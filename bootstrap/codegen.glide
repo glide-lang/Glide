@@ -1,4 +1,19 @@
-// Glide-in-Glide codegen. Walks AST and emits C99 source to stdout.
+// Codegen — AST to C99. Final stage of the pipeline.
+//
+// Emits a single self-contained translation unit:
+//   1. runtime prelude (chan, sched, result template) — substituted from
+//      bootstrap/runtime/*.tmpl with `@T@` / `@TC@` / `@M@` placeholders
+//      replaced by per-monomorphization names.
+//   2. forward declarations for every type the program reaches.
+//   3. struct bodies, trait vtables, dyn fat-pointer typedefs.
+//   4. function bodies (monomorphized over generic args) with a Glide-named
+//      mangling scheme (`Type_method`, `Type_method__T_int`).
+//
+// Generic monomorphization is driven on demand: a call site with concrete
+// type args triggers emission of a dedicated function. Same for any impl
+// touched through `*dyn Trait` (a thunk + vtable entry per impl). The
+// emitter is a string builder, not an IR — no SSA, no register allocation.
+// The downstream C compiler (zig cc / mingw / cl) does the heavy lifting.
 
 import stdlib::hashmap::*;
 import ast;
