@@ -1,7 +1,0 @@
-// Smallest possible Glide program.
-// Run: glide run examples/01_hello.glide
-
-fn main() -> int {
-    println!("hello, glide");
-    return 0;
-}

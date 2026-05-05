@@ -1,0 +1,300 @@
+// tour.glide
+//
+// One file, every Glide feature, end-to-end. Compile and run with:
+//   glide.exe run examples/tour.glide
+//
+// Builds a tiny task pipeline: workers pull jobs from a chan, classify
+// them, push results to an aggregator coro, main collects and prints.
+// Along the way: traits + dyn dispatch, generics with bounds, errors-
+// as-values, macros, arena, asm + naked + cfg, string interpolation.
+
+import stdlib::math::*;
+import stdlib::hashmap::*;
+
+// extern declarations expose runtime built-ins.
+extern fn now_ns() -> i64;
+
+// ---- 1. constants and primitives ---------------------------------------
+
+const POISON: int = -1;
+
+// ---- 2. macros: non-variadic + variadic --------------------------------
+
+macro bail!($cond:expr, $msg:expr) {
+    if $cond { return err($msg); }
+}
+
+macro list_each!($($v:expr),*) {
+    $( println!("  -", $v); )*
+}
+
+// ---- 3. enums with payload + match -------------------------------------
+
+enum Event {
+    Hit(int),
+    Miss(string),
+    Tick,
+}
+
+// ---- 4. structs + impl methods -----------------------------------------
+
+struct Point { x: int, y: int }
+
+impl Point {
+    fn dist2(self: *Point, other: *Point) -> int {
+        let dx: int = self.x - other.x;
+        let dy: int = self.y - other.y;
+        return dx * dx + dy * dy;
+    }
+}
+
+// ---- 5. impl on a primitive (namespaced) -------------------------------
+
+impl int in tour {
+    fn squared(self: int) -> int { return self * self; }
+}
+
+// ---- 6. traits + supertrait + default method + dyn dispatch ------------
+
+trait Named {
+    fn name(self: Self) -> string;
+}
+
+trait Render: Named {
+    fn render(self: Self) -> string;
+    fn label(self: Self) -> string {        // default method
+        return "[${self.name()}]";
+    }
+}
+
+struct Box { w: int, h: int, tag: string }
+struct Circle { r: int, tag: string }
+
+impl Named for Box {
+    fn name(self: Self) -> string { return self.tag; }
+}
+impl Render for Box {
+    fn render(self: Self) -> string { return "Box(${self.w}x${self.h})"; }
+    fn label(self: Self) -> string  { return "[${self.name()}]"; }   // explicit override
+}
+
+impl Named for Circle {
+    fn name(self: Self) -> string { return self.tag; }
+}
+impl Render for Circle {
+    fn render(self: Self) -> string { return "Circle(r=${self.r})"; }
+    fn label(self: Self) -> string  { return "<${self.name()}>"; }   // override — different shape
+}
+
+// ---- 7. generic bound (static dispatch) --------------------------------
+
+fn describe<T: Render>(x: T) {
+    println!(x.label(), "->", x.render());
+}
+
+// ---- 8. errors-as-values + ? -------------------------------------------
+
+struct Cfg { workers: int, jobs: int }
+
+fn parse_pair(part: string, want: string) -> !int {
+    bail!(!part.contains("="), "missing `=`");
+    let kv: *Vector<string> = part.split("=");
+    bail!(kv.len() != 2, "want `key=value`");
+    bail!(!kv.get(0).trim().eq(want), "wrong key");
+    return kv.get(1).trim().try_parse_int();
+}
+
+fn parse_cfg(src: string) -> !Cfg {
+    let parts: *Vector<string> = src.split(";");
+    bail!(parts.len() != 2, "need workers=N;jobs=M");
+    let w: int = parse_pair(parts.get(0), "workers")?;
+    let j: int = parse_pair(parts.get(1), "jobs")?;
+    bail!(w <= 0, "workers must be > 0");
+    bail!(j <= 0, "jobs must be > 0");
+    return ok(Cfg { workers: w, jobs: j });
+}
+
+// ---- 9. closures + first-class fn pointers -----------------------------
+
+fn run_op(f: fn(int) -> int, x: int) -> int { return f(x); }
+
+// ---- 10. inline asm + naked fn + cfg gate ------------------------------
+
+@cfg("posix")
+naked fn add_raw(a: i64, b: i64) -> i64 {
+    asm {
+        "leaq (%rdi, %rsi), %rax"
+        "ret"
+    }
+}
+
+@cfg("windows")
+naked fn add_raw(a: i64, b: i64) -> i64 {
+    asm {
+        "leaq (%rcx, %rdx), %rax"
+        "ret"
+    }
+}
+
+fn read_tsc() -> u64 {
+    let lo: u32 = 0;
+    let hi: u32 = 0;
+    asm volatile {
+        "rdtsc"
+        : "=a"(lo), "=d"(hi)
+    }
+    return ((hi as u64) << 32) | (lo as u64);
+}
+
+// ---- 11. concurrency: chan + spawn + sleep + while-let -----------------
+
+fn streamer(c: chan<int>) {
+    // No poison pill — `close()` + `while let` is the natural shape.
+    for k in 1..6 { c.send(k * 10); sleep_ms(1); }
+    c.close();
+}
+
+fn worker(id: int, jobs: chan<int>, out: chan<Event>) {
+    while let n = jobs.recv() {
+        if n == POISON { return; }
+        sleep_ms(1);
+        let nn: int = n;
+        let key: string = "w${id}-job${nn}";
+        if nn.tour::squared() % 17 == 0 {
+            out.send(Event::Miss(key));
+        } else {
+            out.send(Event::Hit(nn * 5));
+        }
+    }
+}
+
+struct Tally { hits: int, misses: int, total_us: int }
+
+fn aggregator(out: chan<Event>, expected: int, sink: chan<Tally>) {
+    let t: *Tally = malloc(sizeof(Tally)) as *Tally;
+    t.hits = 0; t.misses = 0; t.total_us = 0;
+    let mut seen: int = 0;
+    while seen < expected {
+        let _ev: Event = out.recv();
+        match _ev {
+            Hit(us)  => { t.hits = t.hits + 1; t.total_us = t.total_us + us; }
+            Miss(_k) => { t.misses = t.misses + 1; }
+            Tick     => { /* sentinel, unused */ }
+        }
+        seen = seen + 1;
+    }
+    sink.send(*t);
+    free(t as *void);
+}
+
+// ---- 12. arena + defer + borrows ---------------------------------------
+
+fn fill_jobs(jobs: &mut Vector<int>, count: int) {
+    let arena: *Arena = Arena::new(2048);
+    defer arena.free();
+    let scratch: *int = arena.alloc(sizeof(int)) as *int;
+    *scratch = 0;
+    for i in 0..count {
+        jobs.push(i + 1);
+        *scratch = *scratch + 1;
+    }
+    println!("[arena] queued ${*scratch} jobs (scratch lives in arena)");
+}
+
+// ---- 13. main: ties it all together ------------------------------------
+
+fn main() -> int {
+    // --- (a) parse config: error-as-value, `?`, macros, interpolation
+    let parsed: !Cfg = parse_cfg("workers=3;jobs=15");
+    if !parsed.ok {
+        println!("config:", parsed.err);
+        return 1;
+    }
+    let cfg: Cfg = parsed.val;
+    println!("config: workers=${cfg.workers} jobs=${cfg.jobs}");
+
+    // --- (b) borrows + arena + explicit free
+    let jobs: *Vector<int> = Vector::new();
+    defer jobs.free();
+    fill_jobs(&mut *jobs, cfg.jobs);
+
+    // --- (c) channels + spawn coroutines
+    let job_chan: chan<int>   = make_chan(8);
+    let out_chan: chan<Event> = make_chan(8);
+    let sink:     chan<Tally> = make_chan(1);
+
+    for i in 0..cfg.workers { spawn worker(i + 1, job_chan, out_chan); }
+    spawn aggregator(out_chan, cfg.jobs, sink);
+
+    let t0: i64 = now_ns();
+    for i in 0..jobs.len() { job_chan.send(jobs.get(i)); }
+    for _i in 0..cfg.workers { job_chan.send(POISON); }
+
+    let result: Tally = sink.recv();
+    let elapsed_ms: i64 = (now_ns() - t0) / 1000000;
+
+    // --- (d) closures + first-class fn passing
+    let inc = fn(n: int) -> int { return n + 1; };
+    let sq  = fn(n: int) -> int { return n * n; };
+    let a: int = run_op(inc, 41);
+    let b: int = run_op(sq, 6);
+    println!("inc(41) = ${a}, sq(6) = ${b}");
+
+    // --- (e) struct method + impl-on-primitive
+    let p: Point = Point { x: 0, y: 0 };
+    let q: Point = Point { x: 3, y: 4 };
+    let seven: int = 7;
+    println!("dist² = ${p.dist2(&q)}, 7² (int impl) = ${seven.tour::squared()}");
+
+    // --- (f) traits: static dispatch via `<T: Render>`
+    let bx: Box = Box { w: 10, h: 4, tag: "rect" };
+    describe(bx);
+
+    // --- (g) traits: dynamic dispatch via `*dyn Render`
+    let pb: *Box = malloc(sizeof(Box)) as *Box;
+    pb.w = 6; pb.h = 6; pb.tag = "square";
+    let pc: *Circle = malloc(sizeof(Circle)) as *Circle;
+    pc.r = 9; pc.tag = "donut";
+    let shapes: *Vector<*dyn Render> = Vector::new();
+    shapes.push(pb as *dyn Render);
+    shapes.push(pc as *dyn Render);
+    for i in 0..shapes.len() {
+        let it: *dyn Render = shapes.get(i);
+        println!(it.label(), "->", it.render());
+    }
+    free(pb as *void);
+    free(pc as *void);
+    shapes.free();
+
+    // --- (h) hashmap + module-qualified path
+    let scores* = HashMap::new();
+    scores.insert("hits",   result.hits);
+    scores.insert("misses", result.misses);
+    let lower: int = stdlib::math::min_int(result.hits, result.misses);
+    let h: int = scores.get("hits");
+    let m: int = scores.get("misses");
+    println!("scoreboard: hits=${h} misses=${m} min=${lower}");
+
+    // --- (i) raw asm + naked fn (cfg-gated)
+    let t1: u64 = read_tsc();
+    let t2: u64 = read_tsc();
+    println!("rdtsc Δ:", (t2 - t1) as int);
+    println!("naked add_raw(40, 2):", add_raw(40, 2) as int);
+
+    // --- (j) chan close + while-let (no poison pill, loop ends on close)
+    let stream: chan<int> = make_chan(4);
+    spawn streamer(stream);
+    let mut sum: int = 0;
+    while let v = stream.recv() { sum = sum + v; }
+    println!("stream sum (close-detected): ${sum}");
+
+    // --- (k) f64 arithmetic
+    let avg: f64 = (result.total_us as f64) / (cfg.jobs as f64);
+    println!("avg latency: ${avg} us/job");
+
+    // --- (l) summary via variadic macro
+    println!("=== summary ===");
+    list_each!(result.hits, result.misses, result.total_us, elapsed_ms);
+
+    return 0;
+}
