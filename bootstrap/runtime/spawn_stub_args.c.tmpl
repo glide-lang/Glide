@@ -1,0 +1,8 @@
+typedef struct @AN@ {
+@FIELDS@} @AN@;
+static void* __glide_spawn_stub_@ID@(void* __raw) {
+    @AN@* __args = (@AN@*)__raw;
+    @FN_NAME@(@CALL_ARGS@);
+    free(__raw);
+    return NULL;
+}

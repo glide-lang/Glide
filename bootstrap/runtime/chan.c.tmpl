@@ -1,0 +1,254 @@
+typedef struct __glide_chan_cell_@M@ {
+    atomic_size_t seq;
+    @TC@ data;
+    /* Pad to 64 B so adjacent cells don't share a cache line. */
+    char _pad[64 - sizeof(atomic_size_t) - sizeof(@TC@)];
+} __attribute__((aligned(64))) __glide_chan_cell_@M@;
+
+struct __glide_chan_@M@_t {
+    /* Lock-free ring */
+    __glide_chan_cell_@M@* cells;
+    size_t mask;             /* cap - 1, cap is power of two */
+    char _pad1[48];          /* push enq_pos to its own line */
+    atomic_size_t enq_pos;
+    char _pad2[56];
+    atomic_size_t deq_pos;
+    char _pad3[56];
+    /* Slow path: blocking + close */
+    atomic_int closed;
+    pthread_mutex_t mu;
+    pthread_cond_t  not_empty;
+    pthread_cond_t  not_full;
+    /* counts of cv_waiters so fast-path can skip mutex+signal when 0 */
+    atomic_int cv_recv_waiters;
+    atomic_int cv_send_waiters;
+    /* coro waiter lists, walked only under mu */
+    struct __glide_task* coro_recv_waiters;
+    struct __glide_task* coro_send_waiters;
+};
+
+static __glide_chan_@M@_t* __glide_make_chan_@M@(int cap) {
+    __glide_chan_@M@_t* c = (__glide_chan_@M@_t*)malloc(sizeof(__glide_chan_@M@_t));
+    if (cap < 1) cap = 1;
+    /* Round capacity up to next power of two for the bitmask. */
+    size_t pow2 = 1;
+    while (pow2 < (size_t)cap) pow2 <<= 1;
+    c->mask = pow2 - 1;
+    c->cells = (__glide_chan_cell_@M@*)calloc(pow2, sizeof(__glide_chan_cell_@M@));
+    for (size_t i = 0; i < pow2; i++) {
+        atomic_store_explicit(&c->cells[i].seq, i, memory_order_relaxed);
+    }
+    atomic_store(&c->enq_pos, 0);
+    atomic_store(&c->deq_pos, 0);
+    atomic_store(&c->closed, 0);
+    pthread_mutex_init(&c->mu, NULL);
+    pthread_cond_init(&c->not_empty, NULL);
+    pthread_cond_init(&c->not_full, NULL);
+    atomic_store(&c->cv_recv_waiters, 0);
+    atomic_store(&c->cv_send_waiters, 0);
+    c->coro_recv_waiters = NULL;
+    c->coro_send_waiters = NULL;
+    return c;
+}
+
+static int __glide_try_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
+    __glide_chan_cell_@M@* cell;
+    size_t pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);
+    for (;;) {
+        cell = &c->cells[pos & c->mask];
+        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);
+        intptr_t diff = (intptr_t)seq - (intptr_t)pos;
+        if (diff == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &c->enq_pos, &pos, pos + 1,
+                    memory_order_relaxed, memory_order_relaxed)) break;
+        } else if (diff < 0) {
+            return 0;  /* buffer full */
+        } else {
+            pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);
+        }
+    }
+    cell->data = v;
+    atomic_store_explicit(&cell->seq, pos + 1, memory_order_release);
+    return 1;
+}
+
+static int __glide_try_recv_@M@(__glide_chan_@M@_t* c, @TC@* out) {
+    __glide_chan_cell_@M@* cell;
+    size_t pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);
+    for (;;) {
+        cell = &c->cells[pos & c->mask];
+        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);
+        intptr_t diff = (intptr_t)seq - (intptr_t)(pos + 1);
+        if (diff == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &c->deq_pos, &pos, pos + 1,
+                    memory_order_relaxed, memory_order_relaxed)) break;
+        } else if (diff < 0) {
+            return 0;  /* buffer empty */
+        } else {
+            pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);
+        }
+    }
+    *out = cell->data;
+    atomic_store_explicit(&cell->seq, pos + c->mask + 1, memory_order_release);
+    return 1;
+}
+
+/* Pop one parker off the wait list under chan->mu, then drop the lock BEFORE
+   handing the task back to its worker queue. q_push_to has its own spinlock and
+   can stall for tens of ns; holding chan->mu over that serializes senders/recvers
+   needlessly. */
+static void __glide_wake_recv_@M@(__glide_chan_@M@_t* c) {
+    if (c->coro_recv_waiters == NULL && atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) == 0) return;
+    __glide_task* unparked = NULL;
+    int signal_cv = 0;
+    pthread_mutex_lock(&c->mu);
+    if (c->coro_recv_waiters) {
+        unparked = c->coro_recv_waiters;
+        c->coro_recv_waiters = unparked->wait_next;
+        unparked->wait_next = NULL;
+        unparked->state = 0;
+    }
+    if (atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) > 0) signal_cv = 1;
+    if (signal_cv) pthread_cond_signal(&c->not_empty);
+    pthread_mutex_unlock(&c->mu);
+    if (unparked) __glide_q_push_to(unparked->home_worker, unparked);
+}
+static void __glide_wake_send_@M@(__glide_chan_@M@_t* c) {
+    if (c->coro_send_waiters == NULL && atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) == 0) return;
+    __glide_task* unparked = NULL;
+    int signal_cv = 0;
+    pthread_mutex_lock(&c->mu);
+    if (c->coro_send_waiters) {
+        unparked = c->coro_send_waiters;
+        c->coro_send_waiters = unparked->wait_next;
+        unparked->wait_next = NULL;
+        unparked->state = 0;
+    }
+    if (atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) > 0) signal_cv = 1;
+    if (signal_cv) pthread_cond_signal(&c->not_full);
+    pthread_mutex_unlock(&c->mu);
+    if (unparked) __glide_q_push_to(unparked->home_worker, unparked);
+}
+
+static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
+    if (atomic_load_explicit(&c->closed, memory_order_acquire)) return;
+    /* Fast path: lock-free push. */
+    if (__glide_try_send_@M@(c, v)) {
+        __glide_wake_recv_@M@(c);
+        return;
+    }
+    /* Brief spin — consumer may free a slot any nanosecond. */
+    for (int s = 0; s < 256; s++) {
+#if defined(__x86_64__) || defined(_M_X64)
+        __asm__ __volatile__("pause" ::: "memory");
+#endif
+        if (__glide_try_send_@M@(c, v)) {
+            __glide_wake_recv_@M@(c);
+            return;
+        }
+    }
+    /* Slow path: still full. Take mutex, retry, then block. */
+    pthread_mutex_lock(&c->mu);
+    for (;;) {
+        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
+        if (__glide_try_send_@M@(c, v)) {
+            pthread_mutex_unlock(&c->mu);
+            __glide_wake_recv_@M@(c);
+            return;
+        }
+        if (__glide_park(&c->mu, &c->coro_send_waiters)) {
+            pthread_mutex_lock(&c->mu);
+        } else {
+            atomic_fetch_add_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);
+            pthread_cond_wait(&c->not_full, &c->mu);
+            atomic_fetch_sub_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);
+        }
+    }
+    pthread_mutex_unlock(&c->mu);
+}
+
+static @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {
+    @TC@ v;
+    if (__glide_try_recv_@M@(c, &v)) {
+        __glide_wake_send_@M@(c);
+        return v;
+    }
+    /* Brief spin before paying cv_wait cost — producer may be 1 cell behind. */
+    for (int s = 0; s < 256; s++) {
+#if defined(__x86_64__) || defined(_M_X64)
+        __asm__ __volatile__("pause" ::: "memory");
+#endif
+        if (__glide_try_recv_@M@(c, &v)) {
+            __glide_wake_send_@M@(c);
+            return v;
+        }
+    }
+    pthread_mutex_lock(&c->mu);
+    for (;;) {
+        if (__glide_try_recv_@M@(c, &v)) {
+            pthread_mutex_unlock(&c->mu);
+            __glide_wake_send_@M@(c);
+            return v;
+        }
+        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
+        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {
+            pthread_mutex_lock(&c->mu);
+        } else {
+            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
+            pthread_cond_wait(&c->not_empty, &c->mu);
+            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
+        }
+    }
+    pthread_mutex_unlock(&c->mu);
+    memset(&v, 0, sizeof(v));
+    return v;
+}
+
+static int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {
+    if (__glide_try_recv_@M@(c, out)) {
+        __glide_wake_send_@M@(c);
+        return 1;
+    }
+    /* Spin briefly before cv_wait. */
+    for (int s = 0; s < 256; s++) {
+#if defined(__x86_64__) || defined(_M_X64)
+        __asm__ __volatile__("pause" ::: "memory");
+#endif
+        if (__glide_try_recv_@M@(c, out)) {
+            __glide_wake_send_@M@(c);
+            return 1;
+        }
+    }
+    pthread_mutex_lock(&c->mu);
+    for (;;) {
+        if (__glide_try_recv_@M@(c, out)) {
+            pthread_mutex_unlock(&c->mu);
+            __glide_wake_send_@M@(c);
+            return 1;
+        }
+        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
+        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {
+            pthread_mutex_lock(&c->mu);
+        } else {
+            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
+            pthread_cond_wait(&c->not_empty, &c->mu);
+            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
+        }
+    }
+    pthread_mutex_unlock(&c->mu);
+    return 0;
+}
+
+static void __glide_close_@M@(__glide_chan_@M@_t* c) {
+    pthread_mutex_lock(&c->mu);
+    atomic_store_explicit(&c->closed, 1, memory_order_release);
+    /* Drain coro waiter lists. */
+    while (c->coro_send_waiters) __glide_unpark_one(&c->coro_send_waiters);
+    while (c->coro_recv_waiters) __glide_unpark_one(&c->coro_recv_waiters);
+    /* Wake all cv waiters. */
+    pthread_cond_broadcast(&c->not_empty);
+    pthread_cond_broadcast(&c->not_full);
+    pthread_mutex_unlock(&c->mu);
+}
