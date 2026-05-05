@@ -1,4 +1,8 @@
-// Glide source formatter: AST -> canonical text.
+// Formatter — AST to canonical Glide source. Driven by `glide fmt`.
+//
+// Reads the parsed (but un-lowered) tree so sugared forms like `for x in 0..n`
+// and `while let v = c.recv()` round-trip unchanged. Output is deterministic
+// and stable across runs.
 //
 // Style:
 //   * 4-space indent, K&R braces, LF line endings
