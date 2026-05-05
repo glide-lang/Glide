@@ -83,6 +83,34 @@ let m: *HashMap<int> = HashMap::new();
 m.insert("answer", 42);
 ```
 
+### "I want interfaces without object-orientation."
+
+`trait` declares a contract, `impl Trait for Type` provides it. Default methods + supertraits work. For heterogeneous collections, `*dyn Trait` does runtime dispatch via a small vtable.
+
+```glide
+trait Render {
+    fn render(self: Self) -> string;
+}
+
+impl Render for Box    { fn render(self: Self) -> string { return "Box"; } }
+impl Render for Circle { fn render(self: Self) -> string { return "Circle"; } }
+
+fn show(r: *dyn Render) { println!(r.render()); }
+```
+
+### "I need to drop down to assembly without leaving the file."
+
+Inline `asm { … }` blocks accept GCC-style operand constraints. `naked fn` lets you write your own calling convention. `@cfg("posix"|"windows")` gates definitions per platform. `c_raw! { … }` injects raw C verbatim.
+
+```glide
+fn read_tsc() -> u64 {
+    let lo: u32 = 0;
+    let hi: u32 = 0;
+    asm volatile { "rdtsc" : "=a"(lo), "=d"(hi) }
+    return ((hi as u64) << 32) | (lo as u64);
+}
+```
+
 ## install
 
 Glide ships as a single archive that contains the compiler, a bundled C toolchain (Zig), and the stdlib. No system gcc, clang, or Rust required.
@@ -90,18 +118,18 @@ Glide ships as a single archive that contains the compiler, a bundled C toolchai
 **Linux / macOS:**
 
 ```bash
-curl -fsSL https://github.com/Murilinho145SG/Glide/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/glide-lang/Glide/releases/latest/download/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-iwr https://github.com/Murilinho145SG/Glide/releases/latest/download/install.ps1 -UseB | iex
+iwr https://github.com/glide-lang/Glide/releases/latest/download/install.ps1 -UseB | iex
 ```
 
 Both install into a per-user directory (`~/.local/share/glide` on Linux/macOS, `%LOCALAPPDATA%\Programs\Glide` on Windows) and add a `glide` command to your PATH. No admin / sudo needed. Open a new terminal after install.
 
-If you'd rather install from a downloaded archive, grab the right `.zip` / `.tar.gz` from the [releases page](https://github.com/Murilinho145SG/Glide/releases) and run:
+If you'd rather install from a downloaded archive, grab the right `.zip` / `.tar.gz` from the [releases page](https://github.com/glide-lang/Glide/releases) and run:
 
 ```bash
 bash tools/install.sh --archive ./glide-linux-x86_64-0.1.0.tar.gz
@@ -135,7 +163,34 @@ bash tools/install_zig.sh                                          # 2. fetch Zi
 bash tools/build_release.sh                                        # 4. (optional) make a release archive
 ```
 
-Examples live in `examples/`. Editor support (Zed grammar) in `zed-extension/`.
+## tour
+
+A single program covering every language feature lives in `examples/tour.glide`:
+
+```bash
+glide run examples/tour.glide
+```
+
+It exercises auto-drop, borrows, arenas, errors-as-values, generics with bounds, traits with `*dyn` dispatch, channels, spawn, sleep_ms, while-let-recv, closures, macros (variadic + non-variadic), string interpolation, qualified imports, inline `asm`, `naked fn`, and `@cfg` gates.
+
+## benchmarks
+
+Glide vs Go 1.26 on Windows 11, median of 5 runs. See `bench/RESULTS.md` for the full breakdown.
+
+| bench                       | Glide     | Go     | result                  |
+|-----------------------------|-----------|--------|-------------------------|
+| Spawn + drain 100K          | 6 ms      | 10 ms  | Glide 1.7× faster       |
+| Spawn + drain 1M            | 85 ms     | 94 ms  | Glide 1.1× faster       |
+| Pure chan 1M (cap = 1024)   | 24 ms     | 48 ms  | Glide 2.0× faster       |
+| RAM idle 100K parked        | 448 MB    | 903 MB | Glide 2.0× lighter      |
+| Throughput spawn+chan 100K  | 486 ms    | 436 ms | Glide 1.1× off          |
+
+## editor support
+
+- **Zed**: install the `zed-extension/` folder as a dev extension.
+- **VS Code**: load `vscode-extension/` via Extensions → Install from VSIX.
+- **Tree-sitter grammar** for any other editor: `glide-grammar/` (highlights, indents, outline).
+- The compiler ships an LSP server (`glide lsp`) with hover, definition, references, completion, document symbol, document highlight, rename + prepareRename, and formatting.
 
 ## license
 
