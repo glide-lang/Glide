@@ -1,4 +1,15 @@
-// Glide-in-Glide parser. Pratt expressions + recursive descent for stmts.
+// Parser — tokens to AST. Recursive descent for statements and top-level
+// declarations, Pratt parsing for expressions (precedence climbing keeps
+// operator handling table-driven).
+//
+// Output shape: `(stmts: *Vector<Stmt>, diagnostics: *Vector<ParseDiag>)`.
+// Diagnostics are accumulated rather than fatal; the parser keeps going so
+// the LSP and `glide check` can show multiple errors at once.
+//
+// Lookahead is one token most of the time, two or three for ambiguous heads
+// (`fn(...) -> T` as expression vs as type, struct-literal vs block, etc).
+// Unknown stmts get a synth `ST_ERROR` so later passes still receive a
+// well-formed tree.
 
 import stdlib::hashmap::*;
 import lexer;
