@@ -182,7 +182,8 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>) -> *
                 if entry.def.then_body == null { return null; }
                 let uses_self: bool = body_references_self(entry.def.then_body);
                 if !uses_self {
-                    return expand_with_def_recv(call, &entry.def, null);
+                    let no_recv: *Expr = null;
+                    return expand_with_def_recv(call, &entry.def, no_recv);
                 }
                 if call.args == null || call.args.len() == 0 { return null; }
                 let recv_arg: Expr = call.args.get(0);
@@ -223,11 +224,13 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>) -> *
     // Body-less stub (`macro name!(matchers);`) — declared for docs / LSP
     // only. Skip expansion so codegen's native handling can fire.
     if def.then_body == null { return null; }
-    return expand_with_def_recv(call, &def, null);
+    let no_recv: *Expr = null;
+    return expand_with_def_recv(call, &def, no_recv);
 }
 
 fn expand_with_def(call: *Expr, def: *Stmt) -> *Vector<Stmt> {
-    return expand_with_def_recv(call, def, null);
+    let no_recv: *Expr = null;
+    return expand_with_def_recv(call, def, no_recv);
 }
 
 // Encode the call's source location into the receiver-binding name so two
@@ -263,7 +266,8 @@ fn expand_with_def_recv(call: *Expr, def: *Stmt, recv: *Expr) -> *Vector<Stmt> {
         // `let __glide_macro_recv_N = <recv expr>;` — bind once, no repeated
         // evaluation. The expanded body refers to this via the renamed `self`.
         let recv_clone: *Expr = macro_subst_expr(recv, bindings, -1, "");
-        let bind: *Stmt = stmt_let(self_name, null, recv_clone, false, call.line, call.column);
+        let no_ty: *Type = null;
+        let bind: *Stmt = stmt_let(self_name, no_ty, recv_clone, false, call.line, call.column);
         block_body.push(*bind);
     }
     for let i: int = 0; i < body.len(); i++ {

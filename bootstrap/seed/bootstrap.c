@@ -2085,6 +2085,8 @@ Expr*   expr_bool (bool   b, int   line, int   col);
 Expr*   expr_binary (int   op, Expr*   lhs, Expr*   rhs);
 Expr*   expr_call (Expr*   callee, Vector__Expr*   args);
 Stmt*   stmt_let (const char*   name, Type*   ty, Expr*   value, bool   is_mut, int   line, int   col);
+const char*   int_to_str (int64_t   n);
+const char*   digit_str (int   d);
 Stmt*   stmt_return (Expr*   v, int   line, int   col);
 Stmt*   stmt_expr (Expr*   e);
 Stmt*   stmt_fn (const char*   name, Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col);
@@ -2250,8 +2252,6 @@ void   emit_scheduler_runtime (void);
 void   emit_socket_runtime (void);
 void   pre_emit_spawn_stubs_in_stmt (CG*   g, Stmt*   s);
 void   emit_spawn_stub (CG*   g, Expr*   call, int   id);
-const char*   int_to_str (int64_t   n);
-const char*   digit_str (int   d);
 bool   is_stdlib_primitive (const char*   name);
 void   emit_stdlib_runtime (void);
 CG*   CG_new (void);
@@ -3537,6 +3537,60 @@ Stmt*   stmt_let (const char*   name, Type*   ty, Expr*   value, bool   is_mut, 
     ((s-> let_value )  =  value);
     ((s-> is_mut )  =  is_mut);
     return s;
+}
+
+const char*   int_to_str (int64_t   n) {
+    if ((n  ==  0)) {
+        return "0";
+    }
+    int64_t   x = n;
+    bool   neg = false;
+    if ((x  <  0)) {
+        (neg  =  true);
+        (x  =  (-x));
+    }
+    const char*   s = "";
+    while ((x  >  0)) {
+        int   d = (( int )(x  %  10));
+        const char*   ch = digit_str(d);
+        (s  =  __glide_string_concat(ch, s));
+        (x  =  (x  /  10));
+    }
+    if (neg) {
+        (s  =  __glide_string_concat("-", s));
+    }
+    return s;
+}
+
+const char*   digit_str (int   d) {
+    if ((d  ==  0)) {
+        return "0";
+    }
+    if ((d  ==  1)) {
+        return "1";
+    }
+    if ((d  ==  2)) {
+        return "2";
+    }
+    if ((d  ==  3)) {
+        return "3";
+    }
+    if ((d  ==  4)) {
+        return "4";
+    }
+    if ((d  ==  5)) {
+        return "5";
+    }
+    if ((d  ==  6)) {
+        return "6";
+    }
+    if ((d  ==  7)) {
+        return "7";
+    }
+    if ((d  ==  8)) {
+        return "8";
+    }
+    return "9";
 }
 
 Stmt*   stmt_return (Expr*   v, int   line, int   col) {
@@ -5949,7 +6003,8 @@ Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__Type
                 }
                 bool   uses_self = body_references_self(((entry. def ). then_body ));
                 if ((!uses_self)) {
-                    return expand_with_def_recv(call, (&(entry. def )), NULL);
+                    Expr*   no_recv = NULL;
+                    return expand_with_def_recv(call, (&(entry. def )), no_recv);
                 }
                 if ((((call-> args )  ==  NULL)  ||  (Vector_len__Expr((call-> args ))  ==  0))) {
                     return NULL;
@@ -5994,11 +6049,13 @@ Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__Type
     if (((def. then_body )  ==  NULL)) {
         return NULL;
     }
-    return expand_with_def_recv(call, (&def), NULL);
+    Expr*   no_recv = NULL;
+    return expand_with_def_recv(call, (&def), no_recv);
 }
 
 Vector__Stmt*   expand_with_def (Expr*   call, Stmt*   def) {
-    return expand_with_def_recv(call, def, NULL);
+    Expr*   no_recv = NULL;
+    return expand_with_def_recv(call, def, no_recv);
 }
 
 const char*   recv_name_for (Expr*   call) {
@@ -6026,7 +6083,8 @@ Vector__Stmt*   expand_with_def_recv (Expr*   call, Stmt*   def, Expr*   recv) {
     Vector__Stmt*   block_body = Vector_new__Stmt();
     if ((recv  !=  NULL)) {
         Expr*   recv_clone = macro_subst_expr(recv, bindings, (-1), "");
-        Stmt*   bind = stmt_let(self_name, NULL, recv_clone, false, (call-> line ), (call-> column ));
+        Type*   no_ty = NULL;
+        Stmt*   bind = stmt_let(self_name, no_ty, recv_clone, false, (call-> line ), (call-> column ));
         Vector_push__Stmt(block_body, (*bind));
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
@@ -8450,60 +8508,6 @@ void   emit_spawn_stub (CG*   g, Expr*   call, int   id) {
     const char*   s4 = _cg_replace(s3, "@FIELDS@", fields);
     const char*   s5 = _cg_replace(s4, "@CALL_ARGS@", call_args);
     printf("%s", s5);
-}
-
-const char*   int_to_str (int64_t   n) {
-    if ((n  ==  0)) {
-        return "0";
-    }
-    int64_t   x = n;
-    bool   neg = false;
-    if ((x  <  0)) {
-        (neg  =  true);
-        (x  =  (-x));
-    }
-    const char*   s = "";
-    while ((x  >  0)) {
-        int   d = (( int )(x  %  10));
-        const char*   ch = digit_str(d);
-        (s  =  __glide_string_concat(ch, s));
-        (x  =  (x  /  10));
-    }
-    if (neg) {
-        (s  =  __glide_string_concat("-", s));
-    }
-    return s;
-}
-
-const char*   digit_str (int   d) {
-    if ((d  ==  0)) {
-        return "0";
-    }
-    if ((d  ==  1)) {
-        return "1";
-    }
-    if ((d  ==  2)) {
-        return "2";
-    }
-    if ((d  ==  3)) {
-        return "3";
-    }
-    if ((d  ==  4)) {
-        return "4";
-    }
-    if ((d  ==  5)) {
-        return "5";
-    }
-    if ((d  ==  6)) {
-        return "6";
-    }
-    if ((d  ==  7)) {
-        return "7";
-    }
-    if ((d  ==  8)) {
-        return "8";
-    }
-    return "9";
 }
 
 bool   is_stdlib_primitive (const char*   name) {

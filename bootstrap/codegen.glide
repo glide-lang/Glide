@@ -691,34 +691,8 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: int) {
     print!(s5);
 }
 
-pub fn int_to_str(n: i64) -> string {
-    if n == 0 { return "0"; }
-    let mut x: i64 = n;
-    let mut neg: bool = false;
-    if x < 0 { neg = true; x = -x; }
-    let mut s: string = "";
-    while x > 0 {
-        let d: int = (x % 10) as int;
-        let ch: string = digit_str(d);
-        s = ch.concat(s);
-        x = x / 10;
-    }
-    if neg { s = "-".concat(s); }
-    return s;
-}
-
-fn digit_str(d: int) -> string {
-    if d == 0 { return "0"; }
-    if d == 1 { return "1"; }
-    if d == 2 { return "2"; }
-    if d == 3 { return "3"; }
-    if d == 4 { return "4"; }
-    if d == 5 { return "5"; }
-    if d == 6 { return "6"; }
-    if d == 7 { return "7"; }
-    if d == 8 { return "8"; }
-    return "9";
-}
+// `int_to_str` and `digit_str` moved to ast.glide so expander.glide can
+// reach them without a circular import.
 
 fn is_stdlib_primitive(name: string) -> bool {
     if name.eq("int") { return true; }
