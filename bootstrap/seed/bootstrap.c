@@ -2087,6 +2087,7 @@ Expr*   expr_call (Expr*   callee, Vector__Expr*   args);
 Stmt*   stmt_let (const char*   name, Type*   ty, Expr*   value, bool   is_mut, int   line, int   col);
 const char*   int_to_str (int64_t   n);
 const char*   digit_str (int   d);
+Type*   strip_ptr (Type*   t);
 Stmt*   stmt_return (Expr*   v, int   line, int   col);
 Stmt*   stmt_expr (Expr*   e);
 Stmt*   stmt_fn (const char*   name, Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col);
@@ -2118,6 +2119,7 @@ Expr*   expr_postinc (Expr*   inner);
 Expr*   expr_fnexpr (Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col);
 Expr*   expr_postdec (Expr*   inner);
 Expr*   expr_struct_lit (const char*   type_name, Vector__string*   names, Vector__Expr*   values, int   line, int   col);
+const char*   read_file (const char*   path);
 Parser*   Parser_new (Lexer*   lex);
 void   Parser_free (Parser*   self);
 Token   Parser_advance (Parser*   self);
@@ -2190,6 +2192,7 @@ void   expand_trait_defaults (Vector__Stmt*   stmts);
 Vector__Stmt*   lower_block (Vector__Stmt*   body);
 Stmt*   lower_stmt (Stmt*   s);
 Stmt*   lower_for_in (Stmt*   s);
+void   merge_parse_diags (Typer*   t, Vector__ParseDiag*   pdiags);
 bool   type_eq (Type*   a, Type*   b);
 const char*   type_to_string (Type*   t);
 bool   is_int_type (Type*   t);
@@ -2260,7 +2263,6 @@ void   CG_emit_block_drops (CG*   self, int   saved, int   depth);
 void   CG_free (CG*   self);
 void   CG_declare (CG*   self, const char*   name, Type*   ty);
 Type*   CG_lookup (CG*   self, const char*   name);
-Type*   strip_ptr (Type*   t);
 Type*   infer_for_codegen (CG*   g, Expr*   e);
 const char*   type_to_c (Type*   t);
 const char*   fnptr_cast_str (Type*   t);
@@ -2305,6 +2307,7 @@ void   emit_top_const (CG*   g, Stmt*   s);
 void   emit_struct_mono (CG*   g, Type*   t);
 void   collect_generic_uses_in_type (Type*   t, Vector__Type*   out);
 void   collect_generic_uses_in_stmt (Stmt*   s, Vector__Type*   out);
+const char*   __glide_string_substring (const char*   s, int   start, int   end);
 JsonValue*   json_null (void);
 JsonValue*   json_bool (bool   b);
 JsonValue*   json_int (int   n);
@@ -2362,6 +2365,9 @@ void   __glide_write_str (const char*   s);
 void   __glide_flush_stdout (void);
 void   __glide_log (const char*   s);
 void   __glide_set_binary_io (void);
+const char*   __glide_exe_dir (void);
+void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
+void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
 LspState*   lsp_state_new (void);
 const char*   lsp_read_message (void);
 int   parse_int_str (const char*   s);
@@ -2506,7 +2512,6 @@ const char*   glyph_pipe (void);
 const char*   glyph_under (void);
 void   print_pretty_diag (DiagEntry   d, const char*   src, const char*   src_path);
 void   print_usage (void);
-void   merge_parse_diags (Typer*   t, Vector__ParseDiag*   pdiags);
 void   build_visibility (Typer*   t, Vector__Stmt*   stmts);
 const char*   module_path_from_path (const char*   path);
 bool   path_is_builtin (const char*   path);
@@ -2564,6 +2569,7 @@ MacroBinding   Vector_get__MacroBinding (Vector__MacroBinding*   self, int   i);
 HashMap__bool*   HashMap_new__bool (void);
 void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v);
 bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k);
+void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x);
 int   Vector_len__Type (Vector__Type*   self);
 Type   Vector_get__Type (Vector__Type*   self, int   i);
 HashMap__FnSig*   HashMap_new__FnSig (void);
@@ -2576,7 +2582,6 @@ void   HashMap_free__bool (HashMap__bool*   self);
 void   HashMap_free__Type (HashMap__Type*   self);
 void   Vector_free__BorrowEvent (Vector__BorrowEvent*   self);
 void   Vector_free__DiagEntry (Vector__DiagEntry*   self);
-void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x);
 void   HashMap_insert__Type (HashMap__Type*   self, const char*   k, Type   v);
 void   HashMap_insert__FnSig (HashMap__FnSig*   self, const char*   k, FnSig   v);
 int   Vector_len__Field (Vector__Field*   self);
@@ -3593,6 +3598,16 @@ const char*   digit_str (int   d) {
     return "9";
 }
 
+Type*   strip_ptr (Type*   t) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    if (((((t-> kind )  ==  TY_POINTER)  ||  ((t-> kind )  ==  TY_BORROW))  ||  ((t-> kind )  ==  TY_BORROW_MUT))) {
+        return strip_ptr((t-> inner ));
+    }
+    return t;
+}
+
 Stmt*   stmt_return (Expr*   v, int   line, int   col) {
     Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
     ((s-> kind )  =  ST_RETURN);
@@ -4293,7 +4308,8 @@ Stmt*   parse_fn (Parser*   p) {
         (ret_ty  =  parse_type(p));
     }
     if (Parser_eat_op(p, ";")) {
-        Stmt*   s = stmt_fn(name, params, ret_ty, NULL, line, col);
+        Vector__Stmt*   no_body = NULL;
+        Stmt*   s = stmt_fn(name, params, ret_ty, no_body, line, col);
         if ((s  !=  NULL)) {
             ((s-> type_params )  =  tps);
             ((s-> type_param_bounds )  =  tps_bounds);
@@ -6431,7 +6447,8 @@ Stmt*   lower_for_in (Stmt*   s) {
     const char*   it_name = __glide_string_concat("__glide_iter_", id);
     const char*   idx_name = __glide_string_concat("__glide_idx_", id);
     Vector__Stmt*   block_body = Vector_new__Stmt();
-    Stmt*   bind_iter = stmt_let(it_name, NULL, lo_or_iter, false, line, col);
+    Type*   no_ty = NULL;
+    Stmt*   bind_iter = stmt_let(it_name, no_ty, lo_or_iter, false, line, col);
     Vector_push__Stmt(block_body, (*bind_iter));
     Stmt*   init = stmt_let(idx_name, ty_named("int"), expr_int(0, line, col), true, line, col);
     Expr*   len_call = expr_call(expr_member(expr_ident(it_name, line, col), "len"), Vector_new__Expr());
@@ -6440,7 +6457,7 @@ Stmt*   lower_for_in (Stmt*   s) {
     Vector__Expr*   get_args = Vector_new__Expr();
     Vector_push__Expr(get_args, (*expr_ident(idx_name, line, col)));
     Expr*   get_call = expr_call(expr_member(expr_ident(it_name, line, col), "get"), get_args);
-    Stmt*   bind_var = stmt_let(var_name, NULL, get_call, false, line, col);
+    Stmt*   bind_var = stmt_let(var_name, no_ty, get_call, false, line, col);
     if ((bind_var  !=  NULL)) {
         ((bind_var-> name_line )  =  (s-> name_line ));
         ((bind_var-> name_col )  =  (s-> name_col ));
@@ -6462,6 +6479,17 @@ Stmt*   lower_for_in (Stmt*   s) {
     ((block-> column )  =  col);
     ((block-> then_body )  =  block_body);
     return block;
+}
+
+void   merge_parse_diags (Typer*   t, Vector__ParseDiag*   pdiags) {
+    if (((t  ==  NULL)  ||  (pdiags  ==  NULL))) {
+        return;
+    }
+    for (int   i = 0; (i  <  Vector_len__ParseDiag(pdiags)); i++) {
+        ParseDiag   d = Vector_get__ParseDiag(pdiags, i);
+        DiagEntry   e = (( DiagEntry ){. line  = (d. line ), . col  = (d. col ), . end_line  = (d. line ), . end_col  = ((d. col )  +  1), . severity  = 1, . code  = "parse", . message  = (d. msg ), . origin  = (d. origin ), . tag  = 0});
+        Vector_push__DiagEntry((t-> diagnostics ), e);
+    }
 }
 
 bool   type_eq (Type*   a, Type*   b) {
@@ -8644,16 +8672,6 @@ Type*   CG_lookup (CG*   self, const char*   name) {
     Type*   p = (( Type* )malloc(sizeof( Type )));
     ((*p)  =  t);
     return p;
-}
-
-Type*   strip_ptr (Type*   t) {
-    if ((t  ==  NULL)) {
-        return NULL;
-    }
-    if (((((t-> kind )  ==  TY_POINTER)  ||  ((t-> kind )  ==  TY_BORROW))  ||  ((t-> kind )  ==  TY_BORROW_MUT))) {
-        return strip_ptr((t-> inner ));
-    }
-    return t;
 }
 
 Type*   infer_for_codegen (CG*   g, Expr*   e) {
@@ -17181,17 +17199,6 @@ void   print_usage (void) {
     printf("%s\n", "  glide lsp                  (language server on stdio)");
 }
 
-void   merge_parse_diags (Typer*   t, Vector__ParseDiag*   pdiags) {
-    if (((t  ==  NULL)  ||  (pdiags  ==  NULL))) {
-        return;
-    }
-    for (int   i = 0; (i  <  Vector_len__ParseDiag(pdiags)); i++) {
-        ParseDiag   d = Vector_get__ParseDiag(pdiags, i);
-        DiagEntry   e = (( DiagEntry ){. line  = (d. line ), . col  = (d. col ), . end_line  = (d. line ), . end_col  = ((d. col )  +  1), . severity  = 1, . code  = "parse", . message  = (d. msg ), . origin  = (d. origin ), . tag  = 0});
-        Vector_push__DiagEntry((t-> diagnostics ), e);
-    }
-}
-
 void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
     HashMap__bool*   seen_files = HashMap_new__bool();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
@@ -18460,26 +18467,6 @@ void   HashMap_insert__Type (HashMap__Type*   self, const char*   k, Type   v) {
     ((self-> values )[i]  =  v);
 }
 
-void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        DiagEntry*   new_data = (( DiagEntry* )malloc((new_cap  *  sizeof( DiagEntry ))));
-        for (int   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((self-> cap )  >  0)) {
-            free((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
-}
-
 void   Vector_free__DiagEntry (Vector__DiagEntry*   self) {
     if (((self-> cap )  >  0)) {
         free((( void* )(self-> data )));
@@ -18573,6 +18560,26 @@ Type   Vector_get__Type (Vector__Type*   self, int   i) {
 
 int   Vector_len__Type (Vector__Type*   self) {
     return (self-> len );
+}
+
+void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        DiagEntry*   new_data = (( DiagEntry* )malloc((new_cap  *  sizeof( DiagEntry ))));
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((self-> cap )  >  0)) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
 }
 
 bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k) {

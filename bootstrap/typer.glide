@@ -16,8 +16,36 @@
 
 import stdlib::hashmap::*;
 import ast;
+import parser;     // for ParseDiag (used by merge_parse_diags below)
 
 // ---- type helpers --------------------------------------------------------
+
+// types_compat is the looser companion to type_eq used by call sites.
+// Was private; exported so the LSP (and any analyser running outside the
+// main pipeline) can reach it.
+
+// Convert parser-side diagnostics into typer DiagEntry shape and append
+// them to the typer's diagnostics vector so the pretty-printer / LSP
+// publish path picks them up alongside type errors. Always severity 1
+// (`error`) with code `parse`.
+pub fn merge_parse_diags(t: *Typer, pdiags: *Vector<ParseDiag>) {
+    if t == null || pdiags == null { return; }
+    for let i: int = 0; i < pdiags.len(); i++ {
+        let d: ParseDiag = pdiags.get(i);
+        let e: DiagEntry = DiagEntry {
+            line: d.line,
+            col: d.col,
+            end_line: d.line,
+            end_col: d.col + 1,
+            severity: 1,
+            code: "parse",
+            message: d.msg,
+            origin: d.origin,
+            tag: 0,
+        };
+        t.diagnostics.push(e);
+    }
+}
 
 pub fn type_eq(a: *Type, b: *Type) -> bool {
     if a == null { return b == null; }
@@ -93,7 +121,7 @@ fn is_unknown_type(t: *Type) -> bool {
     return t.kind == TY_NAMED && t.name.eq("__unknown__");
 }
 
-fn types_compat(want: *Type, got: *Type) -> bool {
+pub fn types_compat(want: *Type, got: *Type) -> bool {
     // If either side couldn't be inferred (the typer is permissive and many
     // expressions still return null), don't pretend it's a mismatch — that
     // would flood callers with cascading false-positive diagnostics.

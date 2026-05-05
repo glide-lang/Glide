@@ -77,7 +77,7 @@ fn type_owner_name(t: *Type) -> string {
 // can be called as `Type::name!(args)` with no receiver and all args going
 // straight to matchers. Instance macros keep the existing semantics:
 // `v.name!(args)` and `Type::name!(v, args)`.
-fn body_references_self(stmts: *Vector<Stmt>) -> bool {
+pub fn body_references_self(stmts: *Vector<Stmt>) -> bool {
     if stmts == null { return false; }
     for let i: int = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);

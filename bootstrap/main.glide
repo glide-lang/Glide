@@ -618,28 +618,8 @@ fn print_usage() {
     println!("  glide lsp                  (language server on stdio)");
 }
 
-// Convert parser-side diagnostics into typer DiagEntry shape and append them
-// to the typer's diagnostics vector so the existing pretty-printer / LSP
-// publish path picks them up alongside type errors. Always severity 1
-// (`error`) with code `parse`.
-pub fn merge_parse_diags(t: *Typer, pdiags: *Vector<ParseDiag>) {
-    if t == null || pdiags == null { return; }
-    for let i: int = 0; i < pdiags.len(); i++ {
-        let d: ParseDiag = pdiags.get(i);
-        let e: DiagEntry = DiagEntry {
-            line: d.line,
-            col: d.col,
-            end_line: d.line,
-            end_col: d.col + 1,
-            severity: 1,
-            code: "parse",
-            message: d.msg,
-            origin: d.origin,
-            tag: 0,
-        };
-        t.diagnostics.push(e);
-    }
-}
+// `merge_parse_diags` moved to typer.glide so the LSP can reach it
+// without importing main (which would be a circular dep).
 
 // Build the per-file visibility map the typer uses to enforce selective
 // imports. For each file `F` we accept a name `N` if any of:

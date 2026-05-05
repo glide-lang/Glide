@@ -893,13 +893,8 @@ impl CG {
     }
 }
 
-pub fn strip_ptr(t: *Type) -> *Type {
-    if t == null { return null; }
-    if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT {
-        return strip_ptr(t.inner);
-    }
-    return t;
-}
+// `strip_ptr` moved to ast.glide so typer.glide can reach it without
+// importing codegen (which would be a heavy circular dep).
 
 // Best-effort inference of an expression's type for codegen.
 fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {

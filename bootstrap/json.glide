@@ -1,4 +1,10 @@
 import stdlib::hashmap::*;
+import ast;        // for `int_to_str`
+
+// String runtime helpers consumed by the parser/builder. Declared here so
+// `glide check bootstrap/json.glide` resolves them without needing the
+// full driver to be in scope.
+extern fn __glide_string_substring(s: string, start: int, end: int) -> string;
 
 // Minimal JSON — used by the LSP transport (lsp.glide) and by `glide ast`.
 //

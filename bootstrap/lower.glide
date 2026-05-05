@@ -140,7 +140,8 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     let idx_name: string = "__glide_idx_".concat(id);
 
     let block_body: *Vector<Stmt> = Vector::new();
-    let bind_iter: *Stmt = stmt_let(it_name, null, lo_or_iter, false, line, col);
+    let no_ty: *Type = null;
+    let bind_iter: *Stmt = stmt_let(it_name, no_ty, lo_or_iter, false, line, col);
     block_body.push(*bind_iter);
 
     let init: *Stmt = stmt_let(idx_name, ty_named("int"), expr_int(0, line, col), true, line, col);
@@ -151,7 +152,7 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     let get_args: *Vector<Expr> = Vector::new();
     get_args.push(*expr_ident(idx_name, line, col));
     let get_call: *Expr = expr_call(expr_member(expr_ident(it_name, line, col), "get"), get_args);
-    let bind_var: *Stmt = stmt_let(var_name, null, get_call, false, line, col);
+    let bind_var: *Stmt = stmt_let(var_name, no_ty, get_call, false, line, col);
     if bind_var != null {
         bind_var.name_line = s.name_line; bind_var.name_col = s.name_col; bind_var.name_len = s.name_len;
     }

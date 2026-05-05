@@ -34,7 +34,9 @@ import stdlib::hashmap::*;
 import ast;
 import lexer;
 import parser;
-import typer;
+import expander;     // for body_references_self / expand_macros
+import lower;        // for lower_program
+import typer;        // for types_compat / merge_parse_diags
 import json;
 import fmt;
 
@@ -46,6 +48,16 @@ pub extern fn __glide_write_str(s: string);
 pub extern fn __glide_flush_stdout();
 extern fn __glide_log(s: string);
 extern fn __glide_set_binary_io();
+extern fn __glide_exe_dir() -> string;
+
+// Forward declarations for symbols defined in main.glide. The driver
+// is the canonical owner; declaring them here lets the LSP file
+// type-check standalone without forming a circular import (main.glide
+// itself imports lsp).
+extern fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string,
+                        loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>);
+extern fn load_builtins_dir(stmts: *Vector<Stmt>, dir: string,
+                            loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>);
 
 // ---- Document store ----------------------------------------------------
 
