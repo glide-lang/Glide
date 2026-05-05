@@ -84,8 +84,11 @@ extern fn printf(fmt: string, ...) -> int;
 /// `let`-annotation; capacity is the number of pending sends the channel
 /// can buffer before `send` blocks.
 ///
-/// Channels are bounded MPMC queues backed by a pthread mutex + cond_var.
-/// Use `c.send(x)`, `c.recv()`, `c.close()` for the operations.
+/// Channels are bounded MPMC queues built on a Vyukov ring with
+/// cache-padded cells, a 256-iter pause-spin slow path, and conditional
+/// cv signalling — lock-free in the fast path, no syscall when there are
+/// no waiters. Use `c.send(x)`, `c.recv()`, `c.close()` for the
+/// operations, or `while let v = c.recv() { … }` to drain until close.
 ///
 /// # Examples
 ///
@@ -131,15 +134,32 @@ extern fn calloc(count: usize, size: usize) -> *void;
 /// Release a pointer previously returned by `malloc` / `calloc`. Passing
 /// `null` is a no-op (per libc); passing the same pointer twice is
 /// undefined behaviour.
+///
+/// ```glide
+/// let p: *u8 = malloc(64) as *u8;
+/// // ...use p...
+/// free(p as *void);
+/// ```
 extern fn free(p: *void);
 
 // ---- Glide runtime helpers -----------------------------------------------
 
 /// Number of CLI arguments (mirrors C's `argc`).
+///
+/// ```glide
+/// for let i: int = 0; i < args_count(); i++ {
+///     println!(args_at(i));
+/// }
+/// ```
 extern fn args_count() -> int;
 
-/// CLI argument at index `i` (mirrors `argv[i]`). Index 0 is the program
-/// path; indices `1..args_count()` are user arguments.
+/// CLI argument at index `i` (mirrors `argv[i]`). Index `0` is the
+/// program path; indices `1..args_count()` are user arguments.
+///
+/// ```glide
+/// let prog: string = args_at(0);    // path to the binary
+/// let first: string = args_at(1);   // first user arg, "" if missing
+/// ```
 extern fn args_at(i: int) -> string;
 
 // File I/O lives in `stdlib::io` and `stdlib::fs` - import them explicitly
@@ -164,10 +184,11 @@ extern fn args_at(i: int) -> string;
 /// ```
 extern fn yield_now();
 
-/// Sleep for at least `ms` milliseconds. Currently blocks the worker
-/// thread (uses libc `nanosleep` / WinAPI `Sleep`) — once the reactor
-/// lands in Phase 2, this will become a proper async timer that parks
-/// the coroutine and frees the worker for other tasks.
+/// Sleep for at least `ms` milliseconds. Inside a coroutine this is
+/// **async**: the coro parks on the runtime's timer thread and the
+/// worker is free to pick up another ready task immediately. Outside a
+/// coroutine (e.g. `main` before any `spawn`) it falls back to the
+/// blocking libc `nanosleep` / WinAPI `Sleep`.
 ///
 /// ```glide
 /// for i in 0..3 {
