@@ -1,12 +1,19 @@
-// Glide LSP server. JSON-RPC over stdio per the Language Server Protocol.
+// LSP server — Language Server Protocol over JSON-RPC on stdio.
+//
+// Started by `glide lsp`. The transport reads `Content-Length`-framed
+// messages, decodes them via json.glide, and dispatches by method name.
 //
 // Implemented:
 //   initialize / initialized / shutdown / exit
 //   textDocument/didOpen, didChange, didClose
-//   publishDiagnostics (errors + warnings from the typer; null safety;
-//   unused-var; arena-not-freed)
+//   textDocument/hover               — keyword + builtin docs
+//   textDocument/completion          — `c.send/recv/close` on chans, etc.
+//   publishDiagnostics               — typer errors + warnings: null
+//                                      safety, unused-var, arena-not-freed,
+//                                      missing trait method, unsatisfied
+//                                      bound, type mismatch.
 //
-// Coming next sessions: hover, definition, completion, references.
+// Coming next sessions: definition, references, rename.
 
 import stdlib::hashmap::*;
 import ast;
