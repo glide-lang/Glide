@@ -1,10 +1,35 @@
 // Time + Duration. Wall-clock and monotonic-clock helpers in pure Glide
-// on top of libc / WinAPI. Two value types:
-//   - Time     - an instant. `unix_nanos` (UTC) + `tz_offset_min`.
-//   - Duration - a signed nanosecond span (~292 years either direction).
-// Components like year/month/day are computed on demand via Howard
-// Hinnant's civil-from-days algorithm so the struct stays small (16 / 8
-// bytes). No heap allocation; no `.free()` to remember.
+// on top of libc / WinAPI.
+//
+// Two value types — both small, copied by value, no heap, no `.free()`:
+//   * `Time`     — an instant. `unix_nanos` (UTC) + `tz_offset_min`.
+//   * `Duration` — a signed nanosecond span (~292 years either way).
+//
+// Civil components (year, month, day, weekday, …) are computed on
+// demand via Howard Hinnant's civil-from-days algorithm so the struct
+// stays at 16 / 8 bytes.
+//
+// ```glide
+// import stdlib::time::*;
+//
+// // Wall clock + custom format.
+// let t: Time = Time::now();
+// println!(t.format("YYYY-MM-DD HH:mm:ss"));    // 2026-05-05 14:23:45
+//
+// // Duration arithmetic.
+// let d: Duration = Duration::from_hours(2)
+//                       .add(Duration::from_minutes(30));
+// println!(d.to_string());                       // "2h 30m 0s"
+//
+// // Monotonic stopwatch.
+// let sw: Stopwatch = Stopwatch::start();
+// /* ...work... */
+// println!("elapsed:", sw.elapsed().to_string());
+//
+// // Coro-friendly timer.
+// let timer: chan<i64> = after(Duration::from_millis(50));
+// let _t: i64 = timer.recv();    // wakes ~50ms later
+// ```
 
 extern fn now_ns() -> i64;
 extern fn __time_wall_seconds() -> i64;
@@ -376,10 +401,17 @@ pub struct Time {
 impl Time {
     // ---- constructors ----
 
+    /// Unix epoch — 1970-01-01T00:00:00Z. Useful as a sentinel.
     pub fn epoch() -> Time { return Time { unix_nanos: 0, tz_offset_min: 0 }; }
 
-    /// Wall-clock now in the system's local timezone. The instant itself
-    /// is UTC; only the displayed components are shifted.
+    /// Wall-clock now in the system's local timezone. The underlying
+    /// instant is always UTC; the `tz_offset_min` field shifts the
+    /// rendered components (year/month/day/hour/…).
+    ///
+    /// ```glide
+    /// let t: Time = Time::now();
+    /// println!(t.format("YYYY-MM-DD HH:mm:ss"));
+    /// ```
     pub fn now() -> Time {
         return Time {
             unix_nanos: __time_wall_nanos(),
@@ -387,7 +419,13 @@ impl Time {
         };
     }
 
-    /// Wall-clock now in UTC.
+    /// Wall-clock now in UTC. Same instant as `now()` but with
+    /// `tz_offset_min == 0`, so component accessors yield UTC values.
+    ///
+    /// ```glide
+    /// let utc: Time = Time::now_utc();
+    /// println!(utc.rfc3339());
+    /// ```
     pub fn now_utc() -> Time {
         return Time { unix_nanos: __time_wall_nanos(), tz_offset_min: 0 };
     }
@@ -409,6 +447,14 @@ impl Time {
         return Time { unix_nanos: secs * NANOS_PER_SEC, tz_offset_min: 0 };
     }
 
+    /// Construct a `Time` from civil components in UTC. Out-of-range
+    /// args (e.g. `month == 13`) carry over via the underlying
+    /// civil-from-days math; pass clean values for predictable results.
+    ///
+    /// ```glide
+    /// let new_year: Time = Time::from_datetime(2026, 1, 1, 0, 0, 0);
+    /// println!(new_year.rfc3339());   // 2026-01-01T00:00:00Z
+    /// ```
     pub fn from_datetime(year: int, month: int, day: int,
                          hour: int, minute: int, second: int) -> Time {
         let days: int = _days_from_civil(year, month, day);
@@ -566,6 +612,13 @@ impl Time {
     ///   Dy    short weekday name (`Mon`)
     /// Anything else is copied verbatim. Tokens are matched longest-first
     /// so `MMMM` doesn't get consumed as `MMM` + `M`.
+    ///
+    /// ```glide
+    /// let t: Time = Time::from_datetime(2024, 1, 15, 14, 23, 45);
+    /// t.format("YYYY-MM-DD");          // "2024-01-15"
+    /// t.format("DD/MM/YY HH:mm");      // "15/01/24 14:23"
+    /// t.format("Day, MMMM DD");        // "Monday, January 15"
+    /// ```
     pub fn format(self: Time, spec: string) -> string {
         let n: int = spec.len();
         let mut out: string = "";
@@ -631,6 +684,16 @@ impl Time {
     ///   `2024-01-15T14:23:45+02:00`       (offset)
     ///   `2024-01-15T14:23:45-05:30`       (negative offset)
     /// Fractional seconds and lowercase variants aren't accepted yet.
+    ///
+    /// ```glide
+    /// let r: !Time = Time::parse_rfc3339("2024-03-21T18:45:30+02:00");
+    /// if r.ok {
+    ///     let t: Time = r.val;
+    ///     println!("unix:", t.unix());
+    /// } else {
+    ///     println!("parse failed:", r.err);
+    /// }
+    /// ```
     pub fn parse_rfc3339(s: string) -> !Time {
         let n: int = s.len();
         if n < 20 { return err("rfc3339: too short"); }
@@ -704,16 +767,40 @@ pub struct Stopwatch {
 }
 
 impl Stopwatch {
+    /// Start a stopwatch. Reads the monotonic clock immediately.
+    ///
+    /// ```glide
+    /// let sw: Stopwatch = Stopwatch::start();
+    /// expensive_work();
+    /// println!("took:", sw.elapsed().to_string());
+    /// ```
     pub fn start() -> Stopwatch {
         return Stopwatch { start_ns: now_ns() };
     }
 
+    /// Time since the last `start` / `reset`. Multiple calls are fine —
+    /// the stopwatch keeps running.
+    ///
+    /// ```glide
+    /// let sw: Stopwatch = Stopwatch::start();
+    /// step_one();
+    /// let t1: Duration = sw.elapsed();
+    /// step_two();
+    /// let t2: Duration = sw.elapsed();   // total since start, not since t1
+    /// ```
     pub fn elapsed(self: Stopwatch) -> Duration {
         return Duration { nanos: now_ns() - self.start_ns };
     }
 
     /// Restart the clock. Returns the elapsed Duration up to the reset
     /// point so callers can chain timing intervals.
+    ///
+    /// ```glide
+    /// let sw: *Stopwatch = ...;
+    /// step_one();   let a: Duration = sw.reset();
+    /// step_two();   let b: Duration = sw.reset();
+    /// println!("a =", a.to_string(), " b =", b.to_string());
+    /// ```
     pub fn reset(self: *Stopwatch) -> Duration {
         let prev: i64 = self.start_ns;
         let now: i64 = now_ns();
