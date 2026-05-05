@@ -40,8 +40,10 @@ module.exports = grammar({
       $.extern_type,
       $.c_include,
       $.c_link,
+      $.c_raw_block,
       $.struct_decl,
       $.enum_decl,
+      $.trait_decl,
       $.interface_decl,
       $.impl_decl,
       $.let_stmt,
@@ -102,18 +104,39 @@ module.exports = grammar({
     import_stmt: $ => seq(
       'import',
       field('path', choice($.string_literal, $.import_path)),
+      optional(field('items', $.import_items)),
       ';',
     ),
 
     import_path: $ => seq(
       $.identifier,
       repeat(seq('::', $.identifier)),
+      // `import a::b::*;` and `import a::b::{X, Y};` tail forms.
+      optional(seq('::', choice('*', $.import_brace_list))),
+    ),
+
+    import_brace_list: $ => seq(
+      '{',
+      $.identifier,
+      repeat(seq(',', $.identifier)),
+      optional(','),
+      '}',
+    ),
+
+    import_items: $ => seq(
+      '{',
+      $.identifier,
+      repeat(seq(',', $.identifier)),
+      optional(','),
+      '}',
     ),
 
     // ---- declarations ----
 
     fn_decl: $ => seq(
+      optional($.cfg_attr),
       optional('pub'),
+      optional('naked'),
       'fn',
       field('name', $.identifier),
       optional($.type_params),
@@ -122,9 +145,24 @@ module.exports = grammar({
       field('body', $.block),
     ),
 
-    type_params: $ => seq('<', $.identifier, repeat(seq(',', $.identifier)), '>'),
+    cfg_attr: $ => seq('@', 'cfg', '(', $.string_literal, ')'),
+
+    type_params: $ => seq(
+      '<',
+      $.type_param,
+      repeat(seq(',', $.type_param)),
+      '>',
+    ),
+
+    type_param: $ => seq(
+      field('name', $.identifier),
+      optional(seq(':', $.type_bound, repeat(seq('+', $.type_bound)))),
+    ),
+
+    type_bound: $ => $.identifier,
 
     extern_fn: $ => seq(
+      optional('pub'),
       'extern',
       optional($.string_literal),
       'fn',
@@ -183,9 +221,30 @@ module.exports = grammar({
     ),
 
     struct_field: $ => seq(
+      optional('pub'),
+      optional('!'),
       field('name', $.identifier),
       ':',
       field('type', $._type),
+    ),
+
+    trait_decl: $ => seq(
+      optional('pub'),
+      'trait',
+      field('name', $.identifier),
+      optional($.type_params),
+      optional(seq(':', $.type_bound, repeat(seq('+', $.type_bound)))),
+      '{',
+      repeat(choice($.trait_method_sig, $.fn_decl)),
+      '}',
+    ),
+
+    trait_method_sig: $ => seq(
+      'fn',
+      field('name', $.identifier),
+      field('params', $.param_list),
+      optional(seq('->', field('return_type', $._type))),
+      ';',
     ),
 
     interface_decl: $ => seq(
@@ -206,14 +265,20 @@ module.exports = grammar({
 
     impl_decl: $ => seq(
       'impl',
+      optional($.type_params),
       field('interface', $.identifier),
+      optional($.type_args),
       optional(seq('for', field('target', $._type))),
+      optional(seq('in', field('namespace', $.identifier))),
       '{',
       repeat(choice($.fn_decl, $.macro_def)),
       '}',
     ),
 
     // `macro name!($x:expr, $($y:expr),*) { body }`
+    // Or stub form `macro name!($x:expr, ...);` used by builtins to give
+    // the LSP a hover target without a real expansion (codegen
+    // intercepts the call directly).
     macro_def: $ => seq(
       optional('pub'),
       'macro',
@@ -226,7 +291,7 @@ module.exports = grammar({
         optional(','),
       )),
       ')',
-      field('body', $.block),
+      choice(field('body', $.block), ';'),
     ),
 
     _macro_matcher: $ => choice(
@@ -264,17 +329,95 @@ module.exports = grammar({
       $.struct_decl,
       $.if_stmt,
       $.while_stmt,
+      $.while_let_stmt,
       $.for_stmt,
+      $.for_in_stmt,
       $.match_stmt,
       $.return_stmt,
       $.spawn_stmt,
       $.defer_stmt,
       $.break_stmt,
       $.continue_stmt,
+      $.asm_block,
+      $.c_raw_block,
       $.block,
       $.macro_rep_stmt,
       $.expression_statement,
     ),
+
+    while_let_stmt: $ => seq(
+      'while', 'let',
+      field('name', $.identifier),
+      optional(seq(':', field('type', $._type))),
+      '=',
+      field('value', $._expression),
+      field('body', $.block),
+    ),
+
+    for_in_stmt: $ => seq(
+      'for',
+      field('name', $.identifier),
+      'in',
+      field('start', $._expression),
+      optional(seq(choice('..', '..='), field('end', $._expression))),
+      field('body', $.block),
+    ),
+
+    asm_block: $ => seq(
+      'asm',
+      optional('volatile'),
+      '{',
+      repeat($.asm_line),
+      optional($.asm_operands),
+      '}',
+    ),
+
+    asm_line: $ => $.string_literal,
+
+    asm_operands: $ => seq(
+      ':',
+      optional($.asm_operand_list),
+      optional(seq(':', optional($.asm_operand_list))),
+      optional(seq(':', optional($.asm_clobber_list))),
+    ),
+
+    asm_operand_list: $ => seq(
+      $.asm_operand,
+      repeat(seq(',', $.asm_operand)),
+    ),
+
+    asm_operand: $ => seq(
+      $.string_literal,
+      '(',
+      $._expression,
+      ')',
+    ),
+
+    asm_clobber_list: $ => seq(
+      $.string_literal,
+      repeat(seq(',', $.string_literal)),
+    ),
+
+    // `c_raw! { ... }` — body is captured verbatim by the Glide lexer
+    // (no token interpretation inside). The tree-sitter grammar matches
+    // the opener + a brace-balanced body via the recursive
+    // `raw_brace_block` rule, so editor highlight stays sane.
+    c_raw_block: $ => seq(
+      'c_raw',
+      '!',
+      $.raw_brace_block,
+    ),
+
+    raw_brace_block: $ => seq(
+      '{',
+      repeat(choice(
+        $.raw_brace_block,
+        $._raw_atom,
+      )),
+      '}',
+    ),
+
+    _raw_atom: _ => token(prec(-1, /[^{}]+/)),
 
     // `$( body );*` — body repetition inside a macro def.
     macro_rep_stmt: $ => seq(
@@ -400,6 +543,8 @@ module.exports = grammar({
 
     _type: $ => choice(
       $.named_type,
+      $.self_type,
+      $.dyn_type,
       $.pointer_type,
       $.borrow_type,
       $.borrow_mut_type,
@@ -408,6 +553,10 @@ module.exports = grammar({
       $.fn_ptr_type,
       $.result_type,
     ),
+
+    self_type: _ => 'Self',
+
+    dyn_type: $ => seq('dyn', field('trait', $.identifier)),
 
     result_type: $ => seq('!', $._type),
 
@@ -530,7 +679,16 @@ module.exports = grammar({
     member_expr: $ => prec(PREC.postfix, seq(
       field('object', $._postfix_chain),
       '.',
-      field('field', $.identifier),
+      // Plain field, or qualified `NS::method` for impl-on-primitive
+      // namespaced calls (e.g. `seven.tour::squared()`).
+      choice(
+        field('field', $.identifier),
+        seq(
+          field('namespace', $.identifier),
+          '::',
+          field('field', $.identifier),
+        ),
+      ),
     )),
 
     postfix_expr: $ => prec(PREC.postfix, seq(
@@ -571,9 +729,13 @@ module.exports = grammar({
       field('body', $.block),
     ),
 
+    // `Type::member` and `a::b::c::member` qualified path expressions.
+    // Multi-segment form is used by qualified imports
+    // (`stdlib::math::min_int(…)`).
     path_expr: $ => prec(20, seq(
       field('type', $.identifier),
       '::',
+      repeat(seq($.identifier, '::')),
       field('member', $.identifier),
     )),
 
@@ -680,6 +842,9 @@ module.exports = grammar({
       /[0-9][0-9_]*[eE][+-]?[0-9_]+/,
     )),
 
+    // String literal — supports `${expr}` interpolation segments. The
+    // grammar treats the placeholder as an opaque inner span; the
+    // compiler lowers each `${...}` to a `format!` arg.
     string_literal: _ => token(seq(
       '"',
       repeat(choice(/[^"\\\n]/, /\\./)),

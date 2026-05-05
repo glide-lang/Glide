@@ -5,9 +5,11 @@
   "mut"
   "const"
   "struct"
+  "trait"
   "interface"
   "impl"
   "import"
+  "in"
   "pub"
   "enum"
   "match"
@@ -29,8 +31,41 @@
   "extern"
   "c_include"
   "c_link"
+  "c_raw"
   "macro"
+  "naked"
+  "asm"
+  "volatile"
+  "dyn"
 ] @keyword
+
+; Self type
+(self_type) @type.builtin
+
+; @cfg(...) attribute
+(cfg_attr "@" @attribute "cfg" @attribute)
+
+; trait + supertraits
+(trait_decl name: (identifier) @type)
+(trait_method_sig name: (identifier) @function)
+(type_bound (identifier) @type)
+(type_param name: (identifier) @type.parameter)
+
+; dyn Trait
+(dyn_type "dyn" @keyword
+          trait: (identifier) @type)
+
+; Inline asm strings get treated as embedded asm
+(asm_block (asm_line (string_literal) @string.special))
+(asm_operand (string_literal) @string.special)
+
+; c_raw block contents — neutral so the rest of the editor doesn't
+; try to color C as Glide.
+(raw_brace_block) @comment.block
+
+; Namespaced method call: `obj.NS::method()`
+(member_expr namespace: (identifier) @namespace
+             field: (identifier) @function.method)
 
 ; Built-in / known primitive types
 ((identifier) @type.builtin
