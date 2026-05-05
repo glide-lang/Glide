@@ -15,7 +15,7 @@
 /// ```
 ///
 /// For a known final size, prefer `Vector::with_cap(n)` to avoid reallocations.
-struct Vector<T> {
+pub struct Vector<T> {
     /// Heap buffer. `null` while `cap == 0`.
     data: *T,
     /// Number of initialised elements (`<= cap`).

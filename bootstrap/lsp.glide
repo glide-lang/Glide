@@ -68,9 +68,19 @@ pub struct LspDoc {
     pub stmts: *Vector<Stmt>,
 }
 
+// One importable symbol from src/stdlib/. Built once at server startup
+// and reused by completion to surface auto-import suggestions.
+pub struct ImportableSym {
+    pub name: string,         // `HashMap`, `Time`, `min_int`, …
+    pub kind: int,            // ST_FN / ST_STRUCT / ST_ENUM / ST_CONST / ST_TRAIT
+    pub module: string,       // `stdlib::hashmap`, `stdlib::time`, …
+    pub detail: string,       // signature / preview shown in the completion list
+}
+
 pub struct LspState {
     pub docs: *HashMap<LspDoc>,
     pub shutdown_requested: bool,
+    pub stdlib_index: *Vector<ImportableSym>,
 }
 
 pub fn lsp_state_new() -> *LspState {
@@ -78,6 +88,9 @@ pub fn lsp_state_new() -> *LspState {
     let m: *HashMap<LspDoc> = HashMap::new();
     s.docs = m;
     s.shutdown_requested = false;
+    let idx: *Vector<ImportableSym> = Vector::new();
+    s.stdlib_index = idx;
+    populate_stdlib_index(s);
     return s;
 }
 
@@ -242,6 +255,76 @@ fn find_builtins_dir() -> string {
     }
     if !read_file("src/builtins/builtins.glide").eq("") { return "src/builtins"; }
     return "";
+}
+
+// Locate `src/stdlib/`. Same fallback chain as find_builtins_dir — prefer
+// the install layout next to the binary, fall back to in-repo dev.
+fn find_stdlib_dir() -> string {
+    let exe_dir: string = __glide_exe_dir();
+    if !exe_dir.eq("") {
+        let probe: string = exe_dir.concat("/src/stdlib/hashmap.glide");
+        if !read_file(probe).eq("") { return exe_dir.concat("/src/stdlib"); }
+    }
+    if !read_file("src/stdlib/hashmap.glide").eq("") { return "src/stdlib"; }
+    return "";
+}
+
+// Strip a trailing ".glide" so "math.glide" -> "math".
+fn drop_glide_ext(name: string) -> string {
+    let n: int = name.len();
+    if n > 6 && name.substring(n - 6, n).eq(".glide") {
+        return name.substring(0, n - 6);
+    }
+    return name;
+}
+
+// Walk every src/stdlib/*.glide and collect all `pub` top-level decls into
+// state.stdlib_index. Called once at startup; the LSP doesn't reparse on
+// every completion request.
+fn populate_stdlib_index(state: *LspState) {
+    let dir: string = find_stdlib_dir();
+    if dir.eq("") { return; }
+    let files: *Vector<string> = fs_list_dir(dir, ".glide");
+    if files == null { return; }
+    for let i: int = 0; i < files.len(); i++ {
+        let fname: string = files.get(i);
+        let path: string = dir.concat("/").concat(fname);
+        let src: string = read_file(path);
+        if src.eq("") { continue; }
+        let module: string = "stdlib::".concat(drop_glide_ext(fname));
+        let lex: *Lexer = Lexer::new(src);
+        let par: *Parser = Parser::new(lex);
+        let stmts: *Vector<Stmt> = parse_program(par);
+        if stmts == null { continue; }
+        for let j: int = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if !s.is_pub { continue; }
+            if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
+               && s.kind != ST_CONST && s.kind != ST_TRAIT { continue; }
+            let mut detail: string = "";
+            if s.kind == ST_FN { detail = fn_signature(&s); }
+            else if s.kind == ST_STRUCT { detail = "struct ".concat(s.name); }
+            else if s.kind == ST_ENUM { detail = "enum ".concat(s.name); }
+            else if s.kind == ST_TRAIT { detail = "trait ".concat(s.name); }
+            else if s.kind == ST_CONST { detail = "const ".concat(s.name); }
+            let sym: ImportableSym = ImportableSym {
+                name: s.name,
+                kind: s.kind,
+                module: module,
+                detail: detail,
+            };
+            state.stdlib_index.push(sym);
+        }
+    }
+}
+
+// Helper: directory listing with a suffix filter. Mirrors fs_list from
+// stdlib::fs but stays inside the LSP module to avoid the import dep.
+extern fn __glide_list_dir(path: string, suffix: string) -> string;
+fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
+    let raw: string = __glide_list_dir(dir, suffix);
+    if raw.eq("") { return Vector::new(); }
+    return raw.split("\n");
 }
 
 fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
@@ -1394,6 +1477,96 @@ fn completion_item(label: string, kind: int, detail: string) -> *JsonValue {
     return it;
 }
 
+// Collect every `import a::b::c::*;` / `import "..."` path the doc
+// currently has. Used to skip auto-import suggestions for already-loaded
+// modules.
+fn current_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
+    let h: *HashMap<bool> = HashMap::new();
+    if stmts == null { return h; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPORT { continue; }
+        let p: string = lsp_strip_quotes(s.import_path);
+        if !p.eq("") { h.insert(p, true); }
+        if s.import_short != null && !s.import_short.eq("") {
+            h.insert(s.import_short, true);
+        }
+    }
+    return h;
+}
+
+fn lsp_strip_quotes(s: string) -> string {
+    let n: int = s.len();
+    if n >= 2 && s.at(0).to_int() == 34 && s.at(n - 1).to_int() == 34 {
+        return s.substring(1, n - 1);
+    }
+    return s;
+}
+
+// Find the line + col where a new `import` statement should be inserted.
+// Strategy: place it after the last existing `import` line at the top of
+// the file, or at the very start if the file has none. Returns 0-indexed
+// line + character (LSP coordinates).
+fn find_import_insertion_pos(text: string) -> int {
+    let n: int = text.len();
+    let mut line: int = 0;
+    let mut last_import_line: int = -1;
+    let mut line_start: int = 0;
+    let mut i: int = 0;
+    while i <= n {
+        let at_eol: bool = (i == n) || (text.at(i).to_int() == 10);
+        if at_eol {
+            let cur: string = text.substring(line_start, i);
+            let trimmed: string = cur.trim();
+            if trimmed.len() >= 7 && trimmed.substring(0, 7).eq("import ") {
+                last_import_line = line;
+            }
+            line = line + 1;
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    if last_import_line < 0 { return 0; }
+    return last_import_line + 1;
+}
+
+// Build a completion item that, on accept, adds an `import <module>::*;`
+// at the top of the file via an additionalTextEdit. If the module is
+// already imported, the import line is skipped (a plain item is returned).
+fn completion_item_with_import(label: string, kind: int, detail: string,
+                               module: string, already_imported: bool,
+                               insert_line: int) -> *JsonValue {
+    let it: *JsonValue = completion_item(label, kind, detail);
+    if already_imported { return it; }
+    let edits: *JsonValue = json_array();
+    let edit: *JsonValue = json_object();
+    let range: *JsonValue = json_object();
+    let start: *JsonValue = json_object();
+    let endp: *JsonValue = json_object();
+    json_obj_set(start, "line", json_int(insert_line));
+    json_obj_set(start, "character", json_int(0));
+    json_obj_set(endp,  "line", json_int(insert_line));
+    json_obj_set(endp,  "character", json_int(0));
+    json_obj_set(range, "start", start);
+    json_obj_set(range, "end", endp);
+    json_obj_set(edit, "range", range);
+    json_obj_set(edit, "newText", json_string("import ".concat(module).concat("::*;\n")));
+    json_arr_push(edits, edit);
+    json_obj_set(it, "additionalTextEdits", edits);
+    return it;
+}
+
+// LSP CompletionItemKind for a Stmt kind. Mirrors ci_kind_for, kept here
+// so populate_stdlib_index doesn't need the rest of the file in scope.
+fn ci_kind_for_stmt_kind(k: int) -> int {
+    if k == ST_FN { return 3; }       // Function
+    if k == ST_STRUCT { return 22; }  // Struct
+    if k == ST_ENUM { return 13; }    // Enum
+    if k == ST_CONST { return 21; }   // Constant
+    if k == ST_TRAIT { return 8; }    // Interface
+    return 1;                          // Text fallback
+}
+
 // Walk back from (line0, col0) and skip any partial identifier the user is
 // typing. Returns the cursor position just before that partial.
 fn cursor_before_partial(text: string, line0: int, col0: int) -> int {
@@ -1731,15 +1904,43 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
 
-    // 3. Glide keywords.
+    // 3. Auto-import suggestions: surface every `pub` symbol from
+    // src/stdlib/ that the user hasn't imported yet. Selecting one
+    // inserts `import stdlib::<module>::*;` at the top of the file via
+    // an additionalTextEdit.
+    if state.stdlib_index != null && state.stdlib_index.len() > 0 {
+        let imps: *HashMap<bool> = current_imports(doc.stmts);
+        let insert_line: int = find_import_insertion_pos(doc.text);
+        let n_idx: int = state.stdlib_index.len();
+        for let i: int = 0; i < n_idx; i++ {
+            let sym: ImportableSym = state.stdlib_index.get(i);
+            if seen.contains(sym.name) { continue; }
+            seen.insert(sym.name, true);
+            let already: bool = imps.contains(sym.module);
+            let detail: string = sym.detail.concat("    [").concat(sym.module).concat("]");
+            let item: *JsonValue = completion_item_with_import(
+                sym.name,
+                ci_kind_for_stmt_kind(sym.kind),
+                detail,
+                sym.module,
+                already,
+                insert_line);
+            json_arr_push(items, item);
+        }
+        imps.free();
+    }
+
+    // 4. Glide keywords.
     let kws: *Vector<string> = Vector::new();
     kws.push("let"); kws.push("const"); kws.push("mut"); kws.push("fn");
     kws.push("struct"); kws.push("enum"); kws.push("impl"); kws.push("interface");
+    kws.push("trait"); kws.push("dyn"); kws.push("Self"); kws.push("in");
     kws.push("if"); kws.push("else"); kws.push("while"); kws.push("for");
     kws.push("return"); kws.push("break"); kws.push("continue");
     kws.push("match"); kws.push("defer"); kws.push("spawn"); kws.push("import");
     kws.push("pub"); kws.push("extern"); kws.push("true"); kws.push("false"); kws.push("null");
-    kws.push("as"); kws.push("type"); kws.push("move"); kws.push("chan");
+    kws.push("as"); kws.push("sizeof"); kws.push("type"); kws.push("move"); kws.push("chan");
+    kws.push("naked"); kws.push("asm"); kws.push("c_raw"); kws.push("macro");
     for let i: int = 0; i < kws.len(); i++ {
         let k: string = kws.get(i);
         if seen.contains(k) { continue; }

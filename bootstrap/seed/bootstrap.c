@@ -1440,6 +1440,7 @@ typedef struct  Vector__FnMonoEntry   Vector__FnMonoEntry ;
 typedef struct  Vector__AnonFn   Vector__AnonFn ;
 typedef struct  Vector__JsonValue   Vector__JsonValue ;
 typedef struct  HashMap__LspDoc   HashMap__LspDoc ;
+typedef struct  Vector__ImportableSym   Vector__ImportableSym ;
 typedef struct  Vector__UseSite   Vector__UseSite ;
 typedef struct  Token   Token ;
 typedef struct  Lexer   Lexer ;
@@ -1466,6 +1467,7 @@ typedef struct  CG   CG ;
 typedef struct  JsonValue   JsonValue ;
 typedef struct  JsonParser   JsonParser ;
 typedef struct  LspDoc   LspDoc ;
+typedef struct  ImportableSym   ImportableSym ;
 typedef struct  LspState   LspState ;
 typedef struct  ImplMethodHit   ImplMethodHit ;
 typedef struct  FieldHit   FieldHit ;
@@ -1623,6 +1625,12 @@ struct  HashMap__LspDoc  {
      const char**   keys;
      LspDoc*   values;
      bool*   occupied;
+     int   len;
+     int   cap;
+};
+
+struct  Vector__ImportableSym  {
+     ImportableSym*   data;
      int   len;
      int   cap;
 };
@@ -1907,9 +1915,17 @@ typedef struct  LspDoc  {
      Vector__Stmt*   stmts;
 }  LspDoc ;
 
+typedef struct  ImportableSym  {
+     const char*   name;
+     int   kind;
+     const char*   module;
+     const char*   detail;
+}  ImportableSym ;
+
 typedef struct  LspState  {
      HashMap__LspDoc*   docs;
      bool   shutdown_requested;
+     Vector__ImportableSym*   stdlib_index;
 }  LspState ;
 
 typedef struct  ImplMethodHit  {
@@ -2379,6 +2395,11 @@ void   handle_shutdown (JsonValue*   req, LspState*   state);
 JsonValue*   diag_to_json (DiagEntry*   d);
 const char*   uri_to_path (const char*   uri);
 const char*   find_builtins_dir (void);
+const char*   find_stdlib_dir (void);
+const char*   drop_glide_ext (const char*   name);
+void   populate_stdlib_index (LspState*   state);
+const char*   __glide_list_dir (const char*   path, const char*   suffix);
+Vector__string*   fs_list_dir (const char*   dir, const char*   suffix);
 void   run_analysis_and_publish (const char*   uri, const char*   text, LspState*   state);
 void   handle_did_open (JsonValue*   req, LspState*   state);
 void   handle_did_change (JsonValue*   req, LspState*   state);
@@ -2420,6 +2441,11 @@ Stmt*   fn_containing (Vector__Stmt*   stmts, int   line0);
 void   collect_locals (Vector__Stmt*   body, int   before_line, Vector__Stmt*   out);
 void   collect_locals_stmt (Stmt*   s, int   before_line, Vector__Stmt*   out);
 JsonValue*   completion_item (const char*   label, int   kind, const char*   detail);
+HashMap__bool*   current_imports (Vector__Stmt*   stmts);
+const char*   lsp_strip_quotes (const char*   s);
+int   find_import_insertion_pos (const char*   text);
+JsonValue*   completion_item_with_import (const char*   label, int   kind, const char*   detail, const char*   module, bool   already_imported, int   insert_line);
+int   ci_kind_for_stmt_kind (int   k);
 int   cursor_before_partial (const char*   text, int   line0, int   col0);
 const char*   path_qualifier_before (const char*   text, int   line0, int   col0);
 const char*   member_qualifier_before (const char*   text, int   line0, int   col0);
@@ -2621,6 +2647,8 @@ void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x);
 JsonValue   Vector_get__JsonValue (Vector__JsonValue*   self, int   i);
 int   Vector_len__JsonValue (Vector__JsonValue*   self);
 HashMap__LspDoc*   HashMap_new__LspDoc (void);
+Vector__ImportableSym*   Vector_new__ImportableSym (void);
+void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym   x);
 void   Vector_clear__Stmt (Vector__Stmt*   self);
 bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k);
 LspDoc   HashMap_get__LspDoc (HashMap__LspDoc*   self, const char*   k);
@@ -2628,6 +2656,8 @@ void   HashMap_insert__LspDoc (HashMap__LspDoc*   self, const char*   k, LspDoc 
 int   Vector_len__DiagEntry (Vector__DiagEntry*   self);
 DiagEntry   Vector_get__DiagEntry (Vector__DiagEntry*   self, int   i);
 bool   HashMap_remove__LspDoc (HashMap__LspDoc*   self, const char*   k);
+int   Vector_len__ImportableSym (Vector__ImportableSym*   self);
+ImportableSym   Vector_get__ImportableSym (Vector__ImportableSym*   self, int   i);
 void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x);
 Vector__UseSite*   Vector_new__UseSite (void);
 int   Vector_len__UseSite (Vector__UseSite*   self);
@@ -13357,6 +13387,9 @@ LspState*   lsp_state_new (void) {
     HashMap__LspDoc*   m = HashMap_new__LspDoc();
     ((s-> docs )  =  m);
     ((s-> shutdown_requested )  =  false);
+    Vector__ImportableSym*   idx = Vector_new__ImportableSym();
+    ((s-> stdlib_index )  =  idx);
+    populate_stdlib_index(s);
     return s;
 }
 
@@ -13536,6 +13569,93 @@ const char*   find_builtins_dir (void) {
         return "src/builtins";
     }
     return "";
+}
+
+const char*   find_stdlib_dir (void) {
+    const char*   exe_dir = __glide_exe_dir();
+    if ((!__glide_string_eq(exe_dir, ""))) {
+        const char*   probe = __glide_string_concat(exe_dir, "/src/stdlib/hashmap.glide");
+        if ((!__glide_string_eq(read_file(probe), ""))) {
+            return __glide_string_concat(exe_dir, "/src/stdlib");
+        }
+    }
+    if ((!__glide_string_eq(read_file("src/stdlib/hashmap.glide"), ""))) {
+        return "src/stdlib";
+    }
+    return "";
+}
+
+const char*   drop_glide_ext (const char*   name) {
+    int   n = __glide_string_len(name);
+    if (((n  >  6)  &&  __glide_string_eq(__glide_string_substring(name, (n  -  6), n), ".glide"))) {
+        return __glide_string_substring(name, 0, (n  -  6));
+    }
+    return name;
+}
+
+void   populate_stdlib_index (LspState*   state) {
+    const char*   dir = find_stdlib_dir();
+    if (__glide_string_eq(dir, "")) {
+        return;
+    }
+    Vector__string*   files = fs_list_dir(dir, ".glide");
+    if ((files  ==  NULL)) {
+        return;
+    }
+    for (int   i = 0; (i  <  Vector_len__string(files)); i++) {
+        const char*   fname = Vector_get__string(files, i);
+        const char*   path = __glide_string_concat(__glide_string_concat(dir, "/"), fname);
+        const char*   src = read_file(path);
+        if (__glide_string_eq(src, "")) {
+            continue;
+        }
+        const char*   module = __glide_string_concat("stdlib::", drop_glide_ext(fname));
+        Lexer*   lex = Lexer_new(src);
+        Parser*   par = Parser_new(lex);
+        Vector__Stmt*   stmts = parse_program(par);
+        if ((stmts  ==  NULL)) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(stmts)); j++) {
+            Stmt   s = Vector_get__Stmt(stmts, j);
+            if ((!(s. is_pub ))) {
+                continue;
+            }
+            if (((((((s. kind )  !=  ST_FN)  &&  ((s. kind )  !=  ST_STRUCT))  &&  ((s. kind )  !=  ST_ENUM))  &&  ((s. kind )  !=  ST_CONST))  &&  ((s. kind )  !=  ST_TRAIT))) {
+                continue;
+            }
+            const char*   detail = "";
+            if (((s. kind )  ==  ST_FN)) {
+                (detail  =  fn_signature((&s)));
+            } else {
+                if (((s. kind )  ==  ST_STRUCT)) {
+                    (detail  =  __glide_string_concat("struct ", (s. name )));
+                } else {
+                    if (((s. kind )  ==  ST_ENUM)) {
+                        (detail  =  __glide_string_concat("enum ", (s. name )));
+                    } else {
+                        if (((s. kind )  ==  ST_TRAIT)) {
+                            (detail  =  __glide_string_concat("trait ", (s. name )));
+                        } else {
+                            if (((s. kind )  ==  ST_CONST)) {
+                                (detail  =  __glide_string_concat("const ", (s. name )));
+                            }
+                        }
+                    }
+                }
+            }
+            ImportableSym   sym = (( ImportableSym ){. name  = (s. name ), . kind  = (s. kind ), . module  = module, . detail  = detail});
+            Vector_push__ImportableSym((state-> stdlib_index ), sym);
+        }
+    }
+}
+
+Vector__string*   fs_list_dir (const char*   dir, const char*   suffix) {
+    const char*   raw = __glide_list_dir(dir, suffix);
+    if (__glide_string_eq(raw, "")) {
+        return Vector_new__string();
+    }
+    return string_split(raw, "\n");
 }
 
 void   run_analysis_and_publish (const char*   uri, const char*   text, LspState*   state) {
@@ -14798,6 +14918,102 @@ JsonValue*   completion_item (const char*   label, int   kind, const char*   det
     return it;
 }
 
+HashMap__bool*   current_imports (Vector__Stmt*   stmts) {
+    HashMap__bool*   h = HashMap_new__bool();
+    if ((stmts  ==  NULL)) {
+        return h;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if (((s. kind )  !=  ST_IMPORT)) {
+            continue;
+        }
+        const char*   p = lsp_strip_quotes((s. import_path ));
+        if ((!__glide_string_eq(p, ""))) {
+            HashMap_insert__bool(h, p, true);
+        }
+        if ((((s. import_short )  !=  NULL)  &&  (!__glide_string_eq((s. import_short ), "")))) {
+            HashMap_insert__bool(h, (s. import_short ), true);
+        }
+    }
+    return h;
+}
+
+const char*   lsp_strip_quotes (const char*   s) {
+    int   n = __glide_string_len(s);
+    if ((((n  >=  2)  &&  (__glide_char_to_int(__glide_string_at(s, 0))  ==  34))  &&  (__glide_char_to_int(__glide_string_at(s, (n  -  1)))  ==  34))) {
+        return __glide_string_substring(s, 1, (n  -  1));
+    }
+    return s;
+}
+
+int   find_import_insertion_pos (const char*   text) {
+    int   n = __glide_string_len(text);
+    int   line = 0;
+    int   last_import_line = (-1);
+    int   line_start = 0;
+    int   i = 0;
+    while ((i  <=  n)) {
+        bool   at_eol = ((i  ==  n)  ||  (__glide_char_to_int(__glide_string_at(text, i))  ==  10));
+        if (at_eol) {
+            const char*   cur = __glide_string_substring(text, line_start, i);
+            const char*   trimmed = string_trim(cur);
+            if (((__glide_string_len(trimmed)  >=  7)  &&  __glide_string_eq(__glide_string_substring(trimmed, 0, 7), "import "))) {
+                (last_import_line  =  line);
+            }
+            (line  =  (line  +  1));
+            (line_start  =  (i  +  1));
+        }
+        (i  =  (i  +  1));
+    }
+    if ((last_import_line  <  0)) {
+        return 0;
+    }
+    return (last_import_line  +  1);
+}
+
+JsonValue*   completion_item_with_import (const char*   label, int   kind, const char*   detail, const char*   module, bool   already_imported, int   insert_line) {
+    JsonValue*   it = completion_item(label, kind, detail);
+    if (already_imported) {
+        return it;
+    }
+    JsonValue*   edits = json_array();
+    JsonValue*   edit = json_object();
+    JsonValue*   range = json_object();
+    JsonValue*   start = json_object();
+    JsonValue*   endp = json_object();
+    json_obj_set(start, "line", json_int(insert_line));
+    json_obj_set(start, "character", json_int(0));
+    json_obj_set(endp, "line", json_int(insert_line));
+    json_obj_set(endp, "character", json_int(0));
+    json_obj_set(range, "start", start);
+    json_obj_set(range, "end", endp);
+    json_obj_set(edit, "range", range);
+    json_obj_set(edit, "newText", json_string(__glide_string_concat(__glide_string_concat("import ", module), "::*;\n")));
+    json_arr_push(edits, edit);
+    json_obj_set(it, "additionalTextEdits", edits);
+    return it;
+}
+
+int   ci_kind_for_stmt_kind (int   k) {
+    if ((k  ==  ST_FN)) {
+        return 3;
+    }
+    if ((k  ==  ST_STRUCT)) {
+        return 22;
+    }
+    if ((k  ==  ST_ENUM)) {
+        return 13;
+    }
+    if ((k  ==  ST_CONST)) {
+        return 21;
+    }
+    if ((k  ==  ST_TRAIT)) {
+        return 8;
+    }
+    return 1;
+}
+
 int   cursor_before_partial (const char*   text, int   line0, int   col0) {
     int   pos = 0;
     int   line = 0;
@@ -15219,6 +15435,23 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
         }
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
+    if ((((state-> stdlib_index )  !=  NULL)  &&  (Vector_len__ImportableSym((state-> stdlib_index ))  >  0))) {
+        HashMap__bool*   imps = current_imports((doc. stmts ));
+        int   insert_line = find_import_insertion_pos((doc. text ));
+        int   n_idx = Vector_len__ImportableSym((state-> stdlib_index ));
+        for (int   i = 0; (i  <  n_idx); i++) {
+            ImportableSym   sym = Vector_get__ImportableSym((state-> stdlib_index ), i);
+            if (HashMap_contains__bool(seen, (sym. name ))) {
+                continue;
+            }
+            HashMap_insert__bool(seen, (sym. name ), true);
+            bool   already = HashMap_contains__bool(imps, (sym. module ));
+            const char*   detail = __glide_string_concat(__glide_string_concat(__glide_string_concat((sym. detail ), "    ["), (sym. module )), "]");
+            JsonValue*   item = completion_item_with_import((sym. name ), ci_kind_for_stmt_kind((sym. kind )), detail, (sym. module ), already, insert_line);
+            json_arr_push(items, item);
+        }
+        HashMap_free__bool(imps);
+    }
     Vector__string*   kws = Vector_new__string();
     Vector_push__string(kws, "let");
     Vector_push__string(kws, "const");
@@ -15228,6 +15461,10 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
     Vector_push__string(kws, "enum");
     Vector_push__string(kws, "impl");
     Vector_push__string(kws, "interface");
+    Vector_push__string(kws, "trait");
+    Vector_push__string(kws, "dyn");
+    Vector_push__string(kws, "Self");
+    Vector_push__string(kws, "in");
     Vector_push__string(kws, "if");
     Vector_push__string(kws, "else");
     Vector_push__string(kws, "while");
@@ -15245,9 +15482,14 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
     Vector_push__string(kws, "false");
     Vector_push__string(kws, "null");
     Vector_push__string(kws, "as");
+    Vector_push__string(kws, "sizeof");
     Vector_push__string(kws, "type");
     Vector_push__string(kws, "move");
     Vector_push__string(kws, "chan");
+    Vector_push__string(kws, "naked");
+    Vector_push__string(kws, "asm");
+    Vector_push__string(kws, "c_raw");
+    Vector_push__string(kws, "macro");
     for (int   i = 0; (i  <  Vector_len__string(kws)); i++) {
         const char*   k = Vector_get__string(kws, i);
         if (HashMap_contains__bool(seen, k)) {
@@ -18085,6 +18327,14 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x) {
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
+ImportableSym   Vector_get__ImportableSym (Vector__ImportableSym*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__ImportableSym (Vector__ImportableSym*   self) {
+    return (self-> len );
+}
+
 bool   HashMap_remove__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     int   i = HashMap_slot__LspDoc(self, k);
     if ((i  <  0)) {
@@ -18151,6 +18401,34 @@ bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k) {
 
 void   Vector_clear__Stmt (Vector__Stmt*   self) {
     ((self-> len )  =  0);
+}
+
+void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        ImportableSym*   new_data = (( ImportableSym* )malloc((new_cap  *  sizeof( ImportableSym ))));
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((self-> cap )  >  0)) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__ImportableSym*   Vector_new__ImportableSym (void) {
+    Vector__ImportableSym*   v = (( Vector__ImportableSym* )malloc(sizeof( Vector__ImportableSym )));
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    return v;
 }
 
 HashMap__LspDoc*   HashMap_new__LspDoc (void) {

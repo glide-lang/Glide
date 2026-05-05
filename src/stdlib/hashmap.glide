@@ -20,7 +20,7 @@
 /// m.remove("one");
 /// println!("len:", m.len());              // 1
 /// ```
-struct HashMap<V> {
+pub struct HashMap<V> {
     /// Slot keys; meaningful only when `occupied[i]` is `true`.
     keys: *string,
     /// Slot values; meaningful only when `occupied[i]` is `true`.
