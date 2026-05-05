@@ -1,3 +1,6 @@
+import ast;
+import parser;
+
 // Surface-syntax lowering passes that run between parse and typer/codegen.
 //
 // Currently lowers ST_FOR_IN to the existing ST_FOR / ST_BLOCK shape so the
@@ -6,6 +9,9 @@
 // sees the sugared form and re-emits it verbatim.
 
 pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
+    // Trait expansion has to run first so the for-in / default-method
+    // walk below sees the fully-populated impl blocks.
+    expand_trait_defaults(stmts);
     let out: *Vector<Stmt> = Vector::new();
     for let i: int = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
@@ -13,6 +19,56 @@ pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
         if l != null { out.push(*l); }
     }
     return out;
+}
+
+// Copy default methods from each trait into impl blocks that don't
+// override them. Mutates `impl_methods` of every `impl Trait for T`.
+// Mirrors the parse-time `Self` substitution so the copied bodies see
+// the implementor's type, not the placeholder.
+fn expand_trait_defaults(stmts: *Vector<Stmt>) {
+    let traits: *HashMap<Stmt> = HashMap::new();
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
+            traits.insert(s.name, s);
+        }
+    }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let mut imp: Stmt = stmts.get(i);
+        if imp.kind != ST_IMPL { continue; }
+        if imp.impl_trait_name == null || imp.impl_trait_name.eq("") { continue; }
+        if !traits.contains(imp.impl_trait_name) { continue; }
+        let trait_def: Stmt = traits.get(imp.impl_trait_name);
+        if trait_def.impl_methods == null { continue; }
+        if imp.impl_methods == null { continue; }   // empty impl block has nothing to extend
+        // Build name set of methods already in the impl.
+        let provided: *HashMap<bool> = HashMap::new();
+        for let k: int = 0; k < imp.impl_methods.len(); k++ {
+            let m: Stmt = imp.impl_methods.get(k);
+            if m.name != null { provided.insert(m.name, true); }
+        }
+        // Append defaults that the impl didn't override.
+        for let k: int = 0; k < trait_def.impl_methods.len(); k++ {
+            let req: Stmt = trait_def.impl_methods.get(k);
+            if req.name == null || req.name.eq("") { continue; }
+            if req.fn_body == null { continue; }
+            if provided.contains(req.name) { continue; }
+            // Clone the method shape; substitute Self in the copy's signature.
+            let copy: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+            *copy = req;
+            // Self substitution only applies to the new copy's params/return,
+            // and only when the impl target is named.
+            if imp.impl_target != null {
+                let single: *Vector<Stmt> = Vector::new();
+                single.push(*copy);
+                substitute_self_in_methods(single, imp.impl_target);
+                let sub: Stmt = single.get(0);
+                *copy = sub;
+            }
+            imp.impl_methods.push(*copy);
+        }
+        stmts.set(i, imp);
+    }
 }
 
 fn lower_block(body: *Vector<Stmt>) -> *Vector<Stmt> {

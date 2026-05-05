@@ -1,16 +1,17 @@
 // Drives the Glide-in-Glide lexer + parser over a source file.
 // Usage: glide run bootstrap/main.glide -- path/to/source.glide
 
-import "lexer.glide";
-import "ast.glide";
-import "parser.glide";
-import "expander.glide";
-import "lower.glide";
-import "typer.glide";
-import "codegen.glide";
-import "json.glide";
-import "fmt.glide";
-import "lsp.glide";
+import stdlib::hashmap::*;
+import lexer;
+import ast;
+import parser;
+import expander;
+import lower;
+import typer;
+import codegen;
+import json;
+import fmt;
+import lsp;
 
 fn print_indent(n: int) {
     for let i: int = 0; i < n; i++ { print!("  "); }
@@ -118,18 +119,184 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
             pdiags.push(d);
         }
     }
+    // Pre-pass: scan the parsed source for fully-qualified path refs
+    // (`a::b::c::Item(...)`). Each one names a module; if the corresponding
+    // file exists and isn't loaded yet we pull it in implicitly so that
+    // unimported full-path calls still resolve. Per-file expr walk keeps
+    // this O(N) over Stmts.
+    let auto_loads: *Vector<string> = Vector::new();
+    let auto_seen: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        collect_path_files_in_stmt(&s, auto_loads, auto_seen);
+    }
     let dir: string = parent_dir(origin);
+    for let i: int = 0; i < auto_loads.len(); i++ {
+        let cand: string = auto_loads.get(i);
+        let resolved: string = resolve_import(dir, cand);
+        if __glide_file_exists(resolved) {
+            load_into(stmts, resolved, loaded, pdiags);
+        }
+    }
+
     for let i: int = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
         if s.kind == ST_IMPORT {
+            // Decide whether the trailing path segment names a file (module
+            // import) or an item from the parent file. `imported_items` /
+            // `import_wildcard` already pin the file to the full path, so
+            // no probe is needed for those forms. Bare path `import a::b;`
+            // first probes `a/b.glide` - if that exists we treat it as a
+            // module import (gives the user a `b::Foo` namespace handle);
+            // otherwise we drop the trailing segment and import `a.glide`
+            // with `b` as the imported item.
             let unq: string = strip_quotes(s.import_path);
-            let resolved: string = resolve_import(dir, unq);
+            let mut resolved: string = resolve_import(dir, unq);
+            let mut multi_seg: bool = false;
+            for let k: int = 0; k < unq.len() - 1; k++ {
+                let cc: int = unq.at(k).to_int();
+                if cc == 47 || cc == 92 { multi_seg = true; break; }
+            }
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && !__glide_file_exists(resolved) {
+                let parent_path: string = drop_last_path_segment(unq);
+                if !parent_path.eq("") {
+                    let resolved_parent: string = resolve_import(dir, parent_path);
+                    if __glide_file_exists(resolved_parent) {
+                        let last: string = last_path_segment(unq);
+                        let items: *Vector<string> = Vector::new();
+                        items.push(last);
+                        s.imported_items = items;
+                        resolved = resolved_parent;
+                    }
+                }
+            }
+            // Pure module import: bare path resolved directly to a file
+            // and no items / wildcard requested.
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && __glide_file_exists(resolved) {
+                s.import_is_module = true;
+                s.import_short = last_path_segment(unq);
+            }
             load_into(stmts, resolved, loaded, pdiags);
+            s.import_path = resolved;
+            s.origin = origin;
+            stmts.push(s);
         } else {
             s.origin = origin;
             stmts.push(s);
         }
     }
+}
+
+// Walk an Expr collecting candidate file paths referenced by EX_PATH
+// prefixes. Each prefix `a::b::c` becomes the candidate `a/b/c.glide`.
+// Type-prefix paths like `Vector::new` are also collected; loader will
+// skip those (the file probe fails).
+fn collect_path_files_in_expr(e: *Expr, out: *Vector<string>, seen: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_PATH {
+        let prefix: string = e.str_val;
+        if prefix != null && !prefix.eq("") && !seen.contains(prefix) {
+            // Only auto-load multi-segment paths. Single-segment prefixes
+            // (Vector, HashMap, MyStruct) are type-method calls handled by
+            // the existing dispatch; auto-loading them would either fail
+            // (no `Vector.glide`) or hit case-insensitive FS bugs.
+            let mut multi: bool = false;
+            for let k: int = 0; k + 1 < prefix.len(); k++ {
+                if prefix.at(k).to_int() == 58 && prefix.at(k + 1).to_int() == 58 {
+                    multi = true;
+                    break;
+                }
+            }
+            seen.insert(prefix, true);
+            if multi {
+                let mut path: string = "";
+                let n: int = prefix.len();
+                let mut i: int = 0;
+                while i < n {
+                    if i + 1 < n && prefix.at(i).to_int() == 58 && prefix.at(i + 1).to_int() == 58 {
+                        path = path.concat("/");
+                        i = i + 2;
+                    } else {
+                        path = path.concat(prefix.substring(i, i + 1));
+                        i = i + 1;
+                    }
+                }
+                path = path.concat(".glide");
+                out.push(path);
+            }
+        }
+    }
+    if e.lhs != null { collect_path_files_in_expr(e.lhs, out, seen); }
+    if e.rhs != null { collect_path_files_in_expr(e.rhs, out, seen); }
+    if e.operand != null { collect_path_files_in_expr(e.operand, out, seen); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            collect_path_files_in_expr(&a, out, seen);
+        }
+    }
+}
+
+fn collect_path_files_in_stmt(s: *Stmt, out: *Vector<string>, seen: *HashMap<bool>) {
+    if s == null { return; }
+    if s.let_value != null { collect_path_files_in_expr(s.let_value, out, seen); }
+    if s.expr_value != null { collect_path_files_in_expr(s.expr_value, out, seen); }
+    if s.cond != null { collect_path_files_in_expr(s.cond, out, seen); }
+    if s.then_body != null {
+        for let i: int = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            collect_path_files_in_stmt(&b, out, seen);
+        }
+    }
+    if s.else_body != null {
+        for let i: int = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            collect_path_files_in_stmt(&b, out, seen);
+        }
+    }
+    if s.fn_body != null {
+        for let i: int = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            collect_path_files_in_stmt(&b, out, seen);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: int = 0; i < s.impl_methods.len(); i++ {
+            let m: Stmt = s.impl_methods.get(i);
+            collect_path_files_in_stmt(&m, out, seen);
+        }
+    }
+}
+
+// Drop the trailing `/<name>.glide` from an import path. Returns "" if
+// there is no `/` separator (single-segment paths have no parent).
+fn drop_last_path_segment(path: string) -> string {
+    let n: int = path.len();
+    if n < 7 { return ""; }
+    let stem: string = path.substring(0, n - 6);
+    let mut last: int = -1;
+    for let i: int = 0; i < stem.len(); i++ {
+        let c: int = stem.at(i).to_int();
+        if c == 47 || c == 92 { last = i; }
+    }
+    if last < 0 { return ""; }
+    return stem.substring(0, last).concat(".glide");
+}
+
+// Trailing identifier of an import path: `stdlib/math.glide` -> `math`.
+fn last_path_segment(path: string) -> string {
+    let n: int = path.len();
+    if n < 7 { return ""; }
+    let stem: string = path.substring(0, n - 6);
+    let mut last: int = -1;
+    for let i: int = 0; i < stem.len(); i++ {
+        let c: int = stem.at(i).to_int();
+        if c == 47 || c == 92 { last = i; }
+    }
+    if last < 0 { return stem; }
+    return stem.substring(last + 1, stem.len());
 }
 
 fn strip_quotes(s: string) -> string {
@@ -150,9 +317,31 @@ fn parent_dir(path: string) -> string {
     return path.substring(0, last);
 }
 
+// Search path for imports. Tries (in order):
+//   1. relative to the importing file's directory
+//   2. relative to the current working directory
+//   3. cwd + `src/`              (so `import stdlib::foo;` finds `src/stdlib/foo.glide`)
+//   4. exe-dir                   (installed layout)
+//   5. exe-dir + `src/`          (installed layout)
+// First file that exists wins. Falls back to the file-relative path so the
+// downstream "could not read" error points at something sensible. The `src/`
+// prefix is implicit so user code never has to type it - `src/` is the
+// language's source root, not part of its public namespace.
 fn resolve_import(base: string, ipath: string) -> string {
-    if base.eq("") { return ipath; }
-    return base.concat("/").concat(ipath);
+    let mut from_file: string = ipath;
+    if !base.eq("") { from_file = base.concat("/").concat(ipath); }
+    if __glide_file_exists(from_file) { return from_file; }
+    if __glide_file_exists(ipath) { return ipath; }
+    let cwd_src: string = "src/".concat(ipath);
+    if __glide_file_exists(cwd_src) { return cwd_src; }
+    let exe_dir: string = __glide_exe_dir();
+    if !exe_dir.eq("") {
+        let from_exe: string = exe_dir.concat("/").concat(ipath);
+        if __glide_file_exists(from_exe) { return from_exe; }
+        let exe_src: string = exe_dir.concat("/src/").concat(ipath);
+        if __glide_file_exists(exe_src) { return exe_src; }
+    }
+    return from_file;
 }
 
 // FFI to libc + driver helpers (defined in the runtime emit).
@@ -161,9 +350,97 @@ extern fn __glide_restore_stdout(saved: int);
 extern fn __glide_shell(cmd: string) -> int;
 extern fn __glide_exe_path() -> string;
 extern fn __glide_exe_dir() -> string;
+// Newline-separated listing of files under `path` whose name ends in `suffix`.
+// Empty `suffix` means "all files". Sorted ascending. Returns "" on missing dir.
+// Defined as a c_raw block (rather than in stdlib.c) so older bootstrap
+// binaries — whose embedded stdlib.c predates this helper — can still build
+// the new compiler without a manual seed patch.
+extern fn __glide_list_dir(path: string, suffix: string) -> string;
+
+c_raw! {
+    #ifndef GLIDE_LIST_DIR_DEFINED
+    #define GLIDE_LIST_DIR_DEFINED
+    static int __glide_strcmp_qsort(const void* a, const void* b) {
+        const char* x = *(const char* const*)a;
+        const char* y = *(const char* const*)b;
+        return strcmp(x, y);
+    }
+    #ifdef _WIN32
+    static const char* __glide_list_dir(const char* path, const char* suffix) {
+        char pattern[1024];
+        snprintf(pattern, sizeof(pattern), "%s\\*", path);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        size_t suf_n = suffix ? strlen(suffix) : 0;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            const char* nm = fd.cFileName;
+            size_t nm_n = strlen(nm);
+            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
+    }
+    #else
+    #include <dirent.h>
+    static const char* __glide_list_dir(const char* path, const char* suffix) {
+        DIR* d = opendir(path);
+        if (!d) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        size_t suf_n = suffix ? strlen(suffix) : 0;
+        struct dirent* e;
+        while ((e = readdir(d)) != NULL) {
+            const char* nm = e->d_name;
+            if (nm[0] == '.') continue;
+            size_t nm_n = strlen(nm);
+            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        }
+        closedir(d);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
+    }
+    #endif
+    #endif
+}
 extern fn __glide_getenv(name: string) -> string;
 extern fn __glide_is_windows() -> int;
 extern fn __glide_file_exists(path: string) -> bool;
+// File I/O for the compiler driver itself. `stdlib::fs` wraps these for
+// user-visible API; the bootstrap binary needs them raw.
+extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
 
 // ---- pretty diagnostics --------------------------------------------------
@@ -351,6 +628,222 @@ pub fn merge_parse_diags(t: *Typer, pdiags: *Vector<ParseDiag>) {
     }
 }
 
+// Build the per-file visibility map the typer uses to enforce selective
+// imports. For each file `F` we accept a name `N` if any of:
+//   * `N` is declared (pub or otherwise) in `F` itself
+//   * `N` lives under `src/builtins/` (the implicit prelude)
+//   * `N` is brought in by an `import` statement in `F`:
+//     - `import a::b::c::N;` / `import a::b::c::{N, ...};` — selective
+//     - `import a::b::c::*;` / `import "..."`              — all pub from target
+fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
+    // Module-level setup: record every loaded file's full module path (so
+    // fully qualified `a::b::c::Item` calls always work, no import needed),
+    // and capture every `import a::b::c;` (pure module form) into
+    // `module_imports[<origin>::<short>]` for partial-path enforcement.
+    let seen_files: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.origin == null || s.origin.eq("") { continue; }
+        if !seen_files.contains(s.origin) {
+            seen_files.insert(s.origin, true);
+            let mp: string = module_path_from_path(s.origin);
+            if !mp.eq("") { t.module_full_paths.insert(mp, true); }
+        }
+        if s.kind == ST_IMPORT && s.import_is_module
+           && s.import_short != null && !s.import_short.eq("") {
+            t.module_imports.insert(s.origin.concat("::").concat(s.import_short), true);
+        }
+    }
+
+    // Step 1: for every Stmt with a known origin, collect the set of names
+    // it defines. Stored as `<origin>::<name>` keys. Also harvest struct
+    // field privacy info for cross-file `obj.field` enforcement.
+    let defines_at: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.origin == null || s.origin.eq("") { continue; }
+        if s.name == null || s.name.eq("") { continue; }
+        if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+           || s.kind == ST_CONST || s.kind == ST_MACRO_DEF {
+            defines_at.insert(s.origin.concat("::").concat(s.name), true);
+        }
+        if s.kind == ST_STRUCT && s.struct_fields != null {
+            t.struct_origin.insert(s.name, s.origin);
+            for let k: int = 0; k < s.struct_fields.len(); k++ {
+                let f: Field = s.struct_fields.get(k);
+                if f.is_pub {
+                    t.field_pub.insert(s.name.concat("::").concat(f.name), true);
+                }
+            }
+        }
+    }
+
+    // Step 2: gather the distinct origin files seen + flag which ones live
+    // under `src/builtins/` (these are the always-visible prelude).
+    let origins: *Vector<string> = Vector::new();
+    let seen: *HashMap<bool> = HashMap::new();
+    let builtin_files: *Vector<string> = Vector::new();
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.origin == null || s.origin.eq("") { continue; }
+        if !seen.contains(s.origin) {
+            seen.insert(s.origin, true);
+            origins.push(s.origin);
+            if path_is_builtin(s.origin) { builtin_files.push(s.origin); }
+        }
+    }
+
+    // Step 3: for every origin file `F`, accumulate visible names.
+    for let i: int = 0; i < origins.len(); i++ {
+        let f: string = origins.get(i);
+        // Own decls.
+        for let j: int = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.origin == null || !s.origin.eq(f) { continue; }
+            if s.name == null || s.name.eq("") { continue; }
+            if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF {
+                t.visibility.insert(f.concat("::").concat(s.name), true);
+            }
+        }
+        // Prelude (src/builtins/* contents).
+        for let j: int = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.origin == null { continue; }
+            if !path_is_builtin(s.origin) { continue; }
+            if s.name == null || s.name.eq("") { continue; }
+            if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF {
+                t.visibility.insert(f.concat("::").concat(s.name), true);
+            }
+        }
+        // Explicit imports from this file. Only `pub` items from the
+        // target are exposed - cross-file privacy is enforced here.
+        for let j: int = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.kind != ST_IMPORT { continue; }
+            if s.origin == null || !s.origin.eq(f) { continue; }
+            let target: string = s.import_path;
+            if target == null { continue; }
+            if s.imported_items != null && s.imported_items.len() > 0 {
+                // Selective: each named item must be pub in the target.
+                for let k: int = 0; k < s.imported_items.len(); k++ {
+                    let nm: string = s.imported_items.get(k);
+                    let mut found_pub: bool = false;
+                    let mut found_any: bool = false;
+                    for let m: int = 0; m < stmts.len(); m++ {
+                        let ts: Stmt = stmts.get(m);
+                        if ts.origin == null || !ts.origin.eq(target) { continue; }
+                        if ts.name == null || !ts.name.eq(nm) { continue; }
+                        if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
+                           || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF {
+                            found_any = true;
+                            if ts.is_pub { found_pub = true; break; }
+                        }
+                    }
+                    if found_pub {
+                        t.visibility.insert(f.concat("::").concat(nm), true);
+                    } else if found_any {
+                        t.push_diag(s.line, s.column, 1, "private-import",
+                            "`".concat(nm).concat("` exists in `").concat(target).concat("` but is not `pub`"));
+                    } else {
+                        t.push_diag(s.line, s.column, 1, "missing-import",
+                            "`".concat(nm).concat("` is not declared in `").concat(target).concat("`"));
+                    }
+                }
+            } else {
+                // Wildcard / sibling: every PUB name from the target file.
+                for let k: int = 0; k < stmts.len(); k++ {
+                    let ts: Stmt = stmts.get(k);
+                    if ts.origin == null || !ts.origin.eq(target) { continue; }
+                    if ts.name == null || ts.name.eq("") { continue; }
+                    if !ts.is_pub { continue; }
+                    if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
+                       || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF {
+                        t.visibility.insert(f.concat("::").concat(ts.name), true);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Convert an origin file path to a `::`-separated module path, mirroring
+// codegen's `module_path_from_origin`. Strips a leading `src/` and the
+// `.glide` suffix; rewrites `/` and `\` to `::`.
+fn module_path_from_path(path: string) -> string {
+    if path == null || path.eq("") { return ""; }
+    let mut s: string = path;
+    let n: int = s.len();
+    if n > 6 {
+        let tail: string = s.substring(n - 6, n);
+        if tail.eq(".glide") { s = s.substring(0, n - 6); }
+    }
+    let len0: int = s.len();
+    if len0 >= 4 {
+        let c0: int = s.at(0).to_int();
+        let c1: int = s.at(1).to_int();
+        let c2: int = s.at(2).to_int();
+        let c3: int = s.at(3).to_int();
+        if c0 == 115 && c1 == 114 && c2 == 99 && (c3 == 47 || c3 == 92) {
+            s = s.substring(4, len0);
+        }
+    }
+    let mut out: string = "";
+    let mut i: int = 0;
+    let len: int = s.len();
+    while i < len {
+        let c: int = s.at(i).to_int();
+        if c == 47 || c == 92 { out = out.concat("::"); }
+        else { out = out.concat(s.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    return out;
+}
+
+// True if `path` lives under a `src/builtins/` directory (handles both
+// forward and backslashes for the Windows install layout).
+fn path_is_builtin(path: string) -> bool {
+    if path == null { return false; }
+    let needle: string = "src/builtins/";
+    let n: int = path.len();
+    let m: int = needle.len();
+    if m > n { return false; }
+    for let i: int = 0; i + m <= n; i++ {
+        let mut matched: bool = true;
+        for let j: int = 0; j < m; j++ {
+            let c: int = path.at(i + j).to_int();
+            let d: int = needle.at(j).to_int();
+            // accept '\\' as equivalent to '/' so installer paths match.
+            if c == 92 { c = 47; }
+            if d == 92 { d = 47; }
+            if c != d { matched = false; break; }
+        }
+        if matched { return true; }
+    }
+    return false;
+}
+
+// Auto-load every `*.glide` under the builtins dir in a deterministic
+// order. `builtins.glide` runs first because it declares the extern stubs
+// everything else references (malloc, printf, ...); the remaining files
+// load in the alphabetical order returned by `__glide_list_dir`.
+fn load_builtins_dir(stmts: *Vector<Stmt>, dir: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>) {
+    let listing: string = __glide_list_dir(dir, ".glide");
+    if listing.eq("") { return; }
+    let builtins: string = dir.concat("/builtins.glide");
+    if !read_file(builtins).eq("") {
+        load_into(stmts, builtins, loaded, pdiags);
+    }
+    let names: *Vector<string> = listing.split("\n");
+    for let i: int = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if nm.eq("") { continue; }
+        if nm.eq("builtins.glide") { continue; }
+        load_into(stmts, dir.concat("/").concat(nm), loaded, pdiags);
+    }
+}
+
 fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseDiag>) -> bool {
     let src: string = read_file(path);
     if src.eq("") {
@@ -358,21 +851,18 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
         return false;
     }
     let loaded: *HashMap<bool> = HashMap::new();
-    // Stdlib auto-prepend. Try cwd first, then the dir next to the glide exe.
-    let v_path: string = "stdlib/vector.glide";
-    let h_path: string = "stdlib/hashmap.glide";
-    let b_path: string = "stdlib/builtins.glide";
-    if read_file(v_path).eq("") {
+    // Auto-inject `src/builtins/` — primitive types (Vector, string methods)
+    // and the extern stubs every program inherently needs (malloc, printf,
+    // sleep_ms, ...). Anything under `src/stdlib/` (HashMap, io, fs, time,
+    // env, random, math, bytes) still requires an explicit `import`.
+    let mut builtins_dir: string = "src/builtins";
+    if read_file("src/builtins/builtins.glide").eq("") {
         let exe_dir: string = __glide_exe_dir();
         if !exe_dir.eq("") {
-            v_path = exe_dir.concat("/stdlib/vector.glide");
-            h_path = exe_dir.concat("/stdlib/hashmap.glide");
-            b_path = exe_dir.concat("/stdlib/builtins.glide");
+            builtins_dir = exe_dir.concat("/src/builtins");
         }
     }
-    load_into(stmts, b_path, loaded, pdiags);
-    load_into(stmts, v_path, loaded, pdiags);
-    load_into(stmts, h_path, loaded, pdiags);
+    load_builtins_dir(stmts, builtins_dir, loaded, pdiags);
     load_into_str(stmts, src, path, loaded, pdiags);
     let expanded: *Vector<Stmt> = expand_macros(stmts);
     let lowered: *Vector<Stmt> = lower_program(expanded);
@@ -410,6 +900,8 @@ fn run_build(src_path: string, out_path: string, target: string, then_run: bool)
     //    errors (e.g. infinite-recursion, type mismatches).
     let t: *Typer = Typer::new();
     merge_parse_diags(t, pdiags);
+    build_visibility(t, stmts);
+    t.enforce_visibility = true;
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
     let src_text: string = read_file(src_path);
@@ -569,6 +1061,8 @@ fn main() -> int {
     if mode == MODE_CHECK {
         let t: *Typer = Typer::new();
         merge_parse_diags(t, pdiags);
+        build_visibility(t, stmts);
+        t.enforce_visibility = true;
         check_program(t, stmts);
         run_extra_analyses(t, stmts);
         let src_text: string = read_file(src_path);

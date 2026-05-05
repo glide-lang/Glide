@@ -1,3 +1,5 @@
+import stdlib::hashmap::*;
+
 // AST types for the Glide-in-Glide compiler.
 //
 // Glide enums use positional payloads only, so we group struct-shape data
@@ -13,13 +15,14 @@ pub const TY_SLICE: int = 4;       // payload: inner (*Type)
 pub const TY_GENERIC: int = 5;     // payload: name + type args
 pub const TY_FNPTR: int = 6;       // payload: fnptr_params + fnptr_ret
 pub const TY_RESULT: int = 7;      // payload: inner (*Type) — `!T`
+pub const TY_DYN: int = 8;         // `dyn Trait` — name = trait name. Used behind a pointer (`*dyn Trait`).
 
 pub struct Type {
-    kind: int,
-    name: string,
-    inner: *Type,
-    args: *Vector<Type>,  // TY_GENERIC or TY_FNPTR (params)
-    fnptr_ret: *Type,     // TY_FNPTR ret
+    pub kind: int,
+    pub name: string,
+    pub inner: *Type,
+    pub args: *Vector<Type>,  // TY_GENERIC or TY_FNPTR (params)
+    pub fnptr_ret: *Type,     // TY_FNPTR ret
 }
 
 pub fn ty_fnptr(params: *Vector<Type>, ret: *Type) -> *Type {
@@ -100,43 +103,43 @@ pub const UN_BIT_NOT: int = 6;
 pub const UN_TRY: int = 7;        // postfix `?` propagation
 
 pub struct Expr {
-    kind: int,
-    line: int,
-    column: int,
+    pub kind: int,
+    pub line: int,
+    pub column: int,
 
     // primitive payloads (used per kind)
-    int_val: int,
-    str_val: string,
-    bool_val: bool,
-    op_code: int,        // for Binary, Unary, Assign
+    pub int_val: i64,
+    pub str_val: string,
+    pub bool_val: bool,
+    pub op_code: int,        // for Binary, Unary, Assign
 
     // child expressions (used per kind)
-    lhs: *Expr,          // Binary, Assign, Member, Index, Cast, Call(callee)
-    rhs: *Expr,          // Binary, Assign, Index
-    operand: *Expr,      // Unary
+    pub lhs: *Expr,          // Binary, Assign, Member, Index, Cast, Call(callee)
+    pub rhs: *Expr,          // Binary, Assign, Index
+    pub operand: *Expr,      // Unary
 
     // call args / member field name
-    args: *Vector<Expr>, // Call args (we keep them by-value in Vector for simplicity)
-    field: string,       // Member field, Cast target encoded via type
-    cast_to: *Type,
+    pub args: *Vector<Expr>, // Call args (we keep them by-value in Vector for simplicity)
+    pub field: string,       // Member field, Cast target encoded via type
+    pub cast_to: *Type,
 
     // For EX_STRUCT_LIT: parallel to args, holds field names
-    field_names: *Vector<string>,
+    pub field_names: *Vector<string>,
 
     // For EX_FNEXPR: anonymous fn payload
-    fn_expr_params: *Vector<Param>,
-    fn_expr_body: *Vector<Stmt>,
+    pub fn_expr_params: *Vector<Param>,
+    pub fn_expr_body: *Vector<Stmt>,
 
     // EX_MACRO: receiver-style invocation (`recv.name!(args)`) and qualified
     // path (`Type::name!(args)`). Both are null for the plain `name!(args)`
     // form. Plain str_val still holds the macro name regardless.
-    macro_recv: *Expr,
-    macro_owner: string,
+    pub macro_recv: *Expr,
+    pub macro_owner: string,
 
     // EX_FLOAT: source lexeme (e.g. "3.14"). Stored as a string so we don't
     // need a Glide-side double payload — the lexeme is already a valid C
     // float literal.
-    float_val: string,
+    pub float_val: string,
 }
 
 // ---- Stmt kinds ----------------------------------------------------------
@@ -164,122 +167,152 @@ pub const ST_MACRO_REP: int = 19;   // `$( body );*` repetition inside a macro b
 pub const ST_FOR_IN: int = 20;      // `for x in expr [..[=] hi] { body }` — surface form, lowered to ST_FOR before typer/codegen
 pub const ST_WHILE_RECV: int = 21;  // `while let v [: T] = c.recv() { body }` — chan-aware loop with auto close detection
 pub const ST_ASM: int = 22;         // `asm [volatile] { "..." [: outs] [: ins] [: clobbers] }` — GCC inline asm
+pub const ST_CRAW: int = 23;        // `c_raw! { ... }` — raw C/asm payload emitted verbatim. Body lives in `name`.
+pub const ST_TRAIT: int = 24;       // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
 
 pub struct Param {
-    name: string,
-    ty: *Type,
+    pub name: string,
+    pub ty: *Type,
 }
 
 pub struct Field {
-    name: string,
-    ty: *Type,
-    doc: string,        // contiguous `//` block above the field decl
+    pub name: string,
+    pub ty: *Type,
+    pub doc: string,        // contiguous `//` block above the field decl
+    pub is_pub: bool,       // `pub field: T,` is exported across files
 }
 
 pub struct EnumVariant {
-    name: string,
-    fields: *Vector<Type>,
+    pub name: string,
+    pub fields: *Vector<Type>,
 }
 
 pub struct MatchArm {
-    variant: string,           // variant name; "_" = wildcard
-    bindings: *Vector<string>, // names to bind for payload
-    body: *Vector<Stmt>,
+    pub variant: string,           // variant name; "_" = wildcard
+    pub bindings: *Vector<string>, // names to bind for payload
+    pub body: *Vector<Stmt>,
 }
 
 pub struct MacroParam {
-    name: string,           // matcher binder (`$x` -> "x")
-    is_variadic: bool,      // `$($x:expr),*` form
-    separator: string,      // separator for variadic ("," or ";"); empty otherwise
+    pub name: string,           // matcher binder (`$x` -> "x")
+    pub is_variadic: bool,      // `$($x:expr),*` form
+    pub separator: string,      // separator for variadic ("," or ";"); empty otherwise
 }
 
 pub struct Stmt {
-    kind: int,
-    line: int,
-    column: int,
-    name_line: int,            // position of the declared name (fn/struct/enum/const/let)
-    name_col: int,
-    name_len: int,
-    is_pub: bool,
-    origin: string,            // file path; set by load_into_str on top-level stmts
-    doc_comment: string,       // contiguous `//` block above the decl (LSP hover)
+    pub kind: int,
+    pub line: int,
+    pub column: int,
+    pub name_line: int,            // position of the declared name (fn/struct/enum/const/let)
+    pub name_col: int,
+    pub name_len: int,
+    pub is_pub: bool,
+    pub origin: string,            // file path; set by load_into_str on top-level stmts
+    pub doc_comment: string,       // contiguous `//` block above the decl (LSP hover)
 
     // Let / Const
-    name: string,
-    let_ty: *Type,
-    let_value: *Expr,
-    is_mut: bool,
-    is_auto_owned: bool,    // explicit `let v* = ...` marker (auto-drop)
+    pub name: string,
+    pub let_ty: *Type,
+    pub let_value: *Expr,
+    pub is_mut: bool,
+    pub is_auto_owned: bool,    // explicit `let v* = ...` marker (auto-drop)
 
     // Return / Expr stmt / Defer
-    expr_value: *Expr,
+    pub expr_value: *Expr,
 
     // If / While / For
-    cond: *Expr,
-    then_body: *Vector<Stmt>,
-    else_body: *Vector<Stmt>,
-    for_init: *Stmt,
-    for_step: *Expr,
+    pub cond: *Expr,
+    pub then_body: *Vector<Stmt>,
+    pub else_body: *Vector<Stmt>,
+    pub for_init: *Stmt,
+    pub for_step: *Expr,
 
     // Fn
-    fn_params: *Vector<Param>,
-    fn_ret_ty: *Type,
-    fn_body: *Vector<Stmt>,
+    pub fn_params: *Vector<Param>,
+    pub fn_ret_ty: *Type,
+    pub fn_body: *Vector<Stmt>,
 
     // Struct / Impl
-    struct_fields: *Vector<Field>,
-    impl_target: *Type,
-    impl_methods: *Vector<Stmt>,
+    pub struct_fields: *Vector<Field>,
+    pub impl_target: *Type,
+    pub impl_methods: *Vector<Stmt>,
+    // Set when this is `impl TraitName for Type { ... }`. Empty for plain
+    // `impl Type {}`. Used to verify trait conformance and to mangle the
+    // method symbols the same way as a free impl.
+    pub impl_trait_name: string,
+    // List of supertraits the trait requires (`trait B: A1, A2`).
+    // Conformance checker walks these recursively when validating
+    // `impl B for T` so `T` must also implement A1 and A2.
+    pub trait_supers: *Vector<string>,
 
     // Generics: type params for fn/struct/impl
-    type_params: *Vector<string>,
+    pub type_params: *Vector<string>,
+    // Per-type-param trait bounds. Indexed in lockstep with `type_params`.
+    // Each entry is a `+`-joined string of trait names (e.g. `"Ord+Clone"`)
+    // or `""` if the slot has no bounds. Stored this way (instead of
+    // *Vector<*Vector<string>>) to avoid Vector-of-Vector<T> in Glide's
+    // monomorphizer.
+    pub type_param_bounds: *Vector<string>,
 
     // Import
-    import_path: string,
+    pub import_path: string,
+    // Selective items pulled in by `import a::b::c::Item;` /
+    // `import a::b::c::{X, Y};`. `null` means no items selected
+    // (could be wildcard or pure module import - see import_wildcard
+    // / import_is_module).
+    pub imported_items: *Vector<string>,
+    // True if user wrote `::*` - load all pub items into scope.
+    pub import_wildcard: bool,
+    // Set by the loader once the filesystem probe decides this is a pure
+    // module import (e.g. `import stdlib::math;` resolves to a real file).
+    // The short namespace name lives in `import_short`; user code can then
+    // call `import_short::Item(...)` after this import.
+    pub import_is_module: bool,
+    pub import_short: string,
 
     // Enum
-    enum_variants: *Vector<EnumVariant>,
+    pub enum_variants: *Vector<EnumVariant>,
 
     // Match
-    scrutinee: *Expr,
-    arms: *Vector<MatchArm>,
+    pub scrutinee: *Expr,
+    pub arms: *Vector<MatchArm>,
 
     // Macro def (ST_MACRO_DEF) — name lives in `name`, body in `then_body`,
     // matchers in macro_params. For ST_MACRO_REP, body lives in `then_body`
     // and macro_rep_sep holds the separator literal.
-    macro_params: *Vector<MacroParam>,
-    macro_rep_sep: string,
+    pub macro_params: *Vector<MacroParam>,
+    pub macro_rep_sep: string,
 
     // Fn (ST_FN) flag: trailing `...` after the regular params (C-style
     // variadic). Typer skips the arg-count / arg-type check past `len(params)`
     // so callers can pass any extra args (used for `extern fn printf(...)`).
-    is_variadic: bool,
+    pub is_variadic: bool,
 
     // ST_SPAWN flag: `spawn` (default) submits a coroutine to the M:N
     // scheduler; `spawn_thread` keeps the explicit pthread escape hatch.
-    is_spawn_thread: bool,
+    pub is_spawn_thread: bool,
 
     // ST_FN: skip prologue/epilogue, emit __attribute__((naked)). Body must
     // contain only `asm` blocks. Args are accessed via the platform calling
     // convention directly.
-    is_naked: bool,
+    pub is_naked: bool,
 
     // ST_FN/ST_STRUCT/ST_IMPL/ST_CONST: optional `@cfg("...")` attribute.
     // "" = no guard; "windows" wraps decl in `#ifdef _WIN32`; "posix" wraps
     // it in `#ifndef _WIN32`. Used to write per-platform asm/naked fns.
-    cfg_target: string,
+    pub cfg_target: string,
 
     // ST_ASM payload. `asm_strings` are the instruction lines (each becomes
     // its own quoted line in the emitted __asm__). The three operand vectors
     // are parallel arrays (constraint + expr per operand), GCC-style. For
     // clobbers, only `asm_clobbers` is used.
-    asm_strings: *Vector<string>,
-    asm_out_constraints: *Vector<string>,
-    asm_out_exprs: *Vector<Expr>,
-    asm_in_constraints: *Vector<string>,
-    asm_in_exprs: *Vector<Expr>,
-    asm_clobbers: *Vector<string>,
-    is_volatile: bool,
+    pub asm_strings: *Vector<string>,
+    pub asm_out_constraints: *Vector<string>,
+    pub asm_out_exprs: *Vector<Expr>,
+    pub asm_in_constraints: *Vector<string>,
+    pub asm_in_exprs: *Vector<Expr>,
+    pub asm_clobbers: *Vector<string>,
+    pub is_volatile: bool,
 }
 
 // ---- Constructors --------------------------------------------------------
@@ -307,7 +340,7 @@ pub fn ty_pointer(inner: *Type) -> *Type {
     return t;
 }
 
-pub fn expr_int(n: int, line: int, col: int) -> *Expr {
+pub fn expr_int(n: i64, line: int, col: int) -> *Expr {
     let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
     e.kind = EX_INT;
     e.line = line;
@@ -535,6 +568,15 @@ pub fn stmt_match(scrutinee: *Expr, arms: *Vector<MatchArm>, line: int, col: int
     return s;
 }
 
+pub fn stmt_craw(body: string, line: int, col: int) -> *Stmt {
+    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    s.kind = ST_CRAW;
+    s.line = line;
+    s.column = col;
+    s.name = body;
+    return s;
+}
+
 pub fn stmt_asm(line: int, col: int) -> *Stmt {
     let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
     s.kind = ST_ASM;
@@ -683,8 +725,8 @@ pub fn expr_postdec(inner: *Expr) -> *Expr {
 }
 
 pub struct StructLitField {
-    name: string,
-    value: *Expr,
+    pub name: string,
+    pub value: *Expr,
 }
 
 pub fn expr_struct_lit(type_name: string, names: *Vector<string>, values: *Vector<Expr>, line: int, col: int) -> *Expr {

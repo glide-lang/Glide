@@ -1,6 +1,52 @@
 // Glide-in-Glide codegen. Walks AST and emits C99 source to stdout.
 
-import "ast.glide";
+import stdlib::hashmap::*;
+import ast;
+
+// Naïve string-replace: walk through `s`, copying bytes verbatim except where
+// `find` matches — there we splice in `repl` and skip ahead. Used by the
+// templated runtime emitters (chan, result) to substitute `@M@` / `@TC@`
+// placeholders at codegen time. O(N*M) but only runs a handful of times per
+// compile, on ~250-line templates, so the simple algorithm is fine.
+// Locate `::` inside a method name encoded by the parser as `NS::method` (used
+// for qualified method calls like `s.cores::red()`). Returns the byte index of
+// the first `:` of the separator, or -1 if absent. Plain method names (no `::`)
+// are the common case and exit fast.
+fn ns_split_pos(name: string) -> int {
+    let n: int = name.len();
+    let mut i: int = 0;
+    while i + 1 < n {
+        if name.at(i).to_int() == 58 && name.at(i + 1).to_int() == 58 {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn _cg_replace(s: string, find: string, repl: string) -> string {
+    let n: int = s.len();
+    let m: int = find.len();
+    if m == 0 { return s; }
+    let mut out: string = "";
+    let mut i: int = 0;
+    while i < n {
+        let mut matched: bool = (i + m <= n);
+        if matched {
+            for let k: int = 0; k < m; k++ {
+                if s.at(i + k).to_int() != find.at(k).to_int() { matched = false; break; }
+            }
+        }
+        if matched {
+            out = out.concat(repl);
+            i = i + m;
+        } else {
+            out = out.concat(s.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    return out;
+}
 
 fn format_spec_for(t: *Type) -> string {
     if t == null { return "%p"; }
@@ -29,6 +75,7 @@ fn stdlib_method_ret(ty_name: string, method: string) -> *Type {
         if method.eq("to_int") { return ty_named("int"); }
         if method.eq("is_digit") { return ty_named("bool"); }
         if method.eq("is_alpha") { return ty_named("bool"); }
+        if method.eq("to_string") { return ty_named("string"); }
     }
     if ty_name.eq("int") {
         if method.eq("abs") { return ty_named("int"); }
@@ -186,15 +233,14 @@ fn collect_result_in_stmt(g: *CG, s: *Stmt) {
 
 fn emit_result_runtime(g: *CG) {
     if g.result_types.len() == 0 { return; }
+    let tmpl: string = include_str!("bootstrap/runtime/result.c.tmpl");
     for let i: int = 0; i < g.result_types.len(); i++ {
         let t: Type = g.result_types.get(i);
         let m: string = mangle_type(&t);
         let tc: string = type_to_c(&t);
-        let st: string = "__glide_result_".concat(m).concat("_t");
-        println!("typedef struct ".concat(st).concat(" { int ok; ").concat(tc).concat(" val; const char* err; } ").concat(st).concat(";"));
-        println!("static ".concat(st).concat(" __glide_ok_").concat(m).concat("(").concat(tc).concat(" v) { ").concat(st).concat(" r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }"));
-        println!("static ".concat(st).concat(" __glide_err_").concat(m).concat("(const char* msg) { ").concat(st).concat(" r; r.ok = 0; r.err = msg; return r; }"));
-        println!("static ".concat(tc).concat(" __glide_unwrap_").concat(m).concat("(").concat(st).concat(" r) { ").concat(tc).concat(" z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }"));
+        let s1: string = _cg_replace(tmpl, "@M@", m);
+        let s2: string = _cg_replace(s1, "@TC@", tc);
+        print!(s2);
     }
     println!("");
 }
@@ -236,6 +282,210 @@ fn collect_chan_in_expr(g: *CG, e: *Expr) {
             collect_chan_in_expr(g, &a);
         }
     }
+}
+
+// ---- dyn Trait collection ----
+//
+// Walk every type appearing in the program; whenever we hit a `dyn Trait`
+// (either bare or behind `*`/`&`), register the trait name. Later passes
+// emit a vtable struct + fat-pointer typedef + static vtable instance for
+// each `(Trait, Type)` pair the program implements.
+
+fn collect_dyn_in_type(g: *CG, t: *Type) {
+    if t == null { return; }
+    if t.kind == TY_DYN {
+        if t.name != null && !t.name.eq("") {
+            g.dyn_traits.insert(t.name, true);
+        }
+    }
+    if t.inner != null { collect_dyn_in_type(g, t.inner); }
+    if t.fnptr_ret != null { collect_dyn_in_type(g, t.fnptr_ret); }
+    if t.args != null {
+        for let i: int = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            collect_dyn_in_type(g, &a);
+        }
+    }
+}
+
+fn collect_dyn_in_expr(g: *CG, e: *Expr) {
+    if e == null { return; }
+    if e.cast_to != null { collect_dyn_in_type(g, e.cast_to); }
+    if e.lhs != null { collect_dyn_in_expr(g, e.lhs); }
+    if e.rhs != null { collect_dyn_in_expr(g, e.rhs); }
+    if e.operand != null { collect_dyn_in_expr(g, e.operand); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            collect_dyn_in_expr(g, &a);
+        }
+    }
+}
+
+fn collect_dyn_in_stmt(g: *CG, s: *Stmt) {
+    if s == null { return; }
+    if s.let_ty != null { collect_dyn_in_type(g, s.let_ty); }
+    if s.fn_ret_ty != null { collect_dyn_in_type(g, s.fn_ret_ty); }
+    if s.fn_params != null {
+        for let i: int = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            if p.ty != null { collect_dyn_in_type(g, p.ty); }
+        }
+    }
+    if s.let_value != null { collect_dyn_in_expr(g, s.let_value); }
+    if s.expr_value != null { collect_dyn_in_expr(g, s.expr_value); }
+    if s.cond != null { collect_dyn_in_expr(g, s.cond); }
+    if s.then_body != null {
+        for let i: int = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            collect_dyn_in_stmt(g, &b);
+        }
+    }
+    if s.else_body != null {
+        for let i: int = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            collect_dyn_in_stmt(g, &b);
+        }
+    }
+    if s.fn_body != null {
+        for let i: int = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            collect_dyn_in_stmt(g, &b);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: int = 0; i < s.impl_methods.len(); i++ {
+            let m: Stmt = s.impl_methods.get(i);
+            collect_dyn_in_stmt(g, &m);
+        }
+    }
+}
+
+// Emit the C runtime support for every `dyn Trait` in use:
+//   * Vtable struct (`__glide_<Trait>_vt`) listing every method as a fn ptr.
+//   * Fat-pointer struct (`__glide_dyn_<Trait>`) = `{ data, vtable }`.
+//   * Static vtable instance (`__glide_<Type>_as_<Trait>_vt`) per
+//     `impl Trait for Type` block in the program.
+fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
+    if g.dyn_traits == null { return; }
+    // Helper: index trait defs by name.
+    let traits: *HashMap<Stmt> = HashMap::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
+            traits.insert(s.name, s);
+        }
+    }
+    // Iterate over the program and emit per-trait runtime support.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_TRAIT { continue; }
+        if s.name == null || s.name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.name) { continue; }
+        let trait_name: string = s.name;
+        // Vtable struct: one fn-ptr field per trait method. `data` is
+        // always passed as the first arg (`void*`), then the user params.
+        println!("typedef struct __glide_".concat(trait_name).concat("_vt {"));
+        if s.impl_methods != null {
+            for let k: int = 0; k < s.impl_methods.len(); k++ {
+                let m: Stmt = s.impl_methods.get(k);
+                if m.name == null || m.name.eq("") { continue; }
+                let ret_ty: string = type_to_c(m.fn_ret_ty);
+                print!("    ".concat(ret_ty).concat(" (*").concat(m.name).concat(")(void* self"));
+                if m.fn_params != null && m.fn_params.len() > 1 {
+                    for let j: int = 1; j < m.fn_params.len(); j++ {
+                        let p: Param = m.fn_params.get(j);
+                        print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(p.name));
+                    }
+                }
+                println!(");");
+            }
+        }
+        println!("} __glide_".concat(trait_name).concat("_vt;"));
+        // Fat pointer.
+        println!("typedef struct __glide_dyn_".concat(trait_name).concat(" {"));
+        println!("    void* data;");
+        println!("    const __glide_".concat(trait_name).concat("_vt* vtable;"));
+        println!("} __glide_dyn_".concat(trait_name).concat(";"));
+        println!("");
+    }
+    // For every `impl Trait for Type` whose Trait is dyn-used:
+    //   - forward-declare each `<Type>_<method>` (the body is emitted later).
+    //   - emit a per-method thunk that takes `void* self_p`, derefs to `Type`
+    //     by value, and forwards to `<Type>_<method>`. Trait methods are
+    //     declared `fn m(self: Self)` — Self desugars to `Type` by value, so
+    //     the thunk hides the calling-convention mismatch.
+    //   - emit the static vtable instance pointing at the thunks.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.impl_trait_name) { continue; }
+        if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
+        let trait_name: string = s.impl_trait_name;
+        let type_name: string = s.impl_target.name;
+        if !traits.contains(trait_name) { continue; }
+        if s.impl_methods == null { continue; }
+
+        // Forward declarations of the real impl methods.
+        for let k: int = 0; k < s.impl_methods.len(); k++ {
+            let m: Stmt = s.impl_methods.get(k);
+            if m.name == null || m.name.eq("") { continue; }
+            let ret_ty: string = type_to_c(m.fn_ret_ty);
+            print!(ret_ty.concat(" ").concat(type_name).concat("_").concat(m.name).concat("("));
+            if m.fn_params != null {
+                for let j: int = 0; j < m.fn_params.len(); j++ {
+                    if j > 0 { print!(", "); }
+                    let p: Param = m.fn_params.get(j);
+                    print!(type_to_c(p.ty));
+                }
+            }
+            println!(");");
+        }
+
+        // Per-method thunks.
+        for let k: int = 0; k < s.impl_methods.len(); k++ {
+            let m: Stmt = s.impl_methods.get(k);
+            if m.name == null || m.name.eq("") { continue; }
+            let ret_ty: string = type_to_c(m.fn_ret_ty);
+            print!("static ".concat(ret_ty).concat(" __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("__").concat(m.name).concat("_thunk(void* self_p"));
+            if m.fn_params != null && m.fn_params.len() > 1 {
+                for let j: int = 1; j < m.fn_params.len(); j++ {
+                    let p: Param = m.fn_params.get(j);
+                    print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(p.name));
+                }
+            }
+            println!(") {");
+            let is_void: bool = m.fn_ret_ty == null
+                || (m.fn_ret_ty.kind == TY_NAMED && m.fn_ret_ty.name.eq("void"));
+            if is_void {
+                print!("    ".concat(type_name).concat("_").concat(m.name).concat("(*(").concat(type_name).concat("*)self_p"));
+            } else {
+                print!("    return ".concat(type_name).concat("_").concat(m.name).concat("(*(").concat(type_name).concat("*)self_p"));
+            }
+            if m.fn_params != null && m.fn_params.len() > 1 {
+                for let j: int = 1; j < m.fn_params.len(); j++ {
+                    let p: Param = m.fn_params.get(j);
+                    print!(", ".concat(p.name));
+                }
+            }
+            println!(");");
+            println!("}");
+        }
+
+        // Static vtable instance — fields point at the thunks.
+        print!("static const __glide_".concat(trait_name).concat("_vt __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("_vt = {"));
+        let mut emitted_any: bool = false;
+        for let k: int = 0; k < s.impl_methods.len(); k++ {
+            let m: Stmt = s.impl_methods.get(k);
+            if m.name == null || m.name.eq("") { continue; }
+            if emitted_any { print!(", "); }
+            emitted_any = true;
+            print!(".".concat(m.name).concat(" = __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("__").concat(m.name).concat("_thunk"));
+        }
+        println!("};");
+    }
+    println!("");
 }
 
 fn collect_chan_in_stmt(g: *CG, s: *Stmt) {
@@ -292,7 +542,7 @@ fn emit_chan_runtime(g: *CG) {
     println!("");
     // For chan inners that are themselves generic monos (e.g. `Vector<int>`),
     // emit the struct typedef + body up front so the chan struct's `T buf` /
-    // `sizeof(T)` references resolve.
+    // `sizeof(T)` references resolve before the chan body referencing them.
     for let i: int = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
         if t.kind == TY_GENERIC && g.generic_structs.contains(t.name) {
@@ -303,8 +553,9 @@ fn emit_chan_runtime(g: *CG) {
                 emit_struct_mono(g, &t);
             }
         }
+        // (chan<UserType> body emit moved out of chan_runtime to emit_program)
     }
-    // Forward typedefs
+    // Forward typedefs first so chan<T> bodies that reference each other resolve.
     for let i: int = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
         let m: string = mangle_type(&t);
@@ -312,252 +563,16 @@ fn emit_chan_runtime(g: *CG) {
         println!("typedef struct ".concat(st).concat(" ").concat(st).concat(";"));
     }
     println!("");
-    // Bodies + send/recv/close/make per type
+    // Body, ops, close — substitute `@M@` (mangle hash) and `@TC@` (element C type)
+    // in the chan template per element type.
+    let tmpl: string = include_str!("bootstrap/runtime/chan.c.tmpl");
     for let i: int = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
         let m: string = mangle_type(&t);
         let tc: string = type_to_c(&t);
-        let st: string = "__glide_chan_".concat(m).concat("_t");
-        let cell: string = "__glide_chan_cell_".concat(m);
-        // Vyukov MPMC bounded ring — lock-free fast path, mutex+cv only for blocking.
-        // Each cell carries a sequence counter; producers/consumers race via CAS on
-        // a monotonic position counter, then publish via release-store on the seq.
-        // No false-sharing: enq_pos / deq_pos sit on their own cache lines.
-        println!("typedef struct ".concat(cell).concat(" {"));
-        println!("    atomic_size_t seq;");
-        println!("    ".concat(tc).concat(" data;"));
-        println!("    /* Pad to 64 B so adjacent cells don't share a cache line. */");
-        println!("    char _pad[64 - sizeof(atomic_size_t) - sizeof(".concat(tc).concat(")];"));
-        println!("} __attribute__((aligned(64))) ".concat(cell).concat(";"));
-        println!("");
-        println!("struct ".concat(st).concat(" {"));
-        println!("    /* Lock-free ring */");
-        println!("    ".concat(cell).concat("* cells;"));
-        println!("    size_t mask;             /* cap - 1, cap is power of two */");
-        println!("    char _pad1[48];          /* push enq_pos to its own line */");
-        println!("    atomic_size_t enq_pos;");
-        println!("    char _pad2[56];");
-        println!("    atomic_size_t deq_pos;");
-        println!("    char _pad3[56];");
-        println!("    /* Slow path: blocking + close */");
-        println!("    atomic_int closed;");
-        println!("    pthread_mutex_t mu;");
-        println!("    pthread_cond_t  not_empty;");
-        println!("    pthread_cond_t  not_full;");
-        println!("    /* counts of cv_waiters so fast-path can skip mutex+signal when 0 */");
-        println!("    atomic_int cv_recv_waiters;");
-        println!("    atomic_int cv_send_waiters;");
-        println!("    /* coro waiter lists, walked only under mu */");
-        println!("    struct __glide_task* coro_recv_waiters;");
-        println!("    struct __glide_task* coro_send_waiters;");
-        println!("};");
-        println!("");
-        println!("static ".concat(st).concat("* __glide_make_chan_").concat(m).concat("(int cap) {"));
-        println!("    ".concat(st).concat("* c = (").concat(st).concat("*)malloc(sizeof(").concat(st).concat("));"));
-        println!("    if (cap < 1) cap = 1;");
-        println!("    /* Round capacity up to next power of two for the bitmask. */");
-        println!("    size_t pow2 = 1;");
-        println!("    while (pow2 < (size_t)cap) pow2 <<= 1;");
-        println!("    c->mask = pow2 - 1;");
-        println!("    c->cells = (".concat(cell).concat("*)calloc(pow2, sizeof(").concat(cell).concat("));"));
-        println!("    for (size_t i = 0; i < pow2; i++) {");
-        println!("        atomic_store_explicit(&c->cells[i].seq, i, memory_order_relaxed);");
-        println!("    }");
-        println!("    atomic_store(&c->enq_pos, 0);");
-        println!("    atomic_store(&c->deq_pos, 0);");
-        println!("    atomic_store(&c->closed, 0);");
-        println!("    pthread_mutex_init(&c->mu, NULL);");
-        println!("    pthread_cond_init(&c->not_empty, NULL);");
-        println!("    pthread_cond_init(&c->not_full, NULL);");
-        println!("    atomic_store(&c->cv_recv_waiters, 0);");
-        println!("    atomic_store(&c->cv_send_waiters, 0);");
-        println!("    c->coro_recv_waiters = NULL;");
-        println!("    c->coro_send_waiters = NULL;");
-        println!("    return c;");
-        println!("}");
-        println!("");
-        // Lock-free try_send: returns 1 on success, 0 if full.
-        println!("static int __glide_try_send_".concat(m).concat("(").concat(st).concat("* c, ").concat(tc).concat(" v) {"));
-        println!("    ".concat(cell).concat("* cell;"));
-        println!("    size_t pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);");
-        println!("    for (;;) {");
-        println!("        cell = &c->cells[pos & c->mask];");
-        println!("        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);");
-        println!("        intptr_t diff = (intptr_t)seq - (intptr_t)pos;");
-        println!("        if (diff == 0) {");
-        println!("            if (atomic_compare_exchange_weak_explicit(");
-        println!("                    &c->enq_pos, &pos, pos + 1,");
-        println!("                    memory_order_relaxed, memory_order_relaxed)) break;");
-        println!("        } else if (diff < 0) {");
-        println!("            return 0;  /* buffer full */");
-        println!("        } else {");
-        println!("            pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);");
-        println!("        }");
-        println!("    }");
-        println!("    cell->data = v;");
-        println!("    atomic_store_explicit(&cell->seq, pos + 1, memory_order_release);");
-        println!("    return 1;");
-        println!("}");
-        println!("");
-        // Lock-free try_recv: returns 1 on success, 0 if empty.
-        println!("static int __glide_try_recv_".concat(m).concat("(").concat(st).concat("* c, ").concat(tc).concat("* out) {"));
-        println!("    ".concat(cell).concat("* cell;"));
-        println!("    size_t pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);");
-        println!("    for (;;) {");
-        println!("        cell = &c->cells[pos & c->mask];");
-        println!("        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);");
-        println!("        intptr_t diff = (intptr_t)seq - (intptr_t)(pos + 1);");
-        println!("        if (diff == 0) {");
-        println!("            if (atomic_compare_exchange_weak_explicit(");
-        println!("                    &c->deq_pos, &pos, pos + 1,");
-        println!("                    memory_order_relaxed, memory_order_relaxed)) break;");
-        println!("        } else if (diff < 0) {");
-        println!("            return 0;  /* buffer empty */");
-        println!("        } else {");
-        println!("            pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);");
-        println!("        }");
-        println!("    }");
-        println!("    *out = cell->data;");
-        println!("    atomic_store_explicit(&cell->seq, pos + c->mask + 1, memory_order_release);");
-        println!("    return 1;");
-        println!("}");
-        println!("");
-        // Wake one receiver — coro first, cv fallback. Skips mutex if no waiter.
-        println!("static void __glide_wake_recv_".concat(m).concat("(").concat(st).concat("* c) {"));
-        println!("    if (c->coro_recv_waiters == NULL && atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) == 0) return;");
-        println!("    pthread_mutex_lock(&c->mu);");
-        println!("    if (c->coro_recv_waiters) __glide_unpark_one(&c->coro_recv_waiters);");
-        println!("    if (atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) > 0) pthread_cond_signal(&c->not_empty);");
-        println!("    pthread_mutex_unlock(&c->mu);");
-        println!("}");
-        println!("static void __glide_wake_send_".concat(m).concat("(").concat(st).concat("* c) {"));
-        println!("    if (c->coro_send_waiters == NULL && atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) == 0) return;");
-        println!("    pthread_mutex_lock(&c->mu);");
-        println!("    if (c->coro_send_waiters) __glide_unpark_one(&c->coro_send_waiters);");
-        println!("    if (atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) > 0) pthread_cond_signal(&c->not_full);");
-        println!("    pthread_mutex_unlock(&c->mu);");
-        println!("}");
-        println!("");
-        println!("static void __glide_send_".concat(m).concat("(").concat(st).concat("* c, ").concat(tc).concat(" v) {"));
-        println!("    if (atomic_load_explicit(&c->closed, memory_order_acquire)) return;");
-        println!("    /* Fast path: lock-free push. */");
-        println!("    if (__glide_try_send_".concat(m).concat("(c, v)) {"));
-        println!("        __glide_wake_recv_".concat(m).concat("(c);"));
-        println!("        return;");
-        println!("    }");
-        println!("    /* Brief spin — consumer may free a slot any nanosecond. */");
-        println!("    for (int s = 0; s < 256; s++) {");
-        println!("#if defined(__x86_64__) || defined(_M_X64)");
-        println!("        __asm__ __volatile__(\"pause\" ::: \"memory\");");
-        println!("#endif");
-        println!("        if (__glide_try_send_".concat(m).concat("(c, v)) {"));
-        println!("            __glide_wake_recv_".concat(m).concat("(c);"));
-        println!("            return;");
-        println!("        }");
-        println!("    }");
-        println!("    /* Slow path: still full. Take mutex, retry, then block. */");
-        println!("    pthread_mutex_lock(&c->mu);");
-        println!("    for (;;) {");
-        println!("        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;");
-        println!("        if (__glide_try_send_".concat(m).concat("(c, v)) {"));
-        println!("            pthread_mutex_unlock(&c->mu);");
-        println!("            __glide_wake_recv_".concat(m).concat("(c);"));
-        println!("            return;");
-        println!("        }");
-        println!("        if (__glide_park(&c->mu, &c->coro_send_waiters)) {");
-        println!("            pthread_mutex_lock(&c->mu);");
-        println!("        } else {");
-        println!("            atomic_fetch_add_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);");
-        println!("            pthread_cond_wait(&c->not_full, &c->mu);");
-        println!("            atomic_fetch_sub_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);");
-        println!("        }");
-        println!("    }");
-        println!("    pthread_mutex_unlock(&c->mu);");
-        println!("}");
-        println!("");
-        println!("static ".concat(tc).concat(" __glide_recv_").concat(m).concat("(").concat(st).concat("* c) {"));
-        println!("    ".concat(tc).concat(" v;"));
-        println!("    if (__glide_try_recv_".concat(m).concat("(c, &v)) {"));
-        println!("        __glide_wake_send_".concat(m).concat("(c);"));
-        println!("        return v;");
-        println!("    }");
-        println!("    /* Brief spin before paying cv_wait cost — producer may be 1 cell behind. */");
-        println!("    for (int s = 0; s < 256; s++) {");
-        println!("#if defined(__x86_64__) || defined(_M_X64)");
-        println!("        __asm__ __volatile__(\"pause\" ::: \"memory\");");
-        println!("#endif");
-        println!("        if (__glide_try_recv_".concat(m).concat("(c, &v)) {"));
-        println!("            __glide_wake_send_".concat(m).concat("(c);"));
-        println!("            return v;");
-        println!("        }");
-        println!("    }");
-        println!("    pthread_mutex_lock(&c->mu);");
-        println!("    for (;;) {");
-        println!("        if (__glide_try_recv_".concat(m).concat("(c, &v)) {"));
-        println!("            pthread_mutex_unlock(&c->mu);");
-        println!("            __glide_wake_send_".concat(m).concat("(c);"));
-        println!("            return v;");
-        println!("        }");
-        println!("        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;");
-        println!("        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {");
-        println!("            pthread_mutex_lock(&c->mu);");
-        println!("        } else {");
-        println!("            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);");
-        println!("            pthread_cond_wait(&c->not_empty, &c->mu);");
-        println!("            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);");
-        println!("        }");
-        println!("    }");
-        println!("    pthread_mutex_unlock(&c->mu);");
-        println!("    memset(&v, 0, sizeof(v));");
-        println!("    return v;");
-        println!("}");
-        println!("");
-        println!("static int __glide_recv_into_".concat(m).concat("(").concat(st).concat("* c, ").concat(tc).concat("* out) {"));
-        println!("    if (__glide_try_recv_".concat(m).concat("(c, out)) {"));
-        println!("        __glide_wake_send_".concat(m).concat("(c);"));
-        println!("        return 1;");
-        println!("    }");
-        println!("    /* Spin briefly before cv_wait. */");
-        println!("    for (int s = 0; s < 256; s++) {");
-        println!("#if defined(__x86_64__) || defined(_M_X64)");
-        println!("        __asm__ __volatile__(\"pause\" ::: \"memory\");");
-        println!("#endif");
-        println!("        if (__glide_try_recv_".concat(m).concat("(c, out)) {"));
-        println!("            __glide_wake_send_".concat(m).concat("(c);"));
-        println!("            return 1;");
-        println!("        }");
-        println!("    }");
-        println!("    pthread_mutex_lock(&c->mu);");
-        println!("    for (;;) {");
-        println!("        if (__glide_try_recv_".concat(m).concat("(c, out)) {"));
-        println!("            pthread_mutex_unlock(&c->mu);");
-        println!("            __glide_wake_send_".concat(m).concat("(c);"));
-        println!("            return 1;");
-        println!("        }");
-        println!("        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;");
-        println!("        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {");
-        println!("            pthread_mutex_lock(&c->mu);");
-        println!("        } else {");
-        println!("            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);");
-        println!("            pthread_cond_wait(&c->not_empty, &c->mu);");
-        println!("            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);");
-        println!("        }");
-        println!("    }");
-        println!("    pthread_mutex_unlock(&c->mu);");
-        println!("    return 0;");
-        println!("}");
-        println!("");
-        println!("static void __glide_close_".concat(m).concat("(").concat(st).concat("* c) {"));
-        println!("    pthread_mutex_lock(&c->mu);");
-        println!("    atomic_store_explicit(&c->closed, 1, memory_order_release);");
-        println!("    /* Drain coro waiter lists. */");
-        println!("    while (c->coro_send_waiters) __glide_unpark_one(&c->coro_send_waiters);");
-        println!("    while (c->coro_recv_waiters) __glide_unpark_one(&c->coro_recv_waiters);");
-        println!("    /* Wake all cv waiters. */");
-        println!("    pthread_cond_broadcast(&c->not_empty);");
-        println!("    pthread_cond_broadcast(&c->not_full);");
-        println!("    pthread_mutex_unlock(&c->mu);");
-        println!("}");
+        let s1: string = _cg_replace(tmpl, "@M@", m);
+        let s2: string = _cg_replace(s1, "@TC@", tc);
+        print!(s2);
         println!("");
     }
 }
@@ -572,741 +587,10 @@ fn emit_chan_runtime(g: *CG) {
 // + work-stealing land in Phase 1.2.
 fn emit_scheduler_runtime() {
     println!("");
-    println!("// ============================ scheduler runtime ============================");
-    println!("#include <pthread.h>");
-    println!("#include <stdatomic.h>");
-    println!("#include <time.h>");
-    println!("#include <stdint.h>");
-    println!("#include <stdlib.h>");
-    println!("#ifdef _WIN32");
-    println!("# include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */");
-    println!("#else");
-    println!("# include <unistd.h>");
-    println!("# include <sys/mman.h>");
-    println!("#endif");
-    println!("");
-    println!("/* Spinlock — 5-10× faster than pthread_mutex for the short critical");
-    println!("   sections we use (queue push/pop, pool head update). Falls back to");
-    println!("   `pause` on contention to be hyperthread-friendly. */");
-    println!("typedef atomic_int __glide_spin_t;");
-    println!("static inline void __glide_spin_lock(__glide_spin_t* l) {");
-    println!("    while (atomic_exchange_explicit(l, 1, memory_order_acquire) == 1) {");
-    println!("        while (atomic_load_explicit(l, memory_order_relaxed) == 1) {");
-    println!("#if defined(__x86_64__) || defined(_M_X64)");
-    println!("            __asm__ __volatile__(\"pause\" ::: \"memory\");");
-    println!("#endif");
-    println!("        }");
-    println!("    }");
-    println!("}");
-    println!("static inline void __glide_spin_unlock(__glide_spin_t* l) {");
-    println!("    atomic_store_explicit(l, 0, memory_order_release);");
-    println!("}");
-    println!("");
-    println!("/* Stack defaults: configured size + 4 KB guard, page-rounded up.");
-    println!("   With the default 4 KB the total reservation is 8 KB virtual per coro.");
-    println!("   Linux/Mac mmap commits pages lazily; Windows commits virtual but the");
-    println!("   working-set is bound only on first access. Either way idle coros pay");
-    println!("   ~one 4 KB page in physical RAM.");
-    println!("   Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)");
-    println!("   need pointer-map metadata + copy/relocate — TBD. */");
-    println!("#define __GLIDE_STACK_GUARD 4096");
-    println!("static int __glide_stack_size = 4096;");
-    println!("");
-    println!("/* Custom assembly context switch — replaces Win32 Fibers and POSIX");
-    println!("   ucontext.h with our own portable, ABI-correct register flip. The");
-    println!("   reason: Fibers crash if the same fiber is SwitchToFiber'd by");
-    println!("   different OS threads over its lifetime, which forces us to pin");
-    println!("   coros to a single worker and rules out work-stealing. With our");
-    println!("   own switch we own the entire state, so a coro can move between");
-    println!("   workers safely.");
-    println!("");
-    println!("   Layout: callee-saved GP regs + (Win64 only) callee-saved XMM6-15.");
-    println!("   Caller-saved registers (rax/rcx/rdx/...) were already flushed to the");
-    println!("   caller's stack frame by the compiler before it called us, so we don't");
-    println!("   touch them. SysV marks XMM as caller-saved → no extra work there. */");
-    println!("typedef struct {");
-    println!("#ifdef _WIN32");
-    println!("    void* rsp; void* rbx; void* rbp;");
-    println!("    void* rdi; void* rsi;");
-    println!("    void* r12; void* r13; void* r14; void* r15;");
-    println!("    char xmm[160];");
-    println!("#else");
-    println!("    void* rsp; void* rbx; void* rbp;");
-    println!("    void* r12; void* r13; void* r14; void* r15;");
-    println!("#endif");
-    println!("} __glide_coro_ctx;");
-    println!("");
-    println!("__attribute__((naked, noinline))");
-    println!("static void __glide_ctx_switch(");
-    println!("    __glide_coro_ctx* from __attribute__((unused)),");
-    println!("    __glide_coro_ctx* to   __attribute__((unused))) {");
-    println!("#ifdef _WIN32");
-    println!("    /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */");
-    println!("    __asm__(");
-    println!("        \"movq %rsp,   0(%rcx)\\n\\t\"");
-    println!("        \"movq %rbx,   8(%rcx)\\n\\t\"");
-    println!("        \"movq %rbp,  16(%rcx)\\n\\t\"");
-    println!("        \"movq %rdi,  24(%rcx)\\n\\t\"");
-    println!("        \"movq %rsi,  32(%rcx)\\n\\t\"");
-    println!("        \"movq %r12,  40(%rcx)\\n\\t\"");
-    println!("        \"movq %r13,  48(%rcx)\\n\\t\"");
-    println!("        \"movq %r14,  56(%rcx)\\n\\t\"");
-    println!("        \"movq %r15,  64(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm6,   72(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm7,   88(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm8,  104(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm9,  120(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm10, 136(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm11, 152(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm12, 168(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm13, 184(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm14, 200(%rcx)\\n\\t\"");
-    println!("        \"movdqu %xmm15, 216(%rcx)\\n\\t\"");
-    println!("        \"movq  0(%rdx), %rsp\\n\\t\"");
-    println!("        \"movq  8(%rdx), %rbx\\n\\t\"");
-    println!("        \"movq 16(%rdx), %rbp\\n\\t\"");
-    println!("        \"movq 24(%rdx), %rdi\\n\\t\"");
-    println!("        \"movq 32(%rdx), %rsi\\n\\t\"");
-    println!("        \"movq 40(%rdx), %r12\\n\\t\"");
-    println!("        \"movq 48(%rdx), %r13\\n\\t\"");
-    println!("        \"movq 56(%rdx), %r14\\n\\t\"");
-    println!("        \"movq 64(%rdx), %r15\\n\\t\"");
-    println!("        \"movdqu  72(%rdx), %xmm6\\n\\t\"");
-    println!("        \"movdqu  88(%rdx), %xmm7\\n\\t\"");
-    println!("        \"movdqu 104(%rdx), %xmm8\\n\\t\"");
-    println!("        \"movdqu 120(%rdx), %xmm9\\n\\t\"");
-    println!("        \"movdqu 136(%rdx), %xmm10\\n\\t\"");
-    println!("        \"movdqu 152(%rdx), %xmm11\\n\\t\"");
-    println!("        \"movdqu 168(%rdx), %xmm12\\n\\t\"");
-    println!("        \"movdqu 184(%rdx), %xmm13\\n\\t\"");
-    println!("        \"movdqu 200(%rdx), %xmm14\\n\\t\"");
-    println!("        \"movdqu 216(%rdx), %xmm15\\n\\t\"");
-    println!("        \"ret\\n\\t\"");
-    println!("    );");
-    println!("#else");
-    println!("    /* SysV AMD64 ABI: from=%rdi, to=%rsi */");
-    println!("    __asm__(");
-    println!("        \"movq %rsp,   0(%rdi)\\n\\t\"");
-    println!("        \"movq %rbx,   8(%rdi)\\n\\t\"");
-    println!("        \"movq %rbp,  16(%rdi)\\n\\t\"");
-    println!("        \"movq %r12,  24(%rdi)\\n\\t\"");
-    println!("        \"movq %r13,  32(%rdi)\\n\\t\"");
-    println!("        \"movq %r14,  40(%rdi)\\n\\t\"");
-    println!("        \"movq %r15,  48(%rdi)\\n\\t\"");
-    println!("        \"movq  0(%rsi), %rsp\\n\\t\"");
-    println!("        \"movq  8(%rsi), %rbx\\n\\t\"");
-    println!("        \"movq 16(%rsi), %rbp\\n\\t\"");
-    println!("        \"movq 24(%rsi), %r12\\n\\t\"");
-    println!("        \"movq 32(%rsi), %r13\\n\\t\"");
-    println!("        \"movq 40(%rsi), %r14\\n\\t\"");
-    println!("        \"movq 48(%rsi), %r15\\n\\t\"");
-    println!("        \"ret\\n\\t\"");
-    println!("    );");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("typedef void* (*__glide_task_fn)(void*);");
-    println!("typedef struct __glide_task {");
-    println!("    __glide_coro_ctx    ctx;     /* register save area */");
-    println!("    void*               stack;   /* mmap/VirtualAlloc base (low addr) */");
-    println!("    size_t              stack_total; /* bytes including guard page */");
-    println!("    __glide_task_fn     entry;");
-    println!("    void*               arg;");
-    println!("    int                 state; /* 0=ready 1=running 2=blocked 3=done */");
-    println!("    int                 home_worker; /* worker that currently owns this coro;");
-    println!("                                       updated on steal so future unparks land");
-    println!("                                       on the thief's queue (cache-warm). */");
-    println!("    int                 has_run;     /* 0 if never run; once 1, we never");
-    println!("                                       migrate the coro across OS threads (Win64");
-    println!("                                       SEH/TIB invariants make resumed-on-other-");
-    println!("                                       thread fragile, so first-run-only steal). */");
-    println!("    struct __glide_task* next;       /* link in per-worker ready queue */");
-    println!("    struct __glide_task* wait_next;  /* link in chan wait list */");
-    println!("    /* Park hand-off: if non-null on switch-back to worker fiber,");
-    println!("       worker links self into *park_list and unlocks park_lock.");
-    println!("       Done after the switch so unpark can never race with a");
-    println!("       still-mid-switch coro. */");
-    println!("    pthread_mutex_t*     park_lock;");
-    println!("    struct __glide_task** park_list;");
-    println!("} __glide_task;");
-    println!("");
-    println!("/* Forward decls — out-of-order references between sleep_ms / __glide_park /");
-    println!("   __glide_timer_main / sched_init / task pool helpers used by worker_main. */");
-    println!("static void* __glide_timer_main(void* unused);");
-    println!("int __glide_park(pthread_mutex_t* lock, __glide_task** list);");
-    println!("void __glide_free_task(__glide_task* t);");
-    println!("");
-    println!("/* Per-worker queue: each worker pops only from its own queue, so a");
-    println!("   fiber that first ran on worker A always continues on A. This avoids");
-    println!("   cross-thread fiber migration which crashes Win32 Fibers. Stealing");
-    println!("   between workers comes in Phase 1.2 (with proper atomic ownership). */");
-    println!("typedef struct {");
-    println!("    __glide_spin_t  spin;");
-    println!("    pthread_mutex_t mu;");
-    println!("    pthread_cond_t  cv;");
-    println!("    __glide_task*   head;");
-    println!("    __glide_task*   tail;");
-    println!("    atomic_int      idle;");
-    println!("} __glide_wq;");
-    println!("");
-    println!("/* Sorted sleep queue for the timer thread. Coroutines that call");
-    println!("   sleep_ms park here instead of blocking their worker. */");
-    println!("typedef struct __glide_timer_node {");
-    println!("    long long              deadline_ns;");
-    println!("    __glide_task*          task;");
-    println!("    struct __glide_timer_node* next;");
-    println!("} __glide_timer_node;");
-    println!("static __glide_timer_node* __glide_timer_head = NULL;");
-    println!("static pthread_mutex_t __glide_timer_mu;");
-    println!("static pthread_cond_t  __glide_timer_cv;");
-    println!("static pthread_t __glide_timer_thread;");
-    println!("static int __glide_timer_inited = 0;");
-    println!("");
-    println!("static __glide_wq* __glide_wqs = NULL;");
-    println!("static int __glide_q_inited = 0;");
-    println!("static int __glide_n_workers = 0;");
-    println!("static pthread_t* __glide_workers = NULL;");
-    println!("static atomic_int __glide_pending = 0;");
-    println!("static atomic_int __glide_shutdown = 0;");
-    println!("static atomic_int __glide_rr = 0;        /* round-robin spawn counter */");
-    println!("");
-    // C11 _Thread_local — works on both mingw-gcc and msvc; the older
-    // __declspec(thread) is silently ignored by mingw-gcc which would race
-    // every worker thread on a single global.
-    println!("static _Thread_local __glide_task* __glide_cur_task = NULL;");
-    println!("static _Thread_local int __glide_my_worker = -1;");
-    println!("/* Worker's saved context. Each OS thread has its own — when a coro");
-    println!("   parks/yields, we ctx_switch INTO this so the worker resumes its");
-    println!("   loop right after the call site. */");
-    println!("static _Thread_local __glide_coro_ctx __glide_worker_ctx;");
-    println!("#ifdef _WIN32");
-    println!("/* Original OS-thread stack range — saved on worker entry, restored");
-    println!("   when no coro is running. Win64 SEH walks the stack via TIB, so we");
-    println!("   must point TIB at the coro's stack while it runs and back at the");
-    println!("   OS thread's stack between switches. Without this, any code path that");
-    println!("   raises an exception or probes the stack from a migrated coro reads");
-    println!("   garbage and crashes. */");
-    println!("static _Thread_local void* __glide_orig_stack_base = NULL;");
-    println!("static _Thread_local void* __glide_orig_stack_limit = NULL;");
-    println!("static inline void __glide_tib_set_stack(void* base, void* limit) {");
-    println!("    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();");
-    println!("    tib->StackBase = base;");
-    println!("    tib->StackLimit = limit;");
-    println!("}");
-    println!("#endif");
-    println!("");
-    println!("static void __glide_q_push_to(int wid, __glide_task* t) {");
-    println!("    __glide_wq* q = &__glide_wqs[wid];");
-    println!("    __glide_spin_lock(&q->spin);");
-    println!("    t->next = NULL;");
-    println!("    if (q->tail) q->tail->next = t; else q->head = t;");
-    println!("    q->tail = t;");
-    println!("    __glide_spin_unlock(&q->spin);");
-    println!("    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {");
-    println!("        pthread_mutex_lock(&q->mu);");
-    println!("        pthread_cond_signal(&q->cv);");
-    println!("        pthread_mutex_unlock(&q->mu);");
-    println!("    }");
-    println!("}");
-    println!("");
-    println!("static int __glide_pick_worker(void) {");
-    println!("    /* Inside a coro: same worker as caller (cheap, keeps cache hot).");
-    println!("       Outside (main): always W0 — work-stealing redistributes. This avoids");
-    println!("       the per-spawn atomic+cross-thread cache bounce on N target queues. */");
-    println!("    if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;");
-    println!("    return 0;");
-    println!("}");
-    println!("");
-    println!("/* Work-stealing: when our queue is empty, try grabbing the head of");
-    println!("   another worker's queue (random victim, walk all on miss). On steal");
-    println!("   we adopt the task as our own (home_worker = me) so future unparks");
-    println!("   stay cache-warm here. Now safe to migrate because our custom ctx");
-    println!("   switch is stateless across threads — no Win32 Fiber crash trap. */");
-    println!("static atomic_uint __glide_steal_rr = 0;");
-    println!("static __glide_task* __glide_try_steal(void) {");
-    println!("    int n = __glide_n_workers;");
-    println!("    if (n <= 1) return NULL;");
-    println!("    int my = __glide_my_worker;");
-    println!("    unsigned int seed = atomic_fetch_add_explicit(&__glide_steal_rr, 1, memory_order_relaxed);");
-    println!("    int start = (int)(seed % (unsigned int)n);");
-    println!("    for (int i = 0; i < n; i++) {");
-    println!("        int v = (start + i) % n;");
-    println!("        if (v == my) continue;");
-    println!("        __glide_wq* q = &__glide_wqs[v];");
-    println!("        __glide_spin_lock(&q->spin);");
-    println!("        /* Walk queue head: only first-run-untouched tasks are stealable. */");
-    println!("        __glide_task* prev = NULL;");
-    println!("        __glide_task* t = q->head;");
-    println!("        while (t && t->has_run) { prev = t; t = t->next; }");
-    println!("        if (t) {");
-    println!("            if (prev) prev->next = t->next; else q->head = t->next;");
-    println!("            if (q->tail == t) q->tail = prev;");
-    println!("            __glide_spin_unlock(&q->spin);");
-    println!("            t->home_worker = my;");
-    println!("            t->next = NULL;");
-    println!("            return t;");
-    println!("        }");
-    println!("        __glide_spin_unlock(&q->spin);");
-    println!("    }");
-    println!("    return NULL;");
-    println!("}");
-    println!("");
-    println!("static __glide_task* __glide_q_pop_my(void) {");
-    println!("    __glide_wq* q = &__glide_wqs[__glide_my_worker];");
-    println!("    while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {");
-    println!("        __glide_spin_lock(&q->spin);");
-    println!("        __glide_task* t = q->head;");
-    println!("        if (t) {");
-    println!("            q->head = t->next;");
-    println!("            if (q->head == NULL) q->tail = NULL;");
-    println!("            __glide_spin_unlock(&q->spin);");
-    println!("            return t;");
-    println!("        }");
-    println!("        __glide_spin_unlock(&q->spin);");
-    println!("        __glide_task* stolen = __glide_try_steal();");
-    println!("        if (stolen) return stolen;");
-    println!("        pthread_mutex_lock(&q->mu);");
-    println!("        if (q->head || atomic_load(&__glide_shutdown)) {");
-    println!("            pthread_mutex_unlock(&q->mu);");
-    println!("            continue;");
-    println!("        }");
-    println!("        struct timespec ts;");
-    println!("        clock_gettime(CLOCK_REALTIME, &ts);");
-    println!("        ts.tv_nsec += 500000;");
-    println!("        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }");
-    println!("        atomic_store_explicit(&q->idle, 1, memory_order_relaxed);");
-    println!("        pthread_cond_timedwait(&q->cv, &q->mu, &ts);");
-    println!("        atomic_store_explicit(&q->idle, 0, memory_order_relaxed);");
-    println!("        pthread_mutex_unlock(&q->mu);");
-    println!("    }");
-    println!("    return NULL;");
-    println!("}");
-    println!("");
-    println!("/* Trampoline reached on a coro's first switch-in. Reads the bound");
-    println!("   task from TLS (worker_main set __glide_cur_task before switching),");
-    println!("   runs the user fn, marks done, then hands control back to the worker");
-    println!("   via ctx_switch. The final switch never returns: we discard the saved");
-    println!("   ctx (worker is going to free us anyway). */");
-    println!("static void __glide_coro_trampoline(void) {");
-    println!("    __glide_task* t = __glide_cur_task;");
-    println!("    (void)t->entry(t->arg);");
-    println!("    t->state = 3;");
-    println!("    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);");
-    println!("    __builtin_unreachable();");
-    println!("}");
-    println!("");
-    println!("/* Stack pool: hold a small free list of recently-freed regions so a");
-    println!("   spawn-burst doesn't pay mmap+munmap (Linux) / VirtualAlloc+VirtualFree");
-    println!("   (Win) per coro. Significant on Windows where these are slow syscalls. */");
-    println!("typedef struct __glide_stack_node {");
-    println!("    void*  base;");
-    println!("    size_t total;");
-    println!("    struct __glide_stack_node* next;");
-    println!("} __glide_stack_node;");
-    println!("static __glide_stack_node* __glide_stack_pool = NULL;");
-    println!("static int __glide_stack_pool_count = 0;");
-    println!("static const int __GLIDE_STACK_POOL_MAX = 256;");
-    println!("static __glide_spin_t __glide_stack_pool_spin = 0;");
-    println!("");
-    println!("/* Stack allocator: mmap (POSIX) or VirtualAlloc (Win) so unused pages");
-    println!("   stay uncommitted (Linux/Mac) and overflow into the guard page raises");
-    println!("   SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the");
-    println!("   neighbour stack. Returns the LOW address of the whole region; usable");
-    println!("   stack starts at `base + __GLIDE_STACK_GUARD`. */");
-    println!("static void* __glide_alloc_stack(size_t* out_total) {");
-    println!("    size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;");
-    println!("    size_t page = 4096;");
-    println!("    total = (total + page - 1) & ~(page - 1);");
-    println!("    /* Pool fast path. */");
-    println!("    __glide_spin_lock(&__glide_stack_pool_spin);");
-    println!("    __glide_stack_node* n = __glide_stack_pool;");
-    println!("    while (n && n->total != total) n = n->next;");
-    println!("    if (n && n->total == total) {");
-    println!("        /* Unlink first matching node. */");
-    println!("        __glide_stack_node** p = &__glide_stack_pool;");
-    println!("        while (*p != n) p = &(*p)->next;");
-    println!("        *p = n->next;");
-    println!("        __glide_stack_pool_count--;");
-    println!("        __glide_spin_unlock(&__glide_stack_pool_spin);");
-    println!("        void* base = n->base;");
-    println!("        free(n);");
-    println!("        *out_total = total;");
-    println!("        return base;");
-    println!("    }");
-    println!("    __glide_spin_unlock(&__glide_stack_pool_spin);");
-    println!("    void* base;");
-    println!("#ifdef _WIN32");
-    println!("    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);");
-    println!("    if (!base) return NULL;");
-    println!("    DWORD old;");
-    println!("    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);");
-    println!("#else");
-    println!("    base = mmap(NULL, total, PROT_READ|PROT_WRITE,");
-    println!("                MAP_ANON|MAP_PRIVATE, -1, 0);");
-    println!("    if (base == MAP_FAILED) return NULL;");
-    println!("    mprotect(base, __GLIDE_STACK_GUARD, PROT_NONE);");
-    println!("#endif");
-    println!("    *out_total = total;");
-    println!("    return base;");
-    println!("}");
-    println!("");
-    println!("static void __glide_free_stack(void* base, size_t total) {");
-    println!("    if (!base) return;");
-    println!("    /* Hand back to pool if there's room. */");
-    println!("    __glide_spin_lock(&__glide_stack_pool_spin);");
-    println!("    if (__glide_stack_pool_count < __GLIDE_STACK_POOL_MAX) {");
-    println!("        __glide_stack_node* n = (__glide_stack_node*)malloc(sizeof(*n));");
-    println!("        n->base = base;");
-    println!("        n->total = total;");
-    println!("        n->next = __glide_stack_pool;");
-    println!("        __glide_stack_pool = n;");
-    println!("        __glide_stack_pool_count++;");
-    println!("        __glide_spin_unlock(&__glide_stack_pool_spin);");
-    println!("        return;");
-    println!("    }");
-    println!("    __glide_spin_unlock(&__glide_stack_pool_spin);");
-    println!("#ifdef _WIN32");
-    println!("    (void)total;");
-    println!("    VirtualFree(base, 0, MEM_RELEASE);");
-    println!("#else");
-    println!("    munmap(base, total);");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("/* Plant trampoline address at the top of the stack so the first");
-    println!("   ctx_switch into this ctx pops it and `ret`s into the trampoline.");
-    println!("   16-byte alignment matches the AMD64 call ABI: we save RSP at a");
-    println!("   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees");
-    println!("   RSP%16==8 (which is what `call` would have left). */");
-    println!("static void __glide_coro_init(__glide_task* t) {");
-    println!("    size_t total = 0;");
-    println!("    t->stack = __glide_alloc_stack(&total);");
-    println!("    t->stack_total = total;");
-    println!("    char* top = (char*)t->stack + total;");
-    println!("    top -= 16;                       /* headroom — never write past top */");
-    println!("    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;");
-    println!("    *(void**)sp = (void*)__glide_coro_trampoline;");
-    println!("    t->ctx.rsp = (void*)sp;");
-    println!("    t->ctx.rbx = 0; t->ctx.rbp = 0;");
-    println!("    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;");
-    println!("#ifdef _WIN32");
-    println!("    t->ctx.rdi = 0; t->ctx.rsi = 0;");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("static void __glide_coro_destroy(__glide_task* t) {");
-    println!("    __glide_free_stack(t->stack, t->stack_total);");
-    println!("    t->stack = NULL;");
-    println!("    t->stack_total = 0;");
-    println!("}");
-    println!("");
-    println!("static void* __glide_worker_main(void* arg) {");
-    println!("    __glide_my_worker = (int)(intptr_t)arg;");
-    println!("#ifdef _WIN32");
-    println!("    /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit");
-    println!("       to the coro's region while it runs and back to ours between switches. */");
-    println!("    {");
-    println!("        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();");
-    println!("        __glide_orig_stack_base = tib->StackBase;");
-    println!("        __glide_orig_stack_limit = tib->StackLimit;");
-    println!("    }");
-    println!("#endif");
-    println!("    while (!atomic_load(&__glide_shutdown)) {");
-    println!("        __glide_task* t = __glide_q_pop_my();");
-    println!("        if (!t) break;");
-    println!("        __glide_cur_task = t;");
-    println!("        t->state = 1;");
-    println!("        t->has_run = 1;  /* stick to this OS thread from now on */");
-    println!("#ifdef _WIN32");
-    println!("        __glide_tib_set_stack((char*)t->stack + t->stack_total, t->stack);");
-    println!("#endif");
-    println!("        __glide_ctx_switch(&__glide_worker_ctx, &t->ctx);");
-    println!("#ifdef _WIN32");
-    println!("        __glide_tib_set_stack(__glide_orig_stack_base, __glide_orig_stack_limit);");
-    println!("#endif");
-    println!("        __glide_cur_task = NULL;");
-    println!("        if (t->state == 3) {");
-    println!("            __glide_free_task(t);  /* pool reuse — keeps stack mmap'd */");
-    println!("            int rem = atomic_fetch_sub_explicit(&__glide_pending, 1, memory_order_acq_rel) - 1;");
-    println!("            /* Only broadcast when pending hits zero so sched_shutdown's");
-    println!("               polling loop wakes promptly. Per-task broadcast was costing");
-    println!("               N×lock+broadcast per completion (~1 ms on 12 workers / 100K tasks). */");
-    println!("            if (rem == 0) {");
-    println!("                for (int i = 0; i < __glide_n_workers; i++) {");
-    println!("                    pthread_mutex_lock(&__glide_wqs[i].mu);");
-    println!("                    pthread_cond_broadcast(&__glide_wqs[i].cv);");
-    println!("                    pthread_mutex_unlock(&__glide_wqs[i].mu);");
-    println!("                }");
-    println!("            }");
-    println!("        } else if (t->state == 2) {");
-    println!("            /* Parked. Complete the hand-off: link into wait list,");
-    println!("               release the lock the parker held. After this point");
-    println!("               unpark may safely queue the task. */");
-    println!("            if (t->park_list) {");
-    println!("                t->wait_next = *t->park_list;");
-    println!("                *t->park_list = t;");
-    println!("                t->park_list = NULL;");
-    println!("            }");
-    println!("            if (t->park_lock) {");
-    println!("                pthread_mutex_unlock(t->park_lock);");
-    println!("                t->park_lock = NULL;");
-    println!("            }");
-    println!("        } else {");
-    println!("            t->state = 0;");
-    println!("            __glide_q_push_to(t->home_worker, t);");
-    println!("        }");
-    println!("    }");
-    println!("    return NULL;");
-    println!("}");
-    println!("");
-    println!("void __glide_sched_init(void) {");
-    println!("    if (__glide_q_inited) return;");
-    println!("    const char* env_stk = getenv(\"GLIDE_CORO_STACK\");");
-    println!("    if (env_stk) {");
-    println!("        int n = atoi(env_stk);");
-    println!("        if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */");
-    println!("    }");
-    println!("    const char* env = getenv(\"GLIDE_WORKERS\");");
-    println!("    if (env) __glide_n_workers = atoi(env);");
-    println!("    if (__glide_n_workers <= 0) {");
-    println!("#ifdef _WIN32");
-    println!("        SYSTEM_INFO si; GetSystemInfo(&si);");
-    println!("        __glide_n_workers = (int)si.dwNumberOfProcessors;");
-    println!("#else");
-    println!("        long n = sysconf(_SC_NPROCESSORS_ONLN);");
-    println!("        __glide_n_workers = (n > 0) ? (int)n : 4;");
-    println!("#endif");
-    println!("    }");
-    println!("    __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));");
-    println!("    for (int i = 0; i < __glide_n_workers; i++) {");
-    println!("        pthread_mutex_init(&__glide_wqs[i].mu, NULL);");
-    println!("        pthread_cond_init(&__glide_wqs[i].cv, NULL);");
-    println!("    }");
-    println!("    __glide_q_inited = 1;");
-    println!("    __glide_workers = (pthread_t*)malloc(sizeof(pthread_t) * __glide_n_workers);");
-    println!("    for (int i = 0; i < __glide_n_workers; i++) {");
-    println!("        pthread_create(&__glide_workers[i], NULL, __glide_worker_main, (void*)(intptr_t)i);");
-    println!("    }");
-    println!("    pthread_mutex_init(&__glide_timer_mu, NULL);");
-    println!("    pthread_cond_init(&__glide_timer_cv, NULL);");
-    println!("    __glide_timer_inited = 1;");
-    println!("    pthread_create(&__glide_timer_thread, NULL, __glide_timer_main, NULL);");
-    println!("}");
-    println!("");
-    println!("void __glide_sched_shutdown(void) {");
-    println!("    if (!__glide_q_inited) return;");
-    println!("    while (atomic_load(&__glide_pending) > 0) {");
-    println!("        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;");
-    println!("        nanosleep(&ts, NULL);");
-    println!("    }");
-    println!("    atomic_store(&__glide_shutdown, 1);");
-    println!("    for (int i = 0; i < __glide_n_workers; i++) {");
-    println!("        pthread_mutex_lock(&__glide_wqs[i].mu);");
-    println!("        pthread_cond_broadcast(&__glide_wqs[i].cv);");
-    println!("        pthread_mutex_unlock(&__glide_wqs[i].mu);");
-    println!("    }");
-    println!("    for (int i = 0; i < __glide_n_workers; i++) {");
-    println!("        pthread_join(__glide_workers[i], NULL);");
-    println!("    }");
-    println!("    if (__glide_timer_inited) {");
-    println!("        pthread_mutex_lock(&__glide_timer_mu);");
-    println!("        pthread_cond_broadcast(&__glide_timer_cv);");
-    println!("        pthread_mutex_unlock(&__glide_timer_mu);");
-    println!("        pthread_join(__glide_timer_thread, NULL);");
-    println!("        __glide_timer_inited = 0;");
-    println!("    }");
-    println!("    free(__glide_workers); __glide_workers = NULL;");
-    println!("    free(__glide_wqs); __glide_wqs = NULL;");
-    println!("    __glide_q_inited = 0;");
-    println!("}");
-    println!("");
-    println!("/* Task pool: full task structs (stack + ctx already initialized). On reuse");
-    println!("   we just rewind the trampoline pointer at the top of the existing stack —");
-    println!("   no mmap, no calloc, no setup work. Burst spawns become ~1 mutex + 1 push. */");
-    println!("static __glide_task* __glide_task_pool = NULL;");
-    println!("static int __glide_task_pool_count = 0;");
-    println!("static const int __GLIDE_TASK_POOL_MAX = 1024;");
-    println!("static __glide_spin_t __glide_task_pool_spin = 0;");
-    println!("");
-    println!("static void __glide_reset_ctx(__glide_task* t) {");
-    println!("    char* top = (char*)t->stack + t->stack_total;");
-    println!("    top -= 16;");
-    println!("    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;");
-    println!("    *(void**)sp = (void*)__glide_coro_trampoline;");
-    println!("    t->ctx.rsp = (void*)sp;");
-    println!("    /* GP/XMM regs zeroed via 8-byte stores — faster than memset for");
-    println!("       this fixed-size struct, and the compiler vectorizes if it cares. */");
-    println!("    t->ctx.rbx = 0; t->ctx.rbp = 0;");
-    println!("    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;");
-    println!("#ifdef _WIN32");
-    println!("    t->ctx.rdi = 0; t->ctx.rsi = 0;");
-    println!("    /* xmm[160] = 20 × 8 bytes; unrolled clear for branchless write. */");
-    println!("    uint64_t* x = (uint64_t*)t->ctx.xmm;");
-    println!("    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;");
-    println!("    x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;");
-    println!("    x[16]=0; x[17]=0; x[18]=0; x[19]=0;");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("__glide_task* __glide_alloc_task(void) {");
-    println!("    __glide_spin_lock(&__glide_task_pool_spin);");
-    println!("    __glide_task* t = __glide_task_pool;");
-    println!("    if (t) {");
-    println!("        __glide_task_pool = t->next;");
-    println!("        __glide_task_pool_count--;");
-    println!("        __glide_spin_unlock(&__glide_task_pool_spin);");
-    println!("        t->state = 0; t->has_run = 0;");
-    println!("        t->next = NULL; t->wait_next = NULL;");
-    println!("        t->park_lock = NULL; t->park_list = NULL;");
-    println!("        __glide_reset_ctx(t);");
-    println!("        return t;");
-    println!("    }");
-    println!("    __glide_spin_unlock(&__glide_task_pool_spin);");
-    println!("    t = (__glide_task*)calloc(1, sizeof(__glide_task));");
-    println!("    __glide_coro_init(t);");
-    println!("    return t;");
-    println!("}");
-    println!("");
-    println!("void __glide_free_task(__glide_task* t) {");
-    println!("    __glide_spin_lock(&__glide_task_pool_spin);");
-    println!("    if (__glide_task_pool_count < __GLIDE_TASK_POOL_MAX) {");
-    println!("        t->next = __glide_task_pool;");
-    println!("        __glide_task_pool = t;");
-    println!("        __glide_task_pool_count++;");
-    println!("        __glide_spin_unlock(&__glide_task_pool_spin);");
-    println!("        return;");
-    println!("    }");
-    println!("    __glide_spin_unlock(&__glide_task_pool_spin);");
-    println!("    __glide_coro_destroy(t);");
-    println!("    free(t);");
-    println!("}");
-    println!("");
-    println!("void __glide_spawn(__glide_task_fn fn, void* arg) {");
-    println!("    __glide_task* t = __glide_alloc_task();");
-    println!("    t->entry = fn;");
-    println!("    t->arg = arg;");
-    println!("    t->home_worker = __glide_pick_worker();");
-    println!("    /* Relaxed: shutdown read uses acquire; the queue mutex/spinlock pair");
-    println!("       gives the visibility we need. seq_cst here would be a cache-bus stall. */");
-    println!("    atomic_fetch_add_explicit(&__glide_pending, 1, memory_order_relaxed);");
-    println!("    __glide_q_push_to(t->home_worker, t);");
-    println!("}");
-    println!("");
-    println!("void yield_now(void) {");
-    println!("    __glide_task* t = __glide_cur_task;");
-    println!("    if (!t) return;");
-    println!("    t->state = 0;");
-    println!("    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);");
-    println!("}");
-    println!("");
-    println!("static long long __glide_monotonic_ns(void) {");
-    println!("#ifdef _WIN32");
-    println!("    static LARGE_INTEGER freq; static int inited = 0;");
-    println!("    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }");
-    println!("    LARGE_INTEGER c; QueryPerformanceCounter(&c);");
-    println!("    return (long long)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);");
-    println!("#else");
-    println!("    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);");
-    println!("    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("/* Timer thread: sleeps until the head deadline, unparks expired tasks. */");
-    println!("static void* __glide_timer_main(void* unused) {");
-    println!("    (void)unused;");
-    println!("    pthread_mutex_lock(&__glide_timer_mu);");
-    println!("    while (!atomic_load(&__glide_shutdown)) {");
-    println!("        if (__glide_timer_head == NULL) {");
-    println!("            pthread_cond_wait(&__glide_timer_cv, &__glide_timer_mu);");
-    println!("            continue;");
-    println!("        }");
-    println!("        long long now = __glide_monotonic_ns();");
-    println!("        if (__glide_timer_head->deadline_ns <= now) {");
-    println!("            __glide_timer_node* expired = __glide_timer_head;");
-    println!("            __glide_timer_head = expired->next;");
-    println!("            __glide_task* t = expired->task;");
-    println!("            free(expired);");
-    println!("            pthread_mutex_unlock(&__glide_timer_mu);");
-    println!("            t->state = 0;");
-    println!("            __glide_q_push_to(t->home_worker, t);");
-    println!("            pthread_mutex_lock(&__glide_timer_mu);");
-    println!("            continue;");
-    println!("        }");
-    println!("        long long delta = __glide_timer_head->deadline_ns - now;");
-    println!("        struct timespec abst;");
-    println!("#ifdef _WIN32");
-    println!("        struct timespec _now_rt; clock_gettime(CLOCK_REALTIME, &_now_rt);");
-    println!("        abst.tv_sec = _now_rt.tv_sec; abst.tv_nsec = _now_rt.tv_nsec;");
-    println!("#else");
-    println!("        clock_gettime(CLOCK_REALTIME, &abst);");
-    println!("#endif");
-    println!("        long long add_ns = abst.tv_nsec + delta;");
-    println!("        abst.tv_sec  += (time_t)(add_ns / 1000000000LL);");
-    println!("        abst.tv_nsec  = (long)(add_ns % 1000000000LL);");
-    println!("        pthread_cond_timedwait(&__glide_timer_cv, &__glide_timer_mu, &abst);");
-    println!("    }");
-    println!("    pthread_mutex_unlock(&__glide_timer_mu);");
-    println!("    return NULL;");
-    println!("}");
-    println!("");
-    println!("void sleep_ms(int ms) {");
-    println!("    __glide_task* t = __glide_cur_task;");
-    println!("    if (!t) {");
-    println!("        /* Not in a coro - blocking sleep. */");
-    println!("#ifdef _WIN32");
-    println!("        Sleep((DWORD)ms);");
-    println!("#else");
-    println!("        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (long)((ms % 1000)) * 1000000L;");
-    println!("        nanosleep(&ts, NULL);");
-    println!("#endif");
-    println!("        return;");
-    println!("    }");
-    println!("    /* Coro - register on the timer queue, park, worker runs others. */");
-    println!("    long long deadline = __glide_monotonic_ns() + (long long)ms * 1000000LL;");
-    println!("    __glide_timer_node* node = (__glide_timer_node*)malloc(sizeof(__glide_timer_node));");
-    println!("    node->deadline_ns = deadline;");
-    println!("    node->task = t;");
-    println!("    pthread_mutex_lock(&__glide_timer_mu);");
-    println!("    __glide_timer_node** cur = &__glide_timer_head;");
-    println!("    while (*cur && (*cur)->deadline_ns <= deadline) cur = &(*cur)->next;");
-    println!("    node->next = *cur;");
-    println!("    *cur = node;");
-    println!("    /* Wake timer thread to recompute its deadline. */");
-    println!("    pthread_cond_signal(&__glide_timer_cv);");
-    println!("    /* Park: worker hand-off releases __glide_timer_mu after switch. */");
-    println!("    __glide_park(&__glide_timer_mu, NULL);");
-    println!("}");
-    println!("");
-    println!("/* Coro park: caller holds `lock` and wants to wait on `list`. Returns");
-    println!("   1 if parked (caller must re-acquire `lock` and re-check state), 0");
-    println!("   if the caller is not in a coroutine context (caller should fall");
-    println!("   back to pthread_cond_wait). The actual list link + lock release is");
-    println!("   done by the worker AFTER the fiber switch — that's how we avoid the");
-    println!("   classic park/unpark race. */");
-    println!("int __glide_park(pthread_mutex_t* lock, __glide_task** list) {");
-    println!("    __glide_task* t = __glide_cur_task;");
-    println!("    if (!t) return 0;");
-    println!("    t->park_lock = lock;");
-    println!("    t->park_list = list;");
-    println!("    t->state = 2;");
-    println!("    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);");
-    println!("    return 1;");
-    println!("}");
-    println!("");
-    println!("/* Caller already holds the chan/mutex protecting the wait list. Pops");
-    println!("   the head of the list (FIFO would be nicer but requires a tail ptr;");
-    println!("   v1 is LIFO) and queues it for execution. Safe to call when the head");
-    println!("   is null. */");
-    println!("void __glide_unpark_one(__glide_task** list) {");
-    println!("    __glide_task* t = *list;");
-    println!("    if (!t) return;");
-    println!("    *list = t->wait_next;");
-    println!("    t->wait_next = NULL;");
-    println!("    t->state = 0;");
-    println!("    __glide_q_push_to(t->home_worker, t);");
-    println!("}");
+    print!(include_str!("bootstrap/runtime/sched.c"));
     println!("");
 }
+
 
 // Sync TCP socket runtime. Wraps libc/winsock so Glide programs can write
 // servers/clients with the same API on POSIX and Windows. The blocking
@@ -1314,96 +598,7 @@ fn emit_scheduler_runtime() {
 // will auto-yield to the scheduler when called from a coroutine.
 fn emit_socket_runtime() {
     println!("");
-    println!("// ============================ socket runtime =============================");
-    println!("#ifdef _WIN32");
-    println!("# include <winsock2.h>");
-    println!("# include <ws2tcpip.h>");
-    println!("typedef SOCKET __glide_sock_t;");
-    println!("static int __glide_wsa_inited = 0;");
-    println!("static void __glide_wsa_ensure(void) {");
-    println!("    if (__glide_wsa_inited) return;");
-    println!("    WSADATA d; WSAStartup(MAKEWORD(2, 2), &d);");
-    println!("    __glide_wsa_inited = 1;");
-    println!("}");
-    println!("#else");
-    println!("# include <sys/socket.h>");
-    println!("# include <netinet/in.h>");
-    println!("# include <unistd.h>");
-    println!("# include <arpa/inet.h>");
-    println!("typedef int __glide_sock_t;");
-    println!("static void __glide_wsa_ensure(void) {}");
-    println!("#endif");
-    println!("");
-    println!("int listen_tcp(int port) {");
-    println!("    __glide_wsa_ensure();");
-    println!("    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);");
-    println!("#ifdef _WIN32");
-    println!("    if (s == INVALID_SOCKET) return -1;");
-    println!("#else");
-    println!("    if (s < 0) return -1;");
-    println!("#endif");
-    println!("    int yes = 1;");
-    println!("    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));");
-    println!("    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));");
-    println!("    addr.sin_family = AF_INET;");
-    println!("    addr.sin_port = htons((unsigned short)port);");
-    println!("    addr.sin_addr.s_addr = htonl(INADDR_ANY);");
-    println!("    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {");
-    println!("#ifdef _WIN32");
-    println!("        closesocket(s);");
-    println!("#else");
-    println!("        close(s);");
-    println!("#endif");
-    println!("        return -1;");
-    println!("    }");
-    println!("    if (listen(s, 128) < 0) {");
-    println!("#ifdef _WIN32");
-    println!("        closesocket(s);");
-    println!("#else");
-    println!("        close(s);");
-    println!("#endif");
-    println!("        return -1;");
-    println!("    }");
-    println!("    return (int)s;");
-    println!("}");
-    println!("");
-    println!("int accept_tcp(int listener) {");
-    println!("#ifdef _WIN32");
-    println!("    SOCKET c = accept((SOCKET)listener, NULL, NULL);");
-    println!("    return (c == INVALID_SOCKET) ? -1 : (int)c;");
-    println!("#else");
-    println!("    int c = accept(listener, NULL, NULL);");
-    println!("    return c < 0 ? -1 : c;");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("int tcp_read(int fd, void* buf, int max) {");
-    println!("#ifdef _WIN32");
-    println!("    int n = recv((SOCKET)fd, (char*)buf, max, 0);");
-    println!("    return n < 0 ? -1 : n;");
-    println!("#else");
-    println!("    int n = (int)read(fd, buf, (size_t)max);");
-    println!("    return n < 0 ? -1 : n;");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("int tcp_write(int fd, void* buf, int n) {");
-    println!("#ifdef _WIN32");
-    println!("    int w = send((SOCKET)fd, (const char*)buf, n, 0);");
-    println!("    return w < 0 ? -1 : w;");
-    println!("#else");
-    println!("    int w = (int)write(fd, buf, (size_t)n);");
-    println!("    return w < 0 ? -1 : w;");
-    println!("#endif");
-    println!("}");
-    println!("");
-    println!("void tcp_close(int fd) {");
-    println!("#ifdef _WIN32");
-    println!("    closesocket((SOCKET)fd);");
-    println!("#else");
-    println!("    close(fd);");
-    println!("#endif");
-    println!("}");
+    print!(include_str!("bootstrap/runtime/socket.c"));
     println!("");
 }
 
@@ -1455,44 +650,40 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: int) {
     let ids: string = int_to_str(id);
     // Zero-arg fast path: no args struct, no malloc, no free in stub.
     if n == 0 {
-        println!("static void* __glide_spawn_stub_".concat(ids).concat("(void* __raw) {"));
-        println!("    (void)__raw;");
-        println!("    ".concat(fn_name).concat("();"));
-        println!("    return NULL;");
-        println!("}");
+        let tmpl: string = include_str!("bootstrap/runtime/spawn_stub_zero.c.tmpl");
+        let s1: string = _cg_replace(tmpl, "@ID@", ids);
+        let s2: string = _cg_replace(s1, "@FN_NAME@", fn_name);
+        print!(s2);
         return;
     }
     let an: string = "__glide_spawn_args_".concat(ids);
-    // Args struct
-    println!("typedef struct ".concat(an).concat(" {"));
+    // Build the variable parts: per-arg field decls and the call argument list.
+    let mut fields: string = "";
+    let mut call_args: string = "";
     for let i: int = 0; i < n; i++ {
         let p: Param = fnstmt.fn_params.get(i);
-        println!("    ".concat(type_to_c(p.ty)).concat(" a").concat(int_to_str(i)).concat(";"));
+        let ix: string = int_to_str(i);
+        fields = fields.concat("    ").concat(type_to_c(p.ty)).concat(" a").concat(ix).concat(";\n");
+        if i > 0 { call_args = call_args.concat(", "); }
+        call_args = call_args.concat("__args->a").concat(ix);
     }
-    println!("} ".concat(an).concat(";"));
-    // Stub function
-    println!("static void* __glide_spawn_stub_".concat(ids).concat("(void* __raw) {"));
-    println!("    ".concat(an).concat("* __args = (").concat(an).concat("*)__raw;"));
-    let mut call_line: string = "    ".concat(fn_name).concat("(");
-    for let i: int = 0; i < n; i++ {
-        if i > 0 { call_line = call_line.concat(", "); }
-        call_line = call_line.concat("__args->a").concat(int_to_str(i));
-    }
-    call_line = call_line.concat(");");
-    println!(call_line);
-    println!("    free(__raw);");
-    println!("    return NULL;");
-    println!("}");
+    let tmpl: string = include_str!("bootstrap/runtime/spawn_stub_args.c.tmpl");
+    let s1: string = _cg_replace(tmpl, "@AN@", an);
+    let s2: string = _cg_replace(s1, "@ID@", ids);
+    let s3: string = _cg_replace(s2, "@FN_NAME@", fn_name);
+    let s4: string = _cg_replace(s3, "@FIELDS@", fields);
+    let s5: string = _cg_replace(s4, "@CALL_ARGS@", call_args);
+    print!(s5);
 }
 
-fn int_to_str(n: int) -> string {
+pub fn int_to_str(n: i64) -> string {
     if n == 0 { return "0"; }
-    let mut x: int = n;
+    let mut x: i64 = n;
     let mut neg: bool = false;
     if x < 0 { neg = true; x = -x; }
     let mut s: string = "";
     while x > 0 {
-        let d: int = x % 10;
+        let d: int = (x % 10) as int;
         let ch: string = digit_str(d);
         s = ch.concat(s);
         x = x / 10;
@@ -1526,314 +717,81 @@ fn is_stdlib_primitive(name: string) -> bool {
 }
 
 fn emit_stdlib_runtime() {
-    println!("// ---- glide runtime ----");
-    println!("static int __glide_string_len(const char* s) { return (int)strlen(s); }");
-    println!("static bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }");
-    println!("static char __glide_string_at(const char* s, int i) { return s[i]; }");
-    println!("static const char* __glide_string_concat(const char* a, const char* b) {");
-    println!("    size_t la = strlen(a), lb = strlen(b);");
-    println!("    char* out = (char*)malloc(la + lb + 1);");
-    println!("    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;");
-    println!("    return out;");
-    println!("}");
-    println!("static const char* __glide_string_substring(const char* s, int start, int end) {");
-    println!("    int n = (int)strlen(s);");
-    println!("    if (start < 0) start = 0;");
-    println!("    if (end > n) end = n;");
-    println!("    if (start > end) start = end;");
-    println!("    int len = end - start;");
-    println!("    char* out = (char*)malloc((size_t)len + 1);");
-    println!("    memcpy(out, s + start, (size_t)len); out[len] = 0;");
-    println!("    return out;");
-    println!("}");
-    println!("static int __glide_char_to_int(char c) { return (int)(unsigned char)c; }");
-    println!("static bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }");
-    println!("static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }");
-    println!("static int __glide_int_abs(int n) { return n < 0 ? -n : n; }");
-    println!("static const char* __glide_int_to_string(int n) {");
-    println!("    char buf[32];");
-    println!("    int len = snprintf(buf, sizeof(buf), \"%d\", n);");
-    println!("    char* out = (char*)malloc((size_t)len + 1);");
-    println!("    memcpy(out, buf, (size_t)len + 1);");
-    println!("    return out;");
-    println!("}");
-    println!("static const char* __glide_bool_to_string(bool b) { return b ? \"true\" : \"false\"; }");
-    println!("#include <stdarg.h>");
-    println!("static const char* __glide_format(const char* fmt, ...) {");
-    println!("    va_list ap1, ap2;");
-    println!("    va_start(ap1, fmt);");
-    println!("    va_copy(ap2, ap1);");
-    println!("    int n = vsnprintf(NULL, 0, fmt, ap1);");
-    println!("    va_end(ap1);");
-    println!("    char* out = (char*)malloc((size_t)n + 1);");
-    println!("    vsnprintf(out, (size_t)n + 1, fmt, ap2);");
-    println!("    va_end(ap2);");
-    println!("    return out;");
-    println!("}");
-    println!("static int __glide_argc_g = 0;");
-    println!("static char** __glide_argv_g = NULL;");
-    println!("static void __glide_args_init(int argc, char** argv) { __glide_argc_g = argc; __glide_argv_g = argv; }");
-    println!("static int args_count(void) { return __glide_argc_g; }");
-    println!("static const char* args_at(int i) {");
-    println!("    if (i < 0 || i >= __glide_argc_g) return \"\";");
-    println!("    return __glide_argv_g[i];");
-    println!("}");
-    println!("static const char* read_file(const char* path) {");
-    println!("    FILE* f = fopen(path, \"rb\");");
-    println!("    if (!f) return \"\";");
-    println!("    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);");
-    println!("    char* buf = (char*)malloc((size_t)n + 1);");
-    println!("    size_t got = fread(buf, 1, (size_t)n, f); fclose(f); buf[got] = 0;");
-    println!("    return buf;");
-    println!("}");
-    println!("static bool write_file(const char* path, const char* content) {");
-    println!("    FILE* f = fopen(path, \"wb\"); if (!f) return false;");
-    println!("    size_t n = strlen(content);");
-    println!("    size_t wrote = fwrite(content, 1, n, f); fclose(f);");
-    println!("    return wrote == n;");
-    println!("}");
-    // Driver helpers for `glide build/run`: capture stdout to a file via
-    // dup/dup2 (so we can restore it before invoking the C compiler), run
-    // shell commands, and locate the running executable.
-    println!("#ifdef _WIN32");
-    println!("#include <io.h>");
-    println!("#include <windows.h>");
-    println!("#define __glide_dup _dup");
-    println!("#define __glide_dup2 _dup2");
-    println!("#define __glide_close _close");
-    println!("#define __glide_fileno _fileno");
-    println!("#else");
-    println!("#include <unistd.h>");
-    println!("#define __glide_dup dup");
-    println!("#define __glide_dup2 dup2");
-    println!("#define __glide_close close");
-    println!("#define __glide_fileno fileno");
-    println!("#endif");
-    println!("static int __glide_redirect_to(const char* path) {");
-    println!("    fflush(stdout);");
-    println!("    int saved = __glide_dup(1);");
-    println!("    if (saved < 0) return -1;");
-    println!("    FILE* f = fopen(path, \"w\");");
-    println!("    if (!f) { __glide_close(saved); return -1; }");
-    println!("    __glide_dup2(__glide_fileno(f), 1);");
-    println!("    fclose(f);");
-    println!("    return saved;");
-    println!("}");
-    println!("static void __glide_restore_stdout(int saved) {");
-    println!("    fflush(stdout);");
-    println!("    if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }");
-    println!("}");
-    println!("static int __glide_shell(const char* cmd) { return system(cmd); }");
-    println!("static const char* __glide_getenv(const char* name) { const char* v = getenv(name); return v ? v : \"\"; }");
-    println!("static bool __glide_file_exists(const char* path) {");
-    println!("    FILE* f = fopen(path, \"rb\"); if (!f) return false; fclose(f); return true;");
-    println!("}");
-    // Enable ANSI escape interpretation on Win10+ console at process start.
-    // No-op on non-Windows or when stdout/stderr aren't terminals.
-    println!("#ifdef _WIN32");
-    println!("#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING");
-    println!("#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004");
-    println!("#endif");
-    println!("__attribute__((constructor)) static void __glide_enable_vt(void) {");
-    println!("    HANDLE hs[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };");
-    println!("    for (int i = 0; i < 2; i++) {");
-    println!("        DWORD m = 0;");
-    println!("        if (GetConsoleMode(hs[i], &m)) {");
-    println!("            SetConsoleMode(hs[i], m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);");
-    println!("        }");
-    println!("    }");
-    println!("    SetConsoleOutputCP(65001);");
-    println!("    SetConsoleCP(65001);");
-    println!("}");
-    println!("#endif");
-
-    // Crash handler. Replaces silent SIGSEGV / Windows error dialog with a
-    // labelled message and a frame-address stack trace, so users don't waste
-    // hours guessing what crashed. Disable with GLIDE_NO_TRAP=1.
-    println!("#ifdef _WIN32");
-    println!("static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {");
-    println!("    DWORD code = ep->ExceptionRecord->ExceptionCode;");
-    println!("    const char* name = \"unhandled exception\";");
-    println!("    const char* hint = \"\";");
-    println!("    if (code == 0xC0000005) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }");
-    println!("    else if (code == 0xC0000094) { name = \"integer divide by zero\"; hint = \"hint: divisor reached zero before the division\"; }");
-    println!("    else if (code == 0xC00000FD) { name = \"stack overflow\"; hint = \"hint: runtime recursion exceeded the stack limit\"; }");
-    println!("    else if (code == 0x80000003) { name = \"trap (likely null deref or undefined behavior)\"; hint = \"hint: the optimizer turned a null/invalid op into __builtin_trap; rebuild with `-O0` for clearer location\"; }");
-    println!("    fflush(stdout);");
-    println!("    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (code 0x%lx)\\n\", name, (unsigned long)code);");
-    println!("    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);");
-    println!("    void* frames[32];");
-    println!("    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);");
-    println!("    fprintf(stderr, \"stack trace (%u frames; pipe through addr2line for source lines):\\n\", n);");
-    println!("    for (USHORT i = 0; i < n; i++) fprintf(stderr, \"  #%-2u  %p\\n\", i, frames[i]);");
-    println!("    fflush(stderr);");
-    println!("    ExitProcess((UINT)code);");
-    println!("    return EXCEPTION_CONTINUE_SEARCH;");
-    println!("}");
-    println!("__attribute__((constructor)) static void __glide_install_trap(void) {");
-    println!("    if (getenv(\"GLIDE_NO_TRAP\")) return;");
-    println!("    // VEH runs before any SEH/CRT-installed filter, so our handler stays in charge.");
-    println!("    AddVectoredExceptionHandler(1, __glide_seh_handler);");
-    println!("    SetUnhandledExceptionFilter(__glide_seh_handler);");
-    println!("}");
-    println!("#else");
-    println!("#include <signal.h>");
-    println!("#include <execinfo.h>");
-    println!("#include <unistd.h>");
-    println!("static void __glide_sig_handler(int sig) {");
-    println!("    const char* name = \"unknown\";");
-    println!("    const char* hint = \"\";");
-    println!("    if (sig == SIGSEGV) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }");
-    println!("    else if (sig == SIGFPE) { name = \"floating-point / arithmetic error\"; hint = \"hint: division by zero or invalid float operation\"; }");
-    println!("    else if (sig == SIGABRT) { name = \"aborted\"; hint = \"hint: runtime panic (e.g. arena oom)\"; }");
-    println!("    fflush(stdout);");
-    println!("    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (signal %d)\\n\", name, sig);");
-    println!("    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);");
-    println!("    void* frames[32]; int n = backtrace(frames, 32);");
-    println!("    fprintf(stderr, \"stack trace (%d frames):\\n\", n);");
-    println!("    backtrace_symbols_fd(frames, n, 2);");
-    println!("    _exit(128 + sig);");
-    println!("}");
-    println!("__attribute__((constructor)) static void __glide_install_trap(void) {");
-    println!("    if (getenv(\"GLIDE_NO_TRAP\")) return;");
-    println!("    signal(SIGSEGV, __glide_sig_handler);");
-    println!("    signal(SIGABRT, __glide_sig_handler);");
-    println!("    signal(SIGFPE,  __glide_sig_handler);");
-    println!("}");
-    println!("#endif");
-    // LSP transport helpers: stdin reading + stdout writing without newlines.
-    println!("#ifdef _WIN32");
-    println!("#include <fcntl.h>");
-    println!("static void __glide_set_binary_io(void) {");
-    println!("    _setmode(_fileno(stdin), _O_BINARY);");
-    println!("    _setmode(_fileno(stdout), _O_BINARY);");
-    println!("}");
-    println!("#else");
-    println!("static void __glide_set_binary_io(void) {}");
-    println!("#endif");
-    println!("static const char* __glide_read_line(void) {");
-    println!("    static char buf[8192];");
-    println!("    if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }");
-    println!("    return buf;");
-    println!("}");
-    println!("static const char* __glide_read_bytes(int n) {");
-    println!("    if (n <= 0) return \"\";");
-    println!("    char* buf = (char*)malloc((size_t)n + 1);");
-    println!("    size_t got = fread(buf, 1, (size_t)n, stdin);");
-    println!("    buf[got] = 0;");
-    println!("    return buf;");
-    println!("}");
-    println!("static void __glide_write_str(const char* s) {");
-    println!("    fputs(s, stdout);");
-    println!("}");
-    println!("static void __glide_write_bytes(const char* s, int n) {");
-    println!("    if (n > 0) fwrite(s, 1, (size_t)n, stdout);");
-    println!("}");
-    println!("static void __glide_flush_stdout(void) { fflush(stdout); }");
-    println!("static void __glide_log(const char* s) {");
-    println!("    fputs(s, stderr); fputc('\\n', stderr); fflush(stderr);");
-    println!("}");
-    println!("static int __glide_is_windows(void) {");
-    println!("#ifdef _WIN32");
-    println!("    return 1;");
-    println!("#else");
-    println!("    return 0;");
-    println!("#endif");
-    println!("}");
-    println!("#ifdef _WIN32");
-    println!("static const char* __glide_exe_path(void) {");
-    println!("    static char buf[1024];");
-    println!("    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));");
-    println!("    if (n == 0 || n >= sizeof(buf)) buf[0] = 0;");
-    println!("    return buf;");
-    println!("}");
-    println!("static const char* __glide_exe_dir(void) {");
-    println!("    static char buf[1024];");
-    println!("    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));");
-    println!("    if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }");
-    println!("    for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }");
-    println!("    return \"\";");
-    println!("}");
-    println!("#else");
-    println!("static const char* __glide_exe_path(void) {");
-    println!("    static char buf[1024];");
-    println!("    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);");
-    println!("    if (n <= 0) { buf[0] = 0; return buf; }");
-    println!("    buf[n] = 0;");
-    println!("    return buf;");
-    println!("}");
-    println!("static const char* __glide_exe_dir(void) {");
-    println!("    static char buf[1024];");
-    println!("    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);");
-    println!("    if (n <= 0) { buf[0] = 0; return buf; }");
-    println!("    buf[n] = 0;");
-    println!("    for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }");
-    println!("    return \"\";");
-    println!("}");
-    println!("#endif");
-    // Arena allocator runtime
-    println!("typedef struct Arena { unsigned char* head; int cap; int used; } Arena;");
-    println!("static Arena* Arena_new(int cap) {");
-    println!("    Arena* a = (Arena*)malloc(sizeof(Arena));");
-    println!("    a->head = (unsigned char*)malloc((size_t)cap);");
-    println!("    a->cap = cap; a->used = 0;");
-    println!("    return a;");
-    println!("}");
-    println!("static void* Arena_alloc(Arena* a, int size) {");
-    println!("    int aligned = (size + 7) & ~7;");
-    println!("    if (a->used + aligned > a->cap) { fprintf(stderr, \"arena oom\\n\"); exit(1); }");
-    println!("    void* p = (void*)(a->head + a->used);");
-    println!("    a->used += aligned;");
-    println!("    return p;");
-    println!("}");
-    println!("static void Arena_free(Arena* a) { free(a->head); free(a); }");
-    println!("static int Arena_used(Arena* a) { return a->used; }");
-    println!("static void Arena_reset(Arena* a) { a->used = 0; }");
+    print!(include_str!("bootstrap/runtime/stdlib.c"));
     println!("");
 }
+
 
 // Track variable types per scope so method calls (obj.method()) can be
 // resolved to Type_method(obj, ...) by stripping pointers and using the
 // receiver's named type as the prefix.
 // Pending fn monomorphization: original name + concrete type args.
 pub struct FnMonoEntry {
-    name: string,
-    args: *Vector<Type>,
+    pub name: string,
+    pub args: *Vector<Type>,
 }
 
 // Anonymous fn that needs lifting to top-level.
 pub struct AnonFn {
-    name: string,
-    params: *Vector<Param>,
-    ret_ty: *Type,
-    body: *Vector<Stmt>,
+    pub name: string,
+    pub params: *Vector<Param>,
+    pub ret_ty: *Type,
+    pub body: *Vector<Stmt>,
 }
 
 pub struct CG {
-    scope: *HashMap<Type>,
-    generic_structs: *HashMap<Stmt>,
-    generic_fns: *HashMap<Stmt>,
-    structs: *HashMap<Stmt>,
-    enums: *HashMap<Stmt>,
-    fns: *HashMap<Stmt>,
-    emitted_monos: *HashMap<bool>,
-    fn_mono_queue: *Vector<FnMonoEntry>,
+    pub scope: *HashMap<Type>,
+    pub generic_structs: *HashMap<Stmt>,
+    pub generic_fns: *HashMap<Stmt>,
+    pub structs: *HashMap<Stmt>,
+    pub enums: *HashMap<Stmt>,
+    pub fns: *HashMap<Stmt>,
+    pub emitted_monos: *HashMap<bool>,
+    pub fn_mono_queue: *Vector<FnMonoEntry>,
     // Struct monos discovered dynamically during prescan (e.g. via chained
     // ctor inference where no static `let_ty` exposes the type). Drained
     // after fn-mono drain, before fn forward decls.
-    struct_mono_queue: *Vector<Type>,
-    defer_stack: *Vector<Expr>,         // explicit `defer expr;` (fn-scoped)
-    auto_drop_stack: *Vector<Expr>,     // `let v*` cleanups (block-scoped)
+    pub struct_mono_queue: *Vector<Type>,
+    pub defer_stack: *Vector<Expr>,         // explicit `defer expr;` (fn-scoped)
+    pub auto_drop_stack: *Vector<Expr>,     // `let v*` cleanups (block-scoped)
     // Anonymous fn lifts (collected during codegen, emitted at end).
-    anon_fns: *Vector<AnonFn>,
-    anon_count: int,
+    pub anon_fns: *Vector<AnonFn>,
+    pub anon_count: int,
     // Concurrency
-    chan_types: *Vector<Type>,
-    spawn_count: int,
-    uses_pthread: bool,
+    pub chan_types: *Vector<Type>,
+    pub spawn_count: int,
+    pub uses_pthread: bool,
     // Errors-as-values
-    result_types: *Vector<Type>,
-    current_ret_ty: *Type,
+    pub result_types: *Vector<Type>,
+    pub current_ret_ty: *Type,
+    // Method-dispatch index for `impl T in NS` blocks. Maps the unqualified
+    // `<T>_<method>` name to a `;`-delimited list of full mangled names like
+    // `cores_string_red`. O(1) lookup at dispatch time avoids walking g.fns.
+    // (Glide HashMap takes a single value type; we encode multi-match as a
+    // separator-joined string instead of nesting another Vector.)
+    pub method_index: *HashMap<string>,
+    // Names that came from an `impl T { ... }` block (mangled `<T>_<m>`).
+    // Method dispatch (`obj.method()`) only resolves to entries in this set,
+    // so a free fn named `string_legal` won't be sugared into `s.legal()`.
+    pub method_fns: *HashMap<bool>,
+    // Module-path aliases. Each pub item registers `<module>::<short>` →
+    // `<short>`, so user code can write `stdlib::vector::Vector::new()` and
+    // codegen can normalise it back to the existing flat C symbol naming.
+    // Free functions: key = `<module>::<fn>`, value = `<fn>`.
+    // Type names:     key = `<module>::<Type>`, value = `<Type>`.
+    pub module_aliases: *HashMap<string>,
+    // Named user struct/enum bodies already emitted (e.g. up-front by the
+    // chan runtime so chan<UserType> can store T by value). The main body
+    // pass skips anything already in here.
+    pub emitted_named: *HashMap<bool>,
+    // Trait names that appear as `dyn Trait` somewhere in the program.
+    // Each one needs a fat-pointer typedef, a vtable struct, and a static
+    // vtable instance per `impl Trait for Type`.
+    pub dyn_traits: *HashMap<bool>,
+    // Trait def index: trait name -> ST_TRAIT Stmt. Populated up front so
+    // method-call return types can be looked up when the receiver is a
+    // `*dyn Trait`.
+    pub traits: *HashMap<Stmt>,
 }
 
 impl CG {
@@ -1871,6 +829,18 @@ impl CG {
         g.fn_mono_queue = q;
         let smq: *Vector<Type> = Vector::new();
         g.struct_mono_queue = smq;
+        let mi: *HashMap<string> = HashMap::new();
+        g.method_index = mi;
+        let mf: *HashMap<bool> = HashMap::new();
+        g.method_fns = mf;
+        let ma: *HashMap<string> = HashMap::new();
+        g.module_aliases = ma;
+        let en2: *HashMap<bool> = HashMap::new();
+        g.emitted_named = en2;
+        let dt: *HashMap<bool> = HashMap::new();
+        g.dyn_traits = dt;
+        let trts: *HashMap<Stmt> = HashMap::new();
+        g.traits = trts;
         return g;
     }
 
@@ -1934,7 +904,7 @@ impl CG {
     }
 }
 
-fn strip_ptr(t: *Type) -> *Type {
+pub fn strip_ptr(t: *Type) -> *Type {
     if t == null { return null; }
     if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT {
         return strip_ptr(t.inner);
@@ -2024,6 +994,8 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             if nm.eq("args_at") { return ty_named("string"); }
             if nm.eq("read_file") { return ty_named("string"); }
             if nm.eq("write_file") { return ty_named("bool"); }
+            if nm.eq("now_ns") { return ty_named("i64"); }
+            if nm.eq("pending_count") { return ty_named("int"); }
             if nm.eq("malloc") || nm.eq("calloc") { return ty_pointer(ty_named("void")); }
             if g.fns.contains(nm) {
                 let s: Stmt = g.fns.get(nm);
@@ -2034,9 +1006,16 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 return gn.fn_ret_ty;
             }
         }
-        // Path: Type::method
+        // Path: Type::method (also handles module-qualified `mod::Type::method`
+        // and free-fn `mod::name` forms via the alias table).
         if e.lhs != null && e.lhs.kind == EX_PATH {
-            let pname: string = e.lhs.str_val.concat("_").concat(e.lhs.field);
+            let qual: string = e.lhs.str_val.concat("::").concat(e.lhs.field);
+            if g.module_aliases.contains(qual) {
+                let resolved: string = g.module_aliases.get(qual);
+                if g.fns.contains(resolved) { return g.fns.get(resolved).fn_ret_ty; }
+                if g.generic_fns.contains(resolved) { return g.generic_fns.get(resolved).fn_ret_ty; }
+            }
+            let pname: string = resolve_type_prefix(g, e.lhs.str_val).concat("_").concat(e.lhs.field);
             if g.fns.contains(pname) { return g.fns.get(pname).fn_ret_ty; }
             if g.generic_fns.contains(pname) { return g.generic_fns.get(pname).fn_ret_ty; }
         }
@@ -2044,7 +1023,28 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.lhs != null && e.lhs.kind == EX_MEMBER {
             let rt: *Type = infer_for_codegen(g, e.lhs.lhs);
             let stripped: *Type = strip_ptr(rt);
+            // Dyn dispatch: receiver is `*dyn Trait`. Look up the trait's
+            // method signature for the return type.
+            if stripped != null && stripped.kind == TY_DYN && g.traits.contains(stripped.name) {
+                let td: Stmt = g.traits.get(stripped.name);
+                if td.impl_methods != null {
+                    for let i: int = 0; i < td.impl_methods.len(); i++ {
+                        let tm: Stmt = td.impl_methods.get(i);
+                        if tm.name != null && tm.name.eq(e.lhs.field) {
+                            return tm.fn_ret_ty;
+                        }
+                    }
+                }
+            }
             if stripped != null && stripped.kind == TY_NAMED {
+                // Qualified call `s.NS::method(...)`: look up `NS_<type>_method` directly.
+                let qpos: int = ns_split_pos(e.lhs.field);
+                if qpos > 0 {
+                    let ns: string = e.lhs.field.substring(0, qpos);
+                    let real: string = e.lhs.field.substring(qpos + 2, e.lhs.field.len());
+                    let qmname: string = ns.concat("_").concat(stripped.name).concat("_").concat(real);
+                    if g.fns.contains(qmname) { return g.fns.get(qmname).fn_ret_ty; }
+                }
                 // Stdlib primitive methods.
                 if is_stdlib_primitive(stripped.name) {
                     let std_ret: *Type = stdlib_method_ret(stripped.name, e.lhs.field);
@@ -2053,6 +1053,20 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 let mname: string = stripped.name.concat("_").concat(e.lhs.field);
                 if g.fns.contains(mname) { return g.fns.get(mname).fn_ret_ty; }
                 if g.generic_fns.contains(mname) { return g.generic_fns.get(mname).fn_ret_ty; }
+                // Namespaced impl (`impl T in NS`): O(1) lookup in the method
+                // index. Multi-match returns a `;`-joined list — typer just
+                // takes the first; codegen does the same and reports ambiguity.
+                if g.method_index.contains(mname) {
+                    let entry: string = g.method_index.get(mname);
+                    let semi: int = entry.len();
+                    let mut k: int = 0;
+                    while k < semi {
+                        if entry.at(k).to_int() == 59 { semi = k; break; }
+                        k = k + 1;
+                    }
+                    let first: string = entry.substring(0, semi);
+                    if g.fns.contains(first) { return g.fns.get(first).fn_ret_ty; }
+                }
             }
             if stripped != null && stripped.kind == TY_GENERIC {
                 let mname: string = stripped.name.concat("_").concat(e.lhs.field);
@@ -2065,7 +1079,13 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_PATH {
-        let pname: string = e.str_val.concat("_").concat(e.field);
+        let qual: string = e.str_val.concat("::").concat(e.field);
+        if g.module_aliases.contains(qual) {
+            let resolved: string = g.module_aliases.get(qual);
+            if g.fns.contains(resolved) { return g.fns.get(resolved).fn_ret_ty; }
+            if g.generic_fns.contains(resolved) { return g.generic_fns.get(resolved).fn_ret_ty; }
+        }
+        let pname: string = resolve_type_prefix(g, e.str_val).concat("_").concat(e.field);
         if g.fns.contains(pname) { return g.fns.get(pname).fn_ret_ty; }
         if g.generic_fns.contains(pname) { return g.generic_fns.get(pname).fn_ret_ty; }
         return null;
@@ -2103,10 +1123,17 @@ pub fn type_to_c(t: *Type) -> string {
         if n.eq("__fn_ptr__") { return "void*"; }
         return n;
     }
-    if t.kind == TY_POINTER     { return type_to_c(t.inner).concat("*"); }
+    if t.kind == TY_POINTER {
+        // `*dyn Trait` is a fat pointer struct, not a raw pointer.
+        if t.inner != null && t.inner.kind == TY_DYN {
+            return "__glide_dyn_".concat(t.inner.name);
+        }
+        return type_to_c(t.inner).concat("*");
+    }
     if t.kind == TY_BORROW      { return type_to_c(t.inner).concat(" const*"); }
     if t.kind == TY_BORROW_MUT  { return type_to_c(t.inner).concat("*"); }
     if t.kind == TY_SLICE       { return "/* []".concat(type_to_c(t.inner)).concat(" */ void*"); }
+    if t.kind == TY_DYN         { return "__glide_dyn_".concat(t.name); }
     if t.kind == TY_GENERIC {
         if t.name.eq("chan") && t.args != null && t.args.len() > 0 {
             let inner: Type = t.args.get(0);
@@ -2174,7 +1201,15 @@ fn try_mono_call(g: *CG, call: *Expr, ret_hint: *Type) -> bool {
     let mut gname: string = "";
     if callee != null {
         if callee.kind == EX_IDENT { gname = callee.str_val; }
-        if callee.kind == EX_PATH { gname = callee.str_val.concat("_").concat(callee.field); }
+        if callee.kind == EX_PATH {
+            // Map qualified path → short C name before mono lookup.
+            let qual: string = callee.str_val.concat("::").concat(callee.field);
+            if g.module_aliases.contains(qual) {
+                gname = g.module_aliases.get(qual);
+            } else {
+                gname = resolve_type_prefix(g, callee.str_val).concat("_").concat(callee.field);
+            }
+        }
     }
     if gname.len() == 0 { return false; }
     if !g.generic_fns.contains(gname) { return false; }
@@ -2289,7 +1324,12 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
         && e.lhs.lhs.lhs != null && e.lhs.lhs.lhs.kind == EX_PATH {
         let recv: *Expr = e.lhs.lhs;
         let method: string = e.lhs.field;
-        let family: string = recv.lhs.str_val;
+        // Resolve `mod::path::Vector::new()` → bare `Vector` family before
+        // checking generic-struct registry.
+        let mut family: string = recv.lhs.str_val;
+        if !g.generic_structs.contains(family) {
+            family = resolve_type_prefix(g, family);
+        }
         if g.generic_structs.contains(family) {
             let struct_def: Stmt = g.generic_structs.get(family);
             let mname: string = family.concat("_").concat(method);
@@ -2791,9 +1831,30 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_CALL {
-        // Enum ctor: `Shape::Circle(5)` → struct lit.
-        if e.lhs != null && e.lhs.kind == EX_PATH && g.enums.contains(e.lhs.str_val) {
-            let ename: string = e.lhs.str_val;
+        // Enum ctor: `Shape::Circle(5)` → struct lit. Also accepts the
+        // module-qualified form `mod::path::Shape::Circle(5)` by resolving
+        // the prefix back to the bare enum name first. Only fires when the
+        // trailing segment is actually a variant of the enum - otherwise
+        // it's an `impl <Enum> { fn from_int(...) }` method call and the
+        // normal call path handles it.
+        let mut _is_enum_ctor: bool = false;
+        let mut _ec_ename: string = "";
+        if e.lhs != null && e.lhs.kind == EX_PATH {
+            let mut probe: string = e.lhs.str_val;
+            if !g.enums.contains(probe) { probe = resolve_type_prefix(g, probe); }
+            if g.enums.contains(probe) {
+                let edef: Stmt = g.enums.get(probe);
+                if edef.enum_variants != null {
+                    for let vi: int = 0; vi < edef.enum_variants.len(); vi++ {
+                        let v: EnumVariant = edef.enum_variants.get(vi);
+                        if v.name.eq(e.lhs.field) { _is_enum_ctor = true; break; }
+                    }
+                }
+                if _is_enum_ctor { _ec_ename = probe; }
+            }
+        }
+        if _is_enum_ctor {
+            let mut ename: string = _ec_ename;
             let vname: string = e.lhs.field;
             print!("((");
             print!(ename);
@@ -2885,6 +1946,25 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             let recv_ty: *Type = infer_for_codegen(g, recv);
             let stripped: *Type = strip_ptr(recv_ty);
 
+            // Trait-object dispatch: receiver is `*dyn Trait` (fat pointer
+            // struct). Look the method up in the vtable at runtime.
+            if stripped != null && stripped.kind == TY_DYN {
+                print!("((");
+                emit_expr(g, recv);
+                print!(").vtable->".concat(method).concat("(("));
+                emit_expr(g, recv);
+                print!(").data");
+                if e.args != null {
+                    for let i: int = 0; i < e.args.len(); i++ {
+                        print!(", ");
+                        let a: Expr = e.args.get(i);
+                        emit_expr(g, &a);
+                    }
+                }
+                print!("))");
+                return;
+            }
+
             // Generic method on a generic receiver (e.g. `v.push(x)` on
             // `*Vector<int>`). The receiver's type args bind the impl's
             // type params; mangle accordingly.
@@ -2923,19 +2003,102 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             if stripped != null && stripped.kind == TY_NAMED {
                 let mut prefix: string = stripped.name;
                 let mut fn_name: string = "";
-                if is_stdlib_primitive(stripped.name) {
-                    fn_name = "__glide_".concat(prefix).concat("_").concat(method);
+                // Qualified call `s.NS::method(...)` — encoded as `NS::method` in `field`.
+                // Skip the dispatch search and go straight to `NS_<type>_method`.
+                let qpos: int = ns_split_pos(method);
+                if qpos > 0 {
+                    let ns: string = method.substring(0, qpos);
+                    let real: string = method.substring(qpos + 2, method.len());
+                    fn_name = ns.concat("_").concat(prefix).concat("_").concat(real);
+                } else if is_stdlib_primitive(stripped.name) {
+                    // Three-step dispatch for `s.method()` on a primitive:
+                    //   1. Bareword `<type>_<method>` (impl with no namespace) — wins if it exists.
+                    //   2. Namespaced `<*>_<type>_<method>` (impl in NS { ... }) — scan all fns
+                    //      for keys ending in `_<type>_<method>`. Exactly one match → use it;
+                    //      two or more → ambiguity error embedded in the C source so the build
+                    //      fails with a clear message rather than picking arbitrarily.
+                    //   3. `__glide_<type>_<method>` C runtime fallback (s.len, c.is_digit,
+                    //      i.abs and the other primitive ops baked into stdlib.c).
+                    let glide_name: string = prefix.concat("_").concat(method);
+                    // Only sugar to `obj.method()` if the function came from
+                    // an `impl T { ... }` block. A free fn coincidentally
+                    // named `<Type>_<method>` is just a regular function and
+                    // must be called positionally.
+                    if g.fns.contains(glide_name) && g.method_fns.contains(glide_name) {
+                        fn_name = glide_name;
+                    } else {
+                        // O(1) lookup via the method index. Multi-match values
+                        // are `;`-joined; >1 segment means namespaced collision
+                        // and we abort below with a build-time error.
+                        let mut found: string = "";
+                        let mut count: int = 0;
+                        if g.method_index.contains(glide_name) {
+                            let entry: string = g.method_index.get(glide_name);
+                            let n: int = entry.len();
+                            let mut start: int = 0;
+                            let mut i: int = 0;
+                            while i <= n {
+                                if i == n || entry.at(i).to_int() == 59 {
+                                    let part: string = entry.substring(start, i);
+                                    if part.len() > 0 {
+                                        found = part;
+                                        count = count + 1;
+                                    }
+                                    start = i + 1;
+                                }
+                                i = i + 1;
+                            }
+                        }
+                        if count == 1 {
+                            fn_name = found;
+                        } else if count >= 2 {
+                            // #error in the emitted C aborts the compile with a clear message
+                            // (codegen has no direct path to the parser's diagnostic stream, and
+                            // we don't want to silently let printf("(null)") fall through).
+                            println!("");
+                            print!("#error \"ambiguous method `");
+                            print!(method);
+                            print!("` on `");
+                            print!(prefix);
+                            print!("`: multiple impl blocks register it; qualify the call as `value.NS::");
+                            print!(method);
+                            print!("()` or rename one impl\"");
+                            println!("");
+                            return;
+                        } else {
+                            fn_name = "__glide_".concat(prefix).concat("_").concat(method);
+                        }
+                    }
                 } else {
                     fn_name = prefix.concat("_").concat(method);
                 }
                 print!(fn_name);
                 print!("(");
-                // Primitives are passed by value (no auto-`&`).
+                // Whether to insert an auto-`&` on the receiver depends on
+                // the resolved method's first param: pointer-ish param + value
+                // receiver -> add `&`; everything else stays as-is. Default to
+                // the legacy "non-primitive non-pointer => addr" rule when we
+                // can't see the signature (extern fn, runtime fallback).
                 let is_prim: bool = is_stdlib_primitive(stripped.name);
-                let needs_addr: bool = !is_prim && recv_ty != null
-                    && recv_ty.kind != TY_POINTER
-                    && recv_ty.kind != TY_BORROW
-                    && recv_ty.kind != TY_BORROW_MUT;
+                let r_is_ptr: bool = recv_ty != null
+                    && (recv_ty.kind == TY_POINTER
+                        || recv_ty.kind == TY_BORROW
+                        || recv_ty.kind == TY_BORROW_MUT);
+                let mut needs_addr: bool = false;
+                if g.fns.contains(fn_name) {
+                    let sig: Stmt = g.fns.get(fn_name);
+                    if sig.fn_params != null && sig.fn_params.len() > 0 {
+                        let first: Param = sig.fn_params.get(0);
+                        let p_is_ptr: bool = first.ty != null
+                            && (first.ty.kind == TY_POINTER
+                                || first.ty.kind == TY_BORROW
+                                || first.ty.kind == TY_BORROW_MUT);
+                        if p_is_ptr && !r_is_ptr { needs_addr = true; }
+                    }
+                } else {
+                    // Unknown signature: fall back to the legacy heuristic.
+                    needs_addr = !is_prim && !r_is_ptr;
+                }
                 if needs_addr { print!("&"); }
                 emit_expr(g, recv);
                 if e.args != null {
@@ -2996,6 +2159,27 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_CAST {
+        // `expr as *dyn Trait` produces a fat pointer literal. We need the
+        // source's concrete type to pick the right vtable. infer_for_codegen
+        // gives us back e.g. `*Cat`; we strip the pointer and use the inner
+        // name to find the static `__glide_<Type>_as_<Trait>_vt`.
+        let mut dyn_trait: string = "";
+        if e.cast_to != null && e.cast_to.kind == TY_POINTER
+            && e.cast_to.inner != null && e.cast_to.inner.kind == TY_DYN {
+            dyn_trait = e.cast_to.inner.name;
+        } else if e.cast_to != null && e.cast_to.kind == TY_DYN {
+            dyn_trait = e.cast_to.name;
+        }
+        if !dyn_trait.eq("") {
+            let src_ty: *Type = infer_for_codegen(g, e.lhs);
+            let inner: *Type = strip_ptr(src_ty);
+            let mut src_name: string = "?";
+            if inner != null && inner.kind == TY_NAMED { src_name = inner.name; }
+            print!("((__glide_dyn_".concat(dyn_trait).concat("){.data = (void*)"));
+            emit_expr(g, e.lhs);
+            print!(", .vtable = &__glide_".concat(src_name).concat("_as_").concat(dyn_trait).concat("_vt})"));
+            return;
+        }
         print!("((", type_to_c(e.cast_to), ")");
         emit_expr(g, e.lhs);
         print!(")");
@@ -3022,7 +2206,17 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_PATH {
-        print!(e.str_val.concat("_").concat(e.field));
+        // First try the full qualified form `<prefix>::<field>` as a free
+        // function alias (e.g. `stdlib::math::min_int`). Falls back to the
+        // legacy `<Type>_<field>` form, with the `Type` prefix resolved
+        // through the alias table so multi-segment module paths still hit
+        // the existing flat C symbol.
+        if g.module_aliases.contains(e.str_val.concat("::").concat(e.field)) {
+            print!(g.module_aliases.get(e.str_val.concat("::").concat(e.field)));
+            return;
+        }
+        let ty: string = resolve_type_prefix(g, e.str_val);
+        print!(ty.concat("_").concat(e.field));
         return;
     }
     if e.kind == EX_POSTINC { emit_expr(g, e.lhs); print!("++"); return; }
@@ -3435,6 +2629,9 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
     if s.kind == ST_BREAK { ind(depth); println!("break;"); return; }
     if s.kind == ST_CONTINUE { ind(depth); println!("continue;"); return; }
     if s.kind == ST_ASM { emit_asm_stmt(g, s, depth); return; }
+    // c_raw block: emit body verbatim, no escaping, no transformation. Trust the
+    // user to produce valid C/asm.
+    if s.kind == ST_CRAW { print!(s.name); return; }
     if s.kind == ST_IF {
         ind(depth); print!("if (");
         emit_expr(g, s.cond);
@@ -3787,7 +2984,14 @@ fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: int) -> *T
     if callee == null { return null; }
     let mut gname: string = "";
     if callee.kind == EX_IDENT { gname = callee.str_val; }
-    if callee.kind == EX_PATH { gname = callee.str_val.concat("_").concat(callee.field); }
+    if callee.kind == EX_PATH {
+        let qual: string = callee.str_val.concat("::").concat(callee.field);
+        if g.module_aliases.contains(qual) {
+            gname = g.module_aliases.get(qual);
+        } else {
+            gname = resolve_type_prefix(g, callee.str_val).concat("_").concat(callee.field);
+        }
+    }
     if gname.len() == 0 { return null; }
     if !g.generic_fns.contains(gname) { return null; }
     let template: Stmt = g.generic_fns.get(gname);
@@ -3919,21 +3123,21 @@ fn emit_fn(g: *CG, s: *Stmt) {
     // servers stay in main's loop and never reach this point).
     if is_main {
         println!("");
-        println!("int main(int argc, char** argv) {");
-        println!("    __glide_args_init(argc, argv);");
-        println!("    __glide_sched_init();");
-        println!("    int __glide_rc = __glide_user_main(argc, argv);");
-        println!("    __glide_sched_shutdown();");
-        println!("    return __glide_rc;");
-        println!("}");
+        print!(include_str!("bootstrap/runtime/main_wrapper.c"));
     }
 }
 
 fn emit_impl(g: *CG, s: *Stmt) {
     if s.impl_methods == null { return; }
-    let prefix: string = "X";
+    let mut prefix: string = "X";
     if s.impl_target != null && s.impl_target.kind == TY_NAMED {
         prefix = s.impl_target.name;
+    }
+    // `impl T in NS { ... }` mangles to `NS_T_method` so two libs can each add
+    // a `red()` method to `string` without colliding at link time. Bare
+    // `impl T { ... }` keeps the unprefixed `T_method` name for back-compat.
+    if s.import_path != null && !s.import_path.eq("") {
+        prefix = s.import_path.concat("_").concat(prefix);
     }
     for let i: int = 0; i < s.impl_methods.len(); i++ {
         let m: Stmt = s.impl_methods.get(i);
@@ -3954,6 +3158,11 @@ fn emit_impl(g: *CG, s: *Stmt) {
         }
         println!(") {");
         g.scope.clear();
+        // Track the method's return type so `err(...)` / `ok(...)` lower to
+        // the right `__glide_err_T` / `__glide_ok_T` helpers (same as
+        // emit_fn does for top-level fns).
+        let saved_ret: *Type = g.current_ret_ty;
+        g.current_ret_ty = m.fn_ret_ty;
         let saved_defer: *Vector<Expr> = g.defer_stack;
         let saved_drop: *Vector<Expr> = g.auto_drop_stack;
         let nd: *Vector<Expr> = Vector::new();
@@ -3975,8 +3184,38 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.emit_deferred_reverse(1);
         g.defer_stack = saved_defer;
         g.auto_drop_stack = saved_drop;
+        g.current_ret_ty = saved_ret;
         println!("}");
         println!("");
+    }
+}
+
+// Emit forward declarations for an `impl T { ... }` block's methods. Same
+// mangling rule as emit_impl. Lets methods reference each other (and free
+// fns reference impl methods) regardless of source order.
+fn emit_impl_fwd_decls(g: *CG, s: *Stmt) {
+    if s.impl_methods == null { return; }
+    let mut prefix: string = "X";
+    if s.impl_target != null && s.impl_target.kind == TY_NAMED {
+        prefix = s.impl_target.name;
+    }
+    if s.import_path != null && !s.import_path.eq("") {
+        prefix = s.import_path.concat("_").concat(prefix);
+    }
+    for let i: int = 0; i < s.impl_methods.len(); i++ {
+        let m: Stmt = s.impl_methods.get(i);
+        let mangled: string = prefix.concat("_").concat(m.name);
+        print!(type_to_c(m.fn_ret_ty), " ", mangled, "(");
+        if m.fn_params == null || m.fn_params.len() == 0 {
+            print!("void");
+        } else {
+            for let j: int = 0; j < m.fn_params.len(); j++ {
+                if j > 0 { print!(", "); }
+                let p: Param = m.fn_params.get(j);
+                print!(type_to_c(p.ty), " ", p.name);
+            }
+        }
+        println!(");");
     }
 }
 
@@ -4049,27 +3288,165 @@ fn emit_enum(s: *Stmt) {
     println!("");
 }
 
+// Register `<suffix>::<name>` -> `<name>` for every suffix of `mod_path`.
+// For mod_path `stdlib::math` and name `min_int` this populates:
+//   `stdlib::math::min_int` -> `min_int`   (full path)
+//   `math::min_int`         -> `min_int`   (last-segment shorthand)
+// so users can write either the full or partial qualified form. Single-
+// segment paths only register the full form. Last write wins on collisions
+// (Phase 2 territory).
+fn register_alias_suffixes(g: *CG, mod_path: string, name: string) {
+    if mod_path == null || mod_path.eq("") { return; }
+    if name == null || name.eq("") { return; }
+    let n: int = mod_path.len();
+    let mut start: int = 0;
+    while start < n {
+        let suffix: string = mod_path.substring(start, n);
+        g.module_aliases.insert(suffix.concat("::").concat(name), name);
+        let mut next: int = -1;
+        let mut i: int = start;
+        while i + 1 < n {
+            if mod_path.at(i).to_int() == 58 && mod_path.at(i + 1).to_int() == 58 {
+                next = i + 2;
+                break;
+            }
+            i = i + 1;
+        }
+        if next < 0 { break; }
+        start = next;
+    }
+}
+
+// Convert a source file path to a `::`-separated module path. Strips the
+// `.glide` suffix and rewrites `/` and `\` to `::`. Used so user code can
+// reach a pub item by `module::path::Item` instead of (or in addition to)
+// the bare short name.
+fn module_path_from_origin(origin: string) -> string {
+    if origin == null || origin.eq("") { return ""; }
+    let mut s: string = origin;
+    let n: int = s.len();
+    if n > 6 {
+        let tail: string = s.substring(n - 6, n);
+        if tail.eq(".glide") { s = s.substring(0, n - 6); }
+    }
+    // Strip the leading `src/` segment so user-facing module paths don't
+    // expose the source-root layout. Files under `src/stdlib/foo.glide`
+    // become `stdlib::foo`; files outside `src/` keep their full path.
+    let len0: int = s.len();
+    if len0 >= 4 {
+        let first: int = s.at(0).to_int();
+        let second: int = s.at(1).to_int();
+        let third: int = s.at(2).to_int();
+        let fourth: int = s.at(3).to_int();
+        if first == 115 && second == 114 && third == 99
+            && (fourth == 47 || fourth == 92) {
+            s = s.substring(4, len0);
+        }
+    }
+    let mut out: string = "";
+    let mut i: int = 0;
+    let len: int = s.len();
+    while i < len {
+        let c: int = s.at(i).to_int();
+        if c == 47 || c == 92 {
+            out = out.concat("::");
+        } else {
+            out = out.concat(s.substring(i, i + 1));
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// Resolve a possibly-qualified path to its short C-symbol form. If `prefix`
+// is empty the path is already bare; otherwise we look up `<prefix>::<name>`
+// in the alias table and return the registered short name. Falls back to the
+// last-segment of `prefix` (e.g. `Vector` from `stdlib::vector::Vector`)
+// when no alias matches — that lets new user-written paths still resolve to
+// the existing flat naming as long as the trailing type name is unique.
+fn resolve_path_alias(g: *CG, prefix: string, name: string) -> string {
+    if prefix == null || prefix.eq("") { return name; }
+    let qual: string = prefix.concat("::").concat(name);
+    if g.module_aliases.contains(qual) {
+        return g.module_aliases.get(qual);
+    }
+    return name;
+}
+
+// Resolve the type-prefix of a multi-segment path (e.g. for
+// `stdlib::vector::Vector::new`, `prefix` is `stdlib::vector::Vector` and we
+// want `Vector` back). Used by EX_PATH normalisation in expression handlers.
+fn resolve_type_prefix(g: *CG, prefix: string) -> string {
+    if prefix == null || prefix.eq("")  { return prefix; }
+    if g.module_aliases.contains(prefix) {
+        return g.module_aliases.get(prefix);
+    }
+    // Fallback: trailing segment after the last `::`.
+    let n: int = prefix.len();
+    let mut i: int = n - 1;
+    while i > 0 {
+        if i + 1 < n && prefix.at(i).to_int() == 58 && prefix.at(i + 1).to_int() == 58 {
+            // not how we scan — fix: look for the last `::` running backwards
+            break;
+        }
+        i = i - 1;
+    }
+    // Simple forward scan for last `::` (cheap; module paths are short).
+    let mut last: int = -1;
+    let mut j: int = 0;
+    while j + 1 < n {
+        if prefix.at(j).to_int() == 58 && prefix.at(j + 1).to_int() == 58 {
+            last = j;
+            j = j + 2;
+        } else {
+            j = j + 1;
+        }
+    }
+    if last < 0 { return prefix; }
+    return prefix.substring(last + 2, n);
+}
+
 pub fn emit_program(program: *Vector<Stmt>) {
-    println!("#include <stdio.h>");
-    println!("#include <stdlib.h>");
-    println!("#include <stdbool.h>");
-    println!("#include <stdint.h>");
-    println!("#include <stddef.h>");
-    println!("#include <string.h>");
+    print!(include_str!("bootstrap/runtime/prelude.c"));
     println!("");
 
     emit_stdlib_runtime();
+
+    // Top-level `c_raw! { ... }` blocks: emit the bodies verbatim right after the
+    // stdlib runtime so they can declare types/macros/extern globals that the rest
+    // of the user code references. Order matches source order so users can split
+    // raw payloads across files predictably.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_CRAW {
+            emit_cfg_open(s.cfg_target);
+            print!(s.name);
+            println!("");
+            emit_cfg_close(s.cfg_target);
+        }
+    }
 
     let g: *CG = CG::new();
 
     // Register generic struct templates up front so that runtime emitters
     // (chan, result) can synthesize struct monos for their inner types
     // (e.g. `chan<Vector<int>>` needs the `Vector__int` body before the
-    // chan runtime references it).
+    // chan runtime references it). Also register concrete structs/enums so
+    // chan<UserType> can emit the body before the chan storage references it.
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 {
-            g.generic_structs.insert(s.name, s);
+        if s.kind == ST_STRUCT {
+            if s.type_params != null && s.type_params.len() > 0 {
+                g.generic_structs.insert(s.name, s);
+            } else {
+                g.structs.insert(s.name, s);
+            }
+        }
+        if s.kind == ST_ENUM {
+            g.enums.insert(s.name, s);
+        }
+        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
+            g.traits.insert(s.name, s);
         }
     }
 
@@ -4080,24 +3457,107 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
     emit_scheduler_runtime();
     emit_socket_runtime();
+
+    // Pre-emit user struct/enum bodies that show up as chan<T> inners. The
+    // chan template stores `T v;` by value so it needs the full definition,
+    // not just a forward typedef. Walk the program directly (not g.structs)
+    // because the registration pass is later in emit_program.
+    for let i: int = 0; i < g.chan_types.len(); i++ {
+        let t: Type = g.chan_types.get(i);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: int = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
+
     emit_chan_runtime(g);
+
+    // ---- dyn Trait pre-pass + emission ----
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        collect_dyn_in_stmt(g, &s);
+    }
+    // Pre-emit struct bodies for every Type that appears as an `impl Trait
+    // for Type` target where Trait is dyn-used. The thunks emitted by
+    // emit_dyn_runtime do `*(Type*)self_p`, which needs the full definition.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.impl_trait_name) { continue; }
+        if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
+        let tn: string = s.impl_target.name;
+        if g.emitted_named.contains(tn) { continue; }
+        for let j: int = 0; j < program.len(); j++ {
+            let ts: Stmt = program.get(j);
+            if ts.name == null || ts.name.eq("") { continue; }
+            if !ts.name.eq(tn) { continue; }
+            if ts.kind == ST_STRUCT && (ts.type_params == null || ts.type_params.len() == 0) {
+                println!("typedef struct ".concat(ts.name).concat(" ").concat(ts.name).concat(";"));
+                emit_struct(&ts);
+                g.emitted_named.insert(tn, true);
+            } else if ts.kind == ST_ENUM {
+                println!("typedef struct ".concat(ts.name).concat(" ").concat(ts.name).concat(";"));
+                emit_enum(&ts);
+                g.emitted_named.insert(tn, true);
+            }
+        }
+    }
+    emit_dyn_runtime(g, program);
 
     // ---- Errors-as-values pre-pass: collect Result inner types + emit runtime
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         collect_result_in_stmt(g, &s);
     }
+    // Same chan-userType story: result_<T> wraps T by value, so user
+    // struct/enum bodies must be emitted before the result helpers.
+    for let i: int = 0; i < g.result_types.len(); i++ {
+        let t: Type = g.result_types.get(i);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: int = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
     emit_result_runtime(g);
 
     // Register generic struct + fn + impl-method templates.
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        let mod_path: string = module_path_from_origin(s.origin);
         if s.kind == ST_STRUCT {
             if s.type_params != null && s.type_params.len() > 0 {
                 g.generic_structs.insert(s.name, s);
             } else {
                 g.structs.insert(s.name, s);
             }
+            register_alias_suffixes(g, mod_path, s.name);
         }
         if s.kind == ST_FN {
             if s.type_params != null && s.type_params.len() > 0 {
@@ -4105,20 +3565,43 @@ pub fn emit_program(program: *Vector<Stmt>) {
             } else {
                 g.fns.insert(s.name, s);
             }
+            register_alias_suffixes(g, mod_path, s.name);
         }
         if s.kind == ST_ENUM {
             g.enums.insert(s.name, s);
+            register_alias_suffixes(g, mod_path, s.name);
         }
         if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0)
            && s.impl_target != null && s.impl_methods != null {
             let mut prefix: string = "X";
             if s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
+            // `impl T in NS` registers as `NS_T_method` so two libs can both
+            // add e.g. `red()` to string without colliding. Bare `impl T` keeps
+            // the unprefixed `T_method` name for back-compat.
+            let mut is_namespaced: bool = false;
+            let mut bare_prefix: string = prefix;
+            if s.import_path != null && !s.import_path.eq("") {
+                prefix = s.import_path.concat("_").concat(prefix);
+                is_namespaced = true;
+            }
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 let synth: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
                 *synth = m;
                 synth.name = prefix.concat("_").concat(m.name);
                 g.fns.insert(synth.name, *synth);
+                // Mark as a real method so `obj.method()` dispatch finds it
+                // - free fns named `<Type>_<method>` won't be sugared.
+                g.method_fns.insert(synth.name, true);
+                if is_namespaced {
+                    let key: string = bare_prefix.concat("_").concat(m.name);
+                    if g.method_index.contains(key) {
+                        let prev: string = g.method_index.get(key);
+                        g.method_index.insert(key, prev.concat(";").concat(synth.name));
+                    } else {
+                        g.method_index.insert(key, synth.name);
+                    }
+                }
             }
         }
         if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0
@@ -4147,6 +3630,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
                 }
                 synth.type_params = combined;
                 g.generic_fns.insert(mname, *synth);
+                g.method_fns.insert(mname, true);
             }
         }
     }
@@ -4174,6 +3658,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+            if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
             println!("typedef struct ", s.name, " ", s.name, ";");
         }
     }
@@ -4185,9 +3670,11 @@ pub fn emit_program(program: *Vector<Stmt>) {
         emit_struct_mono(g, &t);
     }
 
-    // Concrete struct definitions.
+    // Concrete struct definitions. Skip anything the chan runtime already
+    // forward-emitted (chan<UserType> needs the body up front).
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
             emit_struct(&s);
         }
@@ -4203,13 +3690,17 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
     println!("");
 
-    // Forward fn declarations (concrete only).
+    // Forward fn declarations (concrete only). Includes impl-block methods
+    // so they can call each other regardless of source order.
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0) {
             emit_cfg_open(s.cfg_target);
             emit_fn_signature(&s); println!(";");
             emit_cfg_close(s.cfg_target);
+        }
+        if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) {
+            emit_impl_fwd_decls(g, &s);
         }
     }
 
@@ -4432,12 +3923,16 @@ pub fn emit_program(program: *Vector<Stmt>) {
 }
 
 fn emit_top_const(g: *CG, s: *Stmt) {
-    // Use #define for int/bool primitives (compatible with `case` labels and
-    // simpler than static const in C). For others, emit static const.
+    // `int` / `uint` / `i32` use `#define` so they can appear in `case`
+    // labels and stay compatible with the existing tag-define machinery.
+    // `i64` (and anything else) needs a typed `static const` so the
+    // value carries its width through expressions - otherwise C macro
+    // expansion treats `1000000000` as plain `int` and arithmetic like
+    // `(SECS_PER_HOUR * NANOS_PER_SEC)` overflows int32 silently.
     if s.let_value == null { return; }
     if s.let_ty != null && s.let_ty.kind == TY_NAMED
        && (s.let_ty.name.eq("int") || s.let_ty.name.eq("uint")
-           || s.let_ty.name.eq("i32") || s.let_ty.name.eq("i64")) {
+           || s.let_ty.name.eq("i32")) {
         print!("#define ", s.name, " ");
         emit_expr(g, s.let_value);
         println!("");
@@ -4450,7 +3945,14 @@ fn emit_top_const(g: *CG, s: *Stmt) {
         print!("int ", s.name);
     }
     print!(" = ");
-    emit_expr(g, s.let_value);
+    if s.let_ty != null && s.let_ty.kind == TY_NAMED && s.let_ty.name.eq("i64") {
+        // Cast the initializer so wider arithmetic stays 64-bit.
+        print!("(int64_t)(");
+        emit_expr(g, s.let_value);
+        print!(")");
+    } else {
+        emit_expr(g, s.let_value);
+    }
     println!(";");
 }
 

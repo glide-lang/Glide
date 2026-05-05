@@ -9,24 +9,28 @@ pub const TOK_CHAR: int = 5;
 pub const TOK_KEYWORD: int = 6;
 pub const TOK_OP: int = 7;
 pub const TOK_ERROR: int = 8;
+// Raw C/asm payload captured by `c_raw!{ ... }`. Lexer scans bytes verbatim
+// between matching braces, no token interpretation. Lexeme = body content
+// (without surrounding `c_raw!{` `}`).
+pub const TOK_RAW_BLOCK: int = 9;
 
 pub struct Token {
-    kind: int,
-    lexeme: string,
-    line: int,
-    column: int,
-    doc: string,        // contiguous `//` block above this token (LSP hover)
+    pub kind: int,
+    pub lexeme: string,
+    pub line: int,
+    pub column: int,
+    pub doc: string,        // contiguous `//` block above this token (LSP hover)
 }
 
 pub struct Lexer {
-    src: string,
-    src_len: int,
-    pos: int,
-    line: int,
-    column: int,
+    pub src: string,
+    pub src_len: int,
+    pub pos: int,
+    pub line: int,
+    pub column: int,
     // Doc comment buffer: contiguous run of `//` comments immediately above
     // the next token. Reset by a blank line. Block comments don't touch it.
-    pending_doc: string,
+    pub pending_doc: string,
 }
 
 impl Lexer {
@@ -164,6 +168,36 @@ impl Lexer {
                 }
             }
             let lex: string = self.src.substring(start_pos, self.pos);
+            // Special case: `c_raw!{ ... }` — capture body bytes verbatim with brace
+            // counting, emit as a single TOK_RAW_BLOCK. Recognised here (not in the
+            // parser) because by the time the parser sees the inner tokens they're
+            // already cooked, and we'd lose comment whitespace plus original layout.
+            // Accepts whitespace between `!` and `{` for ergonomics.
+            if lex.eq("c_raw") && self.pos < self.src_len && self.src.at(self.pos).to_int() == 33 {
+                let mut probe: int = self.pos + 1;
+                while probe < self.src_len {
+                    let pc: int = self.src.at(probe).to_int();
+                    if pc == 32 || pc == 9 || pc == 10 || pc == 13 { probe = probe + 1; } else { break; }
+                }
+                if probe < self.src_len && self.src.at(probe).to_int() == 123 {
+                    // Fast-forward over `!`, optional whitespace, and `{`. Then capture body.
+                    while self.pos <= probe { self.advance(); }
+                    let body_start: int = self.pos;
+                    let mut depth: int = 1;
+                    while self.pos < self.src_len && depth > 0 {
+                        let cc: char = self.peek();
+                        let ic: int = cc.to_int();
+                        if ic == 123 { depth = depth + 1; }
+                        else if ic == 125 { depth = depth - 1; if depth == 0 { break; } }
+                        self.advance();
+                    }
+                    let body: string = self.src.substring(body_start, self.pos);
+                    if self.pos < self.src_len && self.src.at(self.pos).to_int() == 125 {
+                        self.advance(); // consume closing '}'
+                    }
+                    return Token { kind: TOK_RAW_BLOCK, lexeme: body, line: start_line, column: start_col, doc: doc };
+                }
+            }
             let mut kind: int = TOK_IDENT;
             if is_keyword(lex) { kind = TOK_KEYWORD; }
             return Token { kind: kind, lexeme: lex, line: start_line, column: start_col, doc: doc };
@@ -281,6 +315,8 @@ pub fn is_keyword(s: string) -> bool {
     if s.eq("pub") { return true; }
     if s.eq("import") { return true; }
     if s.eq("interface") { return true; }
+    if s.eq("trait") { return true; }
+    if s.eq("dyn") { return true; }
     if s.eq("defer") { return true; }
     if s.eq("type") { return true; }
     if s.eq("move") { return true; }

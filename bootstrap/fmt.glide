@@ -10,7 +10,7 @@
 // them. `glide fmt --write` is opt-in for that reason. Comment preservation
 // is the next iteration.
 
-import "ast.glide";
+import ast;
 
 const FMT_INDENT: string = "    ";
 
@@ -304,7 +304,49 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
         return pad.concat("spawn ").concat(fmt_expr(s.expr_value)).concat(";\n");
     }
     if s.kind == ST_IMPORT {
-        return pad.concat("import ").concat(s.import_path).concat(";\n");
+        // Reconstruct the module-path syntax. `s.import_path` was set to the
+        // resolved file path (e.g. `src/stdlib/hashmap.glide`); we strip the
+        // optional `src/` prefix + `.glide` suffix and rewrite `/` -> `::`.
+        let mut path: string = s.import_path;
+        let pn: int = path.len();
+        if pn >= 4 {
+            let c0: int = path.at(0).to_int();
+            let c1: int = path.at(1).to_int();
+            let c2: int = path.at(2).to_int();
+            let c3: int = path.at(3).to_int();
+            if c0 == 115 && c1 == 114 && c2 == 99 && (c3 == 47 || c3 == 92) {
+                path = path.substring(4, pn);
+            }
+        }
+        let pn2: int = path.len();
+        if pn2 > 6 {
+            let tail: string = path.substring(pn2 - 6, pn2);
+            if tail.eq(".glide") { path = path.substring(0, pn2 - 6); }
+        }
+        let mut module: string = "";
+        let mn: int = path.len();
+        for let i: int = 0; i < mn; i++ {
+            let c: int = path.at(i).to_int();
+            if c == 47 || c == 92 {
+                module = module.concat("::");
+            } else {
+                module = module.concat(path.substring(i, i + 1));
+            }
+        }
+        let mut tail_s: string = "";
+        if s.imported_items != null && s.imported_items.len() > 0 {
+            if s.imported_items.len() == 1 {
+                tail_s = "::".concat(s.imported_items.get(0));
+            } else {
+                tail_s = "::{";
+                for let i: int = 0; i < s.imported_items.len(); i++ {
+                    if i > 0 { tail_s = tail_s.concat(", "); }
+                    tail_s = tail_s.concat(s.imported_items.get(i));
+                }
+                tail_s = tail_s.concat("}");
+            }
+        }
+        return pad.concat("import ").concat(module).concat(tail_s).concat(";\n");
     }
     if s.kind == ST_IF {
         let mut out: string = pad.concat("if ").concat(fmt_expr(s.cond)).concat(" {\n");

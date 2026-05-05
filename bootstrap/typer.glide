@@ -1,7 +1,8 @@
 // Glide-in-Glide type checker. Walks the AST produced by parser.glide
 // and verifies type correctness. First pass: minimal subset.
 
-import "ast.glide";
+import stdlib::hashmap::*;
+import ast;
 
 // ---- type helpers --------------------------------------------------------
 
@@ -10,6 +11,9 @@ pub fn type_eq(a: *Type, b: *Type) -> bool {
     if b == null { return false; }
     if a.kind != b.kind { return false; }
     if a.kind == TY_NAMED {
+        return a.name.eq(b.name);
+    }
+    if a.kind == TY_DYN {
         return a.name.eq(b.name);
     }
     return type_eq(a.inner, b.inner);
@@ -34,6 +38,7 @@ pub fn type_to_string(t: *Type) -> string {
         return out.concat(">");
     }
     if t.kind == TY_RESULT { return "!".concat(type_to_string(t.inner)); }
+    if t.kind == TY_DYN { return "dyn ".concat(t.name); }
     return "<ty?>";
 }
 
@@ -102,44 +107,80 @@ fn types_compat(want: *Type, got: *Type) -> bool {
 // ---- function signatures -------------------------------------------------
 
 pub struct FnSig {
-    name: string,
-    params: *Vector<Param>,
-    ret_type: *Type,
-    is_variadic: bool,      // C-style trailing `...` (extern fn printf etc.)
+    pub name: string,
+    pub params: *Vector<Param>,
+    pub ret_type: *Type,
+    pub is_variadic: bool,      // C-style trailing `...` (extern fn printf etc.)
+    // Generic type parameter names (e.g. `["T", "U"]`) and their `+`-joined
+    // trait bounds in lockstep (`["Ord+Clone", ""]`). Both are null/empty
+    // for non-generic fns. Used by EX_CALL to enforce bounds at the call
+    // site after inferring the concrete type for each T from the args.
+    pub type_params: *Vector<string>,
+    pub type_param_bounds: *Vector<string>,
 }
 
 // ---- typer state ---------------------------------------------------------
 
 pub struct BorrowEvent {
-    source: string,
-    is_mut: bool,
+    pub source: string,
+    pub is_mut: bool,
 }
 
 // Severity levels match LSP's DiagnosticSeverity:
 //   1 = error, 2 = warning, 3 = information, 4 = hint
 pub struct DiagEntry {
-    line: int,
-    col: int,
-    end_line: int,
-    end_col: int,
-    severity: int,
-    code: string,        // stable identifier (e.g. "unused-var", "type-mismatch")
-    message: string,
-    origin: string,      // source file path (set from t.current_origin)
-    tag: int,            // 0 = none, 1 = Unnecessary (faded), 2 = Deprecated (struck-through)
+    pub line: int,
+    pub col: int,
+    pub end_line: int,
+    pub end_col: int,
+    pub severity: int,
+    pub code: string,        // stable identifier (e.g. "unused-var", "type-mismatch")
+    pub message: string,
+    pub origin: string,      // source file path (set from t.current_origin)
+    pub tag: int,            // 0 = none, 1 = Unnecessary (faded), 2 = Deprecated (struck-through)
 }
 
 pub struct Typer {
-    fns: *HashMap<FnSig>,
-    structs: *HashMap<bool>,        // just registry of names for now
-    scope: *HashMap<Type>,          // current scope: name -> Type (heap-alloc'd)
-    module_scope: *HashMap<Type>,   // top-level consts (visible inside any fn body)
-    owned_locals: *HashMap<bool>,   // names that must not escape (auto-drop)
-    borrows: *Vector<BorrowEvent>,  // active let-bound borrows; save/restore per block
-    current_ret: *Type,
-    current_origin: string,    // file the typer is currently checking
-    error_count: int,
-    diagnostics: *Vector<DiagEntry>,
+    pub fns: *HashMap<FnSig>,
+    pub structs: *HashMap<bool>,        // just registry of names for now
+    pub scope: *HashMap<Type>,          // current scope: name -> Type (heap-alloc'd)
+    pub module_scope: *HashMap<Type>,   // top-level consts (visible inside any fn body)
+    pub owned_locals: *HashMap<bool>,   // names that must not escape (auto-drop)
+    pub borrows: *Vector<BorrowEvent>,  // active let-bound borrows; save/restore per block
+    pub current_ret: *Type,
+    pub current_origin: string,    // file the typer is currently checking
+    // Per-file visibility: `<origin>::<name>` -> bool. A name is visible
+    // from file `F` only if it appears in `F`'s visibility set. Selective
+    // imports (`import a::b::c::Item;`) populate this; src/builtins/ pub
+    // names are added to every file's set so they act as a prelude.
+    pub visibility: *HashMap<bool>,
+    // Per-file module aliases: `<origin>::<short>` -> bool. Populated by
+    // `import a::b::c;` (pure module import) - the short name `c` becomes
+    // a callable namespace from inside `<origin>`. Used by EX_PATH
+    // enforcement to allow `c::Item(...)` while rejecting unimported
+    // partial paths.
+    pub module_imports: *HashMap<bool>,
+    // Set of every loaded file's full module path (e.g. `stdlib::math`).
+    // Always-allowed for fully qualified path expressions even without an
+    // explicit import.
+    pub module_full_paths: *HashMap<bool>,
+    // Field-level pub map: key `<struct>::<field>` -> true if the field
+    // was declared with `pub`. Missing entry = private.
+    pub field_pub: *HashMap<bool>,
+    // Where each struct was declared, so we know whether a `obj.field`
+    // access is happening inside the struct's own file (always allowed)
+    // or from another file (then `field_pub` enforces).
+    pub struct_origin: *HashMap<string>,
+    // Whether visibility enforcement is active for this run. Off by default
+    // so existing files that haven't been migrated keep compiling; the
+    // compiler entry point flips it on when the user-facing build runs.
+    pub enforce_visibility: bool,
+    // Set of `<trait>::<type>` keys for every `impl Trait for Type` in the
+    // program. Built up front in pre_register and consulted to verify
+    // `<T: Trait>` bounds at call sites.
+    pub impl_set: *HashMap<bool>,
+    pub error_count: int,
+    pub diagnostics: *Vector<DiagEntry>,
 }
 
 impl Typer {
@@ -161,8 +202,42 @@ impl Typer {
         t.diagnostics = dg;
         t.current_ret = null;
         t.current_origin = "";
+        let vis: *HashMap<bool> = HashMap::new();
+        t.visibility = vis;
+        let mi: *HashMap<bool> = HashMap::new();
+        t.module_imports = mi;
+        let mfp: *HashMap<bool> = HashMap::new();
+        t.module_full_paths = mfp;
+        let fp: *HashMap<bool> = HashMap::new();
+        t.field_pub = fp;
+        let so: *HashMap<string> = HashMap::new();
+        t.struct_origin = so;
+        t.enforce_visibility = false;
+        let is: *HashMap<bool> = HashMap::new();
+        t.impl_set = is;
         t.error_count = 0;
         return t;
+    }
+
+    fn is_visible(self: *Typer, name: string) -> bool {
+        if !self.enforce_visibility { return true; }
+        if self.current_origin == null || self.current_origin.eq("") { return true; }
+        if name == null || name.eq("") { return true; }
+        let key: string = self.current_origin.concat("::").concat(name);
+        return self.visibility.contains(key);
+    }
+
+    // True if `prefix` (the str_val of an EX_PATH) names a module the
+    // current file is allowed to call into. Either the prefix matches
+    // some loaded file's full module path (always allowed) OR the file
+    // brought it into scope via `import x::y::<prefix>;`.
+    fn is_module_path_allowed(self: *Typer, prefix: string) -> bool {
+        if !self.enforce_visibility { return true; }
+        if prefix == null || prefix.eq("") { return true; }
+        if self.module_full_paths.contains(prefix) { return true; }
+        if self.current_origin == null || self.current_origin.eq("") { return true; }
+        let key: string = self.current_origin.concat("::").concat(prefix);
+        return self.module_imports.contains(key);
     }
 
     pub fn free(self: *Typer) {
@@ -249,6 +324,12 @@ impl Typer {
 // ---- pre-register --------------------------------------------------------
 
 pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
+    // C-runtime types that aren't declared in any Glide source file but
+    // user code expects to call as `Arena::new(...)`, etc. Hardcoded for
+    // now; replace with proper `extern type` declarations later.
+    t.structs.insert("Arena", true);
+
+
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_CONST {
@@ -270,8 +351,16 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 params: s.fn_params,
                 ret_type: s.fn_ret_ty,
                 is_variadic: s.is_variadic,
+                type_params: s.type_params,
+                type_param_bounds: s.type_param_bounds,
             };
             t.fns.insert(s.name, sig);
+        }
+        if s.kind == ST_ENUM {
+            // Enums share the type-name registry with structs so EX_PATH
+            // enforcement can tell `MyEnum::Variant` apart from a free
+            // module call.
+            t.structs.insert(s.name, true);
         }
         if s.kind == ST_STRUCT {
             t.structs.insert(s.name, true);
@@ -308,10 +397,130 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                             params: m.fn_params,
                             ret_type: m.fn_ret_ty,
                             is_variadic: m.is_variadic,
+                            type_params: m.type_params,
+                            type_param_bounds: m.type_param_bounds,
                         };
                         t.fns.insert(fname, sig);
                     }
                 }
+            }
+        }
+    }
+
+    // Build impl_set: `<trait>::<type>` → true for every concrete impl in
+    // the program. Generic-bounded calls consult this to decide whether
+    // the inferred concrete type satisfies a `T: Trait` clause.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if s.impl_target == null { continue; }
+        let mut tname: string = "";
+        if s.impl_target.kind == TY_NAMED   { tname = s.impl_target.name; }
+        if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+        if tname.eq("") { continue; }
+        t.impl_set.insert(s.impl_trait_name.concat("::").concat(tname), true);
+    }
+}
+
+// ---- generic bounds enforcement -----------------------------------------
+
+fn type_var_contains(tps: *Vector<string>, name: string) -> bool {
+    if tps == null { return false; }
+    for let i: int = 0; i < tps.len(); i++ {
+        if tps.get(i).eq(name) { return true; }
+    }
+    return false;
+}
+
+// Generic-aware variant of types_compat used for fn-call arg checks.
+// A param type that names one of the fn's type-vars matches anything;
+// pointer/borrow/result wrappers recurse so `*T` matches `*Animal`.
+// Falls back to plain types_compat for everything else.
+fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
+    if want == null || got == null { return true; }
+    if want.kind == TY_NAMED && type_var_contains(tps, want.name) { return true; }
+    if (want.kind == TY_POINTER || want.kind == TY_BORROW || want.kind == TY_BORROW_MUT)
+       && (got.kind == TY_POINTER || got.kind == TY_BORROW || got.kind == TY_BORROW_MUT) {
+        return arg_compat(want.inner, got.inner, tps);
+    }
+    if want.kind == TY_RESULT && got.kind == TY_RESULT {
+        return arg_compat(want.inner, got.inner, tps);
+    }
+    return types_compat(want, got);
+}
+
+// Split "Ord+Clone" → ["Ord", "Clone"]. Empty input → empty vector.
+fn split_bounds(s: string) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    if s == null || s.eq("") { return out; }
+    let n: int = s.len();
+    let mut start: int = 0;
+    let mut i: int = 0;
+    while i < n {
+        if s.at(i).to_int() == 43 {     // '+'
+            if i > start { out.push(s.substring(start, i)); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if n > start { out.push(s.substring(start, n)); }
+    return out;
+}
+
+// Walk a (possibly nested) param type and pick the corresponding concrete
+// chunk out of the arg type for the named type-var. Handles direct
+// TY_NAMED("T"), `*T`, `&T`, `&mut T`. Returns null if nothing matches.
+fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
+    if param_ty == null || arg_ty == null { return null; }
+    if param_ty.kind == TY_NAMED && param_ty.name.eq(var_name) {
+        return arg_ty;
+    }
+    if (param_ty.kind == TY_POINTER || param_ty.kind == TY_BORROW || param_ty.kind == TY_BORROW_MUT)
+       && (arg_ty.kind == TY_POINTER || arg_ty.kind == TY_BORROW || arg_ty.kind == TY_BORROW_MUT) {
+        return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
+    }
+    return null;
+}
+
+fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: int, col: int) {
+    if sig == null { return; }
+    if sig.type_params == null || sig.type_params.len() == 0 { return; }
+    if sig.type_param_bounds == null { return; }
+    if sig.params == null || args == null { return; }
+    let plen: int = sig.params.len();
+    let alen: int = args.len();
+    if plen != alen { return; }     // arity reported separately
+    let bn: int = sig.type_param_bounds.len();
+
+    for let ti: int = 0; ti < sig.type_params.len(); ti++ {
+        let tp_name: string = sig.type_params.get(ti);
+        let mut bounds: string = "";
+        if ti < bn { bounds = sig.type_param_bounds.get(ti); }
+        if bounds.eq("") { continue; }
+
+        // Infer T → concrete by scanning params for the first one that
+        // mentions the var (directly or behind one pointer/borrow).
+        let mut concrete: *Type = null;
+        for let i: int = 0; i < plen; i++ {
+            let p: Param = sig.params.get(i);
+            let a: Expr = args.get(i);
+            let at: *Type = infer_expr(t, &a);
+            let extracted: *Type = extract_for_var(p.ty, at, tp_name);
+            if extracted != null { concrete = extracted; break; }
+        }
+        if concrete == null { continue; }
+        if concrete.kind != TY_NAMED { continue; }
+        let cname: string = concrete.name;
+
+        let parts: *Vector<string> = split_bounds(bounds);
+        for let bi: int = 0; bi < parts.len(); bi++ {
+            let bound: string = parts.get(bi);
+            let key: string = bound.concat("::").concat(cname);
+            if !t.impl_set.contains(key) {
+                t.err_code(line, col, "unsatisfied-bound",
+                    "type `".concat(cname).concat("` does not implement `").concat(bound)
+                    .concat("` (required by `").concat(tp_name).concat("` of `").concat(sig.name).concat("`)"));
             }
         }
     }
@@ -608,6 +817,8 @@ fn check_stmt(t: *Typer, s: *Stmt) {
     }
     if s.kind == ST_BREAK { return; }
     if s.kind == ST_CONTINUE { return; }
+    // Raw C/asm payload — opaque to the typer.
+    if s.kind == ST_CRAW { return; }
     if s.kind == ST_ASM {
         // Operand exprs go through infer_expr so undefined-name diagnostics
         // still fire; constraint strings and clobbers are GCC syntax and pass
@@ -788,6 +999,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e.kind == EX_NULL { return ty_pointer(ty_named("void")); }
 
     if e.kind == EX_IDENT {
+        // Locals + parameters always win; visibility check skipped for them.
         if t.scope.contains(e.str_val) {
             let ty: Type = t.scope.get(e.str_val);
             let p: *Type = malloc(sizeof(Type)) as *Type;
@@ -797,6 +1009,10 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // Top-level consts (and other module-level bindings) live here so
         // they remain visible inside fn bodies whose local scope is fresh.
         if t.module_scope.contains(e.str_val) {
+            if !t.is_visible(e.str_val) {
+                t.err(e.line, e.column, "name `".concat(e.str_val).concat("` is not in scope; add an `import` for it"));
+                return null;
+            }
             let ty: Type = t.module_scope.get(e.str_val);
             let p: *Type = malloc(sizeof(Type)) as *Type;
             *p = ty;
@@ -804,6 +1020,10 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         }
         // Maybe it's a function name
         if t.fns.contains(e.str_val) {
+            if !t.is_visible(e.str_val) {
+                t.err(e.line, e.column, "name `".concat(e.str_val).concat("` is not in scope; add an `import` for it"));
+                return null;
+            }
             return ty_named("__fn__");  // placeholder; full fn-pointer support later
         }
         t.err(e.line, e.column, "unknown name `".concat(e.str_val).concat("`"));
@@ -928,6 +1148,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if e.lhs != null && e.lhs.kind == EX_IDENT {
             let name: string = e.lhs.str_val;
             if t.fns.contains(name) {
+                if !t.is_visible(name) {
+                    t.err(e.lhs.line, e.lhs.column,
+                        "name `".concat(name).concat("` is not in scope; add an `import` for it"));
+                    return null;
+                }
                 let sig: FnSig = t.fns.get(name);
                 // Check arity (if we have args). For C-style variadics
                 // (`extern fn printf(fmt: string, ...)`) we only require the
@@ -955,7 +1180,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                     .concat("` into `*T` parameter (auto-drop conflict)"));
                             }
                             let at: *Type = infer_expr(t, &a);
-                            if !types_compat(p.ty, at) {
+                            if !arg_compat(p.ty, at, sig.type_params) {
                                 t.err(a.line, a.column,
                                     "arg ".concat(p.name).concat(" type mismatch"));
                             }
@@ -968,9 +1193,22 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                 let _u: *Type = infer_expr(t, &a);
                             }
                         }
+                        check_generic_bounds(t, &sig, e.args, e.line, e.column);
                     }
                 }
                 return sig.ret_type;
+            }
+            // Bare ident but not a known fn. Could be a local function
+            // pointer in scope, or a language-level builtin lowered by the
+            // codegen (`ok` / `err` for Result, `make_chan` for channels);
+            // otherwise this is a missing import.
+            let is_builtin: bool = name.eq("ok") || name.eq("err")
+                || name.eq("make_chan") || name.eq("sizeof")
+                || name.eq("printf");
+            if !is_builtin && !t.scope.contains(name) && t.enforce_visibility {
+                t.err(e.lhs.line, e.lhs.column,
+                    "unknown function `".concat(name).concat("`; did you forget an `import`?"));
+                return null;
             }
         }
         // `Type::method(args)` — looked up via the same registry the impl
@@ -979,7 +1217,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // shape-mismatches even when full generic monomorphization isn't
         // run in the typer.
         if e.lhs != null && e.lhs.kind == EX_PATH {
-            let pname: string = e.lhs.str_val.concat("_").concat(e.lhs.field);
+            let prefix: string = e.lhs.str_val;
+            let pname: string = prefix.concat("_").concat(e.lhs.field);
+            // Allow if any of: prefix is a known type (struct/enum), the
+            // mangled `<Type>_<method>` is registered (covers C-runtime
+            // types like `Arena`), or the prefix is a module path the file
+            // is allowed to use.
+            let is_type: bool = t.structs.contains(prefix);
+            let is_known_method: bool = t.fns.contains(pname);
+            if !is_type && !is_known_method && !t.is_module_path_allowed(prefix) {
+                t.err(e.lhs.line, e.lhs.column,
+                    "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
+                return null;
+            }
             if t.fns.contains(pname) {
                 let sig: FnSig = t.fns.get(pname);
                 if e.args != null {
@@ -1002,8 +1252,27 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_MEMBER {
-        let _u3: *Type = infer_expr(t, e.lhs);
-        return null; // Need struct info to resolve field type. Defer.
+        let recv_ty: *Type = infer_expr(t, e.lhs);
+        // Cross-file field privacy: if the receiver resolves to a known
+        // struct and the field isn't marked `pub`, only that struct's
+        // own file can access it. Methods are still resolved later via
+        // the EX_CALL path; this branch fires for plain field reads.
+        if recv_ty != null && t.enforce_visibility && e.field != null && !e.field.eq("") {
+            let stripped: *Type = strip_ptr(recv_ty);
+            if stripped != null && stripped.kind == TY_NAMED
+               && t.struct_origin.contains(stripped.name) {
+                let owner: string = t.struct_origin.get(stripped.name);
+                if !owner.eq(t.current_origin) {
+                    let key: string = stripped.name.concat("::").concat(e.field);
+                    if !t.field_pub.contains(key) {
+                        t.err(e.line, e.column,
+                            "field `".concat(e.field).concat("` of struct `").concat(stripped.name).concat("` is private; declare it `pub` to expose"));
+                        return null;
+                    }
+                }
+            }
+        }
+        return null; // field type resolution still deferred to codegen
     }
 
     if e.kind == EX_INDEX {
@@ -1018,7 +1287,15 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_PATH {
-        let pname: string = e.str_val.concat("_").concat(e.field);
+        let prefix: string = e.str_val;
+        let pname: string = prefix.concat("_").concat(e.field);
+        let is_type: bool = t.structs.contains(prefix);
+        let is_known_method: bool = t.fns.contains(pname);
+        if !is_type && !is_known_method && !t.is_module_path_allowed(prefix) {
+            t.err(e.line, e.column,
+                "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
+            return null;
+        }
         if t.fns.contains(pname) {
             return ty_named("__fn__");
         }

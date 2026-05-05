@@ -1,28 +1,29 @@
 // Glide-in-Glide parser. Pratt expressions + recursive descent for stmts.
 
-import "lexer.glide";
-import "ast.glide";
+import stdlib::hashmap::*;
+import lexer;
+import ast;
 
 pub struct ParseDiag {
-    origin: string,
-    line: int,
-    col: int,
-    msg: string,
+    pub origin: string,
+    pub line: int,
+    pub col: int,
+    pub msg: string,
 }
 
 pub struct Parser {
-    lex: *Lexer,
-    current: Token,
-    peek: Token,
-    error_count: int,
-    no_struct_lit: bool,
-    diags: *Vector<ParseDiag>,
+    pub lex: *Lexer,
+    pub current: Token,
+    pub peek: Token,
+    pub error_count: int,
+    pub no_struct_lit: bool,
+    pub diags: *Vector<ParseDiag>,
     // Position of the most recently consumed token (advanced past). Used to
     // anchor "expected ';'" errors at the END of the previous token rather
     // than the start of the next stmt — much friendlier IDE underlines.
-    prev_line: int,
-    prev_col: int,
-    prev_len: int,
+    pub prev_line: int,
+    pub prev_col: int,
+    pub prev_len: int,
 }
 
 impl Parser {
@@ -217,7 +218,18 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     if p.at_kw("struct") { let s: *Stmt = parse_struct(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
     if p.at_kw("enum") { let s: *Stmt = parse_enum(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
     if p.at_kw("impl") { let s: *Stmt = parse_impl(p); if s != null { s.cfg_target = cfg; } return s; }
+    if p.at_kw("trait") { let s: *Stmt = parse_trait(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
     if p.at_kw("import") { return parse_import(p); }
+    // `c_raw! { ... }` at top level — emitted at the top of the generated .c.
+    if p.current.kind == TOK_RAW_BLOCK {
+        let line: int = p.current.line;
+        let col: int = p.current.column;
+        let body: string = p.current.lexeme;
+        p.advance();
+        let s: *Stmt = stmt_craw(body, line, col);
+        s.cfg_target = cfg;
+        return s;
+    }
     if p.at_kw("macro") {
         let s: *Stmt = parse_macro_def(p);
         if s != null { s.is_pub = is_pub; s.cfg_target = cfg; }
@@ -311,8 +323,9 @@ fn parse_fn(p: *Parser) -> *Stmt {
     let nlen: int = p.current.lexeme.len();
     let name: string = p.expect_ident();
 
-    // Optional generic params <T, U>
-    let tps: *Vector<string> = parse_type_params(p);
+    // Optional generic params <T, U: Bound + Bound>
+    let tps_bounds: *Vector<string> = Vector::new();
+    let tps: *Vector<string> = parse_type_params_with_bounds(p, tps_bounds);
 
     p.expect_op("(");
     let params: *Vector<Param> = Vector::new();
@@ -341,7 +354,8 @@ fn parse_fn(p: *Parser) -> *Stmt {
     if p.eat_op(";") {
         let s: *Stmt = stmt_fn(name, params, ret_ty, null, line, col);
         if s != null {
-            s.type_params = tps; s.name_line = nline; s.name_col = ncol; s.name_len = nlen;
+            s.type_params = tps; s.type_param_bounds = tps_bounds;
+            s.name_line = nline; s.name_col = ncol; s.name_len = nlen;
             s.is_variadic = variadic;
         }
         return s;
@@ -350,7 +364,8 @@ fn parse_fn(p: *Parser) -> *Stmt {
     let body: *Vector<Stmt> = parse_block(p);
     let s: *Stmt = stmt_fn(name, params, ret_ty, body, line, col);
     if s != null {
-        s.type_params = tps; s.name_line = nline; s.name_col = ncol; s.name_len = nlen;
+        s.type_params = tps; s.type_param_bounds = tps_bounds;
+        s.name_line = nline; s.name_col = ncol; s.name_len = nlen;
         s.is_variadic = variadic;
     }
     return s;
@@ -362,6 +377,40 @@ fn parse_type_params(p: *Parser) -> *Vector<string> {
     while !p.at_op(">") && !p.at_eof() {
         let name: string = p.expect_ident();
         tps.push(name);
+        // Optional bounds: `T: Trait1 + Trait2`. Discarded here; the caller
+        // version `parse_type_params_with_bounds` is what records them.
+        if p.eat_op(":") {
+            let _b: string = p.expect_ident();
+            while p.eat_op("+") {
+                let _nb: string = p.expect_ident();
+            }
+        }
+        if !p.eat_op(",") { break; }
+    }
+    p.expect_op(">");
+    return tps;
+}
+
+// Same as parse_type_params, but also fills `bounds_out` in lockstep with
+// the returned name list. Each slot is a `+`-joined string of trait names
+// (or `""` for an unbounded slot). Use this in the parse paths that record
+// type params on the resulting Stmt.
+fn parse_type_params_with_bounds(p: *Parser, bounds_out: *Vector<string>) -> *Vector<string> {
+    let tps: *Vector<string> = Vector::new();
+    if !p.eat_op("<") { return tps; }
+    while !p.at_op(">") && !p.at_eof() {
+        let name: string = p.expect_ident();
+        tps.push(name);
+        let mut bound: string = "";
+        if p.eat_op(":") {
+            let b0: string = p.expect_ident();
+            bound = b0;
+            while p.eat_op("+") {
+                let nb: string = p.expect_ident();
+                bound = bound.concat("+").concat(nb);
+            }
+        }
+        bounds_out.push(bound);
         if !p.eat_op(",") { break; }
     }
     p.expect_op(">");
@@ -384,21 +433,32 @@ fn parse_struct(p: *Parser) -> *Stmt {
     let ncol: int = p.current.column;
     let nlen: int = p.current.lexeme.len();
     let name: string = p.expect_ident();
-    let tps: *Vector<string> = parse_type_params(p);
+    let tps_bounds: *Vector<string> = Vector::new();
+    let tps: *Vector<string> = parse_type_params_with_bounds(p, tps_bounds);
     p.expect_op("{");
     let fields: *Vector<Field> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
         let fdoc: string = p.current.doc;
+        // Three equivalent ways to mark a field exported across files:
+        //   pub field: T,    // long form
+        //   !field: T,       // short prefix sigil (field-only shortcut)
+        // Bare `field: T,` stays private (default).
+        let mut fpub: bool = false;
+        if p.eat_kw("pub") { fpub = true; }
+        else if p.eat_op("!") { fpub = true; }
         let fname: string = p.expect_ident();
         p.expect_op(":");
         let fty: *Type = parse_type(p);
-        let f: Field = Field { name: fname, ty: fty, doc: fdoc };
+        let f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub };
         fields.push(f);
         if !p.eat_op(",") { break; }
     }
     p.expect_op("}");
     let s: *Stmt = stmt_struct(name, fields, line, col);
-    if s != null { s.type_params = tps; s.name_line = nline; s.name_col = ncol; s.name_len = nlen; }
+    if s != null {
+        s.type_params = tps; s.type_param_bounds = tps_bounds;
+        s.name_line = nline; s.name_col = ncol; s.name_len = nlen;
+    }
     return s;
 }
 
@@ -434,12 +494,83 @@ fn parse_enum(p: *Parser) -> *Stmt {
     return s;
 }
 
+// `trait Name { fn method(args) -> ret; ... }` — a contract. Methods
+// have signatures only (no body); a corresponding `impl Trait for Type`
+// supplies the implementations. `Self` is allowed as a stand-in for the
+// implementor and gets substituted when the impl is parsed.
+fn parse_trait(p: *Parser) -> *Stmt {
+    let line: int = p.current.line;
+    let col: int = p.current.column;
+    p.advance(); // 'trait'
+    let nline: int = p.current.line;
+    let ncol: int = p.current.column;
+    let name: string = p.expect_ident();
+    let nlen: int = name.len();
+    // Optional supertrait list: `trait Bird: Animal, Mover { ... }`.
+    let supers: *Vector<string> = Vector::new();
+    if p.eat_op(":") {
+        supers.push(p.expect_ident());
+        while p.eat_op(",") { supers.push(p.expect_ident()); }
+    }
+    p.expect_op("{");
+    let methods: *Vector<Stmt> = Vector::new();
+    while !p.at_op("}") && !p.at_eof() {
+        let doc: string = p.current.doc;
+        let mut is_pub: bool = false;
+        if p.eat_kw("pub") { is_pub = true; }
+        if p.at_kw("fn") {
+            // Trait methods can be bodyless (signature only — implementor must
+            // provide) OR have a body (default implementation that the impl
+            // can override). parse_fn handles both shapes natively.
+            let m: *Stmt = parse_fn(p);
+            if m != null {
+                m.is_pub = is_pub;
+                if doc != null && !doc.eq("") { m.doc_comment = doc; }
+                methods.push(*m);
+            }
+        } else {
+            p.err("expected `fn` inside trait body");
+            p.advance();
+        }
+    }
+    p.expect_op("}");
+    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    s.kind = ST_TRAIT;
+    s.line = line;
+    s.column = col;
+    s.name = name;
+    s.name_line = nline;
+    s.name_col = ncol;
+    s.name_len = nlen;
+    s.impl_methods = methods;
+    s.trait_supers = supers;
+    return s;
+}
+
 fn parse_impl(p: *Parser) -> *Stmt {
     let line: int = p.current.line;
     let col: int = p.current.column;
     p.advance(); // 'impl'
-    let tps: *Vector<string> = parse_type_params(p);
-    let target: *Type = parse_type(p);
+    let tps_bounds: *Vector<string> = Vector::new();
+    let tps: *Vector<string> = parse_type_params_with_bounds(p, tps_bounds);
+    let mut target: *Type = parse_type(p);
+    // `impl TraitName for Type { ... }` — the first type was the trait
+    // name; consume `for` and parse the real implementor.
+    let mut trait_name: string = "";
+    if p.at_kw("for") {
+        if target != null && target.kind == TY_NAMED { trait_name = target.name; }
+        p.advance();
+        target = parse_type(p);
+    }
+    // Optional namespace tag: `impl string in cores { ... }`. Lets two libs both
+    // add e.g. `red()` to string without their generated symbols colliding —
+    // each gets `cores_string_red` / `style_string_red` instead of both stamping
+    // out `string_red`. Method-call dispatch later picks the unambiguous match.
+    let mut ns: string = "";
+    if p.at_kw("in") {
+        p.advance();
+        ns = p.expect_ident();
+    }
     p.expect_op("{");
     let methods: *Vector<Stmt> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
@@ -469,28 +600,105 @@ fn parse_impl(p: *Parser) -> *Stmt {
     }
     p.expect_op("}");
     let s: *Stmt = stmt_impl(target, methods, line, col);
-    if s != null { s.type_params = tps; }
+    if s != null {
+        s.type_params = tps;
+        s.type_param_bounds = tps_bounds;
+        if !ns.eq("") { s.import_path = ns; }
+        if !trait_name.eq("") {
+            s.impl_trait_name = trait_name;
+            // Inside `impl Trait for T { ... }`, `Self` in method signatures
+            // refers to T. Substitute now so later passes don't have to know
+            // about the trait-context.
+            substitute_self_in_methods(methods, target);
+        }
+    }
     return s;
+}
+
+// Replace any TY_NAMED("Self") in the param/return types of `methods`
+// with the concrete `target` type. Vector.get returns by value, so we
+// must `.set()` the rewritten Param/Stmt back in place.
+pub fn substitute_self_in_methods(methods: *Vector<Stmt>, target: *Type) {
+    if methods == null || target == null { return; }
+    for let i: int = 0; i < methods.len(); i++ {
+        let mut m: Stmt = methods.get(i);
+        if m.fn_params != null {
+            for let j: int = 0; j < m.fn_params.len(); j++ {
+                let mut p: Param = m.fn_params.get(j);
+                if p.ty != null { p.ty = substitute_self_in_type(p.ty, target); }
+                m.fn_params.set(j, p);
+            }
+        }
+        if m.fn_ret_ty != null { m.fn_ret_ty = substitute_self_in_type(m.fn_ret_ty, target); }
+        methods.set(i, m);
+    }
+}
+
+fn substitute_self_in_type(t: *Type, target: *Type) -> *Type {
+    if t == null { return null; }
+    if t.kind == TY_NAMED && t.name.eq("Self") { return target; }
+    if t.inner != null { t.inner = substitute_self_in_type(t.inner, target); }
+    if t.fnptr_ret != null { t.fnptr_ret = substitute_self_in_type(t.fnptr_ret, target); }
+    return t;
 }
 
 fn parse_import(p: *Parser) -> *Stmt {
     let line: int = p.current.line;
     let col: int = p.current.column;
     p.advance(); // 'import'
-    let mut path: string = "";
+    // Only path-based imports are supported. The path segments map straight
+    // to the filesystem (`a::b::c` -> `a/b/c.glide`); there's no
+    // `mod.glide` indirection. Forms accepted:
+    //   import a;                    -> load `a.glide`, all pub visible
+    //   import a::b::c::Item;        -> just `Item` from `a/b/c.glide`
+    //   import a::b::c::{X, Y};      -> selective list
+    //   import a::b::c::*;           -> all pub from `a/b/c.glide`
     if p.current.kind == TOK_STRING {
-        path = p.current.lexeme;
-        p.advance();
-    } else {
-        // identifier path: foo::bar
-        path = p.expect_ident();
-        while p.eat_op("::") {
-            let part: string = p.expect_ident();
-            path = path.concat("/").concat(part);
-        }
+        p.err("string-literal imports were removed; use `import a::b::Item;` instead");
+        // skip to ';' so the rest of the file still parses
+        while !p.at_op(";") && !p.at_eof() { p.advance(); }
+        p.eat_op(";");
+        return null;
     }
+    let mut path: string = "";
+    let mut items: *Vector<string> = null;
+    let segs: *Vector<string> = Vector::new();
+    let collected: *Vector<string> = Vector::new();
+    let mut wildcard: bool = false;
+    segs.push(p.expect_ident());
+    while p.at_op("::") {
+        p.advance();
+        if p.at_op("{") {
+            p.advance();
+            while !p.at_op("}") && !p.at_eof() {
+                collected.push(p.expect_ident());
+                if !p.eat_op(",") { break; }
+            }
+            p.expect_op("}");
+            break;
+        }
+        if p.at_op("*") {
+            p.advance();
+            wildcard = true;
+            break;
+        }
+        segs.push(p.expect_ident());
+    }
+    if collected.len() > 0 { items = collected; }
+    // Build "/"-joined file path from ALL segments. The loader probes the
+    // filesystem to decide whether the trailing segment names a file (module
+    // import) or an item from the parent file. Wildcards / brace-lists
+    // already specify items, so they always target the full path as a file.
+    for let i: int = 0; i < segs.len(); i++ {
+        if i > 0 { path = path.concat("/"); }
+        path = path.concat(segs.get(i));
+    }
+    path = path.concat(".glide");
     p.expect_op(";");
-    return stmt_import(path, line, col);
+    let s: *Stmt = stmt_import(path, line, col);
+    s.imported_items = items;
+    s.import_wildcard = wildcard;
+    return s;
 }
 
 fn parse_block(p: *Parser) -> *Vector<Stmt> {
@@ -610,6 +818,14 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         return s;
     }
     if p.at_kw("asm") { return parse_asm_block(p); }
+    // `c_raw! { ... }` raw payload — captured by the lexer as TOK_RAW_BLOCK.
+    if p.current.kind == TOK_RAW_BLOCK {
+        let line: int = p.current.line;
+        let col: int = p.current.column;
+        let body: string = p.current.lexeme;
+        p.advance();
+        return stmt_craw(body, line, col);
+    }
     if p.at_kw("let") { return parse_let(p); }
     if p.at_kw("const") { return parse_const(p); }
     if p.at_kw("return") { return parse_return(p); }
@@ -963,6 +1179,16 @@ fn parse_type(p: *Parser) -> *Type {
         let inner: *Type = parse_type(p);
         return ty_pointer(inner);
     }
+    // `dyn TraitName` - trait object. Must appear behind a pointer
+    // (`*dyn Trait`) since the size depends on the runtime type.
+    if p.at_kw("dyn") {
+        p.advance();
+        let name: string = p.expect_ident();
+        let t: *Type = calloc(1, sizeof(Type)) as *Type;
+        t.kind = TY_DYN;
+        t.name = name;
+        return t;
+    }
     if p.eat_op("&") {
         if p.eat_kw("mut") {
             let inner: *Type = parse_type(p);
@@ -1055,7 +1281,17 @@ fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
         // member .  (with macro-call form `.name!(args)`)
         if p.at_op(".") {
             p.advance();
-            let mname: string = p.expect_ident();
+            let mut mname: string = p.expect_ident();
+            // Qualified method call `expr.NS::method(...)` — disambiguates when
+            // multiple `impl T in NS { ... }` blocks register the same method
+            // name. We encode the namespace into the member field as
+            // `NS::method` (a single string with `::` inside) so codegen can
+            // split it later and emit `NS_T_method(receiver, args)` directly.
+            if p.at_op("::") {
+                p.advance();
+                let real: string = p.expect_ident();
+                mname = mname.concat("::").concat(real);
+            }
             if p.at_op("!") && p.peek_op("(") {
                 p.advance(); // '!'
                 p.advance(); // '('
@@ -1311,10 +1547,19 @@ fn parse_prefix(p: *Parser) -> *Expr {
     }
     if tok.kind == TOK_IDENT {
         p.advance();
-        // `name::member`?  (also `name::macro!(args)` — type-attached macro)
+        // Multi-segment path `a::b::c::Item[::method]`. The full prefix lives
+        // in `str_val` and the trailing segment goes to `field`; codegen looks
+        // the joined `prefix::field` up in the alias table (modules) and
+        // falls back to the legacy 2-segment `Type_method` resolver.
         if p.at_op("::") {
             p.advance();
-            let member: string = p.expect_ident();
+            let mut prefix: string = tok.lexeme;
+            let mut last: string = p.expect_ident();
+            while p.at_op("::") {
+                p.advance();
+                prefix = prefix.concat("::").concat(last);
+                last = p.expect_ident();
+            }
             if p.at_op("!") && p.peek_op("(") {
                 p.advance(); // '!'
                 p.advance(); // '('
@@ -1325,11 +1570,11 @@ fn parse_prefix(p: *Parser) -> *Expr {
                     if !p.eat_op(",") { break; }
                 }
                 p.expect_op(")");
-                let me: *Expr = expr_macro(member, margs, line, col);
-                me.macro_owner = tok.lexeme;
+                let me: *Expr = expr_macro(last, margs, line, col);
+                me.macro_owner = prefix;
                 return me;
             }
-            return expr_path(tok.lexeme, member, line, col);
+            return expr_path(prefix, last, line, col);
         }
         // `name!(...)` macro call?
         if p.at_op("!") && p.peek_op("(") {
@@ -1342,6 +1587,32 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 if !p.eat_op(",") { break; }
             }
             p.expect_op(")");
+            // Compile-time builtin: include_str!("path") → reads the file at parse
+            // time and replaces the call with a string literal of its contents.
+            // The file's raw bytes get pre-escaped into Glide-source form (raw `"`
+            // becomes `\"`, raw newline becomes `\n`-text, etc) so the codegen's
+            // verbatim string-literal emission produces valid C.
+            if tok.lexeme.eq("include_str") && args.len() == 1 {
+                let arg: Expr = args.get(0);
+                if arg.kind == EX_STRING {
+                    let raw: string = read_file(arg.str_val);
+                    let mut esc: string = "";
+                    let n: int = raw.len();
+                    let mut k: int = 0;
+                    while k < n {
+                        let c: char = raw.at(k);
+                        let v: int = c.to_int();
+                        if v == 34 { esc = esc.concat("\\\""); }
+                        else if v == 92 { esc = esc.concat("\\\\"); }
+                        else if v == 10 { esc = esc.concat("\\n"); }
+                        else if v == 13 { esc = esc.concat("\\r"); }
+                        else if v == 9  { esc = esc.concat("\\t"); }
+                        else { esc = esc.concat(raw.substring(k, k + 1)); }
+                        k = k + 1;
+                    }
+                    return expr_string(esc, line, col);
+                }
+            }
             return expr_macro(tok.lexeme, args, line, col);
         }
         // Struct literal: `TypeName { name: value, ... }`. Heuristic: only when
@@ -1393,14 +1664,14 @@ fn parse_prefix(p: *Parser) -> *Expr {
 
 // ---- helpers -------------------------------------------------------------
 
-fn parse_int_lexeme(s: string) -> int {
+fn parse_int_lexeme(s: string) -> i64 {
     let n: int = s.len();
-    let mut v: int = 0;
+    let mut v: i64 = 0;
     for let i: int = 0; i < n; i++ {
         let c: char = s.at(i);
         let ci: int = c.to_int();
         if ci == 95 { continue; } // skip _
-        v = v * 10 + (ci - 48);
+        v = v * 10 + ((ci - 48) as i64);
     }
     return v;
 }

@@ -1,3 +1,5 @@
+import stdlib::hashmap::*;
+
 // Minimal JSON parser + builder for the LSP transport.
 //
 // Parser: parses a UTF-8 JSON string into a JsonValue tree. Numbers are
@@ -14,13 +16,13 @@ pub const JSON_ARRAY: int = 4;
 pub const JSON_OBJECT: int = 5;
 
 pub struct JsonValue {
-    kind: int,
-    b: bool,
-    i: int,
-    s: string,
-    arr: *Vector<JsonValue>,
-    obj_keys: *Vector<string>,
-    obj_vals: *Vector<JsonValue>,
+    pub kind: int,
+    pub b: bool,
+    pub i: int,
+    pub s: string,
+    pub arr: *Vector<JsonValue>,
+    pub obj_keys: *Vector<string>,
+    pub obj_vals: *Vector<JsonValue>,
 }
 
 pub fn json_null() -> *JsonValue {
@@ -127,9 +129,9 @@ pub fn json_is_null(v: *JsonValue) -> bool {
 // ---- parser -------------------------------------------------------------
 
 pub struct JsonParser {
-    src: string,
-    pos: int,
-    n: int,
+    pub src: string,
+    pub pos: int,
+    pub n: int,
 }
 
 fn jp_peek(p: *JsonParser) -> int {

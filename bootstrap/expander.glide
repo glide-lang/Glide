@@ -1,3 +1,6 @@
+import stdlib::hashmap::*;
+import ast;
+
 // Macro expander. Runs after parsing, before typer/codegen.
 //
 // v1 supports:
