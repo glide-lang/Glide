@@ -1,5 +1,18 @@
-// Glide-in-Glide type checker. Walks the AST produced by parser.glide
-// and verifies type correctness. First pass: minimal subset.
+// Typer — semantic analysis on the AST.
+//
+// Runs in two passes:
+//   1. `pre_register` — index every fn signature, struct decl, trait, impl,
+//      and macro reachable from the root. Builds `g.impl_set`, the trait/type
+//      table the bound checker relies on. Also resolves module aliases from
+//      `import` so qualified paths (`stdlib::math::min_int`) become callable.
+//   2. `check` — walk stmts and exprs, attaching types to every node, raising
+//      diagnostics for type mismatches, undefined names, missing trait
+//      methods, unsatisfied generic bounds (`<T: Render>`), null safety,
+//      arena-not-freed, unused locals, etc.
+//
+// Generic functions are typechecked with TY_NAMED placeholders for type
+// parameters; monomorphization happens later in codegen. Borrow rules
+// (`&` / `&mut`) are enforced here without lifetime annotations.
 
 import stdlib::hashmap::*;
 import ast;
