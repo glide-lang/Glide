@@ -1,6 +1,7 @@
-// Mutable byte buffer. Backed by malloc'd memory; doubles capacity on grow.
-// Use this for building up binary payloads or string-like buffers when you
-// don't want the per-concat allocation that string ops trigger.
+// Mutable byte buffer. Backed by `malloc`'d memory; capacity doubles on
+// grow. Use this for building up binary payloads or string-like buffers
+// when you don't want the per-concat allocation that string operators
+// trigger.
 
 extern fn realloc(p: *void, n: usize) -> *void;
 
@@ -11,6 +12,14 @@ pub struct ByteBuffer {
 }
 
 impl ByteBuffer {
+    /// Create an empty buffer with an initial capacity of 16 bytes.
+    /// Pair with `defer .free()`.
+    ///
+    /// ```glide
+    /// let b: *ByteBuffer = ByteBuffer::new();
+    /// defer b.free();
+    /// b.push_str("hello");
+    /// ```
     pub fn new() -> *ByteBuffer {
         let b: *ByteBuffer = malloc(sizeof(ByteBuffer)) as *ByteBuffer;
         b.data = malloc(16) as *u8;
@@ -19,12 +28,22 @@ impl ByteBuffer {
         return b;
     }
 
+    /// Release the data buffer and the struct itself. After `free` the
+    /// pointer is dangling; do not touch it again.
     pub fn free(self: *ByteBuffer) {
         free(self.data as *void);
         free(self as *void);
     }
 
+    /// Number of bytes currently in the buffer.
+    ///
+    /// ```glide
+    /// b.push_str("abc");
+    /// b.len();   // 3
+    /// ```
     pub fn len(self: *ByteBuffer) -> int { return self.len; }
+
+    /// Allocated capacity. Always `>= len()`.
     pub fn cap(self: *ByteBuffer) -> int { return self.cap; }
 
     fn ensure(self: *ByteBuffer, want: int) {
@@ -35,12 +54,24 @@ impl ByteBuffer {
         self.cap = newcap;
     }
 
+    /// Append a single byte. Reallocates (capacity doubles) when the
+    /// buffer is full, so the amortised cost is O(1).
+    ///
+    /// ```glide
+    /// b.push(65 as u8);   // 'A'
+    /// ```
     pub fn push(self: *ByteBuffer, b: u8) {
         self.ensure(self.len + 1);
         self.data[self.len] = b;
         self.len = self.len + 1;
     }
 
+    /// Append every byte of `s` (no NUL is appended). Useful for
+    /// building up an outgoing wire payload.
+    ///
+    /// ```glide
+    /// b.push_str("HTTP/1.1 200 OK\r\n");
+    /// ```
     pub fn push_str(self: *ByteBuffer, s: string) {
         let n: int = s.len();
         self.ensure(self.len + n);
@@ -52,14 +83,34 @@ impl ByteBuffer {
         self.len = self.len + n;
     }
 
+    /// Read the byte at index `i`. **No bounds check**; reading past
+    /// `len()` is undefined behaviour.
+    ///
+    /// ```glide
+    /// let first: u8 = b.at(0);
+    /// ```
     pub fn at(self: *ByteBuffer, i: int) -> u8 { return self.data[i]; }
 
+    /// Reset `len` to `0`. Capacity is preserved so subsequent pushes
+    /// don't reallocate.
+    ///
+    /// ```glide
+    /// b.clear();   // ready to reuse for the next request
+    /// ```
     pub fn clear(self: *ByteBuffer) { self.len = 0; }
 
-    /// Borrow the buffer as a NUL-terminated string. Mutates `self` to ensure
-    /// the trailing NUL — caller shouldn't push more after this without
-    /// realising the slot it took. Returned string is valid until the next
-    /// `push` / `clear` / `free`.
+    /// Borrow the buffer as a NUL-terminated string. Mutates `self` to
+    /// install the trailing NUL — pushing more bytes after this overwrites
+    /// the terminator silently. The returned string aliases `self.data`,
+    /// so it stays valid until the next `push` / `clear` / `free`.
+    ///
+    /// ```glide
+    /// let b: *ByteBuffer = ByteBuffer::new();
+    /// defer b.free();
+    /// b.push_str("hello, ");
+    /// b.push_str("world");
+    /// println!(b.as_string());   // "hello, world"
+    /// ```
     pub fn as_string(self: *ByteBuffer) -> string {
         self.ensure(self.len + 1);
         self.data[self.len] = 0 as u8;
