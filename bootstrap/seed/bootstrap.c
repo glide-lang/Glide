@@ -28,6 +28,14 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
 static int __glide_char_to_int(char c) { return (int)(unsigned char)c; }
 static bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }
 static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+/* Wrap a single byte into a fresh 1-char string so user code can push it into a
+   builder (concat etc.). The byte is re-allocated each call — fine for the
+   one-shot helper case; tight loops should buffer differently. */
+static const char* __glide_char_to_string(char c) {
+    char* out = (char*)malloc(2);
+    out[0] = c; out[1] = 0;
+    return out;
+}
 static int __glide_int_abs(int n) { return n < 0 ? -n : n; }
 static const char* __glide_int_to_string(int n) {
     char buf[32];
@@ -209,6 +217,87 @@ static int __glide_is_windows(void) {
     return 0;
 #endif
 }
+// `__glide_list_dir`: newline-separated, sorted listing of files under
+// `path` whose name ends in `suffix` (pass "" to list everything). Returns
+// "" on missing dir. Same body lives in main.glide as a c_raw block so the
+// compiler can bootstrap from older runtimes — guard avoids dup definition.
+#ifndef GLIDE_LIST_DIR_DEFINED
+#define GLIDE_LIST_DIR_DEFINED
+static int __glide_strcmp_qsort(const void* a, const void* b) {
+    const char* x = *(const char* const*)a;
+    const char* y = *(const char* const*)b;
+    return strcmp(x, y);
+}
+#ifdef _WIN32
+static const char* __glide_list_dir(const char* path, const char* suffix) {
+    char pattern[1024];
+    snprintf(pattern, sizeof(pattern), "%s\\*", path);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return "";
+    char** names = NULL; int n = 0; int cap = 0;
+    size_t suf_n = suffix ? strlen(suffix) : 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const char* nm = fd.cFileName;
+        size_t nm_n = strlen(nm);
+        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+        names[n++] = dup;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    if (n == 0) { free(names); return ""; }
+    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+    char* out = (char*)malloc(total);
+    size_t off = 0;
+    for (int i = 0; i < n; i++) {
+        size_t l = strlen(names[i]);
+        memcpy(out + off, names[i], l); off += l;
+        if (i + 1 < n) out[off++] = '\n';
+        free(names[i]);
+    }
+    out[off] = 0;
+    free(names);
+    return out;
+}
+#else
+#include <dirent.h>
+static const char* __glide_list_dir(const char* path, const char* suffix) {
+    DIR* d = opendir(path);
+    if (!d) return "";
+    char** names = NULL; int n = 0; int cap = 0;
+    size_t suf_n = suffix ? strlen(suffix) : 0;
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        const char* nm = e->d_name;
+        if (nm[0] == '.') continue;
+        size_t nm_n = strlen(nm);
+        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+        names[n++] = dup;
+    }
+    closedir(d);
+    if (n == 0) { free(names); return ""; }
+    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+    char* out = (char*)malloc(total);
+    size_t off = 0;
+    for (int i = 0; i < n; i++) {
+        size_t l = strlen(names[i]);
+        memcpy(out + off, names[i], l); off += l;
+        if (i + 1 < n) out[off++] = '\n';
+        free(names[i]);
+    }
+    out[off] = 0;
+    free(names);
+    return out;
+}
+#endif
+#endif
+
 #ifdef _WIN32
 static const char* __glide_exe_path(void) {
     static char buf[1024];
@@ -258,22 +347,1089 @@ static void Arena_free(Arena* a) { free(a->head); free(a); }
 static int Arena_used(Arena* a) { return a->used; }
 static void Arena_reset(Arena* a) { a->used = 0; }
 
+
+
+
+    #ifndef GLIDE_LIST_DIR_DEFINED
+    #define GLIDE_LIST_DIR_DEFINED
+    static int __glide_strcmp_qsort(const void* a, const void* b) {
+        const char* x = *(const char* const*)a;
+        const char* y = *(const char* const*)b;
+        return strcmp(x, y);
+    }
+    #ifdef _WIN32
+    static const char* __glide_list_dir(const char* path, const char* suffix) {
+        char pattern[1024];
+        snprintf(pattern, sizeof(pattern), "%s\\*", path);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        size_t suf_n = suffix ? strlen(suffix) : 0;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            const char* nm = fd.cFileName;
+            size_t nm_n = strlen(nm);
+            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
+    }
+    #else
+    #include <dirent.h>
+    static const char* __glide_list_dir(const char* path, const char* suffix) {
+        DIR* d = opendir(path);
+        if (!d) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        size_t suf_n = suffix ? strlen(suffix) : 0;
+        struct dirent* e;
+        while ((e = readdir(d)) != NULL) {
+            const char* nm = e->d_name;
+            if (nm[0] == '.') continue;
+            size_t nm_n = strlen(nm);
+            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        }
+        closedir(d);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
+    }
+    #endif
+    #endif
+
+
+// ============================ scheduler runtime ============================
+#include <pthread.h>
+#include <stdatomic.h>
+#include <time.h>
+#include <stdint.h>
+#include <stdlib.h>
+#ifdef _WIN32
+# include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */
+#else
+# include <unistd.h>
+# include <sys/mman.h>
+#endif
+
+/* Spinlock — 5-10× faster than pthread_mutex for the short critical
+   sections we use (queue push/pop, pool head update). Falls back to
+   `pause` on contention to be hyperthread-friendly. */
+typedef atomic_int __glide_spin_t;
+static inline void __glide_spin_lock(__glide_spin_t* l) {
+    while (atomic_exchange_explicit(l, 1, memory_order_acquire) == 1) {
+        while (atomic_load_explicit(l, memory_order_relaxed) == 1) {
+#if defined(__x86_64__) || defined(_M_X64)
+            __asm__ __volatile__("pause" ::: "memory");
+#endif
+        }
+    }
+}
+static inline void __glide_spin_unlock(__glide_spin_t* l) {
+    atomic_store_explicit(l, 0, memory_order_release);
+}
+
+/* Stack defaults: configured size + 4 KB guard, page-rounded up.
+   With the default 4 KB the total reservation is 8 KB virtual per coro.
+   Linux/Mac mmap commits pages lazily; Windows commits virtual but the
+   working-set is bound only on first access. Either way idle coros pay
+   ~one 4 KB page in physical RAM.
+   Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)
+   need pointer-map metadata + copy/relocate — TBD. */
+#define __GLIDE_STACK_GUARD 4096
+static int __glide_stack_size = 4096;
+
+/* Custom assembly context switch — replaces Win32 Fibers and POSIX
+   ucontext.h with our own portable, ABI-correct register flip. The
+   reason: Fibers crash if the same fiber is SwitchToFiber'd by
+   different OS threads over its lifetime, which forces us to pin
+   coros to a single worker and rules out work-stealing. With our
+   own switch we own the entire state, so a coro can move between
+   workers safely.
+
+   Layout: callee-saved GP regs + (Win64 only) callee-saved XMM6-15.
+   Caller-saved registers (rax/rcx/rdx/...) were already flushed to the
+   caller's stack frame by the compiler before it called us, so we don't
+   touch them. SysV marks XMM as caller-saved → no extra work there. */
+typedef struct {
+#ifdef _WIN32
+    void* rsp; void* rbx; void* rbp;
+    void* rdi; void* rsi;
+    void* r12; void* r13; void* r14; void* r15;
+    char xmm[160];
+#else
+    void* rsp; void* rbx; void* rbp;
+    void* r12; void* r13; void* r14; void* r15;
+#endif
+} __glide_coro_ctx;
+
+__attribute__((naked, noinline))
+static void __glide_ctx_switch(
+    __glide_coro_ctx* from __attribute__((unused)),
+    __glide_coro_ctx* to   __attribute__((unused))) {
+#ifdef _WIN32
+    /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */
+    __asm__(
+        "movq %rsp,   0(%rcx)\n\t"
+        "movq %rbx,   8(%rcx)\n\t"
+        "movq %rbp,  16(%rcx)\n\t"
+        "movq %rdi,  24(%rcx)\n\t"
+        "movq %rsi,  32(%rcx)\n\t"
+        "movq %r12,  40(%rcx)\n\t"
+        "movq %r13,  48(%rcx)\n\t"
+        "movq %r14,  56(%rcx)\n\t"
+        "movq %r15,  64(%rcx)\n\t"
+        "movdqu %xmm6,   72(%rcx)\n\t"
+        "movdqu %xmm7,   88(%rcx)\n\t"
+        "movdqu %xmm8,  104(%rcx)\n\t"
+        "movdqu %xmm9,  120(%rcx)\n\t"
+        "movdqu %xmm10, 136(%rcx)\n\t"
+        "movdqu %xmm11, 152(%rcx)\n\t"
+        "movdqu %xmm12, 168(%rcx)\n\t"
+        "movdqu %xmm13, 184(%rcx)\n\t"
+        "movdqu %xmm14, 200(%rcx)\n\t"
+        "movdqu %xmm15, 216(%rcx)\n\t"
+        "movq  0(%rdx), %rsp\n\t"
+        "movq  8(%rdx), %rbx\n\t"
+        "movq 16(%rdx), %rbp\n\t"
+        "movq 24(%rdx), %rdi\n\t"
+        "movq 32(%rdx), %rsi\n\t"
+        "movq 40(%rdx), %r12\n\t"
+        "movq 48(%rdx), %r13\n\t"
+        "movq 56(%rdx), %r14\n\t"
+        "movq 64(%rdx), %r15\n\t"
+        "movdqu  72(%rdx), %xmm6\n\t"
+        "movdqu  88(%rdx), %xmm7\n\t"
+        "movdqu 104(%rdx), %xmm8\n\t"
+        "movdqu 120(%rdx), %xmm9\n\t"
+        "movdqu 136(%rdx), %xmm10\n\t"
+        "movdqu 152(%rdx), %xmm11\n\t"
+        "movdqu 168(%rdx), %xmm12\n\t"
+        "movdqu 184(%rdx), %xmm13\n\t"
+        "movdqu 200(%rdx), %xmm14\n\t"
+        "movdqu 216(%rdx), %xmm15\n\t"
+        "ret\n\t"
+    );
+#else
+    /* SysV AMD64 ABI: from=%rdi, to=%rsi */
+    __asm__(
+        "movq %rsp,   0(%rdi)\n\t"
+        "movq %rbx,   8(%rdi)\n\t"
+        "movq %rbp,  16(%rdi)\n\t"
+        "movq %r12,  24(%rdi)\n\t"
+        "movq %r13,  32(%rdi)\n\t"
+        "movq %r14,  40(%rdi)\n\t"
+        "movq %r15,  48(%rdi)\n\t"
+        "movq  0(%rsi), %rsp\n\t"
+        "movq  8(%rsi), %rbx\n\t"
+        "movq 16(%rsi), %rbp\n\t"
+        "movq 24(%rsi), %r12\n\t"
+        "movq 32(%rsi), %r13\n\t"
+        "movq 40(%rsi), %r14\n\t"
+        "movq 48(%rsi), %r15\n\t"
+        "ret\n\t"
+    );
+#endif
+}
+
+typedef void* (*__glide_task_fn)(void*);
+typedef struct __glide_task {
+    __glide_coro_ctx    ctx;     /* register save area */
+    void*               stack;   /* mmap/VirtualAlloc base (low addr) */
+    size_t              stack_total; /* bytes including guard page */
+    __glide_task_fn     entry;
+    void*               arg;
+    int                 state; /* 0=ready 1=running 2=blocked 3=done */
+    int                 home_worker; /* worker that currently owns this coro;
+                                       updated on steal so future unparks land
+                                       on the thief's queue (cache-warm). */
+    int                 has_run;     /* 0 if never run; once 1, we never
+                                       migrate the coro across OS threads (Win64
+                                       SEH/TIB invariants make resumed-on-other-
+                                       thread fragile, so first-run-only steal). */
+    struct __glide_task* next;       /* link in per-worker ready queue */
+    struct __glide_task* wait_next;  /* link in chan wait list */
+    /* Park hand-off: if non-null on switch-back to worker fiber,
+       worker links self into *park_list and unlocks park_lock.
+       Done after the switch so unpark can never race with a
+       still-mid-switch coro. */
+    pthread_mutex_t*     park_lock;
+    struct __glide_task** park_list;
+} __glide_task;
+
+/* Forward decls — out-of-order references between sleep_ms / __glide_park /
+   __glide_timer_main / sched_init / task pool helpers used by worker_main. */
+static void* __glide_timer_main(void* unused);
+int __glide_park(pthread_mutex_t* lock, __glide_task** list);
+void __glide_free_task(__glide_task* t);
+static void __glide_reset_ctx(__glide_task* t);
+static void __glide_flush_main_buf(void);
+
+/* Per-worker queue: each worker pops only from its own queue, so a
+   fiber that first ran on worker A always continues on A. This avoids
+   cross-thread fiber migration which crashes Win32 Fibers. Stealing
+   between workers comes in Phase 1.2 (with proper atomic ownership). */
+typedef struct {
+    __glide_spin_t  spin;
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;
+    __glide_task*   head;
+    __glide_task*   tail;
+    atomic_int      idle;
+} __glide_wq;
+
+/* Sorted sleep queue for the timer thread. Coroutines that call
+   sleep_ms park here instead of blocking their worker. */
+typedef struct __glide_timer_node {
+    long long              deadline_ns;
+    __glide_task*          task;
+    struct __glide_timer_node* next;
+} __glide_timer_node;
+static __glide_timer_node* __glide_timer_head = NULL;
+static pthread_mutex_t __glide_timer_mu;
+static pthread_cond_t  __glide_timer_cv;
+static pthread_t __glide_timer_thread;
+static int __glide_timer_inited = 0;
+
+static __glide_wq* __glide_wqs = NULL;
+static int __glide_q_inited = 0;
+static int __glide_n_workers = 0;
+static pthread_t* __glide_workers = NULL;
+/* Pending count, sharded per worker so increments and decrements don't all bounce
+   the same cache line. Spawn increments shards[home_worker]; the worker that runs
+   the task decrements shards[my_worker]. Sum across shards = total alive tasks.
+   Each shard is its own cache line to kill false sharing between threads. */
+typedef struct {
+    atomic_int v;
+    char _pad[60];
+} __glide_pending_shard_t;
+static __glide_pending_shard_t* __glide_pending_shards = NULL;
+static int __glide_pending_n_shards = 0;
+static int __glide_pending_sum(void) {
+    int sum = 0;
+    int n = __glide_pending_n_shards;
+    for (int i = 0; i < n; i++) {
+        sum += atomic_load_explicit(&__glide_pending_shards[i].v, memory_order_acquire);
+    }
+    return sum;
+}
+static atomic_int __glide_shutdown = 0;
+static atomic_int __glide_rr = 0;        /* round-robin spawn counter */
+
+static _Thread_local __glide_task* __glide_cur_task = NULL;
+static _Thread_local int __glide_my_worker = -1;
+/* Worker's saved context. Each OS thread has its own — when a coro
+   parks/yields, we ctx_switch INTO this so the worker resumes its
+   loop right after the call site. */
+static _Thread_local __glide_coro_ctx __glide_worker_ctx;
+#ifdef _WIN32
+/* Original OS-thread stack range — saved on worker entry, restored
+   when no coro is running. Win64 SEH walks the stack via TIB, so we
+   must point TIB at the coro's stack while it runs and back at the
+   OS thread's stack between switches. Without this, any code path that
+   raises an exception or probes the stack from a migrated coro reads
+   garbage and crashes. */
+static _Thread_local void* __glide_orig_stack_base = NULL;
+static _Thread_local void* __glide_orig_stack_limit = NULL;
+static inline void __glide_tib_set_stack(void* base, void* limit) {
+    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+    tib->StackBase = base;
+    tib->StackLimit = limit;
+}
+#endif
+
+static void __glide_q_push_to(int wid, __glide_task* t) {
+    __glide_wq* q = &__glide_wqs[wid];
+    __glide_spin_lock(&q->spin);
+    t->next = NULL;
+    if (q->tail) q->tail->next = t; else q->head = t;
+    q->tail = t;
+    __glide_spin_unlock(&q->spin);
+    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {
+        pthread_mutex_lock(&q->mu);
+        pthread_cond_signal(&q->cv);
+        pthread_mutex_unlock(&q->mu);
+    }
+}
+
+/* Splice a pre-built chain (head ... tail, n nodes, NULL-terminated) onto
+   the back of a worker's queue under one spinlock acquisition. Used by main's
+   batched-push path so 32 spawns cost ~1 lock instead of 32. */
+static void __glide_q_push_chain(int wid, __glide_task* head, __glide_task* tail, int n) {
+    if (!head) return; (void)n;
+    __glide_wq* q = &__glide_wqs[wid];
+    __glide_spin_lock(&q->spin);
+    if (q->tail) q->tail->next = head; else q->head = head;
+    q->tail = tail;
+    __glide_spin_unlock(&q->spin);
+    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {
+        pthread_mutex_lock(&q->mu);
+        pthread_cond_broadcast(&q->cv);
+        pthread_mutex_unlock(&q->mu);
+    }
+}
+
+static int __glide_pick_worker(void) {
+    /* Inside a coro: same worker as caller (cheap, keeps cache hot).
+       Outside (main): always W0 — work-stealing redistributes. This avoids
+       the per-spawn atomic+cross-thread cache bounce on N target queues. */
+    if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;
+    return 0;
+}
+
+/* Work-stealing: when our queue is empty, try grabbing the head of
+   another worker's queue (random victim, walk all on miss). On steal
+   we adopt the task as our own (home_worker = me) so future unparks
+   stay cache-warm here. Now safe to migrate because our custom ctx
+   switch is stateless across threads — no Win32 Fiber crash trap. */
+static atomic_uint __glide_steal_rr = 0;
+static __glide_task* __glide_try_steal(void) {
+    int n = __glide_n_workers;
+    if (n <= 1) return NULL;
+    int my = __glide_my_worker;
+    unsigned int seed = atomic_fetch_add_explicit(&__glide_steal_rr, 1, memory_order_relaxed);
+    int start = (int)(seed % (unsigned int)n);
+    for (int i = 0; i < n; i++) {
+        int v = (start + i) % n;
+        if (v == my) continue;
+        __glide_wq* q = &__glide_wqs[v];
+        __glide_spin_lock(&q->spin);
+        /* Walk queue head: only first-run-untouched tasks are stealable. */
+        __glide_task* prev = NULL;
+        __glide_task* t = q->head;
+        while (t && t->has_run) { prev = t; t = t->next; }
+        if (t) {
+            if (prev) prev->next = t->next; else q->head = t->next;
+            if (q->tail == t) q->tail = prev;
+            __glide_spin_unlock(&q->spin);
+            t->home_worker = my;
+            t->next = NULL;
+            return t;
+        }
+        __glide_spin_unlock(&q->spin);
+    }
+    return NULL;
+}
+
+static __glide_task* __glide_q_pop_my(void) {
+    __glide_wq* q = &__glide_wqs[__glide_my_worker];
+    while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {
+        __glide_spin_lock(&q->spin);
+        __glide_task* t = q->head;
+        if (t) {
+            q->head = t->next;
+            if (q->head == NULL) q->tail = NULL;
+            __glide_spin_unlock(&q->spin);
+            return t;
+        }
+        __glide_spin_unlock(&q->spin);
+        __glide_task* stolen = __glide_try_steal();
+        if (stolen) return stolen;
+        pthread_mutex_lock(&q->mu);
+        if (q->head || atomic_load(&__glide_shutdown)) {
+            pthread_mutex_unlock(&q->mu);
+            continue;
+        }
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 500000;
+        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+        atomic_store_explicit(&q->idle, 1, memory_order_relaxed);
+        pthread_cond_timedwait(&q->cv, &q->mu, &ts);
+        atomic_store_explicit(&q->idle, 0, memory_order_relaxed);
+        pthread_mutex_unlock(&q->mu);
+    }
+    return NULL;
+}
+
+/* Trampoline reached on a coro's first switch-in. Reads the bound
+   task from TLS (worker_main set __glide_cur_task before switching),
+   runs the user fn, marks done, then hands control back to the worker
+   via ctx_switch. The final switch never returns: we discard the saved
+   ctx (worker is going to free us anyway). */
+static void __glide_coro_trampoline(void) {
+    __glide_task* t = __glide_cur_task;
+    (void)t->entry(t->arg);
+    t->state = 3;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+    __builtin_unreachable();
+}
+
+/* Stack pool: hold a small free list of recently-freed regions so a
+   spawn-burst doesn't pay mmap+munmap (Linux) / VirtualAlloc+VirtualFree
+   (Win) per coro. Significant on Windows where these are slow syscalls. */
+typedef struct __glide_stack_node {
+    void*  base;
+    size_t total;
+    struct __glide_stack_node* next;
+} __glide_stack_node;
+static __glide_stack_node* __glide_stack_pool = NULL;
+static int __glide_stack_pool_count = 0;
+static const int __GLIDE_STACK_POOL_MAX = 16384;
+static __glide_spin_t __glide_stack_pool_spin = 0;
+
+/* Stack allocator: mmap (POSIX) or VirtualAlloc (Win) so unused pages
+   stay uncommitted (Linux/Mac) and overflow into the guard page raises
+   SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the
+   neighbour stack. Returns the LOW address of the whole region; usable
+   stack starts at `base + __GLIDE_STACK_GUARD`. */
+static void* __glide_alloc_stack(size_t* out_total) {
+    size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;
+    size_t page = 4096;
+    total = (total + page - 1) & ~(page - 1);
+    /* Pool fast path. */
+    __glide_spin_lock(&__glide_stack_pool_spin);
+    __glide_stack_node* n = __glide_stack_pool;
+    while (n && n->total != total) n = n->next;
+    if (n && n->total == total) {
+        /* Unlink first matching node. */
+        __glide_stack_node** p = &__glide_stack_pool;
+        while (*p != n) p = &(*p)->next;
+        *p = n->next;
+        __glide_stack_pool_count--;
+        __glide_spin_unlock(&__glide_stack_pool_spin);
+        void* base = n->base;
+        free(n);
+        *out_total = total;
+        return base;
+    }
+    __glide_spin_unlock(&__glide_stack_pool_spin);
+    void* base;
+#ifdef _WIN32
+    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    if (!base) return NULL;
+    DWORD old;
+    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);
+#else
+    base = mmap(NULL, total, PROT_READ|PROT_WRITE,
+                MAP_ANON|MAP_PRIVATE, -1, 0);
+    if (base == MAP_FAILED) return NULL;
+    mprotect(base, __GLIDE_STACK_GUARD, PROT_NONE);
+#endif
+    *out_total = total;
+    return base;
+}
+
+static void __glide_free_stack(void* base, size_t total) {
+    if (!base) return;
+    /* Hand back to pool if there's room. */
+    __glide_spin_lock(&__glide_stack_pool_spin);
+    if (__glide_stack_pool_count < __GLIDE_STACK_POOL_MAX) {
+        __glide_stack_node* n = (__glide_stack_node*)malloc(sizeof(*n));
+        n->base = base;
+        n->total = total;
+        n->next = __glide_stack_pool;
+        __glide_stack_pool = n;
+        __glide_stack_pool_count++;
+        __glide_spin_unlock(&__glide_stack_pool_spin);
+        return;
+    }
+    __glide_spin_unlock(&__glide_stack_pool_spin);
+#ifdef _WIN32
+    (void)total;
+    VirtualFree(base, 0, MEM_RELEASE);
+#else
+    munmap(base, total);
+#endif
+}
+
+/* Plant trampoline address at the top of the stack so the first
+   ctx_switch into this ctx pops it and `ret`s into the trampoline.
+   16-byte alignment matches the AMD64 call ABI: we save RSP at a
+   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees
+   RSP%16==8 (which is what `call` would have left). */
+static void __glide_coro_init(__glide_task* t) {
+    size_t total = 0;
+    t->stack = __glide_alloc_stack(&total);
+    t->stack_total = total;
+    char* top = (char*)t->stack + total;
+    top -= 16;                       /* headroom — never write past top */
+    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
+    *(void**)sp = (void*)__glide_coro_trampoline;
+    t->ctx.rsp = (void*)sp;
+    t->ctx.rbx = 0; t->ctx.rbp = 0;
+    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;
+#ifdef _WIN32
+    t->ctx.rdi = 0; t->ctx.rsi = 0;
+#endif
+}
+
+static void __glide_coro_destroy(__glide_task* t) {
+    __glide_free_stack(t->stack, t->stack_total);
+    t->stack = NULL;
+    t->stack_total = 0;
+}
+
+static void* __glide_worker_main(void* arg) {
+    __glide_my_worker = (int)(intptr_t)arg;
+#ifdef _WIN32
+    /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit
+       to the coro's region while it runs and back to ours between switches. */
+    {
+        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+        __glide_orig_stack_base = tib->StackBase;
+        __glide_orig_stack_limit = tib->StackLimit;
+    }
+#endif
+    while (!atomic_load(&__glide_shutdown)) {
+        __glide_task* t = __glide_q_pop_my();
+        if (!t) break;
+        __glide_cur_task = t;
+        if (!t->has_run) __glide_reset_ctx(t);
+        t->state = 1;
+        t->has_run = 1;  /* stick to this OS thread from now on */
+#ifdef _WIN32
+        __glide_tib_set_stack((char*)t->stack + t->stack_total, t->stack);
+#endif
+        __glide_ctx_switch(&__glide_worker_ctx, &t->ctx);
+#ifdef _WIN32
+        __glide_tib_set_stack(__glide_orig_stack_base, __glide_orig_stack_limit);
+#endif
+        __glide_cur_task = NULL;
+        if (t->state == 3) {
+            __glide_free_task(t);  /* pool reuse — keeps stack mmap'd */
+            /* Single atomic on this worker's shard. The previous code also did a
+               cross-queue cv broadcast when total pending hit zero, but
+               sched_shutdown busy-waits on pending_sum and broadcasts itself once
+               shutdown=1, so this hot-path broadcast is redundant. */
+            atomic_fetch_sub_explicit(&__glide_pending_shards[__glide_my_worker].v, 1, memory_order_acq_rel);
+        } else if (t->state == 2) {
+            /* Parked. Complete the hand-off: link into wait list,
+               release the lock the parker held. After this point
+               unpark may safely queue the task. */
+            if (t->park_list) {
+                t->wait_next = *t->park_list;
+                *t->park_list = t;
+                t->park_list = NULL;
+            }
+            if (t->park_lock) {
+                pthread_mutex_unlock(t->park_lock);
+                t->park_lock = NULL;
+            }
+        } else {
+            t->state = 0;
+            __glide_q_push_to(t->home_worker, t);
+        }
+    }
+    return NULL;
+}
+
+void __glide_sched_init(void) {
+    if (__glide_q_inited) return;
+    const char* env_stk = getenv("GLIDE_CORO_STACK");
+    if (env_stk) {
+        int n = atoi(env_stk);
+        if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */
+    }
+    const char* env = getenv("GLIDE_WORKERS");
+    if (env) __glide_n_workers = atoi(env);
+    if (__glide_n_workers <= 0) {
+#ifdef _WIN32
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        __glide_n_workers = (int)si.dwNumberOfProcessors;
+#else
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        __glide_n_workers = (n > 0) ? (int)n : 4;
+#endif
+    }
+    __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_mutex_init(&__glide_wqs[i].mu, NULL);
+        pthread_cond_init(&__glide_wqs[i].cv, NULL);
+    }
+    /* One shard per worker plus one for non-coro callers (main / arbitrary OS threads). */
+    __glide_pending_n_shards = __glide_n_workers + 1;
+    __glide_pending_shards = (__glide_pending_shard_t*)calloc(__glide_pending_n_shards, sizeof(__glide_pending_shard_t));
+    __glide_q_inited = 1;
+    __glide_workers = (pthread_t*)malloc(sizeof(pthread_t) * __glide_n_workers);
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_create(&__glide_workers[i], NULL, __glide_worker_main, (void*)(intptr_t)i);
+    }
+    pthread_mutex_init(&__glide_timer_mu, NULL);
+    pthread_cond_init(&__glide_timer_cv, NULL);
+    __glide_timer_inited = 1;
+    pthread_create(&__glide_timer_thread, NULL, __glide_timer_main, NULL);
+}
+
+void __glide_sched_shutdown(void) {
+    if (!__glide_q_inited) return;
+    __glide_flush_main_buf();
+    while (__glide_pending_sum() > 0) {
+        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;
+        nanosleep(&ts, NULL);
+    }
+    atomic_store(&__glide_shutdown, 1);
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_mutex_lock(&__glide_wqs[i].mu);
+        pthread_cond_broadcast(&__glide_wqs[i].cv);
+        pthread_mutex_unlock(&__glide_wqs[i].mu);
+    }
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_join(__glide_workers[i], NULL);
+    }
+    if (__glide_timer_inited) {
+        pthread_mutex_lock(&__glide_timer_mu);
+        pthread_cond_broadcast(&__glide_timer_cv);
+        pthread_mutex_unlock(&__glide_timer_mu);
+        pthread_join(__glide_timer_thread, NULL);
+        __glide_timer_inited = 0;
+    }
+    free(__glide_workers); __glide_workers = NULL;
+    free(__glide_wqs); __glide_wqs = NULL;
+    free(__glide_pending_shards); __glide_pending_shards = NULL;
+    __glide_pending_n_shards = 0;
+    __glide_q_inited = 0;
+}
+
+/* Task pool: full task structs (stack + ctx already initialized). On reuse
+   we just rewind the trampoline pointer at the top of the existing stack —
+   no mmap, no calloc, no setup work. Burst spawns become ~1 mutex + 1 push. */
+static __glide_task* __glide_task_pool = NULL;
+static int __glide_task_pool_count = 0;
+static const int __GLIDE_TASK_POOL_MAX = 16384;
+static __glide_spin_t __glide_task_pool_spin = 0;
+
+/* Per-thread magazine. The global pool's spinlock is the spawn hot-path
+   bottleneck under burst load (13 threads contending). Each thread keeps a
+   small LIFO; alloc/free hit it lock-free, and we only touch the global pool
+   in batches when the magazine fills or drains. Reduces global ops ~32x. */
+#define __GLIDE_TLS_POOL_MAX 256
+#define __GLIDE_TLS_POOL_BATCH 64
+static __thread __glide_task* __glide_tls_pool = NULL;
+static __thread int __glide_tls_pool_count = 0;
+
+static void __glide_reset_ctx(__glide_task* t) {
+    char* top = (char*)t->stack + t->stack_total;
+    top -= 16;
+    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
+    *(void**)sp = (void*)__glide_coro_trampoline;
+    t->ctx.rsp = (void*)sp;
+    /* GP/XMM regs zeroed via 8-byte stores — faster than memset for
+       this fixed-size struct, and the compiler vectorizes if it cares. */
+    t->ctx.rbx = 0; t->ctx.rbp = 0;
+    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;
+#ifdef _WIN32
+    t->ctx.rdi = 0; t->ctx.rsi = 0;
+    /* xmm[160] = 20 × 8 bytes; unrolled clear for branchless write. */
+    uint64_t* x = (uint64_t*)t->ctx.xmm;
+    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;
+    x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;
+    x[16]=0; x[17]=0; x[18]=0; x[19]=0;
+#endif
+}
+
+/* No-op now: state/has_run/wait_next/park_lock/park_list are cleared at FREE time
+   instead, so the spawn hot path on main has fewer stores. The reset_ctx clear
+   already moved to worker_main earlier (gated on has_run==0). Inlined since callers
+   sometimes need the return value. */
+static inline __glide_task* __glide_finish_alloc(__glide_task* t) { return t; }
+
+__glide_task* __glide_alloc_task(void) {
+    /* Magazine fast path: pop without ever touching the spinlock. */
+    __glide_task* t = __glide_tls_pool;
+    if (t) {
+        __glide_tls_pool = t->next;
+        __glide_tls_pool_count--;
+        return __glide_finish_alloc(t);
+    }
+    /* Magazine empty: refill a batch in one global-lock acquisition. */
+    __glide_spin_lock(&__glide_task_pool_spin);
+    t = __glide_task_pool;
+    if (t) {
+        __glide_task_pool = t->next;
+        __glide_task_pool_count--;
+        __glide_task* head = NULL;
+        int taken = 0;
+        while (taken < __GLIDE_TLS_POOL_BATCH - 1 && __glide_task_pool) {
+            __glide_task* x = __glide_task_pool;
+            __glide_task_pool = x->next;
+            __glide_task_pool_count--;
+            x->next = head;
+            head = x;
+            taken++;
+        }
+        __glide_spin_unlock(&__glide_task_pool_spin);
+        __glide_tls_pool = head;
+        __glide_tls_pool_count = taken;
+        return __glide_finish_alloc(t);
+    }
+    __glide_spin_unlock(&__glide_task_pool_spin);
+    /* Pool fully drained: fresh allocation. */
+    t = (__glide_task*)calloc(1, sizeof(__glide_task));
+    __glide_coro_init(t);
+    return t;
+}
+
+void __glide_free_task(__glide_task* t) {
+    /* Reset all the per-task transient fields here, on the worker thread that's
+       freeing — main's spawn hot path was paying for these N stores per task. */
+    t->state = 0; t->has_run = 0;
+    t->wait_next = NULL;
+    t->park_lock = NULL; t->park_list = NULL;
+    if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {
+        t->next = __glide_tls_pool;
+        __glide_tls_pool = t;
+        __glide_tls_pool_count++;
+        return;
+    }
+    /* Magazine full: flush BATCH (this task + last BATCH-1 from TLS) to global. */
+    /* `t` may carry a stale ->next from the run queue; null it so the chain
+       we're about to build terminates cleanly when we walk it for overflow. */
+    t->next = NULL;
+    __glide_task* batch = t;
+    int batch_n = 1;
+    while (batch_n < __GLIDE_TLS_POOL_BATCH && __glide_tls_pool) {
+        __glide_task* x = __glide_tls_pool;
+        __glide_tls_pool = x->next;
+        __glide_tls_pool_count--;
+        x->next = batch;
+        batch = x;
+        batch_n++;
+    }
+    __glide_spin_lock(&__glide_task_pool_spin);
+    int room = __GLIDE_TASK_POOL_MAX - __glide_task_pool_count;
+    int put = (room < batch_n) ? room : batch_n;
+    __glide_task* overflow = batch;
+    if (put > 0) {
+        __glide_task* tail = batch;
+        for (int i = 0; i < put - 1; i++) tail = tail->next;
+        overflow = tail->next;
+        tail->next = __glide_task_pool;
+        __glide_task_pool = batch;
+        __glide_task_pool_count += put;
+    }
+    __glide_spin_unlock(&__glide_task_pool_spin);
+    while (overflow) {
+        __glide_task* x = overflow;
+        overflow = x->next;
+        __glide_coro_destroy(x);
+        free(x);
+    }
+}
+
+/* Per-OS-thread spawn buffer for the from-main path. Batching 32 spawns into
+   one queue lock acquisition cuts spinlock contention dramatically when burst-
+   spawning into W0. pending is incremented immediately (per spawn) so callers'
+   `pending_count()` busy-waits don't observe a stale-low value while tasks sit
+   in the buffer. The flush is triggered by buffer-full, by sched_shutdown, and
+   by pending_count itself (so wait loops can never deadlock on unflushed work). */
+#define __GLIDE_MAIN_BATCH 16
+static _Thread_local __glide_task* __glide_main_buf_head = NULL;
+static _Thread_local __glide_task* __glide_main_buf_tail = NULL;
+static _Thread_local int __glide_main_buf_count = 0;
+static void __glide_flush_main_buf(void) {
+    if (!__glide_main_buf_head) return;
+    __glide_q_push_chain(0, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);
+    __glide_main_buf_head = NULL;
+    __glide_main_buf_tail = NULL;
+    __glide_main_buf_count = 0;
+}
+
+void __glide_spawn(__glide_task_fn fn, void* arg) {
+    __glide_task* t = __glide_alloc_task();
+    t->entry = fn;
+    t->arg = arg;
+    t->home_worker = __glide_pick_worker();
+    /* Increment the SPAWNER's shard, not the home_worker's. With main always
+       picking W0, sharding by home_worker would put every increment on shard[0] and
+       defeat the whole point. Spawner-thread keeps main's stream separate. */
+    int __sidx = (__glide_my_worker >= 0) ? __glide_my_worker : __glide_n_workers;
+    atomic_fetch_add_explicit(&__glide_pending_shards[__sidx].v, 1, memory_order_relaxed);
+    if (__glide_cur_task != NULL && __glide_my_worker >= 0) {
+        /* Inside a coro: same-thread same-queue, spinlock is uncontended. */
+        __glide_q_push_to(t->home_worker, t);
+        return;
+    }
+    /* Outside (main / pthread): buffer locally, flush in batches. */
+    t->next = NULL;
+    if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;
+    else __glide_main_buf_head = t;
+    __glide_main_buf_tail = t;
+    __glide_main_buf_count++;
+    if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) __glide_flush_main_buf();
+}
+
+void yield_now(void) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) return;
+    t->state = 0;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+}
+
+int pending_count(void) {
+    /* Flush any locally-buffered spawns before reading; otherwise a busy-wait
+       like `while pending_count() > 0 {}` could hold tasks in the buffer forever. */
+    if (__glide_cur_task == NULL) __glide_flush_main_buf();
+    return __glide_pending_sum();
+}
+
+int64_t now_ns(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq; static int inited = 0;
+    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }
+    LARGE_INTEGER c; QueryPerformanceCounter(&c);
+    return (int64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+#endif
+}
+
+static long long __glide_monotonic_ns(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq; static int inited = 0;
+    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }
+    LARGE_INTEGER c; QueryPerformanceCounter(&c);
+    return (long long)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+#endif
+}
+
+/* Timer thread: sleeps until the head deadline, unparks expired tasks. */
+static void* __glide_timer_main(void* unused) {
+    (void)unused;
+    pthread_mutex_lock(&__glide_timer_mu);
+    while (!atomic_load(&__glide_shutdown)) {
+        if (__glide_timer_head == NULL) {
+            pthread_cond_wait(&__glide_timer_cv, &__glide_timer_mu);
+            continue;
+        }
+        long long now = __glide_monotonic_ns();
+        if (__glide_timer_head->deadline_ns <= now) {
+            __glide_timer_node* expired = __glide_timer_head;
+            __glide_timer_head = expired->next;
+            __glide_task* t = expired->task;
+            free(expired);
+            pthread_mutex_unlock(&__glide_timer_mu);
+            t->state = 0;
+            __glide_q_push_to(t->home_worker, t);
+            pthread_mutex_lock(&__glide_timer_mu);
+            continue;
+        }
+        long long delta = __glide_timer_head->deadline_ns - now;
+        struct timespec abst;
+#ifdef _WIN32
+        struct timespec _now_rt; clock_gettime(CLOCK_REALTIME, &_now_rt);
+        abst.tv_sec = _now_rt.tv_sec; abst.tv_nsec = _now_rt.tv_nsec;
+#else
+        clock_gettime(CLOCK_REALTIME, &abst);
+#endif
+        long long add_ns = abst.tv_nsec + delta;
+        abst.tv_sec  += (time_t)(add_ns / 1000000000LL);
+        abst.tv_nsec  = (long)(add_ns % 1000000000LL);
+        pthread_cond_timedwait(&__glide_timer_cv, &__glide_timer_mu, &abst);
+    }
+    pthread_mutex_unlock(&__glide_timer_mu);
+    return NULL;
+}
+
+void sleep_ms(int ms) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) {
+        /* Not in a coro - blocking sleep. Flush first so any spawns we just
+           queued aren't held in our local buffer while we sit here idle. */
+        __glide_flush_main_buf();
+#ifdef _WIN32
+        Sleep((DWORD)ms);
+#else
+        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (long)((ms % 1000)) * 1000000L;
+        nanosleep(&ts, NULL);
+#endif
+        return;
+    }
+    /* Coro - register on the timer queue, park, worker runs others. */
+    long long deadline = __glide_monotonic_ns() + (long long)ms * 1000000LL;
+    __glide_timer_node* node = (__glide_timer_node*)malloc(sizeof(__glide_timer_node));
+    node->deadline_ns = deadline;
+    node->task = t;
+    pthread_mutex_lock(&__glide_timer_mu);
+    __glide_timer_node** cur = &__glide_timer_head;
+    while (*cur && (*cur)->deadline_ns <= deadline) cur = &(*cur)->next;
+    node->next = *cur;
+    *cur = node;
+    /* Wake timer thread to recompute its deadline. */
+    pthread_cond_signal(&__glide_timer_cv);
+    /* Park: worker hand-off releases __glide_timer_mu after switch. */
+    __glide_park(&__glide_timer_mu, NULL);
+}
+
+/* Coro park: caller holds `lock` and wants to wait on `list`. Returns
+   1 if parked (caller must re-acquire `lock` and re-check state), 0
+   if the caller is not in a coroutine context (caller should fall
+   back to pthread_cond_wait). The actual list link + lock release is
+   done by the worker AFTER the fiber switch — that's how we avoid the
+   classic park/unpark race. */
+int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) { __glide_flush_main_buf(); return 0; }
+    t->park_lock = lock;
+    t->park_list = list;
+    t->state = 2;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+    return 1;
+}
+
+/* Caller holds the chan/mutex protecting the wait list. Pop the head and queue it. */
+void __glide_unpark_one(__glide_task** list) {
+    __glide_task* t = *list;
+    if (!t) return;
+    *list = t->wait_next;
+    t->wait_next = NULL;
+    t->state = 0;
+    __glide_q_push_to(t->home_worker, t);
+}
+
+
+
+
+// ============================ socket runtime =============================
+#ifdef _WIN32
+# include <winsock2.h>
+# include <ws2tcpip.h>
+typedef SOCKET __glide_sock_t;
+static int __glide_wsa_inited = 0;
+static void __glide_wsa_ensure(void) {
+    if (__glide_wsa_inited) return;
+    WSADATA d; WSAStartup(MAKEWORD(2, 2), &d);
+    __glide_wsa_inited = 1;
+}
+#else
+# include <sys/socket.h>
+# include <netinet/in.h>
+# include <unistd.h>
+# include <arpa/inet.h>
+typedef int __glide_sock_t;
+static void __glide_wsa_ensure(void) {}
+#endif
+
+int listen_tcp(int port) {
+    __glide_wsa_ensure();
+    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);
+#ifdef _WIN32
+    if (s == INVALID_SOCKET) return -1;
+#else
+    if (s < 0) return -1;
+#endif
+    int yes = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((unsigned short)port);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return -1;
+    }
+    if (listen(s, 128) < 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return -1;
+    }
+    return (int)s;
+}
+
+int accept_tcp(int listener) {
+#ifdef _WIN32
+    SOCKET c = accept((SOCKET)listener, NULL, NULL);
+    return (c == INVALID_SOCKET) ? -1 : (int)c;
+#else
+    int c = accept(listener, NULL, NULL);
+    return c < 0 ? -1 : c;
+#endif
+}
+
+int tcp_read(int fd, void* buf, int max) {
+#ifdef _WIN32
+    int n = recv((SOCKET)fd, (char*)buf, max, 0);
+    return n < 0 ? -1 : n;
+#else
+    int n = (int)read(fd, buf, (size_t)max);
+    return n < 0 ? -1 : n;
+#endif
+}
+
+int tcp_write(int fd, void* buf, int n) {
+#ifdef _WIN32
+    int w = send((SOCKET)fd, (const char*)buf, n, 0);
+    return w < 0 ? -1 : w;
+#else
+    int w = (int)write(fd, buf, (size_t)n);
+    return w < 0 ? -1 : w;
+#endif
+}
+
+void tcp_close(int fd) {
+#ifdef _WIN32
+    closesocket((SOCKET)fd);
+#else
+    close(fd);
+#endif
+}
+
+
+typedef struct __glide_result_int_t { int ok; int val; const char* err; } __glide_result_int_t;
+static __glide_result_int_t __glide_ok_int(int v) { __glide_result_int_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
+static __glide_result_int_t __glide_err_int(const char* msg) { __glide_result_int_t r; r.ok = 0; r.err = msg; return r; }
+static int __glide_unwrap_int(__glide_result_int_t r) { int z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
+
+typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__Type   Vector__Type ;
 typedef struct  Vector__Expr   Vector__Expr ;
-typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__Param   Vector__Param ;
 typedef struct  Vector__Stmt   Vector__Stmt ;
 typedef struct  Vector__Field   Vector__Field ;
 typedef struct  Vector__EnumVariant   Vector__EnumVariant ;
 typedef struct  Vector__MatchArm   Vector__MatchArm ;
+typedef struct  Vector__MacroParam   Vector__MacroParam ;
 typedef struct  Vector__ParseDiag   Vector__ParseDiag ;
-typedef struct  HashMap__FnSig   HashMap__FnSig ;
+typedef struct  HashMap__Stmt   HashMap__Stmt ;
+typedef struct  Vector__TypeMacro   Vector__TypeMacro ;
+typedef struct  Vector__MacroBinding   Vector__MacroBinding ;
 typedef struct  HashMap__bool   HashMap__bool ;
+typedef struct  HashMap__FnSig   HashMap__FnSig ;
 typedef struct  HashMap__Type   HashMap__Type ;
 typedef struct  Vector__BorrowEvent   Vector__BorrowEvent ;
+typedef struct  HashMap__string   HashMap__string ;
 typedef struct  Vector__DiagEntry   Vector__DiagEntry ;
 typedef struct  Vector__bool   Vector__bool ;
-typedef struct  HashMap__Stmt   HashMap__Stmt ;
 typedef struct  Vector__FnMonoEntry   Vector__FnMonoEntry ;
 typedef struct  Vector__AnonFn   Vector__AnonFn ;
 typedef struct  Vector__JsonValue   Vector__JsonValue ;
@@ -287,10 +1443,13 @@ typedef struct  Param   Param ;
 typedef struct  Field   Field ;
 typedef struct  EnumVariant   EnumVariant ;
 typedef struct  MatchArm   MatchArm ;
+typedef struct  MacroParam   MacroParam ;
 typedef struct  Stmt   Stmt ;
 typedef struct  StructLitField   StructLitField ;
 typedef struct  ParseDiag   ParseDiag ;
 typedef struct  Parser   Parser ;
+typedef struct  MacroBinding   MacroBinding ;
+typedef struct  TypeMacro   TypeMacro ;
 typedef struct  FnSig   FnSig ;
 typedef struct  BorrowEvent   BorrowEvent ;
 typedef struct  DiagEntry   DiagEntry ;
@@ -302,7 +1461,15 @@ typedef struct  JsonValue   JsonValue ;
 typedef struct  JsonParser   JsonParser ;
 typedef struct  LspDoc   LspDoc ;
 typedef struct  LspState   LspState ;
+typedef struct  ImplMethodHit   ImplMethodHit ;
+typedef struct  FieldHit   FieldHit ;
 typedef struct  UseSite   UseSite ;
+
+struct  Vector__string  {
+     const char**   data;
+     int   len;
+     int   cap;
+};
 
 struct  Vector__Type  {
      Type*   data;
@@ -312,12 +1479,6 @@ struct  Vector__Type  {
 
 struct  Vector__Expr  {
      Expr*   data;
-     int   len;
-     int   cap;
-};
-
-struct  Vector__string  {
-     const char**   data;
      int   len;
      int   cap;
 };
@@ -352,16 +1513,34 @@ struct  Vector__MatchArm  {
      int   cap;
 };
 
+struct  Vector__MacroParam  {
+     MacroParam*   data;
+     int   len;
+     int   cap;
+};
+
 struct  Vector__ParseDiag  {
      ParseDiag*   data;
      int   len;
      int   cap;
 };
 
-struct  HashMap__FnSig  {
+struct  HashMap__Stmt  {
      const char**   keys;
-     FnSig*   values;
+     Stmt*   values;
      bool*   occupied;
+     int   len;
+     int   cap;
+};
+
+struct  Vector__TypeMacro  {
+     TypeMacro*   data;
+     int   len;
+     int   cap;
+};
+
+struct  Vector__MacroBinding  {
+     MacroBinding*   data;
      int   len;
      int   cap;
 };
@@ -369,6 +1548,14 @@ struct  HashMap__FnSig  {
 struct  HashMap__bool  {
      const char**   keys;
      bool*   values;
+     bool*   occupied;
+     int   len;
+     int   cap;
+};
+
+struct  HashMap__FnSig  {
+     const char**   keys;
+     FnSig*   values;
      bool*   occupied;
      int   len;
      int   cap;
@@ -388,6 +1575,14 @@ struct  Vector__BorrowEvent  {
      int   cap;
 };
 
+struct  HashMap__string  {
+     const char**   keys;
+     const char**   values;
+     bool*   occupied;
+     int   len;
+     int   cap;
+};
+
 struct  Vector__DiagEntry  {
      DiagEntry*   data;
      int   len;
@@ -396,14 +1591,6 @@ struct  Vector__DiagEntry  {
 
 struct  Vector__bool  {
      bool*   data;
-     int   len;
-     int   cap;
-};
-
-struct  HashMap__Stmt  {
-     const char**   keys;
-     Stmt*   values;
-     bool*   occupied;
      int   len;
      int   cap;
 };
@@ -469,7 +1656,7 @@ typedef struct  Expr  {
      int   kind;
      int   line;
      int   column;
-     int   int_val;
+     int64_t   int_val;
      const char*   str_val;
      bool   bool_val;
      int   op_code;
@@ -482,6 +1669,9 @@ typedef struct  Expr  {
      Vector__string*   field_names;
      Vector__Param*   fn_expr_params;
      Vector__Stmt*   fn_expr_body;
+     Expr*   macro_recv;
+     const char*   macro_owner;
+     const char*   float_val;
 }  Expr ;
 
 typedef struct  Param  {
@@ -492,6 +1682,8 @@ typedef struct  Param  {
 typedef struct  Field  {
      const char*   name;
      Type*   ty;
+     const char*   doc;
+     bool   is_pub;
 }  Field ;
 
 typedef struct  EnumVariant  {
@@ -504,6 +1696,12 @@ typedef struct  MatchArm  {
      Vector__string*   bindings;
      Vector__Stmt*   body;
 }  MatchArm ;
+
+typedef struct  MacroParam  {
+     const char*   name;
+     bool   is_variadic;
+     const char*   separator;
+}  MacroParam ;
 
 typedef struct  Stmt  {
      int   kind;
@@ -532,11 +1730,31 @@ typedef struct  Stmt  {
      Vector__Field*   struct_fields;
      Type*   impl_target;
      Vector__Stmt*   impl_methods;
+     const char*   impl_trait_name;
+     Vector__string*   trait_supers;
      Vector__string*   type_params;
+     Vector__string*   type_param_bounds;
      const char*   import_path;
+     Vector__string*   imported_items;
+     bool   import_wildcard;
+     bool   import_is_module;
+     const char*   import_short;
      Vector__EnumVariant*   enum_variants;
      Expr*   scrutinee;
      Vector__MatchArm*   arms;
+     Vector__MacroParam*   macro_params;
+     const char*   macro_rep_sep;
+     bool   is_variadic;
+     bool   is_spawn_thread;
+     bool   is_naked;
+     const char*   cfg_target;
+     Vector__string*   asm_strings;
+     Vector__string*   asm_out_constraints;
+     Vector__Expr*   asm_out_exprs;
+     Vector__string*   asm_in_constraints;
+     Vector__Expr*   asm_in_exprs;
+     Vector__string*   asm_clobbers;
+     bool   is_volatile;
 }  Stmt ;
 
 typedef struct  StructLitField  {
@@ -545,6 +1763,7 @@ typedef struct  StructLitField  {
 }  StructLitField ;
 
 typedef struct  ParseDiag  {
+     const char*   origin;
      int   line;
      int   col;
      const char*   msg;
@@ -557,12 +1776,30 @@ typedef struct  Parser  {
      int   error_count;
      bool   no_struct_lit;
      Vector__ParseDiag*   diags;
+     int   prev_line;
+     int   prev_col;
+     int   prev_len;
 }  Parser ;
+
+typedef struct  MacroBinding  {
+     const char*   name;
+     Vector__Expr*   args;
+     bool   is_variadic;
+}  MacroBinding ;
+
+typedef struct  TypeMacro  {
+     const char*   owner;
+     const char*   name;
+     Stmt   def;
+}  TypeMacro ;
 
 typedef struct  FnSig  {
      const char*   name;
      Vector__Param*   params;
      Type*   ret_type;
+     bool   is_variadic;
+     Vector__string*   type_params;
+     Vector__string*   type_param_bounds;
 }  FnSig ;
 
 typedef struct  BorrowEvent  {
@@ -591,6 +1828,13 @@ typedef struct  Typer  {
      Vector__BorrowEvent*   borrows;
      Type*   current_ret;
      const char*   current_origin;
+     HashMap__bool*   visibility;
+     HashMap__bool*   module_imports;
+     HashMap__bool*   module_full_paths;
+     HashMap__bool*   field_pub;
+     HashMap__string*   struct_origin;
+     bool   enforce_visibility;
+     HashMap__bool*   impl_set;
      int   error_count;
      Vector__DiagEntry*   diagnostics;
 }  Typer ;
@@ -616,6 +1860,7 @@ typedef struct  CG  {
      HashMap__Stmt*   fns;
      HashMap__bool*   emitted_monos;
      Vector__FnMonoEntry*   fn_mono_queue;
+     Vector__Type*   struct_mono_queue;
      Vector__Expr*   defer_stack;
      Vector__Expr*   auto_drop_stack;
      Vector__AnonFn*   anon_fns;
@@ -625,6 +1870,12 @@ typedef struct  CG  {
      bool   uses_pthread;
      Vector__Type*   result_types;
      Type*   current_ret_ty;
+     HashMap__string*   method_index;
+     HashMap__bool*   method_fns;
+     HashMap__string*   module_aliases;
+     HashMap__bool*   emitted_named;
+     HashMap__bool*   dyn_traits;
+     HashMap__Stmt*   traits;
 }  CG ;
 
 typedef struct  JsonValue  {
@@ -655,6 +1906,18 @@ typedef struct  LspState  {
      bool   shutdown_requested;
 }  LspState ;
 
+typedef struct  ImplMethodHit  {
+     Stmt*   method;
+     const char*   owner;
+}  ImplMethodHit ;
+
+typedef struct  FieldHit  {
+     const char*   owner;
+     const char*   name;
+     Type*   ty;
+     const char*   doc;
+}  FieldHit ;
+
 typedef struct  UseSite  {
      int   line;
      int   col;
@@ -669,6 +1932,7 @@ typedef struct  UseSite  {
 #define  TOK_KEYWORD  6
 #define  TOK_OP  7
 #define  TOK_ERROR  8
+#define  TOK_RAW_BLOCK  9
 #define  TY_NAMED  0
 #define  TY_POINTER  1
 #define  TY_BORROW  2
@@ -677,6 +1941,7 @@ typedef struct  UseSite  {
 #define  TY_GENERIC  5
 #define  TY_FNPTR  6
 #define  TY_RESULT  7
+#define  TY_DYN  8
 #define  EX_INT  0
 #define  EX_FLOAT  1
 #define  EX_STRING  2
@@ -699,6 +1964,7 @@ typedef struct  UseSite  {
 #define  EX_NEW  19
 #define  EX_SIZEOF  20
 #define  EX_FNEXPR  21
+#define  EX_MACRO_VAR  22
 #define  OP_ADD  1
 #define  OP_SUB  2
 #define  OP_MUL  3
@@ -747,6 +2013,13 @@ typedef struct  UseSite  {
 #define  ST_ENUM  15
 #define  ST_MATCH  16
 #define  ST_SPAWN  17
+#define  ST_MACRO_DEF  18
+#define  ST_MACRO_REP  19
+#define  ST_FOR_IN  20
+#define  ST_WHILE_RECV  21
+#define  ST_ASM  22
+#define  ST_CRAW  23
+#define  ST_TRAIT  24
 #define  JSON_NULL  0
 #define  JSON_BOOL  1
 #define  JSON_INT  2
@@ -760,6 +2033,37 @@ static const const char*   FMT_INDENT = "    ";
 #define  MODE_CHECK  3
 #define  MODE_FMT  4
 
+int   printf (const char*   fmt, ...);
+void   make_chan (int   cap);
+void*   malloc (size_t   n);
+void*   calloc (size_t   count, size_t   size);
+void   free (void*   p);
+int   args_count (void);
+const char*   args_at (int   i);
+void   yield_now (void);
+void   sleep_ms (int   ms);
+bool   _ws (int   c);
+bool   string_contains (const char*   self, const char*   sub);
+int   string_index_of (const char*   self, const char*   sub);
+bool   string_starts_with (const char*   self, const char*   pre);
+bool   string_ends_with (const char*   self, const char*   suf);
+Vector__string*   string_split (const char*   self, const char*   sep);
+const char*   string_replace (const char*   self, const char*   find, const char*   repl);
+const char*   string_trim (const char*   self);
+const char*   string_trim_left (const char*   self);
+const char*   string_trim_right (const char*   self);
+const char*   string_to_upper (const char*   self);
+const char*   string_to_lower (const char*   self);
+const char*   string_repeat (const char*   self, int   n);
+int   string_parse_int (const char*   self);
+__glide_result_int_t   string_try_parse_int (const char*   self);
+Lexer*   Lexer_new (const char*   src);
+void   Lexer_free (Lexer*   self);
+char   Lexer_peek (Lexer*   self);
+char   Lexer_peek_at (Lexer*   self, int   offset);
+void   Lexer_advance (Lexer*   self);
+void   Lexer_skip_trivia (Lexer*   self);
+Token   Lexer_next_token (Lexer*   self);
 bool   is_keyword (const char*   s);
 const char*   token_kind_name (int   k);
 Type*   ty_fnptr (Vector__Type*   params, Type*   ret);
@@ -767,7 +2071,8 @@ Type*   ty_generic (const char*   name, Vector__Type*   args);
 Type*   ty_named (const char*   name);
 Type*   ty_result (Type*   inner);
 Type*   ty_pointer (Type*   inner);
-Expr*   expr_int (int   n, int   line, int   col);
+Expr*   expr_int (int64_t   n, int   line, int   col);
+Expr*   expr_float (const char*   lexeme, int   line, int   col);
 Expr*   expr_string (const char*   s, int   line, int   col);
 Expr*   expr_ident (const char*   name, int   line, int   col);
 Expr*   expr_bool (bool   b, int   line, int   col);
@@ -789,6 +2094,8 @@ Stmt*   stmt_import (const char*   path, int   line, int   col);
 Stmt*   stmt_enum (const char*   name, Vector__EnumVariant*   variants, int   line, int   col);
 Stmt*   stmt_spawn (Expr*   call, int   line, int   col);
 Stmt*   stmt_match (Expr*   scrutinee, Vector__MatchArm*   arms, int   line, int   col);
+Stmt*   stmt_craw (const char*   body, int   line, int   col);
+Stmt*   stmt_asm (int   line, int   col);
 Expr*   expr_unary (int   op, Expr*   operand, int   line, int   col);
 Expr*   expr_assign (int   op, Expr*   lhs, Expr*   rhs);
 Expr*   expr_member (Expr*   obj, const char*   field);
@@ -796,22 +2103,45 @@ Expr*   expr_index (Expr*   obj, Expr*   idx);
 Expr*   expr_cast (Expr*   inner, Type*   target);
 Expr*   expr_path (const char*   ty, const char*   member, int   line, int   col);
 Expr*   expr_macro (const char*   name, Vector__Expr*   args, int   line, int   col);
+Expr*   expr_macro_var (const char*   name, int   line, int   col);
 Expr*   expr_char (char   c, int   line, int   col);
 Expr*   expr_null (int   line, int   col);
 Expr*   expr_postinc (Expr*   inner);
 Expr*   expr_fnexpr (Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col);
 Expr*   expr_postdec (Expr*   inner);
 Expr*   expr_struct_lit (const char*   type_name, Vector__string*   names, Vector__Expr*   values, int   line, int   col);
+Parser*   Parser_new (Lexer*   lex);
+void   Parser_free (Parser*   self);
+Token   Parser_advance (Parser*   self);
+bool   Parser_at_eof (Parser*   self);
+bool   Parser_at_kw (Parser*   self, const char*   lexeme);
+bool   Parser_at_op (Parser*   self, const char*   lexeme);
+bool   Parser_peek_op (Parser*   self, const char*   lexeme);
+bool   Parser_eat_kw (Parser*   self, const char*   lexeme);
+bool   Parser_eat_op (Parser*   self, const char*   lexeme);
+void   Parser_err (Parser*   self, const char*   msg);
+void   Parser_err_after_prev (Parser*   self, const char*   msg);
+bool   Parser_expect_op (Parser*   self, const char*   lexeme);
+bool   Parser_at_close_angle (Parser*   self);
+bool   Parser_consume_close_angle (Parser*   self);
+const char*   Parser_expect_ident (Parser*   self);
 Vector__Stmt*   parse_program (Parser*   p);
 Stmt*   parse_top_stmt (Parser*   p);
+Stmt*   parse_macro_def (Parser*   p);
+Vector__MacroParam*   parse_macro_matchers (Parser*   p);
 Stmt*   parse_fn (Parser*   p);
 Vector__string*   parse_type_params (Parser*   p);
+Vector__string*   parse_type_params_with_bounds (Parser*   p, Vector__string*   bounds_out);
 void   skip_type_params (Parser*   p);
 Stmt*   parse_struct (Parser*   p);
 Stmt*   parse_enum (Parser*   p);
+Stmt*   parse_trait (Parser*   p);
 Stmt*   parse_impl (Parser*   p);
+void   substitute_self_in_methods (Vector__Stmt*   methods, Type*   target);
+Type*   substitute_self_in_type (Type*   t, Type*   target);
 Stmt*   parse_import (Parser*   p);
 Vector__Stmt*   parse_block (Parser*   p);
+Stmt*   parse_asm_block (Parser*   p);
 Stmt*   parse_stmt (Parser*   p);
 Expr*   parse_maybe_assign (Parser*   p, Expr*   lhs);
 Stmt*   parse_let (Parser*   p);
@@ -821,13 +2151,37 @@ Stmt*   parse_match (Parser*   p);
 Stmt*   parse_if (Parser*   p);
 Stmt*   parse_while (Parser*   p);
 Stmt*   parse_for (Parser*   p);
+Stmt*   parse_for_in (Parser*   p, int   line, int   col);
 Type*   parse_type (Parser*   p);
 Expr*   parse_expr (Parser*   p, int   min_bp);
 int   peek_binop_bp (Parser*   p);
+Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int   col);
 Expr*   parse_prefix (Parser*   p);
-int   parse_int_lexeme (const char*   s);
+int64_t   parse_int_lexeme (const char*   s);
 bool   starts_uppercase (const char*   s);
 char   decode_char_inner (const char*   s);
+Vector__Stmt*   expand_macros (Vector__Stmt*   program);
+const char*   type_owner_name (Type*   t);
+bool   body_references_self (Vector__Stmt*   stmts);
+bool   stmt_references_self (Stmt*   s);
+bool   expr_references_self (Expr*   e);
+void   expand_in_program (Vector__Stmt*   program, HashMap__Stmt*   sm, Vector__TypeMacro*   tm);
+Vector__Stmt*   expand_in_block (Vector__Stmt*   stmts, HashMap__Stmt*   sm, Vector__TypeMacro*   tm);
+Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__TypeMacro*   tm);
+Vector__Stmt*   expand_with_def (Expr*   call, Stmt*   def);
+const char*   recv_name_for (Expr*   call);
+Vector__Stmt*   expand_with_def_recv (Expr*   call, Stmt*   def, Expr*   recv);
+Vector__MacroBinding*   bind_args (Expr*   call, Stmt*   def);
+Vector__Stmt*   macro_subst_stmt (Stmt*   s, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name);
+Vector__Stmt*   macro_subst_block (Vector__Stmt*   stmts, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name);
+Expr*   macro_subst_expr (Expr*   e, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name);
+Expr*   lookup_var (const char*   name, Vector__MacroBinding*   bindings, int   rep_idx);
+int   variadic_len (Vector__MacroBinding*   bindings);
+Vector__Stmt*   lower_program (Vector__Stmt*   stmts);
+void   expand_trait_defaults (Vector__Stmt*   stmts);
+Vector__Stmt*   lower_block (Vector__Stmt*   body);
+Stmt*   lower_stmt (Stmt*   s);
+Stmt*   lower_for_in (Stmt*   s);
 bool   type_eq (Type*   a, Type*   b);
 const char*   type_to_string (Type*   t);
 bool   is_int_type (Type*   t);
@@ -835,7 +2189,24 @@ bool   is_float_type (Type*   t);
 bool   is_bool_type (Type*   t);
 bool   is_unknown_type (Type*   t);
 bool   types_compat (Type*   want, Type*   got);
+Typer*   Typer_new (void);
+bool   Typer_is_visible (Typer*   self, const char*   name);
+bool   Typer_is_module_path_allowed (Typer*   self, const char*   prefix);
+void   Typer_free (Typer*   self);
+void   Typer_push_diag_tag (Typer*   self, int   line, int   col, int   severity, const char*   code, const char*   msg, int   tag);
+void   Typer_push_diag (Typer*   self, int   line, int   col, int   severity, const char*   code, const char*   msg);
+void   Typer_warn_unused (Typer*   self, int   line, int   col, const char*   code, const char*   msg);
+void   Typer_warn_unused_range (Typer*   self, int   line, int   col, int   len, const char*   code, const char*   msg);
+void   Typer_err (Typer*   self, int   line, int   col, const char*   msg);
+void   Typer_err_code (Typer*   self, int   line, int   col, const char*   code, const char*   msg);
+void   Typer_err_code_range (Typer*   self, int   line, int   col, int   span, const char*   code, const char*   msg);
+void   Typer_warn (Typer*   self, int   line, int   col, const char*   code, const char*   msg);
 void   pre_register (Typer*   t, Vector__Stmt*   program);
+bool   type_var_contains (Vector__string*   tps, const char*   name);
+bool   arg_compat (Type*   want, Type*   got, Vector__string*   tps);
+Vector__string*   split_bounds (const char*   s);
+Type*   extract_for_var (Type*   param_ty, Type*   arg_ty, const char*   var_name);
+void   check_generic_bounds (Typer*   t, FnSig*   sig, Vector__Expr*   args, int   line, int   col);
 int   count_borrows (Typer*   t, const char*   name, bool   want_mut);
 void   record_borrow (Typer*   t, const char*   source, bool   is_mut, int   line, int   col);
 int   enter_borrow_scope (Typer*   t);
@@ -849,7 +2220,10 @@ void   check_fn (Typer*   t, Stmt*   s);
 void   check_stmt (Typer*   t, Stmt*   s);
 void   check_let_or_const (Typer*   t, Stmt*   s);
 void   check_return (Typer*   t, Stmt*   s);
+Type*   chan_inner (Type*   t);
 Type*   infer_expr (Typer*   t, Expr*   e);
+int   ns_split_pos (const char*   name);
+const char*   _cg_replace (const char*   s, const char*   find, const char*   repl);
 const char*   format_spec_for (Type*   t);
 Type*   stdlib_method_ret (const char*   ty_name, const char*   method);
 void   lift_anons_in_expr (CG*   g, Expr*   e);
@@ -860,14 +2234,26 @@ void   collect_result_in_stmt (CG*   g, Stmt*   s);
 void   emit_result_runtime (CG*   g);
 void   collect_chan_in_type (CG*   g, Type*   t);
 void   collect_chan_in_expr (CG*   g, Expr*   e);
+void   collect_dyn_in_type (CG*   g, Type*   t);
+void   collect_dyn_in_expr (CG*   g, Expr*   e);
+void   collect_dyn_in_stmt (CG*   g, Stmt*   s);
+void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program);
 void   collect_chan_in_stmt (CG*   g, Stmt*   s);
 void   emit_chan_runtime (CG*   g);
+void   emit_scheduler_runtime (void);
+void   emit_socket_runtime (void);
 void   pre_emit_spawn_stubs_in_stmt (CG*   g, Stmt*   s);
 void   emit_spawn_stub (CG*   g, Expr*   call, int   id);
-const char*   int_to_str (int   n);
+const char*   int_to_str (int64_t   n);
 const char*   digit_str (int   d);
 bool   is_stdlib_primitive (const char*   name);
 void   emit_stdlib_runtime (void);
+CG*   CG_new (void);
+void   CG_emit_deferred_reverse (CG*   self, int   depth);
+void   CG_emit_block_drops (CG*   self, int   saved, int   depth);
+void   CG_free (CG*   self);
+void   CG_declare (CG*   self, const char*   name, Type*   ty);
+Type*   CG_lookup (CG*   self, const char*   name);
 Type*   strip_ptr (Type*   t);
 Type*   infer_for_codegen (CG*   g, Expr*   e);
 const char*   type_to_c (Type*   t);
@@ -878,6 +2264,7 @@ bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint);
 Type*   callee_param_ty (CG*   g, Expr*   e, int   i);
 void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint);
 void   prescan_stmt (CG*   g, Stmt*   s);
+void   register_fn_mono_signature (CG*   g, const char*   mangled, Stmt*   template, Vector__Type*   args);
 void   emit_mono_forward_decl (CG*   g, const char*   mangled, Stmt*   template, Vector__Type*   args);
 void   unify_for_inference (Type*   pat, Type*   actual, Vector__string*   params, HashMap__Type*   bindings);
 Type*   subst_type (Type*   t, Vector__string*   params, Vector__Type*   args);
@@ -886,7 +2273,10 @@ Stmt*   subst_stmt (Stmt*   s, Vector__string*   params, Vector__Type*   args, H
 const char*   op_to_c (int   op);
 const char*   unop_to_c (int   op);
 void   ind (int   n);
+void   emit_cfg_open (const char*   cfg);
+void   emit_cfg_close (const char*   cfg);
 void   emit_expr (CG*   g, Expr*   e);
+void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth);
 void   emit_stmt (CG*   g, Stmt*   s, int   depth);
 void   emit_fn_signature (Stmt*   s);
 Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const char*   gen_name, Vector__string*   tparams);
@@ -897,8 +2287,13 @@ void   infer_let_types (CG*   g, Vector__Stmt*   body);
 void   infer_let_types_in_program (CG*   g, Vector__Stmt*   program);
 void   emit_fn (CG*   g, Stmt*   s);
 void   emit_impl (CG*   g, Stmt*   s);
+void   emit_impl_fwd_decls (CG*   g, Stmt*   s);
 void   emit_struct (Stmt*   s);
 void   emit_enum (Stmt*   s);
+void   register_alias_suffixes (CG*   g, const char*   mod_path, const char*   name);
+const char*   module_path_from_origin (const char*   origin);
+const char*   resolve_path_alias (CG*   g, const char*   prefix, const char*   name);
+const char*   resolve_type_prefix (CG*   g, const char*   prefix);
 void   emit_program (Vector__Stmt*   program);
 void   emit_top_const (CG*   g, Stmt*   s);
 void   emit_struct_mono (CG*   g, Type*   t);
@@ -944,6 +2339,7 @@ const char*   fmt_let_const_inline (Stmt*   s);
 const char*   render_doc_lines (const char*   raw, const char*   pad);
 const char*   fmt_stmt (Stmt*   s, int   depth);
 const char*   fmt_stmt_inner (Stmt*   s, int   depth);
+const char*   fmt_asm (Stmt*   s, int   depth);
 const char*   fmt_for_init (Stmt*   s);
 const char*   fmt_type_params (Stmt*   s);
 const char*   fmt_fn (Stmt*   s, int   depth);
@@ -953,6 +2349,7 @@ const char*   fmt_impl (Stmt*   s, int   depth);
 const char*   fmt_match (Stmt*   s, int   depth);
 const char*   fmt_program (Vector__Stmt*   stmts);
 bool   needs_blank_line (int   prev, int   curr);
+const char*   read_file (const char*   path);
 const char*   __glide_read_line (void);
 const char*   __glide_read_bytes (int   n);
 void   __glide_write_str (const char*   s);
@@ -969,15 +2366,25 @@ void   handle_initialize (JsonValue*   req);
 void   handle_shutdown (JsonValue*   req, LspState*   state);
 JsonValue*   diag_to_json (DiagEntry*   d);
 const char*   uri_to_path (const char*   uri);
-const char*   find_stdlib_root (void);
+const char*   find_builtins_dir (void);
 void   run_analysis_and_publish (const char*   uri, const char*   text, LspState*   state);
 void   handle_did_open (JsonValue*   req, LspState*   state);
 void   handle_did_change (JsonValue*   req, LspState*   state);
 void   handle_did_close (JsonValue*   req, LspState*   state);
 void   run_extra_analyses (Typer*   t, Vector__Stmt*   stmts);
+void   analysis_trait_conformance (Typer*   t, Vector__Stmt*   stmts);
+void   check_method_signature (Typer*   t, Stmt   impl_stmt, Stmt   req, Stmt   got, const char*   target_name);
+int   if_param_count (Stmt   s);
+Type*   subst_self (Type*   t, Type*   impl_target);
 const char*   type_to_string_pretty (Type*   t);
 const char*   fn_signature (Stmt*   s);
+const char*   macro_signature (Stmt*   s);
 Stmt*   find_top_decl (Vector__Stmt*   stmts, const char*   name);
+ImplMethodHit   find_macro_in_impl_anywhere (Vector__Stmt*   stmts, const char*   name);
+const char*   builtin_macro_doc (const char*   name);
+const char*   keyword_doc (const char*   name);
+ImplMethodHit   find_method_anywhere (Vector__Stmt*   stmts, const char*   method_name);
+FieldHit   find_field_anywhere (Vector__Stmt*   stmts, const char*   field_name);
 Stmt*   find_method_in_impl (Vector__Stmt*   stmts, const char*   type_name, const char*   method_name);
 const char*   word_at (const char*   text, int   line0, int   col0);
 Type*   lsp_infer_expr (Vector__Stmt*   stmts, Stmt*   host, Expr*   e);
@@ -1004,8 +2411,10 @@ JsonValue*   completion_item (const char*   label, int   kind, const char*   det
 int   cursor_before_partial (const char*   text, int   line0, int   col0);
 const char*   path_qualifier_before (const char*   text, int   line0, int   col0);
 const char*   member_qualifier_before (const char*   text, int   line0, int   col0);
+const char*   chained_ctor_qualifier_before (const char*   text, int   line0, int   col0);
 const char*   lookup_local_type (Vector__Stmt*   stmts, int   line0, const char*   var);
 void   list_fields_for_type (Vector__Stmt*   stmts, const char*   type_name, JsonValue*   items, HashMap__bool*   seen);
+void   list_chan_methods_for_type (const char*   type_name, JsonValue*   items, HashMap__bool*   seen);
 void   list_methods_for_type (Vector__Stmt*   stmts, const char*   type_name, JsonValue*   items, HashMap__bool*   seen, bool   want_self);
 void   handle_completion (JsonValue*   req, LspState*   state);
 void   collect_uses_in_expr (Expr*   e, const char*   name, Vector__UseSite*   out);
@@ -1050,8 +2459,12 @@ void   print_type (Type*   t);
 const char*   op_name (int   op);
 void   print_expr (Expr*   e, int   indent);
 void   print_stmt (Stmt*   s, int   indent);
-void   load_into (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded);
-void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded);
+void   load_into (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
+void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
+void   collect_path_files_in_expr (Expr*   e, Vector__string*   out, HashMap__bool*   seen);
+void   collect_path_files_in_stmt (Stmt*   s, Vector__string*   out, HashMap__bool*   seen);
+const char*   drop_last_path_segment (const char*   path);
+const char*   last_path_segment (const char*   path);
 const char*   strip_quotes (const char*   s);
 const char*   parent_dir (const char*   path);
 const char*   resolve_import (const char*   base, const char*   ipath);
@@ -1060,9 +2473,11 @@ void   __glide_restore_stdout (int   saved);
 int   __glide_shell (const char*   cmd);
 const char*   __glide_exe_path (void);
 const char*   __glide_exe_dir (void);
+const char*   __glide_list_dir (const char*   path, const char*   suffix);
 const char*   __glide_getenv (const char*   name);
 int   __glide_is_windows (void);
 bool   __glide_file_exists (const char*   path);
+const char*   read_file (const char*   path);
 bool   write_file (const char*   path, const char*   content);
 bool   use_color (void);
 const char*   col_red (void);
@@ -1083,35 +2498,71 @@ const char*   glyph_pipe (void);
 const char*   glyph_under (void);
 void   print_pretty_diag (DiagEntry   d, const char*   src, const char*   src_path);
 void   print_usage (void);
-bool   parse_program_into (Vector__Stmt*   stmts, const char*   path);
+void   merge_parse_diags (Typer*   t, Vector__ParseDiag*   pdiags);
+void   build_visibility (Typer*   t, Vector__Stmt*   stmts);
+const char*   module_path_from_path (const char*   path);
+bool   path_is_builtin (const char*   path);
+void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
+bool   parse_program_into (Vector__Stmt*   stmts, const char*   path, Vector__ParseDiag*   pdiags);
 const char*   pick_cc (void);
 int   run_build (const char*   src_path, const char*   out_path, const char*   target, bool   then_run);
 int main(int __glide_main_argc, char** __glide_main_argv);
+Vector__string*   Vector_new__string (void);
+void   Vector_push__string (Vector__string*   self, const char*   x);
+Vector__Expr*   Vector_new__Expr (void);
 Vector__ParseDiag*   Vector_new__ParseDiag (void);
 void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x);
 Vector__Stmt*   Vector_new__Stmt (void);
 void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x);
+Vector__MacroParam*   Vector_new__MacroParam (void);
+void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x);
 Vector__Param*   Vector_new__Param (void);
 void   Vector_push__Param (Vector__Param*   self, Param   x);
-Vector__string*   Vector_new__string (void);
-void   Vector_push__string (Vector__string*   self, const char*   x);
 Vector__Field*   Vector_new__Field (void);
 void   Vector_push__Field (Vector__Field*   self, Field   x);
 Vector__EnumVariant*   Vector_new__EnumVariant (void);
 Vector__Type*   Vector_new__Type (void);
 void   Vector_push__Type (Vector__Type*   self, Type   x);
 void   Vector_push__EnumVariant (Vector__EnumVariant*   self, EnumVariant   x);
-Vector__MatchArm*   Vector_new__MatchArm (void);
 int   Vector_len__Stmt (Vector__Stmt*   self);
 Stmt   Vector_get__Stmt (Vector__Stmt*   self, int   i);
-void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x);
-Vector__Expr*   Vector_new__Expr (void);
+int   Vector_len__Param (Vector__Param*   self);
+Param   Vector_get__Param (Vector__Param*   self, int   i);
+void   Vector_set__Param (Vector__Param*   self, int   i, Param   x);
+void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x);
+int   Vector_len__string (Vector__string*   self);
+const char*   Vector_get__string (Vector__string*   self, int   i);
 void   Vector_push__Expr (Vector__Expr*   self, Expr   x);
-HashMap__FnSig*   HashMap_new__FnSig (void);
+Vector__MatchArm*   Vector_new__MatchArm (void);
+void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x);
+int   Vector_len__ParseDiag (Vector__ParseDiag*   self);
+ParseDiag   Vector_get__ParseDiag (Vector__ParseDiag*   self, int   i);
+int   Vector_len__Expr (Vector__Expr*   self);
+Expr   Vector_get__Expr (Vector__Expr*   self, int   i);
+HashMap__Stmt*   HashMap_new__Stmt (void);
+Vector__TypeMacro*   Vector_new__TypeMacro (void);
+void   HashMap_insert__Stmt (HashMap__Stmt*   self, const char*   k, Stmt   v);
+void   Vector_push__TypeMacro (Vector__TypeMacro*   self, TypeMacro   x);
+int   Vector_len__TypeMacro (Vector__TypeMacro*   self);
+TypeMacro   Vector_get__TypeMacro (Vector__TypeMacro*   self, int   i);
+bool   HashMap_contains__Stmt (HashMap__Stmt*   self, const char*   k);
+Stmt   HashMap_get__Stmt (HashMap__Stmt*   self, const char*   k);
+Vector__MacroBinding*   Vector_new__MacroBinding (void);
+int   Vector_len__MacroParam (Vector__MacroParam*   self);
+MacroParam   Vector_get__MacroParam (Vector__MacroParam*   self, int   i);
+void   Vector_push__MacroBinding (Vector__MacroBinding*   self, MacroBinding   x);
+int   Vector_len__MacroBinding (Vector__MacroBinding*   self);
+MacroBinding   Vector_get__MacroBinding (Vector__MacroBinding*   self, int   i);
 HashMap__bool*   HashMap_new__bool (void);
+void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v);
+bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k);
+int   Vector_len__Type (Vector__Type*   self);
+Type   Vector_get__Type (Vector__Type*   self, int   i);
+HashMap__FnSig*   HashMap_new__FnSig (void);
 HashMap__Type*   HashMap_new__Type (void);
 Vector__BorrowEvent*   Vector_new__BorrowEvent (void);
 Vector__DiagEntry*   Vector_new__DiagEntry (void);
+HashMap__string*   HashMap_new__string (void);
 void   HashMap_free__FnSig (HashMap__FnSig*   self);
 void   HashMap_free__bool (HashMap__bool*   self);
 void   HashMap_free__Type (HashMap__Type*   self);
@@ -1120,7 +2571,6 @@ void   Vector_free__DiagEntry (Vector__DiagEntry*   self);
 void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x);
 void   HashMap_insert__Type (HashMap__Type*   self, const char*   k, Type   v);
 void   HashMap_insert__FnSig (HashMap__FnSig*   self, const char*   k, FnSig   v);
-void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v);
 int   Vector_len__Field (Vector__Field*   self);
 Field   Vector_get__Field (Vector__Field*   self, int   i);
 int   Vector_len__BorrowEvent (Vector__BorrowEvent*   self);
@@ -1128,39 +2578,28 @@ BorrowEvent   Vector_get__BorrowEvent (Vector__BorrowEvent*   self, int   i);
 void   Vector_push__BorrowEvent (Vector__BorrowEvent*   self, BorrowEvent   x);
 BorrowEvent   Vector_pop__BorrowEvent (Vector__BorrowEvent*   self);
 Vector__bool*   Vector_new__bool (void);
-int   Vector_len__Expr (Vector__Expr*   self);
-Expr   Vector_get__Expr (Vector__Expr*   self, int   i);
 void   Vector_push__bool (Vector__bool*   self, bool   x);
-int   Vector_len__string (Vector__string*   self);
-const char*   Vector_get__string (Vector__string*   self, int   i);
 bool   Vector_get__bool (Vector__bool*   self, int   i);
-int   Vector_len__Param (Vector__Param*   self);
-Param   Vector_get__Param (Vector__Param*   self, int   i);
-bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k);
 bool   HashMap_contains__Type (HashMap__Type*   self, const char*   k);
 Type   HashMap_get__Type (HashMap__Type*   self, const char*   k);
 bool   HashMap_contains__FnSig (HashMap__FnSig*   self, const char*   k);
 FnSig   HashMap_get__FnSig (HashMap__FnSig*   self, const char*   k);
+bool   HashMap_contains__string (HashMap__string*   self, const char*   k);
+const char*   HashMap_get__string (HashMap__string*   self, const char*   k);
 void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x);
-int   Vector_len__Type (Vector__Type*   self);
-Type   Vector_get__Type (Vector__Type*   self, int   i);
-bool   HashMap_contains__Stmt (HashMap__Stmt*   self, const char*   k);
-Stmt   HashMap_get__Stmt (HashMap__Stmt*   self, const char*   k);
-HashMap__Stmt*   HashMap_new__Stmt (void);
 Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void);
 Vector__AnonFn*   Vector_new__AnonFn (void);
 Expr   Vector_pop__Expr (Vector__Expr*   self);
 void   HashMap_free__Stmt (HashMap__Stmt*   self);
 void   Vector_push__FnMonoEntry (Vector__FnMonoEntry*   self, FnMonoEntry   x);
 void   HashMap_clear__Type (HashMap__Type*   self);
+int   Vector_len__EnumVariant (Vector__EnumVariant*   self);
+EnumVariant   Vector_get__EnumVariant (Vector__EnumVariant*   self, int   i);
 int   Vector_len__AnonFn (Vector__AnonFn*   self);
 AnonFn   Vector_get__AnonFn (Vector__AnonFn*   self, int   i);
 int   Vector_len__MatchArm (Vector__MatchArm*   self);
 MatchArm   Vector_get__MatchArm (Vector__MatchArm*   self, int   i);
-void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x);
-int   Vector_len__EnumVariant (Vector__EnumVariant*   self);
-EnumVariant   Vector_get__EnumVariant (Vector__EnumVariant*   self, int   i);
-void   HashMap_insert__Stmt (HashMap__Stmt*   self, const char*   k, Stmt   v);
+void   HashMap_insert__string (HashMap__string*   self, const char*   k, const char*   v);
 int   Vector_len__FnMonoEntry (Vector__FnMonoEntry*   self);
 FnMonoEntry   Vector_get__FnMonoEntry (Vector__FnMonoEntry*   self, int   i);
 FnMonoEntry   Vector_pop__FnMonoEntry (Vector__FnMonoEntry*   self);
@@ -1169,6 +2608,7 @@ void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x);
 JsonValue   Vector_get__JsonValue (Vector__JsonValue*   self, int   i);
 int   Vector_len__JsonValue (Vector__JsonValue*   self);
 HashMap__LspDoc*   HashMap_new__LspDoc (void);
+void   Vector_clear__Stmt (Vector__Stmt*   self);
 bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k);
 LspDoc   HashMap_get__LspDoc (HashMap__LspDoc*   self, const char*   k);
 void   HashMap_insert__LspDoc (HashMap__LspDoc*   self, const char*   k, LspDoc   v);
@@ -1179,22 +2619,300 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x);
 Vector__UseSite*   Vector_new__UseSite (void);
 int   Vector_len__UseSite (Vector__UseSite*   self);
 UseSite   Vector_get__UseSite (Vector__UseSite*   self, int   i);
+void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap);
+int   HashMap_slot__Stmt (HashMap__Stmt*   self, const char*   k);
+void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap);
+int   HashMap_slot__bool (HashMap__bool*   self, const char*   k);
 void   HashMap_resize__Type (HashMap__Type*   self, int   new_cap);
 int   HashMap_slot__Type (HashMap__Type*   self, const char*   k);
 void   HashMap_resize__FnSig (HashMap__FnSig*   self, int   new_cap);
 int   HashMap_slot__FnSig (HashMap__FnSig*   self, const char*   k);
-void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap);
-int   HashMap_slot__bool (HashMap__bool*   self, const char*   k);
-int   HashMap_slot__Stmt (HashMap__Stmt*   self, const char*   k);
-void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap);
+int   HashMap_slot__string (HashMap__string*   self, const char*   k);
+void   HashMap_resize__string (HashMap__string*   self, int   new_cap);
 int   HashMap_slot__LspDoc (HashMap__LspDoc*   self, const char*   k);
 void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap);
+int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k);
+int   HashMap_hash_key__bool (HashMap__bool*   self, const char*   k);
 int   HashMap_hash_key__Type (HashMap__Type*   self, const char*   k);
 int   HashMap_hash_key__FnSig (HashMap__FnSig*   self, const char*   k);
-int   HashMap_hash_key__bool (HashMap__bool*   self, const char*   k);
-int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k);
+int   HashMap_hash_key__string (HashMap__string*   self, const char*   k);
 int   HashMap_hash_key__LspDoc (HashMap__LspDoc*   self, const char*   k);
 
+
+bool   _ws (int   c) {
+    return ((((((c  ==  32)  ||  (c  ==  9))  ||  (c  ==  10))  ||  (c  ==  13))  ||  (c  ==  12))  ||  (c  ==  11));
+}
+
+bool   string_contains (const char*   self, const char*   sub) {
+    return (string_index_of(self, sub)  >=  0);
+}
+
+int   string_index_of (const char*   self, const char*   sub) {
+    int   n = __glide_string_len(self);
+    int   m = __glide_string_len(sub);
+    if ((m  ==  0)) {
+        return 0;
+    }
+    if ((m  >  n)) {
+        return (-1);
+    }
+    int   limit = (n  -  m);
+    int   i = 0;
+    while ((i  <=  limit)) {
+        int   k = 0;
+        bool   matched = true;
+        while ((k  <  m)) {
+            if ((__glide_char_to_int(__glide_string_at(self, (i  +  k)))  !=  __glide_char_to_int(__glide_string_at(sub, k)))) {
+                (matched  =  false);
+                break;
+            }
+            (k  =  (k  +  1));
+        }
+        if (matched) {
+            return i;
+        }
+        (i  =  (i  +  1));
+    }
+    return (-1);
+}
+
+bool   string_starts_with (const char*   self, const char*   pre) {
+    int   m = __glide_string_len(pre);
+    if ((m  >  __glide_string_len(self))) {
+        return false;
+    }
+    int   i = 0;
+    while ((i  <  m)) {
+        if ((__glide_char_to_int(__glide_string_at(self, i))  !=  __glide_char_to_int(__glide_string_at(pre, i)))) {
+            return false;
+        }
+        (i  =  (i  +  1));
+    }
+    return true;
+}
+
+bool   string_ends_with (const char*   self, const char*   suf) {
+    int   n = __glide_string_len(self);
+    int   m = __glide_string_len(suf);
+    if ((m  >  n)) {
+        return false;
+    }
+    int   off = (n  -  m);
+    int   i = 0;
+    while ((i  <  m)) {
+        if ((__glide_char_to_int(__glide_string_at(self, (off  +  i)))  !=  __glide_char_to_int(__glide_string_at(suf, i)))) {
+            return false;
+        }
+        (i  =  (i  +  1));
+    }
+    return true;
+}
+
+Vector__string*   string_split (const char*   self, const char*   sep) {
+    Vector__string*   v = Vector_new__string();
+    int   n = __glide_string_len(self);
+    int   m = __glide_string_len(sep);
+    if ((m  ==  0)) {
+        int   i = 0;
+        while ((i  <  n)) {
+            Vector_push__string(v, __glide_string_substring(self, i, (i  +  1)));
+            (i  =  (i  +  1));
+        }
+        return v;
+    }
+    int   start = 0;
+    int   i = 0;
+    while ((i  <=  (n  -  m))) {
+        int   k = 0;
+        bool   matched = true;
+        while ((k  <  m)) {
+            if ((__glide_char_to_int(__glide_string_at(self, (i  +  k)))  !=  __glide_char_to_int(__glide_string_at(sep, k)))) {
+                (matched  =  false);
+                break;
+            }
+            (k  =  (k  +  1));
+        }
+        if (matched) {
+            Vector_push__string(v, __glide_string_substring(self, start, i));
+            (i  =  (i  +  m));
+            (start  =  i);
+        } else {
+            (i  =  (i  +  1));
+        }
+    }
+    Vector_push__string(v, __glide_string_substring(self, start, n));
+    return v;
+}
+
+const char*   string_replace (const char*   self, const char*   find, const char*   repl) {
+    int   n = __glide_string_len(self);
+    int   m = __glide_string_len(find);
+    if ((m  ==  0)) {
+        return self;
+    }
+    const char*   out = "";
+    int   i = 0;
+    while ((i  <  n)) {
+        bool   matched = ((i  +  m)  <=  n);
+        if (matched) {
+            int   k = 0;
+            while ((k  <  m)) {
+                if ((__glide_char_to_int(__glide_string_at(self, (i  +  k)))  !=  __glide_char_to_int(__glide_string_at(find, k)))) {
+                    (matched  =  false);
+                    break;
+                }
+                (k  =  (k  +  1));
+            }
+        }
+        if (matched) {
+            (out  =  __glide_string_concat(out, repl));
+            (i  =  (i  +  m));
+        } else {
+            (out  =  __glide_string_concat(out, __glide_string_substring(self, i, (i  +  1))));
+            (i  =  (i  +  1));
+        }
+    }
+    return out;
+}
+
+const char*   string_trim (const char*   self) {
+    int   n = __glide_string_len(self);
+    int   start = 0;
+    while (((start  <  n)  &&  _ws(__glide_char_to_int(__glide_string_at(self, start))))) {
+        (start  =  (start  +  1));
+    }
+    int   end = n;
+    while (((end  >  start)  &&  _ws(__glide_char_to_int(__glide_string_at(self, (end  -  1)))))) {
+        (end  =  (end  -  1));
+    }
+    return __glide_string_substring(self, start, end);
+}
+
+const char*   string_trim_left (const char*   self) {
+    int   n = __glide_string_len(self);
+    int   start = 0;
+    while (((start  <  n)  &&  _ws(__glide_char_to_int(__glide_string_at(self, start))))) {
+        (start  =  (start  +  1));
+    }
+    return __glide_string_substring(self, start, n);
+}
+
+const char*   string_trim_right (const char*   self) {
+    int   n = __glide_string_len(self);
+    int   end = n;
+    while (((end  >  0)  &&  _ws(__glide_char_to_int(__glide_string_at(self, (end  -  1)))))) {
+        (end  =  (end  -  1));
+    }
+    return __glide_string_substring(self, 0, end);
+}
+
+const char*   string_to_upper (const char*   self) {
+    int   n = __glide_string_len(self);
+    const char*   out = "";
+    int   i = 0;
+    while ((i  <  n)) {
+        int   c = __glide_char_to_int(__glide_string_at(self, i));
+        if (((c  >=  97)  &&  (c  <=  122))) {
+            (out  =  __glide_string_concat(out, __glide_char_to_string((( char )(c  -  32)))));
+        } else {
+            (out  =  __glide_string_concat(out, __glide_string_substring(self, i, (i  +  1))));
+        }
+        (i  =  (i  +  1));
+    }
+    return out;
+}
+
+const char*   string_to_lower (const char*   self) {
+    int   n = __glide_string_len(self);
+    const char*   out = "";
+    int   i = 0;
+    while ((i  <  n)) {
+        int   c = __glide_char_to_int(__glide_string_at(self, i));
+        if (((c  >=  65)  &&  (c  <=  90))) {
+            (out  =  __glide_string_concat(out, __glide_char_to_string((( char )(c  +  32)))));
+        } else {
+            (out  =  __glide_string_concat(out, __glide_string_substring(self, i, (i  +  1))));
+        }
+        (i  =  (i  +  1));
+    }
+    return out;
+}
+
+const char*   string_repeat (const char*   self, int   n) {
+    if ((n  <=  0)) {
+        return "";
+    }
+    const char*   out = "";
+    int   i = 0;
+    while ((i  <  n)) {
+        (out  =  __glide_string_concat(out, self));
+        (i  =  (i  +  1));
+    }
+    return out;
+}
+
+int   string_parse_int (const char*   self) {
+    int   n = __glide_string_len(self);
+    if ((n  ==  0)) {
+        return 0;
+    }
+    int   i = 0;
+    bool   neg = false;
+    if ((__glide_char_to_int(__glide_string_at(self, 0))  ==  45)) {
+        (neg  =  true);
+        (i  =  1);
+    } else {
+        if ((__glide_char_to_int(__glide_string_at(self, 0))  ==  43)) {
+            (i  =  1);
+        }
+    }
+    int   acc = 0;
+    while ((i  <  n)) {
+        int   c = __glide_char_to_int(__glide_string_at(self, i));
+        if (((c  <  48)  ||  (c  >  57))) {
+            return 0;
+        }
+        (acc  =  ((acc  *  10)  +  (c  -  48)));
+        (i  =  (i  +  1));
+    }
+    if (neg) {
+        return (-acc);
+    }
+    return acc;
+}
+
+__glide_result_int_t   string_try_parse_int (const char*   self) {
+    int   n = __glide_string_len(self);
+    if ((n  ==  0)) {
+        return __glide_err_int("empty string");
+    }
+    int   i = 0;
+    bool   neg = false;
+    if ((__glide_char_to_int(__glide_string_at(self, 0))  ==  45)) {
+        (neg  =  true);
+        (i  =  1);
+    } else {
+        if ((__glide_char_to_int(__glide_string_at(self, 0))  ==  43)) {
+            (i  =  1);
+        }
+    }
+    if ((i  >=  n)) {
+        return __glide_err_int("no digits");
+    }
+    int   acc = 0;
+    while ((i  <  n)) {
+        int   c = __glide_char_to_int(__glide_string_at(self, i));
+        if (((c  <  48)  ||  (c  >  57))) {
+            return __glide_err_int("non-digit byte");
+        }
+        (acc  =  ((acc  *  10)  +  (c  -  48)));
+        (i  =  (i  +  1));
+    }
+    if (neg) {
+        return __glide_ok_int((-acc));
+    }
+    return __glide_ok_int(acc);
+}
 
 Lexer*   Lexer_new (const char*   src) {
     Lexer*   l = (( Lexer* )malloc(sizeof( Lexer )));
@@ -1262,6 +2980,9 @@ void   Lexer_skip_trivia (Lexer*   self) {
                         }
                         Lexer_advance(self);
                         Lexer_advance(self);
+                        while ((((self-> pos )  <  (self-> src_len ))  &&  (__glide_char_to_int(Lexer_peek(self))  ==  47))) {
+                            Lexer_advance(self);
+                        }
                         if ((((self-> pos )  <  (self-> src_len ))  &&  (__glide_char_to_int(Lexer_peek(self))  ==  32))) {
                             Lexer_advance(self);
                         }
@@ -1330,6 +3051,44 @@ Token   Lexer_next_token (Lexer*   self) {
             }
         }
         const char*   lex = __glide_string_substring((self-> src ), start_pos, (self-> pos ));
+        if (((__glide_string_eq(lex, "c_raw")  &&  ((self-> pos )  <  (self-> src_len )))  &&  (__glide_char_to_int(__glide_string_at((self-> src ), (self-> pos )))  ==  33))) {
+            int   probe = ((self-> pos )  +  1);
+            while ((probe  <  (self-> src_len ))) {
+                int   pc = __glide_char_to_int(__glide_string_at((self-> src ), probe));
+                if (((((pc  ==  32)  ||  (pc  ==  9))  ||  (pc  ==  10))  ||  (pc  ==  13))) {
+                    (probe  =  (probe  +  1));
+                } else {
+                    break;
+                }
+            }
+            if (((probe  <  (self-> src_len ))  &&  (__glide_char_to_int(__glide_string_at((self-> src ), probe))  ==  123))) {
+                while (((self-> pos )  <=  probe)) {
+                    Lexer_advance(self);
+                }
+                int   body_start = (self-> pos );
+                int   depth = 1;
+                while ((((self-> pos )  <  (self-> src_len ))  &&  (depth  >  0))) {
+                    char   cc = Lexer_peek(self);
+                    int   ic = __glide_char_to_int(cc);
+                    if ((ic  ==  123)) {
+                        (depth  =  (depth  +  1));
+                    } else {
+                        if ((ic  ==  125)) {
+                            (depth  =  (depth  -  1));
+                            if ((depth  ==  0)) {
+                                break;
+                            }
+                        }
+                    }
+                    Lexer_advance(self);
+                }
+                const char*   body = __glide_string_substring((self-> src ), body_start, (self-> pos ));
+                if ((((self-> pos )  <  (self-> src_len ))  &&  (__glide_char_to_int(__glide_string_at((self-> src ), (self-> pos )))  ==  125))) {
+                    Lexer_advance(self);
+                }
+                return (( Token ){. kind  = TOK_RAW_BLOCK, . lexeme  = body, . line  = start_line, . column  = start_col, . doc  = doc});
+            }
+        }
         int   kind = TOK_IDENT;
         if (is_keyword(lex)) {
             (kind  =  TOK_KEYWORD);
@@ -1480,6 +3239,23 @@ Token   Lexer_next_token (Lexer*   self) {
         Lexer_advance(self);
         return (( Token ){. kind  = TOK_OP, . lexeme  = "/=", . line  = start_line, . column  = start_col, . doc  = doc});
     }
+    if ((((ci  ==  46)  &&  (__glide_char_to_int(Lexer_peek_at(self, 1))  ==  46))  &&  (__glide_char_to_int(Lexer_peek_at(self, 2))  ==  46))) {
+        Lexer_advance(self);
+        Lexer_advance(self);
+        Lexer_advance(self);
+        return (( Token ){. kind  = TOK_OP, . lexeme  = "...", . line  = start_line, . column  = start_col, . doc  = doc});
+    }
+    if ((((ci  ==  46)  &&  (__glide_char_to_int(Lexer_peek_at(self, 1))  ==  46))  &&  (__glide_char_to_int(Lexer_peek_at(self, 2))  ==  61))) {
+        Lexer_advance(self);
+        Lexer_advance(self);
+        Lexer_advance(self);
+        return (( Token ){. kind  = TOK_OP, . lexeme  = "..=", . line  = start_line, . column  = start_col, . doc  = doc});
+    }
+    if (((ci  ==  46)  &&  (__glide_char_to_int(Lexer_peek_at(self, 1))  ==  46))) {
+        Lexer_advance(self);
+        Lexer_advance(self);
+        return (( Token ){. kind  = TOK_OP, . lexeme  = "..", . line  = start_line, . column  = start_col, . doc  = doc});
+    }
     Lexer_advance(self);
     const char*   lex = __glide_string_substring((self-> src ), start_pos, (self-> pos ));
     return (( Token ){. kind  = TOK_OP, . lexeme  = lex, . line  = start_line, . column  = start_col, . doc  = doc});
@@ -1558,6 +3334,12 @@ bool   is_keyword (const char*   s) {
     if (__glide_string_eq(s, "interface")) {
         return true;
     }
+    if (__glide_string_eq(s, "trait")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "dyn")) {
+        return true;
+    }
     if (__glide_string_eq(s, "defer")) {
         return true;
     }
@@ -1580,6 +3362,24 @@ bool   is_keyword (const char*   s) {
         return true;
     }
     if (__glide_string_eq(s, "chan")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "macro")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "in")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "spawn_thread")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "asm")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "naked")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "volatile")) {
         return true;
     }
     return false;
@@ -1653,12 +3453,21 @@ Type*   ty_pointer (Type*   inner) {
     return t;
 }
 
-Expr*   expr_int (int   n, int   line, int   col) {
+Expr*   expr_int (int64_t   n, int   line, int   col) {
     Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
     ((e-> kind )  =  EX_INT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
     ((e-> int_val )  =  n);
+    return e;
+}
+
+Expr*   expr_float (const char*   lexeme, int   line, int   col) {
+    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    ((e-> kind )  =  EX_FLOAT);
+    ((e-> line )  =  line);
+    ((e-> column )  =  col);
+    ((e-> float_val )  =  lexeme);
     return e;
 }
 
@@ -1872,6 +3681,35 @@ Stmt*   stmt_match (Expr*   scrutinee, Vector__MatchArm*   arms, int   line, int
     return s;
 }
 
+Stmt*   stmt_craw (const char*   body, int   line, int   col) {
+    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((s-> kind )  =  ST_CRAW);
+    ((s-> line )  =  line);
+    ((s-> column )  =  col);
+    ((s-> name )  =  body);
+    return s;
+}
+
+Stmt*   stmt_asm (int   line, int   col) {
+    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((s-> kind )  =  ST_ASM);
+    ((s-> line )  =  line);
+    ((s-> column )  =  col);
+    Vector__string*   strs = Vector_new__string();
+    Vector__string*   outc = Vector_new__string();
+    Vector__Expr*   oute = Vector_new__Expr();
+    Vector__string*   inc = Vector_new__string();
+    Vector__Expr*   ine = Vector_new__Expr();
+    Vector__string*   clb = Vector_new__string();
+    ((s-> asm_strings )  =  strs);
+    ((s-> asm_out_constraints )  =  outc);
+    ((s-> asm_out_exprs )  =  oute);
+    ((s-> asm_in_constraints )  =  inc);
+    ((s-> asm_in_exprs )  =  ine);
+    ((s-> asm_clobbers )  =  clb);
+    return s;
+}
+
 Expr*   expr_unary (int   op, Expr*   operand, int   line, int   col) {
     Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
     ((e-> kind )  =  EX_UNARY);
@@ -1940,6 +3778,16 @@ Expr*   expr_macro (const char*   name, Vector__Expr*   args, int   line, int   
     ((e-> column )  =  col);
     ((e-> str_val )  =  name);
     ((e-> args )  =  args);
+    ((e-> macro_owner )  =  "");
+    return e;
+}
+
+Expr*   expr_macro_var (const char*   name, int   line, int   col) {
+    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    ((e-> kind )  =  EX_MACRO_VAR);
+    ((e-> line )  =  line);
+    ((e-> column )  =  col);
+    ((e-> str_val )  =  name);
     return e;
 }
 
@@ -2019,6 +3867,9 @@ void   Parser_free (Parser*   self) {
 
 Token   Parser_advance (Parser*   self) {
     Token   prev = (self-> current );
+    ((self-> prev_line )  =  (prev. line ));
+    ((self-> prev_col )  =  (prev. column ));
+    ((self-> prev_len )  =  __glide_string_len((prev. lexeme )));
     ((self-> current )  =  (self-> peek ));
     ((self-> peek )  =  Lexer_next_token((self-> lex )));
     return prev;
@@ -2067,7 +3918,20 @@ bool   Parser_eat_op (Parser*   self, const char*   lexeme) {
 
 void   Parser_err (Parser*   self, const char*   msg) {
     const char*   full = __glide_string_concat(__glide_string_concat(__glide_string_concat(msg, " near '"), ((self-> current ). lexeme )), "'");
-    ParseDiag   d = (( ParseDiag ){. line  = ((self-> current ). line ), . col  = ((self-> current ). column ), . msg  = full});
+    ParseDiag   d = (( ParseDiag ){. origin  = "", . line  = ((self-> current ). line ), . col  = ((self-> current ). column ), . msg  = full});
+    Vector_push__ParseDiag((self-> diags ), d);
+    ((self-> error_count )  =  ((self-> error_count )  +  1));
+}
+
+void   Parser_err_after_prev (Parser*   self, const char*   msg) {
+    const char*   full = __glide_string_concat(__glide_string_concat(__glide_string_concat(msg, " near '"), ((self-> current ). lexeme )), "'");
+    int   line = (self-> prev_line );
+    int   col = ((self-> prev_col )  +  (self-> prev_len ));
+    if ((line  ==  0)) {
+        (line  =  ((self-> current ). line ));
+        (col  =  ((self-> current ). column ));
+    }
+    ParseDiag   d = (( ParseDiag ){. origin  = "", . line  = line, . col  = col, . msg  = full});
     Vector_push__ParseDiag((self-> diags ), d);
     ((self-> error_count )  =  ((self-> error_count )  +  1));
 }
@@ -2077,7 +3941,32 @@ bool   Parser_expect_op (Parser*   self, const char*   lexeme) {
         Parser_advance(self);
         return true;
     }
-    Parser_err(self, __glide_string_concat(__glide_string_concat("expected '", lexeme), "'"));
+    if (__glide_string_eq(lexeme, ";")) {
+        Parser_err_after_prev(self, __glide_string_concat(__glide_string_concat("expected '", lexeme), "'"));
+    } else {
+        Parser_err(self, __glide_string_concat(__glide_string_concat("expected '", lexeme), "'"));
+    }
+    return false;
+}
+
+bool   Parser_at_close_angle (Parser*   self) {
+    if ((((self-> current ). kind )  !=  TOK_OP)) {
+        return false;
+    }
+    return (__glide_string_eq(((self-> current ). lexeme ), ">")  ||  __glide_string_eq(((self-> current ). lexeme ), ">>"));
+}
+
+bool   Parser_consume_close_angle (Parser*   self) {
+    if (Parser_at_op(self, ">")) {
+        Parser_advance(self);
+        return true;
+    }
+    if (Parser_at_op(self, ">>")) {
+        (((self-> current ). lexeme )  =  ">");
+        (((self-> current ). column )  =  (((self-> current ). column )  +  1));
+        return true;
+    }
+    Parser_err(self, "expected '>'");
     return false;
 }
 
@@ -2107,6 +3996,25 @@ Vector__Stmt*   parse_program (Parser*   p) {
 }
 
 Stmt*   parse_top_stmt (Parser*   p) {
+    const char*   cfg = "";
+    if (Parser_at_op(p, "@")) {
+        Parser_advance(p);
+        const char*   attr = Parser_expect_ident(p);
+        if ((!__glide_string_eq(attr, "cfg"))) {
+            Parser_err(p, "only `@cfg(\"...\")` attributes are supported");
+        }
+        Parser_expect_op(p, "(");
+        if ((((p-> current ). kind )  !=  TOK_STRING)) {
+            Parser_err(p, "expected `\"windows\"` or `\"posix\"`");
+        }
+        const char*   lex = ((p-> current ). lexeme );
+        (cfg  =  __glide_string_substring(lex, 1, (__glide_string_len(lex)  -  1)));
+        Parser_advance(p);
+        Parser_expect_op(p, ")");
+        if (((!__glide_string_eq(cfg, "windows"))  &&  (!__glide_string_eq(cfg, "posix")))) {
+            Parser_err(p, "unknown cfg target — expected `windows` or `posix`");
+        }
+    }
     bool   is_pub = false;
     if (Parser_eat_kw(p, "pub")) {
         (is_pub  =  true);
@@ -2117,6 +4025,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
             if ((s  !=  NULL)) {
                 ((s-> is_pub )  =  is_pub);
                 ((s-> fn_body )  =  NULL);
+                ((s-> cfg_target )  =  cfg);
             }
             return s;
         }
@@ -2126,17 +4035,27 @@ Stmt*   parse_top_stmt (Parser*   p) {
         Parser_eat_op(p, ";");
         return NULL;
     }
+    bool   is_naked_fn = false;
+    if (Parser_eat_kw(p, "naked")) {
+        (is_naked_fn  =  true);
+    }
     if (Parser_at_kw(p, "fn")) {
         Stmt*   s = parse_fn(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
+            ((s-> is_naked )  =  is_naked_fn);
+            ((s-> cfg_target )  =  cfg);
         }
         return s;
+    }
+    if (is_naked_fn) {
+        Parser_err(p, "`naked` only applies to `fn`");
     }
     if (Parser_at_kw(p, "let")) {
         Stmt*   s = parse_let(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
+            ((s-> cfg_target )  =  cfg);
         }
         return s;
     }
@@ -2144,6 +4063,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         Stmt*   s = parse_const(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
+            ((s-> cfg_target )  =  cfg);
         }
         return s;
     }
@@ -2151,6 +4071,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         Stmt*   s = parse_struct(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
+            ((s-> cfg_target )  =  cfg);
         }
         return s;
     }
@@ -2158,17 +4079,122 @@ Stmt*   parse_top_stmt (Parser*   p) {
         Stmt*   s = parse_enum(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
+            ((s-> cfg_target )  =  cfg);
         }
         return s;
     }
     if (Parser_at_kw(p, "impl")) {
-        return parse_impl(p);
+        Stmt*   s = parse_impl(p);
+        if ((s  !=  NULL)) {
+            ((s-> cfg_target )  =  cfg);
+        }
+        return s;
+    }
+    if (Parser_at_kw(p, "trait")) {
+        Stmt*   s = parse_trait(p);
+        if ((s  !=  NULL)) {
+            ((s-> is_pub )  =  is_pub);
+            ((s-> cfg_target )  =  cfg);
+        }
+        return s;
     }
     if (Parser_at_kw(p, "import")) {
         return parse_import(p);
     }
+    if ((((p-> current ). kind )  ==  TOK_RAW_BLOCK)) {
+        int   line = ((p-> current ). line );
+        int   col = ((p-> current ). column );
+        const char*   body = ((p-> current ). lexeme );
+        Parser_advance(p);
+        Stmt*   s = stmt_craw(body, line, col);
+        ((s-> cfg_target )  =  cfg);
+        return s;
+    }
+    if (Parser_at_kw(p, "macro")) {
+        Stmt*   s = parse_macro_def(p);
+        if ((s  !=  NULL)) {
+            ((s-> is_pub )  =  is_pub);
+            ((s-> cfg_target )  =  cfg);
+        }
+        return s;
+    }
     Parser_err(p, "unexpected token at top level");
     return NULL;
+}
+
+Stmt*   parse_macro_def (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Parser_advance(p);
+    int   nline = ((p-> current ). line );
+    int   ncol = ((p-> current ). column );
+    int   nlen = __glide_string_len(((p-> current ). lexeme ));
+    const char*   name = Parser_expect_ident(p);
+    Parser_expect_op(p, "!");
+    Parser_expect_op(p, "(");
+    Vector__MacroParam*   params = parse_macro_matchers(p);
+    Parser_expect_op(p, ")");
+    Vector__Stmt*   body = NULL;
+    if (Parser_eat_op(p, ";")) {
+    } else {
+        (body  =  parse_block(p));
+    }
+    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((s-> kind )  =  ST_MACRO_DEF);
+    ((s-> line )  =  line);
+    ((s-> column )  =  col);
+    ((s-> name )  =  name);
+    ((s-> name_line )  =  nline);
+    ((s-> name_col )  =  ncol);
+    ((s-> name_len )  =  nlen);
+    ((s-> macro_params )  =  params);
+    ((s-> then_body )  =  body);
+    return s;
+}
+
+Vector__MacroParam*   parse_macro_matchers (Parser*   p) {
+    Vector__MacroParam*   out = Vector_new__MacroParam();
+    while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
+        if ((Parser_at_op(p, "$")  &&  Parser_peek_op(p, "("))) {
+            Parser_advance(p);
+            Parser_advance(p);
+            Parser_expect_op(p, "$");
+            const char*   bname = Parser_expect_ident(p);
+            Parser_expect_op(p, ":");
+            const char*   kind = Parser_expect_ident(p);
+            if ((!__glide_string_eq(kind, "expr"))) {
+                Parser_err(p, "only `:expr` matchers supported in v1");
+            }
+            Parser_expect_op(p, ")");
+            const char*   sep = "";
+            if ((Parser_at_op(p, ",")  ||  Parser_at_op(p, ";"))) {
+                (sep  =  ((p-> current ). lexeme ));
+                Parser_advance(p);
+            }
+            Parser_expect_op(p, "*");
+            MacroParam   mp = (( MacroParam ){. name  = bname, . is_variadic  = true, . separator  = sep});
+            Vector_push__MacroParam(out, mp);
+        } else {
+            if (Parser_at_op(p, "$")) {
+                Parser_advance(p);
+                const char*   bname = Parser_expect_ident(p);
+                Parser_expect_op(p, ":");
+                const char*   kind = Parser_expect_ident(p);
+                if ((!__glide_string_eq(kind, "expr"))) {
+                    Parser_err(p, "only `:expr` matchers supported in v1");
+                }
+                MacroParam   mp = (( MacroParam ){. name  = bname, . is_variadic  = false, . separator  = ""});
+                Vector_push__MacroParam(out, mp);
+            } else {
+                Parser_err(p, "expected `$name:expr` or `$($name:expr),*` in macro matcher list");
+                Parser_advance(p);
+            }
+        }
+        if ((!Parser_eat_op(p, ","))) {
+            break;
+        }
+    }
+    return out;
 }
 
 Stmt*   parse_fn (Parser*   p) {
@@ -2179,10 +4205,17 @@ Stmt*   parse_fn (Parser*   p) {
     int   ncol = ((p-> current ). column );
     int   nlen = __glide_string_len(((p-> current ). lexeme ));
     const char*   name = Parser_expect_ident(p);
-    Vector__string*   tps = parse_type_params(p);
+    Vector__string*   tps_bounds = Vector_new__string();
+    Vector__string*   tps = parse_type_params_with_bounds(p, tps_bounds);
     Parser_expect_op(p, "(");
     Vector__Param*   params = Vector_new__Param();
+    bool   variadic = false;
     while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
+        if (Parser_at_op(p, "...")) {
+            Parser_advance(p);
+            (variadic  =  true);
+            break;
+        }
         const char*   pname = Parser_expect_ident(p);
         Parser_expect_op(p, ":");
         Type*   pty = parse_type(p);
@@ -2201,9 +4234,11 @@ Stmt*   parse_fn (Parser*   p) {
         Stmt*   s = stmt_fn(name, params, ret_ty, NULL, line, col);
         if ((s  !=  NULL)) {
             ((s-> type_params )  =  tps);
+            ((s-> type_param_bounds )  =  tps_bounds);
             ((s-> name_line )  =  nline);
             ((s-> name_col )  =  ncol);
             ((s-> name_len )  =  nlen);
+            ((s-> is_variadic )  =  variadic);
         }
         return s;
     }
@@ -2211,9 +4246,11 @@ Stmt*   parse_fn (Parser*   p) {
     Stmt*   s = stmt_fn(name, params, ret_ty, body, line, col);
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
+        ((s-> type_param_bounds )  =  tps_bounds);
         ((s-> name_line )  =  nline);
         ((s-> name_col )  =  ncol);
         ((s-> name_len )  =  nlen);
+        ((s-> is_variadic )  =  variadic);
     }
     return s;
 }
@@ -2226,6 +4263,38 @@ Vector__string*   parse_type_params (Parser*   p) {
     while (((!Parser_at_op(p, ">"))  &&  (!Parser_at_eof(p)))) {
         const char*   name = Parser_expect_ident(p);
         Vector_push__string(tps, name);
+        if (Parser_eat_op(p, ":")) {
+            const char*   _b = Parser_expect_ident(p);
+            while (Parser_eat_op(p, "+")) {
+                const char*   _nb = Parser_expect_ident(p);
+            }
+        }
+        if ((!Parser_eat_op(p, ","))) {
+            break;
+        }
+    }
+    Parser_expect_op(p, ">");
+    return tps;
+}
+
+Vector__string*   parse_type_params_with_bounds (Parser*   p, Vector__string*   bounds_out) {
+    Vector__string*   tps = Vector_new__string();
+    if ((!Parser_eat_op(p, "<"))) {
+        return tps;
+    }
+    while (((!Parser_at_op(p, ">"))  &&  (!Parser_at_eof(p)))) {
+        const char*   name = Parser_expect_ident(p);
+        Vector_push__string(tps, name);
+        const char*   bound = "";
+        if (Parser_eat_op(p, ":")) {
+            const char*   b0 = Parser_expect_ident(p);
+            (bound  =  b0);
+            while (Parser_eat_op(p, "+")) {
+                const char*   nb = Parser_expect_ident(p);
+                (bound  =  __glide_string_concat(__glide_string_concat(bound, "+"), nb));
+            }
+        }
+        Vector_push__string(bounds_out, bound);
         if ((!Parser_eat_op(p, ","))) {
             break;
         }
@@ -2250,14 +4319,24 @@ Stmt*   parse_struct (Parser*   p) {
     int   ncol = ((p-> current ). column );
     int   nlen = __glide_string_len(((p-> current ). lexeme ));
     const char*   name = Parser_expect_ident(p);
-    Vector__string*   tps = parse_type_params(p);
+    Vector__string*   tps_bounds = Vector_new__string();
+    Vector__string*   tps = parse_type_params_with_bounds(p, tps_bounds);
     Parser_expect_op(p, "{");
     Vector__Field*   fields = Vector_new__Field();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+        const char*   fdoc = ((p-> current ). doc );
+        bool   fpub = false;
+        if (Parser_eat_kw(p, "pub")) {
+            (fpub  =  true);
+        } else {
+            if (Parser_eat_op(p, "!")) {
+                (fpub  =  true);
+            }
+        }
         const char*   fname = Parser_expect_ident(p);
         Parser_expect_op(p, ":");
         Type*   fty = parse_type(p);
-        Field   f = (( Field ){. name  = fname, . ty  = fty});
+        Field   f = (( Field ){. name  = fname, . ty  = fty, . doc  = fdoc, . is_pub  = fpub});
         Vector_push__Field(fields, f);
         if ((!Parser_eat_op(p, ","))) {
             break;
@@ -2267,6 +4346,7 @@ Stmt*   parse_struct (Parser*   p) {
     Stmt*   s = stmt_struct(name, fields, line, col);
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
+        ((s-> type_param_bounds )  =  tps_bounds);
         ((s-> name_line )  =  nline);
         ((s-> name_col )  =  ncol);
         ((s-> name_len )  =  nlen);
@@ -2318,15 +4398,25 @@ Stmt*   parse_enum (Parser*   p) {
     return s;
 }
 
-Stmt*   parse_impl (Parser*   p) {
+Stmt*   parse_trait (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
     Parser_advance(p);
-    Vector__string*   tps = parse_type_params(p);
-    Type*   target = parse_type(p);
+    int   nline = ((p-> current ). line );
+    int   ncol = ((p-> current ). column );
+    const char*   name = Parser_expect_ident(p);
+    int   nlen = __glide_string_len(name);
+    Vector__string*   supers = Vector_new__string();
+    if (Parser_eat_op(p, ":")) {
+        Vector_push__string(supers, Parser_expect_ident(p));
+        while (Parser_eat_op(p, ",")) {
+            Vector_push__string(supers, Parser_expect_ident(p));
+        }
+    }
     Parser_expect_op(p, "{");
     Vector__Stmt*   methods = Vector_new__Stmt();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+        const char*   doc = ((p-> current ). doc );
         bool   is_pub = false;
         if (Parser_eat_kw(p, "pub")) {
             (is_pub  =  true);
@@ -2335,38 +4425,190 @@ Stmt*   parse_impl (Parser*   p) {
             Stmt*   m = parse_fn(p);
             if ((m  !=  NULL)) {
                 ((m-> is_pub )  =  is_pub);
+                if (((doc  !=  NULL)  &&  (!__glide_string_eq(doc, "")))) {
+                    ((m-> doc_comment )  =  doc);
+                }
                 Vector_push__Stmt(methods, (*m));
             }
         } else {
-            Parser_err(p, "expected fn inside impl");
+            Parser_err(p, "expected `fn` inside trait body");
             Parser_advance(p);
+        }
+    }
+    Parser_expect_op(p, "}");
+    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((s-> kind )  =  ST_TRAIT);
+    ((s-> line )  =  line);
+    ((s-> column )  =  col);
+    ((s-> name )  =  name);
+    ((s-> name_line )  =  nline);
+    ((s-> name_col )  =  ncol);
+    ((s-> name_len )  =  nlen);
+    ((s-> impl_methods )  =  methods);
+    ((s-> trait_supers )  =  supers);
+    return s;
+}
+
+Stmt*   parse_impl (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Parser_advance(p);
+    Vector__string*   tps_bounds = Vector_new__string();
+    Vector__string*   tps = parse_type_params_with_bounds(p, tps_bounds);
+    Type*   target = parse_type(p);
+    const char*   trait_name = "";
+    if (Parser_at_kw(p, "for")) {
+        if (((target  !=  NULL)  &&  ((target-> kind )  ==  TY_NAMED))) {
+            (trait_name  =  (target-> name ));
+        }
+        Parser_advance(p);
+        (target  =  parse_type(p));
+    }
+    const char*   ns = "";
+    if (Parser_at_kw(p, "in")) {
+        Parser_advance(p);
+        (ns  =  Parser_expect_ident(p));
+    }
+    Parser_expect_op(p, "{");
+    Vector__Stmt*   methods = Vector_new__Stmt();
+    while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+        const char*   doc = ((p-> current ). doc );
+        bool   is_pub = false;
+        if (Parser_eat_kw(p, "pub")) {
+            (is_pub  =  true);
+        }
+        if (Parser_at_kw(p, "fn")) {
+            Stmt*   m = parse_fn(p);
+            if ((m  !=  NULL)) {
+                ((m-> is_pub )  =  is_pub);
+                if (((doc  !=  NULL)  &&  (!__glide_string_eq(doc, "")))) {
+                    ((m-> doc_comment )  =  doc);
+                }
+                Vector_push__Stmt(methods, (*m));
+            }
+        } else {
+            if (Parser_at_kw(p, "macro")) {
+                Stmt*   m = parse_macro_def(p);
+                if ((m  !=  NULL)) {
+                    ((m-> is_pub )  =  is_pub);
+                    if (((doc  !=  NULL)  &&  (!__glide_string_eq(doc, "")))) {
+                        ((m-> doc_comment )  =  doc);
+                    }
+                    Vector_push__Stmt(methods, (*m));
+                }
+            } else {
+                Parser_err(p, "expected fn or macro inside impl");
+                Parser_advance(p);
+            }
         }
     }
     Parser_expect_op(p, "}");
     Stmt*   s = stmt_impl(target, methods, line, col);
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
+        ((s-> type_param_bounds )  =  tps_bounds);
+        if ((!__glide_string_eq(ns, ""))) {
+            ((s-> import_path )  =  ns);
+        }
+        if ((!__glide_string_eq(trait_name, ""))) {
+            ((s-> impl_trait_name )  =  trait_name);
+            substitute_self_in_methods(methods, target);
+        }
     }
     return s;
+}
+
+void   substitute_self_in_methods (Vector__Stmt*   methods, Type*   target) {
+    if (((methods  ==  NULL)  ||  (target  ==  NULL))) {
+        return;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(methods)); i++) {
+        Stmt   m = Vector_get__Stmt(methods, i);
+        if (((m. fn_params )  !=  NULL)) {
+            for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
+                Param   p = Vector_get__Param((m. fn_params ), j);
+                if (((p. ty )  !=  NULL)) {
+                    ((p. ty )  =  substitute_self_in_type((p. ty ), target));
+                }
+                Vector_set__Param((m. fn_params ), j, p);
+            }
+        }
+        if (((m. fn_ret_ty )  !=  NULL)) {
+            ((m. fn_ret_ty )  =  substitute_self_in_type((m. fn_ret_ty ), target));
+        }
+        Vector_set__Stmt(methods, i, m);
+    }
+}
+
+Type*   substitute_self_in_type (Type*   t, Type*   target) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    if ((((t-> kind )  ==  TY_NAMED)  &&  __glide_string_eq((t-> name ), "Self"))) {
+        return target;
+    }
+    if (((t-> inner )  !=  NULL)) {
+        ((t-> inner )  =  substitute_self_in_type((t-> inner ), target));
+    }
+    if (((t-> fnptr_ret )  !=  NULL)) {
+        ((t-> fnptr_ret )  =  substitute_self_in_type((t-> fnptr_ret ), target));
+    }
+    return t;
 }
 
 Stmt*   parse_import (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
     Parser_advance(p);
-    const char*   path = "";
     if ((((p-> current ). kind )  ==  TOK_STRING)) {
-        (path  =  ((p-> current ). lexeme ));
-        Parser_advance(p);
-    } else {
-        (path  =  Parser_expect_ident(p));
-        while (Parser_eat_op(p, "::")) {
-            const char*   part = Parser_expect_ident(p);
-            (path  =  __glide_string_concat(__glide_string_concat(path, "/"), part));
+        Parser_err(p, "string-literal imports were removed; use `import a::b::Item;` instead");
+        while (((!Parser_at_op(p, ";"))  &&  (!Parser_at_eof(p)))) {
+            Parser_advance(p);
         }
+        Parser_eat_op(p, ";");
+        return NULL;
     }
+    const char*   path = "";
+    Vector__string*   items = NULL;
+    Vector__string*   segs = Vector_new__string();
+    Vector__string*   collected = Vector_new__string();
+    bool   wildcard = false;
+    Vector_push__string(segs, Parser_expect_ident(p));
+    while (Parser_at_op(p, "::")) {
+        Parser_advance(p);
+        if (Parser_at_op(p, "{")) {
+            Parser_advance(p);
+            while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+                Vector_push__string(collected, Parser_expect_ident(p));
+                if ((!Parser_eat_op(p, ","))) {
+                    break;
+                }
+            }
+            Parser_expect_op(p, "}");
+            break;
+        }
+        if (Parser_at_op(p, "*")) {
+            Parser_advance(p);
+            (wildcard  =  true);
+            break;
+        }
+        Vector_push__string(segs, Parser_expect_ident(p));
+    }
+    if ((Vector_len__string(collected)  >  0)) {
+        (items  =  collected);
+    }
+    for (int   i = 0; (i  <  Vector_len__string(segs)); i++) {
+        if ((i  >  0)) {
+            (path  =  __glide_string_concat(path, "/"));
+        }
+        (path  =  __glide_string_concat(path, Vector_get__string(segs, i)));
+    }
+    (path  =  __glide_string_concat(path, ".glide"));
     Parser_expect_op(p, ";");
-    return stmt_import(path, line, col);
+    Stmt*   s = stmt_import(path, line, col);
+    ((s-> imported_items )  =  items);
+    ((s-> import_wildcard )  =  wildcard);
+    return s;
 }
 
 Vector__Stmt*   parse_block (Parser*   p) {
@@ -2388,7 +4630,108 @@ Vector__Stmt*   parse_block (Parser*   p) {
     return stmts;
 }
 
+Stmt*   parse_asm_block (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Parser_advance(p);
+    bool   is_volatile = false;
+    if (Parser_eat_kw(p, "volatile")) {
+        (is_volatile  =  true);
+    }
+    Parser_expect_op(p, "{");
+    Stmt*   s = stmt_asm(line, col);
+    ((s-> is_volatile )  =  is_volatile);
+    while ((((p-> current ). kind )  ==  TOK_STRING)) {
+        const char*   lex = ((p-> current ). lexeme );
+        const char*   inner = __glide_string_substring(lex, 1, (__glide_string_len(lex)  -  1));
+        Vector_push__string((s-> asm_strings ), inner);
+        Parser_advance(p);
+    }
+    int   slot = 0;
+    while ((Parser_eat_op(p, ":")  &&  (slot  <  3))) {
+        if ((Parser_at_op(p, "}")  ||  Parser_at_op(p, ":"))) {
+            (slot  =  (slot  +  1));
+            continue;
+        }
+        if ((slot  ==  2)) {
+            while ((((p-> current ). kind )  ==  TOK_STRING)) {
+                const char*   lex = ((p-> current ). lexeme );
+                const char*   inner = __glide_string_substring(lex, 1, (__glide_string_len(lex)  -  1));
+                Vector_push__string((s-> asm_clobbers ), inner);
+                Parser_advance(p);
+                if ((!Parser_eat_op(p, ","))) {
+                    break;
+                }
+            }
+        } else {
+            while ((((p-> current ). kind )  ==  TOK_STRING)) {
+                const char*   lex = ((p-> current ). lexeme );
+                const char*   cstr = __glide_string_substring(lex, 1, (__glide_string_len(lex)  -  1));
+                Parser_advance(p);
+                Parser_expect_op(p, "(");
+                Expr*   e = parse_expr(p, 0);
+                Parser_expect_op(p, ")");
+                if ((slot  ==  0)) {
+                    Vector_push__string((s-> asm_out_constraints ), cstr);
+                    if ((e  !=  NULL)) {
+                        Vector_push__Expr((s-> asm_out_exprs ), (*e));
+                    }
+                } else {
+                    Vector_push__string((s-> asm_in_constraints ), cstr);
+                    if ((e  !=  NULL)) {
+                        Vector_push__Expr((s-> asm_in_exprs ), (*e));
+                    }
+                }
+                if ((!Parser_eat_op(p, ","))) {
+                    break;
+                }
+            }
+        }
+        (slot  =  (slot  +  1));
+    }
+    Parser_expect_op(p, "}");
+    Parser_eat_op(p, ";");
+    return s;
+}
+
 Stmt*   parse_stmt (Parser*   p) {
+    if ((Parser_at_op(p, "$")  &&  Parser_peek_op(p, "("))) {
+        int   line = ((p-> current ). line );
+        int   col = ((p-> current ). column );
+        Parser_advance(p);
+        Parser_advance(p);
+        Vector__Stmt*   inner = Vector_new__Stmt();
+        while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
+            Stmt*   s2 = parse_stmt(p);
+            if ((s2  !=  NULL)) {
+                Vector_push__Stmt(inner, (*s2));
+            }
+        }
+        Parser_expect_op(p, ")");
+        const char*   sep = "";
+        if ((Parser_at_op(p, ",")  ||  Parser_at_op(p, ";"))) {
+            (sep  =  ((p-> current ). lexeme ));
+            Parser_advance(p);
+        }
+        Parser_expect_op(p, "*");
+        Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+        ((s-> kind )  =  ST_MACRO_REP);
+        ((s-> line )  =  line);
+        ((s-> column )  =  col);
+        ((s-> then_body )  =  inner);
+        ((s-> macro_rep_sep )  =  sep);
+        return s;
+    }
+    if (Parser_at_kw(p, "asm")) {
+        return parse_asm_block(p);
+    }
+    if ((((p-> current ). kind )  ==  TOK_RAW_BLOCK)) {
+        int   line = ((p-> current ). line );
+        int   col = ((p-> current ). column );
+        const char*   body = ((p-> current ). lexeme );
+        Parser_advance(p);
+        return stmt_craw(body, line, col);
+    }
     if (Parser_at_kw(p, "let")) {
         return parse_let(p);
     }
@@ -2430,6 +4773,18 @@ Stmt*   parse_stmt (Parser*   p) {
         Expr*   e = parse_expr(p, 0);
         Parser_expect_op(p, ";");
         return stmt_spawn(e, line, col);
+    }
+    if (Parser_at_kw(p, "spawn_thread")) {
+        int   line = ((p-> current ). line );
+        int   col = ((p-> current ). column );
+        Parser_advance(p);
+        Expr*   e = parse_expr(p, 0);
+        Parser_expect_op(p, ";");
+        Stmt*   s = stmt_spawn(e, line, col);
+        if ((s  !=  NULL)) {
+            ((s-> is_spawn_thread )  =  true);
+        }
+        return s;
     }
     if (Parser_at_kw(p, "break")) {
         int   line = ((p-> current ). line );
@@ -2639,6 +4994,35 @@ Stmt*   parse_while (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
     Parser_advance(p);
+    if (Parser_at_kw(p, "let")) {
+        int   nline = ((p-> peek ). line );
+        int   ncol = ((p-> peek ). column );
+        int   nlen = __glide_string_len(((p-> peek ). lexeme ));
+        Parser_advance(p);
+        const char*   var_name = Parser_expect_ident(p);
+        Type*   ty = NULL;
+        if (Parser_eat_op(p, ":")) {
+            (ty  =  parse_type(p));
+        }
+        Parser_expect_op(p, "=");
+        bool   saved = (p-> no_struct_lit );
+        ((p-> no_struct_lit )  =  true);
+        Expr*   recv = parse_expr(p, 0);
+        ((p-> no_struct_lit )  =  saved);
+        Vector__Stmt*   body = parse_block(p);
+        Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+        ((s-> kind )  =  ST_WHILE_RECV);
+        ((s-> line )  =  line);
+        ((s-> column )  =  col);
+        ((s-> name )  =  var_name);
+        ((s-> name_line )  =  nline);
+        ((s-> name_col )  =  ncol);
+        ((s-> name_len )  =  nlen);
+        ((s-> let_ty )  =  ty);
+        ((s-> let_value )  =  recv);
+        ((s-> then_body )  =  body);
+        return s;
+    }
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
     Expr*   cond = parse_expr(p, 0);
@@ -2651,6 +5035,9 @@ Stmt*   parse_for (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
     Parser_advance(p);
+    if ((((((p-> current ). kind )  ==  TOK_IDENT)  &&  (((p-> peek ). kind )  ==  TOK_KEYWORD))  &&  __glide_string_eq(((p-> peek ). lexeme ), "in"))) {
+        return parse_for_in(p, line, col);
+    }
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
     Stmt*   init = NULL;
@@ -2695,6 +5082,41 @@ Stmt*   parse_for (Parser*   p) {
     return stmt_for(init, cond, step, body, line, col);
 }
 
+Stmt*   parse_for_in (Parser*   p, int   line, int   col) {
+    int   nline = ((p-> current ). line );
+    int   ncol = ((p-> current ). column );
+    int   nlen = __glide_string_len(((p-> current ). lexeme ));
+    const char*   var_name = Parser_expect_ident(p);
+    Parser_advance(p);
+    bool   saved = (p-> no_struct_lit );
+    ((p-> no_struct_lit )  =  true);
+    Expr*   lo = parse_expr(p, 0);
+    Expr*   hi = NULL;
+    bool   inclusive = false;
+    if ((Parser_at_op(p, "..")  ||  Parser_at_op(p, "..="))) {
+        if (Parser_at_op(p, "..=")) {
+            (inclusive  =  true);
+        }
+        Parser_advance(p);
+        (hi  =  parse_expr(p, 0));
+    }
+    ((p-> no_struct_lit )  =  saved);
+    Vector__Stmt*   body = parse_block(p);
+    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((s-> kind )  =  ST_FOR_IN);
+    ((s-> line )  =  line);
+    ((s-> column )  =  col);
+    ((s-> name )  =  var_name);
+    ((s-> name_line )  =  nline);
+    ((s-> name_col )  =  ncol);
+    ((s-> name_len )  =  nlen);
+    ((s-> let_value )  =  lo);
+    ((s-> cond )  =  hi);
+    ((s-> is_mut )  =  inclusive);
+    ((s-> then_body )  =  body);
+    return s;
+}
+
 Type*   parse_type (Parser*   p) {
     if (Parser_eat_op(p, "!")) {
         Type*   inner = parse_type(p);
@@ -2703,6 +5125,14 @@ Type*   parse_type (Parser*   p) {
     if (Parser_eat_op(p, "*")) {
         Type*   inner = parse_type(p);
         return ty_pointer(inner);
+    }
+    if (Parser_at_kw(p, "dyn")) {
+        Parser_advance(p);
+        const char*   name = Parser_expect_ident(p);
+        Type*   t = (( Type* )calloc(1, sizeof( Type )));
+        ((t-> kind )  =  TY_DYN);
+        ((t-> name )  =  name);
+        return t;
     }
     if (Parser_eat_op(p, "&")) {
         if (Parser_eat_kw(p, "mut")) {
@@ -2757,7 +5187,7 @@ Type*   parse_type (Parser*   p) {
         if (Parser_at_op(p, "<")) {
             Parser_advance(p);
             Vector__Type*   args = Vector_new__Type();
-            while (((!Parser_at_op(p, ">"))  &&  (!Parser_at_eof(p)))) {
+            while (((!Parser_at_close_angle(p))  &&  (!Parser_at_eof(p)))) {
                 Type*   inner = parse_type(p);
                 if ((inner  !=  NULL)) {
                     Vector_push__Type(args, (*inner));
@@ -2766,7 +5196,7 @@ Type*   parse_type (Parser*   p) {
                     break;
                 }
             }
-            Parser_expect_op(p, ">");
+            Parser_consume_close_angle(p);
             return ty_generic(name, args);
         }
         return ty_named(name);
@@ -2806,8 +5236,32 @@ Expr*   parse_expr (Parser*   p, int   min_bp) {
         }
         if (Parser_at_op(p, ".")) {
             Parser_advance(p);
-            const char*   name = Parser_expect_ident(p);
-            (left  =  expr_member(left, name));
+            const char*   mname = Parser_expect_ident(p);
+            if (Parser_at_op(p, "::")) {
+                Parser_advance(p);
+                const char*   real = Parser_expect_ident(p);
+                (mname  =  __glide_string_concat(__glide_string_concat(mname, "::"), real));
+            }
+            if ((Parser_at_op(p, "!")  &&  Parser_peek_op(p, "("))) {
+                Parser_advance(p);
+                Parser_advance(p);
+                Vector__Expr*   margs = Vector_new__Expr();
+                while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
+                    Expr*   a = parse_expr(p, 0);
+                    if ((a  !=  NULL)) {
+                        Vector_push__Expr(margs, (*a));
+                    }
+                    if ((!Parser_eat_op(p, ","))) {
+                        break;
+                    }
+                }
+                Parser_expect_op(p, ")");
+                Expr*   me = expr_macro(mname, margs, (left-> line ), (left-> column ));
+                ((me-> macro_recv )  =  left);
+                (left  =  me);
+                continue;
+            }
+            (left  =  expr_member(left, mname));
             continue;
         }
         if (Parser_at_op(p, "++")) {
@@ -2913,19 +5367,90 @@ int   peek_binop_bp (Parser*   p) {
     return 0;
 }
 
+Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int   col) {
+    int   n = __glide_string_len(raw);
+    bool   has_interp = false;
+    int   probe = 0;
+    while (((probe  +  1)  <  n)) {
+        if (((__glide_char_to_int(__glide_string_at(raw, probe))  ==  36)  &&  (__glide_char_to_int(__glide_string_at(raw, (probe  +  1)))  ==  123))) {
+            (has_interp  =  true);
+            break;
+        }
+        (probe  =  (probe  +  1));
+    }
+    if ((!has_interp)) {
+        return expr_string(raw, line, col);
+    }
+    const char*   fmt = "";
+    Vector__Expr*   inner_args = Vector_new__Expr();
+    int   j = 0;
+    while ((j  <  n)) {
+        char   c0 = __glide_string_at(raw, j);
+        if ((((__glide_char_to_int(c0)  ==  36)  &&  ((j  +  1)  <  n))  &&  (__glide_char_to_int(__glide_string_at(raw, (j  +  1)))  ==  123))) {
+            int   start_expr = (j  +  2);
+            int   k = start_expr;
+            while (((k  <  n)  &&  (__glide_char_to_int(__glide_string_at(raw, k))  !=  125))) {
+                (k  =  (k  +  1));
+            }
+            if ((k  >=  n)) {
+                Parser_err(p, "unterminated `${...}` in string literal");
+                return expr_string(raw, line, col);
+            }
+            const char*   expr_src = __glide_string_substring(raw, start_expr, k);
+            Lexer*   sub_lex = Lexer_new(expr_src);
+            Parser*   sub_par = Parser_new(sub_lex);
+            Expr*   e = parse_expr(sub_par, 0);
+            for (int   di = 0; (di  <  Vector_len__ParseDiag((sub_par-> diags ))); di++) {
+                ParseDiag   d = Vector_get__ParseDiag((sub_par-> diags ), di);
+                ParseDiag   bumped = (( ParseDiag ){. origin  = (d. origin ), . line  = line, . col  = col, . msg  = __glide_string_concat("in `${...}`: ", (d. msg ))});
+                Vector_push__ParseDiag((p-> diags ), bumped);
+                ((p-> error_count )  =  ((p-> error_count )  +  1));
+            }
+            if ((e  ==  NULL)) {
+                return expr_string(raw, line, col);
+            }
+            Vector_push__Expr(inner_args, (*e));
+            (fmt  =  __glide_string_concat(fmt, "{}"));
+            (j  =  (k  +  1));
+        } else {
+            (fmt  =  __glide_string_concat(fmt, __glide_string_substring(raw, j, (j  +  1))));
+            (j  =  (j  +  1));
+        }
+    }
+    Vector__Expr*   final_args = Vector_new__Expr();
+    Vector_push__Expr(final_args, (*expr_string(fmt, line, col)));
+    for (int   i2 = 0; (i2  <  Vector_len__Expr(inner_args)); i2++) {
+        Vector_push__Expr(final_args, Vector_get__Expr(inner_args, i2));
+    }
+    Expr*   m = expr_macro("format", final_args, line, col);
+    ((m-> field )  =  raw);
+    return m;
+}
+
 Expr*   parse_prefix (Parser*   p) {
     Token   tok = (p-> current );
     int   line = (tok. line );
     int   col = (tok. column );
+    if ((((tok. kind )  ==  TOK_OP)  &&  __glide_string_eq((tok. lexeme ), "$"))) {
+        if ((!Parser_peek_op(p, "("))) {
+            Parser_advance(p);
+            const char*   nm = Parser_expect_ident(p);
+            return expr_macro_var(nm, line, col);
+        }
+    }
     if (((tok. kind )  ==  TOK_INT)) {
         Parser_advance(p);
         return expr_int(parse_int_lexeme((tok. lexeme )), line, col);
+    }
+    if (((tok. kind )  ==  TOK_FLOAT)) {
+        Parser_advance(p);
+        return expr_float((tok. lexeme ), line, col);
     }
     if (((tok. kind )  ==  TOK_STRING)) {
         Parser_advance(p);
         int   len = __glide_string_len((tok. lexeme ));
         const char*   inner = __glide_string_substring((tok. lexeme ), 1, (len  -  1));
-        return expr_string(inner, line, col);
+        return build_string_or_interp(p, inner, line, col);
     }
     if (((tok. kind )  ==  TOK_CHAR)) {
         Parser_advance(p);
@@ -3031,8 +5556,32 @@ Expr*   parse_prefix (Parser*   p) {
         Parser_advance(p);
         if (Parser_at_op(p, "::")) {
             Parser_advance(p);
-            const char*   member = Parser_expect_ident(p);
-            return expr_path((tok. lexeme ), member, line, col);
+            const char*   prefix = (tok. lexeme );
+            const char*   last = Parser_expect_ident(p);
+            while (Parser_at_op(p, "::")) {
+                Parser_advance(p);
+                (prefix  =  __glide_string_concat(__glide_string_concat(prefix, "::"), last));
+                (last  =  Parser_expect_ident(p));
+            }
+            if ((Parser_at_op(p, "!")  &&  Parser_peek_op(p, "("))) {
+                Parser_advance(p);
+                Parser_advance(p);
+                Vector__Expr*   margs = Vector_new__Expr();
+                while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
+                    Expr*   a = parse_expr(p, 0);
+                    if ((a  !=  NULL)) {
+                        Vector_push__Expr(margs, (*a));
+                    }
+                    if ((!Parser_eat_op(p, ","))) {
+                        break;
+                    }
+                }
+                Parser_expect_op(p, ")");
+                Expr*   me = expr_macro(last, margs, line, col);
+                ((me-> macro_owner )  =  prefix);
+                return me;
+            }
+            return expr_path(prefix, last, line, col);
         }
         if ((Parser_at_op(p, "!")  &&  Parser_peek_op(p, "("))) {
             Parser_advance(p);
@@ -3048,6 +5597,42 @@ Expr*   parse_prefix (Parser*   p) {
                 }
             }
             Parser_expect_op(p, ")");
+            if ((__glide_string_eq((tok. lexeme ), "include_str")  &&  (Vector_len__Expr(args)  ==  1))) {
+                Expr   arg = Vector_get__Expr(args, 0);
+                if (((arg. kind )  ==  EX_STRING)) {
+                    const char*   raw = read_file((arg. str_val ));
+                    const char*   esc = "";
+                    int   n = __glide_string_len(raw);
+                    int   k = 0;
+                    while ((k  <  n)) {
+                        char   c = __glide_string_at(raw, k);
+                        int   v = __glide_char_to_int(c);
+                        if ((v  ==  34)) {
+                            (esc  =  __glide_string_concat(esc, "\\\""));
+                        } else {
+                            if ((v  ==  92)) {
+                                (esc  =  __glide_string_concat(esc, "\\\\"));
+                            } else {
+                                if ((v  ==  10)) {
+                                    (esc  =  __glide_string_concat(esc, "\\n"));
+                                } else {
+                                    if ((v  ==  13)) {
+                                        (esc  =  __glide_string_concat(esc, "\\r"));
+                                    } else {
+                                        if ((v  ==  9)) {
+                                            (esc  =  __glide_string_concat(esc, "\\t"));
+                                        } else {
+                                            (esc  =  __glide_string_concat(esc, __glide_string_substring(raw, k, (k  +  1))));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        (k  =  (k  +  1));
+                    }
+                    return expr_string(esc, line, col);
+                }
+            }
             return expr_macro((tok. lexeme ), args, line, col);
         }
         if (((Parser_at_op(p, "{")  &&  starts_uppercase((tok. lexeme )))  &&  (!(p-> no_struct_lit )))) {
@@ -3111,16 +5696,16 @@ Expr*   parse_prefix (Parser*   p) {
     return NULL;
 }
 
-int   parse_int_lexeme (const char*   s) {
+int64_t   parse_int_lexeme (const char*   s) {
     int   n = __glide_string_len(s);
-    int   v = 0;
+    int64_t   v = 0;
     for (int   i = 0; (i  <  n); i++) {
         char   c = __glide_string_at(s, i);
         int   ci = __glide_char_to_int(c);
         if ((ci  ==  95)) {
             continue;
         }
-        (v  =  ((v  *  10)  +  (ci  -  48)));
+        (v  =  ((v  *  10)  +  (( int64_t )(ci  -  48))));
     }
     return v;
 }
@@ -3171,6 +5756,648 @@ char   decode_char_inner (const char*   s) {
     return esc;
 }
 
+Vector__Stmt*   expand_macros (Vector__Stmt*   program) {
+    HashMap__Stmt*   static_macros = HashMap_new__Stmt();
+    Vector__TypeMacro*   type_macros = Vector_new__TypeMacro();
+    Vector__Stmt*   cleaned = Vector_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((s. kind )  ==  ST_MACRO_DEF)) {
+            HashMap_insert__Stmt(static_macros, (s. name ), s);
+            continue;
+        }
+        if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
+            Vector__Stmt*   kept = Vector_new__Stmt();
+            const char*   owner = type_owner_name((s. impl_target ));
+            for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
+                Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
+                if (((m. kind )  ==  ST_MACRO_DEF)) {
+                    TypeMacro   tm = (( TypeMacro ){. owner  = owner, . name  = (m. name ), . def  = m});
+                    Vector_push__TypeMacro(type_macros, tm);
+                } else {
+                    Vector_push__Stmt(kept, m);
+                }
+            }
+            ((s. impl_methods )  =  kept);
+        }
+        Vector_push__Stmt(cleaned, s);
+    }
+    expand_in_program(cleaned, static_macros, type_macros);
+    return cleaned;
+}
+
+const char*   type_owner_name (Type*   t) {
+    if ((t  ==  NULL)) {
+        return "";
+    }
+    if (((t-> kind )  ==  TY_NAMED)) {
+        return (t-> name );
+    }
+    if (((t-> kind )  ==  TY_GENERIC)) {
+        return (t-> name );
+    }
+    return "";
+}
+
+bool   body_references_self (Vector__Stmt*   stmts) {
+    if ((stmts  ==  NULL)) {
+        return false;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if (stmt_references_self((&s))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool   stmt_references_self (Stmt*   s) {
+    if ((s  ==  NULL)) {
+        return false;
+    }
+    if ((((s-> let_value )  !=  NULL)  &&  expr_references_self((s-> let_value )))) {
+        return true;
+    }
+    if ((((s-> expr_value )  !=  NULL)  &&  expr_references_self((s-> expr_value )))) {
+        return true;
+    }
+    if ((((s-> cond )  !=  NULL)  &&  expr_references_self((s-> cond )))) {
+        return true;
+    }
+    if ((((s-> for_step )  !=  NULL)  &&  expr_references_self((s-> for_step )))) {
+        return true;
+    }
+    if ((((s-> scrutinee )  !=  NULL)  &&  expr_references_self((s-> scrutinee )))) {
+        return true;
+    }
+    if ((((s-> then_body )  !=  NULL)  &&  body_references_self((s-> then_body )))) {
+        return true;
+    }
+    if ((((s-> else_body )  !=  NULL)  &&  body_references_self((s-> else_body )))) {
+        return true;
+    }
+    if ((((s-> fn_body )  !=  NULL)  &&  body_references_self((s-> fn_body )))) {
+        return true;
+    }
+    if ((((s-> for_init )  !=  NULL)  &&  stmt_references_self((s-> for_init )))) {
+        return true;
+    }
+    return false;
+}
+
+bool   expr_references_self (Expr*   e) {
+    if ((e  ==  NULL)) {
+        return false;
+    }
+    if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), "self"))) {
+        return true;
+    }
+    if ((((e-> lhs )  !=  NULL)  &&  expr_references_self((e-> lhs )))) {
+        return true;
+    }
+    if ((((e-> rhs )  !=  NULL)  &&  expr_references_self((e-> rhs )))) {
+        return true;
+    }
+    if ((((e-> operand )  !=  NULL)  &&  expr_references_self((e-> operand )))) {
+        return true;
+    }
+    if ((((e-> macro_recv )  !=  NULL)  &&  expr_references_self((e-> macro_recv )))) {
+        return true;
+    }
+    if (((e-> args )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+            Expr   a = Vector_get__Expr((e-> args ), i);
+            if (expr_references_self((&a))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void   expand_in_program (Vector__Stmt*   program, HashMap__Stmt*   sm, Vector__TypeMacro*   tm) {
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
+            ((s. fn_body )  =  expand_in_block((s. fn_body ), sm, tm));
+            Vector_set__Stmt(program, i, s);
+        } else {
+            if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
+                for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
+                    Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
+                    if (((m. fn_body )  !=  NULL)) {
+                        ((m. fn_body )  =  expand_in_block((m. fn_body ), sm, tm));
+                        Vector_set__Stmt((s. impl_methods ), j, m);
+                    }
+                }
+                Vector_set__Stmt(program, i, s);
+            }
+        }
+    }
+}
+
+Vector__Stmt*   expand_in_block (Vector__Stmt*   stmts, HashMap__Stmt*   sm, Vector__TypeMacro*   tm) {
+    Vector__Stmt*   out = Vector_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if (((((s. kind )  ==  ST_EXPR)  &&  ((s. expr_value )  !=  NULL))  &&  (((s. expr_value )-> kind )  ==  EX_MACRO))) {
+            Vector__Stmt*   expanded = try_expand_call((s. expr_value ), sm, tm);
+            if ((expanded  !=  NULL)) {
+                for (int   k = 0; (k  <  Vector_len__Stmt(expanded)); k++) {
+                    Stmt   e = Vector_get__Stmt(expanded, k);
+                    Vector_push__Stmt(out, e);
+                }
+                continue;
+            }
+        }
+        if (((s. then_body )  !=  NULL)) {
+            ((s. then_body )  =  expand_in_block((s. then_body ), sm, tm));
+        }
+        if (((s. else_body )  !=  NULL)) {
+            ((s. else_body )  =  expand_in_block((s. else_body ), sm, tm));
+        }
+        if (((s. fn_body )  !=  NULL)) {
+            ((s. fn_body )  =  expand_in_block((s. fn_body ), sm, tm));
+        }
+        if ((((s. for_init )  !=  NULL)  &&  (((s. for_init )-> then_body )  !=  NULL))) {
+            (((s. for_init )-> then_body )  =  expand_in_block(((s. for_init )-> then_body ), sm, tm));
+        }
+        Vector_push__Stmt(out, s);
+    }
+    return out;
+}
+
+Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__TypeMacro*   tm) {
+    if (((call  ==  NULL)  ||  ((call-> kind )  !=  EX_MACRO))) {
+        return NULL;
+    }
+    if ((((call-> macro_owner )  !=  NULL)  &&  (!__glide_string_eq((call-> macro_owner ), "")))) {
+        for (int   i = 0; (i  <  Vector_len__TypeMacro(tm)); i++) {
+            TypeMacro   entry = Vector_get__TypeMacro(tm, i);
+            if ((__glide_string_eq((entry. owner ), (call-> macro_owner ))  &&  __glide_string_eq((entry. name ), (call-> str_val )))) {
+                if ((((entry. def ). then_body )  ==  NULL)) {
+                    return NULL;
+                }
+                bool   uses_self = body_references_self(((entry. def ). then_body ));
+                if ((!uses_self)) {
+                    return expand_with_def_recv(call, (&(entry. def )), NULL);
+                }
+                if ((((call-> args )  ==  NULL)  ||  (Vector_len__Expr((call-> args ))  ==  0))) {
+                    return NULL;
+                }
+                Expr   recv_arg = Vector_get__Expr((call-> args ), 0);
+                Expr*   recv_p = (( Expr* )calloc(1, sizeof( Expr )));
+                ((*recv_p)  =  recv_arg);
+                Vector__Expr*   rest = Vector_new__Expr();
+                for (int   k = 1; (k  <  Vector_len__Expr((call-> args ))); k++) {
+                    Expr   a = Vector_get__Expr((call-> args ), k);
+                    Vector_push__Expr(rest, a);
+                }
+                Expr*   synth = (( Expr* )calloc(1, sizeof( Expr )));
+                ((*synth)  =  (*call));
+                ((synth-> args )  =  rest);
+                return expand_with_def_recv(synth, (&(entry. def )), recv_p);
+            }
+        }
+        return NULL;
+    }
+    if (((call-> macro_recv )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__TypeMacro(tm)); i++) {
+            TypeMacro   entry = Vector_get__TypeMacro(tm, i);
+            if (__glide_string_eq((entry. name ), (call-> str_val ))) {
+                if ((((entry. def ). then_body )  ==  NULL)) {
+                    return NULL;
+                }
+                bool   uses_self = body_references_self(((entry. def ). then_body ));
+                Expr*   recv_for = NULL;
+                if (uses_self) {
+                    (recv_for  =  (call-> macro_recv ));
+                }
+                return expand_with_def_recv(call, (&(entry. def )), recv_for);
+            }
+        }
+        return NULL;
+    }
+    if ((!HashMap_contains__Stmt(sm, (call-> str_val )))) {
+        return NULL;
+    }
+    Stmt   def = HashMap_get__Stmt(sm, (call-> str_val ));
+    if (((def. then_body )  ==  NULL)) {
+        return NULL;
+    }
+    return expand_with_def_recv(call, (&def), NULL);
+}
+
+Vector__Stmt*   expand_with_def (Expr*   call, Stmt*   def) {
+    return expand_with_def_recv(call, def, NULL);
+}
+
+const char*   recv_name_for (Expr*   call) {
+    int   n = (((call-> line )  *  1000)  +  (call-> column ));
+    return __glide_string_concat("__glide_macro_recv_", int_to_str(n));
+}
+
+Vector__Stmt*   expand_with_def_recv (Expr*   call, Stmt*   def, Expr*   recv) {
+    Vector__MacroBinding*   bindings = bind_args(call, def);
+    const char*   self_name = "";
+    if ((recv  !=  NULL)) {
+        (self_name  =  recv_name_for(call));
+    }
+    Vector__Stmt*   body = Vector_new__Stmt();
+    if (((def-> then_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((def-> then_body ))); i++) {
+            Stmt   s = Vector_get__Stmt((def-> then_body ), i);
+            Vector__Stmt*   expanded = macro_subst_stmt((&s), bindings, (-1), self_name);
+            for (int   j = 0; (j  <  Vector_len__Stmt(expanded)); j++) {
+                Stmt   es = Vector_get__Stmt(expanded, j);
+                Vector_push__Stmt(body, es);
+            }
+        }
+    }
+    Vector__Stmt*   block_body = Vector_new__Stmt();
+    if ((recv  !=  NULL)) {
+        Expr*   recv_clone = macro_subst_expr(recv, bindings, (-1), "");
+        Stmt*   bind = stmt_let(self_name, NULL, recv_clone, false, (call-> line ), (call-> column ));
+        Vector_push__Stmt(block_body, (*bind));
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
+        Stmt   bs = Vector_get__Stmt(body, i);
+        Vector_push__Stmt(block_body, bs);
+    }
+    Stmt*   block = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((block-> kind )  =  ST_BLOCK);
+    ((block-> line )  =  (call-> line ));
+    ((block-> column )  =  (call-> column ));
+    ((block-> then_body )  =  block_body);
+    Vector__Stmt*   out = Vector_new__Stmt();
+    Vector_push__Stmt(out, (*block));
+    return out;
+}
+
+Vector__MacroBinding*   bind_args (Expr*   call, Stmt*   def) {
+    Vector__MacroBinding*   out = Vector_new__MacroBinding();
+    if (((def-> macro_params )  ==  NULL)) {
+        return out;
+    }
+    int   idx = 0;
+    int   total = 0;
+    if (((call-> args )  !=  NULL)) {
+        (total  =  Vector_len__Expr((call-> args )));
+    }
+    for (int   p = 0; (p  <  Vector_len__MacroParam((def-> macro_params ))); p++) {
+        MacroParam   mp = Vector_get__MacroParam((def-> macro_params ), p);
+        Vector__Expr*   bound = Vector_new__Expr();
+        if ((mp. is_variadic )) {
+            while ((idx  <  total)) {
+                Expr   a = Vector_get__Expr((call-> args ), idx);
+                Vector_push__Expr(bound, a);
+                (idx  =  (idx  +  1));
+            }
+        } else {
+            if ((idx  <  total)) {
+                Expr   a = Vector_get__Expr((call-> args ), idx);
+                Vector_push__Expr(bound, a);
+                (idx  =  (idx  +  1));
+            }
+        }
+        MacroBinding   mb = (( MacroBinding ){. name  = (mp. name ), . args  = bound, . is_variadic  = (mp. is_variadic )});
+        Vector_push__MacroBinding(out, mb);
+    }
+    return out;
+}
+
+Vector__Stmt*   macro_subst_stmt (Stmt*   s, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name) {
+    Vector__Stmt*   out = Vector_new__Stmt();
+    if ((s  ==  NULL)) {
+        return out;
+    }
+    if (((s-> kind )  ==  ST_MACRO_REP)) {
+        int   n = variadic_len(bindings);
+        if ((n  <  0)) {
+            return out;
+        }
+        for (int   i = 0; (i  <  n); i++) {
+            if (((s-> then_body )  ==  NULL)) {
+                continue;
+            }
+            for (int   j = 0; (j  <  Vector_len__Stmt((s-> then_body ))); j++) {
+                Stmt   inner = Vector_get__Stmt((s-> then_body ), j);
+                Vector__Stmt*   expanded = macro_subst_stmt((&inner), bindings, i, self_name);
+                for (int   k = 0; (k  <  Vector_len__Stmt(expanded)); k++) {
+                    Stmt   e = Vector_get__Stmt(expanded, k);
+                    Vector_push__Stmt(out, e);
+                }
+            }
+        }
+        return out;
+    }
+    Stmt*   cloned = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((*cloned)  =  (*s));
+    if (((cloned-> let_value )  !=  NULL)) {
+        ((cloned-> let_value )  =  macro_subst_expr((cloned-> let_value ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> expr_value )  !=  NULL)) {
+        ((cloned-> expr_value )  =  macro_subst_expr((cloned-> expr_value ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> cond )  !=  NULL)) {
+        ((cloned-> cond )  =  macro_subst_expr((cloned-> cond ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> for_step )  !=  NULL)) {
+        ((cloned-> for_step )  =  macro_subst_expr((cloned-> for_step ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> scrutinee )  !=  NULL)) {
+        ((cloned-> scrutinee )  =  macro_subst_expr((cloned-> scrutinee ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> for_init )  !=  NULL)) {
+        Vector__Stmt*   inits = macro_subst_stmt((cloned-> for_init ), bindings, rep_idx, self_name);
+        if ((Vector_len__Stmt(inits)  >  0)) {
+            Stmt   init0 = Vector_get__Stmt(inits, 0);
+            Stmt*   copy = (( Stmt* )calloc(1, sizeof( Stmt )));
+            ((*copy)  =  init0);
+            ((cloned-> for_init )  =  copy);
+        }
+    }
+    if (((cloned-> then_body )  !=  NULL)) {
+        ((cloned-> then_body )  =  macro_subst_block((cloned-> then_body ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> else_body )  !=  NULL)) {
+        ((cloned-> else_body )  =  macro_subst_block((cloned-> else_body ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> fn_body )  !=  NULL)) {
+        ((cloned-> fn_body )  =  macro_subst_block((cloned-> fn_body ), bindings, rep_idx, self_name));
+    }
+    Vector_push__Stmt(out, (*cloned));
+    return out;
+}
+
+Vector__Stmt*   macro_subst_block (Vector__Stmt*   stmts, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name) {
+    Vector__Stmt*   out = Vector_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        Vector__Stmt*   expanded = macro_subst_stmt((&s), bindings, rep_idx, self_name);
+        for (int   j = 0; (j  <  Vector_len__Stmt(expanded)); j++) {
+            Stmt   e = Vector_get__Stmt(expanded, j);
+            Vector_push__Stmt(out, e);
+        }
+    }
+    return out;
+}
+
+Expr*   macro_subst_expr (Expr*   e, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name) {
+    if ((e  ==  NULL)) {
+        return NULL;
+    }
+    if (((e-> kind )  ==  EX_MACRO_VAR)) {
+        Expr*   chosen = lookup_var((e-> str_val ), bindings, rep_idx);
+        if ((chosen  !=  NULL)) {
+            return chosen;
+        }
+        return e;
+    }
+    if (((((e-> kind )  ==  EX_IDENT)  &&  (!__glide_string_eq(self_name, "")))  &&  __glide_string_eq((e-> str_val ), "self"))) {
+        return expr_ident(self_name, (e-> line ), (e-> column ));
+    }
+    Expr*   cloned = (( Expr* )calloc(1, sizeof( Expr )));
+    ((*cloned)  =  (*e));
+    if (((cloned-> lhs )  !=  NULL)) {
+        ((cloned-> lhs )  =  macro_subst_expr((cloned-> lhs ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> rhs )  !=  NULL)) {
+        ((cloned-> rhs )  =  macro_subst_expr((cloned-> rhs ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> operand )  !=  NULL)) {
+        ((cloned-> operand )  =  macro_subst_expr((cloned-> operand ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> macro_recv )  !=  NULL)) {
+        ((cloned-> macro_recv )  =  macro_subst_expr((cloned-> macro_recv ), bindings, rep_idx, self_name));
+    }
+    if (((cloned-> args )  !=  NULL)) {
+        Vector__Expr*   new_args = Vector_new__Expr();
+        for (int   i = 0; (i  <  Vector_len__Expr((cloned-> args ))); i++) {
+            Expr   a = Vector_get__Expr((cloned-> args ), i);
+            Expr*   na = macro_subst_expr((&a), bindings, rep_idx, self_name);
+            if ((na  !=  NULL)) {
+                Vector_push__Expr(new_args, (*na));
+            }
+        }
+        ((cloned-> args )  =  new_args);
+    }
+    return cloned;
+}
+
+Expr*   lookup_var (const char*   name, Vector__MacroBinding*   bindings, int   rep_idx) {
+    for (int   i = 0; (i  <  Vector_len__MacroBinding(bindings)); i++) {
+        MacroBinding   b = Vector_get__MacroBinding(bindings, i);
+        if ((!__glide_string_eq((b. name ), name))) {
+            continue;
+        }
+        if ((Vector_len__Expr((b. args ))  ==  0)) {
+            return NULL;
+        }
+        int   idx = 0;
+        if ((b. is_variadic )) {
+            if (((rep_idx  <  0)  ||  (rep_idx  >=  Vector_len__Expr((b. args ))))) {
+                return NULL;
+            }
+            (idx  =  rep_idx);
+        }
+        Expr   chosen = Vector_get__Expr((b. args ), idx);
+        Expr*   p = (( Expr* )calloc(1, sizeof( Expr )));
+        ((*p)  =  chosen);
+        return p;
+    }
+    return NULL;
+}
+
+int   variadic_len (Vector__MacroBinding*   bindings) {
+    for (int   i = 0; (i  <  Vector_len__MacroBinding(bindings)); i++) {
+        MacroBinding   b = Vector_get__MacroBinding(bindings, i);
+        if ((b. is_variadic )) {
+            return Vector_len__Expr((b. args ));
+        }
+    }
+    return (-1);
+}
+
+Vector__Stmt*   lower_program (Vector__Stmt*   stmts) {
+    expand_trait_defaults(stmts);
+    Vector__Stmt*   out = Vector_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        Stmt*   l = lower_stmt((&s));
+        if ((l  !=  NULL)) {
+            Vector_push__Stmt(out, (*l));
+        }
+    }
+    return out;
+}
+
+void   expand_trait_defaults (Vector__Stmt*   stmts) {
+    HashMap__Stmt*   traits = HashMap_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if (((((s. kind )  ==  ST_TRAIT)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))) {
+            HashMap_insert__Stmt(traits, (s. name ), s);
+        }
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   imp = Vector_get__Stmt(stmts, i);
+        if (((imp. kind )  !=  ST_IMPL)) {
+            continue;
+        }
+        if ((((imp. impl_trait_name )  ==  NULL)  ||  __glide_string_eq((imp. impl_trait_name ), ""))) {
+            continue;
+        }
+        if ((!HashMap_contains__Stmt(traits, (imp. impl_trait_name )))) {
+            continue;
+        }
+        Stmt   trait_def = HashMap_get__Stmt(traits, (imp. impl_trait_name ));
+        if (((trait_def. impl_methods )  ==  NULL)) {
+            continue;
+        }
+        if (((imp. impl_methods )  ==  NULL)) {
+            continue;
+        }
+        HashMap__bool*   provided = HashMap_new__bool();
+        for (int   k = 0; (k  <  Vector_len__Stmt((imp. impl_methods ))); k++) {
+            Stmt   m = Vector_get__Stmt((imp. impl_methods ), k);
+            if (((m. name )  !=  NULL)) {
+                HashMap_insert__bool(provided, (m. name ), true);
+            }
+        }
+        for (int   k = 0; (k  <  Vector_len__Stmt((trait_def. impl_methods ))); k++) {
+            Stmt   req = Vector_get__Stmt((trait_def. impl_methods ), k);
+            if ((((req. name )  ==  NULL)  ||  __glide_string_eq((req. name ), ""))) {
+                continue;
+            }
+            if (((req. fn_body )  ==  NULL)) {
+                continue;
+            }
+            if (HashMap_contains__bool(provided, (req. name ))) {
+                continue;
+            }
+            Stmt*   copy = (( Stmt* )calloc(1, sizeof( Stmt )));
+            ((*copy)  =  req);
+            if (((imp. impl_target )  !=  NULL)) {
+                Vector__Stmt*   single = Vector_new__Stmt();
+                Vector_push__Stmt(single, (*copy));
+                substitute_self_in_methods(single, (imp. impl_target ));
+                Stmt   sub = Vector_get__Stmt(single, 0);
+                ((*copy)  =  sub);
+            }
+            Vector_push__Stmt((imp. impl_methods ), (*copy));
+        }
+        Vector_set__Stmt(stmts, i, imp);
+    }
+}
+
+Vector__Stmt*   lower_block (Vector__Stmt*   body) {
+    if ((body  ==  NULL)) {
+        return NULL;
+    }
+    Vector__Stmt*   out = Vector_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
+        Stmt   s = Vector_get__Stmt(body, i);
+        Stmt*   l = lower_stmt((&s));
+        if ((l  !=  NULL)) {
+            Vector_push__Stmt(out, (*l));
+        }
+    }
+    return out;
+}
+
+Stmt*   lower_stmt (Stmt*   s) {
+    if ((s  ==  NULL)) {
+        return NULL;
+    }
+    if (((s-> kind )  ==  ST_FOR_IN)) {
+        return lower_for_in(s);
+    }
+    if (((s-> then_body )  !=  NULL)) {
+        ((s-> then_body )  =  lower_block((s-> then_body )));
+    }
+    if (((s-> else_body )  !=  NULL)) {
+        ((s-> else_body )  =  lower_block((s-> else_body )));
+    }
+    if (((s-> fn_body )  !=  NULL)) {
+        ((s-> fn_body )  =  lower_block((s-> fn_body )));
+    }
+    if (((s-> for_init )  !=  NULL)) {
+        ((s-> for_init )  =  lower_stmt((s-> for_init )));
+    }
+    if (((s-> impl_methods )  !=  NULL)) {
+        for (int   j = 0; (j  <  Vector_len__Stmt((s-> impl_methods ))); j++) {
+            Stmt   m = Vector_get__Stmt((s-> impl_methods ), j);
+            Stmt*   lm = lower_stmt((&m));
+            if ((lm  !=  NULL)) {
+                Vector_set__Stmt((s-> impl_methods ), j, (*lm));
+            }
+        }
+    }
+    return s;
+}
+
+Stmt*   lower_for_in (Stmt*   s) {
+    const char*   var_name = (s-> name );
+    Expr*   lo_or_iter = (s-> let_value );
+    Expr*   hi = (s-> cond );
+    bool   inclusive = (s-> is_mut );
+    Vector__Stmt*   body = lower_block((s-> then_body ));
+    int   line = (s-> line );
+    int   col = (s-> column );
+    if ((hi  !=  NULL)) {
+        Stmt*   init = stmt_let(var_name, ty_named("int"), lo_or_iter, true, line, col);
+        if ((init  !=  NULL)) {
+            ((init-> name_line )  =  (s-> name_line ));
+            ((init-> name_col )  =  (s-> name_col ));
+            ((init-> name_len )  =  (s-> name_len ));
+        }
+        int   cmp_op = OP_LT;
+        if (inclusive) {
+            (cmp_op  =  OP_LE);
+        }
+        Expr*   cond = expr_binary(cmp_op, expr_ident(var_name, line, col), hi);
+        Expr*   step = expr_postinc(expr_ident(var_name, line, col));
+        return stmt_for(init, cond, step, body, line, col);
+    }
+    const char*   id = int_to_str(((line  *  1000)  +  col));
+    const char*   it_name = __glide_string_concat("__glide_iter_", id);
+    const char*   idx_name = __glide_string_concat("__glide_idx_", id);
+    Vector__Stmt*   block_body = Vector_new__Stmt();
+    Stmt*   bind_iter = stmt_let(it_name, NULL, lo_or_iter, false, line, col);
+    Vector_push__Stmt(block_body, (*bind_iter));
+    Stmt*   init = stmt_let(idx_name, ty_named("int"), expr_int(0, line, col), true, line, col);
+    Expr*   len_call = expr_call(expr_member(expr_ident(it_name, line, col), "len"), Vector_new__Expr());
+    Expr*   cond = expr_binary(OP_LT, expr_ident(idx_name, line, col), len_call);
+    Expr*   step = expr_postinc(expr_ident(idx_name, line, col));
+    Vector__Expr*   get_args = Vector_new__Expr();
+    Vector_push__Expr(get_args, (*expr_ident(idx_name, line, col)));
+    Expr*   get_call = expr_call(expr_member(expr_ident(it_name, line, col), "get"), get_args);
+    Stmt*   bind_var = stmt_let(var_name, NULL, get_call, false, line, col);
+    if ((bind_var  !=  NULL)) {
+        ((bind_var-> name_line )  =  (s-> name_line ));
+        ((bind_var-> name_col )  =  (s-> name_col ));
+        ((bind_var-> name_len )  =  (s-> name_len ));
+    }
+    Vector__Stmt*   inner_body = Vector_new__Stmt();
+    Vector_push__Stmt(inner_body, (*bind_var));
+    if ((body  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
+            Stmt   bs = Vector_get__Stmt(body, i);
+            Vector_push__Stmt(inner_body, bs);
+        }
+    }
+    Stmt*   inner_for = stmt_for(init, cond, step, inner_body, line, col);
+    Vector_push__Stmt(block_body, (*inner_for));
+    Stmt*   block = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((block-> kind )  =  ST_BLOCK);
+    ((block-> line )  =  line);
+    ((block-> column )  =  col);
+    ((block-> then_body )  =  block_body);
+    return block;
+}
+
 bool   type_eq (Type*   a, Type*   b) {
     if ((a  ==  NULL)) {
         return (b  ==  NULL);
@@ -3182,6 +6409,9 @@ bool   type_eq (Type*   a, Type*   b) {
         return false;
     }
     if (((a-> kind )  ==  TY_NAMED)) {
+        return __glide_string_eq((a-> name ), (b-> name ));
+    }
+    if (((a-> kind )  ==  TY_DYN)) {
         return __glide_string_eq((a-> name ), (b-> name ));
     }
     return type_eq((a-> inner ), (b-> inner ));
@@ -3205,6 +6435,25 @@ const char*   type_to_string (Type*   t) {
     }
     if (((t-> kind )  ==  TY_SLICE)) {
         return __glide_string_concat("[]", type_to_string((t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_GENERIC)) {
+        const char*   out = __glide_string_concat((t-> name ), "<");
+        if (((t-> args )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
+                if ((i  >  0)) {
+                    (out  =  __glide_string_concat(out, ", "));
+                }
+                Type   a = Vector_get__Type((t-> args ), i);
+                (out  =  __glide_string_concat(out, type_to_string((&a))));
+            }
+        }
+        return __glide_string_concat(out, ">");
+    }
+    if (((t-> kind )  ==  TY_RESULT)) {
+        return __glide_string_concat("!", type_to_string((t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_DYN)) {
+        return __glide_string_concat("dyn ", (t-> name ));
     }
     return "<ty?>";
 }
@@ -3337,8 +6586,52 @@ Typer*   Typer_new (void) {
     ((t-> diagnostics )  =  dg);
     ((t-> current_ret )  =  NULL);
     ((t-> current_origin )  =  "");
+    HashMap__bool*   vis = HashMap_new__bool();
+    ((t-> visibility )  =  vis);
+    HashMap__bool*   mi = HashMap_new__bool();
+    ((t-> module_imports )  =  mi);
+    HashMap__bool*   mfp = HashMap_new__bool();
+    ((t-> module_full_paths )  =  mfp);
+    HashMap__bool*   fp = HashMap_new__bool();
+    ((t-> field_pub )  =  fp);
+    HashMap__string*   so = HashMap_new__string();
+    ((t-> struct_origin )  =  so);
+    ((t-> enforce_visibility )  =  false);
+    HashMap__bool*   is = HashMap_new__bool();
+    ((t-> impl_set )  =  is);
     ((t-> error_count )  =  0);
     return t;
+}
+
+bool   Typer_is_visible (Typer*   self, const char*   name) {
+    if ((!(self-> enforce_visibility ))) {
+        return true;
+    }
+    if ((((self-> current_origin )  ==  NULL)  ||  __glide_string_eq((self-> current_origin ), ""))) {
+        return true;
+    }
+    if (((name  ==  NULL)  ||  __glide_string_eq(name, ""))) {
+        return true;
+    }
+    const char*   key = __glide_string_concat(__glide_string_concat((self-> current_origin ), "::"), name);
+    return HashMap_contains__bool((self-> visibility ), key);
+}
+
+bool   Typer_is_module_path_allowed (Typer*   self, const char*   prefix) {
+    if ((!(self-> enforce_visibility ))) {
+        return true;
+    }
+    if (((prefix  ==  NULL)  ||  __glide_string_eq(prefix, ""))) {
+        return true;
+    }
+    if (HashMap_contains__bool((self-> module_full_paths ), prefix)) {
+        return true;
+    }
+    if ((((self-> current_origin )  ==  NULL)  ||  __glide_string_eq((self-> current_origin ), ""))) {
+        return true;
+    }
+    const char*   key = __glide_string_concat(__glide_string_concat((self-> current_origin ), "::"), prefix);
+    return HashMap_contains__bool((self-> module_imports ), key);
 }
 
 void   Typer_free (Typer*   self) {
@@ -3411,6 +6704,7 @@ void   Typer_warn (Typer*   self, int   line, int   col, const char*   code, con
 }
 
 void   pre_register (Typer*   t, Vector__Stmt*   program) {
+    HashMap_insert__bool((t-> structs ), "Arena", true);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  ==  ST_CONST)) {
@@ -3441,8 +6735,11 @@ void   pre_register (Typer*   t, Vector__Stmt*   program) {
             }
         }
         if (((s. kind )  ==  ST_FN)) {
-            FnSig   sig = (( FnSig ){. name  = (s. name ), . params  = (s. fn_params ), . ret_type  = (s. fn_ret_ty )});
+            FnSig   sig = (( FnSig ){. name  = (s. name ), . params  = (s. fn_params ), . ret_type  = (s. fn_ret_ty ), . is_variadic  = (s. is_variadic ), . type_params  = (s. type_params ), . type_param_bounds  = (s. type_param_bounds )});
             HashMap_insert__FnSig((t-> fns ), (s. name ), sig);
+        }
+        if (((s. kind )  ==  ST_ENUM)) {
+            HashMap_insert__bool((t-> structs ), (s. name ), true);
         }
         if (((s. kind )  ==  ST_STRUCT)) {
             HashMap_insert__bool((t-> structs ), (s. name ), true);
@@ -3453,6 +6750,169 @@ void   pre_register (Typer*   t, Vector__Stmt*   program) {
                         Typer_err_code(t, (s. line ), (s. column ), "borrow-in-field", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("borrow `", type_to_string((f. ty ))), "` not allowed in struct field `"), (f. name )), "` (use `*T` instead)"));
                     }
                 }
+            }
+        }
+        if (((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_target )  !=  NULL))  &&  ((s. impl_methods )  !=  NULL))) {
+            const char*   tname = "";
+            if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
+                (tname  =  ((s. impl_target )-> name ));
+            }
+            if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
+                (tname  =  ((s. impl_target )-> name ));
+            }
+            if ((!__glide_string_eq(tname, ""))) {
+                for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
+                    Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
+                    if (((m. kind )  ==  ST_FN)) {
+                        const char*   fname = __glide_string_concat(__glide_string_concat(tname, "_"), (m. name ));
+                        FnSig   sig = (( FnSig ){. name  = fname, . params  = (m. fn_params ), . ret_type  = (m. fn_ret_ty ), . is_variadic  = (m. is_variadic ), . type_params  = (m. type_params ), . type_param_bounds  = (m. type_param_bounds )});
+                        HashMap_insert__FnSig((t-> fns ), fname, sig);
+                    }
+                }
+            }
+        }
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((s. kind )  !=  ST_IMPL)) {
+            continue;
+        }
+        if ((((s. impl_trait_name )  ==  NULL)  ||  __glide_string_eq((s. impl_trait_name ), ""))) {
+            continue;
+        }
+        if (((s. impl_target )  ==  NULL)) {
+            continue;
+        }
+        const char*   tname = "";
+        if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
+            (tname  =  ((s. impl_target )-> name ));
+        }
+        if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
+            (tname  =  ((s. impl_target )-> name ));
+        }
+        if (__glide_string_eq(tname, "")) {
+            continue;
+        }
+        HashMap_insert__bool((t-> impl_set ), __glide_string_concat(__glide_string_concat((s. impl_trait_name ), "::"), tname), true);
+    }
+}
+
+bool   type_var_contains (Vector__string*   tps, const char*   name) {
+    if ((tps  ==  NULL)) {
+        return false;
+    }
+    for (int   i = 0; (i  <  Vector_len__string(tps)); i++) {
+        if (__glide_string_eq(Vector_get__string(tps, i), name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool   arg_compat (Type*   want, Type*   got, Vector__string*   tps) {
+    if (((want  ==  NULL)  ||  (got  ==  NULL))) {
+        return true;
+    }
+    if ((((want-> kind )  ==  TY_NAMED)  &&  type_var_contains(tps, (want-> name )))) {
+        return true;
+    }
+    if ((((((want-> kind )  ==  TY_POINTER)  ||  ((want-> kind )  ==  TY_BORROW))  ||  ((want-> kind )  ==  TY_BORROW_MUT))  &&  ((((got-> kind )  ==  TY_POINTER)  ||  ((got-> kind )  ==  TY_BORROW))  ||  ((got-> kind )  ==  TY_BORROW_MUT)))) {
+        return arg_compat((want-> inner ), (got-> inner ), tps);
+    }
+    if ((((want-> kind )  ==  TY_RESULT)  &&  ((got-> kind )  ==  TY_RESULT))) {
+        return arg_compat((want-> inner ), (got-> inner ), tps);
+    }
+    return types_compat(want, got);
+}
+
+Vector__string*   split_bounds (const char*   s) {
+    Vector__string*   out = Vector_new__string();
+    if (((s  ==  NULL)  ||  __glide_string_eq(s, ""))) {
+        return out;
+    }
+    int   n = __glide_string_len(s);
+    int   start = 0;
+    int   i = 0;
+    while ((i  <  n)) {
+        if ((__glide_char_to_int(__glide_string_at(s, i))  ==  43)) {
+            if ((i  >  start)) {
+                Vector_push__string(out, __glide_string_substring(s, start, i));
+            }
+            (start  =  (i  +  1));
+        }
+        (i  =  (i  +  1));
+    }
+    if ((n  >  start)) {
+        Vector_push__string(out, __glide_string_substring(s, start, n));
+    }
+    return out;
+}
+
+Type*   extract_for_var (Type*   param_ty, Type*   arg_ty, const char*   var_name) {
+    if (((param_ty  ==  NULL)  ||  (arg_ty  ==  NULL))) {
+        return NULL;
+    }
+    if ((((param_ty-> kind )  ==  TY_NAMED)  &&  __glide_string_eq((param_ty-> name ), var_name))) {
+        return arg_ty;
+    }
+    if ((((((param_ty-> kind )  ==  TY_POINTER)  ||  ((param_ty-> kind )  ==  TY_BORROW))  ||  ((param_ty-> kind )  ==  TY_BORROW_MUT))  &&  ((((arg_ty-> kind )  ==  TY_POINTER)  ||  ((arg_ty-> kind )  ==  TY_BORROW))  ||  ((arg_ty-> kind )  ==  TY_BORROW_MUT)))) {
+        return extract_for_var((param_ty-> inner ), (arg_ty-> inner ), var_name);
+    }
+    return NULL;
+}
+
+void   check_generic_bounds (Typer*   t, FnSig*   sig, Vector__Expr*   args, int   line, int   col) {
+    if ((sig  ==  NULL)) {
+        return;
+    }
+    if ((((sig-> type_params )  ==  NULL)  ||  (Vector_len__string((sig-> type_params ))  ==  0))) {
+        return;
+    }
+    if (((sig-> type_param_bounds )  ==  NULL)) {
+        return;
+    }
+    if ((((sig-> params )  ==  NULL)  ||  (args  ==  NULL))) {
+        return;
+    }
+    int   plen = Vector_len__Param((sig-> params ));
+    int   alen = Vector_len__Expr(args);
+    if ((plen  !=  alen)) {
+        return;
+    }
+    int   bn = Vector_len__string((sig-> type_param_bounds ));
+    for (int   ti = 0; (ti  <  Vector_len__string((sig-> type_params ))); ti++) {
+        const char*   tp_name = Vector_get__string((sig-> type_params ), ti);
+        const char*   bounds = "";
+        if ((ti  <  bn)) {
+            (bounds  =  Vector_get__string((sig-> type_param_bounds ), ti));
+        }
+        if (__glide_string_eq(bounds, "")) {
+            continue;
+        }
+        Type*   concrete = NULL;
+        for (int   i = 0; (i  <  plen); i++) {
+            Param   p = Vector_get__Param((sig-> params ), i);
+            Expr   a = Vector_get__Expr(args, i);
+            Type*   at = infer_expr(t, (&a));
+            Type*   extracted = extract_for_var((p. ty ), at, tp_name);
+            if ((extracted  !=  NULL)) {
+                (concrete  =  extracted);
+                break;
+            }
+        }
+        if ((concrete  ==  NULL)) {
+            continue;
+        }
+        if (((concrete-> kind )  !=  TY_NAMED)) {
+            continue;
+        }
+        const char*   cname = (concrete-> name );
+        Vector__string*   parts = split_bounds(bounds);
+        for (int   bi = 0; (bi  <  Vector_len__string(parts)); bi++) {
+            const char*   bound = Vector_get__string(parts, bi);
+            const char*   key = __glide_string_concat(__glide_string_concat(bound, "::"), cname);
+            if ((!HashMap_contains__bool((t-> impl_set ), key))) {
+                Typer_err_code(t, line, col, "unsatisfied-bound", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("type `", cname), "` does not implement `"), bound), "` (required by `"), tp_name), "` of `"), (sig-> name )), "`)"));
             }
         }
     }
@@ -3670,6 +7130,39 @@ void   check_stmt (Typer*   t, Stmt*   s) {
         }
         return;
     }
+    if (((s-> kind )  ==  ST_WHILE_RECV)) {
+        Type*   binder_ty = (s-> let_ty );
+        Expr*   recv = (s-> let_value );
+        if ((((((recv  !=  NULL)  &&  ((recv-> kind )  ==  EX_CALL))  &&  ((recv-> lhs )  !=  NULL))  &&  (((recv-> lhs )-> kind )  ==  EX_MEMBER))  &&  __glide_string_eq(((recv-> lhs )-> field ), "recv"))) {
+            Type*   recv_target_ty = infer_expr(t, ((recv-> lhs )-> lhs ));
+            Type*   inner = chan_inner(recv_target_ty);
+            if ((inner  !=  NULL)) {
+                if ((binder_ty  ==  NULL)) {
+                    (binder_ty  =  inner);
+                } else {
+                    if ((!types_compat(binder_ty, inner))) {
+                        Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("while-let binder type mismatch: expected ", type_to_string(binder_ty)), ", chan yields "), type_to_string(inner)));
+                    }
+                }
+            } else {
+                Typer_err(t, (s-> line ), (s-> column ), "while-let RHS must be a `chan<T>.recv()` call");
+            }
+        } else {
+            Typer_err(t, (s-> line ), (s-> column ), "while-let RHS must be a `chan<T>.recv()` call");
+        }
+        if ((binder_ty  !=  NULL)) {
+            HashMap_insert__Type((t-> scope ), (s-> name ), (*binder_ty));
+        }
+        if (((s-> then_body )  !=  NULL)) {
+            int   saved = enter_borrow_scope(t);
+            for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+                Stmt   b = Vector_get__Stmt((s-> then_body ), i);
+                check_stmt(t, (&b));
+            }
+            exit_borrow_scope(t, saved);
+        }
+        return;
+    }
     if (((s-> kind )  ==  ST_WHILE)) {
         if (((s-> cond )  !=  NULL)) {
             Type*   ct = infer_expr(t, (s-> cond ));
@@ -3722,6 +7215,24 @@ void   check_stmt (Typer*   t, Stmt*   s) {
         return;
     }
     if (((s-> kind )  ==  ST_CONTINUE)) {
+        return;
+    }
+    if (((s-> kind )  ==  ST_CRAW)) {
+        return;
+    }
+    if (((s-> kind )  ==  ST_ASM)) {
+        if (((s-> asm_out_exprs )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_out_exprs ))); i++) {
+                Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
+                infer_expr(t, (&e));
+            }
+        }
+        if (((s-> asm_in_exprs )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_in_exprs ))); i++) {
+                Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
+                infer_expr(t, (&e));
+            }
+        }
         return;
     }
 }
@@ -3812,6 +7323,32 @@ void   check_return (Typer*   t, Stmt*   s) {
     }
 }
 
+Type*   chan_inner (Type*   t) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    Type*   x = t;
+    while (((x  !=  NULL)  &&  ((((x-> kind )  ==  TY_POINTER)  ||  ((x-> kind )  ==  TY_BORROW))  ||  ((x-> kind )  ==  TY_BORROW_MUT)))) {
+        (x  =  (x-> inner ));
+    }
+    if ((x  ==  NULL)) {
+        return NULL;
+    }
+    if (((x-> kind )  !=  TY_GENERIC)) {
+        return NULL;
+    }
+    if ((!__glide_string_eq((x-> name ), "chan"))) {
+        return NULL;
+    }
+    if ((((x-> args )  ==  NULL)  ||  (Vector_len__Type((x-> args ))  ==  0))) {
+        return NULL;
+    }
+    Type   inner = Vector_get__Type((x-> args ), 0);
+    Type*   p = (( Type* )malloc(sizeof( Type )));
+    ((*p)  =  inner);
+    return p;
+}
+
 Type*   infer_expr (Typer*   t, Expr*   e) {
     if ((e  ==  NULL)) {
         return NULL;
@@ -3842,12 +7379,20 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
             return p;
         }
         if (HashMap_contains__Type((t-> module_scope ), (e-> str_val ))) {
+            if ((!Typer_is_visible(t, (e-> str_val )))) {
+                Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat("name `", (e-> str_val )), "` is not in scope; add an `import` for it"));
+                return NULL;
+            }
             Type   ty = HashMap_get__Type((t-> module_scope ), (e-> str_val ));
             Type*   p = (( Type* )malloc(sizeof( Type )));
             ((*p)  =  ty);
             return p;
         }
         if (HashMap_contains__FnSig((t-> fns ), (e-> str_val ))) {
+            if ((!Typer_is_visible(t, (e-> str_val )))) {
+                Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat("name `", (e-> str_val )), "` is not in scope; add an `import` for it"));
+                return NULL;
+            }
             return ty_named("__fn__");
         }
         Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat("unknown name `", (e-> str_val )), "`"));
@@ -3903,25 +7448,121 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_CALL)) {
         check_call_aliasing(t, e);
+        if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))) {
+            const char*   mname = ((e-> lhs )-> field );
+            Type*   recv_ty = infer_expr(t, ((e-> lhs )-> lhs ));
+            Type*   inner = chan_inner(recv_ty);
+            if ((inner  !=  NULL)) {
+                int   nargs = 0;
+                if (((e-> args )  !=  NULL)) {
+                    (nargs  =  Vector_len__Expr((e-> args )));
+                }
+                if (__glide_string_eq(mname, "send")) {
+                    if ((nargs  !=  1)) {
+                        Typer_err(t, (e-> line ), (e-> column ), "`chan.send` takes exactly 1 argument");
+                    } else {
+                        Expr   a = Vector_get__Expr((e-> args ), 0);
+                        Type*   at = infer_expr(t, (&a));
+                        if ((!types_compat(inner, at))) {
+                            Typer_err(t, (a. line ), (a. column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("chan.send arg type mismatch: expected ", type_to_string(inner)), ", got "), type_to_string(at)));
+                        }
+                    }
+                    return ty_named("void");
+                }
+                if (__glide_string_eq(mname, "recv")) {
+                    if ((nargs  !=  0)) {
+                        Typer_err(t, (e-> line ), (e-> column ), "`chan.recv` takes no arguments");
+                    }
+                    Type*   p = (( Type* )malloc(sizeof( Type )));
+                    ((*p)  =  (*inner));
+                    return p;
+                }
+                if (__glide_string_eq(mname, "close")) {
+                    if ((nargs  !=  0)) {
+                        Typer_err(t, (e-> line ), (e-> column ), "`chan.close` takes no arguments");
+                    }
+                    return ty_named("void");
+                }
+            }
+        }
+        if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq(((e-> lhs )-> str_val ), "make_chan"))) {
+            int   nargs = 0;
+            if (((e-> args )  !=  NULL)) {
+                (nargs  =  Vector_len__Expr((e-> args )));
+            }
+            if ((nargs  !=  1)) {
+                Typer_err(t, (e-> line ), (e-> column ), "`make_chan` takes exactly 1 argument (capacity)");
+            } else {
+                Expr   a = Vector_get__Expr((e-> args ), 0);
+                Type*   at = infer_expr(t, (&a));
+                Type*   want = ty_named("int");
+                if ((!types_compat(want, at))) {
+                    Typer_err(t, (a. line ), (a. column ), __glide_string_concat("make_chan capacity must be int, got ", type_to_string(at)));
+                }
+            }
+            return NULL;
+        }
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
             const char*   name = ((e-> lhs )-> str_val );
             if (HashMap_contains__FnSig((t-> fns ), name)) {
+                if ((!Typer_is_visible(t, name))) {
+                    Typer_err(t, ((e-> lhs )-> line ), ((e-> lhs )-> column ), __glide_string_concat(__glide_string_concat("name `", name), "` is not in scope; add an `import` for it"));
+                    return NULL;
+                }
                 FnSig   sig = HashMap_get__FnSig((t-> fns ), name);
                 if ((((sig. params )  !=  NULL)  &&  ((e-> args )  !=  NULL))) {
-                    if ((Vector_len__Param((sig. params ))  !=  Vector_len__Expr((e-> args )))) {
+                    int   plen = Vector_len__Param((sig. params ));
+                    int   alen = Vector_len__Expr((e-> args ));
+                    bool   bad_arity = (plen  !=  alen);
+                    if (((sig. is_variadic )  &&  (alen  >=  plen))) {
+                        (bad_arity  =  false);
+                    }
+                    if (bad_arity) {
                         Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat("wrong arg count for `", name), "`"));
                     } else {
-                        for (int   i = 0; (i  <  Vector_len__Param((sig. params ))); i++) {
+                        for (int   i = 0; (i  <  plen); i++) {
                             Param   p = Vector_get__Param((sig. params ), i);
                             Expr   a = Vector_get__Expr((e-> args ), i);
                             if ((((((a. kind )  ==  EX_IDENT)  &&  HashMap_contains__bool((t-> owned_locals ), (a. str_val )))  &&  ((p. ty )  !=  NULL))  &&  (((p. ty )-> kind )  ==  TY_POINTER))) {
                                 Typer_err(t, (a. line ), (a. column ), __glide_string_concat(__glide_string_concat("cannot move owned value `", (a. str_val )), "` into `*T` parameter (auto-drop conflict)"));
                             }
                             Type*   at = infer_expr(t, (&a));
-                            if ((!types_compat((p. ty ), at))) {
+                            if ((!arg_compat((p. ty ), at, (sig. type_params )))) {
                                 Typer_err(t, (a. line ), (a. column ), __glide_string_concat(__glide_string_concat("arg ", (p. name )), " type mismatch"));
                             }
                         }
+                        if ((sig. is_variadic )) {
+                            for (int   i = plen; (i  <  alen); i++) {
+                                Expr   a = Vector_get__Expr((e-> args ), i);
+                                Type*   _u = infer_expr(t, (&a));
+                            }
+                        }
+                        check_generic_bounds(t, (&sig), (e-> args ), (e-> line ), (e-> column ));
+                    }
+                }
+                return (sig. ret_type );
+            }
+            bool   is_builtin = ((((__glide_string_eq(name, "ok")  ||  __glide_string_eq(name, "err"))  ||  __glide_string_eq(name, "make_chan"))  ||  __glide_string_eq(name, "sizeof"))  ||  __glide_string_eq(name, "printf"));
+            if ((((!is_builtin)  &&  (!HashMap_contains__Type((t-> scope ), name)))  &&  (t-> enforce_visibility ))) {
+                Typer_err(t, ((e-> lhs )-> line ), ((e-> lhs )-> column ), __glide_string_concat(__glide_string_concat("unknown function `", name), "`; did you forget an `import`?"));
+                return NULL;
+            }
+        }
+        if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_PATH))) {
+            const char*   prefix = ((e-> lhs )-> str_val );
+            const char*   pname = __glide_string_concat(__glide_string_concat(prefix, "_"), ((e-> lhs )-> field ));
+            bool   is_type = HashMap_contains__bool((t-> structs ), prefix);
+            bool   is_known_method = HashMap_contains__FnSig((t-> fns ), pname);
+            if ((((!is_type)  &&  (!is_known_method))  &&  (!Typer_is_module_path_allowed(t, prefix)))) {
+                Typer_err(t, ((e-> lhs )-> line ), ((e-> lhs )-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("module `", prefix), "` not in scope; add `import "), prefix), ";` or use the full path"));
+                return NULL;
+            }
+            if (HashMap_contains__FnSig((t-> fns ), pname)) {
+                FnSig   sig = HashMap_get__FnSig((t-> fns ), pname);
+                if (((e-> args )  !=  NULL)) {
+                    for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+                        Expr   a = Vector_get__Expr((e-> args ), i);
+                        Type*   _u = infer_expr(t, (&a));
                     }
                 }
                 return (sig. ret_type );
@@ -3936,7 +7577,20 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return NULL;
     }
     if (((e-> kind )  ==  EX_MEMBER)) {
-        Type*   _u3 = infer_expr(t, (e-> lhs ));
+        Type*   recv_ty = infer_expr(t, (e-> lhs ));
+        if (((((recv_ty  !=  NULL)  &&  (t-> enforce_visibility ))  &&  ((e-> field )  !=  NULL))  &&  (!__glide_string_eq((e-> field ), "")))) {
+            Type*   stripped = strip_ptr(recv_ty);
+            if ((((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_NAMED))  &&  HashMap_contains__string((t-> struct_origin ), (stripped-> name )))) {
+                const char*   owner = HashMap_get__string((t-> struct_origin ), (stripped-> name ));
+                if ((!__glide_string_eq(owner, (t-> current_origin )))) {
+                    const char*   key = __glide_string_concat(__glide_string_concat((stripped-> name ), "::"), (e-> field ));
+                    if ((!HashMap_contains__bool((t-> field_pub ), key))) {
+                        Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("field `", (e-> field )), "` of struct `"), (stripped-> name )), "` is private; declare it `pub` to expose"));
+                        return NULL;
+                    }
+                }
+            }
+        }
         return NULL;
     }
     if (((e-> kind )  ==  EX_INDEX)) {
@@ -3949,6 +7603,17 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return (e-> cast_to );
     }
     if (((e-> kind )  ==  EX_PATH)) {
+        const char*   prefix = (e-> str_val );
+        const char*   pname = __glide_string_concat(__glide_string_concat(prefix, "_"), (e-> field ));
+        bool   is_type = HashMap_contains__bool((t-> structs ), prefix);
+        bool   is_known_method = HashMap_contains__FnSig((t-> fns ), pname);
+        if ((((!is_type)  &&  (!is_known_method))  &&  (!Typer_is_module_path_allowed(t, prefix)))) {
+            Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("module `", prefix), "` not in scope; add `import "), prefix), ";` or use the full path"));
+            return NULL;
+        }
+        if (HashMap_contains__FnSig((t-> fns ), pname)) {
+            return ty_named("__fn__");
+        }
         return NULL;
     }
     if (((e-> kind )  ==  EX_MACRO)) {
@@ -3967,6 +7632,47 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return ty_named((e-> str_val ));
     }
     return NULL;
+}
+
+int   ns_split_pos (const char*   name) {
+    int   n = __glide_string_len(name);
+    int   i = 0;
+    while (((i  +  1)  <  n)) {
+        if (((__glide_char_to_int(__glide_string_at(name, i))  ==  58)  &&  (__glide_char_to_int(__glide_string_at(name, (i  +  1)))  ==  58))) {
+            return i;
+        }
+        (i  =  (i  +  1));
+    }
+    return (-1);
+}
+
+const char*   _cg_replace (const char*   s, const char*   find, const char*   repl) {
+    int   n = __glide_string_len(s);
+    int   m = __glide_string_len(find);
+    if ((m  ==  0)) {
+        return s;
+    }
+    const char*   out = "";
+    int   i = 0;
+    while ((i  <  n)) {
+        bool   matched = ((i  +  m)  <=  n);
+        if (matched) {
+            for (int   k = 0; (k  <  m); k++) {
+                if ((__glide_char_to_int(__glide_string_at(s, (i  +  k)))  !=  __glide_char_to_int(__glide_string_at(find, k)))) {
+                    (matched  =  false);
+                    break;
+                }
+            }
+        }
+        if (matched) {
+            (out  =  __glide_string_concat(out, repl));
+            (i  =  (i  +  m));
+        } else {
+            (out  =  __glide_string_concat(out, __glide_string_substring(s, i, (i  +  1))));
+            (i  =  (i  +  1));
+        }
+    }
+    return out;
 }
 
 const char*   format_spec_for (Type*   t) {
@@ -4031,6 +7737,9 @@ Type*   stdlib_method_ret (const char*   ty_name, const char*   method) {
         }
         if (__glide_string_eq(method, "is_alpha")) {
             return ty_named("bool");
+        }
+        if (__glide_string_eq(method, "to_string")) {
+            return ty_named("string");
         }
     }
     if (__glide_string_eq(ty_name, "int")) {
@@ -4238,15 +7947,14 @@ void   emit_result_runtime (CG*   g) {
     if ((Vector_len__Type((g-> result_types ))  ==  0)) {
         return;
     }
+    const char*   tmpl = "typedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { @TC@ z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }\n";
     for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
         Type   t = Vector_get__Type((g-> result_types ), i);
         const char*   m = mangle_type((&t));
         const char*   tc = type_to_c((&t));
-        const char*   st = __glide_string_concat(__glide_string_concat("__glide_result_", m), "_t");
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", st), " { int ok; "), tc), " val; const char* err; } "), st), ";"));
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static ", st), " __glide_ok_"), m), "("), tc), " v) { "), st), " r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }"));
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static ", st), " __glide_err_"), m), "(const char* msg) { "), st), " r; r.ok = 0; r.err = msg; return r; }"));
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static ", tc), " __glide_unwrap_"), m), "("), st), " r) { "), tc), " z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }"));
+        const char*   s1 = _cg_replace(tmpl, "@M@", m);
+        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        printf("%s", s2);
     }
     printf("%s\n", "");
 }
@@ -4303,6 +8011,241 @@ void   collect_chan_in_expr (CG*   g, Expr*   e) {
             collect_chan_in_expr(g, (&a));
         }
     }
+}
+
+void   collect_dyn_in_type (CG*   g, Type*   t) {
+    if ((t  ==  NULL)) {
+        return;
+    }
+    if (((t-> kind )  ==  TY_DYN)) {
+        if ((((t-> name )  !=  NULL)  &&  (!__glide_string_eq((t-> name ), "")))) {
+            HashMap_insert__bool((g-> dyn_traits ), (t-> name ), true);
+        }
+    }
+    if (((t-> inner )  !=  NULL)) {
+        collect_dyn_in_type(g, (t-> inner ));
+    }
+    if (((t-> fnptr_ret )  !=  NULL)) {
+        collect_dyn_in_type(g, (t-> fnptr_ret ));
+    }
+    if (((t-> args )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
+            Type   a = Vector_get__Type((t-> args ), i);
+            collect_dyn_in_type(g, (&a));
+        }
+    }
+}
+
+void   collect_dyn_in_expr (CG*   g, Expr*   e) {
+    if ((e  ==  NULL)) {
+        return;
+    }
+    if (((e-> cast_to )  !=  NULL)) {
+        collect_dyn_in_type(g, (e-> cast_to ));
+    }
+    if (((e-> lhs )  !=  NULL)) {
+        collect_dyn_in_expr(g, (e-> lhs ));
+    }
+    if (((e-> rhs )  !=  NULL)) {
+        collect_dyn_in_expr(g, (e-> rhs ));
+    }
+    if (((e-> operand )  !=  NULL)) {
+        collect_dyn_in_expr(g, (e-> operand ));
+    }
+    if (((e-> args )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+            Expr   a = Vector_get__Expr((e-> args ), i);
+            collect_dyn_in_expr(g, (&a));
+        }
+    }
+}
+
+void   collect_dyn_in_stmt (CG*   g, Stmt*   s) {
+    if ((s  ==  NULL)) {
+        return;
+    }
+    if (((s-> let_ty )  !=  NULL)) {
+        collect_dyn_in_type(g, (s-> let_ty ));
+    }
+    if (((s-> fn_ret_ty )  !=  NULL)) {
+        collect_dyn_in_type(g, (s-> fn_ret_ty ));
+    }
+    if (((s-> fn_params )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
+            Param   p = Vector_get__Param((s-> fn_params ), i);
+            if (((p. ty )  !=  NULL)) {
+                collect_dyn_in_type(g, (p. ty ));
+            }
+        }
+    }
+    if (((s-> let_value )  !=  NULL)) {
+        collect_dyn_in_expr(g, (s-> let_value ));
+    }
+    if (((s-> expr_value )  !=  NULL)) {
+        collect_dyn_in_expr(g, (s-> expr_value ));
+    }
+    if (((s-> cond )  !=  NULL)) {
+        collect_dyn_in_expr(g, (s-> cond ));
+    }
+    if (((s-> then_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+            Stmt   b = Vector_get__Stmt((s-> then_body ), i);
+            collect_dyn_in_stmt(g, (&b));
+        }
+    }
+    if (((s-> else_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
+            Stmt   b = Vector_get__Stmt((s-> else_body ), i);
+            collect_dyn_in_stmt(g, (&b));
+        }
+    }
+    if (((s-> fn_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
+            Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
+            collect_dyn_in_stmt(g, (&b));
+        }
+    }
+    if (((s-> impl_methods )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
+            Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
+            collect_dyn_in_stmt(g, (&m));
+        }
+    }
+}
+
+void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
+    if (((g-> dyn_traits )  ==  NULL)) {
+        return;
+    }
+    HashMap__Stmt*   traits = HashMap_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((((s. kind )  ==  ST_TRAIT)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))) {
+            HashMap_insert__Stmt(traits, (s. name ), s);
+        }
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((s. kind )  !=  ST_TRAIT)) {
+            continue;
+        }
+        if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+            continue;
+        }
+        if ((!HashMap_contains__bool((g-> dyn_traits ), (s. name )))) {
+            continue;
+        }
+        const char*   trait_name = (s. name );
+        printf("%s\n", __glide_string_concat(__glide_string_concat("typedef struct __glide_", trait_name), "_vt {"));
+        if (((s. impl_methods )  !=  NULL)) {
+            for (int   k = 0; (k  <  Vector_len__Stmt((s. impl_methods ))); k++) {
+                Stmt   m = Vector_get__Stmt((s. impl_methods ), k);
+                if ((((m. name )  ==  NULL)  ||  __glide_string_eq((m. name ), ""))) {
+                    continue;
+                }
+                const char*   ret_ty = type_to_c((m. fn_ret_ty ));
+                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", ret_ty), " (*"), (m. name )), ")(void* self"));
+                if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
+                    for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
+                        Param   p = Vector_get__Param((m. fn_params ), j);
+                        printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), (p. name )));
+                    }
+                }
+                printf("%s\n", ");");
+            }
+        }
+        printf("%s\n", __glide_string_concat(__glide_string_concat("} __glide_", trait_name), "_vt;"));
+        printf("%s\n", __glide_string_concat(__glide_string_concat("typedef struct __glide_dyn_", trait_name), " {"));
+        printf("%s\n", "    void* data;");
+        printf("%s\n", __glide_string_concat(__glide_string_concat("    const __glide_", trait_name), "_vt* vtable;"));
+        printf("%s\n", __glide_string_concat(__glide_string_concat("} __glide_dyn_", trait_name), ";"));
+        printf("%s\n", "");
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((s. kind )  !=  ST_IMPL)) {
+            continue;
+        }
+        if ((((s. impl_trait_name )  ==  NULL)  ||  __glide_string_eq((s. impl_trait_name ), ""))) {
+            continue;
+        }
+        if ((!HashMap_contains__bool((g-> dyn_traits ), (s. impl_trait_name )))) {
+            continue;
+        }
+        if ((((s. impl_target )  ==  NULL)  ||  (((s. impl_target )-> kind )  !=  TY_NAMED))) {
+            continue;
+        }
+        const char*   trait_name = (s. impl_trait_name );
+        const char*   type_name = ((s. impl_target )-> name );
+        if ((!HashMap_contains__Stmt(traits, trait_name))) {
+            continue;
+        }
+        if (((s. impl_methods )  ==  NULL)) {
+            continue;
+        }
+        for (int   k = 0; (k  <  Vector_len__Stmt((s. impl_methods ))); k++) {
+            Stmt   m = Vector_get__Stmt((s. impl_methods ), k);
+            if ((((m. name )  ==  NULL)  ||  __glide_string_eq((m. name ), ""))) {
+                continue;
+            }
+            const char*   ret_ty = type_to_c((m. fn_ret_ty ));
+            printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(ret_ty, " "), type_name), "_"), (m. name )), "("));
+            if (((m. fn_params )  !=  NULL)) {
+                for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
+                    if ((j  >  0)) {
+                        printf("%s", ", ");
+                    }
+                    Param   p = Vector_get__Param((m. fn_params ), j);
+                    printf("%s", type_to_c((p. ty )));
+                }
+            }
+            printf("%s\n", ");");
+        }
+        for (int   k = 0; (k  <  Vector_len__Stmt((s. impl_methods ))); k++) {
+            Stmt   m = Vector_get__Stmt((s. impl_methods ), k);
+            if ((((m. name )  ==  NULL)  ||  __glide_string_eq((m. name ), ""))) {
+                continue;
+            }
+            const char*   ret_ty = type_to_c((m. fn_ret_ty ));
+            printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static ", ret_ty), " __glide_"), type_name), "_as_"), trait_name), "__"), (m. name )), "_thunk(void* self_p"));
+            if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
+                for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
+                    Param   p = Vector_get__Param((m. fn_params ), j);
+                    printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), (p. name )));
+                }
+            }
+            printf("%s\n", ") {");
+            bool   is_void = (((m. fn_ret_ty )  ==  NULL)  ||  ((((m. fn_ret_ty )-> kind )  ==  TY_NAMED)  &&  __glide_string_eq(((m. fn_ret_ty )-> name ), "void")));
+            if (is_void) {
+                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", type_name), "_"), (m. name )), "(*("), type_name), "*)self_p"));
+            } else {
+                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    return ", type_name), "_"), (m. name )), "(*("), type_name), "*)self_p"));
+            }
+            if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
+                for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
+                    Param   p = Vector_get__Param((m. fn_params ), j);
+                    printf("%s", __glide_string_concat(", ", (p. name )));
+                }
+            }
+            printf("%s\n", ");");
+            printf("%s\n", "}");
+        }
+        printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static const __glide_", trait_name), "_vt __glide_"), type_name), "_as_"), trait_name), "_vt = {"));
+        bool   emitted_any = false;
+        for (int   k = 0; (k  <  Vector_len__Stmt((s. impl_methods ))); k++) {
+            Stmt   m = Vector_get__Stmt((s. impl_methods ), k);
+            if ((((m. name )  ==  NULL)  ||  __glide_string_eq((m. name ), ""))) {
+                continue;
+            }
+            if (emitted_any) {
+                printf("%s", ", ");
+            }
+            (emitted_any  =  true);
+            printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(".", (m. name )), " = __glide_"), type_name), "_as_"), trait_name), "__"), (m. name )), "_thunk"));
+        }
+        printf("%s\n", "};");
+    }
+    printf("%s\n", "");
 }
 
 void   collect_chan_in_stmt (CG*   g, Stmt*   s) {
@@ -4377,68 +8320,44 @@ void   emit_chan_runtime (CG*   g) {
     printf("%s\n", "");
     for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
         Type   t = Vector_get__Type((g-> chan_types ), i);
+        if ((((t. kind )  ==  TY_GENERIC)  &&  HashMap_contains__Stmt((g-> generic_structs ), (t. name )))) {
+            const char*   mangled = mangle_generic((t. name ), (t. args ));
+            if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
+                HashMap_insert__bool((g-> emitted_monos ), mangled, true);
+                printf("%s %s %s %s %s\n", "typedef struct ", mangled, " ", mangled, ";");
+                emit_struct_mono(g, (&t));
+            }
+        }
+    }
+    for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
+        Type   t = Vector_get__Type((g-> chan_types ), i);
         const char*   m = mangle_type((&t));
         const char*   st = __glide_string_concat(__glide_string_concat("__glide_chan_", m), "_t");
         printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", st), " "), st), ";"));
     }
     printf("%s\n", "");
+    const char*   tmpl = "typedef struct __glide_chan_cell_@M@ {\n    atomic_size_t seq;\n    @TC@ data;\n    /* Pad to 64 B so adjacent cells don't share a cache line. */\n    char _pad[64 - sizeof(atomic_size_t) - sizeof(@TC@)];\n} __attribute__((aligned(64))) __glide_chan_cell_@M@;\n\nstruct __glide_chan_@M@_t {\n    /* Lock-free ring */\n    __glide_chan_cell_@M@* cells;\n    size_t mask;             /* cap - 1, cap is power of two */\n    char _pad1[48];          /* push enq_pos to its own line */\n    atomic_size_t enq_pos;\n    char _pad2[56];\n    atomic_size_t deq_pos;\n    char _pad3[56];\n    /* Slow path: blocking + close */\n    atomic_int closed;\n    pthread_mutex_t mu;\n    pthread_cond_t  not_empty;\n    pthread_cond_t  not_full;\n    /* counts of cv_waiters so fast-path can skip mutex+signal when 0 */\n    atomic_int cv_recv_waiters;\n    atomic_int cv_send_waiters;\n    /* coro waiter lists, walked only under mu */\n    struct __glide_task* coro_recv_waiters;\n    struct __glide_task* coro_send_waiters;\n};\n\nstatic __glide_chan_@M@_t* __glide_make_chan_@M@(int cap) {\n    __glide_chan_@M@_t* c = (__glide_chan_@M@_t*)malloc(sizeof(__glide_chan_@M@_t));\n    if (cap < 1) cap = 1;\n    /* Round capacity up to next power of two for the bitmask. */\n    size_t pow2 = 1;\n    while (pow2 < (size_t)cap) pow2 <<= 1;\n    c->mask = pow2 - 1;\n    c->cells = (__glide_chan_cell_@M@*)calloc(pow2, sizeof(__glide_chan_cell_@M@));\n    for (size_t i = 0; i < pow2; i++) {\n        atomic_store_explicit(&c->cells[i].seq, i, memory_order_relaxed);\n    }\n    atomic_store(&c->enq_pos, 0);\n    atomic_store(&c->deq_pos, 0);\n    atomic_store(&c->closed, 0);\n    pthread_mutex_init(&c->mu, NULL);\n    pthread_cond_init(&c->not_empty, NULL);\n    pthread_cond_init(&c->not_full, NULL);\n    atomic_store(&c->cv_recv_waiters, 0);\n    atomic_store(&c->cv_send_waiters, 0);\n    c->coro_recv_waiters = NULL;\n    c->coro_send_waiters = NULL;\n    return c;\n}\n\nstatic int __glide_try_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {\n    __glide_chan_cell_@M@* cell;\n    size_t pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);\n    for (;;) {\n        cell = &c->cells[pos & c->mask];\n        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);\n        intptr_t diff = (intptr_t)seq - (intptr_t)pos;\n        if (diff == 0) {\n            if (atomic_compare_exchange_weak_explicit(\n                    &c->enq_pos, &pos, pos + 1,\n                    memory_order_relaxed, memory_order_relaxed)) break;\n        } else if (diff < 0) {\n            return 0;  /* buffer full */\n        } else {\n            pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);\n        }\n    }\n    cell->data = v;\n    atomic_store_explicit(&cell->seq, pos + 1, memory_order_release);\n    return 1;\n}\n\nstatic int __glide_try_recv_@M@(__glide_chan_@M@_t* c, @TC@* out) {\n    __glide_chan_cell_@M@* cell;\n    size_t pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);\n    for (;;) {\n        cell = &c->cells[pos & c->mask];\n        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);\n        intptr_t diff = (intptr_t)seq - (intptr_t)(pos + 1);\n        if (diff == 0) {\n            if (atomic_compare_exchange_weak_explicit(\n                    &c->deq_pos, &pos, pos + 1,\n                    memory_order_relaxed, memory_order_relaxed)) break;\n        } else if (diff < 0) {\n            return 0;  /* buffer empty */\n        } else {\n            pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);\n        }\n    }\n    *out = cell->data;\n    atomic_store_explicit(&cell->seq, pos + c->mask + 1, memory_order_release);\n    return 1;\n}\n\n/* Pop one parker off the wait list under chan->mu, then drop the lock BEFORE\n   handing the task back to its worker queue. q_push_to has its own spinlock and\n   can stall for tens of ns; holding chan->mu over that serializes senders/recvers\n   needlessly. */\nstatic void __glide_wake_recv_@M@(__glide_chan_@M@_t* c) {\n    if (c->coro_recv_waiters == NULL && atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) == 0) return;\n    __glide_task* unparked = NULL;\n    int signal_cv = 0;\n    pthread_mutex_lock(&c->mu);\n    if (c->coro_recv_waiters) {\n        unparked = c->coro_recv_waiters;\n        c->coro_recv_waiters = unparked->wait_next;\n        unparked->wait_next = NULL;\n        unparked->state = 0;\n    }\n    if (atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) > 0) signal_cv = 1;\n    if (signal_cv) pthread_cond_signal(&c->not_empty);\n    pthread_mutex_unlock(&c->mu);\n    if (unparked) __glide_q_push_to(unparked->home_worker, unparked);\n}\nstatic void __glide_wake_send_@M@(__glide_chan_@M@_t* c) {\n    if (c->coro_send_waiters == NULL && atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) == 0) return;\n    __glide_task* unparked = NULL;\n    int signal_cv = 0;\n    pthread_mutex_lock(&c->mu);\n    if (c->coro_send_waiters) {\n        unparked = c->coro_send_waiters;\n        c->coro_send_waiters = unparked->wait_next;\n        unparked->wait_next = NULL;\n        unparked->state = 0;\n    }\n    if (atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) > 0) signal_cv = 1;\n    if (signal_cv) pthread_cond_signal(&c->not_full);\n    pthread_mutex_unlock(&c->mu);\n    if (unparked) __glide_q_push_to(unparked->home_worker, unparked);\n}\n\nstatic void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {\n    if (atomic_load_explicit(&c->closed, memory_order_acquire)) return;\n    /* Fast path: lock-free push. */\n    if (__glide_try_send_@M@(c, v)) {\n        __glide_wake_recv_@M@(c);\n        return;\n    }\n    /* Brief spin — consumer may free a slot any nanosecond. */\n    for (int s = 0; s < 256; s++) {\n#if defined(__x86_64__) || defined(_M_X64)\n        __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        if (__glide_try_send_@M@(c, v)) {\n            __glide_wake_recv_@M@(c);\n            return;\n        }\n    }\n    /* Slow path: still full. Take mutex, retry, then block. */\n    pthread_mutex_lock(&c->mu);\n    for (;;) {\n        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;\n        if (__glide_try_send_@M@(c, v)) {\n            pthread_mutex_unlock(&c->mu);\n            __glide_wake_recv_@M@(c);\n            return;\n        }\n        if (__glide_park(&c->mu, &c->coro_send_waiters)) {\n            pthread_mutex_lock(&c->mu);\n        } else {\n            atomic_fetch_add_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);\n            pthread_cond_wait(&c->not_full, &c->mu);\n            atomic_fetch_sub_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);\n        }\n    }\n    pthread_mutex_unlock(&c->mu);\n}\n\nstatic @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {\n    @TC@ v;\n    if (__glide_try_recv_@M@(c, &v)) {\n        __glide_wake_send_@M@(c);\n        return v;\n    }\n    /* Brief spin before paying cv_wait cost — producer may be 1 cell behind. */\n    for (int s = 0; s < 256; s++) {\n#if defined(__x86_64__) || defined(_M_X64)\n        __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        if (__glide_try_recv_@M@(c, &v)) {\n            __glide_wake_send_@M@(c);\n            return v;\n        }\n    }\n    pthread_mutex_lock(&c->mu);\n    for (;;) {\n        if (__glide_try_recv_@M@(c, &v)) {\n            pthread_mutex_unlock(&c->mu);\n            __glide_wake_send_@M@(c);\n            return v;\n        }\n        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;\n        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {\n            pthread_mutex_lock(&c->mu);\n        } else {\n            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n            pthread_cond_wait(&c->not_empty, &c->mu);\n            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n        }\n    }\n    pthread_mutex_unlock(&c->mu);\n    memset(&v, 0, sizeof(v));\n    return v;\n}\n\nstatic int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {\n    if (__glide_try_recv_@M@(c, out)) {\n        __glide_wake_send_@M@(c);\n        return 1;\n    }\n    /* Spin briefly before cv_wait. */\n    for (int s = 0; s < 256; s++) {\n#if defined(__x86_64__) || defined(_M_X64)\n        __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        if (__glide_try_recv_@M@(c, out)) {\n            __glide_wake_send_@M@(c);\n            return 1;\n        }\n    }\n    pthread_mutex_lock(&c->mu);\n    for (;;) {\n        if (__glide_try_recv_@M@(c, out)) {\n            pthread_mutex_unlock(&c->mu);\n            __glide_wake_send_@M@(c);\n            return 1;\n        }\n        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;\n        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {\n            pthread_mutex_lock(&c->mu);\n        } else {\n            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n            pthread_cond_wait(&c->not_empty, &c->mu);\n            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n        }\n    }\n    pthread_mutex_unlock(&c->mu);\n    return 0;\n}\n\nstatic void __glide_close_@M@(__glide_chan_@M@_t* c) {\n    pthread_mutex_lock(&c->mu);\n    atomic_store_explicit(&c->closed, 1, memory_order_release);\n    /* Drain coro waiter lists. */\n    while (c->coro_send_waiters) __glide_unpark_one(&c->coro_send_waiters);\n    while (c->coro_recv_waiters) __glide_unpark_one(&c->coro_recv_waiters);\n    /* Wake all cv waiters. */\n    pthread_cond_broadcast(&c->not_empty);\n    pthread_cond_broadcast(&c->not_full);\n    pthread_mutex_unlock(&c->mu);\n}\n";
     for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
         Type   t = Vector_get__Type((g-> chan_types ), i);
         const char*   m = mangle_type((&t));
         const char*   tc = type_to_c((&t));
-        const char*   st = __glide_string_concat(__glide_string_concat("__glide_chan_", m), "_t");
-        printf("%s\n", __glide_string_concat(__glide_string_concat("struct ", st), " {"));
-        printf("%s\n", "    pthread_mutex_t mu;");
-        printf("%s\n", "    pthread_cond_t  not_empty;");
-        printf("%s\n", "    pthread_cond_t  not_full;");
-        printf("%s\n", __glide_string_concat(__glide_string_concat("    ", tc), "* buf;"));
-        printf("%s\n", "    int cap;");
-        printf("%s\n", "    int len;");
-        printf("%s\n", "    int head;");
-        printf("%s\n", "    int tail;");
-        printf("%s\n", "    int closed;");
-        printf("%s\n", "};");
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static ", st), "* __glide_make_chan_"), m), "(int cap) {"));
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", st), "* c = ("), st), "*)malloc(sizeof("), st), "));"));
-        printf("%s\n", "    if (cap < 1) cap = 1;");
-        printf("%s\n", "    pthread_mutex_init(&c->mu, NULL);");
-        printf("%s\n", "    pthread_cond_init(&c->not_empty, NULL);");
-        printf("%s\n", "    pthread_cond_init(&c->not_full, NULL);");
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    c->buf = (", tc), "*)malloc(sizeof("), tc), ") * cap);"));
-        printf("%s\n", "    c->cap = cap; c->len = 0; c->head = 0; c->tail = 0; c->closed = 0;");
-        printf("%s\n", "    return c;");
-        printf("%s\n", "}");
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static void __glide_send_", m), "("), st), "* c, "), tc), " v) {"));
-        printf("%s\n", "    pthread_mutex_lock(&c->mu);");
-        printf("%s\n", "    while (c->len == c->cap && !c->closed) pthread_cond_wait(&c->not_full, &c->mu);");
-        printf("%s\n", "    if (c->closed) { pthread_mutex_unlock(&c->mu); return; }");
-        printf("%s\n", "    c->buf[c->tail] = v;");
-        printf("%s\n", "    c->tail = (c->tail + 1) % c->cap;");
-        printf("%s\n", "    c->len++;");
-        printf("%s\n", "    pthread_cond_signal(&c->not_empty);");
-        printf("%s\n", "    pthread_mutex_unlock(&c->mu);");
-        printf("%s\n", "}");
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static ", tc), " __glide_recv_"), m), "("), st), "* c) {"));
-        printf("%s\n", "    pthread_mutex_lock(&c->mu);");
-        printf("%s\n", "    while (c->len == 0 && !c->closed) pthread_cond_wait(&c->not_empty, &c->mu);");
-        printf("%s\n", __glide_string_concat(__glide_string_concat("    ", tc), " v;"));
-        printf("%s\n", "    if (c->len == 0) { memset(&v, 0, sizeof(v)); pthread_mutex_unlock(&c->mu); return v; }");
-        printf("%s\n", "    v = c->buf[c->head];");
-        printf("%s\n", "    c->head = (c->head + 1) % c->cap;");
-        printf("%s\n", "    c->len--;");
-        printf("%s\n", "    pthread_cond_signal(&c->not_full);");
-        printf("%s\n", "    pthread_mutex_unlock(&c->mu);");
-        printf("%s\n", "    return v;");
-        printf("%s\n", "}");
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static void __glide_close_", m), "("), st), "* c) {"));
-        printf("%s\n", "    pthread_mutex_lock(&c->mu);");
-        printf("%s\n", "    c->closed = 1;");
-        printf("%s\n", "    pthread_cond_broadcast(&c->not_empty);");
-        printf("%s\n", "    pthread_cond_broadcast(&c->not_full);");
-        printf("%s\n", "    pthread_mutex_unlock(&c->mu);");
-        printf("%s\n", "}");
+        const char*   s1 = _cg_replace(tmpl, "@M@", m);
+        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        printf("%s", s2);
         printf("%s\n", "");
     }
+}
+
+void   emit_scheduler_runtime (void) {
+    printf("%s\n", "");
+    printf("%s", "// ============================ scheduler runtime ============================\n#include <pthread.h>\n#include <stdatomic.h>\n#include <time.h>\n#include <stdint.h>\n#include <stdlib.h>\n#ifdef _WIN32\n# include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */\n#else\n# include <unistd.h>\n# include <sys/mman.h>\n#endif\n\n/* Spinlock — 5-10× faster than pthread_mutex for the short critical\n   sections we use (queue push/pop, pool head update). Falls back to\n   `pause` on contention to be hyperthread-friendly. */\ntypedef atomic_int __glide_spin_t;\nstatic inline void __glide_spin_lock(__glide_spin_t* l) {\n    while (atomic_exchange_explicit(l, 1, memory_order_acquire) == 1) {\n        while (atomic_load_explicit(l, memory_order_relaxed) == 1) {\n#if defined(__x86_64__) || defined(_M_X64)\n            __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        }\n    }\n}\nstatic inline void __glide_spin_unlock(__glide_spin_t* l) {\n    atomic_store_explicit(l, 0, memory_order_release);\n}\n\n/* Stack defaults: configured size + 4 KB guard, page-rounded up.\n   With the default 4 KB the total reservation is 8 KB virtual per coro.\n   Linux/Mac mmap commits pages lazily; Windows commits virtual but the\n   working-set is bound only on first access. Either way idle coros pay\n   ~one 4 KB page in physical RAM.\n   Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)\n   need pointer-map metadata + copy/relocate — TBD. */\n#define __GLIDE_STACK_GUARD 4096\nstatic int __glide_stack_size = 4096;\n\n/* Custom assembly context switch — replaces Win32 Fibers and POSIX\n   ucontext.h with our own portable, ABI-correct register flip. The\n   reason: Fibers crash if the same fiber is SwitchToFiber'd by\n   different OS threads over its lifetime, which forces us to pin\n   coros to a single worker and rules out work-stealing. With our\n   own switch we own the entire state, so a coro can move between\n   workers safely.\n\n   Layout: callee-saved GP regs + (Win64 only) callee-saved XMM6-15.\n   Caller-saved registers (rax/rcx/rdx/...) were already flushed to the\n   caller's stack frame by the compiler before it called us, so we don't\n   touch them. SysV marks XMM as caller-saved → no extra work there. */\ntypedef struct {\n#ifdef _WIN32\n    void* rsp; void* rbx; void* rbp;\n    void* rdi; void* rsi;\n    void* r12; void* r13; void* r14; void* r15;\n    char xmm[160];\n#else\n    void* rsp; void* rbx; void* rbp;\n    void* r12; void* r13; void* r14; void* r15;\n#endif\n} __glide_coro_ctx;\n\n__attribute__((naked, noinline))\nstatic void __glide_ctx_switch(\n    __glide_coro_ctx* from __attribute__((unused)),\n    __glide_coro_ctx* to   __attribute__((unused))) {\n#ifdef _WIN32\n    /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */\n    __asm__(\n        \"movq %rsp,   0(%rcx)\\n\\t\"\n        \"movq %rbx,   8(%rcx)\\n\\t\"\n        \"movq %rbp,  16(%rcx)\\n\\t\"\n        \"movq %rdi,  24(%rcx)\\n\\t\"\n        \"movq %rsi,  32(%rcx)\\n\\t\"\n        \"movq %r12,  40(%rcx)\\n\\t\"\n        \"movq %r13,  48(%rcx)\\n\\t\"\n        \"movq %r14,  56(%rcx)\\n\\t\"\n        \"movq %r15,  64(%rcx)\\n\\t\"\n        \"movdqu %xmm6,   72(%rcx)\\n\\t\"\n        \"movdqu %xmm7,   88(%rcx)\\n\\t\"\n        \"movdqu %xmm8,  104(%rcx)\\n\\t\"\n        \"movdqu %xmm9,  120(%rcx)\\n\\t\"\n        \"movdqu %xmm10, 136(%rcx)\\n\\t\"\n        \"movdqu %xmm11, 152(%rcx)\\n\\t\"\n        \"movdqu %xmm12, 168(%rcx)\\n\\t\"\n        \"movdqu %xmm13, 184(%rcx)\\n\\t\"\n        \"movdqu %xmm14, 200(%rcx)\\n\\t\"\n        \"movdqu %xmm15, 216(%rcx)\\n\\t\"\n        \"movq  0(%rdx), %rsp\\n\\t\"\n        \"movq  8(%rdx), %rbx\\n\\t\"\n        \"movq 16(%rdx), %rbp\\n\\t\"\n        \"movq 24(%rdx), %rdi\\n\\t\"\n        \"movq 32(%rdx), %rsi\\n\\t\"\n        \"movq 40(%rdx), %r12\\n\\t\"\n        \"movq 48(%rdx), %r13\\n\\t\"\n        \"movq 56(%rdx), %r14\\n\\t\"\n        \"movq 64(%rdx), %r15\\n\\t\"\n        \"movdqu  72(%rdx), %xmm6\\n\\t\"\n        \"movdqu  88(%rdx), %xmm7\\n\\t\"\n        \"movdqu 104(%rdx), %xmm8\\n\\t\"\n        \"movdqu 120(%rdx), %xmm9\\n\\t\"\n        \"movdqu 136(%rdx), %xmm10\\n\\t\"\n        \"movdqu 152(%rdx), %xmm11\\n\\t\"\n        \"movdqu 168(%rdx), %xmm12\\n\\t\"\n        \"movdqu 184(%rdx), %xmm13\\n\\t\"\n        \"movdqu 200(%rdx), %xmm14\\n\\t\"\n        \"movdqu 216(%rdx), %xmm15\\n\\t\"\n        \"ret\\n\\t\"\n    );\n#else\n    /* SysV AMD64 ABI: from=%rdi, to=%rsi */\n    __asm__(\n        \"movq %rsp,   0(%rdi)\\n\\t\"\n        \"movq %rbx,   8(%rdi)\\n\\t\"\n        \"movq %rbp,  16(%rdi)\\n\\t\"\n        \"movq %r12,  24(%rdi)\\n\\t\"\n        \"movq %r13,  32(%rdi)\\n\\t\"\n        \"movq %r14,  40(%rdi)\\n\\t\"\n        \"movq %r15,  48(%rdi)\\n\\t\"\n        \"movq  0(%rsi), %rsp\\n\\t\"\n        \"movq  8(%rsi), %rbx\\n\\t\"\n        \"movq 16(%rsi), %rbp\\n\\t\"\n        \"movq 24(%rsi), %r12\\n\\t\"\n        \"movq 32(%rsi), %r13\\n\\t\"\n        \"movq 40(%rsi), %r14\\n\\t\"\n        \"movq 48(%rsi), %r15\\n\\t\"\n        \"ret\\n\\t\"\n    );\n#endif\n}\n\ntypedef void* (*__glide_task_fn)(void*);\ntypedef struct __glide_task {\n    __glide_coro_ctx    ctx;     /* register save area */\n    void*               stack;   /* mmap/VirtualAlloc base (low addr) */\n    size_t              stack_total; /* bytes including guard page */\n    __glide_task_fn     entry;\n    void*               arg;\n    int                 state; /* 0=ready 1=running 2=blocked 3=done */\n    int                 home_worker; /* worker that currently owns this coro;\n                                       updated on steal so future unparks land\n                                       on the thief's queue (cache-warm). */\n    int                 has_run;     /* 0 if never run; once 1, we never\n                                       migrate the coro across OS threads (Win64\n                                       SEH/TIB invariants make resumed-on-other-\n                                       thread fragile, so first-run-only steal). */\n    struct __glide_task* next;       /* link in per-worker ready queue */\n    struct __glide_task* wait_next;  /* link in chan wait list */\n    /* Park hand-off: if non-null on switch-back to worker fiber,\n       worker links self into *park_list and unlocks park_lock.\n       Done after the switch so unpark can never race with a\n       still-mid-switch coro. */\n    pthread_mutex_t*     park_lock;\n    struct __glide_task** park_list;\n} __glide_task;\n\n/* Forward decls — out-of-order references between sleep_ms / __glide_park /\n   __glide_timer_main / sched_init / task pool helpers used by worker_main. */\nstatic void* __glide_timer_main(void* unused);\nint __glide_park(pthread_mutex_t* lock, __glide_task** list);\nvoid __glide_free_task(__glide_task* t);\nstatic void __glide_reset_ctx(__glide_task* t);\nstatic void __glide_flush_main_buf(void);\n\n/* Per-worker queue: each worker pops only from its own queue, so a\n   fiber that first ran on worker A always continues on A. This avoids\n   cross-thread fiber migration which crashes Win32 Fibers. Stealing\n   between workers comes in Phase 1.2 (with proper atomic ownership). */\ntypedef struct {\n    __glide_spin_t  spin;\n    pthread_mutex_t mu;\n    pthread_cond_t  cv;\n    __glide_task*   head;\n    __glide_task*   tail;\n    atomic_int      idle;\n} __glide_wq;\n\n/* Sorted sleep queue for the timer thread. Coroutines that call\n   sleep_ms park here instead of blocking their worker. */\ntypedef struct __glide_timer_node {\n    long long              deadline_ns;\n    __glide_task*          task;\n    struct __glide_timer_node* next;\n} __glide_timer_node;\nstatic __glide_timer_node* __glide_timer_head = NULL;\nstatic pthread_mutex_t __glide_timer_mu;\nstatic pthread_cond_t  __glide_timer_cv;\nstatic pthread_t __glide_timer_thread;\nstatic int __glide_timer_inited = 0;\n\nstatic __glide_wq* __glide_wqs = NULL;\nstatic int __glide_q_inited = 0;\nstatic int __glide_n_workers = 0;\nstatic pthread_t* __glide_workers = NULL;\n/* Pending count, sharded per worker so increments and decrements don't all bounce\n   the same cache line. Spawn increments shards[home_worker]; the worker that runs\n   the task decrements shards[my_worker]. Sum across shards = total alive tasks.\n   Each shard is its own cache line to kill false sharing between threads. */\ntypedef struct {\n    atomic_int v;\n    char _pad[60];\n} __glide_pending_shard_t;\nstatic __glide_pending_shard_t* __glide_pending_shards = NULL;\nstatic int __glide_pending_n_shards = 0;\nstatic int __glide_pending_sum(void) {\n    int sum = 0;\n    int n = __glide_pending_n_shards;\n    for (int i = 0; i < n; i++) {\n        sum += atomic_load_explicit(&__glide_pending_shards[i].v, memory_order_acquire);\n    }\n    return sum;\n}\nstatic atomic_int __glide_shutdown = 0;\nstatic atomic_int __glide_rr = 0;        /* round-robin spawn counter */\n\nstatic _Thread_local __glide_task* __glide_cur_task = NULL;\nstatic _Thread_local int __glide_my_worker = -1;\n/* Worker's saved context. Each OS thread has its own — when a coro\n   parks/yields, we ctx_switch INTO this so the worker resumes its\n   loop right after the call site. */\nstatic _Thread_local __glide_coro_ctx __glide_worker_ctx;\n#ifdef _WIN32\n/* Original OS-thread stack range — saved on worker entry, restored\n   when no coro is running. Win64 SEH walks the stack via TIB, so we\n   must point TIB at the coro's stack while it runs and back at the\n   OS thread's stack between switches. Without this, any code path that\n   raises an exception or probes the stack from a migrated coro reads\n   garbage and crashes. */\nstatic _Thread_local void* __glide_orig_stack_base = NULL;\nstatic _Thread_local void* __glide_orig_stack_limit = NULL;\nstatic inline void __glide_tib_set_stack(void* base, void* limit) {\n    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();\n    tib->StackBase = base;\n    tib->StackLimit = limit;\n}\n#endif\n\nstatic void __glide_q_push_to(int wid, __glide_task* t) {\n    __glide_wq* q = &__glide_wqs[wid];\n    __glide_spin_lock(&q->spin);\n    t->next = NULL;\n    if (q->tail) q->tail->next = t; else q->head = t;\n    q->tail = t;\n    __glide_spin_unlock(&q->spin);\n    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {\n        pthread_mutex_lock(&q->mu);\n        pthread_cond_signal(&q->cv);\n        pthread_mutex_unlock(&q->mu);\n    }\n}\n\n/* Splice a pre-built chain (head ... tail, n nodes, NULL-terminated) onto\n   the back of a worker's queue under one spinlock acquisition. Used by main's\n   batched-push path so 32 spawns cost ~1 lock instead of 32. */\nstatic void __glide_q_push_chain(int wid, __glide_task* head, __glide_task* tail, int n) {\n    if (!head) return; (void)n;\n    __glide_wq* q = &__glide_wqs[wid];\n    __glide_spin_lock(&q->spin);\n    if (q->tail) q->tail->next = head; else q->head = head;\n    q->tail = tail;\n    __glide_spin_unlock(&q->spin);\n    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {\n        pthread_mutex_lock(&q->mu);\n        pthread_cond_broadcast(&q->cv);\n        pthread_mutex_unlock(&q->mu);\n    }\n}\n\nstatic int __glide_pick_worker(void) {\n    /* Inside a coro: same worker as caller (cheap, keeps cache hot).\n       Outside (main): always W0 — work-stealing redistributes. This avoids\n       the per-spawn atomic+cross-thread cache bounce on N target queues. */\n    if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;\n    return 0;\n}\n\n/* Work-stealing: when our queue is empty, try grabbing the head of\n   another worker's queue (random victim, walk all on miss). On steal\n   we adopt the task as our own (home_worker = me) so future unparks\n   stay cache-warm here. Now safe to migrate because our custom ctx\n   switch is stateless across threads — no Win32 Fiber crash trap. */\nstatic atomic_uint __glide_steal_rr = 0;\nstatic __glide_task* __glide_try_steal(void) {\n    int n = __glide_n_workers;\n    if (n <= 1) return NULL;\n    int my = __glide_my_worker;\n    unsigned int seed = atomic_fetch_add_explicit(&__glide_steal_rr, 1, memory_order_relaxed);\n    int start = (int)(seed % (unsigned int)n);\n    for (int i = 0; i < n; i++) {\n        int v = (start + i) % n;\n        if (v == my) continue;\n        __glide_wq* q = &__glide_wqs[v];\n        __glide_spin_lock(&q->spin);\n        /* Walk queue head: only first-run-untouched tasks are stealable. */\n        __glide_task* prev = NULL;\n        __glide_task* t = q->head;\n        while (t && t->has_run) { prev = t; t = t->next; }\n        if (t) {\n            if (prev) prev->next = t->next; else q->head = t->next;\n            if (q->tail == t) q->tail = prev;\n            __glide_spin_unlock(&q->spin);\n            t->home_worker = my;\n            t->next = NULL;\n            return t;\n        }\n        __glide_spin_unlock(&q->spin);\n    }\n    return NULL;\n}\n\nstatic __glide_task* __glide_q_pop_my(void) {\n    __glide_wq* q = &__glide_wqs[__glide_my_worker];\n    while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {\n        __glide_spin_lock(&q->spin);\n        __glide_task* t = q->head;\n        if (t) {\n            q->head = t->next;\n            if (q->head == NULL) q->tail = NULL;\n            __glide_spin_unlock(&q->spin);\n            return t;\n        }\n        __glide_spin_unlock(&q->spin);\n        __glide_task* stolen = __glide_try_steal();\n        if (stolen) return stolen;\n        pthread_mutex_lock(&q->mu);\n        if (q->head || atomic_load(&__glide_shutdown)) {\n            pthread_mutex_unlock(&q->mu);\n            continue;\n        }\n        struct timespec ts;\n        clock_gettime(CLOCK_REALTIME, &ts);\n        ts.tv_nsec += 500000;\n        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }\n        atomic_store_explicit(&q->idle, 1, memory_order_relaxed);\n        pthread_cond_timedwait(&q->cv, &q->mu, &ts);\n        atomic_store_explicit(&q->idle, 0, memory_order_relaxed);\n        pthread_mutex_unlock(&q->mu);\n    }\n    return NULL;\n}\n\n/* Trampoline reached on a coro's first switch-in. Reads the bound\n   task from TLS (worker_main set __glide_cur_task before switching),\n   runs the user fn, marks done, then hands control back to the worker\n   via ctx_switch. The final switch never returns: we discard the saved\n   ctx (worker is going to free us anyway). */\nstatic void __glide_coro_trampoline(void) {\n    __glide_task* t = __glide_cur_task;\n    (void)t->entry(t->arg);\n    t->state = 3;\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\n    __builtin_unreachable();\n}\n\n/* Stack pool: hold a small free list of recently-freed regions so a\n   spawn-burst doesn't pay mmap+munmap (Linux) / VirtualAlloc+VirtualFree\n   (Win) per coro. Significant on Windows where these are slow syscalls. */\ntypedef struct __glide_stack_node {\n    void*  base;\n    size_t total;\n    struct __glide_stack_node* next;\n} __glide_stack_node;\nstatic __glide_stack_node* __glide_stack_pool = NULL;\nstatic int __glide_stack_pool_count = 0;\nstatic const int __GLIDE_STACK_POOL_MAX = 16384;\nstatic __glide_spin_t __glide_stack_pool_spin = 0;\n\n/* Stack allocator: mmap (POSIX) or VirtualAlloc (Win) so unused pages\n   stay uncommitted (Linux/Mac) and overflow into the guard page raises\n   SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the\n   neighbour stack. Returns the LOW address of the whole region; usable\n   stack starts at `base + __GLIDE_STACK_GUARD`. */\nstatic void* __glide_alloc_stack(size_t* out_total) {\n    size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;\n    size_t page = 4096;\n    total = (total + page - 1) & ~(page - 1);\n    /* Pool fast path. */\n    __glide_spin_lock(&__glide_stack_pool_spin);\n    __glide_stack_node* n = __glide_stack_pool;\n    while (n && n->total != total) n = n->next;\n    if (n && n->total == total) {\n        /* Unlink first matching node. */\n        __glide_stack_node** p = &__glide_stack_pool;\n        while (*p != n) p = &(*p)->next;\n        *p = n->next;\n        __glide_stack_pool_count--;\n        __glide_spin_unlock(&__glide_stack_pool_spin);\n        void* base = n->base;\n        free(n);\n        *out_total = total;\n        return base;\n    }\n    __glide_spin_unlock(&__glide_stack_pool_spin);\n    void* base;\n#ifdef _WIN32\n    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);\n    if (!base) return NULL;\n    DWORD old;\n    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);\n#else\n    base = mmap(NULL, total, PROT_READ|PROT_WRITE,\n                MAP_ANON|MAP_PRIVATE, -1, 0);\n    if (base == MAP_FAILED) return NULL;\n    mprotect(base, __GLIDE_STACK_GUARD, PROT_NONE);\n#endif\n    *out_total = total;\n    return base;\n}\n\nstatic void __glide_free_stack(void* base, size_t total) {\n    if (!base) return;\n    /* Hand back to pool if there's room. */\n    __glide_spin_lock(&__glide_stack_pool_spin);\n    if (__glide_stack_pool_count < __GLIDE_STACK_POOL_MAX) {\n        __glide_stack_node* n = (__glide_stack_node*)malloc(sizeof(*n));\n        n->base = base;\n        n->total = total;\n        n->next = __glide_stack_pool;\n        __glide_stack_pool = n;\n        __glide_stack_pool_count++;\n        __glide_spin_unlock(&__glide_stack_pool_spin);\n        return;\n    }\n    __glide_spin_unlock(&__glide_stack_pool_spin);\n#ifdef _WIN32\n    (void)total;\n    VirtualFree(base, 0, MEM_RELEASE);\n#else\n    munmap(base, total);\n#endif\n}\n\n/* Plant trampoline address at the top of the stack so the first\n   ctx_switch into this ctx pops it and `ret`s into the trampoline.\n   16-byte alignment matches the AMD64 call ABI: we save RSP at a\n   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees\n   RSP%16==8 (which is what `call` would have left). */\nstatic void __glide_coro_init(__glide_task* t) {\n    size_t total = 0;\n    t->stack = __glide_alloc_stack(&total);\n    t->stack_total = total;\n    char* top = (char*)t->stack + total;\n    top -= 16;                       /* headroom — never write past top */\n    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;\n    *(void**)sp = (void*)__glide_coro_trampoline;\n    t->ctx.rsp = (void*)sp;\n    t->ctx.rbx = 0; t->ctx.rbp = 0;\n    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;\n#ifdef _WIN32\n    t->ctx.rdi = 0; t->ctx.rsi = 0;\n#endif\n}\n\nstatic void __glide_coro_destroy(__glide_task* t) {\n    __glide_free_stack(t->stack, t->stack_total);\n    t->stack = NULL;\n    t->stack_total = 0;\n}\n\nstatic void* __glide_worker_main(void* arg) {\n    __glide_my_worker = (int)(intptr_t)arg;\n#ifdef _WIN32\n    /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit\n       to the coro's region while it runs and back to ours between switches. */\n    {\n        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();\n        __glide_orig_stack_base = tib->StackBase;\n        __glide_orig_stack_limit = tib->StackLimit;\n    }\n#endif\n    while (!atomic_load(&__glide_shutdown)) {\n        __glide_task* t = __glide_q_pop_my();\n        if (!t) break;\n        __glide_cur_task = t;\n        if (!t->has_run) __glide_reset_ctx(t);\n        t->state = 1;\n        t->has_run = 1;  /* stick to this OS thread from now on */\n#ifdef _WIN32\n        __glide_tib_set_stack((char*)t->stack + t->stack_total, t->stack);\n#endif\n        __glide_ctx_switch(&__glide_worker_ctx, &t->ctx);\n#ifdef _WIN32\n        __glide_tib_set_stack(__glide_orig_stack_base, __glide_orig_stack_limit);\n#endif\n        __glide_cur_task = NULL;\n        if (t->state == 3) {\n            __glide_free_task(t);  /* pool reuse — keeps stack mmap'd */\n            /* Single atomic on this worker's shard. The previous code also did a\n               cross-queue cv broadcast when total pending hit zero, but\n               sched_shutdown busy-waits on pending_sum and broadcasts itself once\n               shutdown=1, so this hot-path broadcast is redundant. */\n            atomic_fetch_sub_explicit(&__glide_pending_shards[__glide_my_worker].v, 1, memory_order_acq_rel);\n        } else if (t->state == 2) {\n            /* Parked. Complete the hand-off: link into wait list,\n               release the lock the parker held. After this point\n               unpark may safely queue the task. */\n            if (t->park_list) {\n                t->wait_next = *t->park_list;\n                *t->park_list = t;\n                t->park_list = NULL;\n            }\n            if (t->park_lock) {\n                pthread_mutex_unlock(t->park_lock);\n                t->park_lock = NULL;\n            }\n        } else {\n            t->state = 0;\n            __glide_q_push_to(t->home_worker, t);\n        }\n    }\n    return NULL;\n}\n\nvoid __glide_sched_init(void) {\n    if (__glide_q_inited) return;\n    const char* env_stk = getenv(\"GLIDE_CORO_STACK\");\n    if (env_stk) {\n        int n = atoi(env_stk);\n        if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */\n    }\n    const char* env = getenv(\"GLIDE_WORKERS\");\n    if (env) __glide_n_workers = atoi(env);\n    if (__glide_n_workers <= 0) {\n#ifdef _WIN32\n        SYSTEM_INFO si; GetSystemInfo(&si);\n        __glide_n_workers = (int)si.dwNumberOfProcessors;\n#else\n        long n = sysconf(_SC_NPROCESSORS_ONLN);\n        __glide_n_workers = (n > 0) ? (int)n : 4;\n#endif\n    }\n    __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_mutex_init(&__glide_wqs[i].mu, NULL);\n        pthread_cond_init(&__glide_wqs[i].cv, NULL);\n    }\n    /* One shard per worker plus one for non-coro callers (main / arbitrary OS threads). */\n    __glide_pending_n_shards = __glide_n_workers + 1;\n    __glide_pending_shards = (__glide_pending_shard_t*)calloc(__glide_pending_n_shards, sizeof(__glide_pending_shard_t));\n    __glide_q_inited = 1;\n    __glide_workers = (pthread_t*)malloc(sizeof(pthread_t) * __glide_n_workers);\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_create(&__glide_workers[i], NULL, __glide_worker_main, (void*)(intptr_t)i);\n    }\n    pthread_mutex_init(&__glide_timer_mu, NULL);\n    pthread_cond_init(&__glide_timer_cv, NULL);\n    __glide_timer_inited = 1;\n    pthread_create(&__glide_timer_thread, NULL, __glide_timer_main, NULL);\n}\n\nvoid __glide_sched_shutdown(void) {\n    if (!__glide_q_inited) return;\n    __glide_flush_main_buf();\n    while (__glide_pending_sum() > 0) {\n        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;\n        nanosleep(&ts, NULL);\n    }\n    atomic_store(&__glide_shutdown, 1);\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_mutex_lock(&__glide_wqs[i].mu);\n        pthread_cond_broadcast(&__glide_wqs[i].cv);\n        pthread_mutex_unlock(&__glide_wqs[i].mu);\n    }\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_join(__glide_workers[i], NULL);\n    }\n    if (__glide_timer_inited) {\n        pthread_mutex_lock(&__glide_timer_mu);\n        pthread_cond_broadcast(&__glide_timer_cv);\n        pthread_mutex_unlock(&__glide_timer_mu);\n        pthread_join(__glide_timer_thread, NULL);\n        __glide_timer_inited = 0;\n    }\n    free(__glide_workers); __glide_workers = NULL;\n    free(__glide_wqs); __glide_wqs = NULL;\n    free(__glide_pending_shards); __glide_pending_shards = NULL;\n    __glide_pending_n_shards = 0;\n    __glide_q_inited = 0;\n}\n\n/* Task pool: full task structs (stack + ctx already initialized). On reuse\n   we just rewind the trampoline pointer at the top of the existing stack —\n   no mmap, no calloc, no setup work. Burst spawns become ~1 mutex + 1 push. */\nstatic __glide_task* __glide_task_pool = NULL;\nstatic int __glide_task_pool_count = 0;\nstatic const int __GLIDE_TASK_POOL_MAX = 16384;\nstatic __glide_spin_t __glide_task_pool_spin = 0;\n\n/* Per-thread magazine. The global pool's spinlock is the spawn hot-path\n   bottleneck under burst load (13 threads contending). Each thread keeps a\n   small LIFO; alloc/free hit it lock-free, and we only touch the global pool\n   in batches when the magazine fills or drains. Reduces global ops ~32x. */\n#define __GLIDE_TLS_POOL_MAX 256\n#define __GLIDE_TLS_POOL_BATCH 64\nstatic __thread __glide_task* __glide_tls_pool = NULL;\nstatic __thread int __glide_tls_pool_count = 0;\n\nstatic void __glide_reset_ctx(__glide_task* t) {\n    char* top = (char*)t->stack + t->stack_total;\n    top -= 16;\n    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;\n    *(void**)sp = (void*)__glide_coro_trampoline;\n    t->ctx.rsp = (void*)sp;\n    /* GP/XMM regs zeroed via 8-byte stores — faster than memset for\n       this fixed-size struct, and the compiler vectorizes if it cares. */\n    t->ctx.rbx = 0; t->ctx.rbp = 0;\n    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;\n#ifdef _WIN32\n    t->ctx.rdi = 0; t->ctx.rsi = 0;\n    /* xmm[160] = 20 × 8 bytes; unrolled clear for branchless write. */\n    uint64_t* x = (uint64_t*)t->ctx.xmm;\n    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;\n    x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;\n    x[16]=0; x[17]=0; x[18]=0; x[19]=0;\n#endif\n}\n\n/* No-op now: state/has_run/wait_next/park_lock/park_list are cleared at FREE time\n   instead, so the spawn hot path on main has fewer stores. The reset_ctx clear\n   already moved to worker_main earlier (gated on has_run==0). Inlined since callers\n   sometimes need the return value. */\nstatic inline __glide_task* __glide_finish_alloc(__glide_task* t) { return t; }\n\n__glide_task* __glide_alloc_task(void) {\n    /* Magazine fast path: pop without ever touching the spinlock. */\n    __glide_task* t = __glide_tls_pool;\n    if (t) {\n        __glide_tls_pool = t->next;\n        __glide_tls_pool_count--;\n        return __glide_finish_alloc(t);\n    }\n    /* Magazine empty: refill a batch in one global-lock acquisition. */\n    __glide_spin_lock(&__glide_task_pool_spin);\n    t = __glide_task_pool;\n    if (t) {\n        __glide_task_pool = t->next;\n        __glide_task_pool_count--;\n        __glide_task* head = NULL;\n        int taken = 0;\n        while (taken < __GLIDE_TLS_POOL_BATCH - 1 && __glide_task_pool) {\n            __glide_task* x = __glide_task_pool;\n            __glide_task_pool = x->next;\n            __glide_task_pool_count--;\n            x->next = head;\n            head = x;\n            taken++;\n        }\n        __glide_spin_unlock(&__glide_task_pool_spin);\n        __glide_tls_pool = head;\n        __glide_tls_pool_count = taken;\n        return __glide_finish_alloc(t);\n    }\n    __glide_spin_unlock(&__glide_task_pool_spin);\n    /* Pool fully drained: fresh allocation. */\n    t = (__glide_task*)calloc(1, sizeof(__glide_task));\n    __glide_coro_init(t);\n    return t;\n}\n\nvoid __glide_free_task(__glide_task* t) {\n    /* Reset all the per-task transient fields here, on the worker thread that's\n       freeing — main's spawn hot path was paying for these N stores per task. */\n    t->state = 0; t->has_run = 0;\n    t->wait_next = NULL;\n    t->park_lock = NULL; t->park_list = NULL;\n    if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {\n        t->next = __glide_tls_pool;\n        __glide_tls_pool = t;\n        __glide_tls_pool_count++;\n        return;\n    }\n    /* Magazine full: flush BATCH (this task + last BATCH-1 from TLS) to global. */\n    /* `t` may carry a stale ->next from the run queue; null it so the chain\n       we're about to build terminates cleanly when we walk it for overflow. */\n    t->next = NULL;\n    __glide_task* batch = t;\n    int batch_n = 1;\n    while (batch_n < __GLIDE_TLS_POOL_BATCH && __glide_tls_pool) {\n        __glide_task* x = __glide_tls_pool;\n        __glide_tls_pool = x->next;\n        __glide_tls_pool_count--;\n        x->next = batch;\n        batch = x;\n        batch_n++;\n    }\n    __glide_spin_lock(&__glide_task_pool_spin);\n    int room = __GLIDE_TASK_POOL_MAX - __glide_task_pool_count;\n    int put = (room < batch_n) ? room : batch_n;\n    __glide_task* overflow = batch;\n    if (put > 0) {\n        __glide_task* tail = batch;\n        for (int i = 0; i < put - 1; i++) tail = tail->next;\n        overflow = tail->next;\n        tail->next = __glide_task_pool;\n        __glide_task_pool = batch;\n        __glide_task_pool_count += put;\n    }\n    __glide_spin_unlock(&__glide_task_pool_spin);\n    while (overflow) {\n        __glide_task* x = overflow;\n        overflow = x->next;\n        __glide_coro_destroy(x);\n        free(x);\n    }\n}\n\n/* Per-OS-thread spawn buffer for the from-main path. Batching 32 spawns into\n   one queue lock acquisition cuts spinlock contention dramatically when burst-\n   spawning into W0. pending is incremented immediately (per spawn) so callers'\n   `pending_count()` busy-waits don't observe a stale-low value while tasks sit\n   in the buffer. The flush is triggered by buffer-full, by sched_shutdown, and\n   by pending_count itself (so wait loops can never deadlock on unflushed work). */\n#define __GLIDE_MAIN_BATCH 16\nstatic _Thread_local __glide_task* __glide_main_buf_head = NULL;\nstatic _Thread_local __glide_task* __glide_main_buf_tail = NULL;\nstatic _Thread_local int __glide_main_buf_count = 0;\nstatic void __glide_flush_main_buf(void) {\n    if (!__glide_main_buf_head) return;\n    __glide_q_push_chain(0, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);\n    __glide_main_buf_head = NULL;\n    __glide_main_buf_tail = NULL;\n    __glide_main_buf_count = 0;\n}\n\nvoid __glide_spawn(__glide_task_fn fn, void* arg) {\n    __glide_task* t = __glide_alloc_task();\n    t->entry = fn;\n    t->arg = arg;\n    t->home_worker = __glide_pick_worker();\n    /* Increment the SPAWNER's shard, not the home_worker's. With main always\n       picking W0, sharding by home_worker would put every increment on shard[0] and\n       defeat the whole point. Spawner-thread keeps main's stream separate. */\n    int __sidx = (__glide_my_worker >= 0) ? __glide_my_worker : __glide_n_workers;\n    atomic_fetch_add_explicit(&__glide_pending_shards[__sidx].v, 1, memory_order_relaxed);\n    if (__glide_cur_task != NULL && __glide_my_worker >= 0) {\n        /* Inside a coro: same-thread same-queue, spinlock is uncontended. */\n        __glide_q_push_to(t->home_worker, t);\n        return;\n    }\n    /* Outside (main / pthread): buffer locally, flush in batches. */\n    t->next = NULL;\n    if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;\n    else __glide_main_buf_head = t;\n    __glide_main_buf_tail = t;\n    __glide_main_buf_count++;\n    if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) __glide_flush_main_buf();\n}\n\nvoid yield_now(void) {\n    __glide_task* t = __glide_cur_task;\n    if (!t) return;\n    t->state = 0;\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\n}\n\nint pending_count(void) {\n    /* Flush any locally-buffered spawns before reading; otherwise a busy-wait\n       like `while pending_count() > 0 {}` could hold tasks in the buffer forever. */\n    if (__glide_cur_task == NULL) __glide_flush_main_buf();\n    return __glide_pending_sum();\n}\n\nint64_t now_ns(void) {\n#ifdef _WIN32\n    static LARGE_INTEGER freq; static int inited = 0;\n    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }\n    LARGE_INTEGER c; QueryPerformanceCounter(&c);\n    return (int64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);\n#else\n    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);\n    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;\n#endif\n}\n\nstatic long long __glide_monotonic_ns(void) {\n#ifdef _WIN32\n    static LARGE_INTEGER freq; static int inited = 0;\n    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }\n    LARGE_INTEGER c; QueryPerformanceCounter(&c);\n    return (long long)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);\n#else\n    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);\n    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;\n#endif\n}\n\n/* Timer thread: sleeps until the head deadline, unparks expired tasks. */\nstatic void* __glide_timer_main(void* unused) {\n    (void)unused;\n    pthread_mutex_lock(&__glide_timer_mu);\n    while (!atomic_load(&__glide_shutdown)) {\n        if (__glide_timer_head == NULL) {\n            pthread_cond_wait(&__glide_timer_cv, &__glide_timer_mu);\n            continue;\n        }\n        long long now = __glide_monotonic_ns();\n        if (__glide_timer_head->deadline_ns <= now) {\n            __glide_timer_node* expired = __glide_timer_head;\n            __glide_timer_head = expired->next;\n            __glide_task* t = expired->task;\n            free(expired);\n            pthread_mutex_unlock(&__glide_timer_mu);\n            t->state = 0;\n            __glide_q_push_to(t->home_worker, t);\n            pthread_mutex_lock(&__glide_timer_mu);\n            continue;\n        }\n        long long delta = __glide_timer_head->deadline_ns - now;\n        struct timespec abst;\n#ifdef _WIN32\n        struct timespec _now_rt; clock_gettime(CLOCK_REALTIME, &_now_rt);\n        abst.tv_sec = _now_rt.tv_sec; abst.tv_nsec = _now_rt.tv_nsec;\n#else\n        clock_gettime(CLOCK_REALTIME, &abst);\n#endif\n        long long add_ns = abst.tv_nsec + delta;\n        abst.tv_sec  += (time_t)(add_ns / 1000000000LL);\n        abst.tv_nsec  = (long)(add_ns % 1000000000LL);\n        pthread_cond_timedwait(&__glide_timer_cv, &__glide_timer_mu, &abst);\n    }\n    pthread_mutex_unlock(&__glide_timer_mu);\n    return NULL;\n}\n\nvoid sleep_ms(int ms) {\n    __glide_task* t = __glide_cur_task;\n    if (!t) {\n        /* Not in a coro - blocking sleep. Flush first so any spawns we just\n           queued aren't held in our local buffer while we sit here idle. */\n        __glide_flush_main_buf();\n#ifdef _WIN32\n        Sleep((DWORD)ms);\n#else\n        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (long)((ms % 1000)) * 1000000L;\n        nanosleep(&ts, NULL);\n#endif\n        return;\n    }\n    /* Coro - register on the timer queue, park, worker runs others. */\n    long long deadline = __glide_monotonic_ns() + (long long)ms * 1000000LL;\n    __glide_timer_node* node = (__glide_timer_node*)malloc(sizeof(__glide_timer_node));\n    node->deadline_ns = deadline;\n    node->task = t;\n    pthread_mutex_lock(&__glide_timer_mu);\n    __glide_timer_node** cur = &__glide_timer_head;\n    while (*cur && (*cur)->deadline_ns <= deadline) cur = &(*cur)->next;\n    node->next = *cur;\n    *cur = node;\n    /* Wake timer thread to recompute its deadline. */\n    pthread_cond_signal(&__glide_timer_cv);\n    /* Park: worker hand-off releases __glide_timer_mu after switch. */\n    __glide_park(&__glide_timer_mu, NULL);\n}\n\n/* Coro park: caller holds `lock` and wants to wait on `list`. Returns\n   1 if parked (caller must re-acquire `lock` and re-check state), 0\n   if the caller is not in a coroutine context (caller should fall\n   back to pthread_cond_wait). The actual list link + lock release is\n   done by the worker AFTER the fiber switch — that's how we avoid the\n   classic park/unpark race. */\nint __glide_park(pthread_mutex_t* lock, __glide_task** list) {\n    __glide_task* t = __glide_cur_task;\n    if (!t) { __glide_flush_main_buf(); return 0; }\n    t->park_lock = lock;\n    t->park_list = list;\n    t->state = 2;\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\n    return 1;\n}\n\n/* Caller holds the chan/mutex protecting the wait list. Pop the head and queue it. */\nvoid __glide_unpark_one(__glide_task** list) {\n    __glide_task* t = *list;\n    if (!t) return;\n    *list = t->wait_next;\n    t->wait_next = NULL;\n    t->state = 0;\n    __glide_q_push_to(t->home_worker, t);\n}\n\n\n");
+    printf("%s\n", "");
+}
+
+void   emit_socket_runtime (void) {
+    printf("%s\n", "");
+    printf("%s", "// ============================ socket runtime =============================\n#ifdef _WIN32\n# include <winsock2.h>\n# include <ws2tcpip.h>\ntypedef SOCKET __glide_sock_t;\nstatic int __glide_wsa_inited = 0;\nstatic void __glide_wsa_ensure(void) {\n    if (__glide_wsa_inited) return;\n    WSADATA d; WSAStartup(MAKEWORD(2, 2), &d);\n    __glide_wsa_inited = 1;\n}\n#else\n# include <sys/socket.h>\n# include <netinet/in.h>\n# include <unistd.h>\n# include <arpa/inet.h>\ntypedef int __glide_sock_t;\nstatic void __glide_wsa_ensure(void) {}\n#endif\n\nint listen_tcp(int port) {\n    __glide_wsa_ensure();\n    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);\n#ifdef _WIN32\n    if (s == INVALID_SOCKET) return -1;\n#else\n    if (s < 0) return -1;\n#endif\n    int yes = 1;\n    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));\n    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));\n    addr.sin_family = AF_INET;\n    addr.sin_port = htons((unsigned short)port);\n    addr.sin_addr.s_addr = htonl(INADDR_ANY);\n    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    if (listen(s, 128) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    return (int)s;\n}\n\nint accept_tcp(int listener) {\n#ifdef _WIN32\n    SOCKET c = accept((SOCKET)listener, NULL, NULL);\n    return (c == INVALID_SOCKET) ? -1 : (int)c;\n#else\n    int c = accept(listener, NULL, NULL);\n    return c < 0 ? -1 : c;\n#endif\n}\n\nint tcp_read(int fd, void* buf, int max) {\n#ifdef _WIN32\n    int n = recv((SOCKET)fd, (char*)buf, max, 0);\n    return n < 0 ? -1 : n;\n#else\n    int n = (int)read(fd, buf, (size_t)max);\n    return n < 0 ? -1 : n;\n#endif\n}\n\nint tcp_write(int fd, void* buf, int n) {\n#ifdef _WIN32\n    int w = send((SOCKET)fd, (const char*)buf, n, 0);\n    return w < 0 ? -1 : w;\n#else\n    int w = (int)write(fd, buf, (size_t)n);\n    return w < 0 ? -1 : w;\n#endif\n}\n\nvoid tcp_close(int fd) {\n#ifdef _WIN32\n    closesocket((SOCKET)fd);\n#else\n    close(fd);\n#endif\n}\n");
+    printf("%s\n", "");
 }
 
 void   pre_emit_spawn_stubs_in_stmt (CG*   g, Stmt*   s) {
@@ -4497,34 +8416,39 @@ void   emit_spawn_stub (CG*   g, Expr*   call, int   id) {
     }
     int   n = Vector_len__Param((fnstmt. fn_params ));
     const char*   ids = int_to_str(id);
+    if ((n  ==  0)) {
+        const char*   tmpl = "static void* __glide_spawn_stub_@ID@(void* __raw) {\n    (void)__raw;\n    @FN_NAME@();\n    return NULL;\n}\n";
+        const char*   s1 = _cg_replace(tmpl, "@ID@", ids);
+        const char*   s2 = _cg_replace(s1, "@FN_NAME@", fn_name);
+        printf("%s", s2);
+        return;
+    }
     const char*   an = __glide_string_concat("__glide_spawn_args_", ids);
-    printf("%s\n", __glide_string_concat(__glide_string_concat("typedef struct ", an), " {"));
+    const char*   fields = "";
+    const char*   call_args = "";
     for (int   i = 0; (i  <  n); i++) {
         Param   p = Vector_get__Param((fnstmt. fn_params ), i);
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", type_to_c((p. ty ))), " a"), int_to_str(i)), ";"));
-    }
-    printf("%s\n", __glide_string_concat(__glide_string_concat("} ", an), ";"));
-    printf("%s\n", __glide_string_concat(__glide_string_concat("static void* __glide_spawn_stub_", ids), "(void* __raw) {"));
-    printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", an), "* __args = ("), an), "*)__raw;"));
-    const char*   call_line = __glide_string_concat(__glide_string_concat("    ", fn_name), "(");
-    for (int   i = 0; (i  <  n); i++) {
+        const char*   ix = int_to_str(i);
+        (fields  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(fields, "    "), type_to_c((p. ty ))), " a"), ix), ";\n"));
         if ((i  >  0)) {
-            (call_line  =  __glide_string_concat(call_line, ", "));
+            (call_args  =  __glide_string_concat(call_args, ", "));
         }
-        (call_line  =  __glide_string_concat(__glide_string_concat(call_line, "__args->a"), int_to_str(i)));
+        (call_args  =  __glide_string_concat(__glide_string_concat(call_args, "__args->a"), ix));
     }
-    (call_line  =  __glide_string_concat(call_line, ");"));
-    printf("%s\n", call_line);
-    printf("%s\n", "    free(__raw);");
-    printf("%s\n", "    return NULL;");
-    printf("%s\n", "}");
+    const char*   tmpl = "typedef struct @AN@ {\n@FIELDS@} @AN@;\nstatic void* __glide_spawn_stub_@ID@(void* __raw) {\n    @AN@* __args = (@AN@*)__raw;\n    @FN_NAME@(@CALL_ARGS@);\n    free(__raw);\n    return NULL;\n}\n";
+    const char*   s1 = _cg_replace(tmpl, "@AN@", an);
+    const char*   s2 = _cg_replace(s1, "@ID@", ids);
+    const char*   s3 = _cg_replace(s2, "@FN_NAME@", fn_name);
+    const char*   s4 = _cg_replace(s3, "@FIELDS@", fields);
+    const char*   s5 = _cg_replace(s4, "@CALL_ARGS@", call_args);
+    printf("%s", s5);
 }
 
-const char*   int_to_str (int   n) {
+const char*   int_to_str (int64_t   n) {
     if ((n  ==  0)) {
         return "0";
     }
-    int   x = n;
+    int64_t   x = n;
     bool   neg = false;
     if ((x  <  0)) {
         (neg  =  true);
@@ -4532,7 +8456,7 @@ const char*   int_to_str (int   n) {
     }
     const char*   s = "";
     while ((x  >  0)) {
-        int   d = (x  %  10);
+        int   d = (( int )(x  %  10));
         const char*   ch = digit_str(d);
         (s  =  __glide_string_concat(ch, s));
         (x  =  (x  /  10));
@@ -4600,258 +8524,7 @@ bool   is_stdlib_primitive (const char*   name) {
 }
 
 void   emit_stdlib_runtime (void) {
-    printf("%s\n", "// ---- glide runtime ----");
-    printf("%s\n", "static int __glide_string_len(const char* s) { return (int)strlen(s); }");
-    printf("%s\n", "static bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }");
-    printf("%s\n", "static char __glide_string_at(const char* s, int i) { return s[i]; }");
-    printf("%s\n", "static const char* __glide_string_concat(const char* a, const char* b) {");
-    printf("%s\n", "    size_t la = strlen(a), lb = strlen(b);");
-    printf("%s\n", "    char* out = (char*)malloc(la + lb + 1);");
-    printf("%s\n", "    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;");
-    printf("%s\n", "    return out;");
-    printf("%s\n", "}");
-    printf("%s\n", "static const char* __glide_string_substring(const char* s, int start, int end) {");
-    printf("%s\n", "    int n = (int)strlen(s);");
-    printf("%s\n", "    if (start < 0) start = 0;");
-    printf("%s\n", "    if (end > n) end = n;");
-    printf("%s\n", "    if (start > end) start = end;");
-    printf("%s\n", "    int len = end - start;");
-    printf("%s\n", "    char* out = (char*)malloc((size_t)len + 1);");
-    printf("%s\n", "    memcpy(out, s + start, (size_t)len); out[len] = 0;");
-    printf("%s\n", "    return out;");
-    printf("%s\n", "}");
-    printf("%s\n", "static int __glide_char_to_int(char c) { return (int)(unsigned char)c; }");
-    printf("%s\n", "static bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }");
-    printf("%s\n", "static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }");
-    printf("%s\n", "static int __glide_int_abs(int n) { return n < 0 ? -n : n; }");
-    printf("%s\n", "static const char* __glide_int_to_string(int n) {");
-    printf("%s\n", "    char buf[32];");
-    printf("%s\n", "    int len = snprintf(buf, sizeof(buf), \"%d\", n);");
-    printf("%s\n", "    char* out = (char*)malloc((size_t)len + 1);");
-    printf("%s\n", "    memcpy(out, buf, (size_t)len + 1);");
-    printf("%s\n", "    return out;");
-    printf("%s\n", "}");
-    printf("%s\n", "static const char* __glide_bool_to_string(bool b) { return b ? \"true\" : \"false\"; }");
-    printf("%s\n", "#include <stdarg.h>");
-    printf("%s\n", "static const char* __glide_format(const char* fmt, ...) {");
-    printf("%s\n", "    va_list ap1, ap2;");
-    printf("%s\n", "    va_start(ap1, fmt);");
-    printf("%s\n", "    va_copy(ap2, ap1);");
-    printf("%s\n", "    int n = vsnprintf(NULL, 0, fmt, ap1);");
-    printf("%s\n", "    va_end(ap1);");
-    printf("%s\n", "    char* out = (char*)malloc((size_t)n + 1);");
-    printf("%s\n", "    vsnprintf(out, (size_t)n + 1, fmt, ap2);");
-    printf("%s\n", "    va_end(ap2);");
-    printf("%s\n", "    return out;");
-    printf("%s\n", "}");
-    printf("%s\n", "static int __glide_argc_g = 0;");
-    printf("%s\n", "static char** __glide_argv_g = NULL;");
-    printf("%s\n", "static void __glide_args_init(int argc, char** argv) { __glide_argc_g = argc; __glide_argv_g = argv; }");
-    printf("%s\n", "static int args_count(void) { return __glide_argc_g; }");
-    printf("%s\n", "static const char* args_at(int i) {");
-    printf("%s\n", "    if (i < 0 || i >= __glide_argc_g) return \"\";");
-    printf("%s\n", "    return __glide_argv_g[i];");
-    printf("%s\n", "}");
-    printf("%s\n", "static const char* read_file(const char* path) {");
-    printf("%s\n", "    FILE* f = fopen(path, \"rb\");");
-    printf("%s\n", "    if (!f) return \"\";");
-    printf("%s\n", "    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);");
-    printf("%s\n", "    char* buf = (char*)malloc((size_t)n + 1);");
-    printf("%s\n", "    size_t got = fread(buf, 1, (size_t)n, f); fclose(f); buf[got] = 0;");
-    printf("%s\n", "    return buf;");
-    printf("%s\n", "}");
-    printf("%s\n", "static bool write_file(const char* path, const char* content) {");
-    printf("%s\n", "    FILE* f = fopen(path, \"wb\"); if (!f) return false;");
-    printf("%s\n", "    size_t n = strlen(content);");
-    printf("%s\n", "    size_t wrote = fwrite(content, 1, n, f); fclose(f);");
-    printf("%s\n", "    return wrote == n;");
-    printf("%s\n", "}");
-    printf("%s\n", "#ifdef _WIN32");
-    printf("%s\n", "#include <io.h>");
-    printf("%s\n", "#include <windows.h>");
-    printf("%s\n", "#define __glide_dup _dup");
-    printf("%s\n", "#define __glide_dup2 _dup2");
-    printf("%s\n", "#define __glide_close _close");
-    printf("%s\n", "#define __glide_fileno _fileno");
-    printf("%s\n", "#else");
-    printf("%s\n", "#include <unistd.h>");
-    printf("%s\n", "#define __glide_dup dup");
-    printf("%s\n", "#define __glide_dup2 dup2");
-    printf("%s\n", "#define __glide_close close");
-    printf("%s\n", "#define __glide_fileno fileno");
-    printf("%s\n", "#endif");
-    printf("%s\n", "static int __glide_redirect_to(const char* path) {");
-    printf("%s\n", "    fflush(stdout);");
-    printf("%s\n", "    int saved = __glide_dup(1);");
-    printf("%s\n", "    if (saved < 0) return -1;");
-    printf("%s\n", "    FILE* f = fopen(path, \"w\");");
-    printf("%s\n", "    if (!f) { __glide_close(saved); return -1; }");
-    printf("%s\n", "    __glide_dup2(__glide_fileno(f), 1);");
-    printf("%s\n", "    fclose(f);");
-    printf("%s\n", "    return saved;");
-    printf("%s\n", "}");
-    printf("%s\n", "static void __glide_restore_stdout(int saved) {");
-    printf("%s\n", "    fflush(stdout);");
-    printf("%s\n", "    if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }");
-    printf("%s\n", "}");
-    printf("%s\n", "static int __glide_shell(const char* cmd) { return system(cmd); }");
-    printf("%s\n", "static const char* __glide_getenv(const char* name) { const char* v = getenv(name); return v ? v : \"\"; }");
-    printf("%s\n", "static bool __glide_file_exists(const char* path) {");
-    printf("%s\n", "    FILE* f = fopen(path, \"rb\"); if (!f) return false; fclose(f); return true;");
-    printf("%s\n", "}");
-    printf("%s\n", "#ifdef _WIN32");
-    printf("%s\n", "#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING");
-    printf("%s\n", "#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004");
-    printf("%s\n", "#endif");
-    printf("%s\n", "__attribute__((constructor)) static void __glide_enable_vt(void) {");
-    printf("%s\n", "    HANDLE hs[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };");
-    printf("%s\n", "    for (int i = 0; i < 2; i++) {");
-    printf("%s\n", "        DWORD m = 0;");
-    printf("%s\n", "        if (GetConsoleMode(hs[i], &m)) {");
-    printf("%s\n", "            SetConsoleMode(hs[i], m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);");
-    printf("%s\n", "        }");
-    printf("%s\n", "    }");
-    printf("%s\n", "    SetConsoleOutputCP(65001);");
-    printf("%s\n", "    SetConsoleCP(65001);");
-    printf("%s\n", "}");
-    printf("%s\n", "#endif");
-    printf("%s\n", "#ifdef _WIN32");
-    printf("%s\n", "static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {");
-    printf("%s\n", "    DWORD code = ep->ExceptionRecord->ExceptionCode;");
-    printf("%s\n", "    const char* name = \"unhandled exception\";");
-    printf("%s\n", "    const char* hint = \"\";");
-    printf("%s\n", "    if (code == 0xC0000005) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }");
-    printf("%s\n", "    else if (code == 0xC0000094) { name = \"integer divide by zero\"; hint = \"hint: divisor reached zero before the division\"; }");
-    printf("%s\n", "    else if (code == 0xC00000FD) { name = \"stack overflow\"; hint = \"hint: runtime recursion exceeded the stack limit\"; }");
-    printf("%s\n", "    else if (code == 0x80000003) { name = \"trap (likely null deref or undefined behavior)\"; hint = \"hint: the optimizer turned a null/invalid op into __builtin_trap; rebuild with `-O0` for clearer location\"; }");
-    printf("%s\n", "    fflush(stdout);");
-    printf("%s\n", "    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (code 0x%lx)\\n\", name, (unsigned long)code);");
-    printf("%s\n", "    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);");
-    printf("%s\n", "    void* frames[32];");
-    printf("%s\n", "    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);");
-    printf("%s\n", "    fprintf(stderr, \"stack trace (%u frames; pipe through addr2line for source lines):\\n\", n);");
-    printf("%s\n", "    for (USHORT i = 0; i < n; i++) fprintf(stderr, \"  #%-2u  %p\\n\", i, frames[i]);");
-    printf("%s\n", "    fflush(stderr);");
-    printf("%s\n", "    ExitProcess((UINT)code);");
-    printf("%s\n", "    return EXCEPTION_CONTINUE_SEARCH;");
-    printf("%s\n", "}");
-    printf("%s\n", "__attribute__((constructor)) static void __glide_install_trap(void) {");
-    printf("%s\n", "    if (getenv(\"GLIDE_NO_TRAP\")) return;");
-    printf("%s\n", "    // VEH runs before any SEH/CRT-installed filter, so our handler stays in charge.");
-    printf("%s\n", "    AddVectoredExceptionHandler(1, __glide_seh_handler);");
-    printf("%s\n", "    SetUnhandledExceptionFilter(__glide_seh_handler);");
-    printf("%s\n", "}");
-    printf("%s\n", "#else");
-    printf("%s\n", "#include <signal.h>");
-    printf("%s\n", "#include <execinfo.h>");
-    printf("%s\n", "#include <unistd.h>");
-    printf("%s\n", "static void __glide_sig_handler(int sig) {");
-    printf("%s\n", "    const char* name = \"unknown\";");
-    printf("%s\n", "    const char* hint = \"\";");
-    printf("%s\n", "    if (sig == SIGSEGV) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }");
-    printf("%s\n", "    else if (sig == SIGFPE) { name = \"floating-point / arithmetic error\"; hint = \"hint: division by zero or invalid float operation\"; }");
-    printf("%s\n", "    else if (sig == SIGABRT) { name = \"aborted\"; hint = \"hint: runtime panic (e.g. arena oom)\"; }");
-    printf("%s\n", "    fflush(stdout);");
-    printf("%s\n", "    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (signal %d)\\n\", name, sig);");
-    printf("%s\n", "    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);");
-    printf("%s\n", "    void* frames[32]; int n = backtrace(frames, 32);");
-    printf("%s\n", "    fprintf(stderr, \"stack trace (%d frames):\\n\", n);");
-    printf("%s\n", "    backtrace_symbols_fd(frames, n, 2);");
-    printf("%s\n", "    _exit(128 + sig);");
-    printf("%s\n", "}");
-    printf("%s\n", "__attribute__((constructor)) static void __glide_install_trap(void) {");
-    printf("%s\n", "    if (getenv(\"GLIDE_NO_TRAP\")) return;");
-    printf("%s\n", "    signal(SIGSEGV, __glide_sig_handler);");
-    printf("%s\n", "    signal(SIGABRT, __glide_sig_handler);");
-    printf("%s\n", "    signal(SIGFPE,  __glide_sig_handler);");
-    printf("%s\n", "}");
-    printf("%s\n", "#endif");
-    printf("%s\n", "#ifdef _WIN32");
-    printf("%s\n", "#include <fcntl.h>");
-    printf("%s\n", "static void __glide_set_binary_io(void) {");
-    printf("%s\n", "    _setmode(_fileno(stdin), _O_BINARY);");
-    printf("%s\n", "    _setmode(_fileno(stdout), _O_BINARY);");
-    printf("%s\n", "}");
-    printf("%s\n", "#else");
-    printf("%s\n", "static void __glide_set_binary_io(void) {}");
-    printf("%s\n", "#endif");
-    printf("%s\n", "static const char* __glide_read_line(void) {");
-    printf("%s\n", "    static char buf[8192];");
-    printf("%s\n", "    if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }");
-    printf("%s\n", "    return buf;");
-    printf("%s\n", "}");
-    printf("%s\n", "static const char* __glide_read_bytes(int n) {");
-    printf("%s\n", "    if (n <= 0) return \"\";");
-    printf("%s\n", "    char* buf = (char*)malloc((size_t)n + 1);");
-    printf("%s\n", "    size_t got = fread(buf, 1, (size_t)n, stdin);");
-    printf("%s\n", "    buf[got] = 0;");
-    printf("%s\n", "    return buf;");
-    printf("%s\n", "}");
-    printf("%s\n", "static void __glide_write_str(const char* s) {");
-    printf("%s\n", "    fputs(s, stdout);");
-    printf("%s\n", "}");
-    printf("%s\n", "static void __glide_write_bytes(const char* s, int n) {");
-    printf("%s\n", "    if (n > 0) fwrite(s, 1, (size_t)n, stdout);");
-    printf("%s\n", "}");
-    printf("%s\n", "static void __glide_flush_stdout(void) { fflush(stdout); }");
-    printf("%s\n", "static void __glide_log(const char* s) {");
-    printf("%s\n", "    fputs(s, stderr); fputc('\\n', stderr); fflush(stderr);");
-    printf("%s\n", "}");
-    printf("%s\n", "static int __glide_is_windows(void) {");
-    printf("%s\n", "#ifdef _WIN32");
-    printf("%s\n", "    return 1;");
-    printf("%s\n", "#else");
-    printf("%s\n", "    return 0;");
-    printf("%s\n", "#endif");
-    printf("%s\n", "}");
-    printf("%s\n", "#ifdef _WIN32");
-    printf("%s\n", "static const char* __glide_exe_path(void) {");
-    printf("%s\n", "    static char buf[1024];");
-    printf("%s\n", "    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));");
-    printf("%s\n", "    if (n == 0 || n >= sizeof(buf)) buf[0] = 0;");
-    printf("%s\n", "    return buf;");
-    printf("%s\n", "}");
-    printf("%s\n", "static const char* __glide_exe_dir(void) {");
-    printf("%s\n", "    static char buf[1024];");
-    printf("%s\n", "    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));");
-    printf("%s\n", "    if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }");
-    printf("%s\n", "    for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }");
-    printf("%s\n", "    return \"\";");
-    printf("%s\n", "}");
-    printf("%s\n", "#else");
-    printf("%s\n", "static const char* __glide_exe_path(void) {");
-    printf("%s\n", "    static char buf[1024];");
-    printf("%s\n", "    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);");
-    printf("%s\n", "    if (n <= 0) { buf[0] = 0; return buf; }");
-    printf("%s\n", "    buf[n] = 0;");
-    printf("%s\n", "    return buf;");
-    printf("%s\n", "}");
-    printf("%s\n", "static const char* __glide_exe_dir(void) {");
-    printf("%s\n", "    static char buf[1024];");
-    printf("%s\n", "    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);");
-    printf("%s\n", "    if (n <= 0) { buf[0] = 0; return buf; }");
-    printf("%s\n", "    buf[n] = 0;");
-    printf("%s\n", "    for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }");
-    printf("%s\n", "    return \"\";");
-    printf("%s\n", "}");
-    printf("%s\n", "#endif");
-    printf("%s\n", "typedef struct Arena { unsigned char* head; int cap; int used; } Arena;");
-    printf("%s\n", "static Arena* Arena_new(int cap) {");
-    printf("%s\n", "    Arena* a = (Arena*)malloc(sizeof(Arena));");
-    printf("%s\n", "    a->head = (unsigned char*)malloc((size_t)cap);");
-    printf("%s\n", "    a->cap = cap; a->used = 0;");
-    printf("%s\n", "    return a;");
-    printf("%s\n", "}");
-    printf("%s\n", "static void* Arena_alloc(Arena* a, int size) {");
-    printf("%s\n", "    int aligned = (size + 7) & ~7;");
-    printf("%s\n", "    if (a->used + aligned > a->cap) { fprintf(stderr, \"arena oom\\n\"); exit(1); }");
-    printf("%s\n", "    void* p = (void*)(a->head + a->used);");
-    printf("%s\n", "    a->used += aligned;");
-    printf("%s\n", "    return p;");
-    printf("%s\n", "}");
-    printf("%s\n", "static void Arena_free(Arena* a) { free(a->head); free(a); }");
-    printf("%s\n", "static int Arena_used(Arena* a) { return a->used; }");
-    printf("%s\n", "static void Arena_reset(Arena* a) { a->used = 0; }");
+    printf("%s", "// ---- glide runtime ----\nstatic int __glide_string_len(const char* s) { return (int)strlen(s); }\nstatic bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }\nstatic char __glide_string_at(const char* s, int i) { return s[i]; }\nstatic const char* __glide_string_concat(const char* a, const char* b) {\n    size_t la = strlen(a), lb = strlen(b);\n    char* out = (char*)malloc(la + lb + 1);\n    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;\n    return out;\n}\nstatic const char* __glide_string_substring(const char* s, int start, int end) {\n    int n = (int)strlen(s);\n    if (start < 0) start = 0;\n    if (end > n) end = n;\n    if (start > end) start = end;\n    int len = end - start;\n    char* out = (char*)malloc((size_t)len + 1);\n    memcpy(out, s + start, (size_t)len); out[len] = 0;\n    return out;\n}\nstatic int __glide_char_to_int(char c) { return (int)(unsigned char)c; }\nstatic bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }\nstatic bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }\n/* Wrap a single byte into a fresh 1-char string so user code can push it into a\n   builder (concat etc.). The byte is re-allocated each call — fine for the\n   one-shot helper case; tight loops should buffer differently. */\nstatic const char* __glide_char_to_string(char c) {\n    char* out = (char*)malloc(2);\n    out[0] = c; out[1] = 0;\n    return out;\n}\nstatic int __glide_int_abs(int n) { return n < 0 ? -n : n; }\nstatic const char* __glide_int_to_string(int n) {\n    char buf[32];\n    int len = snprintf(buf, sizeof(buf), \"%d\", n);\n    char* out = (char*)malloc((size_t)len + 1);\n    memcpy(out, buf, (size_t)len + 1);\n    return out;\n}\nstatic const char* __glide_bool_to_string(bool b) { return b ? \"true\" : \"false\"; }\n#include <stdarg.h>\nstatic const char* __glide_format(const char* fmt, ...) {\n    va_list ap1, ap2;\n    va_start(ap1, fmt);\n    va_copy(ap2, ap1);\n    int n = vsnprintf(NULL, 0, fmt, ap1);\n    va_end(ap1);\n    char* out = (char*)malloc((size_t)n + 1);\n    vsnprintf(out, (size_t)n + 1, fmt, ap2);\n    va_end(ap2);\n    return out;\n}\nstatic int __glide_argc_g = 0;\nstatic char** __glide_argv_g = NULL;\nstatic void __glide_args_init(int argc, char** argv) { __glide_argc_g = argc; __glide_argv_g = argv; }\nstatic int args_count(void) { return __glide_argc_g; }\nstatic const char* args_at(int i) {\n    if (i < 0 || i >= __glide_argc_g) return \"\";\n    return __glide_argv_g[i];\n}\nstatic const char* read_file(const char* path) {\n    FILE* f = fopen(path, \"rb\");\n    if (!f) return \"\";\n    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);\n    char* buf = (char*)malloc((size_t)n + 1);\n    size_t got = fread(buf, 1, (size_t)n, f); fclose(f); buf[got] = 0;\n    return buf;\n}\nstatic bool write_file(const char* path, const char* content) {\n    FILE* f = fopen(path, \"wb\"); if (!f) return false;\n    size_t n = strlen(content);\n    size_t wrote = fwrite(content, 1, n, f); fclose(f);\n    return wrote == n;\n}\n#ifdef _WIN32\n#include <io.h>\n#include <windows.h>\n#define __glide_dup _dup\n#define __glide_dup2 _dup2\n#define __glide_close _close\n#define __glide_fileno _fileno\n#else\n#include <unistd.h>\n#define __glide_dup dup\n#define __glide_dup2 dup2\n#define __glide_close close\n#define __glide_fileno fileno\n#endif\nstatic int __glide_redirect_to(const char* path) {\n    fflush(stdout);\n    int saved = __glide_dup(1);\n    if (saved < 0) return -1;\n    FILE* f = fopen(path, \"w\");\n    if (!f) { __glide_close(saved); return -1; }\n    __glide_dup2(__glide_fileno(f), 1);\n    fclose(f);\n    return saved;\n}\nstatic void __glide_restore_stdout(int saved) {\n    fflush(stdout);\n    if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }\n}\nstatic int __glide_shell(const char* cmd) { return system(cmd); }\nstatic const char* __glide_getenv(const char* name) { const char* v = getenv(name); return v ? v : \"\"; }\nstatic bool __glide_file_exists(const char* path) {\n    FILE* f = fopen(path, \"rb\"); if (!f) return false; fclose(f); return true;\n}\n#ifdef _WIN32\n#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING\n#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004\n#endif\n__attribute__((constructor)) static void __glide_enable_vt(void) {\n    HANDLE hs[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };\n    for (int i = 0; i < 2; i++) {\n        DWORD m = 0;\n        if (GetConsoleMode(hs[i], &m)) {\n            SetConsoleMode(hs[i], m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);\n        }\n    }\n    SetConsoleOutputCP(65001);\n    SetConsoleCP(65001);\n}\n#endif\n#ifdef _WIN32\nstatic LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {\n    DWORD code = ep->ExceptionRecord->ExceptionCode;\n    const char* name = \"unhandled exception\";\n    const char* hint = \"\";\n    if (code == 0xC0000005) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }\n    else if (code == 0xC0000094) { name = \"integer divide by zero\"; hint = \"hint: divisor reached zero before the division\"; }\n    else if (code == 0xC00000FD) { name = \"stack overflow\"; hint = \"hint: runtime recursion exceeded the stack limit\"; }\n    else if (code == 0x80000003) { name = \"trap (likely null deref or undefined behavior)\"; hint = \"hint: the optimizer turned a null/invalid op into __builtin_trap; rebuild with `-O0` for clearer location\"; }\n    fflush(stdout);\n    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (code 0x%lx)\\n\", name, (unsigned long)code);\n    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);\n    void* frames[32];\n    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);\n    fprintf(stderr, \"stack trace (%u frames; pipe through addr2line for source lines):\\n\", n);\n    for (USHORT i = 0; i < n; i++) fprintf(stderr, \"  #%-2u  %p\\n\", i, frames[i]);\n    fflush(stderr);\n    ExitProcess((UINT)code);\n    return EXCEPTION_CONTINUE_SEARCH;\n}\n__attribute__((constructor)) static void __glide_install_trap(void) {\n    if (getenv(\"GLIDE_NO_TRAP\")) return;\n    // VEH runs before any SEH/CRT-installed filter, so our handler stays in charge.\n    AddVectoredExceptionHandler(1, __glide_seh_handler);\n    SetUnhandledExceptionFilter(__glide_seh_handler);\n}\n#else\n#include <signal.h>\n#include <execinfo.h>\n#include <unistd.h>\nstatic void __glide_sig_handler(int sig) {\n    const char* name = \"unknown\";\n    const char* hint = \"\";\n    if (sig == SIGSEGV) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }\n    else if (sig == SIGFPE) { name = \"floating-point / arithmetic error\"; hint = \"hint: division by zero or invalid float operation\"; }\n    else if (sig == SIGABRT) { name = \"aborted\"; hint = \"hint: runtime panic (e.g. arena oom)\"; }\n    fflush(stdout);\n    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (signal %d)\\n\", name, sig);\n    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);\n    void* frames[32]; int n = backtrace(frames, 32);\n    fprintf(stderr, \"stack trace (%d frames):\\n\", n);\n    backtrace_symbols_fd(frames, n, 2);\n    _exit(128 + sig);\n}\n__attribute__((constructor)) static void __glide_install_trap(void) {\n    if (getenv(\"GLIDE_NO_TRAP\")) return;\n    signal(SIGSEGV, __glide_sig_handler);\n    signal(SIGABRT, __glide_sig_handler);\n    signal(SIGFPE,  __glide_sig_handler);\n}\n#endif\n#ifdef _WIN32\n#include <fcntl.h>\nstatic void __glide_set_binary_io(void) {\n    _setmode(_fileno(stdin), _O_BINARY);\n    _setmode(_fileno(stdout), _O_BINARY);\n}\n#else\nstatic void __glide_set_binary_io(void) {}\n#endif\nstatic const char* __glide_read_line(void) {\n    static char buf[8192];\n    if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }\n    return buf;\n}\nstatic const char* __glide_read_bytes(int n) {\n    if (n <= 0) return \"\";\n    char* buf = (char*)malloc((size_t)n + 1);\n    size_t got = fread(buf, 1, (size_t)n, stdin);\n    buf[got] = 0;\n    return buf;\n}\nstatic void __glide_write_str(const char* s) {\n    fputs(s, stdout);\n}\nstatic void __glide_write_bytes(const char* s, int n) {\n    if (n > 0) fwrite(s, 1, (size_t)n, stdout);\n}\nstatic void __glide_flush_stdout(void) { fflush(stdout); }\nstatic void __glide_log(const char* s) {\n    fputs(s, stderr); fputc('\\n', stderr); fflush(stderr);\n}\nstatic int __glide_is_windows(void) {\n#ifdef _WIN32\n    return 1;\n#else\n    return 0;\n#endif\n}\n// `__glide_list_dir`: newline-separated, sorted listing of files under\n// `path` whose name ends in `suffix` (pass \"\" to list everything). Returns\n// \"\" on missing dir. Same body lives in main.glide as a c_raw block so the\n// compiler can bootstrap from older runtimes — guard avoids dup definition.\n#ifndef GLIDE_LIST_DIR_DEFINED\n#define GLIDE_LIST_DIR_DEFINED\nstatic int __glide_strcmp_qsort(const void* a, const void* b) {\n    const char* x = *(const char* const*)a;\n    const char* y = *(const char* const*)b;\n    return strcmp(x, y);\n}\n#ifdef _WIN32\nstatic const char* __glide_list_dir(const char* path, const char* suffix) {\n    char pattern[1024];\n    snprintf(pattern, sizeof(pattern), \"%s\\\\*\", path);\n    WIN32_FIND_DATAA fd;\n    HANDLE h = FindFirstFileA(pattern, &fd);\n    if (h == INVALID_HANDLE_VALUE) return \"\";\n    char** names = NULL; int n = 0; int cap = 0;\n    size_t suf_n = suffix ? strlen(suffix) : 0;\n    do {\n        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;\n        const char* nm = fd.cFileName;\n        size_t nm_n = strlen(nm);\n        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;\n        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }\n        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);\n        names[n++] = dup;\n    } while (FindNextFileA(h, &fd));\n    FindClose(h);\n    if (n == 0) { free(names); return \"\"; }\n    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);\n    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;\n    char* out = (char*)malloc(total);\n    size_t off = 0;\n    for (int i = 0; i < n; i++) {\n        size_t l = strlen(names[i]);\n        memcpy(out + off, names[i], l); off += l;\n        if (i + 1 < n) out[off++] = '\\n';\n        free(names[i]);\n    }\n    out[off] = 0;\n    free(names);\n    return out;\n}\n#else\n#include <dirent.h>\nstatic const char* __glide_list_dir(const char* path, const char* suffix) {\n    DIR* d = opendir(path);\n    if (!d) return \"\";\n    char** names = NULL; int n = 0; int cap = 0;\n    size_t suf_n = suffix ? strlen(suffix) : 0;\n    struct dirent* e;\n    while ((e = readdir(d)) != NULL) {\n        const char* nm = e->d_name;\n        if (nm[0] == '.') continue;\n        size_t nm_n = strlen(nm);\n        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;\n        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }\n        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);\n        names[n++] = dup;\n    }\n    closedir(d);\n    if (n == 0) { free(names); return \"\"; }\n    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);\n    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;\n    char* out = (char*)malloc(total);\n    size_t off = 0;\n    for (int i = 0; i < n; i++) {\n        size_t l = strlen(names[i]);\n        memcpy(out + off, names[i], l); off += l;\n        if (i + 1 < n) out[off++] = '\\n';\n        free(names[i]);\n    }\n    out[off] = 0;\n    free(names);\n    return out;\n}\n#endif\n#endif\n\n#ifdef _WIN32\nstatic const char* __glide_exe_path(void) {\n    static char buf[1024];\n    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));\n    if (n == 0 || n >= sizeof(buf)) buf[0] = 0;\n    return buf;\n}\nstatic const char* __glide_exe_dir(void) {\n    static char buf[1024];\n    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));\n    if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }\n    for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }\n    return \"\";\n}\n#else\nstatic const char* __glide_exe_path(void) {\n    static char buf[1024];\n    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);\n    if (n <= 0) { buf[0] = 0; return buf; }\n    buf[n] = 0;\n    return buf;\n}\nstatic const char* __glide_exe_dir(void) {\n    static char buf[1024];\n    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);\n    if (n <= 0) { buf[0] = 0; return buf; }\n    buf[n] = 0;\n    for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }\n    return \"\";\n}\n#endif\ntypedef struct Arena { unsigned char* head; int cap; int used; } Arena;\nstatic Arena* Arena_new(int cap) {\n    Arena* a = (Arena*)malloc(sizeof(Arena));\n    a->head = (unsigned char*)malloc((size_t)cap);\n    a->cap = cap; a->used = 0;\n    return a;\n}\nstatic void* Arena_alloc(Arena* a, int size) {\n    int aligned = (size + 7) & ~7;\n    if (a->used + aligned > a->cap) { fprintf(stderr, \"arena oom\\n\"); exit(1); }\n    void* p = (void*)(a->head + a->used);\n    a->used += aligned;\n    return p;\n}\nstatic void Arena_free(Arena* a) { free(a->head); free(a); }\nstatic int Arena_used(Arena* a) { return a->used; }\nstatic void Arena_reset(Arena* a) { a->used = 0; }\n\n\n");
     printf("%s\n", "");
 }
 
@@ -4887,6 +8560,20 @@ CG*   CG_new (void) {
     ((g-> fns )  =  fnm);
     ((g-> emitted_monos )  =  em);
     ((g-> fn_mono_queue )  =  q);
+    Vector__Type*   smq = Vector_new__Type();
+    ((g-> struct_mono_queue )  =  smq);
+    HashMap__string*   mi = HashMap_new__string();
+    ((g-> method_index )  =  mi);
+    HashMap__bool*   mf = HashMap_new__bool();
+    ((g-> method_fns )  =  mf);
+    HashMap__string*   ma = HashMap_new__string();
+    ((g-> module_aliases )  =  ma);
+    HashMap__bool*   en2 = HashMap_new__bool();
+    ((g-> emitted_named )  =  en2);
+    HashMap__bool*   dt = HashMap_new__bool();
+    ((g-> dyn_traits )  =  dt);
+    HashMap__Stmt*   trts = HashMap_new__Stmt();
+    ((g-> traits )  =  trts);
     return g;
 }
 
@@ -5031,6 +8718,12 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
     if (((e-> kind )  ==  EX_CAST)) {
         return (e-> cast_to );
     }
+    if (((e-> kind )  ==  EX_MACRO)) {
+        if (__glide_string_eq((e-> str_val ), "format")) {
+            return ty_named("string");
+        }
+        return NULL;
+    }
     if (((e-> kind )  ==  EX_BINARY)) {
         int   op = (e-> op_code );
         if (((((((((op  ==  OP_EQ)  ||  (op  ==  OP_NE))  ||  (op  ==  OP_LT))  ||  (op  ==  OP_LE))  ||  (op  ==  OP_GT))  ||  (op  ==  OP_GE))  ||  (op  ==  OP_AND))  ||  (op  ==  OP_OR))) {
@@ -5063,6 +8756,12 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
             if (__glide_string_eq(nm, "write_file")) {
                 return ty_named("bool");
             }
+            if (__glide_string_eq(nm, "now_ns")) {
+                return ty_named("i64");
+            }
+            if (__glide_string_eq(nm, "pending_count")) {
+                return ty_named("int");
+            }
             if ((__glide_string_eq(nm, "malloc")  ||  __glide_string_eq(nm, "calloc"))) {
                 return ty_pointer(ty_named("void"));
             }
@@ -5076,7 +8775,17 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
             }
         }
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_PATH))) {
-            const char*   pname = __glide_string_concat(__glide_string_concat(((e-> lhs )-> str_val ), "_"), ((e-> lhs )-> field ));
+            const char*   qual = __glide_string_concat(__glide_string_concat(((e-> lhs )-> str_val ), "::"), ((e-> lhs )-> field ));
+            if (HashMap_contains__string((g-> module_aliases ), qual)) {
+                const char*   resolved = HashMap_get__string((g-> module_aliases ), qual);
+                if (HashMap_contains__Stmt((g-> fns ), resolved)) {
+                    return (HashMap_get__Stmt((g-> fns ), resolved). fn_ret_ty );
+                }
+                if (HashMap_contains__Stmt((g-> generic_fns ), resolved)) {
+                    return (HashMap_get__Stmt((g-> generic_fns ), resolved). fn_ret_ty );
+                }
+            }
+            const char*   pname = __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, ((e-> lhs )-> str_val )), "_"), ((e-> lhs )-> field ));
             if (HashMap_contains__Stmt((g-> fns ), pname)) {
                 return (HashMap_get__Stmt((g-> fns ), pname). fn_ret_ty );
             }
@@ -5087,7 +8796,27 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))) {
             Type*   rt = infer_for_codegen(g, ((e-> lhs )-> lhs ));
             Type*   stripped = strip_ptr(rt);
+            if ((((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_DYN))  &&  HashMap_contains__Stmt((g-> traits ), (stripped-> name )))) {
+                Stmt   td = HashMap_get__Stmt((g-> traits ), (stripped-> name ));
+                if (((td. impl_methods )  !=  NULL)) {
+                    for (int   i = 0; (i  <  Vector_len__Stmt((td. impl_methods ))); i++) {
+                        Stmt   tm = Vector_get__Stmt((td. impl_methods ), i);
+                        if ((((tm. name )  !=  NULL)  &&  __glide_string_eq((tm. name ), ((e-> lhs )-> field )))) {
+                            return (tm. fn_ret_ty );
+                        }
+                    }
+                }
+            }
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_NAMED))) {
+                int   qpos = ns_split_pos(((e-> lhs )-> field ));
+                if ((qpos  >  0)) {
+                    const char*   ns = __glide_string_substring(((e-> lhs )-> field ), 0, qpos);
+                    const char*   real = __glide_string_substring(((e-> lhs )-> field ), (qpos  +  2), __glide_string_len(((e-> lhs )-> field )));
+                    const char*   qmname = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(ns, "_"), (stripped-> name )), "_"), real);
+                    if (HashMap_contains__Stmt((g-> fns ), qmname)) {
+                        return (HashMap_get__Stmt((g-> fns ), qmname). fn_ret_ty );
+                    }
+                }
                 if (is_stdlib_primitive((stripped-> name ))) {
                     Type*   std_ret = stdlib_method_ret((stripped-> name ), ((e-> lhs )-> field ));
                     if ((std_ret  !=  NULL)) {
@@ -5101,6 +8830,22 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                     return (HashMap_get__Stmt((g-> generic_fns ), mname). fn_ret_ty );
                 }
+                if (HashMap_contains__string((g-> method_index ), mname)) {
+                    const char*   entry = HashMap_get__string((g-> method_index ), mname);
+                    int   semi = __glide_string_len(entry);
+                    int   k = 0;
+                    while ((k  <  semi)) {
+                        if ((__glide_char_to_int(__glide_string_at(entry, k))  ==  59)) {
+                            (semi  =  k);
+                            break;
+                        }
+                        (k  =  (k  +  1));
+                    }
+                    const char*   first = __glide_string_substring(entry, 0, semi);
+                    if (HashMap_contains__Stmt((g-> fns ), first)) {
+                        return (HashMap_get__Stmt((g-> fns ), first). fn_ret_ty );
+                    }
+                }
             }
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
                 const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), ((e-> lhs )-> field ));
@@ -5113,7 +8858,17 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
         return NULL;
     }
     if (((e-> kind )  ==  EX_PATH)) {
-        const char*   pname = __glide_string_concat(__glide_string_concat((e-> str_val ), "_"), (e-> field ));
+        const char*   qual = __glide_string_concat(__glide_string_concat((e-> str_val ), "::"), (e-> field ));
+        if (HashMap_contains__string((g-> module_aliases ), qual)) {
+            const char*   resolved = HashMap_get__string((g-> module_aliases ), qual);
+            if (HashMap_contains__Stmt((g-> fns ), resolved)) {
+                return (HashMap_get__Stmt((g-> fns ), resolved). fn_ret_ty );
+            }
+            if (HashMap_contains__Stmt((g-> generic_fns ), resolved)) {
+                return (HashMap_get__Stmt((g-> generic_fns ), resolved). fn_ret_ty );
+            }
+        }
+        const char*   pname = __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, (e-> str_val )), "_"), (e-> field ));
         if (HashMap_contains__Stmt((g-> fns ), pname)) {
             return (HashMap_get__Stmt((g-> fns ), pname). fn_ret_ty );
         }
@@ -5200,6 +8955,9 @@ const char*   type_to_c (Type*   t) {
         return n;
     }
     if (((t-> kind )  ==  TY_POINTER)) {
+        if ((((t-> inner )  !=  NULL)  &&  (((t-> inner )-> kind )  ==  TY_DYN))) {
+            return __glide_string_concat("__glide_dyn_", ((t-> inner )-> name ));
+        }
         return __glide_string_concat(type_to_c((t-> inner )), "*");
     }
     if (((t-> kind )  ==  TY_BORROW)) {
@@ -5210,6 +8968,9 @@ const char*   type_to_c (Type*   t) {
     }
     if (((t-> kind )  ==  TY_SLICE)) {
         return __glide_string_concat(__glide_string_concat("/* []", type_to_c((t-> inner ))), " */ void*");
+    }
+    if (((t-> kind )  ==  TY_DYN)) {
+        return __glide_string_concat("__glide_dyn_", (t-> name ));
     }
     if (((t-> kind )  ==  TY_GENERIC)) {
         if (((__glide_string_eq((t-> name ), "chan")  &&  ((t-> args )  !=  NULL))  &&  (Vector_len__Type((t-> args ))  >  0))) {
@@ -5300,7 +9061,12 @@ bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint) {
             (gname  =  (callee-> str_val ));
         }
         if (((callee-> kind )  ==  EX_PATH)) {
-            (gname  =  __glide_string_concat(__glide_string_concat((callee-> str_val ), "_"), (callee-> field )));
+            const char*   qual = __glide_string_concat(__glide_string_concat((callee-> str_val ), "::"), (callee-> field ));
+            if (HashMap_contains__string((g-> module_aliases ), qual)) {
+                (gname  =  HashMap_get__string((g-> module_aliases ), qual));
+            } else {
+                (gname  =  __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, (callee-> str_val )), "_"), (callee-> field )));
+            }
         }
     }
     if ((__glide_string_len(gname)  ==  0)) {
@@ -5348,6 +9114,7 @@ bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint) {
     ((callee-> kind )  =  EX_IDENT);
     ((callee-> str_val )  =  mangled);
     ((callee-> field )  =  "");
+    register_fn_mono_signature(g, mangled, (&template), derived);
     if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
         HashMap_insert__bool((g-> emitted_monos ), mangled, true);
         FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = derived});
@@ -5397,19 +9164,72 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
     if ((e  ==  NULL)) {
         return;
     }
+    Type*   chain_recv_hint = NULL;
+    if (((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_CALL))  &&  ((((e-> lhs )-> lhs )-> lhs )  !=  NULL))  &&  (((((e-> lhs )-> lhs )-> lhs )-> kind )  ==  EX_PATH))) {
+        Expr*   recv = ((e-> lhs )-> lhs );
+        const char*   method = ((e-> lhs )-> field );
+        const char*   family = ((recv-> lhs )-> str_val );
+        if ((!HashMap_contains__Stmt((g-> generic_structs ), family))) {
+            (family  =  resolve_type_prefix(g, family));
+        }
+        if (HashMap_contains__Stmt((g-> generic_structs ), family)) {
+            Stmt   struct_def = HashMap_get__Stmt((g-> generic_structs ), family);
+            const char*   mname = __glide_string_concat(__glide_string_concat(family, "_"), method);
+            if ((HashMap_contains__Stmt((g-> generic_fns ), mname)  &&  ((struct_def. type_params )  !=  NULL))) {
+                Stmt   mtmpl = HashMap_get__Stmt((g-> generic_fns ), mname);
+                HashMap__Type*   bindings = HashMap_new__Type();
+                if (((((e-> args )  !=  NULL)  &&  ((mtmpl. fn_params )  !=  NULL))  &&  (Vector_len__Param((mtmpl. fn_params ))  >  0))) {
+                    int   n = (Vector_len__Param((mtmpl. fn_params ))  -  1);
+                    if ((Vector_len__Expr((e-> args ))  <  n)) {
+                        (n  =  Vector_len__Expr((e-> args )));
+                    }
+                    for (int   i = 0; (i  <  n); i++) {
+                        Param   p = Vector_get__Param((mtmpl. fn_params ), (i  +  1));
+                        Expr   a = Vector_get__Expr((e-> args ), i);
+                        Type*   at = infer_for_codegen(g, (&a));
+                        if (((at  !=  NULL)  &&  ((p. ty )  !=  NULL))) {
+                            unify_for_inference((p. ty ), at, (mtmpl. type_params ), bindings);
+                        }
+                    }
+                }
+                Vector__Type*   derived = Vector_new__Type();
+                bool   all = true;
+                for (int   i = 0; (i  <  Vector_len__string((struct_def. type_params ))); i++) {
+                    const char*   tn = Vector_get__string((struct_def. type_params ), i);
+                    if (HashMap_contains__Type(bindings, tn)) {
+                        Vector_push__Type(derived, HashMap_get__Type(bindings, tn));
+                    } else {
+                        (all  =  false);
+                    }
+                }
+                if ((all  &&  (Vector_len__Type(derived)  >  0))) {
+                    (chain_recv_hint  =  ty_pointer(ty_generic(family, derived)));
+                    Vector_push__Type((g-> struct_mono_queue ), (*(chain_recv_hint-> inner )));
+                    prescan_expr(g, recv, chain_recv_hint);
+                }
+                HashMap_free__Type(bindings);
+            }
+        }
+    }
     if (((e-> kind )  ==  EX_CALL)) {
         bool   _ok = try_mono_call(g, e, ret_hint);
     }
     if (((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))) {
         Expr*   recv = ((e-> lhs )-> lhs );
         const char*   method = ((e-> lhs )-> field );
-        Type*   rt = infer_for_codegen(g, recv);
-        Type*   stripped = strip_ptr(rt);
+        Type*   stripped = NULL;
+        if ((chain_recv_hint  !=  NULL)) {
+            (stripped  =  (chain_recv_hint-> inner ));
+        } else {
+            Type*   rt = infer_for_codegen(g, recv);
+            (stripped  =  strip_ptr(rt));
+        }
         if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
             const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), method);
             if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                 Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
                 const char*   mangled = mangle_generic(mname, (stripped-> args ));
+                register_fn_mono_signature(g, mangled, (&template), (stripped-> args ));
                 if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
                     HashMap_insert__bool((g-> emitted_monos ), mangled, true);
                     FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = (stripped-> args )});
@@ -5419,7 +9239,11 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
         }
     }
     if (((e-> lhs )  !=  NULL)) {
-        prescan_expr(g, (e-> lhs ), NULL);
+        Type*   child_hint = NULL;
+        if (((e-> kind )  ==  EX_CAST)) {
+            (child_hint  =  (e-> cast_to ));
+        }
+        prescan_expr(g, (e-> lhs ), child_hint);
     }
     if (((e-> rhs )  !=  NULL)) {
         prescan_expr(g, (e-> rhs ), NULL);
@@ -5433,6 +9257,28 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
             Type*   arg_hint = NULL;
             if (((e-> kind )  ==  EX_CALL)) {
                 (arg_hint  =  callee_param_ty(g, e, i));
+            }
+            if ((((((e-> kind )  ==  EX_STRUCT_LIT)  &&  ((e-> str_val )  !=  NULL))  &&  ((e-> field_names )  !=  NULL))  &&  (i  <  Vector_len__string((e-> field_names ))))) {
+                const char*   fname = Vector_get__string((e-> field_names ), i);
+                Stmt   sd = (( Stmt ){. kind  = 0});
+                bool   have = false;
+                if (HashMap_contains__Stmt((g-> structs ), (e-> str_val ))) {
+                    (sd  =  HashMap_get__Stmt((g-> structs ), (e-> str_val )));
+                    (have  =  true);
+                } else {
+                    if (HashMap_contains__Stmt((g-> generic_structs ), (e-> str_val ))) {
+                        (sd  =  HashMap_get__Stmt((g-> generic_structs ), (e-> str_val )));
+                        (have  =  true);
+                    }
+                }
+                if ((have  &&  ((sd. struct_fields )  !=  NULL))) {
+                    for (int   j = 0; (j  <  Vector_len__Field((sd. struct_fields ))); j++) {
+                        Field   f = Vector_get__Field((sd. struct_fields ), j);
+                        if (__glide_string_eq((f. name ), fname)) {
+                            (arg_hint  =  (f. ty ));
+                        }
+                    }
+                }
             }
             prescan_expr(g, (&a), arg_hint);
         }
@@ -5526,6 +9372,26 @@ void   prescan_stmt (CG*   g, Stmt*   s) {
             prescan_stmt(g, (&m));
         }
     }
+}
+
+void   register_fn_mono_signature (CG*   g, const char*   mangled, Stmt*   template, Vector__Type*   args) {
+    if (HashMap_contains__Stmt((g-> fns ), mangled)) {
+        return;
+    }
+    Stmt*   synth = (( Stmt* )calloc(1, sizeof( Stmt )));
+    ((synth-> kind )  =  (template-> kind ));
+    ((synth-> name )  =  mangled);
+    ((synth-> fn_ret_ty )  =  subst_type((template-> fn_ret_ty ), (template-> type_params ), args));
+    if (((template-> fn_params )  !=  NULL)) {
+        Vector__Param*   ps = Vector_new__Param();
+        for (int   i = 0; (i  <  Vector_len__Param((template-> fn_params ))); i++) {
+            Param   p = Vector_get__Param((template-> fn_params ), i);
+            Param   np = (( Param ){. name  = (p. name ), . ty  = subst_type((p. ty ), (template-> type_params ), args)});
+            Vector_push__Param(ps, np);
+        }
+        ((synth-> fn_params )  =  ps);
+    }
+    HashMap_insert__Stmt((g-> fns ), mangled, (*synth));
 }
 
 void   emit_mono_forward_decl (CG*   g, const char*   mangled, Stmt*   template, Vector__Type*   args) {
@@ -5848,17 +9714,33 @@ void   ind (int   n) {
     }
 }
 
+void   emit_cfg_open (const char*   cfg) {
+    if (__glide_string_eq(cfg, "windows")) {
+        printf("%s\n", "#ifdef _WIN32");
+    } else {
+        if (__glide_string_eq(cfg, "posix")) {
+            printf("%s\n", "#ifndef _WIN32");
+        }
+    }
+}
+
+void   emit_cfg_close (const char*   cfg) {
+    if ((__glide_string_eq(cfg, "windows")  ||  __glide_string_eq(cfg, "posix"))) {
+        printf("%s\n", "#endif");
+    }
+}
+
 void   emit_expr (CG*   g, Expr*   e) {
     if ((e  ==  NULL)) {
         printf("%s", "/* null */");
         return;
     }
     if (((e-> kind )  ==  EX_INT)) {
-        printf("%d", (e-> int_val ));
+        printf("%lld", (e-> int_val ));
         return;
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
-        printf("%d", (e-> int_val ));
+        printf("%s", (e-> float_val ));
         return;
     }
     if (((e-> kind )  ==  EX_STRING)) {
@@ -5869,7 +9751,7 @@ void   emit_expr (CG*   g, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_CHAR)) {
         printf("%s", "(char)");
-        printf("%d", (e-> int_val ));
+        printf("%lld", (e-> int_val ));
         return;
     }
     if (((e-> kind )  ==  EX_BOOL)) {
@@ -5924,8 +9806,31 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> kind )  ==  EX_CALL)) {
-        if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_PATH))  &&  HashMap_contains__Stmt((g-> enums ), ((e-> lhs )-> str_val )))) {
-            const char*   ename = ((e-> lhs )-> str_val );
+        bool   _is_enum_ctor = false;
+        const char*   _ec_ename = "";
+        if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_PATH))) {
+            const char*   probe = ((e-> lhs )-> str_val );
+            if ((!HashMap_contains__Stmt((g-> enums ), probe))) {
+                (probe  =  resolve_type_prefix(g, probe));
+            }
+            if (HashMap_contains__Stmt((g-> enums ), probe)) {
+                Stmt   edef = HashMap_get__Stmt((g-> enums ), probe);
+                if (((edef. enum_variants )  !=  NULL)) {
+                    for (int   vi = 0; (vi  <  Vector_len__EnumVariant((edef. enum_variants ))); vi++) {
+                        EnumVariant   v = Vector_get__EnumVariant((edef. enum_variants ), vi);
+                        if (__glide_string_eq((v. name ), ((e-> lhs )-> field ))) {
+                            (_is_enum_ctor  =  true);
+                            break;
+                        }
+                    }
+                }
+                if (_is_enum_ctor) {
+                    (_ec_ename  =  probe);
+                }
+            }
+        }
+        if (_is_enum_ctor) {
+            const char*   ename = _ec_ename;
             const char*   vname = ((e-> lhs )-> field );
             printf("%s", "((");
             printf("%s", ename);
@@ -5955,47 +9860,43 @@ void   emit_expr (CG*   g, Expr*   e) {
             printf("%s", "})");
             return;
         }
-        if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  ((e-> args )  !=  NULL))) {
-            const char*   cname = ((e-> lhs )-> str_val );
-            if ((__glide_string_eq(cname, "send")  &&  (Vector_len__Expr((e-> args ))  ==  2))) {
-                Expr   c0 = Vector_get__Expr((e-> args ), 0);
-                Type*   ct = infer_for_codegen(g, (&c0));
-                if ((((((ct  !=  NULL)  &&  ((ct-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq((ct-> name ), "chan"))  &&  ((ct-> args )  !=  NULL))  &&  (Vector_len__Type((ct-> args ))  >  0))) {
-                    Type   inner = Vector_get__Type((ct-> args ), 0);
-                    const char*   m = mangle_type((&inner));
+        if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))) {
+            const char*   mname = ((e-> lhs )-> field );
+            Expr*   recv_e = ((e-> lhs )-> lhs );
+            Type*   recv_ty = infer_for_codegen(g, recv_e);
+            Type*   stripped = strip_ptr(recv_ty);
+            if ((((((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq((stripped-> name ), "chan"))  &&  ((stripped-> args )  !=  NULL))  &&  (Vector_len__Type((stripped-> args ))  >  0))) {
+                Type   inner = Vector_get__Type((stripped-> args ), 0);
+                const char*   m = mangle_type((&inner));
+                int   nargs = 0;
+                if (((e-> args )  !=  NULL)) {
+                    (nargs  =  Vector_len__Expr((e-> args )));
+                }
+                if ((__glide_string_eq(mname, "send")  &&  (nargs  ==  1))) {
                     printf("%s", __glide_string_concat(__glide_string_concat("__glide_send_", m), "("));
-                    emit_expr(g, (&c0));
+                    emit_expr(g, recv_e);
                     printf("%s", ", ");
-                    Expr   v = Vector_get__Expr((e-> args ), 1);
+                    Expr   v = Vector_get__Expr((e-> args ), 0);
                     emit_expr(g, (&v));
                     printf("%s", ")");
                     return;
                 }
-            }
-            if ((__glide_string_eq(cname, "recv")  &&  (Vector_len__Expr((e-> args ))  ==  1))) {
-                Expr   c0 = Vector_get__Expr((e-> args ), 0);
-                Type*   ct = infer_for_codegen(g, (&c0));
-                if ((((((ct  !=  NULL)  &&  ((ct-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq((ct-> name ), "chan"))  &&  ((ct-> args )  !=  NULL))  &&  (Vector_len__Type((ct-> args ))  >  0))) {
-                    Type   inner = Vector_get__Type((ct-> args ), 0);
-                    const char*   m = mangle_type((&inner));
+                if ((__glide_string_eq(mname, "recv")  &&  (nargs  ==  0))) {
                     printf("%s", __glide_string_concat(__glide_string_concat("__glide_recv_", m), "("));
-                    emit_expr(g, (&c0));
+                    emit_expr(g, recv_e);
                     printf("%s", ")");
                     return;
                 }
-            }
-            if ((__glide_string_eq(cname, "close")  &&  (Vector_len__Expr((e-> args ))  ==  1))) {
-                Expr   c0 = Vector_get__Expr((e-> args ), 0);
-                Type*   ct = infer_for_codegen(g, (&c0));
-                if ((((((ct  !=  NULL)  &&  ((ct-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq((ct-> name ), "chan"))  &&  ((ct-> args )  !=  NULL))  &&  (Vector_len__Type((ct-> args ))  >  0))) {
-                    Type   inner = Vector_get__Type((ct-> args ), 0);
-                    const char*   m = mangle_type((&inner));
+                if ((__glide_string_eq(mname, "close")  &&  (nargs  ==  0))) {
                     printf("%s", __glide_string_concat(__glide_string_concat("__glide_close_", m), "("));
-                    emit_expr(g, (&c0));
+                    emit_expr(g, recv_e);
                     printf("%s", ")");
                     return;
                 }
             }
+        }
+        if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  ((e-> args )  !=  NULL))) {
+            const char*   cname = ((e-> lhs )-> str_val );
             if ((__glide_string_eq(cname, "unwrap")  &&  (Vector_len__Expr((e-> args ))  ==  1))) {
                 Expr   r0 = Vector_get__Expr((e-> args ), 0);
                 Type*   rt = infer_for_codegen(g, (&r0));
@@ -6014,6 +9915,22 @@ void   emit_expr (CG*   g, Expr*   e) {
             const char*   method = ((e-> lhs )-> field );
             Type*   recv_ty = infer_for_codegen(g, recv);
             Type*   stripped = strip_ptr(recv_ty);
+            if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_DYN))) {
+                printf("%s", "((");
+                emit_expr(g, recv);
+                printf("%s", __glide_string_concat(__glide_string_concat(").vtable->", method), "(("));
+                emit_expr(g, recv);
+                printf("%s", ").data");
+                if (((e-> args )  !=  NULL)) {
+                    for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+                        printf("%s", ", ");
+                        Expr   a = Vector_get__Expr((e-> args ), i);
+                        emit_expr(g, (&a));
+                    }
+                }
+                printf("%s", "))");
+                return;
+            }
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
                 const char*   base = (stripped-> name );
                 const char*   mname = __glide_string_concat(__glide_string_concat(base, "_"), method);
@@ -6046,15 +9963,76 @@ void   emit_expr (CG*   g, Expr*   e) {
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_NAMED))) {
                 const char*   prefix = (stripped-> name );
                 const char*   fn_name = "";
-                if (is_stdlib_primitive((stripped-> name ))) {
-                    (fn_name  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("__glide_", prefix), "_"), method));
+                int   qpos = ns_split_pos(method);
+                if ((qpos  >  0)) {
+                    const char*   ns = __glide_string_substring(method, 0, qpos);
+                    const char*   real = __glide_string_substring(method, (qpos  +  2), __glide_string_len(method));
+                    (fn_name  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(ns, "_"), prefix), "_"), real));
                 } else {
-                    (fn_name  =  __glide_string_concat(__glide_string_concat(prefix, "_"), method));
+                    if (is_stdlib_primitive((stripped-> name ))) {
+                        const char*   glide_name = __glide_string_concat(__glide_string_concat(prefix, "_"), method);
+                        if ((HashMap_contains__Stmt((g-> fns ), glide_name)  &&  HashMap_contains__bool((g-> method_fns ), glide_name))) {
+                            (fn_name  =  glide_name);
+                        } else {
+                            const char*   found = "";
+                            int   count = 0;
+                            if (HashMap_contains__string((g-> method_index ), glide_name)) {
+                                const char*   entry = HashMap_get__string((g-> method_index ), glide_name);
+                                int   n = __glide_string_len(entry);
+                                int   start = 0;
+                                int   i = 0;
+                                while ((i  <=  n)) {
+                                    if (((i  ==  n)  ||  (__glide_char_to_int(__glide_string_at(entry, i))  ==  59))) {
+                                        const char*   part = __glide_string_substring(entry, start, i);
+                                        if ((__glide_string_len(part)  >  0)) {
+                                            (found  =  part);
+                                            (count  =  (count  +  1));
+                                        }
+                                        (start  =  (i  +  1));
+                                    }
+                                    (i  =  (i  +  1));
+                                }
+                            }
+                            if ((count  ==  1)) {
+                                (fn_name  =  found);
+                            } else {
+                                if ((count  >=  2)) {
+                                    printf("%s\n", "");
+                                    printf("%s", "#error \"ambiguous method `");
+                                    printf("%s", method);
+                                    printf("%s", "` on `");
+                                    printf("%s", prefix);
+                                    printf("%s", "`: multiple impl blocks register it; qualify the call as `value.NS::");
+                                    printf("%s", method);
+                                    printf("%s", "()` or rename one impl\"");
+                                    printf("%s\n", "");
+                                    return;
+                                } else {
+                                    (fn_name  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("__glide_", prefix), "_"), method));
+                                }
+                            }
+                        }
+                    } else {
+                        (fn_name  =  __glide_string_concat(__glide_string_concat(prefix, "_"), method));
+                    }
                 }
                 printf("%s", fn_name);
                 printf("%s", "(");
                 bool   is_prim = is_stdlib_primitive((stripped-> name ));
-                bool   needs_addr = (((((!is_prim)  &&  (recv_ty  !=  NULL))  &&  ((recv_ty-> kind )  !=  TY_POINTER))  &&  ((recv_ty-> kind )  !=  TY_BORROW))  &&  ((recv_ty-> kind )  !=  TY_BORROW_MUT));
+                bool   r_is_ptr = ((recv_ty  !=  NULL)  &&  ((((recv_ty-> kind )  ==  TY_POINTER)  ||  ((recv_ty-> kind )  ==  TY_BORROW))  ||  ((recv_ty-> kind )  ==  TY_BORROW_MUT)));
+                bool   needs_addr = false;
+                if (HashMap_contains__Stmt((g-> fns ), fn_name)) {
+                    Stmt   sig = HashMap_get__Stmt((g-> fns ), fn_name);
+                    if ((((sig. fn_params )  !=  NULL)  &&  (Vector_len__Param((sig. fn_params ))  >  0))) {
+                        Param   first = Vector_get__Param((sig. fn_params ), 0);
+                        bool   p_is_ptr = (((first. ty )  !=  NULL)  &&  (((((first. ty )-> kind )  ==  TY_POINTER)  ||  (((first. ty )-> kind )  ==  TY_BORROW))  ||  (((first. ty )-> kind )  ==  TY_BORROW_MUT)));
+                        if ((p_is_ptr  &&  (!r_is_ptr))) {
+                            (needs_addr  =  true);
+                        }
+                    }
+                } else {
+                    (needs_addr  =  ((!is_prim)  &&  (!r_is_ptr)));
+                }
                 if (needs_addr) {
                     printf("%s", "&");
                 }
@@ -6114,6 +10092,26 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> kind )  ==  EX_CAST)) {
+        const char*   dyn_trait = "";
+        if ((((((e-> cast_to )  !=  NULL)  &&  (((e-> cast_to )-> kind )  ==  TY_POINTER))  &&  (((e-> cast_to )-> inner )  !=  NULL))  &&  ((((e-> cast_to )-> inner )-> kind )  ==  TY_DYN))) {
+            (dyn_trait  =  (((e-> cast_to )-> inner )-> name ));
+        } else {
+            if ((((e-> cast_to )  !=  NULL)  &&  (((e-> cast_to )-> kind )  ==  TY_DYN))) {
+                (dyn_trait  =  ((e-> cast_to )-> name ));
+            }
+        }
+        if ((!__glide_string_eq(dyn_trait, ""))) {
+            Type*   src_ty = infer_for_codegen(g, (e-> lhs ));
+            Type*   inner = strip_ptr(src_ty);
+            const char*   src_name = "?";
+            if (((inner  !=  NULL)  &&  ((inner-> kind )  ==  TY_NAMED))) {
+                (src_name  =  (inner-> name ));
+            }
+            printf("%s", __glide_string_concat(__glide_string_concat("((__glide_dyn_", dyn_trait), "){.data = (void*)"));
+            emit_expr(g, (e-> lhs ));
+            printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(", .vtable = &__glide_", src_name), "_as_"), dyn_trait), "_vt})"));
+            return;
+        }
         printf("%s %s %s", "((", type_to_c((e-> cast_to )), ")");
         emit_expr(g, (e-> lhs ));
         printf("%s", ")");
@@ -6133,7 +10131,12 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> kind )  ==  EX_PATH)) {
-        printf("%s", __glide_string_concat(__glide_string_concat((e-> str_val ), "_"), (e-> field )));
+        if (HashMap_contains__string((g-> module_aliases ), __glide_string_concat(__glide_string_concat((e-> str_val ), "::"), (e-> field )))) {
+            printf("%s", HashMap_get__string((g-> module_aliases ), __glide_string_concat(__glide_string_concat((e-> str_val ), "::"), (e-> field ))));
+            return;
+        }
+        const char*   ty = resolve_type_prefix(g, (e-> str_val ));
+        printf("%s", __glide_string_concat(__glide_string_concat(ty, "_"), (e-> field )));
         return;
     }
     if (((e-> kind )  ==  EX_POSTINC)) {
@@ -6247,6 +10250,87 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     printf("%s %d %s", "/* unknown expr ", (e-> kind ), " */ 0");
+}
+
+void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth) {
+    ind(depth);
+    printf("%s", "__asm__");
+    if ((s-> is_volatile )) {
+        printf("%s", " volatile");
+    }
+    printf("%s", "(");
+    if ((((s-> asm_strings )  ==  NULL)  ||  (Vector_len__string((s-> asm_strings ))  ==  0))) {
+        printf("%s", "\"\"");
+    } else {
+        for (int   i = 0; (i  <  Vector_len__string((s-> asm_strings ))); i++) {
+            if ((i  >  0)) {
+                printf("%s\n", "");
+                ind((depth  +  1));
+            }
+            const char*   line = Vector_get__string((s-> asm_strings ), i);
+            printf("%s", "\"");
+            int   n = __glide_string_len(line);
+            int   k = 0;
+            while ((k  <  n)) {
+                char   c = __glide_string_at(line, k);
+                if ((__glide_char_to_int(c)  ==  34)) {
+                    printf("%s", "\\\"");
+                } else {
+                    if ((__glide_char_to_int(c)  ==  92)) {
+                        printf("%s", "\\\\");
+                    } else {
+                        printf("%c", c);
+                    }
+                }
+                (k  =  (k  +  1));
+            }
+            printf("%s", "\\n\\t\"");
+        }
+    }
+    bool   has_out = (((s-> asm_out_constraints )  !=  NULL)  &&  (Vector_len__string((s-> asm_out_constraints ))  >  0));
+    bool   has_in = (((s-> asm_in_constraints )  !=  NULL)  &&  (Vector_len__string((s-> asm_in_constraints ))  >  0));
+    bool   has_clb = (((s-> asm_clobbers )  !=  NULL)  &&  (Vector_len__string((s-> asm_clobbers ))  >  0));
+    if (((has_out  ||  has_in)  ||  has_clb)) {
+        printf("%s", " : ");
+        if (has_out) {
+            for (int   i = 0; (i  <  Vector_len__string((s-> asm_out_constraints ))); i++) {
+                if ((i  >  0)) {
+                    printf("%s", ", ");
+                }
+                const char*   cstr = __glide_string_concat(__glide_string_concat("\"", Vector_get__string((s-> asm_out_constraints ), i)), "\"(");
+                printf("%s", cstr);
+                Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
+                emit_expr(g, (&e));
+                printf("%s", ")");
+            }
+        }
+    }
+    if ((has_in  ||  has_clb)) {
+        printf("%s", " : ");
+        if (has_in) {
+            for (int   i = 0; (i  <  Vector_len__string((s-> asm_in_constraints ))); i++) {
+                if ((i  >  0)) {
+                    printf("%s", ", ");
+                }
+                const char*   cstr = __glide_string_concat(__glide_string_concat("\"", Vector_get__string((s-> asm_in_constraints ), i)), "\"(");
+                printf("%s", cstr);
+                Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
+                emit_expr(g, (&e));
+                printf("%s", ")");
+            }
+        }
+    }
+    if (has_clb) {
+        printf("%s", " : ");
+        for (int   i = 0; (i  <  Vector_len__string((s-> asm_clobbers ))); i++) {
+            if ((i  >  0)) {
+                printf("%s", ", ");
+            }
+            const char*   cstr = __glide_string_concat(__glide_string_concat("\"", Vector_get__string((s-> asm_clobbers ), i)), "\"");
+            printf("%s", cstr);
+        }
+    }
+    printf("%s\n", ");");
 }
 
 void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
@@ -6418,27 +10502,43 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         int   id = (g-> spawn_count );
         ((g-> spawn_count )  =  (id  +  1));
         const char*   ids = int_to_str(id);
-        const char*   an = __glide_string_concat("__glide_spawn_args_", ids);
         Expr*   call = (s-> expr_value );
+        int   n_args = 0;
+        if (((call  !=  NULL)  &&  ((call-> args )  !=  NULL))) {
+            (n_args  =  Vector_len__Expr((call-> args )));
+        }
+        if ((n_args  ==  0)) {
+            ind(depth);
+            if ((s-> is_spawn_thread )) {
+                printf("%s\n", __glide_string_concat(__glide_string_concat("{ pthread_t __tid; pthread_create(&__tid, NULL, __glide_spawn_stub_", ids), ", NULL); pthread_detach(__tid); }"));
+            } else {
+                printf("%s\n", __glide_string_concat(__glide_string_concat("__glide_spawn(__glide_spawn_stub_", ids), ", NULL);"));
+            }
+            return;
+        }
+        const char*   an = __glide_string_concat("__glide_spawn_args_", ids);
         ind(depth);
         printf("%s\n", "{");
         ind((depth  +  1));
         printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(an, "* __args = ("), an), "*)malloc(sizeof("), an), "));"));
-        if (((call  !=  NULL)  &&  ((call-> args )  !=  NULL))) {
-            for (int   i = 0; (i  <  Vector_len__Expr((call-> args ))); i++) {
-                ind((depth  +  1));
-                printf("%s", __glide_string_concat(__glide_string_concat("__args->a", int_to_str(i)), " = "));
-                Expr   a = Vector_get__Expr((call-> args ), i);
-                emit_expr(g, (&a));
-                printf("%s\n", ";");
-            }
+        for (int   i = 0; (i  <  Vector_len__Expr((call-> args ))); i++) {
+            ind((depth  +  1));
+            printf("%s", __glide_string_concat(__glide_string_concat("__args->a", int_to_str(i)), " = "));
+            Expr   a = Vector_get__Expr((call-> args ), i);
+            emit_expr(g, (&a));
+            printf("%s\n", ";");
         }
-        ind((depth  +  1));
-        printf("%s\n", "pthread_t __tid;");
-        ind((depth  +  1));
-        printf("%s\n", __glide_string_concat(__glide_string_concat("pthread_create(&__tid, NULL, __glide_spawn_stub_", ids), ", __args);"));
-        ind((depth  +  1));
-        printf("%s\n", "pthread_detach(__tid);");
+        if ((s-> is_spawn_thread )) {
+            ind((depth  +  1));
+            printf("%s\n", "pthread_t __tid;");
+            ind((depth  +  1));
+            printf("%s\n", __glide_string_concat(__glide_string_concat("pthread_create(&__tid, NULL, __glide_spawn_stub_", ids), ", __args);"));
+            ind((depth  +  1));
+            printf("%s\n", "pthread_detach(__tid);");
+        } else {
+            ind((depth  +  1));
+            printf("%s\n", __glide_string_concat(__glide_string_concat("__glide_spawn(__glide_spawn_stub_", ids), ", __args);"));
+        }
         ind(depth);
         printf("%s\n", "}");
         return;
@@ -6457,6 +10557,14 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_CONTINUE)) {
         ind(depth);
         printf("%s\n", "continue;");
+        return;
+    }
+    if (((s-> kind )  ==  ST_ASM)) {
+        emit_asm_stmt(g, s, depth);
+        return;
+    }
+    if (((s-> kind )  ==  ST_CRAW)) {
+        printf("%s", (s-> name ));
         return;
     }
     if (((s-> kind )  ==  ST_IF)) {
@@ -6486,6 +10594,47 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         } else {
             printf("%s\n", "}");
         }
+        return;
+    }
+    if (((s-> kind )  ==  ST_WHILE_RECV)) {
+        Expr*   recv = (s-> let_value );
+        Expr*   recv_target = ((recv-> lhs )-> lhs );
+        Type*   target_ty = infer_for_codegen(g, recv_target);
+        Type*   stripped = strip_ptr(target_ty);
+        if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
+            ind(depth);
+            printf("%s\n", "/* while-let: receiver is not a chan<T> */");
+            return;
+        }
+        Type   inner = Vector_get__Type((stripped-> args ), 0);
+        const char*   m = mangle_type((&inner));
+        const char*   tc = type_to_c((&inner));
+        const char*   var = (s-> name );
+        const char*   decl_ty = tc;
+        if (((s-> let_ty )  !=  NULL)) {
+            (decl_ty  =  type_to_c((s-> let_ty )));
+        }
+        ind(depth);
+        printf("%s\n", "{");
+        ind((depth  +  1));
+        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(decl_ty, " "), var), ";"));
+        ind((depth  +  1));
+        printf("%s", __glide_string_concat(__glide_string_concat("while (__glide_recv_into_", m), "("));
+        emit_expr(g, recv_target);
+        printf("%s\n", __glide_string_concat(__glide_string_concat(", &", var), ")) {"));
+        CG_declare(g, var, (&inner));
+        if (((s-> then_body )  !=  NULL)) {
+            int   saved = Vector_len__Expr((g-> auto_drop_stack ));
+            for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+                Stmt   b = Vector_get__Stmt((s-> then_body ), i);
+                emit_stmt(g, (&b), (depth  +  2));
+            }
+            CG_emit_block_drops(g, saved, (depth  +  2));
+        }
+        ind((depth  +  1));
+        printf("%s\n", "}");
+        ind(depth);
+        printf("%s\n", "}");
         return;
     }
     if (((s-> kind )  ==  ST_WHILE)) {
@@ -6643,9 +10792,16 @@ void   emit_fn_signature (Stmt*   s) {
         printf("%s", "int main(int __glide_main_argc, char** __glide_main_argv)");
         return;
     }
+    if ((s-> is_naked )) {
+        printf("%s", "__attribute__((naked)) ");
+    }
     printf("%s %s %s %s", type_to_c((s-> fn_ret_ty )), " ", (s-> name ), "(");
     if ((((s-> fn_params )  ==  NULL)  ||  (Vector_len__Param((s-> fn_params ))  ==  0))) {
-        printf("%s", "void");
+        if ((s-> is_variadic )) {
+            printf("%s", "...");
+        } else {
+            printf("%s", "void");
+        }
     } else {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
             if ((i  >  0)) {
@@ -6653,6 +10809,9 @@ void   emit_fn_signature (Stmt*   s) {
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
             printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+        }
+        if ((s-> is_variadic )) {
+            printf("%s", ", ...");
         }
     }
     printf("%s", ")");
@@ -6824,7 +10983,12 @@ Type*   try_resolve_open_let (CG*   g, Stmt*   s, Vector__Stmt*   body, int   st
         (gname  =  (callee-> str_val ));
     }
     if (((callee-> kind )  ==  EX_PATH)) {
-        (gname  =  __glide_string_concat(__glide_string_concat((callee-> str_val ), "_"), (callee-> field )));
+        const char*   qual = __glide_string_concat(__glide_string_concat((callee-> str_val ), "::"), (callee-> field ));
+        if (HashMap_contains__string((g-> module_aliases ), qual)) {
+            (gname  =  HashMap_get__string((g-> module_aliases ), qual));
+        } else {
+            (gname  =  __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, (callee-> str_val )), "_"), (callee-> field )));
+        }
     }
     if ((__glide_string_len(gname)  ==  0)) {
         return NULL;
@@ -6920,10 +11084,12 @@ void   infer_let_types_in_program (CG*   g, Vector__Stmt*   program) {
 }
 
 void   emit_fn (CG*   g, Stmt*   s) {
-    emit_fn_signature(s);
-    printf("%s\n", " {");
-    if (__glide_string_eq((s-> name ), "main")) {
-        printf("%s\n", "    __glide_args_init(__glide_main_argc, __glide_main_argv);");
+    bool   is_main = __glide_string_eq((s-> name ), "main");
+    if (is_main) {
+        printf("%s\n", "int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {");
+    } else {
+        emit_fn_signature(s);
+        printf("%s\n", " {");
     }
     HashMap_clear__Type((g-> scope ));
     Type*   saved_ret = (g-> current_ret_ty );
@@ -6951,6 +11117,10 @@ void   emit_fn (CG*   g, Stmt*   s) {
     ((g-> auto_drop_stack )  =  saved_drop);
     ((g-> current_ret_ty )  =  saved_ret);
     printf("%s\n", "}");
+    if (is_main) {
+        printf("%s\n", "");
+        printf("%s", "int main(int argc, char** argv) {\n    __glide_args_init(argc, argv);\n    __glide_sched_init();\n    int __glide_rc = __glide_user_main(argc, argv);\n    __glide_sched_shutdown();\n    return __glide_rc;\n}\n");
+    }
 }
 
 void   emit_impl (CG*   g, Stmt*   s) {
@@ -6960,6 +11130,9 @@ void   emit_impl (CG*   g, Stmt*   s) {
     const char*   prefix = "X";
     if ((((s-> impl_target )  !=  NULL)  &&  (((s-> impl_target )-> kind )  ==  TY_NAMED))) {
         (prefix  =  ((s-> impl_target )-> name ));
+    }
+    if ((((s-> import_path )  !=  NULL)  &&  (!__glide_string_eq((s-> import_path ), "")))) {
+        (prefix  =  __glide_string_concat(__glide_string_concat((s-> import_path ), "_"), prefix));
     }
     for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
         Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
@@ -6979,6 +11152,8 @@ void   emit_impl (CG*   g, Stmt*   s) {
         }
         printf("%s\n", ") {");
         HashMap_clear__Type((g-> scope ));
+        Type*   saved_ret = (g-> current_ret_ty );
+        ((g-> current_ret_ty )  =  (m. fn_ret_ty ));
         Vector__Expr*   saved_defer = (g-> defer_stack );
         Vector__Expr*   saved_drop = (g-> auto_drop_stack );
         Vector__Expr*   nd = Vector_new__Expr();
@@ -7000,8 +11175,39 @@ void   emit_impl (CG*   g, Stmt*   s) {
         CG_emit_deferred_reverse(g, 1);
         ((g-> defer_stack )  =  saved_defer);
         ((g-> auto_drop_stack )  =  saved_drop);
+        ((g-> current_ret_ty )  =  saved_ret);
         printf("%s\n", "}");
         printf("%s\n", "");
+    }
+}
+
+void   emit_impl_fwd_decls (CG*   g, Stmt*   s) {
+    if (((s-> impl_methods )  ==  NULL)) {
+        return;
+    }
+    const char*   prefix = "X";
+    if ((((s-> impl_target )  !=  NULL)  &&  (((s-> impl_target )-> kind )  ==  TY_NAMED))) {
+        (prefix  =  ((s-> impl_target )-> name ));
+    }
+    if ((((s-> import_path )  !=  NULL)  &&  (!__glide_string_eq((s-> import_path ), "")))) {
+        (prefix  =  __glide_string_concat(__glide_string_concat((s-> import_path ), "_"), prefix));
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
+        Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
+        const char*   mangled = __glide_string_concat(__glide_string_concat(prefix, "_"), (m. name ));
+        printf("%s %s %s %s", type_to_c((m. fn_ret_ty )), " ", mangled, "(");
+        if ((((m. fn_params )  ==  NULL)  ||  (Vector_len__Param((m. fn_params ))  ==  0))) {
+            printf("%s", "void");
+        } else {
+            for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
+                if ((j  >  0)) {
+                    printf("%s", ", ");
+                }
+                Param   p = Vector_get__Param((m. fn_params ), j);
+                printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+            }
+        }
+        printf("%s\n", ");");
     }
 }
 
@@ -7081,26 +11287,127 @@ void   emit_enum (Stmt*   s) {
     printf("%s\n", "");
 }
 
+void   register_alias_suffixes (CG*   g, const char*   mod_path, const char*   name) {
+    if (((mod_path  ==  NULL)  ||  __glide_string_eq(mod_path, ""))) {
+        return;
+    }
+    if (((name  ==  NULL)  ||  __glide_string_eq(name, ""))) {
+        return;
+    }
+    int   n = __glide_string_len(mod_path);
+    int   start = 0;
+    while ((start  <  n)) {
+        const char*   suffix = __glide_string_substring(mod_path, start, n);
+        HashMap_insert__string((g-> module_aliases ), __glide_string_concat(__glide_string_concat(suffix, "::"), name), name);
+        int   next = (-1);
+        int   i = start;
+        while (((i  +  1)  <  n)) {
+            if (((__glide_char_to_int(__glide_string_at(mod_path, i))  ==  58)  &&  (__glide_char_to_int(__glide_string_at(mod_path, (i  +  1)))  ==  58))) {
+                (next  =  (i  +  2));
+                break;
+            }
+            (i  =  (i  +  1));
+        }
+        if ((next  <  0)) {
+            break;
+        }
+        (start  =  next);
+    }
+}
+
+const char*   module_path_from_origin (const char*   origin) {
+    if (((origin  ==  NULL)  ||  __glide_string_eq(origin, ""))) {
+        return "";
+    }
+    const char*   s = origin;
+    int   n = __glide_string_len(s);
+    if ((n  >  6)) {
+        const char*   tail = __glide_string_substring(s, (n  -  6), n);
+        if (__glide_string_eq(tail, ".glide")) {
+            (s  =  __glide_string_substring(s, 0, (n  -  6)));
+        }
+    }
+    int   len0 = __glide_string_len(s);
+    if ((len0  >=  4)) {
+        int   first = __glide_char_to_int(__glide_string_at(s, 0));
+        int   second = __glide_char_to_int(__glide_string_at(s, 1));
+        int   third = __glide_char_to_int(__glide_string_at(s, 2));
+        int   fourth = __glide_char_to_int(__glide_string_at(s, 3));
+        if (((((first  ==  115)  &&  (second  ==  114))  &&  (third  ==  99))  &&  ((fourth  ==  47)  ||  (fourth  ==  92)))) {
+            (s  =  __glide_string_substring(s, 4, len0));
+        }
+    }
+    const char*   out = "";
+    int   i = 0;
+    int   len = __glide_string_len(s);
+    while ((i  <  len)) {
+        int   c = __glide_char_to_int(__glide_string_at(s, i));
+        if (((c  ==  47)  ||  (c  ==  92))) {
+            (out  =  __glide_string_concat(out, "::"));
+        } else {
+            (out  =  __glide_string_concat(out, __glide_string_substring(s, i, (i  +  1))));
+        }
+        (i  =  (i  +  1));
+    }
+    return out;
+}
+
+const char*   resolve_path_alias (CG*   g, const char*   prefix, const char*   name) {
+    if (((prefix  ==  NULL)  ||  __glide_string_eq(prefix, ""))) {
+        return name;
+    }
+    const char*   qual = __glide_string_concat(__glide_string_concat(prefix, "::"), name);
+    if (HashMap_contains__string((g-> module_aliases ), qual)) {
+        return HashMap_get__string((g-> module_aliases ), qual);
+    }
+    return name;
+}
+
+const char*   resolve_type_prefix (CG*   g, const char*   prefix) {
+    if (((prefix  ==  NULL)  ||  __glide_string_eq(prefix, ""))) {
+        return prefix;
+    }
+    if (HashMap_contains__string((g-> module_aliases ), prefix)) {
+        return HashMap_get__string((g-> module_aliases ), prefix);
+    }
+    int   n = __glide_string_len(prefix);
+    int   i = (n  -  1);
+    while ((i  >  0)) {
+        if (((((i  +  1)  <  n)  &&  (__glide_char_to_int(__glide_string_at(prefix, i))  ==  58))  &&  (__glide_char_to_int(__glide_string_at(prefix, (i  +  1)))  ==  58))) {
+            break;
+        }
+        (i  =  (i  -  1));
+    }
+    int   last = (-1);
+    int   j = 0;
+    while (((j  +  1)  <  n)) {
+        if (((__glide_char_to_int(__glide_string_at(prefix, j))  ==  58)  &&  (__glide_char_to_int(__glide_string_at(prefix, (j  +  1)))  ==  58))) {
+            (last  =  j);
+            (j  =  (j  +  2));
+        } else {
+            (j  =  (j  +  1));
+        }
+    }
+    if ((last  <  0)) {
+        return prefix;
+    }
+    return __glide_string_substring(prefix, (last  +  2), n);
+}
+
 void   emit_program (Vector__Stmt*   program) {
-    printf("%s\n", "#include <stdio.h>");
-    printf("%s\n", "#include <stdlib.h>");
-    printf("%s\n", "#include <stdbool.h>");
-    printf("%s\n", "#include <stdint.h>");
-    printf("%s\n", "#include <stddef.h>");
-    printf("%s\n", "#include <string.h>");
+    printf("%s", "#include <stdio.h>\n#include <stdlib.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include <stddef.h>\n#include <string.h>\n");
     printf("%s\n", "");
     emit_stdlib_runtime();
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((s. kind )  ==  ST_CRAW)) {
+            emit_cfg_open((s. cfg_target ));
+            printf("%s", (s. name ));
+            printf("%s\n", "");
+            emit_cfg_close((s. cfg_target ));
+        }
+    }
     CG*   g = CG_new();
-    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
-        Stmt   s = Vector_get__Stmt(program, i);
-        collect_chan_in_stmt(g, (&s));
-    }
-    emit_chan_runtime(g);
-    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
-        Stmt   s = Vector_get__Stmt(program, i);
-        collect_result_in_stmt(g, (&s));
-    }
-    emit_result_runtime(g);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  ==  ST_STRUCT)) {
@@ -7110,20 +11417,166 @@ void   emit_program (Vector__Stmt*   program) {
                 HashMap_insert__Stmt((g-> structs ), (s. name ), s);
             }
         }
+        if (((s. kind )  ==  ST_ENUM)) {
+            HashMap_insert__Stmt((g-> enums ), (s. name ), s);
+        }
+        if (((((s. kind )  ==  ST_TRAIT)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))) {
+            HashMap_insert__Stmt((g-> traits ), (s. name ), s);
+        }
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        collect_chan_in_stmt(g, (&s));
+    }
+    emit_scheduler_runtime();
+    emit_socket_runtime();
+    for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
+        Type   t = Vector_get__Type((g-> chan_types ), i);
+        if (((t. kind )  !=  TY_NAMED)) {
+            continue;
+        }
+        if ((((t. name )  ==  NULL)  ||  __glide_string_eq((t. name ), ""))) {
+            continue;
+        }
+        if (HashMap_contains__bool((g-> emitted_named ), (t. name ))) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(program)); j++) {
+            Stmt   s = Vector_get__Stmt(program, j);
+            if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+                continue;
+            }
+            if ((!__glide_string_eq((s. name ), (t. name )))) {
+                continue;
+            }
+            if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+                printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                emit_struct((&s));
+                HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+            } else {
+                if (((s. kind )  ==  ST_ENUM)) {
+                    printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                    emit_enum((&s));
+                    HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+                }
+            }
+        }
+    }
+    emit_chan_runtime(g);
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        collect_dyn_in_stmt(g, (&s));
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((s. kind )  !=  ST_IMPL)) {
+            continue;
+        }
+        if ((((s. impl_trait_name )  ==  NULL)  ||  __glide_string_eq((s. impl_trait_name ), ""))) {
+            continue;
+        }
+        if ((!HashMap_contains__bool((g-> dyn_traits ), (s. impl_trait_name )))) {
+            continue;
+        }
+        if ((((s. impl_target )  ==  NULL)  ||  (((s. impl_target )-> kind )  !=  TY_NAMED))) {
+            continue;
+        }
+        const char*   tn = ((s. impl_target )-> name );
+        if (HashMap_contains__bool((g-> emitted_named ), tn)) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(program)); j++) {
+            Stmt   ts = Vector_get__Stmt(program, j);
+            if ((((ts. name )  ==  NULL)  ||  __glide_string_eq((ts. name ), ""))) {
+                continue;
+            }
+            if ((!__glide_string_eq((ts. name ), tn))) {
+                continue;
+            }
+            if ((((ts. kind )  ==  ST_STRUCT)  &&  (((ts. type_params )  ==  NULL)  ||  (Vector_len__string((ts. type_params ))  ==  0)))) {
+                printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", (ts. name )), " "), (ts. name )), ";"));
+                emit_struct((&ts));
+                HashMap_insert__bool((g-> emitted_named ), tn, true);
+            } else {
+                if (((ts. kind )  ==  ST_ENUM)) {
+                    printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", (ts. name )), " "), (ts. name )), ";"));
+                    emit_enum((&ts));
+                    HashMap_insert__bool((g-> emitted_named ), tn, true);
+                }
+            }
+        }
+    }
+    emit_dyn_runtime(g, program);
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        collect_result_in_stmt(g, (&s));
+    }
+    for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
+        Type   t = Vector_get__Type((g-> result_types ), i);
+        if (((t. kind )  !=  TY_NAMED)) {
+            continue;
+        }
+        if ((((t. name )  ==  NULL)  ||  __glide_string_eq((t. name ), ""))) {
+            continue;
+        }
+        if (HashMap_contains__bool((g-> emitted_named ), (t. name ))) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(program)); j++) {
+            Stmt   s = Vector_get__Stmt(program, j);
+            if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+                continue;
+            }
+            if ((!__glide_string_eq((s. name ), (t. name )))) {
+                continue;
+            }
+            if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+                printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                emit_struct((&s));
+                HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+            } else {
+                if (((s. kind )  ==  ST_ENUM)) {
+                    printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                    emit_enum((&s));
+                    HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+                }
+            }
+        }
+    }
+    emit_result_runtime(g);
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        const char*   mod_path = module_path_from_origin((s. origin ));
+        if (((s. kind )  ==  ST_STRUCT)) {
+            if ((((s. type_params )  !=  NULL)  &&  (Vector_len__string((s. type_params ))  >  0))) {
+                HashMap_insert__Stmt((g-> generic_structs ), (s. name ), s);
+            } else {
+                HashMap_insert__Stmt((g-> structs ), (s. name ), s);
+            }
+            register_alias_suffixes(g, mod_path, (s. name ));
+        }
         if (((s. kind )  ==  ST_FN)) {
             if ((((s. type_params )  !=  NULL)  &&  (Vector_len__string((s. type_params ))  >  0))) {
                 HashMap_insert__Stmt((g-> generic_fns ), (s. name ), s);
             } else {
                 HashMap_insert__Stmt((g-> fns ), (s. name ), s);
             }
+            register_alias_suffixes(g, mod_path, (s. name ));
         }
         if (((s. kind )  ==  ST_ENUM)) {
             HashMap_insert__Stmt((g-> enums ), (s. name ), s);
+            register_alias_suffixes(g, mod_path, (s. name ));
         }
         if ((((((s. kind )  ==  ST_IMPL)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))  &&  ((s. impl_target )  !=  NULL))  &&  ((s. impl_methods )  !=  NULL))) {
             const char*   prefix = "X";
             if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
                 (prefix  =  ((s. impl_target )-> name ));
+            }
+            bool   is_namespaced = false;
+            const char*   bare_prefix = prefix;
+            if ((((s. import_path )  !=  NULL)  &&  (!__glide_string_eq((s. import_path ), "")))) {
+                (prefix  =  __glide_string_concat(__glide_string_concat((s. import_path ), "_"), prefix));
+                (is_namespaced  =  true);
             }
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
@@ -7131,6 +11584,16 @@ void   emit_program (Vector__Stmt*   program) {
                 ((*synth)  =  m);
                 ((synth-> name )  =  __glide_string_concat(__glide_string_concat(prefix, "_"), (m. name )));
                 HashMap_insert__Stmt((g-> fns ), (synth-> name ), (*synth));
+                HashMap_insert__bool((g-> method_fns ), (synth-> name ), true);
+                if (is_namespaced) {
+                    const char*   key = __glide_string_concat(__glide_string_concat(bare_prefix, "_"), (m. name ));
+                    if (HashMap_contains__string((g-> method_index ), key)) {
+                        const char*   prev = HashMap_get__string((g-> method_index ), key);
+                        HashMap_insert__string((g-> method_index ), key, __glide_string_concat(__glide_string_concat(prev, ";"), (synth-> name )));
+                    } else {
+                        HashMap_insert__string((g-> method_index ), key, (synth-> name ));
+                    }
+                }
             }
         }
         if (((((((s. kind )  ==  ST_IMPL)  &&  ((s. type_params )  !=  NULL))  &&  (Vector_len__string((s. type_params ))  >  0))  &&  ((s. impl_target )  !=  NULL))  &&  ((s. impl_methods )  !=  NULL))) {
@@ -7158,6 +11621,7 @@ void   emit_program (Vector__Stmt*   program) {
                 }
                 ((synth-> type_params )  =  combined);
                 HashMap_insert__Stmt((g-> generic_fns ), mname, (*synth));
+                HashMap_insert__bool((g-> method_fns ), mname, true);
             }
         }
     }
@@ -7178,6 +11642,9 @@ void   emit_program (Vector__Stmt*   program) {
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+            if (((((s. name )  !=  NULL)  &&  (!__glide_string_eq((s. name ), "")))  &&  HashMap_contains__bool((g-> emitted_named ), (s. name )))) {
+                continue;
+            }
             printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
         }
     }
@@ -7188,6 +11655,9 @@ void   emit_program (Vector__Stmt*   program) {
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
+        if (((((s. name )  !=  NULL)  &&  (!__glide_string_eq((s. name ), "")))  &&  HashMap_contains__bool((g-> emitted_named ), (s. name )))) {
+            continue;
+        }
         if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
             emit_struct((&s));
         }
@@ -7205,8 +11675,13 @@ void   emit_program (Vector__Stmt*   program) {
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+            emit_cfg_open((s. cfg_target ));
             emit_fn_signature((&s));
             printf("%s\n", ";");
+            emit_cfg_close((s. cfg_target ));
+        }
+        if ((((s. kind )  ==  ST_IMPL)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+            emit_impl_fwd_decls(g, (&s));
         }
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
@@ -7248,6 +11723,15 @@ void   emit_program (Vector__Stmt*   program) {
         }
         (idx  =  (idx  +  1));
     }
+    for (int   i = 0; (i  <  Vector_len__Type((g-> struct_mono_queue ))); i++) {
+        Type   t = Vector_get__Type((g-> struct_mono_queue ), i);
+        const char*   mangled = mangle_generic((t. name ), (t. args ));
+        if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
+            HashMap_insert__bool((g-> emitted_monos ), mangled, true);
+            printf("%s %s %s %s %s\n", "typedef struct ", mangled, " ", mangled, ";");
+            emit_struct_mono(g, (&t));
+        }
+    }
     for (int   i = 0; (i  <  Vector_len__FnMonoEntry((g-> fn_mono_queue ))); i++) {
         FnMonoEntry   entry = Vector_get__FnMonoEntry((g-> fn_mono_queue ), i);
         if (HashMap_contains__Stmt((g-> generic_fns ), (entry. name ))) {
@@ -7287,11 +11771,15 @@ void   emit_program (Vector__Stmt*   program) {
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((((s. kind )  ==  ST_FN)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))  &&  ((s. fn_body )  !=  NULL))) {
+            emit_cfg_open((s. cfg_target ));
             emit_fn(g, (&s));
             printf("%s\n", "");
+            emit_cfg_close((s. cfg_target ));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+            emit_cfg_open((s. cfg_target ));
             emit_impl(g, (&s));
+            emit_cfg_close((s. cfg_target ));
         }
     }
     while ((Vector_len__FnMonoEntry((g-> fn_mono_queue ))  >  0)) {
@@ -7401,7 +11889,7 @@ void   emit_top_const (CG*   g, Stmt*   s) {
     if (((s-> let_value )  ==  NULL)) {
         return;
     }
-    if (((((s-> let_ty )  !=  NULL)  &&  (((s-> let_ty )-> kind )  ==  TY_NAMED))  &&  (((__glide_string_eq(((s-> let_ty )-> name ), "int")  ||  __glide_string_eq(((s-> let_ty )-> name ), "uint"))  ||  __glide_string_eq(((s-> let_ty )-> name ), "i32"))  ||  __glide_string_eq(((s-> let_ty )-> name ), "i64")))) {
+    if (((((s-> let_ty )  !=  NULL)  &&  (((s-> let_ty )-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq(((s-> let_ty )-> name ), "int")  ||  __glide_string_eq(((s-> let_ty )-> name ), "uint"))  ||  __glide_string_eq(((s-> let_ty )-> name ), "i32")))) {
         printf("%s %s %s", "#define ", (s-> name ), " ");
         emit_expr(g, (s-> let_value ));
         printf("%s\n", "");
@@ -7414,7 +11902,13 @@ void   emit_top_const (CG*   g, Stmt*   s) {
         printf("%s %s", "int ", (s-> name ));
     }
     printf("%s", " = ");
-    emit_expr(g, (s-> let_value ));
+    if (((((s-> let_ty )  !=  NULL)  &&  (((s-> let_ty )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq(((s-> let_ty )-> name ), "i64"))) {
+        printf("%s", "(int64_t)(");
+        emit_expr(g, (s-> let_value ));
+        printf("%s", ")");
+    } else {
+        emit_expr(g, (s-> let_value ));
+    }
     printf("%s\n", ";");
 }
 
@@ -8214,7 +12708,7 @@ const char*   fmt_expr (Expr*   e) {
         return __glide_string_concat(__glide_string_concat(__glide_string_concat(fmt_expr((e-> lhs )), "["), fmt_expr((e-> rhs ))), "]");
     }
     if (((e-> kind )  ==  EX_CAST)) {
-        return __glide_string_concat(__glide_string_concat(fmt_expr((e-> lhs )), " as "), fmt_type((e-> cast_to )));
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("(", fmt_expr((e-> lhs ))), " as "), fmt_type((e-> cast_to ))), ")");
     }
     if (((e-> kind )  ==  EX_PATH)) {
         return __glide_string_concat(__glide_string_concat((e-> str_val ), "::"), (e-> field ));
@@ -8226,7 +12720,18 @@ const char*   fmt_expr (Expr*   e) {
         return __glide_string_concat(fmt_expr((e-> lhs )), "--");
     }
     if (((e-> kind )  ==  EX_MACRO)) {
-        const char*   out = __glide_string_concat((e-> str_val ), "!(");
+        if (((__glide_string_eq((e-> str_val ), "format")  &&  ((e-> field )  !=  NULL))  &&  (!__glide_string_eq((e-> field ), "")))) {
+            return __glide_string_concat(__glide_string_concat("\"", (e-> field )), "\"");
+        }
+        const char*   out = "";
+        if (((e-> macro_recv )  !=  NULL)) {
+            (out  =  __glide_string_concat(fmt_expr((e-> macro_recv )), "."));
+        } else {
+            if ((((e-> macro_owner )  !=  NULL)  &&  (!__glide_string_eq((e-> macro_owner ), "")))) {
+                (out  =  __glide_string_concat((e-> macro_owner ), "::"));
+            }
+        }
+        (out  =  __glide_string_concat(__glide_string_concat(out, (e-> str_val )), "!("));
         if (((e-> args )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                 if ((i  >  0)) {
@@ -8400,7 +12905,50 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
         return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "spawn "), fmt_expr((s-> expr_value ))), ";\n");
     }
     if (((s-> kind )  ==  ST_IMPORT)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "import "), (s-> import_path )), ";\n");
+        const char*   path = (s-> import_path );
+        int   pn = __glide_string_len(path);
+        if ((pn  >=  4)) {
+            int   c0 = __glide_char_to_int(__glide_string_at(path, 0));
+            int   c1 = __glide_char_to_int(__glide_string_at(path, 1));
+            int   c2 = __glide_char_to_int(__glide_string_at(path, 2));
+            int   c3 = __glide_char_to_int(__glide_string_at(path, 3));
+            if (((((c0  ==  115)  &&  (c1  ==  114))  &&  (c2  ==  99))  &&  ((c3  ==  47)  ||  (c3  ==  92)))) {
+                (path  =  __glide_string_substring(path, 4, pn));
+            }
+        }
+        int   pn2 = __glide_string_len(path);
+        if ((pn2  >  6)) {
+            const char*   tail = __glide_string_substring(path, (pn2  -  6), pn2);
+            if (__glide_string_eq(tail, ".glide")) {
+                (path  =  __glide_string_substring(path, 0, (pn2  -  6)));
+            }
+        }
+        const char*   module = "";
+        int   mn = __glide_string_len(path);
+        for (int   i = 0; (i  <  mn); i++) {
+            int   c = __glide_char_to_int(__glide_string_at(path, i));
+            if (((c  ==  47)  ||  (c  ==  92))) {
+                (module  =  __glide_string_concat(module, "::"));
+            } else {
+                (module  =  __glide_string_concat(module, __glide_string_substring(path, i, (i  +  1))));
+            }
+        }
+        const char*   tail_s = "";
+        if ((((s-> imported_items )  !=  NULL)  &&  (Vector_len__string((s-> imported_items ))  >  0))) {
+            if ((Vector_len__string((s-> imported_items ))  ==  1)) {
+                (tail_s  =  __glide_string_concat("::", Vector_get__string((s-> imported_items ), 0)));
+            } else {
+                (tail_s  =  "::{");
+                for (int   i = 0; (i  <  Vector_len__string((s-> imported_items ))); i++) {
+                    if ((i  >  0)) {
+                        (tail_s  =  __glide_string_concat(tail_s, ", "));
+                    }
+                    (tail_s  =  __glide_string_concat(tail_s, Vector_get__string((s-> imported_items ), i)));
+                }
+                (tail_s  =  __glide_string_concat(tail_s, "}"));
+            }
+        }
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "import "), module), tail_s), ";\n");
     }
     if (((s-> kind )  ==  ST_IF)) {
         const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "if "), fmt_expr((s-> cond ))), " {\n");
@@ -8414,6 +12962,20 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
             (out  =  __glide_string_concat(__glide_string_concat(out, pad), "} else {\n"));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> else_body ), i);
+                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+            }
+        }
+        return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
+    }
+    if (((s-> kind )  ==  ST_WHILE_RECV)) {
+        const char*   out = __glide_string_concat(__glide_string_concat(pad, "while let "), (s-> name ));
+        if (((s-> let_ty )  !=  NULL)) {
+            (out  =  __glide_string_concat(__glide_string_concat(out, ": "), fmt_type((s-> let_ty ))));
+        }
+        (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, " = "), fmt_expr((s-> let_value ))), " {\n"));
+        if (((s-> then_body )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+                Stmt   b = Vector_get__Stmt((s-> then_body ), i);
                 (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
             }
         }
@@ -8451,6 +13013,27 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
         }
         return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
     }
+    if (((s-> kind )  ==  ST_FOR_IN)) {
+        const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "for "), (s-> name )), " in ");
+        if (((s-> let_value )  !=  NULL)) {
+            (out  =  __glide_string_concat(out, fmt_expr((s-> let_value ))));
+        }
+        if (((s-> cond )  !=  NULL)) {
+            const char*   sep = "..";
+            if ((s-> is_mut )) {
+                (sep  =  "..=");
+            }
+            (out  =  __glide_string_concat(__glide_string_concat(out, sep), fmt_expr((s-> cond ))));
+        }
+        (out  =  __glide_string_concat(out, " {\n"));
+        if (((s-> then_body )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+                Stmt   b = Vector_get__Stmt((s-> then_body ), i);
+                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+            }
+        }
+        return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
+    }
     if (((s-> kind )  ==  ST_BLOCK)) {
         const char*   out = __glide_string_concat(pad, "{\n");
         if (((s-> then_body )  !=  NULL)) {
@@ -8476,7 +13059,67 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_MATCH)) {
         return fmt_match(s, depth);
     }
+    if (((s-> kind )  ==  ST_ASM)) {
+        return fmt_asm(s, depth);
+    }
     return __glide_string_concat(pad, "/* fmt: unknown stmt */\n");
+}
+
+const char*   fmt_asm (Stmt*   s, int   depth) {
+    const char*   pad = fmt_indent(depth);
+    const char*   inner = fmt_indent((depth  +  1));
+    const char*   out = __glide_string_concat(pad, "asm");
+    if ((s-> is_volatile )) {
+        (out  =  __glide_string_concat(out, " volatile"));
+    }
+    (out  =  __glide_string_concat(out, " {\n"));
+    if (((s-> asm_strings )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__string((s-> asm_strings ))); i++) {
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, inner), "\""), Vector_get__string((s-> asm_strings ), i)), "\"\n"));
+        }
+    }
+    bool   has_out = (((s-> asm_out_constraints )  !=  NULL)  &&  (Vector_len__string((s-> asm_out_constraints ))  >  0));
+    bool   has_in = (((s-> asm_in_constraints )  !=  NULL)  &&  (Vector_len__string((s-> asm_in_constraints ))  >  0));
+    bool   has_clb = (((s-> asm_clobbers )  !=  NULL)  &&  (Vector_len__string((s-> asm_clobbers ))  >  0));
+    if (((has_out  ||  has_in)  ||  has_clb)) {
+        (out  =  __glide_string_concat(__glide_string_concat(out, inner), ":"));
+        if (has_out) {
+            (out  =  __glide_string_concat(out, " "));
+            for (int   i = 0; (i  <  Vector_len__string((s-> asm_out_constraints ))); i++) {
+                if ((i  >  0)) {
+                    (out  =  __glide_string_concat(out, ", "));
+                }
+                Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
+                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\""), Vector_get__string((s-> asm_out_constraints ), i)), "\"("), fmt_expr((&e))), ")"));
+            }
+        }
+        (out  =  __glide_string_concat(out, "\n"));
+    }
+    if ((has_in  ||  has_clb)) {
+        (out  =  __glide_string_concat(__glide_string_concat(out, inner), ":"));
+        if (has_in) {
+            (out  =  __glide_string_concat(out, " "));
+            for (int   i = 0; (i  <  Vector_len__string((s-> asm_in_constraints ))); i++) {
+                if ((i  >  0)) {
+                    (out  =  __glide_string_concat(out, ", "));
+                }
+                Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
+                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\""), Vector_get__string((s-> asm_in_constraints ), i)), "\"("), fmt_expr((&e))), ")"));
+            }
+        }
+        (out  =  __glide_string_concat(out, "\n"));
+    }
+    if (has_clb) {
+        (out  =  __glide_string_concat(__glide_string_concat(out, inner), ": "));
+        for (int   i = 0; (i  <  Vector_len__string((s-> asm_clobbers ))); i++) {
+            if ((i  >  0)) {
+                (out  =  __glide_string_concat(out, ", "));
+            }
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\""), Vector_get__string((s-> asm_clobbers ), i)), "\""));
+        }
+        (out  =  __glide_string_concat(out, "\n"));
+    }
+    return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
 }
 
 const char*   fmt_for_init (Stmt*   s) {
@@ -8509,8 +13152,14 @@ const char*   fmt_type_params (Stmt*   s) {
 const char*   fmt_fn (Stmt*   s, int   depth) {
     const char*   pad = fmt_indent(depth);
     const char*   head = pad;
+    if ((((s-> cfg_target )  !=  NULL)  &&  (!__glide_string_eq((s-> cfg_target ), "")))) {
+        (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(head, "@cfg(\""), (s-> cfg_target )), "\")\n"), pad));
+    }
     if ((s-> is_pub )) {
         (head  =  __glide_string_concat(head, "pub "));
+    }
+    if ((s-> is_naked )) {
+        (head  =  __glide_string_concat(head, "naked "));
     }
     (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(head, "fn "), (s-> name )), fmt_type_params(s)), "("));
     if (((s-> fn_params )  !=  NULL)) {
@@ -8831,16 +13480,16 @@ const char*   uri_to_path (const char*   uri) {
     return rest;
 }
 
-const char*   find_stdlib_root (void) {
+const char*   find_builtins_dir (void) {
     const char*   exe_dir = __glide_exe_dir();
     if ((!__glide_string_eq(exe_dir, ""))) {
-        const char*   probe = __glide_string_concat(exe_dir, "/stdlib/vector.glide");
+        const char*   probe = __glide_string_concat(exe_dir, "/src/builtins/builtins.glide");
         if ((!__glide_string_eq(read_file(probe), ""))) {
-            return __glide_string_concat(exe_dir, "/");
+            return __glide_string_concat(exe_dir, "/src/builtins");
         }
     }
-    if ((!__glide_string_eq(read_file("stdlib/vector.glide"), ""))) {
-        return "";
+    if ((!__glide_string_eq(read_file("src/builtins/builtins.glide"), ""))) {
+        return "src/builtins";
     }
     return "";
 }
@@ -8849,11 +13498,21 @@ void   run_analysis_and_publish (const char*   uri, const char*   text, LspState
     const char*   path = uri_to_path(uri);
     Vector__Stmt*   stmts = Vector_new__Stmt();
     HashMap__bool*   loaded = HashMap_new__bool();
-    const char*   prefix = find_stdlib_root();
-    load_into(stmts, __glide_string_concat(prefix, "stdlib/vector.glide"), loaded);
-    load_into(stmts, __glide_string_concat(prefix, "stdlib/hashmap.glide"), loaded);
-    load_into_str(stmts, text, path, loaded);
+    const char*   bdir = find_builtins_dir();
+    Vector__ParseDiag*   pdiags = Vector_new__ParseDiag();
+    if ((!__glide_string_eq(bdir, ""))) {
+        load_builtins_dir(stmts, bdir, loaded, pdiags);
+    }
+    load_into_str(stmts, text, path, loaded, pdiags);
+    Vector__Stmt*   expanded = expand_macros(stmts);
+    Vector__Stmt*   lowered = lower_program(expanded);
+    Vector_clear__Stmt(stmts);
+    for (int   i = 0; (i  <  Vector_len__Stmt(lowered)); i++) {
+        Stmt   s = Vector_get__Stmt(lowered, i);
+        Vector_push__Stmt(stmts, s);
+    }
     Typer*   t = Typer_new();
+    merge_parse_diags(t, pdiags);
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
     if (HashMap_contains__LspDoc((state-> docs ), uri)) {
@@ -8925,6 +13584,135 @@ void   run_extra_analyses (Typer*   t, Vector__Stmt*   stmts) {
     analysis_dead_code(t, stmts);
     analysis_missing_return(t, stmts);
     analysis_large_return(t, stmts);
+    analysis_trait_conformance(t, stmts);
+}
+
+void   analysis_trait_conformance (Typer*   t, Vector__Stmt*   stmts) {
+    HashMap__Stmt*   traits = HashMap_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if (((((s. kind )  ==  ST_TRAIT)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))) {
+            HashMap_insert__Stmt(traits, (s. name ), s);
+        }
+    }
+    HashMap__bool*   impl_set = HashMap_new__bool();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if (((s. kind )  !=  ST_IMPL)) {
+            continue;
+        }
+        if ((((s. impl_trait_name )  ==  NULL)  ||  __glide_string_eq((s. impl_trait_name ), ""))) {
+            continue;
+        }
+        if ((((s. impl_target )  ==  NULL)  ||  (((s. impl_target )-> kind )  !=  TY_NAMED))) {
+            continue;
+        }
+        HashMap_insert__bool(impl_set, __glide_string_concat(__glide_string_concat((s. impl_trait_name ), "::"), ((s. impl_target )-> name )), true);
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if (((s. kind )  !=  ST_IMPL)) {
+            continue;
+        }
+        if ((((s. impl_trait_name )  ==  NULL)  ||  __glide_string_eq((s. impl_trait_name ), ""))) {
+            continue;
+        }
+        if ((!HashMap_contains__Stmt(traits, (s. impl_trait_name )))) {
+            ((t-> current_origin )  =  (s. origin ));
+            Typer_err_code(t, (s. line ), (s. column ), "unknown-trait", __glide_string_concat(__glide_string_concat("trait `", (s. impl_trait_name )), "` is not declared"));
+            continue;
+        }
+        Stmt   trait_def = HashMap_get__Stmt(traits, (s. impl_trait_name ));
+        if (((((trait_def. trait_supers )  !=  NULL)  &&  ((s. impl_target )  !=  NULL))  &&  (((s. impl_target )-> kind )  ==  TY_NAMED))) {
+            for (int   k = 0; (k  <  Vector_len__string((trait_def. trait_supers ))); k++) {
+                const char*   sup = Vector_get__string((trait_def. trait_supers ), k);
+                const char*   key = __glide_string_concat(__glide_string_concat(sup, "::"), ((s. impl_target )-> name ));
+                if ((!HashMap_contains__bool(impl_set, key))) {
+                    ((t-> current_origin )  =  (s. origin ));
+                    Typer_err_code(t, (s. line ), (s. column ), "missing-supertrait", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("trait `", (s. impl_trait_name )), "` requires `"), sup), "` but `"), ((s. impl_target )-> name )), "` doesn't implement it"));
+                }
+            }
+        }
+        if (((trait_def. impl_methods )  ==  NULL)) {
+            continue;
+        }
+        HashMap__Stmt*   provided = HashMap_new__Stmt();
+        if (((s. impl_methods )  !=  NULL)) {
+            for (int   k = 0; (k  <  Vector_len__Stmt((s. impl_methods ))); k++) {
+                Stmt   m = Vector_get__Stmt((s. impl_methods ), k);
+                if (((m. name )  !=  NULL)) {
+                    HashMap_insert__Stmt(provided, (m. name ), m);
+                }
+            }
+        }
+        const char*   target_name = "?";
+        if ((((s. impl_target )  !=  NULL)  &&  (((s. impl_target )-> kind )  ==  TY_NAMED))) {
+            (target_name  =  ((s. impl_target )-> name ));
+        }
+        for (int   k = 0; (k  <  Vector_len__Stmt((trait_def. impl_methods ))); k++) {
+            Stmt   req = Vector_get__Stmt((trait_def. impl_methods ), k);
+            if ((((req. name )  ==  NULL)  ||  __glide_string_eq((req. name ), ""))) {
+                continue;
+            }
+            if ((!HashMap_contains__Stmt(provided, (req. name )))) {
+                ((t-> current_origin )  =  (s. origin ));
+                Typer_err_code(t, (s. line ), (s. column ), "missing-trait-method", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("impl of trait `", (s. impl_trait_name )), "` for `"), target_name), "` is missing method `"), (req. name )), "`"));
+                continue;
+            }
+            Stmt   got = HashMap_get__Stmt(provided, (req. name ));
+            check_method_signature(t, s, req, got, target_name);
+        }
+    }
+}
+
+void   check_method_signature (Typer*   t, Stmt   impl_stmt, Stmt   req, Stmt   got, const char*   target_name) {
+    int   req_arity = if_param_count(req);
+    int   got_arity = if_param_count(got);
+    if ((req_arity  !=  got_arity)) {
+        ((t-> current_origin )  =  (impl_stmt. origin ));
+        Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` has wrong arity for trait `"), (impl_stmt. impl_trait_name )), "`: expected "), int_to_str(req_arity)), " params, got "), int_to_str(got_arity)));
+        return;
+    }
+    if ((((req. fn_params )  !=  NULL)  &&  ((got. fn_params )  !=  NULL))) {
+        for (int   i = 0; (i  <  req_arity); i++) {
+            Param   rp = Vector_get__Param((req. fn_params ), i);
+            Param   gp = Vector_get__Param((got. fn_params ), i);
+            Type*   rty = subst_self((rp. ty ), (impl_stmt. impl_target ));
+            if ((!types_compat(rty, (gp. ty )))) {
+                ((t-> current_origin )  =  (impl_stmt. origin ));
+                Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` param `"), (rp. name )), "`: expected `"), type_to_string(rty)), "`, got `"), type_to_string((gp. ty ))), "`"));
+                return;
+            }
+        }
+    }
+    Type*   rret = subst_self((req. fn_ret_ty ), (impl_stmt. impl_target ));
+    if ((!types_compat(rret, (got. fn_ret_ty )))) {
+        ((t-> current_origin )  =  (impl_stmt. origin ));
+        Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` return: expected `"), type_to_string(rret)), "`, got `"), type_to_string((got. fn_ret_ty ))), "`"));
+    }
+}
+
+int   if_param_count (Stmt   s) {
+    if (((s. fn_params )  ==  NULL)) {
+        return 0;
+    }
+    return Vector_len__Param((s. fn_params ));
+}
+
+Type*   subst_self (Type*   t, Type*   impl_target) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    if ((impl_target  ==  NULL)) {
+        return t;
+    }
+    if ((((t-> kind )  ==  TY_NAMED)  &&  __glide_string_eq((t-> name ), "Self"))) {
+        return impl_target;
+    }
+    if (((t-> inner )  !=  NULL)) {
+        ((t-> inner )  =  subst_self((t-> inner ), impl_target));
+    }
+    return t;
 }
 
 const char*   type_to_string_pretty (Type*   t) {
@@ -8952,19 +13740,264 @@ const char*   fn_signature (Stmt*   s) {
     return sig;
 }
 
+const char*   macro_signature (Stmt*   s) {
+    const char*   sig = __glide_string_concat(__glide_string_concat("macro ", (s-> name )), "!(");
+    if (((s-> macro_params )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__MacroParam((s-> macro_params ))); i++) {
+            if ((i  >  0)) {
+                (sig  =  __glide_string_concat(sig, ", "));
+            }
+            MacroParam   mp = Vector_get__MacroParam((s-> macro_params ), i);
+            if ((mp. is_variadic )) {
+                const char*   sep = ",";
+                if ((!__glide_string_eq((mp. separator ), ""))) {
+                    (sep  =  (mp. separator ));
+                }
+                (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(sig, "$("), "$"), (mp. name )), ":expr)"), sep), "*"));
+            } else {
+                (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(sig, "$"), (mp. name )), ":expr"));
+            }
+        }
+    }
+    (sig  =  __glide_string_concat(sig, ")"));
+    return sig;
+}
+
 Stmt*   find_top_decl (Vector__Stmt*   stmts, const char*   name) {
     if ((stmts  ==  NULL)) {
         return NULL;
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
-        if (((((((s. kind )  ==  ST_FN)  ||  ((s. kind )  ==  ST_STRUCT))  ||  ((s. kind )  ==  ST_ENUM))  ||  ((s. kind )  ==  ST_CONST))  &&  __glide_string_eq((s. name ), name))) {
+        if ((((((((s. kind )  ==  ST_FN)  ||  ((s. kind )  ==  ST_STRUCT))  ||  ((s. kind )  ==  ST_ENUM))  ||  ((s. kind )  ==  ST_CONST))  ||  ((s. kind )  ==  ST_MACRO_DEF))  &&  __glide_string_eq((s. name ), name))) {
             Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
             ((*p)  =  s);
             return p;
         }
     }
     return NULL;
+}
+
+ImplMethodHit   find_macro_in_impl_anywhere (Vector__Stmt*   stmts, const char*   name) {
+    ImplMethodHit   miss = (( ImplMethodHit ){. method  = NULL, . owner  = ""});
+    if ((stmts  ==  NULL)) {
+        return miss;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if ((((s. kind )  !=  ST_IMPL)  ||  ((s. impl_methods )  ==  NULL))) {
+            continue;
+        }
+        const char*   tname = "";
+        if (((s. impl_target )  !=  NULL)) {
+            if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
+                (tname  =  ((s. impl_target )-> name ));
+            }
+            if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
+                (tname  =  ((s. impl_target )-> name ));
+            }
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
+            Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
+            if (((m. kind )  !=  ST_MACRO_DEF)) {
+                continue;
+            }
+            if ((!__glide_string_eq((m. name ), name))) {
+                continue;
+            }
+            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            ((*p)  =  m);
+            if (((((p-> origin )  ==  NULL)  ||  __glide_string_eq((p-> origin ), ""))  &&  ((s. origin )  !=  NULL))) {
+                ((p-> origin )  =  (s. origin ));
+            }
+            ImplMethodHit   hit = (( ImplMethodHit ){. method  = p, . owner  = tname});
+            return hit;
+        }
+    }
+    return miss;
+}
+
+const char*   builtin_macro_doc (const char*   name) {
+    if (__glide_string_eq(name, "println")) {
+        return "```glide\nmacro println!(...)\n```\n\n---\n\nPrint the args separated by spaces, terminated with a newline. Format spec is inferred per arg type.";
+    }
+    if (__glide_string_eq(name, "print")) {
+        return "```glide\nmacro print!(...)\n```\n\n---\n\nLike `println!` but without a trailing newline.";
+    }
+    if (__glide_string_eq(name, "format")) {
+        return "```glide\nmacro format!(\"fmt\", args...)\n```\n\n---\n\nReturn a formatted string. `{}` placeholders take the corresponding arg.";
+    }
+    return "";
+}
+
+const char*   keyword_doc (const char*   name) {
+    if (__glide_string_eq(name, "let")) {
+        return "```glide\nlet name [: T] = expr;\n```\n\n---\n\nDeclares an immutable local binding. Add `mut` to allow reassignment, drop the type annotation when it can be inferred from the initializer.\n\n```glide\nlet x: int = 42;\nlet v = Vector::new();          // type inferred\nlet mut count: int = 0;\n```";
+    }
+    if (__glide_string_eq(name, "mut")) {
+        return "```glide\nlet mut name = expr;\n```\n\n---\n\nMarks a `let` binding as reassignable. Without `mut`, the binding is immutable.\n\n```glide\nlet mut n: int = 0;\nn = n + 1;                       // ok\n```";
+    }
+    if (__glide_string_eq(name, "const")) {
+        return "```glide\nconst NAME [: T] = expr;\n```\n\n---\n\nFile-scope constant. Lowered to a `#define` in C. The initializer must be a compile-time literal.\n\n```glide\nconst MAX: int = 1024;\nconst NAME: string = \"glide\";\n```";
+    }
+    if (__glide_string_eq(name, "fn")) {
+        return "```glide\nfn name(params) [-> T] { body }\n```\n\n---\n\nDeclare a function. Params are `name: type`. Omit `-> T` for void.\n\n```glide\nfn add(a: int, b: int) -> int {\n    return a + b;\n}\n```";
+    }
+    if (__glide_string_eq(name, "struct")) {
+        return "```glide\nstruct Name { field: T, ... }\n```\n\n---\n\nDeclare a value-type record. Fields are `name: type`, comma-separated.\n\n```glide\nstruct Point { x: int, y: int }\nlet p: Point = Point { x: 1, y: 2 };\n```";
+    }
+    if (__glide_string_eq(name, "enum")) {
+        return "```glide\nenum Name { Variant, Variant(T1, T2), ... }\n```\n\n---\n\nTagged union. Each variant can carry zero or more positional payloads.\n\n```glide\nenum Shape { Circle(float), Square(int) }\nlet s: Shape = Shape::Circle(3.14);\n```";
+    }
+    if (__glide_string_eq(name, "impl")) {
+        return "```glide\nimpl T { fn method(self: *T, ...) { ... } }\n```\n\n---\n\nAttach methods (and macros) to a type. The first param `self: *T` makes the method instance-callable as `value.method(args)`.\n\n```glide\nimpl Counter {\n    fn bump(self: *Counter) { self.n = self.n + 1; }\n}\n```";
+    }
+    if (__glide_string_eq(name, "interface")) {
+        return "```glide\ninterface Name { fn method(self: *Self, ...) -> T; }\n```\n\n---\n\nDeclare a set of method signatures that types can implement.";
+    }
+    if (__glide_string_eq(name, "type")) {
+        return "```glide\ntype Alias = ExistingType;\n```\n\n---\n\nDefine a type alias. Resolved transparently — the alias and the original are interchangeable.\n\n```glide\ntype Bytes = []u8;\n```";
+    }
+    if (__glide_string_eq(name, "macro")) {
+        return "```glide\nmacro name!(matchers) { body }\n```\n\n---\n\nDeclare a `macro_rules`-style macro. Matchers use `$x:expr` and the variadic form `$($x:expr),*`. Inside an `impl`, body referring to `self` makes it instance-style.\n\n```glide\nmacro vec_of!($($x:expr),*) {\n    let v: *Vector<int> = Vector::new();\n    $( v.push($x); )*\n}\n```";
+    }
+    if (__glide_string_eq(name, "if")) {
+        return "```glide\nif cond { ... } else if cond { ... } else { ... }\n```\n\n---\n\nBranch on a `bool`. Braces are required; the trailing `else` is optional.";
+    }
+    if (__glide_string_eq(name, "else")) {
+        return "```glide\nif cond { ... } else { ... }\n```\n\n---\n\nFalse-branch of an `if`. Can chain via `else if`.";
+    }
+    if (__glide_string_eq(name, "while")) {
+        return "```glide\nwhile cond { ... }\n```\n\n---\n\nLoop while `cond` evaluates to `true`. Use `break` / `continue` to control flow.\n\n```glide\nwhile !done { step(); }\n```";
+    }
+    if (__glide_string_eq(name, "for")) {
+        return "```glide\nfor IDENT in lo..hi { ... }      // exclusive range\nfor IDENT in lo..=hi { ... }     // inclusive range\nfor IDENT in collection { ... }  // any value with .len() / .get(i)\nfor let i = 0; i < n; i++ { ... } // C-style\n```\n\n---\n\nThree shapes share the keyword: range loops, collection iteration, and C-style.\n\n```glide\nfor i in 0..10 { println!(i); }\nfor x in v { println!(x); }\n```";
+    }
+    if (__glide_string_eq(name, "in")) {
+        return "```glide\nfor IDENT in EXPR { ... }\n```\n\n---\n\nBinder keyword used by the `for` shape. Has no other meaning outside `for`.";
+    }
+    if (__glide_string_eq(name, "return")) {
+        return "```glide\nreturn expr;     // value\nreturn;          // void\n```\n\n---\n\nLeave the enclosing function. The expression must match the declared return type.";
+    }
+    if (__glide_string_eq(name, "break")) {
+        return "```glide\nbreak;\n```\n\n---\n\nLeave the innermost loop (`for` or `while`).";
+    }
+    if (__glide_string_eq(name, "continue")) {
+        return "```glide\ncontinue;\n```\n\n---\n\nSkip to the next iteration of the innermost loop.";
+    }
+    if (__glide_string_eq(name, "match")) {
+        return "```glide\nmatch expr {\n    Variant1(payload) => { ... }\n    Variant2          => { ... }\n    _                 => { ... }\n}\n```\n\n---\n\nPattern-match an enum value. Each arm receives the variant's payload as bindings. `_` is the wildcard.";
+    }
+    if (__glide_string_eq(name, "defer")) {
+        return "```glide\ndefer expr;\n```\n\n---\n\nRun `expr` at function exit (LIFO with other defers, before any `return`). Used for cleanup.\n\n```glide\nlet v: *Vector<int> = Vector::new();\ndefer v.free();\n```";
+    }
+    if (__glide_string_eq(name, "spawn")) {
+        return "```glide\nspawn fn_call(args);\n```\n\n---\n\nRun the call on a new pthread. Detached — no join handle.\n\n```glide\nspawn worker(c);\n```";
+    }
+    if (__glide_string_eq(name, "chan")) {
+        return "```glide\nlet c: chan<T> = make_chan(cap);\n```\n\n---\n\nTyped concurrent channel. Pair with `send(c, x)`, `recv(c)`, `close(c)`.";
+    }
+    if (__glide_string_eq(name, "move")) {
+        return "```glide\nmove fn(args) -> ret { body }\n```\n\n---\n\nClosure prefix that captures referenced locals by move (one-shot, releases the source). Without `move`, an `fn` expression with captures isn't allowed.";
+    }
+    if (__glide_string_eq(name, "new")) {
+        return "```glide\nlet p: *T = new T { field: value, ... };\n```\n\n---\n\nHeap-allocate a struct (raw — no auto-drop). Pair with `free` later.\n\nFor auto-dropped allocation use `let p: *T = T { ... };` (no `new`) instead.";
+    }
+    if (__glide_string_eq(name, "as")) {
+        return "```glide\nexpr as T\n```\n\n---\n\nExplicit cast between numeric types or pointer types. Compiles to a C cast.\n\n```glide\nlet n: int = some_long as int;\nlet p: *void = buf as *void;\n```";
+    }
+    if (__glide_string_eq(name, "sizeof")) {
+        return "```glide\nsizeof(T)\n```\n\n---\n\nByte size of a type, like C's `sizeof`. Returns `usize`.";
+    }
+    if (__glide_string_eq(name, "pub")) {
+        return "```glide\npub fn ...     pub struct ...     pub const ...\n```\n\n---\n\nMakes a top-level item visible across files. Default visibility is file-local.";
+    }
+    if (__glide_string_eq(name, "import")) {
+        return "```glide\nimport \"path/to/file.glide\";\n```\n\n---\n\nLoad another `.glide` source file into this compilation. Resolved relative to the current file. Cycle-safe.";
+    }
+    if (__glide_string_eq(name, "extern")) {
+        return "```glide\nextern fn name(args) -> T;\nextern type Name;\nextern type Name = \"struct foo\";\n```\n\n---\n\nDeclare a foreign C symbol that codegen will reference but not define. Pair with `c_link` to add the library at link time.";
+    }
+    if (__glide_string_eq(name, "c_include")) {
+        return "```glide\nc_include \"<header.h>\";\nc_include \"local.h\";\n```\n\n---\n\nInject a literal `#include` into the generated C. Use to expose types and prototypes for `extern` declarations.";
+    }
+    if (__glide_string_eq(name, "c_link")) {
+        return "```glide\nc_link \"name\";\n```\n\n---\n\nAdd `-lname` to the linker command. Use to pull in a library that backs `extern fn` declarations.";
+    }
+    if (__glide_string_eq(name, "true")) {
+        return "```glide\ntrue\n```\n\n---\n\nThe `true` boolean literal. `bool` in Glide maps to C's `_Bool`.";
+    }
+    if (__glide_string_eq(name, "false")) {
+        return "```glide\nfalse\n```\n\n---\n\nThe `false` boolean literal.";
+    }
+    if (__glide_string_eq(name, "null")) {
+        return "```glide\nnull\n```\n\n---\n\nNull pointer. Compatible with any `*T` / `&T` / `&mut T`.";
+    }
+    if (__glide_string_eq(name, "self")) {
+        return "```glide\nself: *T\n```\n\n---\n\nReceiver parameter inside an `impl` method. Convention: declare as `self: *T`, callers use `value.method(args)`.";
+    }
+    return "";
+}
+
+ImplMethodHit   find_method_anywhere (Vector__Stmt*   stmts, const char*   method_name) {
+    ImplMethodHit   miss = (( ImplMethodHit ){. method  = NULL, . owner  = ""});
+    if ((stmts  ==  NULL)) {
+        return miss;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if ((((s. kind )  !=  ST_IMPL)  ||  ((s. impl_methods )  ==  NULL))) {
+            continue;
+        }
+        const char*   tname = "";
+        if (((s. impl_target )  !=  NULL)) {
+            if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
+                (tname  =  ((s. impl_target )-> name ));
+            }
+            if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
+                (tname  =  ((s. impl_target )-> name ));
+            }
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
+            Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
+            if (((m. kind )  !=  ST_FN)) {
+                continue;
+            }
+            if ((!__glide_string_eq((m. name ), method_name))) {
+                continue;
+            }
+            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            ((*p)  =  m);
+            if (((((p-> origin )  ==  NULL)  ||  __glide_string_eq((p-> origin ), ""))  &&  ((s. origin )  !=  NULL))) {
+                ((p-> origin )  =  (s. origin ));
+            }
+            ImplMethodHit   hit = (( ImplMethodHit ){. method  = p, . owner  = tname});
+            return hit;
+        }
+    }
+    return miss;
+}
+
+FieldHit   find_field_anywhere (Vector__Stmt*   stmts, const char*   field_name) {
+    FieldHit   miss = (( FieldHit ){. owner  = "", . name  = "", . ty  = NULL, . doc  = ""});
+    if ((stmts  ==  NULL)) {
+        return miss;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if ((((s. kind )  !=  ST_STRUCT)  ||  ((s. struct_fields )  ==  NULL))) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Field((s. struct_fields ))); j++) {
+            Field   f = Vector_get__Field((s. struct_fields ), j);
+            if ((!__glide_string_eq((f. name ), field_name))) {
+                continue;
+            }
+            FieldHit   hit = (( FieldHit ){. owner  = (s. name ), . name  = (f. name ), . ty  = (f. ty ), . doc  = (f. doc )});
+            return hit;
+        }
+    }
+    return miss;
 }
 
 Stmt*   find_method_in_impl (Vector__Stmt*   stmts, const char*   type_name, const char*   method_name) {
@@ -8994,7 +14027,7 @@ Stmt*   find_method_in_impl (Vector__Stmt*   stmts, const char*   type_name, con
         }
         for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
             Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
-            if ((((m. kind )  ==  ST_FN)  &&  __glide_string_eq((m. name ), method_name))) {
+            if (((((m. kind )  ==  ST_FN)  ||  ((m. kind )  ==  ST_MACRO_DEF))  &&  __glide_string_eq((m. name ), method_name))) {
                 Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
                 ((*p)  =  m);
                 if (((((p-> origin )  ==  NULL)  ||  __glide_string_eq((p-> origin ), ""))  &&  ((s. origin )  !=  NULL))) {
@@ -9363,6 +14396,10 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
                             (content  =  __glide_string_concat(__glide_string_concat(content, ": "), type_to_string_pretty((decl-> let_ty ))));
                         }
                         (content  =  __glide_string_concat(content, "\n```"));
+                    } else {
+                        if (((decl-> kind )  ==  ST_MACRO_DEF)) {
+                            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", macro_signature(decl)), "\n```"));
+                        }
                     }
                 }
             }
@@ -9393,6 +14430,59 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
                     (content  =  render_hover_for_let((doc. stmts ), host, lst));
                 }
             }
+        }
+    }
+    if (__glide_string_eq(content, "")) {
+        ImplMethodHit   mhit = find_method_anywhere((doc. stmts ), word);
+        if (((mhit. method )  !=  NULL)) {
+            Stmt*   m = (mhit. method );
+            const char*   sig = fn_signature(m);
+            if ((!__glide_string_eq((mhit. owner ), ""))) {
+                (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("impl ", (mhit. owner )), "\n"), sig));
+            }
+            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", sig), "\n```"));
+            if ((((m-> doc_comment )  !=  NULL)  &&  (!__glide_string_eq((m-> doc_comment ), "")))) {
+                (content  =  __glide_string_concat(__glide_string_concat(content, "\n\n---\n\n"), (m-> doc_comment )));
+            }
+        }
+    }
+    if (__glide_string_eq(content, "")) {
+        FieldHit   fhit = find_field_anywhere((doc. stmts ), word);
+        if ((!__glide_string_eq((fhit. name ), ""))) {
+            const char*   sig = __glide_string_concat(__glide_string_concat((fhit. owner ), "."), (fhit. name ));
+            if (((fhit. ty )  !=  NULL)) {
+                (sig  =  __glide_string_concat(__glide_string_concat(sig, ": "), type_to_string_pretty((fhit. ty ))));
+            }
+            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", sig), "\n```"));
+            if ((((fhit. doc )  !=  NULL)  &&  (!__glide_string_eq((fhit. doc ), "")))) {
+                (content  =  __glide_string_concat(__glide_string_concat(content, "\n\n---\n\n"), (fhit. doc )));
+            }
+        }
+    }
+    if (__glide_string_eq(content, "")) {
+        ImplMethodHit   mhit2 = find_macro_in_impl_anywhere((doc. stmts ), word);
+        if (((mhit2. method )  !=  NULL)) {
+            Stmt*   m = (mhit2. method );
+            const char*   sig = macro_signature(m);
+            if ((!__glide_string_eq((mhit2. owner ), ""))) {
+                (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("impl ", (mhit2. owner )), "\n"), sig));
+            }
+            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", sig), "\n```"));
+            if ((((m-> doc_comment )  !=  NULL)  &&  (!__glide_string_eq((m-> doc_comment ), "")))) {
+                (content  =  __glide_string_concat(__glide_string_concat(content, "\n\n---\n\n"), (m-> doc_comment )));
+            }
+        }
+    }
+    if (__glide_string_eq(content, "")) {
+        const char*   bd = builtin_macro_doc(word);
+        if ((!__glide_string_eq(bd, ""))) {
+            (content  =  bd);
+        }
+    }
+    if (__glide_string_eq(content, "")) {
+        const char*   kd = keyword_doc(word);
+        if ((!__glide_string_eq(kd, ""))) {
+            (content  =  kd);
         }
     }
     if (__glide_string_eq(content, "")) {
@@ -9561,6 +14651,12 @@ void   handle_definition (JsonValue*   req, LspState*   state) {
         }
     }
     if ((decl  ==  NULL)) {
+        const char*   chain_ty = chained_ctor_qualifier_before((doc. text ), line0, col0);
+        if ((!__glide_string_eq(chain_ty, ""))) {
+            (decl  =  find_method_in_impl((doc. stmts ), chain_ty, word));
+        }
+    }
+    if ((decl  ==  NULL)) {
         (decl  =  find_top_decl((doc. stmts ), word));
     }
     if ((decl  ==  NULL)) {
@@ -9589,6 +14685,9 @@ int   ci_kind_for (Stmt*   s) {
     }
     if (((s-> kind )  ==  ST_CONST)) {
         return 21;
+    }
+    if (((s-> kind )  ==  ST_MACRO_DEF)) {
+        return 2;
     }
     return 6;
 }
@@ -9721,6 +14820,66 @@ const char*   member_qualifier_before (const char*   text, int   line0, int   co
     return __glide_string_substring(text, start, (p  -  1));
 }
 
+const char*   chained_ctor_qualifier_before (const char*   text, int   line0, int   col0) {
+    int   p = cursor_before_partial(text, line0, col0);
+    if ((p  <  1)) {
+        return "";
+    }
+    if ((__glide_char_to_int(__glide_string_at(text, (p  -  1)))  !=  46)) {
+        return "";
+    }
+    int   i = (p  -  2);
+    if ((i  <  0)) {
+        return "";
+    }
+    if ((__glide_char_to_int(__glide_string_at(text, i))  !=  41)) {
+        return "";
+    }
+    int   depth = 1;
+    (i  =  (i  -  1));
+    while (((i  >=  0)  &&  (depth  >  0))) {
+        int   c = __glide_char_to_int(__glide_string_at(text, i));
+        if ((c  ==  41)) {
+            (depth  =  (depth  +  1));
+        }
+        if ((c  ==  40)) {
+            (depth  =  (depth  -  1));
+        }
+        if ((depth  ==  0)) {
+            break;
+        }
+        (i  =  (i  -  1));
+    }
+    if (((i  <  0)  ||  (depth  !=  0))) {
+        return "";
+    }
+    int   j = (i  -  1);
+    while ((j  >=  0)) {
+        int   c = __glide_char_to_int(__glide_string_at(text, j));
+        if ((((((c  >=  65)  &&  (c  <=  90))  ||  ((c  >=  97)  &&  (c  <=  122)))  ||  ((c  >=  48)  &&  (c  <=  57)))  ||  (c  ==  95))) {
+            (j  =  (j  -  1));
+        } else {
+            break;
+        }
+    }
+    if ((j  <  1)) {
+        return "";
+    }
+    if (((__glide_char_to_int(__glide_string_at(text, j))  !=  58)  ||  (__glide_char_to_int(__glide_string_at(text, (j  -  1)))  !=  58))) {
+        return "";
+    }
+    int   k = (j  -  2);
+    while ((k  >=  0)) {
+        int   c = __glide_char_to_int(__glide_string_at(text, k));
+        if ((((((c  >=  65)  &&  (c  <=  90))  ||  ((c  >=  97)  &&  (c  <=  122)))  ||  ((c  >=  48)  &&  (c  <=  57)))  ||  (c  ==  95))) {
+            (k  =  (k  -  1));
+        } else {
+            break;
+        }
+    }
+    return __glide_string_substring(text, (k  +  1), (j  -  1));
+}
+
 const char*   lookup_local_type (Vector__Stmt*   stmts, int   line0, const char*   var) {
     Stmt*   host = fn_containing(stmts, line0);
     if (((host  ==  NULL)  ||  ((host-> fn_body )  ==  NULL))) {
@@ -9795,6 +14954,24 @@ void   list_fields_for_type (Vector__Stmt*   stmts, const char*   type_name, Jso
     }
 }
 
+void   list_chan_methods_for_type (const char*   type_name, JsonValue*   items, HashMap__bool*   seen) {
+    if ((!__glide_string_eq(type_name, "chan"))) {
+        return;
+    }
+    if ((!HashMap_contains__bool(seen, "send"))) {
+        HashMap_insert__bool(seen, "send", true);
+        json_arr_push(items, completion_item("send", 2, "fn send(self: chan<T>, x: T)"));
+    }
+    if ((!HashMap_contains__bool(seen, "recv"))) {
+        HashMap_insert__bool(seen, "recv", true);
+        json_arr_push(items, completion_item("recv", 2, "fn recv(self: chan<T>) -> T"));
+    }
+    if ((!HashMap_contains__bool(seen, "close"))) {
+        HashMap_insert__bool(seen, "close", true);
+        json_arr_push(items, completion_item("close", 2, "fn close(self: chan<T>)"));
+    }
+}
+
 void   list_methods_for_type (Vector__Stmt*   stmts, const char*   type_name, JsonValue*   items, HashMap__bool*   seen, bool   want_self) {
     if ((stmts  ==  NULL)) {
         return;
@@ -9822,27 +14999,42 @@ void   list_methods_for_type (Vector__Stmt*   stmts, const char*   type_name, Js
         }
         for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
             Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
-            if (((m. kind )  !=  ST_FN)) {
-                continue;
-            }
-            bool   has_self = false;
-            if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  0))) {
-                Param   p0 = Vector_get__Param((m. fn_params ), 0);
-                if (__glide_string_eq((p0. name ), "self")) {
-                    (has_self  =  true);
+            if (((m. kind )  ==  ST_FN)) {
+                bool   has_self = false;
+                if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  0))) {
+                    Param   p0 = Vector_get__Param((m. fn_params ), 0);
+                    if (__glide_string_eq((p0. name ), "self")) {
+                        (has_self  =  true);
+                    }
+                }
+                if ((want_self  &&  (!has_self))) {
+                    continue;
+                }
+                if (((!want_self)  &&  has_self)) {
+                    continue;
+                }
+                if (HashMap_contains__bool(seen, (m. name ))) {
+                    continue;
+                }
+                HashMap_insert__bool(seen, (m. name ), true);
+                json_arr_push(items, completion_item((m. name ), 2, fn_signature((&m))));
+            } else {
+                if (((m. kind )  ==  ST_MACRO_DEF)) {
+                    bool   uses_self = body_references_self((m. then_body ));
+                    if ((want_self  &&  (!uses_self))) {
+                        continue;
+                    }
+                    if (((!want_self)  &&  uses_self)) {
+                        continue;
+                    }
+                    const char*   label = __glide_string_concat((m. name ), "!");
+                    if (HashMap_contains__bool(seen, label)) {
+                        continue;
+                    }
+                    HashMap_insert__bool(seen, label, true);
+                    json_arr_push(items, completion_item(label, 2, macro_signature((&m))));
                 }
             }
-            if ((want_self  &&  (!has_self))) {
-                continue;
-            }
-            if (((!want_self)  &&  has_self)) {
-                continue;
-            }
-            if (HashMap_contains__bool(seen, (m. name ))) {
-                continue;
-            }
-            HashMap_insert__bool(seen, (m. name ), true);
-            json_arr_push(items, completion_item((m. name ), 2, fn_signature((&m))));
         }
     }
 }
@@ -9875,7 +15067,16 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
         if ((!__glide_string_eq(var_type, ""))) {
             list_fields_for_type((doc. stmts ), var_type, items, seen);
             list_methods_for_type((doc. stmts ), var_type, items, seen, true);
+            list_chan_methods_for_type(var_type, items, seen);
         }
+        HashMap_free__bool(seen);
+        lsp_send_response(id, items);
+        return;
+    }
+    const char*   chain_ty = chained_ctor_qualifier_before((doc. text ), line0, col0);
+    if ((!__glide_string_eq(chain_ty, ""))) {
+        list_fields_for_type((doc. stmts ), chain_ty, items, seen);
+        list_methods_for_type((doc. stmts ), chain_ty, items, seen, true);
         HashMap_free__bool(seen);
         lsp_send_response(id, items);
         return;
@@ -9910,13 +15111,17 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
     if (((doc. stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
-            if ((((((s. kind )  !=  ST_FN)  &&  ((s. kind )  !=  ST_STRUCT))  &&  ((s. kind )  !=  ST_ENUM))  &&  ((s. kind )  !=  ST_CONST))) {
+            if (((((((s. kind )  !=  ST_FN)  &&  ((s. kind )  !=  ST_STRUCT))  &&  ((s. kind )  !=  ST_ENUM))  &&  ((s. kind )  !=  ST_CONST))  &&  ((s. kind )  !=  ST_MACRO_DEF))) {
                 continue;
             }
-            if (HashMap_contains__bool(seen, (s. name ))) {
+            const char*   label = (s. name );
+            if (((s. kind )  ==  ST_MACRO_DEF)) {
+                (label  =  __glide_string_concat((s. name ), "!"));
+            }
+            if (HashMap_contains__bool(seen, label)) {
                 continue;
             }
-            HashMap_insert__bool(seen, (s. name ), true);
+            HashMap_insert__bool(seen, label, true);
             const char*   detail = "";
             if (((s. kind )  ==  ST_FN)) {
                 (detail  =  fn_signature((&s)));
@@ -9932,6 +15137,10 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                             if (((s. let_ty )  !=  NULL)) {
                                 (detail  =  __glide_string_concat(__glide_string_concat(detail, ": "), type_to_string_pretty((s. let_ty ))));
                             }
+                        } else {
+                            if (((s. kind )  ==  ST_MACRO_DEF)) {
+                                (detail  =  macro_signature((&s)));
+                            }
                         }
                     }
                 }
@@ -9939,8 +15148,32 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                 (detail  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(detail, "    ["), (s. origin )), "]"));
             }
-            json_arr_push(items, completion_item((s. name ), ci_kind_for((&s)), detail));
+            json_arr_push(items, completion_item(label, ci_kind_for((&s)), detail));
         }
+    }
+    Vector__string*   builtins = Vector_new__string();
+    Vector_push__string(builtins, "println!");
+    Vector_push__string(builtins, "print!");
+    Vector_push__string(builtins, "format!");
+    for (int   i = 0; (i  <  Vector_len__string(builtins)); i++) {
+        const char*   bn = Vector_get__string(builtins, i);
+        if (HashMap_contains__bool(seen, bn)) {
+            continue;
+        }
+        HashMap_insert__bool(seen, bn, true);
+        const char*   bdetail = "builtin macro";
+        if (__glide_string_eq(bn, "println!")) {
+            (bdetail  =  "println!(args...) — print + newline");
+        } else {
+            if (__glide_string_eq(bn, "print!")) {
+                (bdetail  =  "print!(args...) — print, no newline");
+            } else {
+                if (__glide_string_eq(bn, "format!")) {
+                    (bdetail  =  "format!(\"fmt\", args...) — formatted string");
+                }
+            }
+        }
+        json_arr_push(items, completion_item(bn, 2, bdetail));
     }
     Vector__string*   kws = Vector_new__string();
     Vector_push__string(kws, "let");
@@ -10339,6 +15572,24 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
             if (stmt_uses_name((&b), name)) {
                 return true;
+            }
+        }
+    }
+    if (((s-> kind )  ==  ST_ASM)) {
+        if (((s-> asm_out_exprs )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_out_exprs ))); i++) {
+                Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
+                if (expr_uses_name((&e), name)) {
+                    return true;
+                }
+            }
+        }
+        if (((s-> asm_in_exprs )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_in_exprs ))); i++) {
+                Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
+                if (expr_uses_name((&e), name)) {
+                    return true;
+                }
             }
         }
     }
@@ -10791,6 +16042,9 @@ void   analysis_missing_return (Typer*   t, Vector__Stmt*   program) {
         if (((s. fn_ret_ty )  ==  NULL)) {
             continue;
         }
+        if ((s. is_naked )) {
+            continue;
+        }
         if ((!body_always_returns((s. fn_body )))) {
             ((t-> current_origin )  =  (s. origin ));
             Typer_warn(t, (s. line ), (s. column ), "missing-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("function `", (s. name )), "` declared `-> "), type_to_string((s. fn_ret_ty ))), "` may exit without returning a value"));
@@ -10873,6 +16127,9 @@ void   check_unused_params_fn (Typer*   t, Stmt*   fnstmt) {
         return;
     }
     if (((fnstmt-> fn_params )  ==  NULL)) {
+        return;
+    }
+    if ((fnstmt-> is_naked )) {
         return;
     }
     for (int   i = 0; (i  <  Vector_len__Param((fnstmt-> fn_params ))); i++) {
@@ -11120,7 +16377,7 @@ void   print_expr (Expr*   e, int   indent) {
     }
     print_indent(indent);
     if (((e-> kind )  ==  EX_INT)) {
-        printf("%s %d\n", "Int", (e-> int_val ));
+        printf("%s %lld\n", "Int", (e-> int_val ));
         return;
     }
     if (((e-> kind )  ==  EX_STRING)) {
@@ -11205,7 +16462,7 @@ void   print_stmt (Stmt*   s, int   indent) {
     printf("%s %d %s\n", "<stmt kind ", (s-> kind ), ">");
 }
 
-void   load_into (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded) {
+void   load_into (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags) {
     if (HashMap_contains__bool(loaded, path)) {
         return;
     }
@@ -11214,25 +16471,200 @@ void   load_into (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   lo
     if (__glide_string_eq(src, "")) {
         return;
     }
-    load_into_str(stmts, src, path, loaded);
+    load_into_str(stmts, src, path, loaded, pdiags);
 }
 
-void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded) {
+void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags) {
     Lexer*   lex = Lexer_new(src);
     Parser*   p = Parser_new(lex);
     Vector__Stmt*   parsed = parse_program(p);
+    if (((pdiags  !=  NULL)  &&  ((p-> diags )  !=  NULL))) {
+        for (int   k = 0; (k  <  Vector_len__ParseDiag((p-> diags ))); k++) {
+            ParseDiag   d = Vector_get__ParseDiag((p-> diags ), k);
+            ((d. origin )  =  origin);
+            Vector_push__ParseDiag(pdiags, d);
+        }
+    }
+    Vector__string*   auto_loads = Vector_new__string();
+    HashMap__bool*   auto_seen = HashMap_new__bool();
+    for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
+        Stmt   s = Vector_get__Stmt(parsed, i);
+        collect_path_files_in_stmt((&s), auto_loads, auto_seen);
+    }
     const char*   dir = parent_dir(origin);
+    for (int   i = 0; (i  <  Vector_len__string(auto_loads)); i++) {
+        const char*   cand = Vector_get__string(auto_loads, i);
+        const char*   resolved = resolve_import(dir, cand);
+        if (__glide_file_exists(resolved)) {
+            load_into(stmts, resolved, loaded, pdiags);
+        }
+    }
     for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
         Stmt   s = Vector_get__Stmt(parsed, i);
         if (((s. kind )  ==  ST_IMPORT)) {
             const char*   unq = strip_quotes((s. import_path ));
             const char*   resolved = resolve_import(dir, unq);
-            load_into(stmts, resolved, loaded);
+            bool   multi_seg = false;
+            for (int   k = 0; (k  <  (__glide_string_len(unq)  -  1)); k++) {
+                int   cc = __glide_char_to_int(__glide_string_at(unq, k));
+                if (((cc  ==  47)  ||  (cc  ==  92))) {
+                    (multi_seg  =  true);
+                    break;
+                }
+            }
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  (!__glide_file_exists(resolved)))) {
+                const char*   parent_path = drop_last_path_segment(unq);
+                if ((!__glide_string_eq(parent_path, ""))) {
+                    const char*   resolved_parent = resolve_import(dir, parent_path);
+                    if (__glide_file_exists(resolved_parent)) {
+                        const char*   last = last_path_segment(unq);
+                        Vector__string*   items = Vector_new__string();
+                        Vector_push__string(items, last);
+                        ((s. imported_items )  =  items);
+                        (resolved  =  resolved_parent);
+                    }
+                }
+            }
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  __glide_file_exists(resolved))) {
+                ((s. import_is_module )  =  true);
+                ((s. import_short )  =  last_path_segment(unq));
+            }
+            load_into(stmts, resolved, loaded, pdiags);
+            ((s. import_path )  =  resolved);
+            ((s. origin )  =  origin);
+            Vector_push__Stmt(stmts, s);
         } else {
             ((s. origin )  =  origin);
             Vector_push__Stmt(stmts, s);
         }
     }
+}
+
+void   collect_path_files_in_expr (Expr*   e, Vector__string*   out, HashMap__bool*   seen) {
+    if ((e  ==  NULL)) {
+        return;
+    }
+    if (((e-> kind )  ==  EX_PATH)) {
+        const char*   prefix = (e-> str_val );
+        if ((((prefix  !=  NULL)  &&  (!__glide_string_eq(prefix, "")))  &&  (!HashMap_contains__bool(seen, prefix)))) {
+            bool   multi = false;
+            for (int   k = 0; ((k  +  1)  <  __glide_string_len(prefix)); k++) {
+                if (((__glide_char_to_int(__glide_string_at(prefix, k))  ==  58)  &&  (__glide_char_to_int(__glide_string_at(prefix, (k  +  1)))  ==  58))) {
+                    (multi  =  true);
+                    break;
+                }
+            }
+            HashMap_insert__bool(seen, prefix, true);
+            if (multi) {
+                const char*   path = "";
+                int   n = __glide_string_len(prefix);
+                int   i = 0;
+                while ((i  <  n)) {
+                    if (((((i  +  1)  <  n)  &&  (__glide_char_to_int(__glide_string_at(prefix, i))  ==  58))  &&  (__glide_char_to_int(__glide_string_at(prefix, (i  +  1)))  ==  58))) {
+                        (path  =  __glide_string_concat(path, "/"));
+                        (i  =  (i  +  2));
+                    } else {
+                        (path  =  __glide_string_concat(path, __glide_string_substring(prefix, i, (i  +  1))));
+                        (i  =  (i  +  1));
+                    }
+                }
+                (path  =  __glide_string_concat(path, ".glide"));
+                Vector_push__string(out, path);
+            }
+        }
+    }
+    if (((e-> lhs )  !=  NULL)) {
+        collect_path_files_in_expr((e-> lhs ), out, seen);
+    }
+    if (((e-> rhs )  !=  NULL)) {
+        collect_path_files_in_expr((e-> rhs ), out, seen);
+    }
+    if (((e-> operand )  !=  NULL)) {
+        collect_path_files_in_expr((e-> operand ), out, seen);
+    }
+    if (((e-> args )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+            Expr   a = Vector_get__Expr((e-> args ), i);
+            collect_path_files_in_expr((&a), out, seen);
+        }
+    }
+}
+
+void   collect_path_files_in_stmt (Stmt*   s, Vector__string*   out, HashMap__bool*   seen) {
+    if ((s  ==  NULL)) {
+        return;
+    }
+    if (((s-> let_value )  !=  NULL)) {
+        collect_path_files_in_expr((s-> let_value ), out, seen);
+    }
+    if (((s-> expr_value )  !=  NULL)) {
+        collect_path_files_in_expr((s-> expr_value ), out, seen);
+    }
+    if (((s-> cond )  !=  NULL)) {
+        collect_path_files_in_expr((s-> cond ), out, seen);
+    }
+    if (((s-> then_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+            Stmt   b = Vector_get__Stmt((s-> then_body ), i);
+            collect_path_files_in_stmt((&b), out, seen);
+        }
+    }
+    if (((s-> else_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
+            Stmt   b = Vector_get__Stmt((s-> else_body ), i);
+            collect_path_files_in_stmt((&b), out, seen);
+        }
+    }
+    if (((s-> fn_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
+            Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
+            collect_path_files_in_stmt((&b), out, seen);
+        }
+    }
+    if (((s-> impl_methods )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
+            Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
+            collect_path_files_in_stmt((&m), out, seen);
+        }
+    }
+}
+
+const char*   drop_last_path_segment (const char*   path) {
+    int   n = __glide_string_len(path);
+    if ((n  <  7)) {
+        return "";
+    }
+    const char*   stem = __glide_string_substring(path, 0, (n  -  6));
+    int   last = (-1);
+    for (int   i = 0; (i  <  __glide_string_len(stem)); i++) {
+        int   c = __glide_char_to_int(__glide_string_at(stem, i));
+        if (((c  ==  47)  ||  (c  ==  92))) {
+            (last  =  i);
+        }
+    }
+    if ((last  <  0)) {
+        return "";
+    }
+    return __glide_string_concat(__glide_string_substring(stem, 0, last), ".glide");
+}
+
+const char*   last_path_segment (const char*   path) {
+    int   n = __glide_string_len(path);
+    if ((n  <  7)) {
+        return "";
+    }
+    const char*   stem = __glide_string_substring(path, 0, (n  -  6));
+    int   last = (-1);
+    for (int   i = 0; (i  <  __glide_string_len(stem)); i++) {
+        int   c = __glide_char_to_int(__glide_string_at(stem, i));
+        if (((c  ==  47)  ||  (c  ==  92))) {
+            (last  =  i);
+        }
+    }
+    if ((last  <  0)) {
+        return stem;
+    }
+    return __glide_string_substring(stem, (last  +  1), __glide_string_len(stem));
 }
 
 const char*   strip_quotes (const char*   s) {
@@ -11262,10 +16694,32 @@ const char*   parent_dir (const char*   path) {
 }
 
 const char*   resolve_import (const char*   base, const char*   ipath) {
-    if (__glide_string_eq(base, "")) {
+    const char*   from_file = ipath;
+    if ((!__glide_string_eq(base, ""))) {
+        (from_file  =  __glide_string_concat(__glide_string_concat(base, "/"), ipath));
+    }
+    if (__glide_file_exists(from_file)) {
+        return from_file;
+    }
+    if (__glide_file_exists(ipath)) {
         return ipath;
     }
-    return __glide_string_concat(__glide_string_concat(base, "/"), ipath);
+    const char*   cwd_src = __glide_string_concat("src/", ipath);
+    if (__glide_file_exists(cwd_src)) {
+        return cwd_src;
+    }
+    const char*   exe_dir = __glide_exe_dir();
+    if ((!__glide_string_eq(exe_dir, ""))) {
+        const char*   from_exe = __glide_string_concat(__glide_string_concat(exe_dir, "/"), ipath);
+        if (__glide_file_exists(from_exe)) {
+            return from_exe;
+        }
+        const char*   exe_src = __glide_string_concat(__glide_string_concat(exe_dir, "/src/"), ipath);
+        if (__glide_file_exists(exe_src)) {
+            return exe_src;
+        }
+    }
+    return from_file;
 }
 
 bool   use_color (void) {
@@ -11528,25 +16982,281 @@ void   print_usage (void) {
     printf("%s\n", "  glide lsp                  (language server on stdio)");
 }
 
-bool   parse_program_into (Vector__Stmt*   stmts, const char*   path) {
+void   merge_parse_diags (Typer*   t, Vector__ParseDiag*   pdiags) {
+    if (((t  ==  NULL)  ||  (pdiags  ==  NULL))) {
+        return;
+    }
+    for (int   i = 0; (i  <  Vector_len__ParseDiag(pdiags)); i++) {
+        ParseDiag   d = Vector_get__ParseDiag(pdiags, i);
+        DiagEntry   e = (( DiagEntry ){. line  = (d. line ), . col  = (d. col ), . end_line  = (d. line ), . end_col  = ((d. col )  +  1), . severity  = 1, . code  = "parse", . message  = (d. msg ), . origin  = (d. origin ), . tag  = 0});
+        Vector_push__DiagEntry((t-> diagnostics ), e);
+    }
+}
+
+void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
+    HashMap__bool*   seen_files = HashMap_new__bool();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))) {
+            continue;
+        }
+        if ((!HashMap_contains__bool(seen_files, (s. origin )))) {
+            HashMap_insert__bool(seen_files, (s. origin ), true);
+            const char*   mp = module_path_from_path((s. origin ));
+            if ((!__glide_string_eq(mp, ""))) {
+                HashMap_insert__bool((t-> module_full_paths ), mp, true);
+            }
+        }
+        if ((((((s. kind )  ==  ST_IMPORT)  &&  (s. import_is_module ))  &&  ((s. import_short )  !=  NULL))  &&  (!__glide_string_eq((s. import_short ), "")))) {
+            HashMap_insert__bool((t-> module_imports ), __glide_string_concat(__glide_string_concat((s. origin ), "::"), (s. import_short )), true);
+        }
+    }
+    HashMap__bool*   defines_at = HashMap_new__bool();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))) {
+            continue;
+        }
+        if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+            continue;
+        }
+        if (((((((s. kind )  ==  ST_FN)  ||  ((s. kind )  ==  ST_STRUCT))  ||  ((s. kind )  ==  ST_ENUM))  ||  ((s. kind )  ==  ST_CONST))  ||  ((s. kind )  ==  ST_MACRO_DEF))) {
+            HashMap_insert__bool(defines_at, __glide_string_concat(__glide_string_concat((s. origin ), "::"), (s. name )), true);
+        }
+        if ((((s. kind )  ==  ST_STRUCT)  &&  ((s. struct_fields )  !=  NULL))) {
+            HashMap_insert__string((t-> struct_origin ), (s. name ), (s. origin ));
+            for (int   k = 0; (k  <  Vector_len__Field((s. struct_fields ))); k++) {
+                Field   f = Vector_get__Field((s. struct_fields ), k);
+                if ((f. is_pub )) {
+                    HashMap_insert__bool((t-> field_pub ), __glide_string_concat(__glide_string_concat((s. name ), "::"), (f. name )), true);
+                }
+            }
+        }
+    }
+    Vector__string*   origins = Vector_new__string();
+    HashMap__bool*   seen = HashMap_new__bool();
+    Vector__string*   builtin_files = Vector_new__string();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        if ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))) {
+            continue;
+        }
+        if ((!HashMap_contains__bool(seen, (s. origin )))) {
+            HashMap_insert__bool(seen, (s. origin ), true);
+            Vector_push__string(origins, (s. origin ));
+            if (path_is_builtin((s. origin ))) {
+                Vector_push__string(builtin_files, (s. origin ));
+            }
+        }
+    }
+    for (int   i = 0; (i  <  Vector_len__string(origins)); i++) {
+        const char*   f = Vector_get__string(origins, i);
+        for (int   j = 0; (j  <  Vector_len__Stmt(stmts)); j++) {
+            Stmt   s = Vector_get__Stmt(stmts, j);
+            if ((((s. origin )  ==  NULL)  ||  (!__glide_string_eq((s. origin ), f)))) {
+                continue;
+            }
+            if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+                continue;
+            }
+            if (((((((s. kind )  ==  ST_FN)  ||  ((s. kind )  ==  ST_STRUCT))  ||  ((s. kind )  ==  ST_ENUM))  ||  ((s. kind )  ==  ST_CONST))  ||  ((s. kind )  ==  ST_MACRO_DEF))) {
+                HashMap_insert__bool((t-> visibility ), __glide_string_concat(__glide_string_concat(f, "::"), (s. name )), true);
+            }
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(stmts)); j++) {
+            Stmt   s = Vector_get__Stmt(stmts, j);
+            if (((s. origin )  ==  NULL)) {
+                continue;
+            }
+            if ((!path_is_builtin((s. origin )))) {
+                continue;
+            }
+            if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+                continue;
+            }
+            if (((((((s. kind )  ==  ST_FN)  ||  ((s. kind )  ==  ST_STRUCT))  ||  ((s. kind )  ==  ST_ENUM))  ||  ((s. kind )  ==  ST_CONST))  ||  ((s. kind )  ==  ST_MACRO_DEF))) {
+                HashMap_insert__bool((t-> visibility ), __glide_string_concat(__glide_string_concat(f, "::"), (s. name )), true);
+            }
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(stmts)); j++) {
+            Stmt   s = Vector_get__Stmt(stmts, j);
+            if (((s. kind )  !=  ST_IMPORT)) {
+                continue;
+            }
+            if ((((s. origin )  ==  NULL)  ||  (!__glide_string_eq((s. origin ), f)))) {
+                continue;
+            }
+            const char*   target = (s. import_path );
+            if ((target  ==  NULL)) {
+                continue;
+            }
+            if ((((s. imported_items )  !=  NULL)  &&  (Vector_len__string((s. imported_items ))  >  0))) {
+                for (int   k = 0; (k  <  Vector_len__string((s. imported_items ))); k++) {
+                    const char*   nm = Vector_get__string((s. imported_items ), k);
+                    bool   found_pub = false;
+                    bool   found_any = false;
+                    for (int   m = 0; (m  <  Vector_len__Stmt(stmts)); m++) {
+                        Stmt   ts = Vector_get__Stmt(stmts, m);
+                        if ((((ts. origin )  ==  NULL)  ||  (!__glide_string_eq((ts. origin ), target)))) {
+                            continue;
+                        }
+                        if ((((ts. name )  ==  NULL)  ||  (!__glide_string_eq((ts. name ), nm)))) {
+                            continue;
+                        }
+                        if (((((((ts. kind )  ==  ST_FN)  ||  ((ts. kind )  ==  ST_STRUCT))  ||  ((ts. kind )  ==  ST_ENUM))  ||  ((ts. kind )  ==  ST_CONST))  ||  ((ts. kind )  ==  ST_MACRO_DEF))) {
+                            (found_any  =  true);
+                            if ((ts. is_pub )) {
+                                (found_pub  =  true);
+                                break;
+                            }
+                        }
+                    }
+                    if (found_pub) {
+                        HashMap_insert__bool((t-> visibility ), __glide_string_concat(__glide_string_concat(f, "::"), nm), true);
+                    } else {
+                        if (found_any) {
+                            Typer_push_diag(t, (s. line ), (s. column ), 1, "private-import", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", nm), "` exists in `"), target), "` but is not `pub`"));
+                        } else {
+                            Typer_push_diag(t, (s. line ), (s. column ), 1, "missing-import", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", nm), "` is not declared in `"), target), "`"));
+                        }
+                    }
+                }
+            } else {
+                for (int   k = 0; (k  <  Vector_len__Stmt(stmts)); k++) {
+                    Stmt   ts = Vector_get__Stmt(stmts, k);
+                    if ((((ts. origin )  ==  NULL)  ||  (!__glide_string_eq((ts. origin ), target)))) {
+                        continue;
+                    }
+                    if ((((ts. name )  ==  NULL)  ||  __glide_string_eq((ts. name ), ""))) {
+                        continue;
+                    }
+                    if ((!(ts. is_pub ))) {
+                        continue;
+                    }
+                    if (((((((ts. kind )  ==  ST_FN)  ||  ((ts. kind )  ==  ST_STRUCT))  ||  ((ts. kind )  ==  ST_ENUM))  ||  ((ts. kind )  ==  ST_CONST))  ||  ((ts. kind )  ==  ST_MACRO_DEF))) {
+                        HashMap_insert__bool((t-> visibility ), __glide_string_concat(__glide_string_concat(f, "::"), (ts. name )), true);
+                    }
+                }
+            }
+        }
+    }
+}
+
+const char*   module_path_from_path (const char*   path) {
+    if (((path  ==  NULL)  ||  __glide_string_eq(path, ""))) {
+        return "";
+    }
+    const char*   s = path;
+    int   n = __glide_string_len(s);
+    if ((n  >  6)) {
+        const char*   tail = __glide_string_substring(s, (n  -  6), n);
+        if (__glide_string_eq(tail, ".glide")) {
+            (s  =  __glide_string_substring(s, 0, (n  -  6)));
+        }
+    }
+    int   len0 = __glide_string_len(s);
+    if ((len0  >=  4)) {
+        int   c0 = __glide_char_to_int(__glide_string_at(s, 0));
+        int   c1 = __glide_char_to_int(__glide_string_at(s, 1));
+        int   c2 = __glide_char_to_int(__glide_string_at(s, 2));
+        int   c3 = __glide_char_to_int(__glide_string_at(s, 3));
+        if (((((c0  ==  115)  &&  (c1  ==  114))  &&  (c2  ==  99))  &&  ((c3  ==  47)  ||  (c3  ==  92)))) {
+            (s  =  __glide_string_substring(s, 4, len0));
+        }
+    }
+    const char*   out = "";
+    int   i = 0;
+    int   len = __glide_string_len(s);
+    while ((i  <  len)) {
+        int   c = __glide_char_to_int(__glide_string_at(s, i));
+        if (((c  ==  47)  ||  (c  ==  92))) {
+            (out  =  __glide_string_concat(out, "::"));
+        } else {
+            (out  =  __glide_string_concat(out, __glide_string_substring(s, i, (i  +  1))));
+        }
+        (i  =  (i  +  1));
+    }
+    return out;
+}
+
+bool   path_is_builtin (const char*   path) {
+    if ((path  ==  NULL)) {
+        return false;
+    }
+    const char*   needle = "src/builtins/";
+    int   n = __glide_string_len(path);
+    int   m = __glide_string_len(needle);
+    if ((m  >  n)) {
+        return false;
+    }
+    for (int   i = 0; ((i  +  m)  <=  n); i++) {
+        bool   matched = true;
+        for (int   j = 0; (j  <  m); j++) {
+            int   c = __glide_char_to_int(__glide_string_at(path, (i  +  j)));
+            int   d = __glide_char_to_int(__glide_string_at(needle, j));
+            if ((c  ==  92)) {
+                (c  =  47);
+            }
+            if ((d  ==  92)) {
+                (d  =  47);
+            }
+            if ((c  !=  d)) {
+                (matched  =  false);
+                break;
+            }
+        }
+        if (matched) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags) {
+    const char*   listing = __glide_list_dir(dir, ".glide");
+    if (__glide_string_eq(listing, "")) {
+        return;
+    }
+    const char*   builtins = __glide_string_concat(dir, "/builtins.glide");
+    if ((!__glide_string_eq(read_file(builtins), ""))) {
+        load_into(stmts, builtins, loaded, pdiags);
+    }
+    Vector__string*   names = string_split(listing, "\n");
+    for (int   i = 0; (i  <  Vector_len__string(names)); i++) {
+        const char*   nm = Vector_get__string(names, i);
+        if (__glide_string_eq(nm, "")) {
+            continue;
+        }
+        if (__glide_string_eq(nm, "builtins.glide")) {
+            continue;
+        }
+        load_into(stmts, __glide_string_concat(__glide_string_concat(dir, "/"), nm), loaded, pdiags);
+    }
+}
+
+bool   parse_program_into (Vector__Stmt*   stmts, const char*   path, Vector__ParseDiag*   pdiags) {
     const char*   src = read_file(path);
     if (__glide_string_eq(src, "")) {
         printf("%s %s\n", "could not read or empty file:", path);
         return false;
     }
     HashMap__bool*   loaded = HashMap_new__bool();
-    const char*   v_path = "stdlib/vector.glide";
-    const char*   h_path = "stdlib/hashmap.glide";
-    if (__glide_string_eq(read_file(v_path), "")) {
+    const char*   builtins_dir = "src/builtins";
+    if (__glide_string_eq(read_file("src/builtins/builtins.glide"), "")) {
         const char*   exe_dir = __glide_exe_dir();
         if ((!__glide_string_eq(exe_dir, ""))) {
-            (v_path  =  __glide_string_concat(exe_dir, "/stdlib/vector.glide"));
-            (h_path  =  __glide_string_concat(exe_dir, "/stdlib/hashmap.glide"));
+            (builtins_dir  =  __glide_string_concat(exe_dir, "/src/builtins"));
         }
     }
-    load_into(stmts, v_path, loaded);
-    load_into(stmts, h_path, loaded);
-    load_into_str(stmts, src, path, loaded);
+    load_builtins_dir(stmts, builtins_dir, loaded, pdiags);
+    load_into_str(stmts, src, path, loaded, pdiags);
+    Vector__Stmt*   expanded = expand_macros(stmts);
+    Vector__Stmt*   lowered = lower_program(expanded);
+    Vector_clear__Stmt(stmts);
+    for (int   i = 0; (i  <  Vector_len__Stmt(lowered)); i++) {
+        Stmt   s = Vector_get__Stmt(lowered, i);
+        Vector_push__Stmt(stmts, s);
+    }
     return true;
 }
 
@@ -11570,10 +17280,14 @@ const char*   pick_cc (void) {
 
 int   run_build (const char*   src_path, const char*   out_path, const char*   target, bool   then_run) {
     Vector__Stmt*   stmts = Vector_new__Stmt();
-    if ((!parse_program_into(stmts, src_path))) {
+    Vector__ParseDiag*   pdiags = Vector_new__ParseDiag();
+    if ((!parse_program_into(stmts, src_path, pdiags))) {
         return 1;
     }
     Typer*   t = Typer_new();
+    merge_parse_diags(t, pdiags);
+    build_visibility(t, stmts);
+    ((t-> enforce_visibility )  =  true);
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
     const char*   src_text = read_file(src_path);
@@ -11613,6 +17327,9 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " \""), tmp_c), "\""));
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " -o \""), out_path), "\""));
     (cmd  =  __glide_string_concat(cmd, " -O2 -w -lpthread -lm"));
+    if ((__glide_is_windows()  !=  0)) {
+        (cmd  =  __glide_string_concat(cmd, " -lws2_32"));
+    }
     if ((!__glide_string_eq(target, ""))) {
         (cmd  =  __glide_string_concat(__glide_string_concat(cmd, " --target="), target));
     }
@@ -11639,8 +17356,7 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
     return 0;
 }
 
-int main(int __glide_main_argc, char** __glide_main_argv) {
-    __glide_args_init(__glide_main_argc, __glide_main_argv);
+int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
     int   argc = args_count();
     if ((argc  <  2)) {
         print_usage();
@@ -11744,11 +17460,15 @@ int main(int __glide_main_argc, char** __glide_main_argv) {
         return 0;
     }
     Vector__Stmt*   stmts = Vector_new__Stmt();
-    if ((!parse_program_into(stmts, src_path))) {
+    Vector__ParseDiag*   pdiags = Vector_new__ParseDiag();
+    if ((!parse_program_into(stmts, src_path, pdiags))) {
         return 1;
     }
     if ((mode  ==  MODE_CHECK)) {
         Typer*   t = Typer_new();
+        merge_parse_diags(t, pdiags);
+        build_visibility(t, stmts);
+        ((t-> enforce_visibility )  =  true);
         check_program(t, stmts);
         run_extra_analyses(t, stmts);
         const char*   src_text = read_file(src_path);
@@ -11794,6 +17514,14 @@ int main(int __glide_main_argc, char** __glide_main_argv) {
     return 0;
 }
 
+int main(int argc, char** argv) {
+    __glide_args_init(argc, argv);
+    __glide_sched_init();
+    int __glide_rc = __glide_user_main(argc, argv);
+    __glide_sched_shutdown();
+    return __glide_rc;
+}
+
 int   HashMap_hash_key__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     int   h = 0;
     int   n = __glide_string_len(k);
@@ -11806,19 +17534,7 @@ int   HashMap_hash_key__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     return h;
 }
 
-int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k) {
-    int   h = 0;
-    int   n = __glide_string_len(k);
-    for (int   i = 0; (i  <  n); i++) {
-        (h  =  ((h  *  31)  +  __glide_char_to_int(__glide_string_at(k, i))));
-    }
-    if ((h  <  0)) {
-        (h  =  (-h));
-    }
-    return h;
-}
-
-int   HashMap_hash_key__bool (HashMap__bool*   self, const char*   k) {
+int   HashMap_hash_key__string (HashMap__string*   self, const char*   k) {
     int   h = 0;
     int   n = __glide_string_len(k);
     for (int   i = 0; (i  <  n); i++) {
@@ -11843,6 +17559,30 @@ int   HashMap_hash_key__FnSig (HashMap__FnSig*   self, const char*   k) {
 }
 
 int   HashMap_hash_key__Type (HashMap__Type*   self, const char*   k) {
+    int   h = 0;
+    int   n = __glide_string_len(k);
+    for (int   i = 0; (i  <  n); i++) {
+        (h  =  ((h  *  31)  +  __glide_char_to_int(__glide_string_at(k, i))));
+    }
+    if ((h  <  0)) {
+        (h  =  (-h));
+    }
+    return h;
+}
+
+int   HashMap_hash_key__bool (HashMap__bool*   self, const char*   k) {
+    int   h = 0;
+    int   n = __glide_string_len(k);
+    for (int   i = 0; (i  <  n); i++) {
+        (h  =  ((h  *  31)  +  __glide_char_to_int(__glide_string_at(k, i))));
+    }
+    if ((h  <  0)) {
+        (h  =  (-h));
+    }
+    return h;
+}
+
+int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k) {
     int   h = 0;
     int   n = __glide_string_len(k);
     for (int   i = 0; (i  <  n); i++) {
@@ -11894,13 +17634,13 @@ int   HashMap_slot__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     return i;
 }
 
-void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
+void   HashMap_resize__string (HashMap__string*   self, int   new_cap) {
     const char**   old_keys = (self-> keys );
-    Stmt*   old_values = (self-> values );
+    const char**   old_values = (self-> values );
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( Stmt* )malloc((new_cap  *  sizeof( Stmt )))));
+    ((self-> values )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
     ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -11909,7 +17649,7 @@ void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
     }
     for (int   i = 0; (i  <  old_cap); i++) {
         if (old_occupied[i]) {
-            HashMap_insert__Stmt(self, old_keys[i], old_values[i]);
+            HashMap_insert__string(self, old_keys[i], old_values[i]);
         }
     }
     if ((old_cap  >  0)) {
@@ -11919,12 +17659,12 @@ void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
     }
 }
 
-int   HashMap_slot__Stmt (HashMap__Stmt*   self, const char*   k) {
+int   HashMap_slot__string (HashMap__string*   self, const char*   k) {
     if (((self-> cap )  ==  0)) {
         return (-1);
     }
     int   mask = ((self-> cap )  -  1);
-    int   i = (HashMap_hash_key__Stmt(self, k)  &  mask);
+    int   i = (HashMap_hash_key__string(self, k)  &  mask);
     while ((self-> occupied )[i]) {
         if (__glide_string_eq((self-> keys )[i], k)) {
             return i;
@@ -11932,46 +17672,6 @@ int   HashMap_slot__Stmt (HashMap__Stmt*   self, const char*   k) {
         (i  =  ((i  +  1)  &  mask));
     }
     return i;
-}
-
-int   HashMap_slot__bool (HashMap__bool*   self, const char*   k) {
-    if (((self-> cap )  ==  0)) {
-        return (-1);
-    }
-    int   mask = ((self-> cap )  -  1);
-    int   i = (HashMap_hash_key__bool(self, k)  &  mask);
-    while ((self-> occupied )[i]) {
-        if (__glide_string_eq((self-> keys )[i], k)) {
-            return i;
-        }
-        (i  =  ((i  +  1)  &  mask));
-    }
-    return i;
-}
-
-void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap) {
-    const char**   old_keys = (self-> keys );
-    bool*   old_values = (self-> values );
-    bool*   old_occupied = (self-> occupied );
-    int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
-    ((self-> cap )  =  new_cap);
-    ((self-> len )  =  0);
-    for (int   i = 0; (i  <  new_cap); i++) {
-        ((self-> occupied )[i]  =  false);
-    }
-    for (int   i = 0; (i  <  old_cap); i++) {
-        if (old_occupied[i]) {
-            HashMap_insert__bool(self, old_keys[i], old_values[i]);
-        }
-    }
-    if ((old_cap  >  0)) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
-    }
 }
 
 int   HashMap_slot__FnSig (HashMap__FnSig*   self, const char*   k) {
@@ -12045,6 +17745,86 @@ void   HashMap_resize__Type (HashMap__Type*   self, int   new_cap) {
     for (int   i = 0; (i  <  old_cap); i++) {
         if (old_occupied[i]) {
             HashMap_insert__Type(self, old_keys[i], old_values[i]);
+        }
+    }
+    if ((old_cap  >  0)) {
+        free((( void* )old_keys));
+        free((( void* )old_values));
+        free((( void* )old_occupied));
+    }
+}
+
+int   HashMap_slot__bool (HashMap__bool*   self, const char*   k) {
+    if (((self-> cap )  ==  0)) {
+        return (-1);
+    }
+    int   mask = ((self-> cap )  -  1);
+    int   i = (HashMap_hash_key__bool(self, k)  &  mask);
+    while ((self-> occupied )[i]) {
+        if (__glide_string_eq((self-> keys )[i], k)) {
+            return i;
+        }
+        (i  =  ((i  +  1)  &  mask));
+    }
+    return i;
+}
+
+void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap) {
+    const char**   old_keys = (self-> keys );
+    bool*   old_values = (self-> values );
+    bool*   old_occupied = (self-> occupied );
+    int   old_cap = (self-> cap );
+    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+    ((self-> values )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    ((self-> cap )  =  new_cap);
+    ((self-> len )  =  0);
+    for (int   i = 0; (i  <  new_cap); i++) {
+        ((self-> occupied )[i]  =  false);
+    }
+    for (int   i = 0; (i  <  old_cap); i++) {
+        if (old_occupied[i]) {
+            HashMap_insert__bool(self, old_keys[i], old_values[i]);
+        }
+    }
+    if ((old_cap  >  0)) {
+        free((( void* )old_keys));
+        free((( void* )old_values));
+        free((( void* )old_occupied));
+    }
+}
+
+int   HashMap_slot__Stmt (HashMap__Stmt*   self, const char*   k) {
+    if (((self-> cap )  ==  0)) {
+        return (-1);
+    }
+    int   mask = ((self-> cap )  -  1);
+    int   i = (HashMap_hash_key__Stmt(self, k)  &  mask);
+    while ((self-> occupied )[i]) {
+        if (__glide_string_eq((self-> keys )[i], k)) {
+            return i;
+        }
+        (i  =  ((i  +  1)  &  mask));
+    }
+    return i;
+}
+
+void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
+    const char**   old_keys = (self-> keys );
+    Stmt*   old_values = (self-> values );
+    bool*   old_occupied = (self-> occupied );
+    int   old_cap = (self-> cap );
+    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+    ((self-> values )  =  (( Stmt* )malloc((new_cap  *  sizeof( Stmt )))));
+    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    ((self-> cap )  =  new_cap);
+    ((self-> len )  =  0);
+    for (int   i = 0; (i  <  new_cap); i++) {
+        ((self-> occupied )[i]  =  false);
+    }
+    for (int   i = 0; (i  <  old_cap); i++) {
+        if (old_occupied[i]) {
+            HashMap_insert__Stmt(self, old_keys[i], old_values[i]);
         }
     }
     if ((old_cap  >  0)) {
@@ -12154,6 +17934,10 @@ bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
 }
 
+void   Vector_clear__Stmt (Vector__Stmt*   self) {
+    ((self-> len )  =  0);
+}
+
 HashMap__LspDoc*   HashMap_new__LspDoc (void) {
     HashMap__LspDoc*   m = (( HashMap__LspDoc* )malloc(sizeof( HashMap__LspDoc )));
     ((m-> keys )  =  NULL);
@@ -12213,33 +17997,21 @@ int   Vector_len__FnMonoEntry (Vector__FnMonoEntry*   self) {
     return (self-> len );
 }
 
-void   HashMap_insert__Stmt (HashMap__Stmt*   self, const char*   k, Stmt   v) {
+void   HashMap_insert__string (HashMap__string*   self, const char*   k, const char*   v) {
     if (((self-> cap )  ==  0)) {
-        HashMap_resize__Stmt(self, 8);
+        HashMap_resize__string(self, 8);
     } else {
         if ((((self-> len )  *  4)  >=  ((self-> cap )  *  3))) {
-            HashMap_resize__Stmt(self, ((self-> cap )  *  2));
+            HashMap_resize__string(self, ((self-> cap )  *  2));
         }
     }
-    int   i = HashMap_slot__Stmt(self, k);
+    int   i = HashMap_slot__string(self, k);
     if ((!(self-> occupied )[i])) {
         ((self-> occupied )[i]  =  true);
         ((self-> len )  =  ((self-> len )  +  1));
     }
     ((self-> keys )[i]  =  k);
     ((self-> values )[i]  =  v);
-}
-
-EnumVariant   Vector_get__EnumVariant (Vector__EnumVariant*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__EnumVariant (Vector__EnumVariant*   self) {
-    return (self-> len );
-}
-
-void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x) {
-    ((self-> data )[i]  =  x);
 }
 
 MatchArm   Vector_get__MatchArm (Vector__MatchArm*   self, int   i) {
@@ -12255,6 +18027,14 @@ AnonFn   Vector_get__AnonFn (Vector__AnonFn*   self, int   i) {
 }
 
 int   Vector_len__AnonFn (Vector__AnonFn*   self) {
+    return (self-> len );
+}
+
+EnumVariant   Vector_get__EnumVariant (Vector__EnumVariant*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__EnumVariant (Vector__EnumVariant*   self) {
     return (self-> len );
 }
 
@@ -12315,37 +18095,6 @@ Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void) {
     return v;
 }
 
-HashMap__Stmt*   HashMap_new__Stmt (void) {
-    HashMap__Stmt*   m = (( HashMap__Stmt* )malloc(sizeof( HashMap__Stmt )));
-    ((m-> keys )  =  NULL);
-    ((m-> values )  =  NULL);
-    ((m-> occupied )  =  NULL);
-    ((m-> len )  =  0);
-    ((m-> cap )  =  0);
-    return m;
-}
-
-Stmt   HashMap_get__Stmt (HashMap__Stmt*   self, const char*   k) {
-    int   i = HashMap_slot__Stmt(self, k);
-    return (self-> values )[i];
-}
-
-bool   HashMap_contains__Stmt (HashMap__Stmt*   self, const char*   k) {
-    int   i = HashMap_slot__Stmt(self, k);
-    if ((i  <  0)) {
-        return false;
-    }
-    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
-}
-
-Type   Vector_get__Type (Vector__Type*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Type (Vector__Type*   self) {
-    return (self-> len );
-}
-
 void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
@@ -12364,6 +18113,19 @@ void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x) {
     }
     ((self-> data )[(self-> len )]  =  x);
     ((self-> len )  =  ((self-> len )  +  1));
+}
+
+const char*   HashMap_get__string (HashMap__string*   self, const char*   k) {
+    int   i = HashMap_slot__string(self, k);
+    return (self-> values )[i];
+}
+
+bool   HashMap_contains__string (HashMap__string*   self, const char*   k) {
+    int   i = HashMap_slot__string(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
 }
 
 FnSig   HashMap_get__FnSig (HashMap__FnSig*   self, const char*   k) {
@@ -12392,32 +18154,8 @@ bool   HashMap_contains__Type (HashMap__Type*   self, const char*   k) {
     return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
 }
 
-bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k) {
-    int   i = HashMap_slot__bool(self, k);
-    if ((i  <  0)) {
-        return false;
-    }
-    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
-}
-
-Param   Vector_get__Param (Vector__Param*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Param (Vector__Param*   self) {
-    return (self-> len );
-}
-
 bool   Vector_get__bool (Vector__bool*   self, int   i) {
     return (self-> data )[i];
-}
-
-const char*   Vector_get__string (Vector__string*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__string (Vector__string*   self) {
-    return (self-> len );
 }
 
 void   Vector_push__bool (Vector__bool*   self, bool   x) {
@@ -12438,14 +18176,6 @@ void   Vector_push__bool (Vector__bool*   self, bool   x) {
     }
     ((self-> data )[(self-> len )]  =  x);
     ((self-> len )  =  ((self-> len )  +  1));
-}
-
-Expr   Vector_get__Expr (Vector__Expr*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Expr (Vector__Expr*   self) {
-    return (self-> len );
 }
 
 Vector__bool*   Vector_new__bool (void) {
@@ -12495,23 +18225,6 @@ Field   Vector_get__Field (Vector__Field*   self, int   i) {
 
 int   Vector_len__Field (Vector__Field*   self) {
     return (self-> len );
-}
-
-void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v) {
-    if (((self-> cap )  ==  0)) {
-        HashMap_resize__bool(self, 8);
-    } else {
-        if ((((self-> len )  *  4)  >=  ((self-> cap )  *  3))) {
-            HashMap_resize__bool(self, ((self-> cap )  *  2));
-        }
-    }
-    int   i = HashMap_slot__bool(self, k);
-    if ((!(self-> occupied )[i])) {
-        ((self-> occupied )[i]  =  true);
-        ((self-> len )  =  ((self-> len )  +  1));
-    }
-    ((self-> keys )[i]  =  k);
-    ((self-> values )[i]  =  v);
 }
 
 void   HashMap_insert__FnSig (HashMap__FnSig*   self, const char*   k, FnSig   v) {
@@ -12609,6 +18322,16 @@ void   HashMap_free__FnSig (HashMap__FnSig*   self) {
     free((( void* )self));
 }
 
+HashMap__string*   HashMap_new__string (void) {
+    HashMap__string*   m = (( HashMap__string* )malloc(sizeof( HashMap__string )));
+    ((m-> keys )  =  NULL);
+    ((m-> values )  =  NULL);
+    ((m-> occupied )  =  NULL);
+    ((m-> len )  =  0);
+    ((m-> cap )  =  0);
+    return m;
+}
+
 Vector__DiagEntry*   Vector_new__DiagEntry (void) {
     Vector__DiagEntry*   v = (( Vector__DiagEntry* )malloc(sizeof( Vector__DiagEntry )));
     ((v-> data )  =  NULL);
@@ -12635,16 +18358,6 @@ HashMap__Type*   HashMap_new__Type (void) {
     return m;
 }
 
-HashMap__bool*   HashMap_new__bool (void) {
-    HashMap__bool*   m = (( HashMap__bool* )malloc(sizeof( HashMap__bool )));
-    ((m-> keys )  =  NULL);
-    ((m-> values )  =  NULL);
-    ((m-> occupied )  =  NULL);
-    ((m-> len )  =  0);
-    ((m-> cap )  =  0);
-    return m;
-}
-
 HashMap__FnSig*   HashMap_new__FnSig (void) {
     HashMap__FnSig*   m = (( HashMap__FnSig* )malloc(sizeof( HashMap__FnSig )));
     ((m-> keys )  =  NULL);
@@ -12655,13 +18368,64 @@ HashMap__FnSig*   HashMap_new__FnSig (void) {
     return m;
 }
 
-void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
+Type   Vector_get__Type (Vector__Type*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Type (Vector__Type*   self) {
+    return (self-> len );
+}
+
+bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k) {
+    int   i = HashMap_slot__bool(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
+}
+
+void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v) {
+    if (((self-> cap )  ==  0)) {
+        HashMap_resize__bool(self, 8);
+    } else {
+        if ((((self-> len )  *  4)  >=  ((self-> cap )  *  3))) {
+            HashMap_resize__bool(self, ((self-> cap )  *  2));
+        }
+    }
+    int   i = HashMap_slot__bool(self, k);
+    if ((!(self-> occupied )[i])) {
+        ((self-> occupied )[i]  =  true);
+        ((self-> len )  =  ((self-> len )  +  1));
+    }
+    ((self-> keys )[i]  =  k);
+    ((self-> values )[i]  =  v);
+}
+
+HashMap__bool*   HashMap_new__bool (void) {
+    HashMap__bool*   m = (( HashMap__bool* )malloc(sizeof( HashMap__bool )));
+    ((m-> keys )  =  NULL);
+    ((m-> values )  =  NULL);
+    ((m-> occupied )  =  NULL);
+    ((m-> len )  =  0);
+    ((m-> cap )  =  0);
+    return m;
+}
+
+MacroBinding   Vector_get__MacroBinding (Vector__MacroBinding*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__MacroBinding (Vector__MacroBinding*   self) {
+    return (self-> len );
+}
+
+void   Vector_push__MacroBinding (Vector__MacroBinding*   self, MacroBinding   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        Expr*   new_data = (( Expr* )malloc((new_cap  *  sizeof( Expr ))));
+        MacroBinding*   new_data = (( MacroBinding* )malloc((new_cap  *  sizeof( MacroBinding ))));
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
@@ -12675,12 +18439,112 @@ void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
-Vector__Expr*   Vector_new__Expr (void) {
-    Vector__Expr*   v = (( Vector__Expr* )malloc(sizeof( Vector__Expr )));
+MacroParam   Vector_get__MacroParam (Vector__MacroParam*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__MacroParam (Vector__MacroParam*   self) {
+    return (self-> len );
+}
+
+Vector__MacroBinding*   Vector_new__MacroBinding (void) {
+    Vector__MacroBinding*   v = (( Vector__MacroBinding* )malloc(sizeof( Vector__MacroBinding )));
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
     return v;
+}
+
+Stmt   HashMap_get__Stmt (HashMap__Stmt*   self, const char*   k) {
+    int   i = HashMap_slot__Stmt(self, k);
+    return (self-> values )[i];
+}
+
+bool   HashMap_contains__Stmt (HashMap__Stmt*   self, const char*   k) {
+    int   i = HashMap_slot__Stmt(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
+}
+
+TypeMacro   Vector_get__TypeMacro (Vector__TypeMacro*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__TypeMacro (Vector__TypeMacro*   self) {
+    return (self-> len );
+}
+
+void   Vector_push__TypeMacro (Vector__TypeMacro*   self, TypeMacro   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        TypeMacro*   new_data = (( TypeMacro* )malloc((new_cap  *  sizeof( TypeMacro ))));
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((self-> cap )  >  0)) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+void   HashMap_insert__Stmt (HashMap__Stmt*   self, const char*   k, Stmt   v) {
+    if (((self-> cap )  ==  0)) {
+        HashMap_resize__Stmt(self, 8);
+    } else {
+        if ((((self-> len )  *  4)  >=  ((self-> cap )  *  3))) {
+            HashMap_resize__Stmt(self, ((self-> cap )  *  2));
+        }
+    }
+    int   i = HashMap_slot__Stmt(self, k);
+    if ((!(self-> occupied )[i])) {
+        ((self-> occupied )[i]  =  true);
+        ((self-> len )  =  ((self-> len )  +  1));
+    }
+    ((self-> keys )[i]  =  k);
+    ((self-> values )[i]  =  v);
+}
+
+Vector__TypeMacro*   Vector_new__TypeMacro (void) {
+    Vector__TypeMacro*   v = (( Vector__TypeMacro* )malloc(sizeof( Vector__TypeMacro )));
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    return v;
+}
+
+HashMap__Stmt*   HashMap_new__Stmt (void) {
+    HashMap__Stmt*   m = (( HashMap__Stmt* )malloc(sizeof( HashMap__Stmt )));
+    ((m-> keys )  =  NULL);
+    ((m-> values )  =  NULL);
+    ((m-> occupied )  =  NULL);
+    ((m-> len )  =  0);
+    ((m-> cap )  =  0);
+    return m;
+}
+
+Expr   Vector_get__Expr (Vector__Expr*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Expr (Vector__Expr*   self) {
+    return (self-> len );
+}
+
+ParseDiag   Vector_get__ParseDiag (Vector__ParseDiag*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__ParseDiag (Vector__ParseDiag*   self) {
+    return (self-> len );
 }
 
 void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x) {
@@ -12703,20 +18567,64 @@ void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x) {
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
-Stmt   Vector_get__Stmt (Vector__Stmt*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Stmt (Vector__Stmt*   self) {
-    return (self-> len );
-}
-
 Vector__MatchArm*   Vector_new__MatchArm (void) {
     Vector__MatchArm*   v = (( Vector__MatchArm* )malloc(sizeof( Vector__MatchArm )));
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
     return v;
+}
+
+void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        Expr*   new_data = (( Expr* )malloc((new_cap  *  sizeof( Expr ))));
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((self-> cap )  >  0)) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+const char*   Vector_get__string (Vector__string*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__string (Vector__string*   self) {
+    return (self-> len );
+}
+
+void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x) {
+    ((self-> data )[i]  =  x);
+}
+
+void   Vector_set__Param (Vector__Param*   self, int   i, Param   x) {
+    ((self-> data )[i]  =  x);
+}
+
+Param   Vector_get__Param (Vector__Param*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Param (Vector__Param*   self) {
+    return (self-> len );
+}
+
+Stmt   Vector_get__Stmt (Vector__Stmt*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Stmt (Vector__Stmt*   self) {
+    return (self-> len );
 }
 
 void   Vector_push__EnumVariant (Vector__EnumVariant*   self, EnumVariant   x) {
@@ -12803,34 +18711,6 @@ Vector__Field*   Vector_new__Field (void) {
     return v;
 }
 
-void   Vector_push__string (Vector__string*   self, const char*   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        const char**   new_data = (( const char** )malloc((new_cap  *  sizeof( const char* ))));
-        for (int   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((self-> cap )  >  0)) {
-            free((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
-}
-
-Vector__string*   Vector_new__string (void) {
-    Vector__string*   v = (( Vector__string* )malloc(sizeof( Vector__string )));
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    return v;
-}
-
 void   Vector_push__Param (Vector__Param*   self, Param   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
@@ -12853,6 +18733,34 @@ void   Vector_push__Param (Vector__Param*   self, Param   x) {
 
 Vector__Param*   Vector_new__Param (void) {
     Vector__Param*   v = (( Vector__Param* )malloc(sizeof( Vector__Param )));
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    return v;
+}
+
+void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        MacroParam*   new_data = (( MacroParam* )malloc((new_cap  *  sizeof( MacroParam ))));
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((self-> cap )  >  0)) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__MacroParam*   Vector_new__MacroParam (void) {
+    Vector__MacroParam*   v = (( Vector__MacroParam* )malloc(sizeof( Vector__MacroParam )));
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
@@ -12909,6 +18817,42 @@ void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x) {
 
 Vector__ParseDiag*   Vector_new__ParseDiag (void) {
     Vector__ParseDiag*   v = (( Vector__ParseDiag* )malloc(sizeof( Vector__ParseDiag )));
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    return v;
+}
+
+Vector__Expr*   Vector_new__Expr (void) {
+    Vector__Expr*   v = (( Vector__Expr* )malloc(sizeof( Vector__Expr )));
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    return v;
+}
+
+void   Vector_push__string (Vector__string*   self, const char*   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        const char**   new_data = (( const char** )malloc((new_cap  *  sizeof( const char* ))));
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((self-> cap )  >  0)) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__string*   Vector_new__string (void) {
+    Vector__string*   v = (( Vector__string* )malloc(sizeof( Vector__string )));
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
