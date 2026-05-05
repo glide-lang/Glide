@@ -3,17 +3,32 @@
 // Started by `glide lsp`. The transport reads `Content-Length`-framed
 // messages, decodes them via json.glide, and dispatches by method name.
 //
-// Implemented:
+// Lifecycle:
 //   initialize / initialized / shutdown / exit
 //   textDocument/didOpen, didChange, didClose
-//   textDocument/hover               — keyword + builtin docs
-//   textDocument/completion          — `c.send/recv/close` on chans, etc.
-//   publishDiagnostics               — typer errors + warnings: null
-//                                      safety, unused-var, arena-not-freed,
-//                                      missing trait method, unsatisfied
-//                                      bound, type mismatch.
 //
-// Coming next sessions: definition, references, rename.
+// Lookups:
+//   textDocument/hover               — keyword + builtin docs, doc-comment
+//                                       extraction for user fns/structs.
+//   textDocument/definition          — jump to fn / struct / impl method.
+//                                       Resolves Vector::new, c.send, chained
+//                                       inline ctors, qualified paths.
+//   textDocument/references          — every read/write of the symbol.
+//   textDocument/documentHighlight   — same as references, kind-tagged.
+//   textDocument/documentSymbol      — outline tree.
+//   textDocument/completion          — keywords, builtins, locals, fields,
+//                                       chan ops on `c.`, type::method.
+//
+// Edits:
+//   textDocument/rename              — workspace edit across collected uses.
+//   textDocument/prepareRename       — validates the cursor target.
+//   textDocument/formatting          — round-trip through fmt.glide.
+//
+// Diagnostics:
+//   publishDiagnostics               — typer errors + warnings: null safety,
+//                                       unused-var, arena-not-freed, missing
+//                                       trait method, unsatisfied bound,
+//                                       type mismatch, trait-method-mismatch.
 
 import stdlib::hashmap::*;
 import ast;
@@ -132,7 +147,9 @@ fn handle_initialize(req: *JsonValue) {
     json_obj_set(caps, "definitionProvider", json_bool(true));
     json_obj_set(caps, "referencesProvider", json_bool(true));
     json_obj_set(caps, "documentHighlightProvider", json_bool(true));
-    json_obj_set(caps, "renameProvider", json_bool(true));
+    let rename_caps: *JsonValue = json_object();
+    json_obj_set(rename_caps, "prepareProvider", json_bool(true));
+    json_obj_set(caps, "renameProvider", rename_caps);
     json_obj_set(caps, "documentFormattingProvider", json_bool(true));
     let comp: *JsonValue = json_object();
     let trig: *JsonValue = json_array();
@@ -1915,6 +1932,78 @@ fn handle_rename(req: *JsonValue, state: *LspState) {
     lsp_send_response(id, result);
 }
 
+// `prepareRename` — validates that the cursor sits on something renameable.
+// Returns `{ range, placeholder }` so the editor knows what range to
+// highlight while the user types the new name. Refuses keywords, literals,
+// and empty selections.
+fn handle_prepare_rename(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: int = json_as_int(json_get(pos, "line"));
+    let col0: int = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    let word: string = word_at(doc.text, line0, col0);
+    if word.eq("") { lsp_send_response(id, json_null()); return; }
+    if is_glide_keyword(word) { lsp_send_response(id, json_null()); return; }
+
+    // Build the exact range covering the word at the cursor.
+    let lex: *Lexer = Lexer::new(doc.text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF { break; }
+        if tok.kind != TOK_IDENT { continue; }
+        let tline: int = tok.line - 1;
+        let tcol: int = tok.column - 1;
+        let len: int = tok.lexeme.len();
+        if tline == line0 && col0 >= tcol && col0 <= tcol + len {
+            let range: *JsonValue = json_object();
+            let start: *JsonValue = json_object();
+            let endp: *JsonValue = json_object();
+            json_obj_set(start, "line", json_int(tline));
+            json_obj_set(start, "character", json_int(tcol));
+            json_obj_set(endp,  "line", json_int(tline));
+            json_obj_set(endp,  "character", json_int(tcol + len));
+            json_obj_set(range, "start", start);
+            json_obj_set(range, "end", endp);
+            let result: *JsonValue = json_object();
+            json_obj_set(result, "range", range);
+            json_obj_set(result, "placeholder", json_string(word));
+            lsp_send_response(id, result);
+            return;
+        }
+    }
+    lsp_send_response(id, json_null());
+}
+
+// Reject rename of language keywords. Mirrors the lexer's reserved set.
+fn is_glide_keyword(w: string) -> bool {
+    if w.eq("fn") { return true; } if w.eq("let") { return true; }
+    if w.eq("mut") { return true; } if w.eq("const") { return true; }
+    if w.eq("struct") { return true; } if w.eq("enum") { return true; }
+    if w.eq("trait") { return true; } if w.eq("impl") { return true; }
+    if w.eq("import") { return true; } if w.eq("pub") { return true; }
+    if w.eq("if") { return true; } if w.eq("else") { return true; }
+    if w.eq("while") { return true; } if w.eq("for") { return true; }
+    if w.eq("return") { return true; } if w.eq("spawn") { return true; }
+    if w.eq("defer") { return true; } if w.eq("match") { return true; }
+    if w.eq("break") { return true; } if w.eq("continue") { return true; }
+    if w.eq("as") { return true; } if w.eq("sizeof") { return true; }
+    if w.eq("new") { return true; } if w.eq("move") { return true; }
+    if w.eq("type") { return true; } if w.eq("extern") { return true; }
+    if w.eq("c_include") { return true; } if w.eq("c_link") { return true; }
+    if w.eq("c_raw") { return true; } if w.eq("macro") { return true; }
+    if w.eq("naked") { return true; } if w.eq("asm") { return true; }
+    if w.eq("volatile") { return true; } if w.eq("dyn") { return true; }
+    if w.eq("Self") { return true; } if w.eq("in") { return true; }
+    if w.eq("chan") { return true; } if w.eq("true") { return true; }
+    if w.eq("false") { return true; } if w.eq("null") { return true; }
+    return false;
+}
+
 fn count_lines(s: string) -> int {
     let mut n: int = 0;
     let len: int = s.len();
@@ -2556,6 +2645,7 @@ pub fn lsp_main() -> int {
         if method.eq("textDocument/completion") { handle_completion(req, state); continue; }
         if method.eq("textDocument/references") { handle_references(req, state); continue; }
         if method.eq("textDocument/documentHighlight") { handle_document_highlight(req, state); continue; }
+        if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); continue; }
         if method.eq("textDocument/rename") { handle_rename(req, state); continue; }
         if method.eq("textDocument/formatting") { handle_formatting(req, state); continue; }
         // Any unhandled request gets an empty-result reply so clients don't hang.
