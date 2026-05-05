@@ -1,20 +1,32 @@
-// Pseudo-random numbers. xorshift64* — fast, full 64-bit period, terrible
-// cryptographically, fine for shuffling, sampling, randomized tests, and
-// anything else where you'd reach for a Mersenne Twister.
+// Pseudo-random numbers. xorshift64* — fast, full 64-bit period,
+// terrible cryptographically, fine for shuffling, sampling, randomized
+// tests, and anything else where you'd reach for a Mersenne Twister.
 //
-// Seed deterministically (via `Rng::with_seed`) for reproducible runs, or
-// from the monotonic clock (`Rng::from_clock`) for "random enough".
+// Seed deterministically (via `Rng::with_seed`) for reproducible runs,
+// or from the monotonic clock (`Rng::from_clock`) for "random enough".
 
 extern fn now_ns() -> i64;
 
 pub struct Rng { state: i64 }
 
 impl Rng {
+    /// Construct an `Rng` with a known starting state. Same seed always
+    /// produces the same stream, so this is the right choice for tests
+    /// and reproducible simulations.
+    ///
+    /// Seed `0` is silently rewritten to a non-zero state because xorshift
+    /// degenerates from `0`.
+    ///
+    /// ```glide
+    /// let r: *Rng = Rng::with_seed(42);
+    /// defer r.free();
+    /// println!(r.next_int());   // same value on every run
+    /// ```
     pub fn with_seed(seed: i64) -> *Rng {
         let r: *Rng = malloc(sizeof(Rng)) as *Rng;
-        // xorshift can't start from 0; force a non-zero state. Constants are
-        // staged through `1 as i64` shifts because Glide int literals are
-        // 32-bit and silently wrap if you write the full value.
+        // xorshift can't start from 0; force a non-zero state. Constants
+        // are staged through `1 as i64` shifts because Glide int literals
+        // are 32-bit and silently wrap if you write the full value.
         if seed == 0 {
             let one: i64 = 1;
             r.state = (one << 63) | (one << 31) | one;
@@ -24,27 +36,46 @@ impl Rng {
         return r;
     }
 
+    /// Construct an `Rng` seeded from the monotonic clock. Different
+    /// invocations within the same nanosecond would share state, which
+    /// is normally not a concern.
+    ///
+    /// ```glide
+    /// let r: *Rng = Rng::from_clock();
+    /// defer r.free();
+    /// for i in 0..5 { println!(r.range(1, 7)); }   // d6 rolls
+    /// ```
     pub fn from_clock() -> *Rng { return Rng::with_seed(now_ns()); }
 
+    /// Release the `Rng`. Pair with `defer` for leak-free use.
     pub fn free(self: *Rng) { free(self as *void); }
 
-    /// Next raw 64-bit value. Wraps.
+    /// Next raw 64-bit value. Wraps. Use this when you want all 64 bits
+    /// of entropy (hashing, jitter); for ranged ints prefer `range`.
+    ///
+    /// ```glide
+    /// let raw: i64 = r.next_i64();
+    /// ```
     pub fn next_i64(self: *Rng) -> i64 {
         let mut x: i64 = self.state;
         x = x ^ (x << 13);
         x = x ^ (x >> 7);
         x = x ^ (x << 17);
         self.state = x;
-        // Mixing multiplier built piecewise so the 32-bit literals stay in
-        // range. Final value is an arbitrary odd 64-bit constant.
+        // Mixing multiplier built piecewise so the 32-bit literals stay
+        // in range. Final value is an arbitrary odd 64-bit constant.
         let one: i64 = 1;
         let mul: i64 = ((one << 50) | (one << 33) | (one << 17) | one) | 1;
         return x * mul;
     }
 
-    /// Next non-negative `int`. Truncates to 31 bits so the result is always
-    /// positive after the i64 → int32 cast (using all 32 bits would let the
-    /// high bit make it negative).
+    /// Next non-negative `int`. Truncates to 31 bits so the result is
+    /// always positive after the i64 → int32 cast (using all 32 bits
+    /// would let the high bit make it negative).
+    ///
+    /// ```glide
+    /// let n: int = r.next_int();        // 0 .. 2^31-1
+    /// ```
     pub fn next_int(self: *Rng) -> int {
         let v: i64 = self.next_i64();
         let one: i64 = 1;
@@ -52,17 +83,28 @@ impl Rng {
         return (v & mask) as int;
     }
 
-    /// Uniform integer in `[lo, hi)`. Returns `lo` when the range is empty.
-    /// Uses simple modulo — biased near the top of the i64 range; fine for
-    /// the small ranges this is normally called with.
+    /// Uniform integer in `[lo, hi)`. Returns `lo` when the range is
+    /// empty. Uses simple modulo — biased near the top of the i64
+    /// range; fine for the small ranges this is normally called with.
+    ///
+    /// ```glide
+    /// let dice: int = r.range(1, 7);    // d6 → 1..=6
+    /// let pct:  int = r.range(0, 100);  // 0..=99
+    /// ```
     pub fn range(self: *Rng, lo: int, hi: int) -> int {
         if hi <= lo { return lo; }
         let span: int = hi - lo;
         return lo + (self.next_int() % span);
     }
 
-    /// Uniform float in `[0.0, 1.0)`. Built from the upper 53 bits so the
-    /// result fits exactly in a `f64` mantissa.
+    /// Uniform float in `[0.0, 1.0)`. Built from the upper 53 bits so
+    /// the result fits exactly in an `f64` mantissa (no rounding error
+    /// at the boundary).
+    ///
+    /// ```glide
+    /// let p: f64 = r.next_f64();
+    /// if p < 0.1 { /* 10% branch */ }
+    /// ```
     pub fn next_f64(self: *Rng) -> f64 {
         let v: i64 = self.next_i64();
         // 53-bit mantissa mask, built as `(1 << 53) - 1` to stay inside
@@ -73,5 +115,10 @@ impl Rng {
         return (bits as f64) / 9007199254740992.0;
     }
 
+    /// Coin flip — returns `true` with probability ~0.5.
+    ///
+    /// ```glide
+    /// if r.next_bool() { println!("heads"); } else { println!("tails"); }
+    /// ```
     pub fn next_bool(self: *Rng) -> bool { return (self.next_i64() & 1) == 1; }
 }
