@@ -1,0 +1,38 @@
+# clangd configuration for editing Glide's bootstrap C runtime in IDEs.
+#
+# Glide builds with `zig cc` and the bundled Zig toolchain at runtime/zig.
+# clangd by default doesn't know that, so opening bootstrap/seed/bootstrap.c
+# or any of bootstrap/runtime/*.c shows phantom 'pthread.h not found' /
+# 'unknown type pthread_mutex_t' diagnostics.
+#
+# This file tells clangd to use the same include search paths the Glide
+# build pipeline uses, so the diagnostics match what you'd see during a
+# real build.
+
+CompileFlags:
+  Add:
+    - -Iruntime/zig/lib/libc/include/any-windows-any
+    - -Iruntime/zig/lib/libc/include/any-linux-any
+    - -Iruntime/zig/lib/libc/glibc/include
+    - -Iruntime/zig/lib/include
+    - -Wno-pragma-once-outside-header
+    - -Wno-unknown-pragmas
+  # zig cc speaks gcc's flags but reports as clang; treat the bootstrap C
+  # runtime as if it were being compiled with the bundled toolchain.
+  Compiler: clang
+
+# bootstrap/runtime/*.c files are templates that get spliced together into
+# bootstrap/seed/bootstrap.c. They reference symbols that come from
+# sibling templates, so opening them in isolation is always going to be
+# noisy — silence the most common false positives there.
+---
+If:
+  PathMatch:
+    - bootstrap/runtime/.*\.c
+    - bootstrap/runtime/.*\.tmpl
+Diagnostics:
+  Suppress:
+    - implicit_function_declaration
+    - unknown_typename
+    - pp_file_not_found
+    - undeclared_var_use
