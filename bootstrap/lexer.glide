@@ -1,4 +1,16 @@
-// Glide-in-Glide lexer. First piece of the self-hosted compiler.
+// Lexer — bytes to tokens. First stage of the self-hosted compiler pipeline.
+//
+// Reads a UTF-8 source string and emits a stream of `Token`s. Line + column
+// tracking is byte-based and 1-indexed; all downstream diagnostics anchor
+// here. Whitespace and `//` line comments are skipped; `/* */` block comments
+// nest. String literals support `"\n\t\r\\\""` and `${expr}` interpolation
+// (the body between `${}` is reparsed by the parser as a Glide expression).
+//
+// Special token: `c_raw!{ ... }` is captured as a single TOK_RAW_BLOCK with
+// matching-brace scanning and no interpretation, so users can paste raw C or
+// inline asm verbatim.
+//
+// Pipeline: lexer -> parser -> expander -> lower -> typer -> codegen.
 
 pub const TOK_EOF: int = 0;
 pub const TOK_IDENT: int = 1;
