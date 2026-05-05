@@ -1,9 +1,15 @@
 import stdlib::hashmap::*;
 
-// AST types for the Glide-in-Glide compiler.
+// AST nodes shared by every pipeline stage (parser, expander, lower,
+// typer, codegen, fmt, json, lsp).
 //
-// Glide enums use positional payloads only, so we group struct-shape data
-// behind a *T (heap-allocated boxed payload) when there are 3+ fields.
+// Glide enums today carry positional payloads only, so anything wider
+// than two fields lives behind a `*T` (heap-allocated payload) instead
+// of an inline variant — see `Stmt`, `Expr`, `Type`, `Param` below.
+//
+// Three discriminator constants per node group: `TY_*` for type kinds,
+// `EX_*` for expression kinds, `ST_*` for statement kinds, plus `BIN_*` /
+// `UN_*` for operator codes.
 
 // ---- Type kinds ----------------------------------------------------------
 
