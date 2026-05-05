@@ -1919,7 +1919,11 @@ typedef struct  ImportableSym  {
      const char*   name;
      int   kind;
      const char*   module;
-     const char*   detail;
+     const char*   signature;
+     const char*   label_extra;
+     const char*   doc;
+     const char*   snippet;
+     bool   has_snippet;
 }  ImportableSym ;
 
 typedef struct  LspState  {
@@ -2398,6 +2402,8 @@ const char*   find_builtins_dir (void);
 const char*   find_stdlib_dir (void);
 const char*   drop_glide_ext (const char*   name);
 void   populate_stdlib_index (LspState*   state);
+const char*   fn_label_extra (Stmt*   s);
+const char*   fn_snippet (Stmt*   s);
 const char*   __glide_list_dir (const char*   path, const char*   suffix);
 Vector__string*   fs_list_dir (const char*   dir, const char*   suffix);
 void   run_analysis_and_publish (const char*   uri, const char*   text, LspState*   state);
@@ -2444,7 +2450,7 @@ JsonValue*   completion_item (const char*   label, int   kind, const char*   det
 HashMap__bool*   current_imports (Vector__Stmt*   stmts);
 const char*   lsp_strip_quotes (const char*   s);
 int   find_import_insertion_pos (const char*   text);
-JsonValue*   completion_item_with_import (const char*   label, int   kind, const char*   detail, const char*   module, bool   already_imported, int   insert_line);
+JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, bool   already_imported, int   insert_line);
 int   ci_kind_for_stmt_kind (int   k);
 int   cursor_before_partial (const char*   text, int   line0, int   col0);
 const char*   path_qualifier_before (const char*   text, int   line0, int   col0);
@@ -13624,30 +13630,69 @@ void   populate_stdlib_index (LspState*   state) {
             if (((((((s. kind )  !=  ST_FN)  &&  ((s. kind )  !=  ST_STRUCT))  &&  ((s. kind )  !=  ST_ENUM))  &&  ((s. kind )  !=  ST_CONST))  &&  ((s. kind )  !=  ST_TRAIT))) {
                 continue;
             }
-            const char*   detail = "";
+            const char*   sig = "";
+            const char*   label_extra = "";
+            const char*   snip = (s. name );
+            bool   has_snip = false;
             if (((s. kind )  ==  ST_FN)) {
-                (detail  =  fn_signature((&s)));
+                (sig  =  fn_signature((&s)));
+                (label_extra  =  fn_label_extra((&s)));
+                (snip  =  fn_snippet((&s)));
+                (has_snip  =  true);
             } else {
                 if (((s. kind )  ==  ST_STRUCT)) {
-                    (detail  =  __glide_string_concat("struct ", (s. name )));
+                    (sig  =  __glide_string_concat("struct ", (s. name )));
                 } else {
                     if (((s. kind )  ==  ST_ENUM)) {
-                        (detail  =  __glide_string_concat("enum ", (s. name )));
+                        (sig  =  __glide_string_concat("enum ", (s. name )));
                     } else {
                         if (((s. kind )  ==  ST_TRAIT)) {
-                            (detail  =  __glide_string_concat("trait ", (s. name )));
+                            (sig  =  __glide_string_concat("trait ", (s. name )));
                         } else {
                             if (((s. kind )  ==  ST_CONST)) {
-                                (detail  =  __glide_string_concat("const ", (s. name )));
+                                (sig  =  __glide_string_concat("const ", (s. name )));
                             }
                         }
                     }
                 }
             }
-            ImportableSym   sym = (( ImportableSym ){. name  = (s. name ), . kind  = (s. kind ), . module  = module, . detail  = detail});
+            ImportableSym   sym = (( ImportableSym ){. name  = (s. name ), . kind  = (s. kind ), . module  = module, . signature  = sig, . label_extra  = label_extra, . doc  = (s. doc_comment ), . snippet  = snip, . has_snippet  = has_snip});
             Vector_push__ImportableSym((state-> stdlib_index ), sym);
         }
     }
+}
+
+const char*   fn_label_extra (Stmt*   s) {
+    const char*   out = "(";
+    if (((s-> fn_params )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
+            if ((i  >  0)) {
+                (out  =  __glide_string_concat(out, ", "));
+            }
+            Param   p = Vector_get__Param((s-> fn_params ), i);
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, (p. name )), ": "), type_to_string_pretty((p. ty ))));
+        }
+    }
+    (out  =  __glide_string_concat(out, ")"));
+    if (((s-> fn_ret_ty )  !=  NULL)) {
+        (out  =  __glide_string_concat(__glide_string_concat(out, " -> "), type_to_string_pretty((s-> fn_ret_ty ))));
+    }
+    return out;
+}
+
+const char*   fn_snippet (Stmt*   s) {
+    const char*   out = __glide_string_concat((s-> name ), "(");
+    if (((s-> fn_params )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
+            if ((i  >  0)) {
+                (out  =  __glide_string_concat(out, ", "));
+            }
+            Param   p = Vector_get__Param((s-> fn_params ), i);
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "${"), int_to_str((( int64_t )(i  +  1)))), ":"), (p. name )), "}"));
+        }
+    }
+    (out  =  __glide_string_concat(out, ")"));
+    return out;
 }
 
 Vector__string*   fs_list_dir (const char*   dir, const char*   suffix) {
@@ -14972,26 +15017,69 @@ int   find_import_insertion_pos (const char*   text) {
     return (last_import_line  +  1);
 }
 
-JsonValue*   completion_item_with_import (const char*   label, int   kind, const char*   detail, const char*   module, bool   already_imported, int   insert_line) {
-    JsonValue*   it = completion_item(label, kind, detail);
-    if (already_imported) {
-        return it;
+JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, bool   already_imported, int   insert_line) {
+    JsonValue*   it = json_object();
+    json_obj_set(it, "label", json_string(label));
+    json_obj_set(it, "kind", json_int(kind));
+    if (((!__glide_string_eq(label_extra, ""))  ||  (!__glide_string_eq(module, "")))) {
+        JsonValue*   ld = json_object();
+        if ((!__glide_string_eq(label_extra, ""))) {
+            json_obj_set(ld, "detail", json_string(label_extra));
+        }
+        if ((!__glide_string_eq(module, ""))) {
+            json_obj_set(ld, "description", json_string(module));
+        }
+        json_obj_set(it, "labelDetails", ld);
     }
-    JsonValue*   edits = json_array();
-    JsonValue*   edit = json_object();
-    JsonValue*   range = json_object();
-    JsonValue*   start = json_object();
-    JsonValue*   endp = json_object();
-    json_obj_set(start, "line", json_int(insert_line));
-    json_obj_set(start, "character", json_int(0));
-    json_obj_set(endp, "line", json_int(insert_line));
-    json_obj_set(endp, "character", json_int(0));
-    json_obj_set(range, "start", start);
-    json_obj_set(range, "end", endp);
-    json_obj_set(edit, "range", range);
-    json_obj_set(edit, "newText", json_string(__glide_string_concat(__glide_string_concat("import ", module), "::*;\n")));
-    json_arr_push(edits, edit);
-    json_obj_set(it, "additionalTextEdits", edits);
+    if ((!__glide_string_eq(signature, ""))) {
+        json_obj_set(it, "detail", json_string(signature));
+    }
+    const char*   md = "";
+    if ((!__glide_string_eq(signature, ""))) {
+        (md  =  __glide_string_concat(__glide_string_concat("```glide\n", signature), "\n```"));
+    }
+    if ((!__glide_string_eq(doc, ""))) {
+        if ((!__glide_string_eq(md, ""))) {
+            (md  =  __glide_string_concat(md, "\n\n---\n\n"));
+        }
+        (md  =  __glide_string_concat(md, doc));
+    }
+    if ((!__glide_string_eq(module, ""))) {
+        if ((!__glide_string_eq(md, ""))) {
+            (md  =  __glide_string_concat(md, "\n\n"));
+        }
+        (md  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(md, "From "), "`"), module), "`"));
+    }
+    if ((!__glide_string_eq(md, ""))) {
+        JsonValue*   docobj = json_object();
+        json_obj_set(docobj, "kind", json_string("markdown"));
+        json_obj_set(docobj, "value", json_string(md));
+        json_obj_set(it, "documentation", docobj);
+    }
+    if ((has_snippet  &&  (!__glide_string_eq(snippet, "")))) {
+        json_obj_set(it, "insertText", json_string(snippet));
+        json_obj_set(it, "insertTextFormat", json_int(2));
+    } else {
+        json_obj_set(it, "insertText", json_string(label));
+        json_obj_set(it, "insertTextFormat", json_int(1));
+    }
+    if (((!__glide_string_eq(module, ""))  &&  (!already_imported))) {
+        JsonValue*   edits = json_array();
+        JsonValue*   edit = json_object();
+        JsonValue*   range = json_object();
+        JsonValue*   start = json_object();
+        JsonValue*   endp = json_object();
+        json_obj_set(start, "line", json_int(insert_line));
+        json_obj_set(start, "character", json_int(0));
+        json_obj_set(endp, "line", json_int(insert_line));
+        json_obj_set(endp, "character", json_int(0));
+        json_obj_set(range, "start", start);
+        json_obj_set(range, "end", endp);
+        json_obj_set(edit, "range", range);
+        json_obj_set(edit, "newText", json_string(__glide_string_concat(__glide_string_concat("import ", module), "::*;\n")));
+        json_arr_push(edits, edit);
+        json_obj_set(it, "additionalTextEdits", edits);
+    }
     return it;
 }
 
@@ -15348,8 +15436,9 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 Param   p = Vector_get__Param((host-> fn_params ), i);
                 if ((!HashMap_contains__bool(seen, (p. name )))) {
                     HashMap_insert__bool(seen, (p. name ), true);
-                    const char*   detail = __glide_string_concat("param: ", type_to_string_pretty((p. ty )));
-                    json_arr_push(items, completion_item((p. name ), 6, detail));
+                    const char*   sig = __glide_string_concat(__glide_string_concat(__glide_string_concat("param ", (p. name )), ": "), type_to_string_pretty((p. ty )));
+                    JsonValue*   item = rich_completion_item((p. name ), "", 6, sig, "", "", "", false, true, 0);
+                    json_arr_push(items, item);
                 }
             }
         }
@@ -15361,11 +15450,12 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 continue;
             }
             HashMap_insert__bool(seen, (s. name ), true);
-            const char*   detail = "local";
+            const char*   sig = __glide_string_concat("local ", (s. name ));
             if (((s. let_ty )  !=  NULL)) {
-                (detail  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("let ", (s. name )), ": "), type_to_string_pretty((s. let_ty ))));
+                (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("let ", (s. name )), ": "), type_to_string_pretty((s. let_ty ))));
             }
-            json_arr_push(items, completion_item((s. name ), 6, detail));
+            JsonValue*   item = rich_completion_item((s. name ), "", 6, sig, "", "", "", false, true, 0);
+            json_arr_push(items, item);
         }
     }
     if (((doc. stmts )  !=  NULL)) {
@@ -15382,33 +15472,45 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 continue;
             }
             HashMap_insert__bool(seen, label, true);
-            const char*   detail = "";
+            const char*   sig = "";
+            const char*   label_extra = "";
+            const char*   snip = label;
+            bool   has_snip = false;
             if (((s. kind )  ==  ST_FN)) {
-                (detail  =  fn_signature((&s)));
+                (sig  =  fn_signature((&s)));
+                (label_extra  =  fn_label_extra((&s)));
+                (snip  =  fn_snippet((&s)));
+                (has_snip  =  true);
             } else {
                 if (((s. kind )  ==  ST_STRUCT)) {
-                    (detail  =  __glide_string_concat("struct ", (s. name )));
+                    (sig  =  __glide_string_concat("struct ", (s. name )));
                 } else {
                     if (((s. kind )  ==  ST_ENUM)) {
-                        (detail  =  __glide_string_concat("enum ", (s. name )));
+                        (sig  =  __glide_string_concat("enum ", (s. name )));
                     } else {
                         if (((s. kind )  ==  ST_CONST)) {
-                            (detail  =  __glide_string_concat("const ", (s. name )));
+                            (sig  =  __glide_string_concat("const ", (s. name )));
                             if (((s. let_ty )  !=  NULL)) {
-                                (detail  =  __glide_string_concat(__glide_string_concat(detail, ": "), type_to_string_pretty((s. let_ty ))));
+                                (sig  =  __glide_string_concat(__glide_string_concat(sig, ": "), type_to_string_pretty((s. let_ty ))));
                             }
                         } else {
                             if (((s. kind )  ==  ST_MACRO_DEF)) {
-                                (detail  =  macro_signature((&s)));
+                                (sig  =  macro_signature((&s)));
                             }
                         }
                     }
                 }
             }
+            const char*   module = "";
             if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
-                (detail  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(detail, "    ["), (s. origin )), "]"));
+                (module  =  (s. origin ));
             }
-            json_arr_push(items, completion_item(label, ci_kind_for((&s)), detail));
+            const char*   docc = "";
+            if (((s. doc_comment )  !=  NULL)) {
+                (docc  =  (s. doc_comment ));
+            }
+            JsonValue*   item = rich_completion_item(label, label_extra, ci_kind_for((&s)), sig, docc, module, snip, has_snip, true, 0);
+            json_arr_push(items, item);
         }
     }
     Vector__string*   builtins = Vector_new__string();
@@ -15446,8 +15548,7 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             }
             HashMap_insert__bool(seen, (sym. name ), true);
             bool   already = HashMap_contains__bool(imps, (sym. module ));
-            const char*   detail = __glide_string_concat(__glide_string_concat(__glide_string_concat((sym. detail ), "    ["), (sym. module )), "]");
-            JsonValue*   item = completion_item_with_import((sym. name ), ci_kind_for_stmt_kind((sym. kind )), detail, (sym. module ), already, insert_line);
+            JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), already, insert_line);
             json_arr_push(items, item);
         }
         HashMap_free__bool(imps);

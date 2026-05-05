@@ -69,12 +69,18 @@ pub struct LspDoc {
 }
 
 // One importable symbol from src/stdlib/. Built once at server startup
-// and reused by completion to surface auto-import suggestions.
+// and reused by completion to surface auto-import suggestions. Mirrors
+// the data gopls keeps per-symbol so the LSP can fill out the full
+// CompletionItem (signature + labelDetails + documentation + snippet).
 pub struct ImportableSym {
     pub name: string,         // `HashMap`, `Time`, `min_int`, …
     pub kind: int,            // ST_FN / ST_STRUCT / ST_ENUM / ST_CONST / ST_TRAIT
     pub module: string,       // `stdlib::hashmap`, `stdlib::time`, …
-    pub detail: string,       // signature / preview shown in the completion list
+    pub signature: string,    // full one-line signature, used in `detail`
+    pub label_extra: string,  // shown next to the label (param list for fns)
+    pub doc: string,          // doc-comment, rendered in `documentation`
+    pub snippet: string,      // gopls-style snippet for `insertText`
+    pub has_snippet: bool,    // true → insertTextFormat=2; false → plain
 }
 
 pub struct LspState {
@@ -301,21 +307,67 @@ fn populate_stdlib_index(state: *LspState) {
             if !s.is_pub { continue; }
             if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
                && s.kind != ST_CONST && s.kind != ST_TRAIT { continue; }
-            let mut detail: string = "";
-            if s.kind == ST_FN { detail = fn_signature(&s); }
-            else if s.kind == ST_STRUCT { detail = "struct ".concat(s.name); }
-            else if s.kind == ST_ENUM { detail = "enum ".concat(s.name); }
-            else if s.kind == ST_TRAIT { detail = "trait ".concat(s.name); }
-            else if s.kind == ST_CONST { detail = "const ".concat(s.name); }
+            let mut sig: string = "";
+            let mut label_extra: string = "";
+            let mut snip: string = s.name;
+            let mut has_snip: bool = false;
+            if s.kind == ST_FN {
+                sig = fn_signature(&s);
+                label_extra = fn_label_extra(&s);
+                snip = fn_snippet(&s);
+                has_snip = true;
+            }
+            else if s.kind == ST_STRUCT { sig = "struct ".concat(s.name); }
+            else if s.kind == ST_ENUM { sig = "enum ".concat(s.name); }
+            else if s.kind == ST_TRAIT { sig = "trait ".concat(s.name); }
+            else if s.kind == ST_CONST { sig = "const ".concat(s.name); }
             let sym: ImportableSym = ImportableSym {
                 name: s.name,
                 kind: s.kind,
                 module: module,
-                detail: detail,
+                signature: sig,
+                label_extra: label_extra,
+                doc: s.doc_comment,
+                snippet: snip,
+                has_snippet: has_snip,
             };
             state.stdlib_index.push(sym);
         }
     }
+}
+
+// Compact label suffix for fn items, gopls-style: `(a: int, b: int) -> int`.
+// Goes in `labelDetails.detail`, shown next to the function name.
+fn fn_label_extra(s: *Stmt) -> string {
+    let mut out: string = "(";
+    if s.fn_params != null {
+        for let i: int = 0; i < s.fn_params.len(); i++ {
+            if i > 0 { out = out.concat(", "); }
+            let p: Param = s.fn_params.get(i);
+            out = out.concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+        }
+    }
+    out = out.concat(")");
+    if s.fn_ret_ty != null {
+        out = out.concat(" -> ").concat(type_to_string_pretty(s.fn_ret_ty));
+    }
+    return out;
+}
+
+// gopls-style snippet for a fn call: `name(${1:p1}, ${2:p2})`. Each tab
+// stop is the parameter name, so the user can Tab through and overwrite.
+fn fn_snippet(s: *Stmt) -> string {
+    let mut out: string = s.name.concat("(");
+    if s.fn_params != null {
+        for let i: int = 0; i < s.fn_params.len(); i++ {
+            if i > 0 { out = out.concat(", "); }
+            let p: Param = s.fn_params.get(i);
+            out = out.concat("${").concat(int_to_str((i + 1) as i64))
+                     .concat(":").concat(p.name).concat("}");
+        }
+    }
+    out = out.concat(")");
+    return out;
 }
 
 // Helper: directory listing with a suffix filter. Mirrors fs_list from
@@ -1530,29 +1582,85 @@ fn find_import_insertion_pos(text: string) -> int {
     return last_import_line + 1;
 }
 
-// Build a completion item that, on accept, adds an `import <module>::*;`
-// at the top of the file via an additionalTextEdit. If the module is
-// already imported, the import line is skipped (a plain item is returned).
-fn completion_item_with_import(label: string, kind: int, detail: string,
-                               module: string, already_imported: bool,
-                               insert_line: int) -> *JsonValue {
-    let it: *JsonValue = completion_item(label, kind, detail);
-    if already_imported { return it; }
-    let edits: *JsonValue = json_array();
-    let edit: *JsonValue = json_object();
-    let range: *JsonValue = json_object();
-    let start: *JsonValue = json_object();
-    let endp: *JsonValue = json_object();
-    json_obj_set(start, "line", json_int(insert_line));
-    json_obj_set(start, "character", json_int(0));
-    json_obj_set(endp,  "line", json_int(insert_line));
-    json_obj_set(endp,  "character", json_int(0));
-    json_obj_set(range, "start", start);
-    json_obj_set(range, "end", endp);
-    json_obj_set(edit, "range", range);
-    json_obj_set(edit, "newText", json_string("import ".concat(module).concat("::*;\n")));
-    json_arr_push(edits, edit);
-    json_obj_set(it, "additionalTextEdits", edits);
+// Build a rich completion item, gopls-style. Includes:
+//   - labelDetails { detail, description }   compact signature + module
+//   - detail                                  full signature line
+//   - documentation (markdown)                signature fence + doc-comment
+//   - insertText + insertTextFormat=2          snippet with tab stops (fns)
+//   - additionalTextEdits                     auto-import line at top of doc
+//
+// `already_imported` skips the import edit when the module is already in
+// scope. `module` is the empty string for items that are not auto-imports
+// (then the import edit + description are also skipped).
+fn rich_completion_item(label: string, label_extra: string, kind: int,
+                        signature: string, doc: string, module: string,
+                        snippet: string, has_snippet: bool,
+                        already_imported: bool, insert_line: int) -> *JsonValue {
+    let it: *JsonValue = json_object();
+    json_obj_set(it, "label", json_string(label));
+    json_obj_set(it, "kind", json_int(kind));
+
+    // labelDetails: shows `(a: int, b: int) -> int   stdlib::math` next to
+    // the label, gopls-compatible with LSP 3.17 clients.
+    if !label_extra.eq("") || !module.eq("") {
+        let ld: *JsonValue = json_object();
+        if !label_extra.eq("") { json_obj_set(ld, "detail", json_string(label_extra)); }
+        if !module.eq("") { json_obj_set(ld, "description", json_string(module)); }
+        json_obj_set(it, "labelDetails", ld);
+    }
+
+    // detail: full one-line signature, shown above documentation.
+    if !signature.eq("") { json_obj_set(it, "detail", json_string(signature)); }
+
+    // documentation: markdown — fenced signature + horizontal rule + doc.
+    let mut md: string = "";
+    if !signature.eq("") {
+        md = "```glide\n".concat(signature).concat("\n```");
+    }
+    if !doc.eq("") {
+        if !md.eq("") { md = md.concat("\n\n---\n\n"); }
+        md = md.concat(doc);
+    }
+    if !module.eq("") {
+        if !md.eq("") { md = md.concat("\n\n"); }
+        md = md.concat("From ").concat("`").concat(module).concat("`");
+    }
+    if !md.eq("") {
+        let docobj: *JsonValue = json_object();
+        json_obj_set(docobj, "kind", json_string("markdown"));
+        json_obj_set(docobj, "value", json_string(md));
+        json_obj_set(it, "documentation", docobj);
+    }
+
+    // Snippet body: only when the symbol is a callable and the editor
+    // supports snippets. Falls back to plain insert.
+    if has_snippet && !snippet.eq("") {
+        json_obj_set(it, "insertText", json_string(snippet));
+        json_obj_set(it, "insertTextFormat", json_int(2));   // 2 = Snippet
+    } else {
+        json_obj_set(it, "insertText", json_string(label));
+        json_obj_set(it, "insertTextFormat", json_int(1));   // 1 = PlainText
+    }
+
+    // Auto-import edit when the module is missing.
+    if !module.eq("") && !already_imported {
+        let edits: *JsonValue = json_array();
+        let edit: *JsonValue = json_object();
+        let range: *JsonValue = json_object();
+        let start: *JsonValue = json_object();
+        let endp: *JsonValue = json_object();
+        json_obj_set(start, "line", json_int(insert_line));
+        json_obj_set(start, "character", json_int(0));
+        json_obj_set(endp,  "line", json_int(insert_line));
+        json_obj_set(endp,  "character", json_int(0));
+        json_obj_set(range, "start", start);
+        json_obj_set(range, "end", endp);
+        json_obj_set(edit, "range", range);
+        json_obj_set(edit, "newText", json_string("import ".concat(module).concat("::*;\n")));
+        json_arr_push(edits, edit);
+        json_obj_set(it, "additionalTextEdits", edits);
+    }
+
     return it;
 }
 
@@ -1844,8 +1952,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 let p: Param = host.fn_params.get(i);
                 if !seen.contains(p.name) {
                     seen.insert(p.name, true);
-                    let detail: string = "param: ".concat(type_to_string_pretty(p.ty));
-                    json_arr_push(items, completion_item(p.name, 6, detail));
+                    let sig: string = "param ".concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+                    let item: *JsonValue = rich_completion_item(
+                        p.name, "", 6, sig, "", "", "", false, true, 0);
+                    json_arr_push(items, item);
                 }
             }
         }
@@ -1855,9 +1965,11 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             let s: Stmt = locals.get(i);
             if seen.contains(s.name) { continue; }
             seen.insert(s.name, true);
-            let mut detail: string = "local";
-            if s.let_ty != null { detail = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty)); }
-            json_arr_push(items, completion_item(s.name, 6, detail));
+            let mut sig: string = "local ".concat(s.name);
+            if s.let_ty != null { sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty)); }
+            let item: *JsonValue = rich_completion_item(
+                s.name, "", 6, sig, "", "", "", false, true, 0);
+            json_arr_push(items, item);
         }
     }
 
@@ -1872,21 +1984,32 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             if s.kind == ST_MACRO_DEF { label = s.name.concat("!"); }
             if seen.contains(label) { continue; }
             seen.insert(label, true);
-            let mut detail: string = "";
-            if s.kind == ST_FN { detail = fn_signature(&s); }
-            else if s.kind == ST_STRUCT { detail = "struct ".concat(s.name); }
-            else if s.kind == ST_ENUM { detail = "enum ".concat(s.name); }
+            let mut sig: string = "";
+            let mut label_extra: string = "";
+            let mut snip: string = label;
+            let mut has_snip: bool = false;
+            if s.kind == ST_FN {
+                sig = fn_signature(&s);
+                label_extra = fn_label_extra(&s);
+                snip = fn_snippet(&s);
+                has_snip = true;
+            }
+            else if s.kind == ST_STRUCT { sig = "struct ".concat(s.name); }
+            else if s.kind == ST_ENUM { sig = "enum ".concat(s.name); }
             else if s.kind == ST_CONST {
-                detail = "const ".concat(s.name);
-                if s.let_ty != null { detail = detail.concat(": ").concat(type_to_string_pretty(s.let_ty)); }
+                sig = "const ".concat(s.name);
+                if s.let_ty != null { sig = sig.concat(": ").concat(type_to_string_pretty(s.let_ty)); }
             }
-            else if s.kind == ST_MACRO_DEF { detail = macro_signature(&s); }
-            // Tag the source so users can tell stdlib symbols apart from
-            // their own. The path is shown after the signature.
-            if s.origin != null && !s.origin.eq("") {
-                detail = detail.concat("    [").concat(s.origin).concat("]");
-            }
-            json_arr_push(items, completion_item(label, ci_kind_for(&s), detail));
+            else if s.kind == ST_MACRO_DEF { sig = macro_signature(&s); }
+            let mut module: string = "";
+            if s.origin != null && !s.origin.eq("") { module = s.origin; }
+            let mut docc: string = "";
+            if s.doc_comment != null { docc = s.doc_comment; }
+            let item: *JsonValue = rich_completion_item(
+                label, label_extra, ci_kind_for(&s),
+                sig, docc, module, snip, has_snip,
+                true, 0);   // already_imported=true → no auto-import for own decls
+            json_arr_push(items, item);
         }
     }
 
@@ -1905,9 +2028,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     }
 
     // 3. Auto-import suggestions: surface every `pub` symbol from
-    // src/stdlib/ that the user hasn't imported yet. Selecting one
-    // inserts `import stdlib::<module>::*;` at the top of the file via
-    // an additionalTextEdit.
+    // src/stdlib/ that the user hasn't imported yet. Each item carries
+    // labelDetails + documentation (markdown) + a snippet (for fns) +
+    // the additionalTextEdit that inserts the `import stdlib::X::*;`
+    // line at the top of the file.
     if state.stdlib_index != null && state.stdlib_index.len() > 0 {
         let imps: *HashMap<bool> = current_imports(doc.stmts);
         let insert_line: int = find_import_insertion_pos(doc.text);
@@ -1917,12 +2041,15 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             if seen.contains(sym.name) { continue; }
             seen.insert(sym.name, true);
             let already: bool = imps.contains(sym.module);
-            let detail: string = sym.detail.concat("    [").concat(sym.module).concat("]");
-            let item: *JsonValue = completion_item_with_import(
+            let item: *JsonValue = rich_completion_item(
                 sym.name,
+                sym.label_extra,
                 ci_kind_for_stmt_kind(sym.kind),
-                detail,
+                sym.signature,
+                sym.doc,
                 sym.module,
+                sym.snippet,
+                sym.has_snippet,
                 already,
                 insert_line);
             json_arr_push(items, item);
