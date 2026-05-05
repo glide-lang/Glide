@@ -1,12 +1,14 @@
 import stdlib::hashmap::*;
 
-// Minimal JSON parser + builder for the LSP transport.
+// Minimal JSON — used by the LSP transport (lsp.glide) and by `glide ast`.
 //
-// Parser: parses a UTF-8 JSON string into a JsonValue tree. Numbers are
-// limited to ints (LSP doesn't need floats often). Escape sequences in
-// strings are decoded.
+// Parser: UTF-8 in, JsonValue tree out. Numbers are int-only (LSP rarely
+// needs floats); strings decode the standard `\n\t\r\\\"` escapes plus
+// `\uXXXX`. Trailing commas are not accepted.
 //
-// Builder: tiny fluent helpers that append to a *Vector<char> buffer.
+// Builder: a small set of fluent helpers that append to a `*Vector<char>`
+// buffer, used to serialize the AST and LSP responses without allocating
+// per-node strings.
 
 pub const JSON_NULL: int = 0;
 pub const JSON_BOOL: int = 1;
