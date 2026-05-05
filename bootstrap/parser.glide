@@ -1384,12 +1384,21 @@ fn peek_binop_bp(p: *Parser) -> int {
 // to `format!(fmt, args...)` where each `${...}` becomes a `{}` placeholder
 // and the inner source is parsed as a Glide expression. Plain strings (no
 // `${`) are returned as a normal EX_STRING and skip the rewrite.
+//
+// `\${` is the escape: it produces a literal `${` in the output and is NOT
+// treated as the start of an interpolation segment. Use this when the
+// string itself needs to mention `${...}` (error messages, docs, …).
 fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr {
     let n: int = raw.len();
     let mut has_interp: bool = false;
     let mut probe: int = 0;
     while probe + 1 < n {
         if raw.at(probe).to_int() == 36 && raw.at(probe + 1).to_int() == 123 {
+            // `\${` is an escape — skip past it.
+            if probe > 0 && raw.at(probe - 1).to_int() == 92 {
+                probe = probe + 2;
+                continue;
+            }
             has_interp = true;
             break;
         }
@@ -1402,12 +1411,21 @@ fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr
     let mut j: int = 0;
     while j < n {
         let c0: char = raw.at(j);
+        // Escaped `\${` — emit a literal `${` and skip all three chars (drop
+        // the backslash so the rendered string doesn't keep it). The output
+        // is built one byte at a time to avoid the literal `${` in source.
+        if c0.to_int() == 92 && j + 2 < n
+           && raw.at(j + 1).to_int() == 36 && raw.at(j + 2).to_int() == 123 {
+            fmt = fmt.concat(raw.substring(j + 1, j + 3));
+            j = j + 3;
+            continue;
+        }
         if c0.to_int() == 36 && j + 1 < n && raw.at(j + 1).to_int() == 123 {
             let start_expr: int = j + 2;
             let mut k: int = start_expr;
             while k < n && raw.at(k).to_int() != 125 { k = k + 1; }
             if k >= n {
-                p.err("unterminated `${...}` in string literal");
+                p.err("unterminated \\${...} in string literal");
                 return expr_string(raw, line, col);
             }
             let expr_src: string = raw.substring(start_expr, k);
@@ -1420,7 +1438,7 @@ fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr
                     origin: d.origin,
                     line: line,
                     col: col,
-                    msg: "in `${...}`: ".concat(d.msg),
+                    msg: "in interpolation: ".concat(d.msg),
                 };
                 p.diags.push(bumped);
                 p.error_count = p.error_count + 1;

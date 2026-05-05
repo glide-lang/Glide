@@ -5451,6 +5451,10 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
     int   probe = 0;
     while (((probe  +  1)  <  n)) {
         if (((__glide_char_to_int(__glide_string_at(raw, probe))  ==  36)  &&  (__glide_char_to_int(__glide_string_at(raw, (probe  +  1)))  ==  123))) {
+            if (((probe  >  0)  &&  (__glide_char_to_int(__glide_string_at(raw, (probe  -  1)))  ==  92))) {
+                (probe  =  (probe  +  2));
+                continue;
+            }
             (has_interp  =  true);
             break;
         }
@@ -5464,6 +5468,11 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
     int   j = 0;
     while ((j  <  n)) {
         char   c0 = __glide_string_at(raw, j);
+        if (((((__glide_char_to_int(c0)  ==  92)  &&  ((j  +  2)  <  n))  &&  (__glide_char_to_int(__glide_string_at(raw, (j  +  1)))  ==  36))  &&  (__glide_char_to_int(__glide_string_at(raw, (j  +  2)))  ==  123))) {
+            (fmt  =  __glide_string_concat(fmt, __glide_string_substring(raw, (j  +  1), (j  +  3))));
+            (j  =  (j  +  3));
+            continue;
+        }
         if ((((__glide_char_to_int(c0)  ==  36)  &&  ((j  +  1)  <  n))  &&  (__glide_char_to_int(__glide_string_at(raw, (j  +  1)))  ==  123))) {
             int   start_expr = (j  +  2);
             int   k = start_expr;
@@ -5471,7 +5480,7 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
                 (k  =  (k  +  1));
             }
             if ((k  >=  n)) {
-                Parser_err(p, "unterminated `${...}` in string literal");
+                Parser_err(p, "unterminated \\${...} in string literal");
                 return expr_string(raw, line, col);
             }
             const char*   expr_src = __glide_string_substring(raw, start_expr, k);
@@ -5480,7 +5489,7 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
             Expr*   e = parse_expr(sub_par, 0);
             for (int   di = 0; (di  <  Vector_len__ParseDiag((sub_par-> diags ))); di++) {
                 ParseDiag   d = Vector_get__ParseDiag((sub_par-> diags ), di);
-                ParseDiag   bumped = (( ParseDiag ){. origin  = (d. origin ), . line  = line, . col  = col, . msg  = __glide_string_concat("in `${...}`: ", (d. msg ))});
+                ParseDiag   bumped = (( ParseDiag ){. origin  = (d. origin ), . line  = line, . col  = col, . msg  = __glide_string_concat("in interpolation: ", (d. msg ))});
                 Vector_push__ParseDiag((p-> diags ), bumped);
                 ((p-> error_count )  =  ((p-> error_count )  +  1));
             }
