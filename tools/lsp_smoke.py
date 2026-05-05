@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""
-Bateria de smoke tests pro LSP do Glide. Roda `glide lsp` como subprocesso,
-mostra Content-Length framed messages pelo stdin, lê responses do stdout, e
-checa diagnostics + features de posicao.
+"""End-to-end smoke test for the Glide LSP.
+
+Spawns `glide lsp` as a subprocess, drives it through Content-Length-framed
+JSON-RPC messages, and checks diagnostics + position-based features
+(hover, definition, references, rename, completion, documentSymbol,
+documentHighlight, formatting).
 """
 import json, os, re, subprocess, sys, tempfile
 
