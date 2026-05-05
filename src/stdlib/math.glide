@@ -1,0 +1,71 @@
+// Basic math. Integer helpers in pure Glide; floating-point delegates to libm.
+
+extern fn sqrt(x: f64) -> f64;
+extern fn pow(x: f64, y: f64) -> f64;
+extern fn floor(x: f64) -> f64;
+extern fn ceil(x: f64) -> f64;
+extern fn round(x: f64) -> f64;
+extern fn fabs(x: f64) -> f64;
+extern fn sin(x: f64) -> f64;
+extern fn cos(x: f64) -> f64;
+extern fn tan(x: f64) -> f64;
+extern fn log(x: f64) -> f64;
+extern fn log2(x: f64) -> f64;
+extern fn log10(x: f64) -> f64;
+extern fn exp(x: f64) -> f64;
+extern fn atan2(y: f64, x: f64) -> f64;
+
+pub const PI: f64 = 3.141592653589793;
+pub const E:  f64 = 2.718281828459045;
+
+pub fn min_int(a: int, b: int) -> int { if a < b { return a; } return b; }
+pub fn max_int(a: int, b: int) -> int { if a > b { return a; } return b; }
+pub fn abs_int(a: int) -> int { if a < 0 { return -a; } return a; }
+pub fn sign_int(a: int) -> int {
+    if a > 0 { return 1; }
+    if a < 0 { return -1; }
+    return 0;
+}
+pub fn clamp_int(x: int, lo: int, hi: int) -> int {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+pub fn min_f64(a: f64, b: f64) -> f64 { if a < b { return a; } return b; }
+pub fn max_f64(a: f64, b: f64) -> f64 { if a > b { return a; } return b; }
+pub fn clamp_f64(x: f64, lo: f64, hi: f64) -> f64 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+/// Integer pow: a^b for non-negative b. Saturates / overflows on int wrap.
+pub fn ipow(a: int, b: int) -> int {
+    let mut result: int = 1;
+    let mut base: int = a;
+    let mut exp: int = b;
+    while exp > 0 {
+        if exp % 2 == 1 { result = result * base; }
+        base = base * base;
+        exp = exp / 2;
+    }
+    return result;
+}
+
+/// gcd via Euclidean algorithm. Always returns non-negative.
+pub fn gcd(a: int, b: int) -> int {
+    let mut x: int = abs_int(a);
+    let mut y: int = abs_int(b);
+    while y != 0 {
+        let t: int = y;
+        y = x % y;
+        x = t;
+    }
+    return x;
+}
+
+pub fn lcm(a: int, b: int) -> int {
+    if a == 0 || b == 0 { return 0; }
+    return abs_int(a / gcd(a, b) * b);
+}

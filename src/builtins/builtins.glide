@@ -142,13 +142,9 @@ extern fn args_count() -> int;
 /// path; indices `1..args_count()` are user arguments.
 extern fn args_at(i: int) -> string;
 
-/// Read an entire file into a heap-allocated string. Returns `""` if the
-/// file cannot be opened.
-extern fn read_file(path: string) -> string;
-
-/// Write `content` to `path`, replacing any existing file. Returns true
-/// on success.
-extern fn write_file(path: string, content: string) -> bool;
+// File I/O lives in `stdlib::io` and `stdlib::fs` - import them explicitly
+// to read or write files. The raw C-runtime functions stay private to the
+// stdlib so user code is forced through the Glide-level wrappers.
 
 // ---- Concurrency: M:N scheduler --------------------------------------------
 
@@ -181,37 +177,6 @@ extern fn yield_now();
 /// ```
 extern fn sleep_ms(ms: int);
 
-// ---- TCP sockets ---------------------------------------------------------
-//
-// Cross-platform sync wrappers over libc / winsock. accept / read / write
-// currently block the calling worker thread; once the Phase 2 reactor lands
-// they auto-yield to the scheduler when called from inside a coroutine.
-
-/// Listen on TCP `port` (0.0.0.0). Returns the listening socket fd, or `-1`
-/// if `bind` / `listen` failed (port in use, missing privileges).
-///
-/// ```glide
-/// let fd: int = listen_tcp(8080);
-/// if fd < 0 { println!("bind failed"); return 1; }
-/// ```
-extern fn listen_tcp(port: int) -> int;
-
-/// Block until a client connects to `listener`. Returns the new client fd
-/// or `-1` on error. Pair with `tcp_close` when done.
-///
-/// ```glide
-/// let client: int = accept_tcp(listener);
-/// spawn handle(client);
-/// ```
-extern fn accept_tcp(listener: int) -> int;
-
-/// Read up to `max` bytes from `fd` into `buf`. Returns the number of bytes
-/// actually read (0 = EOF, peer closed) or `-1` on error.
-extern fn tcp_read(fd: int, buf: *void, max: int) -> int;
-
-/// Write `n` bytes from `buf` to `fd`. Returns the number actually written
-/// (may be less than `n` for short writes) or `-1` on error.
-extern fn tcp_write(fd: int, buf: *void, n: int) -> int;
-
-/// Close a socket fd. No-op if `fd < 0`.
-extern fn tcp_close(fd: int);
+// TCP sockets live in `stdlib::net` - import the higher-level wrappers
+// from there. The raw C-runtime sockets are intentionally NOT exposed
+// through builtins to keep the auto-injected surface small.

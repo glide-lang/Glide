@@ -1,0 +1,43 @@
+// Filesystem helpers. The raw C-runtime entry points (`read_file`,
+// `write_file`, `__glide_file_exists`, `__glide_list_dir`) are private to
+// this module; user code goes through `fs_*` wrappers below.
+
+extern fn read_file(path: string) -> string;
+extern fn write_file(path: string, content: string) -> bool;
+extern fn __glide_file_exists(path: string) -> bool;
+extern fn __glide_list_dir(path: string, suffix: string) -> string;
+
+/// Read the entire contents of `path` into a heap-allocated string.
+/// Returns "" on any error (missing file, permission denied, ...).
+pub fn fs_read(path: string) -> string { return read_file(path); }
+
+/// Write `content` to `path`, replacing any existing file. Returns true
+/// on success.
+pub fn fs_write(path: string, content: string) -> bool { return write_file(path, content); }
+
+/// True if `path` is openable for reading. Cheap stat-style check.
+pub fn fs_exists(path: string) -> bool { return __glide_file_exists(path); }
+
+/// List filenames directly under `dir` (no recursion). Returns names only,
+/// not full paths. Filter by suffix (e.g. `.glide`); pass "" to keep all.
+/// Sorted ascending so callers get deterministic output across platforms.
+pub fn fs_list(dir: string, suffix: string) -> *Vector<string> {
+    let raw: string = __glide_list_dir(dir, suffix);
+    if raw.eq("") { return Vector::new(); }
+    return raw.split("\n");
+}
+
+/// Read `path` and split on `\n`. Trailing empty entry from a final newline
+/// is dropped so `for line in fs_read_lines(...)` does the obvious thing.
+pub fn fs_read_lines(path: string) -> *Vector<string> {
+    let body: string = read_file(path);
+    if body.eq("") { return Vector::new(); }
+    let lines: *Vector<string> = body.split("\n");
+    let n: int = lines.len();
+    if n > 0 && lines.get(n - 1).eq("") {
+        let trimmed: *Vector<string> = Vector::new();
+        for let i: int = 0; i < n - 1; i++ { trimmed.push(lines.get(i)); }
+        return trimmed;
+    }
+    return lines;
+}

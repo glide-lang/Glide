@@ -1,0 +1,63 @@
+// TCP networking. Wraps the raw socket fds from the C runtime in Listener
+// / Conn structs so users get owning handles + method-style dispatch. The
+// underlying `accept` / `read` / `write` block the calling worker today;
+// once the Phase 2 reactor lands they'll auto-yield from coroutines.
+
+extern fn listen_tcp(port: int) -> int;
+extern fn accept_tcp(listener: int) -> int;
+extern fn tcp_read(fd: int, buf: *void, max: int) -> int;
+extern fn tcp_write(fd: int, buf: *void, n: int) -> int;
+extern fn tcp_close(fd: int);
+
+pub struct Listener { fd: int }
+pub struct Conn     { fd: int }
+
+impl Listener {
+    /// Bind + listen on TCP `port` (all interfaces). Returns a Listener
+    /// with `fd < 0` on failure (port in use, missing privileges).
+    pub fn bind(port: int) -> *Listener {
+        let l: *Listener = malloc(sizeof(Listener)) as *Listener;
+        l.fd = listen_tcp(port);
+        return l;
+    }
+
+    pub fn ok(self: *Listener) -> bool { return self.fd >= 0; }
+
+    /// Block until a client connects. Returns a `Conn` with `fd < 0` on
+    /// error.
+    pub fn accept(self: *Listener) -> *Conn {
+        let c: *Conn = malloc(sizeof(Conn)) as *Conn;
+        c.fd = accept_tcp(self.fd);
+        return c;
+    }
+
+    pub fn close(self: *Listener) {
+        if self.fd >= 0 { tcp_close(self.fd); }
+        free(self as *void);
+    }
+}
+
+impl Conn {
+    pub fn ok(self: *Conn) -> bool { return self.fd >= 0; }
+
+    /// Read up to `max` bytes into `buf`. Returns the byte count
+    /// (0 = peer closed) or `-1` on error.
+    pub fn read(self: *Conn, buf: *void, max: int) -> int {
+        return tcp_read(self.fd, buf, max);
+    }
+
+    /// Write `n` bytes from `buf`. May write fewer; loop on the result.
+    pub fn write(self: *Conn, buf: *void, n: int) -> int {
+        return tcp_write(self.fd, buf, n);
+    }
+
+    /// Convenience: write a whole string (no NUL).
+    pub fn write_str(self: *Conn, s: string) -> int {
+        return tcp_write(self.fd, s as *void, s.len());
+    }
+
+    pub fn close(self: *Conn) {
+        if self.fd >= 0 { tcp_close(self.fd); }
+        free(self as *void);
+    }
+}

@@ -1,0 +1,68 @@
+// Mutable byte buffer. Backed by malloc'd memory; doubles capacity on grow.
+// Use this for building up binary payloads or string-like buffers when you
+// don't want the per-concat allocation that string ops trigger.
+
+extern fn realloc(p: *void, n: usize) -> *void;
+
+pub struct ByteBuffer {
+    data: *u8,
+    len: int,
+    cap: int,
+}
+
+impl ByteBuffer {
+    pub fn new() -> *ByteBuffer {
+        let b: *ByteBuffer = malloc(sizeof(ByteBuffer)) as *ByteBuffer;
+        b.data = malloc(16) as *u8;
+        b.len = 0;
+        b.cap = 16;
+        return b;
+    }
+
+    pub fn free(self: *ByteBuffer) {
+        free(self.data as *void);
+        free(self as *void);
+    }
+
+    pub fn len(self: *ByteBuffer) -> int { return self.len; }
+    pub fn cap(self: *ByteBuffer) -> int { return self.cap; }
+
+    fn ensure(self: *ByteBuffer, want: int) {
+        if want <= self.cap { return; }
+        let mut newcap: int = self.cap;
+        while newcap < want { newcap = newcap * 2; }
+        self.data = realloc(self.data as *void, newcap as usize) as *u8;
+        self.cap = newcap;
+    }
+
+    pub fn push(self: *ByteBuffer, b: u8) {
+        self.ensure(self.len + 1);
+        self.data[self.len] = b;
+        self.len = self.len + 1;
+    }
+
+    pub fn push_str(self: *ByteBuffer, s: string) {
+        let n: int = s.len();
+        self.ensure(self.len + n);
+        let mut i: int = 0;
+        while i < n {
+            self.data[self.len + i] = s.at(i).to_int() as u8;
+            i = i + 1;
+        }
+        self.len = self.len + n;
+    }
+
+    pub fn at(self: *ByteBuffer, i: int) -> u8 { return self.data[i]; }
+
+    pub fn clear(self: *ByteBuffer) { self.len = 0; }
+
+    /// Borrow the buffer as a NUL-terminated string. Mutates `self` to ensure
+    /// the trailing NUL — caller shouldn't push more after this without
+    /// realising the slot it took. Returned string is valid until the next
+    /// `push` / `clear` / `free`.
+    pub fn as_string(self: *ByteBuffer) -> string {
+        self.ensure(self.len + 1);
+        self.data[self.len] = 0 as u8;
+        return self.data as string;
+    }
+}

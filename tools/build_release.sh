@@ -119,10 +119,12 @@ else
     "./$HOST_GLIDE" build bootstrap/main.glide --target="$ZIG_TRIPLE" -o "$TARGET_GLIDE"
 fi
 
-# ---- Stage stdlib + Zig + docs ----
+# ---- Stage src/ + Zig + docs ----
+# `src/builtins/` is auto-injected by the compiler; `src/stdlib/` ships
+# alongside it so user code can `import "src/stdlib/X.glide"`.
 echo ">> Staging $STAGE"
-rm -rf "$STAGE/stdlib" "$STAGE/runtime"
-cp -r stdlib "$STAGE/"
+rm -rf "$STAGE/src" "$STAGE/runtime"
+cp -r src "$STAGE/"
 mkdir -p "$STAGE/runtime"
 if [ -n "$TARGET_ZIG_DIR" ]; then
     cp -r "$TARGET_ZIG_DIR" "$STAGE/runtime/zig"

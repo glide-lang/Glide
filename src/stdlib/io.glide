@@ -1,0 +1,35 @@
+// Standard input / output helpers. `print!` / `println!` cover the happy
+// path for stdout; this module fills in stderr, blocking line / byte reads
+// from stdin, and an explicit flush.
+
+extern fn __glide_read_line() -> string;
+extern fn __glide_read_bytes(n: int) -> string;
+extern fn __glide_write_str(s: string);
+extern fn __glide_write_bytes(s: string, n: int);
+extern fn __glide_flush_stdout();
+extern fn __glide_log(s: string);
+
+/// Read one line from stdin, including the trailing newline if present.
+/// Returns "" on EOF.
+pub fn read_line() -> string { return __glide_read_line(); }
+
+/// Read up to `n` raw bytes from stdin. Caller owns the returned string.
+pub fn read_bytes(n: int) -> string { return __glide_read_bytes(n); }
+
+/// Write `s` to stdout without buffering a newline. Cheaper than `print!`
+/// when you don't need format inference. Named `io_write` (not `write`) so
+/// it doesn't collide with the libc `write(2)` declaration in `<io.h>`.
+pub fn io_write(s: string) { __glide_write_str(s); }
+
+/// Write exactly `n` bytes from `s` to stdout. Use this for binary payloads
+/// where the string may contain embedded NULs.
+pub fn io_write_bytes(s: string, n: int) { __glide_write_bytes(s, n); }
+
+/// Force-flush the stdout buffer. Stdout is line-buffered when attached to
+/// a TTY but block-buffered when piped, so explicit `flush()` matters for
+/// progress indicators / interactive REPLs.
+pub fn flush() { __glide_flush_stdout(); }
+
+/// Write `s` to stderr with a trailing newline. Stderr is unbuffered, so no
+/// flush is needed.
+pub fn eprintln(s: string) { __glide_log(s); }
