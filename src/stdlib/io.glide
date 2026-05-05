@@ -10,26 +10,63 @@ extern fn __glide_flush_stdout();
 extern fn __glide_log(s: string);
 
 /// Read one line from stdin, including the trailing newline if present.
-/// Returns "" on EOF.
+/// Returns `""` on EOF — callers can disambiguate empty input from EOF
+/// only by checking the file descriptor state externally.
+///
+/// ```glide
+/// import stdlib::io::*;
+///
+/// io_write("name? ");
+/// flush();
+/// let name: string = read_line();
+/// println!("hello,", name.trim());
+/// ```
 pub fn read_line() -> string { return __glide_read_line(); }
 
-/// Read up to `n` raw bytes from stdin. Caller owns the returned string.
+/// Read up to `n` raw bytes from stdin. The returned string is the actual
+/// chunk read (may be shorter than `n` near EOF). Caller owns the memory.
+///
+/// ```glide
+/// let chunk: string = read_bytes(4096);   // tail of the stdin pipe
+/// ```
 pub fn read_bytes(n: int) -> string { return __glide_read_bytes(n); }
 
 /// Write `s` to stdout without buffering a newline. Cheaper than `print!`
 /// when you don't need format inference. Named `io_write` (not `write`) so
 /// it doesn't collide with the libc `write(2)` declaration in `<io.h>`.
+///
+/// ```glide
+/// io_write("loading ");
+/// for i in 0..3 { io_write("."); flush(); sleep_ms(200); }
+/// io_write(" done\n");
+/// ```
 pub fn io_write(s: string) { __glide_write_str(s); }
 
 /// Write exactly `n` bytes from `s` to stdout. Use this for binary payloads
 /// where the string may contain embedded NULs.
+///
+/// ```glide
+/// // Echo a 16-byte header verbatim.
+/// io_write_bytes(buf, 16);
+/// ```
 pub fn io_write_bytes(s: string, n: int) { __glide_write_bytes(s, n); }
 
 /// Force-flush the stdout buffer. Stdout is line-buffered when attached to
 /// a TTY but block-buffered when piped, so explicit `flush()` matters for
-/// progress indicators / interactive REPLs.
+/// progress indicators and interactive REPLs.
+///
+/// ```glide
+/// io_write("> ");   // no newline — without flush, prompt won't show
+/// flush();
+/// let cmd: string = read_line();
+/// ```
 pub fn flush() { __glide_flush_stdout(); }
 
-/// Write `s` to stderr with a trailing newline. Stderr is unbuffered, so no
-/// flush is needed.
+/// Write `s` to stderr with a trailing newline. Stderr is unbuffered, so
+/// no flush is needed. Use this for log lines that must not interleave
+/// with normal `println!` stdout output.
+///
+/// ```glide
+/// eprintln("warning: missing config file, using defaults");
+/// ```
 pub fn eprintln(s: string) { __glide_log(s); }
