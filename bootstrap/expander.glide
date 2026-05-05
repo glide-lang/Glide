@@ -1,13 +1,18 @@
 import stdlib::hashmap::*;
 import ast;
 
-// Macro expander. Runs after parsing, before typer/codegen.
+// Macro expander. Runs after the parser (so the body and call args are
+// already AST), before typer/codegen.
 //
-// v1 supports:
+// Surface forms supported:
 //   - Top-level static macros: `macro name!($x:expr) { ... }`
 //   - Variadic with separator: `macro name!($($x:expr),*) { ... }`
 //   - In-body placeholder `$x` in expressions; repetition `$( body );*` at stmt
-//   - Macro calls only at statement position (`name!(args);`)
+//   - Macro calls at statement position (`name!(args);`) and method position
+//     (`v.push_all!(1,2,3)` — see Vector::push_all in src/builtins/vector.glide)
+//
+// Hygiene: bindings introduced by the macro body share the caller's scope.
+// No alpha-renaming yet; keep macro-local variable names distinctive.
 //
 // Phase 3 adds type-attached macros declared inside `impl T { }` and call forms
 // `recv.name!(args)` and `Type::name!(args)`.
