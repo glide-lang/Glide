@@ -1420,8 +1420,9 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
         if e.kind == EX_CAST { child_hint = e.cast_to; }
         prescan_expr(g, e.lhs, child_hint);
     }
-    if e.rhs != null { prescan_expr(g, e.rhs, null); }
-    if e.operand != null { prescan_expr(g, e.operand, null); }
+    let no_hint: *Type = null;
+    if e.rhs != null { prescan_expr(g, e.rhs, no_hint); }
+    if e.operand != null { prescan_expr(g, e.operand, no_hint); }
     if e.args != null {
         for let i: int = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -1488,10 +1489,11 @@ fn prescan_stmt(g: *CG, s: *Stmt) {
         }
         return;
     }
-    if s.expr_value != null { prescan_expr(g, s.expr_value, null); }
-    if s.cond != null { prescan_expr(g, s.cond, null); }
+    let no_hint: *Type = null;
+    if s.expr_value != null { prescan_expr(g, s.expr_value, no_hint); }
+    if s.cond != null { prescan_expr(g, s.cond, no_hint); }
     if s.for_init != null { prescan_stmt(g, s.for_init); }
-    if s.for_step != null { prescan_expr(g, s.for_step, null); }
+    if s.for_step != null { prescan_expr(g, s.for_step, no_hint); }
     if s.then_body != null {
         for let i: int = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -1952,7 +1954,8 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         }
 
         // Try generic monomorphization based on arg types (no ret-hint here).
-        let _mono_ok: bool = try_mono_call(g, e, null);
+        let no_mono_hint: *Type = null;
+        let _mono_ok: bool = try_mono_call(g, e, no_mono_hint);
 
         // Method call: callee is a Member. Rewrite to Type_method(receiver, args).
         if e.lhs != null && e.lhs.kind == EX_MEMBER {
