@@ -157,7 +157,12 @@ The compiler is written in Glide. To build it from scratch you only need a C com
 
 ```bash
 git clone <repo> && cd glide
-cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm     # 1. seed
+
+# 1. Seed. -lws2_32 is needed on Windows for the TCP socket builtins;
+#    POSIX skips it.
+cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lws2_32   # Windows
+cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm            # POSIX
+
 bash tools/install_zig.sh                                          # 2. fetch Zig
 ./glide_seed build bootstrap/main.glide -o glide                   # 3. self-host
 bash tools/build_release.sh                                        # 4. (optional) make a release archive

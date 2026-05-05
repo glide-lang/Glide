@@ -74,6 +74,7 @@ static bool write_file(const char* path, const char* content) {
 }
 #ifdef _WIN32
 #include <io.h>
+#include <winsock2.h>     /* must precede windows.h on mingw-w64 */
 #include <windows.h>
 #define __glide_dup _dup
 #define __glide_dup2 _dup2

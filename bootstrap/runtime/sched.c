@@ -5,6 +5,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #ifdef _WIN32
+/* winsock2.h must precede windows.h on MinGW / mingw-w64; the seed's
+   socket runtime later includes winsock2.h, so include it here too to
+   keep the order well-defined regardless of which template lands first
+   in the emitted bootstrap.c. */
+# include <winsock2.h>
 # include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */
 #else
 # include <unistd.h>
