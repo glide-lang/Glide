@@ -1,7 +1,10 @@
-// TCP networking. Wraps the raw socket fds from the C runtime in Listener
-// / Conn structs so users get owning handles + method-style dispatch. The
-// underlying `accept` / `read` / `write` block the calling worker today;
-// once the Phase 2 reactor lands they'll auto-yield from coroutines.
+// TCP networking. Wraps the raw socket file descriptors from the C
+// runtime in `Listener` / `Conn` structs so users get owning handles
+// and method-style dispatch.
+//
+// The underlying `accept` / `read` / `write` block the calling worker
+// today. Once the Phase 2 reactor lands they'll auto-yield from
+// coroutines, but the surface API stays the same.
 
 extern fn listen_tcp(port: int) -> int;
 extern fn accept_tcp(listener: int) -> int;
@@ -13,24 +16,44 @@ pub struct Listener { fd: int }
 pub struct Conn     { fd: int }
 
 impl Listener {
-    /// Bind + listen on TCP `port` (all interfaces). Returns a Listener
-    /// with `fd < 0` on failure (port in use, missing privileges).
+    /// Bind + listen on TCP `port` across all interfaces. Returns a
+    /// `Listener` with `fd < 0` on failure (port already bound, missing
+    /// privileges, …) — check `ok()` before using.
+    ///
+    /// ```glide
+    /// let l: *Listener = Listener::bind(8080);
+    /// if !l.ok() {
+    ///     println!("bind failed");
+    ///     return 1;
+    /// }
+    /// println!("listening on :8080");
+    /// ```
     pub fn bind(port: int) -> *Listener {
         let l: *Listener = malloc(sizeof(Listener)) as *Listener;
         l.fd = listen_tcp(port);
         return l;
     }
 
+    /// `true` when the listener is bound and ready to accept.
     pub fn ok(self: *Listener) -> bool { return self.fd >= 0; }
 
     /// Block until a client connects. Returns a `Conn` with `fd < 0` on
-    /// error.
+    /// error — always check `ok()` first.
+    ///
+    /// ```glide
+    /// while true {
+    ///     let c: *Conn = l.accept();
+    ///     if !c.ok() { c.close(); continue; }
+    ///     spawn handle(c);
+    /// }
+    /// ```
     pub fn accept(self: *Listener) -> *Conn {
         let c: *Conn = malloc(sizeof(Conn)) as *Conn;
         c.fd = accept_tcp(self.fd);
         return c;
     }
 
+    /// Close the listening socket and free the struct. Pair with `defer`.
     pub fn close(self: *Listener) {
         if self.fd >= 0 { tcp_close(self.fd); }
         free(self as *void);
@@ -38,24 +61,51 @@ impl Listener {
 }
 
 impl Conn {
+    /// `true` when the connection handshake completed.
     pub fn ok(self: *Conn) -> bool { return self.fd >= 0; }
 
-    /// Read up to `max` bytes into `buf`. Returns the byte count
-    /// (0 = peer closed) or `-1` on error.
+    /// Read up to `max` bytes into `buf`. Returns:
+    ///   * `n > 0`: bytes actually read
+    ///   * `0`:     peer closed the connection cleanly
+    ///   * `-1`:    error (connection reset, bad fd, …)
+    ///
+    /// ```glide
+    /// let buf: *u8 = malloc(1024) as *u8;
+    /// let n: int = c.read(buf as *void, 1024);
+    /// if n <= 0 { c.close(); return; }
+    /// ```
     pub fn read(self: *Conn, buf: *void, max: int) -> int {
         return tcp_read(self.fd, buf, max);
     }
 
-    /// Write `n` bytes from `buf`. May write fewer; loop on the result.
+    /// Write `n` bytes from `buf`. May write fewer — loop on the
+    /// returned count when sending payloads larger than the kernel send
+    /// buffer.
+    ///
+    /// ```glide
+    /// let mut sent: int = 0;
+    /// while sent < n {
+    ///     let k: int = c.write(buf as *void, n - sent);
+    ///     if k <= 0 { break; }
+    ///     sent = sent + k;
+    /// }
+    /// ```
     pub fn write(self: *Conn, buf: *void, n: int) -> int {
         return tcp_write(self.fd, buf, n);
     }
 
-    /// Convenience: write a whole string (no NUL).
+    /// Convenience: write a whole string (no trailing NUL is sent).
+    /// Returns the byte count actually written.
+    ///
+    /// ```glide
+    /// c.write_str("HTTP/1.0 200 OK\r\n\r\n");
+    /// ```
     pub fn write_str(self: *Conn, s: string) -> int {
         return tcp_write(self.fd, s as *void, s.len());
     }
 
+    /// Close the connection and free the struct. After `close()`, the
+    /// pointer is dangling; do not touch it again.
     pub fn close(self: *Conn) {
         if self.fd >= 0 { tcp_close(self.fd); }
         free(self as *void);
