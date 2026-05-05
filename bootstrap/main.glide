@@ -1,5 +1,18 @@
-// Drives the Glide-in-Glide lexer + parser over a source file.
-// Usage: glide run bootstrap/main.glide -- path/to/source.glide
+// Compiler driver and CLI entry point.
+//
+// Subcommands:
+//   build <file> [-o out]    parse + check + emit C, hand off to a C
+//                            compiler (zig cc / cc / cl), produce an exe.
+//   run   <file>             build then exec the resulting binary.
+//   check <file>             parse + typecheck only; print diagnostics.
+//   fmt   <file> [--write]   parse + reformat; stdout by default.
+//   ast   <file>             parse + dump JSON AST to stdout.
+//   lsp                      run the Language Server over stdio.
+//
+// Module loading: `load_into_str` walks parsed source for `import` stmts,
+// pulls each referenced file into the unit, and pre-scans for fully-
+// qualified path refs (`a::b::c::Item`) so unimported call sites still
+// resolve when their module file exists on disk.
 
 import stdlib::hashmap::*;
 import lexer;
