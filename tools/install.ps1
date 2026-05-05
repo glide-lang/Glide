@@ -18,7 +18,7 @@ param(
 )
 
 if (-not $DownloadUrlBase) {
-    $DownloadUrlBase = "https://github.com/Murilinho145SG/Glide/releases/download/v$Version"
+    $DownloadUrlBase = "https://github.com/glide-lang/Glide/releases/download/v$Version"
 }
 
 $ErrorActionPreference = "Stop"

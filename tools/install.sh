@@ -17,7 +17,7 @@ VERSION="${VERSION:-0.1.0}"
 ARCHIVE=""
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/glide}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-DOWNLOAD_URL_BASE="${DOWNLOAD_URL_BASE:-https://github.com/Murilinho145SG/Glide/releases/download/v${VERSION}}"
+DOWNLOAD_URL_BASE="${DOWNLOAD_URL_BASE:-https://github.com/glide-lang/Glide/releases/download/v${VERSION}}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
