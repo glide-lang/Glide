@@ -1,12 +1,18 @@
 import ast;
 import parser;
 
-// Surface-syntax lowering passes that run between parse and typer/codegen.
+// Lowering pass — desugars surface syntax into core AST shapes the typer
+// and codegen already understand. Runs between expander and typer.
 //
-// Currently lowers ST_FOR_IN to the existing ST_FOR / ST_BLOCK shape so the
-// rest of the pipeline (typer, borrow checker, codegen) doesn't need to know
-// about for-in. The formatter reads the program before this runs, so it
-// sees the sugared form and re-emits it verbatim.
+// Today's lowerings:
+//   ST_FOR_IN (`for x in 0..n`)        -> ST_FOR + ST_BLOCK with explicit
+//                                         counter, bound, and increment.
+//   ST_WHILE_RECV (`while let v = c.recv()`) is left intact and handled
+//   directly by codegen because it needs runtime close-detection.
+//
+// The formatter (fmt.glide) reads the program *before* lowering, so it
+// re-emits the sugared form. That means new sugar should land in the
+// parser/lower pair without touching fmt.
 
 pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
     // Trait expansion has to run first so the for-in / default-method
