@@ -273,12 +273,28 @@ static void __glide_q_push_chain(int wid, __glide_task* head, __glide_task* tail
     }
 }
 
+/* Sticky preferred worker for OS threads that aren't part of the M:N
+   pool. Main thread gets the first slot (W0); subsequent spawn_thread
+   callers (accept loops in http_listen_workers, for example) round-
+   robin over the rest so they don't all dogpile W0's spinlock + cv. */
+static _Thread_local int __glide_outside_pref_worker = -1;
+static atomic_int        __glide_next_outside_pref   = 0;
+
 static int __glide_pick_worker(void) {
-    /* Inside a coro: same worker as caller (cheap, keeps cache hot).
-       Outside (main): always W0 — work-stealing redistributes. This avoids
-       the per-spawn atomic+cross-thread cache bounce on N target queues. */
+    /* Inside a coro: same worker as caller (cheap, keeps cache hot). */
     if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;
-    return 0;
+    /* Outside: stick to one worker per OS thread. Single-main-thread
+       case still resolves to W0 (it asks first), so the well-trodden
+       hot path is unchanged. The win shows up when there are 2+
+       non-coro spawners in the same process. */
+    if (__glide_outside_pref_worker < 0) {
+        int next = atomic_fetch_add_explicit(&__glide_next_outside_pref, 1,
+                                             memory_order_relaxed);
+        int n = __glide_n_workers;
+        if (n <= 0) n = 1;
+        __glide_outside_pref_worker = next % n;
+    }
+    return __glide_outside_pref_worker;
 }
 
 /* Work-stealing: when our queue is empty, try grabbing the head of
@@ -528,13 +544,21 @@ void __glide_sched_init(void) {
     const char* env = getenv("GLIDE_WORKERS");
     if (env) __glide_n_workers = atoi(env);
     if (__glide_n_workers <= 0) {
+        int ncpu;
 #ifdef _WIN32
         SYSTEM_INFO si; GetSystemInfo(&si);
-        __glide_n_workers = (int)si.dwNumberOfProcessors;
+        ncpu = (int)si.dwNumberOfProcessors;
 #else
         long n = sysconf(_SC_NPROCESSORS_ONLN);
-        __glide_n_workers = (n > 0) ? (int)n : 4;
+        ncpu = (n > 0) ? (int)n : 4;
 #endif
+        /* Cap default workers at 8. The M:N pool plus the reactor/timer
+           pthreads plus any spawn_thread accept loops the user adds are
+           all competing for CPU; on a 32-vCPU host scaling workers to
+           ncpu makes wakes/idles thrash the cv list and drops HTTP
+           throughput by 2× compared to 8 workers. Users can opt back
+           into ncpu via GLIDE_WORKERS=<n>. */
+        __glide_n_workers = ncpu < 8 ? ncpu : 8;
     }
     __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));
     for (int i = 0; i < __glide_n_workers; i++) {
@@ -723,7 +747,12 @@ static _Thread_local __glide_task* __glide_main_buf_tail = NULL;
 static _Thread_local int __glide_main_buf_count = 0;
 static void __glide_flush_main_buf(void) {
     if (!__glide_main_buf_head) return;
-    __glide_q_push_chain(0, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);
+    /* Match the per-thread sticky worker chosen by __glide_pick_worker
+       above, so the chain lands on the same queue the tasks' home_worker
+       points at. Otherwise work-stealing has to immediately re-route. */
+    int target = __glide_outside_pref_worker;
+    if (target < 0) target = 0;
+    __glide_q_push_chain(target, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);
     __glide_main_buf_head = NULL;
     __glide_main_buf_tail = NULL;
     __glide_main_buf_count = 0;
