@@ -2053,6 +2053,7 @@ typedef struct  UseSite  {
 #define  JSON_ARRAY  4
 #define  JSON_OBJECT  5
 static const const char*   FMT_INDENT = "    ";
+#define  SYMKIND_MODULE  (-1)
 #define  MODE_EMIT  0
 #define  MODE_BUILD  1
 #define  MODE_RUN  2
@@ -2451,10 +2452,14 @@ HashMap__bool*   current_imports (Vector__Stmt*   stmts);
 const char*   lsp_strip_quotes (const char*   s);
 int   find_import_insertion_pos (const char*   text);
 JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, bool   already_imported, int   insert_line);
+const char*   ascii_to_lower (const char*   s);
 const char*   pretty_module (const char*   origin);
+void   list_module_members (LspState*   state, const char*   path, JsonValue*   items, HashMap__bool*   seen);
+int   find_substr (const char*   haystack, const char*   needle);
 int   ci_kind_for_stmt_kind (int   k);
 int   cursor_before_partial (const char*   text, int   line0, int   col0);
 const char*   path_qualifier_before (const char*   text, int   line0, int   col0);
+const char*   module_path_before (const char*   text, int   line0, int   col0);
 const char*   member_qualifier_before (const char*   text, int   line0, int   col0);
 const char*   chained_ctor_qualifier_before (const char*   text, int   line0, int   col0);
 const char*   lookup_local_type (Vector__Stmt*   stmts, int   line0, const char*   var);
@@ -13616,13 +13621,16 @@ void   populate_stdlib_index (LspState*   state) {
         if (__glide_string_eq(src, "")) {
             continue;
         }
-        const char*   module = __glide_string_concat("stdlib::", drop_glide_ext(fname));
+        const char*   mod_name = drop_glide_ext(fname);
+        const char*   module = __glide_string_concat("stdlib::", mod_name);
         Lexer*   lex = Lexer_new(src);
         Parser*   par = Parser_new(lex);
         Vector__Stmt*   stmts = parse_program(par);
         if ((stmts  ==  NULL)) {
             continue;
         }
+        const char*   summary = "";
+        int   count = 0;
         for (int   j = 0; (j  <  Vector_len__Stmt(stmts)); j++) {
             Stmt   s = Vector_get__Stmt(stmts, j);
             if ((!(s. is_pub ))) {
@@ -13659,7 +13667,24 @@ void   populate_stdlib_index (LspState*   state) {
             }
             ImportableSym   sym = (( ImportableSym ){. name  = (s. name ), . kind  = (s. kind ), . module  = module, . signature  = sig, . label_extra  = label_extra, . doc  = (s. doc_comment ), . snippet  = snip, . has_snippet  = has_snip});
             Vector_push__ImportableSym((state-> stdlib_index ), sym);
+            if ((count  <  12)) {
+                if ((!__glide_string_eq(summary, ""))) {
+                    (summary  =  __glide_string_concat(summary, ", "));
+                }
+                (summary  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(summary, "`"), (s. name )), "`"));
+            } else {
+                if ((count  ==  12)) {
+                    (summary  =  __glide_string_concat(summary, ", …"));
+                }
+            }
+            (count  =  (count  +  1));
         }
+        const char*   mdoc = "Glide stdlib module.";
+        if ((!__glide_string_eq(summary, ""))) {
+            (mdoc  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(mdoc, "\n\nExports: "), summary), "."));
+        }
+        ImportableSym   mod_sym = (( ImportableSym ){. name  = mod_name, . kind  = SYMKIND_MODULE, . module  = module, . signature  = __glide_string_concat("module ", mod_name), . label_extra  = "", . doc  = mdoc, . snippet  = __glide_string_concat(mod_name, "::"), . has_snippet  = true});
+        Vector_push__ImportableSym((state-> stdlib_index ), mod_sym);
     }
 }
 
@@ -13689,7 +13714,7 @@ const char*   fn_snippet (Stmt*   s) {
                 (out  =  __glide_string_concat(out, ", "));
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "${"), int_to_str((( int64_t )(i  +  1)))), ":"), (p. name )), "}"));
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\${"), int_to_str((( int64_t )(i  +  1)))), ":"), (p. name )), "}"));
         }
     }
     (out  =  __glide_string_concat(out, ")"));
@@ -14977,6 +15002,10 @@ HashMap__bool*   current_imports (Vector__Stmt*   stmts) {
         const char*   p = lsp_strip_quotes((s. import_path ));
         if ((!__glide_string_eq(p, ""))) {
             HashMap_insert__bool(h, p, true);
+            const char*   canon = pretty_module(p);
+            if ((!__glide_string_eq(canon, ""))) {
+                HashMap_insert__bool(h, canon, true);
+            }
         }
         if ((((s. import_short )  !=  NULL)  &&  (!__glide_string_eq((s. import_short ), "")))) {
             HashMap_insert__bool(h, (s. import_short ), true);
@@ -15032,16 +15061,22 @@ JsonValue*   rich_completion_item (const char*   label, const char*   label_extr
         }
         json_obj_set(it, "labelDetails", ld);
     }
-    const char*   detail_text = signature;
+    if ((!__glide_string_eq(signature, ""))) {
+        json_obj_set(it, "detail", json_string(signature));
+    }
+    const char*   lower = ascii_to_lower(label);
+    const char*   filter = lower;
+    if ((!__glide_string_eq(lower, label))) {
+        (filter  =  __glide_string_concat(__glide_string_concat(filter, " "), label));
+    }
     if ((!__glide_string_eq(module, ""))) {
-        if ((!__glide_string_eq(detail_text, ""))) {
-            (detail_text  =  __glide_string_concat(detail_text, "    "));
+        (filter  =  __glide_string_concat(__glide_string_concat(filter, " "), module));
+        const char*   mlower = ascii_to_lower(module);
+        if ((!__glide_string_eq(mlower, module))) {
+            (filter  =  __glide_string_concat(__glide_string_concat(filter, " "), mlower));
         }
-        (detail_text  =  __glide_string_concat(detail_text, module));
     }
-    if ((!__glide_string_eq(detail_text, ""))) {
-        json_obj_set(it, "detail", json_string(detail_text));
-    }
+    json_obj_set(it, "filterText", json_string(filter));
     const char*   md = "";
     if ((!__glide_string_eq(signature, ""))) {
         (md  =  __glide_string_concat(__glide_string_concat("```glide\n", signature), "\n```"));
@@ -15091,6 +15126,20 @@ JsonValue*   rich_completion_item (const char*   label, const char*   label_extr
     return it;
 }
 
+const char*   ascii_to_lower (const char*   s) {
+    int   n = __glide_string_len(s);
+    const char*   out = "";
+    for (int   i = 0; (i  <  n); i++) {
+        int   c = __glide_char_to_int(__glide_string_at(s, i));
+        if (((c  >=  65)  &&  (c  <=  90))) {
+            (out  =  __glide_string_concat(out, __glide_char_to_string((( char )(c  +  32)))));
+        } else {
+            (out  =  __glide_string_concat(out, __glide_string_substring(s, i, (i  +  1))));
+        }
+    }
+    return out;
+}
+
 const char*   pretty_module (const char*   origin) {
     if (((origin  ==  NULL)  ||  __glide_string_eq(origin, ""))) {
         return "";
@@ -15127,7 +15176,86 @@ const char*   pretty_module (const char*   origin) {
     return "";
 }
 
+void   list_module_members (LspState*   state, const char*   path, JsonValue*   items, HashMap__bool*   seen) {
+    if (((state-> stdlib_index )  ==  NULL)) {
+        return;
+    }
+    int   n = Vector_len__ImportableSym((state-> stdlib_index ));
+    if (__glide_string_eq(path, "stdlib")) {
+        HashMap__bool*   mods = HashMap_new__bool();
+        for (int   i = 0; (i  <  n); i++) {
+            ImportableSym   sym = Vector_get__ImportableSym((state-> stdlib_index ), i);
+            const char*   m = (sym. module );
+            int   cut = find_substr(m, "::");
+            const char*   leaf = m;
+            if ((cut  >=  0)) {
+                (leaf  =  __glide_string_substring(m, (cut  +  2), __glide_string_len(m)));
+            }
+            if (HashMap_contains__bool(mods, leaf)) {
+                continue;
+            }
+            HashMap_insert__bool(mods, leaf, true);
+            if (HashMap_contains__bool(seen, leaf)) {
+                continue;
+            }
+            HashMap_insert__bool(seen, leaf, true);
+            JsonValue*   item = rich_completion_item(leaf, "", 9, __glide_string_concat("module ", leaf), "stdlib submodule", "", leaf, false, true, 0);
+            json_arr_push(items, item);
+        }
+        HashMap_free__bool(mods);
+        return;
+    }
+    for (int   i = 0; (i  <  n); i++) {
+        ImportableSym   sym = Vector_get__ImportableSym((state-> stdlib_index ), i);
+        if (((sym. kind )  ==  SYMKIND_MODULE)) {
+            continue;
+        }
+        const char*   m = (sym. module );
+        int   cut = find_substr(m, "::");
+        const char*   leaf = m;
+        if ((cut  >=  0)) {
+            (leaf  =  __glide_string_substring(m, (cut  +  2), __glide_string_len(m)));
+        }
+        if (((!__glide_string_eq(m, path))  &&  (!__glide_string_eq(leaf, path)))) {
+            continue;
+        }
+        if (HashMap_contains__bool(seen, (sym. name ))) {
+            continue;
+        }
+        HashMap_insert__bool(seen, (sym. name ), true);
+        JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), true, 0);
+        json_arr_push(items, item);
+    }
+}
+
+int   find_substr (const char*   haystack, const char*   needle) {
+    int   hn = __glide_string_len(haystack);
+    int   nn = __glide_string_len(needle);
+    if ((nn  ==  0)) {
+        return 0;
+    }
+    if ((nn  >  hn)) {
+        return (-1);
+    }
+    int   limit = (hn  -  nn);
+    int   i = 0;
+    while ((i  <=  limit)) {
+        int   k = 0;
+        while (((k  <  nn)  &&  (__glide_char_to_int(__glide_string_at(haystack, (i  +  k)))  ==  __glide_char_to_int(__glide_string_at(needle, k))))) {
+            (k  =  (k  +  1));
+        }
+        if ((k  ==  nn)) {
+            return i;
+        }
+        (i  =  (i  +  1));
+    }
+    return (-1);
+}
+
 int   ci_kind_for_stmt_kind (int   k) {
+    if ((k  ==  SYMKIND_MODULE)) {
+        return 9;
+    }
     if ((k  ==  ST_FN)) {
         return 3;
     }
@@ -15189,7 +15317,61 @@ const char*   path_qualifier_before (const char*   text, int   line0, int   col0
             break;
         }
     }
-    return __glide_string_substring(text, start, (p  -  2));
+    const char*   raw = __glide_string_substring(text, start, (p  -  2));
+    if (__glide_string_eq(raw, "")) {
+        return "";
+    }
+    int   first = __glide_char_to_int(__glide_string_at(raw, 0));
+    if (((first  >=  97)  &&  (first  <=  122))) {
+        return "";
+    }
+    return raw;
+}
+
+const char*   module_path_before (const char*   text, int   line0, int   col0) {
+    int   p = cursor_before_partial(text, line0, col0);
+    if ((p  <  2)) {
+        return "";
+    }
+    if (((__glide_char_to_int(__glide_string_at(text, (p  -  1)))  !=  58)  ||  (__glide_char_to_int(__glide_string_at(text, (p  -  2)))  !=  58))) {
+        return "";
+    }
+    int   end = (p  -  2);
+    Vector__string*   segments = Vector_new__string();
+    while (true) {
+        int   start = end;
+        while ((start  >  0)) {
+            int   c = __glide_char_to_int(__glide_string_at(text, (start  -  1)));
+            if ((((((c  >=  65)  &&  (c  <=  90))  ||  ((c  >=  97)  &&  (c  <=  122)))  ||  ((c  >=  48)  &&  (c  <=  57)))  ||  (c  ==  95))) {
+                (start  =  (start  -  1));
+            } else {
+                break;
+            }
+        }
+        if ((start  >=  end)) {
+            break;
+        }
+        const char*   seg = __glide_string_substring(text, start, end);
+        int   f = __glide_char_to_int(__glide_string_at(seg, 0));
+        if (((f  <  97)  ||  (f  >  122))) {
+            return "";
+        }
+        Vector_push__string(segments, seg);
+        if ((((start  >=  2)  &&  (__glide_char_to_int(__glide_string_at(text, (start  -  1)))  ==  58))  &&  (__glide_char_to_int(__glide_string_at(text, (start  -  2)))  ==  58))) {
+            (end  =  (start  -  2));
+            continue;
+        }
+        break;
+    }
+    int   n = Vector_len__string(segments);
+    if ((n  ==  0)) {
+        return "";
+    }
+    const char*   out = Vector_get__string(segments, (n  -  1));
+    for (int   i = (n  -  2); (i  >=  0); (i  =  (i  -  1))) {
+        (out  =  __glide_string_concat(__glide_string_concat(out, "::"), Vector_get__string(segments, i)));
+    }
+    return out;
 }
 
 const char*   member_qualifier_before (const char*   text, int   line0, int   col0) {
@@ -15446,6 +15628,13 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
     JsonValue*   items = json_array();
     HashMap__bool*   seen = HashMap_new__bool();
+    const char*   mod_path = module_path_before((doc. text ), line0, col0);
+    if (((!__glide_string_eq(mod_path, ""))  &&  ((state-> stdlib_index )  !=  NULL))) {
+        list_module_members(state, mod_path, items, seen);
+        HashMap_free__bool(seen);
+        lsp_send_response(id, items);
+        return;
+    }
     const char*   qualifier = path_qualifier_before((doc. text ), line0, col0);
     if ((!__glide_string_eq(qualifier, ""))) {
         list_methods_for_type((doc. stmts ), qualifier, items, seen, false);

@@ -68,6 +68,10 @@ pub struct LspDoc {
     pub stmts: *Vector<Stmt>,
 }
 
+// Marker kind for the synthetic "module" entries produced per stdlib
+// file. Out-of-band of the AST's ST_* kind range so it can't collide.
+pub const SYMKIND_MODULE: int = -1;
+
 // One importable symbol from src/stdlib/. Built once at server startup
 // and reused by completion to surface auto-import suggestions. Mirrors
 // the data gopls keeps per-symbol so the LSP can fill out the full
@@ -287,6 +291,11 @@ fn drop_glide_ext(name: string) -> string {
 // Walk every src/stdlib/*.glide and collect all `pub` top-level decls into
 // state.stdlib_index. Called once at startup; the LSP doesn't reparse on
 // every completion request.
+//
+// Each module also gets a single ImportableSym entry of its own (kind =
+// SYMKIND_MODULE) so the completion UI can suggest the module by short
+// name — typing `hash` lists both the `HashMap` struct AND the
+// `hashmap` module, just like gopls lists packages alongside symbols.
 fn populate_stdlib_index(state: *LspState) {
     let dir: string = find_stdlib_dir();
     if dir.eq("") { return; }
@@ -297,11 +306,16 @@ fn populate_stdlib_index(state: *LspState) {
         let path: string = dir.concat("/").concat(fname);
         let src: string = read_file(path);
         if src.eq("") { continue; }
-        let module: string = "stdlib::".concat(drop_glide_ext(fname));
+        let mod_name: string = drop_glide_ext(fname);
+        let module: string = "stdlib::".concat(mod_name);
         let lex: *Lexer = Lexer::new(src);
         let par: *Parser = Parser::new(lex);
         let stmts: *Vector<Stmt> = parse_program(par);
         if stmts == null { continue; }
+        // Track exported symbol names so the module entry can list them
+        // in its hover-doc summary.
+        let mut summary: string = "";
+        let mut count: int = 0;
         for let j: int = 0; j < stmts.len(); j++ {
             let s: Stmt = stmts.get(j);
             if !s.is_pub { continue; }
@@ -332,7 +346,31 @@ fn populate_stdlib_index(state: *LspState) {
                 has_snippet: has_snip,
             };
             state.stdlib_index.push(sym);
+            if count < 12 {
+                if !summary.eq("") { summary = summary.concat(", "); }
+                summary = summary.concat("`").concat(s.name).concat("`");
+            } else if count == 12 {
+                summary = summary.concat(", …");
+            }
+            count = count + 1;
         }
+        // Module entry — the header reads "Glide stdlib module" and the
+        // exported names follow on the next line.
+        let mut mdoc: string = "Glide stdlib module.";
+        if !summary.eq("") {
+            mdoc = mdoc.concat("\n\nExports: ").concat(summary).concat(".");
+        }
+        let mod_sym: ImportableSym = ImportableSym {
+            name: mod_name,
+            kind: SYMKIND_MODULE,
+            module: module,
+            signature: "module ".concat(mod_name),
+            label_extra: "",
+            doc: mdoc,
+            snippet: mod_name.concat("::"),
+            has_snippet: true,
+        };
+        state.stdlib_index.push(mod_sym);
     }
 }
 
@@ -362,7 +400,7 @@ fn fn_snippet(s: *Stmt) -> string {
         for let i: int = 0; i < s.fn_params.len(); i++ {
             if i > 0 { out = out.concat(", "); }
             let p: Param = s.fn_params.get(i);
-            out = out.concat("${").concat(int_to_str((i + 1) as i64))
+            out = out.concat("\${").concat(int_to_str((i + 1) as i64))
                      .concat(":").concat(p.name).concat("}");
         }
     }
@@ -1532,6 +1570,12 @@ fn completion_item(label: string, kind: int, detail: string) -> *JsonValue {
 // Collect every `import a::b::c::*;` / `import "..."` path the doc
 // currently has. Used to skip auto-import suggestions for already-loaded
 // modules.
+//
+// Note: load_into_str rewrites `s.import_path` to the resolved absolute
+// file path before we ever see the doc, so we run it through
+// pretty_module() to recover the canonical `stdlib::hashmap` form that
+// matches what the index emits. Both forms are inserted so we cover
+// either one if the rewrite ever changes.
 fn current_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
     let h: *HashMap<bool> = HashMap::new();
     if stmts == null { return h; }
@@ -1539,7 +1583,11 @@ fn current_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
         let s: Stmt = stmts.get(i);
         if s.kind != ST_IMPORT { continue; }
         let p: string = lsp_strip_quotes(s.import_path);
-        if !p.eq("") { h.insert(p, true); }
+        if !p.eq("") {
+            h.insert(p, true);
+            let canon: string = pretty_module(p);
+            if !canon.eq("") { h.insert(canon, true); }
+        }
         if s.import_short != null && !s.import_short.eq("") {
             h.insert(s.import_short, true);
         }
@@ -1609,16 +1657,30 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "labelDetails", ld);
     }
 
-    // detail: full one-line signature with the module path appended for
-    // auto-import items. labelDetails.description carries the same info
-    // for LSP 3.17 clients, but plenty of editors still only render
-    // `detail` — duplicate so the source is always visible.
-    let mut detail_text: string = signature;
+    // detail: full one-line signature only. The source module is carried
+    // separately in labelDetails.description so 3.17-aware clients render
+    // it right-aligned in muted color (the gopls layout). For older
+    // clients the module still appears at the bottom of the documentation
+    // popup ("From `stdlib::math`") so nothing is lost.
+    if !signature.eq("") { json_obj_set(it, "detail", json_string(signature)); }
+
+    // filterText: makes the item discoverable from a wider range of
+    // queries. Several editors (Zed, VS Code at lower setting) use a
+    // prefix or fuzzy match against filterText, so we order it
+    // lower-first to give `hashmap` the best chance of matching
+    // `HashMap`. The user can also find the symbol via the original
+    // label or the module path:
+    //   `hashmap`, `hash`, `HashMap`, `stdlib::hashmap`
+    // gopls and rust-analyzer use the same trick.
+    let lower: string = ascii_to_lower(label);
+    let mut filter: string = lower;
+    if !lower.eq(label) { filter = filter.concat(" ").concat(label); }
     if !module.eq("") {
-        if !detail_text.eq("") { detail_text = detail_text.concat("    "); }
-        detail_text = detail_text.concat(module);
+        filter = filter.concat(" ").concat(module);
+        let mlower: string = ascii_to_lower(module);
+        if !mlower.eq(module) { filter = filter.concat(" ").concat(mlower); }
     }
-    if !detail_text.eq("") { json_obj_set(it, "detail", json_string(detail_text)); }
+    json_obj_set(it, "filterText", json_string(filter));
 
     // documentation: markdown — fenced signature + horizontal rule + doc.
     let mut md: string = "";
@@ -1672,6 +1734,22 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
     return it;
 }
 
+// ASCII-lowercase a string. Bytes 0x41..0x5A get +0x20; everything else
+// passes through.
+fn ascii_to_lower(s: string) -> string {
+    let n: int = s.len();
+    let mut out: string = "";
+    for let i: int = 0; i < n; i++ {
+        let c: int = s.at(i).to_int();
+        if c >= 65 && c <= 90 {
+            out = out.concat(((c + 32) as char).to_string());
+        } else {
+            out = out.concat(s.substring(i, i + 1));
+        }
+    }
+    return out;
+}
+
 // Map an origin path back to a short module label, gopls-style:
 //   .../src/stdlib/math.glide   -> "stdlib::math"
 //   .../src/builtins/vector.glide -> "builtins::vector"
@@ -1699,15 +1777,93 @@ fn pretty_module(origin: string) -> string {
     return "";
 }
 
+// Push completion items for every `pub` symbol whose module path matches
+// `path`. Accepts both fully-qualified ("stdlib::math") and short
+// ("math") forms. The single-segment "stdlib" path is special-cased to
+// list the available submodules instead of symbols.
+fn list_module_members(state: *LspState, path: string,
+                       items: *JsonValue, seen: *HashMap<bool>) {
+    if state.stdlib_index == null { return; }
+    let n: int = state.stdlib_index.len();
+
+    // `stdlib::|` — the user is drilling into the namespace; list
+    // available modules (math, hashmap, time, …).
+    if path.eq("stdlib") {
+        let mods: *HashMap<bool> = HashMap::new();
+        for let i: int = 0; i < n; i++ {
+            let sym: ImportableSym = state.stdlib_index.get(i);
+            // Module is "stdlib::math" — cut everything before the first ::
+            let m: string = sym.module;
+            let cut: int = find_substr(m, "::");
+            let leaf: string = m;
+            if cut >= 0 { leaf = m.substring(cut + 2, m.len()); }
+            if mods.contains(leaf) { continue; }
+            mods.insert(leaf, true);
+            if seen.contains(leaf) { continue; }
+            seen.insert(leaf, true);
+            let item: *JsonValue = rich_completion_item(
+                leaf, "", 9, "module ".concat(leaf),
+                "stdlib submodule", "", leaf, false, true, 0);
+            json_arr_push(items, item);
+        }
+        mods.free();
+        return;
+    }
+
+    // Match by full ("stdlib::math") or short ("math") path.
+    for let i: int = 0; i < n; i++ {
+        let sym: ImportableSym = state.stdlib_index.get(i);
+        // Skip the module's own self-entry — it would surface as
+        // `hashmap::hashmap` otherwise. Only real members of the module
+        // belong in this list.
+        if sym.kind == SYMKIND_MODULE { continue; }
+        let m: string = sym.module;
+        let cut: int = find_substr(m, "::");
+        let mut leaf: string = m;
+        if cut >= 0 { leaf = m.substring(cut + 2, m.len()); }
+        if !m.eq(path) && !leaf.eq(path) { continue; }
+        if seen.contains(sym.name) { continue; }
+        seen.insert(sym.name, true);
+        // No auto-import edit: the user is already typing the qualified
+        // path, the symbol is reachable as-is once they finish.
+        let item: *JsonValue = rich_completion_item(
+            sym.name, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
+            sym.signature, sym.doc, sym.module,
+            sym.snippet, sym.has_snippet, true, 0);
+        json_arr_push(items, item);
+    }
+}
+
+// Find the first occurrence of `needle` in `haystack`. Returns -1 if
+// missing. Works on bytes; fine for ASCII module names.
+fn find_substr(haystack: string, needle: string) -> int {
+    let hn: int = haystack.len();
+    let nn: int = needle.len();
+    if nn == 0 { return 0; }
+    if nn > hn { return -1; }
+    let limit: int = hn - nn;
+    let mut i: int = 0;
+    while i <= limit {
+        let mut k: int = 0;
+        while k < nn && haystack.at(i + k).to_int() == needle.at(k).to_int() {
+            k = k + 1;
+        }
+        if k == nn { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
 // LSP CompletionItemKind for a Stmt kind. Mirrors ci_kind_for, kept here
 // so populate_stdlib_index doesn't need the rest of the file in scope.
 fn ci_kind_for_stmt_kind(k: int) -> int {
-    if k == ST_FN { return 3; }       // Function
-    if k == ST_STRUCT { return 22; }  // Struct
-    if k == ST_ENUM { return 13; }    // Enum
-    if k == ST_CONST { return 21; }   // Constant
-    if k == ST_TRAIT { return 8; }    // Interface
-    return 1;                          // Text fallback
+    if k == SYMKIND_MODULE { return 9; }  // Module
+    if k == ST_FN { return 3; }           // Function
+    if k == ST_STRUCT { return 22; }      // Struct
+    if k == ST_ENUM { return 13; }        // Enum
+    if k == ST_CONST { return 21; }       // Constant
+    if k == ST_TRAIT { return 8; }        // Interface
+    return 1;                              // Text fallback
 }
 
 // Walk back from (line0, col0) and skip any partial identifier the user is
@@ -1733,7 +1889,9 @@ fn cursor_before_partial(text: string, line0: int, col0: int) -> int {
 }
 
 // If the cursor sits right after `Type::[partial]`, return the type name.
-// Otherwise return "".
+// Otherwise return "". Type vs module is decided by the first character:
+// upper-case → type (`Vector::`, `HashMap::`), lower-case → module
+// (handled by module_path_before instead).
 fn path_qualifier_before(text: string, line0: int, col0: int) -> string {
     let p: int = cursor_before_partial(text, line0, col0);
     if p < 2 { return ""; }
@@ -1745,7 +1903,62 @@ fn path_qualifier_before(text: string, line0: int, col0: int) -> string {
             start = start - 1;
         } else { break; }
     }
-    return text.substring(start, p - 2);
+    let raw: string = text.substring(start, p - 2);
+    if raw.eq("") { return ""; }
+    let first: int = raw.at(0).to_int();
+    // Lower-case ⇒ module path, not a type qualifier. Let
+    // module_path_before pick it up.
+    if first >= 97 && first <= 122 { return ""; }
+    return raw;
+}
+
+// If the cursor sits right after `mod::` or `a::b::…::` (where every
+// segment starts with a lower-case letter), return the joined path. Used
+// by completion to list the symbols inside a stdlib module the user is
+// drilling into. Returns "" when no module-style path precedes the cursor.
+//
+// Examples accepted:
+//   `hashmap::|`            -> "hashmap"
+//   `stdlib::hashmap::|`    -> "stdlib::hashmap"
+//   `stdlib::|`             -> "stdlib"      (caller may list submodules)
+// Examples rejected:
+//   `HashMap::|`            -> "" (type qualifier; path_qualifier_before)
+//   `stdlib::Hashmap::|`    -> "" (mixed-case; ambiguous, skipped)
+fn module_path_before(text: string, line0: int, col0: int) -> string {
+    let p: int = cursor_before_partial(text, line0, col0);
+    if p < 2 { return ""; }
+    if text.at(p - 1).to_int() != 58 || text.at(p - 2).to_int() != 58 { return ""; }
+    let mut end: int = p - 2;
+    let segments: *Vector<string> = Vector::new();
+    while true {
+        let mut start: int = end;
+        while start > 0 {
+            let c: int = text.at(start - 1).to_int();
+            if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+               || (c >= 48 && c <= 57) || c == 95 {
+                start = start - 1;
+            } else { break; }
+        }
+        if start >= end { break; }
+        let seg: string = text.substring(start, end);
+        // Modules are lower-case; bail as soon as a segment isn't.
+        let f: int = seg.at(0).to_int();
+        if f < 97 || f > 122 { return ""; }
+        segments.push(seg);
+        if start >= 2 && text.at(start - 1).to_int() == 58
+                      && text.at(start - 2).to_int() == 58 {
+            end = start - 2;
+            continue;
+        }
+        break;
+    }
+    let n: int = segments.len();
+    if n == 0 { return ""; }
+    let mut out: string = segments.get(n - 1);
+    for let i: int = n - 2; i >= 0; i = i - 1 {
+        out = out.concat("::").concat(segments.get(i));
+    }
+    return out;
 }
 
 // If the cursor sits right after `var.[partial]`, return the var name.
@@ -1940,6 +2153,17 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     let doc: LspDoc = state.docs.get(uri);
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
+
+    // Module-path completion: cursor right after `module::` or
+    // `stdlib::module::`. Lists every `pub` symbol from that module.
+    // Single-segment `stdlib::` lists the submodules instead.
+    let mod_path: string = module_path_before(doc.text, line0, col0);
+    if !mod_path.eq("") && state.stdlib_index != null {
+        list_module_members(state, mod_path, items, seen);
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
 
     // Path completion: cursor is right after `Type::` (or `Type::partial`).
     let qualifier: string = path_qualifier_before(doc.text, line0, col0);
