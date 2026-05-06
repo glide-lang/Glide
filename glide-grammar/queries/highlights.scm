@@ -69,6 +69,14 @@
 (member_expr namespace: (identifier) @namespace
              field: (identifier) @function.method)
 
+; Bare uppercase identifier expression → type. Covers stray references
+; like `let x: T = HashMap;` or `T as *HashMap` that aren't picked up by
+; the more specific `named_type`/`struct_literal` queries below. The
+; scheme runs first so later, more specific captures (member, property,
+; etc.) win when applicable.
+((identifier_expr (identifier) @type)
+ (#match? @type "^[A-Z]"))
+
 ; Built-in / known primitive types
 ((identifier) @type.builtin
  (#match? @type.builtin "^(int|uint|long|ulong|i8|i16|i32|i64|u8|u16|u32|u64|usize|isize|f32|f64|float|bool|char|string|void)$"))
@@ -136,6 +144,12 @@
 (param name: (identifier) @variable.parameter)
 (let_stmt name: (identifier) @variable)
 (const_stmt name: (identifier) @constant)
+
+; `import stdlib::hashmap::*;` — every segment in an import path is a
+; module name, color them all as @namespace.
+(import_path (identifier) @namespace)
+(import_brace_list (identifier) @type)
+(import_items (identifier) @type)
 
 ; `hashmap::HashMap::new()` — color each segment by role:
 ;   * lower-case first segment  → @namespace (module)
