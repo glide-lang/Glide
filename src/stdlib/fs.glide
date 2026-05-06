@@ -81,3 +81,82 @@ pub fn fs_read_lines(path: string) -> *Vector<string> {
     }
     return lines;
 }
+
+/// Last path component (everything after the final `/` or `\`).
+/// Returns the input untouched when there's no separator.
+///
+/// ```glide
+/// fs_basename("src/stdlib/fs.glide");          // "fs.glide"
+/// fs_basename("/usr/local/bin/glide");         // "glide"
+/// fs_basename("C:\\Program Files\\Glide\\bin"); // "bin"
+/// fs_basename("noslash.txt");                  // "noslash.txt"
+/// ```
+pub fn fs_basename(path: string) -> string {
+    let n: int = path.len();
+    let mut i: int = n;
+    while i > 0 {
+        let c: int = path.at(i - 1).to_int();
+        if c == 47 || c == 92 { return path.substring(i, n); }
+        i = i - 1;
+    }
+    return path;
+}
+
+/// File extension *without* the leading dot, lower-case. Handles names
+/// with multiple dots (`archive.tar.gz` → `gz`) and returns `""` when
+/// there's no extension at all.
+///
+/// ```glide
+/// fs_extension("config.toml");        // "toml"
+/// fs_extension("archive.tar.gz");     // "gz"
+/// fs_extension("Makefile");           // ""
+/// fs_extension(".bashrc");            // ""    (leading dot only)
+/// ```
+pub fn fs_extension(path: string) -> string {
+    let name: string = fs_basename(path);
+    let n: int = name.len();
+    let mut i: int = n;
+    while i > 0 {
+        let c: int = name.at(i - 1).to_int();
+        if c == 46 {
+            // Dotfile — `.bashrc` has no extension.
+            if i == 1 { return ""; }
+            return name.substring(i, n).to_lower();
+        }
+        i = i - 1;
+    }
+    return "";
+}
+
+/// Number of `\n` characters in the file plus one if the file is
+/// non-empty and lacks a trailing newline. Cheaper than
+/// `fs_read_lines(path).len()` because it doesn't allocate a vector.
+/// Returns `0` for empty / missing files.
+///
+/// ```glide
+/// let n: int = fs_lines_count("README.md");
+/// println!("readme has", n, "lines");
+/// ```
+pub fn fs_lines_count(path: string) -> int {
+    let body: string = read_file(path);
+    let n: int = body.len();
+    if n == 0 { return 0; }
+    let mut count: int = 0;
+    for let i: int = 0; i < n; i++ {
+        if body.at(i).to_int() == 10 { count = count + 1; }
+    }
+    if body.at(n - 1).to_int() != 10 { count = count + 1; }
+    return count;
+}
+
+/// Read `path` if it exists, otherwise return `fallback`. Distinguishes
+/// "missing file" from "file exists but empty" — `fs_read` collapses
+/// both into `""`.
+///
+/// ```glide
+/// let cfg: string = fs_read_or_default("config.toml", "verbose=false\n");
+/// ```
+pub fn fs_read_or_default(path: string, fallback: string) -> string {
+    if !__glide_file_exists(path) { return fallback; }
+    return read_file(path);
+}
