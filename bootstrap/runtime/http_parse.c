@@ -2,6 +2,10 @@
 #define HP_PARSE_C
 
 #include <stddef.h>
+#include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 enum { HP_INCOMPLETE = 0, HP_OK = 1, HP_ERROR = -1 };
 
@@ -469,6 +473,76 @@ void hp_glide_free(void* gp)
 static __thread char*  hp_resp_buf = NULL;
 static __thread size_t hp_resp_cap = 0;
 
+enum { HP_DATE_LEN = 29 };
+
+static atomic_uchar hp_date_cache[HP_DATE_LEN] = {
+    'T', 'h', 'u', ',', ' ', '0', '1', ' ', 'J', 'a',
+    'n', ' ', '1', '9', '7', '0', ' ', '0', '0', ':',
+    '0', '0', ':', '0', '0', ' ', 'G', 'M', 'T'
+};
+static atomic_llong hp_date_epoch = 0;
+static atomic_int hp_date_lock = 0;
+
+static int hp_gmtime(time_t now, struct tm* out)
+{
+#ifdef _WIN32
+    return gmtime_s(out, &now) == 0;
+#else
+    return gmtime_r(&now, out) != NULL;
+#endif
+}
+
+static void hp_date_lock_acquire(void)
+{
+    int expected;
+
+    for (;;) {
+        expected = 0;
+        if (atomic_compare_exchange_weak_explicit(&hp_date_lock, &expected, 1,
+                                                  memory_order_acquire,
+                                                  memory_order_relaxed)) {
+            return;
+        }
+        while (atomic_load_explicit(&hp_date_lock, memory_order_relaxed) != 0) {
+        }
+    }
+}
+
+static void hp_date_lock_release(void)
+{
+    atomic_store_explicit(&hp_date_lock, 0, memory_order_release);
+}
+
+int hp_get_date(char* out_buf)
+{
+    time_t now = time(NULL);
+    long long sec = (long long)now;
+    int i;
+
+    if (atomic_load_explicit(&hp_date_epoch, memory_order_acquire) != sec) {
+        hp_date_lock_acquire();
+        if (atomic_load_explicit(&hp_date_epoch, memory_order_relaxed) != sec) {
+            struct tm tm_utc;
+            char tmp[32];
+
+            if (hp_gmtime(now, &tm_utc) &&
+                strftime(tmp, sizeof(tmp), "%a, %d %b %Y %H:%M:%S GMT", &tm_utc) == HP_DATE_LEN) {
+                for (i = 0; i < HP_DATE_LEN; i++) {
+                    atomic_store_explicit(&hp_date_cache[i], (unsigned char)tmp[i],
+                                          memory_order_relaxed);
+                }
+                atomic_store_explicit(&hp_date_epoch, sec, memory_order_release);
+            }
+        }
+        hp_date_lock_release();
+    }
+
+    for (i = 0; i < HP_DATE_LEN; i++) {
+        out_buf[i] = (char)atomic_load_explicit(&hp_date_cache[i], memory_order_relaxed);
+    }
+    return HP_DATE_LEN;
+}
+
 static int hp_itoa(char* p, int n) {
     if (n == 0) { p[0] = '0'; return 1; }
     int neg = 0;
@@ -493,7 +567,8 @@ int hp_build_response(int status, const char* status_txt,
     size_t need = 64
                 + (status_txt ? strlen(status_txt) : 2)
                 + (extra_headers ? strlen(extra_headers) : 0)
-                + (size_t)body_len + 32;
+                + (size_t)body_len + 32
+                + 8 + HP_DATE_LEN;
     if (need > hp_resp_cap) {
         size_t cap = hp_resp_cap ? hp_resp_cap : 1024;
         while (cap < need) cap *= 2;
@@ -521,6 +596,9 @@ int hp_build_response(int status, const char* status_txt,
     } else {
         memcpy(p, "\r\nConnection: close\r\n", 21); p += 21;
     }
+    memcpy(p, "Date: ", 6); p += 6;
+    p += hp_get_date(p);
+    memcpy(p, "\r\n", 2); p += 2;
     if (extra_headers) {
         size_t l = strlen(extra_headers);
         if (l > 0) {

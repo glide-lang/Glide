@@ -246,6 +246,11 @@ static inline void __glide_tib_set_stack(void* base, void* limit) {
 }
 #endif
 
+/* Perf counters defined further below; forward-declare here so the
+   queue push helpers can bump them. */
+extern atomic_long __glide_perf_q_pushes;
+extern atomic_long __glide_perf_cv_signals;
+
 static void __glide_q_push_to(int wid, __glide_task* t) {
     __glide_wq* q = &__glide_wqs[wid];
     __glide_spin_lock(&q->spin);
@@ -253,10 +258,12 @@ static void __glide_q_push_to(int wid, __glide_task* t) {
     if (q->tail) q->tail->next = t; else q->head = t;
     q->tail = t;
     __glide_spin_unlock(&q->spin);
+    atomic_fetch_add_explicit(&__glide_perf_q_pushes, 1, memory_order_relaxed);
     if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {
         pthread_mutex_lock(&q->mu);
         pthread_cond_signal(&q->cv);
         pthread_mutex_unlock(&q->mu);
+        atomic_fetch_add_explicit(&__glide_perf_cv_signals, 1, memory_order_relaxed);
     }
 }
 
@@ -541,8 +548,22 @@ static void* __glide_worker_main(void* arg) {
     return NULL;
 }
 
+#ifndef _WIN32
+#include <signal.h>
+static void __glide_perf_sigusr2(int sig) {
+    (void)sig;
+    extern void __glide_perf_dump(void);
+    __glide_perf_dump();
+}
+#endif
+
 void __glide_sched_init(void) {
     if (__glide_q_inited) return;
+#ifndef _WIN32
+    /* SIGUSR2 dumps the perf counters and resets them — used by the
+       bench scripts to read parks/q_pushes/cv_signals across a wrk run. */
+    signal(SIGUSR2, __glide_perf_sigusr2);
+#endif
     const char* env_stk = getenv("GLIDE_CORO_STACK");
     if (env_stk) {
         int n = atoi(env_stk);
@@ -901,6 +922,27 @@ void sleep_ms(int ms) {
    back to pthread_cond_wait). The actual list link + lock release is
    done by the worker AFTER the fiber switch — that's how we avoid the
    classic park/unpark race. */
+/* Counters: instrumented to confirm where the throughput cost is
+   coming from. Call __glide_perf_dump() to print and reset. Non-static
+   because __glide_q_push_to (defined earlier in this same TU) bumps
+   q_pushes / cv_signals via the forward decl above. */
+atomic_long __glide_perf_parks       = 0;
+atomic_long __glide_perf_spin_parks  = 0;
+atomic_long __glide_perf_unparks     = 0;
+atomic_long __glide_perf_q_pushes    = 0;
+atomic_long __glide_perf_cv_signals  = 0;
+
+void __glide_perf_dump(void) {
+    long p  = atomic_exchange(&__glide_perf_parks, 0);
+    long sp = atomic_exchange(&__glide_perf_spin_parks, 0);
+    long u  = atomic_exchange(&__glide_perf_unparks, 0);
+    long q  = atomic_exchange(&__glide_perf_q_pushes, 0);
+    long cs = atomic_exchange(&__glide_perf_cv_signals, 0);
+    fprintf(stderr,
+            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld\n",
+            p, sp, u, q, cs);
+}
+
 int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
     __glide_task* t = __glide_cur_task;
     if (!t) {
@@ -912,6 +954,7 @@ int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
         __glide_flush_main_buf();
         return 0;
     }
+    atomic_fetch_add_explicit(&__glide_perf_parks, 1, memory_order_relaxed);
     t->park_lock = lock;
     t->park_list = list;
     t->state = 2;
@@ -930,6 +973,7 @@ int __glide_spin_park(__glide_spin_t* lock, __glide_task** list) {
         __glide_flush_main_buf();
         return 0;
     }
+    atomic_fetch_add_explicit(&__glide_perf_spin_parks, 1, memory_order_relaxed);
     t->park_spin = lock;
     t->park_list = list;
     t->state = 2;
@@ -944,6 +988,7 @@ void __glide_unpark_one(__glide_task** list) {
     *list = t->wait_next;
     t->wait_next = NULL;
     t->state = 0;
+    atomic_fetch_add_explicit(&__glide_perf_unparks, 1, memory_order_relaxed);
     __glide_q_push_to(t->home_worker, t);
 }
 
