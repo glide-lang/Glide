@@ -18,6 +18,17 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
     memcpy(out, s + start, (size_t)len); out[len] = 0;
     return out;
 }
+/* Take a raw byte buffer + length and produce a NUL-terminated Glide
+   string in one allocation. Used by the HTTP server to skip the
+   per-byte concat that would otherwise allocate `n` strings to
+   convert one read buffer. */
+const char* __glide_string_from_buf(void* buf, int n) {
+    if (n < 0) n = 0;
+    char* out = (char*)malloc((size_t)n + 1);
+    if (n > 0) memcpy(out, buf, (size_t)n);
+    out[n] = 0;
+    return out;
+}
 static int __glide_char_to_int(char c) { return (int)(unsigned char)c; }
 static bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }
 static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }

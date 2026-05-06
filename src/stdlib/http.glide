@@ -27,6 +27,7 @@ import stdlib::net::*;
 import stdlib::http_status::*;
 
 extern fn __glide_is_windows() -> int;
+extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
 // ---- request / response shapes ----------------------------------------
 
@@ -247,11 +248,7 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
         let n: int = c.read(buf as *void, 8192);
         if n <= 0 { break; }
 
-        let mut s: string = "";
-        for let i: int = 0; i < n; i++ {
-            let b: u8 = buf[i];
-            s = s.concat((b as char).to_string());
-        }
+        let s: string = __glide_string_from_buf(buf as *void, n);
 
         let parsed: !HttpRequest = parse_http_request(s);
         let mut keep: bool = false;
@@ -312,5 +309,60 @@ pub fn http_listen(port: int, handler: fn(*HttpRequest) -> HttpResponse) -> !int
             spawn _handle_conn(c, handler);
         }
     }
+    return ok(0);
+}
+
+// One accept loop, runs in either main or a spawned pthread. Each
+// loop owns its own SO_REUSEPORT-bound listener; the kernel
+// load-balances accepts across them.
+fn _accept_loop(port: int, handler: fn(*HttpRequest) -> HttpResponse) {
+    let l: *Listener = Listener::bind_reuseport(port);
+    if !l.ok() { return; }
+    let win: bool = __glide_is_windows() != 0;
+    while true {
+        let c: *Conn = l.accept();
+        if !c.ok() { c.close(); continue; }
+        if win {
+            _handle_conn(c, handler);
+        } else {
+            spawn _handle_conn(c, handler);
+        }
+    }
+}
+
+/// Like `http_listen` but bound to N worker threads, each with its own
+/// SO_REUSEPORT listener. The kernel load-balances accepts across the
+/// N threads; per-conn coroutines still feed the shared M:N scheduler,
+/// so handler work parallelises across all worker pthreads.
+///
+/// `n` is the total number of accept threads. The current OS thread
+/// runs the last loop, the other `n - 1` are spawned via `spawn_thread`.
+/// Picks `n = 1` collapses to the same behaviour as `http_listen`.
+///
+/// Returns `err` only if the very first bind fails. Subsequent threads
+/// that fail to bind die silently — the kernel decides how many fit.
+///
+/// ```glide
+/// fn main() -> int {
+///     http_listen_workers(8080, 4, root);
+///     return 0;
+/// }
+/// ```
+pub fn http_listen_workers(port: int, n: int,
+                           handler: fn(*HttpRequest) -> HttpResponse) -> !int {
+    // Probe-bind once on the calling thread so the caller sees a clean
+    // error if the port is unusable. Drop it before spawning so every
+    // worker creates its own listener inside _accept_loop.
+    let probe: *Listener = Listener::bind_reuseport(port);
+    if !probe.ok() { return err("bind failed"); }
+    probe.close();
+    println!("http: listening on :", port, " across ", n, " worker(s)");
+
+    let mut spawned: int = 1;
+    while spawned < n {
+        spawn_thread _accept_loop(port, handler);
+        spawned = spawned + 1;
+    }
+    _accept_loop(port, handler);
     return ok(0);
 }
