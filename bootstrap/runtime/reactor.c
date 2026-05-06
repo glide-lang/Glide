@@ -152,6 +152,28 @@ static void __glide_set_nonblocking(int fd) {
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+/* Tear down our reactor state for `fd` before the caller calls close().
+   The kernel implicitly drops a closed fd from the interest list, but
+   we cache `registered` per-waiter — without this hook a fd that gets
+   recycled to a new connection would never be re-added to epoll, and
+   the next read/write park on it would block forever. Also wake any
+   coros still parked on the fd so they don't sit on a dead handle. */
+void __glide_io_close(int fd) {
+    if (fd < 0) return;
+    pthread_mutex_lock(&__glide_waiters_mu);
+    __glide_io_waiter* w = (fd < __glide_waiters_cap) ? __glide_waiters[fd] : NULL;
+    pthread_mutex_unlock(&__glide_waiters_mu);
+    if (!w) return;
+    pthread_mutex_lock(&w->mu);
+    if (w->registered && __glide_epoll_fd >= 0) {
+        epoll_ctl(__glide_epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+        w->registered = 0;
+    }
+    while (w->read_waiters)  __glide_unpark_one(&w->read_waiters);
+    while (w->write_waiters) __glide_unpark_one(&w->write_waiters);
+    pthread_mutex_unlock(&w->mu);
+}
+
 static int __glide_io_park_read(int fd) {
     __glide_reactor_ensure();
     __glide_io_waiter* w = __glide_io_get_or_create(fd);

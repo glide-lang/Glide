@@ -117,10 +117,18 @@ int tcp_write(int fd, void* buf, int n) {
 #endif
 }
 
+/* Defined in reactor.c (same translation unit). Tears down per-fd
+   waiter state so a recycled fd is not seen as already-registered
+   the next time tcp_read_async/write_async parks on it. */
+#ifndef _WIN32
+void __glide_io_close(int fd);
+#endif
+
 void tcp_close(int fd) {
 #ifdef _WIN32
     closesocket((SOCKET)fd);
 #else
+    __glide_io_close(fd);
     close(fd);
 #endif
 }
