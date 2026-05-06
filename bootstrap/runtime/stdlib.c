@@ -1,4 +1,14 @@
 // ---- glide runtime ----
+// Slim-runtime markers: when set, the corresponding family of helpers
+// is NOT in this stdlib.c — a c_raw block in the matching stdlib module
+// (`fs.glide`, `os.glide`, `env.glide`, `io.glide`) provides the bodies.
+// Older glide binaries that still carry the bodies in their embedded
+// stdlib.c don't see these defines, so the c_raw blocks stay inactive
+// during the bootstrap step that promotes the new compiler.
+#define GLIDE_FS_VIA_CRAW
+#define GLIDE_OS_VIA_CRAW
+#define GLIDE_ENV_VIA_CRAW
+#define GLIDE_IO_VIA_CRAW
 static int __glide_string_len(const char* s) { return (int)strlen(s); }
 static bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }
 static char __glide_string_at(const char* s, int i) { return s[i]; }
@@ -69,54 +79,13 @@ static const char* args_at(int i) {
     if (i < 0 || i >= __glide_argc_g) return "";
     return __glide_argv_g[i];
 }
-static const char* read_file(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return "";
-    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-    char* buf = (char*)malloc((size_t)n + 1);
-    size_t got = fread(buf, 1, (size_t)n, f); fclose(f); buf[got] = 0;
-    return buf;
-}
-static bool write_file(const char* path, const char* content) {
-    FILE* f = fopen(path, "wb"); if (!f) return false;
-    size_t n = strlen(content);
-    size_t wrote = fwrite(content, 1, n, f); fclose(f);
-    return wrote == n;
-}
 #ifdef _WIN32
 #include <io.h>
 #include <winsock2.h>     /* must precede windows.h on mingw-w64 */
 #include <windows.h>
-#define __glide_dup _dup
-#define __glide_dup2 _dup2
-#define __glide_close _close
-#define __glide_fileno _fileno
 #else
 #include <unistd.h>
-#define __glide_dup dup
-#define __glide_dup2 dup2
-#define __glide_close close
-#define __glide_fileno fileno
 #endif
-static int __glide_redirect_to(const char* path) {
-    fflush(stdout);
-    int saved = __glide_dup(1);
-    if (saved < 0) return -1;
-    FILE* f = fopen(path, "w");
-    if (!f) { __glide_close(saved); return -1; }
-    __glide_dup2(__glide_fileno(f), 1);
-    fclose(f);
-    return saved;
-}
-static void __glide_restore_stdout(int saved) {
-    fflush(stdout);
-    if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }
-}
-static int __glide_shell(const char* cmd) { return system(cmd); }
-static const char* __glide_getenv(const char* name) { const char* v = getenv(name); return v ? v : ""; }
-static bool __glide_file_exists(const char* path) {
-    FILE* f = fopen(path, "rb"); if (!f) return false; fclose(f); return true;
-}
 #ifdef _WIN32
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
@@ -182,156 +151,6 @@ __attribute__((constructor)) static void __glide_install_trap(void) {
     signal(SIGSEGV, __glide_sig_handler);
     signal(SIGABRT, __glide_sig_handler);
     signal(SIGFPE,  __glide_sig_handler);
-}
-#endif
-#ifdef _WIN32
-#include <fcntl.h>
-static void __glide_set_binary_io(void) {
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-}
-#else
-static void __glide_set_binary_io(void) {}
-#endif
-static const char* __glide_read_line(void) {
-    static char buf[8192];
-    if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }
-    return buf;
-}
-static const char* __glide_read_bytes(int n) {
-    if (n <= 0) return "";
-    char* buf = (char*)malloc((size_t)n + 1);
-    size_t got = fread(buf, 1, (size_t)n, stdin);
-    buf[got] = 0;
-    return buf;
-}
-static void __glide_write_str(const char* s) {
-    fputs(s, stdout);
-}
-static void __glide_write_bytes(const char* s, int n) {
-    if (n > 0) fwrite(s, 1, (size_t)n, stdout);
-}
-static void __glide_flush_stdout(void) { fflush(stdout); }
-static void __glide_log(const char* s) {
-    fputs(s, stderr); fputc('\n', stderr); fflush(stderr);
-}
-static int __glide_is_windows(void) {
-#ifdef _WIN32
-    return 1;
-#else
-    return 0;
-#endif
-}
-// `__glide_list_dir`: newline-separated, sorted listing of files under
-// `path` whose name ends in `suffix` (pass "" to list everything). Returns
-// "" on missing dir. Same body lives in main.glide as a c_raw block so the
-// compiler can bootstrap from older runtimes — guard avoids dup definition.
-#ifndef GLIDE_LIST_DIR_DEFINED
-#define GLIDE_LIST_DIR_DEFINED
-static int __glide_strcmp_qsort(const void* a, const void* b) {
-    const char* x = *(const char* const*)a;
-    const char* y = *(const char* const*)b;
-    return strcmp(x, y);
-}
-#ifdef _WIN32
-static const char* __glide_list_dir(const char* path, const char* suffix) {
-    char pattern[1024];
-    snprintf(pattern, sizeof(pattern), "%s\\*", path);
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return "";
-    char** names = NULL; int n = 0; int cap = 0;
-    size_t suf_n = suffix ? strlen(suffix) : 0;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        const char* nm = fd.cFileName;
-        size_t nm_n = strlen(nm);
-        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-        names[n++] = dup;
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-    if (n == 0) { free(names); return ""; }
-    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-    char* out = (char*)malloc(total);
-    size_t off = 0;
-    for (int i = 0; i < n; i++) {
-        size_t l = strlen(names[i]);
-        memcpy(out + off, names[i], l); off += l;
-        if (i + 1 < n) out[off++] = '\n';
-        free(names[i]);
-    }
-    out[off] = 0;
-    free(names);
-    return out;
-}
-#else
-#include <dirent.h>
-static const char* __glide_list_dir(const char* path, const char* suffix) {
-    DIR* d = opendir(path);
-    if (!d) return "";
-    char** names = NULL; int n = 0; int cap = 0;
-    size_t suf_n = suffix ? strlen(suffix) : 0;
-    struct dirent* e;
-    while ((e = readdir(d)) != NULL) {
-        const char* nm = e->d_name;
-        if (nm[0] == '.') continue;
-        size_t nm_n = strlen(nm);
-        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-        names[n++] = dup;
-    }
-    closedir(d);
-    if (n == 0) { free(names); return ""; }
-    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-    char* out = (char*)malloc(total);
-    size_t off = 0;
-    for (int i = 0; i < n; i++) {
-        size_t l = strlen(names[i]);
-        memcpy(out + off, names[i], l); off += l;
-        if (i + 1 < n) out[off++] = '\n';
-        free(names[i]);
-    }
-    out[off] = 0;
-    free(names);
-    return out;
-}
-#endif
-#endif
-
-#ifdef _WIN32
-static const char* __glide_exe_path(void) {
-    static char buf[1024];
-    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
-    return buf;
-}
-static const char* __glide_exe_dir(void) {
-    static char buf[1024];
-    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
-    for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
-    return "";
-}
-#else
-static const char* __glide_exe_path(void) {
-    static char buf[1024];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n <= 0) { buf[0] = 0; return buf; }
-    buf[n] = 0;
-    return buf;
-}
-static const char* __glide_exe_dir(void) {
-    static char buf[1024];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n <= 0) { buf[0] = 0; return buf; }
-    buf[n] = 0;
-    for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
-    return "";
 }
 #endif
 typedef struct Arena { unsigned char* head; int cap; int used; } Arena;

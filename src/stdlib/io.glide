@@ -8,6 +8,68 @@ extern fn __glide_write_str(s: string);
 extern fn __glide_write_bytes(s: string, n: int);
 extern fn __glide_flush_stdout();
 extern fn __glide_log(s: string);
+extern fn __glide_set_binary_io();
+extern fn __glide_redirect_to(path: string) -> int;
+extern fn __glide_restore_stdout(saved: int);
+
+c_raw! {
+    #ifdef GLIDE_IO_VIA_CRAW
+    #ifndef GLIDE_IO_HELPERS_DEFINED
+    #define GLIDE_IO_HELPERS_DEFINED
+    #ifdef _WIN32
+    #include <fcntl.h>
+    #define __glide_dup _dup
+    #define __glide_dup2 _dup2
+    #define __glide_close _close
+    #define __glide_fileno _fileno
+    static void __glide_set_binary_io(void) {
+        _setmode(_fileno(stdin), _O_BINARY);
+        _setmode(_fileno(stdout), _O_BINARY);
+    }
+    #else
+    #define __glide_dup dup
+    #define __glide_dup2 dup2
+    #define __glide_close close
+    #define __glide_fileno fileno
+    static void __glide_set_binary_io(void) {}
+    #endif
+    static int __glide_redirect_to(const char* path) {
+        fflush(stdout);
+        int saved = __glide_dup(1);
+        if (saved < 0) return -1;
+        FILE* f = fopen(path, "w");
+        if (!f) { __glide_close(saved); return -1; }
+        __glide_dup2(__glide_fileno(f), 1);
+        fclose(f);
+        return saved;
+    }
+    static void __glide_restore_stdout(int saved) {
+        fflush(stdout);
+        if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }
+    }
+    static const char* __glide_read_line(void) {
+        static char buf[8192];
+        if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }
+        return buf;
+    }
+    static const char* __glide_read_bytes(int n) {
+        if (n <= 0) return "";
+        char* buf = (char*)malloc((size_t)n + 1);
+        size_t got = fread(buf, 1, (size_t)n, stdin);
+        buf[got] = 0;
+        return buf;
+    }
+    static void __glide_write_str(const char* s) { fputs(s, stdout); }
+    static void __glide_write_bytes(const char* s, int n) {
+        if (n > 0) fwrite(s, 1, (size_t)n, stdout);
+    }
+    static void __glide_flush_stdout(void) { fflush(stdout); }
+    static void __glide_log(const char* s) {
+        fputs(s, stderr); fputc('\n', stderr); fflush(stderr);
+    }
+    #endif
+    #endif // GLIDE_IO_VIA_CRAW
+}
 
 /// Read one line from stdin, including the trailing newline if present.
 /// Returns `""` on EOF — callers can disambiguate empty input from EOF

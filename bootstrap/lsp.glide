@@ -40,7 +40,7 @@ import typer;        // for types_compat / merge_parse_diags
 import json;
 import fmt;
 
-// FFI to runtime helpers (defined in codegen runtime emit).
+// FFI to runtime helpers (defined in codegen runtime emit / stdlib::os c_raw).
 extern fn read_file(path: string) -> string;
 extern fn __glide_read_line() -> string;
 extern fn __glide_read_bytes(n: int) -> string;
@@ -50,27 +50,6 @@ extern fn __glide_log(s: string);
 extern fn __glide_set_binary_io();
 extern fn __glide_exe_dir() -> string;
 extern fn __glide_cwd() -> string;
-
-// Defined inline here so the LSP can resolve relative origin paths (e.g.
-// `src/stdlib/hashmap.glide`) into absolute URIs without depending on a
-// runtime-side helper that older bootstrap binaries might lack.
-c_raw! {
-    #ifndef GLIDE_CWD_DEFINED
-    #define GLIDE_CWD_DEFINED
-    #ifdef _WIN32
-    # include <direct.h>
-    # define __glide_native_cwd _getcwd
-    #else
-    # include <unistd.h>
-    # define __glide_native_cwd getcwd
-    #endif
-    static const char* __glide_cwd(void) {
-        static char buf[4096];
-        if (__glide_native_cwd(buf, sizeof(buf)) == NULL) { buf[0] = 0; }
-        return buf;
-    }
-    #endif
-}
 
 // Forward declarations for symbols defined in main.glide. The driver
 // is the canonical owner; declaring them here lets the LSP file

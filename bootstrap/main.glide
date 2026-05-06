@@ -15,6 +15,10 @@
 // resolve when their module file exists on disk.
 
 import stdlib::hashmap::*;
+import stdlib::fs::*;
+import stdlib::os::*;
+import stdlib::env::*;
+import stdlib::io::*;
 import lexer;
 import ast;
 import parser;
@@ -365,89 +369,9 @@ extern fn __glide_exe_path() -> string;
 extern fn __glide_exe_dir() -> string;
 // Newline-separated listing of files under `path` whose name ends in `suffix`.
 // Empty `suffix` means "all files". Sorted ascending. Returns "" on missing dir.
-// Defined as a c_raw block (rather than in stdlib.c) so older bootstrap
-// binaries — whose embedded stdlib.c predates this helper — can still build
-// the new compiler without a manual seed patch.
+// Defined in bootstrap/runtime/stdlib.c.
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 
-c_raw! {
-    #ifndef GLIDE_LIST_DIR_DEFINED
-    #define GLIDE_LIST_DIR_DEFINED
-    static int __glide_strcmp_qsort(const void* a, const void* b) {
-        const char* x = *(const char* const*)a;
-        const char* y = *(const char* const*)b;
-        return strcmp(x, y);
-    }
-    #ifdef _WIN32
-    static const char* __glide_list_dir(const char* path, const char* suffix) {
-        char pattern[1024];
-        snprintf(pattern, sizeof(pattern), "%s\\*", path);
-        WIN32_FIND_DATAA fd;
-        HANDLE h = FindFirstFileA(pattern, &fd);
-        if (h == INVALID_HANDLE_VALUE) return "";
-        char** names = NULL; int n = 0; int cap = 0;
-        size_t suf_n = suffix ? strlen(suffix) : 0;
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-            const char* nm = fd.cFileName;
-            size_t nm_n = strlen(nm);
-            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-            names[n++] = dup;
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
-        if (n == 0) { free(names); return ""; }
-        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-        char* out = (char*)malloc(total);
-        size_t off = 0;
-        for (int i = 0; i < n; i++) {
-            size_t l = strlen(names[i]);
-            memcpy(out + off, names[i], l); off += l;
-            if (i + 1 < n) out[off++] = '\n';
-            free(names[i]);
-        }
-        out[off] = 0;
-        free(names);
-        return out;
-    }
-    #else
-    #include <dirent.h>
-    static const char* __glide_list_dir(const char* path, const char* suffix) {
-        DIR* d = opendir(path);
-        if (!d) return "";
-        char** names = NULL; int n = 0; int cap = 0;
-        size_t suf_n = suffix ? strlen(suffix) : 0;
-        struct dirent* e;
-        while ((e = readdir(d)) != NULL) {
-            const char* nm = e->d_name;
-            if (nm[0] == '.') continue;
-            size_t nm_n = strlen(nm);
-            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-            names[n++] = dup;
-        }
-        closedir(d);
-        if (n == 0) { free(names); return ""; }
-        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-        char* out = (char*)malloc(total);
-        size_t off = 0;
-        for (int i = 0; i < n; i++) {
-            size_t l = strlen(names[i]);
-            memcpy(out + off, names[i], l); off += l;
-            if (i + 1 < n) out[off++] = '\n';
-            free(names[i]);
-        }
-        out[off] = 0;
-        free(names);
-        return out;
-    }
-    #endif
-    #endif
-}
 extern fn __glide_getenv(name: string) -> string;
 extern fn __glide_is_windows() -> int;
 extern fn __glide_file_exists(path: string) -> bool;
@@ -961,6 +885,7 @@ fn run_build(src_path: string, out_path: string, target: string, then_run: bool)
     }
     return 0;
 }
+
 
 fn main() -> int {
     let argc: int = args_count();

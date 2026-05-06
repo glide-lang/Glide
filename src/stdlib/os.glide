@@ -1,0 +1,205 @@
+// OS / platform info. The static facts about the host the binary is
+// running on — name, arch, path conventions — and a couple of cheap
+// process-level queries (cwd, exe path).
+//
+// Per-process state that can change at runtime (env vars, args, exit
+// code) lives in `stdlib::env`.
+
+extern fn __glide_is_windows() -> int;
+extern fn __glide_exe_path() -> string;
+extern fn __glide_exe_dir() -> string;
+extern fn __glide_shell(cmd: string) -> int;
+
+extern fn __glide_os_name() -> string;
+extern fn __glide_os_arch() -> string;
+extern fn __glide_cwd() -> string;
+
+c_raw! {
+    #ifndef GLIDE_OS_HELPERS_DEFINED
+    #define GLIDE_OS_HELPERS_DEFINED
+    static const char* __glide_os_name(void) {
+    #if defined(_WIN32)
+        return "windows";
+    #elif defined(__APPLE__)
+        return "macos";
+    #elif defined(__linux__)
+        return "linux";
+    #elif defined(__FreeBSD__)
+        return "freebsd";
+    #elif defined(__OpenBSD__)
+        return "openbsd";
+    #elif defined(__NetBSD__)
+        return "netbsd";
+    #else
+        return "unknown";
+    #endif
+    }
+    static const char* __glide_os_arch(void) {
+    #if defined(__x86_64__) || defined(_M_X64)
+        return "x86_64";
+    #elif defined(__aarch64__) || defined(_M_ARM64)
+        return "aarch64";
+    #elif defined(__arm__) || defined(_M_ARM)
+        return "arm";
+    #elif defined(__i386__) || defined(_M_IX86)
+        return "x86";
+    #elif defined(__riscv) && (__riscv_xlen == 64)
+        return "riscv64";
+    #else
+        return "unknown";
+    #endif
+    }
+    static const char* __glide_cwd(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        DWORD n = GetCurrentDirectoryA((DWORD)sizeof(buf), buf);
+        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; }
+    #else
+        if (!getcwd(buf, sizeof(buf))) { buf[0] = 0; }
+    #endif
+        return buf;
+    }
+    #endif
+    #ifdef GLIDE_OS_VIA_CRAW
+    #ifndef GLIDE_OS_PLATFORM_HELPERS_DEFINED
+    #define GLIDE_OS_PLATFORM_HELPERS_DEFINED
+    static int __glide_is_windows(void) {
+    #ifdef _WIN32
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+    static int __glide_shell(const char* cmd) { return system(cmd); }
+    #ifdef _WIN32
+    static const char* __glide_exe_path(void) {
+        static char buf[1024];
+        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
+        if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
+        return buf;
+    }
+    static const char* __glide_exe_dir(void) {
+        static char buf[1024];
+        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
+        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
+        for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
+        return "";
+    }
+    #else
+    static const char* __glide_exe_path(void) {
+        static char buf[1024];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n <= 0) { buf[0] = 0; return buf; }
+        buf[n] = 0;
+        return buf;
+    }
+    static const char* __glide_exe_dir(void) {
+        static char buf[1024];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n <= 0) { buf[0] = 0; return buf; }
+        buf[n] = 0;
+        for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
+        return "";
+    }
+    #endif
+    #endif
+    #endif // GLIDE_OS_VIA_CRAW
+}
+
+/// OS family the binary was compiled for. Mirrors what `@cfg("...")`
+/// would gate on — `"windows"`, `"linux"`, `"macos"`, `"freebsd"`,
+/// `"openbsd"`, `"netbsd"`, or `"unknown"`.
+///
+/// ```glide
+/// match os_name() {
+///     "linux"   => println!("on linux"),
+///     "windows" => println!("on windows"),
+///     _         => println!("other"),
+/// }
+/// ```
+pub fn os_name() -> string { return __glide_os_name(); }
+
+/// CPU architecture: `"x86_64"`, `"aarch64"`, `"arm"`, `"x86"`,
+/// `"riscv64"`, or `"unknown"`. Reflects the build target, not a
+/// runtime probe, so cross-compiled binaries report the *target*.
+///
+/// ```glide
+/// println!("running on", os_arch());
+/// ```
+pub fn os_arch() -> string { return __glide_os_arch(); }
+
+/// `true` on Windows, `false` everywhere else.
+///
+/// ```glide
+/// let sep: string = if os_is_windows() { "\\" } else { "/" };
+/// ```
+pub fn os_is_windows() -> bool { return __glide_is_windows() != 0; }
+
+/// `true` on POSIX-y systems (Linux, macOS, *BSD), `false` on Windows.
+///
+/// ```glide
+/// if os_is_posix() { /* fork-style codepath */ }
+/// ```
+pub fn os_is_posix() -> bool { return __glide_is_windows() == 0; }
+
+/// `true` only on Linux. Use this when a Linux-only syscall is involved
+/// — `epoll`, `eventfd`, `/proc/self/...` — not just "POSIX".
+pub fn os_is_linux() -> bool { return __glide_os_name().eq("linux"); }
+
+/// `true` only on macOS / Darwin. `os_is_posix()` is also true.
+pub fn os_is_macos() -> bool { return __glide_os_name().eq("macos"); }
+
+/// Path component separator: `\\` on Windows, `/` elsewhere. Use this
+/// when building paths for display or external tools that care; for
+/// just reading/writing files, both separators work on Windows.
+///
+/// ```glide
+/// let p: string = "logs".concat(os_path_sep()).concat("today.txt");
+/// ```
+pub fn os_path_sep() -> string {
+    if __glide_is_windows() != 0 { return "\\"; }
+    return "/";
+}
+
+/// Line ending convention: `"\r\n"` on Windows, `"\n"` elsewhere. Most
+/// Glide APIs already normalise to `\n`; reach for this only when
+/// emitting text consumed by Windows-native tools (e.g. `notepad`).
+pub fn os_line_sep() -> string {
+    if __glide_is_windows() != 0 { return "\r\n"; }
+    return "\n";
+}
+
+/// Current working directory of the process, no trailing separator.
+/// Returns `""` if the OS refuses (path longer than 1024 bytes, deleted
+/// dir, …).
+///
+/// ```glide
+/// println!("cwd =", os_cwd());
+/// ```
+pub fn os_cwd() -> string { return __glide_cwd(); }
+
+/// Absolute path of the running executable — the same value `argv[0]`
+/// would have if the OS resolved it. Useful for finding sibling
+/// resources or shipping assets next to the binary.
+///
+/// ```glide
+/// let me: string = os_exe_path();
+/// ```
+pub fn os_exe_path() -> string { return __glide_exe_path(); }
+
+/// Directory portion of `os_exe_path`, without trailing separator.
+///
+/// ```glide
+/// let cfg: string = os_exe_dir().concat("/config.toml");
+/// ```
+pub fn os_exe_dir() -> string { return __glide_exe_dir(); }
+
+/// Run `cmd` through the OS shell (`cmd /c` on Windows, `/bin/sh -c`
+/// elsewhere). Returns the child's exit status. Output goes to the
+/// inherited stdout/stderr — capturing requires `>file` redirection in
+/// the command itself.
+///
+/// ```glide
+/// let rc: int = os_shell("ls -la > /tmp/listing");
+/// ```
+pub fn os_shell(cmd: string) -> int { return __glide_shell(cmd); }
