@@ -23,6 +23,58 @@ extern fn __glide_log(s: string);
 /// ```
 pub fn read_line() -> string { return __glide_read_line(); }
 
+/// Write a prompt, flush stdout, then read one line from stdin.
+/// The returned string does not include a trailing newline.
+///
+/// ```glide
+/// import stdlib::io::*;
+///
+/// let name: string = prompt("name? ");
+/// println!("hello,", name);
+/// ```
+pub fn prompt(msg: string) -> string {
+    io_write(msg);
+    flush();
+    let line: string = read_line();
+    let n: int = line.len();
+    if n > 0 && line.at(n - 1).to_int() == 10 {
+        if n > 1 && line.at(n - 2).to_int() == 13 {
+            return line.substring(0, n - 2);
+        }
+        return line.substring(0, n - 1);
+    }
+    return line;
+}
+
+/// Read one line from stdin and parse it as an integer.
+/// Whitespace is trimmed before parsing.
+///
+/// ```glide
+/// import stdlib::io::*;
+///
+/// let n: !int = read_int();
+/// if n.ok { println!("number:", n.val); }
+/// else { println!("not an int:", n.err); }
+/// ```
+pub fn read_int() -> !int {
+    return read_line().trim().try_parse_int();
+}
+
+/// Prompt for a yes/no response.
+/// Returns true when the trimmed response starts with `y` or `Y`.
+///
+/// ```glide
+/// import stdlib::io::*;
+///
+/// if read_yes_no("continue? ") {
+///     println!("continuing");
+/// }
+/// ```
+pub fn read_yes_no(prompt_msg: string) -> bool {
+    let response: string = prompt(prompt_msg).trim();
+    return response.starts_with("y") || response.starts_with("Y");
+}
+
 /// Read up to `n` raw bytes from stdin. The returned string is the actual
 /// chunk read (may be shorter than `n` near EOF). Caller owns the memory.
 ///
