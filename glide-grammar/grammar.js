@@ -731,11 +731,13 @@ module.exports = grammar({
 
     // `Type::member` and `a::b::c::member` qualified path expressions.
     // Multi-segment form is used by qualified imports
-    // (`stdlib::math::min_int(…)`).
+    // (`stdlib::math::min_int(…)`). The intermediate segments are tagged
+    // with field 'part' so highlights can color modules and types apart
+    // from the trailing member.
     path_expr: $ => prec(20, seq(
       field('type', $.identifier),
       '::',
-      repeat(seq($.identifier, '::')),
+      repeat(seq(field('part', $.identifier), '::')),
       field('member', $.identifier),
     )),
 

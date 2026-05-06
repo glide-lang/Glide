@@ -63,7 +63,9 @@
 ; try to color C as Glide.
 (raw_brace_block) @comment.block
 
-; Namespaced method call: `obj.NS::method()`
+; Namespaced method call: `obj.NS::method()` — NS is always lower-case
+; (it's a module/namespace alias), so it stays @namespace; field is the
+; method itself.
 (member_expr namespace: (identifier) @namespace
              field: (identifier) @function.method)
 
@@ -135,7 +137,22 @@
 (let_stmt name: (identifier) @variable)
 (const_stmt name: (identifier) @constant)
 
-(path_expr type: (identifier) @type)
+; `hashmap::HashMap::new()` — color each segment by role:
+;   * lower-case first segment  → @namespace (module)
+;   * upper-case first segment  → @type
+;   * lower-case middle segment → @namespace (nested module)
+;   * upper-case middle segment → @type
+;   * trailing member           → @function
+((path_expr type: (identifier) @namespace)
+ (#match? @namespace "^[a-z]"))
+((path_expr type: (identifier) @type)
+ (#match? @type "^[A-Z]"))
+
+((path_expr part: (identifier) @namespace)
+ (#match? @namespace "^[a-z]"))
+((path_expr part: (identifier) @type)
+ (#match? @type "^[A-Z]"))
+
 (path_expr member: (identifier) @function)
 
 ; Macro calls (placed last so `!` and macro name override the generic
@@ -146,9 +163,17 @@
 (method_macro_call name: (identifier) @function.macro
                    "!" @function.macro)
 
-(path_macro_call type: (identifier) @type
-                 name: (identifier) @function.macro
-                 "!" @function.macro)
+; Path macro call: `Type::name!(args)` or `module::name!(args)`. Same
+; lower-vs-upper heuristic as path_expr; the macro name itself is
+; always @function.macro.
+((path_macro_call type: (identifier) @namespace
+                  name: (identifier) @function.macro
+                  "!" @function.macro)
+ (#match? @namespace "^[a-z]"))
+((path_macro_call type: (identifier) @type
+                  name: (identifier) @function.macro
+                  "!" @function.macro)
+ (#match? @type "^[A-Z]"))
 
 ; Macro definition: `macro name!(matchers) { body }`
 (macro_def name: (identifier) @function.macro

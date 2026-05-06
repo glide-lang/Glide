@@ -4586,8 +4586,12 @@
               "type": "SEQ",
               "members": [
                 {
-                  "type": "SYMBOL",
-                  "name": "identifier"
+                  "type": "FIELD",
+                  "name": "part",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "identifier"
+                  }
                 },
                 {
                   "type": "STRING",
