@@ -49,6 +49,28 @@ pub extern fn __glide_flush_stdout();
 extern fn __glide_log(s: string);
 extern fn __glide_set_binary_io();
 extern fn __glide_exe_dir() -> string;
+extern fn __glide_cwd() -> string;
+
+// Defined inline here so the LSP can resolve relative origin paths (e.g.
+// `src/stdlib/hashmap.glide`) into absolute URIs without depending on a
+// runtime-side helper that older bootstrap binaries might lack.
+c_raw! {
+    #ifndef GLIDE_CWD_DEFINED
+    #define GLIDE_CWD_DEFINED
+    #ifdef _WIN32
+    # include <direct.h>
+    # define __glide_native_cwd _getcwd
+    #else
+    # include <unistd.h>
+    # define __glide_native_cwd getcwd
+    #endif
+    static const char* __glide_cwd(void) {
+        static char buf[4096];
+        if (__glide_native_cwd(buf, sizeof(buf)) == NULL) { buf[0] = 0; }
+        return buf;
+    }
+    #endif
+}
 
 // Forward declarations for symbols defined in main.glide. The driver
 // is the canonical owner; declaring them here lets the LSP file
@@ -1411,11 +1433,38 @@ fn normalize_path(path: string) -> string {
     return out;
 }
 
-// Convert an absolute filesystem path to a `file://` URI. Handles both
-// POSIX (`/path/to/x`) and Windows (`c:/path/to/x`).
+// `true` when `p` looks absolute on the host platform: leading `/` on
+// POSIX, or `<letter>:/` / `<letter>:\` on Windows. The path should
+// already be normalized (forward-slashed).
+fn is_absolute_path(p: string) -> bool {
+    let n: int = p.len();
+    if n == 0 { return false; }
+    if p.at(0).to_int() == 47 { return true; }
+    if n >= 3 {
+        let c2: int = p.at(1).to_int();
+        let c3: int = p.at(2).to_int();
+        if c2 == 58 && (c3 == 47 || c3 == 92) { return true; }
+    }
+    return false;
+}
+
+// Convert a filesystem path to a `file://` URI. Handles both POSIX
+// (`/path/to/x`) and Windows (`C:/path/to/x`). Relative paths get
+// prefixed with the LSP's working directory so import origins like
+// `src/stdlib/hashmap.glide` produce a clickable URI for goto-def.
 fn path_to_uri(path: string) -> string {
     if path == null || path.len() == 0 { return ""; }
-    let p: string = normalize_path(path);
+    let mut p: string = normalize_path(path);
+    if !is_absolute_path(p) {
+        let cwd: string = normalize_path(__glide_cwd());
+        if !cwd.eq("") {
+            if cwd.at(cwd.len() - 1).to_int() == 47 {
+                p = cwd.concat(p);
+            } else {
+                p = cwd.concat("/").concat(p);
+            }
+        }
+    }
     if p.at(0).to_int() == 47 { return "file://".concat(p); }
     return "file:///".concat(p);
 }
@@ -1567,32 +1616,182 @@ fn completion_item(label: string, kind: int, detail: string) -> *JsonValue {
     return it;
 }
 
-// Collect every `import a::b::c::*;` / `import "..."` path the doc
-// currently has. Used to skip auto-import suggestions for already-loaded
-// modules.
-//
-// Note: load_into_str rewrites `s.import_path` to the resolved absolute
-// file path before we ever see the doc, so we run it through
-// pretty_module() to recover the canonical `stdlib::hashmap` form that
-// matches what the index emits. Both forms are inserted so we cover
-// either one if the rewrite ever changes.
-fn current_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
-    let h: *HashMap<bool> = HashMap::new();
-    if stmts == null { return h; }
-    for let i: int = 0; i < stmts.len(); i++ {
-        let s: Stmt = stmts.get(i);
-        if s.kind != ST_IMPORT { continue; }
-        let p: string = lsp_strip_quotes(s.import_path);
-        if !p.eq("") {
-            h.insert(p, true);
-            let canon: string = pretty_module(p);
-            if !canon.eq("") { h.insert(canon, true); }
+// Import statement form, mirrored from the parser so the LSP can decide
+// whether an auto-import edit would be redundant (wildcard / bare /
+// already-listed in a selective import).
+pub const IMP_BARE: int = 0;       // `import stdlib::hashmap;`
+pub const IMP_WILDCARD: int = 1;   // `import stdlib::hashmap::*;`
+pub const IMP_SELECTIVE: int = 2;  // `import stdlib::hashmap::{X, Y};`
+
+pub struct ImportInfo {
+    pub module: string,         // canonical "stdlib::hashmap"
+    pub line: int,              // 0-indexed line of the import statement
+    pub kind: int,              // IMP_BARE / IMP_WILDCARD / IMP_SELECTIVE
+    pub items: *HashMap<bool>,  // names listed in `{...}` (selective only)
+    pub close_pos: int,         // 0-indexed col of `}` (selective only, else -1)
+}
+
+// Walk the doc text once and parse every `import …;` line into an
+// ImportInfo. Driven off the source text rather than the AST so we can
+// emit precise text edits (insert before `}`) when adding to a
+// selective import that already exists.
+fn analyze_imports(text: string) -> *Vector<ImportInfo> {
+    let out: *Vector<ImportInfo> = Vector::new();
+    if text == null { return out; }
+    let n: int = text.len();
+    let mut line: int = 0;
+    let mut line_start: int = 0;
+    let mut i: int = 0;
+    while i <= n {
+        let at_eol: bool = (i == n) || (text.at(i).to_int() == 10);
+        if at_eol {
+            let raw: string = text.substring(line_start, i);
+            let trimmed: string = raw.trim();
+            if trimmed.len() > 7 && trimmed.substring(0, 7).eq("import ") {
+                let info: ImportInfo = parse_import_line(raw, line);
+                if !info.module.eq("") { out.push(info); }
+            }
+            line = line + 1;
+            line_start = i + 1;
         }
-        if s.import_short != null && !s.import_short.eq("") {
-            h.insert(s.import_short, true);
+        i = i + 1;
+    }
+    return out;
+}
+
+// Find first occurrence of byte `c` in `s` starting from `from`. Returns
+// -1 when missing.
+fn find_byte(s: string, c: int, from: int) -> int {
+    let n: int = s.len();
+    let mut i: int = from;
+    while i < n {
+        if s.at(i).to_int() == c { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn parse_import_line(raw: string, line: int) -> ImportInfo {
+    let none_items: *HashMap<bool> = HashMap::new();
+    let miss: ImportInfo = ImportInfo {
+        module: "", line: line, kind: IMP_BARE,
+        items: none_items, close_pos: -1,
+    };
+    let trimmed: string = raw.trim();
+    if trimmed.len() < 8 { return miss; }
+    let mut body: string = trimmed.substring(7, trimmed.len()).trim();
+    let bn0: int = body.len();
+    if bn0 > 0 && body.at(bn0 - 1).to_int() == 59 {
+        body = body.substring(0, bn0 - 1).trim();
+    }
+    if body.eq("") { return miss; }
+
+    // Selective: `module::{X, Y, …}`
+    let brace_open_in_body: int = find_substr(body, "::{");
+    if brace_open_in_body >= 0 {
+        let module: string = body.substring(0, brace_open_in_body);
+        let inner_start: int = brace_open_in_body + 3;
+        let brace_close: int = find_byte(body, 125, inner_start);
+        let items: *HashMap<bool> = HashMap::new();
+        if brace_close > 0 {
+            let inner: string = body.substring(inner_start, brace_close);
+            let parts: *Vector<string> = inner.split(",");
+            for let i: int = 0; i < parts.len(); i++ {
+                let nm: string = parts.get(i).trim();
+                if !nm.eq("") { items.insert(nm, true); }
+            }
         }
+        // Find `}` column in the original (un-trimmed) raw line so the
+        // text edit can splice `, NewName` directly before it.
+        let close_in_raw: int = find_byte(raw, 125, 0);
+        return ImportInfo {
+            module: module, line: line, kind: IMP_SELECTIVE,
+            items: items, close_pos: close_in_raw,
+        };
+    }
+
+    // Wildcard: `module::*`
+    let bn: int = body.len();
+    if bn >= 3 && body.substring(bn - 3, bn).eq("::*") {
+        return ImportInfo {
+            module: body.substring(0, bn - 3),
+            line: line, kind: IMP_WILDCARD,
+            items: none_items, close_pos: -1,
+        };
+    }
+
+    // Bare module: `module` (single or multi-segment, no items).
+    return ImportInfo {
+        module: body, line: line, kind: IMP_BARE,
+        items: none_items, close_pos: -1,
+    };
+}
+
+// Build a `*HashMap<ImportInfo>` keyed by canonical module path so the
+// completion code can look up "is stdlib::hashmap already imported?" in
+// O(1). Stores both the original and the pretty form for compatibility.
+fn current_imports(text: string) -> *HashMap<ImportInfo> {
+    let h: *HashMap<ImportInfo> = HashMap::new();
+    let infos: *Vector<ImportInfo> = analyze_imports(text);
+    for let i: int = 0; i < infos.len(); i++ {
+        let info: ImportInfo = infos.get(i);
+        h.insert(info.module, info);
     }
     return h;
+}
+
+// Build an `additionalTextEdits` JSON entry for the auto-import action,
+// or return null when no edit is needed.
+//
+// Strategy:
+//   * existing wildcard / bare / matching selective entry → no edit
+//   * existing selective without the name → splice `, name` before `}`
+//   * no existing import → insert `import module::{name};\n` at the
+//     fallback line. For Module items (is_module = true), insert the
+//     bare form `import module;` instead so `module::Foo` paths work.
+fn build_import_edit(name: string, module: string,
+                     existing: *ImportInfo, fallback_line: int,
+                     is_module: bool) -> *JsonValue {
+    if existing != null {
+        if existing.kind == IMP_WILDCARD { return null; }
+        if existing.kind == IMP_BARE { return null; }
+        if existing.kind == IMP_SELECTIVE {
+            if existing.items.contains(name) { return null; }
+            let edit: *JsonValue = json_object();
+            let range: *JsonValue = json_object();
+            let start: *JsonValue = json_object();
+            let endp: *JsonValue = json_object();
+            json_obj_set(start, "line", json_int(existing.line));
+            json_obj_set(start, "character", json_int(existing.close_pos));
+            json_obj_set(endp,  "line", json_int(existing.line));
+            json_obj_set(endp,  "character", json_int(existing.close_pos));
+            json_obj_set(range, "start", start);
+            json_obj_set(range, "end", endp);
+            json_obj_set(edit, "range", range);
+            json_obj_set(edit, "newText", json_string(", ".concat(name)));
+            return edit;
+        }
+    }
+    // No existing import — fresh insertion.
+    let edit: *JsonValue = json_object();
+    let range: *JsonValue = json_object();
+    let start: *JsonValue = json_object();
+    let endp: *JsonValue = json_object();
+    json_obj_set(start, "line", json_int(fallback_line));
+    json_obj_set(start, "character", json_int(0));
+    json_obj_set(endp,  "line", json_int(fallback_line));
+    json_obj_set(endp,  "character", json_int(0));
+    json_obj_set(range, "start", start);
+    json_obj_set(range, "end", endp);
+    json_obj_set(edit, "range", range);
+    let mut new_text: string = "";
+    if is_module {
+        new_text = "import ".concat(module).concat(";\n");
+    } else {
+        new_text = "import ".concat(module).concat("::{").concat(name).concat("};\n");
+    }
+    json_obj_set(edit, "newText", json_string(new_text));
+    return edit;
 }
 
 fn lsp_strip_quotes(s: string) -> string {
@@ -1601,6 +1800,118 @@ fn lsp_strip_quotes(s: string) -> string {
         return s.substring(1, n - 1);
     }
     return s;
+}
+
+// Import-context detector results. The cursor either sits in the
+// path part of an `import …;` line, in the `{X, Y}` selective list
+// of one, or somewhere unrelated.
+pub const IMPCTX_NONE: int = 0;
+pub const IMPCTX_PATH: int = 1;
+pub const IMPCTX_BRACE: int = 2;
+
+// Pull the substring of `text` from the start of `line0` up to `col0`.
+fn line_prefix_to_cursor(text: string, line0: int, col0: int) -> string {
+    let n: int = text.len();
+    let mut line: int = 0;
+    let mut start: int = 0;
+    let mut i: int = 0;
+    while i < n && line < line0 {
+        if text.at(i).to_int() == 10 { line = line + 1; start = i + 1; }
+        i = i + 1;
+    }
+    let mut end: int = start + col0;
+    if end > n { end = n; }
+    return text.substring(start, end);
+}
+
+// Classify the cursor position with respect to the surrounding `import`
+// statement. Returns IMPCTX_NONE when not in an import.
+fn import_context_kind(text: string, line0: int, col0: int) -> int {
+    let prefix: string = line_prefix_to_cursor(text, line0, col0);
+    let trimmed: string = prefix.trim();
+    let tlen: int = trimmed.len();
+    if tlen < 7 { return IMPCTX_NONE; }
+    if !trimmed.substring(0, 7).eq("import ") { return IMPCTX_NONE; }
+    // Ignore lines that already terminated.
+    if find_byte(prefix, 59, 0) >= 0 { return IMPCTX_NONE; }
+    // Inside `{...}` if there's an unclosed `{` after `import `.
+    let brace_pos: int = find_byte(trimmed, 123, 7);
+    if brace_pos >= 0 {
+        let close_after: int = find_byte(trimmed, 125, brace_pos);
+        if close_after < 0 { return IMPCTX_BRACE; }
+    }
+    return IMPCTX_PATH;
+}
+
+// Path the user has typed after `import ` up to the cursor, with any
+// trailing partial identifier dropped. So `import stdlib::ha|shmap`
+// returns "stdlib::"; `import stdlib::|` returns "stdlib::"; `import |`
+// returns "".
+fn import_path_prefix(text: string, line0: int, col0: int) -> string {
+    let prefix: string = line_prefix_to_cursor(text, line0, col0);
+    let trimmed: string = prefix.trim();
+    if trimmed.len() < 7 { return ""; }
+    let body: string = trimmed.substring(7, trimmed.len());
+    // Drop any trailing partial identifier.
+    let n: int = body.len();
+    let mut end: int = n;
+    while end > 0 {
+        let c: int = body.at(end - 1).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+           || (c >= 48 && c <= 57) || c == 95 {
+            end = end - 1;
+        } else { break; }
+    }
+    return body.substring(0, end);
+}
+
+// Module path being filled inside `{ ... }` of a selective import.
+// `import stdlib::hashmap::{Has|}` → "stdlib::hashmap".
+fn import_brace_module(text: string, line0: int, col0: int) -> string {
+    let prefix: string = line_prefix_to_cursor(text, line0, col0);
+    let trimmed: string = prefix.trim();
+    if trimmed.len() < 7 { return ""; }
+    let body: string = trimmed.substring(7, trimmed.len());
+    let bopen: int = find_byte(body, 123, 0);
+    if bopen <= 1 { return ""; }
+    // Body before `::{`
+    if bopen >= 2 && body.at(bopen - 1).to_int() == 58
+                  && body.at(bopen - 2).to_int() == 58 {
+        return body.substring(0, bopen - 2);
+    }
+    return "";
+}
+
+// Push completion items for the children of an import path prefix.
+//   ""               → top-level namespaces (stdlib)
+//   "stdlib::"       → 9 stdlib submodules
+//   "stdlib::math::" → uncommon, falls through (modules don't nest yet)
+fn list_import_path_children(state: *LspState, prefix: string,
+                             items: *JsonValue, seen: *HashMap<bool>) {
+    if prefix.eq("") || prefix.eq("stdlib::") {
+        // Always offer the `stdlib` namespace at the top.
+        if prefix.eq("") && !seen.contains("stdlib") {
+            seen.insert("stdlib", true);
+            let no_edit_n: *JsonValue = null;
+            json_arr_push(items, rich_completion_item(
+                "stdlib", "", 9, "namespace stdlib",
+                "Glide standard library root.", "", "stdlib::", false,
+                no_edit_n));
+        }
+        if prefix.eq("stdlib::") && state.stdlib_index != null {
+            let n: int = state.stdlib_index.len();
+            for let i: int = 0; i < n; i++ {
+                let sym: ImportableSym = state.stdlib_index.get(i);
+                if sym.kind != SYMKIND_MODULE { continue; }
+                if seen.contains(sym.name) { continue; }
+                seen.insert(sym.name, true);
+                let no_edit_m: *JsonValue = null;
+                json_arr_push(items, rich_completion_item(
+                    sym.name, "", 9, sym.signature,
+                    sym.doc, "", sym.name, false, no_edit_m));
+            }
+        }
+    }
 }
 
 // Find the line + col where a new `import` statement should be inserted.
@@ -1635,15 +1946,14 @@ fn find_import_insertion_pos(text: string) -> int {
 //   - detail                                  full signature line
 //   - documentation (markdown)                signature fence + doc-comment
 //   - insertText + insertTextFormat=2          snippet with tab stops (fns)
-//   - additionalTextEdits                     auto-import line at top of doc
+//   - additionalTextEdits                     auto-import edit (caller-built)
 //
-// `already_imported` skips the import edit when the module is already in
-// scope. `module` is the empty string for items that are not auto-imports
-// (then the import edit + description are also skipped).
+// The caller is responsible for constructing the import edit (or passing
+// null when none is needed); see build_import_edit() upstream.
 fn rich_completion_item(label: string, label_extra: string, kind: int,
                         signature: string, doc: string, module: string,
                         snippet: string, has_snippet: bool,
-                        already_imported: bool, insert_line: int) -> *JsonValue {
+                        import_edit: *JsonValue) -> *JsonValue {
     let it: *JsonValue = json_object();
     json_obj_set(it, "label", json_string(label));
     json_obj_set(it, "kind", json_int(kind));
@@ -1712,22 +2022,10 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "insertTextFormat", json_int(1));   // 1 = PlainText
     }
 
-    // Auto-import edit when the module is missing.
-    if !module.eq("") && !already_imported {
+    // Auto-import edit (caller-supplied; null = no edit).
+    if import_edit != null {
         let edits: *JsonValue = json_array();
-        let edit: *JsonValue = json_object();
-        let range: *JsonValue = json_object();
-        let start: *JsonValue = json_object();
-        let endp: *JsonValue = json_object();
-        json_obj_set(start, "line", json_int(insert_line));
-        json_obj_set(start, "character", json_int(0));
-        json_obj_set(endp,  "line", json_int(insert_line));
-        json_obj_set(endp,  "character", json_int(0));
-        json_obj_set(range, "start", start);
-        json_obj_set(range, "end", endp);
-        json_obj_set(edit, "range", range);
-        json_obj_set(edit, "newText", json_string("import ".concat(module).concat("::*;\n")));
-        json_arr_push(edits, edit);
+        json_arr_push(edits, import_edit);
         json_obj_set(it, "additionalTextEdits", edits);
     }
 
@@ -1801,9 +2099,10 @@ fn list_module_members(state: *LspState, path: string,
             mods.insert(leaf, true);
             if seen.contains(leaf) { continue; }
             seen.insert(leaf, true);
+            let no_edit: *JsonValue = null;
             let item: *JsonValue = rich_completion_item(
                 leaf, "", 9, "module ".concat(leaf),
-                "stdlib submodule", "", leaf, false, true, 0);
+                "stdlib submodule", "", leaf, false, no_edit);
             json_arr_push(items, item);
         }
         mods.free();
@@ -1826,10 +2125,11 @@ fn list_module_members(state: *LspState, path: string,
         seen.insert(sym.name, true);
         // No auto-import edit: the user is already typing the qualified
         // path, the symbol is reachable as-is once they finish.
+        let no_edit2: *JsonValue = null;
         let item: *JsonValue = rich_completion_item(
             sym.name, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
             sym.signature, sym.doc, sym.module,
-            sym.snippet, sym.has_snippet, true, 0);
+            sym.snippet, sym.has_snippet, no_edit2);
         json_arr_push(items, item);
     }
 }
@@ -2154,6 +2454,27 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
 
+    // Import-path completion: cursor sits inside `import …;`. The
+    // helper returns the module path the user has typed so far
+    // ("", "stdlib", "stdlib::hashmap"); we list the matching child.
+    let imp_kind: int = import_context_kind(doc.text, line0, col0);
+    if imp_kind == IMPCTX_PATH {
+        let prefix: string = import_path_prefix(doc.text, line0, col0);
+        list_import_path_children(state, prefix, items, seen);
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+    if imp_kind == IMPCTX_BRACE {
+        let mod_in_brace: string = import_brace_module(doc.text, line0, col0);
+        if !mod_in_brace.eq("") {
+            list_module_members(state, mod_in_brace, items, seen);
+            seen.free();
+            lsp_send_response(id, items);
+            return;
+        }
+    }
+
     // Module-path completion: cursor right after `module::` or
     // `stdlib::module::`. Lists every `pub` symbol from that module.
     // Single-segment `stdlib::` lists the submodules instead.
@@ -2212,8 +2533,9 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 if !seen.contains(p.name) {
                     seen.insert(p.name, true);
                     let sig: string = "param ".concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+                    let no_edit_p: *JsonValue = null;
                     let item: *JsonValue = rich_completion_item(
-                        p.name, "", 6, sig, "", "", "", false, true, 0);
+                        p.name, "", 6, sig, "", "", "", false, no_edit_p);
                     json_arr_push(items, item);
                 }
             }
@@ -2226,13 +2548,20 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             seen.insert(s.name, true);
             let mut sig: string = "local ".concat(s.name);
             if s.let_ty != null { sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty)); }
+            let no_edit_l: *JsonValue = null;
             let item: *JsonValue = rich_completion_item(
-                s.name, "", 6, sig, "", "", "", false, true, 0);
+                s.name, "", 6, sig, "", "", "", false, no_edit_l);
             json_arr_push(items, item);
         }
     }
 
-    // 2. Top-level decls (incl. static macros).
+    // 2. Top-level decls (incl. static macros). Decls from stdlib that
+    // were transitively loaded by an existing import still get a
+    // build_import_edit pass so that selective imports are merged
+    // (`{PI}` → `{PI, min_int}`) when the user picks a name that's
+    // not yet listed.
+    let imps2: *HashMap<ImportInfo> = current_imports(doc.text);
+    let insert_line2: int = find_import_insertion_pos(doc.text);
     if doc.stmts != null {
         for let i: int = 0; i < doc.stmts.len(); i++ {
             let s: Stmt = doc.stmts.get(i);
@@ -2260,16 +2589,27 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 if s.let_ty != null { sig = sig.concat(": ").concat(type_to_string_pretty(s.let_ty)); }
             }
             else if s.kind == ST_MACRO_DEF { sig = macro_signature(&s); }
-            // Prefer a short `stdlib::X` / `builtins::X` label over the
-            // raw origin path so the completion list stays scannable.
             let mut module: string = "";
             if s.origin != null { module = pretty_module(s.origin); }
             let mut docc: string = "";
             if s.doc_comment != null { docc = s.doc_comment; }
+            // For stdlib items reached via an existing import, ask
+            // build_import_edit whether a selective merge is needed.
+            // Builtins / own-doc decls always pass null.
+            let mut decl_edit: *JsonValue = null;
+            if module.len() >= 8 && module.substring(0, 8).eq("stdlib::") {
+                let mut existing: *ImportInfo = null;
+                if imps2.contains(module) {
+                    let info_val: ImportInfo = imps2.get(module);
+                    existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+                    *existing = info_val;
+                }
+                decl_edit = build_import_edit(label, module, existing, insert_line2, false);
+            }
             let item: *JsonValue = rich_completion_item(
                 label, label_extra, ci_kind_for(&s),
                 sig, docc, module, snip, has_snip,
-                true, 0);   // already_imported=true → no auto-import for own decls
+                decl_edit);
             json_arr_push(items, item);
         }
     }
@@ -2291,17 +2631,29 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     // 3. Auto-import suggestions: surface every `pub` symbol from
     // src/stdlib/ that the user hasn't imported yet. Each item carries
     // labelDetails + documentation (markdown) + a snippet (for fns) +
-    // the additionalTextEdit that inserts the `import stdlib::X::*;`
-    // line at the top of the file.
+    // a precise additionalTextEdit:
+    //   - existing wildcard / bare / matching selective → no edit
+    //   - existing selective without the name → splice `, name` before `}`
+    //   - no existing import → insert
+    //       `import stdlib::X::{name};\n` (selective)
+    //       or `import stdlib::X;\n` for Module entries
     if state.stdlib_index != null && state.stdlib_index.len() > 0 {
-        let imps: *HashMap<bool> = current_imports(doc.stmts);
+        let imps: *HashMap<ImportInfo> = current_imports(doc.text);
         let insert_line: int = find_import_insertion_pos(doc.text);
         let n_idx: int = state.stdlib_index.len();
         for let i: int = 0; i < n_idx; i++ {
             let sym: ImportableSym = state.stdlib_index.get(i);
             if seen.contains(sym.name) { continue; }
             seen.insert(sym.name, true);
-            let already: bool = imps.contains(sym.module);
+            let mut existing: *ImportInfo = null;
+            if imps.contains(sym.module) {
+                let info_val: ImportInfo = imps.get(sym.module);
+                existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+                *existing = info_val;
+            }
+            let is_module: bool = (sym.kind == SYMKIND_MODULE);
+            let edit: *JsonValue = build_import_edit(
+                sym.name, sym.module, existing, insert_line, is_module);
             let item: *JsonValue = rich_completion_item(
                 sym.name,
                 sym.label_extra,
@@ -2311,8 +2663,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 sym.module,
                 sym.snippet,
                 sym.has_snippet,
-                already,
-                insert_line);
+                edit);
             json_arr_push(items, item);
         }
         imps.free();
