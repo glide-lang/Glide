@@ -1,0 +1,146 @@
+// Tiny testing framework. Macros expand to checks against a process-wide
+// singleton that the `glide test` driver reads at the end of the run.
+//
+// Convention:
+//   - Test files end in `_test.glide`.
+//   - Test functions are named `test_*` and return `int` (0 on success).
+//     The driver synthesises a `main()` that calls each in sequence.
+//
+// ```glide
+// import stdlib::testing::*;
+//
+// fn test_addition() -> int {
+//     assert_eq!(2 + 2, 4);
+//     assert!(true);
+//     return 0;
+// }
+//
+// fn test_string() -> int {
+//     assert_str_eq!("foo".concat("bar"), "foobar");
+//     return 0;
+// }
+// ```
+
+pub extern fn _test_begin(name: string);
+pub extern fn _test_pass();
+pub extern fn _test_fail(msg: string);
+pub extern fn _test_summary() -> int;
+pub extern fn _test_count_passed() -> int;
+pub extern fn _test_count_failed() -> int;
+
+c_raw! {
+    #ifndef GLIDE_TESTING_DEFINED
+    #define GLIDE_TESTING_DEFINED
+    static int __test_pass_g = 0;
+    static int __test_fail_g = 0;
+    static int __test_curr_failed = 0;
+    static const char* __test_curr = "";
+
+    static void _test_begin(const char* name) {
+        __test_curr = name;
+        __test_curr_failed = 0;
+    }
+    static void _test_pass(void) {
+        if (!__test_curr_failed) __test_pass_g++;
+    }
+    static void _test_fail(const char* msg) {
+        if (!__test_curr_failed) {
+            __test_curr_failed = 1;
+            __test_fail_g++;
+            fprintf(stderr, "  \x1b[1;31mFAIL\x1b[0m  %s\n        %s\n", __test_curr, msg);
+        }
+    }
+    static int _test_summary(void) {
+        fprintf(stderr, "\n%d passed, %d failed\n", __test_pass_g, __test_fail_g);
+        return __test_fail_g;
+    }
+    static int _test_count_passed(void) { return __test_pass_g; }
+    static int _test_count_failed(void) { return __test_fail_g; }
+    #endif
+}
+
+/// Fails the current test if `cond` is false. The macro evaluates `cond`
+/// once; build descriptive context into the expression itself or use
+/// `assert_eq!` / `assert_str_eq!` for tailored failure messages.
+///
+/// ```glide
+/// assert!(v.len() > 0);
+/// assert!(user.age >= 18);
+/// ```
+pub macro assert!($cond:expr) {
+    if !($cond) {
+        _test_fail("assertion failed");
+    }
+}
+
+/// Like `assert!` but takes a custom failure message. The message is a
+/// regular string expression, so string interpolation works:
+///
+/// ```glide
+/// let n: int = compute();
+/// assert_msg!(n > 0, "expected positive, got ${n}");
+/// ```
+pub macro assert_msg!($cond:expr, $msg:expr) {
+    if !($cond) {
+        _test_fail($msg);
+    }
+}
+
+/// Numeric / boolean / char equality. Uses C `==`, so DON'T use this for
+/// strings — reach for `assert_str_eq!` instead. On failure, prints both
+/// values via `format!`'s type-aware formatter.
+///
+/// ```glide
+/// assert_eq!(parse_int("42").val, 42);
+/// assert_eq!(true, !false);
+/// ```
+pub macro assert_eq!($a:expr, $b:expr) {
+    let __ta = $a;
+    let __tb = $b;
+    if !(__ta == __tb) {
+        _test_fail(format!("expected {}, got {}", __tb, __ta));
+    }
+}
+
+/// String equality via `.eq()`. `assert_eq!` would compare pointers and
+/// almost always fail; use this whenever either side is a `string`.
+///
+/// ```glide
+/// assert_str_eq!(name.to_lower(), "alice");
+/// ```
+pub macro assert_str_eq!($a:expr, $b:expr) {
+    let __ta: string = $a;
+    let __tb: string = $b;
+    if !__ta.eq(__tb) {
+        _test_fail(format!("expected {}, got {}", __tb, __ta));
+    }
+}
+
+/// Convenience for `assert!(!cond)` with a clearer failure message.
+pub macro assert_not!($cond:expr) {
+    if $cond {
+        _test_fail("expected false, was true");
+    }
+}
+
+/// Mark the start of a test. The `glide test` driver emits this before
+/// calling each `test_*` function; manual callers don't need it. Public
+/// so the synthesised driver code can reach it across modules.
+pub fn test_begin(name: string) { _test_begin(name); }
+
+/// Tick the per-test pass counter. Called by the driver after a test
+/// returns without any failed assertion.
+pub fn test_pass() { _test_pass(); }
+
+/// Print the run summary (`N passed, M failed`) and return the number
+/// of failed tests. The driver uses the return as the process exit code.
+pub fn test_summary() -> int { return _test_summary(); }
+
+/// `(passed, failed)` for the current run. Useful for self-tests of
+/// the framework.
+pub fn test_counts() -> *Vector<int> {
+    let v: *Vector<int> = Vector::new();
+    v.push(_test_count_passed());
+    v.push(_test_count_failed());
+    return v;
+}

@@ -1,0 +1,44 @@
+import stdlib::testing::*;
+import stdlib::env::*;
+
+fn _path_value() -> string {
+    let mut path: string = env_get("PATH");
+    if path.eq("") { path = env_get("Path"); }
+    return path;
+}
+
+fn _has_path() -> bool {
+    let mut has_path: bool = env_has("PATH");
+    if !has_path { has_path = env_has("Path"); }
+    return has_path;
+}
+
+fn test_env_args_count_is_non_negative() -> int {
+    assert!(env_args_count() >= 0);
+    return 0;
+}
+
+fn test_env_args_matches_user_args_when_present() -> int {
+    let args: *Vector<string> = env_args();
+    defer args.free();
+
+    if args.len() == 0 { return 0; }
+    assert_eq!(args.len(), env_args_count() - 1);
+    assert_str_eq!(args.get(0), env_args_at(1));
+    return 0;
+}
+
+fn test_env_get_path_is_available() -> int {
+    assert!(_path_value().len() > 0);
+    return 0;
+}
+
+fn test_env_has_path_is_available() -> int {
+    assert!(_has_path());
+    return 0;
+}
+
+fn test_env_args_at_out_of_range_is_empty() -> int {
+    assert_str_eq!(env_args_at(env_args_count() + 100), "");
+    return 0;
+}

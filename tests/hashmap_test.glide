@@ -1,0 +1,84 @@
+import stdlib::testing::*;
+import stdlib::hashmap::*;
+
+fn test_new_is_empty() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    assert_eq!(m.len(), 0);
+    assert_not!(m.contains("anything"));
+    return 0;
+}
+
+fn test_insert_get_contains() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+
+    m.insert("one", 1);
+    m.insert("two", 2);
+    m.insert("three", 3);
+
+    assert_eq!(m.len(), 3);
+    assert!(m.contains("one"));
+    assert!(m.contains("two"));
+    assert!(m.contains("three"));
+    assert_not!(m.contains("four"));
+
+    assert_eq!(m.get("one"), 1);
+    assert_eq!(m.get("two"), 2);
+    assert_eq!(m.get("three"), 3);
+    return 0;
+}
+
+fn test_overwrite_keeps_len() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    m.insert("k", 1);
+    assert_eq!(m.len(), 1);
+    m.insert("k", 99);
+    assert_eq!(m.len(), 1);
+    assert_eq!(m.get("k"), 99);
+    return 0;
+}
+
+fn test_remove() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    assert_eq!(m.len(), 2);
+
+    assert!(m.remove("a"));
+    assert_eq!(m.len(), 1);
+    assert_not!(m.contains("a"));
+    assert!(m.contains("b"));
+
+    assert_not!(m.remove("nope"));
+    assert_eq!(m.len(), 1);
+    return 0;
+}
+
+fn test_grows_past_default_capacity() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    for let i: int = 0; i < 100; i++ {
+        let key: string = "k${i}";
+        m.insert(key, i);
+    }
+    assert_eq!(m.len(), 100);
+    for let i: int = 0; i < 100; i++ {
+        let key: string = "k${i}";
+        assert!(m.contains(key));
+        assert_eq!(m.get(key), i);
+    }
+    return 0;
+}
+
+fn test_string_value_type() -> int {
+    let m: *HashMap<string> = HashMap::new();
+    defer m.free();
+    m.insert("name", "alice");
+    m.insert("city", "wonderland");
+    assert_str_eq!(m.get("name"), "alice");
+    assert_str_eq!(m.get("city"), "wonderland");
+    return 0;
+}

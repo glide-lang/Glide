@@ -1,0 +1,68 @@
+import stdlib::testing::*;
+import stdlib::bytes::*;
+
+fn test_new_is_empty() -> int {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    assert_eq!(b.len(), 0);
+    assert!(b.cap() > 0);
+    return 0;
+}
+
+fn test_push_increments_len() -> int {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    b.push(65 as u8);
+    b.push(66 as u8);
+    b.push(67 as u8);
+    assert_eq!(b.len(), 3);
+    let v0: int = b.at(0) as int;
+    let v1: int = b.at(1) as int;
+    let v2: int = b.at(2) as int;
+    assert_eq!(v0, 65);
+    assert_eq!(v1, 66);
+    assert_eq!(v2, 67);
+    return 0;
+}
+
+fn test_push_str_appends_all_bytes() -> int {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    b.push_str("hello");
+    assert_eq!(b.len(), 5);
+    assert_str_eq!(b.as_string(), "hello");
+    return 0;
+}
+
+fn test_push_str_concat() -> int {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    b.push_str("hello, ");
+    b.push_str("world");
+    assert_str_eq!(b.as_string(), "hello, world");
+    assert_eq!(b.len(), 12);
+    return 0;
+}
+
+fn test_clear_resets_len_keeps_cap() -> int {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    b.push_str("noise");
+    let cap_before: int = b.cap();
+    b.clear();
+    assert_eq!(b.len(), 0);
+    assert_eq!(b.cap(), cap_before);
+    b.push_str("x");
+    assert_str_eq!(b.as_string(), "x");
+    return 0;
+}
+
+fn test_capacity_grows_amortised() -> int {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    let initial_cap: int = b.cap();
+    for let i: int = 0; i < 100; i++ { b.push(48 as u8); }
+    assert_eq!(b.len(), 100);
+    assert!(b.cap() > initial_cap);
+    return 0;
+}

@@ -530,6 +530,7 @@ const MODE_BUILD: int = 1;
 const MODE_RUN: int = 2;
 const MODE_CHECK: int = 3;
 const MODE_FMT: int = 4;
+const MODE_TEST: int = 5;
 
 fn print_usage() {
     println!("Glide compiler");
@@ -886,6 +887,253 @@ fn run_build(src_path: string, out_path: string, target: string, then_run: bool)
     return 0;
 }
 
+// Scan a source string for top-level `fn test_*` (and `pub fn test_*`) and
+// return the function names in order of appearance. The scan is line-based
+// and intentionally dumb — it doesn't tokenize, so commented-out test
+// declarations would still match. That's acceptable for the test runner:
+// false positives produce a link error from the call site, which is louder
+// than a silent skip.
+fn scan_test_fns(src: string) -> *Vector<string> {
+    let names: *Vector<string> = Vector::new();
+    let lines: *Vector<string> = src.split("\n");
+    let prefix: string = "fn test_";
+    for let i: int = 0; i < lines.len(); i++ {
+        let raw: string = lines.get(i);
+        let trimmed: string = raw.trim();
+        let mut body: string = trimmed;
+        if body.starts_with("pub ") {
+            body = body.substring(4, body.len());
+            // Allow extra whitespace after `pub`.
+            let mut k: int = 0;
+            while k < body.len() && body.at(k).to_int() == 32 { k = k + 1; }
+            body = body.substring(k, body.len());
+        }
+        if !body.starts_with(prefix) { continue; }
+        // Strip the `fn ` and read the identifier up to `(` or whitespace.
+        let after: string = body.substring(3, body.len());
+        let n: int = after.len();
+        let mut end: int = 0;
+        while end < n {
+            let c: int = after.at(end).to_int();
+            if c == 40 || c == 32 || c == 9 { break; }
+            end = end + 1;
+        }
+        if end == 0 { continue; }
+        names.push(after.substring(0, end));
+    }
+    return names;
+}
+
+// `glide test [path]` — run every `test_*` function across `*_test.glide`
+// files under `path`. Per-file: scan, synthesise a `main()` that calls each
+// test in order, hand off to the regular build+run pipeline. Aggregate exit
+// codes; non-zero if any file's run reported failed assertions.
+fn run_test(path: string) -> int {
+    let mut search_path: string = path;
+    if search_path.eq("") { search_path = "."; }
+
+    // Decide whether `search_path` is a single file or a directory of tests.
+    let files: *Vector<string> = Vector::new();
+    let direct: string = read_file(search_path);
+    if !direct.eq("") {
+        files.push(search_path);
+    } else {
+        let raw: string = __glide_list_dir(search_path, "_test.glide");
+        if raw.eq("") {
+            println!("no *_test.glide files found under:", search_path);
+            return 1;
+        }
+        let names: *Vector<string> = raw.split("\n");
+        for let i: int = 0; i < names.len(); i++ {
+            let nm: string = names.get(i);
+            if nm.eq("") { continue; }
+            files.push(search_path.concat("/").concat(nm));
+        }
+    }
+
+    let mut total_files: int = 0;
+    let mut failed_files: int = 0;
+    let tmp_path: string = "__glide_test_run.glide";
+    let mut out_path: string = "__glide_test_run.exe";
+    if __glide_is_windows() == 0 { out_path = "__glide_test_run"; }
+
+    for let i: int = 0; i < files.len(); i++ {
+        let f: string = files.get(i);
+        let src: string = read_file(f);
+        if src.eq("") { continue; }
+
+        let test_fns: *Vector<string> = scan_test_fns(src);
+        if test_fns.len() == 0 {
+            println!("(no test_* functions in", f, "—  skipping)");
+            continue;
+        }
+
+        // Synthesise: prepend testing import (idempotent — loader dedups),
+        // append a main() that calls each test_* in declaration order.
+        let mut synth: string = "import stdlib::testing::*;\n".concat(src);
+        synth = synth.concat("\n\nfn main() -> int {\n");
+        for let j: int = 0; j < test_fns.len(); j++ {
+            let name: string = test_fns.get(j);
+            synth = synth.concat("    test_begin(\"").concat(name).concat("\");\n");
+            synth = synth.concat("    if ").concat(name).concat("() == 0 { test_pass(); }\n");
+        }
+        synth = synth.concat("    return test_summary();\n}\n");
+
+        if !write_file(tmp_path, synth) {
+            println!("could not write temp test file");
+            return 1;
+        }
+
+        println!(col_blue().concat("running").concat(col_reset()), f,
+                 "(", test_fns.len(), "tests )");
+        let rc: int = run_build(tmp_path, out_path, "", true);
+        total_files = total_files + 1;
+        if rc != 0 { failed_files = failed_files + 1; }
+    }
+
+    // Best-effort cleanup; ignore errors.
+    write_file(tmp_path, "");
+    println!("");
+    if failed_files > 0 {
+        println!(col_red().concat("test result:").concat(col_reset()),
+                 failed_files, "of", total_files, "files had failures");
+        return 1;
+    }
+    println!(col_blue().concat("test result:").concat(col_reset()),
+             "all", total_files, "files passed");
+    return 0;
+}
+
+// Build `name` (a `*.glide` path) into a fresh executable, run it with
+// stdout captured to `out_txt`, and return the run's exit code (or -1 if
+// the build itself failed). Build artefacts go in the cwd alongside
+// `__glide_golden.exe`; cleanup is best-effort.
+fn _golden_build_and_run(src: string, out_txt: string) -> int {
+    let mut exe: string = "__glide_golden.exe";
+    if __glide_is_windows() == 0 { exe = "__glide_golden"; }
+    let rc_build: int = run_build(src, exe, "", false);
+    if rc_build != 0 { return -1; }
+    let mut prefix: string = "./";
+    if __glide_is_windows() != 0 { prefix = ".\\"; }
+    let cmd: string = "\"".concat(prefix).concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
+    let mut wrapped: string = cmd;
+    if __glide_is_windows() != 0 {
+        wrapped = "\"".concat(cmd).concat("\"");
+    }
+    return __glide_shell(wrapped);
+}
+
+// Drop CR bytes so `\r\n` → `\n`. Windows shell redirection writes CRLF
+// even when the producer emitted LF, so the .expected file (typically
+// LF) won't match unless we strip them on read-back.
+fn _golden_normalize(s: string) -> string {
+    let n: int = s.len();
+    let mut out: string = "";
+    for let i: int = 0; i < n; i++ {
+        let c: int = s.at(i).to_int();
+        if c == 13 { continue; }
+        out = out.concat(s.substring(i, i + 1));
+    }
+    return out;
+}
+
+// Print the first byte where `actual` and `expected` diverge, with up
+// to 60 chars of context on each side. Anchors the eye in long outputs
+// without dumping a full diff.
+fn _golden_show_diff(actual: string, expected: string) {
+    let na: int = actual.len();
+    let ne: int = expected.len();
+    let mut i: int = 0;
+    while i < na && i < ne && actual.at(i).to_int() == expected.at(i).to_int() {
+        i = i + 1;
+    }
+    let mut line: int = 1;
+    let mut col: int = 1;
+    for let k: int = 0; k < i; k++ {
+        if actual.at(k).to_int() == 10 { line = line + 1; col = 1; }
+        else { col = col + 1; }
+    }
+    let mut win_a_lo: int = 0;
+    if i > 30 { win_a_lo = i - 30; }
+    let mut win_a_hi: int = na;
+    if i + 30 < na { win_a_hi = i + 30; }
+    let mut win_e_lo: int = 0;
+    if i > 30 { win_e_lo = i - 30; }
+    let mut win_e_hi: int = ne;
+    if i + 30 < ne { win_e_hi = i + 30; }
+    println!("        first diff at line", line, "col", col);
+    println!("        actual:   ", actual.substring(win_a_lo, win_a_hi));
+    println!("        expected: ", expected.substring(win_e_lo, win_e_hi));
+}
+
+// `glide test --golden <dir>` — for every `*.glide` under `<dir>` that
+// has a sibling `<name>.expected`, build it, run it, and diff stdout
+// against the file. Files without a `.expected` sibling are skipped
+// (they'd be examples that aren't yet pinned).
+fn run_golden(dir: string) -> int {
+    let mut search_dir: string = dir;
+    if search_dir.eq("") { search_dir = "."; }
+    let raw: string = __glide_list_dir(search_dir, ".glide");
+    if raw.eq("") {
+        println!("no *.glide files under:", search_dir);
+        return 1;
+    }
+    let names: *Vector<string> = raw.split("\n");
+
+    let stdout_path: string = "__glide_golden_stdout.txt";
+    let mut passed: int = 0;
+    let mut failed: int = 0;
+    let mut skipped: int = 0;
+
+    for let i: int = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if nm.eq("") { continue; }
+        // Skip helper test files — those are L1, not goldens.
+        if nm.len() >= 12 && nm.substring(nm.len() - 12, nm.len()).eq("_test.glide") { continue; }
+
+        let src: string = search_dir.concat("/").concat(nm);
+        // Build expected path: strip ".glide", append ".expected".
+        let expected_path: string = search_dir.concat("/")
+            .concat(nm.substring(0, nm.len() - 6))
+            .concat(".expected");
+
+        if !__glide_file_exists(expected_path) {
+            skipped = skipped + 1;
+            continue;
+        }
+        let expected: string = read_file(expected_path);
+
+        let rc: int = _golden_build_and_run(src, stdout_path);
+        if rc < 0 {
+            failed = failed + 1;
+            println!(col_red().concat("FAIL").concat(col_reset()), src, "(build failed)");
+            continue;
+        }
+        let actual_raw: string = read_file(stdout_path);
+        let actual: string = _golden_normalize(actual_raw);
+        let expected_norm: string = _golden_normalize(expected);
+        if actual.eq(expected_norm) {
+            passed = passed + 1;
+            println!(col_blue().concat("ok").concat(col_reset()).concat("  "), src);
+        } else {
+            failed = failed + 1;
+            println!(col_red().concat("FAIL").concat(col_reset()), src);
+            _golden_show_diff(actual, expected_norm);
+        }
+    }
+
+    // Best-effort cleanup.
+    write_file(stdout_path, "");
+    println!("");
+    if failed > 0 {
+        println!(col_red().concat("golden result:").concat(col_reset()),
+                 passed, "passed,", failed, "failed,", skipped, "skipped");
+        return 1;
+    }
+    println!(col_blue().concat("golden result:").concat(col_reset()),
+             passed, "passed,", skipped, "skipped");
+    return 0;
+}
 
 fn main() -> int {
     let argc: int = args_count();
@@ -897,6 +1145,21 @@ fn main() -> int {
 
     // `lsp` takes no positional file arg.
     if cmd.eq("lsp") { return lsp_main(); }
+
+    // `test [path]`           — run *_test.glide files (default cwd).
+    // `test --golden <dir>`   — run each <dir>/*.glide and diff stdout
+    //                            against <name>.expected.
+    if cmd.eq("test") {
+        let mut tpath: string = "";
+        let mut golden: bool = false;
+        for let i: int = 2; i < argc; i++ {
+            let a: string = args_at(i);
+            if a.eq("--golden") { golden = true; continue; }
+            if tpath.eq("") { tpath = a; }
+        }
+        if golden { return run_golden(tpath); }
+        return run_test(tpath);
+    }
 
     // Default action when the user types `glide <file>` with no
     // subcommand: build + execute, like `cargo run` / `go run`.

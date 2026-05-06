@@ -1,0 +1,97 @@
+import stdlib::testing::*;
+import stdlib::math::*;
+
+fn _near(a: f64, b: f64) -> bool {
+    let mut d: f64 = a - b;
+    if d < 0.0 { d = -d; }
+    return d < 0.0001;
+}
+
+fn test_min_max_int() -> int {
+    assert_eq!(min_int(7, 3), 3);
+    assert_eq!(min_int(-1, 1), -1);
+    assert_eq!(max_int(7, 3), 7);
+    assert_eq!(max_int(-1, 1), 1);
+    assert_eq!(min_int(5, 5), 5);
+    return 0;
+}
+
+fn test_abs_sign_int() -> int {
+    assert_eq!(abs_int(-5), 5);
+    assert_eq!(abs_int(0), 0);
+    assert_eq!(abs_int(42), 42);
+    assert_eq!(sign_int(-9), -1);
+    assert_eq!(sign_int(0), 0);
+    assert_eq!(sign_int(42), 1);
+    return 0;
+}
+
+fn test_clamp_int() -> int {
+    assert_eq!(clamp_int(15, 0, 10), 10);
+    assert_eq!(clamp_int(-3, 0, 10), 0);
+    assert_eq!(clamp_int(5, 0, 10), 5);
+    return 0;
+}
+
+fn test_ipow() -> int {
+    assert_eq!(ipow(2, 10), 1024);
+    assert_eq!(ipow(3, 4), 81);
+    assert_eq!(ipow(5, 0), 1);
+    assert_eq!(ipow(7, 1), 7);
+    assert_eq!(ipow(1, 100), 1);
+    return 0;
+}
+
+fn test_gcd_lcm() -> int {
+    assert_eq!(gcd(12, 18), 6);
+    assert_eq!(gcd(100, 75), 25);
+    assert_eq!(gcd(0, 5), 5);
+    assert_eq!(gcd(-12, 8), 4);
+    assert_eq!(lcm(4, 6), 12);
+    assert_eq!(lcm(15, 20), 60);
+    assert_eq!(lcm(0, 5), 0);
+    return 0;
+}
+
+fn test_min_max_clamp_f64() -> int {
+    assert!(_near(min_f64(1.5, 2.5), 1.5));
+    assert!(_near(max_f64(1.5, 2.5), 2.5));
+    assert!(_near(clamp_f64(0.5, 0.0, 1.0), 0.5));
+    assert!(_near(clamp_f64(2.0, 0.0, 1.0), 1.0));
+    assert!(_near(clamp_f64(-0.5, 0.0, 1.0), 0.0));
+    return 0;
+}
+
+fn test_libm_basics() -> int {
+    assert!(_near(sqrt(4.0), 2.0));
+    assert!(_near(sqrt(2.0), 1.41421356));
+    assert!(_near(pow(2.0, 10.0), 1024.0));
+    assert!(_near(floor(2.7), 2.0));
+    assert!(_near(ceil(2.1), 3.0));
+    assert!(_near(round(2.5), 3.0));
+    assert!(_near(fabs(-1.5), 1.5));
+    return 0;
+}
+
+fn test_constants() -> int {
+    assert!(_near(PI, 3.14159265));
+    assert!(_near(E, 2.71828182));
+    return 0;
+}
+
+fn test_trig_at_anchors() -> int {
+    assert!(_near(sin(0.0), 0.0));
+    assert!(_near(cos(0.0), 1.0));
+    assert!(_near(sin(PI / 2.0), 1.0));
+    assert!(_near(cos(PI), -1.0));
+    return 0;
+}
+
+fn test_log_exp() -> int {
+    assert!(_near(log(E), 1.0));
+    assert!(_near(log2(8.0), 3.0));
+    assert!(_near(log10(1000.0), 3.0));
+    assert!(_near(exp(0.0), 1.0));
+    assert!(_near(exp(1.0), E));
+    return 0;
+}

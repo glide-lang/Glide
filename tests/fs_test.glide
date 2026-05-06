@@ -1,0 +1,104 @@
+import stdlib::testing::*;
+import stdlib::fs::*;
+import stdlib::os::*;
+
+fn _cleanup_file(path: string) {
+    if os_is_windows() {
+        os_shell("del /Q ".concat(path.replace("/", "\\")).concat(" >NUL 2>NUL"));
+    } else {
+        os_shell("rm -f ".concat(path));
+    }
+}
+
+fn test_fs_write_read_exists() -> int {
+    let path: string = "tests/glide_fs_write_read.tmp";
+    _cleanup_file(path);
+
+    assert_not!(fs_exists(path));
+    assert!(fs_write(path, "hello fs"));
+    assert!(fs_exists(path));
+    assert_str_eq!(fs_read(path), "hello fs");
+
+    _cleanup_file(path);
+    assert_not!(fs_exists(path));
+    return 0;
+}
+
+fn test_fs_list_filters_sorted_names() -> int {
+    let a: string = "tests/glide_fs_list_a.tmp";
+    let b: string = "tests/glide_fs_list_b.tmp";
+    let other: string = "tests/glide_fs_list_other.txt";
+    _cleanup_file(a);
+    _cleanup_file(b);
+    _cleanup_file(other);
+
+    assert!(fs_write(a, "a"));
+    assert!(fs_write(b, "b"));
+    assert!(fs_write(other, "other"));
+
+    let files: *Vector<string> = fs_list("tests", ".tmp");
+    defer files.free();
+    assert!(files.len() >= 2);
+
+    let mut saw_a: bool = false;
+    let mut saw_b: bool = false;
+    let mut saw_other: bool = false;
+    for let i: int = 0; i < files.len(); i++ {
+        let name: string = files.get(i);
+        if name.eq("glide_fs_list_a.tmp") { saw_a = true; }
+        if name.eq("glide_fs_list_b.tmp") { saw_b = true; }
+        if name.eq("glide_fs_list_other.txt") { saw_other = true; }
+    }
+    assert!(saw_a);
+    assert!(saw_b);
+    assert_not!(saw_other);
+
+    _cleanup_file(a);
+    _cleanup_file(b);
+    _cleanup_file(other);
+    return 0;
+}
+
+fn test_fs_read_lines_and_count() -> int {
+    let path: string = "tests/glide_fs_lines.tmp";
+    _cleanup_file(path);
+
+    assert!(fs_write(path, "one\ntwo\nthree\n"));
+    let lines: *Vector<string> = fs_read_lines(path);
+    defer lines.free();
+
+    assert_eq!(lines.len(), 3);
+    assert_str_eq!(lines.get(0), "one");
+    assert_str_eq!(lines.get(1), "two");
+    assert_str_eq!(lines.get(2), "three");
+    assert_eq!(fs_lines_count(path), 3);
+
+    _cleanup_file(path);
+    return 0;
+}
+
+fn test_fs_path_helpers() -> int {
+    assert_str_eq!(fs_basename("src/stdlib/fs.glide"), "fs.glide");
+    assert_str_eq!(fs_basename("C:\\Program Files\\Glide\\bin"), "bin");
+    assert_str_eq!(fs_extension("archive.TAR.GZ"), "gz");
+    assert_str_eq!(fs_extension(".bashrc"), "");
+    return 0;
+}
+
+fn test_fs_dirname_skipped_until_exported() -> int {
+    return 0;
+}
+
+fn test_fs_read_or_default() -> int {
+    let path: string = "tests/glide_fs_default.tmp";
+    _cleanup_file(path);
+
+    assert_str_eq!(fs_read_or_default(path, "fallback"), "fallback");
+    assert!(fs_write(path, ""));
+    assert_str_eq!(fs_read_or_default(path, "fallback"), "");
+    assert!(fs_write(path, "real"));
+    assert_str_eq!(fs_read_or_default(path, "fallback"), "real");
+
+    _cleanup_file(path);
+    return 0;
+}

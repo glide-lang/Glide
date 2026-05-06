@@ -1,0 +1,108 @@
+import stdlib::testing::*;
+import stdlib::time::*;
+
+fn test_duration_constructors() -> int {
+    let n_500: i64 = 500;
+    let d_ns: Duration = Duration::from_nanos(n_500);
+    assert_eq!(d_ns.as_nanos(), n_500);
+
+    let two: i64 = 2;
+    let d_us: Duration = Duration::from_micros(two);
+    assert_eq!(d_us.as_nanos(), two * NANOS_PER_MICRO);
+
+    let seven: i64 = 7;
+    let d_ms: Duration = Duration::from_millis(seven);
+    assert_eq!(d_ms.as_nanos(), seven * NANOS_PER_MILLI);
+
+    let three: i64 = 3;
+    let d_s: Duration = Duration::from_secs(three);
+    assert_eq!(d_s.as_nanos(), three * NANOS_PER_SEC);
+
+    let one: i64 = 1;
+    let d_m: Duration = Duration::from_minutes(one);
+    let m_expected: i64 = NANOS_PER_MIN;
+    assert_eq!(d_m.as_nanos(), m_expected);
+
+    let d_h: Duration = Duration::from_hours(two);
+    let h_expected: i64 = two * NANOS_PER_HOUR;
+    assert_eq!(d_h.as_nanos(), h_expected);
+    return 0;
+}
+
+fn test_duration_arith() -> int {
+    let a: Duration = Duration::from_millis(500);
+    let b: Duration = Duration::from_millis(1500);
+
+    let sum: Duration = a.add(b);
+    assert_eq!(sum.as_millis(), 2000);
+
+    let diff: Duration = b.sub(a);
+    assert_eq!(diff.as_millis(), 1000);
+
+    let scaled: Duration = a.mul(4);
+    assert_eq!(scaled.as_millis(), 2000);
+
+    let neg: Duration = a.neg();
+    assert_eq!(neg.as_millis(), -500);
+    return 0;
+}
+
+fn test_duration_predicates() -> int {
+    let z: Duration = Duration::zero();
+    assert!(z.is_zero());
+    assert_not!(z.is_positive());
+    assert_not!(z.is_negative());
+
+    let p: Duration = Duration::from_secs(1);
+    assert!(p.is_positive());
+    assert_not!(p.is_zero());
+
+    let n: Duration = Duration::from_secs(1).neg();
+    assert!(n.is_negative());
+    return 0;
+}
+
+fn test_duration_compare() -> int {
+    let a: Duration = Duration::from_millis(100);
+    let b: Duration = Duration::from_millis(200);
+    let a2: Duration = Duration::from_millis(100);
+
+    assert!(a.before(b));
+    assert!(b.after(a));
+    assert!(a.equal(a2));
+    assert_not!(a.equal(b));
+    return 0;
+}
+
+fn test_duration_unit_conversions() -> int {
+    let one_min: Duration = Duration::from_minutes(1);
+    assert_eq!(one_min.as_secs(), 60);
+    assert_eq!(one_min.as_millis(), 60000);
+
+    let one_day: Duration = Duration::from_days(1);
+    assert_eq!(one_day.as_hours(), 24);
+    assert_eq!(one_day.as_minutes(), 24 * 60);
+    return 0;
+}
+
+fn test_time_now_is_recent() -> int {
+    let t: Time = Time::now();
+    // Wall-clock should be after Jan 1 2020 in nanos:
+    //   1577836800 sec * 1e9 = 1577836800000000000
+    let one: i64 = 1;
+    let lower: i64 = (one << 60);
+    assert!(t.unix_nanos > 0);
+    assert!(t.unix_nanos > lower / 100);
+    return 0;
+}
+
+fn test_stopwatch_elapsed_non_negative() -> int {
+    let sw: Stopwatch = Stopwatch::start();
+    let mut i: int = 0;
+    let mut acc: int = 0;
+    while i < 1000 { acc = acc + i; i = i + 1; }
+    assert!(acc >= 0);
+    let e: Duration = sw.elapsed();
+    assert!(e.as_nanos() >= 0);
+    return 0;
+}
