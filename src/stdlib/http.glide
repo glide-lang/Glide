@@ -198,7 +198,7 @@ fn _int_str(n: int) -> string {
 /// ```glide
 /// let bytes: string = format_http_response(&HttpResponse::ok().body("hi"));
 /// ```
-pub fn format_http_response(r: &HttpResponse) -> string {
+pub fn format_http_response(r: *HttpResponse) -> string {
     let body_len: int = r.body.len();
     let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status))
                               .concat(" ").concat(status_text(r.status))

@@ -180,7 +180,10 @@ int accept_tcp_async(int listener) {
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             if (!__glide_io_park_read(listener)) {
-                /* not in a coro — fall back to blocking accept once. */
+                /* not in a coro — flush any pending main-spawned coros so
+                   they can run on the workers while main blocks here, then
+                   fall back to blocking accept. */
+                __glide_flush_main_buf();
                 int flags = fcntl(listener, F_GETFL, 0);
                 fcntl(listener, F_SETFL, flags & ~O_NONBLOCK);
                 int c2 = accept(listener, NULL, NULL);

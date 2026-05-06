@@ -867,7 +867,15 @@ void sleep_ms(int ms) {
    classic park/unpark race. */
 int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
     __glide_task* t = __glide_cur_task;
-    if (!t) { __glide_flush_main_buf(); return 0; }
+    if (!t) {
+        /* Not in a coro — release the wait-list mutex the caller locked
+           (so the reactor pthread / other coros can still touch it),
+           flush main's pending spawn buffer so the workers see them
+           while main blocks, and signal a non-coro fallback to the caller. */
+        if (lock) pthread_mutex_unlock(lock);
+        __glide_flush_main_buf();
+        return 0;
+    }
     t->park_lock = lock;
     t->park_list = list;
     t->state = 2;
