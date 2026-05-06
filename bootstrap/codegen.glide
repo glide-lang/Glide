@@ -607,13 +607,18 @@ fn emit_scheduler_runtime() {
 }
 
 
-// Sync TCP socket runtime. Wraps libc/winsock so Glide programs can write
-// servers/clients with the same API on POSIX and Windows. The blocking
-// versions are emitted now; once Phase 2 (reactor) lands, accept/read/write
-// will auto-yield to the scheduler when called from a coroutine.
+// Sync TCP socket runtime + the async reactor that sits on top of it.
+// socket.c provides the blocking accept/read/write primitives that
+// reactor.c then non-blocks and parks the coroutine on. The async
+// wrappers (`accept_tcp_async`, `tcp_read_async`, `tcp_write_async`)
+// are what stdlib::net actually calls; on Linux they go through epoll,
+// on Windows / macOS they fall back to the sync versions until
+// IOCP / kqueue land.
 fn emit_socket_runtime() {
     println!("");
     print!(include_str!("bootstrap/runtime/socket.c"));
+    println!("");
+    print!(include_str!("bootstrap/runtime/reactor.c"));
     println!("");
 }
 

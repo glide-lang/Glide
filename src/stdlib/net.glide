@@ -2,14 +2,18 @@
 // runtime in `Listener` / `Conn` structs so users get owning handles
 // and method-style dispatch.
 //
-// The underlying `accept` / `read` / `write` block the calling worker
-// today. Once the Phase 2 reactor lands they'll auto-yield from
-// coroutines, but the surface API stays the same.
+// `accept` / `read` / `write` go through the async reactor:
+//   * Linux: the fd is registered with epoll and the calling coro is
+//     parked until the kernel reports readiness; the worker is freed
+//     to run other tasks in the meantime.
+//   * Windows / macOS / BSD: fall back to blocking sync I/O for now
+//     (TODO IOCP / kqueue). The Glide-side surface stays identical, so
+//     code written today is ready for the async transparently.
 
 extern fn listen_tcp(port: int) -> int;
-extern fn accept_tcp(listener: int) -> int;
-extern fn tcp_read(fd: int, buf: *void, max: int) -> int;
-extern fn tcp_write(fd: int, buf: *void, n: int) -> int;
+extern fn accept_tcp_async(listener: int) -> int;
+extern fn tcp_read_async(fd: int, buf: *void, max: int) -> int;
+extern fn tcp_write_async(fd: int, buf: *void, n: int) -> int;
 extern fn tcp_close(fd: int);
 
 pub struct Listener { fd: int }
@@ -49,7 +53,7 @@ impl Listener {
     /// ```
     pub fn accept(self: *Listener) -> *Conn {
         let c: *Conn = malloc(sizeof(Conn)) as *Conn;
-        c.fd = accept_tcp(self.fd);
+        c.fd = accept_tcp_async(self.fd);
         return c;
     }
 
@@ -75,7 +79,7 @@ impl Conn {
     /// if n <= 0 { c.close(); return; }
     /// ```
     pub fn read(self: *Conn, buf: *void, max: int) -> int {
-        return tcp_read(self.fd, buf, max);
+        return tcp_read_async(self.fd, buf, max);
     }
 
     /// Write `n` bytes from `buf`. May write fewer — loop on the
@@ -91,7 +95,7 @@ impl Conn {
     /// }
     /// ```
     pub fn write(self: *Conn, buf: *void, n: int) -> int {
-        return tcp_write(self.fd, buf, n);
+        return tcp_write_async(self.fd, buf, n);
     }
 
     /// Convenience: write a whole string (no trailing NUL is sent).
@@ -101,7 +105,7 @@ impl Conn {
     /// c.write_str("HTTP/1.0 200 OK\r\n\r\n");
     /// ```
     pub fn write_str(self: *Conn, s: string) -> int {
-        return tcp_write(self.fd, s as *void, s.len());
+        return tcp_write_async(self.fd, s as *void, s.len());
     }
 
     /// Close the connection and free the struct. After `close()`, the
