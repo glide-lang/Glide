@@ -192,45 +192,79 @@ fn _int_str(n: int) -> string {
     return s;
 }
 
-/// Render a response as wire bytes. Used by the server loop; exposed
-/// so callers can pipe responses elsewhere (a logger, a recorder).
-///
-/// ```glide
-/// let bytes: string = format_http_response(&HttpResponse::ok().body("hi"));
-/// ```
-pub fn format_http_response(r: *HttpResponse) -> string {
+// Internal renderer: produces the wire bytes for a response and stamps
+// the right `Connection:` header for the persistence the loop chose.
+fn _format_response(r: *HttpResponse, keep_alive: bool) -> string {
     let body_len: int = r.body.len();
     let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status))
                               .concat(" ").concat(status_text(r.status))
                               .concat("\r\n");
     out = out.concat("Content-Length: ").concat(_int_str(body_len)).concat("\r\n");
-    out = out.concat("Connection: close\r\n");
+    if keep_alive {
+        out = out.concat("Connection: keep-alive\r\n");
+    } else {
+        out = out.concat("Connection: close\r\n");
+    }
+    if r.headers_block.len() > 0 {
+        out = out.concat(r.headers_block);
+    }
     out = out.concat("\r\n");
     out = out.concat(r.body);
     return out;
+}
+
+/// Render a response as wire bytes. Used by the server loop; exposed
+/// so callers can pipe responses elsewhere (a logger, a recorder).
+/// Always emits `Connection: close` — the in-process keep-alive path
+/// in `http_listen` calls the internal renderer directly.
+///
+/// ```glide
+/// let bytes: string = format_http_response(&HttpResponse::ok().body("hi"));
+/// ```
+pub fn format_http_response(r: *HttpResponse) -> string {
+    return _format_response(r, false);
+}
+
+// True when the request asked us to drop the connection after this
+// response. HTTP/1.1 keeps the conn open by default; HTTP/1.0 closes
+// by default unless the client explicitly opts into keep-alive.
+fn _wants_close(req: *HttpRequest) -> bool {
+    let h: string = req.header("Connection").to_lower();
+    if _find(h, "close", 0) >= 0 { return true; }
+    // HTTP/1.0 default is close unless the client said keep-alive.
+    if req.version.eq("HTTP/1.0") {
+        if _find(h, "keep-alive", 0) >= 0 { return false; }
+        return true;
+    }
+    return false;
 }
 
 // ---- server loop ------------------------------------------------------
 
 fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
     let buf: *u8 = malloc(8192) as *u8;
-    let n: int = c.read(buf as *void, 8192);
-    if n <= 0 { c.close(); free(buf as *void); return; }
+    while true {
+        let n: int = c.read(buf as *void, 8192);
+        if n <= 0 { break; }
 
-    let mut s: string = "";
-    for let i: int = 0; i < n; i++ {
-        let b: u8 = buf[i];
-        s = s.concat((b as char).to_string());
-    }
+        let mut s: string = "";
+        for let i: int = 0; i < n; i++ {
+            let b: u8 = buf[i];
+            s = s.concat((b as char).to_string());
+        }
 
-    let parsed: !HttpRequest = parse_http_request(s);
-    let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
-    if parsed.ok {
-        let req: HttpRequest = parsed.val;
-        resp = handler(&req);
+        let parsed: !HttpRequest = parse_http_request(s);
+        let mut keep: bool = false;
+        let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
+        if parsed.ok {
+            let req: HttpRequest = parsed.val;
+            keep = !_wants_close(&req);
+            resp = handler(&req);
+        }
+        let wire: string = _format_response(&resp, keep);
+        c.write(wire as *void, wire.len());
+        if !keep { break; }
     }
-    let wire: string = format_http_response(&resp);
-    c.write(wire as *void, wire.len());
     c.close();
     free(buf as *void);
 }
