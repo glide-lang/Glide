@@ -1,0 +1,264 @@
+// Minimal HTTP/1.1 server. Builds on the async `stdlib::net` Listener +
+// Conn so a single Glide process can hold tens of thousands of
+// connections — every read/write parks the coroutine instead of
+// pinning a worker thread.
+//
+// Surface:
+//
+//   import stdlib::http::*;
+//
+//   fn root(req: *HttpRequest) -> HttpResponse {
+//       return HttpResponse::ok().body("hello, ".concat(req.path));
+//   }
+//
+//   fn main() -> int {
+//       http_listen(8080, root);
+//       return 0;
+//   }
+//
+// Limitations of the v1:
+//   - HTTP/1.1 only (no HTTP/2 or chunked transfer-encoding yet)
+//   - One handler for every path (router lives on top of this; future)
+//   - Body fully read before handler runs (no streaming uploads)
+//   - Pure-Glide parser; the C parser at bootstrap/runtime/http_parse.c
+//     is reserved for the upcoming throughput pass.
+
+import stdlib::net::*;
+import stdlib::http_status::*;
+
+// ---- request / response shapes ----------------------------------------
+
+/// One incoming HTTP request, fully buffered. Lifetime is tied to the
+/// handler call that receives it; do not stash the pointer.
+///
+/// `headers_block` is the raw `Name: Value\r\n…` text from the wire.
+/// Use `req.header("name")` for case-insensitive lookups instead of
+/// poking at it directly.
+pub struct HttpRequest {
+    pub method:        string,
+    pub path:          string,
+    pub version:       string,
+    pub headers_block: string,
+    pub body:          string,
+}
+
+impl HttpRequest {
+    /// Look up a header by name, case-insensitive. Returns `""` when
+    /// missing. Linear scan over the raw block — fine for the common
+    /// case of small header sets.
+    ///
+    /// ```glide
+    /// let host: string = req.header("Host");
+    /// ```
+    pub fn header(self: *HttpRequest, name: string) -> string {
+        let want: string = name.to_lower();
+        let lines: *Vector<string> = self.headers_block.split("\r\n");
+        for let i: int = 0; i < lines.len(); i++ {
+            let h: string = lines.get(i);
+            let colon: int = _find(h, ":", 0);
+            if colon < 0 { continue; }
+            let n: string = h.substring(0, colon).trim().to_lower();
+            if n.eq(want) {
+                return h.substring(colon + 1, h.len()).trim();
+            }
+        }
+        return "";
+    }
+}
+
+/// Outgoing response. Build with `HttpResponse::ok()` /
+/// `HttpResponse::with_status(n)` then chain the setters; status codes
+/// fall back to a generic reason phrase when unknown.
+pub struct HttpResponse {
+    pub status:        int,
+    pub headers_block: string,
+    pub body:          string,
+}
+
+impl HttpResponse {
+    pub fn with_status(code: int) -> HttpResponse {
+        return HttpResponse {
+            status: code,
+            headers_block: "",
+            body: "",
+        };
+    }
+
+    /// Shortcut for 200 OK with no body. Chain `.body(s)` to add one.
+    pub fn ok() -> HttpResponse { return HttpResponse::with_status(200); }
+
+    /// Shortcut for 404 Not Found.
+    pub fn not_found() -> HttpResponse { return HttpResponse::with_status(404); }
+
+    /// Set the body and the matching `Content-Length`. Returns the
+    /// modified response so the call chains.
+    pub fn body(self: HttpResponse, s: string) -> HttpResponse {
+        return HttpResponse {
+            status: self.status,
+            headers_block: self.headers_block,
+            body: s,
+        };
+    }
+
+    /// Append a header line. Replacement of an existing same-name
+    /// header is the caller's job; the v1 just appends to the raw
+    /// block in insertion order, which is what the wire format wants.
+    pub fn set(self: HttpResponse, name: string, value: string) -> HttpResponse {
+        return HttpResponse {
+            status: self.status,
+            headers_block: self.headers_block.concat(name).concat(": ").concat(value).concat("\r\n"),
+            body: self.body,
+        };
+    }
+}
+
+// ---- parser -----------------------------------------------------------
+
+// Find the first occurrence of `needle` inside `s`, starting at byte
+// offset `from`. Returns -1 when missing.
+fn _find(s: string, needle: string, from: int) -> int {
+    let n: int = s.len();
+    let m: int = needle.len();
+    if m == 0 { return from; }
+    if m > n - from { return -1; }
+    let limit: int = n - m;
+    let mut i: int = from;
+    while i <= limit {
+        let mut k: int = 0;
+        let mut hit: bool = true;
+        while k < m {
+            if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
+            k = k + 1;
+        }
+        if hit { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+/// Parse a complete HTTP/1.1 request. Returns `err(msg)` on a malformed
+/// or partial request; the server loop drops the connection in that
+/// case. Headers are case-folded to lower-case so `req.headers.get
+/// ("content-length")` always works.
+///
+/// ```glide
+/// let r: !HttpRequest = parse_http_request("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+/// if r.ok { println!(r.val.method, r.val.path); }
+/// ```
+pub fn parse_http_request(raw: string) -> !HttpRequest {
+    let header_end: int = _find(raw, "\r\n\r\n", 0);
+    if header_end < 0 { return err("incomplete: no end-of-headers"); }
+    let body_start: int = header_end + 4;
+    let body: string = raw.substring(body_start, raw.len());
+
+    // Pull the request line off the front; everything after it (up to
+    // \r\n\r\n) is the raw header block we keep.
+    let req_end: int = _find(raw, "\r\n", 0);
+    if req_end < 0 || req_end > header_end { return err("bad request line"); }
+    let line0: string = raw.substring(0, req_end);
+    let headers_block: string = raw.substring(req_end + 2, header_end);
+
+    let sp1: int = _find(line0, " ", 0);
+    if sp1 < 0 { return err("bad request line: missing method"); }
+    let sp2: int = _find(line0, " ", sp1 + 1);
+    if sp2 < 0 { return err("bad request line: missing path"); }
+
+    return ok(HttpRequest {
+        method:        line0.substring(0, sp1),
+        path:          line0.substring(sp1 + 1, sp2),
+        version:       line0.substring(sp2 + 1, line0.len()),
+        headers_block: headers_block,
+        body:          body,
+    });
+}
+
+// ---- response formatting ---------------------------------------------
+
+fn _int_str(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut x: int = n;
+    let mut s: string = "";
+    let mut neg: bool = false;
+    if x < 0 { neg = true; x = -x; }
+    while x > 0 {
+        let d: int = x % 10;
+        let ch: string = ((d + 48) as char).to_string();
+        s = ch.concat(s);
+        x = x / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}
+
+/// Render a response as wire bytes. Used by the server loop; exposed
+/// so callers can pipe responses elsewhere (a logger, a recorder).
+///
+/// ```glide
+/// let bytes: string = format_http_response(&HttpResponse::ok().body("hi"));
+/// ```
+pub fn format_http_response(r: &HttpResponse) -> string {
+    let body_len: int = r.body.len();
+    let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status))
+                              .concat(" ").concat(status_text(r.status))
+                              .concat("\r\n");
+    out = out.concat("Content-Length: ").concat(_int_str(body_len)).concat("\r\n");
+    out = out.concat("Connection: close\r\n");
+    out = out.concat("\r\n");
+    out = out.concat(r.body);
+    return out;
+}
+
+// ---- server loop ------------------------------------------------------
+
+/// Listen on `port` and dispatch every request through `handler`. The
+/// fn returns `err` on bind failure and never returns on success — the
+/// server loop runs until the process exits.
+///
+/// v1 handles connections serially in the accept loop. Once spawn
+/// learns to forward function-pointer arguments (TODO), the body of
+/// the loop will move into a per-connection coroutine for true
+/// concurrent serving. The async reactor underneath already parks
+/// reads/writes regardless, so even the serial form behaves better
+/// than a fully blocking server.
+///
+/// ```glide
+/// fn root(req: *HttpRequest) -> HttpResponse {
+///     return HttpResponse::ok().body("hello, ".concat(req.path));
+/// }
+///
+/// fn main() -> int {
+///     http_listen(8080, root);
+///     return 0;
+/// }
+/// ```
+pub fn http_listen(port: int, handler: fn(*HttpRequest) -> HttpResponse) -> !int {
+    let l: *Listener = Listener::bind(port);
+    if !l.ok() { return err("bind failed"); }
+    println!("http: listening on :", port);
+    let buf: *u8 = malloc(8192) as *u8;
+    while true {
+        let c: *Conn = l.accept();
+        if !c.ok() { c.close(); continue; }
+        let n: int = c.read(buf as *void, 8192);
+        if n <= 0 { c.close(); continue; }
+
+        let mut s: string = "";
+        for let i: int = 0; i < n; i++ {
+            let b: u8 = buf[i];
+            s = s.concat((b as char).to_string());
+        }
+
+        let parsed: !HttpRequest = parse_http_request(s);
+        let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
+        if parsed.ok {
+            let req: HttpRequest = parsed.val;
+            resp = handler(&req);
+        }
+
+        let wire: string = format_http_response(&resp);
+        c.write(wire as *void, wire.len());
+        c.close();
+    }
+    free(buf as *void);
+    return ok(0);
+}
