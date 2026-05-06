@@ -351,6 +351,23 @@ static void Arena_reset(Arena* a) { a->used = 0; }
 
 
 
+    #ifndef GLIDE_CWD_DEFINED
+    #define GLIDE_CWD_DEFINED
+    #ifdef _WIN32
+    # include <direct.h>
+    # define __glide_native_cwd _getcwd
+    #else
+    # include <unistd.h>
+    # define __glide_native_cwd getcwd
+    #endif
+    static const char* __glide_cwd(void) {
+        static char buf[4096];
+        if (__glide_native_cwd(buf, sizeof(buf)) == NULL) { buf[0] = 0; }
+        return buf;
+    }
+    #endif
+
+
     #ifndef GLIDE_LIST_DIR_DEFINED
     #define GLIDE_LIST_DIR_DEFINED
     static int __glide_strcmp_qsort(const void* a, const void* b) {
@@ -1410,6 +1427,252 @@ void tcp_close(int fd) {
 #endif
 }
 
+// ============================ I/O reactor ================================
+//
+// Async wrappers for accept / read / write that, on Linux, register the
+// fd with epoll and park the calling coroutine until the kernel says
+// the fd is ready. The worker thread is then free to pick up another
+// task. A single dedicated `reactor` pthread owns the epoll fd and
+// drives the wakeup loop.
+//
+// On Windows / macOS / BSD we currently fall back to the blocking
+// sync calls in socket.c (TODO: IOCP / kqueue). The Glide-side API
+// (`accept_tcp_async` / `tcp_read_async` / `tcp_write_async`) is
+// platform-portable so net.glide can call the async names everywhere
+// without #ifdef.
+//
+// Wakeup model — level-triggered for now (simplest correct shape).
+// Switch to EPOLLET + drain loops once the parser layer is settled
+// and we have benchmarks to justify the complexity bump.
+
+#ifndef GLIDE_REACTOR_DEFINED
+#define GLIDE_REACTOR_DEFINED
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <errno.h>
+
+#ifdef __linux__
+# include <sys/epoll.h>
+# include <fcntl.h>
+# include <unistd.h>
+# define GLIDE_REACTOR_HAVE_EPOLL 1
+#endif
+
+/* Forward declarations from sched.c. */
+struct __glide_task;
+extern __thread struct __glide_task* __glide_cur_task;
+extern int  __glide_park(pthread_mutex_t* lock, struct __glide_task** list);
+extern void __glide_unpark_one(struct __glide_task** list);
+extern void __glide_flush_main_buf(void);
+
+#ifdef GLIDE_REACTOR_HAVE_EPOLL
+
+/* Per-fd waiter state. Stored in epoll_event.data.ptr so the reactor
+   thread can recover it on a wakeup without a separate lookup. Two
+   wait lists per fd because read and write may park independently. */
+typedef struct __glide_io_waiter {
+    int fd;
+    pthread_mutex_t mu;
+    struct __glide_task* read_waiters;
+    struct __glide_task* write_waiters;
+    int registered;             /* 1 once added to epoll */
+} __glide_io_waiter;
+
+/* Tiny open-addressing fd → waiter map. fds in a long-running server
+   reuse low numbers, so a flat array is plenty (and faster than a
+   hashmap). Grows on demand. */
+static __glide_io_waiter** __glide_waiters = NULL;
+static int                 __glide_waiters_cap = 0;
+static pthread_mutex_t     __glide_waiters_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static int                 __glide_epoll_fd = -1;
+static pthread_t           __glide_reactor_thr;
+static atomic_int          __glide_reactor_inited = 0;
+static atomic_int          __glide_reactor_running = 0;
+
+static __glide_io_waiter* __glide_io_get_or_create(int fd) {
+    pthread_mutex_lock(&__glide_waiters_mu);
+    if (fd >= __glide_waiters_cap) {
+        int new_cap = __glide_waiters_cap ? __glide_waiters_cap : 64;
+        while (new_cap <= fd) new_cap *= 2;
+        __glide_waiters = (__glide_io_waiter**)realloc(
+            __glide_waiters, sizeof(__glide_io_waiter*) * (size_t)new_cap);
+        for (int i = __glide_waiters_cap; i < new_cap; i++) {
+            __glide_waiters[i] = NULL;
+        }
+        __glide_waiters_cap = new_cap;
+    }
+    __glide_io_waiter* w = __glide_waiters[fd];
+    if (!w) {
+        w = (__glide_io_waiter*)calloc(1, sizeof(__glide_io_waiter));
+        w->fd = fd;
+        pthread_mutex_init(&w->mu, NULL);
+        __glide_waiters[fd] = w;
+    }
+    pthread_mutex_unlock(&__glide_waiters_mu);
+    return w;
+}
+
+static void __glide_io_register(__glide_io_waiter* w) {
+    if (w->registered) return;
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events  = EPOLLIN | EPOLLOUT | EPOLLRDHUP;   /* level-triggered */
+    ev.data.ptr = w;
+    if (epoll_ctl(__glide_epoll_fd, EPOLL_CTL_ADD, w->fd, &ev) == 0) {
+        w->registered = 1;
+    } else if (errno == EEXIST) {
+        w->registered = 1;        /* someone added it concurrently */
+    }
+}
+
+static void* __glide_reactor_loop(void* arg) {
+    (void)arg;
+    struct epoll_event evs[64];
+    while (atomic_load(&__glide_reactor_running)) {
+        int n = epoll_wait(__glide_epoll_fd, evs, 64, 100);  /* 100 ms tick */
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int i = 0; i < n; i++) {
+            __glide_io_waiter* w = (__glide_io_waiter*)evs[i].data.ptr;
+            if (!w) continue;
+            uint32_t m = evs[i].events;
+            pthread_mutex_lock(&w->mu);
+            if ((m & (EPOLLIN  | EPOLLERR | EPOLLHUP | EPOLLRDHUP))
+                && w->read_waiters) {
+                while (w->read_waiters) __glide_unpark_one(&w->read_waiters);
+            }
+            if ((m & (EPOLLOUT | EPOLLERR | EPOLLHUP))
+                && w->write_waiters) {
+                while (w->write_waiters) __glide_unpark_one(&w->write_waiters);
+            }
+            pthread_mutex_unlock(&w->mu);
+        }
+    }
+    return NULL;
+}
+
+static void __glide_reactor_ensure(void) {
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&__glide_reactor_inited,
+                                        &expected, 1)) {
+        /* another thread is initialising; spin briefly until done. */
+        while (__glide_epoll_fd < 0) { /* spin */ }
+        return;
+    }
+    __glide_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (__glide_epoll_fd < 0) {
+        atomic_store(&__glide_reactor_inited, 0);
+        return;
+    }
+    atomic_store(&__glide_reactor_running, 1);
+    pthread_create(&__glide_reactor_thr, NULL, __glide_reactor_loop, NULL);
+    pthread_detach(__glide_reactor_thr);
+}
+
+static void __glide_set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static int __glide_io_park_read(int fd) {
+    __glide_reactor_ensure();
+    __glide_io_waiter* w = __glide_io_get_or_create(fd);
+    pthread_mutex_lock(&w->mu);
+    __glide_io_register(w);
+    return __glide_park(&w->mu, &w->read_waiters);
+}
+
+static int __glide_io_park_write(int fd) {
+    __glide_reactor_ensure();
+    __glide_io_waiter* w = __glide_io_get_or_create(fd);
+    pthread_mutex_lock(&w->mu);
+    __glide_io_register(w);
+    return __glide_park(&w->mu, &w->write_waiters);
+}
+
+/* ---- public async wrappers --------------------------------------- */
+
+int accept_tcp_async(int listener) {
+    __glide_set_nonblocking(listener);
+    while (1) {
+        int c = accept(listener, NULL, NULL);
+        if (c >= 0) {
+            __glide_set_nonblocking(c);
+            return c;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!__glide_io_park_read(listener)) {
+                /* not in a coro — fall back to blocking accept once. */
+                int flags = fcntl(listener, F_GETFL, 0);
+                fcntl(listener, F_SETFL, flags & ~O_NONBLOCK);
+                int c2 = accept(listener, NULL, NULL);
+                fcntl(listener, F_SETFL, flags);
+                return c2;
+            }
+            continue;
+        }
+        return -1;
+    }
+}
+
+int tcp_read_async(int fd, void* buf, int max) {
+    __glide_set_nonblocking(fd);
+    while (1) {
+        int n = (int)read(fd, buf, (size_t)max);
+        if (n >= 0) return n;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!__glide_io_park_read(fd)) return -1;
+            continue;
+        }
+        return -1;
+    }
+}
+
+int tcp_write_async(int fd, void* buf, int n) {
+    __glide_set_nonblocking(fd);
+    int sent = 0;
+    while (sent < n) {
+        int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));
+        if (w > 0) { sent += w; continue; }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            if (!__glide_io_park_write(fd)) return sent > 0 ? sent : -1;
+            continue;
+        }
+        return sent > 0 ? sent : -1;
+    }
+    return sent;
+}
+
+#else  /* not Linux: fall back to blocking sync I/O for now. */
+
+/* Forward decls from socket.c so the names link clean. */
+extern int  accept_tcp(int listener);
+extern int  tcp_read(int fd, void* buf, int max);
+extern int  tcp_write(int fd, void* buf, int n);
+
+int accept_tcp_async(int listener) {
+    return accept_tcp(listener);
+}
+
+int tcp_read_async(int fd, void* buf, int max) {
+    return tcp_read(fd, buf, max);
+}
+
+int tcp_write_async(int fd, void* buf, int n) {
+    return tcp_write(fd, buf, n);
+}
+
+#endif  /* GLIDE_REACTOR_HAVE_EPOLL */
+
+#endif  /* GLIDE_REACTOR_DEFINED */
+
 
 typedef struct __glide_result_int_t { int ok; int val; const char* err; } __glide_result_int_t;
 static __glide_result_int_t __glide_ok_int(int v) { __glide_result_int_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
@@ -1441,6 +1704,8 @@ typedef struct  Vector__AnonFn   Vector__AnonFn ;
 typedef struct  Vector__JsonValue   Vector__JsonValue ;
 typedef struct  HashMap__LspDoc   HashMap__LspDoc ;
 typedef struct  Vector__ImportableSym   Vector__ImportableSym ;
+typedef struct  Vector__ImportInfo   Vector__ImportInfo ;
+typedef struct  HashMap__ImportInfo   HashMap__ImportInfo ;
 typedef struct  Vector__UseSite   Vector__UseSite ;
 typedef struct  Token   Token ;
 typedef struct  Lexer   Lexer ;
@@ -1471,6 +1736,7 @@ typedef struct  ImportableSym   ImportableSym ;
 typedef struct  LspState   LspState ;
 typedef struct  ImplMethodHit   ImplMethodHit ;
 typedef struct  FieldHit   FieldHit ;
+typedef struct  ImportInfo   ImportInfo ;
 typedef struct  UseSite   UseSite ;
 
 struct  Vector__string  {
@@ -1631,6 +1897,20 @@ struct  HashMap__LspDoc  {
 
 struct  Vector__ImportableSym  {
      ImportableSym*   data;
+     int   len;
+     int   cap;
+};
+
+struct  Vector__ImportInfo  {
+     ImportInfo*   data;
+     int   len;
+     int   cap;
+};
+
+struct  HashMap__ImportInfo  {
+     const char**   keys;
+     ImportInfo*   values;
+     bool*   occupied;
      int   len;
      int   cap;
 };
@@ -1944,6 +2224,14 @@ typedef struct  FieldHit  {
      const char*   doc;
 }  FieldHit ;
 
+typedef struct  ImportInfo  {
+     const char*   module;
+     int   line;
+     int   kind;
+     HashMap__bool*   items;
+     int   close_pos;
+}  ImportInfo ;
+
 typedef struct  UseSite  {
      int   line;
      int   col;
@@ -2054,6 +2342,12 @@ typedef struct  UseSite  {
 #define  JSON_OBJECT  5
 static const const char*   FMT_INDENT = "    ";
 #define  SYMKIND_MODULE  (-1)
+#define  IMP_BARE  0
+#define  IMP_WILDCARD  1
+#define  IMP_SELECTIVE  2
+#define  IMPCTX_NONE  0
+#define  IMPCTX_PATH  1
+#define  IMPCTX_BRACE  2
 #define  MODE_EMIT  0
 #define  MODE_BUILD  1
 #define  MODE_RUN  2
@@ -2387,6 +2681,7 @@ void   __glide_flush_stdout (void);
 void   __glide_log (const char*   s);
 void   __glide_set_binary_io (void);
 const char*   __glide_exe_dir (void);
+const char*   __glide_cwd (void);
 void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
 void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
 LspState*   lsp_state_new (void);
@@ -2440,6 +2735,7 @@ int   symbol_kind_for (Stmt*   s);
 JsonValue*   position_to_json (int   line1, int   col1);
 JsonValue*   range_for_decl_name (Stmt*   s);
 const char*   normalize_path (const char*   path);
+bool   is_absolute_path (const char*   p);
 const char*   path_to_uri (const char*   path);
 void   handle_document_symbol (JsonValue*   req, LspState*   state);
 void   handle_definition (JsonValue*   req, LspState*   state);
@@ -2448,10 +2744,19 @@ Stmt*   fn_containing (Vector__Stmt*   stmts, int   line0);
 void   collect_locals (Vector__Stmt*   body, int   before_line, Vector__Stmt*   out);
 void   collect_locals_stmt (Stmt*   s, int   before_line, Vector__Stmt*   out);
 JsonValue*   completion_item (const char*   label, int   kind, const char*   detail);
-HashMap__bool*   current_imports (Vector__Stmt*   stmts);
+Vector__ImportInfo*   analyze_imports (const char*   text);
+int   find_byte (const char*   s, int   c, int   from);
+ImportInfo   parse_import_line (const char*   raw, int   line);
+HashMap__ImportInfo*   current_imports (const char*   text);
+JsonValue*   build_import_edit (const char*   name, const char*   module, ImportInfo*   existing, int   fallback_line, bool   is_module);
 const char*   lsp_strip_quotes (const char*   s);
+const char*   line_prefix_to_cursor (const char*   text, int   line0, int   col0);
+int   import_context_kind (const char*   text, int   line0, int   col0);
+const char*   import_path_prefix (const char*   text, int   line0, int   col0);
+const char*   import_brace_module (const char*   text, int   line0, int   col0);
+void   list_import_path_children (LspState*   state, const char*   prefix, JsonValue*   items, HashMap__bool*   seen);
 int   find_import_insertion_pos (const char*   text);
-JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, bool   already_imported, int   insert_line);
+JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, JsonValue*   import_edit);
 const char*   ascii_to_lower (const char*   s);
 const char*   pretty_module (const char*   origin);
 void   list_module_members (LspState*   state, const char*   path, JsonValue*   items, HashMap__bool*   seen);
@@ -2668,8 +2973,17 @@ void   HashMap_insert__LspDoc (HashMap__LspDoc*   self, const char*   k, LspDoc 
 int   Vector_len__DiagEntry (Vector__DiagEntry*   self);
 DiagEntry   Vector_get__DiagEntry (Vector__DiagEntry*   self, int   i);
 bool   HashMap_remove__LspDoc (HashMap__LspDoc*   self, const char*   k);
+Vector__ImportInfo*   Vector_new__ImportInfo (void);
+void   Vector_push__ImportInfo (Vector__ImportInfo*   self, ImportInfo   x);
+HashMap__ImportInfo*   HashMap_new__ImportInfo (void);
+int   Vector_len__ImportInfo (Vector__ImportInfo*   self);
+ImportInfo   Vector_get__ImportInfo (Vector__ImportInfo*   self, int   i);
+void   HashMap_insert__ImportInfo (HashMap__ImportInfo*   self, const char*   k, ImportInfo   v);
 int   Vector_len__ImportableSym (Vector__ImportableSym*   self);
 ImportableSym   Vector_get__ImportableSym (Vector__ImportableSym*   self, int   i);
+bool   HashMap_contains__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
+ImportInfo   HashMap_get__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
+void   HashMap_free__ImportInfo (HashMap__ImportInfo*   self);
 void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x);
 Vector__UseSite*   Vector_new__UseSite (void);
 int   Vector_len__UseSite (Vector__UseSite*   self);
@@ -2686,12 +3000,15 @@ int   HashMap_slot__string (HashMap__string*   self, const char*   k);
 void   HashMap_resize__string (HashMap__string*   self, int   new_cap);
 int   HashMap_slot__LspDoc (HashMap__LspDoc*   self, const char*   k);
 void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap);
+void   HashMap_resize__ImportInfo (HashMap__ImportInfo*   self, int   new_cap);
+int   HashMap_slot__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
 int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k);
 int   HashMap_hash_key__bool (HashMap__bool*   self, const char*   k);
 int   HashMap_hash_key__Type (HashMap__Type*   self, const char*   k);
 int   HashMap_hash_key__FnSig (HashMap__FnSig*   self, const char*   k);
 int   HashMap_hash_key__string (HashMap__string*   self, const char*   k);
 int   HashMap_hash_key__LspDoc (HashMap__LspDoc*   self, const char*   k);
+int   HashMap_hash_key__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
 
 
 bool   _ws (int   c) {
@@ -8502,6 +8819,8 @@ void   emit_scheduler_runtime (void) {
 void   emit_socket_runtime (void) {
     printf("%s\n", "");
     printf("%s", "// ============================ socket runtime =============================\n#ifdef _WIN32\n# include <winsock2.h>\n# include <ws2tcpip.h>\ntypedef SOCKET __glide_sock_t;\nstatic int __glide_wsa_inited = 0;\nstatic void __glide_wsa_ensure(void) {\n    if (__glide_wsa_inited) return;\n    WSADATA d; WSAStartup(MAKEWORD(2, 2), &d);\n    __glide_wsa_inited = 1;\n}\n#else\n# include <sys/socket.h>\n# include <netinet/in.h>\n# include <unistd.h>\n# include <arpa/inet.h>\ntypedef int __glide_sock_t;\nstatic void __glide_wsa_ensure(void) {}\n#endif\n\nint listen_tcp(int port) {\n    __glide_wsa_ensure();\n    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);\n#ifdef _WIN32\n    if (s == INVALID_SOCKET) return -1;\n#else\n    if (s < 0) return -1;\n#endif\n    int yes = 1;\n    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));\n    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));\n    addr.sin_family = AF_INET;\n    addr.sin_port = htons((unsigned short)port);\n    addr.sin_addr.s_addr = htonl(INADDR_ANY);\n    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    if (listen(s, 128) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    return (int)s;\n}\n\nint accept_tcp(int listener) {\n#ifdef _WIN32\n    SOCKET c = accept((SOCKET)listener, NULL, NULL);\n    return (c == INVALID_SOCKET) ? -1 : (int)c;\n#else\n    int c = accept(listener, NULL, NULL);\n    return c < 0 ? -1 : c;\n#endif\n}\n\nint tcp_read(int fd, void* buf, int max) {\n#ifdef _WIN32\n    int n = recv((SOCKET)fd, (char*)buf, max, 0);\n    return n < 0 ? -1 : n;\n#else\n    int n = (int)read(fd, buf, (size_t)max);\n    return n < 0 ? -1 : n;\n#endif\n}\n\nint tcp_write(int fd, void* buf, int n) {\n#ifdef _WIN32\n    int w = send((SOCKET)fd, (const char*)buf, n, 0);\n    return w < 0 ? -1 : w;\n#else\n    int w = (int)write(fd, buf, (size_t)n);\n    return w < 0 ? -1 : w;\n#endif\n}\n\nvoid tcp_close(int fd) {\n#ifdef _WIN32\n    closesocket((SOCKET)fd);\n#else\n    close(fd);\n#endif\n}\n");
+    printf("%s\n", "");
+    printf("%s", "// ============================ I/O reactor ================================\n//\n// Async wrappers for accept / read / write that, on Linux, register the\n// fd with epoll and park the calling coroutine until the kernel says\n// the fd is ready. The worker thread is then free to pick up another\n// task. A single dedicated `reactor` pthread owns the epoll fd and\n// drives the wakeup loop.\n//\n// On Windows / macOS / BSD we currently fall back to the blocking\n// sync calls in socket.c (TODO: IOCP / kqueue). The Glide-side API\n// (`accept_tcp_async` / `tcp_read_async` / `tcp_write_async`) is\n// platform-portable so net.glide can call the async names everywhere\n// without #ifdef.\n//\n// Wakeup model — level-triggered for now (simplest correct shape).\n// Switch to EPOLLET + drain loops once the parser layer is settled\n// and we have benchmarks to justify the complexity bump.\n\n#ifndef GLIDE_REACTOR_DEFINED\n#define GLIDE_REACTOR_DEFINED\n\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n#include <pthread.h>\n#include <stdatomic.h>\n#include <errno.h>\n\n#ifdef __linux__\n# include <sys/epoll.h>\n# include <fcntl.h>\n# include <unistd.h>\n# define GLIDE_REACTOR_HAVE_EPOLL 1\n#endif\n\n/* Forward declarations from sched.c. */\nstruct __glide_task;\nextern __thread struct __glide_task* __glide_cur_task;\nextern int  __glide_park(pthread_mutex_t* lock, struct __glide_task** list);\nextern void __glide_unpark_one(struct __glide_task** list);\nextern void __glide_flush_main_buf(void);\n\n#ifdef GLIDE_REACTOR_HAVE_EPOLL\n\n/* Per-fd waiter state. Stored in epoll_event.data.ptr so the reactor\n   thread can recover it on a wakeup without a separate lookup. Two\n   wait lists per fd because read and write may park independently. */\ntypedef struct __glide_io_waiter {\n    int fd;\n    pthread_mutex_t mu;\n    struct __glide_task* read_waiters;\n    struct __glide_task* write_waiters;\n    int registered;             /* 1 once added to epoll */\n} __glide_io_waiter;\n\n/* Tiny open-addressing fd → waiter map. fds in a long-running server\n   reuse low numbers, so a flat array is plenty (and faster than a\n   hashmap). Grows on demand. */\nstatic __glide_io_waiter** __glide_waiters = NULL;\nstatic int                 __glide_waiters_cap = 0;\nstatic pthread_mutex_t     __glide_waiters_mu = PTHREAD_MUTEX_INITIALIZER;\n\nstatic int                 __glide_epoll_fd = -1;\nstatic pthread_t           __glide_reactor_thr;\nstatic atomic_int          __glide_reactor_inited = 0;\nstatic atomic_int          __glide_reactor_running = 0;\n\nstatic __glide_io_waiter* __glide_io_get_or_create(int fd) {\n    pthread_mutex_lock(&__glide_waiters_mu);\n    if (fd >= __glide_waiters_cap) {\n        int new_cap = __glide_waiters_cap ? __glide_waiters_cap : 64;\n        while (new_cap <= fd) new_cap *= 2;\n        __glide_waiters = (__glide_io_waiter**)realloc(\n            __glide_waiters, sizeof(__glide_io_waiter*) * (size_t)new_cap);\n        for (int i = __glide_waiters_cap; i < new_cap; i++) {\n            __glide_waiters[i] = NULL;\n        }\n        __glide_waiters_cap = new_cap;\n    }\n    __glide_io_waiter* w = __glide_waiters[fd];\n    if (!w) {\n        w = (__glide_io_waiter*)calloc(1, sizeof(__glide_io_waiter));\n        w->fd = fd;\n        pthread_mutex_init(&w->mu, NULL);\n        __glide_waiters[fd] = w;\n    }\n    pthread_mutex_unlock(&__glide_waiters_mu);\n    return w;\n}\n\nstatic void __glide_io_register(__glide_io_waiter* w) {\n    if (w->registered) return;\n    struct epoll_event ev;\n    memset(&ev, 0, sizeof(ev));\n    ev.events  = EPOLLIN | EPOLLOUT | EPOLLRDHUP;   /* level-triggered */\n    ev.data.ptr = w;\n    if (epoll_ctl(__glide_epoll_fd, EPOLL_CTL_ADD, w->fd, &ev) == 0) {\n        w->registered = 1;\n    } else if (errno == EEXIST) {\n        w->registered = 1;        /* someone added it concurrently */\n    }\n}\n\nstatic void* __glide_reactor_loop(void* arg) {\n    (void)arg;\n    struct epoll_event evs[64];\n    while (atomic_load(&__glide_reactor_running)) {\n        int n = epoll_wait(__glide_epoll_fd, evs, 64, 100);  /* 100 ms tick */\n        if (n < 0) {\n            if (errno == EINTR) continue;\n            break;\n        }\n        for (int i = 0; i < n; i++) {\n            __glide_io_waiter* w = (__glide_io_waiter*)evs[i].data.ptr;\n            if (!w) continue;\n            uint32_t m = evs[i].events;\n            pthread_mutex_lock(&w->mu);\n            if ((m & (EPOLLIN  | EPOLLERR | EPOLLHUP | EPOLLRDHUP))\n                && w->read_waiters) {\n                while (w->read_waiters) __glide_unpark_one(&w->read_waiters);\n            }\n            if ((m & (EPOLLOUT | EPOLLERR | EPOLLHUP))\n                && w->write_waiters) {\n                while (w->write_waiters) __glide_unpark_one(&w->write_waiters);\n            }\n            pthread_mutex_unlock(&w->mu);\n        }\n    }\n    return NULL;\n}\n\nstatic void __glide_reactor_ensure(void) {\n    int expected = 0;\n    if (!atomic_compare_exchange_strong(&__glide_reactor_inited,\n                                        &expected, 1)) {\n        /* another thread is initialising; spin briefly until done. */\n        while (__glide_epoll_fd < 0) { /* spin */ }\n        return;\n    }\n    __glide_epoll_fd = epoll_create1(EPOLL_CLOEXEC);\n    if (__glide_epoll_fd < 0) {\n        atomic_store(&__glide_reactor_inited, 0);\n        return;\n    }\n    atomic_store(&__glide_reactor_running, 1);\n    pthread_create(&__glide_reactor_thr, NULL, __glide_reactor_loop, NULL);\n    pthread_detach(__glide_reactor_thr);\n}\n\nstatic void __glide_set_nonblocking(int fd) {\n    int flags = fcntl(fd, F_GETFL, 0);\n    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);\n}\n\nstatic int __glide_io_park_read(int fd) {\n    __glide_reactor_ensure();\n    __glide_io_waiter* w = __glide_io_get_or_create(fd);\n    pthread_mutex_lock(&w->mu);\n    __glide_io_register(w);\n    return __glide_park(&w->mu, &w->read_waiters);\n}\n\nstatic int __glide_io_park_write(int fd) {\n    __glide_reactor_ensure();\n    __glide_io_waiter* w = __glide_io_get_or_create(fd);\n    pthread_mutex_lock(&w->mu);\n    __glide_io_register(w);\n    return __glide_park(&w->mu, &w->write_waiters);\n}\n\n/* ---- public async wrappers --------------------------------------- */\n\nint accept_tcp_async(int listener) {\n    __glide_set_nonblocking(listener);\n    while (1) {\n        int c = accept(listener, NULL, NULL);\n        if (c >= 0) {\n            __glide_set_nonblocking(c);\n            return c;\n        }\n        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {\n            if (!__glide_io_park_read(listener)) {\n                /* not in a coro — fall back to blocking accept once. */\n                int flags = fcntl(listener, F_GETFL, 0);\n                fcntl(listener, F_SETFL, flags & ~O_NONBLOCK);\n                int c2 = accept(listener, NULL, NULL);\n                fcntl(listener, F_SETFL, flags);\n                return c2;\n            }\n            continue;\n        }\n        return -1;\n    }\n}\n\nint tcp_read_async(int fd, void* buf, int max) {\n    __glide_set_nonblocking(fd);\n    while (1) {\n        int n = (int)read(fd, buf, (size_t)max);\n        if (n >= 0) return n;\n        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {\n            if (!__glide_io_park_read(fd)) return -1;\n            continue;\n        }\n        return -1;\n    }\n}\n\nint tcp_write_async(int fd, void* buf, int n) {\n    __glide_set_nonblocking(fd);\n    int sent = 0;\n    while (sent < n) {\n        int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));\n        if (w > 0) { sent += w; continue; }\n        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {\n            if (!__glide_io_park_write(fd)) return sent > 0 ? sent : -1;\n            continue;\n        }\n        return sent > 0 ? sent : -1;\n    }\n    return sent;\n}\n\n#else  /* not Linux: fall back to blocking sync I/O for now. */\n\n/* Forward decls from socket.c so the names link clean. */\nextern int  accept_tcp(int listener);\nextern int  tcp_read(int fd, void* buf, int max);\nextern int  tcp_write(int fd, void* buf, int n);\n\nint accept_tcp_async(int listener) {\n    return accept_tcp(listener);\n}\n\nint tcp_read_async(int fd, void* buf, int max) {\n    return tcp_read(fd, buf, max);\n}\n\nint tcp_write_async(int fd, void* buf, int n) {\n    return tcp_write(fd, buf, n);\n}\n\n#endif  /* GLIDE_REACTOR_HAVE_EPOLL */\n\n#endif  /* GLIDE_REACTOR_DEFINED */\n");
     printf("%s\n", "");
 }
 
@@ -14805,11 +15124,39 @@ const char*   normalize_path (const char*   path) {
     return out;
 }
 
+bool   is_absolute_path (const char*   p) {
+    int   n = __glide_string_len(p);
+    if ((n  ==  0)) {
+        return false;
+    }
+    if ((__glide_char_to_int(__glide_string_at(p, 0))  ==  47)) {
+        return true;
+    }
+    if ((n  >=  3)) {
+        int   c2 = __glide_char_to_int(__glide_string_at(p, 1));
+        int   c3 = __glide_char_to_int(__glide_string_at(p, 2));
+        if (((c2  ==  58)  &&  ((c3  ==  47)  ||  (c3  ==  92)))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const char*   path_to_uri (const char*   path) {
     if (((path  ==  NULL)  ||  (__glide_string_len(path)  ==  0))) {
         return "";
     }
     const char*   p = normalize_path(path);
+    if ((!is_absolute_path(p))) {
+        const char*   cwd = normalize_path(__glide_cwd());
+        if ((!__glide_string_eq(cwd, ""))) {
+            if ((__glide_char_to_int(__glide_string_at(cwd, (__glide_string_len(cwd)  -  1)))  ==  47)) {
+                (p  =  __glide_string_concat(cwd, p));
+            } else {
+                (p  =  __glide_string_concat(__glide_string_concat(cwd, "/"), p));
+            }
+        }
+    }
     if ((__glide_char_to_int(__glide_string_at(p, 0))  ==  47)) {
         return __glide_string_concat("file://", p);
     }
@@ -14989,29 +15336,143 @@ JsonValue*   completion_item (const char*   label, int   kind, const char*   det
     return it;
 }
 
-HashMap__bool*   current_imports (Vector__Stmt*   stmts) {
-    HashMap__bool*   h = HashMap_new__bool();
-    if ((stmts  ==  NULL)) {
-        return h;
+Vector__ImportInfo*   analyze_imports (const char*   text) {
+    Vector__ImportInfo*   out = Vector_new__ImportInfo();
+    if ((text  ==  NULL)) {
+        return out;
     }
-    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
-        Stmt   s = Vector_get__Stmt(stmts, i);
-        if (((s. kind )  !=  ST_IMPORT)) {
-            continue;
+    int   n = __glide_string_len(text);
+    int   line = 0;
+    int   line_start = 0;
+    int   i = 0;
+    while ((i  <=  n)) {
+        bool   at_eol = ((i  ==  n)  ||  (__glide_char_to_int(__glide_string_at(text, i))  ==  10));
+        if (at_eol) {
+            const char*   raw = __glide_string_substring(text, line_start, i);
+            const char*   trimmed = string_trim(raw);
+            if (((__glide_string_len(trimmed)  >  7)  &&  __glide_string_eq(__glide_string_substring(trimmed, 0, 7), "import "))) {
+                ImportInfo   info = parse_import_line(raw, line);
+                if ((!__glide_string_eq((info. module ), ""))) {
+                    Vector_push__ImportInfo(out, info);
+                }
+            }
+            (line  =  (line  +  1));
+            (line_start  =  (i  +  1));
         }
-        const char*   p = lsp_strip_quotes((s. import_path ));
-        if ((!__glide_string_eq(p, ""))) {
-            HashMap_insert__bool(h, p, true);
-            const char*   canon = pretty_module(p);
-            if ((!__glide_string_eq(canon, ""))) {
-                HashMap_insert__bool(h, canon, true);
+        (i  =  (i  +  1));
+    }
+    return out;
+}
+
+int   find_byte (const char*   s, int   c, int   from) {
+    int   n = __glide_string_len(s);
+    int   i = from;
+    while ((i  <  n)) {
+        if ((__glide_char_to_int(__glide_string_at(s, i))  ==  c)) {
+            return i;
+        }
+        (i  =  (i  +  1));
+    }
+    return (-1);
+}
+
+ImportInfo   parse_import_line (const char*   raw, int   line) {
+    HashMap__bool*   none_items = HashMap_new__bool();
+    ImportInfo   miss = (( ImportInfo ){. module  = "", . line  = line, . kind  = IMP_BARE, . items  = none_items, . close_pos  = (-1)});
+    const char*   trimmed = string_trim(raw);
+    if ((__glide_string_len(trimmed)  <  8)) {
+        return miss;
+    }
+    const char*   body = string_trim(__glide_string_substring(trimmed, 7, __glide_string_len(trimmed)));
+    int   bn0 = __glide_string_len(body);
+    if (((bn0  >  0)  &&  (__glide_char_to_int(__glide_string_at(body, (bn0  -  1)))  ==  59))) {
+        (body  =  string_trim(__glide_string_substring(body, 0, (bn0  -  1))));
+    }
+    if (__glide_string_eq(body, "")) {
+        return miss;
+    }
+    int   brace_open_in_body = find_substr(body, "::{");
+    if ((brace_open_in_body  >=  0)) {
+        const char*   module = __glide_string_substring(body, 0, brace_open_in_body);
+        int   inner_start = (brace_open_in_body  +  3);
+        int   brace_close = find_byte(body, 125, inner_start);
+        HashMap__bool*   items = HashMap_new__bool();
+        if ((brace_close  >  0)) {
+            const char*   inner = __glide_string_substring(body, inner_start, brace_close);
+            Vector__string*   parts = string_split(inner, ",");
+            for (int   i = 0; (i  <  Vector_len__string(parts)); i++) {
+                const char*   nm = string_trim(Vector_get__string(parts, i));
+                if ((!__glide_string_eq(nm, ""))) {
+                    HashMap_insert__bool(items, nm, true);
+                }
             }
         }
-        if ((((s. import_short )  !=  NULL)  &&  (!__glide_string_eq((s. import_short ), "")))) {
-            HashMap_insert__bool(h, (s. import_short ), true);
-        }
+        int   close_in_raw = find_byte(raw, 125, 0);
+        return (( ImportInfo ){. module  = module, . line  = line, . kind  = IMP_SELECTIVE, . items  = items, . close_pos  = close_in_raw});
+    }
+    int   bn = __glide_string_len(body);
+    if (((bn  >=  3)  &&  __glide_string_eq(__glide_string_substring(body, (bn  -  3), bn), "::*"))) {
+        return (( ImportInfo ){. module  = __glide_string_substring(body, 0, (bn  -  3)), . line  = line, . kind  = IMP_WILDCARD, . items  = none_items, . close_pos  = (-1)});
+    }
+    return (( ImportInfo ){. module  = body, . line  = line, . kind  = IMP_BARE, . items  = none_items, . close_pos  = (-1)});
+}
+
+HashMap__ImportInfo*   current_imports (const char*   text) {
+    HashMap__ImportInfo*   h = HashMap_new__ImportInfo();
+    Vector__ImportInfo*   infos = analyze_imports(text);
+    for (int   i = 0; (i  <  Vector_len__ImportInfo(infos)); i++) {
+        ImportInfo   info = Vector_get__ImportInfo(infos, i);
+        HashMap_insert__ImportInfo(h, (info. module ), info);
     }
     return h;
+}
+
+JsonValue*   build_import_edit (const char*   name, const char*   module, ImportInfo*   existing, int   fallback_line, bool   is_module) {
+    if ((existing  !=  NULL)) {
+        if (((existing-> kind )  ==  IMP_WILDCARD)) {
+            return NULL;
+        }
+        if (((existing-> kind )  ==  IMP_BARE)) {
+            return NULL;
+        }
+        if (((existing-> kind )  ==  IMP_SELECTIVE)) {
+            if (HashMap_contains__bool((existing-> items ), name)) {
+                return NULL;
+            }
+            JsonValue*   edit = json_object();
+            JsonValue*   range = json_object();
+            JsonValue*   start = json_object();
+            JsonValue*   endp = json_object();
+            json_obj_set(start, "line", json_int((existing-> line )));
+            json_obj_set(start, "character", json_int((existing-> close_pos )));
+            json_obj_set(endp, "line", json_int((existing-> line )));
+            json_obj_set(endp, "character", json_int((existing-> close_pos )));
+            json_obj_set(range, "start", start);
+            json_obj_set(range, "end", endp);
+            json_obj_set(edit, "range", range);
+            json_obj_set(edit, "newText", json_string(__glide_string_concat(", ", name)));
+            return edit;
+        }
+    }
+    JsonValue*   edit = json_object();
+    JsonValue*   range = json_object();
+    JsonValue*   start = json_object();
+    JsonValue*   endp = json_object();
+    json_obj_set(start, "line", json_int(fallback_line));
+    json_obj_set(start, "character", json_int(0));
+    json_obj_set(endp, "line", json_int(fallback_line));
+    json_obj_set(endp, "character", json_int(0));
+    json_obj_set(range, "start", start);
+    json_obj_set(range, "end", endp);
+    json_obj_set(edit, "range", range);
+    const char*   new_text = "";
+    if (is_module) {
+        (new_text  =  __glide_string_concat(__glide_string_concat("import ", module), ";\n"));
+    } else {
+        (new_text  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("import ", module), "::{"), name), "};\n"));
+    }
+    json_obj_set(edit, "newText", json_string(new_text));
+    return edit;
 }
 
 const char*   lsp_strip_quotes (const char*   s) {
@@ -15020,6 +15481,110 @@ const char*   lsp_strip_quotes (const char*   s) {
         return __glide_string_substring(s, 1, (n  -  1));
     }
     return s;
+}
+
+const char*   line_prefix_to_cursor (const char*   text, int   line0, int   col0) {
+    int   n = __glide_string_len(text);
+    int   line = 0;
+    int   start = 0;
+    int   i = 0;
+    while (((i  <  n)  &&  (line  <  line0))) {
+        if ((__glide_char_to_int(__glide_string_at(text, i))  ==  10)) {
+            (line  =  (line  +  1));
+            (start  =  (i  +  1));
+        }
+        (i  =  (i  +  1));
+    }
+    int   end = (start  +  col0);
+    if ((end  >  n)) {
+        (end  =  n);
+    }
+    return __glide_string_substring(text, start, end);
+}
+
+int   import_context_kind (const char*   text, int   line0, int   col0) {
+    const char*   prefix = line_prefix_to_cursor(text, line0, col0);
+    const char*   trimmed = string_trim(prefix);
+    int   tlen = __glide_string_len(trimmed);
+    if ((tlen  <  7)) {
+        return IMPCTX_NONE;
+    }
+    if ((!__glide_string_eq(__glide_string_substring(trimmed, 0, 7), "import "))) {
+        return IMPCTX_NONE;
+    }
+    if ((find_byte(prefix, 59, 0)  >=  0)) {
+        return IMPCTX_NONE;
+    }
+    int   brace_pos = find_byte(trimmed, 123, 7);
+    if ((brace_pos  >=  0)) {
+        int   close_after = find_byte(trimmed, 125, brace_pos);
+        if ((close_after  <  0)) {
+            return IMPCTX_BRACE;
+        }
+    }
+    return IMPCTX_PATH;
+}
+
+const char*   import_path_prefix (const char*   text, int   line0, int   col0) {
+    const char*   prefix = line_prefix_to_cursor(text, line0, col0);
+    const char*   trimmed = string_trim(prefix);
+    if ((__glide_string_len(trimmed)  <  7)) {
+        return "";
+    }
+    const char*   body = __glide_string_substring(trimmed, 7, __glide_string_len(trimmed));
+    int   n = __glide_string_len(body);
+    int   end = n;
+    while ((end  >  0)) {
+        int   c = __glide_char_to_int(__glide_string_at(body, (end  -  1)));
+        if ((((((c  >=  65)  &&  (c  <=  90))  ||  ((c  >=  97)  &&  (c  <=  122)))  ||  ((c  >=  48)  &&  (c  <=  57)))  ||  (c  ==  95))) {
+            (end  =  (end  -  1));
+        } else {
+            break;
+        }
+    }
+    return __glide_string_substring(body, 0, end);
+}
+
+const char*   import_brace_module (const char*   text, int   line0, int   col0) {
+    const char*   prefix = line_prefix_to_cursor(text, line0, col0);
+    const char*   trimmed = string_trim(prefix);
+    if ((__glide_string_len(trimmed)  <  7)) {
+        return "";
+    }
+    const char*   body = __glide_string_substring(trimmed, 7, __glide_string_len(trimmed));
+    int   bopen = find_byte(body, 123, 0);
+    if ((bopen  <=  1)) {
+        return "";
+    }
+    if ((((bopen  >=  2)  &&  (__glide_char_to_int(__glide_string_at(body, (bopen  -  1)))  ==  58))  &&  (__glide_char_to_int(__glide_string_at(body, (bopen  -  2)))  ==  58))) {
+        return __glide_string_substring(body, 0, (bopen  -  2));
+    }
+    return "";
+}
+
+void   list_import_path_children (LspState*   state, const char*   prefix, JsonValue*   items, HashMap__bool*   seen) {
+    if ((__glide_string_eq(prefix, "")  ||  __glide_string_eq(prefix, "stdlib::"))) {
+        if ((__glide_string_eq(prefix, "")  &&  (!HashMap_contains__bool(seen, "stdlib")))) {
+            HashMap_insert__bool(seen, "stdlib", true);
+            JsonValue*   no_edit_n = NULL;
+            json_arr_push(items, rich_completion_item("stdlib", "", 9, "namespace stdlib", "Glide standard library root.", "", "stdlib::", false, no_edit_n));
+        }
+        if ((__glide_string_eq(prefix, "stdlib::")  &&  ((state-> stdlib_index )  !=  NULL))) {
+            int   n = Vector_len__ImportableSym((state-> stdlib_index ));
+            for (int   i = 0; (i  <  n); i++) {
+                ImportableSym   sym = Vector_get__ImportableSym((state-> stdlib_index ), i);
+                if (((sym. kind )  !=  SYMKIND_MODULE)) {
+                    continue;
+                }
+                if (HashMap_contains__bool(seen, (sym. name ))) {
+                    continue;
+                }
+                HashMap_insert__bool(seen, (sym. name ), true);
+                JsonValue*   no_edit_m = NULL;
+                json_arr_push(items, rich_completion_item((sym. name ), "", 9, (sym. signature ), (sym. doc ), "", (sym. name ), false, no_edit_m));
+            }
+        }
+    }
 }
 
 int   find_import_insertion_pos (const char*   text) {
@@ -15047,7 +15612,7 @@ int   find_import_insertion_pos (const char*   text) {
     return (last_import_line  +  1);
 }
 
-JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, bool   already_imported, int   insert_line) {
+JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, JsonValue*   import_edit) {
     JsonValue*   it = json_object();
     json_obj_set(it, "label", json_string(label));
     json_obj_set(it, "kind", json_int(kind));
@@ -15106,21 +15671,9 @@ JsonValue*   rich_completion_item (const char*   label, const char*   label_extr
         json_obj_set(it, "insertText", json_string(label));
         json_obj_set(it, "insertTextFormat", json_int(1));
     }
-    if (((!__glide_string_eq(module, ""))  &&  (!already_imported))) {
+    if ((import_edit  !=  NULL)) {
         JsonValue*   edits = json_array();
-        JsonValue*   edit = json_object();
-        JsonValue*   range = json_object();
-        JsonValue*   start = json_object();
-        JsonValue*   endp = json_object();
-        json_obj_set(start, "line", json_int(insert_line));
-        json_obj_set(start, "character", json_int(0));
-        json_obj_set(endp, "line", json_int(insert_line));
-        json_obj_set(endp, "character", json_int(0));
-        json_obj_set(range, "start", start);
-        json_obj_set(range, "end", endp);
-        json_obj_set(edit, "range", range);
-        json_obj_set(edit, "newText", json_string(__glide_string_concat(__glide_string_concat("import ", module), "::*;\n")));
-        json_arr_push(edits, edit);
+        json_arr_push(edits, import_edit);
         json_obj_set(it, "additionalTextEdits", edits);
     }
     return it;
@@ -15199,7 +15752,8 @@ void   list_module_members (LspState*   state, const char*   path, JsonValue*   
                 continue;
             }
             HashMap_insert__bool(seen, leaf, true);
-            JsonValue*   item = rich_completion_item(leaf, "", 9, __glide_string_concat("module ", leaf), "stdlib submodule", "", leaf, false, true, 0);
+            JsonValue*   no_edit = NULL;
+            JsonValue*   item = rich_completion_item(leaf, "", 9, __glide_string_concat("module ", leaf), "stdlib submodule", "", leaf, false, no_edit);
             json_arr_push(items, item);
         }
         HashMap_free__bool(mods);
@@ -15223,7 +15777,8 @@ void   list_module_members (LspState*   state, const char*   path, JsonValue*   
             continue;
         }
         HashMap_insert__bool(seen, (sym. name ), true);
-        JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), true, 0);
+        JsonValue*   no_edit2 = NULL;
+        JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), no_edit2);
         json_arr_push(items, item);
     }
 }
@@ -15628,6 +16183,23 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
     JsonValue*   items = json_array();
     HashMap__bool*   seen = HashMap_new__bool();
+    int   imp_kind = import_context_kind((doc. text ), line0, col0);
+    if ((imp_kind  ==  IMPCTX_PATH)) {
+        const char*   prefix = import_path_prefix((doc. text ), line0, col0);
+        list_import_path_children(state, prefix, items, seen);
+        HashMap_free__bool(seen);
+        lsp_send_response(id, items);
+        return;
+    }
+    if ((imp_kind  ==  IMPCTX_BRACE)) {
+        const char*   mod_in_brace = import_brace_module((doc. text ), line0, col0);
+        if ((!__glide_string_eq(mod_in_brace, ""))) {
+            list_module_members(state, mod_in_brace, items, seen);
+            HashMap_free__bool(seen);
+            lsp_send_response(id, items);
+            return;
+        }
+    }
     const char*   mod_path = module_path_before((doc. text ), line0, col0);
     if (((!__glide_string_eq(mod_path, ""))  &&  ((state-> stdlib_index )  !=  NULL))) {
         list_module_members(state, mod_path, items, seen);
@@ -15670,7 +16242,8 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 if ((!HashMap_contains__bool(seen, (p. name )))) {
                     HashMap_insert__bool(seen, (p. name ), true);
                     const char*   sig = __glide_string_concat(__glide_string_concat(__glide_string_concat("param ", (p. name )), ": "), type_to_string_pretty((p. ty )));
-                    JsonValue*   item = rich_completion_item((p. name ), "", 6, sig, "", "", "", false, true, 0);
+                    JsonValue*   no_edit_p = NULL;
+                    JsonValue*   item = rich_completion_item((p. name ), "", 6, sig, "", "", "", false, no_edit_p);
                     json_arr_push(items, item);
                 }
             }
@@ -15687,10 +16260,13 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             if (((s. let_ty )  !=  NULL)) {
                 (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("let ", (s. name )), ": "), type_to_string_pretty((s. let_ty ))));
             }
-            JsonValue*   item = rich_completion_item((s. name ), "", 6, sig, "", "", "", false, true, 0);
+            JsonValue*   no_edit_l = NULL;
+            JsonValue*   item = rich_completion_item((s. name ), "", 6, sig, "", "", "", false, no_edit_l);
             json_arr_push(items, item);
         }
     }
+    HashMap__ImportInfo*   imps2 = current_imports((doc. text ));
+    int   insert_line2 = find_import_insertion_pos((doc. text ));
     if (((doc. stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
@@ -15742,7 +16318,17 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             if (((s. doc_comment )  !=  NULL)) {
                 (docc  =  (s. doc_comment ));
             }
-            JsonValue*   item = rich_completion_item(label, label_extra, ci_kind_for((&s)), sig, docc, module, snip, has_snip, true, 0);
+            JsonValue*   decl_edit = NULL;
+            if (((__glide_string_len(module)  >=  8)  &&  __glide_string_eq(__glide_string_substring(module, 0, 8), "stdlib::"))) {
+                ImportInfo*   existing = NULL;
+                if (HashMap_contains__ImportInfo(imps2, module)) {
+                    ImportInfo   info_val = HashMap_get__ImportInfo(imps2, module);
+                    (existing  =  (( ImportInfo* )malloc(sizeof( ImportInfo ))));
+                    ((*existing)  =  info_val);
+                }
+                (decl_edit  =  build_import_edit(label, module, existing, insert_line2, false));
+            }
+            JsonValue*   item = rich_completion_item(label, label_extra, ci_kind_for((&s)), sig, docc, module, snip, has_snip, decl_edit);
             json_arr_push(items, item);
         }
     }
@@ -15771,7 +16357,7 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
     if ((((state-> stdlib_index )  !=  NULL)  &&  (Vector_len__ImportableSym((state-> stdlib_index ))  >  0))) {
-        HashMap__bool*   imps = current_imports((doc. stmts ));
+        HashMap__ImportInfo*   imps = current_imports((doc. text ));
         int   insert_line = find_import_insertion_pos((doc. text ));
         int   n_idx = Vector_len__ImportableSym((state-> stdlib_index ));
         for (int   i = 0; (i  <  n_idx); i++) {
@@ -15780,11 +16366,18 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 continue;
             }
             HashMap_insert__bool(seen, (sym. name ), true);
-            bool   already = HashMap_contains__bool(imps, (sym. module ));
-            JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), already, insert_line);
+            ImportInfo*   existing = NULL;
+            if (HashMap_contains__ImportInfo(imps, (sym. module ))) {
+                ImportInfo   info_val = HashMap_get__ImportInfo(imps, (sym. module ));
+                (existing  =  (( ImportInfo* )malloc(sizeof( ImportInfo ))));
+                ((*existing)  =  info_val);
+            }
+            bool   is_module = ((sym. kind )  ==  SYMKIND_MODULE);
+            JsonValue*   edit = build_import_edit((sym. name ), (sym. module ), existing, insert_line, is_module);
+            JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), edit);
             json_arr_push(items, item);
         }
-        HashMap_free__bool(imps);
+        HashMap_free__ImportInfo(imps);
     }
     Vector__string*   kws = Vector_new__string();
     Vector_push__string(kws, "let");
@@ -18313,6 +18906,18 @@ int main(int argc, char** argv) {
     return __glide_rc;
 }
 
+int   HashMap_hash_key__ImportInfo (HashMap__ImportInfo*   self, const char*   k) {
+    int   h = 0;
+    int   n = __glide_string_len(k);
+    for (int   i = 0; (i  <  n); i++) {
+        (h  =  ((h  *  31)  +  __glide_char_to_int(__glide_string_at(k, i))));
+    }
+    if ((h  <  0)) {
+        (h  =  (-h));
+    }
+    return h;
+}
+
 int   HashMap_hash_key__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     int   h = 0;
     int   n = __glide_string_len(k);
@@ -18383,6 +18988,46 @@ int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k) {
         (h  =  (-h));
     }
     return h;
+}
+
+int   HashMap_slot__ImportInfo (HashMap__ImportInfo*   self, const char*   k) {
+    if (((self-> cap )  ==  0)) {
+        return (-1);
+    }
+    int   mask = ((self-> cap )  -  1);
+    int   i = (HashMap_hash_key__ImportInfo(self, k)  &  mask);
+    while ((self-> occupied )[i]) {
+        if (__glide_string_eq((self-> keys )[i], k)) {
+            return i;
+        }
+        (i  =  ((i  +  1)  &  mask));
+    }
+    return i;
+}
+
+void   HashMap_resize__ImportInfo (HashMap__ImportInfo*   self, int   new_cap) {
+    const char**   old_keys = (self-> keys );
+    ImportInfo*   old_values = (self-> values );
+    bool*   old_occupied = (self-> occupied );
+    int   old_cap = (self-> cap );
+    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+    ((self-> values )  =  (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo )))));
+    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    ((self-> cap )  =  new_cap);
+    ((self-> len )  =  0);
+    for (int   i = 0; (i  <  new_cap); i++) {
+        ((self-> occupied )[i]  =  false);
+    }
+    for (int   i = 0; (i  <  old_cap); i++) {
+        if (old_occupied[i]) {
+            HashMap_insert__ImportInfo(self, old_keys[i], old_values[i]);
+        }
+    }
+    if ((old_cap  >  0)) {
+        free((( void* )old_keys));
+        free((( void* )old_values));
+        free((( void* )old_occupied));
+    }
 }
 
 void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap) {
@@ -18661,12 +19306,97 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x) {
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
+void   HashMap_free__ImportInfo (HashMap__ImportInfo*   self) {
+    if (((self-> cap )  >  0)) {
+        free((( void* )(self-> keys )));
+        free((( void* )(self-> values )));
+        free((( void* )(self-> occupied )));
+    }
+    free((( void* )self));
+}
+
+ImportInfo   HashMap_get__ImportInfo (HashMap__ImportInfo*   self, const char*   k) {
+    int   i = HashMap_slot__ImportInfo(self, k);
+    return (self-> values )[i];
+}
+
+bool   HashMap_contains__ImportInfo (HashMap__ImportInfo*   self, const char*   k) {
+    int   i = HashMap_slot__ImportInfo(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
+}
+
 ImportableSym   Vector_get__ImportableSym (Vector__ImportableSym*   self, int   i) {
     return (self-> data )[i];
 }
 
 int   Vector_len__ImportableSym (Vector__ImportableSym*   self) {
     return (self-> len );
+}
+
+void   HashMap_insert__ImportInfo (HashMap__ImportInfo*   self, const char*   k, ImportInfo   v) {
+    if (((self-> cap )  ==  0)) {
+        HashMap_resize__ImportInfo(self, 8);
+    } else {
+        if ((((self-> len )  *  4)  >=  ((self-> cap )  *  3))) {
+            HashMap_resize__ImportInfo(self, ((self-> cap )  *  2));
+        }
+    }
+    int   i = HashMap_slot__ImportInfo(self, k);
+    if ((!(self-> occupied )[i])) {
+        ((self-> occupied )[i]  =  true);
+        ((self-> len )  =  ((self-> len )  +  1));
+    }
+    ((self-> keys )[i]  =  k);
+    ((self-> values )[i]  =  v);
+}
+
+ImportInfo   Vector_get__ImportInfo (Vector__ImportInfo*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__ImportInfo (Vector__ImportInfo*   self) {
+    return (self-> len );
+}
+
+HashMap__ImportInfo*   HashMap_new__ImportInfo (void) {
+    HashMap__ImportInfo*   m = (( HashMap__ImportInfo* )malloc(sizeof( HashMap__ImportInfo )));
+    ((m-> keys )  =  NULL);
+    ((m-> values )  =  NULL);
+    ((m-> occupied )  =  NULL);
+    ((m-> len )  =  0);
+    ((m-> cap )  =  0);
+    return m;
+}
+
+void   Vector_push__ImportInfo (Vector__ImportInfo*   self, ImportInfo   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        ImportInfo*   new_data = (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo ))));
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((self-> cap )  >  0)) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__ImportInfo*   Vector_new__ImportInfo (void) {
+    Vector__ImportInfo*   v = (( Vector__ImportInfo* )malloc(sizeof( Vector__ImportInfo )));
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    return v;
 }
 
 bool   HashMap_remove__LspDoc (HashMap__LspDoc*   self, const char*   k) {
