@@ -26,6 +26,8 @@
 import stdlib::net::*;
 import stdlib::http_status::*;
 
+extern fn __glide_is_windows() -> int;
+
 // ---- request / response shapes ----------------------------------------
 
 /// One incoming HTTP request, fully buffered. Lifetime is tied to the
@@ -210,16 +212,43 @@ pub fn format_http_response(r: &HttpResponse) -> string {
 
 // ---- server loop ------------------------------------------------------
 
+fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
+    let buf: *u8 = malloc(8192) as *u8;
+    let n: int = c.read(buf as *void, 8192);
+    if n <= 0 { c.close(); free(buf as *void); return; }
+
+    let mut s: string = "";
+    for let i: int = 0; i < n; i++ {
+        let b: u8 = buf[i];
+        s = s.concat((b as char).to_string());
+    }
+
+    let parsed: !HttpRequest = parse_http_request(s);
+    let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
+    if parsed.ok {
+        let req: HttpRequest = parsed.val;
+        resp = handler(&req);
+    }
+    let wire: string = format_http_response(&resp);
+    c.write(wire as *void, wire.len());
+    c.close();
+    free(buf as *void);
+}
+
 /// Listen on `port` and dispatch every request through `handler`. The
 /// fn returns `err` on bind failure and never returns on success — the
 /// server loop runs until the process exits.
 ///
-/// v1 handles connections serially in the accept loop. Once spawn
-/// learns to forward function-pointer arguments (TODO), the body of
-/// the loop will move into a per-connection coroutine for true
-/// concurrent serving. The async reactor underneath already parks
-/// reads/writes regardless, so even the serial form behaves better
-/// than a fully blocking server.
+/// Concurrency model:
+///   * Linux: reactor.c registers each fd with epoll and parks the
+///     calling coro on EAGAIN. The body of the loop spawns a coro per
+///     accepted connection so thousands of clients share a single
+///     OS thread.
+///   * Windows / macOS / BSD: there's no reactor yet, so the per-conn
+///     spawn would block its worker on the first sync read and starve
+///     other coros. The loop runs **serially** until IOCP / kqueue
+///     land. Behaviour is correct on every platform; throughput on
+///     non-Linux is the obvious one-conn-at-a-time.
 ///
 /// ```glide
 /// fn root(req: *HttpRequest) -> HttpResponse {
@@ -235,30 +264,19 @@ pub fn http_listen(port: int, handler: fn(*HttpRequest) -> HttpResponse) -> !int
     let l: *Listener = Listener::bind(port);
     if !l.ok() { return err("bind failed"); }
     println!("http: listening on :", port);
-    let buf: *u8 = malloc(8192) as *u8;
+    let win: bool = __glide_is_windows() != 0;
     while true {
         let c: *Conn = l.accept();
         if !c.ok() { c.close(); continue; }
-        let n: int = c.read(buf as *void, 8192);
-        if n <= 0 { c.close(); continue; }
-
-        let mut s: string = "";
-        for let i: int = 0; i < n; i++ {
-            let b: u8 = buf[i];
-            s = s.concat((b as char).to_string());
+        if win {
+            // Windows: no reactor yet, run the handler inline so the
+            // single read/write doesn't block a worker forever.
+            _handle_conn(c, handler);
+        } else {
+            // Linux: reactor parks the coro on read/write, so spawn
+            // gives us thousands of concurrent connections per thread.
+            spawn _handle_conn(c, handler);
         }
-
-        let parsed: !HttpRequest = parse_http_request(s);
-        let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
-        if parsed.ok {
-            let req: HttpRequest = parsed.val;
-            resp = handler(&req);
-        }
-
-        let wire: string = format_http_response(&resp);
-        c.write(wire as *void, wire.len());
-        c.close();
     }
-    free(buf as *void);
     return ok(0);
 }
