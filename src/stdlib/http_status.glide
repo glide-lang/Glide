@@ -1,0 +1,122 @@
+// HTTP status code helpers. Pure Glide lookup and classification helpers
+// for the upcoming HTTP module; no runtime or libc dependencies.
+
+/// Return the standard reason phrase for an HTTP status code.
+/// Unknown or unassigned codes return `"Unknown"`.
+///
+/// ```glide
+/// status_text(200);  // "OK"
+/// status_text(404);  // "Not Found"
+/// status_text(599);  // "Unknown"
+/// ```
+pub fn status_text(code: int) -> string {
+    if code == 100 { return "Continue"; }
+    if code == 101 { return "Switching Protocols"; }
+    if code == 102 { return "Processing"; }
+    if code == 103 { return "Early Hints"; }
+    if code == 104 { return "Upload Resumption Supported"; }
+
+    if code == 200 { return "OK"; }
+    if code == 201 { return "Created"; }
+    if code == 202 { return "Accepted"; }
+    if code == 203 { return "Non-Authoritative Information"; }
+    if code == 204 { return "No Content"; }
+    if code == 205 { return "Reset Content"; }
+    if code == 206 { return "Partial Content"; }
+    if code == 207 { return "Multi-Status"; }
+    if code == 208 { return "Already Reported"; }
+    if code == 226 { return "IM Used"; }
+
+    if code == 300 { return "Multiple Choices"; }
+    if code == 301 { return "Moved Permanently"; }
+    if code == 302 { return "Found"; }
+    if code == 303 { return "See Other"; }
+    if code == 304 { return "Not Modified"; }
+    if code == 305 { return "Use Proxy"; }
+    if code == 307 { return "Temporary Redirect"; }
+    if code == 308 { return "Permanent Redirect"; }
+
+    if code == 400 { return "Bad Request"; }
+    if code == 401 { return "Unauthorized"; }
+    if code == 402 { return "Payment Required"; }
+    if code == 403 { return "Forbidden"; }
+    if code == 404 { return "Not Found"; }
+    if code == 405 { return "Method Not Allowed"; }
+    if code == 406 { return "Not Acceptable"; }
+    if code == 407 { return "Proxy Authentication Required"; }
+    if code == 408 { return "Request Timeout"; }
+    if code == 409 { return "Conflict"; }
+    if code == 410 { return "Gone"; }
+    if code == 411 { return "Length Required"; }
+    if code == 412 { return "Precondition Failed"; }
+    if code == 413 { return "Payload Too Large"; }
+    if code == 414 { return "URI Too Long"; }
+    if code == 415 { return "Unsupported Media Type"; }
+    if code == 416 { return "Range Not Satisfiable"; }
+    if code == 417 { return "Expectation Failed"; }
+    if code == 418 { return "I'm a teapot"; }
+    if code == 421 { return "Misdirected Request"; }
+    if code == 422 { return "Unprocessable Entity"; }
+    if code == 423 { return "Locked"; }
+    if code == 424 { return "Failed Dependency"; }
+    if code == 425 { return "Too Early"; }
+    if code == 426 { return "Upgrade Required"; }
+    if code == 428 { return "Precondition Required"; }
+    if code == 429 { return "Too Many Requests"; }
+    if code == 431 { return "Request Header Fields Too Large"; }
+    if code == 451 { return "Unavailable For Legal Reasons"; }
+
+    if code == 500 { return "Internal Server Error"; }
+    if code == 501 { return "Not Implemented"; }
+    if code == 502 { return "Bad Gateway"; }
+    if code == 503 { return "Service Unavailable"; }
+    if code == 504 { return "Gateway Timeout"; }
+    if code == 505 { return "HTTP Version Not Supported"; }
+    if code == 506 { return "Variant Also Negotiates"; }
+    if code == 507 { return "Insufficient Storage"; }
+    if code == 508 { return "Loop Detected"; }
+    if code == 510 { return "Not Extended"; }
+    if code == 511 { return "Network Authentication Required"; }
+
+    return "Unknown";
+}
+
+/// Return `true` for HTTP success status codes.
+///
+/// ```glide
+/// is_ok(204);   // true
+/// is_ok(404);   // false
+/// ```
+pub fn is_ok(code: int) -> bool {
+    return code >= 200 && code < 300;
+}
+
+/// Return `true` for HTTP redirection status codes.
+///
+/// ```glide
+/// is_redirect(301);  // true
+/// is_redirect(200);  // false
+/// ```
+pub fn is_redirect(code: int) -> bool {
+    return code >= 300 && code < 400;
+}
+
+/// Return `true` for HTTP client error status codes.
+///
+/// ```glide
+/// is_client_error(404);  // true
+/// is_client_error(503);  // false
+/// ```
+pub fn is_client_error(code: int) -> bool {
+    return code >= 400 && code < 500;
+}
+
+/// Return `true` for HTTP server error status codes.
+///
+/// ```glide
+/// is_server_error(503);  // true
+/// is_server_error(404);  // false
+/// ```
+pub fn is_server_error(code: int) -> bool {
+    return code >= 500 && code < 600;
+}
