@@ -43,6 +43,10 @@ int listen_tcp(int port) {
 #endif
     int yes = 1;
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+#ifdef TCP_DEFER_ACCEPT
+    int defer = 1;
+    setsockopt(s, IPPROTO_TCP, TCP_DEFER_ACCEPT, (const char*)&defer, sizeof(defer));
+#endif
     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
@@ -78,6 +82,15 @@ int listen_tcp_reuseport(int port) {
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 #ifdef SO_REUSEPORT
     setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (const char*)&yes, sizeof(yes));
+#endif
+#ifdef TCP_DEFER_ACCEPT
+    /* Linux only. Kernel holds the accept until the client actually
+       writes data (or a 1 s timeout). With this on, accept returns an
+       fd that already has the request bytes ready, so the very first
+       read avoids the EAGAIN → reactor park → wake round-trip. Big win
+       for HTTP-style "connect, send, close" workloads. */
+    int defer = 1;
+    setsockopt(s, IPPROTO_TCP, TCP_DEFER_ACCEPT, (const char*)&defer, sizeof(defer));
 #endif
     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
