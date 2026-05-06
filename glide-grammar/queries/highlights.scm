@@ -63,19 +63,11 @@
 ; try to color C as Glide.
 (raw_brace_block) @comment.block
 
-; Namespaced method call: `obj.NS::method()` — NS is always lower-case
-; (it's a module/namespace alias), so it stays @namespace; field is the
-; method itself.
-(member_expr namespace: (identifier) @namespace
-             field: (identifier) @function.method)
-
-; Bare uppercase identifier expression → type. Covers stray references
-; like `let x: T = HashMap;` or `T as *HashMap` that aren't picked up by
-; the more specific `named_type`/`struct_literal` queries below. The
-; scheme runs first so later, more specific captures (member, property,
-; etc.) win when applicable.
-((identifier_expr (identifier) @type)
- (#match? @type "^[A-Z]"))
+; Namespaced method call: `obj.NS::method()` — NS is left without a
+; capture so the editor renders it in the default identifier color
+; (typically white). Most themes paint @namespace the same purple as
+; @type, which makes modules and types indistinguishable.
+(member_expr field: (identifier) @function.method)
 
 ; Built-in / known primitive types
 ((identifier) @type.builtin
@@ -145,25 +137,21 @@
 (let_stmt name: (identifier) @variable)
 (const_stmt name: (identifier) @constant)
 
-; `import stdlib::hashmap::*;` — every segment in an import path is a
-; module name, color them all as @namespace.
-(import_path (identifier) @namespace)
+; `import stdlib::hashmap::{X, Y};` — selective imports tag the leaves
+; as types since they refer to imported items.
 (import_brace_list (identifier) @type)
 (import_items (identifier) @type)
 
 ; `hashmap::HashMap::new()` — color each segment by role:
-;   * lower-case first segment  → @namespace (module)
-;   * upper-case first segment  → @type
-;   * lower-case middle segment → @namespace (nested module)
-;   * upper-case middle segment → @type
-;   * trailing member           → @function
-((path_expr type: (identifier) @namespace)
- (#match? @namespace "^[a-z]"))
+;   * lower-case (modules) are LEFT UNCAPTURED so they fall back to the
+;     default identifier color (white in most themes); using @namespace
+;     here ends up purple in themes that share a color between
+;     @namespace and @type, making modules indistinguishable from types.
+;   * upper-case → @type (struct / trait / enum)
+;   * trailing member → @function (call target)
 ((path_expr type: (identifier) @type)
  (#match? @type "^[A-Z]"))
 
-((path_expr part: (identifier) @namespace)
- (#match? @namespace "^[a-z]"))
 ((path_expr part: (identifier) @type)
  (#match? @type "^[A-Z]"))
 
@@ -177,17 +165,15 @@
 (method_macro_call name: (identifier) @function.macro
                    "!" @function.macro)
 
-; Path macro call: `Type::name!(args)` or `module::name!(args)`. Same
-; lower-vs-upper heuristic as path_expr; the macro name itself is
-; always @function.macro.
-((path_macro_call type: (identifier) @namespace
-                  name: (identifier) @function.macro
-                  "!" @function.macro)
- (#match? @namespace "^[a-z]"))
+; Path macro call: `Type::name!(args)` or `module::name!(args)`.
+; Lower-case (module) is left uncaptured (default color); upper-case
+; (type) gets @type. Macro name itself stays @function.macro.
 ((path_macro_call type: (identifier) @type
                   name: (identifier) @function.macro
                   "!" @function.macro)
  (#match? @type "^[A-Z]"))
+(path_macro_call name: (identifier) @function.macro
+                 "!" @function.macro)
 
 ; Macro definition: `macro name!(matchers) { body }`
 (macro_def name: (identifier) @function.macro
