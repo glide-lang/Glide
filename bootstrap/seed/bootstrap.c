@@ -17968,7 +17968,7 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
     if (__glide_string_eq(cmd, "lsp")) {
         return lsp_main();
     }
-    int   mode = MODE_EMIT;
+    int   mode = MODE_RUN;
     int   src_arg_idx = 2;
     if (__glide_string_eq(cmd, "build")) {
         (mode  =  MODE_BUILD);

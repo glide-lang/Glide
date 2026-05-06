@@ -973,7 +973,11 @@ fn main() -> int {
     // `lsp` takes no positional file arg.
     if cmd.eq("lsp") { return lsp_main(); }
 
-    let mut mode: int = MODE_EMIT;
+    // Default action when the user types `glide <file>` with no
+    // subcommand: build + execute, like `cargo run` / `go run`.
+    // Pass `--emit` to keep the legacy "print generated C to stdout"
+    // behaviour for tooling that piped it.
+    let mut mode: int = MODE_RUN;
     let mut src_arg_idx: int = 2;
     if cmd.eq("build") { mode = MODE_BUILD; }
     else if cmd.eq("run") { mode = MODE_RUN; }
@@ -981,7 +985,7 @@ fn main() -> int {
     else if cmd.eq("check") { mode = MODE_CHECK; }
     else if cmd.eq("fmt") { mode = MODE_FMT; }
     else {
-        // Backward-compat: `glide [--emit] file.glide` (old positional form).
+        // No subcommand — first positional arg is the source file.
         src_arg_idx = 1;
         for let i: int = 0; i < argc; i++ {
             if args_at(i).eq("--emit") { mode = MODE_EMIT; src_arg_idx = i + 1; }
