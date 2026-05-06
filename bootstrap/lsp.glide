@@ -1609,8 +1609,16 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "labelDetails", ld);
     }
 
-    // detail: full one-line signature, shown above documentation.
-    if !signature.eq("") { json_obj_set(it, "detail", json_string(signature)); }
+    // detail: full one-line signature with the module path appended for
+    // auto-import items. labelDetails.description carries the same info
+    // for LSP 3.17 clients, but plenty of editors still only render
+    // `detail` — duplicate so the source is always visible.
+    let mut detail_text: string = signature;
+    if !module.eq("") {
+        if !detail_text.eq("") { detail_text = detail_text.concat("    "); }
+        detail_text = detail_text.concat(module);
+    }
+    if !detail_text.eq("") { json_obj_set(it, "detail", json_string(detail_text)); }
 
     // documentation: markdown — fenced signature + horizontal rule + doc.
     let mut md: string = "";
@@ -1662,6 +1670,33 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
     }
 
     return it;
+}
+
+// Map an origin path back to a short module label, gopls-style:
+//   .../src/stdlib/math.glide   -> "stdlib::math"
+//   .../src/builtins/vector.glide -> "builtins::vector"
+//   anything else (the user's own file) -> ""
+fn pretty_module(origin: string) -> string {
+    if origin == null || origin.eq("") { return ""; }
+    let n: int = origin.len();
+    let norm: string = origin;
+    // Walk backwards finding the last two path components.
+    let mut last_sep: int = -1;
+    let mut prev_sep: int = -1;
+    for let i: int = n - 1; i >= 0; i-- {
+        let c: int = norm.at(i).to_int();
+        if c == 47 || c == 92 {
+            if last_sep < 0 { last_sep = i; }
+            else if prev_sep < 0 { prev_sep = i; break; }
+        }
+    }
+    if last_sep < 0 || prev_sep < 0 { return ""; }
+    let parent: string = norm.substring(prev_sep + 1, last_sep);
+    let leaf: string = norm.substring(last_sep + 1, n);
+    let stem: string = drop_glide_ext(leaf);
+    if parent.eq("stdlib") { return "stdlib::".concat(stem); }
+    if parent.eq("builtins") { return "builtins::".concat(stem); }
+    return "";
 }
 
 // LSP CompletionItemKind for a Stmt kind. Mirrors ci_kind_for, kept here
@@ -2001,8 +2036,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 if s.let_ty != null { sig = sig.concat(": ").concat(type_to_string_pretty(s.let_ty)); }
             }
             else if s.kind == ST_MACRO_DEF { sig = macro_signature(&s); }
+            // Prefer a short `stdlib::X` / `builtins::X` label over the
+            // raw origin path so the completion list stays scannable.
             let mut module: string = "";
-            if s.origin != null && !s.origin.eq("") { module = s.origin; }
+            if s.origin != null { module = pretty_module(s.origin); }
             let mut docc: string = "";
             if s.doc_comment != null { docc = s.doc_comment; }
             let item: *JsonValue = rich_completion_item(

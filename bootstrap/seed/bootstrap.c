@@ -2451,6 +2451,7 @@ HashMap__bool*   current_imports (Vector__Stmt*   stmts);
 const char*   lsp_strip_quotes (const char*   s);
 int   find_import_insertion_pos (const char*   text);
 JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, bool   already_imported, int   insert_line);
+const char*   pretty_module (const char*   origin);
 int   ci_kind_for_stmt_kind (int   k);
 int   cursor_before_partial (const char*   text, int   line0, int   col0);
 const char*   path_qualifier_before (const char*   text, int   line0, int   col0);
@@ -15031,8 +15032,15 @@ JsonValue*   rich_completion_item (const char*   label, const char*   label_extr
         }
         json_obj_set(it, "labelDetails", ld);
     }
-    if ((!__glide_string_eq(signature, ""))) {
-        json_obj_set(it, "detail", json_string(signature));
+    const char*   detail_text = signature;
+    if ((!__glide_string_eq(module, ""))) {
+        if ((!__glide_string_eq(detail_text, ""))) {
+            (detail_text  =  __glide_string_concat(detail_text, "    "));
+        }
+        (detail_text  =  __glide_string_concat(detail_text, module));
+    }
+    if ((!__glide_string_eq(detail_text, ""))) {
+        json_obj_set(it, "detail", json_string(detail_text));
     }
     const char*   md = "";
     if ((!__glide_string_eq(signature, ""))) {
@@ -15081,6 +15089,42 @@ JsonValue*   rich_completion_item (const char*   label, const char*   label_extr
         json_obj_set(it, "additionalTextEdits", edits);
     }
     return it;
+}
+
+const char*   pretty_module (const char*   origin) {
+    if (((origin  ==  NULL)  ||  __glide_string_eq(origin, ""))) {
+        return "";
+    }
+    int   n = __glide_string_len(origin);
+    const char*   norm = origin;
+    int   last_sep = (-1);
+    int   prev_sep = (-1);
+    for (int   i = (n  -  1); (i  >=  0); i--) {
+        int   c = __glide_char_to_int(__glide_string_at(norm, i));
+        if (((c  ==  47)  ||  (c  ==  92))) {
+            if ((last_sep  <  0)) {
+                (last_sep  =  i);
+            } else {
+                if ((prev_sep  <  0)) {
+                    (prev_sep  =  i);
+                    break;
+                }
+            }
+        }
+    }
+    if (((last_sep  <  0)  ||  (prev_sep  <  0))) {
+        return "";
+    }
+    const char*   parent = __glide_string_substring(norm, (prev_sep  +  1), last_sep);
+    const char*   leaf = __glide_string_substring(norm, (last_sep  +  1), n);
+    const char*   stem = drop_glide_ext(leaf);
+    if (__glide_string_eq(parent, "stdlib")) {
+        return __glide_string_concat("stdlib::", stem);
+    }
+    if (__glide_string_eq(parent, "builtins")) {
+        return __glide_string_concat("builtins::", stem);
+    }
+    return "";
 }
 
 int   ci_kind_for_stmt_kind (int   k) {
@@ -15502,8 +15546,8 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 }
             }
             const char*   module = "";
-            if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
-                (module  =  (s. origin ));
+            if (((s. origin )  !=  NULL)) {
+                (module  =  pretty_module((s. origin )));
             }
             const char*   docc = "";
             if (((s. doc_comment )  !=  NULL)) {
