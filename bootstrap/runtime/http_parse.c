@@ -289,6 +289,258 @@ static inline int hp_parse_request(const char* buf, size_t len, hp_request_t* ou
     return HP_OK;
 }
 
+/* ---------- Glide-callable adapter ----------------------------------- */
+
+/* Owning struct returned to Glide. The five string fields are
+   nul-terminated heap copies — Glide treats `string` as `const char*`
+   and never inspects the storage, so plain malloc'd buffers are fine.
+   Caller frees via hp_glide_free once the request is consumed. */
+typedef struct {
+    const char* method;
+    const char* path;
+    const char* version;       /* "HTTP/1.0" or "HTTP/1.1" */
+    const char* headers_block; /* "Name: Value\r\n..." (no trailing \r\n) */
+    const char* body;
+    int         total_consumed;
+} hp_glide_t;
+
+static char* hp__nul_dup(const char* p, size_t n) {
+    char* out = (char*)malloc(n + 1);
+    if (n > 0) memcpy(out, p, n);
+    out[n] = 0;
+    return out;
+}
+
+/* Signatures use void* so they line up with what Glide's `*void` extern
+   decl emits. The function bodies cast back internally.
+
+   Single-allocation layout: one malloc holds both the hp_glide_t header
+   and all five string copies back-to-back. Drops 7 mallocs/request to 1
+   (perf showed malloc was 12 % inclusive of CPU on the hello-world hot
+   path, almost all of it from here). The parse scratch lives in TLS so
+   we don't allocate it per-call — safe because each worker thread runs
+   only one coro at a time and the data is consumed before the next
+   ctx switch (we copy out of it before returning). */
+static __thread hp_request_t hp_tls_req;
+
+void* hp_parse_glide(void* buf, int len)
+{
+    if (!buf || len <= 0) return NULL;
+    hp_request_t* r = &hp_tls_req;
+    if (hp_parse_request((const char*)buf, (size_t)len, r) != HP_OK) {
+        return NULL;
+    }
+
+    /* Compute the header block size first; the rest are known directly. */
+    size_t hsz = 0;
+    for (int i = 0; i < r->n_headers; i++) {
+        hsz += r->headers[i].name_len + 2 + r->headers[i].value_len + 2;
+    }
+    if (hsz >= 2) hsz -= 2;  /* strip the trailing CRLF */
+
+    size_t total = sizeof(hp_glide_t)
+                 + r->method_len + 1
+                 + r->path_len   + 1
+                 + 8             + 1   /* "HTTP/1.x" */
+                 + hsz           + 1
+                 + r->body_len   + 1;
+
+    char* mem = (char*)malloc(total);
+    hp_glide_t* g = (hp_glide_t*)mem;
+    char* p = mem + sizeof(hp_glide_t);
+
+    g->method = p;
+    if (r->method_len > 0) memcpy(p, r->method, r->method_len);
+    p[r->method_len] = 0; p += r->method_len + 1;
+
+    g->path = p;
+    if (r->path_len > 0) memcpy(p, r->path, r->path_len);
+    p[r->path_len] = 0; p += r->path_len + 1;
+
+    g->version = p;
+    memcpy(p, (r->version == 11) ? "HTTP/1.1" : "HTTP/1.0", 8);
+    p[8] = 0; p += 9;
+
+    g->headers_block = p;
+    {
+        size_t off = 0;
+        for (int i = 0; i < r->n_headers; i++) {
+            memcpy(p + off, r->headers[i].name, r->headers[i].name_len);
+            off += r->headers[i].name_len;
+            p[off++] = ':'; p[off++] = ' ';
+            memcpy(p + off, r->headers[i].value, r->headers[i].value_len);
+            off += r->headers[i].value_len;
+            p[off++] = '\r'; p[off++] = '\n';
+        }
+        if (off >= 2) off -= 2;
+        p[off] = 0;
+        p += hsz + 1;
+    }
+
+    g->body = p;
+    if (r->body_len > 0) memcpy(p, r->body, r->body_len);
+    p[r->body_len] = 0;
+
+    g->total_consumed = (int)r->total_consumed;
+    return g;
+}
+
+const char* hp_glide_method(void* g)        { return ((hp_glide_t*)g)->method; }
+const char* hp_glide_path(void* g)          { return ((hp_glide_t*)g)->path; }
+const char* hp_glide_version(void* g)       { return ((hp_glide_t*)g)->version; }
+const char* hp_glide_headers_block(void* g) { return ((hp_glide_t*)g)->headers_block; }
+const char* hp_glide_body(void* g)          { return ((hp_glide_t*)g)->body; }
+int         hp_glide_consumed(void* g)      { return ((hp_glide_t*)g)->total_consumed; }
+
+/* True when the parsed request asks the server to close the conn.
+   HTTP/1.1 keeps it alive by default, HTTP/1.0 closes by default.
+   Direct C scan of the parsed headers — bypasses Glide's
+   `req.header(...).to_lower()` chain that was costing ~12 % of CPU
+   on the hot path (each call mallocs four times). */
+int hp_glide_wants_close(void* gp)
+{
+    hp_glide_t* g = (hp_glide_t*)gp;
+    /* The TLS hp_request_t was overwritten on the next parse, so we
+       inspect the rebuilt headers_block directly. */
+    const char* p = g->headers_block;
+    int default_close = (g->version[7] == '0'); /* HTTP/1.0 */
+    int found_close = 0, found_keep = 0;
+
+    while (*p) {
+        /* Match "Connection:" case-insensitive, anchored at line start. */
+        const char* k = "connection";
+        const char* q = p;
+        int matched = 1;
+        for (int i = 0; i < 10; i++) {
+            unsigned char c = (unsigned char)*q;
+            if (c == 0) { matched = 0; break; }
+            unsigned char l = (c >= 'A' && c <= 'Z') ? (c | 0x20) : c;
+            if (l != (unsigned char)k[i]) { matched = 0; break; }
+            q++;
+        }
+        if (matched && *q == ':') {
+            q++;
+            while (*q == ' ' || *q == '\t') q++;
+            /* Look for "close" / "keep-alive" tokens in the value, up to CRLF. */
+            const char* v = q;
+            while (*v && *v != '\r' && *v != '\n') v++;
+            for (const char* s = q; s < v; s++) {
+                /* simple substring scan */
+                if (v - s >= 5) {
+                    char c0 = s[0]; if (c0 >= 'A' && c0 <= 'Z') c0 |= 0x20;
+                    if (c0 == 'c' && (s + 5 <= v)) {
+                        char b1=s[1],b2=s[2],b3=s[3],b4=s[4];
+                        if ((b1|0x20)=='l' && (b2|0x20)=='o' && (b3|0x20)=='s' && (b4|0x20)=='e') {
+                            found_close = 1;
+                        }
+                    }
+                    if (c0 == 'k' && (s + 10 <= v)) {
+                        if ((s[1]|0x20)=='e' && (s[2]|0x20)=='e' && (s[3]|0x20)=='p'
+                         &&  s[4]=='-' && (s[5]|0x20)=='a' && (s[6]|0x20)=='l'
+                         && (s[7]|0x20)=='i' && (s[8]|0x20)=='v' && (s[9]|0x20)=='e') {
+                            found_keep = 1;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        /* Skip to next line */
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+
+    if (found_close) return 1;
+    if (default_close && !found_keep) return 1;
+    return 0;
+}
+
+void hp_glide_free(void* gp)
+{
+    /* All strings live in the same allocation as the header now, so a
+       single free reclaims everything. */
+    if (gp) free(gp);
+}
+
+/* Reusable response buffer per OS thread. _handle_conn writes the
+   wire bytes directly into here, then writes from this buf to the
+   socket — no Glide string concat chain (was ~10 mallocs per
+   response in the previous implementation). */
+static __thread char*  hp_resp_buf = NULL;
+static __thread size_t hp_resp_cap = 0;
+
+static int hp_itoa(char* p, int n) {
+    if (n == 0) { p[0] = '0'; return 1; }
+    int neg = 0;
+    if (n < 0) { neg = 1; n = -n; }
+    char tmp[12]; int k = 0;
+    while (n > 0) { tmp[k++] = (char)('0' + (n % 10)); n /= 10; }
+    int off = 0;
+    if (neg) p[off++] = '-';
+    for (int i = k - 1; i >= 0; i--) p[off++] = tmp[i];
+    return off;
+}
+
+/* Build the response wire bytes into the per-thread buffer. status_txt
+   is NUL-terminated. body is the byte buffer (NUL-terminated since it
+   came from Glide's `string`). extra_headers may be NULL. Returns the
+   total byte count written; the caller hands `hp_resp_buf` straight
+   to write(2) without copying. */
+int hp_build_response(int status, const char* status_txt,
+                      void* body, int body_len,
+                      const char* extra_headers, int keep_alive)
+{
+    size_t need = 64
+                + (status_txt ? strlen(status_txt) : 2)
+                + (extra_headers ? strlen(extra_headers) : 0)
+                + (size_t)body_len + 32;
+    if (need > hp_resp_cap) {
+        size_t cap = hp_resp_cap ? hp_resp_cap : 1024;
+        while (cap < need) cap *= 2;
+        free(hp_resp_buf);
+        hp_resp_buf = (char*)malloc(cap);
+        hp_resp_cap = cap;
+    }
+    char* p = hp_resp_buf;
+    /* "HTTP/1.1 " */
+    memcpy(p, "HTTP/1.1 ", 9); p += 9;
+    /* status code */
+    p += hp_itoa(p, status);
+    *p++ = ' ';
+    /* status text */
+    if (status_txt) {
+        size_t l = strlen(status_txt);
+        memcpy(p, status_txt, l); p += l;
+    } else {
+        memcpy(p, "OK", 2); p += 2;
+    }
+    memcpy(p, "\r\nContent-Length: ", 18); p += 18;
+    p += hp_itoa(p, body_len);
+    if (keep_alive) {
+        memcpy(p, "\r\nConnection: keep-alive\r\n", 26); p += 26;
+    } else {
+        memcpy(p, "\r\nConnection: close\r\n", 21); p += 21;
+    }
+    if (extra_headers) {
+        size_t l = strlen(extra_headers);
+        if (l > 0) {
+            memcpy(p, extra_headers, l); p += l;
+            /* extra_headers does NOT carry a trailing \r\n; add it
+               only if the block isn't already CRLF-terminated. */
+            if (l < 2 || p[-2] != '\r' || p[-1] != '\n') {
+                memcpy(p, "\r\n", 2); p += 2;
+            }
+        }
+    }
+    memcpy(p, "\r\n", 2); p += 2;
+    if (body_len > 0) { memcpy(p, body, body_len); p += body_len; }
+    return (int)(p - hp_resp_buf);
+}
+
+/* Hand the per-thread response buffer back to Glide as a (void*, len)
+   pair. The buffer is owned by the runtime — Glide must not free it. */
+void* hp_resp_buf_ptr(void) { return (void*)hp_resp_buf; }
+
 #endif /* HP_PARSE_C */
 
 #ifdef HP_PARSE_TEST

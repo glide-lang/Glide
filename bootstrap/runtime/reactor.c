@@ -103,9 +103,14 @@ static void __glide_io_register(__glide_io_waiter* w) {
 
 static void* __glide_reactor_loop(void* arg) {
     (void)arg;
-    struct epoll_event evs[64];
+    /* Bigger batch + longer block: each wake processes more events for
+       the price of one syscall, and we don't tick uselessly while there
+       is nothing to do. Sched_shutdown atomically flips reactor_running
+       and writes 1 byte to a stub fd if we ever need an instant wake;
+       for now the workload always has fds in the interest list. */
+    struct epoll_event evs[256];
     while (atomic_load(&__glide_reactor_running)) {
-        int n = epoll_wait(__glide_epoll_fd, evs, 64, 100);  /* 100 ms tick */
+        int n = epoll_wait(__glide_epoll_fd, evs, 256, 1000);
         if (n < 0) {
             if (errno == EINTR) continue;
             break;
@@ -192,12 +197,17 @@ static int __glide_io_park_write(int fd) {
 
 /* ---- public async wrappers --------------------------------------- */
 
+/* __glide_tcp_nodelay is `static` in socket.c. Both files share the
+   same translation unit (codegen concats them) so we can call directly,
+   but reactor.c is included after socket.c — no forward decl needed. */
+
 int accept_tcp_async(int listener) {
     __glide_set_nonblocking(listener);
     while (1) {
         int c = accept(listener, NULL, NULL);
         if (c >= 0) {
             __glide_set_nonblocking(c);
+            __glide_tcp_nodelay(c);
             return c;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
@@ -210,6 +220,10 @@ int accept_tcp_async(int listener) {
                 fcntl(listener, F_SETFL, flags & ~O_NONBLOCK);
                 int c2 = accept(listener, NULL, NULL);
                 fcntl(listener, F_SETFL, flags);
+                if (c2 >= 0) {
+                    __glide_set_nonblocking(c2);
+                    __glide_tcp_nodelay(c2);
+                }
                 return c2;
             }
             continue;
@@ -218,8 +232,11 @@ int accept_tcp_async(int listener) {
     }
 }
 
+/* tcp_*_async assume the fd was made non-blocking when it was accepted
+   (accept_tcp_async does that once). Re-running fcntl(F_GETFL)+fcntl(F_SETFL)
+   on every call costs two syscalls per read/write — measurable on the
+   keep-alive hot path. */
 int tcp_read_async(int fd, void* buf, int max) {
-    __glide_set_nonblocking(fd);
     while (1) {
         int n = (int)read(fd, buf, (size_t)max);
         if (n >= 0) return n;
@@ -232,7 +249,6 @@ int tcp_read_async(int fd, void* buf, int max) {
 }
 
 int tcp_write_async(int fd, void* buf, int n) {
-    __glide_set_nonblocking(fd);
     int sent = 0;
     while (sent < n) {
         int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));

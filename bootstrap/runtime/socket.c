@@ -12,11 +12,26 @@ static void __glide_wsa_ensure(void) {
 #else
 # include <sys/socket.h>
 # include <netinet/in.h>
+# include <netinet/tcp.h>   /* TCP_NODELAY */
 # include <unistd.h>
 # include <arpa/inet.h>
 typedef int __glide_sock_t;
 static void __glide_wsa_ensure(void) {}
 #endif
+
+/* Turn off Nagle on a freshly-accepted conn. With keep-alive +
+   small responses, Nagle would otherwise hold a write back up
+   to 40 ms waiting for an ACK to coalesce, dropping req/s by an
+   order of magnitude under wrk. */
+static void __glide_tcp_nodelay(int fd) {
+#ifndef _WIN32
+    int yes = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
+#else
+    int yes = 1;
+    setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
+#endif
+}
 
 int listen_tcp(int port) {
     __glide_wsa_ensure();
@@ -90,10 +105,14 @@ int listen_tcp_reuseport(int port) {
 int accept_tcp(int listener) {
 #ifdef _WIN32
     SOCKET c = accept((SOCKET)listener, NULL, NULL);
-    return (c == INVALID_SOCKET) ? -1 : (int)c;
+    if (c == INVALID_SOCKET) return -1;
+    __glide_tcp_nodelay((int)c);
+    return (int)c;
 #else
     int c = accept(listener, NULL, NULL);
-    return c < 0 ? -1 : c;
+    if (c < 0) return -1;
+    __glide_tcp_nodelay(c);
+    return c;
 #endif
 }
 

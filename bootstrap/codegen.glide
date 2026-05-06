@@ -620,6 +620,8 @@ fn emit_socket_runtime() {
     println!("");
     print!(include_str!("bootstrap/runtime/reactor.c"));
     println!("");
+    print!(include_str!("bootstrap/runtime/http_parse.c"));
+    println!("");
 }
 
 // Spawn: collect every spawn site and emit a stub up-front. The same pre-walk

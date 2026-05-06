@@ -29,6 +29,22 @@ import stdlib::http_status::*;
 extern fn __glide_is_windows() -> int;
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
+// C HTTP parser (bootstrap/runtime/http_parse.c). Drops the
+// per-byte concat the pure-Glide parser was paying — meaningful CPU
+// for the hot path on a hello-world handler.
+extern fn hp_parse_glide(buf: *void, len: int) -> *void;
+extern fn hp_glide_method(g: *void) -> string;
+extern fn hp_glide_path(g: *void) -> string;
+extern fn hp_glide_version(g: *void) -> string;
+extern fn hp_glide_headers_block(g: *void) -> string;
+extern fn hp_glide_body(g: *void) -> string;
+extern fn hp_glide_free(g: *void);
+extern fn hp_glide_wants_close(g: *void) -> int;
+extern fn hp_build_response(status: int, status_txt: string,
+                            body: *void, body_len: int,
+                            extra_headers: string, keep_alive: int) -> int;
+extern fn hp_resp_buf_ptr() -> *void;
+
 // ---- request / response shapes ----------------------------------------
 
 /// One incoming HTTP request, fully buffered. Lifetime is tied to the
@@ -248,18 +264,30 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
         let n: int = c.read(buf as *void, 8192);
         if n <= 0 { break; }
 
-        let s: string = __glide_string_from_buf(buf as *void, n);
-
-        let parsed: !HttpRequest = parse_http_request(s);
+        let g: *void = hp_parse_glide(buf as *void, n);
         let mut keep: bool = false;
         let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
-        if parsed.ok {
-            let req: HttpRequest = parsed.val;
-            keep = !_wants_close(&req);
+        if g != null {
+            // Decide keep-alive in C — req.header("Connection").to_lower()
+            // in Glide was four mallocs per call, which dominated the
+            // hot path's allocation profile.
+            keep = hp_glide_wants_close(g) == 0;
+            let req: HttpRequest = HttpRequest {
+                method:        hp_glide_method(g),
+                path:          hp_glide_path(g),
+                version:       hp_glide_version(g),
+                headers_block: hp_glide_headers_block(g),
+                body:          hp_glide_body(g),
+            };
             resp = handler(&req);
+            hp_glide_free(g);
         }
-        let wire: string = _format_response(&resp, keep);
-        c.write(wire as *void, wire.len());
+        let mut keep_i: int = 0;
+        if keep { keep_i = 1; }
+        let wlen: int = hp_build_response(resp.status, status_text(resp.status),
+                                          resp.body as *void, resp.body.len(),
+                                          resp.headers_block, keep_i);
+        c.write(hp_resp_buf_ptr(), wlen);
         if !keep { break; }
     }
     c.close();
