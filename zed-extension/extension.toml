@@ -15,6 +15,6 @@ name      = "glide-lsp"
 languages = ["Glide"]
 
 [grammars.glide]
-repository = "file:///C:/Users/bye45/Desktop/desktop/works/javascomp"
-commit     = "28a56bc4ee1f3b536237133bae67f1f667dad1f0"
+repository = "https://github.com/glide-lang/Glide"
+commit     = "b38a1a9fdb3457e8caabfa373bcbd5d90d26a6f3"
 path       = "glide-grammar"
