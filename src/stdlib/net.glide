@@ -11,6 +11,7 @@
 //     code written today is ready for the async transparently.
 
 extern fn listen_tcp(port: int) -> int;
+extern fn listen_tcp_reuseport(port: int) -> int;
 extern fn accept_tcp_async(listener: int) -> int;
 extern fn tcp_read_async(fd: int, buf: *void, max: int) -> int;
 extern fn tcp_write_async(fd: int, buf: *void, n: int) -> int;
@@ -35,6 +36,26 @@ impl Listener {
     pub fn bind(port: int) -> *Listener {
         let l: *Listener = malloc(sizeof(Listener)) as *Listener;
         l.fd = listen_tcp(port);
+        return l;
+    }
+
+    /// Bind + listen on TCP `port` across all interfaces with
+    /// `SO_REUSEPORT` when the platform supports it. This lets multiple
+    /// processes share one accepting port, with the kernel
+    /// load-balancing accepts between them. On Windows this falls back
+    /// to ordinary bind behaviour (`SO_REUSEADDR` only).
+    ///
+    /// ```glide
+    /// let l: *Listener = Listener::bind_reuseport(8080);
+    /// if !l.ok() {
+    ///     println!("bind failed");
+    ///     return 1;
+    /// }
+    /// println!("listening on :8080");
+    /// ```
+    pub fn bind_reuseport(port: int) -> *Listener {
+        let l: *Listener = malloc(sizeof(Listener)) as *Listener;
+        l.fd = listen_tcp_reuseport(port);
         return l;
     }
 
