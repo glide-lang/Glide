@@ -206,6 +206,147 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
     }
 }
 
+// LSP variant: parse `src` (the editor's live buffer for `origin`) and
+// merge it into `stmts`, reusing `cache` for transitive imports so that
+// stdlib + builtins aren't relexed/reparsed on every keystroke. The
+// caller's own file is never cached (its content changes per change).
+pub fn load_into_str_with_cache(stmts: *Vector<Stmt>, src: string, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    let lex: *Lexer = Lexer::new(src);
+    let p: *Parser = Parser::new(lex);
+    let parsed: *Vector<Stmt> = parse_program(p);
+    if pdiags != null && p.diags != null {
+        for let k: int = 0; k < p.diags.len(); k++ {
+            let d: ParseDiag = p.diags.get(k);
+            d.origin = origin;
+            pdiags.push(d);
+        }
+    }
+    p.free();
+    lex.free();
+
+    cached_resolve_and_push(stmts, parsed, origin, loaded, pdiags, cache);
+
+    parsed.free();
+}
+
+// LSP variant: read `path` from disk and merge into `stmts`. On cache
+// hit reuse the prior parse_program output; on miss parse once and add
+// to the cache. The cache becomes the owner — never free a cached vec.
+pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    if loaded.contains(path) { return; }
+    loaded.insert(path, true);
+
+    let mut parsed: *Vector<Stmt> = null;
+    let mut from_cache: bool = false;
+    if cache != null && cache.contains(path) {
+        parsed = cache.get(path);
+        from_cache = true;
+    } else {
+        let src: string = read_file(path);
+        if src.eq("") { return; }
+        let lex: *Lexer = Lexer::new(src);
+        let p: *Parser = Parser::new(lex);
+        parsed = parse_program(p);
+        if pdiags != null && p.diags != null {
+            for let k: int = 0; k < p.diags.len(); k++ {
+                let d: ParseDiag = p.diags.get(k);
+                d.origin = path;
+                pdiags.push(d);
+            }
+        }
+        p.free();
+        lex.free();
+        if cache != null {
+            cache.insert(path, parsed);
+            from_cache = true;
+        }
+    }
+
+    cached_resolve_and_push(stmts, parsed, path, loaded, pdiags, cache);
+
+    if !from_cache { parsed.free(); }
+}
+
+// Shared body of the cached load entry points: walk `parsed`, auto-load
+// referenced path files, resolve imports recursively, push each Stmt
+// (origin/import_path mutated on a local copy so the cached vec stays
+// invariant) into the outer `stmts`.
+fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    let auto_loads: *Vector<string> = Vector::new();
+    let auto_seen: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        collect_path_files_in_stmt(&s, auto_loads, auto_seen);
+    }
+    let dir: string = parent_dir(origin);
+    for let i: int = 0; i < auto_loads.len(); i++ {
+        let cand: string = auto_loads.get(i);
+        let resolved: string = resolve_import(dir, cand);
+        if __glide_file_exists(resolved) {
+            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+        }
+    }
+    auto_loads.free();
+    auto_seen.free();
+
+    for let i: int = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        if s.kind == ST_IMPORT {
+            let unq: string = strip_quotes(s.import_path);
+            let mut resolved: string = resolve_import(dir, unq);
+            let mut multi_seg: bool = false;
+            for let k: int = 0; k < unq.len() - 1; k++ {
+                let cc: int = unq.at(k).to_int();
+                if cc == 47 || cc == 92 { multi_seg = true; break; }
+            }
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && !__glide_file_exists(resolved) {
+                let parent_path: string = drop_last_path_segment(unq);
+                if !parent_path.eq("") {
+                    let resolved_parent: string = resolve_import(dir, parent_path);
+                    if __glide_file_exists(resolved_parent) {
+                        let last: string = last_path_segment(unq);
+                        let items: *Vector<string> = Vector::new();
+                        items.push(last);
+                        s.imported_items = items;
+                        resolved = resolved_parent;
+                    }
+                }
+            }
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && __glide_file_exists(resolved) {
+                s.import_is_module = true;
+                s.import_short = last_path_segment(unq);
+            }
+            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+            s.import_path = resolved;
+            s.origin = origin;
+            stmts.push(s);
+        } else {
+            s.origin = origin;
+            stmts.push(s);
+        }
+    }
+}
+
+// Variant of load_builtins_dir for the cached LSP path.
+pub fn load_builtins_dir_with_cache(stmts: *Vector<Stmt>, dir: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    let listing: string = __glide_list_dir(dir, ".glide");
+    if listing.eq("") { return; }
+    let builtins: string = dir.concat("/builtins.glide");
+    if !read_file(builtins).eq("") {
+        load_into_with_cache(stmts, builtins, loaded, pdiags, cache);
+    }
+    let names: *Vector<string> = listing.split("\n");
+    for let i: int = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if nm.eq("") { continue; }
+        if nm.eq("builtins.glide") { continue; }
+        load_into_with_cache(stmts, dir.concat("/").concat(nm), loaded, pdiags, cache);
+    }
+    names.free();
+}
+
 // Walk an Expr collecting candidate file paths referenced by EX_PATH
 // prefixes. Each prefix `a::b::c` becomes the candidate `a/b/c.glide`.
 // Type-prefix paths like `Vector::new` are also collected; loader will

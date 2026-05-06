@@ -59,6 +59,17 @@ extern fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string,
                         loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>);
 extern fn load_builtins_dir(stmts: *Vector<Stmt>, dir: string,
                             loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>);
+// Cached LSP variants. Skip lex+parse on paths already in `cache`,
+// populate it on miss. Backed by main.glide.
+extern fn load_into_str_with_cache(stmts: *Vector<Stmt>, src: string, origin: string,
+                                   loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>,
+                                   cache: *HashMap<*Vector<Stmt>>);
+extern fn load_into_with_cache(stmts: *Vector<Stmt>, path: string,
+                               loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>,
+                               cache: *HashMap<*Vector<Stmt>>);
+extern fn load_builtins_dir_with_cache(stmts: *Vector<Stmt>, dir: string,
+                                       loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>,
+                                       cache: *HashMap<*Vector<Stmt>>);
 
 // ---- Document store ----------------------------------------------------
 
@@ -92,6 +103,12 @@ pub struct LspState {
     pub docs: *HashMap<LspDoc>,
     pub shutdown_requested: bool,
     pub stdlib_index: *Vector<ImportableSym>,
+    // Path -> parse_program output. Populated lazily on first parse of
+    // each transitive import (builtins + stdlib + user-imported files);
+    // hits skip the lex/parse work on every keystroke. The user's
+    // currently-edited buffer is never cached — its content changes
+    // between calls, so it always parses fresh.
+    pub parse_cache: *HashMap<*Vector<Stmt>>,
 }
 
 pub fn lsp_state_new() -> *LspState {
@@ -101,6 +118,8 @@ pub fn lsp_state_new() -> *LspState {
     s.shutdown_requested = false;
     let idx: *Vector<ImportableSym> = Vector::new();
     s.stdlib_index = idx;
+    let pc: *HashMap<*Vector<Stmt>> = HashMap::new();
+    s.parse_cache = pc;
     populate_stdlib_index(s);
     return s;
 }
@@ -160,6 +179,7 @@ fn lsp_send_response(id: *JsonValue, result: *JsonValue) {
     if id != null { json_obj_set(resp, "id", id); }
     json_obj_set(resp, "result", result);
     lsp_send(json_emit(resp));
+    json_free(resp);
 }
 
 fn lsp_send_notification(method: string, params: *JsonValue) {
@@ -168,6 +188,7 @@ fn lsp_send_notification(method: string, params: *JsonValue) {
     json_obj_set(n, "method", json_string(method));
     json_obj_set(n, "params", params);
     lsp_send(json_emit(n));
+    json_free(n);
 }
 
 // ---- Method handlers ---------------------------------------------------
@@ -418,6 +439,35 @@ fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
     return raw.split("\n");
 }
 
+// Walk a Vector<Stmt> and free its parse-owned descendant containers
+// (fn_body / then_body / else_body / impl_methods) recursively, then
+// free the Vector itself. lower_block builds a fresh Vector for each
+// of these on every reparse, so they always belong to the per-keystroke
+// parse cycle regardless of the host Stmt's origin.
+//
+// Deliberately stops short of Expr / Type / for_init / Param fields:
+// when the host Stmt came from a cached import those pointers refer
+// into the cache's own AST graph, and lower_program never replaces
+// them. Touching them would corrupt the cache. The user-buffer's own
+// Expr / Type leaks are paid for once per keystroke and dwarfed by
+// the Vector-of-Stmt accumulation this walker plugs.
+fn stmt_vec_lower_free(v: *Vector<Stmt>) {
+    if v == null { return; }
+    for let i: int = 0; i < v.len(); i++ {
+        let s: Stmt = v.get(i);
+        stmt_lower_free_children(&s);
+    }
+    v.free();
+}
+
+fn stmt_lower_free_children(s: *Stmt) {
+    if s == null { return; }
+    if s.fn_body != null { stmt_vec_lower_free(s.fn_body); }
+    if s.then_body != null { stmt_vec_lower_free(s.then_body); }
+    if s.else_body != null { stmt_vec_lower_free(s.else_body); }
+    if s.impl_methods != null { stmt_vec_lower_free(s.impl_methods); }
+}
+
 fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     let path: string = uri_to_path(uri);
     let stmts: *Vector<Stmt> = Vector::new();
@@ -428,12 +478,16 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // pulled in via the user file's own `import` statements.
     let bdir: string = find_builtins_dir();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !bdir.eq("") { load_builtins_dir(stmts, bdir, loaded, pdiags); }
+    if !bdir.eq("") {
+        load_builtins_dir_with_cache(stmts, bdir, loaded, pdiags, state.parse_cache);
+    }
 
     // Parse the user's text and follow its `import "..."` directives so that
     // cross-file symbols (Stmt, Expr, Lexer, etc. when editing the bootstrap
     // codebase) resolve. Imports are resolved relative to the user file's dir.
-    load_into_str(stmts, text, path, loaded, pdiags);
+    // Transitive imports go through state.parse_cache so stdlib + builtins
+    // aren't relexed/reparsed on every keystroke.
+    load_into_str_with_cache(stmts, text, path, loaded, pdiags, state.parse_cache);
 
     // Expand macros and lower surface-syntax sugar (for-in -> for) so the
     // typer sees the same shapes the build pipeline does. Without this,
@@ -453,11 +507,15 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     run_extra_analyses(t, stmts);
 
     // Save the parsed stmts on the doc so hover / document symbol / goto can
-    // query them without re-parsing.
+    // query them without re-parsing. Free the prior reparse's vector first
+    // (deep-walk so the lower-block-allocated nested Vectors don't pile up).
     if state.docs.contains(uri) {
         let d: LspDoc = state.docs.get(uri);
+        if d.stmts != null { stmt_vec_lower_free(d.stmts); }
         d.stmts = stmts;
         state.docs.insert(uri, d);
+    } else {
+        stmt_vec_lower_free(stmts);
     }
 
     // Only publish diagnostics whose origin matches the user's file path.
@@ -477,6 +535,10 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     lsp_send_notification("textDocument/publishDiagnostics", params);
 
     t.free();
+    expanded.free();
+    lowered.free();
+    pdiags.free();
+    loaded.free();
 }
 
 fn handle_did_open(req: *JsonValue, state: *LspState) {
@@ -485,6 +547,11 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     let uri: string = json_as_string(json_get(td, "uri"));
     let text: string = json_as_string(json_get(td, "text"));
     let version: int = json_as_int(json_get(td, "version"));
+    // Re-open: drop the prior stmts vector so it doesn't leak.
+    if state.docs.contains(uri) {
+        let prev: LspDoc = state.docs.get(uri);
+        if prev.stmts != null { stmt_vec_lower_free(prev.stmts); }
+    }
     let empty_stmts: *Vector<Stmt> = Vector::new();
     let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: empty_stmts };
     state.docs.insert(uri, doc);
@@ -503,6 +570,12 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
     if text.eq("") {
         // didChange w/ empty diff in incremental mode would land here; ignore.
         return;
+    }
+    // Drop the previous reparse's stmts vector — without this every
+    // keystroke leaks one Vector container.
+    if state.docs.contains(uri) {
+        let prev: LspDoc = state.docs.get(uri);
+        if prev.stmts != null { stmt_vec_lower_free(prev.stmts); }
     }
     let empty_stmts: *Vector<Stmt> = Vector::new();
     let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: empty_stmts };

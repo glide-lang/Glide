@@ -78,15 +78,62 @@ pub fn json_object() -> *JsonValue {
     return v;
 }
 
+// Push consumes `v`: the inline JsonValue is copied into the parent
+// array's storage (sharing any nested arr/obj_* heap pointers) and the
+// wrapper allocation itself is released. After this call, `v` is
+// dangling - do not touch it again.
 pub fn json_arr_push(arr: *JsonValue, v: *JsonValue) {
     if arr == null || arr.kind != JSON_ARRAY { return; }
+    if v == null { return; }
     arr.arr.push(*v);
+    free(v as *void);
 }
 
+// Same ownership transfer as json_arr_push: `v` is copied in by value
+// and its wrapper is freed. The nested heap children (if any) live on
+// inside the parent.
 pub fn json_obj_set(obj: *JsonValue, key: string, v: *JsonValue) {
     if obj == null || obj.kind != JSON_OBJECT { return; }
+    if v == null { return; }
     obj.obj_keys.push(key);
     obj.obj_vals.push(*v);
+    free(v as *void);
+}
+
+// Recursively free a JsonValue tree. Walks every nested array / object,
+// freeing the inner Vector storage and any heap children, then frees
+// the top-level wrapper. Safe on null. Pair with json_object/json_array
+// builders or the json_parse output.
+pub fn json_free(v: *JsonValue) {
+    if v == null { return; }
+    json_free_contents(v);
+    free(v as *void);
+}
+
+// Free the *children* of a JsonValue without freeing the value struct
+// itself. Used by json_free, and also by the recursive walk where
+// children live inline inside Vector<JsonValue> storage (no wrapper to
+// free, only the nested heap pointers).
+fn json_free_contents(v: *JsonValue) {
+    if v == null { return; }
+    if v.kind == JSON_ARRAY {
+        if v.arr != null {
+            for let i: int = 0; i < v.arr.len(); i++ {
+                let child: JsonValue = v.arr.get(i);
+                json_free_contents(&child);
+            }
+            v.arr.free();
+        }
+    } else if v.kind == JSON_OBJECT {
+        if v.obj_vals != null {
+            for let i: int = 0; i < v.obj_vals.len(); i++ {
+                let child: JsonValue = v.obj_vals.get(i);
+                json_free_contents(&child);
+            }
+            v.obj_vals.free();
+        }
+        if v.obj_keys != null { v.obj_keys.free(); }
+    }
 }
 
 // ---- accessors ----------------------------------------------------------

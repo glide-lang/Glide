@@ -55,7 +55,10 @@ impl Parser {
         return p;
     }
 
-    pub fn free(self: *Parser) { free(self as *void); }
+    pub fn free(self: *Parser) {
+        if self.diags != null { self.diags.free(); }
+        free(self as *void);
+    }
 
     fn advance(self: *Parser) -> Token {
         let prev: Token = self.current;
