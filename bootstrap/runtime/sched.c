@@ -156,8 +156,12 @@ typedef struct __glide_task {
     /* Park hand-off: if non-null on switch-back to worker fiber,
        worker links self into *park_list and unlocks park_lock.
        Done after the switch so unpark can never race with a
-       still-mid-switch coro. */
+       still-mid-switch coro. Either park_lock OR park_spin is set
+       per park call, not both — the I/O reactor uses a spinlock per
+       fd because the critical sections are 5-10 ns and futex-backed
+       pthread_mutex was 2.5 % of the keep-alive HTTP hot path. */
     pthread_mutex_t*     park_lock;
+    __glide_spin_t*      park_spin;
     struct __glide_task** park_list;
 } __glide_task;
 
@@ -525,6 +529,9 @@ static void* __glide_worker_main(void* arg) {
             if (t->park_lock) {
                 pthread_mutex_unlock(t->park_lock);
                 t->park_lock = NULL;
+            } else if (t->park_spin) {
+                __glide_spin_unlock(t->park_spin);
+                t->park_spin = NULL;
             }
         } else {
             t->state = 0;
@@ -693,7 +700,7 @@ void __glide_free_task(__glide_task* t) {
        freeing — main's spawn hot path was paying for these N stores per task. */
     t->state = 0; t->has_run = 0;
     t->wait_next = NULL;
-    t->park_lock = NULL; t->park_list = NULL;
+    t->park_lock = NULL; t->park_spin = NULL; t->park_list = NULL;
     if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {
         t->next = __glide_tls_pool;
         __glide_tls_pool = t;
@@ -906,6 +913,24 @@ int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
         return 0;
     }
     t->park_lock = lock;
+    t->park_list = list;
+    t->state = 2;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+    return 1;
+}
+
+/* Spinlock variant of __glide_park. Same protocol — caller holds the
+   spinlock, returns 1 parked / 0 non-coro fallback. Used by the I/O
+   reactor: per-fd waiter critical sections are 5-10 ns of list ops,
+   well below the futex-call overhead a pthread_mutex incurs. */
+int __glide_spin_park(__glide_spin_t* lock, __glide_task** list) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) {
+        if (lock) __glide_spin_unlock(lock);
+        __glide_flush_main_buf();
+        return 0;
+    }
+    t->park_spin = lock;
     t->park_list = list;
     t->state = 2;
     __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
