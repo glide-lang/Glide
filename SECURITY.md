@@ -14,9 +14,13 @@ As the project is in active development (alpha/pre-alpha), only the latest versi
 
 If you discover a security vulnerability in this project, please **DO NOT** open a public issue.
 
-Please send a detailed email to the maintainers (insert contact email here or use GitHub's private reporting feature if enabled).
+Use GitHub's private security reporting at
+[Security → Report a vulnerability](https://github.com/glide-lang/Glide/security/advisories/new).
+The maintainers receive the report privately and respond on the same
+thread.
 
-We will try to respond as quickly as possible to address the issue.
+We aim to acknowledge reports within a few days and ship a fix on
+`main` as quickly as the triage allows.
 
 ## Disclosure Process
 

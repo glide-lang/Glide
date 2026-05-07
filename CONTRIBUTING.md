@@ -48,6 +48,8 @@ Body is optional; lead with the *why* when the change isn't obvious from the tit
 - Branch off `main`. Keep commits clean (one logical change per commit when possible).
 - Run `glide check bootstrap/main.glide` to catch regressions in the compiler.
 - Run `./glide build bootstrap/main.glide -o glide_pr` and verify gen2 self-host works (`./glide_pr build bootstrap/main.glide -o glide_pr2`).
+- Run `./glide test` to make sure the testing framework's checks still pass; add `*_test.glide` files for new behavior (see `TESTING.md`).
+- If your change touches the LSP path, smoke-test it before reinstalling the binary — the throwaway scripts at the repo root (`__lsp_smoke.py` etc.) drive `glide lsp` over JSON-RPC and watch RSS over a few hundred didChange iterations.
 - If you change source under `bootstrap/`, regenerate `bootstrap/seed/bootstrap.c` in the same PR (or note in the PR that the seed needs a follow-up).
 - Update `CHANGELOG.md` under the next release header.
 
