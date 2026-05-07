@@ -573,9 +573,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // chunk, the head moved to a newly-prepended chunk; freeing must
     // start from there to walk the whole chain.
     state.last_arena = __glide_palloc_get();
-    // Deactivate the arena until the next reanalysis. Subsequent
-    // hover / completion / goto requests run with the arena off so
-    // their scratch allocations go to libc heap.
+    // Deactivate the arena until the next reanalysis.
     __glide_palloc_set(null);
 }
 

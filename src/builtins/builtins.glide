@@ -232,12 +232,53 @@ c_raw! {
     // __glide_palloc_free.
     static PArena* g_palloc_active = NULL;
 
+    // 256 MiB cap on per-chunk size. Without it, the previous policy
+    // doubled the chunk on every grow — a 1 GB parse would commit
+    // 16+32+...+512 ≈ 1 GiB of unused tail, and an 8 GB parse would
+    // commit 16 GiB before exhausting. Linear growth past 256 MiB caps
+    // the slack at one chunk worth.
+    #define GLIDE_PALLOC_CHUNK_MAX (256 * 1024 * 1024)
+
+    #ifdef _WIN32
+    #include <windows.h>
+    static unsigned char* __glide_palloc_alloc_pages(int size) {
+        return (unsigned char*)VirtualAlloc(NULL, (SIZE_T)size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    }
+    static void __glide_palloc_free_pages(unsigned char* p, int size) {
+        (void)size;
+        VirtualFree(p, 0, MEM_RELEASE);
+    }
+    #else
+    #include <sys/mman.h>
+    static unsigned char* __glide_palloc_alloc_pages(int size) {
+        void* p = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) return NULL;
+        return (unsigned char*)p;
+    }
+    static void __glide_palloc_free_pages(unsigned char* p, int size) {
+        munmap(p, (size_t)size);
+    }
+    #endif
+
     static PArena* __glide_palloc_chunk(PArena* top, int min_size) {
-        int new_cap = (top != NULL) ? top->cap * 2 : (16 * 1024 * 1024);
+        int new_cap;
+        if (top == NULL) {
+            new_cap = 16 * 1024 * 1024;
+        } else if (top->cap < GLIDE_PALLOC_CHUNK_MAX) {
+            new_cap = top->cap * 2;
+            if (new_cap > GLIDE_PALLOC_CHUNK_MAX) new_cap = GLIDE_PALLOC_CHUNK_MAX;
+        } else {
+            new_cap = GLIDE_PALLOC_CHUNK_MAX;
+        }
         if (new_cap < min_size + 1024) new_cap = min_size + 1024;
         PArena* nc = (PArena*)malloc(sizeof(PArena));
         nc->cap = new_cap;
-        nc->head = (unsigned char*)malloc((size_t)new_cap);
+        // mmap / VirtualAlloc (instead of malloc) so freed chunks return
+        // pages straight to the OS — the libc allocator was holding onto
+        // multi-GB chunks in its arena pool, which made working-set drops
+        // after pipeline reset show up minutes later, if at all.
+        nc->head = __glide_palloc_alloc_pages(new_cap);
         nc->used = 0;
         nc->next = top;
         return nc;
@@ -272,7 +313,7 @@ c_raw! {
         PArena* a = (PArena*)handle;
         while (a != NULL) {
             PArena* n = a->next;
-            free(a->head);
+            __glide_palloc_free_pages(a->head, a->cap);
             free(a);
             a = n;
         }
