@@ -27,6 +27,29 @@ pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
     return out;
 }
 
+// LSP variant: lower only stmts whose origin matches `user_path`.
+// Cached imports were already pre-lowered at cache populate time and
+// pass through unchanged, which is the dominant cost saving — without
+// this, every keystroke walks lower_block recursively over the whole
+// stdlib + bootstrap union and allocates hundreds of MB of fresh
+// fn_body / then_body / else_body / impl_methods Vectors.
+pub fn lower_program_user_only(stmts: *Vector<Stmt>, user_path: string) -> *Vector<Stmt> {
+    expand_trait_defaults(stmts);
+    let out: *Vector<Stmt> = Vector::new();
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        let is_user: bool = s.origin == null || s.origin.eq("") || s.origin.eq(user_path);
+        if !is_user {
+            // Cached, already lowered. Push unchanged.
+            out.push(s);
+            continue;
+        }
+        let l: *Stmt = lower_stmt(&s);
+        if l != null { out.push(*l); }
+    }
+    return out;
+}
+
 // Copy default methods from each trait into impl blocks that don't
 // override them. Mutates `impl_methods` of every `impl Trait for T`.
 // Mirrors the parse-time `Self` substitution so the copied bodies see

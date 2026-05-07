@@ -253,7 +253,7 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         __glide_palloc_set(null);
         let lex: *Lexer = Lexer::new(src);
         let p: *Parser = Parser::new(lex);
-        parsed = parse_program(p);
+        let parsed_raw: *Vector<Stmt> = parse_program(p);
         // The cache key has to outlive the active arena — `path` came in
         // from a caller-allocated concat() that's bump-allocated and will
         // dangle on the next keystroke. Snapshot it with arena disabled
@@ -268,6 +268,16 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         }
         p.free();
         lex.free();
+        for let i: int = 0; i < parsed_raw.len(); i++ {
+            let s: Stmt = parsed_raw.get(i);
+            s.origin = heap_key;
+            parsed_raw.set(i, s);
+        }
+        // Lower at populate so the cached stmts come back in
+        // typer-ready shape (FOR_IN expanded etc.). The user-pass
+        // lower then skips them and only walks the user buffer's
+        // stmts, which is the dominant per-keystroke saving.
+        parsed = lower_program(parsed_raw);
         __glide_palloc_set(saved_arena);
         if cache != null {
             cache.insert(heap_key, parsed);

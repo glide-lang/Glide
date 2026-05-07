@@ -525,7 +525,11 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // anything inside a `for x in expr { ... }` body never gets type-checked
     // by the LSP.
     let expanded: *Vector<Stmt> = expand_macros(stmts);
-    let lowered: *Vector<Stmt> = lower_program(expanded);
+    // user-only: cached imports came back from cache already lowered
+    // at populate time, so we pass them through and only run the heavy
+    // lower_block walk on the user buffer's stmts. Cuts the dominant
+    // per-keystroke arena cost (was ~800 MB for bootstrap edits).
+    let lowered: *Vector<Stmt> = lower_program_user_only(expanded, path);
     stmts.clear();
     for let i: int = 0; i < lowered.len(); i++ {
         let s: Stmt = lowered.get(i);
@@ -569,11 +573,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     pdiags.free();
     loaded.free();
 
-    // Capture the final arena head — when the arena grew past one
-    // chunk, the head moved to a newly-prepended chunk; freeing must
-    // start from there to walk the whole chain.
     state.last_arena = __glide_palloc_get();
-    // Deactivate the arena until the next reanalysis.
     __glide_palloc_set(null);
 }
 
