@@ -7,12 +7,16 @@ Targeted at someone who already knows another systems language (Rust, C, Go, Zig
 ### keywords
 
 ```
-let const mut fn struct enum impl interface type extern pub move
-if else while for return break continue match defer spawn import
-true false null as
+let const mut fn struct enum impl trait dyn type extern pub move naked
+if else while for return break continue match defer spawn spawn_thread
+import use as in
+true false null self Self
+macro asm volatile c_raw
 ```
 
-`chan` is a type constructor, not a keyword in expression position.
+`chan<T>` is a type constructor (parses as a generic type). `Arena`,
+`Vector`, `HashMap` are regular types from the prelude / stdlib, not
+keywords.
 
 ### operators
 
@@ -65,7 +69,8 @@ The lexer currently discards comments; the formatter doesn't preserve them.
 | `T<U, V>`       | generic instantiation                                      |
 | `fn(A, B) -> R` | function pointer                                           |
 | `!T`            | result: success carries `T`, error carries a `string`      |
-| `chan<T>`       | typed channel                                              |
+| `chan<T>`       | typed channel (bounded MPMC)                               |
+| `*dyn Trait`    | fat pointer (vtable + data); runtime dispatch              |
 
 ## statements
 
@@ -87,9 +92,12 @@ for init; cond; step { ... }
 match scrutinee { Variant(b) => { ... } _ => { ... } }
 
 defer expr;                       // run at fn end / before return (LIFO)
-spawn fn_call(args);              // run fn on a new thread
+spawn fn_call(args);              // run fn on the M:N coroutine scheduler
+spawn_thread fn_call(args);       // run fn on a real OS thread (escape hatch)
 
-import "path/to/file.glide";
+import a::b::c;                   // module path; resolves to a/b/c.glide
+import a::b::c::*;                // wildcard
+import a::b::c::{X, Y};           // selective
 ```
 
 `break` and `continue` work in `while` and `for` loops.
@@ -98,7 +106,6 @@ import "path/to/file.glide";
 
 ```glide
 [pub] fn name[<T1, T2>](p1: T1, p2: T2) -> R { ... }
-[pub] fn name(args) -> R;                                  // extern (no body)
 
 [pub] struct Name[<T>] {
     field1: Type1,
@@ -110,15 +117,20 @@ import "path/to/file.glide";
     Variant2(int, string),
 }
 
+[pub] trait Name {
+    fn required(self: Self) -> int;
+    fn provided(self: Self) -> int { return 0; }   // default method
+}
+
 impl[<T>] Name[<T>] {
     fn method(self: *Name<T>, arg: int) -> int { ... }
 }
 
-extern fn libc_function(args) -> ret;
-extern type OpaqueHandle;
-extern type Tm = "struct tm";          // alias an existing C type
-c_include "<stdio.h>";
-c_link "m";                            // link against -lm
+impl Trait for Type {
+    fn required(self: Self) -> int { ... }
+}
+
+extern fn libc_function(args) -> ret;          // declare a C function
 ```
 
 `pub` makes the symbol importable from other Glide files. Top-level visibility defaults to private.
@@ -199,28 +211,6 @@ fn pipeline(s: string) -> !int {
 
 `unwrap(r)` returns the inner value or a zero-initialized fallback if `r` is err. Use it at boundaries where you've already checked the error.
 
-## concurrency
-
-```glide
-fn worker(c: chan<int>) {
-    send(c, 42);
-    close(c);
-}
-
-fn main() -> int {
-    let c: chan<int> = make_chan(4);     // buffered, capacity 4
-    spawn worker(c);
-
-    let v: int = recv(c);                // blocks until value or closed
-    close(c);                            // sender already closed; idempotent
-    return v;
-}
-```
-
-Channels are bounded, blocking, MPMC. `spawn` takes a direct function call and starts a new thread. Each spawned function runs to completion (no early termination from outside).
-
-`make_chan(cap)` requires `cap >= 1`. Sending on a closed channel is a no-op. Receiving from a closed empty channel returns a zero-initialized `T`.
-
 ## generics
 
 Function and struct type parameters use angle brackets; instantiation is monomorphized.
@@ -234,6 +224,10 @@ impl<T> Vec<T> {
 }
 
 fn first<T>(v: *Vec<T>) -> T { return v.data[0]; }
+
+// Trait bounds — checked at every call site against the impl_set.
+fn max<T: Ord>(a: T, b: T) -> T { if a > b { return a; } return b; }
+fn dump<T: Display + Clone>(v: T) { println!(v.clone().to_string()); }
 ```
 
 Inference fires from:
@@ -244,39 +238,181 @@ Inference fires from:
 
 There's no turbofish syntax; if inference fails you must annotate the let.
 
-## interfaces
+## traits
 
 ```glide
-interface Drawable {
-    fn draw(self: *T);
+trait Render {
+    fn render(self: Self) -> string;
+
+    // Default method — any impl that doesn't override gets this body.
+    fn label(self: Self) -> string { return "rendered"; }
 }
 
-impl Drawable for Circle {
-    fn draw(self: *Circle) { ... }
-}
+// Supertrait: every Render implementor must also impl Named.
+trait Render: Named { ... }
 
-fn render(items: *Drawable) { ... }    // dynamic dispatch
+impl Render for Box    { fn render(self: Self) -> string { return "Box"; } }
+impl Render for Circle { fn render(self: Self) -> string { return "Circle"; } }
+
+// Static dispatch via generic bound (monomorphized per type).
+fn show_all<T: Render>(items: *Vector<T>) { ... }
+
+// Dynamic dispatch via *dyn Trait (fat pointer = vtable + data).
+fn show(r: *dyn Render) { println!(r.render()); }
+
+let shapes: *Vector<*dyn Render> = Vector::new();
+shapes.push(box_p as *dyn Render);
+shapes.push(circle_p as *dyn Render);
 ```
 
-Used sparingly; most polymorphism in Glide goes through generics.
+`Self` inside a trait body refers to the implementor's type. The
+default-method walk substitutes `Self` for the concrete type when
+copying a default body into an impl that doesn't override it.
+
+## macros
+
+User-defined macro_rules! for AST-level expansion.
+
+```glide
+macro bail!($cond:expr, $msg:expr) {
+    if $cond { return err($msg); }
+}
+
+macro list_each!($($v:expr),*) {        // variadic
+    $( println!($v); )*
+}
+
+// Type-attached macros: instance form (uses `self`) and static form.
+impl<T> Vector<T> {
+    macro push_all!($($x:expr),*) { $( self.push($x); )* }
+}
+
+// Call sites:
+bail!(n < 0, "negative");
+list_each!(1, 2, 3);
+v.push_all!(10, 20, 30);            // instance: v becomes self
+Vector::new().push_all!(7, 8, 9);   // chained
+```
+
+Matchers: `$x:expr`, variadic `$($x:expr),*` with `,` or `;`
+separators. Expansion runs between parse and typer; the typer sees
+already-expanded AST.
+
+`println!`, `print!`, `format!`, `panic!`, `printf` are codegen
+builtins — they don't go through the macro_rules expander.
+
+## string interpolation
+
+```glide
+let name: string = "world";
+let s: string = "hello, ${name}!";
+let n: int = 7;
+let label: string = "count: ${n}, double: ${n * 2}";
+```
+
+`"...${expr}..."` is sugar — the parser lowers it to a `format!` call
+with `{}` placeholders.
+
+## inline asm and FFI escape hatches
+
+```glide
+// GCC operand syntax with output / input / clobber lists.
+fn read_tsc() -> u64 {
+    let lo: u32 = 0;
+    let hi: u32 = 0;
+    asm volatile { "rdtsc" : "=a"(lo), "=d"(hi) }
+    return ((hi as u64) << 32) | (lo as u64);
+}
+
+// Naked: no prologue / epilogue, body must be only `asm`.
+@cfg("posix")
+naked fn add_raw(a: int, b: int) -> int {
+    asm { "lea (%rdi,%rsi,1), %rax" : : : }
+    asm { "ret" : : : }
+}
+
+// Per-platform gates.
+@cfg("posix")  fn now_ms() -> i64 { ... }
+@cfg("windows") fn now_ms() -> i64 { ... }
+
+// Drop arbitrary C verbatim into the output. Useful for runtime
+// helpers, intrinsics, or to call platform APIs that aren't in
+// stdlib yet. Values from outer scope are interpolated.
+c_raw! {
+    int dup = _dup(_fileno(stdout));
+    fflush(stdout);
+}
+```
+
+## concurrency
+
+```glide
+fn worker(c: chan<int>) {
+    c.send(42);
+    c.close();
+}
+
+fn main() -> int {
+    let c: chan<int> = make_chan(4);     // buffered, capacity 4
+    spawn worker(c);                      // M:N coroutine
+    let v: int = c.recv();                // parks the caller, frees worker
+    return v;
+}
+
+// Drain until close.
+while let v = c.recv() { use(v); }
+
+// `sleep_ms` parks the coro on the timer thread; the worker is free
+// to pick up another ready task immediately.
+sleep_ms(100);
+
+// `spawn_thread` is the escape hatch that runs on a real OS thread.
+spawn_thread heavy_blocking_io();
+```
+
+Channels are bounded MPMC built on a Vyukov ring with cache-padded
+cells. Blocking ops (`recv`, `send` to full chan, `sleep_ms`) park
+the coroutine on a tiny park/unpark primitive without consuming a
+worker thread. `c.recv()` on a closed empty channel returns a
+zero-initialized `T`; `while let v = c.recv()` exits naturally on
+close.
 
 ## FFI
 
 ```glide
-extern fn printf(fmt: string, ...) -> int;
-extern fn time(t: *long) -> long;
-extern type FILE;
-extern type Tm = "struct tm";
-c_include "<time.h>";
-c_link "m";
-
-fn now() -> long {
-    let t: *long = null;
-    return time(t);
-}
+extern fn printf(fmt: string, ...) -> int;     // C-style variadic
+extern fn malloc(n: usize) -> *void;
+extern fn free(p: *void);
 ```
 
-Variadic functions accept `...` as the last "parameter". `extern type Foo;` declares an opaque struct; `extern type Foo = "..."` aliases an existing C type. `c_include` injects an `#include` into the generated C; `c_link` adds `-l<name>` to the linker.
+`extern fn` declares a C function the runtime / system libc provides;
+no body, no Glide-level checks beyond signature. Variadic is declared
+with a trailing `...`. The compiler emits a forward declaration in the
+generated C; the linker pulls the symbol from libc / pthread / the
+emitted runtime.
+
+For `#include`, system-specific glue, calling platform APIs, or
+defining new C helpers, drop into `c_raw! { ... }` at top level (any
+header introduced before its first use becomes available to later
+emitted code):
+
+```glide
+c_raw! {
+    #ifdef _WIN32
+    #include <windows.h>
+    static int now_ticks(void) { return GetTickCount(); }
+    #else
+    #include <time.h>
+    static int now_ticks(void) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (int)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    }
+    #endif
+}
+
+extern fn now_ticks() -> int;
+```
 
 ## memory layout and ABI
 
@@ -284,10 +420,23 @@ Glide compiles to C99 + pthread. Structs follow the C ABI: same layout as the eq
 
 ## what's intentionally not in the language
 
-- **Lifetimes / generic over lifetimes** — borrows are function-scoped only
-- **Async / await** — `chan` + `spawn` cover concurrency; no executor
-- **Trait bounds on generics** — errors surface at monomorphization
-- **Macros beyond `println!` / `print!` / `format!`** — no user-defined macros
-- **Reflection** — none
-- **Garbage collection** — explicitly excluded
-- **Nullable type (`?T`)** — pointers are nullable; borrows are non-null. `?T` is on the roadmap.
+- **Lifetimes / generic over lifetimes** — borrows are function-scoped
+  only.
+- **Reflection** — none. Generics + traits cover the structural cases;
+  macros cover the syntactic ones.
+- **Garbage collection** — explicitly excluded.
+- **Nullable type (`?T`)** — pointers are nullable; borrows are non-null
+  by typer enforcement. `?T` is on the roadmap.
+
+## deferred (planned, not in 0.1.0)
+
+- **`async fn` / `await`** — coroutines + `chan` + `sleep_ms` cover the
+  cases an executor would; `async fn` syntax is on the roadmap once
+  the reactor + parker work is exposed at the language level.
+- **Stack growth** — coroutines have fixed-size stacks today. Lazy
+  growth via mmap-backed regions is planned.
+- **`Mutex<T>` / `select!`** — channels are the recommended sync
+  primitive. A typed mutex and `select!` over multiple chans are
+  planned.
+- **Non-lexical lifetimes** — borrow lifetimes are block-scoped.
+- **`move` returns** — owned values can't escape their declaring fn.
