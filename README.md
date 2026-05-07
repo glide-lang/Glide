@@ -145,8 +145,12 @@ bash tools/install.sh --archive ./glide-linux-x86_64-0.1.0.tar.gz
 glide run hello.glide
 glide build hello.glide -o hello
 glide build hello.glide --target=x86_64-linux-gnu     # cross-compile
-glide check hello.glide
+glide check hello.glide                                # type-check, no codegen
 glide emit hello.glide                                 # show generated C
+glide fmt hello.glide [--write]                        # canonical formatting
+glide test [path]                                      # run *_test.glide
+glide test --golden tests/golden/                      # stdout diff tests
+glide lsp                                              # LSP over JSON-RPC stdio
 ```
 
 Cross-compile targets are anything Zig supports: `x86_64-linux-{gnu,musl}`, `aarch64-linux-{gnu,musl}`, `x86_64-windows-{gnu,msvc}`, `aarch64-macos`, `x86_64-macos`, `riscv64-linux-musl`, etc.
