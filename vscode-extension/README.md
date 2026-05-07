@@ -4,14 +4,14 @@ Syntax highlighting + Language Server Protocol integration for the Glide program
 
 ## Features
 
-- Diagnostics: parse errors, type errors, borrow checker, null safety, unused vars, dead code, missing return, arena leaks, large-return performance hints
-- Hover: function signatures, struct/enum declarations, built-in types
-- Goto definition
-- Find references
-- Document highlight
-- Document symbols (outline)
-- Completion: locals, top-level decls, keywords
-- Rename refactor
+- Diagnostics: parse errors, type errors, borrow checker, null safety, unused vars / fns / params, unnecessary `mut`, dead code after return, missing return, arena leaks, `&temporary`, missing trait method, unsatisfied bound, trait-method-mismatch.
+- Hover: function signatures, struct / enum / trait declarations, doc-comment extraction, keyword and macro builtin docs.
+- Goto definition (functions, struct fields, impl methods, qualified paths, chained inline ctors).
+- Find references / document highlight across the open file.
+- Document symbols (outline).
+- Completion with `.` and `:` triggers: locals, top-level decls, keywords, chan ops on `c.`, `Type::method` paths, struct fields, import paths.
+- Rename + prepareRename (rejects keywords, precise word range).
+- Document formatting via `glide fmt` round-trip.
 
 ## Requirements
 

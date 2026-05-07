@@ -3,16 +3,20 @@
 Registers the Glide language, launches `glide lsp`, and ships a Tree-sitter
 grammar.
 
-LSP features: diagnostics, hover, goto-definition, completion (keywords,
-globals, struct fields after `.`), document formatting.
+LSP features: diagnostics, hover, goto-definition, find references,
+document highlight, document symbols, completion (keywords, locals,
+top-level decls, struct fields after `.`, qualified `Type::method`,
+import paths), rename + prepareRename, document formatting.
 
 ## Install
 
-1. Put `glide` on `PATH`:
+1. Put `glide` on `PATH`. From a release archive:
 
    ```bash
-   cargo install --path ..
+   curl -fsSL https://github.com/glide-lang/Glide/releases/latest/download/install.sh | bash
    ```
+
+   or build from source per the repo root `README.md` (`cc bootstrap/seed/bootstrap.c -o glide_seed && ./glide_seed build bootstrap/main.glide -o glide`) and put the resulting `glide` binary on your PATH.
 
 2. Generate the Tree-sitter parser (one-time):
 
@@ -42,11 +46,7 @@ Paste the SHA into `commit = "..."` in `extension.toml`, then
 
 ## Updating the compiler
 
-```bash
-cargo install --path .. --force
-```
-
-Reopen the workspace so Zed re-spawns the LSP.
+After rebuilding `glide` (`./glide build bootstrap/main.glide -o glide_new && cp glide_new $(which glide)`), reopen the workspace so Zed re-spawns the LSP. The LSP runs every doc analysis through a per-keystroke arena, so it doesn't need restarts to recover memory between sessions, but a fresh spawn is the simplest way to pick up a new binary.
 
 ## Format-on-save
 
