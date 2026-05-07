@@ -1,5 +1,66 @@
 # Changelog
 
+## Unreleased
+
+### LSP performance
+
+The LSP path was rewritten around an arena allocator after a session of
+chasing per-keystroke leaks that crept the long-running `glide lsp`
+process toward 30+ GiB during normal editing.
+
+- **Per-keystroke arena**: every Vector / HashMap / AST node allocated
+  by parse / expand / lower / type runs in a chunked bump arena owned
+  by the active document. The next reanalysis frees the prior arena
+  in bulk via `munmap` / `VirtualFree`, returning pages straight to
+  the OS. Cap chunk size at 256 MiB so a 1 GiB parse no longer
+  reserves 2 GiB of slack.
+- **Per-request arena**: completion, hover, documentHighlight, goto,
+  rename, formatting all run inside a transient arena that's
+  reclaimed when the handler returns. Zed's "fire completion on every
+  character" pattern was the dominant leak; on a 5000-stmt union it
+  cost 150-300 MiB per request that nothing freed.
+- **Cached lower output**: `load_into_with_cache` now lowers each
+  imported file at populate time and stores the typer-ready stmts.
+  The user-pass lower (`lower_program_user_only`) skips top-level
+  stmts whose origin doesn't match the user buffer, so editing a
+  small file with stdlib imports doesn't reallocate fn_body /
+  then_body / else_body / impl_methods Vectors for the whole stdlib
+  on every keystroke.
+- **O(N) jp_unescape**: the JSON parser's escape-decoding path was
+  O(N²) (concat-byte-by-byte). On Zed's didChange payloads (full
+  file content with escaped newlines) it allocated multi-GiB of
+  throwaway strings per request. Replaced with a single arena buffer
+  that's written byte-by-byte then cast to string.
+- **Heap cache keys**: parse_cache keys now strdup'd into libc heap
+  so they outlive every keystroke's arena reset. Without this the
+  second didOpen segfaulted on cache.contains lookup against a freed
+  string.
+- **Runtime string ops via __glide_palloc**: `__glide_string_concat`,
+  `_substring`, `_format`, `_int_to_string`, `_char_to_string` route
+  through the active arena instead of libc malloc. Outside the LSP
+  the arena is null and they fall back to calloc, so build / run /
+  fmt paths see no behavior change.
+- **JSON tree freed**: `lsp_main` now calls `json_free(req)` on the
+  parsed request tree and `free` on the raw read buffer at the end
+  of each loop iteration. `handle_did_open` / `handle_did_change`
+  free the prior `doc.text` after replacement.
+- **Lexer / Parser / Typer**: `__glide_pfree` (free that's safe on
+  arena pointers) now used in their `.free()` methods so calling
+  them while inside an arena is a no-op.
+
+Smoke tests with realistic Zed-style traffic (didChange + completion
++ documentHighlight per keystroke):
+
+  - bootstrap/main.glide (entry point, imports the whole bootstrap):
+    1.3 GiB baseline (the AST cache itself), stable across 50 iters
+    where the previous build climbed to 15 GiB.
+  - bootstrap/lsp.glide: 30 MiB total, stable.
+
+The 1.3 GiB baseline for main.glide-shaped graphs is the AST cache
+for transitively-imported files (~70 MiB / file × 18 files). Reducing
+it further needs a smaller AST representation or a lazy-import scheme
+that doesn't parse symbol bodies until they're queried.
+
 ## 0.1.0 — 2026-05-05
 
 First release. Glide is a self-hosted, plug-and-play systems language with
@@ -94,7 +155,6 @@ no Rust or system C compiler required.
 
 - Formatter drops comments (lexer doesn't track them yet); `glide fmt --write`
   is opt-in for that reason.
-- LSP doesn't follow imports during analysis (single-file scope).
 - No NLL — borrow lifetimes are block-scoped.
 - No `move` returns — owned values can't escape their declaring fn.
 - No `?T` nullable type yet — only borrows are non-null by check; `*T` remains
