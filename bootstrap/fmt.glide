@@ -304,6 +304,9 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
     if s.kind == ST_DEFER {
         return pad.concat("defer ").concat(fmt_expr(s.expr_value)).concat(";\n");
     }
+    if s.kind == ST_DEFER_ERR {
+        return pad.concat("defer_err ").concat(fmt_expr(s.expr_value)).concat(";\n");
+    }
     if s.kind == ST_SPAWN {
         return pad.concat("spawn ").concat(fmt_expr(s.expr_value)).concat(";\n");
     }

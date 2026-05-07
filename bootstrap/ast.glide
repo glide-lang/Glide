@@ -176,6 +176,7 @@ pub const ST_WHILE_RECV: int = 21;  // `while let v [: T] = c.recv() { body }` �
 pub const ST_ASM: int = 22;         // `asm [volatile] { "..." [: outs] [: ins] [: clobbers] }` — GCC inline asm
 pub const ST_CRAW: int = 23;        // `c_raw! { ... }` — raw C/asm payload emitted verbatim. Body lives in `name`.
 pub const ST_TRAIT: int = 24;       // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
+pub const ST_DEFER_ERR: int = 25;   // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
 
 pub struct Param {
     pub name: string,

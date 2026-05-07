@@ -866,6 +866,19 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         s.expr_value = e;
         return s;
     }
+    if p.at_kw("defer_err") {
+        let line: int = p.current.line;
+        let col: int = p.current.column;
+        p.advance();
+        let e: *Expr = parse_expr(p, 0);
+        p.expect_op(";");
+        let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+        s.kind = ST_DEFER_ERR;
+        s.line = line;
+        s.column = col;
+        s.expr_value = e;
+        return s;
+    }
     if p.at_kw("spawn") {
         let line: int = p.current.line;
         let col: int = p.current.column;

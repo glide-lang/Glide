@@ -330,6 +330,7 @@ pub fn is_keyword(s: string) -> bool {
     if s.eq("trait") { return true; }
     if s.eq("dyn") { return true; }
     if s.eq("defer") { return true; }
+    if s.eq("defer_err") { return true; }
     if s.eq("type") { return true; }
     if s.eq("move") { return true; }
     if s.eq("extern") { return true; }

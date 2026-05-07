@@ -749,6 +749,7 @@ pub struct CG {
     // after fn-mono drain, before fn forward decls.
     pub struct_mono_queue: *Vector<Type>,
     pub defer_stack: *Vector<Expr>,         // explicit `defer expr;` (fn-scoped)
+    pub err_defer_stack: *Vector<Expr>,     // `defer_err expr;` — fires only on err return / `?` (fn-scoped)
     pub auto_drop_stack: *Vector<Expr>,     // `let v*` cleanups (block-scoped)
     // Anonymous fn lifts (collected during codegen, emitted at end).
     pub anon_fns: *Vector<AnonFn>,
@@ -803,6 +804,8 @@ impl CG {
         let q: *Vector<FnMonoEntry> = Vector::new();
         let ds: *Vector<Expr> = Vector::new();
         g.defer_stack = ds;
+        let eds: *Vector<Expr> = Vector::new();
+        g.err_defer_stack = eds;
         let ads: *Vector<Expr> = Vector::new();
         g.auto_drop_stack = ads;
         let af: *Vector<AnonFn> = Vector::new();
@@ -838,6 +841,20 @@ impl CG {
         let trts: *HashMap<Stmt> = HashMap::new();
         g.traits = trts;
         return g;
+    }
+
+    // Flush err-only deferred cleanups (LIFO). Called from ST_RETURN when
+    // returning `err(...)` and from the `?` propagation lowering. Fires
+    // BEFORE regular defers so the err handler sees the same outer state
+    // as the regular path.
+    fn emit_err_defers_reverse(self: *CG, depth: int) {
+        let n: int = self.err_defer_stack.len();
+        for let i: int = n - 1; i >= 0; i = i - 1 {
+            ind(depth);
+            let ex: Expr = self.err_defer_stack.get(i);
+            emit_expr(self, &ex);
+            println!(";");
+        }
     }
 
     // Flush all pending cleanups in reverse order. Called on return / fn end.
@@ -1824,8 +1841,9 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     if e.kind == EX_UNARY {
         if e.op_code == UN_TRY {
             // Postfix `?`: GCC stmt-expr that unpacks a Result<T> in the
-            // current fn whose ret-type is Result<U>. On err, return
-            // a wrapped err of the outer type. On ok, evaluate to the inner val.
+            // current fn whose ret-type is Result<U>. On err, run any
+            // pending `defer_err` cleanups (LIFO) and return a wrapped
+            // err of the outer type. On ok, evaluate to the inner val.
             let inner_ty: *Type = infer_for_codegen(g, e.operand);
             if inner_ty == null || inner_ty.kind != TY_RESULT
                 || g.current_ret_ty == null || g.current_ret_ty.kind != TY_RESULT {
@@ -1836,7 +1854,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             let m_out: string = mangle_type(g.current_ret_ty.inner);
             print!("({ __glide_result_".concat(m_in).concat("_t __r = ("));
             emit_expr(g, e.operand);
-            print!("); if (!__r.ok) return __glide_err_".concat(m_out).concat("(__r.err); __r.val; })"));
+            print!("); if (!__r.ok) { ");
+            let nd: int = g.err_defer_stack.len();
+            for let i: int = nd - 1; i >= 0; i = i - 1 {
+                let ex: Expr = g.err_defer_stack.get(i);
+                emit_expr(g, &ex);
+                print!("; ");
+            }
+            print!("return __glide_err_".concat(m_out).concat("(__r.err); } __r.val; })"));
             return;
         }
         print!("(".concat(unop_to_c(e.op_code)));
@@ -2563,6 +2588,13 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         return;
     }
     if s.kind == ST_RETURN {
+        // Detect `return err(...)` BEFORE rewriting `err` -> `__glide_err_X`
+        // so `defer_err` cleanups can fire on this path only.
+        let mut is_err_return: bool = false;
+        if s.expr_value != null && s.expr_value.kind == EX_CALL && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT && s.expr_value.lhs.str_val.eq("err") {
+            is_err_return = true;
+        }
         // ok(v)/err(s) hint via current fn ret-type `!T`.
         if s.expr_value != null && g.current_ret_ty != null
             && g.current_ret_ty.kind == TY_RESULT
@@ -2580,7 +2612,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         // explicit defer), capture the value in a temp BEFORE running cleanups
         // so e.g. `return v.get(0)` doesn't read freed memory after auto-drop
         // of v fires.
-        let has_cleanup: bool = g.defer_stack.len() > 0 || g.auto_drop_stack.len() > 0;
+        let has_err_defers: bool = is_err_return && g.err_defer_stack.len() > 0;
+        let has_cleanup: bool = g.defer_stack.len() > 0 || g.auto_drop_stack.len() > 0 || has_err_defers;
         if s.expr_value != null && has_cleanup {
             ind(depth);
             print!("__typeof__(");
@@ -2588,9 +2621,11 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             print!(") __glide_ret = ");
             emit_expr(g, s.expr_value);
             println!(";");
+            if has_err_defers { g.emit_err_defers_reverse(depth); }
             g.emit_deferred_reverse(depth);
             ind(depth); println!("return __glide_ret;");
         } else {
+            if has_err_defers { g.emit_err_defers_reverse(depth); }
             g.emit_deferred_reverse(depth);
             ind(depth);
             print!("return");
@@ -2601,6 +2636,10 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
     }
     if s.kind == ST_DEFER {
         if s.expr_value != null { g.defer_stack.push(*s.expr_value); }
+        return;
+    }
+    if s.kind == ST_DEFER_ERR {
+        if s.expr_value != null { g.err_defer_stack.push(*s.expr_value); }
         return;
     }
     if s.kind == ST_SPAWN {
@@ -3116,10 +3155,13 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.current_ret_ty = s.fn_ret_ty;
     // Reset defer + auto-drop stacks for this fn.
     let saved_defer: *Vector<Expr> = g.defer_stack;
+    let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
     let saved_drop: *Vector<Expr> = g.auto_drop_stack;
     let new_defer: *Vector<Expr> = Vector::new();
+    let new_err_defer: *Vector<Expr> = Vector::new();
     let new_drop: *Vector<Expr> = Vector::new();
     g.defer_stack = new_defer;
+    g.err_defer_stack = new_err_defer;
     g.auto_drop_stack = new_drop;
     if s.fn_params != null {
         for let i: int = 0; i < s.fn_params.len(); i++ {
@@ -3136,6 +3178,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     // Flush any deferred exprs that didn't hit a return (e.g. fall-through fn end).
     g.emit_deferred_reverse(1);
     g.defer_stack = saved_defer;
+    g.err_defer_stack = saved_err_defer;
     g.auto_drop_stack = saved_drop;
     g.current_ret_ty = saved_ret;
     println!("}");
@@ -3187,10 +3230,13 @@ fn emit_impl(g: *CG, s: *Stmt) {
         let saved_ret: *Type = g.current_ret_ty;
         g.current_ret_ty = m.fn_ret_ty;
         let saved_defer: *Vector<Expr> = g.defer_stack;
+        let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
         let saved_drop: *Vector<Expr> = g.auto_drop_stack;
         let nd: *Vector<Expr> = Vector::new();
+        let ned: *Vector<Expr> = Vector::new();
         let nadr: *Vector<Expr> = Vector::new();
         g.defer_stack = nd;
+        g.err_defer_stack = ned;
         g.auto_drop_stack = nadr;
         if m.fn_params != null {
             for let j: int = 0; j < m.fn_params.len(); j++ {
@@ -3206,6 +3252,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         }
         g.emit_deferred_reverse(1);
         g.defer_stack = saved_defer;
+        g.err_defer_stack = saved_err_defer;
         g.auto_drop_stack = saved_drop;
         g.current_ret_ty = saved_ret;
         println!("}");
