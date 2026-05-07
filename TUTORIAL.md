@@ -182,7 +182,8 @@ fn count(words: *Vector<string>) -> *HashMap<int> {
     let m: *HashMap<int> = HashMap::new();
     for let i: int = 0; i < words.len(); i++ {
         let w: string = words.get(i);
-        let prev: int = if m.contains(w) { m.get(w) } else { 0 };
+        let mut prev: int = 0;
+        if m.contains(w) { prev = m.get(w); }
         m.insert(w, prev + 1);
     }
     return m;
