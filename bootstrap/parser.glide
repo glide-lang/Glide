@@ -1025,6 +1025,38 @@ fn parse_match(p: *Parser) -> *Stmt {
     return stmt_match(scrut, arms, line, col);
 }
 
+// Expression-position `if`. Both branches must be a single expression
+// (`if c { e } else { e }`); the codegen lowers it to a C ternary.
+// Statement-position `if cond { stmts; }` keeps its existing
+// stmt-level parser (parse_if).
+fn parse_if_expr(p: *Parser) -> *Expr {
+    let line: int = p.current.line;
+    let col: int = p.current.column;
+    p.advance(); // 'if'
+    let saved: bool = p.no_struct_lit;
+    p.no_struct_lit = true;
+    let cond: *Expr = parse_expr(p, 0);
+    p.no_struct_lit = saved;
+    p.expect_op("{");
+    let then_e: *Expr = parse_expr(p, 0);
+    p.expect_op("}");
+    if !p.eat_kw("else") {
+        // Without else, no value to produce — fall back to the stmt
+        // form by synthesising a null else branch. The typer rejects
+        // expression-position if without else.
+        return expr_if(cond, then_e, null, line, col);
+    }
+    let else_e: *Expr;
+    if p.at_kw("if") {
+        else_e = parse_if_expr(p);
+    } else {
+        p.expect_op("{");
+        else_e = parse_expr(p, 0);
+        p.expect_op("}");
+    }
+    return expr_if(cond, then_e, else_e, line, col);
+}
+
 fn parse_if(p: *Parser) -> *Stmt {
     let line: int = p.current.line;
     let col: int = p.current.column;
@@ -1514,6 +1546,7 @@ fn parse_prefix(p: *Parser) -> *Expr {
         if tok.lexeme.eq("true") { p.advance(); return expr_bool(true, line, col); }
         if tok.lexeme.eq("false") { p.advance(); return expr_bool(false, line, col); }
         if tok.lexeme.eq("null") { p.advance(); return expr_null(line, col); }
+        if tok.lexeme.eq("if") { return parse_if_expr(p); }
         if tok.lexeme.eq("fn") {
             p.advance();
             p.expect_op("(");

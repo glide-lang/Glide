@@ -73,6 +73,7 @@ pub const EX_NEW: int = 19;         // new Foo { fields }
 pub const EX_SIZEOF: int = 20;      // sizeof(T) — cast_to holds the target type
 pub const EX_FNEXPR: int = 21;      // anonymous fn expression (no capture)
 pub const EX_MACRO_VAR: int = 22;   // `$x` placeholder inside a macro body (str_val = "x")
+pub const EX_IF: int = 23;          // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
 
 // Binary op codes (subset; extend as needed)
 pub const OP_ADD: int = 1;
@@ -742,6 +743,17 @@ pub fn expr_null(line: int, col: int) -> *Expr {
     e.kind = EX_NULL;
     e.line = line;
     e.column = col;
+    return e;
+}
+
+pub fn expr_if(cond: *Expr, then_e: *Expr, else_e: *Expr, line: int, col: int) -> *Expr {
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    e.kind = EX_IF;
+    e.line = line;
+    e.column = col;
+    e.lhs = cond;
+    e.rhs = then_e;
+    e.operand = else_e;
     return e;
 }
 

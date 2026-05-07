@@ -920,6 +920,13 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     if e.kind == EX_BOOL { return ty_named("bool"); }
     if e.kind == EX_CHAR { return ty_named("char"); }
     if e.kind == EX_NULL { return ty_pointer(ty_named("void")); }
+    if e.kind == EX_IF {
+        // Both branches share a type by the typer's check; pick whichever
+        // we can resolve.
+        let then_ty: *Type = infer_for_codegen(g, e.rhs);
+        if then_ty != null { return then_ty; }
+        return infer_for_codegen(g, e.operand);
+    }
     if e.kind == EX_IDENT { return g.lookup(e.str_val); }
     if e.kind == EX_UNARY {
         let inner: *Type = infer_for_codegen(g, e.operand);
@@ -1792,6 +1799,20 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     if e.kind == EX_BOOL { if e.bool_val { print!("true"); } else { print!("false"); } return; }
     if e.kind == EX_NULL { print!("NULL"); return; }
     if e.kind == EX_IDENT { print!(e.str_val); return; }
+    if e.kind == EX_IF {
+        // Lower expression-position if to a C ternary. Both branches
+        // are guaranteed to be single expressions by the parser, so
+        // they fit cleanly. Nested else-if chains nest naturally:
+        // `(c1 ? a : (c2 ? b : c))`.
+        print!("(");
+        emit_expr(g, e.lhs);
+        print!(" ? ");
+        emit_expr(g, e.rhs);
+        print!(" : ");
+        if e.operand != null { emit_expr(g, e.operand); } else { print!("0"); }
+        print!(")");
+        return;
+    }
     if e.kind == EX_BINARY {
         print!("(");
         emit_expr(g, e.lhs);

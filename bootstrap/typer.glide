@@ -1061,6 +1061,32 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e.kind == EX_CHAR { return ty_named("char"); }
     if e.kind == EX_NULL { return ty_pointer(ty_named("void")); }
 
+    if e.kind == EX_IF {
+        // Expression-position if: both branches must produce the same
+        // type, and there must be an else branch (otherwise there's
+        // no value when cond is false).
+        let cond_ty: *Type = infer_expr(t, e.lhs);
+        if cond_ty != null && cond_ty.kind == TY_NAMED && !cond_ty.name.eq("bool") {
+            t.push_diag(e.line, e.column, 1, "if-cond-type",
+                "if condition must be `bool`, got `".concat(type_to_string(cond_ty)).concat("`"));
+        }
+        if e.operand == null {
+            t.push_diag(e.line, e.column, 1, "if-expr-needs-else",
+                "expression-position `if` requires an `else` branch");
+            return infer_expr(t, e.rhs);
+        }
+        let then_ty: *Type = infer_expr(t, e.rhs);
+        let else_ty: *Type = infer_expr(t, e.operand);
+        if then_ty != null && else_ty != null && !type_eq(then_ty, else_ty) {
+            t.push_diag(e.line, e.column, 1, "if-branch-type-mismatch",
+                "`if` branches produce different types: `"
+                    .concat(type_to_string(then_ty)).concat("` vs `")
+                    .concat(type_to_string(else_ty)).concat("`"));
+        }
+        if then_ty != null { return then_ty; }
+        return else_ty;
+    }
+
     if e.kind == EX_IDENT {
         // Locals + parameters always win; visibility check skipped for them.
         if t.scope.contains(e.str_val) {
