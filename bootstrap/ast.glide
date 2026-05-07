@@ -74,6 +74,7 @@ pub const EX_SIZEOF: int = 20;      // sizeof(T) — cast_to holds the target ty
 pub const EX_FNEXPR: int = 21;      // anonymous fn expression (no capture)
 pub const EX_MACRO_VAR: int = 22;   // `$x` placeholder inside a macro body (str_val = "x")
 pub const EX_IF: int = 23;          // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
+pub const EX_BLOCK: int = 24;       // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
 pub const EX_MATCH: int = 25;       // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
 
 // Binary op codes (subset; extend as needed)
@@ -149,6 +150,10 @@ pub struct Expr {
     // float literal.
     pub float_val: string,
 
+    // EX_BLOCK: stmts that run before the value is yielded. The yielded
+    // value lives in `operand`. The trailing `return val;` is stripped
+    // by the parser and its expr_value moved into `operand`.
+    pub block_stmts: *Vector<Stmt>,
     // EX_MATCH: match arms. Each arm's body is *Vector<Stmt>; if the body
     // is multi-stmt the LAST stmt must be `return val;` whose expr_value
     // is the arm's value. Single-expr arm bodies are stored as one ST_EXPR.
@@ -771,6 +776,16 @@ pub fn expr_match(scrut: *Expr, arms: *Vector<MatchArm>, line: int, col: int) ->
     e.column = col;
     e.lhs = scrut;
     e.match_arms = arms;
+    return e;
+}
+
+pub fn expr_block(stmts: *Vector<Stmt>, value: *Expr, line: int, col: int) -> *Expr {
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    e.kind = EX_BLOCK;
+    e.line = line;
+    e.column = col;
+    e.block_stmts = stmts;
+    e.operand = value;
     return e;
 }
 

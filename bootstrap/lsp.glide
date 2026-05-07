@@ -3201,6 +3201,12 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
             }
         }
     }
+    if e.block_stmts != null {
+        for let i: int = 0; i < e.block_stmts.len(); i++ {
+            let b: Stmt = e.block_stmts.get(i);
+            if stmt_uses_name(&b, name) { return true; }
+        }
+    }
     return false;
 }
 

@@ -944,6 +944,10 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if then_ty != null { return then_ty; }
         return infer_for_codegen(g, e.operand);
     }
+    if e.kind == EX_BLOCK {
+        if e.operand != null { return infer_for_codegen(g, e.operand); }
+        return null;
+    }
     if e.kind == EX_MATCH {
         if e.match_arms != null && e.match_arms.len() > 0 {
             let first: MatchArm = e.match_arms.get(0);
@@ -1893,6 +1897,21 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         print!(" : ");
         if e.operand != null { emit_expr(g, e.operand); } else { print!("0"); }
         print!(")");
+        return;
+    }
+    if e.kind == EX_BLOCK {
+        // GCC statement-expression `({ stmts; value; })`. Stmts run for
+        // side effects; trailing comma-expr yields the value.
+        print!("({ ");
+        if e.block_stmts != null {
+            for let i: int = 0; i < e.block_stmts.len(); i++ {
+                let b: Stmt = e.block_stmts.get(i);
+                emit_stmt(g, &b, 0);
+            }
+        }
+        print!("(");
+        if e.operand != null { emit_expr(g, e.operand); } else { print!("0"); }
+        print!("); })");
         return;
     }
     if e.kind == EX_MATCH {

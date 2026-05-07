@@ -1088,6 +1088,41 @@ fn parse_match_expr(p: *Parser) -> *Expr {
     return expr_match(scrut, arms, line, col);
 }
 
+// Expression-position block. `{ stmt; stmt; return val; }` produces
+// `val`. The trailing `return val;` MUST be the last stmt; everything
+// before it runs for side effects, and `val` is the block's value.
+fn parse_block_expr(p: *Parser) -> *Expr {
+    let line: int = p.current.line;
+    let col: int = p.current.column;
+    p.expect_op("{");
+    let stmts: *Vector<Stmt> = Vector::new();
+    while !p.at_op("}") && !p.at_eof() {
+        let s: *Stmt = parse_stmt(p);
+        if s != null { stmts.push(*s); }
+    }
+    p.expect_op("}");
+    let mut value: *Expr = null;
+    if stmts.len() > 0 {
+        let last: Stmt = stmts.get(stmts.len() - 1);
+        if last.kind == ST_RETURN && last.expr_value != null {
+            value = last.expr_value;
+            stmts.pop();
+        }
+    }
+    if value == null {
+        let d: ParseDiag = ParseDiag {
+            origin: "",
+            line: line,
+            col: col,
+            msg: "block expression must end with `return <expr>;`",
+        };
+        p.diags.push(d);
+        p.error_count = p.error_count + 1;
+        value = expr_int(0, line, col);
+    }
+    return expr_block(stmts, value, line, col);
+}
+
 // Expression-position `if`. Both branches must be a single expression
 // (`if c { e } else { e }`); the codegen lowers it to a C ternary.
 // Statement-position `if cond { stmts; }` keeps its existing
@@ -1580,6 +1615,13 @@ fn parse_prefix(p: *Parser) -> *Expr {
             let nm: string = p.expect_ident();
             return expr_macro_var(nm, line, col);
         }
+    }
+
+    // Block-as-expression: `{ stmts; return val; }`. Stmt-position `{`
+    // is consumed by parse_stmt before reaching here, so any `{` we see
+    // is an expression context.
+    if tok.kind == TOK_OP && tok.lexeme.eq("{") {
+        return parse_block_expr(p);
     }
 
     if tok.kind == TOK_INT {

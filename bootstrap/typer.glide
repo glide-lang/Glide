@@ -1149,6 +1149,21 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return else_ty;
     }
 
+    if e.kind == EX_BLOCK {
+        // Run lead-in stmts in a fresh borrow scope; the value's type is
+        // the type of the trailing expression.
+        let saved: int = enter_borrow_scope(t);
+        if e.block_stmts != null {
+            for let i: int = 0; i < e.block_stmts.len(); i++ {
+                let b: Stmt = e.block_stmts.get(i);
+                check_stmt(t, &b);
+            }
+        }
+        let v_ty: *Type = infer_expr(t, e.operand);
+        exit_borrow_scope(t, saved);
+        return v_ty;
+    }
+
     if e.kind == EX_MATCH {
         let scrut_ty: *Type = infer_expr(t, e.lhs);
         let mut result_ty: *Type = null;
