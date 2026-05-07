@@ -201,3 +201,123 @@ extern fn sleep_ms(ms: int);
 // TCP sockets live in `stdlib::net` - import the higher-level wrappers
 // from there. The raw C-runtime sockets are intentionally NOT exposed
 // through builtins to keep the auto-injected surface small.
+
+// ---- Per-keystroke arena allocator ---------------------------------------
+//
+// Bump allocator backing the LSP's per-keystroke parse/lower/type pipeline.
+// Pattern lifted from rust-analyzer's `la_arena` and gopls' snapshot model:
+// every Stmt / Expr / Type / Vector / HashMap allocated while an arena is
+// active comes from chained chunks owned by that arena, and the whole
+// arena is dropped in bulk when the keystroke finishes.
+//
+// Outside the LSP path (compiler/codegen/fmt/test/etc) the arena is null
+// and __glide_palloc falls back to plain calloc, so the build / run / fmt
+// / check pipelines keep their existing heap behaviour. Vector and HashMap
+// stamp themselves "arena-backed" at construction time when an arena is
+// active, so subsequent .push / .resize / .free do the right thing for
+// the buffer they own.
+c_raw! {
+    typedef struct PArena {
+        unsigned char* head;
+        int cap;
+        int used;
+        struct PArena* next;
+    } PArena;
+
+    static PArena* g_palloc_top = NULL;
+
+    static void __glide_palloc_grow(int min_size) {
+        int new_cap = (g_palloc_top != NULL) ? g_palloc_top->cap * 2 : (16 * 1024 * 1024);
+        if (new_cap < min_size + 1024) new_cap = min_size + 1024;
+        PArena* nc = (PArena*)malloc(sizeof(PArena));
+        nc->cap = new_cap;
+        nc->head = (unsigned char*)malloc((size_t)new_cap);
+        nc->used = 0;
+        nc->next = g_palloc_top;
+        g_palloc_top = nc;
+    }
+
+    void* __glide_palloc(int size) {
+        if (size <= 0) size = 1;
+        if (g_palloc_top == NULL) {
+            return calloc(1, (size_t)size);
+        }
+        int aligned = (size + 7) & ~7;
+        if (g_palloc_top->used + aligned > g_palloc_top->cap) {
+            __glide_palloc_grow(aligned);
+        }
+        void* p = g_palloc_top->head + g_palloc_top->used;
+        g_palloc_top->used += aligned;
+        memset(p, 0, (size_t)size);
+        return p;
+    }
+
+    void __glide_palloc_begin(void) {
+        if (g_palloc_top != NULL) {
+            PArena* a = g_palloc_top;
+            while (a != NULL) { PArena* n = a->next; free(a->head); free(a); a = n; }
+            g_palloc_top = NULL;
+        }
+        __glide_palloc_grow(16 * 1024 * 1024);
+    }
+
+    void __glide_palloc_end_and_free(void) {
+        PArena* a = g_palloc_top;
+        while (a != NULL) {
+            PArena* n = a->next;
+            free(a->head);
+            free(a);
+            a = n;
+        }
+        g_palloc_top = NULL;
+    }
+
+    int __glide_palloc_active(void) {
+        return g_palloc_top != NULL ? 1 : 0;
+    }
+
+    void* __glide_palloc_get(void) { return (void*)g_palloc_top; }
+    void __glide_palloc_set(void* a) { g_palloc_top = (PArena*)a; }
+
+    int __glide_palloc_owns(void* p) {
+        if (p == NULL) return 0;
+        PArena* a = g_palloc_top;
+        while (a != NULL) {
+            unsigned char* base = a->head;
+            if ((unsigned char*)p >= base && (unsigned char*)p < base + a->cap) return 1;
+            a = a->next;
+        }
+        return 0;
+    }
+
+    void __glide_pfree(void* p) {
+        if (p == NULL) return;
+        if (__glide_palloc_owns(p)) return;
+        free(p);
+    }
+
+    int __glide_palloc_total_bytes(void) {
+        int total = 0;
+        PArena* a = g_palloc_top;
+        while (a != NULL) { total += a->used; a = a->next; }
+        return total;
+    }
+
+    int __glide_palloc_chunks(void) {
+        int n = 0;
+        PArena* a = g_palloc_top;
+        while (a != NULL) { n++; a = a->next; }
+        return n;
+    }
+}
+
+pub extern fn __glide_palloc(size: int) -> *void;
+pub extern fn __glide_palloc_begin();
+pub extern fn __glide_palloc_end_and_free();
+pub extern fn __glide_palloc_active() -> int;
+pub extern fn __glide_palloc_get() -> *void;
+pub extern fn __glide_palloc_set(a: *void);
+pub extern fn __glide_palloc_owns(p: *void) -> int;
+pub extern fn __glide_pfree(p: *void);
+pub extern fn __glide_palloc_total_bytes() -> int;
+pub extern fn __glide_palloc_chunks() -> int;

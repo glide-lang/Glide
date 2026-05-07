@@ -22,6 +22,10 @@ pub struct Vector<T> {
     len: int,
     /// Allocation size in elements. Always a power of two once non-zero.
     cap: int,
+    /// Set when `data` was bump-allocated by the active arena (LSP path)
+    /// rather than via libc malloc. Free / re-grow paths skip libc free
+    /// when this is true; the arena reclaims everything in bulk.
+    is_arena: bool,
 }
 
 impl<T> Vector<T> {
@@ -32,10 +36,17 @@ impl<T> Vector<T> {
     /// defer v.free();
     /// ```
     fn new() -> *Vector<T> {
-        let v: *Vector<T> = malloc(sizeof(Vector<T>)) as *Vector<T>;
+        let arena: bool = __glide_palloc_active() != 0;
+        let v: *Vector<T>;
+        if arena {
+            v = __glide_palloc(sizeof(Vector<T>)) as *Vector<T>;
+        } else {
+            v = malloc(sizeof(Vector<T>)) as *Vector<T>;
+        }
         v.data = null;
         v.len = 0;
         v.cap = 0;
+        v.is_arena = arena;
         return v;
     }
 
@@ -49,12 +60,23 @@ impl<T> Vector<T> {
     /// for let i: int = 0; i < 1024; i++ { v.push(i); }
     /// ```
     fn with_cap(cap: int) -> *Vector<T> {
-        let v: *Vector<T> = malloc(sizeof(Vector<T>)) as *Vector<T>;
+        let arena: bool = __glide_palloc_active() != 0;
+        let v: *Vector<T>;
+        if arena {
+            v = __glide_palloc(sizeof(Vector<T>)) as *Vector<T>;
+        } else {
+            v = malloc(sizeof(Vector<T>)) as *Vector<T>;
+        }
         v.data = null;
         v.len = 0;
         v.cap = 0;
+        v.is_arena = arena;
         if cap > 0 {
-            v.data = malloc(cap * sizeof(T)) as *T;
+            if arena {
+                v.data = __glide_palloc(cap * sizeof(T)) as *T;
+            } else {
+                v.data = malloc(cap * sizeof(T)) as *T;
+            }
             v.cap = cap;
         }
         return v;
@@ -73,11 +95,19 @@ impl<T> Vector<T> {
         if self.len == self.cap {
             let mut new_cap: int = 4;
             if self.cap > 0 { new_cap = self.cap * 2; }
-            let new_data: *T = malloc(new_cap * sizeof(T)) as *T;
+            let new_data: *T;
+            if self.is_arena {
+                new_data = __glide_palloc(new_cap * sizeof(T)) as *T;
+            } else {
+                new_data = malloc(new_cap * sizeof(T)) as *T;
+            }
             for let i: int = 0; i < self.len; i++ {
                 new_data[i] = self.data[i];
             }
-            if self.cap > 0 { free(self.data as *void); }
+            // Arena-backed buffers can't be free()d individually — the
+            // arena reclaims them in bulk on reset. Heap-backed ones still
+            // need explicit free to avoid a leak.
+            if !self.is_arena && self.cap > 0 { free(self.data as *void); }
             self.data = new_data;
             self.cap = new_cap;
         }
@@ -251,6 +281,9 @@ impl<T> Vector<T> {
     /// // ...use v...
     /// ```
     fn free(self: *Vector<T>) {
+        // Arena-allocated vectors are owned by the arena; the per-keystroke
+        // reset frees them in bulk, so this method is a no-op for them.
+        if self.is_arena { return; }
         if self.cap > 0 { free(self.data as *void); }
         free(self as *void);
     }

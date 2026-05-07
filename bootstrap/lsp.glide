@@ -469,6 +469,21 @@ fn stmt_lower_free_children(s: *Stmt) {
 }
 
 fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
+    // Drop the previous keystroke's arena and start a fresh one. Every
+    // Vector / HashMap / AST node allocated by the pipeline below is
+    // bump-allocated from this arena and reclaimed in bulk on the next
+    // call. Cache populates and the rest of LspState live on libc heap
+    // (load_into_with_cache temporarily disables the arena while
+    // populating), so they survive the reset.
+    //
+    // Between keystrokes the arena stays alive — hover / completion /
+    // goto requests read doc.stmts pointers into it. The LSP main loop
+    // is single-threaded, so the brief window between
+    // end_and_free / begin (during which doc.stmts is dangling) cannot
+    // overlap with another request.
+    __glide_palloc_end_and_free();
+    __glide_palloc_begin();
+
     let path: string = uri_to_path(uri);
     let stmts: *Vector<Stmt> = Vector::new();
     let loaded: *HashMap<bool> = HashMap::new();
@@ -507,15 +522,14 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     run_extra_analyses(t, stmts);
 
     // Save the parsed stmts on the doc so hover / document symbol / goto can
-    // query them without re-parsing. Free the prior reparse's vector first
-    // (deep-walk so the lower-block-allocated nested Vectors don't pile up).
+    // query them without re-parsing. The previous reparse's vector lived
+    // in the previous arena, which end_and_free above already dropped —
+    // any dangling pointer in d.stmts is overwritten now without touching
+    // the freed memory.
     if state.docs.contains(uri) {
         let d: LspDoc = state.docs.get(uri);
-        if d.stmts != null { stmt_vec_lower_free(d.stmts); }
         d.stmts = stmts;
         state.docs.insert(uri, d);
-    } else {
-        stmt_vec_lower_free(stmts);
     }
 
     // Only publish diagnostics whose origin matches the user's file path.
@@ -547,13 +561,11 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     let uri: string = json_as_string(json_get(td, "uri"));
     let text: string = json_as_string(json_get(td, "text"));
     let version: int = json_as_int(json_get(td, "version"));
-    // Re-open: drop the prior stmts vector so it doesn't leak.
-    if state.docs.contains(uri) {
-        let prev: LspDoc = state.docs.get(uri);
-        if prev.stmts != null { stmt_vec_lower_free(prev.stmts); }
-    }
-    let empty_stmts: *Vector<Stmt> = Vector::new();
-    let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: empty_stmts };
+    // Insert with stmts=null. run_analysis_and_publish brings up the
+    // per-keystroke arena and populates stmts from inside it. Allocating
+    // a Vector here would land in the previous keystroke's arena and
+    // dangle once end_and_free fires.
+    let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: null };
     state.docs.insert(uri, doc);
     run_analysis_and_publish(uri, text, state);
 }
@@ -571,14 +583,15 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
         // didChange w/ empty diff in incremental mode would land here; ignore.
         return;
     }
-    // Drop the previous reparse's stmts vector — without this every
-    // keystroke leaks one Vector container.
+    // Update text + version on the existing doc, leaving stmts pointing
+    // at the previous arena's vector. run_analysis_and_publish frees that
+    // arena and re-populates stmts from inside the fresh one.
+    let prev_stmts: *Vector<Stmt> = null;
     if state.docs.contains(uri) {
         let prev: LspDoc = state.docs.get(uri);
-        if prev.stmts != null { stmt_vec_lower_free(prev.stmts); }
+        prev_stmts = prev.stmts;
     }
-    let empty_stmts: *Vector<Stmt> = Vector::new();
-    let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: empty_stmts };
+    let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: prev_stmts };
     state.docs.insert(uri, doc);
     run_analysis_and_publish(uri, text, state);
 }

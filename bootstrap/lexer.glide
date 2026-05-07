@@ -58,7 +58,7 @@ impl Lexer {
     }
 
     pub fn free(self: *Lexer) {
-        free(self as *void);
+        __glide_pfree(self as *void);
     }
 
     fn peek(self: *Lexer) -> char {

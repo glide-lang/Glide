@@ -53,14 +53,17 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
             let m: Stmt = imp.impl_methods.get(k);
             if m.name != null { provided.insert(m.name, true); }
         }
-        // Append defaults that the impl didn't override.
+        // Collect defaults we actually need to add — without mutating the
+        // impl's existing impl_methods Vector, which the LSP cache may
+        // share across multiple parses of the importing file.
+        let to_add: *Vector<Stmt> = Vector::new();
         for let k: int = 0; k < trait_def.impl_methods.len(); k++ {
             let req: Stmt = trait_def.impl_methods.get(k);
             if req.name == null || req.name.eq("") { continue; }
             if req.fn_body == null { continue; }
             if provided.contains(req.name) { continue; }
             // Clone the method shape; substitute Self in the copy's signature.
-            let copy: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+            let copy: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
             *copy = req;
             // Self substitution only applies to the new copy's params/return,
             // and only when the impl target is named.
@@ -71,8 +74,19 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
                 let sub: Stmt = single.get(0);
                 *copy = sub;
             }
-            imp.impl_methods.push(*copy);
+            to_add.push(*copy);
         }
+        if to_add.len() > 0 {
+            let merged: *Vector<Stmt> = Vector::new();
+            for let k: int = 0; k < imp.impl_methods.len(); k++ {
+                merged.push(imp.impl_methods.get(k));
+            }
+            for let k: int = 0; k < to_add.len(); k++ {
+                merged.push(to_add.get(k));
+            }
+            imp.impl_methods = merged;
+        }
+        to_add.free();
         stmts.set(i, imp);
     }
 }
@@ -98,11 +112,16 @@ fn lower_stmt(s: *Stmt) -> *Stmt {
     if s.fn_body != null   { s.fn_body   = lower_block(s.fn_body); }
     if s.for_init != null  { s.for_init  = lower_stmt(s.for_init); }
     if s.impl_methods != null {
+        // Build a fresh Vector instead of mutating the existing one — the
+        // LSP cache shares impl_methods Vectors across parses, and an
+        // in-place .set() corrupts them.
+        let new_methods: *Vector<Stmt> = Vector::new();
         for let j: int = 0; j < s.impl_methods.len(); j++ {
             let m: Stmt = s.impl_methods.get(j);
             let lm: *Stmt = lower_stmt(&m);
-            if lm != null { s.impl_methods.set(j, *lm); }
+            if lm != null { new_methods.push(*lm); }
         }
+        s.impl_methods = new_methods;
     }
     return s;
 }
@@ -168,7 +187,7 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     let inner_for: *Stmt = stmt_for(init, cond, step, inner_body, line, col);
     block_body.push(*inner_for);
 
-    let block: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let block: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     block.kind = ST_BLOCK;
     block.line = line;
     block.column = col;

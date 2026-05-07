@@ -232,6 +232,11 @@ pub fn load_into_str_with_cache(stmts: *Vector<Stmt>, src: string, origin: strin
 // LSP variant: read `path` from disk and merge into `stmts`. On cache
 // hit reuse the prior parse_program output; on miss parse once and add
 // to the cache. The cache becomes the owner — never free a cached vec.
+//
+// Cache populates run with the per-keystroke arena temporarily disabled
+// so cached Vectors / AST nodes go to libc heap and survive across
+// arena resets. Without this, the next keystroke's arena.reset would
+// dangle every cached pointer.
 pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
     if loaded.contains(path) { return; }
     loaded.insert(path, true);
@@ -244,6 +249,8 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
     } else {
         let src: string = read_file(path);
         if src.eq("") { return; }
+        let saved_arena: *void = __glide_palloc_get();
+        __glide_palloc_set(null);
         let lex: *Lexer = Lexer::new(src);
         let p: *Parser = Parser::new(lex);
         parsed = parse_program(p);
@@ -256,6 +263,7 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         }
         p.free();
         lex.free();
+        __glide_palloc_set(saved_arena);
         if cache != null {
             cache.insert(path, parsed);
             from_cache = true;
@@ -334,7 +342,10 @@ pub fn load_builtins_dir_with_cache(stmts: *Vector<Stmt>, dir: string, loaded: *
     let listing: string = __glide_list_dir(dir, ".glide");
     if listing.eq("") { return; }
     let builtins: string = dir.concat("/builtins.glide");
-    if !read_file(builtins).eq("") {
+    // Existence check via stat instead of read_file — read_file would
+    // pull the entire file body into a heap string each keystroke just
+    // to peek at "is it non-empty".
+    if __glide_file_exists(builtins) {
         load_into_with_cache(stmts, builtins, loaded, pdiags, cache);
     }
     let names: *Vector<string> = listing.split("\n");

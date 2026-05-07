@@ -226,7 +226,7 @@ pub struct Typer {
 
 impl Typer {
     pub fn new() -> *Typer {
-        let t: *Typer = malloc(sizeof(Typer)) as *Typer;
+        let t: *Typer = __glide_palloc(sizeof(Typer)) as *Typer;
         let fns: *HashMap<FnSig> = HashMap::new();
         let structs: *HashMap<bool> = HashMap::new();
         let scope: *HashMap<Type> = HashMap::new();
@@ -295,7 +295,7 @@ impl Typer {
         self.field_pub.free();
         self.struct_origin.free();
         self.impl_set.free();
-        free(self as *void);
+        __glide_pfree(self as *void);
     }
 
     fn push_diag_tag(self: *Typer, line: int, col: int, severity: int, code: string, msg: string, tag: int) {
@@ -1031,7 +1031,7 @@ fn chan_inner(t: *Type) -> *Type {
     if !x.name.eq("chan") { return null; }
     if x.args == null || x.args.len() == 0 { return null; }
     let inner: Type = x.args.get(0);
-    let p: *Type = malloc(sizeof(Type)) as *Type;
+    let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
     *p = inner;
     return p;
 }
@@ -1049,7 +1049,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // Locals + parameters always win; visibility check skipped for them.
         if t.scope.contains(e.str_val) {
             let ty: Type = t.scope.get(e.str_val);
-            let p: *Type = malloc(sizeof(Type)) as *Type;
+            let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
             *p = ty;
             return p;
         }
@@ -1061,7 +1061,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 return null;
             }
             let ty: Type = t.module_scope.get(e.str_val);
-            let p: *Type = malloc(sizeof(Type)) as *Type;
+            let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
             *p = ty;
             return p;
         }
@@ -1183,7 +1183,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     if nargs != 0 {
                         t.err(e.line, e.column, "`chan.recv` takes no arguments");
                     }
-                    let p: *Type = malloc(sizeof(Type)) as *Type;
+                    let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
                     *p = *inner;
                     return p;
                 }

@@ -31,6 +31,10 @@ pub struct HashMap<V> {
     len: int,
     /// Allocation size in slots. Always a power of two once non-zero.
     cap: int,
+    /// Set when the slot buffers were bump-allocated by the active arena
+    /// (LSP path) rather than via libc malloc. Resize / free skip libc free
+    /// when this is true; the arena reclaims everything in bulk.
+    is_arena: bool,
 }
 
 impl<V> HashMap<V> {
@@ -41,12 +45,19 @@ impl<V> HashMap<V> {
     /// defer m.free();
     /// ```
     fn new() -> *HashMap<V> {
-        let m: *HashMap<V> = malloc(sizeof(HashMap<V>)) as *HashMap<V>;
+        let arena: bool = __glide_palloc_active() != 0;
+        let m: *HashMap<V>;
+        if arena {
+            m = __glide_palloc(sizeof(HashMap<V>)) as *HashMap<V>;
+        } else {
+            m = malloc(sizeof(HashMap<V>)) as *HashMap<V>;
+        }
         m.keys = null;
         m.values = null;
         m.occupied = null;
         m.len = 0;
         m.cap = 0;
+        m.is_arena = arena;
         return m;
     }
 
@@ -114,9 +125,15 @@ impl<V> HashMap<V> {
         let old_occupied: *bool = self.occupied;
         let old_cap: int = self.cap;
 
-        self.keys = malloc(new_cap * sizeof(string)) as *string;
-        self.values = malloc(new_cap * sizeof(V)) as *V;
-        self.occupied = malloc(new_cap * sizeof(bool)) as *bool;
+        if self.is_arena {
+            self.keys = __glide_palloc(new_cap * sizeof(string)) as *string;
+            self.values = __glide_palloc(new_cap * sizeof(V)) as *V;
+            self.occupied = __glide_palloc(new_cap * sizeof(bool)) as *bool;
+        } else {
+            self.keys = malloc(new_cap * sizeof(string)) as *string;
+            self.values = malloc(new_cap * sizeof(V)) as *V;
+            self.occupied = malloc(new_cap * sizeof(bool)) as *bool;
+        }
         self.cap = new_cap;
         self.len = 0;
         for let i: int = 0; i < new_cap; i++ {
@@ -129,7 +146,9 @@ impl<V> HashMap<V> {
             }
         }
 
-        if old_cap > 0 {
+        // Arena buffers can't be free()d individually — the arena reclaims
+        // them on reset. Heap-backed ones still need explicit free.
+        if !self.is_arena && old_cap > 0 {
             free(old_keys as *void);
             free(old_values as *void);
             free(old_occupied as *void);
@@ -214,6 +233,9 @@ impl<V> HashMap<V> {
     /// defer m.free();
     /// ```
     fn free(self: *HashMap<V>) {
+        // Arena-allocated maps are owned by the arena; the per-keystroke
+        // reset frees them in bulk, so this method is a no-op for them.
+        if self.is_arena { return; }
         if self.cap > 0 {
             free(self.keys as *void);
             free(self.values as *void);

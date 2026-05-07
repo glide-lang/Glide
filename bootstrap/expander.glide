@@ -187,14 +187,14 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>) -> *
                 }
                 if call.args == null || call.args.len() == 0 { return null; }
                 let recv_arg: Expr = call.args.get(0);
-                let recv_p: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+                let recv_p: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
                 *recv_p = recv_arg;
                 let rest: *Vector<Expr> = Vector::new();
                 for let k: int = 1; k < call.args.len(); k++ {
                     let a: Expr = call.args.get(k);
                     rest.push(a);
                 }
-                let synth: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+                let synth: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
                 *synth = *call;
                 synth.args = rest;
                 return expand_with_def_recv(synth, &entry.def, recv_p);
@@ -274,7 +274,7 @@ fn expand_with_def_recv(call: *Expr, def: *Stmt, recv: *Expr) -> *Vector<Stmt> {
         let bs: Stmt = body.get(i);
         block_body.push(bs);
     }
-    let block: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let block: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     block.kind = ST_BLOCK;
     block.line = call.line;
     block.column = call.column;
@@ -342,7 +342,7 @@ fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: int, sel
         return out;
     }
     // Default: shallow-copy then substitute children.
-    let cloned: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let cloned: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     *cloned = *s;
     if cloned.let_value != null { cloned.let_value = macro_subst_expr(cloned.let_value, bindings, rep_idx, self_name); }
     if cloned.expr_value != null { cloned.expr_value = macro_subst_expr(cloned.expr_value, bindings, rep_idx, self_name); }
@@ -353,7 +353,7 @@ fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: int, sel
         let inits: *Vector<Stmt> = macro_subst_stmt(cloned.for_init, bindings, rep_idx, self_name);
         if inits.len() > 0 {
             let init0: Stmt = inits.get(0);
-            let copy: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+            let copy: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
             *copy = init0;
             cloned.for_init = copy;
         }
@@ -391,7 +391,7 @@ fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: int, sel
     if e.kind == EX_IDENT && !self_name.eq("") && e.str_val.eq("self") {
         return expr_ident(self_name, e.line, e.column);
     }
-    let cloned: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let cloned: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     *cloned = *e;
     if cloned.lhs != null { cloned.lhs = macro_subst_expr(cloned.lhs, bindings, rep_idx, self_name); }
     if cloned.rhs != null { cloned.rhs = macro_subst_expr(cloned.rhs, bindings, rep_idx, self_name); }
@@ -420,7 +420,7 @@ fn lookup_var(name: string, bindings: *Vector<MacroBinding>, rep_idx: int) -> *E
             idx = rep_idx;
         }
         let chosen: Expr = b.args.get(idx);
-        let p: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+        let p: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
         *p = chosen;
         return p;
     }

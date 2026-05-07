@@ -32,7 +32,7 @@ pub struct Type {
 }
 
 pub fn ty_fnptr(params: *Vector<Type>, ret: *Type) -> *Type {
-    let t: *Type = calloc(1, sizeof(Type)) as *Type;
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_FNPTR;
     t.args = params;
     t.fnptr_ret = ret;
@@ -40,7 +40,7 @@ pub fn ty_fnptr(params: *Vector<Type>, ret: *Type) -> *Type {
 }
 
 pub fn ty_generic(name: string, args: *Vector<Type>) -> *Type {
-    let t: *Type = calloc(1, sizeof(Type)) as *Type;
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_GENERIC;
     t.name = name;
     t.inner = null;
@@ -324,7 +324,7 @@ pub struct Stmt {
 // ---- Constructors --------------------------------------------------------
 
 pub fn ty_named(name: string) -> *Type {
-    let t: *Type = calloc(1, sizeof(Type)) as *Type;
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_NAMED;
     t.name = name;
     t.inner = null;
@@ -332,14 +332,14 @@ pub fn ty_named(name: string) -> *Type {
 }
 
 pub fn ty_result(inner: *Type) -> *Type {
-    let t: *Type = calloc(1, sizeof(Type)) as *Type;
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_RESULT;
     t.inner = inner;
     return t;
 }
 
 pub fn ty_pointer(inner: *Type) -> *Type {
-    let t: *Type = calloc(1, sizeof(Type)) as *Type;
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_POINTER;
     t.name = "";
     t.inner = inner;
@@ -347,7 +347,7 @@ pub fn ty_pointer(inner: *Type) -> *Type {
 }
 
 pub fn expr_int(n: i64, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_INT;
     e.line = line;
     e.column = col;
@@ -356,7 +356,7 @@ pub fn expr_int(n: i64, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_float(lexeme: string, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_FLOAT;
     e.line = line;
     e.column = col;
@@ -365,7 +365,7 @@ pub fn expr_float(lexeme: string, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_string(s: string, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_STRING;
     e.line = line;
     e.column = col;
@@ -374,7 +374,7 @@ pub fn expr_string(s: string, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_ident(name: string, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_IDENT;
     e.line = line;
     e.column = col;
@@ -383,7 +383,7 @@ pub fn expr_ident(name: string, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_bool(b: bool, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_BOOL;
     e.line = line;
     e.column = col;
@@ -392,7 +392,7 @@ pub fn expr_bool(b: bool, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_binary(op: int, lhs: *Expr, rhs: *Expr) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_BINARY;
     e.line = lhs.line;
     e.column = lhs.column;
@@ -403,7 +403,7 @@ pub fn expr_binary(op: int, lhs: *Expr, rhs: *Expr) -> *Expr {
 }
 
 pub fn expr_call(callee: *Expr, args: *Vector<Expr>) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_CALL;
     e.line = callee.line;
     e.column = callee.column;
@@ -413,7 +413,7 @@ pub fn expr_call(callee: *Expr, args: *Vector<Expr>) -> *Expr {
 }
 
 pub fn stmt_let(name: string, ty: *Type, value: *Expr, is_mut: bool, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_LET;
     s.line = line;
     s.column = col;
@@ -469,7 +469,7 @@ pub fn strip_ptr(t: *Type) -> *Type {
 }
 
 pub fn stmt_return(v: *Expr, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_RETURN;
     s.line = line;
     s.column = col;
@@ -478,7 +478,7 @@ pub fn stmt_return(v: *Expr, line: int, col: int) -> *Stmt {
 }
 
 pub fn stmt_expr(e: *Expr) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_EXPR;
     if e != null {
         s.line = e.line;
@@ -489,7 +489,7 @@ pub fn stmt_expr(e: *Expr) -> *Stmt {
 }
 
 pub fn stmt_fn(name: string, params: *Vector<Param>, ret_ty: *Type, body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_FN;
     s.line = line;
     s.column = col;
@@ -501,7 +501,7 @@ pub fn stmt_fn(name: string, params: *Vector<Param>, ret_ty: *Type, body: *Vecto
 }
 
 pub fn stmt_struct(name: string, fields: *Vector<Field>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_STRUCT;
     s.line = line;
     s.column = col;
@@ -511,7 +511,7 @@ pub fn stmt_struct(name: string, fields: *Vector<Field>, line: int, col: int) ->
 }
 
 pub fn stmt_impl(target: *Type, methods: *Vector<Stmt>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_IMPL;
     s.line = line;
     s.column = col;
@@ -521,7 +521,7 @@ pub fn stmt_impl(target: *Type, methods: *Vector<Stmt>, line: int, col: int) -> 
 }
 
 pub fn stmt_if(cond: *Expr, then_body: *Vector<Stmt>, else_body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_IF;
     s.line = line;
     s.column = col;
@@ -532,7 +532,7 @@ pub fn stmt_if(cond: *Expr, then_body: *Vector<Stmt>, else_body: *Vector<Stmt>, 
 }
 
 pub fn stmt_while(cond: *Expr, body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_WHILE;
     s.line = line;
     s.column = col;
@@ -542,7 +542,7 @@ pub fn stmt_while(cond: *Expr, body: *Vector<Stmt>, line: int, col: int) -> *Stm
 }
 
 pub fn stmt_for(init: *Stmt, cond: *Expr, step: *Expr, body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_FOR;
     s.line = line;
     s.column = col;
@@ -554,7 +554,7 @@ pub fn stmt_for(init: *Stmt, cond: *Expr, step: *Expr, body: *Vector<Stmt>, line
 }
 
 pub fn stmt_break(line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_BREAK;
     s.line = line;
     s.column = col;
@@ -562,7 +562,7 @@ pub fn stmt_break(line: int, col: int) -> *Stmt {
 }
 
 pub fn stmt_continue(line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_CONTINUE;
     s.line = line;
     s.column = col;
@@ -570,7 +570,7 @@ pub fn stmt_continue(line: int, col: int) -> *Stmt {
 }
 
 pub fn stmt_const(name: string, ty: *Type, value: *Expr, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_CONST;
     s.line = line;
     s.column = col;
@@ -581,7 +581,7 @@ pub fn stmt_const(name: string, ty: *Type, value: *Expr, line: int, col: int) ->
 }
 
 pub fn stmt_import(path: string, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_IMPORT;
     s.line = line;
     s.column = col;
@@ -590,7 +590,7 @@ pub fn stmt_import(path: string, line: int, col: int) -> *Stmt {
 }
 
 pub fn stmt_enum(name: string, variants: *Vector<EnumVariant>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_ENUM;
     s.line = line;
     s.column = col;
@@ -600,7 +600,7 @@ pub fn stmt_enum(name: string, variants: *Vector<EnumVariant>, line: int, col: i
 }
 
 pub fn stmt_spawn(call: *Expr, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_SPAWN;
     s.line = line;
     s.column = col;
@@ -609,7 +609,7 @@ pub fn stmt_spawn(call: *Expr, line: int, col: int) -> *Stmt {
 }
 
 pub fn stmt_match(scrutinee: *Expr, arms: *Vector<MatchArm>, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_MATCH;
     s.line = line;
     s.column = col;
@@ -619,7 +619,7 @@ pub fn stmt_match(scrutinee: *Expr, arms: *Vector<MatchArm>, line: int, col: int
 }
 
 pub fn stmt_craw(body: string, line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_CRAW;
     s.line = line;
     s.column = col;
@@ -628,7 +628,7 @@ pub fn stmt_craw(body: string, line: int, col: int) -> *Stmt {
 }
 
 pub fn stmt_asm(line: int, col: int) -> *Stmt {
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_ASM;
     s.line = line;
     s.column = col;
@@ -648,7 +648,7 @@ pub fn stmt_asm(line: int, col: int) -> *Stmt {
 }
 
 pub fn expr_unary(op: int, operand: *Expr, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_UNARY;
     e.line = line;
     e.column = col;
@@ -658,7 +658,7 @@ pub fn expr_unary(op: int, operand: *Expr, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_assign(op: int, lhs: *Expr, rhs: *Expr) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_ASSIGN;
     e.line = lhs.line;
     e.column = lhs.column;
@@ -669,7 +669,7 @@ pub fn expr_assign(op: int, lhs: *Expr, rhs: *Expr) -> *Expr {
 }
 
 pub fn expr_member(obj: *Expr, field: string) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_MEMBER;
     e.line = obj.line;
     e.column = obj.column;
@@ -679,7 +679,7 @@ pub fn expr_member(obj: *Expr, field: string) -> *Expr {
 }
 
 pub fn expr_index(obj: *Expr, idx: *Expr) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_INDEX;
     e.line = obj.line;
     e.column = obj.column;
@@ -689,7 +689,7 @@ pub fn expr_index(obj: *Expr, idx: *Expr) -> *Expr {
 }
 
 pub fn expr_cast(inner: *Expr, target: *Type) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_CAST;
     e.line = inner.line;
     e.column = inner.column;
@@ -699,7 +699,7 @@ pub fn expr_cast(inner: *Expr, target: *Type) -> *Expr {
 }
 
 pub fn expr_path(ty: string, member: string, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_PATH;
     e.line = line;
     e.column = col;
@@ -709,7 +709,7 @@ pub fn expr_path(ty: string, member: string, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_macro(name: string, args: *Vector<Expr>, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_MACRO;
     e.line = line;
     e.column = col;
@@ -720,7 +720,7 @@ pub fn expr_macro(name: string, args: *Vector<Expr>, line: int, col: int) -> *Ex
 }
 
 pub fn expr_macro_var(name: string, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_MACRO_VAR;
     e.line = line;
     e.column = col;
@@ -729,7 +729,7 @@ pub fn expr_macro_var(name: string, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_char(c: char, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_CHAR;
     e.line = line;
     e.column = col;
@@ -738,7 +738,7 @@ pub fn expr_char(c: char, line: int, col: int) -> *Expr {
 }
 
 pub fn expr_null(line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_NULL;
     e.line = line;
     e.column = col;
@@ -746,7 +746,7 @@ pub fn expr_null(line: int, col: int) -> *Expr {
 }
 
 pub fn expr_postinc(inner: *Expr) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_POSTINC;
     e.line = inner.line;
     e.column = inner.column;
@@ -755,7 +755,7 @@ pub fn expr_postinc(inner: *Expr) -> *Expr {
 }
 
 pub fn expr_fnexpr(params: *Vector<Param>, ret_ty: *Type, body: *Vector<Stmt>, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_FNEXPR;
     e.line = line;
     e.column = col;
@@ -766,7 +766,7 @@ pub fn expr_fnexpr(params: *Vector<Param>, ret_ty: *Type, body: *Vector<Stmt>, l
 }
 
 pub fn expr_postdec(inner: *Expr) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_POSTDEC;
     e.line = inner.line;
     e.column = inner.column;
@@ -780,7 +780,7 @@ pub struct StructLitField {
 }
 
 pub fn expr_struct_lit(type_name: string, names: *Vector<string>, values: *Vector<Expr>, line: int, col: int) -> *Expr {
-    let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_STRUCT_LIT;
     e.line = line;
     e.column = col;

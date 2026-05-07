@@ -44,7 +44,7 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(lex: *Lexer) -> *Parser {
-        let p: *Parser = malloc(sizeof(Parser)) as *Parser;
+        let p: *Parser = __glide_palloc(sizeof(Parser)) as *Parser;
         p.lex = lex;
         p.current = lex.next_token();
         p.peek = lex.next_token();
@@ -57,7 +57,7 @@ impl Parser {
 
     pub fn free(self: *Parser) {
         if self.diags != null { self.diags.free(); }
-        free(self as *void);
+        __glide_pfree(self as *void);
     }
 
     fn advance(self: *Parser) -> Token {
@@ -280,7 +280,7 @@ fn parse_macro_def(p: *Parser) -> *Stmt {
     } else {
         body = parse_block(p);
     }
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_MACRO_DEF;
     s.line = line;
     s.column = col;
@@ -554,7 +554,7 @@ fn parse_trait(p: *Parser) -> *Stmt {
         }
     }
     p.expect_op("}");
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_TRAIT;
     s.line = line;
     s.column = col;
@@ -829,7 +829,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
             p.advance();
         }
         p.expect_op("*");
-        let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+        let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
         s.kind = ST_MACRO_REP;
         s.line = line;
         s.column = col;
@@ -859,7 +859,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         p.advance();
         let e: *Expr = parse_expr(p, 0);
         p.expect_op(";");
-        let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+        let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
         s.kind = ST_DEFER;
         s.line = line;
         s.column = col;
@@ -900,7 +900,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
     }
     if p.at_op("{") {
         let body: *Vector<Stmt> = parse_block(p);
-        let s: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+        let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
         s.kind = ST_BLOCK;
         s.then_body = body;
         return s;
@@ -1070,7 +1070,7 @@ fn parse_while(p: *Parser) -> *Stmt {
         let recv: *Expr = parse_expr(p, 0);
         p.no_struct_lit = saved;
         let body: *Vector<Stmt> = parse_block(p);
-        let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+        let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
         s.kind = ST_WHILE_RECV;
         s.line = line;
         s.column = col;
@@ -1173,7 +1173,7 @@ fn parse_for_in(p: *Parser, line: int, col: int) -> *Stmt {
     p.no_struct_lit = saved;
     let body: *Vector<Stmt> = parse_block(p);
 
-    let s: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_FOR_IN;
     s.line = line;
     s.column = col;
@@ -1204,7 +1204,7 @@ fn parse_type(p: *Parser) -> *Type {
     if p.at_kw("dyn") {
         p.advance();
         let name: string = p.expect_ident();
-        let t: *Type = calloc(1, sizeof(Type)) as *Type;
+        let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
         t.kind = TY_DYN;
         t.name = name;
         return t;
@@ -1212,13 +1212,13 @@ fn parse_type(p: *Parser) -> *Type {
     if p.eat_op("&") {
         if p.eat_kw("mut") {
             let inner: *Type = parse_type(p);
-            let t: *Type = malloc(sizeof(Type)) as *Type;
+            let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
             t.kind = TY_BORROW_MUT;
             t.inner = inner;
             return t;
         }
         let inner: *Type = parse_type(p);
-        let t: *Type = malloc(sizeof(Type)) as *Type;
+        let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
         t.kind = TY_BORROW;
         t.inner = inner;
         return t;
@@ -1226,7 +1226,7 @@ fn parse_type(p: *Parser) -> *Type {
     if p.at_op("[") && p.peek_op("]") {
         p.advance(); p.advance();
         let inner: *Type = parse_type(p);
-        let t: *Type = malloc(sizeof(Type)) as *Type;
+        let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
         t.kind = TY_SLICE;
         t.inner = inner;
         return t;
@@ -1558,7 +1558,7 @@ fn parse_prefix(p: *Parser) -> *Expr {
             p.expect_op("(");
             let t: *Type = parse_type(p);
             p.expect_op(")");
-            let e: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+            let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
             e.kind = EX_SIZEOF;
             e.line = line;
             e.column = col;
