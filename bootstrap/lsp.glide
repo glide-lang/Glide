@@ -476,15 +476,21 @@ fn stmt_lower_free_children(s: *Stmt) {
 }
 
 fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
-    // Single global parse arena. We free whatever the previous run
-    // left in state.last_arena, then make a fresh one for this run.
-    // The active arena is deactivated at the end so hover / completion
-    // scratch between requests falls through to libc heap.
+    // Save the request-scoped arena (set by lsp_main for the duration
+    // of this dispatch); we restore it at the end so any post-pipeline
+    // handler scratch keeps flowing into the request arena and gets
+    // reclaimed when the request returns.
+    let prev_active: *void = __glide_palloc_get();
+    // Doc-scoped arena lifecycle: free whatever the previous reanalysis
+    // left in state.last_arena, then make a fresh one. Cached imports
+    // and request scratch live in their own arenas, so the doc arena
+    // exclusively holds the parse / lower / type pipeline output.
     //
-    // Freeing the arena invalidates *every* open doc's stmts pointer
-    // (they all alias into the same chunk chain). Null them out before
-    // the free so a later hover / highlight on a stale doc returns
-    // empty results instead of crashing on dangling memory.
+    // Freeing the doc arena invalidates *every* open doc's stmts
+    // pointer (they all alias into the same chunk chain in the current
+    // single-doc-arena model). Null them out before the free so a
+    // later hover / highlight on a stale doc returns empty results
+    // instead of crashing on dangling memory.
     if state.last_arena != null {
         let keys: *Vector<string> = state.docs.keys();
         for let i: int = 0; i < keys.len(); i++ {
@@ -574,7 +580,10 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     loaded.free();
 
     state.last_arena = __glide_palloc_get();
-    __glide_palloc_set(null);
+    // Restore the request arena so any handler-side scratch after this
+    // reanalysis (e.g. publishDiagnostics tree) lands there and gets
+    // reclaimed at end of dispatch.
+    __glide_palloc_set(prev_active);
 }
 
 fn handle_did_open(req: *JsonValue, state: *LspState) {
@@ -3711,16 +3720,32 @@ pub fn lsp_main() -> int {
         let req: *JsonValue = json_parse(raw);
         let mut should_exit: bool = false;
         if req != null {
+            // Per-request arena. Every Vector / HashMap / __glide_palloc
+            // call inside the handler — completion's `seen` map, hover's
+            // `uses` Vector, all the concat'd item labels and signatures,
+            // all the JsonValue leaf strings the handler builds for the
+            // response — bumps into this arena and is reclaimed in bulk
+            // when the request finishes. Without this every Zed
+            // keystroke that fires a completion or documentHighlight
+            // leaks the full per-call working set (multi-MB on big
+            // files; multi-GB after a few minutes of typing).
+            let req_arena_initial: *void = __glide_palloc_make();
+            __glide_palloc_set(req_arena_initial);
             should_exit = lsp_dispatch(req, state);
+            // Read the final head — when dispatch grows the arena past
+            // the initial chunk, palloc_chunk prepends new ones so the
+            // free has to start from the latest head, not the make()
+            // return that's now buried at the tail.
+            let req_arena_head: *void = __glide_palloc_get();
+            __glide_palloc_set(null);
+            __glide_palloc_free(req_arena_head);
             // Reclaim the JSON tree wrappers. Leaf strings (uri / text /
-            // method) live independently on the heap; handlers that hand
+            // method) live independently on the heap (json_parse ran
+            // before the request arena was set), so handlers that hand
             // them to long-lived state (state.docs[uri].text etc) own
             // them now and free them when they overwrite the slot.
             json_free(req);
         }
-        // The raw bytes from __glide_read_bytes are heap-allocated and
-        // referenced only by `req`'s tree at this point. Free them so
-        // every request doesn't leak its full payload.
         c_raw! { if (raw  !=  NULL) free((char*)(raw )); }
         if should_exit { break; }
     }
