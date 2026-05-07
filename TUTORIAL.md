@@ -3,10 +3,10 @@
 Walks you from a fresh install through writing, building, and running Glide programs. Assumes you've installed Glide via the one-liner from the README.
 
 ```bash
-glide --help
+glide
 ```
 
-If that prints the usage, you're set.
+Running `glide` with no args prints usage. If it does, you're set.
 
 ## hello world
 
@@ -171,29 +171,121 @@ v.push(42);                      // T = int
 let n: int = first(v);           // 42
 ```
 
-The stdlib ships `Vector<T>` and `HashMap<V>`.
+`Vector<T>` is auto-injected from `src/builtins/`. `HashMap<V>`,
+strings, fs, os, env, io, time, http, net, math, etc. live under
+`src/stdlib/` and need an explicit `import`:
+
+```glide
+import stdlib::hashmap::*;
+
+fn count(words: *Vector<string>) -> *HashMap<int> {
+    let m: *HashMap<int> = HashMap::new();
+    for let i: int = 0; i < words.len(); i++ {
+        let w: string = words.get(i);
+        let prev: int = if m.contains(w) { m.get(w) } else { 0 };
+        m.insert(w, prev + 1);
+    }
+    return m;
+}
+```
+
+Bounds on type parameters are checked at every call site:
+
+```glide
+fn max<T: Ord>(a: T, b: T) -> T { if a > b { return a; } return b; }
+```
+
+## traits
+
+```glide
+trait Greet {
+    fn greet(self: Self) -> string;
+    fn shout(self: Self) -> string { return self.greet(); }   // default
+}
+
+impl Greet for Cat { fn greet(self: Self) -> string { return "meow"; } }
+impl Greet for Dog { fn greet(self: Self) -> string { return "woof"; } }
+
+// Static dispatch (one specialization per type, no runtime cost).
+fn say_hi<T: Greet>(g: T) { println!(g.greet()); }
+
+// Dynamic dispatch via *dyn Trait — fat pointer, runtime vtable.
+let pets: *Vector<*dyn Greet> = Vector::new();
+pets.push(cat as *dyn Greet);
+pets.push(dog as *dyn Greet);
+for let i: int = 0; i < pets.len(); i++ {
+    println!(pets.get(i).greet());
+}
+```
 
 ## concurrency
 
-`chan<T>` is a typed channel. `spawn` runs a function on a new thread.
+`chan<T>` is a typed bounded channel. `spawn` runs a function on the
+M:N coroutine scheduler — coroutines park / unpark on
+`recv` / `send` / `sleep_ms` without blocking an OS thread.
 
 ```glide
 fn worker(c: chan<int>) {
-    send(c, 42);
+    c.send(42);
+    c.close();
 }
 
 fn main() -> int {
     let c: chan<int> = make_chan(1);
     spawn worker(c);
-    return recv(c);
+    return c.recv();
 }
 ```
 
-Shared-nothing by design. No locks, no async coloring.
+Drain a channel until close with `while let`:
+
+```glide
+while let v = c.recv() { use(v); }
+```
+
+For a real OS thread (e.g. blocking I/O that doesn't go through the
+reactor) use `spawn_thread fn_call(args)`. Shared-nothing by design:
+data crosses goroutines through channels.
+
+## macros
+
+`macro_rules!`-style expansion runs between parse and typer, so the
+typer sees fully-expanded code.
+
+```glide
+macro bail!($cond:expr, $msg:expr) {
+    if $cond { return err($msg); }
+}
+
+fn check(n: int) -> !int {
+    bail!(n < 0, "negative");
+    return ok(n);
+}
+
+// Variadic.
+macro list_each!($($v:expr),*) {
+    $( println!($v); )*
+}
+list_each!(1, 2, 3);
+
+// Type-attached.
+impl<T> Vector<T> {
+    macro push_all!($($x:expr),*) { $( self.push($x); )* }
+}
+let v: *Vector<int> = Vector::new();
+v.push_all!(10, 20, 30);
+```
 
 ## next steps
 
-- Read `LANGUAGE.md` for the full reference
-- Browse `examples/` for working programs covering each feature
-- Try `glide check foo.glide` to see the compiler's diagnostics
-- Wire up the LSP (`glide lsp`) in your editor for completion, hover, and goto
+- `examples/tour.glide` walks through every feature in one file —
+  `glide run examples/tour.glide` exercises auto-drop, borrows,
+  arenas, errors-as-values, generics with bounds, traits + `*dyn`,
+  channels, spawn, macros, string interpolation, inline `asm`,
+  `naked fn`, `@cfg`, `c_raw!`.
+- `LANGUAGE.md` is the full reference.
+- `glide check foo.glide` runs the type+borrow checker without
+  codegen; pair with `--write` to apply formatter changes.
+- `glide test [path]` runs `*_test.glide` files (see `TESTING.md`).
+- `glide lsp` is the LSP server — install the Zed or VS Code
+  extension to get completion, hover, goto, rename in your editor.
