@@ -85,7 +85,7 @@ return [expr];
 
 expr;                             // expression statement (calls, assignments)
 
-if cond { ... } else { ... }
+if cond { ... } else { ... }      // statement form: blocks of stmts
 while cond { ... }
 for init; cond; step { ... }
 { ... }                           // block
@@ -192,6 +192,25 @@ Use arenas when you have a bag of allocations sharing a lifetime (parser nodes, 
 | `overlap-borrow`        | conflicting `&` / `&mut` in the same scope is rejected          |
 
 You never write lifetime annotations.
+
+## if-as-expression
+
+`if` works as both a statement (above) and an expression. As an
+expression, both branches must be a single expression of the same
+type, and `else` is required:
+
+```glide
+let label: string = if x > 3 { "big" } else { "small" };
+let r: int = (if x > 0 { 10 } else { -10 }) * 2;
+
+// else-if chains compose:
+let category: string =
+    if x < 0 { "negative" } else if x == 0 { "zero" } else { "positive" };
+```
+
+Codegen lowers it to a C ternary, so there's no extra cost vs writing
+the `cond ? a : b` shape by hand. Branches with multiple statements
+still need the statement form (`let mut x = default; if cond { x = ... }`).
 
 ## errors as values
 

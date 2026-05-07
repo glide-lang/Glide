@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Language
+
+- **`if/else` as expression**: `let x = if cond { a } else { b };` now
+  produces a value at any expression position. Both branches must be a
+  single expression of the same type; codegen lowers it to a C ternary
+  so there's no extra runtime cost. `else` is required.
+  Statement-position `if` (with `{ stmt; stmt; }` blocks) is unchanged.
+- **Integer-literal widening**: literals that don't fit in 32-bit `int`
+  (e.g. `19_999_999_998`) now infer as `i64` instead of silently
+  truncating. The most visible effect was inside macros like
+  `assert_eq!` that did `let __t = $a;` and dropped i64 constants on
+  the floor.
+
 ### LSP performance
 
 The LSP path was rewritten around an arena allocator after a session of

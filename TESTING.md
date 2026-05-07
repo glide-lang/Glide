@@ -94,6 +94,5 @@ fn test_ipow_basic() -> int {
 
 ## Caveats
 
-- Glide ainda não tem `if/else` como expressão. Use `let mut x = default; if cond { x = ... }`.
 - O golden runner normaliza CRLF para LF, então `.expected` pode usar LF mesmo no Windows.
 - Tests rodam um arquivo por vez. Cada arquivo vira um binário, então state global não cruza arquivos.
