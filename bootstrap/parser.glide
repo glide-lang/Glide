@@ -1038,6 +1038,56 @@ fn parse_match(p: *Parser) -> *Stmt {
     return stmt_match(scrut, arms, line, col);
 }
 
+// Expression-position `match`. Each arm body is either:
+//   - a single expression (e.g. `A => 1`), which becomes the arm's value;
+//   - a block (e.g. `B => { let t = ...; return t * 2; }`) where the
+//     trailing `return val;` is the arm's value.
+// The codegen lowers the whole match to a GCC stmt-expression.
+fn parse_match_expr(p: *Parser) -> *Expr {
+    let line: int = p.current.line;
+    let col: int = p.current.column;
+    p.advance(); // 'match'
+    let saved: bool = p.no_struct_lit;
+    p.no_struct_lit = true;
+    let scrut: *Expr = parse_expr(p, 0);
+    p.no_struct_lit = saved;
+    p.expect_op("{");
+    let arms: *Vector<MatchArm> = Vector::new();
+    while !p.at_op("}") && !p.at_eof() {
+        let mut variant: string = "_";
+        let bindings: *Vector<string> = Vector::new();
+        if p.current.kind == TOK_IDENT {
+            let first: string = p.current.lexeme;
+            p.advance();
+            if p.eat_op("::") {
+                variant = p.expect_ident();
+            } else {
+                variant = first;
+            }
+            if p.eat_op("(") {
+                while !p.at_op(")") && !p.at_eof() {
+                    bindings.push(p.expect_ident());
+                    if !p.eat_op(",") { break; }
+                }
+                p.expect_op(")");
+            }
+        }
+        p.expect_op("=>");
+        let body: *Vector<Stmt> = Vector::new();
+        if p.at_op("{") {
+            let blk: *Vector<Stmt> = parse_block(p);
+            for let i: int = 0; i < blk.len(); i++ { body.push(blk.get(i)); }
+        } else {
+            let e: *Expr = parse_expr(p, 0);
+            body.push(*stmt_return(e, line, col));
+        }
+        arms.push(MatchArm { variant: variant, bindings: bindings, body: body });
+        p.eat_op(",");
+    }
+    p.expect_op("}");
+    return expr_match(scrut, arms, line, col);
+}
+
 // Expression-position `if`. Both branches must be a single expression
 // (`if c { e } else { e }`); the codegen lowers it to a C ternary.
 // Statement-position `if cond { stmts; }` keeps its existing
@@ -1560,6 +1610,7 @@ fn parse_prefix(p: *Parser) -> *Expr {
         if tok.lexeme.eq("false") { p.advance(); return expr_bool(false, line, col); }
         if tok.lexeme.eq("null") { p.advance(); return expr_null(line, col); }
         if tok.lexeme.eq("if") { return parse_if_expr(p); }
+        if tok.lexeme.eq("match") { return parse_match_expr(p); }
         if tok.lexeme.eq("fn") {
             p.advance();
             p.expect_op("(");

@@ -1149,6 +1149,41 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return else_ty;
     }
 
+    if e.kind == EX_MATCH {
+        let scrut_ty: *Type = infer_expr(t, e.lhs);
+        let mut result_ty: *Type = null;
+        if e.match_arms != null {
+            for let i: int = 0; i < e.match_arms.len(); i++ {
+                let a: MatchArm = e.match_arms.get(i);
+                let saved: int = enter_borrow_scope(t);
+                // Bind payload names with `__unknown__` placeholders. Codegen
+                // emits them via `__typeof__` from the enum's payload field
+                // so the runtime type is correct; the typer just needs each
+                // name in scope to silence "unknown name" diags.
+                if a.bindings != null {
+                    let placeholder: *Type = ty_named("__unknown__");
+                    for let k: int = 0; k < a.bindings.len(); k++ {
+                        t.scope.insert(a.bindings.get(k), *placeholder);
+                    }
+                }
+                if a.body != null && a.body.len() > 0 {
+                    let last_idx: int = a.body.len() - 1;
+                    for let k: int = 0; k < last_idx; k++ {
+                        let b: Stmt = a.body.get(k);
+                        check_stmt(t, &b);
+                    }
+                    let last: Stmt = a.body.get(last_idx);
+                    let v: *Expr = last.expr_value;
+                    let arm_ty: *Type = infer_expr(t, v);
+                    if result_ty == null { result_ty = arm_ty; }
+                }
+                exit_borrow_scope(t, saved);
+            }
+        }
+        if scrut_ty == null { return result_ty; }
+        return result_ty;
+    }
+
     if e.kind == EX_IDENT {
         // Locals + parameters always win; visibility check skipped for them.
         if t.scope.contains(e.str_val) {

@@ -74,6 +74,7 @@ pub const EX_SIZEOF: int = 20;      // sizeof(T) — cast_to holds the target ty
 pub const EX_FNEXPR: int = 21;      // anonymous fn expression (no capture)
 pub const EX_MACRO_VAR: int = 22;   // `$x` placeholder inside a macro body (str_val = "x")
 pub const EX_IF: int = 23;          // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
+pub const EX_MATCH: int = 25;       // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
 
 // Binary op codes (subset; extend as needed)
 pub const OP_ADD: int = 1;
@@ -147,6 +148,11 @@ pub struct Expr {
     // need a Glide-side double payload — the lexeme is already a valid C
     // float literal.
     pub float_val: string,
+
+    // EX_MATCH: match arms. Each arm's body is *Vector<Stmt>; if the body
+    // is multi-stmt the LAST stmt must be `return val;` whose expr_value
+    // is the arm's value. Single-expr arm bodies are stored as one ST_EXPR.
+    pub match_arms: *Vector<MatchArm>,
 }
 
 // ---- Stmt kinds ----------------------------------------------------------
@@ -755,6 +761,16 @@ pub fn expr_if(cond: *Expr, then_e: *Expr, else_e: *Expr, line: int, col: int) -
     e.lhs = cond;
     e.rhs = then_e;
     e.operand = else_e;
+    return e;
+}
+
+pub fn expr_match(scrut: *Expr, arms: *Vector<MatchArm>, line: int, col: int) -> *Expr {
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    e.kind = EX_MATCH;
+    e.line = line;
+    e.column = col;
+    e.lhs = scrut;
+    e.match_arms = arms;
     return e;
 }
 

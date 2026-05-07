@@ -944,6 +944,13 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if then_ty != null { return then_ty; }
         return infer_for_codegen(g, e.operand);
     }
+    if e.kind == EX_MATCH {
+        if e.match_arms != null && e.match_arms.len() > 0 {
+            let first: MatchArm = e.match_arms.get(0);
+            return arm_value_type(g, &first);
+        }
+        return null;
+    }
     if e.kind == EX_IDENT { return g.lookup(e.str_val); }
     if e.kind == EX_UNARY {
         let inner: *Type = infer_for_codegen(g, e.operand);
@@ -1801,6 +1808,64 @@ fn emit_cfg_close(cfg: string) {
     if cfg.eq("windows") || cfg.eq("posix") { println!("#endif"); }
 }
 
+// Yield-expression of a match arm body: either a single ST_EXPR (the
+// arm wrote `=> expr`) or a block whose trailing `return val;` is the
+// value (the arm wrote `=> { stmts; return val; }`).
+fn arm_value_expr(a: *MatchArm) -> *Expr {
+    if a.body == null || a.body.len() == 0 { return null; }
+    let last: Stmt = a.body.get(a.body.len() - 1);
+    if last.kind == ST_RETURN { return last.expr_value; }
+    if last.kind == ST_EXPR { return last.expr_value; }
+    return null;
+}
+
+fn arm_value_type(g: *CG, a: *MatchArm) -> *Type {
+    let v: *Expr = arm_value_expr(a);
+    if v == null { return ty_named("int"); }
+    return infer_for_codegen(g, v);
+}
+
+fn emit_match_arm_value(g: *CG, a: *MatchArm) {
+    if a.body == null { print!("__r = 0;"); return; }
+    let last_idx: int = a.body.len() - 1;
+    for let k: int = 0; k < last_idx; k++ {
+        let b: Stmt = a.body.get(k);
+        emit_stmt(g, &b, 0);
+    }
+    let v: *Expr = arm_value_expr(a);
+    print!("__r = (");
+    if v != null { emit_expr(g, v); } else { print!("0"); }
+    print!(");");
+}
+
+// Probe expression GCC's `__typeof__` resolves to compute the EX_MATCH
+// result type. Walks the first arm's value in a sibling stmt-expr that
+// declares the same payload bindings — `__typeof__` evaluates the type
+// at compile time without executing the body, so the payload reads
+// give correct types even though no scrutinee value flows through.
+fn emit_arm_typeof_probe(g: *CG, arms: *Vector<MatchArm>) {
+    if arms == null || arms.len() == 0 { print!("(int)0"); return; }
+    let a: MatchArm = arms.get(0);
+    print!("({ ");
+    if a.bindings != null && a.bindings.len() > 0 {
+        if a.bindings.len() == 1 {
+            let payload: string = "__m.data.v_".concat(a.variant);
+            print!("__typeof__("); print!(payload); print!(") ");
+            print!(a.bindings.get(0)); print!(" = "); print!(payload); print!("; ");
+        } else {
+            for let k: int = 0; k < a.bindings.len(); k++ {
+                let payload: string = "__m.data.v_".concat(a.variant);
+                print!("__typeof__("); print!(payload); print!(".f"); print!(k); print!(") ");
+                print!(a.bindings.get(k)); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
+            }
+        }
+    }
+    let v: *Expr = arm_value_expr(&a);
+    print!("(");
+    if v != null { emit_expr(g, v); } else { print!("0"); }
+    print!("); })");
+}
+
 // ---- expressions ---------------------------------------------------------
 
 pub fn emit_expr(g: *CG, e: *Expr) {
@@ -1828,6 +1893,48 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         print!(" : ");
         if e.operand != null { emit_expr(g, e.operand); } else { print!("0"); }
         print!(")");
+        return;
+    }
+    if e.kind == EX_MATCH {
+        // GCC stmt-expr lowering. The result type is inferred via
+        // `__typeof__` over the first arm's value evaluated in a sibling
+        // stmt-expr — GCC computes the type at compile time without
+        // running the body, so payload bindings resolve naturally.
+        let scrut_ty: *Type = infer_for_codegen(g, e.lhs);
+        let mut enum_name: string = "X";
+        if scrut_ty != null && scrut_ty.kind == TY_NAMED { enum_name = scrut_ty.name; }
+        print!("({ ");
+        print!(enum_name); print!(" __m = ");
+        emit_expr(g, e.lhs);
+        print!("; ");
+        print!("__typeof__(");
+        emit_arm_typeof_probe(g, e.match_arms);
+        print!(") __r; ");
+        print!("switch (__m.tag) { ");
+        if e.match_arms != null {
+            for let i: int = 0; i < e.match_arms.len(); i++ {
+                let a: MatchArm = e.match_arms.get(i);
+                if a.variant.eq("_") { print!("default: "); }
+                else { print!("case "); print!(enum_name); print!("_"); print!(a.variant); print!(": "); }
+                print!("{ ");
+                if a.bindings != null && a.bindings.len() > 0 {
+                    if a.bindings.len() == 1 {
+                        let payload: string = "__m.data.v_".concat(a.variant);
+                        print!("__typeof__("); print!(payload); print!(") ");
+                        print!(a.bindings.get(0)); print!(" = "); print!(payload); print!("; ");
+                    } else {
+                        for let k: int = 0; k < a.bindings.len(); k++ {
+                            let payload: string = "__m.data.v_".concat(a.variant);
+                            print!("__typeof__("); print!(payload); print!(".f"); print!(k); print!(") ");
+                            print!(a.bindings.get(k)); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
+                        }
+                    }
+                }
+                emit_match_arm_value(g, &a);
+                print!(" break; } ");
+            }
+        }
+        print!("} __r; })");
         return;
     }
     if e.kind == EX_BINARY {
