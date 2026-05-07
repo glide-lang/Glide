@@ -220,6 +220,9 @@ pub struct Typer {
     // program. Built up front in pre_register and consulted to verify
     // `<T: Trait>` bounds at call sites.
     pub impl_set: *HashMap<bool>,
+    // Enum exhaustiveness: enum name -> comma-joined variant names. Built in
+    // pre_register; consulted by ST_MATCH check to flag uncovered variants.
+    pub enums: *HashMap<string>,
     pub error_count: int,
     pub diagnostics: *Vector<DiagEntry>,
 }
@@ -256,6 +259,8 @@ impl Typer {
         t.enforce_visibility = false;
         let is: *HashMap<bool> = HashMap::new();
         t.impl_set = is;
+        let en: *HashMap<string> = HashMap::new();
+        t.enums = en;
         t.error_count = 0;
         return t;
     }
@@ -295,6 +300,7 @@ impl Typer {
         self.field_pub.free();
         self.struct_origin.free();
         self.impl_set.free();
+        self.enums.free();
         __glide_pfree(self as *void);
     }
 
@@ -414,6 +420,16 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // enforcement can tell `MyEnum::Variant` apart from a free
             // module call.
             t.structs.insert(s.name, true);
+            // Record the variant list for exhaustiveness checking.
+            let mut vlist: string = "";
+            if s.enum_variants != null {
+                for let j: int = 0; j < s.enum_variants.len(); j++ {
+                    let ev: EnumVariant = s.enum_variants.get(j);
+                    if j > 0 { vlist = vlist.concat(","); }
+                    vlist = vlist.concat(ev.name);
+                }
+            }
+            t.enums.insert(s.name, vlist);
         }
         if s.kind == ST_STRUCT {
             t.structs.insert(s.name, true);
@@ -866,6 +882,52 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             }
             exit_borrow_scope(t, saved);
         }
+        return;
+    }
+    if s.kind == ST_MATCH {
+        let mut scrut_ty: *Type = null;
+        if s.scrutinee != null { scrut_ty = infer_expr(t, s.scrutinee); }
+
+        let mut has_wildcard: bool = false;
+        let covered: *HashMap<bool> = HashMap::new();
+        if s.arms != null {
+            for let i: int = 0; i < s.arms.len(); i++ {
+                let a: MatchArm = s.arms.get(i);
+                if a.variant.eq("_") { has_wildcard = true; }
+                else { covered.insert(a.variant, true); }
+                // Arm bodies are not recursed into here. Variant-payload
+                // bindings (`Hit(us)` -> `us`) need a per-variant payload
+                // type table that doesn't exist yet; codegen still emits
+                // them via `__typeof__`, so the runtime is unaffected.
+            }
+        }
+
+        if !has_wildcard && scrut_ty != null && scrut_ty.kind == TY_NAMED
+           && t.enums.contains(scrut_ty.name) {
+            let vlist: string = t.enums.get(scrut_ty.name);
+            if !vlist.eq("") {
+                let parts: *Vector<string> = vlist.split(",");
+                let mut missing: string = "";
+                let mut miss_count: int = 0;
+                for let i: int = 0; i < parts.len(); i++ {
+                    let v: string = parts.get(i);
+                    if !covered.contains(v) {
+                        if miss_count > 0 { missing = missing.concat(", "); }
+                        missing = missing.concat("`").concat(v).concat("`");
+                        miss_count = miss_count + 1;
+                    }
+                }
+                if miss_count > 0 {
+                    t.push_diag(s.line, s.column, 1, "match-not-exhaustive",
+                        "match on `".concat(scrut_ty.name)
+                        .concat("` is not exhaustive: missing ")
+                        .concat(missing)
+                        .concat(". Add an arm for each, or `_ =>` to handle the rest."));
+                }
+                parts.free();
+            }
+        }
+        covered.free();
         return;
     }
     if s.kind == ST_BREAK { return; }
