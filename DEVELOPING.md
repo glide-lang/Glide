@@ -27,10 +27,12 @@ Once `glide` works, you don't need `glide_seed` again unless you change a runtim
 
 ```
 bootstrap/
-  main.glide        driver: arg parsing, build/run/emit/check/fmt/lsp
+  main.glide        driver: arg parsing, build/run/emit/check/fmt/lsp/test
   lexer.glide       byte stream -> tokens
   parser.glide      tokens -> AST
   ast.glide         Stmt / Expr / Type definitions
+  expander.glide    macro_rules! expansion
+  lower.glide       desugaring (for-in -> for, default-method copy)
   typer.glide       type + borrow checker (collects diagnostics)
   codegen.glide     AST -> C source (also emits the runtime)
   fmt.glide         AST -> canonical Glide source
@@ -38,10 +40,24 @@ bootstrap/
   json.glide        minimal JSON parser + emitter for the LSP
 
   seed/bootstrap.c  auto-emitted C version of the compiler
+  runtime/          C runtime fragments emitted into every output:
+                    sched.c (M:N scheduler), reactor.c (async I/O),
+                    chan.c.tmpl (typed chan template), socket.c,
+                    http_parse.c, prelude.c, stdlib.c (string helpers
+                    + arena), result.c.tmpl, spawn_stub_*.tmpl
 
-stdlib/
-  vector.glide      Vector<T>
-  hashmap.glide     HashMap<V> with string keys
+src/
+  builtins/         auto-injected into every program (Vector, string
+                    methods, builtins.glide stubs for println / format /
+                    panic, plus the per-keystroke arena allocator
+                    (__glide_palloc + friends) used by the LSP).
+  stdlib/           opt-in via `import stdlib::module`. HashMap, fs, os,
+                    env, io, time, http, net, math, hashmap, etc.
+
+examples/           one program per language feature, plus tour.glide
+                    that exercises everything.
+tests/              *_test.glide files driven by `glide test`.
+bench/              concurrency benchmarks vs Go.
 
 tools/
   install_zig.{sh,ps1}    download a Zig release into runtime/zig/
@@ -49,11 +65,11 @@ tools/
   build_release.sh        package glide+stdlib+Zig into a tarball/zip
   gen_icons.py            rasterize the logo SVG to PNGs
 
-zed-extension/             Zed editor support (LSP wiring + tree-sitter)
-vscode-extension/          VSCode extension (LSP wiring + tmLanguage)
-glide-grammar/             tree-sitter grammar (used by Zed)
+zed-extension/      Zed editor support (LSP wiring + tree-sitter)
+vscode-extension/   VSCode extension (LSP wiring + tmLanguage)
+glide-grammar/      tree-sitter grammar (used by Zed)
 
-assets/                    logos and icons
+assets/             logos and icons
 ```
 
 ## edit-build cycle
@@ -82,28 +98,83 @@ cc bootstrap/seed/bootstrap.c -o /tmp/seed_check -O2 -lpthread -lm
 
 ## testing
 
-There's no test runner yet. The verification flow is:
-
 ```bash
-# Self-host (3 generations should produce identical compilers)
+# Run every *_test.glide under the current dir. See TESTING.md for the
+# `assert!` / `assert_eq!` macros and the L1/L2/L3 conventions.
+./glide test
+./glide test path/to/specific_test.glide
+
+# Golden tests: each .glide under the directory is run, stdout compared
+# to <name>.expected.
+./glide test --golden tests/golden/
+
+# Self-host: three generations should produce byte-identical compilers.
 ./glide build bootstrap/main.glide -o gen2
 ./gen2 build bootstrap/main.glide -o gen3
+diff <(sha256sum gen2) <(sha256sum gen3)
 
-# Smoke test
+# One-liner smoke
 echo 'fn main() -> int { return 42; }' > /tmp/h.glide
 ./glide run /tmp/h.glide                    # exit 42
-
-# LSP smoke test
-echo '{...}' | ./glide lsp                   # see ad-hoc Python tests
 ```
-
-Adding proper tests is on the roadmap.
 
 ## working on the LSP
 
-Run `glide lsp` and pipe LSP requests via stdin. The protocol uses `Content-Length: N\r\n\r\n<payload>` framing. Easiest to drive from a small Python script that builds the right JSON-RPC envelopes.
+Run `glide lsp` and pipe LSP requests via stdin. The protocol uses
+`Content-Length: N\r\n\r\n<payload>` framing — easiest to drive from a
+small Python script that builds the right JSON-RPC envelopes (there
+are throwaway examples under repo root: `__lsp_smoke.py`,
+`__lsp_zed_real.py`).
 
-For interactive testing, install the Zed or VSCode extension, point it at your in-development `glide` binary (PATH or `glide.path` setting), and check the server's `--trace` channel.
+For interactive testing, install the Zed or VSCode extension, point it
+at your in-development `glide` binary (PATH or `glide.path` setting),
+and check the server's `--trace` channel.
+
+### memory model
+
+The LSP holds two arenas at once:
+
+- A **doc arena** (`state.last_arena`) that owns every Vector / HashMap
+  / AST node produced by the most recent `run_analysis_and_publish`.
+  It survives across requests so `doc.stmts` stays valid for hover /
+  completion / goto, and is dropped in bulk on the next reanalysis.
+- A **request arena** that wraps every single request dispatch. All
+  the per-handler scratch (completion's `seen` map and item Vectors,
+  hover's uses Vector, every `concat`'d label / signature, the JSON
+  leaf strings the response is built out of) bumps into it and is
+  reclaimed when the dispatch returns.
+
+The active arena is set per phase: `lsp_main` activates the request
+arena before dispatch; `run_analysis_and_publish` saves the request
+arena, switches to the doc arena, runs parse / expand / lower / type,
+then restores the request arena. At end of dispatch the request arena
+is freed, doc arena stays alive for cross-request reads.
+
+`__glide_palloc` (in `src/builtins/builtins.glide`) is a chunked bump
+allocator backed by `mmap` / `VirtualAlloc`; `__glide_pfree` is a
+free that's safe on either heap or arena pointers (returns no-op for
+arena-owned pointers, libc free otherwise). Vector and HashMap stamp
+themselves "arena-backed" at construction time so push / resize /
+free pick the right path.
+
+Outside the LSP path the active arena is null and `__glide_palloc`
+falls back to `calloc`, so the build / run / fmt pipelines see no
+behaviour change.
+
+The cache (`state.parse_cache`) holds the parse + lower output of
+each transitively-imported file on libc heap so it outlives every
+arena reset. `load_into_with_cache` temporarily switches the active
+arena to null while populating, so cached AST / Vectors / strings
+land on libc heap.
+
+### LSP smoke tests
+
+Useful one-off scripts (untracked, in repo root after a debug
+session): `__lsp_smoke.py` (storm didChange on one file),
+`__lsp_zed_real.py` (didChange + completion + documentHighlight per
+iter, Zed's actual pattern), `__lsp_zed_sim.py` (workspace warmup
+followed by edits). Run them against the locally-built binary
+(`glide_v2.exe` etc) to catch regressions before reinstalling.
 
 ## working on the formatter
 
@@ -141,5 +212,12 @@ The install scripts default to GitHub's `releases/latest/download/` so users get
 
 - The bootstrap parser doesn't track end-position info per node, so the LSP and the formatter can only point at the start of a token.
 - The lexer drops comments. The formatter therefore drops them too. Adding a comment-aware lexer + formatter is the next iteration.
-- LSP analysis is single-file (no cross-file resolution beyond what the typer already does for `pub` symbols).
+- The LSP's baseline working set is dominated by the AST cache (one
+  parsed + lowered Vector per transitively-imported file). For files
+  that import the whole bootstrap (`bootstrap/main.glide` shape) this
+  is around 1.3 GiB. Editing files with smaller import graphs
+  (`bootstrap/lsp.glide`, anything in `src/stdlib/`, `examples/`)
+  costs proportionally less. Reducing further needs a smaller AST
+  representation (struct-of-arrays, Idx-based references) or a
+  lazy-import scheme.
 - No `?T` nullable type yet — only `&T` borrows are non-null by typer enforcement. `*T` may be null at runtime.
