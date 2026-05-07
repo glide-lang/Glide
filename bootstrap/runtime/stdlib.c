@@ -9,12 +9,19 @@
 #define GLIDE_OS_VIA_CRAW
 #define GLIDE_ENV_VIA_CRAW
 #define GLIDE_IO_VIA_CRAW
+// Forward declaration of the per-keystroke arena allocator defined in
+// src/builtins/builtins.glide. Routing the string-runtime allocations
+// through it lets the LSP reclaim every concat / substring / format /
+// int_to_string buffer in bulk on the next reanalysis. Outside the LSP
+// (no arena active) __glide_palloc falls back to calloc, so build /
+// run / fmt paths see no behaviour change.
+extern void* __glide_palloc(int size);
 static int __glide_string_len(const char* s) { return (int)strlen(s); }
 static bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }
 static char __glide_string_at(const char* s, int i) { return s[i]; }
 static const char* __glide_string_concat(const char* a, const char* b) {
     size_t la = strlen(a), lb = strlen(b);
-    char* out = (char*)malloc(la + lb + 1);
+    char* out = (char*)__glide_palloc((int)(la + lb + 1));
     memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;
     return out;
 }
@@ -24,7 +31,7 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
     if (end > n) end = n;
     if (start > end) start = end;
     int len = end - start;
-    char* out = (char*)malloc((size_t)len + 1);
+    char* out = (char*)__glide_palloc(len + 1);
     memcpy(out, s + start, (size_t)len); out[len] = 0;
     return out;
 }
@@ -46,7 +53,7 @@ static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c 
    builder (concat etc.). The byte is re-allocated each call — fine for the
    one-shot helper case; tight loops should buffer differently. */
 static const char* __glide_char_to_string(char c) {
-    char* out = (char*)malloc(2);
+    char* out = (char*)__glide_palloc(2);
     out[0] = c; out[1] = 0;
     return out;
 }
@@ -54,7 +61,7 @@ static int __glide_int_abs(int n) { return n < 0 ? -n : n; }
 static const char* __glide_int_to_string(int n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%d", n);
-    char* out = (char*)malloc((size_t)len + 1);
+    char* out = (char*)__glide_palloc(len + 1);
     memcpy(out, buf, (size_t)len + 1);
     return out;
 }
@@ -66,7 +73,7 @@ static const char* __glide_format(const char* fmt, ...) {
     va_copy(ap2, ap1);
     int n = vsnprintf(NULL, 0, fmt, ap1);
     va_end(ap1);
-    char* out = (char*)malloc((size_t)n + 1);
+    char* out = (char*)__glide_palloc(n + 1);
     vsnprintf(out, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     return out;

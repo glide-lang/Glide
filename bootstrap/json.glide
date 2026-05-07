@@ -280,31 +280,46 @@ fn jp_string_value(p: *JsonParser) -> *JsonValue {
 }
 
 fn jp_unescape(raw: string) -> string {
-    let mut out: string = "";
+    // O(N) builder. The previous implementation called `out.concat(...)`
+    // char-by-char, which is O(N²) and allocates a fresh string for
+    // every byte — a 100 KB JSON-encoded buffer with newline escapes
+    // produced multi-GB of throwaway strings per LSP didChange.
     let n: int = raw.len();
+    let buf: *void = __glide_palloc(n + 1);
     let mut i: int = 0;
+    let mut o: int = 0;
     while i < n {
         let c: int = raw.at(i).to_int();
-        if c != 92 { out = out.concat(__glide_string_substring(raw, i, i + 1)); i = i + 1; continue; }
-        // escape
+        if c != 92 {
+            c_raw! { ((char*)(buf ))[(o )] = (char)(c ); }
+            o = o + 1;
+            i = i + 1;
+            continue;
+        }
         i = i + 1;
         if i >= n { break; }
         let e: int = raw.at(i).to_int();
         i = i + 1;
-        if e == 110 { out = out.concat("\n"); continue; }      // \n
-        if e == 116 { out = out.concat("\t"); continue; }      // \t
-        if e == 114 { out = out.concat("\r"); continue; }      // \r
-        if e == 34  { out = out.concat("\""); continue; }      // \"
-        if e == 92  { out = out.concat("\\"); continue; }      // backslash
-        if e == 47  { out = out.concat("/"); continue; }       // forward slash
-        // \uXXXX — not decoded; pass through ASCII fallback
-        if e == 117 && i + 4 <= n {
+        let mut wc: int = -1;
+        if      e == 110 { wc = 10; }      // \n
+        else if e == 116 { wc = 9;  }      // \t
+        else if e == 114 { wc = 13; }      // \r
+        else if e == 34  { wc = 34; }      // \"
+        else if e == 92  { wc = 92; }      // backslash
+        else if e == 47  { wc = 47; }      // forward slash
+        else if e == 117 && i + 4 <= n {   // \uXXXX — pass-through ASCII
             i = i + 4;
-            out = out.concat("?");
-            continue;
+            wc = 63;                        // '?'
+        }
+        if wc >= 0 {
+            c_raw! { ((char*)(buf ))[(o )] = (char)(wc ); }
+            o = o + 1;
         }
     }
-    return out;
+    c_raw! { ((char*)(buf ))[(o )] = 0; }
+    let result: string = "";
+    c_raw! { (result ) = (const char*)(buf ); }
+    return result;
 }
 
 fn jp_bool(p: *JsonParser) -> *JsonValue {

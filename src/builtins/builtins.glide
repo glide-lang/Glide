@@ -224,64 +224,74 @@ c_raw! {
         struct PArena* next;
     } PArena;
 
-    static PArena* g_palloc_top = NULL;
+    // Multiple arenas can coexist — the LSP keeps one per open document
+    // so hover / completion against any doc can read its AST without
+    // being invalidated by another doc's reanalysis. `g_palloc_active`
+    // names the one __glide_palloc draws from; the rest stay alive but
+    // inert until their owner explicitly hands them back via
+    // __glide_palloc_free.
+    static PArena* g_palloc_active = NULL;
 
-    static void __glide_palloc_grow(int min_size) {
-        int new_cap = (g_palloc_top != NULL) ? g_palloc_top->cap * 2 : (16 * 1024 * 1024);
+    static PArena* __glide_palloc_chunk(PArena* top, int min_size) {
+        int new_cap = (top != NULL) ? top->cap * 2 : (16 * 1024 * 1024);
         if (new_cap < min_size + 1024) new_cap = min_size + 1024;
         PArena* nc = (PArena*)malloc(sizeof(PArena));
         nc->cap = new_cap;
         nc->head = (unsigned char*)malloc((size_t)new_cap);
         nc->used = 0;
-        nc->next = g_palloc_top;
-        g_palloc_top = nc;
+        nc->next = top;
+        return nc;
     }
 
     void* __glide_palloc(int size) {
         if (size <= 0) size = 1;
-        if (g_palloc_top == NULL) {
+        if (g_palloc_active == NULL) {
             return calloc(1, (size_t)size);
         }
         int aligned = (size + 7) & ~7;
-        if (g_palloc_top->used + aligned > g_palloc_top->cap) {
-            __glide_palloc_grow(aligned);
+        if (g_palloc_active->used + aligned > g_palloc_active->cap) {
+            g_palloc_active = __glide_palloc_chunk(g_palloc_active, aligned);
         }
-        void* p = g_palloc_top->head + g_palloc_top->used;
-        g_palloc_top->used += aligned;
+        void* p = g_palloc_active->head + g_palloc_active->used;
+        g_palloc_active->used += aligned;
         memset(p, 0, (size_t)size);
         return p;
     }
 
-    void __glide_palloc_begin(void) {
-        if (g_palloc_top != NULL) {
-            PArena* a = g_palloc_top;
-            while (a != NULL) { PArena* n = a->next; free(a->head); free(a); a = n; }
-            g_palloc_top = NULL;
-        }
-        __glide_palloc_grow(16 * 1024 * 1024);
+    // Build a fresh arena (one chunk). Doesn't touch the active arena;
+    // pair with __glide_palloc_set when you want allocations to flow
+    // into it.
+    void* __glide_palloc_make(void) {
+        return (void*)__glide_palloc_chunk(NULL, 16 * 1024 * 1024);
     }
 
-    void __glide_palloc_end_and_free(void) {
-        PArena* a = g_palloc_top;
+    // Free every chunk reachable from a given arena handle. Safe on
+    // null. Caller must clear any pointer that referenced this arena
+    // before calling — the memory is reclaimed in bulk.
+    void __glide_palloc_free(void* handle) {
+        PArena* a = (PArena*)handle;
         while (a != NULL) {
             PArena* n = a->next;
             free(a->head);
             free(a);
             a = n;
         }
-        g_palloc_top = NULL;
     }
 
     int __glide_palloc_active(void) {
-        return g_palloc_top != NULL ? 1 : 0;
+        return g_palloc_active != NULL ? 1 : 0;
     }
 
-    void* __glide_palloc_get(void) { return (void*)g_palloc_top; }
-    void __glide_palloc_set(void* a) { g_palloc_top = (PArena*)a; }
+    void* __glide_palloc_get(void) { return (void*)g_palloc_active; }
+    void __glide_palloc_set(void* a) { g_palloc_active = (PArena*)a; }
 
+    // True when `p` was handed out by some chunk in the *active* arena
+    // (only). Used by __glide_pfree to skip free() on bump-allocated
+    // pointers. Pointers from inactive arenas (other LspDocs) read as
+    // not-owned here; they're managed via __glide_palloc_free instead.
     int __glide_palloc_owns(void* p) {
         if (p == NULL) return 0;
-        PArena* a = g_palloc_top;
+        PArena* a = g_palloc_active;
         while (a != NULL) {
             unsigned char* base = a->head;
             if ((unsigned char*)p >= base && (unsigned char*)p < base + a->cap) return 1;
@@ -298,22 +308,33 @@ c_raw! {
 
     int __glide_palloc_total_bytes(void) {
         int total = 0;
-        PArena* a = g_palloc_top;
+        PArena* a = g_palloc_active;
         while (a != NULL) { total += a->used; a = a->next; }
         return total;
     }
 
     int __glide_palloc_chunks(void) {
         int n = 0;
-        PArena* a = g_palloc_top;
+        PArena* a = g_palloc_active;
         while (a != NULL) { n++; a = a->next; }
         return n;
     }
+
+    #ifdef _WIN32
+    #include <psapi.h>
+    int __glide_proc_rss_mb(void) {
+        PROCESS_MEMORY_COUNTERS pmc;
+        if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return -1;
+        return (int)(pmc.WorkingSetSize / (1024*1024));
+    }
+    #else
+    int __glide_proc_rss_mb(void) { return -1; }
+    #endif
 }
 
 pub extern fn __glide_palloc(size: int) -> *void;
-pub extern fn __glide_palloc_begin();
-pub extern fn __glide_palloc_end_and_free();
+pub extern fn __glide_palloc_make() -> *void;
+pub extern fn __glide_palloc_free(handle: *void);
 pub extern fn __glide_palloc_active() -> int;
 pub extern fn __glide_palloc_get() -> *void;
 pub extern fn __glide_palloc_set(a: *void);
@@ -321,3 +342,4 @@ pub extern fn __glide_palloc_owns(p: *void) -> int;
 pub extern fn __glide_pfree(p: *void);
 pub extern fn __glide_palloc_total_bytes() -> int;
 pub extern fn __glide_palloc_chunks() -> int;
+pub extern fn __glide_proc_rss_mb() -> int;

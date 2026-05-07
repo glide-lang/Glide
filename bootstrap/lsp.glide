@@ -109,6 +109,12 @@ pub struct LspState {
     // currently-edited buffer is never cached — its content changes
     // between calls, so it always parses fresh.
     pub parse_cache: *HashMap<*Vector<Stmt>>,
+    // Latest parse arena. Held here (rather than via __glide_palloc_get
+    // at the start of each run) because we deactivate the arena
+    // between requests so hover / completion scratch goes to libc heap;
+    // palloc_get would then return null and we'd never free the
+    // arena's many MB of pipeline allocations.
+    pub last_arena: *void,
 }
 
 pub fn lsp_state_new() -> *LspState {
@@ -120,6 +126,7 @@ pub fn lsp_state_new() -> *LspState {
     s.stdlib_index = idx;
     let pc: *HashMap<*Vector<Stmt>> = HashMap::new();
     s.parse_cache = pc;
+    s.last_arena = null;
     populate_stdlib_index(s);
     return s;
 }
@@ -469,20 +476,29 @@ fn stmt_lower_free_children(s: *Stmt) {
 }
 
 fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
-    // Drop the previous keystroke's arena and start a fresh one. Every
-    // Vector / HashMap / AST node allocated by the pipeline below is
-    // bump-allocated from this arena and reclaimed in bulk on the next
-    // call. Cache populates and the rest of LspState live on libc heap
-    // (load_into_with_cache temporarily disables the arena while
-    // populating), so they survive the reset.
+    // Single global parse arena. We free whatever the previous run
+    // left in state.last_arena, then make a fresh one for this run.
+    // The active arena is deactivated at the end so hover / completion
+    // scratch between requests falls through to libc heap.
     //
-    // Between keystrokes the arena stays alive — hover / completion /
-    // goto requests read doc.stmts pointers into it. The LSP main loop
-    // is single-threaded, so the brief window between
-    // end_and_free / begin (during which doc.stmts is dangling) cannot
-    // overlap with another request.
-    __glide_palloc_end_and_free();
-    __glide_palloc_begin();
+    // Freeing the arena invalidates *every* open doc's stmts pointer
+    // (they all alias into the same chunk chain). Null them out before
+    // the free so a later hover / highlight on a stale doc returns
+    // empty results instead of crashing on dangling memory.
+    if state.last_arena != null {
+        let keys: *Vector<string> = state.docs.keys();
+        for let i: int = 0; i < keys.len(); i++ {
+            let k: string = keys.get(i);
+            let d: LspDoc = state.docs.get(k);
+            d.stmts = null;
+            state.docs.insert(k, d);
+        }
+        keys.free();
+        __glide_palloc_free(state.last_arena);
+    }
+    let cur_arena: *void = __glide_palloc_make();
+    state.last_arena = cur_arena;
+    __glide_palloc_set(cur_arena);
 
     let path: string = uri_to_path(uri);
     let stmts: *Vector<Stmt> = Vector::new();
@@ -521,11 +537,10 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
 
-    // Save the parsed stmts on the doc so hover / document symbol / goto can
-    // query them without re-parsing. The previous reparse's vector lived
-    // in the previous arena, which end_and_free above already dropped —
-    // any dangling pointer in d.stmts is overwritten now without touching
-    // the freed memory.
+    // Save the parsed stmts on the doc. The arena stays alive (in the
+    // global g_palloc_active) until the next reanalysis, so this doc's
+    // stmts remain valid for hover / completion / goto on the same
+    // doc. Other docs' stmts are now dangling.
     if state.docs.contains(uri) {
         let d: LspDoc = state.docs.get(uri);
         d.stmts = stmts;
@@ -553,6 +568,15 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     lowered.free();
     pdiags.free();
     loaded.free();
+
+    // Capture the final arena head — when the arena grew past one
+    // chunk, the head moved to a newly-prepended chunk; freeing must
+    // start from there to walk the whole chain.
+    state.last_arena = __glide_palloc_get();
+    // Deactivate the arena until the next reanalysis. Subsequent
+    // hover / completion / goto requests run with the arena off so
+    // their scratch allocations go to libc heap.
+    __glide_palloc_set(null);
 }
 
 fn handle_did_open(req: *JsonValue, state: *LspState) {
@@ -561,10 +585,6 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     let uri: string = json_as_string(json_get(td, "uri"));
     let text: string = json_as_string(json_get(td, "text"));
     let version: int = json_as_int(json_get(td, "version"));
-    // Insert with stmts=null. run_analysis_and_publish brings up the
-    // per-keystroke arena and populates stmts from inside it. Allocating
-    // a Vector here would land in the previous keystroke's arena and
-    // dangle once end_and_free fires.
     let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: null };
     state.docs.insert(uri, doc);
     run_analysis_and_publish(uri, text, state);
@@ -583,9 +603,10 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
         // didChange w/ empty diff in incremental mode would land here; ignore.
         return;
     }
-    // Update text + version on the existing doc, leaving stmts pointing
-    // at the previous arena's vector. run_analysis_and_publish frees that
-    // arena and re-populates stmts from inside the fresh one.
+    // Carry the prior stmts pointer forward — run_analysis_and_publish
+    // frees the global arena and overwrites stmts before any other
+    // request can land (single-threaded loop), so the dangling window
+    // is internal.
     let prev_stmts: *Vector<Stmt> = null;
     if state.docs.contains(uri) {
         let prev: LspDoc = state.docs.get(uri);

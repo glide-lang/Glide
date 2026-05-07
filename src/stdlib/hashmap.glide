@@ -214,6 +214,17 @@ impl<V> HashMap<V> {
         return true;
     }
 
+    /// Snapshot every live key into a fresh Vector. Order is the slot
+    /// order, which is unspecified relative to insertion order. The
+    /// returned Vector is heap- or arena-allocated like any other.
+    fn keys(self: *HashMap<V>) -> *Vector<string> {
+        let out: *Vector<string> = Vector::new();
+        for let i: int = 0; i < self.cap; i++ {
+            if self.occupied[i] { out.push(self.keys[i]); }
+        }
+        return out;
+    }
+
     /// Drop every entry. Capacity is preserved so subsequent inserts don't
     /// re-allocate.
     fn clear(self: *HashMap<V>) {

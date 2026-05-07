@@ -47,7 +47,7 @@ pub struct Lexer {
 
 impl Lexer {
     pub fn new(src: string) -> *Lexer {
-        let l: *Lexer = malloc(sizeof(Lexer)) as *Lexer;
+        let l: *Lexer = __glide_palloc(sizeof(Lexer)) as *Lexer;
         l.src = src;
         l.src_len = src.len();
         l.pos = 0;
