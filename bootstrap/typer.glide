@@ -384,7 +384,13 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // from the literal value (covers `const X: int = 1;` and friends).
             let mut ty: *Type = s.let_ty;
             if ty == null && s.let_value != null {
-                if s.let_value.kind == EX_INT { ty = ty_named("int"); }
+                if s.let_value.kind == EX_INT {
+                    if s.let_value.int_val > 2147483647 || s.let_value.int_val < -2147483648 {
+                        ty = ty_named("i64");
+                    } else {
+                        ty = ty_named("int");
+                    }
+                }
                 else if s.let_value.kind == EX_FLOAT { ty = ty_named("float"); }
                 else if s.let_value.kind == EX_STRING { ty = ty_named("string"); }
                 else if s.let_value.kind == EX_BOOL { ty = ty_named("bool"); }
@@ -1038,7 +1044,17 @@ fn chan_inner(t: *Type) -> *Type {
 
 pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e == null { return null; }
-    if e.kind == EX_INT { return ty_named("int"); }
+    if e.kind == EX_INT {
+        // Auto-widen literals that don't fit in a 32-bit int. Without
+        // this `let n = 19_999_999_998;` infers as `int` and truncates
+        // to -1474836482 in codegen, which silently breaks comparisons
+        // — most visibly inside macros like `assert_eq!` where the
+        // user can't easily annotate the binding.
+        if e.int_val > 2147483647 || e.int_val < -2147483648 {
+            return ty_named("i64");
+        }
+        return ty_named("int");
+    }
     if e.kind == EX_FLOAT { return ty_named("float"); }
     if e.kind == EX_STRING { return ty_named("string"); }
     if e.kind == EX_BOOL { return ty_named("bool"); }

@@ -906,7 +906,15 @@ impl CG {
 // Best-effort inference of an expression's type for codegen.
 fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     if e == null { return null; }
-    if e.kind == EX_INT { return ty_named("int"); }
+    if e.kind == EX_INT {
+        // Mirror infer_expr in the typer: literals that overflow 32-bit
+        // int widen to i64 so the emitted `let` lands the right C type
+        // and downstream format!() picks `%lld` instead of `%d`.
+        if e.int_val > 2147483647 || e.int_val < -2147483648 {
+            return ty_named("i64");
+        }
+        return ty_named("int");
+    }
     if e.kind == EX_FLOAT { return ty_named("float"); }
     if e.kind == EX_STRING { return ty_named("string"); }
     if e.kind == EX_BOOL { return ty_named("bool"); }
