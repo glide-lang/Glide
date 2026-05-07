@@ -114,6 +114,12 @@ pub fn json_free(v: *JsonValue) {
 // itself. Used by json_free, and also by the recursive walk where
 // children live inline inside Vector<JsonValue> storage (no wrapper to
 // free, only the nested heap pointers).
+//
+// Leaf strings (.s on JSON_STRING, key strings on JSON_OBJECT) are
+// also released here. The LSP main loop json_free's the request tree
+// after the handler returns; handlers that need to retain a leaf
+// string past that point (handle_did_open/change holding doc.text)
+// must strdup it first.
 fn json_free_contents(v: *JsonValue) {
     if v == null { return; }
     if v.kind == JSON_ARRAY {
@@ -276,7 +282,12 @@ fn jp_string_value(p: *JsonParser) -> *JsonValue {
     let raw: string = p.src.substring(start, p.pos);
     if jp_peek(p) == 34 { p.pos = p.pos + 1; }
     if !has_escape { return json_string(raw); }
-    return json_string(jp_unescape(raw));
+    // jp_unescape produces a fresh heap buffer; raw becomes orphaned
+    // and would leak the size of the source substring per request
+    // (165 KB+ for any LSP didChange on a non-trivial file).
+    let unescaped: string = jp_unescape(raw);
+    c_raw! { free((char*)(raw )); }
+    return json_string(unescaped);
 }
 
 fn jp_unescape(raw: string) -> string {

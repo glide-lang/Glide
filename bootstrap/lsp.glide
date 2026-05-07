@@ -583,8 +583,18 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     let uri: string = json_as_string(json_get(td, "uri"));
     let text: string = json_as_string(json_get(td, "text"));
     let version: int = json_as_int(json_get(td, "version"));
+    // The leaf strings come straight out of the request tree
+    // (jp_string_value's substring or jp_unescape's heap buffer).
+    // json_free at end of lsp_main only frees tree wrappers, not leaf
+    // strings, so retaining the pointer on doc keeps it alive.
+    let prev_text: string = "";
+    if state.docs.contains(uri) {
+        let prev: LspDoc = state.docs.get(uri);
+        prev_text = prev.text;
+    }
     let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: null };
     state.docs.insert(uri, doc);
+    if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
     run_analysis_and_publish(uri, text, state);
 }
 
@@ -601,17 +611,16 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
         // didChange w/ empty diff in incremental mode would land here; ignore.
         return;
     }
-    // Carry the prior stmts pointer forward — run_analysis_and_publish
-    // frees the global arena and overwrites stmts before any other
-    // request can land (single-threaded loop), so the dangling window
-    // is internal.
     let prev_stmts: *Vector<Stmt> = null;
+    let prev_text: string = "";
     if state.docs.contains(uri) {
         let prev: LspDoc = state.docs.get(uri);
         prev_stmts = prev.stmts;
+        prev_text = prev.text;
     }
     let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: prev_stmts };
     state.docs.insert(uri, doc);
+    if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
     run_analysis_and_publish(uri, text, state);
 }
 
@@ -619,7 +628,13 @@ fn handle_did_close(req: *JsonValue, state: *LspState) {
     let params: *JsonValue = json_get(req, "params");
     let td: *JsonValue = json_get(params, "textDocument");
     let uri: string = json_as_string(json_get(td, "uri"));
+    let prev_text: string = "";
+    if state.docs.contains(uri) {
+        let prev: LspDoc = state.docs.get(uri);
+        prev_text = prev.text;
+    }
     state.docs.remove(uri);
+    if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
     // Clear diagnostics for this URI.
     let p: *JsonValue = json_object();
     json_obj_set(p, "uri", json_string(uri));
@@ -3659,6 +3674,34 @@ fn analysis_large_return(t: *Typer, program: *Vector<Stmt>) {
 
 // ---- Main loop ---------------------------------------------------------
 
+// Dispatch one decoded LSP request to the right handler. Returns true
+// when the loop should stop (graceful exit). Pulled out of lsp_main so
+// the loop can free `raw` and `req` after each iteration without
+// repeating cleanup before every `continue`.
+fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
+    let method: string = json_as_string(json_get(req, "method"));
+    if method.eq("initialize") { handle_initialize(req); return false; }
+    if method.eq("initialized") { return false; }
+    if method.eq("shutdown") { handle_shutdown(req, state); return false; }
+    if method.eq("exit") { return true; }
+    if method.eq("textDocument/didOpen") { handle_did_open(req, state); return false; }
+    if method.eq("textDocument/didChange") { handle_did_change(req, state); return false; }
+    if method.eq("textDocument/didClose") { handle_did_close(req, state); return false; }
+    if method.eq("textDocument/hover") { handle_hover(req, state); return false; }
+    if method.eq("textDocument/documentSymbol") { handle_document_symbol(req, state); return false; }
+    if method.eq("textDocument/definition") { handle_definition(req, state); return false; }
+    if method.eq("textDocument/completion") { handle_completion(req, state); return false; }
+    if method.eq("textDocument/references") { handle_references(req, state); return false; }
+    if method.eq("textDocument/documentHighlight") { handle_document_highlight(req, state); return false; }
+    if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); return false; }
+    if method.eq("textDocument/rename") { handle_rename(req, state); return false; }
+    if method.eq("textDocument/formatting") { handle_formatting(req, state); return false; }
+    // Any unhandled request gets an empty-result reply so clients don't hang.
+    let id: *JsonValue = json_get(req, "id");
+    if id != null { lsp_send_response(id, json_null()); }
+    return false;
+}
+
 pub fn lsp_main() -> int {
     __glide_set_binary_io();
     let state: *LspState = lsp_state_new();
@@ -3666,27 +3709,21 @@ pub fn lsp_main() -> int {
         let raw: string = lsp_read_message();
         if raw.eq("") { break; }
         let req: *JsonValue = json_parse(raw);
-        if req == null { continue; }
-        let method: string = json_as_string(json_get(req, "method"));
-        if method.eq("initialize") { handle_initialize(req); continue; }
-        if method.eq("initialized") { continue; }
-        if method.eq("shutdown") { handle_shutdown(req, state); continue; }
-        if method.eq("exit") { break; }
-        if method.eq("textDocument/didOpen") { handle_did_open(req, state); continue; }
-        if method.eq("textDocument/didChange") { handle_did_change(req, state); continue; }
-        if method.eq("textDocument/didClose") { handle_did_close(req, state); continue; }
-        if method.eq("textDocument/hover") { handle_hover(req, state); continue; }
-        if method.eq("textDocument/documentSymbol") { handle_document_symbol(req, state); continue; }
-        if method.eq("textDocument/definition") { handle_definition(req, state); continue; }
-        if method.eq("textDocument/completion") { handle_completion(req, state); continue; }
-        if method.eq("textDocument/references") { handle_references(req, state); continue; }
-        if method.eq("textDocument/documentHighlight") { handle_document_highlight(req, state); continue; }
-        if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); continue; }
-        if method.eq("textDocument/rename") { handle_rename(req, state); continue; }
-        if method.eq("textDocument/formatting") { handle_formatting(req, state); continue; }
-        // Any unhandled request gets an empty-result reply so clients don't hang.
-        let id: *JsonValue = json_get(req, "id");
-        if id != null { lsp_send_response(id, json_null()); }
+        let mut should_exit: bool = false;
+        if req != null {
+            should_exit = lsp_dispatch(req, state);
+            // Reclaim the JSON tree wrappers. Leaf strings (uri / text /
+            // method) live independently on the heap; handlers that hand
+            // them to long-lived state (state.docs[uri].text etc) own
+            // them now and free them when they overwrite the slot.
+            json_free(req);
+        }
+        // The raw bytes from __glide_read_bytes are heap-allocated and
+        // referenced only by `req`'s tree at this point. Free them so
+        // every request doesn't leak its full payload.
+        c_raw! { if (raw  !=  NULL) free((char*)(raw )); }
+        if should_exit { break; }
     }
     return 0;
 }
+
