@@ -53,3 +53,30 @@ fn test_process_exists_self() -> int {
     assert!(process_exists(me));
     return 0;
 }
+
+fn test_pipe_stdout_via_spawn() -> int {
+    let c* = Command::new(_hostname_program());
+    c.pipe_stdout();
+    let s: !Child = c.spawn();
+    assert!(s.ok);
+    let child: Child = s.val;
+    let out: !string = child.stdout.read_all();
+    assert!(out.ok);
+    assert!(out.val.len() > 0);
+    let w: !ProcessResult = child.wait();
+    assert!(w.ok);
+    return 0;
+}
+
+fn test_capture_with_env_override() -> int {
+    if !os_is_windows() { return 0; }
+    let c* = Command::new("cmd");
+    c.arg("/c").arg("echo %GLIDE_TEST_VAR%");
+    c.env("GLIDE_TEST_VAR", "from_glide_test");
+    c.capture_out();
+    let r: !ProcessResult = c.run();
+    assert!(r.ok);
+    assert_eq!(r.val.exit_code, 0);
+    assert!(r.val.stdout.contains("from_glide_test"));
+    return 0;
+}

@@ -42,6 +42,21 @@ extern fn __glide_proc_spawn(
     env_clear: int
 ) -> int;
 
+extern fn __glide_proc_spawn_pipes(
+    prog: string,
+    args_packed: string, args_n: int,
+    env_packed: string, env_n: int,
+    cwd: string,
+    env_clear: int,
+    pipe_flags: int,
+    out_stdin: *i64, out_stdout: *i64, out_stderr: *i64
+) -> int;
+
+extern fn __glide_pipe_write(handle: i64, data: string, len: int) -> int;
+extern fn __glide_pipe_read(handle: i64, max: int, out: *string) -> int;
+extern fn __glide_pipe_read_all(handle: i64, out: *string) -> int;
+extern fn __glide_pipe_close(handle: i64) -> int;
+
 extern fn __glide_proc_wait(pid: int, exit_out: *int, signaled_out: *int, signal_out: *int) -> int;
 extern fn __glide_proc_kill(pid: int, sig: int) -> int;
 extern fn __glide_proc_exists(pid: int) -> int;
@@ -651,6 +666,201 @@ c_raw! {
     #endif
     }
 
+    // Spawn with pipes for live stdin/stdout/stderr access. `pipe_flags`:
+    // bit 0 = pipe stdin, bit 1 = pipe stdout, bit 2 = pipe stderr. Each
+    // requested pipe's parent-end is returned in *out_stdin / *out_stdout /
+    // *out_stderr as a 64-bit handle (HANDLE on Windows, int fd on POSIX).
+    // Returns the child PID, -1 on spawn failure. Caller must close every
+    // returned handle and call __glide_proc_wait or kill+wait.
+    static int __glide_proc_spawn_pipes(
+        const char* prog,
+        const char* args_packed, int args_n,
+        const char* env_packed, int env_n,
+        const char* cwd,
+        int env_clear,
+        int pipe_flags,
+        int64_t* out_stdin, int64_t* out_stdout, int64_t* out_stderr
+    ) {
+        *out_stdin = -1; *out_stdout = -1; *out_stderr = -1;
+        int p_in  = (pipe_flags & 1) != 0;
+        int p_out = (pipe_flags & 2) != 0;
+        int p_err = (pipe_flags & 4) != 0;
+    #ifdef _WIN32
+        SECURITY_ATTRIBUTES sa = {0};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        HANDLE in_r = NULL, in_w = NULL;
+        HANDLE out_r = NULL, out_w = NULL;
+        HANDLE err_r = NULL, err_w = NULL;
+        if (p_in)  { if (!CreatePipe(&in_r, &in_w, &sa, 0)) return -1; SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0); }
+        if (p_out) { if (!CreatePipe(&out_r, &out_w, &sa, 0)) return -1; SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0); }
+        if (p_err) { if (!CreatePipe(&err_r, &err_w, &sa, 0)) return -1; SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0); }
+
+        char** argv = __glide_proc_split(args_packed, args_n);
+        char* cmd = __glide_build_cmdline_win(prog, argv, args_n);
+        __glide_proc_split_free(argv);
+
+        LPVOID env_block = NULL;
+        char* env_buf = NULL;
+        if (env_clear && env_n > 0) {
+            char** envp = __glide_proc_split(env_packed, env_n);
+            size_t total = 1;
+            for (int i = 0; i < env_n && envp[i]; i++) total += strlen(envp[i]) + 1;
+            env_buf = (char*)malloc(total);
+            char* p = env_buf;
+            for (int i = 0; i < env_n && envp[i]; i++) {
+                size_t L = strlen(envp[i]); memcpy(p, envp[i], L); p[L] = 0; p += L + 1;
+            }
+            *p = 0; env_block = env_buf;
+            __glide_proc_split_free(envp);
+        } else if (env_clear && env_n == 0) {
+            env_buf = (char*)malloc(2); env_buf[0] = 0; env_buf[1] = 0; env_block = env_buf;
+        } else if (env_n > 0) {
+            char** envp = __glide_proc_split(env_packed, env_n);
+            env_buf = __glide_proc_merge_env_block_win(envp, env_n);
+            env_block = env_buf;
+            __glide_proc_split_free(envp);
+        }
+
+        STARTUPINFOA si = {0};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput  = p_in  ? in_r  : GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = p_out ? out_w : GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError  = p_err ? err_w : GetStdHandle(STD_ERROR_HANDLE);
+
+        PROCESS_INFORMATION pi = {0};
+        BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0,
+                                  env_block, (cwd && *cwd) ? cwd : NULL, &si, &pi);
+        free(cmd);
+        if (env_buf) free(env_buf);
+        if (!ok) {
+            if (in_r) CloseHandle(in_r); if (in_w) CloseHandle(in_w);
+            if (out_r) CloseHandle(out_r); if (out_w) CloseHandle(out_w);
+            if (err_r) CloseHandle(err_r); if (err_w) CloseHandle(err_w);
+            return -1;
+        }
+        if (in_r) CloseHandle(in_r);
+        if (out_w) CloseHandle(out_w);
+        if (err_w) CloseHandle(err_w);
+        if (p_in)  *out_stdin  = (int64_t)(intptr_t)in_w;
+        if (p_out) *out_stdout = (int64_t)(intptr_t)out_r;
+        if (p_err) *out_stderr = (int64_t)(intptr_t)err_r;
+        DWORD pid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return (int)pid;
+    #else
+        int in_pipe[2]  = {-1, -1};
+        int out_pipe[2] = {-1, -1};
+        int err_pipe[2] = {-1, -1};
+        if (p_in  && pipe(in_pipe)  != 0) return -1;
+        if (p_out && pipe(out_pipe) != 0) return -1;
+        if (p_err && pipe(err_pipe) != 0) return -1;
+
+        char** argv_data = __glide_proc_split(args_packed, args_n);
+        char** argv = (char**)calloc((size_t)(args_n + 2), sizeof(char*));
+        argv[0] = (char*)prog;
+        for (int i = 0; i < args_n && argv_data[i]; i++) argv[i + 1] = argv_data[i];
+        char** envp_data = env_n > 0 ? __glide_proc_split(env_packed, env_n) : NULL;
+        char** merged_envp = NULL;
+        if (env_clear && env_n > 0) {
+            merged_envp = (char**)calloc((size_t)(env_n + 1), sizeof(char*));
+            for (int i = 0; i < env_n; i++) merged_envp[i] = strdup(envp_data[i]);
+        } else if (env_clear && env_n == 0) {
+            merged_envp = (char**)calloc(1, sizeof(char*));
+        } else if (env_n > 0) {
+            merged_envp = __glide_proc_merge_envp_posix(envp_data, env_n);
+        }
+        pid_t pid = fork();
+        if (pid < 0) {
+            __glide_proc_split_free(argv_data); free(argv);
+            if (envp_data) __glide_proc_split_free(envp_data);
+            if (merged_envp) __glide_proc_envp_free(merged_envp);
+            return -1;
+        }
+        if (pid == 0) {
+            if (p_in)  { dup2(in_pipe[0], 0); close(in_pipe[0]); close(in_pipe[1]); }
+            if (p_out) { dup2(out_pipe[1], 1); close(out_pipe[0]); close(out_pipe[1]); }
+            if (p_err) { dup2(err_pipe[1], 2); close(err_pipe[0]); close(err_pipe[1]); }
+            if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
+            if (merged_envp) execvpe(prog, argv, merged_envp);
+            else             execvp(prog, argv);
+            _exit(127);
+        }
+        __glide_proc_split_free(argv_data); free(argv);
+        if (envp_data) __glide_proc_split_free(envp_data);
+        if (merged_envp) __glide_proc_envp_free(merged_envp);
+        if (p_in)  { close(in_pipe[0]);  *out_stdin  = (int64_t)in_pipe[1]; }
+        if (p_out) { close(out_pipe[1]); *out_stdout = (int64_t)out_pipe[0]; }
+        if (p_err) { close(err_pipe[1]); *out_stderr = (int64_t)err_pipe[0]; }
+        return (int)pid;
+    #endif
+    }
+
+    static int __glide_pipe_write(int64_t handle, const char* data, int len) {
+        if (handle < 0 || !data || len <= 0) return -1;
+    #ifdef _WIN32
+        DWORD wrote = 0;
+        if (!WriteFile((HANDLE)(intptr_t)handle, data, (DWORD)len, &wrote, NULL)) return -1;
+        return (int)wrote;
+    #else
+        ssize_t total = 0;
+        while (total < len) {
+            ssize_t w = write((int)handle, data + total, (size_t)(len - total));
+            if (w < 0) { if (errno == EINTR) continue; return -1; }
+            if (w == 0) break;
+            total += w;
+        }
+        return (int)total;
+    #endif
+    }
+
+    static int __glide_pipe_read(int64_t handle, int max, const char** out) {
+        *out = "";
+        if (handle < 0 || max <= 0) return -1;
+        char* buf = (char*)malloc((size_t)max + 1);
+        if (!buf) return -1;
+    #ifdef _WIN32
+        DWORD got = 0;
+        if (!ReadFile((HANDLE)(intptr_t)handle, buf, (DWORD)max, &got, NULL)) {
+            free(buf); return -1;
+        }
+        buf[got] = 0;
+        *out = buf;
+        return (int)got;
+    #else
+        ssize_t n;
+        do { n = read((int)handle, buf, (size_t)max); } while (n < 0 && errno == EINTR);
+        if (n < 0) { free(buf); return -1; }
+        buf[n] = 0;
+        *out = buf;
+        return (int)n;
+    #endif
+    }
+
+    static int __glide_pipe_read_all(int64_t handle, const char** out) {
+        *out = "";
+        if (handle < 0) return -1;
+    #ifdef _WIN32
+        char* buf = __glide_proc_drain_handle((HANDLE)(intptr_t)handle);
+    #else
+        char* buf = __glide_proc_drain_fd((int)handle);
+    #endif
+        if (!buf) { *out = ""; return 0; }
+        *out = buf;
+        return (int)strlen(buf);
+    }
+
+    static int __glide_pipe_close(int64_t handle) {
+        if (handle < 0) return 0;
+    #ifdef _WIN32
+        return CloseHandle((HANDLE)(intptr_t)handle) ? 0 : -1;
+    #else
+        return close((int)handle);
+    #endif
+    }
+
     static int __glide_proc_exists(int pid) {
     #ifdef _WIN32
         HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
@@ -689,12 +899,81 @@ pub struct Command {
     pub cwd_path: string,
     pub stdin_payload: string,
     pub flags: int,                     // bit 0 = capture stdout, bit 1 = capture stderr,
-                                        // bit 2 = env_clear (don't inherit parent env)
+                                        // bit 2 = env_clear (don't inherit parent env),
+                                        // bit 3 = pipe stdin, bit 4 = pipe stdout, bit 5 = pipe stderr
 }
 
-/// Handle to a spawned (still-running) child process.
+/// Handle to the child's stdin pipe (when `Command::pipe_stdin()` was used).
+pub struct ChildStdin  { pub handle: i64 }
+
+/// Handle to the child's stdout pipe (when `Command::pipe_stdout()` was used).
+pub struct ChildStdout { pub handle: i64 }
+
+/// Handle to the child's stderr pipe (when `Command::pipe_stderr()` was used).
+pub struct ChildStderr { pub handle: i64 }
+
+/// Handle to a spawned (still-running) child process. The pipe handles are
+/// non-null only when the corresponding `Command::pipe_*` builder was called.
 pub struct Child {
     pub pid: int,
+    pub stdin:  *ChildStdin,    // null unless pipe_stdin()
+    pub stdout: *ChildStdout,   // null unless pipe_stdout()
+    pub stderr: *ChildStderr,   // null unless pipe_stderr()
+}
+
+impl ChildStdin {
+    /// Write `s` to the child's stdin. Returns bytes written. Use `close()`
+    /// to send EOF.
+    pub fn write(self: *ChildStdin, s: string) -> !int {
+        let n: int = __glide_pipe_write(self.handle, s, s.len());
+        if n < 0 { return err("write to child stdin failed"); }
+        return ok(n);
+    }
+    /// Close the stdin pipe, signaling EOF to the child. Idempotent.
+    pub fn close(self: *ChildStdin) -> ! {
+        if __glide_pipe_close(self.handle) != 0 { return err("close stdin failed"); }
+        self.handle = 0 - 1;
+    }
+}
+
+impl ChildStdout {
+    /// Read up to `n` bytes from the child's stdout. Returns "" on EOF.
+    pub fn read(self: *ChildStdout, n: int) -> !string {
+        let mut out: string = "";
+        let got: int = __glide_pipe_read(self.handle, n, &mut out);
+        if got < 0 { return err("read from child stdout failed"); }
+        return ok(out);
+    }
+    /// Read everything until EOF.
+    pub fn read_all(self: *ChildStdout) -> !string {
+        let mut out: string = "";
+        let got: int = __glide_pipe_read_all(self.handle, &mut out);
+        if got < 0 { return err("read_all from child stdout failed"); }
+        return ok(out);
+    }
+    pub fn close(self: *ChildStdout) -> ! {
+        if __glide_pipe_close(self.handle) != 0 { return err("close stdout failed"); }
+        self.handle = 0 - 1;
+    }
+}
+
+impl ChildStderr {
+    pub fn read(self: *ChildStderr, n: int) -> !string {
+        let mut out: string = "";
+        let got: int = __glide_pipe_read(self.handle, n, &mut out);
+        if got < 0 { return err("read from child stderr failed"); }
+        return ok(out);
+    }
+    pub fn read_all(self: *ChildStderr) -> !string {
+        let mut out: string = "";
+        let got: int = __glide_pipe_read_all(self.handle, &mut out);
+        if got < 0 { return err("read_all from child stderr failed"); }
+        return ok(out);
+    }
+    pub fn close(self: *ChildStderr) -> ! {
+        if __glide_pipe_close(self.handle) != 0 { return err("close stderr failed"); }
+        self.handle = 0 - 1;
+    }
 }
 
 impl Command {
@@ -754,6 +1033,18 @@ impl Command {
     /// Capture both stdout and stderr.
     pub fn capture(self: *Command) -> *Command { self.flags = self.flags | 3; return self; }
 
+    /// Request a live pipe for the child's stdin, returned as `Child.stdin`
+    /// after `spawn()`. Use it with `child.stdin.write(s)` and `.close()`.
+    /// Only honored by `spawn()` — `run()` uses `stdin_str` instead.
+    pub fn pipe_stdin(self: *Command) -> *Command { self.flags = self.flags | 8; return self; }
+
+    /// Request a live pipe for the child's stdout. Read with
+    /// `child.stdout.read(n)` or `.read_all()`.
+    pub fn pipe_stdout(self: *Command) -> *Command { self.flags = self.flags | 16; return self; }
+
+    /// Request a live pipe for the child's stderr.
+    pub fn pipe_stderr(self: *Command) -> *Command { self.flags = self.flags | 32; return self; }
+
     /// Run the command synchronously. Blocks until the child exits.
     /// Returns `Err` only if the spawn itself failed (program not found,
     /// fork/CreateProcess error). Non-zero exit codes are reported via
@@ -795,15 +1086,59 @@ impl Command {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
         let env_clear:   int = (self.flags >> 2) & 1;
-        let pid: int = __glide_proc_spawn(
+        let pipe_flags:  int = (self.flags >> 3) & 7;   // bits 3..5 → 0..2
+
+        if pipe_flags == 0 {
+            let pid: int = __glide_proc_spawn(
+                self.program,
+                args_packed, self.args.len(),
+                env_packed,  self.env_kv.len(),
+                self.cwd_path,
+                env_clear
+            );
+            if pid <= 0 { return err("failed to spawn process"); }
+            let c: Child = Child {
+                pid: pid,
+                stdin: null, stdout: null, stderr: null,
+            };
+            return ok(c);
+        }
+
+        let mut h_in:  i64 = 0 - 1;
+        let mut h_out: i64 = 0 - 1;
+        let mut h_err: i64 = 0 - 1;
+        let pid: int = __glide_proc_spawn_pipes(
             self.program,
             args_packed, self.args.len(),
             env_packed,  self.env_kv.len(),
             self.cwd_path,
-            env_clear
+            env_clear,
+            pipe_flags,
+            &mut h_in, &mut h_out, &mut h_err
         );
         if pid <= 0 { return err("failed to spawn process"); }
-        let c: Child = Child { pid: pid };
+        let mut cs_in:  *ChildStdin  = null;
+        let mut cs_out: *ChildStdout = null;
+        let mut cs_err: *ChildStderr = null;
+        if (pipe_flags & 1) != 0 {
+            let p: *ChildStdin = malloc(sizeof(ChildStdin)) as *ChildStdin;
+            p.handle = h_in;
+            cs_in = p;
+        }
+        if (pipe_flags & 2) != 0 {
+            let p: *ChildStdout = malloc(sizeof(ChildStdout)) as *ChildStdout;
+            p.handle = h_out;
+            cs_out = p;
+        }
+        if (pipe_flags & 4) != 0 {
+            let p: *ChildStderr = malloc(sizeof(ChildStderr)) as *ChildStderr;
+            p.handle = h_err;
+            cs_err = p;
+        }
+        let c: Child = Child {
+            pid: pid,
+            stdin: cs_in, stdout: cs_out, stderr: cs_err,
+        };
         return ok(c);
     }
 
