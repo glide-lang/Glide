@@ -27,6 +27,48 @@ import ast;
 // for qualified method calls like `s.cores::red()`). Returns the byte index of
 // the first `:` of the separator, or -1 if absent. Plain method names (no `::`)
 // are the common case and exit fast.
+// `c_safe_ident` mangles user-supplied identifier names that would collide
+// with C keywords. Applied at every emit site where a Glide ident reaches
+// the C output (let bindings, fn params, EX_IDENT references, for-loop
+// counters, match-arm payload bindings, struct field decl/access, struct
+// literal field designators, top-level const, fn name, struct/enum typedef
+// name). The mangling prefix is `_g_`. Glide-side scope tracking still
+// uses the original name; only the C-emit side mangles.
+//
+// Covers C99 + GCC's `asm`. Glide-keywords already collide before reaching
+// the value namespace (lexer emits TOK_KEYWORD), so we don't have to mangle
+// `if`/`while`/`for`/etc here.
+pub fn is_c_reserved(s: string) -> bool {
+    if s.eq("asm") { return true; }
+    if s.eq("auto") { return true; }
+    if s.eq("case") { return true; }
+    if s.eq("char") { return true; }
+    if s.eq("default") { return true; }
+    if s.eq("do") { return true; }
+    if s.eq("double") { return true; }
+    if s.eq("float") { return true; }
+    if s.eq("goto") { return true; }
+    if s.eq("inline") { return true; }
+    if s.eq("int") { return true; }
+    if s.eq("long") { return true; }
+    if s.eq("register") { return true; }
+    if s.eq("restrict") { return true; }
+    if s.eq("short") { return true; }
+    if s.eq("signed") { return true; }
+    if s.eq("static") { return true; }
+    if s.eq("switch") { return true; }
+    if s.eq("typedef") { return true; }
+    if s.eq("union") { return true; }
+    if s.eq("unsigned") { return true; }
+    if s.eq("void") { return true; }
+    return false;
+}
+
+pub fn c_safe_ident(name: string) -> string {
+    if is_c_reserved(name) { return "_g_".concat(name); }
+    return name;
+}
+
 fn ns_split_pos(name: string) -> int {
     let n: int = name.len();
     let mut i: int = 0;
@@ -527,7 +569,7 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
                 if m.fn_params != null && m.fn_params.len() > 1 {
                     for let j: int = 1; j < m.fn_params.len(); j++ {
                         let p: Param = m.fn_params.get(j);
-                        print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(p.name));
+                        print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(c_safe_ident(p.name)));
                     }
                 }
                 println!(");");
@@ -584,7 +626,7 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
             if m.fn_params != null && m.fn_params.len() > 1 {
                 for let j: int = 1; j < m.fn_params.len(); j++ {
                     let p: Param = m.fn_params.get(j);
-                    print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(p.name));
+                    print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(c_safe_ident(p.name)));
                 }
             }
             println!(") {");
@@ -598,7 +640,7 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
             if m.fn_params != null && m.fn_params.len() > 1 {
                 for let j: int = 1; j < m.fn_params.len(); j++ {
                     let p: Param = m.fn_params.get(j);
-                    print!(", ".concat(p.name));
+                    print!(", ".concat(c_safe_ident(p.name)));
                 }
             }
             println!(");");
@@ -1301,7 +1343,9 @@ pub fn type_to_c(t: *Type) -> string {
         if n.eq("string") { return "const char*"; }
         if n.eq("void")   { return "void"; }
         if n.eq("__fn_ptr__") { return "void*"; }
-        return n;
+        // User-defined type name (struct/enum). Mangle if it collides with
+        // a C keyword so `struct asm { ... }` and friends compile.
+        return c_safe_ident(n);
     }
     if t.kind == TY_POINTER {
         // `*dyn Trait` is a fat pointer struct, not a raw pointer.
@@ -1768,7 +1812,7 @@ fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vecto
             let pp: Param = template.fn_params.get(j);
             let pt: *Type = subst_type(pp.ty, template.type_params, args);
             let resolved_pt: *Type = resolve_assoc_recursive(g, pt);
-            print!(type_to_c(resolved_pt), " ", pp.name);
+            print!(type_to_c(resolved_pt), " ", c_safe_ident(pp.name));
         }
     }
     println!(");");
@@ -2059,12 +2103,12 @@ fn emit_arm_typeof_probe(g: *CG, arms: *Vector<MatchArm>) {
         if a.bindings.len() == 1 {
             let payload: string = "__m.data.v_".concat(a.variant);
             print!("__typeof__("); print!(payload); print!(") ");
-            print!(a.bindings.get(0)); print!(" = "); print!(payload); print!("; ");
+            print!(c_safe_ident(a.bindings.get(0))); print!(" = "); print!(payload); print!("; ");
         } else {
             for let k: int = 0; k < a.bindings.len(); k++ {
                 let payload: string = "__m.data.v_".concat(a.variant);
                 print!("__typeof__("); print!(payload); print!(".f"); print!(k); print!(") ");
-                print!(a.bindings.get(k)); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
+                print!(c_safe_ident(a.bindings.get(k))); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
             }
         }
     }
@@ -2088,7 +2132,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     }
     if e.kind == EX_BOOL { if e.bool_val { print!("true"); } else { print!("false"); } return; }
     if e.kind == EX_NULL { print!("NULL"); return; }
-    if e.kind == EX_IDENT { print!(e.str_val); return; }
+    if e.kind == EX_IDENT { print!(c_safe_ident(e.str_val)); return; }
     if e.kind == EX_IF {
         // Lower expression-position if to a C ternary. Both branches
         // are guaranteed to be single expressions by the parser, so
@@ -2144,12 +2188,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     if a.bindings.len() == 1 {
                         let payload: string = "__m.data.v_".concat(a.variant);
                         print!("__typeof__("); print!(payload); print!(") ");
-                        print!(a.bindings.get(0)); print!(" = "); print!(payload); print!("; ");
+                        print!(c_safe_ident(a.bindings.get(0))); print!(" = "); print!(payload); print!("; ");
                     } else {
                         for let k: int = 0; k < a.bindings.len(); k++ {
                             let payload: string = "__m.data.v_".concat(a.variant);
                             print!("__typeof__("); print!(payload); print!(".f"); print!(k); print!(") ");
-                            print!(a.bindings.get(k)); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
+                            print!(c_safe_ident(a.bindings.get(k))); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
                         }
                     }
                 }
@@ -2670,12 +2714,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 || recv_ty.kind == TY_BORROW_MUT) {
             print!("(");
             emit_expr(g, e.lhs);
-            print!("->", e.field, ")");
+            print!("->", c_safe_ident(e.field), ")");
             return;
         }
         print!("(");
         emit_expr(g, e.lhs);
-        print!(".", e.field, ")");
+        print!(".", c_safe_ident(e.field), ")");
         return;
     }
     if e.kind == EX_INDEX {
@@ -2832,7 +2876,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         if e.field_names != null && e.args != null {
             for let i: int = 0; i < e.args.len(); i++ {
                 if i > 0 { print!(", "); }
-                print!(".", e.field_names.get(i), " = ");
+                print!(".", c_safe_ident(e.field_names.get(i)), " = ");
                 let v: Expr = e.args.get(i);
                 emit_expr(g, &v);
             }
@@ -3001,8 +3045,9 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
 
         // ---- now emit the let stmt itself ----
         ind(depth);
+        let cname: string = c_safe_ident(s.name);
         if s.let_ty != null {
-            print!(type_to_c(s.let_ty), " ", s.name);
+            print!(type_to_c(s.let_ty), " ", cname);
             g.declare(s.name, s.let_ty);
         } else if s.let_value != null {
             // Try to infer from value. If the value is an Ident referencing
@@ -3012,7 +3057,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                 for let k: int = 0; k < g.anon_fns.len(); k++ {
                     let af: AnonFn = g.anon_fns.get(k);
                     if af.name.eq(s.let_value.str_val) {
-                        print!("void* ", s.name);
+                        print!("void* ", cname);
                         let void_ptr: *Type = ty_pointer(ty_named("void"));
                         g.declare(s.name, void_ptr);
                         handled = true;
@@ -3023,14 +3068,14 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             if !handled {
                 let vt: *Type = infer_for_codegen(g, s.let_value);
                 if vt != null {
-                    print!(type_to_c(vt), " ", s.name);
+                    print!(type_to_c(vt), " ", cname);
                     g.declare(s.name, vt);
                 } else {
-                    print!("/* infer */ int ", s.name);
+                    print!("/* infer */ int ", cname);
                 }
             }
         } else {
-            print!("/* infer */ int ", s.name);
+            print!("/* infer */ int ", cname);
         }
         if struct_lit_auto {
             // T* p = malloc(sizeof(T)); *p = (T){...};
@@ -3042,7 +3087,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             println!("");
             ind(depth);
             print!("*");
-            print!(s.name);
+            print!(cname);
             print!(" = ");
             emit_expr(g, s.let_value);
             println!(";");
@@ -3475,14 +3520,15 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         ind(depth); print!("for (");
         if s.for_init != null {
             if s.for_init.kind == ST_LET {
+                let fname: string = c_safe_ident(s.for_init.name);
                 if s.for_init.let_ty != null {
-                    print!(type_to_c(s.for_init.let_ty), " ", s.for_init.name);
+                    print!(type_to_c(s.for_init.let_ty), " ", fname);
                     g.declare(s.for_init.name, s.for_init.let_ty);
                 } else {
                     // Untyped `for let i = 0; ...`: default to int and register
                     // it in scope so the body's `i` references type-resolve to
                     // int (otherwise printf-style macros emit `%p` → hex).
-                    print!("int ", s.for_init.name);
+                    print!("int ", fname);
                     g.declare(s.for_init.name, ty_named("int"));
                 }
                 if s.for_init.let_value != null {
@@ -3536,7 +3582,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                         print!("__typeof__(");
                         print!(payload);
                         print!(") ");
-                        print!(a.bindings.get(0));
+                        print!(c_safe_ident(a.bindings.get(0)));
                         print!(" = ");
                         print!(payload);
                         println!(";");
@@ -3547,7 +3593,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                             print!("__typeof__(");
                             print!(payload); print!(".f"); print!(k);
                             print!(") ");
-                            print!(a.bindings.get(k));
+                            print!(c_safe_ident(a.bindings.get(k)));
                             print!(" = ");
                             print!(payload); print!(".f"); print!(k);
                             println!(";");
@@ -3591,7 +3637,7 @@ fn emit_fn_signature(s: *Stmt) {
         return;
     }
     if s.is_naked { print!("__attribute__((naked)) "); }
-    print!(type_to_c(s.fn_ret_ty), " ", s.name, "(");
+    print!(type_to_c(s.fn_ret_ty), " ", c_safe_ident(s.name), "(");
     if s.fn_params == null || s.fn_params.len() == 0 {
         if s.is_variadic { print!("..."); }
         else             { print!("void"); }
@@ -3599,7 +3645,7 @@ fn emit_fn_signature(s: *Stmt) {
         for let i: int = 0; i < s.fn_params.len(); i++ {
             if i > 0 { print!(", "); }
             let p: Param = s.fn_params.get(i);
-            print!(type_to_c(p.ty), " ", p.name);
+            print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
         }
         if s.is_variadic { print!(", ..."); }
     }
@@ -3916,7 +3962,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
             for let j: int = 0; j < m.fn_params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = m.fn_params.get(j);
-                print!(type_to_c(p.ty), " ", p.name);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
             }
         }
         println!(") {");
@@ -3979,7 +4025,7 @@ fn emit_impl_fwd_decls(g: *CG, s: *Stmt) {
             for let j: int = 0; j < m.fn_params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = m.fn_params.get(j);
-                print!(type_to_c(p.ty), " ", p.name);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
             }
         }
         println!(");");
@@ -3987,14 +4033,15 @@ fn emit_impl_fwd_decls(g: *CG, s: *Stmt) {
 }
 
 fn emit_struct(s: *Stmt) {
-    println!("typedef struct ", s.name, " {");
+    let cname: string = c_safe_ident(s.name);
+    println!("typedef struct ", cname, " {");
     if s.struct_fields != null {
         for let i: int = 0; i < s.struct_fields.len(); i++ {
             let f: Field = s.struct_fields.get(i);
-            print!("    ", type_to_c(f.ty), " ", f.name); println!(";");
+            print!("    ", type_to_c(f.ty), " ", c_safe_ident(f.name)); println!(";");
         }
     }
-    println!("} ", s.name, ";");
+    println!("} ", cname, ";");
     println!("");
 }
 
@@ -4006,7 +4053,8 @@ fn emit_enum(s: *Stmt) {
             if v.fields != null && v.fields.len() > 0 { has_payload = true; }
         }
     }
-    println!("typedef struct ", s.name, " {");
+    let ename: string = c_safe_ident(s.name);
+    println!("typedef struct ", ename, " {");
     println!("    int tag;");
     if has_payload {
         println!("    union {");
@@ -4039,12 +4087,12 @@ fn emit_enum(s: *Stmt) {
         }
         println!("    } data;");
     }
-    println!("} ", s.name, ";");
+    println!("} ", ename, ";");
     if s.enum_variants != null {
         for let i: int = 0; i < s.enum_variants.len(); i++ {
             let v: EnumVariant = s.enum_variants.get(i);
             print!("#define ");
-            print!(s.name);
+            print!(ename);
             print!("_");
             print!(v.name);
             print!(" ");
@@ -4630,7 +4678,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             for let j: int = 0; j < af.params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = af.params.get(j);
-                print!(type_to_c(p.ty), " ", p.name);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
             }
         }
         println!(");");
@@ -4700,7 +4748,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             for let j: int = 0; j < new_params_v.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = new_params_v.get(j);
-                print!(type_to_c(p.ty), " ", p.name);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
             }
         }
         println!(") {");
@@ -4740,7 +4788,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             for let j: int = 0; j < af.params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = af.params.get(j);
-                print!(type_to_c(p.ty), " ", p.name);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
             }
         }
         println!(") {");
@@ -4781,19 +4829,20 @@ fn emit_top_const(g: *CG, s: *Stmt) {
     // expansion treats `1000000000` as plain `int` and arithmetic like
     // `(SECS_PER_HOUR * NANOS_PER_SEC)` overflows int32 silently.
     if s.let_value == null { return; }
+    let cname: string = c_safe_ident(s.name);
     if s.let_ty != null && s.let_ty.kind == TY_NAMED
        && (s.let_ty.name.eq("int") || s.let_ty.name.eq("uint")
            || s.let_ty.name.eq("i32")) {
-        print!("#define ", s.name, " ");
+        print!("#define ", cname, " ");
         emit_expr(g, s.let_value);
         println!("");
         return;
     }
     print!("static const ");
     if s.let_ty != null {
-        print!(type_to_c(s.let_ty), " ", s.name);
+        print!(type_to_c(s.let_ty), " ", cname);
     } else {
-        print!("int ", s.name);
+        print!("int ", cname);
     }
     print!(" = ");
     if s.let_ty != null && s.let_ty.kind == TY_NAMED && s.let_ty.name.eq("i64") {
