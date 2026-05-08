@@ -3332,6 +3332,18 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         return;
     }
     if s.kind == ST_EXPR {
+        // Field-assign generic mono hint: for `obj.field = Generic::new()`,
+        // infer T from the field's declared type and rewrite the call to
+        // `Generic_new__T()` before emitting. Lets users skip the let-init
+        // dance — `c.args = Vector::new()` Just Works.
+        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+           && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_MEMBER
+           && s.expr_value.rhs != null && s.expr_value.rhs.kind == EX_CALL {
+            let field_ty: *Type = infer_for_codegen(g, s.expr_value.lhs);
+            if field_ty != null {
+                let _ok: bool = try_mono_call(g, s.expr_value.rhs, field_ty);
+            }
+        }
         ind(depth);
         emit_expr(g, s.expr_value);
         println!(";");

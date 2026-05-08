@@ -513,12 +513,10 @@ impl Command {
     /// "inherit"; output is forwarded to the parent's stdout/stderr unless a
     /// `capture_*` method is called.
     pub fn new(program: string) -> *Command {
-        let args_v: *Vector<string> = Vector::new();
-        let env_v: *Vector<string> = Vector::new();
         let c: *Command = malloc(sizeof(Command)) as *Command;
         c.program = program;
-        c.args = args_v;
-        c.env_kv = env_v;
+        c.args = Vector::new();
+        c.env_kv = Vector::new();
         c.cwd_path = "";
         c.stdin_payload = "";
         c.flags = 0;
