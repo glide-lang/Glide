@@ -38,7 +38,8 @@ extern fn __glide_proc_spawn(
     prog: string,
     args_packed: string, args_n: int,
     env_packed: string, env_n: int,
-    cwd: string
+    cwd: string,
+    env_clear: int
 ) -> int;
 
 extern fn __glide_proc_wait(pid: int, exit_out: *int, signaled_out: *int, signal_out: *int) -> int;
@@ -86,6 +87,84 @@ c_raw! {
         if (arr[0]) free(arr[0]);  // single contiguous buffer
         free(arr);
     }
+
+    // Compare KEY parts of two "KEY=VAL" strings. Returns 1 if equal.
+    static int __glide_proc_env_key_eq(const char* a, const char* b) {
+        const char* ea = strchr(a, '=');
+        const char* eb = strchr(b, '=');
+        if (!ea || !eb) return 0;
+        size_t la = (size_t)(ea - a);
+        size_t lb = (size_t)(eb - b);
+        if (la != lb) return 0;
+        return strncmp(a, b, la) == 0;
+    }
+
+    // Build a merged envp: parent's environ entries, with any key in
+    // `overrides` replaced (or appended if absent). Returns malloc'd
+    // NULL-terminated array of malloc'd strings; caller frees via
+    // __glide_proc_envp_free. POSIX-only.
+    #ifndef _WIN32
+    static char** __glide_proc_merge_envp_posix(char** overrides, int n_overrides) {
+        extern char** environ;
+        int parent_count = 0;
+        if (environ) while (environ[parent_count]) parent_count++;
+        char** result = (char**)calloc((size_t)(parent_count + n_overrides + 1), sizeof(char*));
+        int rc = 0;
+        for (int i = 0; i < parent_count; i++) {
+            int overridden = 0;
+            for (int j = 0; j < n_overrides; j++) {
+                if (__glide_proc_env_key_eq(environ[i], overrides[j])) { overridden = 1; break; }
+            }
+            if (!overridden) result[rc++] = strdup(environ[i]);
+        }
+        for (int j = 0; j < n_overrides; j++) result[rc++] = strdup(overrides[j]);
+        result[rc] = NULL;
+        return result;
+    }
+    static void __glide_proc_envp_free(char** envp) {
+        if (!envp) return;
+        for (int i = 0; envp[i]; i++) free(envp[i]);
+        free(envp);
+    }
+    #endif
+
+    // Windows: build an env-block (KEY=VAL\0KEY=VAL\0\0) by merging the
+    // parent's GetEnvironmentStringsA output with overrides. Caller frees
+    // with regular free().
+    #ifdef _WIN32
+    static char* __glide_proc_merge_env_block_win(char** overrides, int n_overrides) {
+        LPCH parent = GetEnvironmentStringsA();
+        size_t cap = 4096, len = 0;
+        char* buf = (char*)malloc(cap);
+        // Copy parent entries, skipping overridden keys.
+        if (parent) {
+            const char* p = parent;
+            while (*p) {
+                size_t L = strlen(p);
+                int overridden = 0;
+                for (int j = 0; j < n_overrides; j++) {
+                    if (__glide_proc_env_key_eq(p, overrides[j])) { overridden = 1; break; }
+                }
+                if (!overridden) {
+                    while (len + L + 2 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+                    memcpy(buf + len, p, L); buf[len + L] = 0; len += L + 1;
+                }
+                p += L + 1;
+            }
+            FreeEnvironmentStringsA(parent);
+        }
+        // Append overrides.
+        for (int j = 0; j < n_overrides; j++) {
+            size_t L = strlen(overrides[j]);
+            while (len + L + 2 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+            memcpy(buf + len, overrides[j], L); buf[len + L] = 0; len += L + 1;
+        }
+        // Double-NUL terminator.
+        if (len + 1 >= cap) { cap += 1; buf = (char*)realloc(buf, cap); }
+        buf[len] = 0;
+        return buf;
+    }
+    #endif
 
     // Read everything available on `fd` until EOF, append to a malloc'd buffer.
     // Returns NUL-terminated string (caller frees).
@@ -187,12 +266,17 @@ c_raw! {
         cmd[cmd_len] = 0;
         __glide_proc_split_free(argv);
 
-        // Build environment block (KEY=VAL\0KEY=VAL\0\0 on Windows).
+        // Build environment block (KEY=VAL\0KEY=VAL\0\0 on Windows). Three modes
+        // mirror the POSIX path:
+        //   env_clear        → use only overrides
+        //   env_n>0 + !clear → merge parent + overrides
+        //   env_n=0 + !clear → NULL → CreateProcess inherits parent env
+        int env_clear_w = (capture_flags & 4) != 0;
         LPVOID env_block = NULL;
         char* env_buf = NULL;
-        if (env_n > 0 && env_packed) {
+        if (env_clear_w && env_n > 0) {
             char** envp = __glide_proc_split(env_packed, env_n);
-            size_t total = 1; // final NUL
+            size_t total = 1;
             for (int i = 0; i < env_n && envp[i]; i++) total += strlen(envp[i]) + 1;
             env_buf = (char*)malloc(total);
             char* p = env_buf;
@@ -200,6 +284,15 @@ c_raw! {
                 size_t L = strlen(envp[i]); memcpy(p, envp[i], L); p[L] = 0; p += L + 1;
             }
             *p = 0;
+            env_block = env_buf;
+            __glide_proc_split_free(envp);
+        } else if (env_clear_w && env_n == 0) {
+            env_buf = (char*)malloc(2);
+            env_buf[0] = 0; env_buf[1] = 0;
+            env_block = env_buf;
+        } else if (env_n > 0) {
+            char** envp = __glide_proc_split(env_packed, env_n);
+            env_buf = __glide_proc_merge_env_block_win(envp, env_n);
             env_block = env_buf;
             __glide_proc_split_free(envp);
         }
@@ -287,14 +380,31 @@ c_raw! {
         argv[0] = (char*)prog;
         for (int i = 0; i < args_n && argv_data[i]; i++) argv[i + 1] = argv_data[i];
 
+        int env_clear = (capture_flags & 4) != 0;
         char** envp_data = NULL;
         if (env_n > 0) envp_data = __glide_proc_split(env_packed, env_n);
+
+        // Build merged envp now in the parent so we can reuse on fork+exec.
+        // Three modes:
+        //   env_clear        → only override entries (fully replace)
+        //   env_n>0 + !clear → parent environ + overrides (overrides win)
+        //   env_n=0 + !clear → NULL → execvp uses inherited environ as-is
+        char** merged_envp = NULL;
+        if (env_clear && env_n > 0) {
+            merged_envp = (char**)calloc((size_t)(env_n + 1), sizeof(char*));
+            for (int i = 0; i < env_n; i++) merged_envp[i] = strdup(envp_data[i]);
+        } else if (env_clear && env_n == 0) {
+            merged_envp = (char**)calloc(1, sizeof(char*));  // empty env
+        } else if (env_n > 0) {
+            merged_envp = __glide_proc_merge_envp_posix(envp_data, env_n);
+        }
 
         pid_t pid = fork();
         if (pid < 0) {
             __glide_proc_split_free(argv_data);
             free(argv);
             if (envp_data) __glide_proc_split_free(envp_data);
+            if (merged_envp) __glide_proc_envp_free(merged_envp);
             return -1;
         }
         if (pid == 0) {
@@ -303,11 +413,8 @@ c_raw! {
             if (cap_out)   { dup2(out_pipe[1], 1); close(out_pipe[0]); close(out_pipe[1]); }
             if (cap_err)   { dup2(err_pipe[1], 2); close(err_pipe[0]); close(err_pipe[1]); }
             if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
-            if (envp_data) {
-                // Replace environ. Build a NULL-terminated envp.
-                char** envp = (char**)calloc((size_t)(env_n + 1), sizeof(char*));
-                for (int i = 0; i < env_n; i++) envp[i] = envp_data[i];
-                execvpe(prog, argv, envp);
+            if (merged_envp) {
+                execvpe(prog, argv, merged_envp);
             } else {
                 execvp(prog, argv);
             }
@@ -317,6 +424,7 @@ c_raw! {
         __glide_proc_split_free(argv_data);
         free(argv);
         if (envp_data) __glide_proc_split_free(envp_data);
+        if (merged_envp) __glide_proc_envp_free(merged_envp);
         if (has_stdin) close(in_pipe[0]);
         if (cap_out)   close(out_pipe[1]);
         if (cap_err)   close(err_pipe[1]);
@@ -370,7 +478,8 @@ c_raw! {
         const char* prog,
         const char* args_packed, int args_n,
         const char* env_packed, int env_n,
-        const char* cwd
+        const char* cwd,
+        int env_clear
     ) {
     #ifdef _WIN32
         char** argv = __glide_proc_split(args_packed, args_n);
@@ -388,11 +497,34 @@ c_raw! {
         }
         cmd[cmd_len] = 0;
         __glide_proc_split_free(argv);
+        // env merge (mirror of __glide_proc_run path)
+        LPVOID env_block = NULL;
+        char* env_buf = NULL;
+        if (env_clear && env_n > 0) {
+            char** envp = __glide_proc_split(env_packed, env_n);
+            size_t total = 1;
+            for (int i = 0; i < env_n && envp[i]; i++) total += strlen(envp[i]) + 1;
+            env_buf = (char*)malloc(total);
+            char* p = env_buf;
+            for (int i = 0; i < env_n && envp[i]; i++) {
+                size_t L = strlen(envp[i]); memcpy(p, envp[i], L); p[L] = 0; p += L + 1;
+            }
+            *p = 0; env_block = env_buf;
+            __glide_proc_split_free(envp);
+        } else if (env_clear && env_n == 0) {
+            env_buf = (char*)malloc(2); env_buf[0] = 0; env_buf[1] = 0; env_block = env_buf;
+        } else if (env_n > 0) {
+            char** envp = __glide_proc_split(env_packed, env_n);
+            env_buf = __glide_proc_merge_env_block_win(envp, env_n);
+            env_block = env_buf;
+            __glide_proc_split_free(envp);
+        }
         STARTUPINFOA si = {0}; si.cb = sizeof(si);
         PROCESS_INFORMATION pi = {0};
-        BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL,
+        BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, env_block,
                                   (cwd && *cwd) ? cwd : NULL, &si, &pi);
         free(cmd);
+        if (env_buf) free(env_buf);
         if (!ok) return -1;
         DWORD pid = pi.dwProcessId;
         CloseHandle(pi.hThread);
@@ -405,25 +537,31 @@ c_raw! {
         argv[0] = (char*)prog;
         for (int i = 0; i < args_n && argv_data[i]; i++) argv[i + 1] = argv_data[i];
         char** envp_data = env_n > 0 ? __glide_proc_split(env_packed, env_n) : NULL;
+        char** merged_envp = NULL;
+        if (env_clear && env_n > 0) {
+            merged_envp = (char**)calloc((size_t)(env_n + 1), sizeof(char*));
+            for (int i = 0; i < env_n; i++) merged_envp[i] = strdup(envp_data[i]);
+        } else if (env_clear && env_n == 0) {
+            merged_envp = (char**)calloc(1, sizeof(char*));
+        } else if (env_n > 0) {
+            merged_envp = __glide_proc_merge_envp_posix(envp_data, env_n);
+        }
         pid_t pid = fork();
         if (pid < 0) {
             __glide_proc_split_free(argv_data); free(argv);
             if (envp_data) __glide_proc_split_free(envp_data);
+            if (merged_envp) __glide_proc_envp_free(merged_envp);
             return -1;
         }
         if (pid == 0) {
             if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
-            if (envp_data) {
-                char** envp = (char**)calloc((size_t)(env_n + 1), sizeof(char*));
-                for (int i = 0; i < env_n; i++) envp[i] = envp_data[i];
-                execvpe(prog, argv, envp);
-            } else {
-                execvp(prog, argv);
-            }
+            if (merged_envp) execvpe(prog, argv, merged_envp);
+            else             execvp(prog, argv);
             _exit(127);
         }
         __glide_proc_split_free(argv_data); free(argv);
         if (envp_data) __glide_proc_split_free(envp_data);
+        if (merged_envp) __glide_proc_envp_free(merged_envp);
         return (int)pid;
     #endif
     }
@@ -500,7 +638,8 @@ pub struct Command {
     pub env_kv: *Vector<string>,        // entries are "KEY=VAL" strings
     pub cwd_path: string,
     pub stdin_payload: string,
-    pub flags: int,                     // bit 0 = capture stdout, bit 1 = capture stderr
+    pub flags: int,                     // bit 0 = capture stdout, bit 1 = capture stderr,
+                                        // bit 2 = env_clear (don't inherit parent env)
 }
 
 /// Handle to a spawned (still-running) child process.
@@ -532,11 +671,20 @@ impl Command {
         return self;
     }
 
-    /// Set an environment variable for the child. Calling this DOES NOT clear
-    /// the inherited environment — only the keys you set are overridden.
-    /// (To run with a clean env, set every var explicitly.)
+    /// Set an environment variable for the child. The child's env is the
+    /// parent's env with these overrides applied — call `.env_clear()` first
+    /// if you want only the explicitly-set vars to reach the child.
     pub fn env(self: *Command, key: string, value: string) -> *Command {
         self.env_kv.push(key.concat("=").concat(value));
+        return self;
+    }
+
+    /// Discard the parent process's environment for this command. After this,
+    /// only the vars set via `.env(k, v)` reach the child. Useful for
+    /// reproducible builds, sandboxing, or when the parent env contains
+    /// keys you don't want leaking into the subprocess.
+    pub fn env_clear(self: *Command) -> *Command {
+        self.flags = self.flags | 4;
         return self;
     }
 
@@ -596,11 +744,13 @@ impl Command {
     pub fn spawn(self: *Command) -> !Child {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
+        let env_clear:   int = (self.flags >> 2) & 1;
         let pid: int = __glide_proc_spawn(
             self.program,
             args_packed, self.args.len(),
             env_packed,  self.env_kv.len(),
-            self.cwd_path
+            self.cwd_path,
+            env_clear
         );
         if pid <= 0 { return err("failed to spawn process"); }
         let c: Child = Child { pid: pid };
