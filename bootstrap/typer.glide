@@ -57,6 +57,10 @@ pub fn type_eq(a: *Type, b: *Type) -> bool {
     if a.kind == TY_DYN {
         return a.name.eq(b.name);
     }
+    if a.kind == TY_ASSOC {
+        if !a.name.eq(b.name) { return false; }
+        return type_eq(a.inner, b.inner);
+    }
     return type_eq(a.inner, b.inner);
 }
 
@@ -82,6 +86,7 @@ pub fn type_to_string(t: *Type) -> string {
     if t.kind == TY_OPTION { return "?".concat(type_to_string(t.inner)); }
     if t.kind == TY_OPT_RESULT { return "?!".concat(type_to_string(t.inner)); }
     if t.kind == TY_DYN { return "dyn ".concat(t.name); }
+    if t.kind == TY_ASSOC { return type_to_string(t.inner).concat("::").concat(t.name); }
     return "<ty?>";
 }
 
@@ -222,6 +227,10 @@ pub struct Typer {
     // program. Built up front in pre_register and consulted to verify
     // `<T: Trait>` bounds at call sites.
     pub impl_set: *HashMap<bool>,
+    // Associated-type lookup: `<Trait>::<TargetTypeName>::<AssocName>` -> Type.
+    // Populated alongside impl_set. Consulted to resolve `T::Item` projections
+    // when T has a trait bound and a concrete impl is in scope.
+    pub assoc_table: *HashMap<Type>,
     // Enum exhaustiveness: enum name -> comma-joined variant names. Built in
     // pre_register; consulted by ST_MATCH check to flag uncovered variants.
     pub enums: *HashMap<string>,
@@ -261,6 +270,8 @@ impl Typer {
         t.enforce_visibility = false;
         let is: *HashMap<bool> = HashMap::new();
         t.impl_set = is;
+        let at: *HashMap<Type> = HashMap::new();
+        t.assoc_table = at;
         let en: *HashMap<string> = HashMap::new();
         t.enums = en;
         t.error_count = 0;
@@ -491,6 +502,17 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
         if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
         if tname.eq("") { continue; }
         t.impl_set.insert(s.impl_trait_name.concat("::").concat(tname), true);
+        // Register `type Name = X;` decls under
+        // `<Trait>::<TargetTypeName>::<Name>` so T::Item lookups resolve.
+        if s.assoc_decls != null {
+            for let j: int = 0; j < s.assoc_decls.len(); j++ {
+                let a: Param = s.assoc_decls.get(j);
+                if a.ty == null { continue; }
+                let key: string = s.impl_trait_name.concat("::").concat(tname)
+                    .concat("::").concat(a.name);
+                t.assoc_table.insert(key, *a.ty);
+            }
+        }
     }
 }
 
@@ -558,6 +580,74 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
         return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
     }
     return null;
+}
+
+// After a generic call's bound check, walk the return type and resolve any
+// `T::Item` projection by looking up `<Trait>::<Concrete>::<Item>` in the
+// assoc_table. T's concrete is inferred from the args (same trick as
+// check_generic_bounds). Mutates a shallow copy; the caller's sig is intact.
+fn resolve_assoc_in_ret(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ret: *Type) -> *Type {
+    if ret == null { return null; }
+    if sig == null { return ret; }
+    if sig.type_params == null || sig.type_params.len() == 0 { return ret; }
+    if sig.type_param_bounds == null { return ret; }
+    if sig.params == null || args == null { return ret; }
+    let plen: int = sig.params.len();
+    let alen: int = args.len();
+    if plen != alen { return ret; }
+    let bn: int = sig.type_param_bounds.len();
+    return rewrite_assoc_in_type(t, sig, args, ret, plen, bn);
+}
+
+fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type, plen: int, bn: int) -> *Type {
+    if ty == null { return null; }
+    if ty.kind == TY_ASSOC && ty.inner != null && ty.inner.kind == TY_NAMED {
+        let owner_name: string = ty.inner.name;
+        // Is owner_name one of the type params? If so, find its bound + concrete.
+        for let ti: int = 0; ti < sig.type_params.len(); ti++ {
+            let tp_name: string = sig.type_params.get(ti);
+            if !tp_name.eq(owner_name) { continue; }
+            let mut bounds: string = "";
+            if ti < bn { bounds = sig.type_param_bounds.get(ti); }
+            if bounds.eq("") { continue; }
+            // Infer concrete by scanning params for the var.
+            let mut concrete: *Type = null;
+            for let i: int = 0; i < plen; i++ {
+                let p: Param = sig.params.get(i);
+                let a: Expr = args.get(i);
+                let at: *Type = infer_expr(t, &a);
+                let extracted: *Type = extract_for_var(p.ty, at, tp_name);
+                if extracted != null { concrete = extracted; break; }
+            }
+            if concrete == null || concrete.kind != TY_NAMED { return ty; }
+            let cname: string = concrete.name;
+            // Look up in assoc_table by the first matching bound.
+            let parts: *Vector<string> = split_bounds(bounds);
+            for let bi: int = 0; bi < parts.len(); bi++ {
+                let bound: string = parts.get(bi);
+                let key: string = bound.concat("::").concat(cname).concat("::").concat(ty.name);
+                if t.assoc_table.contains(key) {
+                    let resolved: Type = t.assoc_table.get(key);
+                    let p: *Type = malloc(sizeof(Type)) as *Type;
+                    *p = resolved;
+                    return p;
+                }
+            }
+            return ty;
+        }
+        return ty;
+    }
+    // Recurse through wrappers.
+    if ty.kind == TY_OPTION || ty.kind == TY_RESULT || ty.kind == TY_OPT_RESULT
+        || ty.kind == TY_POINTER || ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT
+        || ty.kind == TY_SLICE {
+        let new_inner: *Type = rewrite_assoc_in_type(t, sig, args, ty.inner, plen, bn);
+        let p: *Type = malloc(sizeof(Type)) as *Type;
+        *p = *ty;
+        p.inner = new_inner;
+        return p;
+    }
+    return ty;
 }
 
 fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: int, col: int) {
@@ -1444,7 +1534,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         check_generic_bounds(t, &sig, e.args, e.line, e.column);
                     }
                 }
-                return sig.ret_type;
+                return resolve_assoc_in_ret(t, &sig, e.args, sig.ret_type);
             }
             // Bare ident but not a known fn. Could be a local function
             // pointer in scope, or a language-level builtin lowered by the

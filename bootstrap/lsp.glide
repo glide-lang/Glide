@@ -775,6 +775,7 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, targ
             let rp: Param = req.fn_params.get(i);
             let gp: Param = got.fn_params.get(i);
             let rty: *Type = subst_self(rp.ty, impl_stmt.impl_target);
+            rty = subst_assoc(rty, impl_stmt.assoc_decls);
             if !types_compat(rty, gp.ty) {
                 t.current_origin = impl_stmt.origin;
                 t.err_code(got.line, got.column, "trait-method-mismatch",
@@ -785,7 +786,8 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, targ
             }
         }
     }
-    let rret: *Type = subst_self(req.fn_ret_ty, impl_stmt.impl_target);
+    let mut rret: *Type = subst_self(req.fn_ret_ty, impl_stmt.impl_target);
+    rret = subst_assoc(rret, impl_stmt.assoc_decls);
     if !types_compat(rret, got.fn_ret_ty) {
         t.current_origin = impl_stmt.origin;
         t.err_code(got.line, got.column, "trait-method-mismatch",
@@ -793,6 +795,22 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, targ
                 .concat(type_to_string(rret)).concat("`, got `")
                 .concat(type_to_string(got.fn_ret_ty)).concat("`"));
     }
+}
+
+// After Self substitution, an `Self::Item` becomes `<ImplTarget>::Item`. Resolve
+// that against the impl's own `type Item = X;` declarations.
+fn subst_assoc(t: *Type, assocs: *Vector<Param>) -> *Type {
+    if t == null { return null; }
+    if assocs == null { return t; }
+    if t.kind == TY_ASSOC {
+        for let i: int = 0; i < assocs.len(); i++ {
+            let a: Param = assocs.get(i);
+            if a.name.eq(t.name) { return a.ty; }
+        }
+    }
+    if t.inner != null { t.inner = subst_assoc(t.inner, assocs); }
+    if t.fnptr_ret != null { t.fnptr_ret = subst_assoc(t.fnptr_ret, assocs); }
+    return t;
 }
 
 fn if_param_count(s: Stmt) -> int {
