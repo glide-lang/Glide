@@ -300,4 +300,28 @@ impl<T> Vector<T> {
     macro push_all!($($x:expr),*) {
         $( self.push($x); )*
     }
+
+    /// Build an iterator that yields each element by value. The iterator
+    /// borrows the vector's buffer for the walk; mutating the vector while
+    /// iterating is undefined behaviour.
+    fn iter(self: *Vector<T>) -> *VecIter<T> {
+        let it: *VecIter<T> = malloc(sizeof(VecIter<T>)) as *VecIter<T>;
+        it.vec = self;
+        it.idx = 0;
+        return it;
+    }
+}
+
+pub struct VecIter<T> {
+    vec: *Vector<T>,
+    idx: int,
+}
+
+impl<T> VecIter<T> {
+    pub fn next(self: *VecIter<T>) -> ?T {
+        if self.idx >= self.vec.len { return none(); }
+        let v: T = self.vec.data[self.idx];
+        self.idx = self.idx + 1;
+        return some(v);
+    }
 }
