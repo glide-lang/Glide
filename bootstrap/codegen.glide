@@ -4417,6 +4417,24 @@ pub fn emit_program(program: *Vector<Stmt>) {
     emit_scheduler_runtime();
     emit_socket_runtime();
 
+    // Forward typedef every concrete user struct/enum up front. Subsequent
+    // pre-emit passes (chan-inner bodies, result-inner bodies, etc.) emit
+    // FULL bodies that may reference *OtherStruct as field types — without
+    // a forward decl already in scope, those references emit `unknown type`.
+    // C99 accepts duplicate `typedef struct X X;` declarations, so the
+    // later body-emit passes that re-issue the forward are harmless.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.name == null || s.name.eq("") { continue; }
+        if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+            println!("typedef struct ", c_safe_ident(s.name), " ", c_safe_ident(s.name), ";");
+        }
+        if s.kind == ST_ENUM {
+            println!("typedef struct ", c_safe_ident(s.name), " ", c_safe_ident(s.name), ";");
+        }
+    }
+    println!("");
+
     // Pre-emit user struct/enum bodies that show up as chan<T> inners. The
     // chan template stores `T v;` by value so it needs the full definition,
     // not just a forward typedef. Walk the program directly (not g.structs)
