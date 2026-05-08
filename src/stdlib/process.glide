@@ -259,6 +259,29 @@ c_raw! {
     }
     #endif
 
+    #ifdef _WIN32
+    // Drain a HANDLE (Windows pipe) until ReadFile returns 0 or fails.
+    static char* __glide_proc_drain_handle(HANDLE h) {
+        size_t cap = 4096, len = 0;
+        char* buf = (char*)malloc(cap);
+        for (;;) {
+            if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+            DWORD got = 0;
+            if (!ReadFile(h, buf + len, (DWORD)(cap - 1 - len), &got, NULL) || got == 0) break;
+            len += got;
+        }
+        buf[len] = 0;
+        return buf;
+    }
+
+    typedef struct __glide_win_drain_arg { HANDLE h; char* result; } __glide_win_drain_arg;
+    static DWORD WINAPI __glide_win_drain_thread(LPVOID p) {
+        __glide_win_drain_arg* a = (__glide_win_drain_arg*)p;
+        a->result = __glide_proc_drain_handle(a->h);
+        return 0;
+    }
+    #endif
+
     // Run a process synchronously with optional capture. Returns 0 on success
     // (process spawned and waited) or -1 if spawn itself failed. Process exit
     // status / signal info are written to *exit_out / *signaled_out / *signal_out.
@@ -373,33 +396,28 @@ c_raw! {
             CloseHandle(in_w);
         }
 
-        // Drain captured streams sequentially.
-        if (cap_out) {
-            size_t cap = 4096, len = 0;
-            char* buf = (char*)malloc(cap);
-            for (;;) {
-                if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
-                DWORD got = 0;
-                if (!ReadFile(out_r, buf + len, (DWORD)(cap - 1 - len), &got, NULL) || got == 0) break;
-                len += got;
-            }
-            buf[len] = 0;
-            *stdout_out = buf;
-            CloseHandle(out_r);
+        // Drain captured streams. When BOTH stdout and stderr are captured,
+        // drain stderr on a helper thread and stdout on the main one — same
+        // pattern as POSIX, avoids the deadlock where one pipe's buffer fills
+        // (~64KB) and the child blocks while we wait on the other.
+        char* out_buf_w = NULL;
+        char* err_buf_w = NULL;
+        if (cap_out && cap_err) {
+            __glide_win_drain_arg ea = { err_r, NULL };
+            HANDLE drainer = CreateThread(NULL, 0, __glide_win_drain_thread, &ea, 0, NULL);
+            out_buf_w = __glide_proc_drain_handle(out_r);
+            WaitForSingleObject(drainer, INFINITE);
+            CloseHandle(drainer);
+            err_buf_w = ea.result;
+        } else if (cap_out) {
+            out_buf_w = __glide_proc_drain_handle(out_r);
+        } else if (cap_err) {
+            err_buf_w = __glide_proc_drain_handle(err_r);
         }
-        if (cap_err) {
-            size_t cap = 4096, len = 0;
-            char* buf = (char*)malloc(cap);
-            for (;;) {
-                if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
-                DWORD got = 0;
-                if (!ReadFile(err_r, buf + len, (DWORD)(cap - 1 - len), &got, NULL) || got == 0) break;
-                len += got;
-            }
-            buf[len] = 0;
-            *stderr_out = buf;
-            CloseHandle(err_r);
-        }
+        if (cap_out) CloseHandle(out_r);
+        if (cap_err) CloseHandle(err_r);
+        *stdout_out = out_buf_w ? out_buf_w : "";
+        *stderr_out = err_buf_w ? err_buf_w : "";
 
         WaitForSingleObject(pi.hProcess, INFINITE);
         DWORD code = 0;
