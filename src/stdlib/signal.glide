@@ -1,0 +1,251 @@
+// stdlib::signal — signal handling integrated with `select!`.
+//
+//   let intr: chan<int> = signal_chan(SIGINT);
+//   let work: chan<Job> = make_chan(8);
+//   loop {
+//       select! {
+//           _ = intr.recv() => { graceful_shutdown(); break; }
+//           job = work.recv() => { handle(job); }
+//       }
+//   }
+//
+// POSIX uses the self-pipe trick: a small async-signal-safe handler writes
+// the signum byte to a pipe; a daemon reader thread reads bytes off the
+// pipe and pushes them onto the per-signum chan via the regular thread-safe
+// chan API. This keeps the signal handler trivially safe (only `write` is
+// called) while letting userland integrate via select!.
+//
+// Windows uses SetConsoleCtrlHandler. Ctrl+C maps to SIGINT, Ctrl+Break to
+// SIGTERM, console close to SIGHUP. Other POSIX signals (SIGUSR1/2, SIGQUIT)
+// are not deliverable on Windows — `signal_chan` returns a chan that simply
+// never fires.
+//
+// `signal_kill(pid, sig)` lives in `stdlib::process` as `process_kill`;
+// this module is the receive side only.
+
+// ---- Standard signal numbers (POSIX values) ----
+pub const SIGHUP:  int = 1;
+pub const SIGINT:  int = 2;
+pub const SIGQUIT: int = 3;
+pub const SIGKILL: int = 9;
+pub const SIGUSR1: int = 10;
+pub const SIGUSR2: int = 12;
+pub const SIGPIPE: int = 13;
+pub const SIGTERM: int = 15;
+
+extern fn __glide_signal_chan(sig: int) -> chan<int>;
+extern fn __glide_signal_default(sig: int) -> int;
+extern fn __glide_signal_ignore(sig: int) -> int;
+extern fn __glide_signal_raise(sig: int) -> int;
+
+c_raw! {
+    #ifdef GLIDE_SIGNAL_VIA_CRAW
+    #ifndef GLIDE_SIGNAL_HELPERS_DEFINED
+    #define GLIDE_SIGNAL_HELPERS_DEFINED
+
+    #ifdef _WIN32
+    #include <windows.h>
+    #else
+    #include <signal.h>
+    #include <unistd.h>
+    #include <pthread.h>
+    #include <errno.h>
+    #endif
+
+    // Forward decls for chan<int> primitives. The chan template emits its
+    // full bodies AFTER all c_raw blocks (chan_runtime runs later in
+    // codegen), but we reference them here to push signum onto the chan.
+    // Static prototype + later static body is valid C.
+    typedef struct __glide_chan_int_t __glide_chan_int_t;
+    static __glide_chan_int_t* __glide_make_chan_int(int cap);
+    static void __glide_send_int(__glide_chan_int_t* c, int v);
+
+    // Per-signum chan slot. Index = signum (clamped to 0..63). NULL means
+    // the user has not subscribed to this signal yet.
+    static __glide_chan_int_t* __glide_sig_chans[64];
+
+    #ifdef _WIN32
+    static int __glide_sig_handler_installed = 0;
+
+    static BOOL WINAPI __glide_sig_console_handler(DWORD ctrl) {
+        int sig = -1;
+        if      (ctrl == CTRL_C_EVENT)        sig = 2;   // SIGINT
+        else if (ctrl == CTRL_BREAK_EVENT)    sig = 15;  // SIGTERM
+        else if (ctrl == CTRL_CLOSE_EVENT)    sig = 1;   // SIGHUP
+        else if (ctrl == CTRL_LOGOFF_EVENT)   sig = 1;
+        else if (ctrl == CTRL_SHUTDOWN_EVENT) sig = 1;
+        if (sig < 0 || sig >= 64) return FALSE;
+        __glide_chan_int_t* c = __glide_sig_chans[sig];
+        if (!c) return FALSE;  // not subscribed → let default fire
+        __glide_send_int(c, sig);
+        return TRUE;            // consumed → no default termination
+    }
+
+    static __glide_chan_int_t* __glide_signal_chan(int sig) {
+        if (sig < 0 || sig >= 64) return NULL;
+        if (__glide_sig_chans[sig]) return __glide_sig_chans[sig];
+        __glide_chan_int_t* c = __glide_make_chan_int(8);
+        __glide_sig_chans[sig] = c;
+        if (!__glide_sig_handler_installed) {
+            SetConsoleCtrlHandler(__glide_sig_console_handler, TRUE);
+            __glide_sig_handler_installed = 1;
+        }
+        return c;
+    }
+
+    static int __glide_signal_default(int sig) {
+        if (sig < 0 || sig >= 64) return -1;
+        __glide_sig_chans[sig] = NULL;
+        // Windows console handler is process-wide; if no chan remains, leave
+        // the handler installed but it will return FALSE → default fires.
+        return 0;
+    }
+
+    static int __glide_signal_ignore(int sig) {
+        // No portable way to "ignore" a console-ctrl event other than swallow
+        // it in the handler. Same effect as registering an unused chan.
+        if (sig < 0 || sig >= 64) return -1;
+        if (!__glide_sig_chans[sig]) {
+            __glide_sig_chans[sig] = __glide_make_chan_int(1);
+            if (!__glide_sig_handler_installed) {
+                SetConsoleCtrlHandler(__glide_sig_console_handler, TRUE);
+                __glide_sig_handler_installed = 1;
+            }
+        }
+        return 0;
+    }
+
+    static int __glide_signal_raise(int sig) {
+        // Self-raise via the console group. Only SIGINT and SIGTERM map; for
+        // other signums there's no cross-process console-ctrl analogue.
+        if (sig == 2)  return GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)     ? 0 : -1;
+        if (sig == 15) return GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0) ? 0 : -1;
+        return -1;
+    }
+
+    #else
+    // POSIX: self-pipe trick + reader thread.
+    static int __glide_sig_pipe[2] = {-1, -1};
+    static pthread_once_t __glide_sig_init_once = PTHREAD_ONCE_INIT;
+    static pthread_t __glide_sig_reader;
+
+    // Async-signal-safe handler. The only library calls used here are
+    // `write`, which is on the POSIX async-safe list.
+    static void __glide_sig_handler(int sig) {
+        if (sig < 0 || sig >= 64) return;
+        unsigned char b = (unsigned char)sig;
+        ssize_t n;
+        do { n = write(__glide_sig_pipe[1], &b, 1); }
+        while (n < 0 && errno == EINTR);
+    }
+
+    static void* __glide_sig_reader_main(void* unused) {
+        (void)unused;
+        for (;;) {
+            unsigned char b;
+            ssize_t n;
+            do { n = read(__glide_sig_pipe[0], &b, 1); }
+            while (n < 0 && errno == EINTR);
+            if (n <= 0) continue;
+            int sig = (int)b;
+            if (sig < 0 || sig >= 64) continue;
+            __glide_chan_int_t* c = __glide_sig_chans[sig];
+            if (c) __glide_send_int(c, sig);
+        }
+        return NULL;
+    }
+
+    static void __glide_sig_init(void) {
+        if (pipe(__glide_sig_pipe) != 0) return;
+        pthread_create(&__glide_sig_reader, NULL, __glide_sig_reader_main, NULL);
+    }
+
+    static __glide_chan_int_t* __glide_signal_chan(int sig) {
+        if (sig < 0 || sig >= 64) return NULL;
+        pthread_once(&__glide_sig_init_once, __glide_sig_init);
+        if (__glide_sig_chans[sig]) return __glide_sig_chans[sig];
+        __glide_chan_int_t* c = __glide_make_chan_int(8);
+        __glide_sig_chans[sig] = c;
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = __glide_sig_handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        sigaction(sig, &sa, NULL);
+        return c;
+    }
+
+    static int __glide_signal_default(int sig) {
+        if (sig < 0 || sig >= 64) return -1;
+        __glide_sig_chans[sig] = NULL;
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = SIG_DFL;
+        sigemptyset(&sa.sa_mask);
+        return sigaction(sig, &sa, NULL);
+    }
+
+    static int __glide_signal_ignore(int sig) {
+        if (sig < 0 || sig >= 64) return -1;
+        __glide_sig_chans[sig] = NULL;
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = SIG_IGN;
+        sigemptyset(&sa.sa_mask);
+        return sigaction(sig, &sa, NULL);
+    }
+
+    static int __glide_signal_raise(int sig) {
+        return raise(sig);
+    }
+    #endif
+    #endif
+    #endif // GLIDE_SIGNAL_VIA_CRAW
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Subscribe to signal `sig`. Each occurrence pushes `sig` onto the returned
+/// channel. Multiple calls with the same signum return the SAME chan — the
+/// channel is process-global per signal. Buffer size is 8 (signals delivered
+/// faster than the consumer reads are dropped after that — typical for
+/// shutdown signals which deliver once).
+///
+/// Common usage with `select!`:
+///
+/// ```glide
+/// let intr = signal_chan(SIGINT);
+/// loop {
+///     select! {
+///         _ = intr.recv() => { cleanup(); break; }
+///         job = work.recv() => { process(job); }
+///     }
+/// }
+/// ```
+pub fn signal_chan(sig: int) -> chan<int> {
+    return __glide_signal_chan(sig);
+}
+
+/// Restore the default handler for `sig`. After this, the signal will resume
+/// its OS-default behavior (terminate the process for SIGINT/SIGTERM, etc.)
+/// and any chan returned by `signal_chan(sig)` will stop receiving.
+pub fn signal_default(sig: int) -> ! {
+    if __glide_signal_default(sig) != 0 { return err("signal_default failed"); }
+}
+
+/// Ignore `sig`. The signal will be delivered but discarded — no chan, no
+/// default behavior. Useful for SIGPIPE on servers that handle disconnects
+/// at the read/write level.
+pub fn signal_ignore(sig: int) -> ! {
+    if __glide_signal_ignore(sig) != 0 { return err("signal_ignore failed"); }
+}
+
+/// Raise `sig` against the current process. POSIX uses `raise(sig)`. Windows
+/// only supports SIGINT and SIGTERM (mapped to CTRL_C_EVENT / CTRL_BREAK_EVENT
+/// via GenerateConsoleCtrlEvent on the calling process group). Any other
+/// signum on Windows returns Err.
+pub fn signal_raise(sig: int) -> ! {
+    if __glide_signal_raise(sig) != 0 { return err("signal_raise failed"); }
+}
