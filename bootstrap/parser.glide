@@ -655,6 +655,9 @@ fn parse_impl(p: *Parser) -> *Stmt {
             // this impl's assoc definitions.
             substitute_self_in_methods(methods, target);
             substitute_self_assoc_in_methods(methods, assocs);
+        } else {
+            // Plain `impl T { ... }` — Self in method sigs also refers to T.
+            substitute_self_in_methods(methods, target);
         }
     }
     return s;
