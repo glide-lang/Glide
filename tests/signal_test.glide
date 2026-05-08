@@ -1,0 +1,49 @@
+import stdlib::testing::*;
+import stdlib::signal::*;
+import stdlib::os::*;
+import stdlib::time::*;
+
+fn test_signal_chan_returns_chan() -> int {
+    let _c: chan<int> = signal_chan(SIGUSR1);
+    let _r: ! = signal_default(SIGUSR1);
+    return 0;
+}
+
+fn test_signal_chan_idempotent() -> int {
+    // Two calls for the same signum should produce a chan at the same slot.
+    let _a: chan<int> = signal_chan(SIGUSR2);
+    let _b: chan<int> = signal_chan(SIGUSR2);
+    let _r: ! = signal_default(SIGUSR2);
+    return 0;
+}
+
+fn test_signal_default_succeeds() -> int {
+    let _c: chan<int> = signal_chan(SIGHUP);
+    let r: ! = signal_default(SIGHUP);
+    assert!(r.ok);
+    return 0;
+}
+
+fn test_signal_ignore_succeeds() -> int {
+    let r: ! = signal_ignore(SIGPIPE);
+    assert!(r.ok);
+    let _r: ! = signal_default(SIGPIPE);
+    return 0;
+}
+
+fn test_signal_raise_caught() -> int {
+    // POSIX-only end-to-end test: subscribe, raise synchronously, verify
+    // the signal is delivered through the chan within a 2s budget.
+    if !os_is_posix() { return 0; }
+    let intr: chan<int> = signal_chan(SIGUSR1);
+    let _r: ! = signal_raise(SIGUSR1);
+    let timer: chan<i64> = after(Duration::from_secs(2));
+    let mut received: int = 0;
+    select! {
+        s = intr.recv()  => { received = s; }
+        _ = timer.recv() => { received = 0 - 1; }
+    }
+    assert_eq!(received, SIGUSR1);
+    let _d: ! = signal_default(SIGUSR1);
+    return 0;
+}
