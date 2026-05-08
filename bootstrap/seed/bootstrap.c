@@ -14866,6 +14866,12 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         return;
     }
     if (((s-> kind )  ==  ST_EXPR)) {
+        if ((((((((s-> expr_value )  !=  NULL)  &&  (((s-> expr_value )-> kind )  ==  EX_ASSIGN))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((s-> expr_value )-> rhs )  !=  NULL))  &&  ((((s-> expr_value )-> rhs )-> kind )  ==  EX_CALL))) {
+            Type*   field_ty = infer_for_codegen(g, ((s-> expr_value )-> lhs ));
+            if ((field_ty  !=  NULL)) {
+                bool   _ok = try_mono_call(g, ((s-> expr_value )-> rhs ), field_ty);
+            }
+        }
         ind(depth);
         emit_expr(g, (s-> expr_value ));
         printf("%s\n", ";");
