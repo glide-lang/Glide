@@ -114,6 +114,32 @@ fn parse_cfg(src: string) -> !Cfg {
     return ok(Cfg { workers: w, jobs: j });
 }
 
+// ---- 8b. ?T (option) and ?!T (option-or-error) -------------------------
+
+fn lookup_user(id: int) -> ?int {
+    if id < 0 { return none(); }
+    return some(id * 10);
+}
+
+// `?` in fn !U coerces None -> Err{"none-coerced"}.
+fn fetch_strict(id: int) -> !int {
+    let v: int = lookup_user(id)?;
+    return ok(v + 1);
+}
+
+// `?` in fn ?U propagates None.
+fn fetch_loose(id: int) -> ?int {
+    let v: int = lookup_user(id)?;
+    return some(v + 1);
+}
+
+// `?!T` carries 3 tags: 0=Some, 1=None, 2=Err.
+fn fetch_either(id: int) -> ?!int {
+    if id == 0 { return err("zero forbidden"); }
+    let v: int = lookup_user(id)?;
+    return some(v);
+}
+
 // ---- 9. closures + first-class fn pointers -----------------------------
 
 fn run_op(f: fn(int) -> int, x: int) -> int { return f(x); }
@@ -212,6 +238,15 @@ fn main() -> int {
     }
     let cfg: Cfg = parsed.val;
     println!("config: workers=${cfg.workers} jobs=${cfg.jobs}");
+
+    // --- (a2) ?T / ?!T plus the `??` fallback
+    let user_a: int = lookup_user(5)  ?? -1;   // 50
+    let user_b: int = lookup_user(-9) ?? -1;   // -1 (None fell back)
+    println!("lookup_user(5)=${user_a}  lookup_user(-9)=${user_b}");
+    let _strict: !int = fetch_strict(7);       // ok(71)
+    let _loose:  ?int = fetch_loose(-1);       // none -> propagated
+    let either:  ?!int = fetch_either(0);      // err
+    println!("either.tag=${either.tag}");      // 2 (Err)
 
     // --- (b) borrows + arena + explicit free
     let jobs: *Vector<int> = Vector::new();
