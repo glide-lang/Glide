@@ -452,7 +452,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
 fn fmt_asm(s: *Stmt, depth: int) -> string {
     let pad: string = fmt_indent(depth);
     let inner: string = fmt_indent(depth + 1);
-    let mut out: string = pad.concat("asm");
+    let mut out: string = pad.concat("asm!");
     if s.is_volatile { out = out.concat(" volatile"); }
     out = out.concat(" {\n");
     if s.asm_strings != null {

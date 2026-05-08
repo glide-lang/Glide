@@ -813,6 +813,7 @@ fn parse_asm_block(p: *Parser) -> *Stmt {
     let line: int = p.current.line;
     let col: int = p.current.column;
     p.advance(); // 'asm'
+    p.expect_op("!");
     let mut is_volatile: bool = false;
     if p.eat_kw("volatile") { is_volatile = true; }
     p.expect_op("{");
@@ -902,7 +903,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         s.macro_rep_sep = sep;
         return s;
     }
-    if p.at_kw("asm") { return parse_asm_block(p); }
+    if p.at_kw("asm") && p.peek_op("!") { return parse_asm_block(p); }
     // `c_raw! { ... }` raw payload — captured by the lexer as TOK_RAW_BLOCK.
     if p.current.kind == TOK_RAW_BLOCK {
         let line: int = p.current.line;

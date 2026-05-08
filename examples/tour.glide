@@ -168,7 +168,7 @@ fn run_op(f: fn(int) -> int, x: int) -> int { return f(x); }
 
 @cfg("posix")
 naked fn add_raw(a: i64, b: i64) -> i64 {
-    asm {
+    asm! {
         "leaq (%rdi, %rsi), %rax"
         "ret"
     }
@@ -176,7 +176,7 @@ naked fn add_raw(a: i64, b: i64) -> i64 {
 
 @cfg("windows")
 naked fn add_raw(a: i64, b: i64) -> i64 {
-    asm {
+    asm! {
         "leaq (%rcx, %rdx), %rax"
         "ret"
     }
@@ -185,7 +185,7 @@ naked fn add_raw(a: i64, b: i64) -> i64 {
 fn read_tsc() -> u64 {
     let lo: u32 = 0;
     let hi: u32 = 0;
-    asm volatile {
+    asm! volatile {
         "rdtsc"
         : "=a"(lo), "=d"(hi)
     }
