@@ -22,6 +22,8 @@ pub const TY_GENERIC: int = 5;     // payload: name + type args
 pub const TY_FNPTR: int = 6;       // payload: fnptr_params + fnptr_ret
 pub const TY_RESULT: int = 7;      // payload: inner (*Type) — `!T`
 pub const TY_DYN: int = 8;         // `dyn Trait` — name = trait name. Used behind a pointer (`*dyn Trait`).
+pub const TY_OPTION: int = 9;      // payload: inner (*Type) — `?T`
+pub const TY_OPT_RESULT: int = 10; // payload: inner (*Type) — `?!T` (3 variants: Some/None/Err)
 
 pub struct Type {
     pub kind: int,
@@ -101,6 +103,7 @@ pub const OP_BIT_OR: int = 20;
 pub const OP_BIT_XOR: int = 21;
 pub const OP_SHL: int = 22;
 pub const OP_SHR: int = 23;
+pub const OP_COALESCE: int = 24;   // `??` — fallback for ?T / !T / *T-nullable
 
 // Unary op codes
 pub const UN_NEG: int = 1;
@@ -347,6 +350,20 @@ pub fn ty_named(name: string) -> *Type {
 pub fn ty_result(inner: *Type) -> *Type {
     let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_RESULT;
+    t.inner = inner;
+    return t;
+}
+
+pub fn ty_option(inner: *Type) -> *Type {
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    t.kind = TY_OPTION;
+    t.inner = inner;
+    return t;
+}
+
+pub fn ty_optres(inner: *Type) -> *Type {
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    t.kind = TY_OPT_RESULT;
     t.inner = inner;
     return t;
 }

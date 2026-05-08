@@ -289,6 +289,8 @@ impl Lexer {
         if ci == 45 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "-=", line: start_line, column: start_col, doc: doc }; }
         if ci == 42 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "*=", line: start_line, column: start_col, doc: doc }; }
         if ci == 47 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "/=", line: start_line, column: start_col, doc: doc }; }
+        // Null-coalesce / Some-fallback: `??` (works for ?T, !T, *T-nullable).
+        if ci == 63 && self.peek_at(1).to_int() == 63 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "??", line: start_line, column: start_col, doc: doc }; }
         // C-style variadic: `...` (used as the last "param" in extern fn).
         if ci == 46 && self.peek_at(1).to_int() == 46 && self.peek_at(2).to_int() == 46 { self.advance(); self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "...", line: start_line, column: start_col, doc: doc }; }
         // Range operators: `..` and `..=` (used in `for i in 0..n` / `0..=n`).
