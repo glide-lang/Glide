@@ -1,0 +1,27 @@
+// Iterator trait — pull-style streams.
+//
+// Implement `next() -> ?Self::Item` on any struct to expose a sequence of
+// values consumed lazily. Used by helpers that want to walk arbitrary
+// collections without knowing the concrete element type up front.
+//
+// ```glide
+// import "src/stdlib/iter.glide";
+//
+// struct Counter { i: int, max: int }
+// impl Iterator for Counter {
+//     type Item = int;
+//     fn next(self: *Counter) -> ?int {
+//         if self.i >= self.max { return none(); }
+//         self.i = self.i + 1;
+//         return some(self.i - 1);
+//     }
+// }
+//
+// let c: Counter = Counter { i: 0, max: 3 };
+// let r: ?int = c.next();   // some(0)
+// ```
+
+pub trait Iterator {
+    type Item;
+    fn next(self: *Self) -> ?Self::Item;
+}
