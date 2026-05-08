@@ -9,6 +9,7 @@
 #define GLIDE_OS_VIA_CRAW
 #define GLIDE_ENV_VIA_CRAW
 #define GLIDE_IO_VIA_CRAW
+#define GLIDE_PROCESS_VIA_CRAW
 // Forward declaration of the per-keystroke arena allocator defined in
 // src/builtins/builtins.glide. Routing the string-runtime allocations
 // through it lets the LSP reclaim every concat / substring / format /

@@ -751,13 +751,18 @@ pub fn os_data_dir() -> !string {
 pub fn os_is_tty(fd: int) -> bool { return __glide_is_tty(fd) != 0; }
 
 // ============================================================================
-// G. Subprocess quick (prefer stdlib::process::Command when it lands)
+// G. Subprocess quick — one-liner shell escape
 // ============================================================================
 
 /// Run `cmd` through the OS shell (`cmd /c` on Windows, `/bin/sh -c`
 /// elsewhere). Returns `Ok(exit_code)` (0 = success) or `Err` if the shell
 /// itself failed to launch. Output streams are inherited; capture requires
 /// shell-level redirection in the command string.
+///
+/// **Prefer `stdlib::process::Command`** for anything beyond a one-liner:
+/// it gives argv-level control, captured stdout/stderr, env override, cwd,
+/// stdin piping, and avoids shell-injection hazards. `os_shell` stays as
+/// a 1-liner convenience for trivial cases (`os_shell("ls -la > out")`).
 pub fn os_shell(cmd: string) -> !int {
     let rc: int = __glide_shell(cmd);
     if rc < 0 { return err("shell failed to spawn"); }

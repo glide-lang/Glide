@@ -1,0 +1,669 @@
+// stdlib::process — subprocess execution.
+//
+// Builder-style API for spawning external commands. Replaces `os_shell` for
+// any case where you need argv-level control, captured output, env override,
+// or non-shell semantics (no shell injection, no quoting hazards).
+//
+//   let cmd* = Command::new("git");
+//   cmd.arg("clone").arg("https://...").cwd("/tmp").capture();
+//   let r: !ProcessResult = cmd.run();
+//   if r.ok {
+//       println!("exit=", r.val.exit_code);
+//       println!("out=", r.val.stdout);
+//   }
+//
+// Uses fork+execvp on POSIX, CreateProcess on Windows. No shell intermediary.
+// `capture_out` / `capture_err` / `capture` set up pipes; output is drained
+// concurrently on a helper pthread when both stdout AND stderr are captured,
+// avoiding the classic full-pipe deadlock.
+//
+// Streaming Child handles (live stdin/stdout/stderr read/write while the
+// process runs) are NOT in v1. Spawn returns a `Child` with pid + wait + kill
+// only. To pipe data live between processes, that's v2.
+
+import stdlib::os::*;
+
+extern fn __glide_proc_run(
+    prog: string,
+    args_packed: string, args_n: int,
+    env_packed: string, env_n: int,
+    cwd: string,
+    stdin_data: string, stdin_len: int,
+    capture_flags: int,
+    exit_out: *int, signaled_out: *int, signal_out: *int,
+    stdout_out: *string, stderr_out: *string
+) -> int;
+
+extern fn __glide_proc_spawn(
+    prog: string,
+    args_packed: string, args_n: int,
+    env_packed: string, env_n: int,
+    cwd: string
+) -> int;
+
+extern fn __glide_proc_wait(pid: int, exit_out: *int, signaled_out: *int, signal_out: *int) -> int;
+extern fn __glide_proc_kill(pid: int, sig: int) -> int;
+extern fn __glide_proc_exists(pid: int) -> int;
+
+c_raw! {
+    #ifdef GLIDE_PROCESS_VIA_CRAW
+    #ifndef GLIDE_PROCESS_HELPERS_DEFINED
+    #define GLIDE_PROCESS_HELPERS_DEFINED
+
+    #ifdef _WIN32
+    #include <windows.h>
+    #else
+    #include <unistd.h>
+    #include <sys/wait.h>
+    #include <sys/types.h>
+    #include <signal.h>
+    #include <fcntl.h>
+    #include <pthread.h>
+    #include <errno.h>
+    #endif
+
+    // Split a newline-separated buffer into a NULL-terminated argv-style array.
+    // Caller frees the returned array (each entry points into a single allocated
+    // copy of the input, so freeing the first entry frees all string data, then
+    // free the array itself).
+    static char** __glide_proc_split(const char* packed, int n) {
+        char** out = (char**)calloc((size_t)(n + 1), sizeof(char*));
+        if (n == 0 || !packed) { return out; }
+        size_t total = strlen(packed);
+        char* buf = (char*)malloc(total + 1);
+        memcpy(buf, packed, total + 1);
+        int idx = 0;
+        char* p = buf;
+        out[idx++] = p;
+        for (size_t i = 0; i < total && idx < n; i++) {
+            if (buf[i] == '\n') { buf[i] = 0; out[idx++] = &buf[i + 1]; }
+        }
+        return out;
+    }
+
+    static void __glide_proc_split_free(char** arr) {
+        if (!arr) return;
+        if (arr[0]) free(arr[0]);  // single contiguous buffer
+        free(arr);
+    }
+
+    // Read everything available on `fd` until EOF, append to a malloc'd buffer.
+    // Returns NUL-terminated string (caller frees).
+    static char* __glide_proc_drain_fd(int fd) {
+    #ifdef _WIN32
+        (void)fd; return NULL;
+    #else
+        size_t cap = 4096, len = 0;
+        char* buf = (char*)malloc(cap);
+        if (!buf) return NULL;
+        for (;;) {
+            if (len + 1 >= cap) {
+                cap *= 2;
+                buf = (char*)realloc(buf, cap);
+                if (!buf) return NULL;
+            }
+            ssize_t n = read(fd, buf + len, cap - 1 - len);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (n == 0) break;
+            len += (size_t)n;
+        }
+        buf[len] = 0;
+        return buf;
+    #endif
+    }
+
+    #ifndef _WIN32
+    typedef struct __glide_drain_arg { int fd; char* result; } __glide_drain_arg;
+    static void* __glide_drain_thread(void* p) {
+        __glide_drain_arg* a = (__glide_drain_arg*)p;
+        a->result = __glide_proc_drain_fd(a->fd);
+        return NULL;
+    }
+    #endif
+
+    // Run a process synchronously with optional capture. Returns 0 on success
+    // (process spawned and waited) or -1 if spawn itself failed. Process exit
+    // status / signal info are written to *exit_out / *signaled_out / *signal_out.
+    // Captured stdout / stderr are written to *stdout_out / *stderr_out as
+    // malloc'd NUL-terminated strings (caller owns; "" if not captured).
+    static int __glide_proc_run(
+        const char* prog,
+        const char* args_packed, int args_n,
+        const char* env_packed, int env_n,
+        const char* cwd,
+        const char* stdin_data, int stdin_len,
+        int capture_flags,
+        int* exit_out, int* signaled_out, int* signal_out,
+        const char** stdout_out, const char** stderr_out
+    ) {
+        *exit_out = 0; *signaled_out = 0; *signal_out = 0;
+        *stdout_out = ""; *stderr_out = "";
+        int cap_out = (capture_flags & 1) != 0;
+        int cap_err = (capture_flags & 2) != 0;
+        int has_stdin = (stdin_data && stdin_len > 0);
+
+    #ifdef _WIN32
+        // Windows: CreateProcess + anonymous pipes. Captured streams drained
+        // sequentially after the process exits (small-output assumption — full
+        // pipe-buffer deadlock avoidance for both-capture is in v2).
+        SECURITY_ATTRIBUTES sa = {0};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+
+        HANDLE in_r = NULL, in_w = NULL;
+        HANDLE out_r = NULL, out_w = NULL;
+        HANDLE err_r = NULL, err_w = NULL;
+
+        if (has_stdin) {
+            if (!CreatePipe(&in_r, &in_w, &sa, 0)) return -1;
+            SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
+        }
+        if (cap_out) {
+            if (!CreatePipe(&out_r, &out_w, &sa, 0)) return -1;
+            SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+        }
+        if (cap_err) {
+            if (!CreatePipe(&err_r, &err_w, &sa, 0)) return -1;
+            SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
+        }
+
+        // Build a single command line: "prog" "arg1" "arg2" ...
+        char** argv = __glide_proc_split(args_packed, args_n);
+        size_t cmd_cap = 1024;
+        char* cmd = (char*)malloc(cmd_cap);
+        size_t cmd_len = 0;
+        #define APPEND(s) do { \
+            size_t L = strlen(s); \
+            while (cmd_len + L + 4 >= cmd_cap) { cmd_cap *= 2; cmd = (char*)realloc(cmd, cmd_cap); } \
+            memcpy(cmd + cmd_len, (s), L); cmd_len += L; \
+        } while (0)
+        APPEND("\""); APPEND(prog); APPEND("\"");
+        for (int i = 0; i < args_n && argv[i]; i++) {
+            APPEND(" \""); APPEND(argv[i]); APPEND("\"");
+        }
+        cmd[cmd_len] = 0;
+        __glide_proc_split_free(argv);
+
+        // Build environment block (KEY=VAL\0KEY=VAL\0\0 on Windows).
+        LPVOID env_block = NULL;
+        char* env_buf = NULL;
+        if (env_n > 0 && env_packed) {
+            char** envp = __glide_proc_split(env_packed, env_n);
+            size_t total = 1; // final NUL
+            for (int i = 0; i < env_n && envp[i]; i++) total += strlen(envp[i]) + 1;
+            env_buf = (char*)malloc(total);
+            char* p = env_buf;
+            for (int i = 0; i < env_n && envp[i]; i++) {
+                size_t L = strlen(envp[i]); memcpy(p, envp[i], L); p[L] = 0; p += L + 1;
+            }
+            *p = 0;
+            env_block = env_buf;
+            __glide_proc_split_free(envp);
+        }
+
+        STARTUPINFOA si = {0};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput  = has_stdin ? in_r  : GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = cap_out   ? out_w : GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError  = cap_err   ? err_w : GetStdHandle(STD_ERROR_HANDLE);
+
+        PROCESS_INFORMATION pi = {0};
+        BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0,
+                                  env_block, (cwd && *cwd) ? cwd : NULL, &si, &pi);
+        free(cmd);
+        if (env_buf) free(env_buf);
+
+        if (!ok) {
+            if (in_r) CloseHandle(in_r); if (in_w) CloseHandle(in_w);
+            if (out_r) CloseHandle(out_r); if (out_w) CloseHandle(out_w);
+            if (err_r) CloseHandle(err_r); if (err_w) CloseHandle(err_w);
+            return -1;
+        }
+
+        // Close child ends.
+        if (in_r) CloseHandle(in_r);
+        if (out_w) CloseHandle(out_w);
+        if (err_w) CloseHandle(err_w);
+
+        // Feed stdin.
+        if (has_stdin) {
+            DWORD wrote = 0;
+            WriteFile(in_w, stdin_data, (DWORD)stdin_len, &wrote, NULL);
+            CloseHandle(in_w);
+        }
+
+        // Drain captured streams sequentially.
+        if (cap_out) {
+            size_t cap = 4096, len = 0;
+            char* buf = (char*)malloc(cap);
+            for (;;) {
+                if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+                DWORD got = 0;
+                if (!ReadFile(out_r, buf + len, (DWORD)(cap - 1 - len), &got, NULL) || got == 0) break;
+                len += got;
+            }
+            buf[len] = 0;
+            *stdout_out = buf;
+            CloseHandle(out_r);
+        }
+        if (cap_err) {
+            size_t cap = 4096, len = 0;
+            char* buf = (char*)malloc(cap);
+            for (;;) {
+                if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+                DWORD got = 0;
+                if (!ReadFile(err_r, buf + len, (DWORD)(cap - 1 - len), &got, NULL) || got == 0) break;
+                len += got;
+            }
+            buf[len] = 0;
+            *stderr_out = buf;
+            CloseHandle(err_r);
+        }
+
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        *exit_out = (int)code;
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return 0;
+
+    #else
+        // POSIX: fork + exec + pipes. stderr drain runs on a helper pthread when
+        // both stdout AND stderr are captured (full-pipe deadlock avoidance).
+        int in_pipe[2]  = {-1, -1};
+        int out_pipe[2] = {-1, -1};
+        int err_pipe[2] = {-1, -1};
+        if (has_stdin && pipe(in_pipe) != 0) return -1;
+        if (cap_out && pipe(out_pipe) != 0) return -1;
+        if (cap_err && pipe(err_pipe) != 0) return -1;
+
+        char** argv_data = __glide_proc_split(args_packed, args_n);
+        char** argv = (char**)calloc((size_t)(args_n + 2), sizeof(char*));
+        argv[0] = (char*)prog;
+        for (int i = 0; i < args_n && argv_data[i]; i++) argv[i + 1] = argv_data[i];
+
+        char** envp_data = NULL;
+        if (env_n > 0) envp_data = __glide_proc_split(env_packed, env_n);
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            __glide_proc_split_free(argv_data);
+            free(argv);
+            if (envp_data) __glide_proc_split_free(envp_data);
+            return -1;
+        }
+        if (pid == 0) {
+            // Child.
+            if (has_stdin) { dup2(in_pipe[0], 0); close(in_pipe[0]); close(in_pipe[1]); }
+            if (cap_out)   { dup2(out_pipe[1], 1); close(out_pipe[0]); close(out_pipe[1]); }
+            if (cap_err)   { dup2(err_pipe[1], 2); close(err_pipe[0]); close(err_pipe[1]); }
+            if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
+            if (envp_data) {
+                // Replace environ. Build a NULL-terminated envp.
+                char** envp = (char**)calloc((size_t)(env_n + 1), sizeof(char*));
+                for (int i = 0; i < env_n; i++) envp[i] = envp_data[i];
+                execvpe(prog, argv, envp);
+            } else {
+                execvp(prog, argv);
+            }
+            _exit(127);
+        }
+        // Parent.
+        __glide_proc_split_free(argv_data);
+        free(argv);
+        if (envp_data) __glide_proc_split_free(envp_data);
+        if (has_stdin) close(in_pipe[0]);
+        if (cap_out)   close(out_pipe[1]);
+        if (cap_err)   close(err_pipe[1]);
+
+        if (has_stdin) {
+            ssize_t total = 0;
+            while (total < stdin_len) {
+                ssize_t w = write(in_pipe[1], stdin_data + total, (size_t)(stdin_len - total));
+                if (w < 0) { if (errno == EINTR) continue; break; }
+                total += w;
+            }
+            close(in_pipe[1]);
+        }
+
+        // Drain captured streams. If both, spawn a thread for stderr to avoid
+        // deadlock when stdout buffer fills and the child blocks on writing
+        // stderr (or vice versa).
+        char* out_buf = NULL;
+        char* err_buf = NULL;
+        if (cap_out && cap_err) {
+            __glide_drain_arg ea = { err_pipe[0], NULL };
+            pthread_t tid;
+            pthread_create(&tid, NULL, __glide_drain_thread, &ea);
+            out_buf = __glide_proc_drain_fd(out_pipe[0]);
+            pthread_join(tid, NULL);
+            err_buf = ea.result;
+        } else if (cap_out) {
+            out_buf = __glide_proc_drain_fd(out_pipe[0]);
+        } else if (cap_err) {
+            err_buf = __glide_proc_drain_fd(err_pipe[0]);
+        }
+        if (cap_out) close(out_pipe[0]);
+        if (cap_err) close(err_pipe[0]);
+        *stdout_out = out_buf ? out_buf : "";
+        *stderr_out = err_buf ? err_buf : "";
+
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        if (WIFEXITED(status)) {
+            *exit_out = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+            *signaled_out = 1;
+            *signal_out = WTERMSIG(status);
+            *exit_out = 128 + WTERMSIG(status);
+        }
+        return 0;
+    #endif
+    }
+
+    static int __glide_proc_spawn(
+        const char* prog,
+        const char* args_packed, int args_n,
+        const char* env_packed, int env_n,
+        const char* cwd
+    ) {
+    #ifdef _WIN32
+        char** argv = __glide_proc_split(args_packed, args_n);
+        size_t cmd_cap = 1024;
+        char* cmd = (char*)malloc(cmd_cap);
+        size_t cmd_len = 0;
+        #define APPEND2(s) do { \
+            size_t L = strlen(s); \
+            while (cmd_len + L + 4 >= cmd_cap) { cmd_cap *= 2; cmd = (char*)realloc(cmd, cmd_cap); } \
+            memcpy(cmd + cmd_len, (s), L); cmd_len += L; \
+        } while (0)
+        APPEND2("\""); APPEND2(prog); APPEND2("\"");
+        for (int i = 0; i < args_n && argv[i]; i++) {
+            APPEND2(" \""); APPEND2(argv[i]); APPEND2("\"");
+        }
+        cmd[cmd_len] = 0;
+        __glide_proc_split_free(argv);
+        STARTUPINFOA si = {0}; si.cb = sizeof(si);
+        PROCESS_INFORMATION pi = {0};
+        BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL,
+                                  (cwd && *cwd) ? cwd : NULL, &si, &pi);
+        free(cmd);
+        if (!ok) return -1;
+        DWORD pid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        // We leak hProcess intentionally — wait/kill will reopen by pid.
+        CloseHandle(pi.hProcess);
+        return (int)pid;
+    #else
+        char** argv_data = __glide_proc_split(args_packed, args_n);
+        char** argv = (char**)calloc((size_t)(args_n + 2), sizeof(char*));
+        argv[0] = (char*)prog;
+        for (int i = 0; i < args_n && argv_data[i]; i++) argv[i + 1] = argv_data[i];
+        char** envp_data = env_n > 0 ? __glide_proc_split(env_packed, env_n) : NULL;
+        pid_t pid = fork();
+        if (pid < 0) {
+            __glide_proc_split_free(argv_data); free(argv);
+            if (envp_data) __glide_proc_split_free(envp_data);
+            return -1;
+        }
+        if (pid == 0) {
+            if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
+            if (envp_data) {
+                char** envp = (char**)calloc((size_t)(env_n + 1), sizeof(char*));
+                for (int i = 0; i < env_n; i++) envp[i] = envp_data[i];
+                execvpe(prog, argv, envp);
+            } else {
+                execvp(prog, argv);
+            }
+            _exit(127);
+        }
+        __glide_proc_split_free(argv_data); free(argv);
+        if (envp_data) __glide_proc_split_free(envp_data);
+        return (int)pid;
+    #endif
+    }
+
+    static int __glide_proc_wait(int pid, int* exit_out, int* signaled_out, int* signal_out) {
+        *exit_out = 0; *signaled_out = 0; *signal_out = 0;
+    #ifdef _WIN32
+        HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION | SYNCHRONIZE, FALSE, (DWORD)pid);
+        if (!h) return -1;
+        WaitForSingleObject(h, INFINITE);
+        DWORD code = 0;
+        GetExitCodeProcess(h, &code);
+        CloseHandle(h);
+        *exit_out = (int)code;
+        return 0;
+    #else
+        int status = 0;
+        while (waitpid((pid_t)pid, &status, 0) < 0 && errno == EINTR) {}
+        if (WIFEXITED(status)) *exit_out = WEXITSTATUS(status);
+        else if (WIFSIGNALED(status)) {
+            *signaled_out = 1; *signal_out = WTERMSIG(status); *exit_out = 128 + WTERMSIG(status);
+        }
+        return 0;
+    #endif
+    }
+
+    static int __glide_proc_kill(int pid, int sig) {
+    #ifdef _WIN32
+        (void)sig;
+        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+        if (!h) return -1;
+        BOOL ok = TerminateProcess(h, 1);
+        CloseHandle(h);
+        return ok ? 0 : -1;
+    #else
+        return kill((pid_t)pid, sig);
+    #endif
+    }
+
+    static int __glide_proc_exists(int pid) {
+    #ifdef _WIN32
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+        if (!h) return 0;
+        DWORD code = 0;
+        BOOL got = GetExitCodeProcess(h, &code);
+        CloseHandle(h);
+        return (got && code == STILL_ACTIVE) ? 1 : 0;
+    #else
+        return kill((pid_t)pid, 0) == 0 ? 1 : 0;
+    #endif
+    }
+    #endif
+    #endif // GLIDE_PROCESS_VIA_CRAW
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Result of a finished subprocess run.
+pub struct ProcessResult {
+    pub exit_code: int,        // 0 = success
+    pub stdout: string,        // empty if not captured
+    pub stderr: string,        // empty if not captured
+    pub signaled: bool,        // true if child died from a signal (POSIX)
+    pub signal: int,           // signal number; 0 if !signaled
+}
+
+/// Builder for a subprocess command. Chain methods to configure, then call
+/// `.run()` to execute synchronously or `.spawn()` for non-blocking start.
+pub struct Command {
+    pub program: string,
+    pub args: *Vector<string>,
+    pub env_kv: *Vector<string>,        // entries are "KEY=VAL" strings
+    pub cwd_path: string,
+    pub stdin_payload: string,
+    pub flags: int,                     // bit 0 = capture stdout, bit 1 = capture stderr
+}
+
+/// Handle to a spawned (still-running) child process.
+pub struct Child {
+    pub pid: int,
+}
+
+impl Command {
+    /// Create a builder for `program`. Args, env, cwd, stdin all default to
+    /// "inherit"; output is forwarded to the parent's stdout/stderr unless a
+    /// `capture_*` method is called.
+    pub fn new(program: string) -> *Command {
+        let args_v: *Vector<string> = Vector::new();
+        let env_v: *Vector<string> = Vector::new();
+        let c: *Command = malloc(sizeof(Command)) as *Command;
+        c.program = program;
+        c.args = args_v;
+        c.env_kv = env_v;
+        c.cwd_path = "";
+        c.stdin_payload = "";
+        c.flags = 0;
+        return c;
+    }
+
+    /// Add a single positional argument.
+    pub fn arg(self: *Command, a: string) -> *Command { self.args.push(a); return self; }
+
+    /// Add multiple positional arguments at once.
+    pub fn args(self: *Command, vs: *Vector<string>) -> *Command {
+        for let i: int = 0; i < vs.len(); i++ { self.args.push(vs.get(i)); }
+        return self;
+    }
+
+    /// Set an environment variable for the child. Calling this DOES NOT clear
+    /// the inherited environment — only the keys you set are overridden.
+    /// (To run with a clean env, set every var explicitly.)
+    pub fn env(self: *Command, key: string, value: string) -> *Command {
+        self.env_kv.push(key.concat("=").concat(value));
+        return self;
+    }
+
+    /// Set the working directory for the child. Default is the parent's cwd.
+    pub fn cwd(self: *Command, path: string) -> *Command { self.cwd_path = path; return self; }
+
+    /// Pipe `s` to the child's stdin. The pipe is closed once `s` is fully
+    /// written, signaling EOF to the child.
+    pub fn stdin_str(self: *Command, s: string) -> *Command { self.stdin_payload = s; return self; }
+
+    /// Capture stdout into the returned `ProcessResult.stdout`.
+    pub fn capture_out(self: *Command) -> *Command { self.flags = self.flags | 1; return self; }
+
+    /// Capture stderr into the returned `ProcessResult.stderr`.
+    pub fn capture_err(self: *Command) -> *Command { self.flags = self.flags | 2; return self; }
+
+    /// Capture both stdout and stderr.
+    pub fn capture(self: *Command) -> *Command { self.flags = self.flags | 3; return self; }
+
+    /// Run the command synchronously. Blocks until the child exits.
+    /// Returns `Err` only if the spawn itself failed (program not found,
+    /// fork/CreateProcess error). Non-zero exit codes are reported via
+    /// `ProcessResult.exit_code`, NOT as `Err`.
+    pub fn run(self: *Command) -> !ProcessResult {
+        let args_packed: string = _proc_join(self.args);
+        let env_packed:  string = _proc_join(self.env_kv);
+        let mut exit_code: int = 0;
+        let mut signaled:  int = 0;
+        let mut sig:       int = 0;
+        let mut out_str:   string = "";
+        let mut err_str:   string = "";
+        let rc: int = __glide_proc_run(
+            self.program,
+            args_packed, self.args.len(),
+            env_packed,  self.env_kv.len(),
+            self.cwd_path,
+            self.stdin_payload, self.stdin_payload.len(),
+            self.flags,
+            &mut exit_code, &mut signaled, &mut sig,
+            &mut out_str, &mut err_str
+        );
+        if rc != 0 { return err("failed to spawn process"); }
+        let r: ProcessResult = ProcessResult {
+            exit_code: exit_code,
+            stdout: out_str,
+            stderr: err_str,
+            signaled: signaled != 0,
+            signal: sig,
+        };
+        return ok(r);
+    }
+
+    /// Spawn the command without waiting. Returns a `Child` handle whose
+    /// `.wait()` and `.kill(sig)` methods control the running process.
+    /// stdin/stdout/stderr inherit the parent's by default — capture flags
+    /// and stdin_str are ignored on this path (pipe-streaming Child is v2).
+    pub fn spawn(self: *Command) -> !Child {
+        let args_packed: string = _proc_join(self.args);
+        let env_packed:  string = _proc_join(self.env_kv);
+        let pid: int = __glide_proc_spawn(
+            self.program,
+            args_packed, self.args.len(),
+            env_packed,  self.env_kv.len(),
+            self.cwd_path
+        );
+        if pid <= 0 { return err("failed to spawn process"); }
+        let c: Child = Child { pid: pid };
+        return ok(c);
+    }
+
+    pub fn free(self: *Command) {
+        if self.args != null { self.args.free(); }
+        if self.env_kv != null { self.env_kv.free(); }
+        free(self as *void);
+    }
+}
+
+impl Child {
+    /// Block until the child exits and collect its result. Output streams are
+    /// not captured by spawn(), so `stdout` / `stderr` will be empty.
+    pub fn wait(self: *Child) -> !ProcessResult {
+        let mut exit_code: int = 0;
+        let mut signaled:  int = 0;
+        let mut sig:       int = 0;
+        let rc: int = __glide_proc_wait(self.pid, &mut exit_code, &mut signaled, &mut sig);
+        if rc != 0 { return err("waitpid failed"); }
+        let r: ProcessResult = ProcessResult {
+            exit_code: exit_code, stdout: "", stderr: "",
+            signaled: signaled != 0, signal: sig,
+        };
+        return ok(r);
+    }
+
+    /// Send signal `sig` to the child. POSIX: passes through to `kill(pid, sig)`.
+    /// Windows: ignores `sig` and calls `TerminateProcess` (forces exit).
+    pub fn kill(self: *Child, sig: int) -> ! {
+        if __glide_proc_kill(self.pid, sig) != 0 { return err("kill failed"); }
+    }
+}
+
+// ============================================================================
+// Module-level helpers
+// ============================================================================
+
+/// Send signal `sig` to PID. POSIX: kill(pid, sig). Windows: TerminateProcess
+/// (sig is ignored).
+pub fn process_kill(pid: int, sig: int) -> ! {
+    if __glide_proc_kill(pid, sig) != 0 { return err("kill failed"); }
+}
+
+/// `true` if a process with this PID is alive. POSIX: `kill(pid, 0)`. Windows:
+/// `OpenProcess` + `GetExitCodeProcess(STILL_ACTIVE)`.
+pub fn process_exists(pid: int) -> bool {
+    return __glide_proc_exists(pid) != 0;
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+fn _proc_join(v: *Vector<string>) -> string {
+    let mut out: string = "";
+    for let i: int = 0; i < v.len(); i++ {
+        if i > 0 { out = out.concat("\n"); }
+        out = out.concat(v.get(i));
+    }
+    return out;
+}
