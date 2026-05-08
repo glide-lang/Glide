@@ -377,6 +377,18 @@ fn emit_result_runtime(g: *CG) {
         let dedup_key: string = "__rt_result_emit_".concat(m);
         if g.module_aliases.contains(dedup_key) { continue; }
         g.module_aliases.insert(dedup_key, "1");
+        // Special case `!void` — a Result with no value. `void val;` is invalid C,
+        // so emit a struct without the val field, an ok ctor with no args, an err
+        // ctor that takes only the message, and no unwrap (nothing to extract).
+        if t.kind == TY_NAMED && t.name.eq("void") {
+            println!("#ifndef __GLIDE_RESULT_void_GUARD");
+            println!("#define __GLIDE_RESULT_void_GUARD");
+            println!("typedef struct __glide_result_void_t { int ok; const char* err; } __glide_result_void_t;");
+            println!("static __glide_result_void_t __glide_ok_void(void) { __glide_result_void_t r; r.ok = 1; r.err = (const char*)0; return r; }");
+            println!("static __glide_result_void_t __glide_err_void(const char* msg) { __glide_result_void_t r; r.ok = 0; r.err = msg; return r; }");
+            println!("#endif");
+            continue;
+        }
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
         let s2: string = _cg_replace(s1, "@TC@", tc);
@@ -3252,7 +3264,15 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             g.emit_deferred_reverse(depth);
             ind(depth);
             print!("return");
-            if s.expr_value != null { print!(" "); emit_expr(g, s.expr_value); }
+            if s.expr_value != null {
+                print!(" "); emit_expr(g, s.expr_value);
+            } else if g.current_ret_ty != null && g.current_ret_ty.kind == TY_RESULT
+                      && g.current_ret_ty.inner != null
+                      && g.current_ret_ty.inner.kind == TY_NAMED
+                      && g.current_ret_ty.inner.name.eq("void") {
+                // `return;` inside a `fn -> !` body = explicit early success.
+                print!(" __glide_ok_void()");
+            }
             println!(";");
         }
         return;
@@ -4018,6 +4038,14 @@ fn emit_fn(g: *CG, s: *Stmt) {
     }
     // Flush any deferred exprs that didn't hit a return (e.g. fall-through fn end).
     g.emit_deferred_reverse(1);
+    // Implicit `return __glide_ok_void();` at end of `fn -> !` so users can
+    // write fns where success = falling off the end. Unreachable when every
+    // path already returned, but harmless (no -Wreturn-type from gcc).
+    if s.fn_ret_ty != null && s.fn_ret_ty.kind == TY_RESULT
+       && s.fn_ret_ty.inner != null && s.fn_ret_ty.inner.kind == TY_NAMED
+       && s.fn_ret_ty.inner.name.eq("void") {
+        ind(1); println!("return __glide_ok_void();");
+    }
     g.defer_stack = saved_defer;
     g.err_defer_stack = saved_err_defer;
     g.auto_drop_stack = saved_drop;

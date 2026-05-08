@@ -1536,8 +1536,38 @@ fn parse_for_in(p: *Parser, line: int, col: int) -> *Stmt {
 
 // ---- types ---------------------------------------------------------------
 
+// True when the current token can start a type. Used to disambiguate the
+// `!` shorthand for Result-without-value (`-> !`) from `!T` (Result-of-T).
+fn at_type_start(p: *Parser) -> bool {
+    let k: int = p.current.kind;
+    if k == TOK_IDENT { return true; }
+    if k == TOK_KEYWORD {
+        let lex: string = p.current.lexeme;
+        if lex.eq("chan") { return true; }
+        if lex.eq("dyn") { return true; }
+        if lex.eq("fn") { return true; }
+        return false;
+    }
+    if k == TOK_OP {
+        let lex: string = p.current.lexeme;
+        if lex.eq("*") { return true; }
+        if lex.eq("&") { return true; }
+        if lex.eq("[") { return true; }
+        if lex.eq("?") { return true; }
+        if lex.eq("!") { return true; }
+        return false;
+    }
+    return false;
+}
+
 fn parse_type(p: *Parser) -> *Type {
     if p.eat_op("!") {
+        // `!` solo (no inner type) = Result-without-value. Used for fns that
+        // either succeed or fail with no payload: `fn os_chdir(...) -> !`.
+        // If a token that can start a type follows, parse normally as `!T`.
+        if !at_type_start(p) {
+            return ty_result(ty_named("void"));
+        }
         let inner: *Type = parse_type(p);
         return ty_result(inner);
     }

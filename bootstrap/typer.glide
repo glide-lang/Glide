@@ -1138,6 +1138,13 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
 fn check_return(t: *Typer, s: *Stmt) {
     if s.expr_value == null {
         if t.current_ret != null {
+            // `return;` inside a `fn -> !` is a valid early-success — codegen
+            // rewrites it to `return __glide_ok_void();`.
+            if t.current_ret.kind == TY_RESULT && t.current_ret.inner != null
+               && t.current_ret.inner.kind == TY_NAMED
+               && t.current_ret.inner.name.eq("void") {
+                return;
+            }
             t.err(s.line, s.column, "missing return value");
         }
         return;

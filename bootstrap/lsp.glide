@@ -3606,6 +3606,14 @@ pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
         if s.fn_body == null { continue; }
         if s.fn_ret_ty == null { continue; }                 // void -> ok
         if s.is_naked { continue; }                          // raw asm; `ret` lives in the asm
+        // `-> !` (Result-without-value) returns Ok implicitly when the body
+        // falls off the end. Codegen injects `return __glide_ok_void();` at
+        // the function tail, so missing explicit return is not an error.
+        if s.fn_ret_ty.kind == TY_RESULT && s.fn_ret_ty.inner != null
+           && s.fn_ret_ty.inner.kind == TY_NAMED
+           && s.fn_ret_ty.inner.name.eq("void") {
+            continue;
+        }
         // Bool ret is okay-ish but still must return; same logic.
         if !body_always_returns(s.fn_body) {
             t.current_origin = s.origin;
