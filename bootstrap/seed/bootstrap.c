@@ -3148,6 +3148,39 @@ int main(void)
 }
 #endif
 
+typedef struct  Token   Token ;
+typedef struct  Lexer   Lexer ;
+typedef struct  Type   Type ;
+typedef struct  Expr   Expr ;
+typedef struct  SelectArm   SelectArm ;
+typedef struct  Param   Param ;
+typedef struct  Field   Field ;
+typedef struct  EnumVariant   EnumVariant ;
+typedef struct  MatchArm   MatchArm ;
+typedef struct  MacroParam   MacroParam ;
+typedef struct  Stmt   Stmt ;
+typedef struct  StructLitField   StructLitField ;
+typedef struct  ParseDiag   ParseDiag ;
+typedef struct  Parser   Parser ;
+typedef struct  MacroBinding   MacroBinding ;
+typedef struct  TypeMacro   TypeMacro ;
+typedef struct  FnSig   FnSig ;
+typedef struct  BorrowEvent   BorrowEvent ;
+typedef struct  DiagEntry   DiagEntry ;
+typedef struct  Typer   Typer ;
+typedef struct  FnMonoEntry   FnMonoEntry ;
+typedef struct  AnonFn   AnonFn ;
+typedef struct  CG   CG ;
+typedef struct  JsonValue   JsonValue ;
+typedef struct  JsonParser   JsonParser ;
+typedef struct  LspDoc   LspDoc ;
+typedef struct  ImportableSym   ImportableSym ;
+typedef struct  LspState   LspState ;
+typedef struct  ImplMethodHit   ImplMethodHit ;
+typedef struct  FieldHit   FieldHit ;
+typedef struct  ImportInfo   ImportInfo ;
+typedef struct  UseSite   UseSite ;
+
 
 #ifndef __GLIDE_RESULT_int_GUARD
 #define __GLIDE_RESULT_int_GUARD
@@ -16002,6 +16035,19 @@ void   emit_program (Vector__Stmt*   program) {
     }
     emit_scheduler_runtime();
     emit_socket_runtime();
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+            continue;
+        }
+        if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+            printf("%s %s %s %s %s\n", "typedef struct ", c_safe_ident((s. name )), " ", c_safe_ident((s. name )), ";");
+        }
+        if (((s. kind )  ==  ST_ENUM)) {
+            printf("%s %s %s %s %s\n", "typedef struct ", c_safe_ident((s. name )), " ", c_safe_ident((s. name )), ";");
+        }
+    }
+    printf("%s\n", "");
     for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
         Type   t = Vector_get__Type((g-> chan_types ), i);
         if (((t. kind )  !=  TY_NAMED)) {
