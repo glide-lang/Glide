@@ -2787,6 +2787,23 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             return;
         }
         let ty: string = resolve_type_prefix(g, e.str_val);
+        // Payload-less enum variant in expression position. The `<Type>_<Var>`
+        // #define is an int tag; wrap it as a struct literal so the value
+        // is assignable to a `<Type>` binding. Match arms use a separate
+        // emit path (`case <Type>_<Var>:`) and still see the int.
+        if g.enums.contains(ty) {
+            let edef: Stmt = g.enums.get(ty);
+            if edef.enum_variants != null {
+                for let i: int = 0; i < edef.enum_variants.len(); i++ {
+                    let v: EnumVariant = edef.enum_variants.get(i);
+                    if v.name.eq(e.field)
+                       && (v.fields == null || v.fields.len() == 0) {
+                        print!("((", ty, "){.tag = ", ty.concat("_").concat(e.field), "})");
+                        return;
+                    }
+                }
+            }
+        }
         print!(ty.concat("_").concat(e.field));
         return;
     }
