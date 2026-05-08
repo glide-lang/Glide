@@ -171,6 +171,67 @@ fn lift_anons_in_stmt(g: *CG, s: *Stmt) {
 
 // ---- Errors-as-values: collect + emit per-T runtime ---------------------
 
+// Walk a type tree post-substitution, resolving any TY_ASSOC whose owner
+// became concrete during mono. Leaves still-generic types intact.
+fn resolve_assoc_recursive(g: *CG, t: *Type) -> *Type {
+    if t == null { return null; }
+    if t.kind == TY_ASSOC {
+        let r: *Type = resolve_concrete_assoc(g, t);
+        if r != null { return r; }
+        return t;
+    }
+    if t.kind == TY_OPTION { return ty_option(resolve_assoc_recursive(g, t.inner)); }
+    if t.kind == TY_RESULT { return ty_result(resolve_assoc_recursive(g, t.inner)); }
+    if t.kind == TY_OPT_RESULT { return ty_optres(resolve_assoc_recursive(g, t.inner)); }
+    if t.kind == TY_POINTER { return ty_pointer(resolve_assoc_recursive(g, t.inner)); }
+    if t.kind == TY_BORROW {
+        let p: *Type = malloc(sizeof(Type)) as *Type;
+        p.kind = TY_BORROW; p.inner = resolve_assoc_recursive(g, t.inner);
+        return p;
+    }
+    if t.kind == TY_BORROW_MUT {
+        let p: *Type = malloc(sizeof(Type)) as *Type;
+        p.kind = TY_BORROW_MUT; p.inner = resolve_assoc_recursive(g, t.inner);
+        return p;
+    }
+    if t.kind == TY_SLICE {
+        let p: *Type = malloc(sizeof(Type)) as *Type;
+        p.kind = TY_SLICE; p.inner = resolve_assoc_recursive(g, t.inner);
+        return p;
+    }
+    return t;
+}
+
+// If `t` is `TY_ASSOC` with a concrete owner, look up the impl in any
+// trait/assoc map whose key suffix matches `<owner>::<name>`. Returns the
+// resolved type, or null if no match. Walks impl_trait_name keys via a
+// linear scan since assoc_table is keyed by trait, but we don't always
+// know the trait (TY_ASSOC carries owner + name only).
+fn resolve_concrete_assoc(g: *CG, t: *Type) -> *Type {
+    if t == null { return null; }
+    if t.kind != TY_ASSOC { return null; }
+    if t.inner == null { return null; }
+    let mut owner_name: string = "";
+    if t.inner.kind == TY_NAMED   { owner_name = t.inner.name; }
+    if t.inner.kind == TY_GENERIC { owner_name = t.inner.name; }
+    if owner_name.eq("") { return null; }
+    // Linear scan: try every trait registered in assoc_table.
+    let keys: *Vector<string> = g.assoc_table.keys();
+    for let i: int = 0; i < keys.len(); i++ {
+        let k: string = keys.get(i);
+        // Key shape is `<Trait>::<Owner>::<Name>`. Match suffix.
+        let suffix: string = "::".concat(owner_name).concat("::").concat(t.name);
+        if k.len() < suffix.len() { continue; }
+        let tail: string = k.substring(k.len() - suffix.len(), k.len());
+        if !tail.eq(suffix) { continue; }
+        let resolved: Type = g.assoc_table.get(k);
+        let p: *Type = malloc(sizeof(Type)) as *Type;
+        *p = resolved;
+        return p;
+    }
+    return null;
+}
+
 fn collect_result_in_type(g: *CG, t: *Type) {
     if t == null { return; }
     if t.kind == TY_RESULT && t.inner != null {
@@ -223,6 +284,9 @@ fn collect_result_in_expr(g: *CG, e: *Expr) {
 
 fn collect_result_in_stmt(g: *CG, s: *Stmt) {
     if s == null { return; }
+    // Trait sigs reference Self / Self::Item placeholders; impls collect
+    // their own substituted versions.
+    if s.kind == ST_TRAIT { return; }
     if s.let_ty != null { collect_result_in_type(g, s.let_ty); }
     if s.fn_ret_ty != null { collect_result_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
@@ -807,6 +871,9 @@ pub struct CG {
     pub option_types: *Vector<Type>,
     pub optres_types: *Vector<Type>,
     pub current_ret_ty: *Type,
+    // Associated-type lookup for `<Trait>::<Concrete>::<Item>`. Populated
+    // up front from every `impl Trait for Type { type Item = X; }`.
+    pub assoc_table: *HashMap<Type>,
     // Method-dispatch index for `impl T in NS` blocks. Maps the unqualified
     // `<T>_<method>` name to a `;`-delimited list of full mangled names like
     // `cores_string_red`. O(1) lookup at dispatch time avoids walking g.fns.
@@ -867,6 +934,8 @@ impl CG {
         g.option_types = ot;
         let ort: *Vector<Type> = Vector::new();
         g.optres_types = ort;
+        let at: *HashMap<Type> = HashMap::new();
+        g.assoc_table = at;
         g.current_ret_ty = null;
         g.scope = s;
         g.generic_structs = gs;
@@ -1238,6 +1307,11 @@ pub fn type_to_c(t: *Type) -> string {
     if t.kind == TY_OPT_RESULT {
         return "__glide_optres_".concat(mangle_type(t.inner)).concat("_t");
     }
+    if t.kind == TY_ASSOC {
+        // Reaches here only if monomorphization didn't substitute the assoc.
+        // Emit a marker so the C compiler errors visibly instead of silently.
+        return "/* unresolved-assoc */ void";
+    }
     return "void";
 }
 
@@ -1280,6 +1354,7 @@ fn mangle_type(t: *Type) -> string {
     if t.kind == TY_RESULT { return "result_".concat(mangle_type(t.inner)); }
     if t.kind == TY_OPTION { return "option_".concat(mangle_type(t.inner)); }
     if t.kind == TY_OPT_RESULT { return "optres_".concat(mangle_type(t.inner)); }
+    if t.kind == TY_ASSOC { return "assoc_".concat(mangle_type(t.inner)).concat("_").concat(t.name); }
     return "void";
 }
 
@@ -1617,14 +1692,17 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
     let synth: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
     synth.kind = template.kind;
     synth.name = mangled;
-    synth.fn_ret_ty = subst_type(template.fn_ret_ty, template.type_params, args);
+    let mut sret: *Type = subst_type(template.fn_ret_ty, template.type_params, args);
+    sret = resolve_assoc_recursive(g, sret);
+    synth.fn_ret_ty = sret;
     if template.fn_params != null {
         let ps: *Vector<Param> = Vector::new();
         for let i: int = 0; i < template.fn_params.len(); i++ {
             let p: Param = template.fn_params.get(i);
+            let pt: *Type = subst_type(p.ty, template.type_params, args);
             let np: Param = Param {
                 name: p.name,
-                ty: subst_type(p.ty, template.type_params, args),
+                ty: resolve_assoc_recursive(g, pt),
             };
             ps.push(np);
         }
@@ -1634,7 +1712,8 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
 }
 
 fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vector<Type>) {
-    let new_ret: *Type = subst_type(template.fn_ret_ty, template.type_params, args);
+    let mut new_ret: *Type = subst_type(template.fn_ret_ty, template.type_params, args);
+    new_ret = resolve_assoc_recursive(g, new_ret);
     print!(type_to_c(new_ret), " ", mangled, "(");
     if template.fn_params == null || template.fn_params.len() == 0 {
         print!("void");
@@ -1643,7 +1722,8 @@ fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vecto
             if j > 0 { print!(", "); }
             let pp: Param = template.fn_params.get(j);
             let pt: *Type = subst_type(pp.ty, template.type_params, args);
-            print!(type_to_c(pt), " ", pp.name);
+            let resolved_pt: *Type = resolve_assoc_recursive(g, pt);
+            print!(type_to_c(resolved_pt), " ", pp.name);
         }
     }
     println!(");");
@@ -1694,6 +1774,18 @@ fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindi
             }
         }
     }
+    if pat.kind == TY_OPTION && actual.kind == TY_OPTION {
+        unify_for_inference(pat.inner, actual.inner, params, bindings);
+        return;
+    }
+    if pat.kind == TY_RESULT && actual.kind == TY_RESULT {
+        unify_for_inference(pat.inner, actual.inner, params, bindings);
+        return;
+    }
+    if pat.kind == TY_OPT_RESULT && actual.kind == TY_OPT_RESULT {
+        unify_for_inference(pat.inner, actual.inner, params, bindings);
+        return;
+    }
 }
 
 // Recursive type substitution: walk t, replacing Type::Named(n) with the
@@ -1739,6 +1831,15 @@ fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
             }
         }
         return ty_generic(t.name, new_args);
+    }
+    if t.kind == TY_OPTION { return ty_option(subst_type(t.inner, params, args)); }
+    if t.kind == TY_RESULT { return ty_result(subst_type(t.inner, params, args)); }
+    if t.kind == TY_OPT_RESULT { return ty_optres(subst_type(t.inner, params, args)); }
+    if t.kind == TY_ASSOC {
+        // Substitute the owner; the assoc lookup itself happens later when
+        // the owner is fully concrete (typer/codegen impl-table consult).
+        let new_owner: *Type = subst_type(t.inner, params, args);
+        return ty_assoc(new_owner, t.name);
     }
     return t;
 }
@@ -3980,6 +4081,15 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // ---- Errors-as-values pre-pass: collect Result inner types + emit runtime
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        // Skip generic templates — their bodies reference type params and
+        // assoc projections that will be resolved per-instantiation. Mono
+        // entries are added to the queue and collected when emitted.
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
+        // Trait body sigs reference `Self::Item` placeholders; never collect.
+        // Concrete impls of the trait collect their own substituted types.
+        if s.kind == ST_TRAIT { continue; }
         collect_result_in_stmt(g, &s);
     }
     // Same chan-userType story: result_<T> wraps T by value, so user
@@ -4050,6 +4160,28 @@ pub fn emit_program(program: *Vector<Stmt>) {
         }
     }
     emit_optres_runtime(g);
+
+    // Populate codegen's assoc_table from every `impl Trait for T { type X = Y; }`.
+    // Used by mangle_type / type_to_c to resolve TY_ASSOC owners that became
+    // concrete after monomorphization.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if s.assoc_decls == null { continue; }
+        if s.impl_target == null { continue; }
+        let mut tname: string = "";
+        if s.impl_target.kind == TY_NAMED   { tname = s.impl_target.name; }
+        if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+        if tname.eq("") { continue; }
+        for let j: int = 0; j < s.assoc_decls.len(); j++ {
+            let a: Param = s.assoc_decls.get(j);
+            if a.ty == null { continue; }
+            let key: string = s.impl_trait_name.concat("::").concat(tname)
+                .concat("::").concat(a.name);
+            g.assoc_table.insert(key, *a.ty);
+        }
+    }
 
     // Register generic struct + fn + impl-method templates.
     for let i: int = 0; i < program.len(); i++ {
@@ -4330,16 +4462,21 @@ pub fn emit_program(program: *Vector<Stmt>) {
         if !g.generic_fns.contains(e.name) { continue; }
         let template: Stmt = g.generic_fns.get(e.name);
         let mangled: string = mangle_generic(e.name, e.args);
-        // Substitute type params throughout the body / params / ret.
+        // Substitute type params throughout the body / params / ret. After
+        // subst_type makes owners concrete, resolve any TY_ASSOC via the
+        // impl assoc_table.
         let new_params_v: *Vector<Param> = Vector::new();
         if template.fn_params != null {
             for let i: int = 0; i < template.fn_params.len(); i++ {
                 let p: Param = template.fn_params.get(i);
-                let np: Param = Param { name: p.name, ty: subst_type(p.ty, template.type_params, e.args) };
+                let pt: *Type = subst_type(p.ty, template.type_params, e.args);
+                pt = resolve_assoc_recursive(g, pt);
+                let np: Param = Param { name: p.name, ty: pt };
                 new_params_v.push(np);
             }
         }
-        let new_ret: *Type = subst_type(template.fn_ret_ty, template.type_params, e.args);
+        let mut new_ret: *Type = subst_type(template.fn_ret_ty, template.type_params, e.args);
+        new_ret = resolve_assoc_recursive(g, new_ret);
         let new_body: *Vector<Stmt> = Vector::new();
         if template.fn_body != null {
             for let i: int = 0; i < template.fn_body.len(); i++ {
