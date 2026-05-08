@@ -42,3 +42,74 @@ fn test_env_args_at_out_of_range_is_empty() -> int {
     assert_str_eq!(env_args_at(env_args_count() + 100), "");
     return 0;
 }
+
+fn test_env_set_get_roundtrip() -> int {
+    let r: ! = env_set("GLIDE_TEST_VAR_A", "alpha");
+    assert!(r.ok);
+    assert_str_eq!(env_get("GLIDE_TEST_VAR_A"), "alpha");
+    assert!(env_has("GLIDE_TEST_VAR_A"));
+    let _u: ! = env_unset("GLIDE_TEST_VAR_A");
+    return 0;
+}
+
+fn test_env_set_overwrite() -> int {
+    let _r1: ! = env_set("GLIDE_TEST_VAR_B", "first");
+    let _r2: ! = env_set("GLIDE_TEST_VAR_B", "second");
+    assert_str_eq!(env_get("GLIDE_TEST_VAR_B"), "second");
+    let _u: ! = env_unset("GLIDE_TEST_VAR_B");
+    return 0;
+}
+
+fn test_env_unset_clears() -> int {
+    let _r: ! = env_set("GLIDE_TEST_VAR_C", "to-be-removed");
+    let u: ! = env_unset("GLIDE_TEST_VAR_C");
+    assert!(u.ok);
+    assert_str_eq!(env_get("GLIDE_TEST_VAR_C"), "");
+    assert_not!(env_has("GLIDE_TEST_VAR_C"));
+    return 0;
+}
+
+fn test_env_all_contains_set_var() -> int {
+    let _r: ! = env_set("GLIDE_TEST_VAR_D", "marker");
+    let all: *Vector<EnvKV> = env_all();
+    let mut found_value: string = "";
+    for let i: int = 0; i < all.len(); i++ {
+        let kv: EnvKV = all.get(i);
+        if kv.key.eq("GLIDE_TEST_VAR_D") { found_value = kv.value; break; }
+    }
+    assert_str_eq!(found_value, "marker");
+    let _u: ! = env_unset("GLIDE_TEST_VAR_D");
+    return 0;
+}
+
+fn test_env_expand_bare() -> int {
+    let _r: ! = env_set("GLIDE_TEST_VAR_E", "blue");
+    assert_str_eq!(env_expand("color is $GLIDE_TEST_VAR_E"), "color is blue");
+    let _u: ! = env_unset("GLIDE_TEST_VAR_E");
+    return 0;
+}
+
+fn test_env_expand_braces() -> int {
+    let _r: ! = env_set("GLIDE_TEST_VAR_F", "green");
+    let template: string = "color is $".concat("{GLIDE_TEST_VAR_F}!");
+    assert_str_eq!(env_expand(template), "color is green!");
+    let _u: ! = env_unset("GLIDE_TEST_VAR_F");
+    return 0;
+}
+
+fn test_env_expand_windows_style() -> int {
+    let _r: ! = env_set("GLIDE_TEST_VAR_G", "red");
+    assert_str_eq!(env_expand("color is %GLIDE_TEST_VAR_G%"), "color is red");
+    let _u: ! = env_unset("GLIDE_TEST_VAR_G");
+    return 0;
+}
+
+fn test_env_expand_missing_var_empty() -> int {
+    assert_str_eq!(env_expand("[$NEVER_EXISTS_GLIDE]"), "[]");
+    return 0;
+}
+
+fn test_env_expand_no_vars_unchanged() -> int {
+    assert_str_eq!(env_expand("plain text, no dollars"), "plain text, no dollars");
+    return 0;
+}
