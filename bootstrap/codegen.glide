@@ -61,6 +61,12 @@ pub fn is_c_reserved(s: string) -> bool {
     if s.eq("union") { return true; }
     if s.eq("unsigned") { return true; }
     if s.eq("void") { return true; }
+    // stdio.h macros that lower-case Glide users may pick as ident/field
+    // names (e.g. ProcessResult.stdout). They expand to function calls in C
+    // and break compilation if not mangled.
+    if s.eq("stdin") { return true; }
+    if s.eq("stdout") { return true; }
+    if s.eq("stderr") { return true; }
     return false;
 }
 
