@@ -1804,7 +1804,11 @@ fn parse_prefix(p: *Parser) -> *Expr {
             return expr_macro(tn.concat("__new"), args, line, col);
         }
     }
-    if tok.kind == TOK_IDENT {
+    // Keywords that are also valid identifier-position references fall here.
+    // `expect_ident` accepts TOK_KEYWORD as a binder name, so a `let chan = ...`
+    // succeeds at parse time; the use site `... = chan;` must mirror that or
+    // we silently emit a null Expr and produce malformed C.
+    if tok.kind == TOK_IDENT || tok.kind == TOK_KEYWORD {
         p.advance();
         // Multi-segment path `a::b::c::Item[::method]`. The full prefix lives
         // in `str_val` and the trailing segment goes to `field`; codegen looks
