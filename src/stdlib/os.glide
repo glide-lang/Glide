@@ -1,20 +1,57 @@
-// OS / platform info. The static facts about the host the binary is
-// running on — name, arch, path conventions — and a couple of cheap
-// process-level queries (cwd, exe path).
+// stdlib::os — host machine + process identity.
 //
-// Per-process state that can change at runtime (env vars, args, exit
-// code) lives in `stdlib::env`.
+// Two flavors of fn:
+//   - Compile-time facts (T direct): os_name, os_arch, is_*, *_sep, os_pid,
+//     os_is_tty. These cannot meaningfully fail; sentinel returns are
+//     deterministic.
+//   - Runtime queries (!T): cwd, exe_path, hostname, hardware info, dirs,
+//     etc. Each Err carries a human-readable reason.
+//
+// What lives elsewhere:
+//   - argv, env vars (read), exit       → `stdlib::env`
+//   - file/dir IO                        → `stdlib::fs`
+//   - stdin/stdout/stderr handles        → `stdlib::io`
+//   - subprocess Command builder         → `stdlib::process` (planned)
+//   - signal handling                    → `stdlib::signal`  (planned)
 
 extern fn __glide_is_windows() -> int;
+
+extern fn __glide_os_name() -> string;
+extern fn __glide_os_arch() -> string;
+extern fn __glide_path_list_sep() -> string;
+extern fn __glide_pid() -> int;
+
+extern fn __glide_cwd() -> string;
+extern fn __glide_chdir(path: string) -> int;
 extern fn __glide_exe_path() -> string;
 extern fn __glide_exe_dir() -> string;
 extern fn __glide_shell(cmd: string) -> int;
 
-extern fn __glide_os_name() -> string;
-extern fn __glide_os_arch() -> string;
-extern fn __glide_cwd() -> string;
+extern fn __glide_ppid() -> int;
+extern fn __glide_uid() -> int;
+extern fn __glide_gid() -> int;
+extern fn __glide_username() -> string;
+extern fn __glide_hostname() -> string;
+extern fn __glide_kernel_version() -> string;
+
+extern fn __glide_cpu_count() -> int;
+extern fn __glide_cpu_count_physical() -> int;
+extern fn __glide_page_size() -> int;
+extern fn __glide_memory_total() -> u64;
+extern fn __glide_memory_free() -> u64;
+extern fn __glide_uptime_secs() -> u64;
+extern fn __glide_loadavg_1m() -> f64;
+
+extern fn __glide_temp_dir() -> string;
+extern fn __glide_home_dir() -> string;
+extern fn __glide_config_dir() -> string;
+extern fn __glide_cache_dir() -> string;
+extern fn __glide_data_dir() -> string;
+
+extern fn __glide_is_tty(fd: int) -> int;
 
 c_raw! {
+    // ---- Always-on helpers (no ratchet): cheap compile-time facts. ----
     #ifndef GLIDE_OS_HELPERS_DEFINED
     #define GLIDE_OS_HELPERS_DEFINED
     static const char* __glide_os_name(void) {
@@ -49,20 +86,48 @@ c_raw! {
         return "unknown";
     #endif
     }
+    static const char* __glide_path_list_sep(void) {
+    #ifdef _WIN32
+        return ";";
+    #else
+        return ":";
+    #endif
+    }
     static const char* __glide_cwd(void) {
-        static char buf[1024];
+        static char buf[4096];
     #ifdef _WIN32
         DWORD n = GetCurrentDirectoryA((DWORD)sizeof(buf), buf);
-        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; }
+        if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
     #else
-        if (!getcwd(buf, sizeof(buf))) { buf[0] = 0; }
+        if (!getcwd(buf, sizeof(buf))) buf[0] = 0;
     #endif
         return buf;
     }
-    #endif
+    #endif // GLIDE_OS_HELPERS_DEFINED
+
     #ifdef GLIDE_OS_VIA_CRAW
     #ifndef GLIDE_OS_PLATFORM_HELPERS_DEFINED
     #define GLIDE_OS_PLATFORM_HELPERS_DEFINED
+
+    #ifdef _WIN32
+    #include <windows.h>
+    #include <lmcons.h>
+    #include <io.h>
+    #else
+    #include <unistd.h>
+    #include <sys/utsname.h>
+    #include <pwd.h>
+    #include <sys/types.h>
+    #include <time.h>
+    #ifdef __linux__
+    #include <sys/sysinfo.h>
+    #endif
+    #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    #include <sys/sysctl.h>
+    #include <sys/time.h>
+    #endif
+    #endif
+
     static int __glide_is_windows(void) {
     #ifdef _WIN32
         return 1;
@@ -71,6 +136,107 @@ c_raw! {
     #endif
     }
     static int __glide_shell(const char* cmd) { return system(cmd); }
+
+    // Process identity
+    static int __glide_pid(void) {
+    #ifdef _WIN32
+        return (int)GetCurrentProcessId();
+    #else
+        return (int)getpid();
+    #endif
+    }
+    static int __glide_ppid(void) {
+    #ifdef _WIN32
+        return -1;
+    #else
+        return (int)getppid();
+    #endif
+    }
+    static int __glide_uid(void) {
+    #ifdef _WIN32
+        return -1;
+    #else
+        return (int)getuid();
+    #endif
+    }
+    static int __glide_gid(void) {
+    #ifdef _WIN32
+        return -1;
+    #else
+        return (int)getgid();
+    #endif
+    }
+    static const char* __glide_username(void) {
+        static char buf[256];
+    #ifdef _WIN32
+        DWORD n = (DWORD)sizeof(buf);
+        if (!GetUserNameA(buf, &n)) buf[0] = 0;
+    #else
+        const char* env = getenv("USER");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+        } else {
+            struct passwd* pw = getpwuid(getuid());
+            if (pw && pw->pw_name) {
+                size_t L = strlen(pw->pw_name);
+                if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+                memcpy(buf, pw->pw_name, L); buf[L] = 0;
+            } else {
+                buf[0] = 0;
+            }
+        }
+    #endif
+        return buf;
+    }
+    static const char* __glide_hostname(void) {
+        static char buf[256];
+    #ifdef _WIN32
+        DWORD n = (DWORD)sizeof(buf);
+        if (!GetComputerNameA(buf, &n)) buf[0] = 0;
+    #else
+        if (gethostname(buf, sizeof(buf)) != 0) buf[0] = 0;
+        buf[sizeof(buf) - 1] = 0;
+    #endif
+        return buf;
+    }
+    static const char* __glide_kernel_version(void) {
+        static char buf[256];
+    #ifdef _WIN32
+        OSVERSIONINFOA v;
+        memset(&v, 0, sizeof(v));
+        v.dwOSVersionInfoSize = sizeof(v);
+        if (GetVersionExA(&v)) {
+            snprintf(buf, sizeof(buf), "%lu.%lu.%lu",
+                     (unsigned long)v.dwMajorVersion,
+                     (unsigned long)v.dwMinorVersion,
+                     (unsigned long)v.dwBuildNumber);
+        } else {
+            buf[0] = 0;
+        }
+    #else
+        struct utsname u;
+        if (uname(&u) == 0) {
+            size_t L = strlen(u.release);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, u.release, L); buf[L] = 0;
+        } else {
+            buf[0] = 0;
+        }
+    #endif
+        return buf;
+    }
+
+    // CWD / executable mutator
+    static int __glide_chdir(const char* path) {
+    #ifdef _WIN32
+        return SetCurrentDirectoryA(path) ? 0 : -1;
+    #else
+        return chdir(path);
+    #endif
+    }
+
     #ifdef _WIN32
     static const char* __glide_exe_path(void) {
         static char buf[1024];
@@ -102,104 +268,499 @@ c_raw! {
         return "";
     }
     #endif
+
+    // Hardware
+    static int __glide_cpu_count(void) {
+    #ifdef _WIN32
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        return (int)si.dwNumberOfProcessors;
+    #else
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        return n > 0 ? (int)n : 1;
     #endif
+    }
+    static int __glide_cpu_count_physical(void) {
+    #ifdef _WIN32
+        DWORD len = 0;
+        GetLogicalProcessorInformation(NULL, &len);
+        if (len == 0) return -1;
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION* info =
+            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION*)malloc(len);
+        if (!info) return -1;
+        if (!GetLogicalProcessorInformation(info, &len)) { free(info); return -1; }
+        int count = 0;
+        DWORD n = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+        for (DWORD i = 0; i < n; i++) {
+            if (info[i].Relationship == RelationProcessorCore) count++;
+        }
+        free(info);
+        return count > 0 ? count : -1;
+    #elif defined(__linux__)
+        FILE* f = fopen("/proc/cpuinfo", "r");
+        if (!f) return -1;
+        char line[256];
+        int seen[1024]; memset(seen, 0, sizeof(seen));
+        int count = 0;
+        int cur_phys = 0, cur_core = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "physical id", 11) == 0) {
+                const char* c = strchr(line, ':');
+                if (c) cur_phys = atoi(c + 1);
+            } else if (strncmp(line, "core id", 7) == 0) {
+                const char* c = strchr(line, ':');
+                if (c) cur_core = atoi(c + 1);
+                int key = cur_phys * 64 + cur_core;
+                if (key >= 0 && key < 1024 && !seen[key]) {
+                    seen[key] = 1; count++;
+                }
+            }
+        }
+        fclose(f);
+        return count > 0 ? count : -1;
+    #else
+        int count = 0; size_t L = sizeof(count);
+        if (sysctlbyname("hw.physicalcpu", &count, &L, NULL, 0) == 0 && count > 0) return count;
+        return -1;
+    #endif
+    }
+    static int __glide_page_size(void) {
+    #ifdef _WIN32
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        return (int)si.dwPageSize;
+    #else
+        long n = sysconf(_SC_PAGESIZE);
+        return n > 0 ? (int)n : 4096;
+    #endif
+    }
+    static uint64_t __glide_memory_total(void) {
+    #ifdef _WIN32
+        MEMORYSTATUSEX m; m.dwLength = sizeof(m);
+        if (!GlobalMemoryStatusEx(&m)) return 0;
+        return (uint64_t)m.ullTotalPhys;
+    #elif defined(__linux__)
+        long pages = sysconf(_SC_PHYS_PAGES);
+        long page  = sysconf(_SC_PAGESIZE);
+        if (pages <= 0 || page <= 0) return 0;
+        return (uint64_t)pages * (uint64_t)page;
+    #else
+        uint64_t n = 0; size_t L = sizeof(n);
+        if (sysctlbyname("hw.memsize", &n, &L, NULL, 0) == 0) return n;
+        return 0;
+    #endif
+    }
+    static uint64_t __glide_memory_free(void) {
+    #ifdef _WIN32
+        MEMORYSTATUSEX m; m.dwLength = sizeof(m);
+        if (!GlobalMemoryStatusEx(&m)) return 0;
+        return (uint64_t)m.ullAvailPhys;
+    #elif defined(__linux__)
+        long pages = sysconf(_SC_AVPHYS_PAGES);
+        long page  = sysconf(_SC_PAGESIZE);
+        if (pages <= 0 || page <= 0) return 0;
+        return (uint64_t)pages * (uint64_t)page;
+    #else
+        return 0;
+    #endif
+    }
+    static uint64_t __glide_uptime_secs(void) {
+    #ifdef _WIN32
+        return (uint64_t)(GetTickCount64() / 1000ULL);
+    #elif defined(__linux__)
+        struct sysinfo si;
+        if (sysinfo(&si) != 0) return 0;
+        return (uint64_t)si.uptime;
+    #else
+        struct timeval tv; size_t L = sizeof(tv);
+        if (sysctlbyname("kern.boottime", &tv, &L, NULL, 0) != 0) return 0;
+        time_t now = time(NULL);
+        if (now <= tv.tv_sec) return 0;
+        return (uint64_t)(now - tv.tv_sec);
+    #endif
+    }
+    static double __glide_loadavg_1m(void) {
+    #ifdef _WIN32
+        return -1.0;
+    #else
+        double la[3];
+        if (getloadavg(la, 3) < 1) return -1.0;
+        return la[0];
+    #endif
+    }
+
+    // Standard directories
+    static const char* __glide_temp_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        DWORD n = GetTempPathA((DWORD)sizeof(buf), buf);
+        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
+        if (n > 0 && (buf[n-1] == '\\' || buf[n-1] == '/')) buf[n-1] = 0;
+    #else
+        const char* env = getenv("TMPDIR");
+        if (!env || !*env) env = "/tmp";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+    #endif
+        return buf;
+    }
+    static const char* __glide_home_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("USERPROFILE");
+        if (!env || !*env) env = "";
+    #else
+        const char* env = getenv("HOME");
+        if (!env || !*env) {
+            struct passwd* pw = getpwuid(getuid());
+            if (pw && pw->pw_dir) env = pw->pw_dir;
+            else env = "";
+        }
+    #endif
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    }
+    static const char* __glide_config_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("APPDATA");
+        if (!env || !*env) env = "";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    #elif defined(__APPLE__)
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/Library/Application Support", home);
+        return buf;
+    #else
+        const char* env = getenv("XDG_CONFIG_HOME");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+            return buf;
+        }
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/.config", home);
+        return buf;
+    #endif
+    }
+    static const char* __glide_cache_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("LOCALAPPDATA");
+        if (!env || !*env) env = "";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    #elif defined(__APPLE__)
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/Library/Caches", home);
+        return buf;
+    #else
+        const char* env = getenv("XDG_CACHE_HOME");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+            return buf;
+        }
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/.cache", home);
+        return buf;
+    #endif
+    }
+    static const char* __glide_data_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("APPDATA");
+        if (!env || !*env) env = "";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    #elif defined(__APPLE__)
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/Library/Application Support", home);
+        return buf;
+    #else
+        const char* env = getenv("XDG_DATA_HOME");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+            return buf;
+        }
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/.local/share", home);
+        return buf;
+    #endif
+    }
+
+    static int __glide_is_tty(int fd) {
+    #ifdef _WIN32
+        return _isatty(fd) ? 1 : 0;
+    #else
+        return isatty(fd) ? 1 : 0;
+    #endif
+    }
+    #endif // GLIDE_OS_PLATFORM_HELPERS_DEFINED
     #endif // GLIDE_OS_VIA_CRAW
 }
 
-/// OS family the binary was compiled for. Mirrors what `@cfg("...")`
-/// would gate on — `"windows"`, `"linux"`, `"macos"`, `"freebsd"`,
-/// `"openbsd"`, `"netbsd"`, or `"unknown"`.
-///
-/// ```glide
-/// match os_name() {
-///     "linux"   => println!("on linux"),
-///     "windows" => println!("on windows"),
-///     _         => println!("other"),
-/// }
-/// ```
+// ============================================================================
+// A. Platform identity (compile-time, infallible)
+// ============================================================================
+
+/// OS family the binary was compiled for. `"linux"`, `"windows"`, `"macos"`,
+/// `"freebsd"`, `"openbsd"`, `"netbsd"`, or `"unknown"`.
 pub fn os_name() -> string { return __glide_os_name(); }
 
-/// CPU architecture: `"x86_64"`, `"aarch64"`, `"arm"`, `"x86"`,
-/// `"riscv64"`, or `"unknown"`. Reflects the build target, not a
-/// runtime probe, so cross-compiled binaries report the *target*.
-///
-/// ```glide
-/// println!("running on", os_arch());
-/// ```
+/// CPU architecture: `"x86_64"`, `"aarch64"`, `"arm"`, `"x86"`, `"riscv64"`,
+/// or `"unknown"`. Reflects the build target.
 pub fn os_arch() -> string { return __glide_os_arch(); }
 
 /// `true` on Windows, `false` everywhere else.
-///
-/// ```glide
-/// let sep: string = if os_is_windows() { "\\" } else { "/" };
-/// ```
 pub fn os_is_windows() -> bool { return __glide_is_windows() != 0; }
 
 /// `true` on POSIX-y systems (Linux, macOS, *BSD), `false` on Windows.
-///
-/// ```glide
-/// if os_is_posix() { /* fork-style codepath */ }
-/// ```
 pub fn os_is_posix() -> bool { return __glide_is_windows() == 0; }
 
-/// `true` only on Linux. Use this when a Linux-only syscall is involved
-/// — `epoll`, `eventfd`, `/proc/self/...` — not just "POSIX".
+/// `true` only on Linux.
 pub fn os_is_linux() -> bool { return __glide_os_name().eq("linux"); }
 
 /// `true` only on macOS / Darwin. `os_is_posix()` is also true.
 pub fn os_is_macos() -> bool { return __glide_os_name().eq("macos"); }
 
-/// Path component separator: `\\` on Windows, `/` elsewhere. Use this
-/// when building paths for display or external tools that care; for
-/// just reading/writing files, both separators work on Windows.
-///
-/// ```glide
-/// let p: string = "logs".concat(os_path_sep()).concat("today.txt");
-/// ```
+/// Path component separator: `\\` on Windows, `/` elsewhere.
 pub fn os_path_sep() -> string {
     if __glide_is_windows() != 0 { return "\\"; }
     return "/";
 }
 
-/// Line ending convention: `"\r\n"` on Windows, `"\n"` elsewhere. Most
-/// Glide APIs already normalise to `\n`; reach for this only when
-/// emitting text consumed by Windows-native tools (e.g. `notepad`).
+/// Line ending convention: `"\r\n"` on Windows, `"\n"` elsewhere.
 pub fn os_line_sep() -> string {
     if __glide_is_windows() != 0 { return "\r\n"; }
     return "\n";
 }
 
-/// Current working directory of the process, no trailing separator.
-/// Returns `""` if the OS refuses (path longer than 1024 bytes, deleted
-/// dir, …).
-///
-/// ```glide
-/// println!("cwd =", os_cwd());
-/// ```
-pub fn os_cwd() -> string { return __glide_cwd(); }
+/// PATH-list separator: `;` on Windows, `:` elsewhere. Use this when parsing
+/// `$PATH` / `%PATH%`.
+pub fn os_path_list_sep() -> string { return __glide_path_list_sep(); }
 
-/// Absolute path of the running executable — the same value `argv[0]`
-/// would have if the OS resolved it. Useful for finding sibling
-/// resources or shipping assets next to the binary.
-///
-/// ```glide
-/// let me: string = os_exe_path();
-/// ```
-pub fn os_exe_path() -> string { return __glide_exe_path(); }
+// ============================================================================
+// B. Process identity
+// ============================================================================
+
+/// Current process ID. Always returns a positive value; getpid never fails.
+pub fn os_pid() -> int { return __glide_pid(); }
+
+/// Parent process ID. POSIX returns `getppid()`; on Windows, returns
+/// `Err("ppid not available")` because the API doesn't expose it cheaply.
+pub fn os_ppid() -> !int {
+    let p: int = __glide_ppid();
+    if p < 0 { return err("ppid not available"); }
+    return ok(p);
+}
+
+/// POSIX user ID. `Err` on Windows (no numeric UID concept).
+pub fn os_uid() -> !int {
+    let u: int = __glide_uid();
+    if u < 0 { return err("uid not available on this platform"); }
+    return ok(u);
+}
+
+/// POSIX group ID. `Err` on Windows.
+pub fn os_gid() -> !int {
+    let g: int = __glide_gid();
+    if g < 0 { return err("gid not available on this platform"); }
+    return ok(g);
+}
+
+/// Login name of the current user. POSIX checks `$USER` then `getpwuid`;
+/// Windows uses `GetUserNameA`.
+pub fn os_username() -> !string {
+    let s: string = __glide_username();
+    if s.eq("") { return err("username unavailable"); }
+    return ok(s);
+}
+
+/// Host name (machine name). `gethostname()` on POSIX, `GetComputerNameA`
+/// on Windows.
+pub fn os_hostname() -> !string {
+    let s: string = __glide_hostname();
+    if s.eq("") { return err("hostname unavailable"); }
+    return ok(s);
+}
+
+/// Kernel/OS version string. POSIX returns `uname -r` (e.g. `5.15.0-91`);
+/// Windows returns `<major>.<minor>.<build>`.
+pub fn os_kernel_version() -> !string {
+    let s: string = __glide_kernel_version();
+    if s.eq("") { return err("kernel version unavailable"); }
+    return ok(s);
+}
+
+// ============================================================================
+// C. CWD / executable
+// ============================================================================
+
+/// Current working directory of the process, no trailing separator.
+pub fn os_cwd() -> !string {
+    let s: string = __glide_cwd();
+    if s.eq("") { return err("cwd unavailable"); }
+    return ok(s);
+}
+
+/// Change the process's working directory. Returns `Ok(0)` on success,
+/// `Err` on failure (path missing, no permission, etc.).
+pub fn os_chdir(path: string) -> !int {
+    let rc: int = __glide_chdir(path);
+    if rc != 0 { return err("chdir failed"); }
+    return ok(0);
+}
+
+/// Absolute path of the running executable.
+pub fn os_exe_path() -> !string {
+    let s: string = __glide_exe_path();
+    if s.eq("") { return err("exe path unavailable"); }
+    return ok(s);
+}
 
 /// Directory portion of `os_exe_path`, without trailing separator.
-///
-/// ```glide
-/// let cfg: string = os_exe_dir().concat("/config.toml");
-/// ```
-pub fn os_exe_dir() -> string { return __glide_exe_dir(); }
+pub fn os_exe_dir() -> !string {
+    let s: string = __glide_exe_dir();
+    if s.eq("") { return err("exe dir unavailable"); }
+    return ok(s);
+}
+
+// ============================================================================
+// D. Hardware
+// ============================================================================
+
+/// Number of logical CPUs available to the process.
+pub fn os_cpu_count() -> !int {
+    let n: int = __glide_cpu_count();
+    if n <= 0 { return err("cpu count unavailable"); }
+    return ok(n);
+}
+
+/// Number of physical cores. Falls back to `os_cpu_count()` when the
+/// platform doesn't expose a clean count (e.g. some Linux containers).
+pub fn os_cpu_count_physical() -> !int {
+    let n: int = __glide_cpu_count_physical();
+    if n <= 0 { return os_cpu_count(); }
+    return ok(n);
+}
+
+/// Virtual memory page size in bytes. Typically 4096; can be 16384 on
+/// Apple Silicon and some ARM Linux.
+pub fn os_page_size() -> !int {
+    let n: int = __glide_page_size();
+    if n <= 0 { return err("page size unavailable"); }
+    return ok(n);
+}
+
+/// Total physical RAM in bytes.
+pub fn os_memory_total() -> !u64 {
+    let n: u64 = __glide_memory_total();
+    if n == 0 { return err("memory_total unavailable"); }
+    return ok(n);
+}
+
+/// Available physical RAM in bytes (snapshot at call time).
+/// Best-effort on macOS / BSD where the metric needs mach-specific calls.
+pub fn os_memory_free() -> !u64 {
+    let n: u64 = __glide_memory_free();
+    if n == 0 { return err("memory_free unavailable"); }
+    return ok(n);
+}
+
+/// Seconds since system boot.
+pub fn os_uptime_secs() -> !u64 {
+    let n: u64 = __glide_uptime_secs();
+    if n == 0 { return err("uptime unavailable"); }
+    return ok(n);
+}
+
+/// 1-minute load average. POSIX-only — `Err` on Windows.
+pub fn os_loadavg_1m() -> !f64 {
+    let v: f64 = __glide_loadavg_1m();
+    if v < 0.0 { return err("loadavg not supported on this platform"); }
+    return ok(v);
+}
+
+// ============================================================================
+// E. Standard directories (platform-native)
+// ============================================================================
+
+/// Per-user temporary dir. POSIX: `$TMPDIR` or `/tmp`. Windows: `%TEMP%`.
+pub fn os_temp_dir() -> !string {
+    let s: string = __glide_temp_dir();
+    if s.eq("") { return err("temp_dir unavailable"); }
+    return ok(s);
+}
+
+/// User home directory. POSIX: `$HOME` (fallback `getpwuid->pw_dir`).
+/// Windows: `%USERPROFILE%`.
+pub fn os_home_dir() -> !string {
+    let s: string = __glide_home_dir();
+    if s.eq("") { return err("home_dir unavailable"); }
+    return ok(s);
+}
+
+/// Per-user config dir (base — caller appends app name).
+/// Linux: `$XDG_CONFIG_HOME` or `~/.config`.
+/// macOS: `~/Library/Application Support`.
+/// Windows: `%APPDATA%`.
+pub fn os_config_dir() -> !string {
+    let s: string = __glide_config_dir();
+    if s.eq("") { return err("config_dir unavailable"); }
+    return ok(s);
+}
+
+/// Per-user cache dir (base).
+/// Linux: `$XDG_CACHE_HOME` or `~/.cache`.
+/// macOS: `~/Library/Caches`.
+/// Windows: `%LOCALAPPDATA%`.
+pub fn os_cache_dir() -> !string {
+    let s: string = __glide_cache_dir();
+    if s.eq("") { return err("cache_dir unavailable"); }
+    return ok(s);
+}
+
+/// Per-user data dir (base).
+/// Linux: `$XDG_DATA_HOME` or `~/.local/share`.
+/// macOS: `~/Library/Application Support`.
+/// Windows: `%APPDATA%`.
+pub fn os_data_dir() -> !string {
+    let s: string = __glide_data_dir();
+    if s.eq("") { return err("data_dir unavailable"); }
+    return ok(s);
+}
+
+// ============================================================================
+// F. IO state
+// ============================================================================
+
+/// `true` if the descriptor is a terminal. `fd`: 0=stdin, 1=stdout, 2=stderr.
+/// Use this before emitting ANSI color escapes — output piped to a file
+/// or other process should stay plain.
+pub fn os_is_tty(fd: int) -> bool { return __glide_is_tty(fd) != 0; }
+
+// ============================================================================
+// G. Subprocess quick (prefer stdlib::process::Command when it lands)
+// ============================================================================
 
 /// Run `cmd` through the OS shell (`cmd /c` on Windows, `/bin/sh -c`
-/// elsewhere). Returns the child's exit status. Output goes to the
-/// inherited stdout/stderr — capturing requires `>file` redirection in
-/// the command itself.
-///
-/// ```glide
-/// let rc: int = os_shell("ls -la > /tmp/listing");
-/// ```
-pub fn os_shell(cmd: string) -> int { return __glide_shell(cmd); }
+/// elsewhere). Returns `Ok(exit_code)` (0 = success) or `Err` if the shell
+/// itself failed to launch. Output streams are inherited; capture requires
+/// shell-level redirection in the command string.
+pub fn os_shell(cmd: string) -> !int {
+    let rc: int = __glide_shell(cmd);
+    if rc < 0 { return err("shell failed to spawn"); }
+    return ok(rc);
+}
