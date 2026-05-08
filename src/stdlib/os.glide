@@ -615,12 +615,11 @@ pub fn os_cwd() -> !string {
     return ok(s);
 }
 
-/// Change the process's working directory. Returns `Ok(0)` on success,
-/// `Err` on failure (path missing, no permission, etc.).
-pub fn os_chdir(path: string) -> !int {
-    let rc: int = __glide_chdir(path);
-    if rc != 0 { return err("chdir failed"); }
-    return ok(0);
+/// Change the process's working directory. Returns `Ok` on success, `Err`
+/// on failure (path missing, no permission, etc.). The success branch
+/// carries no value — callers just check `r.ok`.
+pub fn os_chdir(path: string) -> ! {
+    if __glide_chdir(path) != 0 { return err("chdir failed"); }
 }
 
 /// Absolute path of the running executable.

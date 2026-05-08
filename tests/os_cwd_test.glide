@@ -14,14 +14,14 @@ fn test_os_chdir_to_temp_dir_and_back() -> int {
     let temp: !string = os_temp_dir();
     assert!(temp.ok);
 
-    let go: !int = os_chdir(temp.val);
+    let go: ! = os_chdir(temp.val);
     assert!(go.ok);
 
     let now: !string = os_cwd();
     assert!(now.ok);
     assert!(now.val.len() > 0);
 
-    let back: !int = os_chdir(original.val);
+    let back: ! = os_chdir(original.val);
     assert!(back.ok);
     return 0;
 }
