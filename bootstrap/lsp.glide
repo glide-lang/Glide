@@ -429,7 +429,7 @@ fn fn_snippet(s: *Stmt) -> string {
         for let i: int = 0; i < s.fn_params.len(); i++ {
             if i > 0 { out = out.concat(", "); }
             let p: Param = s.fn_params.get(i);
-            out = out.concat("\${").concat(int_to_str((i + 1) as i64))
+            out = out.concat("$").concat("{").concat(int_to_str((i + 1) as i64))
                      .concat(":").concat(p.name).concat("}");
         }
     }
