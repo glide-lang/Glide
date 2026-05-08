@@ -233,6 +233,38 @@ fn aggregator(out: chan<Event>, expected: int, sink: chan<Tally>) {
     free(t as *void);
 }
 
+// ---- 11b. select! over multiple chans ---------------------------------
+
+fn tour_emit_after(c: chan<int>, ms: int, v: int) {
+    sleep_ms(ms);
+    c.send(v);
+}
+
+fn tour_close_after(c: chan<int>, ms: int) {
+    sleep_ms(ms);
+    c.close();
+}
+
+fn tour_select_demo() {
+    let fast: chan<int>  = make_chan(2);
+    let slow: chan<int>  = make_chan(2);
+    let done: chan<int>  = make_chan(2);
+    spawn tour_emit_after(fast, 10, 1);
+    spawn tour_emit_after(slow, 50, 2);
+    spawn tour_close_after(done, 70);
+
+    let mut events: int = 0;
+    let mut keep: int = 1;
+    while keep == 1 {
+        select! {
+            x = fast.recv() => { println!("[select] fast=", x); events = events + 1; }
+            y = slow.recv() => { println!("[select] slow=", y); events = events + 1; }
+            none = done.recv() => { println!("[select] done"); keep = 0; }
+        }
+    }
+    println!("[select] total=", events);
+}
+
 // ---- 12. arena + defer + borrows ---------------------------------------
 
 fn fill_jobs(jobs: &mut Vector<int>, count: int) {
@@ -348,6 +380,9 @@ fn main() -> int {
     let mut sum: int = 0;
     while let v = stream.recv() { sum = sum + v; }
     println!("stream sum (close-detected): ${sum}");
+
+    // --- (j2) select! over multiple chans
+    tour_select_demo();
 
     // --- (k) f64 arithmetic
     let avg: f64 = (result.total_us as f64) / (cfg.jobs as f64);

@@ -3294,6 +3294,168 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         ind(depth); println!("}");
         return;
     }
+    if s.kind == ST_SELECT {
+        // `select! { arm => { body } ... }` — race over chan ops.
+        // v1 strategy: polling loop with adaptive backoff (yield_now → sleep_ms).
+        // True parking on N chans is deferred (would need a wait-node refactor).
+        let arms: *Vector<SelectArm> = s.select_arms;
+        if arms == null || arms.len() == 0 {
+            ind(depth); println!("/* empty select */");
+            return;
+        }
+        let id_str: string = int_to_str(s.line * 1000 + s.column);
+        let end_label: string = "__sel_end_".concat(id_str);
+
+        let mut default_idx: int = -1;
+        for let i: int = 0; i < arms.len(); i++ {
+            let a: SelectArm = arms.get(i);
+            if a.kind == SEL_DEFAULT { default_idx = i; }
+        }
+
+        ind(depth); println!("{");
+
+        // Per-arm temp vars for value-binding recv arms.
+        for let i: int = 0; i < arms.len(); i++ {
+            let a: SelectArm = arms.get(i);
+            if a.kind == SEL_RECV || a.kind == SEL_RECV_SOME {
+                let chan_ty: *Type = infer_for_codegen(g, a.chan_expr);
+                let stripped: *Type = strip_ptr(chan_ty);
+                if stripped == null || stripped.kind != TY_GENERIC || !stripped.name.eq("chan")
+                   || stripped.args == null || stripped.args.len() == 0 {
+                    ind(depth + 1); println!("/* select: arm receiver is not a chan<T> */");
+                    continue;
+                }
+                let inner: Type = stripped.args.get(0);
+                let tc: string = type_to_c(&inner);
+                ind(depth + 1); println!(tc.concat(" __sel_tmp_").concat(int_to_str(i)).concat(";"));
+            }
+        }
+
+        ind(depth + 1); println!("int __sel_iters_".concat(id_str).concat(" = 0;"));
+        ind(depth + 1); println!("while (1) {");
+
+        for let i: int = 0; i < arms.len(); i++ {
+            let a: SelectArm = arms.get(i);
+            if a.kind == SEL_DEFAULT { continue; }
+
+            if a.kind == SEL_RECV || a.kind == SEL_RECV_SOME {
+                let chan_ty: *Type = infer_for_codegen(g, a.chan_expr);
+                let stripped: *Type = strip_ptr(chan_ty);
+                if stripped == null || stripped.kind != TY_GENERIC || !stripped.name.eq("chan")
+                   || stripped.args == null || stripped.args.len() == 0 {
+                    ind(depth + 2); println!("/* select arm: receiver is not a chan<T> */");
+                    continue;
+                }
+                let inner: Type = stripped.args.get(0);
+                let m: string = mangle_type(&inner);
+                let tc: string = type_to_c(&inner);
+                let tmp: string = "__sel_tmp_".concat(int_to_str(i));
+
+                ind(depth + 2); print!("if (__glide_try_recv_".concat(m).concat("("));
+                emit_expr(g, a.chan_expr);
+                println!(", &".concat(tmp).concat(")) {"));
+
+                ind(depth + 3); print!("__glide_wake_send_".concat(m).concat("("));
+                emit_expr(g, a.chan_expr);
+                println!(");");
+
+                ind(depth + 3); println!("{");
+                ind(depth + 4); println!(tc.concat(" ").concat(a.bind_name).concat(" = ").concat(tmp).concat(";"));
+                g.declare(a.bind_name, &inner);
+                if a.body != null {
+                    let saved: int = g.auto_drop_stack.len();
+                    for let j: int = 0; j < a.body.len(); j++ {
+                        let bs: Stmt = a.body.get(j);
+                        emit_stmt(g, &bs, depth + 4);
+                    }
+                    g.emit_block_drops(saved, depth + 4);
+                }
+                ind(depth + 4); println!("goto ".concat(end_label).concat(";"));
+                ind(depth + 3); println!("}");
+                ind(depth + 2); println!("}");
+            }
+            if a.kind == SEL_RECV_NONE {
+                let chan_ty: *Type = infer_for_codegen(g, a.chan_expr);
+                let stripped: *Type = strip_ptr(chan_ty);
+                if stripped == null || stripped.kind != TY_GENERIC || !stripped.name.eq("chan") {
+                    ind(depth + 2); println!("/* select arm: none receiver is not a chan<T> */");
+                    continue;
+                }
+                ind(depth + 2); print!("if (atomic_load_explicit(&((");
+                emit_expr(g, a.chan_expr);
+                println!(")->closed), memory_order_acquire)) {");
+                ind(depth + 3); println!("{");
+                if a.body != null {
+                    let saved: int = g.auto_drop_stack.len();
+                    for let j: int = 0; j < a.body.len(); j++ {
+                        let bs: Stmt = a.body.get(j);
+                        emit_stmt(g, &bs, depth + 3);
+                    }
+                    g.emit_block_drops(saved, depth + 3);
+                }
+                ind(depth + 3); println!("goto ".concat(end_label).concat(";"));
+                ind(depth + 2); println!("}");
+                ind(depth + 2); println!("}");
+            }
+            if a.kind == SEL_SEND {
+                let chan_ty: *Type = infer_for_codegen(g, a.chan_expr);
+                let stripped: *Type = strip_ptr(chan_ty);
+                if stripped == null || stripped.kind != TY_GENERIC || !stripped.name.eq("chan")
+                   || stripped.args == null || stripped.args.len() == 0 {
+                    ind(depth + 2); println!("/* select arm: send receiver is not a chan<T> */");
+                    continue;
+                }
+                let inner: Type = stripped.args.get(0);
+                let m: string = mangle_type(&inner);
+
+                ind(depth + 2); print!("if (__glide_try_send_".concat(m).concat("("));
+                emit_expr(g, a.chan_expr);
+                print!(", ");
+                emit_expr(g, a.send_value);
+                println!(")) {");
+
+                ind(depth + 3); print!("__glide_wake_recv_".concat(m).concat("("));
+                emit_expr(g, a.chan_expr);
+                println!(");");
+
+                ind(depth + 3); println!("{");
+                if a.body != null {
+                    let saved: int = g.auto_drop_stack.len();
+                    for let j: int = 0; j < a.body.len(); j++ {
+                        let bs: Stmt = a.body.get(j);
+                        emit_stmt(g, &bs, depth + 3);
+                    }
+                    g.emit_block_drops(saved, depth + 3);
+                }
+                ind(depth + 3); println!("goto ".concat(end_label).concat(";"));
+                ind(depth + 2); println!("}");
+                ind(depth + 2); println!("}");
+            }
+        }
+
+        if default_idx >= 0 {
+            let a: SelectArm = arms.get(default_idx);
+            ind(depth + 2); println!("{");
+            if a.body != null {
+                let saved: int = g.auto_drop_stack.len();
+                for let j: int = 0; j < a.body.len(); j++ {
+                    let bs: Stmt = a.body.get(j);
+                    emit_stmt(g, &bs, depth + 3);
+                }
+                g.emit_block_drops(saved, depth + 3);
+            }
+            ind(depth + 3); println!("goto ".concat(end_label).concat(";"));
+            ind(depth + 2); println!("}");
+        } else {
+            ind(depth + 2); println!("if (__sel_iters_".concat(id_str).concat(" < 64) { yield_now(); } else { sleep_ms(1); }"));
+            ind(depth + 2); println!("__sel_iters_".concat(id_str).concat("++;"));
+        }
+
+        ind(depth + 1); println!("}");
+        ind(depth); println!(end_label.concat(":;"));
+        ind(depth); println!("}");
+        return;
+    }
     if s.kind == ST_WHILE {
         ind(depth); print!("while (");
         emit_expr(g, s.cond);

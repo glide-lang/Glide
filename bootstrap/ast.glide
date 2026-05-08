@@ -192,6 +192,24 @@ pub const ST_ASM: int = 22;         // `asm [volatile] { "..." [: outs] [: ins] 
 pub const ST_CRAW: int = 23;        // `c_raw! { ... }` — raw C/asm payload emitted verbatim. Body lives in `name`.
 pub const ST_TRAIT: int = 24;       // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
 pub const ST_DEFER_ERR: int = 25;   // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
+pub const ST_SELECT: int = 26;      // `select! { arm => stmt; ... }` — race over chan ops. Arms in `select_arms`.
+
+// SelectArm.kind values
+pub const SEL_RECV: int = 0;        // `var = c.recv() => stmt`            — bind T value
+pub const SEL_SEND: int = 1;        // `c.send(v) => stmt`                  — fire when send completes
+pub const SEL_DEFAULT: int = 2;     // `default => stmt`                    — non-blocking fallback
+pub const SEL_RECV_SOME: int = 3;   // `Some(v) = c.recv() => stmt`         — bind on value
+pub const SEL_RECV_NONE: int = 4;   // `None = c.recv() => stmt`            — fire on close+empty
+
+pub struct SelectArm {
+    pub kind: int,
+    pub chan_expr: *Expr,        // the chan receiver (for recv/send/some/none)
+    pub bind_name: string,       // var name for SEL_RECV / SEL_RECV_SOME
+    pub send_value: *Expr,       // value to send for SEL_SEND
+    pub body: *Vector<Stmt>,     // arm body stmts
+    pub line: int,
+    pub column: int,
+}
 
 pub struct Param {
     pub name: string,
@@ -341,6 +359,9 @@ pub struct Stmt {
     // Trait: each Param has name = the assoc name and ty = null (placeholder).
     // Impl:  each Param has name = the assoc name and ty = the concrete type.
     pub assoc_decls: *Vector<Param>,
+
+    // ST_SELECT: arms of `select! { ... }`. See SelectArm.
+    pub select_arms: *Vector<SelectArm>,
 }
 
 // ---- Constructors --------------------------------------------------------

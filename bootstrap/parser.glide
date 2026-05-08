@@ -911,6 +911,10 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         p.advance();
         return stmt_craw(body, line, col);
     }
+    // `select! { arm => { stmt; } ... }` builtin — race over chan ops.
+    if p.current.kind == TOK_IDENT && p.current.lexeme.eq("select") && p.peek_op("!") {
+        return parse_select_macro(p);
+    }
     if p.at_kw("let") { return parse_let(p); }
     if p.at_kw("const") { return parse_const(p); }
     if p.at_kw("return") { return parse_return(p); }
@@ -1151,6 +1155,149 @@ fn parse_match_expr(p: *Parser) -> *Expr {
     }
     p.expect_op("}");
     return expr_match(scrut, arms, line, col);
+}
+
+// `select! { arm => { stmt } ... }` — race over chan ops.
+//
+// Arm forms:
+//   var = c.recv() => { ... }     // bind T value (close ignored)
+//   some(v) = c.recv() => { ... } // fires only on value, binds payload
+//   none = c.recv() => { ... }    // fires only on chan closed + drained
+//   c.send(v) => { ... }          // fires when send completes
+//   default => { ... }            // non-blocking fallback
+fn parse_select_macro(p: *Parser) -> *Stmt {
+    let line: int = p.current.line;
+    let col: int = p.current.column;
+    p.advance(); // 'select'
+    p.expect_op("!");
+    p.expect_op("{");
+
+    let arms: *Vector<SelectArm> = Vector::new();
+    while !p.at_op("}") && !p.at_eof() {
+        let arm: *SelectArm = parse_select_arm(p);
+        if arm != null {
+            arms.push(*arm);
+        }
+        // Optional separator between arms (unnecessary since bodies are blocks,
+        // but accepted for visual rhythm).
+        p.eat_op(",");
+        p.eat_op(";");
+    }
+    p.expect_op("}");
+
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+    s.kind = ST_SELECT;
+    s.line = line;
+    s.column = col;
+    s.select_arms = arms;
+    return s;
+}
+
+fn select_extract_recv_chan(p: *Parser, e: *Expr) -> *Expr {
+    if e == null || e.kind != EX_CALL || e.lhs == null
+       || e.lhs.kind != EX_MEMBER || !e.lhs.field.eq("recv") {
+        p.err("select arm RHS must be `chan.recv()`");
+        return null;
+    }
+    if e.args != null && e.args.len() != 0 {
+        p.err("`chan.recv()` takes no args");
+        return null;
+    }
+    return e.lhs.lhs;
+}
+
+fn parse_select_arm(p: *Parser) -> *SelectArm {
+    let line: int = p.current.line;
+    let col: int = p.current.column;
+
+    let lhs: *Expr = parse_expr(p, 0);
+    if lhs == null { return null; }
+
+    if p.at_op("=") {
+        p.advance(); // '='
+        let rhs: *Expr = parse_expr(p, 0);
+        if rhs == null { return null; }
+        p.expect_op("=>");
+        let body: *Vector<Stmt> = parse_block(p);
+
+        // Dispatch on LHS shape.
+        if lhs.kind == EX_IDENT {
+            let name: string = lhs.str_val;
+            if name.eq("none") || name.eq("None") {
+                let chan: *Expr = select_extract_recv_chan(p, rhs);
+                let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
+                arm.kind = SEL_RECV_NONE;
+                arm.chan_expr = chan;
+                arm.body = body;
+                arm.line = line;
+                arm.column = col;
+                return arm;
+            }
+            // var = chan.recv() => body
+            let chan: *Expr = select_extract_recv_chan(p, rhs);
+            let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
+            arm.kind = SEL_RECV;
+            arm.chan_expr = chan;
+            arm.bind_name = name;
+            arm.body = body;
+            arm.line = line;
+            arm.column = col;
+            return arm;
+        }
+        if lhs.kind == EX_CALL && lhs.lhs != null && lhs.lhs.kind == EX_IDENT {
+            let cname: string = lhs.lhs.str_val;
+            if (cname.eq("some") || cname.eq("Some"))
+               && lhs.args != null && lhs.args.len() == 1 {
+                let arg0: Expr = lhs.args.get(0);
+                if arg0.kind == EX_IDENT {
+                    let chan: *Expr = select_extract_recv_chan(p, rhs);
+                    let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
+                    arm.kind = SEL_RECV_SOME;
+                    arm.chan_expr = chan;
+                    arm.bind_name = arg0.str_val;
+                    arm.body = body;
+                    arm.line = line;
+                    arm.column = col;
+                    return arm;
+                }
+            }
+        }
+        p.err("invalid recv-arm pattern (use `var = chan.recv()`, `some(v) = chan.recv()`, or `none = chan.recv()`)");
+        return null;
+    }
+
+    if p.at_op("=>") {
+        p.advance(); // '=>'
+        let body: *Vector<Stmt> = parse_block(p);
+
+        if lhs.kind == EX_IDENT && lhs.str_val.eq("default") {
+            let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
+            arm.kind = SEL_DEFAULT;
+            arm.body = body;
+            arm.line = line;
+            arm.column = col;
+            return arm;
+        }
+        if lhs.kind == EX_CALL && lhs.lhs != null && lhs.lhs.kind == EX_MEMBER
+           && lhs.lhs.field.eq("send") && lhs.args != null && lhs.args.len() == 1 {
+            let arg0: Expr = lhs.args.get(0);
+            let arg_ptr: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+            *arg_ptr = arg0;
+            let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
+            arm.kind = SEL_SEND;
+            arm.chan_expr = lhs.lhs.lhs;
+            arm.send_value = arg_ptr;
+            arm.body = body;
+            arm.line = line;
+            arm.column = col;
+            return arm;
+        }
+        p.err("invalid select arm (expected `chan.send(v) =>` or `default =>`)");
+        return null;
+    }
+
+    p.err("expected '=' or '=>' in select arm");
+    return null;
 }
 
 // Expression-position block. `{ stmt; stmt; return val; }` produces

@@ -1,0 +1,82 @@
+import stdlib::testing::*;
+
+fn _producer(c: *chan<int>, v: int) {
+    sleep_ms(15);
+    c.send(v);
+}
+
+fn _closer(c: *chan<int>) {
+    sleep_ms(15);
+    c.close();
+}
+
+fn test_default_when_empty() -> int {
+    let q: chan<int> = make_chan(2);
+    let mut hit: int = 0;
+    select! {
+        n = q.recv() => { hit = n; }
+        default => { hit = -1; }
+    }
+    assert_eq!(hit, -1);
+    return 0;
+}
+
+fn test_send_arm_completes() -> int {
+    let s: chan<int> = make_chan(2);
+    let mut sent: int = 0;
+    select! {
+        s.send(42) => { sent = 1; }
+        default => { sent = -1; }
+    }
+    assert_eq!(sent, 1);
+    let v: int = s.recv();
+    assert_eq!(v, 42);
+    return 0;
+}
+
+fn test_recv_arm_binds_value() -> int {
+    let c: chan<int> = make_chan(2);
+    spawn _producer(c, 7);
+    let mut got: int = -1;
+    select! {
+        x = c.recv() => { got = x; }
+    }
+    assert_eq!(got, 7);
+    return 0;
+}
+
+fn test_race_winner_first() -> int {
+    let a: chan<int> = make_chan(2);
+    let b: chan<int> = make_chan(2);
+    spawn _producer(a, 100);
+    let mut got: int = 0;
+    select! {
+        x = a.recv() => { got = x; }
+        y = b.recv() => { got = y * 100; }
+    }
+    assert_eq!(got, 100);
+    return 0;
+}
+
+fn test_none_arm_on_close() -> int {
+    let c: chan<int> = make_chan(2);
+    spawn _closer(c);
+    let mut closed: int = 0;
+    select! {
+        none = c.recv() => { closed = 1; }
+    }
+    assert_eq!(closed, 1);
+    return 0;
+}
+
+fn test_some_arm_binds_value() -> int {
+    let c: chan<int> = make_chan(2);
+    spawn _producer(c, 99);
+    let mut got: int = 0;
+    select! {
+        some(v) = c.recv() => { got = v; }
+        none = c.recv() => { got = -1; }
+    }
+    assert_eq!(got, 99);
+    return 0;
+}
