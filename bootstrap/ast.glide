@@ -24,6 +24,7 @@ pub const TY_RESULT: int = 7;      // payload: inner (*Type) — `!T`
 pub const TY_DYN: int = 8;         // `dyn Trait` — name = trait name. Used behind a pointer (`*dyn Trait`).
 pub const TY_OPTION: int = 9;      // payload: inner (*Type) — `?T`
 pub const TY_OPT_RESULT: int = 10; // payload: inner (*Type) — `?!T` (3 variants: Some/None/Err)
+pub const TY_ASSOC: int = 11;      // `Owner::Name` — owner in inner, assoc name in name
 
 pub struct Type {
     pub kind: int,
@@ -335,6 +336,11 @@ pub struct Stmt {
     pub asm_in_exprs: *Vector<Expr>,
     pub asm_clobbers: *Vector<string>,
     pub is_volatile: bool,
+
+    // ST_TRAIT / ST_IMPL: associated type declarations.
+    // Trait: each Param has name = the assoc name and ty = null (placeholder).
+    // Impl:  each Param has name = the assoc name and ty = the concrete type.
+    pub assoc_decls: *Vector<Param>,
 }
 
 // ---- Constructors --------------------------------------------------------
@@ -365,6 +371,14 @@ pub fn ty_optres(inner: *Type) -> *Type {
     let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_OPT_RESULT;
     t.inner = inner;
+    return t;
+}
+
+pub fn ty_assoc(owner: *Type, name: string) -> *Type {
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    t.kind = TY_ASSOC;
+    t.inner = owner;
+    t.name = name;
     return t;
 }
 

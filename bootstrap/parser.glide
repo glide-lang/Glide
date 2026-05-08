@@ -534,10 +534,20 @@ fn parse_trait(p: *Parser) -> *Stmt {
     }
     p.expect_op("{");
     let methods: *Vector<Stmt> = Vector::new();
+    let assocs: *Vector<Param> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
         let doc: string = p.current.doc;
         let mut is_pub: bool = false;
         if p.eat_kw("pub") { is_pub = true; }
+        // Associated type declaration: `type Item;`
+        if p.at_kw("type") {
+            p.advance();
+            let aname: string = p.expect_ident();
+            p.expect_op(";");
+            let no_ty: *Type = null;
+            assocs.push(Param { name: aname, ty: no_ty });
+            continue;
+        }
         if p.at_kw("fn") {
             // Trait methods can be bodyless (signature only — implementor must
             // provide) OR have a body (default implementation that the impl
@@ -549,7 +559,7 @@ fn parse_trait(p: *Parser) -> *Stmt {
                 methods.push(*m);
             }
         } else {
-            p.err("expected `fn` inside trait body");
+            p.err("expected `fn` or `type` inside trait body");
             p.advance();
         }
     }
@@ -564,6 +574,7 @@ fn parse_trait(p: *Parser) -> *Stmt {
     s.name_len = nlen;
     s.impl_methods = methods;
     s.trait_supers = supers;
+    s.assoc_decls = assocs;
     return s;
 }
 
@@ -593,6 +604,7 @@ fn parse_impl(p: *Parser) -> *Stmt {
     }
     p.expect_op("{");
     let methods: *Vector<Stmt> = Vector::new();
+    let assocs: *Vector<Param> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
         // Capture the contiguous `///` (or `//`) doc block above the method
         // so hover can render it. The lexer attaches doc to the next non-doc
@@ -600,6 +612,16 @@ fn parse_impl(p: *Parser) -> *Stmt {
         let doc: string = p.current.doc;
         let mut is_pub: bool = false;
         if p.eat_kw("pub") { is_pub = true; }
+        // Associated type definition: `type Item = ConcreteType;`
+        if p.at_kw("type") {
+            p.advance();
+            let aname: string = p.expect_ident();
+            p.expect_op("=");
+            let aty: *Type = parse_type(p);
+            p.expect_op(";");
+            assocs.push(Param { name: aname, ty: aty });
+            continue;
+        }
         if p.at_kw("fn") {
             let m: *Stmt = parse_fn(p);
             if m != null {
@@ -615,7 +637,7 @@ fn parse_impl(p: *Parser) -> *Stmt {
                 methods.push(*m);
             }
         } else {
-            p.err("expected fn or macro inside impl"); p.advance();
+            p.err("expected fn, macro, or type inside impl"); p.advance();
         }
     }
     p.expect_op("}");
@@ -623,13 +645,16 @@ fn parse_impl(p: *Parser) -> *Stmt {
     if s != null {
         s.type_params = tps;
         s.type_param_bounds = tps_bounds;
+        s.assoc_decls = assocs;
         if !ns.eq("") { s.import_path = ns; }
         if !trait_name.eq("") {
             s.impl_trait_name = trait_name;
             // Inside `impl Trait for T { ... }`, `Self` in method signatures
             // refers to T. Substitute now so later passes don't have to know
-            // about the trait-context.
+            // about the trait-context. Also resolve `Self::Assoc` against
+            // this impl's assoc definitions.
             substitute_self_in_methods(methods, target);
+            substitute_self_assoc_in_methods(methods, assocs);
         }
     }
     return s;
@@ -659,6 +684,40 @@ fn substitute_self_in_type(t: *Type, target: *Type) -> *Type {
     if t.kind == TY_NAMED && t.name.eq("Self") { return target; }
     if t.inner != null { t.inner = substitute_self_in_type(t.inner, target); }
     if t.fnptr_ret != null { t.fnptr_ret = substitute_self_in_type(t.fnptr_ret, target); }
+    return t;
+}
+
+// Replace any `Self::Name` in method sigs with the impl's `type Name = X`
+// definition. Runs after `substitute_self_in_methods` so the target type
+// already replaced bare `Self`. Lookup the assoc by name; leave unchanged
+// if the impl doesn't define it (typer will diagnose).
+pub fn substitute_self_assoc_in_methods(methods: *Vector<Stmt>, assocs: *Vector<Param>) {
+    if methods == null || assocs == null { return; }
+    for let i: int = 0; i < methods.len(); i++ {
+        let mut m: Stmt = methods.get(i);
+        if m.fn_params != null {
+            for let j: int = 0; j < m.fn_params.len(); j++ {
+                let mut p: Param = m.fn_params.get(j);
+                if p.ty != null { p.ty = substitute_self_assoc_in_type(p.ty, assocs); }
+                m.fn_params.set(j, p);
+            }
+        }
+        if m.fn_ret_ty != null { m.fn_ret_ty = substitute_self_assoc_in_type(m.fn_ret_ty, assocs); }
+        methods.set(i, m);
+    }
+}
+
+fn substitute_self_assoc_in_type(t: *Type, assocs: *Vector<Param>) -> *Type {
+    if t == null { return null; }
+    if t.kind == TY_ASSOC && t.inner != null
+        && t.inner.kind == TY_NAMED && t.inner.name.eq("Self") {
+        for let i: int = 0; i < assocs.len(); i++ {
+            let a: Param = assocs.get(i);
+            if a.name.eq(t.name) { return a.ty; }
+        }
+    }
+    if t.inner != null { t.inner = substitute_self_assoc_in_type(t.inner, assocs); }
+    if t.fnptr_ret != null { t.fnptr_ret = substitute_self_assoc_in_type(t.fnptr_ret, assocs); }
     return t;
 }
 
@@ -1402,6 +1461,13 @@ fn parse_type(p: *Parser) -> *Type {
             }
             p.consume_close_angle();
             return ty_generic(name, args);
+        }
+        // Associated type projection: `Owner::Name` (e.g. `Self::Item`,
+        // `T::Item`). Owner is the bare ident parsed above.
+        if p.at_op("::") {
+            p.advance();
+            let assoc_name: string = p.expect_ident();
+            return ty_assoc(ty_named(name), assoc_name);
         }
         return ty_named(name);
     }
