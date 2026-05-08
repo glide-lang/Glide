@@ -12750,6 +12750,18 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
         if (HashMap_contains__Stmt((g-> generic_fns ), pname)) {
             return (HashMap_get__Stmt((g-> generic_fns ), pname). fn_ret_ty );
         }
+        const char*   probe = resolve_type_prefix(g, (e-> str_val ));
+        if (HashMap_contains__Stmt((g-> enums ), probe)) {
+            Stmt   edef = HashMap_get__Stmt((g-> enums ), probe);
+            if (((edef. enum_variants )  !=  NULL)) {
+                for (int   i = 0; (i  <  Vector_len__EnumVariant((edef. enum_variants ))); i++) {
+                    EnumVariant   v = Vector_get__EnumVariant((edef. enum_variants ), i);
+                    if (__glide_string_eq((v. name ), (e-> field ))) {
+                        return ty_named(probe);
+                    }
+                }
+            }
+        }
         return NULL;
     }
     return NULL;
