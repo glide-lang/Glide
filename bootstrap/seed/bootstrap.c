@@ -5,1335 +5,1599 @@
 #include <stddef.h>
 #include <string.h>
 
-// ---- glide runtime ----
-static int __glide_string_len(const char* s) { return (int)strlen(s); }
-static bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }
-static char __glide_string_at(const char* s, int i) { return s[i]; }
-static const char* __glide_string_concat(const char* a, const char* b) {
-    size_t la = strlen(a), lb = strlen(b);
-    char* out = (char*)malloc(la + lb + 1);
-    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;
-    return out;
-}
-static const char* __glide_string_substring(const char* s, int start, int end) {
-    int n = (int)strlen(s);
-    if (start < 0) start = 0;
-    if (end > n) end = n;
-    if (start > end) start = end;
-    int len = end - start;
-    char* out = (char*)malloc((size_t)len + 1);
-    memcpy(out, s + start, (size_t)len); out[len] = 0;
-    return out;
-}
-static int __glide_char_to_int(char c) { return (int)(unsigned char)c; }
-static bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }
-static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
-/* Wrap a single byte into a fresh 1-char string so user code can push it into a
-   builder (concat etc.). The byte is re-allocated each call — fine for the
-   one-shot helper case; tight loops should buffer differently. */
-static const char* __glide_char_to_string(char c) {
-    char* out = (char*)malloc(2);
-    out[0] = c; out[1] = 0;
-    return out;
-}
-static int __glide_int_abs(int n) { return n < 0 ? -n : n; }
-static const char* __glide_int_to_string(int n) {
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%d", n);
-    char* out = (char*)malloc((size_t)len + 1);
-    memcpy(out, buf, (size_t)len + 1);
-    return out;
-}
-static const char* __glide_bool_to_string(bool b) { return b ? "true" : "false"; }
-#include <stdarg.h>
-static const char* __glide_format(const char* fmt, ...) {
-    va_list ap1, ap2;
-    va_start(ap1, fmt);
-    va_copy(ap2, ap1);
-    int n = vsnprintf(NULL, 0, fmt, ap1);
-    va_end(ap1);
-    char* out = (char*)malloc((size_t)n + 1);
-    vsnprintf(out, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
-    return out;
-}
-static int __glide_argc_g = 0;
-static char** __glide_argv_g = NULL;
-static void __glide_args_init(int argc, char** argv) { __glide_argc_g = argc; __glide_argv_g = argv; }
-static int args_count(void) { return __glide_argc_g; }
-static const char* args_at(int i) {
-    if (i < 0 || i >= __glide_argc_g) return "";
-    return __glide_argv_g[i];
-}
-static const char* read_file(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return "";
-    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-    char* buf = (char*)malloc((size_t)n + 1);
-    size_t got = fread(buf, 1, (size_t)n, f); fclose(f); buf[got] = 0;
-    return buf;
-}
-static bool write_file(const char* path, const char* content) {
-    FILE* f = fopen(path, "wb"); if (!f) return false;
-    size_t n = strlen(content);
-    size_t wrote = fwrite(content, 1, n, f); fclose(f);
-    return wrote == n;
-}
-#ifdef _WIN32
-#include <io.h>
-#include <winsock2.h>     /* must precede windows.h on mingw-w64 */
-#include <windows.h>
-#define __glide_dup _dup
-#define __glide_dup2 _dup2
-#define __glide_close _close
-#define __glide_fileno _fileno
-#else
-#include <unistd.h>
-#define __glide_dup dup
-#define __glide_dup2 dup2
-#define __glide_close close
-#define __glide_fileno fileno
-#endif
-static int __glide_redirect_to(const char* path) {
-    fflush(stdout);
-    int saved = __glide_dup(1);
-    if (saved < 0) return -1;
-    FILE* f = fopen(path, "w");
-    if (!f) { __glide_close(saved); return -1; }
-    __glide_dup2(__glide_fileno(f), 1);
-    fclose(f);
-    return saved;
-}
-static void __glide_restore_stdout(int saved) {
-    fflush(stdout);
-    if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }
-}
-static int __glide_shell(const char* cmd) { return system(cmd); }
-static const char* __glide_getenv(const char* name) { const char* v = getenv(name); return v ? v : ""; }
-static bool __glide_file_exists(const char* path) {
-    FILE* f = fopen(path, "rb"); if (!f) return false; fclose(f); return true;
-}
-#ifdef _WIN32
-#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
-#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
-#endif
-__attribute__((constructor)) static void __glide_enable_vt(void) {
-    HANDLE hs[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };
-    for (int i = 0; i < 2; i++) {
-        DWORD m = 0;
-        if (GetConsoleMode(hs[i], &m)) {
-            SetConsoleMode(hs[i], m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-        }
-    }
-    SetConsoleOutputCP(65001);
-    SetConsoleCP(65001);
-}
-#endif
-#ifdef _WIN32
-static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {
-    DWORD code = ep->ExceptionRecord->ExceptionCode;
-    const char* name = "unhandled exception";
-    const char* hint = "";
-    if (code == 0xC0000005) { name = "segmentation fault"; hint = "hint: dereferenced a null or invalid pointer"; }
-    else if (code == 0xC0000094) { name = "integer divide by zero"; hint = "hint: divisor reached zero before the division"; }
-    else if (code == 0xC00000FD) { name = "stack overflow"; hint = "hint: runtime recursion exceeded the stack limit"; }
-    else if (code == 0x80000003) { name = "trap (likely null deref or undefined behavior)"; hint = "hint: the optimizer turned a null/invalid op into __builtin_trap; rebuild with `-O0` for clearer location"; }
-    fflush(stdout);
-    fprintf(stderr, "\n\x1b[1;31mfatal\x1b[0m: %s (code 0x%lx)\n", name, (unsigned long)code);
-    if (hint[0]) fprintf(stderr, "  \x1b[1;36m=\x1b[0m %s\n", hint);
-    void* frames[32];
-    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);
-    fprintf(stderr, "stack trace (%u frames; pipe through addr2line for source lines):\n", n);
-    for (USHORT i = 0; i < n; i++) fprintf(stderr, "  #%-2u  %p\n", i, frames[i]);
-    fflush(stderr);
-    ExitProcess((UINT)code);
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-__attribute__((constructor)) static void __glide_install_trap(void) {
-    if (getenv("GLIDE_NO_TRAP")) return;
-    // VEH runs before any SEH/CRT-installed filter, so our handler stays in charge.
-    AddVectoredExceptionHandler(1, __glide_seh_handler);
-    SetUnhandledExceptionFilter(__glide_seh_handler);
-}
-#else
-#include <signal.h>
-#include <execinfo.h>
-#include <unistd.h>
-static void __glide_sig_handler(int sig) {
-    const char* name = "unknown";
-    const char* hint = "";
-    if (sig == SIGSEGV) { name = "segmentation fault"; hint = "hint: dereferenced a null or invalid pointer"; }
-    else if (sig == SIGFPE) { name = "floating-point / arithmetic error"; hint = "hint: division by zero or invalid float operation"; }
-    else if (sig == SIGABRT) { name = "aborted"; hint = "hint: runtime panic (e.g. arena oom)"; }
-    fflush(stdout);
-    fprintf(stderr, "\n\x1b[1;31mfatal\x1b[0m: %s (signal %d)\n", name, sig);
-    if (hint[0]) fprintf(stderr, "  \x1b[1;36m=\x1b[0m %s\n", hint);
-    void* frames[32]; int n = backtrace(frames, 32);
-    fprintf(stderr, "stack trace (%d frames):\n", n);
-    backtrace_symbols_fd(frames, n, 2);
-    _exit(128 + sig);
-}
-__attribute__((constructor)) static void __glide_install_trap(void) {
-    if (getenv("GLIDE_NO_TRAP")) return;
-    signal(SIGSEGV, __glide_sig_handler);
-    signal(SIGABRT, __glide_sig_handler);
-    signal(SIGFPE,  __glide_sig_handler);
-}
-#endif
-#ifdef _WIN32
-#include <fcntl.h>
-static void __glide_set_binary_io(void) {
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-}
-#else
-static void __glide_set_binary_io(void) {}
-#endif
-static const char* __glide_read_line(void) {
-    static char buf[8192];
-    if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }
-    return buf;
-}
-static const char* __glide_read_bytes(int n) {
-    if (n <= 0) return "";
-    char* buf = (char*)malloc((size_t)n + 1);
-    size_t got = fread(buf, 1, (size_t)n, stdin);
-    buf[got] = 0;
-    return buf;
-}
-static void __glide_write_str(const char* s) {
-    fputs(s, stdout);
-}
-static void __glide_write_bytes(const char* s, int n) {
-    if (n > 0) fwrite(s, 1, (size_t)n, stdout);
-}
-static void __glide_flush_stdout(void) { fflush(stdout); }
-static void __glide_log(const char* s) {
-    fputs(s, stderr); fputc('\n', stderr); fflush(stderr);
-}
-static int __glide_is_windows(void) {
-#ifdef _WIN32
-    return 1;
-#else
-    return 0;
-#endif
-}
-// `__glide_list_dir`: newline-separated, sorted listing of files under
-// `path` whose name ends in `suffix` (pass "" to list everything). Returns
-// "" on missing dir. Same body lives in main.glide as a c_raw block so the
-// compiler can bootstrap from older runtimes — guard avoids dup definition.
-#ifndef GLIDE_LIST_DIR_DEFINED
-#define GLIDE_LIST_DIR_DEFINED
-static int __glide_strcmp_qsort(const void* a, const void* b) {
-    const char* x = *(const char* const*)a;
-    const char* y = *(const char* const*)b;
-    return strcmp(x, y);
-}
-#ifdef _WIN32
-static const char* __glide_list_dir(const char* path, const char* suffix) {
-    char pattern[1024];
-    snprintf(pattern, sizeof(pattern), "%s\\*", path);
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return "";
-    char** names = NULL; int n = 0; int cap = 0;
-    size_t suf_n = suffix ? strlen(suffix) : 0;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        const char* nm = fd.cFileName;
-        size_t nm_n = strlen(nm);
-        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-        names[n++] = dup;
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-    if (n == 0) { free(names); return ""; }
-    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-    char* out = (char*)malloc(total);
-    size_t off = 0;
-    for (int i = 0; i < n; i++) {
-        size_t l = strlen(names[i]);
-        memcpy(out + off, names[i], l); off += l;
-        if (i + 1 < n) out[off++] = '\n';
-        free(names[i]);
-    }
-    out[off] = 0;
-    free(names);
-    return out;
-}
-#else
-#include <dirent.h>
-static const char* __glide_list_dir(const char* path, const char* suffix) {
-    DIR* d = opendir(path);
-    if (!d) return "";
-    char** names = NULL; int n = 0; int cap = 0;
-    size_t suf_n = suffix ? strlen(suffix) : 0;
-    struct dirent* e;
-    while ((e = readdir(d)) != NULL) {
-        const char* nm = e->d_name;
-        if (nm[0] == '.') continue;
-        size_t nm_n = strlen(nm);
-        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-        names[n++] = dup;
-    }
-    closedir(d);
-    if (n == 0) { free(names); return ""; }
-    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-    char* out = (char*)malloc(total);
-    size_t off = 0;
-    for (int i = 0; i < n; i++) {
-        size_t l = strlen(names[i]);
-        memcpy(out + off, names[i], l); off += l;
-        if (i + 1 < n) out[off++] = '\n';
-        free(names[i]);
-    }
-    out[off] = 0;
-    free(names);
-    return out;
-}
-#endif
-#endif
+// ---- glide runtime ----
+// Slim-runtime markers: when set, the corresponding family of helpers
+// is NOT in this stdlib.c — a c_raw block in the matching stdlib module
+// (`fs.glide`, `os.glide`, `env.glide`, `io.glide`) provides the bodies.
+// Older glide binaries that still carry the bodies in their embedded
+// stdlib.c don't see these defines, so the c_raw blocks stay inactive
+// during the bootstrap step that promotes the new compiler.
+#define GLIDE_FS_VIA_CRAW
+#define GLIDE_OS_VIA_CRAW
+#define GLIDE_ENV_VIA_CRAW
+#define GLIDE_IO_VIA_CRAW
+// Forward declaration of the per-keystroke arena allocator defined in
+// src/builtins/builtins.glide. Routing the string-runtime allocations
+// through it lets the LSP reclaim every concat / substring / format /
+// int_to_string buffer in bulk on the next reanalysis. Outside the LSP
+// (no arena active) __glide_palloc falls back to calloc, so build /
+// run / fmt paths see no behaviour change.
+extern void* __glide_palloc(int size);
+static int __glide_string_len(const char* s) { return (int)strlen(s); }
+static bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }
+static char __glide_string_at(const char* s, int i) { return s[i]; }
+static const char* __glide_string_concat(const char* a, const char* b) {
+    size_t la = strlen(a), lb = strlen(b);
+    char* out = (char*)__glide_palloc((int)(la + lb + 1));
+    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;
+    return out;
+}
+static const char* __glide_string_substring(const char* s, int start, int end) {
+    int n = (int)strlen(s);
+    if (start < 0) start = 0;
+    if (end > n) end = n;
+    if (start > end) start = end;
+    int len = end - start;
+    char* out = (char*)__glide_palloc(len + 1);
+    memcpy(out, s + start, (size_t)len); out[len] = 0;
+    return out;
+}
+/* Take a raw byte buffer + length and produce a NUL-terminated Glide
+   string in one allocation. Used by the HTTP server to skip the
+   per-byte concat that would otherwise allocate `n` strings to
+   convert one read buffer. */
+const char* __glide_string_from_buf(void* buf, int n) {
+    if (n < 0) n = 0;
+    char* out = (char*)malloc((size_t)n + 1);
+    if (n > 0) memcpy(out, buf, (size_t)n);
+    out[n] = 0;
+    return out;
+}
+static int __glide_char_to_int(char c) { return (int)(unsigned char)c; }
+static bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }
+static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+/* Wrap a single byte into a fresh 1-char string so user code can push it into a
+   builder (concat etc.). The byte is re-allocated each call — fine for the
+   one-shot helper case; tight loops should buffer differently. */
+static const char* __glide_char_to_string(char c) {
+    char* out = (char*)__glide_palloc(2);
+    out[0] = c; out[1] = 0;
+    return out;
+}
+static int __glide_int_abs(int n) { return n < 0 ? -n : n; }
+static const char* __glide_int_to_string(int n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%d", n);
+    char* out = (char*)__glide_palloc(len + 1);
+    memcpy(out, buf, (size_t)len + 1);
+    return out;
+}
+static const char* __glide_bool_to_string(bool b) { return b ? "true" : "false"; }
+#include <stdarg.h>
+static const char* __glide_format(const char* fmt, ...) {
+    va_list ap1, ap2;
+    va_start(ap1, fmt);
+    va_copy(ap2, ap1);
+    int n = vsnprintf(NULL, 0, fmt, ap1);
+    va_end(ap1);
+    char* out = (char*)__glide_palloc(n + 1);
+    vsnprintf(out, (size_t)n + 1, fmt, ap2);
+    va_end(ap2);
+    return out;
+}
+static int __glide_argc_g = 0;
+static char** __glide_argv_g = NULL;
+static void __glide_args_init(int argc, char** argv) { __glide_argc_g = argc; __glide_argv_g = argv; }
+static int args_count(void) { return __glide_argc_g; }
+static const char* args_at(int i) {
+    if (i < 0 || i >= __glide_argc_g) return "";
+    return __glide_argv_g[i];
+}
+#ifdef _WIN32
+#include <io.h>
+#include <winsock2.h>     /* must precede windows.h on mingw-w64 */
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+#ifdef _WIN32
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+__attribute__((constructor)) static void __glide_enable_vt(void) {
+    HANDLE hs[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };
+    for (int i = 0; i < 2; i++) {
+        DWORD m = 0;
+        if (GetConsoleMode(hs[i], &m)) {
+            SetConsoleMode(hs[i], m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+    SetConsoleOutputCP(65001);
+    SetConsoleCP(65001);
+}
+#endif
+#ifdef _WIN32
+static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    const char* name = "unhandled exception";
+    const char* hint = "";
+    if (code == 0xC0000005) { name = "segmentation fault"; hint = "hint: dereferenced a null or invalid pointer"; }
+    else if (code == 0xC0000094) { name = "integer divide by zero"; hint = "hint: divisor reached zero before the division"; }
+    else if (code == 0xC00000FD) { name = "stack overflow"; hint = "hint: runtime recursion exceeded the stack limit"; }
+    else if (code == 0x80000003) { name = "trap (likely null deref or undefined behavior)"; hint = "hint: the optimizer turned a null/invalid op into __builtin_trap; rebuild with `-O0` for clearer location"; }
+    fflush(stdout);
+    fprintf(stderr, "\n\x1b[1;31mfatal\x1b[0m: %s (code 0x%lx)\n", name, (unsigned long)code);
+    if (hint[0]) fprintf(stderr, "  \x1b[1;36m=\x1b[0m %s\n", hint);
+    void* frames[32];
+    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);
+    fprintf(stderr, "stack trace (%u frames; pipe through addr2line for source lines):\n", n);
+    for (USHORT i = 0; i < n; i++) fprintf(stderr, "  #%-2u  %p\n", i, frames[i]);
+    fflush(stderr);
+    ExitProcess((UINT)code);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+__attribute__((constructor)) static void __glide_install_trap(void) {
+    if (getenv("GLIDE_NO_TRAP")) return;
+    // VEH runs before any SEH/CRT-installed filter, so our handler stays in charge.
+    AddVectoredExceptionHandler(1, __glide_seh_handler);
+    SetUnhandledExceptionFilter(__glide_seh_handler);
+}
+#else
+#include <signal.h>
+#include <execinfo.h>
+#include <unistd.h>
+static void __glide_sig_handler(int sig) {
+    const char* name = "unknown";
+    const char* hint = "";
+    if (sig == SIGSEGV) { name = "segmentation fault"; hint = "hint: dereferenced a null or invalid pointer"; }
+    else if (sig == SIGFPE) { name = "floating-point / arithmetic error"; hint = "hint: division by zero or invalid float operation"; }
+    else if (sig == SIGABRT) { name = "aborted"; hint = "hint: runtime panic (e.g. arena oom)"; }
+    fflush(stdout);
+    fprintf(stderr, "\n\x1b[1;31mfatal\x1b[0m: %s (signal %d)\n", name, sig);
+    if (hint[0]) fprintf(stderr, "  \x1b[1;36m=\x1b[0m %s\n", hint);
+    void* frames[32]; int n = backtrace(frames, 32);
+    fprintf(stderr, "stack trace (%d frames):\n", n);
+    backtrace_symbols_fd(frames, n, 2);
+    _exit(128 + sig);
+}
+__attribute__((constructor)) static void __glide_install_trap(void) {
+    if (getenv("GLIDE_NO_TRAP")) return;
+    signal(SIGSEGV, __glide_sig_handler);
+    signal(SIGABRT, __glide_sig_handler);
+    signal(SIGFPE,  __glide_sig_handler);
+}
+#endif
+typedef struct Arena { unsigned char* head; int cap; int used; } Arena;
+static Arena* Arena_new(int cap) {
+    Arena* a = (Arena*)malloc(sizeof(Arena));
+    a->head = (unsigned char*)malloc((size_t)cap);
+    a->cap = cap; a->used = 0;
+    return a;
+}
+static void* Arena_alloc(Arena* a, int size) {
+    int aligned = (size + 7) & ~7;
+    if (a->used + aligned > a->cap) { fprintf(stderr, "arena oom\n"); exit(1); }
+    void* p = (void*)(a->head + a->used);
+    a->used += aligned;
+    return p;
+}
+static void Arena_free(Arena* a) { free(a->head); free(a); }
+static int Arena_used(Arena* a) { return a->used; }
+static void Arena_reset(Arena* a) { a->used = 0; }
+
+
 
-#ifdef _WIN32
-static const char* __glide_exe_path(void) {
-    static char buf[1024];
-    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
-    return buf;
-}
-static const char* __glide_exe_dir(void) {
-    static char buf[1024];
-    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
-    for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
-    return "";
-}
-#else
-static const char* __glide_exe_path(void) {
-    static char buf[1024];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n <= 0) { buf[0] = 0; return buf; }
-    buf[n] = 0;
-    return buf;
-}
-static const char* __glide_exe_dir(void) {
-    static char buf[1024];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n <= 0) { buf[0] = 0; return buf; }
-    buf[n] = 0;
-    for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
-    return "";
-}
-#endif
-typedef struct Arena { unsigned char* head; int cap; int used; } Arena;
-static Arena* Arena_new(int cap) {
-    Arena* a = (Arena*)malloc(sizeof(Arena));
-    a->head = (unsigned char*)malloc((size_t)cap);
-    a->cap = cap; a->used = 0;
-    return a;
-}
-static void* Arena_alloc(Arena* a, int size) {
-    int aligned = (size + 7) & ~7;
-    if (a->used + aligned > a->cap) { fprintf(stderr, "arena oom\n"); exit(1); }
-    void* p = (void*)(a->head + a->used);
-    a->used += aligned;
-    return p;
-}
-static void Arena_free(Arena* a) { free(a->head); free(a); }
-static int Arena_used(Arena* a) { return a->used; }
-static void Arena_reset(Arena* a) { a->used = 0; }
+
+    typedef struct PArena {
+        unsigned char* head;
+        int cap;
+        int used;
+        struct PArena* next;
+    } PArena;
+
+    // Multiple arenas can coexist — the LSP keeps one per open document
+    // so hover / completion against any doc can read its AST without
+    // being invalidated by another doc's reanalysis. `g_palloc_active`
+    // names the one __glide_palloc draws from; the rest stay alive but
+    // inert until their owner explicitly hands them back via
+    // __glide_palloc_free.
+    static PArena* g_palloc_active = NULL;
+
+    // 256 MiB cap on per-chunk size. Without it, the previous policy
+    // doubled the chunk on every grow — a 1 GB parse would commit
+    // 16+32+...+512 ≈ 1 GiB of unused tail, and an 8 GB parse would
+    // commit 16 GiB before exhausting. Linear growth past 256 MiB caps
+    // the slack at one chunk worth.
+    #define GLIDE_PALLOC_CHUNK_MAX (256 * 1024 * 1024)
+
+    #ifdef _WIN32
+    #include <windows.h>
+    static unsigned char* __glide_palloc_alloc_pages(int size) {
+        return (unsigned char*)VirtualAlloc(NULL, (SIZE_T)size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    }
+    static void __glide_palloc_free_pages(unsigned char* p, int size) {
+        (void)size;
+        VirtualFree(p, 0, MEM_RELEASE);
+    }
+    #else
+    #include <sys/mman.h>
+    static unsigned char* __glide_palloc_alloc_pages(int size) {
+        void* p = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) return NULL;
+        return (unsigned char*)p;
+    }
+    static void __glide_palloc_free_pages(unsigned char* p, int size) {
+        munmap(p, (size_t)size);
+    }
+    #endif
+
+    static PArena* __glide_palloc_chunk(PArena* top, int min_size) {
+        int new_cap;
+        if (top == NULL) {
+            new_cap = 16 * 1024 * 1024;
+        } else if (top->cap < GLIDE_PALLOC_CHUNK_MAX) {
+            new_cap = top->cap * 2;
+            if (new_cap > GLIDE_PALLOC_CHUNK_MAX) new_cap = GLIDE_PALLOC_CHUNK_MAX;
+        } else {
+            new_cap = GLIDE_PALLOC_CHUNK_MAX;
+        }
+        if (new_cap < min_size + 1024) new_cap = min_size + 1024;
+        PArena* nc = (PArena*)malloc(sizeof(PArena));
+        nc->cap = new_cap;
+        // mmap / VirtualAlloc (instead of malloc) so freed chunks return
+        // pages straight to the OS — the libc allocator was holding onto
+        // multi-GB chunks in its arena pool, which made working-set drops
+        // after pipeline reset show up minutes later, if at all.
+        nc->head = __glide_palloc_alloc_pages(new_cap);
+        nc->used = 0;
+        nc->next = top;
+        return nc;
+    }
+
+    void* __glide_palloc(int size) {
+        if (size <= 0) size = 1;
+        if (g_palloc_active == NULL) {
+            return calloc(1, (size_t)size);
+        }
+        int aligned = (size + 7) & ~7;
+        if (g_palloc_active->used + aligned > g_palloc_active->cap) {
+            g_palloc_active = __glide_palloc_chunk(g_palloc_active, aligned);
+        }
+        void* p = g_palloc_active->head + g_palloc_active->used;
+        g_palloc_active->used += aligned;
+        memset(p, 0, (size_t)size);
+        return p;
+    }
+
+    // Build a fresh arena (one chunk). Doesn't touch the active arena;
+    // pair with __glide_palloc_set when you want allocations to flow
+    // into it.
+    void* __glide_palloc_make(void) {
+        return (void*)__glide_palloc_chunk(NULL, 16 * 1024 * 1024);
+    }
+
+    // Free every chunk reachable from a given arena handle. Safe on
+    // null. Caller must clear any pointer that referenced this arena
+    // before calling — the memory is reclaimed in bulk.
+    void __glide_palloc_free(void* handle) {
+        PArena* a = (PArena*)handle;
+        while (a != NULL) {
+            PArena* n = a->next;
+            __glide_palloc_free_pages(a->head, a->cap);
+            free(a);
+            a = n;
+        }
+    }
+
+    int __glide_palloc_active(void) {
+        return g_palloc_active != NULL ? 1 : 0;
+    }
+
+    void* __glide_palloc_get(void) { return (void*)g_palloc_active; }
+    void __glide_palloc_set(void* a) { g_palloc_active = (PArena*)a; }
+
+    // True when `p` was handed out by some chunk in the *active* arena
+    // (only). Used by __glide_pfree to skip free() on bump-allocated
+    // pointers. Pointers from inactive arenas (other LspDocs) read as
+    // not-owned here; they're managed via __glide_palloc_free instead.
+    int __glide_palloc_owns(void* p) {
+        if (p == NULL) return 0;
+        PArena* a = g_palloc_active;
+        while (a != NULL) {
+            unsigned char* base = a->head;
+            if ((unsigned char*)p >= base && (unsigned char*)p < base + a->cap) return 1;
+            a = a->next;
+        }
+        return 0;
+    }
+
+    void __glide_pfree(void* p) {
+        if (p == NULL) return;
+        if (__glide_palloc_owns(p)) return;
+        free(p);
+    }
+
+    int __glide_palloc_total_bytes(void) {
+        int total = 0;
+        PArena* a = g_palloc_active;
+        while (a != NULL) { total += a->used; a = a->next; }
+        return total;
+    }
+
+    int __glide_palloc_chunks(void) {
+        int n = 0;
+        PArena* a = g_palloc_active;
+        while (a != NULL) { n++; a = a->next; }
+        return n;
+    }
+
+    #ifdef _WIN32
+    #include <psapi.h>
+    int __glide_proc_rss_mb(void) {
+        PROCESS_MEMORY_COUNTERS pmc;
+        if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return -1;
+        return (int)(pmc.WorkingSetSize / (1024*1024));
+    }
+    #else
+    int __glide_proc_rss_mb(void) { return -1; }
+    #endif
 
+
+    #ifdef GLIDE_FS_VIA_CRAW
+    #ifndef GLIDE_FS_HELPERS_DEFINED
+    #define GLIDE_FS_HELPERS_DEFINED
+    static const char* read_file(const char* path) {
+        FILE* f = fopen(path, "rb");
+        if (!f) return "";
+        fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+        char* buf = (char*)malloc((size_t)n + 1);
+        size_t got = fread(buf, 1, (size_t)n, f); fclose(f); buf[got] = 0;
+        return buf;
+    }
+    static bool write_file(const char* path, const char* content) {
+        FILE* f = fopen(path, "wb"); if (!f) return false;
+        size_t n = strlen(content);
+        size_t wrote = fwrite(content, 1, n, f); fclose(f);
+        return wrote == n;
+    }
+    static bool __glide_file_exists(const char* path) {
+        FILE* f = fopen(path, "rb"); if (!f) return false; fclose(f); return true;
+    }
+    #endif
+    #ifndef GLIDE_LIST_DIR_DEFINED
+    #define GLIDE_LIST_DIR_DEFINED
+    static int __glide_strcmp_qsort(const void* a, const void* b) {
+        const char* x = *(const char* const*)a;
+        const char* y = *(const char* const*)b;
+        return strcmp(x, y);
+    }
+    #ifdef _WIN32
+    static const char* __glide_list_dir(const char* path, const char* suffix) {
+        char pattern[1024];
+        snprintf(pattern, sizeof(pattern), "%s\\*", path);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        size_t suf_n = suffix ? strlen(suffix) : 0;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            const char* nm = fd.cFileName;
+            size_t nm_n = strlen(nm);
+            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
+    }
+    #else
+    #include <dirent.h>
+    static const char* __glide_list_dir(const char* path, const char* suffix) {
+        DIR* d = opendir(path);
+        if (!d) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        size_t suf_n = suffix ? strlen(suffix) : 0;
+        struct dirent* e;
+        while ((e = readdir(d)) != NULL) {
+            const char* nm = e->d_name;
+            if (nm[0] == '.') continue;
+            size_t nm_n = strlen(nm);
+            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        }
+        closedir(d);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
+    }
+    #endif
+    #endif
+    #endif // GLIDE_FS_VIA_CRAW
 
+
+    #ifndef GLIDE_OS_HELPERS_DEFINED
+    #define GLIDE_OS_HELPERS_DEFINED
+    static const char* __glide_os_name(void) {
+    #if defined(_WIN32)
+        return "windows";
+    #elif defined(__APPLE__)
+        return "macos";
+    #elif defined(__linux__)
+        return "linux";
+    #elif defined(__FreeBSD__)
+        return "freebsd";
+    #elif defined(__OpenBSD__)
+        return "openbsd";
+    #elif defined(__NetBSD__)
+        return "netbsd";
+    #else
+        return "unknown";
+    #endif
+    }
+    static const char* __glide_os_arch(void) {
+    #if defined(__x86_64__) || defined(_M_X64)
+        return "x86_64";
+    #elif defined(__aarch64__) || defined(_M_ARM64)
+        return "aarch64";
+    #elif defined(__arm__) || defined(_M_ARM)
+        return "arm";
+    #elif defined(__i386__) || defined(_M_IX86)
+        return "x86";
+    #elif defined(__riscv) && (__riscv_xlen == 64)
+        return "riscv64";
+    #else
+        return "unknown";
+    #endif
+    }
+    static const char* __glide_cwd(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        DWORD n = GetCurrentDirectoryA((DWORD)sizeof(buf), buf);
+        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; }
+    #else
+        if (!getcwd(buf, sizeof(buf))) { buf[0] = 0; }
+    #endif
+        return buf;
+    }
+    #endif
+    #ifdef GLIDE_OS_VIA_CRAW
+    #ifndef GLIDE_OS_PLATFORM_HELPERS_DEFINED
+    #define GLIDE_OS_PLATFORM_HELPERS_DEFINED
+    static int __glide_is_windows(void) {
+    #ifdef _WIN32
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+    static int __glide_shell(const char* cmd) { return system(cmd); }
+    #ifdef _WIN32
+    static const char* __glide_exe_path(void) {
+        static char buf[1024];
+        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
+        if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
+        return buf;
+    }
+    static const char* __glide_exe_dir(void) {
+        static char buf[1024];
+        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
+        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
+        for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
+        return "";
+    }
+    #else
+    static const char* __glide_exe_path(void) {
+        static char buf[1024];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n <= 0) { buf[0] = 0; return buf; }
+        buf[n] = 0;
+        return buf;
+    }
+    static const char* __glide_exe_dir(void) {
+        static char buf[1024];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n <= 0) { buf[0] = 0; return buf; }
+        buf[n] = 0;
+        for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
+        return "";
+    }
+    #endif
+    #endif
+    #endif // GLIDE_OS_VIA_CRAW
 
+
+    #ifdef GLIDE_ENV_VIA_CRAW
+    #ifndef GLIDE_ENV_HELPERS_DEFINED
+    #define GLIDE_ENV_HELPERS_DEFINED
+    static const char* __glide_getenv(const char* name) {
+        const char* v = getenv(name); return v ? v : "";
+    }
+    #endif
+    #endif
 
-    #ifndef GLIDE_CWD_DEFINED
-    #define GLIDE_CWD_DEFINED
-    #ifdef _WIN32
-    # include <direct.h>
-    # define __glide_native_cwd _getcwd
-    #else
-    # include <unistd.h>
-    # define __glide_native_cwd getcwd
-    #endif
-    static const char* __glide_cwd(void) {
-        static char buf[4096];
-        if (__glide_native_cwd(buf, sizeof(buf)) == NULL) { buf[0] = 0; }
-        return buf;
-    }
-    #endif
-
-
-    #ifndef GLIDE_LIST_DIR_DEFINED
-    #define GLIDE_LIST_DIR_DEFINED
-    static int __glide_strcmp_qsort(const void* a, const void* b) {
-        const char* x = *(const char* const*)a;
-        const char* y = *(const char* const*)b;
-        return strcmp(x, y);
-    }
-    #ifdef _WIN32
-    static const char* __glide_list_dir(const char* path, const char* suffix) {
-        char pattern[1024];
-        snprintf(pattern, sizeof(pattern), "%s\\*", path);
-        WIN32_FIND_DATAA fd;
-        HANDLE h = FindFirstFileA(pattern, &fd);
-        if (h == INVALID_HANDLE_VALUE) return "";
-        char** names = NULL; int n = 0; int cap = 0;
-        size_t suf_n = suffix ? strlen(suffix) : 0;
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-            const char* nm = fd.cFileName;
-            size_t nm_n = strlen(nm);
-            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-            names[n++] = dup;
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
-        if (n == 0) { free(names); return ""; }
-        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-        char* out = (char*)malloc(total);
-        size_t off = 0;
-        for (int i = 0; i < n; i++) {
-            size_t l = strlen(names[i]);
-            memcpy(out + off, names[i], l); off += l;
-            if (i + 1 < n) out[off++] = '\n';
-            free(names[i]);
-        }
-        out[off] = 0;
-        free(names);
-        return out;
-    }
-    #else
-    #include <dirent.h>
-    static const char* __glide_list_dir(const char* path, const char* suffix) {
-        DIR* d = opendir(path);
-        if (!d) return "";
-        char** names = NULL; int n = 0; int cap = 0;
-        size_t suf_n = suffix ? strlen(suffix) : 0;
-        struct dirent* e;
-        while ((e = readdir(d)) != NULL) {
-            const char* nm = e->d_name;
-            if (nm[0] == '.') continue;
-            size_t nm_n = strlen(nm);
-            if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;
-            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
-            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
-            names[n++] = dup;
-        }
-        closedir(d);
-        if (n == 0) { free(names); return ""; }
-        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
-        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
-        char* out = (char*)malloc(total);
-        size_t off = 0;
-        for (int i = 0; i < n; i++) {
-            size_t l = strlen(names[i]);
-            memcpy(out + off, names[i], l); off += l;
-            if (i + 1 < n) out[off++] = '\n';
-            free(names[i]);
-        }
-        out[off] = 0;
-        free(names);
-        return out;
-    }
-    #endif
-    #endif
-
-
-// ============================ scheduler runtime ============================
-#include <pthread.h>
-#include <stdatomic.h>
-#include <time.h>
-#include <stdint.h>
-#include <stdlib.h>
-#ifdef _WIN32
-/* winsock2.h must precede windows.h on MinGW / mingw-w64; the seed's
-   socket runtime later includes winsock2.h, so include it here too to
-   keep the order well-defined regardless of which template lands first
-   in the emitted bootstrap.c. */
-# include <winsock2.h>
-# include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */
-#else
-# include <unistd.h>
-# include <sys/mman.h>
-#endif
-
-/* Spinlock — 5-10× faster than pthread_mutex for the short critical
-   sections we use (queue push/pop, pool head update). Falls back to
-   `pause` on contention to be hyperthread-friendly. */
-typedef atomic_int __glide_spin_t;
-static inline void __glide_spin_lock(__glide_spin_t* l) {
-    while (atomic_exchange_explicit(l, 1, memory_order_acquire) == 1) {
-        while (atomic_load_explicit(l, memory_order_relaxed) == 1) {
-#if defined(__x86_64__) || defined(_M_X64)
-            __asm__ __volatile__("pause" ::: "memory");
-#endif
-        }
-    }
-}
-static inline void __glide_spin_unlock(__glide_spin_t* l) {
-    atomic_store_explicit(l, 0, memory_order_release);
-}
-
-/* Stack defaults: configured size + 4 KB guard, page-rounded up.
-   With the default 4 KB the total reservation is 8 KB virtual per coro.
-   Linux/Mac mmap commits pages lazily; Windows commits virtual but the
-   working-set is bound only on first access. Either way idle coros pay
-   ~one 4 KB page in physical RAM.
-   Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)
-   need pointer-map metadata + copy/relocate — TBD. */
-#define __GLIDE_STACK_GUARD 4096
-static int __glide_stack_size = 4096;
-
-/* Custom assembly context switch — replaces Win32 Fibers and POSIX
-   ucontext.h with our own portable, ABI-correct register flip. The
-   reason: Fibers crash if the same fiber is SwitchToFiber'd by
-   different OS threads over its lifetime, which forces us to pin
-   coros to a single worker and rules out work-stealing. With our
-   own switch we own the entire state, so a coro can move between
-   workers safely.
-
-   Layout: callee-saved GP regs + (Win64 only) callee-saved XMM6-15.
-   Caller-saved registers (rax/rcx/rdx/...) were already flushed to the
-   caller's stack frame by the compiler before it called us, so we don't
-   touch them. SysV marks XMM as caller-saved → no extra work there. */
-typedef struct {
-#ifdef _WIN32
-    void* rsp; void* rbx; void* rbp;
-    void* rdi; void* rsi;
-    void* r12; void* r13; void* r14; void* r15;
-    char xmm[160];
-#else
-    void* rsp; void* rbx; void* rbp;
-    void* r12; void* r13; void* r14; void* r15;
-#endif
-} __glide_coro_ctx;
-
-__attribute__((naked, noinline))
-static void __glide_ctx_switch(
-    __glide_coro_ctx* from __attribute__((unused)),
-    __glide_coro_ctx* to   __attribute__((unused))) {
-#ifdef _WIN32
-    /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */
-    __asm__(
-        "movq %rsp,   0(%rcx)\n\t"
-        "movq %rbx,   8(%rcx)\n\t"
-        "movq %rbp,  16(%rcx)\n\t"
-        "movq %rdi,  24(%rcx)\n\t"
-        "movq %rsi,  32(%rcx)\n\t"
-        "movq %r12,  40(%rcx)\n\t"
-        "movq %r13,  48(%rcx)\n\t"
-        "movq %r14,  56(%rcx)\n\t"
-        "movq %r15,  64(%rcx)\n\t"
-        "movdqu %xmm6,   72(%rcx)\n\t"
-        "movdqu %xmm7,   88(%rcx)\n\t"
-        "movdqu %xmm8,  104(%rcx)\n\t"
-        "movdqu %xmm9,  120(%rcx)\n\t"
-        "movdqu %xmm10, 136(%rcx)\n\t"
-        "movdqu %xmm11, 152(%rcx)\n\t"
-        "movdqu %xmm12, 168(%rcx)\n\t"
-        "movdqu %xmm13, 184(%rcx)\n\t"
-        "movdqu %xmm14, 200(%rcx)\n\t"
-        "movdqu %xmm15, 216(%rcx)\n\t"
-        "movq  0(%rdx), %rsp\n\t"
-        "movq  8(%rdx), %rbx\n\t"
-        "movq 16(%rdx), %rbp\n\t"
-        "movq 24(%rdx), %rdi\n\t"
-        "movq 32(%rdx), %rsi\n\t"
-        "movq 40(%rdx), %r12\n\t"
-        "movq 48(%rdx), %r13\n\t"
-        "movq 56(%rdx), %r14\n\t"
-        "movq 64(%rdx), %r15\n\t"
-        "movdqu  72(%rdx), %xmm6\n\t"
-        "movdqu  88(%rdx), %xmm7\n\t"
-        "movdqu 104(%rdx), %xmm8\n\t"
-        "movdqu 120(%rdx), %xmm9\n\t"
-        "movdqu 136(%rdx), %xmm10\n\t"
-        "movdqu 152(%rdx), %xmm11\n\t"
-        "movdqu 168(%rdx), %xmm12\n\t"
-        "movdqu 184(%rdx), %xmm13\n\t"
-        "movdqu 200(%rdx), %xmm14\n\t"
-        "movdqu 216(%rdx), %xmm15\n\t"
-        "ret\n\t"
-    );
-#else
-    /* SysV AMD64 ABI: from=%rdi, to=%rsi */
-    __asm__(
-        "movq %rsp,   0(%rdi)\n\t"
-        "movq %rbx,   8(%rdi)\n\t"
-        "movq %rbp,  16(%rdi)\n\t"
-        "movq %r12,  24(%rdi)\n\t"
-        "movq %r13,  32(%rdi)\n\t"
-        "movq %r14,  40(%rdi)\n\t"
-        "movq %r15,  48(%rdi)\n\t"
-        "movq  0(%rsi), %rsp\n\t"
-        "movq  8(%rsi), %rbx\n\t"
-        "movq 16(%rsi), %rbp\n\t"
-        "movq 24(%rsi), %r12\n\t"
-        "movq 32(%rsi), %r13\n\t"
-        "movq 40(%rsi), %r14\n\t"
-        "movq 48(%rsi), %r15\n\t"
-        "ret\n\t"
-    );
-#endif
-}
-
-typedef void* (*__glide_task_fn)(void*);
-typedef struct __glide_task {
-    __glide_coro_ctx    ctx;     /* register save area */
-    void*               stack;   /* mmap/VirtualAlloc base (low addr) */
-    size_t              stack_total; /* bytes including guard page */
-    __glide_task_fn     entry;
-    void*               arg;
-    int                 state; /* 0=ready 1=running 2=blocked 3=done */
-    int                 home_worker; /* worker that currently owns this coro;
-                                       updated on steal so future unparks land
-                                       on the thief's queue (cache-warm). */
-    int                 has_run;     /* 0 if never run; once 1, we never
-                                       migrate the coro across OS threads (Win64
-                                       SEH/TIB invariants make resumed-on-other-
-                                       thread fragile, so first-run-only steal). */
-    struct __glide_task* next;       /* link in per-worker ready queue */
-    struct __glide_task* wait_next;  /* link in chan wait list */
-    /* Park hand-off: if non-null on switch-back to worker fiber,
-       worker links self into *park_list and unlocks park_lock.
-       Done after the switch so unpark can never race with a
-       still-mid-switch coro. */
-    pthread_mutex_t*     park_lock;
-    struct __glide_task** park_list;
-} __glide_task;
-
-/* Forward decls — out-of-order references between sleep_ms / __glide_park /
-   __glide_timer_main / sched_init / task pool helpers used by worker_main. */
-static void* __glide_timer_main(void* unused);
-int __glide_park(pthread_mutex_t* lock, __glide_task** list);
-void __glide_free_task(__glide_task* t);
-static void __glide_reset_ctx(__glide_task* t);
-static void __glide_flush_main_buf(void);
-
-/* Per-worker queue: each worker pops only from its own queue, so a
-   fiber that first ran on worker A always continues on A. This avoids
-   cross-thread fiber migration which crashes Win32 Fibers. Stealing
-   between workers comes in Phase 1.2 (with proper atomic ownership). */
-typedef struct {
-    __glide_spin_t  spin;
-    pthread_mutex_t mu;
-    pthread_cond_t  cv;
-    __glide_task*   head;
-    __glide_task*   tail;
-    atomic_int      idle;
-} __glide_wq;
-
-/* Sorted sleep queue for the timer thread. Coroutines that call
-   sleep_ms park here instead of blocking their worker. */
-typedef struct __glide_timer_node {
-    long long              deadline_ns;
-    __glide_task*          task;
-    struct __glide_timer_node* next;
-} __glide_timer_node;
-static __glide_timer_node* __glide_timer_head = NULL;
-static pthread_mutex_t __glide_timer_mu;
-static pthread_cond_t  __glide_timer_cv;
-static pthread_t __glide_timer_thread;
-static int __glide_timer_inited = 0;
-
-static __glide_wq* __glide_wqs = NULL;
-static int __glide_q_inited = 0;
-static int __glide_n_workers = 0;
-static pthread_t* __glide_workers = NULL;
-/* Pending count, sharded per worker so increments and decrements don't all bounce
-   the same cache line. Spawn increments shards[home_worker]; the worker that runs
-   the task decrements shards[my_worker]. Sum across shards = total alive tasks.
-   Each shard is its own cache line to kill false sharing between threads. */
-typedef struct {
-    atomic_int v;
-    char _pad[60];
-} __glide_pending_shard_t;
-static __glide_pending_shard_t* __glide_pending_shards = NULL;
-static int __glide_pending_n_shards = 0;
-static int __glide_pending_sum(void) {
-    int sum = 0;
-    int n = __glide_pending_n_shards;
-    for (int i = 0; i < n; i++) {
-        sum += atomic_load_explicit(&__glide_pending_shards[i].v, memory_order_acquire);
-    }
-    return sum;
-}
-static atomic_int __glide_shutdown = 0;
-static atomic_int __glide_rr = 0;        /* round-robin spawn counter */
-
-static _Thread_local __glide_task* __glide_cur_task = NULL;
-static _Thread_local int __glide_my_worker = -1;
-/* Worker's saved context. Each OS thread has its own — when a coro
-   parks/yields, we ctx_switch INTO this so the worker resumes its
-   loop right after the call site. */
-static _Thread_local __glide_coro_ctx __glide_worker_ctx;
-#ifdef _WIN32
-/* Original OS-thread stack range — saved on worker entry, restored
-   when no coro is running. Win64 SEH walks the stack via TIB, so we
-   must point TIB at the coro's stack while it runs and back at the
-   OS thread's stack between switches. Without this, any code path that
-   raises an exception or probes the stack from a migrated coro reads
-   garbage and crashes. */
-static _Thread_local void* __glide_orig_stack_base = NULL;
-static _Thread_local void* __glide_orig_stack_limit = NULL;
-static inline void __glide_tib_set_stack(void* base, void* limit) {
-    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
-    tib->StackBase = base;
-    tib->StackLimit = limit;
-}
-#endif
-
-static void __glide_q_push_to(int wid, __glide_task* t) {
-    __glide_wq* q = &__glide_wqs[wid];
-    __glide_spin_lock(&q->spin);
-    t->next = NULL;
-    if (q->tail) q->tail->next = t; else q->head = t;
-    q->tail = t;
-    __glide_spin_unlock(&q->spin);
-    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {
-        pthread_mutex_lock(&q->mu);
-        pthread_cond_signal(&q->cv);
-        pthread_mutex_unlock(&q->mu);
-    }
-}
-
-/* Splice a pre-built chain (head ... tail, n nodes, NULL-terminated) onto
-   the back of a worker's queue under one spinlock acquisition. Used by main's
-   batched-push path so 32 spawns cost ~1 lock instead of 32. */
-static void __glide_q_push_chain(int wid, __glide_task* head, __glide_task* tail, int n) {
-    if (!head) return; (void)n;
-    __glide_wq* q = &__glide_wqs[wid];
-    __glide_spin_lock(&q->spin);
-    if (q->tail) q->tail->next = head; else q->head = head;
-    q->tail = tail;
-    __glide_spin_unlock(&q->spin);
-    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {
-        pthread_mutex_lock(&q->mu);
-        pthread_cond_broadcast(&q->cv);
-        pthread_mutex_unlock(&q->mu);
-    }
-}
-
-static int __glide_pick_worker(void) {
-    /* Inside a coro: same worker as caller (cheap, keeps cache hot).
-       Outside (main): always W0 — work-stealing redistributes. This avoids
-       the per-spawn atomic+cross-thread cache bounce on N target queues. */
-    if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;
-    return 0;
-}
-
-/* Work-stealing: when our queue is empty, try grabbing the head of
-   another worker's queue (random victim, walk all on miss). On steal
-   we adopt the task as our own (home_worker = me) so future unparks
-   stay cache-warm here. Now safe to migrate because our custom ctx
-   switch is stateless across threads — no Win32 Fiber crash trap. */
-static atomic_uint __glide_steal_rr = 0;
-static __glide_task* __glide_try_steal(void) {
-    int n = __glide_n_workers;
-    if (n <= 1) return NULL;
-    int my = __glide_my_worker;
-    unsigned int seed = atomic_fetch_add_explicit(&__glide_steal_rr, 1, memory_order_relaxed);
-    int start = (int)(seed % (unsigned int)n);
-    for (int i = 0; i < n; i++) {
-        int v = (start + i) % n;
-        if (v == my) continue;
-        __glide_wq* q = &__glide_wqs[v];
-        __glide_spin_lock(&q->spin);
-        /* Walk queue head: only first-run-untouched tasks are stealable. */
-        __glide_task* prev = NULL;
-        __glide_task* t = q->head;
-        while (t && t->has_run) { prev = t; t = t->next; }
-        if (t) {
-            if (prev) prev->next = t->next; else q->head = t->next;
-            if (q->tail == t) q->tail = prev;
-            __glide_spin_unlock(&q->spin);
-            t->home_worker = my;
-            t->next = NULL;
-            return t;
-        }
-        __glide_spin_unlock(&q->spin);
-    }
-    return NULL;
-}
-
-static __glide_task* __glide_q_pop_my(void) {
-    __glide_wq* q = &__glide_wqs[__glide_my_worker];
-    while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {
-        __glide_spin_lock(&q->spin);
-        __glide_task* t = q->head;
-        if (t) {
-            q->head = t->next;
-            if (q->head == NULL) q->tail = NULL;
-            __glide_spin_unlock(&q->spin);
-            return t;
-        }
-        __glide_spin_unlock(&q->spin);
-        __glide_task* stolen = __glide_try_steal();
-        if (stolen) return stolen;
-        pthread_mutex_lock(&q->mu);
-        if (q->head || atomic_load(&__glide_shutdown)) {
-            pthread_mutex_unlock(&q->mu);
-            continue;
-        }
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += 500000;
-        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
-        atomic_store_explicit(&q->idle, 1, memory_order_relaxed);
-        pthread_cond_timedwait(&q->cv, &q->mu, &ts);
-        atomic_store_explicit(&q->idle, 0, memory_order_relaxed);
-        pthread_mutex_unlock(&q->mu);
-    }
-    return NULL;
-}
-
-/* Trampoline reached on a coro's first switch-in. Reads the bound
-   task from TLS (worker_main set __glide_cur_task before switching),
-   runs the user fn, marks done, then hands control back to the worker
-   via ctx_switch. The final switch never returns: we discard the saved
-   ctx (worker is going to free us anyway). */
-static void __glide_coro_trampoline(void) {
-    __glide_task* t = __glide_cur_task;
-    (void)t->entry(t->arg);
-    t->state = 3;
-    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
-    __builtin_unreachable();
-}
-
-/* Stack pool: hold a small free list of recently-freed regions so a
-   spawn-burst doesn't pay mmap+munmap (Linux) / VirtualAlloc+VirtualFree
-   (Win) per coro. Significant on Windows where these are slow syscalls. */
-typedef struct __glide_stack_node {
-    void*  base;
-    size_t total;
-    struct __glide_stack_node* next;
-} __glide_stack_node;
-static __glide_stack_node* __glide_stack_pool = NULL;
-static int __glide_stack_pool_count = 0;
-static const int __GLIDE_STACK_POOL_MAX = 16384;
-static __glide_spin_t __glide_stack_pool_spin = 0;
-
-/* Stack allocator: mmap (POSIX) or VirtualAlloc (Win) so unused pages
-   stay uncommitted (Linux/Mac) and overflow into the guard page raises
-   SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the
-   neighbour stack. Returns the LOW address of the whole region; usable
-   stack starts at `base + __GLIDE_STACK_GUARD`. */
-static void* __glide_alloc_stack(size_t* out_total) {
-    size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;
-    size_t page = 4096;
-    total = (total + page - 1) & ~(page - 1);
-    /* Pool fast path. */
-    __glide_spin_lock(&__glide_stack_pool_spin);
-    __glide_stack_node* n = __glide_stack_pool;
-    while (n && n->total != total) n = n->next;
-    if (n && n->total == total) {
-        /* Unlink first matching node. */
-        __glide_stack_node** p = &__glide_stack_pool;
-        while (*p != n) p = &(*p)->next;
-        *p = n->next;
-        __glide_stack_pool_count--;
-        __glide_spin_unlock(&__glide_stack_pool_spin);
-        void* base = n->base;
-        free(n);
-        *out_total = total;
-        return base;
-    }
-    __glide_spin_unlock(&__glide_stack_pool_spin);
-    void* base;
-#ifdef _WIN32
-    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
-    if (!base) return NULL;
-    DWORD old;
-    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);
-#else
-    base = mmap(NULL, total, PROT_READ|PROT_WRITE,
-                MAP_ANON|MAP_PRIVATE, -1, 0);
-    if (base == MAP_FAILED) return NULL;
-    mprotect(base, __GLIDE_STACK_GUARD, PROT_NONE);
-#endif
-    *out_total = total;
-    return base;
-}
-
-static void __glide_free_stack(void* base, size_t total) {
-    if (!base) return;
-    /* Hand back to pool if there's room. */
-    __glide_spin_lock(&__glide_stack_pool_spin);
-    if (__glide_stack_pool_count < __GLIDE_STACK_POOL_MAX) {
-        __glide_stack_node* n = (__glide_stack_node*)malloc(sizeof(*n));
-        n->base = base;
-        n->total = total;
-        n->next = __glide_stack_pool;
-        __glide_stack_pool = n;
-        __glide_stack_pool_count++;
-        __glide_spin_unlock(&__glide_stack_pool_spin);
-        return;
-    }
-    __glide_spin_unlock(&__glide_stack_pool_spin);
-#ifdef _WIN32
-    (void)total;
-    VirtualFree(base, 0, MEM_RELEASE);
-#else
-    munmap(base, total);
-#endif
-}
-
-/* Plant trampoline address at the top of the stack so the first
-   ctx_switch into this ctx pops it and `ret`s into the trampoline.
-   16-byte alignment matches the AMD64 call ABI: we save RSP at a
-   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees
-   RSP%16==8 (which is what `call` would have left). */
-static void __glide_coro_init(__glide_task* t) {
-    size_t total = 0;
-    t->stack = __glide_alloc_stack(&total);
-    t->stack_total = total;
-    char* top = (char*)t->stack + total;
-    top -= 16;                       /* headroom — never write past top */
-    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
-    *(void**)sp = (void*)__glide_coro_trampoline;
-    t->ctx.rsp = (void*)sp;
-    t->ctx.rbx = 0; t->ctx.rbp = 0;
-    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;
-#ifdef _WIN32
-    t->ctx.rdi = 0; t->ctx.rsi = 0;
-#endif
-}
-
-static void __glide_coro_destroy(__glide_task* t) {
-    __glide_free_stack(t->stack, t->stack_total);
-    t->stack = NULL;
-    t->stack_total = 0;
-}
-
-static void* __glide_worker_main(void* arg) {
-    __glide_my_worker = (int)(intptr_t)arg;
-#ifdef _WIN32
-    /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit
-       to the coro's region while it runs and back to ours between switches. */
-    {
-        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
-        __glide_orig_stack_base = tib->StackBase;
-        __glide_orig_stack_limit = tib->StackLimit;
-    }
-#endif
-    while (!atomic_load(&__glide_shutdown)) {
-        __glide_task* t = __glide_q_pop_my();
-        if (!t) break;
-        __glide_cur_task = t;
-        if (!t->has_run) __glide_reset_ctx(t);
-        t->state = 1;
-        t->has_run = 1;  /* stick to this OS thread from now on */
-#ifdef _WIN32
-        __glide_tib_set_stack((char*)t->stack + t->stack_total, t->stack);
-#endif
-        __glide_ctx_switch(&__glide_worker_ctx, &t->ctx);
-#ifdef _WIN32
-        __glide_tib_set_stack(__glide_orig_stack_base, __glide_orig_stack_limit);
-#endif
-        __glide_cur_task = NULL;
-        if (t->state == 3) {
-            __glide_free_task(t);  /* pool reuse — keeps stack mmap'd */
-            /* Single atomic on this worker's shard. The previous code also did a
-               cross-queue cv broadcast when total pending hit zero, but
-               sched_shutdown busy-waits on pending_sum and broadcasts itself once
-               shutdown=1, so this hot-path broadcast is redundant. */
-            atomic_fetch_sub_explicit(&__glide_pending_shards[__glide_my_worker].v, 1, memory_order_acq_rel);
-        } else if (t->state == 2) {
-            /* Parked. Complete the hand-off: link into wait list,
-               release the lock the parker held. After this point
-               unpark may safely queue the task. */
-            if (t->park_list) {
-                t->wait_next = *t->park_list;
-                *t->park_list = t;
-                t->park_list = NULL;
-            }
-            if (t->park_lock) {
-                pthread_mutex_unlock(t->park_lock);
-                t->park_lock = NULL;
-            }
-        } else {
-            t->state = 0;
-            __glide_q_push_to(t->home_worker, t);
-        }
-    }
-    return NULL;
-}
-
-void __glide_sched_init(void) {
-    if (__glide_q_inited) return;
-    const char* env_stk = getenv("GLIDE_CORO_STACK");
-    if (env_stk) {
-        int n = atoi(env_stk);
-        if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */
-    }
-    const char* env = getenv("GLIDE_WORKERS");
-    if (env) __glide_n_workers = atoi(env);
-    if (__glide_n_workers <= 0) {
-#ifdef _WIN32
-        SYSTEM_INFO si; GetSystemInfo(&si);
-        __glide_n_workers = (int)si.dwNumberOfProcessors;
-#else
-        long n = sysconf(_SC_NPROCESSORS_ONLN);
-        __glide_n_workers = (n > 0) ? (int)n : 4;
-#endif
-    }
-    __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));
-    for (int i = 0; i < __glide_n_workers; i++) {
-        pthread_mutex_init(&__glide_wqs[i].mu, NULL);
-        pthread_cond_init(&__glide_wqs[i].cv, NULL);
-    }
-    /* One shard per worker plus one for non-coro callers (main / arbitrary OS threads). */
-    __glide_pending_n_shards = __glide_n_workers + 1;
-    __glide_pending_shards = (__glide_pending_shard_t*)calloc(__glide_pending_n_shards, sizeof(__glide_pending_shard_t));
-    __glide_q_inited = 1;
-    __glide_workers = (pthread_t*)malloc(sizeof(pthread_t) * __glide_n_workers);
-    for (int i = 0; i < __glide_n_workers; i++) {
-        pthread_create(&__glide_workers[i], NULL, __glide_worker_main, (void*)(intptr_t)i);
-    }
-    pthread_mutex_init(&__glide_timer_mu, NULL);
-    pthread_cond_init(&__glide_timer_cv, NULL);
-    __glide_timer_inited = 1;
-    pthread_create(&__glide_timer_thread, NULL, __glide_timer_main, NULL);
-}
-
-void __glide_sched_shutdown(void) {
-    if (!__glide_q_inited) return;
-    __glide_flush_main_buf();
-    while (__glide_pending_sum() > 0) {
-        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;
-        nanosleep(&ts, NULL);
-    }
-    atomic_store(&__glide_shutdown, 1);
-    for (int i = 0; i < __glide_n_workers; i++) {
-        pthread_mutex_lock(&__glide_wqs[i].mu);
-        pthread_cond_broadcast(&__glide_wqs[i].cv);
-        pthread_mutex_unlock(&__glide_wqs[i].mu);
-    }
-    for (int i = 0; i < __glide_n_workers; i++) {
-        pthread_join(__glide_workers[i], NULL);
-    }
-    if (__glide_timer_inited) {
-        pthread_mutex_lock(&__glide_timer_mu);
-        pthread_cond_broadcast(&__glide_timer_cv);
-        pthread_mutex_unlock(&__glide_timer_mu);
-        pthread_join(__glide_timer_thread, NULL);
-        __glide_timer_inited = 0;
-    }
-    free(__glide_workers); __glide_workers = NULL;
-    free(__glide_wqs); __glide_wqs = NULL;
-    free(__glide_pending_shards); __glide_pending_shards = NULL;
-    __glide_pending_n_shards = 0;
-    __glide_q_inited = 0;
-}
-
-/* Task pool: full task structs (stack + ctx already initialized). On reuse
-   we just rewind the trampoline pointer at the top of the existing stack —
-   no mmap, no calloc, no setup work. Burst spawns become ~1 mutex + 1 push. */
-static __glide_task* __glide_task_pool = NULL;
-static int __glide_task_pool_count = 0;
-static const int __GLIDE_TASK_POOL_MAX = 16384;
-static __glide_spin_t __glide_task_pool_spin = 0;
-
-/* Per-thread magazine. The global pool's spinlock is the spawn hot-path
-   bottleneck under burst load (13 threads contending). Each thread keeps a
-   small LIFO; alloc/free hit it lock-free, and we only touch the global pool
-   in batches when the magazine fills or drains. Reduces global ops ~32x. */
-#define __GLIDE_TLS_POOL_MAX 256
-#define __GLIDE_TLS_POOL_BATCH 64
-static __thread __glide_task* __glide_tls_pool = NULL;
-static __thread int __glide_tls_pool_count = 0;
-
-static void __glide_reset_ctx(__glide_task* t) {
-    char* top = (char*)t->stack + t->stack_total;
-    top -= 16;
-    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
-    *(void**)sp = (void*)__glide_coro_trampoline;
-    t->ctx.rsp = (void*)sp;
-    /* GP/XMM regs zeroed via 8-byte stores — faster than memset for
-       this fixed-size struct, and the compiler vectorizes if it cares. */
-    t->ctx.rbx = 0; t->ctx.rbp = 0;
-    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;
-#ifdef _WIN32
-    t->ctx.rdi = 0; t->ctx.rsi = 0;
-    /* xmm[160] = 20 × 8 bytes; unrolled clear for branchless write. */
-    uint64_t* x = (uint64_t*)t->ctx.xmm;
-    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;
-    x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;
-    x[16]=0; x[17]=0; x[18]=0; x[19]=0;
-#endif
-}
-
-/* No-op now: state/has_run/wait_next/park_lock/park_list are cleared at FREE time
-   instead, so the spawn hot path on main has fewer stores. The reset_ctx clear
-   already moved to worker_main earlier (gated on has_run==0). Inlined since callers
-   sometimes need the return value. */
-static inline __glide_task* __glide_finish_alloc(__glide_task* t) { return t; }
-
-__glide_task* __glide_alloc_task(void) {
-    /* Magazine fast path: pop without ever touching the spinlock. */
-    __glide_task* t = __glide_tls_pool;
-    if (t) {
-        __glide_tls_pool = t->next;
-        __glide_tls_pool_count--;
-        return __glide_finish_alloc(t);
-    }
-    /* Magazine empty: refill a batch in one global-lock acquisition. */
-    __glide_spin_lock(&__glide_task_pool_spin);
-    t = __glide_task_pool;
-    if (t) {
-        __glide_task_pool = t->next;
-        __glide_task_pool_count--;
-        __glide_task* head = NULL;
-        int taken = 0;
-        while (taken < __GLIDE_TLS_POOL_BATCH - 1 && __glide_task_pool) {
-            __glide_task* x = __glide_task_pool;
-            __glide_task_pool = x->next;
-            __glide_task_pool_count--;
-            x->next = head;
-            head = x;
-            taken++;
-        }
-        __glide_spin_unlock(&__glide_task_pool_spin);
-        __glide_tls_pool = head;
-        __glide_tls_pool_count = taken;
-        return __glide_finish_alloc(t);
-    }
-    __glide_spin_unlock(&__glide_task_pool_spin);
-    /* Pool fully drained: fresh allocation. */
-    t = (__glide_task*)calloc(1, sizeof(__glide_task));
-    __glide_coro_init(t);
-    return t;
-}
-
-void __glide_free_task(__glide_task* t) {
-    /* Reset all the per-task transient fields here, on the worker thread that's
-       freeing — main's spawn hot path was paying for these N stores per task. */
-    t->state = 0; t->has_run = 0;
-    t->wait_next = NULL;
-    t->park_lock = NULL; t->park_list = NULL;
-    if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {
-        t->next = __glide_tls_pool;
-        __glide_tls_pool = t;
-        __glide_tls_pool_count++;
-        return;
-    }
-    /* Magazine full: flush BATCH (this task + last BATCH-1 from TLS) to global. */
-    /* `t` may carry a stale ->next from the run queue; null it so the chain
-       we're about to build terminates cleanly when we walk it for overflow. */
-    t->next = NULL;
-    __glide_task* batch = t;
-    int batch_n = 1;
-    while (batch_n < __GLIDE_TLS_POOL_BATCH && __glide_tls_pool) {
-        __glide_task* x = __glide_tls_pool;
-        __glide_tls_pool = x->next;
-        __glide_tls_pool_count--;
-        x->next = batch;
-        batch = x;
-        batch_n++;
-    }
-    __glide_spin_lock(&__glide_task_pool_spin);
-    int room = __GLIDE_TASK_POOL_MAX - __glide_task_pool_count;
-    int put = (room < batch_n) ? room : batch_n;
-    __glide_task* overflow = batch;
-    if (put > 0) {
-        __glide_task* tail = batch;
-        for (int i = 0; i < put - 1; i++) tail = tail->next;
-        overflow = tail->next;
-        tail->next = __glide_task_pool;
-        __glide_task_pool = batch;
-        __glide_task_pool_count += put;
-    }
-    __glide_spin_unlock(&__glide_task_pool_spin);
-    while (overflow) {
-        __glide_task* x = overflow;
-        overflow = x->next;
-        __glide_coro_destroy(x);
-        free(x);
-    }
-}
-
-/* Per-OS-thread spawn buffer for the from-main path. Batching 32 spawns into
-   one queue lock acquisition cuts spinlock contention dramatically when burst-
-   spawning into W0. pending is incremented immediately (per spawn) so callers'
-   `pending_count()` busy-waits don't observe a stale-low value while tasks sit
-   in the buffer. The flush is triggered by buffer-full, by sched_shutdown, and
-   by pending_count itself (so wait loops can never deadlock on unflushed work). */
-#define __GLIDE_MAIN_BATCH 16
-static _Thread_local __glide_task* __glide_main_buf_head = NULL;
-static _Thread_local __glide_task* __glide_main_buf_tail = NULL;
-static _Thread_local int __glide_main_buf_count = 0;
-static void __glide_flush_main_buf(void) {
-    if (!__glide_main_buf_head) return;
-    __glide_q_push_chain(0, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);
-    __glide_main_buf_head = NULL;
-    __glide_main_buf_tail = NULL;
-    __glide_main_buf_count = 0;
-}
-
-void __glide_spawn(__glide_task_fn fn, void* arg) {
-    __glide_task* t = __glide_alloc_task();
-    t->entry = fn;
-    t->arg = arg;
-    t->home_worker = __glide_pick_worker();
-    /* Increment the SPAWNER's shard, not the home_worker's. With main always
-       picking W0, sharding by home_worker would put every increment on shard[0] and
-       defeat the whole point. Spawner-thread keeps main's stream separate. */
-    int __sidx = (__glide_my_worker >= 0) ? __glide_my_worker : __glide_n_workers;
-    atomic_fetch_add_explicit(&__glide_pending_shards[__sidx].v, 1, memory_order_relaxed);
-    if (__glide_cur_task != NULL && __glide_my_worker >= 0) {
-        /* Inside a coro: same-thread same-queue, spinlock is uncontended. */
-        __glide_q_push_to(t->home_worker, t);
-        return;
-    }
-    /* Outside (main / pthread): buffer locally, flush in batches. */
-    t->next = NULL;
-    if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;
-    else __glide_main_buf_head = t;
-    __glide_main_buf_tail = t;
-    __glide_main_buf_count++;
-    if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) __glide_flush_main_buf();
-}
-
-void yield_now(void) {
-    __glide_task* t = __glide_cur_task;
-    if (!t) return;
-    t->state = 0;
-    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
-}
-
-int pending_count(void) {
-    /* Flush any locally-buffered spawns before reading; otherwise a busy-wait
-       like `while pending_count() > 0 {}` could hold tasks in the buffer forever. */
-    if (__glide_cur_task == NULL) __glide_flush_main_buf();
-    return __glide_pending_sum();
-}
-
-int64_t now_ns(void) {
-#ifdef _WIN32
-    static LARGE_INTEGER freq; static int inited = 0;
-    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }
-    LARGE_INTEGER c; QueryPerformanceCounter(&c);
-    return (int64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
-#else
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
-#endif
-}
-
-static long long __glide_monotonic_ns(void) {
-#ifdef _WIN32
-    static LARGE_INTEGER freq; static int inited = 0;
-    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }
-    LARGE_INTEGER c; QueryPerformanceCounter(&c);
-    return (long long)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
-#else
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-#endif
-}
-
-/* Timer thread: sleeps until the head deadline, unparks expired tasks. */
-static void* __glide_timer_main(void* unused) {
-    (void)unused;
-    pthread_mutex_lock(&__glide_timer_mu);
-    while (!atomic_load(&__glide_shutdown)) {
-        if (__glide_timer_head == NULL) {
-            pthread_cond_wait(&__glide_timer_cv, &__glide_timer_mu);
-            continue;
-        }
-        long long now = __glide_monotonic_ns();
-        if (__glide_timer_head->deadline_ns <= now) {
-            __glide_timer_node* expired = __glide_timer_head;
-            __glide_timer_head = expired->next;
-            __glide_task* t = expired->task;
-            free(expired);
-            pthread_mutex_unlock(&__glide_timer_mu);
-            t->state = 0;
-            __glide_q_push_to(t->home_worker, t);
-            pthread_mutex_lock(&__glide_timer_mu);
-            continue;
-        }
-        long long delta = __glide_timer_head->deadline_ns - now;
-        struct timespec abst;
-#ifdef _WIN32
-        struct timespec _now_rt; clock_gettime(CLOCK_REALTIME, &_now_rt);
-        abst.tv_sec = _now_rt.tv_sec; abst.tv_nsec = _now_rt.tv_nsec;
-#else
-        clock_gettime(CLOCK_REALTIME, &abst);
-#endif
-        long long add_ns = abst.tv_nsec + delta;
-        abst.tv_sec  += (time_t)(add_ns / 1000000000LL);
-        abst.tv_nsec  = (long)(add_ns % 1000000000LL);
-        pthread_cond_timedwait(&__glide_timer_cv, &__glide_timer_mu, &abst);
-    }
-    pthread_mutex_unlock(&__glide_timer_mu);
-    return NULL;
-}
-
-void sleep_ms(int ms) {
-    __glide_task* t = __glide_cur_task;
-    if (!t) {
-        /* Not in a coro - blocking sleep. Flush first so any spawns we just
-           queued aren't held in our local buffer while we sit here idle. */
-        __glide_flush_main_buf();
-#ifdef _WIN32
-        Sleep((DWORD)ms);
-#else
-        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (long)((ms % 1000)) * 1000000L;
-        nanosleep(&ts, NULL);
-#endif
-        return;
-    }
-    /* Coro - register on the timer queue, park, worker runs others. */
-    long long deadline = __glide_monotonic_ns() + (long long)ms * 1000000LL;
-    __glide_timer_node* node = (__glide_timer_node*)malloc(sizeof(__glide_timer_node));
-    node->deadline_ns = deadline;
-    node->task = t;
-    pthread_mutex_lock(&__glide_timer_mu);
-    __glide_timer_node** cur = &__glide_timer_head;
-    while (*cur && (*cur)->deadline_ns <= deadline) cur = &(*cur)->next;
-    node->next = *cur;
-    *cur = node;
-    /* Wake timer thread to recompute its deadline. */
-    pthread_cond_signal(&__glide_timer_cv);
-    /* Park: worker hand-off releases __glide_timer_mu after switch. */
-    __glide_park(&__glide_timer_mu, NULL);
-}
-
-/* Coro park: caller holds `lock` and wants to wait on `list`. Returns
-   1 if parked (caller must re-acquire `lock` and re-check state), 0
-   if the caller is not in a coroutine context (caller should fall
-   back to pthread_cond_wait). The actual list link + lock release is
-   done by the worker AFTER the fiber switch — that's how we avoid the
-   classic park/unpark race. */
-int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
-    __glide_task* t = __glide_cur_task;
-    if (!t) { __glide_flush_main_buf(); return 0; }
-    t->park_lock = lock;
-    t->park_list = list;
-    t->state = 2;
-    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
-    return 1;
-}
-
-/* Caller holds the chan/mutex protecting the wait list. Pop the head and queue it. */
-void __glide_unpark_one(__glide_task** list) {
-    __glide_task* t = *list;
-    if (!t) return;
-    *list = t->wait_next;
-    t->wait_next = NULL;
-    t->state = 0;
-    __glide_q_push_to(t->home_worker, t);
-}
+
+    #ifdef GLIDE_IO_VIA_CRAW
+    #ifndef GLIDE_IO_HELPERS_DEFINED
+    #define GLIDE_IO_HELPERS_DEFINED
+    #ifdef _WIN32
+    #include <fcntl.h>
+    #define __glide_dup _dup
+    #define __glide_dup2 _dup2
+    #define __glide_close _close
+    #define __glide_fileno _fileno
+    static void __glide_set_binary_io(void) {
+        _setmode(_fileno(stdin), _O_BINARY);
+        _setmode(_fileno(stdout), _O_BINARY);
+    }
+    #else
+    #define __glide_dup dup
+    #define __glide_dup2 dup2
+    #define __glide_close close
+    #define __glide_fileno fileno
+    static void __glide_set_binary_io(void) {}
+    #endif
+    static int __glide_redirect_to(const char* path) {
+        fflush(stdout);
+        int saved = __glide_dup(1);
+        if (saved < 0) return -1;
+        FILE* f = fopen(path, "w");
+        if (!f) { __glide_close(saved); return -1; }
+        __glide_dup2(__glide_fileno(f), 1);
+        fclose(f);
+        return saved;
+    }
+    static void __glide_restore_stdout(int saved) {
+        fflush(stdout);
+        if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }
+    }
+    static const char* __glide_read_line(void) {
+        static char buf[8192];
+        if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }
+        return buf;
+    }
+    static const char* __glide_read_bytes(int n) {
+        if (n <= 0) return "";
+        char* buf = (char*)malloc((size_t)n + 1);
+        size_t got = fread(buf, 1, (size_t)n, stdin);
+        buf[got] = 0;
+        return buf;
+    }
+    static void __glide_write_str(const char* s) { fputs(s, stdout); }
+    static void __glide_write_bytes(const char* s, int n) {
+        if (n > 0) fwrite(s, 1, (size_t)n, stdout);
+    }
+    static void __glide_flush_stdout(void) { fflush(stdout); }
+    static void __glide_log(const char* s) {
+        fputs(s, stderr); fputc('\n', stderr); fflush(stderr);
+    }
+    #endif
+    #endif // GLIDE_IO_VIA_CRAW
 
 
+// ============================ scheduler runtime ============================
+#include <pthread.h>
+#include <stdatomic.h>
+#include <time.h>
+#include <stdint.h>
+#include <stdlib.h>
+#ifdef _WIN32
+/* winsock2.h must precede windows.h on MinGW / mingw-w64; the seed's
+   socket runtime later includes winsock2.h, so include it here too to
+   keep the order well-defined regardless of which template lands first
+   in the emitted bootstrap.c. */
+# include <winsock2.h>
+# include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */
+#else
+# include <unistd.h>
+# include <sys/mman.h>
+#endif
+
+/* Spinlock — 5-10× faster than pthread_mutex for the short critical
+   sections we use (queue push/pop, pool head update). Falls back to
+   `pause` on contention to be hyperthread-friendly. */
+typedef atomic_int __glide_spin_t;
+static inline void __glide_spin_lock(__glide_spin_t* l) {
+    while (atomic_exchange_explicit(l, 1, memory_order_acquire) == 1) {
+        while (atomic_load_explicit(l, memory_order_relaxed) == 1) {
+#if defined(__x86_64__) || defined(_M_X64)
+            __asm__ __volatile__("pause" ::: "memory");
+#endif
+        }
+    }
+}
+static inline void __glide_spin_unlock(__glide_spin_t* l) {
+    atomic_store_explicit(l, 0, memory_order_release);
+}
+
+/* Stack defaults: configured size + 4 KB guard, page-rounded up.
+   With the default 4 KB the total reservation is 8 KB virtual per coro.
+   Linux/Mac mmap commits pages lazily; Windows commits virtual but the
+   working-set is bound only on first access. Either way idle coros pay
+   ~one 4 KB page in physical RAM.
+   Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)
+   need pointer-map metadata + copy/relocate — TBD. */
+#define __GLIDE_STACK_GUARD 4096
+static int __glide_stack_size = 4096;
+
+/* Custom assembly context switch — replaces Win32 Fibers and POSIX
+   ucontext.h with our own portable, ABI-correct register flip. The
+   reason: Fibers crash if the same fiber is SwitchToFiber'd by
+   different OS threads over its lifetime, which forces us to pin
+   coros to a single worker and rules out work-stealing. With our
+   own switch we own the entire state, so a coro can move between
+   workers safely.
+
+   Layout: callee-saved GP regs + (Win64 only) callee-saved XMM6-15.
+   Caller-saved registers (rax/rcx/rdx/...) were already flushed to the
+   caller's stack frame by the compiler before it called us, so we don't
+   touch them. SysV marks XMM as caller-saved → no extra work there. */
+typedef struct {
+#ifdef _WIN32
+    void* rsp; void* rbx; void* rbp;
+    void* rdi; void* rsi;
+    void* r12; void* r13; void* r14; void* r15;
+    char xmm[160];
+#else
+    void* rsp; void* rbx; void* rbp;
+    void* r12; void* r13; void* r14; void* r15;
+#endif
+} __glide_coro_ctx;
+
+__attribute__((naked, noinline))
+static void __glide_ctx_switch(
+    __glide_coro_ctx* from __attribute__((unused)),
+    __glide_coro_ctx* to   __attribute__((unused))) {
+#ifdef _WIN32
+    /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */
+    __asm__(
+        "movq %rsp,   0(%rcx)\n\t"
+        "movq %rbx,   8(%rcx)\n\t"
+        "movq %rbp,  16(%rcx)\n\t"
+        "movq %rdi,  24(%rcx)\n\t"
+        "movq %rsi,  32(%rcx)\n\t"
+        "movq %r12,  40(%rcx)\n\t"
+        "movq %r13,  48(%rcx)\n\t"
+        "movq %r14,  56(%rcx)\n\t"
+        "movq %r15,  64(%rcx)\n\t"
+        "movdqu %xmm6,   72(%rcx)\n\t"
+        "movdqu %xmm7,   88(%rcx)\n\t"
+        "movdqu %xmm8,  104(%rcx)\n\t"
+        "movdqu %xmm9,  120(%rcx)\n\t"
+        "movdqu %xmm10, 136(%rcx)\n\t"
+        "movdqu %xmm11, 152(%rcx)\n\t"
+        "movdqu %xmm12, 168(%rcx)\n\t"
+        "movdqu %xmm13, 184(%rcx)\n\t"
+        "movdqu %xmm14, 200(%rcx)\n\t"
+        "movdqu %xmm15, 216(%rcx)\n\t"
+        "movq  0(%rdx), %rsp\n\t"
+        "movq  8(%rdx), %rbx\n\t"
+        "movq 16(%rdx), %rbp\n\t"
+        "movq 24(%rdx), %rdi\n\t"
+        "movq 32(%rdx), %rsi\n\t"
+        "movq 40(%rdx), %r12\n\t"
+        "movq 48(%rdx), %r13\n\t"
+        "movq 56(%rdx), %r14\n\t"
+        "movq 64(%rdx), %r15\n\t"
+        "movdqu  72(%rdx), %xmm6\n\t"
+        "movdqu  88(%rdx), %xmm7\n\t"
+        "movdqu 104(%rdx), %xmm8\n\t"
+        "movdqu 120(%rdx), %xmm9\n\t"
+        "movdqu 136(%rdx), %xmm10\n\t"
+        "movdqu 152(%rdx), %xmm11\n\t"
+        "movdqu 168(%rdx), %xmm12\n\t"
+        "movdqu 184(%rdx), %xmm13\n\t"
+        "movdqu 200(%rdx), %xmm14\n\t"
+        "movdqu 216(%rdx), %xmm15\n\t"
+        "ret\n\t"
+    );
+#else
+    /* SysV AMD64 ABI: from=%rdi, to=%rsi */
+    __asm__(
+        "movq %rsp,   0(%rdi)\n\t"
+        "movq %rbx,   8(%rdi)\n\t"
+        "movq %rbp,  16(%rdi)\n\t"
+        "movq %r12,  24(%rdi)\n\t"
+        "movq %r13,  32(%rdi)\n\t"
+        "movq %r14,  40(%rdi)\n\t"
+        "movq %r15,  48(%rdi)\n\t"
+        "movq  0(%rsi), %rsp\n\t"
+        "movq  8(%rsi), %rbx\n\t"
+        "movq 16(%rsi), %rbp\n\t"
+        "movq 24(%rsi), %r12\n\t"
+        "movq 32(%rsi), %r13\n\t"
+        "movq 40(%rsi), %r14\n\t"
+        "movq 48(%rsi), %r15\n\t"
+        "ret\n\t"
+    );
+#endif
+}
+
+typedef void* (*__glide_task_fn)(void*);
+typedef struct __glide_task {
+    __glide_coro_ctx    ctx;     /* register save area */
+    void*               stack;   /* mmap/VirtualAlloc base (low addr) */
+    size_t              stack_total; /* bytes including guard page */
+    __glide_task_fn     entry;
+    void*               arg;
+    int                 state; /* 0=ready 1=running 2=blocked 3=done */
+    int                 home_worker; /* worker that currently owns this coro;
+                                       updated on steal so future unparks land
+                                       on the thief's queue (cache-warm). */
+    int                 has_run;     /* 0 if never run; once 1, we never
+                                       migrate the coro across OS threads (Win64
+                                       SEH/TIB invariants make resumed-on-other-
+                                       thread fragile, so first-run-only steal). */
+    struct __glide_task* next;       /* link in per-worker ready queue */
+    struct __glide_task* wait_next;  /* link in chan wait list */
+    /* Park hand-off: if non-null on switch-back to worker fiber,
+       worker links self into *park_list and unlocks park_lock.
+       Done after the switch so unpark can never race with a
+       still-mid-switch coro. Either park_lock OR park_spin is set
+       per park call, not both — the I/O reactor uses a spinlock per
+       fd because the critical sections are 5-10 ns and futex-backed
+       pthread_mutex was 2.5 % of the keep-alive HTTP hot path. */
+    pthread_mutex_t*     park_lock;
+    __glide_spin_t*      park_spin;
+    struct __glide_task** park_list;
+} __glide_task;
+
+/* Forward decls — out-of-order references between sleep_ms / __glide_park /
+   __glide_timer_main / sched_init / task pool helpers used by worker_main. */
+static void* __glide_timer_main(void* unused);
+int __glide_park(pthread_mutex_t* lock, __glide_task** list);
+void __glide_free_task(__glide_task* t);
+static void __glide_reset_ctx(__glide_task* t);
+static void __glide_flush_main_buf(void);
+
+/* Per-worker queue: each worker pops only from its own queue, so a
+   fiber that first ran on worker A always continues on A. This avoids
+   cross-thread fiber migration which crashes Win32 Fibers. Stealing
+   between workers comes in Phase 1.2 (with proper atomic ownership). */
+typedef struct {
+    __glide_spin_t  spin;
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;
+    __glide_task*   head;
+    __glide_task*   tail;
+    atomic_int      idle;
+} __glide_wq;
+
+/* Sorted sleep queue for the timer thread. Coroutines that call
+   sleep_ms park here instead of blocking their worker. */
+typedef struct __glide_timer_node {
+    long long              deadline_ns;
+    __glide_task*          task;
+    struct __glide_timer_node* next;
+} __glide_timer_node;
+static __glide_timer_node* __glide_timer_head = NULL;
+static pthread_mutex_t __glide_timer_mu;
+static pthread_cond_t  __glide_timer_cv;
+static pthread_t __glide_timer_thread;
+static int __glide_timer_inited = 0;
+
+static __glide_wq* __glide_wqs = NULL;
+static int __glide_q_inited = 0;
+static int __glide_n_workers = 0;
+static pthread_t* __glide_workers = NULL;
+/* Pending count, sharded per worker so increments and decrements don't all bounce
+   the same cache line. Spawn increments shards[home_worker]; the worker that runs
+   the task decrements shards[my_worker]. Sum across shards = total alive tasks.
+   Each shard is its own cache line to kill false sharing between threads. */
+typedef struct {
+    atomic_int v;
+    char _pad[60];
+} __glide_pending_shard_t;
+static __glide_pending_shard_t* __glide_pending_shards = NULL;
+static int __glide_pending_n_shards = 0;
+static int __glide_pending_sum(void) {
+    int sum = 0;
+    int n = __glide_pending_n_shards;
+    for (int i = 0; i < n; i++) {
+        sum += atomic_load_explicit(&__glide_pending_shards[i].v, memory_order_acquire);
+    }
+    return sum;
+}
+static atomic_int __glide_shutdown = 0;
+static atomic_int __glide_rr = 0;        /* round-robin spawn counter */
+
+static _Thread_local __glide_task* __glide_cur_task = NULL;
+static _Thread_local int __glide_my_worker = -1;
+/* Worker's saved context. Each OS thread has its own — when a coro
+   parks/yields, we ctx_switch INTO this so the worker resumes its
+   loop right after the call site. */
+static _Thread_local __glide_coro_ctx __glide_worker_ctx;
+#ifdef _WIN32
+/* Original OS-thread stack range — saved on worker entry, restored
+   when no coro is running. Win64 SEH walks the stack via TIB, so we
+   must point TIB at the coro's stack while it runs and back at the
+   OS thread's stack between switches. Without this, any code path that
+   raises an exception or probes the stack from a migrated coro reads
+   garbage and crashes. */
+static _Thread_local void* __glide_orig_stack_base = NULL;
+static _Thread_local void* __glide_orig_stack_limit = NULL;
+static inline void __glide_tib_set_stack(void* base, void* limit) {
+    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+    tib->StackBase = base;
+    tib->StackLimit = limit;
+}
+#endif
+
+/* Perf counters defined further below; forward-declare here so the
+   queue push helpers can bump them. */
+extern atomic_long __glide_perf_q_pushes;
+extern atomic_long __glide_perf_cv_signals;
+
+static void __glide_q_push_to(int wid, __glide_task* t) {
+    __glide_wq* q = &__glide_wqs[wid];
+    __glide_spin_lock(&q->spin);
+    t->next = NULL;
+    if (q->tail) q->tail->next = t; else q->head = t;
+    q->tail = t;
+    __glide_spin_unlock(&q->spin);
+    atomic_fetch_add_explicit(&__glide_perf_q_pushes, 1, memory_order_relaxed);
+    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {
+        pthread_mutex_lock(&q->mu);
+        pthread_cond_signal(&q->cv);
+        pthread_mutex_unlock(&q->mu);
+        atomic_fetch_add_explicit(&__glide_perf_cv_signals, 1, memory_order_relaxed);
+    }
+}
+
+/* Splice a pre-built chain (head ... tail, n nodes, NULL-terminated) onto
+   the back of a worker's queue under one spinlock acquisition. Used by main's
+   batched-push path so 32 spawns cost ~1 lock instead of 32. */
+static void __glide_q_push_chain(int wid, __glide_task* head, __glide_task* tail, int n) {
+    if (!head) return; (void)n;
+    __glide_wq* q = &__glide_wqs[wid];
+    __glide_spin_lock(&q->spin);
+    if (q->tail) q->tail->next = head; else q->head = head;
+    q->tail = tail;
+    __glide_spin_unlock(&q->spin);
+    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {
+        pthread_mutex_lock(&q->mu);
+        pthread_cond_broadcast(&q->cv);
+        pthread_mutex_unlock(&q->mu);
+    }
+}
+
+/* Sticky preferred worker for OS threads that aren't part of the M:N
+   pool. Main thread gets the first slot (W0); subsequent spawn_thread
+   callers (accept loops in http_listen_workers, for example) round-
+   robin over the rest so they don't all dogpile W0's spinlock + cv. */
+static _Thread_local int __glide_outside_pref_worker = -1;
+static atomic_int        __glide_next_outside_pref   = 0;
+
+static int __glide_pick_worker(void) {
+    /* Inside a coro: same worker as caller (cheap, keeps cache hot). */
+    if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;
+    /* Outside: stick to one worker per OS thread. Single-main-thread
+       case still resolves to W0 (it asks first), so the well-trodden
+       hot path is unchanged. The win shows up when there are 2+
+       non-coro spawners in the same process. */
+    if (__glide_outside_pref_worker < 0) {
+        int next = atomic_fetch_add_explicit(&__glide_next_outside_pref, 1,
+                                             memory_order_relaxed);
+        int n = __glide_n_workers;
+        if (n <= 0) n = 1;
+        __glide_outside_pref_worker = next % n;
+    }
+    return __glide_outside_pref_worker;
+}
+
+/* Work-stealing: when our queue is empty, try grabbing the head of
+   another worker's queue (random victim, walk all on miss). On steal
+   we adopt the task as our own (home_worker = me) so future unparks
+   stay cache-warm here. Now safe to migrate because our custom ctx
+   switch is stateless across threads — no Win32 Fiber crash trap. */
+static atomic_uint __glide_steal_rr = 0;
+static __glide_task* __glide_try_steal(void) {
+    int n = __glide_n_workers;
+    if (n <= 1) return NULL;
+    int my = __glide_my_worker;
+    unsigned int seed = atomic_fetch_add_explicit(&__glide_steal_rr, 1, memory_order_relaxed);
+    int start = (int)(seed % (unsigned int)n);
+    for (int i = 0; i < n; i++) {
+        int v = (start + i) % n;
+        if (v == my) continue;
+        __glide_wq* q = &__glide_wqs[v];
+        __glide_spin_lock(&q->spin);
+        /* Walk queue head: only first-run-untouched tasks are stealable. */
+        __glide_task* prev = NULL;
+        __glide_task* t = q->head;
+        while (t && t->has_run) { prev = t; t = t->next; }
+        if (t) {
+            if (prev) prev->next = t->next; else q->head = t->next;
+            if (q->tail == t) q->tail = prev;
+            __glide_spin_unlock(&q->spin);
+            t->home_worker = my;
+            t->next = NULL;
+            return t;
+        }
+        __glide_spin_unlock(&q->spin);
+    }
+    return NULL;
+}
+
+static __glide_task* __glide_q_pop_my(void) {
+    __glide_wq* q = &__glide_wqs[__glide_my_worker];
+    while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {
+        __glide_spin_lock(&q->spin);
+        __glide_task* t = q->head;
+        if (t) {
+            q->head = t->next;
+            if (q->head == NULL) q->tail = NULL;
+            __glide_spin_unlock(&q->spin);
+            return t;
+        }
+        __glide_spin_unlock(&q->spin);
+        __glide_task* stolen = __glide_try_steal();
+        if (stolen) return stolen;
+        pthread_mutex_lock(&q->mu);
+        if (q->head || atomic_load(&__glide_shutdown)) {
+            pthread_mutex_unlock(&q->mu);
+            continue;
+        }
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 500000;
+        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+        atomic_store_explicit(&q->idle, 1, memory_order_relaxed);
+        pthread_cond_timedwait(&q->cv, &q->mu, &ts);
+        atomic_store_explicit(&q->idle, 0, memory_order_relaxed);
+        pthread_mutex_unlock(&q->mu);
+    }
+    return NULL;
+}
+
+/* Trampoline reached on a coro's first switch-in. Reads the bound
+   task from TLS (worker_main set __glide_cur_task before switching),
+   runs the user fn, marks done, then hands control back to the worker
+   via ctx_switch. The final switch never returns: we discard the saved
+   ctx (worker is going to free us anyway). */
+static void __glide_coro_trampoline(void) {
+    __glide_task* t = __glide_cur_task;
+    (void)t->entry(t->arg);
+    t->state = 3;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+    __builtin_unreachable();
+}
+
+/* Stack pool: hold a small free list of recently-freed regions so a
+   spawn-burst doesn't pay mmap+munmap (Linux) / VirtualAlloc+VirtualFree
+   (Win) per coro. Significant on Windows where these are slow syscalls. */
+typedef struct __glide_stack_node {
+    void*  base;
+    size_t total;
+    struct __glide_stack_node* next;
+} __glide_stack_node;
+static __glide_stack_node* __glide_stack_pool = NULL;
+static int __glide_stack_pool_count = 0;
+static const int __GLIDE_STACK_POOL_MAX = 16384;
+static __glide_spin_t __glide_stack_pool_spin = 0;
+
+/* Stack allocator: mmap (POSIX) or VirtualAlloc (Win) so unused pages
+   stay uncommitted (Linux/Mac) and overflow into the guard page raises
+   SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the
+   neighbour stack. Returns the LOW address of the whole region; usable
+   stack starts at `base + __GLIDE_STACK_GUARD`. */
+static void* __glide_alloc_stack(size_t* out_total) {
+    size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;
+    size_t page = 4096;
+    total = (total + page - 1) & ~(page - 1);
+    /* Pool fast path. */
+    __glide_spin_lock(&__glide_stack_pool_spin);
+    __glide_stack_node* n = __glide_stack_pool;
+    while (n && n->total != total) n = n->next;
+    if (n && n->total == total) {
+        /* Unlink first matching node. */
+        __glide_stack_node** p = &__glide_stack_pool;
+        while (*p != n) p = &(*p)->next;
+        *p = n->next;
+        __glide_stack_pool_count--;
+        __glide_spin_unlock(&__glide_stack_pool_spin);
+        void* base = n->base;
+        free(n);
+        *out_total = total;
+        return base;
+    }
+    __glide_spin_unlock(&__glide_stack_pool_spin);
+    void* base;
+#ifdef _WIN32
+    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    if (!base) return NULL;
+    DWORD old;
+    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);
+#else
+    base = mmap(NULL, total, PROT_READ|PROT_WRITE,
+                MAP_ANON|MAP_PRIVATE, -1, 0);
+    if (base == MAP_FAILED) return NULL;
+    mprotect(base, __GLIDE_STACK_GUARD, PROT_NONE);
+#endif
+    *out_total = total;
+    return base;
+}
+
+static void __glide_free_stack(void* base, size_t total) {
+    if (!base) return;
+    /* Hand back to pool if there's room. */
+    __glide_spin_lock(&__glide_stack_pool_spin);
+    if (__glide_stack_pool_count < __GLIDE_STACK_POOL_MAX) {
+        __glide_stack_node* n = (__glide_stack_node*)malloc(sizeof(*n));
+        n->base = base;
+        n->total = total;
+        n->next = __glide_stack_pool;
+        __glide_stack_pool = n;
+        __glide_stack_pool_count++;
+        __glide_spin_unlock(&__glide_stack_pool_spin);
+        return;
+    }
+    __glide_spin_unlock(&__glide_stack_pool_spin);
+#ifdef _WIN32
+    (void)total;
+    VirtualFree(base, 0, MEM_RELEASE);
+#else
+    munmap(base, total);
+#endif
+}
+
+/* Plant trampoline address at the top of the stack so the first
+   ctx_switch into this ctx pops it and `ret`s into the trampoline.
+   16-byte alignment matches the AMD64 call ABI: we save RSP at a
+   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees
+   RSP%16==8 (which is what `call` would have left). */
+static void __glide_coro_init(__glide_task* t) {
+    size_t total = 0;
+    t->stack = __glide_alloc_stack(&total);
+    t->stack_total = total;
+    char* top = (char*)t->stack + total;
+    top -= 16;                       /* headroom — never write past top */
+    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
+    *(void**)sp = (void*)__glide_coro_trampoline;
+    t->ctx.rsp = (void*)sp;
+    t->ctx.rbx = 0; t->ctx.rbp = 0;
+    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;
+#ifdef _WIN32
+    t->ctx.rdi = 0; t->ctx.rsi = 0;
+#endif
+}
+
+static void __glide_coro_destroy(__glide_task* t) {
+    __glide_free_stack(t->stack, t->stack_total);
+    t->stack = NULL;
+    t->stack_total = 0;
+}
+
+static void* __glide_worker_main(void* arg) {
+    __glide_my_worker = (int)(intptr_t)arg;
+#ifdef _WIN32
+    /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit
+       to the coro's region while it runs and back to ours between switches. */
+    {
+        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+        __glide_orig_stack_base = tib->StackBase;
+        __glide_orig_stack_limit = tib->StackLimit;
+    }
+#endif
+    while (!atomic_load(&__glide_shutdown)) {
+        __glide_task* t = __glide_q_pop_my();
+        if (!t) break;
+        __glide_cur_task = t;
+        if (!t->has_run) __glide_reset_ctx(t);
+        t->state = 1;
+        t->has_run = 1;  /* stick to this OS thread from now on */
+#ifdef _WIN32
+        __glide_tib_set_stack((char*)t->stack + t->stack_total, t->stack);
+#endif
+        __glide_ctx_switch(&__glide_worker_ctx, &t->ctx);
+#ifdef _WIN32
+        __glide_tib_set_stack(__glide_orig_stack_base, __glide_orig_stack_limit);
+#endif
+        __glide_cur_task = NULL;
+        if (t->state == 3) {
+            __glide_free_task(t);  /* pool reuse — keeps stack mmap'd */
+            /* Single atomic on this worker's shard. The previous code also did a
+               cross-queue cv broadcast when total pending hit zero, but
+               sched_shutdown busy-waits on pending_sum and broadcasts itself once
+               shutdown=1, so this hot-path broadcast is redundant. */
+            atomic_fetch_sub_explicit(&__glide_pending_shards[__glide_my_worker].v, 1, memory_order_acq_rel);
+        } else if (t->state == 2) {
+            /* Parked. Complete the hand-off: link into wait list,
+               release the lock the parker held. After this point
+               unpark may safely queue the task. */
+            if (t->park_list) {
+                t->wait_next = *t->park_list;
+                *t->park_list = t;
+                t->park_list = NULL;
+            }
+            if (t->park_lock) {
+                pthread_mutex_unlock(t->park_lock);
+                t->park_lock = NULL;
+            } else if (t->park_spin) {
+                __glide_spin_unlock(t->park_spin);
+                t->park_spin = NULL;
+            }
+        } else {
+            t->state = 0;
+            __glide_q_push_to(t->home_worker, t);
+        }
+    }
+    return NULL;
+}
+
+#ifndef _WIN32
+#include <signal.h>
+static void __glide_perf_sigusr2(int sig) {
+    (void)sig;
+    extern void __glide_perf_dump(void);
+    __glide_perf_dump();
+}
+#endif
+
+void __glide_sched_init(void) {
+    if (__glide_q_inited) return;
+#ifndef _WIN32
+    /* SIGUSR2 dumps the perf counters and resets them — used by the
+       bench scripts to read parks/q_pushes/cv_signals across a wrk run. */
+    signal(SIGUSR2, __glide_perf_sigusr2);
+#endif
+    const char* env_stk = getenv("GLIDE_CORO_STACK");
+    if (env_stk) {
+        int n = atoi(env_stk);
+        if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */
+    }
+    const char* env = getenv("GLIDE_WORKERS");
+    if (env) __glide_n_workers = atoi(env);
+    if (__glide_n_workers <= 0) {
+        int ncpu;
+#ifdef _WIN32
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        ncpu = (int)si.dwNumberOfProcessors;
+#else
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        ncpu = (n > 0) ? (int)n : 4;
+#endif
+        /* Cap default workers at 8. The M:N pool plus the reactor/timer
+           pthreads plus any spawn_thread accept loops the user adds are
+           all competing for CPU; on a 32-vCPU host scaling workers to
+           ncpu makes wakes/idles thrash the cv list and drops HTTP
+           throughput by 2× compared to 8 workers. Users can opt back
+           into ncpu via GLIDE_WORKERS=<n>. */
+        __glide_n_workers = ncpu < 8 ? ncpu : 8;
+    }
+    __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_mutex_init(&__glide_wqs[i].mu, NULL);
+        pthread_cond_init(&__glide_wqs[i].cv, NULL);
+    }
+    /* One shard per worker plus one for non-coro callers (main / arbitrary OS threads). */
+    __glide_pending_n_shards = __glide_n_workers + 1;
+    __glide_pending_shards = (__glide_pending_shard_t*)calloc(__glide_pending_n_shards, sizeof(__glide_pending_shard_t));
+    __glide_q_inited = 1;
+    __glide_workers = (pthread_t*)malloc(sizeof(pthread_t) * __glide_n_workers);
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_create(&__glide_workers[i], NULL, __glide_worker_main, (void*)(intptr_t)i);
+    }
+    pthread_mutex_init(&__glide_timer_mu, NULL);
+    pthread_cond_init(&__glide_timer_cv, NULL);
+    __glide_timer_inited = 1;
+    pthread_create(&__glide_timer_thread, NULL, __glide_timer_main, NULL);
+}
+
+void __glide_sched_shutdown(void) {
+    if (!__glide_q_inited) return;
+    __glide_flush_main_buf();
+    while (__glide_pending_sum() > 0) {
+        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;
+        nanosleep(&ts, NULL);
+    }
+    atomic_store(&__glide_shutdown, 1);
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_mutex_lock(&__glide_wqs[i].mu);
+        pthread_cond_broadcast(&__glide_wqs[i].cv);
+        pthread_mutex_unlock(&__glide_wqs[i].mu);
+    }
+    for (int i = 0; i < __glide_n_workers; i++) {
+        pthread_join(__glide_workers[i], NULL);
+    }
+    if (__glide_timer_inited) {
+        pthread_mutex_lock(&__glide_timer_mu);
+        pthread_cond_broadcast(&__glide_timer_cv);
+        pthread_mutex_unlock(&__glide_timer_mu);
+        pthread_join(__glide_timer_thread, NULL);
+        __glide_timer_inited = 0;
+    }
+    free(__glide_workers); __glide_workers = NULL;
+    free(__glide_wqs); __glide_wqs = NULL;
+    free(__glide_pending_shards); __glide_pending_shards = NULL;
+    __glide_pending_n_shards = 0;
+    __glide_q_inited = 0;
+}
+
+/* Task pool: full task structs (stack + ctx already initialized). On reuse
+   we just rewind the trampoline pointer at the top of the existing stack —
+   no mmap, no calloc, no setup work. Burst spawns become ~1 mutex + 1 push. */
+static __glide_task* __glide_task_pool = NULL;
+static int __glide_task_pool_count = 0;
+static const int __GLIDE_TASK_POOL_MAX = 16384;
+static __glide_spin_t __glide_task_pool_spin = 0;
+
+/* Per-thread magazine. The global pool's spinlock is the spawn hot-path
+   bottleneck under burst load (13 threads contending). Each thread keeps a
+   small LIFO; alloc/free hit it lock-free, and we only touch the global pool
+   in batches when the magazine fills or drains. Reduces global ops ~32x. */
+#define __GLIDE_TLS_POOL_MAX 256
+#define __GLIDE_TLS_POOL_BATCH 64
+static __thread __glide_task* __glide_tls_pool = NULL;
+static __thread int __glide_tls_pool_count = 0;
+
+static void __glide_reset_ctx(__glide_task* t) {
+    char* top = (char*)t->stack + t->stack_total;
+    top -= 16;
+    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
+    *(void**)sp = (void*)__glide_coro_trampoline;
+    t->ctx.rsp = (void*)sp;
+    /* GP/XMM regs zeroed via 8-byte stores — faster than memset for
+       this fixed-size struct, and the compiler vectorizes if it cares. */
+    t->ctx.rbx = 0; t->ctx.rbp = 0;
+    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;
+#ifdef _WIN32
+    t->ctx.rdi = 0; t->ctx.rsi = 0;
+    /* xmm[160] = 20 × 8 bytes; unrolled clear for branchless write. */
+    uint64_t* x = (uint64_t*)t->ctx.xmm;
+    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;
+    x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;
+    x[16]=0; x[17]=0; x[18]=0; x[19]=0;
+#endif
+}
+
+/* No-op now: state/has_run/wait_next/park_lock/park_list are cleared at FREE time
+   instead, so the spawn hot path on main has fewer stores. The reset_ctx clear
+   already moved to worker_main earlier (gated on has_run==0). Inlined since callers
+   sometimes need the return value. */
+static inline __glide_task* __glide_finish_alloc(__glide_task* t) { return t; }
+
+__glide_task* __glide_alloc_task(void) {
+    /* Magazine fast path: pop without ever touching the spinlock. */
+    __glide_task* t = __glide_tls_pool;
+    if (t) {
+        __glide_tls_pool = t->next;
+        __glide_tls_pool_count--;
+        return __glide_finish_alloc(t);
+    }
+    /* Magazine empty: refill a batch in one global-lock acquisition. */
+    __glide_spin_lock(&__glide_task_pool_spin);
+    t = __glide_task_pool;
+    if (t) {
+        __glide_task_pool = t->next;
+        __glide_task_pool_count--;
+        __glide_task* head = NULL;
+        int taken = 0;
+        while (taken < __GLIDE_TLS_POOL_BATCH - 1 && __glide_task_pool) {
+            __glide_task* x = __glide_task_pool;
+            __glide_task_pool = x->next;
+            __glide_task_pool_count--;
+            x->next = head;
+            head = x;
+            taken++;
+        }
+        __glide_spin_unlock(&__glide_task_pool_spin);
+        __glide_tls_pool = head;
+        __glide_tls_pool_count = taken;
+        return __glide_finish_alloc(t);
+    }
+    __glide_spin_unlock(&__glide_task_pool_spin);
+    /* Pool fully drained: fresh allocation. */
+    t = (__glide_task*)calloc(1, sizeof(__glide_task));
+    __glide_coro_init(t);
+    return t;
+}
+
+void __glide_free_task(__glide_task* t) {
+    /* Reset all the per-task transient fields here, on the worker thread that's
+       freeing — main's spawn hot path was paying for these N stores per task. */
+    t->state = 0; t->has_run = 0;
+    t->wait_next = NULL;
+    t->park_lock = NULL; t->park_spin = NULL; t->park_list = NULL;
+    if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {
+        t->next = __glide_tls_pool;
+        __glide_tls_pool = t;
+        __glide_tls_pool_count++;
+        return;
+    }
+    /* Magazine full: flush BATCH (this task + last BATCH-1 from TLS) to global. */
+    /* `t` may carry a stale ->next from the run queue; null it so the chain
+       we're about to build terminates cleanly when we walk it for overflow. */
+    t->next = NULL;
+    __glide_task* batch = t;
+    int batch_n = 1;
+    while (batch_n < __GLIDE_TLS_POOL_BATCH && __glide_tls_pool) {
+        __glide_task* x = __glide_tls_pool;
+        __glide_tls_pool = x->next;
+        __glide_tls_pool_count--;
+        x->next = batch;
+        batch = x;
+        batch_n++;
+    }
+    __glide_spin_lock(&__glide_task_pool_spin);
+    int room = __GLIDE_TASK_POOL_MAX - __glide_task_pool_count;
+    int put = (room < batch_n) ? room : batch_n;
+    __glide_task* overflow = batch;
+    if (put > 0) {
+        __glide_task* tail = batch;
+        for (int i = 0; i < put - 1; i++) tail = tail->next;
+        overflow = tail->next;
+        tail->next = __glide_task_pool;
+        __glide_task_pool = batch;
+        __glide_task_pool_count += put;
+    }
+    __glide_spin_unlock(&__glide_task_pool_spin);
+    while (overflow) {
+        __glide_task* x = overflow;
+        overflow = x->next;
+        __glide_coro_destroy(x);
+        free(x);
+    }
+}
+
+/* Per-OS-thread spawn buffer for the from-main path. Batching 32 spawns into
+   one queue lock acquisition cuts spinlock contention dramatically when burst-
+   spawning into W0. pending is incremented immediately (per spawn) so callers'
+   `pending_count()` busy-waits don't observe a stale-low value while tasks sit
+   in the buffer. The flush is triggered by buffer-full, by sched_shutdown, and
+   by pending_count itself (so wait loops can never deadlock on unflushed work). */
+#define __GLIDE_MAIN_BATCH 16
+static _Thread_local __glide_task* __glide_main_buf_head = NULL;
+static _Thread_local __glide_task* __glide_main_buf_tail = NULL;
+static _Thread_local int __glide_main_buf_count = 0;
+static void __glide_flush_main_buf(void) {
+    if (!__glide_main_buf_head) return;
+    /* Match the per-thread sticky worker chosen by __glide_pick_worker
+       above, so the chain lands on the same queue the tasks' home_worker
+       points at. Otherwise work-stealing has to immediately re-route. */
+    int target = __glide_outside_pref_worker;
+    if (target < 0) target = 0;
+    __glide_q_push_chain(target, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);
+    __glide_main_buf_head = NULL;
+    __glide_main_buf_tail = NULL;
+    __glide_main_buf_count = 0;
+}
+
+void __glide_spawn(__glide_task_fn fn, void* arg) {
+    __glide_task* t = __glide_alloc_task();
+    t->entry = fn;
+    t->arg = arg;
+    t->home_worker = __glide_pick_worker();
+    /* Increment the SPAWNER's shard, not the home_worker's. With main always
+       picking W0, sharding by home_worker would put every increment on shard[0] and
+       defeat the whole point. Spawner-thread keeps main's stream separate. */
+    int __sidx = (__glide_my_worker >= 0) ? __glide_my_worker : __glide_n_workers;
+    atomic_fetch_add_explicit(&__glide_pending_shards[__sidx].v, 1, memory_order_relaxed);
+    if (__glide_cur_task != NULL && __glide_my_worker >= 0) {
+        /* Inside a coro: same-thread same-queue, spinlock is uncontended. */
+        __glide_q_push_to(t->home_worker, t);
+        return;
+    }
+    /* Outside (main / pthread): buffer locally, flush in batches. */
+    t->next = NULL;
+    if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;
+    else __glide_main_buf_head = t;
+    __glide_main_buf_tail = t;
+    __glide_main_buf_count++;
+    if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) __glide_flush_main_buf();
+}
+
+void yield_now(void) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) return;
+    t->state = 0;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+}
+
+int pending_count(void) {
+    /* Flush any locally-buffered spawns before reading; otherwise a busy-wait
+       like `while pending_count() > 0 {}` could hold tasks in the buffer forever. */
+    if (__glide_cur_task == NULL) __glide_flush_main_buf();
+    return __glide_pending_sum();
+}
+
+int64_t now_ns(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq; static int inited = 0;
+    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }
+    LARGE_INTEGER c; QueryPerformanceCounter(&c);
+    return (int64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+#endif
+}
+
+static long long __glide_monotonic_ns(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq; static int inited = 0;
+    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }
+    LARGE_INTEGER c; QueryPerformanceCounter(&c);
+    return (long long)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+#endif
+}
+
+/* Timer thread: sleeps until the head deadline, unparks expired tasks. */
+static void* __glide_timer_main(void* unused) {
+    (void)unused;
+    pthread_mutex_lock(&__glide_timer_mu);
+    while (!atomic_load(&__glide_shutdown)) {
+        if (__glide_timer_head == NULL) {
+            pthread_cond_wait(&__glide_timer_cv, &__glide_timer_mu);
+            continue;
+        }
+        long long now = __glide_monotonic_ns();
+        if (__glide_timer_head->deadline_ns <= now) {
+            __glide_timer_node* expired = __glide_timer_head;
+            __glide_timer_head = expired->next;
+            __glide_task* t = expired->task;
+            free(expired);
+            pthread_mutex_unlock(&__glide_timer_mu);
+            t->state = 0;
+            __glide_q_push_to(t->home_worker, t);
+            pthread_mutex_lock(&__glide_timer_mu);
+            continue;
+        }
+        long long delta = __glide_timer_head->deadline_ns - now;
+        struct timespec abst;
+#ifdef _WIN32
+        struct timespec _now_rt; clock_gettime(CLOCK_REALTIME, &_now_rt);
+        abst.tv_sec = _now_rt.tv_sec; abst.tv_nsec = _now_rt.tv_nsec;
+#else
+        clock_gettime(CLOCK_REALTIME, &abst);
+#endif
+        long long add_ns = abst.tv_nsec + delta;
+        abst.tv_sec  += (time_t)(add_ns / 1000000000LL);
+        abst.tv_nsec  = (long)(add_ns % 1000000000LL);
+        pthread_cond_timedwait(&__glide_timer_cv, &__glide_timer_mu, &abst);
+    }
+    pthread_mutex_unlock(&__glide_timer_mu);
+    return NULL;
+}
+
+void sleep_ms(int ms) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) {
+        /* Not in a coro - blocking sleep. Flush first so any spawns we just
+           queued aren't held in our local buffer while we sit here idle. */
+        __glide_flush_main_buf();
+#ifdef _WIN32
+        Sleep((DWORD)ms);
+#else
+        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (long)((ms % 1000)) * 1000000L;
+        nanosleep(&ts, NULL);
+#endif
+        return;
+    }
+    /* Coro - register on the timer queue, park, worker runs others. */
+    long long deadline = __glide_monotonic_ns() + (long long)ms * 1000000LL;
+    __glide_timer_node* node = (__glide_timer_node*)malloc(sizeof(__glide_timer_node));
+    node->deadline_ns = deadline;
+    node->task = t;
+    pthread_mutex_lock(&__glide_timer_mu);
+    __glide_timer_node** cur = &__glide_timer_head;
+    while (*cur && (*cur)->deadline_ns <= deadline) cur = &(*cur)->next;
+    node->next = *cur;
+    *cur = node;
+    /* Wake timer thread to recompute its deadline. */
+    pthread_cond_signal(&__glide_timer_cv);
+    /* Park: worker hand-off releases __glide_timer_mu after switch. */
+    __glide_park(&__glide_timer_mu, NULL);
+}
+
+/* Coro park: caller holds `lock` and wants to wait on `list`. Returns
+   1 if parked (caller must re-acquire `lock` and re-check state), 0
+   if the caller is not in a coroutine context (caller should fall
+   back to pthread_cond_wait). The actual list link + lock release is
+   done by the worker AFTER the fiber switch — that's how we avoid the
+   classic park/unpark race. */
+/* Counters: instrumented to confirm where the throughput cost is
+   coming from. Call __glide_perf_dump() to print and reset. Non-static
+   because __glide_q_push_to (defined earlier in this same TU) bumps
+   q_pushes / cv_signals via the forward decl above. */
+atomic_long __glide_perf_parks       = 0;
+atomic_long __glide_perf_spin_parks  = 0;
+atomic_long __glide_perf_unparks     = 0;
+atomic_long __glide_perf_q_pushes    = 0;
+atomic_long __glide_perf_cv_signals  = 0;
+
+void __glide_perf_dump(void) {
+    long p  = atomic_exchange(&__glide_perf_parks, 0);
+    long sp = atomic_exchange(&__glide_perf_spin_parks, 0);
+    long u  = atomic_exchange(&__glide_perf_unparks, 0);
+    long q  = atomic_exchange(&__glide_perf_q_pushes, 0);
+    long cs = atomic_exchange(&__glide_perf_cv_signals, 0);
+    fprintf(stderr,
+            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld\n",
+            p, sp, u, q, cs);
+}
+
+int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) {
+        /* Not in a coro — release the wait-list mutex the caller locked
+           (so the reactor pthread / other coros can still touch it),
+           flush main's pending spawn buffer so the workers see them
+           while main blocks, and signal a non-coro fallback to the caller. */
+        if (lock) pthread_mutex_unlock(lock);
+        __glide_flush_main_buf();
+        return 0;
+    }
+    atomic_fetch_add_explicit(&__glide_perf_parks, 1, memory_order_relaxed);
+    t->park_lock = lock;
+    t->park_list = list;
+    t->state = 2;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+    return 1;
+}
+
+/* Spinlock variant of __glide_park. Same protocol — caller holds the
+   spinlock, returns 1 parked / 0 non-coro fallback. Used by the I/O
+   reactor: per-fd waiter critical sections are 5-10 ns of list ops,
+   well below the futex-call overhead a pthread_mutex incurs. */
+int __glide_spin_park(__glide_spin_t* lock, __glide_task** list) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) {
+        if (lock) __glide_spin_unlock(lock);
+        __glide_flush_main_buf();
+        return 0;
+    }
+    atomic_fetch_add_explicit(&__glide_perf_spin_parks, 1, memory_order_relaxed);
+    t->park_spin = lock;
+    t->park_list = list;
+    t->state = 2;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+    return 1;
+}
+
+/* Caller holds the chan/mutex protecting the wait list. Pop the head and queue it. */
+void __glide_unpark_one(__glide_task** list) {
+    __glide_task* t = *list;
+    if (!t) return;
+    *list = t->wait_next;
+    t->wait_next = NULL;
+    t->state = 0;
+    atomic_fetch_add_explicit(&__glide_perf_unparks, 1, memory_order_relaxed);
+    __glide_q_push_to(t->home_worker, t);
+}
+
+
 
 
 // ============================ socket runtime =============================
@@ -1350,11 +1614,26 @@ static void __glide_wsa_ensure(void) {
 #else
 # include <sys/socket.h>
 # include <netinet/in.h>
+# include <netinet/tcp.h>   /* TCP_NODELAY */
 # include <unistd.h>
 # include <arpa/inet.h>
 typedef int __glide_sock_t;
 static void __glide_wsa_ensure(void) {}
 #endif
+
+/* Turn off Nagle on a freshly-accepted conn. With keep-alive +
+   small responses, Nagle would otherwise hold a write back up
+   to 40 ms waiting for an ACK to coalesce, dropping req/s by an
+   order of magnitude under wrk. */
+static void __glide_tcp_nodelay(int fd) {
+#ifndef _WIN32
+    int yes = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
+#else
+    int yes = 1;
+    setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
+#endif
+}
 
 int listen_tcp(int port) {
     __glide_wsa_ensure();
@@ -1366,6 +1645,55 @@ int listen_tcp(int port) {
 #endif
     int yes = 1;
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+#ifdef TCP_DEFER_ACCEPT
+    int defer = 1;
+    setsockopt(s, IPPROTO_TCP, TCP_DEFER_ACCEPT, (const char*)&defer, sizeof(defer));
+#endif
+    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((unsigned short)port);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return -1;
+    }
+    if (listen(s, 128) < 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return -1;
+    }
+    return (int)s;
+}
+
+int listen_tcp_reuseport(int port) {
+    __glide_wsa_ensure();
+    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);
+#ifdef _WIN32
+    if (s == INVALID_SOCKET) return -1;
+#else
+    if (s < 0) return -1;
+#endif
+    int yes = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+#ifdef SO_REUSEPORT
+    setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (const char*)&yes, sizeof(yes));
+#endif
+#ifdef TCP_DEFER_ACCEPT
+    /* Linux only. Kernel holds the accept until the client actually
+       writes data (or a 1 s timeout). With this on, accept returns an
+       fd that already has the request bytes ready, so the very first
+       read avoids the EAGAIN → reactor park → wake round-trip. Big win
+       for HTTP-style "connect, send, close" workloads. */
+    int defer = 1;
+    setsockopt(s, IPPROTO_TCP, TCP_DEFER_ACCEPT, (const char*)&defer, sizeof(defer));
+#endif
     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
@@ -1392,10 +1720,14 @@ int listen_tcp(int port) {
 int accept_tcp(int listener) {
 #ifdef _WIN32
     SOCKET c = accept((SOCKET)listener, NULL, NULL);
-    return (c == INVALID_SOCKET) ? -1 : (int)c;
+    if (c == INVALID_SOCKET) return -1;
+    __glide_tcp_nodelay((int)c);
+    return (int)c;
 #else
     int c = accept(listener, NULL, NULL);
-    return c < 0 ? -1 : c;
+    if (c < 0) return -1;
+    __glide_tcp_nodelay(c);
+    return c;
 #endif
 }
 
@@ -1419,10 +1751,18 @@ int tcp_write(int fd, void* buf, int n) {
 #endif
 }
 
+/* Defined in reactor.c (same translation unit). Tears down per-fd
+   waiter state so a recycled fd is not seen as already-registered
+   the next time tcp_read_async/write_async parks on it. */
+#ifndef _WIN32
+void __glide_io_close(int fd);
+#endif
+
 void tcp_close(int fd) {
 #ifdef _WIN32
     closesocket((SOCKET)fd);
 #else
+    __glide_io_close(fd);
     close(fd);
 #endif
 }
@@ -1473,14 +1813,19 @@ extern void __glide_flush_main_buf(void);
 
 /* Per-fd waiter state. Stored in epoll_event.data.ptr so the reactor
    thread can recover it on a wakeup without a separate lookup. Two
-   wait lists per fd because read and write may park independently. */
+   wait lists per fd because read and write may park independently.
+   The lock is a spinlock because the critical sections — link or
+   unlink one task on the wait list — are 5-10 ns. pthread_mutex was
+   2.5 % of the keep-alive HTTP hot path's CPU. */
 typedef struct __glide_io_waiter {
     int fd;
-    pthread_mutex_t mu;
+    __glide_spin_t spin;
     struct __glide_task* read_waiters;
     struct __glide_task* write_waiters;
     int registered;             /* 1 once added to epoll */
 } __glide_io_waiter;
+
+extern int  __glide_spin_park(__glide_spin_t* lock, struct __glide_task** list);
 
 /* Tiny open-addressing fd → waiter map. fds in a long-running server
    reuse low numbers, so a flat array is plenty (and faster than a
@@ -1510,7 +1855,7 @@ static __glide_io_waiter* __glide_io_get_or_create(int fd) {
     if (!w) {
         w = (__glide_io_waiter*)calloc(1, sizeof(__glide_io_waiter));
         w->fd = fd;
-        pthread_mutex_init(&w->mu, NULL);
+        /* spin starts at 0 from calloc, no init needed */
         __glide_waiters[fd] = w;
     }
     pthread_mutex_unlock(&__glide_waiters_mu);
@@ -1532,9 +1877,14 @@ static void __glide_io_register(__glide_io_waiter* w) {
 
 static void* __glide_reactor_loop(void* arg) {
     (void)arg;
-    struct epoll_event evs[64];
+    /* Bigger batch + longer block: each wake processes more events for
+       the price of one syscall, and we don't tick uselessly while there
+       is nothing to do. Sched_shutdown atomically flips reactor_running
+       and writes 1 byte to a stub fd if we ever need an instant wake;
+       for now the workload always has fds in the interest list. */
+    struct epoll_event evs[256];
     while (atomic_load(&__glide_reactor_running)) {
-        int n = epoll_wait(__glide_epoll_fd, evs, 64, 100);  /* 100 ms tick */
+        int n = epoll_wait(__glide_epoll_fd, evs, 256, 1000);
         if (n < 0) {
             if (errno == EINTR) continue;
             break;
@@ -1543,16 +1893,26 @@ static void* __glide_reactor_loop(void* arg) {
             __glide_io_waiter* w = (__glide_io_waiter*)evs[i].data.ptr;
             if (!w) continue;
             uint32_t m = evs[i].events;
-            pthread_mutex_lock(&w->mu);
-            if ((m & (EPOLLIN  | EPOLLERR | EPOLLHUP | EPOLLRDHUP))
-                && w->read_waiters) {
+            /* Skip the lock entirely when there is nobody to wake. The
+               read carries a torn-list risk for one direction, but a
+               level-triggered fd that still has data ready will trip
+               the next epoll_wait cycle anyway, so a missed wake here
+               just defers by one tick. The win: zero-waiter wakeups
+               (from spurious EPOLLOUT during write completion) cost
+               no mutex traffic on the hot path. */
+            int rd_ready = (m & (EPOLLIN  | EPOLLERR | EPOLLHUP | EPOLLRDHUP))
+                            && w->read_waiters;
+            int wr_ready = (m & (EPOLLOUT | EPOLLERR | EPOLLHUP))
+                            && w->write_waiters;
+            if (!rd_ready && !wr_ready) continue;
+            __glide_spin_lock(&w->spin);
+            if (rd_ready) {
                 while (w->read_waiters) __glide_unpark_one(&w->read_waiters);
             }
-            if ((m & (EPOLLOUT | EPOLLERR | EPOLLHUP))
-                && w->write_waiters) {
+            if (wr_ready) {
                 while (w->write_waiters) __glide_unpark_one(&w->write_waiters);
             }
-            pthread_mutex_unlock(&w->mu);
+            __glide_spin_unlock(&w->spin);
         }
     }
     return NULL;
@@ -1581,23 +1941,49 @@ static void __glide_set_nonblocking(int fd) {
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+/* Tear down our reactor state for `fd` before the caller calls close().
+   The kernel implicitly drops a closed fd from the interest list, but
+   we cache `registered` per-waiter — without this hook a fd that gets
+   recycled to a new connection would never be re-added to epoll, and
+   the next read/write park on it would block forever. Also wake any
+   coros still parked on the fd so they don't sit on a dead handle. */
+void __glide_io_close(int fd) {
+    if (fd < 0) return;
+    pthread_mutex_lock(&__glide_waiters_mu);
+    __glide_io_waiter* w = (fd < __glide_waiters_cap) ? __glide_waiters[fd] : NULL;
+    pthread_mutex_unlock(&__glide_waiters_mu);
+    if (!w) return;
+    __glide_spin_lock(&w->spin);
+    if (w->registered && __glide_epoll_fd >= 0) {
+        epoll_ctl(__glide_epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+        w->registered = 0;
+    }
+    while (w->read_waiters)  __glide_unpark_one(&w->read_waiters);
+    while (w->write_waiters) __glide_unpark_one(&w->write_waiters);
+    __glide_spin_unlock(&w->spin);
+}
+
 static int __glide_io_park_read(int fd) {
     __glide_reactor_ensure();
     __glide_io_waiter* w = __glide_io_get_or_create(fd);
-    pthread_mutex_lock(&w->mu);
+    __glide_spin_lock(&w->spin);
     __glide_io_register(w);
-    return __glide_park(&w->mu, &w->read_waiters);
+    return __glide_spin_park(&w->spin, &w->read_waiters);
 }
 
 static int __glide_io_park_write(int fd) {
     __glide_reactor_ensure();
     __glide_io_waiter* w = __glide_io_get_or_create(fd);
-    pthread_mutex_lock(&w->mu);
+    __glide_spin_lock(&w->spin);
     __glide_io_register(w);
-    return __glide_park(&w->mu, &w->write_waiters);
+    return __glide_spin_park(&w->spin, &w->write_waiters);
 }
 
 /* ---- public async wrappers --------------------------------------- */
+
+/* __glide_tcp_nodelay is `static` in socket.c. Both files share the
+   same translation unit (codegen concats them) so we can call directly,
+   but reactor.c is included after socket.c — no forward decl needed. */
 
 int accept_tcp_async(int listener) {
     __glide_set_nonblocking(listener);
@@ -1605,15 +1991,23 @@ int accept_tcp_async(int listener) {
         int c = accept(listener, NULL, NULL);
         if (c >= 0) {
             __glide_set_nonblocking(c);
+            __glide_tcp_nodelay(c);
             return c;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             if (!__glide_io_park_read(listener)) {
-                /* not in a coro — fall back to blocking accept once. */
+                /* not in a coro — flush any pending main-spawned coros so
+                   they can run on the workers while main blocks here, then
+                   fall back to blocking accept. */
+                __glide_flush_main_buf();
                 int flags = fcntl(listener, F_GETFL, 0);
                 fcntl(listener, F_SETFL, flags & ~O_NONBLOCK);
                 int c2 = accept(listener, NULL, NULL);
                 fcntl(listener, F_SETFL, flags);
+                if (c2 >= 0) {
+                    __glide_set_nonblocking(c2);
+                    __glide_tcp_nodelay(c2);
+                }
                 return c2;
             }
             continue;
@@ -1622,8 +2016,11 @@ int accept_tcp_async(int listener) {
     }
 }
 
+/* tcp_*_async assume the fd was made non-blocking when it was accepted
+   (accept_tcp_async does that once). Re-running fcntl(F_GETFL)+fcntl(F_SETFL)
+   on every call costs two syscalls per read/write — measurable on the
+   keep-alive hot path. */
 int tcp_read_async(int fd, void* buf, int max) {
-    __glide_set_nonblocking(fd);
     while (1) {
         int n = (int)read(fd, buf, (size_t)max);
         if (n >= 0) return n;
@@ -1636,7 +2033,6 @@ int tcp_read_async(int fd, void* buf, int max) {
 }
 
 int tcp_write_async(int fd, void* buf, int n) {
-    __glide_set_nonblocking(fd);
     int sent = 0;
     while (sent < n) {
         int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));
@@ -1673,21 +2069,734 @@ int tcp_write_async(int fd, void* buf, int n) {
 
 #endif  /* GLIDE_REACTOR_DEFINED */
 
+#ifndef HP_PARSE_C
+#define HP_PARSE_C
 
+#include <stddef.h>
+#include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+enum { HP_INCOMPLETE = 0, HP_OK = 1, HP_ERROR = -1 };
+
+typedef struct {
+    const char* name;  size_t name_len;
+    const char* value; size_t value_len;
+} hp_header_t;
+
+typedef struct {
+    const char* method;   size_t method_len;
+    const char* path;     size_t path_len;
+    int         version;          /* 10 = HTTP/1.0, 11 = HTTP/1.1 */
+    hp_header_t headers[64];
+    int         n_headers;
+    const char* body;
+    size_t      body_len;
+    size_t      total_consumed;
+} hp_request_t;
+
+static inline int hp_parse_request(const char* buf, size_t len, hp_request_t* out);
+
+static inline int hp_is_tchar(unsigned char c)
+{
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9')) {
+        return 1;
+    }
+
+    switch (c) {
+    case '!': case '#': case '$': case '%': case '&': case '\'':
+    case '*': case '+': case '-': case '.': case '^': case '_':
+    case '`': case '|': case '~':
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static inline int hp_is_header_name(const char* p, size_t n)
+{
+    size_t i;
+
+    if (n == 0) {
+        return 0;
+    }
+
+    for (i = 0; i < n; i++) {
+        if (!hp_is_tchar((unsigned char)p[i])) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static inline int hp_lower(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (int)(c - 'A' + 'a') : (int)c;
+}
+
+static inline int hp_name_eq(const char* p, size_t n, const char* lit)
+{
+    size_t i;
+
+    for (i = 0; i < n && lit[i] != '\0'; i++) {
+        if (hp_lower((unsigned char)p[i]) != hp_lower((unsigned char)lit[i])) {
+            return 0;
+        }
+    }
+
+    return i == n && lit[i] == '\0';
+}
+
+static inline const char* hp_find_crlf(const char* p, const char* end)
+{
+    while (p < end) {
+        if (*p == '\n') {
+            return 0;
+        }
+        if (*p == '\r') {
+            if (p + 1 == end) {
+                return 0;
+            }
+            return p[1] == '\n' ? p : 0;
+        }
+        p++;
+    }
+
+    return 0;
+}
+
+static inline int hp_line_needs_more(const char* p, const char* end)
+{
+    while (p < end) {
+        if (*p == '\n') {
+            return 0;
+        }
+        if (*p == '\r') {
+            return p + 1 == end;
+        }
+        p++;
+    }
+
+    return 1;
+}
+
+static inline int hp_parse_content_length(const char* p, size_t n, size_t* value)
+{
+    size_t i = 0;
+    size_t v = 0;
+    size_t max = (size_t)-1;
+
+    while (i < n && (p[i] == ' ' || p[i] == '\t')) {
+        i++;
+    }
+
+    if (i == n || p[i] < '0' || p[i] > '9') {
+        return 0;
+    }
+
+    for (; i < n && p[i] >= '0' && p[i] <= '9'; i++) {
+        size_t d = (size_t)(p[i] - '0');
+        if (v > (max - d) / 10) {
+            return 0;
+        }
+        v = v * 10 + d;
+    }
+
+    while (i < n && (p[i] == ' ' || p[i] == '\t')) {
+        i++;
+    }
+
+    if (i != n) {
+        return 0;
+    }
+
+    *value = v;
+    return 1;
+}
+
+static inline int hp_parse_request(const char* buf, size_t len, hp_request_t* out)
+{
+    const char* end = buf + len;
+    const char* p = buf;
+    const char* line_end;
+    const char* sp1;
+    const char* sp2;
+    hp_request_t req;
+    size_t content_length = 0;
+    int have_content_length = 0;
+    int i;
+
+    if (!buf || !out) {
+        return HP_ERROR;
+    }
+
+    req.method = 0;
+    req.method_len = 0;
+    req.path = 0;
+    req.path_len = 0;
+    req.version = 0;
+    req.n_headers = 0;
+    req.body = 0;
+    req.body_len = 0;
+    req.total_consumed = 0;
+
+    line_end = hp_find_crlf(p, end);
+    if (!line_end) {
+        return hp_line_needs_more(p, end) ? HP_INCOMPLETE : HP_ERROR;
+    }
+
+    sp1 = p;
+    while (sp1 < line_end && *sp1 != ' ') {
+        sp1++;
+    }
+    if (sp1 == p || sp1 == line_end) {
+        return HP_ERROR;
+    }
+    for (i = 0; p + i < sp1; i++) {
+        if (!hp_is_tchar((unsigned char)p[i])) {
+            return HP_ERROR;
+        }
+    }
+
+    sp2 = sp1 + 1;
+    while (sp2 < line_end && *sp2 != ' ') {
+        sp2++;
+    }
+    if (sp2 == sp1 + 1 || sp2 == line_end || sp2 + 9 != line_end) {
+        return HP_ERROR;
+    }
+
+    if (sp2[1] != 'H' || sp2[2] != 'T' || sp2[3] != 'T' ||
+        sp2[4] != 'P' || sp2[5] != '/' ||
+        (sp2[6] != '1' || sp2[7] != '.' ||
+         (sp2[8] != '0' && sp2[8] != '1'))) {
+        return HP_ERROR;
+    }
+
+    req.method = p;
+    req.method_len = (size_t)(sp1 - p);
+    req.path = sp1 + 1;
+    req.path_len = (size_t)(sp2 - (sp1 + 1));
+    req.version = sp2[8] == '0' ? 10 : 11;
+    p = line_end + 2;
+
+    while (1) {
+        const char* colon;
+        const char* value;
+        const char* value_end;
+        size_t name_len;
+        size_t value_len;
+
+        line_end = hp_find_crlf(p, end);
+        if (!line_end) {
+            return hp_line_needs_more(p, end) ? HP_INCOMPLETE : HP_ERROR;
+        }
+
+        if (line_end == p) {
+            p = line_end + 2;
+            break;
+        }
+
+        if (*p == ' ' || *p == '\t') {
+            return HP_ERROR;
+        }
+
+        colon = p;
+        while (colon < line_end && *colon != ':') {
+            colon++;
+        }
+        if (colon == line_end) {
+            return HP_ERROR;
+        }
+
+        name_len = (size_t)(colon - p);
+        if (!hp_is_header_name(p, name_len)) {
+            return HP_ERROR;
+        }
+
+        if (req.n_headers >= 64) {
+            return HP_ERROR;
+        }
+
+        value = colon + 1;
+        while (value < line_end && (*value == ' ' || *value == '\t')) {
+            value++;
+        }
+        value_end = line_end;
+        while (value_end > value &&
+               (value_end[-1] == ' ' || value_end[-1] == '\t')) {
+            value_end--;
+        }
+        value_len = (size_t)(value_end - value);
+
+        req.headers[req.n_headers].name = p;
+        req.headers[req.n_headers].name_len = name_len;
+        req.headers[req.n_headers].value = value;
+        req.headers[req.n_headers].value_len = value_len;
+        req.n_headers++;
+
+        if (hp_name_eq(p, name_len, "Content-Length")) {
+            size_t parsed;
+            if (!hp_parse_content_length(value, value_len, &parsed)) {
+                return HP_ERROR;
+            }
+            if (have_content_length && parsed != content_length) {
+                return HP_ERROR;
+            }
+            have_content_length = 1;
+            content_length = parsed;
+        }
+
+        p = line_end + 2;
+    }
+
+    if ((size_t)(end - p) < content_length) {
+        return HP_INCOMPLETE;
+    }
+
+    req.body = p;
+    req.body_len = content_length;
+    req.total_consumed = (size_t)(p - buf) + content_length;
+    *out = req;
+    return HP_OK;
+}
+
+/* ---------- Glide-callable adapter ----------------------------------- */
+
+/* Owning struct returned to Glide. The five string fields are
+   nul-terminated heap copies — Glide treats `string` as `const char*`
+   and never inspects the storage, so plain malloc'd buffers are fine.
+   Caller frees via hp_glide_free once the request is consumed. */
+typedef struct {
+    const char* method;
+    const char* path;
+    const char* version;       /* "HTTP/1.0" or "HTTP/1.1" */
+    const char* headers_block; /* "Name: Value\r\n..." (no trailing \r\n) */
+    const char* body;
+    int         total_consumed;
+} hp_glide_t;
+
+static char* hp__nul_dup(const char* p, size_t n) {
+    char* out = (char*)malloc(n + 1);
+    if (n > 0) memcpy(out, p, n);
+    out[n] = 0;
+    return out;
+}
+
+/* Signatures use void* so they line up with what Glide's `*void` extern
+   decl emits. The function bodies cast back internally.
+
+   Single-allocation layout: one malloc holds both the hp_glide_t header
+   and all five string copies back-to-back. Drops 7 mallocs/request to 1
+   (perf showed malloc was 12 % inclusive of CPU on the hello-world hot
+   path, almost all of it from here). The parse scratch lives in TLS so
+   we don't allocate it per-call — safe because each worker thread runs
+   only one coro at a time and the data is consumed before the next
+   ctx switch (we copy out of it before returning). */
+static __thread hp_request_t hp_tls_req;
+
+void* hp_parse_glide(void* buf, int len)
+{
+    if (!buf || len <= 0) return NULL;
+    hp_request_t* r = &hp_tls_req;
+    if (hp_parse_request((const char*)buf, (size_t)len, r) != HP_OK) {
+        return NULL;
+    }
+
+    /* Compute the header block size first; the rest are known directly. */
+    size_t hsz = 0;
+    for (int i = 0; i < r->n_headers; i++) {
+        hsz += r->headers[i].name_len + 2 + r->headers[i].value_len + 2;
+    }
+    if (hsz >= 2) hsz -= 2;  /* strip the trailing CRLF */
+
+    size_t total = sizeof(hp_glide_t)
+                 + r->method_len + 1
+                 + r->path_len   + 1
+                 + 8             + 1   /* "HTTP/1.x" */
+                 + hsz           + 1
+                 + r->body_len   + 1;
+
+    char* mem = (char*)malloc(total);
+    hp_glide_t* g = (hp_glide_t*)mem;
+    char* p = mem + sizeof(hp_glide_t);
+
+    g->method = p;
+    if (r->method_len > 0) memcpy(p, r->method, r->method_len);
+    p[r->method_len] = 0; p += r->method_len + 1;
+
+    g->path = p;
+    if (r->path_len > 0) memcpy(p, r->path, r->path_len);
+    p[r->path_len] = 0; p += r->path_len + 1;
+
+    g->version = p;
+    memcpy(p, (r->version == 11) ? "HTTP/1.1" : "HTTP/1.0", 8);
+    p[8] = 0; p += 9;
+
+    g->headers_block = p;
+    {
+        size_t off = 0;
+        for (int i = 0; i < r->n_headers; i++) {
+            memcpy(p + off, r->headers[i].name, r->headers[i].name_len);
+            off += r->headers[i].name_len;
+            p[off++] = ':'; p[off++] = ' ';
+            memcpy(p + off, r->headers[i].value, r->headers[i].value_len);
+            off += r->headers[i].value_len;
+            p[off++] = '\r'; p[off++] = '\n';
+        }
+        if (off >= 2) off -= 2;
+        p[off] = 0;
+        p += hsz + 1;
+    }
+
+    g->body = p;
+    if (r->body_len > 0) memcpy(p, r->body, r->body_len);
+    p[r->body_len] = 0;
+
+    g->total_consumed = (int)r->total_consumed;
+    return g;
+}
+
+const char* hp_glide_method(void* g)        { return ((hp_glide_t*)g)->method; }
+const char* hp_glide_path(void* g)          { return ((hp_glide_t*)g)->path; }
+const char* hp_glide_version(void* g)       { return ((hp_glide_t*)g)->version; }
+const char* hp_glide_headers_block(void* g) { return ((hp_glide_t*)g)->headers_block; }
+const char* hp_glide_body(void* g)          { return ((hp_glide_t*)g)->body; }
+int         hp_glide_consumed(void* g)      { return ((hp_glide_t*)g)->total_consumed; }
+
+/* True when the parsed request asks the server to close the conn.
+   HTTP/1.1 keeps it alive by default, HTTP/1.0 closes by default.
+   Direct C scan of the parsed headers — bypasses Glide's
+   `req.header(...).to_lower()` chain that was costing ~12 % of CPU
+   on the hot path (each call mallocs four times). */
+int hp_glide_wants_close(void* gp)
+{
+    hp_glide_t* g = (hp_glide_t*)gp;
+    /* The TLS hp_request_t was overwritten on the next parse, so we
+       inspect the rebuilt headers_block directly. */
+    const char* p = g->headers_block;
+    int default_close = (g->version[7] == '0'); /* HTTP/1.0 */
+    int found_close = 0, found_keep = 0;
+
+    while (*p) {
+        /* Match "Connection:" case-insensitive, anchored at line start. */
+        const char* k = "connection";
+        const char* q = p;
+        int matched = 1;
+        for (int i = 0; i < 10; i++) {
+            unsigned char c = (unsigned char)*q;
+            if (c == 0) { matched = 0; break; }
+            unsigned char l = (c >= 'A' && c <= 'Z') ? (c | 0x20) : c;
+            if (l != (unsigned char)k[i]) { matched = 0; break; }
+            q++;
+        }
+        if (matched && *q == ':') {
+            q++;
+            while (*q == ' ' || *q == '\t') q++;
+            /* Look for "close" / "keep-alive" tokens in the value, up to CRLF. */
+            const char* v = q;
+            while (*v && *v != '\r' && *v != '\n') v++;
+            for (const char* s = q; s < v; s++) {
+                /* simple substring scan */
+                if (v - s >= 5) {
+                    char c0 = s[0]; if (c0 >= 'A' && c0 <= 'Z') c0 |= 0x20;
+                    if (c0 == 'c' && (s + 5 <= v)) {
+                        char b1=s[1],b2=s[2],b3=s[3],b4=s[4];
+                        if ((b1|0x20)=='l' && (b2|0x20)=='o' && (b3|0x20)=='s' && (b4|0x20)=='e') {
+                            found_close = 1;
+                        }
+                    }
+                    if (c0 == 'k' && (s + 10 <= v)) {
+                        if ((s[1]|0x20)=='e' && (s[2]|0x20)=='e' && (s[3]|0x20)=='p'
+                         &&  s[4]=='-' && (s[5]|0x20)=='a' && (s[6]|0x20)=='l'
+                         && (s[7]|0x20)=='i' && (s[8]|0x20)=='v' && (s[9]|0x20)=='e') {
+                            found_keep = 1;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        /* Skip to next line */
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+
+    if (found_close) return 1;
+    if (default_close && !found_keep) return 1;
+    return 0;
+}
+
+void hp_glide_free(void* gp)
+{
+    /* All strings live in the same allocation as the header now, so a
+       single free reclaims everything. */
+    if (gp) free(gp);
+}
+
+/* Reusable response buffer per OS thread. _handle_conn writes the
+   wire bytes directly into here, then writes from this buf to the
+   socket — no Glide string concat chain (was ~10 mallocs per
+   response in the previous implementation). */
+static __thread char*  hp_resp_buf = NULL;
+static __thread size_t hp_resp_cap = 0;
+
+enum { HP_DATE_LEN = 29 };
+
+static atomic_uchar hp_date_cache[HP_DATE_LEN] = {
+    'T', 'h', 'u', ',', ' ', '0', '1', ' ', 'J', 'a',
+    'n', ' ', '1', '9', '7', '0', ' ', '0', '0', ':',
+    '0', '0', ':', '0', '0', ' ', 'G', 'M', 'T'
+};
+static atomic_llong hp_date_epoch = 0;
+static atomic_int hp_date_lock = 0;
+
+static int hp_gmtime(time_t now, struct tm* out)
+{
+#ifdef _WIN32
+    return gmtime_s(out, &now) == 0;
+#else
+    return gmtime_r(&now, out) != NULL;
+#endif
+}
+
+static void hp_date_lock_acquire(void)
+{
+    int expected;
+
+    for (;;) {
+        expected = 0;
+        if (atomic_compare_exchange_weak_explicit(&hp_date_lock, &expected, 1,
+                                                  memory_order_acquire,
+                                                  memory_order_relaxed)) {
+            return;
+        }
+        while (atomic_load_explicit(&hp_date_lock, memory_order_relaxed) != 0) {
+        }
+    }
+}
+
+static void hp_date_lock_release(void)
+{
+    atomic_store_explicit(&hp_date_lock, 0, memory_order_release);
+}
+
+int hp_get_date(char* out_buf)
+{
+    time_t now = time(NULL);
+    long long sec = (long long)now;
+    int i;
+
+    if (atomic_load_explicit(&hp_date_epoch, memory_order_acquire) != sec) {
+        hp_date_lock_acquire();
+        if (atomic_load_explicit(&hp_date_epoch, memory_order_relaxed) != sec) {
+            struct tm tm_utc;
+            char tmp[32];
+
+            if (hp_gmtime(now, &tm_utc) &&
+                strftime(tmp, sizeof(tmp), "%a, %d %b %Y %H:%M:%S GMT", &tm_utc) == HP_DATE_LEN) {
+                for (i = 0; i < HP_DATE_LEN; i++) {
+                    atomic_store_explicit(&hp_date_cache[i], (unsigned char)tmp[i],
+                                          memory_order_relaxed);
+                }
+                atomic_store_explicit(&hp_date_epoch, sec, memory_order_release);
+            }
+        }
+        hp_date_lock_release();
+    }
+
+    for (i = 0; i < HP_DATE_LEN; i++) {
+        out_buf[i] = (char)atomic_load_explicit(&hp_date_cache[i], memory_order_relaxed);
+    }
+    return HP_DATE_LEN;
+}
+
+static int hp_itoa(char* p, int n) {
+    if (n == 0) { p[0] = '0'; return 1; }
+    int neg = 0;
+    if (n < 0) { neg = 1; n = -n; }
+    char tmp[12]; int k = 0;
+    while (n > 0) { tmp[k++] = (char)('0' + (n % 10)); n /= 10; }
+    int off = 0;
+    if (neg) p[off++] = '-';
+    for (int i = k - 1; i >= 0; i--) p[off++] = tmp[i];
+    return off;
+}
+
+/* Build the response wire bytes into the per-thread buffer. status_txt
+   is NUL-terminated. body is the byte buffer (NUL-terminated since it
+   came from Glide's `string`). extra_headers may be NULL. Returns the
+   total byte count written; the caller hands `hp_resp_buf` straight
+   to write(2) without copying. */
+int hp_build_response(int status, const char* status_txt,
+                      void* body, int body_len,
+                      const char* extra_headers, int keep_alive)
+{
+    size_t need = 64
+                + (status_txt ? strlen(status_txt) : 2)
+                + (extra_headers ? strlen(extra_headers) : 0)
+                + (size_t)body_len + 32
+                + 8 + HP_DATE_LEN;
+    if (need > hp_resp_cap) {
+        size_t cap = hp_resp_cap ? hp_resp_cap : 1024;
+        while (cap < need) cap *= 2;
+        free(hp_resp_buf);
+        hp_resp_buf = (char*)malloc(cap);
+        hp_resp_cap = cap;
+    }
+    char* p = hp_resp_buf;
+    /* "HTTP/1.1 " */
+    memcpy(p, "HTTP/1.1 ", 9); p += 9;
+    /* status code */
+    p += hp_itoa(p, status);
+    *p++ = ' ';
+    /* status text */
+    if (status_txt) {
+        size_t l = strlen(status_txt);
+        memcpy(p, status_txt, l); p += l;
+    } else {
+        memcpy(p, "OK", 2); p += 2;
+    }
+    memcpy(p, "\r\nContent-Length: ", 18); p += 18;
+    p += hp_itoa(p, body_len);
+    if (keep_alive) {
+        memcpy(p, "\r\nConnection: keep-alive\r\n", 26); p += 26;
+    } else {
+        memcpy(p, "\r\nConnection: close\r\n", 21); p += 21;
+    }
+    memcpy(p, "Date: ", 6); p += 6;
+    p += hp_get_date(p);
+    memcpy(p, "\r\n", 2); p += 2;
+    if (extra_headers) {
+        size_t l = strlen(extra_headers);
+        if (l > 0) {
+            memcpy(p, extra_headers, l); p += l;
+            /* extra_headers does NOT carry a trailing \r\n; add it
+               only if the block isn't already CRLF-terminated. */
+            if (l < 2 || p[-2] != '\r' || p[-1] != '\n') {
+                memcpy(p, "\r\n", 2); p += 2;
+            }
+        }
+    }
+    memcpy(p, "\r\n", 2); p += 2;
+    if (body_len > 0) { memcpy(p, body, body_len); p += body_len; }
+    return (int)(p - hp_resp_buf);
+}
+
+/* Hand the per-thread response buffer back to Glide as a (void*, len)
+   pair. The buffer is owned by the runtime — Glide must not free it. */
+void* hp_resp_buf_ptr(void) { return (void*)hp_resp_buf; }
+
+#endif /* HP_PARSE_C */
+
+#ifdef HP_PARSE_TEST
+#include <assert.h>
+#include <string.h>
+
+static void hp_test_simple_get(void)
+{
+    const char* s = "GET /x HTTP/1.1\r\nHost: example\r\n\r\n";
+    hp_request_t r;
+
+    assert(hp_parse_request(s, strlen(s), &r) == HP_OK);
+    assert(r.method_len == 3 && memcmp(r.method, "GET", 3) == 0);
+    assert(r.path_len == 2 && memcmp(r.path, "/x", 2) == 0);
+    assert(r.version == 11);
+    assert(r.n_headers == 1);
+    assert(r.headers[0].name_len == 4);
+    assert(r.headers[0].value_len == 7);
+    assert(r.body_len == 0);
+    assert(r.total_consumed == strlen(s));
+}
+
+static void hp_test_post_body(void)
+{
+    const char* s = "POST /submit HTTP/1.0\r\nContent-Length: 5\r\n\r\nhelloextra";
+    hp_request_t r;
+
+    assert(hp_parse_request(s, strlen(s), &r) == HP_OK);
+    assert(r.version == 10);
+    assert(r.body_len == 5);
+    assert(memcmp(r.body, "hello", 5) == 0);
+    assert(r.total_consumed == strlen(s) - 5);
+}
+
+static void hp_test_incomplete(void)
+{
+    const char* partial_header = "GET / HTTP/1.1\r\nHost: x\r\n\r";
+    const char* partial_body = "POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nabc";
+    hp_request_t r;
+
+    assert(hp_parse_request(partial_header, strlen(partial_header), &r) ==
+           HP_INCOMPLETE);
+    assert(hp_parse_request(partial_body, strlen(partial_body), &r) ==
+           HP_INCOMPLETE);
+}
+
+static void hp_test_errors(void)
+{
+    hp_request_t r;
+    char many[1400];
+    size_t n = 0;
+    int i;
+
+    assert(hp_parse_request("GET / HTTP/1.2\r\n\r\n",
+                            strlen("GET / HTTP/1.2\r\n\r\n"), &r) ==
+           HP_ERROR);
+    assert(hp_parse_request("GET / HTTP/1.1\n\n",
+                            strlen("GET / HTTP/1.1\n\n"), &r) ==
+           HP_ERROR);
+    assert(hp_parse_request("GET / HTTP/1.1\r\nContent-Length: x\r\n\r\n",
+                            strlen("GET / HTTP/1.1\r\nContent-Length: x\r\n\r\n"),
+                            &r) == HP_ERROR);
+
+    memcpy(many + n, "GET / HTTP/1.1\r\n", 16);
+    n += 16;
+    for (i = 0; i < 65; i++) {
+        many[n++] = 'X';
+        many[n++] = ':';
+        many[n++] = ' ';
+        many[n++] = '0';
+        many[n++] = '\r';
+        many[n++] = '\n';
+    }
+    many[n++] = '\r';
+    many[n++] = '\n';
+    assert(hp_parse_request(many, n, &r) == HP_ERROR);
+}
+
+int main(void)
+{
+    hp_test_simple_get();
+    hp_test_post_body();
+    hp_test_incomplete();
+    hp_test_errors();
+    return 0;
+}
+#endif
+
+
+#ifndef __GLIDE_RESULT_int_GUARD
+#define __GLIDE_RESULT_int_GUARD
 typedef struct __glide_result_int_t { int ok; int val; const char* err; } __glide_result_int_t;
 static __glide_result_int_t __glide_ok_int(int v) { __glide_result_int_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
 static __glide_result_int_t __glide_err_int(const char* msg) { __glide_result_int_t r; r.ok = 0; r.err = msg; return r; }
 static int __glide_unwrap_int(__glide_result_int_t r) { int z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
+#endif
 
 typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__Type   Vector__Type ;
 typedef struct  Vector__Expr   Vector__Expr ;
 typedef struct  Vector__Param   Vector__Param ;
 typedef struct  Vector__Stmt   Vector__Stmt ;
+typedef struct  Vector__MatchArm   Vector__MatchArm ;
 typedef struct  Vector__Field   Vector__Field ;
 typedef struct  Vector__EnumVariant   Vector__EnumVariant ;
-typedef struct  Vector__MatchArm   Vector__MatchArm ;
 typedef struct  Vector__MacroParam   Vector__MacroParam ;
+typedef struct  Vector__SelectArm   Vector__SelectArm ;
 typedef struct  Vector__ParseDiag   Vector__ParseDiag ;
 typedef struct  HashMap__Stmt   HashMap__Stmt ;
 typedef struct  Vector__TypeMacro   Vector__TypeMacro ;
@@ -1702,6 +2811,7 @@ typedef struct  Vector__bool   Vector__bool ;
 typedef struct  Vector__FnMonoEntry   Vector__FnMonoEntry ;
 typedef struct  Vector__AnonFn   Vector__AnonFn ;
 typedef struct  Vector__JsonValue   Vector__JsonValue ;
+typedef struct  HashMap__Vector__Stmt_ptr   HashMap__Vector__Stmt_ptr ;
 typedef struct  HashMap__LspDoc   HashMap__LspDoc ;
 typedef struct  Vector__ImportableSym   Vector__ImportableSym ;
 typedef struct  Vector__ImportInfo   Vector__ImportInfo ;
@@ -1711,6 +2821,7 @@ typedef struct  Token   Token ;
 typedef struct  Lexer   Lexer ;
 typedef struct  Type   Type ;
 typedef struct  Expr   Expr ;
+typedef struct  SelectArm   SelectArm ;
 typedef struct  Param   Param ;
 typedef struct  Field   Field ;
 typedef struct  EnumVariant   EnumVariant ;
@@ -1743,60 +2854,77 @@ struct  Vector__string  {
      const char**   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__Type  {
      Type*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__Expr  {
      Expr*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__Param  {
      Param*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__Stmt  {
      Stmt*   data;
      int   len;
      int   cap;
-};
-
-struct  Vector__Field  {
-     Field*   data;
-     int   len;
-     int   cap;
-};
-
-struct  Vector__EnumVariant  {
-     EnumVariant*   data;
-     int   len;
-     int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__MatchArm  {
      MatchArm*   data;
      int   len;
      int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__Field  {
+     Field*   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__EnumVariant  {
+     EnumVariant*   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__MacroParam  {
      MacroParam*   data;
      int   len;
      int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__SelectArm  {
+     SelectArm*   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__ParseDiag  {
      ParseDiag*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  HashMap__Stmt  {
@@ -1805,18 +2933,21 @@ struct  HashMap__Stmt  {
      bool*   occupied;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__TypeMacro  {
      TypeMacro*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__MacroBinding  {
      MacroBinding*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  HashMap__bool  {
@@ -1825,6 +2956,7 @@ struct  HashMap__bool  {
      bool*   occupied;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  HashMap__FnSig  {
@@ -1833,6 +2965,7 @@ struct  HashMap__FnSig  {
      bool*   occupied;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  HashMap__Type  {
@@ -1841,12 +2974,14 @@ struct  HashMap__Type  {
      bool*   occupied;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__BorrowEvent  {
      BorrowEvent*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  HashMap__string  {
@@ -1855,36 +2990,51 @@ struct  HashMap__string  {
      bool*   occupied;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__DiagEntry  {
      DiagEntry*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__bool  {
      bool*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__FnMonoEntry  {
      FnMonoEntry*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__AnonFn  {
      AnonFn*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__JsonValue  {
      JsonValue*   data;
      int   len;
      int   cap;
+     bool   is_arena;
+};
+
+struct  HashMap__Vector__Stmt_ptr  {
+     const char**   keys;
+     Vector__Stmt**   values;
+     bool*   occupied;
+     int   len;
+     int   cap;
+     bool   is_arena;
 };
 
 struct  HashMap__LspDoc  {
@@ -1893,18 +3043,21 @@ struct  HashMap__LspDoc  {
      bool*   occupied;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__ImportableSym  {
      ImportableSym*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__ImportInfo  {
      ImportInfo*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  HashMap__ImportInfo  {
@@ -1913,12 +3066,14 @@ struct  HashMap__ImportInfo  {
      bool*   occupied;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 struct  Vector__UseSite  {
      UseSite*   data;
      int   len;
      int   cap;
+     bool   is_arena;
 };
 
 typedef struct  Token  {
@@ -1966,7 +3121,19 @@ typedef struct  Expr  {
      Expr*   macro_recv;
      const char*   macro_owner;
      const char*   float_val;
+     Vector__Stmt*   block_stmts;
+     Vector__MatchArm*   match_arms;
 }  Expr ;
+
+typedef struct  SelectArm  {
+     int   kind;
+     Expr*   chan_expr;
+     const char*   bind_name;
+     Expr*   send_value;
+     Vector__Stmt*   body;
+     int   line;
+     int   column;
+}  SelectArm ;
 
 typedef struct  Param  {
      const char*   name;
@@ -2049,6 +3216,8 @@ typedef struct  Stmt  {
      Vector__Expr*   asm_in_exprs;
      Vector__string*   asm_clobbers;
      bool   is_volatile;
+     Vector__Param*   assoc_decls;
+     Vector__SelectArm*   select_arms;
 }  Stmt ;
 
 typedef struct  StructLitField  {
@@ -2129,6 +3298,8 @@ typedef struct  Typer  {
      HashMap__string*   struct_origin;
      bool   enforce_visibility;
      HashMap__bool*   impl_set;
+     HashMap__Type*   assoc_table;
+     HashMap__string*   enums;
      int   error_count;
      Vector__DiagEntry*   diagnostics;
 }  Typer ;
@@ -2156,6 +3327,7 @@ typedef struct  CG  {
      Vector__FnMonoEntry*   fn_mono_queue;
      Vector__Type*   struct_mono_queue;
      Vector__Expr*   defer_stack;
+     Vector__Expr*   err_defer_stack;
      Vector__Expr*   auto_drop_stack;
      Vector__AnonFn*   anon_fns;
      int   anon_count;
@@ -2163,7 +3335,10 @@ typedef struct  CG  {
      int   spawn_count;
      bool   uses_pthread;
      Vector__Type*   result_types;
+     Vector__Type*   option_types;
+     Vector__Type*   optres_types;
      Type*   current_ret_ty;
+     HashMap__Type*   assoc_table;
      HashMap__string*   method_index;
      HashMap__bool*   method_fns;
      HashMap__string*   module_aliases;
@@ -2210,6 +3385,8 @@ typedef struct  LspState  {
      HashMap__LspDoc*   docs;
      bool   shutdown_requested;
      Vector__ImportableSym*   stdlib_index;
+     HashMap__Vector__Stmt_ptr*   parse_cache;
+     void*   last_arena;
 }  LspState ;
 
 typedef struct  ImplMethodHit  {
@@ -2256,6 +3433,9 @@ typedef struct  UseSite  {
 #define  TY_FNPTR  6
 #define  TY_RESULT  7
 #define  TY_DYN  8
+#define  TY_OPTION  9
+#define  TY_OPT_RESULT  10
+#define  TY_ASSOC  11
 #define  EX_INT  0
 #define  EX_FLOAT  1
 #define  EX_STRING  2
@@ -2279,6 +3459,9 @@ typedef struct  UseSite  {
 #define  EX_SIZEOF  20
 #define  EX_FNEXPR  21
 #define  EX_MACRO_VAR  22
+#define  EX_IF  23
+#define  EX_BLOCK  24
+#define  EX_MATCH  25
 #define  OP_ADD  1
 #define  OP_SUB  2
 #define  OP_MUL  3
@@ -2302,6 +3485,7 @@ typedef struct  UseSite  {
 #define  OP_BIT_XOR  21
 #define  OP_SHL  22
 #define  OP_SHR  23
+#define  OP_COALESCE  24
 #define  UN_NEG  1
 #define  UN_NOT  2
 #define  UN_DEREF  3
@@ -2334,6 +3518,13 @@ typedef struct  UseSite  {
 #define  ST_ASM  22
 #define  ST_CRAW  23
 #define  ST_TRAIT  24
+#define  ST_DEFER_ERR  25
+#define  ST_SELECT  26
+#define  SEL_RECV  0
+#define  SEL_SEND  1
+#define  SEL_DEFAULT  2
+#define  SEL_RECV_SOME  3
+#define  SEL_RECV_NONE  4
 #define  JSON_NULL  0
 #define  JSON_BOOL  1
 #define  JSON_INT  2
@@ -2353,6 +3544,7 @@ static const const char*   FMT_INDENT = "    ";
 #define  MODE_RUN  2
 #define  MODE_CHECK  3
 #define  MODE_FMT  4
+#define  MODE_TEST  5
 
 int   printf (const char*   fmt, ...);
 void   make_chan (int   cap);
@@ -2363,6 +3555,17 @@ int   args_count (void);
 const char*   args_at (int   i);
 void   yield_now (void);
 void   sleep_ms (int   ms);
+void*   __glide_palloc (int   size);
+void*   __glide_palloc_make (void);
+void   __glide_palloc_free (void*   handle);
+int   __glide_palloc_active (void);
+void*   __glide_palloc_get (void);
+void   __glide_palloc_set (void*   a);
+int   __glide_palloc_owns (void*   p);
+void   __glide_pfree (void*   p);
+int   __glide_palloc_total_bytes (void);
+int   __glide_palloc_chunks (void);
+int   __glide_proc_rss_mb (void);
 bool   _ws (int   c);
 bool   string_contains (const char*   self, const char*   sub);
 int   string_index_of (const char*   self, const char*   sub);
@@ -2378,6 +3581,64 @@ const char*   string_to_lower (const char*   self);
 const char*   string_repeat (const char*   self, int   n);
 int   string_parse_int (const char*   self);
 __glide_result_int_t   string_try_parse_int (const char*   self);
+const char*   read_file (const char*   path);
+bool   write_file (const char*   path, const char*   content);
+bool   __glide_file_exists (const char*   path);
+const char*   __glide_list_dir (const char*   path, const char*   suffix);
+const char*   fs_read (const char*   path);
+bool   fs_write (const char*   path, const char*   content);
+bool   fs_exists (const char*   path);
+Vector__string*   fs_list (const char*   dir, const char*   suffix);
+Vector__string*   fs_read_lines (const char*   path);
+const char*   fs_basename (const char*   path);
+const char*   fs_extension (const char*   path);
+int   fs_lines_count (const char*   path);
+const char*   fs_read_or_default (const char*   path, const char*   fallback);
+int   __glide_is_windows (void);
+const char*   __glide_exe_path (void);
+const char*   __glide_exe_dir (void);
+int   __glide_shell (const char*   cmd);
+const char*   __glide_os_name (void);
+const char*   __glide_os_arch (void);
+const char*   __glide_cwd (void);
+const char*   os_name (void);
+const char*   os_arch (void);
+bool   os_is_windows (void);
+bool   os_is_posix (void);
+bool   os_is_linux (void);
+bool   os_is_macos (void);
+const char*   os_path_sep (void);
+const char*   os_line_sep (void);
+const char*   os_cwd (void);
+const char*   os_exe_path (void);
+const char*   os_exe_dir (void);
+int   os_shell (const char*   cmd);
+const char*   __glide_getenv (const char*   name);
+void   exit (int   code);
+int   env_args_count (void);
+const char*   env_args_at (int   i);
+Vector__string*   env_args (void);
+const char*   env_get (const char*   name);
+bool   env_has (const char*   name);
+void   env_exit (int   code);
+const char*   __glide_read_line (void);
+const char*   __glide_read_bytes (int   n);
+void   __glide_write_str (const char*   s);
+void   __glide_write_bytes (const char*   s, int   n);
+void   __glide_flush_stdout (void);
+void   __glide_log (const char*   s);
+void   __glide_set_binary_io (void);
+int   __glide_redirect_to (const char*   path);
+void   __glide_restore_stdout (int   saved);
+const char*   read_line (void);
+const char*   prompt (const char*   msg);
+__glide_result_int_t   read_int (void);
+bool   read_yes_no (const char*   prompt_msg);
+const char*   read_bytes (int   n);
+void   io_write (const char*   s);
+void   io_write_bytes (const char*   s, int   n);
+void   flush (void);
+void   eprintln (const char*   s);
 Lexer*   Lexer_new (const char*   src);
 void   Lexer_free (Lexer*   self);
 char   Lexer_peek (Lexer*   self);
@@ -2391,6 +3652,9 @@ Type*   ty_fnptr (Vector__Type*   params, Type*   ret);
 Type*   ty_generic (const char*   name, Vector__Type*   args);
 Type*   ty_named (const char*   name);
 Type*   ty_result (Type*   inner);
+Type*   ty_option (Type*   inner);
+Type*   ty_optres (Type*   inner);
+Type*   ty_assoc (Type*   owner, const char*   name);
 Type*   ty_pointer (Type*   inner);
 Expr*   expr_int (int64_t   n, int   line, int   col);
 Expr*   expr_float (const char*   lexeme, int   line, int   col);
@@ -2430,6 +3694,9 @@ Expr*   expr_macro (const char*   name, Vector__Expr*   args, int   line, int   
 Expr*   expr_macro_var (const char*   name, int   line, int   col);
 Expr*   expr_char (char   c, int   line, int   col);
 Expr*   expr_null (int   line, int   col);
+Expr*   expr_if (Expr*   cond, Expr*   then_e, Expr*   else_e, int   line, int   col);
+Expr*   expr_match (Expr*   scrut, Vector__MatchArm*   arms, int   line, int   col);
+Expr*   expr_block (Vector__Stmt*   stmts, Expr*   value, int   line, int   col);
 Expr*   expr_postinc (Expr*   inner);
 Expr*   expr_fnexpr (Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col);
 Expr*   expr_postdec (Expr*   inner);
@@ -2464,6 +3731,8 @@ Stmt*   parse_trait (Parser*   p);
 Stmt*   parse_impl (Parser*   p);
 void   substitute_self_in_methods (Vector__Stmt*   methods, Type*   target);
 Type*   substitute_self_in_type (Type*   t, Type*   target);
+void   substitute_self_assoc_in_methods (Vector__Stmt*   methods, Vector__Param*   assocs);
+Type*   substitute_self_assoc_in_type (Type*   t, Vector__Param*   assocs);
 Stmt*   parse_import (Parser*   p);
 Vector__Stmt*   parse_block (Parser*   p);
 Stmt*   parse_asm_block (Parser*   p);
@@ -2473,6 +3742,12 @@ Stmt*   parse_let (Parser*   p);
 Stmt*   parse_const (Parser*   p);
 Stmt*   parse_return (Parser*   p);
 Stmt*   parse_match (Parser*   p);
+Expr*   parse_match_expr (Parser*   p);
+Stmt*   parse_select_macro (Parser*   p);
+Expr*   select_extract_recv_chan (Parser*   p, Expr*   e);
+SelectArm*   parse_select_arm (Parser*   p);
+Expr*   parse_block_expr (Parser*   p);
+Expr*   parse_if_expr (Parser*   p);
 Stmt*   parse_if (Parser*   p);
 Stmt*   parse_while (Parser*   p);
 Stmt*   parse_for (Parser*   p);
@@ -2503,6 +3778,7 @@ Expr*   macro_subst_expr (Expr*   e, Vector__MacroBinding*   bindings, int   rep
 Expr*   lookup_var (const char*   name, Vector__MacroBinding*   bindings, int   rep_idx);
 int   variadic_len (Vector__MacroBinding*   bindings);
 Vector__Stmt*   lower_program (Vector__Stmt*   stmts);
+Vector__Stmt*   lower_program_user_only (Vector__Stmt*   stmts, const char*   user_path);
 void   expand_trait_defaults (Vector__Stmt*   stmts);
 Vector__Stmt*   lower_block (Vector__Stmt*   body);
 Stmt*   lower_stmt (Stmt*   s);
@@ -2532,6 +3808,8 @@ bool   type_var_contains (Vector__string*   tps, const char*   name);
 bool   arg_compat (Type*   want, Type*   got, Vector__string*   tps);
 Vector__string*   split_bounds (const char*   s);
 Type*   extract_for_var (Type*   param_ty, Type*   arg_ty, const char*   var_name);
+Type*   resolve_assoc_in_ret (Typer*   t, FnSig*   sig, Vector__Expr*   args, Type*   ret);
+Type*   rewrite_assoc_in_type (Typer*   t, FnSig*   sig, Vector__Expr*   args, Type*   ty, int   plen, int   bn);
 void   check_generic_bounds (Typer*   t, FnSig*   sig, Vector__Expr*   args, int   line, int   col);
 int   count_borrows (Typer*   t, const char*   name, bool   want_mut);
 void   record_borrow (Typer*   t, const char*   source, bool   is_mut, int   line, int   col);
@@ -2548,16 +3826,22 @@ void   check_let_or_const (Typer*   t, Stmt*   s);
 void   check_return (Typer*   t, Stmt*   s);
 Type*   chan_inner (Type*   t);
 Type*   infer_expr (Typer*   t, Expr*   e);
+bool   is_c_reserved (const char*   s);
+const char*   c_safe_ident (const char*   name);
 int   ns_split_pos (const char*   name);
 const char*   _cg_replace (const char*   s, const char*   find, const char*   repl);
 const char*   format_spec_for (Type*   t);
 Type*   stdlib_method_ret (const char*   ty_name, const char*   method);
 void   lift_anons_in_expr (CG*   g, Expr*   e);
 void   lift_anons_in_stmt (CG*   g, Stmt*   s);
+Type*   resolve_assoc_recursive (CG*   g, Type*   t);
+Type*   resolve_concrete_assoc (CG*   g, Type*   t);
 void   collect_result_in_type (CG*   g, Type*   t);
 void   collect_result_in_expr (CG*   g, Expr*   e);
 void   collect_result_in_stmt (CG*   g, Stmt*   s);
 void   emit_result_runtime (CG*   g);
+void   emit_option_runtime (CG*   g);
+void   emit_optres_runtime (CG*   g);
 void   collect_chan_in_type (CG*   g, Type*   t);
 void   collect_chan_in_expr (CG*   g, Expr*   e);
 void   collect_dyn_in_type (CG*   g, Type*   t);
@@ -2573,6 +3857,7 @@ void   emit_spawn_stub (CG*   g, Expr*   call, int   id);
 bool   is_stdlib_primitive (const char*   name);
 void   emit_stdlib_runtime (void);
 CG*   CG_new (void);
+void   CG_emit_err_defers_reverse (CG*   self, int   depth);
 void   CG_emit_deferred_reverse (CG*   self, int   depth);
 void   CG_emit_block_drops (CG*   self, int   saved, int   depth);
 void   CG_free (CG*   self);
@@ -2598,11 +3883,16 @@ const char*   unop_to_c (int   op);
 void   ind (int   n);
 void   emit_cfg_open (const char*   cfg);
 void   emit_cfg_close (const char*   cfg);
+Expr*   arm_value_expr (MatchArm*   a);
+Type*   arm_value_type (CG*   g, MatchArm*   a);
+void   emit_match_arm_value (CG*   g, MatchArm*   a);
+void   emit_arm_typeof_probe (CG*   g, Vector__MatchArm*   arms);
 void   emit_expr (CG*   g, Expr*   e);
 void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth);
 void   emit_stmt (CG*   g, Stmt*   s, int   depth);
 void   emit_fn_signature (Stmt*   s);
 Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const char*   gen_name, Vector__string*   tparams);
+Type*   constrain_walk (Expr*   arg, Type*   ty, const char*   var);
 Type*   try_constrain_from_stmt (CG*   g, Stmt*   s, const char*   var, const char*   gen_name, Vector__string*   tparams);
 void   populate_scope_from_stmt (CG*   g, Stmt*   s);
 Type*   try_resolve_open_let (CG*   g, Stmt*   s, Vector__Stmt*   body, int   start);
@@ -2631,6 +3921,8 @@ JsonValue*   json_array (void);
 JsonValue*   json_object (void);
 void   json_arr_push (JsonValue*   arr, JsonValue*   v);
 void   json_obj_set (JsonValue*   obj, const char*   key, JsonValue*   v);
+void   json_free (JsonValue*   v);
+void   json_free_contents (JsonValue*   v);
 JsonValue*   json_get (JsonValue*   v, const char*   key);
 JsonValue*   json_at (JsonValue*   v, int   idx);
 const char*   json_as_string (JsonValue*   v);
@@ -2684,6 +3976,9 @@ const char*   __glide_exe_dir (void);
 const char*   __glide_cwd (void);
 void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
 void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
+void   load_into_str_with_cache (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache);
+void   load_into_with_cache (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache);
+void   load_builtins_dir_with_cache (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache);
 LspState*   lsp_state_new (void);
 const char*   lsp_read_message (void);
 int   parse_int_str (const char*   s);
@@ -2702,6 +3997,8 @@ const char*   fn_label_extra (Stmt*   s);
 const char*   fn_snippet (Stmt*   s);
 const char*   __glide_list_dir (const char*   path, const char*   suffix);
 Vector__string*   fs_list_dir (const char*   dir, const char*   suffix);
+void   stmt_vec_lower_free (Vector__Stmt*   v);
+void   stmt_lower_free_children (Stmt*   s);
 void   run_analysis_and_publish (const char*   uri, const char*   text, LspState*   state);
 void   handle_did_open (JsonValue*   req, LspState*   state);
 void   handle_did_change (JsonValue*   req, LspState*   state);
@@ -2709,6 +4006,7 @@ void   handle_did_close (JsonValue*   req, LspState*   state);
 void   run_extra_analyses (Typer*   t, Vector__Stmt*   stmts);
 void   analysis_trait_conformance (Typer*   t, Vector__Stmt*   stmts);
 void   check_method_signature (Typer*   t, Stmt   impl_stmt, Stmt   req, Stmt   got, const char*   target_name);
+Type*   subst_assoc (Type*   t, Vector__Param*   assocs);
 int   if_param_count (Stmt   s);
 Type*   subst_self (Type*   t, Type*   impl_target);
 const char*   type_to_string_pretty (Type*   t);
@@ -2810,6 +4108,7 @@ void   analysis_unused_params (Typer*   t, Vector__Stmt*   program);
 void   check_unused_params_fn (Typer*   t, Stmt*   fnstmt);
 int   type_size_bytes (Type*   t, HashMap__Stmt*   structs);
 void   analysis_large_return (Typer*   t, Vector__Stmt*   program);
+bool   lsp_dispatch (JsonValue*   req, LspState*   state);
 int   lsp_main (void);
 void   print_indent (int   n);
 void   print_type (Type*   t);
@@ -2818,6 +4117,10 @@ void   print_expr (Expr*   e, int   indent);
 void   print_stmt (Stmt*   s, int   indent);
 void   load_into (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
 void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags);
+void   load_into_str_with_cache (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache);
+void   load_into_with_cache (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache);
+void   cached_resolve_and_push (Vector__Stmt*   stmts, Vector__Stmt*   parsed, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache);
+void   load_builtins_dir_with_cache (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache);
 void   collect_path_files_in_expr (Expr*   e, Vector__string*   out, HashMap__bool*   seen);
 void   collect_path_files_in_stmt (Stmt*   s, Vector__string*   out, HashMap__bool*   seen);
 const char*   drop_last_path_segment (const char*   path);
@@ -2862,11 +4165,185 @@ void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__boo
 bool   parse_program_into (Vector__Stmt*   stmts, const char*   path, Vector__ParseDiag*   pdiags);
 const char*   pick_cc (void);
 int   run_build (const char*   src_path, const char*   out_path, const char*   target, bool   then_run);
+Vector__string*   scan_test_fns (const char*   src);
+int   run_test (const char*   path);
+int   _golden_build_and_run (const char*   src, const char*   out_txt);
+const char*   _golden_normalize (const char*   s);
+void   _golden_show_diff (const char*   actual, const char*   expected);
+int   run_golden (const char*   dir);
 int main(int __glide_main_argc, char** __glide_main_argv);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Vector__string*   Vector_new__string (void);
 void   Vector_push__string (Vector__string*   self, const char*   x);
+int   Vector_len__string (Vector__string*   self);
+const char*   Vector_get__string (Vector__string*   self, int   i);
 Vector__Expr*   Vector_new__Expr (void);
 Vector__ParseDiag*   Vector_new__ParseDiag (void);
+void   Vector_free__ParseDiag (Vector__ParseDiag*   self);
 void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x);
 Vector__Stmt*   Vector_new__Stmt (void);
 void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x);
@@ -2886,15 +4363,16 @@ int   Vector_len__Param (Vector__Param*   self);
 Param   Vector_get__Param (Vector__Param*   self, int   i);
 void   Vector_set__Param (Vector__Param*   self, int   i, Param   x);
 void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x);
-int   Vector_len__string (Vector__string*   self);
-const char*   Vector_get__string (Vector__string*   self, int   i);
 void   Vector_push__Expr (Vector__Expr*   self, Expr   x);
 Vector__MatchArm*   Vector_new__MatchArm (void);
 void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x);
-int   Vector_len__ParseDiag (Vector__ParseDiag*   self);
-ParseDiag   Vector_get__ParseDiag (Vector__ParseDiag*   self, int   i);
+Vector__SelectArm*   Vector_new__SelectArm (void);
+void   Vector_push__SelectArm (Vector__SelectArm*   self, SelectArm   x);
 int   Vector_len__Expr (Vector__Expr*   self);
 Expr   Vector_get__Expr (Vector__Expr*   self, int   i);
+Stmt   Vector_pop__Stmt (Vector__Stmt*   self);
+int   Vector_len__ParseDiag (Vector__ParseDiag*   self);
+ParseDiag   Vector_get__ParseDiag (Vector__ParseDiag*   self, int   i);
 HashMap__Stmt*   HashMap_new__Stmt (void);
 Vector__TypeMacro*   Vector_new__TypeMacro (void);
 void   HashMap_insert__Stmt (HashMap__Stmt*   self, const char*   k, Stmt   v);
@@ -2912,6 +4390,7 @@ MacroBinding   Vector_get__MacroBinding (Vector__MacroBinding*   self, int   i);
 HashMap__bool*   HashMap_new__bool (void);
 void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v);
 bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k);
+void   Vector_free__Stmt (Vector__Stmt*   self);
 void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x);
 int   Vector_len__Type (Vector__Type*   self);
 Type   Vector_get__Type (Vector__Type*   self, int   i);
@@ -2925,10 +4404,16 @@ void   HashMap_free__bool (HashMap__bool*   self);
 void   HashMap_free__Type (HashMap__Type*   self);
 void   Vector_free__BorrowEvent (Vector__BorrowEvent*   self);
 void   Vector_free__DiagEntry (Vector__DiagEntry*   self);
+void   HashMap_free__string (HashMap__string*   self);
 void   HashMap_insert__Type (HashMap__Type*   self, const char*   k, Type   v);
 void   HashMap_insert__FnSig (HashMap__FnSig*   self, const char*   k, FnSig   v);
+int   Vector_len__EnumVariant (Vector__EnumVariant*   self);
+EnumVariant   Vector_get__EnumVariant (Vector__EnumVariant*   self, int   i);
+void   HashMap_insert__string (HashMap__string*   self, const char*   k, const char*   v);
 int   Vector_len__Field (Vector__Field*   self);
 Field   Vector_get__Field (Vector__Field*   self, int   i);
+bool   HashMap_contains__Type (HashMap__Type*   self, const char*   k);
+Type   HashMap_get__Type (HashMap__Type*   self, const char*   k);
 int   Vector_len__BorrowEvent (Vector__BorrowEvent*   self);
 BorrowEvent   Vector_get__BorrowEvent (Vector__BorrowEvent*   self, int   i);
 void   Vector_push__BorrowEvent (Vector__BorrowEvent*   self, BorrowEvent   x);
@@ -2936,40 +4421,42 @@ BorrowEvent   Vector_pop__BorrowEvent (Vector__BorrowEvent*   self);
 Vector__bool*   Vector_new__bool (void);
 void   Vector_push__bool (Vector__bool*   self, bool   x);
 bool   Vector_get__bool (Vector__bool*   self, int   i);
-bool   HashMap_contains__Type (HashMap__Type*   self, const char*   k);
-Type   HashMap_get__Type (HashMap__Type*   self, const char*   k);
-bool   HashMap_contains__FnSig (HashMap__FnSig*   self, const char*   k);
-FnSig   HashMap_get__FnSig (HashMap__FnSig*   self, const char*   k);
+int   Vector_len__MatchArm (Vector__MatchArm*   self);
+MatchArm   Vector_get__MatchArm (Vector__MatchArm*   self, int   i);
 bool   HashMap_contains__string (HashMap__string*   self, const char*   k);
 const char*   HashMap_get__string (HashMap__string*   self, const char*   k);
+void   Vector_free__string (Vector__string*   self);
+bool   HashMap_contains__FnSig (HashMap__FnSig*   self, const char*   k);
+FnSig   HashMap_get__FnSig (HashMap__FnSig*   self, const char*   k);
 void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x);
+Vector__string*   HashMap_keys__Type (HashMap__Type*   self);
 Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void);
 Vector__AnonFn*   Vector_new__AnonFn (void);
 Expr   Vector_pop__Expr (Vector__Expr*   self);
 void   HashMap_free__Stmt (HashMap__Stmt*   self);
 void   Vector_push__FnMonoEntry (Vector__FnMonoEntry*   self, FnMonoEntry   x);
 void   HashMap_clear__Type (HashMap__Type*   self);
-int   Vector_len__EnumVariant (Vector__EnumVariant*   self);
-EnumVariant   Vector_get__EnumVariant (Vector__EnumVariant*   self, int   i);
 int   Vector_len__AnonFn (Vector__AnonFn*   self);
 AnonFn   Vector_get__AnonFn (Vector__AnonFn*   self, int   i);
-int   Vector_len__MatchArm (Vector__MatchArm*   self);
-MatchArm   Vector_get__MatchArm (Vector__MatchArm*   self, int   i);
-void   HashMap_insert__string (HashMap__string*   self, const char*   k, const char*   v);
+int   Vector_len__SelectArm (Vector__SelectArm*   self);
+SelectArm   Vector_get__SelectArm (Vector__SelectArm*   self, int   i);
 int   Vector_len__FnMonoEntry (Vector__FnMonoEntry*   self);
 FnMonoEntry   Vector_get__FnMonoEntry (Vector__FnMonoEntry*   self, int   i);
 FnMonoEntry   Vector_pop__FnMonoEntry (Vector__FnMonoEntry*   self);
 Vector__JsonValue*   Vector_new__JsonValue (void);
 void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x);
-JsonValue   Vector_get__JsonValue (Vector__JsonValue*   self, int   i);
 int   Vector_len__JsonValue (Vector__JsonValue*   self);
+JsonValue   Vector_get__JsonValue (Vector__JsonValue*   self, int   i);
+void   Vector_free__JsonValue (Vector__JsonValue*   self);
 HashMap__LspDoc*   HashMap_new__LspDoc (void);
 Vector__ImportableSym*   Vector_new__ImportableSym (void);
+HashMap__Vector__Stmt_ptr*   HashMap_new__Vector__Stmt_ptr (void);
 void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym   x);
-void   Vector_clear__Stmt (Vector__Stmt*   self);
-bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k);
+Vector__string*   HashMap_keys__LspDoc (HashMap__LspDoc*   self);
 LspDoc   HashMap_get__LspDoc (HashMap__LspDoc*   self, const char*   k);
 void   HashMap_insert__LspDoc (HashMap__LspDoc*   self, const char*   k, LspDoc   v);
+void   Vector_clear__Stmt (Vector__Stmt*   self);
+bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k);
 int   Vector_len__DiagEntry (Vector__DiagEntry*   self);
 DiagEntry   Vector_get__DiagEntry (Vector__DiagEntry*   self, int   i);
 bool   HashMap_remove__LspDoc (HashMap__LspDoc*   self, const char*   k);
@@ -2988,6 +4475,9 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x);
 Vector__UseSite*   Vector_new__UseSite (void);
 int   Vector_len__UseSite (Vector__UseSite*   self);
 UseSite   Vector_get__UseSite (Vector__UseSite*   self, int   i);
+bool   HashMap_contains__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k);
+Vector__Stmt*   HashMap_get__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k);
+void   HashMap_insert__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k, Vector__Stmt*   v);
 void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap);
 int   HashMap_slot__Stmt (HashMap__Stmt*   self, const char*   k);
 void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap);
@@ -2996,12 +4486,14 @@ void   HashMap_resize__Type (HashMap__Type*   self, int   new_cap);
 int   HashMap_slot__Type (HashMap__Type*   self, const char*   k);
 void   HashMap_resize__FnSig (HashMap__FnSig*   self, int   new_cap);
 int   HashMap_slot__FnSig (HashMap__FnSig*   self, const char*   k);
-int   HashMap_slot__string (HashMap__string*   self, const char*   k);
 void   HashMap_resize__string (HashMap__string*   self, int   new_cap);
+int   HashMap_slot__string (HashMap__string*   self, const char*   k);
 int   HashMap_slot__LspDoc (HashMap__LspDoc*   self, const char*   k);
 void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap);
 void   HashMap_resize__ImportInfo (HashMap__ImportInfo*   self, int   new_cap);
 int   HashMap_slot__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
+int   HashMap_slot__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k);
+void   HashMap_resize__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, int   new_cap);
 int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k);
 int   HashMap_hash_key__bool (HashMap__bool*   self, const char*   k);
 int   HashMap_hash_key__Type (HashMap__Type*   self, const char*   k);
@@ -3009,6 +4501,7 @@ int   HashMap_hash_key__FnSig (HashMap__FnSig*   self, const char*   k);
 int   HashMap_hash_key__string (HashMap__string*   self, const char*   k);
 int   HashMap_hash_key__LspDoc (HashMap__LspDoc*   self, const char*   k);
 int   HashMap_hash_key__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
+int   HashMap_hash_key__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k);
 
 
 bool   _ws (int   c) {
@@ -3286,8 +4779,230 @@ __glide_result_int_t   string_try_parse_int (const char*   self) {
     return __glide_ok_int(acc);
 }
 
+const char*   fs_read (const char*   path) {
+    return read_file(path);
+}
+
+bool   fs_write (const char*   path, const char*   content) {
+    return write_file(path, content);
+}
+
+bool   fs_exists (const char*   path) {
+    return __glide_file_exists(path);
+}
+
+Vector__string*   fs_list (const char*   dir, const char*   suffix) {
+    const char*   raw = __glide_list_dir(dir, suffix);
+    if (__glide_string_eq(raw, "")) {
+        return Vector_new__string();
+    }
+    return string_split(raw, "\n");
+}
+
+Vector__string*   fs_read_lines (const char*   path) {
+    const char*   body = read_file(path);
+    if (__glide_string_eq(body, "")) {
+        return Vector_new__string();
+    }
+    Vector__string*   lines = string_split(body, "\n");
+    int   n = Vector_len__string(lines);
+    if (((n  >  0)  &&  __glide_string_eq(Vector_get__string(lines, (n  -  1)), ""))) {
+        Vector__string*   trimmed = Vector_new__string();
+        for (int   i = 0; (i  <  (n  -  1)); i++) {
+            Vector_push__string(trimmed, Vector_get__string(lines, i));
+        }
+        return trimmed;
+    }
+    return lines;
+}
+
+const char*   fs_basename (const char*   path) {
+    int   n = __glide_string_len(path);
+    int   i = n;
+    while ((i  >  0)) {
+        int   c = __glide_char_to_int(__glide_string_at(path, (i  -  1)));
+        if (((c  ==  47)  ||  (c  ==  92))) {
+            return __glide_string_substring(path, i, n);
+        }
+        (i  =  (i  -  1));
+    }
+    return path;
+}
+
+const char*   fs_extension (const char*   path) {
+    const char*   name = fs_basename(path);
+    int   n = __glide_string_len(name);
+    int   i = n;
+    while ((i  >  0)) {
+        int   c = __glide_char_to_int(__glide_string_at(name, (i  -  1)));
+        if ((c  ==  46)) {
+            if ((i  ==  1)) {
+                return "";
+            }
+            return string_to_lower(__glide_string_substring(name, i, n));
+        }
+        (i  =  (i  -  1));
+    }
+    return "";
+}
+
+int   fs_lines_count (const char*   path) {
+    const char*   body = read_file(path);
+    int   n = __glide_string_len(body);
+    if ((n  ==  0)) {
+        return 0;
+    }
+    int   count = 0;
+    for (int   i = 0; (i  <  n); i++) {
+        if ((__glide_char_to_int(__glide_string_at(body, i))  ==  10)) {
+            (count  =  (count  +  1));
+        }
+    }
+    if ((__glide_char_to_int(__glide_string_at(body, (n  -  1)))  !=  10)) {
+        (count  =  (count  +  1));
+    }
+    return count;
+}
+
+const char*   fs_read_or_default (const char*   path, const char*   fallback) {
+    if ((!__glide_file_exists(path))) {
+        return fallback;
+    }
+    return read_file(path);
+}
+
+const char*   os_name (void) {
+    return __glide_os_name();
+}
+
+const char*   os_arch (void) {
+    return __glide_os_arch();
+}
+
+bool   os_is_windows (void) {
+    return (__glide_is_windows()  !=  0);
+}
+
+bool   os_is_posix (void) {
+    return (__glide_is_windows()  ==  0);
+}
+
+bool   os_is_linux (void) {
+    return __glide_string_eq(__glide_os_name(), "linux");
+}
+
+bool   os_is_macos (void) {
+    return __glide_string_eq(__glide_os_name(), "macos");
+}
+
+const char*   os_path_sep (void) {
+    if ((__glide_is_windows()  !=  0)) {
+        return "\\";
+    }
+    return "/";
+}
+
+const char*   os_line_sep (void) {
+    if ((__glide_is_windows()  !=  0)) {
+        return "\r\n";
+    }
+    return "\n";
+}
+
+const char*   os_cwd (void) {
+    return __glide_cwd();
+}
+
+const char*   os_exe_path (void) {
+    return __glide_exe_path();
+}
+
+const char*   os_exe_dir (void) {
+    return __glide_exe_dir();
+}
+
+int   os_shell (const char*   cmd) {
+    return __glide_shell(cmd);
+}
+
+int   env_args_count (void) {
+    return args_count();
+}
+
+const char*   env_args_at (int   i) {
+    return args_at(i);
+}
+
+Vector__string*   env_args (void) {
+    Vector__string*   v = Vector_new__string();
+    int   n = args_count();
+    for (int   i = 1; (i  <  n); i++) {
+        Vector_push__string(v, args_at(i));
+    }
+    return v;
+}
+
+const char*   env_get (const char*   name) {
+    return __glide_getenv(name);
+}
+
+bool   env_has (const char*   name) {
+    return (!__glide_string_eq(__glide_getenv(name), ""));
+}
+
+void   env_exit (int   code) {
+    exit(code);
+}
+
+const char*   read_line (void) {
+    return __glide_read_line();
+}
+
+const char*   prompt (const char*   msg) {
+    io_write(msg);
+    flush();
+    const char*   line = read_line();
+    int   n = __glide_string_len(line);
+    if (((n  >  0)  &&  (__glide_char_to_int(__glide_string_at(line, (n  -  1)))  ==  10))) {
+        if (((n  >  1)  &&  (__glide_char_to_int(__glide_string_at(line, (n  -  2)))  ==  13))) {
+            return __glide_string_substring(line, 0, (n  -  2));
+        }
+        return __glide_string_substring(line, 0, (n  -  1));
+    }
+    return line;
+}
+
+__glide_result_int_t   read_int (void) {
+    return string_try_parse_int(string_trim(read_line()));
+}
+
+bool   read_yes_no (const char*   prompt_msg) {
+    const char*   response = string_trim(prompt(prompt_msg));
+    return (string_starts_with(response, "y")  ||  string_starts_with(response, "Y"));
+}
+
+const char*   read_bytes (int   n) {
+    return __glide_read_bytes(n);
+}
+
+void   io_write (const char*   s) {
+    __glide_write_str(s);
+}
+
+void   io_write_bytes (const char*   s, int   n) {
+    __glide_write_bytes(s, n);
+}
+
+void   flush (void) {
+    __glide_flush_stdout();
+}
+
+void   eprintln (const char*   s) {
+    __glide_log(s);
+}
+
 Lexer*   Lexer_new (const char*   src) {
-    Lexer*   l = (( Lexer* )malloc(sizeof( Lexer )));
+    Lexer*   l = (( Lexer* )__glide_palloc(sizeof( Lexer )));
     ((l-> src )  =  src);
     ((l-> src_len )  =  __glide_string_len(src));
     ((l-> pos )  =  0);
@@ -3298,7 +5013,7 @@ Lexer*   Lexer_new (const char*   src) {
 }
 
 void   Lexer_free (Lexer*   self) {
-    free((( void* )self));
+    __glide_pfree((( void* )self));
 }
 
 char   Lexer_peek (Lexer*   self) {
@@ -3611,6 +5326,11 @@ Token   Lexer_next_token (Lexer*   self) {
         Lexer_advance(self);
         return (( Token ){. kind  = TOK_OP, . lexeme  = "/=", . line  = start_line, . column  = start_col, . doc  = doc});
     }
+    if (((ci  ==  63)  &&  (__glide_char_to_int(Lexer_peek_at(self, 1))  ==  63))) {
+        Lexer_advance(self);
+        Lexer_advance(self);
+        return (( Token ){. kind  = TOK_OP, . lexeme  = "??", . line  = start_line, . column  = start_col, . doc  = doc});
+    }
     if ((((ci  ==  46)  &&  (__glide_char_to_int(Lexer_peek_at(self, 1))  ==  46))  &&  (__glide_char_to_int(Lexer_peek_at(self, 2))  ==  46))) {
         Lexer_advance(self);
         Lexer_advance(self);
@@ -3715,6 +5435,9 @@ bool   is_keyword (const char*   s) {
     if (__glide_string_eq(s, "defer")) {
         return true;
     }
+    if (__glide_string_eq(s, "defer_err")) {
+        return true;
+    }
     if (__glide_string_eq(s, "type")) {
         return true;
     }
@@ -3786,7 +5509,7 @@ const char*   token_kind_name (int   k) {
 }
 
 Type*   ty_fnptr (Vector__Type*   params, Type*   ret) {
-    Type*   t = (( Type* )calloc(1, sizeof( Type )));
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
     ((t-> kind )  =  TY_FNPTR);
     ((t-> args )  =  params);
     ((t-> fnptr_ret )  =  ret);
@@ -3794,7 +5517,7 @@ Type*   ty_fnptr (Vector__Type*   params, Type*   ret) {
 }
 
 Type*   ty_generic (const char*   name, Vector__Type*   args) {
-    Type*   t = (( Type* )calloc(1, sizeof( Type )));
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
     ((t-> kind )  =  TY_GENERIC);
     ((t-> name )  =  name);
     ((t-> inner )  =  NULL);
@@ -3803,7 +5526,7 @@ Type*   ty_generic (const char*   name, Vector__Type*   args) {
 }
 
 Type*   ty_named (const char*   name) {
-    Type*   t = (( Type* )calloc(1, sizeof( Type )));
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
     ((t-> kind )  =  TY_NAMED);
     ((t-> name )  =  name);
     ((t-> inner )  =  NULL);
@@ -3811,14 +5534,36 @@ Type*   ty_named (const char*   name) {
 }
 
 Type*   ty_result (Type*   inner) {
-    Type*   t = (( Type* )calloc(1, sizeof( Type )));
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
     ((t-> kind )  =  TY_RESULT);
     ((t-> inner )  =  inner);
     return t;
 }
 
+Type*   ty_option (Type*   inner) {
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    ((t-> kind )  =  TY_OPTION);
+    ((t-> inner )  =  inner);
+    return t;
+}
+
+Type*   ty_optres (Type*   inner) {
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    ((t-> kind )  =  TY_OPT_RESULT);
+    ((t-> inner )  =  inner);
+    return t;
+}
+
+Type*   ty_assoc (Type*   owner, const char*   name) {
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    ((t-> kind )  =  TY_ASSOC);
+    ((t-> inner )  =  owner);
+    ((t-> name )  =  name);
+    return t;
+}
+
 Type*   ty_pointer (Type*   inner) {
-    Type*   t = (( Type* )calloc(1, sizeof( Type )));
+    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
     ((t-> kind )  =  TY_POINTER);
     ((t-> name )  =  "");
     ((t-> inner )  =  inner);
@@ -3826,7 +5571,7 @@ Type*   ty_pointer (Type*   inner) {
 }
 
 Expr*   expr_int (int64_t   n, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_INT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -3835,7 +5580,7 @@ Expr*   expr_int (int64_t   n, int   line, int   col) {
 }
 
 Expr*   expr_float (const char*   lexeme, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_FLOAT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -3844,7 +5589,7 @@ Expr*   expr_float (const char*   lexeme, int   line, int   col) {
 }
 
 Expr*   expr_string (const char*   s, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_STRING);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -3853,7 +5598,7 @@ Expr*   expr_string (const char*   s, int   line, int   col) {
 }
 
 Expr*   expr_ident (const char*   name, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_IDENT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -3862,7 +5607,7 @@ Expr*   expr_ident (const char*   name, int   line, int   col) {
 }
 
 Expr*   expr_bool (bool   b, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_BOOL);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -3871,7 +5616,7 @@ Expr*   expr_bool (bool   b, int   line, int   col) {
 }
 
 Expr*   expr_binary (int   op, Expr*   lhs, Expr*   rhs) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_BINARY);
     ((e-> line )  =  (lhs-> line ));
     ((e-> column )  =  (lhs-> column ));
@@ -3882,7 +5627,7 @@ Expr*   expr_binary (int   op, Expr*   lhs, Expr*   rhs) {
 }
 
 Expr*   expr_call (Expr*   callee, Vector__Expr*   args) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_CALL);
     ((e-> line )  =  (callee-> line ));
     ((e-> column )  =  (callee-> column ));
@@ -3892,7 +5637,7 @@ Expr*   expr_call (Expr*   callee, Vector__Expr*   args) {
 }
 
 Stmt*   stmt_let (const char*   name, Type*   ty, Expr*   value, bool   is_mut, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_LET);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -3968,7 +5713,7 @@ Type*   strip_ptr (Type*   t) {
 }
 
 Stmt*   stmt_return (Expr*   v, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_RETURN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -3977,7 +5722,7 @@ Stmt*   stmt_return (Expr*   v, int   line, int   col) {
 }
 
 Stmt*   stmt_expr (Expr*   e) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_EXPR);
     if ((e  !=  NULL)) {
         ((s-> line )  =  (e-> line ));
@@ -3988,7 +5733,7 @@ Stmt*   stmt_expr (Expr*   e) {
 }
 
 Stmt*   stmt_fn (const char*   name, Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_FN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4000,7 +5745,7 @@ Stmt*   stmt_fn (const char*   name, Vector__Param*   params, Type*   ret_ty, Ve
 }
 
 Stmt*   stmt_struct (const char*   name, Vector__Field*   fields, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_STRUCT);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4010,7 +5755,7 @@ Stmt*   stmt_struct (const char*   name, Vector__Field*   fields, int   line, in
 }
 
 Stmt*   stmt_impl (Type*   target, Vector__Stmt*   methods, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_IMPL);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4020,7 +5765,7 @@ Stmt*   stmt_impl (Type*   target, Vector__Stmt*   methods, int   line, int   co
 }
 
 Stmt*   stmt_if (Expr*   cond, Vector__Stmt*   then_body, Vector__Stmt*   else_body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_IF);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4031,7 +5776,7 @@ Stmt*   stmt_if (Expr*   cond, Vector__Stmt*   then_body, Vector__Stmt*   else_b
 }
 
 Stmt*   stmt_while (Expr*   cond, Vector__Stmt*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_WHILE);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4041,7 +5786,7 @@ Stmt*   stmt_while (Expr*   cond, Vector__Stmt*   body, int   line, int   col) {
 }
 
 Stmt*   stmt_for (Stmt*   init, Expr*   cond, Expr*   step, Vector__Stmt*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_FOR);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4053,7 +5798,7 @@ Stmt*   stmt_for (Stmt*   init, Expr*   cond, Expr*   step, Vector__Stmt*   body
 }
 
 Stmt*   stmt_break (int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_BREAK);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4061,7 +5806,7 @@ Stmt*   stmt_break (int   line, int   col) {
 }
 
 Stmt*   stmt_continue (int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_CONTINUE);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4069,7 +5814,7 @@ Stmt*   stmt_continue (int   line, int   col) {
 }
 
 Stmt*   stmt_const (const char*   name, Type*   ty, Expr*   value, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_CONST);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4080,7 +5825,7 @@ Stmt*   stmt_const (const char*   name, Type*   ty, Expr*   value, int   line, i
 }
 
 Stmt*   stmt_import (const char*   path, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_IMPORT);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4089,7 +5834,7 @@ Stmt*   stmt_import (const char*   path, int   line, int   col) {
 }
 
 Stmt*   stmt_enum (const char*   name, Vector__EnumVariant*   variants, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_ENUM);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4099,7 +5844,7 @@ Stmt*   stmt_enum (const char*   name, Vector__EnumVariant*   variants, int   li
 }
 
 Stmt*   stmt_spawn (Expr*   call, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_SPAWN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4108,7 +5853,7 @@ Stmt*   stmt_spawn (Expr*   call, int   line, int   col) {
 }
 
 Stmt*   stmt_match (Expr*   scrutinee, Vector__MatchArm*   arms, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_MATCH);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4118,7 +5863,7 @@ Stmt*   stmt_match (Expr*   scrutinee, Vector__MatchArm*   arms, int   line, int
 }
 
 Stmt*   stmt_craw (const char*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_CRAW);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4127,7 +5872,7 @@ Stmt*   stmt_craw (const char*   body, int   line, int   col) {
 }
 
 Stmt*   stmt_asm (int   line, int   col) {
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_ASM);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4147,7 +5892,7 @@ Stmt*   stmt_asm (int   line, int   col) {
 }
 
 Expr*   expr_unary (int   op, Expr*   operand, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_UNARY);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -4157,7 +5902,7 @@ Expr*   expr_unary (int   op, Expr*   operand, int   line, int   col) {
 }
 
 Expr*   expr_assign (int   op, Expr*   lhs, Expr*   rhs) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_ASSIGN);
     ((e-> line )  =  (lhs-> line ));
     ((e-> column )  =  (lhs-> column ));
@@ -4168,7 +5913,7 @@ Expr*   expr_assign (int   op, Expr*   lhs, Expr*   rhs) {
 }
 
 Expr*   expr_member (Expr*   obj, const char*   field) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_MEMBER);
     ((e-> line )  =  (obj-> line ));
     ((e-> column )  =  (obj-> column ));
@@ -4178,7 +5923,7 @@ Expr*   expr_member (Expr*   obj, const char*   field) {
 }
 
 Expr*   expr_index (Expr*   obj, Expr*   idx) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_INDEX);
     ((e-> line )  =  (obj-> line ));
     ((e-> column )  =  (obj-> column ));
@@ -4188,7 +5933,7 @@ Expr*   expr_index (Expr*   obj, Expr*   idx) {
 }
 
 Expr*   expr_cast (Expr*   inner, Type*   target) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_CAST);
     ((e-> line )  =  (inner-> line ));
     ((e-> column )  =  (inner-> column ));
@@ -4198,7 +5943,7 @@ Expr*   expr_cast (Expr*   inner, Type*   target) {
 }
 
 Expr*   expr_path (const char*   ty, const char*   member, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_PATH);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -4208,7 +5953,7 @@ Expr*   expr_path (const char*   ty, const char*   member, int   line, int   col
 }
 
 Expr*   expr_macro (const char*   name, Vector__Expr*   args, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_MACRO);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -4219,7 +5964,7 @@ Expr*   expr_macro (const char*   name, Vector__Expr*   args, int   line, int   
 }
 
 Expr*   expr_macro_var (const char*   name, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_MACRO_VAR);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -4228,7 +5973,7 @@ Expr*   expr_macro_var (const char*   name, int   line, int   col) {
 }
 
 Expr*   expr_char (char   c, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_CHAR);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -4237,15 +5982,46 @@ Expr*   expr_char (char   c, int   line, int   col) {
 }
 
 Expr*   expr_null (int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_NULL);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
     return e;
 }
 
+Expr*   expr_if (Expr*   cond, Expr*   then_e, Expr*   else_e, int   line, int   col) {
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    ((e-> kind )  =  EX_IF);
+    ((e-> line )  =  line);
+    ((e-> column )  =  col);
+    ((e-> lhs )  =  cond);
+    ((e-> rhs )  =  then_e);
+    ((e-> operand )  =  else_e);
+    return e;
+}
+
+Expr*   expr_match (Expr*   scrut, Vector__MatchArm*   arms, int   line, int   col) {
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    ((e-> kind )  =  EX_MATCH);
+    ((e-> line )  =  line);
+    ((e-> column )  =  col);
+    ((e-> lhs )  =  scrut);
+    ((e-> match_arms )  =  arms);
+    return e;
+}
+
+Expr*   expr_block (Vector__Stmt*   stmts, Expr*   value, int   line, int   col) {
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    ((e-> kind )  =  EX_BLOCK);
+    ((e-> line )  =  line);
+    ((e-> column )  =  col);
+    ((e-> block_stmts )  =  stmts);
+    ((e-> operand )  =  value);
+    return e;
+}
+
 Expr*   expr_postinc (Expr*   inner) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_POSTINC);
     ((e-> line )  =  (inner-> line ));
     ((e-> column )  =  (inner-> column ));
@@ -4254,7 +6030,7 @@ Expr*   expr_postinc (Expr*   inner) {
 }
 
 Expr*   expr_fnexpr (Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_FNEXPR);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -4265,7 +6041,7 @@ Expr*   expr_fnexpr (Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   bo
 }
 
 Expr*   expr_postdec (Expr*   inner) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_POSTDEC);
     ((e-> line )  =  (inner-> line ));
     ((e-> column )  =  (inner-> column ));
@@ -4274,7 +6050,7 @@ Expr*   expr_postdec (Expr*   inner) {
 }
 
 Expr*   expr_struct_lit (const char*   type_name, Vector__string*   names, Vector__Expr*   values, int   line, int   col) {
-    Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((e-> kind )  =  EX_STRUCT_LIT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -4286,7 +6062,7 @@ Expr*   expr_struct_lit (const char*   type_name, Vector__string*   names, Vecto
 }
 
 Parser*   Parser_new (Lexer*   lex) {
-    Parser*   p = (( Parser* )malloc(sizeof( Parser )));
+    Parser*   p = (( Parser* )__glide_palloc(sizeof( Parser )));
     ((p-> lex )  =  lex);
     ((p-> current )  =  Lexer_next_token(lex));
     ((p-> peek )  =  Lexer_next_token(lex));
@@ -4298,7 +6074,10 @@ Parser*   Parser_new (Lexer*   lex) {
 }
 
 void   Parser_free (Parser*   self) {
-    free((( void* )self));
+    if (((self-> diags )  !=  NULL)) {
+        Vector_free__ParseDiag((self-> diags ));
+    }
+    __glide_pfree((( void* )self));
 }
 
 Token   Parser_advance (Parser*   self) {
@@ -4575,7 +6354,7 @@ Stmt*   parse_macro_def (Parser*   p) {
     } else {
         (body  =  parse_block(p));
     }
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_MACRO_DEF);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4852,11 +6631,20 @@ Stmt*   parse_trait (Parser*   p) {
     }
     Parser_expect_op(p, "{");
     Vector__Stmt*   methods = Vector_new__Stmt();
+    Vector__Param*   assocs = Vector_new__Param();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   doc = ((p-> current ). doc );
         bool   is_pub = false;
         if (Parser_eat_kw(p, "pub")) {
             (is_pub  =  true);
+        }
+        if (Parser_at_kw(p, "type")) {
+            Parser_advance(p);
+            const char*   aname = Parser_expect_ident(p);
+            Parser_expect_op(p, ";");
+            Type*   no_ty = NULL;
+            Vector_push__Param(assocs, (( Param ){. name  = aname, . ty  = no_ty}));
+            continue;
         }
         if (Parser_at_kw(p, "fn")) {
             Stmt*   m = parse_fn(p);
@@ -4868,12 +6656,12 @@ Stmt*   parse_trait (Parser*   p) {
                 Vector_push__Stmt(methods, (*m));
             }
         } else {
-            Parser_err(p, "expected `fn` inside trait body");
+            Parser_err(p, "expected `fn` or `type` inside trait body");
             Parser_advance(p);
         }
     }
     Parser_expect_op(p, "}");
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_TRAIT);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -4883,6 +6671,7 @@ Stmt*   parse_trait (Parser*   p) {
     ((s-> name_len )  =  nlen);
     ((s-> impl_methods )  =  methods);
     ((s-> trait_supers )  =  supers);
+    ((s-> assoc_decls )  =  assocs);
     return s;
 }
 
@@ -4908,11 +6697,21 @@ Stmt*   parse_impl (Parser*   p) {
     }
     Parser_expect_op(p, "{");
     Vector__Stmt*   methods = Vector_new__Stmt();
+    Vector__Param*   assocs = Vector_new__Param();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   doc = ((p-> current ). doc );
         bool   is_pub = false;
         if (Parser_eat_kw(p, "pub")) {
             (is_pub  =  true);
+        }
+        if (Parser_at_kw(p, "type")) {
+            Parser_advance(p);
+            const char*   aname = Parser_expect_ident(p);
+            Parser_expect_op(p, "=");
+            Type*   aty = parse_type(p);
+            Parser_expect_op(p, ";");
+            Vector_push__Param(assocs, (( Param ){. name  = aname, . ty  = aty}));
+            continue;
         }
         if (Parser_at_kw(p, "fn")) {
             Stmt*   m = parse_fn(p);
@@ -4934,7 +6733,7 @@ Stmt*   parse_impl (Parser*   p) {
                     Vector_push__Stmt(methods, (*m));
                 }
             } else {
-                Parser_err(p, "expected fn or macro inside impl");
+                Parser_err(p, "expected fn, macro, or type inside impl");
                 Parser_advance(p);
             }
         }
@@ -4944,11 +6743,15 @@ Stmt*   parse_impl (Parser*   p) {
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
         ((s-> type_param_bounds )  =  tps_bounds);
+        ((s-> assoc_decls )  =  assocs);
         if ((!__glide_string_eq(ns, ""))) {
             ((s-> import_path )  =  ns);
         }
         if ((!__glide_string_eq(trait_name, ""))) {
             ((s-> impl_trait_name )  =  trait_name);
+            substitute_self_in_methods(methods, target);
+            substitute_self_assoc_in_methods(methods, assocs);
+        } else {
             substitute_self_in_methods(methods, target);
         }
     }
@@ -4984,13 +6787,66 @@ Type*   substitute_self_in_type (Type*   t, Type*   target) {
     if ((((t-> kind )  ==  TY_NAMED)  &&  __glide_string_eq((t-> name ), "Self"))) {
         return target;
     }
-    if (((t-> inner )  !=  NULL)) {
-        ((t-> inner )  =  substitute_self_in_type((t-> inner ), target));
+    if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
+        return t;
     }
-    if (((t-> fnptr_ret )  !=  NULL)) {
-        ((t-> fnptr_ret )  =  substitute_self_in_type((t-> fnptr_ret ), target));
+    Type*   copy = (( Type* )__glide_palloc(sizeof( Type )));
+    ((*copy)  =  (*t));
+    if (((copy-> inner )  !=  NULL)) {
+        ((copy-> inner )  =  substitute_self_in_type((copy-> inner ), target));
     }
-    return t;
+    if (((copy-> fnptr_ret )  !=  NULL)) {
+        ((copy-> fnptr_ret )  =  substitute_self_in_type((copy-> fnptr_ret ), target));
+    }
+    return copy;
+}
+
+void   substitute_self_assoc_in_methods (Vector__Stmt*   methods, Vector__Param*   assocs) {
+    if (((methods  ==  NULL)  ||  (assocs  ==  NULL))) {
+        return;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(methods)); i++) {
+        Stmt   m = Vector_get__Stmt(methods, i);
+        if (((m. fn_params )  !=  NULL)) {
+            for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
+                Param   p = Vector_get__Param((m. fn_params ), j);
+                if (((p. ty )  !=  NULL)) {
+                    ((p. ty )  =  substitute_self_assoc_in_type((p. ty ), assocs));
+                }
+                Vector_set__Param((m. fn_params ), j, p);
+            }
+        }
+        if (((m. fn_ret_ty )  !=  NULL)) {
+            ((m. fn_ret_ty )  =  substitute_self_assoc_in_type((m. fn_ret_ty ), assocs));
+        }
+        Vector_set__Stmt(methods, i, m);
+    }
+}
+
+Type*   substitute_self_assoc_in_type (Type*   t, Vector__Param*   assocs) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    if ((((((t-> kind )  ==  TY_ASSOC)  &&  ((t-> inner )  !=  NULL))  &&  (((t-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq(((t-> inner )-> name ), "Self"))) {
+        for (int   i = 0; (i  <  Vector_len__Param(assocs)); i++) {
+            Param   a = Vector_get__Param(assocs, i);
+            if (__glide_string_eq((a. name ), (t-> name ))) {
+                return (a. ty );
+            }
+        }
+    }
+    if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
+        return t;
+    }
+    Type*   copy = (( Type* )__glide_palloc(sizeof( Type )));
+    ((*copy)  =  (*t));
+    if (((copy-> inner )  !=  NULL)) {
+        ((copy-> inner )  =  substitute_self_assoc_in_type((copy-> inner ), assocs));
+    }
+    if (((copy-> fnptr_ret )  !=  NULL)) {
+        ((copy-> fnptr_ret )  =  substitute_self_assoc_in_type((copy-> fnptr_ret ), assocs));
+    }
+    return copy;
 }
 
 Stmt*   parse_import (Parser*   p) {
@@ -5071,6 +6927,7 @@ Stmt*   parse_asm_block (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
     Parser_advance(p);
+    Parser_expect_op(p, "!");
     bool   is_volatile = false;
     if (Parser_eat_kw(p, "volatile")) {
         (is_volatile  =  true);
@@ -5151,7 +7008,7 @@ Stmt*   parse_stmt (Parser*   p) {
             Parser_advance(p);
         }
         Parser_expect_op(p, "*");
-        Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
         ((s-> kind )  =  ST_MACRO_REP);
         ((s-> line )  =  line);
         ((s-> column )  =  col);
@@ -5159,7 +7016,7 @@ Stmt*   parse_stmt (Parser*   p) {
         ((s-> macro_rep_sep )  =  sep);
         return s;
     }
-    if (Parser_at_kw(p, "asm")) {
+    if ((Parser_at_kw(p, "asm")  &&  Parser_peek_op(p, "!"))) {
         return parse_asm_block(p);
     }
     if ((((p-> current ). kind )  ==  TOK_RAW_BLOCK)) {
@@ -5168,6 +7025,9 @@ Stmt*   parse_stmt (Parser*   p) {
         const char*   body = ((p-> current ). lexeme );
         Parser_advance(p);
         return stmt_craw(body, line, col);
+    }
+    if ((((((p-> current ). kind )  ==  TOK_IDENT)  &&  __glide_string_eq(((p-> current ). lexeme ), "select"))  &&  Parser_peek_op(p, "!"))) {
+        return parse_select_macro(p);
     }
     if (Parser_at_kw(p, "let")) {
         return parse_let(p);
@@ -5196,8 +7056,21 @@ Stmt*   parse_stmt (Parser*   p) {
         Parser_advance(p);
         Expr*   e = parse_expr(p, 0);
         Parser_expect_op(p, ";");
-        Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
         ((s-> kind )  =  ST_DEFER);
+        ((s-> line )  =  line);
+        ((s-> column )  =  col);
+        ((s-> expr_value )  =  e);
+        return s;
+    }
+    if (Parser_at_kw(p, "defer_err")) {
+        int   line = ((p-> current ). line );
+        int   col = ((p-> current ). column );
+        Parser_advance(p);
+        Expr*   e = parse_expr(p, 0);
+        Parser_expect_op(p, ";");
+        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+        ((s-> kind )  =  ST_DEFER_ERR);
         ((s-> line )  =  line);
         ((s-> column )  =  col);
         ((s-> expr_value )  =  e);
@@ -5239,7 +7112,7 @@ Stmt*   parse_stmt (Parser*   p) {
     }
     if (Parser_at_op(p, "{")) {
         Vector__Stmt*   body = parse_block(p);
-        Stmt*   s = (( Stmt* )malloc(sizeof( Stmt )));
+        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
         ((s-> kind )  =  ST_BLOCK);
         ((s-> then_body )  =  body);
         return s;
@@ -5402,6 +7275,233 @@ Stmt*   parse_match (Parser*   p) {
     return stmt_match(scrut, arms, line, col);
 }
 
+Expr*   parse_match_expr (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Parser_advance(p);
+    bool   saved = (p-> no_struct_lit );
+    ((p-> no_struct_lit )  =  true);
+    Expr*   scrut = parse_expr(p, 0);
+    ((p-> no_struct_lit )  =  saved);
+    Parser_expect_op(p, "{");
+    Vector__MatchArm*   arms = Vector_new__MatchArm();
+    while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+        const char*   variant = "_";
+        Vector__string*   bindings = Vector_new__string();
+        if ((((p-> current ). kind )  ==  TOK_IDENT)) {
+            const char*   first = ((p-> current ). lexeme );
+            Parser_advance(p);
+            if (Parser_eat_op(p, "::")) {
+                (variant  =  Parser_expect_ident(p));
+            } else {
+                (variant  =  first);
+            }
+            if (Parser_eat_op(p, "(")) {
+                while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
+                    Vector_push__string(bindings, Parser_expect_ident(p));
+                    if ((!Parser_eat_op(p, ","))) {
+                        break;
+                    }
+                }
+                Parser_expect_op(p, ")");
+            }
+        }
+        Parser_expect_op(p, "=>");
+        Vector__Stmt*   body = Vector_new__Stmt();
+        if (Parser_at_op(p, "{")) {
+            Vector__Stmt*   blk = parse_block(p);
+            for (int   i = 0; (i  <  Vector_len__Stmt(blk)); i++) {
+                Vector_push__Stmt(body, Vector_get__Stmt(blk, i));
+            }
+        } else {
+            Expr*   e = parse_expr(p, 0);
+            Vector_push__Stmt(body, (*stmt_return(e, line, col)));
+        }
+        Vector_push__MatchArm(arms, (( MatchArm ){. variant  = variant, . bindings  = bindings, . body  = body}));
+        Parser_eat_op(p, ",");
+    }
+    Parser_expect_op(p, "}");
+    return expr_match(scrut, arms, line, col);
+}
+
+Stmt*   parse_select_macro (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Parser_advance(p);
+    Parser_expect_op(p, "!");
+    Parser_expect_op(p, "{");
+    Vector__SelectArm*   arms = Vector_new__SelectArm();
+    while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+        SelectArm*   arm = parse_select_arm(p);
+        if ((arm  !=  NULL)) {
+            Vector_push__SelectArm(arms, (*arm));
+        }
+        Parser_eat_op(p, ",");
+        Parser_eat_op(p, ";");
+    }
+    Parser_expect_op(p, "}");
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    ((s-> kind )  =  ST_SELECT);
+    ((s-> line )  =  line);
+    ((s-> column )  =  col);
+    ((s-> select_arms )  =  arms);
+    return s;
+}
+
+Expr*   select_extract_recv_chan (Parser*   p, Expr*   e) {
+    if ((((((e  ==  NULL)  ||  ((e-> kind )  !=  EX_CALL))  ||  ((e-> lhs )  ==  NULL))  ||  (((e-> lhs )-> kind )  !=  EX_MEMBER))  ||  (!__glide_string_eq(((e-> lhs )-> field ), "recv")))) {
+        Parser_err(p, "select arm RHS must be `chan.recv()`");
+        return NULL;
+    }
+    if ((((e-> args )  !=  NULL)  &&  (Vector_len__Expr((e-> args ))  !=  0))) {
+        Parser_err(p, "`chan.recv()` takes no args");
+        return NULL;
+    }
+    return ((e-> lhs )-> lhs );
+}
+
+SelectArm*   parse_select_arm (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Expr*   lhs = parse_expr(p, 0);
+    if ((lhs  ==  NULL)) {
+        return NULL;
+    }
+    if (Parser_at_op(p, "=")) {
+        Parser_advance(p);
+        Expr*   rhs = parse_expr(p, 0);
+        if ((rhs  ==  NULL)) {
+            return NULL;
+        }
+        Parser_expect_op(p, "=>");
+        Vector__Stmt*   body = parse_block(p);
+        if (((lhs-> kind )  ==  EX_IDENT)) {
+            const char*   name = (lhs-> str_val );
+            if ((__glide_string_eq(name, "none")  ||  __glide_string_eq(name, "None"))) {
+                Expr*   chan = select_extract_recv_chan(p, rhs);
+                SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+                ((arm-> kind )  =  SEL_RECV_NONE);
+                ((arm-> chan_expr )  =  chan);
+                ((arm-> body )  =  body);
+                ((arm-> line )  =  line);
+                ((arm-> column )  =  col);
+                return arm;
+            }
+            Expr*   chan = select_extract_recv_chan(p, rhs);
+            SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+            ((arm-> kind )  =  SEL_RECV);
+            ((arm-> chan_expr )  =  chan);
+            ((arm-> bind_name )  =  name);
+            ((arm-> body )  =  body);
+            ((arm-> line )  =  line);
+            ((arm-> column )  =  col);
+            return arm;
+        }
+        if (((((lhs-> kind )  ==  EX_CALL)  &&  ((lhs-> lhs )  !=  NULL))  &&  (((lhs-> lhs )-> kind )  ==  EX_IDENT))) {
+            const char*   cname = ((lhs-> lhs )-> str_val );
+            if ((((__glide_string_eq(cname, "some")  ||  __glide_string_eq(cname, "Some"))  &&  ((lhs-> args )  !=  NULL))  &&  (Vector_len__Expr((lhs-> args ))  ==  1))) {
+                Expr   arg0 = Vector_get__Expr((lhs-> args ), 0);
+                if (((arg0. kind )  ==  EX_IDENT)) {
+                    Expr*   chan = select_extract_recv_chan(p, rhs);
+                    SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+                    ((arm-> kind )  =  SEL_RECV_SOME);
+                    ((arm-> chan_expr )  =  chan);
+                    ((arm-> bind_name )  =  (arg0. str_val ));
+                    ((arm-> body )  =  body);
+                    ((arm-> line )  =  line);
+                    ((arm-> column )  =  col);
+                    return arm;
+                }
+            }
+        }
+        Parser_err(p, "invalid recv-arm pattern (use `var = chan.recv()`, `some(v) = chan.recv()`, or `none = chan.recv()`)");
+        return NULL;
+    }
+    if (Parser_at_op(p, "=>")) {
+        Parser_advance(p);
+        Vector__Stmt*   body = parse_block(p);
+        if ((((lhs-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((lhs-> str_val ), "default"))) {
+            SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+            ((arm-> kind )  =  SEL_DEFAULT);
+            ((arm-> body )  =  body);
+            ((arm-> line )  =  line);
+            ((arm-> column )  =  col);
+            return arm;
+        }
+        if ((((((((lhs-> kind )  ==  EX_CALL)  &&  ((lhs-> lhs )  !=  NULL))  &&  (((lhs-> lhs )-> kind )  ==  EX_MEMBER))  &&  __glide_string_eq(((lhs-> lhs )-> field ), "send"))  &&  ((lhs-> args )  !=  NULL))  &&  (Vector_len__Expr((lhs-> args ))  ==  1))) {
+            Expr   arg0 = Vector_get__Expr((lhs-> args ), 0);
+            Expr*   arg_ptr = (( Expr* )__glide_palloc(sizeof( Expr )));
+            ((*arg_ptr)  =  arg0);
+            SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+            ((arm-> kind )  =  SEL_SEND);
+            ((arm-> chan_expr )  =  ((lhs-> lhs )-> lhs ));
+            ((arm-> send_value )  =  arg_ptr);
+            ((arm-> body )  =  body);
+            ((arm-> line )  =  line);
+            ((arm-> column )  =  col);
+            return arm;
+        }
+        Parser_err(p, "invalid select arm (expected `chan.send(v) =>` or `default =>`)");
+        return NULL;
+    }
+    Parser_err(p, "expected '=' or '=>' in select arm");
+    return NULL;
+}
+
+Expr*   parse_block_expr (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Parser_expect_op(p, "{");
+    Vector__Stmt*   stmts = Vector_new__Stmt();
+    while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+        Stmt*   s = parse_stmt(p);
+        if ((s  !=  NULL)) {
+            Vector_push__Stmt(stmts, (*s));
+        }
+    }
+    Parser_expect_op(p, "}");
+    Expr*   value = NULL;
+    if ((Vector_len__Stmt(stmts)  >  0)) {
+        Stmt   last = Vector_get__Stmt(stmts, (Vector_len__Stmt(stmts)  -  1));
+        if ((((last. kind )  ==  ST_RETURN)  &&  ((last. expr_value )  !=  NULL))) {
+            (value  =  (last. expr_value ));
+            Vector_pop__Stmt(stmts);
+        }
+    }
+    if ((value  ==  NULL)) {
+        ParseDiag   d = (( ParseDiag ){. origin  = "", . line  = line, . col  = col, . msg  = "block expression must end with `return <expr>;`"});
+        Vector_push__ParseDiag((p-> diags ), d);
+        ((p-> error_count )  =  ((p-> error_count )  +  1));
+        (value  =  expr_int(0, line, col));
+    }
+    return expr_block(stmts, value, line, col);
+}
+
+Expr*   parse_if_expr (Parser*   p) {
+    int   line = ((p-> current ). line );
+    int   col = ((p-> current ). column );
+    Parser_advance(p);
+    bool   saved = (p-> no_struct_lit );
+    ((p-> no_struct_lit )  =  true);
+    Expr*   cond = parse_expr(p, 0);
+    ((p-> no_struct_lit )  =  saved);
+    Parser_expect_op(p, "{");
+    Expr*   then_e = parse_expr(p, 0);
+    Parser_expect_op(p, "}");
+    if ((!Parser_eat_kw(p, "else"))) {
+        return expr_if(cond, then_e, NULL, line, col);
+    }
+    Expr*   else_e;
+    if (Parser_at_kw(p, "if")) {
+        (else_e  =  parse_if_expr(p));
+    } else {
+        Parser_expect_op(p, "{");
+        (else_e  =  parse_expr(p, 0));
+        Parser_expect_op(p, "}");
+    }
+    return expr_if(cond, then_e, else_e, line, col);
+}
+
 Stmt*   parse_if (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
@@ -5447,7 +7547,7 @@ Stmt*   parse_while (Parser*   p) {
         Expr*   recv = parse_expr(p, 0);
         ((p-> no_struct_lit )  =  saved);
         Vector__Stmt*   body = parse_block(p);
-        Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
         ((s-> kind )  =  ST_WHILE_RECV);
         ((s-> line )  =  line);
         ((s-> column )  =  col);
@@ -5539,7 +7639,7 @@ Stmt*   parse_for_in (Parser*   p, int   line, int   col) {
     }
     ((p-> no_struct_lit )  =  saved);
     Vector__Stmt*   body = parse_block(p);
-    Stmt*   s = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((s-> kind )  =  ST_FOR_IN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -5559,6 +7659,14 @@ Type*   parse_type (Parser*   p) {
         Type*   inner = parse_type(p);
         return ty_result(inner);
     }
+    if (Parser_eat_op(p, "?")) {
+        if (Parser_eat_op(p, "!")) {
+            Type*   inner = parse_type(p);
+            return ty_optres(inner);
+        }
+        Type*   inner = parse_type(p);
+        return ty_option(inner);
+    }
     if (Parser_eat_op(p, "*")) {
         Type*   inner = parse_type(p);
         return ty_pointer(inner);
@@ -5566,7 +7674,7 @@ Type*   parse_type (Parser*   p) {
     if (Parser_at_kw(p, "dyn")) {
         Parser_advance(p);
         const char*   name = Parser_expect_ident(p);
-        Type*   t = (( Type* )calloc(1, sizeof( Type )));
+        Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
         ((t-> kind )  =  TY_DYN);
         ((t-> name )  =  name);
         return t;
@@ -5574,13 +7682,13 @@ Type*   parse_type (Parser*   p) {
     if (Parser_eat_op(p, "&")) {
         if (Parser_eat_kw(p, "mut")) {
             Type*   inner = parse_type(p);
-            Type*   t = (( Type* )malloc(sizeof( Type )));
+            Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
             ((t-> kind )  =  TY_BORROW_MUT);
             ((t-> inner )  =  inner);
             return t;
         }
         Type*   inner = parse_type(p);
-        Type*   t = (( Type* )malloc(sizeof( Type )));
+        Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
         ((t-> kind )  =  TY_BORROW);
         ((t-> inner )  =  inner);
         return t;
@@ -5589,7 +7697,7 @@ Type*   parse_type (Parser*   p) {
         Parser_advance(p);
         Parser_advance(p);
         Type*   inner = parse_type(p);
-        Type*   t = (( Type* )malloc(sizeof( Type )));
+        Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
         ((t-> kind )  =  TY_SLICE);
         ((t-> inner )  =  inner);
         return t;
@@ -5635,6 +7743,11 @@ Type*   parse_type (Parser*   p) {
             }
             Parser_consume_close_angle(p);
             return ty_generic(name, args);
+        }
+        if (Parser_at_op(p, "::")) {
+            Parser_advance(p);
+            const char*   assoc_name = Parser_expect_ident(p);
+            return ty_assoc(ty_named(name), assoc_name);
         }
         return ty_named(name);
     }
@@ -5747,6 +7860,9 @@ int   peek_binop_bp (Parser*   p) {
         return 0;
     }
     const char*   lex = ((p-> current ). lexeme );
+    if (__glide_string_eq(lex, "??")) {
+        return ((100  *  1)  +  OP_COALESCE);
+    }
     if (__glide_string_eq(lex, "||")) {
         return ((100  *  2)  +  OP_OR);
     }
@@ -5884,6 +8000,9 @@ Expr*   parse_prefix (Parser*   p) {
             return expr_macro_var(nm, line, col);
         }
     }
+    if ((((tok. kind )  ==  TOK_OP)  &&  __glide_string_eq((tok. lexeme ), "{"))) {
+        return parse_block_expr(p);
+    }
     if (((tok. kind )  ==  TOK_INT)) {
         Parser_advance(p);
         return expr_int(parse_int_lexeme((tok. lexeme )), line, col);
@@ -5917,6 +8036,12 @@ Expr*   parse_prefix (Parser*   p) {
         if (__glide_string_eq((tok. lexeme ), "null")) {
             Parser_advance(p);
             return expr_null(line, col);
+        }
+        if (__glide_string_eq((tok. lexeme ), "if")) {
+            return parse_if_expr(p);
+        }
+        if (__glide_string_eq((tok. lexeme ), "match")) {
+            return parse_match_expr(p);
         }
         if (__glide_string_eq((tok. lexeme ), "fn")) {
             Parser_advance(p);
@@ -5968,7 +8093,7 @@ Expr*   parse_prefix (Parser*   p) {
             Parser_expect_op(p, "(");
             Type*   t = parse_type(p);
             Parser_expect_op(p, ")");
-            Expr*   e = (( Expr* )calloc(1, sizeof( Expr )));
+            Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
             ((e-> kind )  =  EX_SIZEOF);
             ((e-> line )  =  line);
             ((e-> column )  =  col);
@@ -5998,7 +8123,7 @@ Expr*   parse_prefix (Parser*   p) {
             return expr_macro(__glide_string_concat(tn, "__new"), args, line, col);
         }
     }
-    if (((tok. kind )  ==  TOK_IDENT)) {
+    if ((((tok. kind )  ==  TOK_IDENT)  ||  ((tok. kind )  ==  TOK_KEYWORD))) {
         Parser_advance(p);
         if (Parser_at_op(p, "::")) {
             Parser_advance(p);
@@ -6394,14 +8519,14 @@ Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__Type
                     return NULL;
                 }
                 Expr   recv_arg = Vector_get__Expr((call-> args ), 0);
-                Expr*   recv_p = (( Expr* )calloc(1, sizeof( Expr )));
+                Expr*   recv_p = (( Expr* )__glide_palloc(sizeof( Expr )));
                 ((*recv_p)  =  recv_arg);
                 Vector__Expr*   rest = Vector_new__Expr();
                 for (int   k = 1; (k  <  Vector_len__Expr((call-> args ))); k++) {
                     Expr   a = Vector_get__Expr((call-> args ), k);
                     Vector_push__Expr(rest, a);
                 }
-                Expr*   synth = (( Expr* )calloc(1, sizeof( Expr )));
+                Expr*   synth = (( Expr* )__glide_palloc(sizeof( Expr )));
                 ((*synth)  =  (*call));
                 ((synth-> args )  =  rest);
                 return expand_with_def_recv(synth, (&(entry. def )), recv_p);
@@ -6475,7 +8600,7 @@ Vector__Stmt*   expand_with_def_recv (Expr*   call, Stmt*   def, Expr*   recv) {
         Stmt   bs = Vector_get__Stmt(body, i);
         Vector_push__Stmt(block_body, bs);
     }
-    Stmt*   block = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   block = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((block-> kind )  =  ST_BLOCK);
     ((block-> line )  =  (call-> line ));
     ((block-> column )  =  (call-> column ));
@@ -6542,7 +8667,7 @@ Vector__Stmt*   macro_subst_stmt (Stmt*   s, Vector__MacroBinding*   bindings, i
         }
         return out;
     }
-    Stmt*   cloned = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   cloned = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((*cloned)  =  (*s));
     if (((cloned-> let_value )  !=  NULL)) {
         ((cloned-> let_value )  =  macro_subst_expr((cloned-> let_value ), bindings, rep_idx, self_name));
@@ -6563,7 +8688,7 @@ Vector__Stmt*   macro_subst_stmt (Stmt*   s, Vector__MacroBinding*   bindings, i
         Vector__Stmt*   inits = macro_subst_stmt((cloned-> for_init ), bindings, rep_idx, self_name);
         if ((Vector_len__Stmt(inits)  >  0)) {
             Stmt   init0 = Vector_get__Stmt(inits, 0);
-            Stmt*   copy = (( Stmt* )calloc(1, sizeof( Stmt )));
+            Stmt*   copy = (( Stmt* )__glide_palloc(sizeof( Stmt )));
             ((*copy)  =  init0);
             ((cloned-> for_init )  =  copy);
         }
@@ -6608,7 +8733,7 @@ Expr*   macro_subst_expr (Expr*   e, Vector__MacroBinding*   bindings, int   rep
     if (((((e-> kind )  ==  EX_IDENT)  &&  (!__glide_string_eq(self_name, "")))  &&  __glide_string_eq((e-> str_val ), "self"))) {
         return expr_ident(self_name, (e-> line ), (e-> column ));
     }
-    Expr*   cloned = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   cloned = (( Expr* )__glide_palloc(sizeof( Expr )));
     ((*cloned)  =  (*e));
     if (((cloned-> lhs )  !=  NULL)) {
         ((cloned-> lhs )  =  macro_subst_expr((cloned-> lhs ), bindings, rep_idx, self_name));
@@ -6653,7 +8778,7 @@ Expr*   lookup_var (const char*   name, Vector__MacroBinding*   bindings, int   
             (idx  =  rep_idx);
         }
         Expr   chosen = Vector_get__Expr((b. args ), idx);
-        Expr*   p = (( Expr* )calloc(1, sizeof( Expr )));
+        Expr*   p = (( Expr* )__glide_palloc(sizeof( Expr )));
         ((*p)  =  chosen);
         return p;
     }
@@ -6675,6 +8800,24 @@ Vector__Stmt*   lower_program (Vector__Stmt*   stmts) {
     Vector__Stmt*   out = Vector_new__Stmt();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
+        Stmt*   l = lower_stmt((&s));
+        if ((l  !=  NULL)) {
+            Vector_push__Stmt(out, (*l));
+        }
+    }
+    return out;
+}
+
+Vector__Stmt*   lower_program_user_only (Vector__Stmt*   stmts, const char*   user_path) {
+    expand_trait_defaults(stmts);
+    Vector__Stmt*   out = Vector_new__Stmt();
+    for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
+        Stmt   s = Vector_get__Stmt(stmts, i);
+        bool   is_user = ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))  ||  __glide_string_eq((s. origin ), user_path));
+        if ((!is_user)) {
+            Vector_push__Stmt(out, s);
+            continue;
+        }
         Stmt*   l = lower_stmt((&s));
         if ((l  !=  NULL)) {
             Vector_push__Stmt(out, (*l));
@@ -6716,6 +8859,7 @@ void   expand_trait_defaults (Vector__Stmt*   stmts) {
                 HashMap_insert__bool(provided, (m. name ), true);
             }
         }
+        Vector__Stmt*   to_add = Vector_new__Stmt();
         for (int   k = 0; (k  <  Vector_len__Stmt((trait_def. impl_methods ))); k++) {
             Stmt   req = Vector_get__Stmt((trait_def. impl_methods ), k);
             if ((((req. name )  ==  NULL)  ||  __glide_string_eq((req. name ), ""))) {
@@ -6727,8 +8871,15 @@ void   expand_trait_defaults (Vector__Stmt*   stmts) {
             if (HashMap_contains__bool(provided, (req. name ))) {
                 continue;
             }
-            Stmt*   copy = (( Stmt* )calloc(1, sizeof( Stmt )));
+            Stmt*   copy = (( Stmt* )__glide_palloc(sizeof( Stmt )));
             ((*copy)  =  req);
+            if (((req. fn_params )  !=  NULL)) {
+                Vector__Param*   cloned_params = Vector_new__Param();
+                for (int   pi = 0; (pi  <  Vector_len__Param((req. fn_params ))); pi++) {
+                    Vector_push__Param(cloned_params, Vector_get__Param((req. fn_params ), pi));
+                }
+                ((copy-> fn_params )  =  cloned_params);
+            }
             if (((imp. impl_target )  !=  NULL)) {
                 Vector__Stmt*   single = Vector_new__Stmt();
                 Vector_push__Stmt(single, (*copy));
@@ -6736,8 +8887,19 @@ void   expand_trait_defaults (Vector__Stmt*   stmts) {
                 Stmt   sub = Vector_get__Stmt(single, 0);
                 ((*copy)  =  sub);
             }
-            Vector_push__Stmt((imp. impl_methods ), (*copy));
+            Vector_push__Stmt(to_add, (*copy));
         }
+        if ((Vector_len__Stmt(to_add)  >  0)) {
+            Vector__Stmt*   merged = Vector_new__Stmt();
+            for (int   k = 0; (k  <  Vector_len__Stmt((imp. impl_methods ))); k++) {
+                Vector_push__Stmt(merged, Vector_get__Stmt((imp. impl_methods ), k));
+            }
+            for (int   k = 0; (k  <  Vector_len__Stmt(to_add)); k++) {
+                Vector_push__Stmt(merged, Vector_get__Stmt(to_add, k));
+            }
+            ((imp. impl_methods )  =  merged);
+        }
+        Vector_free__Stmt(to_add);
         Vector_set__Stmt(stmts, i, imp);
     }
 }
@@ -6777,13 +8939,15 @@ Stmt*   lower_stmt (Stmt*   s) {
         ((s-> for_init )  =  lower_stmt((s-> for_init )));
     }
     if (((s-> impl_methods )  !=  NULL)) {
+        Vector__Stmt*   new_methods = Vector_new__Stmt();
         for (int   j = 0; (j  <  Vector_len__Stmt((s-> impl_methods ))); j++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), j);
             Stmt*   lm = lower_stmt((&m));
             if ((lm  !=  NULL)) {
-                Vector_set__Stmt((s-> impl_methods ), j, (*lm));
+                Vector_push__Stmt(new_methods, (*lm));
             }
         }
+        ((s-> impl_methods )  =  new_methods);
     }
     return s;
 }
@@ -6841,7 +9005,7 @@ Stmt*   lower_for_in (Stmt*   s) {
     }
     Stmt*   inner_for = stmt_for(init, cond, step, inner_body, line, col);
     Vector_push__Stmt(block_body, (*inner_for));
-    Stmt*   block = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   block = (( Stmt* )__glide_palloc(sizeof( Stmt )));
     ((block-> kind )  =  ST_BLOCK);
     ((block-> line )  =  line);
     ((block-> column )  =  col);
@@ -6875,6 +9039,12 @@ bool   type_eq (Type*   a, Type*   b) {
     }
     if (((a-> kind )  ==  TY_DYN)) {
         return __glide_string_eq((a-> name ), (b-> name ));
+    }
+    if (((a-> kind )  ==  TY_ASSOC)) {
+        if ((!__glide_string_eq((a-> name ), (b-> name )))) {
+            return false;
+        }
+        return type_eq((a-> inner ), (b-> inner ));
     }
     return type_eq((a-> inner ), (b-> inner ));
 }
@@ -6914,8 +9084,17 @@ const char*   type_to_string (Type*   t) {
     if (((t-> kind )  ==  TY_RESULT)) {
         return __glide_string_concat("!", type_to_string((t-> inner )));
     }
+    if (((t-> kind )  ==  TY_OPTION)) {
+        return __glide_string_concat("?", type_to_string((t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_OPT_RESULT)) {
+        return __glide_string_concat("?!", type_to_string((t-> inner )));
+    }
     if (((t-> kind )  ==  TY_DYN)) {
         return __glide_string_concat("dyn ", (t-> name ));
+    }
+    if (((t-> kind )  ==  TY_ASSOC)) {
+        return __glide_string_concat(__glide_string_concat(type_to_string((t-> inner )), "::"), (t-> name ));
     }
     return "<ty?>";
 }
@@ -7031,7 +9210,7 @@ bool   types_compat (Type*   want, Type*   got) {
 }
 
 Typer*   Typer_new (void) {
-    Typer*   t = (( Typer* )malloc(sizeof( Typer )));
+    Typer*   t = (( Typer* )__glide_palloc(sizeof( Typer )));
     HashMap__FnSig*   fns = HashMap_new__FnSig();
     HashMap__bool*   structs = HashMap_new__bool();
     HashMap__Type*   scope = HashMap_new__Type();
@@ -7061,6 +9240,10 @@ Typer*   Typer_new (void) {
     ((t-> enforce_visibility )  =  false);
     HashMap__bool*   is = HashMap_new__bool();
     ((t-> impl_set )  =  is);
+    HashMap__Type*   at = HashMap_new__Type();
+    ((t-> assoc_table )  =  at);
+    HashMap__string*   en = HashMap_new__string();
+    ((t-> enums )  =  en);
     ((t-> error_count )  =  0);
     return t;
 }
@@ -7104,7 +9287,14 @@ void   Typer_free (Typer*   self) {
     HashMap_free__bool((self-> owned_locals ));
     Vector_free__BorrowEvent((self-> borrows ));
     Vector_free__DiagEntry((self-> diagnostics ));
-    free((( void* )self));
+    HashMap_free__bool((self-> visibility ));
+    HashMap_free__bool((self-> module_imports ));
+    HashMap_free__bool((self-> module_full_paths ));
+    HashMap_free__bool((self-> field_pub ));
+    HashMap_free__string((self-> struct_origin ));
+    HashMap_free__bool((self-> impl_set ));
+    HashMap_free__string((self-> enums ));
+    __glide_pfree((( void* )self));
 }
 
 void   Typer_push_diag_tag (Typer*   self, int   line, int   col, int   severity, const char*   code, const char*   msg, int   tag) {
@@ -7173,7 +9363,11 @@ void   pre_register (Typer*   t, Vector__Stmt*   program) {
             Type*   ty = (s. let_ty );
             if (((ty  ==  NULL)  &&  ((s. let_value )  !=  NULL))) {
                 if ((((s. let_value )-> kind )  ==  EX_INT)) {
-                    (ty  =  ty_named("int"));
+                    if (((((s. let_value )-> int_val )  >  2147483647)  ||  (((s. let_value )-> int_val )  <  (-2147483648)))) {
+                        (ty  =  ty_named("i64"));
+                    } else {
+                        (ty  =  ty_named("int"));
+                    }
                 } else {
                     if ((((s. let_value )-> kind )  ==  EX_FLOAT)) {
                         (ty  =  ty_named("float"));
@@ -7202,6 +9396,17 @@ void   pre_register (Typer*   t, Vector__Stmt*   program) {
         }
         if (((s. kind )  ==  ST_ENUM)) {
             HashMap_insert__bool((t-> structs ), (s. name ), true);
+            const char*   vlist = "";
+            if (((s. enum_variants )  !=  NULL)) {
+                for (int   j = 0; (j  <  Vector_len__EnumVariant((s. enum_variants ))); j++) {
+                    EnumVariant   ev = Vector_get__EnumVariant((s. enum_variants ), j);
+                    if ((j  >  0)) {
+                        (vlist  =  __glide_string_concat(vlist, ","));
+                    }
+                    (vlist  =  __glide_string_concat(vlist, (ev. name )));
+                }
+            }
+            HashMap_insert__string((t-> enums ), (s. name ), vlist);
         }
         if (((s. kind )  ==  ST_STRUCT)) {
             HashMap_insert__bool((t-> structs ), (s. name ), true);
@@ -7256,6 +9461,16 @@ void   pre_register (Typer*   t, Vector__Stmt*   program) {
             continue;
         }
         HashMap_insert__bool((t-> impl_set ), __glide_string_concat(__glide_string_concat((s. impl_trait_name ), "::"), tname), true);
+        if (((s. assoc_decls )  !=  NULL)) {
+            for (int   j = 0; (j  <  Vector_len__Param((s. assoc_decls ))); j++) {
+                Param   a = Vector_get__Param((s. assoc_decls ), j);
+                if (((a. ty )  ==  NULL)) {
+                    continue;
+                }
+                const char*   key = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat((s. impl_trait_name ), "::"), tname), "::"), (a. name ));
+                HashMap_insert__Type((t-> assoc_table ), key, (*(a. ty )));
+            }
+        }
     }
 }
 
@@ -7282,6 +9497,12 @@ bool   arg_compat (Type*   want, Type*   got, Vector__string*   tps) {
         return arg_compat((want-> inner ), (got-> inner ), tps);
     }
     if ((((want-> kind )  ==  TY_RESULT)  &&  ((got-> kind )  ==  TY_RESULT))) {
+        return arg_compat((want-> inner ), (got-> inner ), tps);
+    }
+    if ((((want-> kind )  ==  TY_OPTION)  &&  ((got-> kind )  ==  TY_OPTION))) {
+        return arg_compat((want-> inner ), (got-> inner ), tps);
+    }
+    if ((((want-> kind )  ==  TY_OPT_RESULT)  &&  ((got-> kind )  ==  TY_OPT_RESULT))) {
         return arg_compat((want-> inner ), (got-> inner ), tps);
     }
     return types_compat(want, got);
@@ -7321,6 +9542,89 @@ Type*   extract_for_var (Type*   param_ty, Type*   arg_ty, const char*   var_nam
         return extract_for_var((param_ty-> inner ), (arg_ty-> inner ), var_name);
     }
     return NULL;
+}
+
+Type*   resolve_assoc_in_ret (Typer*   t, FnSig*   sig, Vector__Expr*   args, Type*   ret) {
+    if ((ret  ==  NULL)) {
+        return NULL;
+    }
+    if ((sig  ==  NULL)) {
+        return ret;
+    }
+    if ((((sig-> type_params )  ==  NULL)  ||  (Vector_len__string((sig-> type_params ))  ==  0))) {
+        return ret;
+    }
+    if (((sig-> type_param_bounds )  ==  NULL)) {
+        return ret;
+    }
+    if ((((sig-> params )  ==  NULL)  ||  (args  ==  NULL))) {
+        return ret;
+    }
+    int   plen = Vector_len__Param((sig-> params ));
+    int   alen = Vector_len__Expr(args);
+    if ((plen  !=  alen)) {
+        return ret;
+    }
+    int   bn = Vector_len__string((sig-> type_param_bounds ));
+    return rewrite_assoc_in_type(t, sig, args, ret, plen, bn);
+}
+
+Type*   rewrite_assoc_in_type (Typer*   t, FnSig*   sig, Vector__Expr*   args, Type*   ty, int   plen, int   bn) {
+    if ((ty  ==  NULL)) {
+        return NULL;
+    }
+    if (((((ty-> kind )  ==  TY_ASSOC)  &&  ((ty-> inner )  !=  NULL))  &&  (((ty-> inner )-> kind )  ==  TY_NAMED))) {
+        const char*   owner_name = ((ty-> inner )-> name );
+        for (int   ti = 0; (ti  <  Vector_len__string((sig-> type_params ))); ti++) {
+            const char*   tp_name = Vector_get__string((sig-> type_params ), ti);
+            if ((!__glide_string_eq(tp_name, owner_name))) {
+                continue;
+            }
+            const char*   bounds = "";
+            if ((ti  <  bn)) {
+                (bounds  =  Vector_get__string((sig-> type_param_bounds ), ti));
+            }
+            if (__glide_string_eq(bounds, "")) {
+                continue;
+            }
+            Type*   concrete = NULL;
+            for (int   i = 0; (i  <  plen); i++) {
+                Param   p = Vector_get__Param((sig-> params ), i);
+                Expr   a = Vector_get__Expr(args, i);
+                Type*   at = infer_expr(t, (&a));
+                Type*   extracted = extract_for_var((p. ty ), at, tp_name);
+                if ((extracted  !=  NULL)) {
+                    (concrete  =  extracted);
+                    break;
+                }
+            }
+            if (((concrete  ==  NULL)  ||  ((concrete-> kind )  !=  TY_NAMED))) {
+                return ty;
+            }
+            const char*   cname = (concrete-> name );
+            Vector__string*   parts = split_bounds(bounds);
+            for (int   bi = 0; (bi  <  Vector_len__string(parts)); bi++) {
+                const char*   bound = Vector_get__string(parts, bi);
+                const char*   key = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(bound, "::"), cname), "::"), (ty-> name ));
+                if (HashMap_contains__Type((t-> assoc_table ), key)) {
+                    Type   resolved = HashMap_get__Type((t-> assoc_table ), key);
+                    Type*   p = (( Type* )malloc(sizeof( Type )));
+                    ((*p)  =  resolved);
+                    return p;
+                }
+            }
+            return ty;
+        }
+        return ty;
+    }
+    if (((((((((ty-> kind )  ==  TY_OPTION)  ||  ((ty-> kind )  ==  TY_RESULT))  ||  ((ty-> kind )  ==  TY_OPT_RESULT))  ||  ((ty-> kind )  ==  TY_POINTER))  ||  ((ty-> kind )  ==  TY_BORROW))  ||  ((ty-> kind )  ==  TY_BORROW_MUT))  ||  ((ty-> kind )  ==  TY_SLICE))) {
+        Type*   new_inner = rewrite_assoc_in_type(t, sig, args, (ty-> inner ), plen, bn);
+        Type*   p = (( Type* )malloc(sizeof( Type )));
+        ((*p)  =  (*ty));
+        ((p-> inner )  =  new_inner);
+        return p;
+    }
+    return ty;
 }
 
 void   check_generic_bounds (Typer*   t, FnSig*   sig, Vector__Expr*   args, int   line, int   col) {
@@ -7673,6 +9977,48 @@ void   check_stmt (Typer*   t, Stmt*   s) {
         }
         return;
     }
+    if (((s-> kind )  ==  ST_MATCH)) {
+        Type*   scrut_ty = NULL;
+        if (((s-> scrutinee )  !=  NULL)) {
+            (scrut_ty  =  infer_expr(t, (s-> scrutinee )));
+        }
+        bool   has_wildcard = false;
+        HashMap__bool*   covered = HashMap_new__bool();
+        if (((s-> arms )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__MatchArm((s-> arms ))); i++) {
+                MatchArm   a = Vector_get__MatchArm((s-> arms ), i);
+                if (__glide_string_eq((a. variant ), "_")) {
+                    (has_wildcard  =  true);
+                } else {
+                    HashMap_insert__bool(covered, (a. variant ), true);
+                }
+            }
+        }
+        if (((((!has_wildcard)  &&  (scrut_ty  !=  NULL))  &&  ((scrut_ty-> kind )  ==  TY_NAMED))  &&  HashMap_contains__string((t-> enums ), (scrut_ty-> name )))) {
+            const char*   vlist = HashMap_get__string((t-> enums ), (scrut_ty-> name ));
+            if ((!__glide_string_eq(vlist, ""))) {
+                Vector__string*   parts = string_split(vlist, ",");
+                const char*   missing = "";
+                int   miss_count = 0;
+                for (int   i = 0; (i  <  Vector_len__string(parts)); i++) {
+                    const char*   v = Vector_get__string(parts, i);
+                    if ((!HashMap_contains__bool(covered, v))) {
+                        if ((miss_count  >  0)) {
+                            (missing  =  __glide_string_concat(missing, ", "));
+                        }
+                        (missing  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(missing, "`"), v), "`"));
+                        (miss_count  =  (miss_count  +  1));
+                    }
+                }
+                if ((miss_count  >  0)) {
+                    Typer_push_diag(t, (s-> line ), (s-> column ), 1, "match-not-exhaustive", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("match on `", (scrut_ty-> name )), "` is not exhaustive: missing "), missing), ". Add an arm for each, or `_ =>` to handle the rest."));
+                }
+                Vector_free__string(parts);
+            }
+        }
+        HashMap_free__bool(covered);
+        return;
+    }
     if (((s-> kind )  ==  ST_BREAK)) {
         return;
     }
@@ -7806,7 +10152,7 @@ Type*   chan_inner (Type*   t) {
         return NULL;
     }
     Type   inner = Vector_get__Type((x-> args ), 0);
-    Type*   p = (( Type* )malloc(sizeof( Type )));
+    Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
     ((*p)  =  inner);
     return p;
 }
@@ -7816,6 +10162,9 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return NULL;
     }
     if (((e-> kind )  ==  EX_INT)) {
+        if ((((e-> int_val )  >  2147483647)  ||  ((e-> int_val )  <  (-2147483648)))) {
+            return ty_named("i64");
+        }
         return ty_named("int");
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
@@ -7833,10 +10182,75 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
     if (((e-> kind )  ==  EX_NULL)) {
         return ty_pointer(ty_named("void"));
     }
+    if (((e-> kind )  ==  EX_IF)) {
+        Type*   cond_ty = infer_expr(t, (e-> lhs ));
+        if ((((cond_ty  !=  NULL)  &&  ((cond_ty-> kind )  ==  TY_NAMED))  &&  (!__glide_string_eq((cond_ty-> name ), "bool")))) {
+            Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-cond-type", __glide_string_concat(__glide_string_concat("if condition must be `bool`, got `", type_to_string(cond_ty)), "`"));
+        }
+        if (((e-> operand )  ==  NULL)) {
+            Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-expr-needs-else", "expression-position `if` requires an `else` branch");
+            return infer_expr(t, (e-> rhs ));
+        }
+        Type*   then_ty = infer_expr(t, (e-> rhs ));
+        Type*   else_ty = infer_expr(t, (e-> operand ));
+        if ((((then_ty  !=  NULL)  &&  (else_ty  !=  NULL))  &&  (!type_eq(then_ty, else_ty)))) {
+            Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-branch-type-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`if` branches produce different types: `", type_to_string(then_ty)), "` vs `"), type_to_string(else_ty)), "`"));
+        }
+        if ((then_ty  !=  NULL)) {
+            return then_ty;
+        }
+        return else_ty;
+    }
+    if (((e-> kind )  ==  EX_BLOCK)) {
+        int   saved = enter_borrow_scope(t);
+        if (((e-> block_stmts )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Stmt((e-> block_stmts ))); i++) {
+                Stmt   b = Vector_get__Stmt((e-> block_stmts ), i);
+                check_stmt(t, (&b));
+            }
+        }
+        Type*   v_ty = infer_expr(t, (e-> operand ));
+        exit_borrow_scope(t, saved);
+        return v_ty;
+    }
+    if (((e-> kind )  ==  EX_MATCH)) {
+        Type*   scrut_ty = infer_expr(t, (e-> lhs ));
+        Type*   result_ty = NULL;
+        if (((e-> match_arms )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__MatchArm((e-> match_arms ))); i++) {
+                MatchArm   a = Vector_get__MatchArm((e-> match_arms ), i);
+                int   saved = enter_borrow_scope(t);
+                if (((a. bindings )  !=  NULL)) {
+                    Type*   placeholder = ty_named("__unknown__");
+                    for (int   k = 0; (k  <  Vector_len__string((a. bindings ))); k++) {
+                        HashMap_insert__Type((t-> scope ), Vector_get__string((a. bindings ), k), (*placeholder));
+                    }
+                }
+                if ((((a. body )  !=  NULL)  &&  (Vector_len__Stmt((a. body ))  >  0))) {
+                    int   last_idx = (Vector_len__Stmt((a. body ))  -  1);
+                    for (int   k = 0; (k  <  last_idx); k++) {
+                        Stmt   b = Vector_get__Stmt((a. body ), k);
+                        check_stmt(t, (&b));
+                    }
+                    Stmt   last = Vector_get__Stmt((a. body ), last_idx);
+                    Expr*   v = (last. expr_value );
+                    Type*   arm_ty = infer_expr(t, v);
+                    if ((result_ty  ==  NULL)) {
+                        (result_ty  =  arm_ty);
+                    }
+                }
+                exit_borrow_scope(t, saved);
+            }
+        }
+        if ((scrut_ty  ==  NULL)) {
+            return result_ty;
+        }
+        return result_ty;
+    }
     if (((e-> kind )  ==  EX_IDENT)) {
         if (HashMap_contains__Type((t-> scope ), (e-> str_val ))) {
             Type   ty = HashMap_get__Type((t-> scope ), (e-> str_val ));
-            Type*   p = (( Type* )malloc(sizeof( Type )));
+            Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
             ((*p)  =  ty);
             return p;
         }
@@ -7846,7 +10260,7 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                 return NULL;
             }
             Type   ty = HashMap_get__Type((t-> module_scope ), (e-> str_val ));
-            Type*   p = (( Type* )malloc(sizeof( Type )));
+            Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
             ((*p)  =  ty);
             return p;
         }
@@ -7865,13 +10279,43 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         Type*   rt = infer_expr(t, (e-> rhs ));
         int   op = (e-> op_code );
         if (((((((op  ==  OP_EQ)  ||  (op  ==  OP_NE))  ||  (op  ==  OP_LT))  ||  (op  ==  OP_LE))  ||  (op  ==  OP_GT))  ||  (op  ==  OP_GE))) {
+            if (((op  ==  OP_EQ)  ||  (op  ==  OP_NE))) {
+                if (((((((lt  !=  NULL)  &&  (rt  !=  NULL))  &&  ((lt-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((lt-> name ), "string"))  &&  ((rt-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((rt-> name ), "string"))) {
+                    const char*   msg = "comparing strings with `==` checks pointer identity";
+                    if ((op  ==  OP_NE)) {
+                        (msg  =  "comparing strings with `!=` checks pointer identity");
+                    }
+                    Typer_warn(t, (e-> line ), (e-> column ), "string-pointer-eq", __glide_string_concat(msg, "; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
+                }
+            }
             return ty_named("bool");
         }
         if (((op  ==  OP_AND)  ||  (op  ==  OP_OR))) {
             return ty_named("bool");
         }
+        if ((op  ==  OP_COALESCE)) {
+            Type*   inner_lt = lt;
+            if (((lt  !=  NULL)  &&  (((lt-> kind )  ==  TY_OPTION)  ||  ((lt-> kind )  ==  TY_RESULT)))) {
+                (inner_lt  =  (lt-> inner ));
+            }
+            return inner_lt;
+        }
         if ((!types_compat(lt, rt))) {
             Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("binary op type mismatch: ", type_to_string(lt)), " vs "), type_to_string(rt)));
+        }
+        const char*   lname = "";
+        const char*   rname = "";
+        if (((lt  !=  NULL)  &&  ((lt-> kind )  ==  TY_NAMED))) {
+            (lname  =  (lt-> name ));
+        }
+        if (((rt  !=  NULL)  &&  ((rt-> kind )  ==  TY_NAMED))) {
+            (rname  =  (rt-> name ));
+        }
+        if ((__glide_string_eq(lname, "f64")  ||  __glide_string_eq(rname, "f64"))) {
+            return ty_named("f64");
+        }
+        if ((__glide_string_eq(lname, "i64")  ||  __glide_string_eq(rname, "i64"))) {
+            return ty_named("i64");
         }
         return lt;
     }
@@ -7894,6 +10338,12 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         }
         if (((e-> op_code )  ==  UN_TRY)) {
             if (((inner  !=  NULL)  &&  ((inner-> kind )  ==  TY_RESULT))) {
+                return (inner-> inner );
+            }
+            if (((inner  !=  NULL)  &&  ((inner-> kind )  ==  TY_OPTION))) {
+                return (inner-> inner );
+            }
+            if (((inner  !=  NULL)  &&  ((inner-> kind )  ==  TY_OPT_RESULT))) {
                 return (inner-> inner );
             }
             return inner;
@@ -7935,7 +10385,7 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                     if ((nargs  !=  0)) {
                         Typer_err(t, (e-> line ), (e-> column ), "`chan.recv` takes no arguments");
                     }
-                    Type*   p = (( Type* )malloc(sizeof( Type )));
+                    Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
                     ((*p)  =  (*inner));
                     return p;
                 }
@@ -8002,9 +10452,9 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                         check_generic_bounds(t, (&sig), (e-> args ), (e-> line ), (e-> column ));
                     }
                 }
-                return (sig. ret_type );
+                return resolve_assoc_in_ret(t, (&sig), (e-> args ), (sig. ret_type ));
             }
-            bool   is_builtin = ((((__glide_string_eq(name, "ok")  ||  __glide_string_eq(name, "err"))  ||  __glide_string_eq(name, "make_chan"))  ||  __glide_string_eq(name, "sizeof"))  ||  __glide_string_eq(name, "printf"));
+            bool   is_builtin = ((((((__glide_string_eq(name, "ok")  ||  __glide_string_eq(name, "err"))  ||  __glide_string_eq(name, "some"))  ||  __glide_string_eq(name, "none"))  ||  __glide_string_eq(name, "make_chan"))  ||  __glide_string_eq(name, "sizeof"))  ||  __glide_string_eq(name, "printf"));
             if ((((!is_builtin)  &&  (!HashMap_contains__Type((t-> scope ), name)))  &&  (t-> enforce_visibility ))) {
                 Typer_err(t, ((e-> lhs )-> line ), ((e-> lhs )-> column ), __glide_string_concat(__glide_string_concat("unknown function `", name), "`; did you forget an `import`?"));
                 return NULL;
@@ -8094,6 +10544,83 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return ty_named((e-> str_val ));
     }
     return NULL;
+}
+
+bool   is_c_reserved (const char*   s) {
+    if (__glide_string_eq(s, "asm")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "auto")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "case")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "char")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "default")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "do")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "double")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "float")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "goto")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "inline")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "int")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "long")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "register")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "restrict")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "short")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "signed")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "static")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "switch")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "typedef")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "union")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "unsigned")) {
+        return true;
+    }
+    if (__glide_string_eq(s, "void")) {
+        return true;
+    }
+    return false;
+}
+
+const char*   c_safe_ident (const char*   name) {
+    if (is_c_reserved(name)) {
+        return __glide_string_concat("_g_", name);
+    }
+    return name;
 }
 
 int   ns_split_pos (const char*   name) {
@@ -8296,6 +10823,89 @@ void   lift_anons_in_stmt (CG*   g, Stmt*   s) {
     }
 }
 
+Type*   resolve_assoc_recursive (CG*   g, Type*   t) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    if (((t-> kind )  ==  TY_ASSOC)) {
+        Type*   r = resolve_concrete_assoc(g, t);
+        if ((r  !=  NULL)) {
+            return r;
+        }
+        return t;
+    }
+    if (((t-> kind )  ==  TY_OPTION)) {
+        return ty_option(resolve_assoc_recursive(g, (t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_RESULT)) {
+        return ty_result(resolve_assoc_recursive(g, (t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_OPT_RESULT)) {
+        return ty_optres(resolve_assoc_recursive(g, (t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_POINTER)) {
+        return ty_pointer(resolve_assoc_recursive(g, (t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_BORROW)) {
+        Type*   p = (( Type* )malloc(sizeof( Type )));
+        ((p-> kind )  =  TY_BORROW);
+        ((p-> inner )  =  resolve_assoc_recursive(g, (t-> inner )));
+        return p;
+    }
+    if (((t-> kind )  ==  TY_BORROW_MUT)) {
+        Type*   p = (( Type* )malloc(sizeof( Type )));
+        ((p-> kind )  =  TY_BORROW_MUT);
+        ((p-> inner )  =  resolve_assoc_recursive(g, (t-> inner )));
+        return p;
+    }
+    if (((t-> kind )  ==  TY_SLICE)) {
+        Type*   p = (( Type* )malloc(sizeof( Type )));
+        ((p-> kind )  =  TY_SLICE);
+        ((p-> inner )  =  resolve_assoc_recursive(g, (t-> inner )));
+        return p;
+    }
+    return t;
+}
+
+Type*   resolve_concrete_assoc (CG*   g, Type*   t) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    if (((t-> kind )  !=  TY_ASSOC)) {
+        return NULL;
+    }
+    if (((t-> inner )  ==  NULL)) {
+        return NULL;
+    }
+    const char*   owner_name = "";
+    if ((((t-> inner )-> kind )  ==  TY_NAMED)) {
+        (owner_name  =  ((t-> inner )-> name ));
+    }
+    if ((((t-> inner )-> kind )  ==  TY_GENERIC)) {
+        (owner_name  =  ((t-> inner )-> name ));
+    }
+    if (__glide_string_eq(owner_name, "")) {
+        return NULL;
+    }
+    Vector__string*   keys = HashMap_keys__Type((g-> assoc_table ));
+    for (int   i = 0; (i  <  Vector_len__string(keys)); i++) {
+        const char*   k = Vector_get__string(keys, i);
+        const char*   suffix = __glide_string_concat(__glide_string_concat(__glide_string_concat("::", owner_name), "::"), (t-> name ));
+        if ((__glide_string_len(k)  <  __glide_string_len(suffix))) {
+            continue;
+        }
+        const char*   tail = __glide_string_substring(k, (__glide_string_len(k)  -  __glide_string_len(suffix)), __glide_string_len(k));
+        if ((!__glide_string_eq(tail, suffix))) {
+            continue;
+        }
+        Type   resolved = HashMap_get__Type((g-> assoc_table ), k);
+        Type*   p = (( Type* )malloc(sizeof( Type )));
+        ((*p)  =  resolved);
+        return p;
+    }
+    return NULL;
+}
+
 void   collect_result_in_type (CG*   g, Type*   t) {
     if ((t  ==  NULL)) {
         return;
@@ -8309,6 +10919,26 @@ void   collect_result_in_type (CG*   g, Type*   t) {
             }
         }
         Vector_push__Type((g-> result_types ), (*(t-> inner )));
+    }
+    if ((((t-> kind )  ==  TY_OPTION)  &&  ((t-> inner )  !=  NULL))) {
+        const char*   m = mangle_type((t-> inner ));
+        for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
+            Type   ex = Vector_get__Type((g-> option_types ), i);
+            if (__glide_string_eq(mangle_type((&ex)), m)) {
+                return;
+            }
+        }
+        Vector_push__Type((g-> option_types ), (*(t-> inner )));
+    }
+    if ((((t-> kind )  ==  TY_OPT_RESULT)  &&  ((t-> inner )  !=  NULL))) {
+        const char*   m = mangle_type((t-> inner ));
+        for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
+            Type   ex = Vector_get__Type((g-> optres_types ), i);
+            if (__glide_string_eq(mangle_type((&ex)), m)) {
+                return;
+            }
+        }
+        Vector_push__Type((g-> optres_types ), (*(t-> inner )));
     }
     if (((t-> inner )  !=  NULL)) {
         collect_result_in_type(g, (t-> inner ));
@@ -8350,6 +10980,9 @@ void   collect_result_in_expr (CG*   g, Expr*   e) {
 
 void   collect_result_in_stmt (CG*   g, Stmt*   s) {
     if ((s  ==  NULL)) {
+        return;
+    }
+    if (((s-> kind )  ==  ST_TRAIT)) {
         return;
     }
     if (((s-> let_ty )  !=  NULL)) {
@@ -8409,10 +11042,57 @@ void   emit_result_runtime (CG*   g) {
     if ((Vector_len__Type((g-> result_types ))  ==  0)) {
         return;
     }
-    const char*   tmpl = "typedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { @TC@ z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }\n";
+    const char*   tmpl = "#ifndef __GLIDE_RESULT_@M@_GUARD\n#define __GLIDE_RESULT_@M@_GUARD\ntypedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { @TC@ z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }\n#endif\n";
     for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
         Type   t = Vector_get__Type((g-> result_types ), i);
         const char*   m = mangle_type((&t));
+        const char*   dedup_key = __glide_string_concat("__rt_result_emit_", m);
+        if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
+            continue;
+        }
+        HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
+        const char*   tc = type_to_c((&t));
+        const char*   s1 = _cg_replace(tmpl, "@M@", m);
+        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        printf("%s", s2);
+    }
+    printf("%s\n", "");
+}
+
+void   emit_option_runtime (CG*   g) {
+    if ((Vector_len__Type((g-> option_types ))  ==  0)) {
+        return;
+    }
+    const char*   tmpl = "#ifndef __GLIDE_OPTION_@M@_GUARD\n#define __GLIDE_OPTION_@M@_GUARD\ntypedef struct __glide_option_@M@_t { int has; @TC@ val; } __glide_option_@M@_t;\nstatic __glide_option_@M@_t __glide_some_@M@(@TC@ v) { __glide_option_@M@_t o; o.has = 1; o.val = v; return o; }\nstatic __glide_option_@M@_t __glide_none_@M@(void) { __glide_option_@M@_t o; o.has = 0; return o; }\n#endif\n";
+    for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
+        Type   t = Vector_get__Type((g-> option_types ), i);
+        const char*   m = mangle_type((&t));
+        const char*   dedup_key = __glide_string_concat("__rt_option_emit_", m);
+        if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
+            continue;
+        }
+        HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
+        const char*   tc = type_to_c((&t));
+        const char*   s1 = _cg_replace(tmpl, "@M@", m);
+        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        printf("%s", s2);
+    }
+    printf("%s\n", "");
+}
+
+void   emit_optres_runtime (CG*   g) {
+    if ((Vector_len__Type((g-> optres_types ))  ==  0)) {
+        return;
+    }
+    const char*   tmpl = "#ifndef __GLIDE_OPTRES_@M@_GUARD\n#define __GLIDE_OPTRES_@M@_GUARD\n/* tag: 0=Some, 1=None, 2=Err */\ntypedef struct __glide_optres_@M@_t { int tag; @TC@ val; const char* err; } __glide_optres_@M@_t;\nstatic __glide_optres_@M@_t __glide_optres_some_@M@(@TC@ v) { __glide_optres_@M@_t r; r.tag = 0; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_none_@M@(void) { __glide_optres_@M@_t r; r.tag = 1; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_err_@M@(const char* msg) { __glide_optres_@M@_t r; r.tag = 2; r.err = msg; return r; }\n#endif\n";
+    for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
+        Type   t = Vector_get__Type((g-> optres_types ), i);
+        const char*   m = mangle_type((&t));
+        const char*   dedup_key = __glide_string_concat("__rt_optres_emit_", m);
+        if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
+            continue;
+        }
+        HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
         const char*   tc = type_to_c((&t));
         const char*   s1 = _cg_replace(tmpl, "@M@", m);
         const char*   s2 = _cg_replace(s1, "@TC@", tc);
@@ -8610,7 +11290,7 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
                 if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
                     for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                         Param   p = Vector_get__Param((m. fn_params ), j);
-                        printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), (p. name )));
+                        printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), c_safe_ident((p. name ))));
                     }
                 }
                 printf("%s\n", ");");
@@ -8673,7 +11353,7 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
             if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
                 for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                     Param   p = Vector_get__Param((m. fn_params ), j);
-                    printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), (p. name )));
+                    printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), c_safe_ident((p. name ))));
                 }
             }
             printf("%s\n", ") {");
@@ -8686,7 +11366,7 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
             if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
                 for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                     Param   p = Vector_get__Param((m. fn_params ), j);
-                    printf("%s", __glide_string_concat(", ", (p. name )));
+                    printf("%s", __glide_string_concat(", ", c_safe_ident((p. name ))));
                 }
             }
             printf("%s\n", ");");
@@ -8812,15 +11492,17 @@ void   emit_chan_runtime (CG*   g) {
 
 void   emit_scheduler_runtime (void) {
     printf("%s\n", "");
-    printf("%s", "// ============================ scheduler runtime ============================\n#include <pthread.h>\n#include <stdatomic.h>\n#include <time.h>\n#include <stdint.h>\n#include <stdlib.h>\n#ifdef _WIN32\n/* winsock2.h must precede windows.h on MinGW / mingw-w64; the seed's\n   socket runtime later includes winsock2.h, so include it here too to\n   keep the order well-defined regardless of which template lands first\n   in the emitted bootstrap.c. */\n# include <winsock2.h>\n# include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */\n#else\n# include <unistd.h>\n# include <sys/mman.h>\n#endif\n\n/* Spinlock — 5-10× faster than pthread_mutex for the short critical\n   sections we use (queue push/pop, pool head update). Falls back to\n   `pause` on contention to be hyperthread-friendly. */\ntypedef atomic_int __glide_spin_t;\nstatic inline void __glide_spin_lock(__glide_spin_t* l) {\n    while (atomic_exchange_explicit(l, 1, memory_order_acquire) == 1) {\n        while (atomic_load_explicit(l, memory_order_relaxed) == 1) {\n#if defined(__x86_64__) || defined(_M_X64)\n            __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        }\n    }\n}\nstatic inline void __glide_spin_unlock(__glide_spin_t* l) {\n    atomic_store_explicit(l, 0, memory_order_release);\n}\n\n/* Stack defaults: configured size + 4 KB guard, page-rounded up.\n   With the default 4 KB the total reservation is 8 KB virtual per coro.\n   Linux/Mac mmap commits pages lazily; Windows commits virtual but the\n   working-set is bound only on first access. Either way idle coros pay\n   ~one 4 KB page in physical RAM.\n   Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)\n   need pointer-map metadata + copy/relocate — TBD. */\n#define __GLIDE_STACK_GUARD 4096\nstatic int __glide_stack_size = 4096;\n\n/* Custom assembly context switch — replaces Win32 Fibers and POSIX\n   ucontext.h with our own portable, ABI-correct register flip. The\n   reason: Fibers crash if the same fiber is SwitchToFiber'd by\n   different OS threads over its lifetime, which forces us to pin\n   coros to a single worker and rules out work-stealing. With our\n   own switch we own the entire state, so a coro can move between\n   workers safely.\n\n   Layout: callee-saved GP regs + (Win64 only) callee-saved XMM6-15.\n   Caller-saved registers (rax/rcx/rdx/...) were already flushed to the\n   caller's stack frame by the compiler before it called us, so we don't\n   touch them. SysV marks XMM as caller-saved → no extra work there. */\ntypedef struct {\n#ifdef _WIN32\n    void* rsp; void* rbx; void* rbp;\n    void* rdi; void* rsi;\n    void* r12; void* r13; void* r14; void* r15;\n    char xmm[160];\n#else\n    void* rsp; void* rbx; void* rbp;\n    void* r12; void* r13; void* r14; void* r15;\n#endif\n} __glide_coro_ctx;\n\n__attribute__((naked, noinline))\nstatic void __glide_ctx_switch(\n    __glide_coro_ctx* from __attribute__((unused)),\n    __glide_coro_ctx* to   __attribute__((unused))) {\n#ifdef _WIN32\n    /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */\n    __asm__(\n        \"movq %rsp,   0(%rcx)\\n\\t\"\n        \"movq %rbx,   8(%rcx)\\n\\t\"\n        \"movq %rbp,  16(%rcx)\\n\\t\"\n        \"movq %rdi,  24(%rcx)\\n\\t\"\n        \"movq %rsi,  32(%rcx)\\n\\t\"\n        \"movq %r12,  40(%rcx)\\n\\t\"\n        \"movq %r13,  48(%rcx)\\n\\t\"\n        \"movq %r14,  56(%rcx)\\n\\t\"\n        \"movq %r15,  64(%rcx)\\n\\t\"\n        \"movdqu %xmm6,   72(%rcx)\\n\\t\"\n        \"movdqu %xmm7,   88(%rcx)\\n\\t\"\n        \"movdqu %xmm8,  104(%rcx)\\n\\t\"\n        \"movdqu %xmm9,  120(%rcx)\\n\\t\"\n        \"movdqu %xmm10, 136(%rcx)\\n\\t\"\n        \"movdqu %xmm11, 152(%rcx)\\n\\t\"\n        \"movdqu %xmm12, 168(%rcx)\\n\\t\"\n        \"movdqu %xmm13, 184(%rcx)\\n\\t\"\n        \"movdqu %xmm14, 200(%rcx)\\n\\t\"\n        \"movdqu %xmm15, 216(%rcx)\\n\\t\"\n        \"movq  0(%rdx), %rsp\\n\\t\"\n        \"movq  8(%rdx), %rbx\\n\\t\"\n        \"movq 16(%rdx), %rbp\\n\\t\"\n        \"movq 24(%rdx), %rdi\\n\\t\"\n        \"movq 32(%rdx), %rsi\\n\\t\"\n        \"movq 40(%rdx), %r12\\n\\t\"\n        \"movq 48(%rdx), %r13\\n\\t\"\n        \"movq 56(%rdx), %r14\\n\\t\"\n        \"movq 64(%rdx), %r15\\n\\t\"\n        \"movdqu  72(%rdx), %xmm6\\n\\t\"\n        \"movdqu  88(%rdx), %xmm7\\n\\t\"\n        \"movdqu 104(%rdx), %xmm8\\n\\t\"\n        \"movdqu 120(%rdx), %xmm9\\n\\t\"\n        \"movdqu 136(%rdx), %xmm10\\n\\t\"\n        \"movdqu 152(%rdx), %xmm11\\n\\t\"\n        \"movdqu 168(%rdx), %xmm12\\n\\t\"\n        \"movdqu 184(%rdx), %xmm13\\n\\t\"\n        \"movdqu 200(%rdx), %xmm14\\n\\t\"\n        \"movdqu 216(%rdx), %xmm15\\n\\t\"\n        \"ret\\n\\t\"\n    );\n#else\n    /* SysV AMD64 ABI: from=%rdi, to=%rsi */\n    __asm__(\n        \"movq %rsp,   0(%rdi)\\n\\t\"\n        \"movq %rbx,   8(%rdi)\\n\\t\"\n        \"movq %rbp,  16(%rdi)\\n\\t\"\n        \"movq %r12,  24(%rdi)\\n\\t\"\n        \"movq %r13,  32(%rdi)\\n\\t\"\n        \"movq %r14,  40(%rdi)\\n\\t\"\n        \"movq %r15,  48(%rdi)\\n\\t\"\n        \"movq  0(%rsi), %rsp\\n\\t\"\n        \"movq  8(%rsi), %rbx\\n\\t\"\n        \"movq 16(%rsi), %rbp\\n\\t\"\n        \"movq 24(%rsi), %r12\\n\\t\"\n        \"movq 32(%rsi), %r13\\n\\t\"\n        \"movq 40(%rsi), %r14\\n\\t\"\n        \"movq 48(%rsi), %r15\\n\\t\"\n        \"ret\\n\\t\"\n    );\n#endif\n}\n\ntypedef void* (*__glide_task_fn)(void*);\ntypedef struct __glide_task {\n    __glide_coro_ctx    ctx;     /* register save area */\n    void*               stack;   /* mmap/VirtualAlloc base (low addr) */\n    size_t              stack_total; /* bytes including guard page */\n    __glide_task_fn     entry;\n    void*               arg;\n    int                 state; /* 0=ready 1=running 2=blocked 3=done */\n    int                 home_worker; /* worker that currently owns this coro;\n                                       updated on steal so future unparks land\n                                       on the thief's queue (cache-warm). */\n    int                 has_run;     /* 0 if never run; once 1, we never\n                                       migrate the coro across OS threads (Win64\n                                       SEH/TIB invariants make resumed-on-other-\n                                       thread fragile, so first-run-only steal). */\n    struct __glide_task* next;       /* link in per-worker ready queue */\n    struct __glide_task* wait_next;  /* link in chan wait list */\n    /* Park hand-off: if non-null on switch-back to worker fiber,\n       worker links self into *park_list and unlocks park_lock.\n       Done after the switch so unpark can never race with a\n       still-mid-switch coro. */\n    pthread_mutex_t*     park_lock;\n    struct __glide_task** park_list;\n} __glide_task;\n\n/* Forward decls — out-of-order references between sleep_ms / __glide_park /\n   __glide_timer_main / sched_init / task pool helpers used by worker_main. */\nstatic void* __glide_timer_main(void* unused);\nint __glide_park(pthread_mutex_t* lock, __glide_task** list);\nvoid __glide_free_task(__glide_task* t);\nstatic void __glide_reset_ctx(__glide_task* t);\nstatic void __glide_flush_main_buf(void);\n\n/* Per-worker queue: each worker pops only from its own queue, so a\n   fiber that first ran on worker A always continues on A. This avoids\n   cross-thread fiber migration which crashes Win32 Fibers. Stealing\n   between workers comes in Phase 1.2 (with proper atomic ownership). */\ntypedef struct {\n    __glide_spin_t  spin;\n    pthread_mutex_t mu;\n    pthread_cond_t  cv;\n    __glide_task*   head;\n    __glide_task*   tail;\n    atomic_int      idle;\n} __glide_wq;\n\n/* Sorted sleep queue for the timer thread. Coroutines that call\n   sleep_ms park here instead of blocking their worker. */\ntypedef struct __glide_timer_node {\n    long long              deadline_ns;\n    __glide_task*          task;\n    struct __glide_timer_node* next;\n} __glide_timer_node;\nstatic __glide_timer_node* __glide_timer_head = NULL;\nstatic pthread_mutex_t __glide_timer_mu;\nstatic pthread_cond_t  __glide_timer_cv;\nstatic pthread_t __glide_timer_thread;\nstatic int __glide_timer_inited = 0;\n\nstatic __glide_wq* __glide_wqs = NULL;\nstatic int __glide_q_inited = 0;\nstatic int __glide_n_workers = 0;\nstatic pthread_t* __glide_workers = NULL;\n/* Pending count, sharded per worker so increments and decrements don't all bounce\n   the same cache line. Spawn increments shards[home_worker]; the worker that runs\n   the task decrements shards[my_worker]. Sum across shards = total alive tasks.\n   Each shard is its own cache line to kill false sharing between threads. */\ntypedef struct {\n    atomic_int v;\n    char _pad[60];\n} __glide_pending_shard_t;\nstatic __glide_pending_shard_t* __glide_pending_shards = NULL;\nstatic int __glide_pending_n_shards = 0;\nstatic int __glide_pending_sum(void) {\n    int sum = 0;\n    int n = __glide_pending_n_shards;\n    for (int i = 0; i < n; i++) {\n        sum += atomic_load_explicit(&__glide_pending_shards[i].v, memory_order_acquire);\n    }\n    return sum;\n}\nstatic atomic_int __glide_shutdown = 0;\nstatic atomic_int __glide_rr = 0;        /* round-robin spawn counter */\n\nstatic _Thread_local __glide_task* __glide_cur_task = NULL;\nstatic _Thread_local int __glide_my_worker = -1;\n/* Worker's saved context. Each OS thread has its own — when a coro\n   parks/yields, we ctx_switch INTO this so the worker resumes its\n   loop right after the call site. */\nstatic _Thread_local __glide_coro_ctx __glide_worker_ctx;\n#ifdef _WIN32\n/* Original OS-thread stack range — saved on worker entry, restored\n   when no coro is running. Win64 SEH walks the stack via TIB, so we\n   must point TIB at the coro's stack while it runs and back at the\n   OS thread's stack between switches. Without this, any code path that\n   raises an exception or probes the stack from a migrated coro reads\n   garbage and crashes. */\nstatic _Thread_local void* __glide_orig_stack_base = NULL;\nstatic _Thread_local void* __glide_orig_stack_limit = NULL;\nstatic inline void __glide_tib_set_stack(void* base, void* limit) {\n    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();\n    tib->StackBase = base;\n    tib->StackLimit = limit;\n}\n#endif\n\nstatic void __glide_q_push_to(int wid, __glide_task* t) {\n    __glide_wq* q = &__glide_wqs[wid];\n    __glide_spin_lock(&q->spin);\n    t->next = NULL;\n    if (q->tail) q->tail->next = t; else q->head = t;\n    q->tail = t;\n    __glide_spin_unlock(&q->spin);\n    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {\n        pthread_mutex_lock(&q->mu);\n        pthread_cond_signal(&q->cv);\n        pthread_mutex_unlock(&q->mu);\n    }\n}\n\n/* Splice a pre-built chain (head ... tail, n nodes, NULL-terminated) onto\n   the back of a worker's queue under one spinlock acquisition. Used by main's\n   batched-push path so 32 spawns cost ~1 lock instead of 32. */\nstatic void __glide_q_push_chain(int wid, __glide_task* head, __glide_task* tail, int n) {\n    if (!head) return; (void)n;\n    __glide_wq* q = &__glide_wqs[wid];\n    __glide_spin_lock(&q->spin);\n    if (q->tail) q->tail->next = head; else q->head = head;\n    q->tail = tail;\n    __glide_spin_unlock(&q->spin);\n    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {\n        pthread_mutex_lock(&q->mu);\n        pthread_cond_broadcast(&q->cv);\n        pthread_mutex_unlock(&q->mu);\n    }\n}\n\nstatic int __glide_pick_worker(void) {\n    /* Inside a coro: same worker as caller (cheap, keeps cache hot).\n       Outside (main): always W0 — work-stealing redistributes. This avoids\n       the per-spawn atomic+cross-thread cache bounce on N target queues. */\n    if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;\n    return 0;\n}\n\n/* Work-stealing: when our queue is empty, try grabbing the head of\n   another worker's queue (random victim, walk all on miss). On steal\n   we adopt the task as our own (home_worker = me) so future unparks\n   stay cache-warm here. Now safe to migrate because our custom ctx\n   switch is stateless across threads — no Win32 Fiber crash trap. */\nstatic atomic_uint __glide_steal_rr = 0;\nstatic __glide_task* __glide_try_steal(void) {\n    int n = __glide_n_workers;\n    if (n <= 1) return NULL;\n    int my = __glide_my_worker;\n    unsigned int seed = atomic_fetch_add_explicit(&__glide_steal_rr, 1, memory_order_relaxed);\n    int start = (int)(seed % (unsigned int)n);\n    for (int i = 0; i < n; i++) {\n        int v = (start + i) % n;\n        if (v == my) continue;\n        __glide_wq* q = &__glide_wqs[v];\n        __glide_spin_lock(&q->spin);\n        /* Walk queue head: only first-run-untouched tasks are stealable. */\n        __glide_task* prev = NULL;\n        __glide_task* t = q->head;\n        while (t && t->has_run) { prev = t; t = t->next; }\n        if (t) {\n            if (prev) prev->next = t->next; else q->head = t->next;\n            if (q->tail == t) q->tail = prev;\n            __glide_spin_unlock(&q->spin);\n            t->home_worker = my;\n            t->next = NULL;\n            return t;\n        }\n        __glide_spin_unlock(&q->spin);\n    }\n    return NULL;\n}\n\nstatic __glide_task* __glide_q_pop_my(void) {\n    __glide_wq* q = &__glide_wqs[__glide_my_worker];\n    while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {\n        __glide_spin_lock(&q->spin);\n        __glide_task* t = q->head;\n        if (t) {\n            q->head = t->next;\n            if (q->head == NULL) q->tail = NULL;\n            __glide_spin_unlock(&q->spin);\n            return t;\n        }\n        __glide_spin_unlock(&q->spin);\n        __glide_task* stolen = __glide_try_steal();\n        if (stolen) return stolen;\n        pthread_mutex_lock(&q->mu);\n        if (q->head || atomic_load(&__glide_shutdown)) {\n            pthread_mutex_unlock(&q->mu);\n            continue;\n        }\n        struct timespec ts;\n        clock_gettime(CLOCK_REALTIME, &ts);\n        ts.tv_nsec += 500000;\n        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }\n        atomic_store_explicit(&q->idle, 1, memory_order_relaxed);\n        pthread_cond_timedwait(&q->cv, &q->mu, &ts);\n        atomic_store_explicit(&q->idle, 0, memory_order_relaxed);\n        pthread_mutex_unlock(&q->mu);\n    }\n    return NULL;\n}\n\n/* Trampoline reached on a coro's first switch-in. Reads the bound\n   task from TLS (worker_main set __glide_cur_task before switching),\n   runs the user fn, marks done, then hands control back to the worker\n   via ctx_switch. The final switch never returns: we discard the saved\n   ctx (worker is going to free us anyway). */\nstatic void __glide_coro_trampoline(void) {\n    __glide_task* t = __glide_cur_task;\n    (void)t->entry(t->arg);\n    t->state = 3;\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\n    __builtin_unreachable();\n}\n\n/* Stack pool: hold a small free list of recently-freed regions so a\n   spawn-burst doesn't pay mmap+munmap (Linux) / VirtualAlloc+VirtualFree\n   (Win) per coro. Significant on Windows where these are slow syscalls. */\ntypedef struct __glide_stack_node {\n    void*  base;\n    size_t total;\n    struct __glide_stack_node* next;\n} __glide_stack_node;\nstatic __glide_stack_node* __glide_stack_pool = NULL;\nstatic int __glide_stack_pool_count = 0;\nstatic const int __GLIDE_STACK_POOL_MAX = 16384;\nstatic __glide_spin_t __glide_stack_pool_spin = 0;\n\n/* Stack allocator: mmap (POSIX) or VirtualAlloc (Win) so unused pages\n   stay uncommitted (Linux/Mac) and overflow into the guard page raises\n   SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the\n   neighbour stack. Returns the LOW address of the whole region; usable\n   stack starts at `base + __GLIDE_STACK_GUARD`. */\nstatic void* __glide_alloc_stack(size_t* out_total) {\n    size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;\n    size_t page = 4096;\n    total = (total + page - 1) & ~(page - 1);\n    /* Pool fast path. */\n    __glide_spin_lock(&__glide_stack_pool_spin);\n    __glide_stack_node* n = __glide_stack_pool;\n    while (n && n->total != total) n = n->next;\n    if (n && n->total == total) {\n        /* Unlink first matching node. */\n        __glide_stack_node** p = &__glide_stack_pool;\n        while (*p != n) p = &(*p)->next;\n        *p = n->next;\n        __glide_stack_pool_count--;\n        __glide_spin_unlock(&__glide_stack_pool_spin);\n        void* base = n->base;\n        free(n);\n        *out_total = total;\n        return base;\n    }\n    __glide_spin_unlock(&__glide_stack_pool_spin);\n    void* base;\n#ifdef _WIN32\n    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);\n    if (!base) return NULL;\n    DWORD old;\n    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);\n#else\n    base = mmap(NULL, total, PROT_READ|PROT_WRITE,\n                MAP_ANON|MAP_PRIVATE, -1, 0);\n    if (base == MAP_FAILED) return NULL;\n    mprotect(base, __GLIDE_STACK_GUARD, PROT_NONE);\n#endif\n    *out_total = total;\n    return base;\n}\n\nstatic void __glide_free_stack(void* base, size_t total) {\n    if (!base) return;\n    /* Hand back to pool if there's room. */\n    __glide_spin_lock(&__glide_stack_pool_spin);\n    if (__glide_stack_pool_count < __GLIDE_STACK_POOL_MAX) {\n        __glide_stack_node* n = (__glide_stack_node*)malloc(sizeof(*n));\n        n->base = base;\n        n->total = total;\n        n->next = __glide_stack_pool;\n        __glide_stack_pool = n;\n        __glide_stack_pool_count++;\n        __glide_spin_unlock(&__glide_stack_pool_spin);\n        return;\n    }\n    __glide_spin_unlock(&__glide_stack_pool_spin);\n#ifdef _WIN32\n    (void)total;\n    VirtualFree(base, 0, MEM_RELEASE);\n#else\n    munmap(base, total);\n#endif\n}\n\n/* Plant trampoline address at the top of the stack so the first\n   ctx_switch into this ctx pops it and `ret`s into the trampoline.\n   16-byte alignment matches the AMD64 call ABI: we save RSP at a\n   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees\n   RSP%16==8 (which is what `call` would have left). */\nstatic void __glide_coro_init(__glide_task* t) {\n    size_t total = 0;\n    t->stack = __glide_alloc_stack(&total);\n    t->stack_total = total;\n    char* top = (char*)t->stack + total;\n    top -= 16;                       /* headroom — never write past top */\n    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;\n    *(void**)sp = (void*)__glide_coro_trampoline;\n    t->ctx.rsp = (void*)sp;\n    t->ctx.rbx = 0; t->ctx.rbp = 0;\n    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;\n#ifdef _WIN32\n    t->ctx.rdi = 0; t->ctx.rsi = 0;\n#endif\n}\n\nstatic void __glide_coro_destroy(__glide_task* t) {\n    __glide_free_stack(t->stack, t->stack_total);\n    t->stack = NULL;\n    t->stack_total = 0;\n}\n\nstatic void* __glide_worker_main(void* arg) {\n    __glide_my_worker = (int)(intptr_t)arg;\n#ifdef _WIN32\n    /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit\n       to the coro's region while it runs and back to ours between switches. */\n    {\n        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();\n        __glide_orig_stack_base = tib->StackBase;\n        __glide_orig_stack_limit = tib->StackLimit;\n    }\n#endif\n    while (!atomic_load(&__glide_shutdown)) {\n        __glide_task* t = __glide_q_pop_my();\n        if (!t) break;\n        __glide_cur_task = t;\n        if (!t->has_run) __glide_reset_ctx(t);\n        t->state = 1;\n        t->has_run = 1;  /* stick to this OS thread from now on */\n#ifdef _WIN32\n        __glide_tib_set_stack((char*)t->stack + t->stack_total, t->stack);\n#endif\n        __glide_ctx_switch(&__glide_worker_ctx, &t->ctx);\n#ifdef _WIN32\n        __glide_tib_set_stack(__glide_orig_stack_base, __glide_orig_stack_limit);\n#endif\n        __glide_cur_task = NULL;\n        if (t->state == 3) {\n            __glide_free_task(t);  /* pool reuse — keeps stack mmap'd */\n            /* Single atomic on this worker's shard. The previous code also did a\n               cross-queue cv broadcast when total pending hit zero, but\n               sched_shutdown busy-waits on pending_sum and broadcasts itself once\n               shutdown=1, so this hot-path broadcast is redundant. */\n            atomic_fetch_sub_explicit(&__glide_pending_shards[__glide_my_worker].v, 1, memory_order_acq_rel);\n        } else if (t->state == 2) {\n            /* Parked. Complete the hand-off: link into wait list,\n               release the lock the parker held. After this point\n               unpark may safely queue the task. */\n            if (t->park_list) {\n                t->wait_next = *t->park_list;\n                *t->park_list = t;\n                t->park_list = NULL;\n            }\n            if (t->park_lock) {\n                pthread_mutex_unlock(t->park_lock);\n                t->park_lock = NULL;\n            }\n        } else {\n            t->state = 0;\n            __glide_q_push_to(t->home_worker, t);\n        }\n    }\n    return NULL;\n}\n\nvoid __glide_sched_init(void) {\n    if (__glide_q_inited) return;\n    const char* env_stk = getenv(\"GLIDE_CORO_STACK\");\n    if (env_stk) {\n        int n = atoi(env_stk);\n        if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */\n    }\n    const char* env = getenv(\"GLIDE_WORKERS\");\n    if (env) __glide_n_workers = atoi(env);\n    if (__glide_n_workers <= 0) {\n#ifdef _WIN32\n        SYSTEM_INFO si; GetSystemInfo(&si);\n        __glide_n_workers = (int)si.dwNumberOfProcessors;\n#else\n        long n = sysconf(_SC_NPROCESSORS_ONLN);\n        __glide_n_workers = (n > 0) ? (int)n : 4;\n#endif\n    }\n    __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_mutex_init(&__glide_wqs[i].mu, NULL);\n        pthread_cond_init(&__glide_wqs[i].cv, NULL);\n    }\n    /* One shard per worker plus one for non-coro callers (main / arbitrary OS threads). */\n    __glide_pending_n_shards = __glide_n_workers + 1;\n    __glide_pending_shards = (__glide_pending_shard_t*)calloc(__glide_pending_n_shards, sizeof(__glide_pending_shard_t));\n    __glide_q_inited = 1;\n    __glide_workers = (pthread_t*)malloc(sizeof(pthread_t) * __glide_n_workers);\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_create(&__glide_workers[i], NULL, __glide_worker_main, (void*)(intptr_t)i);\n    }\n    pthread_mutex_init(&__glide_timer_mu, NULL);\n    pthread_cond_init(&__glide_timer_cv, NULL);\n    __glide_timer_inited = 1;\n    pthread_create(&__glide_timer_thread, NULL, __glide_timer_main, NULL);\n}\n\nvoid __glide_sched_shutdown(void) {\n    if (!__glide_q_inited) return;\n    __glide_flush_main_buf();\n    while (__glide_pending_sum() > 0) {\n        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;\n        nanosleep(&ts, NULL);\n    }\n    atomic_store(&__glide_shutdown, 1);\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_mutex_lock(&__glide_wqs[i].mu);\n        pthread_cond_broadcast(&__glide_wqs[i].cv);\n        pthread_mutex_unlock(&__glide_wqs[i].mu);\n    }\n    for (int i = 0; i < __glide_n_workers; i++) {\n        pthread_join(__glide_workers[i], NULL);\n    }\n    if (__glide_timer_inited) {\n        pthread_mutex_lock(&__glide_timer_mu);\n        pthread_cond_broadcast(&__glide_timer_cv);\n        pthread_mutex_unlock(&__glide_timer_mu);\n        pthread_join(__glide_timer_thread, NULL);\n        __glide_timer_inited = 0;\n    }\n    free(__glide_workers); __glide_workers = NULL;\n    free(__glide_wqs); __glide_wqs = NULL;\n    free(__glide_pending_shards); __glide_pending_shards = NULL;\n    __glide_pending_n_shards = 0;\n    __glide_q_inited = 0;\n}\n\n/* Task pool: full task structs (stack + ctx already initialized). On reuse\n   we just rewind the trampoline pointer at the top of the existing stack —\n   no mmap, no calloc, no setup work. Burst spawns become ~1 mutex + 1 push. */\nstatic __glide_task* __glide_task_pool = NULL;\nstatic int __glide_task_pool_count = 0;\nstatic const int __GLIDE_TASK_POOL_MAX = 16384;\nstatic __glide_spin_t __glide_task_pool_spin = 0;\n\n/* Per-thread magazine. The global pool's spinlock is the spawn hot-path\n   bottleneck under burst load (13 threads contending). Each thread keeps a\n   small LIFO; alloc/free hit it lock-free, and we only touch the global pool\n   in batches when the magazine fills or drains. Reduces global ops ~32x. */\n#define __GLIDE_TLS_POOL_MAX 256\n#define __GLIDE_TLS_POOL_BATCH 64\nstatic __thread __glide_task* __glide_tls_pool = NULL;\nstatic __thread int __glide_tls_pool_count = 0;\n\nstatic void __glide_reset_ctx(__glide_task* t) {\n    char* top = (char*)t->stack + t->stack_total;\n    top -= 16;\n    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;\n    *(void**)sp = (void*)__glide_coro_trampoline;\n    t->ctx.rsp = (void*)sp;\n    /* GP/XMM regs zeroed via 8-byte stores — faster than memset for\n       this fixed-size struct, and the compiler vectorizes if it cares. */\n    t->ctx.rbx = 0; t->ctx.rbp = 0;\n    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;\n#ifdef _WIN32\n    t->ctx.rdi = 0; t->ctx.rsi = 0;\n    /* xmm[160] = 20 × 8 bytes; unrolled clear for branchless write. */\n    uint64_t* x = (uint64_t*)t->ctx.xmm;\n    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;\n    x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;\n    x[16]=0; x[17]=0; x[18]=0; x[19]=0;\n#endif\n}\n\n/* No-op now: state/has_run/wait_next/park_lock/park_list are cleared at FREE time\n   instead, so the spawn hot path on main has fewer stores. The reset_ctx clear\n   already moved to worker_main earlier (gated on has_run==0). Inlined since callers\n   sometimes need the return value. */\nstatic inline __glide_task* __glide_finish_alloc(__glide_task* t) { return t; }\n\n__glide_task* __glide_alloc_task(void) {\n    /* Magazine fast path: pop without ever touching the spinlock. */\n    __glide_task* t = __glide_tls_pool;\n    if (t) {\n        __glide_tls_pool = t->next;\n        __glide_tls_pool_count--;\n        return __glide_finish_alloc(t);\n    }\n    /* Magazine empty: refill a batch in one global-lock acquisition. */\n    __glide_spin_lock(&__glide_task_pool_spin);\n    t = __glide_task_pool;\n    if (t) {\n        __glide_task_pool = t->next;\n        __glide_task_pool_count--;\n        __glide_task* head = NULL;\n        int taken = 0;\n        while (taken < __GLIDE_TLS_POOL_BATCH - 1 && __glide_task_pool) {\n            __glide_task* x = __glide_task_pool;\n            __glide_task_pool = x->next;\n            __glide_task_pool_count--;\n            x->next = head;\n            head = x;\n            taken++;\n        }\n        __glide_spin_unlock(&__glide_task_pool_spin);\n        __glide_tls_pool = head;\n        __glide_tls_pool_count = taken;\n        return __glide_finish_alloc(t);\n    }\n    __glide_spin_unlock(&__glide_task_pool_spin);\n    /* Pool fully drained: fresh allocation. */\n    t = (__glide_task*)calloc(1, sizeof(__glide_task));\n    __glide_coro_init(t);\n    return t;\n}\n\nvoid __glide_free_task(__glide_task* t) {\n    /* Reset all the per-task transient fields here, on the worker thread that's\n       freeing — main's spawn hot path was paying for these N stores per task. */\n    t->state = 0; t->has_run = 0;\n    t->wait_next = NULL;\n    t->park_lock = NULL; t->park_list = NULL;\n    if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {\n        t->next = __glide_tls_pool;\n        __glide_tls_pool = t;\n        __glide_tls_pool_count++;\n        return;\n    }\n    /* Magazine full: flush BATCH (this task + last BATCH-1 from TLS) to global. */\n    /* `t` may carry a stale ->next from the run queue; null it so the chain\n       we're about to build terminates cleanly when we walk it for overflow. */\n    t->next = NULL;\n    __glide_task* batch = t;\n    int batch_n = 1;\n    while (batch_n < __GLIDE_TLS_POOL_BATCH && __glide_tls_pool) {\n        __glide_task* x = __glide_tls_pool;\n        __glide_tls_pool = x->next;\n        __glide_tls_pool_count--;\n        x->next = batch;\n        batch = x;\n        batch_n++;\n    }\n    __glide_spin_lock(&__glide_task_pool_spin);\n    int room = __GLIDE_TASK_POOL_MAX - __glide_task_pool_count;\n    int put = (room < batch_n) ? room : batch_n;\n    __glide_task* overflow = batch;\n    if (put > 0) {\n        __glide_task* tail = batch;\n        for (int i = 0; i < put - 1; i++) tail = tail->next;\n        overflow = tail->next;\n        tail->next = __glide_task_pool;\n        __glide_task_pool = batch;\n        __glide_task_pool_count += put;\n    }\n    __glide_spin_unlock(&__glide_task_pool_spin);\n    while (overflow) {\n        __glide_task* x = overflow;\n        overflow = x->next;\n        __glide_coro_destroy(x);\n        free(x);\n    }\n}\n\n/* Per-OS-thread spawn buffer for the from-main path. Batching 32 spawns into\n   one queue lock acquisition cuts spinlock contention dramatically when burst-\n   spawning into W0. pending is incremented immediately (per spawn) so callers'\n   `pending_count()` busy-waits don't observe a stale-low value while tasks sit\n   in the buffer. The flush is triggered by buffer-full, by sched_shutdown, and\n   by pending_count itself (so wait loops can never deadlock on unflushed work). */\n#define __GLIDE_MAIN_BATCH 16\nstatic _Thread_local __glide_task* __glide_main_buf_head = NULL;\nstatic _Thread_local __glide_task* __glide_main_buf_tail = NULL;\nstatic _Thread_local int __glide_main_buf_count = 0;\nstatic void __glide_flush_main_buf(void) {\n    if (!__glide_main_buf_head) return;\n    __glide_q_push_chain(0, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);\n    __glide_main_buf_head = NULL;\n    __glide_main_buf_tail = NULL;\n    __glide_main_buf_count = 0;\n}\n\nvoid __glide_spawn(__glide_task_fn fn, void* arg) {\n    __glide_task* t = __glide_alloc_task();\n    t->entry = fn;\n    t->arg = arg;\n    t->home_worker = __glide_pick_worker();\n    /* Increment the SPAWNER's shard, not the home_worker's. With main always\n       picking W0, sharding by home_worker would put every increment on shard[0] and\n       defeat the whole point. Spawner-thread keeps main's stream separate. */\n    int __sidx = (__glide_my_worker >= 0) ? __glide_my_worker : __glide_n_workers;\n    atomic_fetch_add_explicit(&__glide_pending_shards[__sidx].v, 1, memory_order_relaxed);\n    if (__glide_cur_task != NULL && __glide_my_worker >= 0) {\n        /* Inside a coro: same-thread same-queue, spinlock is uncontended. */\n        __glide_q_push_to(t->home_worker, t);\n        return;\n    }\n    /* Outside (main / pthread): buffer locally, flush in batches. */\n    t->next = NULL;\n    if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;\n    else __glide_main_buf_head = t;\n    __glide_main_buf_tail = t;\n    __glide_main_buf_count++;\n    if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) __glide_flush_main_buf();\n}\n\nvoid yield_now(void) {\n    __glide_task* t = __glide_cur_task;\n    if (!t) return;\n    t->state = 0;\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\n}\n\nint pending_count(void) {\n    /* Flush any locally-buffered spawns before reading; otherwise a busy-wait\n       like `while pending_count() > 0 {}` could hold tasks in the buffer forever. */\n    if (__glide_cur_task == NULL) __glide_flush_main_buf();\n    return __glide_pending_sum();\n}\n\nint64_t now_ns(void) {\n#ifdef _WIN32\n    static LARGE_INTEGER freq; static int inited = 0;\n    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }\n    LARGE_INTEGER c; QueryPerformanceCounter(&c);\n    return (int64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);\n#else\n    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);\n    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;\n#endif\n}\n\nstatic long long __glide_monotonic_ns(void) {\n#ifdef _WIN32\n    static LARGE_INTEGER freq; static int inited = 0;\n    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }\n    LARGE_INTEGER c; QueryPerformanceCounter(&c);\n    return (long long)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);\n#else\n    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);\n    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;\n#endif\n}\n\n/* Timer thread: sleeps until the head deadline, unparks expired tasks. */\nstatic void* __glide_timer_main(void* unused) {\n    (void)unused;\n    pthread_mutex_lock(&__glide_timer_mu);\n    while (!atomic_load(&__glide_shutdown)) {\n        if (__glide_timer_head == NULL) {\n            pthread_cond_wait(&__glide_timer_cv, &__glide_timer_mu);\n            continue;\n        }\n        long long now = __glide_monotonic_ns();\n        if (__glide_timer_head->deadline_ns <= now) {\n            __glide_timer_node* expired = __glide_timer_head;\n            __glide_timer_head = expired->next;\n            __glide_task* t = expired->task;\n            free(expired);\n            pthread_mutex_unlock(&__glide_timer_mu);\n            t->state = 0;\n            __glide_q_push_to(t->home_worker, t);\n            pthread_mutex_lock(&__glide_timer_mu);\n            continue;\n        }\n        long long delta = __glide_timer_head->deadline_ns - now;\n        struct timespec abst;\n#ifdef _WIN32\n        struct timespec _now_rt; clock_gettime(CLOCK_REALTIME, &_now_rt);\n        abst.tv_sec = _now_rt.tv_sec; abst.tv_nsec = _now_rt.tv_nsec;\n#else\n        clock_gettime(CLOCK_REALTIME, &abst);\n#endif\n        long long add_ns = abst.tv_nsec + delta;\n        abst.tv_sec  += (time_t)(add_ns / 1000000000LL);\n        abst.tv_nsec  = (long)(add_ns % 1000000000LL);\n        pthread_cond_timedwait(&__glide_timer_cv, &__glide_timer_mu, &abst);\n    }\n    pthread_mutex_unlock(&__glide_timer_mu);\n    return NULL;\n}\n\nvoid sleep_ms(int ms) {\n    __glide_task* t = __glide_cur_task;\n    if (!t) {\n        /* Not in a coro - blocking sleep. Flush first so any spawns we just\n           queued aren't held in our local buffer while we sit here idle. */\n        __glide_flush_main_buf();\n#ifdef _WIN32\n        Sleep((DWORD)ms);\n#else\n        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (long)((ms % 1000)) * 1000000L;\n        nanosleep(&ts, NULL);\n#endif\n        return;\n    }\n    /* Coro - register on the timer queue, park, worker runs others. */\n    long long deadline = __glide_monotonic_ns() + (long long)ms * 1000000LL;\n    __glide_timer_node* node = (__glide_timer_node*)malloc(sizeof(__glide_timer_node));\n    node->deadline_ns = deadline;\n    node->task = t;\n    pthread_mutex_lock(&__glide_timer_mu);\n    __glide_timer_node** cur = &__glide_timer_head;\n    while (*cur && (*cur)->deadline_ns <= deadline) cur = &(*cur)->next;\n    node->next = *cur;\n    *cur = node;\n    /* Wake timer thread to recompute its deadline. */\n    pthread_cond_signal(&__glide_timer_cv);\n    /* Park: worker hand-off releases __glide_timer_mu after switch. */\n    __glide_park(&__glide_timer_mu, NULL);\n}\n\n/* Coro park: caller holds `lock` and wants to wait on `list`. Returns\n   1 if parked (caller must re-acquire `lock` and re-check state), 0\n   if the caller is not in a coroutine context (caller should fall\n   back to pthread_cond_wait). The actual list link + lock release is\n   done by the worker AFTER the fiber switch — that's how we avoid the\n   classic park/unpark race. */\nint __glide_park(pthread_mutex_t* lock, __glide_task** list) {\n    __glide_task* t = __glide_cur_task;\n    if (!t) { __glide_flush_main_buf(); return 0; }\n    t->park_lock = lock;\n    t->park_list = list;\n    t->state = 2;\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\n    return 1;\n}\n\n/* Caller holds the chan/mutex protecting the wait list. Pop the head and queue it. */\nvoid __glide_unpark_one(__glide_task** list) {\n    __glide_task* t = *list;\n    if (!t) return;\n    *list = t->wait_next;\n    t->wait_next = NULL;\n    t->state = 0;\n    __glide_q_push_to(t->home_worker, t);\n}\n\n\n");
+    printf("%s", "// ============================ scheduler runtime ============================\r\n#include <pthread.h>\r\n#include <stdatomic.h>\r\n#include <time.h>\r\n#include <stdint.h>\r\n#include <stdlib.h>\r\n#ifdef _WIN32\r\n/* winsock2.h must precede windows.h on MinGW / mingw-w64; the seed's\r\n   socket runtime later includes winsock2.h, so include it here too to\r\n   keep the order well-defined regardless of which template lands first\r\n   in the emitted bootstrap.c. */\r\n# include <winsock2.h>\r\n# include <windows.h>  /* GetSystemInfo / Sleep / VirtualAlloc */\r\n#else\r\n# include <unistd.h>\r\n# include <sys/mman.h>\r\n#endif\r\n\r\n/* Spinlock — 5-10× faster than pthread_mutex for the short critical\r\n   sections we use (queue push/pop, pool head update). Falls back to\r\n   `pause` on contention to be hyperthread-friendly. */\r\ntypedef atomic_int __glide_spin_t;\r\nstatic inline void __glide_spin_lock(__glide_spin_t* l) {\r\n    while (atomic_exchange_explicit(l, 1, memory_order_acquire) == 1) {\r\n        while (atomic_load_explicit(l, memory_order_relaxed) == 1) {\r\n#if defined(__x86_64__) || defined(_M_X64)\r\n            __asm__ __volatile__(\"pause\" ::: \"memory\");\r\n#endif\r\n        }\r\n    }\r\n}\r\nstatic inline void __glide_spin_unlock(__glide_spin_t* l) {\r\n    atomic_store_explicit(l, 0, memory_order_release);\r\n}\r\n\r\n/* Stack defaults: configured size + 4 KB guard, page-rounded up.\r\n   With the default 4 KB the total reservation is 8 KB virtual per coro.\r\n   Linux/Mac mmap commits pages lazily; Windows commits virtual but the\r\n   working-set is bound only on first access. Either way idle coros pay\r\n   ~one 4 KB page in physical RAM.\r\n   Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)\r\n   need pointer-map metadata + copy/relocate — TBD. */\r\n#define __GLIDE_STACK_GUARD 4096\r\nstatic int __glide_stack_size = 4096;\r\n\r\n/* Custom assembly context switch — replaces Win32 Fibers and POSIX\r\n   ucontext.h with our own portable, ABI-correct register flip. The\r\n   reason: Fibers crash if the same fiber is SwitchToFiber'd by\r\n   different OS threads over its lifetime, which forces us to pin\r\n   coros to a single worker and rules out work-stealing. With our\r\n   own switch we own the entire state, so a coro can move between\r\n   workers safely.\r\n\r\n   Layout: callee-saved GP regs + (Win64 only) callee-saved XMM6-15.\r\n   Caller-saved registers (rax/rcx/rdx/...) were already flushed to the\r\n   caller's stack frame by the compiler before it called us, so we don't\r\n   touch them. SysV marks XMM as caller-saved → no extra work there. */\r\ntypedef struct {\r\n#ifdef _WIN32\r\n    void* rsp; void* rbx; void* rbp;\r\n    void* rdi; void* rsi;\r\n    void* r12; void* r13; void* r14; void* r15;\r\n    char xmm[160];\r\n#else\r\n    void* rsp; void* rbx; void* rbp;\r\n    void* r12; void* r13; void* r14; void* r15;\r\n#endif\r\n} __glide_coro_ctx;\r\n\r\n__attribute__((naked, noinline))\r\nstatic void __glide_ctx_switch(\r\n    __glide_coro_ctx* from __attribute__((unused)),\r\n    __glide_coro_ctx* to   __attribute__((unused))) {\r\n#ifdef _WIN32\r\n    /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */\r\n    __asm__(\r\n        \"movq %rsp,   0(%rcx)\\n\\t\"\r\n        \"movq %rbx,   8(%rcx)\\n\\t\"\r\n        \"movq %rbp,  16(%rcx)\\n\\t\"\r\n        \"movq %rdi,  24(%rcx)\\n\\t\"\r\n        \"movq %rsi,  32(%rcx)\\n\\t\"\r\n        \"movq %r12,  40(%rcx)\\n\\t\"\r\n        \"movq %r13,  48(%rcx)\\n\\t\"\r\n        \"movq %r14,  56(%rcx)\\n\\t\"\r\n        \"movq %r15,  64(%rcx)\\n\\t\"\r\n        \"movdqu %xmm6,   72(%rcx)\\n\\t\"\r\n        \"movdqu %xmm7,   88(%rcx)\\n\\t\"\r\n        \"movdqu %xmm8,  104(%rcx)\\n\\t\"\r\n        \"movdqu %xmm9,  120(%rcx)\\n\\t\"\r\n        \"movdqu %xmm10, 136(%rcx)\\n\\t\"\r\n        \"movdqu %xmm11, 152(%rcx)\\n\\t\"\r\n        \"movdqu %xmm12, 168(%rcx)\\n\\t\"\r\n        \"movdqu %xmm13, 184(%rcx)\\n\\t\"\r\n        \"movdqu %xmm14, 200(%rcx)\\n\\t\"\r\n        \"movdqu %xmm15, 216(%rcx)\\n\\t\"\r\n        \"movq  0(%rdx), %rsp\\n\\t\"\r\n        \"movq  8(%rdx), %rbx\\n\\t\"\r\n        \"movq 16(%rdx), %rbp\\n\\t\"\r\n        \"movq 24(%rdx), %rdi\\n\\t\"\r\n        \"movq 32(%rdx), %rsi\\n\\t\"\r\n        \"movq 40(%rdx), %r12\\n\\t\"\r\n        \"movq 48(%rdx), %r13\\n\\t\"\r\n        \"movq 56(%rdx), %r14\\n\\t\"\r\n        \"movq 64(%rdx), %r15\\n\\t\"\r\n        \"movdqu  72(%rdx), %xmm6\\n\\t\"\r\n        \"movdqu  88(%rdx), %xmm7\\n\\t\"\r\n        \"movdqu 104(%rdx), %xmm8\\n\\t\"\r\n        \"movdqu 120(%rdx), %xmm9\\n\\t\"\r\n        \"movdqu 136(%rdx), %xmm10\\n\\t\"\r\n        \"movdqu 152(%rdx), %xmm11\\n\\t\"\r\n        \"movdqu 168(%rdx), %xmm12\\n\\t\"\r\n        \"movdqu 184(%rdx), %xmm13\\n\\t\"\r\n        \"movdqu 200(%rdx), %xmm14\\n\\t\"\r\n        \"movdqu 216(%rdx), %xmm15\\n\\t\"\r\n        \"ret\\n\\t\"\r\n    );\r\n#else\r\n    /* SysV AMD64 ABI: from=%rdi, to=%rsi */\r\n    __asm__(\r\n        \"movq %rsp,   0(%rdi)\\n\\t\"\r\n        \"movq %rbx,   8(%rdi)\\n\\t\"\r\n        \"movq %rbp,  16(%rdi)\\n\\t\"\r\n        \"movq %r12,  24(%rdi)\\n\\t\"\r\n        \"movq %r13,  32(%rdi)\\n\\t\"\r\n        \"movq %r14,  40(%rdi)\\n\\t\"\r\n        \"movq %r15,  48(%rdi)\\n\\t\"\r\n        \"movq  0(%rsi), %rsp\\n\\t\"\r\n        \"movq  8(%rsi), %rbx\\n\\t\"\r\n        \"movq 16(%rsi), %rbp\\n\\t\"\r\n        \"movq 24(%rsi), %r12\\n\\t\"\r\n        \"movq 32(%rsi), %r13\\n\\t\"\r\n        \"movq 40(%rsi), %r14\\n\\t\"\r\n        \"movq 48(%rsi), %r15\\n\\t\"\r\n        \"ret\\n\\t\"\r\n    );\r\n#endif\r\n}\r\n\r\ntypedef void* (*__glide_task_fn)(void*);\r\ntypedef struct __glide_task {\r\n    __glide_coro_ctx    ctx;     /* register save area */\r\n    void*               stack;   /* mmap/VirtualAlloc base (low addr) */\r\n    size_t              stack_total; /* bytes including guard page */\r\n    __glide_task_fn     entry;\r\n    void*               arg;\r\n    int                 state; /* 0=ready 1=running 2=blocked 3=done */\r\n    int                 home_worker; /* worker that currently owns this coro;\r\n                                       updated on steal so future unparks land\r\n                                       on the thief's queue (cache-warm). */\r\n    int                 has_run;     /* 0 if never run; once 1, we never\r\n                                       migrate the coro across OS threads (Win64\r\n                                       SEH/TIB invariants make resumed-on-other-\r\n                                       thread fragile, so first-run-only steal). */\r\n    struct __glide_task* next;       /* link in per-worker ready queue */\r\n    struct __glide_task* wait_next;  /* link in chan wait list */\r\n    /* Park hand-off: if non-null on switch-back to worker fiber,\r\n       worker links self into *park_list and unlocks park_lock.\r\n       Done after the switch so unpark can never race with a\r\n       still-mid-switch coro. Either park_lock OR park_spin is set\r\n       per park call, not both — the I/O reactor uses a spinlock per\r\n       fd because the critical sections are 5-10 ns and futex-backed\r\n       pthread_mutex was 2.5 % of the keep-alive HTTP hot path. */\r\n    pthread_mutex_t*     park_lock;\r\n    __glide_spin_t*      park_spin;\r\n    struct __glide_task** park_list;\r\n} __glide_task;\r\n\r\n/* Forward decls — out-of-order references between sleep_ms / __glide_park /\r\n   __glide_timer_main / sched_init / task pool helpers used by worker_main. */\r\nstatic void* __glide_timer_main(void* unused);\r\nint __glide_park(pthread_mutex_t* lock, __glide_task** list);\r\nvoid __glide_free_task(__glide_task* t);\r\nstatic void __glide_reset_ctx(__glide_task* t);\r\nstatic void __glide_flush_main_buf(void);\r\n\r\n/* Per-worker queue: each worker pops only from its own queue, so a\r\n   fiber that first ran on worker A always continues on A. This avoids\r\n   cross-thread fiber migration which crashes Win32 Fibers. Stealing\r\n   between workers comes in Phase 1.2 (with proper atomic ownership). */\r\ntypedef struct {\r\n    __glide_spin_t  spin;\r\n    pthread_mutex_t mu;\r\n    pthread_cond_t  cv;\r\n    __glide_task*   head;\r\n    __glide_task*   tail;\r\n    atomic_int      idle;\r\n} __glide_wq;\r\n\r\n/* Sorted sleep queue for the timer thread. Coroutines that call\r\n   sleep_ms park here instead of blocking their worker. */\r\ntypedef struct __glide_timer_node {\r\n    long long              deadline_ns;\r\n    __glide_task*          task;\r\n    struct __glide_timer_node* next;\r\n} __glide_timer_node;\r\nstatic __glide_timer_node* __glide_timer_head = NULL;\r\nstatic pthread_mutex_t __glide_timer_mu;\r\nstatic pthread_cond_t  __glide_timer_cv;\r\nstatic pthread_t __glide_timer_thread;\r\nstatic int __glide_timer_inited = 0;\r\n\r\nstatic __glide_wq* __glide_wqs = NULL;\r\nstatic int __glide_q_inited = 0;\r\nstatic int __glide_n_workers = 0;\r\nstatic pthread_t* __glide_workers = NULL;\r\n/* Pending count, sharded per worker so increments and decrements don't all bounce\r\n   the same cache line. Spawn increments shards[home_worker]; the worker that runs\r\n   the task decrements shards[my_worker]. Sum across shards = total alive tasks.\r\n   Each shard is its own cache line to kill false sharing between threads. */\r\ntypedef struct {\r\n    atomic_int v;\r\n    char _pad[60];\r\n} __glide_pending_shard_t;\r\nstatic __glide_pending_shard_t* __glide_pending_shards = NULL;\r\nstatic int __glide_pending_n_shards = 0;\r\nstatic int __glide_pending_sum(void) {\r\n    int sum = 0;\r\n    int n = __glide_pending_n_shards;\r\n    for (int i = 0; i < n; i++) {\r\n        sum += atomic_load_explicit(&__glide_pending_shards[i].v, memory_order_acquire);\r\n    }\r\n    return sum;\r\n}\r\nstatic atomic_int __glide_shutdown = 0;\r\nstatic atomic_int __glide_rr = 0;        /* round-robin spawn counter */\r\n\r\nstatic _Thread_local __glide_task* __glide_cur_task = NULL;\r\nstatic _Thread_local int __glide_my_worker = -1;\r\n/* Worker's saved context. Each OS thread has its own — when a coro\r\n   parks/yields, we ctx_switch INTO this so the worker resumes its\r\n   loop right after the call site. */\r\nstatic _Thread_local __glide_coro_ctx __glide_worker_ctx;\r\n#ifdef _WIN32\r\n/* Original OS-thread stack range — saved on worker entry, restored\r\n   when no coro is running. Win64 SEH walks the stack via TIB, so we\r\n   must point TIB at the coro's stack while it runs and back at the\r\n   OS thread's stack between switches. Without this, any code path that\r\n   raises an exception or probes the stack from a migrated coro reads\r\n   garbage and crashes. */\r\nstatic _Thread_local void* __glide_orig_stack_base = NULL;\r\nstatic _Thread_local void* __glide_orig_stack_limit = NULL;\r\nstatic inline void __glide_tib_set_stack(void* base, void* limit) {\r\n    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();\r\n    tib->StackBase = base;\r\n    tib->StackLimit = limit;\r\n}\r\n#endif\r\n\r\n/* Perf counters defined further below; forward-declare here so the\r\n   queue push helpers can bump them. */\r\nextern atomic_long __glide_perf_q_pushes;\r\nextern atomic_long __glide_perf_cv_signals;\r\n\r\nstatic void __glide_q_push_to(int wid, __glide_task* t) {\r\n    __glide_wq* q = &__glide_wqs[wid];\r\n    __glide_spin_lock(&q->spin);\r\n    t->next = NULL;\r\n    if (q->tail) q->tail->next = t; else q->head = t;\r\n    q->tail = t;\r\n    __glide_spin_unlock(&q->spin);\r\n    atomic_fetch_add_explicit(&__glide_perf_q_pushes, 1, memory_order_relaxed);\r\n    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {\r\n        pthread_mutex_lock(&q->mu);\r\n        pthread_cond_signal(&q->cv);\r\n        pthread_mutex_unlock(&q->mu);\r\n        atomic_fetch_add_explicit(&__glide_perf_cv_signals, 1, memory_order_relaxed);\r\n    }\r\n}\r\n\r\n/* Splice a pre-built chain (head ... tail, n nodes, NULL-terminated) onto\r\n   the back of a worker's queue under one spinlock acquisition. Used by main's\r\n   batched-push path so 32 spawns cost ~1 lock instead of 32. */\r\nstatic void __glide_q_push_chain(int wid, __glide_task* head, __glide_task* tail, int n) {\r\n    if (!head) return; (void)n;\r\n    __glide_wq* q = &__glide_wqs[wid];\r\n    __glide_spin_lock(&q->spin);\r\n    if (q->tail) q->tail->next = head; else q->head = head;\r\n    q->tail = tail;\r\n    __glide_spin_unlock(&q->spin);\r\n    if (atomic_load_explicit(&q->idle, memory_order_relaxed)) {\r\n        pthread_mutex_lock(&q->mu);\r\n        pthread_cond_broadcast(&q->cv);\r\n        pthread_mutex_unlock(&q->mu);\r\n    }\r\n}\r\n\r\n/* Sticky preferred worker for OS threads that aren't part of the M:N\r\n   pool. Main thread gets the first slot (W0); subsequent spawn_thread\r\n   callers (accept loops in http_listen_workers, for example) round-\r\n   robin over the rest so they don't all dogpile W0's spinlock + cv. */\r\nstatic _Thread_local int __glide_outside_pref_worker = -1;\r\nstatic atomic_int        __glide_next_outside_pref   = 0;\r\n\r\nstatic int __glide_pick_worker(void) {\r\n    /* Inside a coro: same worker as caller (cheap, keeps cache hot). */\r\n    if (__glide_cur_task != NULL && __glide_my_worker >= 0) return __glide_my_worker;\r\n    /* Outside: stick to one worker per OS thread. Single-main-thread\r\n       case still resolves to W0 (it asks first), so the well-trodden\r\n       hot path is unchanged. The win shows up when there are 2+\r\n       non-coro spawners in the same process. */\r\n    if (__glide_outside_pref_worker < 0) {\r\n        int next = atomic_fetch_add_explicit(&__glide_next_outside_pref, 1,\r\n                                             memory_order_relaxed);\r\n        int n = __glide_n_workers;\r\n        if (n <= 0) n = 1;\r\n        __glide_outside_pref_worker = next % n;\r\n    }\r\n    return __glide_outside_pref_worker;\r\n}\r\n\r\n/* Work-stealing: when our queue is empty, try grabbing the head of\r\n   another worker's queue (random victim, walk all on miss). On steal\r\n   we adopt the task as our own (home_worker = me) so future unparks\r\n   stay cache-warm here. Now safe to migrate because our custom ctx\r\n   switch is stateless across threads — no Win32 Fiber crash trap. */\r\nstatic atomic_uint __glide_steal_rr = 0;\r\nstatic __glide_task* __glide_try_steal(void) {\r\n    int n = __glide_n_workers;\r\n    if (n <= 1) return NULL;\r\n    int my = __glide_my_worker;\r\n    unsigned int seed = atomic_fetch_add_explicit(&__glide_steal_rr, 1, memory_order_relaxed);\r\n    int start = (int)(seed % (unsigned int)n);\r\n    for (int i = 0; i < n; i++) {\r\n        int v = (start + i) % n;\r\n        if (v == my) continue;\r\n        __glide_wq* q = &__glide_wqs[v];\r\n        __glide_spin_lock(&q->spin);\r\n        /* Walk queue head: only first-run-untouched tasks are stealable. */\r\n        __glide_task* prev = NULL;\r\n        __glide_task* t = q->head;\r\n        while (t && t->has_run) { prev = t; t = t->next; }\r\n        if (t) {\r\n            if (prev) prev->next = t->next; else q->head = t->next;\r\n            if (q->tail == t) q->tail = prev;\r\n            __glide_spin_unlock(&q->spin);\r\n            t->home_worker = my;\r\n            t->next = NULL;\r\n            return t;\r\n        }\r\n        __glide_spin_unlock(&q->spin);\r\n    }\r\n    return NULL;\r\n}\r\n\r\nstatic __glide_task* __glide_q_pop_my(void) {\r\n    __glide_wq* q = &__glide_wqs[__glide_my_worker];\r\n    while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {\r\n        __glide_spin_lock(&q->spin);\r\n        __glide_task* t = q->head;\r\n        if (t) {\r\n            q->head = t->next;\r\n            if (q->head == NULL) q->tail = NULL;\r\n            __glide_spin_unlock(&q->spin);\r\n            return t;\r\n        }\r\n        __glide_spin_unlock(&q->spin);\r\n        __glide_task* stolen = __glide_try_steal();\r\n        if (stolen) return stolen;\r\n        pthread_mutex_lock(&q->mu);\r\n        if (q->head || atomic_load(&__glide_shutdown)) {\r\n            pthread_mutex_unlock(&q->mu);\r\n            continue;\r\n        }\r\n        struct timespec ts;\r\n        clock_gettime(CLOCK_REALTIME, &ts);\r\n        ts.tv_nsec += 500000;\r\n        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }\r\n        atomic_store_explicit(&q->idle, 1, memory_order_relaxed);\r\n        pthread_cond_timedwait(&q->cv, &q->mu, &ts);\r\n        atomic_store_explicit(&q->idle, 0, memory_order_relaxed);\r\n        pthread_mutex_unlock(&q->mu);\r\n    }\r\n    return NULL;\r\n}\r\n\r\n/* Trampoline reached on a coro's first switch-in. Reads the bound\r\n   task from TLS (worker_main set __glide_cur_task before switching),\r\n   runs the user fn, marks done, then hands control back to the worker\r\n   via ctx_switch. The final switch never returns: we discard the saved\r\n   ctx (worker is going to free us anyway). */\r\nstatic void __glide_coro_trampoline(void) {\r\n    __glide_task* t = __glide_cur_task;\r\n    (void)t->entry(t->arg);\r\n    t->state = 3;\r\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\r\n    __builtin_unreachable();\r\n}\r\n\r\n/* Stack pool: hold a small free list of recently-freed regions so a\r\n   spawn-burst doesn't pay mmap+munmap (Linux) / VirtualAlloc+VirtualFree\r\n   (Win) per coro. Significant on Windows where these are slow syscalls. */\r\ntypedef struct __glide_stack_node {\r\n    void*  base;\r\n    size_t total;\r\n    struct __glide_stack_node* next;\r\n} __glide_stack_node;\r\nstatic __glide_stack_node* __glide_stack_pool = NULL;\r\nstatic int __glide_stack_pool_count = 0;\r\nstatic const int __GLIDE_STACK_POOL_MAX = 16384;\r\nstatic __glide_spin_t __glide_stack_pool_spin = 0;\r\n\r\n/* Stack allocator: mmap (POSIX) or VirtualAlloc (Win) so unused pages\r\n   stay uncommitted (Linux/Mac) and overflow into the guard page raises\r\n   SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the\r\n   neighbour stack. Returns the LOW address of the whole region; usable\r\n   stack starts at `base + __GLIDE_STACK_GUARD`. */\r\nstatic void* __glide_alloc_stack(size_t* out_total) {\r\n    size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;\r\n    size_t page = 4096;\r\n    total = (total + page - 1) & ~(page - 1);\r\n    /* Pool fast path. */\r\n    __glide_spin_lock(&__glide_stack_pool_spin);\r\n    __glide_stack_node* n = __glide_stack_pool;\r\n    while (n && n->total != total) n = n->next;\r\n    if (n && n->total == total) {\r\n        /* Unlink first matching node. */\r\n        __glide_stack_node** p = &__glide_stack_pool;\r\n        while (*p != n) p = &(*p)->next;\r\n        *p = n->next;\r\n        __glide_stack_pool_count--;\r\n        __glide_spin_unlock(&__glide_stack_pool_spin);\r\n        void* base = n->base;\r\n        free(n);\r\n        *out_total = total;\r\n        return base;\r\n    }\r\n    __glide_spin_unlock(&__glide_stack_pool_spin);\r\n    void* base;\r\n#ifdef _WIN32\r\n    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);\r\n    if (!base) return NULL;\r\n    DWORD old;\r\n    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);\r\n#else\r\n    base = mmap(NULL, total, PROT_READ|PROT_WRITE,\r\n                MAP_ANON|MAP_PRIVATE, -1, 0);\r\n    if (base == MAP_FAILED) return NULL;\r\n    mprotect(base, __GLIDE_STACK_GUARD, PROT_NONE);\r\n#endif\r\n    *out_total = total;\r\n    return base;\r\n}\r\n\r\nstatic void __glide_free_stack(void* base, size_t total) {\r\n    if (!base) return;\r\n    /* Hand back to pool if there's room. */\r\n    __glide_spin_lock(&__glide_stack_pool_spin);\r\n    if (__glide_stack_pool_count < __GLIDE_STACK_POOL_MAX) {\r\n        __glide_stack_node* n = (__glide_stack_node*)malloc(sizeof(*n));\r\n        n->base = base;\r\n        n->total = total;\r\n        n->next = __glide_stack_pool;\r\n        __glide_stack_pool = n;\r\n        __glide_stack_pool_count++;\r\n        __glide_spin_unlock(&__glide_stack_pool_spin);\r\n        return;\r\n    }\r\n    __glide_spin_unlock(&__glide_stack_pool_spin);\r\n#ifdef _WIN32\r\n    (void)total;\r\n    VirtualFree(base, 0, MEM_RELEASE);\r\n#else\r\n    munmap(base, total);\r\n#endif\r\n}\r\n\r\n/* Plant trampoline address at the top of the stack so the first\r\n   ctx_switch into this ctx pops it and `ret`s into the trampoline.\r\n   16-byte alignment matches the AMD64 call ABI: we save RSP at a\r\n   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees\r\n   RSP%16==8 (which is what `call` would have left). */\r\nstatic void __glide_coro_init(__glide_task* t) {\r\n    size_t total = 0;\r\n    t->stack = __glide_alloc_stack(&total);\r\n    t->stack_total = total;\r\n    char* top = (char*)t->stack + total;\r\n    top -= 16;                       /* headroom — never write past top */\r\n    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;\r\n    *(void**)sp = (void*)__glide_coro_trampoline;\r\n    t->ctx.rsp = (void*)sp;\r\n    t->ctx.rbx = 0; t->ctx.rbp = 0;\r\n    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;\r\n#ifdef _WIN32\r\n    t->ctx.rdi = 0; t->ctx.rsi = 0;\r\n#endif\r\n}\r\n\r\nstatic void __glide_coro_destroy(__glide_task* t) {\r\n    __glide_free_stack(t->stack, t->stack_total);\r\n    t->stack = NULL;\r\n    t->stack_total = 0;\r\n}\r\n\r\nstatic void* __glide_worker_main(void* arg) {\r\n    __glide_my_worker = (int)(intptr_t)arg;\r\n#ifdef _WIN32\r\n    /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit\r\n       to the coro's region while it runs and back to ours between switches. */\r\n    {\r\n        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();\r\n        __glide_orig_stack_base = tib->StackBase;\r\n        __glide_orig_stack_limit = tib->StackLimit;\r\n    }\r\n#endif\r\n    while (!atomic_load(&__glide_shutdown)) {\r\n        __glide_task* t = __glide_q_pop_my();\r\n        if (!t) break;\r\n        __glide_cur_task = t;\r\n        if (!t->has_run) __glide_reset_ctx(t);\r\n        t->state = 1;\r\n        t->has_run = 1;  /* stick to this OS thread from now on */\r\n#ifdef _WIN32\r\n        __glide_tib_set_stack((char*)t->stack + t->stack_total, t->stack);\r\n#endif\r\n        __glide_ctx_switch(&__glide_worker_ctx, &t->ctx);\r\n#ifdef _WIN32\r\n        __glide_tib_set_stack(__glide_orig_stack_base, __glide_orig_stack_limit);\r\n#endif\r\n        __glide_cur_task = NULL;\r\n        if (t->state == 3) {\r\n            __glide_free_task(t);  /* pool reuse — keeps stack mmap'd */\r\n            /* Single atomic on this worker's shard. The previous code also did a\r\n               cross-queue cv broadcast when total pending hit zero, but\r\n               sched_shutdown busy-waits on pending_sum and broadcasts itself once\r\n               shutdown=1, so this hot-path broadcast is redundant. */\r\n            atomic_fetch_sub_explicit(&__glide_pending_shards[__glide_my_worker].v, 1, memory_order_acq_rel);\r\n        } else if (t->state == 2) {\r\n            /* Parked. Complete the hand-off: link into wait list,\r\n               release the lock the parker held. After this point\r\n               unpark may safely queue the task. */\r\n            if (t->park_list) {\r\n                t->wait_next = *t->park_list;\r\n                *t->park_list = t;\r\n                t->park_list = NULL;\r\n            }\r\n            if (t->park_lock) {\r\n                pthread_mutex_unlock(t->park_lock);\r\n                t->park_lock = NULL;\r\n            } else if (t->park_spin) {\r\n                __glide_spin_unlock(t->park_spin);\r\n                t->park_spin = NULL;\r\n            }\r\n        } else {\r\n            t->state = 0;\r\n            __glide_q_push_to(t->home_worker, t);\r\n        }\r\n    }\r\n    return NULL;\r\n}\r\n\r\n#ifndef _WIN32\r\n#include <signal.h>\r\nstatic void __glide_perf_sigusr2(int sig) {\r\n    (void)sig;\r\n    extern void __glide_perf_dump(void);\r\n    __glide_perf_dump();\r\n}\r\n#endif\r\n\r\nvoid __glide_sched_init(void) {\r\n    if (__glide_q_inited) return;\r\n#ifndef _WIN32\r\n    /* SIGUSR2 dumps the perf counters and resets them — used by the\r\n       bench scripts to read parks/q_pushes/cv_signals across a wrk run. */\r\n    signal(SIGUSR2, __glide_perf_sigusr2);\r\n#endif\r\n    const char* env_stk = getenv(\"GLIDE_CORO_STACK\");\r\n    if (env_stk) {\r\n        int n = atoi(env_stk);\r\n        if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */\r\n    }\r\n    const char* env = getenv(\"GLIDE_WORKERS\");\r\n    if (env) __glide_n_workers = atoi(env);\r\n    if (__glide_n_workers <= 0) {\r\n        int ncpu;\r\n#ifdef _WIN32\r\n        SYSTEM_INFO si; GetSystemInfo(&si);\r\n        ncpu = (int)si.dwNumberOfProcessors;\r\n#else\r\n        long n = sysconf(_SC_NPROCESSORS_ONLN);\r\n        ncpu = (n > 0) ? (int)n : 4;\r\n#endif\r\n        /* Cap default workers at 8. The M:N pool plus the reactor/timer\r\n           pthreads plus any spawn_thread accept loops the user adds are\r\n           all competing for CPU; on a 32-vCPU host scaling workers to\r\n           ncpu makes wakes/idles thrash the cv list and drops HTTP\r\n           throughput by 2× compared to 8 workers. Users can opt back\r\n           into ncpu via GLIDE_WORKERS=<n>. */\r\n        __glide_n_workers = ncpu < 8 ? ncpu : 8;\r\n    }\r\n    __glide_wqs = (__glide_wq*)calloc(__glide_n_workers, sizeof(__glide_wq));\r\n    for (int i = 0; i < __glide_n_workers; i++) {\r\n        pthread_mutex_init(&__glide_wqs[i].mu, NULL);\r\n        pthread_cond_init(&__glide_wqs[i].cv, NULL);\r\n    }\r\n    /* One shard per worker plus one for non-coro callers (main / arbitrary OS threads). */\r\n    __glide_pending_n_shards = __glide_n_workers + 1;\r\n    __glide_pending_shards = (__glide_pending_shard_t*)calloc(__glide_pending_n_shards, sizeof(__glide_pending_shard_t));\r\n    __glide_q_inited = 1;\r\n    __glide_workers = (pthread_t*)malloc(sizeof(pthread_t) * __glide_n_workers);\r\n    for (int i = 0; i < __glide_n_workers; i++) {\r\n        pthread_create(&__glide_workers[i], NULL, __glide_worker_main, (void*)(intptr_t)i);\r\n    }\r\n    pthread_mutex_init(&__glide_timer_mu, NULL);\r\n    pthread_cond_init(&__glide_timer_cv, NULL);\r\n    __glide_timer_inited = 1;\r\n    pthread_create(&__glide_timer_thread, NULL, __glide_timer_main, NULL);\r\n}\r\n\r\nvoid __glide_sched_shutdown(void) {\r\n    if (!__glide_q_inited) return;\r\n    __glide_flush_main_buf();\r\n    while (__glide_pending_sum() > 0) {\r\n        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;\r\n        nanosleep(&ts, NULL);\r\n    }\r\n    atomic_store(&__glide_shutdown, 1);\r\n    for (int i = 0; i < __glide_n_workers; i++) {\r\n        pthread_mutex_lock(&__glide_wqs[i].mu);\r\n        pthread_cond_broadcast(&__glide_wqs[i].cv);\r\n        pthread_mutex_unlock(&__glide_wqs[i].mu);\r\n    }\r\n    for (int i = 0; i < __glide_n_workers; i++) {\r\n        pthread_join(__glide_workers[i], NULL);\r\n    }\r\n    if (__glide_timer_inited) {\r\n        pthread_mutex_lock(&__glide_timer_mu);\r\n        pthread_cond_broadcast(&__glide_timer_cv);\r\n        pthread_mutex_unlock(&__glide_timer_mu);\r\n        pthread_join(__glide_timer_thread, NULL);\r\n        __glide_timer_inited = 0;\r\n    }\r\n    free(__glide_workers); __glide_workers = NULL;\r\n    free(__glide_wqs); __glide_wqs = NULL;\r\n    free(__glide_pending_shards); __glide_pending_shards = NULL;\r\n    __glide_pending_n_shards = 0;\r\n    __glide_q_inited = 0;\r\n}\r\n\r\n/* Task pool: full task structs (stack + ctx already initialized). On reuse\r\n   we just rewind the trampoline pointer at the top of the existing stack —\r\n   no mmap, no calloc, no setup work. Burst spawns become ~1 mutex + 1 push. */\r\nstatic __glide_task* __glide_task_pool = NULL;\r\nstatic int __glide_task_pool_count = 0;\r\nstatic const int __GLIDE_TASK_POOL_MAX = 16384;\r\nstatic __glide_spin_t __glide_task_pool_spin = 0;\r\n\r\n/* Per-thread magazine. The global pool's spinlock is the spawn hot-path\r\n   bottleneck under burst load (13 threads contending). Each thread keeps a\r\n   small LIFO; alloc/free hit it lock-free, and we only touch the global pool\r\n   in batches when the magazine fills or drains. Reduces global ops ~32x. */\r\n#define __GLIDE_TLS_POOL_MAX 256\r\n#define __GLIDE_TLS_POOL_BATCH 64\r\nstatic __thread __glide_task* __glide_tls_pool = NULL;\r\nstatic __thread int __glide_tls_pool_count = 0;\r\n\r\nstatic void __glide_reset_ctx(__glide_task* t) {\r\n    char* top = (char*)t->stack + t->stack_total;\r\n    top -= 16;\r\n    uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;\r\n    *(void**)sp = (void*)__glide_coro_trampoline;\r\n    t->ctx.rsp = (void*)sp;\r\n    /* GP/XMM regs zeroed via 8-byte stores — faster than memset for\r\n       this fixed-size struct, and the compiler vectorizes if it cares. */\r\n    t->ctx.rbx = 0; t->ctx.rbp = 0;\r\n    t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;\r\n#ifdef _WIN32\r\n    t->ctx.rdi = 0; t->ctx.rsi = 0;\r\n    /* xmm[160] = 20 × 8 bytes; unrolled clear for branchless write. */\r\n    uint64_t* x = (uint64_t*)t->ctx.xmm;\r\n    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;\r\n    x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;\r\n    x[16]=0; x[17]=0; x[18]=0; x[19]=0;\r\n#endif\r\n}\r\n\r\n/* No-op now: state/has_run/wait_next/park_lock/park_list are cleared at FREE time\r\n   instead, so the spawn hot path on main has fewer stores. The reset_ctx clear\r\n   already moved to worker_main earlier (gated on has_run==0). Inlined since callers\r\n   sometimes need the return value. */\r\nstatic inline __glide_task* __glide_finish_alloc(__glide_task* t) { return t; }\r\n\r\n__glide_task* __glide_alloc_task(void) {\r\n    /* Magazine fast path: pop without ever touching the spinlock. */\r\n    __glide_task* t = __glide_tls_pool;\r\n    if (t) {\r\n        __glide_tls_pool = t->next;\r\n        __glide_tls_pool_count--;\r\n        return __glide_finish_alloc(t);\r\n    }\r\n    /* Magazine empty: refill a batch in one global-lock acquisition. */\r\n    __glide_spin_lock(&__glide_task_pool_spin);\r\n    t = __glide_task_pool;\r\n    if (t) {\r\n        __glide_task_pool = t->next;\r\n        __glide_task_pool_count--;\r\n        __glide_task* head = NULL;\r\n        int taken = 0;\r\n        while (taken < __GLIDE_TLS_POOL_BATCH - 1 && __glide_task_pool) {\r\n            __glide_task* x = __glide_task_pool;\r\n            __glide_task_pool = x->next;\r\n            __glide_task_pool_count--;\r\n            x->next = head;\r\n            head = x;\r\n            taken++;\r\n        }\r\n        __glide_spin_unlock(&__glide_task_pool_spin);\r\n        __glide_tls_pool = head;\r\n        __glide_tls_pool_count = taken;\r\n        return __glide_finish_alloc(t);\r\n    }\r\n    __glide_spin_unlock(&__glide_task_pool_spin);\r\n    /* Pool fully drained: fresh allocation. */\r\n    t = (__glide_task*)calloc(1, sizeof(__glide_task));\r\n    __glide_coro_init(t);\r\n    return t;\r\n}\r\n\r\nvoid __glide_free_task(__glide_task* t) {\r\n    /* Reset all the per-task transient fields here, on the worker thread that's\r\n       freeing — main's spawn hot path was paying for these N stores per task. */\r\n    t->state = 0; t->has_run = 0;\r\n    t->wait_next = NULL;\r\n    t->park_lock = NULL; t->park_spin = NULL; t->park_list = NULL;\r\n    if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {\r\n        t->next = __glide_tls_pool;\r\n        __glide_tls_pool = t;\r\n        __glide_tls_pool_count++;\r\n        return;\r\n    }\r\n    /* Magazine full: flush BATCH (this task + last BATCH-1 from TLS) to global. */\r\n    /* `t` may carry a stale ->next from the run queue; null it so the chain\r\n       we're about to build terminates cleanly when we walk it for overflow. */\r\n    t->next = NULL;\r\n    __glide_task* batch = t;\r\n    int batch_n = 1;\r\n    while (batch_n < __GLIDE_TLS_POOL_BATCH && __glide_tls_pool) {\r\n        __glide_task* x = __glide_tls_pool;\r\n        __glide_tls_pool = x->next;\r\n        __glide_tls_pool_count--;\r\n        x->next = batch;\r\n        batch = x;\r\n        batch_n++;\r\n    }\r\n    __glide_spin_lock(&__glide_task_pool_spin);\r\n    int room = __GLIDE_TASK_POOL_MAX - __glide_task_pool_count;\r\n    int put = (room < batch_n) ? room : batch_n;\r\n    __glide_task* overflow = batch;\r\n    if (put > 0) {\r\n        __glide_task* tail = batch;\r\n        for (int i = 0; i < put - 1; i++) tail = tail->next;\r\n        overflow = tail->next;\r\n        tail->next = __glide_task_pool;\r\n        __glide_task_pool = batch;\r\n        __glide_task_pool_count += put;\r\n    }\r\n    __glide_spin_unlock(&__glide_task_pool_spin);\r\n    while (overflow) {\r\n        __glide_task* x = overflow;\r\n        overflow = x->next;\r\n        __glide_coro_destroy(x);\r\n        free(x);\r\n    }\r\n}\r\n\r\n/* Per-OS-thread spawn buffer for the from-main path. Batching 32 spawns into\r\n   one queue lock acquisition cuts spinlock contention dramatically when burst-\r\n   spawning into W0. pending is incremented immediately (per spawn) so callers'\r\n   `pending_count()` busy-waits don't observe a stale-low value while tasks sit\r\n   in the buffer. The flush is triggered by buffer-full, by sched_shutdown, and\r\n   by pending_count itself (so wait loops can never deadlock on unflushed work). */\r\n#define __GLIDE_MAIN_BATCH 16\r\nstatic _Thread_local __glide_task* __glide_main_buf_head = NULL;\r\nstatic _Thread_local __glide_task* __glide_main_buf_tail = NULL;\r\nstatic _Thread_local int __glide_main_buf_count = 0;\r\nstatic void __glide_flush_main_buf(void) {\r\n    if (!__glide_main_buf_head) return;\r\n    /* Match the per-thread sticky worker chosen by __glide_pick_worker\r\n       above, so the chain lands on the same queue the tasks' home_worker\r\n       points at. Otherwise work-stealing has to immediately re-route. */\r\n    int target = __glide_outside_pref_worker;\r\n    if (target < 0) target = 0;\r\n    __glide_q_push_chain(target, __glide_main_buf_head, __glide_main_buf_tail, __glide_main_buf_count);\r\n    __glide_main_buf_head = NULL;\r\n    __glide_main_buf_tail = NULL;\r\n    __glide_main_buf_count = 0;\r\n}\r\n\r\nvoid __glide_spawn(__glide_task_fn fn, void* arg) {\r\n    __glide_task* t = __glide_alloc_task();\r\n    t->entry = fn;\r\n    t->arg = arg;\r\n    t->home_worker = __glide_pick_worker();\r\n    /* Increment the SPAWNER's shard, not the home_worker's. With main always\r\n       picking W0, sharding by home_worker would put every increment on shard[0] and\r\n       defeat the whole point. Spawner-thread keeps main's stream separate. */\r\n    int __sidx = (__glide_my_worker >= 0) ? __glide_my_worker : __glide_n_workers;\r\n    atomic_fetch_add_explicit(&__glide_pending_shards[__sidx].v, 1, memory_order_relaxed);\r\n    if (__glide_cur_task != NULL && __glide_my_worker >= 0) {\r\n        /* Inside a coro: same-thread same-queue, spinlock is uncontended. */\r\n        __glide_q_push_to(t->home_worker, t);\r\n        return;\r\n    }\r\n    /* Outside (main / pthread): buffer locally, flush in batches. */\r\n    t->next = NULL;\r\n    if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;\r\n    else __glide_main_buf_head = t;\r\n    __glide_main_buf_tail = t;\r\n    __glide_main_buf_count++;\r\n    if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) __glide_flush_main_buf();\r\n}\r\n\r\nvoid yield_now(void) {\r\n    __glide_task* t = __glide_cur_task;\r\n    if (!t) return;\r\n    t->state = 0;\r\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\r\n}\r\n\r\nint pending_count(void) {\r\n    /* Flush any locally-buffered spawns before reading; otherwise a busy-wait\r\n       like `while pending_count() > 0 {}` could hold tasks in the buffer forever. */\r\n    if (__glide_cur_task == NULL) __glide_flush_main_buf();\r\n    return __glide_pending_sum();\r\n}\r\n\r\nint64_t now_ns(void) {\r\n#ifdef _WIN32\r\n    static LARGE_INTEGER freq; static int inited = 0;\r\n    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }\r\n    LARGE_INTEGER c; QueryPerformanceCounter(&c);\r\n    return (int64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);\r\n#else\r\n    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);\r\n    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;\r\n#endif\r\n}\r\n\r\nstatic long long __glide_monotonic_ns(void) {\r\n#ifdef _WIN32\r\n    static LARGE_INTEGER freq; static int inited = 0;\r\n    if (!inited) { QueryPerformanceFrequency(&freq); inited = 1; }\r\n    LARGE_INTEGER c; QueryPerformanceCounter(&c);\r\n    return (long long)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);\r\n#else\r\n    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);\r\n    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;\r\n#endif\r\n}\r\n\r\n/* Timer thread: sleeps until the head deadline, unparks expired tasks. */\r\nstatic void* __glide_timer_main(void* unused) {\r\n    (void)unused;\r\n    pthread_mutex_lock(&__glide_timer_mu);\r\n    while (!atomic_load(&__glide_shutdown)) {\r\n        if (__glide_timer_head == NULL) {\r\n            pthread_cond_wait(&__glide_timer_cv, &__glide_timer_mu);\r\n            continue;\r\n        }\r\n        long long now = __glide_monotonic_ns();\r\n        if (__glide_timer_head->deadline_ns <= now) {\r\n            __glide_timer_node* expired = __glide_timer_head;\r\n            __glide_timer_head = expired->next;\r\n            __glide_task* t = expired->task;\r\n            free(expired);\r\n            pthread_mutex_unlock(&__glide_timer_mu);\r\n            t->state = 0;\r\n            __glide_q_push_to(t->home_worker, t);\r\n            pthread_mutex_lock(&__glide_timer_mu);\r\n            continue;\r\n        }\r\n        long long delta = __glide_timer_head->deadline_ns - now;\r\n        struct timespec abst;\r\n#ifdef _WIN32\r\n        struct timespec _now_rt; clock_gettime(CLOCK_REALTIME, &_now_rt);\r\n        abst.tv_sec = _now_rt.tv_sec; abst.tv_nsec = _now_rt.tv_nsec;\r\n#else\r\n        clock_gettime(CLOCK_REALTIME, &abst);\r\n#endif\r\n        long long add_ns = abst.tv_nsec + delta;\r\n        abst.tv_sec  += (time_t)(add_ns / 1000000000LL);\r\n        abst.tv_nsec  = (long)(add_ns % 1000000000LL);\r\n        pthread_cond_timedwait(&__glide_timer_cv, &__glide_timer_mu, &abst);\r\n    }\r\n    pthread_mutex_unlock(&__glide_timer_mu);\r\n    return NULL;\r\n}\r\n\r\nvoid sleep_ms(int ms) {\r\n    __glide_task* t = __glide_cur_task;\r\n    if (!t) {\r\n        /* Not in a coro - blocking sleep. Flush first so any spawns we just\r\n           queued aren't held in our local buffer while we sit here idle. */\r\n        __glide_flush_main_buf();\r\n#ifdef _WIN32\r\n        Sleep((DWORD)ms);\r\n#else\r\n        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (long)((ms % 1000)) * 1000000L;\r\n        nanosleep(&ts, NULL);\r\n#endif\r\n        return;\r\n    }\r\n    /* Coro - register on the timer queue, park, worker runs others. */\r\n    long long deadline = __glide_monotonic_ns() + (long long)ms * 1000000LL;\r\n    __glide_timer_node* node = (__glide_timer_node*)malloc(sizeof(__glide_timer_node));\r\n    node->deadline_ns = deadline;\r\n    node->task = t;\r\n    pthread_mutex_lock(&__glide_timer_mu);\r\n    __glide_timer_node** cur = &__glide_timer_head;\r\n    while (*cur && (*cur)->deadline_ns <= deadline) cur = &(*cur)->next;\r\n    node->next = *cur;\r\n    *cur = node;\r\n    /* Wake timer thread to recompute its deadline. */\r\n    pthread_cond_signal(&__glide_timer_cv);\r\n    /* Park: worker hand-off releases __glide_timer_mu after switch. */\r\n    __glide_park(&__glide_timer_mu, NULL);\r\n}\r\n\r\n/* Coro park: caller holds `lock` and wants to wait on `list`. Returns\r\n   1 if parked (caller must re-acquire `lock` and re-check state), 0\r\n   if the caller is not in a coroutine context (caller should fall\r\n   back to pthread_cond_wait). The actual list link + lock release is\r\n   done by the worker AFTER the fiber switch — that's how we avoid the\r\n   classic park/unpark race. */\r\n/* Counters: instrumented to confirm where the throughput cost is\r\n   coming from. Call __glide_perf_dump() to print and reset. Non-static\r\n   because __glide_q_push_to (defined earlier in this same TU) bumps\r\n   q_pushes / cv_signals via the forward decl above. */\r\natomic_long __glide_perf_parks       = 0;\r\natomic_long __glide_perf_spin_parks  = 0;\r\natomic_long __glide_perf_unparks     = 0;\r\natomic_long __glide_perf_q_pushes    = 0;\r\natomic_long __glide_perf_cv_signals  = 0;\r\n\r\nvoid __glide_perf_dump(void) {\r\n    long p  = atomic_exchange(&__glide_perf_parks, 0);\r\n    long sp = atomic_exchange(&__glide_perf_spin_parks, 0);\r\n    long u  = atomic_exchange(&__glide_perf_unparks, 0);\r\n    long q  = atomic_exchange(&__glide_perf_q_pushes, 0);\r\n    long cs = atomic_exchange(&__glide_perf_cv_signals, 0);\r\n    fprintf(stderr,\r\n            \"[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld\\n\",\r\n            p, sp, u, q, cs);\r\n}\r\n\r\nint __glide_park(pthread_mutex_t* lock, __glide_task** list) {\r\n    __glide_task* t = __glide_cur_task;\r\n    if (!t) {\r\n        /* Not in a coro — release the wait-list mutex the caller locked\r\n           (so the reactor pthread / other coros can still touch it),\r\n           flush main's pending spawn buffer so the workers see them\r\n           while main blocks, and signal a non-coro fallback to the caller. */\r\n        if (lock) pthread_mutex_unlock(lock);\r\n        __glide_flush_main_buf();\r\n        return 0;\r\n    }\r\n    atomic_fetch_add_explicit(&__glide_perf_parks, 1, memory_order_relaxed);\r\n    t->park_lock = lock;\r\n    t->park_list = list;\r\n    t->state = 2;\r\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\r\n    return 1;\r\n}\r\n\r\n/* Spinlock variant of __glide_park. Same protocol — caller holds the\r\n   spinlock, returns 1 parked / 0 non-coro fallback. Used by the I/O\r\n   reactor: per-fd waiter critical sections are 5-10 ns of list ops,\r\n   well below the futex-call overhead a pthread_mutex incurs. */\r\nint __glide_spin_park(__glide_spin_t* lock, __glide_task** list) {\r\n    __glide_task* t = __glide_cur_task;\r\n    if (!t) {\r\n        if (lock) __glide_spin_unlock(lock);\r\n        __glide_flush_main_buf();\r\n        return 0;\r\n    }\r\n    atomic_fetch_add_explicit(&__glide_perf_spin_parks, 1, memory_order_relaxed);\r\n    t->park_spin = lock;\r\n    t->park_list = list;\r\n    t->state = 2;\r\n    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);\r\n    return 1;\r\n}\r\n\r\n/* Caller holds the chan/mutex protecting the wait list. Pop the head and queue it. */\r\nvoid __glide_unpark_one(__glide_task** list) {\r\n    __glide_task* t = *list;\r\n    if (!t) return;\r\n    *list = t->wait_next;\r\n    t->wait_next = NULL;\r\n    t->state = 0;\r\n    atomic_fetch_add_explicit(&__glide_perf_unparks, 1, memory_order_relaxed);\r\n    __glide_q_push_to(t->home_worker, t);\r\n}\r\n\r\n\r\n");
     printf("%s\n", "");
 }
 
 void   emit_socket_runtime (void) {
     printf("%s\n", "");
-    printf("%s", "// ============================ socket runtime =============================\n#ifdef _WIN32\n# include <winsock2.h>\n# include <ws2tcpip.h>\ntypedef SOCKET __glide_sock_t;\nstatic int __glide_wsa_inited = 0;\nstatic void __glide_wsa_ensure(void) {\n    if (__glide_wsa_inited) return;\n    WSADATA d; WSAStartup(MAKEWORD(2, 2), &d);\n    __glide_wsa_inited = 1;\n}\n#else\n# include <sys/socket.h>\n# include <netinet/in.h>\n# include <unistd.h>\n# include <arpa/inet.h>\ntypedef int __glide_sock_t;\nstatic void __glide_wsa_ensure(void) {}\n#endif\n\nint listen_tcp(int port) {\n    __glide_wsa_ensure();\n    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);\n#ifdef _WIN32\n    if (s == INVALID_SOCKET) return -1;\n#else\n    if (s < 0) return -1;\n#endif\n    int yes = 1;\n    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));\n    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));\n    addr.sin_family = AF_INET;\n    addr.sin_port = htons((unsigned short)port);\n    addr.sin_addr.s_addr = htonl(INADDR_ANY);\n    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    if (listen(s, 128) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    return (int)s;\n}\n\nint accept_tcp(int listener) {\n#ifdef _WIN32\n    SOCKET c = accept((SOCKET)listener, NULL, NULL);\n    return (c == INVALID_SOCKET) ? -1 : (int)c;\n#else\n    int c = accept(listener, NULL, NULL);\n    return c < 0 ? -1 : c;\n#endif\n}\n\nint tcp_read(int fd, void* buf, int max) {\n#ifdef _WIN32\n    int n = recv((SOCKET)fd, (char*)buf, max, 0);\n    return n < 0 ? -1 : n;\n#else\n    int n = (int)read(fd, buf, (size_t)max);\n    return n < 0 ? -1 : n;\n#endif\n}\n\nint tcp_write(int fd, void* buf, int n) {\n#ifdef _WIN32\n    int w = send((SOCKET)fd, (const char*)buf, n, 0);\n    return w < 0 ? -1 : w;\n#else\n    int w = (int)write(fd, buf, (size_t)n);\n    return w < 0 ? -1 : w;\n#endif\n}\n\nvoid tcp_close(int fd) {\n#ifdef _WIN32\n    closesocket((SOCKET)fd);\n#else\n    close(fd);\n#endif\n}\n");
+    printf("%s", "// ============================ socket runtime =============================\n#ifdef _WIN32\n# include <winsock2.h>\n# include <ws2tcpip.h>\ntypedef SOCKET __glide_sock_t;\nstatic int __glide_wsa_inited = 0;\nstatic void __glide_wsa_ensure(void) {\n    if (__glide_wsa_inited) return;\n    WSADATA d; WSAStartup(MAKEWORD(2, 2), &d);\n    __glide_wsa_inited = 1;\n}\n#else\n# include <sys/socket.h>\n# include <netinet/in.h>\n# include <netinet/tcp.h>   /* TCP_NODELAY */\n# include <unistd.h>\n# include <arpa/inet.h>\ntypedef int __glide_sock_t;\nstatic void __glide_wsa_ensure(void) {}\n#endif\n\n/* Turn off Nagle on a freshly-accepted conn. With keep-alive +\n   small responses, Nagle would otherwise hold a write back up\n   to 40 ms waiting for an ACK to coalesce, dropping req/s by an\n   order of magnitude under wrk. */\nstatic void __glide_tcp_nodelay(int fd) {\n#ifndef _WIN32\n    int yes = 1;\n    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));\n#else\n    int yes = 1;\n    setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));\n#endif\n}\n\nint listen_tcp(int port) {\n    __glide_wsa_ensure();\n    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);\n#ifdef _WIN32\n    if (s == INVALID_SOCKET) return -1;\n#else\n    if (s < 0) return -1;\n#endif\n    int yes = 1;\n    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));\n#ifdef TCP_DEFER_ACCEPT\n    int defer = 1;\n    setsockopt(s, IPPROTO_TCP, TCP_DEFER_ACCEPT, (const char*)&defer, sizeof(defer));\n#endif\n    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));\n    addr.sin_family = AF_INET;\n    addr.sin_port = htons((unsigned short)port);\n    addr.sin_addr.s_addr = htonl(INADDR_ANY);\n    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    if (listen(s, 128) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    return (int)s;\n}\n\nint listen_tcp_reuseport(int port) {\n    __glide_wsa_ensure();\n    __glide_sock_t s = socket(AF_INET, SOCK_STREAM, 0);\n#ifdef _WIN32\n    if (s == INVALID_SOCKET) return -1;\n#else\n    if (s < 0) return -1;\n#endif\n    int yes = 1;\n    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));\n#ifdef SO_REUSEPORT\n    setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (const char*)&yes, sizeof(yes));\n#endif\n#ifdef TCP_DEFER_ACCEPT\n    /* Linux only. Kernel holds the accept until the client actually\n       writes data (or a 1 s timeout). With this on, accept returns an\n       fd that already has the request bytes ready, so the very first\n       read avoids the EAGAIN → reactor park → wake round-trip. Big win\n       for HTTP-style \"connect, send, close\" workloads. */\n    int defer = 1;\n    setsockopt(s, IPPROTO_TCP, TCP_DEFER_ACCEPT, (const char*)&defer, sizeof(defer));\n#endif\n    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));\n    addr.sin_family = AF_INET;\n    addr.sin_port = htons((unsigned short)port);\n    addr.sin_addr.s_addr = htonl(INADDR_ANY);\n    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    if (listen(s, 128) < 0) {\n#ifdef _WIN32\n        closesocket(s);\n#else\n        close(s);\n#endif\n        return -1;\n    }\n    return (int)s;\n}\n\nint accept_tcp(int listener) {\n#ifdef _WIN32\n    SOCKET c = accept((SOCKET)listener, NULL, NULL);\n    if (c == INVALID_SOCKET) return -1;\n    __glide_tcp_nodelay((int)c);\n    return (int)c;\n#else\n    int c = accept(listener, NULL, NULL);\n    if (c < 0) return -1;\n    __glide_tcp_nodelay(c);\n    return c;\n#endif\n}\n\nint tcp_read(int fd, void* buf, int max) {\n#ifdef _WIN32\n    int n = recv((SOCKET)fd, (char*)buf, max, 0);\n    return n < 0 ? -1 : n;\n#else\n    int n = (int)read(fd, buf, (size_t)max);\n    return n < 0 ? -1 : n;\n#endif\n}\n\nint tcp_write(int fd, void* buf, int n) {\n#ifdef _WIN32\n    int w = send((SOCKET)fd, (const char*)buf, n, 0);\n    return w < 0 ? -1 : w;\n#else\n    int w = (int)write(fd, buf, (size_t)n);\n    return w < 0 ? -1 : w;\n#endif\n}\n\n/* Defined in reactor.c (same translation unit). Tears down per-fd\n   waiter state so a recycled fd is not seen as already-registered\n   the next time tcp_read_async/write_async parks on it. */\n#ifndef _WIN32\nvoid __glide_io_close(int fd);\n#endif\n\nvoid tcp_close(int fd) {\n#ifdef _WIN32\n    closesocket((SOCKET)fd);\n#else\n    __glide_io_close(fd);\n    close(fd);\n#endif\n}\n");
     printf("%s\n", "");
-    printf("%s", "// ============================ I/O reactor ================================\n//\n// Async wrappers for accept / read / write that, on Linux, register the\n// fd with epoll and park the calling coroutine until the kernel says\n// the fd is ready. The worker thread is then free to pick up another\n// task. A single dedicated `reactor` pthread owns the epoll fd and\n// drives the wakeup loop.\n//\n// On Windows / macOS / BSD we currently fall back to the blocking\n// sync calls in socket.c (TODO: IOCP / kqueue). The Glide-side API\n// (`accept_tcp_async` / `tcp_read_async` / `tcp_write_async`) is\n// platform-portable so net.glide can call the async names everywhere\n// without #ifdef.\n//\n// Wakeup model — level-triggered for now (simplest correct shape).\n// Switch to EPOLLET + drain loops once the parser layer is settled\n// and we have benchmarks to justify the complexity bump.\n\n#ifndef GLIDE_REACTOR_DEFINED\n#define GLIDE_REACTOR_DEFINED\n\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n#include <pthread.h>\n#include <stdatomic.h>\n#include <errno.h>\n\n#ifdef __linux__\n# include <sys/epoll.h>\n# include <fcntl.h>\n# include <unistd.h>\n# define GLIDE_REACTOR_HAVE_EPOLL 1\n#endif\n\n/* Forward declarations from sched.c. */\nstruct __glide_task;\nextern __thread struct __glide_task* __glide_cur_task;\nextern int  __glide_park(pthread_mutex_t* lock, struct __glide_task** list);\nextern void __glide_unpark_one(struct __glide_task** list);\nextern void __glide_flush_main_buf(void);\n\n#ifdef GLIDE_REACTOR_HAVE_EPOLL\n\n/* Per-fd waiter state. Stored in epoll_event.data.ptr so the reactor\n   thread can recover it on a wakeup without a separate lookup. Two\n   wait lists per fd because read and write may park independently. */\ntypedef struct __glide_io_waiter {\n    int fd;\n    pthread_mutex_t mu;\n    struct __glide_task* read_waiters;\n    struct __glide_task* write_waiters;\n    int registered;             /* 1 once added to epoll */\n} __glide_io_waiter;\n\n/* Tiny open-addressing fd → waiter map. fds in a long-running server\n   reuse low numbers, so a flat array is plenty (and faster than a\n   hashmap). Grows on demand. */\nstatic __glide_io_waiter** __glide_waiters = NULL;\nstatic int                 __glide_waiters_cap = 0;\nstatic pthread_mutex_t     __glide_waiters_mu = PTHREAD_MUTEX_INITIALIZER;\n\nstatic int                 __glide_epoll_fd = -1;\nstatic pthread_t           __glide_reactor_thr;\nstatic atomic_int          __glide_reactor_inited = 0;\nstatic atomic_int          __glide_reactor_running = 0;\n\nstatic __glide_io_waiter* __glide_io_get_or_create(int fd) {\n    pthread_mutex_lock(&__glide_waiters_mu);\n    if (fd >= __glide_waiters_cap) {\n        int new_cap = __glide_waiters_cap ? __glide_waiters_cap : 64;\n        while (new_cap <= fd) new_cap *= 2;\n        __glide_waiters = (__glide_io_waiter**)realloc(\n            __glide_waiters, sizeof(__glide_io_waiter*) * (size_t)new_cap);\n        for (int i = __glide_waiters_cap; i < new_cap; i++) {\n            __glide_waiters[i] = NULL;\n        }\n        __glide_waiters_cap = new_cap;\n    }\n    __glide_io_waiter* w = __glide_waiters[fd];\n    if (!w) {\n        w = (__glide_io_waiter*)calloc(1, sizeof(__glide_io_waiter));\n        w->fd = fd;\n        pthread_mutex_init(&w->mu, NULL);\n        __glide_waiters[fd] = w;\n    }\n    pthread_mutex_unlock(&__glide_waiters_mu);\n    return w;\n}\n\nstatic void __glide_io_register(__glide_io_waiter* w) {\n    if (w->registered) return;\n    struct epoll_event ev;\n    memset(&ev, 0, sizeof(ev));\n    ev.events  = EPOLLIN | EPOLLOUT | EPOLLRDHUP;   /* level-triggered */\n    ev.data.ptr = w;\n    if (epoll_ctl(__glide_epoll_fd, EPOLL_CTL_ADD, w->fd, &ev) == 0) {\n        w->registered = 1;\n    } else if (errno == EEXIST) {\n        w->registered = 1;        /* someone added it concurrently */\n    }\n}\n\nstatic void* __glide_reactor_loop(void* arg) {\n    (void)arg;\n    struct epoll_event evs[64];\n    while (atomic_load(&__glide_reactor_running)) {\n        int n = epoll_wait(__glide_epoll_fd, evs, 64, 100);  /* 100 ms tick */\n        if (n < 0) {\n            if (errno == EINTR) continue;\n            break;\n        }\n        for (int i = 0; i < n; i++) {\n            __glide_io_waiter* w = (__glide_io_waiter*)evs[i].data.ptr;\n            if (!w) continue;\n            uint32_t m = evs[i].events;\n            pthread_mutex_lock(&w->mu);\n            if ((m & (EPOLLIN  | EPOLLERR | EPOLLHUP | EPOLLRDHUP))\n                && w->read_waiters) {\n                while (w->read_waiters) __glide_unpark_one(&w->read_waiters);\n            }\n            if ((m & (EPOLLOUT | EPOLLERR | EPOLLHUP))\n                && w->write_waiters) {\n                while (w->write_waiters) __glide_unpark_one(&w->write_waiters);\n            }\n            pthread_mutex_unlock(&w->mu);\n        }\n    }\n    return NULL;\n}\n\nstatic void __glide_reactor_ensure(void) {\n    int expected = 0;\n    if (!atomic_compare_exchange_strong(&__glide_reactor_inited,\n                                        &expected, 1)) {\n        /* another thread is initialising; spin briefly until done. */\n        while (__glide_epoll_fd < 0) { /* spin */ }\n        return;\n    }\n    __glide_epoll_fd = epoll_create1(EPOLL_CLOEXEC);\n    if (__glide_epoll_fd < 0) {\n        atomic_store(&__glide_reactor_inited, 0);\n        return;\n    }\n    atomic_store(&__glide_reactor_running, 1);\n    pthread_create(&__glide_reactor_thr, NULL, __glide_reactor_loop, NULL);\n    pthread_detach(__glide_reactor_thr);\n}\n\nstatic void __glide_set_nonblocking(int fd) {\n    int flags = fcntl(fd, F_GETFL, 0);\n    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);\n}\n\nstatic int __glide_io_park_read(int fd) {\n    __glide_reactor_ensure();\n    __glide_io_waiter* w = __glide_io_get_or_create(fd);\n    pthread_mutex_lock(&w->mu);\n    __glide_io_register(w);\n    return __glide_park(&w->mu, &w->read_waiters);\n}\n\nstatic int __glide_io_park_write(int fd) {\n    __glide_reactor_ensure();\n    __glide_io_waiter* w = __glide_io_get_or_create(fd);\n    pthread_mutex_lock(&w->mu);\n    __glide_io_register(w);\n    return __glide_park(&w->mu, &w->write_waiters);\n}\n\n/* ---- public async wrappers --------------------------------------- */\n\nint accept_tcp_async(int listener) {\n    __glide_set_nonblocking(listener);\n    while (1) {\n        int c = accept(listener, NULL, NULL);\n        if (c >= 0) {\n            __glide_set_nonblocking(c);\n            return c;\n        }\n        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {\n            if (!__glide_io_park_read(listener)) {\n                /* not in a coro — fall back to blocking accept once. */\n                int flags = fcntl(listener, F_GETFL, 0);\n                fcntl(listener, F_SETFL, flags & ~O_NONBLOCK);\n                int c2 = accept(listener, NULL, NULL);\n                fcntl(listener, F_SETFL, flags);\n                return c2;\n            }\n            continue;\n        }\n        return -1;\n    }\n}\n\nint tcp_read_async(int fd, void* buf, int max) {\n    __glide_set_nonblocking(fd);\n    while (1) {\n        int n = (int)read(fd, buf, (size_t)max);\n        if (n >= 0) return n;\n        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {\n            if (!__glide_io_park_read(fd)) return -1;\n            continue;\n        }\n        return -1;\n    }\n}\n\nint tcp_write_async(int fd, void* buf, int n) {\n    __glide_set_nonblocking(fd);\n    int sent = 0;\n    while (sent < n) {\n        int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));\n        if (w > 0) { sent += w; continue; }\n        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {\n            if (!__glide_io_park_write(fd)) return sent > 0 ? sent : -1;\n            continue;\n        }\n        return sent > 0 ? sent : -1;\n    }\n    return sent;\n}\n\n#else  /* not Linux: fall back to blocking sync I/O for now. */\n\n/* Forward decls from socket.c so the names link clean. */\nextern int  accept_tcp(int listener);\nextern int  tcp_read(int fd, void* buf, int max);\nextern int  tcp_write(int fd, void* buf, int n);\n\nint accept_tcp_async(int listener) {\n    return accept_tcp(listener);\n}\n\nint tcp_read_async(int fd, void* buf, int max) {\n    return tcp_read(fd, buf, max);\n}\n\nint tcp_write_async(int fd, void* buf, int n) {\n    return tcp_write(fd, buf, n);\n}\n\n#endif  /* GLIDE_REACTOR_HAVE_EPOLL */\n\n#endif  /* GLIDE_REACTOR_DEFINED */\n");
+    printf("%s", "// ============================ I/O reactor ================================\n//\n// Async wrappers for accept / read / write that, on Linux, register the\n// fd with epoll and park the calling coroutine until the kernel says\n// the fd is ready. The worker thread is then free to pick up another\n// task. A single dedicated `reactor` pthread owns the epoll fd and\n// drives the wakeup loop.\n//\n// On Windows / macOS / BSD we currently fall back to the blocking\n// sync calls in socket.c (TODO: IOCP / kqueue). The Glide-side API\n// (`accept_tcp_async` / `tcp_read_async` / `tcp_write_async`) is\n// platform-portable so net.glide can call the async names everywhere\n// without #ifdef.\n//\n// Wakeup model — level-triggered for now (simplest correct shape).\n// Switch to EPOLLET + drain loops once the parser layer is settled\n// and we have benchmarks to justify the complexity bump.\n\n#ifndef GLIDE_REACTOR_DEFINED\n#define GLIDE_REACTOR_DEFINED\n\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n#include <pthread.h>\n#include <stdatomic.h>\n#include <errno.h>\n\n#ifdef __linux__\n# include <sys/epoll.h>\n# include <fcntl.h>\n# include <unistd.h>\n# define GLIDE_REACTOR_HAVE_EPOLL 1\n#endif\n\n/* Forward declarations from sched.c. */\nstruct __glide_task;\nextern __thread struct __glide_task* __glide_cur_task;\nextern int  __glide_park(pthread_mutex_t* lock, struct __glide_task** list);\nextern void __glide_unpark_one(struct __glide_task** list);\nextern void __glide_flush_main_buf(void);\n\n#ifdef GLIDE_REACTOR_HAVE_EPOLL\n\n/* Per-fd waiter state. Stored in epoll_event.data.ptr so the reactor\n   thread can recover it on a wakeup without a separate lookup. Two\n   wait lists per fd because read and write may park independently.\n   The lock is a spinlock because the critical sections — link or\n   unlink one task on the wait list — are 5-10 ns. pthread_mutex was\n   2.5 % of the keep-alive HTTP hot path's CPU. */\ntypedef struct __glide_io_waiter {\n    int fd;\n    __glide_spin_t spin;\n    struct __glide_task* read_waiters;\n    struct __glide_task* write_waiters;\n    int registered;             /* 1 once added to epoll */\n} __glide_io_waiter;\n\nextern int  __glide_spin_park(__glide_spin_t* lock, struct __glide_task** list);\n\n/* Tiny open-addressing fd → waiter map. fds in a long-running server\n   reuse low numbers, so a flat array is plenty (and faster than a\n   hashmap). Grows on demand. */\nstatic __glide_io_waiter** __glide_waiters = NULL;\nstatic int                 __glide_waiters_cap = 0;\nstatic pthread_mutex_t     __glide_waiters_mu = PTHREAD_MUTEX_INITIALIZER;\n\nstatic int                 __glide_epoll_fd = -1;\nstatic pthread_t           __glide_reactor_thr;\nstatic atomic_int          __glide_reactor_inited = 0;\nstatic atomic_int          __glide_reactor_running = 0;\n\nstatic __glide_io_waiter* __glide_io_get_or_create(int fd) {\n    pthread_mutex_lock(&__glide_waiters_mu);\n    if (fd >= __glide_waiters_cap) {\n        int new_cap = __glide_waiters_cap ? __glide_waiters_cap : 64;\n        while (new_cap <= fd) new_cap *= 2;\n        __glide_waiters = (__glide_io_waiter**)realloc(\n            __glide_waiters, sizeof(__glide_io_waiter*) * (size_t)new_cap);\n        for (int i = __glide_waiters_cap; i < new_cap; i++) {\n            __glide_waiters[i] = NULL;\n        }\n        __glide_waiters_cap = new_cap;\n    }\n    __glide_io_waiter* w = __glide_waiters[fd];\n    if (!w) {\n        w = (__glide_io_waiter*)calloc(1, sizeof(__glide_io_waiter));\n        w->fd = fd;\n        /* spin starts at 0 from calloc, no init needed */\n        __glide_waiters[fd] = w;\n    }\n    pthread_mutex_unlock(&__glide_waiters_mu);\n    return w;\n}\n\nstatic void __glide_io_register(__glide_io_waiter* w) {\n    if (w->registered) return;\n    struct epoll_event ev;\n    memset(&ev, 0, sizeof(ev));\n    ev.events  = EPOLLIN | EPOLLOUT | EPOLLRDHUP;   /* level-triggered */\n    ev.data.ptr = w;\n    if (epoll_ctl(__glide_epoll_fd, EPOLL_CTL_ADD, w->fd, &ev) == 0) {\n        w->registered = 1;\n    } else if (errno == EEXIST) {\n        w->registered = 1;        /* someone added it concurrently */\n    }\n}\n\nstatic void* __glide_reactor_loop(void* arg) {\n    (void)arg;\n    /* Bigger batch + longer block: each wake processes more events for\n       the price of one syscall, and we don't tick uselessly while there\n       is nothing to do. Sched_shutdown atomically flips reactor_running\n       and writes 1 byte to a stub fd if we ever need an instant wake;\n       for now the workload always has fds in the interest list. */\n    struct epoll_event evs[256];\n    while (atomic_load(&__glide_reactor_running)) {\n        int n = epoll_wait(__glide_epoll_fd, evs, 256, 1000);\n        if (n < 0) {\n            if (errno == EINTR) continue;\n            break;\n        }\n        for (int i = 0; i < n; i++) {\n            __glide_io_waiter* w = (__glide_io_waiter*)evs[i].data.ptr;\n            if (!w) continue;\n            uint32_t m = evs[i].events;\n            /* Skip the lock entirely when there is nobody to wake. The\n               read carries a torn-list risk for one direction, but a\n               level-triggered fd that still has data ready will trip\n               the next epoll_wait cycle anyway, so a missed wake here\n               just defers by one tick. The win: zero-waiter wakeups\n               (from spurious EPOLLOUT during write completion) cost\n               no mutex traffic on the hot path. */\n            int rd_ready = (m & (EPOLLIN  | EPOLLERR | EPOLLHUP | EPOLLRDHUP))\n                            && w->read_waiters;\n            int wr_ready = (m & (EPOLLOUT | EPOLLERR | EPOLLHUP))\n                            && w->write_waiters;\n            if (!rd_ready && !wr_ready) continue;\n            __glide_spin_lock(&w->spin);\n            if (rd_ready) {\n                while (w->read_waiters) __glide_unpark_one(&w->read_waiters);\n            }\n            if (wr_ready) {\n                while (w->write_waiters) __glide_unpark_one(&w->write_waiters);\n            }\n            __glide_spin_unlock(&w->spin);\n        }\n    }\n    return NULL;\n}\n\nstatic void __glide_reactor_ensure(void) {\n    int expected = 0;\n    if (!atomic_compare_exchange_strong(&__glide_reactor_inited,\n                                        &expected, 1)) {\n        /* another thread is initialising; spin briefly until done. */\n        while (__glide_epoll_fd < 0) { /* spin */ }\n        return;\n    }\n    __glide_epoll_fd = epoll_create1(EPOLL_CLOEXEC);\n    if (__glide_epoll_fd < 0) {\n        atomic_store(&__glide_reactor_inited, 0);\n        return;\n    }\n    atomic_store(&__glide_reactor_running, 1);\n    pthread_create(&__glide_reactor_thr, NULL, __glide_reactor_loop, NULL);\n    pthread_detach(__glide_reactor_thr);\n}\n\nstatic void __glide_set_nonblocking(int fd) {\n    int flags = fcntl(fd, F_GETFL, 0);\n    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);\n}\n\n/* Tear down our reactor state for `fd` before the caller calls close().\n   The kernel implicitly drops a closed fd from the interest list, but\n   we cache `registered` per-waiter — without this hook a fd that gets\n   recycled to a new connection would never be re-added to epoll, and\n   the next read/write park on it would block forever. Also wake any\n   coros still parked on the fd so they don't sit on a dead handle. */\nvoid __glide_io_close(int fd) {\n    if (fd < 0) return;\n    pthread_mutex_lock(&__glide_waiters_mu);\n    __glide_io_waiter* w = (fd < __glide_waiters_cap) ? __glide_waiters[fd] : NULL;\n    pthread_mutex_unlock(&__glide_waiters_mu);\n    if (!w) return;\n    __glide_spin_lock(&w->spin);\n    if (w->registered && __glide_epoll_fd >= 0) {\n        epoll_ctl(__glide_epoll_fd, EPOLL_CTL_DEL, fd, NULL);\n        w->registered = 0;\n    }\n    while (w->read_waiters)  __glide_unpark_one(&w->read_waiters);\n    while (w->write_waiters) __glide_unpark_one(&w->write_waiters);\n    __glide_spin_unlock(&w->spin);\n}\n\nstatic int __glide_io_park_read(int fd) {\n    __glide_reactor_ensure();\n    __glide_io_waiter* w = __glide_io_get_or_create(fd);\n    __glide_spin_lock(&w->spin);\n    __glide_io_register(w);\n    return __glide_spin_park(&w->spin, &w->read_waiters);\n}\n\nstatic int __glide_io_park_write(int fd) {\n    __glide_reactor_ensure();\n    __glide_io_waiter* w = __glide_io_get_or_create(fd);\n    __glide_spin_lock(&w->spin);\n    __glide_io_register(w);\n    return __glide_spin_park(&w->spin, &w->write_waiters);\n}\n\n/* ---- public async wrappers --------------------------------------- */\n\n/* __glide_tcp_nodelay is `static` in socket.c. Both files share the\n   same translation unit (codegen concats them) so we can call directly,\n   but reactor.c is included after socket.c — no forward decl needed. */\n\nint accept_tcp_async(int listener) {\n    __glide_set_nonblocking(listener);\n    while (1) {\n        int c = accept(listener, NULL, NULL);\n        if (c >= 0) {\n            __glide_set_nonblocking(c);\n            __glide_tcp_nodelay(c);\n            return c;\n        }\n        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {\n            if (!__glide_io_park_read(listener)) {\n                /* not in a coro — flush any pending main-spawned coros so\n                   they can run on the workers while main blocks here, then\n                   fall back to blocking accept. */\n                __glide_flush_main_buf();\n                int flags = fcntl(listener, F_GETFL, 0);\n                fcntl(listener, F_SETFL, flags & ~O_NONBLOCK);\n                int c2 = accept(listener, NULL, NULL);\n                fcntl(listener, F_SETFL, flags);\n                if (c2 >= 0) {\n                    __glide_set_nonblocking(c2);\n                    __glide_tcp_nodelay(c2);\n                }\n                return c2;\n            }\n            continue;\n        }\n        return -1;\n    }\n}\n\n/* tcp_*_async assume the fd was made non-blocking when it was accepted\n   (accept_tcp_async does that once). Re-running fcntl(F_GETFL)+fcntl(F_SETFL)\n   on every call costs two syscalls per read/write — measurable on the\n   keep-alive hot path. */\nint tcp_read_async(int fd, void* buf, int max) {\n    while (1) {\n        int n = (int)read(fd, buf, (size_t)max);\n        if (n >= 0) return n;\n        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {\n            if (!__glide_io_park_read(fd)) return -1;\n            continue;\n        }\n        return -1;\n    }\n}\n\nint tcp_write_async(int fd, void* buf, int n) {\n    int sent = 0;\n    while (sent < n) {\n        int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));\n        if (w > 0) { sent += w; continue; }\n        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {\n            if (!__glide_io_park_write(fd)) return sent > 0 ? sent : -1;\n            continue;\n        }\n        return sent > 0 ? sent : -1;\n    }\n    return sent;\n}\n\n#else  /* not Linux: fall back to blocking sync I/O for now. */\n\n/* Forward decls from socket.c so the names link clean. */\nextern int  accept_tcp(int listener);\nextern int  tcp_read(int fd, void* buf, int max);\nextern int  tcp_write(int fd, void* buf, int n);\n\nint accept_tcp_async(int listener) {\n    return accept_tcp(listener);\n}\n\nint tcp_read_async(int fd, void* buf, int max) {\n    return tcp_read(fd, buf, max);\n}\n\nint tcp_write_async(int fd, void* buf, int n) {\n    return tcp_write(fd, buf, n);\n}\n\n#endif  /* GLIDE_REACTOR_HAVE_EPOLL */\n\n#endif  /* GLIDE_REACTOR_DEFINED */\n");
+    printf("%s\n", "");
+    printf("%s", "#ifndef HP_PARSE_C\n#define HP_PARSE_C\n\n#include <stddef.h>\n#include <stdatomic.h>\n#include <stdlib.h>\n#include <string.h>\n#include <time.h>\n\nenum { HP_INCOMPLETE = 0, HP_OK = 1, HP_ERROR = -1 };\n\ntypedef struct {\n    const char* name;  size_t name_len;\n    const char* value; size_t value_len;\n} hp_header_t;\n\ntypedef struct {\n    const char* method;   size_t method_len;\n    const char* path;     size_t path_len;\n    int         version;          /* 10 = HTTP/1.0, 11 = HTTP/1.1 */\n    hp_header_t headers[64];\n    int         n_headers;\n    const char* body;\n    size_t      body_len;\n    size_t      total_consumed;\n} hp_request_t;\n\nstatic inline int hp_parse_request(const char* buf, size_t len, hp_request_t* out);\n\nstatic inline int hp_is_tchar(unsigned char c)\n{\n    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||\n        (c >= '0' && c <= '9')) {\n        return 1;\n    }\n\n    switch (c) {\n    case '!': case '#': case '$': case '%': case '&': case '\\'':\n    case '*': case '+': case '-': case '.': case '^': case '_':\n    case '`': case '|': case '~':\n        return 1;\n    default:\n        return 0;\n    }\n}\n\nstatic inline int hp_is_header_name(const char* p, size_t n)\n{\n    size_t i;\n\n    if (n == 0) {\n        return 0;\n    }\n\n    for (i = 0; i < n; i++) {\n        if (!hp_is_tchar((unsigned char)p[i])) {\n            return 0;\n        }\n    }\n\n    return 1;\n}\n\nstatic inline int hp_lower(unsigned char c)\n{\n    return (c >= 'A' && c <= 'Z') ? (int)(c - 'A' + 'a') : (int)c;\n}\n\nstatic inline int hp_name_eq(const char* p, size_t n, const char* lit)\n{\n    size_t i;\n\n    for (i = 0; i < n && lit[i] != '\\0'; i++) {\n        if (hp_lower((unsigned char)p[i]) != hp_lower((unsigned char)lit[i])) {\n            return 0;\n        }\n    }\n\n    return i == n && lit[i] == '\\0';\n}\n\nstatic inline const char* hp_find_crlf(const char* p, const char* end)\n{\n    while (p < end) {\n        if (*p == '\\n') {\n            return 0;\n        }\n        if (*p == '\\r') {\n            if (p + 1 == end) {\n                return 0;\n            }\n            return p[1] == '\\n' ? p : 0;\n        }\n        p++;\n    }\n\n    return 0;\n}\n\nstatic inline int hp_line_needs_more(const char* p, const char* end)\n{\n    while (p < end) {\n        if (*p == '\\n') {\n            return 0;\n        }\n        if (*p == '\\r') {\n            return p + 1 == end;\n        }\n        p++;\n    }\n\n    return 1;\n}\n\nstatic inline int hp_parse_content_length(const char* p, size_t n, size_t* value)\n{\n    size_t i = 0;\n    size_t v = 0;\n    size_t max = (size_t)-1;\n\n    while (i < n && (p[i] == ' ' || p[i] == '\\t')) {\n        i++;\n    }\n\n    if (i == n || p[i] < '0' || p[i] > '9') {\n        return 0;\n    }\n\n    for (; i < n && p[i] >= '0' && p[i] <= '9'; i++) {\n        size_t d = (size_t)(p[i] - '0');\n        if (v > (max - d) / 10) {\n            return 0;\n        }\n        v = v * 10 + d;\n    }\n\n    while (i < n && (p[i] == ' ' || p[i] == '\\t')) {\n        i++;\n    }\n\n    if (i != n) {\n        return 0;\n    }\n\n    *value = v;\n    return 1;\n}\n\nstatic inline int hp_parse_request(const char* buf, size_t len, hp_request_t* out)\n{\n    const char* end = buf + len;\n    const char* p = buf;\n    const char* line_end;\n    const char* sp1;\n    const char* sp2;\n    hp_request_t req;\n    size_t content_length = 0;\n    int have_content_length = 0;\n    int i;\n\n    if (!buf || !out) {\n        return HP_ERROR;\n    }\n\n    req.method = 0;\n    req.method_len = 0;\n    req.path = 0;\n    req.path_len = 0;\n    req.version = 0;\n    req.n_headers = 0;\n    req.body = 0;\n    req.body_len = 0;\n    req.total_consumed = 0;\n\n    line_end = hp_find_crlf(p, end);\n    if (!line_end) {\n        return hp_line_needs_more(p, end) ? HP_INCOMPLETE : HP_ERROR;\n    }\n\n    sp1 = p;\n    while (sp1 < line_end && *sp1 != ' ') {\n        sp1++;\n    }\n    if (sp1 == p || sp1 == line_end) {\n        return HP_ERROR;\n    }\n    for (i = 0; p + i < sp1; i++) {\n        if (!hp_is_tchar((unsigned char)p[i])) {\n            return HP_ERROR;\n        }\n    }\n\n    sp2 = sp1 + 1;\n    while (sp2 < line_end && *sp2 != ' ') {\n        sp2++;\n    }\n    if (sp2 == sp1 + 1 || sp2 == line_end || sp2 + 9 != line_end) {\n        return HP_ERROR;\n    }\n\n    if (sp2[1] != 'H' || sp2[2] != 'T' || sp2[3] != 'T' ||\n        sp2[4] != 'P' || sp2[5] != '/' ||\n        (sp2[6] != '1' || sp2[7] != '.' ||\n         (sp2[8] != '0' && sp2[8] != '1'))) {\n        return HP_ERROR;\n    }\n\n    req.method = p;\n    req.method_len = (size_t)(sp1 - p);\n    req.path = sp1 + 1;\n    req.path_len = (size_t)(sp2 - (sp1 + 1));\n    req.version = sp2[8] == '0' ? 10 : 11;\n    p = line_end + 2;\n\n    while (1) {\n        const char* colon;\n        const char* value;\n        const char* value_end;\n        size_t name_len;\n        size_t value_len;\n\n        line_end = hp_find_crlf(p, end);\n        if (!line_end) {\n            return hp_line_needs_more(p, end) ? HP_INCOMPLETE : HP_ERROR;\n        }\n\n        if (line_end == p) {\n            p = line_end + 2;\n            break;\n        }\n\n        if (*p == ' ' || *p == '\\t') {\n            return HP_ERROR;\n        }\n\n        colon = p;\n        while (colon < line_end && *colon != ':') {\n            colon++;\n        }\n        if (colon == line_end) {\n            return HP_ERROR;\n        }\n\n        name_len = (size_t)(colon - p);\n        if (!hp_is_header_name(p, name_len)) {\n            return HP_ERROR;\n        }\n\n        if (req.n_headers >= 64) {\n            return HP_ERROR;\n        }\n\n        value = colon + 1;\n        while (value < line_end && (*value == ' ' || *value == '\\t')) {\n            value++;\n        }\n        value_end = line_end;\n        while (value_end > value &&\n               (value_end[-1] == ' ' || value_end[-1] == '\\t')) {\n            value_end--;\n        }\n        value_len = (size_t)(value_end - value);\n\n        req.headers[req.n_headers].name = p;\n        req.headers[req.n_headers].name_len = name_len;\n        req.headers[req.n_headers].value = value;\n        req.headers[req.n_headers].value_len = value_len;\n        req.n_headers++;\n\n        if (hp_name_eq(p, name_len, \"Content-Length\")) {\n            size_t parsed;\n            if (!hp_parse_content_length(value, value_len, &parsed)) {\n                return HP_ERROR;\n            }\n            if (have_content_length && parsed != content_length) {\n                return HP_ERROR;\n            }\n            have_content_length = 1;\n            content_length = parsed;\n        }\n\n        p = line_end + 2;\n    }\n\n    if ((size_t)(end - p) < content_length) {\n        return HP_INCOMPLETE;\n    }\n\n    req.body = p;\n    req.body_len = content_length;\n    req.total_consumed = (size_t)(p - buf) + content_length;\n    *out = req;\n    return HP_OK;\n}\n\n/* ---------- Glide-callable adapter ----------------------------------- */\n\n/* Owning struct returned to Glide. The five string fields are\n   nul-terminated heap copies — Glide treats `string` as `const char*`\n   and never inspects the storage, so plain malloc'd buffers are fine.\n   Caller frees via hp_glide_free once the request is consumed. */\ntypedef struct {\n    const char* method;\n    const char* path;\n    const char* version;       /* \"HTTP/1.0\" or \"HTTP/1.1\" */\n    const char* headers_block; /* \"Name: Value\\r\\n...\" (no trailing \\r\\n) */\n    const char* body;\n    int         total_consumed;\n} hp_glide_t;\n\nstatic char* hp__nul_dup(const char* p, size_t n) {\n    char* out = (char*)malloc(n + 1);\n    if (n > 0) memcpy(out, p, n);\n    out[n] = 0;\n    return out;\n}\n\n/* Signatures use void* so they line up with what Glide's `*void` extern\n   decl emits. The function bodies cast back internally.\n\n   Single-allocation layout: one malloc holds both the hp_glide_t header\n   and all five string copies back-to-back. Drops 7 mallocs/request to 1\n   (perf showed malloc was 12 % inclusive of CPU on the hello-world hot\n   path, almost all of it from here). The parse scratch lives in TLS so\n   we don't allocate it per-call — safe because each worker thread runs\n   only one coro at a time and the data is consumed before the next\n   ctx switch (we copy out of it before returning). */\nstatic __thread hp_request_t hp_tls_req;\n\nvoid* hp_parse_glide(void* buf, int len)\n{\n    if (!buf || len <= 0) return NULL;\n    hp_request_t* r = &hp_tls_req;\n    if (hp_parse_request((const char*)buf, (size_t)len, r) != HP_OK) {\n        return NULL;\n    }\n\n    /* Compute the header block size first; the rest are known directly. */\n    size_t hsz = 0;\n    for (int i = 0; i < r->n_headers; i++) {\n        hsz += r->headers[i].name_len + 2 + r->headers[i].value_len + 2;\n    }\n    if (hsz >= 2) hsz -= 2;  /* strip the trailing CRLF */\n\n    size_t total = sizeof(hp_glide_t)\n                 + r->method_len + 1\n                 + r->path_len   + 1\n                 + 8             + 1   /* \"HTTP/1.x\" */\n                 + hsz           + 1\n                 + r->body_len   + 1;\n\n    char* mem = (char*)malloc(total);\n    hp_glide_t* g = (hp_glide_t*)mem;\n    char* p = mem + sizeof(hp_glide_t);\n\n    g->method = p;\n    if (r->method_len > 0) memcpy(p, r->method, r->method_len);\n    p[r->method_len] = 0; p += r->method_len + 1;\n\n    g->path = p;\n    if (r->path_len > 0) memcpy(p, r->path, r->path_len);\n    p[r->path_len] = 0; p += r->path_len + 1;\n\n    g->version = p;\n    memcpy(p, (r->version == 11) ? \"HTTP/1.1\" : \"HTTP/1.0\", 8);\n    p[8] = 0; p += 9;\n\n    g->headers_block = p;\n    {\n        size_t off = 0;\n        for (int i = 0; i < r->n_headers; i++) {\n            memcpy(p + off, r->headers[i].name, r->headers[i].name_len);\n            off += r->headers[i].name_len;\n            p[off++] = ':'; p[off++] = ' ';\n            memcpy(p + off, r->headers[i].value, r->headers[i].value_len);\n            off += r->headers[i].value_len;\n            p[off++] = '\\r'; p[off++] = '\\n';\n        }\n        if (off >= 2) off -= 2;\n        p[off] = 0;\n        p += hsz + 1;\n    }\n\n    g->body = p;\n    if (r->body_len > 0) memcpy(p, r->body, r->body_len);\n    p[r->body_len] = 0;\n\n    g->total_consumed = (int)r->total_consumed;\n    return g;\n}\n\nconst char* hp_glide_method(void* g)        { return ((hp_glide_t*)g)->method; }\nconst char* hp_glide_path(void* g)          { return ((hp_glide_t*)g)->path; }\nconst char* hp_glide_version(void* g)       { return ((hp_glide_t*)g)->version; }\nconst char* hp_glide_headers_block(void* g) { return ((hp_glide_t*)g)->headers_block; }\nconst char* hp_glide_body(void* g)          { return ((hp_glide_t*)g)->body; }\nint         hp_glide_consumed(void* g)      { return ((hp_glide_t*)g)->total_consumed; }\n\n/* True when the parsed request asks the server to close the conn.\n   HTTP/1.1 keeps it alive by default, HTTP/1.0 closes by default.\n   Direct C scan of the parsed headers — bypasses Glide's\n   `req.header(...).to_lower()` chain that was costing ~12 % of CPU\n   on the hot path (each call mallocs four times). */\nint hp_glide_wants_close(void* gp)\n{\n    hp_glide_t* g = (hp_glide_t*)gp;\n    /* The TLS hp_request_t was overwritten on the next parse, so we\n       inspect the rebuilt headers_block directly. */\n    const char* p = g->headers_block;\n    int default_close = (g->version[7] == '0'); /* HTTP/1.0 */\n    int found_close = 0, found_keep = 0;\n\n    while (*p) {\n        /* Match \"Connection:\" case-insensitive, anchored at line start. */\n        const char* k = \"connection\";\n        const char* q = p;\n        int matched = 1;\n        for (int i = 0; i < 10; i++) {\n            unsigned char c = (unsigned char)*q;\n            if (c == 0) { matched = 0; break; }\n            unsigned char l = (c >= 'A' && c <= 'Z') ? (c | 0x20) : c;\n            if (l != (unsigned char)k[i]) { matched = 0; break; }\n            q++;\n        }\n        if (matched && *q == ':') {\n            q++;\n            while (*q == ' ' || *q == '\\t') q++;\n            /* Look for \"close\" / \"keep-alive\" tokens in the value, up to CRLF. */\n            const char* v = q;\n            while (*v && *v != '\\r' && *v != '\\n') v++;\n            for (const char* s = q; s < v; s++) {\n                /* simple substring scan */\n                if (v - s >= 5) {\n                    char c0 = s[0]; if (c0 >= 'A' && c0 <= 'Z') c0 |= 0x20;\n                    if (c0 == 'c' && (s + 5 <= v)) {\n                        char b1=s[1],b2=s[2],b3=s[3],b4=s[4];\n                        if ((b1|0x20)=='l' && (b2|0x20)=='o' && (b3|0x20)=='s' && (b4|0x20)=='e') {\n                            found_close = 1;\n                        }\n                    }\n                    if (c0 == 'k' && (s + 10 <= v)) {\n                        if ((s[1]|0x20)=='e' && (s[2]|0x20)=='e' && (s[3]|0x20)=='p'\n                         &&  s[4]=='-' && (s[5]|0x20)=='a' && (s[6]|0x20)=='l'\n                         && (s[7]|0x20)=='i' && (s[8]|0x20)=='v' && (s[9]|0x20)=='e') {\n                            found_keep = 1;\n                        }\n                    }\n                }\n            }\n            break;\n        }\n        /* Skip to next line */\n        while (*p && *p != '\\n') p++;\n        if (*p == '\\n') p++;\n    }\n\n    if (found_close) return 1;\n    if (default_close && !found_keep) return 1;\n    return 0;\n}\n\nvoid hp_glide_free(void* gp)\n{\n    /* All strings live in the same allocation as the header now, so a\n       single free reclaims everything. */\n    if (gp) free(gp);\n}\n\n/* Reusable response buffer per OS thread. _handle_conn writes the\n   wire bytes directly into here, then writes from this buf to the\n   socket — no Glide string concat chain (was ~10 mallocs per\n   response in the previous implementation). */\nstatic __thread char*  hp_resp_buf = NULL;\nstatic __thread size_t hp_resp_cap = 0;\n\nenum { HP_DATE_LEN = 29 };\n\nstatic atomic_uchar hp_date_cache[HP_DATE_LEN] = {\n    'T', 'h', 'u', ',', ' ', '0', '1', ' ', 'J', 'a',\n    'n', ' ', '1', '9', '7', '0', ' ', '0', '0', ':',\n    '0', '0', ':', '0', '0', ' ', 'G', 'M', 'T'\n};\nstatic atomic_llong hp_date_epoch = 0;\nstatic atomic_int hp_date_lock = 0;\n\nstatic int hp_gmtime(time_t now, struct tm* out)\n{\n#ifdef _WIN32\n    return gmtime_s(out, &now) == 0;\n#else\n    return gmtime_r(&now, out) != NULL;\n#endif\n}\n\nstatic void hp_date_lock_acquire(void)\n{\n    int expected;\n\n    for (;;) {\n        expected = 0;\n        if (atomic_compare_exchange_weak_explicit(&hp_date_lock, &expected, 1,\n                                                  memory_order_acquire,\n                                                  memory_order_relaxed)) {\n            return;\n        }\n        while (atomic_load_explicit(&hp_date_lock, memory_order_relaxed) != 0) {\n        }\n    }\n}\n\nstatic void hp_date_lock_release(void)\n{\n    atomic_store_explicit(&hp_date_lock, 0, memory_order_release);\n}\n\nint hp_get_date(char* out_buf)\n{\n    time_t now = time(NULL);\n    long long sec = (long long)now;\n    int i;\n\n    if (atomic_load_explicit(&hp_date_epoch, memory_order_acquire) != sec) {\n        hp_date_lock_acquire();\n        if (atomic_load_explicit(&hp_date_epoch, memory_order_relaxed) != sec) {\n            struct tm tm_utc;\n            char tmp[32];\n\n            if (hp_gmtime(now, &tm_utc) &&\n                strftime(tmp, sizeof(tmp), \"%a, %d %b %Y %H:%M:%S GMT\", &tm_utc) == HP_DATE_LEN) {\n                for (i = 0; i < HP_DATE_LEN; i++) {\n                    atomic_store_explicit(&hp_date_cache[i], (unsigned char)tmp[i],\n                                          memory_order_relaxed);\n                }\n                atomic_store_explicit(&hp_date_epoch, sec, memory_order_release);\n            }\n        }\n        hp_date_lock_release();\n    }\n\n    for (i = 0; i < HP_DATE_LEN; i++) {\n        out_buf[i] = (char)atomic_load_explicit(&hp_date_cache[i], memory_order_relaxed);\n    }\n    return HP_DATE_LEN;\n}\n\nstatic int hp_itoa(char* p, int n) {\n    if (n == 0) { p[0] = '0'; return 1; }\n    int neg = 0;\n    if (n < 0) { neg = 1; n = -n; }\n    char tmp[12]; int k = 0;\n    while (n > 0) { tmp[k++] = (char)('0' + (n % 10)); n /= 10; }\n    int off = 0;\n    if (neg) p[off++] = '-';\n    for (int i = k - 1; i >= 0; i--) p[off++] = tmp[i];\n    return off;\n}\n\n/* Build the response wire bytes into the per-thread buffer. status_txt\n   is NUL-terminated. body is the byte buffer (NUL-terminated since it\n   came from Glide's `string`). extra_headers may be NULL. Returns the\n   total byte count written; the caller hands `hp_resp_buf` straight\n   to write(2) without copying. */\nint hp_build_response(int status, const char* status_txt,\n                      void* body, int body_len,\n                      const char* extra_headers, int keep_alive)\n{\n    size_t need = 64\n                + (status_txt ? strlen(status_txt) : 2)\n                + (extra_headers ? strlen(extra_headers) : 0)\n                + (size_t)body_len + 32\n                + 8 + HP_DATE_LEN;\n    if (need > hp_resp_cap) {\n        size_t cap = hp_resp_cap ? hp_resp_cap : 1024;\n        while (cap < need) cap *= 2;\n        free(hp_resp_buf);\n        hp_resp_buf = (char*)malloc(cap);\n        hp_resp_cap = cap;\n    }\n    char* p = hp_resp_buf;\n    /* \"HTTP/1.1 \" */\n    memcpy(p, \"HTTP/1.1 \", 9); p += 9;\n    /* status code */\n    p += hp_itoa(p, status);\n    *p++ = ' ';\n    /* status text */\n    if (status_txt) {\n        size_t l = strlen(status_txt);\n        memcpy(p, status_txt, l); p += l;\n    } else {\n        memcpy(p, \"OK\", 2); p += 2;\n    }\n    memcpy(p, \"\\r\\nContent-Length: \", 18); p += 18;\n    p += hp_itoa(p, body_len);\n    if (keep_alive) {\n        memcpy(p, \"\\r\\nConnection: keep-alive\\r\\n\", 26); p += 26;\n    } else {\n        memcpy(p, \"\\r\\nConnection: close\\r\\n\", 21); p += 21;\n    }\n    memcpy(p, \"Date: \", 6); p += 6;\n    p += hp_get_date(p);\n    memcpy(p, \"\\r\\n\", 2); p += 2;\n    if (extra_headers) {\n        size_t l = strlen(extra_headers);\n        if (l > 0) {\n            memcpy(p, extra_headers, l); p += l;\n            /* extra_headers does NOT carry a trailing \\r\\n; add it\n               only if the block isn't already CRLF-terminated. */\n            if (l < 2 || p[-2] != '\\r' || p[-1] != '\\n') {\n                memcpy(p, \"\\r\\n\", 2); p += 2;\n            }\n        }\n    }\n    memcpy(p, \"\\r\\n\", 2); p += 2;\n    if (body_len > 0) { memcpy(p, body, body_len); p += body_len; }\n    return (int)(p - hp_resp_buf);\n}\n\n/* Hand the per-thread response buffer back to Glide as a (void*, len)\n   pair. The buffer is owned by the runtime — Glide must not free it. */\nvoid* hp_resp_buf_ptr(void) { return (void*)hp_resp_buf; }\n\n#endif /* HP_PARSE_C */\n\n#ifdef HP_PARSE_TEST\n#include <assert.h>\n#include <string.h>\n\nstatic void hp_test_simple_get(void)\n{\n    const char* s = \"GET /x HTTP/1.1\\r\\nHost: example\\r\\n\\r\\n\";\n    hp_request_t r;\n\n    assert(hp_parse_request(s, strlen(s), &r) == HP_OK);\n    assert(r.method_len == 3 && memcmp(r.method, \"GET\", 3) == 0);\n    assert(r.path_len == 2 && memcmp(r.path, \"/x\", 2) == 0);\n    assert(r.version == 11);\n    assert(r.n_headers == 1);\n    assert(r.headers[0].name_len == 4);\n    assert(r.headers[0].value_len == 7);\n    assert(r.body_len == 0);\n    assert(r.total_consumed == strlen(s));\n}\n\nstatic void hp_test_post_body(void)\n{\n    const char* s = \"POST /submit HTTP/1.0\\r\\nContent-Length: 5\\r\\n\\r\\nhelloextra\";\n    hp_request_t r;\n\n    assert(hp_parse_request(s, strlen(s), &r) == HP_OK);\n    assert(r.version == 10);\n    assert(r.body_len == 5);\n    assert(memcmp(r.body, \"hello\", 5) == 0);\n    assert(r.total_consumed == strlen(s) - 5);\n}\n\nstatic void hp_test_incomplete(void)\n{\n    const char* partial_header = \"GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\";\n    const char* partial_body = \"POST / HTTP/1.1\\r\\nContent-Length: 4\\r\\n\\r\\nabc\";\n    hp_request_t r;\n\n    assert(hp_parse_request(partial_header, strlen(partial_header), &r) ==\n           HP_INCOMPLETE);\n    assert(hp_parse_request(partial_body, strlen(partial_body), &r) ==\n           HP_INCOMPLETE);\n}\n\nstatic void hp_test_errors(void)\n{\n    hp_request_t r;\n    char many[1400];\n    size_t n = 0;\n    int i;\n\n    assert(hp_parse_request(\"GET / HTTP/1.2\\r\\n\\r\\n\",\n                            strlen(\"GET / HTTP/1.2\\r\\n\\r\\n\"), &r) ==\n           HP_ERROR);\n    assert(hp_parse_request(\"GET / HTTP/1.1\\n\\n\",\n                            strlen(\"GET / HTTP/1.1\\n\\n\"), &r) ==\n           HP_ERROR);\n    assert(hp_parse_request(\"GET / HTTP/1.1\\r\\nContent-Length: x\\r\\n\\r\\n\",\n                            strlen(\"GET / HTTP/1.1\\r\\nContent-Length: x\\r\\n\\r\\n\"),\n                            &r) == HP_ERROR);\n\n    memcpy(many + n, \"GET / HTTP/1.1\\r\\n\", 16);\n    n += 16;\n    for (i = 0; i < 65; i++) {\n        many[n++] = 'X';\n        many[n++] = ':';\n        many[n++] = ' ';\n        many[n++] = '0';\n        many[n++] = '\\r';\n        many[n++] = '\\n';\n    }\n    many[n++] = '\\r';\n    many[n++] = '\\n';\n    assert(hp_parse_request(many, n, &r) == HP_ERROR);\n}\n\nint main(void)\n{\n    hp_test_simple_get();\n    hp_test_post_body();\n    hp_test_incomplete();\n    hp_test_errors();\n    return 0;\n}\n#endif\n");
     printf("%s\n", "");
 }
 
@@ -8934,7 +11616,7 @@ bool   is_stdlib_primitive (const char*   name) {
 }
 
 void   emit_stdlib_runtime (void) {
-    printf("%s", "// ---- glide runtime ----\nstatic int __glide_string_len(const char* s) { return (int)strlen(s); }\nstatic bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }\nstatic char __glide_string_at(const char* s, int i) { return s[i]; }\nstatic const char* __glide_string_concat(const char* a, const char* b) {\n    size_t la = strlen(a), lb = strlen(b);\n    char* out = (char*)malloc(la + lb + 1);\n    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;\n    return out;\n}\nstatic const char* __glide_string_substring(const char* s, int start, int end) {\n    int n = (int)strlen(s);\n    if (start < 0) start = 0;\n    if (end > n) end = n;\n    if (start > end) start = end;\n    int len = end - start;\n    char* out = (char*)malloc((size_t)len + 1);\n    memcpy(out, s + start, (size_t)len); out[len] = 0;\n    return out;\n}\nstatic int __glide_char_to_int(char c) { return (int)(unsigned char)c; }\nstatic bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }\nstatic bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }\n/* Wrap a single byte into a fresh 1-char string so user code can push it into a\n   builder (concat etc.). The byte is re-allocated each call — fine for the\n   one-shot helper case; tight loops should buffer differently. */\nstatic const char* __glide_char_to_string(char c) {\n    char* out = (char*)malloc(2);\n    out[0] = c; out[1] = 0;\n    return out;\n}\nstatic int __glide_int_abs(int n) { return n < 0 ? -n : n; }\nstatic const char* __glide_int_to_string(int n) {\n    char buf[32];\n    int len = snprintf(buf, sizeof(buf), \"%d\", n);\n    char* out = (char*)malloc((size_t)len + 1);\n    memcpy(out, buf, (size_t)len + 1);\n    return out;\n}\nstatic const char* __glide_bool_to_string(bool b) { return b ? \"true\" : \"false\"; }\n#include <stdarg.h>\nstatic const char* __glide_format(const char* fmt, ...) {\n    va_list ap1, ap2;\n    va_start(ap1, fmt);\n    va_copy(ap2, ap1);\n    int n = vsnprintf(NULL, 0, fmt, ap1);\n    va_end(ap1);\n    char* out = (char*)malloc((size_t)n + 1);\n    vsnprintf(out, (size_t)n + 1, fmt, ap2);\n    va_end(ap2);\n    return out;\n}\nstatic int __glide_argc_g = 0;\nstatic char** __glide_argv_g = NULL;\nstatic void __glide_args_init(int argc, char** argv) { __glide_argc_g = argc; __glide_argv_g = argv; }\nstatic int args_count(void) { return __glide_argc_g; }\nstatic const char* args_at(int i) {\n    if (i < 0 || i >= __glide_argc_g) return \"\";\n    return __glide_argv_g[i];\n}\nstatic const char* read_file(const char* path) {\n    FILE* f = fopen(path, \"rb\");\n    if (!f) return \"\";\n    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);\n    char* buf = (char*)malloc((size_t)n + 1);\n    size_t got = fread(buf, 1, (size_t)n, f); fclose(f); buf[got] = 0;\n    return buf;\n}\nstatic bool write_file(const char* path, const char* content) {\n    FILE* f = fopen(path, \"wb\"); if (!f) return false;\n    size_t n = strlen(content);\n    size_t wrote = fwrite(content, 1, n, f); fclose(f);\n    return wrote == n;\n}\n#ifdef _WIN32\n#include <io.h>\n#include <winsock2.h>     /* must precede windows.h on mingw-w64 */\n#include <windows.h>\n#define __glide_dup _dup\n#define __glide_dup2 _dup2\n#define __glide_close _close\n#define __glide_fileno _fileno\n#else\n#include <unistd.h>\n#define __glide_dup dup\n#define __glide_dup2 dup2\n#define __glide_close close\n#define __glide_fileno fileno\n#endif\nstatic int __glide_redirect_to(const char* path) {\n    fflush(stdout);\n    int saved = __glide_dup(1);\n    if (saved < 0) return -1;\n    FILE* f = fopen(path, \"w\");\n    if (!f) { __glide_close(saved); return -1; }\n    __glide_dup2(__glide_fileno(f), 1);\n    fclose(f);\n    return saved;\n}\nstatic void __glide_restore_stdout(int saved) {\n    fflush(stdout);\n    if (saved >= 0) { __glide_dup2(saved, 1); __glide_close(saved); }\n}\nstatic int __glide_shell(const char* cmd) { return system(cmd); }\nstatic const char* __glide_getenv(const char* name) { const char* v = getenv(name); return v ? v : \"\"; }\nstatic bool __glide_file_exists(const char* path) {\n    FILE* f = fopen(path, \"rb\"); if (!f) return false; fclose(f); return true;\n}\n#ifdef _WIN32\n#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING\n#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004\n#endif\n__attribute__((constructor)) static void __glide_enable_vt(void) {\n    HANDLE hs[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };\n    for (int i = 0; i < 2; i++) {\n        DWORD m = 0;\n        if (GetConsoleMode(hs[i], &m)) {\n            SetConsoleMode(hs[i], m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);\n        }\n    }\n    SetConsoleOutputCP(65001);\n    SetConsoleCP(65001);\n}\n#endif\n#ifdef _WIN32\nstatic LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {\n    DWORD code = ep->ExceptionRecord->ExceptionCode;\n    const char* name = \"unhandled exception\";\n    const char* hint = \"\";\n    if (code == 0xC0000005) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }\n    else if (code == 0xC0000094) { name = \"integer divide by zero\"; hint = \"hint: divisor reached zero before the division\"; }\n    else if (code == 0xC00000FD) { name = \"stack overflow\"; hint = \"hint: runtime recursion exceeded the stack limit\"; }\n    else if (code == 0x80000003) { name = \"trap (likely null deref or undefined behavior)\"; hint = \"hint: the optimizer turned a null/invalid op into __builtin_trap; rebuild with `-O0` for clearer location\"; }\n    fflush(stdout);\n    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (code 0x%lx)\\n\", name, (unsigned long)code);\n    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);\n    void* frames[32];\n    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);\n    fprintf(stderr, \"stack trace (%u frames; pipe through addr2line for source lines):\\n\", n);\n    for (USHORT i = 0; i < n; i++) fprintf(stderr, \"  #%-2u  %p\\n\", i, frames[i]);\n    fflush(stderr);\n    ExitProcess((UINT)code);\n    return EXCEPTION_CONTINUE_SEARCH;\n}\n__attribute__((constructor)) static void __glide_install_trap(void) {\n    if (getenv(\"GLIDE_NO_TRAP\")) return;\n    // VEH runs before any SEH/CRT-installed filter, so our handler stays in charge.\n    AddVectoredExceptionHandler(1, __glide_seh_handler);\n    SetUnhandledExceptionFilter(__glide_seh_handler);\n}\n#else\n#include <signal.h>\n#include <execinfo.h>\n#include <unistd.h>\nstatic void __glide_sig_handler(int sig) {\n    const char* name = \"unknown\";\n    const char* hint = \"\";\n    if (sig == SIGSEGV) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }\n    else if (sig == SIGFPE) { name = \"floating-point / arithmetic error\"; hint = \"hint: division by zero or invalid float operation\"; }\n    else if (sig == SIGABRT) { name = \"aborted\"; hint = \"hint: runtime panic (e.g. arena oom)\"; }\n    fflush(stdout);\n    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (signal %d)\\n\", name, sig);\n    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);\n    void* frames[32]; int n = backtrace(frames, 32);\n    fprintf(stderr, \"stack trace (%d frames):\\n\", n);\n    backtrace_symbols_fd(frames, n, 2);\n    _exit(128 + sig);\n}\n__attribute__((constructor)) static void __glide_install_trap(void) {\n    if (getenv(\"GLIDE_NO_TRAP\")) return;\n    signal(SIGSEGV, __glide_sig_handler);\n    signal(SIGABRT, __glide_sig_handler);\n    signal(SIGFPE,  __glide_sig_handler);\n}\n#endif\n#ifdef _WIN32\n#include <fcntl.h>\nstatic void __glide_set_binary_io(void) {\n    _setmode(_fileno(stdin), _O_BINARY);\n    _setmode(_fileno(stdout), _O_BINARY);\n}\n#else\nstatic void __glide_set_binary_io(void) {}\n#endif\nstatic const char* __glide_read_line(void) {\n    static char buf[8192];\n    if (!fgets(buf, sizeof(buf), stdin)) { buf[0] = 0; return buf; }\n    return buf;\n}\nstatic const char* __glide_read_bytes(int n) {\n    if (n <= 0) return \"\";\n    char* buf = (char*)malloc((size_t)n + 1);\n    size_t got = fread(buf, 1, (size_t)n, stdin);\n    buf[got] = 0;\n    return buf;\n}\nstatic void __glide_write_str(const char* s) {\n    fputs(s, stdout);\n}\nstatic void __glide_write_bytes(const char* s, int n) {\n    if (n > 0) fwrite(s, 1, (size_t)n, stdout);\n}\nstatic void __glide_flush_stdout(void) { fflush(stdout); }\nstatic void __glide_log(const char* s) {\n    fputs(s, stderr); fputc('\\n', stderr); fflush(stderr);\n}\nstatic int __glide_is_windows(void) {\n#ifdef _WIN32\n    return 1;\n#else\n    return 0;\n#endif\n}\n// `__glide_list_dir`: newline-separated, sorted listing of files under\n// `path` whose name ends in `suffix` (pass \"\" to list everything). Returns\n// \"\" on missing dir. Same body lives in main.glide as a c_raw block so the\n// compiler can bootstrap from older runtimes — guard avoids dup definition.\n#ifndef GLIDE_LIST_DIR_DEFINED\n#define GLIDE_LIST_DIR_DEFINED\nstatic int __glide_strcmp_qsort(const void* a, const void* b) {\n    const char* x = *(const char* const*)a;\n    const char* y = *(const char* const*)b;\n    return strcmp(x, y);\n}\n#ifdef _WIN32\nstatic const char* __glide_list_dir(const char* path, const char* suffix) {\n    char pattern[1024];\n    snprintf(pattern, sizeof(pattern), \"%s\\\\*\", path);\n    WIN32_FIND_DATAA fd;\n    HANDLE h = FindFirstFileA(pattern, &fd);\n    if (h == INVALID_HANDLE_VALUE) return \"\";\n    char** names = NULL; int n = 0; int cap = 0;\n    size_t suf_n = suffix ? strlen(suffix) : 0;\n    do {\n        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;\n        const char* nm = fd.cFileName;\n        size_t nm_n = strlen(nm);\n        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;\n        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }\n        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);\n        names[n++] = dup;\n    } while (FindNextFileA(h, &fd));\n    FindClose(h);\n    if (n == 0) { free(names); return \"\"; }\n    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);\n    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;\n    char* out = (char*)malloc(total);\n    size_t off = 0;\n    for (int i = 0; i < n; i++) {\n        size_t l = strlen(names[i]);\n        memcpy(out + off, names[i], l); off += l;\n        if (i + 1 < n) out[off++] = '\\n';\n        free(names[i]);\n    }\n    out[off] = 0;\n    free(names);\n    return out;\n}\n#else\n#include <dirent.h>\nstatic const char* __glide_list_dir(const char* path, const char* suffix) {\n    DIR* d = opendir(path);\n    if (!d) return \"\";\n    char** names = NULL; int n = 0; int cap = 0;\n    size_t suf_n = suffix ? strlen(suffix) : 0;\n    struct dirent* e;\n    while ((e = readdir(d)) != NULL) {\n        const char* nm = e->d_name;\n        if (nm[0] == '.') continue;\n        size_t nm_n = strlen(nm);\n        if (suf_n > 0 && (nm_n < suf_n || strcmp(nm + nm_n - suf_n, suffix) != 0)) continue;\n        if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }\n        char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);\n        names[n++] = dup;\n    }\n    closedir(d);\n    if (n == 0) { free(names); return \"\"; }\n    qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);\n    size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;\n    char* out = (char*)malloc(total);\n    size_t off = 0;\n    for (int i = 0; i < n; i++) {\n        size_t l = strlen(names[i]);\n        memcpy(out + off, names[i], l); off += l;\n        if (i + 1 < n) out[off++] = '\\n';\n        free(names[i]);\n    }\n    out[off] = 0;\n    free(names);\n    return out;\n}\n#endif\n#endif\n\n#ifdef _WIN32\nstatic const char* __glide_exe_path(void) {\n    static char buf[1024];\n    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));\n    if (n == 0 || n >= sizeof(buf)) buf[0] = 0;\n    return buf;\n}\nstatic const char* __glide_exe_dir(void) {\n    static char buf[1024];\n    DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));\n    if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }\n    for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }\n    return \"\";\n}\n#else\nstatic const char* __glide_exe_path(void) {\n    static char buf[1024];\n    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);\n    if (n <= 0) { buf[0] = 0; return buf; }\n    buf[n] = 0;\n    return buf;\n}\nstatic const char* __glide_exe_dir(void) {\n    static char buf[1024];\n    ssize_t n = readlink(\"/proc/self/exe\", buf, sizeof(buf) - 1);\n    if (n <= 0) { buf[0] = 0; return buf; }\n    buf[n] = 0;\n    for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }\n    return \"\";\n}\n#endif\ntypedef struct Arena { unsigned char* head; int cap; int used; } Arena;\nstatic Arena* Arena_new(int cap) {\n    Arena* a = (Arena*)malloc(sizeof(Arena));\n    a->head = (unsigned char*)malloc((size_t)cap);\n    a->cap = cap; a->used = 0;\n    return a;\n}\nstatic void* Arena_alloc(Arena* a, int size) {\n    int aligned = (size + 7) & ~7;\n    if (a->used + aligned > a->cap) { fprintf(stderr, \"arena oom\\n\"); exit(1); }\n    void* p = (void*)(a->head + a->used);\n    a->used += aligned;\n    return p;\n}\nstatic void Arena_free(Arena* a) { free(a->head); free(a); }\nstatic int Arena_used(Arena* a) { return a->used; }\nstatic void Arena_reset(Arena* a) { a->used = 0; }\n\n\n");
+    printf("%s", "// ---- glide runtime ----\r\n// Slim-runtime markers: when set, the corresponding family of helpers\r\n// is NOT in this stdlib.c — a c_raw block in the matching stdlib module\r\n// (`fs.glide`, `os.glide`, `env.glide`, `io.glide`) provides the bodies.\r\n// Older glide binaries that still carry the bodies in their embedded\r\n// stdlib.c don't see these defines, so the c_raw blocks stay inactive\r\n// during the bootstrap step that promotes the new compiler.\r\n#define GLIDE_FS_VIA_CRAW\r\n#define GLIDE_OS_VIA_CRAW\r\n#define GLIDE_ENV_VIA_CRAW\r\n#define GLIDE_IO_VIA_CRAW\r\n// Forward declaration of the per-keystroke arena allocator defined in\r\n// src/builtins/builtins.glide. Routing the string-runtime allocations\r\n// through it lets the LSP reclaim every concat / substring / format /\r\n// int_to_string buffer in bulk on the next reanalysis. Outside the LSP\r\n// (no arena active) __glide_palloc falls back to calloc, so build /\r\n// run / fmt paths see no behaviour change.\r\nextern void* __glide_palloc(int size);\r\nstatic int __glide_string_len(const char* s) { return (int)strlen(s); }\r\nstatic bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }\r\nstatic char __glide_string_at(const char* s, int i) { return s[i]; }\r\nstatic const char* __glide_string_concat(const char* a, const char* b) {\r\n    size_t la = strlen(a), lb = strlen(b);\r\n    char* out = (char*)__glide_palloc((int)(la + lb + 1));\r\n    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;\r\n    return out;\r\n}\r\nstatic const char* __glide_string_substring(const char* s, int start, int end) {\r\n    int n = (int)strlen(s);\r\n    if (start < 0) start = 0;\r\n    if (end > n) end = n;\r\n    if (start > end) start = end;\r\n    int len = end - start;\r\n    char* out = (char*)__glide_palloc(len + 1);\r\n    memcpy(out, s + start, (size_t)len); out[len] = 0;\r\n    return out;\r\n}\r\n/* Take a raw byte buffer + length and produce a NUL-terminated Glide\r\n   string in one allocation. Used by the HTTP server to skip the\r\n   per-byte concat that would otherwise allocate `n` strings to\r\n   convert one read buffer. */\r\nconst char* __glide_string_from_buf(void* buf, int n) {\r\n    if (n < 0) n = 0;\r\n    char* out = (char*)malloc((size_t)n + 1);\r\n    if (n > 0) memcpy(out, buf, (size_t)n);\r\n    out[n] = 0;\r\n    return out;\r\n}\r\nstatic int __glide_char_to_int(char c) { return (int)(unsigned char)c; }\r\nstatic bool __glide_char_is_digit(char c) { return c >= '0' && c <= '9'; }\r\nstatic bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }\r\n/* Wrap a single byte into a fresh 1-char string so user code can push it into a\r\n   builder (concat etc.). The byte is re-allocated each call — fine for the\r\n   one-shot helper case; tight loops should buffer differently. */\r\nstatic const char* __glide_char_to_string(char c) {\r\n    char* out = (char*)__glide_palloc(2);\r\n    out[0] = c; out[1] = 0;\r\n    return out;\r\n}\r\nstatic int __glide_int_abs(int n) { return n < 0 ? -n : n; }\r\nstatic const char* __glide_int_to_string(int n) {\r\n    char buf[32];\r\n    int len = snprintf(buf, sizeof(buf), \"%d\", n);\r\n    char* out = (char*)__glide_palloc(len + 1);\r\n    memcpy(out, buf, (size_t)len + 1);\r\n    return out;\r\n}\r\nstatic const char* __glide_bool_to_string(bool b) { return b ? \"true\" : \"false\"; }\r\n#include <stdarg.h>\r\nstatic const char* __glide_format(const char* fmt, ...) {\r\n    va_list ap1, ap2;\r\n    va_start(ap1, fmt);\r\n    va_copy(ap2, ap1);\r\n    int n = vsnprintf(NULL, 0, fmt, ap1);\r\n    va_end(ap1);\r\n    char* out = (char*)__glide_palloc(n + 1);\r\n    vsnprintf(out, (size_t)n + 1, fmt, ap2);\r\n    va_end(ap2);\r\n    return out;\r\n}\r\nstatic int __glide_argc_g = 0;\r\nstatic char** __glide_argv_g = NULL;\r\nstatic void __glide_args_init(int argc, char** argv) { __glide_argc_g = argc; __glide_argv_g = argv; }\r\nstatic int args_count(void) { return __glide_argc_g; }\r\nstatic const char* args_at(int i) {\r\n    if (i < 0 || i >= __glide_argc_g) return \"\";\r\n    return __glide_argv_g[i];\r\n}\r\n#ifdef _WIN32\r\n#include <io.h>\r\n#include <winsock2.h>     /* must precede windows.h on mingw-w64 */\r\n#include <windows.h>\r\n#else\r\n#include <unistd.h>\r\n#endif\r\n#ifdef _WIN32\r\n#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING\r\n#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004\r\n#endif\r\n__attribute__((constructor)) static void __glide_enable_vt(void) {\r\n    HANDLE hs[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };\r\n    for (int i = 0; i < 2; i++) {\r\n        DWORD m = 0;\r\n        if (GetConsoleMode(hs[i], &m)) {\r\n            SetConsoleMode(hs[i], m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);\r\n        }\r\n    }\r\n    SetConsoleOutputCP(65001);\r\n    SetConsoleCP(65001);\r\n}\r\n#endif\r\n#ifdef _WIN32\r\nstatic LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {\r\n    DWORD code = ep->ExceptionRecord->ExceptionCode;\r\n    const char* name = \"unhandled exception\";\r\n    const char* hint = \"\";\r\n    if (code == 0xC0000005) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }\r\n    else if (code == 0xC0000094) { name = \"integer divide by zero\"; hint = \"hint: divisor reached zero before the division\"; }\r\n    else if (code == 0xC00000FD) { name = \"stack overflow\"; hint = \"hint: runtime recursion exceeded the stack limit\"; }\r\n    else if (code == 0x80000003) { name = \"trap (likely null deref or undefined behavior)\"; hint = \"hint: the optimizer turned a null/invalid op into __builtin_trap; rebuild with `-O0` for clearer location\"; }\r\n    fflush(stdout);\r\n    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (code 0x%lx)\\n\", name, (unsigned long)code);\r\n    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);\r\n    void* frames[32];\r\n    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);\r\n    fprintf(stderr, \"stack trace (%u frames; pipe through addr2line for source lines):\\n\", n);\r\n    for (USHORT i = 0; i < n; i++) fprintf(stderr, \"  #%-2u  %p\\n\", i, frames[i]);\r\n    fflush(stderr);\r\n    ExitProcess((UINT)code);\r\n    return EXCEPTION_CONTINUE_SEARCH;\r\n}\r\n__attribute__((constructor)) static void __glide_install_trap(void) {\r\n    if (getenv(\"GLIDE_NO_TRAP\")) return;\r\n    // VEH runs before any SEH/CRT-installed filter, so our handler stays in charge.\r\n    AddVectoredExceptionHandler(1, __glide_seh_handler);\r\n    SetUnhandledExceptionFilter(__glide_seh_handler);\r\n}\r\n#else\r\n#include <signal.h>\r\n#include <execinfo.h>\r\n#include <unistd.h>\r\nstatic void __glide_sig_handler(int sig) {\r\n    const char* name = \"unknown\";\r\n    const char* hint = \"\";\r\n    if (sig == SIGSEGV) { name = \"segmentation fault\"; hint = \"hint: dereferenced a null or invalid pointer\"; }\r\n    else if (sig == SIGFPE) { name = \"floating-point / arithmetic error\"; hint = \"hint: division by zero or invalid float operation\"; }\r\n    else if (sig == SIGABRT) { name = \"aborted\"; hint = \"hint: runtime panic (e.g. arena oom)\"; }\r\n    fflush(stdout);\r\n    fprintf(stderr, \"\\n\\x1b[1;31mfatal\\x1b[0m: %s (signal %d)\\n\", name, sig);\r\n    if (hint[0]) fprintf(stderr, \"  \\x1b[1;36m=\\x1b[0m %s\\n\", hint);\r\n    void* frames[32]; int n = backtrace(frames, 32);\r\n    fprintf(stderr, \"stack trace (%d frames):\\n\", n);\r\n    backtrace_symbols_fd(frames, n, 2);\r\n    _exit(128 + sig);\r\n}\r\n__attribute__((constructor)) static void __glide_install_trap(void) {\r\n    if (getenv(\"GLIDE_NO_TRAP\")) return;\r\n    signal(SIGSEGV, __glide_sig_handler);\r\n    signal(SIGABRT, __glide_sig_handler);\r\n    signal(SIGFPE,  __glide_sig_handler);\r\n}\r\n#endif\r\ntypedef struct Arena { unsigned char* head; int cap; int used; } Arena;\r\nstatic Arena* Arena_new(int cap) {\r\n    Arena* a = (Arena*)malloc(sizeof(Arena));\r\n    a->head = (unsigned char*)malloc((size_t)cap);\r\n    a->cap = cap; a->used = 0;\r\n    return a;\r\n}\r\nstatic void* Arena_alloc(Arena* a, int size) {\r\n    int aligned = (size + 7) & ~7;\r\n    if (a->used + aligned > a->cap) { fprintf(stderr, \"arena oom\\n\"); exit(1); }\r\n    void* p = (void*)(a->head + a->used);\r\n    a->used += aligned;\r\n    return p;\r\n}\r\nstatic void Arena_free(Arena* a) { free(a->head); free(a); }\r\nstatic int Arena_used(Arena* a) { return a->used; }\r\nstatic void Arena_reset(Arena* a) { a->used = 0; }\r\n\r\n\r\n");
     printf("%s\n", "");
 }
 
@@ -8950,6 +11632,8 @@ CG*   CG_new (void) {
     Vector__FnMonoEntry*   q = Vector_new__FnMonoEntry();
     Vector__Expr*   ds = Vector_new__Expr();
     ((g-> defer_stack )  =  ds);
+    Vector__Expr*   eds = Vector_new__Expr();
+    ((g-> err_defer_stack )  =  eds);
     Vector__Expr*   ads = Vector_new__Expr();
     ((g-> auto_drop_stack )  =  ads);
     Vector__AnonFn*   af = Vector_new__AnonFn();
@@ -8961,6 +11645,12 @@ CG*   CG_new (void) {
     ((g-> uses_pthread )  =  false);
     Vector__Type*   rt = Vector_new__Type();
     ((g-> result_types )  =  rt);
+    Vector__Type*   ot = Vector_new__Type();
+    ((g-> option_types )  =  ot);
+    Vector__Type*   ort = Vector_new__Type();
+    ((g-> optres_types )  =  ort);
+    HashMap__Type*   at = HashMap_new__Type();
+    ((g-> assoc_table )  =  at);
     ((g-> current_ret_ty )  =  NULL);
     ((g-> scope )  =  s);
     ((g-> generic_structs )  =  gs);
@@ -8985,6 +11675,16 @@ CG*   CG_new (void) {
     HashMap__Stmt*   trts = HashMap_new__Stmt();
     ((g-> traits )  =  trts);
     return g;
+}
+
+void   CG_emit_err_defers_reverse (CG*   self, int   depth) {
+    int   n = Vector_len__Expr((self-> err_defer_stack ));
+    for (int   i = (n  -  1); (i  >=  0); (i  =  (i  -  1))) {
+        ind(depth);
+        Expr   ex = Vector_get__Expr((self-> err_defer_stack ), i);
+        emit_expr(self, (&ex));
+        printf("%s\n", ";");
+    }
 }
 
 void   CG_emit_deferred_reverse (CG*   self, int   depth) {
@@ -9049,6 +11749,9 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
         return NULL;
     }
     if (((e-> kind )  ==  EX_INT)) {
+        if ((((e-> int_val )  >  2147483647)  ||  ((e-> int_val )  <  (-2147483648)))) {
+            return ty_named("i64");
+        }
         return ty_named("int");
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
@@ -9065,6 +11768,26 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_NULL)) {
         return ty_pointer(ty_named("void"));
+    }
+    if (((e-> kind )  ==  EX_IF)) {
+        Type*   then_ty = infer_for_codegen(g, (e-> rhs ));
+        if ((then_ty  !=  NULL)) {
+            return then_ty;
+        }
+        return infer_for_codegen(g, (e-> operand ));
+    }
+    if (((e-> kind )  ==  EX_BLOCK)) {
+        if (((e-> operand )  !=  NULL)) {
+            return infer_for_codegen(g, (e-> operand ));
+        }
+        return NULL;
+    }
+    if (((e-> kind )  ==  EX_MATCH)) {
+        if ((((e-> match_arms )  !=  NULL)  &&  (Vector_len__MatchArm((e-> match_arms ))  >  0))) {
+            MatchArm   first = Vector_get__MatchArm((e-> match_arms ), 0);
+            return arm_value_type(g, (&first));
+        }
+        return NULL;
     }
     if (((e-> kind )  ==  EX_IDENT)) {
         return CG_lookup(g, (e-> str_val ));
@@ -9083,6 +11806,39 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
         Type*   recv_ty = infer_for_codegen(g, (e-> lhs ));
         Type*   stripped = strip_ptr(recv_ty);
         if ((stripped  ==  NULL)) {
+            return NULL;
+        }
+        if (((stripped-> kind )  ==  TY_RESULT)) {
+            if (__glide_string_eq((e-> field ), "val")) {
+                return (stripped-> inner );
+            }
+            if (__glide_string_eq((e-> field ), "ok")) {
+                return ty_named("bool");
+            }
+            if (__glide_string_eq((e-> field ), "err")) {
+                return ty_named("string");
+            }
+            return NULL;
+        }
+        if (((stripped-> kind )  ==  TY_OPTION)) {
+            if (__glide_string_eq((e-> field ), "val")) {
+                return (stripped-> inner );
+            }
+            if (__glide_string_eq((e-> field ), "has")) {
+                return ty_named("bool");
+            }
+            return NULL;
+        }
+        if (((stripped-> kind )  ==  TY_OPT_RESULT)) {
+            if (__glide_string_eq((e-> field ), "val")) {
+                return (stripped-> inner );
+            }
+            if (__glide_string_eq((e-> field ), "tag")) {
+                return ty_named("int");
+            }
+            if (__glide_string_eq((e-> field ), "err")) {
+                return ty_named("string");
+            }
             return NULL;
         }
         if (((stripped-> kind )  ==  TY_SLICE)) {
@@ -9352,7 +12108,7 @@ const char*   type_to_c (Type*   t) {
         if (__glide_string_eq(n, "__fn_ptr__")) {
             return "void*";
         }
-        return n;
+        return c_safe_ident(n);
     }
     if (((t-> kind )  ==  TY_POINTER)) {
         if ((((t-> inner )  !=  NULL)  &&  (((t-> inner )-> kind )  ==  TY_DYN))) {
@@ -9384,6 +12140,15 @@ const char*   type_to_c (Type*   t) {
     }
     if (((t-> kind )  ==  TY_RESULT)) {
         return __glide_string_concat(__glide_string_concat("__glide_result_", mangle_type((t-> inner ))), "_t");
+    }
+    if (((t-> kind )  ==  TY_OPTION)) {
+        return __glide_string_concat(__glide_string_concat("__glide_option_", mangle_type((t-> inner ))), "_t");
+    }
+    if (((t-> kind )  ==  TY_OPT_RESULT)) {
+        return __glide_string_concat(__glide_string_concat("__glide_optres_", mangle_type((t-> inner ))), "_t");
+    }
+    if (((t-> kind )  ==  TY_ASSOC)) {
+        return "/* unresolved-assoc */ void";
     }
     return "void";
 }
@@ -9443,6 +12208,15 @@ const char*   mangle_type (Type*   t) {
     }
     if (((t-> kind )  ==  TY_RESULT)) {
         return __glide_string_concat("result_", mangle_type((t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_OPTION)) {
+        return __glide_string_concat("option_", mangle_type((t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_OPT_RESULT)) {
+        return __glide_string_concat("optres_", mangle_type((t-> inner )));
+    }
+    if (((t-> kind )  ==  TY_ASSOC)) {
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat("assoc_", mangle_type((t-> inner ))), "_"), (t-> name ));
     }
     return "void";
 }
@@ -9783,21 +12557,38 @@ void   register_fn_mono_signature (CG*   g, const char*   mangled, Stmt*   templ
     Stmt*   synth = (( Stmt* )calloc(1, sizeof( Stmt )));
     ((synth-> kind )  =  (template-> kind ));
     ((synth-> name )  =  mangled);
-    ((synth-> fn_ret_ty )  =  subst_type((template-> fn_ret_ty ), (template-> type_params ), args));
+    Type*   sret = subst_type((template-> fn_ret_ty ), (template-> type_params ), args);
+    (sret  =  resolve_assoc_recursive(g, sret));
+    ((synth-> fn_ret_ty )  =  sret);
+    collect_result_in_type(g, sret);
     if (((template-> fn_params )  !=  NULL)) {
         Vector__Param*   ps = Vector_new__Param();
         for (int   i = 0; (i  <  Vector_len__Param((template-> fn_params ))); i++) {
             Param   p = Vector_get__Param((template-> fn_params ), i);
-            Param   np = (( Param ){. name  = (p. name ), . ty  = subst_type((p. ty ), (template-> type_params ), args)});
+            Type*   pt = subst_type((p. ty ), (template-> type_params ), args);
+            Type*   resolved = resolve_assoc_recursive(g, pt);
+            collect_result_in_type(g, resolved);
+            Param   np = (( Param ){. name  = (p. name ), . ty  = resolved});
             Vector_push__Param(ps, np);
         }
         ((synth-> fn_params )  =  ps);
     }
     HashMap_insert__Stmt((g-> fns ), mangled, (*synth));
+    collect_result_in_type(g, sret);
+    if (((synth-> fn_params )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Param((synth-> fn_params ))); i++) {
+            Param   p = Vector_get__Param((synth-> fn_params ), i);
+            collect_result_in_type(g, (p. ty ));
+        }
+    }
+    emit_result_runtime(g);
+    emit_option_runtime(g);
+    emit_optres_runtime(g);
 }
 
 void   emit_mono_forward_decl (CG*   g, const char*   mangled, Stmt*   template, Vector__Type*   args) {
     Type*   new_ret = subst_type((template-> fn_ret_ty ), (template-> type_params ), args);
+    (new_ret  =  resolve_assoc_recursive(g, new_ret));
     printf("%s %s %s %s", type_to_c(new_ret), " ", mangled, "(");
     if ((((template-> fn_params )  ==  NULL)  ||  (Vector_len__Param((template-> fn_params ))  ==  0))) {
         printf("%s", "void");
@@ -9808,7 +12599,8 @@ void   emit_mono_forward_decl (CG*   g, const char*   mangled, Stmt*   template,
             }
             Param   pp = Vector_get__Param((template-> fn_params ), j);
             Type*   pt = subst_type((pp. ty ), (template-> type_params ), args);
-            printf("%s %s %s", type_to_c(pt), " ", (pp. name ));
+            Type*   resolved_pt = resolve_assoc_recursive(g, pt);
+            printf("%s %s %s", type_to_c(resolved_pt), " ", c_safe_ident((pp. name )));
         }
     }
     printf("%s\n", ");");
@@ -9857,6 +12649,18 @@ void   unify_for_inference (Type*   pat, Type*   actual, Vector__string*   param
                 unify_for_inference((&pa), (&aa), params, bindings);
             }
         }
+    }
+    if ((((pat-> kind )  ==  TY_OPTION)  &&  ((actual-> kind )  ==  TY_OPTION))) {
+        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        return;
+    }
+    if ((((pat-> kind )  ==  TY_RESULT)  &&  ((actual-> kind )  ==  TY_RESULT))) {
+        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        return;
+    }
+    if ((((pat-> kind )  ==  TY_OPT_RESULT)  &&  ((actual-> kind )  ==  TY_OPT_RESULT))) {
+        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        return;
     }
 }
 
@@ -9910,6 +12714,19 @@ Type*   subst_type (Type*   t, Vector__string*   params, Vector__Type*   args) {
             }
         }
         return ty_generic((t-> name ), new_args);
+    }
+    if (((t-> kind )  ==  TY_OPTION)) {
+        return ty_option(subst_type((t-> inner ), params, args));
+    }
+    if (((t-> kind )  ==  TY_RESULT)) {
+        return ty_result(subst_type((t-> inner ), params, args));
+    }
+    if (((t-> kind )  ==  TY_OPT_RESULT)) {
+        return ty_optres(subst_type((t-> inner ), params, args));
+    }
+    if (((t-> kind )  ==  TY_ASSOC)) {
+        Type*   new_owner = subst_type((t-> inner ), params, args);
+        return ty_assoc(new_owner, (t-> name ));
     }
     return t;
 }
@@ -10132,13 +12949,99 @@ void   emit_cfg_close (const char*   cfg) {
     }
 }
 
+Expr*   arm_value_expr (MatchArm*   a) {
+    if ((((a-> body )  ==  NULL)  ||  (Vector_len__Stmt((a-> body ))  ==  0))) {
+        return NULL;
+    }
+    Stmt   last = Vector_get__Stmt((a-> body ), (Vector_len__Stmt((a-> body ))  -  1));
+    if (((last. kind )  ==  ST_RETURN)) {
+        return (last. expr_value );
+    }
+    if (((last. kind )  ==  ST_EXPR)) {
+        return (last. expr_value );
+    }
+    return NULL;
+}
+
+Type*   arm_value_type (CG*   g, MatchArm*   a) {
+    Expr*   v = arm_value_expr(a);
+    if ((v  ==  NULL)) {
+        return ty_named("int");
+    }
+    return infer_for_codegen(g, v);
+}
+
+void   emit_match_arm_value (CG*   g, MatchArm*   a) {
+    if (((a-> body )  ==  NULL)) {
+        printf("%s", "__r = 0;");
+        return;
+    }
+    int   last_idx = (Vector_len__Stmt((a-> body ))  -  1);
+    for (int   k = 0; (k  <  last_idx); k++) {
+        Stmt   b = Vector_get__Stmt((a-> body ), k);
+        emit_stmt(g, (&b), 0);
+    }
+    Expr*   v = arm_value_expr(a);
+    printf("%s", "__r = (");
+    if ((v  !=  NULL)) {
+        emit_expr(g, v);
+    } else {
+        printf("%s", "0");
+    }
+    printf("%s", ");");
+}
+
+void   emit_arm_typeof_probe (CG*   g, Vector__MatchArm*   arms) {
+    if (((arms  ==  NULL)  ||  (Vector_len__MatchArm(arms)  ==  0))) {
+        printf("%s", "(int)0");
+        return;
+    }
+    MatchArm   a = Vector_get__MatchArm(arms, 0);
+    printf("%s", "({ ");
+    if ((((a. bindings )  !=  NULL)  &&  (Vector_len__string((a. bindings ))  >  0))) {
+        if ((Vector_len__string((a. bindings ))  ==  1)) {
+            const char*   payload = __glide_string_concat("__m.data.v_", (a. variant ));
+            printf("%s", "__typeof__(");
+            printf("%s", payload);
+            printf("%s", ") ");
+            printf("%s", c_safe_ident(Vector_get__string((a. bindings ), 0)));
+            printf("%s", " = ");
+            printf("%s", payload);
+            printf("%s", "; ");
+        } else {
+            for (int   k = 0; (k  <  Vector_len__string((a. bindings ))); k++) {
+                const char*   payload = __glide_string_concat("__m.data.v_", (a. variant ));
+                printf("%s", "__typeof__(");
+                printf("%s", payload);
+                printf("%s", ".f");
+                printf("%d", k);
+                printf("%s", ") ");
+                printf("%s", c_safe_ident(Vector_get__string((a. bindings ), k)));
+                printf("%s", " = ");
+                printf("%s", payload);
+                printf("%s", ".f");
+                printf("%d", k);
+                printf("%s", "; ");
+            }
+        }
+    }
+    Expr*   v = arm_value_expr((&a));
+    printf("%s", "(");
+    if ((v  !=  NULL)) {
+        emit_expr(g, v);
+    } else {
+        printf("%s", "0");
+    }
+    printf("%s", "); })");
+}
+
 void   emit_expr (CG*   g, Expr*   e) {
     if ((e  ==  NULL)) {
         printf("%s", "/* null */");
         return;
     }
     if (((e-> kind )  ==  EX_INT)) {
-        printf("%lld", (e-> int_val ));
+        printf("%lld", (long long)((e-> int_val )));
         return;
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
@@ -10153,7 +13056,7 @@ void   emit_expr (CG*   g, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_CHAR)) {
         printf("%s", "(char)");
-        printf("%lld", (e-> int_val ));
+        printf("%lld", (long long)((e-> int_val )));
         return;
     }
     if (((e-> kind )  ==  EX_BOOL)) {
@@ -10169,10 +13072,170 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> kind )  ==  EX_IDENT)) {
-        printf("%s", (e-> str_val ));
+        printf("%s", c_safe_ident((e-> str_val )));
+        return;
+    }
+    if (((e-> kind )  ==  EX_IF)) {
+        printf("%s", "(");
+        emit_expr(g, (e-> lhs ));
+        printf("%s", " ? ");
+        emit_expr(g, (e-> rhs ));
+        printf("%s", " : ");
+        if (((e-> operand )  !=  NULL)) {
+            emit_expr(g, (e-> operand ));
+        } else {
+            printf("%s", "0");
+        }
+        printf("%s", ")");
+        return;
+    }
+    if (((e-> kind )  ==  EX_BLOCK)) {
+        printf("%s", "({ ");
+        if (((e-> block_stmts )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Stmt((e-> block_stmts ))); i++) {
+                Stmt   b = Vector_get__Stmt((e-> block_stmts ), i);
+                emit_stmt(g, (&b), 0);
+            }
+        }
+        printf("%s", "(");
+        if (((e-> operand )  !=  NULL)) {
+            emit_expr(g, (e-> operand ));
+        } else {
+            printf("%s", "0");
+        }
+        printf("%s", "); })");
+        return;
+    }
+    if (((e-> kind )  ==  EX_MATCH)) {
+        Type*   scrut_ty = infer_for_codegen(g, (e-> lhs ));
+        const char*   enum_name = "X";
+        if (((scrut_ty  !=  NULL)  &&  ((scrut_ty-> kind )  ==  TY_NAMED))) {
+            (enum_name  =  (scrut_ty-> name ));
+        }
+        printf("%s", "({ ");
+        printf("%s", enum_name);
+        printf("%s", " __m = ");
+        emit_expr(g, (e-> lhs ));
+        printf("%s", "; ");
+        printf("%s", "__typeof__(");
+        emit_arm_typeof_probe(g, (e-> match_arms ));
+        printf("%s", ") __r; ");
+        printf("%s", "switch (__m.tag) { ");
+        if (((e-> match_arms )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__MatchArm((e-> match_arms ))); i++) {
+                MatchArm   a = Vector_get__MatchArm((e-> match_arms ), i);
+                if (__glide_string_eq((a. variant ), "_")) {
+                    printf("%s", "default: ");
+                } else {
+                    printf("%s", "case ");
+                    printf("%s", enum_name);
+                    printf("%s", "_");
+                    printf("%s", (a. variant ));
+                    printf("%s", ": ");
+                }
+                printf("%s", "{ ");
+                if ((((a. bindings )  !=  NULL)  &&  (Vector_len__string((a. bindings ))  >  0))) {
+                    if ((Vector_len__string((a. bindings ))  ==  1)) {
+                        const char*   payload = __glide_string_concat("__m.data.v_", (a. variant ));
+                        printf("%s", "__typeof__(");
+                        printf("%s", payload);
+                        printf("%s", ") ");
+                        printf("%s", c_safe_ident(Vector_get__string((a. bindings ), 0)));
+                        printf("%s", " = ");
+                        printf("%s", payload);
+                        printf("%s", "; ");
+                    } else {
+                        for (int   k = 0; (k  <  Vector_len__string((a. bindings ))); k++) {
+                            const char*   payload = __glide_string_concat("__m.data.v_", (a. variant ));
+                            printf("%s", "__typeof__(");
+                            printf("%s", payload);
+                            printf("%s", ".f");
+                            printf("%d", k);
+                            printf("%s", ") ");
+                            printf("%s", c_safe_ident(Vector_get__string((a. bindings ), k)));
+                            printf("%s", " = ");
+                            printf("%s", payload);
+                            printf("%s", ".f");
+                            printf("%d", k);
+                            printf("%s", "; ");
+                        }
+                    }
+                }
+                emit_match_arm_value(g, (&a));
+                printf("%s", " break; } ");
+            }
+        }
+        printf("%s", "} __r; })");
         return;
     }
     if (((e-> kind )  ==  EX_BINARY)) {
+        if (((e-> op_code )  ==  OP_COALESCE)) {
+            Type*   lt = infer_for_codegen(g, (e-> lhs ));
+            bool   is_err_form = false;
+            if (((((((e-> rhs )  !=  NULL)  &&  (((e-> rhs )-> kind )  ==  EX_CALL))  &&  (((e-> rhs )-> lhs )  !=  NULL))  &&  ((((e-> rhs )-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((((e-> rhs )-> lhs )-> str_val ), "err"))) {
+                (is_err_form  =  true);
+            }
+            if (((lt  !=  NULL)  &&  ((lt-> kind )  ==  TY_OPTION))) {
+                const char*   m_in = mangle_type((lt-> inner ));
+                if (is_err_form) {
+                    const char*   m_out = m_in;
+                    Expr   arg = Vector_get__Expr(((e-> rhs )-> args ), 0);
+                    printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_option_", m_in), "_t __o = ("));
+                    emit_expr(g, (e-> lhs ));
+                    printf("%s", __glide_string_concat(__glide_string_concat("); __r_lift_t_", m_out), "("));
+                }
+                if ((!is_err_form)) {
+                    printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_option_", m_in), "_t __o = ("));
+                    emit_expr(g, (e-> lhs ));
+                    printf("%s", "); __o.has ? __o.val : (");
+                    emit_expr(g, (e-> rhs ));
+                    printf("%s", "); })");
+                    return;
+                }
+                printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_option_", m_in), "_t __o = ("));
+                emit_expr(g, (e-> lhs ));
+                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("); __o.has ? __glide_ok_", m_in), "(__o.val) : __glide_err_"), m_in), "("));
+                Expr   arg = Vector_get__Expr(((e-> rhs )-> args ), 0);
+                emit_expr(g, (&arg));
+                printf("%s", "); })");
+                return;
+            }
+            if (((lt  !=  NULL)  &&  ((lt-> kind )  ==  TY_RESULT))) {
+                const char*   m_in = mangle_type((lt-> inner ));
+                if ((!is_err_form)) {
+                    printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_result_", m_in), "_t __r = ("));
+                    emit_expr(g, (e-> lhs ));
+                    printf("%s", "); __r.ok ? __r.val : (");
+                    emit_expr(g, (e-> rhs ));
+                    printf("%s", "); })");
+                    return;
+                }
+                printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_result_", m_in), "_t __r = ("));
+                emit_expr(g, (e-> lhs ));
+                printf("%s", __glide_string_concat(__glide_string_concat("); __r.ok ? __r : __glide_err_", m_in), "("));
+                Expr   arg = Vector_get__Expr(((e-> rhs )-> args ), 0);
+                emit_expr(g, (&arg));
+                printf("%s", "); })");
+                return;
+            }
+            if (((lt  !=  NULL)  &&  ((lt-> kind )  ==  TY_POINTER))) {
+                const char*   tc = type_to_c(lt);
+                printf("%s", __glide_string_concat(__glide_string_concat("({ ", tc), " __p = ("));
+                emit_expr(g, (e-> lhs ));
+                printf("%s", "); __p ? __p : (");
+                emit_expr(g, (e-> rhs ));
+                printf("%s", "); })");
+                return;
+            }
+            printf("%s", "((");
+            emit_expr(g, (e-> lhs ));
+            printf("%s", ") ? (");
+            emit_expr(g, (e-> lhs ));
+            printf("%s", ") : (");
+            emit_expr(g, (e-> rhs ));
+            printf("%s", "))");
+            return;
+        }
         printf("%s", "(");
         emit_expr(g, (e-> lhs ));
         printf("%s %s %s", " ", op_to_c((e-> op_code )), " ");
@@ -10183,15 +13246,85 @@ void   emit_expr (CG*   g, Expr*   e) {
     if (((e-> kind )  ==  EX_UNARY)) {
         if (((e-> op_code )  ==  UN_TRY)) {
             Type*   inner_ty = infer_for_codegen(g, (e-> operand ));
-            if (((((inner_ty  ==  NULL)  ||  ((inner_ty-> kind )  !=  TY_RESULT))  ||  ((g-> current_ret_ty )  ==  NULL))  ||  (((g-> current_ret_ty )-> kind )  !=  TY_RESULT))) {
+            Type*   ret_ty = (g-> current_ret_ty );
+            if (((inner_ty  ==  NULL)  ||  (ret_ty  ==  NULL))) {
+                printf("%s", "/* invalid `?` */ 0");
+                return;
+            }
+            int   inner_kind = (inner_ty-> kind );
+            int   ret_kind = (ret_ty-> kind );
+            if ((((inner_kind  !=  TY_RESULT)  &&  (inner_kind  !=  TY_OPTION))  &&  (inner_kind  !=  TY_OPT_RESULT))) {
+                printf("%s", "/* invalid `?` */ 0");
+                return;
+            }
+            if ((((ret_kind  !=  TY_RESULT)  &&  (ret_kind  !=  TY_OPTION))  &&  (ret_kind  !=  TY_OPT_RESULT))) {
                 printf("%s", "/* invalid `?` */ 0");
                 return;
             }
             const char*   m_in = mangle_type((inner_ty-> inner ));
-            const char*   m_out = mangle_type(((g-> current_ret_ty )-> inner ));
-            printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_result_", m_in), "_t __r = ("));
+            const char*   m_out = mangle_type((ret_ty-> inner ));
+            const char*   struct_pref = "__glide_result_";
+            if ((inner_kind  ==  TY_OPTION)) {
+                (struct_pref  =  "__glide_option_");
+            }
+            if ((inner_kind  ==  TY_OPT_RESULT)) {
+                (struct_pref  =  "__glide_optres_");
+            }
+            printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat("({ ", struct_pref), m_in), "_t __r = ("));
             emit_expr(g, (e-> operand ));
-            printf("%s", __glide_string_concat(__glide_string_concat("); if (!__r.ok) return __glide_err_", m_out), "(__r.err); __r.val; })"));
+            printf("%s", "); ");
+            int   nd = Vector_len__Expr((g-> err_defer_stack ));
+            if ((inner_kind  ==  TY_RESULT)) {
+                printf("%s", "if (!__r.ok) { ");
+                for (int   i = (nd  -  1); (i  >=  0); (i  =  (i  -  1))) {
+                    Expr   ex = Vector_get__Expr((g-> err_defer_stack ), i);
+                    emit_expr(g, (&ex));
+                    printf("%s", "; ");
+                }
+                if ((ret_kind  ==  TY_RESULT)) {
+                    printf("%s", __glide_string_concat(__glide_string_concat("return __glide_err_", m_out), "(__r.err); } __r.val; })"));
+                } else {
+                    if ((ret_kind  ==  TY_OPT_RESULT)) {
+                        printf("%s", __glide_string_concat(__glide_string_concat("return __glide_optres_err_", m_out), "(__r.err); } __r.val; })"));
+                    } else {
+                        printf("%s", __glide_string_concat(__glide_string_concat("return __glide_none_", m_out), "(); } __r.val; })"));
+                    }
+                }
+                return;
+            }
+            if ((inner_kind  ==  TY_OPTION)) {
+                printf("%s", "if (!__r.has) { ");
+                for (int   i = (nd  -  1); (i  >=  0); (i  =  (i  -  1))) {
+                    Expr   ex = Vector_get__Expr((g-> err_defer_stack ), i);
+                    emit_expr(g, (&ex));
+                    printf("%s", "; ");
+                }
+                if ((ret_kind  ==  TY_OPTION)) {
+                    printf("%s", __glide_string_concat(__glide_string_concat("return __glide_none_", m_out), "(); } __r.val; })"));
+                } else {
+                    if ((ret_kind  ==  TY_OPT_RESULT)) {
+                        printf("%s", __glide_string_concat(__glide_string_concat("return __glide_optres_none_", m_out), "(); } __r.val; })"));
+                    } else {
+                        printf("%s", __glide_string_concat(__glide_string_concat("return __glide_err_", m_out), "(\"none-coerced\"); } __r.val; })"));
+                    }
+                }
+                return;
+            }
+            printf("%s", "if (__r.tag != 0) { ");
+            for (int   i = (nd  -  1); (i  >=  0); (i  =  (i  -  1))) {
+                Expr   ex = Vector_get__Expr((g-> err_defer_stack ), i);
+                emit_expr(g, (&ex));
+                printf("%s", "; ");
+            }
+            if ((ret_kind  ==  TY_OPT_RESULT)) {
+                printf("%s", __glide_string_concat(__glide_string_concat("__glide_optres_", m_out), "_t __pr; __pr.tag = __r.tag; __pr.err = __r.err; return __pr; } __r.val; })"));
+            } else {
+                if ((ret_kind  ==  TY_RESULT)) {
+                    printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("if (__r.tag == 1) return __glide_err_", m_out), "(\"none-coerced\"); "), "return __glide_err_"), m_out), "(__r.err); } __r.val; })"));
+                } else {
+                    printf("%s", __glide_string_concat(__glide_string_concat("return __glide_none_", m_out), "(); } __r.val; })"));
+                }
+            }
             return;
         }
         printf("%s", __glide_string_concat("(", unop_to_c((e-> op_code ))));
@@ -10479,12 +13612,12 @@ void   emit_expr (CG*   g, Expr*   e) {
         if (((recv_ty  !=  NULL)  &&  ((((recv_ty-> kind )  ==  TY_POINTER)  ||  ((recv_ty-> kind )  ==  TY_BORROW))  ||  ((recv_ty-> kind )  ==  TY_BORROW_MUT)))) {
             printf("%s", "(");
             emit_expr(g, (e-> lhs ));
-            printf("%s %s %s", "->", (e-> field ), ")");
+            printf("%s %s %s", "->", c_safe_ident((e-> field )), ")");
             return;
         }
         printf("%s", "(");
         emit_expr(g, (e-> lhs ));
-        printf("%s %s %s", ".", (e-> field ), ")");
+        printf("%s %s %s", ".", c_safe_ident((e-> field )), ")");
         return;
     }
     if (((e-> kind )  ==  EX_INDEX)) {
@@ -10539,6 +13672,18 @@ void   emit_expr (CG*   g, Expr*   e) {
             return;
         }
         const char*   ty = resolve_type_prefix(g, (e-> str_val ));
+        if (HashMap_contains__Stmt((g-> enums ), ty)) {
+            Stmt   edef = HashMap_get__Stmt((g-> enums ), ty);
+            if (((edef. enum_variants )  !=  NULL)) {
+                for (int   i = 0; (i  <  Vector_len__EnumVariant((edef. enum_variants ))); i++) {
+                    EnumVariant   v = Vector_get__EnumVariant((edef. enum_variants ), i);
+                    if ((__glide_string_eq((v. name ), (e-> field ))  &&  (((v. fields )  ==  NULL)  ||  (Vector_len__Type((v. fields ))  ==  0)))) {
+                        printf("%s %s %s %s %s", "((", ty, "){.tag = ", __glide_string_concat(__glide_string_concat(ty, "_"), (e-> field )), "})");
+                        return;
+                    }
+                }
+            }
+        }
         printf("%s", __glide_string_concat(__glide_string_concat(ty, "_"), (e-> field )));
         return;
     }
@@ -10579,7 +13724,19 @@ void   emit_expr (CG*   g, Expr*   e) {
                         emit_expr(g, (&a));
                         printf("%s", ")");
                     } else {
-                        emit_expr(g, (&a));
+                        if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "i64")  ||  __glide_string_eq((at-> name ), "isize"))  ||  __glide_string_eq((at-> name ), "long")))) {
+                            printf("%s", "(long long)(");
+                            emit_expr(g, (&a));
+                            printf("%s", ")");
+                        } else {
+                            if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "u64")  ||  __glide_string_eq((at-> name ), "usize"))  ||  __glide_string_eq((at-> name ), "ulong")))) {
+                                printf("%s", "(unsigned long long)(");
+                                emit_expr(g, (&a));
+                                printf("%s", ")");
+                            } else {
+                                emit_expr(g, (&a));
+                            }
+                        }
                     }
                 }
             }
@@ -10628,7 +13785,20 @@ void   emit_expr (CG*   g, Expr*   e) {
                 for (int   j = 1; (j  <  Vector_len__Expr((e-> args ))); j++) {
                     printf("%s", ", ");
                     Expr   a = Vector_get__Expr((e-> args ), j);
-                    emit_expr(g, (&a));
+                    Type*   at = infer_for_codegen(g, (&a));
+                    if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "i64")  ||  __glide_string_eq((at-> name ), "isize"))  ||  __glide_string_eq((at-> name ), "long")))) {
+                        printf("%s", "(long long)(");
+                        emit_expr(g, (&a));
+                        printf("%s", ")");
+                    } else {
+                        if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "u64")  ||  __glide_string_eq((at-> name ), "usize"))  ||  __glide_string_eq((at-> name ), "ulong")))) {
+                            printf("%s", "(unsigned long long)(");
+                            emit_expr(g, (&a));
+                            printf("%s", ")");
+                        } else {
+                            emit_expr(g, (&a));
+                        }
+                    }
                 }
             }
             printf("%s", ")");
@@ -10644,7 +13814,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                 if ((i  >  0)) {
                     printf("%s", ", ");
                 }
-                printf("%s %s %s", ".", Vector_get__string((e-> field_names ), i), " = ");
+                printf("%s %s %s", ".", c_safe_ident(Vector_get__string((e-> field_names ), i)), " = ");
                 Expr   v = Vector_get__Expr((e-> args ), i);
                 emit_expr(g, (&v));
             }
@@ -10769,12 +13939,34 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_err_", m));
             }
         }
+        if ((((((((s-> let_value )  !=  NULL)  &&  ((s-> let_ty )  !=  NULL))  &&  (((s-> let_ty )-> kind )  ==  TY_OPTION))  &&  (((s-> let_value )-> kind )  ==  EX_CALL))  &&  (((s-> let_value )-> lhs )  !=  NULL))  &&  ((((s-> let_value )-> lhs )-> kind )  ==  EX_IDENT))) {
+            const char*   m = mangle_type(((s-> let_ty )-> inner ));
+            if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "some")) {
+                ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_some_", m));
+            }
+            if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "none")) {
+                ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_none_", m));
+            }
+        }
+        if ((((((((s-> let_value )  !=  NULL)  &&  ((s-> let_ty )  !=  NULL))  &&  (((s-> let_ty )-> kind )  ==  TY_OPT_RESULT))  &&  (((s-> let_value )-> kind )  ==  EX_CALL))  &&  (((s-> let_value )-> lhs )  !=  NULL))  &&  ((((s-> let_value )-> lhs )-> kind )  ==  EX_IDENT))) {
+            const char*   m = mangle_type(((s-> let_ty )-> inner ));
+            if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "some")) {
+                ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_some_", m));
+            }
+            if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "none")) {
+                ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_none_", m));
+            }
+            if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "err")) {
+                ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_err_", m));
+            }
+        }
         if ((((s-> let_value )  !=  NULL)  &&  (((s-> let_value )-> kind )  ==  EX_CALL))) {
             bool   _ok = try_mono_call(g, (s-> let_value ), (s-> let_ty ));
         }
         ind(depth);
+        const char*   cname = c_safe_ident((s-> name ));
         if (((s-> let_ty )  !=  NULL)) {
-            printf("%s %s %s", type_to_c((s-> let_ty )), " ", (s-> name ));
+            printf("%s %s %s", type_to_c((s-> let_ty )), " ", cname);
             CG_declare(g, (s-> name ), (s-> let_ty ));
         } else {
             if (((s-> let_value )  !=  NULL)) {
@@ -10783,7 +13975,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                     for (int   k = 0; (k  <  Vector_len__AnonFn((g-> anon_fns ))); k++) {
                         AnonFn   af = Vector_get__AnonFn((g-> anon_fns ), k);
                         if (__glide_string_eq((af. name ), ((s-> let_value )-> str_val ))) {
-                            printf("%s %s", "void* ", (s-> name ));
+                            printf("%s %s", "void* ", cname);
                             Type*   void_ptr = ty_pointer(ty_named("void"));
                             CG_declare(g, (s-> name ), void_ptr);
                             (handled  =  true);
@@ -10794,14 +13986,14 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 if ((!handled)) {
                     Type*   vt = infer_for_codegen(g, (s-> let_value ));
                     if ((vt  !=  NULL)) {
-                        printf("%s %s %s", type_to_c(vt), " ", (s-> name ));
+                        printf("%s %s %s", type_to_c(vt), " ", cname);
                         CG_declare(g, (s-> name ), vt);
                     } else {
-                        printf("%s %s", "/* infer */ int ", (s-> name ));
+                        printf("%s %s", "/* infer */ int ", cname);
                     }
                 }
             } else {
-                printf("%s %s", "/* infer */ int ", (s-> name ));
+                printf("%s %s", "/* infer */ int ", cname);
             }
         }
         if (struct_lit_auto) {
@@ -10813,7 +14005,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             printf("%s\n", "");
             ind(depth);
             printf("%s", "*");
-            printf("%s", (s-> name ));
+            printf("%s", cname);
             printf("%s", " = ");
             emit_expr(g, (s-> let_value ));
             printf("%s\n", ";");
@@ -10863,6 +14055,10 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         return;
     }
     if (((s-> kind )  ==  ST_RETURN)) {
+        bool   is_err_return = false;
+        if (((((((s-> expr_value )  !=  NULL)  &&  (((s-> expr_value )-> kind )  ==  EX_CALL))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "err"))) {
+            (is_err_return  =  true);
+        }
         if ((((((((s-> expr_value )  !=  NULL)  &&  ((g-> current_ret_ty )  !=  NULL))  &&  (((g-> current_ret_ty )-> kind )  ==  TY_RESULT))  &&  (((s-> expr_value )-> kind )  ==  EX_CALL))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
             const char*   m = mangle_type(((g-> current_ret_ty )-> inner ));
             if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "ok")) {
@@ -10872,7 +14068,29 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_err_", m));
             }
         }
-        bool   has_cleanup = ((Vector_len__Expr((g-> defer_stack ))  >  0)  ||  (Vector_len__Expr((g-> auto_drop_stack ))  >  0));
+        if ((((((((s-> expr_value )  !=  NULL)  &&  ((g-> current_ret_ty )  !=  NULL))  &&  (((g-> current_ret_ty )-> kind )  ==  TY_OPTION))  &&  (((s-> expr_value )-> kind )  ==  EX_CALL))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
+            const char*   m = mangle_type(((g-> current_ret_ty )-> inner ));
+            if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "some")) {
+                ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_some_", m));
+            }
+            if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "none")) {
+                ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_none_", m));
+            }
+        }
+        if ((((((((s-> expr_value )  !=  NULL)  &&  ((g-> current_ret_ty )  !=  NULL))  &&  (((g-> current_ret_ty )-> kind )  ==  TY_OPT_RESULT))  &&  (((s-> expr_value )-> kind )  ==  EX_CALL))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
+            const char*   m = mangle_type(((g-> current_ret_ty )-> inner ));
+            if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "some")) {
+                ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_some_", m));
+            }
+            if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "none")) {
+                ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_none_", m));
+            }
+            if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "err")) {
+                ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_err_", m));
+            }
+        }
+        bool   has_err_defers = (is_err_return  &&  (Vector_len__Expr((g-> err_defer_stack ))  >  0));
+        bool   has_cleanup = (((Vector_len__Expr((g-> defer_stack ))  >  0)  ||  (Vector_len__Expr((g-> auto_drop_stack ))  >  0))  ||  has_err_defers);
         if ((((s-> expr_value )  !=  NULL)  &&  has_cleanup)) {
             ind(depth);
             printf("%s", "__typeof__(");
@@ -10880,10 +14098,16 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             printf("%s", ") __glide_ret = ");
             emit_expr(g, (s-> expr_value ));
             printf("%s\n", ";");
+            if (has_err_defers) {
+                CG_emit_err_defers_reverse(g, depth);
+            }
             CG_emit_deferred_reverse(g, depth);
             ind(depth);
             printf("%s\n", "return __glide_ret;");
         } else {
+            if (has_err_defers) {
+                CG_emit_err_defers_reverse(g, depth);
+            }
             CG_emit_deferred_reverse(g, depth);
             ind(depth);
             printf("%s", "return");
@@ -10898,6 +14122,12 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_DEFER)) {
         if (((s-> expr_value )  !=  NULL)) {
             Vector_push__Expr((g-> defer_stack ), (*(s-> expr_value )));
+        }
+        return;
+    }
+    if (((s-> kind )  ==  ST_DEFER_ERR)) {
+        if (((s-> expr_value )  !=  NULL)) {
+            Vector_push__Expr((g-> err_defer_stack ), (*(s-> expr_value )));
         }
         return;
     }
@@ -11040,6 +14270,186 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         printf("%s\n", "}");
         return;
     }
+    if (((s-> kind )  ==  ST_SELECT)) {
+        Vector__SelectArm*   arms = (s-> select_arms );
+        if (((arms  ==  NULL)  ||  (Vector_len__SelectArm(arms)  ==  0))) {
+            ind(depth);
+            printf("%s\n", "/* empty select */");
+            return;
+        }
+        const char*   id_str = int_to_str((((s-> line )  *  1000)  +  (s-> column )));
+        const char*   end_label = __glide_string_concat("__sel_end_", id_str);
+        int   default_idx = (-1);
+        for (int   i = 0; (i  <  Vector_len__SelectArm(arms)); i++) {
+            SelectArm   a = Vector_get__SelectArm(arms, i);
+            if (((a. kind )  ==  SEL_DEFAULT)) {
+                (default_idx  =  i);
+            }
+        }
+        ind(depth);
+        printf("%s\n", "{");
+        for (int   i = 0; (i  <  Vector_len__SelectArm(arms)); i++) {
+            SelectArm   a = Vector_get__SelectArm(arms, i);
+            if ((((a. kind )  ==  SEL_RECV)  ||  ((a. kind )  ==  SEL_RECV_SOME))) {
+                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
+                Type*   stripped = strip_ptr(chan_ty);
+                if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
+                    ind((depth  +  1));
+                    printf("%s\n", "/* select: arm receiver is not a chan<T> */");
+                    continue;
+                }
+                Type   inner = Vector_get__Type((stripped-> args ), 0);
+                const char*   tc = type_to_c((&inner));
+                ind((depth  +  1));
+                printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(tc, " __sel_tmp_"), int_to_str(i)), ";"));
+            }
+        }
+        ind((depth  +  1));
+        printf("%s\n", __glide_string_concat(__glide_string_concat("int __sel_iters_", id_str), " = 0;"));
+        ind((depth  +  1));
+        printf("%s\n", "while (1) {");
+        for (int   i = 0; (i  <  Vector_len__SelectArm(arms)); i++) {
+            SelectArm   a = Vector_get__SelectArm(arms, i);
+            if (((a. kind )  ==  SEL_DEFAULT)) {
+                continue;
+            }
+            if ((((a. kind )  ==  SEL_RECV)  ||  ((a. kind )  ==  SEL_RECV_SOME))) {
+                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
+                Type*   stripped = strip_ptr(chan_ty);
+                if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
+                    ind((depth  +  2));
+                    printf("%s\n", "/* select arm: receiver is not a chan<T> */");
+                    continue;
+                }
+                Type   inner = Vector_get__Type((stripped-> args ), 0);
+                const char*   m = mangle_type((&inner));
+                const char*   tc = type_to_c((&inner));
+                const char*   tmp = __glide_string_concat("__sel_tmp_", int_to_str(i));
+                ind((depth  +  2));
+                printf("%s", __glide_string_concat(__glide_string_concat("if (__glide_try_recv_", m), "("));
+                emit_expr(g, (a. chan_expr ));
+                printf("%s\n", __glide_string_concat(__glide_string_concat(", &", tmp), ")) {"));
+                ind((depth  +  3));
+                printf("%s", __glide_string_concat(__glide_string_concat("__glide_wake_send_", m), "("));
+                emit_expr(g, (a. chan_expr ));
+                printf("%s\n", ");");
+                ind((depth  +  3));
+                printf("%s\n", "{");
+                ind((depth  +  4));
+                printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(tc, " "), (a. bind_name )), " = "), tmp), ";"));
+                CG_declare(g, (a. bind_name ), (&inner));
+                if (((a. body )  !=  NULL)) {
+                    int   saved = Vector_len__Expr((g-> auto_drop_stack ));
+                    for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
+                        Stmt   bs = Vector_get__Stmt((a. body ), j);
+                        emit_stmt(g, (&bs), (depth  +  4));
+                    }
+                    CG_emit_block_drops(g, saved, (depth  +  4));
+                }
+                ind((depth  +  4));
+                printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
+                ind((depth  +  3));
+                printf("%s\n", "}");
+                ind((depth  +  2));
+                printf("%s\n", "}");
+            }
+            if (((a. kind )  ==  SEL_RECV_NONE)) {
+                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
+                Type*   stripped = strip_ptr(chan_ty);
+                if ((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))) {
+                    ind((depth  +  2));
+                    printf("%s\n", "/* select arm: none receiver is not a chan<T> */");
+                    continue;
+                }
+                ind((depth  +  2));
+                printf("%s", "if (atomic_load_explicit(&((");
+                emit_expr(g, (a. chan_expr ));
+                printf("%s\n", ")->closed), memory_order_acquire)) {");
+                ind((depth  +  3));
+                printf("%s\n", "{");
+                if (((a. body )  !=  NULL)) {
+                    int   saved = Vector_len__Expr((g-> auto_drop_stack ));
+                    for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
+                        Stmt   bs = Vector_get__Stmt((a. body ), j);
+                        emit_stmt(g, (&bs), (depth  +  3));
+                    }
+                    CG_emit_block_drops(g, saved, (depth  +  3));
+                }
+                ind((depth  +  3));
+                printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
+                ind((depth  +  2));
+                printf("%s\n", "}");
+                ind((depth  +  2));
+                printf("%s\n", "}");
+            }
+            if (((a. kind )  ==  SEL_SEND)) {
+                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
+                Type*   stripped = strip_ptr(chan_ty);
+                if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
+                    ind((depth  +  2));
+                    printf("%s\n", "/* select arm: send receiver is not a chan<T> */");
+                    continue;
+                }
+                Type   inner = Vector_get__Type((stripped-> args ), 0);
+                const char*   m = mangle_type((&inner));
+                ind((depth  +  2));
+                printf("%s", __glide_string_concat(__glide_string_concat("if (__glide_try_send_", m), "("));
+                emit_expr(g, (a. chan_expr ));
+                printf("%s", ", ");
+                emit_expr(g, (a. send_value ));
+                printf("%s\n", ")) {");
+                ind((depth  +  3));
+                printf("%s", __glide_string_concat(__glide_string_concat("__glide_wake_recv_", m), "("));
+                emit_expr(g, (a. chan_expr ));
+                printf("%s\n", ");");
+                ind((depth  +  3));
+                printf("%s\n", "{");
+                if (((a. body )  !=  NULL)) {
+                    int   saved = Vector_len__Expr((g-> auto_drop_stack ));
+                    for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
+                        Stmt   bs = Vector_get__Stmt((a. body ), j);
+                        emit_stmt(g, (&bs), (depth  +  3));
+                    }
+                    CG_emit_block_drops(g, saved, (depth  +  3));
+                }
+                ind((depth  +  3));
+                printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
+                ind((depth  +  2));
+                printf("%s\n", "}");
+                ind((depth  +  2));
+                printf("%s\n", "}");
+            }
+        }
+        if ((default_idx  >=  0)) {
+            SelectArm   a = Vector_get__SelectArm(arms, default_idx);
+            ind((depth  +  2));
+            printf("%s\n", "{");
+            if (((a. body )  !=  NULL)) {
+                int   saved = Vector_len__Expr((g-> auto_drop_stack ));
+                for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
+                    Stmt   bs = Vector_get__Stmt((a. body ), j);
+                    emit_stmt(g, (&bs), (depth  +  3));
+                }
+                CG_emit_block_drops(g, saved, (depth  +  3));
+            }
+            ind((depth  +  3));
+            printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
+            ind((depth  +  2));
+            printf("%s\n", "}");
+        } else {
+            ind((depth  +  2));
+            printf("%s\n", __glide_string_concat(__glide_string_concat("if (__sel_iters_", id_str), " < 64) { yield_now(); } else { sleep_ms(1); }"));
+            ind((depth  +  2));
+            printf("%s\n", __glide_string_concat(__glide_string_concat("__sel_iters_", id_str), "++;"));
+        }
+        ind((depth  +  1));
+        printf("%s\n", "}");
+        ind(depth);
+        printf("%s\n", __glide_string_concat(end_label, ":;"));
+        ind(depth);
+        printf("%s\n", "}");
+        return;
+    }
     if (((s-> kind )  ==  ST_WHILE)) {
         ind(depth);
         printf("%s", "while (");
@@ -11062,11 +14472,12 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         printf("%s", "for (");
         if (((s-> for_init )  !=  NULL)) {
             if ((((s-> for_init )-> kind )  ==  ST_LET)) {
+                const char*   fname = c_safe_ident(((s-> for_init )-> name ));
                 if ((((s-> for_init )-> let_ty )  !=  NULL)) {
-                    printf("%s %s %s", type_to_c(((s-> for_init )-> let_ty )), " ", ((s-> for_init )-> name ));
+                    printf("%s %s %s", type_to_c(((s-> for_init )-> let_ty )), " ", fname);
                     CG_declare(g, ((s-> for_init )-> name ), ((s-> for_init )-> let_ty ));
                 } else {
-                    printf("%s %s", "int ", ((s-> for_init )-> name ));
+                    printf("%s %s", "int ", fname);
                     CG_declare(g, ((s-> for_init )-> name ), ty_named("int"));
                 }
                 if ((((s-> for_init )-> let_value )  !=  NULL)) {
@@ -11133,7 +14544,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                         printf("%s", "__typeof__(");
                         printf("%s", payload);
                         printf("%s", ") ");
-                        printf("%s", Vector_get__string((a. bindings ), 0));
+                        printf("%s", c_safe_ident(Vector_get__string((a. bindings ), 0)));
                         printf("%s", " = ");
                         printf("%s", payload);
                         printf("%s\n", ";");
@@ -11146,7 +14557,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                             printf("%s", ".f");
                             printf("%d", k);
                             printf("%s", ") ");
-                            printf("%s", Vector_get__string((a. bindings ), k));
+                            printf("%s", c_safe_ident(Vector_get__string((a. bindings ), k)));
                             printf("%s", " = ");
                             printf("%s", payload);
                             printf("%s", ".f");
@@ -11198,7 +14609,7 @@ void   emit_fn_signature (Stmt*   s) {
     if ((s-> is_naked )) {
         printf("%s", "__attribute__((naked)) ");
     }
-    printf("%s %s %s %s", type_to_c((s-> fn_ret_ty )), " ", (s-> name ), "(");
+    printf("%s %s %s %s", type_to_c((s-> fn_ret_ty )), " ", c_safe_ident((s-> name )), "(");
     if ((((s-> fn_params )  ==  NULL)  ||  (Vector_len__Param((s-> fn_params ))  ==  0))) {
         if ((s-> is_variadic )) {
             printf("%s", "...");
@@ -11211,7 +14622,7 @@ void   emit_fn_signature (Stmt*   s) {
                 printf("%s", ", ");
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+            printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
         }
         if ((s-> is_variadic )) {
             printf("%s", ", ...");
@@ -11261,6 +14672,28 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
             }
         }
     }
+    if ((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  ((e-> args )  !=  NULL))) {
+        const char*   cname = ((e-> lhs )-> str_val );
+        if (HashMap_contains__Stmt((g-> fns ), cname)) {
+            Stmt   fn_def = HashMap_get__Stmt((g-> fns ), cname);
+            if (((fn_def. fn_params )  !=  NULL)) {
+                int   nparams = Vector_len__Param((fn_def. fn_params ));
+                int   nargs = Vector_len__Expr((e-> args ));
+                int   limit = nargs;
+                if ((nparams  <  limit)) {
+                    (limit  =  nparams);
+                }
+                for (int   i = 0; (i  <  limit); i++) {
+                    Expr   a = Vector_get__Expr((e-> args ), i);
+                    Param   p = Vector_get__Param((fn_def. fn_params ), i);
+                    Type*   resolved = constrain_walk((&a), (p. ty ), var);
+                    if ((((((resolved  !=  NULL)  &&  ((resolved-> kind )  ==  TY_POINTER))  &&  ((resolved-> inner )  !=  NULL))  &&  (((resolved-> inner )-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq(((resolved-> inner )-> name ), gen_name))) {
+                        return resolved;
+                    }
+                }
+            }
+        }
+    }
     if (((e-> lhs )  !=  NULL)) {
         Type*   r = try_constrain_from_expr(g, (e-> lhs ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
@@ -11286,6 +14719,33 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
             if ((r  !=  NULL)) {
                 return r;
             }
+        }
+    }
+    return NULL;
+}
+
+Type*   constrain_walk (Expr*   arg, Type*   ty, const char*   var) {
+    if (((arg  ==  NULL)  ||  (ty  ==  NULL))) {
+        return NULL;
+    }
+    if ((((arg-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((arg-> str_val ), var))) {
+        return ty;
+    }
+    if ((((arg-> kind )  ==  EX_UNARY)  &&  ((arg-> operand )  !=  NULL))) {
+        if (((arg-> op_code )  ==  UN_DEREF)) {
+            return constrain_walk((arg-> operand ), ty_pointer(ty), var);
+        }
+        if (((arg-> op_code )  ==  UN_ADDR)) {
+            if ((((ty-> kind )  !=  TY_BORROW)  ||  ((ty-> inner )  ==  NULL))) {
+                return NULL;
+            }
+            return constrain_walk((arg-> operand ), (ty-> inner ), var);
+        }
+        if (((arg-> op_code )  ==  UN_ADDR_MUT)) {
+            if ((((ty-> kind )  !=  TY_BORROW_MUT)  ||  ((ty-> inner )  ==  NULL))) {
+                return NULL;
+            }
+            return constrain_walk((arg-> operand ), (ty-> inner ), var);
         }
     }
     return NULL;
@@ -11498,10 +14958,13 @@ void   emit_fn (CG*   g, Stmt*   s) {
     Type*   saved_ret = (g-> current_ret_ty );
     ((g-> current_ret_ty )  =  (s-> fn_ret_ty ));
     Vector__Expr*   saved_defer = (g-> defer_stack );
+    Vector__Expr*   saved_err_defer = (g-> err_defer_stack );
     Vector__Expr*   saved_drop = (g-> auto_drop_stack );
     Vector__Expr*   new_defer = Vector_new__Expr();
+    Vector__Expr*   new_err_defer = Vector_new__Expr();
     Vector__Expr*   new_drop = Vector_new__Expr();
     ((g-> defer_stack )  =  new_defer);
+    ((g-> err_defer_stack )  =  new_err_defer);
     ((g-> auto_drop_stack )  =  new_drop);
     if (((s-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
@@ -11517,6 +14980,7 @@ void   emit_fn (CG*   g, Stmt*   s) {
     }
     CG_emit_deferred_reverse(g, 1);
     ((g-> defer_stack )  =  saved_defer);
+    ((g-> err_defer_stack )  =  saved_err_defer);
     ((g-> auto_drop_stack )  =  saved_drop);
     ((g-> current_ret_ty )  =  saved_ret);
     printf("%s\n", "}");
@@ -11550,7 +15014,7 @@ void   emit_impl (CG*   g, Stmt*   s) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((m. fn_params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
             }
         }
         printf("%s\n", ") {");
@@ -11558,10 +15022,13 @@ void   emit_impl (CG*   g, Stmt*   s) {
         Type*   saved_ret = (g-> current_ret_ty );
         ((g-> current_ret_ty )  =  (m. fn_ret_ty ));
         Vector__Expr*   saved_defer = (g-> defer_stack );
+        Vector__Expr*   saved_err_defer = (g-> err_defer_stack );
         Vector__Expr*   saved_drop = (g-> auto_drop_stack );
         Vector__Expr*   nd = Vector_new__Expr();
+        Vector__Expr*   ned = Vector_new__Expr();
         Vector__Expr*   nadr = Vector_new__Expr();
         ((g-> defer_stack )  =  nd);
+        ((g-> err_defer_stack )  =  ned);
         ((g-> auto_drop_stack )  =  nadr);
         if (((m. fn_params )  !=  NULL)) {
             for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
@@ -11577,6 +15044,7 @@ void   emit_impl (CG*   g, Stmt*   s) {
         }
         CG_emit_deferred_reverse(g, 1);
         ((g-> defer_stack )  =  saved_defer);
+        ((g-> err_defer_stack )  =  saved_err_defer);
         ((g-> auto_drop_stack )  =  saved_drop);
         ((g-> current_ret_ty )  =  saved_ret);
         printf("%s\n", "}");
@@ -11607,7 +15075,7 @@ void   emit_impl_fwd_decls (CG*   g, Stmt*   s) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((m. fn_params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
             }
         }
         printf("%s\n", ");");
@@ -11615,15 +15083,16 @@ void   emit_impl_fwd_decls (CG*   g, Stmt*   s) {
 }
 
 void   emit_struct (Stmt*   s) {
-    printf("%s %s %s\n", "typedef struct ", (s-> name ), " {");
+    const char*   cname = c_safe_ident((s-> name ));
+    printf("%s %s %s\n", "typedef struct ", cname, " {");
     if (((s-> struct_fields )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
             Field   f = Vector_get__Field((s-> struct_fields ), i);
-            printf("%s %s %s %s", "    ", type_to_c((f. ty )), " ", (f. name ));
+            printf("%s %s %s %s", "    ", type_to_c((f. ty )), " ", c_safe_ident((f. name )));
             printf("%s\n", ";");
         }
     }
-    printf("%s %s %s\n", "} ", (s-> name ), ";");
+    printf("%s %s %s\n", "} ", cname, ";");
     printf("%s\n", "");
 }
 
@@ -11637,7 +15106,8 @@ void   emit_enum (Stmt*   s) {
             }
         }
     }
-    printf("%s %s %s\n", "typedef struct ", (s-> name ), " {");
+    const char*   ename = c_safe_ident((s-> name ));
+    printf("%s %s %s\n", "typedef struct ", ename, " {");
     printf("%s\n", "    int tag;");
     if (has_payload) {
         printf("%s\n", "    union {");
@@ -11674,12 +15144,12 @@ void   emit_enum (Stmt*   s) {
         }
         printf("%s\n", "    } data;");
     }
-    printf("%s %s %s\n", "} ", (s-> name ), ";");
+    printf("%s %s %s\n", "} ", ename, ";");
     if (((s-> enum_variants )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__EnumVariant((s-> enum_variants ))); i++) {
             EnumVariant   v = Vector_get__EnumVariant((s-> enum_variants ), i);
             printf("%s", "#define ");
-            printf("%s", (s-> name ));
+            printf("%s", ename);
             printf("%s", "_");
             printf("%s", (v. name ));
             printf("%s", " ");
@@ -11912,6 +15382,18 @@ void   emit_program (Vector__Stmt*   program) {
     emit_dyn_runtime(g, program);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
+        if (((((s. kind )  ==  ST_FN)  &&  ((s. type_params )  !=  NULL))  &&  (Vector_len__string((s. type_params ))  >  0))) {
+            continue;
+        }
+        if (((((s. kind )  ==  ST_STRUCT)  &&  ((s. type_params )  !=  NULL))  &&  (Vector_len__string((s. type_params ))  >  0))) {
+            continue;
+        }
+        if (((((s. kind )  ==  ST_IMPL)  &&  ((s. type_params )  !=  NULL))  &&  (Vector_len__string((s. type_params ))  >  0))) {
+            continue;
+        }
+        if (((s. kind )  ==  ST_TRAIT)) {
+            continue;
+        }
         collect_result_in_stmt(g, (&s));
     }
     for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
@@ -11947,6 +15429,105 @@ void   emit_program (Vector__Stmt*   program) {
         }
     }
     emit_result_runtime(g);
+    for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
+        Type   t = Vector_get__Type((g-> option_types ), i);
+        if (((t. kind )  !=  TY_NAMED)) {
+            continue;
+        }
+        if ((((t. name )  ==  NULL)  ||  __glide_string_eq((t. name ), ""))) {
+            continue;
+        }
+        if (HashMap_contains__bool((g-> emitted_named ), (t. name ))) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(program)); j++) {
+            Stmt   s = Vector_get__Stmt(program, j);
+            if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+                continue;
+            }
+            if ((!__glide_string_eq((s. name ), (t. name )))) {
+                continue;
+            }
+            if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+                printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                emit_struct((&s));
+                HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+            } else {
+                if (((s. kind )  ==  ST_ENUM)) {
+                    printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                    emit_enum((&s));
+                    HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+                }
+            }
+        }
+    }
+    emit_option_runtime(g);
+    for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
+        Type   t = Vector_get__Type((g-> optres_types ), i);
+        if (((t. kind )  !=  TY_NAMED)) {
+            continue;
+        }
+        if ((((t. name )  ==  NULL)  ||  __glide_string_eq((t. name ), ""))) {
+            continue;
+        }
+        if (HashMap_contains__bool((g-> emitted_named ), (t. name ))) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Stmt(program)); j++) {
+            Stmt   s = Vector_get__Stmt(program, j);
+            if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
+                continue;
+            }
+            if ((!__glide_string_eq((s. name ), (t. name )))) {
+                continue;
+            }
+            if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+                printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                emit_struct((&s));
+                HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+            } else {
+                if (((s. kind )  ==  ST_ENUM)) {
+                    printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
+                    emit_enum((&s));
+                    HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
+                }
+            }
+        }
+    }
+    emit_optres_runtime(g);
+    for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
+        Stmt   s = Vector_get__Stmt(program, i);
+        if (((s. kind )  !=  ST_IMPL)) {
+            continue;
+        }
+        if ((((s. impl_trait_name )  ==  NULL)  ||  __glide_string_eq((s. impl_trait_name ), ""))) {
+            continue;
+        }
+        if (((s. assoc_decls )  ==  NULL)) {
+            continue;
+        }
+        if (((s. impl_target )  ==  NULL)) {
+            continue;
+        }
+        const char*   tname = "";
+        if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
+            (tname  =  ((s. impl_target )-> name ));
+        }
+        if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
+            (tname  =  ((s. impl_target )-> name ));
+        }
+        if (__glide_string_eq(tname, "")) {
+            continue;
+        }
+        for (int   j = 0; (j  <  Vector_len__Param((s. assoc_decls ))); j++) {
+            Param   a = Vector_get__Param((s. assoc_decls ), j);
+            if (((a. ty )  ==  NULL)) {
+                continue;
+            }
+            const char*   key = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat((s. impl_trait_name ), "::"), tname), "::"), (a. name ));
+            HashMap_insert__Type((g-> assoc_table ), key, (*(a. ty )));
+        }
+    }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         const char*   mod_path = module_path_from_origin((s. origin ));
@@ -12159,7 +15740,7 @@ void   emit_program (Vector__Stmt*   program) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((af. params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
             }
         }
         printf("%s\n", ");");
@@ -12196,11 +15777,14 @@ void   emit_program (Vector__Stmt*   program) {
         if (((template. fn_params )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Param((template. fn_params ))); i++) {
                 Param   p = Vector_get__Param((template. fn_params ), i);
-                Param   np = (( Param ){. name  = (p. name ), . ty  = subst_type((p. ty ), (template. type_params ), (e. args ))});
+                Type*   pt = subst_type((p. ty ), (template. type_params ), (e. args ));
+                (pt  =  resolve_assoc_recursive(g, pt));
+                Param   np = (( Param ){. name  = (p. name ), . ty  = pt});
                 Vector_push__Param(new_params_v, np);
             }
         }
         Type*   new_ret = subst_type((template. fn_ret_ty ), (template. type_params ), (e. args ));
+        (new_ret  =  resolve_assoc_recursive(g, new_ret));
         Vector__Stmt*   new_body = Vector_new__Stmt();
         if (((template. fn_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((template. fn_body ))); i++) {
@@ -12220,7 +15804,7 @@ void   emit_program (Vector__Stmt*   program) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param(new_params_v, j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
             }
         }
         printf("%s\n", ") {");
@@ -12235,11 +15819,14 @@ void   emit_program (Vector__Stmt*   program) {
             Param   p = Vector_get__Param(new_params_v, j);
             CG_declare(g, (p. name ), (p. ty ));
         }
+        Type*   saved_ret_mono = (g-> current_ret_ty );
+        ((g-> current_ret_ty )  =  new_ret);
         for (int   j = 0; (j  <  Vector_len__Stmt(new_body)); j++) {
             Stmt   b = Vector_get__Stmt(new_body, j);
             emit_stmt(g, (&b), 1);
         }
         CG_emit_deferred_reverse(g, 1);
+        ((g-> current_ret_ty )  =  saved_ret_mono);
         ((g-> defer_stack )  =  saved_d);
         ((g-> auto_drop_stack )  =  saved_dr);
         printf("%s\n", "}");
@@ -12256,7 +15843,7 @@ void   emit_program (Vector__Stmt*   program) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((af. params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", (p. name ));
+                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
             }
         }
         printf("%s\n", ") {");
@@ -12292,17 +15879,18 @@ void   emit_top_const (CG*   g, Stmt*   s) {
     if (((s-> let_value )  ==  NULL)) {
         return;
     }
+    const char*   cname = c_safe_ident((s-> name ));
     if (((((s-> let_ty )  !=  NULL)  &&  (((s-> let_ty )-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq(((s-> let_ty )-> name ), "int")  ||  __glide_string_eq(((s-> let_ty )-> name ), "uint"))  ||  __glide_string_eq(((s-> let_ty )-> name ), "i32")))) {
-        printf("%s %s %s", "#define ", (s-> name ), " ");
+        printf("%s %s %s", "#define ", cname, " ");
         emit_expr(g, (s-> let_value ));
         printf("%s\n", "");
         return;
     }
     printf("%s", "static const ");
     if (((s-> let_ty )  !=  NULL)) {
-        printf("%s %s %s", type_to_c((s-> let_ty )), " ", (s-> name ));
+        printf("%s %s %s", type_to_c((s-> let_ty )), " ", cname);
     } else {
-        printf("%s %s", "int ", (s-> name ));
+        printf("%s %s", "int ", cname);
     }
     printf("%s", " = ");
     if (((((s-> let_ty )  !=  NULL)  &&  (((s-> let_ty )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq(((s-> let_ty )-> name ), "i64"))) {
@@ -12366,6 +15954,9 @@ void   collect_generic_uses_in_stmt (Stmt*   s, Vector__Type*   out) {
     }
     bool   is_generic = (((s-> type_params )  !=  NULL)  &&  (Vector_len__string((s-> type_params ))  >  0));
     if (is_generic) {
+        return;
+    }
+    if (((s-> kind )  ==  ST_TRAIT)) {
         return;
     }
     if (((s-> let_ty )  !=  NULL)) {
@@ -12461,15 +16052,59 @@ void   json_arr_push (JsonValue*   arr, JsonValue*   v) {
     if (((arr  ==  NULL)  ||  ((arr-> kind )  !=  JSON_ARRAY))) {
         return;
     }
+    if ((v  ==  NULL)) {
+        return;
+    }
     Vector_push__JsonValue((arr-> arr ), (*v));
+    free((( void* )v));
 }
 
 void   json_obj_set (JsonValue*   obj, const char*   key, JsonValue*   v) {
     if (((obj  ==  NULL)  ||  ((obj-> kind )  !=  JSON_OBJECT))) {
         return;
     }
+    if ((v  ==  NULL)) {
+        return;
+    }
     Vector_push__string((obj-> obj_keys ), key);
     Vector_push__JsonValue((obj-> obj_vals ), (*v));
+    free((( void* )v));
+}
+
+void   json_free (JsonValue*   v) {
+    if ((v  ==  NULL)) {
+        return;
+    }
+    json_free_contents(v);
+    free((( void* )v));
+}
+
+void   json_free_contents (JsonValue*   v) {
+    if ((v  ==  NULL)) {
+        return;
+    }
+    if (((v-> kind )  ==  JSON_ARRAY)) {
+        if (((v-> arr )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__JsonValue((v-> arr ))); i++) {
+                JsonValue   child = Vector_get__JsonValue((v-> arr ), i);
+                json_free_contents((&child));
+            }
+            Vector_free__JsonValue((v-> arr ));
+        }
+    } else {
+        if (((v-> kind )  ==  JSON_OBJECT)) {
+            if (((v-> obj_vals )  !=  NULL)) {
+                for (int   i = 0; (i  <  Vector_len__JsonValue((v-> obj_vals ))); i++) {
+                    JsonValue   child = Vector_get__JsonValue((v-> obj_vals ), i);
+                    json_free_contents((&child));
+                }
+                Vector_free__JsonValue((v-> obj_vals ));
+            }
+            if (((v-> obj_keys )  !=  NULL)) {
+                Vector_free__string((v-> obj_keys ));
+            }
+        }
+    }
 }
 
 JsonValue*   json_get (JsonValue*   v, const char*   key) {
@@ -12676,17 +16311,19 @@ JsonValue*   jp_string_value (JsonParser*   p) {
     if ((!has_escape)) {
         return json_string(raw);
     }
-    return json_string(jp_unescape(raw));
+    const char*   unescaped = jp_unescape(raw);
+ free((char*)(raw ));     return json_string(unescaped);
 }
 
 const char*   jp_unescape (const char*   raw) {
-    const char*   out = "";
     int   n = __glide_string_len(raw);
+    void*   buf = __glide_palloc((n  +  1));
     int   i = 0;
+    int   o = 0;
     while ((i  <  n)) {
         int   c = __glide_char_to_int(__glide_string_at(raw, i));
         if ((c  !=  92)) {
-            (out  =  __glide_string_concat(out, __glide_string_substring(raw, i, (i  +  1))));
+ ((char*)(buf ))[(o )] = (char)(c );             (o  =  (o  +  1));
             (i  =  (i  +  1));
             continue;
         }
@@ -12696,37 +16333,41 @@ const char*   jp_unescape (const char*   raw) {
         }
         int   e = __glide_char_to_int(__glide_string_at(raw, i));
         (i  =  (i  +  1));
+        int   wc = (-1);
         if ((e  ==  110)) {
-            (out  =  __glide_string_concat(out, "\n"));
-            continue;
+            (wc  =  10);
+        } else {
+            if ((e  ==  116)) {
+                (wc  =  9);
+            } else {
+                if ((e  ==  114)) {
+                    (wc  =  13);
+                } else {
+                    if ((e  ==  34)) {
+                        (wc  =  34);
+                    } else {
+                        if ((e  ==  92)) {
+                            (wc  =  92);
+                        } else {
+                            if ((e  ==  47)) {
+                                (wc  =  47);
+                            } else {
+                                if (((e  ==  117)  &&  ((i  +  4)  <=  n))) {
+                                    (i  =  (i  +  4));
+                                    (wc  =  63);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-        if ((e  ==  116)) {
-            (out  =  __glide_string_concat(out, "\t"));
-            continue;
-        }
-        if ((e  ==  114)) {
-            (out  =  __glide_string_concat(out, "\r"));
-            continue;
-        }
-        if ((e  ==  34)) {
-            (out  =  __glide_string_concat(out, "\""));
-            continue;
-        }
-        if ((e  ==  92)) {
-            (out  =  __glide_string_concat(out, "\\"));
-            continue;
-        }
-        if ((e  ==  47)) {
-            (out  =  __glide_string_concat(out, "/"));
-            continue;
-        }
-        if (((e  ==  117)  &&  ((i  +  4)  <=  n))) {
-            (i  =  (i  +  4));
-            (out  =  __glide_string_concat(out, "?"));
-            continue;
+        if ((wc  >=  0)) {
+ ((char*)(buf ))[(o )] = (char)(wc );             (o  =  (o  +  1));
         }
     }
-    return out;
+ ((char*)(buf ))[(o )] = 0;     const char*   result = "";
+ (result ) = (const char*)(buf );     return result;
 }
 
 JsonValue*   jp_bool (JsonParser*   p) {
@@ -13304,6 +16945,9 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_DEFER)) {
         return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "defer "), fmt_expr((s-> expr_value ))), ";\n");
     }
+    if (((s-> kind )  ==  ST_DEFER_ERR)) {
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "defer_err "), fmt_expr((s-> expr_value ))), ";\n");
+    }
     if (((s-> kind )  ==  ST_SPAWN)) {
         return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "spawn "), fmt_expr((s-> expr_value ))), ";\n");
     }
@@ -13471,7 +17115,7 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
 const char*   fmt_asm (Stmt*   s, int   depth) {
     const char*   pad = fmt_indent(depth);
     const char*   inner = fmt_indent((depth  +  1));
-    const char*   out = __glide_string_concat(pad, "asm");
+    const char*   out = __glide_string_concat(pad, "asm!");
     if ((s-> is_volatile )) {
         (out  =  __glide_string_concat(out, " volatile"));
     }
@@ -13720,6 +17364,9 @@ LspState*   lsp_state_new (void) {
     ((s-> shutdown_requested )  =  false);
     Vector__ImportableSym*   idx = Vector_new__ImportableSym();
     ((s-> stdlib_index )  =  idx);
+    HashMap__Vector__Stmt_ptr*   pc = HashMap_new__Vector__Stmt_ptr();
+    ((s-> parse_cache )  =  pc);
+    ((s-> last_arena )  =  NULL);
     populate_stdlib_index(s);
     return s;
 }
@@ -13786,6 +17433,7 @@ void   lsp_send_response (JsonValue*   id, JsonValue*   result) {
     }
     json_obj_set(resp, "result", result);
     lsp_send(json_emit(resp));
+    json_free(resp);
 }
 
 void   lsp_send_notification (const char*   method, JsonValue*   params) {
@@ -13794,6 +17442,7 @@ void   lsp_send_notification (const char*   method, JsonValue*   params) {
     json_obj_set(n, "method", json_string(method));
     json_obj_set(n, "params", params);
     lsp_send(json_emit(n));
+    json_free(n);
 }
 
 void   handle_initialize (JsonValue*   req) {
@@ -14033,7 +17682,7 @@ const char*   fn_snippet (Stmt*   s) {
                 (out  =  __glide_string_concat(out, ", "));
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\${"), int_to_str((( int64_t )(i  +  1)))), ":"), (p. name )), "}"));
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "$"), "{"), int_to_str((( int64_t )(i  +  1)))), ":"), (p. name )), "}"));
         }
     }
     (out  =  __glide_string_concat(out, ")"));
@@ -14048,18 +17697,62 @@ Vector__string*   fs_list_dir (const char*   dir, const char*   suffix) {
     return string_split(raw, "\n");
 }
 
+void   stmt_vec_lower_free (Vector__Stmt*   v) {
+    if ((v  ==  NULL)) {
+        return;
+    }
+    for (int   i = 0; (i  <  Vector_len__Stmt(v)); i++) {
+        Stmt   s = Vector_get__Stmt(v, i);
+        stmt_lower_free_children((&s));
+    }
+    Vector_free__Stmt(v);
+}
+
+void   stmt_lower_free_children (Stmt*   s) {
+    if ((s  ==  NULL)) {
+        return;
+    }
+    if (((s-> fn_body )  !=  NULL)) {
+        stmt_vec_lower_free((s-> fn_body ));
+    }
+    if (((s-> then_body )  !=  NULL)) {
+        stmt_vec_lower_free((s-> then_body ));
+    }
+    if (((s-> else_body )  !=  NULL)) {
+        stmt_vec_lower_free((s-> else_body ));
+    }
+    if (((s-> impl_methods )  !=  NULL)) {
+        stmt_vec_lower_free((s-> impl_methods ));
+    }
+}
+
 void   run_analysis_and_publish (const char*   uri, const char*   text, LspState*   state) {
+    void*   prev_active = __glide_palloc_get();
+    if (((state-> last_arena )  !=  NULL)) {
+        Vector__string*   keys = HashMap_keys__LspDoc((state-> docs ));
+        for (int   i = 0; (i  <  Vector_len__string(keys)); i++) {
+            const char*   k = Vector_get__string(keys, i);
+            LspDoc   d = HashMap_get__LspDoc((state-> docs ), k);
+            ((d. stmts )  =  NULL);
+            HashMap_insert__LspDoc((state-> docs ), k, d);
+        }
+        Vector_free__string(keys);
+        __glide_palloc_free((state-> last_arena ));
+    }
+    void*   cur_arena = __glide_palloc_make();
+    ((state-> last_arena )  =  cur_arena);
+    __glide_palloc_set(cur_arena);
     const char*   path = uri_to_path(uri);
     Vector__Stmt*   stmts = Vector_new__Stmt();
     HashMap__bool*   loaded = HashMap_new__bool();
     const char*   bdir = find_builtins_dir();
     Vector__ParseDiag*   pdiags = Vector_new__ParseDiag();
     if ((!__glide_string_eq(bdir, ""))) {
-        load_builtins_dir(stmts, bdir, loaded, pdiags);
+        load_builtins_dir_with_cache(stmts, bdir, loaded, pdiags, (state-> parse_cache ));
     }
-    load_into_str(stmts, text, path, loaded, pdiags);
+    load_into_str_with_cache(stmts, text, path, loaded, pdiags, (state-> parse_cache ));
     Vector__Stmt*   expanded = expand_macros(stmts);
-    Vector__Stmt*   lowered = lower_program(expanded);
+    Vector__Stmt*   lowered = lower_program_user_only(expanded, path);
     Vector_clear__Stmt(stmts);
     for (int   i = 0; (i  <  Vector_len__Stmt(lowered)); i++) {
         Stmt   s = Vector_get__Stmt(lowered, i);
@@ -14086,6 +17779,12 @@ void   run_analysis_and_publish (const char*   uri, const char*   text, LspState
     json_obj_set(params, "diagnostics", arr);
     lsp_send_notification("textDocument/publishDiagnostics", params);
     Typer_free(t);
+    Vector_free__Stmt(expanded);
+    Vector_free__Stmt(lowered);
+    Vector_free__ParseDiag(pdiags);
+    HashMap_free__bool(loaded);
+    ((state-> last_arena )  =  __glide_palloc_get());
+    __glide_palloc_set(prev_active);
 }
 
 void   handle_did_open (JsonValue*   req, LspState*   state) {
@@ -14094,9 +17793,15 @@ void   handle_did_open (JsonValue*   req, LspState*   state) {
     const char*   uri = json_as_string(json_get(td, "uri"));
     const char*   text = json_as_string(json_get(td, "text"));
     int   version = json_as_int(json_get(td, "version"));
-    Vector__Stmt*   empty_stmts = Vector_new__Stmt();
-    LspDoc   doc = (( LspDoc ){. uri  = uri, . text  = text, . version  = version, . stmts  = empty_stmts});
+    const char*   prev_text = "";
+    if (HashMap_contains__LspDoc((state-> docs ), uri)) {
+        LspDoc   prev = HashMap_get__LspDoc((state-> docs ), uri);
+        (prev_text  =  (prev. text ));
+    }
+    LspDoc   doc = (( LspDoc ){. uri  = uri, . text  = text, . version  = version, . stmts  = NULL});
     HashMap_insert__LspDoc((state-> docs ), uri, doc);
+    if ((!__glide_string_eq(prev_text, ""))) {
+ free((char*)(prev_text ));     }
     run_analysis_and_publish(uri, text, state);
 }
 
@@ -14111,9 +17816,17 @@ void   handle_did_change (JsonValue*   req, LspState*   state) {
     if (__glide_string_eq(text, "")) {
         return;
     }
-    Vector__Stmt*   empty_stmts = Vector_new__Stmt();
-    LspDoc   doc = (( LspDoc ){. uri  = uri, . text  = text, . version  = version, . stmts  = empty_stmts});
+    Vector__Stmt*   prev_stmts = NULL;
+    const char*   prev_text = "";
+    if (HashMap_contains__LspDoc((state-> docs ), uri)) {
+        LspDoc   prev = HashMap_get__LspDoc((state-> docs ), uri);
+        (prev_stmts  =  (prev. stmts ));
+        (prev_text  =  (prev. text ));
+    }
+    LspDoc   doc = (( LspDoc ){. uri  = uri, . text  = text, . version  = version, . stmts  = prev_stmts});
     HashMap_insert__LspDoc((state-> docs ), uri, doc);
+    if ((!__glide_string_eq(prev_text, ""))) {
+ free((char*)(prev_text ));     }
     run_analysis_and_publish(uri, text, state);
 }
 
@@ -14121,7 +17834,14 @@ void   handle_did_close (JsonValue*   req, LspState*   state) {
     JsonValue*   params = json_get(req, "params");
     JsonValue*   td = json_get(params, "textDocument");
     const char*   uri = json_as_string(json_get(td, "uri"));
+    const char*   prev_text = "";
+    if (HashMap_contains__LspDoc((state-> docs ), uri)) {
+        LspDoc   prev = HashMap_get__LspDoc((state-> docs ), uri);
+        (prev_text  =  (prev. text ));
+    }
     HashMap_remove__LspDoc((state-> docs ), uri);
+    if ((!__glide_string_eq(prev_text, ""))) {
+ free((char*)(prev_text ));     }
     JsonValue*   p = json_object();
     json_obj_set(p, "uri", json_string(uri));
     json_obj_set(p, "diagnostics", json_array());
@@ -14232,6 +17952,7 @@ void   check_method_signature (Typer*   t, Stmt   impl_stmt, Stmt   req, Stmt   
             Param   rp = Vector_get__Param((req. fn_params ), i);
             Param   gp = Vector_get__Param((got. fn_params ), i);
             Type*   rty = subst_self((rp. ty ), (impl_stmt. impl_target ));
+            (rty  =  subst_assoc(rty, (impl_stmt. assoc_decls )));
             if ((!types_compat(rty, (gp. ty )))) {
                 ((t-> current_origin )  =  (impl_stmt. origin ));
                 Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` param `"), (rp. name )), "`: expected `"), type_to_string(rty)), "`, got `"), type_to_string((gp. ty ))), "`"));
@@ -14240,10 +17961,40 @@ void   check_method_signature (Typer*   t, Stmt   impl_stmt, Stmt   req, Stmt   
         }
     }
     Type*   rret = subst_self((req. fn_ret_ty ), (impl_stmt. impl_target ));
+    (rret  =  subst_assoc(rret, (impl_stmt. assoc_decls )));
     if ((!types_compat(rret, (got. fn_ret_ty )))) {
         ((t-> current_origin )  =  (impl_stmt. origin ));
         Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` return: expected `"), type_to_string(rret)), "`, got `"), type_to_string((got. fn_ret_ty ))), "`"));
     }
+}
+
+Type*   subst_assoc (Type*   t, Vector__Param*   assocs) {
+    if ((t  ==  NULL)) {
+        return NULL;
+    }
+    if ((assocs  ==  NULL)) {
+        return t;
+    }
+    if (((t-> kind )  ==  TY_ASSOC)) {
+        for (int   i = 0; (i  <  Vector_len__Param(assocs)); i++) {
+            Param   a = Vector_get__Param(assocs, i);
+            if (__glide_string_eq((a. name ), (t-> name ))) {
+                return (a. ty );
+            }
+        }
+    }
+    if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
+        return t;
+    }
+    Type*   copy = (( Type* )malloc(sizeof( Type )));
+    ((*copy)  =  (*t));
+    if (((copy-> inner )  !=  NULL)) {
+        ((copy-> inner )  =  subst_assoc((copy-> inner ), assocs));
+    }
+    if (((copy-> fnptr_ret )  !=  NULL)) {
+        ((copy-> fnptr_ret )  =  subst_assoc((copy-> fnptr_ret ), assocs));
+    }
+    return copy;
 }
 
 int   if_param_count (Stmt   s) {
@@ -14263,9 +18014,18 @@ Type*   subst_self (Type*   t, Type*   impl_target) {
     if ((((t-> kind )  ==  TY_NAMED)  &&  __glide_string_eq((t-> name ), "Self"))) {
         return impl_target;
     }
-    if (((t-> inner )  !=  NULL)) {
-        ((t-> inner )  =  subst_self((t-> inner ), impl_target));
+    if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
+        return t;
     }
+    Type*   copy = (( Type* )malloc(sizeof( Type )));
+    ((*copy)  =  (*t));
+    if (((copy-> inner )  !=  NULL)) {
+        ((copy-> inner )  =  subst_self((copy-> inner ), impl_target));
+    }
+    if (((copy-> fnptr_ret )  !=  NULL)) {
+        ((copy-> fnptr_ret )  =  subst_self((copy-> fnptr_ret ), impl_target));
+    }
+    return copy;
     return t;
 }
 
@@ -16928,6 +20688,14 @@ void   check_unused_in_body (Typer*   t, Vector__Stmt*   body) {
         if (((s. else_body )  !=  NULL)) {
             check_unused_in_body(t, (s. else_body ));
         }
+        if ((((s. kind )  ==  ST_SELECT)  &&  ((s. select_arms )  !=  NULL))) {
+            for (int   k = 0; (k  <  Vector_len__SelectArm((s. select_arms ))); k++) {
+                SelectArm   arm = Vector_get__SelectArm((s. select_arms ), k);
+                if (((arm. body )  !=  NULL)) {
+                    check_unused_in_body(t, (arm. body ));
+                }
+            }
+        }
     }
 }
 
@@ -16984,6 +20752,25 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
             }
         }
     }
+    if ((((s-> kind )  ==  ST_SELECT)  &&  ((s-> select_arms )  !=  NULL))) {
+        for (int   i = 0; (i  <  Vector_len__SelectArm((s-> select_arms ))); i++) {
+            SelectArm   arm = Vector_get__SelectArm((s-> select_arms ), i);
+            if ((((arm. chan_expr )  !=  NULL)  &&  expr_uses_name((arm. chan_expr ), name))) {
+                return true;
+            }
+            if ((((arm. send_value )  !=  NULL)  &&  expr_uses_name((arm. send_value ), name))) {
+                return true;
+            }
+            if (((arm. body )  !=  NULL)) {
+                for (int   j = 0; (j  <  Vector_len__Stmt((arm. body ))); j++) {
+                    Stmt   b = Vector_get__Stmt((arm. body ), j);
+                    if (stmt_uses_name((&b), name)) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
     return false;
 }
 
@@ -17007,6 +20794,27 @@ bool   expr_uses_name (Expr*   e, const char*   name) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
             if (expr_uses_name((&a), name)) {
+                return true;
+            }
+        }
+    }
+    if (((e-> match_arms )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__MatchArm((e-> match_arms ))); i++) {
+            MatchArm   a = Vector_get__MatchArm((e-> match_arms ), i);
+            if (((a. body )  !=  NULL)) {
+                for (int   k = 0; (k  <  Vector_len__Stmt((a. body ))); k++) {
+                    Stmt   b = Vector_get__Stmt((a. body ), k);
+                    if (stmt_uses_name((&b), name)) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    if (((e-> block_stmts )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((e-> block_stmts ))); i++) {
+            Stmt   b = Vector_get__Stmt((e-> block_stmts ), i);
+            if (stmt_uses_name((&b), name)) {
                 return true;
             }
         }
@@ -17353,6 +21161,14 @@ void   check_mut_body (Typer*   t, Vector__Stmt*   body) {
         if (((s. else_body )  !=  NULL)) {
             check_mut_body(t, (s. else_body ));
         }
+        if ((((s. kind )  ==  ST_SELECT)  &&  ((s. select_arms )  !=  NULL))) {
+            for (int   k = 0; (k  <  Vector_len__SelectArm((s. select_arms ))); k++) {
+                SelectArm   arm = Vector_get__SelectArm((s. select_arms ), k);
+                if (((arm. body )  !=  NULL)) {
+                    check_mut_body(t, (arm. body ));
+                }
+            }
+        }
     }
 }
 
@@ -17385,6 +21201,22 @@ bool   stmt_reassigns (Stmt*   s, const char*   name) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
             if (stmt_reassigns((&b), name)) {
                 return true;
+            }
+        }
+    }
+    if ((((s-> kind )  ==  ST_SELECT)  &&  ((s-> select_arms )  !=  NULL))) {
+        for (int   i = 0; (i  <  Vector_len__SelectArm((s-> select_arms ))); i++) {
+            SelectArm   arm = Vector_get__SelectArm((s-> select_arms ), i);
+            if ((((arm. send_value )  !=  NULL)  &&  expr_reassigns((arm. send_value ), name))) {
+                return true;
+            }
+            if (((arm. body )  !=  NULL)) {
+                for (int   j = 0; (j  <  Vector_len__Stmt((arm. body ))); j++) {
+                    Stmt   b = Vector_get__Stmt((arm. body ), j);
+                    if (stmt_reassigns((&b), name)) {
+                        return true;
+                    }
+                }
             }
         }
     }
@@ -17633,6 +21465,77 @@ void   analysis_large_return (Typer*   t, Vector__Stmt*   program) {
     HashMap_free__Stmt(structs);
 }
 
+bool   lsp_dispatch (JsonValue*   req, LspState*   state) {
+    const char*   method = json_as_string(json_get(req, "method"));
+    if (__glide_string_eq(method, "initialize")) {
+        handle_initialize(req);
+        return false;
+    }
+    if (__glide_string_eq(method, "initialized")) {
+        return false;
+    }
+    if (__glide_string_eq(method, "shutdown")) {
+        handle_shutdown(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "exit")) {
+        return true;
+    }
+    if (__glide_string_eq(method, "textDocument/didOpen")) {
+        handle_did_open(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/didChange")) {
+        handle_did_change(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/didClose")) {
+        handle_did_close(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/hover")) {
+        handle_hover(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/documentSymbol")) {
+        handle_document_symbol(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/definition")) {
+        handle_definition(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/completion")) {
+        handle_completion(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/references")) {
+        handle_references(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/documentHighlight")) {
+        handle_document_highlight(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/prepareRename")) {
+        handle_prepare_rename(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/rename")) {
+        handle_rename(req, state);
+        return false;
+    }
+    if (__glide_string_eq(method, "textDocument/formatting")) {
+        handle_formatting(req, state);
+        return false;
+    }
+    JsonValue*   id = json_get(req, "id");
+    if ((id  !=  NULL)) {
+        lsp_send_response(id, json_null());
+    }
+    return false;
+}
+
 int   lsp_main (void) {
     __glide_set_binary_io();
     LspState*   state = lsp_state_new();
@@ -17642,75 +21545,18 @@ int   lsp_main (void) {
             break;
         }
         JsonValue*   req = json_parse(raw);
-        if ((req  ==  NULL)) {
-            continue;
+        bool   should_exit = false;
+        if ((req  !=  NULL)) {
+            void*   req_arena_initial = __glide_palloc_make();
+            __glide_palloc_set(req_arena_initial);
+            (should_exit  =  lsp_dispatch(req, state));
+            void*   req_arena_head = __glide_palloc_get();
+            __glide_palloc_set(NULL);
+            __glide_palloc_free(req_arena_head);
+            json_free(req);
         }
-        const char*   method = json_as_string(json_get(req, "method"));
-        if (__glide_string_eq(method, "initialize")) {
-            handle_initialize(req);
-            continue;
-        }
-        if (__glide_string_eq(method, "initialized")) {
-            continue;
-        }
-        if (__glide_string_eq(method, "shutdown")) {
-            handle_shutdown(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "exit")) {
+ if (raw  !=  NULL) free((char*)(raw ));         if (should_exit) {
             break;
-        }
-        if (__glide_string_eq(method, "textDocument/didOpen")) {
-            handle_did_open(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/didChange")) {
-            handle_did_change(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/didClose")) {
-            handle_did_close(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/hover")) {
-            handle_hover(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/documentSymbol")) {
-            handle_document_symbol(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/definition")) {
-            handle_definition(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/completion")) {
-            handle_completion(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/references")) {
-            handle_references(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/documentHighlight")) {
-            handle_document_highlight(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/prepareRename")) {
-            handle_prepare_rename(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/rename")) {
-            handle_rename(req, state);
-            continue;
-        }
-        if (__glide_string_eq(method, "textDocument/formatting")) {
-            handle_formatting(req, state);
-            continue;
-        }
-        JsonValue*   id = json_get(req, "id");
-        if ((id  !=  NULL)) {
-            lsp_send_response(id, json_null());
         }
     }
     return 0;
@@ -17772,7 +21618,7 @@ void   print_expr (Expr*   e, int   indent) {
     }
     print_indent(indent);
     if (((e-> kind )  ==  EX_INT)) {
-        printf("%s %lld\n", "Int", (e-> int_val ));
+        printf("%s %lld\n", "Int", (long long)((e-> int_val )));
         return;
     }
     if (((e-> kind )  ==  EX_STRING)) {
@@ -17933,6 +21779,152 @@ void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   or
             Vector_push__Stmt(stmts, s);
         }
     }
+}
+
+void   load_into_str_with_cache (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache) {
+    Lexer*   lex = Lexer_new(src);
+    Parser*   p = Parser_new(lex);
+    Vector__Stmt*   parsed = parse_program(p);
+    if (((pdiags  !=  NULL)  &&  ((p-> diags )  !=  NULL))) {
+        for (int   k = 0; (k  <  Vector_len__ParseDiag((p-> diags ))); k++) {
+            ParseDiag   d = Vector_get__ParseDiag((p-> diags ), k);
+            ((d. origin )  =  origin);
+            Vector_push__ParseDiag(pdiags, d);
+        }
+    }
+    Parser_free(p);
+    Lexer_free(lex);
+    cached_resolve_and_push(stmts, parsed, origin, loaded, pdiags, cache);
+    Vector_free__Stmt(parsed);
+}
+
+void   load_into_with_cache (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache) {
+    if (HashMap_contains__bool(loaded, path)) {
+        return;
+    }
+    HashMap_insert__bool(loaded, path, true);
+    Vector__Stmt*   parsed = NULL;
+    bool   from_cache = false;
+    if (((cache  !=  NULL)  &&  HashMap_contains__Vector__Stmt_ptr(cache, path))) {
+        (parsed  =  HashMap_get__Vector__Stmt_ptr(cache, path));
+        (from_cache  =  true);
+    } else {
+        const char*   src = read_file(path);
+        if (__glide_string_eq(src, "")) {
+            return;
+        }
+        void*   saved_arena = __glide_palloc_get();
+        __glide_palloc_set(NULL);
+        Lexer*   lex = Lexer_new(src);
+        Parser*   p = Parser_new(lex);
+        Vector__Stmt*   parsed_raw = parse_program(p);
+        const char*   heap_key = __glide_string_concat(path, "");
+        if (((pdiags  !=  NULL)  &&  ((p-> diags )  !=  NULL))) {
+            for (int   k = 0; (k  <  Vector_len__ParseDiag((p-> diags ))); k++) {
+                ParseDiag   d = Vector_get__ParseDiag((p-> diags ), k);
+                ((d. origin )  =  heap_key);
+                Vector_push__ParseDiag(pdiags, d);
+            }
+        }
+        Parser_free(p);
+        Lexer_free(lex);
+        for (int   i = 0; (i  <  Vector_len__Stmt(parsed_raw)); i++) {
+            Stmt   s = Vector_get__Stmt(parsed_raw, i);
+            ((s. origin )  =  heap_key);
+            Vector_set__Stmt(parsed_raw, i, s);
+        }
+        (parsed  =  lower_program(parsed_raw));
+        __glide_palloc_set(saved_arena);
+        if ((cache  !=  NULL)) {
+            HashMap_insert__Vector__Stmt_ptr(cache, heap_key, parsed);
+            (from_cache  =  true);
+        }
+    }
+    cached_resolve_and_push(stmts, parsed, path, loaded, pdiags, cache);
+    if ((!from_cache)) {
+        Vector_free__Stmt(parsed);
+    }
+}
+
+void   cached_resolve_and_push (Vector__Stmt*   stmts, Vector__Stmt*   parsed, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache) {
+    Vector__string*   auto_loads = Vector_new__string();
+    HashMap__bool*   auto_seen = HashMap_new__bool();
+    for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
+        Stmt   s = Vector_get__Stmt(parsed, i);
+        collect_path_files_in_stmt((&s), auto_loads, auto_seen);
+    }
+    const char*   dir = parent_dir(origin);
+    for (int   i = 0; (i  <  Vector_len__string(auto_loads)); i++) {
+        const char*   cand = Vector_get__string(auto_loads, i);
+        const char*   resolved = resolve_import(dir, cand);
+        if (__glide_file_exists(resolved)) {
+            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+        }
+    }
+    Vector_free__string(auto_loads);
+    HashMap_free__bool(auto_seen);
+    for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
+        Stmt   s = Vector_get__Stmt(parsed, i);
+        if (((s. kind )  ==  ST_IMPORT)) {
+            const char*   unq = strip_quotes((s. import_path ));
+            const char*   resolved = resolve_import(dir, unq);
+            bool   multi_seg = false;
+            for (int   k = 0; (k  <  (__glide_string_len(unq)  -  1)); k++) {
+                int   cc = __glide_char_to_int(__glide_string_at(unq, k));
+                if (((cc  ==  47)  ||  (cc  ==  92))) {
+                    (multi_seg  =  true);
+                    break;
+                }
+            }
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  (!__glide_file_exists(resolved)))) {
+                const char*   parent_path = drop_last_path_segment(unq);
+                if ((!__glide_string_eq(parent_path, ""))) {
+                    const char*   resolved_parent = resolve_import(dir, parent_path);
+                    if (__glide_file_exists(resolved_parent)) {
+                        const char*   last = last_path_segment(unq);
+                        Vector__string*   items = Vector_new__string();
+                        Vector_push__string(items, last);
+                        ((s. imported_items )  =  items);
+                        (resolved  =  resolved_parent);
+                    }
+                }
+            }
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  __glide_file_exists(resolved))) {
+                ((s. import_is_module )  =  true);
+                ((s. import_short )  =  last_path_segment(unq));
+            }
+            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+            ((s. import_path )  =  resolved);
+            ((s. origin )  =  origin);
+            Vector_push__Stmt(stmts, s);
+        } else {
+            ((s. origin )  =  origin);
+            Vector_push__Stmt(stmts, s);
+        }
+    }
+}
+
+void   load_builtins_dir_with_cache (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache) {
+    const char*   listing = __glide_list_dir(dir, ".glide");
+    if (__glide_string_eq(listing, "")) {
+        return;
+    }
+    const char*   builtins = __glide_string_concat(dir, "/builtins.glide");
+    if (__glide_file_exists(builtins)) {
+        load_into_with_cache(stmts, builtins, loaded, pdiags, cache);
+    }
+    Vector__string*   names = string_split(listing, "\n");
+    for (int   i = 0; (i  <  Vector_len__string(names)); i++) {
+        const char*   nm = Vector_get__string(names, i);
+        if (__glide_string_eq(nm, "")) {
+            continue;
+        }
+        if (__glide_string_eq(nm, "builtins.glide")) {
+            continue;
+        }
+        load_into_with_cache(stmts, __glide_string_concat(__glide_string_concat(dir, "/"), nm), loaded, pdiags, cache);
+    }
+    Vector_free__string(names);
 }
 
 void   collect_path_files_in_expr (Expr*   e, Vector__string*   out, HashMap__bool*   seen) {
@@ -18740,6 +22732,244 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
     return 0;
 }
 
+Vector__string*   scan_test_fns (const char*   src) {
+    Vector__string*   names = Vector_new__string();
+    Vector__string*   lines = string_split(src, "\n");
+    const char*   prefix = "fn test_";
+    for (int   i = 0; (i  <  Vector_len__string(lines)); i++) {
+        const char*   raw = Vector_get__string(lines, i);
+        const char*   trimmed = string_trim(raw);
+        const char*   body = trimmed;
+        if (string_starts_with(body, "pub ")) {
+            (body  =  __glide_string_substring(body, 4, __glide_string_len(body)));
+            int   k = 0;
+            while (((k  <  __glide_string_len(body))  &&  (__glide_char_to_int(__glide_string_at(body, k))  ==  32))) {
+                (k  =  (k  +  1));
+            }
+            (body  =  __glide_string_substring(body, k, __glide_string_len(body)));
+        }
+        if ((!string_starts_with(body, prefix))) {
+            continue;
+        }
+        const char*   after = __glide_string_substring(body, 3, __glide_string_len(body));
+        int   n = __glide_string_len(after);
+        int   end = 0;
+        while ((end  <  n)) {
+            int   c = __glide_char_to_int(__glide_string_at(after, end));
+            if ((((c  ==  40)  ||  (c  ==  32))  ||  (c  ==  9))) {
+                break;
+            }
+            (end  =  (end  +  1));
+        }
+        if ((end  ==  0)) {
+            continue;
+        }
+        Vector_push__string(names, __glide_string_substring(after, 0, end));
+    }
+    return names;
+}
+
+int   run_test (const char*   path) {
+    const char*   search_path = path;
+    if (__glide_string_eq(search_path, "")) {
+        (search_path  =  ".");
+    }
+    Vector__string*   files = Vector_new__string();
+    const char*   direct = read_file(search_path);
+    if ((!__glide_string_eq(direct, ""))) {
+        Vector_push__string(files, search_path);
+    } else {
+        const char*   raw = __glide_list_dir(search_path, "_test.glide");
+        if (__glide_string_eq(raw, "")) {
+            printf("%s %s\n", "no *_test.glide files found under:", search_path);
+            return 1;
+        }
+        Vector__string*   names = string_split(raw, "\n");
+        for (int   i = 0; (i  <  Vector_len__string(names)); i++) {
+            const char*   nm = Vector_get__string(names, i);
+            if (__glide_string_eq(nm, "")) {
+                continue;
+            }
+            Vector_push__string(files, __glide_string_concat(__glide_string_concat(search_path, "/"), nm));
+        }
+    }
+    int   total_files = 0;
+    int   failed_files = 0;
+    const char*   tmp_path = "__glide_test_run.glide";
+    const char*   out_path = "__glide_test_run.exe";
+    if ((__glide_is_windows()  ==  0)) {
+        (out_path  =  "__glide_test_run");
+    }
+    for (int   i = 0; (i  <  Vector_len__string(files)); i++) {
+        const char*   f = Vector_get__string(files, i);
+        const char*   src = read_file(f);
+        if (__glide_string_eq(src, "")) {
+            continue;
+        }
+        Vector__string*   test_fns = scan_test_fns(src);
+        if ((Vector_len__string(test_fns)  ==  0)) {
+            printf("%s %s %s\n", "(no test_* functions in", f, "—  skipping)");
+            continue;
+        }
+        const char*   synth = __glide_string_concat("import stdlib::testing::*;\n", src);
+        (synth  =  __glide_string_concat(synth, "\n\nfn main() -> int {\n"));
+        for (int   j = 0; (j  <  Vector_len__string(test_fns)); j++) {
+            const char*   name = Vector_get__string(test_fns, j);
+            (synth  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(synth, "    test_begin(\""), name), "\");\n"));
+            (synth  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(synth, "    if "), name), "() == 0 { test_pass(); }\n"));
+        }
+        (synth  =  __glide_string_concat(synth, "    return test_summary();\n}\n"));
+        if ((!write_file(tmp_path, synth))) {
+            printf("%s\n", "could not write temp test file");
+            return 1;
+        }
+        printf("%s %s %s %d %s\n", __glide_string_concat(__glide_string_concat(col_blue(), "running"), col_reset()), f, "(", Vector_len__string(test_fns), "tests )");
+        int   rc = run_build(tmp_path, out_path, "", true);
+        (total_files  =  (total_files  +  1));
+        if ((rc  !=  0)) {
+            (failed_files  =  (failed_files  +  1));
+        }
+    }
+    write_file(tmp_path, "");
+    printf("%s\n", "");
+    if ((failed_files  >  0)) {
+        printf("%s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(col_red(), "test result:"), col_reset()), failed_files, "of", total_files, "files had failures");
+        return 1;
+    }
+    printf("%s %s %d %s\n", __glide_string_concat(__glide_string_concat(col_blue(), "test result:"), col_reset()), "all", total_files, "files passed");
+    return 0;
+}
+
+int   _golden_build_and_run (const char*   src, const char*   out_txt) {
+    const char*   exe = "__glide_golden.exe";
+    if ((__glide_is_windows()  ==  0)) {
+        (exe  =  "__glide_golden");
+    }
+    int   rc_build = run_build(src, exe, "", false);
+    if ((rc_build  !=  0)) {
+        return (-1);
+    }
+    const char*   prefix = "./";
+    if ((__glide_is_windows()  !=  0)) {
+        (prefix  =  ".\\");
+    }
+    const char*   cmd = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("\"", prefix), exe), "\" > \""), out_txt), "\"");
+    const char*   wrapped = cmd;
+    if ((__glide_is_windows()  !=  0)) {
+        (wrapped  =  __glide_string_concat(__glide_string_concat("\"", cmd), "\""));
+    }
+    return __glide_shell(wrapped);
+}
+
+const char*   _golden_normalize (const char*   s) {
+    int   n = __glide_string_len(s);
+    const char*   out = "";
+    for (int   i = 0; (i  <  n); i++) {
+        int   c = __glide_char_to_int(__glide_string_at(s, i));
+        if ((c  ==  13)) {
+            continue;
+        }
+        (out  =  __glide_string_concat(out, __glide_string_substring(s, i, (i  +  1))));
+    }
+    return out;
+}
+
+void   _golden_show_diff (const char*   actual, const char*   expected) {
+    int   na = __glide_string_len(actual);
+    int   ne = __glide_string_len(expected);
+    int   i = 0;
+    while ((((i  <  na)  &&  (i  <  ne))  &&  (__glide_char_to_int(__glide_string_at(actual, i))  ==  __glide_char_to_int(__glide_string_at(expected, i))))) {
+        (i  =  (i  +  1));
+    }
+    int   line = 1;
+    int   col = 1;
+    for (int   k = 0; (k  <  i); k++) {
+        if ((__glide_char_to_int(__glide_string_at(actual, k))  ==  10)) {
+            (line  =  (line  +  1));
+            (col  =  1);
+        } else {
+            (col  =  (col  +  1));
+        }
+    }
+    int   win_a_lo = 0;
+    if ((i  >  30)) {
+        (win_a_lo  =  (i  -  30));
+    }
+    int   win_a_hi = na;
+    if (((i  +  30)  <  na)) {
+        (win_a_hi  =  (i  +  30));
+    }
+    int   win_e_lo = 0;
+    if ((i  >  30)) {
+        (win_e_lo  =  (i  -  30));
+    }
+    int   win_e_hi = ne;
+    if (((i  +  30)  <  ne)) {
+        (win_e_hi  =  (i  +  30));
+    }
+    printf("%s %d %s %d\n", "        first diff at line", line, "col", col);
+    printf("%s %s\n", "        actual:   ", __glide_string_substring(actual, win_a_lo, win_a_hi));
+    printf("%s %s\n", "        expected: ", __glide_string_substring(expected, win_e_lo, win_e_hi));
+}
+
+int   run_golden (const char*   dir) {
+    const char*   search_dir = dir;
+    if (__glide_string_eq(search_dir, "")) {
+        (search_dir  =  ".");
+    }
+    const char*   raw = __glide_list_dir(search_dir, ".glide");
+    if (__glide_string_eq(raw, "")) {
+        printf("%s %s\n", "no *.glide files under:", search_dir);
+        return 1;
+    }
+    Vector__string*   names = string_split(raw, "\n");
+    const char*   stdout_path = "__glide_golden_stdout.txt";
+    int   passed = 0;
+    int   failed = 0;
+    int   skipped = 0;
+    for (int   i = 0; (i  <  Vector_len__string(names)); i++) {
+        const char*   nm = Vector_get__string(names, i);
+        if (__glide_string_eq(nm, "")) {
+            continue;
+        }
+        if (((__glide_string_len(nm)  >=  12)  &&  __glide_string_eq(__glide_string_substring(nm, (__glide_string_len(nm)  -  12), __glide_string_len(nm)), "_test.glide"))) {
+            continue;
+        }
+        const char*   src = __glide_string_concat(__glide_string_concat(search_dir, "/"), nm);
+        const char*   expected_path = __glide_string_concat(__glide_string_concat(__glide_string_concat(search_dir, "/"), __glide_string_substring(nm, 0, (__glide_string_len(nm)  -  6))), ".expected");
+        if ((!__glide_file_exists(expected_path))) {
+            (skipped  =  (skipped  +  1));
+            continue;
+        }
+        const char*   expected = read_file(expected_path);
+        int   rc = _golden_build_and_run(src, stdout_path);
+        if ((rc  <  0)) {
+            (failed  =  (failed  +  1));
+            printf("%s %s %s\n", __glide_string_concat(__glide_string_concat(col_red(), "FAIL"), col_reset()), src, "(build failed)");
+            continue;
+        }
+        const char*   actual_raw = read_file(stdout_path);
+        const char*   actual = _golden_normalize(actual_raw);
+        const char*   expected_norm = _golden_normalize(expected);
+        if (__glide_string_eq(actual, expected_norm)) {
+            (passed  =  (passed  +  1));
+            printf("%s %s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(col_blue(), "ok"), col_reset()), "  "), src);
+        } else {
+            (failed  =  (failed  +  1));
+            printf("%s %s\n", __glide_string_concat(__glide_string_concat(col_red(), "FAIL"), col_reset()), src);
+            _golden_show_diff(actual, expected_norm);
+        }
+    }
+    write_file(stdout_path, "");
+    printf("%s\n", "");
+    if ((failed  >  0)) {
+        printf("%s %d %s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(col_red(), "golden result:"), col_reset()), passed, "passed,", failed, "failed,", skipped, "skipped");
+        return 1;
+    }
+    printf("%s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(col_blue(), "golden result:"), col_reset()), passed, "passed,", skipped, "skipped");
+    return 0;
+}
+
 int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
     int   argc = args_count();
     if ((argc  <  2)) {
@@ -18749,6 +22979,24 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
     const char*   cmd = args_at(1);
     if (__glide_string_eq(cmd, "lsp")) {
         return lsp_main();
+    }
+    if (__glide_string_eq(cmd, "test")) {
+        const char*   tpath = "";
+        bool   golden = false;
+        for (int   i = 2; (i  <  argc); i++) {
+            const char*   a = args_at(i);
+            if (__glide_string_eq(a, "--golden")) {
+                (golden  =  true);
+                continue;
+            }
+            if (__glide_string_eq(tpath, "")) {
+                (tpath  =  a);
+            }
+        }
+        if (golden) {
+            return run_golden(tpath);
+        }
+        return run_test(tpath);
     }
     int   mode = MODE_RUN;
     int   src_arg_idx = 2;
@@ -18906,6 +23154,18 @@ int main(int argc, char** argv) {
     return __glide_rc;
 }
 
+int   HashMap_hash_key__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k) {
+    int   h = 0;
+    int   n = __glide_string_len(k);
+    for (int   i = 0; (i  <  n); i++) {
+        (h  =  ((h  *  31)  +  __glide_char_to_int(__glide_string_at(k, i))));
+    }
+    if ((h  <  0)) {
+        (h  =  (-h));
+    }
+    return h;
+}
+
 int   HashMap_hash_key__ImportInfo (HashMap__ImportInfo*   self, const char*   k) {
     int   h = 0;
     int   n = __glide_string_len(k);
@@ -18990,6 +23250,52 @@ int   HashMap_hash_key__Stmt (HashMap__Stmt*   self, const char*   k) {
     return h;
 }
 
+void   HashMap_resize__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, int   new_cap) {
+    const char**   old_keys = (self-> keys );
+    Vector__Stmt**   old_values = (self-> values );
+    bool*   old_occupied = (self-> occupied );
+    int   old_cap = (self-> cap );
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Vector__Stmt** )__glide_palloc((new_cap  *  sizeof( Vector__Stmt* )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Vector__Stmt** )malloc((new_cap  *  sizeof( Vector__Stmt* )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
+    ((self-> cap )  =  new_cap);
+    ((self-> len )  =  0);
+    for (int   i = 0; (i  <  new_cap); i++) {
+        ((self-> occupied )[i]  =  false);
+    }
+    for (int   i = 0; (i  <  old_cap); i++) {
+        if (old_occupied[i]) {
+            HashMap_insert__Vector__Stmt_ptr(self, old_keys[i], old_values[i]);
+        }
+    }
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
+        free((( void* )old_keys));
+        free((( void* )old_values));
+        free((( void* )old_occupied));
+    }
+}
+
+int   HashMap_slot__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k) {
+    if (((self-> cap )  ==  0)) {
+        return (-1);
+    }
+    int   mask = ((self-> cap )  -  1);
+    int   i = (HashMap_hash_key__Vector__Stmt_ptr(self, k)  &  mask);
+    while ((self-> occupied )[i]) {
+        if (__glide_string_eq((self-> keys )[i], k)) {
+            return i;
+        }
+        (i  =  ((i  +  1)  &  mask));
+    }
+    return i;
+}
+
 int   HashMap_slot__ImportInfo (HashMap__ImportInfo*   self, const char*   k) {
     if (((self-> cap )  ==  0)) {
         return (-1);
@@ -19010,9 +23316,15 @@ void   HashMap_resize__ImportInfo (HashMap__ImportInfo*   self, int   new_cap) {
     ImportInfo*   old_values = (self-> values );
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( ImportInfo* )__glide_palloc((new_cap  *  sizeof( ImportInfo )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
     for (int   i = 0; (i  <  new_cap); i++) {
@@ -19023,7 +23335,7 @@ void   HashMap_resize__ImportInfo (HashMap__ImportInfo*   self, int   new_cap) {
             HashMap_insert__ImportInfo(self, old_keys[i], old_values[i]);
         }
     }
-    if ((old_cap  >  0)) {
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
         free((( void* )old_keys));
         free((( void* )old_values));
         free((( void* )old_occupied));
@@ -19035,9 +23347,15 @@ void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap) {
     LspDoc*   old_values = (self-> values );
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( LspDoc* )malloc((new_cap  *  sizeof( LspDoc )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( LspDoc* )__glide_palloc((new_cap  *  sizeof( LspDoc )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( LspDoc* )malloc((new_cap  *  sizeof( LspDoc )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
     for (int   i = 0; (i  <  new_cap); i++) {
@@ -19048,7 +23366,7 @@ void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap) {
             HashMap_insert__LspDoc(self, old_keys[i], old_values[i]);
         }
     }
-    if ((old_cap  >  0)) {
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
         free((( void* )old_keys));
         free((( void* )old_values));
         free((( void* )old_occupied));
@@ -19070,31 +23388,6 @@ int   HashMap_slot__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     return i;
 }
 
-void   HashMap_resize__string (HashMap__string*   self, int   new_cap) {
-    const char**   old_keys = (self-> keys );
-    const char**   old_values = (self-> values );
-    bool*   old_occupied = (self-> occupied );
-    int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
-    ((self-> cap )  =  new_cap);
-    ((self-> len )  =  0);
-    for (int   i = 0; (i  <  new_cap); i++) {
-        ((self-> occupied )[i]  =  false);
-    }
-    for (int   i = 0; (i  <  old_cap); i++) {
-        if (old_occupied[i]) {
-            HashMap_insert__string(self, old_keys[i], old_values[i]);
-        }
-    }
-    if ((old_cap  >  0)) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
-    }
-}
-
 int   HashMap_slot__string (HashMap__string*   self, const char*   k) {
     if (((self-> cap )  ==  0)) {
         return (-1);
@@ -19108,6 +23401,37 @@ int   HashMap_slot__string (HashMap__string*   self, const char*   k) {
         (i  =  ((i  +  1)  &  mask));
     }
     return i;
+}
+
+void   HashMap_resize__string (HashMap__string*   self, int   new_cap) {
+    const char**   old_keys = (self-> keys );
+    const char**   old_values = (self-> values );
+    bool*   old_occupied = (self-> occupied );
+    int   old_cap = (self-> cap );
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
+    ((self-> cap )  =  new_cap);
+    ((self-> len )  =  0);
+    for (int   i = 0; (i  <  new_cap); i++) {
+        ((self-> occupied )[i]  =  false);
+    }
+    for (int   i = 0; (i  <  old_cap); i++) {
+        if (old_occupied[i]) {
+            HashMap_insert__string(self, old_keys[i], old_values[i]);
+        }
+    }
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
+        free((( void* )old_keys));
+        free((( void* )old_values));
+        free((( void* )old_occupied));
+    }
 }
 
 int   HashMap_slot__FnSig (HashMap__FnSig*   self, const char*   k) {
@@ -19130,9 +23454,15 @@ void   HashMap_resize__FnSig (HashMap__FnSig*   self, int   new_cap) {
     FnSig*   old_values = (self-> values );
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( FnSig* )malloc((new_cap  *  sizeof( FnSig )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( FnSig* )__glide_palloc((new_cap  *  sizeof( FnSig )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( FnSig* )malloc((new_cap  *  sizeof( FnSig )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
     for (int   i = 0; (i  <  new_cap); i++) {
@@ -19143,7 +23473,7 @@ void   HashMap_resize__FnSig (HashMap__FnSig*   self, int   new_cap) {
             HashMap_insert__FnSig(self, old_keys[i], old_values[i]);
         }
     }
-    if ((old_cap  >  0)) {
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
         free((( void* )old_keys));
         free((( void* )old_values));
         free((( void* )old_occupied));
@@ -19170,9 +23500,15 @@ void   HashMap_resize__Type (HashMap__Type*   self, int   new_cap) {
     Type*   old_values = (self-> values );
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( Type* )malloc((new_cap  *  sizeof( Type )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Type* )__glide_palloc((new_cap  *  sizeof( Type )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Type* )malloc((new_cap  *  sizeof( Type )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
     for (int   i = 0; (i  <  new_cap); i++) {
@@ -19183,7 +23519,7 @@ void   HashMap_resize__Type (HashMap__Type*   self, int   new_cap) {
             HashMap_insert__Type(self, old_keys[i], old_values[i]);
         }
     }
-    if ((old_cap  >  0)) {
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
         free((( void* )old_keys));
         free((( void* )old_values));
         free((( void* )old_occupied));
@@ -19210,9 +23546,15 @@ void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap) {
     bool*   old_values = (self-> values );
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
     for (int   i = 0; (i  <  new_cap); i++) {
@@ -19223,7 +23565,7 @@ void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap) {
             HashMap_insert__bool(self, old_keys[i], old_values[i]);
         }
     }
-    if ((old_cap  >  0)) {
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
         free((( void* )old_keys));
         free((( void* )old_values));
         free((( void* )old_occupied));
@@ -19250,9 +23592,15 @@ void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
     Stmt*   old_values = (self-> values );
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
-    ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-    ((self-> values )  =  (( Stmt* )malloc((new_cap  *  sizeof( Stmt )))));
-    ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    if ((self-> is_arena )) {
+        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Stmt* )__glide_palloc((new_cap  *  sizeof( Stmt )))));
+        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+    } else {
+        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Stmt* )malloc((new_cap  *  sizeof( Stmt )))));
+        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+    }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
     for (int   i = 0; (i  <  new_cap); i++) {
@@ -19263,11 +23611,41 @@ void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
             HashMap_insert__Stmt(self, old_keys[i], old_values[i]);
         }
     }
-    if ((old_cap  >  0)) {
+    if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
         free((( void* )old_keys));
         free((( void* )old_values));
         free((( void* )old_occupied));
     }
+}
+
+void   HashMap_insert__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k, Vector__Stmt*   v) {
+    if (((self-> cap )  ==  0)) {
+        HashMap_resize__Vector__Stmt_ptr(self, 8);
+    } else {
+        if ((((self-> len )  *  4)  >=  ((self-> cap )  *  3))) {
+            HashMap_resize__Vector__Stmt_ptr(self, ((self-> cap )  *  2));
+        }
+    }
+    int   i = HashMap_slot__Vector__Stmt_ptr(self, k);
+    if ((!(self-> occupied )[i])) {
+        ((self-> occupied )[i]  =  true);
+        ((self-> len )  =  ((self-> len )  +  1));
+    }
+    ((self-> keys )[i]  =  k);
+    ((self-> values )[i]  =  v);
+}
+
+Vector__Stmt*   HashMap_get__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k) {
+    int   i = HashMap_slot__Vector__Stmt_ptr(self, k);
+    return (self-> values )[i];
+}
+
+bool   HashMap_contains__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, const char*   k) {
+    int   i = HashMap_slot__Vector__Stmt_ptr(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
 }
 
 UseSite   Vector_get__UseSite (Vector__UseSite*   self, int   i) {
@@ -19279,10 +23657,17 @@ int   Vector_len__UseSite (Vector__UseSite*   self) {
 }
 
 Vector__UseSite*   Vector_new__UseSite (void) {
-    Vector__UseSite*   v = (( Vector__UseSite* )malloc(sizeof( Vector__UseSite )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__UseSite*   v;
+    if (arena) {
+        (v  =  (( Vector__UseSite* )__glide_palloc(sizeof( Vector__UseSite ))));
+    } else {
+        (v  =  (( Vector__UseSite* )malloc(sizeof( Vector__UseSite ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -19292,11 +23677,16 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        UseSite*   new_data = (( UseSite* )malloc((new_cap  *  sizeof( UseSite ))));
+        UseSite*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( UseSite* )__glide_palloc((new_cap  *  sizeof( UseSite )))));
+        } else {
+            (new_data  =  (( UseSite* )malloc((new_cap  *  sizeof( UseSite )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -19307,6 +23697,9 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x) {
 }
 
 void   HashMap_free__ImportInfo (HashMap__ImportInfo*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
     if (((self-> cap )  >  0)) {
         free((( void* )(self-> keys )));
         free((( void* )(self-> values )));
@@ -19362,12 +23755,19 @@ int   Vector_len__ImportInfo (Vector__ImportInfo*   self) {
 }
 
 HashMap__ImportInfo*   HashMap_new__ImportInfo (void) {
-    HashMap__ImportInfo*   m = (( HashMap__ImportInfo* )malloc(sizeof( HashMap__ImportInfo )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__ImportInfo*   m;
+    if (arena) {
+        (m  =  (( HashMap__ImportInfo* )__glide_palloc(sizeof( HashMap__ImportInfo ))));
+    } else {
+        (m  =  (( HashMap__ImportInfo* )malloc(sizeof( HashMap__ImportInfo ))));
+    }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
     ((m-> occupied )  =  NULL);
     ((m-> len )  =  0);
     ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
     return m;
 }
 
@@ -19377,11 +23777,16 @@ void   Vector_push__ImportInfo (Vector__ImportInfo*   self, ImportInfo   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        ImportInfo*   new_data = (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo ))));
+        ImportInfo*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( ImportInfo* )__glide_palloc((new_cap  *  sizeof( ImportInfo )))));
+        } else {
+            (new_data  =  (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -19392,10 +23797,17 @@ void   Vector_push__ImportInfo (Vector__ImportInfo*   self, ImportInfo   x) {
 }
 
 Vector__ImportInfo*   Vector_new__ImportInfo (void) {
-    Vector__ImportInfo*   v = (( Vector__ImportInfo* )malloc(sizeof( Vector__ImportInfo )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__ImportInfo*   v;
+    if (arena) {
+        (v  =  (( Vector__ImportInfo* )__glide_palloc(sizeof( Vector__ImportInfo ))));
+    } else {
+        (v  =  (( Vector__ImportInfo* )malloc(sizeof( Vector__ImportInfo ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -19433,6 +23845,18 @@ int   Vector_len__DiagEntry (Vector__DiagEntry*   self) {
     return (self-> len );
 }
 
+bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k) {
+    int   i = HashMap_slot__LspDoc(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
+}
+
+void   Vector_clear__Stmt (Vector__Stmt*   self) {
+    ((self-> len )  =  0);
+}
+
 void   HashMap_insert__LspDoc (HashMap__LspDoc*   self, const char*   k, LspDoc   v) {
     if (((self-> cap )  ==  0)) {
         HashMap_resize__LspDoc(self, 8);
@@ -19455,16 +23879,14 @@ LspDoc   HashMap_get__LspDoc (HashMap__LspDoc*   self, const char*   k) {
     return (self-> values )[i];
 }
 
-bool   HashMap_contains__LspDoc (HashMap__LspDoc*   self, const char*   k) {
-    int   i = HashMap_slot__LspDoc(self, k);
-    if ((i  <  0)) {
-        return false;
+Vector__string*   HashMap_keys__LspDoc (HashMap__LspDoc*   self) {
+    Vector__string*   out = Vector_new__string();
+    for (int   i = 0; (i  <  (self-> cap )); i++) {
+        if ((self-> occupied )[i]) {
+            Vector_push__string(out, (self-> keys )[i]);
+        }
     }
-    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
-}
-
-void   Vector_clear__Stmt (Vector__Stmt*   self) {
-    ((self-> len )  =  0);
+    return out;
 }
 
 void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym   x) {
@@ -19473,11 +23895,16 @@ void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym 
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        ImportableSym*   new_data = (( ImportableSym* )malloc((new_cap  *  sizeof( ImportableSym ))));
+        ImportableSym*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( ImportableSym* )__glide_palloc((new_cap  *  sizeof( ImportableSym )))));
+        } else {
+            (new_data  =  (( ImportableSym* )malloc((new_cap  *  sizeof( ImportableSym )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -19487,30 +23914,71 @@ void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym 
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
-Vector__ImportableSym*   Vector_new__ImportableSym (void) {
-    Vector__ImportableSym*   v = (( Vector__ImportableSym* )malloc(sizeof( Vector__ImportableSym )));
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    return v;
-}
-
-HashMap__LspDoc*   HashMap_new__LspDoc (void) {
-    HashMap__LspDoc*   m = (( HashMap__LspDoc* )malloc(sizeof( HashMap__LspDoc )));
+HashMap__Vector__Stmt_ptr*   HashMap_new__Vector__Stmt_ptr (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__Vector__Stmt_ptr*   m;
+    if (arena) {
+        (m  =  (( HashMap__Vector__Stmt_ptr* )__glide_palloc(sizeof( HashMap__Vector__Stmt_ptr ))));
+    } else {
+        (m  =  (( HashMap__Vector__Stmt_ptr* )malloc(sizeof( HashMap__Vector__Stmt_ptr ))));
+    }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
     ((m-> occupied )  =  NULL);
     ((m-> len )  =  0);
     ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
     return m;
 }
 
-int   Vector_len__JsonValue (Vector__JsonValue*   self) {
-    return (self-> len );
+Vector__ImportableSym*   Vector_new__ImportableSym (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__ImportableSym*   v;
+    if (arena) {
+        (v  =  (( Vector__ImportableSym* )__glide_palloc(sizeof( Vector__ImportableSym ))));
+    } else {
+        (v  =  (( Vector__ImportableSym* )malloc(sizeof( Vector__ImportableSym ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+HashMap__LspDoc*   HashMap_new__LspDoc (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__LspDoc*   m;
+    if (arena) {
+        (m  =  (( HashMap__LspDoc* )__glide_palloc(sizeof( HashMap__LspDoc ))));
+    } else {
+        (m  =  (( HashMap__LspDoc* )malloc(sizeof( HashMap__LspDoc ))));
+    }
+    ((m-> keys )  =  NULL);
+    ((m-> values )  =  NULL);
+    ((m-> occupied )  =  NULL);
+    ((m-> len )  =  0);
+    ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
+    return m;
+}
+
+void   Vector_free__JsonValue (Vector__JsonValue*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
+    if (((self-> cap )  >  0)) {
+        free((( void* )(self-> data )));
+    }
+    free((( void* )self));
 }
 
 JsonValue   Vector_get__JsonValue (Vector__JsonValue*   self, int   i) {
     return (self-> data )[i];
+}
+
+int   Vector_len__JsonValue (Vector__JsonValue*   self) {
+    return (self-> len );
 }
 
 void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x) {
@@ -19519,11 +23987,16 @@ void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        JsonValue*   new_data = (( JsonValue* )malloc((new_cap  *  sizeof( JsonValue ))));
+        JsonValue*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( JsonValue* )__glide_palloc((new_cap  *  sizeof( JsonValue )))));
+        } else {
+            (new_data  =  (( JsonValue* )malloc((new_cap  *  sizeof( JsonValue )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -19534,10 +24007,17 @@ void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x) {
 }
 
 Vector__JsonValue*   Vector_new__JsonValue (void) {
-    Vector__JsonValue*   v = (( Vector__JsonValue* )malloc(sizeof( Vector__JsonValue )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__JsonValue*   v;
+    if (arena) {
+        (v  =  (( Vector__JsonValue* )__glide_palloc(sizeof( Vector__JsonValue ))));
+    } else {
+        (v  =  (( Vector__JsonValue* )malloc(sizeof( Vector__JsonValue ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -19551,6 +24031,283 @@ FnMonoEntry   Vector_get__FnMonoEntry (Vector__FnMonoEntry*   self, int   i) {
 }
 
 int   Vector_len__FnMonoEntry (Vector__FnMonoEntry*   self) {
+    return (self-> len );
+}
+
+SelectArm   Vector_get__SelectArm (Vector__SelectArm*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__SelectArm (Vector__SelectArm*   self) {
+    return (self-> len );
+}
+
+AnonFn   Vector_get__AnonFn (Vector__AnonFn*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__AnonFn (Vector__AnonFn*   self) {
+    return (self-> len );
+}
+
+void   HashMap_clear__Type (HashMap__Type*   self) {
+    for (int   i = 0; (i  <  (self-> cap )); i++) {
+        ((self-> occupied )[i]  =  false);
+    }
+    ((self-> len )  =  0);
+}
+
+void   Vector_push__FnMonoEntry (Vector__FnMonoEntry*   self, FnMonoEntry   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        FnMonoEntry*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( FnMonoEntry* )__glide_palloc((new_cap  *  sizeof( FnMonoEntry )))));
+        } else {
+            (new_data  =  (( FnMonoEntry* )malloc((new_cap  *  sizeof( FnMonoEntry )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+void   HashMap_free__Stmt (HashMap__Stmt*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
+    if (((self-> cap )  >  0)) {
+        free((( void* )(self-> keys )));
+        free((( void* )(self-> values )));
+        free((( void* )(self-> occupied )));
+    }
+    free((( void* )self));
+}
+
+Expr   Vector_pop__Expr (Vector__Expr*   self) {
+    ((self-> len )  =  ((self-> len )  -  1));
+    return (self-> data )[(self-> len )];
+}
+
+Vector__AnonFn*   Vector_new__AnonFn (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__AnonFn*   v;
+    if (arena) {
+        (v  =  (( Vector__AnonFn* )__glide_palloc(sizeof( Vector__AnonFn ))));
+    } else {
+        (v  =  (( Vector__AnonFn* )malloc(sizeof( Vector__AnonFn ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__FnMonoEntry*   v;
+    if (arena) {
+        (v  =  (( Vector__FnMonoEntry* )__glide_palloc(sizeof( Vector__FnMonoEntry ))));
+    } else {
+        (v  =  (( Vector__FnMonoEntry* )malloc(sizeof( Vector__FnMonoEntry ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+Vector__string*   HashMap_keys__Type (HashMap__Type*   self) {
+    Vector__string*   out = Vector_new__string();
+    for (int   i = 0; (i  <  (self-> cap )); i++) {
+        if ((self-> occupied )[i]) {
+            Vector_push__string(out, (self-> keys )[i]);
+        }
+    }
+    return out;
+}
+
+void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        AnonFn*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( AnonFn* )__glide_palloc((new_cap  *  sizeof( AnonFn )))));
+        } else {
+            (new_data  =  (( AnonFn* )malloc((new_cap  *  sizeof( AnonFn )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+FnSig   HashMap_get__FnSig (HashMap__FnSig*   self, const char*   k) {
+    int   i = HashMap_slot__FnSig(self, k);
+    return (self-> values )[i];
+}
+
+bool   HashMap_contains__FnSig (HashMap__FnSig*   self, const char*   k) {
+    int   i = HashMap_slot__FnSig(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
+}
+
+void   Vector_free__string (Vector__string*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
+    if (((self-> cap )  >  0)) {
+        free((( void* )(self-> data )));
+    }
+    free((( void* )self));
+}
+
+const char*   HashMap_get__string (HashMap__string*   self, const char*   k) {
+    int   i = HashMap_slot__string(self, k);
+    return (self-> values )[i];
+}
+
+bool   HashMap_contains__string (HashMap__string*   self, const char*   k) {
+    int   i = HashMap_slot__string(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
+}
+
+MatchArm   Vector_get__MatchArm (Vector__MatchArm*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__MatchArm (Vector__MatchArm*   self) {
+    return (self-> len );
+}
+
+bool   Vector_get__bool (Vector__bool*   self, int   i) {
+    return (self-> data )[i];
+}
+
+void   Vector_push__bool (Vector__bool*   self, bool   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        bool*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        } else {
+            (new_data  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__bool*   Vector_new__bool (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__bool*   v;
+    if (arena) {
+        (v  =  (( Vector__bool* )__glide_palloc(sizeof( Vector__bool ))));
+    } else {
+        (v  =  (( Vector__bool* )malloc(sizeof( Vector__bool ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+BorrowEvent   Vector_pop__BorrowEvent (Vector__BorrowEvent*   self) {
+    ((self-> len )  =  ((self-> len )  -  1));
+    return (self-> data )[(self-> len )];
+}
+
+void   Vector_push__BorrowEvent (Vector__BorrowEvent*   self, BorrowEvent   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        BorrowEvent*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( BorrowEvent* )__glide_palloc((new_cap  *  sizeof( BorrowEvent )))));
+        } else {
+            (new_data  =  (( BorrowEvent* )malloc((new_cap  *  sizeof( BorrowEvent )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+BorrowEvent   Vector_get__BorrowEvent (Vector__BorrowEvent*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__BorrowEvent (Vector__BorrowEvent*   self) {
+    return (self-> len );
+}
+
+Type   HashMap_get__Type (HashMap__Type*   self, const char*   k) {
+    int   i = HashMap_slot__Type(self, k);
+    return (self-> values )[i];
+}
+
+bool   HashMap_contains__Type (HashMap__Type*   self, const char*   k) {
+    int   i = HashMap_slot__Type(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
+}
+
+Field   Vector_get__Field (Vector__Field*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Field (Vector__Field*   self) {
     return (self-> len );
 }
 
@@ -19571,216 +24328,11 @@ void   HashMap_insert__string (HashMap__string*   self, const char*   k, const c
     ((self-> values )[i]  =  v);
 }
 
-MatchArm   Vector_get__MatchArm (Vector__MatchArm*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__MatchArm (Vector__MatchArm*   self) {
-    return (self-> len );
-}
-
-AnonFn   Vector_get__AnonFn (Vector__AnonFn*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__AnonFn (Vector__AnonFn*   self) {
-    return (self-> len );
-}
-
 EnumVariant   Vector_get__EnumVariant (Vector__EnumVariant*   self, int   i) {
     return (self-> data )[i];
 }
 
 int   Vector_len__EnumVariant (Vector__EnumVariant*   self) {
-    return (self-> len );
-}
-
-void   HashMap_clear__Type (HashMap__Type*   self) {
-    for (int   i = 0; (i  <  (self-> cap )); i++) {
-        ((self-> occupied )[i]  =  false);
-    }
-    ((self-> len )  =  0);
-}
-
-void   Vector_push__FnMonoEntry (Vector__FnMonoEntry*   self, FnMonoEntry   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        FnMonoEntry*   new_data = (( FnMonoEntry* )malloc((new_cap  *  sizeof( FnMonoEntry ))));
-        for (int   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((self-> cap )  >  0)) {
-            free((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
-}
-
-void   HashMap_free__Stmt (HashMap__Stmt*   self) {
-    if (((self-> cap )  >  0)) {
-        free((( void* )(self-> keys )));
-        free((( void* )(self-> values )));
-        free((( void* )(self-> occupied )));
-    }
-    free((( void* )self));
-}
-
-Expr   Vector_pop__Expr (Vector__Expr*   self) {
-    ((self-> len )  =  ((self-> len )  -  1));
-    return (self-> data )[(self-> len )];
-}
-
-Vector__AnonFn*   Vector_new__AnonFn (void) {
-    Vector__AnonFn*   v = (( Vector__AnonFn* )malloc(sizeof( Vector__AnonFn )));
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    return v;
-}
-
-Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void) {
-    Vector__FnMonoEntry*   v = (( Vector__FnMonoEntry* )malloc(sizeof( Vector__FnMonoEntry )));
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    return v;
-}
-
-void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        AnonFn*   new_data = (( AnonFn* )malloc((new_cap  *  sizeof( AnonFn ))));
-        for (int   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((self-> cap )  >  0)) {
-            free((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
-}
-
-const char*   HashMap_get__string (HashMap__string*   self, const char*   k) {
-    int   i = HashMap_slot__string(self, k);
-    return (self-> values )[i];
-}
-
-bool   HashMap_contains__string (HashMap__string*   self, const char*   k) {
-    int   i = HashMap_slot__string(self, k);
-    if ((i  <  0)) {
-        return false;
-    }
-    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
-}
-
-FnSig   HashMap_get__FnSig (HashMap__FnSig*   self, const char*   k) {
-    int   i = HashMap_slot__FnSig(self, k);
-    return (self-> values )[i];
-}
-
-bool   HashMap_contains__FnSig (HashMap__FnSig*   self, const char*   k) {
-    int   i = HashMap_slot__FnSig(self, k);
-    if ((i  <  0)) {
-        return false;
-    }
-    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
-}
-
-Type   HashMap_get__Type (HashMap__Type*   self, const char*   k) {
-    int   i = HashMap_slot__Type(self, k);
-    return (self-> values )[i];
-}
-
-bool   HashMap_contains__Type (HashMap__Type*   self, const char*   k) {
-    int   i = HashMap_slot__Type(self, k);
-    if ((i  <  0)) {
-        return false;
-    }
-    return ((self-> occupied )[i]  &&  __glide_string_eq((self-> keys )[i], k));
-}
-
-bool   Vector_get__bool (Vector__bool*   self, int   i) {
-    return (self-> data )[i];
-}
-
-void   Vector_push__bool (Vector__bool*   self, bool   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        bool*   new_data = (( bool* )malloc((new_cap  *  sizeof( bool ))));
-        for (int   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((self-> cap )  >  0)) {
-            free((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
-}
-
-Vector__bool*   Vector_new__bool (void) {
-    Vector__bool*   v = (( Vector__bool* )malloc(sizeof( Vector__bool )));
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    return v;
-}
-
-BorrowEvent   Vector_pop__BorrowEvent (Vector__BorrowEvent*   self) {
-    ((self-> len )  =  ((self-> len )  -  1));
-    return (self-> data )[(self-> len )];
-}
-
-void   Vector_push__BorrowEvent (Vector__BorrowEvent*   self, BorrowEvent   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        BorrowEvent*   new_data = (( BorrowEvent* )malloc((new_cap  *  sizeof( BorrowEvent ))));
-        for (int   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((self-> cap )  >  0)) {
-            free((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
-}
-
-BorrowEvent   Vector_get__BorrowEvent (Vector__BorrowEvent*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__BorrowEvent (Vector__BorrowEvent*   self) {
-    return (self-> len );
-}
-
-Field   Vector_get__Field (Vector__Field*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Field (Vector__Field*   self) {
     return (self-> len );
 }
 
@@ -19818,7 +24370,22 @@ void   HashMap_insert__Type (HashMap__Type*   self, const char*   k, Type   v) {
     ((self-> values )[i]  =  v);
 }
 
+void   HashMap_free__string (HashMap__string*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
+    if (((self-> cap )  >  0)) {
+        free((( void* )(self-> keys )));
+        free((( void* )(self-> values )));
+        free((( void* )(self-> occupied )));
+    }
+    free((( void* )self));
+}
+
 void   Vector_free__DiagEntry (Vector__DiagEntry*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
     if (((self-> cap )  >  0)) {
         free((( void* )(self-> data )));
     }
@@ -19826,6 +24393,9 @@ void   Vector_free__DiagEntry (Vector__DiagEntry*   self) {
 }
 
 void   Vector_free__BorrowEvent (Vector__BorrowEvent*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
     if (((self-> cap )  >  0)) {
         free((( void* )(self-> data )));
     }
@@ -19833,6 +24403,9 @@ void   Vector_free__BorrowEvent (Vector__BorrowEvent*   self) {
 }
 
 void   HashMap_free__Type (HashMap__Type*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
     if (((self-> cap )  >  0)) {
         free((( void* )(self-> keys )));
         free((( void* )(self-> values )));
@@ -19842,6 +24415,9 @@ void   HashMap_free__Type (HashMap__Type*   self) {
 }
 
 void   HashMap_free__bool (HashMap__bool*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
     if (((self-> cap )  >  0)) {
         free((( void* )(self-> keys )));
         free((( void* )(self-> values )));
@@ -19851,6 +24427,9 @@ void   HashMap_free__bool (HashMap__bool*   self) {
 }
 
 void   HashMap_free__FnSig (HashMap__FnSig*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
     if (((self-> cap )  >  0)) {
         free((( void* )(self-> keys )));
         free((( void* )(self-> values )));
@@ -19860,48 +24439,83 @@ void   HashMap_free__FnSig (HashMap__FnSig*   self) {
 }
 
 HashMap__string*   HashMap_new__string (void) {
-    HashMap__string*   m = (( HashMap__string* )malloc(sizeof( HashMap__string )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__string*   m;
+    if (arena) {
+        (m  =  (( HashMap__string* )__glide_palloc(sizeof( HashMap__string ))));
+    } else {
+        (m  =  (( HashMap__string* )malloc(sizeof( HashMap__string ))));
+    }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
     ((m-> occupied )  =  NULL);
     ((m-> len )  =  0);
     ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
     return m;
 }
 
 Vector__DiagEntry*   Vector_new__DiagEntry (void) {
-    Vector__DiagEntry*   v = (( Vector__DiagEntry* )malloc(sizeof( Vector__DiagEntry )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__DiagEntry*   v;
+    if (arena) {
+        (v  =  (( Vector__DiagEntry* )__glide_palloc(sizeof( Vector__DiagEntry ))));
+    } else {
+        (v  =  (( Vector__DiagEntry* )malloc(sizeof( Vector__DiagEntry ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
 Vector__BorrowEvent*   Vector_new__BorrowEvent (void) {
-    Vector__BorrowEvent*   v = (( Vector__BorrowEvent* )malloc(sizeof( Vector__BorrowEvent )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__BorrowEvent*   v;
+    if (arena) {
+        (v  =  (( Vector__BorrowEvent* )__glide_palloc(sizeof( Vector__BorrowEvent ))));
+    } else {
+        (v  =  (( Vector__BorrowEvent* )malloc(sizeof( Vector__BorrowEvent ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
 HashMap__Type*   HashMap_new__Type (void) {
-    HashMap__Type*   m = (( HashMap__Type* )malloc(sizeof( HashMap__Type )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__Type*   m;
+    if (arena) {
+        (m  =  (( HashMap__Type* )__glide_palloc(sizeof( HashMap__Type ))));
+    } else {
+        (m  =  (( HashMap__Type* )malloc(sizeof( HashMap__Type ))));
+    }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
     ((m-> occupied )  =  NULL);
     ((m-> len )  =  0);
     ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
     return m;
 }
 
 HashMap__FnSig*   HashMap_new__FnSig (void) {
-    HashMap__FnSig*   m = (( HashMap__FnSig* )malloc(sizeof( HashMap__FnSig )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__FnSig*   m;
+    if (arena) {
+        (m  =  (( HashMap__FnSig* )__glide_palloc(sizeof( HashMap__FnSig ))));
+    } else {
+        (m  =  (( HashMap__FnSig* )malloc(sizeof( HashMap__FnSig ))));
+    }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
     ((m-> occupied )  =  NULL);
     ((m-> len )  =  0);
     ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
     return m;
 }
 
@@ -19919,11 +24533,16 @@ void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        DiagEntry*   new_data = (( DiagEntry* )malloc((new_cap  *  sizeof( DiagEntry ))));
+        DiagEntry*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( DiagEntry* )__glide_palloc((new_cap  *  sizeof( DiagEntry )))));
+        } else {
+            (new_data  =  (( DiagEntry* )malloc((new_cap  *  sizeof( DiagEntry )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -19931,6 +24550,16 @@ void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x) {
     }
     ((self-> data )[(self-> len )]  =  x);
     ((self-> len )  =  ((self-> len )  +  1));
+}
+
+void   Vector_free__Stmt (Vector__Stmt*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
+    if (((self-> cap )  >  0)) {
+        free((( void* )(self-> data )));
+    }
+    free((( void* )self));
 }
 
 bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k) {
@@ -19959,12 +24588,19 @@ void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v) {
 }
 
 HashMap__bool*   HashMap_new__bool (void) {
-    HashMap__bool*   m = (( HashMap__bool* )malloc(sizeof( HashMap__bool )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__bool*   m;
+    if (arena) {
+        (m  =  (( HashMap__bool* )__glide_palloc(sizeof( HashMap__bool ))));
+    } else {
+        (m  =  (( HashMap__bool* )malloc(sizeof( HashMap__bool ))));
+    }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
     ((m-> occupied )  =  NULL);
     ((m-> len )  =  0);
     ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
     return m;
 }
 
@@ -19982,11 +24618,16 @@ void   Vector_push__MacroBinding (Vector__MacroBinding*   self, MacroBinding   x
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        MacroBinding*   new_data = (( MacroBinding* )malloc((new_cap  *  sizeof( MacroBinding ))));
+        MacroBinding*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( MacroBinding* )__glide_palloc((new_cap  *  sizeof( MacroBinding )))));
+        } else {
+            (new_data  =  (( MacroBinding* )malloc((new_cap  *  sizeof( MacroBinding )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20005,10 +24646,17 @@ int   Vector_len__MacroParam (Vector__MacroParam*   self) {
 }
 
 Vector__MacroBinding*   Vector_new__MacroBinding (void) {
-    Vector__MacroBinding*   v = (( Vector__MacroBinding* )malloc(sizeof( Vector__MacroBinding )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__MacroBinding*   v;
+    if (arena) {
+        (v  =  (( Vector__MacroBinding* )__glide_palloc(sizeof( Vector__MacroBinding ))));
+    } else {
+        (v  =  (( Vector__MacroBinding* )malloc(sizeof( Vector__MacroBinding ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -20039,11 +24687,16 @@ void   Vector_push__TypeMacro (Vector__TypeMacro*   self, TypeMacro   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        TypeMacro*   new_data = (( TypeMacro* )malloc((new_cap  *  sizeof( TypeMacro ))));
+        TypeMacro*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( TypeMacro* )__glide_palloc((new_cap  *  sizeof( TypeMacro )))));
+        } else {
+            (new_data  =  (( TypeMacro* )malloc((new_cap  *  sizeof( TypeMacro )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20071,29 +24724,35 @@ void   HashMap_insert__Stmt (HashMap__Stmt*   self, const char*   k, Stmt   v) {
 }
 
 Vector__TypeMacro*   Vector_new__TypeMacro (void) {
-    Vector__TypeMacro*   v = (( Vector__TypeMacro* )malloc(sizeof( Vector__TypeMacro )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__TypeMacro*   v;
+    if (arena) {
+        (v  =  (( Vector__TypeMacro* )__glide_palloc(sizeof( Vector__TypeMacro ))));
+    } else {
+        (v  =  (( Vector__TypeMacro* )malloc(sizeof( Vector__TypeMacro ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
 HashMap__Stmt*   HashMap_new__Stmt (void) {
-    HashMap__Stmt*   m = (( HashMap__Stmt* )malloc(sizeof( HashMap__Stmt )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    HashMap__Stmt*   m;
+    if (arena) {
+        (m  =  (( HashMap__Stmt* )__glide_palloc(sizeof( HashMap__Stmt ))));
+    } else {
+        (m  =  (( HashMap__Stmt* )malloc(sizeof( HashMap__Stmt ))));
+    }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
     ((m-> occupied )  =  NULL);
     ((m-> len )  =  0);
     ((m-> cap )  =  0);
+    ((m-> is_arena )  =  arena);
     return m;
-}
-
-Expr   Vector_get__Expr (Vector__Expr*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Expr (Vector__Expr*   self) {
-    return (self-> len );
 }
 
 ParseDiag   Vector_get__ParseDiag (Vector__ParseDiag*   self, int   i) {
@@ -20104,17 +24763,75 @@ int   Vector_len__ParseDiag (Vector__ParseDiag*   self) {
     return (self-> len );
 }
 
+Stmt   Vector_pop__Stmt (Vector__Stmt*   self) {
+    ((self-> len )  =  ((self-> len )  -  1));
+    return (self-> data )[(self-> len )];
+}
+
+Expr   Vector_get__Expr (Vector__Expr*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Expr (Vector__Expr*   self) {
+    return (self-> len );
+}
+
+void   Vector_push__SelectArm (Vector__SelectArm*   self, SelectArm   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        SelectArm*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( SelectArm* )__glide_palloc((new_cap  *  sizeof( SelectArm )))));
+        } else {
+            (new_data  =  (( SelectArm* )malloc((new_cap  *  sizeof( SelectArm )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__SelectArm*   Vector_new__SelectArm (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__SelectArm*   v;
+    if (arena) {
+        (v  =  (( Vector__SelectArm* )__glide_palloc(sizeof( Vector__SelectArm ))));
+    } else {
+        (v  =  (( Vector__SelectArm* )malloc(sizeof( Vector__SelectArm ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
 void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        MatchArm*   new_data = (( MatchArm* )malloc((new_cap  *  sizeof( MatchArm ))));
+        MatchArm*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( MatchArm* )__glide_palloc((new_cap  *  sizeof( MatchArm )))));
+        } else {
+            (new_data  =  (( MatchArm* )malloc((new_cap  *  sizeof( MatchArm )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20125,10 +24842,17 @@ void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x) {
 }
 
 Vector__MatchArm*   Vector_new__MatchArm (void) {
-    Vector__MatchArm*   v = (( Vector__MatchArm* )malloc(sizeof( Vector__MatchArm )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__MatchArm*   v;
+    if (arena) {
+        (v  =  (( Vector__MatchArm* )__glide_palloc(sizeof( Vector__MatchArm ))));
+    } else {
+        (v  =  (( Vector__MatchArm* )malloc(sizeof( Vector__MatchArm ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -20138,11 +24862,16 @@ void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        Expr*   new_data = (( Expr* )malloc((new_cap  *  sizeof( Expr ))));
+        Expr*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( Expr* )__glide_palloc((new_cap  *  sizeof( Expr )))));
+        } else {
+            (new_data  =  (( Expr* )malloc((new_cap  *  sizeof( Expr )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20150,14 +24879,6 @@ void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
     }
     ((self-> data )[(self-> len )]  =  x);
     ((self-> len )  =  ((self-> len )  +  1));
-}
-
-const char*   Vector_get__string (Vector__string*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__string (Vector__string*   self) {
-    return (self-> len );
 }
 
 void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x) {
@@ -20190,11 +24911,16 @@ void   Vector_push__EnumVariant (Vector__EnumVariant*   self, EnumVariant   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        EnumVariant*   new_data = (( EnumVariant* )malloc((new_cap  *  sizeof( EnumVariant ))));
+        EnumVariant*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( EnumVariant* )__glide_palloc((new_cap  *  sizeof( EnumVariant )))));
+        } else {
+            (new_data  =  (( EnumVariant* )malloc((new_cap  *  sizeof( EnumVariant )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20210,11 +24936,16 @@ void   Vector_push__Type (Vector__Type*   self, Type   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        Type*   new_data = (( Type* )malloc((new_cap  *  sizeof( Type ))));
+        Type*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( Type* )__glide_palloc((new_cap  *  sizeof( Type )))));
+        } else {
+            (new_data  =  (( Type* )malloc((new_cap  *  sizeof( Type )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20225,18 +24956,32 @@ void   Vector_push__Type (Vector__Type*   self, Type   x) {
 }
 
 Vector__Type*   Vector_new__Type (void) {
-    Vector__Type*   v = (( Vector__Type* )malloc(sizeof( Vector__Type )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__Type*   v;
+    if (arena) {
+        (v  =  (( Vector__Type* )__glide_palloc(sizeof( Vector__Type ))));
+    } else {
+        (v  =  (( Vector__Type* )malloc(sizeof( Vector__Type ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
 Vector__EnumVariant*   Vector_new__EnumVariant (void) {
-    Vector__EnumVariant*   v = (( Vector__EnumVariant* )malloc(sizeof( Vector__EnumVariant )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__EnumVariant*   v;
+    if (arena) {
+        (v  =  (( Vector__EnumVariant* )__glide_palloc(sizeof( Vector__EnumVariant ))));
+    } else {
+        (v  =  (( Vector__EnumVariant* )malloc(sizeof( Vector__EnumVariant ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -20246,11 +24991,16 @@ void   Vector_push__Field (Vector__Field*   self, Field   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        Field*   new_data = (( Field* )malloc((new_cap  *  sizeof( Field ))));
+        Field*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( Field* )__glide_palloc((new_cap  *  sizeof( Field )))));
+        } else {
+            (new_data  =  (( Field* )malloc((new_cap  *  sizeof( Field )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20261,10 +25011,17 @@ void   Vector_push__Field (Vector__Field*   self, Field   x) {
 }
 
 Vector__Field*   Vector_new__Field (void) {
-    Vector__Field*   v = (( Vector__Field* )malloc(sizeof( Vector__Field )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__Field*   v;
+    if (arena) {
+        (v  =  (( Vector__Field* )__glide_palloc(sizeof( Vector__Field ))));
+    } else {
+        (v  =  (( Vector__Field* )malloc(sizeof( Vector__Field ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -20274,11 +25031,16 @@ void   Vector_push__Param (Vector__Param*   self, Param   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        Param*   new_data = (( Param* )malloc((new_cap  *  sizeof( Param ))));
+        Param*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( Param* )__glide_palloc((new_cap  *  sizeof( Param )))));
+        } else {
+            (new_data  =  (( Param* )malloc((new_cap  *  sizeof( Param )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20289,10 +25051,17 @@ void   Vector_push__Param (Vector__Param*   self, Param   x) {
 }
 
 Vector__Param*   Vector_new__Param (void) {
-    Vector__Param*   v = (( Vector__Param* )malloc(sizeof( Vector__Param )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__Param*   v;
+    if (arena) {
+        (v  =  (( Vector__Param* )__glide_palloc(sizeof( Vector__Param ))));
+    } else {
+        (v  =  (( Vector__Param* )malloc(sizeof( Vector__Param ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -20302,11 +25071,16 @@ void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        MacroParam*   new_data = (( MacroParam* )malloc((new_cap  *  sizeof( MacroParam ))));
+        MacroParam*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( MacroParam* )__glide_palloc((new_cap  *  sizeof( MacroParam )))));
+        } else {
+            (new_data  =  (( MacroParam* )malloc((new_cap  *  sizeof( MacroParam )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20317,10 +25091,17 @@ void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x) {
 }
 
 Vector__MacroParam*   Vector_new__MacroParam (void) {
-    Vector__MacroParam*   v = (( Vector__MacroParam* )malloc(sizeof( Vector__MacroParam )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__MacroParam*   v;
+    if (arena) {
+        (v  =  (( Vector__MacroParam* )__glide_palloc(sizeof( Vector__MacroParam ))));
+    } else {
+        (v  =  (( Vector__MacroParam* )malloc(sizeof( Vector__MacroParam ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -20330,11 +25111,16 @@ void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        Stmt*   new_data = (( Stmt* )malloc((new_cap  *  sizeof( Stmt ))));
+        Stmt*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( Stmt* )__glide_palloc((new_cap  *  sizeof( Stmt )))));
+        } else {
+            (new_data  =  (( Stmt* )malloc((new_cap  *  sizeof( Stmt )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20345,10 +25131,17 @@ void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x) {
 }
 
 Vector__Stmt*   Vector_new__Stmt (void) {
-    Vector__Stmt*   v = (( Vector__Stmt* )malloc(sizeof( Vector__Stmt )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__Stmt*   v;
+    if (arena) {
+        (v  =  (( Vector__Stmt* )__glide_palloc(sizeof( Vector__Stmt ))));
+    } else {
+        (v  =  (( Vector__Stmt* )malloc(sizeof( Vector__Stmt ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
@@ -20358,11 +25151,16 @@ void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        ParseDiag*   new_data = (( ParseDiag* )malloc((new_cap  *  sizeof( ParseDiag ))));
+        ParseDiag*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( ParseDiag* )__glide_palloc((new_cap  *  sizeof( ParseDiag )))));
+        } else {
+            (new_data  =  (( ParseDiag* )malloc((new_cap  *  sizeof( ParseDiag )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20372,20 +25170,52 @@ void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x) {
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
+void   Vector_free__ParseDiag (Vector__ParseDiag*   self) {
+    if ((self-> is_arena )) {
+        return;
+    }
+    if (((self-> cap )  >  0)) {
+        free((( void* )(self-> data )));
+    }
+    free((( void* )self));
+}
+
 Vector__ParseDiag*   Vector_new__ParseDiag (void) {
-    Vector__ParseDiag*   v = (( Vector__ParseDiag* )malloc(sizeof( Vector__ParseDiag )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__ParseDiag*   v;
+    if (arena) {
+        (v  =  (( Vector__ParseDiag* )__glide_palloc(sizeof( Vector__ParseDiag ))));
+    } else {
+        (v  =  (( Vector__ParseDiag* )malloc(sizeof( Vector__ParseDiag ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
 Vector__Expr*   Vector_new__Expr (void) {
-    Vector__Expr*   v = (( Vector__Expr* )malloc(sizeof( Vector__Expr )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__Expr*   v;
+    if (arena) {
+        (v  =  (( Vector__Expr* )__glide_palloc(sizeof( Vector__Expr ))));
+    } else {
+        (v  =  (( Vector__Expr* )malloc(sizeof( Vector__Expr ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
+}
+
+const char*   Vector_get__string (Vector__string*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__string (Vector__string*   self) {
+    return (self-> len );
 }
 
 void   Vector_push__string (Vector__string*   self, const char*   x) {
@@ -20394,11 +25224,16 @@ void   Vector_push__string (Vector__string*   self, const char*   x) {
         if (((self-> cap )  >  0)) {
             (new_cap  =  ((self-> cap )  *  2));
         }
-        const char**   new_data = (( const char** )malloc((new_cap  *  sizeof( const char* ))));
+        const char**   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+        } else {
+            (new_data  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+        }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
-        if (((self-> cap )  >  0)) {
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
             free((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
@@ -20409,10 +25244,17 @@ void   Vector_push__string (Vector__string*   self, const char*   x) {
 }
 
 Vector__string*   Vector_new__string (void) {
-    Vector__string*   v = (( Vector__string* )malloc(sizeof( Vector__string )));
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__string*   v;
+    if (arena) {
+        (v  =  (( Vector__string* )__glide_palloc(sizeof( Vector__string ))));
+    } else {
+        (v  =  (( Vector__string* )malloc(sizeof( Vector__string ))));
+    }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
     ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
     return v;
 }
 
