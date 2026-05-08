@@ -3162,6 +3162,12 @@ static __glide_result_string_t __glide_ok_string(const char* v) { __glide_result
 static __glide_result_string_t __glide_err_string(const char* msg) { __glide_result_string_t r; r.ok = 0; r.err = msg; return r; }
 static const char* __glide_unwrap_string(__glide_result_string_t r) { const char* z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
 #endif
+#ifndef __GLIDE_RESULT_void_GUARD
+#define __GLIDE_RESULT_void_GUARD
+typedef struct __glide_result_void_t { int ok; const char* err; } __glide_result_void_t;
+static __glide_result_void_t __glide_ok_void(void) { __glide_result_void_t r; r.ok = 1; r.err = (const char*)0; return r; }
+static __glide_result_void_t __glide_err_void(const char* msg) { __glide_result_void_t r; r.ok = 0; r.err = msg; return r; }
+#endif
 #ifndef __GLIDE_RESULT_u64_GUARD
 #define __GLIDE_RESULT_u64_GUARD
 typedef struct __glide_result_u64_t { int ok; uint64_t val; const char* err; } __glide_result_u64_t;
@@ -4030,7 +4036,7 @@ __glide_result_string_t   os_username (void);
 __glide_result_string_t   os_hostname (void);
 __glide_result_string_t   os_kernel_version (void);
 __glide_result_string_t   os_cwd (void);
-__glide_result_int_t   os_chdir (const char*   path);
+__glide_result_void_t   os_chdir (const char*   path);
 __glide_result_string_t   os_exe_path (void);
 __glide_result_string_t   os_exe_dir (void);
 __glide_result_int_t   os_cpu_count (void);
@@ -4186,6 +4192,7 @@ Stmt*   parse_if (Parser*   p);
 Stmt*   parse_while (Parser*   p);
 Stmt*   parse_for (Parser*   p);
 Stmt*   parse_for_in (Parser*   p, int   line, int   col);
+bool   at_type_start (Parser*   p);
 Type*   parse_type (Parser*   p);
 Expr*   parse_expr (Parser*   p, int   min_bp);
 int   peek_binop_bp (Parser*   p);
@@ -5407,12 +5414,11 @@ __glide_result_string_t   os_cwd (void) {
     return __glide_ok_string(s);
 }
 
-__glide_result_int_t   os_chdir (const char*   path) {
-    int   rc = __glide_chdir(path);
-    if ((rc  !=  0)) {
-        return __glide_err_int("chdir failed");
+__glide_result_void_t   os_chdir (const char*   path) {
+    if ((__glide_chdir(path)  !=  0)) {
+        return __glide_err_void("chdir failed");
     }
-    return __glide_ok_int(0);
+    return __glide_ok_void();
 }
 
 __glide_result_string_t   os_exe_path (void) {
@@ -8268,8 +8274,51 @@ Stmt*   parse_for_in (Parser*   p, int   line, int   col) {
     return s;
 }
 
+bool   at_type_start (Parser*   p) {
+    int   k = ((p-> current ). kind );
+    if ((k  ==  TOK_IDENT)) {
+        return true;
+    }
+    if ((k  ==  TOK_KEYWORD)) {
+        const char*   lex = ((p-> current ). lexeme );
+        if (__glide_string_eq(lex, "chan")) {
+            return true;
+        }
+        if (__glide_string_eq(lex, "dyn")) {
+            return true;
+        }
+        if (__glide_string_eq(lex, "fn")) {
+            return true;
+        }
+        return false;
+    }
+    if ((k  ==  TOK_OP)) {
+        const char*   lex = ((p-> current ). lexeme );
+        if (__glide_string_eq(lex, "*")) {
+            return true;
+        }
+        if (__glide_string_eq(lex, "&")) {
+            return true;
+        }
+        if (__glide_string_eq(lex, "[")) {
+            return true;
+        }
+        if (__glide_string_eq(lex, "?")) {
+            return true;
+        }
+        if (__glide_string_eq(lex, "!")) {
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 Type*   parse_type (Parser*   p) {
     if (Parser_eat_op(p, "!")) {
+        if ((!at_type_start(p))) {
+            return ty_result(ty_named("void"));
+        }
         Type*   inner = parse_type(p);
         return ty_result(inner);
     }
@@ -10714,6 +10763,9 @@ void   check_let_or_const (Typer*   t, Stmt*   s) {
 void   check_return (Typer*   t, Stmt*   s) {
     if (((s-> expr_value )  ==  NULL)) {
         if (((t-> current_ret )  !=  NULL)) {
+            if (((((((t-> current_ret )-> kind )  ==  TY_RESULT)  &&  (((t-> current_ret )-> inner )  !=  NULL))  &&  ((((t-> current_ret )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((t-> current_ret )-> inner )-> name ), "void"))) {
+                return;
+            }
             Typer_err(t, (s-> line ), (s-> column ), "missing return value");
         }
         return;
@@ -11665,6 +11717,15 @@ void   emit_result_runtime (CG*   g) {
             continue;
         }
         HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
+        if ((((t. kind )  ==  TY_NAMED)  &&  __glide_string_eq((t. name ), "void"))) {
+            printf("%s\n", "#ifndef __GLIDE_RESULT_void_GUARD");
+            printf("%s\n", "#define __GLIDE_RESULT_void_GUARD");
+            printf("%s\n", "typedef struct __glide_result_void_t { int ok; const char* err; } __glide_result_void_t;");
+            printf("%s\n", "static __glide_result_void_t __glide_ok_void(void) { __glide_result_void_t r; r.ok = 1; r.err = (const char*)0; return r; }");
+            printf("%s\n", "static __glide_result_void_t __glide_err_void(const char* msg) { __glide_result_void_t r; r.ok = 0; r.err = msg; return r; }");
+            printf("%s\n", "#endif");
+            continue;
+        }
         const char*   tc = type_to_c((&t));
         const char*   s1 = _cg_replace(tmpl, "@M@", m);
         const char*   s2 = _cg_replace(s1, "@TC@", tc);
@@ -14728,6 +14789,10 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             if (((s-> expr_value )  !=  NULL)) {
                 printf("%s", " ");
                 emit_expr(g, (s-> expr_value ));
+            } else {
+                if (((((((g-> current_ret_ty )  !=  NULL)  &&  (((g-> current_ret_ty )-> kind )  ==  TY_RESULT))  &&  (((g-> current_ret_ty )-> inner )  !=  NULL))  &&  ((((g-> current_ret_ty )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((g-> current_ret_ty )-> inner )-> name ), "void"))) {
+                    printf("%s", " __glide_ok_void()");
+                }
             }
             printf("%s\n", ";");
         }
@@ -15593,6 +15658,10 @@ void   emit_fn (CG*   g, Stmt*   s) {
         }
     }
     CG_emit_deferred_reverse(g, 1);
+    if (((((((s-> fn_ret_ty )  !=  NULL)  &&  (((s-> fn_ret_ty )-> kind )  ==  TY_RESULT))  &&  (((s-> fn_ret_ty )-> inner )  !=  NULL))  &&  ((((s-> fn_ret_ty )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((s-> fn_ret_ty )-> inner )-> name ), "void"))) {
+        ind(1);
+        printf("%s\n", "return __glide_ok_void();");
+    }
     ((g-> defer_stack )  =  saved_defer);
     ((g-> err_defer_stack )  =  saved_err_defer);
     ((g-> auto_drop_stack )  =  saved_drop);
@@ -21880,6 +21949,9 @@ void   analysis_missing_return (Typer*   t, Vector__Stmt*   program) {
             continue;
         }
         if ((s. is_naked )) {
+            continue;
+        }
+        if (((((((s. fn_ret_ty )-> kind )  ==  TY_RESULT)  &&  (((s. fn_ret_ty )-> inner )  !=  NULL))  &&  ((((s. fn_ret_ty )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((s. fn_ret_ty )-> inner )-> name ), "void"))) {
             continue;
         }
         if ((!body_always_returns((s. fn_body )))) {
