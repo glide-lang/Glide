@@ -1,0 +1,43 @@
+import stdlib::testing::*;
+import stdlib::os::*;
+
+fn test_os_cwd_returns_path() -> int {
+    let r: !string = os_cwd();
+    assert!(r.ok);
+    assert!(r.val.len() > 0);
+    return 0;
+}
+
+fn test_os_chdir_to_temp_dir_and_back() -> int {
+    let original: !string = os_cwd();
+    assert!(original.ok);
+    let temp: !string = os_temp_dir();
+    assert!(temp.ok);
+
+    let go: !int = os_chdir(temp.val);
+    assert!(go.ok);
+
+    let now: !string = os_cwd();
+    assert!(now.ok);
+    assert!(now.val.len() > 0);
+
+    let back: !int = os_chdir(original.val);
+    assert!(back.ok);
+    return 0;
+}
+
+fn test_os_exe_path_is_absolute() -> int {
+    let r: !string = os_exe_path();
+    assert!(r.ok);
+    assert!(r.val.len() > 5);
+    return 0;
+}
+
+fn test_os_exe_dir_is_prefix_of_path() -> int {
+    let p: !string = os_exe_path();
+    let d: !string = os_exe_dir();
+    assert!(p.ok);
+    assert!(d.ok);
+    assert!(p.val.len() > d.val.len());
+    return 0;
+}

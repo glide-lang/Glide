@@ -1,0 +1,16 @@
+import stdlib::testing::*;
+import stdlib::os::*;
+
+fn test_os_is_tty_returns_bool() -> int {
+    let _v: bool = os_is_tty(1);
+    return 0;
+}
+
+fn test_os_shell_zero_exit() -> int {
+    let mut cmd: string = "exit 0";
+    if os_is_windows() { cmd = "cmd /c exit 0"; }
+    let r: !int = os_shell(cmd);
+    assert!(r.ok);
+    assert_eq!(r.val, 0);
+    return 0;
+}

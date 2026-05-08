@@ -26,12 +26,26 @@ fn test_os_path_sep_matches_platform() -> int {
     return 0;
 }
 
-fn test_os_cwd_is_non_empty() -> int {
-    assert!(os_cwd().len() > 0);
+fn test_os_path_list_sep_matches_platform() -> int {
+    let mut expected: string = ":";
+    if os_is_windows() { expected = ";"; }
+    assert_str_eq!(os_path_list_sep(), expected);
     return 0;
 }
 
-fn test_os_exe_path_is_non_empty() -> int {
-    assert!(os_exe_path().len() > 0);
+fn test_os_line_sep_matches_platform() -> int {
+    let mut expected: string = "\n";
+    if os_is_windows() { expected = "\r\n"; }
+    assert_str_eq!(os_line_sep(), expected);
+    return 0;
+}
+
+fn test_os_is_linux_implies_is_posix() -> int {
+    if os_is_linux() { assert!(os_is_posix()); }
+    return 0;
+}
+
+fn test_os_is_macos_implies_is_posix() -> int {
+    if os_is_macos() { assert!(os_is_posix()); }
     return 0;
 }

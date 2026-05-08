@@ -1,0 +1,52 @@
+import stdlib::testing::*;
+import stdlib::os::*;
+
+fn test_os_pid_is_positive() -> int {
+    assert!(os_pid() > 0);
+    return 0;
+}
+
+fn test_os_ppid_returns_value() -> int {
+    if !os_is_posix() { return 0; }
+    let r: !int = os_ppid();
+    assert!(r.ok);
+    assert!(r.val > 0);
+    return 0;
+}
+
+fn test_os_uid_on_posix() -> int {
+    if !os_is_posix() { return 0; }
+    let r: !int = os_uid();
+    assert!(r.ok);
+    assert!(r.val >= 0);
+    return 0;
+}
+
+fn test_os_gid_on_posix() -> int {
+    if !os_is_posix() { return 0; }
+    let r: !int = os_gid();
+    assert!(r.ok);
+    assert!(r.val >= 0);
+    return 0;
+}
+
+fn test_os_username_non_empty() -> int {
+    let r: !string = os_username();
+    assert!(r.ok);
+    assert!(r.val.len() > 0);
+    return 0;
+}
+
+fn test_os_hostname_non_empty() -> int {
+    let r: !string = os_hostname();
+    assert!(r.ok);
+    assert!(r.val.len() > 0);
+    return 0;
+}
+
+fn test_os_kernel_version_non_empty() -> int {
+    let r: !string = os_kernel_version();
+    assert!(r.ok);
+    assert!(r.val.len() > 0);
+    return 0;
+}

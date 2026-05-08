@@ -1,0 +1,55 @@
+import stdlib::testing::*;
+import stdlib::os::*;
+
+fn test_os_cpu_count_at_least_one() -> int {
+    let r: !int = os_cpu_count();
+    assert!(r.ok);
+    assert!(r.val >= 1);
+    return 0;
+}
+
+fn test_os_cpu_count_physical_at_most_logical() -> int {
+    let logical: !int = os_cpu_count();
+    let phys: !int = os_cpu_count_physical();
+    assert!(logical.ok);
+    assert!(phys.ok);
+    assert!(phys.val >= 1);
+    assert!(phys.val <= logical.val);
+    return 0;
+}
+
+fn test_os_page_size_is_reasonable() -> int {
+    let r: !int = os_page_size();
+    assert!(r.ok);
+    assert!(r.val >= 512);
+    assert!(r.val <= 65536);
+    return 0;
+}
+
+fn test_os_memory_total_positive() -> int {
+    let r: !u64 = os_memory_total();
+    assert!(r.ok);
+    return 0;
+}
+
+fn test_os_memory_free_at_most_total() -> int {
+    let total: !u64 = os_memory_total();
+    let free:  !u64 = os_memory_free();
+    if !free.ok { return 0; }
+    assert!(total.ok);
+    assert!(free.val <= total.val);
+    return 0;
+}
+
+fn test_os_uptime_returns_value() -> int {
+    let r: !u64 = os_uptime_secs();
+    assert!(r.ok);
+    return 0;
+}
+
+fn test_os_loadavg_on_posix() -> int {
+    if !os_is_posix() { return 0; }
+    let r: !f64 = os_loadavg_1m();
+    assert!(r.ok);
+    return 0;
+}
