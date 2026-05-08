@@ -2833,6 +2833,19 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         print!("__glide_bool_to_string(");
                         emit_expr(g, &a);
                         print!(")");
+                    } else if at != null && at.kind == TY_NAMED
+                              && (at.name.eq("i64") || at.name.eq("isize") || at.name.eq("long")) {
+                        // Cast to (long long) so `%lld` works regardless of whether
+                        // int64_t is `long long` (Windows) or `long` (Linux). Quiets
+                        // -Wformat without forcing an inttypes.h dance.
+                        print!("(long long)(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED
+                              && (at.name.eq("u64") || at.name.eq("usize") || at.name.eq("ulong")) {
+                        print!("(unsigned long long)(");
+                        emit_expr(g, &a);
+                        print!(")");
                     } else {
                         emit_expr(g, &a);
                     }
@@ -2879,7 +2892,20 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 for let j: int = 1; j < e.args.len(); j++ {
                     print!(", ");
                     let a: Expr = e.args.get(j);
-                    emit_expr(g, &a);
+                    let at: *Type = infer_for_codegen(g, &a);
+                    if at != null && at.kind == TY_NAMED
+                       && (at.name.eq("i64") || at.name.eq("isize") || at.name.eq("long")) {
+                        print!("(long long)(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED
+                              && (at.name.eq("u64") || at.name.eq("usize") || at.name.eq("ulong")) {
+                        print!("(unsigned long long)(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else {
+                        emit_expr(g, &a);
+                    }
                 }
             }
             print!(")");
