@@ -443,96 +443,465 @@ static void Arena_reset(Arena* a) { a->used = 0; }
     #endif
     #endif // GLIDE_FS_VIA_CRAW
 
-
-    #ifndef GLIDE_OS_HELPERS_DEFINED
-    #define GLIDE_OS_HELPERS_DEFINED
-    static const char* __glide_os_name(void) {
-    #if defined(_WIN32)
-        return "windows";
-    #elif defined(__APPLE__)
-        return "macos";
-    #elif defined(__linux__)
-        return "linux";
-    #elif defined(__FreeBSD__)
-        return "freebsd";
-    #elif defined(__OpenBSD__)
-        return "openbsd";
-    #elif defined(__NetBSD__)
-        return "netbsd";
-    #else
-        return "unknown";
-    #endif
-    }
-    static const char* __glide_os_arch(void) {
-    #if defined(__x86_64__) || defined(_M_X64)
-        return "x86_64";
-    #elif defined(__aarch64__) || defined(_M_ARM64)
-        return "aarch64";
-    #elif defined(__arm__) || defined(_M_ARM)
-        return "arm";
-    #elif defined(__i386__) || defined(_M_IX86)
-        return "x86";
-    #elif defined(__riscv) && (__riscv_xlen == 64)
-        return "riscv64";
-    #else
-        return "unknown";
-    #endif
-    }
-    static const char* __glide_cwd(void) {
-        static char buf[1024];
-    #ifdef _WIN32
-        DWORD n = GetCurrentDirectoryA((DWORD)sizeof(buf), buf);
-        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; }
-    #else
-        if (!getcwd(buf, sizeof(buf))) { buf[0] = 0; }
-    #endif
-        return buf;
-    }
-    #endif
-    #ifdef GLIDE_OS_VIA_CRAW
-    #ifndef GLIDE_OS_PLATFORM_HELPERS_DEFINED
-    #define GLIDE_OS_PLATFORM_HELPERS_DEFINED
-    static int __glide_is_windows(void) {
-    #ifdef _WIN32
-        return 1;
-    #else
-        return 0;
-    #endif
-    }
-    static int __glide_shell(const char* cmd) { return system(cmd); }
-    #ifdef _WIN32
-    static const char* __glide_exe_path(void) {
-        static char buf[1024];
-        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
-        if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
-        return buf;
-    }
-    static const char* __glide_exe_dir(void) {
-        static char buf[1024];
-        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
-        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
-        for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
-        return "";
-    }
-    #else
-    static const char* __glide_exe_path(void) {
-        static char buf[1024];
-        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-        if (n <= 0) { buf[0] = 0; return buf; }
-        buf[n] = 0;
-        return buf;
-    }
-    static const char* __glide_exe_dir(void) {
-        static char buf[1024];
-        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-        if (n <= 0) { buf[0] = 0; return buf; }
-        buf[n] = 0;
-        for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
-        return "";
-    }
-    #endif
-    #endif
-    #endif // GLIDE_OS_VIA_CRAW
+
+    // ---- Always-on helpers (no ratchet): cheap compile-time facts. ----
+    #ifndef GLIDE_OS_HELPERS_DEFINED
+    #define GLIDE_OS_HELPERS_DEFINED
+    static const char* __glide_os_name(void) {
+    #if defined(_WIN32)
+        return "windows";
+    #elif defined(__APPLE__)
+        return "macos";
+    #elif defined(__linux__)
+        return "linux";
+    #elif defined(__FreeBSD__)
+        return "freebsd";
+    #elif defined(__OpenBSD__)
+        return "openbsd";
+    #elif defined(__NetBSD__)
+        return "netbsd";
+    #else
+        return "unknown";
+    #endif
+    }
+    static const char* __glide_os_arch(void) {
+    #if defined(__x86_64__) || defined(_M_X64)
+        return "x86_64";
+    #elif defined(__aarch64__) || defined(_M_ARM64)
+        return "aarch64";
+    #elif defined(__arm__) || defined(_M_ARM)
+        return "arm";
+    #elif defined(__i386__) || defined(_M_IX86)
+        return "x86";
+    #elif defined(__riscv) && (__riscv_xlen == 64)
+        return "riscv64";
+    #else
+        return "unknown";
+    #endif
+    }
+    static const char* __glide_path_list_sep(void) {
+    #ifdef _WIN32
+        return ";";
+    #else
+        return ":";
+    #endif
+    }
+    static const char* __glide_cwd(void) {
+        static char buf[4096];
+    #ifdef _WIN32
+        DWORD n = GetCurrentDirectoryA((DWORD)sizeof(buf), buf);
+        if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
+    #else
+        if (!getcwd(buf, sizeof(buf))) buf[0] = 0;
+    #endif
+        return buf;
+    }
+    #endif // GLIDE_OS_HELPERS_DEFINED
+
+    #ifdef GLIDE_OS_VIA_CRAW
+    #ifndef GLIDE_OS_PLATFORM_HELPERS_DEFINED
+    #define GLIDE_OS_PLATFORM_HELPERS_DEFINED
+
+    #ifdef _WIN32
+    #include <windows.h>
+    #include <lmcons.h>
+    #include <io.h>
+    #else
+    #include <unistd.h>
+    #include <sys/utsname.h>
+    #include <pwd.h>
+    #include <sys/types.h>
+    #include <time.h>
+    #ifdef __linux__
+    #include <sys/sysinfo.h>
+    #endif
+    #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    #include <sys/sysctl.h>
+    #include <sys/time.h>
+    #endif
+    #endif
+
+    static int __glide_is_windows(void) {
+    #ifdef _WIN32
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+    static int __glide_shell(const char* cmd) { return system(cmd); }
+
+    // Process identity
+    static int __glide_pid(void) {
+    #ifdef _WIN32
+        return (int)GetCurrentProcessId();
+    #else
+        return (int)getpid();
+    #endif
+    }
+    static int __glide_ppid(void) {
+    #ifdef _WIN32
+        return -1;
+    #else
+        return (int)getppid();
+    #endif
+    }
+    static int __glide_uid(void) {
+    #ifdef _WIN32
+        return -1;
+    #else
+        return (int)getuid();
+    #endif
+    }
+    static int __glide_gid(void) {
+    #ifdef _WIN32
+        return -1;
+    #else
+        return (int)getgid();
+    #endif
+    }
+    static const char* __glide_username(void) {
+        static char buf[256];
+    #ifdef _WIN32
+        DWORD n = (DWORD)sizeof(buf);
+        if (!GetUserNameA(buf, &n)) buf[0] = 0;
+    #else
+        const char* env = getenv("USER");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+        } else {
+            struct passwd* pw = getpwuid(getuid());
+            if (pw && pw->pw_name) {
+                size_t L = strlen(pw->pw_name);
+                if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+                memcpy(buf, pw->pw_name, L); buf[L] = 0;
+            } else {
+                buf[0] = 0;
+            }
+        }
+    #endif
+        return buf;
+    }
+    static const char* __glide_hostname(void) {
+        static char buf[256];
+    #ifdef _WIN32
+        DWORD n = (DWORD)sizeof(buf);
+        if (!GetComputerNameA(buf, &n)) buf[0] = 0;
+    #else
+        if (gethostname(buf, sizeof(buf)) != 0) buf[0] = 0;
+        buf[sizeof(buf) - 1] = 0;
+    #endif
+        return buf;
+    }
+    static const char* __glide_kernel_version(void) {
+        static char buf[256];
+    #ifdef _WIN32
+        OSVERSIONINFOA v;
+        memset(&v, 0, sizeof(v));
+        v.dwOSVersionInfoSize = sizeof(v);
+        if (GetVersionExA(&v)) {
+            snprintf(buf, sizeof(buf), "%lu.%lu.%lu",
+                     (unsigned long)v.dwMajorVersion,
+                     (unsigned long)v.dwMinorVersion,
+                     (unsigned long)v.dwBuildNumber);
+        } else {
+            buf[0] = 0;
+        }
+    #else
+        struct utsname u;
+        if (uname(&u) == 0) {
+            size_t L = strlen(u.release);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, u.release, L); buf[L] = 0;
+        } else {
+            buf[0] = 0;
+        }
+    #endif
+        return buf;
+    }
+
+    // CWD / executable mutator
+    static int __glide_chdir(const char* path) {
+    #ifdef _WIN32
+        return SetCurrentDirectoryA(path) ? 0 : -1;
+    #else
+        return chdir(path);
+    #endif
+    }
+
+    #ifdef _WIN32
+    static const char* __glide_exe_path(void) {
+        static char buf[1024];
+        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
+        if (n == 0 || n >= sizeof(buf)) buf[0] = 0;
+        return buf;
+    }
+    static const char* __glide_exe_dir(void) {
+        static char buf[1024];
+        DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
+        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
+        for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
+        return "";
+    }
+    #else
+    static const char* __glide_exe_path(void) {
+        static char buf[1024];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n <= 0) { buf[0] = 0; return buf; }
+        buf[n] = 0;
+        return buf;
+    }
+    static const char* __glide_exe_dir(void) {
+        static char buf[1024];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n <= 0) { buf[0] = 0; return buf; }
+        buf[n] = 0;
+        for (ssize_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
+        return "";
+    }
+    #endif
+
+    // Hardware
+    static int __glide_cpu_count(void) {
+    #ifdef _WIN32
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        return (int)si.dwNumberOfProcessors;
+    #else
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        return n > 0 ? (int)n : 1;
+    #endif
+    }
+    static int __glide_cpu_count_physical(void) {
+    #ifdef _WIN32
+        DWORD len = 0;
+        GetLogicalProcessorInformation(NULL, &len);
+        if (len == 0) return -1;
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION* info =
+            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION*)malloc(len);
+        if (!info) return -1;
+        if (!GetLogicalProcessorInformation(info, &len)) { free(info); return -1; }
+        int count = 0;
+        DWORD n = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+        for (DWORD i = 0; i < n; i++) {
+            if (info[i].Relationship == RelationProcessorCore) count++;
+        }
+        free(info);
+        return count > 0 ? count : -1;
+    #elif defined(__linux__)
+        FILE* f = fopen("/proc/cpuinfo", "r");
+        if (!f) return -1;
+        char line[256];
+        int seen[1024]; memset(seen, 0, sizeof(seen));
+        int count = 0;
+        int cur_phys = 0, cur_core = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "physical id", 11) == 0) {
+                const char* c = strchr(line, ':');
+                if (c) cur_phys = atoi(c + 1);
+            } else if (strncmp(line, "core id", 7) == 0) {
+                const char* c = strchr(line, ':');
+                if (c) cur_core = atoi(c + 1);
+                int key = cur_phys * 64 + cur_core;
+                if (key >= 0 && key < 1024 && !seen[key]) {
+                    seen[key] = 1; count++;
+                }
+            }
+        }
+        fclose(f);
+        return count > 0 ? count : -1;
+    #else
+        int count = 0; size_t L = sizeof(count);
+        if (sysctlbyname("hw.physicalcpu", &count, &L, NULL, 0) == 0 && count > 0) return count;
+        return -1;
+    #endif
+    }
+    static int __glide_page_size(void) {
+    #ifdef _WIN32
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        return (int)si.dwPageSize;
+    #else
+        long n = sysconf(_SC_PAGESIZE);
+        return n > 0 ? (int)n : 4096;
+    #endif
+    }
+    static uint64_t __glide_memory_total(void) {
+    #ifdef _WIN32
+        MEMORYSTATUSEX m; m.dwLength = sizeof(m);
+        if (!GlobalMemoryStatusEx(&m)) return 0;
+        return (uint64_t)m.ullTotalPhys;
+    #elif defined(__linux__)
+        long pages = sysconf(_SC_PHYS_PAGES);
+        long page  = sysconf(_SC_PAGESIZE);
+        if (pages <= 0 || page <= 0) return 0;
+        return (uint64_t)pages * (uint64_t)page;
+    #else
+        uint64_t n = 0; size_t L = sizeof(n);
+        if (sysctlbyname("hw.memsize", &n, &L, NULL, 0) == 0) return n;
+        return 0;
+    #endif
+    }
+    static uint64_t __glide_memory_free(void) {
+    #ifdef _WIN32
+        MEMORYSTATUSEX m; m.dwLength = sizeof(m);
+        if (!GlobalMemoryStatusEx(&m)) return 0;
+        return (uint64_t)m.ullAvailPhys;
+    #elif defined(__linux__)
+        long pages = sysconf(_SC_AVPHYS_PAGES);
+        long page  = sysconf(_SC_PAGESIZE);
+        if (pages <= 0 || page <= 0) return 0;
+        return (uint64_t)pages * (uint64_t)page;
+    #else
+        return 0;
+    #endif
+    }
+    static uint64_t __glide_uptime_secs(void) {
+    #ifdef _WIN32
+        return (uint64_t)(GetTickCount64() / 1000ULL);
+    #elif defined(__linux__)
+        struct sysinfo si;
+        if (sysinfo(&si) != 0) return 0;
+        return (uint64_t)si.uptime;
+    #else
+        struct timeval tv; size_t L = sizeof(tv);
+        if (sysctlbyname("kern.boottime", &tv, &L, NULL, 0) != 0) return 0;
+        time_t now = time(NULL);
+        if (now <= tv.tv_sec) return 0;
+        return (uint64_t)(now - tv.tv_sec);
+    #endif
+    }
+    static double __glide_loadavg_1m(void) {
+    #ifdef _WIN32
+        return -1.0;
+    #else
+        double la[3];
+        if (getloadavg(la, 3) < 1) return -1.0;
+        return la[0];
+    #endif
+    }
+
+    // Standard directories
+    static const char* __glide_temp_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        DWORD n = GetTempPathA((DWORD)sizeof(buf), buf);
+        if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
+        if (n > 0 && (buf[n-1] == '\\' || buf[n-1] == '/')) buf[n-1] = 0;
+    #else
+        const char* env = getenv("TMPDIR");
+        if (!env || !*env) env = "/tmp";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+    #endif
+        return buf;
+    }
+    static const char* __glide_home_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("USERPROFILE");
+        if (!env || !*env) env = "";
+    #else
+        const char* env = getenv("HOME");
+        if (!env || !*env) {
+            struct passwd* pw = getpwuid(getuid());
+            if (pw && pw->pw_dir) env = pw->pw_dir;
+            else env = "";
+        }
+    #endif
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    }
+    static const char* __glide_config_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("APPDATA");
+        if (!env || !*env) env = "";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    #elif defined(__APPLE__)
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/Library/Application Support", home);
+        return buf;
+    #else
+        const char* env = getenv("XDG_CONFIG_HOME");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+            return buf;
+        }
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/.config", home);
+        return buf;
+    #endif
+    }
+    static const char* __glide_cache_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("LOCALAPPDATA");
+        if (!env || !*env) env = "";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    #elif defined(__APPLE__)
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/Library/Caches", home);
+        return buf;
+    #else
+        const char* env = getenv("XDG_CACHE_HOME");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+            return buf;
+        }
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/.cache", home);
+        return buf;
+    #endif
+    }
+    static const char* __glide_data_dir(void) {
+        static char buf[1024];
+    #ifdef _WIN32
+        const char* env = getenv("APPDATA");
+        if (!env || !*env) env = "";
+        size_t L = strlen(env);
+        if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+        memcpy(buf, env, L); buf[L] = 0;
+        return buf;
+    #elif defined(__APPLE__)
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/Library/Application Support", home);
+        return buf;
+    #else
+        const char* env = getenv("XDG_DATA_HOME");
+        if (env && *env) {
+            size_t L = strlen(env);
+            if (L >= sizeof(buf)) L = sizeof(buf) - 1;
+            memcpy(buf, env, L); buf[L] = 0;
+            return buf;
+        }
+        const char* home = getenv("HOME"); if (!home) home = "";
+        snprintf(buf, sizeof(buf), "%s/.local/share", home);
+        return buf;
+    #endif
+    }
+
+    static int __glide_is_tty(int fd) {
+    #ifdef _WIN32
+        return _isatty(fd) ? 1 : 0;
+    #else
+        return isatty(fd) ? 1 : 0;
+    #endif
+    }
+    #endif // GLIDE_OS_PLATFORM_HELPERS_DEFINED
+    #endif // GLIDE_OS_VIA_CRAW
 
 
     #ifdef GLIDE_ENV_VIA_CRAW
@@ -2786,6 +3155,27 @@ static __glide_result_int_t __glide_ok_int(int v) { __glide_result_int_t r; r.ok
 static __glide_result_int_t __glide_err_int(const char* msg) { __glide_result_int_t r; r.ok = 0; r.err = msg; return r; }
 static int __glide_unwrap_int(__glide_result_int_t r) { int z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
 #endif
+#ifndef __GLIDE_RESULT_string_GUARD
+#define __GLIDE_RESULT_string_GUARD
+typedef struct __glide_result_string_t { int ok; const char* val; const char* err; } __glide_result_string_t;
+static __glide_result_string_t __glide_ok_string(const char* v) { __glide_result_string_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
+static __glide_result_string_t __glide_err_string(const char* msg) { __glide_result_string_t r; r.ok = 0; r.err = msg; return r; }
+static const char* __glide_unwrap_string(__glide_result_string_t r) { const char* z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
+#endif
+#ifndef __GLIDE_RESULT_u64_GUARD
+#define __GLIDE_RESULT_u64_GUARD
+typedef struct __glide_result_u64_t { int ok; uint64_t val; const char* err; } __glide_result_u64_t;
+static __glide_result_u64_t __glide_ok_u64(uint64_t v) { __glide_result_u64_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
+static __glide_result_u64_t __glide_err_u64(const char* msg) { __glide_result_u64_t r; r.ok = 0; r.err = msg; return r; }
+static uint64_t __glide_unwrap_u64(__glide_result_u64_t r) { uint64_t z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
+#endif
+#ifndef __GLIDE_RESULT_f64_GUARD
+#define __GLIDE_RESULT_f64_GUARD
+typedef struct __glide_result_f64_t { int ok; double val; const char* err; } __glide_result_f64_t;
+static __glide_result_f64_t __glide_ok_f64(double v) { __glide_result_f64_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
+static __glide_result_f64_t __glide_err_f64(const char* msg) { __glide_result_f64_t r; r.ok = 0; r.err = msg; return r; }
+static double __glide_unwrap_f64(__glide_result_f64_t r) { double z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
+#endif
 
 typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__Type   Vector__Type ;
@@ -3595,12 +3985,34 @@ const char*   fs_extension (const char*   path);
 int   fs_lines_count (const char*   path);
 const char*   fs_read_or_default (const char*   path, const char*   fallback);
 int   __glide_is_windows (void);
+const char*   __glide_os_name (void);
+const char*   __glide_os_arch (void);
+const char*   __glide_path_list_sep (void);
+int   __glide_pid (void);
+const char*   __glide_cwd (void);
+int   __glide_chdir (const char*   path);
 const char*   __glide_exe_path (void);
 const char*   __glide_exe_dir (void);
 int   __glide_shell (const char*   cmd);
-const char*   __glide_os_name (void);
-const char*   __glide_os_arch (void);
-const char*   __glide_cwd (void);
+int   __glide_ppid (void);
+int   __glide_uid (void);
+int   __glide_gid (void);
+const char*   __glide_username (void);
+const char*   __glide_hostname (void);
+const char*   __glide_kernel_version (void);
+int   __glide_cpu_count (void);
+int   __glide_cpu_count_physical (void);
+int   __glide_page_size (void);
+uint64_t   __glide_memory_total (void);
+uint64_t   __glide_memory_free (void);
+uint64_t   __glide_uptime_secs (void);
+double   __glide_loadavg_1m (void);
+const char*   __glide_temp_dir (void);
+const char*   __glide_home_dir (void);
+const char*   __glide_config_dir (void);
+const char*   __glide_cache_dir (void);
+const char*   __glide_data_dir (void);
+int   __glide_is_tty (int   fd);
 const char*   os_name (void);
 const char*   os_arch (void);
 bool   os_is_windows (void);
@@ -3609,10 +4021,32 @@ bool   os_is_linux (void);
 bool   os_is_macos (void);
 const char*   os_path_sep (void);
 const char*   os_line_sep (void);
-const char*   os_cwd (void);
-const char*   os_exe_path (void);
-const char*   os_exe_dir (void);
-int   os_shell (const char*   cmd);
+const char*   os_path_list_sep (void);
+int   os_pid (void);
+__glide_result_int_t   os_ppid (void);
+__glide_result_int_t   os_uid (void);
+__glide_result_int_t   os_gid (void);
+__glide_result_string_t   os_username (void);
+__glide_result_string_t   os_hostname (void);
+__glide_result_string_t   os_kernel_version (void);
+__glide_result_string_t   os_cwd (void);
+__glide_result_int_t   os_chdir (const char*   path);
+__glide_result_string_t   os_exe_path (void);
+__glide_result_string_t   os_exe_dir (void);
+__glide_result_int_t   os_cpu_count (void);
+__glide_result_int_t   os_cpu_count_physical (void);
+__glide_result_int_t   os_page_size (void);
+__glide_result_u64_t   os_memory_total (void);
+__glide_result_u64_t   os_memory_free (void);
+__glide_result_u64_t   os_uptime_secs (void);
+__glide_result_f64_t   os_loadavg_1m (void);
+__glide_result_string_t   os_temp_dir (void);
+__glide_result_string_t   os_home_dir (void);
+__glide_result_string_t   os_config_dir (void);
+__glide_result_string_t   os_cache_dir (void);
+__glide_result_string_t   os_data_dir (void);
+bool   os_is_tty (int   fd);
+__glide_result_int_t   os_shell (const char*   cmd);
 const char*   __glide_getenv (const char*   name);
 void   exit (int   code);
 int   env_args_count (void);
@@ -4909,20 +5343,200 @@ const char*   os_line_sep (void) {
     return "\n";
 }
 
-const char*   os_cwd (void) {
-    return __glide_cwd();
+const char*   os_path_list_sep (void) {
+    return __glide_path_list_sep();
 }
 
-const char*   os_exe_path (void) {
-    return __glide_exe_path();
+int   os_pid (void) {
+    return __glide_pid();
 }
 
-const char*   os_exe_dir (void) {
-    return __glide_exe_dir();
+__glide_result_int_t   os_ppid (void) {
+    int   p = __glide_ppid();
+    if ((p  <  0)) {
+        return __glide_err_int("ppid not available");
+    }
+    return __glide_ok_int(p);
 }
 
-int   os_shell (const char*   cmd) {
-    return __glide_shell(cmd);
+__glide_result_int_t   os_uid (void) {
+    int   u = __glide_uid();
+    if ((u  <  0)) {
+        return __glide_err_int("uid not available on this platform");
+    }
+    return __glide_ok_int(u);
+}
+
+__glide_result_int_t   os_gid (void) {
+    int   g = __glide_gid();
+    if ((g  <  0)) {
+        return __glide_err_int("gid not available on this platform");
+    }
+    return __glide_ok_int(g);
+}
+
+__glide_result_string_t   os_username (void) {
+    const char*   s = __glide_username();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("username unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_hostname (void) {
+    const char*   s = __glide_hostname();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("hostname unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_kernel_version (void) {
+    const char*   s = __glide_kernel_version();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("kernel version unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_cwd (void) {
+    const char*   s = __glide_cwd();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("cwd unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_int_t   os_chdir (const char*   path) {
+    int   rc = __glide_chdir(path);
+    if ((rc  !=  0)) {
+        return __glide_err_int("chdir failed");
+    }
+    return __glide_ok_int(0);
+}
+
+__glide_result_string_t   os_exe_path (void) {
+    const char*   s = __glide_exe_path();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("exe path unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_exe_dir (void) {
+    const char*   s = __glide_exe_dir();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("exe dir unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_int_t   os_cpu_count (void) {
+    int   n = __glide_cpu_count();
+    if ((n  <=  0)) {
+        return __glide_err_int("cpu count unavailable");
+    }
+    return __glide_ok_int(n);
+}
+
+__glide_result_int_t   os_cpu_count_physical (void) {
+    int   n = __glide_cpu_count_physical();
+    if ((n  <=  0)) {
+        return os_cpu_count();
+    }
+    return __glide_ok_int(n);
+}
+
+__glide_result_int_t   os_page_size (void) {
+    int   n = __glide_page_size();
+    if ((n  <=  0)) {
+        return __glide_err_int("page size unavailable");
+    }
+    return __glide_ok_int(n);
+}
+
+__glide_result_u64_t   os_memory_total (void) {
+    uint64_t   n = __glide_memory_total();
+    if ((n  ==  0)) {
+        return __glide_err_u64("memory_total unavailable");
+    }
+    return __glide_ok_u64(n);
+}
+
+__glide_result_u64_t   os_memory_free (void) {
+    uint64_t   n = __glide_memory_free();
+    if ((n  ==  0)) {
+        return __glide_err_u64("memory_free unavailable");
+    }
+    return __glide_ok_u64(n);
+}
+
+__glide_result_u64_t   os_uptime_secs (void) {
+    uint64_t   n = __glide_uptime_secs();
+    if ((n  ==  0)) {
+        return __glide_err_u64("uptime unavailable");
+    }
+    return __glide_ok_u64(n);
+}
+
+__glide_result_f64_t   os_loadavg_1m (void) {
+    double   v = __glide_loadavg_1m();
+    if ((v  <  0.0)) {
+        return __glide_err_f64("loadavg not supported on this platform");
+    }
+    return __glide_ok_f64(v);
+}
+
+__glide_result_string_t   os_temp_dir (void) {
+    const char*   s = __glide_temp_dir();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("temp_dir unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_home_dir (void) {
+    const char*   s = __glide_home_dir();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("home_dir unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_config_dir (void) {
+    const char*   s = __glide_config_dir();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("config_dir unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_cache_dir (void) {
+    const char*   s = __glide_cache_dir();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("cache_dir unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+__glide_result_string_t   os_data_dir (void) {
+    const char*   s = __glide_data_dir();
+    if (__glide_string_eq(s, "")) {
+        return __glide_err_string("data_dir unavailable");
+    }
+    return __glide_ok_string(s);
+}
+
+bool   os_is_tty (int   fd) {
+    return (__glide_is_tty(fd)  !=  0);
+}
+
+__glide_result_int_t   os_shell (const char*   cmd) {
+    int   rc = __glide_shell(cmd);
+    if ((rc  <  0)) {
+        return __glide_err_int("shell failed to spawn");
+    }
+    return __glide_ok_int(rc);
 }
 
 int   env_args_count (void) {
