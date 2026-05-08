@@ -4,9 +4,9 @@ import stdlib::os::*;
 
 fn _cleanup_file(path: string) {
     if os_is_windows() {
-        os_shell("del /Q ".concat(path.replace("/", "\\")).concat(" >NUL 2>NUL"));
+        let _r: !int = os_shell("del /Q ".concat(path.replace("/", "\\")).concat(" >NUL 2>NUL"));
     } else {
-        os_shell("rm -f ".concat(path));
+        let _r: !int = os_shell("rm -f ".concat(path));
     }
 }
 
