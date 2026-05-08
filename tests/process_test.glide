@@ -1,0 +1,55 @@
+import stdlib::testing::*;
+import stdlib::process::*;
+import stdlib::os::*;
+
+fn _hostname_program() -> string {
+    return "hostname";
+}
+
+fn test_run_simple_program() -> int {
+    let c* = Command::new(_hostname_program());
+    let r: !ProcessResult = c.run();
+    assert!(r.ok);
+    assert_eq!(r.val.exit_code, 0);
+    return 0;
+}
+
+fn test_run_with_capture_out() -> int {
+    let c* = Command::new(_hostname_program());
+    c.capture_out();
+    let r: !ProcessResult = c.run();
+    assert!(r.ok);
+    assert_eq!(r.val.exit_code, 0);
+    assert!(r.val.stdout.len() > 0);
+    return 0;
+}
+
+fn test_run_program_not_found() -> int {
+    let c* = Command::new("definitely-not-a-real-glide-test-program");
+    let r: !ProcessResult = c.run();
+    assert_not!(r.ok);
+    return 0;
+}
+
+fn test_spawn_and_wait() -> int {
+    let c* = Command::new(_hostname_program());
+    let s: !Child = c.spawn();
+    assert!(s.ok);
+    let child: Child = s.val;
+    assert!(child.pid > 0);
+    let w: !ProcessResult = child.wait();
+    assert!(w.ok);
+    assert_eq!(w.val.exit_code, 0);
+    return 0;
+}
+
+fn test_process_exists_bogus_pid() -> int {
+    assert_not!(process_exists(99999999));
+    return 0;
+}
+
+fn test_process_exists_self() -> int {
+    let me: int = os_pid();
+    assert!(process_exists(me));
+    return 0;
+}
