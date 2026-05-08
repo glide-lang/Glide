@@ -1,0 +1,3 @@
+typedef struct __glide_option_@M@_t { int has; @TC@ val; } __glide_option_@M@_t;
+static __glide_option_@M@_t __glide_some_@M@(@TC@ v) { __glide_option_@M@_t o; o.has = 1; o.val = v; return o; }
+static __glide_option_@M@_t __glide_none_@M@(void) { __glide_option_@M@_t o; o.has = 0; return o; }

@@ -1,0 +1,5 @@
+/* tag: 0=Some, 1=None, 2=Err */
+typedef struct __glide_optres_@M@_t { int tag; @TC@ val; const char* err; } __glide_optres_@M@_t;
+static __glide_optres_@M@_t __glide_optres_some_@M@(@TC@ v) { __glide_optres_@M@_t r; r.tag = 0; r.val = v; r.err = (const char*)0; return r; }
+static __glide_optres_@M@_t __glide_optres_none_@M@(void) { __glide_optres_@M@_t r; r.tag = 1; r.err = (const char*)0; return r; }
+static __glide_optres_@M@_t __glide_optres_err_@M@(const char* msg) { __glide_optres_@M@_t r; r.tag = 2; r.err = msg; return r; }

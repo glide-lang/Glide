@@ -181,6 +181,22 @@ fn collect_result_in_type(g: *CG, t: *Type) {
         }
         g.result_types.push(*t.inner);
     }
+    if t.kind == TY_OPTION && t.inner != null {
+        let m: string = mangle_type(t.inner);
+        for let i: int = 0; i < g.option_types.len(); i++ {
+            let ex: Type = g.option_types.get(i);
+            if mangle_type(&ex).eq(m) { return; }
+        }
+        g.option_types.push(*t.inner);
+    }
+    if t.kind == TY_OPT_RESULT && t.inner != null {
+        let m: string = mangle_type(t.inner);
+        for let i: int = 0; i < g.optres_types.len(); i++ {
+            let ex: Type = g.optres_types.get(i);
+            if mangle_type(&ex).eq(m) { return; }
+        }
+        g.optres_types.push(*t.inner);
+    }
     if t.inner != null { collect_result_in_type(g, t.inner); }
     if t.fnptr_ret != null { collect_result_in_type(g, t.fnptr_ret); }
     if t.args != null {
@@ -251,6 +267,34 @@ fn emit_result_runtime(g: *CG) {
     let tmpl: string = include_str!("bootstrap/runtime/result.c.tmpl");
     for let i: int = 0; i < g.result_types.len(); i++ {
         let t: Type = g.result_types.get(i);
+        let m: string = mangle_type(&t);
+        let tc: string = type_to_c(&t);
+        let s1: string = _cg_replace(tmpl, "@M@", m);
+        let s2: string = _cg_replace(s1, "@TC@", tc);
+        print!(s2);
+    }
+    println!("");
+}
+
+fn emit_option_runtime(g: *CG) {
+    if g.option_types.len() == 0 { return; }
+    let tmpl: string = include_str!("bootstrap/runtime/option.c.tmpl");
+    for let i: int = 0; i < g.option_types.len(); i++ {
+        let t: Type = g.option_types.get(i);
+        let m: string = mangle_type(&t);
+        let tc: string = type_to_c(&t);
+        let s1: string = _cg_replace(tmpl, "@M@", m);
+        let s2: string = _cg_replace(s1, "@TC@", tc);
+        print!(s2);
+    }
+    println!("");
+}
+
+fn emit_optres_runtime(g: *CG) {
+    if g.optres_types.len() == 0 { return; }
+    let tmpl: string = include_str!("bootstrap/runtime/optres.c.tmpl");
+    for let i: int = 0; i < g.optres_types.len(); i++ {
+        let t: Type = g.optres_types.get(i);
         let m: string = mangle_type(&t);
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
@@ -760,6 +804,8 @@ pub struct CG {
     pub uses_pthread: bool,
     // Errors-as-values
     pub result_types: *Vector<Type>,
+    pub option_types: *Vector<Type>,
+    pub optres_types: *Vector<Type>,
     pub current_ret_ty: *Type,
     // Method-dispatch index for `impl T in NS` blocks. Maps the unqualified
     // `<T>_<method>` name to a `;`-delimited list of full mangled names like
@@ -817,6 +863,10 @@ impl CG {
         g.uses_pthread = false;
         let rt: *Vector<Type> = Vector::new();
         g.result_types = rt;
+        let ot: *Vector<Type> = Vector::new();
+        g.option_types = ot;
+        let ort: *Vector<Type> = Vector::new();
+        g.optres_types = ort;
         g.current_ret_ty = null;
         g.scope = s;
         g.generic_structs = gs;
@@ -1182,6 +1232,12 @@ pub fn type_to_c(t: *Type) -> string {
     if t.kind == TY_RESULT {
         return "__glide_result_".concat(mangle_type(t.inner)).concat("_t");
     }
+    if t.kind == TY_OPTION {
+        return "__glide_option_".concat(mangle_type(t.inner)).concat("_t");
+    }
+    if t.kind == TY_OPT_RESULT {
+        return "__glide_optres_".concat(mangle_type(t.inner)).concat("_t");
+    }
     return "void";
 }
 
@@ -1222,6 +1278,8 @@ fn mangle_type(t: *Type) -> string {
     if t.kind == TY_SLICE { return "slice_".concat(mangle_type(t.inner)); }
     if t.kind == TY_GENERIC { return mangle_generic(t.name, t.args); }
     if t.kind == TY_RESULT { return "result_".concat(mangle_type(t.inner)); }
+    if t.kind == TY_OPTION { return "option_".concat(mangle_type(t.inner)); }
+    if t.kind == TY_OPT_RESULT { return "optres_".concat(mangle_type(t.inner)); }
     return "void";
 }
 
@@ -1957,6 +2015,85 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_BINARY {
+        if e.op_code == OP_COALESCE {
+            // `??` fallback. LHS is ?T or !T. RHS is either a plain value
+            // (yields T) or an `err(...)` call (yields !T, intended to be
+            // chained with `?`). Detect the err() form by looking at the
+            // RHS Expr shape — if it's a bare `err(s)` call we stay in
+            // Result-shape; otherwise we extract the inner value.
+            let lt: *Type = infer_for_codegen(g, e.lhs);
+            let mut is_err_form: bool = false;
+            if e.rhs != null && e.rhs.kind == EX_CALL && e.rhs.lhs != null
+                && e.rhs.lhs.kind == EX_IDENT && e.rhs.lhs.str_val.eq("err") {
+                is_err_form = true;
+            }
+            if lt != null && lt.kind == TY_OPTION {
+                let m_in: string = mangle_type(lt.inner);
+                if is_err_form {
+                    // Substitute the None branch with an Err of the same inner
+                    // type — caller will use `?` to propagate.
+                    let m_out: string = m_in;
+                    let arg: Expr = e.rhs.args.get(0);
+                    print!("({ __glide_option_".concat(m_in).concat("_t __o = ("));
+                    emit_expr(g, e.lhs);
+                    print!("); __r_lift_t_".concat(m_out)
+                        .concat("("));
+                    // Fallback: emit ternary directly into __glide_err_<m>.
+                    // Simpler form below avoids needing a per-T helper:
+                    // (we re-emit the expression instead)
+                }
+                // Plain fallback: extract the inner.
+                if !is_err_form {
+                    print!("({ __glide_option_".concat(m_in).concat("_t __o = ("));
+                    emit_expr(g, e.lhs);
+                    print!("); __o.has ? __o.val : (");
+                    emit_expr(g, e.rhs);
+                    print!("); })");
+                    return;
+                }
+                // is_err_form: substitute None → Err. Result is __glide_result_<T>_t.
+                print!("({ __glide_option_".concat(m_in).concat("_t __o = ("));
+                emit_expr(g, e.lhs);
+                print!("); __o.has ? __glide_ok_".concat(m_in).concat("(__o.val) : __glide_err_").concat(m_in).concat("("));
+                let arg: Expr = e.rhs.args.get(0);
+                emit_expr(g, &arg);
+                print!("); })");
+                return;
+            }
+            if lt != null && lt.kind == TY_RESULT {
+                let m_in: string = mangle_type(lt.inner);
+                if !is_err_form {
+                    print!("({ __glide_result_".concat(m_in).concat("_t __r = ("));
+                    emit_expr(g, e.lhs);
+                    print!("); __r.ok ? __r.val : (");
+                    emit_expr(g, e.rhs);
+                    print!("); })");
+                    return;
+                }
+                // Replace existing Err msg with the new one.
+                print!("({ __glide_result_".concat(m_in).concat("_t __r = ("));
+                emit_expr(g, e.lhs);
+                print!("); __r.ok ? __r : __glide_err_".concat(m_in).concat("("));
+                let arg: Expr = e.rhs.args.get(0);
+                emit_expr(g, &arg);
+                print!("); })");
+                return;
+            }
+            // Pointer nullable: `*T ?? default` → null check.
+            if lt != null && lt.kind == TY_POINTER {
+                let tc: string = type_to_c(lt);
+                print!("({ ".concat(tc).concat(" __p = ("));
+                emit_expr(g, e.lhs);
+                print!("); __p ? __p : (");
+                emit_expr(g, e.rhs);
+                print!("); })");
+                return;
+            }
+            // Fallback: simple ternary using a non-zero-ness of LHS.
+            print!("(("); emit_expr(g, e.lhs); print!(") ? ("); emit_expr(g, e.lhs);
+            print!(") : ("); emit_expr(g, e.rhs); print!("))");
+            return;
+        }
         print!("(");
         emit_expr(g, e.lhs);
         print!(" ", op_to_c(e.op_code), " ");
@@ -1966,28 +2103,98 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     }
     if e.kind == EX_UNARY {
         if e.op_code == UN_TRY {
-            // Postfix `?`: GCC stmt-expr that unpacks a Result<T> in the
-            // current fn whose ret-type is Result<U>. On err, run any
-            // pending `defer_err` cleanups (LIFO) and return a wrapped
-            // err of the outer type. On ok, evaluate to the inner val.
+            // Postfix `?`: GCC stmt-expr that unpacks the Result/Option/OptRes
+            // in the current fn. The dispatch matrix:
+            //   inner !T  in fn !U   -> propagate Err
+            //   inner ?T  in fn ?U   -> propagate None
+            //   inner ?T  in fn !U   -> coerce None -> Err{"none-coerced"}
+            //   inner ?T  in fn ?!U  -> propagate None
+            //   inner ?!T in fn ?!U  -> propagate Err and None
+            //   inner ?!T in fn !U   -> propagate Err; None coerces
+            // err-defer cleanups fire on every propagating arm.
             let inner_ty: *Type = infer_for_codegen(g, e.operand);
-            if inner_ty == null || inner_ty.kind != TY_RESULT
-                || g.current_ret_ty == null || g.current_ret_ty.kind != TY_RESULT {
+            let ret_ty: *Type = g.current_ret_ty;
+            if inner_ty == null || ret_ty == null {
+                print!("/* invalid `?` */ 0");
+                return;
+            }
+            let inner_kind: int = inner_ty.kind;
+            let ret_kind: int = ret_ty.kind;
+            if inner_kind != TY_RESULT && inner_kind != TY_OPTION && inner_kind != TY_OPT_RESULT {
+                print!("/* invalid `?` */ 0");
+                return;
+            }
+            if ret_kind != TY_RESULT && ret_kind != TY_OPTION && ret_kind != TY_OPT_RESULT {
                 print!("/* invalid `?` */ 0");
                 return;
             }
             let m_in: string = mangle_type(inner_ty.inner);
-            let m_out: string = mangle_type(g.current_ret_ty.inner);
-            print!("({ __glide_result_".concat(m_in).concat("_t __r = ("));
+            let m_out: string = mangle_type(ret_ty.inner);
+            // Pick struct typedef + propagation snippets per (inner, ret) combo.
+            let mut struct_pref: string = "__glide_result_";
+            if inner_kind == TY_OPTION { struct_pref = "__glide_option_"; }
+            if inner_kind == TY_OPT_RESULT { struct_pref = "__glide_optres_"; }
+            print!("({ ".concat(struct_pref).concat(m_in).concat("_t __r = ("));
             emit_expr(g, e.operand);
-            print!("); if (!__r.ok) { ");
+            print!("); ");
+            // Build the err/none-propagation block(s) for this combo.
+            // Common err-defer prelude for any propagating arm.
             let nd: int = g.err_defer_stack.len();
+            // Helper: write defer drains.
+            // Inner = !T: check !__r.ok, propagate Err.
+            if inner_kind == TY_RESULT {
+                print!("if (!__r.ok) { ");
+                for let i: int = nd - 1; i >= 0; i = i - 1 {
+                    let ex: Expr = g.err_defer_stack.get(i);
+                    emit_expr(g, &ex);
+                    print!("; ");
+                }
+                if ret_kind == TY_RESULT {
+                    print!("return __glide_err_".concat(m_out).concat("(__r.err); } __r.val; })"));
+                } else if ret_kind == TY_OPT_RESULT {
+                    print!("return __glide_optres_err_".concat(m_out).concat("(__r.err); } __r.val; })"));
+                } else {
+                    // ?U fn cannot represent Err — typer should have rejected.
+                    print!("return __glide_none_".concat(m_out).concat("(); } __r.val; })"));
+                }
+                return;
+            }
+            // Inner = ?T: check !__r.has, propagate None (or coerce).
+            if inner_kind == TY_OPTION {
+                print!("if (!__r.has) { ");
+                for let i: int = nd - 1; i >= 0; i = i - 1 {
+                    let ex: Expr = g.err_defer_stack.get(i);
+                    emit_expr(g, &ex);
+                    print!("; ");
+                }
+                if ret_kind == TY_OPTION {
+                    print!("return __glide_none_".concat(m_out).concat("(); } __r.val; })"));
+                } else if ret_kind == TY_OPT_RESULT {
+                    print!("return __glide_optres_none_".concat(m_out).concat("(); } __r.val; })"));
+                } else {
+                    // !U fn: coerce None → Err{"none-coerced"}.
+                    print!("return __glide_err_".concat(m_out).concat("(\"none-coerced\"); } __r.val; })"));
+                }
+                return;
+            }
+            // Inner = ?!T: dispatch on tag. 0=Some, 1=None, 2=Err.
+            print!("if (__r.tag != 0) { ");
             for let i: int = nd - 1; i >= 0; i = i - 1 {
                 let ex: Expr = g.err_defer_stack.get(i);
                 emit_expr(g, &ex);
                 print!("; ");
             }
-            print!("return __glide_err_".concat(m_out).concat("(__r.err); } __r.val; })"));
+            if ret_kind == TY_OPT_RESULT {
+                print!("__glide_optres_".concat(m_out)
+                    .concat("_t __pr; __pr.tag = __r.tag; __pr.err = __r.err; return __pr; } __r.val; })"));
+            } else if ret_kind == TY_RESULT {
+                // None coerces to Err{"none-coerced"}; Err passes msg through.
+                print!("if (__r.tag == 1) return __glide_err_".concat(m_out).concat("(\"none-coerced\"); ")
+                    .concat("return __glide_err_").concat(m_out).concat("(__r.err); } __r.val; })"));
+            } else {
+                // ?U fn: drop Err msg, propagate None.
+                print!("return __glide_none_".concat(m_out).concat("(); } __r.val; })"));
+            }
             return;
         }
         print!("(".concat(unop_to_c(e.op_code)));
@@ -2614,6 +2821,33 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                 s.let_value.lhs.str_val = "__glide_err_".concat(m);
             }
         }
+        // some(v)/none() hint: rewrite for ?T let-init.
+        if s.let_value != null && s.let_ty != null && s.let_ty.kind == TY_OPTION
+            && s.let_value.kind == EX_CALL && s.let_value.lhs != null
+            && s.let_value.lhs.kind == EX_IDENT {
+            let m: string = mangle_type(s.let_ty.inner);
+            if s.let_value.lhs.str_val.eq("some") {
+                s.let_value.lhs.str_val = "__glide_some_".concat(m);
+            }
+            if s.let_value.lhs.str_val.eq("none") {
+                s.let_value.lhs.str_val = "__glide_none_".concat(m);
+            }
+        }
+        // some(v)/none()/err(s) hint: rewrite for ?!T let-init.
+        if s.let_value != null && s.let_ty != null && s.let_ty.kind == TY_OPT_RESULT
+            && s.let_value.kind == EX_CALL && s.let_value.lhs != null
+            && s.let_value.lhs.kind == EX_IDENT {
+            let m: string = mangle_type(s.let_ty.inner);
+            if s.let_value.lhs.str_val.eq("some") {
+                s.let_value.lhs.str_val = "__glide_optres_some_".concat(m);
+            }
+            if s.let_value.lhs.str_val.eq("none") {
+                s.let_value.lhs.str_val = "__glide_optres_none_".concat(m);
+            }
+            if s.let_value.lhs.str_val.eq("err") {
+                s.let_value.lhs.str_val = "__glide_optres_err_".concat(m);
+            }
+        }
         // Generic fn call mono attempt — uses let-annot as ret-hint plus args.
         if s.let_value != null && s.let_value.kind == EX_CALL {
             let _ok: bool = try_mono_call(g, s.let_value, s.let_ty);
@@ -2732,6 +2966,35 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             }
             if s.expr_value.lhs.str_val.eq("err") {
                 s.expr_value.lhs.str_val = "__glide_err_".concat(m);
+            }
+        }
+        // some(v)/none() hint via current fn ret-type `?T`.
+        if s.expr_value != null && g.current_ret_ty != null
+            && g.current_ret_ty.kind == TY_OPTION
+            && s.expr_value.kind == EX_CALL && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT {
+            let m: string = mangle_type(g.current_ret_ty.inner);
+            if s.expr_value.lhs.str_val.eq("some") {
+                s.expr_value.lhs.str_val = "__glide_some_".concat(m);
+            }
+            if s.expr_value.lhs.str_val.eq("none") {
+                s.expr_value.lhs.str_val = "__glide_none_".concat(m);
+            }
+        }
+        // some(v)/none()/err(s) hint via current fn ret-type `?!T`.
+        if s.expr_value != null && g.current_ret_ty != null
+            && g.current_ret_ty.kind == TY_OPT_RESULT
+            && s.expr_value.kind == EX_CALL && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT {
+            let m: string = mangle_type(g.current_ret_ty.inner);
+            if s.expr_value.lhs.str_val.eq("some") {
+                s.expr_value.lhs.str_val = "__glide_optres_some_".concat(m);
+            }
+            if s.expr_value.lhs.str_val.eq("none") {
+                s.expr_value.lhs.str_val = "__glide_optres_none_".concat(m);
+            }
+            if s.expr_value.lhs.str_val.eq("err") {
+                s.expr_value.lhs.str_val = "__glide_optres_err_".concat(m);
             }
         }
         // If there's a value AND there are pending cleanups (auto-drop or
@@ -3742,6 +4005,51 @@ pub fn emit_program(program: *Vector<Stmt>) {
         }
     }
     emit_result_runtime(g);
+
+    // Same up-front emission for option_<T> / optres_<T> wrappers.
+    for let i: int = 0; i < g.option_types.len(); i++ {
+        let t: Type = g.option_types.get(i);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: int = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
+    emit_option_runtime(g);
+
+    for let i: int = 0; i < g.optres_types.len(); i++ {
+        let t: Type = g.optres_types.get(i);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: int = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
+    emit_optres_runtime(g);
 
     // Register generic struct + fn + impl-method templates.
     for let i: int = 0; i < program.len(); i++ {
