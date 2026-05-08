@@ -1325,6 +1325,15 @@ fn parse_type(p: *Parser) -> *Type {
         let inner: *Type = parse_type(p);
         return ty_result(inner);
     }
+    // `?T` (Option) and `?!T` (Option-or-Err, 3 variants Some|None|Err).
+    if p.eat_op("?") {
+        if p.eat_op("!") {
+            let inner: *Type = parse_type(p);
+            return ty_optres(inner);
+        }
+        let inner: *Type = parse_type(p);
+        return ty_option(inner);
+    }
     if p.eat_op("*") {
         let inner: *Type = parse_type(p);
         return ty_pointer(inner);
@@ -1492,6 +1501,7 @@ fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
 fn peek_binop_bp(p: *Parser) -> int {
     if p.current.kind != TOK_OP { return 0; }
     let lex: string = p.current.lexeme;
+    if lex.eq("??") { return 100 * 1  + OP_COALESCE; }
     if lex.eq("||") { return 100 * 2  + OP_OR; }
     if lex.eq("&&") { return 100 * 3  + OP_AND; }
     if lex.eq("|")  { return 100 * 4  + OP_BIT_OR; }
