@@ -1328,6 +1328,19 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         let pname: string = resolve_type_prefix(g, e.str_val).concat("_").concat(e.field);
         if g.fns.contains(pname) { return g.fns.get(pname).fn_ret_ty; }
         if g.generic_fns.contains(pname) { return g.generic_fns.get(pname).fn_ret_ty; }
+        // Enum variant: `Signal::Hup` is a value of type Signal. Without this
+        // case, method dispatch on bare variant values (`Signal::Hup.to_int()`)
+        // falls through to plain field access.
+        let probe: string = resolve_type_prefix(g, e.str_val);
+        if g.enums.contains(probe) {
+            let edef: Stmt = g.enums.get(probe);
+            if edef.enum_variants != null {
+                for let i: int = 0; i < edef.enum_variants.len(); i++ {
+                    let v: EnumVariant = edef.enum_variants.get(i);
+                    if v.name.eq(e.field) { return ty_named(probe); }
+                }
+            }
+        }
         return null;
     }
     return null;
