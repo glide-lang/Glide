@@ -86,8 +86,22 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
             if req.fn_body == null { continue; }
             if provided.contains(req.name) { continue; }
             // Clone the method shape; substitute Self in the copy's signature.
+            // CRITICAL: the shallow `*copy = req` shares `fn_params` (a *Vector
+            // pointer) between copy and req. substitute_self_in_methods mutates
+            // entries via `params.set(j, p)`, which would write back into the
+            // trait's own params. That pollutes the next impl that copies the
+            // same default — its `req` would already have Self→PreviousImpl.
+            // Deep-clone fn_params (and fn_ret_ty was already cloned by
+            // substitute_self_in_type via copy-on-descend).
             let copy: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
             *copy = req;
+            if req.fn_params != null {
+                let cloned_params: *Vector<Param> = Vector::new();
+                for let pi: int = 0; pi < req.fn_params.len(); pi++ {
+                    cloned_params.push(req.fn_params.get(pi));
+                }
+                copy.fn_params = cloned_params;
+            }
             // Self substitution only applies to the new copy's params/return,
             // and only when the impl target is named.
             if imp.impl_target != null {
