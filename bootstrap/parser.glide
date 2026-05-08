@@ -682,9 +682,12 @@ pub fn substitute_self_in_methods(methods: *Vector<Stmt>, target: *Type) {
 fn substitute_self_in_type(t: *Type, target: *Type) -> *Type {
     if t == null { return null; }
     if t.kind == TY_NAMED && t.name.eq("Self") { return target; }
-    if t.inner != null { t.inner = substitute_self_in_type(t.inner, target); }
-    if t.fnptr_ret != null { t.fnptr_ret = substitute_self_in_type(t.fnptr_ret, target); }
-    return t;
+    if t.inner == null && t.fnptr_ret == null { return t; }
+    let copy: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    *copy = *t;
+    if copy.inner != null { copy.inner = substitute_self_in_type(copy.inner, target); }
+    if copy.fnptr_ret != null { copy.fnptr_ret = substitute_self_in_type(copy.fnptr_ret, target); }
+    return copy;
 }
 
 // Replace any `Self::Name` in method sigs with the impl's `type Name = X`
@@ -716,9 +719,12 @@ fn substitute_self_assoc_in_type(t: *Type, assocs: *Vector<Param>) -> *Type {
             if a.name.eq(t.name) { return a.ty; }
         }
     }
-    if t.inner != null { t.inner = substitute_self_assoc_in_type(t.inner, assocs); }
-    if t.fnptr_ret != null { t.fnptr_ret = substitute_self_assoc_in_type(t.fnptr_ret, assocs); }
-    return t;
+    if t.inner == null && t.fnptr_ret == null { return t; }
+    let copy: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    *copy = *t;
+    if copy.inner != null { copy.inner = substitute_self_assoc_in_type(copy.inner, assocs); }
+    if copy.fnptr_ret != null { copy.fnptr_ret = substitute_self_assoc_in_type(copy.fnptr_ret, assocs); }
+    return copy;
 }
 
 fn parse_import(p: *Parser) -> *Stmt {

@@ -332,6 +332,9 @@ fn emit_result_runtime(g: *CG) {
     for let i: int = 0; i < g.result_types.len(); i++ {
         let t: Type = g.result_types.get(i);
         let m: string = mangle_type(&t);
+        let dedup_key: string = "__rt_result_emit_".concat(m);
+        if g.module_aliases.contains(dedup_key) { continue; }
+        g.module_aliases.insert(dedup_key, "1");
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
         let s2: string = _cg_replace(s1, "@TC@", tc);
@@ -346,6 +349,9 @@ fn emit_option_runtime(g: *CG) {
     for let i: int = 0; i < g.option_types.len(); i++ {
         let t: Type = g.option_types.get(i);
         let m: string = mangle_type(&t);
+        let dedup_key: string = "__rt_option_emit_".concat(m);
+        if g.module_aliases.contains(dedup_key) { continue; }
+        g.module_aliases.insert(dedup_key, "1");
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
         let s2: string = _cg_replace(s1, "@TC@", tc);
@@ -360,6 +366,9 @@ fn emit_optres_runtime(g: *CG) {
     for let i: int = 0; i < g.optres_types.len(); i++ {
         let t: Type = g.optres_types.get(i);
         let m: string = mangle_type(&t);
+        let dedup_key: string = "__rt_optres_emit_".concat(m);
+        if g.module_aliases.contains(dedup_key) { continue; }
+        g.module_aliases.insert(dedup_key, "1");
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
         let s2: string = _cg_replace(s1, "@TC@", tc);
@@ -1089,6 +1098,24 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         let recv_ty: *Type = infer_for_codegen(g, e.lhs);
         let stripped: *Type = strip_ptr(recv_ty);
         if stripped == null { return null; }
+        // Built-in field access on the synth Result/Option/OptResult structs.
+        if stripped.kind == TY_RESULT {
+            if e.field.eq("val") { return stripped.inner; }
+            if e.field.eq("ok") { return ty_named("bool"); }
+            if e.field.eq("err") { return ty_named("string"); }
+            return null;
+        }
+        if stripped.kind == TY_OPTION {
+            if e.field.eq("val") { return stripped.inner; }
+            if e.field.eq("has") { return ty_named("bool"); }
+            return null;
+        }
+        if stripped.kind == TY_OPT_RESULT {
+            if e.field.eq("val") { return stripped.inner; }
+            if e.field.eq("tag") { return ty_named("int"); }
+            if e.field.eq("err") { return ty_named("string"); }
+            return null;
+        }
         // Slice .len → usize/int placeholder.
         if stripped.kind == TY_SLICE {
             if e.field.eq("len") { return ty_named("usize"); }
@@ -1695,20 +1722,38 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
     let mut sret: *Type = subst_type(template.fn_ret_ty, template.type_params, args);
     sret = resolve_assoc_recursive(g, sret);
     synth.fn_ret_ty = sret;
+    // The mono may have introduced ?T / !T / ?!T inners that the up-front
+    // collection pass never saw (it skipped the generic template body).
+    // Register them now and emit runtime helpers inline so the forward decl
+    // and body that follow can reference the typedef.
+    collect_result_in_type(g, sret);
     if template.fn_params != null {
         let ps: *Vector<Param> = Vector::new();
         for let i: int = 0; i < template.fn_params.len(); i++ {
             let p: Param = template.fn_params.get(i);
             let pt: *Type = subst_type(p.ty, template.type_params, args);
-            let np: Param = Param {
-                name: p.name,
-                ty: resolve_assoc_recursive(g, pt),
-            };
+            let resolved: *Type = resolve_assoc_recursive(g, pt);
+            collect_result_in_type(g, resolved);
+            let np: Param = Param { name: p.name, ty: resolved };
             ps.push(np);
         }
         synth.fn_params = ps;
     }
     g.fns.insert(mangled, *synth);
+    // The mono may have introduced ?T / !T / ?!T inners that the up-front
+    // collection pass never saw (it skipped the generic template body).
+    // Collect them now and re-emit runtime helpers; the templates carry
+    // header guards so re-emission of an existing inner is a no-op for cc.
+    collect_result_in_type(g, sret);
+    if synth.fn_params != null {
+        for let i: int = 0; i < synth.fn_params.len(); i++ {
+            let p: Param = synth.fn_params.get(i);
+            collect_result_in_type(g, p.ty);
+        }
+    }
+    emit_result_runtime(g);
+    emit_option_runtime(g);
+    emit_optres_runtime(g);
 }
 
 fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vector<Type>) {
@@ -4508,11 +4553,14 @@ pub fn emit_program(program: *Vector<Stmt>) {
             let p: Param = new_params_v.get(j);
             g.declare(p.name, p.ty);
         }
+        let saved_ret_mono: *Type = g.current_ret_ty;
+        g.current_ret_ty = new_ret;
         for let j: int = 0; j < new_body.len(); j++ {
             let b: Stmt = new_body.get(j);
             emit_stmt(g, &b, 1);
         }
         g.emit_deferred_reverse(1);
+        g.current_ret_ty = saved_ret_mono;
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
         println!("}");
@@ -4643,6 +4691,13 @@ fn collect_generic_uses_in_stmt(s: *Stmt, out: *Vector<Type>) {
     // not concrete uses, and the substituted versions will be collected later.
     let is_generic: bool = s.type_params != null && s.type_params.len() > 0;
     if is_generic { return; }
+    // Trait sigs are templates referencing Self / Self::Item; impls of the
+    // trait walk normally and contribute their substituted uses there.
+    if s.kind == ST_TRAIT { return; }
+    // Skip impl method walks for generic impls (`impl<T> X for Foo<T>`) — the
+    // method bodies reference T placeholders. Their substituted versions land
+    // when each mono of Foo<Concrete> is processed. Concrete impls (no
+    // type_params) walk normally below.
 
     if s.let_ty != null { collect_generic_uses_in_type(s.let_ty, out); }
     if s.fn_ret_ty != null { collect_generic_uses_in_type(s.fn_ret_ty, out); }

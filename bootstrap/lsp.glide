@@ -798,7 +798,8 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, targ
 }
 
 // After Self substitution, an `Self::Item` becomes `<ImplTarget>::Item`. Resolve
-// that against the impl's own `type Item = X;` declarations.
+// that against the impl's own `type Item = X;` declarations. Returns a fresh
+// node — must NOT mutate the input (shared across impls).
 fn subst_assoc(t: *Type, assocs: *Vector<Param>) -> *Type {
     if t == null { return null; }
     if assocs == null { return t; }
@@ -808,9 +809,12 @@ fn subst_assoc(t: *Type, assocs: *Vector<Param>) -> *Type {
             if a.name.eq(t.name) { return a.ty; }
         }
     }
-    if t.inner != null { t.inner = subst_assoc(t.inner, assocs); }
-    if t.fnptr_ret != null { t.fnptr_ret = subst_assoc(t.fnptr_ret, assocs); }
-    return t;
+    if t.inner == null && t.fnptr_ret == null { return t; }
+    let copy: *Type = malloc(sizeof(Type)) as *Type;
+    *copy = *t;
+    if copy.inner != null { copy.inner = subst_assoc(copy.inner, assocs); }
+    if copy.fnptr_ret != null { copy.fnptr_ret = subst_assoc(copy.fnptr_ret, assocs); }
+    return copy;
 }
 
 fn if_param_count(s: Stmt) -> int {
@@ -819,12 +823,18 @@ fn if_param_count(s: Stmt) -> int {
 }
 
 // Walk a Type and replace `Self` with `impl_target`, leaving everything
-// else untouched. Used for comparing trait sigs to impl sigs.
+// else untouched. Returns a fresh node — must NOT mutate the input, since
+// the trait sig is shared across every impl that names the trait.
 fn subst_self(t: *Type, impl_target: *Type) -> *Type {
     if t == null { return null; }
     if impl_target == null { return t; }
     if t.kind == TY_NAMED && t.name.eq("Self") { return impl_target; }
-    if t.inner != null { t.inner = subst_self(t.inner, impl_target); }
+    if t.inner == null && t.fnptr_ret == null { return t; }
+    let copy: *Type = malloc(sizeof(Type)) as *Type;
+    *copy = *t;
+    if copy.inner != null { copy.inner = subst_self(copy.inner, impl_target); }
+    if copy.fnptr_ret != null { copy.fnptr_ret = subst_self(copy.fnptr_ret, impl_target); }
+    return copy;
     return t;
 }
 
