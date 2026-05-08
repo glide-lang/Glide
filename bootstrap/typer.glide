@@ -79,6 +79,8 @@ pub fn type_to_string(t: *Type) -> string {
         return out.concat(">");
     }
     if t.kind == TY_RESULT { return "!".concat(type_to_string(t.inner)); }
+    if t.kind == TY_OPTION { return "?".concat(type_to_string(t.inner)); }
+    if t.kind == TY_OPT_RESULT { return "?!".concat(type_to_string(t.inner)); }
     if t.kind == TY_DYN { return "dyn ".concat(t.name); }
     return "<ty?>";
 }
@@ -514,6 +516,12 @@ fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
         return arg_compat(want.inner, got.inner, tps);
     }
     if want.kind == TY_RESULT && got.kind == TY_RESULT {
+        return arg_compat(want.inner, got.inner, tps);
+    }
+    if want.kind == TY_OPTION && got.kind == TY_OPTION {
+        return arg_compat(want.inner, got.inner, tps);
+    }
+    if want.kind == TY_OPT_RESULT && got.kind == TY_OPT_RESULT {
         return arg_compat(want.inner, got.inner, tps);
     }
     return types_compat(want, got);
@@ -1253,6 +1261,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             return ty_named("bool");
         }
         if op == OP_AND || op == OP_OR { return ty_named("bool"); }
+        if op == OP_COALESCE {
+            // `??` extracts the inner of an Option/Result/nullable. Result
+            // type matches the LHS inner; the RHS supplies the fallback.
+            let inner_lt: *Type = lt;
+            if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT) {
+                inner_lt = lt.inner;
+            }
+            // RHS may either match the inner directly (fallback value) or
+            // be an `err(...)` call → wraps the result back into !T.
+            return inner_lt;
+        }
         if !types_compat(lt, rt) {
             t.err(e.line, e.column,
                 "binary op type mismatch: ".concat(type_to_string(lt))
@@ -1286,8 +1305,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if e.op_code == UN_ADDR { return ty_pointer(inner); }
         if e.op_code == UN_ADDR_MUT { return ty_pointer(inner); }
         if e.op_code == UN_TRY {
-            // `expr?` on `!T` propagates the err and yields T to the caller.
+            // `expr?` polymorphic by inner type: !T / ?T / ?!T all propagate
+            // and yield the underlying T to the caller. The enclosing fn's
+            // return type decides whether None can coerce to Err — that
+            // dispatch lives in codegen; the typer just unwraps.
             if inner != null && inner.kind == TY_RESULT { return inner.inner; }
+            if inner != null && inner.kind == TY_OPTION { return inner.inner; }
+            if inner != null && inner.kind == TY_OPT_RESULT { return inner.inner; }
             return inner;
         }
         return inner;
@@ -1427,6 +1451,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // codegen (`ok` / `err` for Result, `make_chan` for channels);
             // otherwise this is a missing import.
             let is_builtin: bool = name.eq("ok") || name.eq("err")
+                || name.eq("some") || name.eq("none")
                 || name.eq("make_chan") || name.eq("sizeof")
                 || name.eq("printf");
             if !is_builtin && !t.scope.contains(name) && t.enforce_visibility {
