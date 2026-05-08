@@ -905,15 +905,94 @@ static void Arena_reset(Arena* a) { a->used = 0; }
     #endif // GLIDE_OS_PLATFORM_HELPERS_DEFINED
     #endif // GLIDE_OS_VIA_CRAW
 
-
-    #ifdef GLIDE_ENV_VIA_CRAW
-    #ifndef GLIDE_ENV_HELPERS_DEFINED
-    #define GLIDE_ENV_HELPERS_DEFINED
-    static const char* __glide_getenv(const char* name) {
-        const char* v = getenv(name); return v ? v : "";
-    }
-    #endif
-    #endif
+
+    #ifdef GLIDE_ENV_VIA_CRAW
+    #ifndef GLIDE_ENV_HELPERS_DEFINED
+    #define GLIDE_ENV_HELPERS_DEFINED
+
+    #ifdef _WIN32
+    #include <windows.h>
+    #endif
+
+    static const char* __glide_getenv(const char* name) {
+        const char* v = getenv(name); return v ? v : "";
+    }
+
+    static int __glide_setenv(const char* name, const char* value) {
+    #ifdef _WIN32
+        // _putenv_s updates BOTH the Win env block AND the CRT env table
+        // (so subsequent getenv calls see the new value). SetEnvironmentVariableA
+        // alone leaves CRT stale.
+        return _putenv_s(name, value);
+    #else
+        return setenv(name, value, 1);
+    #endif
+    }
+
+    static int __glide_unsetenv(const char* name) {
+    #ifdef _WIN32
+        // Empty-value _putenv_s removes the variable from both stores.
+        return _putenv_s(name, "");
+    #else
+        return unsetenv(name);
+    #endif
+    }
+
+    // Snapshot the current environ on first call so subsequent indexed
+    // accesses see a stable list (the OS environ pointer can be relocated
+    // by setenv/putenv between calls). Caller pattern: count() then iterate
+    // at(0)..at(count-1).
+    static char** __glide_env_snapshot = NULL;
+    static int    __glide_env_snapshot_n = 0;
+
+    static void __glide_env_snapshot_take(void) {
+        if (__glide_env_snapshot) {
+            for (int i = 0; i < __glide_env_snapshot_n; i++) free(__glide_env_snapshot[i]);
+            free(__glide_env_snapshot);
+            __glide_env_snapshot = NULL;
+            __glide_env_snapshot_n = 0;
+        }
+    #ifdef _WIN32
+        LPCH block = GetEnvironmentStringsA();
+        if (!block) return;
+        int count = 0;
+        for (const char* p = block; *p; p += strlen(p) + 1) count++;
+        __glide_env_snapshot = (char**)malloc((size_t)count * sizeof(char*));
+        int idx = 0;
+        for (const char* p = block; *p; p += strlen(p) + 1) {
+            size_t L = strlen(p);
+            char* dup = (char*)malloc(L + 1);
+            memcpy(dup, p, L + 1);
+            __glide_env_snapshot[idx++] = dup;
+        }
+        __glide_env_snapshot_n = count;
+        FreeEnvironmentStringsA(block);
+    #else
+        extern char** environ;
+        int count = 0;
+        if (environ) while (environ[count]) count++;
+        __glide_env_snapshot = (char**)malloc((size_t)count * sizeof(char*));
+        for (int i = 0; i < count; i++) {
+            size_t L = strlen(environ[i]);
+            char* dup = (char*)malloc(L + 1);
+            memcpy(dup, environ[i], L + 1);
+            __glide_env_snapshot[i] = dup;
+        }
+        __glide_env_snapshot_n = count;
+    #endif
+    }
+
+    static int __glide_environ_count(void) {
+        __glide_env_snapshot_take();
+        return __glide_env_snapshot_n;
+    }
+
+    static const char* __glide_environ_at(int i) {
+        if (i < 0 || i >= __glide_env_snapshot_n || !__glide_env_snapshot) return "";
+        return __glide_env_snapshot[i];
+    }
+    #endif
+    #endif
 
 
     #ifdef GLIDE_IO_VIA_CRAW
@@ -3149,6 +3228,7 @@ int main(void)
 }
 #endif
 
+typedef struct  EnvKV   EnvKV ;
 typedef struct  Token   Token ;
 typedef struct  Lexer   Lexer ;
 typedef struct  Type   Type ;
@@ -3219,6 +3299,7 @@ static double __glide_unwrap_f64(__glide_result_f64_t r) { double z; if (r.ok) r
 #endif
 
 typedef struct  Vector__string   Vector__string ;
+typedef struct  Vector__EnvKV   Vector__EnvKV ;
 typedef struct  Vector__Type   Vector__Type ;
 typedef struct  Vector__Expr   Vector__Expr ;
 typedef struct  Vector__Param   Vector__Param ;
@@ -3248,6 +3329,7 @@ typedef struct  Vector__ImportableSym   Vector__ImportableSym ;
 typedef struct  Vector__ImportInfo   Vector__ImportInfo ;
 typedef struct  HashMap__ImportInfo   HashMap__ImportInfo ;
 typedef struct  Vector__UseSite   Vector__UseSite ;
+typedef struct  EnvKV   EnvKV ;
 typedef struct  Token   Token ;
 typedef struct  Lexer   Lexer ;
 typedef struct  Type   Type ;
@@ -3283,6 +3365,13 @@ typedef struct  UseSite   UseSite ;
 
 struct  Vector__string  {
      const char**   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__EnvKV  {
+     EnvKV*   data;
      int   len;
      int   cap;
      bool   is_arena;
@@ -3506,6 +3595,11 @@ struct  Vector__UseSite  {
      int   cap;
      bool   is_arena;
 };
+
+typedef struct  EnvKV  {
+     const char*   key;
+     const char*   value;
+}  EnvKV ;
 
 typedef struct  Token  {
      int   kind;
@@ -4089,6 +4183,10 @@ __glide_result_string_t   os_data_dir (void);
 bool   os_is_tty (int   fd);
 __glide_result_int_t   os_shell (const char*   cmd);
 const char*   __glide_getenv (const char*   name);
+int   __glide_setenv (const char*   name, const char*   value);
+int   __glide_unsetenv (const char*   name);
+int   __glide_environ_count (void);
+const char*   __glide_environ_at (int   i);
 void   exit (int   code);
 int   env_args_count (void);
 const char*   env_args_at (int   i);
@@ -4096,6 +4194,12 @@ Vector__string*   env_args (void);
 const char*   env_get (const char*   name);
 bool   env_has (const char*   name);
 void   env_exit (int   code);
+__glide_result_void_t   env_set (const char*   name, const char*   value);
+__glide_result_void_t   env_unset (const char*   name);
+Vector__EnvKV*   env_all (void);
+const char*   env_expand (const char*   s);
+bool   _env_is_name_start (int   c);
+bool   _env_is_name_cont (int   c);
 const char*   __glide_read_line (void);
 const char*   __glide_read_bytes (int   n);
 void   __glide_write_str (const char*   s);
@@ -4813,10 +4917,14 @@ int main(int __glide_main_argc, char** __glide_main_argv);
 
 
 
+
+
 Vector__string*   Vector_new__string (void);
 void   Vector_push__string (Vector__string*   self, const char*   x);
 int   Vector_len__string (Vector__string*   self);
 const char*   Vector_get__string (Vector__string*   self, int   i);
+Vector__EnvKV*   Vector_new__EnvKV (void);
+void   Vector_push__EnvKV (Vector__EnvKV*   self, EnvKV   x);
 Vector__Expr*   Vector_new__Expr (void);
 Vector__ParseDiag*   Vector_new__ParseDiag (void);
 void   Vector_free__ParseDiag (Vector__ParseDiag*   self);
@@ -5607,6 +5715,112 @@ bool   env_has (const char*   name) {
 
 void   env_exit (int   code) {
     exit(code);
+}
+
+__glide_result_void_t   env_set (const char*   name, const char*   value) {
+    if ((__glide_setenv(name, value)  !=  0)) {
+        return __glide_err_void("env_set failed");
+    }
+    return __glide_ok_void();
+}
+
+__glide_result_void_t   env_unset (const char*   name) {
+    if ((__glide_unsetenv(name)  !=  0)) {
+        return __glide_err_void("env_unset failed");
+    }
+    return __glide_ok_void();
+}
+
+Vector__EnvKV*   env_all (void) {
+    Vector__EnvKV*   out = Vector_new__EnvKV();
+    int   n = __glide_environ_count();
+    for (int   i = 0; (i  <  n); i++) {
+        const char*   raw = __glide_environ_at(i);
+        int   len = __glide_string_len(raw);
+        int   eq = (0  -  1);
+        for (int   j = 0; (j  <  len); j++) {
+            if ((__glide_char_to_int(__glide_string_at(raw, j))  ==  61)) {
+                (eq  =  j);
+                break;
+            }
+        }
+        if ((eq  <=  0)) {
+            continue;
+        }
+        const char*   k = __glide_string_substring(raw, 0, eq);
+        const char*   v = __glide_string_substring(raw, (eq  +  1), len);
+        Vector_push__EnvKV(out, (( EnvKV ){. key  = k, . value  = v}));
+    }
+    return out;
+}
+
+const char*   env_expand (const char*   s) {
+    int   n = __glide_string_len(s);
+    const char*   out = "";
+    int   i = 0;
+    while ((i  <  n)) {
+        int   c = __glide_char_to_int(__glide_string_at(s, i));
+        if ((((c  ==  36)  &&  ((i  +  1)  <  n))  &&  (__glide_char_to_int(__glide_string_at(s, (i  +  1)))  ==  123))) {
+            int   j = (i  +  2);
+            while (((j  <  n)  &&  (__glide_char_to_int(__glide_string_at(s, j))  !=  125))) {
+                (j  =  (j  +  1));
+            }
+            if ((j  <  n)) {
+                const char*   name = __glide_string_substring(s, (i  +  2), j);
+                (out  =  __glide_string_concat(out, __glide_getenv(name)));
+                (i  =  (j  +  1));
+                continue;
+            }
+        }
+        if ((((c  ==  36)  &&  ((i  +  1)  <  n))  &&  _env_is_name_start(__glide_char_to_int(__glide_string_at(s, (i  +  1)))))) {
+            int   j = (i  +  1);
+            while (((j  <  n)  &&  _env_is_name_cont(__glide_char_to_int(__glide_string_at(s, j))))) {
+                (j  =  (j  +  1));
+            }
+            const char*   name = __glide_string_substring(s, (i  +  1), j);
+            (out  =  __glide_string_concat(out, __glide_getenv(name)));
+            (i  =  j);
+            continue;
+        }
+        if (((c  ==  37)  &&  ((i  +  1)  <  n))) {
+            int   j = (i  +  1);
+            while (((j  <  n)  &&  (__glide_char_to_int(__glide_string_at(s, j))  !=  37))) {
+                (j  =  (j  +  1));
+            }
+            if (((j  <  n)  &&  (j  >  (i  +  1)))) {
+                const char*   name = __glide_string_substring(s, (i  +  1), j);
+                (out  =  __glide_string_concat(out, __glide_getenv(name)));
+                (i  =  (j  +  1));
+                continue;
+            }
+        }
+        (out  =  __glide_string_concat(out, __glide_string_substring(s, i, (i  +  1))));
+        (i  =  (i  +  1));
+    }
+    return out;
+}
+
+bool   _env_is_name_start (int   c) {
+    if ((c  ==  95)) {
+        return true;
+    }
+    if (((c  >=  65)  &&  (c  <=  90))) {
+        return true;
+    }
+    if (((c  >=  97)  &&  (c  <=  122))) {
+        return true;
+    }
+    return false;
+}
+
+bool   _env_is_name_cont (int   c) {
+    if (_env_is_name_start(c)) {
+        return true;
+    }
+    if (((c  >=  48)  &&  (c  <=  57))) {
+        return true;
+    }
+    return false;
 }
 
 const char*   read_line (void) {
@@ -25963,6 +26177,46 @@ Vector__Expr*   Vector_new__Expr (void) {
         (v  =  (( Vector__Expr* )__glide_palloc(sizeof( Vector__Expr ))));
     } else {
         (v  =  (( Vector__Expr* )malloc(sizeof( Vector__Expr ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+void   Vector_push__EnvKV (Vector__EnvKV*   self, EnvKV   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        EnvKV*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( EnvKV* )__glide_palloc((new_cap  *  sizeof( EnvKV )))));
+        } else {
+            (new_data  =  (( EnvKV* )malloc((new_cap  *  sizeof( EnvKV )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            free((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__EnvKV*   Vector_new__EnvKV (void) {
+    bool   arena = (__glide_palloc_active()  !=  0);
+    Vector__EnvKV*   v;
+    if (arena) {
+        (v  =  (( Vector__EnvKV* )__glide_palloc(sizeof( Vector__EnvKV ))));
+    } else {
+        (v  =  (( Vector__EnvKV* )malloc(sizeof( Vector__EnvKV ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
