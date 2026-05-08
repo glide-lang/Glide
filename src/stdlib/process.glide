@@ -132,6 +132,62 @@ c_raw! {
     // parent's GetEnvironmentStringsA output with overrides. Caller frees
     // with regular free().
     #ifdef _WIN32
+    // Last path component of `prog` matches "cmd" or "cmd.exe" (case-insensitive)?
+    static int __glide_is_cmd_exe_win(const char* prog) {
+        if (!prog || !*prog) return 0;
+        const char* base = prog;
+        for (const char* p = prog; *p; p++) {
+            if (*p == '/' || *p == '\\') base = p + 1;
+        }
+        return _stricmp(base, "cmd") == 0 || _stricmp(base, "cmd.exe") == 0;
+    }
+
+    // Build a CreateProcessA command line with cmd.exe-aware quoting. When
+    // prog is cmd[.exe] and the first arg is /C or /K, switch to a special
+    // form: `"cmd" /S /C "arg1 arg2 ..."` — single outer quoting around the
+    // post-/C portion, with /S forcing cmd to strip them. Otherwise use the
+    // standard per-arg quoting.
+    //
+    // Returns malloc'd string, caller frees.
+    static char* __glide_build_cmdline_win(const char* prog, char** argv, int args_n) {
+        size_t cap = 1024, len = 0;
+        char* cmd = (char*)malloc(cap);
+        #define BLDAPP(s) do { \
+            size_t L_ = strlen(s); \
+            while (len + L_ + 4 >= cap) { cap *= 2; cmd = (char*)realloc(cmd, cap); } \
+            memcpy(cmd + len, (s), L_); len += L_; \
+        } while (0)
+
+        int cmd_special = 0;
+        if (__glide_is_cmd_exe_win(prog) && args_n >= 1 && argv[0]) {
+            const char* a0 = argv[0];
+            if (a0[0] == '/' && (a0[1] == 'c' || a0[1] == 'C' || a0[1] == 'k' || a0[1] == 'K') && a0[2] == 0) {
+                cmd_special = 1;
+            }
+        }
+
+        if (cmd_special) {
+            BLDAPP("\""); BLDAPP(prog); BLDAPP("\" /S ");
+            BLDAPP(argv[0]);  // /C or /K verbatim, unquoted
+            if (args_n > 1) {
+                BLDAPP(" \"");
+                for (int i = 1; i < args_n; i++) {
+                    if (i > 1) BLDAPP(" ");
+                    BLDAPP(argv[i]);
+                }
+                BLDAPP("\"");
+            }
+        } else {
+            BLDAPP("\""); BLDAPP(prog); BLDAPP("\"");
+            for (int i = 0; i < args_n && argv[i]; i++) {
+                BLDAPP(" \""); BLDAPP(argv[i]); BLDAPP("\"");
+            }
+        }
+        cmd[len] = 0;
+        return cmd;
+        #undef BLDAPP
+    }
+
     static char* __glide_proc_merge_env_block_win(char** overrides, int n_overrides) {
         LPCH parent = GetEnvironmentStringsA();
         size_t cap = 4096, len = 0;
@@ -249,21 +305,9 @@ c_raw! {
             SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
         }
 
-        // Build a single command line: "prog" "arg1" "arg2" ...
+        // Build a single command line, with cmd.exe-aware quoting.
         char** argv = __glide_proc_split(args_packed, args_n);
-        size_t cmd_cap = 1024;
-        char* cmd = (char*)malloc(cmd_cap);
-        size_t cmd_len = 0;
-        #define APPEND(s) do { \
-            size_t L = strlen(s); \
-            while (cmd_len + L + 4 >= cmd_cap) { cmd_cap *= 2; cmd = (char*)realloc(cmd, cmd_cap); } \
-            memcpy(cmd + cmd_len, (s), L); cmd_len += L; \
-        } while (0)
-        APPEND("\""); APPEND(prog); APPEND("\"");
-        for (int i = 0; i < args_n && argv[i]; i++) {
-            APPEND(" \""); APPEND(argv[i]); APPEND("\"");
-        }
-        cmd[cmd_len] = 0;
+        char* cmd = __glide_build_cmdline_win(prog, argv, args_n);
         __glide_proc_split_free(argv);
 
         // Build environment block (KEY=VAL\0KEY=VAL\0\0 on Windows). Three modes
@@ -483,19 +527,7 @@ c_raw! {
     ) {
     #ifdef _WIN32
         char** argv = __glide_proc_split(args_packed, args_n);
-        size_t cmd_cap = 1024;
-        char* cmd = (char*)malloc(cmd_cap);
-        size_t cmd_len = 0;
-        #define APPEND2(s) do { \
-            size_t L = strlen(s); \
-            while (cmd_len + L + 4 >= cmd_cap) { cmd_cap *= 2; cmd = (char*)realloc(cmd, cmd_cap); } \
-            memcpy(cmd + cmd_len, (s), L); cmd_len += L; \
-        } while (0)
-        APPEND2("\""); APPEND2(prog); APPEND2("\"");
-        for (int i = 0; i < args_n && argv[i]; i++) {
-            APPEND2(" \""); APPEND2(argv[i]); APPEND2("\"");
-        }
-        cmd[cmd_len] = 0;
+        char* cmd = __glide_build_cmdline_win(prog, argv, args_n);
         __glide_proc_split_free(argv);
         // env merge (mirror of __glide_proc_run path)
         LPVOID env_block = NULL;
