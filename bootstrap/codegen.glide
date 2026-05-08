@@ -3711,6 +3711,37 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
             }
         }
     }
+    // Concrete free-fn call where `var` (possibly wrapped in &/&mut/*)
+    // appears as an arg. Walk both the arg expr and the matching param
+    // type in parallel, stripping wrappers on each side, until we hit
+    // EX_IDENT(var) — the type at that point IS var's type. Resolves
+    // bug #1: `let v* = Vector::new(); fill_jobs(&mut *v, n);` where
+    // fill_jobs has a concrete `&mut Vector<int>` first param.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.args != null {
+        let cname: string = e.lhs.str_val;
+        if g.fns.contains(cname) {
+            let fn_def: Stmt = g.fns.get(cname);
+            if fn_def.fn_params != null {
+                let nparams: int = fn_def.fn_params.len();
+                let nargs: int = e.args.len();
+                let mut limit: int = nargs;
+                if nparams < limit { limit = nparams; }
+                for let i: int = 0; i < limit; i++ {
+                    let a: Expr = e.args.get(i);
+                    let p: Param = fn_def.fn_params.get(i);
+                    let resolved: *Type = constrain_walk(&a, p.ty, var);
+                    if resolved != null
+                       && resolved.kind == TY_POINTER
+                       && resolved.inner != null
+                       && resolved.inner.kind == TY_GENERIC
+                       && resolved.inner.name.eq(gen_name) {
+                        return resolved;
+                    }
+                }
+            }
+        }
+    }
     // Recurse into children.
     if e.lhs != null {
         let r: *Type = try_constrain_from_expr(g, e.lhs, var, gen_name, tparams);
@@ -3729,6 +3760,30 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
             let a: Expr = e.args.get(i);
             let r: *Type = try_constrain_from_expr(g, &a, var, gen_name, tparams);
             if r != null { return r; }
+        }
+    }
+    return null;
+}
+
+// Walk an arg-expr alongside its param-type, stripping unary wrappers in
+// parallel. When we hit EX_IDENT matching `var`, return the type at that
+// depth — that's `var`'s type. UN_DEREF/UN_ADDR/UN_ADDR_MUT each strip
+// their corresponding type wrapper (or wrap, in the case of `*var` whose
+// type is `ty_pointer(current)`). Returns null if shape diverges.
+fn constrain_walk(arg: *Expr, ty: *Type, var: string) -> *Type {
+    if arg == null || ty == null { return null; }
+    if arg.kind == EX_IDENT && arg.str_val.eq(var) { return ty; }
+    if arg.kind == EX_UNARY && arg.operand != null {
+        if arg.op_code == UN_DEREF {
+            return constrain_walk(arg.operand, ty_pointer(ty), var);
+        }
+        if arg.op_code == UN_ADDR {
+            if ty.kind != TY_BORROW || ty.inner == null { return null; }
+            return constrain_walk(arg.operand, ty.inner, var);
+        }
+        if arg.op_code == UN_ADDR_MUT {
+            if ty.kind != TY_BORROW_MUT || ty.inner == null { return null; }
+            return constrain_walk(arg.operand, ty.inner, var);
         }
     }
     return null;
