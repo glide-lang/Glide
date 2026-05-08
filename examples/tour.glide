@@ -10,6 +10,7 @@
 
 import stdlib::math::*;
 import stdlib::hashmap::*;
+import stdlib::iter::*;
 
 // extern declarations expose runtime built-ins.
 extern fn now_ns() -> i64;
@@ -140,6 +141,25 @@ fn fetch_either(id: int) -> ?!int {
     return some(v);
 }
 
+// ---- 8c. Iterator trait with associated type ---------------------------
+
+struct Counter { i: int, max: int }
+
+impl Iterator for Counter {
+    type Item = int;
+    fn next(self: *Counter) -> ?int {
+        if self.i >= self.max { return none(); }
+        self.i = self.i + 1;
+        return some(self.i - 1);
+    }
+}
+
+// `?I::Item` is resolved per-instantiation by looking up the impl's
+// `type Item = X` declaration.
+fn first<I: Iterator>(it: *I) -> ?I::Item {
+    return it.next();
+}
+
 // ---- 9. closures + first-class fn pointers -----------------------------
 
 fn run_op(f: fn(int) -> int, x: int) -> int { return f(x); }
@@ -247,6 +267,12 @@ fn main() -> int {
     let _loose:  ?int = fetch_loose(-1);       // none -> propagated
     let either:  ?!int = fetch_either(0);      // err
     println!("either.tag=${either.tag}");      // 2 (Err)
+
+    // --- (a3) Iterator trait + assoc types
+    let cnt: Counter = Counter { i: 7, max: 10 };
+    let head: ?int = first(&cnt);              // some(7)
+    let head_val: int = -1; if head.has { head_val = head.val; }
+    println!("counter first=${head_val}");
 
     // --- (b) borrows + arena + explicit free
     let jobs: *Vector<int> = Vector::new();
