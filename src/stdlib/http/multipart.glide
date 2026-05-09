@@ -1,0 +1,95 @@
+// `multipart/form-data` builder. Wire format per RFC 7578: each part
+// starts with `--<boundary>\r\n`, has its own headers + blank line +
+// body, and the message ends with `--<boundary>--\r\n`.
+//
+// ```glide
+// import stdlib::http::multipart::*;
+// import stdlib::http::client::*;
+//
+// let mp: *Multipart = Multipart::new();
+// mp.add_field("user", "alice");
+// mp.add_file("avatar", "pic.png", "image/png", file_bytes);
+// let body: string = mp.body();
+// let ct:   string = mp.content_type();
+//
+// let c: *HttpClient = HttpClient::new();
+// c.post(url, body, ct);
+// ```
+
+import stdlib::http::client::*;
+import stdlib::random::*;
+
+pub struct Multipart {
+    boundary: string,
+    parts:    *Vector<string>,
+}
+
+impl Multipart {
+    pub fn new() -> *Multipart {
+        let m: *Multipart = malloc(sizeof(Multipart)) as *Multipart;
+        m.boundary = _gen_boundary();
+        let v: *Vector<string> = Vector::new();
+        m.parts = v;
+        return m;
+    }
+
+    /// Same as `new` but lets the caller fix the boundary — useful for
+    /// deterministic tests. The string must not appear in any part body.
+    pub fn with_boundary(boundary: string) -> *Multipart {
+        let m: *Multipart = malloc(sizeof(Multipart)) as *Multipart;
+        m.boundary = boundary;
+        let v: *Vector<string> = Vector::new();
+        m.parts = v;
+        return m;
+    }
+
+    /// Add a plain text field.
+    pub fn add_field(self: *Multipart, name: string, value: string) {
+        let mut p: string = "Content-Disposition: form-data; name=\"";
+        p = p.concat(name).concat("\"\r\n\r\n");
+        p = p.concat(value);
+        self.parts.push(p);
+    }
+
+    /// Add a file part. `data` is the raw file bytes (Glide string is
+    /// fine for binary, but embedded NULs truncate downstream readers).
+    pub fn add_file(self: *Multipart, name: string, filename: string,
+                    content_type: string, data: string) {
+        let mut p: string = "Content-Disposition: form-data; name=\"";
+        p = p.concat(name).concat("\"; filename=\"").concat(filename).concat("\"\r\n");
+        p = p.concat("Content-Type: ").concat(content_type).concat("\r\n\r\n");
+        p = p.concat(data);
+        self.parts.push(p);
+    }
+
+    /// `multipart/form-data; boundary=...` — drop into a Content-Type
+    /// header so the receiver knows where the parts split.
+    pub fn content_type(self: *Multipart) -> string {
+        return "multipart/form-data; boundary=".concat(self.boundary);
+    }
+
+    /// Serialize all parts into the wire body.
+    pub fn body(self: *Multipart) -> string {
+        let mut out: string = "";
+        for let i: int = 0; i < self.parts.len(); i++ {
+            out = out.concat("--").concat(self.boundary).concat("\r\n");
+            out = out.concat(self.parts.get(i)).concat("\r\n");
+        }
+        out = out.concat("--").concat(self.boundary).concat("--\r\n");
+        return out;
+    }
+}
+
+/// Random boundary (24 ASCII chars, base32-ish). Avoids the legacy
+/// `=`-as-padding problem and is far longer than any plausible part body.
+fn _gen_boundary() -> string {
+    let r: *Rng = Rng::from_clock();
+    let chars: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut s: string = "----glide";
+    for let i: int = 0; i < 24; i++ {
+        let idx: int = r.range(0, 62);
+        s = s.concat(chars.at(idx).to_string());
+    }
+    free(r as *void);
+    return s;
+}

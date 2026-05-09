@@ -1,0 +1,97 @@
+// `application/x-www-form-urlencoded` body builder + parser. The
+// classic HTML-form encoding: keys and values percent-encoded, joined
+// with `=`, pairs joined with `&`.
+//
+// ```glide
+// import stdlib::http::form::*;
+// import stdlib::http::client::*;
+//
+// let f: *FormData = FormData::new();
+// f.set("user", "alice");
+// f.set("token", "abc xyz=99");
+// let body: string = f.encode();
+// // -> "user=alice&token=abc%20xyz%3D99"
+//
+// http_post_form("https://api.example.com/login", f);
+// ```
+
+import stdlib::http::client::*;
+import stdlib::url::*;
+
+/// Ordered list of (name, value) pairs. Order matters — repeating a
+/// key is legal and meaningful for some servers.
+pub struct FormData {
+    names:  *Vector<string>,
+    values: *Vector<string>,
+}
+
+impl FormData {
+    pub fn new() -> *FormData {
+        let f: *FormData = malloc(sizeof(FormData)) as *FormData;
+        let n: *Vector<string> = Vector::new();
+        let v: *Vector<string> = Vector::new();
+        f.names = n;
+        f.values = v;
+        return f;
+    }
+
+    /// Append a (name, value) pair. Duplicate names are kept — most
+    /// servers accept repeated keys and merge them server-side.
+    pub fn set(self: *FormData, name: string, value: string) {
+        self.names.push(name);
+        self.values.push(value);
+    }
+
+    pub fn len(self: *FormData) -> int { return self.names.len(); }
+
+    pub fn name_at(self: *FormData, i: int) -> string { return self.names.get(i); }
+    pub fn value_at(self: *FormData, i: int) -> string { return self.values.get(i); }
+
+    /// Build the wire string: `k=v&k=v` with each piece percent-encoded.
+    pub fn encode(self: *FormData) -> string {
+        let mut out: string = "";
+        for let i: int = 0; i < self.names.len(); i++ {
+            if i > 0 { out = out.concat("&"); }
+            out = out.concat(url_encode(self.names.get(i)));
+            out = out.concat("=");
+            out = out.concat(url_encode(self.values.get(i)));
+        }
+        return out;
+    }
+}
+
+/// Decode a `k=v&k=v` body into a FormData. Mirrors `FormData.encode`.
+/// Returns err on malformed percent-encoding.
+pub fn form_decode(s: string) -> !*FormData {
+    let f: *FormData = FormData::new();
+    if s.len() == 0 { return ok(f); }
+    let pairs: *Vector<string> = s.split("&");
+    for let i: int = 0; i < pairs.len(); i++ {
+        let p: string = pairs.get(i);
+        if p.len() == 0 { continue; }
+        let eq: int = p.index_of("=");
+        let mut k: string = p;
+        let mut v: string = "";
+        if eq >= 0 {
+            k = p.substring(0, eq);
+            v = p.substring(eq + 1, p.len());
+        }
+        let kr: !string = url_decode(k);
+        if !kr.ok { return err(kr.err); }
+        let vr: !string = url_decode(v);
+        if !vr.ok { return err(vr.err); }
+        f.set(kr.val, vr.val);
+    }
+    return ok(f);
+}
+
+/// One-shot form POST. Builds an HttpClient, sets Content-Type, sends.
+/// For repeated calls share a client (set `c.jar`, etc.) and call
+/// `c.post(url, form.encode(), "application/x-www-form-urlencoded")`.
+pub fn http_post_form(url: string, form: *FormData) -> !*HttpResponse {
+    let body: string = form.encode();
+    let c: *HttpClient = HttpClient::new();
+    let r: !*HttpResponse = c.post(url, body, "application/x-www-form-urlencoded");
+    free(c as *void);
+    return r;
+}

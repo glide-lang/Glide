@@ -156,7 +156,7 @@ fn _parse_v4(s: string) -> !*IpAddr {
 // RFC 5952. Supports the `::` zero-collapse, mixed `::ffff:1.2.3.4`,
 // embedded v4 in last 32 bits.
 
-fn _hex_digit(n: int) -> string {
+fn _ip_hex_digit(n: int) -> string {
     if n < 10 { return ((48 + n) as char).to_string(); }
     return ((87 + n) as char).to_string();
 }
@@ -167,7 +167,7 @@ fn _v6_group_str(g: int) -> string {
     let mut x: int = g;
     while x > 0 {
         let d: int = x & 15;
-        s = _hex_digit(d).concat(s);
+        s = _ip_hex_digit(d).concat(s);
         x = x >> 4;
     }
     return s;
