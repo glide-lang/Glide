@@ -3270,6 +3270,20 @@ static __glide_result_int_t __glide_ok_int(int v) { __glide_result_int_t r; r.ok
 static __glide_result_int_t __glide_err_int(const char* msg) { __glide_result_int_t r; r.ok = 0; r.err = msg; return r; }
 static int __glide_unwrap_int(__glide_result_int_t r) { int z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
 #endif
+#ifndef __GLIDE_RESULT_f64_GUARD
+#define __GLIDE_RESULT_f64_GUARD
+typedef struct __glide_result_f64_t { int ok; double val; const char* err; } __glide_result_f64_t;
+static __glide_result_f64_t __glide_ok_f64(double v) { __glide_result_f64_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
+static __glide_result_f64_t __glide_err_f64(const char* msg) { __glide_result_f64_t r; r.ok = 0; r.err = msg; return r; }
+static double __glide_unwrap_f64(__glide_result_f64_t r) { double z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
+#endif
+#ifndef __GLIDE_RESULT_bool_GUARD
+#define __GLIDE_RESULT_bool_GUARD
+typedef struct __glide_result_bool_t { int ok; bool val; const char* err; } __glide_result_bool_t;
+static __glide_result_bool_t __glide_ok_bool(bool v) { __glide_result_bool_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
+static __glide_result_bool_t __glide_err_bool(const char* msg) { __glide_result_bool_t r; r.ok = 0; r.err = msg; return r; }
+static bool __glide_unwrap_bool(__glide_result_bool_t r) { bool z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
+#endif
 #ifndef __GLIDE_RESULT_string_GUARD
 #define __GLIDE_RESULT_string_GUARD
 typedef struct __glide_result_string_t { int ok; const char* val; const char* err; } __glide_result_string_t;
@@ -3289,13 +3303,6 @@ typedef struct __glide_result_u64_t { int ok; uint64_t val; const char* err; } _
 static __glide_result_u64_t __glide_ok_u64(uint64_t v) { __glide_result_u64_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
 static __glide_result_u64_t __glide_err_u64(const char* msg) { __glide_result_u64_t r; r.ok = 0; r.err = msg; return r; }
 static uint64_t __glide_unwrap_u64(__glide_result_u64_t r) { uint64_t z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
-#endif
-#ifndef __GLIDE_RESULT_f64_GUARD
-#define __GLIDE_RESULT_f64_GUARD
-typedef struct __glide_result_f64_t { int ok; double val; const char* err; } __glide_result_f64_t;
-static __glide_result_f64_t __glide_ok_f64(double v) { __glide_result_f64_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }
-static __glide_result_f64_t __glide_err_f64(const char* msg) { __glide_result_f64_t r; r.ok = 0; r.err = msg; return r; }
-static double __glide_unwrap_f64(__glide_result_f64_t r) { double z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
 #endif
 
 #ifndef __GLIDE_OPTION_int_GUARD
@@ -4127,6 +4134,7 @@ int   __glide_palloc_total_bytes (void);
 int   __glide_palloc_chunks (void);
 int   __glide_proc_rss_mb (void);
 bool   _ws (int   c);
+bool   string_is_empty (const char*   self);
 int   string_cmp (const char*   self, const char*   other);
 bool   string_contains (const char*   self, const char*   sub);
 int   string_index_of (const char*   self, const char*   sub);
@@ -4142,6 +4150,8 @@ const char*   string_to_lower (const char*   self);
 const char*   string_repeat (const char*   self, int   n);
 int   string_parse_int (const char*   self);
 __glide_result_int_t   string_try_parse_int (const char*   self);
+__glide_result_f64_t   string_try_parse_float (const char*   self);
+__glide_result_bool_t   string_try_parse_bool (const char*   self);
 int   Vector__int_sum (Vector__int*   self);
 __glide_option_int_t   Vector__int_max (Vector__int*   self);
 __glide_option_int_t   Vector__int_min (Vector__int*   self);
@@ -4468,6 +4478,7 @@ void   lift_anons_in_stmt (CG*   g, Stmt*   s);
 Type*   resolve_assoc_recursive (CG*   g, Type*   t);
 Type*   resolve_concrete_assoc (CG*   g, Type*   t);
 void   forward_decl_generic_monos (CG*   g, Type*   t);
+void   _forward_decl_field_monos (CG*   g, Stmt*   s);
 void   collect_result_in_type (CG*   g, Type*   t);
 void   collect_result_in_expr (CG*   g, Expr*   e);
 void   collect_result_in_stmt (CG*   g, Stmt*   s);
@@ -5312,6 +5323,10 @@ bool   _ws (int   c) {
     return ((((((c  ==  32)  ||  (c  ==  9))  ||  (c  ==  10))  ||  (c  ==  13))  ||  (c  ==  12))  ||  (c  ==  11));
 }
 
+bool   string_is_empty (const char*   self) {
+    return (__glide_string_len(self)  ==  0);
+}
+
 int   string_cmp (const char*   self, const char*   other) {
     int   n = __glide_string_len(self);
     int   m = __glide_string_len(other);
@@ -5607,6 +5622,122 @@ __glide_result_int_t   string_try_parse_int (const char*   self) {
         return __glide_ok_int((-acc));
     }
     return __glide_ok_int(acc);
+}
+
+__glide_result_f64_t   string_try_parse_float (const char*   self) {
+    int   n = __glide_string_len(self);
+    if ((n  ==  0)) {
+        return __glide_err_f64("empty string");
+    }
+    int   i = 0;
+    bool   neg = false;
+    if ((__glide_char_to_int(__glide_string_at(self, 0))  ==  45)) {
+        (neg  =  true);
+        (i  =  1);
+    } else {
+        if ((__glide_char_to_int(__glide_string_at(self, 0))  ==  43)) {
+            (i  =  1);
+        }
+    }
+    int   int_digits = 0;
+    int   int_part = 0;
+    while ((i  <  n)) {
+        int   c = __glide_char_to_int(__glide_string_at(self, i));
+        if (((c  <  48)  ||  (c  >  57))) {
+            break;
+        }
+        (int_part  =  ((int_part  *  10)  +  (c  -  48)));
+        (int_digits  =  (int_digits  +  1));
+        (i  =  (i  +  1));
+    }
+    int   frac_part = 0;
+    int   frac_digits = 0;
+    if (((i  <  n)  &&  (__glide_char_to_int(__glide_string_at(self, i))  ==  46))) {
+        (i  =  (i  +  1));
+        while ((i  <  n)) {
+            int   c = __glide_char_to_int(__glide_string_at(self, i));
+            if (((c  <  48)  ||  (c  >  57))) {
+                break;
+            }
+            (frac_part  =  ((frac_part  *  10)  +  (c  -  48)));
+            (frac_digits  =  (frac_digits  +  1));
+            (i  =  (i  +  1));
+        }
+    }
+    if (((int_digits  ==  0)  &&  (frac_digits  ==  0))) {
+        return __glide_err_f64("no digits");
+    }
+    int   exp_val = 0;
+    bool   exp_neg = false;
+    if (((i  <  n)  &&  ((__glide_char_to_int(__glide_string_at(self, i))  ==  101)  ||  (__glide_char_to_int(__glide_string_at(self, i))  ==  69)))) {
+        (i  =  (i  +  1));
+        if ((i  <  n)) {
+            int   s = __glide_char_to_int(__glide_string_at(self, i));
+            if ((s  ==  43)) {
+                (i  =  (i  +  1));
+            } else {
+                if ((s  ==  45)) {
+                    (exp_neg  =  true);
+                    (i  =  (i  +  1));
+                }
+            }
+        }
+        int   exp_digits = 0;
+        while ((i  <  n)) {
+            int   c = __glide_char_to_int(__glide_string_at(self, i));
+            if (((c  <  48)  ||  (c  >  57))) {
+                break;
+            }
+            (exp_val  =  ((exp_val  *  10)  +  (c  -  48)));
+            (exp_digits  =  (exp_digits  +  1));
+            (i  =  (i  +  1));
+        }
+        if ((exp_digits  ==  0)) {
+            return __glide_err_f64("malformed exponent");
+        }
+    }
+    if ((i  !=  n)) {
+        return __glide_err_f64("non-digit byte");
+    }
+    if (exp_neg) {
+        (exp_val  =  (-exp_val));
+    }
+    double   pow_frac = 1.0;
+    int   k = 0;
+    while ((k  <  frac_digits)) {
+        (pow_frac  =  (pow_frac  *  10.0));
+        (k  =  (k  +  1));
+    }
+    double   v = ((( double )int_part)  +  ((( double )frac_part)  /  pow_frac));
+    double   pow_exp = 1.0;
+    if ((exp_val  >=  0)) {
+        int   e = exp_val;
+        while ((e  >  0)) {
+            (pow_exp  =  (pow_exp  *  10.0));
+            (e  =  (e  -  1));
+        }
+    } else {
+        int   e = (-exp_val);
+        while ((e  >  0)) {
+            (pow_exp  =  (pow_exp  /  10.0));
+            (e  =  (e  -  1));
+        }
+    }
+    (v  =  (v  *  pow_exp));
+    if (neg) {
+        (v  =  (-v));
+    }
+    return __glide_ok_f64(v);
+}
+
+__glide_result_bool_t   string_try_parse_bool (const char*   self) {
+    if (__glide_string_eq(self, "true")) {
+        return __glide_ok_bool(true);
+    }
+    if (__glide_string_eq(self, "false")) {
+        return __glide_ok_bool(false);
+    }
+    return __glide_err_bool("not a bool");
 }
 
 int   Vector__int_sum (Vector__int*   self) {
@@ -12328,6 +12459,19 @@ void   forward_decl_generic_monos (CG*   g, Type*   t) {
     }
 }
 
+void   _forward_decl_field_monos (CG*   g, Stmt*   s) {
+    if ((s  ==  NULL)) {
+        return;
+    }
+    if (((s-> struct_fields )  ==  NULL)) {
+        return;
+    }
+    for (int   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
+        Field   f = Vector_get__Field((s-> struct_fields ), i);
+        ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (f. ty ));
+    }
+}
+
 void   collect_result_in_type (CG*   g, Type*   t) {
     if ((t  ==  NULL)) {
         return;
@@ -17033,6 +17177,7 @@ void   emit_program (Vector__Stmt*   program) {
                 continue;
             }
             if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+                ((void(*)(CG*, Stmt*))_forward_decl_field_monos)(g, (&s));
                 printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
                 ((void(*)(Stmt*))emit_struct)((&s));
                 HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
@@ -17067,6 +17212,7 @@ void   emit_program (Vector__Stmt*   program) {
                 continue;
             }
             if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+                ((void(*)(CG*, Stmt*))_forward_decl_field_monos)(g, (&s));
                 printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
                 ((void(*)(Stmt*))emit_struct)((&s));
                 HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
@@ -17101,6 +17247,7 @@ void   emit_program (Vector__Stmt*   program) {
                 continue;
             }
             if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
+                ((void(*)(CG*, Stmt*))_forward_decl_field_monos)(g, (&s));
                 printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
                 ((void(*)(Stmt*))emit_struct)((&s));
                 HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
