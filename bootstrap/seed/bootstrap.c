@@ -12306,7 +12306,7 @@ void   forward_decl_generic_monos (CG*   g, Type*   t) {
     if ((t  ==  NULL)) {
         return;
     }
-    if (((((t-> kind )  ==  TY_GENERIC)  &&  ((t-> name )  !=  NULL))  &&  ((t-> args )  !=  NULL))) {
+    if ((((((t-> kind )  ==  TY_GENERIC)  &&  ((t-> name )  !=  NULL))  &&  ((t-> args )  !=  NULL))  &&  (!__glide_string_eq((t-> name ), "chan")))) {
         const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t-> name ), (t-> args ));
         if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
             HashMap_insert__bool((g-> emitted_monos ), mangled, true);

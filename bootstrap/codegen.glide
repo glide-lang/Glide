@@ -285,9 +285,14 @@ fn resolve_concrete_assoc(g: *CG, t: *Type) -> *Type {
 // declarations for any TY_GENERIC encountered. Lets result/option/
 // optres struct typedefs that wrap a `*Vector<X>`-style pointer
 // reference the mangled tag before its full body shows up later.
+//
+// Skips `chan<T>` — the channel runtime emits its own
+// `__glide_chan_T_t` typedef and a stray `chan__T` here would just
+// shadow the real one without ever being referenced.
 fn forward_decl_generic_monos(g: *CG, t: *Type) {
     if t == null { return; }
-    if t.kind == TY_GENERIC && t.name != null && t.args != null {
+    if t.kind == TY_GENERIC && t.name != null && t.args != null
+       && !t.name.eq("chan") {
         let mangled: string = mangle_generic(t.name, t.args);
         if !g.emitted_monos.contains(mangled) {
             g.emitted_monos.insert(mangled, true);

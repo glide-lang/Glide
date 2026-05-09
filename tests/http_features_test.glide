@@ -1,0 +1,156 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::client::*;
+import stdlib::http::cookies::*;
+import stdlib::http::form::*;
+import stdlib::http::multipart::*;
+
+// ---- HttpResponse.header() readers ----
+
+fn _make_resp() -> *HttpResponse {
+    let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
+    r.status = 200;
+    r.headers_block = "Content-Type: text/plain\r\nLocation: /next\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2";
+    r.body = "";
+    return r;
+}
+
+fn test_response_header_case_insensitive() -> int {
+    let r: *HttpResponse = _make_resp();
+    assert_str_eq!(r.header("Content-Type"), "text/plain");
+    assert_str_eq!(r.header("content-type"), "text/plain");
+    assert_str_eq!(r.header("CONTENT-TYPE"), "text/plain");
+    assert_str_eq!(r.header("Missing"), "");
+    return 0;
+}
+
+fn test_response_headers_multi() -> int {
+    let r: *HttpResponse = _make_resp();
+    let cookies: *Vector<string> = r.headers("Set-Cookie");
+    assert_eq!(cookies.len(), 2);
+    assert_str_eq!(cookies.get(0), "a=1");
+    assert_str_eq!(cookies.get(1), "b=2");
+    return 0;
+}
+
+// ---- form encoding ----
+
+fn test_form_encode_basic() -> int {
+    let f: *FormData = FormData::new();
+    f.set("a", "1");
+    f.set("b", "two");
+    assert_str_eq!(f.encode(), "a=1&b=two");
+    return 0;
+}
+
+fn test_form_encode_special_chars() -> int {
+    let f: *FormData = FormData::new();
+    f.set("k", "x y&z=1");
+    let body: string = f.encode();
+    // Spaces, & and = must be percent-encoded.
+    assert!(body.contains("%20"));
+    assert!(body.contains("%26"));
+    assert!(body.contains("%3D"));
+    return 0;
+}
+
+fn test_form_decode_round_trip() -> int {
+    let f: *FormData = FormData::new();
+    f.set("user", "alice");
+    f.set("note", "hello world");
+    let body: string = f.encode();
+    let r: !*FormData = form_decode(body);
+    assert!(r.ok);
+    assert_eq!(r.val.len(), 2);
+    assert_str_eq!(r.val.name_at(0), "user");
+    assert_str_eq!(r.val.value_at(1), "hello world");
+    return 0;
+}
+
+// ---- multipart ----
+
+fn test_multipart_content_type_format() -> int {
+    let mp: *Multipart = Multipart::with_boundary("xxx");
+    let ct: string = mp.content_type();
+    assert_str_eq!(ct, "multipart/form-data; boundary=xxx");
+    return 0;
+}
+
+fn test_multipart_body_layout() -> int {
+    let mp: *Multipart = Multipart::with_boundary("XXX");
+    mp.add_field("k", "v");
+    let body: string = mp.body();
+    assert!(body.starts_with("--XXX\r\n"));
+    assert!(body.ends_with("--XXX--\r\n"));
+    assert!(body.contains("name=\"k\""));
+    assert!(body.contains("\r\n\r\nv\r\n"));
+    return 0;
+}
+
+fn test_multipart_file_part() -> int {
+    let mp: *Multipart = Multipart::with_boundary("BB");
+    mp.add_file("upload", "doc.txt", "text/plain", "hello");
+    let body: string = mp.body();
+    assert!(body.contains("filename=\"doc.txt\""));
+    assert!(body.contains("Content-Type: text/plain"));
+    assert!(body.contains("\r\n\r\nhello\r\n"));
+    return 0;
+}
+
+// ---- CookieJar ----
+
+fn test_cookie_jar_ingest_simple() -> int {
+    let j: *CookieJar = CookieJar::new();
+    let lines: *Vector<string> = Vector::new();
+    lines.push("token=abc; Path=/");
+    lines.push("user=alice");
+    j.ingest("api.example.com", lines);
+    assert_eq!(j.all().len(), 2);
+    return 0;
+}
+
+fn test_cookie_jar_header_value() -> int {
+    let j: *CookieJar = CookieJar::new();
+    let lines: *Vector<string> = Vector::new();
+    lines.push("token=abc");
+    j.ingest("api.example.com", lines);
+    let h: string = j.header_value("api.example.com", "/", true);
+    assert_str_eq!(h, "token=abc");
+    return 0;
+}
+
+fn test_cookie_jar_secure_skip_on_http() -> int {
+    let j: *CookieJar = CookieJar::new();
+    let lines: *Vector<string> = Vector::new();
+    lines.push("session=xyz; Secure");
+    j.ingest("example.com", lines);
+    let h_http: string = j.header_value("example.com", "/", false);
+    assert_str_eq!(h_http, "");
+    let h_https: string = j.header_value("example.com", "/", true);
+    assert_str_eq!(h_https, "session=xyz");
+    return 0;
+}
+
+fn test_cookie_jar_replaces_same_name() -> int {
+    let j: *CookieJar = CookieJar::new();
+    let lines1: *Vector<string> = Vector::new();
+    lines1.push("k=old");
+    j.ingest("h.com", lines1);
+    let lines2: *Vector<string> = Vector::new();
+    lines2.push("k=new");
+    j.ingest("h.com", lines2);
+    assert_eq!(j.all().len(), 1);
+    let h: string = j.header_value("h.com", "/", false);
+    assert_str_eq!(h, "k=new");
+    return 0;
+}
+
+fn test_cookie_jar_clear() -> int {
+    let j: *CookieJar = CookieJar::new();
+    let lines: *Vector<string> = Vector::new();
+    lines.push("k=v");
+    j.ingest("h.com", lines);
+    j.clear();
+    assert_eq!(j.all().len(), 0);
+    return 0;
+}
