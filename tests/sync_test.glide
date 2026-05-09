@@ -1,0 +1,143 @@
+import stdlib::testing::*;
+import stdlib::sync::*;
+
+fn _inc(p: *int) -> int {
+    *p = *p + 1;
+    return *p;
+}
+
+fn _double(p: *int) -> int {
+    *p = *p * 2;
+    return *p;
+}
+
+fn _atomic_worker(a: *Atomic, w: *WaitGroup) {
+    for let i: int = 0; i < 1000; i++ {
+        a.add(1);
+    }
+    w.done();
+}
+
+fn _mutex_worker(m: *Mutex<int>, w: *WaitGroup) {
+    for let i: int = 0; i < 100; i++ {
+        m.with(_inc);
+    }
+    w.done();
+}
+
+fn test_mutex_explicit_lock() -> int {
+    let m: *Mutex<int> = Mutex::new(10);
+    defer m.free();
+    m.lock();
+    m.set(m.get() + 5);
+    m.unlock();
+    assert_eq!(m.get(), 15);
+    return 0;
+}
+
+fn test_mutex_with_returns_value() -> int {
+    let m: *Mutex<int> = Mutex::new(5);
+    defer m.free();
+    let result: int = m.with(_inc);
+    assert_eq!(result, 6);
+    assert_eq!(m.get(), 6);
+    return 0;
+}
+
+fn test_mutex_with_repeated() -> int {
+    let m: *Mutex<int> = Mutex::new(1);
+    defer m.free();
+    m.with(_double);
+    m.with(_double);
+    m.with(_double);
+    assert_eq!(m.get(), 8);
+    return 0;
+}
+
+fn test_atomic_initial_value() -> int {
+    let a: *Atomic = Atomic::new(42);
+    defer a.free();
+    assert_eq!(a.load(), 42);
+    return 0;
+}
+
+fn test_atomic_store_load() -> int {
+    let a: *Atomic = Atomic::new(0);
+    defer a.free();
+    a.store(99);
+    assert_eq!(a.load(), 99);
+    return 0;
+}
+
+fn test_atomic_add_returns_previous() -> int {
+    let a: *Atomic = Atomic::new(10);
+    defer a.free();
+    let prev: i64 = a.add(5);
+    assert_eq!(prev, 10);
+    assert_eq!(a.load(), 15);
+    return 0;
+}
+
+fn test_atomic_cas_success() -> int {
+    let a: *Atomic = Atomic::new(7);
+    defer a.free();
+    assert!(a.cas(7, 100));
+    assert_eq!(a.load(), 100);
+    return 0;
+}
+
+fn test_atomic_cas_failure_leaves_value() -> int {
+    let a: *Atomic = Atomic::new(7);
+    defer a.free();
+    assert_not!(a.cas(99, 100));
+    assert_eq!(a.load(), 7);
+    return 0;
+}
+
+fn test_wg_zero_returns_immediately() -> int {
+    let w: *WaitGroup = WaitGroup::new();
+    defer w.free();
+    w.wait();
+    assert_eq!(0, 0);
+    return 0;
+}
+
+fn test_wg_add_done_balanced() -> int {
+    let w: *WaitGroup = WaitGroup::new();
+    defer w.free();
+    w.add(3);
+    w.done(); w.done(); w.done();
+    w.wait();
+    assert_eq!(0, 0);
+    return 0;
+}
+
+fn test_atomic_concurrent_increment() -> int {
+    let a: *Atomic = Atomic::new(0);
+    defer a.free();
+    let w: *WaitGroup = WaitGroup::new();
+    defer w.free();
+    let n: int = 8;
+    w.add(n);
+    for let i: int = 0; i < n; i++ {
+        spawn_thread _atomic_worker(a, w);
+    }
+    w.wait();
+    assert_eq!(a.load(), 8000);
+    return 0;
+}
+
+fn test_mutex_concurrent_increment() -> int {
+    let m: *Mutex<int> = Mutex::new(0);
+    defer m.free();
+    let w: *WaitGroup = WaitGroup::new();
+    defer w.free();
+    let n: int = 4;
+    w.add(n);
+    for let i: int = 0; i < n; i++ {
+        spawn_thread _mutex_worker(m, w);
+    }
+    w.wait();
+    assert_eq!(m.get(), 400);
+    return 0;
+}
