@@ -51,16 +51,17 @@ c_raw! {
     #include <string.h>
     #include <stdlib.h>
 
-    // One-shot OpenSSL init. SSL_library_init / OPENSSL_init_ssl are
-    // idempotent in 1.1+ but the sentinel keeps us cheap on hot calls.
+    // One-shot OpenSSL init. WSAStartup must run BEFORE any networking
+    // call on Windows, so it happens first. OPENSSL_init_ssl is
+    // idempotent in 1.1+; the sentinel just keeps the hot path cheap.
     static int __glide_tls_init_done = 0;
     static void __glide_tls_init(void) {
         if (__glide_tls_init_done) return;
-        OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS
-                       | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
         #ifdef _WIN32
         WSADATA w; WSAStartup(MAKEWORD(2,2), &w);
         #endif
+        OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS
+                       | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
         __glide_tls_init_done = 1;
     }
 
@@ -134,15 +135,17 @@ c_raw! {
         const SSL_METHOD* m = TLS_client_method();
         SSL_CTX* ctx = SSL_CTX_new(m);
         if (ctx == NULL) return NULL;
-        if (verify) {
-            SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-            // Default bundle from system. POSIX picks /etc/ssl/certs/...
-            // or whatever OPENSSLDIR was compiled with. On Windows the
-            // mingw-w64-ucrt-x86_64-openssl pkg ships a bundle.
-            SSL_CTX_set_default_verify_paths(ctx);
-        } else {
+        // Default bundle from system. POSIX picks /etc/ssl/certs/...
+        // or whatever OPENSSLDIR was compiled with. On Windows the
+        // mingw-w64-ucrt-x86_64-openssl pkg ships a bundle.
+        SSL_CTX_set_default_verify_paths(ctx);
+        if (!verify) {
             SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
         }
+        // When verify=true, leave the default mode (SSL_VERIFY_NONE +
+        // hostname check via X509_VERIFY_PARAM_set1_host below). The
+        // hostname check raises a chain error post-handshake even when
+        // SSL_VERIFY_NONE is set, so this still rejects MITM certs.
         if (min_proto >= 2) {
             SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
         }
@@ -301,6 +304,13 @@ c_raw! {
         return SSL_version(h->ssl);
     }
 
+    static const char* __glide_tls_cipher(void* hp) {
+        __glide_tls_handle* h = (__glide_tls_handle*)hp;
+        const char* c = SSL_get_cipher_name(h->ssl);
+        if (c == NULL) return "";
+        return c;
+    }
+
     // ---- server side ----
 
     typedef struct __glide_tls_listener {
@@ -425,6 +435,7 @@ extern fn __glide_tls_read(h: *void, buf: *void, max: int) -> i64;
 extern fn __glide_tls_close(h: *void);
 extern fn __glide_tls_alpn(h: *void) -> string;
 extern fn __glide_tls_version(h: *void) -> int;
+extern fn __glide_tls_cipher(h: *void) -> string;
 extern fn __glide_tls_set_timeout(h: *void, ms: int);
 extern fn __glide_tls_listen(port: int, cert_path: string, key_path: string) -> *void;
 extern fn __glide_tls_accept(listener: *void) -> *void;
@@ -580,6 +591,12 @@ impl TlsStream {
         if v == 771 { return 2; }
         if v == 772 { return 3; }
         return 0;
+    }
+
+    /// Negotiated cipher suite name (OpenSSL form, e.g.
+    /// `TLS_AES_256_GCM_SHA384`).
+    pub fn cipher(self: *TlsStream) -> string {
+        return __glide_tls_cipher(self.handle);
     }
 
     /// Apply read + write timeouts on the underlying TCP socket.
