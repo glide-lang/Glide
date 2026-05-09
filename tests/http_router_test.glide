@@ -1,0 +1,244 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+
+// Build a minimal request — only the fields the router cares about
+// (method + path) need to be non-default; the rest stay empty.
+fn _req(method: string, path: string) -> HttpRequest {
+    return HttpRequest {
+        method:        method,
+        path:          path,
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          "",
+        params:        null,
+        queries:       null,
+    };
+}
+
+// ---- handlers used across tests ---------------------------------------
+
+fn _h_root(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("root");
+}
+
+fn _h_get_user(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text(req.param("id"));
+}
+
+fn _h_create_user(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::with_status(201).text("created");
+}
+
+fn _h_post_at(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("posted:".concat(req.param("id")));
+}
+
+fn _h_static(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text(req.param("rest"));
+}
+
+fn _h_health(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("any:".concat(req.method));
+}
+
+fn _h_two_params(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text(req.param("uid").concat("+").concat(req.param("pid")));
+}
+
+fn _h_search(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text(req.query("q").concat("|").concat(req.query("page")));
+}
+
+fn _h_not_found(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::with_status(404).json("{\"err\":\"missing\"}");
+}
+
+// ---- tests ------------------------------------------------------------
+
+fn test_literal_route() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/", _h_root);
+
+    let q: HttpRequest = _req("GET", "/");
+    let resp: HttpResponse = r.dispatch(&q);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "root");
+    return 0;
+}
+
+fn test_method_mismatch_falls_to_404() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/", _h_root);
+
+    let q: HttpRequest = _req("POST", "/");
+    let resp: HttpResponse = r.dispatch(&q);
+    assert_eq!(resp.status, 404);
+    return 0;
+}
+
+fn test_param_capture() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/users/:id", _h_get_user);
+
+    let q: HttpRequest = _req("GET", "/users/42");
+    let resp: HttpResponse = r.dispatch(&q);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "42");
+    return 0;
+}
+
+fn test_two_params() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/u/:uid/posts/:pid", _h_two_params);
+
+    let q: HttpRequest = _req("GET", "/u/9/posts/100");
+    let resp: HttpResponse = r.dispatch(&q);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "9+100");
+    return 0;
+}
+
+fn test_method_dispatch() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/users/:id", _h_get_user);
+    r.post("/users", _h_create_user);
+    r.post("/posts/:id", _h_post_at);
+
+    let g: HttpRequest = _req("GET", "/users/7");
+    let gr: HttpResponse = r.dispatch(&g);
+    assert_str_eq!(gr.body, "7");
+
+    let p: HttpRequest = _req("POST", "/users");
+    let pr: HttpResponse = r.dispatch(&p);
+    assert_eq!(pr.status, 201);
+    assert_str_eq!(pr.body, "created");
+
+    let q: HttpRequest = _req("POST", "/posts/abc");
+    let qr: HttpResponse = r.dispatch(&q);
+    assert_str_eq!(qr.body, "posted:abc");
+    return 0;
+}
+
+fn test_wildcard() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/static/*rest", _h_static);
+
+    let a: HttpRequest = _req("GET", "/static/css/main.css");
+    let ar: HttpResponse = r.dispatch(&a);
+    assert_str_eq!(ar.body, "css/main.css");
+
+    let b: HttpRequest = _req("GET", "/static/foo");
+    let br: HttpResponse = r.dispatch(&b);
+    assert_str_eq!(br.body, "foo");
+
+    let c: HttpRequest = _req("GET", "/static");
+    let cr: HttpResponse = r.dispatch(&c);
+    assert_str_eq!(cr.body, "");
+    return 0;
+}
+
+fn test_any_matches_every_method() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.any("/health", _h_health);
+
+    let g: HttpRequest = _req("GET", "/health");
+    let gr: HttpResponse = r.dispatch(&g);
+    assert_str_eq!(gr.body, "any:GET");
+
+    let p: HttpRequest = _req("POST", "/health");
+    let pr: HttpResponse = r.dispatch(&p);
+    assert_str_eq!(pr.body, "any:POST");
+
+    let d: HttpRequest = _req("DELETE", "/health");
+    let dr: HttpResponse = r.dispatch(&d);
+    assert_str_eq!(dr.body, "any:DELETE");
+    return 0;
+}
+
+fn test_query_string_does_not_break_match() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/search", _h_search);
+
+    let q: HttpRequest = _req("GET", "/search?q=glide&page=2");
+    let resp: HttpResponse = r.dispatch(&q);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "glide|2");
+    return 0;
+}
+
+fn test_custom_not_found() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    r.get("/", _h_root);
+    r.not_found_with(_h_not_found);
+
+    let q: HttpRequest = _req("GET", "/missing");
+    let resp: HttpResponse = r.dispatch(&q);
+    assert_eq!(resp.status, 404);
+    assert_str_eq!(resp.body, "{\"err\":\"missing\"}");
+    return 0;
+}
+
+fn test_first_match_wins() -> int {
+    let r: *Router = Router::new();
+    defer r.free();
+    // More specific literal first, less specific later — both would
+    // match `/users/me` if the router tried the second; we want the
+    // first registered route to win.
+    r.get("/users/me", _h_root);
+    r.get("/users/:id", _h_get_user);
+
+    let q: HttpRequest = _req("GET", "/users/me");
+    let resp: HttpResponse = r.dispatch(&q);
+    assert_str_eq!(resp.body, "root");
+
+    let q2: HttpRequest = _req("GET", "/users/42");
+    let resp2: HttpResponse = r.dispatch(&q2);
+    assert_str_eq!(resp2.body, "42");
+    return 0;
+}
+
+fn test_response_helpers() -> int {
+    let t: HttpResponse = HttpResponse::ok().text("hi");
+    assert_eq!(t.status, 200);
+    assert_str_eq!(t.body, "hi");
+    assert!(t.header("Content-Type").starts_with("text/plain"));
+
+    let h: HttpResponse = HttpResponse::ok().html("<h1>hi</h1>");
+    assert!(h.header("Content-Type").starts_with("text/html"));
+
+    let j: HttpResponse = HttpResponse::ok().json("{\"a\":1}");
+    assert_str_eq!(j.header("Content-Type"), "application/json");
+
+    let red: HttpResponse = HttpResponse::redirect("/login");
+    assert_eq!(red.status, 302);
+    assert_str_eq!(red.header("Location"), "/login");
+
+    let rs: HttpResponse = HttpResponse::ok().status(204);
+    assert_eq!(rs.status, 204);
+
+    let ck: HttpResponse = HttpResponse::ok().cookie("session", "abc");
+    assert_str_eq!(ck.header("Set-Cookie"), "session=abc");
+    return 0;
+}
+
+fn test_request_helpers() -> int {
+    let q: HttpRequest = _req("GET", "/x?a=1&b=hello%20world");
+    assert_str_eq!(q.path_only(), "/x");
+    assert_str_eq!(q.query("a"), "1");
+    assert_str_eq!(q.query("b"), "hello world");
+    assert_str_eq!(q.query("missing"), "");
+    assert!(q.is_method("get"));
+    assert!(q.is_method("GET"));
+    assert_not!(q.is_method("POST"));
+    return 0;
+}

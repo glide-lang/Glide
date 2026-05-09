@@ -1,0 +1,427 @@
+// HTTP method-aware router. Picks the handler for an incoming request
+// by matching the HTTP method + URL path against a list of patterns
+// declared up-front. Patterns support three segment shapes:
+//
+//   /users           literal — must match byte-for-byte
+//   /users/:id       parameter — captures the segment, accessible via
+//                    `req.param("id")`
+//   /static/*rest    wildcard — captures the *remainder* of the path
+//                    (one or more segments) into `req.param("rest")`
+//
+// Method dispatch is exact (`GET` ≠ `POST`); register the same pattern
+// twice if you want to handle both verbs. `r.any(...)` registers a
+// catch-all that matches every method.
+//
+// ```glide
+// import stdlib::http::*;
+// import stdlib::http::router::*;
+//
+// fn root(req: *HttpRequest) -> HttpResponse {
+//     return HttpResponse::ok().text("hi");
+// }
+//
+// fn get_user(req: *HttpRequest) -> HttpResponse {
+//     let id: string = req.param("id");
+//     return HttpResponse::ok().json("{\"id\":\"".concat(id).concat("\"}"));
+// }
+//
+// fn create_user(req: *HttpRequest) -> HttpResponse {
+//     return HttpResponse::with_status(201).json(req.body);
+// }
+//
+// fn main() -> int {
+//     let r: *Router = Router::new();
+//     defer r.free();
+//     r.get("/", root);
+//     r.get("/users/:id", get_user);
+//     r.post("/users", create_user);
+//     return r.listen(8080).val;
+// }
+// ```
+
+import stdlib::http::*;
+import stdlib::http_status::*;
+import stdlib::net::*;
+import stdlib::os::*;
+import stdlib::hashmap::*;
+
+extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
+
+// Same C HTTP parser ABI the http.glide server loop uses. Re-declared
+// here so the router can run its own accept loop without round-tripping
+// through a fn-pointer handler.
+extern fn hp_parse_glide(buf: *void, len: int) -> *void;
+extern fn hp_glide_method(g: *void) -> string;
+extern fn hp_glide_path(g: *void) -> string;
+extern fn hp_glide_version(g: *void) -> string;
+extern fn hp_glide_headers_block(g: *void) -> string;
+extern fn hp_glide_body(g: *void) -> string;
+extern fn hp_glide_free(g: *void);
+extern fn hp_glide_wants_close(g: *void) -> int;
+extern fn hp_build_response(status: int, status_txt: string,
+                            body: *void, body_len: int,
+                            extra_headers: string, keep_alive: int) -> int;
+extern fn hp_resp_buf_ptr() -> *void;
+
+// ---- segment kinds ----------------------------------------------------
+
+pub const RS_LITERAL:  int = 0;
+pub const RS_PARAM:    int = 1;
+pub const RS_WILDCARD: int = 2;
+
+/// One piece of a compiled route pattern.
+///
+/// `kind` is `RS_LITERAL` (the segment text must match), `RS_PARAM`
+/// (any one segment, captured under `text`), or `RS_WILDCARD` (the
+/// rest of the path, captured under `text`). Wildcard segments can
+/// only appear last; later segments after a `*` are ignored.
+pub struct RouteSegment {
+    pub kind: int,
+    pub text: string,
+}
+
+/// One row of the routing table.
+pub struct Route {
+    pub method:   string,
+    pub pattern:  string,
+    pub segments: *Vector<RouteSegment>,
+    pub handler:  fn(*HttpRequest) -> HttpResponse,
+}
+
+// Wildcard sentinel for `Router::any`. `dispatch` matches any verb when
+// `route.method` equals this exact string.
+pub const ANY_METHOD: string = "*";
+
+/// HTTP method router. Stores routes in declaration order; the first
+/// match wins. A separate "not found" handler runs when no route
+/// matches; defaults to a plain 404 with body `"not found"`.
+pub struct Router {
+    pub routes:    *Vector<Route>,
+    pub not_found: fn(*HttpRequest) -> HttpResponse,
+}
+
+// ---- pattern compilation / matching -----------------------------------
+
+fn _split_nonempty(s: string) -> *Vector<string> {
+    let parts: *Vector<string> = s.split("/");
+    let out: *Vector<string> = Vector::new();
+    for let i: int = 0; i < parts.len(); i++ {
+        let p: string = parts.get(i);
+        if p.eq("") { continue; }
+        out.push(p);
+    }
+    return out;
+}
+
+fn _compile_pattern(pattern: string) -> *Vector<RouteSegment> {
+    let segs: *Vector<RouteSegment> = Vector::new();
+    let parts: *Vector<string> = _split_nonempty(pattern);
+    for let i: int = 0; i < parts.len(); i++ {
+        let p: string = parts.get(i);
+        if p.starts_with(":") {
+            segs.push(RouteSegment { kind: RS_PARAM, text: p.substring(1, p.len()) });
+        } else if p.starts_with("*") {
+            segs.push(RouteSegment { kind: RS_WILDCARD, text: p.substring(1, p.len()) });
+        } else {
+            segs.push(RouteSegment { kind: RS_LITERAL, text: p });
+        }
+    }
+    return segs;
+}
+
+// Try to match `path` against the compiled `route_segs`. On match,
+// fills `out` with captured `:name` / `*name` segments and returns
+// true. On miss, leaves `out` empty and returns false.
+fn _match_path(route_segs: *Vector<RouteSegment>, path: string,
+               out: *HashMap<string>) -> bool {
+    let parts: *Vector<string> = _split_nonempty(path);
+    let np: int = parts.len();
+    let ns: int = route_segs.len();
+    let mut i: int = 0;
+    let mut j: int = 0;
+    while i < ns && j < np {
+        let seg: RouteSegment = route_segs.get(i);
+        let part: string = parts.get(j);
+        if seg.kind == RS_LITERAL {
+            if !seg.text.eq(part) { return false; }
+            i = i + 1;
+            j = j + 1;
+        } else if seg.kind == RS_PARAM {
+            out.insert(seg.text, part);
+            i = i + 1;
+            j = j + 1;
+        } else if seg.kind == RS_WILDCARD {
+            // Capture every remaining part joined by `/`. A wildcard
+            // matches even an empty tail (segment count == 0) so a
+            // route like `/static/*rest` can match `/static`.
+            let mut rest: string = "";
+            let mut k: int = j;
+            while k < np {
+                if k > j { rest = rest.concat("/"); }
+                rest = rest.concat(parts.get(k));
+                k = k + 1;
+            }
+            out.insert(seg.text, rest);
+            return i + 1 == ns;
+        }
+    }
+    // Trailing wildcard with nothing left to consume.
+    if i < ns && j == np {
+        let last: RouteSegment = route_segs.get(i);
+        if last.kind == RS_WILDCARD && i + 1 == ns {
+            out.insert(last.text, "");
+            return true;
+        }
+    }
+    return i == ns && j == np;
+}
+
+// ---- default handlers -------------------------------------------------
+
+fn _default_not_found(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::with_status(404).text("not found");
+}
+
+// ---- Router methods ---------------------------------------------------
+
+impl Router {
+    /// Empty router with a default 404 handler.
+    ///
+    /// ```glide
+    /// let r: *Router = Router::new();
+    /// defer r.free();
+    /// ```
+    pub fn new() -> *Router {
+        let r: *Router = malloc(sizeof(Router)) as *Router;
+        let v: *Vector<Route> = Vector::new();
+        r.routes = v;
+        r.not_found = _default_not_found;
+        return r;
+    }
+
+    /// Register `handler` for `method` + `pattern`. The method match is
+    /// case-insensitive (`"GET"`, `"get"`, `"Get"` all work) and stored
+    /// upper-case. Pass `ANY_METHOD` (or `"*"`) to match every verb.
+    ///
+    /// ```glide
+    /// r.route("GET", "/users/:id", get_user);
+    /// r.route("*",   "/health",    health);
+    /// ```
+    pub fn route(self: *Router, method: string, pattern: string,
+                 handler: fn(*HttpRequest) -> HttpResponse) {
+        self.routes.push(Route {
+            method:   method.to_upper(),
+            pattern:  pattern,
+            segments: _compile_pattern(pattern),
+            handler:  handler,
+        });
+    }
+
+    /// Shortcut for `route("GET", ...)`.
+    ///
+    /// ```glide
+    /// r.get("/users/:id", get_user);
+    /// ```
+    pub fn get(self: *Router, pattern: string,
+               handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route("GET", pattern, handler);
+    }
+
+    /// Shortcut for `route("POST", ...)`.
+    pub fn post(self: *Router, pattern: string,
+                handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route("POST", pattern, handler);
+    }
+
+    /// Shortcut for `route("PUT", ...)`.
+    pub fn put(self: *Router, pattern: string,
+               handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route("PUT", pattern, handler);
+    }
+
+    /// Shortcut for `route("DELETE", ...)`.
+    pub fn delete(self: *Router, pattern: string,
+                  handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route("DELETE", pattern, handler);
+    }
+
+    /// Shortcut for `route("PATCH", ...)`.
+    pub fn patch(self: *Router, pattern: string,
+                 handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route("PATCH", pattern, handler);
+    }
+
+    /// Shortcut for `route("HEAD", ...)`.
+    pub fn head(self: *Router, pattern: string,
+                handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route("HEAD", pattern, handler);
+    }
+
+    /// Shortcut for `route("OPTIONS", ...)`.
+    pub fn options(self: *Router, pattern: string,
+                   handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route("OPTIONS", pattern, handler);
+    }
+
+    /// Match every HTTP method on this pattern.
+    ///
+    /// ```glide
+    /// r.any("/health", fn(req: *HttpRequest) -> HttpResponse {
+    ///     return HttpResponse::ok().text("ok");
+    /// });
+    /// ```
+    pub fn any(self: *Router, pattern: string,
+               handler: fn(*HttpRequest) -> HttpResponse) {
+        self.route(ANY_METHOD, pattern, handler);
+    }
+
+    /// Override the default 404 handler.
+    ///
+    /// ```glide
+    /// r.not_found_with(fn(req: *HttpRequest) -> HttpResponse {
+    ///     return HttpResponse::with_status(404).json("{\"err\":\"missing\"}");
+    /// });
+    /// ```
+    pub fn not_found_with(self: *Router,
+                          handler: fn(*HttpRequest) -> HttpResponse) {
+        self.not_found = handler;
+    }
+
+    /// Walk the route table; on first match, populate `req.params` and
+    /// dispatch. Falls back to the not-found handler when no route
+    /// fits. Mutates `req.params` in place — pass a freshly-built
+    /// `HttpRequest`, not a long-lived pointer.
+    ///
+    /// ```glide
+    /// let req: HttpRequest = ...;
+    /// let resp: HttpResponse = r.dispatch(&req);
+    /// ```
+    pub fn dispatch(self: *Router, req: *HttpRequest) -> HttpResponse {
+        let path: string = req.path_only();
+        let method: string = req.method.to_upper();
+        for let i: int = 0; i < self.routes.len(); i++ {
+            let route: Route = self.routes.get(i);
+            if !route.method.eq(ANY_METHOD) && !route.method.eq(method) { continue; }
+            let params: *HashMap<string> = HashMap::new();
+            if _match_path(route.segments, path, params) {
+                req.params = params;
+                let h: fn(*HttpRequest) -> HttpResponse = route.handler;
+                return h(req);
+            }
+            params.free();
+        }
+        let nf: fn(*HttpRequest) -> HttpResponse = self.not_found;
+        return nf(req);
+    }
+
+    /// Release the route table and the router struct. Pair with `defer`.
+    pub fn free(self: *Router) {
+        for let i: int = 0; i < self.routes.len(); i++ {
+            let r: Route = self.routes.get(i);
+            r.segments.free();
+        }
+        self.routes.free();
+        free(self as *void);
+    }
+
+    /// Run the server loop on `port`, dispatching each request through
+    /// `self.dispatch`. Same OS semantics as `http_listen`: Linux uses
+    /// the reactor + per-conn coroutines, Windows / macOS / BSD run
+    /// serially until the platform reactors land.
+    ///
+    /// ```glide
+    /// let r: *Router = Router::new();
+    /// r.get("/", index);
+    /// r.listen(8080);
+    /// ```
+    pub fn listen(self: *Router, port: int) -> !int {
+        let l: *Listener = Listener::bind(port);
+        if !l.ok() { return err("bind failed"); }
+        println!("http: listening on :", port);
+        let win: bool = os_is_windows();
+        while true {
+            let c: *Conn = l.accept();
+            if !c.ok() { c.close(); continue; }
+            if win {
+                _router_handle_conn(c, self);
+            } else {
+                spawn _router_handle_conn(c, self);
+            }
+        }
+        return ok(0);
+    }
+
+    /// Multi-worker variant: `n` accept loops, each on its own
+    /// SO_REUSEPORT listener. Behaves like `http_listen_workers` but
+    /// dispatches through the router instead of a raw fn-pointer.
+    ///
+    /// ```glide
+    /// r.listen_workers(8080, 4);
+    /// ```
+    pub fn listen_workers(self: *Router, port: int, n: int) -> !int {
+        let probe: *Listener = Listener::bind_reuseport(port);
+        if !probe.ok() { return err("bind failed"); }
+        probe.close();
+        println!("http: listening on :", port, " across ", n, " worker(s)");
+
+        let mut spawned: int = 1;
+        while spawned < n {
+            spawn_thread _router_accept_loop(port, self);
+            spawned = spawned + 1;
+        }
+        _router_accept_loop(port, self);
+        return ok(0);
+    }
+}
+
+// ---- server loop (mirror of http.glide _handle_conn but with router) --
+
+fn _router_handle_conn(c: *Conn, r: *Router) {
+    let buf: *u8 = malloc(8192) as *u8;
+    while true {
+        let n: int = c.read(buf as *void, 8192);
+        if n <= 0 { break; }
+
+        let g: *void = hp_parse_glide(buf as *void, n);
+        let mut keep: bool = false;
+        let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
+        if g != null {
+            keep = hp_glide_wants_close(g) == 0;
+            let req: HttpRequest = HttpRequest {
+                method:        hp_glide_method(g),
+                path:          hp_glide_path(g),
+                version:       hp_glide_version(g),
+                headers_block: hp_glide_headers_block(g),
+                body:          hp_glide_body(g),
+                params:        null,
+                queries:       null,
+            };
+            resp = r.dispatch(&req);
+            hp_glide_free(g);
+        }
+        let mut keep_i: int = 0;
+        if keep { keep_i = 1; }
+        let wlen: int = hp_build_response(resp.status, status_text(resp.status),
+                                          resp.body as *void, resp.body.len(),
+                                          resp.headers_block, keep_i);
+        c.write(hp_resp_buf_ptr(), wlen);
+        if !keep { break; }
+    }
+    c.close();
+    free(buf as *void);
+}
+
+fn _router_accept_loop(port: int, r: *Router) {
+    let l: *Listener = Listener::bind_reuseport(port);
+    if !l.ok() { return; }
+    let win: bool = os_is_windows();
+    while true {
+        let c: *Conn = l.accept();
+        if !c.ok() { c.close(); continue; }
+        if win {
+            _router_handle_conn(c, r);
+        } else {
+            spawn _router_handle_conn(c, r);
+        }
+    }
+}
