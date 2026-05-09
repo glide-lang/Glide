@@ -1,0 +1,135 @@
+import stdlib::testing::*;
+import stdlib::json::*;
+
+fn _near(a: f64, b: f64) -> bool {
+    let mut d: f64 = a - b;
+    if d < 0.0 { d = -d; }
+    return d < 0.0001;
+}
+
+fn test_emit_primitives() -> int {
+    assert_str_eq!(json_emit(json_null()), "null");
+    assert_str_eq!(json_emit(json_bool(true)), "true");
+    assert_str_eq!(json_emit(json_bool(false)), "false");
+    assert_str_eq!(json_emit(json_int(42)), "42");
+    assert_str_eq!(json_emit(json_int(-7)), "-7");
+    assert_str_eq!(json_emit(json_string("hi")), "\"hi\"");
+    return 0;
+}
+
+fn test_emit_escape() -> int {
+    assert_str_eq!(json_emit(json_string("a\"b")), "\"a\\\"b\"");
+    assert_str_eq!(json_emit(json_string("a\nb")), "\"a\\nb\"");
+    assert_str_eq!(json_emit(json_string("a\\b")), "\"a\\\\b\"");
+    return 0;
+}
+
+fn test_emit_array() -> int {
+    let a: *JsonValue = json_array();
+    json_arr_push(a, json_int(1));
+    json_arr_push(a, json_int(2));
+    json_arr_push(a, json_int(3));
+    assert_str_eq!(json_emit(a), "[1,2,3]");
+
+    let empty: *JsonValue = json_array();
+    assert_str_eq!(json_emit(empty), "[]");
+    return 0;
+}
+
+fn test_emit_object() -> int {
+    let o: *JsonValue = json_object();
+    json_obj_set(o, "a", json_int(1));
+    json_obj_set(o, "b", json_string("hi"));
+    assert_str_eq!(json_emit(o), "{\"a\":1,\"b\":\"hi\"}");
+
+    let empty: *JsonValue = json_object();
+    assert_str_eq!(json_emit(empty), "{}");
+    return 0;
+}
+
+fn test_emit_nested() -> int {
+    let o: *JsonValue = json_object();
+    let arr: *JsonValue = json_array();
+    json_arr_push(arr, json_int(1));
+    json_arr_push(arr, json_int(2));
+    json_obj_set(o, "xs", arr);
+    json_obj_set(o, "ok", json_bool(true));
+    assert_str_eq!(json_emit(o), "{\"xs\":[1,2],\"ok\":true}");
+    return 0;
+}
+
+fn test_parse_primitives() -> int {
+    assert!(json_is_null(json_parse("null")));
+    assert!(json_as_bool(json_parse("true")));
+    assert_not!(json_as_bool(json_parse("false")));
+    assert_eq!(json_as_int(json_parse("42")), 42);
+    assert_eq!(json_as_int(json_parse("-7")), -7);
+    assert_str_eq!(json_as_string(json_parse("\"hi\"")), "hi");
+    return 0;
+}
+
+fn test_parse_array() -> int {
+    let v: *JsonValue = json_parse("[1, 2, 3]");
+    assert_eq!(json_len(v), 3);
+    assert_eq!(json_as_int(json_at(v, 0)), 1);
+    assert_eq!(json_as_int(json_at(v, 1)), 2);
+    assert_eq!(json_as_int(json_at(v, 2)), 3);
+    return 0;
+}
+
+fn test_parse_object() -> int {
+    let v: *JsonValue = json_parse("{\"name\": \"alice\", \"age\": 30}");
+    assert_eq!(json_len(v), 2);
+    assert_str_eq!(json_as_string(json_get(v, "name")), "alice");
+    assert_eq!(json_as_int(json_get(v, "age")), 30);
+    let missing: *JsonValue = json_get(v, "nope");
+    assert!(missing == null);
+    return 0;
+}
+
+fn test_parse_nested() -> int {
+    let v: *JsonValue = json_parse("{\"items\":[{\"id\":1},{\"id\":2}]}");
+    let items: *JsonValue = json_get(v, "items");
+    assert_eq!(json_len(items), 2);
+
+    let first: *JsonValue = json_at(items, 0);
+    assert_eq!(json_as_int(json_get(first, "id")), 1);
+    let second: *JsonValue = json_at(items, 1);
+    assert_eq!(json_as_int(json_get(second, "id")), 2);
+    return 0;
+}
+
+fn test_parse_float() -> int {
+    let v: *JsonValue = json_parse("3.14");
+    assert_eq!(v.kind, JSON_FLOAT);
+    assert!(_near(json_as_float(v), 3.14));
+
+    let exp: *JsonValue = json_parse("1.5e2");
+    assert!(_near(json_as_float(exp), 150.0));
+
+    let neg: *JsonValue = json_parse("-0.5");
+    assert!(_near(json_as_float(neg), -0.5));
+    return 0;
+}
+
+fn test_parse_string_escapes() -> int {
+    let v: *JsonValue = json_parse("\"a\\nb\\tc\\\"d\"");
+    assert_str_eq!(json_as_string(v), "a\nb\tc\"d");
+    return 0;
+}
+
+fn test_round_trip() -> int {
+    let o: *JsonValue = json_object();
+    json_obj_set(o, "name", json_string("alice"));
+    json_obj_set(o, "age",  json_int(30));
+    json_obj_set(o, "ok",   json_bool(true));
+    json_obj_set(o, "nada", json_null());
+
+    let s: string = json_emit(o);
+    let parsed: *JsonValue = json_parse(s);
+    assert_str_eq!(json_as_string(json_get(parsed, "name")), "alice");
+    assert_eq!(json_as_int(json_get(parsed, "age")), 30);
+    assert!(json_as_bool(json_get(parsed, "ok")));
+    assert!(json_is_null(json_get(parsed, "nada")));
+    return 0;
+}

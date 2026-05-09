@@ -1,0 +1,578 @@
+// JSON parser + emitter. UTF-8 in, UTF-8 out. Numbers are kept as `int`
+// when they fit a plain integer literal, otherwise as `f64`. Strings
+// decode the standard `\n\t\r\\\"\/` escapes; `\uXXXX` is replaced
+// with `?` (no surrogate handling yet — full UTF-16 decoding is on the
+// roadmap).
+//
+// Build values with the `json_*` constructors, mutate arrays/objects
+// with `json_arr_push` / `json_obj_set`, read them back with
+// `json_get` (object) / `json_at` (array) / `json_as_*` accessors, and
+// round-trip with `json_parse` / `json_emit`.
+//
+// ```glide
+// import stdlib::json::*;
+//
+// // Build
+// let user: *JsonValue = json_object();
+// json_obj_set(user, "name", json_string("alice"));
+// json_obj_set(user, "age",  json_int(30));
+// let s: string = json_emit(user);   // {"name":"alice","age":30}
+//
+// // Parse
+// let parsed: *JsonValue = json_parse(s);
+// let name: *JsonValue = json_get(parsed, "name");
+// println!(json_as_string(name));    // alice
+// ```
+
+import stdlib::hashmap::*;
+
+pub const JSON_NULL:   int = 0;
+pub const JSON_BOOL:   int = 1;
+pub const JSON_INT:    int = 2;
+pub const JSON_FLOAT:  int = 3;
+pub const JSON_STRING: int = 4;
+pub const JSON_ARRAY:  int = 5;
+pub const JSON_OBJECT: int = 6;
+
+pub struct JsonValue {
+    pub kind: int,
+    pub b: bool,
+    pub i: int,
+    pub f: f64,
+    pub s: string,
+    pub arr: *Vector<JsonValue>,
+    pub obj_keys: *Vector<string>,
+    pub obj_vals: *Vector<JsonValue>,
+}
+
+// ---- constructors -------------------------------------------------------
+
+/// JSON `null`.
+///
+/// ```glide
+/// let v: *JsonValue = json_null();
+/// json_emit(v);   // "null"
+/// ```
+pub fn json_null() -> *JsonValue {
+    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+    v.kind = JSON_NULL;
+    return v;
+}
+
+/// JSON boolean.
+///
+/// ```glide
+/// json_emit(json_bool(true));    // "true"
+/// json_emit(json_bool(false));   // "false"
+/// ```
+pub fn json_bool(b: bool) -> *JsonValue {
+    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+    v.kind = JSON_BOOL;
+    v.b = b;
+    return v;
+}
+
+/// JSON integer (kept as `int` until parsed back as a float).
+///
+/// ```glide
+/// json_emit(json_int(42));   // "42"
+/// ```
+pub fn json_int(n: int) -> *JsonValue {
+    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+    v.kind = JSON_INT;
+    v.i = n;
+    return v;
+}
+
+/// JSON floating-point number. Always emits as a float (no automatic
+/// demotion to integer even for whole values).
+///
+/// ```glide
+/// json_emit(json_float(3.14));   // "3.140000"
+/// ```
+pub fn json_float(f: f64) -> *JsonValue {
+    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+    v.kind = JSON_FLOAT;
+    v.f = f;
+    return v;
+}
+
+/// JSON string. The value is escaped at emit time, so callers pass raw
+/// text (no manual quoting).
+///
+/// ```glide
+/// json_emit(json_string("hi"));        // "\"hi\""
+/// json_emit(json_string("a\"b"));      // "\"a\\\"b\""
+/// ```
+pub fn json_string(s: string) -> *JsonValue {
+    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+    v.kind = JSON_STRING;
+    v.s = s;
+    return v;
+}
+
+/// Empty JSON array. Use `json_arr_push` to append elements.
+///
+/// ```glide
+/// let a: *JsonValue = json_array();
+/// json_arr_push(a, json_int(1));
+/// json_arr_push(a, json_int(2));
+/// json_emit(a);    // "[1,2]"
+/// ```
+pub fn json_array() -> *JsonValue {
+    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+    v.kind = JSON_ARRAY;
+    let arr: *Vector<JsonValue> = Vector::new();
+    v.arr = arr;
+    return v;
+}
+
+/// Empty JSON object. Use `json_obj_set` to add `key: value` pairs.
+///
+/// ```glide
+/// let o: *JsonValue = json_object();
+/// json_obj_set(o, "name", json_string("bob"));
+/// json_obj_set(o, "age",  json_int(7));
+/// json_emit(o);    // "{\"name\":\"bob\",\"age\":7}"
+/// ```
+pub fn json_object() -> *JsonValue {
+    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+    v.kind = JSON_OBJECT;
+    let keys: *Vector<string> = Vector::new();
+    let vals: *Vector<JsonValue> = Vector::new();
+    v.obj_keys = keys;
+    v.obj_vals = vals;
+    return v;
+}
+
+// ---- mutators -----------------------------------------------------------
+
+/// Append `v` to a JSON array. No-op when `arr` isn't an array.
+///
+/// ```glide
+/// let a: *JsonValue = json_array();
+/// json_arr_push(a, json_string("first"));
+/// json_arr_push(a, json_string("second"));
+/// json_len(a);   // 2
+/// ```
+pub fn json_arr_push(arr: *JsonValue, v: *JsonValue) {
+    if arr == null || arr.kind != JSON_ARRAY { return; }
+    arr.arr.push(*v);
+}
+
+/// Set `key` → `v` on a JSON object. Duplicate keys append rather than
+/// overwrite — JSON tolerates duplicates and `json_get` returns the
+/// first hit. Use `json_obj_replace` (TODO) when overwriting matters.
+///
+/// ```glide
+/// let o: *JsonValue = json_object();
+/// json_obj_set(o, "x", json_int(1));
+/// json_obj_set(o, "y", json_int(2));
+/// json_emit(o);   // "{\"x\":1,\"y\":2}"
+/// ```
+pub fn json_obj_set(obj: *JsonValue, key: string, v: *JsonValue) {
+    if obj == null || obj.kind != JSON_OBJECT { return; }
+    obj.obj_keys.push(key);
+    obj.obj_vals.push(*v);
+}
+
+// ---- accessors ----------------------------------------------------------
+
+/// Look up `key` on an object. Returns `null` when absent or when `v`
+/// isn't an object.
+///
+/// ```glide
+/// let o: *JsonValue = json_parse("{\"name\":\"alice\"}");
+/// let name: *JsonValue = json_get(o, "name");
+/// json_as_string(name);    // "alice"
+/// json_get(o, "missing");  // null
+/// ```
+pub fn json_get(v: *JsonValue, key: string) -> *JsonValue {
+    if v == null || v.kind != JSON_OBJECT { return null; }
+    for let i: int = 0; i < v.obj_keys.len(); i++ {
+        if v.obj_keys.get(i).eq(key) {
+            let val: JsonValue = v.obj_vals.get(i);
+            let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
+            *p = val;
+            return p;
+        }
+    }
+    return null;
+}
+
+/// Read element `idx` from an array. Returns `null` for out-of-range
+/// or when `v` isn't an array.
+///
+/// ```glide
+/// let a: *JsonValue = json_parse("[10, 20, 30]");
+/// json_as_int(json_at(a, 1));   // 20
+/// json_at(a, 99);               // null
+/// ```
+pub fn json_at(v: *JsonValue, idx: int) -> *JsonValue {
+    if v == null || v.kind != JSON_ARRAY { return null; }
+    if idx < 0 || idx >= v.arr.len() { return null; }
+    let val: JsonValue = v.arr.get(idx);
+    let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
+    *p = val;
+    return p;
+}
+
+/// Length of an array (number of elements) or object (number of keys),
+/// or `0` for scalars / `null`.
+///
+/// ```glide
+/// json_len(json_parse("[1,2,3]"));            // 3
+/// json_len(json_parse("{\"a\":1,\"b\":2}"));  // 2
+/// json_len(json_int(7));                      // 0
+/// ```
+pub fn json_len(v: *JsonValue) -> int {
+    if v == null { return 0; }
+    if v.kind == JSON_ARRAY  { return v.arr.len(); }
+    if v.kind == JSON_OBJECT { return v.obj_keys.len(); }
+    return 0;
+}
+
+/// Read as string. Empty string for non-strings / `null`.
+///
+/// ```glide
+/// json_as_string(json_string("hi"));   // "hi"
+/// json_as_string(json_int(42));        // ""
+/// ```
+pub fn json_as_string(v: *JsonValue) -> string {
+    if v == null || v.kind != JSON_STRING { return ""; }
+    return v.s;
+}
+
+/// Read as integer. Float values truncate toward zero; non-numbers /
+/// `null` return `0`.
+///
+/// ```glide
+/// json_as_int(json_int(42));           // 42
+/// json_as_int(json_float(3.9));        // 3
+/// json_as_int(json_string("nope"));    // 0
+/// ```
+pub fn json_as_int(v: *JsonValue) -> int {
+    if v == null { return 0; }
+    if v.kind == JSON_INT { return v.i; }
+    if v.kind == JSON_FLOAT { return v.f as int; }
+    return 0;
+}
+
+/// Read as float. Integer values are coerced; non-numbers / `null`
+/// return `0.0`.
+///
+/// ```glide
+/// json_as_float(json_float(3.14));     // 3.14
+/// json_as_float(json_int(7));          // 7.0
+/// ```
+pub fn json_as_float(v: *JsonValue) -> f64 {
+    if v == null { return 0.0; }
+    if v.kind == JSON_FLOAT { return v.f; }
+    if v.kind == JSON_INT { return v.i as f64; }
+    return 0.0;
+}
+
+/// Read as bool. Non-bools / `null` return `false`.
+///
+/// ```glide
+/// json_as_bool(json_bool(true));    // true
+/// json_as_bool(json_int(1));        // false  (no truthy coercion)
+/// ```
+pub fn json_as_bool(v: *JsonValue) -> bool {
+    if v == null || v.kind != JSON_BOOL { return false; }
+    return v.b;
+}
+
+/// `true` for JSON `null` (or a Glide `null` pointer); `false` for any
+/// other kind.
+///
+/// ```glide
+/// json_is_null(json_null());        // true
+/// json_is_null(json_int(0));        // false
+/// ```
+pub fn json_is_null(v: *JsonValue) -> bool {
+    if v == null { return true; }
+    return v.kind == JSON_NULL;
+}
+
+// ---- parser -------------------------------------------------------------
+
+pub struct JsonParser {
+    pub src: string,
+    pub pos: int,
+    pub n: int,
+}
+
+fn _jp_peek(p: *JsonParser) -> int {
+    if p.pos >= p.n { return -1; }
+    return p.src.at(p.pos).to_int();
+}
+
+fn _jp_skip_ws(p: *JsonParser) {
+    while p.pos < p.n {
+        let c: int = _jp_peek(p);
+        if c == 32 || c == 9 || c == 10 || c == 13 { p.pos = p.pos + 1; }
+        else { break; }
+    }
+}
+
+fn _jp_value(p: *JsonParser) -> *JsonValue {
+    _jp_skip_ws(p);
+    let c: int = _jp_peek(p);
+    if c == 123 { return _jp_object(p); }       // '{'
+    if c == 91  { return _jp_array(p); }        // '['
+    if c == 34  { return _jp_string_value(p); } // '"'
+    if c == 116 || c == 102 { return _jp_bool(p); }  // 't' / 'f'
+    if c == 110 { return _jp_null(p); }          // 'n'
+    if c == 45 || (c >= 48 && c <= 57) { return _jp_number(p); }
+    return null;
+}
+
+fn _jp_object(p: *JsonParser) -> *JsonValue {
+    let obj: *JsonValue = json_object();
+    p.pos = p.pos + 1; // consume '{'
+    _jp_skip_ws(p);
+    if _jp_peek(p) == 125 { p.pos = p.pos + 1; return obj; }
+    while p.pos < p.n {
+        _jp_skip_ws(p);
+        let k: *JsonValue = _jp_string_value(p);
+        if k == null { return obj; }
+        _jp_skip_ws(p);
+        if _jp_peek(p) == 58 { p.pos = p.pos + 1; }
+        let v: *JsonValue = _jp_value(p);
+        if v == null { v = json_null(); }
+        obj.obj_keys.push(k.s);
+        obj.obj_vals.push(*v);
+        _jp_skip_ws(p);
+        let c: int = _jp_peek(p);
+        if c == 44 { p.pos = p.pos + 1; continue; } // ','
+        if c == 125 { p.pos = p.pos + 1; break; }   // '}'
+        break;
+    }
+    return obj;
+}
+
+fn _jp_array(p: *JsonParser) -> *JsonValue {
+    let arr: *JsonValue = json_array();
+    p.pos = p.pos + 1;
+    _jp_skip_ws(p);
+    if _jp_peek(p) == 93 { p.pos = p.pos + 1; return arr; }
+    while p.pos < p.n {
+        let v: *JsonValue = _jp_value(p);
+        if v == null { return arr; }
+        arr.arr.push(*v);
+        _jp_skip_ws(p);
+        let c: int = _jp_peek(p);
+        if c == 44 { p.pos = p.pos + 1; continue; }
+        if c == 93 { p.pos = p.pos + 1; break; }
+        break;
+    }
+    return arr;
+}
+
+fn _jp_string_value(p: *JsonParser) -> *JsonValue {
+    if _jp_peek(p) != 34 { return null; }
+    p.pos = p.pos + 1;
+    let start: int = p.pos;
+    let mut has_escape: bool = false;
+    while p.pos < p.n {
+        let c: int = _jp_peek(p);
+        if c == 34 { break; }
+        if c == 92 {
+            has_escape = true;
+            p.pos = p.pos + 1;
+            if p.pos < p.n { p.pos = p.pos + 1; }
+            continue;
+        }
+        p.pos = p.pos + 1;
+    }
+    let raw: string = p.src.substring(start, p.pos);
+    if _jp_peek(p) == 34 { p.pos = p.pos + 1; }
+    if !has_escape { return json_string(raw); }
+    return json_string(_jp_unescape(raw));
+}
+
+fn _jp_unescape(raw: string) -> string {
+    let mut out: string = "";
+    let n: int = raw.len();
+    let mut i: int = 0;
+    while i < n {
+        let c: int = raw.at(i).to_int();
+        if c != 92 { out = out.concat(raw.substring(i, i + 1)); i = i + 1; continue; }
+        i = i + 1;
+        if i >= n { break; }
+        let e: int = raw.at(i).to_int();
+        i = i + 1;
+        if e == 110 { out = out.concat("\n"); continue; }
+        if e == 116 { out = out.concat("\t"); continue; }
+        if e == 114 { out = out.concat("\r"); continue; }
+        if e == 34  { out = out.concat("\""); continue; }
+        if e == 92  { out = out.concat("\\"); continue; }
+        if e == 47  { out = out.concat("/"); continue; }
+        // \uXXXX — simplified pass-through (full surrogate decoding pending).
+        if e == 117 && i + 4 <= n {
+            i = i + 4;
+            out = out.concat("?");
+            continue;
+        }
+    }
+    return out;
+}
+
+fn _jp_bool(p: *JsonParser) -> *JsonValue {
+    let c: int = _jp_peek(p);
+    if c == 116 { p.pos = p.pos + 4; return json_bool(true); }
+    p.pos = p.pos + 5;
+    return json_bool(false);
+}
+
+fn _jp_null(p: *JsonParser) -> *JsonValue {
+    p.pos = p.pos + 4;
+    return json_null();
+}
+
+fn _jp_pow10(n: int) -> f64 {
+    let mut r: f64 = 1.0;
+    let mut k: int = n;
+    if k >= 0 {
+        while k > 0 { r = r * 10.0; k = k - 1; }
+    } else {
+        while k < 0 { r = r / 10.0; k = k + 1; }
+    }
+    return r;
+}
+
+fn _jp_number(p: *JsonParser) -> *JsonValue {
+    let mut neg: bool = false;
+    if _jp_peek(p) == 45 { neg = true; p.pos = p.pos + 1; }
+    let mut int_part: int = 0;
+    while p.pos < p.n {
+        let c: int = _jp_peek(p);
+        if c < 48 || c > 57 { break; }
+        int_part = int_part * 10 + (c - 48);
+        p.pos = p.pos + 1;
+    }
+    let mut is_float: bool = false;
+    if _jp_peek(p) == 46 { is_float = true; }
+    if _jp_peek(p) == 101 || _jp_peek(p) == 69 { is_float = true; }
+    if !is_float {
+        if neg { int_part = -int_part; }
+        return json_int(int_part);
+    }
+
+    let mut frac_part: int = 0;
+    let mut frac_digits: int = 0;
+    if _jp_peek(p) == 46 {
+        p.pos = p.pos + 1;
+        while p.pos < p.n {
+            let c: int = _jp_peek(p);
+            if c < 48 || c > 57 { break; }
+            frac_part = frac_part * 10 + (c - 48);
+            frac_digits = frac_digits + 1;
+            p.pos = p.pos + 1;
+        }
+    }
+    let mut exp_val: int = 0;
+    let mut exp_neg: bool = false;
+    if _jp_peek(p) == 101 || _jp_peek(p) == 69 {
+        p.pos = p.pos + 1;
+        if _jp_peek(p) == 43 {
+            p.pos = p.pos + 1;
+        } else if _jp_peek(p) == 45 {
+            exp_neg = true;
+            p.pos = p.pos + 1;
+        }
+        while p.pos < p.n {
+            let c: int = _jp_peek(p);
+            if c < 48 || c > 57 { break; }
+            exp_val = exp_val * 10 + (c - 48);
+            p.pos = p.pos + 1;
+        }
+    }
+    if exp_neg { exp_val = -exp_val; }
+
+    let mut v: f64 = (int_part as f64) + (frac_part as f64) / _jp_pow10(frac_digits);
+    v = v * _jp_pow10(exp_val);
+    if neg { v = -v; }
+    return json_float(v);
+}
+
+/// Parse a JSON document. Lenient: malformed input may produce a
+/// partially populated tree rather than an error. For strict parsing
+/// (errors on unexpected tokens), `try_parse` is on the roadmap.
+///
+/// ```glide
+/// let v: *JsonValue = json_parse("{\"name\":\"alice\",\"age\":30}");
+/// json_as_string(json_get(v, "name"));   // "alice"
+/// json_as_int(json_get(v, "age"));       // 30
+/// ```
+pub fn json_parse(src: string) -> *JsonValue {
+    let p: JsonParser = JsonParser { src: src, pos: 0, n: src.len() };
+    return _jp_value(&p);
+}
+
+// ---- emitter ------------------------------------------------------------
+
+/// Wrap `s` in double quotes and escape JSON-special bytes (`"`, `\`,
+/// CR, LF, tab, control bytes).
+///
+/// ```glide
+/// json_escape("hi");           // "\"hi\""
+/// json_escape("a\nb");         // "\"a\\nb\""
+/// ```
+pub fn json_escape(s: string) -> string {
+    let mut out: string = "\"";
+    let n: int = s.len();
+    for let i: int = 0; i < n; i++ {
+        let c: int = s.at(i).to_int();
+        if c == 34       { out = out.concat("\\\""); }
+        else if c == 92  { out = out.concat("\\\\"); }
+        else if c == 10  { out = out.concat("\\n"); }
+        else if c == 13  { out = out.concat("\\r"); }
+        else if c == 9   { out = out.concat("\\t"); }
+        else if c < 32   { out = out.concat("?"); }
+        else             { out = out.concat(s.substring(i, i + 1)); }
+    }
+    return out.concat("\"");
+}
+
+/// Serialise a JSON value to a compact (no whitespace) string. The
+/// returned string is heap-owned by the caller.
+///
+/// ```glide
+/// let o: *JsonValue = json_object();
+/// json_obj_set(o, "x", json_int(1));
+/// json_obj_set(o, "y", json_array());
+/// json_emit(o);   // "{\"x\":1,\"y\":[]}"
+/// ```
+pub fn json_emit(v: *JsonValue) -> string {
+    if v == null { return "null"; }
+    if v.kind == JSON_NULL  { return "null"; }
+    if v.kind == JSON_BOOL  { if v.b { return "true"; } return "false"; }
+    if v.kind == JSON_INT   { return format!("{}", v.i); }
+    if v.kind == JSON_FLOAT { return format!("{}", v.f); }
+    if v.kind == JSON_STRING { return json_escape(v.s); }
+    if v.kind == JSON_ARRAY {
+        let mut out: string = "[";
+        let n: int = v.arr.len();
+        for let i: int = 0; i < n; i++ {
+            if i > 0 { out = out.concat(","); }
+            let e: JsonValue = v.arr.get(i);
+            out = out.concat(json_emit(&e));
+        }
+        return out.concat("]");
+    }
+    if v.kind == JSON_OBJECT {
+        let mut out: string = "{";
+        let n: int = v.obj_keys.len();
+        for let i: int = 0; i < n; i++ {
+            if i > 0 { out = out.concat(","); }
+            out = out.concat(json_escape(v.obj_keys.get(i)));
+            out = out.concat(":");
+            let val: JsonValue = v.obj_vals.get(i);
+            out = out.concat(json_emit(&val));
+        }
+        return out.concat("}");
+    }
+    return "null";
+}
