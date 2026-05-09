@@ -93,10 +93,41 @@ c_raw! {
     // built. The caller can call __glide_tls_last_err on a saved
     // handle from a prior call to introspect; first-call failures
     // surface only the rough cause.
+    // Comma-separated ALPN list -> wire-format prefix-length encoding
+    // expected by SSL_CTX_set_alpn_protos. Returns malloc'd buffer +
+    // length via out_len.
+    static unsigned char* __glide_tls_alpn_pack(const char* csv, int* out_len) {
+        if (csv == NULL || csv[0] == 0) { *out_len = 0; return NULL; }
+        size_t total = 0;
+        const char* p = csv;
+        while (*p) {
+            const char* q = strchr(p, ',');
+            size_t n = q ? (size_t)(q - p) : strlen(p);
+            if (n == 0 || n > 255) { *out_len = 0; return NULL; }
+            total += 1 + n;
+            if (!q) break;
+            p = q + 1;
+        }
+        unsigned char* out = (unsigned char*)malloc(total);
+        size_t i = 0;
+        p = csv;
+        while (*p) {
+            const char* q = strchr(p, ',');
+            size_t n = q ? (size_t)(q - p) : strlen(p);
+            out[i++] = (unsigned char)n;
+            memcpy(out + i, p, n);
+            i += n;
+            if (!q) break;
+            p = q + 1;
+        }
+        *out_len = (int)total;
+        return out;
+    }
+
     static void* __glide_tls_connect(int family, int64_t v4,
                                       int64_t v6_hi, int64_t v6_lo, int port,
                                       const char* hostname, int verify,
-                                      int min_proto) {
+                                      int min_proto, const char* alpn_csv) {
         __glide_tls_init();
 
         // Build context + SSL up front so a transport failure can free both.
@@ -114,6 +145,14 @@ c_raw! {
         }
         if (min_proto >= 2) {
             SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+        }
+        if (alpn_csv != NULL && alpn_csv[0] != 0) {
+            int alpn_len = 0;
+            unsigned char* alpn_buf = __glide_tls_alpn_pack(alpn_csv, &alpn_len);
+            if (alpn_buf != NULL) {
+                SSL_CTX_set_alpn_protos(ctx, alpn_buf, (unsigned int)alpn_len);
+                free(alpn_buf);
+            }
         }
 
         // Open the underlying TCP socket directly — same code as net::tcp
@@ -210,6 +249,15 @@ c_raw! {
     static int64_t __glide_tls_write(void* hp, const char* data, int n) {
         __glide_tls_handle* h = (__glide_tls_handle*)hp;
         int rc = SSL_write(h->ssl, data, n);
+        return (int64_t)rc;
+    }
+
+    // Same as write but takes void* — for binary payloads that may
+    // contain NUL bytes (HTTP/2 frames, TLS records, etc.). The
+    // string-typed entry above truncates at the first NUL.
+    static int64_t __glide_tls_write_raw(void* hp, void* data, int n) {
+        __glide_tls_handle* h = (__glide_tls_handle*)hp;
+        int rc = SSL_write(h->ssl, (const char*)data, n);
         return (int64_t)rc;
     }
 
@@ -370,8 +418,9 @@ c_raw! {
 
 extern fn __glide_tls_connect(family: int, v4: i64, v6_hi: i64, v6_lo: i64,
                                port: int, hostname: string, verify: int,
-                               min_proto: int) -> *void;
+                               min_proto: int, alpn_csv: string) -> *void;
 extern fn __glide_tls_write(h: *void, data: string, n: int) -> i64;
+extern fn __glide_tls_write_raw(h: *void, data: *void, n: int) -> i64;
 extern fn __glide_tls_read(h: *void, buf: *void, max: int) -> i64;
 extern fn __glide_tls_close(h: *void);
 extern fn __glide_tls_alpn(h: *void) -> string;
@@ -391,14 +440,19 @@ pub struct TlsConfig {
     /// `0`=TLS1.0, `1`=TLS1.1, `2`=TLS1.2, `3`=TLS1.3 minimum. Default
     /// is 2 (TLS 1.2). Most modern servers support 1.2 and 1.3.
     pub min_proto: int,
+
+    /// Comma-separated ALPN protocols to advertise (e.g. "h2,http/1.1").
+    /// Empty string disables ALPN.
+    pub alpn: string,
 }
 
 impl TlsConfig {
-    /// Default client config: verify=true, min TLS 1.2.
+    /// Default client config: verify=true, min TLS 1.2, no ALPN.
     pub fn client() -> *TlsConfig {
         let c: *TlsConfig = malloc(sizeof(TlsConfig)) as *TlsConfig;
         c.verify = true;
         c.min_proto = 2;
+        c.alpn = "";
         return c;
     }
 
@@ -407,6 +461,7 @@ impl TlsConfig {
         let c: *TlsConfig = malloc(sizeof(TlsConfig)) as *TlsConfig;
         c.verify = false;
         c.min_proto = 2;
+        c.alpn = "";
         return c;
     }
 
@@ -446,7 +501,8 @@ impl TlsStream {
                 lo = ip.v6_lo;
             }
             let h: *void = __glide_tls_connect(family, v4, hi, lo, port,
-                                                host, verify_int, cfg.min_proto);
+                                                host, verify_int, cfg.min_proto,
+                                                cfg.alpn);
             if h != null {
                 let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
                 s.handle = h;
@@ -475,6 +531,17 @@ impl TlsStream {
             sent = sent + r.val;
         }
         return ok(n);
+    }
+
+    /// Write `n` raw bytes from `buf`. Use this for binary protocols
+    /// where the wire content can have embedded NULs (HTTP/2, etc.) —
+    /// `write_all` reads its argument via strlen and truncates there.
+    /// SSL_write handles partial writes internally for sub-record
+    /// payloads, so a single call covers the buffer.
+    pub fn write_bytes(self: *TlsStream, buf: *u8, n: int) -> !int {
+        let raw_n: i64 = __glide_tls_write_raw(self.handle, buf as *void, n);
+        if raw_n <= 0 { return err("tls: write_bytes failed"); }
+        return ok(raw_n as int);
     }
 
     /// Read up to `max` bytes. ok(0) means peer closed cleanly.

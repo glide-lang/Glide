@@ -6,9 +6,14 @@
 extern fn realloc(p: *void, n: usize) -> *void;
 
 pub struct ByteBuffer {
-    data: *u8,
-    len: int,
-    cap: int,
+    /// Raw byte storage. Public for binary protocols (HTTP/2, TLS,
+    /// custom wire formats) that need to hand the pointer to a C-side
+    /// `write` syscall along with `len`.
+    pub data: *u8,
+    /// Number of valid bytes in `data`. Always `<= cap`.
+    pub len: int,
+    /// Allocated capacity. Always `>= len`.
+    pub cap: int,
 }
 
 impl ByteBuffer {

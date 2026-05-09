@@ -19,6 +19,8 @@ import stdlib::net::tls::*;
 import stdlib::net::ip::*;
 import stdlib::http::*;
 import stdlib::http::cookies::*;
+import stdlib::http::h2::*;
+import stdlib::http::hpack::*;
 
 /// A request being assembled — mutable holder; not the same shape as
 /// the server-side `HttpRequest` (which is parsed-from-wire).
@@ -69,6 +71,10 @@ pub struct HttpClient {
     /// send + receive). `0` disables. Applied via SO_RCVTIMEO /
     /// SO_SNDTIMEO on the underlying socket.
     pub timeout_ms: int,
+    /// Try HTTP/2 over TLS via ALPN. Falls back to HTTP/1.1
+    /// transparently when the server doesn't negotiate `h2`. No effect
+    /// on `http://` URLs (h2c upgrade not implemented).
+    pub http2: bool,
 }
 
 impl HttpClient {
@@ -79,6 +85,7 @@ impl HttpClient {
         c.jar = null as *CookieJar;
         c.tls_insecure = false;
         c.timeout_ms = 0;
+        c.http2 = false;
         return c;
     }
 
@@ -130,6 +137,77 @@ impl HttpClient {
         return err("http_client: redirect loop exited unexpectedly");
     }
 
+    fn _do_h2(self: *HttpClient, stream: *TlsStream, method: string,
+              url: *ParsedUrl, extra_headers: string,
+              body: string) -> !*HttpResponse {
+        let cr: !*H2Conn = H2Conn::over(stream);
+        if !cr.ok { stream.close(); return err(cr.err); }
+        let conn: *H2Conn = cr.val;
+
+        let extras: *Vector<*HpackHeader> = Vector::new();
+        // Default headers — h2 doesn't use Connection:close, the
+        // request ends when END_STREAM lands instead.
+        let ua: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
+        ua.name = "user-agent";
+        ua.value = self.user_agent;
+        extras.push(ua);
+        let acc: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
+        acc.name = "accept";
+        acc.value = "*/*";
+        extras.push(acc);
+        if self.jar != null {
+            let cookies: string = self.jar.header_value(url.host, url.path, true);
+            if cookies.len() > 0 {
+                let ch: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
+                ch.name = "cookie";
+                ch.value = cookies;
+                extras.push(ch);
+            }
+        }
+        // Parse the user's extra_headers block ("Name: Value\r\n...")
+        // and surface lowercased name/value pairs.
+        let lines: *Vector<string> = extra_headers.split("\r\n");
+        for let i: int = 0; i < lines.len(); i++ {
+            let l: string = lines.get(i);
+            if l.len() == 0 { continue; }
+            let colon: int = l.index_of(":");
+            if colon < 0 { continue; }
+            let n: string = l.substring(0, colon).trim().to_lower();
+            let v: string = l.substring(colon + 1, l.len()).trim();
+            let h: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
+            h.name = n;
+            h.value = v;
+            extras.push(h);
+        }
+
+        let r: !*H2Response = conn.request(method, url.path,
+                                             url.host_header(), "https",
+                                             extras, body);
+        conn.close();
+        if !r.ok { return err(r.err); }
+        let h2r: *H2Response = r.val;
+
+        // Lower the h2 response into the existing HttpResponse shape so
+        // callers don't have to learn two response types. Headers go
+        // into the raw `headers_block` formatted as "Name: Value\r\n".
+        let resp: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
+        resp.status = h2r.status;
+        resp.body = h2r.body;
+        let mut block: string = "";
+        for let i: int = 0; i < h2r.headers.len(); i++ {
+            let h: *HpackHeader = h2r.headers.get(i);
+            if block.len() > 0 { block = block.concat("\r\n"); }
+            block = block.concat(h.name).concat(": ").concat(h.value);
+        }
+        resp.headers_block = block;
+
+        if self.jar != null {
+            let lines: *Vector<string> = resp.headers("Set-Cookie");
+            if lines.len() > 0 { self.jar.ingest(url.host, lines); }
+        }
+        return ok(resp);
+    }
+
     fn _do_once(self: *HttpClient, method: string, url_s: string,
                 extra_headers: string, body: string) -> !*HttpResponse {
         let u: !*ParsedUrl = _hcli_parse_url(url_s);
@@ -160,11 +238,21 @@ impl HttpClient {
             let cfg: *TlsConfig;
             if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
             else                  { cfg = TlsConfig::client(); }
+            if self.http2 { cfg.alpn = "h2,http/1.1"; }
             let s: !*TlsStream = TlsStream::connect(url.host, url.port, cfg);
             cfg.free();
             if !s.ok { return err(s.err); }
             let stream: *TlsStream = s.val;
             if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
+
+            // ALPN agreed on h2? Use the binary frame transport instead.
+            let alpn: string = stream.alpn();
+            if alpn.eq("h2") {
+                let r: !*HttpResponse = self._do_h2(stream, method, url,
+                                                     extra_headers, body);
+                return r;
+            }
+
             let w: !int = stream.write_all(wire);
             if !w.ok { stream.close(); return err(w.err); }
             let raw: !string = stream.read_to_end();

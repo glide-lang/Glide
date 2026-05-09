@@ -1,0 +1,359 @@
+// HTTP/2 framing (RFC 7540) + the GET-only client transport.
+//
+// Phase D scope:
+//   * frame header parser/encoder (24-bit length + type + flags + 31-bit stream id)
+//   * encoders for the HEADERS / DATA / SETTINGS / WINDOW_UPDATE / PING /
+//     GOAWAY / RST_STREAM frames the client actually emits
+//   * a thin connection state machine that does the connection preface,
+//     opens one stream, sends a request, and reassembles the response
+//     headers + body
+//
+// What's deferred:
+//   * server side (no inbound stream multiplex)
+//   * push promise
+//   * priority frames (we send a default; servers ignore)
+//   * trailers
+//   * full flow control — we always advertise a large window and
+//     trust the server's settings
+//
+// Use `HttpClient::new()` with `c.http2 = true` and call against an
+// HTTPS endpoint. The client opts into ALPN "h2,http/1.1" so a server
+// that doesn't speak h2 falls back to HTTP/1.1 transparently.
+
+import stdlib::bytes::*;
+import stdlib::net::tls::*;
+import stdlib::http::hpack::*;
+
+// ===========================================================================
+// Frame types (RFC 7540 §11.2) + standard flags
+// ===========================================================================
+
+pub struct FrameType {}
+impl FrameType {
+    pub fn data() -> int          { return 0; }
+    pub fn headers() -> int       { return 1; }
+    pub fn priority() -> int      { return 2; }
+    pub fn rst_stream() -> int    { return 3; }
+    pub fn settings() -> int      { return 4; }
+    pub fn push_promise() -> int  { return 5; }
+    pub fn ping() -> int          { return 6; }
+    pub fn goaway() -> int        { return 7; }
+    pub fn window_update() -> int { return 8; }
+    pub fn continuation() -> int  { return 9; }
+}
+
+pub struct FrameFlag {}
+impl FrameFlag {
+    pub fn end_stream() -> int    { return 1; }
+    pub fn end_headers() -> int   { return 4; }
+    pub fn padded() -> int        { return 8; }
+    pub fn priority() -> int      { return 32; }
+    pub fn ack() -> int           { return 1; }
+}
+
+pub struct FrameHeader {
+    pub length:    int,    // 24-bit
+    pub frame_type: int,    // 8-bit
+    pub flags:     int,    // 8-bit
+    pub stream_id: int,    // 31-bit (top bit reserved, R=0)
+}
+
+// ===========================================================================
+// Frame header encode / decode
+// ===========================================================================
+
+/// Append a 9-byte frame header to `buf`, then `payload`. RFC 7540 §4.1.
+/// Use `write_frame_bytes` for binary payloads that may contain NUL —
+/// this entry truncates at the first NUL because Glide string is a
+/// cstring.
+pub fn write_frame(buf: *ByteBuffer, frame_type: int, flags: int,
+                   stream_id: int, payload: string) {
+    let n: int = payload.len();
+    _frame_header(buf, n, frame_type, flags, stream_id);
+    for let i: int = 0; i < n; i++ {
+        buf.push(payload.at(i).to_int() as u8);
+    }
+}
+
+/// Same as `write_frame` but pulls the payload from a ByteBuffer with
+/// explicit length. Use this for HPACK-encoded headers and for any
+/// payload that may carry NUL bytes mid-frame.
+pub fn write_frame_bytes(buf: *ByteBuffer, frame_type: int, flags: int,
+                          stream_id: int, payload: *ByteBuffer) {
+    _frame_header(buf, payload.len, frame_type, flags, stream_id);
+    for let i: int = 0; i < payload.len; i++ {
+        buf.push(payload.at(i));
+    }
+}
+
+fn _frame_header(buf: *ByteBuffer, n: int, frame_type: int, flags: int,
+                 stream_id: int) {
+    buf.push(((n >> 16) & 255) as u8);
+    buf.push(((n >>  8) & 255) as u8);
+    buf.push(( n        & 255) as u8);
+    buf.push(frame_type as u8);
+    buf.push(flags as u8);
+    buf.push(((stream_id >> 24) & 127) as u8);
+    buf.push(((stream_id >> 16) & 255) as u8);
+    buf.push(((stream_id >>  8) & 255) as u8);
+    buf.push(( stream_id        & 255) as u8);
+}
+
+/// Parse a 9-byte frame header at `pos` in `raw`. Returns the header
+/// and the new position (header end; payload starts here).
+pub fn read_frame_header(raw: string, pos: int) -> !*FrameHeader {
+    if pos + 9 > raw.len() { return err("h2: frame header truncated"); }
+    let h: *FrameHeader = malloc(sizeof(FrameHeader)) as *FrameHeader;
+    h.length = (raw.at(pos).to_int() << 16)
+             | (raw.at(pos + 1).to_int() << 8)
+             |  raw.at(pos + 2).to_int();
+    h.frame_type = raw.at(pos + 3).to_int() & 255;
+    h.flags = raw.at(pos + 4).to_int() & 255;
+    let s0: int = raw.at(pos + 5).to_int() & 127;    // strip R bit
+    let s1: int = raw.at(pos + 6).to_int() & 255;
+    let s2: int = raw.at(pos + 7).to_int() & 255;
+    let s3: int = raw.at(pos + 8).to_int() & 255;
+    h.stream_id = (s0 << 24) | (s1 << 16) | (s2 << 8) | s3;
+    return ok(h);
+}
+
+// ===========================================================================
+// Connection preface (RFC 7540 §3.5) — fixed magic string + initial SETTINGS
+// ===========================================================================
+
+pub fn h2_preface() -> string {
+    return "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+}
+
+// ===========================================================================
+// Specific payload builders the client emits
+// ===========================================================================
+
+/// Empty SETTINGS frame (acknowledges defaults). Use with flags=0 to
+/// announce our settings, or with FrameFlag::ack() to ack the peer's.
+pub fn settings_payload_empty() -> string { return ""; }
+
+/// 8-byte SETTINGS payload with one (key, value). Repeat to send more.
+pub fn settings_pair(key: int, value: int) -> string {
+    let mut s: string = "";
+    s = s.concat(((key   >> 8) & 255 as char).to_string());
+    s = s.concat(( key         & 255 as char).to_string());
+    s = s.concat(((value >> 24) & 255 as char).to_string());
+    s = s.concat(((value >> 16) & 255 as char).to_string());
+    s = s.concat(((value >>  8) & 255 as char).to_string());
+    s = s.concat(( value        & 255 as char).to_string());
+    return s;
+}
+
+/// WINDOW_UPDATE payload: 31-bit increment, top bit reserved.
+pub fn window_update_payload(increment: int) -> string {
+    let mut s: string = "";
+    s = s.concat(((increment >> 24) & 127 as char).to_string());
+    s = s.concat(((increment >> 16) & 255 as char).to_string());
+    s = s.concat(((increment >>  8) & 255 as char).to_string());
+    s = s.concat(( increment        & 255 as char).to_string());
+    return s;
+}
+
+// ===========================================================================
+// Connection state — owns the TlsStream + HPACK codecs + stream counter
+// ===========================================================================
+
+pub struct H2Conn {
+    tls:     *TlsStream,
+    enc:     *HpackEncoder,
+    dec:     *HpackDecoder,
+    pub next_stream_id: int,
+    /// Bytes read from the wire that haven't been consumed yet. Lives
+    /// on the connection so handshake reads don't drop the SETTINGS
+    /// ACK / WINDOW_UPDATE / etc. that arrived in the same packet.
+    rx_buf: string,
+}
+
+impl H2Conn {
+    /// Wrap an already-handshaked TlsStream that negotiated ALPN h2.
+    /// Sends the connection preface + an initial empty SETTINGS. The
+    /// peer's SETTINGS arrives during the response read; the ACK is
+    /// sent inline by `_read_response`.
+    pub fn over(tls: *TlsStream) -> !*H2Conn {
+        let c: *H2Conn = malloc(sizeof(H2Conn)) as *H2Conn;
+        c.tls = tls;
+        c.enc = HpackEncoder::new();
+        c.dec = HpackDecoder::new();
+        c.next_stream_id = 1;
+        c.rx_buf = "";
+
+        let preface: string = h2_preface();
+        let buf: *ByteBuffer = ByteBuffer::new();
+        defer buf.free();
+        for let i: int = 0; i < preface.len(); i++ {
+            buf.push(preface.at(i).to_int() as u8);
+        }
+        write_frame(buf, FrameType::settings(), 0, 0, "");
+        let w: !int = tls.write_bytes(buf.data, buf.len);
+        if !w.ok { return err(w.err); }
+        return ok(c);
+    }
+
+    /// Send a request whose body is a single string and read the
+    /// response back fully. Closes the stream end-to-end and returns
+    /// (status, headers, body). The connection itself stays open for
+    /// reuse with `request_again`-style callers.
+    pub fn request(self: *H2Conn, method: string, path: string,
+                   authority: string, scheme: string,
+                   extra_headers: *Vector<*HpackHeader>,
+                   body: string) -> !*H2Response {
+        let stream_id: int = self.next_stream_id;
+        self.next_stream_id = self.next_stream_id + 2;
+
+        // Encode pseudo-headers + extras into a HEADERS payload.
+        let hp_buf: *ByteBuffer = ByteBuffer::new();
+        defer hp_buf.free();
+        self.enc.encode_header(hp_buf, ":method", method);
+        self.enc.encode_header(hp_buf, ":scheme", scheme);
+        self.enc.encode_header(hp_buf, ":path", path);
+        self.enc.encode_header(hp_buf, ":authority", authority);
+        for let i: int = 0; i < extra_headers.len(); i++ {
+            let h: *HpackHeader = extra_headers.get(i);
+            self.enc.encode_header(hp_buf, h.name, h.value);
+        }
+
+        // Single HEADERS frame. END_HEADERS always (no CONTINUATION on
+        // outbound for v1). END_STREAM only when no body.
+        let mut flags: int = FrameFlag::end_headers();
+        if body.len() == 0 { flags = flags | FrameFlag::end_stream(); }
+        let frame_buf: *ByteBuffer = ByteBuffer::new();
+        defer frame_buf.free();
+        write_frame_bytes(frame_buf, FrameType::headers(), flags, stream_id,
+                           hp_buf);
+        if body.len() > 0 {
+            write_frame(frame_buf, FrameType::data(),
+                        FrameFlag::end_stream(), stream_id, body);
+        }
+        let w: !int = self.tls.write_bytes(frame_buf.data, frame_buf.len);
+        if !w.ok { return err(w.err); }
+
+        return self._read_response(stream_id);
+    }
+
+    fn _read_response(self: *H2Conn, stream_id: int) -> !*H2Response {
+        let mut headers_done: bool = false;
+        let mut header_block: string = "";
+        let mut body: string = "";
+        let mut stream_closed: bool = false;
+        while !stream_closed {
+            while self.rx_buf.len() < 9 {
+                let r: !string = self.tls.read(16384);
+                if !r.ok { return err(r.err); }
+                if r.val.len() == 0 { return err("h2: closed mid-response"); }
+                self.rx_buf = self.rx_buf.concat(r.val);
+            }
+            let hr: !*FrameHeader = read_frame_header(self.rx_buf, 0);
+            if !hr.ok { return err(hr.err); }
+            let h: *FrameHeader = hr.val;
+            let total: int = 9 + h.length;
+            while self.rx_buf.len() < total {
+                let r: !string = self.tls.read(16384);
+                if !r.ok { return err(r.err); }
+                if r.val.len() == 0 { return err("h2: closed mid-frame"); }
+                self.rx_buf = self.rx_buf.concat(r.val);
+            }
+            let payload: string = self.rx_buf.substring(9, total);
+            self.rx_buf = self.rx_buf.substring(total, self.rx_buf.len());
+
+            // Anything not on our stream is connection-level; skip.
+            if h.stream_id != stream_id && h.stream_id != 0 { continue; }
+
+            if h.frame_type == FrameType::settings() {
+                // ACK if it's not already an ack.
+                if (h.flags & FrameFlag::ack()) == 0 {
+                    let ack: *ByteBuffer = ByteBuffer::new();
+                    write_frame(ack, FrameType::settings(),
+                                FrameFlag::ack(), 0, "");
+                    let _: !int = self.tls.write_bytes(ack.data, ack.len);
+                    ack.free();
+                }
+                continue;
+            }
+            if h.frame_type == FrameType::window_update() { continue; }
+            if h.frame_type == FrameType::ping() {
+                if (h.flags & FrameFlag::ack()) == 0 {
+                    let pong: *ByteBuffer = ByteBuffer::new();
+                    write_frame(pong, FrameType::ping(),
+                                FrameFlag::ack(), 0, payload);
+                    let _: !int = self.tls.write_bytes(pong.data, pong.len);
+                    pong.free();
+                }
+                continue;
+            }
+            if h.frame_type == FrameType::goaway() {
+                return err("h2: server sent GOAWAY");
+            }
+            if h.frame_type == FrameType::headers() {
+                header_block = header_block.concat(payload);
+                if (h.flags & FrameFlag::end_headers()) != 0 { headers_done = true; }
+                if (h.flags & FrameFlag::end_stream()) != 0 { stream_closed = true; }
+                continue;
+            }
+            if h.frame_type == FrameType::continuation() {
+                header_block = header_block.concat(payload);
+                if (h.flags & FrameFlag::end_headers()) != 0 { headers_done = true; }
+                continue;
+            }
+            if h.frame_type == FrameType::data() {
+                body = body.concat(payload);
+                if (h.flags & FrameFlag::end_stream()) != 0 { stream_closed = true; }
+                continue;
+            }
+            if h.frame_type == FrameType::rst_stream() {
+                return err("h2: server reset stream");
+            }
+            // Unknown frame type — skip.
+        }
+
+        if !headers_done { return err("h2: stream closed before END_HEADERS"); }
+        let parsed: !*Vector<*HpackHeader> = self.dec.decode_block(header_block,
+                                                                    header_block.len());
+        if !parsed.ok { return err(parsed.err); }
+
+        let resp: *H2Response = malloc(sizeof(H2Response)) as *H2Response;
+        let hv: *Vector<*HpackHeader> = Vector::new();
+        resp.headers = hv;
+        resp.status = 0;
+        resp.body = body;
+        let lst: *Vector<*HpackHeader> = parsed.val;
+        for let i: int = 0; i < lst.len(); i++ {
+            let h: *HpackHeader = lst.get(i);
+            if h.name.eq(":status") {
+                let pr: !int = h.value.try_parse_int();
+                if pr.ok { resp.status = pr.val; }
+            } else {
+                resp.headers.push(h);
+            }
+        }
+        return ok(resp);
+    }
+
+    pub fn close(self: *H2Conn) {
+        // Send GOAWAY with last-stream-id and NO_ERROR (code 0).
+        let buf: *ByteBuffer = ByteBuffer::new();
+        defer buf.free();
+        let mut p: string = "";
+        p = p.concat((0 as char).to_string());
+        p = p.concat((0 as char).to_string());
+        p = p.concat((0 as char).to_string());
+        p = p.concat((0 as char).to_string());
+        // error code = NO_ERROR (4 bytes of zero)
+        for let i: int = 0; i < 4; i++ { p = p.concat((0 as char).to_string()); }
+        write_frame(buf, FrameType::goaway(), 0, 0, p);
+        let _: !int = self.tls.write_bytes(buf.data, buf.len);
+        self.tls.close();
+        free(self as *void);
+    }
+}
+
+pub struct H2Response {
+    pub status:  int,
+    pub headers: *Vector<*HpackHeader>,
+    pub body:    string,
+}
