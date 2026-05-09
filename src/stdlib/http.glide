@@ -26,6 +26,8 @@
 import stdlib::net::*;
 import stdlib::http_status::*;
 import stdlib::os::*;
+import stdlib::hashmap::*;
+import stdlib::url::*;
 
 import stdlib::net::tls::*;
 
@@ -61,6 +63,8 @@ pub struct HttpRequest {
     pub version:       string,
     pub headers_block: string,
     pub body:          string,
+    pub params:        *HashMap<string>,
+    pub queries:       *HashMap<string>,
 }
 
 impl HttpRequest {
@@ -84,6 +88,63 @@ impl HttpRequest {
             }
         }
         return "";
+    }
+
+    /// Path parameter captured by the router. Returns `""` for an
+    /// unknown name or when the request was dispatched without a
+    /// router (e.g. a raw `http_listen`).
+    ///
+    /// ```glide
+    /// // for route "/users/:id" matched against /users/42
+    /// req.param("id");   // "42"
+    /// req.param("zzz");  // ""
+    /// ```
+    pub fn param(self: *HttpRequest, name: string) -> string {
+        if self.params == null { return ""; }
+        if !self.params.contains(name) { return ""; }
+        return self.params.get(name);
+    }
+
+    /// Query-string value, decoded. Empty string when missing or when
+    /// the path has no `?...` segment. Cached on first access — repeat
+    /// calls reuse the parsed map.
+    ///
+    /// ```glide
+    /// // for path "/search?q=glide&page=2"
+    /// req.query("q");      // "glide"
+    /// req.query("page");   // "2"
+    /// req.query("zzz");    // ""
+    /// ```
+    pub fn query(self: *HttpRequest, name: string) -> string {
+        if self.queries == null {
+            self.queries = _parse_query(self.path);
+        }
+        if !self.queries.contains(name) { return ""; }
+        return self.queries.get(name);
+    }
+
+    /// Path with the query string stripped. Useful for routing logic
+    /// that wants to match against just the route portion.
+    ///
+    /// ```glide
+    /// // path = "/users/42?fields=name"
+    /// req.path_only();   // "/users/42"
+    /// ```
+    pub fn path_only(self: *HttpRequest) -> string {
+        let q: int = _find(self.path, "?", 0);
+        if q < 0 { return self.path; }
+        return self.path.substring(0, q);
+    }
+
+    /// Case-insensitive method check. Equivalent to
+    /// `self.method.to_upper().eq(m.to_upper())` but doesn't allocate
+    /// for the common "GET"/"POST"/... case.
+    ///
+    /// ```glide
+    /// if req.is_method("GET") { /* ... */ }
+    /// ```
+    pub fn is_method(self: *HttpRequest, m: string) -> bool {
+        return self.method.to_upper().eq(m.to_upper());
     }
 }
 
@@ -161,6 +222,67 @@ impl HttpResponse {
         };
     }
 
+    /// Replace the status code. Chainable.
+    ///
+    /// ```glide
+    /// HttpResponse::ok().status(204);
+    /// ```
+    pub fn status(self: HttpResponse, code: int) -> HttpResponse {
+        return HttpResponse {
+            status: code,
+            headers_block: self.headers_block,
+            body: self.body,
+        };
+    }
+
+    /// Set body + `Content-Type: text/plain; charset=utf-8`.
+    ///
+    /// ```glide
+    /// HttpResponse::ok().text("hello");
+    /// ```
+    pub fn text(self: HttpResponse, s: string) -> HttpResponse {
+        return self.set("Content-Type", "text/plain; charset=utf-8").body(s);
+    }
+
+    /// Set body + `Content-Type: text/html; charset=utf-8`.
+    ///
+    /// ```glide
+    /// HttpResponse::ok().html("<h1>hi</h1>");
+    /// ```
+    pub fn html(self: HttpResponse, s: string) -> HttpResponse {
+        return self.set("Content-Type", "text/html; charset=utf-8").body(s);
+    }
+
+    /// Set body + `Content-Type: application/json`.
+    ///
+    /// ```glide
+    /// HttpResponse::ok().json("{\"ok\":true}");
+    /// ```
+    pub fn json(self: HttpResponse, s: string) -> HttpResponse {
+        return self.set("Content-Type", "application/json").body(s);
+    }
+
+    /// 302 redirect to `url`. Chainable; the caller can swap to 301
+    /// via `.status(301)` afterwards.
+    ///
+    /// ```glide
+    /// HttpResponse::redirect("/login");
+    /// HttpResponse::redirect("/login").status(301);
+    /// ```
+    pub fn redirect(url: string) -> HttpResponse {
+        return HttpResponse::with_status(302).set("Location", url);
+    }
+
+    /// Append a `Set-Cookie` header with `name=value`. Multiple cookies
+    /// are legal; each call appends another line.
+    ///
+    /// ```glide
+    /// HttpResponse::ok().cookie("session", "abc123").body("ok");
+    /// ```
+    pub fn cookie(self: HttpResponse, name: string, value: string) -> HttpResponse {
+        return self.set("Set-Cookie", name.concat("=").concat(value));
+    }
+
     /// Look up a header by name, case-insensitive. Returns `""` when
     /// missing. Mirrors `HttpRequest.header()` so client code can read
     /// `Location`, `Set-Cookie`, `Content-Type`, etc. without
@@ -210,6 +332,38 @@ impl HttpResponse {
 }
 
 // ---- parser -----------------------------------------------------------
+
+// Parse the `?k=v&k=v` portion of a URL into a HashMap. Tolerant of
+// malformed percent-encoding: a bad sequence leaves the raw byte in
+// place rather than dropping the whole pair, so `?x=%ZZ` still gives
+// you `x` -> `%ZZ`.
+fn _parse_query(path: string) -> *HashMap<string> {
+    let m: *HashMap<string> = HashMap::new();
+    let q: int = _find(path, "?", 0);
+    if q < 0 { return m; }
+    let qs: string = path.substring(q + 1, path.len());
+    if qs.len() == 0 { return m; }
+    let pairs: *Vector<string> = qs.split("&");
+    for let i: int = 0; i < pairs.len(); i++ {
+        let p: string = pairs.get(i);
+        if p.len() == 0 { continue; }
+        let eq: int = _find(p, "=", 0);
+        let mut k: string = p;
+        let mut v: string = "";
+        if eq >= 0 {
+            k = p.substring(0, eq);
+            v = p.substring(eq + 1, p.len());
+        }
+        let mut kk: string = k;
+        let mut vv: string = v;
+        let kr: !string = url_decode(k);
+        if kr.ok { kk = kr.val; }
+        let vr: !string = url_decode(v);
+        if vr.ok { vv = vr.val; }
+        m.insert(kk, vv);
+    }
+    return m;
+}
 
 // Find the first occurrence of `needle` inside `s`, starting at byte
 // offset `from`. Returns -1 when missing.
@@ -266,6 +420,8 @@ pub fn parse_http_request(raw: string) -> !HttpRequest {
         version:       line0.substring(sp2 + 1, line0.len()),
         headers_block: headers_block,
         body:          body,
+        params:        null,
+        queries:       null,
     });
 }
 
@@ -356,6 +512,8 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
                 version:       hp_glide_version(g),
                 headers_block: hp_glide_headers_block(g),
                 body:          hp_glide_body(g),
+                params:        null,
+                queries:       null,
             };
             resp = handler(&req);
             hp_glide_free(g);
@@ -491,6 +649,8 @@ fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
             version:       hp_glide_version(g),
             headers_block: hp_glide_headers_block(g),
             body:          hp_glide_body(g),
+            params:        null,
+            queries:       null,
         };
         resp = handler(&req);
         hp_glide_free(g);
