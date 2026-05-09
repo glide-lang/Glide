@@ -1,0 +1,80 @@
+import stdlib::testing::*;
+import stdlib::set::*;
+
+fn test_new_is_empty() -> int {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+
+    assert_eq!(s.len(), 0);
+    assert_not!(s.contains("missing"));
+    return 0;
+}
+
+fn test_insert_returns_new_status_and_len() -> int {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+
+    assert!(s.insert("a"));
+    assert_eq!(s.len(), 1);
+    assert!(s.contains("a"));
+
+    assert_not!(s.insert("a"));
+    assert_eq!(s.len(), 1);
+
+    assert!(s.insert("b"));
+    assert_eq!(s.len(), 2);
+    assert!(s.contains("b"));
+    return 0;
+}
+
+fn test_remove_returns_status_and_decrements_len() -> int {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+
+    assert!(s.insert("a"));
+    assert!(s.insert("b"));
+    assert_eq!(s.len(), 2);
+
+    assert!(s.remove("a"));
+    assert_eq!(s.len(), 1);
+    assert_not!(s.contains("a"));
+    assert!(s.contains("b"));
+
+    assert_not!(s.remove("a"));
+    assert_not!(s.remove("missing"));
+    assert_eq!(s.len(), 1);
+    return 0;
+}
+
+fn test_clear_empties_set() -> int {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+
+    assert!(s.insert("a"));
+    assert!(s.insert("b"));
+    assert_eq!(s.len(), 2);
+
+    s.clear();
+    assert_eq!(s.len(), 0);
+    assert_not!(s.contains("a"));
+    assert_not!(s.contains("b"));
+    return 0;
+}
+
+fn test_insert_100_keys_all_present() -> int {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+
+    for let i: int = 0; i < 100; i++ {
+        let key: string = "k${i}";
+        assert!(s.insert(key));
+    }
+
+    assert_eq!(s.len(), 100);
+
+    for let i: int = 0; i < 100; i++ {
+        let key: string = "k${i}";
+        assert!(s.contains(key));
+    }
+    return 0;
+}

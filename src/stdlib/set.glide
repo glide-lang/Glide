@@ -1,0 +1,99 @@
+import stdlib::hashmap::*;
+
+/// A set of strings backed by `HashMap<bool>`.
+///
+/// ```glide
+/// let s: *StringSet = StringSet::new();
+/// defer s.free();
+///
+/// assert!(s.insert("one"));
+/// assert_not!(s.insert("one"));
+/// assert!(s.contains("one"));
+/// ```
+pub struct StringSet {
+    m: *HashMap<bool>,
+}
+
+impl StringSet {
+    /// Create an empty string set.
+    ///
+    /// ```glide
+    /// let s: *StringSet = StringSet::new();
+    /// defer s.free();
+    /// ```
+    fn new() -> *StringSet {
+        let s: *StringSet = malloc(sizeof(StringSet)) as *StringSet;
+        let m: *HashMap<bool> = HashMap::new();
+        s.m = m;
+        return s;
+    }
+
+    /// Insert `k`. Returns `true` when it was not already present.
+    ///
+    /// ```glide
+    /// s.insert("apple");    // true
+    /// s.insert("apple");    // false (already there)
+    /// ```
+    fn insert(self: *StringSet, k: string) -> bool {
+        if self.m.contains(k) {
+            return false;
+        }
+        self.m.insert(k, true);
+        return true;
+    }
+
+    /// `true` when `k` is present.
+    ///
+    /// ```glide
+    /// s.insert("ready");
+    /// s.contains("ready");   // true
+    /// s.contains("nope");    // false
+    /// ```
+    fn contains(self: *StringSet, k: string) -> bool {
+        return self.m.contains(k);
+    }
+
+    /// Remove `k`. Returns `true` when it was present.
+    ///
+    /// ```glide
+    /// s.insert("a");
+    /// s.remove("a");    // true
+    /// s.remove("a");    // false (already gone)
+    /// ```
+    fn remove(self: *StringSet, k: string) -> bool {
+        return self.m.remove(k);
+    }
+
+    /// Number of keys currently held.
+    ///
+    /// ```glide
+    /// s.insert("a"); s.insert("b");
+    /// s.len();   // 2
+    /// ```
+    fn len(self: *StringSet) -> int {
+        return self.m.len();
+    }
+
+    /// Remove every key while preserving the internal map allocation.
+    ///
+    /// ```glide
+    /// s.insert("a"); s.insert("b");
+    /// s.clear();
+    /// s.len();   // 0
+    /// ```
+    fn clear(self: *StringSet) {
+        self.m.clear();
+    }
+
+    /// Release the internal map and the set struct itself. Pair with
+    /// `defer` so leaks are impossible.
+    ///
+    /// ```glide
+    /// let s: *StringSet = StringSet::new();
+    /// defer s.free();
+    /// ```
+    fn free(self: *StringSet) {
+        self.m.free();
+        free(self as *void);
+    }
+}
