@@ -1335,7 +1335,10 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 let mname: string = stripped.name.concat("_").concat(e.lhs.field);
                 if g.generic_fns.contains(mname) {
                     let template: Stmt = g.generic_fns.get(mname);
-                    return subst_type(template.fn_ret_ty, template.type_params, stripped.args);
+                    let mut full_args: *Vector<Type> = resolve_method_call_args(
+                        g, e, &template, stripped.args);
+                    if full_args == null { full_args = stripped.args; }
+                    return subst_type(template.fn_ret_ty, template.type_params, full_args);
                 }
             }
         }
@@ -1481,6 +1484,52 @@ fn mangle_type(t: *Type) -> string {
     if t.kind == TY_OPT_RESULT { return "optres_".concat(mangle_type(t.inner)); }
     if t.kind == TY_ASSOC { return "assoc_".concat(mangle_type(t.inner)).concat("_").concat(t.name); }
     return "void";
+}
+
+// Build the full type-arg list for a method call on a generic receiver,
+// including any method-level extra generics. The receiver supplies the
+// impl's struct-level args (T...); extras (U...) are inferred from the
+// call's argument types against the method's parameter types.
+//
+// Returns null if any extra param can't be bound (caller treats this as
+// "not enough info — skip this call site").
+fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt,
+                            recv_args: *Vector<Type>) -> *Vector<Type> {
+    if template.type_params == null { return recv_args; }
+    let n_total: int = template.type_params.len();
+    let n_recv: int = 0;
+    if recv_args != null { n_recv = recv_args.len(); }
+    if n_total <= n_recv { return recv_args; }
+
+    let bindings: *HashMap<Type> = HashMap::new();
+    // Pre-bind struct-level params from the receiver.
+    for let i: int = 0; i < n_recv; i++ {
+        let tn: string = template.type_params.get(i);
+        let av: Type = recv_args.get(i);
+        bindings.insert(tn, av);
+    }
+    // Infer extras from call args. fn_params[0] is `self`.
+    if call.args != null && template.fn_params != null && template.fn_params.len() > 1 {
+        let nargs: int = template.fn_params.len() - 1;
+        if call.args.len() < nargs { nargs = call.args.len(); }
+        for let i: int = 0; i < nargs; i++ {
+            let p: Param = template.fn_params.get(i + 1);
+            let a: Expr = call.args.get(i);
+            let at: *Type = infer_for_codegen(g, &a);
+            if at != null && p.ty != null {
+                unify_for_inference(p.ty, at, template.type_params, bindings);
+            }
+        }
+    }
+    let combined: *Vector<Type> = Vector::new();
+    for let i: int = 0; i < n_recv; i++ { combined.push(recv_args.get(i)); }
+    for let i: int = n_recv; i < n_total; i++ {
+        let tn: string = template.type_params.get(i);
+        if !bindings.contains(tn) { bindings.free(); return null; }
+        combined.push(bindings.get(tn));
+    }
+    bindings.free();
+    return combined;
 }
 
 // Try to monomorphize a Call expression. Returns true if the callee was
@@ -1680,12 +1729,16 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
             let mname: string = stripped.name.concat("_").concat(method);
             if g.generic_fns.contains(mname) {
                 let template: Stmt = g.generic_fns.get(mname);
-                let mangled: string = mangle_generic(mname, stripped.args);
-                register_fn_mono_signature(g, mangled, &template, stripped.args);
-                if !g.emitted_monos.contains(mangled) {
-                    g.emitted_monos.insert(mangled, true);
-                    let entry: FnMonoEntry = FnMonoEntry { name: template.name, args: stripped.args };
-                    g.fn_mono_queue.push(entry);
+                let full_args: *Vector<Type> = resolve_method_call_args(
+                    g, e, &template, stripped.args);
+                if full_args != null {
+                    let mangled: string = mangle_generic(mname, full_args);
+                    register_fn_mono_signature(g, mangled, &template, full_args);
+                    if !g.emitted_monos.contains(mangled) {
+                        g.emitted_monos.insert(mangled, true);
+                        let entry: FnMonoEntry = FnMonoEntry { name: template.name, args: full_args };
+                        g.fn_mono_queue.push(entry);
+                    }
                 }
             }
         }
@@ -2624,17 +2677,20 @@ pub fn emit_expr(g: *CG, e: *Expr) {
 
             // Generic method on a generic receiver (e.g. `v.push(x)` on
             // `*Vector<int>`). The receiver's type args bind the impl's
-            // type params; mangle accordingly.
+            // type params; mangle accordingly. If the method declares
+            // additional `<U>`-style params, infer them from call args.
             if stripped != null && stripped.kind == TY_GENERIC {
                 let base: string = stripped.name;
                 let mname: string = base.concat("_").concat(method);
                 if g.generic_fns.contains(mname) {
                     let template: Stmt = g.generic_fns.get(mname);
-                    // Receiver supplies the impl's type args directly.
-                    let mangled: string = mangle_generic(mname, stripped.args);
+                    let full_args: *Vector<Type> = resolve_method_call_args(
+                        g, e, &template, stripped.args);
+                    if full_args == null { full_args = stripped.args; }
+                    let mangled: string = mangle_generic(mname, full_args);
                     if !g.emitted_monos.contains(mangled) {
                         g.emitted_monos.insert(mangled, true);
-                        let entry: FnMonoEntry = FnMonoEntry { name: template.name, args: stripped.args };
+                        let entry: FnMonoEntry = FnMonoEntry { name: template.name, args: full_args };
                         g.fn_mono_queue.push(entry);
                     }
                     print!(mangled);
