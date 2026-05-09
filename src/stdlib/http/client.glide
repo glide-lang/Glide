@@ -15,6 +15,7 @@
 // ```
 
 import stdlib::net::tcp::*;
+import stdlib::net::tls::*;
 import stdlib::net::ip::*;
 import stdlib::http::*;
 
@@ -72,8 +73,8 @@ impl HttpClient {
         let u: !*ParsedUrl = _hcli_parse_url(req.url);
         if !u.ok { return err(u.err); }
         let url: *ParsedUrl = u.val;
-        if !url.scheme.eq("http") {
-            return err("http_client: only `http://` is supported in v1 (got `".concat(url.scheme).concat("`)"));
+        if !url.scheme.eq("http") && !url.scheme.eq("https") {
+            return err("http_client: scheme must be http or https (got `".concat(url.scheme).concat("`)"));
         }
 
         // Compose request line + default headers + caller headers + body.
@@ -86,16 +87,31 @@ impl HttpClient {
         wire = wire.concat("\r\n");
         wire = wire.concat(req.body);
 
-        // Connect + send + read-until-close (Connection: close above).
-        let s: !*TcpStream = TcpStream::connect_host(url.host, url.port);
-        if !s.ok { return err(s.err); }
-        let stream: *TcpStream = s.val;
-        let w: !int = stream.write_all(wire);
-        if !w.ok { stream.close(); return err(w.err); }
-        let raw: !string = stream.read_to_end();
-        stream.close();
-        if !raw.ok { return err(raw.err); }
-        return _hcli_parse_response(raw.val);
+        let mut raw_body: string = "";
+        if url.scheme.eq("https") {
+            let cfg: *TlsConfig = TlsConfig::client();
+            let s: !*TlsStream = TlsStream::connect(url.host, url.port, cfg);
+            cfg.free();
+            if !s.ok { return err(s.err); }
+            let stream: *TlsStream = s.val;
+            let w: !int = stream.write_all(wire);
+            if !w.ok { stream.close(); return err(w.err); }
+            let raw: !string = stream.read_to_end();
+            stream.close();
+            if !raw.ok { return err(raw.err); }
+            raw_body = raw.val;
+        } else {
+            let s: !*TcpStream = TcpStream::connect_host(url.host, url.port);
+            if !s.ok { return err(s.err); }
+            let stream: *TcpStream = s.val;
+            let w: !int = stream.write_all(wire);
+            if !w.ok { stream.close(); return err(w.err); }
+            let raw: !string = stream.read_to_end();
+            stream.close();
+            if !raw.ok { return err(raw.err); }
+            raw_body = raw.val;
+        }
+        return _hcli_parse_response(raw_body);
     }
 
     pub fn get(self: *HttpClient, url: string) -> !*HttpResponse {
