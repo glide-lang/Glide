@@ -126,3 +126,39 @@ fn test_map_values_doubles() -> int {
     assert_eq!(m.get("one"), 1);
     return 0;
 }
+
+fn _add_pair(acc: int, p: *Pair<string, int>) -> int { return acc + p.second; }
+
+fn test_entries_count() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    m.insert("a", 1); m.insert("b", 2); m.insert("c", 3);
+    let es: *Vector<*Pair<string, int>> = m.entries();
+    assert_eq!(es.len(), 3);
+    return 0;
+}
+
+fn test_entries_empty_map() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    let es: *Vector<*Pair<string, int>> = m.entries();
+    assert_eq!(es.len(), 0);
+    return 0;
+}
+
+fn test_entries_sum_via_fold() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    m.insert("a", 10); m.insert("b", 20); m.insert("c", 30);
+    let es: *Vector<*Pair<string, int>> = m.entries();
+    let total: int = es.fold(0, _add_pair);
+    assert_eq!(total, 60);
+    return 0;
+}
+
+fn test_pair_new() -> int {
+    let p: *Pair<int, string> = Pair::new(42, "answer");
+    assert_eq!(p.first, 42);
+    assert_str_eq!(p.second, "answer");
+    return 0;
+}

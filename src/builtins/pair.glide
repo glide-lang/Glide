@@ -1,0 +1,30 @@
+/// Two values of possibly-different types bundled together. The minimum
+/// viable tuple — Glide doesn't have anonymous tuples yet, so APIs that
+/// need to return two things use this struct.
+///
+/// ```glide
+/// fn divmod(a: int, b: int) -> *Pair<int, int> {
+///     let p: *Pair<int, int> = malloc(sizeof(Pair<int, int>)) as *Pair<int, int>;
+///     p.first = a / b;
+///     p.second = a % b;
+///     return p;
+/// }
+/// ```
+///
+/// Notably used by `HashMap::entries` to surface key/value pairs as a
+/// `*Vector<Pair<string, V>>` so callers can iterate without needing
+/// separate `keys()` / `values()` snapshots.
+pub struct Pair<K, V> {
+    pub first: K,
+    pub second: V,
+}
+
+impl<K, V> Pair<K, V> {
+    /// Build a heap-allocated Pair. Caller owns the result.
+    pub fn new(first: K, second: V) -> *Pair<K, V> {
+        let p: *Pair<K, V> = malloc(sizeof(Pair<K, V>)) as *Pair<K, V>;
+        p.first = first;
+        p.second = second;
+        return p;
+    }
+}

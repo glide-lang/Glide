@@ -251,6 +251,20 @@ impl<V> HashMap<V> {
         return out;
     }
 
+    /// Snapshot every (key, value) entry as a Vector of pairs. Order
+    /// matches `keys()` / `values()` (slot order). Each pair is heap
+    /// allocated; calling `.free()` on the Vector reclaims the slots
+    /// but not the pairs — drop them explicitly if needed.
+    fn entries(self: *HashMap<V>) -> *Vector<*Pair<string, V>> {
+        let out: *Vector<*Pair<string, V>> = Vector::new();
+        for let i: int = 0; i < self.cap; i++ {
+            if self.occupied[i] {
+                out.push(Pair::new(self.keys[i], self.values[i]));
+            }
+        }
+        return out;
+    }
+
     /// Drop every entry. Capacity is preserved so subsequent inserts don't
     /// re-allocate.
     fn clear(self: *HashMap<V>) {
