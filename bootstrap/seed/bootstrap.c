@@ -4448,6 +4448,7 @@ const char*   type_to_c (Type*   t);
 const char*   fnptr_cast_str (Type*   t);
 const char*   mangle_generic (const char*   name, Vector__Type*   args);
 const char*   mangle_type (Type*   t);
+Vector__Type*   resolve_method_call_args (CG*   g, Expr*   call, Stmt*   template, Vector__Type*   recv_args);
 bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint);
 Type*   callee_param_ty (CG*   g, Expr*   e, int   i);
 void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint);
@@ -13021,7 +13022,11 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), ((e-> lhs )-> field ));
                 if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                     Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
-                    return ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((template. fn_ret_ty ), (template. type_params ), (stripped-> args ));
+                    Vector__Type*   full_args = ((Vector__Type*(*)(CG*, Expr*, Stmt*, Vector__Type*))resolve_method_call_args)(g, e, (&template), (stripped-> args ));
+                    if ((full_args  ==  NULL)) {
+                        (full_args  =  (stripped-> args ));
+                    }
+                    return ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((template. fn_ret_ty ), (template. type_params ), full_args);
                 }
             }
         }
@@ -13247,6 +13252,54 @@ const char*   mangle_type (Type*   t) {
     return "void";
 }
 
+Vector__Type*   resolve_method_call_args (CG*   g, Expr*   call, Stmt*   template, Vector__Type*   recv_args) {
+    if (((template-> type_params )  ==  NULL)) {
+        return recv_args;
+    }
+    int   n_total = Vector_len__string((template-> type_params ));
+    int   n_recv = 0;
+    if ((recv_args  !=  NULL)) {
+        (n_recv  =  Vector_len__Type(recv_args));
+    }
+    if ((n_total  <=  n_recv)) {
+        return recv_args;
+    }
+    HashMap__Type*   bindings = ((HashMap__Type*(*)(void))HashMap_new__Type)();
+    for (int   i = 0; (i  <  n_recv); i++) {
+        const char*   tn = Vector_get__string((template-> type_params ), i);
+        Type   av = Vector_get__Type(recv_args, i);
+        HashMap_insert__Type(bindings, tn, av);
+    }
+    if (((((call-> args )  !=  NULL)  &&  ((template-> fn_params )  !=  NULL))  &&  (Vector_len__Param((template-> fn_params ))  >  1))) {
+        int   nargs = (Vector_len__Param((template-> fn_params ))  -  1);
+        if ((Vector_len__Expr((call-> args ))  <  nargs)) {
+            (nargs  =  Vector_len__Expr((call-> args )));
+        }
+        for (int   i = 0; (i  <  nargs); i++) {
+            Param   p = Vector_get__Param((template-> fn_params ), (i  +  1));
+            Expr   a = Vector_get__Expr((call-> args ), i);
+            Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
+            if (((at  !=  NULL)  &&  ((p. ty )  !=  NULL))) {
+                ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((p. ty ), at, (template-> type_params ), bindings);
+            }
+        }
+    }
+    Vector__Type*   combined = ((Vector__Type*(*)(void))Vector_new__Type)();
+    for (int   i = 0; (i  <  n_recv); i++) {
+        Vector_push__Type(combined, Vector_get__Type(recv_args, i));
+    }
+    for (int   i = n_recv; (i  <  n_total); i++) {
+        const char*   tn = Vector_get__string((template-> type_params ), i);
+        if ((!HashMap_contains__Type(bindings, tn))) {
+            HashMap_free__Type(bindings);
+            return NULL;
+        }
+        Vector_push__Type(combined, HashMap_get__Type(bindings, tn));
+    }
+    HashMap_free__Type(bindings);
+    return combined;
+}
+
 bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint) {
     if ((call  ==  NULL)) {
         return false;
@@ -13428,12 +13481,15 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
             const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), method);
             if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                 Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
-                const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, (stripped-> args ));
-                ((void(*)(CG*, const char*, Stmt*, Vector__Type*))register_fn_mono_signature)(g, mangled, (&template), (stripped-> args ));
-                if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
-                    HashMap_insert__bool((g-> emitted_monos ), mangled, true);
-                    FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = (stripped-> args )});
-                    Vector_push__FnMonoEntry((g-> fn_mono_queue ), entry);
+                Vector__Type*   full_args = ((Vector__Type*(*)(CG*, Expr*, Stmt*, Vector__Type*))resolve_method_call_args)(g, e, (&template), (stripped-> args ));
+                if ((full_args  !=  NULL)) {
+                    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, full_args);
+                    ((void(*)(CG*, const char*, Stmt*, Vector__Type*))register_fn_mono_signature)(g, mangled, (&template), full_args);
+                    if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
+                        HashMap_insert__bool((g-> emitted_monos ), mangled, true);
+                        FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = full_args});
+                        Vector_push__FnMonoEntry((g-> fn_mono_queue ), entry);
+                    }
                 }
             }
         }
@@ -14527,10 +14583,14 @@ void   emit_expr (CG*   g, Expr*   e) {
                 const char*   mname = __glide_string_concat(__glide_string_concat(base, "_"), method);
                 if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                     Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
-                    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, (stripped-> args ));
+                    Vector__Type*   full_args = ((Vector__Type*(*)(CG*, Expr*, Stmt*, Vector__Type*))resolve_method_call_args)(g, e, (&template), (stripped-> args ));
+                    if ((full_args  ==  NULL)) {
+                        (full_args  =  (stripped-> args ));
+                    }
+                    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, full_args);
                     if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
                         HashMap_insert__bool((g-> emitted_monos ), mangled, true);
-                        FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = (stripped-> args )});
+                        FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = full_args});
                         Vector_push__FnMonoEntry((g-> fn_mono_queue ), entry);
                     }
                     printf("%s", mangled);
