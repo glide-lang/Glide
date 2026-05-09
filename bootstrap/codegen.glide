@@ -311,6 +311,20 @@ fn forward_decl_generic_monos(g: *CG, t: *Type) {
     }
 }
 
+// Walk every field type of `s` (a concrete struct stmt) and emit the
+// forward typedef + body of any generic mono referenced. Used by the
+// result/option/optres pre-passes so a struct wrapped in `!T` / `?T`
+// can mention `*HashMap<X>` / `*Vector<X>` as a field type without the
+// body referencing an as-yet-undeclared mangled tag.
+fn _forward_decl_field_monos(g: *CG, s: *Stmt) {
+    if s == null { return; }
+    if s.struct_fields == null { return; }
+    for let i: int = 0; i < s.struct_fields.len(); i++ {
+        let f: Field = s.struct_fields.get(i);
+        forward_decl_generic_monos(g, f.ty);
+    }
+}
+
 fn collect_result_in_type(g: *CG, t: *Type) {
     if t == null { return; }
     if t.kind == TY_RESULT && t.inner != null {
@@ -4727,6 +4741,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             if s.name == null || s.name.eq("") { continue; }
             if !s.name.eq(t.name) { continue; }
             if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &s);
                 println!("typedef struct ", s.name, " ", s.name, ";");
                 emit_struct(&s);
                 g.emitted_named.insert(t.name, true);
@@ -4751,6 +4766,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             if s.name == null || s.name.eq("") { continue; }
             if !s.name.eq(t.name) { continue; }
             if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &s);
                 println!("typedef struct ", s.name, " ", s.name, ";");
                 emit_struct(&s);
                 g.emitted_named.insert(t.name, true);
@@ -4774,6 +4790,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             if s.name == null || s.name.eq("") { continue; }
             if !s.name.eq(t.name) { continue; }
             if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &s);
                 println!("typedef struct ", s.name, " ", s.name, ";");
                 emit_struct(&s);
                 g.emitted_named.insert(t.name, true);
