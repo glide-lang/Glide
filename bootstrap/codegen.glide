@@ -316,13 +316,131 @@ fn forward_decl_generic_monos(g: *CG, t: *Type) {
 // result/option/optres pre-passes so a struct wrapped in `!T` / `?T`
 // can mention `*HashMap<X>` / `*Vector<X>` as a field type without the
 // body referencing an as-yet-undeclared mangled tag.
+//
+// Also emits the option/result/optres runtime templates for any
+// wrapper field types whose inner type is already defined (primitives
+// or already-emitted structs). The templates' include guards make
+// re-emission later harmless. Same chicken-and-egg as the generic
+// monos: if the struct holds `?int`, the body needs `__glide_option_int_t`
+// which is otherwise emitted only by the option pre-pass that runs
+// AFTER the result pre-pass that triggered this struct emission.
 fn _forward_decl_field_monos(g: *CG, s: *Stmt) {
     if s == null { return; }
     if s.struct_fields == null { return; }
     for let i: int = 0; i < s.struct_fields.len(); i++ {
         let f: Field = s.struct_fields.get(i);
         forward_decl_generic_monos(g, f.ty);
+        _emit_wrapper_for_type(g, f.ty);
     }
+}
+
+// Emit the option/result/optres runtime template for `t` (and recurse
+// into wrappers) when its inner type is already declared, so a field
+// reference doesn't outpace its typedef. No-op for non-wrapper types
+// or for wrapper-of-named-struct (the named body must come first; the
+// guarded later emission picks it up).
+fn _emit_wrapper_for_type(g: *CG, t: *Type) {
+    if t == null { return; }
+    if t.kind == TY_OPTION && t.inner != null && _is_primitive_or_emitted(g, t.inner) {
+        _emit_option_template(g, t.inner);
+    }
+    if t.kind == TY_RESULT && t.inner != null && _is_primitive_or_emitted(g, t.inner) {
+        _emit_result_template(g, t.inner);
+    }
+    if t.kind == TY_OPT_RESULT && t.inner != null && _is_primitive_or_emitted(g, t.inner) {
+        _emit_optres_template(g, t.inner);
+    }
+    if t.inner != null { _emit_wrapper_for_type(g, t.inner); }
+    if t.args != null {
+        for let i: int = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            _emit_wrapper_for_type(g, &a);
+        }
+    }
+}
+
+fn _is_primitive_or_emitted(g: *CG, t: *Type) -> bool {
+    if t == null { return false; }
+    if t.kind == TY_NAMED && t.name != null {
+        let n: string = t.name;
+        if n.eq("int") || n.eq("uint") || n.eq("long") || n.eq("ulong") { return true; }
+        if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") { return true; }
+        if n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64") { return true; }
+        if n.eq("usize") || n.eq("isize") { return true; }
+        if n.eq("f32") || n.eq("f64") || n.eq("float") { return true; }
+        if n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") { return true; }
+        if g.emitted_named.contains(n) { return true; }
+    }
+    if t.kind == TY_POINTER { return true; }
+    if t.kind == TY_GENERIC && t.name != null && t.args != null && !t.name.eq("chan") {
+        let mangled: string = mangle_generic(t.name, t.args);
+        return g.emitted_monos.contains(mangled);
+    }
+    return false;
+}
+
+fn _emit_option_template(g: *CG, inner: *Type) {
+    let m: string = mangle_type(inner);
+    let dedup_key: string = "__rt_option_emit_".concat(m);
+    if g.module_aliases.contains(dedup_key) { return; }
+    g.module_aliases.insert(dedup_key, "1");
+    let tc: string = type_to_c(inner);
+    let tmpl: string = include_str!("bootstrap/runtime/option.c.tmpl");
+    let s1: string = _cg_replace(tmpl, "@M@", m);
+    let s2: string = _cg_replace(s1, "@TC@", tc);
+    print!(s2);
+    println!("");
+    // Make the option pre-pass skip this entry — already done.
+    let mut already: bool = false;
+    for let i: int = 0; i < g.option_types.len(); i++ {
+        let ex: Type = g.option_types.get(i);
+        if mangle_type(&ex).eq(m) { already = true; break; }
+    }
+    if !already { g.option_types.push(*inner); }
+}
+
+fn _emit_result_template(g: *CG, inner: *Type) {
+    let m: string = mangle_type(inner);
+    let dedup_key: string = "__rt_result_emit_".concat(m);
+    if g.module_aliases.contains(dedup_key) { return; }
+    g.module_aliases.insert(dedup_key, "1");
+    let tc: string = type_to_c(inner);
+    let tmpl: string = include_str!("bootstrap/runtime/result.c.tmpl");
+    // `!void` uses a different template (no `val` field). Fall back to
+    // emit_result_runtime by NOT emitting here; the later pass picks it up.
+    if inner.kind == TY_NAMED && inner.name.eq("void") {
+        g.module_aliases.remove(dedup_key);
+        return;
+    }
+    let s1: string = _cg_replace(tmpl, "@M@", m);
+    let s2: string = _cg_replace(s1, "@TC@", tc);
+    print!(s2);
+    println!("");
+    let mut already: bool = false;
+    for let i: int = 0; i < g.result_types.len(); i++ {
+        let ex: Type = g.result_types.get(i);
+        if mangle_type(&ex).eq(m) { already = true; break; }
+    }
+    if !already { g.result_types.push(*inner); }
+}
+
+fn _emit_optres_template(g: *CG, inner: *Type) {
+    let m: string = mangle_type(inner);
+    let dedup_key: string = "__rt_optres_emit_".concat(m);
+    if g.module_aliases.contains(dedup_key) { return; }
+    g.module_aliases.insert(dedup_key, "1");
+    let tc: string = type_to_c(inner);
+    let tmpl: string = include_str!("bootstrap/runtime/optres.c.tmpl");
+    let s1: string = _cg_replace(tmpl, "@M@", m);
+    let s2: string = _cg_replace(s1, "@TC@", tc);
+    print!(s2);
+    println!("");
+    let mut already: bool = false;
+    for let i: int = 0; i < g.optres_types.len(); i++ {
+        let ex: Type = g.optres_types.get(i);
+        if mangle_type(&ex).eq(m) { already = true; break; }
+    }
+    if !already { g.optres_types.push(*inner); }
 }
 
 fn collect_result_in_type(g: *CG, t: *Type) {
