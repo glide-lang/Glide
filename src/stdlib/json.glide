@@ -576,3 +576,181 @@ pub fn json_emit(v: *JsonValue) -> string {
     }
     return "null";
 }
+
+// ---- typed object accessors -----------------------------------------------
+
+// Type-checked field reads. Each `json_get_<type>` returns `!T`: ok with
+// the value when the key is present *and* the JSON type matches, err
+// otherwise. The optional variants (`json_opt_<type>`) return `?T`:
+// some on a present-and-correct field, none when the key is missing,
+// null, or the wrong type. Pair the typed getters with a manual
+// `Foo::from_json(v) -> !Foo` impl on user structs to bind incoming
+// JSON into a typed value with one validation path.
+
+fn _missing_key_err(key: string) -> string {
+    return "missing key \"".concat(key).concat("\"");
+}
+
+fn _wrong_type_err(key: string, want: string) -> string {
+    return "field \"".concat(key).concat("\" is not ").concat(want);
+}
+
+/// Read a required string field. Errors when the key is missing, the
+/// value is `null`, or the value is a non-string JSON type.
+///
+/// ```glide
+/// // {"nome": "alice"}
+/// let r: !string = json_get_string(v, "nome");
+/// if r.ok { println!(r.val); }    // "alice"
+/// ```
+pub fn json_get_string(v: *JsonValue, key: string) -> !string {
+    if v.kind != JSON_OBJECT { return err("not an object"); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+    if f.kind != JSON_STRING { return err(_wrong_type_err(key, "a string")); }
+    return ok(f.s);
+}
+
+/// Read a required int field. Accepts JSON int only — JSON float values
+/// like `3.0` count as "wrong type" for explicit integer parsing.
+///
+/// ```glide
+/// // {"idade": 12}
+/// let r: !int = json_get_int(v, "idade");
+/// if r.ok { println!(r.val); }    // 12
+/// ```
+pub fn json_get_int(v: *JsonValue, key: string) -> !int {
+    if v.kind != JSON_OBJECT { return err("not an object"); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+    if f.kind != JSON_INT { return err(_wrong_type_err(key, "an int")); }
+    return ok(f.i);
+}
+
+/// Read a required bool field.
+///
+/// ```glide
+/// // {"active": true}
+/// let r: !bool = json_get_bool(v, "active");
+/// if r.ok { println!(r.val); }    // true
+/// ```
+pub fn json_get_bool(v: *JsonValue, key: string) -> !bool {
+    if v.kind != JSON_OBJECT { return err("not an object"); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+    if f.kind != JSON_BOOL { return err(_wrong_type_err(key, "a bool")); }
+    return ok(f.b);
+}
+
+/// Read a required float field. Tolerant: a JSON int promotes to f64
+/// rather than counting as a wrong type, so `{"x": 1}` still parses
+/// for a `f64`-typed `x`.
+///
+/// ```glide
+/// // {"score": 3.14}
+/// let r: !f64 = json_get_float(v, "score");
+/// if r.ok { println!(r.val); }    // 3.14
+/// ```
+pub fn json_get_float(v: *JsonValue, key: string) -> !f64 {
+    if v.kind != JSON_OBJECT { return err("not an object"); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+    if f.kind == JSON_FLOAT { return ok(f.f); }
+    if f.kind == JSON_INT   { return ok(f.i as f64); }
+    return err(_wrong_type_err(key, "a number"));
+}
+
+/// Optional string. `none` on missing key, JSON null, or wrong type.
+///
+/// ```glide
+/// match json_opt_string(v, "nick") {
+///     some(s) => println!("nick=", s),
+///     none()  => println!("no nick"),
+/// }
+/// ```
+pub fn json_opt_string(v: *JsonValue, key: string) -> ?string {
+    if v.kind != JSON_OBJECT { return none(); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind != JSON_STRING { return none(); }
+    return some(f.s);
+}
+
+/// Optional int. `none` on missing key, JSON null, or wrong type.
+pub fn json_opt_int(v: *JsonValue, key: string) -> ?int {
+    if v.kind != JSON_OBJECT { return none(); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind != JSON_INT { return none(); }
+    return some(f.i);
+}
+
+/// Optional bool. `none` on missing key, JSON null, or wrong type.
+pub fn json_opt_bool(v: *JsonValue, key: string) -> ?bool {
+    if v.kind != JSON_OBJECT { return none(); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind != JSON_BOOL { return none(); }
+    return some(f.b);
+}
+
+/// Optional float. JSON int promotes to f64.
+pub fn json_opt_float(v: *JsonValue, key: string) -> ?f64 {
+    if v.kind != JSON_OBJECT { return none(); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null { return none(); }
+    if f.kind == JSON_FLOAT { return some(f.f); }
+    if f.kind == JSON_INT   { return some(f.i as f64); }
+    return none();
+}
+
+/// Read a nested object. Returns the raw `*JsonValue` so callers can
+/// further drill via `json_get_*` / `json_opt_*`. Errors when the key
+/// is missing or the value is not a JSON object.
+///
+/// ```glide
+/// // {"addr": {"city": "Rio"}}
+/// let addr: !*JsonValue = json_get_object(v, "addr");
+/// if addr.ok {
+///     let city: !string = json_get_string(addr.val, "city");
+/// }
+/// ```
+pub fn json_get_object(v: *JsonValue, key: string) -> !*JsonValue {
+    if v.kind != JSON_OBJECT { return err("not an object"); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+    if f.kind != JSON_OBJECT { return err(_wrong_type_err(key, "an object")); }
+    return ok(f);
+}
+
+/// Read a nested array. Returns the raw `*JsonValue` so callers can
+/// walk it via `json_len(v)` + `json_at(v, i)`.
+///
+/// ```glide
+/// // {"tags": ["a", "b"]}
+/// let tags: !*JsonValue = json_get_array(v, "tags");
+/// if tags.ok {
+///     for let i: int = 0; i < json_len(tags.val); i++ {
+///         println!(json_as_string(json_at(tags.val, i)));
+///     }
+/// }
+/// ```
+pub fn json_get_array(v: *JsonValue, key: string) -> !*JsonValue {
+    if v.kind != JSON_OBJECT { return err("not an object"); }
+    let f: *JsonValue = json_get(v, key);
+    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+    if f.kind != JSON_ARRAY { return err(_wrong_type_err(key, "an array")); }
+    return ok(f);
+}
+
+/// Read any value at `key` regardless of JSON type — useful when a
+/// struct has a "dynamic" pass-through field that wants to keep the
+/// raw subtree for later inspection. Returns `null` (a Glide null
+/// pointer, not a JSON null) when the key is absent.
+///
+/// ```glide
+/// // {"meta": <anything>}
+/// let raw: *JsonValue = json_get_any(v, "meta");
+/// if raw != null { println!(json_emit(raw)); }
+/// ```
+pub fn json_get_any(v: *JsonValue, key: string) -> *JsonValue {
+    if v.kind != JSON_OBJECT { return null; }
+    return json_get(v, key);
+}
