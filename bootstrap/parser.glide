@@ -305,7 +305,9 @@ fn parse_macro_matchers(p: *Parser) -> *Vector<MacroParam> {
             let bname: string = p.expect_ident();
             p.expect_op(":");
             let kind: string = p.expect_ident();
-            if !kind.eq("expr") { p.err("only `:expr` matchers supported in v1"); }
+            if !kind.eq("expr") && !kind.eq("ty") && !kind.eq("ident") {
+                p.err("matcher kind must be `expr`, `ty`, or `ident`");
+            }
             p.expect_op(")");
             let mut sep: string = "";
             if p.at_op(",") || p.at_op(";") {
@@ -313,18 +315,24 @@ fn parse_macro_matchers(p: *Parser) -> *Vector<MacroParam> {
                 p.advance();
             }
             p.expect_op("*");
-            let mp: MacroParam = MacroParam { name: bname, is_variadic: true, separator: sep };
+            let mp: MacroParam = MacroParam {
+                name: bname, is_variadic: true, separator: sep, kind: kind,
+            };
             out.push(mp);
         } else if p.at_op("$") {
             p.advance(); // '$'
             let bname: string = p.expect_ident();
             p.expect_op(":");
             let kind: string = p.expect_ident();
-            if !kind.eq("expr") { p.err("only `:expr` matchers supported in v1"); }
-            let mp: MacroParam = MacroParam { name: bname, is_variadic: false, separator: "" };
+            if !kind.eq("expr") && !kind.eq("ty") && !kind.eq("ident") {
+                p.err("matcher kind must be `expr`, `ty`, or `ident`");
+            }
+            let mp: MacroParam = MacroParam {
+                name: bname, is_variadic: false, separator: "", kind: kind,
+            };
             out.push(mp);
         } else {
-            p.err("expected `$name:expr` or `$($name:expr),*` in macro matcher list");
+            p.err("expected `$name:<kind>` or `$($name:<kind>),*` in macro matcher list");
             p.advance();
         }
         if !p.eat_op(",") { break; }

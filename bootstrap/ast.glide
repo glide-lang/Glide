@@ -238,6 +238,7 @@ pub struct MacroParam {
     pub name: string,           // matcher binder (`$x` -> "x")
     pub is_variadic: bool,      // `$($x:expr),*` form
     pub separator: string,      // separator for variadic ("," or ";"); empty otherwise
+    pub kind: string,           // matcher kind: "expr" (default), "ty", "ident"
 }
 
 pub struct Stmt {
