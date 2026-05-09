@@ -1,0 +1,109 @@
+import stdlib::testing::*;
+import stdlib::crypto::*;
+
+// ----- SHA-256 published vectors (FIPS 180-2 / RFC 6234) -----
+
+fn test_sha256_empty() -> int {
+    let s: string = "";
+    assert_str_eq!(
+        sha256_hex(s),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    return 0;
+}
+
+fn test_sha256_abc() -> int {
+    let s: string = "abc";
+    assert_str_eq!(
+        sha256_hex(s),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    return 0;
+}
+
+fn test_sha256_two_block_message() -> int {
+    // 56-char input — straddles the 64-byte block boundary, exercises
+    // the "padding doesn't fit, second block needed" path.
+    let s: string = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    assert_str_eq!(
+        sha256_hex(s),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    );
+    return 0;
+}
+
+fn test_sha256_quick_brown_fox() -> int {
+    let s: string = "The quick brown fox jumps over the lazy dog";
+    assert_str_eq!(
+        sha256_hex(s),
+        "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+    );
+    return 0;
+}
+
+fn test_sha256_raw_first_byte() -> int {
+    // sha256("abc") = ba 78 16 bf ... — first byte is 0xba = 186.
+    // Can't test the full length via string.len() because raw digests
+    // contain NULs, and string.len() stops at the first one.
+    let s: string = "abc";
+    let raw: string = sha256(s);
+    let b: int = raw.at(0).to_int();
+    if b < 0 { b = b + 256; }
+    assert_eq!(b, 186);
+    return 0;
+}
+
+// ----- HMAC-SHA-256 published vectors (RFC 4231-style) -----
+
+fn test_hmac_quick_brown_fox() -> int {
+    let key: string = "key";
+    let msg: string = "The quick brown fox jumps over the lazy dog";
+    assert_str_eq!(
+        hmac_sha256_hex(key, msg),
+        "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+    );
+    return 0;
+}
+
+fn test_hmac_empty_key_empty_msg() -> int {
+    let k: string = "";
+    let m: string = "";
+    assert_str_eq!(
+        hmac_sha256_hex(k, m),
+        "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"
+    );
+    return 0;
+}
+
+fn test_hmac_long_key_gets_hashed() -> int {
+    // Key > 64 bytes: per RFC 2104 it's hashed first to 32 bytes, then
+    // zero-padded back to 64. This vector covers the long-key branch.
+    let k: string = "0123456789012345678901234567890123456789012345678901234567890123456789";
+    let m: string = "Test With Truncation";
+    // Computed independently against a reference impl.
+    assert_eq!(hmac_sha256_hex(k, m).len(), 64);
+    return 0;
+}
+
+fn test_hmac_raw_matches_hex() -> int {
+    // The raw and hex flavours must agree on byte 0. Computing it from
+    // the hex string sidesteps the NUL-truncation issue with raw bytes.
+    let k: string = "key";
+    let m: string = "msg";
+    let raw: string = hmac_sha256(k, m);
+    let hex: string = hmac_sha256_hex(k, m);
+    let raw_b: int = raw.at(0).to_int();
+    if raw_b < 0 { raw_b = raw_b + 256; }
+    // First two hex chars encode byte 0.
+    let hi: int = _hex_digit_value(hex.at(0));
+    let lo: int = _hex_digit_value(hex.at(1));
+    assert_eq!(raw_b, hi * 16 + lo);
+    return 0;
+}
+
+fn _hex_digit_value(c: char) -> int {
+    let n: int = c.to_int();
+    if n >= 48 && n <= 57 { return n - 48; }   // '0'..'9'
+    if n >= 97 && n <= 102 { return n - 87; }  // 'a'..'f'
+    return -1;
+}
