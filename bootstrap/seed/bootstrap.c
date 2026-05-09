@@ -3320,6 +3320,7 @@ static __glide_option_string_t __glide_none_string(void) { __glide_option_string
 typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__int   Vector__int ;
 typedef struct  Vector__f64   Vector__f64 ;
+typedef struct  Vector__bool   Vector__bool ;
 typedef struct  Vector__EnvKV   Vector__EnvKV ;
 typedef struct  Vector__Type   Vector__Type ;
 typedef struct  Vector__Expr   Vector__Expr ;
@@ -3340,7 +3341,6 @@ typedef struct  HashMap__Type   HashMap__Type ;
 typedef struct  Vector__BorrowEvent   Vector__BorrowEvent ;
 typedef struct  HashMap__string   HashMap__string ;
 typedef struct  Vector__DiagEntry   Vector__DiagEntry ;
-typedef struct  Vector__bool   Vector__bool ;
 typedef struct  Vector__FnMonoEntry   Vector__FnMonoEntry ;
 typedef struct  Vector__AnonFn   Vector__AnonFn ;
 typedef struct  Vector__JsonValue   Vector__JsonValue ;
@@ -3400,6 +3400,13 @@ struct  Vector__int  {
 
 struct  Vector__f64  {
      double*   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__bool  {
+     bool*   data;
      int   len;
      int   cap;
      bool   is_arena;
@@ -3550,13 +3557,6 @@ struct  HashMap__string  {
 
 struct  Vector__DiagEntry  {
      DiagEntry*   data;
-     int   len;
-     int   cap;
-     bool   is_arena;
-};
-
-struct  Vector__bool  {
-     bool*   data;
      int   len;
      int   cap;
      bool   is_arena;
@@ -4153,6 +4153,10 @@ const char*   Vector__string_join (Vector__string*   self, const char*   sep);
 const char*   Vector__string_concat (Vector__string*   self);
 __glide_option_string_t   Vector__string_max (Vector__string*   self);
 __glide_option_string_t   Vector__string_min (Vector__string*   self);
+int   Vector__bool_count_true (Vector__bool*   self);
+int   Vector__bool_count_false (Vector__bool*   self);
+bool   Vector__bool_all_true (Vector__bool*   self);
+bool   Vector__bool_any_true (Vector__bool*   self);
 const char*   read_file (const char*   path);
 bool   write_file (const char*   path, const char*   content);
 bool   __glide_file_exists (const char*   path);
@@ -5727,6 +5731,44 @@ __glide_option_string_t   Vector__string_min (Vector__string*   self) {
         }
     }
     return __glide_some_string(m);
+}
+
+int   Vector__bool_count_true (Vector__bool*   self) {
+    int   n = 0;
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        if ((self-> data )[i]) {
+            (n  =  (n  +  1));
+        }
+    }
+    return n;
+}
+
+int   Vector__bool_count_false (Vector__bool*   self) {
+    int   n = 0;
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        if ((!(self-> data )[i])) {
+            (n  =  (n  +  1));
+        }
+    }
+    return n;
+}
+
+bool   Vector__bool_all_true (Vector__bool*   self) {
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        if ((!(self-> data )[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool   Vector__bool_any_true (Vector__bool*   self) {
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        if ((self-> data )[i]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const char*   fs_read (const char*   path) {
