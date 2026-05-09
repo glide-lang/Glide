@@ -39,6 +39,12 @@ pub struct SmtpClient {
     pub timeout_ms: int,
     /// Skip TLS cert validation. Local dev only.
     pub tls_insecure: bool,
+    /// Auth mechanism:
+    ///   "auto"  — pick from EHLO advertisement (prefer PLAIN, fall to LOGIN)
+    ///   "plain" — force AUTH PLAIN
+    ///   "login" — force AUTH LOGIN (for servers that don't accept PLAIN)
+    /// Default: "auto".
+    pub auth_method: string,
 }
 
 impl SmtpClient {
@@ -54,6 +60,7 @@ impl SmtpClient {
         c.password = np;
         c.timeout_ms = 0;
         c.tls_insecure = false;
+        c.auth_method = "auto";
         return c;
     }
 
@@ -79,6 +86,7 @@ impl SmtpClient {
         s.tcp = null as *TcpStream;
         s.is_tls = false;
         s.host = self.host;
+        s.auth_mechs = "";
 
         if self.use_tls {
             let cfg: *TlsConfig = TlsConfig::client();
@@ -131,7 +139,9 @@ impl SmtpClient {
         }
 
         if self.username.has && self.password.has {
-            let ar: !int = s._auth_plain(self.username.val, self.password.val);
+            let ar: !int = s._auth_dispatch(self.username.val,
+                                              self.password.val,
+                                              self.auth_method);
             if !ar.ok { s.close(); return err(ar.err); }
         }
         return ok(s);
@@ -148,6 +158,10 @@ pub struct SmtpSession {
     tcp: *TcpStream,
     tls: *TlsStream,
     is_tls: bool,
+    /// Auth mechanisms the server advertised in the latest EHLO
+    /// response (lowercased, e.g. "plain login cram-md5"). Empty
+    /// when EHLO hasn't run yet or the server didn't advertise AUTH.
+    pub auth_mechs: string,
 }
 
 impl SmtpSession {
@@ -250,23 +264,87 @@ impl SmtpSession {
         return ok(0);
     }
 
+    /// Send EHLO and walk every continuation line, recording any
+    /// `AUTH ...` extension into `self.auth_mechs` so a later
+    /// `_auth_dispatch` can pick the right mechanism.
     fn _ehlo(self: *SmtpSession) -> !int {
-        let cmd: string = "EHLO ".concat(_local_hostname()).concat("\r\n");
-        let _: !int = self._write(cmd);
-        let r: !*SmtpReply = self._read_reply();
-        if !r.ok { return err(r.err); }
-        if r.val.code != 250 {
-            return err("smtp: EHLO ".concat(_smtp_itos(r.val.code)).concat(" ").concat(r.val.text));
+        self.auth_mechs = "";
+        let _w: !int = self._write("EHLO ".concat(_local_hostname()).concat("\r\n"));
+        let mut last_code: int = 0;
+        let mut acc: string = "";
+        while true {
+            while acc.index_of("\r\n") < 0 {
+                let r: !string = self._read(4096);
+                if !r.ok { return err(r.err); }
+                if r.val.len() == 0 { return err("smtp: connection closed during EHLO"); }
+                acc = acc.concat(r.val);
+            }
+            let nl: int = acc.index_of("\r\n");
+            let line: string = acc.substring(0, nl);
+            acc = acc.substring(nl + 2, acc.len());
+            if line.len() < 4 { return err("smtp: short EHLO line"); }
+            let code_s: string = line.substring(0, 3);
+            let cr: !int = code_s.try_parse_int();
+            if !cr.ok { return err("smtp: non-numeric EHLO code"); }
+            last_code = cr.val;
+            if last_code != 250 {
+                return err("smtp: EHLO ".concat(_smtp_itos(last_code))
+                           .concat(" ").concat(line.substring(4, line.len())));
+            }
+            let body: string = line.substring(4, line.len());
+            // Server lists extensions as "EXTNAME [args]". `AUTH` lists
+            // the supported mechanisms space-separated as args.
+            let upper: string = body.to_upper();
+            if upper.starts_with("AUTH ") {
+                self.auth_mechs = body.substring(5, body.len()).to_lower();
+            } else if upper.eq("AUTH") {
+                // RFC 2222 historic empty form.
+                self.auth_mechs = "";
+            }
+            let sep: int = line.at(3).to_int();
+            if sep == 32 { return ok(0); }    // space → final line
+            if sep != 45 { return err("smtp: bad EHLO continuation"); }
         }
         return ok(0);
     }
 
+    fn _auth_dispatch(self: *SmtpSession, user: string, pass: string,
+                      pref: string) -> !int {
+        let p: string = pref.to_lower();
+        if p.eq("plain") { return self._auth_plain(user, pass); }
+        if p.eq("login") { return self._auth_login(user, pass); }
+        // Auto: prefer PLAIN when advertised, else LOGIN, else PLAIN
+        // anyway (lots of servers accept it without advertising).
+        let mechs: string = self.auth_mechs;
+        let has_plain: bool = _word_in_list(mechs, "plain");
+        let has_login: bool = _word_in_list(mechs, "login");
+        if has_plain { return self._auth_plain(user, pass); }
+        if has_login { return self._auth_login(user, pass); }
+        return self._auth_plain(user, pass);
+    }
+
     fn _auth_plain(self: *SmtpSession, user: string, pass: string) -> !int {
-        // PLAIN: base64(\0 user \0 pass)
+        // PLAIN: base64(\0 user \0 pass) — RFC 4616
         let nul: string = (0 as char).to_string();
         let raw: string = nul.concat(user).concat(nul).concat(pass);
         let token: string = b64_encode(raw);
         return self._cmd_check("AUTH PLAIN ".concat(token).concat("\r\n"), 235);
+    }
+
+    /// AUTH LOGIN — RFC 4954 + the de-facto Microsoft mechanism. Two
+    /// 334 server prompts (typically containing base64 "Username:"
+    /// and "Password:"); we ignore the prompt content and just send
+    /// our base64-encoded user / pass in turn.
+    fn _auth_login(self: *SmtpSession, user: string, pass: string) -> !int {
+        let r1: !int = self._cmd_check("AUTH LOGIN\r\n", 334);
+        if !r1.ok { return err(r1.err); }
+        let user_b64: string = b64_encode(user);
+        let r2: !int = self._cmd_check(user_b64.concat("\r\n"), 334);
+        if !r2.ok { return err(r2.err); }
+        let pass_b64: string = b64_encode(pass);
+        let r3: !int = self._cmd_check(pass_b64.concat("\r\n"), 235);
+        if !r3.ok { return err(r3.err); }
+        return ok(0);
     }
 }
 
@@ -289,6 +367,16 @@ fn _dot_stuff(s: string) -> string {
 }
 
 fn _local_hostname() -> string { return "glide.local"; }
+
+/// Whitespace-tokenized membership check (case-insensitive caller).
+/// `_word_in_list("plain login cram-md5", "login")` → true.
+fn _word_in_list(haystack: string, needle: string) -> bool {
+    let parts: *Vector<string> = haystack.split(" ");
+    for let i: int = 0; i < parts.len(); i++ {
+        if parts.get(i).eq(needle) { return true; }
+    }
+    return false;
+}
 
 fn _smtp_itos(n: int) -> string {
     if n == 0 { return "0"; }

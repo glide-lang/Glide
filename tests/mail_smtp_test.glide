@@ -102,6 +102,75 @@ fn _rejecting_server(port: int) {
     c.close(); l.close();
 }
 
+// ---- AUTH LOGIN flow ----
+
+fn _login_only_server(port: int) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("220 fake ready\r\n");
+    let buf: *u8 = malloc(8192) as *u8;
+    let mut step: int = 0;
+    let mut data_mode: bool = false;
+    let mut data_acc: string = "";
+    while true {
+        let n: int = c.read(buf as *void, 8192);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+        if data_mode {
+            data_acc = data_acc.concat(s);
+            if data_acc.contains("\r\n.\r\n") {
+                c.write_str("250 OK queued\r\n");
+                data_mode = false; data_acc = "";
+            }
+            continue;
+        }
+        if step == 1 { c.write_str("334 UGFzc3dvcmQ6\r\n"); step = 2; continue; }
+        if step == 2 { c.write_str("235 auth ok\r\n"); step = 0; continue; }
+        let upper: string = s.to_upper().trim();
+        if upper.starts_with("EHLO") {
+            c.write_str("250-fake\r\n250 AUTH LOGIN\r\n");
+        } else if upper.starts_with("AUTH LOGIN") {
+            c.write_str("334 VXNlcm5hbWU6\r\n"); step = 1;
+        } else if upper.starts_with("MAIL FROM") { c.write_str("250 OK\r\n"); }
+        else if upper.starts_with("RCPT TO")    { c.write_str("250 OK\r\n"); }
+        else if upper.starts_with("DATA")        { c.write_str("354 ok\r\n"); data_mode = true; }
+        else if upper.starts_with("QUIT")        { c.write_str("221 bye\r\n"); break; }
+        else                                      { c.write_str("500\r\n"); }
+    }
+    c.close(); l.close();
+}
+
+fn test_auth_login_auto_detected_from_ehlo() -> int {
+    spawn_thread _login_only_server(43528);
+    sleep_ms(300);
+    let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43528);
+    let u: ?string = some("alice");
+    let p: ?string = some("pwd");
+    c.username = u; c.password = p;
+    let m: *Mail = Mail::new();
+    m.from = "a@x"; m.to.push("b@x"); m.subject = "s"; m.body = "y";
+    let r: !int = c.send(m);
+    assert!(r.ok);
+    return 0;
+}
+
+fn test_auth_login_explicit_method() -> int {
+    spawn_thread _login_only_server(43529);
+    sleep_ms(300);
+    let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43529);
+    c.auth_method = "login";
+    let u: ?string = some("alice");
+    let p: ?string = some("pwd");
+    c.username = u; c.password = p;
+    let m: *Mail = Mail::new();
+    m.from = "a@x"; m.to.push("b@x"); m.subject = "s"; m.body = "y";
+    let r: !int = c.send(m);
+    assert!(r.ok);
+    return 0;
+}
+
 fn test_client_surfaces_server_550_error() -> int {
     spawn_thread _rejecting_server(43527);
     sleep_ms(300);

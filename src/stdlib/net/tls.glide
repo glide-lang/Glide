@@ -28,6 +28,7 @@
 
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
+import stdlib::net::tcp::*;
 
 c_raw! {
     #ifndef GLIDE_NET_TLS_HELPERS_DEFINED
@@ -349,7 +350,7 @@ c_raw! {
         const unsigned char* p = NULL;
         unsigned int len = 0;
         SSL_get0_alpn_selected(h->ssl, &p, &len);
-        if (p == NULL || len == 0) return NULL;
+        if (p == NULL || len == 0) return "";
         char* out = (char*)malloc((size_t)(len + 1));
         memcpy(out, p, len);
         out[len] = 0;
