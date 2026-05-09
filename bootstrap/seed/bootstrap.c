@@ -3310,6 +3310,12 @@ typedef struct __glide_option_f64_t { int has; double val; } __glide_option_f64_
 static __glide_option_f64_t __glide_some_f64(double v) { __glide_option_f64_t o; o.has = 1; o.val = v; return o; }
 static __glide_option_f64_t __glide_none_f64(void) { __glide_option_f64_t o; o.has = 0; return o; }
 #endif
+#ifndef __GLIDE_OPTION_string_GUARD
+#define __GLIDE_OPTION_string_GUARD
+typedef struct __glide_option_string_t { int has; const char* val; } __glide_option_string_t;
+static __glide_option_string_t __glide_some_string(const char* v) { __glide_option_string_t o; o.has = 1; o.val = v; return o; }
+static __glide_option_string_t __glide_none_string(void) { __glide_option_string_t o; o.has = 0; return o; }
+#endif
 
 typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__int   Vector__int ;
@@ -4121,6 +4127,7 @@ int   __glide_palloc_total_bytes (void);
 int   __glide_palloc_chunks (void);
 int   __glide_proc_rss_mb (void);
 bool   _ws (int   c);
+int   string_cmp (const char*   self, const char*   other);
 bool   string_contains (const char*   self, const char*   sub);
 int   string_index_of (const char*   self, const char*   sub);
 bool   string_starts_with (const char*   self, const char*   pre);
@@ -4144,6 +4151,8 @@ __glide_option_f64_t   Vector__f64_min (Vector__f64*   self);
 __glide_option_f64_t   Vector__f64_avg (Vector__f64*   self);
 const char*   Vector__string_join (Vector__string*   self, const char*   sep);
 const char*   Vector__string_concat (Vector__string*   self);
+__glide_option_string_t   Vector__string_max (Vector__string*   self);
+__glide_option_string_t   Vector__string_min (Vector__string*   self);
 const char*   read_file (const char*   path);
 bool   write_file (const char*   path, const char*   content);
 bool   __glide_file_exists (const char*   path);
@@ -5298,6 +5307,32 @@ bool   _ws (int   c) {
     return ((((((c  ==  32)  ||  (c  ==  9))  ||  (c  ==  10))  ||  (c  ==  13))  ||  (c  ==  12))  ||  (c  ==  11));
 }
 
+int   string_cmp (const char*   self, const char*   other) {
+    int   n = __glide_string_len(self);
+    int   m = __glide_string_len(other);
+    int   k = n;
+    if ((m  <  k)) {
+        (k  =  m);
+    }
+    for (int   i = 0; (i  <  k); i++) {
+        int   a = __glide_char_to_int(__glide_string_at(self, i));
+        int   b = __glide_char_to_int(__glide_string_at(other, i));
+        if ((a  <  b)) {
+            return (-1);
+        }
+        if ((a  >  b)) {
+            return 1;
+        }
+    }
+    if ((n  <  m)) {
+        return (-1);
+    }
+    if ((n  >  m)) {
+        return 1;
+    }
+    return 0;
+}
+
 bool   string_contains (const char*   self, const char*   sub) {
     return (string_index_of(self, sub)  >=  0);
 }
@@ -5666,6 +5701,32 @@ const char*   Vector__string_concat (Vector__string*   self) {
         (out  =  __glide_string_concat(out, (self-> data )[i]));
     }
     return out;
+}
+
+__glide_option_string_t   Vector__string_max (Vector__string*   self) {
+    if (((self-> len )  ==  0)) {
+        return __glide_none_string();
+    }
+    const char*   m = (self-> data )[0];
+    for (int   i = 1; (i  <  (self-> len )); i++) {
+        if ((string_cmp((self-> data )[i], m)  >  0)) {
+            (m  =  (self-> data )[i]);
+        }
+    }
+    return __glide_some_string(m);
+}
+
+__glide_option_string_t   Vector__string_min (Vector__string*   self) {
+    if (((self-> len )  ==  0)) {
+        return __glide_none_string();
+    }
+    const char*   m = (self-> data )[0];
+    for (int   i = 1; (i  <  (self-> len )); i++) {
+        if ((string_cmp((self-> data )[i], m)  <  0)) {
+            (m  =  (self-> data )[i]);
+        }
+    }
+    return __glide_some_string(m);
 }
 
 const char*   fs_read (const char*   path) {
@@ -11995,6 +12056,9 @@ Type*   stdlib_method_ret (const char*   ty_name, const char*   method) {
         }
         if (__glide_string_eq(method, "eq")) {
             return ((Type*(*)(const char*))ty_named)("bool");
+        }
+        if (__glide_string_eq(method, "cmp")) {
+            return ((Type*(*)(const char*))ty_named)("int");
         }
         if (__glide_string_eq(method, "at")) {
             return ((Type*(*)(const char*))ty_named)("char");
