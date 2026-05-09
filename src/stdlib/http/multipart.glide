@@ -25,6 +25,15 @@ pub struct Multipart {
 }
 
 impl Multipart {
+    /// Create a multipart body with a random 24-char boundary. Use
+    /// `with_boundary(...)` for deterministic tests.
+    ///
+    /// ```glide
+    /// let mp: *Multipart = Multipart::new();
+    /// mp.add_field("user", "alice");
+    /// let r: !*HttpResponse = HttpClient::new()
+    ///     .post(url, mp.body(), mp.content_type());
+    /// ```
     pub fn new() -> *Multipart {
         let m: *Multipart = malloc(sizeof(Multipart)) as *Multipart;
         m.boundary = _gen_boundary();
@@ -35,6 +44,12 @@ impl Multipart {
 
     /// Same as `new` but lets the caller fix the boundary — useful for
     /// deterministic tests. The string must not appear in any part body.
+    ///
+    /// ```glide
+    /// let mp: *Multipart = Multipart::with_boundary("XYZ");
+    /// mp.add_field("k", "v");
+    /// // body() now starts with "--XYZ\r\n..."
+    /// ```
     pub fn with_boundary(boundary: string) -> *Multipart {
         let m: *Multipart = malloc(sizeof(Multipart)) as *Multipart;
         m.boundary = boundary;
@@ -44,6 +59,11 @@ impl Multipart {
     }
 
     /// Add a plain text field.
+    ///
+    /// ```glide
+    /// mp.add_field("user", "alice");
+    /// mp.add_field("note", "hello world");
+    /// ```
     pub fn add_field(self: *Multipart, name: string, value: string) {
         let mut p: string = "Content-Disposition: form-data; name=\"";
         p = p.concat(name).concat("\"\r\n\r\n");
@@ -53,6 +73,11 @@ impl Multipart {
 
     /// Add a file part. `data` is the raw file bytes (Glide string is
     /// fine for binary, but embedded NULs truncate downstream readers).
+    ///
+    /// ```glide
+    /// let bytes: string = fs_read("avatar.png");
+    /// mp.add_file("avatar", "avatar.png", "image/png", bytes);
+    /// ```
     pub fn add_file(self: *Multipart, name: string, filename: string,
                     content_type: string, data: string) {
         let mut p: string = "Content-Disposition: form-data; name=\"";
@@ -64,11 +89,21 @@ impl Multipart {
 
     /// `multipart/form-data; boundary=...` — drop into a Content-Type
     /// header so the receiver knows where the parts split.
+    ///
+    /// ```glide
+    /// let r: !*HttpResponse = HttpClient::new()
+    ///     .post(url, mp.body(), mp.content_type());
+    /// ```
     pub fn content_type(self: *Multipart) -> string {
         return "multipart/form-data; boundary=".concat(self.boundary);
     }
 
     /// Serialize all parts into the wire body.
+    ///
+    /// ```glide
+    /// let body: string = mp.body();
+    /// // hand body + mp.content_type() to the HTTP client
+    /// ```
     pub fn body(self: *Multipart) -> string {
         let mut out: string = "";
         for let i: int = 0; i < self.parts.len(); i++ {

@@ -29,6 +29,14 @@ pub struct Cookie {
 }
 
 impl Cookie {
+    /// Build a Cookie with default scope: path=`/`, no domain restriction,
+    /// not secure, not http-only. Adjust the fields directly if needed.
+    ///
+    /// ```glide
+    /// let c: *Cookie = Cookie::new("session", "abc123");
+    /// c.secure = true;
+    /// c.domain = "example.com";
+    /// ```
     pub fn new(name: string, value: string) -> *Cookie {
         let c: *Cookie = malloc(sizeof(Cookie)) as *Cookie;
         c.name = name;
@@ -46,6 +54,14 @@ pub struct CookieJar {
 }
 
 impl CookieJar {
+    /// Create an empty cookie jar. Attach to an `HttpClient` so `Set-Cookie`
+    /// responses are absorbed and subsequent requests carry `Cookie:` automatically.
+    ///
+    /// ```glide
+    /// let jar: *CookieJar = CookieJar::new();
+    /// let c: *HttpClient = HttpClient::new();
+    /// c.jar = jar;
+    /// ```
     pub fn new() -> *CookieJar {
         let j: *CookieJar = malloc(sizeof(CookieJar)) as *CookieJar;
         let v: *Vector<*Cookie> = Vector::new();
@@ -56,6 +72,11 @@ impl CookieJar {
     /// Parse every `Set-Cookie` header in `set_cookie_lines` and store
     /// the cookies, scoped to `request_host`. Existing cookies with
     /// the same (name, domain, path) are replaced.
+    ///
+    /// ```glide
+    /// let cookies: *Vector<string> = resp.headers("Set-Cookie");
+    /// jar.ingest("example.com", cookies);
+    /// ```
     pub fn ingest(self: *CookieJar, request_host: string,
                   set_cookie_lines: *Vector<string>) {
         for let i: int = 0; i < set_cookie_lines.len(); i++ {
@@ -80,6 +101,11 @@ impl CookieJar {
     /// Build the `Cookie:` header value for an outbound request to
     /// `host`/`path` over `is_secure` transport. Returns `""` when no
     /// cookie applies.
+    ///
+    /// ```glide
+    /// let h: string = jar.header_value("example.com", "/api", true);
+    /// // h might be "session=abc123; pref=dark"
+    /// ```
     pub fn header_value(self: *CookieJar, host: string, path: string,
                         is_secure: bool) -> string {
         let mut out: string = "";
@@ -95,9 +121,21 @@ impl CookieJar {
     }
 
     /// Snapshot of every cookie. Order matches insertion / replacement.
+    ///
+    /// ```glide
+    /// let all: *Vector<*Cookie> = jar.all();
+    /// for let i: int = 0; i < all.len(); i++ {
+    ///     let c: *Cookie = all.get(i);
+    ///     println!(c.name, "=", c.value);
+    /// }
+    /// ```
     pub fn all(self: *CookieJar) -> *Vector<*Cookie> { return self.cookies; }
 
     /// Forget every cookie. Useful for logout flows.
+    ///
+    /// ```glide
+    /// jar.clear();   // log everyone out
+    /// ```
     pub fn clear(self: *CookieJar) { self.cookies.clear(); }
 }
 

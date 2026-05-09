@@ -38,6 +38,11 @@ pub struct IpAddr {
 
 impl IpAddr {
     /// Build an IPv4 address from four octets.
+    ///
+    /// ```glide
+    /// let ip: *IpAddr = IpAddr::v4(192, 168, 1, 100);
+    /// ip.to_string();   // "192.168.1.100"
+    /// ```
     pub fn v4(a: int, b: int, c: int, d: int) -> *IpAddr {
         let ip: *IpAddr = malloc(sizeof(IpAddr)) as *IpAddr;
         ip.kind = 4;
@@ -48,6 +53,12 @@ impl IpAddr {
     }
 
     /// Build an IPv6 address from two 64-bit halves (host-order).
+    ///
+    /// ```glide
+    /// let one: i64 = 1;
+    /// let ip: *IpAddr = IpAddr::v6(0, one);
+    /// ip.to_string();    // "::1"
+    /// ```
     pub fn v6(hi: i64, lo: i64) -> *IpAddr {
         let ip: *IpAddr = malloc(sizeof(IpAddr)) as *IpAddr;
         ip.kind = 6;
@@ -57,18 +68,50 @@ impl IpAddr {
         return ip;
     }
 
-    /// `127.0.0.1` / `::1` shorthands.
+    /// `127.0.0.1` shorthand.
+    ///
+    /// ```glide
+    /// IpAddr::loopback_v4().to_string();   // "127.0.0.1"
+    /// ```
     pub fn loopback_v4() -> *IpAddr { return IpAddr::v4(127, 0, 0, 1); }
+
+    /// `::1` shorthand.
+    ///
+    /// ```glide
+    /// IpAddr::loopback_v6().to_string();   // "::1"
+    /// ```
     pub fn loopback_v6() -> *IpAddr { return IpAddr::v6(0, 1); }
 
-    /// `0.0.0.0` / `::` (all-interfaces / unspecified).
+    /// `0.0.0.0` (bind-on-any-interface).
+    ///
+    /// ```glide
+    /// IpAddr::unspec_v4().is_unspecified();   // true
+    /// ```
     pub fn unspec_v4() -> *IpAddr { return IpAddr::v4(0, 0, 0, 0); }
+
+    /// `::` (all-interfaces / unspecified, IPv6).
     pub fn unspec_v6() -> *IpAddr { return IpAddr::v6(0, 0); }
 
+    /// `true` if this is a v4 address.
+    ///
+    /// ```glide
+    /// IpAddr::v4(8, 8, 8, 8).is_v4();   // true
+    /// ```
     pub fn is_v4(self: *IpAddr) -> bool { return self.kind == 4; }
+
+    /// `true` if this is a v6 address.
+    ///
+    /// ```glide
+    /// IpAddr::loopback_v6().is_v6();   // true
+    /// ```
     pub fn is_v6(self: *IpAddr) -> bool { return self.kind == 6; }
 
     /// `true` for `127.0.0.0/8` (v4) or `::1` (v6).
+    ///
+    /// ```glide
+    /// IpAddr::v4(127, 0, 0, 1).is_loopback();   // true
+    /// IpAddr::v4(8, 8, 8, 8).is_loopback();     // false
+    /// ```
     pub fn is_loopback(self: *IpAddr) -> bool {
         if self.kind == 4 {
             return ((self.v4 >> 24) & 255) == 127;
@@ -77,6 +120,10 @@ impl IpAddr {
     }
 
     /// `true` for the all-zeros address.
+    ///
+    /// ```glide
+    /// IpAddr::v4(0, 0, 0, 0).is_unspecified();   // true
+    /// ```
     pub fn is_unspecified(self: *IpAddr) -> bool {
         if self.kind == 4 { return self.v4 == 0; }
         return self.v6_hi == 0 && self.v6_lo == 0;
@@ -84,6 +131,11 @@ impl IpAddr {
 
     /// `true` for RFC 1918 (10/8, 172.16/12, 192.168/16) on v4 or
     /// fc00::/7 unique-local on v6.
+    ///
+    /// ```glide
+    /// IpAddr::v4(192, 168, 1, 5).is_private();   // true
+    /// IpAddr::v4(8, 8, 8, 8).is_private();       // false
+    /// ```
     pub fn is_private(self: *IpAddr) -> bool {
         if self.kind == 4 {
             let a: int = (self.v4 >> 24) & 255;
@@ -98,6 +150,13 @@ impl IpAddr {
         return (high_byte & 254) == 252;
     }
 
+    /// Render as a textual address. v6 follows RFC 5952 (longest zero-run
+    /// collapsed to `::`).
+    ///
+    /// ```glide
+    /// IpAddr::v4(8, 8, 8, 8).to_string();    // "8.8.8.8"
+    /// IpAddr::loopback_v6().to_string();     // "::1"
+    /// ```
     pub fn to_string(self: *IpAddr) -> string {
         if self.kind == 4 { return _v4_to_str(self.v4); }
         return _v6_to_str(self.v6_hi, self.v6_lo);
@@ -105,6 +164,13 @@ impl IpAddr {
 
     /// Parse `"1.2.3.4"` (v4) or `"::1"` / `"2001:db8::1"` (v6).
     /// Returns `err` on malformed input.
+    ///
+    /// ```glide
+    /// let r: !*IpAddr = IpAddr::parse("192.168.0.1");
+    /// if r.ok { r.val.is_private(); }   // true
+    ///
+    /// IpAddr::parse("not.an.ip");       // err
+    /// ```
     pub fn parse(s: string) -> !*IpAddr {
         if s.contains(":") {
             let v: !*IpAddr = _parse_v6(s);
@@ -113,6 +179,14 @@ impl IpAddr {
         return _parse_v4(s);
     }
 
+    /// Byte-for-byte equality. v4 vs v6 always compare unequal even when
+    /// they refer to the same address (use IPv4-mapped form to compare).
+    ///
+    /// ```glide
+    /// let a: *IpAddr = IpAddr::v4(127, 0, 0, 1);
+    /// let b: *IpAddr = IpAddr::v4(127, 0, 0, 1);
+    /// a.eq(b);   // true
+    /// ```
     pub fn eq(self: *IpAddr, other: *IpAddr) -> bool {
         if self.kind != other.kind { return false; }
         if self.kind == 4 { return self.v4 == other.v4; }
@@ -306,6 +380,12 @@ pub struct SocketAddr {
 }
 
 impl SocketAddr {
+    /// Bundle an IP and port into a single SocketAddr.
+    ///
+    /// ```glide
+    /// let sa: *SocketAddr = SocketAddr::new(IpAddr::loopback_v4(), 8080);
+    /// sa.to_string();    // "127.0.0.1:8080"
+    /// ```
     pub fn new(ip: *IpAddr, port: int) -> *SocketAddr {
         let s: *SocketAddr = malloc(sizeof(SocketAddr)) as *SocketAddr;
         s.ip = ip;
@@ -313,6 +393,12 @@ impl SocketAddr {
         return s;
     }
 
+    /// Render as `host:port`. v6 hosts are wrapped in brackets per RFC 3986.
+    ///
+    /// ```glide
+    /// SocketAddr::new(IpAddr::loopback_v4(), 80).to_string();   // "127.0.0.1:80"
+    /// SocketAddr::new(IpAddr::loopback_v6(), 80).to_string();   // "[::1]:80"
+    /// ```
     pub fn to_string(self: *SocketAddr) -> string {
         if self.ip.is_v6() {
             return "[".concat(self.ip.to_string())
@@ -322,6 +408,13 @@ impl SocketAddr {
     }
 
     /// Parse `"1.2.3.4:80"` or `"[::1]:80"`.
+    ///
+    /// ```glide
+    /// let r: !*SocketAddr = SocketAddr::parse("127.0.0.1:8080");
+    /// if r.ok { println!(r.val.port); }   // 8080
+    ///
+    /// SocketAddr::parse("[::1]:443").ok;  // true
+    /// ```
     pub fn parse(s: string) -> !*SocketAddr {
         if s.len() == 0 { return err("socketaddr: empty"); }
         if s.at(0).to_int() == 91 {              // '['
@@ -353,6 +446,12 @@ impl SocketAddr {
         return ok(SocketAddr::new(ipr.val, pr.val));
     }
 
+    /// Release the wrapped IpAddr and the SocketAddr struct itself.
+    ///
+    /// ```glide
+    /// let sa: *SocketAddr = SocketAddr::new(IpAddr::loopback_v4(), 80);
+    /// defer sa.free();
+    /// ```
     pub fn free(self: *SocketAddr) {
         free(self.ip as *void);
         free(self as *void);

@@ -26,6 +26,14 @@ pub struct FormData {
 }
 
 impl FormData {
+    /// Empty form. Use `.set(k, v)` to add fields.
+    ///
+    /// ```glide
+    /// let f: *FormData = FormData::new();
+    /// f.set("user", "alice");
+    /// f.set("pass", "s3cret!");
+    /// f.encode();   // "user=alice&pass=s3cret%21"
+    /// ```
     pub fn new() -> *FormData {
         let f: *FormData = malloc(sizeof(FormData)) as *FormData;
         let n: *Vector<string> = Vector::new();
@@ -37,17 +45,44 @@ impl FormData {
 
     /// Append a (name, value) pair. Duplicate names are kept — most
     /// servers accept repeated keys and merge them server-side.
+    ///
+    /// ```glide
+    /// f.set("tag", "red");
+    /// f.set("tag", "blue");   // both kept; encodes as "tag=red&tag=blue"
+    /// ```
     pub fn set(self: *FormData, name: string, value: string) {
         self.names.push(name);
         self.values.push(value);
     }
 
+    /// Number of (name, value) pairs in the form.
+    ///
+    /// ```glide
+    /// f.set("a", "1"); f.set("b", "2");
+    /// f.len();   // 2
+    /// ```
     pub fn len(self: *FormData) -> int { return self.names.len(); }
 
+    /// Name at insertion position `i`. Pair with `value_at(i)` to walk
+    /// the form.
+    ///
+    /// ```glide
+    /// for let i: int = 0; i < f.len(); i++ {
+    ///     println!(f.name_at(i), "=", f.value_at(i));
+    /// }
+    /// ```
     pub fn name_at(self: *FormData, i: int) -> string { return self.names.get(i); }
+
+    /// Value at insertion position `i`. See `name_at`.
     pub fn value_at(self: *FormData, i: int) -> string { return self.values.get(i); }
 
     /// Build the wire string: `k=v&k=v` with each piece percent-encoded.
+    ///
+    /// ```glide
+    /// f.set("user", "alice");
+    /// f.set("token", "abc xyz=99");
+    /// f.encode();   // "user=alice&token=abc%20xyz%3D99"
+    /// ```
     pub fn encode(self: *FormData) -> string {
         let mut out: string = "";
         for let i: int = 0; i < self.names.len(); i++ {
@@ -62,6 +97,15 @@ impl FormData {
 
 /// Decode a `k=v&k=v` body into a FormData. Mirrors `FormData.encode`.
 /// Returns err on malformed percent-encoding.
+///
+/// ```glide
+/// let r: !*FormData = form_decode("user=alice&pass=s3cret%21");
+/// if r.ok {
+///     for let i: int = 0; i < r.val.len(); i++ {
+///         println!(r.val.name_at(i), "=", r.val.value_at(i));
+///     }
+/// }
+/// ```
 pub fn form_decode(s: string) -> !*FormData {
     let f: *FormData = FormData::new();
     if s.len() == 0 { return ok(f); }
@@ -88,6 +132,13 @@ pub fn form_decode(s: string) -> !*FormData {
 /// One-shot form POST. Builds an HttpClient, sets Content-Type, sends.
 /// For repeated calls share a client (set `c.jar`, etc.) and call
 /// `c.post(url, form.encode(), "application/x-www-form-urlencoded")`.
+///
+/// ```glide
+/// let f: *FormData = FormData::new();
+/// f.set("user", "alice"); f.set("pass", "secret");
+/// let r: !*HttpResponse = http_post_form("https://api.example.com/login", f);
+/// if r.ok { println!(r.val.status); }
+/// ```
 pub fn http_post_form(url: string, form: *FormData) -> !*HttpResponse {
     let body: string = form.encode();
     let c: *HttpClient = HttpClient::new();

@@ -151,6 +151,15 @@ extern fn __glide_dns_free(r: *void);
 /// Resolve `host` to a list of IP addresses via the system resolver.
 /// Returns every A and AAAA record the resolver returns, in the order
 /// it returned them.
+///
+/// ```glide
+/// let r: !*Vector<*IpAddr> = resolve("example.com");
+/// if r.ok {
+///     for let i: int = 0; i < r.val.len(); i++ {
+///         println!(r.val.get(i).to_string());
+///     }
+/// }
+/// ```
 pub fn resolve(host: string) -> !*Vector<*IpAddr> {
     let r: *void = __glide_dns_resolve(host);
     if r == null { return err("dns: resolve failed for ".concat(host)); }
@@ -174,6 +183,13 @@ pub fn resolve(host: string) -> !*Vector<*IpAddr> {
 }
 
 /// Same as `resolve` but filters to v4 addresses only.
+///
+/// ```glide
+/// let r: !*Vector<*IpAddr> = resolve_v4("example.com");
+/// if r.ok && r.val.len() > 0 {
+///     println!("first v4:", r.val.get(0).to_string());
+/// }
+/// ```
 pub fn resolve_v4(host: string) -> !*Vector<*IpAddr> {
     let all: !*Vector<*IpAddr> = resolve(host);
     if !all.ok { return err(all.err); }
@@ -187,6 +203,13 @@ pub fn resolve_v4(host: string) -> !*Vector<*IpAddr> {
 }
 
 /// Same as `resolve` but filters to v6 addresses only.
+///
+/// ```glide
+/// let r: !*Vector<*IpAddr> = resolve_v6("ipv6.google.com");
+/// if r.ok && r.val.len() > 0 {
+///     println!("first v6:", r.val.get(0).to_string());
+/// }
+/// ```
 pub fn resolve_v6(host: string) -> !*Vector<*IpAddr> {
     let all: !*Vector<*IpAddr> = resolve(host);
     if !all.ok { return err(all.err); }

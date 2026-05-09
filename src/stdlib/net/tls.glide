@@ -565,6 +565,12 @@ pub struct TlsConfig {
 
 impl TlsConfig {
     /// Default client config: verify=true, min TLS 1.2, no ALPN.
+    ///
+    /// ```glide
+    /// let cfg: *TlsConfig = TlsConfig::client();
+    /// defer cfg.free();
+    /// let r: !*TlsStream = TlsStream::connect("example.com", 443, cfg);
+    /// ```
     pub fn client() -> *TlsConfig {
         let c: *TlsConfig = malloc(sizeof(TlsConfig)) as *TlsConfig;
         c.verify = true;
@@ -574,6 +580,12 @@ impl TlsConfig {
     }
 
     /// Insecure client: cert validation off. Local dev only.
+    ///
+    /// ```glide
+    /// let cfg: *TlsConfig = TlsConfig::client_insecure();
+    /// defer cfg.free();
+    /// // connects with self-signed certs, but DO NOT use in prod
+    /// ```
     pub fn client_insecure() -> *TlsConfig {
         let c: *TlsConfig = malloc(sizeof(TlsConfig)) as *TlsConfig;
         c.verify = false;
@@ -582,6 +594,12 @@ impl TlsConfig {
         return c;
     }
 
+    /// Release the config struct.
+    ///
+    /// ```glide
+    /// let cfg: *TlsConfig = TlsConfig::client();
+    /// defer cfg.free();
+    /// ```
     pub fn free(self: *TlsConfig) { free(self as *void); }
 }
 
@@ -593,6 +611,17 @@ impl TlsStream {
     /// Connect to `host:port` over TLS. Resolves the host via DNS,
     /// opens a TCP connection, and runs the TLS handshake. The
     /// hostname is also fed to SNI and used for cert verification.
+    ///
+    /// ```glide
+    /// let cfg: *TlsConfig = TlsConfig::client();
+    /// let r: !*TlsStream = TlsStream::connect("example.com", 443, cfg);
+    /// if r.ok {
+    ///     defer r.val.close();
+    ///     r.val.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n");
+    ///     let body: !string = r.val.read_to_end();
+    ///     if body.ok { println!(body.val.len(), "bytes"); }
+    /// }
+    /// ```
     pub fn connect(host: string, port: int, cfg: *TlsConfig) -> !*TlsStream {
         let r: !*Vector<*IpAddr> = resolve(host);
         if !r.ok { return err(r.err); }
@@ -637,6 +666,15 @@ impl TlsStream {
     /// On success the returned `TlsStream` owns the fd; the caller
     /// should NOT call `tcp.close()` or the fd will be double-closed.
     /// The `tcp` wrapper struct itself is freed.
+    ///
+    /// ```glide
+    /// let tcp: *TcpStream = TcpStream::connect_host("smtp.example.com", 587).val;
+    /// tcp.write_all("EHLO me\r\nSTARTTLS\r\n");
+    /// // ... wait for "220 Go ahead" ...
+    /// let cfg: *TlsConfig = TlsConfig::client();
+    /// let r: !*TlsStream = TlsStream::attach(tcp, "smtp.example.com", cfg);
+    /// if r.ok { defer r.val.close(); /* now encrypted */ }
+    /// ```
     pub fn attach(tcp: *TcpStream, hostname: string,
                   cfg: *TlsConfig) -> !*TlsStream {
         let fd: i64 = tcp.fd;
@@ -656,12 +694,22 @@ impl TlsStream {
     /// Write `data`. Returns bytes written (>0) or err. May write less
     /// than asked under back-pressure — wrap in `write_all` for the
     /// common case.
+    ///
+    /// ```glide
+    /// let r: !int = stream.write("hello");
+    /// if r.ok { println!("sent", r.val, "bytes"); }
+    /// ```
     pub fn write(self: *TlsStream, data: string) -> !int {
         let n: i64 = __glide_tls_write(self.handle, data, data.len());
         if n <= 0 { return err("tls: write failed"); }
         return ok(n as int);
     }
 
+    /// Write every byte of `data`, looping on partial writes.
+    ///
+    /// ```glide
+    /// stream.write_all("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
+    /// ```
     pub fn write_all(self: *TlsStream, data: string) -> !int {
         let n: int = data.len();
         let mut sent: int = 0;
@@ -679,6 +727,13 @@ impl TlsStream {
     /// `write_all` reads its argument via strlen and truncates there.
     /// SSL_write handles partial writes internally for sub-record
     /// payloads, so a single call covers the buffer.
+    ///
+    /// ```glide
+    /// let frame: *ByteBuffer = ByteBuffer::new();
+    /// defer frame.free();
+    /// frame.push_str("\x00\x00\x1e\x04\x00\x00\x00\x00\x00");   // h2 SETTINGS
+    /// stream.write_bytes(frame.data, frame.len);
+    /// ```
     pub fn write_bytes(self: *TlsStream, buf: *u8, n: int) -> !int {
         let raw_n: i64 = __glide_tls_write_raw(self.handle, buf as *void, n);
         if raw_n <= 0 { return err("tls: write_bytes failed"); }
@@ -695,6 +750,13 @@ impl TlsStream {
     ///   ok(n>0) — bytes received
     ///   ok(0)   — peer closed cleanly (TLS close_notify)
     ///   err(_)  — error
+    ///
+    /// ```glide
+    /// let buf: *u8 = malloc(8192) as *u8;
+    /// defer free(buf as *void);
+    /// let r: !int = stream.read_bytes(buf, 8192);
+    /// if r.ok && r.val > 0 { /* process buf[0..r.val] */ }
+    /// ```
     pub fn read_bytes(self: *TlsStream, buf: *u8, max: int) -> !int {
         let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
         if n < 0 { return err("tls: read_bytes failed"); }
@@ -702,6 +764,11 @@ impl TlsStream {
     }
 
     /// Read up to `max` bytes. ok(0) means peer closed cleanly.
+    ///
+    /// ```glide
+    /// let r: !string = stream.read(4096);
+    /// if r.ok && r.val.len() > 0 { print!(r.val); }
+    /// ```
     pub fn read(self: *TlsStream, max: int) -> !string {
         let buf: *u8 = malloc(max) as *u8;
         let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
@@ -711,6 +778,14 @@ impl TlsStream {
         return ok(s);
     }
 
+    /// Read until the peer closes the connection. Useful for HTTP/1.x
+    /// `Connection: close` responses.
+    ///
+    /// ```glide
+    /// stream.write_all("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    /// let r: !string = stream.read_to_end();
+    /// if r.ok { println!(r.val.len(), "bytes"); }
+    /// ```
     pub fn read_to_end(self: *TlsStream) -> !string {
         let mut out: string = "";
         while true {
@@ -723,6 +798,10 @@ impl TlsStream {
     }
 
     /// Negotiated protocol via ALPN, or `""` if no ALPN was offered.
+    ///
+    /// ```glide
+    /// if stream.alpn().eq("h2") { /* speak HTTP/2 */ }
+    /// ```
     pub fn alpn(self: *TlsStream) -> string {
         let s: string = __glide_tls_alpn(self.handle);
         if s.len() == 0 { return ""; }
@@ -731,6 +810,10 @@ impl TlsStream {
 
     /// `2` for TLS 1.2, `3` for TLS 1.3, etc. Approximate — derives
     /// from OpenSSL's SSL_version raw value.
+    ///
+    /// ```glide
+    /// if stream.version() < 3 { eprintln("not TLS 1.3"); }
+    /// ```
     pub fn version(self: *TlsStream) -> int {
         let v: int = __glide_tls_version(self.handle);
         // 0x0303 = TLS 1.2, 0x0304 = TLS 1.3
@@ -741,16 +824,30 @@ impl TlsStream {
 
     /// Negotiated cipher suite name (OpenSSL form, e.g.
     /// `TLS_AES_256_GCM_SHA384`).
+    ///
+    /// ```glide
+    /// println!("cipher:", stream.cipher());
+    /// ```
     pub fn cipher(self: *TlsStream) -> string {
         return __glide_tls_cipher(self.handle);
     }
 
     /// Apply read + write timeouts on the underlying TCP socket.
     /// SSL_read/SSL_write inherit SO_RCVTIMEO / SO_SNDTIMEO.
+    ///
+    /// ```glide
+    /// stream.set_timeout_ms(10000);   // 10s for reads and writes
+    /// ```
     pub fn set_timeout_ms(self: *TlsStream, ms: int) {
         __glide_tls_set_timeout(self.handle, ms);
     }
 
+    /// Close the TLS session and underlying socket. Pair with `defer`.
+    ///
+    /// ```glide
+    /// let r: !*TlsStream = TlsStream::connect("example.com", 443, cfg);
+    /// if r.ok { defer r.val.close(); /* ... */ }
+    /// ```
     pub fn close(self: *TlsStream) {
         __glide_tls_close(self.handle);
         free(self as *void);
@@ -769,6 +866,17 @@ impl TlsListener {
     /// `key_path` (PEM private key), and start listening. On any I/O
     /// or cert error returns `err` with a generic message — call
     /// `openssl errstr` against the OpenSSL log if you need detail.
+    ///
+    /// ```glide
+    /// let r: !*TlsListener = TlsListener::bind(443, "fullchain.pem", "privkey.pem");
+    /// if !r.ok { eprintln(r.err); env_exit(1); }
+    /// let l: *TlsListener = r.val;
+    /// defer l.close();
+    /// while true {
+    ///     let s: !*TlsStream = l.accept();
+    ///     if s.ok { spawn handle(s.val); }
+    /// }
+    /// ```
     pub fn bind(port: int, cert_path: string, key_path: string) -> !*TlsListener {
         let h: *void = __glide_tls_listen(port, cert_path, key_path);
         if h == null { return err("tls_listener: bind/cert/key failure"); }
@@ -779,6 +887,14 @@ impl TlsListener {
 
     /// Wait for the next client; run TLS handshake; return a stream
     /// ready for read/write. Skips clients whose handshake fails.
+    ///
+    /// ```glide
+    /// let s: !*TlsStream = listener.accept();
+    /// if s.ok {
+    ///     defer s.val.close();
+    ///     s.val.write("HTTP/1.1 200 OK\r\n\r\nhi");
+    /// }
+    /// ```
     pub fn accept(self: *TlsListener) -> !*TlsStream {
         let h: *void = __glide_tls_accept(self.handle);
         if h == null { return err("tls_listener: accept/handshake failure"); }
@@ -787,6 +903,12 @@ impl TlsListener {
         return ok(s);
     }
 
+    /// Close the TLS listener (cert context + listening socket).
+    ///
+    /// ```glide
+    /// let l: *TlsListener = TlsListener::bind(443, "cert.pem", "key.pem").val;
+    /// defer l.close();
+    /// ```
     pub fn close(self: *TlsListener) {
         __glide_tls_listener_close(self.handle);
         free(self as *void);
@@ -799,6 +921,12 @@ impl TlsListener {
 ///
 /// On success the returned `TlsStream` owns the underlying socket;
 /// the caller MUST NOT call `conn.close()` afterwards.
+///
+/// ```glide
+/// // In an SMTP server, after the client sends STARTTLS:
+/// let r: !*TlsStream = tls_attach_server(conn.fd, "cert.pem", "key.pem");
+/// if r.ok { defer r.val.close(); /* communicate over TLS */ }
+/// ```
 pub fn tls_attach_server(conn_fd: int, cert_path: string,
                          key_path: string) -> !*TlsStream {
     let h: *void = __glide_tls_server_attach(conn_fd as i64, cert_path, key_path);

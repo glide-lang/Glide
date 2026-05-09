@@ -24,14 +24,29 @@ import stdlib::crypto::*;
 import stdlib::base64::*;
 import stdlib::random::*;
 
-// Frame opcodes.
+// Frame opcodes (RFC 6455 §11.8). Compare against `WsMessage.kind`.
+//
+// ```glide
+// match m.kind {
+//     k if k == WsOp::text()  => println!("text:", m.text),
+//     k if k == WsOp::ping()  => ws.pong(m.text),
+//     k if k == WsOp::close() => break,
+//     _ => {},
+// }
+// ```
 pub struct WsOp {}
 impl WsOp {
+    /// Continuation frame opcode (`0`). Used for fragmented messages.
     pub fn cont() -> int { return 0; }
+    /// Text-frame opcode (`1`).
     pub fn text() -> int { return 1; }
+    /// Binary-frame opcode (`2`).
     pub fn binary() -> int { return 2; }
+    /// Close-frame opcode (`8`). `WsMessage.close_code` carries the reason.
     pub fn close() -> int { return 8; }
+    /// Ping-frame opcode (`9`).
     pub fn ping() -> int { return 9; }
+    /// Pong-frame opcode (`10`).
     pub fn pong() -> int { return 10; }
 }
 
@@ -56,6 +71,17 @@ pub struct WebSocket {
 impl WebSocket {
     /// Open a WebSocket. URL must be `ws://host[:port]/path` or
     /// `wss://host[:port]/path`.
+    ///
+    /// ```glide
+    /// let r: !*WebSocket = WebSocket::connect("wss://echo.example.com/sock");
+    /// if r.ok {
+    ///     let ws: *WebSocket = r.val;
+    ///     ws.send_text("hello");
+    ///     let m: !*WsMessage = ws.recv();
+    ///     if m.ok { println!("got:", m.val.text); }
+    ///     ws.close(1000, "bye");
+    /// }
+    /// ```
     pub fn connect(url: string) -> !*WebSocket {
         let p: !*WsParsedUrl = _ws_parse_url(url);
         if !p.ok { return err(p.err); }
@@ -165,17 +191,32 @@ impl WebSocket {
 
     /// Send a UTF-8 text frame. Always masked (client → server is
     /// always masked, per RFC 6455 §5.3).
+    ///
+    /// ```glide
+    /// ws.send_text("{\"type\":\"hello\"}");
+    /// ```
     pub fn send_text(self: *WebSocket, msg: string) -> !int {
         return self._send_frame(1, msg);
     }
 
     /// Send a binary frame.
+    ///
+    /// ```glide
+    /// ws.send_binary(hex_decode("deadbeef").val);
+    /// ```
     pub fn send_binary(self: *WebSocket, data: string) -> !int {
         return self._send_frame(2, data);
     }
 
     /// Send a Pong with optional payload. Use after recv'ing a Ping
     /// to keep the connection alive.
+    ///
+    /// ```glide
+    /// let m: !*WsMessage = ws.recv();
+    /// if m.ok && m.val.kind == WsOp::ping() {
+    ///     ws.pong(m.val.text);   // echo the ping payload
+    /// }
+    /// ```
     pub fn pong(self: *WebSocket, payload: string) -> !int {
         return self._send_frame(10, payload);
     }
@@ -230,6 +271,17 @@ impl WebSocket {
     /// Read one inbound frame. Pings are returned as-is (caller decides
     /// whether to auto-pong); close frames surface with the kind set
     /// to `WsOp::close()` and `close_code` populated.
+    ///
+    /// ```glide
+    /// let m: !*WsMessage = ws.recv();
+    /// if m.ok {
+    ///     match m.val.kind {
+    ///         k if k == WsOp::text()  => println!(m.val.text),
+    ///         k if k == WsOp::close() => println!("closed:", m.val.close_code),
+    ///         _ => {},
+    ///     }
+    /// }
+    /// ```
     pub fn recv(self: *WebSocket) -> !*WsMessage {
         let h2: !string = self._read_exact(2);
         if !h2.ok { return err(h2.err); }
@@ -287,6 +339,11 @@ impl WebSocket {
 
     /// Send a close frame and tear down the transport. `code` 1000 is
     /// "normal closure"; see RFC 6455 §7.4 for the registry.
+    ///
+    /// ```glide
+    /// ws.close(1000, "bye");          // normal closure
+    /// ws.close(4000, "app reset");    // app-defined code
+    /// ```
     pub fn close(self: *WebSocket, code: int, reason: string) {
         let mut payload: string = "";
         payload = payload.concat(((code >> 8) & 255 as char).to_string());
@@ -309,6 +366,14 @@ pub struct WsParsedUrl {
 }
 
 impl WsParsedUrl {
+    /// Format the host (with port if non-default) for the HTTP `Host`
+    /// header. Drops the port when it matches the scheme default
+    /// (80 for ws, 443 for wss).
+    ///
+    /// ```glide
+    /// let u: *WsParsedUrl = _ws_parse_url("wss://example.com:8443/").val;
+    /// u.host_header();   // "example.com:8443"
+    /// ```
     pub fn host_header(self: *WsParsedUrl) -> string {
         let mut def: int = 80;
         if self.is_wss { def = 443; }

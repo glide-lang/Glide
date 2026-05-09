@@ -4,49 +4,119 @@
 // in pure Glide so they monomorphize cleanly. Floating-point lives in
 // libm via `extern fn`; link with `-lm` is automatic.
 
-/// Square root: `sqrt(2.0) == 1.41421...`. Returns NaN for negative input.
+/// Square root. Returns NaN for negative input.
+///
+/// ```glide
+/// sqrt(2.0);    // 1.4142135623730951
+/// sqrt(9.0);    // 3.0
+/// ```
 pub extern fn sqrt(x: f64) -> f64;
 
-/// `pow(x, y) == x^y`. Both args are doubles; for integer exponents prefer
-/// `ipow` to avoid floating-point drift.
+/// `x^y` as a float. For integer exponents prefer `ipow` to avoid
+/// floating-point drift.
+///
+/// ```glide
+/// pow(2.0, 10.0);   // 1024.0
+/// pow(3.0, 0.5);    // sqrt(3) = 1.7320508...
+/// ```
 pub extern fn pow(x: f64, y: f64) -> f64;
 
-/// Round toward `-∞`: `floor(2.7) == 2.0`, `floor(-2.3) == -3.0`.
+/// Round toward `-∞`.
+///
+/// ```glide
+/// floor(2.7);     //  2.0
+/// floor(-2.3);    // -3.0
+/// ```
 pub extern fn floor(x: f64) -> f64;
 
-/// Round toward `+∞`: `ceil(2.1) == 3.0`, `ceil(-2.7) == -2.0`.
+/// Round toward `+∞`.
+///
+/// ```glide
+/// ceil(2.1);     //  3.0
+/// ceil(-2.7);    // -2.0
+/// ```
 pub extern fn ceil(x: f64) -> f64;
 
-/// Round to nearest, ties away from zero: `round(2.5) == 3.0`, `round(-2.5) == -3.0`.
+/// Round to nearest, ties away from zero.
+///
+/// ```glide
+/// round(2.5);     //  3.0
+/// round(-2.5);    // -3.0
+/// round(2.4);     //  2.0
+/// ```
 pub extern fn round(x: f64) -> f64;
 
-/// Absolute value: `fabs(-1.5) == 1.5`. Use `abs_int` for ints.
+/// Absolute value (float). Use `abs_int` for ints.
+///
+/// ```glide
+/// fabs(-1.5);     // 1.5
+/// fabs(0.0);      // 0.0
+/// ```
 pub extern fn fabs(x: f64) -> f64;
 
-/// Sine. Argument is in radians: `sin(PI / 2) ≈ 1.0`.
+/// Sine. Argument is in radians.
+///
+/// ```glide
+/// sin(0.0);          // 0.0
+/// sin(PI / 2.0);     // 1.0
+/// ```
 pub extern fn sin(x: f64) -> f64;
 
-/// Cosine. Argument is in radians: `cos(0.0) == 1.0`.
+/// Cosine. Argument is in radians.
+///
+/// ```glide
+/// cos(0.0);     // 1.0
+/// cos(PI);      // -1.0
+/// ```
 pub extern fn cos(x: f64) -> f64;
 
 /// Tangent. Argument is in radians.
+///
+/// ```glide
+/// tan(PI / 4.0);   // 1.0
+/// ```
 pub extern fn tan(x: f64) -> f64;
 
-/// Natural log (base e): `log(E) == 1.0`. Domain `x > 0`.
+/// Natural log (base e). Domain `x > 0`.
+///
+/// ```glide
+/// log(E);         // 1.0
+/// log(1.0);       // 0.0
+/// ```
 pub extern fn log(x: f64) -> f64;
 
-/// Log base 2: `log2(8.0) == 3.0`.
+/// Log base 2.
+///
+/// ```glide
+/// log2(8.0);      // 3.0
+/// log2(1024.0);   // 10.0
+/// ```
 pub extern fn log2(x: f64) -> f64;
 
-/// Log base 10: `log10(1000.0) == 3.0`.
+/// Log base 10.
+///
+/// ```glide
+/// log10(1000.0);   // 3.0
+/// log10(1.0);      // 0.0
+/// ```
 pub extern fn log10(x: f64) -> f64;
 
-/// `e^x`: `exp(1.0) == E`.
+/// `e^x`.
+///
+/// ```glide
+/// exp(0.0);    // 1.0
+/// exp(1.0);    // E (≈ 2.71828)
+/// ```
 pub extern fn exp(x: f64) -> f64;
 
 /// Two-argument arctangent: full-circle angle of point `(x, y)` in radians.
-/// `atan2(1.0, 0.0) == PI / 2`. Use this instead of `atan(y / x)` when you
-/// need the right quadrant.
+/// Use this instead of `atan(y / x)` when you need the right quadrant.
+///
+/// ```glide
+/// atan2(1.0, 0.0);    // PI / 2  (point straight up)
+/// atan2(0.0, 1.0);    // 0       (point along +X)
+/// atan2(0.0, -1.0);   // PI      (point along -X)
+/// ```
 pub extern fn atan2(y: f64, x: f64) -> f64;
 
 pub const PI: f64 = 3.141592653589793;

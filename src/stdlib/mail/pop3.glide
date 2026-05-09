@@ -36,6 +36,16 @@ pub struct Pop3Session {
 impl Pop3Session {
     /// Open a session. `use_tls=true` wraps from start (port 995);
     /// false uses plain TCP (port 110).
+    ///
+    /// ```glide
+    /// let r: !*Pop3Session = Pop3Session::connect("pop.example.com", 995, true);
+    /// if r.ok {
+    ///     defer r.val.close();
+    ///     r.val.login("user@example.com", "pw");
+    ///     // ...stat / list / retrieve...
+    ///     r.val.quit();
+    /// }
+    /// ```
     pub fn connect(host: string, port: int, use_tls: bool) -> !*Pop3Session {
         let s: *Pop3Session = malloc(sizeof(Pop3Session)) as *Pop3Session;
         s.host = host;
@@ -66,6 +76,13 @@ impl Pop3Session {
         return ok(s);
     }
 
+    /// Authenticate via USER + PASS. Many providers accept "app passwords"
+    /// only via this path (basic auth, no AUTH PLAIN ceremony).
+    ///
+    /// ```glide
+    /// let r: !int = session.login("me@example.com", "app-password");
+    /// if !r.ok { eprintln(r.err); }
+    /// ```
     pub fn login(self: *Pop3Session, user: string, pass: string) -> !int {
         let _u: !string = self._cmd("USER ".concat(user));
         if !_u.ok { return err(_u.err); }
@@ -75,6 +92,11 @@ impl Pop3Session {
     }
 
     /// Returns (count, total_size_octets) via stat reply.
+    ///
+    /// ```glide
+    /// let r: !*Pop3MsgInfo = session.stat();
+    /// if r.ok { println!(r.val.idx, "msgs,", r.val.size, "bytes"); }
+    /// ```
     pub fn stat(self: *Pop3Session) -> !*Pop3MsgInfo {
         let r: !string = self._cmd("STAT");
         if !r.ok { return err(r.err); }
@@ -92,6 +114,16 @@ impl Pop3Session {
     }
 
     /// Multi-line LIST: per-message (idx, size).
+    ///
+    /// ```glide
+    /// let r: !*Vector<*Pop3MsgInfo> = session.list();
+    /// if r.ok {
+    ///     for let i: int = 0; i < r.val.len(); i++ {
+    ///         let m: *Pop3MsgInfo = r.val.get(i);
+    ///         println!("#", m.idx, "size", m.size);
+    ///     }
+    /// }
+    /// ```
     pub fn list(self: *Pop3Session) -> !*Vector<*Pop3MsgInfo> {
         let _w: !int = self._write("LIST\r\n");
         let head: !string = self._read_line();
@@ -120,6 +152,14 @@ impl Pop3Session {
     }
 
     /// Full message body for index `n`.
+    ///
+    /// ```glide
+    /// let r: !string = session.retrieve(1);
+    /// if r.ok {
+    ///     let m: !*Mail = parse_mail(r.val);
+    ///     if m.ok { println!("subject:", m.val.subject); }
+    /// }
+    /// ```
     pub fn retrieve(self: *Pop3Session, n: int) -> !string {
         let _w: !int = self._write("RETR ".concat(_pop3_itos(n)).concat("\r\n"));
         let head: !string = self._read_line();
@@ -130,24 +170,48 @@ impl Pop3Session {
         return self._read_multiline();
     }
 
+    /// Mark message `n` for deletion. Actual removal happens at QUIT.
+    ///
+    /// ```glide
+    /// session.delete(1);
+    /// session.quit();   // server now removes it
+    /// ```
     pub fn delete(self: *Pop3Session, n: int) -> !int {
         let r: !string = self._cmd("DELE ".concat(_pop3_itos(n)));
         if !r.ok { return err(r.err); }
         return ok(0);
     }
 
+    /// Server-side keep-alive. Some IMAP/POP3 servers idle-disconnect after
+    /// 30 minutes; periodic NOOP keeps the session warm.
+    ///
+    /// ```glide
+    /// session.noop();
+    /// ```
     pub fn noop(self: *Pop3Session) -> !int {
         let r: !string = self._cmd("NOOP");
         if !r.ok { return err(r.err); }
         return ok(0);
     }
 
+    /// Send `QUIT` and commit pending deletions. Always pair with
+    /// `close()` to release the socket.
+    ///
+    /// ```glide
+    /// session.quit();
+    /// session.close();
+    /// ```
     pub fn quit(self: *Pop3Session) -> !int {
         let r: !string = self._cmd("QUIT");
         if !r.ok { return err(r.err); }
         return ok(0);
     }
 
+    /// Tear down the underlying TCP/TLS socket. Idempotent.
+    ///
+    /// ```glide
+    /// defer session.close();
+    /// ```
     pub fn close(self: *Pop3Session) {
         if self.is_tls && self.tls != null { self.tls.close(); }
         if !self.is_tls && self.tcp != null { self.tcp.close(); }

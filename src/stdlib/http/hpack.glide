@@ -165,6 +165,17 @@ pub struct HpackEncoder {
 }
 
 impl HpackEncoder {
+    /// Create an encoder with the default 4 KiB dynamic table cap.
+    /// Reuse one encoder across the whole connection — the dynamic
+    /// table builds up so subsequent encodes get shorter.
+    ///
+    /// ```glide
+    /// let enc: *HpackEncoder = HpackEncoder::new();
+    /// let buf: *ByteBuffer = ByteBuffer::new();  defer buf.free();
+    /// enc.encode_header(buf, ":method", "GET");
+    /// enc.encode_header(buf, ":path", "/");
+    /// // send buf.data[0..buf.len] as the HEADERS frame payload
+    /// ```
     pub fn new() -> *HpackEncoder {
         let e: *HpackEncoder = malloc(sizeof(HpackEncoder)) as *HpackEncoder;
         e.max_table_size = 4096;
@@ -183,6 +194,14 @@ impl HpackEncoder {
     ///   buf := ByteBuffer::new()
     ///   for each header: enc.encode_header(buf, name, value)
     ///   send buf.as_string() as the HEADERS frame payload
+    ///
+    /// ```glide
+    /// let enc: *HpackEncoder = HpackEncoder::new();
+    /// let buf: *ByteBuffer = ByteBuffer::new();  defer buf.free();
+    /// enc.encode_header(buf, ":method", "POST");
+    /// enc.encode_header(buf, ":path", "/api");
+    /// enc.encode_header(buf, "user-agent", "glide");
+    /// ```
     pub fn encode_header(self: *HpackEncoder, buf: *ByteBuffer,
                          name: string, value: string) {
         // Try to find an exact (name, value) match in static or dyn table.
@@ -286,6 +305,20 @@ pub struct HpackHeader {
 }
 
 impl HpackDecoder {
+    /// Create a decoder with the default 4 KiB dynamic table cap.
+    /// Reuse one decoder across the connection so dynamic-table refs
+    /// resolve correctly.
+    ///
+    /// ```glide
+    /// let dec: *HpackDecoder = HpackDecoder::new();
+    /// let r: !*Vector<*HpackHeader> = dec.decode_block(payload, payload.len());
+    /// if r.ok {
+    ///     for let i: int = 0; i < r.val.len(); i++ {
+    ///         let h: *HpackHeader = r.val.get(i);
+    ///         println!(h.name, ":", h.value);
+    ///     }
+    /// }
+    /// ```
     pub fn new() -> *HpackDecoder {
         let d: *HpackDecoder = malloc(sizeof(HpackDecoder)) as *HpackDecoder;
         d.max_table_size = 4096;
@@ -302,6 +335,16 @@ impl HpackDecoder {
     /// Decode a full header block (HEADERS + CONTINUATION concatenated).
     /// Returns the headers in order; the dynamic table is mutated as a
     /// side effect of any "with incremental indexing" entries.
+    ///
+    /// ```glide
+    /// let r: !*Vector<*HpackHeader> = dec.decode_block(payload, payload.len());
+    /// if r.ok {
+    ///     for let i: int = 0; i < r.val.len(); i++ {
+    ///         let h: *HpackHeader = r.val.get(i);
+    ///         if h.name.eq(":status") { println!("status:", h.value); }
+    ///     }
+    /// }
+    /// ```
     pub fn decode_block(self: *HpackDecoder, raw: string,
                         len: int) -> !*Vector<*HpackHeader> {
         let out: *Vector<*HpackHeader> = Vector::new();

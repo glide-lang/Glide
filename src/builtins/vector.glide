@@ -150,6 +150,12 @@ impl<T> Vector<T> {
     }
 
     /// Number of initialised elements currently held.
+    ///
+    /// ```glide
+    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// v.push_all!(1, 2, 3);
+    /// v.len();   // 3
+    /// ```
     fn len(self: *Vector<T>) -> int {
         return self.len;
     }
@@ -266,6 +272,13 @@ impl<T> Vector<T> {
 
     /// Drop every element by resetting `len` to 0. Capacity is preserved
     /// so subsequent pushes don't reallocate.
+    ///
+    /// ```glide
+    /// v.push_all!(1, 2, 3);
+    /// v.clear();
+    /// v.len();        // 0
+    /// v.is_empty();   // true
+    /// ```
     fn clear(self: *Vector<T>) {
         self.len = 0;
     }
@@ -304,6 +317,18 @@ impl<T> Vector<T> {
     /// Build an iterator that yields each element by value. The iterator
     /// borrows the vector's buffer for the walk; mutating the vector while
     /// iterating is undefined behaviour.
+    ///
+    /// ```glide
+    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// v.push_all!(10, 20, 30);
+    /// let it: *VecIter<int> = v.iter();
+    /// while true {
+    ///     match it.next() {
+    ///         some(x) => println!(x),
+    ///         none()  => break,
+    ///     }
+    /// }
+    /// ```
     fn iter(self: *Vector<T>) -> *VecIter<T> {
         let it: *VecIter<T> = malloc(sizeof(VecIter<T>)) as *VecIter<T>;
         it.vec = self;
@@ -312,6 +337,14 @@ impl<T> Vector<T> {
     }
 
     /// Apply `f` to each element; return a new Vector.
+    ///
+    /// ```glide
+    /// fn double(x: int) -> int { return x * 2; }
+    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// v.push_all!(1, 2, 3);
+    /// let doubled: *Vector<int> = v.map(double);   // [2, 4, 6]
+    /// defer doubled.free();
+    /// ```
     fn map<U>(self: *Vector<T>, f: fn(T) -> U) -> *Vector<U> {
         let out: *Vector<U> = Vector::new();
         for let i: int = 0; i < self.len; i++ {
@@ -321,6 +354,14 @@ impl<T> Vector<T> {
     }
 
     /// Keep only elements where `p` returns true.
+    ///
+    /// ```glide
+    /// fn is_even(x: int) -> bool { return x % 2 == 0; }
+    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// v.push_all!(1, 2, 3, 4, 5);
+    /// let evens: *Vector<int> = v.filter(is_even);   // [2, 4]
+    /// defer evens.free();
+    /// ```
     fn filter(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         for let i: int = 0; i < self.len; i++ {
@@ -331,6 +372,12 @@ impl<T> Vector<T> {
     }
 
     /// First `n` elements (or all if `n` exceeds length).
+    ///
+    /// ```glide
+    /// v.push_all!(1, 2, 3, 4, 5);
+    /// let head: *Vector<int> = v.take(3);   // [1, 2, 3]
+    /// v.take(99).len();                     // 5  (clamped)
+    /// ```
     fn take(self: *Vector<T>, n: int) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         let mut limit: int = n;
@@ -341,6 +388,11 @@ impl<T> Vector<T> {
     }
 
     /// Drop first `n` elements; return the rest.
+    ///
+    /// ```glide
+    /// v.push_all!(1, 2, 3, 4, 5);
+    /// let tail: *Vector<int> = v.skip(2);   // [3, 4, 5]
+    /// ```
     fn skip(self: *Vector<T>, n: int) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         let mut start: int = n;
@@ -350,6 +402,12 @@ impl<T> Vector<T> {
     }
 
     /// Take elements until `p` returns false (then stop).
+    ///
+    /// ```glide
+    /// fn lt5(x: int) -> bool { return x < 5; }
+    /// v.push_all!(1, 3, 7, 2, 9);
+    /// v.take_while(lt5);   // [1, 3]   (stops at 7)
+    /// ```
     fn take_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         for let i: int = 0; i < self.len; i++ {
@@ -361,6 +419,12 @@ impl<T> Vector<T> {
     }
 
     /// Skip elements while `p` returns true; keep the rest from first false.
+    ///
+    /// ```glide
+    /// fn lt5(x: int) -> bool { return x < 5; }
+    /// v.push_all!(1, 3, 7, 2, 9);
+    /// v.skip_while(lt5);   // [7, 2, 9]
+    /// ```
     fn skip_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         let mut skipping: bool = true;
@@ -376,6 +440,13 @@ impl<T> Vector<T> {
     }
 
     /// Fold over the vector. `f(acc, item)` returns the new accumulator.
+    ///
+    /// ```glide
+    /// fn add(acc: int, x: int) -> int { return acc + x; }
+    /// v.push_all!(1, 2, 3, 4);
+    /// v.fold(0, add);     // 10
+    /// v.fold(100, add);   // 110
+    /// ```
     fn fold<U>(self: *Vector<T>, init: U, f: fn(U, T) -> U) -> U {
         let mut acc: U = init;
         for let i: int = 0; i < self.len; i++ {
@@ -385,6 +456,12 @@ impl<T> Vector<T> {
     }
 
     /// `true` if any element matches `p`. Short-circuits on first hit.
+    ///
+    /// ```glide
+    /// fn is_neg(x: int) -> bool { return x < 0; }
+    /// v.push_all!(1, 2, -3, 4);
+    /// v.any(is_neg);   // true
+    /// ```
     fn any(self: *Vector<T>, p: fn(T) -> bool) -> bool {
         for let i: int = 0; i < self.len; i++ {
             if p(self.data[i]) { return true; }
@@ -393,6 +470,13 @@ impl<T> Vector<T> {
     }
 
     /// `true` if all elements match `p`. Short-circuits on first miss.
+    /// Empty vector returns `true` (vacuous truth).
+    ///
+    /// ```glide
+    /// fn is_pos(x: int) -> bool { return x > 0; }
+    /// v.push_all!(1, 2, 3);
+    /// v.all(is_pos);   // true
+    /// ```
     fn all(self: *Vector<T>, p: fn(T) -> bool) -> bool {
         for let i: int = 0; i < self.len; i++ {
             if !p(self.data[i]) { return false; }
@@ -401,6 +485,15 @@ impl<T> Vector<T> {
     }
 
     /// First element matching `p`, or `none` if no match.
+    ///
+    /// ```glide
+    /// fn is_even(x: int) -> bool { return x % 2 == 0; }
+    /// v.push_all!(1, 3, 4, 7);
+    /// match v.find(is_even) {
+    ///     some(x) => println!(x),   // 4
+    ///     none()  => println!("no even"),
+    /// }
+    /// ```
     fn find(self: *Vector<T>, p: fn(T) -> bool) -> ?T {
         for let i: int = 0; i < self.len; i++ {
             let item: T = self.data[i];
@@ -416,6 +509,17 @@ pub struct VecIter<T> {
 }
 
 impl<T> VecIter<T> {
+    /// Yield the next element, or `none` at end of sequence.
+    ///
+    /// ```glide
+    /// let it: *VecIter<int> = v.iter();
+    /// while true {
+    ///     match it.next() {
+    ///         some(x) => println!(x),
+    ///         none()  => break,
+    ///     }
+    /// }
+    /// ```
     pub fn next(self: *VecIter<T>) -> ?T {
         if self.idx >= self.vec.len { return none(); }
         let v: T = self.vec.data[self.idx];
@@ -429,6 +533,12 @@ impl<T> VecIter<T> {
 // element type. Strings, floats, etc. follow the same pattern when added.
 impl Vector<int> {
     /// Sum of all elements. Empty vector returns 0.
+    ///
+    /// ```glide
+    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// v.push_all!(1, 2, 3, 4);
+    /// v.sum();   // 10
+    /// ```
     pub fn sum(self: *Vector<int>) -> int {
         let mut acc: int = 0;
         for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
@@ -436,6 +546,14 @@ impl Vector<int> {
     }
 
     /// Largest element, or `none` if the vector is empty.
+    ///
+    /// ```glide
+    /// v.push_all!(3, 7, 2, 9, 4);
+    /// match v.max() {
+    ///     some(x) => println!(x),   // 9
+    ///     none()  => println!("empty"),
+    /// }
+    /// ```
     pub fn max(self: *Vector<int>) -> ?int {
         if self.len == 0 { return none(); }
         let mut m: int = self.data[0];
@@ -446,6 +564,14 @@ impl Vector<int> {
     }
 
     /// Smallest element, or `none` if the vector is empty.
+    ///
+    /// ```glide
+    /// v.push_all!(3, 7, 2, 9, 4);
+    /// match v.min() {
+    ///     some(x) => println!(x),   // 2
+    ///     none()  => {},
+    /// }
+    /// ```
     pub fn min(self: *Vector<int>) -> ?int {
         if self.len == 0 { return none(); }
         let mut m: int = self.data[0];
@@ -458,6 +584,12 @@ impl Vector<int> {
 
 impl Vector<f64> {
     /// Sum of all elements. Empty vector returns 0.0.
+    ///
+    /// ```glide
+    /// let v: *Vector<f64> = Vector::new();  defer v.free();
+    /// v.push_all!(1.5, 2.5, 3.0);
+    /// v.sum();   // 7.0
+    /// ```
     pub fn sum(self: *Vector<f64>) -> f64 {
         let mut acc: f64 = 0.0;
         for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
@@ -465,6 +597,11 @@ impl Vector<f64> {
     }
 
     /// Largest element, or `none` if the vector is empty.
+    ///
+    /// ```glide
+    /// v.push_all!(1.0, 3.5, 2.0);
+    /// v.max();   // some(3.5)
+    /// ```
     pub fn max(self: *Vector<f64>) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut m: f64 = self.data[0];
@@ -475,6 +612,11 @@ impl Vector<f64> {
     }
 
     /// Smallest element, or `none` if the vector is empty.
+    ///
+    /// ```glide
+    /// v.push_all!(1.0, 3.5, 2.0);
+    /// v.min();   // some(1.0)
+    /// ```
     pub fn min(self: *Vector<f64>) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut m: f64 = self.data[0];
@@ -485,6 +627,11 @@ impl Vector<f64> {
     }
 
     /// Arithmetic mean, or `none` if the vector is empty.
+    ///
+    /// ```glide
+    /// v.push_all!(2.0, 4.0, 6.0);
+    /// v.avg();   // some(4.0)
+    /// ```
     pub fn avg(self: *Vector<f64>) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut acc: f64 = 0.0;
@@ -496,6 +643,13 @@ impl Vector<f64> {
 impl Vector<string> {
     /// Concatenate all elements with `sep` between them. Empty vector
     /// returns "". Single-element vector returns that element unchanged.
+    ///
+    /// ```glide
+    /// let v: *Vector<string> = Vector::new();  defer v.free();
+    /// v.push_all!("a", "b", "c");
+    /// v.join(", ");   // "a, b, c"
+    /// v.join("");     // "abc"
+    /// ```
     pub fn join(self: *Vector<string>, sep: string) -> string {
         if self.len == 0 { return ""; }
         let mut out: string = self.data[0];
@@ -507,6 +661,11 @@ impl Vector<string> {
     }
 
     /// Concatenate all elements with no separator. Empty vector returns "".
+    ///
+    /// ```glide
+    /// v.push_all!("foo", "bar", "baz");
+    /// v.concat();   // "foobarbaz"
+    /// ```
     pub fn concat(self: *Vector<string>) -> string {
         let mut out: string = "";
         for let i: int = 0; i < self.len; i++ {
@@ -516,6 +675,11 @@ impl Vector<string> {
     }
 
     /// Lexicographically largest element, or `none` if the vector is empty.
+    ///
+    /// ```glide
+    /// v.push_all!("apple", "banana", "cherry");
+    /// v.max();   // some("cherry")
+    /// ```
     pub fn max(self: *Vector<string>) -> ?string {
         if self.len == 0 { return none(); }
         let mut m: string = self.data[0];
@@ -526,6 +690,11 @@ impl Vector<string> {
     }
 
     /// Lexicographically smallest element, or `none` if empty.
+    ///
+    /// ```glide
+    /// v.push_all!("apple", "banana", "cherry");
+    /// v.min();   // some("apple")
+    /// ```
     pub fn min(self: *Vector<string>) -> ?string {
         if self.len == 0 { return none(); }
         let mut m: string = self.data[0];
@@ -538,6 +707,12 @@ impl Vector<string> {
 
 impl Vector<bool> {
     /// Number of `true` elements.
+    ///
+    /// ```glide
+    /// let v: *Vector<bool> = Vector::new();  defer v.free();
+    /// v.push_all!(true, false, true, true);
+    /// v.count_true();    // 3
+    /// ```
     pub fn count_true(self: *Vector<bool>) -> int {
         let mut n: int = 0;
         for let i: int = 0; i < self.len; i++ {
@@ -547,6 +722,11 @@ impl Vector<bool> {
     }
 
     /// Number of `false` elements.
+    ///
+    /// ```glide
+    /// v.push_all!(true, false, true, true);
+    /// v.count_false();   // 1
+    /// ```
     pub fn count_false(self: *Vector<bool>) -> int {
         let mut n: int = 0;
         for let i: int = 0; i < self.len; i++ {
@@ -557,6 +737,13 @@ impl Vector<bool> {
 
     /// `true` if every element is `true`. Empty vector returns `true`
     /// (vacuous truth — same convention as `Vector::all`).
+    ///
+    /// ```glide
+    /// v.push_all!(true, true, true);
+    /// v.all_true();   // true
+    /// v.push(false);
+    /// v.all_true();   // false
+    /// ```
     pub fn all_true(self: *Vector<bool>) -> bool {
         for let i: int = 0; i < self.len; i++ {
             if !self.data[i] { return false; }
@@ -566,6 +753,11 @@ impl Vector<bool> {
 
     /// `true` if at least one element is `true`. Empty vector returns
     /// `false`.
+    ///
+    /// ```glide
+    /// v.push_all!(false, false, true);
+    /// v.any_true();   // true
+    /// ```
     pub fn any_true(self: *Vector<bool>) -> bool {
         for let i: int = 0; i < self.len; i++ {
             if self.data[i] { return true; }

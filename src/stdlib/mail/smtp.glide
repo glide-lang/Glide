@@ -48,6 +48,16 @@ pub struct SmtpClient {
 }
 
 impl SmtpClient {
+    /// Build an SMTP client. Configure the public fields (`use_tls`,
+    /// `use_starttls`, `username`, `password`, etc.) before calling
+    /// `send` or `connect`.
+    ///
+    /// ```glide
+    /// let c: *SmtpClient = SmtpClient::new("smtp.gmail.com", 587);
+    /// c.use_starttls = true;
+    /// c.username = some("me@gmail.com");
+    /// c.password = some("app-password");
+    /// ```
     pub fn new(host: string, port: int) -> *SmtpClient {
         let c: *SmtpClient = malloc(sizeof(SmtpClient)) as *SmtpClient;
         c.host = host;
@@ -67,6 +77,14 @@ impl SmtpClient {
     /// Send a single message. Opens the connection, runs the full
     /// SMTP conversation, closes. For multi-message workflows hold
     /// onto an SmtpSession via `connect()` instead.
+    ///
+    /// ```glide
+    /// let m: *Mail = Mail::new();
+    /// m.from = "me@x.com"; m.to.push("you@y.com");
+    /// m.subject = "hi"; m.body = "hello";
+    /// let r: !int = c.send(m);
+    /// if !r.ok { eprintln(r.err); }
+    /// ```
     pub fn send(self: *SmtpClient, mail: *Mail) -> !int {
         let sr: !*SmtpSession = self.connect();
         if !sr.ok { return err(sr.err); }
@@ -80,6 +98,17 @@ impl SmtpClient {
     /// Open a session: TCP connect → optionally STARTTLS → optionally AUTH.
     /// The returned session is positioned right before MAIL FROM and
     /// can be reused across multiple send_mail calls until quit/close.
+    ///
+    /// ```glide
+    /// let r: !*SmtpSession = c.connect();
+    /// if r.ok {
+    ///     for let i: int = 0; i < msgs.len(); i++ {
+    ///         r.val.send_mail(msgs.get(i));
+    ///     }
+    ///     r.val.quit();
+    ///     r.val.close();
+    /// }
+    /// ```
     pub fn connect(self: *SmtpClient) -> !*SmtpSession {
         let s: *SmtpSession = malloc(sizeof(SmtpSession)) as *SmtpSession;
         s.tls = null as *TlsStream;
@@ -167,6 +196,11 @@ pub struct SmtpSession {
 impl SmtpSession {
     /// Send a single message. Returns ok(0) on success or err with
     /// a human-readable status code.
+    ///
+    /// ```glide
+    /// let r: !int = session.send_mail(mail);
+    /// if r.ok { println!("delivered"); }
+    /// ```
     pub fn send_mail(self: *SmtpSession, mail: *Mail) -> !int {
         // MAIL FROM
         let mr: !int = self._cmd_check("MAIL FROM:<".concat(mail.from).concat(">\r\n"), 250);
@@ -200,10 +234,23 @@ impl SmtpSession {
         return ok(0);
     }
 
+    /// Send `QUIT` and wait for the 221 response. Always pair with
+    /// `close()` to release the socket.
+    ///
+    /// ```glide
+    /// session.quit();
+    /// session.close();
+    /// ```
     pub fn quit(self: *SmtpSession) -> !int {
         return self._cmd_check("QUIT\r\n", 221);
     }
 
+    /// Tear down the underlying TCP/TLS connection and free the session.
+    /// Idempotent on already-closed sessions.
+    ///
+    /// ```glide
+    /// defer session.close();
+    /// ```
     pub fn close(self: *SmtpSession) {
         if self.is_tls && self.tls != null { self.tls.close(); }
         if !self.is_tls && self.tcp != null { self.tcp.close(); }

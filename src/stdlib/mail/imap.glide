@@ -42,6 +42,17 @@ pub struct ImapSession {
 }
 
 impl ImapSession {
+    /// Open a session. `use_tls=true` connects via implicit TLS on port
+    /// 993; false uses plain TCP on 143 (rarely the right choice today).
+    ///
+    /// ```glide
+    /// let r: !*ImapSession = ImapSession::connect("imap.gmail.com", 993, true);
+    /// if r.ok {
+    ///     defer r.val.close();
+    ///     r.val.login("me@gmail.com", "app-password");
+    ///     r.val.select("INBOX");
+    /// }
+    /// ```
     pub fn connect(host: string, port: int, use_tls: bool) -> !*ImapSession {
         let s: *ImapSession = malloc(sizeof(ImapSession)) as *ImapSession;
         s.host = host;
@@ -74,6 +85,13 @@ impl ImapSession {
         return ok(s);
     }
 
+    /// Authenticate via the LOGIN command (basic auth). Most providers
+    /// require an "app password" rather than the regular account password.
+    ///
+    /// ```glide
+    /// let r: !int = session.login("me@gmail.com", "abcd-efgh-ijkl-mnop");
+    /// if !r.ok { eprintln(r.err); }
+    /// ```
     pub fn login(self: *ImapSession, user: string, pass: string) -> !int {
         // Tag user/pass as quoted strings. RFC 3501 allows astring or
         // literal — we use the simpler astring since user/pass shouldn't
@@ -87,6 +105,11 @@ impl ImapSession {
     /// Select a mailbox. Returns the message count surfaced via
     /// `* <N> EXISTS`. Read-only is not used in v1; SELECT acquires
     /// read-write.
+    ///
+    /// ```glide
+    /// let r: !int = session.select("INBOX");
+    /// if r.ok { println!(r.val, "messages"); }
+    /// ```
     pub fn select(self: *ImapSession, mailbox: string) -> !int {
         let cmd: string = "SELECT \"".concat(mailbox).concat("\"");
         let r: !*ImapResponse = self._cmd(cmd);
@@ -110,6 +133,14 @@ impl ImapSession {
     }
 
     /// FETCH the full RFC 5322 body for sequence number `seq`.
+    ///
+    /// ```glide
+    /// let r: !string = session.fetch(1);
+    /// if r.ok {
+    ///     let m: !*Mail = parse_mail(r.val);
+    ///     if m.ok { println!(m.val.subject); }
+    /// }
+    /// ```
     pub fn fetch(self: *ImapSession, seq: int) -> !string {
         let cmd: string = "FETCH ".concat(_imap_itos(seq)).concat(" BODY[]");
         let r: !*ImapResponse = self._cmd_capture_literal(cmd);
@@ -119,6 +150,12 @@ impl ImapSession {
 
     /// Add or remove a flag. Common flags: `\\Seen`, `\\Deleted`,
     /// `\\Flagged`. Pass `add=true` for `+FLAGS`, false for `-FLAGS`.
+    ///
+    /// ```glide
+    /// session.store_flag(1, "\\Seen", true);     // mark as read
+    /// session.store_flag(2, "\\Flagged", true);  // star it
+    /// session.store_flag(3, "\\Deleted", true);  // mark for expunge
+    /// ```
     pub fn store_flag(self: *ImapSession, seq: int, flag: string,
                       add: bool) -> !int {
         let mut op: string = "+FLAGS";
@@ -141,6 +178,13 @@ impl ImapSession {
     ///   "FROM x SUBJECT y"    (juxtaposition = AND)
     ///   "OR FROM x FROM y"    "NOT DELETED"
     /// Returns the sequence numbers of matching messages.
+    ///
+    /// ```glide
+    /// let r: !*Vector<int> = session.search("UNSEEN SUBJECT \"alert\"");
+    /// if r.ok { for let i: int = 0; i < r.val.len(); i++ {
+    ///     println!("msg #", r.val.get(i));
+    /// }}
+    /// ```
     pub fn search(self: *ImapSession, criteria: string) -> !*Vector<int> {
         let cmd: string = "SEARCH ".concat(criteria);
         let r: !*ImapResponse = self._cmd(cmd);
@@ -164,6 +208,11 @@ impl ImapSession {
     }
 
     /// Convenience: search for unread messages.
+    ///
+    /// ```glide
+    /// let r: !*Vector<int> = session.search_unseen();
+    /// if r.ok { println!(r.val.len(), "unread"); }
+    /// ```
     pub fn search_unseen(self: *ImapSession) -> !*Vector<int> {
         return self.search("UNSEEN");
     }
@@ -171,6 +220,11 @@ impl ImapSession {
     /// Convenience: search by sender. The address is wrapped in
     /// quotes; the IMAP server matches it as a substring of the
     /// `From:` header.
+    ///
+    /// ```glide
+    /// let r: !*Vector<int> = session.search_from("alice@example.com");
+    /// if r.ok { println!("from alice:", r.val.len()); }
+    /// ```
     pub fn search_from(self: *ImapSession, addr: string) -> !*Vector<int> {
         return self.search("FROM \"".concat(addr).concat("\""));
     }
@@ -180,6 +234,13 @@ impl ImapSession {
     /// backslash escaped; e.g. `"\\Seen \\Flagged"`). Pass `""` for
     /// no flags. Useful for moving messages between mailboxes
     /// (Sent / Drafts) without losing server-side state.
+    ///
+    /// ```glide
+    /// let m: *Mail = Mail::new();
+    /// m.from = "me@x.com"; m.to.push("you@y.com");
+    /// m.subject = "draft"; m.body = "WIP";
+    /// session.append("Drafts", "\\Seen", m.to_rfc5322());
+    /// ```
     pub fn append(self: *ImapSession, mailbox: string, flags: string,
                   message: string) -> !int {
         let mut head: string = "APPEND \"".concat(mailbox).concat("\"");
@@ -219,6 +280,16 @@ impl ImapSession {
     /// updates (`* 5 EXISTS`, `* 5 RECENT`, `* 3 EXPUNGE`, etc.) until
     /// the client sends `DONE`. After this returns ok, drive the loop
     /// with `idle_next()` and call `idle_stop()` to exit cleanly.
+    ///
+    /// ```glide
+    /// session.idle_start();
+    /// loop {
+    ///     let line: !string = session.idle_next();
+    ///     if !line.ok { break; }
+    ///     if line.val.contains("EXISTS") { /* new mail */ break; }
+    /// }
+    /// session.idle_stop();
+    /// ```
     pub fn idle_start(self: *ImapSession) -> !int {
         let tag: string = self._next_tag();
         self.idle_tag = tag;
@@ -236,6 +307,11 @@ impl ImapSession {
     /// when it fires, the underlying read errors out and the err
     /// surfaces here. Loop on this and break when your application
     /// signals shutdown (e.g. via a chan / Atomic flag).
+    ///
+    /// ```glide
+    /// let l: !string = session.idle_next();
+    /// if l.ok && l.val.contains("EXISTS") { /* new mail arrived */ }
+    /// ```
     pub fn idle_next(self: *ImapSession) -> !string {
         return self._read_line();
     }
@@ -244,6 +320,13 @@ impl ImapSession {
     /// Any pending untagged lines that were already on the wire are
     /// silently consumed; pull them via `idle_next()` first if you
     /// need them.
+    ///
+    /// ```glide
+    /// session.idle_start();
+    /// // ...wait for an event...
+    /// session.idle_stop();
+    /// session.fetch(latest_seq);   // session is back in command mode
+    /// ```
     pub fn idle_stop(self: *ImapSession) -> !int {
         let tag: string = self.idle_tag;
         if tag.eq("") { return err("imap: idle_stop without idle_start"); }
@@ -264,12 +347,25 @@ impl ImapSession {
         return ok(0);
     }
 
+    /// Send LOGOUT, releasing server state. Pair with `close()` for the
+    /// underlying socket teardown.
+    ///
+    /// ```glide
+    /// session.logout();
+    /// session.close();
+    /// ```
     pub fn logout(self: *ImapSession) -> !int {
         let _r: !*ImapResponse = self._cmd("LOGOUT");
         if !_r.ok { return err(_r.err); }
         return ok(0);
     }
 
+    /// Tear down the underlying TCP/TLS connection and free the session.
+    /// Idempotent on already-closed sessions.
+    ///
+    /// ```glide
+    /// defer session.close();
+    /// ```
     pub fn close(self: *ImapSession) {
         if self.is_tls && self.tls != null { self.tls.close(); }
         if !self.is_tls && self.tcp != null { self.tcp.close(); }

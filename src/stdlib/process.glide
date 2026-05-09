@@ -924,12 +924,22 @@ pub struct Child {
 impl ChildStdin {
     /// Write `s` to the child's stdin. Returns bytes written. Use `close()`
     /// to send EOF.
+    ///
+    /// ```glide
+    /// child.stdin.write("input line\n");
+    /// child.stdin.close();   // signal EOF
+    /// ```
     pub fn write(self: *ChildStdin, s: string) -> !int {
         let n: int = __glide_pipe_write(self.handle, s, s.len());
         if n < 0 { return err("write to child stdin failed"); }
         return ok(n);
     }
     /// Close the stdin pipe, signaling EOF to the child. Idempotent.
+    ///
+    /// ```glide
+    /// child.stdin.write("data");
+    /// child.stdin.close();
+    /// ```
     pub fn close(self: *ChildStdin) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stdin failed"); }
         self.handle = 0 - 1;
@@ -938,6 +948,11 @@ impl ChildStdin {
 
 impl ChildStdout {
     /// Read up to `n` bytes from the child's stdout. Returns "" on EOF.
+    ///
+    /// ```glide
+    /// let r: !string = child.stdout.read(4096);
+    /// if r.ok && r.val.len() > 0 { print!(r.val); }
+    /// ```
     pub fn read(self: *ChildStdout, n: int) -> !string {
         let mut out: string = "";
         let got: int = __glide_pipe_read(self.handle, n, &mut out);
@@ -945,12 +960,22 @@ impl ChildStdout {
         return ok(out);
     }
     /// Read everything until EOF.
+    ///
+    /// ```glide
+    /// let r: !string = child.stdout.read_all();
+    /// if r.ok { println!("got", r.val.len(), "bytes"); }
+    /// ```
     pub fn read_all(self: *ChildStdout) -> !string {
         let mut out: string = "";
         let got: int = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stdout failed"); }
         return ok(out);
     }
+    /// Close the stdout pipe.
+    ///
+    /// ```glide
+    /// child.stdout.close();
+    /// ```
     pub fn close(self: *ChildStdout) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stdout failed"); }
         self.handle = 0 - 1;
@@ -958,18 +983,31 @@ impl ChildStdout {
 }
 
 impl ChildStderr {
+    /// Read up to `n` bytes from the child's stderr. Returns "" on EOF.
+    ///
+    /// ```glide
+    /// let r: !string = child.stderr.read(4096);
+    /// if r.ok && r.val.len() > 0 { eprintln(r.val); }
+    /// ```
     pub fn read(self: *ChildStderr, n: int) -> !string {
         let mut out: string = "";
         let got: int = __glide_pipe_read(self.handle, n, &mut out);
         if got < 0 { return err("read from child stderr failed"); }
         return ok(out);
     }
+    /// Read everything written to stderr until EOF.
+    ///
+    /// ```glide
+    /// let r: !string = child.stderr.read_all();
+    /// if r.ok && r.val.len() > 0 { eprintln(r.val); }
+    /// ```
     pub fn read_all(self: *ChildStderr) -> !string {
         let mut out: string = "";
         let got: int = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stderr failed"); }
         return ok(out);
     }
+    /// Close the stderr pipe.
     pub fn close(self: *ChildStderr) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stderr failed"); }
         self.handle = 0 - 1;
@@ -980,6 +1018,17 @@ impl Command {
     /// Create a builder for `program`. Args, env, cwd, stdin all default to
     /// "inherit"; output is forwarded to the parent's stdout/stderr unless a
     /// `capture_*` method is called.
+    ///
+    /// ```glide
+    /// // Run `git rev-parse HEAD`, capture stdout, parse the SHA.
+    /// let cmd: *Command = Command::new("git");
+    /// cmd.arg("rev-parse").arg("HEAD").capture_out();
+    /// let r: !ProcessResult = cmd.run();
+    /// if r.ok {
+    ///     let sha: string = r.val.stdout.trim();
+    ///     println!("HEAD =", sha);
+    /// }
+    /// ```
     pub fn new(program: string) -> *Command {
         let c: *Command = malloc(sizeof(Command)) as *Command;
         c.program = program;
@@ -992,9 +1041,19 @@ impl Command {
     }
 
     /// Add a single positional argument.
+    ///
+    /// ```glide
+    /// Command::new("ls").arg("-la").arg("/tmp").run();
+    /// ```
     pub fn arg(self: *Command, a: string) -> *Command { self.args.push(a); return self; }
 
     /// Add multiple positional arguments at once.
+    ///
+    /// ```glide
+    /// let extras: *Vector<string> = Vector::new();
+    /// extras.push_all!("--verbose", "input.txt");
+    /// Command::new("tool").args(extras).run();
+    /// ```
     pub fn args(self: *Command, vs: *Vector<string>) -> *Command {
         for let i: int = 0; i < vs.len(); i++ { self.args.push(vs.get(i)); }
         return self;
@@ -1003,6 +1062,10 @@ impl Command {
     /// Set an environment variable for the child. The child's env is the
     /// parent's env with these overrides applied — call `.env_clear()` first
     /// if you want only the explicitly-set vars to reach the child.
+    ///
+    /// ```glide
+    /// Command::new("python").env("PYTHONUNBUFFERED", "1").arg("script.py").run();
+    /// ```
     pub fn env(self: *Command, key: string, value: string) -> *Command {
         self.env_kv.push(key.concat("=").concat(value));
         return self;
@@ -1012,43 +1075,124 @@ impl Command {
     /// only the vars set via `.env(k, v)` reach the child. Useful for
     /// reproducible builds, sandboxing, or when the parent env contains
     /// keys you don't want leaking into the subprocess.
+    ///
+    /// ```glide
+    /// // Sandbox: only PATH and LANG reach the child.
+    /// Command::new("build")
+    ///     .env_clear()
+    ///     .env("PATH", "/usr/bin:/bin")
+    ///     .env("LANG", "C.UTF-8")
+    ///     .run();
+    /// ```
     pub fn env_clear(self: *Command) -> *Command {
         self.flags = self.flags | 4;
         return self;
     }
 
     /// Set the working directory for the child. Default is the parent's cwd.
+    ///
+    /// ```glide
+    /// Command::new("git").arg("status").cwd("/tmp/repo").run();
+    /// ```
     pub fn cwd(self: *Command, path: string) -> *Command { self.cwd_path = path; return self; }
 
     /// Pipe `s` to the child's stdin. The pipe is closed once `s` is fully
     /// written, signaling EOF to the child.
+    ///
+    /// ```glide
+    /// // Pipe data through `wc -l`.
+    /// let cmd: *Command = Command::new("wc");
+    /// cmd.arg("-l").stdin_str("a\nb\nc\n").capture_out();
+    /// let r: !ProcessResult = cmd.run();
+    /// if r.ok { println!(r.val.stdout.trim()); }   // "3"
+    /// ```
     pub fn stdin_str(self: *Command, s: string) -> *Command { self.stdin_payload = s; return self; }
 
     /// Capture stdout into the returned `ProcessResult.stdout`.
+    ///
+    /// ```glide
+    /// let cmd: *Command = Command::new("uname");
+    /// cmd.arg("-a").capture_out();
+    /// let r: !ProcessResult = cmd.run();
+    /// if r.ok { println!(r.val.stdout.trim()); }
+    /// ```
     pub fn capture_out(self: *Command) -> *Command { self.flags = self.flags | 1; return self; }
 
     /// Capture stderr into the returned `ProcessResult.stderr`.
+    ///
+    /// ```glide
+    /// let cmd: *Command = Command::new("gcc");
+    /// cmd.arg("missing.c").capture_err();
+    /// let r: !ProcessResult = cmd.run();
+    /// if r.ok && r.val.exit_code != 0 { eprintln(r.val.stderr); }
+    /// ```
     pub fn capture_err(self: *Command) -> *Command { self.flags = self.flags | 2; return self; }
 
     /// Capture both stdout and stderr.
+    ///
+    /// ```glide
+    /// let r: !ProcessResult = Command::new("cargo").arg("build").capture().run();
+    /// if r.ok && r.val.exit_code != 0 {
+    ///     println!("out:", r.val.stdout);
+    ///     eprintln(r.val.stderr);
+    /// }
+    /// ```
     pub fn capture(self: *Command) -> *Command { self.flags = self.flags | 3; return self; }
 
     /// Request a live pipe for the child's stdin, returned as `Child.stdin`
     /// after `spawn()`. Use it with `child.stdin.write(s)` and `.close()`.
     /// Only honored by `spawn()` — `run()` uses `stdin_str` instead.
+    ///
+    /// ```glide
+    /// let cmd: *Command = Command::new("cat").pipe_stdin().pipe_stdout();
+    /// let r: !Child = cmd.spawn();
+    /// if r.ok {
+    ///     r.val.stdin.write("hi\n");
+    ///     r.val.stdin.close();
+    ///     let s: !string = r.val.stdout.read_all();
+    ///     if s.ok { println!(s.val); }
+    ///     r.val.wait();
+    /// }
+    /// ```
     pub fn pipe_stdin(self: *Command) -> *Command { self.flags = self.flags | 8; return self; }
 
     /// Request a live pipe for the child's stdout. Read with
     /// `child.stdout.read(n)` or `.read_all()`.
+    ///
+    /// ```glide
+    /// let r: !Child = Command::new("ls").pipe_stdout().spawn();
+    /// if r.ok {
+    ///     let lines: !string = r.val.stdout.read_all();
+    ///     if lines.ok { println!(lines.val); }
+    ///     r.val.wait();
+    /// }
+    /// ```
     pub fn pipe_stdout(self: *Command) -> *Command { self.flags = self.flags | 16; return self; }
 
     /// Request a live pipe for the child's stderr.
+    ///
+    /// ```glide
+    /// let r: !Child = Command::new("rustc").arg("--bad-flag").pipe_stderr().spawn();
+    /// if r.ok {
+    ///     let e: !string = r.val.stderr.read_all();
+    ///     if e.ok { eprintln(e.val); }
+    ///     r.val.wait();
+    /// }
+    /// ```
     pub fn pipe_stderr(self: *Command) -> *Command { self.flags = self.flags | 32; return self; }
 
     /// Run the command synchronously. Blocks until the child exits.
     /// Returns `Err` only if the spawn itself failed (program not found,
     /// fork/CreateProcess error). Non-zero exit codes are reported via
     /// `ProcessResult.exit_code`, NOT as `Err`.
+    ///
+    /// ```glide
+    /// let r: !ProcessResult = Command::new("echo").arg("hi").capture_out().run();
+    /// if r.ok {
+    ///     println!("exit:", r.val.exit_code);
+    ///     println!("out:",  r.val.stdout.trim());   // "hi"
+    /// }
+    /// ```
     pub fn run(self: *Command) -> !ProcessResult {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
@@ -1082,6 +1226,16 @@ impl Command {
     /// `.wait()` and `.kill(sig)` methods control the running process.
     /// stdin/stdout/stderr inherit the parent's by default — capture flags
     /// and stdin_str are ignored on this path (pipe-streaming Child is v2).
+    ///
+    /// ```glide
+    /// let r: !Child = Command::new("sleep").arg("60").spawn();
+    /// if r.ok {
+    ///     println!("pid:", r.val.pid);
+    ///     // ...do other work...
+    ///     r.val.kill(9);   // SIGKILL on POSIX, TerminateProcess on Win
+    ///     r.val.wait();
+    /// }
+    /// ```
     pub fn spawn(self: *Command) -> !Child {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
@@ -1142,6 +1296,14 @@ impl Command {
         return ok(c);
     }
 
+    /// Release the Command builder (args + env_kv vectors and the struct).
+    /// Pair with `defer` for leak-free use.
+    ///
+    /// ```glide
+    /// let cmd: *Command = Command::new("echo");
+    /// defer cmd.free();
+    /// cmd.arg("hi").run();
+    /// ```
     pub fn free(self: *Command) {
         if self.args != null { self.args.free(); }
         if self.env_kv != null { self.env_kv.free(); }
@@ -1152,6 +1314,14 @@ impl Command {
 impl Child {
     /// Block until the child exits and collect its result. Output streams are
     /// not captured by spawn(), so `stdout` / `stderr` will be empty.
+    ///
+    /// ```glide
+    /// let r: !Child = Command::new("true").spawn();
+    /// if r.ok {
+    ///     let res: !ProcessResult = r.val.wait();
+    ///     if res.ok { println!("exited", res.val.exit_code); }
+    /// }
+    /// ```
     pub fn wait(self: *Child) -> !ProcessResult {
         let mut exit_code: int = 0;
         let mut signaled:  int = 0;
@@ -1167,6 +1337,11 @@ impl Child {
 
     /// Send signal `sig` to the child. POSIX: passes through to `kill(pid, sig)`.
     /// Windows: ignores `sig` and calls `TerminateProcess` (forces exit).
+    ///
+    /// ```glide
+    /// child.kill(15);   // SIGTERM (POSIX); ignored arg on Windows
+    /// child.wait();
+    /// ```
     pub fn kill(self: *Child, sig: int) -> ! {
         if __glide_proc_kill(self.pid, sig) != 0 { return err("kill failed"); }
     }
@@ -1178,12 +1353,21 @@ impl Child {
 
 /// Send signal `sig` to PID. POSIX: kill(pid, sig). Windows: TerminateProcess
 /// (sig is ignored).
+///
+/// ```glide
+/// let r: ! = process_kill(1234, 15);   // SIGTERM
+/// if !r.ok { eprintln(r.err); }
+/// ```
 pub fn process_kill(pid: int, sig: int) -> ! {
     if __glide_proc_kill(pid, sig) != 0 { return err("kill failed"); }
 }
 
 /// `true` if a process with this PID is alive. POSIX: `kill(pid, 0)`. Windows:
 /// `OpenProcess` + `GetExitCodeProcess(STILL_ACTIVE)`.
+///
+/// ```glide
+/// if process_exists(1234) { println!("still running"); }
+/// ```
 pub fn process_exists(pid: int) -> bool {
     return __glide_proc_exists(pid) != 0;
 }

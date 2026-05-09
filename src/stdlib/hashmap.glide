@@ -62,10 +62,24 @@ impl<V> HashMap<V> {
     }
 
     /// Number of live entries currently held.
+    ///
+    /// ```glide
+    /// let m: *HashMap<int> = HashMap::new();  defer m.free();
+    /// m.insert("a", 1);
+    /// m.insert("b", 2);
+    /// m.len();   // 2
+    /// ```
     fn len(self: *HashMap<V>) -> int { return self.len; }
 
     /// Allocated slot count (always a power of two once non-zero). Useful
     /// for diagnostics; most callers want `len()` instead.
+    ///
+    /// ```glide
+    /// let m: *HashMap<int> = HashMap::new();
+    /// m.cap();              // 0   (no allocation yet)
+    /// m.insert("a", 1);
+    /// m.cap();              // 8   (initial table size)
+    /// ```
     fn cap(self: *HashMap<V>) -> int { return self.cap; }
 
     /// Internal: hash a string with the classic 31x multiply-add. Folds the
@@ -215,11 +229,24 @@ impl<V> HashMap<V> {
     }
 
     /// `true` when the map holds zero entries.
+    ///
+    /// ```glide
+    /// let m: *HashMap<int> = HashMap::new();
+    /// m.is_empty();          // true
+    /// m.insert("a", 1);
+    /// m.is_empty();          // false
+    /// ```
     fn is_empty(self: *HashMap<V>) -> bool { return self.len == 0; }
 
     /// Snapshot every live key into a fresh Vector. Order is the slot
     /// order, which is unspecified relative to insertion order. The
     /// returned Vector is heap- or arena-allocated like any other.
+    ///
+    /// ```glide
+    /// m.insert("a", 1); m.insert("b", 2);
+    /// let ks: *Vector<string> = m.keys();
+    /// for let i: int = 0; i < ks.len(); i++ { println!(ks.get(i)); }
+    /// ```
     fn keys(self: *HashMap<V>) -> *Vector<string> {
         let out: *Vector<string> = Vector::new();
         for let i: int = 0; i < self.cap; i++ {
@@ -231,6 +258,12 @@ impl<V> HashMap<V> {
     /// Snapshot every live value into a fresh Vector. Same slot order as
     /// `keys()` so paired iteration via index is meaningful within a
     /// single moment in time.
+    ///
+    /// ```glide
+    /// m.insert("a", 1); m.insert("b", 2);
+    /// let vs: *Vector<int> = m.values();
+    /// vs.sum();    // 3
+    /// ```
     fn values(self: *HashMap<V>) -> *Vector<V> {
         let out: *Vector<V> = Vector::new();
         for let i: int = 0; i < self.cap; i++ {
@@ -241,6 +274,13 @@ impl<V> HashMap<V> {
 
     /// Apply `f` to every value, producing a new HashMap with the same
     /// keys and the transformed values. The original map is unchanged.
+    ///
+    /// ```glide
+    /// fn square(x: int) -> int { return x * x; }
+    /// m.insert("a", 2); m.insert("b", 3);
+    /// let m2: *HashMap<int> = m.map_values(square);
+    /// m2.get("b");   // 9
+    /// ```
     fn map_values<U>(self: *HashMap<V>, f: fn(V) -> U) -> *HashMap<U> {
         let out: *HashMap<U> = HashMap::new();
         for let i: int = 0; i < self.cap; i++ {
@@ -255,6 +295,15 @@ impl<V> HashMap<V> {
     /// matches `keys()` / `values()` (slot order). Each pair is heap
     /// allocated; calling `.free()` on the Vector reclaims the slots
     /// but not the pairs — drop them explicitly if needed.
+    ///
+    /// ```glide
+    /// m.insert("a", 1); m.insert("b", 2);
+    /// let es: *Vector<*Pair<string, int>> = m.entries();
+    /// for let i: int = 0; i < es.len(); i++ {
+    ///     let p: *Pair<string, int> = es.get(i);
+    ///     println!(p.first, "->", p.second);
+    /// }
+    /// ```
     fn entries(self: *HashMap<V>) -> *Vector<*Pair<string, V>> {
         let out: *Vector<*Pair<string, V>> = Vector::new();
         for let i: int = 0; i < self.cap; i++ {
@@ -267,6 +316,13 @@ impl<V> HashMap<V> {
 
     /// Drop every entry. Capacity is preserved so subsequent inserts don't
     /// re-allocate.
+    ///
+    /// ```glide
+    /// m.insert("a", 1); m.insert("b", 2);
+    /// m.clear();
+    /// m.len();         // 0
+    /// m.is_empty();    // true
+    /// ```
     fn clear(self: *HashMap<V>) {
         for let i: int = 0; i < self.cap; i++ {
             self.occupied[i] = false;

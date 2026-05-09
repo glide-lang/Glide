@@ -21,6 +21,12 @@ pub struct Pair<K, V> {
 
 impl<K, V> Pair<K, V> {
     /// Build a heap-allocated Pair. Caller owns the result.
+    ///
+    /// ```glide
+    /// let p: *Pair<int, string> = Pair::new(42, "answer");
+    /// p.first;     // 42
+    /// p.second;    // "answer"
+    /// ```
     pub fn new(first: K, second: V) -> *Pair<K, V> {
         let p: *Pair<K, V> = malloc(sizeof(Pair<K, V>)) as *Pair<K, V>;
         p.first = first;

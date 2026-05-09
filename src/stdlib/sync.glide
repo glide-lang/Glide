@@ -156,6 +156,11 @@ pub struct Mutex<T> {
 
 impl<T> Mutex<T> {
     /// Build a fresh mutex wrapping `initial`. The mutex starts unlocked.
+    ///
+    /// ```glide
+    /// let m: *Mutex<int> = Mutex::new(0);
+    /// defer m.free();
+    /// ```
     pub fn new(initial: T) -> *Mutex<T> {
         let m: *Mutex<T> = malloc(sizeof(Mutex<T>)) as *Mutex<T>;
         m.inner = initial;
@@ -164,21 +169,50 @@ impl<T> Mutex<T> {
     }
 
     /// Acquire the lock, blocking until available.
+    ///
+    /// ```glide
+    /// m.lock();
+    /// m.set(m.get() + 1);
+    /// m.unlock();
+    /// ```
     pub fn lock(self: *Mutex<T>) { __glide_mutex_lock(self.handle); }
 
     /// Release the lock. Calling without holding the lock is UB.
+    ///
+    /// ```glide
+    /// m.lock();
+    /// // ...mutate...
+    /// m.unlock();
+    /// ```
     pub fn unlock(self: *Mutex<T>) { __glide_mutex_unlock(self.handle); }
 
     /// Read the inner value. Caller must hold the lock.
+    ///
+    /// ```glide
+    /// m.lock();
+    /// let v: int = m.get();
+    /// m.unlock();
+    /// ```
     pub fn get(self: *Mutex<T>) -> T { return self.inner; }
 
     /// Write the inner value. Caller must hold the lock.
+    ///
+    /// ```glide
+    /// m.lock();
+    /// m.set(42);
+    /// m.unlock();
+    /// ```
     pub fn set(self: *Mutex<T>, v: T) { self.inner = v; }
 
     /// Run `f(&inner)` while holding the lock and return its result.
     /// `f` may read or mutate the inner value via the pointer; the lock
     /// is released even if `f` returns abnormally (the runtime doesn't
     /// support unwinding yet, so this currently means a normal return).
+    ///
+    /// ```glide
+    /// fn bump(p: *int) -> int { *p = *p + 1; return *p; }
+    /// let after: int = m.with(bump);
+    /// ```
     pub fn with<U>(self: *Mutex<T>, f: fn(*T) -> U) -> U {
         __glide_mutex_lock(self.handle);
         let r: U = f(&self.inner);
@@ -187,7 +221,12 @@ impl<T> Mutex<T> {
     }
 
     /// Release the underlying pthread mutex and free the wrapper. The
-    /// pointer is dangling after this call.
+    /// pointer is dangling after this call. Pair with `defer`.
+    ///
+    /// ```glide
+    /// let m: *Mutex<int> = Mutex::new(0);
+    /// defer m.free();
+    /// ```
     pub fn free(self: *Mutex<T>) {
         __glide_mutex_destroy(self.handle);
         free(self as *void);
@@ -206,6 +245,11 @@ pub struct Atomic {
 
 impl Atomic {
     /// Build a new atomic initialised to `initial`.
+    ///
+    /// ```glide
+    /// let a: *Atomic = Atomic::new(0);
+    /// defer a.free();
+    /// ```
     pub fn new(initial: i64) -> *Atomic {
         let a: *Atomic = malloc(sizeof(Atomic)) as *Atomic;
         a.handle = __glide_atomic_new(initial);
@@ -213,13 +257,25 @@ impl Atomic {
     }
 
     /// Load the current value. Sequentially consistent.
+    ///
+    /// ```glide
+    /// let v: i64 = a.load();
+    /// ```
     pub fn load(self: *Atomic) -> i64 { return __glide_atomic_load(self.handle); }
 
     /// Store `v`. Sequentially consistent.
+    ///
+    /// ```glide
+    /// a.store(42);
+    /// ```
     pub fn store(self: *Atomic, v: i64) { __glide_atomic_store(self.handle, v); }
 
     /// Add `delta` and return the *previous* value. Use with `delta=1`
     /// for a counter increment that also surfaces the prior count.
+    ///
+    /// ```glide
+    /// let prev: i64 = a.add(1);   // unique-id seed pattern
+    /// ```
     pub fn add(self: *Atomic, delta: i64) -> i64 {
         return __glide_atomic_add(self.handle, delta);
     }
@@ -227,11 +283,21 @@ impl Atomic {
     /// Compare-and-swap. If current value equals `expected`, replace it
     /// with `desired` and return `true`; otherwise leave it and return
     /// `false`. Sequentially consistent on both success and failure.
+    ///
+    /// ```glide
+    /// // Take a one-shot lock: only the first caller succeeds.
+    /// if a.cas(0, 1) { /* I won the race, do init work */ }
+    /// ```
     pub fn cas(self: *Atomic, expected: i64, desired: i64) -> bool {
         return __glide_atomic_cas(self.handle, expected, desired) != 0;
     }
 
     /// Free the wrapper. Pointer is dangling afterwards.
+    ///
+    /// ```glide
+    /// let a: *Atomic = Atomic::new(0);
+    /// defer a.free();
+    /// ```
     pub fn free(self: *Atomic) {
         __glide_atomic_destroy(self.handle);
         free(self as *void);
@@ -252,6 +318,14 @@ pub struct WaitGroup {
 
 impl WaitGroup {
     /// Build an empty wait group with counter zero.
+    ///
+    /// ```glide
+    /// let wg: *WaitGroup = WaitGroup::new();
+    /// defer wg.free();
+    /// wg.add(3);
+    /// for let i: int = 0; i < 3; i++ { spawn worker(wg); }
+    /// wg.wait();
+    /// ```
     pub fn new() -> *WaitGroup {
         let w: *WaitGroup = malloc(sizeof(WaitGroup)) as *WaitGroup;
         w.handle = __glide_wg_new();
@@ -260,17 +334,37 @@ impl WaitGroup {
 
     /// Increase the counter by `n`. Pass a positive number; `done()` is
     /// the standard way to decrement.
+    ///
+    /// ```glide
+    /// wg.add(3);   // expect 3 done() calls before wait() returns
+    /// ```
     pub fn add(self: *WaitGroup, n: int) { __glide_wg_add(self.handle, n); }
 
     /// Decrement the counter by one. When it hits zero, every blocked
     /// `wait()` call returns.
+    ///
+    /// ```glide
+    /// fn worker(wg: *WaitGroup) {
+    ///     defer wg.done();
+    ///     // ...do work...
+    /// }
+    /// ```
     pub fn done(self: *WaitGroup) { __glide_wg_add(self.handle, 0 - 1); }
 
     /// Block until the counter reaches zero. Returns immediately if it
     /// already is.
+    ///
+    /// ```glide
+    /// wg.wait();   // all spawned workers have finished
+    /// ```
     pub fn wait(self: *WaitGroup) { __glide_wg_wait(self.handle); }
 
     /// Free the wrapper. Pointer is dangling afterwards.
+    ///
+    /// ```glide
+    /// let wg: *WaitGroup = WaitGroup::new();
+    /// defer wg.free();
+    /// ```
     pub fn free(self: *WaitGroup) {
         __glide_wg_destroy(self.handle);
         free(self as *void);

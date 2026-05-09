@@ -224,40 +224,81 @@ pub struct Duration {
     !nanos: i64,
 }
 
+// Duration is a span of time as exact nanoseconds (no month/year
+// arithmetic). The `from_*` / `as_*` family is the primary API;
+// arithmetic methods produce new Durations.
+//
+// ```glide
+// let d: Duration = Duration::from_secs(90);
+// d.as_minutes();                 // 1
+// d.as_millis();                  // 90000
+// d.add(Duration::from_secs(30)); // 120s
+// d.is_positive();                // true
+// ```
 impl Duration {
+    /// Zero Duration (useful as the seed for sums).
     pub fn zero() -> Duration { return Duration { nanos: 0 }; }
 
+    /// `n` nanoseconds.
     pub fn from_nanos(n: i64)   -> Duration { return Duration { nanos: n }; }
+    /// `n` microseconds.
     pub fn from_micros(n: i64)  -> Duration { return Duration { nanos: n * NANOS_PER_MICRO }; }
+    /// `n` milliseconds.
     pub fn from_millis(n: i64)  -> Duration { return Duration { nanos: n * NANOS_PER_MILLI }; }
+    /// `n` seconds.
     pub fn from_secs(n: i64)    -> Duration { return Duration { nanos: n * NANOS_PER_SEC }; }
+    /// `n` minutes.
     pub fn from_minutes(n: i64) -> Duration { return Duration { nanos: n * NANOS_PER_MIN }; }
+    /// `n` hours.
     pub fn from_hours(n: i64)   -> Duration { return Duration { nanos: n * NANOS_PER_HOUR }; }
+    /// `n` days (24 × 60 × 60 s — no DST adjustment).
     pub fn from_days(n: i64)    -> Duration { return Duration { nanos: n * NANOS_PER_DAY }; }
 
+    /// Total nanoseconds (the underlying field).
     pub fn as_nanos(self: Duration)   -> i64 { return self.nanos; }
+    /// Total microseconds, truncating sub-microsecond fraction.
     pub fn as_micros(self: Duration)  -> i64 { return self.nanos / NANOS_PER_MICRO; }
+    /// Total milliseconds, truncating sub-millisecond fraction.
     pub fn as_millis(self: Duration)  -> i64 { return self.nanos / NANOS_PER_MILLI; }
+    /// Total seconds, truncating sub-second fraction.
     pub fn as_secs(self: Duration)    -> i64 { return self.nanos / NANOS_PER_SEC; }
+    /// Total minutes, truncating sub-minute fraction.
     pub fn as_minutes(self: Duration) -> i64 { return self.nanos / NANOS_PER_MIN; }
+    /// Total hours, truncating sub-hour fraction.
     pub fn as_hours(self: Duration)   -> i64 { return self.nanos / NANOS_PER_HOUR; }
+    /// Total days, truncating sub-day fraction.
     pub fn as_days(self: Duration)    -> i64 { return self.nanos / NANOS_PER_DAY; }
 
+    /// `self + other`.
     pub fn add(self: Duration, other: Duration)  -> Duration { return Duration { nanos: self.nanos + other.nanos }; }
+    /// `self - other` (may produce a negative Duration).
     pub fn sub(self: Duration, other: Duration)  -> Duration { return Duration { nanos: self.nanos - other.nanos }; }
+    /// `self * factor`.
     pub fn mul(self: Duration, factor: i64)      -> Duration { return Duration { nanos: self.nanos * factor }; }
+    /// `-self`.
     pub fn neg(self: Duration)                    -> Duration { return Duration { nanos: -self.nanos }; }
 
+    /// `true` for zero Duration.
     pub fn is_zero(self: Duration)     -> bool { return self.nanos == 0; }
+    /// `true` for strictly positive Duration.
     pub fn is_positive(self: Duration) -> bool { return self.nanos > 0; }
+    /// `true` for strictly negative Duration.
     pub fn is_negative(self: Duration) -> bool { return self.nanos < 0; }
 
+    /// `self < other`.
     pub fn before(self: Duration, other: Duration) -> bool { return self.nanos <  other.nanos; }
+    /// `self > other`.
     pub fn after(self: Duration, other: Duration)  -> bool { return self.nanos >  other.nanos; }
+    /// `self == other`.
     pub fn equal(self: Duration, other: Duration)  -> bool { return self.nanos == other.nanos; }
 
     /// Render as `<H>h <M>m <S>s.<ms>`. Always positive; sign moves to a
     /// leading `-` if the duration is negative.
+    ///
+    /// ```glide
+    /// Duration::from_secs(3725).to_string();   // "1h 2m 5s"
+    /// Duration::from_millis(1500).to_string(); // "1.50s"
+    /// ```
     pub fn to_string(self: Duration) -> string {
         let mut total: i64 = self.nanos;
         let mut prefix: string = "";
@@ -287,6 +328,13 @@ impl Duration {
 // ---- Weekday + Month accessors -----------------------------------------
 
 impl Weekday {
+    /// Convert a numeric weekday to the typed enum (Sunday=0, Saturday=6).
+    /// Out-of-range values wrap with Euclidean modulo.
+    ///
+    /// ```glide
+    /// Weekday::from_int(0).short_name();   // "Sun"
+    /// Weekday::from_int(5).short_name();   // "Fri"
+    /// ```
     pub fn from_int(n: int) -> Weekday {
         let m: int = ((n % 7) + 7) % 7;
         if m == 0 { return Weekday::Sunday(); }
@@ -297,6 +345,11 @@ impl Weekday {
         if m == 5 { return Weekday::Friday(); }
         return Weekday::Saturday();
     }
+    /// Full English weekday name.
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).weekday().name();   // "Friday"
+    /// ```
     pub fn name(self: Weekday) -> string {
         match self {
             Sunday    => { return "Sunday"; }
@@ -308,6 +361,11 @@ impl Weekday {
             Saturday  => { return "Saturday"; }
         }
     }
+    /// 3-letter English weekday abbreviation.
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).weekday().short_name();   // "Fri"
+    /// ```
     pub fn short_name(self: Weekday) -> string {
         match self {
             Sunday    => { return "Sun"; }
@@ -322,6 +380,12 @@ impl Weekday {
 }
 
 impl Month {
+    /// Convert a 1..12 numeric month to the typed enum.
+    /// Out-of-range values clamp toward the boundary.
+    ///
+    /// ```glide
+    /// Month::from_int(5).short_name();   // "May"
+    /// ```
     pub fn from_int(n: int) -> Month {
         let m: int = n - 1;
         if m == 0  { return Month::January(); }
@@ -338,6 +402,10 @@ impl Month {
         return Month::December();
     }
     /// Conventional 1..12.
+    ///
+    /// ```glide
+    /// Month::December().to_int();   // 12
+    /// ```
     pub fn to_int(self: Month) -> int {
         match self {
             January   => { return 1; }
@@ -354,6 +422,11 @@ impl Month {
             December  => { return 12; }
         }
     }
+    /// Full English month name.
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).month().name();   // "May"
+    /// ```
     pub fn name(self: Month) -> string {
         match self {
             January   => { return "January"; }
@@ -370,6 +443,11 @@ impl Month {
             December  => { return "December"; }
         }
     }
+    /// 3-letter English month abbreviation.
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).month().short_name();   // "May"
+    /// ```
     pub fn short_name(self: Month) -> string {
         match self {
             January   => { return "Jan"; }
@@ -386,6 +464,13 @@ impl Month {
             December  => { return "Dec"; }
         }
     }
+    /// Number of days in this month for a given Gregorian year (handles
+    /// leap years for February).
+    ///
+    /// ```glide
+    /// Month::February().days(2024);   // 29  (leap)
+    /// Month::February().days(2025);   // 28
+    /// ```
     pub fn days(self: Month, year: int) -> int {
         return _days_in_month(year, self.to_int());
     }
@@ -430,17 +515,34 @@ impl Time {
         return Time { unix_nanos: __time_wall_nanos(), tz_offset_min: 0 };
     }
 
+    /// Build a UTC Time from a Unix-epoch timestamp in seconds.
+    ///
+    /// ```glide
+    /// let t: Time = Time::from_unix(1735689600);   // 2025-01-01T00:00:00Z
+    /// ```
     pub fn from_unix(secs: i64) -> Time {
         return Time { unix_nanos: secs * NANOS_PER_SEC, tz_offset_min: 0 };
     }
+    /// Build a UTC Time from a Unix-epoch timestamp in milliseconds.
+    ///
+    /// ```glide
+    /// let t: Time = Time::from_unix_millis(1735689600000);
+    /// ```
     pub fn from_unix_millis(ms: i64) -> Time {
         return Time { unix_nanos: ms * NANOS_PER_MILLI, tz_offset_min: 0 };
     }
+    /// Build a UTC Time from a Unix-epoch timestamp in nanoseconds.
+    /// Highest-precision constructor.
     pub fn from_unix_nanos(ns: i64) -> Time {
         return Time { unix_nanos: ns, tz_offset_min: 0 };
     }
 
     /// Construct UTC midnight on the given civil date.
+    ///
+    /// ```glide
+    /// let d: Time = Time::from_date(2026, 5, 8);
+    /// d.rfc3339();   // "2026-05-08T00:00:00Z"
+    /// ```
     pub fn from_date(year: int, month: int, day: int) -> Time {
         let days: int = _days_from_civil(year, month, day);
         let secs: i64 = (days as i64) * SECS_PER_DAY;
@@ -467,10 +569,25 @@ impl Time {
 
     // ---- raw accessors ----
 
+    /// Seconds since the Unix epoch.
+    ///
+    /// ```glide
+    /// Time::from_date(1970, 1, 2).unix();   // 86400
+    /// ```
     pub fn unix(self: Time)        -> i64 { return self.unix_nanos / NANOS_PER_SEC; }
+    /// Milliseconds since the Unix epoch.
     pub fn unix_millis(self: Time) -> i64 { return self.unix_nanos / NANOS_PER_MILLI; }
+    /// Microseconds since the Unix epoch.
     pub fn unix_micros(self: Time) -> i64 { return self.unix_nanos / NANOS_PER_MICRO; }
+    /// Nanoseconds since the Unix epoch (the underlying field).
     pub fn unix_nanos(self: Time)  -> i64 { return self.unix_nanos; }
+    /// Timezone offset in minutes east of UTC. `0` for any UTC Time;
+    /// non-zero for `Time::now()` outside the UTC zone.
+    ///
+    /// ```glide
+    /// Time::now_utc().tz_offset();   // 0
+    /// // Time::now() in São Paulo (-03:00) returns -180.
+    /// ```
     pub fn tz_offset(self: Time)   -> int { return self.tz_offset_min; }
 
     // ---- civil components (computed in the time's own tz) ----
@@ -482,33 +599,64 @@ impl Time {
         return _mod_floor_i64(self._local_secs(), SECS_PER_DAY) as int;
     }
 
+    /// Civil year in the time's own timezone (4-digit; negative for BCE).
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).year();   // 2026
+    /// ```
     pub fn year(self: Time) -> int {
         let days: int = _div_floor_i64(self._local_secs(), SECS_PER_DAY) as int;
         let mut y: int = 0; let mut m: int = 0; let mut d: int = 0;
         _civil_from_days(days, &mut y, &mut m, &mut d);
         return y;
     }
+    /// Civil month as 1..12.
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).month_int();   // 5
+    /// ```
     pub fn month_int(self: Time) -> int {
         let days: int = _div_floor_i64(self._local_secs(), SECS_PER_DAY) as int;
         let mut y: int = 0; let mut m: int = 0; let mut d: int = 0;
         _civil_from_days(days, &mut y, &mut m, &mut d);
         return m;
     }
+    /// Civil day-of-month as 1..31.
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).day();   // 8
+    /// ```
     pub fn day(self: Time) -> int {
         let days: int = _div_floor_i64(self._local_secs(), SECS_PER_DAY) as int;
         let mut y: int = 0; let mut m: int = 0; let mut d: int = 0;
         _civil_from_days(days, &mut y, &mut m, &mut d);
         return d;
     }
+    /// Civil month as a typed `Month` enum (use `month_int` for the
+    /// 1..12 numeric form).
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).month().short_name();   // "May"
+    /// ```
     pub fn month(self: Time)   -> Month   { return Month::from_int(self.month_int()); }
+
+    /// Day of week (Sunday-first enum).
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).weekday().short_name();   // "Fri"
+    /// ```
     pub fn weekday(self: Time) -> Weekday {
         let days: int = _div_floor_i64(self._local_secs(), SECS_PER_DAY) as int;
         return Weekday::from_int(((days % 7) + 7 + 4) % 7);   // 1970-01-01 was Thursday
     }
 
+    /// 0..23.
     pub fn hour(self: Time)        -> int { return self._day_secs() / 3600; }
+    /// 0..59.
     pub fn minute(self: Time)      -> int { return (self._day_secs() / 60) % 60; }
+    /// 0..59 (60 only via `parse_rfc3339` for leap-second strings).
     pub fn second(self: Time)      -> int { return self._day_secs() % 60; }
+    /// Sub-second component, 0..999_999_999.
     pub fn nanosecond(self: Time)  -> int { return _mod_floor_i64(self.unix_nanos, NANOS_PER_SEC) as int; }
 
     /// 1..366
@@ -521,22 +669,54 @@ impl Time {
         return here - start + 1;
     }
 
+    /// `true` when this Time falls in a leap year.
+    ///
+    /// ```glide
+    /// Time::from_date(2024, 1, 1).is_leap_year();   // true
+    /// Time::from_date(2025, 1, 1).is_leap_year();   // false
+    /// ```
     pub fn is_leap_year(self: Time) -> bool { return _is_leap(self.year()); }
 
     // ---- queries ----
 
+    /// `true` if `self` is strictly earlier than `other`.
+    ///
+    /// ```glide
+    /// let a: Time = Time::from_date(2026, 1, 1);
+    /// let b: Time = Time::from_date(2026, 5, 8);
+    /// a.before(b);   // true
+    /// ```
     pub fn before(self: Time, other: Time) -> bool { return self.unix_nanos <  other.unix_nanos; }
+    /// `true` if `self` is strictly later than `other`.
     pub fn after(self: Time, other: Time)  -> bool { return self.unix_nanos >  other.unix_nanos; }
+    /// `true` if `self` and `other` represent the same instant
+    /// (timezone offset is ignored).
     pub fn equal(self: Time, other: Time)  -> bool { return self.unix_nanos == other.unix_nanos; }
 
     // ---- arithmetic ----
 
+    /// Add a Duration; tz offset is preserved.
+    ///
+    /// ```glide
+    /// let t: Time = Time::from_date(2026, 5, 8).add(Duration::from_hours(6));
+    /// ```
     pub fn add(self: Time, d: Duration) -> Time {
         return Time { unix_nanos: self.unix_nanos + d.nanos, tz_offset_min: self.tz_offset_min };
     }
+    /// Subtract a Duration; tz offset is preserved.
+    ///
+    /// ```glide
+    /// let earlier: Time = Time::now().sub(Duration::from_minutes(30));
+    /// ```
     pub fn sub(self: Time, d: Duration) -> Time {
         return Time { unix_nanos: self.unix_nanos - d.nanos, tz_offset_min: self.tz_offset_min };
     }
+    /// `self - other` as a Duration (may be negative).
+    ///
+    /// ```glide
+    /// let d: Duration = Time::now().diff(start);
+    /// println!(d.as_millis(), "ms elapsed");
+    /// ```
     pub fn diff(self: Time, other: Time) -> Duration {
         return Duration { nanos: self.unix_nanos - other.unix_nanos };
     }
@@ -560,21 +740,43 @@ impl Time {
 
     // ---- timezone transforms ----
 
+    /// Return the same instant viewed in UTC (drops the tz offset).
+    ///
+    /// ```glide
+    /// let utc: Time = Time::now().to_utc();
+    /// utc.tz_offset();   // 0
+    /// ```
     pub fn to_utc(self: Time)  -> Time { return Time { unix_nanos: self.unix_nanos, tz_offset_min: 0 }; }
+
+    /// Return the same instant rendered with `offset_min` minutes east
+    /// of UTC. Useful for emitting values in a fixed-offset timezone.
+    ///
+    /// ```glide
+    /// let jst: Time = Time::now().with_tz(540);    // UTC+09:00
+    /// let pst: Time = Time::now().with_tz(-480);   // UTC-08:00
+    /// ```
     pub fn with_tz(self: Time, offset_min: int) -> Time {
         return Time { unix_nanos: self.unix_nanos, tz_offset_min: offset_min };
     }
 
     // ---- formatting ----
 
-    /// "2024-01-15"
+    /// `YYYY-MM-DD`.
+    ///
+    /// ```glide
+    /// Time::from_date(2026, 5, 8).date_string();   // "2026-05-08"
+    /// ```
     pub fn date_string(self: Time) -> string {
         return _four_digit(self.year())
             .concat("-").concat(_two_digit(self.month_int()))
             .concat("-").concat(_two_digit(self.day()));
     }
 
-    /// "14:23:45"
+    /// `HH:MM:SS`.
+    ///
+    /// ```glide
+    /// Time::from_datetime(2026, 5, 8, 14, 23, 45).time_string();   // "14:23:45"
+    /// ```
     pub fn time_string(self: Time) -> string {
         return _two_digit(self.hour())
             .concat(":").concat(_two_digit(self.minute()))
@@ -582,6 +784,11 @@ impl Time {
     }
 
     /// RFC 3339 / ISO 8601: "2024-01-15T14:23:45Z" or "...+02:00".
+    ///
+    /// ```glide
+    /// Time::from_datetime(2026, 5, 8, 14, 23, 45).rfc3339();
+    /// // "2026-05-08T14:23:45Z"
+    /// ```
     pub fn rfc3339(self: Time) -> string {
         let mut tz: string = "Z";
         if self.tz_offset_min != 0 {
@@ -596,6 +803,10 @@ impl Time {
     }
 
     /// Default rendering = RFC 3339.
+    ///
+    /// ```glide
+    /// println!(Time::now_utc().to_string());   // "2026-05-08T..."
+    /// ```
     pub fn to_string(self: Time) -> string { return self.rfc3339(); }
 
     /// Format using a spec string with these placeholders:
@@ -745,6 +956,11 @@ impl Time {
     }
 
     /// Parse a bare date `YYYY-MM-DD` as UTC midnight.
+    ///
+    /// ```glide
+    /// let r: !Time = Time::parse_date("2026-05-08");
+    /// if r.ok { r.val.rfc3339(); }   // "2026-05-08T00:00:00Z"
+    /// ```
     pub fn parse_date(s: string) -> !Time {
         if s.len() != 10 { return err("parse_date: expected YYYY-MM-DD"); }
         let y: int = _read_digits(s, 0, 4);
@@ -842,6 +1058,16 @@ fn _tick_worker(c: chan<i64>, ms: int) {
 /// Spawn a coroutine that emits `now_ns()` on the returned chan every `d`.
 /// The coroutine runs forever — there's no `stop()` yet, so use this for
 /// process-lifetime tickers (heartbeats, periodic flushes, etc.).
+///
+/// ```glide
+/// let beat = tick(Duration::from_secs(5));
+/// loop {
+///     select! {
+///         t = beat.recv() => { flush_metrics(); }
+///         msg = work.recv() => { handle(msg); }
+///     }
+/// }
+/// ```
 pub fn tick(d: Duration) -> chan<i64> {
     let c: chan<i64> = make_chan(4);
     let mut ms: i64 = d.as_millis();
@@ -852,20 +1078,40 @@ pub fn tick(d: Duration) -> chan<i64> {
 
 // ---- legacy free-fn helpers (used by examples/benches) ----------------
 
+/// Monotonic-clock timestamp in nanoseconds. The Stopwatch struct wraps
+/// this; reach for it directly when you want a single-int handle.
+///
+/// ```glide
+/// let t0: i64 = time_now_ns();
+/// work();
+/// println!("ns:", time_now_ns() - t0);
+/// ```
 pub fn time_now_ns() -> i64 { return now_ns(); }
+/// Same as `time_now_ns` but in microseconds.
 pub fn time_now_us() -> i64 { return now_ns() / 1000; }
+/// Same as `time_now_ns` but in milliseconds.
 pub fn time_now_ms() -> i64 { return now_ns() / 1000000; }
 
+/// Nanoseconds elapsed since `start_ns`. Clamps to 0 if the monotonic
+/// clock somehow ran backwards (e.g. a debugger pause).
+///
+/// ```glide
+/// let t0: i64 = time_now_ns();
+/// work();
+/// println!(time_since_ns(t0), "ns");
+/// ```
 pub fn time_since_ns(start_ns: i64) -> i64 {
     let diff: i64 = now_ns() - start_ns;
     if diff < 0 { return 0; }
     return diff;
 }
+/// Microseconds elapsed since `start_ns`.
 pub fn time_since_us(start_ns: i64) -> i64 {
     let diff: i64 = (now_ns() - start_ns) / 1000;
     if diff < 0 { return 0; }
     return diff;
 }
+/// Milliseconds elapsed since `start_ns`.
 pub fn time_since_ms(start_ns: i64) -> i64 {
     let diff: i64 = (now_ns() - start_ns) / 1000000;
     if diff < 0 { return 0; }

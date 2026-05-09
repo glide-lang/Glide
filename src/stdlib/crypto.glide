@@ -290,6 +290,11 @@ extern fn __glide_sha1_hex_str(s: string) -> string;
 /// **Caveat:** treats `data` as a NUL-terminated cstring, so embedded
 /// NUL bytes truncate the input. Hash binary blobs with embedded NULs
 /// via a future `sha256_bytes(*ByteBuffer)` once that's wired.
+///
+/// ```glide
+/// let raw: string = sha256("hello");
+/// hex_encode(raw);   // 2cf24dba...8b9824 (32 bytes)
+/// ```
 pub fn sha256(data: string) -> string {
     return __glide_sha256_str(data);
 }
@@ -309,6 +314,11 @@ pub fn sha256_hex(data: string) -> string {
 ///
 /// Same NUL caveat as `sha256` — both `key` and `msg` are read until
 /// the first NUL. RFC 2104.
+///
+/// ```glide
+/// let mac: string = hmac_sha256("secret", "payload");
+/// hex_encode(mac);    // 32 raw bytes as hex
+/// ```
 pub fn hmac_sha256(key: string, msg: string) -> string {
     return __glide_hmac_sha256_str(key, msg);
 }
@@ -326,12 +336,22 @@ pub fn hmac_sha256_hex(key: string, msg: string) -> string {
 /// SHA-1 of `data`. Returns 20 raw bytes. **Cryptographically broken**
 /// — use only for legacy protocols that mandate SHA-1 (notably the
 /// RFC 6455 WebSocket handshake). For everything else, prefer SHA-256.
+///
+/// ```glide
+/// let raw: string = sha1("abc");
+/// hex_encode(raw);   // a9993e36...c9cd0d89 (20 bytes)
+/// ```
 pub fn sha1(data: string) -> string {
     return __glide_sha1_str(data);
 }
 
 /// SHA-1 of `data`, returned as 40 lowercase hex chars. Same caveat
 /// as `sha1`.
+///
+/// ```glide
+/// sha1_hex("");      // da39a3ee5e6b4b0d3255bfef95601890afd80709
+/// sha1_hex("abc");   // a9993e364706816aba3e25717850c26c9cd0d89d
+/// ```
 pub fn sha1_hex(data: string) -> string {
     return __glide_sha1_hex_str(data);
 }

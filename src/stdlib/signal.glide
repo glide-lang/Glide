@@ -42,6 +42,12 @@ pub enum Signal {
 
 impl Signal {
     /// Numérico POSIX correspondente. `Other(n)` retorna `n` literal.
+    ///
+    /// ```glide
+    /// Signal::Int.to_int();          // 2
+    /// Signal::Term.to_int();         // 15
+    /// Signal::Other(42).to_int();    // 42
+    /// ```
     pub fn to_int(self: Signal) -> int {
         match self {
             Hup     => { return 1; }
@@ -59,6 +65,11 @@ impl Signal {
 
     /// Construir `Signal` a partir de signum bruto. Sempre retorna um valor —
     /// signums fora do conjunto comum viram `Other(n)`.
+    ///
+    /// ```glide
+    /// Signal::from_int(2);    // Signal::Int
+    /// Signal::from_int(99);   // Signal::Other(99)
+    /// ```
     pub fn from_int(n: int) -> Signal {
         if n == 1  { return Signal::Hup; }
         if n == 2  { return Signal::Int; }
@@ -73,6 +84,11 @@ impl Signal {
 
     /// Nome do sinal estilo POSIX (`"SIGINT"`, etc.). `Other` retorna
     /// `"SIG#<n>"` com o signum embutido.
+    ///
+    /// ```glide
+    /// Signal::Int.name();         // "SIGINT"
+    /// Signal::Other(42).name();   // "SIG#42"
+    /// ```
     pub fn name(self: Signal) -> string {
         match self {
             Hup     => { return "SIGHUP"; }
@@ -274,18 +290,38 @@ c_raw! {
 /// return the same chan. Buffer = 64 (delivered-faster-than-consumed
 /// signals beyond that are dropped — typical for shutdown signals which
 /// deliver once).
+///
+/// ```glide
+/// let intr: chan<Signal> = signal_chan(Signal::Int);
+/// loop {
+///     select! {
+///         sig = intr.recv() => {
+///             println!("got", sig.name());
+///             break;
+///         }
+///     }
+/// }
+/// ```
 pub fn signal_chan(s: Signal) -> chan<Signal> {
     return __glide_signal_chan(s.to_int());
 }
 
 /// Restore the default OS handler for `s`. The chan returned by a previous
 /// `signal_chan(s)` stops receiving.
+///
+/// ```glide
+/// signal_default(Signal::Int);   // Ctrl+C now terminates again
+/// ```
 pub fn signal_default(s: Signal) -> ! {
     if __glide_signal_default(s.to_int()) != 0 { return err("signal_default failed"); }
 }
 
 /// Discard `s` (no chan, no default behavior). Useful for SIGPIPE on
 /// servers that handle disconnect at the read/write level.
+///
+/// ```glide
+/// signal_ignore(Signal::Pipe);   // writes to closed sockets won't kill us
+/// ```
 pub fn signal_ignore(s: Signal) -> ! {
     if __glide_signal_ignore(s.to_int()) != 0 { return err("signal_ignore failed"); }
 }
@@ -296,6 +332,13 @@ pub fn signal_ignore(s: Signal) -> ! {
 /// `GenerateConsoleCtrlEvent` (Windows) — Windows can only raise SIGINT
 /// and SIGTERM at OS level, but in-process raise via subscription works
 /// for any signum.
+///
+/// ```glide
+/// // Useful in tests: subscribe + raise to drive a select! arm.
+/// let usr1: chan<Signal> = signal_chan(Signal::Usr1);
+/// signal_raise(Signal::Usr1);
+/// let s: Signal = usr1.recv();   // gets Signal::Usr1
+/// ```
 pub fn signal_raise(s: Signal) -> ! {
     if __glide_signal_raise(s.to_int()) != 0 { return err("signal_raise failed"); }
 }

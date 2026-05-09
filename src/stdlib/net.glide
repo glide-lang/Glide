@@ -60,6 +60,11 @@ impl Listener {
     }
 
     /// `true` when the listener is bound and ready to accept.
+    ///
+    /// ```glide
+    /// let l: *Listener = Listener::bind(8080);
+    /// if !l.ok() { eprintln("bind failed"); env_exit(1); }
+    /// ```
     pub fn ok(self: *Listener) -> bool { return self.fd >= 0; }
 
     /// Block until a client connects. Returns a `Conn` with `fd < 0` on
@@ -79,6 +84,12 @@ impl Listener {
     }
 
     /// Close the listening socket and free the struct. Pair with `defer`.
+    ///
+    /// ```glide
+    /// let l: *Listener = Listener::bind(8080);
+    /// defer l.close();
+    /// // ...accept loop...
+    /// ```
     pub fn close(self: *Listener) {
         if self.fd >= 0 { tcp_close(self.fd); }
         free(self as *void);
@@ -87,6 +98,11 @@ impl Listener {
 
 impl Conn {
     /// `true` when the connection handshake completed.
+    ///
+    /// ```glide
+    /// let c: *Conn = l.accept();
+    /// if !c.ok() { c.close(); continue; }
+    /// ```
     pub fn ok(self: *Conn) -> bool { return self.fd >= 0; }
 
     /// Read up to `max` bytes into `buf`. Returns:
@@ -131,6 +147,12 @@ impl Conn {
 
     /// Close the connection and free the struct. After `close()`, the
     /// pointer is dangling; do not touch it again.
+    ///
+    /// ```glide
+    /// let c: *Conn = l.accept();
+    /// defer c.close();
+    /// c.write_str("hello\n");
+    /// ```
     pub fn close(self: *Conn) {
         if self.fd >= 0 { tcp_close(self.fd); }
         free(self as *void);

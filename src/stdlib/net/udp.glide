@@ -190,6 +190,13 @@ pub struct UdpRecv {
 impl UdpSocket {
     /// Bind a UDP socket to the given local address. Use
     /// `IpAddr::unspec_v4()` (or v6) to listen on every interface.
+    ///
+    /// ```glide
+    /// let any: *IpAddr = IpAddr::unspec_v4();
+    /// let addr: *SocketAddr = SocketAddr::new(any, 5353);
+    /// let r: !*UdpSocket = UdpSocket::bind(addr);
+    /// if r.ok { defer r.val.close(); /* ...recv loop... */ }
+    /// ```
     pub fn bind(addr: *SocketAddr) -> !*UdpSocket {
         let mut family: int = 4;
         let mut v4: i64 = 0;
@@ -211,6 +218,11 @@ impl UdpSocket {
     }
 
     /// Convenience: bind on `0.0.0.0:port` (all v4 interfaces).
+    ///
+    /// ```glide
+    /// let r: !*UdpSocket = UdpSocket::bind_port(5353);
+    /// if r.ok { defer r.val.close(); }
+    /// ```
     pub fn bind_port(port: int) -> !*UdpSocket {
         let any: *IpAddr = IpAddr::unspec_v4();
         let addr: *SocketAddr = SocketAddr::new(any, port);
@@ -220,6 +232,11 @@ impl UdpSocket {
     /// Send `data` to `dst`. Returns the number of bytes sent (or err
     /// on failure). UDP doesn't fragment user-mode payloads — keep
     /// each call ≤ 1472 bytes for safe v4 over Ethernet.
+    ///
+    /// ```glide
+    /// let dst: *SocketAddr = SocketAddr::parse("127.0.0.1:5353").val;
+    /// sock.send_to("ping", dst);
+    /// ```
     pub fn send_to(self: *UdpSocket, data: string, dst: *SocketAddr) -> !int {
         let mut family: int = 4;
         let mut v4: i64 = 0;
@@ -241,6 +258,13 @@ impl UdpSocket {
 
     /// Block until a datagram arrives. `max` caps payload size — bytes
     /// past `max` are silently dropped by the kernel.
+    ///
+    /// ```glide
+    /// let r: !*UdpRecv = sock.recv_from(1500);
+    /// if r.ok {
+    ///     println!("from", r.val.from.to_string(), ":", r.val.data);
+    /// }
+    /// ```
     pub fn recv_from(self: *UdpSocket, max: int) -> !*UdpRecv {
         let buf: *u8 = malloc(max) as *u8;
         let mut fam: int = 0;
@@ -268,6 +292,12 @@ impl UdpSocket {
         return ok(r);
     }
 
+    /// Close the socket and free the struct. Pair with `defer`.
+    ///
+    /// ```glide
+    /// let r: !*UdpSocket = UdpSocket::bind_port(5353);
+    /// if r.ok { defer r.val.close(); }
+    /// ```
     pub fn close(self: *UdpSocket) {
         __glide_udp_close(self.fd);
         free(self as *void);

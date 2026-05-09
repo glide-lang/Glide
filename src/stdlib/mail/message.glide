@@ -50,6 +50,17 @@ pub struct Mail {
 }
 
 impl Mail {
+    /// Build an empty Mail. Set the public fields directly, then call
+    /// `to_rfc5322()` to produce the wire bytes.
+    ///
+    /// ```glide
+    /// let m: *Mail = Mail::new();
+    /// m.from = "alice@example.com";
+    /// m.to.push("bob@example.com");
+    /// m.subject = "hi";
+    /// m.body = "hello bob";
+    /// let wire: string = m.to_rfc5322();
+    /// ```
     pub fn new() -> *Mail {
         let m: *Mail = malloc(sizeof(Mail)) as *Mail;
         m.from = "";
@@ -74,6 +85,21 @@ impl Mail {
 
     /// Serialise to the RFC 5322 wire format. Headers + blank line +
     /// body or multipart sections.
+    ///
+    /// Layout depends on what's set:
+    /// - body only → `text/plain; charset=UTF-8`
+    /// - body + html → `multipart/alternative`
+    /// - any attachments → `multipart/mixed` (wrapping the alt above)
+    ///
+    /// ```glide
+    /// let m: *Mail = Mail::new();
+    /// m.from = "a@x.com"; m.to.push("b@y.com");
+    /// m.subject = "report"; m.body = "see attached";
+    /// let att: *Attachment = malloc(sizeof(Attachment)) as *Attachment;
+    /// att.filename = "r.csv"; att.mime_type = "text/csv"; att.data = "a,b\n1,2";
+    /// m.attachments.push(att);
+    /// let wire: string = m.to_rfc5322();   // multipart/mixed envelope
+    /// ```
     pub fn to_rfc5322(self: *Mail) -> string {
         let mut h: string = "";
         if !self.from.eq("") {
@@ -171,6 +197,15 @@ impl Mail {
 /// and decodes the headline fields. MIME multipart bodies are kept as
 /// the raw body string — full MIME parsing is deferred (good enough
 /// for round-trip metadata access in v1).
+///
+/// ```glide
+/// let raw: string = pop3.retr(1).val;
+/// let r: !*Mail = parse_mail(raw);
+/// if r.ok {
+///     println!("from:", r.val.from);
+///     println!("subject:", r.val.subject);
+/// }
+/// ```
 pub fn parse_mail(raw: string) -> !*Mail {
     let head_end: int = raw.index_of("\r\n\r\n");
     if head_end < 0 { return err("mail: missing header/body separator"); }

@@ -517,31 +517,63 @@ c_raw! {
 
 /// OS family the binary was compiled for. `"linux"`, `"windows"`, `"macos"`,
 /// `"freebsd"`, `"openbsd"`, `"netbsd"`, or `"unknown"`.
+///
+/// ```glide
+/// if os_name().eq("linux") { /* linux-only path */ }
+/// ```
 pub fn os_name() -> string { return __glide_os_name(); }
 
 /// CPU architecture: `"x86_64"`, `"aarch64"`, `"arm"`, `"x86"`, `"riscv64"`,
 /// or `"unknown"`. Reflects the build target.
+///
+/// ```glide
+/// println!("running on", os_arch());   // e.g. "running on x86_64"
+/// ```
 pub fn os_arch() -> string { return __glide_os_arch(); }
 
 /// `true` on Windows, `false` everywhere else.
+///
+/// ```glide
+/// if os_is_windows() { use_crlf(); } else { use_lf(); }
+/// ```
 pub fn os_is_windows() -> bool { return __glide_is_windows() != 0; }
 
 /// `true` on POSIX-y systems (Linux, macOS, *BSD), `false` on Windows.
+///
+/// ```glide
+/// if os_is_posix() { send_signal(); }
+/// ```
 pub fn os_is_posix() -> bool { return __glide_is_windows() == 0; }
 
 /// `true` only on Linux.
+///
+/// ```glide
+/// if os_is_linux() { read_proc_meminfo(); }
+/// ```
 pub fn os_is_linux() -> bool { return __glide_os_name().eq("linux"); }
 
 /// `true` only on macOS / Darwin. `os_is_posix()` is also true.
+///
+/// ```glide
+/// if os_is_macos() { open_url_via("open"); }
+/// ```
 pub fn os_is_macos() -> bool { return __glide_os_name().eq("macos"); }
 
 /// Path component separator: `\\` on Windows, `/` elsewhere.
+///
+/// ```glide
+/// let full: string = format!("{}{}{}", base, os_path_sep(), name);
+/// ```
 pub fn os_path_sep() -> string {
     if __glide_is_windows() != 0 { return "\\"; }
     return "/";
 }
 
 /// Line ending convention: `"\r\n"` on Windows, `"\n"` elsewhere.
+///
+/// ```glide
+/// let line: string = format!("hello{}", os_line_sep());
+/// ```
 pub fn os_line_sep() -> string {
     if __glide_is_windows() != 0 { return "\r\n"; }
     return "\n";
@@ -549,6 +581,11 @@ pub fn os_line_sep() -> string {
 
 /// PATH-list separator: `;` on Windows, `:` elsewhere. Use this when parsing
 /// `$PATH` / `%PATH%`.
+///
+/// ```glide
+/// let path: string = env_get("PATH");
+/// let dirs: *Vector<string> = path.split(os_path_list_sep());
+/// ```
 pub fn os_path_list_sep() -> string { return __glide_path_list_sep(); }
 
 // ============================================================================
@@ -556,10 +593,19 @@ pub fn os_path_list_sep() -> string { return __glide_path_list_sep(); }
 // ============================================================================
 
 /// Current process ID. Always returns a positive value; getpid never fails.
+///
+/// ```glide
+/// println!("pid:", os_pid());
+/// ```
 pub fn os_pid() -> int { return __glide_pid(); }
 
 /// Parent process ID. POSIX returns `getppid()`; on Windows, returns
 /// `Err("ppid not available")` because the API doesn't expose it cheaply.
+///
+/// ```glide
+/// let r: !int = os_ppid();
+/// if r.ok { println!("parent:", r.val); }
+/// ```
 pub fn os_ppid() -> !int {
     let p: int = __glide_ppid();
     if p < 0 { return err("ppid not available"); }
@@ -567,6 +613,11 @@ pub fn os_ppid() -> !int {
 }
 
 /// POSIX user ID. `Err` on Windows (no numeric UID concept).
+///
+/// ```glide
+/// let u: !int = os_uid();
+/// if u.ok && u.val == 0 { println!("running as root"); }
+/// ```
 pub fn os_uid() -> !int {
     let u: int = __glide_uid();
     if u < 0 { return err("uid not available on this platform"); }
@@ -574,6 +625,11 @@ pub fn os_uid() -> !int {
 }
 
 /// POSIX group ID. `Err` on Windows.
+///
+/// ```glide
+/// let g: !int = os_gid();
+/// if g.ok { println!("gid:", g.val); }
+/// ```
 pub fn os_gid() -> !int {
     let g: int = __glide_gid();
     if g < 0 { return err("gid not available on this platform"); }
@@ -582,6 +638,11 @@ pub fn os_gid() -> !int {
 
 /// Login name of the current user. POSIX checks `$USER` then `getpwuid`;
 /// Windows uses `GetUserNameA`.
+///
+/// ```glide
+/// let r: !string = os_username();
+/// if r.ok { println!("hello,", r.val); }
+/// ```
 pub fn os_username() -> !string {
     let s: string = __glide_username();
     if s.eq("") { return err("username unavailable"); }
@@ -590,6 +651,11 @@ pub fn os_username() -> !string {
 
 /// Host name (machine name). `gethostname()` on POSIX, `GetComputerNameA`
 /// on Windows.
+///
+/// ```glide
+/// let r: !string = os_hostname();
+/// if r.ok { println!("on host", r.val); }
+/// ```
 pub fn os_hostname() -> !string {
     let s: string = __glide_hostname();
     if s.eq("") { return err("hostname unavailable"); }
@@ -598,6 +664,11 @@ pub fn os_hostname() -> !string {
 
 /// Kernel/OS version string. POSIX returns `uname -r` (e.g. `5.15.0-91`);
 /// Windows returns `<major>.<minor>.<build>`.
+///
+/// ```glide
+/// let r: !string = os_kernel_version();
+/// if r.ok { println!("kernel:", r.val); }
+/// ```
 pub fn os_kernel_version() -> !string {
     let s: string = __glide_kernel_version();
     if s.eq("") { return err("kernel version unavailable"); }
@@ -609,6 +680,11 @@ pub fn os_kernel_version() -> !string {
 // ============================================================================
 
 /// Current working directory of the process, no trailing separator.
+///
+/// ```glide
+/// let r: !string = os_cwd();
+/// if r.ok { println!("cwd:", r.val); }
+/// ```
 pub fn os_cwd() -> !string {
     let s: string = __glide_cwd();
     if s.eq("") { return err("cwd unavailable"); }
@@ -618,11 +694,21 @@ pub fn os_cwd() -> !string {
 /// Change the process's working directory. Returns `Ok` on success, `Err`
 /// on failure (path missing, no permission, etc.). The success branch
 /// carries no value — callers just check `r.ok`.
+///
+/// ```glide
+/// let r: ! = os_chdir("/tmp");
+/// if !r.ok { eprintln(r.err); }
+/// ```
 pub fn os_chdir(path: string) -> ! {
     if __glide_chdir(path) != 0 { return err("chdir failed"); }
 }
 
 /// Absolute path of the running executable.
+///
+/// ```glide
+/// let r: !string = os_exe_path();
+/// if r.ok { println!("running from:", r.val); }
+/// ```
 pub fn os_exe_path() -> !string {
     let s: string = __glide_exe_path();
     if s.eq("") { return err("exe path unavailable"); }
@@ -630,6 +716,11 @@ pub fn os_exe_path() -> !string {
 }
 
 /// Directory portion of `os_exe_path`, without trailing separator.
+///
+/// ```glide
+/// let r: !string = os_exe_dir();
+/// if r.ok { println!("install dir:", r.val); }
+/// ```
 pub fn os_exe_dir() -> !string {
     let s: string = __glide_exe_dir();
     if s.eq("") { return err("exe dir unavailable"); }
@@ -641,6 +732,11 @@ pub fn os_exe_dir() -> !string {
 // ============================================================================
 
 /// Number of logical CPUs available to the process.
+///
+/// ```glide
+/// let r: !int = os_cpu_count();
+/// if r.ok { println!(r.val, "threads"); }
+/// ```
 pub fn os_cpu_count() -> !int {
     let n: int = __glide_cpu_count();
     if n <= 0 { return err("cpu count unavailable"); }
@@ -649,6 +745,11 @@ pub fn os_cpu_count() -> !int {
 
 /// Number of physical cores. Falls back to `os_cpu_count()` when the
 /// platform doesn't expose a clean count (e.g. some Linux containers).
+///
+/// ```glide
+/// let r: !int = os_cpu_count_physical();
+/// if r.ok { println!(r.val, "physical cores"); }
+/// ```
 pub fn os_cpu_count_physical() -> !int {
     let n: int = __glide_cpu_count_physical();
     if n <= 0 { return os_cpu_count(); }
@@ -657,6 +758,11 @@ pub fn os_cpu_count_physical() -> !int {
 
 /// Virtual memory page size in bytes. Typically 4096; can be 16384 on
 /// Apple Silicon and some ARM Linux.
+///
+/// ```glide
+/// let r: !int = os_page_size();
+/// if r.ok { println!("page:", r.val, "bytes"); }
+/// ```
 pub fn os_page_size() -> !int {
     let n: int = __glide_page_size();
     if n <= 0 { return err("page size unavailable"); }
@@ -664,6 +770,11 @@ pub fn os_page_size() -> !int {
 }
 
 /// Total physical RAM in bytes.
+///
+/// ```glide
+/// let r: !u64 = os_memory_total();
+/// if r.ok { println!("RAM:", (r.val / 1024 / 1024) as int, "MiB"); }
+/// ```
 pub fn os_memory_total() -> !u64 {
     let n: u64 = __glide_memory_total();
     if n == 0 { return err("memory_total unavailable"); }
@@ -672,6 +783,11 @@ pub fn os_memory_total() -> !u64 {
 
 /// Available physical RAM in bytes (snapshot at call time).
 /// Best-effort on macOS / BSD where the metric needs mach-specific calls.
+///
+/// ```glide
+/// let r: !u64 = os_memory_free();
+/// if r.ok { println!("free:", (r.val / 1024 / 1024) as int, "MiB"); }
+/// ```
 pub fn os_memory_free() -> !u64 {
     let n: u64 = __glide_memory_free();
     if n == 0 { return err("memory_free unavailable"); }
@@ -679,6 +795,11 @@ pub fn os_memory_free() -> !u64 {
 }
 
 /// Seconds since system boot.
+///
+/// ```glide
+/// let r: !u64 = os_uptime_secs();
+/// if r.ok { println!("up", r.val, "seconds"); }
+/// ```
 pub fn os_uptime_secs() -> !u64 {
     let n: u64 = __glide_uptime_secs();
     if n == 0 { return err("uptime unavailable"); }
@@ -686,6 +807,11 @@ pub fn os_uptime_secs() -> !u64 {
 }
 
 /// 1-minute load average. POSIX-only — `Err` on Windows.
+///
+/// ```glide
+/// let r: !f64 = os_loadavg_1m();
+/// if r.ok { println!("load:", r.val); }
+/// ```
 pub fn os_loadavg_1m() -> !f64 {
     let v: f64 = __glide_loadavg_1m();
     if v < 0.0 { return err("loadavg not supported on this platform"); }
@@ -697,6 +823,11 @@ pub fn os_loadavg_1m() -> !f64 {
 // ============================================================================
 
 /// Per-user temporary dir. POSIX: `$TMPDIR` or `/tmp`. Windows: `%TEMP%`.
+///
+/// ```glide
+/// let r: !string = os_temp_dir();
+/// if r.ok { fs_write(format!("{}/scratch.txt", r.val), "..."); }
+/// ```
 pub fn os_temp_dir() -> !string {
     let s: string = __glide_temp_dir();
     if s.eq("") { return err("temp_dir unavailable"); }
@@ -705,6 +836,11 @@ pub fn os_temp_dir() -> !string {
 
 /// User home directory. POSIX: `$HOME` (fallback `getpwuid->pw_dir`).
 /// Windows: `%USERPROFILE%`.
+///
+/// ```glide
+/// let r: !string = os_home_dir();
+/// if r.ok { println!("home:", r.val); }
+/// ```
 pub fn os_home_dir() -> !string {
     let s: string = __glide_home_dir();
     if s.eq("") { return err("home_dir unavailable"); }
@@ -715,6 +851,11 @@ pub fn os_home_dir() -> !string {
 /// Linux: `$XDG_CONFIG_HOME` or `~/.config`.
 /// macOS: `~/Library/Application Support`.
 /// Windows: `%APPDATA%`.
+///
+/// ```glide
+/// let r: !string = os_config_dir();
+/// if r.ok { fs_read(format!("{}/myapp/cfg.toml", r.val)); }
+/// ```
 pub fn os_config_dir() -> !string {
     let s: string = __glide_config_dir();
     if s.eq("") { return err("config_dir unavailable"); }
@@ -725,6 +866,11 @@ pub fn os_config_dir() -> !string {
 /// Linux: `$XDG_CACHE_HOME` or `~/.cache`.
 /// macOS: `~/Library/Caches`.
 /// Windows: `%LOCALAPPDATA%`.
+///
+/// ```glide
+/// let r: !string = os_cache_dir();
+/// if r.ok { /* write rebuildable artifacts under r.val/myapp/ */ }
+/// ```
 pub fn os_cache_dir() -> !string {
     let s: string = __glide_cache_dir();
     if s.eq("") { return err("cache_dir unavailable"); }
@@ -735,6 +881,11 @@ pub fn os_cache_dir() -> !string {
 /// Linux: `$XDG_DATA_HOME` or `~/.local/share`.
 /// macOS: `~/Library/Application Support`.
 /// Windows: `%APPDATA%`.
+///
+/// ```glide
+/// let r: !string = os_data_dir();
+/// if r.ok { /* persistent state under r.val/myapp/ */ }
+/// ```
 pub fn os_data_dir() -> !string {
     let s: string = __glide_data_dir();
     if s.eq("") { return err("data_dir unavailable"); }
@@ -748,6 +899,11 @@ pub fn os_data_dir() -> !string {
 /// `true` if the descriptor is a terminal. `fd`: 0=stdin, 1=stdout, 2=stderr.
 /// Use this before emitting ANSI color escapes — output piped to a file
 /// or other process should stay plain.
+///
+/// ```glide
+/// if os_is_tty(1) { println!("\x1b[32mok\x1b[0m"); }
+/// else            { println!("ok"); }
+/// ```
 pub fn os_is_tty(fd: int) -> bool { return __glide_is_tty(fd) != 0; }
 
 // ============================================================================
@@ -763,6 +919,11 @@ pub fn os_is_tty(fd: int) -> bool { return __glide_is_tty(fd) != 0; }
 /// it gives argv-level control, captured stdout/stderr, env override, cwd,
 /// stdin piping, and avoids shell-injection hazards. `os_shell` stays as
 /// a 1-liner convenience for trivial cases (`os_shell("ls -la > out")`).
+///
+/// ```glide
+/// let r: !int = os_shell("ls -la");
+/// if r.ok { println!("exited", r.val); }
+/// ```
 pub fn os_shell(cmd: string) -> !int {
     let rc: int = __glide_shell(cmd);
     if rc < 0 { return err("shell failed to spawn"); }

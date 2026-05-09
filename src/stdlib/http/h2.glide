@@ -29,6 +29,13 @@ import stdlib::http::hpack::*;
 // Frame types (RFC 7540 §11.2) + standard flags
 // ===========================================================================
 
+/// Frame type opcodes (RFC 7540 §11.2). Use these symbolic names instead
+/// of literal integers when calling `write_frame` / matching headers.
+///
+/// ```glide
+/// write_frame_bytes(buf, FrameType::headers(),
+///                   FrameFlag::end_headers(), 1, hdr_payload);
+/// ```
 pub struct FrameType {}
 impl FrameType {
     pub fn data() -> int          { return 0; }
@@ -43,6 +50,15 @@ impl FrameType {
     pub fn continuation() -> int  { return 9; }
 }
 
+/// Frame flag bits (RFC 7540 §6). Combine with `|` for multi-flag frames
+/// (e.g. last HEADERS frame with no body sets both `end_headers` and
+/// `end_stream`). `ack` and `end_stream` happen to share bit `1` —
+/// they're never used on the same frame type.
+///
+/// ```glide
+/// let f: int = FrameFlag::end_headers() | FrameFlag::end_stream();
+/// write_frame_bytes(buf, FrameType::headers(), f, 1, hdr_payload);
+/// ```
 pub struct FrameFlag {}
 impl FrameFlag {
     pub fn end_stream() -> int    { return 1; }
@@ -67,6 +83,12 @@ pub struct FrameHeader {
 /// Use `write_frame_bytes` for binary payloads that may contain NUL —
 /// this entry truncates at the first NUL because Glide string is a
 /// cstring.
+///
+/// ```glide
+/// let buf: *ByteBuffer = ByteBuffer::new();  defer buf.free();
+/// write_frame(buf, FrameType::ping(), 0, 0, "ABCDEFGH");   // 8-byte ping
+/// tls.write_bytes(buf.data, buf.len);
+/// ```
 pub fn write_frame(buf: *ByteBuffer, frame_type: int, flags: int,
                    stream_id: int, payload: string) {
     let n: int = payload.len();
@@ -79,6 +101,15 @@ pub fn write_frame(buf: *ByteBuffer, frame_type: int, flags: int,
 /// Same as `write_frame` but pulls the payload from a ByteBuffer with
 /// explicit length. Use this for HPACK-encoded headers and for any
 /// payload that may carry NUL bytes mid-frame.
+///
+/// ```glide
+/// let hdrs: *ByteBuffer = ByteBuffer::new();  defer hdrs.free();
+/// enc.encode_header(hdrs, ":method", "GET");
+/// enc.encode_header(hdrs, ":path", "/");
+/// let buf: *ByteBuffer = ByteBuffer::new();   defer buf.free();
+/// let f: int = FrameFlag::end_headers() | FrameFlag::end_stream();
+/// write_frame_bytes(buf, FrameType::headers(), f, 1, hdrs);
+/// ```
 pub fn write_frame_bytes(buf: *ByteBuffer, frame_type: int, flags: int,
                           stream_id: int, payload: *ByteBuffer) {
     _frame_header(buf, payload.len, frame_type, flags, stream_id);
@@ -103,6 +134,14 @@ fn _frame_header(buf: *ByteBuffer, n: int, frame_type: int, flags: int,
 /// Parse a 9-byte frame header at `pos` in `raw`. Returns the header
 /// and the new position (header end; payload starts here). Binary
 /// safe (uses ByteBuffer.at, not string indexing).
+///
+/// ```glide
+/// let r: !*FrameHeader = read_frame_header(rx_buf, 0);
+/// if r.ok {
+///     let h: *FrameHeader = r.val;
+///     println!("type", h.frame_type, "len", h.length, "stream", h.stream_id);
+/// }
+/// ```
 pub fn read_frame_header(raw: *ByteBuffer, pos: int) -> !*FrameHeader {
     if pos + 9 > raw.len { return err("h2: frame header truncated"); }
     let h: *FrameHeader = malloc(sizeof(FrameHeader)) as *FrameHeader;
@@ -123,6 +162,14 @@ pub fn read_frame_header(raw: *ByteBuffer, pos: int) -> !*FrameHeader {
 // Connection preface (RFC 7540 §3.5) — fixed magic string + initial SETTINGS
 // ===========================================================================
 
+/// The 24-byte HTTP/2 connection preface (RFC 7540 §3.5). Send this
+/// immediately after the TLS handshake (or the bare TCP connection
+/// for h2c). `H2Conn::over` does this for you.
+///
+/// ```glide
+/// let preface: string = h2_preface();
+/// // preface is "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+/// ```
 pub fn h2_preface() -> string {
     return "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 }
@@ -133,6 +180,12 @@ pub fn h2_preface() -> string {
 
 /// Empty SETTINGS frame (acknowledges defaults). Use with flags=0 to
 /// announce our settings, or with FrameFlag::ack() to ack the peer's.
+///
+/// ```glide
+/// // Acknowledge the peer's SETTINGS:
+/// write_frame(buf, FrameType::settings(),
+///             FrameFlag::ack(), 0, settings_payload_empty());
+/// ```
 pub fn settings_payload_empty() -> string { return ""; }
 
 /// Append a single 6-byte SETTINGS entry (16-bit key + 32-bit value).
@@ -140,6 +193,13 @@ pub fn settings_payload_empty() -> string { return ""; }
 ///   0x1 HEADER_TABLE_SIZE       0x2 ENABLE_PUSH
 ///   0x3 MAX_CONCURRENT_STREAMS  0x4 INITIAL_WINDOW_SIZE
 ///   0x5 MAX_FRAME_SIZE          0x6 MAX_HEADER_LIST_SIZE
+///
+/// ```glide
+/// let pl: *ByteBuffer = ByteBuffer::new();  defer pl.free();
+/// settings_pair_to(pl, 2, 0);          // ENABLE_PUSH = false
+/// settings_pair_to(pl, 4, 1048576);    // INITIAL_WINDOW_SIZE = 1 MiB
+/// write_frame_bytes(buf, FrameType::settings(), 0, 0, pl);
+/// ```
 pub fn settings_pair_to(buf: *ByteBuffer, key: int, value: int) {
     buf.push(((key >> 8)    & 255) as u8);
     buf.push(( key          & 255) as u8);
@@ -150,6 +210,12 @@ pub fn settings_pair_to(buf: *ByteBuffer, key: int, value: int) {
 }
 
 /// Append a 4-byte WINDOW_UPDATE payload (31-bit increment + reserved bit).
+///
+/// ```glide
+/// let wu: *ByteBuffer = ByteBuffer::new();  defer wu.free();
+/// window_update_to(wu, 65535);   // grow stream window by 64 KiB
+/// write_frame_bytes(buf, FrameType::window_update(), 0, stream_id, wu);
+/// ```
 pub fn window_update_to(buf: *ByteBuffer, increment: int) {
     buf.push(((increment >> 24) & 127) as u8);
     buf.push(((increment >> 16) & 255) as u8);
@@ -186,6 +252,16 @@ impl H2Conn {
     ///
     /// The peer's SETTINGS arrives during the response read; the ACK
     /// is sent inline by `_read_response`.
+    ///
+    /// ```glide
+    /// let cfg: *TlsConfig = TlsConfig::client();
+    /// cfg.alpn = "h2,http/1.1";
+    /// let ts: !*TlsStream = TlsStream::connect("nghttp2.org", 443, cfg);
+    /// if ts.ok && ts.val.alpn().eq("h2") {
+    ///     let h2: !*H2Conn = H2Conn::over(ts.val);
+    ///     if h2.ok { defer h2.val.close(); /* ...request... */ }
+    /// }
+    /// ```
     pub fn over(tls: *TlsStream) -> !*H2Conn {
         let c: *H2Conn = malloc(sizeof(H2Conn)) as *H2Conn;
         c.tls = tls;
@@ -227,6 +303,15 @@ impl H2Conn {
     /// response back fully. Closes the stream end-to-end and returns
     /// (status, headers, body). The connection itself stays open for
     /// reuse with `request_again`-style callers.
+    ///
+    /// ```glide
+    /// let extras: *Vector<*HpackHeader> = Vector::new();
+    /// let r: !*H2Response = h2.request("GET", "/", "example.com", "https", extras, "");
+    /// if r.ok {
+    ///     println!("status:", r.val.status);
+    ///     println!("body bytes:", r.val.body.len());
+    /// }
+    /// ```
     pub fn request(self: *H2Conn, method: string, path: string,
                    authority: string, scheme: string,
                    extra_headers: *Vector<*HpackHeader>,
@@ -425,6 +510,14 @@ impl H2Conn {
         return out;
     }
 
+    /// Send GOAWAY (NO_ERROR) and close the underlying TLS stream. Pair
+    /// with `defer` so connections never leak.
+    ///
+    /// ```glide
+    /// let h2: *H2Conn = H2Conn::over(tls).val;
+    /// defer h2.close();
+    /// h2.request("GET", "/", "example.com", "https", extras, "");
+    /// ```
     pub fn close(self: *H2Conn) {
         // GOAWAY payload: 8 bytes of zero (last-stream-id 0 + NO_ERROR).
         // String-typed concat truncates at NUL, so build via ByteBuffer.

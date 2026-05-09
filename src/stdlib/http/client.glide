@@ -32,6 +32,14 @@ pub struct HttpClientRequest {
 }
 
 impl HttpClientRequest {
+    /// Build a request envelope. Use `set` to add headers and `body_str`
+    /// for the payload, then hand to `HttpClient::do`.
+    ///
+    /// ```glide
+    /// let req: *HttpClientRequest = HttpClientRequest::new("GET", "https://example.com/");
+    /// req.set("Accept", "application/json");
+    /// let r: !*HttpResponse = HttpClient::new().do(req);
+    /// ```
     pub fn new(method: string, url: string) -> *HttpClientRequest {
         let r: *HttpClientRequest = malloc(sizeof(HttpClientRequest)) as *HttpClientRequest;
         r.method = method;
@@ -43,11 +51,21 @@ impl HttpClientRequest {
 
     /// Append a header. Multiple calls produce multiple lines (no
     /// dedup — last wins is the user's responsibility).
+    ///
+    /// ```glide
+    /// req.set("Authorization", "Bearer xyz");
+    /// req.set("Accept", "application/json");
+    /// ```
     pub fn set(self: *HttpClientRequest, name: string, value: string) {
         self.headers = self.headers.concat(name).concat(": ").concat(value).concat("\r\n");
     }
 
     /// Set the body and the matching `Content-Length` header.
+    ///
+    /// ```glide
+    /// req.set("Content-Type", "application/json");
+    /// req.body_str("{\"name\":\"alice\"}");
+    /// ```
     pub fn body_str(self: *HttpClientRequest, s: string) {
         self.body = s;
         self.set("Content-Length", _hcli_itos(s.len()));
@@ -78,6 +96,17 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    /// Build an HttpClient with reasonable defaults. Customize the
+    /// public fields (`user_agent`, `max_redirects`, `jar`, `timeout_ms`,
+    /// `http2`, `tls_insecure`) before issuing requests.
+    ///
+    /// ```glide
+    /// let c: *HttpClient = HttpClient::new();
+    /// c.user_agent = "myapp/1.0";
+    /// c.timeout_ms = 5000;
+    /// c.http2 = true;
+    /// let r: !*HttpResponse = c.get("https://example.com/");
+    /// ```
     pub fn new() -> *HttpClient {
         let c: *HttpClient = malloc(sizeof(HttpClient)) as *HttpClient;
         c.user_agent = "glide/0.1";
@@ -93,6 +122,14 @@ impl HttpClient {
     /// to `self.max_redirects` hops; 303 demotes the method to GET and
     /// drops the body, 301/302/307/308 keep both. Relative `Location`
     /// values are resolved against the current URL.
+    ///
+    /// ```glide
+    /// let req: *HttpClientRequest = HttpClientRequest::new("PATCH", "https://api/me");
+    /// req.set("Authorization", "Bearer xyz");
+    /// req.body_str("{\"name\":\"new\"}");
+    /// let r: !*HttpResponse = client.do(req);
+    /// if r.ok { println!(r.val.status, r.val.body); }
+    /// ```
     pub fn do(self: *HttpClient, req: *HttpClientRequest) -> !*HttpResponse {
         let mut current_url: string = req.url;
         let mut current_method: string = req.method;
@@ -283,6 +320,12 @@ impl HttpClient {
         return ok(resp);
     }
 
+    /// One-shot GET. Convenience wrapper over `do`.
+    ///
+    /// ```glide
+    /// let r: !*HttpResponse = client.get("https://example.com/");
+    /// if r.ok && r.val.status == 200 { print!(r.val.body); }
+    /// ```
     pub fn get(self: *HttpClient, url: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("GET", url);
         let r: !*HttpResponse = self.do(req);
@@ -290,6 +333,13 @@ impl HttpClient {
         return r;
     }
 
+    /// POST with explicit content type. For JSON specifically use
+    /// `post_json`.
+    ///
+    /// ```glide
+    /// let r: !*HttpResponse = client.post(
+    ///     "https://api/upload", "raw=text", "application/x-www-form-urlencoded");
+    /// ```
     pub fn post(self: *HttpClient, url: string, body: string,
                 content_type: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("POST", url);
@@ -300,10 +350,24 @@ impl HttpClient {
         return r;
     }
 
+    /// POST with `Content-Type: application/json`. Caller serialises
+    /// the JSON via `stdlib::json::json_emit` (or any other source).
+    ///
+    /// ```glide
+    /// let r: !*HttpResponse = client.post_json("https://api/users",
+    ///                                          "{\"name\":\"alice\"}");
+    /// ```
     pub fn post_json(self: *HttpClient, url: string, body: string) -> !*HttpResponse {
         return self.post(url, body, "application/json");
     }
 
+    /// PUT with explicit content type.
+    ///
+    /// ```glide
+    /// let r: !*HttpResponse = client.put("https://api/me",
+    ///                                    "{\"name\":\"new\"}",
+    ///                                    "application/json");
+    /// ```
     pub fn put(self: *HttpClient, url: string, body: string,
                content_type: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("PUT", url);
@@ -314,6 +378,12 @@ impl HttpClient {
         return r;
     }
 
+    /// DELETE.
+    ///
+    /// ```glide
+    /// let r: !*HttpResponse = client.delete("https://api/items/42");
+    /// if r.ok { println!("status:", r.val.status); }
+    /// ```
     pub fn delete(self: *HttpClient, url: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("DELETE", url);
         let r: !*HttpResponse = self.do(req);
@@ -324,6 +394,13 @@ impl HttpClient {
 
 // ---- one-shot free fns (default client) ----
 
+/// One-shot GET with a default client. For multiple calls or shared
+/// state (cookies, timeouts), use `HttpClient::new()` once and reuse.
+///
+/// ```glide
+/// let r: !*HttpResponse = http_get("https://example.com/");
+/// if r.ok && r.val.status == 200 { println!(r.val.body.len(), "bytes"); }
+/// ```
 pub fn http_get(url: string) -> !*HttpResponse {
     let c: *HttpClient = HttpClient::new();
     let r: !*HttpResponse = c.get(url);
@@ -331,6 +408,12 @@ pub fn http_get(url: string) -> !*HttpResponse {
     return r;
 }
 
+/// One-shot JSON POST with a default client.
+///
+/// ```glide
+/// let r: !*HttpResponse = http_post_json("https://api/login",
+///                                        "{\"user\":\"a\",\"pass\":\"b\"}");
+/// ```
 pub fn http_post_json(url: string, body: string) -> !*HttpResponse {
     let c: *HttpClient = HttpClient::new();
     let r: !*HttpResponse = c.post_json(url, body);
@@ -350,6 +433,11 @@ pub struct ParsedUrl {
 impl ParsedUrl {
     /// Format the `Host:` header — omits the port when it's the
     /// scheme's default (80 for http, 443 for https).
+    ///
+    /// ```glide
+    /// // For an https URL on port 443: returns just "example.com"
+    /// // For "https://example.com:8443/foo": returns "example.com:8443"
+    /// ```
     pub fn host_header(self: *ParsedUrl) -> string {
         let mut default_port: int = 80;
         if self.scheme.eq("https") { default_port = 443; }

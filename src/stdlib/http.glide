@@ -97,6 +97,13 @@ pub struct HttpResponse {
 }
 
 impl HttpResponse {
+    /// Build a response with the given status code, no body, no headers.
+    /// Chain `.body(...)` and `.set(...)` to fill it in.
+    ///
+    /// ```glide
+    /// HttpResponse::with_status(204);
+    /// HttpResponse::with_status(301).set("Location", "/new");
+    /// ```
     pub fn with_status(code: int) -> HttpResponse {
         return HttpResponse {
             status: code,
@@ -106,13 +113,28 @@ impl HttpResponse {
     }
 
     /// Shortcut for 200 OK with no body. Chain `.body(s)` to add one.
+    ///
+    /// ```glide
+    /// HttpResponse::ok().body("hello");
+    /// ```
     pub fn ok() -> HttpResponse { return HttpResponse::with_status(200); }
 
     /// Shortcut for 404 Not Found.
+    ///
+    /// ```glide
+    /// fn handler(req: *HttpRequest) -> HttpResponse {
+    ///     if !known(req.path) { return HttpResponse::not_found(); }
+    ///     return HttpResponse::ok().body("...");
+    /// }
+    /// ```
     pub fn not_found() -> HttpResponse { return HttpResponse::with_status(404); }
 
     /// Set the body and the matching `Content-Length`. Returns the
     /// modified response so the call chains.
+    ///
+    /// ```glide
+    /// HttpResponse::ok().body("{\"ok\":true}");
+    /// ```
     pub fn body(self: HttpResponse, s: string) -> HttpResponse {
         return HttpResponse {
             status: self.status,
@@ -124,6 +146,13 @@ impl HttpResponse {
     /// Append a header line. Replacement of an existing same-name
     /// header is the caller's job; the v1 just appends to the raw
     /// block in insertion order, which is what the wire format wants.
+    ///
+    /// ```glide
+    /// HttpResponse::ok()
+    ///     .set("Content-Type", "application/json")
+    ///     .set("Cache-Control", "no-store")
+    ///     .body("{}");
+    /// ```
     pub fn set(self: HttpResponse, name: string, value: string) -> HttpResponse {
         return HttpResponse {
             status: self.status,
@@ -136,6 +165,11 @@ impl HttpResponse {
     /// missing. Mirrors `HttpRequest.header()` so client code can read
     /// `Location`, `Set-Cookie`, `Content-Type`, etc. without
     /// hand-rolling a parse.
+    ///
+    /// ```glide
+    /// let ct: string = resp.header("Content-Type");
+    /// if ct.starts_with("application/json") { /* parse JSON */ }
+    /// ```
     pub fn header(self: *HttpResponse, name: string) -> string {
         let want: string = name.to_lower();
         let lines: *Vector<string> = self.headers_block.split("\r\n");
@@ -153,6 +187,11 @@ impl HttpResponse {
 
     /// Return *every* header line matching `name` (case-insensitive).
     /// Useful for `Set-Cookie`, which legitimately repeats per cookie.
+    ///
+    /// ```glide
+    /// let cookies: *Vector<string> = resp.headers("Set-Cookie");
+    /// for let i: int = 0; i < cookies.len(); i++ { println!(cookies.get(i)); }
+    /// ```
     pub fn headers(self: *HttpResponse, name: string) -> *Vector<string> {
         let want: string = name.to_lower();
         let out: *Vector<string> = Vector::new();

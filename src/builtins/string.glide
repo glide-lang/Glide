@@ -11,6 +11,13 @@ impl string {
     /// before `other`, 0 if equal, a positive int if it sorts after.
     /// Compares byte-by-byte (UTF-8 ordering matches code-point ordering
     /// for ASCII; multi-byte sequences sort by raw byte order).
+    ///
+    /// ```glide
+    /// "apple".cmp("banana");   // -1
+    /// "banana".cmp("apple");   //  1
+    /// "apple".cmp("apple");    //  0
+    /// "apple".cmp("app");      //  1   (longer wins on prefix match)
+    /// ```
     pub fn cmp(self: string, other: string) -> int {
         let n: int = self.len();
         let m: int = other.len();
@@ -27,10 +34,23 @@ impl string {
         return 0;
     }
 
+    /// `true` when `sub` appears anywhere inside `self`.
+    ///
+    /// ```glide
+    /// "hello world".contains("world");   // true
+    /// "hello world".contains("World");   // false (case-sensitive)
+    /// ```
     pub fn contains(self: string, sub: string) -> bool {
         return self.index_of(sub) >= 0;
     }
 
+    /// Byte offset of the first occurrence of `sub`, or `-1` if missing.
+    /// Empty needle returns `0`.
+    ///
+    /// ```glide
+    /// "hello world".index_of("world");   // 6
+    /// "hello world".index_of("xyz");     // -1
+    /// ```
     pub fn index_of(self: string, sub: string) -> int {
         let n: int = self.len();
         let m: int = sub.len();
@@ -51,6 +71,12 @@ impl string {
         return -1;
     }
 
+    /// `true` when `self` begins with `pre` byte-for-byte.
+    ///
+    /// ```glide
+    /// "https://example.com".starts_with("https://");   // true
+    /// "image.png".starts_with("img");                  // false
+    /// ```
     pub fn starts_with(self: string, pre: string) -> bool {
         let m: int = pre.len();
         if m > self.len() { return false; }
@@ -62,6 +88,12 @@ impl string {
         return true;
     }
 
+    /// `true` when `self` ends with `suf` byte-for-byte.
+    ///
+    /// ```glide
+    /// "report.pdf".ends_with(".pdf");   // true
+    /// "report.pdf".ends_with(".PDF");   // false (case-sensitive)
+    /// ```
     pub fn ends_with(self: string, suf: string) -> bool {
         let n: int = self.len();
         let m: int = suf.len();
@@ -75,7 +107,18 @@ impl string {
         return true;
     }
 
-    /// Empty `sep` yields one slice per byte.
+    /// Split on every occurrence of `sep`. Empty `sep` yields one slice
+    /// per byte (handy for char-by-char walks). Two adjacent separators
+    /// produce an empty piece between them.
+    ///
+    /// ```glide
+    /// let parts: *Vector<string> = "a,b,c".split(",");
+    /// parts.len();         // 3
+    /// parts.get(1);        // "b"
+    ///
+    /// "a,,b".split(",").len();   // 3   (the middle one is "")
+    /// "abc".split("").len();     // 3   ["a", "b", "c"]
+    /// ```
     pub fn split(self: string, sep: string) -> *Vector<string> {
         let v: *Vector<string> = Vector::new();
         let n: int = self.len();
@@ -109,6 +152,15 @@ impl string {
         return v;
     }
 
+    /// Replace every occurrence of `find` with `repl`. Non-overlapping;
+    /// `find` is matched from left to right and the result is built up
+    /// piece by piece. Empty `find` returns `self` unchanged.
+    ///
+    /// ```glide
+    /// "hello world".replace("world", "there");   // "hello there"
+    /// "aaaa".replace("aa", "b");                 // "bb"
+    /// "abc".replace("z", "?");                   // "abc"
+    /// ```
     pub fn replace(self: string, find: string, repl: string) -> string {
         let n: int = self.len();
         let m: int = find.len();
@@ -135,6 +187,12 @@ impl string {
         return out;
     }
 
+    /// Strip whitespace (space, tab, CR, LF, FF, VT) from both ends.
+    ///
+    /// ```glide
+    /// "  hello  ".trim();        // "hello"
+    /// "\r\n hi \t\n".trim();      // "hi"
+    /// ```
     pub fn trim(self: string) -> string {
         let n: int = self.len();
         let mut start: int = 0;
@@ -144,6 +202,11 @@ impl string {
         return self.substring(start, end);
     }
 
+    /// Strip leading whitespace only.
+    ///
+    /// ```glide
+    /// "   hello".trim_left();    // "hello"
+    /// ```
     pub fn trim_left(self: string) -> string {
         let n: int = self.len();
         let mut start: int = 0;
@@ -151,6 +214,11 @@ impl string {
         return self.substring(start, n);
     }
 
+    /// Strip trailing whitespace only.
+    ///
+    /// ```glide
+    /// "hello   ".trim_right();   // "hello"
+    /// ```
     pub fn trim_right(self: string) -> string {
         let n: int = self.len();
         let mut end: int = n;
@@ -158,6 +226,12 @@ impl string {
         return self.substring(0, end);
     }
 
+    /// Convert ASCII letters to upper-case. Non-ASCII bytes pass through
+    /// unchanged.
+    ///
+    /// ```glide
+    /// "Hello, World!".to_upper();   // "HELLO, WORLD!"
+    /// ```
     pub fn to_upper(self: string) -> string {
         let n: int = self.len();
         let mut out: string = "";
@@ -174,6 +248,12 @@ impl string {
         return out;
     }
 
+    /// Convert ASCII letters to lower-case. Non-ASCII bytes pass through
+    /// unchanged.
+    ///
+    /// ```glide
+    /// "Hello, World!".to_lower();   // "hello, world!"
+    /// ```
     pub fn to_lower(self: string) -> string {
         let n: int = self.len();
         let mut out: string = "";
@@ -190,6 +270,13 @@ impl string {
         return out;
     }
 
+    /// Concatenate `self` to itself `n` times. Returns `""` when `n <= 0`.
+    ///
+    /// ```glide
+    /// "ab".repeat(3);     // "ababab"
+    /// "-".repeat(40);     // 40-char rule
+    /// "x".repeat(0);      // ""
+    /// ```
     pub fn repeat(self: string, n: int) -> string {
         if n <= 0 { return ""; }
         let mut out: string = "";
@@ -201,8 +288,16 @@ impl string {
         return out;
     }
 
-    /// Decimal integer parse. Returns 0 on failure; see `try_parse_int`
-    /// for an unambiguous variant.
+    /// Decimal integer parse. Accepts an optional `+` or `-` sign and
+    /// digits 0–9. Returns `0` on any failure (empty string, non-digit
+    /// byte, etc.) — use `try_parse_int` when you need to distinguish
+    /// "the input was invalid" from "the input was actually 0".
+    ///
+    /// ```glide
+    /// "42".parse_int();      // 42
+    /// "-7".parse_int();      // -7
+    /// "abc".parse_int();     // 0  (and so does "0", be careful)
+    /// ```
     pub fn parse_int(self: string) -> int {
         let n: int = self.len();
         if n == 0 { return 0; }
@@ -221,6 +316,17 @@ impl string {
         return acc;
     }
 
+    /// Decimal integer parse with explicit error reporting. Surfaces
+    /// "empty string", "no digits" (just a sign), or "non-digit byte"
+    /// as `err(...)` so callers can react to bad input.
+    ///
+    /// ```glide
+    /// let r: !int = "42".try_parse_int();
+    /// if r.ok { println!(r.val); }   // 42
+    ///
+    /// let bad: !int = "abc".try_parse_int();
+    /// if !bad.ok { println!(bad.err); }   // "non-digit byte"
+    /// ```
     pub fn try_parse_int(self: string) -> !int {
         let n: int = self.len();
         if n == 0 { return err("empty string"); }
