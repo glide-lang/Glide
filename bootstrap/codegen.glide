@@ -1143,7 +1143,30 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         }
         return null;
     }
-    if e.kind == EX_IDENT { return g.lookup(e.str_val); }
+    if e.kind == EX_IDENT {
+        let local: *Type = g.lookup(e.str_val);
+        if local != null { return local; }
+        // Top-level fn name as a value: build TY_FNPTR from its signature so
+        // generic-fn arg unification can bind type vars from `fn(T) -> U`
+        // patterns. e.g. `iter_map(v, _double)` infers U=int from _double's
+        // return type.
+        if g.fns.contains(e.str_val) {
+            let s: Stmt = g.fns.get(e.str_val);
+            let args: *Vector<Type> = Vector::new();
+            if s.fn_params != null {
+                for let i: int = 0; i < s.fn_params.len(); i++ {
+                    let p: Param = s.fn_params.get(i);
+                    if p.ty != null { args.push(*p.ty); }
+                }
+            }
+            let fp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            fp.kind = TY_FNPTR;
+            fp.args = args;
+            fp.fnptr_ret = s.fn_ret_ty;
+            return fp;
+        }
+        return null;
+    }
     if e.kind == EX_UNARY {
         let inner: *Type = infer_for_codegen(g, e.operand);
         if e.op_code == UN_DEREF && inner != null && inner.kind == TY_POINTER {
@@ -1906,6 +1929,23 @@ fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindi
         unify_for_inference(pat.inner, actual.inner, params, bindings);
         return;
     }
+    // Fn-pointer types: `fn(T) -> U` against `fn(int) -> string` should
+    // bind T=int, U=string. Without this case, generic fns like
+    // `iter_map<T, U>(v: *Vector<T>, f: fn(T) -> U) -> *Vector<U>` couldn't
+    // infer U from the fn-pointer arg's return type.
+    if pat.kind == TY_FNPTR && actual.kind == TY_FNPTR {
+        if pat.args != null && actual.args != null
+           && pat.args.len() == actual.args.len() {
+            for let i: int = 0; i < pat.args.len(); i++ {
+                let pa: Type = pat.args.get(i);
+                let aa: Type = actual.args.get(i);
+                unify_for_inference(&pa, &aa, params, bindings);
+            }
+        }
+        if pat.fnptr_ret != null && actual.fnptr_ret != null {
+            unify_for_inference(pat.fnptr_ret, actual.fnptr_ret, params, bindings);
+        }
+    }
 }
 
 // Recursive type substitution: walk t, replacing Type::Named(n) with the
@@ -1955,6 +1995,21 @@ fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
     if t.kind == TY_OPTION { return ty_option(subst_type(t.inner, params, args)); }
     if t.kind == TY_RESULT { return ty_result(subst_type(t.inner, params, args)); }
     if t.kind == TY_OPT_RESULT { return ty_optres(subst_type(t.inner, params, args)); }
+    if t.kind == TY_FNPTR {
+        let new_args: *Vector<Type> = Vector::new();
+        if t.args != null {
+            for let i: int = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                let na: *Type = subst_type(&a, params, args);
+                if na != null { new_args.push(*na); }
+            }
+        }
+        let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+        p.kind = TY_FNPTR;
+        p.args = new_args;
+        p.fnptr_ret = subst_type(t.fnptr_ret, params, args);
+        return p;
+    }
     if t.kind == TY_ASSOC {
         // Substitute the owner; the assoc lookup itself happens later when
         // the owner is fully concrete (typer/codegen impl-table consult).

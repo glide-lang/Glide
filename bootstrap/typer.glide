@@ -546,6 +546,25 @@ fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
     if want.kind == TY_OPT_RESULT && got.kind == TY_OPT_RESULT {
         return arg_compat(want.inner, got.inner, tps);
     }
+    // Fn pointers: recurse element-wise so type vars inside the signature
+    // (`fn(T) -> U`) match concrete fn types (`fn(int) -> string`).
+    if want.kind == TY_FNPTR && got.kind == TY_FNPTR {
+        if want.args == null || got.args == null { return false; }
+        if want.args.len() != got.args.len() { return false; }
+        for let i: int = 0; i < want.args.len(); i++ {
+            let wp: Type = want.args.get(i);
+            let gp: Type = got.args.get(i);
+            if !arg_compat(&wp, &gp, tps) { return false; }
+        }
+        return arg_compat(want.fnptr_ret, got.fnptr_ret, tps);
+    }
+    // EX_IDENT for a top-level fn name is typed as `__fn__` placeholder
+    // by the typer (no full fn-pointer typing yet at the use site). Accept
+    // that against any TY_FNPTR — the codegen does the proper TY_FNPTR
+    // binding from the fn's signature for mono purposes.
+    if want.kind == TY_FNPTR && got.kind == TY_NAMED && got.name.eq("__fn__") {
+        return true;
+    }
     return types_compat(want, got);
 }
 
@@ -579,6 +598,33 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
        && (arg_ty.kind == TY_POINTER || arg_ty.kind == TY_BORROW || arg_ty.kind == TY_BORROW_MUT) {
         return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
     }
+    if param_ty.kind == TY_GENERIC && arg_ty.kind == TY_GENERIC
+       && param_ty.name.eq(arg_ty.name)
+       && param_ty.args != null && arg_ty.args != null
+       && param_ty.args.len() == arg_ty.args.len() {
+        for let i: int = 0; i < param_ty.args.len(); i++ {
+            // Heap-copy each arg so the recursive call's match-result —
+            // which may be aa itself — doesn't dangle when our stack
+            // locals (pa, aa) go out of scope on early return.
+            let pa_v: Type = param_ty.args.get(i);
+            let aa_v: Type = arg_ty.args.get(i);
+            let pa_p: *Type = malloc(sizeof(Type)) as *Type;
+            let aa_p: *Type = malloc(sizeof(Type)) as *Type;
+            *pa_p = pa_v;
+            *aa_p = aa_v;
+            let r: *Type = extract_for_var(pa_p, aa_p, var_name);
+            if r != null { return r; }
+        }
+    }
+    if param_ty.kind == TY_OPTION && arg_ty.kind == TY_OPTION {
+        return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
+    }
+    if param_ty.kind == TY_RESULT && arg_ty.kind == TY_RESULT {
+        return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
+    }
+    if param_ty.kind == TY_OPT_RESULT && arg_ty.kind == TY_OPT_RESULT {
+        return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
+    }
     return null;
 }
 
@@ -590,17 +636,34 @@ fn resolve_assoc_in_ret(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ret: *Type)
     if ret == null { return null; }
     if sig == null { return ret; }
     if sig.type_params == null || sig.type_params.len() == 0 { return ret; }
-    if sig.type_param_bounds == null { return ret; }
     if sig.params == null || args == null { return ret; }
     let plen: int = sig.params.len();
     let alen: int = args.len();
     if plen != alen { return ret; }
-    let bn: int = sig.type_param_bounds.len();
+    let mut bn: int = 0;
+    if sig.type_param_bounds != null { bn = sig.type_param_bounds.len(); }
     return rewrite_assoc_in_type(t, sig, args, ret, plen, bn);
 }
 
 fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type, plen: int, bn: int) -> *Type {
     if ty == null { return null; }
+    // TY_NAMED that's a type-param: substitute with the concrete inferred from
+    // args. Without this, generic fns like `iter_fold<T, U>(...) -> U` return
+    // the literal "U" type and the caller sees "expected int, got U".
+    if ty.kind == TY_NAMED && sig.type_params != null {
+        for let ti: int = 0; ti < sig.type_params.len(); ti++ {
+            let tp_name: string = sig.type_params.get(ti);
+            if !tp_name.eq(ty.name) { continue; }
+            for let i: int = 0; i < plen; i++ {
+                let p: Param = sig.params.get(i);
+                let a: Expr = args.get(i);
+                let at: *Type = infer_expr(t, &a);
+                let extracted: *Type = extract_for_var(p.ty, at, tp_name);
+                if extracted != null { return extracted; }
+            }
+            return ty;
+        }
+    }
     if ty.kind == TY_ASSOC && ty.inner != null && ty.inner.kind == TY_NAMED {
         let owner_name: string = ty.inner.name;
         // Is owner_name one of the type params? If so, find its bound + concrete.
