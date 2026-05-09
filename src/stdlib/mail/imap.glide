@@ -1,0 +1,287 @@
+// IMAP4rev1 minimal client (RFC 3501) — covers LOGIN / SELECT /
+// FETCH / STORE / LOGOUT, the 80% verbs needed to read and flag a
+// mailbox. Tag-based protocol: every request gets a unique tag and
+// every response either tagged-OK/NO/BAD or untagged with `*`.
+//
+// Notably out of scope:
+//   * SEARCH (the syntax is its own grammar)
+//   * APPEND
+//   * IDLE
+//   * UID variants (we use sequence numbers)
+//   * SASL beyond plain LOGIN
+//   * CAPABILITY parsing (we read it back as opaque text)
+//
+// ```glide
+// import stdlib::mail::imap::*;
+//
+// let s: !*ImapSession = ImapSession::connect("imap.example.com", 993, true);
+// if !s.ok { return 1; }
+// let p: *ImapSession = s.val;
+// p.login("alice", "secret");
+// let count: !int = p.select("INBOX");
+// if count.ok && count.val > 0 {
+//     let raw: !string = p.fetch(1);
+//     if raw.ok { println!(raw.val); }
+//     p.store_flag(1, "\\Seen", true);
+// }
+// p.logout();
+// ```
+
+import stdlib::net::tcp::*;
+import stdlib::net::tls::*;
+
+pub struct ImapSession {
+    pub host: string,
+    tcp: *TcpStream,
+    tls: *TlsStream,
+    is_tls: bool,
+    rx_buf: string,
+    tag_counter: int,
+}
+
+impl ImapSession {
+    pub fn connect(host: string, port: int, use_tls: bool) -> !*ImapSession {
+        let s: *ImapSession = malloc(sizeof(ImapSession)) as *ImapSession;
+        s.host = host;
+        s.tcp = null as *TcpStream;
+        s.tls = null as *TlsStream;
+        s.is_tls = use_tls;
+        s.rx_buf = "";
+        s.tag_counter = 0;
+
+        if use_tls {
+            let cfg: *TlsConfig = TlsConfig::client();
+            let r: !*TlsStream = TlsStream::connect(host, port, cfg);
+            cfg.free();
+            if !r.ok { free(s as *void); return err(r.err); }
+            s.tls = r.val;
+        } else {
+            let r: !*TcpStream = TcpStream::connect_host(host, port);
+            if !r.ok { free(s as *void); return err(r.err); }
+            s.tcp = r.val;
+        }
+
+        // Banner: "* OK ..."
+        let b: !string = s._read_line();
+        if !b.ok { s.close(); return err(b.err); }
+        if !b.val.starts_with("* OK") {
+            s.close();
+            return err("imap: bad banner: ".concat(b.val));
+        }
+        return ok(s);
+    }
+
+    pub fn login(self: *ImapSession, user: string, pass: string) -> !int {
+        // Tag user/pass as quoted strings. RFC 3501 allows astring or
+        // literal — we use the simpler astring since user/pass shouldn't
+        // contain CR/LF.
+        let cmd: string = "LOGIN \"".concat(user).concat("\" \"").concat(pass).concat("\"");
+        let _r: !*ImapResponse = self._cmd(cmd);
+        if !_r.ok { return err(_r.err); }
+        return ok(0);
+    }
+
+    /// Select a mailbox. Returns the message count surfaced via
+    /// `* <N> EXISTS`. Read-only is not used in v1; SELECT acquires
+    /// read-write.
+    pub fn select(self: *ImapSession, mailbox: string) -> !int {
+        let cmd: string = "SELECT \"".concat(mailbox).concat("\"");
+        let r: !*ImapResponse = self._cmd(cmd);
+        if !r.ok { return err(r.err); }
+        // Look for "* N EXISTS" in the untagged lines.
+        let mut count: int = 0;
+        for let i: int = 0; i < r.val.untagged.len(); i++ {
+            let line: string = r.val.untagged.get(i);
+            // Format: "* 12 EXISTS"
+            if !line.starts_with("* ") { continue; }
+            let body: string = line.substring(2, line.len());
+            let sp: int = body.index_of(" ");
+            if sp < 0 { continue; }
+            let rest: string = body.substring(sp + 1, body.len());
+            if !rest.starts_with("EXISTS") { continue; }
+            let nstr: string = body.substring(0, sp);
+            let n: !int = nstr.try_parse_int();
+            if n.ok { count = n.val; }
+        }
+        return ok(count);
+    }
+
+    /// FETCH the full RFC 5322 body for sequence number `seq`.
+    pub fn fetch(self: *ImapSession, seq: int) -> !string {
+        let cmd: string = "FETCH ".concat(_imap_itos(seq)).concat(" BODY[]");
+        let r: !*ImapResponse = self._cmd_capture_literal(cmd);
+        if !r.ok { return err(r.err); }
+        return ok(r.val.literal);
+    }
+
+    /// Add or remove a flag. Common flags: `\\Seen`, `\\Deleted`,
+    /// `\\Flagged`. Pass `add=true` for `+FLAGS`, false for `-FLAGS`.
+    pub fn store_flag(self: *ImapSession, seq: int, flag: string,
+                      add: bool) -> !int {
+        let mut op: string = "+FLAGS";
+        if !add { op = "-FLAGS"; }
+        let cmd: string = "STORE ".concat(_imap_itos(seq)).concat(" ")
+            .concat(op).concat(" (").concat(flag).concat(")");
+        let _r: !*ImapResponse = self._cmd(cmd);
+        if !_r.ok { return err(_r.err); }
+        return ok(0);
+    }
+
+    pub fn logout(self: *ImapSession) -> !int {
+        let _r: !*ImapResponse = self._cmd("LOGOUT");
+        if !_r.ok { return err(_r.err); }
+        return ok(0);
+    }
+
+    pub fn close(self: *ImapSession) {
+        if self.is_tls && self.tls != null { self.tls.close(); }
+        if !self.is_tls && self.tcp != null { self.tcp.close(); }
+        free(self as *void);
+    }
+
+    // ---- transport ----
+
+    fn _write(self: *ImapSession, data: string) -> !int {
+        if self.is_tls { return self.tls.write_all(data); }
+        return self.tcp.write_all(data);
+    }
+
+    fn _read(self: *ImapSession, max: int) -> !string {
+        if self.is_tls { return self.tls.read(max); }
+        return self.tcp.read(max);
+    }
+
+    fn _read_line(self: *ImapSession) -> !string {
+        while self.rx_buf.index_of("\r\n") < 0 {
+            let r: !string = self._read(4096);
+            if !r.ok { return err(r.err); }
+            if r.val.len() == 0 { return err("imap: connection closed"); }
+            self.rx_buf = self.rx_buf.concat(r.val);
+        }
+        let nl: int = self.rx_buf.index_of("\r\n");
+        let line: string = self.rx_buf.substring(0, nl);
+        self.rx_buf = self.rx_buf.substring(nl + 2, self.rx_buf.len());
+        return ok(line);
+    }
+
+    fn _read_exact(self: *ImapSession, n: int) -> !string {
+        while self.rx_buf.len() < n {
+            let r: !string = self._read(4096);
+            if !r.ok { return err(r.err); }
+            if r.val.len() == 0 { return err("imap: short read for literal"); }
+            self.rx_buf = self.rx_buf.concat(r.val);
+        }
+        let chunk: string = self.rx_buf.substring(0, n);
+        self.rx_buf = self.rx_buf.substring(n, self.rx_buf.len());
+        return ok(chunk);
+    }
+
+    fn _next_tag(self: *ImapSession) -> string {
+        self.tag_counter = self.tag_counter + 1;
+        return "A".concat(_imap_itos(self.tag_counter));
+    }
+
+    /// Run a command without literal handling. Returns all untagged
+    /// lines plus the tagged final line.
+    fn _cmd(self: *ImapSession, cmd: string) -> !*ImapResponse {
+        let tag: string = self._next_tag();
+        let _w: !int = self._write(tag.concat(" ").concat(cmd).concat("\r\n"));
+        let resp: *ImapResponse = malloc(sizeof(ImapResponse)) as *ImapResponse;
+        let v: *Vector<string> = Vector::new();
+        resp.untagged = v;
+        resp.tagged = "";
+        resp.literal = "";
+        while true {
+            let lr: !string = self._read_line();
+            if !lr.ok { return err(lr.err); }
+            let line: string = lr.val;
+            if line.starts_with(tag.concat(" ")) {
+                resp.tagged = line;
+                if line.contains(" OK ") { return ok(resp); }
+                return err("imap: ".concat(line));
+            }
+            resp.untagged.push(line);
+        }
+        return ok(resp);
+    }
+
+    /// Variant that handles `{N}` literal markers in untagged data
+    /// (FETCH BODY[] returns the message body as a literal). The
+    /// captured literal is stored on the response via the `literal`
+    /// field. Only one literal per command is supported.
+    fn _cmd_capture_literal(self: *ImapSession, cmd: string) -> !*ImapResponse {
+        let tag: string = self._next_tag();
+        let _w: !int = self._write(tag.concat(" ").concat(cmd).concat("\r\n"));
+        let resp: *ImapResponse = malloc(sizeof(ImapResponse)) as *ImapResponse;
+        let v: *Vector<string> = Vector::new();
+        resp.untagged = v;
+        resp.tagged = "";
+        resp.literal = "";
+        while true {
+            let lr: !string = self._read_line();
+            if !lr.ok { return err(lr.err); }
+            let line: string = lr.val;
+            if line.starts_with(tag.concat(" ")) {
+                resp.tagged = line;
+                if line.contains(" OK ") { return ok(resp); }
+                return err("imap: ".concat(line));
+            }
+            resp.untagged.push(line);
+            // Look for trailing `{N}` literal length
+            if line.ends_with("}") {
+                let open: int = _last_index_of(line, "{");
+                if open >= 0 {
+                    let nstr: string = line.substring(open + 1, line.len() - 1);
+                    let nr: !int = nstr.try_parse_int();
+                    if nr.ok && nr.val > 0 {
+                        let body: !string = self._read_exact(nr.val);
+                        if !body.ok { return err(body.err); }
+                        resp.literal = body.val;
+                        // After the literal, more text on the same
+                        // logical line follows on the next \r\n.
+                    }
+                }
+            }
+        }
+        return ok(resp);
+    }
+}
+
+pub struct ImapResponse {
+    pub untagged: *Vector<string>,
+    pub tagged:   string,
+    pub literal:  string,
+}
+
+fn _last_index_of(s: string, needle: string) -> int {
+    let n: int = s.len();
+    let m: int = needle.len();
+    if m == 0 || m > n { return -1; }
+    let mut i: int = n - m;
+    while i >= 0 {
+        let mut k: int = 0;
+        let mut hit: bool = true;
+        while k < m {
+            if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
+            k = k + 1;
+        }
+        if hit { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn _imap_itos(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut x: int = n;
+    let mut neg: bool = false;
+    if x < 0 { neg = true; x = 0 - x; }
+    let mut s: string = "";
+    while x > 0 {
+        let d: int = x % 10;
+        s = ((48 + d) as char).to_string().concat(s);
+        x = x / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}

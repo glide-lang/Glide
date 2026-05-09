@@ -1,0 +1,224 @@
+// POP3 client (RFC 1939) — single-mailbox retrieval. Standard 8
+// commands: USER / PASS / STAT / LIST / RETR / DELE / NOOP / QUIT.
+// Multi-line responses (LIST, RETR) terminate with `.\r\n`.
+//
+// ```glide
+// import stdlib::mail::pop3::*;
+//
+// let s: !*Pop3Session = Pop3Session::connect("pop.example.com", 110, false);
+// if !s.ok { return 1; }
+// let p: *Pop3Session = s.val;
+// p.login("alice", "secret");
+// let lst: *Vector<*Pop3MsgInfo> = p.list().val;
+// for let i: int = 0; i < lst.len(); i++ {
+//     let raw: !string = p.retrieve(lst.get(i).idx);
+//     if raw.ok { println!(raw.val); }
+// }
+// p.quit();
+// ```
+
+import stdlib::net::tcp::*;
+import stdlib::net::tls::*;
+
+pub struct Pop3MsgInfo {
+    pub idx:  int,
+    pub size: int,
+}
+
+pub struct Pop3Session {
+    pub host: string,
+    tcp: *TcpStream,
+    tls: *TlsStream,
+    is_tls: bool,
+    rx_buf: string,
+}
+
+impl Pop3Session {
+    /// Open a session. `use_tls=true` wraps from start (port 995);
+    /// false uses plain TCP (port 110).
+    pub fn connect(host: string, port: int, use_tls: bool) -> !*Pop3Session {
+        let s: *Pop3Session = malloc(sizeof(Pop3Session)) as *Pop3Session;
+        s.host = host;
+        s.tcp = null as *TcpStream;
+        s.tls = null as *TlsStream;
+        s.is_tls = use_tls;
+        s.rx_buf = "";
+
+        if use_tls {
+            let cfg: *TlsConfig = TlsConfig::client();
+            let r: !*TlsStream = TlsStream::connect(host, port, cfg);
+            cfg.free();
+            if !r.ok { free(s as *void); return err(r.err); }
+            s.tls = r.val;
+        } else {
+            let r: !*TcpStream = TcpStream::connect_host(host, port);
+            if !r.ok { free(s as *void); return err(r.err); }
+            s.tcp = r.val;
+        }
+
+        // Banner: "+OK ..."
+        let b: !string = s._read_line();
+        if !b.ok { s.close(); return err(b.err); }
+        if !b.val.starts_with("+OK") {
+            s.close();
+            return err("pop3: bad banner: ".concat(b.val));
+        }
+        return ok(s);
+    }
+
+    pub fn login(self: *Pop3Session, user: string, pass: string) -> !int {
+        let _u: !string = self._cmd("USER ".concat(user));
+        if !_u.ok { return err(_u.err); }
+        let _p: !string = self._cmd("PASS ".concat(pass));
+        if !_p.ok { return err(_p.err); }
+        return ok(0);
+    }
+
+    /// Returns (count, total_size_octets) via stat reply.
+    pub fn stat(self: *Pop3Session) -> !*Pop3MsgInfo {
+        let r: !string = self._cmd("STAT");
+        if !r.ok { return err(r.err); }
+        // "+OK n octets"
+        let rest: string = r.val.substring(4, r.val.len()).trim();
+        let sp: int = rest.index_of(" ");
+        if sp < 0 { return err("pop3: bad STAT reply"); }
+        let cr: !int = rest.substring(0, sp).try_parse_int();
+        let sr: !int = rest.substring(sp + 1, rest.len()).try_parse_int();
+        if !cr.ok || !sr.ok { return err("pop3: STAT non-numeric"); }
+        let p: *Pop3MsgInfo = malloc(sizeof(Pop3MsgInfo)) as *Pop3MsgInfo;
+        p.idx = cr.val;
+        p.size = sr.val;
+        return ok(p);
+    }
+
+    /// Multi-line LIST: per-message (idx, size).
+    pub fn list(self: *Pop3Session) -> !*Vector<*Pop3MsgInfo> {
+        let _w: !int = self._write("LIST\r\n");
+        let head: !string = self._read_line();
+        if !head.ok { return err(head.err); }
+        if !head.val.starts_with("+OK") {
+            return err("pop3: LIST: ".concat(head.val));
+        }
+        let body: !string = self._read_multiline();
+        if !body.ok { return err(body.err); }
+        let out: *Vector<*Pop3MsgInfo> = Vector::new();
+        let lines: *Vector<string> = body.val.split("\r\n");
+        for let i: int = 0; i < lines.len(); i++ {
+            let line: string = lines.get(i);
+            if line.len() == 0 { continue; }
+            let sp: int = line.index_of(" ");
+            if sp < 0 { continue; }
+            let cr: !int = line.substring(0, sp).try_parse_int();
+            let sr: !int = line.substring(sp + 1, line.len()).trim().try_parse_int();
+            if !cr.ok || !sr.ok { continue; }
+            let p: *Pop3MsgInfo = malloc(sizeof(Pop3MsgInfo)) as *Pop3MsgInfo;
+            p.idx = cr.val;
+            p.size = sr.val;
+            out.push(p);
+        }
+        return ok(out);
+    }
+
+    /// Full message body for index `n`.
+    pub fn retrieve(self: *Pop3Session, n: int) -> !string {
+        let _w: !int = self._write("RETR ".concat(_pop3_itos(n)).concat("\r\n"));
+        let head: !string = self._read_line();
+        if !head.ok { return err(head.err); }
+        if !head.val.starts_with("+OK") {
+            return err("pop3: RETR: ".concat(head.val));
+        }
+        return self._read_multiline();
+    }
+
+    pub fn delete(self: *Pop3Session, n: int) -> !int {
+        let r: !string = self._cmd("DELE ".concat(_pop3_itos(n)));
+        if !r.ok { return err(r.err); }
+        return ok(0);
+    }
+
+    pub fn noop(self: *Pop3Session) -> !int {
+        let r: !string = self._cmd("NOOP");
+        if !r.ok { return err(r.err); }
+        return ok(0);
+    }
+
+    pub fn quit(self: *Pop3Session) -> !int {
+        let r: !string = self._cmd("QUIT");
+        if !r.ok { return err(r.err); }
+        return ok(0);
+    }
+
+    pub fn close(self: *Pop3Session) {
+        if self.is_tls && self.tls != null { self.tls.close(); }
+        if !self.is_tls && self.tcp != null { self.tcp.close(); }
+        free(self as *void);
+    }
+
+    // ---- transport helpers ----
+
+    fn _write(self: *Pop3Session, data: string) -> !int {
+        if self.is_tls { return self.tls.write_all(data); }
+        return self.tcp.write_all(data);
+    }
+
+    fn _read(self: *Pop3Session, max: int) -> !string {
+        if self.is_tls { return self.tls.read(max); }
+        return self.tcp.read(max);
+    }
+
+    fn _read_line(self: *Pop3Session) -> !string {
+        while self.rx_buf.index_of("\r\n") < 0 {
+            let r: !string = self._read(4096);
+            if !r.ok { return err(r.err); }
+            if r.val.len() == 0 { return err("pop3: connection closed"); }
+            self.rx_buf = self.rx_buf.concat(r.val);
+        }
+        let nl: int = self.rx_buf.index_of("\r\n");
+        let line: string = self.rx_buf.substring(0, nl);
+        self.rx_buf = self.rx_buf.substring(nl + 2, self.rx_buf.len());
+        return ok(line);
+    }
+
+    /// Read until a line consisting solely of "." appears. Strip the
+    /// terminator and unescape leading-double-dot lines.
+    fn _read_multiline(self: *Pop3Session) -> !string {
+        let mut out: string = "";
+        while true {
+            let lr: !string = self._read_line();
+            if !lr.ok { return err(lr.err); }
+            let line: string = lr.val;
+            if line.eq(".") { break; }
+            // Dot-stuffing: leading ".." → "."
+            let mut emit: string = line;
+            if line.starts_with("..") { emit = line.substring(1, line.len()); }
+            if out.len() > 0 { out = out.concat("\r\n"); }
+            out = out.concat(emit);
+        }
+        return ok(out);
+    }
+
+    fn _cmd(self: *Pop3Session, cmd: string) -> !string {
+        let _w: !int = self._write(cmd.concat("\r\n"));
+        let r: !string = self._read_line();
+        if !r.ok { return err(r.err); }
+        if !r.val.starts_with("+OK") {
+            return err("pop3: ".concat(r.val));
+        }
+        return ok(r.val);
+    }
+}
+
+fn _pop3_itos(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut x: int = n;
+    let mut neg: bool = false;
+    if x < 0 { neg = true; x = 0 - x; }
+    let mut s: string = "";
+    while x > 0 {
+        let d: int = x % 10;
+        s = ((48 + d) as char).to_string().concat(s);
+        x = x / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}

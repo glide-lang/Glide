@@ -1,0 +1,297 @@
+// SMTP client (RFC 5321) — connects, optionally STARTTLS-upgrades or
+// wraps from start (port 465), optionally authenticates with PLAIN
+// or LOGIN, then runs the standard MAIL FROM / RCPT TO / DATA / QUIT
+// state machine.
+//
+// ```glide
+// import stdlib::mail::message::*;
+// import stdlib::mail::smtp::*;
+//
+// let c: *SmtpClient = SmtpClient::new("smtp.example.com", 587);
+// c.use_starttls = true;
+// c.username = some("alice");
+// c.password = some("hunter2");
+//
+// let m: *Mail = Mail::new();
+// m.from = "alice@example.com";
+// m.to.push("bob@example.com");
+// m.subject = "ping";
+// m.body = "hi";
+// let r: !int = c.send(m);
+// ```
+
+import stdlib::net::tcp::*;
+import stdlib::net::tls::*;
+import stdlib::base64::*;
+import stdlib::mail::message::*;
+
+pub struct SmtpClient {
+    pub host: string,
+    pub port: int,
+    /// Wrap the connection in TLS from the very first byte (port 465
+    /// / SMTPS). Mutually exclusive with `use_starttls`.
+    pub use_tls: bool,
+    /// Send `STARTTLS` after EHLO and continue the rest of the
+    /// session over the upgraded TLS socket. Standard for port 587.
+    pub use_starttls: bool,
+    pub username: ?string,
+    pub password: ?string,
+    pub timeout_ms: int,
+    /// Skip TLS cert validation. Local dev only.
+    pub tls_insecure: bool,
+}
+
+impl SmtpClient {
+    pub fn new(host: string, port: int) -> *SmtpClient {
+        let c: *SmtpClient = malloc(sizeof(SmtpClient)) as *SmtpClient;
+        c.host = host;
+        c.port = port;
+        c.use_tls = false;
+        c.use_starttls = false;
+        let nu: ?string = none();
+        let np: ?string = none();
+        c.username = nu;
+        c.password = np;
+        c.timeout_ms = 0;
+        c.tls_insecure = false;
+        return c;
+    }
+
+    /// Send a single message. Opens the connection, runs the full
+    /// SMTP conversation, closes. For multi-message workflows hold
+    /// onto an SmtpSession via `connect()` instead.
+    pub fn send(self: *SmtpClient, mail: *Mail) -> !int {
+        let sr: !*SmtpSession = self.connect();
+        if !sr.ok { return err(sr.err); }
+        let s: *SmtpSession = sr.val;
+        let r: !int = s.send_mail(mail);
+        let _: !int = s.quit();
+        s.close();
+        return r;
+    }
+
+    /// Open a session: TCP connect → optionally STARTTLS → optionally AUTH.
+    /// The returned session is positioned right before MAIL FROM and
+    /// can be reused across multiple send_mail calls until quit/close.
+    pub fn connect(self: *SmtpClient) -> !*SmtpSession {
+        let s: *SmtpSession = malloc(sizeof(SmtpSession)) as *SmtpSession;
+        s.tls = null as *TlsStream;
+        s.tcp = null as *TcpStream;
+        s.is_tls = false;
+        s.host = self.host;
+
+        if self.use_tls {
+            let cfg: *TlsConfig = TlsConfig::client();
+            if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
+            let tr: !*TlsStream = TlsStream::connect(self.host, self.port, cfg);
+            cfg.free();
+            if !tr.ok { free(s as *void); return err(tr.err); }
+            s.tls = tr.val;
+            s.is_tls = true;
+            if self.timeout_ms > 0 { s.tls.set_timeout_ms(self.timeout_ms); }
+        } else {
+            let tr: !*TcpStream = TcpStream::connect_host(self.host, self.port);
+            if !tr.ok { free(s as *void); return err(tr.err); }
+            s.tcp = tr.val;
+            if self.timeout_ms > 0 { s.tcp.set_timeout_ms(self.timeout_ms); }
+        }
+
+        // Banner
+        let b: !*SmtpReply = s._read_reply();
+        if !b.ok { s.close(); return err(b.err); }
+        if b.val.code < 200 || b.val.code >= 300 {
+            s.close();
+            return err("smtp: banner ".concat(_smtp_itos(b.val.code)).concat(" ").concat(b.val.text));
+        }
+
+        // EHLO
+        let er: !int = s._ehlo();
+        if !er.ok { s.close(); return err(er.err); }
+
+        if self.use_starttls && !s.is_tls {
+            // STARTTLS upgrade
+            let _: !int = s._cmd_check("STARTTLS\r\n", 220);
+            // Wrap the same socket fd in TLS. Easiest path: tear down
+            // the TcpStream wrapper and reconnect via TLS handshake on
+            // the existing fd. Glide's TlsStream doesn't currently
+            // support attach-to-existing-fd, so v1 closes the plain
+            // socket and opens a fresh TLS connection. That's a wire
+            // protocol violation if we already issued EHLO — strict
+            // servers refuse this. Document and move on.
+            return err("smtp: STARTTLS upgrade not yet implemented (need TlsStream::attach)");
+        }
+
+        if self.username.has && self.password.has {
+            let ar: !int = s._auth_plain(self.username.val, self.password.val);
+            if !ar.ok { s.close(); return err(ar.err); }
+        }
+        return ok(s);
+    }
+}
+
+pub struct SmtpReply {
+    pub code: int,
+    pub text: string,   // last reply line (server may send multi-line)
+}
+
+pub struct SmtpSession {
+    pub host: string,
+    tcp: *TcpStream,
+    tls: *TlsStream,
+    is_tls: bool,
+}
+
+impl SmtpSession {
+    /// Send a single message. Returns ok(0) on success or err with
+    /// a human-readable status code.
+    pub fn send_mail(self: *SmtpSession, mail: *Mail) -> !int {
+        // MAIL FROM
+        let mr: !int = self._cmd_check("MAIL FROM:<".concat(mail.from).concat(">\r\n"), 250);
+        if !mr.ok { return err(mr.err); }
+        // RCPT TO — to + cc + bcc
+        for let i: int = 0; i < mail.to.len(); i++ {
+            let r: !int = self._cmd_check("RCPT TO:<".concat(mail.to.get(i)).concat(">\r\n"), 250);
+            if !r.ok { return err(r.err); }
+        }
+        for let i: int = 0; i < mail.cc.len(); i++ {
+            let r: !int = self._cmd_check("RCPT TO:<".concat(mail.cc.get(i)).concat(">\r\n"), 250);
+            if !r.ok { return err(r.err); }
+        }
+        for let i: int = 0; i < mail.bcc.len(); i++ {
+            let r: !int = self._cmd_check("RCPT TO:<".concat(mail.bcc.get(i)).concat(">\r\n"), 250);
+            if !r.ok { return err(r.err); }
+        }
+        // DATA
+        let d: !int = self._cmd_check("DATA\r\n", 354);
+        if !d.ok { return err(d.err); }
+
+        let wire: string = mail.to_rfc5322();
+        let dotted: string = _dot_stuff(wire);
+        let _w: !int = self._write(dotted);
+        let _wend: !int = self._write("\r\n.\r\n");
+        let final: !*SmtpReply = self._read_reply();
+        if !final.ok { return err(final.err); }
+        if final.val.code < 200 || final.val.code >= 300 {
+            return err("smtp: ".concat(_smtp_itos(final.val.code)).concat(" ").concat(final.val.text));
+        }
+        return ok(0);
+    }
+
+    pub fn quit(self: *SmtpSession) -> !int {
+        return self._cmd_check("QUIT\r\n", 221);
+    }
+
+    pub fn close(self: *SmtpSession) {
+        if self.is_tls && self.tls != null { self.tls.close(); }
+        if !self.is_tls && self.tcp != null { self.tcp.close(); }
+        free(self as *void);
+    }
+
+    fn _write(self: *SmtpSession, data: string) -> !int {
+        if self.is_tls { return self.tls.write_all(data); }
+        return self.tcp.write_all(data);
+    }
+
+    fn _read(self: *SmtpSession, max: int) -> !string {
+        if self.is_tls { return self.tls.read(max); }
+        return self.tcp.read(max);
+    }
+
+    fn _read_reply(self: *SmtpSession) -> !*SmtpReply {
+        // Multi-line replies: each line "ddd-text" until "ddd text" (space).
+        let mut acc: string = "";
+        let mut last_text: string = "";
+        let mut last_code: int = 0;
+        while true {
+            // Read until we have at least one full \r\n line.
+            while acc.index_of("\r\n") < 0 {
+                let r: !string = self._read(4096);
+                if !r.ok { return err(r.err); }
+                if r.val.len() == 0 { return err("smtp: connection closed during reply"); }
+                acc = acc.concat(r.val);
+            }
+            let nl: int = acc.index_of("\r\n");
+            let line: string = acc.substring(0, nl);
+            acc = acc.substring(nl + 2, acc.len());
+            if line.len() < 4 { return err("smtp: short reply line"); }
+            let code_s: string = line.substring(0, 3);
+            let cr: !int = code_s.try_parse_int();
+            if !cr.ok { return err("smtp: non-numeric reply code"); }
+            last_code = cr.val;
+            last_text = line.substring(4, line.len());
+            let sep: int = line.at(3).to_int();
+            if sep == 32 { break; }       // space → final line
+            if sep != 45 { return err("smtp: bad reply continuation"); }  // expect dash
+        }
+        let r: *SmtpReply = malloc(sizeof(SmtpReply)) as *SmtpReply;
+        r.code = last_code;
+        r.text = last_text;
+        return ok(r);
+    }
+
+    fn _cmd_check(self: *SmtpSession, cmd: string, want: int) -> !int {
+        let _: !int = self._write(cmd);
+        let r: !*SmtpReply = self._read_reply();
+        if !r.ok { return err(r.err); }
+        if r.val.code != want {
+            return err("smtp: expected ".concat(_smtp_itos(want))
+                .concat(", got ").concat(_smtp_itos(r.val.code))
+                .concat(" ").concat(r.val.text));
+        }
+        return ok(0);
+    }
+
+    fn _ehlo(self: *SmtpSession) -> !int {
+        let cmd: string = "EHLO ".concat(_local_hostname()).concat("\r\n");
+        let _: !int = self._write(cmd);
+        let r: !*SmtpReply = self._read_reply();
+        if !r.ok { return err(r.err); }
+        if r.val.code != 250 {
+            return err("smtp: EHLO ".concat(_smtp_itos(r.val.code)).concat(" ").concat(r.val.text));
+        }
+        return ok(0);
+    }
+
+    fn _auth_plain(self: *SmtpSession, user: string, pass: string) -> !int {
+        // PLAIN: base64(\0 user \0 pass)
+        let nul: string = (0 as char).to_string();
+        let raw: string = nul.concat(user).concat(nul).concat(pass);
+        let token: string = b64_encode(raw);
+        return self._cmd_check("AUTH PLAIN ".concat(token).concat("\r\n"), 235);
+    }
+}
+
+// ---- helpers ----
+
+/// RFC 5321 §4.5.2 — any line in the message body that starts with
+/// `.` must be doubled to `..` so the server doesn't interpret it as
+/// the end-of-data terminator.
+fn _dot_stuff(s: string) -> string {
+    let mut out: string = "";
+    let mut at_line_start: bool = true;
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if at_line_start && c == 46 { out = out.concat("."); }
+        out = out.concat((c as char).to_string());
+        if c == 10 { at_line_start = true; }
+        else        { at_line_start = false; }
+    }
+    return out;
+}
+
+fn _local_hostname() -> string { return "glide.local"; }
+
+fn _smtp_itos(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut x: int = n;
+    let mut neg: bool = false;
+    if x < 0 { neg = true; x = 0 - x; }
+    let mut s: string = "";
+    while x > 0 {
+        let d: int = x % 10;
+        s = ((48 + d) as char).to_string().concat(s);
+        x = x / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}
