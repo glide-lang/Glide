@@ -1,0 +1,125 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::typed::*;
+import stdlib::json::*;
+
+// ---- user-side struct + JsonBind impl --------------------------------
+
+pub struct StructLegal {
+    pub nome:  string,
+    pub idade: ?int,
+    pub extra: *JsonValue,
+}
+
+impl JsonBind for StructLegal {
+    fn from_json(v: *JsonValue) -> !StructLegal {
+        if v.kind != JSON_OBJECT { return err("expected object"); }
+        let nome_r: !string = json_get_string(v, "nome");
+        if !nome_r.ok { return err(nome_r.err); }
+        return ok(StructLegal {
+            nome:  nome_r.val,
+            idade: json_opt_int(v, "idade"),
+            extra: json_get_any(v, "extra"),
+        });
+    }
+
+    fn to_json(self: *StructLegal) -> *JsonValue {
+        let v: *JsonValue = json_object();
+        json_obj_set(v, "nome", json_string(self.nome));
+        if self.idade.has {
+            json_obj_set(v, "idade", json_int(self.idade.val));
+        }
+        if self.extra != null {
+            json_obj_set(v, "extra", self.extra);
+        }
+        return v;
+    }
+}
+
+// ---- handler that uses Json::respond ----------------------------------
+
+fn _handler(req: *HttpRequest) -> HttpResponse {
+    let body_r: !*JsonValue = req.body_json();
+    if !body_r.ok {
+        return HttpResponse::with_status(400).text(body_r.err);
+    }
+    let u_r: !StructLegal = StructLegal::from_json(body_r.val);
+    if !u_r.ok {
+        return HttpResponse::with_status(422).text(u_r.err);
+    }
+    let echoed: StructLegal = u_r.val;
+    return json_respond(echoed);
+}
+
+fn _post(body: string) -> HttpResponse {
+    let req: HttpRequest = HttpRequest {
+        method:        "POST",
+        path:          "/users",
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          body,
+        params:        null,
+        queries:       null,
+    };
+    return _handler(&req);
+}
+
+// ---- tests ------------------------------------------------------------
+
+fn test_json_respond_round_trip() -> int {
+    let r: HttpResponse = _post("{\"nome\":\"alice\"}");
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.header("Content-Type"), "application/json");
+    assert_str_eq!(r.body, "{\"nome\":\"alice\"}");
+    return 0;
+}
+
+fn test_json_respond_carries_optional() -> int {
+    let r: HttpResponse = _post("{\"nome\":\"bob\",\"idade\":30}");
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "{\"nome\":\"bob\",\"idade\":30}");
+    return 0;
+}
+
+fn test_json_respond_passes_dynamic_subtree() -> int {
+    let r: HttpResponse = _post("{\"nome\":\"c\",\"extra\":[1,2,3]}");
+    assert_eq!(r.status, 200);
+    assert!(r.body.index_of("\"extra\":[1,2,3]") >= 0);
+    return 0;
+}
+
+fn test_into_response_for_httpresponse_is_identity() -> int {
+    // The trait surface should let bare HttpResponse flow through
+    // unchanged so a handler can mix typed and raw replies.
+    let r: HttpResponse = HttpResponse::ok().text("plain").into_response();
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "plain");
+    return 0;
+}
+
+fn test_json_respond_with_value() -> int {
+    let i: ?int = some(25);
+    let s: StructLegal = StructLegal {
+        nome:  "carol",
+        idade: i,
+        extra: null,
+    };
+    let r: HttpResponse = json_respond(s);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.header("Content-Type"), "application/json");
+    assert_str_eq!(r.body, "{\"nome\":\"carol\",\"idade\":25}");
+    return 0;
+}
+
+fn test_invalid_body_still_400() -> int {
+    let r: HttpResponse = _post("not json");
+    assert_eq!(r.status, 400);
+    return 0;
+}
+
+fn test_missing_required_still_422() -> int {
+    let r: HttpResponse = _post("{\"idade\":99}");
+    assert_eq!(r.status, 422);
+    return 0;
+}

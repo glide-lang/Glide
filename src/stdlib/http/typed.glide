@@ -1,0 +1,109 @@
+// Typed JSON handler ergonomics. Wraps the validation ceremony around
+// `req.body_json()` + `Foo::from_json` so each handler reads as one
+// line of "extract and bind", and gives a single `value.into_response()`
+// surface for converting typed payloads back to HttpResponse.
+//
+// ```glide
+// import stdlib::http::*;
+// import stdlib::http::typed::*;
+// import stdlib::http::router::*;
+// import stdlib::json::*;
+//
+// pub struct StructLegal {
+//     pub nome:  string,
+//     pub idade: ?int,
+// }
+//
+// impl JsonBind for StructLegal {
+//     fn from_json(v: *JsonValue) -> !StructLegal { /* ... */ }
+//     fn to_json(self: *StructLegal) -> *JsonValue { /* ... */ }
+// }
+//
+// fn create_user(req: *HttpRequest) -> HttpResponse {
+//     bind_json!(req, StructLegal, body);     // populates `body` or returns 400/422
+//     let echoed: StructLegal = body;
+//     return Json::respond(echoed);            // body.to_json() + 200 + JSON header
+// }
+// ```
+//
+// ## What's NOT in (Phase 2 follow-ups)
+//
+// - `fn h(Json(req): Json<T>)` fn-param destructure: parser doesn't
+//   accept patterns in fn params today.
+// - `fn h() -> Json<T>` auto-conversion: router stores
+//   `fn(*HttpRequest) -> HttpResponse` so handlers can't return
+//   `Json<T>` directly; use `Json::respond(t)` to convert at the
+//   end of the handler.
+// - `derive_json!` macro: needs macro_rules! arms that distinguish
+//   `?T` / required / dynamic fields and either compiler-side
+//   `T::method(v)` dispatch via a generic type param, or per-field
+//   pattern arms.
+
+import stdlib::http::*;
+import stdlib::http_status::*;
+import stdlib::json::*;
+
+// ---- Json<T> wrapper ----------------------------------------------------
+
+/// Generic wrapper around a value that should be serialised as the
+/// JSON body of an HTTP response. The struct is intentionally a
+/// single-field carrier — the value gets to `into_response()` via
+/// the `IntoResponse` impl below, which calls `T.to_json()` (so `T`
+/// must implement `JsonBind`).
+///
+/// ```glide
+/// // Build:
+/// let r: HttpResponse = json_respond(StructLegal { nome: "alice", idade: some(30) });
+/// ```
+pub struct Json<T> {
+    pub val: T,
+}
+
+/// One-step from typed value to HttpResponse: serialises `v.to_json()`
+/// + stamps `Content-Type: application/json` + 200 status. Free fn
+/// (instead of a `Json::respond` static method) because Glide's
+/// monomorphizer doesn't yet propagate the substituted T through a
+/// chained `Json::wrap(v).into_response()` — calling `to_json`
+/// directly here sidesteps that entirely.
+///
+/// ```glide
+/// fn create(req: *HttpRequest) -> HttpResponse {
+///     let user: StructLegal = /* ... */;
+///     return json_respond(user);
+/// }
+/// ```
+pub fn json_respond<T: JsonBind>(v: T) -> HttpResponse {
+    return HttpResponse::ok().json_of(v.to_json());
+}
+
+// ---- IntoResponse trait -------------------------------------------------
+
+/// Convert any "response-shaped" value into a final HttpResponse the
+/// server loop can write to the wire. Implemented for HttpResponse
+/// itself (identity) and for `Json<T>` when T binds to JSON. Future
+/// implementors might cover `string` (text reply), `?T`, error types,
+/// etc.; nothing in stdlib::http::router calls `into_response`
+/// today, so impls are purely for handler-tail ergonomics.
+pub trait IntoResponse {
+    fn into_response(self: Self) -> HttpResponse;
+}
+
+impl IntoResponse for HttpResponse {
+    fn into_response(self: HttpResponse) -> HttpResponse {
+        return self;
+    }
+}
+
+impl<T: JsonBind> IntoResponse for Json<T> {
+    fn into_response(self: Json<T>) -> HttpResponse {
+        return HttpResponse::ok().json_of(self.val.to_json());
+    }
+}
+
+// A `bind_json!` macro that wraps the validate-and-respond ceremony
+// would round out this surface (see the example fn above). v1 of the
+// macro system only accepts `:expr` matchers, so the macro can't
+// take a `:ty` for the target type or a `:ident` for the bind name.
+// Until the macro system grows those matchers, hand-write the two
+// `!.ok` checks (see `tests/http_typed_test.glide` for the canonical
+// shape) and use `Json::respond(value)` for the typed reply.
