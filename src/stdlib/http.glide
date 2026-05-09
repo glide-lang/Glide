@@ -129,6 +129,43 @@ impl HttpResponse {
             body: self.body,
         };
     }
+
+    /// Look up a header by name, case-insensitive. Returns `""` when
+    /// missing. Mirrors `HttpRequest.header()` so client code can read
+    /// `Location`, `Set-Cookie`, `Content-Type`, etc. without
+    /// hand-rolling a parse.
+    pub fn header(self: *HttpResponse, name: string) -> string {
+        let want: string = name.to_lower();
+        let lines: *Vector<string> = self.headers_block.split("\r\n");
+        for let i: int = 0; i < lines.len(); i++ {
+            let h: string = lines.get(i);
+            let colon: int = _find(h, ":", 0);
+            if colon < 0 { continue; }
+            let n: string = h.substring(0, colon).trim().to_lower();
+            if n.eq(want) {
+                return h.substring(colon + 1, h.len()).trim();
+            }
+        }
+        return "";
+    }
+
+    /// Return *every* header line matching `name` (case-insensitive).
+    /// Useful for `Set-Cookie`, which legitimately repeats per cookie.
+    pub fn headers(self: *HttpResponse, name: string) -> *Vector<string> {
+        let want: string = name.to_lower();
+        let out: *Vector<string> = Vector::new();
+        let lines: *Vector<string> = self.headers_block.split("\r\n");
+        for let i: int = 0; i < lines.len(); i++ {
+            let h: string = lines.get(i);
+            let colon: int = _find(h, ":", 0);
+            if colon < 0 { continue; }
+            let n: string = h.substring(0, colon).trim().to_lower();
+            if n.eq(want) {
+                out.push(h.substring(colon + 1, h.len()).trim());
+            }
+        }
+        return out;
+    }
 }
 
 // ---- parser -----------------------------------------------------------

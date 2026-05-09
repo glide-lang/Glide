@@ -18,6 +18,7 @@ import stdlib::net::tcp::*;
 import stdlib::net::tls::*;
 import stdlib::net::ip::*;
 import stdlib::http::*;
+import stdlib::http::cookies::*;
 
 /// A request being assembled — mutable holder; not the same shape as
 /// the server-side `HttpRequest` (which is parsed-from-wire).
@@ -57,7 +58,11 @@ impl HttpClientRequest {
 pub struct HttpClient {
     pub user_agent: string,
     pub max_redirects: int,
-    // Future: pool, timeout, jar (cookie jar), tls_config.
+    /// Optional cookie jar — assign a `CookieJar::new()` to enable
+    /// automatic Set-Cookie ingestion + Cookie: header attachment
+    /// across requests.
+    pub jar: *CookieJar,
+    // Future: pool, timeout, tls_config.
 }
 
 impl HttpClient {
@@ -65,27 +70,82 @@ impl HttpClient {
         let c: *HttpClient = malloc(sizeof(HttpClient)) as *HttpClient;
         c.user_agent = "glide/0.1";
         c.max_redirects = 5;
+        c.jar = null as *CookieJar;
         return c;
     }
 
-    /// Send `req` and return the parsed response.
+    /// Send `req` and return the parsed response. Follows redirects up
+    /// to `self.max_redirects` hops; 303 demotes the method to GET and
+    /// drops the body, 301/302/307/308 keep both. Relative `Location`
+    /// values are resolved against the current URL.
     pub fn do(self: *HttpClient, req: *HttpClientRequest) -> !*HttpResponse {
-        let u: !*ParsedUrl = _hcli_parse_url(req.url);
+        let mut current_url: string = req.url;
+        let mut current_method: string = req.method;
+        let mut current_body: string = req.body;
+        let mut current_headers: string = req.headers;
+        let mut hops: int = 0;
+        while true {
+            let r: !*HttpResponse = self._do_once(current_method, current_url,
+                                                  current_headers, current_body);
+            if !r.ok { return err(r.err); }
+            let resp: *HttpResponse = r.val;
+            // Decide whether to follow.
+            if !_hcli_is_redirect(resp.status) { return ok(resp); }
+            if hops >= self.max_redirects {
+                return err("http_client: too many redirects");
+            }
+            let loc: string = resp.header("Location");
+            if loc.eq("") { return ok(resp); }
+            let next_url: !string = _hcli_resolve_url(current_url, loc);
+            if !next_url.ok { return err(next_url.err); }
+
+            // 303 → GET, no body. 301/302 historically also dropped body
+            // for non-GET; we follow that convention here. 307/308
+            // preserve method + body.
+            if resp.status == 307 || resp.status == 308 {
+                // keep method + body
+            } else if resp.status == 303 {
+                current_method = "GET";
+                current_body = "";
+                current_headers = _hcli_strip_content_headers(current_headers);
+            } else {
+                // 301/302
+                if !current_method.eq("GET") && !current_method.eq("HEAD") {
+                    current_method = "GET";
+                    current_body = "";
+                    current_headers = _hcli_strip_content_headers(current_headers);
+                }
+            }
+            current_url = next_url.val;
+            hops = hops + 1;
+        }
+        return err("http_client: redirect loop exited unexpectedly");
+    }
+
+    fn _do_once(self: *HttpClient, method: string, url_s: string,
+                extra_headers: string, body: string) -> !*HttpResponse {
+        let u: !*ParsedUrl = _hcli_parse_url(url_s);
         if !u.ok { return err(u.err); }
         let url: *ParsedUrl = u.val;
         if !url.scheme.eq("http") && !url.scheme.eq("https") {
             return err("http_client: scheme must be http or https (got `".concat(url.scheme).concat("`)"));
         }
 
-        // Compose request line + default headers + caller headers + body.
-        let mut wire: string = req.method.concat(" ").concat(url.path).concat(" HTTP/1.1\r\n");
+        let mut wire: string = method.concat(" ").concat(url.path).concat(" HTTP/1.1\r\n");
         wire = wire.concat("Host: ").concat(url.host_header()).concat("\r\n");
         wire = wire.concat("User-Agent: ").concat(self.user_agent).concat("\r\n");
         wire = wire.concat("Accept: */*\r\n");
         wire = wire.concat("Connection: close\r\n");
-        wire = wire.concat(req.headers);
+        if self.jar != null {
+            let cookies: string = self.jar.header_value(url.host, url.path,
+                                                        url.scheme.eq("https"));
+            if cookies.len() > 0 {
+                wire = wire.concat("Cookie: ").concat(cookies).concat("\r\n");
+            }
+        }
+        wire = wire.concat(extra_headers);
         wire = wire.concat("\r\n");
-        wire = wire.concat(req.body);
+        wire = wire.concat(body);
 
         let mut raw_body: string = "";
         if url.scheme.eq("https") {
@@ -111,7 +171,16 @@ impl HttpClient {
             if !raw.ok { return err(raw.err); }
             raw_body = raw.val;
         }
-        return _hcli_parse_response(raw_body);
+        let parsed: !*HttpResponse = _hcli_parse_response(raw_body);
+        if !parsed.ok { return err(parsed.err); }
+        let resp: *HttpResponse = parsed.val;
+        if self.jar != null {
+            let lines: *Vector<string> = resp.headers("Set-Cookie");
+            if lines.len() > 0 {
+                self.jar.ingest(url.host, lines);
+            }
+        }
+        return ok(resp);
     }
 
     pub fn get(self: *HttpClient, url: string) -> !*HttpResponse {
@@ -279,6 +348,79 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     r.headers_block = hdr;
     r.body = body;
     return ok(r);
+}
+
+fn _hcli_is_redirect(status: int) -> bool {
+    return status == 301 || status == 302 || status == 303
+        || status == 307 || status == 308;
+}
+
+/// Resolve `loc` against `base`. Handles three cases:
+///   * absolute (`http://...` or `https://...`) — return as-is
+///   * scheme-relative (`//host/path`) — copy scheme from base
+///   * path-absolute (`/path`) — keep base scheme + host, replace path
+///   * path-relative (`path`)  — anchor on base's path directory
+fn _hcli_resolve_url(base: string, loc: string) -> !string {
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return ok(loc);
+    }
+    let base_url: !*ParsedUrl = _hcli_parse_url(base);
+    if !base_url.ok { return err(base_url.err); }
+    let bu: *ParsedUrl = base_url.val;
+    if loc.starts_with("//") {
+        return ok(bu.scheme.concat(":").concat(loc));
+    }
+    let mut auth: string = bu.host;
+    let mut def: int = 80;
+    if bu.scheme.eq("https") { def = 443; }
+    if bu.port != def {
+        auth = auth.concat(":").concat(_hcli_itos(bu.port));
+    }
+    if loc.starts_with("/") {
+        return ok(bu.scheme.concat("://").concat(auth).concat(loc));
+    }
+    // Path-relative: drop the basename of bu.path and append loc.
+    let mut dir: string = "/";
+    let last_slash: int = _last_index_of(bu.path, "/");
+    if last_slash >= 0 {
+        dir = bu.path.substring(0, last_slash + 1);
+    }
+    return ok(bu.scheme.concat("://").concat(auth).concat(dir).concat(loc));
+}
+
+fn _last_index_of(s: string, needle: string) -> int {
+    let n: int = s.len();
+    let m: int = needle.len();
+    if m == 0 || m > n { return -1; }
+    let mut i: int = n - m;
+    while i >= 0 {
+        let mut k: int = 0;
+        let mut hit: bool = true;
+        while k < m {
+            if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
+            k = k + 1;
+        }
+        if hit { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+/// Strip Content-Type and Content-Length from a header block. Used
+/// when a redirect demotes POST→GET — the body goes away, so its
+/// describing headers must too.
+fn _hcli_strip_content_headers(block: string) -> string {
+    let lines: *Vector<string> = block.split("\r\n");
+    let mut out: string = "";
+    for let i: int = 0; i < lines.len(); i++ {
+        let line: string = lines.get(i);
+        if line.len() == 0 { continue; }
+        let lower: string = line.to_lower();
+        if lower.starts_with("content-type:") { continue; }
+        if lower.starts_with("content-length:") { continue; }
+        out = out.concat(line).concat("\r\n");
+    }
+    return out;
 }
 
 fn _hcli_itos(n: int) -> string {

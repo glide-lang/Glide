@@ -1,0 +1,156 @@
+// Cookie storage for the HTTP client. RFC 6265-ish — covers the
+// common case (Set-Cookie parse, Cookie: header build) without
+// implementing the full public-suffix-list domain matching, expires
+// time parsing, or SameSite enforcement. Plenty for talking to APIs
+// that use session cookies.
+//
+// ```glide
+// import stdlib::http::client::*;
+// import stdlib::http::cookies::*;
+//
+// let jar: *CookieJar = CookieJar::new();
+// let c: *HttpClient = HttpClient::new();
+// c.jar = jar;
+//
+// // Login: server responds with Set-Cookie; the jar absorbs it.
+// let _ = c.post_json("https://api.example.com/login", body);
+//
+// // Subsequent requests: the jar attaches Cookie: header automatically.
+// let r: !*HttpResponse = c.get("https://api.example.com/me");
+// ```
+
+pub struct Cookie {
+    pub name:    string,
+    pub value:   string,
+    pub domain:  string,
+    pub path:    string,
+    pub secure:  bool,
+    pub http_only: bool,
+}
+
+impl Cookie {
+    pub fn new(name: string, value: string) -> *Cookie {
+        let c: *Cookie = malloc(sizeof(Cookie)) as *Cookie;
+        c.name = name;
+        c.value = value;
+        c.domain = "";
+        c.path = "/";
+        c.secure = false;
+        c.http_only = false;
+        return c;
+    }
+}
+
+pub struct CookieJar {
+    cookies: *Vector<*Cookie>,
+}
+
+impl CookieJar {
+    pub fn new() -> *CookieJar {
+        let j: *CookieJar = malloc(sizeof(CookieJar)) as *CookieJar;
+        let v: *Vector<*Cookie> = Vector::new();
+        j.cookies = v;
+        return j;
+    }
+
+    /// Parse every `Set-Cookie` header in `set_cookie_lines` and store
+    /// the cookies, scoped to `request_host`. Existing cookies with
+    /// the same (name, domain, path) are replaced.
+    pub fn ingest(self: *CookieJar, request_host: string,
+                  set_cookie_lines: *Vector<string>) {
+        for let i: int = 0; i < set_cookie_lines.len(); i++ {
+            let line: string = set_cookie_lines.get(i);
+            let c: ?*Cookie = _parse_set_cookie(request_host, line);
+            if c.has { self._add(c.val); }
+        }
+    }
+
+    fn _add(self: *CookieJar, c: *Cookie) {
+        // Replace any existing cookie with the same (name, domain, path).
+        for let i: int = 0; i < self.cookies.len(); i++ {
+            let ex: *Cookie = self.cookies.get(i);
+            if ex.name.eq(c.name) && ex.domain.eq(c.domain) && ex.path.eq(c.path) {
+                self.cookies.set(i, c);
+                return;
+            }
+        }
+        self.cookies.push(c);
+    }
+
+    /// Build the `Cookie:` header value for an outbound request to
+    /// `host`/`path` over `is_secure` transport. Returns `""` when no
+    /// cookie applies.
+    pub fn header_value(self: *CookieJar, host: string, path: string,
+                        is_secure: bool) -> string {
+        let mut out: string = "";
+        for let i: int = 0; i < self.cookies.len(); i++ {
+            let c: *Cookie = self.cookies.get(i);
+            if !_domain_match(host, c.domain) { continue; }
+            if !path.starts_with(c.path) { continue; }
+            if c.secure && !is_secure { continue; }
+            if out.len() > 0 { out = out.concat("; "); }
+            out = out.concat(c.name).concat("=").concat(c.value);
+        }
+        return out;
+    }
+
+    /// Snapshot of every cookie. Order matches insertion / replacement.
+    pub fn all(self: *CookieJar) -> *Vector<*Cookie> { return self.cookies; }
+
+    /// Forget every cookie. Useful for logout flows.
+    pub fn clear(self: *CookieJar) { self.cookies.clear(); }
+}
+
+// ---- parsing ----
+
+fn _parse_set_cookie(request_host: string, raw: string) -> ?*Cookie {
+    // Split on `;`. First chunk is name=value, rest are attributes.
+    let parts: *Vector<string> = raw.split(";");
+    if parts.len() == 0 { return none(); }
+    let head: string = parts.get(0).trim();
+    let eq: int = head.index_of("=");
+    if eq <= 0 { return none(); }
+    let name: string = head.substring(0, eq).trim();
+    let value: string = head.substring(eq + 1, head.len()).trim();
+    let c: *Cookie = Cookie::new(name, value);
+    c.domain = request_host;
+    c.path = "/";
+
+    for let i: int = 1; i < parts.len(); i++ {
+        let attr: string = parts.get(i).trim();
+        let lower: string = attr.to_lower();
+        if lower.eq("secure") { c.secure = true; continue; }
+        if lower.eq("httponly") { c.http_only = true; continue; }
+        let aeq: int = attr.index_of("=");
+        if aeq <= 0 { continue; }
+        let k: string = attr.substring(0, aeq).trim().to_lower();
+        let v: string = attr.substring(aeq + 1, attr.len()).trim();
+        if k.eq("domain") {
+            // Strip leading dot per RFC 6265 §5.2.3.
+            let mut d: string = v;
+            if d.len() > 0 && d.at(0).to_int() == 46 { d = d.substring(1, d.len()); }
+            c.domain = d.to_lower();
+            continue;
+        }
+        if k.eq("path") { c.path = v; continue; }
+        // Expires / Max-Age / SameSite are parsed but ignored in v1.
+    }
+    return some(c);
+}
+
+/// Approximate RFC 6265 §5.1.3 domain match: `host` matches `cookie_domain`
+/// if equal, or if `cookie_domain` is a suffix preceded by `.`. Doesn't
+/// consult the public-suffix list, so a cookie set for `example.com`
+/// applies to any subdomain — that's the standard "cookie-without-PSL"
+/// behaviour for v1.
+fn _domain_match(host: string, cookie_domain: string) -> bool {
+    if cookie_domain.eq("") { return false; }
+    let h: string = host.to_lower();
+    let d: string = cookie_domain.to_lower();
+    if h.eq(d) { return true; }
+    if h.len() <= d.len() { return false; }
+    if !h.ends_with(d) { return false; }
+    let dot_idx: int = h.len() - d.len() - 1;
+    if dot_idx < 0 { return false; }
+    return h.at(dot_idx).to_int() == 46;
+}
