@@ -455,3 +455,63 @@ impl Vector<int> {
         return some(m);
     }
 }
+
+impl Vector<f64> {
+    /// Sum of all elements. Empty vector returns 0.0.
+    pub fn sum(self: *Vector<f64>) -> f64 {
+        let mut acc: f64 = 0.0;
+        for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+        return acc;
+    }
+
+    /// Largest element, or `none` if the vector is empty.
+    pub fn max(self: *Vector<f64>) -> ?f64 {
+        if self.len == 0 { return none(); }
+        let mut m: f64 = self.data[0];
+        for let i: int = 1; i < self.len; i++ {
+            if self.data[i] > m { m = self.data[i]; }
+        }
+        return some(m);
+    }
+
+    /// Smallest element, or `none` if the vector is empty.
+    pub fn min(self: *Vector<f64>) -> ?f64 {
+        if self.len == 0 { return none(); }
+        let mut m: f64 = self.data[0];
+        for let i: int = 1; i < self.len; i++ {
+            if self.data[i] < m { m = self.data[i]; }
+        }
+        return some(m);
+    }
+
+    /// Arithmetic mean, or `none` if the vector is empty.
+    pub fn avg(self: *Vector<f64>) -> ?f64 {
+        if self.len == 0 { return none(); }
+        let mut acc: f64 = 0.0;
+        for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+        return some(acc / (self.len as f64));
+    }
+}
+
+impl Vector<string> {
+    /// Concatenate all elements with `sep` between them. Empty vector
+    /// returns "". Single-element vector returns that element unchanged.
+    pub fn join(self: *Vector<string>, sep: string) -> string {
+        if self.len == 0 { return ""; }
+        let mut out: string = self.data[0];
+        for let i: int = 1; i < self.len; i++ {
+            out = out.concat(sep);
+            out = out.concat(self.data[i]);
+        }
+        return out;
+    }
+
+    /// Concatenate all elements with no separator. Empty vector returns "".
+    pub fn concat(self: *Vector<string>) -> string {
+        let mut out: string = "";
+        for let i: int = 0; i < self.len; i++ {
+            out = out.concat(self.data[i]);
+        }
+        return out;
+    }
+}

@@ -186,3 +186,109 @@ fn test_vec_chain_into_max() -> int {
     assert_eq!(r.val, 8);
     return 0;
 }
+
+fn _half(x: int) -> f64 { return (x as f64) / 2.0; }
+
+fn test_vec_f64_sum() -> int {
+    let v: *Vector<f64> = Vector::new();
+    v.push(1.5); v.push(2.5); v.push(3.0);
+    assert_eq!(v.sum(), 7.0);
+    return 0;
+}
+
+fn test_vec_f64_sum_empty() -> int {
+    let v: *Vector<f64> = Vector::new();
+    assert_eq!(v.sum(), 0.0);
+    return 0;
+}
+
+fn test_vec_f64_max_some() -> int {
+    let v: *Vector<f64> = Vector::new();
+    v.push(1.0); v.push(7.5); v.push(3.0);
+    let r: ?f64 = v.max();
+    assert!(r.has);
+    assert_eq!(r.val, 7.5);
+    return 0;
+}
+
+fn test_vec_f64_min_some() -> int {
+    let v: *Vector<f64> = Vector::new();
+    v.push(1.0); v.push(7.5); v.push(0.5);
+    let r: ?f64 = v.min();
+    assert!(r.has);
+    assert_eq!(r.val, 0.5);
+    return 0;
+}
+
+fn test_vec_f64_avg_some() -> int {
+    let v: *Vector<f64> = Vector::new();
+    v.push(2.0); v.push(4.0); v.push(6.0);
+    let r: ?f64 = v.avg();
+    assert!(r.has);
+    assert_eq!(r.val, 4.0);
+    return 0;
+}
+
+fn test_vec_f64_avg_empty() -> int {
+    let v: *Vector<f64> = Vector::new();
+    let r: ?f64 = v.avg();
+    assert_not!(r.has);
+    return 0;
+}
+
+fn test_vec_f64_chain_map_sum() -> int {
+    let v: *Vector<int> = _build(2, 6);
+    let total: f64 = v.map(_half).sum();
+    assert_eq!(total, 7.0);
+    return 0;
+}
+
+fn _name(x: int) -> string {
+    if x == 1 { return "one"; }
+    if x == 2 { return "two"; }
+    if x == 3 { return "three"; }
+    return "?";
+}
+
+fn test_vec_string_join() -> int {
+    let v: *Vector<string> = Vector::new();
+    v.push("a"); v.push("b"); v.push("c");
+    let sep: string = ",";
+    assert_str_eq!(v.join(sep), "a,b,c");
+    return 0;
+}
+
+fn test_vec_string_join_empty() -> int {
+    let v: *Vector<string> = Vector::new();
+    let sep: string = ",";
+    assert_str_eq!(v.join(sep), "");
+    return 0;
+}
+
+fn test_vec_string_join_single() -> int {
+    let v: *Vector<string> = Vector::new();
+    v.push("alone");
+    let sep: string = "|";
+    assert_str_eq!(v.join(sep), "alone");
+    return 0;
+}
+
+fn test_vec_string_concat() -> int {
+    let v: *Vector<string> = Vector::new();
+    v.push("foo"); v.push("bar"); v.push("baz");
+    assert_str_eq!(v.concat(), "foobarbaz");
+    return 0;
+}
+
+fn test_vec_string_concat_empty() -> int {
+    let v: *Vector<string> = Vector::new();
+    assert_str_eq!(v.concat(), "");
+    return 0;
+}
+
+fn test_vec_chain_map_join() -> int {
+    let v: *Vector<int> = _build(1, 4);
+    let sep: string = ", ";
+    assert_str_eq!(v.map(_name).join(sep), "one, two, three");
+    return 0;
+}
