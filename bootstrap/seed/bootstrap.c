@@ -4479,6 +4479,11 @@ Type*   resolve_assoc_recursive (CG*   g, Type*   t);
 Type*   resolve_concrete_assoc (CG*   g, Type*   t);
 void   forward_decl_generic_monos (CG*   g, Type*   t);
 void   _forward_decl_field_monos (CG*   g, Stmt*   s);
+void   _emit_wrapper_for_type (CG*   g, Type*   t);
+bool   _is_primitive_or_emitted (CG*   g, Type*   t);
+void   _emit_option_template (CG*   g, Type*   inner);
+void   _emit_result_template (CG*   g, Type*   inner);
+void   _emit_optres_template (CG*   g, Type*   inner);
 void   collect_result_in_type (CG*   g, Type*   t);
 void   collect_result_in_expr (CG*   g, Expr*   e);
 void   collect_result_in_stmt (CG*   g, Stmt*   s);
@@ -5150,6 +5155,8 @@ int main(int __glide_main_argc, char** __glide_main_argv);
 
 
 
+
+
 Vector__string*   Vector_new__string (void);
 void   Vector_push__string (Vector__string*   self, const char*   x);
 int   Vector_len__string (Vector__string*   self);
@@ -5245,6 +5252,7 @@ bool   HashMap_contains__FnSig (HashMap__FnSig*   self, const char*   k);
 FnSig   HashMap_get__FnSig (HashMap__FnSig*   self, const char*   k);
 void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x);
 Vector__string*   HashMap_keys__Type (HashMap__Type*   self);
+bool   HashMap_remove__string (HashMap__string*   self, const char*   k);
 Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void);
 Vector__AnonFn*   Vector_new__AnonFn (void);
 Expr   Vector_pop__Expr (Vector__Expr*   self);
@@ -12469,6 +12477,151 @@ void   _forward_decl_field_monos (CG*   g, Stmt*   s) {
     for (int   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
         Field   f = Vector_get__Field((s-> struct_fields ), i);
         ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (f. ty ));
+        ((void(*)(CG*, Type*))_emit_wrapper_for_type)(g, (f. ty ));
+    }
+}
+
+void   _emit_wrapper_for_type (CG*   g, Type*   t) {
+    if ((t  ==  NULL)) {
+        return;
+    }
+    if (((((t-> kind )  ==  TY_OPTION)  &&  ((t-> inner )  !=  NULL))  &&  ((bool(*)(CG*, Type*))_is_primitive_or_emitted)(g, (t-> inner )))) {
+        ((void(*)(CG*, Type*))_emit_option_template)(g, (t-> inner ));
+    }
+    if (((((t-> kind )  ==  TY_RESULT)  &&  ((t-> inner )  !=  NULL))  &&  ((bool(*)(CG*, Type*))_is_primitive_or_emitted)(g, (t-> inner )))) {
+        ((void(*)(CG*, Type*))_emit_result_template)(g, (t-> inner ));
+    }
+    if (((((t-> kind )  ==  TY_OPT_RESULT)  &&  ((t-> inner )  !=  NULL))  &&  ((bool(*)(CG*, Type*))_is_primitive_or_emitted)(g, (t-> inner )))) {
+        ((void(*)(CG*, Type*))_emit_optres_template)(g, (t-> inner ));
+    }
+    if (((t-> inner )  !=  NULL)) {
+        ((void(*)(CG*, Type*))_emit_wrapper_for_type)(g, (t-> inner ));
+    }
+    if (((t-> args )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
+            Type   a = Vector_get__Type((t-> args ), i);
+            ((void(*)(CG*, Type*))_emit_wrapper_for_type)(g, (&a));
+        }
+    }
+}
+
+bool   _is_primitive_or_emitted (CG*   g, Type*   t) {
+    if ((t  ==  NULL)) {
+        return false;
+    }
+    if ((((t-> kind )  ==  TY_NAMED)  &&  ((t-> name )  !=  NULL))) {
+        const char*   n = (t-> name );
+        if ((((__glide_string_eq(n, "int")  ||  __glide_string_eq(n, "uint"))  ||  __glide_string_eq(n, "long"))  ||  __glide_string_eq(n, "ulong"))) {
+            return true;
+        }
+        if ((((__glide_string_eq(n, "i8")  ||  __glide_string_eq(n, "i16"))  ||  __glide_string_eq(n, "i32"))  ||  __glide_string_eq(n, "i64"))) {
+            return true;
+        }
+        if ((((__glide_string_eq(n, "u8")  ||  __glide_string_eq(n, "u16"))  ||  __glide_string_eq(n, "u32"))  ||  __glide_string_eq(n, "u64"))) {
+            return true;
+        }
+        if ((__glide_string_eq(n, "usize")  ||  __glide_string_eq(n, "isize"))) {
+            return true;
+        }
+        if (((__glide_string_eq(n, "f32")  ||  __glide_string_eq(n, "f64"))  ||  __glide_string_eq(n, "float"))) {
+            return true;
+        }
+        if ((((__glide_string_eq(n, "bool")  ||  __glide_string_eq(n, "char"))  ||  __glide_string_eq(n, "string"))  ||  __glide_string_eq(n, "void"))) {
+            return true;
+        }
+        if (HashMap_contains__bool((g-> emitted_named ), n)) {
+            return true;
+        }
+    }
+    if (((t-> kind )  ==  TY_POINTER)) {
+        return true;
+    }
+    if ((((((t-> kind )  ==  TY_GENERIC)  &&  ((t-> name )  !=  NULL))  &&  ((t-> args )  !=  NULL))  &&  (!__glide_string_eq((t-> name ), "chan")))) {
+        const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t-> name ), (t-> args ));
+        return HashMap_contains__bool((g-> emitted_monos ), mangled);
+    }
+    return false;
+}
+
+void   _emit_option_template (CG*   g, Type*   inner) {
+    const char*   m = ((const char*(*)(Type*))mangle_type)(inner);
+    const char*   dedup_key = __glide_string_concat("__rt_option_emit_", m);
+    if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
+        return;
+    }
+    HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
+    const char*   tc = ((const char*(*)(Type*))type_to_c)(inner);
+    const char*   tmpl = "#ifndef __GLIDE_OPTION_@M@_GUARD\n#define __GLIDE_OPTION_@M@_GUARD\ntypedef struct __glide_option_@M@_t { int has; @TC@ val; } __glide_option_@M@_t;\nstatic __glide_option_@M@_t __glide_some_@M@(@TC@ v) { __glide_option_@M@_t o; o.has = 1; o.val = v; return o; }\nstatic __glide_option_@M@_t __glide_none_@M@(void) { __glide_option_@M@_t o; o.has = 0; return o; }\n#endif\n";
+    const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@M@", m);
+    const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@TC@", tc);
+    printf("%s", s2);
+    printf("%s\n", "");
+    bool   already = false;
+    for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
+        Type   ex = Vector_get__Type((g-> option_types ), i);
+        if (__glide_string_eq(((const char*(*)(Type*))mangle_type)((&ex)), m)) {
+            (already  =  true);
+            break;
+        }
+    }
+    if ((!already)) {
+        Vector_push__Type((g-> option_types ), (*inner));
+    }
+}
+
+void   _emit_result_template (CG*   g, Type*   inner) {
+    const char*   m = ((const char*(*)(Type*))mangle_type)(inner);
+    const char*   dedup_key = __glide_string_concat("__rt_result_emit_", m);
+    if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
+        return;
+    }
+    HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
+    const char*   tc = ((const char*(*)(Type*))type_to_c)(inner);
+    const char*   tmpl = "#ifndef __GLIDE_RESULT_@M@_GUARD\n#define __GLIDE_RESULT_@M@_GUARD\ntypedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { @TC@ z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }\n#endif\n";
+    if ((((inner-> kind )  ==  TY_NAMED)  &&  __glide_string_eq((inner-> name ), "void"))) {
+        HashMap_remove__string((g-> module_aliases ), dedup_key);
+        return;
+    }
+    const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@M@", m);
+    const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@TC@", tc);
+    printf("%s", s2);
+    printf("%s\n", "");
+    bool   already = false;
+    for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
+        Type   ex = Vector_get__Type((g-> result_types ), i);
+        if (__glide_string_eq(((const char*(*)(Type*))mangle_type)((&ex)), m)) {
+            (already  =  true);
+            break;
+        }
+    }
+    if ((!already)) {
+        Vector_push__Type((g-> result_types ), (*inner));
+    }
+}
+
+void   _emit_optres_template (CG*   g, Type*   inner) {
+    const char*   m = ((const char*(*)(Type*))mangle_type)(inner);
+    const char*   dedup_key = __glide_string_concat("__rt_optres_emit_", m);
+    if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
+        return;
+    }
+    HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
+    const char*   tc = ((const char*(*)(Type*))type_to_c)(inner);
+    const char*   tmpl = "#ifndef __GLIDE_OPTRES_@M@_GUARD\n#define __GLIDE_OPTRES_@M@_GUARD\n/* tag: 0=Some, 1=None, 2=Err */\ntypedef struct __glide_optres_@M@_t { int tag; @TC@ val; const char* err; } __glide_optres_@M@_t;\nstatic __glide_optres_@M@_t __glide_optres_some_@M@(@TC@ v) { __glide_optres_@M@_t r; r.tag = 0; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_none_@M@(void) { __glide_optres_@M@_t r; r.tag = 1; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_err_@M@(const char* msg) { __glide_optres_@M@_t r; r.tag = 2; r.err = msg; return r; }\n#endif\n";
+    const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@M@", m);
+    const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@TC@", tc);
+    printf("%s", s2);
+    printf("%s\n", "");
+    bool   already = false;
+    for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
+        Type   ex = Vector_get__Type((g-> optres_types ), i);
+        if (__glide_string_eq(((const char*(*)(Type*))mangle_type)((&ex)), m)) {
+            (already  =  true);
+            break;
+        }
+    }
+    if ((!already)) {
+        Vector_push__Type((g-> optres_types ), (*inner));
     }
 }
 
@@ -25899,6 +26052,32 @@ Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void) {
     ((v-> cap )  =  0);
     ((v-> is_arena )  =  arena);
     return v;
+}
+
+bool   HashMap_remove__string (HashMap__string*   self, const char*   k) {
+    int   i = HashMap_slot__string(self, k);
+    if ((i  <  0)) {
+        return false;
+    }
+    if ((!(self-> occupied )[i])) {
+        return false;
+    }
+    if ((!__glide_string_eq((self-> keys )[i], k))) {
+        return false;
+    }
+    ((self-> occupied )[i]  =  false);
+    ((self-> len )  =  ((self-> len )  -  1));
+    int   mask = ((self-> cap )  -  1);
+    int   j = ((i  +  1)  &  mask);
+    while ((self-> occupied )[j]) {
+        const char*   rk = (self-> keys )[j];
+        const char*   rv = (self-> values )[j];
+        ((self-> occupied )[j]  =  false);
+        ((self-> len )  =  ((self-> len )  -  1));
+        HashMap_insert__string(self, rk, rv);
+        (j  =  ((j  +  1)  &  mask));
+    }
+    return true;
 }
 
 Vector__string*   HashMap_keys__Type (HashMap__Type*   self) {
