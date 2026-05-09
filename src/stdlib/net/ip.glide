@@ -1,0 +1,358 @@
+// IP address types — IPv4 + IPv6 in a single tagged struct, plus the
+// SocketAddr (ip+port) bundle and Cidr range. No allocations: every
+// type is small enough to live by value or in a single malloc.
+
+/// A v4 or v6 address. `kind` is 4 or 6; the other fields are
+/// meaningful only for the matching kind.
+///
+/// V4 layout: `v4` holds the 32-bit address in host-order, e.g.
+/// `127.0.0.1` is `0x7F000001`.
+///
+/// V6 layout: `v6_hi` and `v6_lo` are the upper and lower 64 bits in
+/// host-order. The address `::1` has `v6_hi = 0`, `v6_lo = 1`.
+pub struct IpAddr {
+    pub kind: int,
+    pub v4: int,
+    pub v6_hi: i64,
+    pub v6_lo: i64,
+}
+
+impl IpAddr {
+    /// Build an IPv4 address from four octets.
+    pub fn v4(a: int, b: int, c: int, d: int) -> *IpAddr {
+        let ip: *IpAddr = malloc(sizeof(IpAddr)) as *IpAddr;
+        ip.kind = 4;
+        ip.v4 = (a << 24) | (b << 16) | (c << 8) | d;
+        ip.v6_hi = 0;
+        ip.v6_lo = 0;
+        return ip;
+    }
+
+    /// Build an IPv6 address from two 64-bit halves (host-order).
+    pub fn v6(hi: i64, lo: i64) -> *IpAddr {
+        let ip: *IpAddr = malloc(sizeof(IpAddr)) as *IpAddr;
+        ip.kind = 6;
+        ip.v4 = 0;
+        ip.v6_hi = hi;
+        ip.v6_lo = lo;
+        return ip;
+    }
+
+    /// `127.0.0.1` / `::1` shorthands.
+    pub fn loopback_v4() -> *IpAddr { return IpAddr::v4(127, 0, 0, 1); }
+    pub fn loopback_v6() -> *IpAddr { return IpAddr::v6(0, 1); }
+
+    /// `0.0.0.0` / `::` (all-interfaces / unspecified).
+    pub fn unspec_v4() -> *IpAddr { return IpAddr::v4(0, 0, 0, 0); }
+    pub fn unspec_v6() -> *IpAddr { return IpAddr::v6(0, 0); }
+
+    pub fn is_v4(self: *IpAddr) -> bool { return self.kind == 4; }
+    pub fn is_v6(self: *IpAddr) -> bool { return self.kind == 6; }
+
+    /// `true` for `127.0.0.0/8` (v4) or `::1` (v6).
+    pub fn is_loopback(self: *IpAddr) -> bool {
+        if self.kind == 4 {
+            return ((self.v4 >> 24) & 255) == 127;
+        }
+        return self.v6_hi == 0 && self.v6_lo == 1;
+    }
+
+    /// `true` for the all-zeros address.
+    pub fn is_unspecified(self: *IpAddr) -> bool {
+        if self.kind == 4 { return self.v4 == 0; }
+        return self.v6_hi == 0 && self.v6_lo == 0;
+    }
+
+    /// `true` for RFC 1918 (10/8, 172.16/12, 192.168/16) on v4 or
+    /// fc00::/7 unique-local on v6.
+    pub fn is_private(self: *IpAddr) -> bool {
+        if self.kind == 4 {
+            let a: int = (self.v4 >> 24) & 255;
+            let b: int = (self.v4 >> 16) & 255;
+            if a == 10 { return true; }
+            if a == 172 && b >= 16 && b <= 31 { return true; }
+            if a == 192 && b == 168 { return true; }
+            return false;
+        }
+        // v6 unique local: fc00::/7
+        let high_byte: i64 = (self.v6_hi >> 56) & 255;
+        return (high_byte & 254) == 252;
+    }
+
+    pub fn to_string(self: *IpAddr) -> string {
+        if self.kind == 4 { return _v4_to_str(self.v4); }
+        return _v6_to_str(self.v6_hi, self.v6_lo);
+    }
+
+    /// Parse `"1.2.3.4"` (v4) or `"::1"` / `"2001:db8::1"` (v6).
+    /// Returns `err` on malformed input.
+    pub fn parse(s: string) -> !*IpAddr {
+        if s.contains(":") {
+            let v: !*IpAddr = _parse_v6(s);
+            return v;
+        }
+        return _parse_v4(s);
+    }
+
+    pub fn eq(self: *IpAddr, other: *IpAddr) -> bool {
+        if self.kind != other.kind { return false; }
+        if self.kind == 4 { return self.v4 == other.v4; }
+        return self.v6_hi == other.v6_hi && self.v6_lo == other.v6_lo;
+    }
+}
+
+// ---- v4 parse / format ----
+
+fn _v4_to_str(packed: int) -> string {
+    let a: int = (packed >> 24) & 255;
+    let b: int = (packed >> 16) & 255;
+    let c: int = (packed >>  8) & 255;
+    let d: int =  packed        & 255;
+    return _itos(a).concat(".").concat(_itos(b))
+                   .concat(".").concat(_itos(c))
+                   .concat(".").concat(_itos(d));
+}
+
+fn _parse_v4(s: string) -> !*IpAddr {
+    let parts: *Vector<string> = s.split(".");
+    if parts.len() != 4 { return err("ipv4: expected 4 octets"); }
+    let mut packed: int = 0;
+    for let i: int = 0; i < 4; i++ {
+        let p: string = parts.get(i);
+        if p.len() == 0 || p.len() > 3 { return err("ipv4: bad octet"); }
+        let r: !int = p.try_parse_int();
+        if !r.ok { return err("ipv4: non-numeric octet"); }
+        let n: int = r.val;
+        if n < 0 || n > 255 { return err("ipv4: octet out of range"); }
+        packed = (packed << 8) | n;
+    }
+    return ok(IpAddr::v4((packed >> 24) & 255,
+                         (packed >> 16) & 255,
+                         (packed >>  8) & 255,
+                          packed        & 255));
+}
+
+// ---- v6 parse / format ----
+//
+// RFC 5952. Supports the `::` zero-collapse, mixed `::ffff:1.2.3.4`,
+// embedded v4 in last 32 bits.
+
+fn _hex_digit(n: int) -> string {
+    if n < 10 { return ((48 + n) as char).to_string(); }
+    return ((87 + n) as char).to_string();
+}
+
+fn _v6_group_str(g: int) -> string {
+    if g == 0 { return "0"; }
+    let mut s: string = "";
+    let mut x: int = g;
+    while x > 0 {
+        let d: int = x & 15;
+        s = _hex_digit(d).concat(s);
+        x = x >> 4;
+    }
+    return s;
+}
+
+fn _v6_groups(hi: i64, lo: i64) -> *Vector<int> {
+    let g: *Vector<int> = Vector::new();
+    g.push(((hi >> 48) & 65535) as int);
+    g.push(((hi >> 32) & 65535) as int);
+    g.push(((hi >> 16) & 65535) as int);
+    g.push(( hi        & 65535) as int);
+    g.push(((lo >> 48) & 65535) as int);
+    g.push(((lo >> 32) & 65535) as int);
+    g.push(((lo >> 16) & 65535) as int);
+    g.push(( lo        & 65535) as int);
+    return g;
+}
+
+fn _v6_to_str(hi: i64, lo: i64) -> string {
+    let groups: *Vector<int> = _v6_groups(hi, lo);
+
+    // Find the longest run of zero groups (>=2). RFC 5952 §4.2.
+    let mut best_start: int = -1;
+    let mut best_len: int = 0;
+    let mut cur_start: int = -1;
+    let mut cur_len: int = 0;
+    for let i: int = 0; i < 8; i++ {
+        if groups.get(i) == 0 {
+            if cur_len == 0 { cur_start = i; }
+            cur_len = cur_len + 1;
+            if cur_len > best_len { best_len = cur_len; best_start = cur_start; }
+        } else {
+            cur_len = 0;
+        }
+    }
+    if best_len < 2 { best_start = -1; }
+
+    // Build tokens then join with ":". Collapse run becomes one empty
+    // token; an extra empty at start/end if the run touches the edge so
+    // joining produces the leading/trailing "::".
+    let toks: *Vector<string> = Vector::new();
+    if best_start == 0 { toks.push(""); }
+    let mut at: int = 0;
+    while at < 8 {
+        if at == best_start {
+            toks.push("");
+            at = at + best_len;
+            continue;
+        }
+        toks.push(_v6_group_str(groups.get(at)));
+        at = at + 1;
+    }
+    if best_start >= 0 && best_start + best_len == 8 { toks.push(""); }
+    return toks.join(":");
+}
+
+fn _parse_v6_group(s: string) -> !int {
+    if s.len() == 0 || s.len() > 4 { return err("ipv6: group length"); }
+    let mut v: int = 0;
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        let mut d: int = -1;
+        if c >= 48 && c <=  57 { d = c - 48; }
+        if c >= 97 && c <= 102 { d = c - 87; }
+        if c >= 65 && c <=  70 { d = c - 55; }
+        if d < 0 { return err("ipv6: non-hex char"); }
+        v = (v << 4) | d;
+    }
+    return ok(v);
+}
+
+fn _parse_v6(s: string) -> !*IpAddr {
+    // Locate "::" if present.
+    let collapse_at: int = s.index_of("::");
+    let mut left: *Vector<int> = Vector::new();
+    let mut right: *Vector<int> = Vector::new();
+    if collapse_at >= 0 {
+        let lpart: string = s.substring(0, collapse_at);
+        let rpart: string = s.substring(collapse_at + 2, s.len());
+        if lpart.len() > 0 {
+            let lv: *Vector<string> = lpart.split(":");
+            for let i: int = 0; i < lv.len(); i++ {
+                let r: !int = _parse_v6_group(lv.get(i));
+                if !r.ok { return err(r.err); }
+                left.push(r.val);
+            }
+        }
+        if rpart.len() > 0 {
+            let rv: *Vector<string> = rpart.split(":");
+            for let i: int = 0; i < rv.len(); i++ {
+                let r: !int = _parse_v6_group(rv.get(i));
+                if !r.ok { return err(r.err); }
+                right.push(r.val);
+            }
+        }
+        if left.len() + right.len() > 8 { return err("ipv6: too many groups"); }
+    } else {
+        let parts: *Vector<string> = s.split(":");
+        if parts.len() != 8 { return err("ipv6: expected 8 groups or `::`"); }
+        for let i: int = 0; i < 8; i++ {
+            let r: !int = _parse_v6_group(parts.get(i));
+            if !r.ok { return err(r.err); }
+            left.push(r.val);
+        }
+    }
+
+    // Pad zeros into the collapse slot if any.
+    let total: int = left.len() + right.len();
+    let zeros: int = 8 - total;
+    let groups: *Vector<int> = Vector::new();
+    for let i: int = 0; i < left.len(); i++ { groups.push(left.get(i)); }
+    if collapse_at >= 0 {
+        for let i: int = 0; i < zeros; i++ { groups.push(0); }
+    }
+    for let i: int = 0; i < right.len(); i++ { groups.push(right.get(i)); }
+    if groups.len() != 8 { return err("ipv6: wrong group count after expand"); }
+
+    let g0: i64 = groups.get(0) as i64;
+    let g1: i64 = groups.get(1) as i64;
+    let g2: i64 = groups.get(2) as i64;
+    let g3: i64 = groups.get(3) as i64;
+    let g4: i64 = groups.get(4) as i64;
+    let g5: i64 = groups.get(5) as i64;
+    let g6: i64 = groups.get(6) as i64;
+    let g7: i64 = groups.get(7) as i64;
+    let hi: i64 = (g0 << 48) | (g1 << 32) | (g2 << 16) | g3;
+    let lo: i64 = (g4 << 48) | (g5 << 32) | (g6 << 16) | g7;
+    return ok(IpAddr::v6(hi, lo));
+}
+
+// ---- SocketAddr ----
+
+pub struct SocketAddr {
+    pub ip: *IpAddr,
+    pub port: int,
+}
+
+impl SocketAddr {
+    pub fn new(ip: *IpAddr, port: int) -> *SocketAddr {
+        let s: *SocketAddr = malloc(sizeof(SocketAddr)) as *SocketAddr;
+        s.ip = ip;
+        s.port = port;
+        return s;
+    }
+
+    pub fn to_string(self: *SocketAddr) -> string {
+        if self.ip.is_v6() {
+            return "[".concat(self.ip.to_string())
+                      .concat("]:").concat(_itos(self.port));
+        }
+        return self.ip.to_string().concat(":").concat(_itos(self.port));
+    }
+
+    /// Parse `"1.2.3.4:80"` or `"[::1]:80"`.
+    pub fn parse(s: string) -> !*SocketAddr {
+        if s.len() == 0 { return err("socketaddr: empty"); }
+        if s.at(0).to_int() == 91 {              // '['
+            let close: int = s.index_of("]");
+            if close < 0 { return err("socketaddr: missing ']'"); }
+            let host: string = s.substring(1, close);
+            if close + 2 > s.len() || s.at(close + 1).to_int() != 58 {
+                return err("socketaddr: missing ':' after ']'");
+            }
+            let port_s: string = s.substring(close + 2, s.len());
+            let pr: !int = port_s.try_parse_int();
+            if !pr.ok { return err("socketaddr: bad port"); }
+            let ipr: !*IpAddr = IpAddr::parse(host);
+            if !ipr.ok { return err(ipr.err); }
+            return ok(SocketAddr::new(ipr.val, pr.val));
+        }
+        // v4: split on last ':'
+        let mut last: int = -1;
+        for let i: int = 0; i < s.len(); i++ {
+            if s.at(i).to_int() == 58 { last = i; }
+        }
+        if last < 0 { return err("socketaddr: missing ':'"); }
+        let host: string = s.substring(0, last);
+        let port_s: string = s.substring(last + 1, s.len());
+        let pr: !int = port_s.try_parse_int();
+        if !pr.ok { return err("socketaddr: bad port"); }
+        let ipr: !*IpAddr = IpAddr::parse(host);
+        if !ipr.ok { return err(ipr.err); }
+        return ok(SocketAddr::new(ipr.val, pr.val));
+    }
+
+    pub fn free(self: *SocketAddr) {
+        free(self.ip as *void);
+        free(self as *void);
+    }
+}
+
+// ---- shared int-to-string ----
+
+fn _itos(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut x: int = n;
+    let mut neg: bool = false;
+    if x < 0 { neg = true; x = 0 - x; }
+    let mut s: string = "";
+    while x > 0 {
+        let d: int = x % 10;
+        s = ((48 + d) as char).to_string().concat(s);
+        x = x / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}
