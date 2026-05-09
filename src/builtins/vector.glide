@@ -423,3 +423,35 @@ impl<T> VecIter<T> {
         return some(v);
     }
 }
+
+// Specialized reducers for Vector<int>. Glide doesn't have a generic
+// numeric trait yet, so sum / max / min live in concrete impls per
+// element type. Strings, floats, etc. follow the same pattern when added.
+impl Vector<int> {
+    /// Sum of all elements. Empty vector returns 0.
+    pub fn sum(self: *Vector<int>) -> int {
+        let mut acc: int = 0;
+        for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+        return acc;
+    }
+
+    /// Largest element, or `none` if the vector is empty.
+    pub fn max(self: *Vector<int>) -> ?int {
+        if self.len == 0 { return none(); }
+        let mut m: int = self.data[0];
+        for let i: int = 1; i < self.len; i++ {
+            if self.data[i] > m { m = self.data[i]; }
+        }
+        return some(m);
+    }
+
+    /// Smallest element, or `none` if the vector is empty.
+    pub fn min(self: *Vector<int>) -> ?int {
+        if self.len == 0 { return none(); }
+        let mut m: int = self.data[0];
+        for let i: int = 1; i < self.len; i++ {
+            if self.data[i] < m { m = self.data[i]; }
+        }
+        return some(m);
+    }
+}

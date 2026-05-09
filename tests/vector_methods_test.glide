@@ -128,3 +128,61 @@ fn test_vec_chain_filter_take() -> int {
     assert_eq!(t.get(2), 6);
     return 0;
 }
+
+fn test_vec_int_sum() -> int {
+    let v: *Vector<int> = _build(1, 5);
+    assert_eq!(v.sum(), 10);
+    return 0;
+}
+
+fn test_vec_int_sum_empty() -> int {
+    let v: *Vector<int> = Vector::new();
+    assert_eq!(v.sum(), 0);
+    return 0;
+}
+
+fn test_vec_int_max_some() -> int {
+    let v: *Vector<int> = Vector::new();
+    v.push(3); v.push(7); v.push(1); v.push(5);
+    let r: ?int = v.max();
+    assert!(r.has);
+    assert_eq!(r.val, 7);
+    return 0;
+}
+
+fn test_vec_int_max_empty() -> int {
+    let v: *Vector<int> = Vector::new();
+    let r: ?int = v.max();
+    assert_not!(r.has);
+    return 0;
+}
+
+fn test_vec_int_min_some() -> int {
+    let v: *Vector<int> = Vector::new();
+    v.push(3); v.push(7); v.push(1); v.push(5);
+    let r: ?int = v.min();
+    assert!(r.has);
+    assert_eq!(r.val, 1);
+    return 0;
+}
+
+fn test_vec_int_min_empty() -> int {
+    let v: *Vector<int> = Vector::new();
+    let r: ?int = v.min();
+    assert_not!(r.has);
+    return 0;
+}
+
+fn test_vec_chain_into_sum() -> int {
+    let v: *Vector<int> = _build(1, 6);
+    assert_eq!(v.map(_square).filter(_is_even).sum(), 20);
+    return 0;
+}
+
+fn test_vec_chain_into_max() -> int {
+    let v: *Vector<int> = _build(1, 10);
+    let r: ?int = v.filter(_is_even).max();
+    assert!(r.has);
+    assert_eq!(r.val, 8);
+    return 0;
+}
