@@ -3304,9 +3304,16 @@ typedef struct __glide_option_int_t { int has; int val; } __glide_option_int_t;
 static __glide_option_int_t __glide_some_int(int v) { __glide_option_int_t o; o.has = 1; o.val = v; return o; }
 static __glide_option_int_t __glide_none_int(void) { __glide_option_int_t o; o.has = 0; return o; }
 #endif
+#ifndef __GLIDE_OPTION_f64_GUARD
+#define __GLIDE_OPTION_f64_GUARD
+typedef struct __glide_option_f64_t { int has; double val; } __glide_option_f64_t;
+static __glide_option_f64_t __glide_some_f64(double v) { __glide_option_f64_t o; o.has = 1; o.val = v; return o; }
+static __glide_option_f64_t __glide_none_f64(void) { __glide_option_f64_t o; o.has = 0; return o; }
+#endif
 
 typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__int   Vector__int ;
+typedef struct  Vector__f64   Vector__f64 ;
 typedef struct  Vector__EnvKV   Vector__EnvKV ;
 typedef struct  Vector__Type   Vector__Type ;
 typedef struct  Vector__Expr   Vector__Expr ;
@@ -3380,6 +3387,13 @@ struct  Vector__string  {
 
 struct  Vector__int  {
      int*   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__f64  {
+     double*   data;
      int   len;
      int   cap;
      bool   is_arena;
@@ -4124,6 +4138,12 @@ __glide_result_int_t   string_try_parse_int (const char*   self);
 int   Vector__int_sum (Vector__int*   self);
 __glide_option_int_t   Vector__int_max (Vector__int*   self);
 __glide_option_int_t   Vector__int_min (Vector__int*   self);
+double   Vector__f64_sum (Vector__f64*   self);
+__glide_option_f64_t   Vector__f64_max (Vector__f64*   self);
+__glide_option_f64_t   Vector__f64_min (Vector__f64*   self);
+__glide_option_f64_t   Vector__f64_avg (Vector__f64*   self);
+const char*   Vector__string_join (Vector__string*   self, const char*   sep);
+const char*   Vector__string_concat (Vector__string*   self);
 const char*   read_file (const char*   path);
 bool   write_file (const char*   path, const char*   content);
 bool   __glide_file_exists (const char*   path);
@@ -5581,6 +5601,71 @@ __glide_option_int_t   Vector__int_min (Vector__int*   self) {
         }
     }
     return __glide_some_int(m);
+}
+
+double   Vector__f64_sum (Vector__f64*   self) {
+    double   acc = 0.0;
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        (acc  =  (acc  +  (self-> data )[i]));
+    }
+    return acc;
+}
+
+__glide_option_f64_t   Vector__f64_max (Vector__f64*   self) {
+    if (((self-> len )  ==  0)) {
+        return __glide_none_f64();
+    }
+    double   m = (self-> data )[0];
+    for (int   i = 1; (i  <  (self-> len )); i++) {
+        if (((self-> data )[i]  >  m)) {
+            (m  =  (self-> data )[i]);
+        }
+    }
+    return __glide_some_f64(m);
+}
+
+__glide_option_f64_t   Vector__f64_min (Vector__f64*   self) {
+    if (((self-> len )  ==  0)) {
+        return __glide_none_f64();
+    }
+    double   m = (self-> data )[0];
+    for (int   i = 1; (i  <  (self-> len )); i++) {
+        if (((self-> data )[i]  <  m)) {
+            (m  =  (self-> data )[i]);
+        }
+    }
+    return __glide_some_f64(m);
+}
+
+__glide_option_f64_t   Vector__f64_avg (Vector__f64*   self) {
+    if (((self-> len )  ==  0)) {
+        return __glide_none_f64();
+    }
+    double   acc = 0.0;
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        (acc  =  (acc  +  (self-> data )[i]));
+    }
+    return __glide_some_f64((acc  /  (( double )(self-> len ))));
+}
+
+const char*   Vector__string_join (Vector__string*   self, const char*   sep) {
+    if (((self-> len )  ==  0)) {
+        return "";
+    }
+    const char*   out = (self-> data )[0];
+    for (int   i = 1; (i  <  (self-> len )); i++) {
+        (out  =  __glide_string_concat(out, sep));
+        (out  =  __glide_string_concat(out, (self-> data )[i]));
+    }
+    return out;
+}
+
+const char*   Vector__string_concat (Vector__string*   self) {
+    const char*   out = "";
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        (out  =  __glide_string_concat(out, (self-> data )[i]));
+    }
+    return out;
 }
 
 const char*   fs_read (const char*   path) {
