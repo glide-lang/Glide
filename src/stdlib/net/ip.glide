@@ -1,6 +1,25 @@
 // IP address types — IPv4 + IPv6 in a single tagged struct, plus the
 // SocketAddr (ip+port) bundle and Cidr range. No allocations: every
 // type is small enough to live by value or in a single malloc.
+//
+// Also hosts the shared `_bytes_to_string` helper (NUL-terminated heap
+// copy of an arbitrary byte buffer) since tcp.glide and udp.glide both
+// depend on net::ip and need a stable place to share the symbol.
+
+c_raw! {
+    #ifndef GLIDE_BYTES_TO_STRING_DEFINED
+    #define GLIDE_BYTES_TO_STRING_DEFINED
+    #include <string.h>
+    #include <stdlib.h>
+    const char* _bytes_to_string(unsigned char* p, int n) {
+        char* out = (char*)malloc((size_t)(n + 1));
+        memcpy(out, p, (size_t)n);
+        out[n] = 0;
+        return out;
+    }
+    #endif
+}
+extern fn _bytes_to_string(p: *u8, n: int) -> string;
 
 /// A v4 or v6 address. `kind` is 4 or 6; the other fields are
 /// meaningful only for the matching kind.

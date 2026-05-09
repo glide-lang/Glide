@@ -1,0 +1,34 @@
+import stdlib::testing::*;
+import stdlib::net::udp::*;
+import stdlib::net::ip::*;
+
+fn test_udp_bind_ephemeral() -> int {
+    let r: !*UdpSocket = UdpSocket::bind_port(0);
+    assert!(r.ok);
+    r.val.close();
+    return 0;
+}
+
+fn test_udp_send_recv_loopback() -> int {
+    let r1: !*UdpSocket = UdpSocket::bind_port(38492);
+    assert!(r1.ok);
+    let server: *UdpSocket = r1.val;
+
+    let r2: !*UdpSocket = UdpSocket::bind_port(0);
+    assert!(r2.ok);
+    let client: *UdpSocket = r2.val;
+
+    let dst_ip: *IpAddr = IpAddr::loopback_v4();
+    let dst: *SocketAddr = SocketAddr::new(dst_ip, 38492);
+    let s: !int = client.send_to("hello", dst);
+    assert!(s.ok);
+    assert_eq!(s.val, 5);
+
+    let recv: !*UdpRecv = server.recv_from(1500);
+    assert!(recv.ok);
+    assert_str_eq!(recv.val.data, "hello");
+
+    server.close();
+    client.close();
+    return 0;
+}

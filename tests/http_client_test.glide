@@ -1,0 +1,53 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::client::*;
+
+fn _echo_handler(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok()
+        .set("X-Echo-Path", req.path)
+        .body("path=".concat(req.path));
+}
+
+fn _server_thread() {
+    let r: !int = http_listen(45200, _echo_handler);
+    if !r.ok { println!("server: ${r.err}"); }
+}
+
+fn _start_server() {
+    spawn_thread _server_thread();
+    sleep_ms(200);
+}
+
+fn test_get_returns_200() -> int {
+    _start_server();
+    let url: string = "http://127.0.0.1:45200/hello";
+    let r: !*HttpResponse = http_get(url);
+    assert!(r.ok);
+    assert_eq!(r.val.status, 200);
+    return 0;
+}
+
+fn test_get_body_includes_path() -> int {
+    let url: string = "http://127.0.0.1:45200/foo/bar";
+    let r: !*HttpResponse = http_get(url);
+    assert!(r.ok);
+    assert_str_eq!(r.val.body, "path=/foo/bar");
+    return 0;
+}
+
+fn test_get_response_headers_present() -> int {
+    let url: string = "http://127.0.0.1:45200/custom";
+    let r: !*HttpResponse = http_get(url);
+    assert!(r.ok);
+    assert!(r.val.headers_block.contains("X-Echo-Path: /custom"));
+    return 0;
+}
+
+fn test_post_json_works() -> int {
+    let url: string = "http://127.0.0.1:45200/api/post";
+    let body: string = "{\"k\":1}";
+    let r: !*HttpResponse = http_post_json(url, body);
+    assert!(r.ok);
+    assert_eq!(r.val.status, 200);
+    return 0;
+}

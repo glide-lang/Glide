@@ -102,20 +102,6 @@ c_raw! {
         close((__glide_tcp_h)fd);
         #endif
     }
-
-    // Build a NUL-terminated Glide string from an arbitrary byte buffer.
-    // Embedded NULs in the data will truncate the visible length under
-    // strlen — for binary-safe transport use ByteBuffer instead. Lives
-    // here (not static) so net::udp can share the symbol via extern.
-    #ifndef GLIDE_BYTES_TO_STRING_DEFINED
-    #define GLIDE_BYTES_TO_STRING_DEFINED
-    const char* _bytes_to_string(unsigned char* p, int n) {
-        char* out = (char*)malloc((size_t)(n + 1));
-        memcpy(out, p, (size_t)n);
-        out[n] = 0;
-        return out;
-    }
-    #endif
     #endif
 }
 
@@ -123,7 +109,7 @@ extern fn __glide_tcp_connect(family: int, v4: i64, v6_hi: i64, v6_lo: i64, port
 extern fn __glide_tcp_send(fd: i64, data: string, n: int) -> i64;
 extern fn __glide_tcp_recv(fd: i64, buf: *void, max: int) -> i64;
 extern fn __glide_tcp_close_h(fd: i64);
-extern fn _bytes_to_string(p: *u8, n: int) -> string;
+// `_bytes_to_string` comes from net::ip via the import above.
 
 pub struct TcpStream {
     pub fd: i64,
