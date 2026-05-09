@@ -3298,7 +3298,15 @@ static __glide_result_f64_t __glide_err_f64(const char* msg) { __glide_result_f6
 static double __glide_unwrap_f64(__glide_result_f64_t r) { double z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }
 #endif
 
+#ifndef __GLIDE_OPTION_int_GUARD
+#define __GLIDE_OPTION_int_GUARD
+typedef struct __glide_option_int_t { int has; int val; } __glide_option_int_t;
+static __glide_option_int_t __glide_some_int(int v) { __glide_option_int_t o; o.has = 1; o.val = v; return o; }
+static __glide_option_int_t __glide_none_int(void) { __glide_option_int_t o; o.has = 0; return o; }
+#endif
+
 typedef struct  Vector__string   Vector__string ;
+typedef struct  Vector__int   Vector__int ;
 typedef struct  Vector__EnvKV   Vector__EnvKV ;
 typedef struct  Vector__Type   Vector__Type ;
 typedef struct  Vector__Expr   Vector__Expr ;
@@ -3365,6 +3373,13 @@ typedef struct  UseSite   UseSite ;
 
 struct  Vector__string  {
      const char**   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__int  {
+     int*   data;
      int   len;
      int   cap;
      bool   is_arena;
@@ -4106,6 +4121,9 @@ const char*   string_to_lower (const char*   self);
 const char*   string_repeat (const char*   self, int   n);
 int   string_parse_int (const char*   self);
 __glide_result_int_t   string_try_parse_int (const char*   self);
+int   Vector__int_sum (Vector__int*   self);
+__glide_option_int_t   Vector__int_max (Vector__int*   self);
+__glide_option_int_t   Vector__int_min (Vector__int*   self);
 const char*   read_file (const char*   path);
 bool   write_file (const char*   path, const char*   content);
 bool   __glide_file_exists (const char*   path);
@@ -4920,6 +4938,173 @@ int main(int __glide_main_argc, char** __glide_main_argv);
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Vector__string*   Vector_new__string (void);
 void   Vector_push__string (Vector__string*   self, const char*   x);
 int   Vector_len__string (Vector__string*   self);
@@ -5362,6 +5547,40 @@ __glide_result_int_t   string_try_parse_int (const char*   self) {
         return __glide_ok_int((-acc));
     }
     return __glide_ok_int(acc);
+}
+
+int   Vector__int_sum (Vector__int*   self) {
+    int   acc = 0;
+    for (int   i = 0; (i  <  (self-> len )); i++) {
+        (acc  =  (acc  +  (self-> data )[i]));
+    }
+    return acc;
+}
+
+__glide_option_int_t   Vector__int_max (Vector__int*   self) {
+    if (((self-> len )  ==  0)) {
+        return __glide_none_int();
+    }
+    int   m = (self-> data )[0];
+    for (int   i = 1; (i  <  (self-> len )); i++) {
+        if (((self-> data )[i]  >  m)) {
+            (m  =  (self-> data )[i]);
+        }
+    }
+    return __glide_some_int(m);
+}
+
+__glide_option_int_t   Vector__int_min (Vector__int*   self) {
+    if (((self-> len )  ==  0)) {
+        return __glide_none_int();
+    }
+    int   m = (self-> data )[0];
+    for (int   i = 1; (i  <  (self-> len )); i++) {
+        if (((self-> data )[i]  <  m)) {
+            (m  =  (self-> data )[i]);
+        }
+    }
+    return __glide_some_int(m);
 }
 
 const char*   fs_read (const char*   path) {
@@ -13019,6 +13238,11 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 }
             }
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
+                const char*   spec_prefix = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((stripped-> name ), (stripped-> args ));
+                const char*   spec_name = __glide_string_concat(__glide_string_concat(spec_prefix, "_"), ((e-> lhs )-> field ));
+                if (HashMap_contains__Stmt((g-> fns ), spec_name)) {
+                    return (HashMap_get__Stmt((g-> fns ), spec_name). fn_ret_ty );
+                }
                 const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), ((e-> lhs )-> field ));
                 if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                     Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
@@ -13478,17 +13702,21 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
             (stripped  =  ((Type*(*)(Type*))strip_ptr)(rt));
         }
         if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
-            const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), method);
-            if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
-                Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
-                Vector__Type*   full_args = ((Vector__Type*(*)(CG*, Expr*, Stmt*, Vector__Type*))resolve_method_call_args)(g, e, (&template), (stripped-> args ));
-                if ((full_args  !=  NULL)) {
-                    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, full_args);
-                    ((void(*)(CG*, const char*, Stmt*, Vector__Type*))register_fn_mono_signature)(g, mangled, (&template), full_args);
-                    if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
-                        HashMap_insert__bool((g-> emitted_monos ), mangled, true);
-                        FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = full_args});
-                        Vector_push__FnMonoEntry((g-> fn_mono_queue ), entry);
+            const char*   spec_prefix = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((stripped-> name ), (stripped-> args ));
+            const char*   spec_name = __glide_string_concat(__glide_string_concat(spec_prefix, "_"), method);
+            if ((!HashMap_contains__Stmt((g-> fns ), spec_name))) {
+                const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), method);
+                if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
+                    Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
+                    Vector__Type*   full_args = ((Vector__Type*(*)(CG*, Expr*, Stmt*, Vector__Type*))resolve_method_call_args)(g, e, (&template), (stripped-> args ));
+                    if ((full_args  !=  NULL)) {
+                        const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, full_args);
+                        ((void(*)(CG*, const char*, Stmt*, Vector__Type*))register_fn_mono_signature)(g, mangled, (&template), full_args);
+                        if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
+                            HashMap_insert__bool((g-> emitted_monos ), mangled, true);
+                            FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = full_args});
+                            Vector_push__FnMonoEntry((g-> fn_mono_queue ), entry);
+                        }
                     }
                 }
             }
@@ -14577,6 +14805,28 @@ void   emit_expr (CG*   g, Expr*   e) {
                 }
                 printf("%s", "))");
                 return;
+            }
+            if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
+                const char*   spec_prefix = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((stripped-> name ), (stripped-> args ));
+                const char*   spec_name = __glide_string_concat(__glide_string_concat(spec_prefix, "_"), method);
+                if (HashMap_contains__Stmt((g-> fns ), spec_name)) {
+                    printf("%s", spec_name);
+                    printf("%s", "(");
+                    bool   spec_needs_addr = ((((recv_ty  !=  NULL)  &&  ((recv_ty-> kind )  !=  TY_POINTER))  &&  ((recv_ty-> kind )  !=  TY_BORROW))  &&  ((recv_ty-> kind )  !=  TY_BORROW_MUT));
+                    if (spec_needs_addr) {
+                        printf("%s", "&");
+                    }
+                    ((void(*)(CG*, Expr*))emit_expr)(g, recv);
+                    if (((e-> args )  !=  NULL)) {
+                        for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+                            printf("%s", ", ");
+                            Expr   a = Vector_get__Expr((e-> args ), i);
+                            ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
+                        }
+                    }
+                    printf("%s", ")");
+                    return;
+                }
             }
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
                 const char*   base = (stripped-> name );
@@ -16127,6 +16377,9 @@ void   emit_impl (CG*   g, Stmt*   s) {
     if ((((s-> impl_target )  !=  NULL)  &&  (((s-> impl_target )-> kind )  ==  TY_NAMED))) {
         (prefix  =  ((s-> impl_target )-> name ));
     }
+    if ((((s-> impl_target )  !=  NULL)  &&  (((s-> impl_target )-> kind )  ==  TY_GENERIC))) {
+        (prefix  =  ((const char*(*)(const char*, Vector__Type*))mangle_generic)(((s-> impl_target )-> name ), ((s-> impl_target )-> args )));
+    }
     if ((((s-> import_path )  !=  NULL)  &&  (!__glide_string_eq((s-> import_path ), "")))) {
         (prefix  =  __glide_string_concat(__glide_string_concat((s-> import_path ), "_"), prefix));
     }
@@ -16188,6 +16441,9 @@ void   emit_impl_fwd_decls (CG*   g, Stmt*   s) {
     const char*   prefix = "X";
     if ((((s-> impl_target )  !=  NULL)  &&  (((s-> impl_target )-> kind )  ==  TY_NAMED))) {
         (prefix  =  ((s-> impl_target )-> name ));
+    }
+    if ((((s-> impl_target )  !=  NULL)  &&  (((s-> impl_target )-> kind )  ==  TY_GENERIC))) {
+        (prefix  =  ((const char*(*)(const char*, Vector__Type*))mangle_generic)(((s-> impl_target )-> name ), ((s-> impl_target )-> args )));
     }
     if ((((s-> import_path )  !=  NULL)  &&  (!__glide_string_eq((s-> import_path ), "")))) {
         (prefix  =  __glide_string_concat(__glide_string_concat((s-> import_path ), "_"), prefix));
@@ -16697,6 +16953,9 @@ void   emit_program (Vector__Stmt*   program) {
             const char*   prefix = "X";
             if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
                 (prefix  =  ((s. impl_target )-> name ));
+            }
+            if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
+                (prefix  =  ((const char*(*)(const char*, Vector__Type*))mangle_generic)(((s. impl_target )-> name ), ((s. impl_target )-> args )));
             }
             bool   is_namespaced = false;
             const char*   bare_prefix = prefix;
