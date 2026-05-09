@@ -1429,7 +1429,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             }
             if g.generic_fns.contains(nm) {
                 let gn: Stmt = g.generic_fns.get(nm);
-                return gn.fn_ret_ty;
+                return _infer_generic_call_ret(g, e, &gn);
             }
         }
         // Path: Type::method (also handles module-qualified `mod::Type::method`
@@ -1439,11 +1439,17 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             if g.module_aliases.contains(qual) {
                 let resolved: string = g.module_aliases.get(qual);
                 if g.fns.contains(resolved) { return g.fns.get(resolved).fn_ret_ty; }
-                if g.generic_fns.contains(resolved) { return g.generic_fns.get(resolved).fn_ret_ty; }
+                if g.generic_fns.contains(resolved) {
+                    let gn: Stmt = g.generic_fns.get(resolved);
+                    return _infer_generic_call_ret(g, e, &gn);
+                }
             }
             let pname: string = resolve_type_prefix(g, e.lhs.str_val).concat("_").concat(e.lhs.field);
             if g.fns.contains(pname) { return g.fns.get(pname).fn_ret_ty; }
-            if g.generic_fns.contains(pname) { return g.generic_fns.get(pname).fn_ret_ty; }
+            if g.generic_fns.contains(pname) {
+                let gn: Stmt = g.generic_fns.get(pname);
+                return _infer_generic_call_ret(g, e, &gn);
+            }
         }
         // Method call: receiver_type.method(...) → look up Type_method ret_ty
         if e.lhs != null && e.lhs.kind == EX_MEMBER {
@@ -1663,6 +1669,43 @@ fn mangle_type(t: *Type) -> string {
 //
 // Returns null if any extra param can't be bound (caller treats this as
 // "not enough info — skip this call site").
+// Infer the return type of a call to a generic free fn (or path-form
+// like `Json::wrap(v)`) by unifying the template's parameter types
+// against the call's argument types. Without this, infer_for_codegen
+// hands back the template's `fn_ret_ty` un-substituted (e.g.
+// `Json<T>` for `Json::wrap`), which then breaks downstream method
+// dispatch on the returned value (`.into_response()` would emit
+// `Json_into_response__T` instead of the substituted mono).
+fn _infer_generic_call_ret(g: *CG, call: *Expr, template: *Stmt) -> *Type {
+    if template == null { return null; }
+    if template.type_params == null || template.type_params.len() == 0 {
+        return template.fn_ret_ty;
+    }
+    let bindings: *HashMap<Type> = HashMap::new();
+    if call.args != null && template.fn_params != null {
+        let mut n: int = template.fn_params.len();
+        if call.args.len() < n { n = call.args.len(); }
+        for let i: int = 0; i < n; i++ {
+            let p: Param = template.fn_params.get(i);
+            let a: Expr = call.args.get(i);
+            let at: *Type = infer_for_codegen(g, &a);
+            if at != null && p.ty != null {
+                unify_for_inference(p.ty, at, template.type_params, bindings);
+            }
+        }
+    }
+    let derived: *Vector<Type> = Vector::new();
+    let mut all: bool = true;
+    for let i: int = 0; i < template.type_params.len(); i++ {
+        let tn: string = template.type_params.get(i);
+        if !bindings.contains(tn) { all = false; break; }
+        derived.push(bindings.get(tn));
+    }
+    bindings.free();
+    if !all { return template.fn_ret_ty; }
+    return subst_type(template.fn_ret_ty, template.type_params, derived);
+}
+
 fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt,
                             recv_args: *Vector<Type>) -> *Vector<Type> {
     if template.type_params == null { return recv_args; }
@@ -1847,15 +1890,50 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
             if g.generic_fns.contains(mname) && struct_def.type_params != null {
                 let mtmpl: Stmt = g.generic_fns.get(mname);
                 let bindings: *HashMap<Type> = HashMap::new();
-                if e.args != null && mtmpl.fn_params != null && mtmpl.fn_params.len() > 0 {
-                    let n: int = mtmpl.fn_params.len() - 1;
+                // Static methods (`Json::wrap(v)`) have no `self`; instance
+                // methods (`v.push(x)`) put `self` at fn_params[0]. Detect
+                // by name to know whether call args start at param 0 or 1.
+                let mut self_off: int = 0;
+                if mtmpl.fn_params != null && mtmpl.fn_params.len() > 0 {
+                    let first_p: Param = mtmpl.fn_params.get(0);
+                    if first_p.name != null && first_p.name.eq("self") { self_off = 1; }
+                }
+                if e.args != null && mtmpl.fn_params != null
+                   && mtmpl.fn_params.len() > self_off {
+                    let n: int = mtmpl.fn_params.len() - self_off;
                     if e.args.len() < n { n = e.args.len(); }
                     for let i: int = 0; i < n; i++ {
-                        let p: Param = mtmpl.fn_params.get(i + 1);
+                        let p: Param = mtmpl.fn_params.get(i + self_off);
                         let a: Expr = e.args.get(i);
                         let at: *Type = infer_for_codegen(g, &a);
                         if at != null && p.ty != null {
                             unify_for_inference(p.ty, at, mtmpl.type_params, bindings);
+                        }
+                    }
+                }
+                // Also unify against the inner static method's args (e.g.
+                // `Json::wrap(v).into_response()` — the outer `.into_response()`
+                // has no args of its own, but `wrap`'s arg `v` carries T).
+                let inner_method: string = recv.lhs.field;
+                let inner_mname: string = family.concat("_").concat(inner_method);
+                if g.generic_fns.contains(inner_mname) {
+                    let inner_tmpl: Stmt = g.generic_fns.get(inner_mname);
+                    let mut inner_off: int = 0;
+                    if inner_tmpl.fn_params != null && inner_tmpl.fn_params.len() > 0 {
+                        let p0: Param = inner_tmpl.fn_params.get(0);
+                        if p0.name != null && p0.name.eq("self") { inner_off = 1; }
+                    }
+                    if recv.args != null && inner_tmpl.fn_params != null
+                       && inner_tmpl.fn_params.len() > inner_off {
+                        let n2: int = inner_tmpl.fn_params.len() - inner_off;
+                        if recv.args.len() < n2 { n2 = recv.args.len(); }
+                        for let i: int = 0; i < n2; i++ {
+                            let p: Param = inner_tmpl.fn_params.get(i + inner_off);
+                            let a: Expr = recv.args.get(i);
+                            let at: *Type = infer_for_codegen(g, &a);
+                            if at != null && p.ty != null {
+                                unify_for_inference(p.ty, at, struct_def.type_params, bindings);
+                            }
                         }
                     }
                 }
@@ -1870,7 +1948,16 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                     chain_recv_hint = ty_pointer(ty_generic(family, derived));
                     // Queue the struct mono — chained inference is the only
                     // way Vector<int> reaches codegen here (no let_ty / no
-                    // call-site signature mentions it).
+                    // call-site signature mentions it). Emit the typedef +
+                    // body inline so any fn forward-decl that follows in
+                    // the same prescan window can name the mangled type.
+                    let mangled_struct: string = mangle_generic(
+                        chain_recv_hint.inner.name, chain_recv_hint.inner.args);
+                    if !g.emitted_monos.contains(mangled_struct) {
+                        g.emitted_monos.insert(mangled_struct, true);
+                        println!("typedef struct ", mangled_struct, " ", mangled_struct, ";");
+                        emit_struct_mono(g, chain_recv_hint.inner);
+                    }
                     g.struct_mono_queue.push(*chain_recv_hint.inner);
                     prescan_expr(g, recv, chain_recv_hint);
                 }
@@ -2911,11 +2998,29 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     }
                     print!(mangled);
                     print!("(");
-                    let needs_addr: bool = recv_ty != null
-                        && recv_ty.kind != TY_POINTER
-                        && recv_ty.kind != TY_BORROW
-                        && recv_ty.kind != TY_BORROW_MUT;
+                    // Methods with `self: *T` (pointer receiver, the
+                    // common case) want `&recv` when recv is a value;
+                    // methods with `self: T` (by-value receiver) take
+                    // recv directly. Inspect the template's first param
+                    // to decide.
+                    let mut p_is_ptr: bool = true;
+                    if template.fn_params != null && template.fn_params.len() > 0 {
+                        let first: Param = template.fn_params.get(0);
+                        if first.ty != null
+                           && first.ty.kind != TY_POINTER
+                           && first.ty.kind != TY_BORROW
+                           && first.ty.kind != TY_BORROW_MUT {
+                            p_is_ptr = false;
+                        }
+                    }
+                    let r_is_ptr: bool = recv_ty != null
+                        && (recv_ty.kind == TY_POINTER
+                            || recv_ty.kind == TY_BORROW
+                            || recv_ty.kind == TY_BORROW_MUT);
+                    let needs_addr: bool = p_is_ptr && !r_is_ptr;
+                    let needs_deref: bool = !p_is_ptr && r_is_ptr;
                     if needs_addr { print!("&"); }
+                    if needs_deref { print!("*"); }
                     emit_expr(g, recv);
                     if e.args != null {
                         for let i: int = 0; i < e.args.len(); i++ {
