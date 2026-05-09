@@ -1,0 +1,188 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::json::*;
+
+// ---- typed binding pattern --------------------------------------------
+//
+// Glide doesn't have Axum-style param destructure (`Json(req): Json<T>`)
+// or auto-converted return types yet — those need compiler work. The
+// pattern below does the same job with explicit code:
+//
+//   1. user struct with required + optional + dynamic fields
+//   2. `Foo::from_json(v: *JsonValue) -> !Foo` static method that uses
+//      `json_get_*` / `json_opt_*` / `json_get_any` to validate and bind
+//   3. handler calls `req.body_json()` -> `Foo::from_json(...)`,
+//      surfaces err as 400, otherwise runs business logic
+//   4. response built with `HttpResponse::ok().json_of(...)` for a
+//      typed reply
+//
+// Required fields → `json_get_<type>(...)` returns `!T`; missing or
+//   wrong type bubbles up via err.
+// Optional fields → `json_opt_<type>(...)` returns `?T`; missing or
+//   wrong type collapses to `none`.
+// Dynamic fields → `json_get_any(...)` returns the raw `*JsonValue` so
+//   the struct can keep an arbitrary subtree for later inspection.
+
+pub struct UpdateUser {
+    pub nome:  string,        // required
+    pub idade: ?int,          // optional
+    pub extra: *JsonValue,    // dynamic (raw subtree)
+}
+
+impl UpdateUser {
+    pub fn from_json(v: *JsonValue) -> !UpdateUser {
+        if v.kind != JSON_OBJECT { return err("expected object"); }
+        let nome_r: !string = json_get_string(v, "nome");
+        if !nome_r.ok { return err(nome_r.err); }
+        return ok(UpdateUser {
+            nome:  nome_r.val,
+            idade: json_opt_int(v, "idade"),
+            extra: json_get_any(v, "extra"),
+        });
+    }
+
+    pub fn to_json(self: *UpdateUser) -> *JsonValue {
+        let v: *JsonValue = json_object();
+        json_obj_set(v, "nome", json_string(self.nome));
+        if self.idade.has {
+            json_obj_set(v, "idade", json_int(self.idade.val));
+        }
+        if self.extra != null {
+            json_obj_set(v, "extra", self.extra);
+        }
+        return v;
+    }
+}
+
+// ---- handler that validates incoming JSON and replies in JSON ---------
+
+fn _handler(req: *HttpRequest) -> HttpResponse {
+    let body_r: !*JsonValue = req.body_json();
+    if !body_r.ok {
+        return HttpResponse::with_status(400).text(body_r.err);
+    }
+    let u_r: !UpdateUser = UpdateUser::from_json(body_r.val);
+    if !u_r.ok {
+        return HttpResponse::with_status(422).text(u_r.err);
+    }
+    let u: UpdateUser = u_r.val;
+    // Echo the parsed struct back as JSON so the test can inspect
+    // exactly which fields landed.
+    return HttpResponse::ok().json_of(u.to_json());
+}
+
+// ---- test plumbing: build a request + run through the handler ---------
+
+fn _post(body: string) -> HttpResponse {
+    let req: HttpRequest = HttpRequest {
+        method:        "POST",
+        path:          "/users",
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          body,
+        params:        null,
+        queries:       null,
+    };
+    return _handler(&req);
+}
+
+// ---- tests ------------------------------------------------------------
+
+fn test_required_only() -> int {
+    let r: HttpResponse = _post("{\"nome\":\"alice\"}");
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.header("Content-Type"), "application/json");
+    assert_str_eq!(r.body, "{\"nome\":\"alice\"}");
+    return 0;
+}
+
+fn test_required_plus_optional() -> int {
+    let r: HttpResponse = _post("{\"nome\":\"bob\", \"idade\":30}");
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "{\"nome\":\"bob\",\"idade\":30}");
+    return 0;
+}
+
+fn test_dynamic_field_passes_through() -> int {
+    let payload: string = "{\"nome\":\"c\", \"extra\":{\"any\":[1,2,3]}}";
+    let r: HttpResponse = _post(payload);
+    assert_eq!(r.status, 200);
+    assert!(r.body.index_of("\"extra\":{\"any\":[1,2,3]}") >= 0);
+    return 0;
+}
+
+fn test_missing_required_field_errors() -> int {
+    let r: HttpResponse = _post("{\"idade\":30}");
+    assert_eq!(r.status, 422);
+    assert!(r.body.index_of("nome") >= 0);
+    return 0;
+}
+
+fn test_wrong_type_for_required_errors() -> int {
+    // nome should be a string; sending a number triggers the typed read.
+    let r: HttpResponse = _post("{\"nome\":42}");
+    assert_eq!(r.status, 422);
+    assert!(r.body.index_of("nome") >= 0);
+    return 0;
+}
+
+fn test_invalid_json_body_errors() -> int {
+    let r: HttpResponse = _post("not json at all");
+    assert_eq!(r.status, 400);
+    return 0;
+}
+
+fn test_optional_wrong_type_drops_to_none() -> int {
+    // idade is optional and the wrong type — it just drops to none()
+    // rather than failing the whole bind. This matches Axum's serde
+    // default for `Option<T>` fields.
+    let r: HttpResponse = _post("{\"nome\":\"d\", \"idade\":\"thirty\"}");
+    assert_eq!(r.status, 200);
+    // idade is dropped, so the echo body has only nome.
+    assert_str_eq!(r.body, "{\"nome\":\"d\"}");
+    return 0;
+}
+
+fn test_response_json_of() -> int {
+    let v: *JsonValue = json_object();
+    json_obj_set(v, "ok", json_bool(true));
+    json_obj_set(v, "n",  json_int(42));
+    let resp: HttpResponse = HttpResponse::ok().json_of(v);
+    assert_str_eq!(resp.header("Content-Type"), "application/json");
+    assert_str_eq!(resp.body, "{\"ok\":true,\"n\":42}");
+    return 0;
+}
+
+fn test_typed_getters_directly() -> int {
+    let v: *JsonValue = json_parse("{\"a\":\"hi\", \"n\":7, \"x\":3.14, \"f\":true}");
+
+    let a: !string = json_get_string(v, "a");
+    assert!(a.ok);
+    assert_str_eq!(a.val, "hi");
+
+    let n: !int = json_get_int(v, "n");
+    assert!(n.ok);
+    assert_eq!(n.val, 7);
+
+    let x: !f64 = json_get_float(v, "x");
+    assert!(x.ok);
+
+    let f: !bool = json_get_bool(v, "f");
+    assert!(f.ok);
+    assert!(f.val);
+
+    // wrong type
+    let bad: !int = json_get_int(v, "a");
+    assert_not!(bad.ok);
+
+    // missing key
+    let miss: !string = json_get_string(v, "zzz");
+    assert_not!(miss.ok);
+
+    // float promotes from int
+    let promoted: !f64 = json_get_float(v, "n");
+    assert!(promoted.ok);
+
+    return 0;
+}
