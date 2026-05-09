@@ -310,7 +310,7 @@ impl HpackDecoder {
             let b: int = raw.at(pos).to_int() & 255;
             if (b & 128) != 0 {
                 // Indexed header field (1xxxxxxx)
-                let idx_r: !*Pair<int, int> = _decode_integer(raw, pos, 7);
+                let idx_r: !*Pair<int, int> = _decode_integer(raw, pos, 7, len);
                 if !idx_r.ok { return err(idx_r.err); }
                 pos = idx_r.val.first;
                 let idx: int = idx_r.val.second;
@@ -322,7 +322,7 @@ impl HpackDecoder {
             }
             if (b & 192) == 64 {
                 // Literal with incremental indexing (01xxxxxx)
-                let r: !*Pair<int, *HpackHeader> = self._decode_literal(raw, pos, 6);
+                let r: !*Pair<int, *HpackHeader> = self._decode_literal(raw, pos, 6, len);
                 if !r.ok { return err(r.err); }
                 pos = r.val.first;
                 self._add_dynamic(r.val.second.name, r.val.second.value);
@@ -331,7 +331,7 @@ impl HpackDecoder {
             }
             if (b & 224) == 32 {
                 // Dynamic table size update (001xxxxx)
-                let sz_r: !*Pair<int, int> = _decode_integer(raw, pos, 5);
+                let sz_r: !*Pair<int, int> = _decode_integer(raw, pos, 5, len);
                 if !sz_r.ok { return err(sz_r.err); }
                 pos = sz_r.val.first;
                 let new_max: int = sz_r.val.second;
@@ -342,7 +342,7 @@ impl HpackDecoder {
             // Literal without indexing (0000xxxx) or never indexed (0001xxxx).
             // Both decode the same way; the difference matters only for
             // proxies that re-encode and we're not one.
-            let r: !*Pair<int, *HpackHeader> = self._decode_literal(raw, pos, 4);
+            let r: !*Pair<int, *HpackHeader> = self._decode_literal(raw, pos, 4, len);
             if !r.ok { return err(r.err); }
             pos = r.val.first;
             out.push(r.val.second);
@@ -369,14 +369,14 @@ impl HpackDecoder {
     }
 
     fn _decode_literal(self: *HpackDecoder, raw: string, pos: int,
-                       prefix: int) -> !*Pair<int, *HpackHeader> {
-        let idx_r: !*Pair<int, int> = _decode_integer(raw, pos, prefix);
+                       prefix: int, len: int) -> !*Pair<int, *HpackHeader> {
+        let idx_r: !*Pair<int, int> = _decode_integer(raw, pos, prefix, len);
         if !idx_r.ok { return err(idx_r.err); }
         let mut p: int = idx_r.val.first;
         let idx: int = idx_r.val.second;
         let mut name: string = "";
         if idx == 0 {
-            let nr: !*Pair<int, string> = _decode_string(raw, p);
+            let nr: !*Pair<int, string> = _decode_string(raw, p, len);
             if !nr.ok { return err(nr.err); }
             p = nr.val.first;
             name = nr.val.second;
@@ -385,7 +385,7 @@ impl HpackDecoder {
             if !entry.ok { return err(entry.err); }
             name = entry.val.name;
         }
-        let vr: !*Pair<int, string> = _decode_string(raw, p);
+        let vr: !*Pair<int, string> = _decode_string(raw, p, len);
         if !vr.ok { return err(vr.err); }
         p = vr.val.first;
         let h: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
@@ -459,9 +459,11 @@ fn _encode_integer(buf: *ByteBuffer, value: int, prefix_bits: int, first_byte_to
 }
 
 /// Decode a variable-length integer starting at `raw[pos]` with `prefix`
-/// bits in the first byte. Returns `(new_pos, value)`.
-fn _decode_integer(raw: string, pos: int, prefix: int) -> !*Pair<int, int> {
-    if pos >= raw.len() { return err("hpack: integer EOF"); }
+/// bits in the first byte. `len` bounds the buffer (we can't trust
+/// `raw.len()` because Glide string is NUL-terminated and HPACK
+/// payloads frequently contain leading-NUL bytes for short literals).
+fn _decode_integer(raw: string, pos: int, prefix: int, len: int) -> !*Pair<int, int> {
+    if pos >= len { return err("hpack: integer EOF"); }
     let mut max_prefix: int = 1;
     for let i: int = 0; i < prefix; i++ { max_prefix = max_prefix * 2; }
     max_prefix = max_prefix - 1;
@@ -472,7 +474,7 @@ fn _decode_integer(raw: string, pos: int, prefix: int) -> !*Pair<int, int> {
     let mut result: int = max_prefix;
     let mut shift: int = 0;
     while true {
-        if p >= raw.len() { return err("hpack: integer truncated"); }
+        if p >= len { return err("hpack: integer truncated"); }
         let cb: int = raw.at(p).to_int() & 255;
         p = p + 1;
         result = result + ((cb & 127) << shift);
@@ -495,16 +497,21 @@ fn _encode_string_literal(buf: *ByteBuffer, s: string) {
     }
 }
 
-fn _decode_string(raw: string, pos: int) -> !*Pair<int, string> {
-    if pos >= raw.len() { return err("hpack: string EOF"); }
+fn _decode_string(raw: string, pos: int, len: int) -> !*Pair<int, string> {
+    if pos >= len { return err("hpack: string EOF"); }
     let first: int = raw.at(pos).to_int() & 255;
     let huffman: bool = (first & 128) != 0;
-    let len_r: !*Pair<int, int> = _decode_integer(raw, pos, 7);
+    let len_r: !*Pair<int, int> = _decode_integer(raw, pos, 7, len);
     if !len_r.ok { return err(len_r.err); }
     let mut p: int = len_r.val.first;
     let n: int = len_r.val.second;
-    if p + n > raw.len() { return err("hpack: string truncated"); }
-    let chunk: string = raw.substring(p, p + n);
+    if p + n > len { return err("hpack: string truncated"); }
+    // Build the chunk via byte-by-byte concat — substring() goes
+    // through strlen and would miss bytes past an internal NUL.
+    let mut chunk: string = "";
+    for let i: int = 0; i < n; i++ {
+        chunk = chunk.concat(raw.at(p + i).to_string());
+    }
     p = p + n;
     if !huffman { return ok(Pair::new(p, chunk)); }
     let dr: !string = _huffman_decode(chunk);

@@ -22,6 +22,7 @@
 
 import stdlib::bytes::*;
 import stdlib::net::tls::*;
+import stdlib::net::ip::*;            // for _bytes_to_string
 import stdlib::http::hpack::*;
 
 // ===========================================================================
@@ -100,19 +101,20 @@ fn _frame_header(buf: *ByteBuffer, n: int, frame_type: int, flags: int,
 }
 
 /// Parse a 9-byte frame header at `pos` in `raw`. Returns the header
-/// and the new position (header end; payload starts here).
-pub fn read_frame_header(raw: string, pos: int) -> !*FrameHeader {
-    if pos + 9 > raw.len() { return err("h2: frame header truncated"); }
+/// and the new position (header end; payload starts here). Binary
+/// safe (uses ByteBuffer.at, not string indexing).
+pub fn read_frame_header(raw: *ByteBuffer, pos: int) -> !*FrameHeader {
+    if pos + 9 > raw.len { return err("h2: frame header truncated"); }
     let h: *FrameHeader = malloc(sizeof(FrameHeader)) as *FrameHeader;
-    h.length = (raw.at(pos).to_int() << 16)
-             | (raw.at(pos + 1).to_int() << 8)
-             |  raw.at(pos + 2).to_int();
-    h.frame_type = raw.at(pos + 3).to_int() & 255;
-    h.flags = raw.at(pos + 4).to_int() & 255;
-    let s0: int = raw.at(pos + 5).to_int() & 127;    // strip R bit
-    let s1: int = raw.at(pos + 6).to_int() & 255;
-    let s2: int = raw.at(pos + 7).to_int() & 255;
-    let s3: int = raw.at(pos + 8).to_int() & 255;
+    h.length = ((raw.at(pos)     as int) << 16)
+             | ((raw.at(pos + 1) as int) << 8)
+             |  (raw.at(pos + 2) as int);
+    h.frame_type = (raw.at(pos + 3) as int) & 255;
+    h.flags = (raw.at(pos + 4) as int) & 255;
+    let s0: int = (raw.at(pos + 5) as int) & 127;
+    let s1: int = (raw.at(pos + 6) as int) & 255;
+    let s2: int = (raw.at(pos + 7) as int) & 255;
+    let s3: int = (raw.at(pos + 8) as int) & 255;
     h.stream_id = (s0 << 24) | (s1 << 16) | (s2 << 8) | s3;
     return ok(h);
 }
@@ -164,10 +166,12 @@ pub struct H2Conn {
     enc:     *HpackEncoder,
     dec:     *HpackDecoder,
     pub next_stream_id: int,
-    /// Bytes read from the wire that haven't been consumed yet. Lives
-    /// on the connection so handshake reads don't drop the SETTINGS
-    /// ACK / WINDOW_UPDATE / etc. that arrived in the same packet.
-    rx_buf: string,
+    /// Binary-safe rx ring: byte buffer + read offset. We can't use a
+    /// Glide `string` here because frame headers start with the 24-bit
+    /// length field whose top byte is often `0`, and string ops use
+    /// strlen which would truncate at the first NUL.
+    rx_buf:    *ByteBuffer,
+    rx_offset: int,
 }
 
 impl H2Conn {
@@ -181,7 +185,9 @@ impl H2Conn {
         c.enc = HpackEncoder::new();
         c.dec = HpackDecoder::new();
         c.next_stream_id = 1;
-        c.rx_buf = "";
+        let rx: *ByteBuffer = ByteBuffer::new();
+        c.rx_buf = rx;
+        c.rx_offset = 0;
 
         let preface: string = h2_preface();
         let buf: *ByteBuffer = ByteBuffer::new();
@@ -238,28 +244,32 @@ impl H2Conn {
 
     fn _read_response(self: *H2Conn, stream_id: int) -> !*H2Response {
         let mut headers_done: bool = false;
-        let mut header_block: string = "";
-        let mut body: string = "";
+        let mut header_block: *ByteBuffer = ByteBuffer::new();
+        let mut body: *ByteBuffer = ByteBuffer::new();
         let mut stream_closed: bool = false;
         while !stream_closed {
-            while self.rx_buf.len() < 9 {
-                let r: !string = self.tls.read(16384);
-                if !r.ok { return err(r.err); }
-                if r.val.len() == 0 { return err("h2: closed mid-response"); }
-                self.rx_buf = self.rx_buf.concat(r.val);
+            // Pull until we have at least one full frame header.
+            while self._rx_avail() < 9 {
+                let got: !int = self._fill_rx();
+                if !got.ok { return err(got.err); }
+                if got.val == 0 { return err("h2: closed mid-response"); }
             }
-            let hr: !*FrameHeader = read_frame_header(self.rx_buf, 0);
+            let hr: !*FrameHeader = read_frame_header(self.rx_buf, self.rx_offset);
             if !hr.ok { return err(hr.err); }
             let h: *FrameHeader = hr.val;
             let total: int = 9 + h.length;
-            while self.rx_buf.len() < total {
-                let r: !string = self.tls.read(16384);
-                if !r.ok { return err(r.err); }
-                if r.val.len() == 0 { return err("h2: closed mid-frame"); }
-                self.rx_buf = self.rx_buf.concat(r.val);
+            while self._rx_avail() < total {
+                let got: !int = self._fill_rx();
+                if !got.ok { return err(got.err); }
+                if got.val == 0 { return err("h2: closed mid-frame"); }
             }
-            let payload: string = self.rx_buf.substring(9, total);
-            self.rx_buf = self.rx_buf.substring(total, self.rx_buf.len());
+            let payload_start: int = self.rx_offset + 9;
+            let payload_end:   int = self.rx_offset + total;
+            // Copy payload into a fresh ByteBuffer so it survives the
+            // ring slide. For headers we'll concat onto header_block;
+            // for data we'll concat onto body.
+            let payload: *ByteBuffer = self._rx_slice(payload_start, payload_end);
+            self.rx_offset = self.rx_offset + total;
 
             // Anything not on our stream is connection-level; skip.
             if h.stream_id != stream_id && h.stream_id != 0 { continue; }
@@ -279,8 +289,8 @@ impl H2Conn {
             if h.frame_type == FrameType::ping() {
                 if (h.flags & FrameFlag::ack()) == 0 {
                     let pong: *ByteBuffer = ByteBuffer::new();
-                    write_frame(pong, FrameType::ping(),
-                                FrameFlag::ack(), 0, payload);
+                    write_frame_bytes(pong, FrameType::ping(),
+                                       FrameFlag::ack(), 0, payload);
                     let _: !int = self.tls.write_bytes(pong.data, pong.len);
                     pong.free();
                 }
@@ -290,18 +300,18 @@ impl H2Conn {
                 return err("h2: server sent GOAWAY");
             }
             if h.frame_type == FrameType::headers() {
-                header_block = header_block.concat(payload);
+                _bb_append(header_block, payload);
                 if (h.flags & FrameFlag::end_headers()) != 0 { headers_done = true; }
                 if (h.flags & FrameFlag::end_stream()) != 0 { stream_closed = true; }
                 continue;
             }
             if h.frame_type == FrameType::continuation() {
-                header_block = header_block.concat(payload);
+                _bb_append(header_block, payload);
                 if (h.flags & FrameFlag::end_headers()) != 0 { headers_done = true; }
                 continue;
             }
             if h.frame_type == FrameType::data() {
-                body = body.concat(payload);
+                _bb_append(body, payload);
                 if (h.flags & FrameFlag::end_stream()) != 0 { stream_closed = true; }
                 continue;
             }
@@ -312,15 +322,24 @@ impl H2Conn {
         }
 
         if !headers_done { return err("h2: stream closed before END_HEADERS"); }
-        let parsed: !*Vector<*HpackHeader> = self.dec.decode_block(header_block,
-                                                                    header_block.len());
+        // ByteBuffer → Glide string. _bytes_to_string heap-copies with
+        // a trailing NUL, but decode_block uses .at(i) up to an
+        // explicit `len` argument and therefore doesn't care about
+        // internal NULs — safe for HPACK payloads with bytes < 32.
+        let hb_str: string = _bytes_to_string(header_block.data, header_block.len);
+        let parsed: !*Vector<*HpackHeader> = self.dec.decode_block(hb_str,
+                                                                    header_block.len);
         if !parsed.ok { return err(parsed.err); }
 
         let resp: *H2Response = malloc(sizeof(H2Response)) as *H2Response;
         let hv: *Vector<*HpackHeader> = Vector::new();
         resp.headers = hv;
         resp.status = 0;
-        resp.body = body;
+        // Same conversion for the body. Text responses (HTML/JSON/etc.)
+        // round-trip cleanly. Binary downloads with embedded NULs lose
+        // .len() visibility — wrap with ByteBuffer if you need to feed
+        // them somewhere length-aware.
+        resp.body = _bytes_to_string(body.data, body.len);
         let lst: *Vector<*HpackHeader> = parsed.val;
         for let i: int = 0; i < lst.len(); i++ {
             let h: *HpackHeader = lst.get(i);
@@ -334,18 +353,49 @@ impl H2Conn {
         return ok(resp);
     }
 
+    fn _rx_avail(self: *H2Conn) -> int {
+        return self.rx_buf.len - self.rx_offset;
+    }
+
+    /// Read up to 16 KiB more bytes into the rx ring. Returns the
+    /// count appended (0 = peer closed cleanly). Compacts the ring
+    /// when offset gets large to avoid unbounded growth.
+    fn _fill_rx(self: *H2Conn) -> !int {
+        // Compact when consumed past 4 KiB.
+        if self.rx_offset > 4096 {
+            let nb: *ByteBuffer = ByteBuffer::new();
+            for let i: int = self.rx_offset; i < self.rx_buf.len; i++ {
+                nb.push(self.rx_buf.at(i));
+            }
+            self.rx_buf = nb;
+            self.rx_offset = 0;
+        }
+        // Reserve space and read into a scratch buffer.
+        let scratch: *u8 = malloc(16384) as *u8;
+        let r: !int = self.tls.read_bytes(scratch, 16384);
+        if !r.ok { free(scratch as *void); return err(r.err); }
+        for let i: int = 0; i < r.val; i++ { self.rx_buf.push(scratch[i]); }
+        free(scratch as *void);
+        return ok(r.val);
+    }
+
+    /// Copy bytes [`from`, `to`) of the rx ring into a fresh
+    /// ByteBuffer. Used so frame payloads survive ring compaction.
+    fn _rx_slice(self: *H2Conn, from: int, to: int) -> *ByteBuffer {
+        let out: *ByteBuffer = ByteBuffer::new();
+        for let i: int = from; i < to; i++ { out.push(self.rx_buf.at(i)); }
+        return out;
+    }
+
     pub fn close(self: *H2Conn) {
-        // Send GOAWAY with last-stream-id and NO_ERROR (code 0).
+        // GOAWAY payload: 8 bytes of zero (last-stream-id 0 + NO_ERROR).
+        // String-typed concat truncates at NUL, so build via ByteBuffer.
+        let payload: *ByteBuffer = ByteBuffer::new();
+        defer payload.free();
+        for let i: int = 0; i < 8; i++ { payload.push(0 as u8); }
         let buf: *ByteBuffer = ByteBuffer::new();
         defer buf.free();
-        let mut p: string = "";
-        p = p.concat((0 as char).to_string());
-        p = p.concat((0 as char).to_string());
-        p = p.concat((0 as char).to_string());
-        p = p.concat((0 as char).to_string());
-        // error code = NO_ERROR (4 bytes of zero)
-        for let i: int = 0; i < 4; i++ { p = p.concat((0 as char).to_string()); }
-        write_frame(buf, FrameType::goaway(), 0, 0, p);
+        write_frame_bytes(buf, FrameType::goaway(), 0, 0, payload);
         let _: !int = self.tls.write_bytes(buf.data, buf.len);
         self.tls.close();
         free(self as *void);
@@ -356,4 +406,8 @@ pub struct H2Response {
     pub status:  int,
     pub headers: *Vector<*HpackHeader>,
     pub body:    string,
+}
+
+fn _bb_append(dst: *ByteBuffer, src: *ByteBuffer) {
+    for let i: int = 0; i < src.len; i++ { dst.push(src.at(i)); }
 }
