@@ -310,6 +310,104 @@ impl<T> Vector<T> {
         it.idx = 0;
         return it;
     }
+
+    /// Apply `f` to each element; return a new Vector.
+    fn map<U>(self: *Vector<T>, f: fn(T) -> U) -> *Vector<U> {
+        let out: *Vector<U> = Vector::new();
+        for let i: int = 0; i < self.len; i++ {
+            out.push(f(self.data[i]));
+        }
+        return out;
+    }
+
+    /// Keep only elements where `p` returns true.
+    fn filter(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+        let out: *Vector<T> = Vector::new();
+        for let i: int = 0; i < self.len; i++ {
+            let item: T = self.data[i];
+            if p(item) { out.push(item); }
+        }
+        return out;
+    }
+
+    /// First `n` elements (or all if `n` exceeds length).
+    fn take(self: *Vector<T>, n: int) -> *Vector<T> {
+        let out: *Vector<T> = Vector::new();
+        let mut limit: int = n;
+        if limit > self.len { limit = self.len; }
+        if limit < 0 { limit = 0; }
+        for let i: int = 0; i < limit; i++ { out.push(self.data[i]); }
+        return out;
+    }
+
+    /// Drop first `n` elements; return the rest.
+    fn skip(self: *Vector<T>, n: int) -> *Vector<T> {
+        let out: *Vector<T> = Vector::new();
+        let mut start: int = n;
+        if start < 0 { start = 0; }
+        for let i: int = start; i < self.len; i++ { out.push(self.data[i]); }
+        return out;
+    }
+
+    /// Take elements until `p` returns false (then stop).
+    fn take_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+        let out: *Vector<T> = Vector::new();
+        for let i: int = 0; i < self.len; i++ {
+            let item: T = self.data[i];
+            if !p(item) { return out; }
+            out.push(item);
+        }
+        return out;
+    }
+
+    /// Skip elements while `p` returns true; keep the rest from first false.
+    fn skip_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+        let out: *Vector<T> = Vector::new();
+        let mut skipping: bool = true;
+        for let i: int = 0; i < self.len; i++ {
+            let item: T = self.data[i];
+            if skipping {
+                if !p(item) { skipping = false; out.push(item); }
+            } else {
+                out.push(item);
+            }
+        }
+        return out;
+    }
+
+    /// Fold over the vector. `f(acc, item)` returns the new accumulator.
+    fn fold<U>(self: *Vector<T>, init: U, f: fn(U, T) -> U) -> U {
+        let mut acc: U = init;
+        for let i: int = 0; i < self.len; i++ {
+            acc = f(acc, self.data[i]);
+        }
+        return acc;
+    }
+
+    /// `true` if any element matches `p`. Short-circuits on first hit.
+    fn any(self: *Vector<T>, p: fn(T) -> bool) -> bool {
+        for let i: int = 0; i < self.len; i++ {
+            if p(self.data[i]) { return true; }
+        }
+        return false;
+    }
+
+    /// `true` if all elements match `p`. Short-circuits on first miss.
+    fn all(self: *Vector<T>, p: fn(T) -> bool) -> bool {
+        for let i: int = 0; i < self.len; i++ {
+            if !p(self.data[i]) { return false; }
+        }
+        return true;
+    }
+
+    /// First element matching `p`, or `none` if no match.
+    fn find(self: *Vector<T>, p: fn(T) -> bool) -> ?T {
+        for let i: int = 0; i < self.len; i++ {
+            let item: T = self.data[i];
+            if p(item) { return some(item); }
+        }
+        return none();
+    }
 }
 
 pub struct VecIter<T> {

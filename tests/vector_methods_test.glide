@@ -1,0 +1,130 @@
+import stdlib::testing::*;
+
+fn _double(x: int) -> int { return x * 2; }
+fn _square(x: int) -> int { return x * x; }
+fn _to_str(x: int) -> string {
+    if x == 1 { return "one"; }
+    if x == 2 { return "two"; }
+    if x == 3 { return "three"; }
+    return "?";
+}
+fn _is_positive(x: int) -> bool { return x > 0; }
+fn _is_even(x: int) -> bool { return x % 2 == 0; }
+fn _lt5(x: int) -> bool { return x < 5; }
+fn _gte3(x: int) -> bool { return x >= 3; }
+fn _add(a: int, b: int) -> int { return a + b; }
+
+fn _build(start: int, end: int) -> *Vector<int> {
+    let v: *Vector<int> = Vector::new();
+    let mut i: int = start;
+    while i < end { v.push(i); i = i + 1; }
+    return v;
+}
+
+fn test_vec_map_int_to_int() -> int {
+    let v: *Vector<int> = _build(1, 5);
+    let m: *Vector<int> = v.map(_double);
+    assert_eq!(m.len(), 4);
+    assert_eq!(m.get(0), 2);
+    assert_eq!(m.get(3), 8);
+    return 0;
+}
+
+fn test_vec_map_int_to_string() -> int {
+    let v: *Vector<int> = _build(1, 4);
+    let names: *Vector<string> = v.map(_to_str);
+    assert_eq!(names.len(), 3);
+    assert_str_eq!(names.get(0), "one");
+    assert_str_eq!(names.get(2), "three");
+    return 0;
+}
+
+fn test_vec_filter() -> int {
+    let v: *Vector<int> = _build(0 - 2, 5);
+    let p: *Vector<int> = v.filter(_is_positive);
+    assert_eq!(p.len(), 4);
+    assert_eq!(p.get(0), 1);
+    return 0;
+}
+
+fn test_vec_take() -> int {
+    let v: *Vector<int> = _build(0, 10);
+    let t: *Vector<int> = v.take(3);
+    assert_eq!(t.len(), 3);
+    assert_eq!(t.get(2), 2);
+    return 0;
+}
+
+fn test_vec_skip() -> int {
+    let v: *Vector<int> = _build(0, 10);
+    let s: *Vector<int> = v.skip(7);
+    assert_eq!(s.len(), 3);
+    assert_eq!(s.get(0), 7);
+    return 0;
+}
+
+fn test_vec_take_while() -> int {
+    let v: *Vector<int> = _build(0, 10);
+    let t: *Vector<int> = v.take_while(_lt5);
+    assert_eq!(t.len(), 5);
+    assert_eq!(t.get(4), 4);
+    return 0;
+}
+
+fn test_vec_skip_while() -> int {
+    let v: *Vector<int> = _build(0, 6);
+    let s: *Vector<int> = v.skip_while(_lt5);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s.get(0), 5);
+    return 0;
+}
+
+fn test_vec_fold() -> int {
+    let v: *Vector<int> = _build(1, 5);
+    let total: int = v.fold(0, _add);
+    assert_eq!(total, 10);
+    return 0;
+}
+
+fn test_vec_any_true() -> int {
+    let v: *Vector<int> = _build(1, 6);
+    assert!(v.any(_is_even));
+    return 0;
+}
+
+fn test_vec_all_false() -> int {
+    let v: *Vector<int> = _build(1, 6);
+    assert_not!(v.all(_is_even));
+    return 0;
+}
+
+fn test_vec_find_some() -> int {
+    let v: *Vector<int> = _build(1, 10);
+    let r: ?int = v.find(_gte3);
+    assert!(r.has);
+    assert_eq!(r.val, 3);
+    return 0;
+}
+
+fn test_vec_find_none() -> int {
+    let v: *Vector<int> = _build(0 - 5, 0 - 1);
+    let r: ?int = v.find(_is_positive);
+    assert_not!(r.has);
+    return 0;
+}
+
+fn test_vec_chain_map_filter_fold() -> int {
+    let v: *Vector<int> = _build(1, 6);
+    let total: int = v.map(_square).filter(_is_even).fold(0, _add);
+    assert_eq!(total, 20);
+    return 0;
+}
+
+fn test_vec_chain_filter_take() -> int {
+    let v: *Vector<int> = _build(1, 20);
+    let t: *Vector<int> = v.filter(_is_even).take(3);
+    assert_eq!(t.len(), 3);
+    assert_eq!(t.get(0), 2);
+    assert_eq!(t.get(2), 6);
+    return 0;
+}
