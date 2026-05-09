@@ -5158,7 +5158,7 @@ bool   string_ends_with (const char*   self, const char*   suf) {
 }
 
 Vector__string*   string_split (const char*   self, const char*   sep) {
-    Vector__string*   v = Vector_new__string();
+    Vector__string*   v = ((Vector__string*(*)(void))Vector_new__string)();
     int   n = __glide_string_len(self);
     int   m = __glide_string_len(sep);
     if ((m  ==  0)) {
@@ -5227,11 +5227,11 @@ const char*   string_replace (const char*   self, const char*   find, const char
 const char*   string_trim (const char*   self) {
     int   n = __glide_string_len(self);
     int   start = 0;
-    while (((start  <  n)  &&  _ws(__glide_char_to_int(__glide_string_at(self, start))))) {
+    while (((start  <  n)  &&  ((bool(*)(int))_ws)(__glide_char_to_int(__glide_string_at(self, start))))) {
         (start  =  (start  +  1));
     }
     int   end = n;
-    while (((end  >  start)  &&  _ws(__glide_char_to_int(__glide_string_at(self, (end  -  1)))))) {
+    while (((end  >  start)  &&  ((bool(*)(int))_ws)(__glide_char_to_int(__glide_string_at(self, (end  -  1)))))) {
         (end  =  (end  -  1));
     }
     return __glide_string_substring(self, start, end);
@@ -5240,7 +5240,7 @@ const char*   string_trim (const char*   self) {
 const char*   string_trim_left (const char*   self) {
     int   n = __glide_string_len(self);
     int   start = 0;
-    while (((start  <  n)  &&  _ws(__glide_char_to_int(__glide_string_at(self, start))))) {
+    while (((start  <  n)  &&  ((bool(*)(int))_ws)(__glide_char_to_int(__glide_string_at(self, start))))) {
         (start  =  (start  +  1));
     }
     return __glide_string_substring(self, start, n);
@@ -5249,7 +5249,7 @@ const char*   string_trim_left (const char*   self) {
 const char*   string_trim_right (const char*   self) {
     int   n = __glide_string_len(self);
     int   end = n;
-    while (((end  >  0)  &&  _ws(__glide_char_to_int(__glide_string_at(self, (end  -  1)))))) {
+    while (((end  >  0)  &&  ((bool(*)(int))_ws)(__glide_char_to_int(__glide_string_at(self, (end  -  1)))))) {
         (end  =  (end  -  1));
     }
     return __glide_string_substring(self, 0, end);
@@ -5364,34 +5364,34 @@ __glide_result_int_t   string_try_parse_int (const char*   self) {
 }
 
 const char*   fs_read (const char*   path) {
-    return read_file(path);
+    return ((const char*(*)(const char*))read_file)(path);
 }
 
 bool   fs_write (const char*   path, const char*   content) {
-    return write_file(path, content);
+    return ((bool(*)(const char*, const char*))write_file)(path, content);
 }
 
 bool   fs_exists (const char*   path) {
-    return __glide_file_exists(path);
+    return ((bool(*)(const char*))__glide_file_exists)(path);
 }
 
 Vector__string*   fs_list (const char*   dir, const char*   suffix) {
-    const char*   raw = __glide_list_dir(dir, suffix);
+    const char*   raw = ((const char*(*)(const char*, const char*))__glide_list_dir)(dir, suffix);
     if (__glide_string_eq(raw, "")) {
-        return Vector_new__string();
+        return ((Vector__string*(*)(void))Vector_new__string)();
     }
     return string_split(raw, "\n");
 }
 
 Vector__string*   fs_read_lines (const char*   path) {
-    const char*   body = read_file(path);
+    const char*   body = ((const char*(*)(const char*))read_file)(path);
     if (__glide_string_eq(body, "")) {
-        return Vector_new__string();
+        return ((Vector__string*(*)(void))Vector_new__string)();
     }
     Vector__string*   lines = string_split(body, "\n");
     int   n = Vector_len__string(lines);
     if (((n  >  0)  &&  __glide_string_eq(Vector_get__string(lines, (n  -  1)), ""))) {
-        Vector__string*   trimmed = Vector_new__string();
+        Vector__string*   trimmed = ((Vector__string*(*)(void))Vector_new__string)();
         for (int   i = 0; (i  <  (n  -  1)); i++) {
             Vector_push__string(trimmed, Vector_get__string(lines, i));
         }
@@ -5414,7 +5414,7 @@ const char*   fs_basename (const char*   path) {
 }
 
 const char*   fs_extension (const char*   path) {
-    const char*   name = fs_basename(path);
+    const char*   name = ((const char*(*)(const char*))fs_basename)(path);
     int   n = __glide_string_len(name);
     int   i = n;
     while ((i  >  0)) {
@@ -5431,7 +5431,7 @@ const char*   fs_extension (const char*   path) {
 }
 
 int   fs_lines_count (const char*   path) {
-    const char*   body = read_file(path);
+    const char*   body = ((const char*(*)(const char*))read_file)(path);
     int   n = __glide_string_len(body);
     if ((n  ==  0)) {
         return 0;
@@ -5449,60 +5449,60 @@ int   fs_lines_count (const char*   path) {
 }
 
 const char*   fs_read_or_default (const char*   path, const char*   fallback) {
-    if ((!__glide_file_exists(path))) {
+    if ((!((bool(*)(const char*))__glide_file_exists)(path))) {
         return fallback;
     }
-    return read_file(path);
+    return ((const char*(*)(const char*))read_file)(path);
 }
 
 const char*   os_name (void) {
-    return __glide_os_name();
+    return ((const char*(*)(void))__glide_os_name)();
 }
 
 const char*   os_arch (void) {
-    return __glide_os_arch();
+    return ((const char*(*)(void))__glide_os_arch)();
 }
 
 bool   os_is_windows (void) {
-    return (__glide_is_windows()  !=  0);
+    return (((int(*)(void))__glide_is_windows)()  !=  0);
 }
 
 bool   os_is_posix (void) {
-    return (__glide_is_windows()  ==  0);
+    return (((int(*)(void))__glide_is_windows)()  ==  0);
 }
 
 bool   os_is_linux (void) {
-    return __glide_string_eq(__glide_os_name(), "linux");
+    return __glide_string_eq(((const char*(*)(void))__glide_os_name)(), "linux");
 }
 
 bool   os_is_macos (void) {
-    return __glide_string_eq(__glide_os_name(), "macos");
+    return __glide_string_eq(((const char*(*)(void))__glide_os_name)(), "macos");
 }
 
 const char*   os_path_sep (void) {
-    if ((__glide_is_windows()  !=  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         return "\\";
     }
     return "/";
 }
 
 const char*   os_line_sep (void) {
-    if ((__glide_is_windows()  !=  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         return "\r\n";
     }
     return "\n";
 }
 
 const char*   os_path_list_sep (void) {
-    return __glide_path_list_sep();
+    return ((const char*(*)(void))__glide_path_list_sep)();
 }
 
 int   os_pid (void) {
-    return __glide_pid();
+    return ((int(*)(void))__glide_pid)();
 }
 
 __glide_result_int_t   os_ppid (void) {
-    int   p = __glide_ppid();
+    int   p = ((int(*)(void))__glide_ppid)();
     if ((p  <  0)) {
         return __glide_err_int("ppid not available");
     }
@@ -5510,7 +5510,7 @@ __glide_result_int_t   os_ppid (void) {
 }
 
 __glide_result_int_t   os_uid (void) {
-    int   u = __glide_uid();
+    int   u = ((int(*)(void))__glide_uid)();
     if ((u  <  0)) {
         return __glide_err_int("uid not available on this platform");
     }
@@ -5518,7 +5518,7 @@ __glide_result_int_t   os_uid (void) {
 }
 
 __glide_result_int_t   os_gid (void) {
-    int   g = __glide_gid();
+    int   g = ((int(*)(void))__glide_gid)();
     if ((g  <  0)) {
         return __glide_err_int("gid not available on this platform");
     }
@@ -5526,7 +5526,7 @@ __glide_result_int_t   os_gid (void) {
 }
 
 __glide_result_string_t   os_username (void) {
-    const char*   s = __glide_username();
+    const char*   s = ((const char*(*)(void))__glide_username)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("username unavailable");
     }
@@ -5534,7 +5534,7 @@ __glide_result_string_t   os_username (void) {
 }
 
 __glide_result_string_t   os_hostname (void) {
-    const char*   s = __glide_hostname();
+    const char*   s = ((const char*(*)(void))__glide_hostname)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("hostname unavailable");
     }
@@ -5542,7 +5542,7 @@ __glide_result_string_t   os_hostname (void) {
 }
 
 __glide_result_string_t   os_kernel_version (void) {
-    const char*   s = __glide_kernel_version();
+    const char*   s = ((const char*(*)(void))__glide_kernel_version)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("kernel version unavailable");
     }
@@ -5550,7 +5550,7 @@ __glide_result_string_t   os_kernel_version (void) {
 }
 
 __glide_result_string_t   os_cwd (void) {
-    const char*   s = __glide_cwd();
+    const char*   s = ((const char*(*)(void))__glide_cwd)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("cwd unavailable");
     }
@@ -5558,14 +5558,14 @@ __glide_result_string_t   os_cwd (void) {
 }
 
 __glide_result_void_t   os_chdir (const char*   path) {
-    if ((__glide_chdir(path)  !=  0)) {
+    if ((((int(*)(const char*))__glide_chdir)(path)  !=  0)) {
         return __glide_err_void("chdir failed");
     }
     return __glide_ok_void();
 }
 
 __glide_result_string_t   os_exe_path (void) {
-    const char*   s = __glide_exe_path();
+    const char*   s = ((const char*(*)(void))__glide_exe_path)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("exe path unavailable");
     }
@@ -5573,7 +5573,7 @@ __glide_result_string_t   os_exe_path (void) {
 }
 
 __glide_result_string_t   os_exe_dir (void) {
-    const char*   s = __glide_exe_dir();
+    const char*   s = ((const char*(*)(void))__glide_exe_dir)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("exe dir unavailable");
     }
@@ -5581,7 +5581,7 @@ __glide_result_string_t   os_exe_dir (void) {
 }
 
 __glide_result_int_t   os_cpu_count (void) {
-    int   n = __glide_cpu_count();
+    int   n = ((int(*)(void))__glide_cpu_count)();
     if ((n  <=  0)) {
         return __glide_err_int("cpu count unavailable");
     }
@@ -5589,15 +5589,15 @@ __glide_result_int_t   os_cpu_count (void) {
 }
 
 __glide_result_int_t   os_cpu_count_physical (void) {
-    int   n = __glide_cpu_count_physical();
+    int   n = ((int(*)(void))__glide_cpu_count_physical)();
     if ((n  <=  0)) {
-        return os_cpu_count();
+        return ((__glide_result_int_t(*)(void))os_cpu_count)();
     }
     return __glide_ok_int(n);
 }
 
 __glide_result_int_t   os_page_size (void) {
-    int   n = __glide_page_size();
+    int   n = ((int(*)(void))__glide_page_size)();
     if ((n  <=  0)) {
         return __glide_err_int("page size unavailable");
     }
@@ -5605,7 +5605,7 @@ __glide_result_int_t   os_page_size (void) {
 }
 
 __glide_result_u64_t   os_memory_total (void) {
-    uint64_t   n = __glide_memory_total();
+    uint64_t   n = ((uint64_t(*)(void))__glide_memory_total)();
     if ((n  ==  0)) {
         return __glide_err_u64("memory_total unavailable");
     }
@@ -5613,7 +5613,7 @@ __glide_result_u64_t   os_memory_total (void) {
 }
 
 __glide_result_u64_t   os_memory_free (void) {
-    uint64_t   n = __glide_memory_free();
+    uint64_t   n = ((uint64_t(*)(void))__glide_memory_free)();
     if ((n  ==  0)) {
         return __glide_err_u64("memory_free unavailable");
     }
@@ -5621,7 +5621,7 @@ __glide_result_u64_t   os_memory_free (void) {
 }
 
 __glide_result_u64_t   os_uptime_secs (void) {
-    uint64_t   n = __glide_uptime_secs();
+    uint64_t   n = ((uint64_t(*)(void))__glide_uptime_secs)();
     if ((n  ==  0)) {
         return __glide_err_u64("uptime unavailable");
     }
@@ -5629,7 +5629,7 @@ __glide_result_u64_t   os_uptime_secs (void) {
 }
 
 __glide_result_f64_t   os_loadavg_1m (void) {
-    double   v = __glide_loadavg_1m();
+    double   v = ((double(*)(void))__glide_loadavg_1m)();
     if ((v  <  0.0)) {
         return __glide_err_f64("loadavg not supported on this platform");
     }
@@ -5637,7 +5637,7 @@ __glide_result_f64_t   os_loadavg_1m (void) {
 }
 
 __glide_result_string_t   os_temp_dir (void) {
-    const char*   s = __glide_temp_dir();
+    const char*   s = ((const char*(*)(void))__glide_temp_dir)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("temp_dir unavailable");
     }
@@ -5645,7 +5645,7 @@ __glide_result_string_t   os_temp_dir (void) {
 }
 
 __glide_result_string_t   os_home_dir (void) {
-    const char*   s = __glide_home_dir();
+    const char*   s = ((const char*(*)(void))__glide_home_dir)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("home_dir unavailable");
     }
@@ -5653,7 +5653,7 @@ __glide_result_string_t   os_home_dir (void) {
 }
 
 __glide_result_string_t   os_config_dir (void) {
-    const char*   s = __glide_config_dir();
+    const char*   s = ((const char*(*)(void))__glide_config_dir)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("config_dir unavailable");
     }
@@ -5661,7 +5661,7 @@ __glide_result_string_t   os_config_dir (void) {
 }
 
 __glide_result_string_t   os_cache_dir (void) {
-    const char*   s = __glide_cache_dir();
+    const char*   s = ((const char*(*)(void))__glide_cache_dir)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("cache_dir unavailable");
     }
@@ -5669,7 +5669,7 @@ __glide_result_string_t   os_cache_dir (void) {
 }
 
 __glide_result_string_t   os_data_dir (void) {
-    const char*   s = __glide_data_dir();
+    const char*   s = ((const char*(*)(void))__glide_data_dir)();
     if (__glide_string_eq(s, "")) {
         return __glide_err_string("data_dir unavailable");
     }
@@ -5677,11 +5677,11 @@ __glide_result_string_t   os_data_dir (void) {
 }
 
 bool   os_is_tty (int   fd) {
-    return (__glide_is_tty(fd)  !=  0);
+    return (((int(*)(int))__glide_is_tty)(fd)  !=  0);
 }
 
 __glide_result_int_t   os_shell (const char*   cmd) {
-    int   rc = __glide_shell(cmd);
+    int   rc = ((int(*)(const char*))__glide_shell)(cmd);
     if ((rc  <  0)) {
         return __glide_err_int("shell failed to spawn");
     }
@@ -5689,53 +5689,53 @@ __glide_result_int_t   os_shell (const char*   cmd) {
 }
 
 int   env_args_count (void) {
-    return args_count();
+    return ((int(*)(void))args_count)();
 }
 
 const char*   env_args_at (int   i) {
-    return args_at(i);
+    return ((const char*(*)(int))args_at)(i);
 }
 
 Vector__string*   env_args (void) {
-    Vector__string*   v = Vector_new__string();
-    int   n = args_count();
+    Vector__string*   v = ((Vector__string*(*)(void))Vector_new__string)();
+    int   n = ((int(*)(void))args_count)();
     for (int   i = 1; (i  <  n); i++) {
-        Vector_push__string(v, args_at(i));
+        Vector_push__string(v, ((const char*(*)(int))args_at)(i));
     }
     return v;
 }
 
 const char*   env_get (const char*   name) {
-    return __glide_getenv(name);
+    return ((const char*(*)(const char*))__glide_getenv)(name);
 }
 
 bool   env_has (const char*   name) {
-    return (!__glide_string_eq(__glide_getenv(name), ""));
+    return (!__glide_string_eq(((const char*(*)(const char*))__glide_getenv)(name), ""));
 }
 
 void   env_exit (int   code) {
-    exit(code);
+    ((void(*)(int))exit)(code);
 }
 
 __glide_result_void_t   env_set (const char*   name, const char*   value) {
-    if ((__glide_setenv(name, value)  !=  0)) {
+    if ((((int(*)(const char*, const char*))__glide_setenv)(name, value)  !=  0)) {
         return __glide_err_void("env_set failed");
     }
     return __glide_ok_void();
 }
 
 __glide_result_void_t   env_unset (const char*   name) {
-    if ((__glide_unsetenv(name)  !=  0)) {
+    if ((((int(*)(const char*))__glide_unsetenv)(name)  !=  0)) {
         return __glide_err_void("env_unset failed");
     }
     return __glide_ok_void();
 }
 
 Vector__EnvKV*   env_all (void) {
-    Vector__EnvKV*   out = Vector_new__EnvKV();
-    int   n = __glide_environ_count();
+    Vector__EnvKV*   out = ((Vector__EnvKV*(*)(void))Vector_new__EnvKV)();
+    int   n = ((int(*)(void))__glide_environ_count)();
     for (int   i = 0; (i  <  n); i++) {
-        const char*   raw = __glide_environ_at(i);
+        const char*   raw = ((const char*(*)(int))__glide_environ_at)(i);
         int   len = __glide_string_len(raw);
         int   eq = (0  -  1);
         for (int   j = 0; (j  <  len); j++) {
@@ -5767,18 +5767,18 @@ const char*   env_expand (const char*   s) {
             }
             if ((j  <  n)) {
                 const char*   name = __glide_string_substring(s, (i  +  2), j);
-                (out  =  __glide_string_concat(out, __glide_getenv(name)));
+                (out  =  __glide_string_concat(out, ((const char*(*)(const char*))__glide_getenv)(name)));
                 (i  =  (j  +  1));
                 continue;
             }
         }
-        if ((((c  ==  36)  &&  ((i  +  1)  <  n))  &&  _env_is_name_start(__glide_char_to_int(__glide_string_at(s, (i  +  1)))))) {
+        if ((((c  ==  36)  &&  ((i  +  1)  <  n))  &&  ((bool(*)(int))_env_is_name_start)(__glide_char_to_int(__glide_string_at(s, (i  +  1)))))) {
             int   j = (i  +  1);
-            while (((j  <  n)  &&  _env_is_name_cont(__glide_char_to_int(__glide_string_at(s, j))))) {
+            while (((j  <  n)  &&  ((bool(*)(int))_env_is_name_cont)(__glide_char_to_int(__glide_string_at(s, j))))) {
                 (j  =  (j  +  1));
             }
             const char*   name = __glide_string_substring(s, (i  +  1), j);
-            (out  =  __glide_string_concat(out, __glide_getenv(name)));
+            (out  =  __glide_string_concat(out, ((const char*(*)(const char*))__glide_getenv)(name)));
             (i  =  j);
             continue;
         }
@@ -5789,7 +5789,7 @@ const char*   env_expand (const char*   s) {
             }
             if (((j  <  n)  &&  (j  >  (i  +  1)))) {
                 const char*   name = __glide_string_substring(s, (i  +  1), j);
-                (out  =  __glide_string_concat(out, __glide_getenv(name)));
+                (out  =  __glide_string_concat(out, ((const char*(*)(const char*))__glide_getenv)(name)));
                 (i  =  (j  +  1));
                 continue;
             }
@@ -5814,7 +5814,7 @@ bool   _env_is_name_start (int   c) {
 }
 
 bool   _env_is_name_cont (int   c) {
-    if (_env_is_name_start(c)) {
+    if (((bool(*)(int))_env_is_name_start)(c)) {
         return true;
     }
     if (((c  >=  48)  &&  (c  <=  57))) {
@@ -5824,13 +5824,13 @@ bool   _env_is_name_cont (int   c) {
 }
 
 const char*   read_line (void) {
-    return __glide_read_line();
+    return ((const char*(*)(void))__glide_read_line)();
 }
 
 const char*   prompt (const char*   msg) {
-    io_write(msg);
-    flush();
-    const char*   line = read_line();
+    ((void(*)(const char*))io_write)(msg);
+    ((void(*)(void))flush)();
+    const char*   line = ((const char*(*)(void))read_line)();
     int   n = __glide_string_len(line);
     if (((n  >  0)  &&  (__glide_char_to_int(__glide_string_at(line, (n  -  1)))  ==  10))) {
         if (((n  >  1)  &&  (__glide_char_to_int(__glide_string_at(line, (n  -  2)))  ==  13))) {
@@ -5842,36 +5842,36 @@ const char*   prompt (const char*   msg) {
 }
 
 __glide_result_int_t   read_int (void) {
-    return string_try_parse_int(string_trim(read_line()));
+    return string_try_parse_int(string_trim(((const char*(*)(void))read_line)()));
 }
 
 bool   read_yes_no (const char*   prompt_msg) {
-    const char*   response = string_trim(prompt(prompt_msg));
+    const char*   response = string_trim(((const char*(*)(const char*))prompt)(prompt_msg));
     return (string_starts_with(response, "y")  ||  string_starts_with(response, "Y"));
 }
 
 const char*   read_bytes (int   n) {
-    return __glide_read_bytes(n);
+    return ((const char*(*)(int))__glide_read_bytes)(n);
 }
 
 void   io_write (const char*   s) {
-    __glide_write_str(s);
+    ((void(*)(const char*))__glide_write_str)(s);
 }
 
 void   io_write_bytes (const char*   s, int   n) {
-    __glide_write_bytes(s, n);
+    ((void(*)(const char*, int))__glide_write_bytes)(s, n);
 }
 
 void   flush (void) {
-    __glide_flush_stdout();
+    ((void(*)(void))__glide_flush_stdout)();
 }
 
 void   eprintln (const char*   s) {
-    __glide_log(s);
+    ((void(*)(const char*))__glide_log)(s);
 }
 
 Lexer*   Lexer_new (const char*   src) {
-    Lexer*   l = (( Lexer* )__glide_palloc(sizeof( Lexer )));
+    Lexer*   l = (( Lexer* )((void*(*)(int))__glide_palloc)(sizeof( Lexer )));
     ((l-> src )  =  src);
     ((l-> src_len )  =  __glide_string_len(src));
     ((l-> pos )  =  0);
@@ -5882,7 +5882,7 @@ Lexer*   Lexer_new (const char*   src) {
 }
 
 void   Lexer_free (Lexer*   self) {
-    __glide_pfree((( void* )self));
+    ((void(*)(void*))__glide_pfree)((( void* )self));
 }
 
 char   Lexer_peek (Lexer*   self) {
@@ -6046,7 +6046,7 @@ Token   Lexer_next_token (Lexer*   self) {
             }
         }
         int   kind = TOK_IDENT;
-        if (is_keyword(lex)) {
+        if (((bool(*)(const char*))is_keyword)(lex)) {
             (kind  =  TOK_KEYWORD);
         }
         return (( Token ){. kind  = kind, . lexeme  = lex, . line  = start_line, . column  = start_col, . doc  = doc});
@@ -6378,7 +6378,7 @@ const char*   token_kind_name (int   k) {
 }
 
 Type*   ty_fnptr (Vector__Type*   params, Type*   ret) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_FNPTR);
     ((t-> args )  =  params);
     ((t-> fnptr_ret )  =  ret);
@@ -6386,7 +6386,7 @@ Type*   ty_fnptr (Vector__Type*   params, Type*   ret) {
 }
 
 Type*   ty_generic (const char*   name, Vector__Type*   args) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_GENERIC);
     ((t-> name )  =  name);
     ((t-> inner )  =  NULL);
@@ -6395,7 +6395,7 @@ Type*   ty_generic (const char*   name, Vector__Type*   args) {
 }
 
 Type*   ty_named (const char*   name) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_NAMED);
     ((t-> name )  =  name);
     ((t-> inner )  =  NULL);
@@ -6403,28 +6403,28 @@ Type*   ty_named (const char*   name) {
 }
 
 Type*   ty_result (Type*   inner) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_RESULT);
     ((t-> inner )  =  inner);
     return t;
 }
 
 Type*   ty_option (Type*   inner) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_OPTION);
     ((t-> inner )  =  inner);
     return t;
 }
 
 Type*   ty_optres (Type*   inner) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_OPT_RESULT);
     ((t-> inner )  =  inner);
     return t;
 }
 
 Type*   ty_assoc (Type*   owner, const char*   name) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_ASSOC);
     ((t-> inner )  =  owner);
     ((t-> name )  =  name);
@@ -6432,7 +6432,7 @@ Type*   ty_assoc (Type*   owner, const char*   name) {
 }
 
 Type*   ty_pointer (Type*   inner) {
-    Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((t-> kind )  =  TY_POINTER);
     ((t-> name )  =  "");
     ((t-> inner )  =  inner);
@@ -6440,7 +6440,7 @@ Type*   ty_pointer (Type*   inner) {
 }
 
 Expr*   expr_int (int64_t   n, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_INT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6449,7 +6449,7 @@ Expr*   expr_int (int64_t   n, int   line, int   col) {
 }
 
 Expr*   expr_float (const char*   lexeme, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_FLOAT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6458,7 +6458,7 @@ Expr*   expr_float (const char*   lexeme, int   line, int   col) {
 }
 
 Expr*   expr_string (const char*   s, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_STRING);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6467,7 +6467,7 @@ Expr*   expr_string (const char*   s, int   line, int   col) {
 }
 
 Expr*   expr_ident (const char*   name, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_IDENT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6476,7 +6476,7 @@ Expr*   expr_ident (const char*   name, int   line, int   col) {
 }
 
 Expr*   expr_bool (bool   b, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_BOOL);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6485,7 +6485,7 @@ Expr*   expr_bool (bool   b, int   line, int   col) {
 }
 
 Expr*   expr_binary (int   op, Expr*   lhs, Expr*   rhs) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_BINARY);
     ((e-> line )  =  (lhs-> line ));
     ((e-> column )  =  (lhs-> column ));
@@ -6496,7 +6496,7 @@ Expr*   expr_binary (int   op, Expr*   lhs, Expr*   rhs) {
 }
 
 Expr*   expr_call (Expr*   callee, Vector__Expr*   args) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_CALL);
     ((e-> line )  =  (callee-> line ));
     ((e-> column )  =  (callee-> column ));
@@ -6506,7 +6506,7 @@ Expr*   expr_call (Expr*   callee, Vector__Expr*   args) {
 }
 
 Stmt*   stmt_let (const char*   name, Type*   ty, Expr*   value, bool   is_mut, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_LET);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6530,7 +6530,7 @@ const char*   int_to_str (int64_t   n) {
     const char*   s = "";
     while ((x  >  0)) {
         int   d = (( int )(x  %  10));
-        const char*   ch = digit_str(d);
+        const char*   ch = ((const char*(*)(int))digit_str)(d);
         (s  =  __glide_string_concat(ch, s));
         (x  =  (x  /  10));
     }
@@ -6576,13 +6576,13 @@ Type*   strip_ptr (Type*   t) {
         return NULL;
     }
     if (((((t-> kind )  ==  TY_POINTER)  ||  ((t-> kind )  ==  TY_BORROW))  ||  ((t-> kind )  ==  TY_BORROW_MUT))) {
-        return strip_ptr((t-> inner ));
+        return ((Type*(*)(Type*))strip_ptr)((t-> inner ));
     }
     return t;
 }
 
 Stmt*   stmt_return (Expr*   v, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_RETURN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6591,7 +6591,7 @@ Stmt*   stmt_return (Expr*   v, int   line, int   col) {
 }
 
 Stmt*   stmt_expr (Expr*   e) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_EXPR);
     if ((e  !=  NULL)) {
         ((s-> line )  =  (e-> line ));
@@ -6602,7 +6602,7 @@ Stmt*   stmt_expr (Expr*   e) {
 }
 
 Stmt*   stmt_fn (const char*   name, Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_FN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6614,7 +6614,7 @@ Stmt*   stmt_fn (const char*   name, Vector__Param*   params, Type*   ret_ty, Ve
 }
 
 Stmt*   stmt_struct (const char*   name, Vector__Field*   fields, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_STRUCT);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6624,7 +6624,7 @@ Stmt*   stmt_struct (const char*   name, Vector__Field*   fields, int   line, in
 }
 
 Stmt*   stmt_impl (Type*   target, Vector__Stmt*   methods, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_IMPL);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6634,7 +6634,7 @@ Stmt*   stmt_impl (Type*   target, Vector__Stmt*   methods, int   line, int   co
 }
 
 Stmt*   stmt_if (Expr*   cond, Vector__Stmt*   then_body, Vector__Stmt*   else_body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_IF);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6645,7 +6645,7 @@ Stmt*   stmt_if (Expr*   cond, Vector__Stmt*   then_body, Vector__Stmt*   else_b
 }
 
 Stmt*   stmt_while (Expr*   cond, Vector__Stmt*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_WHILE);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6655,7 +6655,7 @@ Stmt*   stmt_while (Expr*   cond, Vector__Stmt*   body, int   line, int   col) {
 }
 
 Stmt*   stmt_for (Stmt*   init, Expr*   cond, Expr*   step, Vector__Stmt*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_FOR);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6667,7 +6667,7 @@ Stmt*   stmt_for (Stmt*   init, Expr*   cond, Expr*   step, Vector__Stmt*   body
 }
 
 Stmt*   stmt_break (int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_BREAK);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6675,7 +6675,7 @@ Stmt*   stmt_break (int   line, int   col) {
 }
 
 Stmt*   stmt_continue (int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_CONTINUE);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6683,7 +6683,7 @@ Stmt*   stmt_continue (int   line, int   col) {
 }
 
 Stmt*   stmt_const (const char*   name, Type*   ty, Expr*   value, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_CONST);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6694,7 +6694,7 @@ Stmt*   stmt_const (const char*   name, Type*   ty, Expr*   value, int   line, i
 }
 
 Stmt*   stmt_import (const char*   path, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_IMPORT);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6703,7 +6703,7 @@ Stmt*   stmt_import (const char*   path, int   line, int   col) {
 }
 
 Stmt*   stmt_enum (const char*   name, Vector__EnumVariant*   variants, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_ENUM);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6713,7 +6713,7 @@ Stmt*   stmt_enum (const char*   name, Vector__EnumVariant*   variants, int   li
 }
 
 Stmt*   stmt_spawn (Expr*   call, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_SPAWN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6722,7 +6722,7 @@ Stmt*   stmt_spawn (Expr*   call, int   line, int   col) {
 }
 
 Stmt*   stmt_match (Expr*   scrutinee, Vector__MatchArm*   arms, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_MATCH);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6732,7 +6732,7 @@ Stmt*   stmt_match (Expr*   scrutinee, Vector__MatchArm*   arms, int   line, int
 }
 
 Stmt*   stmt_craw (const char*   body, int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_CRAW);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -6741,16 +6741,16 @@ Stmt*   stmt_craw (const char*   body, int   line, int   col) {
 }
 
 Stmt*   stmt_asm (int   line, int   col) {
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_ASM);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
-    Vector__string*   strs = Vector_new__string();
-    Vector__string*   outc = Vector_new__string();
-    Vector__Expr*   oute = Vector_new__Expr();
-    Vector__string*   inc = Vector_new__string();
-    Vector__Expr*   ine = Vector_new__Expr();
-    Vector__string*   clb = Vector_new__string();
+    Vector__string*   strs = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__string*   outc = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__Expr*   oute = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+    Vector__string*   inc = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__Expr*   ine = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+    Vector__string*   clb = ((Vector__string*(*)(void))Vector_new__string)();
     ((s-> asm_strings )  =  strs);
     ((s-> asm_out_constraints )  =  outc);
     ((s-> asm_out_exprs )  =  oute);
@@ -6761,7 +6761,7 @@ Stmt*   stmt_asm (int   line, int   col) {
 }
 
 Expr*   expr_unary (int   op, Expr*   operand, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_UNARY);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6771,7 +6771,7 @@ Expr*   expr_unary (int   op, Expr*   operand, int   line, int   col) {
 }
 
 Expr*   expr_assign (int   op, Expr*   lhs, Expr*   rhs) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_ASSIGN);
     ((e-> line )  =  (lhs-> line ));
     ((e-> column )  =  (lhs-> column ));
@@ -6782,7 +6782,7 @@ Expr*   expr_assign (int   op, Expr*   lhs, Expr*   rhs) {
 }
 
 Expr*   expr_member (Expr*   obj, const char*   field) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_MEMBER);
     ((e-> line )  =  (obj-> line ));
     ((e-> column )  =  (obj-> column ));
@@ -6792,7 +6792,7 @@ Expr*   expr_member (Expr*   obj, const char*   field) {
 }
 
 Expr*   expr_index (Expr*   obj, Expr*   idx) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_INDEX);
     ((e-> line )  =  (obj-> line ));
     ((e-> column )  =  (obj-> column ));
@@ -6802,7 +6802,7 @@ Expr*   expr_index (Expr*   obj, Expr*   idx) {
 }
 
 Expr*   expr_cast (Expr*   inner, Type*   target) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_CAST);
     ((e-> line )  =  (inner-> line ));
     ((e-> column )  =  (inner-> column ));
@@ -6812,7 +6812,7 @@ Expr*   expr_cast (Expr*   inner, Type*   target) {
 }
 
 Expr*   expr_path (const char*   ty, const char*   member, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_PATH);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6822,7 +6822,7 @@ Expr*   expr_path (const char*   ty, const char*   member, int   line, int   col
 }
 
 Expr*   expr_macro (const char*   name, Vector__Expr*   args, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_MACRO);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6833,7 +6833,7 @@ Expr*   expr_macro (const char*   name, Vector__Expr*   args, int   line, int   
 }
 
 Expr*   expr_macro_var (const char*   name, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_MACRO_VAR);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6842,7 +6842,7 @@ Expr*   expr_macro_var (const char*   name, int   line, int   col) {
 }
 
 Expr*   expr_char (char   c, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_CHAR);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6851,7 +6851,7 @@ Expr*   expr_char (char   c, int   line, int   col) {
 }
 
 Expr*   expr_null (int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_NULL);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6859,7 +6859,7 @@ Expr*   expr_null (int   line, int   col) {
 }
 
 Expr*   expr_if (Expr*   cond, Expr*   then_e, Expr*   else_e, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_IF);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6870,7 +6870,7 @@ Expr*   expr_if (Expr*   cond, Expr*   then_e, Expr*   else_e, int   line, int  
 }
 
 Expr*   expr_match (Expr*   scrut, Vector__MatchArm*   arms, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_MATCH);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6880,7 +6880,7 @@ Expr*   expr_match (Expr*   scrut, Vector__MatchArm*   arms, int   line, int   c
 }
 
 Expr*   expr_block (Vector__Stmt*   stmts, Expr*   value, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_BLOCK);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6890,7 +6890,7 @@ Expr*   expr_block (Vector__Stmt*   stmts, Expr*   value, int   line, int   col)
 }
 
 Expr*   expr_postinc (Expr*   inner) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_POSTINC);
     ((e-> line )  =  (inner-> line ));
     ((e-> column )  =  (inner-> column ));
@@ -6899,7 +6899,7 @@ Expr*   expr_postinc (Expr*   inner) {
 }
 
 Expr*   expr_fnexpr (Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   body, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_FNEXPR);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6910,7 +6910,7 @@ Expr*   expr_fnexpr (Vector__Param*   params, Type*   ret_ty, Vector__Stmt*   bo
 }
 
 Expr*   expr_postdec (Expr*   inner) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_POSTDEC);
     ((e-> line )  =  (inner-> line ));
     ((e-> column )  =  (inner-> column ));
@@ -6919,7 +6919,7 @@ Expr*   expr_postdec (Expr*   inner) {
 }
 
 Expr*   expr_struct_lit (const char*   type_name, Vector__string*   names, Vector__Expr*   values, int   line, int   col) {
-    Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((e-> kind )  =  EX_STRUCT_LIT);
     ((e-> line )  =  line);
     ((e-> column )  =  col);
@@ -6931,13 +6931,13 @@ Expr*   expr_struct_lit (const char*   type_name, Vector__string*   names, Vecto
 }
 
 Parser*   Parser_new (Lexer*   lex) {
-    Parser*   p = (( Parser* )__glide_palloc(sizeof( Parser )));
+    Parser*   p = (( Parser* )((void*(*)(int))__glide_palloc)(sizeof( Parser )));
     ((p-> lex )  =  lex);
     ((p-> current )  =  Lexer_next_token(lex));
     ((p-> peek )  =  Lexer_next_token(lex));
     ((p-> error_count )  =  0);
     ((p-> no_struct_lit )  =  false);
-    Vector__ParseDiag*   dv = Vector_new__ParseDiag();
+    Vector__ParseDiag*   dv = ((Vector__ParseDiag*(*)(void))Vector_new__ParseDiag)();
     ((p-> diags )  =  dv);
     return p;
 }
@@ -6946,7 +6946,7 @@ void   Parser_free (Parser*   self) {
     if (((self-> diags )  !=  NULL)) {
         Vector_free__ParseDiag((self-> diags ));
     }
-    __glide_pfree((( void* )self));
+    ((void(*)(void*))__glide_pfree)((( void* )self));
 }
 
 Token   Parser_advance (Parser*   self) {
@@ -7065,10 +7065,10 @@ const char*   Parser_expect_ident (Parser*   self) {
 }
 
 Vector__Stmt*   parse_program (Parser*   p) {
-    Vector__Stmt*   stmts = Vector_new__Stmt();
+    Vector__Stmt*   stmts = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     while ((!Parser_at_eof(p))) {
         const char*   doc = ((p-> current ). doc );
-        Stmt*   s = parse_top_stmt(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_top_stmt)(p);
         if ((s  ==  NULL)) {
             Parser_advance(p);
             continue;
@@ -7105,7 +7105,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
     }
     if (Parser_eat_kw(p, "extern")) {
         if (Parser_at_kw(p, "fn")) {
-            Stmt*   s = parse_fn(p);
+            Stmt*   s = ((Stmt*(*)(Parser*))parse_fn)(p);
             if ((s  !=  NULL)) {
                 ((s-> is_pub )  =  is_pub);
                 ((s-> fn_body )  =  NULL);
@@ -7124,7 +7124,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         (is_naked_fn  =  true);
     }
     if (Parser_at_kw(p, "fn")) {
-        Stmt*   s = parse_fn(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_fn)(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> is_naked )  =  is_naked_fn);
@@ -7136,7 +7136,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         Parser_err(p, "`naked` only applies to `fn`");
     }
     if (Parser_at_kw(p, "let")) {
-        Stmt*   s = parse_let(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_let)(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
@@ -7144,7 +7144,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         return s;
     }
     if (Parser_at_kw(p, "const")) {
-        Stmt*   s = parse_const(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_const)(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
@@ -7152,7 +7152,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         return s;
     }
     if (Parser_at_kw(p, "struct")) {
-        Stmt*   s = parse_struct(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_struct)(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
@@ -7160,7 +7160,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         return s;
     }
     if (Parser_at_kw(p, "enum")) {
-        Stmt*   s = parse_enum(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_enum)(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
@@ -7168,14 +7168,14 @@ Stmt*   parse_top_stmt (Parser*   p) {
         return s;
     }
     if (Parser_at_kw(p, "impl")) {
-        Stmt*   s = parse_impl(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_impl)(p);
         if ((s  !=  NULL)) {
             ((s-> cfg_target )  =  cfg);
         }
         return s;
     }
     if (Parser_at_kw(p, "trait")) {
-        Stmt*   s = parse_trait(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_trait)(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
@@ -7183,19 +7183,19 @@ Stmt*   parse_top_stmt (Parser*   p) {
         return s;
     }
     if (Parser_at_kw(p, "import")) {
-        return parse_import(p);
+        return ((Stmt*(*)(Parser*))parse_import)(p);
     }
     if ((((p-> current ). kind )  ==  TOK_RAW_BLOCK)) {
         int   line = ((p-> current ). line );
         int   col = ((p-> current ). column );
         const char*   body = ((p-> current ). lexeme );
         Parser_advance(p);
-        Stmt*   s = stmt_craw(body, line, col);
+        Stmt*   s = ((Stmt*(*)(const char*, int, int))stmt_craw)(body, line, col);
         ((s-> cfg_target )  =  cfg);
         return s;
     }
     if (Parser_at_kw(p, "macro")) {
-        Stmt*   s = parse_macro_def(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_macro_def)(p);
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
@@ -7216,14 +7216,14 @@ Stmt*   parse_macro_def (Parser*   p) {
     const char*   name = Parser_expect_ident(p);
     Parser_expect_op(p, "!");
     Parser_expect_op(p, "(");
-    Vector__MacroParam*   params = parse_macro_matchers(p);
+    Vector__MacroParam*   params = ((Vector__MacroParam*(*)(Parser*))parse_macro_matchers)(p);
     Parser_expect_op(p, ")");
     Vector__Stmt*   body = NULL;
     if (Parser_eat_op(p, ";")) {
     } else {
-        (body  =  parse_block(p));
+        (body  =  ((Vector__Stmt*(*)(Parser*))parse_block)(p));
     }
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_MACRO_DEF);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -7237,7 +7237,7 @@ Stmt*   parse_macro_def (Parser*   p) {
 }
 
 Vector__MacroParam*   parse_macro_matchers (Parser*   p) {
-    Vector__MacroParam*   out = Vector_new__MacroParam();
+    Vector__MacroParam*   out = ((Vector__MacroParam*(*)(void))Vector_new__MacroParam)();
     while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
         if ((Parser_at_op(p, "$")  &&  Parser_peek_op(p, "("))) {
             Parser_advance(p);
@@ -7289,10 +7289,10 @@ Stmt*   parse_fn (Parser*   p) {
     int   ncol = ((p-> current ). column );
     int   nlen = __glide_string_len(((p-> current ). lexeme ));
     const char*   name = Parser_expect_ident(p);
-    Vector__string*   tps_bounds = Vector_new__string();
-    Vector__string*   tps = parse_type_params_with_bounds(p, tps_bounds);
+    Vector__string*   tps_bounds = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__string*   tps = ((Vector__string*(*)(Parser*, Vector__string*))parse_type_params_with_bounds)(p, tps_bounds);
     Parser_expect_op(p, "(");
-    Vector__Param*   params = Vector_new__Param();
+    Vector__Param*   params = ((Vector__Param*(*)(void))Vector_new__Param)();
     bool   variadic = false;
     while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
         if (Parser_at_op(p, "...")) {
@@ -7302,7 +7302,7 @@ Stmt*   parse_fn (Parser*   p) {
         }
         const char*   pname = Parser_expect_ident(p);
         Parser_expect_op(p, ":");
-        Type*   pty = parse_type(p);
+        Type*   pty = ((Type*(*)(Parser*))parse_type)(p);
         Param   prm = (( Param ){. name  = pname, . ty  = pty});
         Vector_push__Param(params, prm);
         if ((!Parser_eat_op(p, ","))) {
@@ -7312,11 +7312,11 @@ Stmt*   parse_fn (Parser*   p) {
     Parser_expect_op(p, ")");
     Type*   ret_ty = NULL;
     if (Parser_eat_op(p, "->")) {
-        (ret_ty  =  parse_type(p));
+        (ret_ty  =  ((Type*(*)(Parser*))parse_type)(p));
     }
     if (Parser_eat_op(p, ";")) {
         Vector__Stmt*   no_body = NULL;
-        Stmt*   s = stmt_fn(name, params, ret_ty, no_body, line, col);
+        Stmt*   s = ((Stmt*(*)(const char*, Vector__Param*, Type*, Vector__Stmt*, int, int))stmt_fn)(name, params, ret_ty, no_body, line, col);
         if ((s  !=  NULL)) {
             ((s-> type_params )  =  tps);
             ((s-> type_param_bounds )  =  tps_bounds);
@@ -7327,8 +7327,8 @@ Stmt*   parse_fn (Parser*   p) {
         }
         return s;
     }
-    Vector__Stmt*   body = parse_block(p);
-    Stmt*   s = stmt_fn(name, params, ret_ty, body, line, col);
+    Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+    Stmt*   s = ((Stmt*(*)(const char*, Vector__Param*, Type*, Vector__Stmt*, int, int))stmt_fn)(name, params, ret_ty, body, line, col);
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
         ((s-> type_param_bounds )  =  tps_bounds);
@@ -7341,7 +7341,7 @@ Stmt*   parse_fn (Parser*   p) {
 }
 
 Vector__string*   parse_type_params (Parser*   p) {
-    Vector__string*   tps = Vector_new__string();
+    Vector__string*   tps = ((Vector__string*(*)(void))Vector_new__string)();
     if ((!Parser_eat_op(p, "<"))) {
         return tps;
     }
@@ -7363,7 +7363,7 @@ Vector__string*   parse_type_params (Parser*   p) {
 }
 
 Vector__string*   parse_type_params_with_bounds (Parser*   p, Vector__string*   bounds_out) {
-    Vector__string*   tps = Vector_new__string();
+    Vector__string*   tps = ((Vector__string*(*)(void))Vector_new__string)();
     if ((!Parser_eat_op(p, "<"))) {
         return tps;
     }
@@ -7404,10 +7404,10 @@ Stmt*   parse_struct (Parser*   p) {
     int   ncol = ((p-> current ). column );
     int   nlen = __glide_string_len(((p-> current ). lexeme ));
     const char*   name = Parser_expect_ident(p);
-    Vector__string*   tps_bounds = Vector_new__string();
-    Vector__string*   tps = parse_type_params_with_bounds(p, tps_bounds);
+    Vector__string*   tps_bounds = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__string*   tps = ((Vector__string*(*)(Parser*, Vector__string*))parse_type_params_with_bounds)(p, tps_bounds);
     Parser_expect_op(p, "{");
-    Vector__Field*   fields = Vector_new__Field();
+    Vector__Field*   fields = ((Vector__Field*(*)(void))Vector_new__Field)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   fdoc = ((p-> current ). doc );
         bool   fpub = false;
@@ -7420,7 +7420,7 @@ Stmt*   parse_struct (Parser*   p) {
         }
         const char*   fname = Parser_expect_ident(p);
         Parser_expect_op(p, ":");
-        Type*   fty = parse_type(p);
+        Type*   fty = ((Type*(*)(Parser*))parse_type)(p);
         Field   f = (( Field ){. name  = fname, . ty  = fty, . doc  = fdoc, . is_pub  = fpub});
         Vector_push__Field(fields, f);
         if ((!Parser_eat_op(p, ","))) {
@@ -7428,7 +7428,7 @@ Stmt*   parse_struct (Parser*   p) {
         }
     }
     Parser_expect_op(p, "}");
-    Stmt*   s = stmt_struct(name, fields, line, col);
+    Stmt*   s = ((Stmt*(*)(const char*, Vector__Field*, int, int))stmt_struct)(name, fields, line, col);
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
         ((s-> type_param_bounds )  =  tps_bounds);
@@ -7448,16 +7448,16 @@ Stmt*   parse_enum (Parser*   p) {
     int   nlen = __glide_string_len(((p-> current ). lexeme ));
     const char*   name = Parser_expect_ident(p);
     if (Parser_at_op(p, "<")) {
-        skip_type_params(p);
+        ((void(*)(Parser*))skip_type_params)(p);
     }
     Parser_expect_op(p, "{");
-    Vector__EnumVariant*   variants = Vector_new__EnumVariant();
+    Vector__EnumVariant*   variants = ((Vector__EnumVariant*(*)(void))Vector_new__EnumVariant)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   vname = Parser_expect_ident(p);
-        Vector__Type*   fields = Vector_new__Type();
+        Vector__Type*   fields = ((Vector__Type*(*)(void))Vector_new__Type)();
         if (Parser_eat_op(p, "(")) {
             while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
-                Type*   t = parse_type(p);
+                Type*   t = ((Type*(*)(Parser*))parse_type)(p);
                 if ((t  !=  NULL)) {
                     Vector_push__Type(fields, (*t));
                 }
@@ -7474,7 +7474,7 @@ Stmt*   parse_enum (Parser*   p) {
         }
     }
     Parser_expect_op(p, "}");
-    Stmt*   s = stmt_enum(name, variants, line, col);
+    Stmt*   s = ((Stmt*(*)(const char*, Vector__EnumVariant*, int, int))stmt_enum)(name, variants, line, col);
     if ((s  !=  NULL)) {
         ((s-> name_line )  =  nline);
         ((s-> name_col )  =  ncol);
@@ -7491,7 +7491,7 @@ Stmt*   parse_trait (Parser*   p) {
     int   ncol = ((p-> current ). column );
     const char*   name = Parser_expect_ident(p);
     int   nlen = __glide_string_len(name);
-    Vector__string*   supers = Vector_new__string();
+    Vector__string*   supers = ((Vector__string*(*)(void))Vector_new__string)();
     if (Parser_eat_op(p, ":")) {
         Vector_push__string(supers, Parser_expect_ident(p));
         while (Parser_eat_op(p, ",")) {
@@ -7499,8 +7499,8 @@ Stmt*   parse_trait (Parser*   p) {
         }
     }
     Parser_expect_op(p, "{");
-    Vector__Stmt*   methods = Vector_new__Stmt();
-    Vector__Param*   assocs = Vector_new__Param();
+    Vector__Stmt*   methods = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+    Vector__Param*   assocs = ((Vector__Param*(*)(void))Vector_new__Param)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   doc = ((p-> current ). doc );
         bool   is_pub = false;
@@ -7516,7 +7516,7 @@ Stmt*   parse_trait (Parser*   p) {
             continue;
         }
         if (Parser_at_kw(p, "fn")) {
-            Stmt*   m = parse_fn(p);
+            Stmt*   m = ((Stmt*(*)(Parser*))parse_fn)(p);
             if ((m  !=  NULL)) {
                 ((m-> is_pub )  =  is_pub);
                 if (((doc  !=  NULL)  &&  (!__glide_string_eq(doc, "")))) {
@@ -7530,7 +7530,7 @@ Stmt*   parse_trait (Parser*   p) {
         }
     }
     Parser_expect_op(p, "}");
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_TRAIT);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -7548,16 +7548,16 @@ Stmt*   parse_impl (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
     Parser_advance(p);
-    Vector__string*   tps_bounds = Vector_new__string();
-    Vector__string*   tps = parse_type_params_with_bounds(p, tps_bounds);
-    Type*   target = parse_type(p);
+    Vector__string*   tps_bounds = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__string*   tps = ((Vector__string*(*)(Parser*, Vector__string*))parse_type_params_with_bounds)(p, tps_bounds);
+    Type*   target = ((Type*(*)(Parser*))parse_type)(p);
     const char*   trait_name = "";
     if (Parser_at_kw(p, "for")) {
         if (((target  !=  NULL)  &&  ((target-> kind )  ==  TY_NAMED))) {
             (trait_name  =  (target-> name ));
         }
         Parser_advance(p);
-        (target  =  parse_type(p));
+        (target  =  ((Type*(*)(Parser*))parse_type)(p));
     }
     const char*   ns = "";
     if (Parser_at_kw(p, "in")) {
@@ -7565,8 +7565,8 @@ Stmt*   parse_impl (Parser*   p) {
         (ns  =  Parser_expect_ident(p));
     }
     Parser_expect_op(p, "{");
-    Vector__Stmt*   methods = Vector_new__Stmt();
-    Vector__Param*   assocs = Vector_new__Param();
+    Vector__Stmt*   methods = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+    Vector__Param*   assocs = ((Vector__Param*(*)(void))Vector_new__Param)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   doc = ((p-> current ). doc );
         bool   is_pub = false;
@@ -7577,13 +7577,13 @@ Stmt*   parse_impl (Parser*   p) {
             Parser_advance(p);
             const char*   aname = Parser_expect_ident(p);
             Parser_expect_op(p, "=");
-            Type*   aty = parse_type(p);
+            Type*   aty = ((Type*(*)(Parser*))parse_type)(p);
             Parser_expect_op(p, ";");
             Vector_push__Param(assocs, (( Param ){. name  = aname, . ty  = aty}));
             continue;
         }
         if (Parser_at_kw(p, "fn")) {
-            Stmt*   m = parse_fn(p);
+            Stmt*   m = ((Stmt*(*)(Parser*))parse_fn)(p);
             if ((m  !=  NULL)) {
                 ((m-> is_pub )  =  is_pub);
                 if (((doc  !=  NULL)  &&  (!__glide_string_eq(doc, "")))) {
@@ -7593,7 +7593,7 @@ Stmt*   parse_impl (Parser*   p) {
             }
         } else {
             if (Parser_at_kw(p, "macro")) {
-                Stmt*   m = parse_macro_def(p);
+                Stmt*   m = ((Stmt*(*)(Parser*))parse_macro_def)(p);
                 if ((m  !=  NULL)) {
                     ((m-> is_pub )  =  is_pub);
                     if (((doc  !=  NULL)  &&  (!__glide_string_eq(doc, "")))) {
@@ -7608,7 +7608,7 @@ Stmt*   parse_impl (Parser*   p) {
         }
     }
     Parser_expect_op(p, "}");
-    Stmt*   s = stmt_impl(target, methods, line, col);
+    Stmt*   s = ((Stmt*(*)(Type*, Vector__Stmt*, int, int))stmt_impl)(target, methods, line, col);
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
         ((s-> type_param_bounds )  =  tps_bounds);
@@ -7618,10 +7618,10 @@ Stmt*   parse_impl (Parser*   p) {
         }
         if ((!__glide_string_eq(trait_name, ""))) {
             ((s-> impl_trait_name )  =  trait_name);
-            substitute_self_in_methods(methods, target);
-            substitute_self_assoc_in_methods(methods, assocs);
+            ((void(*)(Vector__Stmt*, Type*))substitute_self_in_methods)(methods, target);
+            ((void(*)(Vector__Stmt*, Vector__Param*))substitute_self_assoc_in_methods)(methods, assocs);
         } else {
-            substitute_self_in_methods(methods, target);
+            ((void(*)(Vector__Stmt*, Type*))substitute_self_in_methods)(methods, target);
         }
     }
     return s;
@@ -7637,13 +7637,13 @@ void   substitute_self_in_methods (Vector__Stmt*   methods, Type*   target) {
             for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                 Param   p = Vector_get__Param((m. fn_params ), j);
                 if (((p. ty )  !=  NULL)) {
-                    ((p. ty )  =  substitute_self_in_type((p. ty ), target));
+                    ((p. ty )  =  ((Type*(*)(Type*, Type*))substitute_self_in_type)((p. ty ), target));
                 }
                 Vector_set__Param((m. fn_params ), j, p);
             }
         }
         if (((m. fn_ret_ty )  !=  NULL)) {
-            ((m. fn_ret_ty )  =  substitute_self_in_type((m. fn_ret_ty ), target));
+            ((m. fn_ret_ty )  =  ((Type*(*)(Type*, Type*))substitute_self_in_type)((m. fn_ret_ty ), target));
         }
         Vector_set__Stmt(methods, i, m);
     }
@@ -7659,13 +7659,13 @@ Type*   substitute_self_in_type (Type*   t, Type*   target) {
     if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
         return t;
     }
-    Type*   copy = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   copy = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((*copy)  =  (*t));
     if (((copy-> inner )  !=  NULL)) {
-        ((copy-> inner )  =  substitute_self_in_type((copy-> inner ), target));
+        ((copy-> inner )  =  ((Type*(*)(Type*, Type*))substitute_self_in_type)((copy-> inner ), target));
     }
     if (((copy-> fnptr_ret )  !=  NULL)) {
-        ((copy-> fnptr_ret )  =  substitute_self_in_type((copy-> fnptr_ret ), target));
+        ((copy-> fnptr_ret )  =  ((Type*(*)(Type*, Type*))substitute_self_in_type)((copy-> fnptr_ret ), target));
     }
     return copy;
 }
@@ -7680,13 +7680,13 @@ void   substitute_self_assoc_in_methods (Vector__Stmt*   methods, Vector__Param*
             for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                 Param   p = Vector_get__Param((m. fn_params ), j);
                 if (((p. ty )  !=  NULL)) {
-                    ((p. ty )  =  substitute_self_assoc_in_type((p. ty ), assocs));
+                    ((p. ty )  =  ((Type*(*)(Type*, Vector__Param*))substitute_self_assoc_in_type)((p. ty ), assocs));
                 }
                 Vector_set__Param((m. fn_params ), j, p);
             }
         }
         if (((m. fn_ret_ty )  !=  NULL)) {
-            ((m. fn_ret_ty )  =  substitute_self_assoc_in_type((m. fn_ret_ty ), assocs));
+            ((m. fn_ret_ty )  =  ((Type*(*)(Type*, Vector__Param*))substitute_self_assoc_in_type)((m. fn_ret_ty ), assocs));
         }
         Vector_set__Stmt(methods, i, m);
     }
@@ -7707,13 +7707,13 @@ Type*   substitute_self_assoc_in_type (Type*   t, Vector__Param*   assocs) {
     if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
         return t;
     }
-    Type*   copy = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   copy = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((*copy)  =  (*t));
     if (((copy-> inner )  !=  NULL)) {
-        ((copy-> inner )  =  substitute_self_assoc_in_type((copy-> inner ), assocs));
+        ((copy-> inner )  =  ((Type*(*)(Type*, Vector__Param*))substitute_self_assoc_in_type)((copy-> inner ), assocs));
     }
     if (((copy-> fnptr_ret )  !=  NULL)) {
-        ((copy-> fnptr_ret )  =  substitute_self_assoc_in_type((copy-> fnptr_ret ), assocs));
+        ((copy-> fnptr_ret )  =  ((Type*(*)(Type*, Vector__Param*))substitute_self_assoc_in_type)((copy-> fnptr_ret ), assocs));
     }
     return copy;
 }
@@ -7732,8 +7732,8 @@ Stmt*   parse_import (Parser*   p) {
     }
     const char*   path = "";
     Vector__string*   items = NULL;
-    Vector__string*   segs = Vector_new__string();
-    Vector__string*   collected = Vector_new__string();
+    Vector__string*   segs = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__string*   collected = ((Vector__string*(*)(void))Vector_new__string)();
     bool   wildcard = false;
     Vector_push__string(segs, Parser_expect_ident(p));
     while (Parser_at_op(p, "::")) {
@@ -7767,20 +7767,20 @@ Stmt*   parse_import (Parser*   p) {
     }
     (path  =  __glide_string_concat(path, ".glide"));
     Parser_expect_op(p, ";");
-    Stmt*   s = stmt_import(path, line, col);
+    Stmt*   s = ((Stmt*(*)(const char*, int, int))stmt_import)(path, line, col);
     ((s-> imported_items )  =  items);
     ((s-> import_wildcard )  =  wildcard);
     return s;
 }
 
 Vector__Stmt*   parse_block (Parser*   p) {
-    Vector__Stmt*   stmts = Vector_new__Stmt();
+    Vector__Stmt*   stmts = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     if ((!Parser_expect_op(p, "{"))) {
         return stmts;
     }
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   doc = ((p-> current ). doc );
-        Stmt*   s = parse_stmt(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_stmt)(p);
         if ((s  !=  NULL)) {
             if (((doc  !=  NULL)  &&  (!__glide_string_eq(doc, "")))) {
                 ((s-> doc_comment )  =  doc);
@@ -7802,7 +7802,7 @@ Stmt*   parse_asm_block (Parser*   p) {
         (is_volatile  =  true);
     }
     Parser_expect_op(p, "{");
-    Stmt*   s = stmt_asm(line, col);
+    Stmt*   s = ((Stmt*(*)(int, int))stmt_asm)(line, col);
     ((s-> is_volatile )  =  is_volatile);
     while ((((p-> current ). kind )  ==  TOK_STRING)) {
         const char*   lex = ((p-> current ). lexeme );
@@ -7832,7 +7832,7 @@ Stmt*   parse_asm_block (Parser*   p) {
                 const char*   cstr = __glide_string_substring(lex, 1, (__glide_string_len(lex)  -  1));
                 Parser_advance(p);
                 Parser_expect_op(p, "(");
-                Expr*   e = parse_expr(p, 0);
+                Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
                 Parser_expect_op(p, ")");
                 if ((slot  ==  0)) {
                     Vector_push__string((s-> asm_out_constraints ), cstr);
@@ -7863,9 +7863,9 @@ Stmt*   parse_stmt (Parser*   p) {
         int   col = ((p-> current ). column );
         Parser_advance(p);
         Parser_advance(p);
-        Vector__Stmt*   inner = Vector_new__Stmt();
+        Vector__Stmt*   inner = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
-            Stmt*   s2 = parse_stmt(p);
+            Stmt*   s2 = ((Stmt*(*)(Parser*))parse_stmt)(p);
             if ((s2  !=  NULL)) {
                 Vector_push__Stmt(inner, (*s2));
             }
@@ -7877,7 +7877,7 @@ Stmt*   parse_stmt (Parser*   p) {
             Parser_advance(p);
         }
         Parser_expect_op(p, "*");
-        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+        Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
         ((s-> kind )  =  ST_MACRO_REP);
         ((s-> line )  =  line);
         ((s-> column )  =  col);
@@ -7886,46 +7886,46 @@ Stmt*   parse_stmt (Parser*   p) {
         return s;
     }
     if ((Parser_at_kw(p, "asm")  &&  Parser_peek_op(p, "!"))) {
-        return parse_asm_block(p);
+        return ((Stmt*(*)(Parser*))parse_asm_block)(p);
     }
     if ((((p-> current ). kind )  ==  TOK_RAW_BLOCK)) {
         int   line = ((p-> current ). line );
         int   col = ((p-> current ). column );
         const char*   body = ((p-> current ). lexeme );
         Parser_advance(p);
-        return stmt_craw(body, line, col);
+        return ((Stmt*(*)(const char*, int, int))stmt_craw)(body, line, col);
     }
     if ((((((p-> current ). kind )  ==  TOK_IDENT)  &&  __glide_string_eq(((p-> current ). lexeme ), "select"))  &&  Parser_peek_op(p, "!"))) {
-        return parse_select_macro(p);
+        return ((Stmt*(*)(Parser*))parse_select_macro)(p);
     }
     if (Parser_at_kw(p, "let")) {
-        return parse_let(p);
+        return ((Stmt*(*)(Parser*))parse_let)(p);
     }
     if (Parser_at_kw(p, "const")) {
-        return parse_const(p);
+        return ((Stmt*(*)(Parser*))parse_const)(p);
     }
     if (Parser_at_kw(p, "return")) {
-        return parse_return(p);
+        return ((Stmt*(*)(Parser*))parse_return)(p);
     }
     if (Parser_at_kw(p, "if")) {
-        return parse_if(p);
+        return ((Stmt*(*)(Parser*))parse_if)(p);
     }
     if (Parser_at_kw(p, "while")) {
-        return parse_while(p);
+        return ((Stmt*(*)(Parser*))parse_while)(p);
     }
     if (Parser_at_kw(p, "for")) {
-        return parse_for(p);
+        return ((Stmt*(*)(Parser*))parse_for)(p);
     }
     if (Parser_at_kw(p, "match")) {
-        return parse_match(p);
+        return ((Stmt*(*)(Parser*))parse_match)(p);
     }
     if (Parser_at_kw(p, "defer")) {
         int   line = ((p-> current ). line );
         int   col = ((p-> current ). column );
         Parser_advance(p);
-        Expr*   e = parse_expr(p, 0);
+        Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
         Parser_expect_op(p, ";");
-        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+        Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
         ((s-> kind )  =  ST_DEFER);
         ((s-> line )  =  line);
         ((s-> column )  =  col);
@@ -7936,9 +7936,9 @@ Stmt*   parse_stmt (Parser*   p) {
         int   line = ((p-> current ). line );
         int   col = ((p-> current ). column );
         Parser_advance(p);
-        Expr*   e = parse_expr(p, 0);
+        Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
         Parser_expect_op(p, ";");
-        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+        Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
         ((s-> kind )  =  ST_DEFER_ERR);
         ((s-> line )  =  line);
         ((s-> column )  =  col);
@@ -7949,17 +7949,17 @@ Stmt*   parse_stmt (Parser*   p) {
         int   line = ((p-> current ). line );
         int   col = ((p-> current ). column );
         Parser_advance(p);
-        Expr*   e = parse_expr(p, 0);
+        Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
         Parser_expect_op(p, ";");
-        return stmt_spawn(e, line, col);
+        return ((Stmt*(*)(Expr*, int, int))stmt_spawn)(e, line, col);
     }
     if (Parser_at_kw(p, "spawn_thread")) {
         int   line = ((p-> current ). line );
         int   col = ((p-> current ). column );
         Parser_advance(p);
-        Expr*   e = parse_expr(p, 0);
+        Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
         Parser_expect_op(p, ";");
-        Stmt*   s = stmt_spawn(e, line, col);
+        Stmt*   s = ((Stmt*(*)(Expr*, int, int))stmt_spawn)(e, line, col);
         if ((s  !=  NULL)) {
             ((s-> is_spawn_thread )  =  true);
         }
@@ -7970,29 +7970,29 @@ Stmt*   parse_stmt (Parser*   p) {
         int   col = ((p-> current ). column );
         Parser_advance(p);
         Parser_expect_op(p, ";");
-        return stmt_break(line, col);
+        return ((Stmt*(*)(int, int))stmt_break)(line, col);
     }
     if (Parser_at_kw(p, "continue")) {
         int   line = ((p-> current ). line );
         int   col = ((p-> current ). column );
         Parser_advance(p);
         Parser_expect_op(p, ";");
-        return stmt_continue(line, col);
+        return ((Stmt*(*)(int, int))stmt_continue)(line, col);
     }
     if (Parser_at_op(p, "{")) {
-        Vector__Stmt*   body = parse_block(p);
-        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+        Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+        Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
         ((s-> kind )  =  ST_BLOCK);
         ((s-> then_body )  =  body);
         return s;
     }
-    Expr*   e = parse_expr(p, 0);
+    Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     if ((e  ==  NULL)) {
         return NULL;
     }
-    Expr*   assigned = parse_maybe_assign(p, e);
+    Expr*   assigned = ((Expr*(*)(Parser*, Expr*))parse_maybe_assign)(p, e);
     Parser_expect_op(p, ";");
-    return stmt_expr(assigned);
+    return ((Stmt*(*)(Expr*))stmt_expr)(assigned);
 }
 
 Expr*   parse_maybe_assign (Parser*   p, Expr*   lhs) {
@@ -8020,9 +8020,9 @@ Expr*   parse_maybe_assign (Parser*   p, Expr*   lhs) {
         return lhs;
     }
     Parser_advance(p);
-    Expr*   rhs_raw = parse_expr(p, 0);
-    Expr*   rhs = parse_maybe_assign(p, rhs_raw);
-    return expr_assign(op, lhs, rhs);
+    Expr*   rhs_raw = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
+    Expr*   rhs = ((Expr*(*)(Parser*, Expr*))parse_maybe_assign)(p, rhs_raw);
+    return ((Expr*(*)(int, Expr*, Expr*))expr_assign)(op, lhs, rhs);
 }
 
 Stmt*   parse_let (Parser*   p) {
@@ -8043,14 +8043,14 @@ Stmt*   parse_let (Parser*   p) {
     }
     Type*   ty = NULL;
     if (Parser_eat_op(p, ":")) {
-        (ty  =  parse_type(p));
+        (ty  =  ((Type*(*)(Parser*))parse_type)(p));
     }
     Expr*   value = NULL;
     if (Parser_eat_op(p, "=")) {
-        (value  =  parse_expr(p, 0));
+        (value  =  ((Expr*(*)(Parser*, int))parse_expr)(p, 0));
     }
     Parser_expect_op(p, ";");
-    Stmt*   s = stmt_let(name, ty, value, is_mut, line, col);
+    Stmt*   s = ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(name, ty, value, is_mut, line, col);
     ((s-> is_auto_owned )  =  is_auto_owned);
     ((s-> name_line )  =  nline);
     ((s-> name_col )  =  ncol);
@@ -8068,12 +8068,12 @@ Stmt*   parse_const (Parser*   p) {
     const char*   name = Parser_expect_ident(p);
     Type*   ty = NULL;
     if (Parser_eat_op(p, ":")) {
-        (ty  =  parse_type(p));
+        (ty  =  ((Type*(*)(Parser*))parse_type)(p));
     }
     Parser_expect_op(p, "=");
-    Expr*   value = parse_expr(p, 0);
+    Expr*   value = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     Parser_expect_op(p, ";");
-    Stmt*   s = stmt_const(name, ty, value, line, col);
+    Stmt*   s = ((Stmt*(*)(const char*, Type*, Expr*, int, int))stmt_const)(name, ty, value, line, col);
     if ((s  !=  NULL)) {
         ((s-> name_line )  =  nline);
         ((s-> name_col )  =  ncol);
@@ -8088,10 +8088,10 @@ Stmt*   parse_return (Parser*   p) {
     Parser_advance(p);
     Expr*   value = NULL;
     if ((!Parser_at_op(p, ";"))) {
-        (value  =  parse_expr(p, 0));
+        (value  =  ((Expr*(*)(Parser*, int))parse_expr)(p, 0));
     }
     Parser_expect_op(p, ";");
-    return stmt_return(value, line, col);
+    return ((Stmt*(*)(Expr*, int, int))stmt_return)(value, line, col);
 }
 
 Stmt*   parse_match (Parser*   p) {
@@ -8100,13 +8100,13 @@ Stmt*   parse_match (Parser*   p) {
     Parser_advance(p);
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
-    Expr*   scrut = parse_expr(p, 0);
+    Expr*   scrut = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     ((p-> no_struct_lit )  =  saved);
     Parser_expect_op(p, "{");
-    Vector__MatchArm*   arms = Vector_new__MatchArm();
+    Vector__MatchArm*   arms = ((Vector__MatchArm*(*)(void))Vector_new__MatchArm)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   variant = "_";
-        Vector__string*   bindings = Vector_new__string();
+        Vector__string*   bindings = ((Vector__string*(*)(void))Vector_new__string)();
         if ((((p-> current ). kind )  ==  TOK_IDENT)) {
             const char*   first = ((p-> current ). lexeme );
             Parser_advance(p);
@@ -8126,22 +8126,22 @@ Stmt*   parse_match (Parser*   p) {
             }
         }
         Parser_expect_op(p, "=>");
-        Vector__Stmt*   body = Vector_new__Stmt();
+        Vector__Stmt*   body = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         if (Parser_at_op(p, "{")) {
-            Vector__Stmt*   blk = parse_block(p);
+            Vector__Stmt*   blk = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
             for (int   i = 0; (i  <  Vector_len__Stmt(blk)); i++) {
                 Vector_push__Stmt(body, Vector_get__Stmt(blk, i));
             }
         } else {
-            Expr*   e = parse_expr(p, 0);
-            Expr*   ass = parse_maybe_assign(p, e);
-            Vector_push__Stmt(body, (*stmt_expr(ass)));
+            Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
+            Expr*   ass = ((Expr*(*)(Parser*, Expr*))parse_maybe_assign)(p, e);
+            Vector_push__Stmt(body, (*((Stmt*(*)(Expr*))stmt_expr)(ass)));
         }
         Vector_push__MatchArm(arms, (( MatchArm ){. variant  = variant, . bindings  = bindings, . body  = body}));
         Parser_eat_op(p, ",");
     }
     Parser_expect_op(p, "}");
-    return stmt_match(scrut, arms, line, col);
+    return ((Stmt*(*)(Expr*, Vector__MatchArm*, int, int))stmt_match)(scrut, arms, line, col);
 }
 
 Expr*   parse_match_expr (Parser*   p) {
@@ -8150,13 +8150,13 @@ Expr*   parse_match_expr (Parser*   p) {
     Parser_advance(p);
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
-    Expr*   scrut = parse_expr(p, 0);
+    Expr*   scrut = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     ((p-> no_struct_lit )  =  saved);
     Parser_expect_op(p, "{");
-    Vector__MatchArm*   arms = Vector_new__MatchArm();
+    Vector__MatchArm*   arms = ((Vector__MatchArm*(*)(void))Vector_new__MatchArm)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
         const char*   variant = "_";
-        Vector__string*   bindings = Vector_new__string();
+        Vector__string*   bindings = ((Vector__string*(*)(void))Vector_new__string)();
         if ((((p-> current ). kind )  ==  TOK_IDENT)) {
             const char*   first = ((p-> current ). lexeme );
             Parser_advance(p);
@@ -8176,21 +8176,21 @@ Expr*   parse_match_expr (Parser*   p) {
             }
         }
         Parser_expect_op(p, "=>");
-        Vector__Stmt*   body = Vector_new__Stmt();
+        Vector__Stmt*   body = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         if (Parser_at_op(p, "{")) {
-            Vector__Stmt*   blk = parse_block(p);
+            Vector__Stmt*   blk = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
             for (int   i = 0; (i  <  Vector_len__Stmt(blk)); i++) {
                 Vector_push__Stmt(body, Vector_get__Stmt(blk, i));
             }
         } else {
-            Expr*   e = parse_expr(p, 0);
-            Vector_push__Stmt(body, (*stmt_return(e, line, col)));
+            Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
+            Vector_push__Stmt(body, (*((Stmt*(*)(Expr*, int, int))stmt_return)(e, line, col)));
         }
         Vector_push__MatchArm(arms, (( MatchArm ){. variant  = variant, . bindings  = bindings, . body  = body}));
         Parser_eat_op(p, ",");
     }
     Parser_expect_op(p, "}");
-    return expr_match(scrut, arms, line, col);
+    return ((Expr*(*)(Expr*, Vector__MatchArm*, int, int))expr_match)(scrut, arms, line, col);
 }
 
 Stmt*   parse_select_macro (Parser*   p) {
@@ -8199,9 +8199,9 @@ Stmt*   parse_select_macro (Parser*   p) {
     Parser_advance(p);
     Parser_expect_op(p, "!");
     Parser_expect_op(p, "{");
-    Vector__SelectArm*   arms = Vector_new__SelectArm();
+    Vector__SelectArm*   arms = ((Vector__SelectArm*(*)(void))Vector_new__SelectArm)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
-        SelectArm*   arm = parse_select_arm(p);
+        SelectArm*   arm = ((SelectArm*(*)(Parser*))parse_select_arm)(p);
         if ((arm  !=  NULL)) {
             Vector_push__SelectArm(arms, (*arm));
         }
@@ -8209,7 +8209,7 @@ Stmt*   parse_select_macro (Parser*   p) {
         Parser_eat_op(p, ";");
     }
     Parser_expect_op(p, "}");
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_SELECT);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -8232,23 +8232,23 @@ Expr*   select_extract_recv_chan (Parser*   p, Expr*   e) {
 SelectArm*   parse_select_arm (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
-    Expr*   lhs = parse_expr(p, 0);
+    Expr*   lhs = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     if ((lhs  ==  NULL)) {
         return NULL;
     }
     if (Parser_at_op(p, "=")) {
         Parser_advance(p);
-        Expr*   rhs = parse_expr(p, 0);
+        Expr*   rhs = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
         if ((rhs  ==  NULL)) {
             return NULL;
         }
         Parser_expect_op(p, "=>");
-        Vector__Stmt*   body = parse_block(p);
+        Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
         if (((lhs-> kind )  ==  EX_IDENT)) {
             const char*   name = (lhs-> str_val );
             if ((__glide_string_eq(name, "none")  ||  __glide_string_eq(name, "None"))) {
-                Expr*   chan = select_extract_recv_chan(p, rhs);
-                SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+                Expr*   chan = ((Expr*(*)(Parser*, Expr*))select_extract_recv_chan)(p, rhs);
+                SelectArm*   arm = (( SelectArm* )((void*(*)(int))__glide_palloc)(sizeof( SelectArm )));
                 ((arm-> kind )  =  SEL_RECV_NONE);
                 ((arm-> chan_expr )  =  chan);
                 ((arm-> body )  =  body);
@@ -8256,8 +8256,8 @@ SelectArm*   parse_select_arm (Parser*   p) {
                 ((arm-> column )  =  col);
                 return arm;
             }
-            Expr*   chan = select_extract_recv_chan(p, rhs);
-            SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+            Expr*   chan = ((Expr*(*)(Parser*, Expr*))select_extract_recv_chan)(p, rhs);
+            SelectArm*   arm = (( SelectArm* )((void*(*)(int))__glide_palloc)(sizeof( SelectArm )));
             ((arm-> kind )  =  SEL_RECV);
             ((arm-> chan_expr )  =  chan);
             ((arm-> bind_name )  =  name);
@@ -8271,8 +8271,8 @@ SelectArm*   parse_select_arm (Parser*   p) {
             if ((((__glide_string_eq(cname, "some")  ||  __glide_string_eq(cname, "Some"))  &&  ((lhs-> args )  !=  NULL))  &&  (Vector_len__Expr((lhs-> args ))  ==  1))) {
                 Expr   arg0 = Vector_get__Expr((lhs-> args ), 0);
                 if (((arg0. kind )  ==  EX_IDENT)) {
-                    Expr*   chan = select_extract_recv_chan(p, rhs);
-                    SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+                    Expr*   chan = ((Expr*(*)(Parser*, Expr*))select_extract_recv_chan)(p, rhs);
+                    SelectArm*   arm = (( SelectArm* )((void*(*)(int))__glide_palloc)(sizeof( SelectArm )));
                     ((arm-> kind )  =  SEL_RECV_SOME);
                     ((arm-> chan_expr )  =  chan);
                     ((arm-> bind_name )  =  (arg0. str_val ));
@@ -8288,9 +8288,9 @@ SelectArm*   parse_select_arm (Parser*   p) {
     }
     if (Parser_at_op(p, "=>")) {
         Parser_advance(p);
-        Vector__Stmt*   body = parse_block(p);
+        Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
         if ((((lhs-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((lhs-> str_val ), "default"))) {
-            SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+            SelectArm*   arm = (( SelectArm* )((void*(*)(int))__glide_palloc)(sizeof( SelectArm )));
             ((arm-> kind )  =  SEL_DEFAULT);
             ((arm-> body )  =  body);
             ((arm-> line )  =  line);
@@ -8299,9 +8299,9 @@ SelectArm*   parse_select_arm (Parser*   p) {
         }
         if ((((((((lhs-> kind )  ==  EX_CALL)  &&  ((lhs-> lhs )  !=  NULL))  &&  (((lhs-> lhs )-> kind )  ==  EX_MEMBER))  &&  __glide_string_eq(((lhs-> lhs )-> field ), "send"))  &&  ((lhs-> args )  !=  NULL))  &&  (Vector_len__Expr((lhs-> args ))  ==  1))) {
             Expr   arg0 = Vector_get__Expr((lhs-> args ), 0);
-            Expr*   arg_ptr = (( Expr* )__glide_palloc(sizeof( Expr )));
+            Expr*   arg_ptr = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
             ((*arg_ptr)  =  arg0);
-            SelectArm*   arm = (( SelectArm* )__glide_palloc(sizeof( SelectArm )));
+            SelectArm*   arm = (( SelectArm* )((void*(*)(int))__glide_palloc)(sizeof( SelectArm )));
             ((arm-> kind )  =  SEL_SEND);
             ((arm-> chan_expr )  =  ((lhs-> lhs )-> lhs ));
             ((arm-> send_value )  =  arg_ptr);
@@ -8321,9 +8321,9 @@ Expr*   parse_block_expr (Parser*   p) {
     int   line = ((p-> current ). line );
     int   col = ((p-> current ). column );
     Parser_expect_op(p, "{");
-    Vector__Stmt*   stmts = Vector_new__Stmt();
+    Vector__Stmt*   stmts = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
-        Stmt*   s = parse_stmt(p);
+        Stmt*   s = ((Stmt*(*)(Parser*))parse_stmt)(p);
         if ((s  !=  NULL)) {
             Vector_push__Stmt(stmts, (*s));
         }
@@ -8341,9 +8341,9 @@ Expr*   parse_block_expr (Parser*   p) {
         ParseDiag   d = (( ParseDiag ){. origin  = "", . line  = line, . col  = col, . msg  = "block expression must end with `return <expr>;`"});
         Vector_push__ParseDiag((p-> diags ), d);
         ((p-> error_count )  =  ((p-> error_count )  +  1));
-        (value  =  expr_int(0, line, col));
+        (value  =  ((Expr*(*)(int64_t, int, int))expr_int)(0, line, col));
     }
-    return expr_block(stmts, value, line, col);
+    return ((Expr*(*)(Vector__Stmt*, Expr*, int, int))expr_block)(stmts, value, line, col);
 }
 
 Expr*   parse_if_expr (Parser*   p) {
@@ -8352,23 +8352,23 @@ Expr*   parse_if_expr (Parser*   p) {
     Parser_advance(p);
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
-    Expr*   cond = parse_expr(p, 0);
+    Expr*   cond = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     ((p-> no_struct_lit )  =  saved);
     Parser_expect_op(p, "{");
-    Expr*   then_e = parse_expr(p, 0);
+    Expr*   then_e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     Parser_expect_op(p, "}");
     if ((!Parser_eat_kw(p, "else"))) {
-        return expr_if(cond, then_e, NULL, line, col);
+        return ((Expr*(*)(Expr*, Expr*, Expr*, int, int))expr_if)(cond, then_e, NULL, line, col);
     }
     Expr*   else_e;
     if (Parser_at_kw(p, "if")) {
-        (else_e  =  parse_if_expr(p));
+        (else_e  =  ((Expr*(*)(Parser*))parse_if_expr)(p));
     } else {
         Parser_expect_op(p, "{");
-        (else_e  =  parse_expr(p, 0));
+        (else_e  =  ((Expr*(*)(Parser*, int))parse_expr)(p, 0));
         Parser_expect_op(p, "}");
     }
-    return expr_if(cond, then_e, else_e, line, col);
+    return ((Expr*(*)(Expr*, Expr*, Expr*, int, int))expr_if)(cond, then_e, else_e, line, col);
 }
 
 Stmt*   parse_if (Parser*   p) {
@@ -8377,23 +8377,23 @@ Stmt*   parse_if (Parser*   p) {
     Parser_advance(p);
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
-    Expr*   cond = parse_expr(p, 0);
+    Expr*   cond = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     ((p-> no_struct_lit )  =  saved);
-    Vector__Stmt*   then_body = parse_block(p);
+    Vector__Stmt*   then_body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
     Vector__Stmt*   else_body = NULL;
     if (Parser_eat_kw(p, "else")) {
         if (Parser_at_kw(p, "if")) {
-            Stmt*   inner = parse_if(p);
-            Vector__Stmt*   one = Vector_new__Stmt();
+            Stmt*   inner = ((Stmt*(*)(Parser*))parse_if)(p);
+            Vector__Stmt*   one = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
             if ((inner  !=  NULL)) {
                 Vector_push__Stmt(one, (*inner));
             }
             (else_body  =  one);
         } else {
-            (else_body  =  parse_block(p));
+            (else_body  =  ((Vector__Stmt*(*)(Parser*))parse_block)(p));
         }
     }
-    return stmt_if(cond, then_body, else_body, line, col);
+    return ((Stmt*(*)(Expr*, Vector__Stmt*, Vector__Stmt*, int, int))stmt_if)(cond, then_body, else_body, line, col);
 }
 
 Stmt*   parse_while (Parser*   p) {
@@ -8408,15 +8408,15 @@ Stmt*   parse_while (Parser*   p) {
         const char*   var_name = Parser_expect_ident(p);
         Type*   ty = NULL;
         if (Parser_eat_op(p, ":")) {
-            (ty  =  parse_type(p));
+            (ty  =  ((Type*(*)(Parser*))parse_type)(p));
         }
         Parser_expect_op(p, "=");
         bool   saved = (p-> no_struct_lit );
         ((p-> no_struct_lit )  =  true);
-        Expr*   recv = parse_expr(p, 0);
+        Expr*   recv = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
         ((p-> no_struct_lit )  =  saved);
-        Vector__Stmt*   body = parse_block(p);
-        Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+        Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+        Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
         ((s-> kind )  =  ST_WHILE_RECV);
         ((s-> line )  =  line);
         ((s-> column )  =  col);
@@ -8431,10 +8431,10 @@ Stmt*   parse_while (Parser*   p) {
     }
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
-    Expr*   cond = parse_expr(p, 0);
+    Expr*   cond = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     ((p-> no_struct_lit )  =  saved);
-    Vector__Stmt*   body = parse_block(p);
-    return stmt_while(cond, body, line, col);
+    Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+    return ((Stmt*(*)(Expr*, Vector__Stmt*, int, int))stmt_while)(cond, body, line, col);
 }
 
 Stmt*   parse_for (Parser*   p) {
@@ -8442,7 +8442,7 @@ Stmt*   parse_for (Parser*   p) {
     int   col = ((p-> current ). column );
     Parser_advance(p);
     if ((((((p-> current ). kind )  ==  TOK_IDENT)  &&  (((p-> peek ). kind )  ==  TOK_KEYWORD))  &&  __glide_string_eq(((p-> peek ). lexeme ), "in"))) {
-        return parse_for_in(p, line, col);
+        return ((Stmt*(*)(Parser*, int, int))parse_for_in)(p, line, col);
     }
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
@@ -8459,33 +8459,33 @@ Stmt*   parse_for (Parser*   p) {
             const char*   lname = Parser_expect_ident(p);
             Type*   lty = NULL;
             if (Parser_eat_op(p, ":")) {
-                (lty  =  parse_type(p));
+                (lty  =  ((Type*(*)(Parser*))parse_type)(p));
             }
             Expr*   lval = NULL;
             if (Parser_eat_op(p, "=")) {
-                (lval  =  parse_expr(p, 0));
+                (lval  =  ((Expr*(*)(Parser*, int))parse_expr)(p, 0));
             }
-            (init  =  stmt_let(lname, lty, lval, is_mut, l_line, l_col));
+            (init  =  ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(lname, lty, lval, is_mut, l_line, l_col));
         } else {
-            Expr*   e = parse_expr(p, 0);
-            Expr*   assigned = parse_maybe_assign(p, e);
-            (init  =  stmt_expr(assigned));
+            Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
+            Expr*   assigned = ((Expr*(*)(Parser*, Expr*))parse_maybe_assign)(p, e);
+            (init  =  ((Stmt*(*)(Expr*))stmt_expr)(assigned));
         }
     }
     Parser_expect_op(p, ";");
     Expr*   cond = NULL;
     if ((!Parser_at_op(p, ";"))) {
-        (cond  =  parse_expr(p, 0));
+        (cond  =  ((Expr*(*)(Parser*, int))parse_expr)(p, 0));
     }
     Parser_expect_op(p, ";");
     Expr*   step = NULL;
     if ((!Parser_at_op(p, "{"))) {
-        Expr*   e = parse_expr(p, 0);
-        (step  =  parse_maybe_assign(p, e));
+        Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
+        (step  =  ((Expr*(*)(Parser*, Expr*))parse_maybe_assign)(p, e));
     }
     ((p-> no_struct_lit )  =  saved);
-    Vector__Stmt*   body = parse_block(p);
-    return stmt_for(init, cond, step, body, line, col);
+    Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+    return ((Stmt*(*)(Stmt*, Expr*, Expr*, Vector__Stmt*, int, int))stmt_for)(init, cond, step, body, line, col);
 }
 
 Stmt*   parse_for_in (Parser*   p, int   line, int   col) {
@@ -8496,7 +8496,7 @@ Stmt*   parse_for_in (Parser*   p, int   line, int   col) {
     Parser_advance(p);
     bool   saved = (p-> no_struct_lit );
     ((p-> no_struct_lit )  =  true);
-    Expr*   lo = parse_expr(p, 0);
+    Expr*   lo = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
     Expr*   hi = NULL;
     bool   inclusive = false;
     if ((Parser_at_op(p, "..")  ||  Parser_at_op(p, "..="))) {
@@ -8504,11 +8504,11 @@ Stmt*   parse_for_in (Parser*   p, int   line, int   col) {
             (inclusive  =  true);
         }
         Parser_advance(p);
-        (hi  =  parse_expr(p, 0));
+        (hi  =  ((Expr*(*)(Parser*, int))parse_expr)(p, 0));
     }
     ((p-> no_struct_lit )  =  saved);
-    Vector__Stmt*   body = parse_block(p);
-    Stmt*   s = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+    Stmt*   s = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((s-> kind )  =  ST_FOR_IN);
     ((s-> line )  =  line);
     ((s-> column )  =  col);
@@ -8565,42 +8565,42 @@ bool   at_type_start (Parser*   p) {
 
 Type*   parse_type (Parser*   p) {
     if (Parser_eat_op(p, "!")) {
-        if ((!at_type_start(p))) {
-            return ty_result(ty_named("void"));
+        if ((!((bool(*)(Parser*))at_type_start)(p))) {
+            return ((Type*(*)(Type*))ty_result)(((Type*(*)(const char*))ty_named)("void"));
         }
-        Type*   inner = parse_type(p);
-        return ty_result(inner);
+        Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
+        return ((Type*(*)(Type*))ty_result)(inner);
     }
     if (Parser_eat_op(p, "?")) {
         if (Parser_eat_op(p, "!")) {
-            Type*   inner = parse_type(p);
-            return ty_optres(inner);
+            Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
+            return ((Type*(*)(Type*))ty_optres)(inner);
         }
-        Type*   inner = parse_type(p);
-        return ty_option(inner);
+        Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
+        return ((Type*(*)(Type*))ty_option)(inner);
     }
     if (Parser_eat_op(p, "*")) {
-        Type*   inner = parse_type(p);
-        return ty_pointer(inner);
+        Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
+        return ((Type*(*)(Type*))ty_pointer)(inner);
     }
     if (Parser_at_kw(p, "dyn")) {
         Parser_advance(p);
         const char*   name = Parser_expect_ident(p);
-        Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+        Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
         ((t-> kind )  =  TY_DYN);
         ((t-> name )  =  name);
         return t;
     }
     if (Parser_eat_op(p, "&")) {
         if (Parser_eat_kw(p, "mut")) {
-            Type*   inner = parse_type(p);
-            Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+            Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
+            Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
             ((t-> kind )  =  TY_BORROW_MUT);
             ((t-> inner )  =  inner);
             return t;
         }
-        Type*   inner = parse_type(p);
-        Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+        Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
+        Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
         ((t-> kind )  =  TY_BORROW);
         ((t-> inner )  =  inner);
         return t;
@@ -8608,8 +8608,8 @@ Type*   parse_type (Parser*   p) {
     if ((Parser_at_op(p, "[")  &&  Parser_peek_op(p, "]"))) {
         Parser_advance(p);
         Parser_advance(p);
-        Type*   inner = parse_type(p);
-        Type*   t = (( Type* )__glide_palloc(sizeof( Type )));
+        Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
+        Type*   t = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
         ((t-> kind )  =  TY_SLICE);
         ((t-> inner )  =  inner);
         return t;
@@ -8617,13 +8617,13 @@ Type*   parse_type (Parser*   p) {
     if (Parser_at_kw(p, "fn")) {
         Parser_advance(p);
         Parser_expect_op(p, "(");
-        Vector__Type*   params = Vector_new__Type();
+        Vector__Type*   params = ((Vector__Type*(*)(void))Vector_new__Type)();
         while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
             if (((((p-> current ). kind )  ==  TOK_IDENT)  &&  Parser_peek_op(p, ":"))) {
                 Parser_advance(p);
                 Parser_advance(p);
             }
-            Type*   t = parse_type(p);
+            Type*   t = ((Type*(*)(Parser*))parse_type)(p);
             if ((t  !=  NULL)) {
                 Vector_push__Type(params, (*t));
             }
@@ -8634,18 +8634,18 @@ Type*   parse_type (Parser*   p) {
         Parser_expect_op(p, ")");
         Type*   ret = NULL;
         if (Parser_eat_op(p, "->")) {
-            (ret  =  parse_type(p));
+            (ret  =  ((Type*(*)(Parser*))parse_type)(p));
         }
-        return ty_fnptr(params, ret);
+        return ((Type*(*)(Vector__Type*, Type*))ty_fnptr)(params, ret);
     }
     if (((((p-> current ). kind )  ==  TOK_IDENT)  ||  (((p-> current ). kind )  ==  TOK_KEYWORD))) {
         const char*   name = ((p-> current ). lexeme );
         Parser_advance(p);
         if (Parser_at_op(p, "<")) {
             Parser_advance(p);
-            Vector__Type*   args = Vector_new__Type();
+            Vector__Type*   args = ((Vector__Type*(*)(void))Vector_new__Type)();
             while (((!Parser_at_close_angle(p))  &&  (!Parser_at_eof(p)))) {
-                Type*   inner = parse_type(p);
+                Type*   inner = ((Type*(*)(Parser*))parse_type)(p);
                 if ((inner  !=  NULL)) {
                     Vector_push__Type(args, (*inner));
                 }
@@ -8654,30 +8654,30 @@ Type*   parse_type (Parser*   p) {
                 }
             }
             Parser_consume_close_angle(p);
-            return ty_generic(name, args);
+            return ((Type*(*)(const char*, Vector__Type*))ty_generic)(name, args);
         }
         if (Parser_at_op(p, "::")) {
             Parser_advance(p);
             const char*   assoc_name = Parser_expect_ident(p);
-            return ty_assoc(ty_named(name), assoc_name);
+            return ((Type*(*)(Type*, const char*))ty_assoc)(((Type*(*)(const char*))ty_named)(name), assoc_name);
         }
-        return ty_named(name);
+        return ((Type*(*)(const char*))ty_named)(name);
     }
     Parser_err(p, "expected type");
-    return ty_named("__error__");
+    return ((Type*(*)(const char*))ty_named)("__error__");
 }
 
 Expr*   parse_expr (Parser*   p, int   min_bp) {
-    Expr*   left = parse_prefix(p);
+    Expr*   left = ((Expr*(*)(Parser*))parse_prefix)(p);
     if ((left  ==  NULL)) {
         return NULL;
     }
     while (true) {
         if (Parser_at_op(p, "(")) {
             Parser_advance(p);
-            Vector__Expr*   args = Vector_new__Expr();
+            Vector__Expr*   args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
             while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
-                Expr*   a = parse_expr(p, 0);
+                Expr*   a = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
                 if ((a  !=  NULL)) {
                     Vector_push__Expr(args, (*a));
                 }
@@ -8686,14 +8686,14 @@ Expr*   parse_expr (Parser*   p, int   min_bp) {
                 }
             }
             Parser_expect_op(p, ")");
-            (left  =  expr_call(left, args));
+            (left  =  ((Expr*(*)(Expr*, Vector__Expr*))expr_call)(left, args));
             continue;
         }
         if (Parser_at_op(p, "[")) {
             Parser_advance(p);
-            Expr*   idx = parse_expr(p, 0);
+            Expr*   idx = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
             Parser_expect_op(p, "]");
-            (left  =  expr_index(left, idx));
+            (left  =  ((Expr*(*)(Expr*, Expr*))expr_index)(left, idx));
             continue;
         }
         if (Parser_at_op(p, ".")) {
@@ -8707,9 +8707,9 @@ Expr*   parse_expr (Parser*   p, int   min_bp) {
             if ((Parser_at_op(p, "!")  &&  Parser_peek_op(p, "("))) {
                 Parser_advance(p);
                 Parser_advance(p);
-                Vector__Expr*   margs = Vector_new__Expr();
+                Vector__Expr*   margs = ((Vector__Expr*(*)(void))Vector_new__Expr)();
                 while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
-                    Expr*   a = parse_expr(p, 0);
+                    Expr*   a = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
                     if ((a  !=  NULL)) {
                         Vector_push__Expr(margs, (*a));
                     }
@@ -8718,36 +8718,36 @@ Expr*   parse_expr (Parser*   p, int   min_bp) {
                     }
                 }
                 Parser_expect_op(p, ")");
-                Expr*   me = expr_macro(mname, margs, (left-> line ), (left-> column ));
+                Expr*   me = ((Expr*(*)(const char*, Vector__Expr*, int, int))expr_macro)(mname, margs, (left-> line ), (left-> column ));
                 ((me-> macro_recv )  =  left);
                 (left  =  me);
                 continue;
             }
-            (left  =  expr_member(left, mname));
+            (left  =  ((Expr*(*)(Expr*, const char*))expr_member)(left, mname));
             continue;
         }
         if (Parser_at_op(p, "++")) {
             Parser_advance(p);
-            (left  =  expr_postinc(left));
+            (left  =  ((Expr*(*)(Expr*))expr_postinc)(left));
             continue;
         }
         if (Parser_at_op(p, "--")) {
             Parser_advance(p);
-            (left  =  expr_postdec(left));
+            (left  =  ((Expr*(*)(Expr*))expr_postdec)(left));
             continue;
         }
         if (Parser_at_op(p, "?")) {
             Parser_advance(p);
-            (left  =  expr_unary(UN_TRY, left, (left-> line ), (left-> column )));
+            (left  =  ((Expr*(*)(int, Expr*, int, int))expr_unary)(UN_TRY, left, (left-> line ), (left-> column )));
             continue;
         }
         if (Parser_at_kw(p, "as")) {
             Parser_advance(p);
-            Type*   target = parse_type(p);
-            (left  =  expr_cast(left, target));
+            Type*   target = ((Type*(*)(Parser*))parse_type)(p);
+            (left  =  ((Expr*(*)(Expr*, Type*))expr_cast)(left, target));
             continue;
         }
-        int   info = peek_binop_bp(p);
+        int   info = ((int(*)(Parser*))peek_binop_bp)(p);
         int   lbp = (info  /  100);
         int   op = (info  -  (lbp  *  100));
         if ((lbp  ==  0)) {
@@ -8758,11 +8758,11 @@ Expr*   parse_expr (Parser*   p, int   min_bp) {
         }
         Parser_advance(p);
         int   rbp = (lbp  +  1);
-        Expr*   right = parse_expr(p, rbp);
+        Expr*   right = ((Expr*(*)(Parser*, int))parse_expr)(p, rbp);
         if ((right  ==  NULL)) {
             break;
         }
-        (left  =  expr_binary(op, left, right));
+        (left  =  ((Expr*(*)(int, Expr*, Expr*))expr_binary)(op, left, right));
     }
     return left;
 }
@@ -8848,10 +8848,10 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
         (probe  =  (probe  +  1));
     }
     if ((!has_interp)) {
-        return expr_string(raw, line, col);
+        return ((Expr*(*)(const char*, int, int))expr_string)(raw, line, col);
     }
     const char*   fmt = "";
-    Vector__Expr*   inner_args = Vector_new__Expr();
+    Vector__Expr*   inner_args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
     int   j = 0;
     while ((j  <  n)) {
         char   c0 = __glide_string_at(raw, j);
@@ -8868,12 +8868,12 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
             }
             if ((k  >=  n)) {
                 Parser_err(p, "unterminated \\${...} in string literal");
-                return expr_string(raw, line, col);
+                return ((Expr*(*)(const char*, int, int))expr_string)(raw, line, col);
             }
             const char*   expr_src = __glide_string_substring(raw, start_expr, k);
             Lexer*   sub_lex = Lexer_new(expr_src);
             Parser*   sub_par = Parser_new(sub_lex);
-            Expr*   e = parse_expr(sub_par, 0);
+            Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(sub_par, 0);
             for (int   di = 0; (di  <  Vector_len__ParseDiag((sub_par-> diags ))); di++) {
                 ParseDiag   d = Vector_get__ParseDiag((sub_par-> diags ), di);
                 ParseDiag   bumped = (( ParseDiag ){. origin  = (d. origin ), . line  = line, . col  = col, . msg  = __glide_string_concat("in interpolation: ", (d. msg ))});
@@ -8881,7 +8881,7 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
                 ((p-> error_count )  =  ((p-> error_count )  +  1));
             }
             if ((e  ==  NULL)) {
-                return expr_string(raw, line, col);
+                return ((Expr*(*)(const char*, int, int))expr_string)(raw, line, col);
             }
             Vector_push__Expr(inner_args, (*e));
             (fmt  =  __glide_string_concat(fmt, "{}"));
@@ -8891,12 +8891,12 @@ Expr*   build_string_or_interp (Parser*   p, const char*   raw, int   line, int 
             (j  =  (j  +  1));
         }
     }
-    Vector__Expr*   final_args = Vector_new__Expr();
-    Vector_push__Expr(final_args, (*expr_string(fmt, line, col)));
+    Vector__Expr*   final_args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+    Vector_push__Expr(final_args, (*((Expr*(*)(const char*, int, int))expr_string)(fmt, line, col)));
     for (int   i2 = 0; (i2  <  Vector_len__Expr(inner_args)); i2++) {
         Vector_push__Expr(final_args, Vector_get__Expr(inner_args, i2));
     }
-    Expr*   m = expr_macro("format", final_args, line, col);
+    Expr*   m = ((Expr*(*)(const char*, Vector__Expr*, int, int))expr_macro)("format", final_args, line, col);
     ((m-> field )  =  raw);
     return m;
 }
@@ -8909,60 +8909,60 @@ Expr*   parse_prefix (Parser*   p) {
         if ((!Parser_peek_op(p, "("))) {
             Parser_advance(p);
             const char*   nm = Parser_expect_ident(p);
-            return expr_macro_var(nm, line, col);
+            return ((Expr*(*)(const char*, int, int))expr_macro_var)(nm, line, col);
         }
     }
     if ((((tok. kind )  ==  TOK_OP)  &&  __glide_string_eq((tok. lexeme ), "{"))) {
-        return parse_block_expr(p);
+        return ((Expr*(*)(Parser*))parse_block_expr)(p);
     }
     if (((tok. kind )  ==  TOK_INT)) {
         Parser_advance(p);
-        return expr_int(parse_int_lexeme((tok. lexeme )), line, col);
+        return ((Expr*(*)(int64_t, int, int))expr_int)(((int64_t(*)(const char*))parse_int_lexeme)((tok. lexeme )), line, col);
     }
     if (((tok. kind )  ==  TOK_FLOAT)) {
         Parser_advance(p);
-        return expr_float((tok. lexeme ), line, col);
+        return ((Expr*(*)(const char*, int, int))expr_float)((tok. lexeme ), line, col);
     }
     if (((tok. kind )  ==  TOK_STRING)) {
         Parser_advance(p);
         int   len = __glide_string_len((tok. lexeme ));
         const char*   inner = __glide_string_substring((tok. lexeme ), 1, (len  -  1));
-        return build_string_or_interp(p, inner, line, col);
+        return ((Expr*(*)(Parser*, const char*, int, int))build_string_or_interp)(p, inner, line, col);
     }
     if (((tok. kind )  ==  TOK_CHAR)) {
         Parser_advance(p);
         int   len = __glide_string_len((tok. lexeme ));
         const char*   inner = __glide_string_substring((tok. lexeme ), 1, (len  -  1));
-        char   c = decode_char_inner(inner);
-        return expr_char(c, line, col);
+        char   c = ((char(*)(const char*))decode_char_inner)(inner);
+        return ((Expr*(*)(char, int, int))expr_char)(c, line, col);
     }
     if (((tok. kind )  ==  TOK_KEYWORD)) {
         if (__glide_string_eq((tok. lexeme ), "true")) {
             Parser_advance(p);
-            return expr_bool(true, line, col);
+            return ((Expr*(*)(bool, int, int))expr_bool)(true, line, col);
         }
         if (__glide_string_eq((tok. lexeme ), "false")) {
             Parser_advance(p);
-            return expr_bool(false, line, col);
+            return ((Expr*(*)(bool, int, int))expr_bool)(false, line, col);
         }
         if (__glide_string_eq((tok. lexeme ), "null")) {
             Parser_advance(p);
-            return expr_null(line, col);
+            return ((Expr*(*)(int, int))expr_null)(line, col);
         }
         if (__glide_string_eq((tok. lexeme ), "if")) {
-            return parse_if_expr(p);
+            return ((Expr*(*)(Parser*))parse_if_expr)(p);
         }
         if (__glide_string_eq((tok. lexeme ), "match")) {
-            return parse_match_expr(p);
+            return ((Expr*(*)(Parser*))parse_match_expr)(p);
         }
         if (__glide_string_eq((tok. lexeme ), "fn")) {
             Parser_advance(p);
             Parser_expect_op(p, "(");
-            Vector__Param*   params = Vector_new__Param();
+            Vector__Param*   params = ((Vector__Param*(*)(void))Vector_new__Param)();
             while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
                 const char*   pname = Parser_expect_ident(p);
                 Parser_expect_op(p, ":");
-                Type*   pty = parse_type(p);
+                Type*   pty = ((Type*(*)(Parser*))parse_type)(p);
                 Vector_push__Param(params, (( Param ){. name  = pname, . ty  = pty}));
                 if ((!Parser_eat_op(p, ","))) {
                     break;
@@ -8971,21 +8971,21 @@ Expr*   parse_prefix (Parser*   p) {
             Parser_expect_op(p, ")");
             Type*   ret = NULL;
             if (Parser_eat_op(p, "->")) {
-                (ret  =  parse_type(p));
+                (ret  =  ((Type*(*)(Parser*))parse_type)(p));
             }
-            Vector__Stmt*   body = parse_block(p);
-            return expr_fnexpr(params, ret, body, line, col);
+            Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+            return ((Expr*(*)(Vector__Param*, Type*, Vector__Stmt*, int, int))expr_fnexpr)(params, ret, body, line, col);
         }
         if (__glide_string_eq((tok. lexeme ), "move")) {
             Parser_advance(p);
             if (Parser_at_kw(p, "fn")) {
                 Parser_advance(p);
                 Parser_expect_op(p, "(");
-                Vector__Param*   params = Vector_new__Param();
+                Vector__Param*   params = ((Vector__Param*(*)(void))Vector_new__Param)();
                 while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
                     const char*   pname = Parser_expect_ident(p);
                     Parser_expect_op(p, ":");
-                    Type*   pty = parse_type(p);
+                    Type*   pty = ((Type*(*)(Parser*))parse_type)(p);
                     Vector_push__Param(params, (( Param ){. name  = pname, . ty  = pty}));
                     if ((!Parser_eat_op(p, ","))) {
                         break;
@@ -8994,18 +8994,18 @@ Expr*   parse_prefix (Parser*   p) {
                 Parser_expect_op(p, ")");
                 Type*   ret = NULL;
                 if (Parser_eat_op(p, "->")) {
-                    (ret  =  parse_type(p));
+                    (ret  =  ((Type*(*)(Parser*))parse_type)(p));
                 }
-                Vector__Stmt*   body = parse_block(p);
-                return expr_fnexpr(params, ret, body, line, col);
+                Vector__Stmt*   body = ((Vector__Stmt*(*)(Parser*))parse_block)(p);
+                return ((Expr*(*)(Vector__Param*, Type*, Vector__Stmt*, int, int))expr_fnexpr)(params, ret, body, line, col);
             }
         }
         if (__glide_string_eq((tok. lexeme ), "sizeof")) {
             Parser_advance(p);
             Parser_expect_op(p, "(");
-            Type*   t = parse_type(p);
+            Type*   t = ((Type*(*)(Parser*))parse_type)(p);
             Parser_expect_op(p, ")");
-            Expr*   e = (( Expr* )__glide_palloc(sizeof( Expr )));
+            Expr*   e = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
             ((e-> kind )  =  EX_SIZEOF);
             ((e-> line )  =  line);
             ((e-> column )  =  col);
@@ -9016,14 +9016,14 @@ Expr*   parse_prefix (Parser*   p) {
             Parser_advance(p);
             const char*   tn = Parser_expect_ident(p);
             if (Parser_at_op(p, "<")) {
-                skip_type_params(p);
+                ((void(*)(Parser*))skip_type_params)(p);
             }
             Parser_expect_op(p, "{");
-            Vector__Expr*   args = Vector_new__Expr();
+            Vector__Expr*   args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
             while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
                 const char*   _name = Parser_expect_ident(p);
                 Parser_expect_op(p, ":");
-                Expr*   v = parse_expr(p, 0);
+                Expr*   v = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
                 if ((v  !=  NULL)) {
                     Vector_push__Expr(args, (*v));
                 }
@@ -9032,7 +9032,7 @@ Expr*   parse_prefix (Parser*   p) {
                 }
             }
             Parser_expect_op(p, "}");
-            return expr_macro(__glide_string_concat(tn, "__new"), args, line, col);
+            return ((Expr*(*)(const char*, Vector__Expr*, int, int))expr_macro)(__glide_string_concat(tn, "__new"), args, line, col);
         }
     }
     if ((((tok. kind )  ==  TOK_IDENT)  ||  ((tok. kind )  ==  TOK_KEYWORD))) {
@@ -9049,9 +9049,9 @@ Expr*   parse_prefix (Parser*   p) {
             if ((Parser_at_op(p, "!")  &&  Parser_peek_op(p, "("))) {
                 Parser_advance(p);
                 Parser_advance(p);
-                Vector__Expr*   margs = Vector_new__Expr();
+                Vector__Expr*   margs = ((Vector__Expr*(*)(void))Vector_new__Expr)();
                 while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
-                    Expr*   a = parse_expr(p, 0);
+                    Expr*   a = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
                     if ((a  !=  NULL)) {
                         Vector_push__Expr(margs, (*a));
                     }
@@ -9060,18 +9060,18 @@ Expr*   parse_prefix (Parser*   p) {
                     }
                 }
                 Parser_expect_op(p, ")");
-                Expr*   me = expr_macro(last, margs, line, col);
+                Expr*   me = ((Expr*(*)(const char*, Vector__Expr*, int, int))expr_macro)(last, margs, line, col);
                 ((me-> macro_owner )  =  prefix);
                 return me;
             }
-            return expr_path(prefix, last, line, col);
+            return ((Expr*(*)(const char*, const char*, int, int))expr_path)(prefix, last, line, col);
         }
         if ((Parser_at_op(p, "!")  &&  Parser_peek_op(p, "("))) {
             Parser_advance(p);
             Parser_advance(p);
-            Vector__Expr*   args = Vector_new__Expr();
+            Vector__Expr*   args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
             while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
-                Expr*   a = parse_expr(p, 0);
+                Expr*   a = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
                 if ((a  !=  NULL)) {
                     Vector_push__Expr(args, (*a));
                 }
@@ -9083,7 +9083,7 @@ Expr*   parse_prefix (Parser*   p) {
             if ((__glide_string_eq((tok. lexeme ), "include_str")  &&  (Vector_len__Expr(args)  ==  1))) {
                 Expr   arg = Vector_get__Expr(args, 0);
                 if (((arg. kind )  ==  EX_STRING)) {
-                    const char*   raw = read_file((arg. str_val ));
+                    const char*   raw = ((const char*(*)(const char*))read_file)((arg. str_val ));
                     const char*   esc = "";
                     int   n = __glide_string_len(raw);
                     int   k = 0;
@@ -9113,19 +9113,19 @@ Expr*   parse_prefix (Parser*   p) {
                         }
                         (k  =  (k  +  1));
                     }
-                    return expr_string(esc, line, col);
+                    return ((Expr*(*)(const char*, int, int))expr_string)(esc, line, col);
                 }
             }
-            return expr_macro((tok. lexeme ), args, line, col);
+            return ((Expr*(*)(const char*, Vector__Expr*, int, int))expr_macro)((tok. lexeme ), args, line, col);
         }
-        if (((Parser_at_op(p, "{")  &&  starts_uppercase((tok. lexeme )))  &&  (!(p-> no_struct_lit )))) {
+        if (((Parser_at_op(p, "{")  &&  ((bool(*)(const char*))starts_uppercase)((tok. lexeme )))  &&  (!(p-> no_struct_lit )))) {
             Parser_advance(p);
-            Vector__string*   names = Vector_new__string();
-            Vector__Expr*   values = Vector_new__Expr();
+            Vector__string*   names = ((Vector__string*(*)(void))Vector_new__string)();
+            Vector__Expr*   values = ((Vector__Expr*(*)(void))Vector_new__Expr)();
             while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
                 const char*   fname = Parser_expect_ident(p);
                 Parser_expect_op(p, ":");
-                Expr*   v = parse_expr(p, 0);
+                Expr*   v = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
                 if ((v  !=  NULL)) {
                     Vector_push__string(names, fname);
                     Vector_push__Expr(values, (*v));
@@ -9135,44 +9135,44 @@ Expr*   parse_prefix (Parser*   p) {
                 }
             }
             Parser_expect_op(p, "}");
-            return expr_struct_lit((tok. lexeme ), names, values, line, col);
+            return ((Expr*(*)(const char*, Vector__string*, Vector__Expr*, int, int))expr_struct_lit)((tok. lexeme ), names, values, line, col);
         }
-        return expr_ident((tok. lexeme ), line, col);
+        return ((Expr*(*)(const char*, int, int))expr_ident)((tok. lexeme ), line, col);
     }
     if (Parser_at_op(p, "(")) {
         Parser_advance(p);
-        Expr*   e = parse_expr(p, 0);
+        Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
         Parser_expect_op(p, ")");
         return e;
     }
     if (Parser_at_op(p, "-")) {
         Parser_advance(p);
-        Expr*   r = parse_expr(p, 13);
-        return expr_unary(UN_NEG, r, line, col);
+        Expr*   r = ((Expr*(*)(Parser*, int))parse_expr)(p, 13);
+        return ((Expr*(*)(int, Expr*, int, int))expr_unary)(UN_NEG, r, line, col);
     }
     if (Parser_at_op(p, "!")) {
         Parser_advance(p);
-        Expr*   r = parse_expr(p, 13);
-        return expr_unary(UN_NOT, r, line, col);
+        Expr*   r = ((Expr*(*)(Parser*, int))parse_expr)(p, 13);
+        return ((Expr*(*)(int, Expr*, int, int))expr_unary)(UN_NOT, r, line, col);
     }
     if (Parser_at_op(p, "~")) {
         Parser_advance(p);
-        Expr*   r = parse_expr(p, 13);
-        return expr_unary(UN_BIT_NOT, r, line, col);
+        Expr*   r = ((Expr*(*)(Parser*, int))parse_expr)(p, 13);
+        return ((Expr*(*)(int, Expr*, int, int))expr_unary)(UN_BIT_NOT, r, line, col);
     }
     if (Parser_at_op(p, "*")) {
         Parser_advance(p);
-        Expr*   r = parse_expr(p, 13);
-        return expr_unary(UN_DEREF, r, line, col);
+        Expr*   r = ((Expr*(*)(Parser*, int))parse_expr)(p, 13);
+        return ((Expr*(*)(int, Expr*, int, int))expr_unary)(UN_DEREF, r, line, col);
     }
     if (Parser_at_op(p, "&")) {
         Parser_advance(p);
         if (Parser_eat_kw(p, "mut")) {
-            Expr*   r = parse_expr(p, 13);
-            return expr_unary(UN_ADDR_MUT, r, line, col);
+            Expr*   r = ((Expr*(*)(Parser*, int))parse_expr)(p, 13);
+            return ((Expr*(*)(int, Expr*, int, int))expr_unary)(UN_ADDR_MUT, r, line, col);
         }
-        Expr*   r = parse_expr(p, 13);
-        return expr_unary(UN_ADDR, r, line, col);
+        Expr*   r = ((Expr*(*)(Parser*, int))parse_expr)(p, 13);
+        return ((Expr*(*)(int, Expr*, int, int))expr_unary)(UN_ADDR, r, line, col);
     }
     Parser_err(p, "unexpected token at start of expression");
     Parser_advance(p);
@@ -9240,9 +9240,9 @@ char   decode_char_inner (const char*   s) {
 }
 
 Vector__Stmt*   expand_macros (Vector__Stmt*   program) {
-    HashMap__Stmt*   static_macros = HashMap_new__Stmt();
-    Vector__TypeMacro*   type_macros = Vector_new__TypeMacro();
-    Vector__Stmt*   cleaned = Vector_new__Stmt();
+    HashMap__Stmt*   static_macros = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
+    Vector__TypeMacro*   type_macros = ((Vector__TypeMacro*(*)(void))Vector_new__TypeMacro)();
+    Vector__Stmt*   cleaned = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  ==  ST_MACRO_DEF)) {
@@ -9250,8 +9250,8 @@ Vector__Stmt*   expand_macros (Vector__Stmt*   program) {
             continue;
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
-            Vector__Stmt*   kept = Vector_new__Stmt();
-            const char*   owner = type_owner_name((s. impl_target ));
+            Vector__Stmt*   kept = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+            const char*   owner = ((const char*(*)(Type*))type_owner_name)((s. impl_target ));
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
                 if (((m. kind )  ==  ST_MACRO_DEF)) {
@@ -9265,7 +9265,7 @@ Vector__Stmt*   expand_macros (Vector__Stmt*   program) {
         }
         Vector_push__Stmt(cleaned, s);
     }
-    expand_in_program(cleaned, static_macros, type_macros);
+    ((void(*)(Vector__Stmt*, HashMap__Stmt*, Vector__TypeMacro*))expand_in_program)(cleaned, static_macros, type_macros);
     return cleaned;
 }
 
@@ -9288,7 +9288,7 @@ bool   body_references_self (Vector__Stmt*   stmts) {
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
-        if (stmt_references_self((&s))) {
+        if (((bool(*)(Stmt*))stmt_references_self)((&s))) {
             return true;
         }
     }
@@ -9299,31 +9299,31 @@ bool   stmt_references_self (Stmt*   s) {
     if ((s  ==  NULL)) {
         return false;
     }
-    if ((((s-> let_value )  !=  NULL)  &&  expr_references_self((s-> let_value )))) {
+    if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((s-> let_value )))) {
         return true;
     }
-    if ((((s-> expr_value )  !=  NULL)  &&  expr_references_self((s-> expr_value )))) {
+    if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((s-> expr_value )))) {
         return true;
     }
-    if ((((s-> cond )  !=  NULL)  &&  expr_references_self((s-> cond )))) {
+    if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((s-> cond )))) {
         return true;
     }
-    if ((((s-> for_step )  !=  NULL)  &&  expr_references_self((s-> for_step )))) {
+    if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((s-> for_step )))) {
         return true;
     }
-    if ((((s-> scrutinee )  !=  NULL)  &&  expr_references_self((s-> scrutinee )))) {
+    if ((((s-> scrutinee )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((s-> scrutinee )))) {
         return true;
     }
-    if ((((s-> then_body )  !=  NULL)  &&  body_references_self((s-> then_body )))) {
+    if ((((s-> then_body )  !=  NULL)  &&  ((bool(*)(Vector__Stmt*))body_references_self)((s-> then_body )))) {
         return true;
     }
-    if ((((s-> else_body )  !=  NULL)  &&  body_references_self((s-> else_body )))) {
+    if ((((s-> else_body )  !=  NULL)  &&  ((bool(*)(Vector__Stmt*))body_references_self)((s-> else_body )))) {
         return true;
     }
-    if ((((s-> fn_body )  !=  NULL)  &&  body_references_self((s-> fn_body )))) {
+    if ((((s-> fn_body )  !=  NULL)  &&  ((bool(*)(Vector__Stmt*))body_references_self)((s-> fn_body )))) {
         return true;
     }
-    if ((((s-> for_init )  !=  NULL)  &&  stmt_references_self((s-> for_init )))) {
+    if ((((s-> for_init )  !=  NULL)  &&  ((bool(*)(Stmt*))stmt_references_self)((s-> for_init )))) {
         return true;
     }
     return false;
@@ -9336,22 +9336,22 @@ bool   expr_references_self (Expr*   e) {
     if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), "self"))) {
         return true;
     }
-    if ((((e-> lhs )  !=  NULL)  &&  expr_references_self((e-> lhs )))) {
+    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((e-> lhs )))) {
         return true;
     }
-    if ((((e-> rhs )  !=  NULL)  &&  expr_references_self((e-> rhs )))) {
+    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((e-> rhs )))) {
         return true;
     }
-    if ((((e-> operand )  !=  NULL)  &&  expr_references_self((e-> operand )))) {
+    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((e-> operand )))) {
         return true;
     }
-    if ((((e-> macro_recv )  !=  NULL)  &&  expr_references_self((e-> macro_recv )))) {
+    if ((((e-> macro_recv )  !=  NULL)  &&  ((bool(*)(Expr*))expr_references_self)((e-> macro_recv )))) {
         return true;
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            if (expr_references_self((&a))) {
+            if (((bool(*)(Expr*))expr_references_self)((&a))) {
                 return true;
             }
         }
@@ -9363,14 +9363,14 @@ void   expand_in_program (Vector__Stmt*   program, HashMap__Stmt*   sm, Vector__
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
-            ((s. fn_body )  =  expand_in_block((s. fn_body ), sm, tm));
+            ((s. fn_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, HashMap__Stmt*, Vector__TypeMacro*))expand_in_block)((s. fn_body ), sm, tm));
             Vector_set__Stmt(program, i, s);
         } else {
             if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
                 for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                     Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
                     if (((m. fn_body )  !=  NULL)) {
-                        ((m. fn_body )  =  expand_in_block((m. fn_body ), sm, tm));
+                        ((m. fn_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, HashMap__Stmt*, Vector__TypeMacro*))expand_in_block)((m. fn_body ), sm, tm));
                         Vector_set__Stmt((s. impl_methods ), j, m);
                     }
                 }
@@ -9381,11 +9381,11 @@ void   expand_in_program (Vector__Stmt*   program, HashMap__Stmt*   sm, Vector__
 }
 
 Vector__Stmt*   expand_in_block (Vector__Stmt*   stmts, HashMap__Stmt*   sm, Vector__TypeMacro*   tm) {
-    Vector__Stmt*   out = Vector_new__Stmt();
+    Vector__Stmt*   out = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if (((((s. kind )  ==  ST_EXPR)  &&  ((s. expr_value )  !=  NULL))  &&  (((s. expr_value )-> kind )  ==  EX_MACRO))) {
-            Vector__Stmt*   expanded = try_expand_call((s. expr_value ), sm, tm);
+            Vector__Stmt*   expanded = ((Vector__Stmt*(*)(Expr*, HashMap__Stmt*, Vector__TypeMacro*))try_expand_call)((s. expr_value ), sm, tm);
             if ((expanded  !=  NULL)) {
                 for (int   k = 0; (k  <  Vector_len__Stmt(expanded)); k++) {
                     Stmt   e = Vector_get__Stmt(expanded, k);
@@ -9395,16 +9395,16 @@ Vector__Stmt*   expand_in_block (Vector__Stmt*   stmts, HashMap__Stmt*   sm, Vec
             }
         }
         if (((s. then_body )  !=  NULL)) {
-            ((s. then_body )  =  expand_in_block((s. then_body ), sm, tm));
+            ((s. then_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, HashMap__Stmt*, Vector__TypeMacro*))expand_in_block)((s. then_body ), sm, tm));
         }
         if (((s. else_body )  !=  NULL)) {
-            ((s. else_body )  =  expand_in_block((s. else_body ), sm, tm));
+            ((s. else_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, HashMap__Stmt*, Vector__TypeMacro*))expand_in_block)((s. else_body ), sm, tm));
         }
         if (((s. fn_body )  !=  NULL)) {
-            ((s. fn_body )  =  expand_in_block((s. fn_body ), sm, tm));
+            ((s. fn_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, HashMap__Stmt*, Vector__TypeMacro*))expand_in_block)((s. fn_body ), sm, tm));
         }
         if ((((s. for_init )  !=  NULL)  &&  (((s. for_init )-> then_body )  !=  NULL))) {
-            (((s. for_init )-> then_body )  =  expand_in_block(((s. for_init )-> then_body ), sm, tm));
+            (((s. for_init )-> then_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, HashMap__Stmt*, Vector__TypeMacro*))expand_in_block)(((s. for_init )-> then_body ), sm, tm));
         }
         Vector_push__Stmt(out, s);
     }
@@ -9422,26 +9422,26 @@ Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__Type
                 if ((((entry. def ). then_body )  ==  NULL)) {
                     return NULL;
                 }
-                bool   uses_self = body_references_self(((entry. def ). then_body ));
+                bool   uses_self = ((bool(*)(Vector__Stmt*))body_references_self)(((entry. def ). then_body ));
                 if ((!uses_self)) {
                     Expr*   no_recv = NULL;
-                    return expand_with_def_recv(call, (&(entry. def )), no_recv);
+                    return ((Vector__Stmt*(*)(Expr*, Stmt*, Expr*))expand_with_def_recv)(call, (&(entry. def )), no_recv);
                 }
                 if ((((call-> args )  ==  NULL)  ||  (Vector_len__Expr((call-> args ))  ==  0))) {
                     return NULL;
                 }
                 Expr   recv_arg = Vector_get__Expr((call-> args ), 0);
-                Expr*   recv_p = (( Expr* )__glide_palloc(sizeof( Expr )));
+                Expr*   recv_p = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
                 ((*recv_p)  =  recv_arg);
-                Vector__Expr*   rest = Vector_new__Expr();
+                Vector__Expr*   rest = ((Vector__Expr*(*)(void))Vector_new__Expr)();
                 for (int   k = 1; (k  <  Vector_len__Expr((call-> args ))); k++) {
                     Expr   a = Vector_get__Expr((call-> args ), k);
                     Vector_push__Expr(rest, a);
                 }
-                Expr*   synth = (( Expr* )__glide_palloc(sizeof( Expr )));
+                Expr*   synth = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
                 ((*synth)  =  (*call));
                 ((synth-> args )  =  rest);
-                return expand_with_def_recv(synth, (&(entry. def )), recv_p);
+                return ((Vector__Stmt*(*)(Expr*, Stmt*, Expr*))expand_with_def_recv)(synth, (&(entry. def )), recv_p);
             }
         }
         return NULL;
@@ -9453,12 +9453,12 @@ Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__Type
                 if ((((entry. def ). then_body )  ==  NULL)) {
                     return NULL;
                 }
-                bool   uses_self = body_references_self(((entry. def ). then_body ));
+                bool   uses_self = ((bool(*)(Vector__Stmt*))body_references_self)(((entry. def ). then_body ));
                 Expr*   recv_for = NULL;
                 if (uses_self) {
                     (recv_for  =  (call-> macro_recv ));
                 }
-                return expand_with_def_recv(call, (&(entry. def )), recv_for);
+                return ((Vector__Stmt*(*)(Expr*, Stmt*, Expr*))expand_with_def_recv)(call, (&(entry. def )), recv_for);
             }
         }
         return NULL;
@@ -9471,59 +9471,59 @@ Vector__Stmt*   try_expand_call (Expr*   call, HashMap__Stmt*   sm, Vector__Type
         return NULL;
     }
     Expr*   no_recv = NULL;
-    return expand_with_def_recv(call, (&def), no_recv);
+    return ((Vector__Stmt*(*)(Expr*, Stmt*, Expr*))expand_with_def_recv)(call, (&def), no_recv);
 }
 
 Vector__Stmt*   expand_with_def (Expr*   call, Stmt*   def) {
     Expr*   no_recv = NULL;
-    return expand_with_def_recv(call, def, no_recv);
+    return ((Vector__Stmt*(*)(Expr*, Stmt*, Expr*))expand_with_def_recv)(call, def, no_recv);
 }
 
 const char*   recv_name_for (Expr*   call) {
     int   n = (((call-> line )  *  1000)  +  (call-> column ));
-    return __glide_string_concat("__glide_macro_recv_", int_to_str(n));
+    return __glide_string_concat("__glide_macro_recv_", ((const char*(*)(int64_t))int_to_str)(n));
 }
 
 Vector__Stmt*   expand_with_def_recv (Expr*   call, Stmt*   def, Expr*   recv) {
-    Vector__MacroBinding*   bindings = bind_args(call, def);
+    Vector__MacroBinding*   bindings = ((Vector__MacroBinding*(*)(Expr*, Stmt*))bind_args)(call, def);
     const char*   self_name = "";
     if ((recv  !=  NULL)) {
-        (self_name  =  recv_name_for(call));
+        (self_name  =  ((const char*(*)(Expr*))recv_name_for)(call));
     }
-    Vector__Stmt*   body = Vector_new__Stmt();
+    Vector__Stmt*   body = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     if (((def-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((def-> then_body ))); i++) {
             Stmt   s = Vector_get__Stmt((def-> then_body ), i);
-            Vector__Stmt*   expanded = macro_subst_stmt((&s), bindings, (-1), self_name);
+            Vector__Stmt*   expanded = ((Vector__Stmt*(*)(Stmt*, Vector__MacroBinding*, int, const char*))macro_subst_stmt)((&s), bindings, (-1), self_name);
             for (int   j = 0; (j  <  Vector_len__Stmt(expanded)); j++) {
                 Stmt   es = Vector_get__Stmt(expanded, j);
                 Vector_push__Stmt(body, es);
             }
         }
     }
-    Vector__Stmt*   block_body = Vector_new__Stmt();
+    Vector__Stmt*   block_body = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     if ((recv  !=  NULL)) {
-        Expr*   recv_clone = macro_subst_expr(recv, bindings, (-1), "");
+        Expr*   recv_clone = ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)(recv, bindings, (-1), "");
         Type*   no_ty = NULL;
-        Stmt*   bind = stmt_let(self_name, no_ty, recv_clone, false, (call-> line ), (call-> column ));
+        Stmt*   bind = ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(self_name, no_ty, recv_clone, false, (call-> line ), (call-> column ));
         Vector_push__Stmt(block_body, (*bind));
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
         Stmt   bs = Vector_get__Stmt(body, i);
         Vector_push__Stmt(block_body, bs);
     }
-    Stmt*   block = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   block = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((block-> kind )  =  ST_BLOCK);
     ((block-> line )  =  (call-> line ));
     ((block-> column )  =  (call-> column ));
     ((block-> then_body )  =  block_body);
-    Vector__Stmt*   out = Vector_new__Stmt();
+    Vector__Stmt*   out = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     Vector_push__Stmt(out, (*block));
     return out;
 }
 
 Vector__MacroBinding*   bind_args (Expr*   call, Stmt*   def) {
-    Vector__MacroBinding*   out = Vector_new__MacroBinding();
+    Vector__MacroBinding*   out = ((Vector__MacroBinding*(*)(void))Vector_new__MacroBinding)();
     if (((def-> macro_params )  ==  NULL)) {
         return out;
     }
@@ -9534,7 +9534,7 @@ Vector__MacroBinding*   bind_args (Expr*   call, Stmt*   def) {
     }
     for (int   p = 0; (p  <  Vector_len__MacroParam((def-> macro_params ))); p++) {
         MacroParam   mp = Vector_get__MacroParam((def-> macro_params ), p);
-        Vector__Expr*   bound = Vector_new__Expr();
+        Vector__Expr*   bound = ((Vector__Expr*(*)(void))Vector_new__Expr)();
         if ((mp. is_variadic )) {
             while ((idx  <  total)) {
                 Expr   a = Vector_get__Expr((call-> args ), idx);
@@ -9555,12 +9555,12 @@ Vector__MacroBinding*   bind_args (Expr*   call, Stmt*   def) {
 }
 
 Vector__Stmt*   macro_subst_stmt (Stmt*   s, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name) {
-    Vector__Stmt*   out = Vector_new__Stmt();
+    Vector__Stmt*   out = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     if ((s  ==  NULL)) {
         return out;
     }
     if (((s-> kind )  ==  ST_MACRO_REP)) {
-        int   n = variadic_len(bindings);
+        int   n = ((int(*)(Vector__MacroBinding*))variadic_len)(bindings);
         if ((n  <  0)) {
             return out;
         }
@@ -9570,7 +9570,7 @@ Vector__Stmt*   macro_subst_stmt (Stmt*   s, Vector__MacroBinding*   bindings, i
             }
             for (int   j = 0; (j  <  Vector_len__Stmt((s-> then_body ))); j++) {
                 Stmt   inner = Vector_get__Stmt((s-> then_body ), j);
-                Vector__Stmt*   expanded = macro_subst_stmt((&inner), bindings, i, self_name);
+                Vector__Stmt*   expanded = ((Vector__Stmt*(*)(Stmt*, Vector__MacroBinding*, int, const char*))macro_subst_stmt)((&inner), bindings, i, self_name);
                 for (int   k = 0; (k  <  Vector_len__Stmt(expanded)); k++) {
                     Stmt   e = Vector_get__Stmt(expanded, k);
                     Vector_push__Stmt(out, e);
@@ -9579,50 +9579,50 @@ Vector__Stmt*   macro_subst_stmt (Stmt*   s, Vector__MacroBinding*   bindings, i
         }
         return out;
     }
-    Stmt*   cloned = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   cloned = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((*cloned)  =  (*s));
     if (((cloned-> let_value )  !=  NULL)) {
-        ((cloned-> let_value )  =  macro_subst_expr((cloned-> let_value ), bindings, rep_idx, self_name));
+        ((cloned-> let_value )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> let_value ), bindings, rep_idx, self_name));
     }
     if (((cloned-> expr_value )  !=  NULL)) {
-        ((cloned-> expr_value )  =  macro_subst_expr((cloned-> expr_value ), bindings, rep_idx, self_name));
+        ((cloned-> expr_value )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> expr_value ), bindings, rep_idx, self_name));
     }
     if (((cloned-> cond )  !=  NULL)) {
-        ((cloned-> cond )  =  macro_subst_expr((cloned-> cond ), bindings, rep_idx, self_name));
+        ((cloned-> cond )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> cond ), bindings, rep_idx, self_name));
     }
     if (((cloned-> for_step )  !=  NULL)) {
-        ((cloned-> for_step )  =  macro_subst_expr((cloned-> for_step ), bindings, rep_idx, self_name));
+        ((cloned-> for_step )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> for_step ), bindings, rep_idx, self_name));
     }
     if (((cloned-> scrutinee )  !=  NULL)) {
-        ((cloned-> scrutinee )  =  macro_subst_expr((cloned-> scrutinee ), bindings, rep_idx, self_name));
+        ((cloned-> scrutinee )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> scrutinee ), bindings, rep_idx, self_name));
     }
     if (((cloned-> for_init )  !=  NULL)) {
-        Vector__Stmt*   inits = macro_subst_stmt((cloned-> for_init ), bindings, rep_idx, self_name);
+        Vector__Stmt*   inits = ((Vector__Stmt*(*)(Stmt*, Vector__MacroBinding*, int, const char*))macro_subst_stmt)((cloned-> for_init ), bindings, rep_idx, self_name);
         if ((Vector_len__Stmt(inits)  >  0)) {
             Stmt   init0 = Vector_get__Stmt(inits, 0);
-            Stmt*   copy = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+            Stmt*   copy = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
             ((*copy)  =  init0);
             ((cloned-> for_init )  =  copy);
         }
     }
     if (((cloned-> then_body )  !=  NULL)) {
-        ((cloned-> then_body )  =  macro_subst_block((cloned-> then_body ), bindings, rep_idx, self_name));
+        ((cloned-> then_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, Vector__MacroBinding*, int, const char*))macro_subst_block)((cloned-> then_body ), bindings, rep_idx, self_name));
     }
     if (((cloned-> else_body )  !=  NULL)) {
-        ((cloned-> else_body )  =  macro_subst_block((cloned-> else_body ), bindings, rep_idx, self_name));
+        ((cloned-> else_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, Vector__MacroBinding*, int, const char*))macro_subst_block)((cloned-> else_body ), bindings, rep_idx, self_name));
     }
     if (((cloned-> fn_body )  !=  NULL)) {
-        ((cloned-> fn_body )  =  macro_subst_block((cloned-> fn_body ), bindings, rep_idx, self_name));
+        ((cloned-> fn_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*, Vector__MacroBinding*, int, const char*))macro_subst_block)((cloned-> fn_body ), bindings, rep_idx, self_name));
     }
     Vector_push__Stmt(out, (*cloned));
     return out;
 }
 
 Vector__Stmt*   macro_subst_block (Vector__Stmt*   stmts, Vector__MacroBinding*   bindings, int   rep_idx, const char*   self_name) {
-    Vector__Stmt*   out = Vector_new__Stmt();
+    Vector__Stmt*   out = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
-        Vector__Stmt*   expanded = macro_subst_stmt((&s), bindings, rep_idx, self_name);
+        Vector__Stmt*   expanded = ((Vector__Stmt*(*)(Stmt*, Vector__MacroBinding*, int, const char*))macro_subst_stmt)((&s), bindings, rep_idx, self_name);
         for (int   j = 0; (j  <  Vector_len__Stmt(expanded)); j++) {
             Stmt   e = Vector_get__Stmt(expanded, j);
             Vector_push__Stmt(out, e);
@@ -9636,34 +9636,34 @@ Expr*   macro_subst_expr (Expr*   e, Vector__MacroBinding*   bindings, int   rep
         return NULL;
     }
     if (((e-> kind )  ==  EX_MACRO_VAR)) {
-        Expr*   chosen = lookup_var((e-> str_val ), bindings, rep_idx);
+        Expr*   chosen = ((Expr*(*)(const char*, Vector__MacroBinding*, int))lookup_var)((e-> str_val ), bindings, rep_idx);
         if ((chosen  !=  NULL)) {
             return chosen;
         }
         return e;
     }
     if (((((e-> kind )  ==  EX_IDENT)  &&  (!__glide_string_eq(self_name, "")))  &&  __glide_string_eq((e-> str_val ), "self"))) {
-        return expr_ident(self_name, (e-> line ), (e-> column ));
+        return ((Expr*(*)(const char*, int, int))expr_ident)(self_name, (e-> line ), (e-> column ));
     }
-    Expr*   cloned = (( Expr* )__glide_palloc(sizeof( Expr )));
+    Expr*   cloned = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
     ((*cloned)  =  (*e));
     if (((cloned-> lhs )  !=  NULL)) {
-        ((cloned-> lhs )  =  macro_subst_expr((cloned-> lhs ), bindings, rep_idx, self_name));
+        ((cloned-> lhs )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> lhs ), bindings, rep_idx, self_name));
     }
     if (((cloned-> rhs )  !=  NULL)) {
-        ((cloned-> rhs )  =  macro_subst_expr((cloned-> rhs ), bindings, rep_idx, self_name));
+        ((cloned-> rhs )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> rhs ), bindings, rep_idx, self_name));
     }
     if (((cloned-> operand )  !=  NULL)) {
-        ((cloned-> operand )  =  macro_subst_expr((cloned-> operand ), bindings, rep_idx, self_name));
+        ((cloned-> operand )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> operand ), bindings, rep_idx, self_name));
     }
     if (((cloned-> macro_recv )  !=  NULL)) {
-        ((cloned-> macro_recv )  =  macro_subst_expr((cloned-> macro_recv ), bindings, rep_idx, self_name));
+        ((cloned-> macro_recv )  =  ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((cloned-> macro_recv ), bindings, rep_idx, self_name));
     }
     if (((cloned-> args )  !=  NULL)) {
-        Vector__Expr*   new_args = Vector_new__Expr();
+        Vector__Expr*   new_args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
         for (int   i = 0; (i  <  Vector_len__Expr((cloned-> args ))); i++) {
             Expr   a = Vector_get__Expr((cloned-> args ), i);
-            Expr*   na = macro_subst_expr((&a), bindings, rep_idx, self_name);
+            Expr*   na = ((Expr*(*)(Expr*, Vector__MacroBinding*, int, const char*))macro_subst_expr)((&a), bindings, rep_idx, self_name);
             if ((na  !=  NULL)) {
                 Vector_push__Expr(new_args, (*na));
             }
@@ -9690,7 +9690,7 @@ Expr*   lookup_var (const char*   name, Vector__MacroBinding*   bindings, int   
             (idx  =  rep_idx);
         }
         Expr   chosen = Vector_get__Expr((b. args ), idx);
-        Expr*   p = (( Expr* )__glide_palloc(sizeof( Expr )));
+        Expr*   p = (( Expr* )((void*(*)(int))__glide_palloc)(sizeof( Expr )));
         ((*p)  =  chosen);
         return p;
     }
@@ -9708,11 +9708,11 @@ int   variadic_len (Vector__MacroBinding*   bindings) {
 }
 
 Vector__Stmt*   lower_program (Vector__Stmt*   stmts) {
-    expand_trait_defaults(stmts);
-    Vector__Stmt*   out = Vector_new__Stmt();
+    ((void(*)(Vector__Stmt*))expand_trait_defaults)(stmts);
+    Vector__Stmt*   out = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
-        Stmt*   l = lower_stmt((&s));
+        Stmt*   l = ((Stmt*(*)(Stmt*))lower_stmt)((&s));
         if ((l  !=  NULL)) {
             Vector_push__Stmt(out, (*l));
         }
@@ -9721,8 +9721,8 @@ Vector__Stmt*   lower_program (Vector__Stmt*   stmts) {
 }
 
 Vector__Stmt*   lower_program_user_only (Vector__Stmt*   stmts, const char*   user_path) {
-    expand_trait_defaults(stmts);
-    Vector__Stmt*   out = Vector_new__Stmt();
+    ((void(*)(Vector__Stmt*))expand_trait_defaults)(stmts);
+    Vector__Stmt*   out = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         bool   is_user = ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))  ||  __glide_string_eq((s. origin ), user_path));
@@ -9730,7 +9730,7 @@ Vector__Stmt*   lower_program_user_only (Vector__Stmt*   stmts, const char*   us
             Vector_push__Stmt(out, s);
             continue;
         }
-        Stmt*   l = lower_stmt((&s));
+        Stmt*   l = ((Stmt*(*)(Stmt*))lower_stmt)((&s));
         if ((l  !=  NULL)) {
             Vector_push__Stmt(out, (*l));
         }
@@ -9739,7 +9739,7 @@ Vector__Stmt*   lower_program_user_only (Vector__Stmt*   stmts, const char*   us
 }
 
 void   expand_trait_defaults (Vector__Stmt*   stmts) {
-    HashMap__Stmt*   traits = HashMap_new__Stmt();
+    HashMap__Stmt*   traits = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if (((((s. kind )  ==  ST_TRAIT)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))) {
@@ -9764,14 +9764,14 @@ void   expand_trait_defaults (Vector__Stmt*   stmts) {
         if (((imp. impl_methods )  ==  NULL)) {
             continue;
         }
-        HashMap__bool*   provided = HashMap_new__bool();
+        HashMap__bool*   provided = ((HashMap__bool*(*)(void))HashMap_new__bool)();
         for (int   k = 0; (k  <  Vector_len__Stmt((imp. impl_methods ))); k++) {
             Stmt   m = Vector_get__Stmt((imp. impl_methods ), k);
             if (((m. name )  !=  NULL)) {
                 HashMap_insert__bool(provided, (m. name ), true);
             }
         }
-        Vector__Stmt*   to_add = Vector_new__Stmt();
+        Vector__Stmt*   to_add = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         for (int   k = 0; (k  <  Vector_len__Stmt((trait_def. impl_methods ))); k++) {
             Stmt   req = Vector_get__Stmt((trait_def. impl_methods ), k);
             if ((((req. name )  ==  NULL)  ||  __glide_string_eq((req. name ), ""))) {
@@ -9783,26 +9783,26 @@ void   expand_trait_defaults (Vector__Stmt*   stmts) {
             if (HashMap_contains__bool(provided, (req. name ))) {
                 continue;
             }
-            Stmt*   copy = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+            Stmt*   copy = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
             ((*copy)  =  req);
             if (((req. fn_params )  !=  NULL)) {
-                Vector__Param*   cloned_params = Vector_new__Param();
+                Vector__Param*   cloned_params = ((Vector__Param*(*)(void))Vector_new__Param)();
                 for (int   pi = 0; (pi  <  Vector_len__Param((req. fn_params ))); pi++) {
                     Vector_push__Param(cloned_params, Vector_get__Param((req. fn_params ), pi));
                 }
                 ((copy-> fn_params )  =  cloned_params);
             }
             if (((imp. impl_target )  !=  NULL)) {
-                Vector__Stmt*   single = Vector_new__Stmt();
+                Vector__Stmt*   single = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
                 Vector_push__Stmt(single, (*copy));
-                substitute_self_in_methods(single, (imp. impl_target ));
+                ((void(*)(Vector__Stmt*, Type*))substitute_self_in_methods)(single, (imp. impl_target ));
                 Stmt   sub = Vector_get__Stmt(single, 0);
                 ((*copy)  =  sub);
             }
             Vector_push__Stmt(to_add, (*copy));
         }
         if ((Vector_len__Stmt(to_add)  >  0)) {
-            Vector__Stmt*   merged = Vector_new__Stmt();
+            Vector__Stmt*   merged = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
             for (int   k = 0; (k  <  Vector_len__Stmt((imp. impl_methods ))); k++) {
                 Vector_push__Stmt(merged, Vector_get__Stmt((imp. impl_methods ), k));
             }
@@ -9820,10 +9820,10 @@ Vector__Stmt*   lower_block (Vector__Stmt*   body) {
     if ((body  ==  NULL)) {
         return NULL;
     }
-    Vector__Stmt*   out = Vector_new__Stmt();
+    Vector__Stmt*   out = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
         Stmt   s = Vector_get__Stmt(body, i);
-        Stmt*   l = lower_stmt((&s));
+        Stmt*   l = ((Stmt*(*)(Stmt*))lower_stmt)((&s));
         if ((l  !=  NULL)) {
             Vector_push__Stmt(out, (*l));
         }
@@ -9836,25 +9836,25 @@ Stmt*   lower_stmt (Stmt*   s) {
         return NULL;
     }
     if (((s-> kind )  ==  ST_FOR_IN)) {
-        return lower_for_in(s);
+        return ((Stmt*(*)(Stmt*))lower_for_in)(s);
     }
     if (((s-> then_body )  !=  NULL)) {
-        ((s-> then_body )  =  lower_block((s-> then_body )));
+        ((s-> then_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*))lower_block)((s-> then_body )));
     }
     if (((s-> else_body )  !=  NULL)) {
-        ((s-> else_body )  =  lower_block((s-> else_body )));
+        ((s-> else_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*))lower_block)((s-> else_body )));
     }
     if (((s-> fn_body )  !=  NULL)) {
-        ((s-> fn_body )  =  lower_block((s-> fn_body )));
+        ((s-> fn_body )  =  ((Vector__Stmt*(*)(Vector__Stmt*))lower_block)((s-> fn_body )));
     }
     if (((s-> for_init )  !=  NULL)) {
-        ((s-> for_init )  =  lower_stmt((s-> for_init )));
+        ((s-> for_init )  =  ((Stmt*(*)(Stmt*))lower_stmt)((s-> for_init )));
     }
     if (((s-> impl_methods )  !=  NULL)) {
-        Vector__Stmt*   new_methods = Vector_new__Stmt();
+        Vector__Stmt*   new_methods = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         for (int   j = 0; (j  <  Vector_len__Stmt((s-> impl_methods ))); j++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), j);
-            Stmt*   lm = lower_stmt((&m));
+            Stmt*   lm = ((Stmt*(*)(Stmt*))lower_stmt)((&m));
             if ((lm  !=  NULL)) {
                 Vector_push__Stmt(new_methods, (*lm));
             }
@@ -9869,11 +9869,11 @@ Stmt*   lower_for_in (Stmt*   s) {
     Expr*   lo_or_iter = (s-> let_value );
     Expr*   hi = (s-> cond );
     bool   inclusive = (s-> is_mut );
-    Vector__Stmt*   body = lower_block((s-> then_body ));
+    Vector__Stmt*   body = ((Vector__Stmt*(*)(Vector__Stmt*))lower_block)((s-> then_body ));
     int   line = (s-> line );
     int   col = (s-> column );
     if ((hi  !=  NULL)) {
-        Stmt*   init = stmt_let(var_name, ty_named("int"), lo_or_iter, true, line, col);
+        Stmt*   init = ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(var_name, ((Type*(*)(const char*))ty_named)("int"), lo_or_iter, true, line, col);
         if ((init  !=  NULL)) {
             ((init-> name_line )  =  (s-> name_line ));
             ((init-> name_col )  =  (s-> name_col ));
@@ -9883,31 +9883,31 @@ Stmt*   lower_for_in (Stmt*   s) {
         if (inclusive) {
             (cmp_op  =  OP_LE);
         }
-        Expr*   cond = expr_binary(cmp_op, expr_ident(var_name, line, col), hi);
-        Expr*   step = expr_postinc(expr_ident(var_name, line, col));
-        return stmt_for(init, cond, step, body, line, col);
+        Expr*   cond = ((Expr*(*)(int, Expr*, Expr*))expr_binary)(cmp_op, ((Expr*(*)(const char*, int, int))expr_ident)(var_name, line, col), hi);
+        Expr*   step = ((Expr*(*)(Expr*))expr_postinc)(((Expr*(*)(const char*, int, int))expr_ident)(var_name, line, col));
+        return ((Stmt*(*)(Stmt*, Expr*, Expr*, Vector__Stmt*, int, int))stmt_for)(init, cond, step, body, line, col);
     }
-    const char*   id = int_to_str(((line  *  1000)  +  col));
+    const char*   id = ((const char*(*)(int64_t))int_to_str)(((line  *  1000)  +  col));
     const char*   it_name = __glide_string_concat("__glide_iter_", id);
     const char*   idx_name = __glide_string_concat("__glide_idx_", id);
-    Vector__Stmt*   block_body = Vector_new__Stmt();
+    Vector__Stmt*   block_body = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     Type*   no_ty = NULL;
-    Stmt*   bind_iter = stmt_let(it_name, no_ty, lo_or_iter, false, line, col);
+    Stmt*   bind_iter = ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(it_name, no_ty, lo_or_iter, false, line, col);
     Vector_push__Stmt(block_body, (*bind_iter));
-    Stmt*   init = stmt_let(idx_name, ty_named("int"), expr_int(0, line, col), true, line, col);
-    Expr*   len_call = expr_call(expr_member(expr_ident(it_name, line, col), "len"), Vector_new__Expr());
-    Expr*   cond = expr_binary(OP_LT, expr_ident(idx_name, line, col), len_call);
-    Expr*   step = expr_postinc(expr_ident(idx_name, line, col));
-    Vector__Expr*   get_args = Vector_new__Expr();
-    Vector_push__Expr(get_args, (*expr_ident(idx_name, line, col)));
-    Expr*   get_call = expr_call(expr_member(expr_ident(it_name, line, col), "get"), get_args);
-    Stmt*   bind_var = stmt_let(var_name, no_ty, get_call, false, line, col);
+    Stmt*   init = ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(idx_name, ((Type*(*)(const char*))ty_named)("int"), ((Expr*(*)(int64_t, int, int))expr_int)(0, line, col), true, line, col);
+    Expr*   len_call = ((Expr*(*)(Expr*, Vector__Expr*))expr_call)(((Expr*(*)(Expr*, const char*))expr_member)(((Expr*(*)(const char*, int, int))expr_ident)(it_name, line, col), "len"), ((Vector__Expr*(*)(void))Vector_new__Expr)());
+    Expr*   cond = ((Expr*(*)(int, Expr*, Expr*))expr_binary)(OP_LT, ((Expr*(*)(const char*, int, int))expr_ident)(idx_name, line, col), len_call);
+    Expr*   step = ((Expr*(*)(Expr*))expr_postinc)(((Expr*(*)(const char*, int, int))expr_ident)(idx_name, line, col));
+    Vector__Expr*   get_args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+    Vector_push__Expr(get_args, (*((Expr*(*)(const char*, int, int))expr_ident)(idx_name, line, col)));
+    Expr*   get_call = ((Expr*(*)(Expr*, Vector__Expr*))expr_call)(((Expr*(*)(Expr*, const char*))expr_member)(((Expr*(*)(const char*, int, int))expr_ident)(it_name, line, col), "get"), get_args);
+    Stmt*   bind_var = ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(var_name, no_ty, get_call, false, line, col);
     if ((bind_var  !=  NULL)) {
         ((bind_var-> name_line )  =  (s-> name_line ));
         ((bind_var-> name_col )  =  (s-> name_col ));
         ((bind_var-> name_len )  =  (s-> name_len ));
     }
-    Vector__Stmt*   inner_body = Vector_new__Stmt();
+    Vector__Stmt*   inner_body = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
     Vector_push__Stmt(inner_body, (*bind_var));
     if ((body  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
@@ -9915,9 +9915,9 @@ Stmt*   lower_for_in (Stmt*   s) {
             Vector_push__Stmt(inner_body, bs);
         }
     }
-    Stmt*   inner_for = stmt_for(init, cond, step, inner_body, line, col);
+    Stmt*   inner_for = ((Stmt*(*)(Stmt*, Expr*, Expr*, Vector__Stmt*, int, int))stmt_for)(init, cond, step, inner_body, line, col);
     Vector_push__Stmt(block_body, (*inner_for));
-    Stmt*   block = (( Stmt* )__glide_palloc(sizeof( Stmt )));
+    Stmt*   block = (( Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Stmt )));
     ((block-> kind )  =  ST_BLOCK);
     ((block-> line )  =  line);
     ((block-> column )  =  col);
@@ -9956,9 +9956,9 @@ bool   type_eq (Type*   a, Type*   b) {
         if ((!__glide_string_eq((a-> name ), (b-> name )))) {
             return false;
         }
-        return type_eq((a-> inner ), (b-> inner ));
+        return ((bool(*)(Type*, Type*))type_eq)((a-> inner ), (b-> inner ));
     }
-    return type_eq((a-> inner ), (b-> inner ));
+    return ((bool(*)(Type*, Type*))type_eq)((a-> inner ), (b-> inner ));
 }
 
 const char*   type_to_string (Type*   t) {
@@ -9969,16 +9969,16 @@ const char*   type_to_string (Type*   t) {
         return (t-> name );
     }
     if (((t-> kind )  ==  TY_POINTER)) {
-        return __glide_string_concat("*", type_to_string((t-> inner )));
+        return __glide_string_concat("*", ((const char*(*)(Type*))type_to_string)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_BORROW)) {
-        return __glide_string_concat("&", type_to_string((t-> inner )));
+        return __glide_string_concat("&", ((const char*(*)(Type*))type_to_string)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_BORROW_MUT)) {
-        return __glide_string_concat("&mut ", type_to_string((t-> inner )));
+        return __glide_string_concat("&mut ", ((const char*(*)(Type*))type_to_string)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_SLICE)) {
-        return __glide_string_concat("[]", type_to_string((t-> inner )));
+        return __glide_string_concat("[]", ((const char*(*)(Type*))type_to_string)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_GENERIC)) {
         const char*   out = __glide_string_concat((t-> name ), "<");
@@ -9988,25 +9988,25 @@ const char*   type_to_string (Type*   t) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Type   a = Vector_get__Type((t-> args ), i);
-                (out  =  __glide_string_concat(out, type_to_string((&a))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Type*))type_to_string)((&a))));
             }
         }
         return __glide_string_concat(out, ">");
     }
     if (((t-> kind )  ==  TY_RESULT)) {
-        return __glide_string_concat("!", type_to_string((t-> inner )));
+        return __glide_string_concat("!", ((const char*(*)(Type*))type_to_string)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_OPTION)) {
-        return __glide_string_concat("?", type_to_string((t-> inner )));
+        return __glide_string_concat("?", ((const char*(*)(Type*))type_to_string)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_OPT_RESULT)) {
-        return __glide_string_concat("?!", type_to_string((t-> inner )));
+        return __glide_string_concat("?!", ((const char*(*)(Type*))type_to_string)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_DYN)) {
         return __glide_string_concat("dyn ", (t-> name ));
     }
     if (((t-> kind )  ==  TY_ASSOC)) {
-        return __glide_string_concat(__glide_string_concat(type_to_string((t-> inner )), "::"), (t-> name ));
+        return __glide_string_concat(__glide_string_concat(((const char*(*)(Type*))type_to_string)((t-> inner )), "::"), (t-> name ));
     }
     return "<ty?>";
 }
@@ -10095,16 +10095,16 @@ bool   types_compat (Type*   want, Type*   got) {
     if (((want  ==  NULL)  ||  (got  ==  NULL))) {
         return true;
     }
-    if ((is_unknown_type(want)  ||  is_unknown_type(got))) {
+    if ((((bool(*)(Type*))is_unknown_type)(want)  ||  ((bool(*)(Type*))is_unknown_type)(got))) {
         return true;
     }
-    if (type_eq(want, got)) {
+    if (((bool(*)(Type*, Type*))type_eq)(want, got)) {
         return true;
     }
-    if ((is_int_type(want)  &&  is_int_type(got))) {
+    if ((((bool(*)(Type*))is_int_type)(want)  &&  ((bool(*)(Type*))is_int_type)(got))) {
         return true;
     }
-    if ((is_float_type(want)  &&  is_float_type(got))) {
+    if ((((bool(*)(Type*))is_float_type)(want)  &&  ((bool(*)(Type*))is_float_type)(got))) {
         return true;
     }
     if ((((want-> kind )  ==  TY_POINTER)  &&  ((got-> kind )  ==  TY_POINTER))) {
@@ -10116,20 +10116,20 @@ bool   types_compat (Type*   want, Type*   got) {
         }
     }
     if ((((((want-> kind )  ==  TY_POINTER)  ||  ((want-> kind )  ==  TY_BORROW))  ||  ((want-> kind )  ==  TY_BORROW_MUT))  &&  ((((got-> kind )  ==  TY_POINTER)  ||  ((got-> kind )  ==  TY_BORROW))  ||  ((got-> kind )  ==  TY_BORROW_MUT)))) {
-        return types_compat((want-> inner ), (got-> inner ));
+        return ((bool(*)(Type*, Type*))types_compat)((want-> inner ), (got-> inner ));
     }
     return false;
 }
 
 Typer*   Typer_new (void) {
-    Typer*   t = (( Typer* )__glide_palloc(sizeof( Typer )));
-    HashMap__FnSig*   fns = HashMap_new__FnSig();
-    HashMap__bool*   structs = HashMap_new__bool();
-    HashMap__Type*   scope = HashMap_new__Type();
-    HashMap__Type*   mscope = HashMap_new__Type();
-    HashMap__bool*   owned = HashMap_new__bool();
-    Vector__BorrowEvent*   bw = Vector_new__BorrowEvent();
-    Vector__DiagEntry*   dg = Vector_new__DiagEntry();
+    Typer*   t = (( Typer* )((void*(*)(int))__glide_palloc)(sizeof( Typer )));
+    HashMap__FnSig*   fns = ((HashMap__FnSig*(*)(void))HashMap_new__FnSig)();
+    HashMap__bool*   structs = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+    HashMap__Type*   scope = ((HashMap__Type*(*)(void))HashMap_new__Type)();
+    HashMap__Type*   mscope = ((HashMap__Type*(*)(void))HashMap_new__Type)();
+    HashMap__bool*   owned = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+    Vector__BorrowEvent*   bw = ((Vector__BorrowEvent*(*)(void))Vector_new__BorrowEvent)();
+    Vector__DiagEntry*   dg = ((Vector__DiagEntry*(*)(void))Vector_new__DiagEntry)();
     ((t-> fns )  =  fns);
     ((t-> structs )  =  structs);
     ((t-> scope )  =  scope);
@@ -10139,22 +10139,22 @@ Typer*   Typer_new (void) {
     ((t-> diagnostics )  =  dg);
     ((t-> current_ret )  =  NULL);
     ((t-> current_origin )  =  "");
-    HashMap__bool*   vis = HashMap_new__bool();
+    HashMap__bool*   vis = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((t-> visibility )  =  vis);
-    HashMap__bool*   mi = HashMap_new__bool();
+    HashMap__bool*   mi = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((t-> module_imports )  =  mi);
-    HashMap__bool*   mfp = HashMap_new__bool();
+    HashMap__bool*   mfp = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((t-> module_full_paths )  =  mfp);
-    HashMap__bool*   fp = HashMap_new__bool();
+    HashMap__bool*   fp = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((t-> field_pub )  =  fp);
-    HashMap__string*   so = HashMap_new__string();
+    HashMap__string*   so = ((HashMap__string*(*)(void))HashMap_new__string)();
     ((t-> struct_origin )  =  so);
     ((t-> enforce_visibility )  =  false);
-    HashMap__bool*   is = HashMap_new__bool();
+    HashMap__bool*   is = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((t-> impl_set )  =  is);
-    HashMap__Type*   at = HashMap_new__Type();
+    HashMap__Type*   at = ((HashMap__Type*(*)(void))HashMap_new__Type)();
     ((t-> assoc_table )  =  at);
-    HashMap__string*   en = HashMap_new__string();
+    HashMap__string*   en = ((HashMap__string*(*)(void))HashMap_new__string)();
     ((t-> enums )  =  en);
     ((t-> error_count )  =  0);
     return t;
@@ -10206,7 +10206,7 @@ void   Typer_free (Typer*   self) {
     HashMap_free__string((self-> struct_origin ));
     HashMap_free__bool((self-> impl_set ));
     HashMap_free__string((self-> enums ));
-    __glide_pfree((( void* )self));
+    ((void(*)(void*))__glide_pfree)((( void* )self));
 }
 
 void   Typer_push_diag_tag (Typer*   self, int   line, int   col, int   severity, const char*   code, const char*   msg, int   tag) {
@@ -10276,22 +10276,22 @@ void   pre_register (Typer*   t, Vector__Stmt*   program) {
             if (((ty  ==  NULL)  &&  ((s. let_value )  !=  NULL))) {
                 if ((((s. let_value )-> kind )  ==  EX_INT)) {
                     if (((((s. let_value )-> int_val )  >  2147483647)  ||  (((s. let_value )-> int_val )  <  (-2147483648)))) {
-                        (ty  =  ty_named("i64"));
+                        (ty  =  ((Type*(*)(const char*))ty_named)("i64"));
                     } else {
-                        (ty  =  ty_named("int"));
+                        (ty  =  ((Type*(*)(const char*))ty_named)("int"));
                     }
                 } else {
                     if ((((s. let_value )-> kind )  ==  EX_FLOAT)) {
-                        (ty  =  ty_named("float"));
+                        (ty  =  ((Type*(*)(const char*))ty_named)("float"));
                     } else {
                         if ((((s. let_value )-> kind )  ==  EX_STRING)) {
-                            (ty  =  ty_named("string"));
+                            (ty  =  ((Type*(*)(const char*))ty_named)("string"));
                         } else {
                             if ((((s. let_value )-> kind )  ==  EX_BOOL)) {
-                                (ty  =  ty_named("bool"));
+                                (ty  =  ((Type*(*)(const char*))ty_named)("bool"));
                             } else {
                                 if ((((s. let_value )-> kind )  ==  EX_CHAR)) {
-                                    (ty  =  ty_named("char"));
+                                    (ty  =  ((Type*(*)(const char*))ty_named)("char"));
                                 }
                             }
                         }
@@ -10326,7 +10326,7 @@ void   pre_register (Typer*   t, Vector__Stmt*   program) {
                 for (int   j = 0; (j  <  Vector_len__Field((s. struct_fields ))); j++) {
                     Field   f = Vector_get__Field((s. struct_fields ), j);
                     if ((((f. ty )  !=  NULL)  &&  ((((f. ty )-> kind )  ==  TY_BORROW)  ||  (((f. ty )-> kind )  ==  TY_BORROW_MUT)))) {
-                        Typer_err_code(t, (s. line ), (s. column ), "borrow-in-field", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("borrow `", type_to_string((f. ty ))), "` not allowed in struct field `"), (f. name )), "` (use `*T` instead)"));
+                        Typer_err_code(t, (s. line ), (s. column ), "borrow-in-field", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("borrow `", ((const char*(*)(Type*))type_to_string)((f. ty ))), "` not allowed in struct field `"), (f. name )), "` (use `*T` instead)"));
                     }
                 }
             }
@@ -10402,26 +10402,45 @@ bool   arg_compat (Type*   want, Type*   got, Vector__string*   tps) {
     if (((want  ==  NULL)  ||  (got  ==  NULL))) {
         return true;
     }
-    if ((((want-> kind )  ==  TY_NAMED)  &&  type_var_contains(tps, (want-> name )))) {
+    if ((((want-> kind )  ==  TY_NAMED)  &&  ((bool(*)(Vector__string*, const char*))type_var_contains)(tps, (want-> name )))) {
         return true;
     }
     if ((((((want-> kind )  ==  TY_POINTER)  ||  ((want-> kind )  ==  TY_BORROW))  ||  ((want-> kind )  ==  TY_BORROW_MUT))  &&  ((((got-> kind )  ==  TY_POINTER)  ||  ((got-> kind )  ==  TY_BORROW))  ||  ((got-> kind )  ==  TY_BORROW_MUT)))) {
-        return arg_compat((want-> inner ), (got-> inner ), tps);
+        return ((bool(*)(Type*, Type*, Vector__string*))arg_compat)((want-> inner ), (got-> inner ), tps);
     }
     if ((((want-> kind )  ==  TY_RESULT)  &&  ((got-> kind )  ==  TY_RESULT))) {
-        return arg_compat((want-> inner ), (got-> inner ), tps);
+        return ((bool(*)(Type*, Type*, Vector__string*))arg_compat)((want-> inner ), (got-> inner ), tps);
     }
     if ((((want-> kind )  ==  TY_OPTION)  &&  ((got-> kind )  ==  TY_OPTION))) {
-        return arg_compat((want-> inner ), (got-> inner ), tps);
+        return ((bool(*)(Type*, Type*, Vector__string*))arg_compat)((want-> inner ), (got-> inner ), tps);
     }
     if ((((want-> kind )  ==  TY_OPT_RESULT)  &&  ((got-> kind )  ==  TY_OPT_RESULT))) {
-        return arg_compat((want-> inner ), (got-> inner ), tps);
+        return ((bool(*)(Type*, Type*, Vector__string*))arg_compat)((want-> inner ), (got-> inner ), tps);
     }
-    return types_compat(want, got);
+    if ((((want-> kind )  ==  TY_FNPTR)  &&  ((got-> kind )  ==  TY_FNPTR))) {
+        if ((((want-> args )  ==  NULL)  ||  ((got-> args )  ==  NULL))) {
+            return false;
+        }
+        if ((Vector_len__Type((want-> args ))  !=  Vector_len__Type((got-> args )))) {
+            return false;
+        }
+        for (int   i = 0; (i  <  Vector_len__Type((want-> args ))); i++) {
+            Type   wp = Vector_get__Type((want-> args ), i);
+            Type   gp = Vector_get__Type((got-> args ), i);
+            if ((!((bool(*)(Type*, Type*, Vector__string*))arg_compat)((&wp), (&gp), tps))) {
+                return false;
+            }
+        }
+        return ((bool(*)(Type*, Type*, Vector__string*))arg_compat)((want-> fnptr_ret ), (got-> fnptr_ret ), tps);
+    }
+    if (((((want-> kind )  ==  TY_FNPTR)  &&  ((got-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((got-> name ), "__fn__"))) {
+        return true;
+    }
+    return ((bool(*)(Type*, Type*))types_compat)(want, got);
 }
 
 Vector__string*   split_bounds (const char*   s) {
-    Vector__string*   out = Vector_new__string();
+    Vector__string*   out = ((Vector__string*(*)(void))Vector_new__string)();
     if (((s  ==  NULL)  ||  __glide_string_eq(s, ""))) {
         return out;
     }
@@ -10451,7 +10470,30 @@ Type*   extract_for_var (Type*   param_ty, Type*   arg_ty, const char*   var_nam
         return arg_ty;
     }
     if ((((((param_ty-> kind )  ==  TY_POINTER)  ||  ((param_ty-> kind )  ==  TY_BORROW))  ||  ((param_ty-> kind )  ==  TY_BORROW_MUT))  &&  ((((arg_ty-> kind )  ==  TY_POINTER)  ||  ((arg_ty-> kind )  ==  TY_BORROW))  ||  ((arg_ty-> kind )  ==  TY_BORROW_MUT)))) {
-        return extract_for_var((param_ty-> inner ), (arg_ty-> inner ), var_name);
+        return ((Type*(*)(Type*, Type*, const char*))extract_for_var)((param_ty-> inner ), (arg_ty-> inner ), var_name);
+    }
+    if ((((((((param_ty-> kind )  ==  TY_GENERIC)  &&  ((arg_ty-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq((param_ty-> name ), (arg_ty-> name )))  &&  ((param_ty-> args )  !=  NULL))  &&  ((arg_ty-> args )  !=  NULL))  &&  (Vector_len__Type((param_ty-> args ))  ==  Vector_len__Type((arg_ty-> args ))))) {
+        for (int   i = 0; (i  <  Vector_len__Type((param_ty-> args ))); i++) {
+            Type   pa_v = Vector_get__Type((param_ty-> args ), i);
+            Type   aa_v = Vector_get__Type((arg_ty-> args ), i);
+            Type*   pa_p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
+            Type*   aa_p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
+            ((*pa_p)  =  pa_v);
+            ((*aa_p)  =  aa_v);
+            Type*   r = ((Type*(*)(Type*, Type*, const char*))extract_for_var)(pa_p, aa_p, var_name);
+            if ((r  !=  NULL)) {
+                return r;
+            }
+        }
+    }
+    if ((((param_ty-> kind )  ==  TY_OPTION)  &&  ((arg_ty-> kind )  ==  TY_OPTION))) {
+        return ((Type*(*)(Type*, Type*, const char*))extract_for_var)((param_ty-> inner ), (arg_ty-> inner ), var_name);
+    }
+    if ((((param_ty-> kind )  ==  TY_RESULT)  &&  ((arg_ty-> kind )  ==  TY_RESULT))) {
+        return ((Type*(*)(Type*, Type*, const char*))extract_for_var)((param_ty-> inner ), (arg_ty-> inner ), var_name);
+    }
+    if ((((param_ty-> kind )  ==  TY_OPT_RESULT)  &&  ((arg_ty-> kind )  ==  TY_OPT_RESULT))) {
+        return ((Type*(*)(Type*, Type*, const char*))extract_for_var)((param_ty-> inner ), (arg_ty-> inner ), var_name);
     }
     return NULL;
 }
@@ -10466,9 +10508,6 @@ Type*   resolve_assoc_in_ret (Typer*   t, FnSig*   sig, Vector__Expr*   args, Ty
     if ((((sig-> type_params )  ==  NULL)  ||  (Vector_len__string((sig-> type_params ))  ==  0))) {
         return ret;
     }
-    if (((sig-> type_param_bounds )  ==  NULL)) {
-        return ret;
-    }
     if ((((sig-> params )  ==  NULL)  ||  (args  ==  NULL))) {
         return ret;
     }
@@ -10477,13 +10516,34 @@ Type*   resolve_assoc_in_ret (Typer*   t, FnSig*   sig, Vector__Expr*   args, Ty
     if ((plen  !=  alen)) {
         return ret;
     }
-    int   bn = Vector_len__string((sig-> type_param_bounds ));
-    return rewrite_assoc_in_type(t, sig, args, ret, plen, bn);
+    int   bn = 0;
+    if (((sig-> type_param_bounds )  !=  NULL)) {
+        (bn  =  Vector_len__string((sig-> type_param_bounds )));
+    }
+    return ((Type*(*)(Typer*, FnSig*, Vector__Expr*, Type*, int, int))rewrite_assoc_in_type)(t, sig, args, ret, plen, bn);
 }
 
 Type*   rewrite_assoc_in_type (Typer*   t, FnSig*   sig, Vector__Expr*   args, Type*   ty, int   plen, int   bn) {
     if ((ty  ==  NULL)) {
         return NULL;
+    }
+    if ((((ty-> kind )  ==  TY_NAMED)  &&  ((sig-> type_params )  !=  NULL))) {
+        for (int   ti = 0; (ti  <  Vector_len__string((sig-> type_params ))); ti++) {
+            const char*   tp_name = Vector_get__string((sig-> type_params ), ti);
+            if ((!__glide_string_eq(tp_name, (ty-> name )))) {
+                continue;
+            }
+            for (int   i = 0; (i  <  plen); i++) {
+                Param   p = Vector_get__Param((sig-> params ), i);
+                Expr   a = Vector_get__Expr(args, i);
+                Type*   at = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
+                Type*   extracted = ((Type*(*)(Type*, Type*, const char*))extract_for_var)((p. ty ), at, tp_name);
+                if ((extracted  !=  NULL)) {
+                    return extracted;
+                }
+            }
+            return ty;
+        }
     }
     if (((((ty-> kind )  ==  TY_ASSOC)  &&  ((ty-> inner )  !=  NULL))  &&  (((ty-> inner )-> kind )  ==  TY_NAMED))) {
         const char*   owner_name = ((ty-> inner )-> name );
@@ -10503,8 +10563,8 @@ Type*   rewrite_assoc_in_type (Typer*   t, FnSig*   sig, Vector__Expr*   args, T
             for (int   i = 0; (i  <  plen); i++) {
                 Param   p = Vector_get__Param((sig-> params ), i);
                 Expr   a = Vector_get__Expr(args, i);
-                Type*   at = infer_expr(t, (&a));
-                Type*   extracted = extract_for_var((p. ty ), at, tp_name);
+                Type*   at = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
+                Type*   extracted = ((Type*(*)(Type*, Type*, const char*))extract_for_var)((p. ty ), at, tp_name);
                 if ((extracted  !=  NULL)) {
                     (concrete  =  extracted);
                     break;
@@ -10514,13 +10574,13 @@ Type*   rewrite_assoc_in_type (Typer*   t, FnSig*   sig, Vector__Expr*   args, T
                 return ty;
             }
             const char*   cname = (concrete-> name );
-            Vector__string*   parts = split_bounds(bounds);
+            Vector__string*   parts = ((Vector__string*(*)(const char*))split_bounds)(bounds);
             for (int   bi = 0; (bi  <  Vector_len__string(parts)); bi++) {
                 const char*   bound = Vector_get__string(parts, bi);
                 const char*   key = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(bound, "::"), cname), "::"), (ty-> name ));
                 if (HashMap_contains__Type((t-> assoc_table ), key)) {
                     Type   resolved = HashMap_get__Type((t-> assoc_table ), key);
-                    Type*   p = (( Type* )malloc(sizeof( Type )));
+                    Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
                     ((*p)  =  resolved);
                     return p;
                 }
@@ -10530,8 +10590,8 @@ Type*   rewrite_assoc_in_type (Typer*   t, FnSig*   sig, Vector__Expr*   args, T
         return ty;
     }
     if (((((((((ty-> kind )  ==  TY_OPTION)  ||  ((ty-> kind )  ==  TY_RESULT))  ||  ((ty-> kind )  ==  TY_OPT_RESULT))  ||  ((ty-> kind )  ==  TY_POINTER))  ||  ((ty-> kind )  ==  TY_BORROW))  ||  ((ty-> kind )  ==  TY_BORROW_MUT))  ||  ((ty-> kind )  ==  TY_SLICE))) {
-        Type*   new_inner = rewrite_assoc_in_type(t, sig, args, (ty-> inner ), plen, bn);
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   new_inner = ((Type*(*)(Typer*, FnSig*, Vector__Expr*, Type*, int, int))rewrite_assoc_in_type)(t, sig, args, (ty-> inner ), plen, bn);
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((*p)  =  (*ty));
         ((p-> inner )  =  new_inner);
         return p;
@@ -10571,8 +10631,8 @@ void   check_generic_bounds (Typer*   t, FnSig*   sig, Vector__Expr*   args, int
         for (int   i = 0; (i  <  plen); i++) {
             Param   p = Vector_get__Param((sig-> params ), i);
             Expr   a = Vector_get__Expr(args, i);
-            Type*   at = infer_expr(t, (&a));
-            Type*   extracted = extract_for_var((p. ty ), at, tp_name);
+            Type*   at = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
+            Type*   extracted = ((Type*(*)(Type*, Type*, const char*))extract_for_var)((p. ty ), at, tp_name);
             if ((extracted  !=  NULL)) {
                 (concrete  =  extracted);
                 break;
@@ -10585,7 +10645,7 @@ void   check_generic_bounds (Typer*   t, FnSig*   sig, Vector__Expr*   args, int
             continue;
         }
         const char*   cname = (concrete-> name );
-        Vector__string*   parts = split_bounds(bounds);
+        Vector__string*   parts = ((Vector__string*(*)(const char*))split_bounds)(bounds);
         for (int   bi = 0; (bi  <  Vector_len__string(parts)); bi++) {
             const char*   bound = Vector_get__string(parts, bi);
             const char*   key = __glide_string_concat(__glide_string_concat(bound, "::"), cname);
@@ -10609,8 +10669,8 @@ int   count_borrows (Typer*   t, const char*   name, bool   want_mut) {
 }
 
 void   record_borrow (Typer*   t, const char*   source, bool   is_mut, int   line, int   col) {
-    int   n_shared = count_borrows(t, source, false);
-    int   n_mut = count_borrows(t, source, true);
+    int   n_shared = ((int(*)(Typer*, const char*, bool))count_borrows)(t, source, false);
+    int   n_mut = ((int(*)(Typer*, const char*, bool))count_borrows)(t, source, true);
     if (is_mut) {
         if (((n_mut  >  0)  ||  (n_shared  >  0))) {
             Typer_err_code(t, line, col, "overlap-borrow", __glide_string_concat(__glide_string_concat("cannot borrow `", source), "` as mutable: already borrowed (across statements)"));
@@ -10638,8 +10698,8 @@ void   check_call_aliasing (Typer*   t, Expr*   call) {
     if ((((call  ==  NULL)  ||  ((call-> kind )  !=  EX_CALL))  ||  ((call-> args )  ==  NULL))) {
         return;
     }
-    Vector__string*   names = Vector_new__string();
-    Vector__bool*   muts = Vector_new__bool();
+    Vector__string*   names = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__bool*   muts = ((Vector__bool*(*)(void))Vector_new__bool)();
     for (int   i = 0; (i  <  Vector_len__Expr((call-> args ))); i++) {
         Expr   a = Vector_get__Expr((call-> args ), i);
         if ((((((a. kind )  ==  EX_UNARY)  &&  (((a. op_code )  ==  UN_ADDR)  ||  ((a. op_code )  ==  UN_ADDR_MUT)))  &&  ((a. operand )  !=  NULL))  &&  (((a. operand )-> kind )  ==  EX_IDENT))) {
@@ -10662,17 +10722,17 @@ void   check_call_aliasing (Typer*   t, Expr*   call) {
 }
 
 void   check_program (Typer*   t, Vector__Stmt*   program) {
-    pre_register(t, program);
+    ((void(*)(Typer*, Vector__Stmt*))pre_register)(t, program);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         ((t-> current_origin )  =  (s. origin ));
-        check_top(t, (&s));
+        ((void(*)(Typer*, Stmt*))check_top)(t, (&s));
     }
 }
 
 void   check_top (Typer*   t, Stmt*   s) {
     if (((s-> kind )  ==  ST_FN)) {
-        check_fn(t, s);
+        ((void(*)(Typer*, Stmt*))check_fn)(t, s);
         return;
     }
     if (((s-> kind )  ==  ST_STRUCT)) {
@@ -10682,11 +10742,11 @@ void   check_top (Typer*   t, Stmt*   s) {
         return;
     }
     if (((s-> kind )  ==  ST_CONST)) {
-        check_let_or_const(t, s);
+        ((void(*)(Typer*, Stmt*))check_let_or_const)(t, s);
         return;
     }
     if (((s-> kind )  ==  ST_LET)) {
-        check_let_or_const(t, s);
+        ((void(*)(Typer*, Stmt*))check_let_or_const)(t, s);
         return;
     }
     if (((s-> kind )  ==  ST_IMPORT)) {
@@ -10719,10 +10779,10 @@ Expr*   first_unconditional_self_call (Vector__Stmt*   body, const char*   name)
         if (((((((((st. kind )  ==  ST_IF)  ||  ((st. kind )  ==  ST_WHILE))  ||  ((st. kind )  ==  ST_FOR))  ||  ((st. kind )  ==  ST_MATCH))  ||  ((st. kind )  ==  ST_RETURN))  ||  ((st. kind )  ==  ST_BREAK))  ||  ((st. kind )  ==  ST_CONTINUE))) {
             return NULL;
         }
-        if ((((st. kind )  ==  ST_EXPR)  &&  is_self_call_expr((st. expr_value ), name))) {
+        if ((((st. kind )  ==  ST_EXPR)  &&  ((bool(*)(Expr*, const char*))is_self_call_expr)((st. expr_value ), name))) {
             return (st. expr_value );
         }
-        if ((((st. kind )  ==  ST_LET)  &&  is_self_call_expr((st. let_value ), name))) {
+        if ((((st. kind )  ==  ST_LET)  &&  ((bool(*)(Expr*, const char*))is_self_call_expr)((st. let_value ), name))) {
             return (st. let_value );
         }
     }
@@ -10734,9 +10794,9 @@ void   check_fn (Typer*   t, Stmt*   s) {
     HashMap__bool*   saved_owned = (t-> owned_locals );
     Vector__BorrowEvent*   saved_borrows = (t-> borrows );
     Type*   saved_ret = (t-> current_ret );
-    HashMap__Type*   new_scope = HashMap_new__Type();
-    HashMap__bool*   new_owned = HashMap_new__bool();
-    Vector__BorrowEvent*   new_borrows = Vector_new__BorrowEvent();
+    HashMap__Type*   new_scope = ((HashMap__Type*(*)(void))HashMap_new__Type)();
+    HashMap__bool*   new_owned = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+    Vector__BorrowEvent*   new_borrows = ((Vector__BorrowEvent*(*)(void))Vector_new__BorrowEvent)();
     ((t-> scope )  =  new_scope);
     ((t-> owned_locals )  =  new_owned);
     ((t-> borrows )  =  new_borrows);
@@ -10752,9 +10812,9 @@ void   check_fn (Typer*   t, Stmt*   s) {
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            check_stmt(t, (&b));
+            ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
         }
-        Expr*   rc = first_unconditional_self_call((s-> fn_body ), (s-> name ));
+        Expr*   rc = ((Expr*(*)(Vector__Stmt*, const char*))first_unconditional_self_call)((s-> fn_body ), (s-> name ));
         if ((rc  !=  NULL)) {
             Typer_err_code_range(t, (rc-> line ), (rc-> column ), __glide_string_len((s-> name )), "infinite-recursion", __glide_string_concat(__glide_string_concat("function `", (s-> name )), "` recurses unconditionally; every call overflows the stack"));
         }
@@ -10770,41 +10830,41 @@ void   check_fn (Typer*   t, Stmt*   s) {
 
 void   check_stmt (Typer*   t, Stmt*   s) {
     if ((((s-> kind )  ==  ST_LET)  ||  ((s-> kind )  ==  ST_CONST))) {
-        check_let_or_const(t, s);
+        ((void(*)(Typer*, Stmt*))check_let_or_const)(t, s);
         return;
     }
     if (((s-> kind )  ==  ST_RETURN)) {
-        check_return(t, s);
+        ((void(*)(Typer*, Stmt*))check_return)(t, s);
         return;
     }
     if (((s-> kind )  ==  ST_EXPR)) {
         if (((s-> expr_value )  !=  NULL)) {
-            infer_expr(t, (s-> expr_value ));
+            ((Type*(*)(Typer*, Expr*))infer_expr)(t, (s-> expr_value ));
         }
         return;
     }
     if (((s-> kind )  ==  ST_IF)) {
         if (((s-> cond )  !=  NULL)) {
-            Type*   ct = infer_expr(t, (s-> cond ));
-            if ((((ct  !=  NULL)  &&  (!is_unknown_type(ct)))  &&  (!is_bool_type(ct)))) {
+            Type*   ct = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (s-> cond ));
+            if ((((ct  !=  NULL)  &&  (!((bool(*)(Type*))is_unknown_type)(ct)))  &&  (!((bool(*)(Type*))is_bool_type)(ct)))) {
                 Typer_err(t, (s-> line ), (s-> column ), "if condition must be bool");
             }
         }
         if (((s-> then_body )  !=  NULL)) {
-            int   saved = enter_borrow_scope(t);
+            int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                check_stmt(t, (&b));
+                ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
             }
-            exit_borrow_scope(t, saved);
+            ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
         }
         if (((s-> else_body )  !=  NULL)) {
-            int   saved = enter_borrow_scope(t);
+            int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-                check_stmt(t, (&b));
+                ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
             }
-            exit_borrow_scope(t, saved);
+            ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
         }
         return;
     }
@@ -10812,14 +10872,14 @@ void   check_stmt (Typer*   t, Stmt*   s) {
         Type*   binder_ty = (s-> let_ty );
         Expr*   recv = (s-> let_value );
         if ((((((recv  !=  NULL)  &&  ((recv-> kind )  ==  EX_CALL))  &&  ((recv-> lhs )  !=  NULL))  &&  (((recv-> lhs )-> kind )  ==  EX_MEMBER))  &&  __glide_string_eq(((recv-> lhs )-> field ), "recv"))) {
-            Type*   recv_target_ty = infer_expr(t, ((recv-> lhs )-> lhs ));
-            Type*   inner = chan_inner(recv_target_ty);
+            Type*   recv_target_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, ((recv-> lhs )-> lhs ));
+            Type*   inner = ((Type*(*)(Type*))chan_inner)(recv_target_ty);
             if ((inner  !=  NULL)) {
                 if ((binder_ty  ==  NULL)) {
                     (binder_ty  =  inner);
                 } else {
-                    if ((!types_compat(binder_ty, inner))) {
-                        Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("while-let binder type mismatch: expected ", type_to_string(binder_ty)), ", chan yields "), type_to_string(inner)));
+                    if ((!((bool(*)(Type*, Type*))types_compat)(binder_ty, inner))) {
+                        Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("while-let binder type mismatch: expected ", ((const char*(*)(Type*))type_to_string)(binder_ty)), ", chan yields "), ((const char*(*)(Type*))type_to_string)(inner)));
                     }
                 }
             } else {
@@ -10832,70 +10892,70 @@ void   check_stmt (Typer*   t, Stmt*   s) {
             HashMap_insert__Type((t-> scope ), (s-> name ), (*binder_ty));
         }
         if (((s-> then_body )  !=  NULL)) {
-            int   saved = enter_borrow_scope(t);
+            int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                check_stmt(t, (&b));
+                ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
             }
-            exit_borrow_scope(t, saved);
+            ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
         }
         return;
     }
     if (((s-> kind )  ==  ST_WHILE)) {
         if (((s-> cond )  !=  NULL)) {
-            Type*   ct = infer_expr(t, (s-> cond ));
-            if ((((ct  !=  NULL)  &&  (!is_unknown_type(ct)))  &&  (!is_bool_type(ct)))) {
+            Type*   ct = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (s-> cond ));
+            if ((((ct  !=  NULL)  &&  (!((bool(*)(Type*))is_unknown_type)(ct)))  &&  (!((bool(*)(Type*))is_bool_type)(ct)))) {
                 Typer_err(t, (s-> line ), (s-> column ), "while condition must be bool");
             }
         }
         if (((s-> then_body )  !=  NULL)) {
-            int   saved = enter_borrow_scope(t);
+            int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                check_stmt(t, (&b));
+                ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
             }
-            exit_borrow_scope(t, saved);
+            ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
         }
         return;
     }
     if (((s-> kind )  ==  ST_FOR)) {
-        int   saved = enter_borrow_scope(t);
+        int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
         if (((s-> for_init )  !=  NULL)) {
-            check_stmt(t, (s-> for_init ));
+            ((void(*)(Typer*, Stmt*))check_stmt)(t, (s-> for_init ));
         }
         if (((s-> cond )  !=  NULL)) {
-            Type*   _u0 = infer_expr(t, (s-> cond ));
+            Type*   _u0 = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (s-> cond ));
         }
         if (((s-> for_step )  !=  NULL)) {
-            Type*   _u1 = infer_expr(t, (s-> for_step ));
+            Type*   _u1 = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (s-> for_step ));
         }
         if (((s-> then_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                check_stmt(t, (&b));
+                ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
             }
         }
-        exit_borrow_scope(t, saved);
+        ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
         return;
     }
     if (((s-> kind )  ==  ST_BLOCK)) {
         if (((s-> then_body )  !=  NULL)) {
-            int   saved = enter_borrow_scope(t);
+            int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                check_stmt(t, (&b));
+                ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
             }
-            exit_borrow_scope(t, saved);
+            ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
         }
         return;
     }
     if (((s-> kind )  ==  ST_MATCH)) {
         Type*   scrut_ty = NULL;
         if (((s-> scrutinee )  !=  NULL)) {
-            (scrut_ty  =  infer_expr(t, (s-> scrutinee )));
+            (scrut_ty  =  ((Type*(*)(Typer*, Expr*))infer_expr)(t, (s-> scrutinee )));
         }
         bool   has_wildcard = false;
-        HashMap__bool*   covered = HashMap_new__bool();
+        HashMap__bool*   covered = ((HashMap__bool*(*)(void))HashMap_new__bool)();
         if (((s-> arms )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__MatchArm((s-> arms ))); i++) {
                 MatchArm   a = Vector_get__MatchArm((s-> arms ), i);
@@ -10944,13 +11004,13 @@ void   check_stmt (Typer*   t, Stmt*   s) {
         if (((s-> asm_out_exprs )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_out_exprs ))); i++) {
                 Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
-                infer_expr(t, (&e));
+                ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&e));
             }
         }
         if (((s-> asm_in_exprs )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_in_exprs ))); i++) {
                 Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
-                infer_expr(t, (&e));
+                ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&e));
             }
         }
         return;
@@ -10961,7 +11021,7 @@ void   check_let_or_const (Typer*   t, Stmt*   s) {
     Type*   final_ty = (s-> let_ty );
     if ((((s-> let_ty )  !=  NULL)  &&  ((((s-> let_ty )-> kind )  ==  TY_BORROW)  ||  (((s-> let_ty )-> kind )  ==  TY_BORROW_MUT)))) {
         if ((((s-> let_value )  !=  NULL)  &&  (((s-> let_value )-> kind )  ==  EX_NULL))) {
-            Typer_err_code(t, (s-> line ), (s-> column ), "null-borrow", __glide_string_concat(__glide_string_concat("borrow `", type_to_string((s-> let_ty ))), "` cannot be null"));
+            Typer_err_code(t, (s-> line ), (s-> column ), "null-borrow", __glide_string_concat(__glide_string_concat("borrow `", ((const char*(*)(Type*))type_to_string)((s-> let_ty ))), "` cannot be null"));
         }
     }
     if ((((((s-> kind )  ==  ST_LET)  &&  (s-> is_auto_owned ))  &&  ((s-> let_value )  !=  NULL))  &&  (((s-> let_value )-> kind )  ==  EX_NULL))) {
@@ -10981,10 +11041,10 @@ void   check_let_or_const (Typer*   t, Stmt*   s) {
         (is_auto_owned  =  true);
     }
     if (((s-> let_value )  !=  NULL)) {
-        Type*   val_ty = infer_expr(t, (s-> let_value ));
+        Type*   val_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (s-> let_value ));
         if ((final_ty  !=  NULL)) {
-            if ((!types_compat(final_ty, val_ty))) {
-                Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("let initializer type mismatch: expected ", type_to_string(final_ty)), ", got "), type_to_string(val_ty)));
+            if ((!((bool(*)(Type*, Type*))types_compat)(final_ty, val_ty))) {
+                Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("let initializer type mismatch: expected ", ((const char*(*)(Type*))type_to_string)(final_ty)), ", got "), ((const char*(*)(Type*))type_to_string)(val_ty)));
             }
         } else {
             (final_ty  =  val_ty);
@@ -10996,7 +11056,7 @@ void   check_let_or_const (Typer*   t, Stmt*   s) {
             HashMap_insert__bool((t-> owned_locals ), (s-> name ), true);
         }
     } else {
-        Type*   placeholder = ty_named("__unknown__");
+        Type*   placeholder = ((Type*(*)(const char*))ty_named)("__unknown__");
         HashMap_insert__Type((t-> scope ), (s-> name ), (*placeholder));
         if (is_auto_owned) {
             HashMap_insert__bool((t-> owned_locals ), (s-> name ), true);
@@ -11005,7 +11065,7 @@ void   check_let_or_const (Typer*   t, Stmt*   s) {
     if ((((((((s-> kind )  ==  ST_LET)  &&  ((s-> let_value )  !=  NULL))  &&  (((s-> let_value )-> kind )  ==  EX_UNARY))  &&  ((((s-> let_value )-> op_code )  ==  UN_ADDR)  ||  (((s-> let_value )-> op_code )  ==  UN_ADDR_MUT)))  &&  (((s-> let_value )-> operand )  !=  NULL))  &&  ((((s-> let_value )-> operand )-> kind )  ==  EX_IDENT))) {
         const char*   src = (((s-> let_value )-> operand )-> str_val );
         bool   is_mut = (((s-> let_value )-> op_code )  ==  UN_ADDR_MUT);
-        record_borrow(t, src, is_mut, (s-> line ), (s-> column ));
+        ((void(*)(Typer*, const char*, bool, int, int))record_borrow)(t, src, is_mut, (s-> line ), (s-> column ));
     }
 }
 
@@ -11036,13 +11096,13 @@ void   check_return (Typer*   t, Stmt*   s) {
             Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat("cannot return borrow of local `", n), "` (would dangle after function returns)"));
         }
     }
-    Type*   vt = infer_expr(t, e);
+    Type*   vt = ((Type*(*)(Typer*, Expr*))infer_expr)(t, e);
     if (((t-> current_ret )  ==  NULL)) {
         Typer_err(t, (s-> line ), (s-> column ), "return with value in fn declared without ret type");
         return;
     }
-    if ((!types_compat((t-> current_ret ), vt))) {
-        Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("return type mismatch: expected ", type_to_string((t-> current_ret ))), ", got "), type_to_string(vt)));
+    if ((!((bool(*)(Type*, Type*))types_compat)((t-> current_ret ), vt))) {
+        Typer_err(t, (s-> line ), (s-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("return type mismatch: expected ", ((const char*(*)(Type*))type_to_string)((t-> current_ret ))), ", got "), ((const char*(*)(Type*))type_to_string)(vt)));
     }
 }
 
@@ -11067,7 +11127,7 @@ Type*   chan_inner (Type*   t) {
         return NULL;
     }
     Type   inner = Vector_get__Type((x-> args ), 0);
-    Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
+    Type*   p = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
     ((*p)  =  inner);
     return p;
 }
@@ -11078,38 +11138,38 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_INT)) {
         if ((((e-> int_val )  >  2147483647)  ||  ((e-> int_val )  <  (-2147483648)))) {
-            return ty_named("i64");
+            return ((Type*(*)(const char*))ty_named)("i64");
         }
-        return ty_named("int");
+        return ((Type*(*)(const char*))ty_named)("int");
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
-        return ty_named("float");
+        return ((Type*(*)(const char*))ty_named)("float");
     }
     if (((e-> kind )  ==  EX_STRING)) {
-        return ty_named("string");
+        return ((Type*(*)(const char*))ty_named)("string");
     }
     if (((e-> kind )  ==  EX_BOOL)) {
-        return ty_named("bool");
+        return ((Type*(*)(const char*))ty_named)("bool");
     }
     if (((e-> kind )  ==  EX_CHAR)) {
-        return ty_named("char");
+        return ((Type*(*)(const char*))ty_named)("char");
     }
     if (((e-> kind )  ==  EX_NULL)) {
-        return ty_pointer(ty_named("void"));
+        return ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*))ty_named)("void"));
     }
     if (((e-> kind )  ==  EX_IF)) {
-        Type*   cond_ty = infer_expr(t, (e-> lhs ));
+        Type*   cond_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
         if ((((cond_ty  !=  NULL)  &&  ((cond_ty-> kind )  ==  TY_NAMED))  &&  (!__glide_string_eq((cond_ty-> name ), "bool")))) {
-            Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-cond-type", __glide_string_concat(__glide_string_concat("if condition must be `bool`, got `", type_to_string(cond_ty)), "`"));
+            Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-cond-type", __glide_string_concat(__glide_string_concat("if condition must be `bool`, got `", ((const char*(*)(Type*))type_to_string)(cond_ty)), "`"));
         }
         if (((e-> operand )  ==  NULL)) {
             Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-expr-needs-else", "expression-position `if` requires an `else` branch");
-            return infer_expr(t, (e-> rhs ));
+            return ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> rhs ));
         }
-        Type*   then_ty = infer_expr(t, (e-> rhs ));
-        Type*   else_ty = infer_expr(t, (e-> operand ));
-        if ((((then_ty  !=  NULL)  &&  (else_ty  !=  NULL))  &&  (!type_eq(then_ty, else_ty)))) {
-            Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-branch-type-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`if` branches produce different types: `", type_to_string(then_ty)), "` vs `"), type_to_string(else_ty)), "`"));
+        Type*   then_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> rhs ));
+        Type*   else_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> operand ));
+        if ((((then_ty  !=  NULL)  &&  (else_ty  !=  NULL))  &&  (!((bool(*)(Type*, Type*))type_eq)(then_ty, else_ty)))) {
+            Typer_push_diag(t, (e-> line ), (e-> column ), 1, "if-branch-type-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`if` branches produce different types: `", ((const char*(*)(Type*))type_to_string)(then_ty)), "` vs `"), ((const char*(*)(Type*))type_to_string)(else_ty)), "`"));
         }
         if ((then_ty  !=  NULL)) {
             return then_ty;
@@ -11117,26 +11177,26 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return else_ty;
     }
     if (((e-> kind )  ==  EX_BLOCK)) {
-        int   saved = enter_borrow_scope(t);
+        int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
         if (((e-> block_stmts )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((e-> block_stmts ))); i++) {
                 Stmt   b = Vector_get__Stmt((e-> block_stmts ), i);
-                check_stmt(t, (&b));
+                ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
             }
         }
-        Type*   v_ty = infer_expr(t, (e-> operand ));
-        exit_borrow_scope(t, saved);
+        Type*   v_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> operand ));
+        ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
         return v_ty;
     }
     if (((e-> kind )  ==  EX_MATCH)) {
-        Type*   scrut_ty = infer_expr(t, (e-> lhs ));
+        Type*   scrut_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
         Type*   result_ty = NULL;
         if (((e-> match_arms )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__MatchArm((e-> match_arms ))); i++) {
                 MatchArm   a = Vector_get__MatchArm((e-> match_arms ), i);
-                int   saved = enter_borrow_scope(t);
+                int   saved = ((int(*)(Typer*))enter_borrow_scope)(t);
                 if (((a. bindings )  !=  NULL)) {
-                    Type*   placeholder = ty_named("__unknown__");
+                    Type*   placeholder = ((Type*(*)(const char*))ty_named)("__unknown__");
                     for (int   k = 0; (k  <  Vector_len__string((a. bindings ))); k++) {
                         HashMap_insert__Type((t-> scope ), Vector_get__string((a. bindings ), k), (*placeholder));
                     }
@@ -11145,16 +11205,16 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                     int   last_idx = (Vector_len__Stmt((a. body ))  -  1);
                     for (int   k = 0; (k  <  last_idx); k++) {
                         Stmt   b = Vector_get__Stmt((a. body ), k);
-                        check_stmt(t, (&b));
+                        ((void(*)(Typer*, Stmt*))check_stmt)(t, (&b));
                     }
                     Stmt   last = Vector_get__Stmt((a. body ), last_idx);
                     Expr*   v = (last. expr_value );
-                    Type*   arm_ty = infer_expr(t, v);
+                    Type*   arm_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, v);
                     if ((result_ty  ==  NULL)) {
                         (result_ty  =  arm_ty);
                     }
                 }
-                exit_borrow_scope(t, saved);
+                ((void(*)(Typer*, int))exit_borrow_scope)(t, saved);
             }
         }
         if ((scrut_ty  ==  NULL)) {
@@ -11165,7 +11225,7 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
     if (((e-> kind )  ==  EX_IDENT)) {
         if (HashMap_contains__Type((t-> scope ), (e-> str_val ))) {
             Type   ty = HashMap_get__Type((t-> scope ), (e-> str_val ));
-            Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
+            Type*   p = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
             ((*p)  =  ty);
             return p;
         }
@@ -11175,7 +11235,7 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                 return NULL;
             }
             Type   ty = HashMap_get__Type((t-> module_scope ), (e-> str_val ));
-            Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
+            Type*   p = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
             ((*p)  =  ty);
             return p;
         }
@@ -11184,14 +11244,14 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                 Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat("name `", (e-> str_val )), "` is not in scope; add an `import` for it"));
                 return NULL;
             }
-            return ty_named("__fn__");
+            return ((Type*(*)(const char*))ty_named)("__fn__");
         }
         Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat("unknown name `", (e-> str_val )), "`"));
         return NULL;
     }
     if (((e-> kind )  ==  EX_BINARY)) {
-        Type*   lt = infer_expr(t, (e-> lhs ));
-        Type*   rt = infer_expr(t, (e-> rhs ));
+        Type*   lt = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
+        Type*   rt = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> rhs ));
         int   op = (e-> op_code );
         if (((((((op  ==  OP_EQ)  ||  (op  ==  OP_NE))  ||  (op  ==  OP_LT))  ||  (op  ==  OP_LE))  ||  (op  ==  OP_GT))  ||  (op  ==  OP_GE))) {
             if (((op  ==  OP_EQ)  ||  (op  ==  OP_NE))) {
@@ -11203,10 +11263,10 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                     Typer_warn(t, (e-> line ), (e-> column ), "string-pointer-eq", __glide_string_concat(msg, "; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
                 }
             }
-            return ty_named("bool");
+            return ((Type*(*)(const char*))ty_named)("bool");
         }
         if (((op  ==  OP_AND)  ||  (op  ==  OP_OR))) {
-            return ty_named("bool");
+            return ((Type*(*)(const char*))ty_named)("bool");
         }
         if ((op  ==  OP_COALESCE)) {
             Type*   inner_lt = lt;
@@ -11215,8 +11275,8 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
             }
             return inner_lt;
         }
-        if ((!types_compat(lt, rt))) {
-            Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("binary op type mismatch: ", type_to_string(lt)), " vs "), type_to_string(rt)));
+        if ((!((bool(*)(Type*, Type*))types_compat)(lt, rt))) {
+            Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("binary op type mismatch: ", ((const char*(*)(Type*))type_to_string)(lt)), " vs "), ((const char*(*)(Type*))type_to_string)(rt)));
         }
         const char*   lname = "";
         const char*   rname = "";
@@ -11227,17 +11287,17 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
             (rname  =  (rt-> name ));
         }
         if ((__glide_string_eq(lname, "f64")  ||  __glide_string_eq(rname, "f64"))) {
-            return ty_named("f64");
+            return ((Type*(*)(const char*))ty_named)("f64");
         }
         if ((__glide_string_eq(lname, "i64")  ||  __glide_string_eq(rname, "i64"))) {
-            return ty_named("i64");
+            return ((Type*(*)(const char*))ty_named)("i64");
         }
         return lt;
     }
     if (((e-> kind )  ==  EX_UNARY)) {
-        Type*   inner = infer_expr(t, (e-> operand ));
+        Type*   inner = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> operand ));
         if (((e-> op_code )  ==  UN_NOT)) {
-            return ty_named("bool");
+            return ((Type*(*)(const char*))ty_named)("bool");
         }
         if (((e-> op_code )  ==  UN_DEREF)) {
             if (((inner  !=  NULL)  &&  ((((inner-> kind )  ==  TY_POINTER)  ||  ((inner-> kind )  ==  TY_BORROW))  ||  ((inner-> kind )  ==  TY_BORROW_MUT)))) {
@@ -11246,10 +11306,10 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
             return inner;
         }
         if (((e-> op_code )  ==  UN_ADDR)) {
-            return ty_pointer(inner);
+            return ((Type*(*)(Type*))ty_pointer)(inner);
         }
         if (((e-> op_code )  ==  UN_ADDR_MUT)) {
-            return ty_pointer(inner);
+            return ((Type*(*)(Type*))ty_pointer)(inner);
         }
         if (((e-> op_code )  ==  UN_TRY)) {
             if (((inner  !=  NULL)  &&  ((inner-> kind )  ==  TY_RESULT))) {
@@ -11266,19 +11326,19 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return inner;
     }
     if (((e-> kind )  ==  EX_ASSIGN)) {
-        Type*   lt = infer_expr(t, (e-> lhs ));
-        Type*   rt = infer_expr(t, (e-> rhs ));
-        if ((!types_compat(lt, rt))) {
-            Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("assignment type mismatch: ", type_to_string(lt)), " = "), type_to_string(rt)));
+        Type*   lt = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
+        Type*   rt = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> rhs ));
+        if ((!((bool(*)(Type*, Type*))types_compat)(lt, rt))) {
+            Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("assignment type mismatch: ", ((const char*(*)(Type*))type_to_string)(lt)), " = "), ((const char*(*)(Type*))type_to_string)(rt)));
         }
         return lt;
     }
     if (((e-> kind )  ==  EX_CALL)) {
-        check_call_aliasing(t, e);
+        ((void(*)(Typer*, Expr*))check_call_aliasing)(t, e);
         if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))) {
             const char*   mname = ((e-> lhs )-> field );
-            Type*   recv_ty = infer_expr(t, ((e-> lhs )-> lhs ));
-            Type*   inner = chan_inner(recv_ty);
+            Type*   recv_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, ((e-> lhs )-> lhs ));
+            Type*   inner = ((Type*(*)(Type*))chan_inner)(recv_ty);
             if ((inner  !=  NULL)) {
                 int   nargs = 0;
                 if (((e-> args )  !=  NULL)) {
@@ -11289,18 +11349,18 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                         Typer_err(t, (e-> line ), (e-> column ), "`chan.send` takes exactly 1 argument");
                     } else {
                         Expr   a = Vector_get__Expr((e-> args ), 0);
-                        Type*   at = infer_expr(t, (&a));
-                        if ((!types_compat(inner, at))) {
-                            Typer_err(t, (a. line ), (a. column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("chan.send arg type mismatch: expected ", type_to_string(inner)), ", got "), type_to_string(at)));
+                        Type*   at = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
+                        if ((!((bool(*)(Type*, Type*))types_compat)(inner, at))) {
+                            Typer_err(t, (a. line ), (a. column ), __glide_string_concat(__glide_string_concat(__glide_string_concat("chan.send arg type mismatch: expected ", ((const char*(*)(Type*))type_to_string)(inner)), ", got "), ((const char*(*)(Type*))type_to_string)(at)));
                         }
                     }
-                    return ty_named("void");
+                    return ((Type*(*)(const char*))ty_named)("void");
                 }
                 if (__glide_string_eq(mname, "recv")) {
                     if ((nargs  !=  0)) {
                         Typer_err(t, (e-> line ), (e-> column ), "`chan.recv` takes no arguments");
                     }
-                    Type*   p = (( Type* )__glide_palloc(sizeof( Type )));
+                    Type*   p = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
                     ((*p)  =  (*inner));
                     return p;
                 }
@@ -11308,7 +11368,7 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                     if ((nargs  !=  0)) {
                         Typer_err(t, (e-> line ), (e-> column ), "`chan.close` takes no arguments");
                     }
-                    return ty_named("void");
+                    return ((Type*(*)(const char*))ty_named)("void");
                 }
             }
         }
@@ -11321,10 +11381,10 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                 Typer_err(t, (e-> line ), (e-> column ), "`make_chan` takes exactly 1 argument (capacity)");
             } else {
                 Expr   a = Vector_get__Expr((e-> args ), 0);
-                Type*   at = infer_expr(t, (&a));
-                Type*   want = ty_named("int");
-                if ((!types_compat(want, at))) {
-                    Typer_err(t, (a. line ), (a. column ), __glide_string_concat("make_chan capacity must be int, got ", type_to_string(at)));
+                Type*   at = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
+                Type*   want = ((Type*(*)(const char*))ty_named)("int");
+                if ((!((bool(*)(Type*, Type*))types_compat)(want, at))) {
+                    Typer_err(t, (a. line ), (a. column ), __glide_string_concat("make_chan capacity must be int, got ", ((const char*(*)(Type*))type_to_string)(at)));
                 }
             }
             return NULL;
@@ -11353,21 +11413,21 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                             if ((((((a. kind )  ==  EX_IDENT)  &&  HashMap_contains__bool((t-> owned_locals ), (a. str_val )))  &&  ((p. ty )  !=  NULL))  &&  (((p. ty )-> kind )  ==  TY_POINTER))) {
                                 Typer_err(t, (a. line ), (a. column ), __glide_string_concat(__glide_string_concat("cannot move owned value `", (a. str_val )), "` into `*T` parameter (auto-drop conflict)"));
                             }
-                            Type*   at = infer_expr(t, (&a));
-                            if ((!arg_compat((p. ty ), at, (sig. type_params )))) {
+                            Type*   at = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
+                            if ((!((bool(*)(Type*, Type*, Vector__string*))arg_compat)((p. ty ), at, (sig. type_params )))) {
                                 Typer_err(t, (a. line ), (a. column ), __glide_string_concat(__glide_string_concat("arg ", (p. name )), " type mismatch"));
                             }
                         }
                         if ((sig. is_variadic )) {
                             for (int   i = plen; (i  <  alen); i++) {
                                 Expr   a = Vector_get__Expr((e-> args ), i);
-                                Type*   _u = infer_expr(t, (&a));
+                                Type*   _u = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
                             }
                         }
-                        check_generic_bounds(t, (&sig), (e-> args ), (e-> line ), (e-> column ));
+                        ((void(*)(Typer*, FnSig*, Vector__Expr*, int, int))check_generic_bounds)(t, (&sig), (e-> args ), (e-> line ), (e-> column ));
                     }
                 }
-                return resolve_assoc_in_ret(t, (&sig), (e-> args ), (sig. ret_type ));
+                return ((Type*(*)(Typer*, FnSig*, Vector__Expr*, Type*))resolve_assoc_in_ret)(t, (&sig), (e-> args ), (sig. ret_type ));
             }
             bool   is_builtin = ((((((__glide_string_eq(name, "ok")  ||  __glide_string_eq(name, "err"))  ||  __glide_string_eq(name, "some"))  ||  __glide_string_eq(name, "none"))  ||  __glide_string_eq(name, "make_chan"))  ||  __glide_string_eq(name, "sizeof"))  ||  __glide_string_eq(name, "printf"));
             if ((((!is_builtin)  &&  (!HashMap_contains__Type((t-> scope ), name)))  &&  (t-> enforce_visibility ))) {
@@ -11389,7 +11449,7 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
                 if (((e-> args )  !=  NULL)) {
                     for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                         Expr   a = Vector_get__Expr((e-> args ), i);
-                        Type*   _u = infer_expr(t, (&a));
+                        Type*   _u = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
                     }
                 }
                 return (sig. ret_type );
@@ -11398,15 +11458,15 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         if (((e-> args )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                 Expr   a = Vector_get__Expr((e-> args ), i);
-                Type*   _u2 = infer_expr(t, (&a));
+                Type*   _u2 = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
             }
         }
         return NULL;
     }
     if (((e-> kind )  ==  EX_MEMBER)) {
-        Type*   recv_ty = infer_expr(t, (e-> lhs ));
+        Type*   recv_ty = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
         if (((((recv_ty  !=  NULL)  &&  (t-> enforce_visibility ))  &&  ((e-> field )  !=  NULL))  &&  (!__glide_string_eq((e-> field ), "")))) {
-            Type*   stripped = strip_ptr(recv_ty);
+            Type*   stripped = ((Type*(*)(Type*))strip_ptr)(recv_ty);
             if ((((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_NAMED))  &&  HashMap_contains__string((t-> struct_origin ), (stripped-> name )))) {
                 const char*   owner = HashMap_get__string((t-> struct_origin ), (stripped-> name ));
                 if ((!__glide_string_eq(owner, (t-> current_origin )))) {
@@ -11421,12 +11481,12 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         return NULL;
     }
     if (((e-> kind )  ==  EX_INDEX)) {
-        Type*   _u4 = infer_expr(t, (e-> lhs ));
-        Type*   _u5 = infer_expr(t, (e-> rhs ));
+        Type*   _u4 = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
+        Type*   _u5 = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> rhs ));
         return NULL;
     }
     if (((e-> kind )  ==  EX_CAST)) {
-        Type*   _u6 = infer_expr(t, (e-> lhs ));
+        Type*   _u6 = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
         return (e-> cast_to );
     }
     if (((e-> kind )  ==  EX_PATH)) {
@@ -11439,7 +11499,7 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
             return NULL;
         }
         if (HashMap_contains__FnSig((t-> fns ), pname)) {
-            return ty_named("__fn__");
+            return ((Type*(*)(const char*))ty_named)("__fn__");
         }
         return NULL;
     }
@@ -11447,16 +11507,16 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         if (((e-> args )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                 Expr   a = Vector_get__Expr((e-> args ), i);
-                Type*   _u7 = infer_expr(t, (&a));
+                Type*   _u7 = ((Type*(*)(Typer*, Expr*))infer_expr)(t, (&a));
             }
         }
         return NULL;
     }
     if ((((e-> kind )  ==  EX_POSTINC)  ||  ((e-> kind )  ==  EX_POSTDEC))) {
-        return infer_expr(t, (e-> lhs ));
+        return ((Type*(*)(Typer*, Expr*))infer_expr)(t, (e-> lhs ));
     }
     if (((e-> kind )  ==  EX_STRUCT_LIT)) {
-        return ty_named((e-> str_val ));
+        return ((Type*(*)(const char*))ty_named)((e-> str_val ));
     }
     return NULL;
 }
@@ -11541,7 +11601,7 @@ bool   is_c_reserved (const char*   s) {
 }
 
 const char*   c_safe_ident (const char*   name) {
-    if (is_c_reserved(name)) {
+    if (((bool(*)(const char*))is_c_reserved)(name)) {
         return __glide_string_concat("_g_", name);
     }
     return name;
@@ -11626,46 +11686,46 @@ const char*   format_spec_for (Type*   t) {
 Type*   stdlib_method_ret (const char*   ty_name, const char*   method) {
     if (__glide_string_eq(ty_name, "string")) {
         if (__glide_string_eq(method, "len")) {
-            return ty_named("int");
+            return ((Type*(*)(const char*))ty_named)("int");
         }
         if (__glide_string_eq(method, "eq")) {
-            return ty_named("bool");
+            return ((Type*(*)(const char*))ty_named)("bool");
         }
         if (__glide_string_eq(method, "at")) {
-            return ty_named("char");
+            return ((Type*(*)(const char*))ty_named)("char");
         }
         if (__glide_string_eq(method, "concat")) {
-            return ty_named("string");
+            return ((Type*(*)(const char*))ty_named)("string");
         }
         if (__glide_string_eq(method, "substring")) {
-            return ty_named("string");
+            return ((Type*(*)(const char*))ty_named)("string");
         }
     }
     if (__glide_string_eq(ty_name, "char")) {
         if (__glide_string_eq(method, "to_int")) {
-            return ty_named("int");
+            return ((Type*(*)(const char*))ty_named)("int");
         }
         if (__glide_string_eq(method, "is_digit")) {
-            return ty_named("bool");
+            return ((Type*(*)(const char*))ty_named)("bool");
         }
         if (__glide_string_eq(method, "is_alpha")) {
-            return ty_named("bool");
+            return ((Type*(*)(const char*))ty_named)("bool");
         }
         if (__glide_string_eq(method, "to_string")) {
-            return ty_named("string");
+            return ((Type*(*)(const char*))ty_named)("string");
         }
     }
     if (__glide_string_eq(ty_name, "int")) {
         if (__glide_string_eq(method, "abs")) {
-            return ty_named("int");
+            return ((Type*(*)(const char*))ty_named)("int");
         }
         if (__glide_string_eq(method, "to_string")) {
-            return ty_named("string");
+            return ((Type*(*)(const char*))ty_named)("string");
         }
     }
     if (__glide_string_eq(ty_name, "bool")) {
         if (__glide_string_eq(method, "to_string")) {
-            return ty_named("string");
+            return ((Type*(*)(const char*))ty_named)("string");
         }
     }
     return NULL;
@@ -11678,7 +11738,7 @@ void   lift_anons_in_expr (CG*   g, Expr*   e) {
     if (((e-> kind )  ==  EX_FNEXPR)) {
         int   id = (g-> anon_count );
         ((g-> anon_count )  =  (id  +  1));
-        const char*   name = __glide_string_concat("__glide_anon_", int_to_str(id));
+        const char*   name = __glide_string_concat("__glide_anon_", ((const char*(*)(int64_t))int_to_str)(id));
         AnonFn   af = (( AnonFn ){. name  = name, . params  = (e-> fn_expr_params ), . ret_ty  = (e-> cast_to ), . body  = (e-> fn_expr_body )});
         Vector_push__AnonFn((g-> anon_fns ), af);
         ((e-> kind )  =  EX_IDENT);
@@ -11686,18 +11746,18 @@ void   lift_anons_in_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> lhs )  !=  NULL)) {
-        lift_anons_in_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (e-> lhs ));
     }
     if (((e-> rhs )  !=  NULL)) {
-        lift_anons_in_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (e-> rhs ));
     }
     if (((e-> operand )  !=  NULL)) {
-        lift_anons_in_expr(g, (e-> operand ));
+        ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (e-> operand ));
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            lift_anons_in_expr(g, (&a));
+            ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (&a));
         }
     }
 }
@@ -11707,42 +11767,42 @@ void   lift_anons_in_stmt (CG*   g, Stmt*   s) {
         return;
     }
     if (((s-> let_value )  !=  NULL)) {
-        lift_anons_in_expr(g, (s-> let_value ));
+        ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (s-> let_value ));
     }
     if (((s-> expr_value )  !=  NULL)) {
-        lift_anons_in_expr(g, (s-> expr_value ));
+        ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (s-> expr_value ));
     }
     if (((s-> cond )  !=  NULL)) {
-        lift_anons_in_expr(g, (s-> cond ));
+        ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (s-> cond ));
     }
     if (((s-> for_init )  !=  NULL)) {
-        lift_anons_in_stmt(g, (s-> for_init ));
+        ((void(*)(CG*, Stmt*))lift_anons_in_stmt)(g, (s-> for_init ));
     }
     if (((s-> for_step )  !=  NULL)) {
-        lift_anons_in_expr(g, (s-> for_step ));
+        ((void(*)(CG*, Expr*))lift_anons_in_expr)(g, (s-> for_step ));
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            lift_anons_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))lift_anons_in_stmt)(g, (&b));
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            lift_anons_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))lift_anons_in_stmt)(g, (&b));
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            lift_anons_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))lift_anons_in_stmt)(g, (&b));
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            lift_anons_in_stmt(g, (&m));
+            ((void(*)(CG*, Stmt*))lift_anons_in_stmt)(g, (&m));
         }
     }
 }
@@ -11752,40 +11812,40 @@ Type*   resolve_assoc_recursive (CG*   g, Type*   t) {
         return NULL;
     }
     if (((t-> kind )  ==  TY_ASSOC)) {
-        Type*   r = resolve_concrete_assoc(g, t);
+        Type*   r = ((Type*(*)(CG*, Type*))resolve_concrete_assoc)(g, t);
         if ((r  !=  NULL)) {
             return r;
         }
         return t;
     }
     if (((t-> kind )  ==  TY_OPTION)) {
-        return ty_option(resolve_assoc_recursive(g, (t-> inner )));
+        return ((Type*(*)(Type*))ty_option)(((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, (t-> inner )));
     }
     if (((t-> kind )  ==  TY_RESULT)) {
-        return ty_result(resolve_assoc_recursive(g, (t-> inner )));
+        return ((Type*(*)(Type*))ty_result)(((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, (t-> inner )));
     }
     if (((t-> kind )  ==  TY_OPT_RESULT)) {
-        return ty_optres(resolve_assoc_recursive(g, (t-> inner )));
+        return ((Type*(*)(Type*))ty_optres)(((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, (t-> inner )));
     }
     if (((t-> kind )  ==  TY_POINTER)) {
-        return ty_pointer(resolve_assoc_recursive(g, (t-> inner )));
+        return ((Type*(*)(Type*))ty_pointer)(((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, (t-> inner )));
     }
     if (((t-> kind )  ==  TY_BORROW)) {
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((p-> kind )  =  TY_BORROW);
-        ((p-> inner )  =  resolve_assoc_recursive(g, (t-> inner )));
+        ((p-> inner )  =  ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, (t-> inner )));
         return p;
     }
     if (((t-> kind )  ==  TY_BORROW_MUT)) {
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((p-> kind )  =  TY_BORROW_MUT);
-        ((p-> inner )  =  resolve_assoc_recursive(g, (t-> inner )));
+        ((p-> inner )  =  ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, (t-> inner )));
         return p;
     }
     if (((t-> kind )  ==  TY_SLICE)) {
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((p-> kind )  =  TY_SLICE);
-        ((p-> inner )  =  resolve_assoc_recursive(g, (t-> inner )));
+        ((p-> inner )  =  ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, (t-> inner )));
         return p;
     }
     return t;
@@ -11823,7 +11883,7 @@ Type*   resolve_concrete_assoc (CG*   g, Type*   t) {
             continue;
         }
         Type   resolved = HashMap_get__Type((g-> assoc_table ), k);
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((*p)  =  resolved);
         return p;
     }
@@ -11835,45 +11895,45 @@ void   collect_result_in_type (CG*   g, Type*   t) {
         return;
     }
     if ((((t-> kind )  ==  TY_RESULT)  &&  ((t-> inner )  !=  NULL))) {
-        const char*   m = mangle_type((t-> inner ));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((t-> inner ));
         for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
             Type   ex = Vector_get__Type((g-> result_types ), i);
-            if (__glide_string_eq(mangle_type((&ex)), m)) {
+            if (__glide_string_eq(((const char*(*)(Type*))mangle_type)((&ex)), m)) {
                 return;
             }
         }
         Vector_push__Type((g-> result_types ), (*(t-> inner )));
     }
     if ((((t-> kind )  ==  TY_OPTION)  &&  ((t-> inner )  !=  NULL))) {
-        const char*   m = mangle_type((t-> inner ));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((t-> inner ));
         for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
             Type   ex = Vector_get__Type((g-> option_types ), i);
-            if (__glide_string_eq(mangle_type((&ex)), m)) {
+            if (__glide_string_eq(((const char*(*)(Type*))mangle_type)((&ex)), m)) {
                 return;
             }
         }
         Vector_push__Type((g-> option_types ), (*(t-> inner )));
     }
     if ((((t-> kind )  ==  TY_OPT_RESULT)  &&  ((t-> inner )  !=  NULL))) {
-        const char*   m = mangle_type((t-> inner ));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((t-> inner ));
         for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
             Type   ex = Vector_get__Type((g-> optres_types ), i);
-            if (__glide_string_eq(mangle_type((&ex)), m)) {
+            if (__glide_string_eq(((const char*(*)(Type*))mangle_type)((&ex)), m)) {
                 return;
             }
         }
         Vector_push__Type((g-> optres_types ), (*(t-> inner )));
     }
     if (((t-> inner )  !=  NULL)) {
-        collect_result_in_type(g, (t-> inner ));
+        ((void(*)(CG*, Type*))collect_result_in_type)(g, (t-> inner ));
     }
     if (((t-> fnptr_ret )  !=  NULL)) {
-        collect_result_in_type(g, (t-> fnptr_ret ));
+        ((void(*)(CG*, Type*))collect_result_in_type)(g, (t-> fnptr_ret ));
     }
     if (((t-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
             Type   a = Vector_get__Type((t-> args ), i);
-            collect_result_in_type(g, (&a));
+            ((void(*)(CG*, Type*))collect_result_in_type)(g, (&a));
         }
     }
 }
@@ -11883,21 +11943,21 @@ void   collect_result_in_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> cast_to )  !=  NULL)) {
-        collect_result_in_type(g, (e-> cast_to ));
+        ((void(*)(CG*, Type*))collect_result_in_type)(g, (e-> cast_to ));
     }
     if (((e-> lhs )  !=  NULL)) {
-        collect_result_in_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (e-> lhs ));
     }
     if (((e-> rhs )  !=  NULL)) {
-        collect_result_in_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (e-> rhs ));
     }
     if (((e-> operand )  !=  NULL)) {
-        collect_result_in_expr(g, (e-> operand ));
+        ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (e-> operand ));
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            collect_result_in_expr(g, (&a));
+            ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (&a));
         }
     }
 }
@@ -11910,54 +11970,54 @@ void   collect_result_in_stmt (CG*   g, Stmt*   s) {
         return;
     }
     if (((s-> let_ty )  !=  NULL)) {
-        collect_result_in_type(g, (s-> let_ty ));
+        ((void(*)(CG*, Type*))collect_result_in_type)(g, (s-> let_ty ));
     }
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        collect_result_in_type(g, (s-> fn_ret_ty ));
+        ((void(*)(CG*, Type*))collect_result_in_type)(g, (s-> fn_ret_ty ));
     }
     if (((s-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            collect_result_in_type(g, (p. ty ));
+            ((void(*)(CG*, Type*))collect_result_in_type)(g, (p. ty ));
         }
     }
     if (((s-> let_value )  !=  NULL)) {
-        collect_result_in_expr(g, (s-> let_value ));
+        ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (s-> let_value ));
     }
     if (((s-> expr_value )  !=  NULL)) {
-        collect_result_in_expr(g, (s-> expr_value ));
+        ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (s-> expr_value ));
     }
     if (((s-> cond )  !=  NULL)) {
-        collect_result_in_expr(g, (s-> cond ));
+        ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (s-> cond ));
     }
     if (((s-> for_step )  !=  NULL)) {
-        collect_result_in_expr(g, (s-> for_step ));
+        ((void(*)(CG*, Expr*))collect_result_in_expr)(g, (s-> for_step ));
     }
     if (((s-> for_init )  !=  NULL)) {
-        collect_result_in_stmt(g, (s-> for_init ));
+        ((void(*)(CG*, Stmt*))collect_result_in_stmt)(g, (s-> for_init ));
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            collect_result_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_result_in_stmt)(g, (&b));
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            collect_result_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_result_in_stmt)(g, (&b));
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            collect_result_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_result_in_stmt)(g, (&b));
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   mm = Vector_get__Stmt((s-> impl_methods ), i);
-            collect_result_in_stmt(g, (&mm));
+            ((void(*)(CG*, Stmt*))collect_result_in_stmt)(g, (&mm));
         }
     }
 }
@@ -11969,7 +12029,7 @@ void   emit_result_runtime (CG*   g) {
     const char*   tmpl = "#ifndef __GLIDE_RESULT_@M@_GUARD\n#define __GLIDE_RESULT_@M@_GUARD\ntypedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { @TC@ z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }\n#endif\n";
     for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
         Type   t = Vector_get__Type((g-> result_types ), i);
-        const char*   m = mangle_type((&t));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((&t));
         const char*   dedup_key = __glide_string_concat("__rt_result_emit_", m);
         if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
             continue;
@@ -11984,9 +12044,9 @@ void   emit_result_runtime (CG*   g) {
             printf("%s\n", "#endif");
             continue;
         }
-        const char*   tc = type_to_c((&t));
-        const char*   s1 = _cg_replace(tmpl, "@M@", m);
-        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        const char*   tc = ((const char*(*)(Type*))type_to_c)((&t));
+        const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@M@", m);
+        const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@TC@", tc);
         printf("%s", s2);
     }
     printf("%s\n", "");
@@ -11999,15 +12059,15 @@ void   emit_option_runtime (CG*   g) {
     const char*   tmpl = "#ifndef __GLIDE_OPTION_@M@_GUARD\n#define __GLIDE_OPTION_@M@_GUARD\ntypedef struct __glide_option_@M@_t { int has; @TC@ val; } __glide_option_@M@_t;\nstatic __glide_option_@M@_t __glide_some_@M@(@TC@ v) { __glide_option_@M@_t o; o.has = 1; o.val = v; return o; }\nstatic __glide_option_@M@_t __glide_none_@M@(void) { __glide_option_@M@_t o; o.has = 0; return o; }\n#endif\n";
     for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
         Type   t = Vector_get__Type((g-> option_types ), i);
-        const char*   m = mangle_type((&t));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((&t));
         const char*   dedup_key = __glide_string_concat("__rt_option_emit_", m);
         if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
             continue;
         }
         HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
-        const char*   tc = type_to_c((&t));
-        const char*   s1 = _cg_replace(tmpl, "@M@", m);
-        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        const char*   tc = ((const char*(*)(Type*))type_to_c)((&t));
+        const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@M@", m);
+        const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@TC@", tc);
         printf("%s", s2);
     }
     printf("%s\n", "");
@@ -12020,15 +12080,15 @@ void   emit_optres_runtime (CG*   g) {
     const char*   tmpl = "#ifndef __GLIDE_OPTRES_@M@_GUARD\n#define __GLIDE_OPTRES_@M@_GUARD\n/* tag: 0=Some, 1=None, 2=Err */\ntypedef struct __glide_optres_@M@_t { int tag; @TC@ val; const char* err; } __glide_optres_@M@_t;\nstatic __glide_optres_@M@_t __glide_optres_some_@M@(@TC@ v) { __glide_optres_@M@_t r; r.tag = 0; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_none_@M@(void) { __glide_optres_@M@_t r; r.tag = 1; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_err_@M@(const char* msg) { __glide_optres_@M@_t r; r.tag = 2; r.err = msg; return r; }\n#endif\n";
     for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
         Type   t = Vector_get__Type((g-> optres_types ), i);
-        const char*   m = mangle_type((&t));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((&t));
         const char*   dedup_key = __glide_string_concat("__rt_optres_emit_", m);
         if (HashMap_contains__string((g-> module_aliases ), dedup_key)) {
             continue;
         }
         HashMap_insert__string((g-> module_aliases ), dedup_key, "1");
-        const char*   tc = type_to_c((&t));
-        const char*   s1 = _cg_replace(tmpl, "@M@", m);
-        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        const char*   tc = ((const char*(*)(Type*))type_to_c)((&t));
+        const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@M@", m);
+        const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@TC@", tc);
         printf("%s", s2);
     }
     printf("%s\n", "");
@@ -12040,26 +12100,26 @@ void   collect_chan_in_type (CG*   g, Type*   t) {
     }
     if ((((((t-> kind )  ==  TY_GENERIC)  &&  __glide_string_eq((t-> name ), "chan"))  &&  ((t-> args )  !=  NULL))  &&  (Vector_len__Type((t-> args ))  >  0))) {
         Type   inner = Vector_get__Type((t-> args ), 0);
-        const char*   m = mangle_type((&inner));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((&inner));
         int   n = Vector_len__Type((g-> chan_types ));
         for (int   i = 0; (i  <  n); i++) {
             Type   existing = Vector_get__Type((g-> chan_types ), i);
-            if (__glide_string_eq(mangle_type((&existing)), m)) {
+            if (__glide_string_eq(((const char*(*)(Type*))mangle_type)((&existing)), m)) {
                 return;
             }
         }
         Vector_push__Type((g-> chan_types ), inner);
     }
     if (((t-> inner )  !=  NULL)) {
-        collect_chan_in_type(g, (t-> inner ));
+        ((void(*)(CG*, Type*))collect_chan_in_type)(g, (t-> inner ));
     }
     if (((t-> fnptr_ret )  !=  NULL)) {
-        collect_chan_in_type(g, (t-> fnptr_ret ));
+        ((void(*)(CG*, Type*))collect_chan_in_type)(g, (t-> fnptr_ret ));
     }
     if (((t-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
             Type   a = Vector_get__Type((t-> args ), i);
-            collect_chan_in_type(g, (&a));
+            ((void(*)(CG*, Type*))collect_chan_in_type)(g, (&a));
         }
     }
 }
@@ -12069,21 +12129,21 @@ void   collect_chan_in_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> cast_to )  !=  NULL)) {
-        collect_chan_in_type(g, (e-> cast_to ));
+        ((void(*)(CG*, Type*))collect_chan_in_type)(g, (e-> cast_to ));
     }
     if (((e-> lhs )  !=  NULL)) {
-        collect_chan_in_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (e-> lhs ));
     }
     if (((e-> rhs )  !=  NULL)) {
-        collect_chan_in_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (e-> rhs ));
     }
     if (((e-> operand )  !=  NULL)) {
-        collect_chan_in_expr(g, (e-> operand ));
+        ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (e-> operand ));
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            collect_chan_in_expr(g, (&a));
+            ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (&a));
         }
     }
 }
@@ -12098,15 +12158,15 @@ void   collect_dyn_in_type (CG*   g, Type*   t) {
         }
     }
     if (((t-> inner )  !=  NULL)) {
-        collect_dyn_in_type(g, (t-> inner ));
+        ((void(*)(CG*, Type*))collect_dyn_in_type)(g, (t-> inner ));
     }
     if (((t-> fnptr_ret )  !=  NULL)) {
-        collect_dyn_in_type(g, (t-> fnptr_ret ));
+        ((void(*)(CG*, Type*))collect_dyn_in_type)(g, (t-> fnptr_ret ));
     }
     if (((t-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
             Type   a = Vector_get__Type((t-> args ), i);
-            collect_dyn_in_type(g, (&a));
+            ((void(*)(CG*, Type*))collect_dyn_in_type)(g, (&a));
         }
     }
 }
@@ -12116,21 +12176,21 @@ void   collect_dyn_in_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> cast_to )  !=  NULL)) {
-        collect_dyn_in_type(g, (e-> cast_to ));
+        ((void(*)(CG*, Type*))collect_dyn_in_type)(g, (e-> cast_to ));
     }
     if (((e-> lhs )  !=  NULL)) {
-        collect_dyn_in_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))collect_dyn_in_expr)(g, (e-> lhs ));
     }
     if (((e-> rhs )  !=  NULL)) {
-        collect_dyn_in_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))collect_dyn_in_expr)(g, (e-> rhs ));
     }
     if (((e-> operand )  !=  NULL)) {
-        collect_dyn_in_expr(g, (e-> operand ));
+        ((void(*)(CG*, Expr*))collect_dyn_in_expr)(g, (e-> operand ));
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            collect_dyn_in_expr(g, (&a));
+            ((void(*)(CG*, Expr*))collect_dyn_in_expr)(g, (&a));
         }
     }
 }
@@ -12140,50 +12200,50 @@ void   collect_dyn_in_stmt (CG*   g, Stmt*   s) {
         return;
     }
     if (((s-> let_ty )  !=  NULL)) {
-        collect_dyn_in_type(g, (s-> let_ty ));
+        ((void(*)(CG*, Type*))collect_dyn_in_type)(g, (s-> let_ty ));
     }
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        collect_dyn_in_type(g, (s-> fn_ret_ty ));
+        ((void(*)(CG*, Type*))collect_dyn_in_type)(g, (s-> fn_ret_ty ));
     }
     if (((s-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
             Param   p = Vector_get__Param((s-> fn_params ), i);
             if (((p. ty )  !=  NULL)) {
-                collect_dyn_in_type(g, (p. ty ));
+                ((void(*)(CG*, Type*))collect_dyn_in_type)(g, (p. ty ));
             }
         }
     }
     if (((s-> let_value )  !=  NULL)) {
-        collect_dyn_in_expr(g, (s-> let_value ));
+        ((void(*)(CG*, Expr*))collect_dyn_in_expr)(g, (s-> let_value ));
     }
     if (((s-> expr_value )  !=  NULL)) {
-        collect_dyn_in_expr(g, (s-> expr_value ));
+        ((void(*)(CG*, Expr*))collect_dyn_in_expr)(g, (s-> expr_value ));
     }
     if (((s-> cond )  !=  NULL)) {
-        collect_dyn_in_expr(g, (s-> cond ));
+        ((void(*)(CG*, Expr*))collect_dyn_in_expr)(g, (s-> cond ));
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            collect_dyn_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_dyn_in_stmt)(g, (&b));
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            collect_dyn_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_dyn_in_stmt)(g, (&b));
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            collect_dyn_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_dyn_in_stmt)(g, (&b));
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            collect_dyn_in_stmt(g, (&m));
+            ((void(*)(CG*, Stmt*))collect_dyn_in_stmt)(g, (&m));
         }
     }
 }
@@ -12192,7 +12252,7 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
     if (((g-> dyn_traits )  ==  NULL)) {
         return;
     }
-    HashMap__Stmt*   traits = HashMap_new__Stmt();
+    HashMap__Stmt*   traits = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((((s. kind )  ==  ST_TRAIT)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))) {
@@ -12218,12 +12278,12 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
                 if ((((m. name )  ==  NULL)  ||  __glide_string_eq((m. name ), ""))) {
                     continue;
                 }
-                const char*   ret_ty = type_to_c((m. fn_ret_ty ));
+                const char*   ret_ty = ((const char*(*)(Type*))type_to_c)((m. fn_ret_ty ));
                 printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", ret_ty), " (*"), (m. name )), ")(void* self"));
                 if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
                     for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                         Param   p = Vector_get__Param((m. fn_params ), j);
-                        printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), c_safe_ident((p. name ))));
+                        printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", ((const char*(*)(Type*))type_to_c)((p. ty ))), " "), ((const char*(*)(const char*))c_safe_ident)((p. name ))));
                     }
                 }
                 printf("%s\n", ");");
@@ -12263,7 +12323,7 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
             if ((((m. name )  ==  NULL)  ||  __glide_string_eq((m. name ), ""))) {
                 continue;
             }
-            const char*   ret_ty = type_to_c((m. fn_ret_ty ));
+            const char*   ret_ty = ((const char*(*)(Type*))type_to_c)((m. fn_ret_ty ));
             printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(ret_ty, " "), type_name), "_"), (m. name )), "("));
             if (((m. fn_params )  !=  NULL)) {
                 for (int   j = 0; (j  <  Vector_len__Param((m. fn_params ))); j++) {
@@ -12271,7 +12331,7 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
                         printf("%s", ", ");
                     }
                     Param   p = Vector_get__Param((m. fn_params ), j);
-                    printf("%s", type_to_c((p. ty )));
+                    printf("%s", ((const char*(*)(Type*))type_to_c)((p. ty )));
                 }
             }
             printf("%s\n", ");");
@@ -12281,12 +12341,12 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
             if ((((m. name )  ==  NULL)  ||  __glide_string_eq((m. name ), ""))) {
                 continue;
             }
-            const char*   ret_ty = type_to_c((m. fn_ret_ty ));
+            const char*   ret_ty = ((const char*(*)(Type*))type_to_c)((m. fn_ret_ty ));
             printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("static ", ret_ty), " __glide_"), type_name), "_as_"), trait_name), "__"), (m. name )), "_thunk(void* self_p"));
             if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
                 for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                     Param   p = Vector_get__Param((m. fn_params ), j);
-                    printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", type_to_c((p. ty ))), " "), c_safe_ident((p. name ))));
+                    printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(", ", ((const char*(*)(Type*))type_to_c)((p. ty ))), " "), ((const char*(*)(const char*))c_safe_ident)((p. name ))));
                 }
             }
             printf("%s\n", ") {");
@@ -12299,7 +12359,7 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
             if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
                 for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
                     Param   p = Vector_get__Param((m. fn_params ), j);
-                    printf("%s", __glide_string_concat(", ", c_safe_ident((p. name ))));
+                    printf("%s", __glide_string_concat(", ", ((const char*(*)(const char*))c_safe_ident)((p. name ))));
                 }
             }
             printf("%s\n", ");");
@@ -12328,60 +12388,60 @@ void   collect_chan_in_stmt (CG*   g, Stmt*   s) {
         return;
     }
     if (((s-> let_ty )  !=  NULL)) {
-        collect_chan_in_type(g, (s-> let_ty ));
+        ((void(*)(CG*, Type*))collect_chan_in_type)(g, (s-> let_ty ));
     }
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        collect_chan_in_type(g, (s-> fn_ret_ty ));
+        ((void(*)(CG*, Type*))collect_chan_in_type)(g, (s-> fn_ret_ty ));
     }
     if (((s-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            collect_chan_in_type(g, (p. ty ));
+            ((void(*)(CG*, Type*))collect_chan_in_type)(g, (p. ty ));
         }
     }
     if (((s-> struct_fields )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
             Field   f = Vector_get__Field((s-> struct_fields ), i);
-            collect_chan_in_type(g, (f. ty ));
+            ((void(*)(CG*, Type*))collect_chan_in_type)(g, (f. ty ));
         }
     }
     if (((s-> let_value )  !=  NULL)) {
-        collect_chan_in_expr(g, (s-> let_value ));
+        ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (s-> let_value ));
     }
     if (((s-> expr_value )  !=  NULL)) {
-        collect_chan_in_expr(g, (s-> expr_value ));
+        ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (s-> expr_value ));
     }
     if (((s-> cond )  !=  NULL)) {
-        collect_chan_in_expr(g, (s-> cond ));
+        ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (s-> cond ));
     }
     if (((s-> for_step )  !=  NULL)) {
-        collect_chan_in_expr(g, (s-> for_step ));
+        ((void(*)(CG*, Expr*))collect_chan_in_expr)(g, (s-> for_step ));
     }
     if (((s-> for_init )  !=  NULL)) {
-        collect_chan_in_stmt(g, (s-> for_init ));
+        ((void(*)(CG*, Stmt*))collect_chan_in_stmt)(g, (s-> for_init ));
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            collect_chan_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_chan_in_stmt)(g, (&b));
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            collect_chan_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_chan_in_stmt)(g, (&b));
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            collect_chan_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))collect_chan_in_stmt)(g, (&b));
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            collect_chan_in_stmt(g, (&m));
+            ((void(*)(CG*, Stmt*))collect_chan_in_stmt)(g, (&m));
         }
     }
 }
@@ -12396,17 +12456,17 @@ void   emit_chan_runtime (CG*   g) {
     for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
         Type   t = Vector_get__Type((g-> chan_types ), i);
         if ((((t. kind )  ==  TY_GENERIC)  &&  HashMap_contains__Stmt((g-> generic_structs ), (t. name )))) {
-            const char*   mangled = mangle_generic((t. name ), (t. args ));
+            const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t. name ), (t. args ));
             if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
                 HashMap_insert__bool((g-> emitted_monos ), mangled, true);
                 printf("%s %s %s %s %s\n", "typedef struct ", mangled, " ", mangled, ";");
-                emit_struct_mono(g, (&t));
+                ((void(*)(CG*, Type*))emit_struct_mono)(g, (&t));
             }
         }
     }
     for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
         Type   t = Vector_get__Type((g-> chan_types ), i);
-        const char*   m = mangle_type((&t));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((&t));
         const char*   st = __glide_string_concat(__glide_string_concat("__glide_chan_", m), "_t");
         printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", st), " "), st), ";"));
     }
@@ -12414,10 +12474,10 @@ void   emit_chan_runtime (CG*   g) {
     const char*   tmpl = "typedef struct __glide_chan_cell_@M@ {\n    atomic_size_t seq;\n    @TC@ data;\n    /* Pad to 64 B so adjacent cells don't share a cache line. */\n    char _pad[64 - sizeof(atomic_size_t) - sizeof(@TC@)];\n} __attribute__((aligned(64))) __glide_chan_cell_@M@;\n\nstruct __glide_chan_@M@_t {\n    /* Lock-free ring */\n    __glide_chan_cell_@M@* cells;\n    size_t mask;             /* cap - 1, cap is power of two */\n    char _pad1[48];          /* push enq_pos to its own line */\n    atomic_size_t enq_pos;\n    char _pad2[56];\n    atomic_size_t deq_pos;\n    char _pad3[56];\n    /* Slow path: blocking + close */\n    atomic_int closed;\n    pthread_mutex_t mu;\n    pthread_cond_t  not_empty;\n    pthread_cond_t  not_full;\n    /* counts of cv_waiters so fast-path can skip mutex+signal when 0 */\n    atomic_int cv_recv_waiters;\n    atomic_int cv_send_waiters;\n    /* coro waiter lists, walked only under mu */\n    struct __glide_task* coro_recv_waiters;\n    struct __glide_task* coro_send_waiters;\n};\n\nstatic __glide_chan_@M@_t* __glide_make_chan_@M@(int cap) {\n    __glide_chan_@M@_t* c = (__glide_chan_@M@_t*)malloc(sizeof(__glide_chan_@M@_t));\n    if (cap < 1) cap = 1;\n    /* Round capacity up to next power of two for the bitmask. */\n    size_t pow2 = 1;\n    while (pow2 < (size_t)cap) pow2 <<= 1;\n    c->mask = pow2 - 1;\n    c->cells = (__glide_chan_cell_@M@*)calloc(pow2, sizeof(__glide_chan_cell_@M@));\n    for (size_t i = 0; i < pow2; i++) {\n        atomic_store_explicit(&c->cells[i].seq, i, memory_order_relaxed);\n    }\n    atomic_store(&c->enq_pos, 0);\n    atomic_store(&c->deq_pos, 0);\n    atomic_store(&c->closed, 0);\n    pthread_mutex_init(&c->mu, NULL);\n    pthread_cond_init(&c->not_empty, NULL);\n    pthread_cond_init(&c->not_full, NULL);\n    atomic_store(&c->cv_recv_waiters, 0);\n    atomic_store(&c->cv_send_waiters, 0);\n    c->coro_recv_waiters = NULL;\n    c->coro_send_waiters = NULL;\n    return c;\n}\n\nstatic int __glide_try_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {\n    __glide_chan_cell_@M@* cell;\n    size_t pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);\n    for (;;) {\n        cell = &c->cells[pos & c->mask];\n        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);\n        intptr_t diff = (intptr_t)seq - (intptr_t)pos;\n        if (diff == 0) {\n            if (atomic_compare_exchange_weak_explicit(\n                    &c->enq_pos, &pos, pos + 1,\n                    memory_order_relaxed, memory_order_relaxed)) break;\n        } else if (diff < 0) {\n            return 0;  /* buffer full */\n        } else {\n            pos = atomic_load_explicit(&c->enq_pos, memory_order_relaxed);\n        }\n    }\n    cell->data = v;\n    atomic_store_explicit(&cell->seq, pos + 1, memory_order_release);\n    return 1;\n}\n\nstatic int __glide_try_recv_@M@(__glide_chan_@M@_t* c, @TC@* out) {\n    __glide_chan_cell_@M@* cell;\n    size_t pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);\n    for (;;) {\n        cell = &c->cells[pos & c->mask];\n        size_t seq = atomic_load_explicit(&cell->seq, memory_order_acquire);\n        intptr_t diff = (intptr_t)seq - (intptr_t)(pos + 1);\n        if (diff == 0) {\n            if (atomic_compare_exchange_weak_explicit(\n                    &c->deq_pos, &pos, pos + 1,\n                    memory_order_relaxed, memory_order_relaxed)) break;\n        } else if (diff < 0) {\n            return 0;  /* buffer empty */\n        } else {\n            pos = atomic_load_explicit(&c->deq_pos, memory_order_relaxed);\n        }\n    }\n    *out = cell->data;\n    atomic_store_explicit(&cell->seq, pos + c->mask + 1, memory_order_release);\n    return 1;\n}\n\n/* Pop one parker off the wait list under chan->mu, then drop the lock BEFORE\n   handing the task back to its worker queue. q_push_to has its own spinlock and\n   can stall for tens of ns; holding chan->mu over that serializes senders/recvers\n   needlessly. */\nstatic void __glide_wake_recv_@M@(__glide_chan_@M@_t* c) {\n    if (c->coro_recv_waiters == NULL && atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) == 0) return;\n    __glide_task* unparked = NULL;\n    int signal_cv = 0;\n    pthread_mutex_lock(&c->mu);\n    if (c->coro_recv_waiters) {\n        unparked = c->coro_recv_waiters;\n        c->coro_recv_waiters = unparked->wait_next;\n        unparked->wait_next = NULL;\n        unparked->state = 0;\n    }\n    if (atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) > 0) signal_cv = 1;\n    if (signal_cv) pthread_cond_signal(&c->not_empty);\n    pthread_mutex_unlock(&c->mu);\n    if (unparked) __glide_q_push_to(unparked->home_worker, unparked);\n}\nstatic void __glide_wake_send_@M@(__glide_chan_@M@_t* c) {\n    if (c->coro_send_waiters == NULL && atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) == 0) return;\n    __glide_task* unparked = NULL;\n    int signal_cv = 0;\n    pthread_mutex_lock(&c->mu);\n    if (c->coro_send_waiters) {\n        unparked = c->coro_send_waiters;\n        c->coro_send_waiters = unparked->wait_next;\n        unparked->wait_next = NULL;\n        unparked->state = 0;\n    }\n    if (atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) > 0) signal_cv = 1;\n    if (signal_cv) pthread_cond_signal(&c->not_full);\n    pthread_mutex_unlock(&c->mu);\n    if (unparked) __glide_q_push_to(unparked->home_worker, unparked);\n}\n\nstatic void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {\n    if (atomic_load_explicit(&c->closed, memory_order_acquire)) return;\n    /* Fast path: lock-free push. */\n    if (__glide_try_send_@M@(c, v)) {\n        __glide_wake_recv_@M@(c);\n        return;\n    }\n    /* Brief spin — consumer may free a slot any nanosecond. */\n    for (int s = 0; s < 256; s++) {\n#if defined(__x86_64__) || defined(_M_X64)\n        __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        if (__glide_try_send_@M@(c, v)) {\n            __glide_wake_recv_@M@(c);\n            return;\n        }\n    }\n    /* Slow path: still full. Take mutex, retry, then block. */\n    pthread_mutex_lock(&c->mu);\n    for (;;) {\n        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;\n        if (__glide_try_send_@M@(c, v)) {\n            pthread_mutex_unlock(&c->mu);\n            __glide_wake_recv_@M@(c);\n            return;\n        }\n        if (__glide_park(&c->mu, &c->coro_send_waiters)) {\n            pthread_mutex_lock(&c->mu);\n        } else {\n            atomic_fetch_add_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);\n            pthread_cond_wait(&c->not_full, &c->mu);\n            atomic_fetch_sub_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);\n        }\n    }\n    pthread_mutex_unlock(&c->mu);\n}\n\nstatic @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {\n    @TC@ v;\n    if (__glide_try_recv_@M@(c, &v)) {\n        __glide_wake_send_@M@(c);\n        return v;\n    }\n    /* Brief spin before paying cv_wait cost — producer may be 1 cell behind. */\n    for (int s = 0; s < 256; s++) {\n#if defined(__x86_64__) || defined(_M_X64)\n        __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        if (__glide_try_recv_@M@(c, &v)) {\n            __glide_wake_send_@M@(c);\n            return v;\n        }\n    }\n    pthread_mutex_lock(&c->mu);\n    for (;;) {\n        if (__glide_try_recv_@M@(c, &v)) {\n            pthread_mutex_unlock(&c->mu);\n            __glide_wake_send_@M@(c);\n            return v;\n        }\n        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;\n        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {\n            pthread_mutex_lock(&c->mu);\n        } else {\n            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n            pthread_cond_wait(&c->not_empty, &c->mu);\n            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n        }\n    }\n    pthread_mutex_unlock(&c->mu);\n    memset(&v, 0, sizeof(v));\n    return v;\n}\n\nstatic int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {\n    if (__glide_try_recv_@M@(c, out)) {\n        __glide_wake_send_@M@(c);\n        return 1;\n    }\n    /* Spin briefly before cv_wait. */\n    for (int s = 0; s < 256; s++) {\n#if defined(__x86_64__) || defined(_M_X64)\n        __asm__ __volatile__(\"pause\" ::: \"memory\");\n#endif\n        if (__glide_try_recv_@M@(c, out)) {\n            __glide_wake_send_@M@(c);\n            return 1;\n        }\n    }\n    pthread_mutex_lock(&c->mu);\n    for (;;) {\n        if (__glide_try_recv_@M@(c, out)) {\n            pthread_mutex_unlock(&c->mu);\n            __glide_wake_send_@M@(c);\n            return 1;\n        }\n        if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;\n        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {\n            pthread_mutex_lock(&c->mu);\n        } else {\n            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n            pthread_cond_wait(&c->not_empty, &c->mu);\n            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);\n        }\n    }\n    pthread_mutex_unlock(&c->mu);\n    return 0;\n}\n\nstatic void __glide_close_@M@(__glide_chan_@M@_t* c) {\n    pthread_mutex_lock(&c->mu);\n    atomic_store_explicit(&c->closed, 1, memory_order_release);\n    /* Drain coro waiter lists. */\n    while (c->coro_send_waiters) __glide_unpark_one(&c->coro_send_waiters);\n    while (c->coro_recv_waiters) __glide_unpark_one(&c->coro_recv_waiters);\n    /* Wake all cv waiters. */\n    pthread_cond_broadcast(&c->not_empty);\n    pthread_cond_broadcast(&c->not_full);\n    pthread_mutex_unlock(&c->mu);\n}\n";
     for (int   i = 0; (i  <  Vector_len__Type((g-> chan_types ))); i++) {
         Type   t = Vector_get__Type((g-> chan_types ), i);
-        const char*   m = mangle_type((&t));
-        const char*   tc = type_to_c((&t));
-        const char*   s1 = _cg_replace(tmpl, "@M@", m);
-        const char*   s2 = _cg_replace(s1, "@TC@", tc);
+        const char*   m = ((const char*(*)(Type*))mangle_type)((&t));
+        const char*   tc = ((const char*(*)(Type*))type_to_c)((&t));
+        const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@M@", m);
+        const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@TC@", tc);
         printf("%s", s2);
         printf("%s\n", "");
     }
@@ -12446,34 +12506,34 @@ void   pre_emit_spawn_stubs_in_stmt (CG*   g, Stmt*   s) {
     if (((s-> kind )  ==  ST_SPAWN)) {
         int   id = (g-> spawn_count );
         ((g-> spawn_count )  =  (id  +  1));
-        emit_spawn_stub(g, (s-> expr_value ), id);
+        ((void(*)(CG*, Expr*, int))emit_spawn_stub)(g, (s-> expr_value ), id);
         return;
     }
     if (((s-> for_init )  !=  NULL)) {
-        pre_emit_spawn_stubs_in_stmt(g, (s-> for_init ));
+        ((void(*)(CG*, Stmt*))pre_emit_spawn_stubs_in_stmt)(g, (s-> for_init ));
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            pre_emit_spawn_stubs_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))pre_emit_spawn_stubs_in_stmt)(g, (&b));
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            pre_emit_spawn_stubs_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))pre_emit_spawn_stubs_in_stmt)(g, (&b));
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            pre_emit_spawn_stubs_in_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))pre_emit_spawn_stubs_in_stmt)(g, (&b));
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            pre_emit_spawn_stubs_in_stmt(g, (&m));
+            ((void(*)(CG*, Stmt*))pre_emit_spawn_stubs_in_stmt)(g, (&m));
         }
     }
 }
@@ -12494,11 +12554,11 @@ void   emit_spawn_stub (CG*   g, Expr*   call, int   id) {
         return;
     }
     int   n = Vector_len__Param((fnstmt. fn_params ));
-    const char*   ids = int_to_str(id);
+    const char*   ids = ((const char*(*)(int64_t))int_to_str)(id);
     if ((n  ==  0)) {
         const char*   tmpl = "static void* __glide_spawn_stub_@ID@(void* __raw) {\n    (void)__raw;\n    @FN_NAME@();\n    return NULL;\n}\n";
-        const char*   s1 = _cg_replace(tmpl, "@ID@", ids);
-        const char*   s2 = _cg_replace(s1, "@FN_NAME@", fn_name);
+        const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@ID@", ids);
+        const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@FN_NAME@", fn_name);
         printf("%s", s2);
         return;
     }
@@ -12507,19 +12567,19 @@ void   emit_spawn_stub (CG*   g, Expr*   call, int   id) {
     const char*   call_args = "";
     for (int   i = 0; (i  <  n); i++) {
         Param   p = Vector_get__Param((fnstmt. fn_params ), i);
-        const char*   ix = int_to_str(i);
-        (fields  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(fields, "    "), type_to_c((p. ty ))), " a"), ix), ";\n"));
+        const char*   ix = ((const char*(*)(int64_t))int_to_str)(i);
+        (fields  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(fields, "    "), ((const char*(*)(Type*))type_to_c)((p. ty ))), " a"), ix), ";\n"));
         if ((i  >  0)) {
             (call_args  =  __glide_string_concat(call_args, ", "));
         }
         (call_args  =  __glide_string_concat(__glide_string_concat(call_args, "__args->a"), ix));
     }
     const char*   tmpl = "typedef struct @AN@ {\n@FIELDS@} @AN@;\nstatic void* __glide_spawn_stub_@ID@(void* __raw) {\n    @AN@* __args = (@AN@*)__raw;\n    @FN_NAME@(@CALL_ARGS@);\n    free(__raw);\n    return NULL;\n}\n";
-    const char*   s1 = _cg_replace(tmpl, "@AN@", an);
-    const char*   s2 = _cg_replace(s1, "@ID@", ids);
-    const char*   s3 = _cg_replace(s2, "@FN_NAME@", fn_name);
-    const char*   s4 = _cg_replace(s3, "@FIELDS@", fields);
-    const char*   s5 = _cg_replace(s4, "@CALL_ARGS@", call_args);
+    const char*   s1 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(tmpl, "@AN@", an);
+    const char*   s2 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s1, "@ID@", ids);
+    const char*   s3 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s2, "@FN_NAME@", fn_name);
+    const char*   s4 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s3, "@FIELDS@", fields);
+    const char*   s5 = ((const char*(*)(const char*, const char*, const char*))_cg_replace)(s4, "@CALL_ARGS@", call_args);
     printf("%s", s5);
 }
 
@@ -12554,35 +12614,35 @@ void   emit_stdlib_runtime (void) {
 }
 
 CG*   CG_new (void) {
-    CG*   g = (( CG* )malloc(sizeof( CG )));
-    HashMap__Type*   s = HashMap_new__Type();
-    HashMap__Stmt*   gs = HashMap_new__Stmt();
-    HashMap__Stmt*   gf = HashMap_new__Stmt();
-    HashMap__Stmt*   st = HashMap_new__Stmt();
-    HashMap__Stmt*   en = HashMap_new__Stmt();
-    HashMap__Stmt*   fnm = HashMap_new__Stmt();
-    HashMap__bool*   em = HashMap_new__bool();
-    Vector__FnMonoEntry*   q = Vector_new__FnMonoEntry();
-    Vector__Expr*   ds = Vector_new__Expr();
+    CG*   g = (( CG* )((void*(*)(size_t))malloc)(sizeof( CG )));
+    HashMap__Type*   s = ((HashMap__Type*(*)(void))HashMap_new__Type)();
+    HashMap__Stmt*   gs = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
+    HashMap__Stmt*   gf = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
+    HashMap__Stmt*   st = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
+    HashMap__Stmt*   en = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
+    HashMap__Stmt*   fnm = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
+    HashMap__bool*   em = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+    Vector__FnMonoEntry*   q = ((Vector__FnMonoEntry*(*)(void))Vector_new__FnMonoEntry)();
+    Vector__Expr*   ds = ((Vector__Expr*(*)(void))Vector_new__Expr)();
     ((g-> defer_stack )  =  ds);
-    Vector__Expr*   eds = Vector_new__Expr();
+    Vector__Expr*   eds = ((Vector__Expr*(*)(void))Vector_new__Expr)();
     ((g-> err_defer_stack )  =  eds);
-    Vector__Expr*   ads = Vector_new__Expr();
+    Vector__Expr*   ads = ((Vector__Expr*(*)(void))Vector_new__Expr)();
     ((g-> auto_drop_stack )  =  ads);
-    Vector__AnonFn*   af = Vector_new__AnonFn();
+    Vector__AnonFn*   af = ((Vector__AnonFn*(*)(void))Vector_new__AnonFn)();
     ((g-> anon_fns )  =  af);
     ((g-> anon_count )  =  0);
-    Vector__Type*   ct = Vector_new__Type();
+    Vector__Type*   ct = ((Vector__Type*(*)(void))Vector_new__Type)();
     ((g-> chan_types )  =  ct);
     ((g-> spawn_count )  =  0);
     ((g-> uses_pthread )  =  false);
-    Vector__Type*   rt = Vector_new__Type();
+    Vector__Type*   rt = ((Vector__Type*(*)(void))Vector_new__Type)();
     ((g-> result_types )  =  rt);
-    Vector__Type*   ot = Vector_new__Type();
+    Vector__Type*   ot = ((Vector__Type*(*)(void))Vector_new__Type)();
     ((g-> option_types )  =  ot);
-    Vector__Type*   ort = Vector_new__Type();
+    Vector__Type*   ort = ((Vector__Type*(*)(void))Vector_new__Type)();
     ((g-> optres_types )  =  ort);
-    HashMap__Type*   at = HashMap_new__Type();
+    HashMap__Type*   at = ((HashMap__Type*(*)(void))HashMap_new__Type)();
     ((g-> assoc_table )  =  at);
     ((g-> current_ret_ty )  =  NULL);
     ((g-> scope )  =  s);
@@ -12593,19 +12653,19 @@ CG*   CG_new (void) {
     ((g-> fns )  =  fnm);
     ((g-> emitted_monos )  =  em);
     ((g-> fn_mono_queue )  =  q);
-    Vector__Type*   smq = Vector_new__Type();
+    Vector__Type*   smq = ((Vector__Type*(*)(void))Vector_new__Type)();
     ((g-> struct_mono_queue )  =  smq);
-    HashMap__string*   mi = HashMap_new__string();
+    HashMap__string*   mi = ((HashMap__string*(*)(void))HashMap_new__string)();
     ((g-> method_index )  =  mi);
-    HashMap__bool*   mf = HashMap_new__bool();
+    HashMap__bool*   mf = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((g-> method_fns )  =  mf);
-    HashMap__string*   ma = HashMap_new__string();
+    HashMap__string*   ma = ((HashMap__string*(*)(void))HashMap_new__string)();
     ((g-> module_aliases )  =  ma);
-    HashMap__bool*   en2 = HashMap_new__bool();
+    HashMap__bool*   en2 = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((g-> emitted_named )  =  en2);
-    HashMap__bool*   dt = HashMap_new__bool();
+    HashMap__bool*   dt = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((g-> dyn_traits )  =  dt);
-    HashMap__Stmt*   trts = HashMap_new__Stmt();
+    HashMap__Stmt*   trts = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
     ((g-> traits )  =  trts);
     return g;
 }
@@ -12613,9 +12673,9 @@ CG*   CG_new (void) {
 void   CG_emit_err_defers_reverse (CG*   self, int   depth) {
     int   n = Vector_len__Expr((self-> err_defer_stack ));
     for (int   i = (n  -  1); (i  >=  0); (i  =  (i  -  1))) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         Expr   ex = Vector_get__Expr((self-> err_defer_stack ), i);
-        emit_expr(self, (&ex));
+        ((void(*)(CG*, Expr*))emit_expr)(self, (&ex));
         printf("%s\n", ";");
     }
 }
@@ -12623,16 +12683,16 @@ void   CG_emit_err_defers_reverse (CG*   self, int   depth) {
 void   CG_emit_deferred_reverse (CG*   self, int   depth) {
     int   na = Vector_len__Expr((self-> auto_drop_stack ));
     for (int   i = (na  -  1); (i  >=  0); (i  =  (i  -  1))) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         Expr   ex = Vector_get__Expr((self-> auto_drop_stack ), i);
-        emit_expr(self, (&ex));
+        ((void(*)(CG*, Expr*))emit_expr)(self, (&ex));
         printf("%s\n", ";");
     }
     int   nd = Vector_len__Expr((self-> defer_stack ));
     for (int   i = (nd  -  1); (i  >=  0); (i  =  (i  -  1))) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         Expr   ex = Vector_get__Expr((self-> defer_stack ), i);
-        emit_expr(self, (&ex));
+        ((void(*)(CG*, Expr*))emit_expr)(self, (&ex));
         printf("%s\n", ";");
     }
 }
@@ -12640,9 +12700,9 @@ void   CG_emit_deferred_reverse (CG*   self, int   depth) {
 void   CG_emit_block_drops (CG*   self, int   saved, int   depth) {
     int   n = Vector_len__Expr((self-> auto_drop_stack ));
     for (int   i = (n  -  1); (i  >=  saved); (i  =  (i  -  1))) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         Expr   ex = Vector_get__Expr((self-> auto_drop_stack ), i);
-        emit_expr(self, (&ex));
+        ((void(*)(CG*, Expr*))emit_expr)(self, (&ex));
         printf("%s\n", ";");
     }
     while ((Vector_len__Expr((self-> auto_drop_stack ))  >  saved)) {
@@ -12658,7 +12718,7 @@ void   CG_free (CG*   self) {
     HashMap_free__Stmt((self-> enums ));
     HashMap_free__Stmt((self-> fns ));
     HashMap_free__bool((self-> emitted_monos ));
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 void   CG_declare (CG*   self, const char*   name, Type*   ty) {
@@ -12672,7 +12732,7 @@ Type*   CG_lookup (CG*   self, const char*   name) {
         return NULL;
     }
     Type   t = HashMap_get__Type((self-> scope ), name);
-    Type*   p = (( Type* )malloc(sizeof( Type )));
+    Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
     ((*p)  =  t);
     return p;
 }
@@ -12683,61 +12743,82 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_INT)) {
         if ((((e-> int_val )  >  2147483647)  ||  ((e-> int_val )  <  (-2147483648)))) {
-            return ty_named("i64");
+            return ((Type*(*)(const char*))ty_named)("i64");
         }
-        return ty_named("int");
+        return ((Type*(*)(const char*))ty_named)("int");
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
-        return ty_named("float");
+        return ((Type*(*)(const char*))ty_named)("float");
     }
     if (((e-> kind )  ==  EX_STRING)) {
-        return ty_named("string");
+        return ((Type*(*)(const char*))ty_named)("string");
     }
     if (((e-> kind )  ==  EX_BOOL)) {
-        return ty_named("bool");
+        return ((Type*(*)(const char*))ty_named)("bool");
     }
     if (((e-> kind )  ==  EX_CHAR)) {
-        return ty_named("char");
+        return ((Type*(*)(const char*))ty_named)("char");
     }
     if (((e-> kind )  ==  EX_NULL)) {
-        return ty_pointer(ty_named("void"));
+        return ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*))ty_named)("void"));
     }
     if (((e-> kind )  ==  EX_IF)) {
-        Type*   then_ty = infer_for_codegen(g, (e-> rhs ));
+        Type*   then_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> rhs ));
         if ((then_ty  !=  NULL)) {
             return then_ty;
         }
-        return infer_for_codegen(g, (e-> operand ));
+        return ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> operand ));
     }
     if (((e-> kind )  ==  EX_BLOCK)) {
         if (((e-> operand )  !=  NULL)) {
-            return infer_for_codegen(g, (e-> operand ));
+            return ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> operand ));
         }
         return NULL;
     }
     if (((e-> kind )  ==  EX_MATCH)) {
         if ((((e-> match_arms )  !=  NULL)  &&  (Vector_len__MatchArm((e-> match_arms ))  >  0))) {
             MatchArm   first = Vector_get__MatchArm((e-> match_arms ), 0);
-            return arm_value_type(g, (&first));
+            return ((Type*(*)(CG*, MatchArm*))arm_value_type)(g, (&first));
         }
         return NULL;
     }
     if (((e-> kind )  ==  EX_IDENT)) {
-        return CG_lookup(g, (e-> str_val ));
+        Type*   local = CG_lookup(g, (e-> str_val ));
+        if ((local  !=  NULL)) {
+            return local;
+        }
+        if (HashMap_contains__Stmt((g-> fns ), (e-> str_val ))) {
+            Stmt   s = HashMap_get__Stmt((g-> fns ), (e-> str_val ));
+            Vector__Type*   args = ((Vector__Type*(*)(void))Vector_new__Type)();
+            if (((s. fn_params )  !=  NULL)) {
+                for (int   i = 0; (i  <  Vector_len__Param((s. fn_params ))); i++) {
+                    Param   p = Vector_get__Param((s. fn_params ), i);
+                    if (((p. ty )  !=  NULL)) {
+                        Vector_push__Type(args, (*(p. ty )));
+                    }
+                }
+            }
+            Type*   fp = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
+            ((fp-> kind )  =  TY_FNPTR);
+            ((fp-> args )  =  args);
+            ((fp-> fnptr_ret )  =  (s. fn_ret_ty ));
+            return fp;
+        }
+        return NULL;
     }
     if (((e-> kind )  ==  EX_UNARY)) {
-        Type*   inner = infer_for_codegen(g, (e-> operand ));
+        Type*   inner = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> operand ));
         if (((((e-> op_code )  ==  UN_DEREF)  &&  (inner  !=  NULL))  &&  ((inner-> kind )  ==  TY_POINTER))) {
             return (inner-> inner );
         }
         if ((((e-> op_code )  ==  UN_ADDR)  ||  ((e-> op_code )  ==  UN_ADDR_MUT))) {
-            return ty_pointer(inner);
+            return ((Type*(*)(Type*))ty_pointer)(inner);
         }
         return inner;
     }
     if (((e-> kind )  ==  EX_MEMBER)) {
-        Type*   recv_ty = infer_for_codegen(g, (e-> lhs ));
-        Type*   stripped = strip_ptr(recv_ty);
+        Type*   recv_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
+        Type*   stripped = ((Type*(*)(Type*))strip_ptr)(recv_ty);
         if ((stripped  ==  NULL)) {
             return NULL;
         }
@@ -12746,10 +12827,10 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 return (stripped-> inner );
             }
             if (__glide_string_eq((e-> field ), "ok")) {
-                return ty_named("bool");
+                return ((Type*(*)(const char*))ty_named)("bool");
             }
             if (__glide_string_eq((e-> field ), "err")) {
-                return ty_named("string");
+                return ((Type*(*)(const char*))ty_named)("string");
             }
             return NULL;
         }
@@ -12758,7 +12839,7 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 return (stripped-> inner );
             }
             if (__glide_string_eq((e-> field ), "has")) {
-                return ty_named("bool");
+                return ((Type*(*)(const char*))ty_named)("bool");
             }
             return NULL;
         }
@@ -12767,16 +12848,16 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 return (stripped-> inner );
             }
             if (__glide_string_eq((e-> field ), "tag")) {
-                return ty_named("int");
+                return ((Type*(*)(const char*))ty_named)("int");
             }
             if (__glide_string_eq((e-> field ), "err")) {
-                return ty_named("string");
+                return ((Type*(*)(const char*))ty_named)("string");
             }
             return NULL;
         }
         if (((stripped-> kind )  ==  TY_SLICE)) {
             if (__glide_string_eq((e-> field ), "len")) {
-                return ty_named("usize");
+                return ((Type*(*)(const char*))ty_named)("usize");
             }
             return NULL;
         }
@@ -12797,7 +12878,7 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 for (int   i = 0; (i  <  Vector_len__Field((sd. struct_fields ))); i++) {
                     Field   f = Vector_get__Field((sd. struct_fields ), i);
                     if (__glide_string_eq((f. name ), (e-> field ))) {
-                        return subst_type((f. ty ), (sd. type_params ), (stripped-> args ));
+                        return ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((f. ty ), (sd. type_params ), (stripped-> args ));
                     }
                 }
             }
@@ -12809,19 +12890,19 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_MACRO)) {
         if (__glide_string_eq((e-> str_val ), "format")) {
-            return ty_named("string");
+            return ((Type*(*)(const char*))ty_named)("string");
         }
         return NULL;
     }
     if (((e-> kind )  ==  EX_BINARY)) {
         int   op = (e-> op_code );
         if (((((((((op  ==  OP_EQ)  ||  (op  ==  OP_NE))  ||  (op  ==  OP_LT))  ||  (op  ==  OP_LE))  ||  (op  ==  OP_GT))  ||  (op  ==  OP_GE))  ||  (op  ==  OP_AND))  ||  (op  ==  OP_OR))) {
-            return ty_named("bool");
+            return ((Type*(*)(const char*))ty_named)("bool");
         }
-        return infer_for_codegen(g, (e-> lhs ));
+        return ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
     }
     if (((e-> kind )  ==  EX_INDEX)) {
-        Type*   base = infer_for_codegen(g, (e-> lhs ));
+        Type*   base = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
         if ((base  ==  NULL)) {
             return NULL;
         }
@@ -12834,25 +12915,25 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
             const char*   nm = ((e-> lhs )-> str_val );
             if (__glide_string_eq(nm, "args_count")) {
-                return ty_named("int");
+                return ((Type*(*)(const char*))ty_named)("int");
             }
             if (__glide_string_eq(nm, "args_at")) {
-                return ty_named("string");
+                return ((Type*(*)(const char*))ty_named)("string");
             }
             if (__glide_string_eq(nm, "read_file")) {
-                return ty_named("string");
+                return ((Type*(*)(const char*))ty_named)("string");
             }
             if (__glide_string_eq(nm, "write_file")) {
-                return ty_named("bool");
+                return ((Type*(*)(const char*))ty_named)("bool");
             }
             if (__glide_string_eq(nm, "now_ns")) {
-                return ty_named("i64");
+                return ((Type*(*)(const char*))ty_named)("i64");
             }
             if (__glide_string_eq(nm, "pending_count")) {
-                return ty_named("int");
+                return ((Type*(*)(const char*))ty_named)("int");
             }
             if ((__glide_string_eq(nm, "malloc")  ||  __glide_string_eq(nm, "calloc"))) {
-                return ty_pointer(ty_named("void"));
+                return ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*))ty_named)("void"));
             }
             if (HashMap_contains__Stmt((g-> fns ), nm)) {
                 Stmt   s = HashMap_get__Stmt((g-> fns ), nm);
@@ -12874,7 +12955,7 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                     return (HashMap_get__Stmt((g-> generic_fns ), resolved). fn_ret_ty );
                 }
             }
-            const char*   pname = __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, ((e-> lhs )-> str_val )), "_"), ((e-> lhs )-> field ));
+            const char*   pname = __glide_string_concat(__glide_string_concat(((const char*(*)(CG*, const char*))resolve_type_prefix)(g, ((e-> lhs )-> str_val )), "_"), ((e-> lhs )-> field ));
             if (HashMap_contains__Stmt((g-> fns ), pname)) {
                 return (HashMap_get__Stmt((g-> fns ), pname). fn_ret_ty );
             }
@@ -12883,8 +12964,8 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
             }
         }
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))) {
-            Type*   rt = infer_for_codegen(g, ((e-> lhs )-> lhs ));
-            Type*   stripped = strip_ptr(rt);
+            Type*   rt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, ((e-> lhs )-> lhs ));
+            Type*   stripped = ((Type*(*)(Type*))strip_ptr)(rt);
             if ((((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_DYN))  &&  HashMap_contains__Stmt((g-> traits ), (stripped-> name )))) {
                 Stmt   td = HashMap_get__Stmt((g-> traits ), (stripped-> name ));
                 if (((td. impl_methods )  !=  NULL)) {
@@ -12897,7 +12978,7 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 }
             }
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_NAMED))) {
-                int   qpos = ns_split_pos(((e-> lhs )-> field ));
+                int   qpos = ((int(*)(const char*))ns_split_pos)(((e-> lhs )-> field ));
                 if ((qpos  >  0)) {
                     const char*   ns = __glide_string_substring(((e-> lhs )-> field ), 0, qpos);
                     const char*   real = __glide_string_substring(((e-> lhs )-> field ), (qpos  +  2), __glide_string_len(((e-> lhs )-> field )));
@@ -12906,8 +12987,8 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                         return (HashMap_get__Stmt((g-> fns ), qmname). fn_ret_ty );
                     }
                 }
-                if (is_stdlib_primitive((stripped-> name ))) {
-                    Type*   std_ret = stdlib_method_ret((stripped-> name ), ((e-> lhs )-> field ));
+                if (((bool(*)(const char*))is_stdlib_primitive)((stripped-> name ))) {
+                    Type*   std_ret = ((Type*(*)(const char*, const char*))stdlib_method_ret)((stripped-> name ), ((e-> lhs )-> field ));
                     if ((std_ret  !=  NULL)) {
                         return std_ret;
                     }
@@ -12940,7 +13021,7 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), ((e-> lhs )-> field ));
                 if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                     Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
-                    return subst_type((template. fn_ret_ty ), (template. type_params ), (stripped-> args ));
+                    return ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((template. fn_ret_ty ), (template. type_params ), (stripped-> args ));
                 }
             }
         }
@@ -12957,21 +13038,21 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 return (HashMap_get__Stmt((g-> generic_fns ), resolved). fn_ret_ty );
             }
         }
-        const char*   pname = __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, (e-> str_val )), "_"), (e-> field ));
+        const char*   pname = __glide_string_concat(__glide_string_concat(((const char*(*)(CG*, const char*))resolve_type_prefix)(g, (e-> str_val )), "_"), (e-> field ));
         if (HashMap_contains__Stmt((g-> fns ), pname)) {
             return (HashMap_get__Stmt((g-> fns ), pname). fn_ret_ty );
         }
         if (HashMap_contains__Stmt((g-> generic_fns ), pname)) {
             return (HashMap_get__Stmt((g-> generic_fns ), pname). fn_ret_ty );
         }
-        const char*   probe = resolve_type_prefix(g, (e-> str_val ));
+        const char*   probe = ((const char*(*)(CG*, const char*))resolve_type_prefix)(g, (e-> str_val ));
         if (HashMap_contains__Stmt((g-> enums ), probe)) {
             Stmt   edef = HashMap_get__Stmt((g-> enums ), probe);
             if (((edef. enum_variants )  !=  NULL)) {
                 for (int   i = 0; (i  <  Vector_len__EnumVariant((edef. enum_variants ))); i++) {
                     EnumVariant   v = Vector_get__EnumVariant((edef. enum_variants ), i);
                     if (__glide_string_eq((v. name ), (e-> field ))) {
-                        return ty_named(probe);
+                        return ((Type*(*)(const char*))ty_named)(probe);
                     }
                 }
             }
@@ -13053,22 +13134,22 @@ const char*   type_to_c (Type*   t) {
         if (__glide_string_eq(n, "__fn_ptr__")) {
             return "void*";
         }
-        return c_safe_ident(n);
+        return ((const char*(*)(const char*))c_safe_ident)(n);
     }
     if (((t-> kind )  ==  TY_POINTER)) {
         if ((((t-> inner )  !=  NULL)  &&  (((t-> inner )-> kind )  ==  TY_DYN))) {
             return __glide_string_concat("__glide_dyn_", ((t-> inner )-> name ));
         }
-        return __glide_string_concat(type_to_c((t-> inner )), "*");
+        return __glide_string_concat(((const char*(*)(Type*))type_to_c)((t-> inner )), "*");
     }
     if (((t-> kind )  ==  TY_BORROW)) {
-        return __glide_string_concat(type_to_c((t-> inner )), " const*");
+        return __glide_string_concat(((const char*(*)(Type*))type_to_c)((t-> inner )), " const*");
     }
     if (((t-> kind )  ==  TY_BORROW_MUT)) {
-        return __glide_string_concat(type_to_c((t-> inner )), "*");
+        return __glide_string_concat(((const char*(*)(Type*))type_to_c)((t-> inner )), "*");
     }
     if (((t-> kind )  ==  TY_SLICE)) {
-        return __glide_string_concat(__glide_string_concat("/* []", type_to_c((t-> inner ))), " */ void*");
+        return __glide_string_concat(__glide_string_concat("/* []", ((const char*(*)(Type*))type_to_c)((t-> inner ))), " */ void*");
     }
     if (((t-> kind )  ==  TY_DYN)) {
         return __glide_string_concat("__glide_dyn_", (t-> name ));
@@ -13076,21 +13157,21 @@ const char*   type_to_c (Type*   t) {
     if (((t-> kind )  ==  TY_GENERIC)) {
         if (((__glide_string_eq((t-> name ), "chan")  &&  ((t-> args )  !=  NULL))  &&  (Vector_len__Type((t-> args ))  >  0))) {
             Type   inner = Vector_get__Type((t-> args ), 0);
-            return __glide_string_concat(__glide_string_concat("__glide_chan_", mangle_type((&inner))), "_t*");
+            return __glide_string_concat(__glide_string_concat("__glide_chan_", ((const char*(*)(Type*))mangle_type)((&inner))), "_t*");
         }
-        return mangle_generic((t-> name ), (t-> args ));
+        return ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t-> name ), (t-> args ));
     }
     if (((t-> kind )  ==  TY_FNPTR)) {
         return "void*";
     }
     if (((t-> kind )  ==  TY_RESULT)) {
-        return __glide_string_concat(__glide_string_concat("__glide_result_", mangle_type((t-> inner ))), "_t");
+        return __glide_string_concat(__glide_string_concat("__glide_result_", ((const char*(*)(Type*))mangle_type)((t-> inner ))), "_t");
     }
     if (((t-> kind )  ==  TY_OPTION)) {
-        return __glide_string_concat(__glide_string_concat("__glide_option_", mangle_type((t-> inner ))), "_t");
+        return __glide_string_concat(__glide_string_concat("__glide_option_", ((const char*(*)(Type*))mangle_type)((t-> inner ))), "_t");
     }
     if (((t-> kind )  ==  TY_OPT_RESULT)) {
-        return __glide_string_concat(__glide_string_concat("__glide_optres_", mangle_type((t-> inner ))), "_t");
+        return __glide_string_concat(__glide_string_concat("__glide_optres_", ((const char*(*)(Type*))mangle_type)((t-> inner ))), "_t");
     }
     if (((t-> kind )  ==  TY_ASSOC)) {
         return "/* unresolved-assoc */ void";
@@ -13099,7 +13180,7 @@ const char*   type_to_c (Type*   t) {
 }
 
 const char*   fnptr_cast_str (Type*   t) {
-    const char*   s = __glide_string_concat(type_to_c((t-> fnptr_ret )), "(*)(");
+    const char*   s = __glide_string_concat(((const char*(*)(Type*))type_to_c)((t-> fnptr_ret )), "(*)(");
     if ((((t-> args )  ==  NULL)  ||  (Vector_len__Type((t-> args ))  ==  0))) {
         (s  =  __glide_string_concat(s, "void"));
     } else {
@@ -13108,7 +13189,7 @@ const char*   fnptr_cast_str (Type*   t) {
                 (s  =  __glide_string_concat(s, ", "));
             }
             Type   p = Vector_get__Type((t-> args ), i);
-            (s  =  __glide_string_concat(s, type_to_c((&p))));
+            (s  =  __glide_string_concat(s, ((const char*(*)(Type*))type_to_c)((&p))));
         }
     }
     (s  =  __glide_string_concat(s, ")"));
@@ -13123,7 +13204,7 @@ const char*   mangle_generic (const char*   name, Vector__Type*   args) {
                 (out  =  __glide_string_concat(out, "_"));
             }
             Type   a = Vector_get__Type(args, i);
-            (out  =  __glide_string_concat(out, mangle_type((&a))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(Type*))mangle_type)((&a))));
         }
     }
     return out;
@@ -13137,31 +13218,31 @@ const char*   mangle_type (Type*   t) {
         return (t-> name );
     }
     if (((t-> kind )  ==  TY_POINTER)) {
-        return __glide_string_concat(mangle_type((t-> inner )), "_ptr");
+        return __glide_string_concat(((const char*(*)(Type*))mangle_type)((t-> inner )), "_ptr");
     }
     if (((t-> kind )  ==  TY_BORROW)) {
-        return __glide_string_concat(mangle_type((t-> inner )), "_ref");
+        return __glide_string_concat(((const char*(*)(Type*))mangle_type)((t-> inner )), "_ref");
     }
     if (((t-> kind )  ==  TY_BORROW_MUT)) {
-        return __glide_string_concat(mangle_type((t-> inner )), "_refmut");
+        return __glide_string_concat(((const char*(*)(Type*))mangle_type)((t-> inner )), "_refmut");
     }
     if (((t-> kind )  ==  TY_SLICE)) {
-        return __glide_string_concat("slice_", mangle_type((t-> inner )));
+        return __glide_string_concat("slice_", ((const char*(*)(Type*))mangle_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_GENERIC)) {
-        return mangle_generic((t-> name ), (t-> args ));
+        return ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t-> name ), (t-> args ));
     }
     if (((t-> kind )  ==  TY_RESULT)) {
-        return __glide_string_concat("result_", mangle_type((t-> inner )));
+        return __glide_string_concat("result_", ((const char*(*)(Type*))mangle_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_OPTION)) {
-        return __glide_string_concat("option_", mangle_type((t-> inner )));
+        return __glide_string_concat("option_", ((const char*(*)(Type*))mangle_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_OPT_RESULT)) {
-        return __glide_string_concat("optres_", mangle_type((t-> inner )));
+        return __glide_string_concat("optres_", ((const char*(*)(Type*))mangle_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_ASSOC)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat("assoc_", mangle_type((t-> inner ))), "_"), (t-> name ));
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat("assoc_", ((const char*(*)(Type*))mangle_type)((t-> inner ))), "_"), (t-> name ));
     }
     return "void";
 }
@@ -13184,7 +13265,7 @@ bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint) {
             if (HashMap_contains__string((g-> module_aliases ), qual)) {
                 (gname  =  HashMap_get__string((g-> module_aliases ), qual));
             } else {
-                (gname  =  __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, (callee-> str_val )), "_"), (callee-> field )));
+                (gname  =  __glide_string_concat(__glide_string_concat(((const char*(*)(CG*, const char*))resolve_type_prefix)(g, (callee-> str_val )), "_"), (callee-> field )));
             }
         }
     }
@@ -13195,9 +13276,9 @@ bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint) {
         return false;
     }
     Stmt   template = HashMap_get__Stmt((g-> generic_fns ), gname);
-    HashMap__Type*   bindings = HashMap_new__Type();
+    HashMap__Type*   bindings = ((HashMap__Type*(*)(void))HashMap_new__Type)();
     if (((ret_hint  !=  NULL)  &&  ((template. fn_ret_ty )  !=  NULL))) {
-        unify_for_inference((template. fn_ret_ty ), ret_hint, (template. type_params ), bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((template. fn_ret_ty ), ret_hint, (template. type_params ), bindings);
     }
     if ((((call-> args )  !=  NULL)  &&  ((template. fn_params )  !=  NULL))) {
         int   n = Vector_len__Param((template. fn_params ));
@@ -13207,13 +13288,13 @@ bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint) {
         for (int   i = 0; (i  <  n); i++) {
             Param   p = Vector_get__Param((template. fn_params ), i);
             Expr   a = Vector_get__Expr((call-> args ), i);
-            Type*   at = infer_for_codegen(g, (&a));
+            Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
             if (((at  !=  NULL)  &&  ((p. ty )  !=  NULL))) {
-                unify_for_inference((p. ty ), at, (template. type_params ), bindings);
+                ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((p. ty ), at, (template. type_params ), bindings);
             }
         }
     }
-    Vector__Type*   derived = Vector_new__Type();
+    Vector__Type*   derived = ((Vector__Type*(*)(void))Vector_new__Type)();
     bool   all = true;
     if (((template. type_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__string((template. type_params ))); i++) {
@@ -13229,11 +13310,11 @@ bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint) {
         HashMap_free__Type(bindings);
         return false;
     }
-    const char*   mangled = mangle_generic(gname, derived);
+    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(gname, derived);
     ((callee-> kind )  =  EX_IDENT);
     ((callee-> str_val )  =  mangled);
     ((callee-> field )  =  "");
-    register_fn_mono_signature(g, mangled, (&template), derived);
+    ((void(*)(CG*, const char*, Stmt*, Vector__Type*))register_fn_mono_signature)(g, mangled, (&template), derived);
     if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
         HashMap_insert__bool((g-> emitted_monos ), mangled, true);
         FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = derived});
@@ -13256,8 +13337,8 @@ Type*   callee_param_ty (CG*   g, Expr*   e, int   i) {
         }
     }
     if ((((callee-> kind )  ==  EX_MEMBER)  &&  ((callee-> lhs )  !=  NULL))) {
-        Type*   rt = infer_for_codegen(g, (callee-> lhs ));
-        Type*   stripped = strip_ptr(rt);
+        Type*   rt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (callee-> lhs ));
+        Type*   stripped = ((Type*(*)(Type*))strip_ptr)(rt);
         if (((stripped  !=  NULL)  &&  (((stripped-> kind )  ==  TY_NAMED)  ||  ((stripped-> kind )  ==  TY_GENERIC)))) {
             const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), (callee-> field ));
             if (HashMap_contains__Stmt((g-> fns ), mname)) {
@@ -13289,14 +13370,14 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
         const char*   method = ((e-> lhs )-> field );
         const char*   family = ((recv-> lhs )-> str_val );
         if ((!HashMap_contains__Stmt((g-> generic_structs ), family))) {
-            (family  =  resolve_type_prefix(g, family));
+            (family  =  ((const char*(*)(CG*, const char*))resolve_type_prefix)(g, family));
         }
         if (HashMap_contains__Stmt((g-> generic_structs ), family)) {
             Stmt   struct_def = HashMap_get__Stmt((g-> generic_structs ), family);
             const char*   mname = __glide_string_concat(__glide_string_concat(family, "_"), method);
             if ((HashMap_contains__Stmt((g-> generic_fns ), mname)  &&  ((struct_def. type_params )  !=  NULL))) {
                 Stmt   mtmpl = HashMap_get__Stmt((g-> generic_fns ), mname);
-                HashMap__Type*   bindings = HashMap_new__Type();
+                HashMap__Type*   bindings = ((HashMap__Type*(*)(void))HashMap_new__Type)();
                 if (((((e-> args )  !=  NULL)  &&  ((mtmpl. fn_params )  !=  NULL))  &&  (Vector_len__Param((mtmpl. fn_params ))  >  0))) {
                     int   n = (Vector_len__Param((mtmpl. fn_params ))  -  1);
                     if ((Vector_len__Expr((e-> args ))  <  n)) {
@@ -13305,13 +13386,13 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
                     for (int   i = 0; (i  <  n); i++) {
                         Param   p = Vector_get__Param((mtmpl. fn_params ), (i  +  1));
                         Expr   a = Vector_get__Expr((e-> args ), i);
-                        Type*   at = infer_for_codegen(g, (&a));
+                        Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
                         if (((at  !=  NULL)  &&  ((p. ty )  !=  NULL))) {
-                            unify_for_inference((p. ty ), at, (mtmpl. type_params ), bindings);
+                            ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((p. ty ), at, (mtmpl. type_params ), bindings);
                         }
                     }
                 }
-                Vector__Type*   derived = Vector_new__Type();
+                Vector__Type*   derived = ((Vector__Type*(*)(void))Vector_new__Type)();
                 bool   all = true;
                 for (int   i = 0; (i  <  Vector_len__string((struct_def. type_params ))); i++) {
                     const char*   tn = Vector_get__string((struct_def. type_params ), i);
@@ -13322,16 +13403,16 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
                     }
                 }
                 if ((all  &&  (Vector_len__Type(derived)  >  0))) {
-                    (chain_recv_hint  =  ty_pointer(ty_generic(family, derived)));
+                    (chain_recv_hint  =  ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*, Vector__Type*))ty_generic)(family, derived)));
                     Vector_push__Type((g-> struct_mono_queue ), (*(chain_recv_hint-> inner )));
-                    prescan_expr(g, recv, chain_recv_hint);
+                    ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, recv, chain_recv_hint);
                 }
                 HashMap_free__Type(bindings);
             }
         }
     }
     if (((e-> kind )  ==  EX_CALL)) {
-        bool   _ok = try_mono_call(g, e, ret_hint);
+        bool   _ok = ((bool(*)(CG*, Expr*, Type*))try_mono_call)(g, e, ret_hint);
     }
     if (((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))) {
         Expr*   recv = ((e-> lhs )-> lhs );
@@ -13340,15 +13421,15 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
         if ((chain_recv_hint  !=  NULL)) {
             (stripped  =  (chain_recv_hint-> inner ));
         } else {
-            Type*   rt = infer_for_codegen(g, recv);
-            (stripped  =  strip_ptr(rt));
+            Type*   rt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, recv);
+            (stripped  =  ((Type*(*)(Type*))strip_ptr)(rt));
         }
         if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))) {
             const char*   mname = __glide_string_concat(__glide_string_concat((stripped-> name ), "_"), method);
             if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                 Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
-                const char*   mangled = mangle_generic(mname, (stripped-> args ));
-                register_fn_mono_signature(g, mangled, (&template), (stripped-> args ));
+                const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, (stripped-> args ));
+                ((void(*)(CG*, const char*, Stmt*, Vector__Type*))register_fn_mono_signature)(g, mangled, (&template), (stripped-> args ));
                 if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
                     HashMap_insert__bool((g-> emitted_monos ), mangled, true);
                     FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = (stripped-> args )});
@@ -13362,21 +13443,21 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
         if (((e-> kind )  ==  EX_CAST)) {
             (child_hint  =  (e-> cast_to ));
         }
-        prescan_expr(g, (e-> lhs ), child_hint);
+        ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (e-> lhs ), child_hint);
     }
     Type*   no_hint = NULL;
     if (((e-> rhs )  !=  NULL)) {
-        prescan_expr(g, (e-> rhs ), no_hint);
+        ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (e-> rhs ), no_hint);
     }
     if (((e-> operand )  !=  NULL)) {
-        prescan_expr(g, (e-> operand ), no_hint);
+        ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (e-> operand ), no_hint);
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
             Type*   arg_hint = NULL;
             if (((e-> kind )  ==  EX_CALL)) {
-                (arg_hint  =  callee_param_ty(g, e, i));
+                (arg_hint  =  ((Type*(*)(CG*, Expr*, int))callee_param_ty)(g, e, i));
             }
             if ((((((e-> kind )  ==  EX_STRUCT_LIT)  &&  ((e-> str_val )  !=  NULL))  &&  ((e-> field_names )  !=  NULL))  &&  (i  <  Vector_len__string((e-> field_names ))))) {
                 const char*   fname = Vector_get__string((e-> field_names ), i);
@@ -13400,7 +13481,7 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
                     }
                 }
             }
-            prescan_expr(g, (&a), arg_hint);
+            ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (&a), arg_hint);
         }
     }
 }
@@ -13411,7 +13492,7 @@ void   prescan_stmt (CG*   g, Stmt*   s) {
     }
     if (((s-> kind )  ==  ST_RETURN)) {
         if (((s-> expr_value )  !=  NULL)) {
-            prescan_expr(g, (s-> expr_value ), (g-> current_ret_ty ));
+            ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (s-> expr_value ), (g-> current_ret_ty ));
         }
         return;
     }
@@ -13420,21 +13501,21 @@ void   prescan_stmt (CG*   g, Stmt*   s) {
             CG_declare(g, (s-> name ), (s-> let_ty ));
         } else {
             if (((s-> let_value )  !=  NULL)) {
-                Type*   inferred = infer_for_codegen(g, (s-> let_value ));
+                Type*   inferred = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (s-> let_value ));
                 if ((inferred  !=  NULL)) {
                     CG_declare(g, (s-> name ), inferred);
                 }
             }
         }
         if (((s-> let_value )  !=  NULL)) {
-            prescan_expr(g, (s-> let_value ), (s-> let_ty ));
+            ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (s-> let_value ), (s-> let_ty ));
         }
         if (((((s-> kind )  ==  ST_LET)  &&  (s-> is_auto_owned ))  &&  ((s-> let_ty )  !=  NULL))) {
-            Type*   inner_ty = strip_ptr((s-> let_ty ));
+            Type*   inner_ty = ((Type*(*)(Type*))strip_ptr)((s-> let_ty ));
             if (((inner_ty  !=  NULL)  &&  ((inner_ty-> kind )  ==  TY_GENERIC))) {
                 const char*   free_name = __glide_string_concat((inner_ty-> name ), "_free");
                 if (HashMap_contains__Stmt((g-> generic_fns ), free_name)) {
-                    const char*   mangled = mangle_generic(free_name, (inner_ty-> args ));
+                    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(free_name, (inner_ty-> args ));
                     if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
                         HashMap_insert__bool((g-> emitted_monos ), mangled, true);
                         Stmt   template = HashMap_get__Stmt((g-> generic_fns ), free_name);
@@ -13448,27 +13529,27 @@ void   prescan_stmt (CG*   g, Stmt*   s) {
     }
     Type*   no_hint = NULL;
     if (((s-> expr_value )  !=  NULL)) {
-        prescan_expr(g, (s-> expr_value ), no_hint);
+        ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (s-> expr_value ), no_hint);
     }
     if (((s-> cond )  !=  NULL)) {
-        prescan_expr(g, (s-> cond ), no_hint);
+        ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (s-> cond ), no_hint);
     }
     if (((s-> for_init )  !=  NULL)) {
-        prescan_stmt(g, (s-> for_init ));
+        ((void(*)(CG*, Stmt*))prescan_stmt)(g, (s-> for_init ));
     }
     if (((s-> for_step )  !=  NULL)) {
-        prescan_expr(g, (s-> for_step ), no_hint);
+        ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, (s-> for_step ), no_hint);
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            prescan_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))prescan_stmt)(g, (&b));
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            prescan_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))prescan_stmt)(g, (&b));
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
@@ -13483,14 +13564,14 @@ void   prescan_stmt (CG*   g, Stmt*   s) {
         ((g-> current_ret_ty )  =  (s-> fn_ret_ty ));
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            prescan_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))prescan_stmt)(g, (&b));
         }
         ((g-> current_ret_ty )  =  saved_ret);
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            prescan_stmt(g, (&m));
+            ((void(*)(CG*, Stmt*))prescan_stmt)(g, (&m));
         }
     }
 }
@@ -13499,42 +13580,42 @@ void   register_fn_mono_signature (CG*   g, const char*   mangled, Stmt*   templ
     if (HashMap_contains__Stmt((g-> fns ), mangled)) {
         return;
     }
-    Stmt*   synth = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   synth = (( Stmt* )((void*(*)(size_t, size_t))calloc)(1, sizeof( Stmt )));
     ((synth-> kind )  =  (template-> kind ));
     ((synth-> name )  =  mangled);
-    Type*   sret = subst_type((template-> fn_ret_ty ), (template-> type_params ), args);
-    (sret  =  resolve_assoc_recursive(g, sret));
+    Type*   sret = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((template-> fn_ret_ty ), (template-> type_params ), args);
+    (sret  =  ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, sret));
     ((synth-> fn_ret_ty )  =  sret);
-    collect_result_in_type(g, sret);
+    ((void(*)(CG*, Type*))collect_result_in_type)(g, sret);
     if (((template-> fn_params )  !=  NULL)) {
-        Vector__Param*   ps = Vector_new__Param();
+        Vector__Param*   ps = ((Vector__Param*(*)(void))Vector_new__Param)();
         for (int   i = 0; (i  <  Vector_len__Param((template-> fn_params ))); i++) {
             Param   p = Vector_get__Param((template-> fn_params ), i);
-            Type*   pt = subst_type((p. ty ), (template-> type_params ), args);
-            Type*   resolved = resolve_assoc_recursive(g, pt);
-            collect_result_in_type(g, resolved);
+            Type*   pt = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((p. ty ), (template-> type_params ), args);
+            Type*   resolved = ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, pt);
+            ((void(*)(CG*, Type*))collect_result_in_type)(g, resolved);
             Param   np = (( Param ){. name  = (p. name ), . ty  = resolved});
             Vector_push__Param(ps, np);
         }
         ((synth-> fn_params )  =  ps);
     }
     HashMap_insert__Stmt((g-> fns ), mangled, (*synth));
-    collect_result_in_type(g, sret);
+    ((void(*)(CG*, Type*))collect_result_in_type)(g, sret);
     if (((synth-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((synth-> fn_params ))); i++) {
             Param   p = Vector_get__Param((synth-> fn_params ), i);
-            collect_result_in_type(g, (p. ty ));
+            ((void(*)(CG*, Type*))collect_result_in_type)(g, (p. ty ));
         }
     }
-    emit_result_runtime(g);
-    emit_option_runtime(g);
-    emit_optres_runtime(g);
+    ((void(*)(CG*))emit_result_runtime)(g);
+    ((void(*)(CG*))emit_option_runtime)(g);
+    ((void(*)(CG*))emit_optres_runtime)(g);
 }
 
 void   emit_mono_forward_decl (CG*   g, const char*   mangled, Stmt*   template, Vector__Type*   args) {
-    Type*   new_ret = subst_type((template-> fn_ret_ty ), (template-> type_params ), args);
-    (new_ret  =  resolve_assoc_recursive(g, new_ret));
-    printf("%s %s %s %s", type_to_c(new_ret), " ", mangled, "(");
+    Type*   new_ret = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((template-> fn_ret_ty ), (template-> type_params ), args);
+    (new_ret  =  ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, new_ret));
+    printf("%s %s %s %s", ((const char*(*)(Type*))type_to_c)(new_ret), " ", mangled, "(");
     if ((((template-> fn_params )  ==  NULL)  ||  (Vector_len__Param((template-> fn_params ))  ==  0))) {
         printf("%s", "void");
     } else {
@@ -13543,9 +13624,9 @@ void   emit_mono_forward_decl (CG*   g, const char*   mangled, Stmt*   template,
                 printf("%s", ", ");
             }
             Param   pp = Vector_get__Param((template-> fn_params ), j);
-            Type*   pt = subst_type((pp. ty ), (template-> type_params ), args);
-            Type*   resolved_pt = resolve_assoc_recursive(g, pt);
-            printf("%s %s %s", type_to_c(resolved_pt), " ", c_safe_ident((pp. name )));
+            Type*   pt = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((pp. ty ), (template-> type_params ), args);
+            Type*   resolved_pt = ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, pt);
+            printf("%s %s %s", ((const char*(*)(Type*))type_to_c)(resolved_pt), " ", ((const char*(*)(const char*))c_safe_ident)((pp. name )));
         }
     }
     printf("%s\n", ");");
@@ -13571,19 +13652,19 @@ void   unify_for_inference (Type*   pat, Type*   actual, Vector__string*   param
         }
     }
     if ((((pat-> kind )  ==  TY_POINTER)  &&  ((actual-> kind )  ==  TY_POINTER))) {
-        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> inner ), (actual-> inner ), params, bindings);
         return;
     }
     if ((((pat-> kind )  ==  TY_BORROW)  &&  ((actual-> kind )  ==  TY_BORROW))) {
-        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> inner ), (actual-> inner ), params, bindings);
         return;
     }
     if ((((pat-> kind )  ==  TY_BORROW_MUT)  &&  ((actual-> kind )  ==  TY_BORROW_MUT))) {
-        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> inner ), (actual-> inner ), params, bindings);
         return;
     }
     if ((((pat-> kind )  ==  TY_SLICE)  &&  ((actual-> kind )  ==  TY_SLICE))) {
-        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> inner ), (actual-> inner ), params, bindings);
         return;
     }
     if ((((pat-> kind )  ==  TY_GENERIC)  &&  ((actual-> kind )  ==  TY_GENERIC))) {
@@ -13591,21 +13672,33 @@ void   unify_for_inference (Type*   pat, Type*   actual, Vector__string*   param
             for (int   i = 0; (i  <  Vector_len__Type((pat-> args ))); i++) {
                 Type   pa = Vector_get__Type((pat-> args ), i);
                 Type   aa = Vector_get__Type((actual-> args ), i);
-                unify_for_inference((&pa), (&aa), params, bindings);
+                ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((&pa), (&aa), params, bindings);
             }
         }
     }
     if ((((pat-> kind )  ==  TY_OPTION)  &&  ((actual-> kind )  ==  TY_OPTION))) {
-        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> inner ), (actual-> inner ), params, bindings);
         return;
     }
     if ((((pat-> kind )  ==  TY_RESULT)  &&  ((actual-> kind )  ==  TY_RESULT))) {
-        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> inner ), (actual-> inner ), params, bindings);
         return;
     }
     if ((((pat-> kind )  ==  TY_OPT_RESULT)  &&  ((actual-> kind )  ==  TY_OPT_RESULT))) {
-        unify_for_inference((pat-> inner ), (actual-> inner ), params, bindings);
+        ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> inner ), (actual-> inner ), params, bindings);
         return;
+    }
+    if ((((pat-> kind )  ==  TY_FNPTR)  &&  ((actual-> kind )  ==  TY_FNPTR))) {
+        if (((((pat-> args )  !=  NULL)  &&  ((actual-> args )  !=  NULL))  &&  (Vector_len__Type((pat-> args ))  ==  Vector_len__Type((actual-> args ))))) {
+            for (int   i = 0; (i  <  Vector_len__Type((pat-> args ))); i++) {
+                Type   pa = Vector_get__Type((pat-> args ), i);
+                Type   aa = Vector_get__Type((actual-> args ), i);
+                ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((&pa), (&aa), params, bindings);
+            }
+        }
+        if ((((pat-> fnptr_ret )  !=  NULL)  &&  ((actual-> fnptr_ret )  !=  NULL))) {
+            ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((pat-> fnptr_ret ), (actual-> fnptr_ret ), params, bindings);
+        }
     }
 }
 
@@ -13618,7 +13711,7 @@ Type*   subst_type (Type*   t, Vector__string*   params, Vector__Type*   args) {
             for (int   i = 0; (i  <  Vector_len__string(params)); i++) {
                 if (__glide_string_eq((t-> name ), Vector_get__string(params, i))) {
                     Type   a = Vector_get__Type(args, i);
-                    Type*   p = (( Type* )malloc(sizeof( Type )));
+                    Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
                     ((*p)  =  a);
                     return p;
                 }
@@ -13627,51 +13720,68 @@ Type*   subst_type (Type*   t, Vector__string*   params, Vector__Type*   args) {
         return t;
     }
     if (((t-> kind )  ==  TY_POINTER)) {
-        return ty_pointer(subst_type((t-> inner ), params, args));
+        return ((Type*(*)(Type*))ty_pointer)(((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args));
     }
     if (((t-> kind )  ==  TY_BORROW)) {
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((p-> kind )  =  TY_BORROW);
-        ((p-> inner )  =  subst_type((t-> inner ), params, args));
+        ((p-> inner )  =  ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args));
         return p;
     }
     if (((t-> kind )  ==  TY_BORROW_MUT)) {
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((p-> kind )  =  TY_BORROW_MUT);
-        ((p-> inner )  =  subst_type((t-> inner ), params, args));
+        ((p-> inner )  =  ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args));
         return p;
     }
     if (((t-> kind )  ==  TY_SLICE)) {
-        Type*   p = (( Type* )malloc(sizeof( Type )));
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
         ((p-> kind )  =  TY_SLICE);
-        ((p-> inner )  =  subst_type((t-> inner ), params, args));
+        ((p-> inner )  =  ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args));
         return p;
     }
     if (((t-> kind )  ==  TY_GENERIC)) {
-        Vector__Type*   new_args = Vector_new__Type();
+        Vector__Type*   new_args = ((Vector__Type*(*)(void))Vector_new__Type)();
         if (((t-> args )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
                 Type   a = Vector_get__Type((t-> args ), i);
-                Type*   na = subst_type((&a), params, args);
+                Type*   na = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((&a), params, args);
                 if ((na  !=  NULL)) {
                     Vector_push__Type(new_args, (*na));
                 }
             }
         }
-        return ty_generic((t-> name ), new_args);
+        return ((Type*(*)(const char*, Vector__Type*))ty_generic)((t-> name ), new_args);
     }
     if (((t-> kind )  ==  TY_OPTION)) {
-        return ty_option(subst_type((t-> inner ), params, args));
+        return ((Type*(*)(Type*))ty_option)(((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args));
     }
     if (((t-> kind )  ==  TY_RESULT)) {
-        return ty_result(subst_type((t-> inner ), params, args));
+        return ((Type*(*)(Type*))ty_result)(((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args));
     }
     if (((t-> kind )  ==  TY_OPT_RESULT)) {
-        return ty_optres(subst_type((t-> inner ), params, args));
+        return ((Type*(*)(Type*))ty_optres)(((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args));
+    }
+    if (((t-> kind )  ==  TY_FNPTR)) {
+        Vector__Type*   new_args = ((Vector__Type*(*)(void))Vector_new__Type)();
+        if (((t-> args )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
+                Type   a = Vector_get__Type((t-> args ), i);
+                Type*   na = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((&a), params, args);
+                if ((na  !=  NULL)) {
+                    Vector_push__Type(new_args, (*na));
+                }
+            }
+        }
+        Type*   p = (( Type* )((void*(*)(int))__glide_palloc)(sizeof( Type )));
+        ((p-> kind )  =  TY_FNPTR);
+        ((p-> args )  =  new_args);
+        ((p-> fnptr_ret )  =  ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> fnptr_ret ), params, args));
+        return p;
     }
     if (((t-> kind )  ==  TY_ASSOC)) {
-        Type*   new_owner = subst_type((t-> inner ), params, args);
-        return ty_assoc(new_owner, (t-> name ));
+        Type*   new_owner = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((t-> inner ), params, args);
+        return ((Type*(*)(Type*, const char*))ty_assoc)(new_owner, (t-> name ));
     }
     return t;
 }
@@ -13680,25 +13790,25 @@ Expr*   subst_expr (Expr*   e, Vector__string*   params, Vector__Type*   args, H
     if ((e  ==  NULL)) {
         return NULL;
     }
-    Expr*   n = (( Expr* )calloc(1, sizeof( Expr )));
+    Expr*   n = (( Expr* )((void*(*)(size_t, size_t))calloc)(1, sizeof( Expr )));
     ((*n)  =  (*e));
     if (((e-> cast_to )  !=  NULL)) {
-        ((n-> cast_to )  =  subst_type((e-> cast_to ), params, args));
+        ((n-> cast_to )  =  ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((e-> cast_to ), params, args));
     }
     if (((e-> lhs )  !=  NULL)) {
-        ((n-> lhs )  =  subst_expr((e-> lhs ), params, args, gs));
+        ((n-> lhs )  =  ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((e-> lhs ), params, args, gs));
     }
     if (((e-> rhs )  !=  NULL)) {
-        ((n-> rhs )  =  subst_expr((e-> rhs ), params, args, gs));
+        ((n-> rhs )  =  ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((e-> rhs ), params, args, gs));
     }
     if (((e-> operand )  !=  NULL)) {
-        ((n-> operand )  =  subst_expr((e-> operand ), params, args, gs));
+        ((n-> operand )  =  ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((e-> operand ), params, args, gs));
     }
     if (((e-> args )  !=  NULL)) {
-        Vector__Expr*   new_args = Vector_new__Expr();
+        Vector__Expr*   new_args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            Expr*   nu = subst_expr((&a), params, args, gs);
+            Expr*   nu = ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((&a), params, args, gs);
             if ((nu  !=  NULL)) {
                 Vector_push__Expr(new_args, (*nu));
             }
@@ -13708,7 +13818,7 @@ Expr*   subst_expr (Expr*   e, Vector__string*   params, Vector__Type*   args, H
     if (((((e-> kind )  ==  EX_STRUCT_LIT)  &&  (gs  !=  NULL))  &&  HashMap_contains__Stmt(gs, (e-> str_val )))) {
         Stmt   template = HashMap_get__Stmt(gs, (e-> str_val ));
         if (((((template. type_params )  !=  NULL)  &&  (args  !=  NULL))  &&  (Vector_len__string((template. type_params ))  ==  Vector_len__Type(args)))) {
-            ((n-> str_val )  =  mangle_generic((e-> str_val ), args));
+            ((n-> str_val )  =  ((const char*(*)(const char*, Vector__Type*))mangle_generic)((e-> str_val ), args));
         }
     }
     return n;
@@ -13718,34 +13828,34 @@ Stmt*   subst_stmt (Stmt*   s, Vector__string*   params, Vector__Type*   args, H
     if ((s  ==  NULL)) {
         return NULL;
     }
-    Stmt*   n = (( Stmt* )calloc(1, sizeof( Stmt )));
+    Stmt*   n = (( Stmt* )((void*(*)(size_t, size_t))calloc)(1, sizeof( Stmt )));
     ((*n)  =  (*s));
     if (((s-> let_ty )  !=  NULL)) {
-        ((n-> let_ty )  =  subst_type((s-> let_ty ), params, args));
+        ((n-> let_ty )  =  ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((s-> let_ty ), params, args));
     }
     if (((s-> let_value )  !=  NULL)) {
-        ((n-> let_value )  =  subst_expr((s-> let_value ), params, args, gs));
+        ((n-> let_value )  =  ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((s-> let_value ), params, args, gs));
     }
     if (((s-> expr_value )  !=  NULL)) {
-        ((n-> expr_value )  =  subst_expr((s-> expr_value ), params, args, gs));
+        ((n-> expr_value )  =  ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((s-> expr_value ), params, args, gs));
     }
     if (((s-> cond )  !=  NULL)) {
-        ((n-> cond )  =  subst_expr((s-> cond ), params, args, gs));
+        ((n-> cond )  =  ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((s-> cond ), params, args, gs));
     }
     if (((s-> for_init )  !=  NULL)) {
-        ((n-> for_init )  =  subst_stmt((s-> for_init ), params, args, gs));
+        ((n-> for_init )  =  ((Stmt*(*)(Stmt*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_stmt)((s-> for_init ), params, args, gs));
     }
     if (((s-> for_step )  !=  NULL)) {
-        ((n-> for_step )  =  subst_expr((s-> for_step ), params, args, gs));
+        ((n-> for_step )  =  ((Expr*(*)(Expr*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_expr)((s-> for_step ), params, args, gs));
     }
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        ((n-> fn_ret_ty )  =  subst_type((s-> fn_ret_ty ), params, args));
+        ((n-> fn_ret_ty )  =  ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((s-> fn_ret_ty ), params, args));
     }
     if (((s-> then_body )  !=  NULL)) {
-        Vector__Stmt*   nb = Vector_new__Stmt();
+        Vector__Stmt*   nb = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            Stmt*   nu = subst_stmt((&b), params, args, gs);
+            Stmt*   nu = ((Stmt*(*)(Stmt*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_stmt)((&b), params, args, gs);
             if ((nu  !=  NULL)) {
                 Vector_push__Stmt(nb, (*nu));
             }
@@ -13753,10 +13863,10 @@ Stmt*   subst_stmt (Stmt*   s, Vector__string*   params, Vector__Type*   args, H
         ((n-> then_body )  =  nb);
     }
     if (((s-> else_body )  !=  NULL)) {
-        Vector__Stmt*   nb = Vector_new__Stmt();
+        Vector__Stmt*   nb = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            Stmt*   nu = subst_stmt((&b), params, args, gs);
+            Stmt*   nu = ((Stmt*(*)(Stmt*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_stmt)((&b), params, args, gs);
             if ((nu  !=  NULL)) {
                 Vector_push__Stmt(nb, (*nu));
             }
@@ -13764,10 +13874,10 @@ Stmt*   subst_stmt (Stmt*   s, Vector__string*   params, Vector__Type*   args, H
         ((n-> else_body )  =  nb);
     }
     if (((s-> fn_body )  !=  NULL)) {
-        Vector__Stmt*   nb = Vector_new__Stmt();
+        Vector__Stmt*   nb = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            Stmt*   nu = subst_stmt((&b), params, args, gs);
+            Stmt*   nu = ((Stmt*(*)(Stmt*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_stmt)((&b), params, args, gs);
             if ((nu  !=  NULL)) {
                 Vector_push__Stmt(nb, (*nu));
             }
@@ -13909,11 +14019,11 @@ Expr*   arm_value_expr (MatchArm*   a) {
 }
 
 Type*   arm_value_type (CG*   g, MatchArm*   a) {
-    Expr*   v = arm_value_expr(a);
+    Expr*   v = ((Expr*(*)(MatchArm*))arm_value_expr)(a);
     if ((v  ==  NULL)) {
-        return ty_named("int");
+        return ((Type*(*)(const char*))ty_named)("int");
     }
-    return infer_for_codegen(g, v);
+    return ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, v);
 }
 
 void   emit_match_arm_value (CG*   g, MatchArm*   a) {
@@ -13924,12 +14034,12 @@ void   emit_match_arm_value (CG*   g, MatchArm*   a) {
     int   last_idx = (Vector_len__Stmt((a-> body ))  -  1);
     for (int   k = 0; (k  <  last_idx); k++) {
         Stmt   b = Vector_get__Stmt((a-> body ), k);
-        emit_stmt(g, (&b), 0);
+        ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), 0);
     }
-    Expr*   v = arm_value_expr(a);
+    Expr*   v = ((Expr*(*)(MatchArm*))arm_value_expr)(a);
     printf("%s", "__r = (");
     if ((v  !=  NULL)) {
-        emit_expr(g, v);
+        ((void(*)(CG*, Expr*))emit_expr)(g, v);
     } else {
         printf("%s", "0");
     }
@@ -13949,7 +14059,7 @@ void   emit_arm_typeof_probe (CG*   g, Vector__MatchArm*   arms) {
             printf("%s", "__typeof__(");
             printf("%s", payload);
             printf("%s", ") ");
-            printf("%s", c_safe_ident(Vector_get__string((a. bindings ), 0)));
+            printf("%s", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((a. bindings ), 0)));
             printf("%s", " = ");
             printf("%s", payload);
             printf("%s", "; ");
@@ -13961,7 +14071,7 @@ void   emit_arm_typeof_probe (CG*   g, Vector__MatchArm*   arms) {
                 printf("%s", ".f");
                 printf("%d", k);
                 printf("%s", ") ");
-                printf("%s", c_safe_ident(Vector_get__string((a. bindings ), k)));
+                printf("%s", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((a. bindings ), k)));
                 printf("%s", " = ");
                 printf("%s", payload);
                 printf("%s", ".f");
@@ -13970,10 +14080,10 @@ void   emit_arm_typeof_probe (CG*   g, Vector__MatchArm*   arms) {
             }
         }
     }
-    Expr*   v = arm_value_expr((&a));
+    Expr*   v = ((Expr*(*)(MatchArm*))arm_value_expr)((&a));
     printf("%s", "(");
     if ((v  !=  NULL)) {
-        emit_expr(g, v);
+        ((void(*)(CG*, Expr*))emit_expr)(g, v);
     } else {
         printf("%s", "0");
     }
@@ -14017,17 +14127,17 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> kind )  ==  EX_IDENT)) {
-        printf("%s", c_safe_ident((e-> str_val )));
+        printf("%s", ((const char*(*)(const char*))c_safe_ident)((e-> str_val )));
         return;
     }
     if (((e-> kind )  ==  EX_IF)) {
         printf("%s", "(");
-        emit_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
         printf("%s", " ? ");
-        emit_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
         printf("%s", " : ");
         if (((e-> operand )  !=  NULL)) {
-            emit_expr(g, (e-> operand ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> operand ));
         } else {
             printf("%s", "0");
         }
@@ -14039,12 +14149,12 @@ void   emit_expr (CG*   g, Expr*   e) {
         if (((e-> block_stmts )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((e-> block_stmts ))); i++) {
                 Stmt   b = Vector_get__Stmt((e-> block_stmts ), i);
-                emit_stmt(g, (&b), 0);
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), 0);
             }
         }
         printf("%s", "(");
         if (((e-> operand )  !=  NULL)) {
-            emit_expr(g, (e-> operand ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> operand ));
         } else {
             printf("%s", "0");
         }
@@ -14052,7 +14162,7 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> kind )  ==  EX_MATCH)) {
-        Type*   scrut_ty = infer_for_codegen(g, (e-> lhs ));
+        Type*   scrut_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
         const char*   enum_name = "X";
         if (((scrut_ty  !=  NULL)  &&  ((scrut_ty-> kind )  ==  TY_NAMED))) {
             (enum_name  =  (scrut_ty-> name ));
@@ -14060,10 +14170,10 @@ void   emit_expr (CG*   g, Expr*   e) {
         printf("%s", "({ ");
         printf("%s", enum_name);
         printf("%s", " __m = ");
-        emit_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
         printf("%s", "; ");
         printf("%s", "__typeof__(");
-        emit_arm_typeof_probe(g, (e-> match_arms ));
+        ((void(*)(CG*, Vector__MatchArm*))emit_arm_typeof_probe)(g, (e-> match_arms ));
         printf("%s", ") __r; ");
         printf("%s", "switch (__m.tag) { ");
         if (((e-> match_arms )  !=  NULL)) {
@@ -14085,7 +14195,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                         printf("%s", "__typeof__(");
                         printf("%s", payload);
                         printf("%s", ") ");
-                        printf("%s", c_safe_ident(Vector_get__string((a. bindings ), 0)));
+                        printf("%s", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((a. bindings ), 0)));
                         printf("%s", " = ");
                         printf("%s", payload);
                         printf("%s", "; ");
@@ -14097,7 +14207,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                             printf("%s", ".f");
                             printf("%d", k);
                             printf("%s", ") ");
-                            printf("%s", c_safe_ident(Vector_get__string((a. bindings ), k)));
+                            printf("%s", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((a. bindings ), k)));
                             printf("%s", " = ");
                             printf("%s", payload);
                             printf("%s", ".f");
@@ -14106,7 +14216,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                         }
                     }
                 }
-                emit_match_arm_value(g, (&a));
+                ((void(*)(CG*, MatchArm*))emit_match_arm_value)(g, (&a));
                 printf("%s", " break; } ");
             }
         }
@@ -14115,82 +14225,82 @@ void   emit_expr (CG*   g, Expr*   e) {
     }
     if (((e-> kind )  ==  EX_BINARY)) {
         if (((e-> op_code )  ==  OP_COALESCE)) {
-            Type*   lt = infer_for_codegen(g, (e-> lhs ));
+            Type*   lt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
             bool   is_err_form = false;
             if (((((((e-> rhs )  !=  NULL)  &&  (((e-> rhs )-> kind )  ==  EX_CALL))  &&  (((e-> rhs )-> lhs )  !=  NULL))  &&  ((((e-> rhs )-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((((e-> rhs )-> lhs )-> str_val ), "err"))) {
                 (is_err_form  =  true);
             }
             if (((lt  !=  NULL)  &&  ((lt-> kind )  ==  TY_OPTION))) {
-                const char*   m_in = mangle_type((lt-> inner ));
+                const char*   m_in = ((const char*(*)(Type*))mangle_type)((lt-> inner ));
                 if (is_err_form) {
                     const char*   m_out = m_in;
                     Expr   arg = Vector_get__Expr(((e-> rhs )-> args ), 0);
                     printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_option_", m_in), "_t __o = ("));
-                    emit_expr(g, (e-> lhs ));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
                     printf("%s", __glide_string_concat(__glide_string_concat("); __r_lift_t_", m_out), "("));
                 }
                 if ((!is_err_form)) {
                     printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_option_", m_in), "_t __o = ("));
-                    emit_expr(g, (e-> lhs ));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
                     printf("%s", "); __o.has ? __o.val : (");
-                    emit_expr(g, (e-> rhs ));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
                     printf("%s", "); })");
                     return;
                 }
                 printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_option_", m_in), "_t __o = ("));
-                emit_expr(g, (e-> lhs ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
                 printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("); __o.has ? __glide_ok_", m_in), "(__o.val) : __glide_err_"), m_in), "("));
                 Expr   arg = Vector_get__Expr(((e-> rhs )-> args ), 0);
-                emit_expr(g, (&arg));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (&arg));
                 printf("%s", "); })");
                 return;
             }
             if (((lt  !=  NULL)  &&  ((lt-> kind )  ==  TY_RESULT))) {
-                const char*   m_in = mangle_type((lt-> inner ));
+                const char*   m_in = ((const char*(*)(Type*))mangle_type)((lt-> inner ));
                 if ((!is_err_form)) {
                     printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_result_", m_in), "_t __r = ("));
-                    emit_expr(g, (e-> lhs ));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
                     printf("%s", "); __r.ok ? __r.val : (");
-                    emit_expr(g, (e-> rhs ));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
                     printf("%s", "); })");
                     return;
                 }
                 printf("%s", __glide_string_concat(__glide_string_concat("({ __glide_result_", m_in), "_t __r = ("));
-                emit_expr(g, (e-> lhs ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
                 printf("%s", __glide_string_concat(__glide_string_concat("); __r.ok ? __r : __glide_err_", m_in), "("));
                 Expr   arg = Vector_get__Expr(((e-> rhs )-> args ), 0);
-                emit_expr(g, (&arg));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (&arg));
                 printf("%s", "); })");
                 return;
             }
             if (((lt  !=  NULL)  &&  ((lt-> kind )  ==  TY_POINTER))) {
-                const char*   tc = type_to_c(lt);
+                const char*   tc = ((const char*(*)(Type*))type_to_c)(lt);
                 printf("%s", __glide_string_concat(__glide_string_concat("({ ", tc), " __p = ("));
-                emit_expr(g, (e-> lhs ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
                 printf("%s", "); __p ? __p : (");
-                emit_expr(g, (e-> rhs ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
                 printf("%s", "); })");
                 return;
             }
             printf("%s", "((");
-            emit_expr(g, (e-> lhs ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
             printf("%s", ") ? (");
-            emit_expr(g, (e-> lhs ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
             printf("%s", ") : (");
-            emit_expr(g, (e-> rhs ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
             printf("%s", "))");
             return;
         }
         printf("%s", "(");
-        emit_expr(g, (e-> lhs ));
-        printf("%s %s %s", " ", op_to_c((e-> op_code )), " ");
-        emit_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
+        printf("%s %s %s", " ", ((const char*(*)(int))op_to_c)((e-> op_code )), " ");
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
         printf("%s", ")");
         return;
     }
     if (((e-> kind )  ==  EX_UNARY)) {
         if (((e-> op_code )  ==  UN_TRY)) {
-            Type*   inner_ty = infer_for_codegen(g, (e-> operand ));
+            Type*   inner_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> operand ));
             Type*   ret_ty = (g-> current_ret_ty );
             if (((inner_ty  ==  NULL)  ||  (ret_ty  ==  NULL))) {
                 printf("%s", "/* invalid `?` */ 0");
@@ -14206,8 +14316,8 @@ void   emit_expr (CG*   g, Expr*   e) {
                 printf("%s", "/* invalid `?` */ 0");
                 return;
             }
-            const char*   m_in = mangle_type((inner_ty-> inner ));
-            const char*   m_out = mangle_type((ret_ty-> inner ));
+            const char*   m_in = ((const char*(*)(Type*))mangle_type)((inner_ty-> inner ));
+            const char*   m_out = ((const char*(*)(Type*))mangle_type)((ret_ty-> inner ));
             const char*   struct_pref = "__glide_result_";
             if ((inner_kind  ==  TY_OPTION)) {
                 (struct_pref  =  "__glide_option_");
@@ -14216,14 +14326,14 @@ void   emit_expr (CG*   g, Expr*   e) {
                 (struct_pref  =  "__glide_optres_");
             }
             printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat("({ ", struct_pref), m_in), "_t __r = ("));
-            emit_expr(g, (e-> operand ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> operand ));
             printf("%s", "); ");
             int   nd = Vector_len__Expr((g-> err_defer_stack ));
             if ((inner_kind  ==  TY_RESULT)) {
                 printf("%s", "if (!__r.ok) { ");
                 for (int   i = (nd  -  1); (i  >=  0); (i  =  (i  -  1))) {
                     Expr   ex = Vector_get__Expr((g-> err_defer_stack ), i);
-                    emit_expr(g, (&ex));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (&ex));
                     printf("%s", "; ");
                 }
                 if ((ret_kind  ==  TY_RESULT)) {
@@ -14241,7 +14351,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                 printf("%s", "if (!__r.has) { ");
                 for (int   i = (nd  -  1); (i  >=  0); (i  =  (i  -  1))) {
                     Expr   ex = Vector_get__Expr((g-> err_defer_stack ), i);
-                    emit_expr(g, (&ex));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (&ex));
                     printf("%s", "; ");
                 }
                 if ((ret_kind  ==  TY_OPTION)) {
@@ -14258,7 +14368,7 @@ void   emit_expr (CG*   g, Expr*   e) {
             printf("%s", "if (__r.tag != 0) { ");
             for (int   i = (nd  -  1); (i  >=  0); (i  =  (i  -  1))) {
                 Expr   ex = Vector_get__Expr((g-> err_defer_stack ), i);
-                emit_expr(g, (&ex));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (&ex));
                 printf("%s", "; ");
             }
             if ((ret_kind  ==  TY_OPT_RESULT)) {
@@ -14272,16 +14382,16 @@ void   emit_expr (CG*   g, Expr*   e) {
             }
             return;
         }
-        printf("%s", __glide_string_concat("(", unop_to_c((e-> op_code ))));
-        emit_expr(g, (e-> operand ));
+        printf("%s", __glide_string_concat("(", ((const char*(*)(int))unop_to_c)((e-> op_code ))));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> operand ));
         printf("%s", ")");
         return;
     }
     if (((e-> kind )  ==  EX_ASSIGN)) {
         printf("%s", "(");
-        emit_expr(g, (e-> lhs ));
-        printf("%s %s %s", " ", op_to_c((e-> op_code )), " ");
-        emit_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
+        printf("%s %s %s", " ", ((const char*(*)(int))op_to_c)((e-> op_code )), " ");
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
         printf("%s", ")");
         return;
     }
@@ -14291,7 +14401,7 @@ void   emit_expr (CG*   g, Expr*   e) {
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_PATH))) {
             const char*   probe = ((e-> lhs )-> str_val );
             if ((!HashMap_contains__Stmt((g-> enums ), probe))) {
-                (probe  =  resolve_type_prefix(g, probe));
+                (probe  =  ((const char*(*)(CG*, const char*))resolve_type_prefix)(g, probe));
             }
             if (HashMap_contains__Stmt((g-> enums ), probe)) {
                 Stmt   edef = HashMap_get__Stmt((g-> enums ), probe);
@@ -14322,7 +14432,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                     printf("%s", vname);
                     printf("%s", " = ");
                     Expr   a = Vector_get__Expr((e-> args ), 0);
-                    emit_expr(g, (&a));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                 } else {
                     printf("%s", ", .data.v_");
                     printf("%s", vname);
@@ -14332,7 +14442,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                             printf("%s", ", ");
                         }
                         Expr   a = Vector_get__Expr((e-> args ), i);
-                        emit_expr(g, (&a));
+                        ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                     }
                     printf("%s", "}");
                 }
@@ -14343,33 +14453,33 @@ void   emit_expr (CG*   g, Expr*   e) {
         if (((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))) {
             const char*   mname = ((e-> lhs )-> field );
             Expr*   recv_e = ((e-> lhs )-> lhs );
-            Type*   recv_ty = infer_for_codegen(g, recv_e);
-            Type*   stripped = strip_ptr(recv_ty);
+            Type*   recv_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, recv_e);
+            Type*   stripped = ((Type*(*)(Type*))strip_ptr)(recv_ty);
             if ((((((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq((stripped-> name ), "chan"))  &&  ((stripped-> args )  !=  NULL))  &&  (Vector_len__Type((stripped-> args ))  >  0))) {
                 Type   inner = Vector_get__Type((stripped-> args ), 0);
-                const char*   m = mangle_type((&inner));
+                const char*   m = ((const char*(*)(Type*))mangle_type)((&inner));
                 int   nargs = 0;
                 if (((e-> args )  !=  NULL)) {
                     (nargs  =  Vector_len__Expr((e-> args )));
                 }
                 if ((__glide_string_eq(mname, "send")  &&  (nargs  ==  1))) {
                     printf("%s", __glide_string_concat(__glide_string_concat("__glide_send_", m), "("));
-                    emit_expr(g, recv_e);
+                    ((void(*)(CG*, Expr*))emit_expr)(g, recv_e);
                     printf("%s", ", ");
                     Expr   v = Vector_get__Expr((e-> args ), 0);
-                    emit_expr(g, (&v));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (&v));
                     printf("%s", ")");
                     return;
                 }
                 if ((__glide_string_eq(mname, "recv")  &&  (nargs  ==  0))) {
                     printf("%s", __glide_string_concat(__glide_string_concat("__glide_recv_", m), "("));
-                    emit_expr(g, recv_e);
+                    ((void(*)(CG*, Expr*))emit_expr)(g, recv_e);
                     printf("%s", ")");
                     return;
                 }
                 if ((__glide_string_eq(mname, "close")  &&  (nargs  ==  0))) {
                     printf("%s", __glide_string_concat(__glide_string_concat("__glide_close_", m), "("));
-                    emit_expr(g, recv_e);
+                    ((void(*)(CG*, Expr*))emit_expr)(g, recv_e);
                     printf("%s", ")");
                     return;
                 }
@@ -14379,34 +14489,34 @@ void   emit_expr (CG*   g, Expr*   e) {
             const char*   cname = ((e-> lhs )-> str_val );
             if ((__glide_string_eq(cname, "unwrap")  &&  (Vector_len__Expr((e-> args ))  ==  1))) {
                 Expr   r0 = Vector_get__Expr((e-> args ), 0);
-                Type*   rt = infer_for_codegen(g, (&r0));
+                Type*   rt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&r0));
                 if (((rt  !=  NULL)  &&  ((rt-> kind )  ==  TY_RESULT))) {
-                    const char*   m = mangle_type((rt-> inner ));
+                    const char*   m = ((const char*(*)(Type*))mangle_type)((rt-> inner ));
                     printf("%s", __glide_string_concat(__glide_string_concat("__glide_unwrap_", m), "("));
-                    emit_expr(g, (&r0));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (&r0));
                     printf("%s", ")");
                     return;
                 }
             }
         }
         Type*   no_mono_hint = NULL;
-        bool   _mono_ok = try_mono_call(g, e, no_mono_hint);
+        bool   _mono_ok = ((bool(*)(CG*, Expr*, Type*))try_mono_call)(g, e, no_mono_hint);
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))) {
             Expr*   recv = ((e-> lhs )-> lhs );
             const char*   method = ((e-> lhs )-> field );
-            Type*   recv_ty = infer_for_codegen(g, recv);
-            Type*   stripped = strip_ptr(recv_ty);
+            Type*   recv_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, recv);
+            Type*   stripped = ((Type*(*)(Type*))strip_ptr)(recv_ty);
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_DYN))) {
                 printf("%s", "((");
-                emit_expr(g, recv);
+                ((void(*)(CG*, Expr*))emit_expr)(g, recv);
                 printf("%s", __glide_string_concat(__glide_string_concat(").vtable->", method), "(("));
-                emit_expr(g, recv);
+                ((void(*)(CG*, Expr*))emit_expr)(g, recv);
                 printf("%s", ").data");
                 if (((e-> args )  !=  NULL)) {
                     for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                         printf("%s", ", ");
                         Expr   a = Vector_get__Expr((e-> args ), i);
-                        emit_expr(g, (&a));
+                        ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                     }
                 }
                 printf("%s", "))");
@@ -14417,7 +14527,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                 const char*   mname = __glide_string_concat(__glide_string_concat(base, "_"), method);
                 if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
                     Stmt   template = HashMap_get__Stmt((g-> generic_fns ), mname);
-                    const char*   mangled = mangle_generic(mname, (stripped-> args ));
+                    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(mname, (stripped-> args ));
                     if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
                         HashMap_insert__bool((g-> emitted_monos ), mangled, true);
                         FnMonoEntry   entry = (( FnMonoEntry ){. name  = (template. name ), . args  = (stripped-> args )});
@@ -14429,12 +14539,12 @@ void   emit_expr (CG*   g, Expr*   e) {
                     if (needs_addr) {
                         printf("%s", "&");
                     }
-                    emit_expr(g, recv);
+                    ((void(*)(CG*, Expr*))emit_expr)(g, recv);
                     if (((e-> args )  !=  NULL)) {
                         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                             printf("%s", ", ");
                             Expr   a = Vector_get__Expr((e-> args ), i);
-                            emit_expr(g, (&a));
+                            ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                         }
                     }
                     printf("%s", ")");
@@ -14444,13 +14554,13 @@ void   emit_expr (CG*   g, Expr*   e) {
             if (((stripped  !=  NULL)  &&  ((stripped-> kind )  ==  TY_NAMED))) {
                 const char*   prefix = (stripped-> name );
                 const char*   fn_name = "";
-                int   qpos = ns_split_pos(method);
+                int   qpos = ((int(*)(const char*))ns_split_pos)(method);
                 if ((qpos  >  0)) {
                     const char*   ns = __glide_string_substring(method, 0, qpos);
                     const char*   real = __glide_string_substring(method, (qpos  +  2), __glide_string_len(method));
                     (fn_name  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(ns, "_"), prefix), "_"), real));
                 } else {
-                    if (is_stdlib_primitive((stripped-> name ))) {
+                    if (((bool(*)(const char*))is_stdlib_primitive)((stripped-> name ))) {
                         const char*   glide_name = __glide_string_concat(__glide_string_concat(prefix, "_"), method);
                         if ((HashMap_contains__Stmt((g-> fns ), glide_name)  &&  HashMap_contains__bool((g-> method_fns ), glide_name))) {
                             (fn_name  =  glide_name);
@@ -14499,7 +14609,7 @@ void   emit_expr (CG*   g, Expr*   e) {
                 }
                 printf("%s", fn_name);
                 printf("%s", "(");
-                bool   is_prim = is_stdlib_primitive((stripped-> name ));
+                bool   is_prim = ((bool(*)(const char*))is_stdlib_primitive)((stripped-> name ));
                 bool   r_is_ptr = ((recv_ty  !=  NULL)  &&  ((((recv_ty-> kind )  ==  TY_POINTER)  ||  ((recv_ty-> kind )  ==  TY_BORROW))  ||  ((recv_ty-> kind )  ==  TY_BORROW_MUT)));
                 bool   needs_addr = false;
                 if (HashMap_contains__Stmt((g-> fns ), fn_name)) {
@@ -14517,27 +14627,27 @@ void   emit_expr (CG*   g, Expr*   e) {
                 if (needs_addr) {
                     printf("%s", "&");
                 }
-                emit_expr(g, recv);
+                ((void(*)(CG*, Expr*))emit_expr)(g, recv);
                 if (((e-> args )  !=  NULL)) {
                     for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                         printf("%s", ", ");
                         Expr   a = Vector_get__Expr((e-> args ), i);
-                        emit_expr(g, (&a));
+                        ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                     }
                 }
                 printf("%s", ")");
                 return;
             }
         }
-        Type*   callee_ty = infer_for_codegen(g, (e-> lhs ));
+        Type*   callee_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
         if (((callee_ty  !=  NULL)  &&  ((callee_ty-> kind )  ==  TY_FNPTR))) {
             printf("%s", "((");
-            printf("%s", fnptr_cast_str(callee_ty));
+            printf("%s", ((const char*(*)(Type*))fnptr_cast_str)(callee_ty));
             printf("%s", ")");
-            emit_expr(g, (e-> lhs ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
             printf("%s", ")");
         } else {
-            emit_expr(g, (e-> lhs ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
         }
         printf("%s", "(");
         if (((e-> args )  !=  NULL)) {
@@ -14546,29 +14656,29 @@ void   emit_expr (CG*   g, Expr*   e) {
                     printf("%s", ", ");
                 }
                 Expr   a = Vector_get__Expr((e-> args ), i);
-                emit_expr(g, (&a));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
             }
         }
         printf("%s", ")");
         return;
     }
     if (((e-> kind )  ==  EX_MEMBER)) {
-        Type*   recv_ty = infer_for_codegen(g, (e-> lhs ));
+        Type*   recv_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
         if (((recv_ty  !=  NULL)  &&  ((((recv_ty-> kind )  ==  TY_POINTER)  ||  ((recv_ty-> kind )  ==  TY_BORROW))  ||  ((recv_ty-> kind )  ==  TY_BORROW_MUT)))) {
             printf("%s", "(");
-            emit_expr(g, (e-> lhs ));
-            printf("%s %s %s", "->", c_safe_ident((e-> field )), ")");
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
+            printf("%s %s %s", "->", ((const char*(*)(const char*))c_safe_ident)((e-> field )), ")");
             return;
         }
         printf("%s", "(");
-        emit_expr(g, (e-> lhs ));
-        printf("%s %s %s", ".", c_safe_ident((e-> field )), ")");
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
+        printf("%s %s %s", ".", ((const char*(*)(const char*))c_safe_ident)((e-> field )), ")");
         return;
     }
     if (((e-> kind )  ==  EX_INDEX)) {
-        emit_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
         printf("%s", "[");
-        emit_expr(g, (e-> rhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
         printf("%s", "]");
         return;
     }
@@ -14582,30 +14692,30 @@ void   emit_expr (CG*   g, Expr*   e) {
             }
         }
         if ((!__glide_string_eq(dyn_trait, ""))) {
-            Type*   src_ty = infer_for_codegen(g, (e-> lhs ));
-            Type*   inner = strip_ptr(src_ty);
+            Type*   src_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
+            Type*   inner = ((Type*(*)(Type*))strip_ptr)(src_ty);
             const char*   src_name = "?";
             if (((inner  !=  NULL)  &&  ((inner-> kind )  ==  TY_NAMED))) {
                 (src_name  =  (inner-> name ));
             }
             printf("%s", __glide_string_concat(__glide_string_concat("((__glide_dyn_", dyn_trait), "){.data = (void*)"));
-            emit_expr(g, (e-> lhs ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
             printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(", .vtable = &__glide_", src_name), "_as_"), dyn_trait), "_vt})"));
             return;
         }
-        printf("%s %s %s", "((", type_to_c((e-> cast_to )), ")");
-        emit_expr(g, (e-> lhs ));
+        printf("%s %s %s", "((", ((const char*(*)(Type*))type_to_c)((e-> cast_to )), ")");
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
         printf("%s", ")");
         return;
     }
     if (((e-> kind )  ==  EX_SIZEOF)) {
-        printf("%s %s %s", "sizeof(", type_to_c((e-> cast_to )), ")");
+        printf("%s %s %s", "sizeof(", ((const char*(*)(Type*))type_to_c)((e-> cast_to )), ")");
         return;
     }
     if (((e-> kind )  ==  EX_FNEXPR)) {
         int   id = (g-> anon_count );
         ((g-> anon_count )  =  (id  +  1));
-        const char*   name = __glide_string_concat("__glide_anon_", int_to_str(id));
+        const char*   name = __glide_string_concat("__glide_anon_", ((const char*(*)(int64_t))int_to_str)(id));
         AnonFn   af = (( AnonFn ){. name  = name, . params  = (e-> fn_expr_params ), . ret_ty  = (e-> cast_to ), . body  = (e-> fn_expr_body )});
         Vector_push__AnonFn((g-> anon_fns ), af);
         printf("%s", name);
@@ -14616,7 +14726,7 @@ void   emit_expr (CG*   g, Expr*   e) {
             printf("%s", HashMap_get__string((g-> module_aliases ), __glide_string_concat(__glide_string_concat((e-> str_val ), "::"), (e-> field ))));
             return;
         }
-        const char*   ty = resolve_type_prefix(g, (e-> str_val ));
+        const char*   ty = ((const char*(*)(CG*, const char*))resolve_type_prefix)(g, (e-> str_val ));
         if (HashMap_contains__Stmt((g-> enums ), ty)) {
             Stmt   edef = HashMap_get__Stmt((g-> enums ), ty);
             if (((edef. enum_variants )  !=  NULL)) {
@@ -14633,12 +14743,12 @@ void   emit_expr (CG*   g, Expr*   e) {
         return;
     }
     if (((e-> kind )  ==  EX_POSTINC)) {
-        emit_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
         printf("%s", "++");
         return;
     }
     if (((e-> kind )  ==  EX_POSTDEC)) {
-        emit_expr(g, (e-> lhs ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
         printf("%s", "--");
         return;
     }
@@ -14651,8 +14761,8 @@ void   emit_expr (CG*   g, Expr*   e) {
                         printf("%s", " ");
                     }
                     Expr   a = Vector_get__Expr((e-> args ), i);
-                    Type*   at = infer_for_codegen(g, (&a));
-                    printf("%s", format_spec_for(at));
+                    Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
+                    printf("%s", ((const char*(*)(Type*))format_spec_for)(at));
                 }
             }
             if (__glide_string_eq((e-> str_val ), "println")) {
@@ -14663,23 +14773,23 @@ void   emit_expr (CG*   g, Expr*   e) {
                 for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                     printf("%s", ", ");
                     Expr   a = Vector_get__Expr((e-> args ), i);
-                    Type*   at = infer_for_codegen(g, (&a));
+                    Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
                     if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((at-> name ), "bool"))) {
                         printf("%s", "__glide_bool_to_string(");
-                        emit_expr(g, (&a));
+                        ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                         printf("%s", ")");
                     } else {
                         if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "i64")  ||  __glide_string_eq((at-> name ), "isize"))  ||  __glide_string_eq((at-> name ), "long")))) {
                             printf("%s", "(long long)(");
-                            emit_expr(g, (&a));
+                            ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                             printf("%s", ")");
                         } else {
                             if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "u64")  ||  __glide_string_eq((at-> name ), "usize"))  ||  __glide_string_eq((at-> name ), "ulong")))) {
                                 printf("%s", "(unsigned long long)(");
-                                emit_expr(g, (&a));
+                                ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                                 printf("%s", ")");
                             } else {
-                                emit_expr(g, (&a));
+                                ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                             }
                         }
                     }
@@ -14703,8 +14813,8 @@ void   emit_expr (CG*   g, Expr*   e) {
                         if ((((__glide_char_to_int(c)  ==  123)  &&  ((i  +  1)  <  n))  &&  (__glide_char_to_int(__glide_string_at(raw, (i  +  1)))  ==  125))) {
                             if ((((e-> args )  !=  NULL)  &&  (arg_idx  <  Vector_len__Expr((e-> args ))))) {
                                 Expr   a = Vector_get__Expr((e-> args ), arg_idx);
-                                Type*   at = infer_for_codegen(g, (&a));
-                                printf("%s", format_spec_for(at));
+                                Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
+                                printf("%s", ((const char*(*)(Type*))format_spec_for)(at));
                             } else {
                                 printf("%s", "%s");
                             }
@@ -14725,23 +14835,23 @@ void   emit_expr (CG*   g, Expr*   e) {
                     }
                     printf("%s", "\"");
                 } else {
-                    emit_expr(g, (&first));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (&first));
                 }
                 for (int   j = 1; (j  <  Vector_len__Expr((e-> args ))); j++) {
                     printf("%s", ", ");
                     Expr   a = Vector_get__Expr((e-> args ), j);
-                    Type*   at = infer_for_codegen(g, (&a));
+                    Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
                     if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "i64")  ||  __glide_string_eq((at-> name ), "isize"))  ||  __glide_string_eq((at-> name ), "long")))) {
                         printf("%s", "(long long)(");
-                        emit_expr(g, (&a));
+                        ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                         printf("%s", ")");
                     } else {
                         if ((((at  !=  NULL)  &&  ((at-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq((at-> name ), "u64")  ||  __glide_string_eq((at-> name ), "usize"))  ||  __glide_string_eq((at-> name ), "ulong")))) {
                             printf("%s", "(unsigned long long)(");
-                            emit_expr(g, (&a));
+                            ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                             printf("%s", ")");
                         } else {
-                            emit_expr(g, (&a));
+                            ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
                         }
                     }
                 }
@@ -14759,9 +14869,9 @@ void   emit_expr (CG*   g, Expr*   e) {
                 if ((i  >  0)) {
                     printf("%s", ", ");
                 }
-                printf("%s %s %s", ".", c_safe_ident(Vector_get__string((e-> field_names ), i)), " = ");
+                printf("%s %s %s", ".", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((e-> field_names ), i)), " = ");
                 Expr   v = Vector_get__Expr((e-> args ), i);
-                emit_expr(g, (&v));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (&v));
             }
         }
         printf("%s", "})");
@@ -14771,7 +14881,7 @@ void   emit_expr (CG*   g, Expr*   e) {
 }
 
 void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth) {
-    ind(depth);
+    ((void(*)(int))ind)(depth);
     printf("%s", "__asm__");
     if ((s-> is_volatile )) {
         printf("%s", " volatile");
@@ -14783,7 +14893,7 @@ void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth) {
         for (int   i = 0; (i  <  Vector_len__string((s-> asm_strings ))); i++) {
             if ((i  >  0)) {
                 printf("%s\n", "");
-                ind((depth  +  1));
+                ((void(*)(int))ind)((depth  +  1));
             }
             const char*   line = Vector_get__string((s-> asm_strings ), i);
             printf("%s", "\"");
@@ -14818,7 +14928,7 @@ void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth) {
                 const char*   cstr = __glide_string_concat(__glide_string_concat("\"", Vector_get__string((s-> asm_out_constraints ), i)), "\"(");
                 printf("%s", cstr);
                 Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
-                emit_expr(g, (&e));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (&e));
                 printf("%s", ")");
             }
         }
@@ -14833,7 +14943,7 @@ void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth) {
                 const char*   cstr = __glide_string_concat(__glide_string_concat("\"", Vector_get__string((s-> asm_in_constraints ), i)), "\"(");
                 printf("%s", cstr);
                 Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
-                emit_expr(g, (&e));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (&e));
                 printf("%s", ")");
             }
         }
@@ -14867,16 +14977,16 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         bool   auto_owned = (struct_lit_auto  ||  (s-> is_auto_owned ));
         if (((((s-> let_value )  !=  NULL)  &&  ((s-> let_ty )  !=  NULL))  &&  (((s-> let_ty )-> kind )  ==  TY_GENERIC))) {
             if (((((s-> let_value )-> kind )  ==  EX_STRUCT_LIT)  &&  __glide_string_eq(((s-> let_value )-> str_val ), ((s-> let_ty )-> name )))) {
-                (((s-> let_value )-> str_val )  =  mangle_generic(((s-> let_ty )-> name ), ((s-> let_ty )-> args )));
+                (((s-> let_value )-> str_val )  =  ((const char*(*)(const char*, Vector__Type*))mangle_generic)(((s-> let_ty )-> name ), ((s-> let_ty )-> args )));
             }
         }
         if ((((((((((((s-> let_value )  !=  NULL)  &&  ((s-> let_ty )  !=  NULL))  &&  (((s-> let_ty )-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq(((s-> let_ty )-> name ), "chan"))  &&  (((s-> let_ty )-> args )  !=  NULL))  &&  (Vector_len__Type(((s-> let_ty )-> args ))  >  0))  &&  (((s-> let_value )-> kind )  ==  EX_CALL))  &&  (((s-> let_value )-> lhs )  !=  NULL))  &&  ((((s-> let_value )-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "make_chan"))) {
             Type   inner = Vector_get__Type(((s-> let_ty )-> args ), 0);
-            const char*   m = mangle_type((&inner));
+            const char*   m = ((const char*(*)(Type*))mangle_type)((&inner));
             ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_make_chan_", m));
         }
         if ((((((((s-> let_value )  !=  NULL)  &&  ((s-> let_ty )  !=  NULL))  &&  (((s-> let_ty )-> kind )  ==  TY_RESULT))  &&  (((s-> let_value )-> kind )  ==  EX_CALL))  &&  (((s-> let_value )-> lhs )  !=  NULL))  &&  ((((s-> let_value )-> lhs )-> kind )  ==  EX_IDENT))) {
-            const char*   m = mangle_type(((s-> let_ty )-> inner ));
+            const char*   m = ((const char*(*)(Type*))mangle_type)(((s-> let_ty )-> inner ));
             if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "ok")) {
                 ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_ok_", m));
             }
@@ -14885,7 +14995,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             }
         }
         if ((((((((s-> let_value )  !=  NULL)  &&  ((s-> let_ty )  !=  NULL))  &&  (((s-> let_ty )-> kind )  ==  TY_OPTION))  &&  (((s-> let_value )-> kind )  ==  EX_CALL))  &&  (((s-> let_value )-> lhs )  !=  NULL))  &&  ((((s-> let_value )-> lhs )-> kind )  ==  EX_IDENT))) {
-            const char*   m = mangle_type(((s-> let_ty )-> inner ));
+            const char*   m = ((const char*(*)(Type*))mangle_type)(((s-> let_ty )-> inner ));
             if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "some")) {
                 ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_some_", m));
             }
@@ -14894,7 +15004,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             }
         }
         if ((((((((s-> let_value )  !=  NULL)  &&  ((s-> let_ty )  !=  NULL))  &&  (((s-> let_ty )-> kind )  ==  TY_OPT_RESULT))  &&  (((s-> let_value )-> kind )  ==  EX_CALL))  &&  (((s-> let_value )-> lhs )  !=  NULL))  &&  ((((s-> let_value )-> lhs )-> kind )  ==  EX_IDENT))) {
-            const char*   m = mangle_type(((s-> let_ty )-> inner ));
+            const char*   m = ((const char*(*)(Type*))mangle_type)(((s-> let_ty )-> inner ));
             if (__glide_string_eq((((s-> let_value )-> lhs )-> str_val ), "some")) {
                 ((((s-> let_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_some_", m));
             }
@@ -14906,12 +15016,12 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             }
         }
         if ((((s-> let_value )  !=  NULL)  &&  (((s-> let_value )-> kind )  ==  EX_CALL))) {
-            bool   _ok = try_mono_call(g, (s-> let_value ), (s-> let_ty ));
+            bool   _ok = ((bool(*)(CG*, Expr*, Type*))try_mono_call)(g, (s-> let_value ), (s-> let_ty ));
         }
-        ind(depth);
-        const char*   cname = c_safe_ident((s-> name ));
+        ((void(*)(int))ind)(depth);
+        const char*   cname = ((const char*(*)(const char*))c_safe_ident)((s-> name ));
         if (((s-> let_ty )  !=  NULL)) {
-            printf("%s %s %s", type_to_c((s-> let_ty )), " ", cname);
+            printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((s-> let_ty )), " ", cname);
             CG_declare(g, (s-> name ), (s-> let_ty ));
         } else {
             if (((s-> let_value )  !=  NULL)) {
@@ -14921,7 +15031,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                         AnonFn   af = Vector_get__AnonFn((g-> anon_fns ), k);
                         if (__glide_string_eq((af. name ), ((s-> let_value )-> str_val ))) {
                             printf("%s %s", "void* ", cname);
-                            Type*   void_ptr = ty_pointer(ty_named("void"));
+                            Type*   void_ptr = ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*))ty_named)("void"));
                             CG_declare(g, (s-> name ), void_ptr);
                             (handled  =  true);
                             break;
@@ -14929,9 +15039,9 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                     }
                 }
                 if ((!handled)) {
-                    Type*   vt = infer_for_codegen(g, (s-> let_value ));
+                    Type*   vt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (s-> let_value ));
                     if ((vt  !=  NULL)) {
-                        printf("%s %s %s", type_to_c(vt), " ", cname);
+                        printf("%s %s %s", ((const char*(*)(Type*))type_to_c)(vt), " ", cname);
                         CG_declare(g, (s-> name ), vt);
                     } else {
                         printf("%s %s", "/* infer */ int ", cname);
@@ -14943,26 +15053,26 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         }
         if (struct_lit_auto) {
             printf("%s", " = (");
-            printf("%s", type_to_c((s-> let_ty )));
+            printf("%s", ((const char*(*)(Type*))type_to_c)((s-> let_ty )));
             printf("%s", ")malloc(sizeof(");
-            printf("%s", type_to_c(((s-> let_ty )-> inner )));
+            printf("%s", ((const char*(*)(Type*))type_to_c)(((s-> let_ty )-> inner )));
             printf("%s", "));");
             printf("%s\n", "");
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             printf("%s", "*");
             printf("%s", cname);
             printf("%s", " = ");
-            emit_expr(g, (s-> let_value ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (s-> let_value ));
             printf("%s\n", ";");
         } else {
             if (((s-> let_value )  !=  NULL)) {
                 printf("%s", " = ");
-                emit_expr(g, (s-> let_value ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (s-> let_value ));
             }
             printf("%s\n", ";");
         }
         if (auto_owned) {
-            Type*   inner_ty = strip_ptr((s-> let_ty ));
+            Type*   inner_ty = ((Type*(*)(Type*))strip_ptr)((s-> let_ty ));
             const char*   method_name = "";
             bool   has_method = false;
             if (((inner_ty  !=  NULL)  &&  ((inner_ty-> kind )  ==  TY_NAMED))) {
@@ -14978,20 +15088,20 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 }
             }
             if (has_method) {
-                Expr*   recv = expr_ident((s-> name ), (s-> line ), (s-> column ));
-                Expr*   mem = expr_member(recv, "free");
-                Vector__Expr*   no_args = Vector_new__Expr();
-                Expr*   call = expr_call(mem, no_args);
+                Expr*   recv = ((Expr*(*)(const char*, int, int))expr_ident)((s-> name ), (s-> line ), (s-> column ));
+                Expr*   mem = ((Expr*(*)(Expr*, const char*))expr_member)(recv, "free");
+                Vector__Expr*   no_args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+                Expr*   call = ((Expr*(*)(Expr*, Vector__Expr*))expr_call)(mem, no_args);
                 Vector_push__Expr((g-> auto_drop_stack ), (*call));
             } else {
-                Expr*   free_call = (( Expr* )calloc(1, sizeof( Expr )));
+                Expr*   free_call = (( Expr* )((void*(*)(size_t, size_t))calloc)(1, sizeof( Expr )));
                 ((free_call-> kind )  =  EX_CALL);
                 ((free_call-> line )  =  (s-> line ));
                 ((free_call-> column )  =  (s-> column ));
-                Expr*   callee = expr_ident("free", (s-> line ), (s-> column ));
+                Expr*   callee = ((Expr*(*)(const char*, int, int))expr_ident)("free", (s-> line ), (s-> column ));
                 ((free_call-> lhs )  =  callee);
-                Vector__Expr*   args = Vector_new__Expr();
-                Expr*   cast_arg = expr_cast(expr_ident((s-> name ), (s-> line ), (s-> column )), ty_pointer(ty_named("void")));
+                Vector__Expr*   args = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+                Expr*   cast_arg = ((Expr*(*)(Expr*, Type*))expr_cast)(((Expr*(*)(const char*, int, int))expr_ident)((s-> name ), (s-> line ), (s-> column )), ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*))ty_named)("void")));
                 Vector_push__Expr(args, (*cast_arg));
                 ((free_call-> args )  =  args);
                 Vector_push__Expr((g-> auto_drop_stack ), (*free_call));
@@ -15005,7 +15115,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             (is_err_return  =  true);
         }
         if ((((((((s-> expr_value )  !=  NULL)  &&  ((g-> current_ret_ty )  !=  NULL))  &&  (((g-> current_ret_ty )-> kind )  ==  TY_RESULT))  &&  (((s-> expr_value )-> kind )  ==  EX_CALL))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
-            const char*   m = mangle_type(((g-> current_ret_ty )-> inner ));
+            const char*   m = ((const char*(*)(Type*))mangle_type)(((g-> current_ret_ty )-> inner ));
             if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "ok")) {
                 ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_ok_", m));
             }
@@ -15014,7 +15124,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             }
         }
         if ((((((((s-> expr_value )  !=  NULL)  &&  ((g-> current_ret_ty )  !=  NULL))  &&  (((g-> current_ret_ty )-> kind )  ==  TY_OPTION))  &&  (((s-> expr_value )-> kind )  ==  EX_CALL))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
-            const char*   m = mangle_type(((g-> current_ret_ty )-> inner ));
+            const char*   m = ((const char*(*)(Type*))mangle_type)(((g-> current_ret_ty )-> inner ));
             if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "some")) {
                 ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_some_", m));
             }
@@ -15023,7 +15133,7 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             }
         }
         if ((((((((s-> expr_value )  !=  NULL)  &&  ((g-> current_ret_ty )  !=  NULL))  &&  (((g-> current_ret_ty )-> kind )  ==  TY_OPT_RESULT))  &&  (((s-> expr_value )-> kind )  ==  EX_CALL))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
-            const char*   m = mangle_type(((g-> current_ret_ty )-> inner ));
+            const char*   m = ((const char*(*)(Type*))mangle_type)(((g-> current_ret_ty )-> inner ));
             if (__glide_string_eq((((s-> expr_value )-> lhs )-> str_val ), "some")) {
                 ((((s-> expr_value )-> lhs )-> str_val )  =  __glide_string_concat("__glide_optres_some_", m));
             }
@@ -15037,28 +15147,28 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         bool   has_err_defers = (is_err_return  &&  (Vector_len__Expr((g-> err_defer_stack ))  >  0));
         bool   has_cleanup = (((Vector_len__Expr((g-> defer_stack ))  >  0)  ||  (Vector_len__Expr((g-> auto_drop_stack ))  >  0))  ||  has_err_defers);
         if ((((s-> expr_value )  !=  NULL)  &&  has_cleanup)) {
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             printf("%s", "__typeof__(");
-            emit_expr(g, (s-> expr_value ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (s-> expr_value ));
             printf("%s", ") __glide_ret = ");
-            emit_expr(g, (s-> expr_value ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (s-> expr_value ));
             printf("%s\n", ";");
             if (has_err_defers) {
                 CG_emit_err_defers_reverse(g, depth);
             }
             CG_emit_deferred_reverse(g, depth);
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             printf("%s\n", "return __glide_ret;");
         } else {
             if (has_err_defers) {
                 CG_emit_err_defers_reverse(g, depth);
             }
             CG_emit_deferred_reverse(g, depth);
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             printf("%s", "return");
             if (((s-> expr_value )  !=  NULL)) {
                 printf("%s", " ");
-                emit_expr(g, (s-> expr_value ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (s-> expr_value ));
             } else {
                 if (((((((g-> current_ret_ty )  !=  NULL)  &&  (((g-> current_ret_ty )-> kind )  ==  TY_RESULT))  &&  (((g-> current_ret_ty )-> inner )  !=  NULL))  &&  ((((g-> current_ret_ty )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((g-> current_ret_ty )-> inner )-> name ), "void"))) {
                     printf("%s", " __glide_ok_void()");
@@ -15083,14 +15193,14 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_SPAWN)) {
         int   id = (g-> spawn_count );
         ((g-> spawn_count )  =  (id  +  1));
-        const char*   ids = int_to_str(id);
+        const char*   ids = ((const char*(*)(int64_t))int_to_str)(id);
         Expr*   call = (s-> expr_value );
         int   n_args = 0;
         if (((call  !=  NULL)  &&  ((call-> args )  !=  NULL))) {
             (n_args  =  Vector_len__Expr((call-> args )));
         }
         if ((n_args  ==  0)) {
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             if ((s-> is_spawn_thread )) {
                 printf("%s\n", __glide_string_concat(__glide_string_concat("{ pthread_t __tid; pthread_create(&__tid, NULL, __glide_spawn_stub_", ids), ", NULL); pthread_detach(__tid); }"));
             } else {
@@ -15099,56 +15209,56 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
             return;
         }
         const char*   an = __glide_string_concat("__glide_spawn_args_", ids);
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "{");
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(an, "* __args = ("), an), "*)malloc(sizeof("), an), "));"));
         for (int   i = 0; (i  <  Vector_len__Expr((call-> args ))); i++) {
-            ind((depth  +  1));
-            printf("%s", __glide_string_concat(__glide_string_concat("__args->a", int_to_str(i)), " = "));
+            ((void(*)(int))ind)((depth  +  1));
+            printf("%s", __glide_string_concat(__glide_string_concat("__args->a", ((const char*(*)(int64_t))int_to_str)(i)), " = "));
             Expr   a = Vector_get__Expr((call-> args ), i);
-            emit_expr(g, (&a));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (&a));
             printf("%s\n", ";");
         }
         if ((s-> is_spawn_thread )) {
-            ind((depth  +  1));
+            ((void(*)(int))ind)((depth  +  1));
             printf("%s\n", "pthread_t __tid;");
-            ind((depth  +  1));
+            ((void(*)(int))ind)((depth  +  1));
             printf("%s\n", __glide_string_concat(__glide_string_concat("pthread_create(&__tid, NULL, __glide_spawn_stub_", ids), ", __args);"));
-            ind((depth  +  1));
+            ((void(*)(int))ind)((depth  +  1));
             printf("%s\n", "pthread_detach(__tid);");
         } else {
-            ind((depth  +  1));
+            ((void(*)(int))ind)((depth  +  1));
             printf("%s\n", __glide_string_concat(__glide_string_concat("__glide_spawn(__glide_spawn_stub_", ids), ", __args);"));
         }
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "}");
         return;
     }
     if (((s-> kind )  ==  ST_EXPR)) {
         if ((((((((s-> expr_value )  !=  NULL)  &&  (((s-> expr_value )-> kind )  ==  EX_ASSIGN))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((s-> expr_value )-> rhs )  !=  NULL))  &&  ((((s-> expr_value )-> rhs )-> kind )  ==  EX_CALL))) {
-            Type*   field_ty = infer_for_codegen(g, ((s-> expr_value )-> lhs ));
+            Type*   field_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, ((s-> expr_value )-> lhs ));
             if ((field_ty  !=  NULL)) {
-                bool   _ok = try_mono_call(g, ((s-> expr_value )-> rhs ), field_ty);
+                bool   _ok = ((bool(*)(CG*, Expr*, Type*))try_mono_call)(g, ((s-> expr_value )-> rhs ), field_ty);
             }
         }
-        ind(depth);
-        emit_expr(g, (s-> expr_value ));
+        ((void(*)(int))ind)(depth);
+        ((void(*)(CG*, Expr*))emit_expr)(g, (s-> expr_value ));
         printf("%s\n", ";");
         return;
     }
     if (((s-> kind )  ==  ST_BREAK)) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "break;");
         return;
     }
     if (((s-> kind )  ==  ST_CONTINUE)) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "continue;");
         return;
     }
     if (((s-> kind )  ==  ST_ASM)) {
-        emit_asm_stmt(g, s, depth);
+        ((void(*)(CG*, Stmt*, int))emit_asm_stmt)(g, s, depth);
         return;
     }
     if (((s-> kind )  ==  ST_CRAW)) {
@@ -15156,28 +15266,28 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         return;
     }
     if (((s-> kind )  ==  ST_IF)) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s", "if (");
-        emit_expr(g, (s-> cond ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (s-> cond ));
         printf("%s\n", ") {");
         if (((s-> then_body )  !=  NULL)) {
             int   saved = Vector_len__Expr((g-> auto_drop_stack ));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                emit_stmt(g, (&b), (depth  +  1));
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), (depth  +  1));
             }
             CG_emit_block_drops(g, saved, (depth  +  1));
         }
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         if (((s-> else_body )  !=  NULL)) {
             printf("%s\n", "} else {");
             int   saved = Vector_len__Expr((g-> auto_drop_stack ));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-                emit_stmt(g, (&b), (depth  +  1));
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), (depth  +  1));
             }
             CG_emit_block_drops(g, saved, (depth  +  1));
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             printf("%s\n", "}");
         } else {
             printf("%s\n", "}");
@@ -15187,52 +15297,52 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_WHILE_RECV)) {
         Expr*   recv = (s-> let_value );
         Expr*   recv_target = ((recv-> lhs )-> lhs );
-        Type*   target_ty = infer_for_codegen(g, recv_target);
-        Type*   stripped = strip_ptr(target_ty);
+        Type*   target_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, recv_target);
+        Type*   stripped = ((Type*(*)(Type*))strip_ptr)(target_ty);
         if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             printf("%s\n", "/* while-let: receiver is not a chan<T> */");
             return;
         }
         Type   inner = Vector_get__Type((stripped-> args ), 0);
-        const char*   m = mangle_type((&inner));
-        const char*   tc = type_to_c((&inner));
+        const char*   m = ((const char*(*)(Type*))mangle_type)((&inner));
+        const char*   tc = ((const char*(*)(Type*))type_to_c)((&inner));
         const char*   var = (s-> name );
         const char*   decl_ty = tc;
         if (((s-> let_ty )  !=  NULL)) {
-            (decl_ty  =  type_to_c((s-> let_ty )));
+            (decl_ty  =  ((const char*(*)(Type*))type_to_c)((s-> let_ty )));
         }
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "{");
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(decl_ty, " "), var), ";"));
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s", __glide_string_concat(__glide_string_concat("while (__glide_recv_into_", m), "("));
-        emit_expr(g, recv_target);
+        ((void(*)(CG*, Expr*))emit_expr)(g, recv_target);
         printf("%s\n", __glide_string_concat(__glide_string_concat(", &", var), ")) {"));
         CG_declare(g, var, (&inner));
         if (((s-> then_body )  !=  NULL)) {
             int   saved = Vector_len__Expr((g-> auto_drop_stack ));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                emit_stmt(g, (&b), (depth  +  2));
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), (depth  +  2));
             }
             CG_emit_block_drops(g, saved, (depth  +  2));
         }
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", "}");
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "}");
         return;
     }
     if (((s-> kind )  ==  ST_SELECT)) {
         Vector__SelectArm*   arms = (s-> select_arms );
         if (((arms  ==  NULL)  ||  (Vector_len__SelectArm(arms)  ==  0))) {
-            ind(depth);
+            ((void(*)(int))ind)(depth);
             printf("%s\n", "/* empty select */");
             return;
         }
-        const char*   id_str = int_to_str((((s-> line )  *  1000)  +  (s-> column )));
+        const char*   id_str = ((const char*(*)(int64_t))int_to_str)((((s-> line )  *  1000)  +  (s-> column )));
         const char*   end_label = __glide_string_concat("__sel_end_", id_str);
         int   default_idx = (-1);
         for (int   i = 0; (i  <  Vector_len__SelectArm(arms)); i++) {
@@ -15241,27 +15351,27 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 (default_idx  =  i);
             }
         }
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "{");
         for (int   i = 0; (i  <  Vector_len__SelectArm(arms)); i++) {
             SelectArm   a = Vector_get__SelectArm(arms, i);
             if ((((a. kind )  ==  SEL_RECV)  ||  ((a. kind )  ==  SEL_RECV_SOME))) {
-                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
-                Type*   stripped = strip_ptr(chan_ty);
+                Type*   chan_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (a. chan_expr ));
+                Type*   stripped = ((Type*(*)(Type*))strip_ptr)(chan_ty);
                 if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
-                    ind((depth  +  1));
+                    ((void(*)(int))ind)((depth  +  1));
                     printf("%s\n", "/* select: arm receiver is not a chan<T> */");
                     continue;
                 }
                 Type   inner = Vector_get__Type((stripped-> args ), 0);
-                const char*   tc = type_to_c((&inner));
-                ind((depth  +  1));
-                printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(tc, " __sel_tmp_"), int_to_str(i)), ";"));
+                const char*   tc = ((const char*(*)(Type*))type_to_c)((&inner));
+                ((void(*)(int))ind)((depth  +  1));
+                printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(tc, " __sel_tmp_"), ((const char*(*)(int64_t))int_to_str)(i)), ";"));
             }
         }
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", __glide_string_concat(__glide_string_concat("int __sel_iters_", id_str), " = 0;"));
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", "while (1) {");
         for (int   i = 0; (i  <  Vector_len__SelectArm(arms)); i++) {
             SelectArm   a = Vector_get__SelectArm(arms, i);
@@ -15269,221 +15379,221 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 continue;
             }
             if ((((a. kind )  ==  SEL_RECV)  ||  ((a. kind )  ==  SEL_RECV_SOME))) {
-                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
-                Type*   stripped = strip_ptr(chan_ty);
+                Type*   chan_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (a. chan_expr ));
+                Type*   stripped = ((Type*(*)(Type*))strip_ptr)(chan_ty);
                 if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
-                    ind((depth  +  2));
+                    ((void(*)(int))ind)((depth  +  2));
                     printf("%s\n", "/* select arm: receiver is not a chan<T> */");
                     continue;
                 }
                 Type   inner = Vector_get__Type((stripped-> args ), 0);
-                const char*   m = mangle_type((&inner));
-                const char*   tc = type_to_c((&inner));
-                const char*   tmp = __glide_string_concat("__sel_tmp_", int_to_str(i));
-                ind((depth  +  2));
+                const char*   m = ((const char*(*)(Type*))mangle_type)((&inner));
+                const char*   tc = ((const char*(*)(Type*))type_to_c)((&inner));
+                const char*   tmp = __glide_string_concat("__sel_tmp_", ((const char*(*)(int64_t))int_to_str)(i));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s", __glide_string_concat(__glide_string_concat("if (__glide_try_recv_", m), "("));
-                emit_expr(g, (a. chan_expr ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (a. chan_expr ));
                 printf("%s\n", __glide_string_concat(__glide_string_concat(", &", tmp), ")) {"));
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s", __glide_string_concat(__glide_string_concat("__glide_wake_send_", m), "("));
-                emit_expr(g, (a. chan_expr ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (a. chan_expr ));
                 printf("%s\n", ");");
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s\n", "{");
-                ind((depth  +  4));
+                ((void(*)(int))ind)((depth  +  4));
                 printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(tc, " "), (a. bind_name )), " = "), tmp), ";"));
                 CG_declare(g, (a. bind_name ), (&inner));
                 if (((a. body )  !=  NULL)) {
                     int   saved = Vector_len__Expr((g-> auto_drop_stack ));
                     for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
                         Stmt   bs = Vector_get__Stmt((a. body ), j);
-                        emit_stmt(g, (&bs), (depth  +  4));
+                        ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&bs), (depth  +  4));
                     }
                     CG_emit_block_drops(g, saved, (depth  +  4));
                 }
-                ind((depth  +  4));
+                ((void(*)(int))ind)((depth  +  4));
                 printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s\n", "}");
-                ind((depth  +  2));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s\n", "}");
             }
             if (((a. kind )  ==  SEL_RECV_NONE)) {
-                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
-                Type*   stripped = strip_ptr(chan_ty);
+                Type*   chan_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (a. chan_expr ));
+                Type*   stripped = ((Type*(*)(Type*))strip_ptr)(chan_ty);
                 if ((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))) {
-                    ind((depth  +  2));
+                    ((void(*)(int))ind)((depth  +  2));
                     printf("%s\n", "/* select arm: none receiver is not a chan<T> */");
                     continue;
                 }
-                ind((depth  +  2));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s", "if (atomic_load_explicit(&((");
-                emit_expr(g, (a. chan_expr ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (a. chan_expr ));
                 printf("%s\n", ")->closed), memory_order_acquire)) {");
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s\n", "{");
                 if (((a. body )  !=  NULL)) {
                     int   saved = Vector_len__Expr((g-> auto_drop_stack ));
                     for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
                         Stmt   bs = Vector_get__Stmt((a. body ), j);
-                        emit_stmt(g, (&bs), (depth  +  3));
+                        ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&bs), (depth  +  3));
                     }
                     CG_emit_block_drops(g, saved, (depth  +  3));
                 }
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
-                ind((depth  +  2));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s\n", "}");
-                ind((depth  +  2));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s\n", "}");
             }
             if (((a. kind )  ==  SEL_SEND)) {
-                Type*   chan_ty = infer_for_codegen(g, (a. chan_expr ));
-                Type*   stripped = strip_ptr(chan_ty);
+                Type*   chan_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (a. chan_expr ));
+                Type*   stripped = ((Type*(*)(Type*))strip_ptr)(chan_ty);
                 if ((((((stripped  ==  NULL)  ||  ((stripped-> kind )  !=  TY_GENERIC))  ||  (!__glide_string_eq((stripped-> name ), "chan")))  ||  ((stripped-> args )  ==  NULL))  ||  (Vector_len__Type((stripped-> args ))  ==  0))) {
-                    ind((depth  +  2));
+                    ((void(*)(int))ind)((depth  +  2));
                     printf("%s\n", "/* select arm: send receiver is not a chan<T> */");
                     continue;
                 }
                 Type   inner = Vector_get__Type((stripped-> args ), 0);
-                const char*   m = mangle_type((&inner));
-                ind((depth  +  2));
+                const char*   m = ((const char*(*)(Type*))mangle_type)((&inner));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s", __glide_string_concat(__glide_string_concat("if (__glide_try_send_", m), "("));
-                emit_expr(g, (a. chan_expr ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (a. chan_expr ));
                 printf("%s", ", ");
-                emit_expr(g, (a. send_value ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (a. send_value ));
                 printf("%s\n", ")) {");
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s", __glide_string_concat(__glide_string_concat("__glide_wake_recv_", m), "("));
-                emit_expr(g, (a. chan_expr ));
+                ((void(*)(CG*, Expr*))emit_expr)(g, (a. chan_expr ));
                 printf("%s\n", ");");
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s\n", "{");
                 if (((a. body )  !=  NULL)) {
                     int   saved = Vector_len__Expr((g-> auto_drop_stack ));
                     for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
                         Stmt   bs = Vector_get__Stmt((a. body ), j);
-                        emit_stmt(g, (&bs), (depth  +  3));
+                        ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&bs), (depth  +  3));
                     }
                     CG_emit_block_drops(g, saved, (depth  +  3));
                 }
-                ind((depth  +  3));
+                ((void(*)(int))ind)((depth  +  3));
                 printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
-                ind((depth  +  2));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s\n", "}");
-                ind((depth  +  2));
+                ((void(*)(int))ind)((depth  +  2));
                 printf("%s\n", "}");
             }
         }
         if ((default_idx  >=  0)) {
             SelectArm   a = Vector_get__SelectArm(arms, default_idx);
-            ind((depth  +  2));
+            ((void(*)(int))ind)((depth  +  2));
             printf("%s\n", "{");
             if (((a. body )  !=  NULL)) {
                 int   saved = Vector_len__Expr((g-> auto_drop_stack ));
                 for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
                     Stmt   bs = Vector_get__Stmt((a. body ), j);
-                    emit_stmt(g, (&bs), (depth  +  3));
+                    ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&bs), (depth  +  3));
                 }
                 CG_emit_block_drops(g, saved, (depth  +  3));
             }
-            ind((depth  +  3));
+            ((void(*)(int))ind)((depth  +  3));
             printf("%s\n", __glide_string_concat(__glide_string_concat("goto ", end_label), ";"));
-            ind((depth  +  2));
+            ((void(*)(int))ind)((depth  +  2));
             printf("%s\n", "}");
         } else {
-            ind((depth  +  2));
+            ((void(*)(int))ind)((depth  +  2));
             printf("%s\n", __glide_string_concat(__glide_string_concat("if (__sel_iters_", id_str), " < 64) { yield_now(); } else { sleep_ms(1); }"));
-            ind((depth  +  2));
+            ((void(*)(int))ind)((depth  +  2));
             printf("%s\n", __glide_string_concat(__glide_string_concat("__sel_iters_", id_str), "++;"));
         }
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", "}");
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", __glide_string_concat(end_label, ":;"));
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "}");
         return;
     }
     if (((s-> kind )  ==  ST_WHILE)) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s", "while (");
-        emit_expr(g, (s-> cond ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (s-> cond ));
         printf("%s\n", ") {");
         if (((s-> then_body )  !=  NULL)) {
             int   saved = Vector_len__Expr((g-> auto_drop_stack ));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                emit_stmt(g, (&b), (depth  +  1));
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), (depth  +  1));
             }
             CG_emit_block_drops(g, saved, (depth  +  1));
         }
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "}");
         return;
     }
     if (((s-> kind )  ==  ST_FOR)) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s", "for (");
         if (((s-> for_init )  !=  NULL)) {
             if ((((s-> for_init )-> kind )  ==  ST_LET)) {
-                const char*   fname = c_safe_ident(((s-> for_init )-> name ));
+                const char*   fname = ((const char*(*)(const char*))c_safe_ident)(((s-> for_init )-> name ));
                 if ((((s-> for_init )-> let_ty )  !=  NULL)) {
-                    printf("%s %s %s", type_to_c(((s-> for_init )-> let_ty )), " ", fname);
+                    printf("%s %s %s", ((const char*(*)(Type*))type_to_c)(((s-> for_init )-> let_ty )), " ", fname);
                     CG_declare(g, ((s-> for_init )-> name ), ((s-> for_init )-> let_ty ));
                 } else {
                     printf("%s %s", "int ", fname);
-                    CG_declare(g, ((s-> for_init )-> name ), ty_named("int"));
+                    CG_declare(g, ((s-> for_init )-> name ), ((Type*(*)(const char*))ty_named)("int"));
                 }
                 if ((((s-> for_init )-> let_value )  !=  NULL)) {
                     printf("%s", " = ");
-                    emit_expr(g, ((s-> for_init )-> let_value ));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, ((s-> for_init )-> let_value ));
                 }
             } else {
                 if ((((s-> for_init )-> expr_value )  !=  NULL)) {
-                    emit_expr(g, ((s-> for_init )-> expr_value ));
+                    ((void(*)(CG*, Expr*))emit_expr)(g, ((s-> for_init )-> expr_value ));
                 }
             }
         }
         printf("%s", "; ");
         if (((s-> cond )  !=  NULL)) {
-            emit_expr(g, (s-> cond ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (s-> cond ));
         }
         printf("%s", "; ");
         if (((s-> for_step )  !=  NULL)) {
-            emit_expr(g, (s-> for_step ));
+            ((void(*)(CG*, Expr*))emit_expr)(g, (s-> for_step ));
         }
         printf("%s\n", ") {");
         if (((s-> then_body )  !=  NULL)) {
             int   saved = Vector_len__Expr((g-> auto_drop_stack ));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                emit_stmt(g, (&b), (depth  +  1));
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), (depth  +  1));
             }
             CG_emit_block_drops(g, saved, (depth  +  1));
         }
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "}");
         return;
     }
     if (((s-> kind )  ==  ST_MATCH)) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "{");
-        Type*   scrut_ty = infer_for_codegen(g, (s-> scrutinee ));
+        Type*   scrut_ty = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (s-> scrutinee ));
         const char*   enum_name = "X";
         if (((scrut_ty  !=  NULL)  &&  ((scrut_ty-> kind )  ==  TY_NAMED))) {
             (enum_name  =  (scrut_ty-> name ));
         }
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s %s", enum_name, " __m = ");
-        emit_expr(g, (s-> scrutinee ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (s-> scrutinee ));
         printf("%s\n", ";");
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", "switch (__m.tag) {");
         if (((s-> arms )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__MatchArm((s-> arms ))); i++) {
                 MatchArm   a = Vector_get__MatchArm((s-> arms ), i);
-                ind((depth  +  1));
+                ((void(*)(int))ind)((depth  +  1));
                 if (__glide_string_eq((a. variant ), "_")) {
                     printf("%s", "default: ");
                 } else {
@@ -15494,25 +15604,25 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 printf("%s\n", "{");
                 if ((((a. bindings )  !=  NULL)  &&  (Vector_len__string((a. bindings ))  >  0))) {
                     if ((Vector_len__string((a. bindings ))  ==  1)) {
-                        ind((depth  +  2));
+                        ((void(*)(int))ind)((depth  +  2));
                         const char*   payload = __glide_string_concat("__m.data.v_", (a. variant ));
                         printf("%s", "__typeof__(");
                         printf("%s", payload);
                         printf("%s", ") ");
-                        printf("%s", c_safe_ident(Vector_get__string((a. bindings ), 0)));
+                        printf("%s", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((a. bindings ), 0)));
                         printf("%s", " = ");
                         printf("%s", payload);
                         printf("%s\n", ";");
                     } else {
                         for (int   k = 0; (k  <  Vector_len__string((a. bindings ))); k++) {
-                            ind((depth  +  2));
+                            ((void(*)(int))ind)((depth  +  2));
                             const char*   payload = __glide_string_concat("__m.data.v_", (a. variant ));
                             printf("%s", "__typeof__(");
                             printf("%s", payload);
                             printf("%s", ".f");
                             printf("%d", k);
                             printf("%s", ") ");
-                            printf("%s", c_safe_ident(Vector_get__string((a. bindings ), k)));
+                            printf("%s", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((a. bindings ), k)));
                             printf("%s", " = ");
                             printf("%s", payload);
                             printf("%s", ".f");
@@ -15524,35 +15634,35 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
                 if (((a. body )  !=  NULL)) {
                     for (int   k = 0; (k  <  Vector_len__Stmt((a. body ))); k++) {
                         Stmt   bb = Vector_get__Stmt((a. body ), k);
-                        emit_stmt(g, (&bb), (depth  +  2));
+                        ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&bb), (depth  +  2));
                     }
                 }
-                ind((depth  +  1));
+                ((void(*)(int))ind)((depth  +  1));
                 printf("%s\n", "break; }");
             }
         }
-        ind((depth  +  1));
+        ((void(*)(int))ind)((depth  +  1));
         printf("%s\n", "}");
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "}");
         return;
     }
     if (((s-> kind )  ==  ST_BLOCK)) {
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "{");
         if (((s-> then_body )  !=  NULL)) {
             int   saved = Vector_len__Expr((g-> auto_drop_stack ));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                emit_stmt(g, (&b), (depth  +  1));
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), (depth  +  1));
             }
             CG_emit_block_drops(g, saved, (depth  +  1));
         }
-        ind(depth);
+        ((void(*)(int))ind)(depth);
         printf("%s\n", "}");
         return;
     }
-    ind(depth);
+    ((void(*)(int))ind)(depth);
     printf("%s %d %s\n", "/* unknown stmt ", (s-> kind ), " */");
 }
 
@@ -15564,7 +15674,7 @@ void   emit_fn_signature (Stmt*   s) {
     if ((s-> is_naked )) {
         printf("%s", "__attribute__((naked)) ");
     }
-    printf("%s %s %s %s", type_to_c((s-> fn_ret_ty )), " ", c_safe_ident((s-> name )), "(");
+    printf("%s %s %s %s", ((const char*(*)(Type*))type_to_c)((s-> fn_ret_ty )), " ", ((const char*(*)(const char*))c_safe_ident)((s-> name )), "(");
     if ((((s-> fn_params )  ==  NULL)  ||  (Vector_len__Param((s-> fn_params ))  ==  0))) {
         if ((s-> is_variadic )) {
             printf("%s", "...");
@@ -15577,7 +15687,7 @@ void   emit_fn_signature (Stmt*   s) {
                 printf("%s", ", ");
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
+            printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((p. ty )), " ", ((const char*(*)(const char*))c_safe_ident)((p. name )));
         }
         if ((s-> is_variadic )) {
             printf("%s", ", ...");
@@ -15596,7 +15706,7 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
         if (HashMap_contains__Stmt((g-> generic_fns ), mname)) {
             Stmt   mtmpl = HashMap_get__Stmt((g-> generic_fns ), mname);
             if ((((mtmpl. fn_params )  !=  NULL)  &&  ((e-> args )  !=  NULL))) {
-                Vector__Type*   resolved = Vector_new__Type();
+                Vector__Type*   resolved = ((Vector__Type*(*)(void))Vector_new__Type)();
                 bool   all = true;
                 for (int   pi = 0; (pi  <  Vector_len__string(tparams)); pi++) {
                     const char*   tp = Vector_get__string(tparams, pi);
@@ -15607,7 +15717,7 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
                             int   arg_idx = (j  -  1);
                             if ((arg_idx  <  Vector_len__Expr((e-> args )))) {
                                 Expr   a = Vector_get__Expr((e-> args ), arg_idx);
-                                Type*   at = infer_for_codegen(g, (&a));
+                                Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
                                 if ((at  !=  NULL)) {
                                     (found  =  at);
                                     break;
@@ -15622,7 +15732,7 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
                     Vector_push__Type(resolved, (*found));
                 }
                 if ((all  &&  (Vector_len__Type(resolved)  >  0))) {
-                    return ty_pointer(ty_generic(gen_name, resolved));
+                    return ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*, Vector__Type*))ty_generic)(gen_name, resolved));
                 }
             }
         }
@@ -15641,7 +15751,7 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
                 for (int   i = 0; (i  <  limit); i++) {
                     Expr   a = Vector_get__Expr((e-> args ), i);
                     Param   p = Vector_get__Param((fn_def. fn_params ), i);
-                    Type*   resolved = constrain_walk((&a), (p. ty ), var);
+                    Type*   resolved = ((Type*(*)(Expr*, Type*, const char*))constrain_walk)((&a), (p. ty ), var);
                     if ((((((resolved  !=  NULL)  &&  ((resolved-> kind )  ==  TY_POINTER))  &&  ((resolved-> inner )  !=  NULL))  &&  (((resolved-> inner )-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq(((resolved-> inner )-> name ), gen_name))) {
                         return resolved;
                     }
@@ -15650,19 +15760,19 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
         }
     }
     if (((e-> lhs )  !=  NULL)) {
-        Type*   r = try_constrain_from_expr(g, (e-> lhs ), var, gen_name, tparams);
+        Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (e-> lhs ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
             return r;
         }
     }
     if (((e-> rhs )  !=  NULL)) {
-        Type*   r = try_constrain_from_expr(g, (e-> rhs ), var, gen_name, tparams);
+        Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (e-> rhs ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
             return r;
         }
     }
     if (((e-> operand )  !=  NULL)) {
-        Type*   r = try_constrain_from_expr(g, (e-> operand ), var, gen_name, tparams);
+        Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (e-> operand ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
             return r;
         }
@@ -15670,7 +15780,7 @@ Type*   try_constrain_from_expr (CG*   g, Expr*   e, const char*   var, const ch
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            Type*   r = try_constrain_from_expr(g, (&a), var, gen_name, tparams);
+            Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (&a), var, gen_name, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
@@ -15688,19 +15798,19 @@ Type*   constrain_walk (Expr*   arg, Type*   ty, const char*   var) {
     }
     if ((((arg-> kind )  ==  EX_UNARY)  &&  ((arg-> operand )  !=  NULL))) {
         if (((arg-> op_code )  ==  UN_DEREF)) {
-            return constrain_walk((arg-> operand ), ty_pointer(ty), var);
+            return ((Type*(*)(Expr*, Type*, const char*))constrain_walk)((arg-> operand ), ((Type*(*)(Type*))ty_pointer)(ty), var);
         }
         if (((arg-> op_code )  ==  UN_ADDR)) {
             if ((((ty-> kind )  !=  TY_BORROW)  ||  ((ty-> inner )  ==  NULL))) {
                 return NULL;
             }
-            return constrain_walk((arg-> operand ), (ty-> inner ), var);
+            return ((Type*(*)(Expr*, Type*, const char*))constrain_walk)((arg-> operand ), (ty-> inner ), var);
         }
         if (((arg-> op_code )  ==  UN_ADDR_MUT)) {
             if ((((ty-> kind )  !=  TY_BORROW_MUT)  ||  ((ty-> inner )  ==  NULL))) {
                 return NULL;
             }
-            return constrain_walk((arg-> operand ), (ty-> inner ), var);
+            return ((Type*(*)(Expr*, Type*, const char*))constrain_walk)((arg-> operand ), (ty-> inner ), var);
         }
     }
     return NULL;
@@ -15711,25 +15821,25 @@ Type*   try_constrain_from_stmt (CG*   g, Stmt*   s, const char*   var, const ch
         return NULL;
     }
     if (((s-> let_value )  !=  NULL)) {
-        Type*   r = try_constrain_from_expr(g, (s-> let_value ), var, gen_name, tparams);
+        Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (s-> let_value ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
             return r;
         }
     }
     if (((s-> expr_value )  !=  NULL)) {
-        Type*   r = try_constrain_from_expr(g, (s-> expr_value ), var, gen_name, tparams);
+        Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (s-> expr_value ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
             return r;
         }
     }
     if (((s-> cond )  !=  NULL)) {
-        Type*   r = try_constrain_from_expr(g, (s-> cond ), var, gen_name, tparams);
+        Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (s-> cond ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
             return r;
         }
     }
     if (((s-> for_step )  !=  NULL)) {
-        Type*   r = try_constrain_from_expr(g, (s-> for_step ), var, gen_name, tparams);
+        Type*   r = ((Type*(*)(CG*, Expr*, const char*, const char*, Vector__string*))try_constrain_from_expr)(g, (s-> for_step ), var, gen_name, tparams);
         if ((r  !=  NULL)) {
             return r;
         }
@@ -15737,7 +15847,7 @@ Type*   try_constrain_from_stmt (CG*   g, Stmt*   s, const char*   var, const ch
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            Type*   r = try_constrain_from_stmt(g, (&b), var, gen_name, tparams);
+            Type*   r = ((Type*(*)(CG*, Stmt*, const char*, const char*, Vector__string*))try_constrain_from_stmt)(g, (&b), var, gen_name, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
@@ -15746,7 +15856,7 @@ Type*   try_constrain_from_stmt (CG*   g, Stmt*   s, const char*   var, const ch
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            Type*   r = try_constrain_from_stmt(g, (&b), var, gen_name, tparams);
+            Type*   r = ((Type*(*)(CG*, Stmt*, const char*, const char*, Vector__string*))try_constrain_from_stmt)(g, (&b), var, gen_name, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
@@ -15762,25 +15872,25 @@ void   populate_scope_from_stmt (CG*   g, Stmt*   s) {
     if ((((s-> kind )  ==  ST_LET)  ||  ((s-> kind )  ==  ST_CONST))) {
         Type*   ty = (s-> let_ty );
         if (((ty  ==  NULL)  &&  ((s-> let_value )  !=  NULL))) {
-            (ty  =  infer_for_codegen(g, (s-> let_value )));
+            (ty  =  ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (s-> let_value )));
         }
         if ((ty  !=  NULL)) {
             CG_declare(g, (s-> name ), ty);
         }
     }
     if (((s-> for_init )  !=  NULL)) {
-        populate_scope_from_stmt(g, (s-> for_init ));
+        ((void(*)(CG*, Stmt*))populate_scope_from_stmt)(g, (s-> for_init ));
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            populate_scope_from_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))populate_scope_from_stmt)(g, (&b));
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            populate_scope_from_stmt(g, (&b));
+            ((void(*)(CG*, Stmt*))populate_scope_from_stmt)(g, (&b));
         }
     }
 }
@@ -15805,7 +15915,7 @@ Type*   try_resolve_open_let (CG*   g, Stmt*   s, Vector__Stmt*   body, int   st
         if (HashMap_contains__string((g-> module_aliases ), qual)) {
             (gname  =  HashMap_get__string((g-> module_aliases ), qual));
         } else {
-            (gname  =  __glide_string_concat(__glide_string_concat(resolve_type_prefix(g, (callee-> str_val )), "_"), (callee-> field )));
+            (gname  =  __glide_string_concat(__glide_string_concat(((const char*(*)(CG*, const char*))resolve_type_prefix)(g, (callee-> str_val )), "_"), (callee-> field )));
         }
     }
     if ((__glide_string_len(gname)  ==  0)) {
@@ -15832,7 +15942,7 @@ Type*   try_resolve_open_let (CG*   g, Stmt*   s, Vector__Stmt*   body, int   st
     int   n = Vector_len__Stmt(body);
     for (int   j = (start  +  1); (j  <  n); j++) {
         Stmt   s2 = Vector_get__Stmt(body, j);
-        Type*   r = try_constrain_from_stmt(g, (&s2), (s-> name ), gen_base, (template. type_params ));
+        Type*   r = ((Type*(*)(CG*, Stmt*, const char*, const char*, Vector__string*))try_constrain_from_stmt)(g, (&s2), (s-> name ), gen_base, (template. type_params ));
         if ((r  !=  NULL)) {
             return r;
         }
@@ -15846,13 +15956,13 @@ void   infer_let_types (CG*   g, Vector__Stmt*   body) {
     }
     for (int   k = 0; (k  <  Vector_len__Stmt(body)); k++) {
         Stmt   sk = Vector_get__Stmt(body, k);
-        populate_scope_from_stmt(g, (&sk));
+        ((void(*)(CG*, Stmt*))populate_scope_from_stmt)(g, (&sk));
     }
     int   n = Vector_len__Stmt(body);
     for (int   i = 0; (i  <  n); i++) {
         Stmt   s = Vector_get__Stmt(body, i);
         if (((s. kind )  ==  ST_LET)) {
-            Type*   resolved = try_resolve_open_let(g, (&s), body, i);
+            Type*   resolved = ((Type*(*)(CG*, Stmt*, Vector__Stmt*, int))try_resolve_open_let)(g, (&s), body, i);
             if ((resolved  !=  NULL)) {
                 ((s. let_ty )  =  resolved);
                 Vector_set__Stmt(body, i, s);
@@ -15860,10 +15970,10 @@ void   infer_let_types (CG*   g, Vector__Stmt*   body) {
             }
         }
         if (((s. then_body )  !=  NULL)) {
-            infer_let_types(g, (s. then_body ));
+            ((void(*)(CG*, Vector__Stmt*))infer_let_types)(g, (s. then_body ));
         }
         if (((s. else_body )  !=  NULL)) {
-            infer_let_types(g, (s. else_body ));
+            ((void(*)(CG*, Vector__Stmt*))infer_let_types)(g, (s. else_body ));
         }
     }
 }
@@ -15880,7 +15990,7 @@ void   infer_let_types_in_program (CG*   g, Vector__Stmt*   program) {
                     CG_declare(g, (p. name ), (p. ty ));
                 }
             }
-            infer_let_types(g, (s. fn_body ));
+            ((void(*)(CG*, Vector__Stmt*))infer_let_types)(g, (s. fn_body ));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
@@ -15893,7 +16003,7 @@ void   infer_let_types_in_program (CG*   g, Vector__Stmt*   program) {
                             CG_declare(g, (p. name ), (p. ty ));
                         }
                     }
-                    infer_let_types(g, (m. fn_body ));
+                    ((void(*)(CG*, Vector__Stmt*))infer_let_types)(g, (m. fn_body ));
                 }
             }
         }
@@ -15906,7 +16016,7 @@ void   emit_fn (CG*   g, Stmt*   s) {
     if (is_main) {
         printf("%s\n", "int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {");
     } else {
-        emit_fn_signature(s);
+        ((void(*)(Stmt*))emit_fn_signature)(s);
         printf("%s\n", " {");
     }
     HashMap_clear__Type((g-> scope ));
@@ -15915,9 +16025,9 @@ void   emit_fn (CG*   g, Stmt*   s) {
     Vector__Expr*   saved_defer = (g-> defer_stack );
     Vector__Expr*   saved_err_defer = (g-> err_defer_stack );
     Vector__Expr*   saved_drop = (g-> auto_drop_stack );
-    Vector__Expr*   new_defer = Vector_new__Expr();
-    Vector__Expr*   new_err_defer = Vector_new__Expr();
-    Vector__Expr*   new_drop = Vector_new__Expr();
+    Vector__Expr*   new_defer = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+    Vector__Expr*   new_err_defer = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+    Vector__Expr*   new_drop = ((Vector__Expr*(*)(void))Vector_new__Expr)();
     ((g-> defer_stack )  =  new_defer);
     ((g-> err_defer_stack )  =  new_err_defer);
     ((g-> auto_drop_stack )  =  new_drop);
@@ -15930,12 +16040,12 @@ void   emit_fn (CG*   g, Stmt*   s) {
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            emit_stmt(g, (&b), 1);
+            ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), 1);
         }
     }
     CG_emit_deferred_reverse(g, 1);
     if (((((((s-> fn_ret_ty )  !=  NULL)  &&  (((s-> fn_ret_ty )-> kind )  ==  TY_RESULT))  &&  (((s-> fn_ret_ty )-> inner )  !=  NULL))  &&  ((((s-> fn_ret_ty )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((s-> fn_ret_ty )-> inner )-> name ), "void"))) {
-        ind(1);
+        ((void(*)(int))ind)(1);
         printf("%s\n", "return __glide_ok_void();");
     }
     ((g-> defer_stack )  =  saved_defer);
@@ -15964,7 +16074,7 @@ void   emit_impl (CG*   g, Stmt*   s) {
         Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
         const char*   mangled = __glide_string_concat(__glide_string_concat(prefix, "_"), (m. name ));
         const char*   saved_name = (m. name );
-        printf("%s %s %s %s", type_to_c((m. fn_ret_ty )), " ", mangled, "(");
+        printf("%s %s %s %s", ((const char*(*)(Type*))type_to_c)((m. fn_ret_ty )), " ", mangled, "(");
         if ((((m. fn_params )  ==  NULL)  ||  (Vector_len__Param((m. fn_params ))  ==  0))) {
             printf("%s", "void");
         } else {
@@ -15973,7 +16083,7 @@ void   emit_impl (CG*   g, Stmt*   s) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((m. fn_params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
+                printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((p. ty )), " ", ((const char*(*)(const char*))c_safe_ident)((p. name )));
             }
         }
         printf("%s\n", ") {");
@@ -15983,9 +16093,9 @@ void   emit_impl (CG*   g, Stmt*   s) {
         Vector__Expr*   saved_defer = (g-> defer_stack );
         Vector__Expr*   saved_err_defer = (g-> err_defer_stack );
         Vector__Expr*   saved_drop = (g-> auto_drop_stack );
-        Vector__Expr*   nd = Vector_new__Expr();
-        Vector__Expr*   ned = Vector_new__Expr();
-        Vector__Expr*   nadr = Vector_new__Expr();
+        Vector__Expr*   nd = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+        Vector__Expr*   ned = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+        Vector__Expr*   nadr = ((Vector__Expr*(*)(void))Vector_new__Expr)();
         ((g-> defer_stack )  =  nd);
         ((g-> err_defer_stack )  =  ned);
         ((g-> auto_drop_stack )  =  nadr);
@@ -15998,7 +16108,7 @@ void   emit_impl (CG*   g, Stmt*   s) {
         if (((m. fn_body )  !=  NULL)) {
             for (int   j = 0; (j  <  Vector_len__Stmt((m. fn_body ))); j++) {
                 Stmt   b = Vector_get__Stmt((m. fn_body ), j);
-                emit_stmt(g, (&b), 1);
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), 1);
             }
         }
         CG_emit_deferred_reverse(g, 1);
@@ -16025,7 +16135,7 @@ void   emit_impl_fwd_decls (CG*   g, Stmt*   s) {
     for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
         Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
         const char*   mangled = __glide_string_concat(__glide_string_concat(prefix, "_"), (m. name ));
-        printf("%s %s %s %s", type_to_c((m. fn_ret_ty )), " ", mangled, "(");
+        printf("%s %s %s %s", ((const char*(*)(Type*))type_to_c)((m. fn_ret_ty )), " ", mangled, "(");
         if ((((m. fn_params )  ==  NULL)  ||  (Vector_len__Param((m. fn_params ))  ==  0))) {
             printf("%s", "void");
         } else {
@@ -16034,7 +16144,7 @@ void   emit_impl_fwd_decls (CG*   g, Stmt*   s) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((m. fn_params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
+                printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((p. ty )), " ", ((const char*(*)(const char*))c_safe_ident)((p. name )));
             }
         }
         printf("%s\n", ");");
@@ -16042,12 +16152,12 @@ void   emit_impl_fwd_decls (CG*   g, Stmt*   s) {
 }
 
 void   emit_struct (Stmt*   s) {
-    const char*   cname = c_safe_ident((s-> name ));
+    const char*   cname = ((const char*(*)(const char*))c_safe_ident)((s-> name ));
     printf("%s %s %s\n", "typedef struct ", cname, " {");
     if (((s-> struct_fields )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
             Field   f = Vector_get__Field((s-> struct_fields ), i);
-            printf("%s %s %s %s", "    ", type_to_c((f. ty )), " ", c_safe_ident((f. name )));
+            printf("%s %s %s %s", "    ", ((const char*(*)(Type*))type_to_c)((f. ty )), " ", ((const char*(*)(const char*))c_safe_ident)((f. name )));
             printf("%s\n", ";");
         }
     }
@@ -16065,7 +16175,7 @@ void   emit_enum (Stmt*   s) {
             }
         }
     }
-    const char*   ename = c_safe_ident((s-> name ));
+    const char*   ename = ((const char*(*)(const char*))c_safe_ident)((s-> name ));
     printf("%s %s %s\n", "typedef struct ", ename, " {");
     printf("%s\n", "    int tag;");
     if (has_payload) {
@@ -16079,7 +16189,7 @@ void   emit_enum (Stmt*   s) {
                 if ((Vector_len__Type((v. fields ))  ==  1)) {
                     Type   t = Vector_get__Type((v. fields ), 0);
                     printf("%s", "        ");
-                    printf("%s", type_to_c((&t)));
+                    printf("%s", ((const char*(*)(Type*))type_to_c)((&t)));
                     printf("%s", " v_");
                     printf("%s", (v. name ));
                     printf("%s\n", ";");
@@ -16090,7 +16200,7 @@ void   emit_enum (Stmt*   s) {
                             printf("%s", " ");
                         }
                         Type   t = Vector_get__Type((v. fields ), j);
-                        printf("%s", type_to_c((&t)));
+                        printf("%s", ((const char*(*)(Type*))type_to_c)((&t)));
                         printf("%s", " f");
                         printf("%d", j);
                         printf("%s", ";");
@@ -16229,14 +16339,14 @@ const char*   resolve_type_prefix (CG*   g, const char*   prefix) {
 void   emit_program (Vector__Stmt*   program) {
     printf("%s", "#include <stdio.h>\n#include <stdlib.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include <stddef.h>\n#include <string.h>\n");
     printf("%s\n", "");
-    emit_stdlib_runtime();
+    ((void(*)(void))emit_stdlib_runtime)();
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  ==  ST_CRAW)) {
-            emit_cfg_open((s. cfg_target ));
+            ((void(*)(const char*))emit_cfg_open)((s. cfg_target ));
             printf("%s", (s. name ));
             printf("%s\n", "");
-            emit_cfg_close((s. cfg_target ));
+            ((void(*)(const char*))emit_cfg_close)((s. cfg_target ));
         }
     }
     CG*   g = CG_new();
@@ -16258,20 +16368,20 @@ void   emit_program (Vector__Stmt*   program) {
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
-        collect_chan_in_stmt(g, (&s));
+        ((void(*)(CG*, Stmt*))collect_chan_in_stmt)(g, (&s));
     }
-    emit_scheduler_runtime();
-    emit_socket_runtime();
+    ((void(*)(void))emit_scheduler_runtime)();
+    ((void(*)(void))emit_socket_runtime)();
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
             continue;
         }
         if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
-            printf("%s %s %s %s %s\n", "typedef struct ", c_safe_ident((s. name )), " ", c_safe_ident((s. name )), ";");
+            printf("%s %s %s %s %s\n", "typedef struct ", ((const char*(*)(const char*))c_safe_ident)((s. name )), " ", ((const char*(*)(const char*))c_safe_ident)((s. name )), ";");
         }
         if (((s. kind )  ==  ST_ENUM)) {
-            printf("%s %s %s %s %s\n", "typedef struct ", c_safe_ident((s. name )), " ", c_safe_ident((s. name )), ";");
+            printf("%s %s %s %s %s\n", "typedef struct ", ((const char*(*)(const char*))c_safe_ident)((s. name )), " ", ((const char*(*)(const char*))c_safe_ident)((s. name )), ";");
         }
     }
     printf("%s\n", "");
@@ -16296,21 +16406,21 @@ void   emit_program (Vector__Stmt*   program) {
             }
             if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
                 printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                emit_struct((&s));
+                ((void(*)(Stmt*))emit_struct)((&s));
                 HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
             } else {
                 if (((s. kind )  ==  ST_ENUM)) {
                     printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                    emit_enum((&s));
+                    ((void(*)(Stmt*))emit_enum)((&s));
                     HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
                 }
             }
         }
     }
-    emit_chan_runtime(g);
+    ((void(*)(CG*))emit_chan_runtime)(g);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
-        collect_dyn_in_stmt(g, (&s));
+        ((void(*)(CG*, Stmt*))collect_dyn_in_stmt)(g, (&s));
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
@@ -16340,18 +16450,18 @@ void   emit_program (Vector__Stmt*   program) {
             }
             if ((((ts. kind )  ==  ST_STRUCT)  &&  (((ts. type_params )  ==  NULL)  ||  (Vector_len__string((ts. type_params ))  ==  0)))) {
                 printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", (ts. name )), " "), (ts. name )), ";"));
-                emit_struct((&ts));
+                ((void(*)(Stmt*))emit_struct)((&ts));
                 HashMap_insert__bool((g-> emitted_named ), tn, true);
             } else {
                 if (((ts. kind )  ==  ST_ENUM)) {
                     printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", (ts. name )), " "), (ts. name )), ";"));
-                    emit_enum((&ts));
+                    ((void(*)(Stmt*))emit_enum)((&ts));
                     HashMap_insert__bool((g-> emitted_named ), tn, true);
                 }
             }
         }
     }
-    emit_dyn_runtime(g, program);
+    ((void(*)(CG*, Vector__Stmt*))emit_dyn_runtime)(g, program);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((((s. kind )  ==  ST_FN)  &&  ((s. type_params )  !=  NULL))  &&  (Vector_len__string((s. type_params ))  >  0))) {
@@ -16366,7 +16476,7 @@ void   emit_program (Vector__Stmt*   program) {
         if (((s. kind )  ==  ST_TRAIT)) {
             continue;
         }
-        collect_result_in_stmt(g, (&s));
+        ((void(*)(CG*, Stmt*))collect_result_in_stmt)(g, (&s));
     }
     for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
         Type   t = Vector_get__Type((g-> result_types ), i);
@@ -16389,18 +16499,18 @@ void   emit_program (Vector__Stmt*   program) {
             }
             if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
                 printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                emit_struct((&s));
+                ((void(*)(Stmt*))emit_struct)((&s));
                 HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
             } else {
                 if (((s. kind )  ==  ST_ENUM)) {
                     printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                    emit_enum((&s));
+                    ((void(*)(Stmt*))emit_enum)((&s));
                     HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
                 }
             }
         }
     }
-    emit_result_runtime(g);
+    ((void(*)(CG*))emit_result_runtime)(g);
     for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
         Type   t = Vector_get__Type((g-> option_types ), i);
         if (((t. kind )  !=  TY_NAMED)) {
@@ -16422,18 +16532,18 @@ void   emit_program (Vector__Stmt*   program) {
             }
             if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
                 printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                emit_struct((&s));
+                ((void(*)(Stmt*))emit_struct)((&s));
                 HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
             } else {
                 if (((s. kind )  ==  ST_ENUM)) {
                     printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                    emit_enum((&s));
+                    ((void(*)(Stmt*))emit_enum)((&s));
                     HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
                 }
             }
         }
     }
-    emit_option_runtime(g);
+    ((void(*)(CG*))emit_option_runtime)(g);
     for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
         Type   t = Vector_get__Type((g-> optres_types ), i);
         if (((t. kind )  !=  TY_NAMED)) {
@@ -16455,18 +16565,18 @@ void   emit_program (Vector__Stmt*   program) {
             }
             if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
                 printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                emit_struct((&s));
+                ((void(*)(Stmt*))emit_struct)((&s));
                 HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
             } else {
                 if (((s. kind )  ==  ST_ENUM)) {
                     printf("%s %s %s %s %s\n", "typedef struct ", (s. name ), " ", (s. name ), ";");
-                    emit_enum((&s));
+                    ((void(*)(Stmt*))emit_enum)((&s));
                     HashMap_insert__bool((g-> emitted_named ), (t. name ), true);
                 }
             }
         }
     }
-    emit_optres_runtime(g);
+    ((void(*)(CG*))emit_optres_runtime)(g);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  !=  ST_IMPL)) {
@@ -16502,14 +16612,14 @@ void   emit_program (Vector__Stmt*   program) {
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
-        const char*   mod_path = module_path_from_origin((s. origin ));
+        const char*   mod_path = ((const char*(*)(const char*))module_path_from_origin)((s. origin ));
         if (((s. kind )  ==  ST_STRUCT)) {
             if ((((s. type_params )  !=  NULL)  &&  (Vector_len__string((s. type_params ))  >  0))) {
                 HashMap_insert__Stmt((g-> generic_structs ), (s. name ), s);
             } else {
                 HashMap_insert__Stmt((g-> structs ), (s. name ), s);
             }
-            register_alias_suffixes(g, mod_path, (s. name ));
+            ((void(*)(CG*, const char*, const char*))register_alias_suffixes)(g, mod_path, (s. name ));
         }
         if (((s. kind )  ==  ST_FN)) {
             if ((((s. type_params )  !=  NULL)  &&  (Vector_len__string((s. type_params ))  >  0))) {
@@ -16517,11 +16627,11 @@ void   emit_program (Vector__Stmt*   program) {
             } else {
                 HashMap_insert__Stmt((g-> fns ), (s. name ), s);
             }
-            register_alias_suffixes(g, mod_path, (s. name ));
+            ((void(*)(CG*, const char*, const char*))register_alias_suffixes)(g, mod_path, (s. name ));
         }
         if (((s. kind )  ==  ST_ENUM)) {
             HashMap_insert__Stmt((g-> enums ), (s. name ), s);
-            register_alias_suffixes(g, mod_path, (s. name ));
+            ((void(*)(CG*, const char*, const char*))register_alias_suffixes)(g, mod_path, (s. name ));
         }
         if ((((((s. kind )  ==  ST_IMPL)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))  &&  ((s. impl_target )  !=  NULL))  &&  ((s. impl_methods )  !=  NULL))) {
             const char*   prefix = "X";
@@ -16536,7 +16646,7 @@ void   emit_program (Vector__Stmt*   program) {
             }
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
-                Stmt*   synth = (( Stmt* )calloc(1, sizeof( Stmt )));
+                Stmt*   synth = (( Stmt* )((void*(*)(size_t, size_t))calloc)(1, sizeof( Stmt )));
                 ((*synth)  =  m);
                 ((synth-> name )  =  __glide_string_concat(__glide_string_concat(prefix, "_"), (m. name )));
                 HashMap_insert__Stmt((g-> fns ), (synth-> name ), (*synth));
@@ -16563,10 +16673,10 @@ void   emit_program (Vector__Stmt*   program) {
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
                 const char*   mname = __glide_string_concat(__glide_string_concat(prefix, "_"), (m. name ));
-                Stmt*   synth = (( Stmt* )calloc(1, sizeof( Stmt )));
+                Stmt*   synth = (( Stmt* )((void*(*)(size_t, size_t))calloc)(1, sizeof( Stmt )));
                 ((*synth)  =  m);
                 ((synth-> name )  =  mname);
-                Vector__string*   combined = Vector_new__string();
+                Vector__string*   combined = ((Vector__string*(*)(void))Vector_new__string)();
                 for (int   k = 0; (k  <  Vector_len__string((s. type_params ))); k++) {
                     Vector_push__string(combined, Vector_get__string((s. type_params ), k));
                 }
@@ -16581,15 +16691,15 @@ void   emit_program (Vector__Stmt*   program) {
             }
         }
     }
-    infer_let_types_in_program(g, program);
-    Vector__Type*   monos = Vector_new__Type();
+    ((void(*)(CG*, Vector__Stmt*))infer_let_types_in_program)(g, program);
+    Vector__Type*   monos = ((Vector__Type*(*)(void))Vector_new__Type)();
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
-        collect_generic_uses_in_stmt((&s), monos);
+        ((void(*)(Stmt*, Vector__Type*))collect_generic_uses_in_stmt)((&s), monos);
     }
     for (int   i = 0; (i  <  Vector_len__Type(monos)); i++) {
         Type   t = Vector_get__Type(monos, i);
-        const char*   mangled = mangle_generic((t. name ), (t. args ));
+        const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t. name ), (t. args ));
         if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
             HashMap_insert__bool((g-> emitted_monos ), mangled, true);
             printf("%s %s %s %s %s\n", "typedef struct ", mangled, " ", mangled, ";");
@@ -16607,7 +16717,7 @@ void   emit_program (Vector__Stmt*   program) {
     printf("%s\n", "");
     for (int   i = 0; (i  <  Vector_len__Type(monos)); i++) {
         Type   t = Vector_get__Type(monos, i);
-        emit_struct_mono(g, (&t));
+        ((void(*)(CG*, Type*))emit_struct_mono)(g, (&t));
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
@@ -16615,41 +16725,41 @@ void   emit_program (Vector__Stmt*   program) {
             continue;
         }
         if ((((s. kind )  ==  ST_STRUCT)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
-            emit_struct((&s));
+            ((void(*)(Stmt*))emit_struct)((&s));
         }
         if (((s. kind )  ==  ST_ENUM)) {
-            emit_enum((&s));
+            ((void(*)(Stmt*))emit_enum)((&s));
         }
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  ==  ST_CONST)) {
-            emit_top_const(g, (&s));
+            ((void(*)(CG*, Stmt*))emit_top_const)(g, (&s));
         }
     }
     printf("%s\n", "");
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
-            emit_cfg_open((s. cfg_target ));
-            emit_fn_signature((&s));
+            ((void(*)(const char*))emit_cfg_open)((s. cfg_target ));
+            ((void(*)(Stmt*))emit_fn_signature)((&s));
             printf("%s\n", ";");
-            emit_cfg_close((s. cfg_target ));
+            ((void(*)(const char*))emit_cfg_close)((s. cfg_target ));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
-            emit_impl_fwd_decls(g, (&s));
+            ((void(*)(CG*, Stmt*))emit_impl_fwd_decls)(g, (&s));
         }
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
-            prescan_stmt(g, (&s));
+            ((void(*)(CG*, Stmt*))prescan_stmt)(g, (&s));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
             if (((s. impl_methods )  !=  NULL)) {
                 for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                     Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
-                    prescan_stmt(g, (&m));
+                    ((void(*)(CG*, Stmt*))prescan_stmt)(g, (&m));
                 }
             }
         }
@@ -16663,16 +16773,16 @@ void   emit_program (Vector__Stmt*   program) {
             if (((template. fn_params )  !=  NULL)) {
                 for (int   j = 0; (j  <  Vector_len__Param((template. fn_params ))); j++) {
                     Param   p = Vector_get__Param((template. fn_params ), j);
-                    Type*   pt = subst_type((p. ty ), (template. type_params ), (entry. args ));
+                    Type*   pt = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((p. ty ), (template. type_params ), (entry. args ));
                     CG_declare(g, (p. name ), pt);
                 }
             }
             if (((template. fn_body )  !=  NULL)) {
                 for (int   j = 0; (j  <  Vector_len__Stmt((template. fn_body ))); j++) {
                     Stmt   b = Vector_get__Stmt((template. fn_body ), j);
-                    Stmt*   nb = subst_stmt((&b), (template. type_params ), (entry. args ), (g-> generic_structs ));
+                    Stmt*   nb = ((Stmt*(*)(Stmt*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_stmt)((&b), (template. type_params ), (entry. args ), (g-> generic_structs ));
                     if ((nb  !=  NULL)) {
-                        prescan_stmt(g, nb);
+                        ((void(*)(CG*, Stmt*))prescan_stmt)(g, nb);
                     }
                 }
             }
@@ -16681,29 +16791,29 @@ void   emit_program (Vector__Stmt*   program) {
     }
     for (int   i = 0; (i  <  Vector_len__Type((g-> struct_mono_queue ))); i++) {
         Type   t = Vector_get__Type((g-> struct_mono_queue ), i);
-        const char*   mangled = mangle_generic((t. name ), (t. args ));
+        const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t. name ), (t. args ));
         if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
             HashMap_insert__bool((g-> emitted_monos ), mangled, true);
             printf("%s %s %s %s %s\n", "typedef struct ", mangled, " ", mangled, ";");
-            emit_struct_mono(g, (&t));
+            ((void(*)(CG*, Type*))emit_struct_mono)(g, (&t));
         }
     }
     for (int   i = 0; (i  <  Vector_len__FnMonoEntry((g-> fn_mono_queue ))); i++) {
         FnMonoEntry   entry = Vector_get__FnMonoEntry((g-> fn_mono_queue ), i);
         if (HashMap_contains__Stmt((g-> generic_fns ), (entry. name ))) {
             Stmt   template = HashMap_get__Stmt((g-> generic_fns ), (entry. name ));
-            const char*   mangled = mangle_generic((entry. name ), (entry. args ));
-            emit_mono_forward_decl(g, mangled, (&template), (entry. args ));
+            const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((entry. name ), (entry. args ));
+            ((void(*)(CG*, const char*, Stmt*, Vector__Type*))emit_mono_forward_decl)(g, mangled, (&template), (entry. args ));
         }
     }
     printf("%s\n", "");
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
-        lift_anons_in_stmt(g, (&s));
+        ((void(*)(CG*, Stmt*))lift_anons_in_stmt)(g, (&s));
     }
     for (int   i = 0; (i  <  Vector_len__AnonFn((g-> anon_fns ))); i++) {
         AnonFn   af = Vector_get__AnonFn((g-> anon_fns ), i);
-        printf("%s %s %s %s", type_to_c((af. ret_ty )), " ", (af. name ), "(");
+        printf("%s %s %s %s", ((const char*(*)(Type*))type_to_c)((af. ret_ty )), " ", (af. name ), "(");
         if ((((af. params )  ==  NULL)  ||  (Vector_len__Param((af. params ))  ==  0))) {
             printf("%s", "void");
         } else {
@@ -16712,7 +16822,7 @@ void   emit_program (Vector__Stmt*   program) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((af. params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
+                printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((p. ty )), " ", ((const char*(*)(const char*))c_safe_ident)((p. name )));
             }
         }
         printf("%s\n", ");");
@@ -16721,21 +16831,21 @@ void   emit_program (Vector__Stmt*   program) {
     ((g-> spawn_count )  =  0);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
-        pre_emit_spawn_stubs_in_stmt(g, (&s));
+        ((void(*)(CG*, Stmt*))pre_emit_spawn_stubs_in_stmt)(g, (&s));
     }
     ((g-> spawn_count )  =  0);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((((s. kind )  ==  ST_FN)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))  &&  ((s. fn_body )  !=  NULL))) {
-            emit_cfg_open((s. cfg_target ));
-            emit_fn(g, (&s));
+            ((void(*)(const char*))emit_cfg_open)((s. cfg_target ));
+            ((void(*)(CG*, Stmt*))emit_fn)(g, (&s));
             printf("%s\n", "");
-            emit_cfg_close((s. cfg_target ));
+            ((void(*)(const char*))emit_cfg_close)((s. cfg_target ));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  (((s. type_params )  ==  NULL)  ||  (Vector_len__string((s. type_params ))  ==  0)))) {
-            emit_cfg_open((s. cfg_target ));
-            emit_impl(g, (&s));
-            emit_cfg_close((s. cfg_target ));
+            ((void(*)(const char*))emit_cfg_open)((s. cfg_target ));
+            ((void(*)(CG*, Stmt*))emit_impl)(g, (&s));
+            ((void(*)(const char*))emit_cfg_close)((s. cfg_target ));
         }
     }
     while ((Vector_len__FnMonoEntry((g-> fn_mono_queue ))  >  0)) {
@@ -16744,30 +16854,30 @@ void   emit_program (Vector__Stmt*   program) {
             continue;
         }
         Stmt   template = HashMap_get__Stmt((g-> generic_fns ), (e. name ));
-        const char*   mangled = mangle_generic((e. name ), (e. args ));
-        Vector__Param*   new_params_v = Vector_new__Param();
+        const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((e. name ), (e. args ));
+        Vector__Param*   new_params_v = ((Vector__Param*(*)(void))Vector_new__Param)();
         if (((template. fn_params )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Param((template. fn_params ))); i++) {
                 Param   p = Vector_get__Param((template. fn_params ), i);
-                Type*   pt = subst_type((p. ty ), (template. type_params ), (e. args ));
-                (pt  =  resolve_assoc_recursive(g, pt));
+                Type*   pt = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((p. ty ), (template. type_params ), (e. args ));
+                (pt  =  ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, pt));
                 Param   np = (( Param ){. name  = (p. name ), . ty  = pt});
                 Vector_push__Param(new_params_v, np);
             }
         }
-        Type*   new_ret = subst_type((template. fn_ret_ty ), (template. type_params ), (e. args ));
-        (new_ret  =  resolve_assoc_recursive(g, new_ret));
-        Vector__Stmt*   new_body = Vector_new__Stmt();
+        Type*   new_ret = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((template. fn_ret_ty ), (template. type_params ), (e. args ));
+        (new_ret  =  ((Type*(*)(CG*, Type*))resolve_assoc_recursive)(g, new_ret));
+        Vector__Stmt*   new_body = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
         if (((template. fn_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((template. fn_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((template. fn_body ), i);
-                Stmt*   nb = subst_stmt((&b), (template. type_params ), (e. args ), (g-> generic_structs ));
+                Stmt*   nb = ((Stmt*(*)(Stmt*, Vector__string*, Vector__Type*, HashMap__Stmt*))subst_stmt)((&b), (template. type_params ), (e. args ), (g-> generic_structs ));
                 if ((nb  !=  NULL)) {
                     Vector_push__Stmt(new_body, (*nb));
                 }
             }
         }
-        printf("%s %s %s %s", type_to_c(new_ret), " ", mangled, "(");
+        printf("%s %s %s %s", ((const char*(*)(Type*))type_to_c)(new_ret), " ", mangled, "(");
         if ((Vector_len__Param(new_params_v)  ==  0)) {
             printf("%s", "void");
         } else {
@@ -16776,15 +16886,15 @@ void   emit_program (Vector__Stmt*   program) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param(new_params_v, j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
+                printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((p. ty )), " ", ((const char*(*)(const char*))c_safe_ident)((p. name )));
             }
         }
         printf("%s\n", ") {");
         HashMap_clear__Type((g-> scope ));
         Vector__Expr*   saved_d = (g-> defer_stack );
         Vector__Expr*   saved_dr = (g-> auto_drop_stack );
-        Vector__Expr*   nd_q = Vector_new__Expr();
-        Vector__Expr*   nadr_q = Vector_new__Expr();
+        Vector__Expr*   nd_q = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+        Vector__Expr*   nadr_q = ((Vector__Expr*(*)(void))Vector_new__Expr)();
         ((g-> defer_stack )  =  nd_q);
         ((g-> auto_drop_stack )  =  nadr_q);
         for (int   j = 0; (j  <  Vector_len__Param(new_params_v)); j++) {
@@ -16795,7 +16905,7 @@ void   emit_program (Vector__Stmt*   program) {
         ((g-> current_ret_ty )  =  new_ret);
         for (int   j = 0; (j  <  Vector_len__Stmt(new_body)); j++) {
             Stmt   b = Vector_get__Stmt(new_body, j);
-            emit_stmt(g, (&b), 1);
+            ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), 1);
         }
         CG_emit_deferred_reverse(g, 1);
         ((g-> current_ret_ty )  =  saved_ret_mono);
@@ -16806,7 +16916,7 @@ void   emit_program (Vector__Stmt*   program) {
     }
     for (int   i = 0; (i  <  Vector_len__AnonFn((g-> anon_fns ))); i++) {
         AnonFn   af = Vector_get__AnonFn((g-> anon_fns ), i);
-        printf("%s %s %s %s", type_to_c((af. ret_ty )), " ", (af. name ), "(");
+        printf("%s %s %s %s", ((const char*(*)(Type*))type_to_c)((af. ret_ty )), " ", (af. name ), "(");
         if ((((af. params )  ==  NULL)  ||  (Vector_len__Param((af. params ))  ==  0))) {
             printf("%s", "void");
         } else {
@@ -16815,15 +16925,15 @@ void   emit_program (Vector__Stmt*   program) {
                     printf("%s", ", ");
                 }
                 Param   p = Vector_get__Param((af. params ), j);
-                printf("%s %s %s", type_to_c((p. ty )), " ", c_safe_ident((p. name )));
+                printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((p. ty )), " ", ((const char*(*)(const char*))c_safe_ident)((p. name )));
             }
         }
         printf("%s\n", ") {");
         HashMap_clear__Type((g-> scope ));
         Vector__Expr*   saved_d = (g-> defer_stack );
         Vector__Expr*   saved_dr = (g-> auto_drop_stack );
-        Vector__Expr*   nd = Vector_new__Expr();
-        Vector__Expr*   nadr = Vector_new__Expr();
+        Vector__Expr*   nd = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+        Vector__Expr*   nadr = ((Vector__Expr*(*)(void))Vector_new__Expr)();
         ((g-> defer_stack )  =  nd);
         ((g-> auto_drop_stack )  =  nadr);
         if (((af. params )  !=  NULL)) {
@@ -16835,7 +16945,7 @@ void   emit_program (Vector__Stmt*   program) {
         if (((af. body )  !=  NULL)) {
             for (int   j = 0; (j  <  Vector_len__Stmt((af. body ))); j++) {
                 Stmt   b = Vector_get__Stmt((af. body ), j);
-                emit_stmt(g, (&b), 1);
+                ((void(*)(CG*, Stmt*, int))emit_stmt)(g, (&b), 1);
             }
         }
         CG_emit_deferred_reverse(g, 1);
@@ -16851,26 +16961,26 @@ void   emit_top_const (CG*   g, Stmt*   s) {
     if (((s-> let_value )  ==  NULL)) {
         return;
     }
-    const char*   cname = c_safe_ident((s-> name ));
+    const char*   cname = ((const char*(*)(const char*))c_safe_ident)((s-> name ));
     if (((((s-> let_ty )  !=  NULL)  &&  (((s-> let_ty )-> kind )  ==  TY_NAMED))  &&  ((__glide_string_eq(((s-> let_ty )-> name ), "int")  ||  __glide_string_eq(((s-> let_ty )-> name ), "uint"))  ||  __glide_string_eq(((s-> let_ty )-> name ), "i32")))) {
         printf("%s %s %s", "#define ", cname, " ");
-        emit_expr(g, (s-> let_value ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (s-> let_value ));
         printf("%s\n", "");
         return;
     }
     printf("%s", "static const ");
     if (((s-> let_ty )  !=  NULL)) {
-        printf("%s %s %s", type_to_c((s-> let_ty )), " ", cname);
+        printf("%s %s %s", ((const char*(*)(Type*))type_to_c)((s-> let_ty )), " ", cname);
     } else {
         printf("%s %s", "int ", cname);
     }
     printf("%s", " = ");
     if (((((s-> let_ty )  !=  NULL)  &&  (((s-> let_ty )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq(((s-> let_ty )-> name ), "i64"))) {
         printf("%s", "(int64_t)(");
-        emit_expr(g, (s-> let_value ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (s-> let_value ));
         printf("%s", ")");
     } else {
-        emit_expr(g, (s-> let_value ));
+        ((void(*)(CG*, Expr*))emit_expr)(g, (s-> let_value ));
     }
     printf("%s\n", ";");
 }
@@ -16883,7 +16993,7 @@ void   emit_struct_mono (CG*   g, Type*   t) {
         return;
     }
     Stmt   template = HashMap_get__Stmt((g-> generic_structs ), (t-> name ));
-    const char*   mangled = mangle_generic((t-> name ), (t-> args ));
+    const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t-> name ), (t-> args ));
     const char*   body_key = __glide_string_concat(mangled, "__body");
     if (HashMap_contains__bool((g-> emitted_monos ), body_key)) {
         return;
@@ -16893,8 +17003,8 @@ void   emit_struct_mono (CG*   g, Type*   t) {
     if ((((template. struct_fields )  !=  NULL)  &&  ((template. type_params )  !=  NULL))) {
         for (int   i = 0; (i  <  Vector_len__Field((template. struct_fields ))); i++) {
             Field   f = Vector_get__Field((template. struct_fields ), i);
-            Type*   sub = subst_type((f. ty ), (template. type_params ), (t-> args ));
-            printf("%s %s %s %s", "    ", type_to_c(sub), " ", (f. name ));
+            Type*   sub = ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((f. ty ), (template. type_params ), (t-> args ));
+            printf("%s %s %s %s", "    ", ((const char*(*)(Type*))type_to_c)(sub), " ", (f. name ));
             printf("%s\n", ";");
         }
     }
@@ -16910,13 +17020,13 @@ void   collect_generic_uses_in_type (Type*   t, Vector__Type*   out) {
         if (((t-> args )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
                 Type   a = Vector_get__Type((t-> args ), i);
-                collect_generic_uses_in_type((&a), out);
+                ((void(*)(Type*, Vector__Type*))collect_generic_uses_in_type)((&a), out);
             }
         }
         Vector_push__Type(out, (*t));
     }
     if ((((((t-> kind )  ==  TY_POINTER)  ||  ((t-> kind )  ==  TY_BORROW))  ||  ((t-> kind )  ==  TY_BORROW_MUT))  ||  ((t-> kind )  ==  TY_SLICE))) {
-        collect_generic_uses_in_type((t-> inner ), out);
+        ((void(*)(Type*, Vector__Type*))collect_generic_uses_in_type)((t-> inner ), out);
     }
 }
 
@@ -16932,89 +17042,89 @@ void   collect_generic_uses_in_stmt (Stmt*   s, Vector__Type*   out) {
         return;
     }
     if (((s-> let_ty )  !=  NULL)) {
-        collect_generic_uses_in_type((s-> let_ty ), out);
+        ((void(*)(Type*, Vector__Type*))collect_generic_uses_in_type)((s-> let_ty ), out);
     }
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        collect_generic_uses_in_type((s-> fn_ret_ty ), out);
+        ((void(*)(Type*, Vector__Type*))collect_generic_uses_in_type)((s-> fn_ret_ty ), out);
     }
     if (((s-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            collect_generic_uses_in_type((p. ty ), out);
+            ((void(*)(Type*, Vector__Type*))collect_generic_uses_in_type)((p. ty ), out);
         }
     }
     if (((s-> struct_fields )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
             Field   f = Vector_get__Field((s-> struct_fields ), i);
-            collect_generic_uses_in_type((f. ty ), out);
+            ((void(*)(Type*, Vector__Type*))collect_generic_uses_in_type)((f. ty ), out);
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            collect_generic_uses_in_stmt((&b), out);
+            ((void(*)(Stmt*, Vector__Type*))collect_generic_uses_in_stmt)((&b), out);
         }
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            collect_generic_uses_in_stmt((&b), out);
+            ((void(*)(Stmt*, Vector__Type*))collect_generic_uses_in_stmt)((&b), out);
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            collect_generic_uses_in_stmt((&b), out);
+            ((void(*)(Stmt*, Vector__Type*))collect_generic_uses_in_stmt)((&b), out);
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            collect_generic_uses_in_stmt((&m), out);
+            ((void(*)(Stmt*, Vector__Type*))collect_generic_uses_in_stmt)((&m), out);
         }
     }
 }
 
 JsonValue*   json_null (void) {
-    JsonValue*   v = (( JsonValue* )calloc(1, sizeof( JsonValue )));
+    JsonValue*   v = (( JsonValue* )((void*(*)(size_t, size_t))calloc)(1, sizeof( JsonValue )));
     ((v-> kind )  =  JSON_NULL);
     return v;
 }
 
 JsonValue*   json_bool (bool   b) {
-    JsonValue*   v = (( JsonValue* )calloc(1, sizeof( JsonValue )));
+    JsonValue*   v = (( JsonValue* )((void*(*)(size_t, size_t))calloc)(1, sizeof( JsonValue )));
     ((v-> kind )  =  JSON_BOOL);
     ((v-> b )  =  b);
     return v;
 }
 
 JsonValue*   json_int (int   n) {
-    JsonValue*   v = (( JsonValue* )calloc(1, sizeof( JsonValue )));
+    JsonValue*   v = (( JsonValue* )((void*(*)(size_t, size_t))calloc)(1, sizeof( JsonValue )));
     ((v-> kind )  =  JSON_INT);
     ((v-> i )  =  n);
     return v;
 }
 
 JsonValue*   json_string (const char*   s) {
-    JsonValue*   v = (( JsonValue* )calloc(1, sizeof( JsonValue )));
+    JsonValue*   v = (( JsonValue* )((void*(*)(size_t, size_t))calloc)(1, sizeof( JsonValue )));
     ((v-> kind )  =  JSON_STRING);
     ((v-> s )  =  s);
     return v;
 }
 
 JsonValue*   json_array (void) {
-    JsonValue*   v = (( JsonValue* )calloc(1, sizeof( JsonValue )));
+    JsonValue*   v = (( JsonValue* )((void*(*)(size_t, size_t))calloc)(1, sizeof( JsonValue )));
     ((v-> kind )  =  JSON_ARRAY);
-    Vector__JsonValue*   arr = Vector_new__JsonValue();
+    Vector__JsonValue*   arr = ((Vector__JsonValue*(*)(void))Vector_new__JsonValue)();
     ((v-> arr )  =  arr);
     return v;
 }
 
 JsonValue*   json_object (void) {
-    JsonValue*   v = (( JsonValue* )calloc(1, sizeof( JsonValue )));
+    JsonValue*   v = (( JsonValue* )((void*(*)(size_t, size_t))calloc)(1, sizeof( JsonValue )));
     ((v-> kind )  =  JSON_OBJECT);
-    Vector__string*   keys = Vector_new__string();
-    Vector__JsonValue*   vals = Vector_new__JsonValue();
+    Vector__string*   keys = ((Vector__string*(*)(void))Vector_new__string)();
+    Vector__JsonValue*   vals = ((Vector__JsonValue*(*)(void))Vector_new__JsonValue)();
     ((v-> obj_keys )  =  keys);
     ((v-> obj_vals )  =  vals);
     return v;
@@ -17028,7 +17138,7 @@ void   json_arr_push (JsonValue*   arr, JsonValue*   v) {
         return;
     }
     Vector_push__JsonValue((arr-> arr ), (*v));
-    free((( void* )v));
+    ((void(*)(void*))free)((( void* )v));
 }
 
 void   json_obj_set (JsonValue*   obj, const char*   key, JsonValue*   v) {
@@ -17040,15 +17150,15 @@ void   json_obj_set (JsonValue*   obj, const char*   key, JsonValue*   v) {
     }
     Vector_push__string((obj-> obj_keys ), key);
     Vector_push__JsonValue((obj-> obj_vals ), (*v));
-    free((( void* )v));
+    ((void(*)(void*))free)((( void* )v));
 }
 
 void   json_free (JsonValue*   v) {
     if ((v  ==  NULL)) {
         return;
     }
-    json_free_contents(v);
-    free((( void* )v));
+    ((void(*)(JsonValue*))json_free_contents)(v);
+    ((void(*)(void*))free)((( void* )v));
 }
 
 void   json_free_contents (JsonValue*   v) {
@@ -17059,7 +17169,7 @@ void   json_free_contents (JsonValue*   v) {
         if (((v-> arr )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__JsonValue((v-> arr ))); i++) {
                 JsonValue   child = Vector_get__JsonValue((v-> arr ), i);
-                json_free_contents((&child));
+                ((void(*)(JsonValue*))json_free_contents)((&child));
             }
             Vector_free__JsonValue((v-> arr ));
         }
@@ -17068,7 +17178,7 @@ void   json_free_contents (JsonValue*   v) {
             if (((v-> obj_vals )  !=  NULL)) {
                 for (int   i = 0; (i  <  Vector_len__JsonValue((v-> obj_vals ))); i++) {
                     JsonValue   child = Vector_get__JsonValue((v-> obj_vals ), i);
-                    json_free_contents((&child));
+                    ((void(*)(JsonValue*))json_free_contents)((&child));
                 }
                 Vector_free__JsonValue((v-> obj_vals ));
             }
@@ -17086,7 +17196,7 @@ JsonValue*   json_get (JsonValue*   v, const char*   key) {
     for (int   i = 0; (i  <  Vector_len__string((v-> obj_keys ))); i++) {
         if (__glide_string_eq(Vector_get__string((v-> obj_keys ), i), key)) {
             JsonValue   val = Vector_get__JsonValue((v-> obj_vals ), i);
-            JsonValue*   p = (( JsonValue* )malloc(sizeof( JsonValue )));
+            JsonValue*   p = (( JsonValue* )((void*(*)(size_t))malloc)(sizeof( JsonValue )));
             ((*p)  =  val);
             return p;
         }
@@ -17102,7 +17212,7 @@ JsonValue*   json_at (JsonValue*   v, int   idx) {
         return NULL;
     }
     JsonValue   val = Vector_get__JsonValue((v-> arr ), idx);
-    JsonValue*   p = (( JsonValue* )malloc(sizeof( JsonValue )));
+    JsonValue*   p = (( JsonValue* )((void*(*)(size_t))malloc)(sizeof( JsonValue )));
     ((*p)  =  val);
     return p;
 }
@@ -17146,14 +17256,14 @@ int   jp_peek (JsonParser*   p) {
 }
 
 int   jp_advance (JsonParser*   p) {
-    int   c = jp_peek(p);
+    int   c = ((int(*)(JsonParser*))jp_peek)(p);
     ((p-> pos )  =  ((p-> pos )  +  1));
     return c;
 }
 
 void   jp_skip_ws (JsonParser*   p) {
     while (((p-> pos )  <  (p-> n ))) {
-        int   c = jp_peek(p);
+        int   c = ((int(*)(JsonParser*))jp_peek)(p);
         if (((((c  ==  32)  ||  (c  ==  9))  ||  (c  ==  10))  ||  (c  ==  13))) {
             ((p-> pos )  =  ((p-> pos )  +  1));
         } else {
@@ -17163,55 +17273,55 @@ void   jp_skip_ws (JsonParser*   p) {
 }
 
 JsonValue*   jp_value (JsonParser*   p) {
-    jp_skip_ws(p);
-    int   c = jp_peek(p);
+    ((void(*)(JsonParser*))jp_skip_ws)(p);
+    int   c = ((int(*)(JsonParser*))jp_peek)(p);
     if ((c  ==  123)) {
-        return jp_object(p);
+        return ((JsonValue*(*)(JsonParser*))jp_object)(p);
     }
     if ((c  ==  91)) {
-        return jp_array(p);
+        return ((JsonValue*(*)(JsonParser*))jp_array)(p);
     }
     if ((c  ==  34)) {
-        return jp_string_value(p);
+        return ((JsonValue*(*)(JsonParser*))jp_string_value)(p);
     }
     if (((c  ==  116)  ||  (c  ==  102))) {
-        return jp_bool(p);
+        return ((JsonValue*(*)(JsonParser*))jp_bool)(p);
     }
     if ((c  ==  110)) {
-        return jp_null(p);
+        return ((JsonValue*(*)(JsonParser*))jp_null)(p);
     }
     if (((c  ==  45)  ||  ((c  >=  48)  &&  (c  <=  57)))) {
-        return jp_number(p);
+        return ((JsonValue*(*)(JsonParser*))jp_number)(p);
     }
     return NULL;
 }
 
 JsonValue*   jp_object (JsonParser*   p) {
-    JsonValue*   obj = json_object();
+    JsonValue*   obj = ((JsonValue*(*)(void))json_object)();
     ((p-> pos )  =  ((p-> pos )  +  1));
-    jp_skip_ws(p);
-    if ((jp_peek(p)  ==  125)) {
+    ((void(*)(JsonParser*))jp_skip_ws)(p);
+    if ((((int(*)(JsonParser*))jp_peek)(p)  ==  125)) {
         ((p-> pos )  =  ((p-> pos )  +  1));
         return obj;
     }
     while (((p-> pos )  <  (p-> n ))) {
-        jp_skip_ws(p);
-        JsonValue*   k = jp_string_value(p);
+        ((void(*)(JsonParser*))jp_skip_ws)(p);
+        JsonValue*   k = ((JsonValue*(*)(JsonParser*))jp_string_value)(p);
         if ((k  ==  NULL)) {
             return obj;
         }
-        jp_skip_ws(p);
-        if ((jp_peek(p)  ==  58)) {
+        ((void(*)(JsonParser*))jp_skip_ws)(p);
+        if ((((int(*)(JsonParser*))jp_peek)(p)  ==  58)) {
             ((p-> pos )  =  ((p-> pos )  +  1));
         }
-        JsonValue*   v = jp_value(p);
+        JsonValue*   v = ((JsonValue*(*)(JsonParser*))jp_value)(p);
         if ((v  ==  NULL)) {
-            (v  =  json_null());
+            (v  =  ((JsonValue*(*)(void))json_null)());
         }
         Vector_push__string((obj-> obj_keys ), (k-> s ));
         Vector_push__JsonValue((obj-> obj_vals ), (*v));
-        jp_skip_ws(p);
-        int   c = jp_peek(p);
+        ((void(*)(JsonParser*))jp_skip_ws)(p);
+        int   c = ((int(*)(JsonParser*))jp_peek)(p);
         if ((c  ==  44)) {
             ((p-> pos )  =  ((p-> pos )  +  1));
             continue;
@@ -17226,21 +17336,21 @@ JsonValue*   jp_object (JsonParser*   p) {
 }
 
 JsonValue*   jp_array (JsonParser*   p) {
-    JsonValue*   arr = json_array();
+    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
     ((p-> pos )  =  ((p-> pos )  +  1));
-    jp_skip_ws(p);
-    if ((jp_peek(p)  ==  93)) {
+    ((void(*)(JsonParser*))jp_skip_ws)(p);
+    if ((((int(*)(JsonParser*))jp_peek)(p)  ==  93)) {
         ((p-> pos )  =  ((p-> pos )  +  1));
         return arr;
     }
     while (((p-> pos )  <  (p-> n ))) {
-        JsonValue*   v = jp_value(p);
+        JsonValue*   v = ((JsonValue*(*)(JsonParser*))jp_value)(p);
         if ((v  ==  NULL)) {
             return arr;
         }
         Vector_push__JsonValue((arr-> arr ), (*v));
-        jp_skip_ws(p);
-        int   c = jp_peek(p);
+        ((void(*)(JsonParser*))jp_skip_ws)(p);
+        int   c = ((int(*)(JsonParser*))jp_peek)(p);
         if ((c  ==  44)) {
             ((p-> pos )  =  ((p-> pos )  +  1));
             continue;
@@ -17255,14 +17365,14 @@ JsonValue*   jp_array (JsonParser*   p) {
 }
 
 JsonValue*   jp_string_value (JsonParser*   p) {
-    if ((jp_peek(p)  !=  34)) {
+    if ((((int(*)(JsonParser*))jp_peek)(p)  !=  34)) {
         return NULL;
     }
     ((p-> pos )  =  ((p-> pos )  +  1));
     int   start = (p-> pos );
     bool   has_escape = false;
     while (((p-> pos )  <  (p-> n ))) {
-        int   c = jp_peek(p);
+        int   c = ((int(*)(JsonParser*))jp_peek)(p);
         if ((c  ==  34)) {
             break;
         }
@@ -17277,19 +17387,19 @@ JsonValue*   jp_string_value (JsonParser*   p) {
         ((p-> pos )  =  ((p-> pos )  +  1));
     }
     const char*   raw = __glide_string_substring((p-> src ), start, (p-> pos ));
-    if ((jp_peek(p)  ==  34)) {
+    if ((((int(*)(JsonParser*))jp_peek)(p)  ==  34)) {
         ((p-> pos )  =  ((p-> pos )  +  1));
     }
     if ((!has_escape)) {
-        return json_string(raw);
+        return ((JsonValue*(*)(const char*))json_string)(raw);
     }
-    const char*   unescaped = jp_unescape(raw);
- free((char*)(raw ));     return json_string(unescaped);
+    const char*   unescaped = ((const char*(*)(const char*))jp_unescape)(raw);
+ free((char*)(raw ));     return ((JsonValue*(*)(const char*))json_string)(unescaped);
 }
 
 const char*   jp_unescape (const char*   raw) {
     int   n = __glide_string_len(raw);
-    void*   buf = __glide_palloc((n  +  1));
+    void*   buf = ((void*(*)(int))__glide_palloc)((n  +  1));
     int   i = 0;
     int   o = 0;
     while ((i  <  n)) {
@@ -17343,39 +17453,39 @@ const char*   jp_unescape (const char*   raw) {
 }
 
 JsonValue*   jp_bool (JsonParser*   p) {
-    int   c = jp_peek(p);
+    int   c = ((int(*)(JsonParser*))jp_peek)(p);
     if ((c  ==  116)) {
         ((p-> pos )  =  ((p-> pos )  +  4));
-        return json_bool(true);
+        return ((JsonValue*(*)(bool))json_bool)(true);
     }
     ((p-> pos )  =  ((p-> pos )  +  5));
-    return json_bool(false);
+    return ((JsonValue*(*)(bool))json_bool)(false);
 }
 
 JsonValue*   jp_null (JsonParser*   p) {
     ((p-> pos )  =  ((p-> pos )  +  4));
-    return json_null();
+    return ((JsonValue*(*)(void))json_null)();
 }
 
 JsonValue*   jp_number (JsonParser*   p) {
     bool   neg = false;
-    if ((jp_peek(p)  ==  45)) {
+    if ((((int(*)(JsonParser*))jp_peek)(p)  ==  45)) {
         (neg  =  true);
         ((p-> pos )  =  ((p-> pos )  +  1));
     }
     int   n = 0;
     while (((p-> pos )  <  (p-> n ))) {
-        int   c = jp_peek(p);
+        int   c = ((int(*)(JsonParser*))jp_peek)(p);
         if (((c  <  48)  ||  (c  >  57))) {
             break;
         }
         (n  =  ((n  *  10)  +  (c  -  48)));
         ((p-> pos )  =  ((p-> pos )  +  1));
     }
-    if ((jp_peek(p)  ==  46)) {
+    if ((((int(*)(JsonParser*))jp_peek)(p)  ==  46)) {
         ((p-> pos )  =  ((p-> pos )  +  1));
         while (((p-> pos )  <  (p-> n ))) {
-            int   c = jp_peek(p);
+            int   c = ((int(*)(JsonParser*))jp_peek)(p);
             if (((c  <  48)  ||  (c  >  57))) {
                 break;
             }
@@ -17385,12 +17495,12 @@ JsonValue*   jp_number (JsonParser*   p) {
     if (neg) {
         (n  =  (-n));
     }
-    return json_int(n);
+    return ((JsonValue*(*)(int))json_int)(n);
 }
 
 JsonValue*   json_parse (const char*   src) {
     JsonParser   p = (( JsonParser ){. src  = src, . pos  = 0, . n  = __glide_string_len(src)});
-    return jp_value((&p));
+    return ((JsonValue*(*)(JsonParser*))jp_value)((&p));
 }
 
 const char*   json_escape (const char*   s) {
@@ -17416,7 +17526,7 @@ const char*   json_escape (const char*   s) {
                             if ((c  <  32)) {
                                 (out  =  __glide_string_concat(out, "?"));
                             } else {
-                                (out  =  __glide_string_concat(out, __glide_string_substring(s, i, (i  +  1))));
+                                (out  =  __glide_string_concat(out, ((const char*(*)(const char*, int, int))__glide_string_substring)(s, i, (i  +  1))));
                             }
                         }
                     }
@@ -17441,10 +17551,10 @@ const char*   json_emit (JsonValue*   v) {
         return "false";
     }
     if (((v-> kind )  ==  JSON_INT)) {
-        return int_to_str((v-> i ));
+        return ((const char*(*)(int64_t))int_to_str)((v-> i ));
     }
     if (((v-> kind )  ==  JSON_STRING)) {
-        return json_escape((v-> s ));
+        return ((const char*(*)(const char*))json_escape)((v-> s ));
     }
     if (((v-> kind )  ==  JSON_ARRAY)) {
         const char*   out = "[";
@@ -17454,7 +17564,7 @@ const char*   json_emit (JsonValue*   v) {
                 (out  =  __glide_string_concat(out, ","));
             }
             JsonValue   e = Vector_get__JsonValue((v-> arr ), i);
-            (out  =  __glide_string_concat(out, json_emit((&e))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(JsonValue*))json_emit)((&e))));
         }
         return __glide_string_concat(out, "]");
     }
@@ -17465,10 +17575,10 @@ const char*   json_emit (JsonValue*   v) {
             if ((i  >  0)) {
                 (out  =  __glide_string_concat(out, ","));
             }
-            (out  =  __glide_string_concat(out, json_escape(Vector_get__string((v-> obj_keys ), i))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(const char*))json_escape)(Vector_get__string((v-> obj_keys ), i))));
             (out  =  __glide_string_concat(out, ":"));
             JsonValue   val = Vector_get__JsonValue((v-> obj_vals ), i);
-            (out  =  __glide_string_concat(out, json_emit((&val))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(JsonValue*))json_emit)((&val))));
         }
         return __glide_string_concat(out, "}");
     }
@@ -17491,19 +17601,19 @@ const char*   fmt_type (Type*   t) {
         return (t-> name );
     }
     if (((t-> kind )  ==  TY_POINTER)) {
-        return __glide_string_concat("*", fmt_type((t-> inner )));
+        return __glide_string_concat("*", ((const char*(*)(Type*))fmt_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_BORROW)) {
-        return __glide_string_concat("&", fmt_type((t-> inner )));
+        return __glide_string_concat("&", ((const char*(*)(Type*))fmt_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_BORROW_MUT)) {
-        return __glide_string_concat("&mut ", fmt_type((t-> inner )));
+        return __glide_string_concat("&mut ", ((const char*(*)(Type*))fmt_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_SLICE)) {
-        return __glide_string_concat("[]", fmt_type((t-> inner )));
+        return __glide_string_concat("[]", ((const char*(*)(Type*))fmt_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_RESULT)) {
-        return __glide_string_concat("!", fmt_type((t-> inner )));
+        return __glide_string_concat("!", ((const char*(*)(Type*))fmt_type)((t-> inner )));
     }
     if (((t-> kind )  ==  TY_GENERIC)) {
         const char*   out = __glide_string_concat((t-> name ), "<");
@@ -17513,7 +17623,7 @@ const char*   fmt_type (Type*   t) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Type   a = Vector_get__Type((t-> args ), i);
-                (out  =  __glide_string_concat(out, fmt_type((&a))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Type*))fmt_type)((&a))));
             }
         }
         return __glide_string_concat(out, ">");
@@ -17526,12 +17636,12 @@ const char*   fmt_type (Type*   t) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Type   a = Vector_get__Type((t-> args ), i);
-                (out  =  __glide_string_concat(out, fmt_type((&a))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Type*))fmt_type)((&a))));
             }
         }
         (out  =  __glide_string_concat(out, ")"));
         if (((t-> fnptr_ret )  !=  NULL)) {
-            (out  =  __glide_string_concat(__glide_string_concat(out, " -> "), fmt_type((t-> fnptr_ret ))));
+            (out  =  __glide_string_concat(__glide_string_concat(out, " -> "), ((const char*(*)(Type*))fmt_type)((t-> fnptr_ret ))));
         }
         return out;
     }
@@ -17669,10 +17779,10 @@ const char*   fmt_expr (Expr*   e) {
         return "";
     }
     if (((e-> kind )  ==  EX_INT)) {
-        return int_to_str((e-> int_val ));
+        return ((const char*(*)(int64_t))int_to_str)((e-> int_val ));
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
-        return int_to_str((e-> int_val ));
+        return ((const char*(*)(int64_t))int_to_str)((e-> int_val ));
     }
     if (((e-> kind )  ==  EX_STRING)) {
         return __glide_string_concat(__glide_string_concat("\"", (e-> str_val )), "\"");
@@ -17690,50 +17800,50 @@ const char*   fmt_expr (Expr*   e) {
         return (e-> str_val );
     }
     if (((e-> kind )  ==  EX_CHAR)) {
-        return fmt_char_lit((e-> int_val ));
+        return ((const char*(*)(int))fmt_char_lit)((e-> int_val ));
     }
     if (((e-> kind )  ==  EX_BINARY)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("(", fmt_expr((e-> lhs ))), " "), fmt_binop((e-> op_code ))), " "), fmt_expr((e-> rhs ))), ")");
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("(", ((const char*(*)(Expr*))fmt_expr)((e-> lhs ))), " "), ((const char*(*)(int))fmt_binop)((e-> op_code ))), " "), ((const char*(*)(Expr*))fmt_expr)((e-> rhs ))), ")");
     }
     if (((e-> kind )  ==  EX_UNARY)) {
         if (((e-> op_code )  ==  UN_TRY)) {
-            return __glide_string_concat(fmt_expr((e-> operand )), "?");
+            return __glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> operand )), "?");
         }
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat("(", fmt_unop((e-> op_code ))), fmt_expr((e-> operand ))), ")");
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat("(", ((const char*(*)(int))fmt_unop)((e-> op_code ))), ((const char*(*)(Expr*))fmt_expr)((e-> operand ))), ")");
     }
     if (((e-> kind )  ==  EX_ASSIGN)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(fmt_expr((e-> lhs )), " "), fmt_binop((e-> op_code ))), " "), fmt_expr((e-> rhs )));
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> lhs )), " "), ((const char*(*)(int))fmt_binop)((e-> op_code ))), " "), ((const char*(*)(Expr*))fmt_expr)((e-> rhs )));
     }
     if (((e-> kind )  ==  EX_CALL)) {
-        const char*   out = __glide_string_concat(fmt_expr((e-> lhs )), "(");
+        const char*   out = __glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> lhs )), "(");
         if (((e-> args )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
                 if ((i  >  0)) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Expr   a = Vector_get__Expr((e-> args ), i);
-                (out  =  __glide_string_concat(out, fmt_expr((&a))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Expr*))fmt_expr)((&a))));
             }
         }
         return __glide_string_concat(out, ")");
     }
     if (((e-> kind )  ==  EX_MEMBER)) {
-        return __glide_string_concat(__glide_string_concat(fmt_expr((e-> lhs )), "."), (e-> field ));
+        return __glide_string_concat(__glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> lhs )), "."), (e-> field ));
     }
     if (((e-> kind )  ==  EX_INDEX)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(fmt_expr((e-> lhs )), "["), fmt_expr((e-> rhs ))), "]");
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> lhs )), "["), ((const char*(*)(Expr*))fmt_expr)((e-> rhs ))), "]");
     }
     if (((e-> kind )  ==  EX_CAST)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("(", fmt_expr((e-> lhs ))), " as "), fmt_type((e-> cast_to ))), ")");
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("(", ((const char*(*)(Expr*))fmt_expr)((e-> lhs ))), " as "), ((const char*(*)(Type*))fmt_type)((e-> cast_to ))), ")");
     }
     if (((e-> kind )  ==  EX_PATH)) {
         return __glide_string_concat(__glide_string_concat((e-> str_val ), "::"), (e-> field ));
     }
     if (((e-> kind )  ==  EX_POSTINC)) {
-        return __glide_string_concat(fmt_expr((e-> lhs )), "++");
+        return __glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> lhs )), "++");
     }
     if (((e-> kind )  ==  EX_POSTDEC)) {
-        return __glide_string_concat(fmt_expr((e-> lhs )), "--");
+        return __glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> lhs )), "--");
     }
     if (((e-> kind )  ==  EX_MACRO)) {
         if (((__glide_string_eq((e-> str_val ), "format")  &&  ((e-> field )  !=  NULL))  &&  (!__glide_string_eq((e-> field ), "")))) {
@@ -17741,7 +17851,7 @@ const char*   fmt_expr (Expr*   e) {
         }
         const char*   out = "";
         if (((e-> macro_recv )  !=  NULL)) {
-            (out  =  __glide_string_concat(fmt_expr((e-> macro_recv )), "."));
+            (out  =  __glide_string_concat(((const char*(*)(Expr*))fmt_expr)((e-> macro_recv )), "."));
         } else {
             if ((((e-> macro_owner )  !=  NULL)  &&  (!__glide_string_eq((e-> macro_owner ), "")))) {
                 (out  =  __glide_string_concat((e-> macro_owner ), "::"));
@@ -17754,19 +17864,19 @@ const char*   fmt_expr (Expr*   e) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Expr   a = Vector_get__Expr((e-> args ), i);
-                (out  =  __glide_string_concat(out, fmt_expr((&a))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Expr*))fmt_expr)((&a))));
             }
         }
         return __glide_string_concat(out, ")");
     }
     if (((e-> kind )  ==  EX_SIZEOF)) {
-        return __glide_string_concat(__glide_string_concat("sizeof(", fmt_type((e-> cast_to ))), ")");
+        return __glide_string_concat(__glide_string_concat("sizeof(", ((const char*(*)(Type*))fmt_type)((e-> cast_to ))), ")");
     }
     if (((e-> kind )  ==  EX_NEW)) {
-        return fmt_struct_lit(e, "new ");
+        return ((const char*(*)(Expr*, const char*))fmt_struct_lit)(e, "new ");
     }
     if (((e-> kind )  ==  EX_STRUCT_LIT)) {
-        return fmt_struct_lit(e, "");
+        return ((const char*(*)(Expr*, const char*))fmt_struct_lit)(e, "");
     }
     if (((e-> kind )  ==  EX_FNEXPR)) {
         const char*   out = "fn(";
@@ -17776,12 +17886,12 @@ const char*   fmt_expr (Expr*   e) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Param   p = Vector_get__Param((e-> fn_expr_params ), i);
-                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, (p. name )), ": "), fmt_type((p. ty ))));
+                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, (p. name )), ": "), ((const char*(*)(Type*))fmt_type)((p. ty ))));
             }
         }
         (out  =  __glide_string_concat(out, ")"));
         if (((e-> cast_to )  !=  NULL)) {
-            (out  =  __glide_string_concat(__glide_string_concat(out, " -> "), fmt_type((e-> cast_to ))));
+            (out  =  __glide_string_concat(__glide_string_concat(out, " -> "), ((const char*(*)(Type*))fmt_type)((e-> cast_to ))));
         }
         (out  =  __glide_string_concat(out, " { "));
         if (((e-> fn_expr_body )  !=  NULL)) {
@@ -17790,7 +17900,7 @@ const char*   fmt_expr (Expr*   e) {
                     (out  =  __glide_string_concat(out, " "));
                 }
                 Stmt   b = Vector_get__Stmt((e-> fn_expr_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt_inline((&b))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*))fmt_stmt_inline)((&b))));
             }
         }
         return __glide_string_concat(out, " }");
@@ -17808,7 +17918,7 @@ const char*   fmt_struct_lit (Expr*   e, const char*   prefix) {
             }
             (out  =  __glide_string_concat(__glide_string_concat(out, Vector_get__string((e-> field_names ), i)), ": "));
             Expr   v = Vector_get__Expr((e-> args ), i);
-            (out  =  __glide_string_concat(out, fmt_expr((&v))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(Expr*))fmt_expr)((&v))));
         }
         (out  =  __glide_string_concat(out, " "));
     }
@@ -17821,17 +17931,17 @@ const char*   fmt_stmt_inline (Stmt*   s) {
     }
     if (((s-> kind )  ==  ST_RETURN)) {
         if (((s-> expr_value )  !=  NULL)) {
-            return __glide_string_concat(__glide_string_concat("return ", fmt_expr((s-> expr_value ))), ";");
+            return __glide_string_concat(__glide_string_concat("return ", ((const char*(*)(Expr*))fmt_expr)((s-> expr_value ))), ";");
         }
         return "return;";
     }
     if (((s-> kind )  ==  ST_EXPR)) {
-        return __glide_string_concat(fmt_expr((s-> expr_value )), ";");
+        return __glide_string_concat(((const char*(*)(Expr*))fmt_expr)((s-> expr_value )), ";");
     }
     if ((((s-> kind )  ==  ST_LET)  ||  ((s-> kind )  ==  ST_CONST))) {
-        return fmt_let_const_inline(s);
+        return ((const char*(*)(Stmt*))fmt_let_const_inline)(s);
     }
-    return fmt_stmt(s, 0);
+    return ((const char*(*)(Stmt*, int))fmt_stmt)(s, 0);
 }
 
 const char*   fmt_let_const_inline (Stmt*   s) {
@@ -17849,10 +17959,10 @@ const char*   fmt_let_const_inline (Stmt*   s) {
         (out  =  __glide_string_concat(out, "*"));
     }
     if (((s-> let_ty )  !=  NULL)) {
-        (out  =  __glide_string_concat(__glide_string_concat(out, ": "), fmt_type((s-> let_ty ))));
+        (out  =  __glide_string_concat(__glide_string_concat(out, ": "), ((const char*(*)(Type*))fmt_type)((s-> let_ty ))));
     }
     if (((s-> let_value )  !=  NULL)) {
-        (out  =  __glide_string_concat(__glide_string_concat(out, " = "), fmt_expr((s-> let_value ))));
+        (out  =  __glide_string_concat(__glide_string_concat(out, " = "), ((const char*(*)(Expr*))fmt_expr)((s-> let_value ))));
     }
     return __glide_string_concat(out, ";");
 }
@@ -17886,27 +17996,27 @@ const char*   fmt_stmt (Stmt*   s, int   depth) {
     if ((s  ==  NULL)) {
         return "";
     }
-    const char*   pad = fmt_indent(depth);
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
     const char*   prefix = "";
     if ((((s-> doc_comment )  !=  NULL)  &&  (!__glide_string_eq((s-> doc_comment ), "")))) {
-        (prefix  =  render_doc_lines((s-> doc_comment ), pad));
+        (prefix  =  ((const char*(*)(const char*, const char*))render_doc_lines)((s-> doc_comment ), pad));
     }
-    return __glide_string_concat(prefix, fmt_stmt_inner(s, depth));
+    return __glide_string_concat(prefix, ((const char*(*)(Stmt*, int))fmt_stmt_inner)(s, depth));
 }
 
 const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
-    const char*   pad = fmt_indent(depth);
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
     if ((((s-> kind )  ==  ST_LET)  ||  ((s-> kind )  ==  ST_CONST))) {
-        return __glide_string_concat(__glide_string_concat(pad, fmt_let_const_inline(s)), "\n");
+        return __glide_string_concat(__glide_string_concat(pad, ((const char*(*)(Stmt*))fmt_let_const_inline)(s)), "\n");
     }
     if (((s-> kind )  ==  ST_RETURN)) {
         if (((s-> expr_value )  !=  NULL)) {
-            return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "return "), fmt_expr((s-> expr_value ))), ";\n");
+            return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "return "), ((const char*(*)(Expr*))fmt_expr)((s-> expr_value ))), ";\n");
         }
         return __glide_string_concat(pad, "return;\n");
     }
     if (((s-> kind )  ==  ST_EXPR)) {
-        return __glide_string_concat(__glide_string_concat(pad, fmt_expr((s-> expr_value ))), ";\n");
+        return __glide_string_concat(__glide_string_concat(pad, ((const char*(*)(Expr*))fmt_expr)((s-> expr_value ))), ";\n");
     }
     if (((s-> kind )  ==  ST_BREAK)) {
         return __glide_string_concat(pad, "break;\n");
@@ -17915,13 +18025,13 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
         return __glide_string_concat(pad, "continue;\n");
     }
     if (((s-> kind )  ==  ST_DEFER)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "defer "), fmt_expr((s-> expr_value ))), ";\n");
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "defer "), ((const char*(*)(Expr*))fmt_expr)((s-> expr_value ))), ";\n");
     }
     if (((s-> kind )  ==  ST_DEFER_ERR)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "defer_err "), fmt_expr((s-> expr_value ))), ";\n");
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "defer_err "), ((const char*(*)(Expr*))fmt_expr)((s-> expr_value ))), ";\n");
     }
     if (((s-> kind )  ==  ST_SPAWN)) {
-        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "spawn "), fmt_expr((s-> expr_value ))), ";\n");
+        return __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "spawn "), ((const char*(*)(Expr*))fmt_expr)((s-> expr_value ))), ";\n");
     }
     if (((s-> kind )  ==  ST_IMPORT)) {
         const char*   path = (s-> import_path );
@@ -17970,18 +18080,18 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
         return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "import "), module), tail_s), ";\n");
     }
     if (((s-> kind )  ==  ST_IF)) {
-        const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "if "), fmt_expr((s-> cond ))), " {\n");
+        const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "if "), ((const char*(*)(Expr*))fmt_expr)((s-> cond ))), " {\n");
         if (((s-> then_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
             }
         }
         if (((s-> else_body )  !=  NULL)) {
             (out  =  __glide_string_concat(__glide_string_concat(out, pad), "} else {\n"));
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
             }
         }
         return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
@@ -17989,23 +18099,23 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_WHILE_RECV)) {
         const char*   out = __glide_string_concat(__glide_string_concat(pad, "while let "), (s-> name ));
         if (((s-> let_ty )  !=  NULL)) {
-            (out  =  __glide_string_concat(__glide_string_concat(out, ": "), fmt_type((s-> let_ty ))));
+            (out  =  __glide_string_concat(__glide_string_concat(out, ": "), ((const char*(*)(Type*))fmt_type)((s-> let_ty ))));
         }
-        (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, " = "), fmt_expr((s-> let_value ))), " {\n"));
+        (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, " = "), ((const char*(*)(Expr*))fmt_expr)((s-> let_value ))), " {\n"));
         if (((s-> then_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
             }
         }
         return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
     }
     if (((s-> kind )  ==  ST_WHILE)) {
-        const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "while "), fmt_expr((s-> cond ))), " {\n");
+        const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "while "), ((const char*(*)(Expr*))fmt_expr)((s-> cond ))), " {\n");
         if (((s-> then_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
             }
         }
         return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
@@ -18013,21 +18123,21 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_FOR)) {
         const char*   out = __glide_string_concat(pad, "for ");
         if (((s-> for_init )  !=  NULL)) {
-            (out  =  __glide_string_concat(out, fmt_for_init((s-> for_init ))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*))fmt_for_init)((s-> for_init ))));
         }
         (out  =  __glide_string_concat(out, "; "));
         if (((s-> cond )  !=  NULL)) {
-            (out  =  __glide_string_concat(out, fmt_expr((s-> cond ))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(Expr*))fmt_expr)((s-> cond ))));
         }
         (out  =  __glide_string_concat(out, "; "));
         if (((s-> for_step )  !=  NULL)) {
-            (out  =  __glide_string_concat(out, fmt_expr((s-> for_step ))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(Expr*))fmt_expr)((s-> for_step ))));
         }
         (out  =  __glide_string_concat(out, " {\n"));
         if (((s-> then_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
             }
         }
         return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
@@ -18035,20 +18145,20 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
     if (((s-> kind )  ==  ST_FOR_IN)) {
         const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "for "), (s-> name )), " in ");
         if (((s-> let_value )  !=  NULL)) {
-            (out  =  __glide_string_concat(out, fmt_expr((s-> let_value ))));
+            (out  =  __glide_string_concat(out, ((const char*(*)(Expr*))fmt_expr)((s-> let_value ))));
         }
         if (((s-> cond )  !=  NULL)) {
             const char*   sep = "..";
             if ((s-> is_mut )) {
                 (sep  =  "..=");
             }
-            (out  =  __glide_string_concat(__glide_string_concat(out, sep), fmt_expr((s-> cond ))));
+            (out  =  __glide_string_concat(__glide_string_concat(out, sep), ((const char*(*)(Expr*))fmt_expr)((s-> cond ))));
         }
         (out  =  __glide_string_concat(out, " {\n"));
         if (((s-> then_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
             }
         }
         return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
@@ -18058,35 +18168,35 @@ const char*   fmt_stmt_inner (Stmt*   s, int   depth) {
         if (((s-> then_body )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
                 Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-                (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
             }
         }
         return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
     }
     if (((s-> kind )  ==  ST_FN)) {
-        return fmt_fn(s, depth);
+        return ((const char*(*)(Stmt*, int))fmt_fn)(s, depth);
     }
     if (((s-> kind )  ==  ST_STRUCT)) {
-        return fmt_struct(s, depth);
+        return ((const char*(*)(Stmt*, int))fmt_struct)(s, depth);
     }
     if (((s-> kind )  ==  ST_ENUM)) {
-        return fmt_enum(s, depth);
+        return ((const char*(*)(Stmt*, int))fmt_enum)(s, depth);
     }
     if (((s-> kind )  ==  ST_IMPL)) {
-        return fmt_impl(s, depth);
+        return ((const char*(*)(Stmt*, int))fmt_impl)(s, depth);
     }
     if (((s-> kind )  ==  ST_MATCH)) {
-        return fmt_match(s, depth);
+        return ((const char*(*)(Stmt*, int))fmt_match)(s, depth);
     }
     if (((s-> kind )  ==  ST_ASM)) {
-        return fmt_asm(s, depth);
+        return ((const char*(*)(Stmt*, int))fmt_asm)(s, depth);
     }
     return __glide_string_concat(pad, "/* fmt: unknown stmt */\n");
 }
 
 const char*   fmt_asm (Stmt*   s, int   depth) {
-    const char*   pad = fmt_indent(depth);
-    const char*   inner = fmt_indent((depth  +  1));
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
+    const char*   inner = ((const char*(*)(int))fmt_indent)((depth  +  1));
     const char*   out = __glide_string_concat(pad, "asm!");
     if ((s-> is_volatile )) {
         (out  =  __glide_string_concat(out, " volatile"));
@@ -18109,7 +18219,7 @@ const char*   fmt_asm (Stmt*   s, int   depth) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
-                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\""), Vector_get__string((s-> asm_out_constraints ), i)), "\"("), fmt_expr((&e))), ")"));
+                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\""), Vector_get__string((s-> asm_out_constraints ), i)), "\"("), ((const char*(*)(Expr*))fmt_expr)((&e))), ")"));
             }
         }
         (out  =  __glide_string_concat(out, "\n"));
@@ -18123,7 +18233,7 @@ const char*   fmt_asm (Stmt*   s, int   depth) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
-                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\""), Vector_get__string((s-> asm_in_constraints ), i)), "\"("), fmt_expr((&e))), ")"));
+                (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "\""), Vector_get__string((s-> asm_in_constraints ), i)), "\"("), ((const char*(*)(Expr*))fmt_expr)((&e))), ")"));
             }
         }
         (out  =  __glide_string_concat(out, "\n"));
@@ -18146,10 +18256,10 @@ const char*   fmt_for_init (Stmt*   s) {
         return "";
     }
     if (((s-> kind )  ==  ST_LET)) {
-        return __glide_string_substring(fmt_let_const_inline(s), 0, (__glide_string_len(fmt_let_const_inline(s))  -  1));
+        return __glide_string_substring(((const char*(*)(Stmt*))fmt_let_const_inline)(s), 0, (__glide_string_len(((const char*(*)(Stmt*))fmt_let_const_inline)(s))  -  1));
     }
     if (((s-> kind )  ==  ST_EXPR)) {
-        return fmt_expr((s-> expr_value ));
+        return ((const char*(*)(Expr*))fmt_expr)((s-> expr_value ));
     }
     return "";
 }
@@ -18169,7 +18279,7 @@ const char*   fmt_type_params (Stmt*   s) {
 }
 
 const char*   fmt_fn (Stmt*   s, int   depth) {
-    const char*   pad = fmt_indent(depth);
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
     const char*   head = pad;
     if ((((s-> cfg_target )  !=  NULL)  &&  (!__glide_string_eq((s-> cfg_target ), "")))) {
         (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(head, "@cfg(\""), (s-> cfg_target )), "\")\n"), pad));
@@ -18180,19 +18290,19 @@ const char*   fmt_fn (Stmt*   s, int   depth) {
     if ((s-> is_naked )) {
         (head  =  __glide_string_concat(head, "naked "));
     }
-    (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(head, "fn "), (s-> name )), fmt_type_params(s)), "("));
+    (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(head, "fn "), (s-> name )), ((const char*(*)(Stmt*))fmt_type_params)(s)), "("));
     if (((s-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
             if ((i  >  0)) {
                 (head  =  __glide_string_concat(head, ", "));
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(head, (p. name )), ": "), fmt_type((p. ty ))));
+            (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(head, (p. name )), ": "), ((const char*(*)(Type*))fmt_type)((p. ty ))));
         }
     }
     (head  =  __glide_string_concat(head, ")"));
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        (head  =  __glide_string_concat(__glide_string_concat(head, " -> "), fmt_type((s-> fn_ret_ty ))));
+        (head  =  __glide_string_concat(__glide_string_concat(head, " -> "), ((const char*(*)(Type*))fmt_type)((s-> fn_ret_ty ))));
     }
     if (((s-> fn_body )  ==  NULL)) {
         return __glide_string_concat(head, ";\n");
@@ -18200,32 +18310,32 @@ const char*   fmt_fn (Stmt*   s, int   depth) {
     const char*   out = __glide_string_concat(head, " {\n");
     for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
         Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-        (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  1))));
+        (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  1))));
     }
     return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
 }
 
 const char*   fmt_struct (Stmt*   s, int   depth) {
-    const char*   pad = fmt_indent(depth);
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
     const char*   head = pad;
     if ((s-> is_pub )) {
         (head  =  __glide_string_concat(head, "pub "));
     }
-    (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(head, "struct "), (s-> name )), fmt_type_params(s)));
+    (head  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(head, "struct "), (s-> name )), ((const char*(*)(Stmt*))fmt_type_params)(s)));
     if ((((s-> struct_fields )  ==  NULL)  ||  (Vector_len__Field((s-> struct_fields ))  ==  0))) {
         return __glide_string_concat(head, " {}\n");
     }
     const char*   out = __glide_string_concat(head, " {\n");
-    const char*   inner = fmt_indent((depth  +  1));
+    const char*   inner = ((const char*(*)(int))fmt_indent)((depth  +  1));
     for (int   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
         Field   f = Vector_get__Field((s-> struct_fields ), i);
-        (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, inner), (f. name )), ": "), fmt_type((f. ty ))), ",\n"));
+        (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, inner), (f. name )), ": "), ((const char*(*)(Type*))fmt_type)((f. ty ))), ",\n"));
     }
     return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
 }
 
 const char*   fmt_enum (Stmt*   s, int   depth) {
-    const char*   pad = fmt_indent(depth);
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
     const char*   head = pad;
     if ((s-> is_pub )) {
         (head  =  __glide_string_concat(head, "pub "));
@@ -18235,7 +18345,7 @@ const char*   fmt_enum (Stmt*   s, int   depth) {
         return __glide_string_concat(head, " {}\n");
     }
     const char*   out = __glide_string_concat(head, " {\n");
-    const char*   inner = fmt_indent((depth  +  1));
+    const char*   inner = ((const char*(*)(int))fmt_indent)((depth  +  1));
     for (int   i = 0; (i  <  Vector_len__EnumVariant((s-> enum_variants ))); i++) {
         EnumVariant   v = Vector_get__EnumVariant((s-> enum_variants ), i);
         (out  =  __glide_string_concat(__glide_string_concat(out, inner), (v. name )));
@@ -18246,7 +18356,7 @@ const char*   fmt_enum (Stmt*   s, int   depth) {
                     (out  =  __glide_string_concat(out, ", "));
                 }
                 Type   ty = Vector_get__Type((v. fields ), j);
-                (out  =  __glide_string_concat(out, fmt_type((&ty))));
+                (out  =  __glide_string_concat(out, ((const char*(*)(Type*))fmt_type)((&ty))));
             }
             (out  =  __glide_string_concat(out, ")"));
         }
@@ -18256,10 +18366,10 @@ const char*   fmt_enum (Stmt*   s, int   depth) {
 }
 
 const char*   fmt_impl (Stmt*   s, int   depth) {
-    const char*   pad = fmt_indent(depth);
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
     const char*   head = __glide_string_concat(pad, "impl");
-    (head  =  __glide_string_concat(head, fmt_type_params(s)));
-    (head  =  __glide_string_concat(__glide_string_concat(head, " "), fmt_type((s-> impl_target ))));
+    (head  =  __glide_string_concat(head, ((const char*(*)(Stmt*))fmt_type_params)(s)));
+    (head  =  __glide_string_concat(__glide_string_concat(head, " "), ((const char*(*)(Type*))fmt_type)((s-> impl_target ))));
     if ((((s-> impl_methods )  ==  NULL)  ||  (Vector_len__Stmt((s-> impl_methods ))  ==  0))) {
         return __glide_string_concat(head, " {}\n");
     }
@@ -18269,15 +18379,15 @@ const char*   fmt_impl (Stmt*   s, int   depth) {
             (out  =  __glide_string_concat(out, "\n"));
         }
         Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-        (out  =  __glide_string_concat(out, fmt_fn((&m), (depth  +  1))));
+        (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_fn)((&m), (depth  +  1))));
     }
     return __glide_string_concat(__glide_string_concat(out, pad), "}\n");
 }
 
 const char*   fmt_match (Stmt*   s, int   depth) {
-    const char*   pad = fmt_indent(depth);
-    const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "match "), fmt_expr((s-> scrutinee ))), " {\n");
-    const char*   inner = fmt_indent((depth  +  1));
+    const char*   pad = ((const char*(*)(int))fmt_indent)(depth);
+    const char*   out = __glide_string_concat(__glide_string_concat(__glide_string_concat(pad, "match "), ((const char*(*)(Expr*))fmt_expr)((s-> scrutinee ))), " {\n");
+    const char*   inner = ((const char*(*)(int))fmt_indent)((depth  +  1));
     if (((s-> arms )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__MatchArm((s-> arms ))); i++) {
             MatchArm   a = Vector_get__MatchArm((s-> arms ), i);
@@ -18296,7 +18406,7 @@ const char*   fmt_match (Stmt*   s, int   depth) {
             if (((a. body )  !=  NULL)) {
                 for (int   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
                     Stmt   b = Vector_get__Stmt((a. body ), j);
-                    (out  =  __glide_string_concat(out, fmt_stmt((&b), (depth  +  2))));
+                    (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&b), (depth  +  2))));
                 }
             }
             (out  =  __glide_string_concat(__glide_string_concat(out, inner), "}\n"));
@@ -18310,10 +18420,10 @@ const char*   fmt_program (Vector__Stmt*   stmts) {
     int   prev_kind = (-1);
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
-        if (((i  >  0)  &&  needs_blank_line(prev_kind, (s. kind )))) {
+        if (((i  >  0)  &&  ((bool(*)(int, int))needs_blank_line)(prev_kind, (s. kind )))) {
             (out  =  __glide_string_concat(out, "\n"));
         }
-        (out  =  __glide_string_concat(out, fmt_stmt((&s), 0)));
+        (out  =  __glide_string_concat(out, ((const char*(*)(Stmt*, int))fmt_stmt)((&s), 0)));
         (prev_kind  =  (s. kind ));
     }
     return out;
@@ -18330,23 +18440,23 @@ bool   needs_blank_line (int   prev, int   curr) {
 }
 
 LspState*   lsp_state_new (void) {
-    LspState*   s = (( LspState* )malloc(sizeof( LspState )));
-    HashMap__LspDoc*   m = HashMap_new__LspDoc();
+    LspState*   s = (( LspState* )((void*(*)(size_t))malloc)(sizeof( LspState )));
+    HashMap__LspDoc*   m = ((HashMap__LspDoc*(*)(void))HashMap_new__LspDoc)();
     ((s-> docs )  =  m);
     ((s-> shutdown_requested )  =  false);
-    Vector__ImportableSym*   idx = Vector_new__ImportableSym();
+    Vector__ImportableSym*   idx = ((Vector__ImportableSym*(*)(void))Vector_new__ImportableSym)();
     ((s-> stdlib_index )  =  idx);
-    HashMap__Vector__Stmt_ptr*   pc = HashMap_new__Vector__Stmt_ptr();
+    HashMap__Vector__Stmt_ptr*   pc = ((HashMap__Vector__Stmt_ptr*(*)(void))HashMap_new__Vector__Stmt_ptr)();
     ((s-> parse_cache )  =  pc);
     ((s-> last_arena )  =  NULL);
-    populate_stdlib_index(s);
+    ((void(*)(LspState*))populate_stdlib_index)(s);
     return s;
 }
 
 const char*   lsp_read_message (void) {
     int   content_length = 0;
     while (true) {
-        const char*   line = __glide_read_line();
+        const char*   line = ((const char*(*)(void))__glide_read_line)();
         if (__glide_string_eq(line, "")) {
             return "";
         }
@@ -18367,14 +18477,14 @@ const char*   lsp_read_message (void) {
         if ((__glide_string_len(trimmed)  >  16)) {
             const char*   prefix = __glide_string_substring(trimmed, 0, 16);
             if (__glide_string_eq(prefix, "Content-Length: ")) {
-                (content_length  =  parse_int_str(__glide_string_substring(trimmed, 16, __glide_string_len(trimmed))));
+                (content_length  =  ((int(*)(const char*))parse_int_str)(__glide_string_substring(trimmed, 16, __glide_string_len(trimmed))));
             }
         }
     }
     if ((content_length  <=  0)) {
         return "";
     }
-    return __glide_read_bytes(content_length);
+    return ((const char*(*)(int))__glide_read_bytes)(content_length);
 }
 
 int   parse_int_str (const char*   s) {
@@ -18391,71 +18501,71 @@ int   parse_int_str (const char*   s) {
 }
 
 void   lsp_send (const char*   payload) {
-    const char*   header = __glide_string_concat(__glide_string_concat("Content-Length: ", int_to_str(__glide_string_len(payload))), "\r\n\r\n");
-    __glide_write_str(header);
-    __glide_write_str(payload);
-    __glide_flush_stdout();
+    const char*   header = __glide_string_concat(__glide_string_concat("Content-Length: ", ((const char*(*)(int64_t))int_to_str)(__glide_string_len(payload))), "\r\n\r\n");
+    ((void(*)(const char*))__glide_write_str)(header);
+    ((void(*)(const char*))__glide_write_str)(payload);
+    ((void(*)(void))__glide_flush_stdout)();
 }
 
 void   lsp_send_response (JsonValue*   id, JsonValue*   result) {
-    JsonValue*   resp = json_object();
-    json_obj_set(resp, "jsonrpc", json_string("2.0"));
+    JsonValue*   resp = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(resp, "jsonrpc", ((JsonValue*(*)(const char*))json_string)("2.0"));
     if ((id  !=  NULL)) {
-        json_obj_set(resp, "id", id);
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(resp, "id", id);
     }
-    json_obj_set(resp, "result", result);
-    lsp_send(json_emit(resp));
-    json_free(resp);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(resp, "result", result);
+    ((void(*)(const char*))lsp_send)(((const char*(*)(JsonValue*))json_emit)(resp));
+    ((void(*)(JsonValue*))json_free)(resp);
 }
 
 void   lsp_send_notification (const char*   method, JsonValue*   params) {
-    JsonValue*   n = json_object();
-    json_obj_set(n, "jsonrpc", json_string("2.0"));
-    json_obj_set(n, "method", json_string(method));
-    json_obj_set(n, "params", params);
-    lsp_send(json_emit(n));
-    json_free(n);
+    JsonValue*   n = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(n, "jsonrpc", ((JsonValue*(*)(const char*))json_string)("2.0"));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(n, "method", ((JsonValue*(*)(const char*))json_string)(method));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(n, "params", params);
+    ((void(*)(const char*))lsp_send)(((const char*(*)(JsonValue*))json_emit)(n));
+    ((void(*)(JsonValue*))json_free)(n);
 }
 
 void   handle_initialize (JsonValue*   req) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   result = json_object();
-    JsonValue*   caps = json_object();
-    json_obj_set(caps, "textDocumentSync", json_int(1));
-    json_obj_set(caps, "hoverProvider", json_bool(true));
-    json_obj_set(caps, "documentSymbolProvider", json_bool(true));
-    json_obj_set(caps, "definitionProvider", json_bool(true));
-    json_obj_set(caps, "referencesProvider", json_bool(true));
-    json_obj_set(caps, "documentHighlightProvider", json_bool(true));
-    JsonValue*   rename_caps = json_object();
-    json_obj_set(rename_caps, "prepareProvider", json_bool(true));
-    json_obj_set(caps, "renameProvider", rename_caps);
-    json_obj_set(caps, "documentFormattingProvider", json_bool(true));
-    JsonValue*   comp = json_object();
-    JsonValue*   trig = json_array();
-    json_arr_push(trig, json_string("."));
-    json_arr_push(trig, json_string(":"));
-    json_obj_set(comp, "triggerCharacters", trig);
-    json_obj_set(caps, "completionProvider", comp);
-    json_obj_set(result, "capabilities", caps);
-    JsonValue*   info = json_object();
-    json_obj_set(info, "name", json_string("glide-lsp"));
-    json_obj_set(info, "version", json_string("0.1.0"));
-    json_obj_set(result, "serverInfo", info);
-    lsp_send_response(id, result);
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   result = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   caps = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "textDocumentSync", ((JsonValue*(*)(int))json_int)(1));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "hoverProvider", ((JsonValue*(*)(bool))json_bool)(true));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "documentSymbolProvider", ((JsonValue*(*)(bool))json_bool)(true));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "definitionProvider", ((JsonValue*(*)(bool))json_bool)(true));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "referencesProvider", ((JsonValue*(*)(bool))json_bool)(true));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "documentHighlightProvider", ((JsonValue*(*)(bool))json_bool)(true));
+    JsonValue*   rename_caps = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(rename_caps, "prepareProvider", ((JsonValue*(*)(bool))json_bool)(true));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "renameProvider", rename_caps);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "documentFormattingProvider", ((JsonValue*(*)(bool))json_bool)(true));
+    JsonValue*   comp = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   trig = ((JsonValue*(*)(void))json_array)();
+    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(trig, ((JsonValue*(*)(const char*))json_string)("."));
+    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(trig, ((JsonValue*(*)(const char*))json_string)(":"));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(comp, "triggerCharacters", trig);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(caps, "completionProvider", comp);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "capabilities", caps);
+    JsonValue*   info = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(info, "name", ((JsonValue*(*)(const char*))json_string)("glide-lsp"));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(info, "version", ((JsonValue*(*)(const char*))json_string)("0.1.0"));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "serverInfo", info);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, result);
 }
 
 void   handle_shutdown (JsonValue*   req, LspState*   state) {
     ((state-> shutdown_requested )  =  true);
-    JsonValue*   id = json_get(req, "id");
-    lsp_send_response(id, json_null());
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
 }
 
 JsonValue*   diag_to_json (DiagEntry*   d) {
-    JsonValue*   dj = json_object();
-    JsonValue*   range = json_object();
-    JsonValue*   start = json_object();
-    JsonValue*   endp = json_object();
+    JsonValue*   dj = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   range = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   start = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   endp = ((JsonValue*(*)(void))json_object)();
     int   line0 = ((d-> line )  -  1);
     if ((line0  <  0)) {
         (line0  =  0);
@@ -18472,23 +18582,23 @@ JsonValue*   diag_to_json (DiagEntry*   d) {
     if ((endc  <  0)) {
         (endc  =  0);
     }
-    json_obj_set(start, "line", json_int(line0));
-    json_obj_set(start, "character", json_int(col0));
-    json_obj_set(endp, "line", json_int(endl));
-    json_obj_set(endp, "character", json_int(endc));
-    json_obj_set(range, "start", start);
-    json_obj_set(range, "end", endp);
-    json_obj_set(dj, "range", range);
-    json_obj_set(dj, "severity", json_int((d-> severity )));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "line", ((JsonValue*(*)(int))json_int)(line0));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "character", ((JsonValue*(*)(int))json_int)(col0));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "line", ((JsonValue*(*)(int))json_int)(endl));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "character", ((JsonValue*(*)(int))json_int)(endc));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "start", start);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "end", endp);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(dj, "range", range);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(dj, "severity", ((JsonValue*(*)(int))json_int)((d-> severity )));
     if ((!__glide_string_eq((d-> code ), ""))) {
-        json_obj_set(dj, "code", json_string((d-> code )));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(dj, "code", ((JsonValue*(*)(const char*))json_string)((d-> code )));
     }
-    json_obj_set(dj, "source", json_string("glide"));
-    json_obj_set(dj, "message", json_string((d-> message )));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(dj, "source", ((JsonValue*(*)(const char*))json_string)("glide"));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(dj, "message", ((JsonValue*(*)(const char*))json_string)((d-> message )));
     if (((d-> tag )  !=  0)) {
-        JsonValue*   tags = json_array();
-        json_arr_push(tags, json_int((d-> tag )));
-        json_obj_set(dj, "tags", tags);
+        JsonValue*   tags = ((JsonValue*(*)(void))json_array)();
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(tags, ((JsonValue*(*)(int))json_int)((d-> tag )));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(dj, "tags", tags);
     }
     return dj;
 }
@@ -18510,28 +18620,28 @@ const char*   uri_to_path (const char*   uri) {
 }
 
 const char*   find_builtins_dir (void) {
-    const char*   exe_dir = __glide_exe_dir();
+    const char*   exe_dir = ((const char*(*)(void))__glide_exe_dir)();
     if ((!__glide_string_eq(exe_dir, ""))) {
         const char*   probe = __glide_string_concat(exe_dir, "/src/builtins/builtins.glide");
-        if ((!__glide_string_eq(read_file(probe), ""))) {
+        if ((!__glide_string_eq(((const char*(*)(const char*))read_file)(probe), ""))) {
             return __glide_string_concat(exe_dir, "/src/builtins");
         }
     }
-    if ((!__glide_string_eq(read_file("src/builtins/builtins.glide"), ""))) {
+    if ((!__glide_string_eq(((const char*(*)(const char*))read_file)("src/builtins/builtins.glide"), ""))) {
         return "src/builtins";
     }
     return "";
 }
 
 const char*   find_stdlib_dir (void) {
-    const char*   exe_dir = __glide_exe_dir();
+    const char*   exe_dir = ((const char*(*)(void))__glide_exe_dir)();
     if ((!__glide_string_eq(exe_dir, ""))) {
         const char*   probe = __glide_string_concat(exe_dir, "/src/stdlib/hashmap.glide");
-        if ((!__glide_string_eq(read_file(probe), ""))) {
+        if ((!__glide_string_eq(((const char*(*)(const char*))read_file)(probe), ""))) {
             return __glide_string_concat(exe_dir, "/src/stdlib");
         }
     }
-    if ((!__glide_string_eq(read_file("src/stdlib/hashmap.glide"), ""))) {
+    if ((!__glide_string_eq(((const char*(*)(const char*))read_file)("src/stdlib/hashmap.glide"), ""))) {
         return "src/stdlib";
     }
     return "";
@@ -18546,26 +18656,26 @@ const char*   drop_glide_ext (const char*   name) {
 }
 
 void   populate_stdlib_index (LspState*   state) {
-    const char*   dir = find_stdlib_dir();
+    const char*   dir = ((const char*(*)(void))find_stdlib_dir)();
     if (__glide_string_eq(dir, "")) {
         return;
     }
-    Vector__string*   files = fs_list_dir(dir, ".glide");
+    Vector__string*   files = ((Vector__string*(*)(const char*, const char*))fs_list_dir)(dir, ".glide");
     if ((files  ==  NULL)) {
         return;
     }
     for (int   i = 0; (i  <  Vector_len__string(files)); i++) {
         const char*   fname = Vector_get__string(files, i);
         const char*   path = __glide_string_concat(__glide_string_concat(dir, "/"), fname);
-        const char*   src = read_file(path);
+        const char*   src = ((const char*(*)(const char*))read_file)(path);
         if (__glide_string_eq(src, "")) {
             continue;
         }
-        const char*   mod_name = drop_glide_ext(fname);
+        const char*   mod_name = ((const char*(*)(const char*))drop_glide_ext)(fname);
         const char*   module = __glide_string_concat("stdlib::", mod_name);
         Lexer*   lex = Lexer_new(src);
         Parser*   par = Parser_new(lex);
-        Vector__Stmt*   stmts = parse_program(par);
+        Vector__Stmt*   stmts = ((Vector__Stmt*(*)(Parser*))parse_program)(par);
         if ((stmts  ==  NULL)) {
             continue;
         }
@@ -18584,9 +18694,9 @@ void   populate_stdlib_index (LspState*   state) {
             const char*   snip = (s. name );
             bool   has_snip = false;
             if (((s. kind )  ==  ST_FN)) {
-                (sig  =  fn_signature((&s)));
-                (label_extra  =  fn_label_extra((&s)));
-                (snip  =  fn_snippet((&s)));
+                (sig  =  ((const char*(*)(Stmt*))fn_signature)((&s)));
+                (label_extra  =  ((const char*(*)(Stmt*))fn_label_extra)((&s)));
+                (snip  =  ((const char*(*)(Stmt*))fn_snippet)((&s)));
                 (has_snip  =  true);
             } else {
                 if (((s. kind )  ==  ST_STRUCT)) {
@@ -18636,12 +18746,12 @@ const char*   fn_label_extra (Stmt*   s) {
                 (out  =  __glide_string_concat(out, ", "));
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, (p. name )), ": "), type_to_string_pretty((p. ty ))));
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(out, (p. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)((p. ty ))));
         }
     }
     (out  =  __glide_string_concat(out, ")"));
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        (out  =  __glide_string_concat(__glide_string_concat(out, " -> "), type_to_string_pretty((s-> fn_ret_ty ))));
+        (out  =  __glide_string_concat(__glide_string_concat(out, " -> "), ((const char*(*)(Type*))type_to_string_pretty)((s-> fn_ret_ty ))));
     }
     return out;
 }
@@ -18654,7 +18764,7 @@ const char*   fn_snippet (Stmt*   s) {
                 (out  =  __glide_string_concat(out, ", "));
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "$"), "{"), int_to_str((( int64_t )(i  +  1)))), ":"), (p. name )), "}"));
+            (out  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(out, "$"), "{"), ((const char*(*)(int64_t))int_to_str)((( int64_t )(i  +  1)))), ":"), (p. name )), "}"));
         }
     }
     (out  =  __glide_string_concat(out, ")"));
@@ -18662,9 +18772,9 @@ const char*   fn_snippet (Stmt*   s) {
 }
 
 Vector__string*   fs_list_dir (const char*   dir, const char*   suffix) {
-    const char*   raw = __glide_list_dir(dir, suffix);
+    const char*   raw = ((const char*(*)(const char*, const char*))__glide_list_dir)(dir, suffix);
     if (__glide_string_eq(raw, "")) {
-        return Vector_new__string();
+        return ((Vector__string*(*)(void))Vector_new__string)();
     }
     return string_split(raw, "\n");
 }
@@ -18675,7 +18785,7 @@ void   stmt_vec_lower_free (Vector__Stmt*   v) {
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(v)); i++) {
         Stmt   s = Vector_get__Stmt(v, i);
-        stmt_lower_free_children((&s));
+        ((void(*)(Stmt*))stmt_lower_free_children)((&s));
     }
     Vector_free__Stmt(v);
 }
@@ -18685,21 +18795,21 @@ void   stmt_lower_free_children (Stmt*   s) {
         return;
     }
     if (((s-> fn_body )  !=  NULL)) {
-        stmt_vec_lower_free((s-> fn_body ));
+        ((void(*)(Vector__Stmt*))stmt_vec_lower_free)((s-> fn_body ));
     }
     if (((s-> then_body )  !=  NULL)) {
-        stmt_vec_lower_free((s-> then_body ));
+        ((void(*)(Vector__Stmt*))stmt_vec_lower_free)((s-> then_body ));
     }
     if (((s-> else_body )  !=  NULL)) {
-        stmt_vec_lower_free((s-> else_body ));
+        ((void(*)(Vector__Stmt*))stmt_vec_lower_free)((s-> else_body ));
     }
     if (((s-> impl_methods )  !=  NULL)) {
-        stmt_vec_lower_free((s-> impl_methods ));
+        ((void(*)(Vector__Stmt*))stmt_vec_lower_free)((s-> impl_methods ));
     }
 }
 
 void   run_analysis_and_publish (const char*   uri, const char*   text, LspState*   state) {
-    void*   prev_active = __glide_palloc_get();
+    void*   prev_active = ((void*(*)(void))__glide_palloc_get)();
     if (((state-> last_arena )  !=  NULL)) {
         Vector__string*   keys = HashMap_keys__LspDoc((state-> docs ));
         for (int   i = 0; (i  <  Vector_len__string(keys)); i++) {
@@ -18709,62 +18819,62 @@ void   run_analysis_and_publish (const char*   uri, const char*   text, LspState
             HashMap_insert__LspDoc((state-> docs ), k, d);
         }
         Vector_free__string(keys);
-        __glide_palloc_free((state-> last_arena ));
+        ((void(*)(void*))__glide_palloc_free)((state-> last_arena ));
     }
-    void*   cur_arena = __glide_palloc_make();
+    void*   cur_arena = ((void*(*)(void))__glide_palloc_make)();
     ((state-> last_arena )  =  cur_arena);
-    __glide_palloc_set(cur_arena);
-    const char*   path = uri_to_path(uri);
-    Vector__Stmt*   stmts = Vector_new__Stmt();
-    HashMap__bool*   loaded = HashMap_new__bool();
-    const char*   bdir = find_builtins_dir();
-    Vector__ParseDiag*   pdiags = Vector_new__ParseDiag();
+    ((void(*)(void*))__glide_palloc_set)(cur_arena);
+    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
+    Vector__Stmt*   stmts = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+    HashMap__bool*   loaded = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+    const char*   bdir = ((const char*(*)(void))find_builtins_dir)();
+    Vector__ParseDiag*   pdiags = ((Vector__ParseDiag*(*)(void))Vector_new__ParseDiag)();
     if ((!__glide_string_eq(bdir, ""))) {
-        load_builtins_dir_with_cache(stmts, bdir, loaded, pdiags, (state-> parse_cache ));
+        ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))load_builtins_dir_with_cache)(stmts, bdir, loaded, pdiags, (state-> parse_cache ));
     }
-    load_into_str_with_cache(stmts, text, path, loaded, pdiags, (state-> parse_cache ));
-    Vector__Stmt*   expanded = expand_macros(stmts);
-    Vector__Stmt*   lowered = lower_program_user_only(expanded, path);
+    ((void(*)(Vector__Stmt*, const char*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))load_into_str_with_cache)(stmts, text, path, loaded, pdiags, (state-> parse_cache ));
+    Vector__Stmt*   expanded = ((Vector__Stmt*(*)(Vector__Stmt*))expand_macros)(stmts);
+    Vector__Stmt*   lowered = ((Vector__Stmt*(*)(Vector__Stmt*, const char*))lower_program_user_only)(expanded, path);
     Vector_clear__Stmt(stmts);
     for (int   i = 0; (i  <  Vector_len__Stmt(lowered)); i++) {
         Stmt   s = Vector_get__Stmt(lowered, i);
         Vector_push__Stmt(stmts, s);
     }
     Typer*   t = Typer_new();
-    merge_parse_diags(t, pdiags);
-    check_program(t, stmts);
-    run_extra_analyses(t, stmts);
+    ((void(*)(Typer*, Vector__ParseDiag*))merge_parse_diags)(t, pdiags);
+    ((void(*)(Typer*, Vector__Stmt*))check_program)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))run_extra_analyses)(t, stmts);
     if (HashMap_contains__LspDoc((state-> docs ), uri)) {
         LspDoc   d = HashMap_get__LspDoc((state-> docs ), uri);
         ((d. stmts )  =  stmts);
         HashMap_insert__LspDoc((state-> docs ), uri, d);
     }
-    JsonValue*   arr = json_array();
+    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
     for (int   i = 0; (i  <  Vector_len__DiagEntry((t-> diagnostics ))); i++) {
         DiagEntry   de = Vector_get__DiagEntry((t-> diagnostics ), i);
         if ((__glide_string_eq((de. origin ), path)  ||  __glide_string_eq((de. origin ), ""))) {
-            json_arr_push(arr, diag_to_json((&de)));
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, ((JsonValue*(*)(DiagEntry*))diag_to_json)((&de)));
         }
     }
-    JsonValue*   params = json_object();
-    json_obj_set(params, "uri", json_string(uri));
-    json_obj_set(params, "diagnostics", arr);
-    lsp_send_notification("textDocument/publishDiagnostics", params);
+    JsonValue*   params = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(params, "uri", ((JsonValue*(*)(const char*))json_string)(uri));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(params, "diagnostics", arr);
+    ((void(*)(const char*, JsonValue*))lsp_send_notification)("textDocument/publishDiagnostics", params);
     Typer_free(t);
     Vector_free__Stmt(expanded);
     Vector_free__Stmt(lowered);
     Vector_free__ParseDiag(pdiags);
     HashMap_free__bool(loaded);
-    ((state-> last_arena )  =  __glide_palloc_get());
-    __glide_palloc_set(prev_active);
+    ((state-> last_arena )  =  ((void*(*)(void))__glide_palloc_get)());
+    ((void(*)(void*))__glide_palloc_set)(prev_active);
 }
 
 void   handle_did_open (JsonValue*   req, LspState*   state) {
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    const char*   text = json_as_string(json_get(td, "text"));
-    int   version = json_as_int(json_get(td, "version"));
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    const char*   text = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "text"));
+    int   version = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "version"));
     const char*   prev_text = "";
     if (HashMap_contains__LspDoc((state-> docs ), uri)) {
         LspDoc   prev = HashMap_get__LspDoc((state-> docs ), uri);
@@ -18774,17 +18884,17 @@ void   handle_did_open (JsonValue*   req, LspState*   state) {
     HashMap_insert__LspDoc((state-> docs ), uri, doc);
     if ((!__glide_string_eq(prev_text, ""))) {
  free((char*)(prev_text ));     }
-    run_analysis_and_publish(uri, text, state);
+    ((void(*)(const char*, const char*, LspState*))run_analysis_and_publish)(uri, text, state);
 }
 
 void   handle_did_change (JsonValue*   req, LspState*   state) {
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    int   version = json_as_int(json_get(td, "version"));
-    JsonValue*   changes = json_get(params, "contentChanges");
-    JsonValue*   first = json_at(changes, 0);
-    const char*   text = json_as_string(json_get(first, "text"));
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    int   version = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "version"));
+    JsonValue*   changes = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "contentChanges");
+    JsonValue*   first = ((JsonValue*(*)(JsonValue*, int))json_at)(changes, 0);
+    const char*   text = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(first, "text"));
     if (__glide_string_eq(text, "")) {
         return;
     }
@@ -18799,13 +18909,13 @@ void   handle_did_change (JsonValue*   req, LspState*   state) {
     HashMap_insert__LspDoc((state-> docs ), uri, doc);
     if ((!__glide_string_eq(prev_text, ""))) {
  free((char*)(prev_text ));     }
-    run_analysis_and_publish(uri, text, state);
+    ((void(*)(const char*, const char*, LspState*))run_analysis_and_publish)(uri, text, state);
 }
 
 void   handle_did_close (JsonValue*   req, LspState*   state) {
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
     const char*   prev_text = "";
     if (HashMap_contains__LspDoc((state-> docs ), uri)) {
         LspDoc   prev = HashMap_get__LspDoc((state-> docs ), uri);
@@ -18814,34 +18924,34 @@ void   handle_did_close (JsonValue*   req, LspState*   state) {
     HashMap_remove__LspDoc((state-> docs ), uri);
     if ((!__glide_string_eq(prev_text, ""))) {
  free((char*)(prev_text ));     }
-    JsonValue*   p = json_object();
-    json_obj_set(p, "uri", json_string(uri));
-    json_obj_set(p, "diagnostics", json_array());
-    lsp_send_notification("textDocument/publishDiagnostics", p);
+    JsonValue*   p = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(p, "uri", ((JsonValue*(*)(const char*))json_string)(uri));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(p, "diagnostics", ((JsonValue*(*)(void))json_array)());
+    ((void(*)(const char*, JsonValue*))lsp_send_notification)("textDocument/publishDiagnostics", p);
 }
 
 void   run_extra_analyses (Typer*   t, Vector__Stmt*   stmts) {
-    analysis_unused_vars(t, stmts);
-    analysis_unused_params(t, stmts);
-    analysis_unused_fn(t, stmts);
-    analysis_unnecessary_mut(t, stmts);
-    analysis_arena_not_freed(t, stmts);
-    analysis_addr_of_temporary(t, stmts);
-    analysis_dead_code(t, stmts);
-    analysis_missing_return(t, stmts);
-    analysis_large_return(t, stmts);
-    analysis_trait_conformance(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_unused_vars)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_unused_params)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_unused_fn)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_unnecessary_mut)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_arena_not_freed)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_addr_of_temporary)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_dead_code)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_missing_return)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_large_return)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))analysis_trait_conformance)(t, stmts);
 }
 
 void   analysis_trait_conformance (Typer*   t, Vector__Stmt*   stmts) {
-    HashMap__Stmt*   traits = HashMap_new__Stmt();
+    HashMap__Stmt*   traits = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if (((((s. kind )  ==  ST_TRAIT)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))) {
             HashMap_insert__Stmt(traits, (s. name ), s);
         }
     }
-    HashMap__bool*   impl_set = HashMap_new__bool();
+    HashMap__bool*   impl_set = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if (((s. kind )  !=  ST_IMPL)) {
@@ -18882,7 +18992,7 @@ void   analysis_trait_conformance (Typer*   t, Vector__Stmt*   stmts) {
         if (((trait_def. impl_methods )  ==  NULL)) {
             continue;
         }
-        HashMap__Stmt*   provided = HashMap_new__Stmt();
+        HashMap__Stmt*   provided = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
         if (((s. impl_methods )  !=  NULL)) {
             for (int   k = 0; (k  <  Vector_len__Stmt((s. impl_methods ))); k++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), k);
@@ -18906,37 +19016,37 @@ void   analysis_trait_conformance (Typer*   t, Vector__Stmt*   stmts) {
                 continue;
             }
             Stmt   got = HashMap_get__Stmt(provided, (req. name ));
-            check_method_signature(t, s, req, got, target_name);
+            ((void(*)(Typer*, Stmt, Stmt, Stmt, const char*))check_method_signature)(t, s, req, got, target_name);
         }
     }
 }
 
 void   check_method_signature (Typer*   t, Stmt   impl_stmt, Stmt   req, Stmt   got, const char*   target_name) {
-    int   req_arity = if_param_count(req);
-    int   got_arity = if_param_count(got);
+    int   req_arity = ((int(*)(Stmt))if_param_count)(req);
+    int   got_arity = ((int(*)(Stmt))if_param_count)(got);
     if ((req_arity  !=  got_arity)) {
         ((t-> current_origin )  =  (impl_stmt. origin ));
-        Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` has wrong arity for trait `"), (impl_stmt. impl_trait_name )), "`: expected "), int_to_str(req_arity)), " params, got "), int_to_str(got_arity)));
+        Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` has wrong arity for trait `"), (impl_stmt. impl_trait_name )), "`: expected "), ((const char*(*)(int64_t))int_to_str)(req_arity)), " params, got "), ((const char*(*)(int64_t))int_to_str)(got_arity)));
         return;
     }
     if ((((req. fn_params )  !=  NULL)  &&  ((got. fn_params )  !=  NULL))) {
         for (int   i = 0; (i  <  req_arity); i++) {
             Param   rp = Vector_get__Param((req. fn_params ), i);
             Param   gp = Vector_get__Param((got. fn_params ), i);
-            Type*   rty = subst_self((rp. ty ), (impl_stmt. impl_target ));
-            (rty  =  subst_assoc(rty, (impl_stmt. assoc_decls )));
-            if ((!types_compat(rty, (gp. ty )))) {
+            Type*   rty = ((Type*(*)(Type*, Type*))subst_self)((rp. ty ), (impl_stmt. impl_target ));
+            (rty  =  ((Type*(*)(Type*, Vector__Param*))subst_assoc)(rty, (impl_stmt. assoc_decls )));
+            if ((!((bool(*)(Type*, Type*))types_compat)(rty, (gp. ty )))) {
                 ((t-> current_origin )  =  (impl_stmt. origin ));
-                Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` param `"), (rp. name )), "`: expected `"), type_to_string(rty)), "`, got `"), type_to_string((gp. ty ))), "`"));
+                Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` param `"), (rp. name )), "`: expected `"), ((const char*(*)(Type*))type_to_string)(rty)), "`, got `"), ((const char*(*)(Type*))type_to_string)((gp. ty ))), "`"));
                 return;
             }
         }
     }
-    Type*   rret = subst_self((req. fn_ret_ty ), (impl_stmt. impl_target ));
-    (rret  =  subst_assoc(rret, (impl_stmt. assoc_decls )));
-    if ((!types_compat(rret, (got. fn_ret_ty )))) {
+    Type*   rret = ((Type*(*)(Type*, Type*))subst_self)((req. fn_ret_ty ), (impl_stmt. impl_target ));
+    (rret  =  ((Type*(*)(Type*, Vector__Param*))subst_assoc)(rret, (impl_stmt. assoc_decls )));
+    if ((!((bool(*)(Type*, Type*))types_compat)(rret, (got. fn_ret_ty )))) {
         ((t-> current_origin )  =  (impl_stmt. origin ));
-        Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` return: expected `"), type_to_string(rret)), "`, got `"), type_to_string((got. fn_ret_ty ))), "`"));
+        Typer_err_code(t, (got. line ), (got. column ), "trait-method-mismatch", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("method `", (req. name )), "` return: expected `"), ((const char*(*)(Type*))type_to_string)(rret)), "`, got `"), ((const char*(*)(Type*))type_to_string)((got. fn_ret_ty ))), "`"));
     }
 }
 
@@ -18958,13 +19068,13 @@ Type*   subst_assoc (Type*   t, Vector__Param*   assocs) {
     if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
         return t;
     }
-    Type*   copy = (( Type* )malloc(sizeof( Type )));
+    Type*   copy = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
     ((*copy)  =  (*t));
     if (((copy-> inner )  !=  NULL)) {
-        ((copy-> inner )  =  subst_assoc((copy-> inner ), assocs));
+        ((copy-> inner )  =  ((Type*(*)(Type*, Vector__Param*))subst_assoc)((copy-> inner ), assocs));
     }
     if (((copy-> fnptr_ret )  !=  NULL)) {
-        ((copy-> fnptr_ret )  =  subst_assoc((copy-> fnptr_ret ), assocs));
+        ((copy-> fnptr_ret )  =  ((Type*(*)(Type*, Vector__Param*))subst_assoc)((copy-> fnptr_ret ), assocs));
     }
     return copy;
 }
@@ -18989,13 +19099,13 @@ Type*   subst_self (Type*   t, Type*   impl_target) {
     if ((((t-> inner )  ==  NULL)  &&  ((t-> fnptr_ret )  ==  NULL))) {
         return t;
     }
-    Type*   copy = (( Type* )malloc(sizeof( Type )));
+    Type*   copy = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
     ((*copy)  =  (*t));
     if (((copy-> inner )  !=  NULL)) {
-        ((copy-> inner )  =  subst_self((copy-> inner ), impl_target));
+        ((copy-> inner )  =  ((Type*(*)(Type*, Type*))subst_self)((copy-> inner ), impl_target));
     }
     if (((copy-> fnptr_ret )  !=  NULL)) {
-        ((copy-> fnptr_ret )  =  subst_self((copy-> fnptr_ret ), impl_target));
+        ((copy-> fnptr_ret )  =  ((Type*(*)(Type*, Type*))subst_self)((copy-> fnptr_ret ), impl_target));
     }
     return copy;
     return t;
@@ -19005,7 +19115,7 @@ const char*   type_to_string_pretty (Type*   t) {
     if ((t  ==  NULL)) {
         return "";
     }
-    return type_to_string(t);
+    return ((const char*(*)(Type*))type_to_string)(t);
 }
 
 const char*   fn_signature (Stmt*   s) {
@@ -19016,12 +19126,12 @@ const char*   fn_signature (Stmt*   s) {
                 (sig  =  __glide_string_concat(sig, ", "));
             }
             Param   p = Vector_get__Param((s-> fn_params ), i);
-            (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(sig, (p. name )), ": "), type_to_string_pretty((p. ty ))));
+            (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(sig, (p. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)((p. ty ))));
         }
     }
     (sig  =  __glide_string_concat(sig, ")"));
     if (((s-> fn_ret_ty )  !=  NULL)) {
-        (sig  =  __glide_string_concat(__glide_string_concat(sig, " -> "), type_to_string_pretty((s-> fn_ret_ty ))));
+        (sig  =  __glide_string_concat(__glide_string_concat(sig, " -> "), ((const char*(*)(Type*))type_to_string_pretty)((s-> fn_ret_ty ))));
     }
     return sig;
 }
@@ -19056,7 +19166,7 @@ Stmt*   find_top_decl (Vector__Stmt*   stmts, const char*   name) {
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if ((((((((s. kind )  ==  ST_FN)  ||  ((s. kind )  ==  ST_STRUCT))  ||  ((s. kind )  ==  ST_ENUM))  ||  ((s. kind )  ==  ST_CONST))  ||  ((s. kind )  ==  ST_MACRO_DEF))  &&  __glide_string_eq((s. name ), name))) {
-            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
             ((*p)  =  s);
             return p;
         }
@@ -19091,7 +19201,7 @@ ImplMethodHit   find_macro_in_impl_anywhere (Vector__Stmt*   stmts, const char* 
             if ((!__glide_string_eq((m. name ), name))) {
                 continue;
             }
-            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
             ((*p)  =  m);
             if (((((p-> origin )  ==  NULL)  ||  __glide_string_eq((p-> origin ), ""))  &&  ((s. origin )  !=  NULL))) {
                 ((p-> origin )  =  (s. origin ));
@@ -19252,7 +19362,7 @@ ImplMethodHit   find_method_anywhere (Vector__Stmt*   stmts, const char*   metho
             if ((!__glide_string_eq((m. name ), method_name))) {
                 continue;
             }
-            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
             ((*p)  =  m);
             if (((((p-> origin )  ==  NULL)  ||  __glide_string_eq((p-> origin ), ""))  &&  ((s. origin )  !=  NULL))) {
                 ((p-> origin )  =  (s. origin ));
@@ -19314,7 +19424,7 @@ Stmt*   find_method_in_impl (Vector__Stmt*   stmts, const char*   type_name, con
         for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
             Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
             if (((((m. kind )  ==  ST_FN)  ||  ((m. kind )  ==  ST_MACRO_DEF))  &&  __glide_string_eq((m. name ), method_name))) {
-                Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+                Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
                 ((*p)  =  m);
                 if (((((p-> origin )  ==  NULL)  ||  __glide_string_eq((p-> origin ), ""))  &&  ((s. origin )  !=  NULL))) {
                     ((p-> origin )  =  (s. origin ));
@@ -19351,19 +19461,19 @@ Type*   lsp_infer_expr (Vector__Stmt*   stmts, Stmt*   host, Expr*   e) {
         return NULL;
     }
     if (((e-> kind )  ==  EX_INT)) {
-        return ty_named("int");
+        return ((Type*(*)(const char*))ty_named)("int");
     }
     if (((e-> kind )  ==  EX_FLOAT)) {
-        return ty_named("float");
+        return ((Type*(*)(const char*))ty_named)("float");
     }
     if (((e-> kind )  ==  EX_STRING)) {
-        return ty_named("string");
+        return ((Type*(*)(const char*))ty_named)("string");
     }
     if (((e-> kind )  ==  EX_BOOL)) {
-        return ty_named("bool");
+        return ((Type*(*)(const char*))ty_named)("bool");
     }
     if (((e-> kind )  ==  EX_CHAR)) {
-        return ty_named("char");
+        return ((Type*(*)(const char*))ty_named)("char");
     }
     if (((((e-> kind )  ==  EX_IDENT)  &&  ((e-> str_val )  !=  NULL))  &&  (host  !=  NULL))) {
         if (((host-> fn_params )  !=  NULL)) {
@@ -19374,13 +19484,13 @@ Type*   lsp_infer_expr (Vector__Stmt*   stmts, Stmt*   host, Expr*   e) {
                 }
             }
         }
-        Stmt*   lst = find_local_let_in_body((host-> fn_body ), (e-> str_val ));
+        Stmt*   lst = ((Stmt*(*)(Vector__Stmt*, const char*))find_local_let_in_body)((host-> fn_body ), (e-> str_val ));
         if ((lst  !=  NULL)) {
             if (((lst-> let_ty )  !=  NULL)) {
                 return (lst-> let_ty );
             }
             if (((lst-> let_value )  !=  NULL)) {
-                return lsp_infer_expr(stmts, host, (lst-> let_value ));
+                return ((Type*(*)(Vector__Stmt*, Stmt*, Expr*))lsp_infer_expr)(stmts, host, (lst-> let_value ));
             }
         }
     }
@@ -19407,7 +19517,7 @@ Stmt*   find_generic_impl (Vector__Stmt*   stmts, const char*   gen_name) {
             (tname  =  ((s. impl_target )-> name ));
         }
         if (__glide_string_eq(tname, gen_name)) {
-            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
             ((*p)  =  s);
             return p;
         }
@@ -19454,7 +19564,7 @@ Type*   try_constrain_call (Vector__Stmt*   stmts, Stmt*   host, Expr*   e, cons
             if ((((mp. ty )  ==  NULL)  ||  (((mp. ty )-> kind )  !=  TY_NAMED))) {
                 continue;
             }
-            if ((!name_in_tparams(((mp. ty )-> name ), tparams))) {
+            if ((!((bool(*)(const char*, Vector__string*))name_in_tparams)(((mp. ty )-> name ), tparams))) {
                 continue;
             }
             int   arg_idx = (j  -  1);
@@ -19462,7 +19572,7 @@ Type*   try_constrain_call (Vector__Stmt*   stmts, Stmt*   host, Expr*   e, cons
                 continue;
             }
             Expr   a = Vector_get__Expr((e-> args ), arg_idx);
-            Type*   at = lsp_infer_expr(stmts, host, (&a));
+            Type*   at = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*))lsp_infer_expr)(stmts, host, (&a));
             if ((at  !=  NULL)) {
                 return at;
             }
@@ -19475,24 +19585,24 @@ Type*   walk_constraint_in_expr (Vector__Stmt*   stmts, Stmt*   host, Expr*   e,
     if ((e  ==  NULL)) {
         return NULL;
     }
-    Type*   r = try_constrain_call(stmts, host, e, var, impl_methods, tparams);
+    Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))try_constrain_call)(stmts, host, e, var, impl_methods, tparams);
     if ((r  !=  NULL)) {
         return r;
     }
     if (((e-> lhs )  !=  NULL)) {
-        Type*   r2 = walk_constraint_in_expr(stmts, host, (e-> lhs ), var, impl_methods, tparams);
+        Type*   r2 = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (e-> lhs ), var, impl_methods, tparams);
         if ((r2  !=  NULL)) {
             return r2;
         }
     }
     if (((e-> rhs )  !=  NULL)) {
-        Type*   r2 = walk_constraint_in_expr(stmts, host, (e-> rhs ), var, impl_methods, tparams);
+        Type*   r2 = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (e-> rhs ), var, impl_methods, tparams);
         if ((r2  !=  NULL)) {
             return r2;
         }
     }
     if (((e-> operand )  !=  NULL)) {
-        Type*   r2 = walk_constraint_in_expr(stmts, host, (e-> operand ), var, impl_methods, tparams);
+        Type*   r2 = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (e-> operand ), var, impl_methods, tparams);
         if ((r2  !=  NULL)) {
             return r2;
         }
@@ -19500,7 +19610,7 @@ Type*   walk_constraint_in_expr (Vector__Stmt*   stmts, Stmt*   host, Expr*   e,
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            Type*   r2 = walk_constraint_in_expr(stmts, host, (&a), var, impl_methods, tparams);
+            Type*   r2 = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (&a), var, impl_methods, tparams);
             if ((r2  !=  NULL)) {
                 return r2;
             }
@@ -19516,37 +19626,37 @@ Type*   walk_constraint_in_body (Vector__Stmt*   stmts, Stmt*   host, Vector__St
     for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
         Stmt   s = Vector_get__Stmt(body, i);
         if (((s. expr_value )  !=  NULL)) {
-            Type*   r = walk_constraint_in_expr(stmts, host, (s. expr_value ), var, impl_methods, tparams);
+            Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (s. expr_value ), var, impl_methods, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
         }
         if (((s. let_value )  !=  NULL)) {
-            Type*   r = walk_constraint_in_expr(stmts, host, (s. let_value ), var, impl_methods, tparams);
+            Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (s. let_value ), var, impl_methods, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
         }
         if (((s. cond )  !=  NULL)) {
-            Type*   r = walk_constraint_in_expr(stmts, host, (s. cond ), var, impl_methods, tparams);
+            Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (s. cond ), var, impl_methods, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
         }
         if (((s. for_step )  !=  NULL)) {
-            Type*   r = walk_constraint_in_expr(stmts, host, (s. for_step ), var, impl_methods, tparams);
+            Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Expr*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_expr)(stmts, host, (s. for_step ), var, impl_methods, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
         }
         if (((s. then_body )  !=  NULL)) {
-            Type*   r = walk_constraint_in_body(stmts, host, (s. then_body ), var, impl_methods, tparams);
+            Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Vector__Stmt*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_body)(stmts, host, (s. then_body ), var, impl_methods, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
         }
         if (((s. else_body )  !=  NULL)) {
-            Type*   r = walk_constraint_in_body(stmts, host, (s. else_body ), var, impl_methods, tparams);
+            Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Vector__Stmt*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_body)(stmts, host, (s. else_body ), var, impl_methods, tparams);
             if ((r  !=  NULL)) {
                 return r;
             }
@@ -19562,23 +19672,23 @@ Stmt*   find_local_let_in_body (Vector__Stmt*   body, const char*   name) {
     for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
         Stmt   s = Vector_get__Stmt(body, i);
         if (((((s. kind )  ==  ST_LET)  &&  ((s. name )  !=  NULL))  &&  __glide_string_eq((s. name ), name))) {
-            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
             ((*p)  =  s);
             return p;
         }
         if (((((((s. kind )  ==  ST_FOR)  &&  ((s. for_init )  !=  NULL))  &&  (((s. for_init )-> kind )  ==  ST_LET))  &&  (((s. for_init )-> name )  !=  NULL))  &&  __glide_string_eq(((s. for_init )-> name ), name))) {
-            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
             ((*p)  =  (*(s. for_init )));
             return p;
         }
         if (((s. then_body )  !=  NULL)) {
-            Stmt*   r = find_local_let_in_body((s. then_body ), name);
+            Stmt*   r = ((Stmt*(*)(Vector__Stmt*, const char*))find_local_let_in_body)((s. then_body ), name);
             if ((r  !=  NULL)) {
                 return r;
             }
         }
         if (((s. else_body )  !=  NULL)) {
-            Stmt*   r = find_local_let_in_body((s. else_body ), name);
+            Stmt*   r = ((Stmt*(*)(Vector__Stmt*, const char*))find_local_let_in_body)((s. else_body ), name);
             if ((r  !=  NULL)) {
                 return r;
             }
@@ -19595,18 +19705,18 @@ const char*   render_hover_for_let (Vector__Stmt*   stmts, Stmt*   host, Stmt*  
     (header  =  __glide_string_concat(header, (s-> name )));
     bool   inferred = false;
     if (((s-> let_ty )  !=  NULL)) {
-        (header  =  __glide_string_concat(__glide_string_concat(header, ": "), type_to_string_pretty((s-> let_ty ))));
+        (header  =  __glide_string_concat(__glide_string_concat(header, ": "), ((const char*(*)(Type*))type_to_string_pretty)((s-> let_ty ))));
     } else {
         if (((s-> let_value )  !=  NULL)) {
             Expr*   e = (s-> let_value );
             if (((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_PATH))) {
                 const char*   gen_name = ((e-> lhs )-> str_val );
                 const char*   t_str = "?";
-                Stmt*   imp = find_generic_impl(stmts, gen_name);
+                Stmt*   imp = ((Stmt*(*)(Vector__Stmt*, const char*))find_generic_impl)(stmts, gen_name);
                 if ((((imp  !=  NULL)  &&  (host  !=  NULL))  &&  ((host-> fn_body )  !=  NULL))) {
-                    Type*   r = walk_constraint_in_body(stmts, host, (host-> fn_body ), (s-> name ), (imp-> impl_methods ), (imp-> type_params ));
+                    Type*   r = ((Type*(*)(Vector__Stmt*, Stmt*, Vector__Stmt*, const char*, Vector__Stmt*, Vector__string*))walk_constraint_in_body)(stmts, host, (host-> fn_body ), (s-> name ), (imp-> impl_methods ), (imp-> type_params ));
                     if ((r  !=  NULL)) {
-                        (t_str  =  type_to_string_pretty(r));
+                        (t_str  =  ((const char*(*)(Type*))type_to_string_pretty)(r));
                     }
                 }
                 (header  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(header, ": *"), gen_name), "<"), t_str), ">"));
@@ -19647,28 +19757,28 @@ const char*   render_hover_for_let (Vector__Stmt*   stmts, Stmt*   host, Stmt*  
 }
 
 void   handle_hover (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    JsonValue*   pos = json_get(params, "position");
-    int   line0 = json_as_int(json_get(pos, "line"));
-    int   col0 = json_as_int(json_get(pos, "character"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+    int   line0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+    int   col0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    const char*   word = word_at((doc. text ), line0, col0);
+    const char*   word = ((const char*(*)(const char*, int, int))word_at)((doc. text ), line0, col0);
     if (__glide_string_eq(word, "")) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
-    Stmt*   decl = find_top_decl((doc. stmts ), word);
+    Stmt*   decl = ((Stmt*(*)(Vector__Stmt*, const char*))find_top_decl)((doc. stmts ), word);
     const char*   content = "";
     if ((decl  !=  NULL)) {
         if (((decl-> kind )  ==  ST_FN)) {
-            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", fn_signature(decl)), "\n```"));
+            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", ((const char*(*)(Stmt*))fn_signature)(decl)), "\n```"));
         } else {
             if (((decl-> kind )  ==  ST_STRUCT)) {
                 (content  =  __glide_string_concat(__glide_string_concat("```glide\nstruct ", (decl-> name )), "\n```"));
@@ -19679,12 +19789,12 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
                     if (((decl-> kind )  ==  ST_CONST)) {
                         (content  =  __glide_string_concat("```glide\nconst ", (decl-> name )));
                         if (((decl-> let_ty )  !=  NULL)) {
-                            (content  =  __glide_string_concat(__glide_string_concat(content, ": "), type_to_string_pretty((decl-> let_ty ))));
+                            (content  =  __glide_string_concat(__glide_string_concat(content, ": "), ((const char*(*)(Type*))type_to_string_pretty)((decl-> let_ty ))));
                         }
                         (content  =  __glide_string_concat(content, "\n```"));
                     } else {
                         if (((decl-> kind )  ==  ST_MACRO_DEF)) {
-                            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", macro_signature(decl)), "\n```"));
+                            (content  =  __glide_string_concat(__glide_string_concat("```glide\n", ((const char*(*)(Stmt*))macro_signature)(decl)), "\n```"));
                         }
                     }
                 }
@@ -19695,7 +19805,7 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
         }
     }
     if (__glide_string_eq(content, "")) {
-        Stmt*   host = fn_containing((doc. stmts ), line0);
+        Stmt*   host = ((Stmt*(*)(Vector__Stmt*, int))fn_containing)((doc. stmts ), line0);
         if ((host  !=  NULL)) {
             if (((host-> fn_params )  !=  NULL)) {
                 for (int   i = 0; (i  <  Vector_len__Param((host-> fn_params ))); i++) {
@@ -19703,7 +19813,7 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
                     if (__glide_string_eq((pp. name ), word)) {
                         const char*   h = __glide_string_concat("param ", (pp. name ));
                         if (((pp. ty )  !=  NULL)) {
-                            (h  =  __glide_string_concat(__glide_string_concat(h, ": "), type_to_string_pretty((pp. ty ))));
+                            (h  =  __glide_string_concat(__glide_string_concat(h, ": "), ((const char*(*)(Type*))type_to_string_pretty)((pp. ty ))));
                         }
                         (content  =  __glide_string_concat(__glide_string_concat("```glide\n", h), "\n```"));
                         break;
@@ -19711,18 +19821,18 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
                 }
             }
             if (__glide_string_eq(content, "")) {
-                Stmt*   lst = find_local_let_in_body((host-> fn_body ), word);
+                Stmt*   lst = ((Stmt*(*)(Vector__Stmt*, const char*))find_local_let_in_body)((host-> fn_body ), word);
                 if ((lst  !=  NULL)) {
-                    (content  =  render_hover_for_let((doc. stmts ), host, lst));
+                    (content  =  ((const char*(*)(Vector__Stmt*, Stmt*, Stmt*))render_hover_for_let)((doc. stmts ), host, lst));
                 }
             }
         }
     }
     if (__glide_string_eq(content, "")) {
-        ImplMethodHit   mhit = find_method_anywhere((doc. stmts ), word);
+        ImplMethodHit   mhit = ((ImplMethodHit(*)(Vector__Stmt*, const char*))find_method_anywhere)((doc. stmts ), word);
         if (((mhit. method )  !=  NULL)) {
             Stmt*   m = (mhit. method );
-            const char*   sig = fn_signature(m);
+            const char*   sig = ((const char*(*)(Stmt*))fn_signature)(m);
             if ((!__glide_string_eq((mhit. owner ), ""))) {
                 (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("impl ", (mhit. owner )), "\n"), sig));
             }
@@ -19733,11 +19843,11 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
         }
     }
     if (__glide_string_eq(content, "")) {
-        FieldHit   fhit = find_field_anywhere((doc. stmts ), word);
+        FieldHit   fhit = ((FieldHit(*)(Vector__Stmt*, const char*))find_field_anywhere)((doc. stmts ), word);
         if ((!__glide_string_eq((fhit. name ), ""))) {
             const char*   sig = __glide_string_concat(__glide_string_concat((fhit. owner ), "."), (fhit. name ));
             if (((fhit. ty )  !=  NULL)) {
-                (sig  =  __glide_string_concat(__glide_string_concat(sig, ": "), type_to_string_pretty((fhit. ty ))));
+                (sig  =  __glide_string_concat(__glide_string_concat(sig, ": "), ((const char*(*)(Type*))type_to_string_pretty)((fhit. ty ))));
             }
             (content  =  __glide_string_concat(__glide_string_concat("```glide\n", sig), "\n```"));
             if ((((fhit. doc )  !=  NULL)  &&  (!__glide_string_eq((fhit. doc ), "")))) {
@@ -19746,10 +19856,10 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
         }
     }
     if (__glide_string_eq(content, "")) {
-        ImplMethodHit   mhit2 = find_macro_in_impl_anywhere((doc. stmts ), word);
+        ImplMethodHit   mhit2 = ((ImplMethodHit(*)(Vector__Stmt*, const char*))find_macro_in_impl_anywhere)((doc. stmts ), word);
         if (((mhit2. method )  !=  NULL)) {
             Stmt*   m = (mhit2. method );
-            const char*   sig = macro_signature(m);
+            const char*   sig = ((const char*(*)(Stmt*))macro_signature)(m);
             if ((!__glide_string_eq((mhit2. owner ), ""))) {
                 (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("impl ", (mhit2. owner )), "\n"), sig));
             }
@@ -19760,13 +19870,13 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
         }
     }
     if (__glide_string_eq(content, "")) {
-        const char*   bd = builtin_macro_doc(word);
+        const char*   bd = ((const char*(*)(const char*))builtin_macro_doc)(word);
         if ((!__glide_string_eq(bd, ""))) {
             (content  =  bd);
         }
     }
     if (__glide_string_eq(content, "")) {
-        const char*   kd = keyword_doc(word);
+        const char*   kd = ((const char*(*)(const char*))keyword_doc)(word);
         if ((!__glide_string_eq(kd, ""))) {
             (content  =  kd);
         }
@@ -19777,15 +19887,15 @@ void   handle_hover (JsonValue*   req, LspState*   state) {
         }
     }
     if (__glide_string_eq(content, "")) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
-    JsonValue*   result = json_object();
-    JsonValue*   contents = json_object();
-    json_obj_set(contents, "kind", json_string("markdown"));
-    json_obj_set(contents, "value", json_string(content));
-    json_obj_set(result, "contents", contents);
-    lsp_send_response(id, result);
+    JsonValue*   result = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   contents = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(contents, "kind", ((JsonValue*(*)(const char*))json_string)("markdown"));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(contents, "value", ((JsonValue*(*)(const char*))json_string)(content));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "contents", contents);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, result);
 }
 
 int   symbol_kind_for (Stmt*   s) {
@@ -19805,7 +19915,7 @@ int   symbol_kind_for (Stmt*   s) {
 }
 
 JsonValue*   position_to_json (int   line1, int   col1) {
-    JsonValue*   p = json_object();
+    JsonValue*   p = ((JsonValue*(*)(void))json_object)();
     int   l = (line1  -  1);
     if ((l  <  0)) {
         (l  =  0);
@@ -19814,8 +19924,8 @@ JsonValue*   position_to_json (int   line1, int   col1) {
     if ((c  <  0)) {
         (c  =  0);
     }
-    json_obj_set(p, "line", json_int(l));
-    json_obj_set(p, "character", json_int(c));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(p, "line", ((JsonValue*(*)(int))json_int)(l));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(p, "character", ((JsonValue*(*)(int))json_int)(c));
     return p;
 }
 
@@ -19831,9 +19941,9 @@ JsonValue*   range_for_decl_name (Stmt*   s) {
     if ((nlen  <  1)) {
         (nlen  =  1);
     }
-    JsonValue*   r = json_object();
-    json_obj_set(r, "start", position_to_json(nl, nc));
-    json_obj_set(r, "end", position_to_json(nl, (nc  +  nlen)));
+    JsonValue*   r = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "start", ((JsonValue*(*)(int, int))position_to_json)(nl, nc));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "end", ((JsonValue*(*)(int, int))position_to_json)(nl, (nc  +  nlen)));
     return r;
 }
 
@@ -19878,9 +19988,9 @@ const char*   path_to_uri (const char*   path) {
     if (((path  ==  NULL)  ||  (__glide_string_len(path)  ==  0))) {
         return "";
     }
-    const char*   p = normalize_path(path);
-    if ((!is_absolute_path(p))) {
-        const char*   cwd = normalize_path(__glide_cwd());
+    const char*   p = ((const char*(*)(const char*))normalize_path)(path);
+    if ((!((bool(*)(const char*))is_absolute_path)(p))) {
+        const char*   cwd = ((const char*(*)(const char*))normalize_path)(((const char*(*)(void))__glide_cwd)());
         if ((!__glide_string_eq(cwd, ""))) {
             if ((__glide_char_to_int(__glide_string_at(cwd, (__glide_string_len(cwd)  -  1)))  ==  47)) {
                 (p  =  __glide_string_concat(cwd, p));
@@ -19896,17 +20006,17 @@ const char*   path_to_uri (const char*   path) {
 }
 
 void   handle_document_symbol (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_array());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    const char*   path = uri_to_path(uri);
-    JsonValue*   arr = json_array();
+    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
+    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
     if (((doc. stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
@@ -19916,75 +20026,75 @@ void   handle_document_symbol (JsonValue*   req, LspState*   state) {
             if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
                 continue;
             }
-            JsonValue*   sym = json_object();
-            json_obj_set(sym, "name", json_string((s. name )));
+            JsonValue*   sym = ((JsonValue*(*)(void))json_object)();
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(sym, "name", ((JsonValue*(*)(const char*))json_string)((s. name )));
             const char*   detail = "";
             if (((s. kind )  ==  ST_FN)) {
-                (detail  =  fn_signature((&s)));
+                (detail  =  ((const char*(*)(Stmt*))fn_signature)((&s)));
             }
-            json_obj_set(sym, "detail", json_string(detail));
-            json_obj_set(sym, "kind", json_int(symbol_kind_for((&s))));
-            json_obj_set(sym, "range", range_for_decl_name((&s)));
-            json_obj_set(sym, "selectionRange", range_for_decl_name((&s)));
-            json_arr_push(arr, sym);
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(sym, "detail", ((JsonValue*(*)(const char*))json_string)(detail));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(sym, "kind", ((JsonValue*(*)(int))json_int)(((int(*)(Stmt*))symbol_kind_for)((&s))));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(sym, "range", ((JsonValue*(*)(Stmt*))range_for_decl_name)((&s)));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(sym, "selectionRange", ((JsonValue*(*)(Stmt*))range_for_decl_name)((&s)));
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, sym);
         }
     }
-    lsp_send_response(id, arr);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
 }
 
 void   handle_definition (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    JsonValue*   pos = json_get(params, "position");
-    int   line0 = json_as_int(json_get(pos, "line"));
-    int   col0 = json_as_int(json_get(pos, "character"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+    int   line0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+    int   col0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    const char*   word = word_at((doc. text ), line0, col0);
+    const char*   word = ((const char*(*)(const char*, int, int))word_at)((doc. text ), line0, col0);
     if (__glide_string_eq(word, "")) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
     Stmt*   decl = NULL;
-    const char*   path_q = path_qualifier_before((doc. text ), line0, col0);
+    const char*   path_q = ((const char*(*)(const char*, int, int))path_qualifier_before)((doc. text ), line0, col0);
     if ((!__glide_string_eq(path_q, ""))) {
-        (decl  =  find_method_in_impl((doc. stmts ), path_q, word));
+        (decl  =  ((Stmt*(*)(Vector__Stmt*, const char*, const char*))find_method_in_impl)((doc. stmts ), path_q, word));
     }
     if ((decl  ==  NULL)) {
-        const char*   mem_var = member_qualifier_before((doc. text ), line0, col0);
+        const char*   mem_var = ((const char*(*)(const char*, int, int))member_qualifier_before)((doc. text ), line0, col0);
         if ((!__glide_string_eq(mem_var, ""))) {
-            const char*   var_type = lookup_local_type((doc. stmts ), line0, mem_var);
+            const char*   var_type = ((const char*(*)(Vector__Stmt*, int, const char*))lookup_local_type)((doc. stmts ), line0, mem_var);
             if ((!__glide_string_eq(var_type, ""))) {
-                (decl  =  find_method_in_impl((doc. stmts ), var_type, word));
+                (decl  =  ((Stmt*(*)(Vector__Stmt*, const char*, const char*))find_method_in_impl)((doc. stmts ), var_type, word));
             }
         }
     }
     if ((decl  ==  NULL)) {
-        const char*   chain_ty = chained_ctor_qualifier_before((doc. text ), line0, col0);
+        const char*   chain_ty = ((const char*(*)(const char*, int, int))chained_ctor_qualifier_before)((doc. text ), line0, col0);
         if ((!__glide_string_eq(chain_ty, ""))) {
-            (decl  =  find_method_in_impl((doc. stmts ), chain_ty, word));
+            (decl  =  ((Stmt*(*)(Vector__Stmt*, const char*, const char*))find_method_in_impl)((doc. stmts ), chain_ty, word));
         }
     }
     if ((decl  ==  NULL)) {
-        (decl  =  find_top_decl((doc. stmts ), word));
+        (decl  =  ((Stmt*(*)(Vector__Stmt*, const char*))find_top_decl)((doc. stmts ), word));
     }
     if ((decl  ==  NULL)) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
     const char*   target_uri = uri;
     if ((((decl-> origin )  !=  NULL)  &&  (!__glide_string_eq((decl-> origin ), "")))) {
-        (target_uri  =  path_to_uri((decl-> origin )));
+        (target_uri  =  ((const char*(*)(const char*))path_to_uri)((decl-> origin )));
     }
-    JsonValue*   loc = json_object();
-    json_obj_set(loc, "uri", json_string(target_uri));
-    json_obj_set(loc, "range", range_for_decl_name(decl));
-    lsp_send_response(id, loc);
+    JsonValue*   loc = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(loc, "uri", ((JsonValue*(*)(const char*))json_string)(target_uri));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(loc, "range", ((JsonValue*(*)(Stmt*))range_for_decl_name)(decl));
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, loc);
 }
 
 int   ci_kind_for (Stmt*   s) {
@@ -20020,7 +20130,7 @@ Stmt*   fn_containing (Vector__Stmt*   stmts, int   line0) {
         int   start = ((s. line )  -  1);
         if (((start  <=  line0)  &&  (start  >  best_line))) {
             (best_line  =  start);
-            Stmt*   p = (( Stmt* )malloc(sizeof( Stmt )));
+            Stmt*   p = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
             ((*p)  =  s);
             (best  =  p);
         }
@@ -20038,13 +20148,13 @@ void   collect_locals (Vector__Stmt*   body, int   before_line, Vector__Stmt*   
             Vector_push__Stmt(out, s);
         }
         if ((((s. kind )  ==  ST_FOR)  &&  ((s. for_init )  !=  NULL))) {
-            collect_locals_stmt((s. for_init ), before_line, out);
+            ((void(*)(Stmt*, int, Vector__Stmt*))collect_locals_stmt)((s. for_init ), before_line, out);
         }
         if (((s. then_body )  !=  NULL)) {
-            collect_locals((s. then_body ), before_line, out);
+            ((void(*)(Vector__Stmt*, int, Vector__Stmt*))collect_locals)((s. then_body ), before_line, out);
         }
         if (((s. else_body )  !=  NULL)) {
-            collect_locals((s. else_body ), before_line, out);
+            ((void(*)(Vector__Stmt*, int, Vector__Stmt*))collect_locals)((s. else_body ), before_line, out);
         }
     }
 }
@@ -20059,17 +20169,17 @@ void   collect_locals_stmt (Stmt*   s, int   before_line, Vector__Stmt*   out) {
 }
 
 JsonValue*   completion_item (const char*   label, int   kind, const char*   detail) {
-    JsonValue*   it = json_object();
-    json_obj_set(it, "label", json_string(label));
-    json_obj_set(it, "kind", json_int(kind));
+    JsonValue*   it = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "label", ((JsonValue*(*)(const char*))json_string)(label));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "kind", ((JsonValue*(*)(int))json_int)(kind));
     if ((!__glide_string_eq(detail, ""))) {
-        json_obj_set(it, "detail", json_string(detail));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "detail", ((JsonValue*(*)(const char*))json_string)(detail));
     }
     return it;
 }
 
 Vector__ImportInfo*   analyze_imports (const char*   text) {
-    Vector__ImportInfo*   out = Vector_new__ImportInfo();
+    Vector__ImportInfo*   out = ((Vector__ImportInfo*(*)(void))Vector_new__ImportInfo)();
     if ((text  ==  NULL)) {
         return out;
     }
@@ -20083,7 +20193,7 @@ Vector__ImportInfo*   analyze_imports (const char*   text) {
             const char*   raw = __glide_string_substring(text, line_start, i);
             const char*   trimmed = string_trim(raw);
             if (((__glide_string_len(trimmed)  >  7)  &&  __glide_string_eq(__glide_string_substring(trimmed, 0, 7), "import "))) {
-                ImportInfo   info = parse_import_line(raw, line);
+                ImportInfo   info = ((ImportInfo(*)(const char*, int))parse_import_line)(raw, line);
                 if ((!__glide_string_eq((info. module ), ""))) {
                     Vector_push__ImportInfo(out, info);
                 }
@@ -20109,7 +20219,7 @@ int   find_byte (const char*   s, int   c, int   from) {
 }
 
 ImportInfo   parse_import_line (const char*   raw, int   line) {
-    HashMap__bool*   none_items = HashMap_new__bool();
+    HashMap__bool*   none_items = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ImportInfo   miss = (( ImportInfo ){. module  = "", . line  = line, . kind  = IMP_BARE, . items  = none_items, . close_pos  = (-1)});
     const char*   trimmed = string_trim(raw);
     if ((__glide_string_len(trimmed)  <  8)) {
@@ -20123,12 +20233,12 @@ ImportInfo   parse_import_line (const char*   raw, int   line) {
     if (__glide_string_eq(body, "")) {
         return miss;
     }
-    int   brace_open_in_body = find_substr(body, "::{");
+    int   brace_open_in_body = ((int(*)(const char*, const char*))find_substr)(body, "::{");
     if ((brace_open_in_body  >=  0)) {
         const char*   module = __glide_string_substring(body, 0, brace_open_in_body);
         int   inner_start = (brace_open_in_body  +  3);
-        int   brace_close = find_byte(body, 125, inner_start);
-        HashMap__bool*   items = HashMap_new__bool();
+        int   brace_close = ((int(*)(const char*, int, int))find_byte)(body, 125, inner_start);
+        HashMap__bool*   items = ((HashMap__bool*(*)(void))HashMap_new__bool)();
         if ((brace_close  >  0)) {
             const char*   inner = __glide_string_substring(body, inner_start, brace_close);
             Vector__string*   parts = string_split(inner, ",");
@@ -20139,7 +20249,7 @@ ImportInfo   parse_import_line (const char*   raw, int   line) {
                 }
             }
         }
-        int   close_in_raw = find_byte(raw, 125, 0);
+        int   close_in_raw = ((int(*)(const char*, int, int))find_byte)(raw, 125, 0);
         return (( ImportInfo ){. module  = module, . line  = line, . kind  = IMP_SELECTIVE, . items  = items, . close_pos  = close_in_raw});
     }
     int   bn = __glide_string_len(body);
@@ -20150,8 +20260,8 @@ ImportInfo   parse_import_line (const char*   raw, int   line) {
 }
 
 HashMap__ImportInfo*   current_imports (const char*   text) {
-    HashMap__ImportInfo*   h = HashMap_new__ImportInfo();
-    Vector__ImportInfo*   infos = analyze_imports(text);
+    HashMap__ImportInfo*   h = ((HashMap__ImportInfo*(*)(void))HashMap_new__ImportInfo)();
+    Vector__ImportInfo*   infos = ((Vector__ImportInfo*(*)(const char*))analyze_imports)(text);
     for (int   i = 0; (i  <  Vector_len__ImportInfo(infos)); i++) {
         ImportInfo   info = Vector_get__ImportInfo(infos, i);
         HashMap_insert__ImportInfo(h, (info. module ), info);
@@ -20171,39 +20281,39 @@ JsonValue*   build_import_edit (const char*   name, const char*   module, Import
             if (HashMap_contains__bool((existing-> items ), name)) {
                 return NULL;
             }
-            JsonValue*   edit = json_object();
-            JsonValue*   range = json_object();
-            JsonValue*   start = json_object();
-            JsonValue*   endp = json_object();
-            json_obj_set(start, "line", json_int((existing-> line )));
-            json_obj_set(start, "character", json_int((existing-> close_pos )));
-            json_obj_set(endp, "line", json_int((existing-> line )));
-            json_obj_set(endp, "character", json_int((existing-> close_pos )));
-            json_obj_set(range, "start", start);
-            json_obj_set(range, "end", endp);
-            json_obj_set(edit, "range", range);
-            json_obj_set(edit, "newText", json_string(__glide_string_concat(", ", name)));
+            JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
+            JsonValue*   range = ((JsonValue*(*)(void))json_object)();
+            JsonValue*   start = ((JsonValue*(*)(void))json_object)();
+            JsonValue*   endp = ((JsonValue*(*)(void))json_object)();
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "line", ((JsonValue*(*)(int))json_int)((existing-> line )));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "character", ((JsonValue*(*)(int))json_int)((existing-> close_pos )));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "line", ((JsonValue*(*)(int))json_int)((existing-> line )));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "character", ((JsonValue*(*)(int))json_int)((existing-> close_pos )));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "start", start);
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "end", endp);
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "range", range);
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "newText", ((JsonValue*(*)(const char*))json_string)(__glide_string_concat(", ", name)));
             return edit;
         }
     }
-    JsonValue*   edit = json_object();
-    JsonValue*   range = json_object();
-    JsonValue*   start = json_object();
-    JsonValue*   endp = json_object();
-    json_obj_set(start, "line", json_int(fallback_line));
-    json_obj_set(start, "character", json_int(0));
-    json_obj_set(endp, "line", json_int(fallback_line));
-    json_obj_set(endp, "character", json_int(0));
-    json_obj_set(range, "start", start);
-    json_obj_set(range, "end", endp);
-    json_obj_set(edit, "range", range);
+    JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   range = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   start = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   endp = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "line", ((JsonValue*(*)(int))json_int)(fallback_line));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "character", ((JsonValue*(*)(int))json_int)(0));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "line", ((JsonValue*(*)(int))json_int)(fallback_line));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "character", ((JsonValue*(*)(int))json_int)(0));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "start", start);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "end", endp);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "range", range);
     const char*   new_text = "";
     if (is_module) {
         (new_text  =  __glide_string_concat(__glide_string_concat("import ", module), ";\n"));
     } else {
         (new_text  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("import ", module), "::{"), name), "};\n"));
     }
-    json_obj_set(edit, "newText", json_string(new_text));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "newText", ((JsonValue*(*)(const char*))json_string)(new_text));
     return edit;
 }
 
@@ -20235,7 +20345,7 @@ const char*   line_prefix_to_cursor (const char*   text, int   line0, int   col0
 }
 
 int   import_context_kind (const char*   text, int   line0, int   col0) {
-    const char*   prefix = line_prefix_to_cursor(text, line0, col0);
+    const char*   prefix = ((const char*(*)(const char*, int, int))line_prefix_to_cursor)(text, line0, col0);
     const char*   trimmed = string_trim(prefix);
     int   tlen = __glide_string_len(trimmed);
     if ((tlen  <  7)) {
@@ -20244,12 +20354,12 @@ int   import_context_kind (const char*   text, int   line0, int   col0) {
     if ((!__glide_string_eq(__glide_string_substring(trimmed, 0, 7), "import "))) {
         return IMPCTX_NONE;
     }
-    if ((find_byte(prefix, 59, 0)  >=  0)) {
+    if ((((int(*)(const char*, int, int))find_byte)(prefix, 59, 0)  >=  0)) {
         return IMPCTX_NONE;
     }
-    int   brace_pos = find_byte(trimmed, 123, 7);
+    int   brace_pos = ((int(*)(const char*, int, int))find_byte)(trimmed, 123, 7);
     if ((brace_pos  >=  0)) {
-        int   close_after = find_byte(trimmed, 125, brace_pos);
+        int   close_after = ((int(*)(const char*, int, int))find_byte)(trimmed, 125, brace_pos);
         if ((close_after  <  0)) {
             return IMPCTX_BRACE;
         }
@@ -20258,7 +20368,7 @@ int   import_context_kind (const char*   text, int   line0, int   col0) {
 }
 
 const char*   import_path_prefix (const char*   text, int   line0, int   col0) {
-    const char*   prefix = line_prefix_to_cursor(text, line0, col0);
+    const char*   prefix = ((const char*(*)(const char*, int, int))line_prefix_to_cursor)(text, line0, col0);
     const char*   trimmed = string_trim(prefix);
     if ((__glide_string_len(trimmed)  <  7)) {
         return "";
@@ -20278,13 +20388,13 @@ const char*   import_path_prefix (const char*   text, int   line0, int   col0) {
 }
 
 const char*   import_brace_module (const char*   text, int   line0, int   col0) {
-    const char*   prefix = line_prefix_to_cursor(text, line0, col0);
+    const char*   prefix = ((const char*(*)(const char*, int, int))line_prefix_to_cursor)(text, line0, col0);
     const char*   trimmed = string_trim(prefix);
     if ((__glide_string_len(trimmed)  <  7)) {
         return "";
     }
     const char*   body = __glide_string_substring(trimmed, 7, __glide_string_len(trimmed));
-    int   bopen = find_byte(body, 123, 0);
+    int   bopen = ((int(*)(const char*, int, int))find_byte)(body, 123, 0);
     if ((bopen  <=  1)) {
         return "";
     }
@@ -20299,7 +20409,7 @@ void   list_import_path_children (LspState*   state, const char*   prefix, JsonV
         if ((__glide_string_eq(prefix, "")  &&  (!HashMap_contains__bool(seen, "stdlib")))) {
             HashMap_insert__bool(seen, "stdlib", true);
             JsonValue*   no_edit_n = NULL;
-            json_arr_push(items, rich_completion_item("stdlib", "", 9, "namespace stdlib", "Glide standard library root.", "", "stdlib::", false, no_edit_n));
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)("stdlib", "", 9, "namespace stdlib", "Glide standard library root.", "", "stdlib::", false, no_edit_n));
         }
         if ((__glide_string_eq(prefix, "stdlib::")  &&  ((state-> stdlib_index )  !=  NULL))) {
             int   n = Vector_len__ImportableSym((state-> stdlib_index ));
@@ -20313,7 +20423,7 @@ void   list_import_path_children (LspState*   state, const char*   prefix, JsonV
                 }
                 HashMap_insert__bool(seen, (sym. name ), true);
                 JsonValue*   no_edit_m = NULL;
-                json_arr_push(items, rich_completion_item((sym. name ), "", 9, (sym. signature ), (sym. doc ), "", (sym. name ), false, no_edit_m));
+                ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((sym. name ), "", 9, (sym. signature ), (sym. doc ), "", (sym. name ), false, no_edit_m));
             }
         }
     }
@@ -20345,35 +20455,35 @@ int   find_import_insertion_pos (const char*   text) {
 }
 
 JsonValue*   rich_completion_item (const char*   label, const char*   label_extra, int   kind, const char*   signature, const char*   doc, const char*   module, const char*   snippet, bool   has_snippet, JsonValue*   import_edit) {
-    JsonValue*   it = json_object();
-    json_obj_set(it, "label", json_string(label));
-    json_obj_set(it, "kind", json_int(kind));
+    JsonValue*   it = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "label", ((JsonValue*(*)(const char*))json_string)(label));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "kind", ((JsonValue*(*)(int))json_int)(kind));
     if (((!__glide_string_eq(label_extra, ""))  ||  (!__glide_string_eq(module, "")))) {
-        JsonValue*   ld = json_object();
+        JsonValue*   ld = ((JsonValue*(*)(void))json_object)();
         if ((!__glide_string_eq(label_extra, ""))) {
-            json_obj_set(ld, "detail", json_string(label_extra));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(ld, "detail", ((JsonValue*(*)(const char*))json_string)(label_extra));
         }
         if ((!__glide_string_eq(module, ""))) {
-            json_obj_set(ld, "description", json_string(module));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(ld, "description", ((JsonValue*(*)(const char*))json_string)(module));
         }
-        json_obj_set(it, "labelDetails", ld);
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "labelDetails", ld);
     }
     if ((!__glide_string_eq(signature, ""))) {
-        json_obj_set(it, "detail", json_string(signature));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "detail", ((JsonValue*(*)(const char*))json_string)(signature));
     }
-    const char*   lower = ascii_to_lower(label);
+    const char*   lower = ((const char*(*)(const char*))ascii_to_lower)(label);
     const char*   filter = lower;
     if ((!__glide_string_eq(lower, label))) {
         (filter  =  __glide_string_concat(__glide_string_concat(filter, " "), label));
     }
     if ((!__glide_string_eq(module, ""))) {
         (filter  =  __glide_string_concat(__glide_string_concat(filter, " "), module));
-        const char*   mlower = ascii_to_lower(module);
+        const char*   mlower = ((const char*(*)(const char*))ascii_to_lower)(module);
         if ((!__glide_string_eq(mlower, module))) {
             (filter  =  __glide_string_concat(__glide_string_concat(filter, " "), mlower));
         }
     }
-    json_obj_set(it, "filterText", json_string(filter));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "filterText", ((JsonValue*(*)(const char*))json_string)(filter));
     const char*   md = "";
     if ((!__glide_string_eq(signature, ""))) {
         (md  =  __glide_string_concat(__glide_string_concat("```glide\n", signature), "\n```"));
@@ -20391,22 +20501,22 @@ JsonValue*   rich_completion_item (const char*   label, const char*   label_extr
         (md  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(md, "From "), "`"), module), "`"));
     }
     if ((!__glide_string_eq(md, ""))) {
-        JsonValue*   docobj = json_object();
-        json_obj_set(docobj, "kind", json_string("markdown"));
-        json_obj_set(docobj, "value", json_string(md));
-        json_obj_set(it, "documentation", docobj);
+        JsonValue*   docobj = ((JsonValue*(*)(void))json_object)();
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(docobj, "kind", ((JsonValue*(*)(const char*))json_string)("markdown"));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(docobj, "value", ((JsonValue*(*)(const char*))json_string)(md));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "documentation", docobj);
     }
     if ((has_snippet  &&  (!__glide_string_eq(snippet, "")))) {
-        json_obj_set(it, "insertText", json_string(snippet));
-        json_obj_set(it, "insertTextFormat", json_int(2));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "insertText", ((JsonValue*(*)(const char*))json_string)(snippet));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "insertTextFormat", ((JsonValue*(*)(int))json_int)(2));
     } else {
-        json_obj_set(it, "insertText", json_string(label));
-        json_obj_set(it, "insertTextFormat", json_int(1));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "insertText", ((JsonValue*(*)(const char*))json_string)(label));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "insertTextFormat", ((JsonValue*(*)(int))json_int)(1));
     }
     if ((import_edit  !=  NULL)) {
-        JsonValue*   edits = json_array();
-        json_arr_push(edits, import_edit);
-        json_obj_set(it, "additionalTextEdits", edits);
+        JsonValue*   edits = ((JsonValue*(*)(void))json_array)();
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(edits, import_edit);
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(it, "additionalTextEdits", edits);
     }
     return it;
 }
@@ -20451,7 +20561,7 @@ const char*   pretty_module (const char*   origin) {
     }
     const char*   parent = __glide_string_substring(norm, (prev_sep  +  1), last_sep);
     const char*   leaf = __glide_string_substring(norm, (last_sep  +  1), n);
-    const char*   stem = drop_glide_ext(leaf);
+    const char*   stem = ((const char*(*)(const char*))drop_glide_ext)(leaf);
     if (__glide_string_eq(parent, "stdlib")) {
         return __glide_string_concat("stdlib::", stem);
     }
@@ -20467,11 +20577,11 @@ void   list_module_members (LspState*   state, const char*   path, JsonValue*   
     }
     int   n = Vector_len__ImportableSym((state-> stdlib_index ));
     if (__glide_string_eq(path, "stdlib")) {
-        HashMap__bool*   mods = HashMap_new__bool();
+        HashMap__bool*   mods = ((HashMap__bool*(*)(void))HashMap_new__bool)();
         for (int   i = 0; (i  <  n); i++) {
             ImportableSym   sym = Vector_get__ImportableSym((state-> stdlib_index ), i);
             const char*   m = (sym. module );
-            int   cut = find_substr(m, "::");
+            int   cut = ((int(*)(const char*, const char*))find_substr)(m, "::");
             const char*   leaf = m;
             if ((cut  >=  0)) {
                 (leaf  =  __glide_string_substring(m, (cut  +  2), __glide_string_len(m)));
@@ -20485,8 +20595,8 @@ void   list_module_members (LspState*   state, const char*   path, JsonValue*   
             }
             HashMap_insert__bool(seen, leaf, true);
             JsonValue*   no_edit = NULL;
-            JsonValue*   item = rich_completion_item(leaf, "", 9, __glide_string_concat("module ", leaf), "stdlib submodule", "", leaf, false, no_edit);
-            json_arr_push(items, item);
+            JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)(leaf, "", 9, __glide_string_concat("module ", leaf), "stdlib submodule", "", leaf, false, no_edit);
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
         }
         HashMap_free__bool(mods);
         return;
@@ -20497,7 +20607,7 @@ void   list_module_members (LspState*   state, const char*   path, JsonValue*   
             continue;
         }
         const char*   m = (sym. module );
-        int   cut = find_substr(m, "::");
+        int   cut = ((int(*)(const char*, const char*))find_substr)(m, "::");
         const char*   leaf = m;
         if ((cut  >=  0)) {
             (leaf  =  __glide_string_substring(m, (cut  +  2), __glide_string_len(m)));
@@ -20510,8 +20620,8 @@ void   list_module_members (LspState*   state, const char*   path, JsonValue*   
         }
         HashMap_insert__bool(seen, (sym. name ), true);
         JsonValue*   no_edit2 = NULL;
-        JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), no_edit2);
-        json_arr_push(items, item);
+        JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((sym. name ), (sym. label_extra ), ((int(*)(int))ci_kind_for_stmt_kind)((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), no_edit2);
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
     }
 }
 
@@ -20588,7 +20698,7 @@ int   cursor_before_partial (const char*   text, int   line0, int   col0) {
 }
 
 const char*   path_qualifier_before (const char*   text, int   line0, int   col0) {
-    int   p = cursor_before_partial(text, line0, col0);
+    int   p = ((int(*)(const char*, int, int))cursor_before_partial)(text, line0, col0);
     if ((p  <  2)) {
         return "";
     }
@@ -20616,7 +20726,7 @@ const char*   path_qualifier_before (const char*   text, int   line0, int   col0
 }
 
 const char*   module_path_before (const char*   text, int   line0, int   col0) {
-    int   p = cursor_before_partial(text, line0, col0);
+    int   p = ((int(*)(const char*, int, int))cursor_before_partial)(text, line0, col0);
     if ((p  <  2)) {
         return "";
     }
@@ -20624,7 +20734,7 @@ const char*   module_path_before (const char*   text, int   line0, int   col0) {
         return "";
     }
     int   end = (p  -  2);
-    Vector__string*   segments = Vector_new__string();
+    Vector__string*   segments = ((Vector__string*(*)(void))Vector_new__string)();
     while (true) {
         int   start = end;
         while ((start  >  0)) {
@@ -20662,7 +20772,7 @@ const char*   module_path_before (const char*   text, int   line0, int   col0) {
 }
 
 const char*   member_qualifier_before (const char*   text, int   line0, int   col0) {
-    int   p = cursor_before_partial(text, line0, col0);
+    int   p = ((int(*)(const char*, int, int))cursor_before_partial)(text, line0, col0);
     if ((p  <  1)) {
         return "";
     }
@@ -20682,7 +20792,7 @@ const char*   member_qualifier_before (const char*   text, int   line0, int   co
 }
 
 const char*   chained_ctor_qualifier_before (const char*   text, int   line0, int   col0) {
-    int   p = cursor_before_partial(text, line0, col0);
+    int   p = ((int(*)(const char*, int, int))cursor_before_partial)(text, line0, col0);
     if ((p  <  1)) {
         return "";
     }
@@ -20742,7 +20852,7 @@ const char*   chained_ctor_qualifier_before (const char*   text, int   line0, in
 }
 
 const char*   lookup_local_type (Vector__Stmt*   stmts, int   line0, const char*   var) {
-    Stmt*   host = fn_containing(stmts, line0);
+    Stmt*   host = ((Stmt*(*)(Vector__Stmt*, int))fn_containing)(stmts, line0);
     if (((host  ==  NULL)  ||  ((host-> fn_body )  ==  NULL))) {
         return "";
     }
@@ -20810,7 +20920,7 @@ void   list_fields_for_type (Vector__Stmt*   stmts, const char*   type_name, Jso
                 continue;
             }
             HashMap_insert__bool(seen, (f. name ), true);
-            json_arr_push(items, completion_item((f. name ), 5, type_to_string_pretty((f. ty ))));
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)((f. name ), 5, ((const char*(*)(Type*))type_to_string_pretty)((f. ty ))));
         }
     }
 }
@@ -20821,15 +20931,15 @@ void   list_chan_methods_for_type (const char*   type_name, JsonValue*   items, 
     }
     if ((!HashMap_contains__bool(seen, "send"))) {
         HashMap_insert__bool(seen, "send", true);
-        json_arr_push(items, completion_item("send", 2, "fn send(self: chan<T>, x: T)"));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)("send", 2, "fn send(self: chan<T>, x: T)"));
     }
     if ((!HashMap_contains__bool(seen, "recv"))) {
         HashMap_insert__bool(seen, "recv", true);
-        json_arr_push(items, completion_item("recv", 2, "fn recv(self: chan<T>) -> T"));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)("recv", 2, "fn recv(self: chan<T>) -> T"));
     }
     if ((!HashMap_contains__bool(seen, "close"))) {
         HashMap_insert__bool(seen, "close", true);
-        json_arr_push(items, completion_item("close", 2, "fn close(self: chan<T>)"));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)("close", 2, "fn close(self: chan<T>)"));
     }
 }
 
@@ -20878,10 +20988,10 @@ void   list_methods_for_type (Vector__Stmt*   stmts, const char*   type_name, Js
                     continue;
                 }
                 HashMap_insert__bool(seen, (m. name ), true);
-                json_arr_push(items, completion_item((m. name ), 2, fn_signature((&m))));
+                ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)((m. name ), 2, ((const char*(*)(Stmt*))fn_signature)((&m))));
             } else {
                 if (((m. kind )  ==  ST_MACRO_DEF)) {
-                    bool   uses_self = body_references_self((m. then_body ));
+                    bool   uses_self = ((bool(*)(Vector__Stmt*))body_references_self)((m. then_body ));
                     if ((want_self  &&  (!uses_self))) {
                         continue;
                     }
@@ -20893,7 +21003,7 @@ void   list_methods_for_type (Vector__Stmt*   stmts, const char*   type_name, Js
                         continue;
                     }
                     HashMap_insert__bool(seen, label, true);
-                    json_arr_push(items, completion_item(label, 2, macro_signature((&m))));
+                    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)(label, 2, ((const char*(*)(Stmt*))macro_signature)((&m))));
                 }
             }
         }
@@ -20901,87 +21011,87 @@ void   list_methods_for_type (Vector__Stmt*   stmts, const char*   type_name, Js
 }
 
 void   handle_completion (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    JsonValue*   pos = json_get(params, "position");
-    int   line0 = json_as_int(json_get(pos, "line"));
-    int   col0 = json_as_int(json_get(pos, "character"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+    int   line0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+    int   col0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_array());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    JsonValue*   items = json_array();
-    HashMap__bool*   seen = HashMap_new__bool();
-    int   imp_kind = import_context_kind((doc. text ), line0, col0);
+    JsonValue*   items = ((JsonValue*(*)(void))json_array)();
+    HashMap__bool*   seen = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+    int   imp_kind = ((int(*)(const char*, int, int))import_context_kind)((doc. text ), line0, col0);
     if ((imp_kind  ==  IMPCTX_PATH)) {
-        const char*   prefix = import_path_prefix((doc. text ), line0, col0);
-        list_import_path_children(state, prefix, items, seen);
+        const char*   prefix = ((const char*(*)(const char*, int, int))import_path_prefix)((doc. text ), line0, col0);
+        ((void(*)(LspState*, const char*, JsonValue*, HashMap__bool*))list_import_path_children)(state, prefix, items, seen);
         HashMap_free__bool(seen);
-        lsp_send_response(id, items);
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
         return;
     }
     if ((imp_kind  ==  IMPCTX_BRACE)) {
-        const char*   mod_in_brace = import_brace_module((doc. text ), line0, col0);
+        const char*   mod_in_brace = ((const char*(*)(const char*, int, int))import_brace_module)((doc. text ), line0, col0);
         if ((!__glide_string_eq(mod_in_brace, ""))) {
-            list_module_members(state, mod_in_brace, items, seen);
+            ((void(*)(LspState*, const char*, JsonValue*, HashMap__bool*))list_module_members)(state, mod_in_brace, items, seen);
             HashMap_free__bool(seen);
-            lsp_send_response(id, items);
+            ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
             return;
         }
     }
-    const char*   mod_path = module_path_before((doc. text ), line0, col0);
+    const char*   mod_path = ((const char*(*)(const char*, int, int))module_path_before)((doc. text ), line0, col0);
     if (((!__glide_string_eq(mod_path, ""))  &&  ((state-> stdlib_index )  !=  NULL))) {
-        list_module_members(state, mod_path, items, seen);
+        ((void(*)(LspState*, const char*, JsonValue*, HashMap__bool*))list_module_members)(state, mod_path, items, seen);
         HashMap_free__bool(seen);
-        lsp_send_response(id, items);
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
         return;
     }
-    const char*   qualifier = path_qualifier_before((doc. text ), line0, col0);
+    const char*   qualifier = ((const char*(*)(const char*, int, int))path_qualifier_before)((doc. text ), line0, col0);
     if ((!__glide_string_eq(qualifier, ""))) {
-        list_methods_for_type((doc. stmts ), qualifier, items, seen, false);
+        ((void(*)(Vector__Stmt*, const char*, JsonValue*, HashMap__bool*, bool))list_methods_for_type)((doc. stmts ), qualifier, items, seen, false);
         HashMap_free__bool(seen);
-        lsp_send_response(id, items);
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
         return;
     }
-    const char*   member_var = member_qualifier_before((doc. text ), line0, col0);
+    const char*   member_var = ((const char*(*)(const char*, int, int))member_qualifier_before)((doc. text ), line0, col0);
     if ((!__glide_string_eq(member_var, ""))) {
-        const char*   var_type = lookup_local_type((doc. stmts ), line0, member_var);
+        const char*   var_type = ((const char*(*)(Vector__Stmt*, int, const char*))lookup_local_type)((doc. stmts ), line0, member_var);
         if ((!__glide_string_eq(var_type, ""))) {
-            list_fields_for_type((doc. stmts ), var_type, items, seen);
-            list_methods_for_type((doc. stmts ), var_type, items, seen, true);
-            list_chan_methods_for_type(var_type, items, seen);
+            ((void(*)(Vector__Stmt*, const char*, JsonValue*, HashMap__bool*))list_fields_for_type)((doc. stmts ), var_type, items, seen);
+            ((void(*)(Vector__Stmt*, const char*, JsonValue*, HashMap__bool*, bool))list_methods_for_type)((doc. stmts ), var_type, items, seen, true);
+            ((void(*)(const char*, JsonValue*, HashMap__bool*))list_chan_methods_for_type)(var_type, items, seen);
         }
         HashMap_free__bool(seen);
-        lsp_send_response(id, items);
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
         return;
     }
-    const char*   chain_ty = chained_ctor_qualifier_before((doc. text ), line0, col0);
+    const char*   chain_ty = ((const char*(*)(const char*, int, int))chained_ctor_qualifier_before)((doc. text ), line0, col0);
     if ((!__glide_string_eq(chain_ty, ""))) {
-        list_fields_for_type((doc. stmts ), chain_ty, items, seen);
-        list_methods_for_type((doc. stmts ), chain_ty, items, seen, true);
+        ((void(*)(Vector__Stmt*, const char*, JsonValue*, HashMap__bool*))list_fields_for_type)((doc. stmts ), chain_ty, items, seen);
+        ((void(*)(Vector__Stmt*, const char*, JsonValue*, HashMap__bool*, bool))list_methods_for_type)((doc. stmts ), chain_ty, items, seen, true);
         HashMap_free__bool(seen);
-        lsp_send_response(id, items);
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
         return;
     }
-    Stmt*   host = fn_containing((doc. stmts ), line0);
+    Stmt*   host = ((Stmt*(*)(Vector__Stmt*, int))fn_containing)((doc. stmts ), line0);
     if ((host  !=  NULL)) {
         if (((host-> fn_params )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Param((host-> fn_params ))); i++) {
                 Param   p = Vector_get__Param((host-> fn_params ), i);
                 if ((!HashMap_contains__bool(seen, (p. name )))) {
                     HashMap_insert__bool(seen, (p. name ), true);
-                    const char*   sig = __glide_string_concat(__glide_string_concat(__glide_string_concat("param ", (p. name )), ": "), type_to_string_pretty((p. ty )));
+                    const char*   sig = __glide_string_concat(__glide_string_concat(__glide_string_concat("param ", (p. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)((p. ty )));
                     JsonValue*   no_edit_p = NULL;
-                    JsonValue*   item = rich_completion_item((p. name ), "", 6, sig, "", "", "", false, no_edit_p);
-                    json_arr_push(items, item);
+                    JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((p. name ), "", 6, sig, "", "", "", false, no_edit_p);
+                    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
                 }
             }
         }
-        Vector__Stmt*   locals = Vector_new__Stmt();
-        collect_locals((host-> fn_body ), line0, locals);
+        Vector__Stmt*   locals = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+        ((void(*)(Vector__Stmt*, int, Vector__Stmt*))collect_locals)((host-> fn_body ), line0, locals);
         for (int   i = 0; (i  <  Vector_len__Stmt(locals)); i++) {
             Stmt   s = Vector_get__Stmt(locals, i);
             if (HashMap_contains__bool(seen, (s. name ))) {
@@ -20990,15 +21100,15 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             HashMap_insert__bool(seen, (s. name ), true);
             const char*   sig = __glide_string_concat("local ", (s. name ));
             if (((s. let_ty )  !=  NULL)) {
-                (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("let ", (s. name )), ": "), type_to_string_pretty((s. let_ty ))));
+                (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("let ", (s. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)((s. let_ty ))));
             }
             JsonValue*   no_edit_l = NULL;
-            JsonValue*   item = rich_completion_item((s. name ), "", 6, sig, "", "", "", false, no_edit_l);
-            json_arr_push(items, item);
+            JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((s. name ), "", 6, sig, "", "", "", false, no_edit_l);
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
         }
     }
-    HashMap__ImportInfo*   imps2 = current_imports((doc. text ));
-    int   insert_line2 = find_import_insertion_pos((doc. text ));
+    HashMap__ImportInfo*   imps2 = ((HashMap__ImportInfo*(*)(const char*))current_imports)((doc. text ));
+    int   insert_line2 = ((int(*)(const char*))find_import_insertion_pos)((doc. text ));
     if (((doc. stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
@@ -21018,9 +21128,9 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             const char*   snip = label;
             bool   has_snip = false;
             if (((s. kind )  ==  ST_FN)) {
-                (sig  =  fn_signature((&s)));
-                (label_extra  =  fn_label_extra((&s)));
-                (snip  =  fn_snippet((&s)));
+                (sig  =  ((const char*(*)(Stmt*))fn_signature)((&s)));
+                (label_extra  =  ((const char*(*)(Stmt*))fn_label_extra)((&s)));
+                (snip  =  ((const char*(*)(Stmt*))fn_snippet)((&s)));
                 (has_snip  =  true);
             } else {
                 if (((s. kind )  ==  ST_STRUCT)) {
@@ -21032,11 +21142,11 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                         if (((s. kind )  ==  ST_CONST)) {
                             (sig  =  __glide_string_concat("const ", (s. name )));
                             if (((s. let_ty )  !=  NULL)) {
-                                (sig  =  __glide_string_concat(__glide_string_concat(sig, ": "), type_to_string_pretty((s. let_ty ))));
+                                (sig  =  __glide_string_concat(__glide_string_concat(sig, ": "), ((const char*(*)(Type*))type_to_string_pretty)((s. let_ty ))));
                             }
                         } else {
                             if (((s. kind )  ==  ST_MACRO_DEF)) {
-                                (sig  =  macro_signature((&s)));
+                                (sig  =  ((const char*(*)(Stmt*))macro_signature)((&s)));
                             }
                         }
                     }
@@ -21044,7 +21154,7 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             }
             const char*   module = "";
             if (((s. origin )  !=  NULL)) {
-                (module  =  pretty_module((s. origin )));
+                (module  =  ((const char*(*)(const char*))pretty_module)((s. origin )));
             }
             const char*   docc = "";
             if (((s. doc_comment )  !=  NULL)) {
@@ -21055,16 +21165,16 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 ImportInfo*   existing = NULL;
                 if (HashMap_contains__ImportInfo(imps2, module)) {
                     ImportInfo   info_val = HashMap_get__ImportInfo(imps2, module);
-                    (existing  =  (( ImportInfo* )malloc(sizeof( ImportInfo ))));
+                    (existing  =  (( ImportInfo* )((void*(*)(size_t))malloc)(sizeof( ImportInfo ))));
                     ((*existing)  =  info_val);
                 }
-                (decl_edit  =  build_import_edit(label, module, existing, insert_line2, false));
+                (decl_edit  =  ((JsonValue*(*)(const char*, const char*, ImportInfo*, int, bool))build_import_edit)(label, module, existing, insert_line2, false));
             }
-            JsonValue*   item = rich_completion_item(label, label_extra, ci_kind_for((&s)), sig, docc, module, snip, has_snip, decl_edit);
-            json_arr_push(items, item);
+            JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)(label, label_extra, ((int(*)(Stmt*))ci_kind_for)((&s)), sig, docc, module, snip, has_snip, decl_edit);
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
         }
     }
-    Vector__string*   builtins = Vector_new__string();
+    Vector__string*   builtins = ((Vector__string*(*)(void))Vector_new__string)();
     Vector_push__string(builtins, "println!");
     Vector_push__string(builtins, "print!");
     Vector_push__string(builtins, "format!");
@@ -21086,11 +21196,11 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 }
             }
         }
-        json_arr_push(items, completion_item(bn, 2, bdetail));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)(bn, 2, bdetail));
     }
     if ((((state-> stdlib_index )  !=  NULL)  &&  (Vector_len__ImportableSym((state-> stdlib_index ))  >  0))) {
-        HashMap__ImportInfo*   imps = current_imports((doc. text ));
-        int   insert_line = find_import_insertion_pos((doc. text ));
+        HashMap__ImportInfo*   imps = ((HashMap__ImportInfo*(*)(const char*))current_imports)((doc. text ));
+        int   insert_line = ((int(*)(const char*))find_import_insertion_pos)((doc. text ));
         int   n_idx = Vector_len__ImportableSym((state-> stdlib_index ));
         for (int   i = 0; (i  <  n_idx); i++) {
             ImportableSym   sym = Vector_get__ImportableSym((state-> stdlib_index ), i);
@@ -21101,17 +21211,17 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             ImportInfo*   existing = NULL;
             if (HashMap_contains__ImportInfo(imps, (sym. module ))) {
                 ImportInfo   info_val = HashMap_get__ImportInfo(imps, (sym. module ));
-                (existing  =  (( ImportInfo* )malloc(sizeof( ImportInfo ))));
+                (existing  =  (( ImportInfo* )((void*(*)(size_t))malloc)(sizeof( ImportInfo ))));
                 ((*existing)  =  info_val);
             }
             bool   is_module = ((sym. kind )  ==  SYMKIND_MODULE);
-            JsonValue*   edit = build_import_edit((sym. name ), (sym. module ), existing, insert_line, is_module);
-            JsonValue*   item = rich_completion_item((sym. name ), (sym. label_extra ), ci_kind_for_stmt_kind((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), edit);
-            json_arr_push(items, item);
+            JsonValue*   edit = ((JsonValue*(*)(const char*, const char*, ImportInfo*, int, bool))build_import_edit)((sym. name ), (sym. module ), existing, insert_line, is_module);
+            JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((sym. name ), (sym. label_extra ), ((int(*)(int))ci_kind_for_stmt_kind)((sym. kind )), (sym. signature ), (sym. doc ), (sym. module ), (sym. snippet ), (sym. has_snippet ), edit);
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
         }
         HashMap_free__ImportInfo(imps);
     }
-    Vector__string*   kws = Vector_new__string();
+    Vector__string*   kws = ((Vector__string*(*)(void))Vector_new__string)();
     Vector_push__string(kws, "let");
     Vector_push__string(kws, "const");
     Vector_push__string(kws, "mut");
@@ -21155,10 +21265,10 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
             continue;
         }
         HashMap_insert__bool(seen, k, true);
-        json_arr_push(items, completion_item(k, 14, ""));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int, const char*))completion_item)(k, 14, ""));
     }
     HashMap_free__bool(seen);
-    lsp_send_response(id, items);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 }
 
 void   collect_uses_in_expr (Expr*   e, const char*   name, Vector__UseSite*   out) {
@@ -21174,18 +21284,18 @@ void   collect_uses_in_expr (Expr*   e, const char*   name, Vector__UseSite*   o
         Vector_push__UseSite(out, u);
     }
     if (((e-> lhs )  !=  NULL)) {
-        collect_uses_in_expr((e-> lhs ), name, out);
+        ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((e-> lhs ), name, out);
     }
     if (((e-> rhs )  !=  NULL)) {
-        collect_uses_in_expr((e-> rhs ), name, out);
+        ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((e-> rhs ), name, out);
     }
     if (((e-> operand )  !=  NULL)) {
-        collect_uses_in_expr((e-> operand ), name, out);
+        ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((e-> operand ), name, out);
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            collect_uses_in_expr((&a), name, out);
+            ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((&a), name, out);
         }
     }
 }
@@ -21215,48 +21325,48 @@ void   collect_uses_in_stmt (Stmt*   s, const char*   name, Vector__UseSite*   o
         Vector_push__UseSite(out, u);
     }
     if (((s-> let_value )  !=  NULL)) {
-        collect_uses_in_expr((s-> let_value ), name, out);
+        ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> let_value ), name, out);
     }
     if (((s-> expr_value )  !=  NULL)) {
-        collect_uses_in_expr((s-> expr_value ), name, out);
+        ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> expr_value ), name, out);
     }
     if (((s-> cond )  !=  NULL)) {
-        collect_uses_in_expr((s-> cond ), name, out);
+        ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> cond ), name, out);
     }
     if (((s-> for_step )  !=  NULL)) {
-        collect_uses_in_expr((s-> for_step ), name, out);
+        ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> for_step ), name, out);
     }
     if (((s-> for_init )  !=  NULL)) {
-        collect_uses_in_stmt((s-> for_init ), name, out);
+        ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((s-> for_init ), name, out);
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            collect_uses_in_stmt((&b), name, out);
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&b), name, out);
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            collect_uses_in_stmt((&b), name, out);
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&b), name, out);
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            collect_uses_in_stmt((&b), name, out);
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&b), name, out);
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            collect_uses_in_stmt((&m), name, out);
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&m), name, out);
         }
     }
 }
 
 JsonValue*   use_to_range (UseSite*   u, int   name_len) {
-    JsonValue*   r = json_object();
+    JsonValue*   r = ((JsonValue*(*)(void))json_object)();
     int   l = ((u-> line )  -  1);
     if ((l  <  0)) {
         (l  =  0);
@@ -21265,162 +21375,162 @@ JsonValue*   use_to_range (UseSite*   u, int   name_len) {
     if ((c  <  0)) {
         (c  =  0);
     }
-    JsonValue*   s = json_object();
-    json_obj_set(s, "line", json_int(l));
-    json_obj_set(s, "character", json_int(c));
-    JsonValue*   e = json_object();
-    json_obj_set(e, "line", json_int(l));
-    json_obj_set(e, "character", json_int((c  +  name_len)));
-    json_obj_set(r, "start", s);
-    json_obj_set(r, "end", e);
+    JsonValue*   s = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(s, "line", ((JsonValue*(*)(int))json_int)(l));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(s, "character", ((JsonValue*(*)(int))json_int)(c));
+    JsonValue*   e = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(e, "line", ((JsonValue*(*)(int))json_int)(l));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(e, "character", ((JsonValue*(*)(int))json_int)((c  +  name_len)));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "start", s);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "end", e);
     return r;
 }
 
 void   handle_references (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    JsonValue*   pos = json_get(params, "position");
-    int   line0 = json_as_int(json_get(pos, "line"));
-    int   col0 = json_as_int(json_get(pos, "character"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+    int   line0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+    int   col0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_array());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    const char*   path = uri_to_path(uri);
-    const char*   word = word_at((doc. text ), line0, col0);
+    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
+    const char*   word = ((const char*(*)(const char*, int, int))word_at)((doc. text ), line0, col0);
     if (__glide_string_eq(word, "")) {
-        lsp_send_response(id, json_array());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
-    Vector__UseSite*   uses = Vector_new__UseSite();
+    Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
     if (((doc. stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
             if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
                 continue;
             }
-            collect_uses_in_stmt((&s), word, uses);
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
         }
     }
-    JsonValue*   arr = json_array();
+    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
     for (int   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
         UseSite   u = Vector_get__UseSite(uses, i);
-        JsonValue*   loc = json_object();
-        json_obj_set(loc, "uri", json_string(uri));
-        json_obj_set(loc, "range", use_to_range((&u), __glide_string_len(word)));
-        json_arr_push(arr, loc);
+        JsonValue*   loc = ((JsonValue*(*)(void))json_object)();
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(loc, "uri", ((JsonValue*(*)(const char*))json_string)(uri));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(loc, "range", ((JsonValue*(*)(UseSite*, int))use_to_range)((&u), __glide_string_len(word)));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, loc);
     }
-    lsp_send_response(id, arr);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
 }
 
 void   handle_document_highlight (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    JsonValue*   pos = json_get(params, "position");
-    int   line0 = json_as_int(json_get(pos, "line"));
-    int   col0 = json_as_int(json_get(pos, "character"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+    int   line0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+    int   col0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_array());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    const char*   path = uri_to_path(uri);
-    const char*   word = word_at((doc. text ), line0, col0);
+    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
+    const char*   word = ((const char*(*)(const char*, int, int))word_at)((doc. text ), line0, col0);
     if (__glide_string_eq(word, "")) {
-        lsp_send_response(id, json_array());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
-    Vector__UseSite*   uses = Vector_new__UseSite();
+    Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
     if (((doc. stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
             if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
                 continue;
             }
-            collect_uses_in_stmt((&s), word, uses);
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
         }
     }
-    JsonValue*   arr = json_array();
+    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
     for (int   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
         UseSite   u = Vector_get__UseSite(uses, i);
-        JsonValue*   h = json_object();
-        json_obj_set(h, "range", use_to_range((&u), __glide_string_len(word)));
-        json_obj_set(h, "kind", json_int(1));
-        json_arr_push(arr, h);
+        JsonValue*   h = ((JsonValue*(*)(void))json_object)();
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(h, "range", ((JsonValue*(*)(UseSite*, int))use_to_range)((&u), __glide_string_len(word)));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(h, "kind", ((JsonValue*(*)(int))json_int)(1));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, h);
     }
-    lsp_send_response(id, arr);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
 }
 
 void   handle_rename (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    JsonValue*   pos = json_get(params, "position");
-    int   line0 = json_as_int(json_get(pos, "line"));
-    int   col0 = json_as_int(json_get(pos, "character"));
-    const char*   new_name = json_as_string(json_get(params, "newName"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+    int   line0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+    int   col0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
+    const char*   new_name = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "newName"));
     if (((!HashMap_contains__LspDoc((state-> docs ), uri))  ||  __glide_string_eq(new_name, ""))) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    const char*   path = uri_to_path(uri);
-    const char*   word = word_at((doc. text ), line0, col0);
+    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
+    const char*   word = ((const char*(*)(const char*, int, int))word_at)((doc. text ), line0, col0);
     if (__glide_string_eq(word, "")) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
-    Vector__UseSite*   uses = Vector_new__UseSite();
+    Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
     if (((doc. stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
             if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
                 continue;
             }
-            collect_uses_in_stmt((&s), word, uses);
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
         }
     }
-    JsonValue*   edits = json_array();
+    JsonValue*   edits = ((JsonValue*(*)(void))json_array)();
     for (int   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
         UseSite   u = Vector_get__UseSite(uses, i);
-        JsonValue*   edit = json_object();
-        json_obj_set(edit, "range", use_to_range((&u), __glide_string_len(word)));
-        json_obj_set(edit, "newText", json_string(new_name));
-        json_arr_push(edits, edit);
+        JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "range", ((JsonValue*(*)(UseSite*, int))use_to_range)((&u), __glide_string_len(word)));
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "newText", ((JsonValue*(*)(const char*))json_string)(new_name));
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(edits, edit);
     }
-    JsonValue*   changes = json_object();
-    json_obj_set(changes, uri, edits);
-    JsonValue*   result = json_object();
-    json_obj_set(result, "changes", changes);
-    lsp_send_response(id, result);
+    JsonValue*   changes = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(changes, uri, edits);
+    JsonValue*   result = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "changes", changes);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, result);
 }
 
 void   handle_prepare_rename (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
-    JsonValue*   pos = json_get(params, "position");
-    int   line0 = json_as_int(json_get(pos, "line"));
-    int   col0 = json_as_int(json_get(pos, "character"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+    int   line0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+    int   col0 = ((int(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-    const char*   word = word_at((doc. text ), line0, col0);
+    const char*   word = ((const char*(*)(const char*, int, int))word_at)((doc. text ), line0, col0);
     if (__glide_string_eq(word, "")) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
-    if (is_glide_keyword(word)) {
-        lsp_send_response(id, json_null());
+    if (((bool(*)(const char*))is_glide_keyword)(word)) {
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
     Lexer*   lex = Lexer_new((doc. text ));
@@ -21436,23 +21546,23 @@ void   handle_prepare_rename (JsonValue*   req, LspState*   state) {
         int   tcol = ((tok. column )  -  1);
         int   len = __glide_string_len((tok. lexeme ));
         if ((((tline  ==  line0)  &&  (col0  >=  tcol))  &&  (col0  <=  (tcol  +  len)))) {
-            JsonValue*   range = json_object();
-            JsonValue*   start = json_object();
-            JsonValue*   endp = json_object();
-            json_obj_set(start, "line", json_int(tline));
-            json_obj_set(start, "character", json_int(tcol));
-            json_obj_set(endp, "line", json_int(tline));
-            json_obj_set(endp, "character", json_int((tcol  +  len)));
-            json_obj_set(range, "start", start);
-            json_obj_set(range, "end", endp);
-            JsonValue*   result = json_object();
-            json_obj_set(result, "range", range);
-            json_obj_set(result, "placeholder", json_string(word));
-            lsp_send_response(id, result);
+            JsonValue*   range = ((JsonValue*(*)(void))json_object)();
+            JsonValue*   start = ((JsonValue*(*)(void))json_object)();
+            JsonValue*   endp = ((JsonValue*(*)(void))json_object)();
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "line", ((JsonValue*(*)(int))json_int)(tline));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "character", ((JsonValue*(*)(int))json_int)(tcol));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "line", ((JsonValue*(*)(int))json_int)(tline));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "character", ((JsonValue*(*)(int))json_int)((tcol  +  len)));
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "start", start);
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "end", endp);
+            JsonValue*   result = ((JsonValue*(*)(void))json_object)();
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "range", range);
+            ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "placeholder", ((JsonValue*(*)(const char*))json_string)(word));
+            ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, result);
             return;
         }
     }
-    lsp_send_response(id, json_null());
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
 }
 
 bool   is_glide_keyword (const char*   w) {
@@ -21591,35 +21701,35 @@ int   count_lines (const char*   s) {
 }
 
 void   handle_formatting (JsonValue*   req, LspState*   state) {
-    JsonValue*   id = json_get(req, "id");
-    JsonValue*   params = json_get(req, "params");
-    JsonValue*   td = json_get(params, "textDocument");
-    const char*   uri = json_as_string(json_get(td, "uri"));
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        lsp_send_response(id, json_array());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
     Lexer*   lex = Lexer_new((doc. text ));
     Parser*   p = Parser_new(lex);
-    Vector__Stmt*   parsed = parse_program(p);
-    const char*   formatted = fmt_program(parsed);
-    int   lines = (count_lines((doc. text ))  +  2);
-    JsonValue*   edit = json_object();
-    JsonValue*   range = json_object();
-    JsonValue*   start = json_object();
-    JsonValue*   endp = json_object();
-    json_obj_set(start, "line", json_int(0));
-    json_obj_set(start, "character", json_int(0));
-    json_obj_set(endp, "line", json_int(lines));
-    json_obj_set(endp, "character", json_int(0));
-    json_obj_set(range, "start", start);
-    json_obj_set(range, "end", endp);
-    json_obj_set(edit, "range", range);
-    json_obj_set(edit, "newText", json_string(formatted));
-    JsonValue*   arr = json_array();
-    json_arr_push(arr, edit);
-    lsp_send_response(id, arr);
+    Vector__Stmt*   parsed = ((Vector__Stmt*(*)(Parser*))parse_program)(p);
+    const char*   formatted = ((const char*(*)(Vector__Stmt*))fmt_program)(parsed);
+    int   lines = (((int(*)(const char*))count_lines)((doc. text ))  +  2);
+    JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   range = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   start = ((JsonValue*(*)(void))json_object)();
+    JsonValue*   endp = ((JsonValue*(*)(void))json_object)();
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "line", ((JsonValue*(*)(int))json_int)(0));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "character", ((JsonValue*(*)(int))json_int)(0));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "line", ((JsonValue*(*)(int))json_int)(lines));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "character", ((JsonValue*(*)(int))json_int)(0));
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "start", start);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "end", endp);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "range", range);
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "newText", ((JsonValue*(*)(const char*))json_string)(formatted));
+    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
+    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, edit);
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
 }
 
 void   analysis_unused_vars (Typer*   t, Vector__Stmt*   program) {
@@ -21629,7 +21739,7 @@ void   analysis_unused_vars (Typer*   t, Vector__Stmt*   program) {
             continue;
         }
         ((t-> current_origin )  =  (s. origin ));
-        check_unused_in_body(t, (s. fn_body ));
+        ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (s. fn_body ));
     }
 }
 
@@ -21645,7 +21755,7 @@ void   check_unused_in_body (Typer*   t, Vector__Stmt*   body) {
             bool   used = false;
             for (int   j = (i  +  1); (j  <  n); j++) {
                 Stmt   s2 = Vector_get__Stmt(body, j);
-                if (stmt_uses_name((&s2), name)) {
+                if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&s2), name)) {
                     (used  =  true);
                     break;
                 }
@@ -21655,16 +21765,16 @@ void   check_unused_in_body (Typer*   t, Vector__Stmt*   body) {
             }
         }
         if (((s. then_body )  !=  NULL)) {
-            check_unused_in_body(t, (s. then_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (s. then_body ));
         }
         if (((s. else_body )  !=  NULL)) {
-            check_unused_in_body(t, (s. else_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (s. else_body ));
         }
         if ((((s. kind )  ==  ST_SELECT)  &&  ((s. select_arms )  !=  NULL))) {
             for (int   k = 0; (k  <  Vector_len__SelectArm((s. select_arms ))); k++) {
                 SelectArm   arm = Vector_get__SelectArm((s. select_arms ), k);
                 if (((arm. body )  !=  NULL)) {
-                    check_unused_in_body(t, (arm. body ));
+                    ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (arm. body ));
                 }
             }
         }
@@ -21675,25 +21785,25 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
     if ((s  ==  NULL)) {
         return false;
     }
-    if ((((s-> let_value )  !=  NULL)  &&  expr_uses_name((s-> let_value ), name))) {
+    if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> let_value ), name))) {
         return true;
     }
-    if ((((s-> expr_value )  !=  NULL)  &&  expr_uses_name((s-> expr_value ), name))) {
+    if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> expr_value ), name))) {
         return true;
     }
-    if ((((s-> cond )  !=  NULL)  &&  expr_uses_name((s-> cond ), name))) {
+    if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> cond ), name))) {
         return true;
     }
-    if ((((s-> for_step )  !=  NULL)  &&  expr_uses_name((s-> for_step ), name))) {
+    if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> for_step ), name))) {
         return true;
     }
-    if ((((s-> for_init )  !=  NULL)  &&  stmt_uses_name((s-> for_init ), name))) {
+    if ((((s-> for_init )  !=  NULL)  &&  ((bool(*)(Stmt*, const char*))stmt_uses_name)((s-> for_init ), name))) {
         return true;
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            if (stmt_uses_name((&b), name)) {
+            if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                 return true;
             }
         }
@@ -21701,7 +21811,7 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            if (stmt_uses_name((&b), name)) {
+            if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                 return true;
             }
         }
@@ -21710,7 +21820,7 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
         if (((s-> asm_out_exprs )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_out_exprs ))); i++) {
                 Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
-                if (expr_uses_name((&e), name)) {
+                if (((bool(*)(Expr*, const char*))expr_uses_name)((&e), name)) {
                     return true;
                 }
             }
@@ -21718,7 +21828,7 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
         if (((s-> asm_in_exprs )  !=  NULL)) {
             for (int   i = 0; (i  <  Vector_len__Expr((s-> asm_in_exprs ))); i++) {
                 Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
-                if (expr_uses_name((&e), name)) {
+                if (((bool(*)(Expr*, const char*))expr_uses_name)((&e), name)) {
                     return true;
                 }
             }
@@ -21727,16 +21837,16 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
     if ((((s-> kind )  ==  ST_SELECT)  &&  ((s-> select_arms )  !=  NULL))) {
         for (int   i = 0; (i  <  Vector_len__SelectArm((s-> select_arms ))); i++) {
             SelectArm   arm = Vector_get__SelectArm((s-> select_arms ), i);
-            if ((((arm. chan_expr )  !=  NULL)  &&  expr_uses_name((arm. chan_expr ), name))) {
+            if ((((arm. chan_expr )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((arm. chan_expr ), name))) {
                 return true;
             }
-            if ((((arm. send_value )  !=  NULL)  &&  expr_uses_name((arm. send_value ), name))) {
+            if ((((arm. send_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((arm. send_value ), name))) {
                 return true;
             }
             if (((arm. body )  !=  NULL)) {
                 for (int   j = 0; (j  <  Vector_len__Stmt((arm. body ))); j++) {
                     Stmt   b = Vector_get__Stmt((arm. body ), j);
-                    if (stmt_uses_name((&b), name)) {
+                    if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                         return true;
                     }
                 }
@@ -21753,19 +21863,19 @@ bool   expr_uses_name (Expr*   e, const char*   name) {
     if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), name))) {
         return true;
     }
-    if ((((e-> lhs )  !=  NULL)  &&  expr_uses_name((e-> lhs ), name))) {
+    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((e-> lhs ), name))) {
         return true;
     }
-    if ((((e-> rhs )  !=  NULL)  &&  expr_uses_name((e-> rhs ), name))) {
+    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((e-> rhs ), name))) {
         return true;
     }
-    if ((((e-> operand )  !=  NULL)  &&  expr_uses_name((e-> operand ), name))) {
+    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((e-> operand ), name))) {
         return true;
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            if (expr_uses_name((&a), name)) {
+            if (((bool(*)(Expr*, const char*))expr_uses_name)((&a), name)) {
                 return true;
             }
         }
@@ -21776,7 +21886,7 @@ bool   expr_uses_name (Expr*   e, const char*   name) {
             if (((a. body )  !=  NULL)) {
                 for (int   k = 0; (k  <  Vector_len__Stmt((a. body ))); k++) {
                     Stmt   b = Vector_get__Stmt((a. body ), k);
-                    if (stmt_uses_name((&b), name)) {
+                    if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                         return true;
                     }
                 }
@@ -21786,7 +21896,7 @@ bool   expr_uses_name (Expr*   e, const char*   name) {
     if (((e-> block_stmts )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((e-> block_stmts ))); i++) {
             Stmt   b = Vector_get__Stmt((e-> block_stmts ), i);
-            if (stmt_uses_name((&b), name)) {
+            if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                 return true;
             }
         }
@@ -21801,7 +21911,7 @@ void   analysis_arena_not_freed (Typer*   t, Vector__Stmt*   program) {
             continue;
         }
         ((t-> current_origin )  =  (s. origin ));
-        check_arena_in_body(t, (s. fn_body ));
+        ((void(*)(Typer*, Vector__Stmt*))check_arena_in_body)(t, (s. fn_body ));
     }
 }
 
@@ -21812,16 +21922,16 @@ void   check_arena_in_body (Typer*   t, Vector__Stmt*   body) {
         if ((((s. kind )  ==  ST_LET)  &&  (!(s. is_auto_owned )))) {
             Expr*   v = (s. let_value );
             if (((((((v  !=  NULL)  &&  ((v-> kind )  ==  EX_CALL))  &&  ((v-> lhs )  !=  NULL))  &&  (((v-> lhs )-> kind )  ==  EX_PATH))  &&  __glide_string_eq(((v-> lhs )-> str_val ), "Arena"))  &&  __glide_string_eq(((v-> lhs )-> field ), "new"))) {
-                if ((!arena_is_freed_in_body((s. name ), body, (i  +  1)))) {
+                if ((!((bool(*)(const char*, Vector__Stmt*, int))arena_is_freed_in_body)((s. name ), body, (i  +  1)))) {
                     Typer_warn(t, (s. line ), (s. column ), "arena-not-freed", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("arena `", (s. name )), "` is never freed (use `let "), (s. name )), "* = Arena::new(...)` or add `defer "), (s. name )), ".free()`)"));
                 }
             }
         }
         if (((s. then_body )  !=  NULL)) {
-            check_arena_in_body(t, (s. then_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_arena_in_body)(t, (s. then_body ));
         }
         if (((s. else_body )  !=  NULL)) {
-            check_arena_in_body(t, (s. else_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_arena_in_body)(t, (s. else_body ));
         }
     }
 }
@@ -21830,7 +21940,7 @@ bool   arena_is_freed_in_body (const char*   name, Vector__Stmt*   body, int   s
     int   n = Vector_len__Stmt(body);
     for (int   i = start; (i  <  n); i++) {
         Stmt   s = Vector_get__Stmt(body, i);
-        if (stmt_calls_method((&s), name, "free")) {
+        if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_method)((&s), name, "free")) {
             return true;
         }
     }
@@ -21841,22 +21951,22 @@ bool   stmt_calls_method (Stmt*   s, const char*   var, const char*   method) {
     if ((s  ==  NULL)) {
         return false;
     }
-    if ((((s-> expr_value )  !=  NULL)  &&  expr_calls_method((s-> expr_value ), var, method))) {
+    if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> expr_value ), var, method))) {
         return true;
     }
-    if ((((s-> let_value )  !=  NULL)  &&  expr_calls_method((s-> let_value ), var, method))) {
+    if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> let_value ), var, method))) {
         return true;
     }
-    if ((((s-> cond )  !=  NULL)  &&  expr_calls_method((s-> cond ), var, method))) {
+    if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> cond ), var, method))) {
         return true;
     }
-    if ((((s-> for_step )  !=  NULL)  &&  expr_calls_method((s-> for_step ), var, method))) {
+    if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> for_step ), var, method))) {
         return true;
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            if (stmt_calls_method((&b), var, method)) {
+            if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_method)((&b), var, method)) {
                 return true;
             }
         }
@@ -21864,7 +21974,7 @@ bool   stmt_calls_method (Stmt*   s, const char*   var, const char*   method) {
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            if (stmt_calls_method((&b), var, method)) {
+            if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_method)((&b), var, method)) {
                 return true;
             }
         }
@@ -21879,19 +21989,19 @@ bool   expr_calls_method (Expr*   e, const char*   var, const char*   method) {
     if (((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((((e-> lhs )-> lhs )-> str_val ), var))  &&  __glide_string_eq(((e-> lhs )-> field ), method))) {
         return true;
     }
-    if ((((e-> lhs )  !=  NULL)  &&  expr_calls_method((e-> lhs ), var, method))) {
+    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((e-> lhs ), var, method))) {
         return true;
     }
-    if ((((e-> rhs )  !=  NULL)  &&  expr_calls_method((e-> rhs ), var, method))) {
+    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((e-> rhs ), var, method))) {
         return true;
     }
-    if ((((e-> operand )  !=  NULL)  &&  expr_calls_method((e-> operand ), var, method))) {
+    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((e-> operand ), var, method))) {
         return true;
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            if (expr_calls_method((&a), var, method)) {
+            if (((bool(*)(Expr*, const char*, const char*))expr_calls_method)((&a), var, method)) {
                 return true;
             }
         }
@@ -21904,14 +22014,14 @@ void   analysis_addr_of_temporary (Typer*   t, Vector__Stmt*   program) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
             ((t-> current_origin )  =  (s. origin ));
-            check_addr_temp_body(t, (s. fn_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (s. fn_body ));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
             ((t-> current_origin )  =  (s. origin ));
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
                 if (((m. fn_body )  !=  NULL)) {
-                    check_addr_temp_body(t, (m. fn_body ));
+                    ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (m. fn_body ));
                 }
             }
         }
@@ -21928,10 +22038,10 @@ void   check_addr_temp_body (Typer*   t, Vector__Stmt*   body) {
             }
         }
         if (((s. then_body )  !=  NULL)) {
-            check_addr_temp_body(t, (s. then_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (s. then_body ));
         }
         if (((s. else_body )  !=  NULL)) {
-            check_addr_temp_body(t, (s. else_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (s. else_body ));
         }
     }
 }
@@ -21941,14 +22051,14 @@ void   analysis_dead_code (Typer*   t, Vector__Stmt*   program) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
             ((t-> current_origin )  =  (s. origin ));
-            check_dead_code_body(t, (s. fn_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (s. fn_body ));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
             ((t-> current_origin )  =  (s. origin ));
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
                 if (((m. fn_body )  !=  NULL)) {
-                    check_dead_code_body(t, (m. fn_body ));
+                    ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (m. fn_body ));
                 }
             }
         }
@@ -21968,26 +22078,26 @@ void   check_dead_code_body (Typer*   t, Vector__Stmt*   body) {
             (terminated  =  true);
         }
         if (((s. then_body )  !=  NULL)) {
-            check_dead_code_body(t, (s. then_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (s. then_body ));
         }
         if (((s. else_body )  !=  NULL)) {
-            check_dead_code_body(t, (s. else_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (s. else_body ));
         }
     }
 }
 
 void   analysis_unused_fn (Typer*   t, Vector__Stmt*   program) {
-    HashMap__bool*   called = HashMap_new__bool();
+    HashMap__bool*   called = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
-            collect_calls_body((s. fn_body ), called);
+            ((void(*)(Vector__Stmt*, HashMap__bool*))collect_calls_body)((s. fn_body ), called);
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
                 if (((m. fn_body )  !=  NULL)) {
-                    collect_calls_body((m. fn_body ), called);
+                    ((void(*)(Vector__Stmt*, HashMap__bool*))collect_calls_body)((m. fn_body ), called);
                 }
             }
         }
@@ -22021,7 +22131,7 @@ void   analysis_unused_fn (Typer*   t, Vector__Stmt*   program) {
 void   collect_calls_body (Vector__Stmt*   body, HashMap__bool*   out) {
     for (int   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
         Stmt   s = Vector_get__Stmt(body, i);
-        collect_calls_stmt((&s), out);
+        ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((&s), out);
     }
 }
 
@@ -22030,30 +22140,30 @@ void   collect_calls_stmt (Stmt*   s, HashMap__bool*   out) {
         return;
     }
     if (((s-> let_value )  !=  NULL)) {
-        collect_calls_expr((s-> let_value ), out);
+        ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> let_value ), out);
     }
     if (((s-> expr_value )  !=  NULL)) {
-        collect_calls_expr((s-> expr_value ), out);
+        ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> expr_value ), out);
     }
     if (((s-> cond )  !=  NULL)) {
-        collect_calls_expr((s-> cond ), out);
+        ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> cond ), out);
     }
     if (((s-> for_step )  !=  NULL)) {
-        collect_calls_expr((s-> for_step ), out);
+        ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> for_step ), out);
     }
     if (((s-> for_init )  !=  NULL)) {
-        collect_calls_stmt((s-> for_init ), out);
+        ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((s-> for_init ), out);
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            collect_calls_stmt((&b), out);
+            ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((&b), out);
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            collect_calls_stmt((&b), out);
+            ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((&b), out);
         }
     }
 }
@@ -22075,18 +22185,18 @@ void   collect_calls_expr (Expr*   e, HashMap__bool*   out) {
         }
     }
     if (((e-> lhs )  !=  NULL)) {
-        collect_calls_expr((e-> lhs ), out);
+        ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((e-> lhs ), out);
     }
     if (((e-> rhs )  !=  NULL)) {
-        collect_calls_expr((e-> rhs ), out);
+        ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((e-> rhs ), out);
     }
     if (((e-> operand )  !=  NULL)) {
-        collect_calls_expr((e-> operand ), out);
+        ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((e-> operand ), out);
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            collect_calls_expr((&a), out);
+            ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((&a), out);
         }
     }
 }
@@ -22096,14 +22206,14 @@ void   analysis_unnecessary_mut (Typer*   t, Vector__Stmt*   program) {
         Stmt   s = Vector_get__Stmt(program, i);
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
             ((t-> current_origin )  =  (s. origin ));
-            check_mut_body(t, (s. fn_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (s. fn_body ));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
             ((t-> current_origin )  =  (s. origin ));
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
                 if (((m. fn_body )  !=  NULL)) {
-                    check_mut_body(t, (m. fn_body ));
+                    ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (m. fn_body ));
                 }
             }
         }
@@ -22118,7 +22228,7 @@ void   check_mut_body (Typer*   t, Vector__Stmt*   body) {
             bool   reassigned = false;
             for (int   j = (i  +  1); (j  <  n); j++) {
                 Stmt   s2 = Vector_get__Stmt(body, j);
-                if (stmt_reassigns((&s2), (s. name ))) {
+                if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&s2), (s. name ))) {
                     (reassigned  =  true);
                     break;
                 }
@@ -22128,16 +22238,16 @@ void   check_mut_body (Typer*   t, Vector__Stmt*   body) {
             }
         }
         if (((s. then_body )  !=  NULL)) {
-            check_mut_body(t, (s. then_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (s. then_body ));
         }
         if (((s. else_body )  !=  NULL)) {
-            check_mut_body(t, (s. else_body ));
+            ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (s. else_body ));
         }
         if ((((s. kind )  ==  ST_SELECT)  &&  ((s. select_arms )  !=  NULL))) {
             for (int   k = 0; (k  <  Vector_len__SelectArm((s. select_arms ))); k++) {
                 SelectArm   arm = Vector_get__SelectArm((s. select_arms ), k);
                 if (((arm. body )  !=  NULL)) {
-                    check_mut_body(t, (arm. body ));
+                    ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (arm. body ));
                 }
             }
         }
@@ -22148,22 +22258,22 @@ bool   stmt_reassigns (Stmt*   s, const char*   name) {
     if ((s  ==  NULL)) {
         return false;
     }
-    if ((((s-> expr_value )  !=  NULL)  &&  expr_reassigns((s-> expr_value ), name))) {
+    if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> expr_value ), name))) {
         return true;
     }
-    if ((((s-> let_value )  !=  NULL)  &&  expr_reassigns((s-> let_value ), name))) {
+    if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> let_value ), name))) {
         return true;
     }
-    if ((((s-> cond )  !=  NULL)  &&  expr_reassigns((s-> cond ), name))) {
+    if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> cond ), name))) {
         return true;
     }
-    if ((((s-> for_step )  !=  NULL)  &&  expr_reassigns((s-> for_step ), name))) {
+    if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> for_step ), name))) {
         return true;
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            if (stmt_reassigns((&b), name)) {
+            if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&b), name)) {
                 return true;
             }
         }
@@ -22171,7 +22281,7 @@ bool   stmt_reassigns (Stmt*   s, const char*   name) {
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            if (stmt_reassigns((&b), name)) {
+            if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&b), name)) {
                 return true;
             }
         }
@@ -22179,13 +22289,13 @@ bool   stmt_reassigns (Stmt*   s, const char*   name) {
     if ((((s-> kind )  ==  ST_SELECT)  &&  ((s-> select_arms )  !=  NULL))) {
         for (int   i = 0; (i  <  Vector_len__SelectArm((s-> select_arms ))); i++) {
             SelectArm   arm = Vector_get__SelectArm((s-> select_arms ), i);
-            if ((((arm. send_value )  !=  NULL)  &&  expr_reassigns((arm. send_value ), name))) {
+            if ((((arm. send_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((arm. send_value ), name))) {
                 return true;
             }
             if (((arm. body )  !=  NULL)) {
                 for (int   j = 0; (j  <  Vector_len__Stmt((arm. body ))); j++) {
                     Stmt   b = Vector_get__Stmt((arm. body ), j);
-                    if (stmt_reassigns((&b), name)) {
+                    if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&b), name)) {
                         return true;
                     }
                 }
@@ -22205,19 +22315,19 @@ bool   expr_reassigns (Expr*   e, const char*   name) {
     if (((((((e-> kind )  ==  EX_POSTINC)  ||  ((e-> kind )  ==  EX_POSTDEC))  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq(((e-> lhs )-> str_val ), name))) {
         return true;
     }
-    if ((((e-> lhs )  !=  NULL)  &&  expr_reassigns((e-> lhs ), name))) {
+    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((e-> lhs ), name))) {
         return true;
     }
-    if ((((e-> rhs )  !=  NULL)  &&  expr_reassigns((e-> rhs ), name))) {
+    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((e-> rhs ), name))) {
         return true;
     }
-    if ((((e-> operand )  !=  NULL)  &&  expr_reassigns((e-> operand ), name))) {
+    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((e-> operand ), name))) {
         return true;
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            if (expr_reassigns((&a), name)) {
+            if (((bool(*)(Expr*, const char*))expr_reassigns)((&a), name)) {
                 return true;
             }
         }
@@ -22243,9 +22353,9 @@ void   analysis_missing_return (Typer*   t, Vector__Stmt*   program) {
         if (((((((s. fn_ret_ty )-> kind )  ==  TY_RESULT)  &&  (((s. fn_ret_ty )-> inner )  !=  NULL))  &&  ((((s. fn_ret_ty )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((s. fn_ret_ty )-> inner )-> name ), "void"))) {
             continue;
         }
-        if ((!body_always_returns((s. fn_body )))) {
+        if ((!((bool(*)(Vector__Stmt*))body_always_returns)((s. fn_body )))) {
             ((t-> current_origin )  =  (s. origin ));
-            Typer_warn(t, (s. line ), (s. column ), "missing-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("function `", (s. name )), "` declared `-> "), type_to_string((s. fn_ret_ty ))), "` may exit without returning a value"));
+            Typer_warn(t, (s. line ), (s. column ), "missing-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("function `", (s. name )), "` declared `-> "), ((const char*(*)(Type*))type_to_string)((s. fn_ret_ty ))), "` may exit without returning a value"));
         }
     }
 }
@@ -22256,7 +22366,7 @@ bool   body_always_returns (Vector__Stmt*   body) {
         return false;
     }
     Stmt   last = Vector_get__Stmt(body, (n  -  1));
-    return stmt_terminates((&last));
+    return ((bool(*)(Stmt*))stmt_terminates)((&last));
 }
 
 bool   stmt_terminates (Stmt*   s) {
@@ -22271,13 +22381,13 @@ bool   stmt_terminates (Stmt*   s) {
     }
     if (((s-> kind )  ==  ST_BLOCK)) {
         if (((s-> then_body )  !=  NULL)) {
-            return body_always_returns((s-> then_body ));
+            return ((bool(*)(Vector__Stmt*))body_always_returns)((s-> then_body ));
         }
         return false;
     }
     if (((s-> kind )  ==  ST_IF)) {
         if ((((s-> then_body )  !=  NULL)  &&  ((s-> else_body )  !=  NULL))) {
-            return (body_always_returns((s-> then_body ))  &&  body_always_returns((s-> else_body )));
+            return (((bool(*)(Vector__Stmt*))body_always_returns)((s-> then_body ))  &&  ((bool(*)(Vector__Stmt*))body_always_returns)((s-> else_body )));
         }
         return false;
     }
@@ -22292,7 +22402,7 @@ bool   stmt_terminates (Stmt*   s) {
             if (__glide_string_eq((a. variant ), "_")) {
                 (has_default  =  true);
             }
-            if ((((a. body )  ==  NULL)  ||  (!body_always_returns((a. body ))))) {
+            if ((((a. body )  ==  NULL)  ||  (!((bool(*)(Vector__Stmt*))body_always_returns)((a. body ))))) {
                 (all  =  false);
                 break;
             }
@@ -22306,12 +22416,12 @@ void   analysis_unused_params (Typer*   t, Vector__Stmt*   program) {
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  ==  ST_FN)) {
-            check_unused_params_fn(t, (&s));
+            ((void(*)(Typer*, Stmt*))check_unused_params_fn)(t, (&s));
         }
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
             for (int   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
-                check_unused_params_fn(t, (&m));
+                ((void(*)(Typer*, Stmt*))check_unused_params_fn)(t, (&m));
             }
         }
     }
@@ -22341,7 +22451,7 @@ void   check_unused_params_fn (Typer*   t, Stmt*   fnstmt) {
         bool   used = false;
         for (int   j = 0; (j  <  Vector_len__Stmt((fnstmt-> fn_body ))); j++) {
             Stmt   b = Vector_get__Stmt((fnstmt-> fn_body ), j);
-            if (stmt_uses_name((&b), (p. name ))) {
+            if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), (p. name ))) {
                 (used  =  true);
                 break;
             }
@@ -22367,7 +22477,7 @@ int   type_size_bytes (Type*   t, HashMap__Stmt*   structs) {
         return 16;
     }
     if (((t-> kind )  ==  TY_RESULT)) {
-        return (type_size_bytes((t-> inner ), structs)  +  16);
+        return (((int(*)(Type*, HashMap__Stmt*))type_size_bytes)((t-> inner ), structs)  +  16);
     }
     if (((t-> kind )  ==  TY_GENERIC)) {
         return 16;
@@ -22398,7 +22508,7 @@ int   type_size_bytes (Type*   t, HashMap__Stmt*   structs) {
             if (((sd. struct_fields )  !=  NULL)) {
                 for (int   i = 0; (i  <  Vector_len__Field((sd. struct_fields ))); i++) {
                     Field   f = Vector_get__Field((sd. struct_fields ), i);
-                    (sz  =  (sz  +  type_size_bytes((f. ty ), structs)));
+                    (sz  =  (sz  +  ((int(*)(Type*, HashMap__Stmt*))type_size_bytes)((f. ty ), structs)));
                 }
             }
             return sz;
@@ -22408,7 +22518,7 @@ int   type_size_bytes (Type*   t, HashMap__Stmt*   structs) {
 }
 
 void   analysis_large_return (Typer*   t, Vector__Stmt*   program) {
-    HashMap__Stmt*   structs = HashMap_new__Stmt();
+    HashMap__Stmt*   structs = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  ==  ST_STRUCT)) {
@@ -22431,104 +22541,104 @@ void   analysis_large_return (Typer*   t, Vector__Stmt*   program) {
         if ((((((ret-> kind )  ==  TY_POINTER)  ||  ((ret-> kind )  ==  TY_BORROW))  ||  ((ret-> kind )  ==  TY_BORROW_MUT))  ||  ((ret-> kind )  ==  TY_FNPTR))) {
             continue;
         }
-        int   sz = type_size_bytes(ret, structs);
+        int   sz = ((int(*)(Type*, HashMap__Stmt*))type_size_bytes)(ret, structs);
         if ((sz  >=  threshold)) {
             ((t-> current_origin )  =  (s. origin ));
-            Typer_push_diag(t, (s. line ), (s. column ), 3, "large-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("fn `", (s. name )), "` returns "), int_to_str(sz)), " bytes by value ("), type_to_string(ret)), "); for hot paths consider an out-param `out: *"), type_to_string(ret)), "` or returning `*"), type_to_string(ret)), "`"));
+            Typer_push_diag(t, (s. line ), (s. column ), 3, "large-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("fn `", (s. name )), "` returns "), ((const char*(*)(int64_t))int_to_str)(sz)), " bytes by value ("), ((const char*(*)(Type*))type_to_string)(ret)), "); for hot paths consider an out-param `out: *"), ((const char*(*)(Type*))type_to_string)(ret)), "` or returning `*"), ((const char*(*)(Type*))type_to_string)(ret)), "`"));
         }
     }
     HashMap_free__Stmt(structs);
 }
 
 bool   lsp_dispatch (JsonValue*   req, LspState*   state) {
-    const char*   method = json_as_string(json_get(req, "method"));
+    const char*   method = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "method"));
     if (__glide_string_eq(method, "initialize")) {
-        handle_initialize(req);
+        ((void(*)(JsonValue*))handle_initialize)(req);
         return false;
     }
     if (__glide_string_eq(method, "initialized")) {
         return false;
     }
     if (__glide_string_eq(method, "shutdown")) {
-        handle_shutdown(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_shutdown)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "exit")) {
         return true;
     }
     if (__glide_string_eq(method, "textDocument/didOpen")) {
-        handle_did_open(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_did_open)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/didChange")) {
-        handle_did_change(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_did_change)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/didClose")) {
-        handle_did_close(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_did_close)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/hover")) {
-        handle_hover(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_hover)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/documentSymbol")) {
-        handle_document_symbol(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_document_symbol)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/definition")) {
-        handle_definition(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_definition)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/completion")) {
-        handle_completion(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_completion)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/references")) {
-        handle_references(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_references)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/documentHighlight")) {
-        handle_document_highlight(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_document_highlight)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/prepareRename")) {
-        handle_prepare_rename(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_prepare_rename)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/rename")) {
-        handle_rename(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_rename)(req, state);
         return false;
     }
     if (__glide_string_eq(method, "textDocument/formatting")) {
-        handle_formatting(req, state);
+        ((void(*)(JsonValue*, LspState*))handle_formatting)(req, state);
         return false;
     }
-    JsonValue*   id = json_get(req, "id");
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
     if ((id  !=  NULL)) {
-        lsp_send_response(id, json_null());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
     }
     return false;
 }
 
 int   lsp_main (void) {
-    __glide_set_binary_io();
-    LspState*   state = lsp_state_new();
+    ((void(*)(void))__glide_set_binary_io)();
+    LspState*   state = ((LspState*(*)(void))lsp_state_new)();
     while (true) {
-        const char*   raw = lsp_read_message();
+        const char*   raw = ((const char*(*)(void))lsp_read_message)();
         if (__glide_string_eq(raw, "")) {
             break;
         }
-        JsonValue*   req = json_parse(raw);
+        JsonValue*   req = ((JsonValue*(*)(const char*))json_parse)(raw);
         bool   should_exit = false;
         if ((req  !=  NULL)) {
-            void*   req_arena_initial = __glide_palloc_make();
-            __glide_palloc_set(req_arena_initial);
-            (should_exit  =  lsp_dispatch(req, state));
-            void*   req_arena_head = __glide_palloc_get();
-            __glide_palloc_set(NULL);
-            __glide_palloc_free(req_arena_head);
-            json_free(req);
+            void*   req_arena_initial = ((void*(*)(void))__glide_palloc_make)();
+            ((void(*)(void*))__glide_palloc_set)(req_arena_initial);
+            (should_exit  =  ((bool(*)(JsonValue*, LspState*))lsp_dispatch)(req, state));
+            void*   req_arena_head = ((void*(*)(void))__glide_palloc_get)();
+            ((void(*)(void*))__glide_palloc_set)(NULL);
+            ((void(*)(void*))__glide_palloc_free)(req_arena_head);
+            ((void(*)(JsonValue*))json_free)(req);
         }
  if (raw  !=  NULL) free((char*)(raw ));         if (should_exit) {
             break;
@@ -22550,7 +22660,7 @@ void   print_type (Type*   t) {
     }
     if (((t-> kind )  ==  TY_POINTER)) {
         printf("%s", "*");
-        print_type((t-> inner ));
+        ((void(*)(Type*))print_type)((t-> inner ));
         return;
     }
     if (((t-> kind )  ==  TY_NAMED)) {
@@ -22587,11 +22697,11 @@ const char*   op_name (int   op) {
 
 void   print_expr (Expr*   e, int   indent) {
     if ((e  ==  NULL)) {
-        print_indent(indent);
+        ((void(*)(int))print_indent)(indent);
         printf("%s\n", "<null>");
         return;
     }
-    print_indent(indent);
+    ((void(*)(int))print_indent)(indent);
     if (((e-> kind )  ==  EX_INT)) {
         printf("%s %lld\n", "Int", (long long)((e-> int_val )));
         return;
@@ -22609,19 +22719,19 @@ void   print_expr (Expr*   e, int   indent) {
         return;
     }
     if (((e-> kind )  ==  EX_BINARY)) {
-        printf("%s %s\n", "Binary", op_name((e-> op_code )));
-        print_expr((e-> lhs ), (indent  +  1));
-        print_expr((e-> rhs ), (indent  +  1));
+        printf("%s %s\n", "Binary", ((const char*(*)(int))op_name)((e-> op_code )));
+        ((void(*)(Expr*, int))print_expr)((e-> lhs ), (indent  +  1));
+        ((void(*)(Expr*, int))print_expr)((e-> rhs ), (indent  +  1));
         return;
     }
     if (((e-> kind )  ==  EX_CALL)) {
         printf("%s\n", "Call");
-        print_expr((e-> lhs ), (indent  +  1));
-        print_indent((indent  +  1));
+        ((void(*)(Expr*, int))print_expr)((e-> lhs ), (indent  +  1));
+        ((void(*)(int))print_indent)((indent  +  1));
         printf("%s %d\n", "args:", Vector_len__Expr((e-> args )));
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            print_expr((&a), (indent  +  2));
+            ((void(*)(Expr*, int))print_expr)((&a), (indent  +  2));
         }
         return;
     }
@@ -22630,11 +22740,11 @@ void   print_expr (Expr*   e, int   indent) {
 
 void   print_stmt (Stmt*   s, int   indent) {
     if ((s  ==  NULL)) {
-        print_indent(indent);
+        ((void(*)(int))print_indent)(indent);
         printf("%s\n", "<null stmt>");
         return;
     }
-    print_indent(indent);
+    ((void(*)(int))print_indent)(indent);
     if (((s-> kind )  ==  ST_FN)) {
         printf("%s %s %s", "Fn ", (s-> name ), " (");
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
@@ -22643,36 +22753,36 @@ void   print_stmt (Stmt*   s, int   indent) {
             }
             Param   prm = Vector_get__Param((s-> fn_params ), i);
             printf("%s %s", (prm. name ), ": ");
-            print_type((prm. ty ));
+            ((void(*)(Type*))print_type)((prm. ty ));
         }
         printf("%s", ") -> ");
-        print_type((s-> fn_ret_ty ));
+        ((void(*)(Type*))print_type)((s-> fn_ret_ty ));
         printf("%s\n", "");
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            print_stmt((&b), (indent  +  1));
+            ((void(*)(Stmt*, int))print_stmt)((&b), (indent  +  1));
         }
         return;
     }
     if (((s-> kind )  ==  ST_LET)) {
         printf("%s %s %s", "Let ", (s-> name ), ": ");
-        print_type((s-> let_ty ));
+        ((void(*)(Type*))print_type)((s-> let_ty ));
         printf("%s\n", "");
         if (((s-> let_value )  !=  NULL)) {
-            print_expr((s-> let_value ), (indent  +  1));
+            ((void(*)(Expr*, int))print_expr)((s-> let_value ), (indent  +  1));
         }
         return;
     }
     if (((s-> kind )  ==  ST_RETURN)) {
         printf("%s\n", "Return");
         if (((s-> expr_value )  !=  NULL)) {
-            print_expr((s-> expr_value ), (indent  +  1));
+            ((void(*)(Expr*, int))print_expr)((s-> expr_value ), (indent  +  1));
         }
         return;
     }
     if (((s-> kind )  ==  ST_EXPR)) {
         printf("%s\n", "Expr");
-        print_expr((s-> expr_value ), (indent  +  1));
+        ((void(*)(Expr*, int))print_expr)((s-> expr_value ), (indent  +  1));
         return;
     }
     printf("%s %d %s\n", "<stmt kind ", (s-> kind ), ">");
@@ -22683,17 +22793,17 @@ void   load_into (Vector__Stmt*   stmts, const char*   path, HashMap__bool*   lo
         return;
     }
     HashMap_insert__bool(loaded, path, true);
-    const char*   src = read_file(path);
+    const char*   src = ((const char*(*)(const char*))read_file)(path);
     if (__glide_string_eq(src, "")) {
         return;
     }
-    load_into_str(stmts, src, path, loaded, pdiags);
+    ((void(*)(Vector__Stmt*, const char*, const char*, HashMap__bool*, Vector__ParseDiag*))load_into_str)(stmts, src, path, loaded, pdiags);
 }
 
 void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags) {
     Lexer*   lex = Lexer_new(src);
     Parser*   p = Parser_new(lex);
-    Vector__Stmt*   parsed = parse_program(p);
+    Vector__Stmt*   parsed = ((Vector__Stmt*(*)(Parser*))parse_program)(p);
     if (((pdiags  !=  NULL)  &&  ((p-> diags )  !=  NULL))) {
         for (int   k = 0; (k  <  Vector_len__ParseDiag((p-> diags ))); k++) {
             ParseDiag   d = Vector_get__ParseDiag((p-> diags ), k);
@@ -22701,25 +22811,25 @@ void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   or
             Vector_push__ParseDiag(pdiags, d);
         }
     }
-    Vector__string*   auto_loads = Vector_new__string();
-    HashMap__bool*   auto_seen = HashMap_new__bool();
+    Vector__string*   auto_loads = ((Vector__string*(*)(void))Vector_new__string)();
+    HashMap__bool*   auto_seen = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
         Stmt   s = Vector_get__Stmt(parsed, i);
-        collect_path_files_in_stmt((&s), auto_loads, auto_seen);
+        ((void(*)(Stmt*, Vector__string*, HashMap__bool*))collect_path_files_in_stmt)((&s), auto_loads, auto_seen);
     }
-    const char*   dir = parent_dir(origin);
+    const char*   dir = ((const char*(*)(const char*))parent_dir)(origin);
     for (int   i = 0; (i  <  Vector_len__string(auto_loads)); i++) {
         const char*   cand = Vector_get__string(auto_loads, i);
-        const char*   resolved = resolve_import(dir, cand);
-        if (__glide_file_exists(resolved)) {
-            load_into(stmts, resolved, loaded, pdiags);
+        const char*   resolved = ((const char*(*)(const char*, const char*))resolve_import)(dir, cand);
+        if (((bool(*)(const char*))__glide_file_exists)(resolved)) {
+            ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*))load_into)(stmts, resolved, loaded, pdiags);
         }
     }
     for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
         Stmt   s = Vector_get__Stmt(parsed, i);
         if (((s. kind )  ==  ST_IMPORT)) {
-            const char*   unq = strip_quotes((s. import_path ));
-            const char*   resolved = resolve_import(dir, unq);
+            const char*   unq = ((const char*(*)(const char*))strip_quotes)((s. import_path ));
+            const char*   resolved = ((const char*(*)(const char*, const char*))resolve_import)(dir, unq);
             bool   multi_seg = false;
             for (int   k = 0; (k  <  (__glide_string_len(unq)  -  1)); k++) {
                 int   cc = __glide_char_to_int(__glide_string_at(unq, k));
@@ -22728,24 +22838,24 @@ void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   or
                     break;
                 }
             }
-            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  (!__glide_file_exists(resolved)))) {
-                const char*   parent_path = drop_last_path_segment(unq);
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  (!((bool(*)(const char*))__glide_file_exists)(resolved)))) {
+                const char*   parent_path = ((const char*(*)(const char*))drop_last_path_segment)(unq);
                 if ((!__glide_string_eq(parent_path, ""))) {
-                    const char*   resolved_parent = resolve_import(dir, parent_path);
-                    if (__glide_file_exists(resolved_parent)) {
-                        const char*   last = last_path_segment(unq);
-                        Vector__string*   items = Vector_new__string();
+                    const char*   resolved_parent = ((const char*(*)(const char*, const char*))resolve_import)(dir, parent_path);
+                    if (((bool(*)(const char*))__glide_file_exists)(resolved_parent)) {
+                        const char*   last = ((const char*(*)(const char*))last_path_segment)(unq);
+                        Vector__string*   items = ((Vector__string*(*)(void))Vector_new__string)();
                         Vector_push__string(items, last);
                         ((s. imported_items )  =  items);
                         (resolved  =  resolved_parent);
                     }
                 }
             }
-            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  __glide_file_exists(resolved))) {
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  ((bool(*)(const char*))__glide_file_exists)(resolved))) {
                 ((s. import_is_module )  =  true);
-                ((s. import_short )  =  last_path_segment(unq));
+                ((s. import_short )  =  ((const char*(*)(const char*))last_path_segment)(unq));
             }
-            load_into(stmts, resolved, loaded, pdiags);
+            ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*))load_into)(stmts, resolved, loaded, pdiags);
             ((s. import_path )  =  resolved);
             ((s. origin )  =  origin);
             Vector_push__Stmt(stmts, s);
@@ -22759,7 +22869,7 @@ void   load_into_str (Vector__Stmt*   stmts, const char*   src, const char*   or
 void   load_into_str_with_cache (Vector__Stmt*   stmts, const char*   src, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache) {
     Lexer*   lex = Lexer_new(src);
     Parser*   p = Parser_new(lex);
-    Vector__Stmt*   parsed = parse_program(p);
+    Vector__Stmt*   parsed = ((Vector__Stmt*(*)(Parser*))parse_program)(p);
     if (((pdiags  !=  NULL)  &&  ((p-> diags )  !=  NULL))) {
         for (int   k = 0; (k  <  Vector_len__ParseDiag((p-> diags ))); k++) {
             ParseDiag   d = Vector_get__ParseDiag((p-> diags ), k);
@@ -22769,7 +22879,7 @@ void   load_into_str_with_cache (Vector__Stmt*   stmts, const char*   src, const
     }
     Parser_free(p);
     Lexer_free(lex);
-    cached_resolve_and_push(stmts, parsed, origin, loaded, pdiags, cache);
+    ((void(*)(Vector__Stmt*, Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))cached_resolve_and_push)(stmts, parsed, origin, loaded, pdiags, cache);
     Vector_free__Stmt(parsed);
 }
 
@@ -22784,15 +22894,15 @@ void   load_into_with_cache (Vector__Stmt*   stmts, const char*   path, HashMap_
         (parsed  =  HashMap_get__Vector__Stmt_ptr(cache, path));
         (from_cache  =  true);
     } else {
-        const char*   src = read_file(path);
+        const char*   src = ((const char*(*)(const char*))read_file)(path);
         if (__glide_string_eq(src, "")) {
             return;
         }
-        void*   saved_arena = __glide_palloc_get();
-        __glide_palloc_set(NULL);
+        void*   saved_arena = ((void*(*)(void))__glide_palloc_get)();
+        ((void(*)(void*))__glide_palloc_set)(NULL);
         Lexer*   lex = Lexer_new(src);
         Parser*   p = Parser_new(lex);
-        Vector__Stmt*   parsed_raw = parse_program(p);
+        Vector__Stmt*   parsed_raw = ((Vector__Stmt*(*)(Parser*))parse_program)(p);
         const char*   heap_key = __glide_string_concat(path, "");
         if (((pdiags  !=  NULL)  &&  ((p-> diags )  !=  NULL))) {
             for (int   k = 0; (k  <  Vector_len__ParseDiag((p-> diags ))); k++) {
@@ -22808,32 +22918,32 @@ void   load_into_with_cache (Vector__Stmt*   stmts, const char*   path, HashMap_
             ((s. origin )  =  heap_key);
             Vector_set__Stmt(parsed_raw, i, s);
         }
-        (parsed  =  lower_program(parsed_raw));
-        __glide_palloc_set(saved_arena);
+        (parsed  =  ((Vector__Stmt*(*)(Vector__Stmt*))lower_program)(parsed_raw));
+        ((void(*)(void*))__glide_palloc_set)(saved_arena);
         if ((cache  !=  NULL)) {
             HashMap_insert__Vector__Stmt_ptr(cache, heap_key, parsed);
             (from_cache  =  true);
         }
     }
-    cached_resolve_and_push(stmts, parsed, path, loaded, pdiags, cache);
+    ((void(*)(Vector__Stmt*, Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))cached_resolve_and_push)(stmts, parsed, path, loaded, pdiags, cache);
     if ((!from_cache)) {
         Vector_free__Stmt(parsed);
     }
 }
 
 void   cached_resolve_and_push (Vector__Stmt*   stmts, Vector__Stmt*   parsed, const char*   origin, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache) {
-    Vector__string*   auto_loads = Vector_new__string();
-    HashMap__bool*   auto_seen = HashMap_new__bool();
+    Vector__string*   auto_loads = ((Vector__string*(*)(void))Vector_new__string)();
+    HashMap__bool*   auto_seen = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
         Stmt   s = Vector_get__Stmt(parsed, i);
-        collect_path_files_in_stmt((&s), auto_loads, auto_seen);
+        ((void(*)(Stmt*, Vector__string*, HashMap__bool*))collect_path_files_in_stmt)((&s), auto_loads, auto_seen);
     }
-    const char*   dir = parent_dir(origin);
+    const char*   dir = ((const char*(*)(const char*))parent_dir)(origin);
     for (int   i = 0; (i  <  Vector_len__string(auto_loads)); i++) {
         const char*   cand = Vector_get__string(auto_loads, i);
-        const char*   resolved = resolve_import(dir, cand);
-        if (__glide_file_exists(resolved)) {
-            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+        const char*   resolved = ((const char*(*)(const char*, const char*))resolve_import)(dir, cand);
+        if (((bool(*)(const char*))__glide_file_exists)(resolved)) {
+            ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))load_into_with_cache)(stmts, resolved, loaded, pdiags, cache);
         }
     }
     Vector_free__string(auto_loads);
@@ -22841,8 +22951,8 @@ void   cached_resolve_and_push (Vector__Stmt*   stmts, Vector__Stmt*   parsed, c
     for (int   i = 0; (i  <  Vector_len__Stmt(parsed)); i++) {
         Stmt   s = Vector_get__Stmt(parsed, i);
         if (((s. kind )  ==  ST_IMPORT)) {
-            const char*   unq = strip_quotes((s. import_path ));
-            const char*   resolved = resolve_import(dir, unq);
+            const char*   unq = ((const char*(*)(const char*))strip_quotes)((s. import_path ));
+            const char*   resolved = ((const char*(*)(const char*, const char*))resolve_import)(dir, unq);
             bool   multi_seg = false;
             for (int   k = 0; (k  <  (__glide_string_len(unq)  -  1)); k++) {
                 int   cc = __glide_char_to_int(__glide_string_at(unq, k));
@@ -22851,24 +22961,24 @@ void   cached_resolve_and_push (Vector__Stmt*   stmts, Vector__Stmt*   parsed, c
                     break;
                 }
             }
-            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  (!__glide_file_exists(resolved)))) {
-                const char*   parent_path = drop_last_path_segment(unq);
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  (!((bool(*)(const char*))__glide_file_exists)(resolved)))) {
+                const char*   parent_path = ((const char*(*)(const char*))drop_last_path_segment)(unq);
                 if ((!__glide_string_eq(parent_path, ""))) {
-                    const char*   resolved_parent = resolve_import(dir, parent_path);
-                    if (__glide_file_exists(resolved_parent)) {
-                        const char*   last = last_path_segment(unq);
-                        Vector__string*   items = Vector_new__string();
+                    const char*   resolved_parent = ((const char*(*)(const char*, const char*))resolve_import)(dir, parent_path);
+                    if (((bool(*)(const char*))__glide_file_exists)(resolved_parent)) {
+                        const char*   last = ((const char*(*)(const char*))last_path_segment)(unq);
+                        Vector__string*   items = ((Vector__string*(*)(void))Vector_new__string)();
                         Vector_push__string(items, last);
                         ((s. imported_items )  =  items);
                         (resolved  =  resolved_parent);
                     }
                 }
             }
-            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  __glide_file_exists(resolved))) {
+            if ((((multi_seg  &&  ((s. imported_items )  ==  NULL))  &&  (!(s. import_wildcard )))  &&  ((bool(*)(const char*))__glide_file_exists)(resolved))) {
                 ((s. import_is_module )  =  true);
-                ((s. import_short )  =  last_path_segment(unq));
+                ((s. import_short )  =  ((const char*(*)(const char*))last_path_segment)(unq));
             }
-            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+            ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))load_into_with_cache)(stmts, resolved, loaded, pdiags, cache);
             ((s. import_path )  =  resolved);
             ((s. origin )  =  origin);
             Vector_push__Stmt(stmts, s);
@@ -22880,13 +22990,13 @@ void   cached_resolve_and_push (Vector__Stmt*   stmts, Vector__Stmt*   parsed, c
 }
 
 void   load_builtins_dir_with_cache (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags, HashMap__Vector__Stmt_ptr*   cache) {
-    const char*   listing = __glide_list_dir(dir, ".glide");
+    const char*   listing = ((const char*(*)(const char*, const char*))__glide_list_dir)(dir, ".glide");
     if (__glide_string_eq(listing, "")) {
         return;
     }
     const char*   builtins = __glide_string_concat(dir, "/builtins.glide");
-    if (__glide_file_exists(builtins)) {
-        load_into_with_cache(stmts, builtins, loaded, pdiags, cache);
+    if (((bool(*)(const char*))__glide_file_exists)(builtins)) {
+        ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))load_into_with_cache)(stmts, builtins, loaded, pdiags, cache);
     }
     Vector__string*   names = string_split(listing, "\n");
     for (int   i = 0; (i  <  Vector_len__string(names)); i++) {
@@ -22897,7 +23007,7 @@ void   load_builtins_dir_with_cache (Vector__Stmt*   stmts, const char*   dir, H
         if (__glide_string_eq(nm, "builtins.glide")) {
             continue;
         }
-        load_into_with_cache(stmts, __glide_string_concat(__glide_string_concat(dir, "/"), nm), loaded, pdiags, cache);
+        ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*, HashMap__Vector__Stmt_ptr*))load_into_with_cache)(stmts, __glide_string_concat(__glide_string_concat(dir, "/"), nm), loaded, pdiags, cache);
     }
     Vector_free__string(names);
 }
@@ -22936,18 +23046,18 @@ void   collect_path_files_in_expr (Expr*   e, Vector__string*   out, HashMap__bo
         }
     }
     if (((e-> lhs )  !=  NULL)) {
-        collect_path_files_in_expr((e-> lhs ), out, seen);
+        ((void(*)(Expr*, Vector__string*, HashMap__bool*))collect_path_files_in_expr)((e-> lhs ), out, seen);
     }
     if (((e-> rhs )  !=  NULL)) {
-        collect_path_files_in_expr((e-> rhs ), out, seen);
+        ((void(*)(Expr*, Vector__string*, HashMap__bool*))collect_path_files_in_expr)((e-> rhs ), out, seen);
     }
     if (((e-> operand )  !=  NULL)) {
-        collect_path_files_in_expr((e-> operand ), out, seen);
+        ((void(*)(Expr*, Vector__string*, HashMap__bool*))collect_path_files_in_expr)((e-> operand ), out, seen);
     }
     if (((e-> args )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
             Expr   a = Vector_get__Expr((e-> args ), i);
-            collect_path_files_in_expr((&a), out, seen);
+            ((void(*)(Expr*, Vector__string*, HashMap__bool*))collect_path_files_in_expr)((&a), out, seen);
         }
     }
 }
@@ -22957,36 +23067,36 @@ void   collect_path_files_in_stmt (Stmt*   s, Vector__string*   out, HashMap__bo
         return;
     }
     if (((s-> let_value )  !=  NULL)) {
-        collect_path_files_in_expr((s-> let_value ), out, seen);
+        ((void(*)(Expr*, Vector__string*, HashMap__bool*))collect_path_files_in_expr)((s-> let_value ), out, seen);
     }
     if (((s-> expr_value )  !=  NULL)) {
-        collect_path_files_in_expr((s-> expr_value ), out, seen);
+        ((void(*)(Expr*, Vector__string*, HashMap__bool*))collect_path_files_in_expr)((s-> expr_value ), out, seen);
     }
     if (((s-> cond )  !=  NULL)) {
-        collect_path_files_in_expr((s-> cond ), out, seen);
+        ((void(*)(Expr*, Vector__string*, HashMap__bool*))collect_path_files_in_expr)((s-> cond ), out, seen);
     }
     if (((s-> then_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-            collect_path_files_in_stmt((&b), out, seen);
+            ((void(*)(Stmt*, Vector__string*, HashMap__bool*))collect_path_files_in_stmt)((&b), out, seen);
         }
     }
     if (((s-> else_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-            collect_path_files_in_stmt((&b), out, seen);
+            ((void(*)(Stmt*, Vector__string*, HashMap__bool*))collect_path_files_in_stmt)((&b), out, seen);
         }
     }
     if (((s-> fn_body )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
-            collect_path_files_in_stmt((&b), out, seen);
+            ((void(*)(Stmt*, Vector__string*, HashMap__bool*))collect_path_files_in_stmt)((&b), out, seen);
         }
     }
     if (((s-> impl_methods )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
-            collect_path_files_in_stmt((&m), out, seen);
+            ((void(*)(Stmt*, Vector__string*, HashMap__bool*))collect_path_files_in_stmt)((&m), out, seen);
         }
     }
 }
@@ -23060,24 +23170,24 @@ const char*   resolve_import (const char*   base, const char*   ipath) {
     if ((!__glide_string_eq(base, ""))) {
         (from_file  =  __glide_string_concat(__glide_string_concat(base, "/"), ipath));
     }
-    if (__glide_file_exists(from_file)) {
+    if (((bool(*)(const char*))__glide_file_exists)(from_file)) {
         return from_file;
     }
-    if (__glide_file_exists(ipath)) {
+    if (((bool(*)(const char*))__glide_file_exists)(ipath)) {
         return ipath;
     }
     const char*   cwd_src = __glide_string_concat("src/", ipath);
-    if (__glide_file_exists(cwd_src)) {
+    if (((bool(*)(const char*))__glide_file_exists)(cwd_src)) {
         return cwd_src;
     }
-    const char*   exe_dir = __glide_exe_dir();
+    const char*   exe_dir = ((const char*(*)(void))__glide_exe_dir)();
     if ((!__glide_string_eq(exe_dir, ""))) {
         const char*   from_exe = __glide_string_concat(__glide_string_concat(exe_dir, "/"), ipath);
-        if (__glide_file_exists(from_exe)) {
+        if (((bool(*)(const char*))__glide_file_exists)(from_exe)) {
             return from_exe;
         }
         const char*   exe_src = __glide_string_concat(__glide_string_concat(exe_dir, "/src/"), ipath);
-        if (__glide_file_exists(exe_src)) {
+        if (((bool(*)(const char*))__glide_file_exists)(exe_src)) {
             return exe_src;
         }
     }
@@ -23085,39 +23195,39 @@ const char*   resolve_import (const char*   base, const char*   ipath) {
 }
 
 bool   use_color (void) {
-    return __glide_string_eq(__glide_getenv("NO_COLOR"), "");
+    return __glide_string_eq(((const char*(*)(const char*))__glide_getenv)("NO_COLOR"), "");
 }
 
 const char*   col_red (void) {
-    if (use_color()) {
+    if (((bool(*)(void))use_color)()) {
         return "\x1b[1;31m";
     }
     return "";
 }
 
 const char*   col_yellow (void) {
-    if (use_color()) {
+    if (((bool(*)(void))use_color)()) {
         return "\x1b[1;33m";
     }
     return "";
 }
 
 const char*   col_blue (void) {
-    if (use_color()) {
+    if (((bool(*)(void))use_color)()) {
         return "\x1b[1;36m";
     }
     return "";
 }
 
 const char*   col_bold (void) {
-    if (use_color()) {
+    if (((bool(*)(void))use_color)()) {
         return "\x1b[1m";
     }
     return "";
 }
 
 const char*   col_reset (void) {
-    if (use_color()) {
+    if (((bool(*)(void))use_color)()) {
         return "\x1b[0m";
     }
     return "";
@@ -23200,80 +23310,80 @@ const char*   help_for_code (const char*   code) {
 }
 
 bool   use_unicode (void) {
-    const char*   asc = __glide_getenv("GLIDE_ASCII");
+    const char*   asc = ((const char*(*)(const char*))__glide_getenv)("GLIDE_ASCII");
     if (((!__glide_string_eq(asc, ""))  &&  (!__glide_string_eq(asc, "0")))) {
         return false;
     }
-    const char*   uni = __glide_getenv("GLIDE_UNICODE");
+    const char*   uni = ((const char*(*)(const char*))__glide_getenv)("GLIDE_UNICODE");
     if (((!__glide_string_eq(uni, ""))  &&  (!__glide_string_eq(uni, "0")))) {
         return true;
     }
-    if ((__glide_is_windows()  !=  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         return false;
     }
     return true;
 }
 
 const char*   glyph_err (void) {
-    if (use_unicode()) {
+    if (((bool(*)(void))use_unicode)()) {
         return "\xe2\x9c\x97";
     }
     return "x";
 }
 
 const char*   glyph_warn (void) {
-    if (use_unicode()) {
+    if (((bool(*)(void))use_unicode)()) {
         return "\xe2\x9a\xa0";
     }
     return "!";
 }
 
 const char*   glyph_info (void) {
-    if (use_unicode()) {
+    if (((bool(*)(void))use_unicode)()) {
         return "\xe2\x84\xb9";
     }
     return "i";
 }
 
 const char*   glyph_help (void) {
-    if (use_unicode()) {
+    if (((bool(*)(void))use_unicode)()) {
         return "\xe2\x86\xaa";
     }
     return ">";
 }
 
 const char*   glyph_pipe (void) {
-    if (use_unicode()) {
+    if (((bool(*)(void))use_unicode)()) {
         return "\xe2\x94\x8a";
     }
     return "|";
 }
 
 const char*   glyph_under (void) {
-    if (use_unicode()) {
+    if (((bool(*)(void))use_unicode)()) {
         return "\xe2\x94\x81";
     }
     return "-";
 }
 
 void   print_pretty_diag (DiagEntry   d, const char*   src, const char*   src_path) {
-    const char*   sym = glyph_err();
-    const char*   color = col_red();
+    const char*   sym = ((const char*(*)(void))glyph_err)();
+    const char*   color = ((const char*(*)(void))col_red)();
     if (((d. severity )  ==  2)) {
-        (sym  =  glyph_warn());
-        (color  =  col_yellow());
+        (sym  =  ((const char*(*)(void))glyph_warn)());
+        (color  =  ((const char*(*)(void))col_yellow)());
     }
     if (((d. severity )  ==  3)) {
-        (sym  =  glyph_info());
-        (color  =  col_blue());
+        (sym  =  ((const char*(*)(void))glyph_info)());
+        (color  =  ((const char*(*)(void))col_blue)());
     }
     if (((d. severity )  ==  4)) {
-        (sym  =  glyph_help());
-        (color  =  col_blue());
+        (sym  =  ((const char*(*)(void))glyph_help)());
+        (color  =  ((const char*(*)(void))col_blue)());
     }
-    const char*   reset = col_reset();
-    const char*   bold = col_bold();
-    const char*   dim_blue = col_blue();
+    const char*   reset = ((const char*(*)(void))col_reset)();
+    const char*   bold = ((const char*(*)(void))col_bold)();
+    const char*   dim_blue = ((const char*(*)(void))col_blue)();
     const char*   title = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(color, sym), " "), reset), bold);
     if ((!__glide_string_eq((d. code ), ""))) {
         (title  =  __glide_string_concat(title, (d. code )));
@@ -23292,13 +23402,13 @@ void   print_pretty_diag (DiagEntry   d, const char*   src, const char*   src_pa
     printf("%s\n", title);
     printf("%s\n", __glide_string_concat("  ", (d. message )));
     printf("%s\n", "");
-    const char*   loc = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("  ", dim_blue), "in "), reset), src_path), ":"), int_to_str((d. line ))), ":"), int_to_str((d. col )));
+    const char*   loc = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("  ", dim_blue), "in "), reset), src_path), ":"), ((const char*(*)(int64_t))int_to_str)((d. line ))), ":"), ((const char*(*)(int64_t))int_to_str)((d. col )));
     printf("%s\n", loc);
-    const char*   line_text = nth_line(src, (d. line ));
-    int   gw = int_width((d. line ));
-    const char*   pad = repeat_char(" ", gw);
-    const char*   bar = glyph_pipe();
-    printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(dim_blue, int_to_str((d. line ))), " "), bar), " "), reset), line_text));
+    const char*   line_text = ((const char*(*)(const char*, int))nth_line)(src, (d. line ));
+    int   gw = ((int(*)(int))int_width)((d. line ));
+    const char*   pad = ((const char*(*)(const char*, int))repeat_char)(" ", gw);
+    const char*   bar = ((const char*(*)(void))glyph_pipe)();
+    printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(dim_blue, ((const char*(*)(int64_t))int_to_str)((d. line ))), " "), bar), " "), reset), line_text));
     int   col0 = (d. col );
     if ((col0  <  1)) {
         (col0  =  1);
@@ -23322,11 +23432,11 @@ void   print_pretty_diag (DiagEntry   d, const char*   src, const char*   src_pa
         }
         (k  =  (k  +  1));
     }
-    const char*   underline = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(pad, " "), dim_blue), bar), " "), reset), indent), color), repeat_char(glyph_under(), span)), reset);
+    const char*   underline = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(pad, " "), dim_blue), bar), " "), reset), indent), color), ((const char*(*)(const char*, int))repeat_char)(((const char*(*)(void))glyph_under)(), span)), reset);
     printf("%s\n", underline);
-    const char*   help = help_for_code((d. code ));
+    const char*   help = ((const char*(*)(const char*))help_for_code)((d. code ));
     if ((!__glide_string_eq(help, ""))) {
-        const char*   h = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("  ", dim_blue), glyph_help()), " "), reset), help);
+        const char*   h = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("  ", dim_blue), ((const char*(*)(void))glyph_help)()), " "), reset), help);
         printf("%s\n", "");
         printf("%s\n", h);
     }
@@ -23345,7 +23455,7 @@ void   print_usage (void) {
 }
 
 void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
-    HashMap__bool*   seen_files = HashMap_new__bool();
+    HashMap__bool*   seen_files = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))) {
@@ -23353,7 +23463,7 @@ void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
         }
         if ((!HashMap_contains__bool(seen_files, (s. origin )))) {
             HashMap_insert__bool(seen_files, (s. origin ), true);
-            const char*   mp = module_path_from_path((s. origin ));
+            const char*   mp = ((const char*(*)(const char*))module_path_from_path)((s. origin ));
             if ((!__glide_string_eq(mp, ""))) {
                 HashMap_insert__bool((t-> module_full_paths ), mp, true);
             }
@@ -23362,7 +23472,7 @@ void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
             HashMap_insert__bool((t-> module_imports ), __glide_string_concat(__glide_string_concat((s. origin ), "::"), (s. import_short )), true);
         }
     }
-    HashMap__bool*   defines_at = HashMap_new__bool();
+    HashMap__bool*   defines_at = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))) {
@@ -23384,9 +23494,9 @@ void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
             }
         }
     }
-    Vector__string*   origins = Vector_new__string();
-    HashMap__bool*   seen = HashMap_new__bool();
-    Vector__string*   builtin_files = Vector_new__string();
+    Vector__string*   origins = ((Vector__string*(*)(void))Vector_new__string)();
+    HashMap__bool*   seen = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+    Vector__string*   builtin_files = ((Vector__string*(*)(void))Vector_new__string)();
     for (int   i = 0; (i  <  Vector_len__Stmt(stmts)); i++) {
         Stmt   s = Vector_get__Stmt(stmts, i);
         if ((((s. origin )  ==  NULL)  ||  __glide_string_eq((s. origin ), ""))) {
@@ -23395,7 +23505,7 @@ void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
         if ((!HashMap_contains__bool(seen, (s. origin )))) {
             HashMap_insert__bool(seen, (s. origin ), true);
             Vector_push__string(origins, (s. origin ));
-            if (path_is_builtin((s. origin ))) {
+            if (((bool(*)(const char*))path_is_builtin)((s. origin ))) {
                 Vector_push__string(builtin_files, (s. origin ));
             }
         }
@@ -23419,7 +23529,7 @@ void   build_visibility (Typer*   t, Vector__Stmt*   stmts) {
             if (((s. origin )  ==  NULL)) {
                 continue;
             }
-            if ((!path_is_builtin((s. origin )))) {
+            if ((!((bool(*)(const char*))path_is_builtin)((s. origin )))) {
                 continue;
             }
             if ((((s. name )  ==  NULL)  ||  __glide_string_eq((s. name ), ""))) {
@@ -23564,13 +23674,13 @@ bool   path_is_builtin (const char*   path) {
 }
 
 void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__bool*   loaded, Vector__ParseDiag*   pdiags) {
-    const char*   listing = __glide_list_dir(dir, ".glide");
+    const char*   listing = ((const char*(*)(const char*, const char*))__glide_list_dir)(dir, ".glide");
     if (__glide_string_eq(listing, "")) {
         return;
     }
     const char*   builtins = __glide_string_concat(dir, "/builtins.glide");
-    if ((!__glide_string_eq(read_file(builtins), ""))) {
-        load_into(stmts, builtins, loaded, pdiags);
+    if ((!__glide_string_eq(((const char*(*)(const char*))read_file)(builtins), ""))) {
+        ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*))load_into)(stmts, builtins, loaded, pdiags);
     }
     Vector__string*   names = string_split(listing, "\n");
     for (int   i = 0; (i  <  Vector_len__string(names)); i++) {
@@ -23581,28 +23691,28 @@ void   load_builtins_dir (Vector__Stmt*   stmts, const char*   dir, HashMap__boo
         if (__glide_string_eq(nm, "builtins.glide")) {
             continue;
         }
-        load_into(stmts, __glide_string_concat(__glide_string_concat(dir, "/"), nm), loaded, pdiags);
+        ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*))load_into)(stmts, __glide_string_concat(__glide_string_concat(dir, "/"), nm), loaded, pdiags);
     }
 }
 
 bool   parse_program_into (Vector__Stmt*   stmts, const char*   path, Vector__ParseDiag*   pdiags) {
-    const char*   src = read_file(path);
+    const char*   src = ((const char*(*)(const char*))read_file)(path);
     if (__glide_string_eq(src, "")) {
         printf("%s %s\n", "could not read or empty file:", path);
         return false;
     }
-    HashMap__bool*   loaded = HashMap_new__bool();
+    HashMap__bool*   loaded = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     const char*   builtins_dir = "src/builtins";
-    if (__glide_string_eq(read_file("src/builtins/builtins.glide"), "")) {
-        const char*   exe_dir = __glide_exe_dir();
+    if (__glide_string_eq(((const char*(*)(const char*))read_file)("src/builtins/builtins.glide"), "")) {
+        const char*   exe_dir = ((const char*(*)(void))__glide_exe_dir)();
         if ((!__glide_string_eq(exe_dir, ""))) {
             (builtins_dir  =  __glide_string_concat(exe_dir, "/src/builtins"));
         }
     }
-    load_builtins_dir(stmts, builtins_dir, loaded, pdiags);
-    load_into_str(stmts, src, path, loaded, pdiags);
-    Vector__Stmt*   expanded = expand_macros(stmts);
-    Vector__Stmt*   lowered = lower_program(expanded);
+    ((void(*)(Vector__Stmt*, const char*, HashMap__bool*, Vector__ParseDiag*))load_builtins_dir)(stmts, builtins_dir, loaded, pdiags);
+    ((void(*)(Vector__Stmt*, const char*, const char*, HashMap__bool*, Vector__ParseDiag*))load_into_str)(stmts, src, path, loaded, pdiags);
+    Vector__Stmt*   expanded = ((Vector__Stmt*(*)(Vector__Stmt*))expand_macros)(stmts);
+    Vector__Stmt*   lowered = ((Vector__Stmt*(*)(Vector__Stmt*))lower_program)(expanded);
     Vector_clear__Stmt(stmts);
     for (int   i = 0; (i  <  Vector_len__Stmt(lowered)); i++) {
         Stmt   s = Vector_get__Stmt(lowered, i);
@@ -23612,17 +23722,17 @@ bool   parse_program_into (Vector__Stmt*   stmts, const char*   path, Vector__Pa
 }
 
 const char*   pick_cc (void) {
-    const char*   exe_dir = __glide_exe_dir();
+    const char*   exe_dir = ((const char*(*)(void))__glide_exe_dir)();
     if ((!__glide_string_eq(exe_dir, ""))) {
         const char*   zig = __glide_string_concat(exe_dir, "/runtime/zig/zig");
-        if ((__glide_is_windows()  !=  0)) {
+        if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
             (zig  =  __glide_string_concat(zig, ".exe"));
         }
-        if (__glide_file_exists(zig)) {
+        if (((bool(*)(const char*))__glide_file_exists)(zig)) {
             return __glide_string_concat(__glide_string_concat("\"", zig), "\" cc");
         }
     }
-    const char*   env = __glide_getenv("CC");
+    const char*   env = ((const char*(*)(const char*))__glide_getenv)("CC");
     if ((!__glide_string_eq(env, ""))) {
         return env;
     }
@@ -23630,18 +23740,18 @@ const char*   pick_cc (void) {
 }
 
 int   run_build (const char*   src_path, const char*   out_path, const char*   target, bool   then_run) {
-    Vector__Stmt*   stmts = Vector_new__Stmt();
-    Vector__ParseDiag*   pdiags = Vector_new__ParseDiag();
-    if ((!parse_program_into(stmts, src_path, pdiags))) {
+    Vector__Stmt*   stmts = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+    Vector__ParseDiag*   pdiags = ((Vector__ParseDiag*(*)(void))Vector_new__ParseDiag)();
+    if ((!((bool(*)(Vector__Stmt*, const char*, Vector__ParseDiag*))parse_program_into)(stmts, src_path, pdiags))) {
         return 1;
     }
     Typer*   t = Typer_new();
-    merge_parse_diags(t, pdiags);
-    build_visibility(t, stmts);
+    ((void(*)(Typer*, Vector__ParseDiag*))merge_parse_diags)(t, pdiags);
+    ((void(*)(Typer*, Vector__Stmt*))build_visibility)(t, stmts);
     ((t-> enforce_visibility )  =  true);
-    check_program(t, stmts);
-    run_extra_analyses(t, stmts);
-    const char*   src_text = read_file(src_path);
+    ((void(*)(Typer*, Vector__Stmt*))check_program)(t, stmts);
+    ((void(*)(Typer*, Vector__Stmt*))run_extra_analyses)(t, stmts);
+    const char*   src_text = ((const char*(*)(const char*))read_file)(src_path);
     int   errors = 0;
     for (int   i = 0; (i  <  Vector_len__DiagEntry((t-> diagnostics ))); i++) {
         DiagEntry   d = Vector_get__DiagEntry((t-> diagnostics ), i);
@@ -23652,7 +23762,7 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
         if ((!__glide_string_eq(dpath, src_path))) {
             continue;
         }
-        print_pretty_diag(d, src_text, dpath);
+        ((void(*)(DiagEntry, const char*, const char*))print_pretty_diag)(d, src_text, dpath);
         if (((d. severity )  ==  1)) {
             (errors  =  (errors  +  1));
         }
@@ -23660,34 +23770,34 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
     if ((errors  >  0)) {
         const char*   tail = "could not compile due to 1 previous error";
         if ((errors  >  1)) {
-            (tail  =  __glide_string_concat(__glide_string_concat("could not compile due to ", int_to_str(errors)), " previous errors"));
+            (tail  =  __glide_string_concat(__glide_string_concat("could not compile due to ", ((const char*(*)(int64_t))int_to_str)(errors)), " previous errors"));
         }
-        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(col_red(), "error"), col_reset()), ": "), tail));
+        printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(((const char*(*)(void))col_red)(), "error"), ((const char*(*)(void))col_reset)()), ": "), tail));
         return 1;
     }
     const char*   tmp_c = __glide_string_concat(out_path, ".__glide.c");
-    int   saved = __glide_redirect_to(tmp_c);
+    int   saved = ((int(*)(const char*))__glide_redirect_to)(tmp_c);
     if ((saved  <  0)) {
         printf("%s %s\n", "could not open temp file:", tmp_c);
         return 1;
     }
-    emit_program(stmts);
-    __glide_restore_stdout(saved);
-    const char*   cc = pick_cc();
+    ((void(*)(Vector__Stmt*))emit_program)(stmts);
+    ((void(*)(int))__glide_restore_stdout)(saved);
+    const char*   cc = ((const char*(*)(void))pick_cc)();
     const char*   cmd = cc;
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " \""), tmp_c), "\""));
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " -o \""), out_path), "\""));
     (cmd  =  __glide_string_concat(cmd, " -O2 -w -lpthread -lm"));
-    if ((__glide_is_windows()  !=  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         (cmd  =  __glide_string_concat(cmd, " -lws2_32"));
     }
     if ((!__glide_string_eq(target, ""))) {
         (cmd  =  __glide_string_concat(__glide_string_concat(cmd, " --target="), target));
     }
-    if ((__glide_is_windows()  !=  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         (cmd  =  __glide_string_concat(__glide_string_concat("\"", cmd), "\""));
     }
-    int   rc = __glide_shell(cmd);
+    int   rc = ((int(*)(const char*))__glide_shell)(cmd);
     if ((rc  !=  0)) {
         printf("%s %d %s\n", "compilation failed (cc exit", rc, ")");
         printf("%s %s\n", "preserved C source at:", tmp_c);
@@ -23695,20 +23805,20 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
     }
     if (then_run) {
         const char*   prefix = "./";
-        if ((__glide_is_windows()  !=  0)) {
+        if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
             (prefix  =  ".\\");
         }
         const char*   run_cmd = __glide_string_concat(__glide_string_concat(__glide_string_concat("\"", prefix), out_path), "\"");
-        if ((__glide_is_windows()  !=  0)) {
+        if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
             (run_cmd  =  __glide_string_concat(__glide_string_concat("\"", run_cmd), "\""));
         }
-        return __glide_shell(run_cmd);
+        return ((int(*)(const char*))__glide_shell)(run_cmd);
     }
     return 0;
 }
 
 Vector__string*   scan_test_fns (const char*   src) {
-    Vector__string*   names = Vector_new__string();
+    Vector__string*   names = ((Vector__string*(*)(void))Vector_new__string)();
     Vector__string*   lines = string_split(src, "\n");
     const char*   prefix = "fn test_";
     for (int   i = 0; (i  <  Vector_len__string(lines)); i++) {
@@ -23749,12 +23859,12 @@ int   run_test (const char*   path) {
     if (__glide_string_eq(search_path, "")) {
         (search_path  =  ".");
     }
-    Vector__string*   files = Vector_new__string();
-    const char*   direct = read_file(search_path);
+    Vector__string*   files = ((Vector__string*(*)(void))Vector_new__string)();
+    const char*   direct = ((const char*(*)(const char*))read_file)(search_path);
     if ((!__glide_string_eq(direct, ""))) {
         Vector_push__string(files, search_path);
     } else {
-        const char*   raw = __glide_list_dir(search_path, "_test.glide");
+        const char*   raw = ((const char*(*)(const char*, const char*))__glide_list_dir)(search_path, "_test.glide");
         if (__glide_string_eq(raw, "")) {
             printf("%s %s\n", "no *_test.glide files found under:", search_path);
             return 1;
@@ -23772,16 +23882,16 @@ int   run_test (const char*   path) {
     int   failed_files = 0;
     const char*   tmp_path = "__glide_test_run.glide";
     const char*   out_path = "__glide_test_run.exe";
-    if ((__glide_is_windows()  ==  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  ==  0)) {
         (out_path  =  "__glide_test_run");
     }
     for (int   i = 0; (i  <  Vector_len__string(files)); i++) {
         const char*   f = Vector_get__string(files, i);
-        const char*   src = read_file(f);
+        const char*   src = ((const char*(*)(const char*))read_file)(f);
         if (__glide_string_eq(src, "")) {
             continue;
         }
-        Vector__string*   test_fns = scan_test_fns(src);
+        Vector__string*   test_fns = ((Vector__string*(*)(const char*))scan_test_fns)(src);
         if ((Vector_len__string(test_fns)  ==  0)) {
             printf("%s %s %s\n", "(no test_* functions in", f, "—  skipping)");
             continue;
@@ -23794,46 +23904,46 @@ int   run_test (const char*   path) {
             (synth  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(synth, "    if "), name), "() == 0 { test_pass(); }\n"));
         }
         (synth  =  __glide_string_concat(synth, "    return test_summary();\n}\n"));
-        if ((!write_file(tmp_path, synth))) {
+        if ((!((bool(*)(const char*, const char*))write_file)(tmp_path, synth))) {
             printf("%s\n", "could not write temp test file");
             return 1;
         }
-        printf("%s %s %s %d %s\n", __glide_string_concat(__glide_string_concat(col_blue(), "running"), col_reset()), f, "(", Vector_len__string(test_fns), "tests )");
-        int   rc = run_build(tmp_path, out_path, "", true);
+        printf("%s %s %s %d %s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_blue)(), "running"), ((const char*(*)(void))col_reset)()), f, "(", Vector_len__string(test_fns), "tests )");
+        int   rc = ((int(*)(const char*, const char*, const char*, bool))run_build)(tmp_path, out_path, "", true);
         (total_files  =  (total_files  +  1));
         if ((rc  !=  0)) {
             (failed_files  =  (failed_files  +  1));
         }
     }
-    write_file(tmp_path, "");
+    ((bool(*)(const char*, const char*))write_file)(tmp_path, "");
     printf("%s\n", "");
     if ((failed_files  >  0)) {
-        printf("%s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(col_red(), "test result:"), col_reset()), failed_files, "of", total_files, "files had failures");
+        printf("%s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_red)(), "test result:"), ((const char*(*)(void))col_reset)()), failed_files, "of", total_files, "files had failures");
         return 1;
     }
-    printf("%s %s %d %s\n", __glide_string_concat(__glide_string_concat(col_blue(), "test result:"), col_reset()), "all", total_files, "files passed");
+    printf("%s %s %d %s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_blue)(), "test result:"), ((const char*(*)(void))col_reset)()), "all", total_files, "files passed");
     return 0;
 }
 
 int   _golden_build_and_run (const char*   src, const char*   out_txt) {
     const char*   exe = "__glide_golden.exe";
-    if ((__glide_is_windows()  ==  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  ==  0)) {
         (exe  =  "__glide_golden");
     }
-    int   rc_build = run_build(src, exe, "", false);
+    int   rc_build = ((int(*)(const char*, const char*, const char*, bool))run_build)(src, exe, "", false);
     if ((rc_build  !=  0)) {
         return (-1);
     }
     const char*   prefix = "./";
-    if ((__glide_is_windows()  !=  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         (prefix  =  ".\\");
     }
     const char*   cmd = __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("\"", prefix), exe), "\" > \""), out_txt), "\"");
     const char*   wrapped = cmd;
-    if ((__glide_is_windows()  !=  0)) {
+    if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         (wrapped  =  __glide_string_concat(__glide_string_concat("\"", cmd), "\""));
     }
-    return __glide_shell(wrapped);
+    return ((int(*)(const char*))__glide_shell)(wrapped);
 }
 
 const char*   _golden_normalize (const char*   s) {
@@ -23892,7 +24002,7 @@ int   run_golden (const char*   dir) {
     if (__glide_string_eq(search_dir, "")) {
         (search_dir  =  ".");
     }
-    const char*   raw = __glide_list_dir(search_dir, ".glide");
+    const char*   raw = ((const char*(*)(const char*, const char*))__glide_list_dir)(search_dir, ".glide");
     if (__glide_string_eq(raw, "")) {
         printf("%s %s\n", "no *.glide files under:", search_dir);
         return 1;
@@ -23912,54 +24022,54 @@ int   run_golden (const char*   dir) {
         }
         const char*   src = __glide_string_concat(__glide_string_concat(search_dir, "/"), nm);
         const char*   expected_path = __glide_string_concat(__glide_string_concat(__glide_string_concat(search_dir, "/"), __glide_string_substring(nm, 0, (__glide_string_len(nm)  -  6))), ".expected");
-        if ((!__glide_file_exists(expected_path))) {
+        if ((!((bool(*)(const char*))__glide_file_exists)(expected_path))) {
             (skipped  =  (skipped  +  1));
             continue;
         }
-        const char*   expected = read_file(expected_path);
-        int   rc = _golden_build_and_run(src, stdout_path);
+        const char*   expected = ((const char*(*)(const char*))read_file)(expected_path);
+        int   rc = ((int(*)(const char*, const char*))_golden_build_and_run)(src, stdout_path);
         if ((rc  <  0)) {
             (failed  =  (failed  +  1));
-            printf("%s %s %s\n", __glide_string_concat(__glide_string_concat(col_red(), "FAIL"), col_reset()), src, "(build failed)");
+            printf("%s %s %s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_red)(), "FAIL"), ((const char*(*)(void))col_reset)()), src, "(build failed)");
             continue;
         }
-        const char*   actual_raw = read_file(stdout_path);
-        const char*   actual = _golden_normalize(actual_raw);
-        const char*   expected_norm = _golden_normalize(expected);
+        const char*   actual_raw = ((const char*(*)(const char*))read_file)(stdout_path);
+        const char*   actual = ((const char*(*)(const char*))_golden_normalize)(actual_raw);
+        const char*   expected_norm = ((const char*(*)(const char*))_golden_normalize)(expected);
         if (__glide_string_eq(actual, expected_norm)) {
             (passed  =  (passed  +  1));
-            printf("%s %s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(col_blue(), "ok"), col_reset()), "  "), src);
+            printf("%s %s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(((const char*(*)(void))col_blue)(), "ok"), ((const char*(*)(void))col_reset)()), "  "), src);
         } else {
             (failed  =  (failed  +  1));
-            printf("%s %s\n", __glide_string_concat(__glide_string_concat(col_red(), "FAIL"), col_reset()), src);
-            _golden_show_diff(actual, expected_norm);
+            printf("%s %s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_red)(), "FAIL"), ((const char*(*)(void))col_reset)()), src);
+            ((void(*)(const char*, const char*))_golden_show_diff)(actual, expected_norm);
         }
     }
-    write_file(stdout_path, "");
+    ((bool(*)(const char*, const char*))write_file)(stdout_path, "");
     printf("%s\n", "");
     if ((failed  >  0)) {
-        printf("%s %d %s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(col_red(), "golden result:"), col_reset()), passed, "passed,", failed, "failed,", skipped, "skipped");
+        printf("%s %d %s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_red)(), "golden result:"), ((const char*(*)(void))col_reset)()), passed, "passed,", failed, "failed,", skipped, "skipped");
         return 1;
     }
-    printf("%s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(col_blue(), "golden result:"), col_reset()), passed, "passed,", skipped, "skipped");
+    printf("%s %d %s %d %s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_blue)(), "golden result:"), ((const char*(*)(void))col_reset)()), passed, "passed,", skipped, "skipped");
     return 0;
 }
 
 int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
-    int   argc = args_count();
+    int   argc = ((int(*)(void))args_count)();
     if ((argc  <  2)) {
-        print_usage();
+        ((void(*)(void))print_usage)();
         return 1;
     }
-    const char*   cmd = args_at(1);
+    const char*   cmd = ((const char*(*)(int))args_at)(1);
     if (__glide_string_eq(cmd, "lsp")) {
-        return lsp_main();
+        return ((int(*)(void))lsp_main)();
     }
     if (__glide_string_eq(cmd, "test")) {
         const char*   tpath = "";
         bool   golden = false;
         for (int   i = 2; (i  <  argc); i++) {
-            const char*   a = args_at(i);
+            const char*   a = ((const char*(*)(int))args_at)(i);
             if (__glide_string_eq(a, "--golden")) {
                 (golden  =  true);
                 continue;
@@ -23969,9 +24079,9 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
             }
         }
         if (golden) {
-            return run_golden(tpath);
+            return ((int(*)(const char*))run_golden)(tpath);
         }
-        return run_test(tpath);
+        return ((int(*)(const char*))run_test)(tpath);
     }
     int   mode = MODE_RUN;
     int   src_arg_idx = 2;
@@ -23992,7 +24102,7 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
                     } else {
                         (src_arg_idx  =  1);
                         for (int   i = 0; (i  <  argc); i++) {
-                            if (__glide_string_eq(args_at(i), "--emit")) {
+                            if (__glide_string_eq(((const char*(*)(int))args_at)(i), "--emit")) {
                                 (mode  =  MODE_EMIT);
                                 (src_arg_idx  =  (i  +  1));
                             }
@@ -24003,17 +24113,17 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
         }
     }
     if ((src_arg_idx  >=  argc)) {
-        print_usage();
+        ((void(*)(void))print_usage)();
         return 1;
     }
-    const char*   src_path = args_at(src_arg_idx);
+    const char*   src_path = ((const char*(*)(int))args_at)(src_arg_idx);
     const char*   out_path = "";
     const char*   target = "";
     bool   write_in_place = false;
     for (int   i = (src_arg_idx  +  1); (i  <  argc); i++) {
-        const char*   a = args_at(i);
+        const char*   a = ((const char*(*)(int))args_at)(i);
         if ((__glide_string_eq(a, "-o")  &&  ((i  +  1)  <  argc))) {
-            (out_path  =  args_at((i  +  1)));
+            (out_path  =  ((const char*(*)(int))args_at)((i  +  1)));
         }
         if (__glide_string_eq(a, "--write")) {
             (write_in_place  =  true);
@@ -24027,58 +24137,58 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
     }
     if ((mode  ==  MODE_BUILD)) {
         if (__glide_string_eq(out_path, "")) {
-            if ((__glide_is_windows()  !=  0)) {
+            if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
                 (out_path  =  "a.exe");
             } else {
                 (out_path  =  "a.out");
             }
         }
-        return run_build(src_path, out_path, target, false);
+        return ((int(*)(const char*, const char*, const char*, bool))run_build)(src_path, out_path, target, false);
     }
     if ((mode  ==  MODE_RUN)) {
         if (__glide_string_eq(out_path, "")) {
-            if ((__glide_is_windows()  !=  0)) {
+            if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
                 (out_path  =  "__glide_run_tmp.exe");
             } else {
                 (out_path  =  "__glide_run_tmp");
             }
         }
-        return run_build(src_path, out_path, target, true);
+        return ((int(*)(const char*, const char*, const char*, bool))run_build)(src_path, out_path, target, true);
     }
     if ((mode  ==  MODE_FMT)) {
-        const char*   src = read_file(src_path);
+        const char*   src = ((const char*(*)(const char*))read_file)(src_path);
         if (__glide_string_eq(src, "")) {
             printf("%s %s\n", "could not read or empty file:", src_path);
             return 1;
         }
         Lexer*   lex = Lexer_new(src);
         Parser*   p = Parser_new(lex);
-        Vector__Stmt*   parsed = parse_program(p);
-        const char*   formatted = fmt_program(parsed);
+        Vector__Stmt*   parsed = ((Vector__Stmt*(*)(Parser*))parse_program)(p);
+        const char*   formatted = ((const char*(*)(Vector__Stmt*))fmt_program)(parsed);
         if (write_in_place) {
-            if ((!write_file(src_path, formatted))) {
+            if ((!((bool(*)(const char*, const char*))write_file)(src_path, formatted))) {
                 printf("%s %s\n", "could not write:", src_path);
                 return 1;
             }
             return 0;
         }
-        __glide_write_str(formatted);
-        __glide_flush_stdout();
+        ((void(*)(const char*))__glide_write_str)(formatted);
+        ((void(*)(void))__glide_flush_stdout)();
         return 0;
     }
-    Vector__Stmt*   stmts = Vector_new__Stmt();
-    Vector__ParseDiag*   pdiags = Vector_new__ParseDiag();
-    if ((!parse_program_into(stmts, src_path, pdiags))) {
+    Vector__Stmt*   stmts = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+    Vector__ParseDiag*   pdiags = ((Vector__ParseDiag*(*)(void))Vector_new__ParseDiag)();
+    if ((!((bool(*)(Vector__Stmt*, const char*, Vector__ParseDiag*))parse_program_into)(stmts, src_path, pdiags))) {
         return 1;
     }
     if ((mode  ==  MODE_CHECK)) {
         Typer*   t = Typer_new();
-        merge_parse_diags(t, pdiags);
-        build_visibility(t, stmts);
+        ((void(*)(Typer*, Vector__ParseDiag*))merge_parse_diags)(t, pdiags);
+        ((void(*)(Typer*, Vector__Stmt*))build_visibility)(t, stmts);
         ((t-> enforce_visibility )  =  true);
-        check_program(t, stmts);
-        run_extra_analyses(t, stmts);
-        const char*   src_text = read_file(src_path);
+        ((void(*)(Typer*, Vector__Stmt*))check_program)(t, stmts);
+        ((void(*)(Typer*, Vector__Stmt*))run_extra_analyses)(t, stmts);
+        const char*   src_text = ((const char*(*)(const char*))read_file)(src_path);
         int   user_errors = 0;
         for (int   i = 0; (i  <  Vector_len__DiagEntry((t-> diagnostics ))); i++) {
             DiagEntry   d = Vector_get__DiagEntry((t-> diagnostics ), i);
@@ -24088,7 +24198,7 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
             }
             bool   want_all = false;
             for (int   k = 0; (k  <  argc); k++) {
-                if (__glide_string_eq(args_at(k), "--all")) {
+                if (__glide_string_eq(((const char*(*)(int))args_at)(k), "--all")) {
                     (want_all  =  true);
                 }
             }
@@ -24097,9 +24207,9 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
             }
             const char*   snippet = src_text;
             if ((!__glide_string_eq(path, src_path))) {
-                (snippet  =  read_file(path));
+                (snippet  =  ((const char*(*)(const char*))read_file)(path));
             }
-            print_pretty_diag(d, snippet, path);
+            ((void(*)(DiagEntry, const char*, const char*))print_pretty_diag)(d, snippet, path);
             if (((d. severity )  ==  1)) {
                 (user_errors  =  (user_errors  +  1));
             }
@@ -24107,17 +24217,17 @@ int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {
         if ((user_errors  >  0)) {
             const char*   tail = "found 1 error";
             if ((user_errors  >  1)) {
-                (tail  =  __glide_string_concat(__glide_string_concat("found ", int_to_str(user_errors)), " errors"));
+                (tail  =  __glide_string_concat(__glide_string_concat("found ", ((const char*(*)(int64_t))int_to_str)(user_errors)), " errors"));
             }
-            printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(col_red(), "error"), col_reset()), ": "), tail));
+            printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(((const char*(*)(void))col_red)(), "error"), ((const char*(*)(void))col_reset)()), ": "), tail));
             Typer_free(t);
             return 1;
         }
-        printf("%s\n", __glide_string_concat(__glide_string_concat(col_blue(), "ok"), col_reset()));
+        printf("%s\n", __glide_string_concat(__glide_string_concat(((const char*(*)(void))col_blue)(), "ok"), ((const char*(*)(void))col_reset)()));
         Typer_free(t);
         return 0;
     }
-    emit_program(stmts);
+    ((void(*)(Vector__Stmt*))emit_program)(stmts);
     return 0;
 }
 
@@ -24231,13 +24341,13 @@ void   HashMap_resize__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, int 
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( Vector__Stmt** )__glide_palloc((new_cap  *  sizeof( Vector__Stmt* )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Vector__Stmt** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Vector__Stmt* )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( Vector__Stmt** )malloc((new_cap  *  sizeof( Vector__Stmt* )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Vector__Stmt** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Vector__Stmt* )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24250,9 +24360,9 @@ void   HashMap_resize__Vector__Stmt_ptr (HashMap__Vector__Stmt_ptr*   self, int 
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24292,13 +24402,13 @@ void   HashMap_resize__ImportInfo (HashMap__ImportInfo*   self, int   new_cap) {
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( ImportInfo* )__glide_palloc((new_cap  *  sizeof( ImportInfo )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( ImportInfo* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( ImportInfo )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( ImportInfo* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( ImportInfo )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24311,9 +24421,9 @@ void   HashMap_resize__ImportInfo (HashMap__ImportInfo*   self, int   new_cap) {
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24323,13 +24433,13 @@ void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap) {
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( LspDoc* )__glide_palloc((new_cap  *  sizeof( LspDoc )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( LspDoc* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( LspDoc )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( LspDoc* )malloc((new_cap  *  sizeof( LspDoc )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( LspDoc* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( LspDoc )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24342,9 +24452,9 @@ void   HashMap_resize__LspDoc (HashMap__LspDoc*   self, int   new_cap) {
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24384,13 +24494,13 @@ void   HashMap_resize__string (HashMap__string*   self, int   new_cap) {
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24403,9 +24513,9 @@ void   HashMap_resize__string (HashMap__string*   self, int   new_cap) {
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24430,13 +24540,13 @@ void   HashMap_resize__FnSig (HashMap__FnSig*   self, int   new_cap) {
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( FnSig* )__glide_palloc((new_cap  *  sizeof( FnSig )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( FnSig* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( FnSig )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( FnSig* )malloc((new_cap  *  sizeof( FnSig )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( FnSig* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( FnSig )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24449,9 +24559,9 @@ void   HashMap_resize__FnSig (HashMap__FnSig*   self, int   new_cap) {
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24476,13 +24586,13 @@ void   HashMap_resize__Type (HashMap__Type*   self, int   new_cap) {
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( Type* )__glide_palloc((new_cap  *  sizeof( Type )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Type* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Type )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( Type* )malloc((new_cap  *  sizeof( Type )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Type* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Type )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24495,9 +24605,9 @@ void   HashMap_resize__Type (HashMap__Type*   self, int   new_cap) {
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24522,13 +24632,13 @@ void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap) {
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24541,9 +24651,9 @@ void   HashMap_resize__bool (HashMap__bool*   self, int   new_cap) {
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24568,13 +24678,13 @@ void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
     bool*   old_occupied = (self-> occupied );
     int   old_cap = (self-> cap );
     if ((self-> is_arena )) {
-        ((self-> keys )  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( Stmt* )__glide_palloc((new_cap  *  sizeof( Stmt )))));
-        ((self-> occupied )  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Stmt* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Stmt )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
     } else {
-        ((self-> keys )  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
-        ((self-> values )  =  (( Stmt* )malloc((new_cap  *  sizeof( Stmt )))));
-        ((self-> occupied )  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+        ((self-> keys )  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
+        ((self-> values )  =  (( Stmt* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Stmt )))));
+        ((self-> occupied )  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
     }
     ((self-> cap )  =  new_cap);
     ((self-> len )  =  0);
@@ -24587,9 +24697,9 @@ void   HashMap_resize__Stmt (HashMap__Stmt*   self, int   new_cap) {
         }
     }
     if (((!(self-> is_arena ))  &&  (old_cap  >  0))) {
-        free((( void* )old_keys));
-        free((( void* )old_values));
-        free((( void* )old_occupied));
+        ((void(*)(void*))free)((( void* )old_keys));
+        ((void(*)(void*))free)((( void* )old_values));
+        ((void(*)(void*))free)((( void* )old_occupied));
     }
 }
 
@@ -24632,12 +24742,12 @@ int   Vector_len__UseSite (Vector__UseSite*   self) {
 }
 
 Vector__UseSite*   Vector_new__UseSite (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__UseSite*   v;
     if (arena) {
-        (v  =  (( Vector__UseSite* )__glide_palloc(sizeof( Vector__UseSite ))));
+        (v  =  (( Vector__UseSite* )((void*(*)(int))__glide_palloc)(sizeof( Vector__UseSite ))));
     } else {
-        (v  =  (( Vector__UseSite* )malloc(sizeof( Vector__UseSite ))));
+        (v  =  (( Vector__UseSite* )((void*(*)(size_t))malloc)(sizeof( Vector__UseSite ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -24654,15 +24764,15 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x) {
         }
         UseSite*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( UseSite* )__glide_palloc((new_cap  *  sizeof( UseSite )))));
+            (new_data  =  (( UseSite* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( UseSite )))));
         } else {
-            (new_data  =  (( UseSite* )malloc((new_cap  *  sizeof( UseSite )))));
+            (new_data  =  (( UseSite* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( UseSite )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -24676,11 +24786,11 @@ void   HashMap_free__ImportInfo (HashMap__ImportInfo*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> keys )));
-        free((( void* )(self-> values )));
-        free((( void* )(self-> occupied )));
+        ((void(*)(void*))free)((( void* )(self-> keys )));
+        ((void(*)(void*))free)((( void* )(self-> values )));
+        ((void(*)(void*))free)((( void* )(self-> occupied )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 ImportInfo   HashMap_get__ImportInfo (HashMap__ImportInfo*   self, const char*   k) {
@@ -24730,12 +24840,12 @@ int   Vector_len__ImportInfo (Vector__ImportInfo*   self) {
 }
 
 HashMap__ImportInfo*   HashMap_new__ImportInfo (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__ImportInfo*   m;
     if (arena) {
-        (m  =  (( HashMap__ImportInfo* )__glide_palloc(sizeof( HashMap__ImportInfo ))));
+        (m  =  (( HashMap__ImportInfo* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__ImportInfo ))));
     } else {
-        (m  =  (( HashMap__ImportInfo* )malloc(sizeof( HashMap__ImportInfo ))));
+        (m  =  (( HashMap__ImportInfo* )((void*(*)(size_t))malloc)(sizeof( HashMap__ImportInfo ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -24754,15 +24864,15 @@ void   Vector_push__ImportInfo (Vector__ImportInfo*   self, ImportInfo   x) {
         }
         ImportInfo*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( ImportInfo* )__glide_palloc((new_cap  *  sizeof( ImportInfo )))));
+            (new_data  =  (( ImportInfo* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( ImportInfo )))));
         } else {
-            (new_data  =  (( ImportInfo* )malloc((new_cap  *  sizeof( ImportInfo )))));
+            (new_data  =  (( ImportInfo* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( ImportInfo )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -24772,12 +24882,12 @@ void   Vector_push__ImportInfo (Vector__ImportInfo*   self, ImportInfo   x) {
 }
 
 Vector__ImportInfo*   Vector_new__ImportInfo (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__ImportInfo*   v;
     if (arena) {
-        (v  =  (( Vector__ImportInfo* )__glide_palloc(sizeof( Vector__ImportInfo ))));
+        (v  =  (( Vector__ImportInfo* )((void*(*)(int))__glide_palloc)(sizeof( Vector__ImportInfo ))));
     } else {
-        (v  =  (( Vector__ImportInfo* )malloc(sizeof( Vector__ImportInfo ))));
+        (v  =  (( Vector__ImportInfo* )((void*(*)(size_t))malloc)(sizeof( Vector__ImportInfo ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -24855,7 +24965,7 @@ LspDoc   HashMap_get__LspDoc (HashMap__LspDoc*   self, const char*   k) {
 }
 
 Vector__string*   HashMap_keys__LspDoc (HashMap__LspDoc*   self) {
-    Vector__string*   out = Vector_new__string();
+    Vector__string*   out = ((Vector__string*(*)(void))Vector_new__string)();
     for (int   i = 0; (i  <  (self-> cap )); i++) {
         if ((self-> occupied )[i]) {
             Vector_push__string(out, (self-> keys )[i]);
@@ -24872,15 +24982,15 @@ void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym 
         }
         ImportableSym*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( ImportableSym* )__glide_palloc((new_cap  *  sizeof( ImportableSym )))));
+            (new_data  =  (( ImportableSym* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( ImportableSym )))));
         } else {
-            (new_data  =  (( ImportableSym* )malloc((new_cap  *  sizeof( ImportableSym )))));
+            (new_data  =  (( ImportableSym* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( ImportableSym )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -24890,12 +25000,12 @@ void   Vector_push__ImportableSym (Vector__ImportableSym*   self, ImportableSym 
 }
 
 HashMap__Vector__Stmt_ptr*   HashMap_new__Vector__Stmt_ptr (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__Vector__Stmt_ptr*   m;
     if (arena) {
-        (m  =  (( HashMap__Vector__Stmt_ptr* )__glide_palloc(sizeof( HashMap__Vector__Stmt_ptr ))));
+        (m  =  (( HashMap__Vector__Stmt_ptr* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__Vector__Stmt_ptr ))));
     } else {
-        (m  =  (( HashMap__Vector__Stmt_ptr* )malloc(sizeof( HashMap__Vector__Stmt_ptr ))));
+        (m  =  (( HashMap__Vector__Stmt_ptr* )((void*(*)(size_t))malloc)(sizeof( HashMap__Vector__Stmt_ptr ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -24907,12 +25017,12 @@ HashMap__Vector__Stmt_ptr*   HashMap_new__Vector__Stmt_ptr (void) {
 }
 
 Vector__ImportableSym*   Vector_new__ImportableSym (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__ImportableSym*   v;
     if (arena) {
-        (v  =  (( Vector__ImportableSym* )__glide_palloc(sizeof( Vector__ImportableSym ))));
+        (v  =  (( Vector__ImportableSym* )((void*(*)(int))__glide_palloc)(sizeof( Vector__ImportableSym ))));
     } else {
-        (v  =  (( Vector__ImportableSym* )malloc(sizeof( Vector__ImportableSym ))));
+        (v  =  (( Vector__ImportableSym* )((void*(*)(size_t))malloc)(sizeof( Vector__ImportableSym ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -24922,12 +25032,12 @@ Vector__ImportableSym*   Vector_new__ImportableSym (void) {
 }
 
 HashMap__LspDoc*   HashMap_new__LspDoc (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__LspDoc*   m;
     if (arena) {
-        (m  =  (( HashMap__LspDoc* )__glide_palloc(sizeof( HashMap__LspDoc ))));
+        (m  =  (( HashMap__LspDoc* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__LspDoc ))));
     } else {
-        (m  =  (( HashMap__LspDoc* )malloc(sizeof( HashMap__LspDoc ))));
+        (m  =  (( HashMap__LspDoc* )((void*(*)(size_t))malloc)(sizeof( HashMap__LspDoc ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -24943,9 +25053,9 @@ void   Vector_free__JsonValue (Vector__JsonValue*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> data )));
+        ((void(*)(void*))free)((( void* )(self-> data )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 JsonValue   Vector_get__JsonValue (Vector__JsonValue*   self, int   i) {
@@ -24964,15 +25074,15 @@ void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x) {
         }
         JsonValue*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( JsonValue* )__glide_palloc((new_cap  *  sizeof( JsonValue )))));
+            (new_data  =  (( JsonValue* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( JsonValue )))));
         } else {
-            (new_data  =  (( JsonValue* )malloc((new_cap  *  sizeof( JsonValue )))));
+            (new_data  =  (( JsonValue* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( JsonValue )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -24982,12 +25092,12 @@ void   Vector_push__JsonValue (Vector__JsonValue*   self, JsonValue   x) {
 }
 
 Vector__JsonValue*   Vector_new__JsonValue (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__JsonValue*   v;
     if (arena) {
-        (v  =  (( Vector__JsonValue* )__glide_palloc(sizeof( Vector__JsonValue ))));
+        (v  =  (( Vector__JsonValue* )((void*(*)(int))__glide_palloc)(sizeof( Vector__JsonValue ))));
     } else {
-        (v  =  (( Vector__JsonValue* )malloc(sizeof( Vector__JsonValue ))));
+        (v  =  (( Vector__JsonValue* )((void*(*)(size_t))malloc)(sizeof( Vector__JsonValue ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25040,15 +25150,15 @@ void   Vector_push__FnMonoEntry (Vector__FnMonoEntry*   self, FnMonoEntry   x) {
         }
         FnMonoEntry*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( FnMonoEntry* )__glide_palloc((new_cap  *  sizeof( FnMonoEntry )))));
+            (new_data  =  (( FnMonoEntry* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( FnMonoEntry )))));
         } else {
-            (new_data  =  (( FnMonoEntry* )malloc((new_cap  *  sizeof( FnMonoEntry )))));
+            (new_data  =  (( FnMonoEntry* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( FnMonoEntry )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25062,11 +25172,11 @@ void   HashMap_free__Stmt (HashMap__Stmt*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> keys )));
-        free((( void* )(self-> values )));
-        free((( void* )(self-> occupied )));
+        ((void(*)(void*))free)((( void* )(self-> keys )));
+        ((void(*)(void*))free)((( void* )(self-> values )));
+        ((void(*)(void*))free)((( void* )(self-> occupied )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 Expr   Vector_pop__Expr (Vector__Expr*   self) {
@@ -25075,12 +25185,12 @@ Expr   Vector_pop__Expr (Vector__Expr*   self) {
 }
 
 Vector__AnonFn*   Vector_new__AnonFn (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__AnonFn*   v;
     if (arena) {
-        (v  =  (( Vector__AnonFn* )__glide_palloc(sizeof( Vector__AnonFn ))));
+        (v  =  (( Vector__AnonFn* )((void*(*)(int))__glide_palloc)(sizeof( Vector__AnonFn ))));
     } else {
-        (v  =  (( Vector__AnonFn* )malloc(sizeof( Vector__AnonFn ))));
+        (v  =  (( Vector__AnonFn* )((void*(*)(size_t))malloc)(sizeof( Vector__AnonFn ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25090,12 +25200,12 @@ Vector__AnonFn*   Vector_new__AnonFn (void) {
 }
 
 Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__FnMonoEntry*   v;
     if (arena) {
-        (v  =  (( Vector__FnMonoEntry* )__glide_palloc(sizeof( Vector__FnMonoEntry ))));
+        (v  =  (( Vector__FnMonoEntry* )((void*(*)(int))__glide_palloc)(sizeof( Vector__FnMonoEntry ))));
     } else {
-        (v  =  (( Vector__FnMonoEntry* )malloc(sizeof( Vector__FnMonoEntry ))));
+        (v  =  (( Vector__FnMonoEntry* )((void*(*)(size_t))malloc)(sizeof( Vector__FnMonoEntry ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25105,7 +25215,7 @@ Vector__FnMonoEntry*   Vector_new__FnMonoEntry (void) {
 }
 
 Vector__string*   HashMap_keys__Type (HashMap__Type*   self) {
-    Vector__string*   out = Vector_new__string();
+    Vector__string*   out = ((Vector__string*(*)(void))Vector_new__string)();
     for (int   i = 0; (i  <  (self-> cap )); i++) {
         if ((self-> occupied )[i]) {
             Vector_push__string(out, (self-> keys )[i]);
@@ -25122,15 +25232,15 @@ void   Vector_push__AnonFn (Vector__AnonFn*   self, AnonFn   x) {
         }
         AnonFn*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( AnonFn* )__glide_palloc((new_cap  *  sizeof( AnonFn )))));
+            (new_data  =  (( AnonFn* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( AnonFn )))));
         } else {
-            (new_data  =  (( AnonFn* )malloc((new_cap  *  sizeof( AnonFn )))));
+            (new_data  =  (( AnonFn* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( AnonFn )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25157,9 +25267,9 @@ void   Vector_free__string (Vector__string*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> data )));
+        ((void(*)(void*))free)((( void* )(self-> data )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 const char*   HashMap_get__string (HashMap__string*   self, const char*   k) {
@@ -25195,15 +25305,15 @@ void   Vector_push__bool (Vector__bool*   self, bool   x) {
         }
         bool*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( bool* )__glide_palloc((new_cap  *  sizeof( bool )))));
+            (new_data  =  (( bool* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( bool )))));
         } else {
-            (new_data  =  (( bool* )malloc((new_cap  *  sizeof( bool )))));
+            (new_data  =  (( bool* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( bool )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25213,12 +25323,12 @@ void   Vector_push__bool (Vector__bool*   self, bool   x) {
 }
 
 Vector__bool*   Vector_new__bool (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__bool*   v;
     if (arena) {
-        (v  =  (( Vector__bool* )__glide_palloc(sizeof( Vector__bool ))));
+        (v  =  (( Vector__bool* )((void*(*)(int))__glide_palloc)(sizeof( Vector__bool ))));
     } else {
-        (v  =  (( Vector__bool* )malloc(sizeof( Vector__bool ))));
+        (v  =  (( Vector__bool* )((void*(*)(size_t))malloc)(sizeof( Vector__bool ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25240,15 +25350,15 @@ void   Vector_push__BorrowEvent (Vector__BorrowEvent*   self, BorrowEvent   x) {
         }
         BorrowEvent*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( BorrowEvent* )__glide_palloc((new_cap  *  sizeof( BorrowEvent )))));
+            (new_data  =  (( BorrowEvent* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( BorrowEvent )))));
         } else {
-            (new_data  =  (( BorrowEvent* )malloc((new_cap  *  sizeof( BorrowEvent )))));
+            (new_data  =  (( BorrowEvent* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( BorrowEvent )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25350,11 +25460,11 @@ void   HashMap_free__string (HashMap__string*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> keys )));
-        free((( void* )(self-> values )));
-        free((( void* )(self-> occupied )));
+        ((void(*)(void*))free)((( void* )(self-> keys )));
+        ((void(*)(void*))free)((( void* )(self-> values )));
+        ((void(*)(void*))free)((( void* )(self-> occupied )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 void   Vector_free__DiagEntry (Vector__DiagEntry*   self) {
@@ -25362,9 +25472,9 @@ void   Vector_free__DiagEntry (Vector__DiagEntry*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> data )));
+        ((void(*)(void*))free)((( void* )(self-> data )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 void   Vector_free__BorrowEvent (Vector__BorrowEvent*   self) {
@@ -25372,9 +25482,9 @@ void   Vector_free__BorrowEvent (Vector__BorrowEvent*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> data )));
+        ((void(*)(void*))free)((( void* )(self-> data )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 void   HashMap_free__Type (HashMap__Type*   self) {
@@ -25382,11 +25492,11 @@ void   HashMap_free__Type (HashMap__Type*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> keys )));
-        free((( void* )(self-> values )));
-        free((( void* )(self-> occupied )));
+        ((void(*)(void*))free)((( void* )(self-> keys )));
+        ((void(*)(void*))free)((( void* )(self-> values )));
+        ((void(*)(void*))free)((( void* )(self-> occupied )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 void   HashMap_free__bool (HashMap__bool*   self) {
@@ -25394,11 +25504,11 @@ void   HashMap_free__bool (HashMap__bool*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> keys )));
-        free((( void* )(self-> values )));
-        free((( void* )(self-> occupied )));
+        ((void(*)(void*))free)((( void* )(self-> keys )));
+        ((void(*)(void*))free)((( void* )(self-> values )));
+        ((void(*)(void*))free)((( void* )(self-> occupied )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 void   HashMap_free__FnSig (HashMap__FnSig*   self) {
@@ -25406,20 +25516,20 @@ void   HashMap_free__FnSig (HashMap__FnSig*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> keys )));
-        free((( void* )(self-> values )));
-        free((( void* )(self-> occupied )));
+        ((void(*)(void*))free)((( void* )(self-> keys )));
+        ((void(*)(void*))free)((( void* )(self-> values )));
+        ((void(*)(void*))free)((( void* )(self-> occupied )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 HashMap__string*   HashMap_new__string (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__string*   m;
     if (arena) {
-        (m  =  (( HashMap__string* )__glide_palloc(sizeof( HashMap__string ))));
+        (m  =  (( HashMap__string* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__string ))));
     } else {
-        (m  =  (( HashMap__string* )malloc(sizeof( HashMap__string ))));
+        (m  =  (( HashMap__string* )((void*(*)(size_t))malloc)(sizeof( HashMap__string ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -25431,12 +25541,12 @@ HashMap__string*   HashMap_new__string (void) {
 }
 
 Vector__DiagEntry*   Vector_new__DiagEntry (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__DiagEntry*   v;
     if (arena) {
-        (v  =  (( Vector__DiagEntry* )__glide_palloc(sizeof( Vector__DiagEntry ))));
+        (v  =  (( Vector__DiagEntry* )((void*(*)(int))__glide_palloc)(sizeof( Vector__DiagEntry ))));
     } else {
-        (v  =  (( Vector__DiagEntry* )malloc(sizeof( Vector__DiagEntry ))));
+        (v  =  (( Vector__DiagEntry* )((void*(*)(size_t))malloc)(sizeof( Vector__DiagEntry ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25446,12 +25556,12 @@ Vector__DiagEntry*   Vector_new__DiagEntry (void) {
 }
 
 Vector__BorrowEvent*   Vector_new__BorrowEvent (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__BorrowEvent*   v;
     if (arena) {
-        (v  =  (( Vector__BorrowEvent* )__glide_palloc(sizeof( Vector__BorrowEvent ))));
+        (v  =  (( Vector__BorrowEvent* )((void*(*)(int))__glide_palloc)(sizeof( Vector__BorrowEvent ))));
     } else {
-        (v  =  (( Vector__BorrowEvent* )malloc(sizeof( Vector__BorrowEvent ))));
+        (v  =  (( Vector__BorrowEvent* )((void*(*)(size_t))malloc)(sizeof( Vector__BorrowEvent ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25461,12 +25571,12 @@ Vector__BorrowEvent*   Vector_new__BorrowEvent (void) {
 }
 
 HashMap__Type*   HashMap_new__Type (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__Type*   m;
     if (arena) {
-        (m  =  (( HashMap__Type* )__glide_palloc(sizeof( HashMap__Type ))));
+        (m  =  (( HashMap__Type* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__Type ))));
     } else {
-        (m  =  (( HashMap__Type* )malloc(sizeof( HashMap__Type ))));
+        (m  =  (( HashMap__Type* )((void*(*)(size_t))malloc)(sizeof( HashMap__Type ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -25478,12 +25588,12 @@ HashMap__Type*   HashMap_new__Type (void) {
 }
 
 HashMap__FnSig*   HashMap_new__FnSig (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__FnSig*   m;
     if (arena) {
-        (m  =  (( HashMap__FnSig* )__glide_palloc(sizeof( HashMap__FnSig ))));
+        (m  =  (( HashMap__FnSig* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__FnSig ))));
     } else {
-        (m  =  (( HashMap__FnSig* )malloc(sizeof( HashMap__FnSig ))));
+        (m  =  (( HashMap__FnSig* )((void*(*)(size_t))malloc)(sizeof( HashMap__FnSig ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -25510,15 +25620,15 @@ void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x) {
         }
         DiagEntry*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( DiagEntry* )__glide_palloc((new_cap  *  sizeof( DiagEntry )))));
+            (new_data  =  (( DiagEntry* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( DiagEntry )))));
         } else {
-            (new_data  =  (( DiagEntry* )malloc((new_cap  *  sizeof( DiagEntry )))));
+            (new_data  =  (( DiagEntry* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( DiagEntry )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25532,9 +25642,9 @@ void   Vector_free__Stmt (Vector__Stmt*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> data )));
+        ((void(*)(void*))free)((( void* )(self-> data )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k) {
@@ -25563,12 +25673,12 @@ void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v) {
 }
 
 HashMap__bool*   HashMap_new__bool (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__bool*   m;
     if (arena) {
-        (m  =  (( HashMap__bool* )__glide_palloc(sizeof( HashMap__bool ))));
+        (m  =  (( HashMap__bool* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__bool ))));
     } else {
-        (m  =  (( HashMap__bool* )malloc(sizeof( HashMap__bool ))));
+        (m  =  (( HashMap__bool* )((void*(*)(size_t))malloc)(sizeof( HashMap__bool ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -25595,15 +25705,15 @@ void   Vector_push__MacroBinding (Vector__MacroBinding*   self, MacroBinding   x
         }
         MacroBinding*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( MacroBinding* )__glide_palloc((new_cap  *  sizeof( MacroBinding )))));
+            (new_data  =  (( MacroBinding* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( MacroBinding )))));
         } else {
-            (new_data  =  (( MacroBinding* )malloc((new_cap  *  sizeof( MacroBinding )))));
+            (new_data  =  (( MacroBinding* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( MacroBinding )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25621,12 +25731,12 @@ int   Vector_len__MacroParam (Vector__MacroParam*   self) {
 }
 
 Vector__MacroBinding*   Vector_new__MacroBinding (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__MacroBinding*   v;
     if (arena) {
-        (v  =  (( Vector__MacroBinding* )__glide_palloc(sizeof( Vector__MacroBinding ))));
+        (v  =  (( Vector__MacroBinding* )((void*(*)(int))__glide_palloc)(sizeof( Vector__MacroBinding ))));
     } else {
-        (v  =  (( Vector__MacroBinding* )malloc(sizeof( Vector__MacroBinding ))));
+        (v  =  (( Vector__MacroBinding* )((void*(*)(size_t))malloc)(sizeof( Vector__MacroBinding ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25664,15 +25774,15 @@ void   Vector_push__TypeMacro (Vector__TypeMacro*   self, TypeMacro   x) {
         }
         TypeMacro*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( TypeMacro* )__glide_palloc((new_cap  *  sizeof( TypeMacro )))));
+            (new_data  =  (( TypeMacro* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( TypeMacro )))));
         } else {
-            (new_data  =  (( TypeMacro* )malloc((new_cap  *  sizeof( TypeMacro )))));
+            (new_data  =  (( TypeMacro* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( TypeMacro )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25699,12 +25809,12 @@ void   HashMap_insert__Stmt (HashMap__Stmt*   self, const char*   k, Stmt   v) {
 }
 
 Vector__TypeMacro*   Vector_new__TypeMacro (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__TypeMacro*   v;
     if (arena) {
-        (v  =  (( Vector__TypeMacro* )__glide_palloc(sizeof( Vector__TypeMacro ))));
+        (v  =  (( Vector__TypeMacro* )((void*(*)(int))__glide_palloc)(sizeof( Vector__TypeMacro ))));
     } else {
-        (v  =  (( Vector__TypeMacro* )malloc(sizeof( Vector__TypeMacro ))));
+        (v  =  (( Vector__TypeMacro* )((void*(*)(size_t))malloc)(sizeof( Vector__TypeMacro ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25714,12 +25824,12 @@ Vector__TypeMacro*   Vector_new__TypeMacro (void) {
 }
 
 HashMap__Stmt*   HashMap_new__Stmt (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     HashMap__Stmt*   m;
     if (arena) {
-        (m  =  (( HashMap__Stmt* )__glide_palloc(sizeof( HashMap__Stmt ))));
+        (m  =  (( HashMap__Stmt* )((void*(*)(int))__glide_palloc)(sizeof( HashMap__Stmt ))));
     } else {
-        (m  =  (( HashMap__Stmt* )malloc(sizeof( HashMap__Stmt ))));
+        (m  =  (( HashMap__Stmt* )((void*(*)(size_t))malloc)(sizeof( HashMap__Stmt ))));
     }
     ((m-> keys )  =  NULL);
     ((m-> values )  =  NULL);
@@ -25759,15 +25869,15 @@ void   Vector_push__SelectArm (Vector__SelectArm*   self, SelectArm   x) {
         }
         SelectArm*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( SelectArm* )__glide_palloc((new_cap  *  sizeof( SelectArm )))));
+            (new_data  =  (( SelectArm* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( SelectArm )))));
         } else {
-            (new_data  =  (( SelectArm* )malloc((new_cap  *  sizeof( SelectArm )))));
+            (new_data  =  (( SelectArm* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( SelectArm )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25777,12 +25887,12 @@ void   Vector_push__SelectArm (Vector__SelectArm*   self, SelectArm   x) {
 }
 
 Vector__SelectArm*   Vector_new__SelectArm (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__SelectArm*   v;
     if (arena) {
-        (v  =  (( Vector__SelectArm* )__glide_palloc(sizeof( Vector__SelectArm ))));
+        (v  =  (( Vector__SelectArm* )((void*(*)(int))__glide_palloc)(sizeof( Vector__SelectArm ))));
     } else {
-        (v  =  (( Vector__SelectArm* )malloc(sizeof( Vector__SelectArm ))));
+        (v  =  (( Vector__SelectArm* )((void*(*)(size_t))malloc)(sizeof( Vector__SelectArm ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25799,15 +25909,15 @@ void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x) {
         }
         MatchArm*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( MatchArm* )__glide_palloc((new_cap  *  sizeof( MatchArm )))));
+            (new_data  =  (( MatchArm* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( MatchArm )))));
         } else {
-            (new_data  =  (( MatchArm* )malloc((new_cap  *  sizeof( MatchArm )))));
+            (new_data  =  (( MatchArm* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( MatchArm )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25817,12 +25927,12 @@ void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x) {
 }
 
 Vector__MatchArm*   Vector_new__MatchArm (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__MatchArm*   v;
     if (arena) {
-        (v  =  (( Vector__MatchArm* )__glide_palloc(sizeof( Vector__MatchArm ))));
+        (v  =  (( Vector__MatchArm* )((void*(*)(int))__glide_palloc)(sizeof( Vector__MatchArm ))));
     } else {
-        (v  =  (( Vector__MatchArm* )malloc(sizeof( Vector__MatchArm ))));
+        (v  =  (( Vector__MatchArm* )((void*(*)(size_t))malloc)(sizeof( Vector__MatchArm ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25839,15 +25949,15 @@ void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
         }
         Expr*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( Expr* )__glide_palloc((new_cap  *  sizeof( Expr )))));
+            (new_data  =  (( Expr* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Expr )))));
         } else {
-            (new_data  =  (( Expr* )malloc((new_cap  *  sizeof( Expr )))));
+            (new_data  =  (( Expr* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Expr )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25888,15 +25998,15 @@ void   Vector_push__EnumVariant (Vector__EnumVariant*   self, EnumVariant   x) {
         }
         EnumVariant*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( EnumVariant* )__glide_palloc((new_cap  *  sizeof( EnumVariant )))));
+            (new_data  =  (( EnumVariant* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( EnumVariant )))));
         } else {
-            (new_data  =  (( EnumVariant* )malloc((new_cap  *  sizeof( EnumVariant )))));
+            (new_data  =  (( EnumVariant* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( EnumVariant )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25913,15 +26023,15 @@ void   Vector_push__Type (Vector__Type*   self, Type   x) {
         }
         Type*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( Type* )__glide_palloc((new_cap  *  sizeof( Type )))));
+            (new_data  =  (( Type* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Type )))));
         } else {
-            (new_data  =  (( Type* )malloc((new_cap  *  sizeof( Type )))));
+            (new_data  =  (( Type* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Type )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25931,12 +26041,12 @@ void   Vector_push__Type (Vector__Type*   self, Type   x) {
 }
 
 Vector__Type*   Vector_new__Type (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__Type*   v;
     if (arena) {
-        (v  =  (( Vector__Type* )__glide_palloc(sizeof( Vector__Type ))));
+        (v  =  (( Vector__Type* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Type ))));
     } else {
-        (v  =  (( Vector__Type* )malloc(sizeof( Vector__Type ))));
+        (v  =  (( Vector__Type* )((void*(*)(size_t))malloc)(sizeof( Vector__Type ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25946,12 +26056,12 @@ Vector__Type*   Vector_new__Type (void) {
 }
 
 Vector__EnumVariant*   Vector_new__EnumVariant (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__EnumVariant*   v;
     if (arena) {
-        (v  =  (( Vector__EnumVariant* )__glide_palloc(sizeof( Vector__EnumVariant ))));
+        (v  =  (( Vector__EnumVariant* )((void*(*)(int))__glide_palloc)(sizeof( Vector__EnumVariant ))));
     } else {
-        (v  =  (( Vector__EnumVariant* )malloc(sizeof( Vector__EnumVariant ))));
+        (v  =  (( Vector__EnumVariant* )((void*(*)(size_t))malloc)(sizeof( Vector__EnumVariant ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -25968,15 +26078,15 @@ void   Vector_push__Field (Vector__Field*   self, Field   x) {
         }
         Field*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( Field* )__glide_palloc((new_cap  *  sizeof( Field )))));
+            (new_data  =  (( Field* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Field )))));
         } else {
-            (new_data  =  (( Field* )malloc((new_cap  *  sizeof( Field )))));
+            (new_data  =  (( Field* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Field )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -25986,12 +26096,12 @@ void   Vector_push__Field (Vector__Field*   self, Field   x) {
 }
 
 Vector__Field*   Vector_new__Field (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__Field*   v;
     if (arena) {
-        (v  =  (( Vector__Field* )__glide_palloc(sizeof( Vector__Field ))));
+        (v  =  (( Vector__Field* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Field ))));
     } else {
-        (v  =  (( Vector__Field* )malloc(sizeof( Vector__Field ))));
+        (v  =  (( Vector__Field* )((void*(*)(size_t))malloc)(sizeof( Vector__Field ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -26008,15 +26118,15 @@ void   Vector_push__Param (Vector__Param*   self, Param   x) {
         }
         Param*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( Param* )__glide_palloc((new_cap  *  sizeof( Param )))));
+            (new_data  =  (( Param* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Param )))));
         } else {
-            (new_data  =  (( Param* )malloc((new_cap  *  sizeof( Param )))));
+            (new_data  =  (( Param* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Param )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -26026,12 +26136,12 @@ void   Vector_push__Param (Vector__Param*   self, Param   x) {
 }
 
 Vector__Param*   Vector_new__Param (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__Param*   v;
     if (arena) {
-        (v  =  (( Vector__Param* )__glide_palloc(sizeof( Vector__Param ))));
+        (v  =  (( Vector__Param* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Param ))));
     } else {
-        (v  =  (( Vector__Param* )malloc(sizeof( Vector__Param ))));
+        (v  =  (( Vector__Param* )((void*(*)(size_t))malloc)(sizeof( Vector__Param ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -26048,15 +26158,15 @@ void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x) {
         }
         MacroParam*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( MacroParam* )__glide_palloc((new_cap  *  sizeof( MacroParam )))));
+            (new_data  =  (( MacroParam* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( MacroParam )))));
         } else {
-            (new_data  =  (( MacroParam* )malloc((new_cap  *  sizeof( MacroParam )))));
+            (new_data  =  (( MacroParam* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( MacroParam )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -26066,12 +26176,12 @@ void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x) {
 }
 
 Vector__MacroParam*   Vector_new__MacroParam (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__MacroParam*   v;
     if (arena) {
-        (v  =  (( Vector__MacroParam* )__glide_palloc(sizeof( Vector__MacroParam ))));
+        (v  =  (( Vector__MacroParam* )((void*(*)(int))__glide_palloc)(sizeof( Vector__MacroParam ))));
     } else {
-        (v  =  (( Vector__MacroParam* )malloc(sizeof( Vector__MacroParam ))));
+        (v  =  (( Vector__MacroParam* )((void*(*)(size_t))malloc)(sizeof( Vector__MacroParam ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -26088,15 +26198,15 @@ void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x) {
         }
         Stmt*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( Stmt* )__glide_palloc((new_cap  *  sizeof( Stmt )))));
+            (new_data  =  (( Stmt* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Stmt )))));
         } else {
-            (new_data  =  (( Stmt* )malloc((new_cap  *  sizeof( Stmt )))));
+            (new_data  =  (( Stmt* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Stmt )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -26106,12 +26216,12 @@ void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x) {
 }
 
 Vector__Stmt*   Vector_new__Stmt (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__Stmt*   v;
     if (arena) {
-        (v  =  (( Vector__Stmt* )__glide_palloc(sizeof( Vector__Stmt ))));
+        (v  =  (( Vector__Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Stmt ))));
     } else {
-        (v  =  (( Vector__Stmt* )malloc(sizeof( Vector__Stmt ))));
+        (v  =  (( Vector__Stmt* )((void*(*)(size_t))malloc)(sizeof( Vector__Stmt ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -26128,15 +26238,15 @@ void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x) {
         }
         ParseDiag*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( ParseDiag* )__glide_palloc((new_cap  *  sizeof( ParseDiag )))));
+            (new_data  =  (( ParseDiag* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( ParseDiag )))));
         } else {
-            (new_data  =  (( ParseDiag* )malloc((new_cap  *  sizeof( ParseDiag )))));
+            (new_data  =  (( ParseDiag* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( ParseDiag )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -26150,18 +26260,18 @@ void   Vector_free__ParseDiag (Vector__ParseDiag*   self) {
         return;
     }
     if (((self-> cap )  >  0)) {
-        free((( void* )(self-> data )));
+        ((void(*)(void*))free)((( void* )(self-> data )));
     }
-    free((( void* )self));
+    ((void(*)(void*))free)((( void* )self));
 }
 
 Vector__ParseDiag*   Vector_new__ParseDiag (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__ParseDiag*   v;
     if (arena) {
-        (v  =  (( Vector__ParseDiag* )__glide_palloc(sizeof( Vector__ParseDiag ))));
+        (v  =  (( Vector__ParseDiag* )((void*(*)(int))__glide_palloc)(sizeof( Vector__ParseDiag ))));
     } else {
-        (v  =  (( Vector__ParseDiag* )malloc(sizeof( Vector__ParseDiag ))));
+        (v  =  (( Vector__ParseDiag* )((void*(*)(size_t))malloc)(sizeof( Vector__ParseDiag ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -26171,12 +26281,12 @@ Vector__ParseDiag*   Vector_new__ParseDiag (void) {
 }
 
 Vector__Expr*   Vector_new__Expr (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__Expr*   v;
     if (arena) {
-        (v  =  (( Vector__Expr* )__glide_palloc(sizeof( Vector__Expr ))));
+        (v  =  (( Vector__Expr* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Expr ))));
     } else {
-        (v  =  (( Vector__Expr* )malloc(sizeof( Vector__Expr ))));
+        (v  =  (( Vector__Expr* )((void*(*)(size_t))malloc)(sizeof( Vector__Expr ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -26193,15 +26303,15 @@ void   Vector_push__EnvKV (Vector__EnvKV*   self, EnvKV   x) {
         }
         EnvKV*   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( EnvKV* )__glide_palloc((new_cap  *  sizeof( EnvKV )))));
+            (new_data  =  (( EnvKV* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( EnvKV )))));
         } else {
-            (new_data  =  (( EnvKV* )malloc((new_cap  *  sizeof( EnvKV )))));
+            (new_data  =  (( EnvKV* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( EnvKV )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -26211,12 +26321,12 @@ void   Vector_push__EnvKV (Vector__EnvKV*   self, EnvKV   x) {
 }
 
 Vector__EnvKV*   Vector_new__EnvKV (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__EnvKV*   v;
     if (arena) {
-        (v  =  (( Vector__EnvKV* )__glide_palloc(sizeof( Vector__EnvKV ))));
+        (v  =  (( Vector__EnvKV* )((void*(*)(int))__glide_palloc)(sizeof( Vector__EnvKV ))));
     } else {
-        (v  =  (( Vector__EnvKV* )malloc(sizeof( Vector__EnvKV ))));
+        (v  =  (( Vector__EnvKV* )((void*(*)(size_t))malloc)(sizeof( Vector__EnvKV ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
@@ -26241,15 +26351,15 @@ void   Vector_push__string (Vector__string*   self, const char*   x) {
         }
         const char**   new_data;
         if ((self-> is_arena )) {
-            (new_data  =  (( const char** )__glide_palloc((new_cap  *  sizeof( const char* )))));
+            (new_data  =  (( const char** )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( const char* )))));
         } else {
-            (new_data  =  (( const char** )malloc((new_cap  *  sizeof( const char* )))));
+            (new_data  =  (( const char** )((void*(*)(size_t))malloc)((new_cap  *  sizeof( const char* )))));
         }
         for (int   i = 0; (i  <  (self-> len )); i++) {
             (new_data[i]  =  (self-> data )[i]);
         }
         if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            free((( void* )(self-> data )));
+            ((void(*)(void*))free)((( void* )(self-> data )));
         }
         ((self-> data )  =  new_data);
         ((self-> cap )  =  new_cap);
@@ -26259,12 +26369,12 @@ void   Vector_push__string (Vector__string*   self, const char*   x) {
 }
 
 Vector__string*   Vector_new__string (void) {
-    bool   arena = (__glide_palloc_active()  !=  0);
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
     Vector__string*   v;
     if (arena) {
-        (v  =  (( Vector__string* )__glide_palloc(sizeof( Vector__string ))));
+        (v  =  (( Vector__string* )((void*(*)(int))__glide_palloc)(sizeof( Vector__string ))));
     } else {
-        (v  =  (( Vector__string* )malloc(sizeof( Vector__string ))));
+        (v  =  (( Vector__string* )((void*(*)(size_t))malloc)(sizeof( Vector__string ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
