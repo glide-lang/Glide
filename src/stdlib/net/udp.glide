@@ -272,16 +272,4 @@ impl UdpSocket {
     }
 }
 
-c_raw! {
-    // Build a Glide string (NUL-terminated heap copy) from a byte buffer
-    // of arbitrary content. Inserts a NUL at position n, so embedded
-    // NULs in the data WILL truncate when read via string.len(). Use
-    // ByteBuffer if you need binary-safe transport.
-    static const char* _bytes_to_string(unsigned char* p, int n) {
-        char* out = (char*)malloc((size_t)(n + 1));
-        memcpy(out, p, (size_t)n);
-        out[n] = 0;
-        return out;
-    }
-}
 extern fn _bytes_to_string(p: *u8, n: int) -> string;

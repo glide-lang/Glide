@@ -1,0 +1,229 @@
+// Outbound TCP. Connects a stream socket to a remote address.
+// Complements the existing `Listener` / `Conn` (server side) and the
+// runtime's async accept/read/write reactor with a client-side primitive.
+//
+// ```glide
+// import stdlib::net::tcp::*;
+// import stdlib::net::ip::*;
+//
+// let dst: *SocketAddr = SocketAddr::parse("1.2.3.4:80").val;
+// let r: !*TcpStream = TcpStream::connect(dst);
+// if !r.ok { println!(r.err); return 1; }
+// let s: *TcpStream = r.val;
+// s.write_all("hello\n");
+// s.close();
+// ```
+
+import stdlib::net::ip::*;
+import stdlib::net::dns::*;
+
+c_raw! {
+    #ifndef GLIDE_NET_TCP_HELPERS_DEFINED
+    #define GLIDE_NET_TCP_HELPERS_DEFINED
+    #ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    typedef SOCKET __glide_tcp_h;
+    #define __GLIDE_TCP_INVALID INVALID_SOCKET
+    #else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <unistd.h>
+    typedef int __glide_tcp_h;
+    #define __GLIDE_TCP_INVALID (-1)
+    #endif
+    #include <string.h>
+    #include <stdint.h>
+
+    static int __glide_tcpc_init_done = 0;
+    static void __glide_tcpc_init(void) {
+        if (__glide_tcpc_init_done) return;
+        #ifdef _WIN32
+        WSADATA w;
+        WSAStartup(MAKEWORD(2,2), &w);
+        #endif
+        __glide_tcpc_init_done = 1;
+    }
+
+    static int64_t __glide_tcp_connect(int family, int64_t v4,
+                                        int64_t v6_hi, int64_t v6_lo, int port) {
+        __glide_tcpc_init();
+        __glide_tcp_h s;
+        if (family == 6) {
+            s = socket(AF_INET6, SOCK_STREAM, 0);
+            if (s == __GLIDE_TCP_INVALID) return -1;
+            struct sockaddr_in6 a;
+            memset(&a, 0, sizeof(a));
+            a.sin6_family = AF_INET6;
+            a.sin6_port = htons((uint16_t)port);
+            unsigned char* p = (unsigned char*)&a.sin6_addr;
+            for (int i = 0; i < 8; i++) p[i]   = (unsigned char)((v6_hi >> (56 - i*8)) & 0xff);
+            for (int i = 0; i < 8; i++) p[8+i] = (unsigned char)((v6_lo >> (56 - i*8)) & 0xff);
+            if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
+                #ifdef _WIN32
+                closesocket(s);
+                #else
+                close(s);
+                #endif
+                return -1;
+            }
+        } else {
+            s = socket(AF_INET, SOCK_STREAM, 0);
+            if (s == __GLIDE_TCP_INVALID) return -1;
+            struct sockaddr_in a;
+            memset(&a, 0, sizeof(a));
+            a.sin_family = AF_INET;
+            a.sin_port = htons((uint16_t)port);
+            a.sin_addr.s_addr = htonl((uint32_t)v4);
+            if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
+                #ifdef _WIN32
+                closesocket(s);
+                #else
+                close(s);
+                #endif
+                return -1;
+            }
+        }
+        return (int64_t)s;
+    }
+
+    static int64_t __glide_tcp_send(int64_t fd, const char* data, int n) {
+        return (int64_t)send((__glide_tcp_h)fd, data, n, 0);
+    }
+
+    static int64_t __glide_tcp_recv(int64_t fd, void* buf, int max) {
+        return (int64_t)recv((__glide_tcp_h)fd, (char*)buf, max, 0);
+    }
+
+    static void __glide_tcp_close_h(int64_t fd) {
+        #ifdef _WIN32
+        closesocket((__glide_tcp_h)fd);
+        #else
+        close((__glide_tcp_h)fd);
+        #endif
+    }
+
+    // Build a NUL-terminated Glide string from an arbitrary byte buffer.
+    // Embedded NULs in the data will truncate the visible length under
+    // strlen — for binary-safe transport use ByteBuffer instead. Lives
+    // here (not static) so net::udp can share the symbol via extern.
+    #ifndef GLIDE_BYTES_TO_STRING_DEFINED
+    #define GLIDE_BYTES_TO_STRING_DEFINED
+    const char* _bytes_to_string(unsigned char* p, int n) {
+        char* out = (char*)malloc((size_t)(n + 1));
+        memcpy(out, p, (size_t)n);
+        out[n] = 0;
+        return out;
+    }
+    #endif
+    #endif
+}
+
+extern fn __glide_tcp_connect(family: int, v4: i64, v6_hi: i64, v6_lo: i64, port: int) -> i64;
+extern fn __glide_tcp_send(fd: i64, data: string, n: int) -> i64;
+extern fn __glide_tcp_recv(fd: i64, buf: *void, max: int) -> i64;
+extern fn __glide_tcp_close_h(fd: i64);
+extern fn _bytes_to_string(p: *u8, n: int) -> string;
+
+pub struct TcpStream {
+    pub fd: i64,
+}
+
+impl TcpStream {
+    /// Connect to `dst`. Synchronous on the calling coro — the worker
+    /// keeps running other coros while the kernel waits on the
+    /// handshake.
+    pub fn connect(dst: *SocketAddr) -> !*TcpStream {
+        let mut family: int = 4;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        if dst.ip.is_v4() {
+            family = 4;
+            v4 = dst.ip.v4 as i64;
+        } else {
+            family = 6;
+            hi = dst.ip.v6_hi;
+            lo = dst.ip.v6_lo;
+        }
+        let fd: i64 = __glide_tcp_connect(family, v4, hi, lo, dst.port);
+        if fd < 0 { return err("tcp: connect failed"); }
+        let s: *TcpStream = malloc(sizeof(TcpStream)) as *TcpStream;
+        s.fd = fd;
+        return ok(s);
+    }
+
+    /// Resolve `host` via DNS, then connect to the first reachable
+    /// address on `port`. Tries every address in order.
+    pub fn connect_host(host: string, port: int) -> !*TcpStream {
+        let r: !*Vector<*IpAddr> = resolve(host);
+        if !r.ok { return err(r.err); }
+        let v: *Vector<*IpAddr> = r.val;
+        if v.len() == 0 { return err("tcp: no addresses for ".concat(host)); }
+        let mut last_err: string = "tcp: connect failed";
+        for let i: int = 0; i < v.len(); i++ {
+            let ip: *IpAddr = v.get(i);
+            let dst: *SocketAddr = SocketAddr::new(ip, port);
+            let r2: !*TcpStream = TcpStream::connect(dst);
+            if r2.ok { return ok(r2.val); }
+            last_err = r2.err;
+        }
+        return err(last_err);
+    }
+
+    /// Write `data` once. May write fewer bytes than requested under
+    /// pressure — use `write_all` for a loop that retries until every
+    /// byte is sent.
+    pub fn write(self: *TcpStream, data: string) -> !int {
+        let n: i64 = __glide_tcp_send(self.fd, data, data.len());
+        if n < 0 { return err("tcp: send failed"); }
+        return ok(n as int);
+    }
+
+    /// Write every byte of `data`. Loops on partial writes; only
+    /// returns err if the OS reports an unrecoverable error.
+    pub fn write_all(self: *TcpStream, data: string) -> !int {
+        let n: int = data.len();
+        let mut sent: int = 0;
+        while sent < n {
+            let chunk: string = data.substring(sent, n);
+            let r: !int = self.write(chunk);
+            if !r.ok { return err(r.err); }
+            if r.val == 0 { return err("tcp: write returned 0"); }
+            sent = sent + r.val;
+        }
+        return ok(n);
+    }
+
+    /// Read up to `max` bytes. Returns:
+    ///   ok(n>0) — bytes read
+    ///   ok(0)   — peer closed cleanly
+    ///   err(_)  — error
+    pub fn read(self: *TcpStream, max: int) -> !string {
+        let buf: *u8 = malloc(max) as *u8;
+        let n: i64 = __glide_tcp_recv(self.fd, buf as *void, max);
+        if n < 0 { free(buf as *void); return err("tcp: recv failed"); }
+        let s: string = _bytes_to_string(buf, n as int);
+        free(buf as *void);
+        return ok(s);
+    }
+
+    /// Read until the connection closes. Useful for HTTP/1.0-style
+    /// "read everything" responses or for simple line protocols
+    /// terminated by EOF.
+    pub fn read_to_end(self: *TcpStream) -> !string {
+        let mut out: string = "";
+        while true {
+            let r: !string = self.read(4096);
+            if !r.ok { return err(r.err); }
+            if r.val.len() == 0 { return ok(out); }
+            out = out.concat(r.val);
+        }
+        return ok(out);
+    }
+
+    pub fn close(self: *TcpStream) {
+        __glide_tcp_close_h(self.fd);
+        free(self as *void);
+    }
+}

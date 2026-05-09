@@ -1,0 +1,281 @@
+// HTTP/1.1 client over plain TCP. v1 supports `http://` only — `https://`
+// lands once stdlib::net::tls is wired (Phase B). The transport is
+// stdlib::net::tcp::TcpStream.
+//
+// ```glide
+// import stdlib::http::client::*;
+//
+// let r: !*HttpResponse = http_get("http://example.com/");
+// if r.ok { println!(r.val.body); }
+//
+// // Custom client with default headers / timeout knobs.
+// let c: *HttpClient = HttpClient::new();
+// c.user_agent = "myapp/0.1";
+// let resp: !*HttpResponse = c.get("http://localhost:8080/health");
+// ```
+
+import stdlib::net::tcp::*;
+import stdlib::net::ip::*;
+import stdlib::http::*;
+
+/// A request being assembled — mutable holder; not the same shape as
+/// the server-side `HttpRequest` (which is parsed-from-wire).
+pub struct HttpClientRequest {
+    pub method: string,
+    pub url: string,
+    pub headers: string,        // raw "Name: Value\r\n" lines
+    pub body: string,
+}
+
+impl HttpClientRequest {
+    pub fn new(method: string, url: string) -> *HttpClientRequest {
+        let r: *HttpClientRequest = malloc(sizeof(HttpClientRequest)) as *HttpClientRequest;
+        r.method = method;
+        r.url = url;
+        r.headers = "";
+        r.body = "";
+        return r;
+    }
+
+    /// Append a header. Multiple calls produce multiple lines (no
+    /// dedup — last wins is the user's responsibility).
+    pub fn set(self: *HttpClientRequest, name: string, value: string) {
+        self.headers = self.headers.concat(name).concat(": ").concat(value).concat("\r\n");
+    }
+
+    /// Set the body and the matching `Content-Length` header.
+    pub fn body_str(self: *HttpClientRequest, s: string) {
+        self.body = s;
+        self.set("Content-Length", _hcli_itos(s.len()));
+    }
+}
+
+/// Persistent client config. Keep one around to share defaults across
+/// many requests; for one-shot calls use the `http_get` / `http_post*`
+/// free functions which build a default client per call.
+pub struct HttpClient {
+    pub user_agent: string,
+    pub max_redirects: int,
+    // Future: pool, timeout, jar (cookie jar), tls_config.
+}
+
+impl HttpClient {
+    pub fn new() -> *HttpClient {
+        let c: *HttpClient = malloc(sizeof(HttpClient)) as *HttpClient;
+        c.user_agent = "glide/0.1";
+        c.max_redirects = 5;
+        return c;
+    }
+
+    /// Send `req` and return the parsed response.
+    pub fn do(self: *HttpClient, req: *HttpClientRequest) -> !*HttpResponse {
+        let u: !*ParsedUrl = _hcli_parse_url(req.url);
+        if !u.ok { return err(u.err); }
+        let url: *ParsedUrl = u.val;
+        if !url.scheme.eq("http") {
+            return err("http_client: only `http://` is supported in v1 (got `".concat(url.scheme).concat("`)"));
+        }
+
+        // Compose request line + default headers + caller headers + body.
+        let mut wire: string = req.method.concat(" ").concat(url.path).concat(" HTTP/1.1\r\n");
+        wire = wire.concat("Host: ").concat(url.host_header()).concat("\r\n");
+        wire = wire.concat("User-Agent: ").concat(self.user_agent).concat("\r\n");
+        wire = wire.concat("Accept: */*\r\n");
+        wire = wire.concat("Connection: close\r\n");
+        wire = wire.concat(req.headers);
+        wire = wire.concat("\r\n");
+        wire = wire.concat(req.body);
+
+        // Connect + send + read-until-close (Connection: close above).
+        let s: !*TcpStream = TcpStream::connect_host(url.host, url.port);
+        if !s.ok { return err(s.err); }
+        let stream: *TcpStream = s.val;
+        let w: !int = stream.write_all(wire);
+        if !w.ok { stream.close(); return err(w.err); }
+        let raw: !string = stream.read_to_end();
+        stream.close();
+        if !raw.ok { return err(raw.err); }
+        return _hcli_parse_response(raw.val);
+    }
+
+    pub fn get(self: *HttpClient, url: string) -> !*HttpResponse {
+        let req: *HttpClientRequest = HttpClientRequest::new("GET", url);
+        let r: !*HttpResponse = self.do(req);
+        free(req as *void);
+        return r;
+    }
+
+    pub fn post(self: *HttpClient, url: string, body: string,
+                content_type: string) -> !*HttpResponse {
+        let req: *HttpClientRequest = HttpClientRequest::new("POST", url);
+        req.set("Content-Type", content_type);
+        req.body_str(body);
+        let r: !*HttpResponse = self.do(req);
+        free(req as *void);
+        return r;
+    }
+
+    pub fn post_json(self: *HttpClient, url: string, body: string) -> !*HttpResponse {
+        return self.post(url, body, "application/json");
+    }
+
+    pub fn put(self: *HttpClient, url: string, body: string,
+               content_type: string) -> !*HttpResponse {
+        let req: *HttpClientRequest = HttpClientRequest::new("PUT", url);
+        req.set("Content-Type", content_type);
+        req.body_str(body);
+        let r: !*HttpResponse = self.do(req);
+        free(req as *void);
+        return r;
+    }
+
+    pub fn delete(self: *HttpClient, url: string) -> !*HttpResponse {
+        let req: *HttpClientRequest = HttpClientRequest::new("DELETE", url);
+        let r: !*HttpResponse = self.do(req);
+        free(req as *void);
+        return r;
+    }
+}
+
+// ---- one-shot free fns (default client) ----
+
+pub fn http_get(url: string) -> !*HttpResponse {
+    let c: *HttpClient = HttpClient::new();
+    let r: !*HttpResponse = c.get(url);
+    free(c as *void);
+    return r;
+}
+
+pub fn http_post_json(url: string, body: string) -> !*HttpResponse {
+    let c: *HttpClient = HttpClient::new();
+    let r: !*HttpResponse = c.post_json(url, body);
+    free(c as *void);
+    return r;
+}
+
+// ---- URL parser (internal, http://-only) ----
+
+pub struct ParsedUrl {
+    pub scheme: string,
+    pub host:   string,
+    pub port:   int,
+    pub path:   string,
+}
+
+impl ParsedUrl {
+    /// Format the `Host:` header — omits the port when it's the
+    /// scheme's default (80 for http, 443 for https).
+    pub fn host_header(self: *ParsedUrl) -> string {
+        let mut default_port: int = 80;
+        if self.scheme.eq("https") { default_port = 443; }
+        if self.port == default_port { return self.host; }
+        return self.host.concat(":").concat(_hcli_itos(self.port));
+    }
+}
+
+fn _hcli_parse_url(s: string) -> !*ParsedUrl {
+    // scheme://
+    let scheme_end: int = s.index_of("://");
+    if scheme_end < 0 { return err("url: missing scheme"); }
+    let scheme: string = s.substring(0, scheme_end);
+    let rest: string = s.substring(scheme_end + 3, s.len());
+
+    // Find the first slash that ends authority.
+    let mut slash: int = rest.index_of("/");
+    if slash < 0 { slash = rest.len(); }
+    let authority: string = rest.substring(0, slash);
+    let mut path: string = rest.substring(slash, rest.len());
+    if path.eq("") { path = "/"; }
+
+    // host:port split (only the last `:` — IPv6 literals would need
+    // bracket-aware parsing; a v6 host is wrapped in `[...]` per RFC 3986).
+    let mut host: string = authority;
+    let mut port: int = 80;
+    if scheme.eq("https") { port = 443; }
+    if authority.len() > 0 && authority.at(0).to_int() == 91 {
+        // [v6]:port
+        let close: int = authority.index_of("]");
+        if close < 0 { return err("url: missing ']' in v6 host"); }
+        host = authority.substring(1, close);
+        if close + 1 < authority.len() && authority.at(close + 1).to_int() == 58 {
+            let p_s: string = authority.substring(close + 2, authority.len());
+            let pr: !int = p_s.try_parse_int();
+            if !pr.ok { return err("url: bad port"); }
+            port = pr.val;
+        }
+    } else {
+        let colon: int = _hcli_last_colon(authority);
+        if colon >= 0 {
+            host = authority.substring(0, colon);
+            let p_s: string = authority.substring(colon + 1, authority.len());
+            let pr: !int = p_s.try_parse_int();
+            if !pr.ok { return err("url: bad port"); }
+            port = pr.val;
+        }
+    }
+
+    let u: *ParsedUrl = malloc(sizeof(ParsedUrl)) as *ParsedUrl;
+    u.scheme = scheme;
+    u.host = host;
+    u.port = port;
+    u.path = path;
+    return ok(u);
+}
+
+fn _hcli_last_colon(s: string) -> int {
+    let mut at: int = -1;
+    for let i: int = 0; i < s.len(); i++ {
+        if s.at(i).to_int() == 58 { at = i; }
+    }
+    return at;
+}
+
+// ---- response parser ----
+
+fn _hcli_parse_response(raw: string) -> !*HttpResponse {
+    let head_end: int = raw.index_of("\r\n\r\n");
+    if head_end < 0 { return err("http_client: malformed response (no header terminator)"); }
+    let head: string = raw.substring(0, head_end);
+    let body: string = raw.substring(head_end + 4, raw.len());
+
+    let lines: *Vector<string> = head.split("\r\n");
+    if lines.len() == 0 { return err("http_client: empty header"); }
+    let status_line: string = lines.get(0);
+    // "HTTP/1.1 200 OK"
+    let p1: int = status_line.index_of(" ");
+    if p1 < 0 { return err("http_client: malformed status line"); }
+    let after: string = status_line.substring(p1 + 1, status_line.len());
+    let p2: int = after.index_of(" ");
+    let mut code_s: string = after;
+    if p2 >= 0 { code_s = after.substring(0, p2); }
+    let cr: !int = code_s.try_parse_int();
+    if !cr.ok { return err("http_client: bad status code"); }
+
+    // Headers block: every line after the status line, joined with \r\n.
+    let mut hdr: string = "";
+    for let i: int = 1; i < lines.len(); i++ {
+        if hdr.len() > 0 { hdr = hdr.concat("\r\n"); }
+        hdr = hdr.concat(lines.get(i));
+    }
+
+    let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
+    r.status = cr.val;
+    r.headers_block = hdr;
+    r.body = body;
+    return ok(r);
+}
+
+fn _hcli_itos(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut x: int = n;
+    let mut neg: bool = false;
+    if x < 0 { neg = true; x = 0 - x; }
+    let mut s: string = "";
+    while x > 0 {
+        let d: int = x % 10;
+        s = ((48 + d) as char).to_string().concat(s);
+        x = x / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}
