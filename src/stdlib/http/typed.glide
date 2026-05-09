@@ -59,12 +59,22 @@ pub struct Json<T> {
     pub val: T,
 }
 
-/// One-step from typed value to HttpResponse: serialises `v.to_json()`
-/// + stamps `Content-Type: application/json` + 200 status. Free fn
-/// (instead of a `Json::respond` static method) because Glide's
-/// monomorphizer doesn't yet propagate the substituted T through a
-/// chained `Json::wrap(v).into_response()` — calling `to_json`
-/// directly here sidesteps that entirely.
+impl<T: JsonBind> Json<T> {
+    /// Wrap a typed value. Pair with `into_response()` to drop into
+    /// HttpResponse, or with `json_respond` for the one-liner.
+    ///
+    /// ```glide
+    /// let r: HttpResponse = Json::wrap(my_struct).into_response();
+    /// ```
+    pub fn wrap(v: T) -> Json<T> {
+        return Json { val: v };
+    }
+}
+
+/// One-step from typed value to HttpResponse via the `IntoResponse`
+/// trait. Equivalent to `Json::wrap(v).into_response()` but spelt as
+/// a free fn so the chained dispatch monomorphizes cleanly across
+/// the call boundary.
 ///
 /// ```glide
 /// fn create(req: *HttpRequest) -> HttpResponse {
@@ -73,7 +83,7 @@ pub struct Json<T> {
 /// }
 /// ```
 pub fn json_respond<T: JsonBind>(v: T) -> HttpResponse {
-    return HttpResponse::ok().json_of(v.to_json());
+    return Json::wrap(v).into_response();
 }
 
 // ---- IntoResponse trait -------------------------------------------------
