@@ -1,0 +1,213 @@
+import stdlib::testing::*;
+import stdlib::argparse::*;
+
+fn _setup() -> *ArgParser {
+    let p: *ArgParser = ArgParser::new("test", "");
+    p.add_string("name", "n", "world", "who");
+    p.add_int("count", "c", 1, "n");
+    p.add_bool("verbose", "v", false, "verbose");
+    return p;
+}
+
+fn _toks() -> *Vector<string> { return Vector::new(); }
+
+fn test_defaults_when_no_args() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_str_eq!(p.get_string("name"), "world");
+    assert_eq!(p.get_int("count"), 1);
+    assert_not!(p.get_bool("verbose"));
+    return 0;
+}
+
+fn test_long_with_equals() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--name=alice");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_str_eq!(p.get_string("name"), "alice");
+    return 0;
+}
+
+fn test_long_with_space() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--name"); toks.push("bob");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_str_eq!(p.get_string("name"), "bob");
+    return 0;
+}
+
+fn test_int_via_short() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("-c"); toks.push("42");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_eq!(p.get_int("count"), 42);
+    return 0;
+}
+
+fn test_bool_long() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--verbose");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert!(p.get_bool("verbose"));
+    return 0;
+}
+
+fn test_bool_short() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("-v");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert!(p.get_bool("verbose"));
+    return 0;
+}
+
+fn test_bool_explicit_value() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--verbose=false");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_not!(p.get_bool("verbose"));
+    return 0;
+}
+
+fn test_positional_capture() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--name=x"); toks.push("a"); toks.push("b"); toks.push("c");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_eq!(p.positional().len(), 3);
+    assert_str_eq!(p.positional().get(0), "a");
+    assert_str_eq!(p.positional().get(2), "c");
+    return 0;
+}
+
+fn test_double_dash_ends_flags() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--name=x");
+    toks.push("--");
+    toks.push("--name=looks-like-flag-but-isnt");
+    toks.push("-v");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_str_eq!(p.get_string("name"), "x");
+    assert_not!(p.get_bool("verbose"));
+    assert_eq!(p.positional().len(), 2);
+    return 0;
+}
+
+fn test_unknown_long_flag_errors() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--bogus=1");
+    let r: !int = p.parse_tokens(toks);
+    assert_not!(r.ok);
+    return 0;
+}
+
+fn test_missing_value_errors() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--name");  // no value follows
+    let r: !int = p.parse_tokens(toks);
+    assert_not!(r.ok);
+    return 0;
+}
+
+fn test_bad_int_errors() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("-c"); toks.push("not-a-number");
+    let r: !int = p.parse_tokens(toks);
+    assert_not!(r.ok);
+    return 0;
+}
+
+fn test_help_flag_long() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("--help");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert!(p.help_requested());
+    return 0;
+}
+
+fn test_help_flag_short() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("-h");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert!(p.help_requested());
+    return 0;
+}
+
+fn test_negative_number_is_positional() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("-3");
+    toks.push("-42");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert_eq!(p.positional().len(), 2);
+    assert_str_eq!(p.positional().get(0), "-3");
+    return 0;
+}
+
+fn test_format_help_includes_flags() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let h: string = p.format_help();
+    assert!(h.contains("--name"));
+    assert!(h.contains("--count"));
+    assert!(h.contains("--verbose"));
+    assert!(h.contains("--help"));
+    return 0;
+}
+
+fn test_combined_real_invocation() -> int {
+    let p: *ArgParser = _setup();
+    defer p.free();
+    let toks: *Vector<string> = _toks();
+    toks.push("-v");
+    toks.push("--count=5");
+    toks.push("-n"); toks.push("eve");
+    toks.push("file.txt");
+    let r: !int = p.parse_tokens(toks);
+    assert!(r.ok);
+    assert!(p.get_bool("verbose"));
+    assert_eq!(p.get_int("count"), 5);
+    assert_str_eq!(p.get_string("name"), "eve");
+    assert_eq!(p.positional().len(), 1);
+    assert_str_eq!(p.positional().get(0), "file.txt");
+    return 0;
+}
