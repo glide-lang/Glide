@@ -214,6 +214,9 @@ impl<V> HashMap<V> {
         return true;
     }
 
+    /// `true` when the map holds zero entries.
+    fn is_empty(self: *HashMap<V>) -> bool { return self.len == 0; }
+
     /// Snapshot every live key into a fresh Vector. Order is the slot
     /// order, which is unspecified relative to insertion order. The
     /// returned Vector is heap- or arena-allocated like any other.
@@ -221,6 +224,29 @@ impl<V> HashMap<V> {
         let out: *Vector<string> = Vector::new();
         for let i: int = 0; i < self.cap; i++ {
             if self.occupied[i] { out.push(self.keys[i]); }
+        }
+        return out;
+    }
+
+    /// Snapshot every live value into a fresh Vector. Same slot order as
+    /// `keys()` so paired iteration via index is meaningful within a
+    /// single moment in time.
+    fn values(self: *HashMap<V>) -> *Vector<V> {
+        let out: *Vector<V> = Vector::new();
+        for let i: int = 0; i < self.cap; i++ {
+            if self.occupied[i] { out.push(self.values[i]); }
+        }
+        return out;
+    }
+
+    /// Apply `f` to every value, producing a new HashMap with the same
+    /// keys and the transformed values. The original map is unchanged.
+    fn map_values<U>(self: *HashMap<V>, f: fn(V) -> U) -> *HashMap<U> {
+        let out: *HashMap<U> = HashMap::new();
+        for let i: int = 0; i < self.cap; i++ {
+            if self.occupied[i] {
+                out.insert(self.keys[i], f(self.values[i]));
+            }
         }
         return out;
     }

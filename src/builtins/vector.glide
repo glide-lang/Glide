@@ -535,3 +535,41 @@ impl Vector<string> {
         return some(m);
     }
 }
+
+impl Vector<bool> {
+    /// Number of `true` elements.
+    pub fn count_true(self: *Vector<bool>) -> int {
+        let mut n: int = 0;
+        for let i: int = 0; i < self.len; i++ {
+            if self.data[i] { n = n + 1; }
+        }
+        return n;
+    }
+
+    /// Number of `false` elements.
+    pub fn count_false(self: *Vector<bool>) -> int {
+        let mut n: int = 0;
+        for let i: int = 0; i < self.len; i++ {
+            if !self.data[i] { n = n + 1; }
+        }
+        return n;
+    }
+
+    /// `true` if every element is `true`. Empty vector returns `true`
+    /// (vacuous truth — same convention as `Vector::all`).
+    pub fn all_true(self: *Vector<bool>) -> bool {
+        for let i: int = 0; i < self.len; i++ {
+            if !self.data[i] { return false; }
+        }
+        return true;
+    }
+
+    /// `true` if at least one element is `true`. Empty vector returns
+    /// `false`.
+    pub fn any_true(self: *Vector<bool>) -> bool {
+        for let i: int = 0; i < self.len; i++ {
+            if self.data[i] { return true; }
+        }
+        return false;
+    }
+}

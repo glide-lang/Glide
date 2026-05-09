@@ -82,3 +82,47 @@ fn test_string_value_type() -> int {
     assert_str_eq!(m.get("city"), "wonderland");
     return 0;
 }
+
+fn _dbl(x: int) -> int { return x * 2; }
+
+fn test_is_empty() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    assert!(m.is_empty());
+    m.insert("x", 1);
+    assert_not!(m.is_empty());
+    return 0;
+}
+
+fn test_values_snapshot() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    m.insert("a", 10); m.insert("b", 20); m.insert("c", 30);
+    let vs: *Vector<int> = m.values();
+    assert_eq!(vs.len(), 3);
+    assert_eq!(vs.sum(), 60);
+    return 0;
+}
+
+fn test_values_empty_map() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    let vs: *Vector<int> = m.values();
+    assert_eq!(vs.len(), 0);
+    return 0;
+}
+
+fn test_map_values_doubles() -> int {
+    let m: *HashMap<int> = HashMap::new();
+    defer m.free();
+    m.insert("one", 1); m.insert("two", 2); m.insert("three", 3);
+    let d: *HashMap<int> = m.map_values(_dbl);
+    defer d.free();
+    assert_eq!(d.len(), 3);
+    assert_eq!(d.get("one"), 2);
+    assert_eq!(d.get("two"), 4);
+    assert_eq!(d.get("three"), 6);
+    // original unchanged
+    assert_eq!(m.get("one"), 1);
+    return 0;
+}

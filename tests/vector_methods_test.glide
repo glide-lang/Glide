@@ -361,3 +361,46 @@ fn test_vec_string_min_empty() -> int {
     assert_not!(r.has);
     return 0;
 }
+
+fn test_vec_bool_count_true() -> int {
+    let v: *Vector<bool> = Vector::new();
+    v.push(true); v.push(false); v.push(true); v.push(true); v.push(false);
+    assert_eq!(v.count_true(), 3);
+    assert_eq!(v.count_false(), 2);
+    return 0;
+}
+
+fn test_vec_bool_all_true_yes() -> int {
+    let v: *Vector<bool> = Vector::new();
+    v.push(true); v.push(true); v.push(true);
+    assert!(v.all_true());
+    return 0;
+}
+
+fn test_vec_bool_all_true_no() -> int {
+    let v: *Vector<bool> = Vector::new();
+    v.push(true); v.push(false); v.push(true);
+    assert_not!(v.all_true());
+    return 0;
+}
+
+fn test_vec_bool_any_true_yes() -> int {
+    let v: *Vector<bool> = Vector::new();
+    v.push(false); v.push(true); v.push(false);
+    assert!(v.any_true());
+    return 0;
+}
+
+fn test_vec_bool_any_true_no() -> int {
+    let v: *Vector<bool> = Vector::new();
+    v.push(false); v.push(false);
+    assert_not!(v.any_true());
+    return 0;
+}
+
+fn test_vec_bool_all_true_empty_is_vacuous() -> int {
+    let v: *Vector<bool> = Vector::new();
+    assert!(v.all_true());
+    assert_not!(v.any_true());
+    return 0;
+}
