@@ -17,8 +17,8 @@ extern fn tcp_read_async(fd: int, buf: *void, max: int) -> int;
 extern fn tcp_write_async(fd: int, buf: *void, n: int) -> int;
 extern fn tcp_close(fd: int);
 
-pub struct Listener { fd: int }
-pub struct Conn     { fd: int }
+pub struct Listener { pub fd: int }
+pub struct Conn     { pub fd: int }
 
 impl Listener {
     /// Bind + listen on TCP `port` across all interfaces. Returns a

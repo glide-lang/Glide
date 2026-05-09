@@ -109,16 +109,25 @@ impl SmtpClient {
         if !er.ok { s.close(); return err(er.err); }
 
         if self.use_starttls && !s.is_tls {
-            // STARTTLS upgrade
-            let _: !int = s._cmd_check("STARTTLS\r\n", 220);
-            // Wrap the same socket fd in TLS. Easiest path: tear down
-            // the TcpStream wrapper and reconnect via TLS handshake on
-            // the existing fd. Glide's TlsStream doesn't currently
-            // support attach-to-existing-fd, so v1 closes the plain
-            // socket and opens a fresh TLS connection. That's a wire
-            // protocol violation if we already issued EHLO — strict
-            // servers refuse this. Document and move on.
-            return err("smtp: STARTTLS upgrade not yet implemented (need TlsStream::attach)");
+            // STARTTLS upgrade: ask the server to flip to TLS, attach
+            // a TlsStream onto the same fd, then re-EHLO over TLS.
+            let st: !int = s._cmd_check("STARTTLS\r\n", 220);
+            if !st.ok { s.close(); return err(st.err); }
+
+            let cfg: *TlsConfig = TlsConfig::client();
+            if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
+            let tcp: *TcpStream = s.tcp;
+            s.tcp = null as *TcpStream;
+            let tr: !*TlsStream = TlsStream::attach(tcp, self.host, cfg);
+            cfg.free();
+            if !tr.ok { free(s as *void); return err(tr.err); }
+            s.tls = tr.val;
+            s.is_tls = true;
+            // RFC 3207 §4.2: after STARTTLS the client MUST re-issue
+            // EHLO so the server's capabilities are re-advertised in
+            // the protected channel.
+            let er: !int = s._ehlo();
+            if !er.ok { s.close(); return err(er.err); }
         }
 
         if self.username.has && self.password.has {

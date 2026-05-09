@@ -125,6 +125,64 @@ c_raw! {
         return out;
     }
 
+    // Wrap an already-connected raw socket fd in TLS. Used for
+    // STARTTLS upgrades and any protocol that negotiates over plain
+    // TCP first. Caller hands over the fd; on success we own it for
+    // the lifetime of the returned handle. On failure we close it
+    // and return NULL.
+    static void* __glide_tls_attach(int64_t fd, const char* hostname,
+                                     int verify, int min_proto,
+                                     const char* alpn_csv) {
+        __glide_tls_init();
+        const SSL_METHOD* m = TLS_client_method();
+        SSL_CTX* ctx = SSL_CTX_new(m);
+        if (ctx == NULL) return NULL;
+        SSL_CTX_set_default_verify_paths(ctx);
+        if (!verify) SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+        if (min_proto >= 2) SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+        if (alpn_csv != NULL && alpn_csv[0] != 0) {
+            int alpn_len = 0;
+            unsigned char* alpn_buf = __glide_tls_alpn_pack(alpn_csv, &alpn_len);
+            if (alpn_buf != NULL) {
+                SSL_CTX_set_alpn_protos(ctx, alpn_buf, (unsigned int)alpn_len);
+                free(alpn_buf);
+            }
+        }
+        SSL* ssl = SSL_new(ctx);
+        if (ssl == NULL) {
+            SSL_CTX_free(ctx);
+            #ifdef _WIN32
+            closesocket((__glide_tls_sock)fd);
+            #else
+            close((__glide_tls_sock)fd);
+            #endif
+            return NULL;
+        }
+        if (hostname != NULL && hostname[0] != 0) {
+            SSL_set_tlsext_host_name(ssl, hostname);
+            if (verify) {
+                X509_VERIFY_PARAM* p = SSL_get0_param(ssl);
+                X509_VERIFY_PARAM_set_hostflags(p, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+                X509_VERIFY_PARAM_set1_host(p, hostname, 0);
+            }
+        }
+        SSL_set_fd(ssl, (int)fd);
+        if (SSL_connect(ssl) != 1) {
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            #ifdef _WIN32
+            closesocket((__glide_tls_sock)fd);
+            #else
+            close((__glide_tls_sock)fd);
+            #endif
+            return NULL;
+        }
+        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
+        h->ctx = ctx; h->ssl = ssl; h->sock = (__glide_tls_sock)fd;
+        h->last_err[0] = 0;
+        return (void*)h;
+    }
+
     static void* __glide_tls_connect(int family, int64_t v4,
                                       int64_t v6_hi, int64_t v6_lo, int port,
                                       const char* hostname, int verify,
@@ -394,6 +452,38 @@ c_raw! {
         return (void*)h;
     }
 
+    // Wrap an already-accepted plain socket in TLS for the server
+    // side. Used by STARTTLS upgrades on protocols (SMTP, IMAP,
+    // POP3, FTP) that negotiate plaintext first and promote on
+    // demand. `cert_path` + `key_path` are PEM files.
+    static void* __glide_tls_server_attach(int64_t fd,
+                                            const char* cert_path,
+                                            const char* key_path) {
+        __glide_tls_init();
+        SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+        if (ctx == NULL) return NULL;
+        if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0) {
+            SSL_CTX_free(ctx); return NULL;
+        }
+        if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0) {
+            SSL_CTX_free(ctx); return NULL;
+        }
+        SSL* ssl = SSL_new(ctx);
+        if (ssl == NULL) { SSL_CTX_free(ctx); return NULL; }
+        SSL_set_fd(ssl, (int)fd);
+        if (SSL_accept(ssl) <= 0) {
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            return NULL;
+        }
+        // Reuse the same handle struct; ctx is owned by this stream
+        // (created fresh per upgrade, no shared listener context).
+        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
+        h->ctx = ctx; h->ssl = ssl; h->sock = (__glide_tls_sock)fd;
+        h->last_err[0] = 0;
+        return (void*)h;
+    }
+
     static void __glide_tls_listener_close(void* lp) {
         __glide_tls_listener* l = (__glide_tls_listener*)lp;
         if (l == NULL) return;
@@ -429,6 +519,8 @@ c_raw! {
 extern fn __glide_tls_connect(family: int, v4: i64, v6_hi: i64, v6_lo: i64,
                                port: int, hostname: string, verify: int,
                                min_proto: int, alpn_csv: string) -> *void;
+extern fn __glide_tls_attach(fd: i64, hostname: string, verify: int,
+                              min_proto: int, alpn_csv: string) -> *void;
 extern fn __glide_tls_write(h: *void, data: string, n: int) -> i64;
 extern fn __glide_tls_write_raw(h: *void, data: *void, n: int) -> i64;
 extern fn __glide_tls_read(h: *void, buf: *void, max: int) -> i64;
@@ -440,6 +532,7 @@ extern fn __glide_tls_set_timeout(h: *void, ms: int);
 extern fn __glide_tls_listen(port: int, cert_path: string, key_path: string) -> *void;
 extern fn __glide_tls_accept(listener: *void) -> *void;
 extern fn __glide_tls_listener_close(listener: *void);
+extern fn __glide_tls_server_attach(fd: i64, cert_path: string, key_path: string) -> *void;
 
 /// Configuration for an outbound TLS connection.
 pub struct TlsConfig {
@@ -521,6 +614,30 @@ impl TlsStream {
             }
         }
         return err(last_err);
+    }
+
+    /// Wrap an already-connected `TcpStream` in TLS — runs the TLS
+    /// handshake on top of its raw socket fd. Use this for STARTTLS-
+    /// style upgrades where the protocol negotiates over plain TCP
+    /// first and then promotes the same connection to encrypted.
+    ///
+    /// On success the returned `TlsStream` owns the fd; the caller
+    /// should NOT call `tcp.close()` or the fd will be double-closed.
+    /// The `tcp` wrapper struct itself is freed.
+    pub fn attach(tcp: *TcpStream, hostname: string,
+                  cfg: *TlsConfig) -> !*TlsStream {
+        let fd: i64 = tcp.fd;
+        // Hand the fd off to TLS. Free only the wrapper struct so the
+        // socket isn't closed underneath us.
+        free(tcp as *void);
+        let mut verify_int: int = 0;
+        if cfg.verify { verify_int = 1; }
+        let h: *void = __glide_tls_attach(fd, hostname, verify_int,
+                                           cfg.min_proto, cfg.alpn);
+        if h == null { return err("tls: attach handshake failed"); }
+        let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
+        s.handle = h;
+        return ok(s);
     }
 
     /// Write `data`. Returns bytes written (>0) or err. May write less
@@ -645,5 +762,20 @@ impl TlsListener {
         __glide_tls_listener_close(self.handle);
         free(self as *void);
     }
+}
+
+/// Server-side counterpart to `TlsStream::attach`: wrap an already-
+/// accepted plain `Conn` in TLS for protocols that promote inline
+/// (STARTTLS, FTPS-AUTH-TLS, IMAP STARTTLS, POP3 STLS).
+///
+/// On success the returned `TlsStream` owns the underlying socket;
+/// the caller MUST NOT call `conn.close()` afterwards.
+pub fn tls_attach_server(conn_fd: int, cert_path: string,
+                         key_path: string) -> !*TlsStream {
+    let h: *void = __glide_tls_server_attach(conn_fd as i64, cert_path, key_path);
+    if h == null { return err("tls: server attach handshake failed"); }
+    let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
+    s.handle = h;
+    return ok(s);
 }
 
