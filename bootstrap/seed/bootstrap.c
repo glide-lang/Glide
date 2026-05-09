@@ -3857,6 +3857,7 @@ typedef struct  Typer  {
      HashMap__bool*   owned_locals;
      Vector__BorrowEvent*   borrows;
      Type*   current_ret;
+     Vector__string*   current_type_params;
      const char*   current_origin;
      HashMap__bool*   visibility;
      HashMap__bool*   module_imports;
@@ -4432,6 +4433,7 @@ bool   is_float_type (Type*   t);
 bool   is_bool_type (Type*   t);
 bool   is_unknown_type (Type*   t);
 bool   types_compat (Type*   want, Type*   got);
+bool   _is_current_type_param (Typer*   t, const char*   name);
 Typer*   Typer_new (void);
 bool   Typer_is_visible (Typer*   self, const char*   name);
 bool   Typer_is_module_path_allowed (Typer*   self, const char*   prefix);
@@ -10669,6 +10671,21 @@ bool   types_compat (Type*   want, Type*   got) {
     return false;
 }
 
+bool   _is_current_type_param (Typer*   t, const char*   name) {
+    if (((t-> current_type_params )  ==  NULL)) {
+        return false;
+    }
+    if (((name  ==  NULL)  ||  __glide_string_eq(name, ""))) {
+        return false;
+    }
+    for (int   i = 0; (i  <  Vector_len__string((t-> current_type_params ))); i++) {
+        if (__glide_string_eq(Vector_get__string((t-> current_type_params ), i), name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 Typer*   Typer_new (void) {
     Typer*   t = (( Typer* )((void*(*)(int))__glide_palloc)(sizeof( Typer )));
     HashMap__FnSig*   fns = ((HashMap__FnSig*(*)(void))HashMap_new__FnSig)();
@@ -10686,6 +10703,7 @@ Typer*   Typer_new (void) {
     ((t-> borrows )  =  bw);
     ((t-> diagnostics )  =  dg);
     ((t-> current_ret )  =  NULL);
+    ((t-> current_type_params )  =  NULL);
     ((t-> current_origin )  =  "");
     HashMap__bool*   vis = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     ((t-> visibility )  =  vis);
@@ -11342,6 +11360,7 @@ void   check_fn (Typer*   t, Stmt*   s) {
     HashMap__bool*   saved_owned = (t-> owned_locals );
     Vector__BorrowEvent*   saved_borrows = (t-> borrows );
     Type*   saved_ret = (t-> current_ret );
+    Vector__string*   saved_tps = (t-> current_type_params );
     HashMap__Type*   new_scope = ((HashMap__Type*(*)(void))HashMap_new__Type)();
     HashMap__bool*   new_owned = ((HashMap__bool*(*)(void))HashMap_new__bool)();
     Vector__BorrowEvent*   new_borrows = ((Vector__BorrowEvent*(*)(void))Vector_new__BorrowEvent)();
@@ -11349,6 +11368,7 @@ void   check_fn (Typer*   t, Stmt*   s) {
     ((t-> owned_locals )  =  new_owned);
     ((t-> borrows )  =  new_borrows);
     ((t-> current_ret )  =  (s-> fn_ret_ty ));
+    ((t-> current_type_params )  =  (s-> type_params ));
     if (((s-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
             Param   p = Vector_get__Param((s-> fn_params ), i);
@@ -11374,6 +11394,7 @@ void   check_fn (Typer*   t, Stmt*   s) {
     ((t-> owned_locals )  =  saved_owned);
     ((t-> borrows )  =  saved_borrows);
     ((t-> current_ret )  =  saved_ret);
+    ((t-> current_type_params )  =  saved_tps);
 }
 
 void   check_stmt (Typer*   t, Stmt*   s) {
@@ -11988,7 +12009,8 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
             const char*   pname = __glide_string_concat(__glide_string_concat(prefix, "_"), ((e-> lhs )-> field ));
             bool   is_type = HashMap_contains__bool((t-> structs ), prefix);
             bool   is_known_method = HashMap_contains__FnSig((t-> fns ), pname);
-            if ((((!is_type)  &&  (!is_known_method))  &&  (!Typer_is_module_path_allowed(t, prefix)))) {
+            bool   is_type_param = ((bool(*)(Typer*, const char*))_is_current_type_param)(t, prefix);
+            if (((((!is_type)  &&  (!is_known_method))  &&  (!is_type_param))  &&  (!Typer_is_module_path_allowed(t, prefix)))) {
                 Typer_err(t, ((e-> lhs )-> line ), ((e-> lhs )-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("module `", prefix), "` not in scope; add `import "), prefix), ";` or use the full path"));
                 return NULL;
             }
@@ -12042,7 +12064,8 @@ Type*   infer_expr (Typer*   t, Expr*   e) {
         const char*   pname = __glide_string_concat(__glide_string_concat(prefix, "_"), (e-> field ));
         bool   is_type = HashMap_contains__bool((t-> structs ), prefix);
         bool   is_known_method = HashMap_contains__FnSig((t-> fns ), pname);
-        if ((((!is_type)  &&  (!is_known_method))  &&  (!Typer_is_module_path_allowed(t, prefix)))) {
+        bool   is_type_param = ((bool(*)(Typer*, const char*))_is_current_type_param)(t, prefix);
+        if (((((!is_type)  &&  (!is_known_method))  &&  (!is_type_param))  &&  (!Typer_is_module_path_allowed(t, prefix)))) {
             Typer_err(t, (e-> line ), (e-> column ), __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("module `", prefix), "` not in scope; add `import "), prefix), ";` or use the full path"));
             return NULL;
         }
@@ -14618,6 +14641,15 @@ Expr*   subst_expr (Expr*   e, Vector__string*   params, Vector__Type*   args, H
         Stmt   template = HashMap_get__Stmt(gs, (e-> str_val ));
         if (((((template. type_params )  !=  NULL)  &&  (args  !=  NULL))  &&  (Vector_len__string((template. type_params ))  ==  Vector_len__Type(args)))) {
             ((n-> str_val )  =  ((const char*(*)(const char*, Vector__Type*))mangle_generic)((e-> str_val ), args));
+        }
+    }
+    if (((((e-> kind )  ==  EX_PATH)  &&  (params  !=  NULL))  &&  (args  !=  NULL))) {
+        for (int   i = 0; (i  <  Vector_len__string(params)); i++) {
+            if ((__glide_string_eq(Vector_get__string(params, i), (e-> str_val ))  &&  (i  <  Vector_len__Type(args)))) {
+                Type   a = Vector_get__Type(args, i);
+                ((n-> str_val )  =  ((const char*(*)(Type*))mangle_type)((&a)));
+                break;
+            }
         }
     }
     return n;
