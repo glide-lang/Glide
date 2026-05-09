@@ -1,0 +1,82 @@
+import stdlib::bytes::*;
+
+fn _is_unreserved(c: int) -> bool {
+    if c >= 65 && c <= 90 { return true; }
+    if c >= 97 && c <= 122 { return true; }
+    if c >= 48 && c <= 57 { return true; }
+    return c == 45 || c == 95 || c == 46 || c == 126;
+}
+
+fn _url_hex_digit(n: int) -> string {
+    if n < 10 { return ((48 + n) as char).to_string(); }
+    return ((55 + n) as char).to_string();
+}
+
+fn _from_hex(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48; }
+    if c >= 65 && c <= 70 { return c - 55; }
+    if c >= 97 && c <= 102 { return c - 87; }
+    return -1;
+}
+
+/// Percent-encode `s` for use in a URL component. Unreserved characters
+/// (RFC 3986 §2.3 — letters, digits, `-`, `_`, `.`, `~`) pass through;
+/// everything else becomes `%XX` with upper-case hex.
+///
+/// ```glide
+/// url_encode("hello world");        // "hello%20world"
+/// url_encode("a&b=c");              // "a%26b%3Dc"
+/// url_encode("café");               // "caf%C3%A9"
+/// ```
+pub fn url_encode(s: string) -> string {
+    let n: int = s.len();
+    let mut out: string = "";
+    let mut i: int = 0;
+    while i < n {
+        let c: int = s.at(i).to_int();
+        if _is_unreserved(c) {
+            out = out.concat(s.substring(i, i + 1));
+        } else {
+            out = out.concat("%");
+            out = out.concat(_url_hex_digit(c / 16));
+            out = out.concat(_url_hex_digit(c % 16));
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+/// Inverse of `url_encode`. Replaces every `%XX` with the corresponding
+/// byte. Returns `err` on a malformed escape (`%` at end-of-string or
+/// followed by non-hex digits).
+///
+/// ```glide
+/// let r: !string = url_decode("hello%20world");
+/// if r.ok { println!(r.val); }       // "hello world"
+///
+/// let bad: !string = url_decode("%ZZ");
+/// if !bad.ok { println!(bad.err); }  // "url_decode: malformed percent escape"
+/// ```
+pub fn url_decode(s: string) -> !string {
+    let n: int = s.len();
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+
+    let mut i: int = 0;
+    while i < n {
+        let c: int = s.at(i).to_int();
+        if c == 37 {
+            if i + 2 >= n { return err("url_decode: malformed percent escape"); }
+            let hi: int = _from_hex(s.at(i + 1).to_int());
+            let lo: int = _from_hex(s.at(i + 2).to_int());
+            if hi < 0 || lo < 0 { return err("url_decode: malformed percent escape"); }
+            b.push((hi * 16 + lo) as u8);
+            i = i + 3;
+        } else {
+            b.push(c as u8);
+            i = i + 1;
+        }
+    }
+
+    return ok(b.as_string());
+}
