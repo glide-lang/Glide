@@ -7,6 +7,17 @@ fn _ws(c: int) -> bool {
 }
 
 impl string {
+    /// `true` when the string has zero bytes.
+    ///
+    /// ```glide
+    /// "".is_empty();        // true
+    /// " ".is_empty();       // false (a space is a byte)
+    /// "abc".is_empty();     // false
+    /// ```
+    pub fn is_empty(self: string) -> bool {
+        return self.len() == 0;
+    }
+
     /// Lexicographic comparison. Returns a negative int if `self` sorts
     /// before `other`, 0 if equal, a positive int if it sorts after.
     /// Compares byte-by-byte (UTF-8 ordering matches code-point ordering
@@ -344,5 +355,104 @@ impl string {
         }
         if neg { return ok(-acc); }
         return ok(acc);
+    }
+
+    /// Parse a decimal float: optional sign, integer part, optional
+    /// fractional part (`.NNN`), optional exponent (`e[+-]NNN`). Either
+    /// the integer or the fractional part may be empty (`.5` and `5.`
+    /// both parse), but at least one digit must be present.
+    ///
+    /// ```glide
+    /// "3.14".try_parse_float();    // ok(3.14)
+    /// ".5".try_parse_float();      // ok(0.5)
+    /// "1e3".try_parse_float();     // ok(1000.0)
+    /// "abc".try_parse_float();     // err("non-digit byte")
+    /// ```
+    pub fn try_parse_float(self: string) -> !f64 {
+        let n: int = self.len();
+        if n == 0 { return err("empty string"); }
+        let mut i: int = 0;
+        let mut neg: bool = false;
+        if self.at(0).to_int() == 45 { neg = true; i = 1; }
+        else if self.at(0).to_int() == 43 { i = 1; }
+
+        let mut int_digits: int = 0;
+        let mut int_part: int = 0;
+        while i < n {
+            let c: int = self.at(i).to_int();
+            if c < 48 || c > 57 { break; }
+            int_part = int_part * 10 + (c - 48);
+            int_digits = int_digits + 1;
+            i = i + 1;
+        }
+
+        let mut frac_part: int = 0;
+        let mut frac_digits: int = 0;
+        if i < n && self.at(i).to_int() == 46 {
+            i = i + 1;
+            while i < n {
+                let c: int = self.at(i).to_int();
+                if c < 48 || c > 57 { break; }
+                frac_part = frac_part * 10 + (c - 48);
+                frac_digits = frac_digits + 1;
+                i = i + 1;
+            }
+        }
+        if int_digits == 0 && frac_digits == 0 { return err("no digits"); }
+
+        let mut exp_val: int = 0;
+        let mut exp_neg: bool = false;
+        if i < n && (self.at(i).to_int() == 101 || self.at(i).to_int() == 69) {
+            i = i + 1;
+            if i < n {
+                let s: int = self.at(i).to_int();
+                if s == 43 { i = i + 1; }
+                else if s == 45 { exp_neg = true; i = i + 1; }
+            }
+            let mut exp_digits: int = 0;
+            while i < n {
+                let c: int = self.at(i).to_int();
+                if c < 48 || c > 57 { break; }
+                exp_val = exp_val * 10 + (c - 48);
+                exp_digits = exp_digits + 1;
+                i = i + 1;
+            }
+            if exp_digits == 0 { return err("malformed exponent"); }
+        }
+
+        if i != n { return err("non-digit byte"); }
+        if exp_neg { exp_val = -exp_val; }
+
+        let mut pow_frac: f64 = 1.0;
+        let mut k: int = 0;
+        while k < frac_digits { pow_frac = pow_frac * 10.0; k = k + 1; }
+
+        let mut v: f64 = (int_part as f64) + (frac_part as f64) / pow_frac;
+
+        let mut pow_exp: f64 = 1.0;
+        if exp_val >= 0 {
+            let mut e: int = exp_val;
+            while e > 0 { pow_exp = pow_exp * 10.0; e = e - 1; }
+        } else {
+            let mut e: int = -exp_val;
+            while e > 0 { pow_exp = pow_exp / 10.0; e = e - 1; }
+        }
+        v = v * pow_exp;
+        if neg { v = -v; }
+        return ok(v);
+    }
+
+    /// Parse `"true"` or `"false"`. Case-sensitive: `"True"` / `"1"` /
+    /// `"yes"` are rejected with `err`.
+    ///
+    /// ```glide
+    /// "true".try_parse_bool();    // ok(true)
+    /// "false".try_parse_bool();   // ok(false)
+    /// "yes".try_parse_bool();     // err("not a bool")
+    /// ```
+    pub fn try_parse_bool(self: string) -> !bool {
+        if self.eq("true") { return ok(true); }
+        if self.eq("false") { return ok(false); }
+        return err("not a bool");
     }
 }

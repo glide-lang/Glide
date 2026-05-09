@@ -1,0 +1,88 @@
+import stdlib::testing::*;
+
+fn _near(a: f64, b: f64) -> bool {
+    let mut d: f64 = a - b;
+    if d < 0.0 { d = -d; }
+    return d < 0.0001;
+}
+
+fn test_is_empty() -> int {
+    assert!("".is_empty());
+    assert_not!("a".is_empty());
+    assert_not!(" ".is_empty());
+    return 0;
+}
+
+fn test_try_parse_float_basic() -> int {
+    let a: !f64 = "3.14".try_parse_float();
+    assert!(a.ok);
+    assert!(_near(a.val, 3.14));
+
+    let b: !f64 = "0".try_parse_float();
+    assert!(b.ok);
+    assert!(_near(b.val, 0.0));
+
+    let c: !f64 = "-2.5".try_parse_float();
+    assert!(c.ok);
+    assert!(_near(c.val, -2.5));
+
+    let d: !f64 = "+1.5".try_parse_float();
+    assert!(d.ok);
+    assert!(_near(d.val, 1.5));
+    return 0;
+}
+
+fn test_try_parse_float_int_form() -> int {
+    let r: !f64 = "42".try_parse_float();
+    assert!(r.ok);
+    assert!(_near(r.val, 42.0));
+    return 0;
+}
+
+fn test_try_parse_float_leading_dot() -> int {
+    let r: !f64 = ".5".try_parse_float();
+    assert!(r.ok);
+    assert!(_near(r.val, 0.5));
+    return 0;
+}
+
+fn test_try_parse_float_exponent() -> int {
+    let a: !f64 = "1e3".try_parse_float();
+    assert!(a.ok);
+    assert!(_near(a.val, 1000.0));
+
+    let b: !f64 = "2.5E2".try_parse_float();
+    assert!(b.ok);
+    assert!(_near(b.val, 250.0));
+
+    let c: !f64 = "1e-3".try_parse_float();
+    assert!(c.ok);
+    assert!(_near(c.val, 0.001));
+    return 0;
+}
+
+fn test_try_parse_float_rejects_garbage() -> int {
+    assert_not!("".try_parse_float().ok);
+    assert_not!("abc".try_parse_float().ok);
+    assert_not!("-".try_parse_float().ok);
+    assert_not!("1.2.3".try_parse_float().ok);
+    assert_not!("1e".try_parse_float().ok);
+    assert_not!("1ex".try_parse_float().ok);
+    return 0;
+}
+
+fn test_try_parse_bool() -> int {
+    let t: !bool = "true".try_parse_bool();
+    assert!(t.ok);
+    assert!(t.val);
+
+    let f: !bool = "false".try_parse_bool();
+    assert!(f.ok);
+    assert_not!(f.val);
+
+    assert_not!("True".try_parse_bool().ok);
+    assert_not!("1".try_parse_bool().ok);
+    assert_not!("".try_parse_bool().ok);
+    assert_not!("yes".try_parse_bool().ok);
+    return 0;
+}
