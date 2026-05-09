@@ -78,5 +78,8 @@ pub fn url_decode(s: string) -> !string {
         }
     }
 
-    return ok(b.as_string());
+    // `b.as_string()` aliases the internal buffer; `defer b.free()` would
+    // leave the caller with a dangling pointer. Copy via `concat("")` so
+    // the returned string outlives `b`.
+    return ok(b.as_string().concat(""));
 }
