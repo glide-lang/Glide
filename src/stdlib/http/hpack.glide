@@ -1,0 +1,844 @@
+// HPACK header compression for HTTP/2 (RFC 7541).
+//
+// HPACK shrinks HTTP header fields using:
+//   * a static table (61 of the most common headers), pre-defined
+//   * a dynamic table maintained per direction, FIFO-evicted when size > limit
+//   * Huffman coding of literal values (decoded here, not yet emitted)
+//   * variable-length integer + prefixed-string encodings
+//
+// The encoder in this module never emits Huffman literals (H=0 always).
+// That's spec-legal — Huffman is optional — and keeps v1 simple. The
+// decoder fully supports Huffman because real-world servers always
+// emit it. Adding the encoder side later is mechanical (canonical
+// 256-entry code table, bit-pack, end-of-stream pad).
+
+import stdlib::bytes::*;
+
+// ===========================================================================
+// Static table (RFC 7541 Appendix A) — 61 entries, 1-indexed in the spec.
+// We store as parallel Vectors and expose a 1-indexed lookup.
+// ===========================================================================
+
+fn _static_names() -> *Vector<string> {
+    let v: *Vector<string> = Vector::new();
+    v.push(":authority");
+    v.push(":method");
+    v.push(":method");
+    v.push(":path");
+    v.push(":path");
+    v.push(":scheme");
+    v.push(":scheme");
+    v.push(":status");
+    v.push(":status");
+    v.push(":status");
+    v.push(":status");
+    v.push(":status");
+    v.push(":status");
+    v.push(":status");
+    v.push("accept-charset");
+    v.push("accept-encoding");
+    v.push("accept-language");
+    v.push("accept-ranges");
+    v.push("accept");
+    v.push("access-control-allow-origin");
+    v.push("age");
+    v.push("allow");
+    v.push("authorization");
+    v.push("cache-control");
+    v.push("content-disposition");
+    v.push("content-encoding");
+    v.push("content-language");
+    v.push("content-length");
+    v.push("content-location");
+    v.push("content-range");
+    v.push("content-type");
+    v.push("cookie");
+    v.push("date");
+    v.push("etag");
+    v.push("expect");
+    v.push("expires");
+    v.push("from");
+    v.push("host");
+    v.push("if-match");
+    v.push("if-modified-since");
+    v.push("if-none-match");
+    v.push("if-range");
+    v.push("if-unmodified-since");
+    v.push("last-modified");
+    v.push("link");
+    v.push("location");
+    v.push("max-forwards");
+    v.push("proxy-authenticate");
+    v.push("proxy-authorization");
+    v.push("range");
+    v.push("referer");
+    v.push("refresh");
+    v.push("retry-after");
+    v.push("server");
+    v.push("set-cookie");
+    v.push("strict-transport-security");
+    v.push("transfer-encoding");
+    v.push("user-agent");
+    v.push("vary");
+    v.push("via");
+    v.push("www-authenticate");
+    return v;
+}
+
+fn _static_values() -> *Vector<string> {
+    let v: *Vector<string> = Vector::new();
+    v.push("");                     // 1
+    v.push("GET");                  // 2
+    v.push("POST");                 // 3
+    v.push("/");                    // 4
+    v.push("/index.html");          // 5
+    v.push("http");                 // 6
+    v.push("https");                // 7
+    v.push("200");                  // 8
+    v.push("204");                  // 9
+    v.push("206");                  // 10
+    v.push("304");                  // 11
+    v.push("400");                  // 12
+    v.push("404");                  // 13
+    v.push("500");                  // 14
+    v.push("");                     // 15..61: header-name only
+    v.push("gzip, deflate");        // 16
+    v.push("");                     // 17
+    v.push("");                     // 18
+    v.push("");                     // 19
+    v.push("");                     // 20
+    v.push("");                     // 21
+    v.push("");                     // 22
+    v.push("");                     // 23
+    v.push("");                     // 24
+    v.push("");                     // 25
+    v.push("");                     // 26
+    v.push("");                     // 27
+    v.push("");                     // 28
+    v.push("");                     // 29
+    v.push("");                     // 30
+    v.push("");                     // 31
+    v.push("");                     // 32
+    v.push("");                     // 33
+    v.push("");                     // 34
+    v.push("");                     // 35
+    v.push("");                     // 36
+    v.push("");                     // 37
+    v.push("");                     // 38
+    v.push("");                     // 39
+    v.push("");                     // 40
+    v.push("");                     // 41
+    v.push("");                     // 42
+    v.push("");                     // 43
+    v.push("");                     // 44
+    v.push("");                     // 45
+    v.push("");                     // 46
+    v.push("");                     // 47
+    v.push("");                     // 48
+    v.push("");                     // 49
+    v.push("");                     // 50
+    v.push("");                     // 51
+    v.push("");                     // 52
+    v.push("");                     // 53
+    v.push("");                     // 54
+    v.push("");                     // 55
+    v.push("");                     // 56
+    v.push("");                     // 57
+    v.push("");                     // 58
+    v.push("");                     // 59
+    v.push("");                     // 60
+    v.push("");                     // 61
+    return v;
+}
+
+// ===========================================================================
+// HpackEncoder + HpackDecoder
+// ===========================================================================
+
+pub struct HpackEncoder {
+    pub max_table_size: int,
+    dyn_names:  *Vector<string>,
+    dyn_values: *Vector<string>,
+    dyn_size:   int,
+    static_names:  *Vector<string>,
+    static_values: *Vector<string>,
+}
+
+impl HpackEncoder {
+    pub fn new() -> *HpackEncoder {
+        let e: *HpackEncoder = malloc(sizeof(HpackEncoder)) as *HpackEncoder;
+        e.max_table_size = 4096;
+        let dn: *Vector<string> = Vector::new();
+        let dv: *Vector<string> = Vector::new();
+        e.dyn_names = dn;
+        e.dyn_values = dv;
+        e.dyn_size = 0;
+        e.static_names = _static_names();
+        e.static_values = _static_values();
+        return e;
+    }
+
+    /// Encode a single (name, value) header. Caller passes a ByteBuffer
+    /// to accumulate the output bytes — the typical workflow is:
+    ///   buf := ByteBuffer::new()
+    ///   for each header: enc.encode_header(buf, name, value)
+    ///   send buf.as_string() as the HEADERS frame payload
+    pub fn encode_header(self: *HpackEncoder, buf: *ByteBuffer,
+                         name: string, value: string) {
+        // Try to find an exact (name, value) match in static or dyn table.
+        let exact_idx: int = self._find_exact(name, value);
+        if exact_idx > 0 {
+            // Indexed (1xxxxxxx): high bit set, 7-bit prefix integer.
+            _encode_integer(buf, exact_idx, 7, 128);
+            return;
+        }
+        let name_idx: int = self._find_name(name);
+        // Literal with incremental indexing (01xxxxxx) — store in dynamic
+        // table so the next request reusing it gets a smaller index.
+        if name_idx > 0 {
+            _encode_integer(buf, name_idx, 6, 64);
+        } else {
+            _encode_integer(buf, 0, 6, 64);
+            _encode_string_literal(buf, name);
+        }
+        _encode_string_literal(buf, value);
+        self._add_dynamic(name, value);
+    }
+
+    fn _find_exact(self: *HpackEncoder, name: string, value: string) -> int {
+        for let i: int = 0; i < self.static_names.len(); i++ {
+            if self.static_names.get(i).eq(name)
+               && self.static_values.get(i).eq(value) {
+                return i + 1;
+            }
+        }
+        for let i: int = 0; i < self.dyn_names.len(); i++ {
+            if self.dyn_names.get(i).eq(name)
+               && self.dyn_values.get(i).eq(value) {
+                return self.static_names.len() + i + 1;
+            }
+        }
+        return 0;
+    }
+
+    fn _find_name(self: *HpackEncoder, name: string) -> int {
+        for let i: int = 0; i < self.static_names.len(); i++ {
+            if self.static_names.get(i).eq(name) { return i + 1; }
+        }
+        for let i: int = 0; i < self.dyn_names.len(); i++ {
+            if self.dyn_names.get(i).eq(name) {
+                return self.static_names.len() + i + 1;
+            }
+        }
+        return 0;
+    }
+
+    fn _add_dynamic(self: *HpackEncoder, name: string, value: string) {
+        let entry_size: int = name.len() + value.len() + 32;
+        // Evict from the tail until we fit, or the table is empty.
+        while self.dyn_size + entry_size > self.max_table_size
+              && self.dyn_names.len() > 0 {
+            let last: int = self.dyn_names.len() - 1;
+            let n: string = self.dyn_names.get(last);
+            let v: string = self.dyn_values.get(last);
+            self.dyn_size = self.dyn_size - n.len() - v.len() - 32;
+            // Vector lacks pop_at; rebuild without the last entry.
+            let nn: *Vector<string> = Vector::new();
+            let nv: *Vector<string> = Vector::new();
+            for let i: int = 0; i < last; i++ {
+                nn.push(self.dyn_names.get(i));
+                nv.push(self.dyn_values.get(i));
+            }
+            self.dyn_names = nn;
+            self.dyn_values = nv;
+        }
+        if entry_size > self.max_table_size { return; }
+        // Insert at index 0 (newest first).
+        let new_n: *Vector<string> = Vector::new();
+        let new_v: *Vector<string> = Vector::new();
+        new_n.push(name);
+        new_v.push(value);
+        for let i: int = 0; i < self.dyn_names.len(); i++ {
+            new_n.push(self.dyn_names.get(i));
+            new_v.push(self.dyn_values.get(i));
+        }
+        self.dyn_names = new_n;
+        self.dyn_values = new_v;
+        self.dyn_size = self.dyn_size + entry_size;
+    }
+}
+
+pub struct HpackDecoder {
+    pub max_table_size: int,
+    dyn_names:  *Vector<string>,
+    dyn_values: *Vector<string>,
+    dyn_size:   int,
+    static_names:  *Vector<string>,
+    static_values: *Vector<string>,
+}
+
+/// Output of decode_block: a list of (name, value) pairs in wire order.
+/// Pseudo-headers (`:method`, `:status`, etc.) are surfaced as-is —
+/// users sort response vs request semantics.
+pub struct HpackHeader {
+    pub name: string,
+    pub value: string,
+}
+
+impl HpackDecoder {
+    pub fn new() -> *HpackDecoder {
+        let d: *HpackDecoder = malloc(sizeof(HpackDecoder)) as *HpackDecoder;
+        d.max_table_size = 4096;
+        let dn: *Vector<string> = Vector::new();
+        let dv: *Vector<string> = Vector::new();
+        d.dyn_names = dn;
+        d.dyn_values = dv;
+        d.dyn_size = 0;
+        d.static_names = _static_names();
+        d.static_values = _static_values();
+        return d;
+    }
+
+    /// Decode a full header block (HEADERS + CONTINUATION concatenated).
+    /// Returns the headers in order; the dynamic table is mutated as a
+    /// side effect of any "with incremental indexing" entries.
+    pub fn decode_block(self: *HpackDecoder, raw: string,
+                        len: int) -> !*Vector<*HpackHeader> {
+        let out: *Vector<*HpackHeader> = Vector::new();
+        let mut pos: int = 0;
+        while pos < len {
+            let b: int = raw.at(pos).to_int() & 255;
+            if (b & 128) != 0 {
+                // Indexed header field (1xxxxxxx)
+                let idx_r: !*Pair<int, int> = _decode_integer(raw, pos, 7);
+                if !idx_r.ok { return err(idx_r.err); }
+                pos = idx_r.val.first;
+                let idx: int = idx_r.val.second;
+                if idx == 0 { return err("hpack: index 0 in indexed field"); }
+                let entry: !*HpackHeader = self._lookup(idx);
+                if !entry.ok { return err(entry.err); }
+                out.push(entry.val);
+                continue;
+            }
+            if (b & 192) == 64 {
+                // Literal with incremental indexing (01xxxxxx)
+                let r: !*Pair<int, *HpackHeader> = self._decode_literal(raw, pos, 6);
+                if !r.ok { return err(r.err); }
+                pos = r.val.first;
+                self._add_dynamic(r.val.second.name, r.val.second.value);
+                out.push(r.val.second);
+                continue;
+            }
+            if (b & 224) == 32 {
+                // Dynamic table size update (001xxxxx)
+                let sz_r: !*Pair<int, int> = _decode_integer(raw, pos, 5);
+                if !sz_r.ok { return err(sz_r.err); }
+                pos = sz_r.val.first;
+                let new_max: int = sz_r.val.second;
+                self.max_table_size = new_max;
+                self._evict_to_fit();
+                continue;
+            }
+            // Literal without indexing (0000xxxx) or never indexed (0001xxxx).
+            // Both decode the same way; the difference matters only for
+            // proxies that re-encode and we're not one.
+            let r: !*Pair<int, *HpackHeader> = self._decode_literal(raw, pos, 4);
+            if !r.ok { return err(r.err); }
+            pos = r.val.first;
+            out.push(r.val.second);
+        }
+        return ok(out);
+    }
+
+    fn _lookup(self: *HpackDecoder, idx: int) -> !*HpackHeader {
+        let s_n: int = self.static_names.len();
+        if idx <= s_n {
+            let h: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
+            h.name = self.static_names.get(idx - 1);
+            h.value = self.static_values.get(idx - 1);
+            return ok(h);
+        }
+        let dyn_idx: int = idx - s_n - 1;
+        if dyn_idx < 0 || dyn_idx >= self.dyn_names.len() {
+            return err("hpack: index out of range");
+        }
+        let h: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
+        h.name = self.dyn_names.get(dyn_idx);
+        h.value = self.dyn_values.get(dyn_idx);
+        return ok(h);
+    }
+
+    fn _decode_literal(self: *HpackDecoder, raw: string, pos: int,
+                       prefix: int) -> !*Pair<int, *HpackHeader> {
+        let idx_r: !*Pair<int, int> = _decode_integer(raw, pos, prefix);
+        if !idx_r.ok { return err(idx_r.err); }
+        let mut p: int = idx_r.val.first;
+        let idx: int = idx_r.val.second;
+        let mut name: string = "";
+        if idx == 0 {
+            let nr: !*Pair<int, string> = _decode_string(raw, p);
+            if !nr.ok { return err(nr.err); }
+            p = nr.val.first;
+            name = nr.val.second;
+        } else {
+            let entry: !*HpackHeader = self._lookup(idx);
+            if !entry.ok { return err(entry.err); }
+            name = entry.val.name;
+        }
+        let vr: !*Pair<int, string> = _decode_string(raw, p);
+        if !vr.ok { return err(vr.err); }
+        p = vr.val.first;
+        let h: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
+        h.name = name;
+        h.value = vr.val.second;
+        return ok(Pair::new(p, h));
+    }
+
+    fn _add_dynamic(self: *HpackDecoder, name: string, value: string) {
+        let entry_size: int = name.len() + value.len() + 32;
+        while self.dyn_size + entry_size > self.max_table_size
+              && self.dyn_names.len() > 0 {
+            self._evict_one();
+        }
+        if entry_size > self.max_table_size { return; }
+        let new_n: *Vector<string> = Vector::new();
+        let new_v: *Vector<string> = Vector::new();
+        new_n.push(name);
+        new_v.push(value);
+        for let i: int = 0; i < self.dyn_names.len(); i++ {
+            new_n.push(self.dyn_names.get(i));
+            new_v.push(self.dyn_values.get(i));
+        }
+        self.dyn_names = new_n;
+        self.dyn_values = new_v;
+        self.dyn_size = self.dyn_size + entry_size;
+    }
+
+    fn _evict_one(self: *HpackDecoder) {
+        let last: int = self.dyn_names.len() - 1;
+        if last < 0 { return; }
+        let n: string = self.dyn_names.get(last);
+        let v: string = self.dyn_values.get(last);
+        self.dyn_size = self.dyn_size - n.len() - v.len() - 32;
+        let nn: *Vector<string> = Vector::new();
+        let nv: *Vector<string> = Vector::new();
+        for let i: int = 0; i < last; i++ {
+            nn.push(self.dyn_names.get(i));
+            nv.push(self.dyn_values.get(i));
+        }
+        self.dyn_names = nn;
+        self.dyn_values = nv;
+    }
+
+    fn _evict_to_fit(self: *HpackDecoder) {
+        while self.dyn_size > self.max_table_size && self.dyn_names.len() > 0 {
+            self._evict_one();
+        }
+    }
+}
+
+// ===========================================================================
+// Variable-length integer (RFC 7541 §5.1)
+// ===========================================================================
+
+fn _encode_integer(buf: *ByteBuffer, value: int, prefix_bits: int, first_byte_top: int) {
+    let mut max_first: int = 1;
+    for let i: int = 0; i < prefix_bits; i++ { max_first = max_first * 2; }
+    max_first = max_first - 1;
+    if value < max_first {
+        buf.push((first_byte_top | value) as u8);
+        return;
+    }
+    buf.push((first_byte_top | max_first) as u8);
+    let mut v: int = value - max_first;
+    while v >= 128 {
+        buf.push(((v & 127) | 128) as u8);
+        v = v >> 7;
+    }
+    buf.push(v as u8);
+}
+
+/// Decode a variable-length integer starting at `raw[pos]` with `prefix`
+/// bits in the first byte. Returns `(new_pos, value)`.
+fn _decode_integer(raw: string, pos: int, prefix: int) -> !*Pair<int, int> {
+    if pos >= raw.len() { return err("hpack: integer EOF"); }
+    let mut max_prefix: int = 1;
+    for let i: int = 0; i < prefix; i++ { max_prefix = max_prefix * 2; }
+    max_prefix = max_prefix - 1;
+    let b: int = raw.at(pos).to_int() & 255;
+    let v: int = b & max_prefix;
+    let mut p: int = pos + 1;
+    if v < max_prefix { return ok(Pair::new(p, v)); }
+    let mut result: int = max_prefix;
+    let mut shift: int = 0;
+    while true {
+        if p >= raw.len() { return err("hpack: integer truncated"); }
+        let cb: int = raw.at(p).to_int() & 255;
+        p = p + 1;
+        result = result + ((cb & 127) << shift);
+        shift = shift + 7;
+        if (cb & 128) == 0 { return ok(Pair::new(p, result)); }
+        if shift > 28 { return err("hpack: integer overflow"); }
+    }
+    return err("hpack: integer decode loop");
+}
+
+// ===========================================================================
+// String literal (RFC 7541 §5.2) — H bit + length + bytes
+// ===========================================================================
+
+fn _encode_string_literal(buf: *ByteBuffer, s: string) {
+    // H=0, raw bytes. RFC 7541 §5.2: first byte = H<<7 | length (7-bit prefix).
+    _encode_integer(buf, s.len(), 7, 0);
+    for let i: int = 0; i < s.len(); i++ {
+        buf.push(s.at(i).to_int() as u8);
+    }
+}
+
+fn _decode_string(raw: string, pos: int) -> !*Pair<int, string> {
+    if pos >= raw.len() { return err("hpack: string EOF"); }
+    let first: int = raw.at(pos).to_int() & 255;
+    let huffman: bool = (first & 128) != 0;
+    let len_r: !*Pair<int, int> = _decode_integer(raw, pos, 7);
+    if !len_r.ok { return err(len_r.err); }
+    let mut p: int = len_r.val.first;
+    let n: int = len_r.val.second;
+    if p + n > raw.len() { return err("hpack: string truncated"); }
+    let chunk: string = raw.substring(p, p + n);
+    p = p + n;
+    if !huffman { return ok(Pair::new(p, chunk)); }
+    let dr: !string = _huffman_decode(chunk);
+    if !dr.ok { return err(dr.err); }
+    return ok(Pair::new(p, dr.val));
+}
+
+// ===========================================================================
+// Huffman decoder — bit-by-bit walk of the canonical RFC 7541 Appendix B
+// table. Slow but correct; switch to a 4-bit table once volumes climb.
+// ===========================================================================
+
+fn _huffman_decode(input: string) -> !string {
+    let mut out: string = "";
+    let mut buf: i64 = 0;
+    let mut bits: int = 0;
+    for let i: int = 0; i < input.len(); i++ {
+        buf = (buf << 8) | (input.at(i).to_int() as i64 & 255);
+        bits = bits + 8;
+        // After each byte, repeatedly try to consume the longest matching
+        // code at the high end of `buf`. The table is canonical — codes
+        // grow longest-first, so we test code lengths from 5 to 30.
+        while bits >= 5 {
+            let mut found: bool = false;
+            for let cl: int = 5; cl <= 30; cl++ {
+                if cl > bits { break; }
+                let code: i64 = (buf >> (bits - cl)) & ((1 as i64 << cl) - 1);
+                let sym: int = _huffman_lookup(code as int, cl);
+                if sym >= 0 {
+                    if sym == 256 {
+                        // End-of-stream marker — must be at the tail with
+                        // padding only after it. The padding (1-bits) is
+                        // legal trailing content and we'll fall out of the
+                        // outer loop naturally.
+                        return ok(out);
+                    }
+                    out = out.concat((sym as char).to_string());
+                    bits = bits - cl;
+                    found = true;
+                    break;
+                }
+            }
+            if !found { break; }
+        }
+    }
+    // Trailing bits must be all 1s (Huffman pad). RFC 7541 §5.2: any
+    // trailing pattern that doesn't match the eos prefix is a decode
+    // error. We're permissive in v1 — accept anything <= 7 bits left.
+    if bits > 7 { return err("hpack: huffman trailing bits invalid"); }
+    return ok(out);
+}
+
+// Canonical Huffman table from RFC 7541 Appendix B — symbol → (code, length).
+// We store the inverse: a flat list of (length, code, symbol) tuples,
+// scanned linearly. ~250 entries; fine for v1 perf.
+fn _huffman_lookup(code: int, len: int) -> int {
+    let entries: *Vector<int> = _huffman_entries();
+    // entries layout: triplets [length, code, symbol]
+    for let i: int = 0; i < entries.len(); i = i + 3 {
+        if entries.get(i) == len && entries.get(i + 1) == code {
+            return entries.get(i + 2);
+        }
+    }
+    return -1;
+}
+
+// RFC 7541 Appendix B verbatim. Built lazily; cached at module level
+// once Glide grows lazy statics. For now we rebuild per call — Huffman
+// is rare enough on the request side that this is acceptable.
+fn _huffman_entries() -> *Vector<int> {
+    let v: *Vector<int> = Vector::new();
+    // (sym, code, length)
+    _hp(v,   0, 8184, 13);
+    _hp(v,   1, 8388568, 23);
+    _hp(v,   2, 268435426, 28);
+    _hp(v,   3, 268435427, 28);
+    _hp(v,   4, 268435428, 28);
+    _hp(v,   5, 268435429, 28);
+    _hp(v,   6, 268435430, 28);
+    _hp(v,   7, 268435431, 28);
+    _hp(v,   8, 268435432, 28);
+    _hp(v,   9, 16777194, 24);
+    _hp(v,  10, 1073741820, 30);
+    _hp(v,  11, 268435433, 28);
+    _hp(v,  12, 268435434, 28);
+    _hp(v,  13, 1073741821, 30);
+    _hp(v,  14, 268435435, 28);
+    _hp(v,  15, 268435436, 28);
+    _hp(v,  16, 268435437, 28);
+    _hp(v,  17, 268435438, 28);
+    _hp(v,  18, 268435439, 28);
+    _hp(v,  19, 268435440, 28);
+    _hp(v,  20, 268435441, 28);
+    _hp(v,  21, 268435442, 28);
+    _hp(v,  22, 1073741822, 30);
+    _hp(v,  23, 268435443, 28);
+    _hp(v,  24, 268435444, 28);
+    _hp(v,  25, 268435445, 28);
+    _hp(v,  26, 268435446, 28);
+    _hp(v,  27, 268435447, 28);
+    _hp(v,  28, 268435448, 28);
+    _hp(v,  29, 268435449, 28);
+    _hp(v,  30, 268435450, 28);
+    _hp(v,  31, 268435451, 28);
+    _hp(v,  32, 20, 6);            // ' '
+    _hp(v,  33, 1016, 10);
+    _hp(v,  34, 1017, 10);
+    _hp(v,  35, 4090, 12);
+    _hp(v,  36, 8185, 13);
+    _hp(v,  37, 21, 6);            // '%'
+    _hp(v,  38, 248, 8);
+    _hp(v,  39, 2042, 11);
+    _hp(v,  40, 1018, 10);
+    _hp(v,  41, 1019, 10);
+    _hp(v,  42, 249, 8);
+    _hp(v,  43, 2043, 11);
+    _hp(v,  44, 250, 8);
+    _hp(v,  45, 22, 6);
+    _hp(v,  46, 23, 6);
+    _hp(v,  47, 24, 6);            // '/'
+    _hp(v,  48, 0, 5);             // '0'
+    _hp(v,  49, 1, 5);
+    _hp(v,  50, 2, 5);
+    _hp(v,  51, 25, 6);
+    _hp(v,  52, 26, 6);
+    _hp(v,  53, 27, 6);
+    _hp(v,  54, 28, 6);
+    _hp(v,  55, 29, 6);
+    _hp(v,  56, 30, 6);
+    _hp(v,  57, 31, 6);            // '9'
+    _hp(v,  58, 92, 7);            // ':'
+    _hp(v,  59, 251, 8);
+    _hp(v,  60, 32764, 15);
+    _hp(v,  61, 32, 6);            // '='
+    _hp(v,  62, 4091, 12);
+    _hp(v,  63, 1020, 10);
+    _hp(v,  64, 8186, 13);
+    _hp(v,  65, 33, 6);            // 'A'
+    _hp(v,  66, 93, 7);
+    _hp(v,  67, 94, 7);
+    _hp(v,  68, 95, 7);
+    _hp(v,  69, 96, 7);
+    _hp(v,  70, 97, 7);
+    _hp(v,  71, 98, 7);
+    _hp(v,  72, 99, 7);
+    _hp(v,  73, 100, 7);
+    _hp(v,  74, 101, 7);
+    _hp(v,  75, 102, 7);
+    _hp(v,  76, 103, 7);
+    _hp(v,  77, 104, 7);
+    _hp(v,  78, 105, 7);
+    _hp(v,  79, 106, 7);
+    _hp(v,  80, 107, 7);
+    _hp(v,  81, 108, 7);
+    _hp(v,  82, 109, 7);
+    _hp(v,  83, 110, 7);
+    _hp(v,  84, 111, 7);
+    _hp(v,  85, 112, 7);
+    _hp(v,  86, 113, 7);
+    _hp(v,  87, 114, 7);            // 'W'
+    _hp(v,  88, 252, 8);
+    _hp(v,  89, 115, 7);
+    _hp(v,  90, 253, 8);
+    _hp(v,  91, 8187, 13);
+    _hp(v,  92, 16777196, 24);
+    _hp(v,  93, 8188, 13);
+    _hp(v,  94, 16380, 14);
+    _hp(v,  95, 34, 6);            // '_'
+    _hp(v,  96, 32765, 15);
+    _hp(v,  97, 3, 5);             // 'a'
+    _hp(v,  98, 35, 6);
+    _hp(v,  99, 4, 5);
+    _hp(v, 100, 36, 6);
+    _hp(v, 101, 5, 5);             // 'e'
+    _hp(v, 102, 37, 6);
+    _hp(v, 103, 38, 6);
+    _hp(v, 104, 39, 6);
+    _hp(v, 105, 6, 5);             // 'i'
+    _hp(v, 106, 116, 7);
+    _hp(v, 107, 117, 7);
+    _hp(v, 108, 40, 6);
+    _hp(v, 109, 41, 6);
+    _hp(v, 110, 42, 6);
+    _hp(v, 111, 7, 5);             // 'o'
+    _hp(v, 112, 43, 6);
+    _hp(v, 113, 118, 7);
+    _hp(v, 114, 44, 6);            // 'r'
+    _hp(v, 115, 8, 5);             // 's'
+    _hp(v, 116, 9, 5);             // 't'
+    _hp(v, 117, 45, 6);
+    _hp(v, 118, 119, 7);
+    _hp(v, 119, 120, 7);
+    _hp(v, 120, 121, 7);
+    _hp(v, 121, 122, 7);
+    _hp(v, 122, 123, 7);
+    _hp(v, 123, 32766, 15);
+    _hp(v, 124, 2044, 11);
+    _hp(v, 125, 16381, 14);
+    _hp(v, 126, 8189, 13);
+    _hp(v, 127, 268435452, 28);
+    _hp(v, 128, 1048550, 20);
+    _hp(v, 129, 4194258, 22);
+    _hp(v, 130, 1048551, 20);
+    _hp(v, 131, 1048552, 20);
+    _hp(v, 132, 4194259, 22);
+    _hp(v, 133, 4194260, 22);
+    _hp(v, 134, 4194261, 22);
+    _hp(v, 135, 8388569, 23);
+    _hp(v, 136, 4194262, 22);
+    _hp(v, 137, 8388570, 23);
+    _hp(v, 138, 8388571, 23);
+    _hp(v, 139, 8388572, 23);
+    _hp(v, 140, 8388573, 23);
+    _hp(v, 141, 8388574, 23);
+    _hp(v, 142, 16777197, 24);
+    _hp(v, 143, 8388575, 23);
+    _hp(v, 144, 16777198, 24);
+    _hp(v, 145, 16777199, 24);
+    _hp(v, 146, 4194263, 22);
+    _hp(v, 147, 8388576, 23);
+    _hp(v, 148, 16777200, 24);
+    _hp(v, 149, 8388577, 23);
+    _hp(v, 150, 8388578, 23);
+    _hp(v, 151, 8388579, 23);
+    _hp(v, 152, 8388580, 23);
+    _hp(v, 153, 2097116, 21);
+    _hp(v, 154, 4194264, 22);
+    _hp(v, 155, 8388581, 23);
+    _hp(v, 156, 4194265, 22);
+    _hp(v, 157, 8388582, 23);
+    _hp(v, 158, 8388583, 23);
+    _hp(v, 159, 16777201, 24);
+    _hp(v, 160, 4194266, 22);
+    _hp(v, 161, 2097117, 21);
+    _hp(v, 162, 1048553, 20);
+    _hp(v, 163, 4194267, 22);
+    _hp(v, 164, 4194268, 22);
+    _hp(v, 165, 4194269, 22);
+    _hp(v, 166, 4194270, 22);
+    _hp(v, 167, 2097118, 21);
+    _hp(v, 168, 4194271, 22);
+    _hp(v, 169, 8388584, 23);
+    _hp(v, 170, 4194272, 22);
+    _hp(v, 171, 2097119, 21);
+    _hp(v, 172, 2097120, 21);
+    _hp(v, 173, 8388585, 23);
+    _hp(v, 174, 4194273, 22);
+    _hp(v, 175, 2097121, 21);
+    _hp(v, 176, 8388586, 23);
+    _hp(v, 177, 4194274, 22);
+    _hp(v, 178, 4194275, 22);
+    _hp(v, 179, 8388587, 23);
+    _hp(v, 180, 8388588, 23);
+    _hp(v, 181, 2097122, 21);
+    _hp(v, 182, 4194276, 22);
+    _hp(v, 183, 8388589, 23);
+    _hp(v, 184, 4194277, 22);
+    _hp(v, 185, 8388590, 23);
+    _hp(v, 186, 8388591, 23);
+    _hp(v, 187, 16777202, 24);
+    _hp(v, 188, 4194278, 22);
+    _hp(v, 189, 4194279, 22);
+    _hp(v, 190, 4194280, 22);
+    _hp(v, 191, 4194281, 22);
+    _hp(v, 192, 8388592, 23);
+    _hp(v, 193, 4194282, 22);
+    _hp(v, 194, 8388593, 23);
+    _hp(v, 195, 16777203, 24);
+    _hp(v, 196, 1048554, 20);
+    _hp(v, 197, 1048555, 20);
+    _hp(v, 198, 4194283, 22);
+    _hp(v, 199, 1048556, 20);
+    _hp(v, 200, 8388594, 23);
+    _hp(v, 201, 4194284, 22);
+    _hp(v, 202, 4194285, 22);
+    _hp(v, 203, 4194286, 22);
+    _hp(v, 204, 4194287, 22);
+    _hp(v, 205, 4194288, 22);
+    _hp(v, 206, 8388595, 23);
+    _hp(v, 207, 8388596, 23);
+    _hp(v, 208, 8388597, 23);
+    _hp(v, 209, 16777204, 24);
+    _hp(v, 210, 16777205, 24);
+    _hp(v, 211, 524268, 19);
+    _hp(v, 212, 1048557, 20);
+    _hp(v, 213, 524269, 19);
+    _hp(v, 214, 1048558, 20);
+    _hp(v, 215, 1048559, 20);
+    _hp(v, 216, 524270, 19);
+    _hp(v, 217, 524271, 19);
+    _hp(v, 218, 524272, 19);
+    _hp(v, 219, 524273, 19);
+    _hp(v, 220, 524274, 19);
+    _hp(v, 221, 524275, 19);
+    _hp(v, 222, 524276, 19);
+    _hp(v, 223, 1048560, 20);
+    _hp(v, 224, 1048561, 20);
+    _hp(v, 225, 524277, 19);
+    _hp(v, 226, 1048562, 20);
+    _hp(v, 227, 4194289, 22);
+    _hp(v, 228, 1048563, 20);
+    _hp(v, 229, 1048564, 20);
+    _hp(v, 230, 1048565, 20);
+    _hp(v, 231, 1048566, 20);
+    _hp(v, 232, 1048567, 20);
+    _hp(v, 233, 1048568, 20);
+    _hp(v, 234, 4194290, 22);
+    _hp(v, 235, 1048569, 20);
+    _hp(v, 236, 8388598, 23);
+    _hp(v, 237, 1048570, 20);
+    _hp(v, 238, 524278, 19);
+    _hp(v, 239, 1048571, 20);
+    _hp(v, 240, 8388599, 23);
+    _hp(v, 241, 524279, 19);
+    _hp(v, 242, 1048572, 20);
+    _hp(v, 243, 1048573, 20);
+    _hp(v, 244, 1048574, 20);
+    _hp(v, 245, 4194291, 22);
+    _hp(v, 246, 4194292, 22);
+    _hp(v, 247, 524280, 19);
+    _hp(v, 248, 1048575, 20);
+    _hp(v, 249, 8388600, 23);
+    _hp(v, 250, 524281, 19);
+    _hp(v, 251, 524282, 19);
+    _hp(v, 252, 4194293, 22);
+    _hp(v, 253, 4194294, 22);
+    _hp(v, 254, 8388601, 23);
+    _hp(v, 255, 524283, 19);
+    _hp(v, 256, 1073741823, 30);   // EOS
+    return v;
+}
+
+fn _hp(v: *Vector<int>, sym: int, code: int, length: int) {
+    v.push(length);
+    v.push(code);
+    v.push(sym);
+}

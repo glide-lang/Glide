@@ -282,9 +282,10 @@ fn resolve_concrete_assoc(g: *CG, t: *Type) -> *Type {
 }
 
 // Walk a type, emitting `typedef struct mangled mangled;` forward
-// declarations for any TY_GENERIC encountered. Lets result/option/
-// optres struct typedefs that wrap a `*Vector<X>`-style pointer
-// reference the mangled tag before its full body shows up later.
+// declarations AND the full body for any TY_GENERIC encountered.
+// Lets result/option/optres struct typedefs that wrap a
+// `*Vector<X>`-style pointer reference the mangled tag, with the
+// body in scope so users that store the value (not pointer) work too.
 //
 // Skips `chan<T>` — the channel runtime emits its own
 // `__glide_chan_T_t` typedef and a stray `chan__T` here would just
@@ -297,6 +298,7 @@ fn forward_decl_generic_monos(g: *CG, t: *Type) {
         if !g.emitted_monos.contains(mangled) {
             g.emitted_monos.insert(mangled, true);
             println!("typedef struct ", mangled, " ", mangled, ";");
+            emit_struct_mono(g, t);
         }
     }
     if t.inner != null { forward_decl_generic_monos(g, t.inner); }
