@@ -1,0 +1,115 @@
+import stdlib::testing::*;
+import stdlib::net::*;
+import stdlib::mail::message::*;
+import stdlib::mail::smtp::*;
+
+// Fake SMTP server: drives the conversation and returns success codes
+// for the standard sequence. Validates the client side runs through
+// the state machine without protocol errors. Per-line recording is
+// skipped because Glide doesn't have top-level mutable globals — the
+// integration smoke (in /tmp during development) does the byte-level
+// inspection.
+
+fn _fake_smtp(port: int) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("220 fake.example.com SMTP service ready\r\n");
+    let buf: *u8 = malloc(8192) as *u8;
+    let mut data_mode: bool = false;
+    let mut data_acc: string = "";
+    while true {
+        let n: int = c.read(buf as *void, 8192);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+
+        if data_mode {
+            data_acc = data_acc.concat(s);
+            if data_acc.contains("\r\n.\r\n") {
+                c.write_str("250 OK queued\r\n");
+                data_mode = false;
+                data_acc = "";
+            }
+            continue;
+        }
+        let upper: string = s.to_upper().trim();
+        if upper.starts_with("EHLO") {
+            c.write_str("250-fake greets you\r\n250 SIZE 10485760\r\n");
+        } else if upper.starts_with("MAIL FROM") {
+            c.write_str("250 OK\r\n");
+        } else if upper.starts_with("RCPT TO") {
+            c.write_str("250 OK\r\n");
+        } else if upper.starts_with("DATA") {
+            c.write_str("354 send the data\r\n");
+            data_mode = true;
+        } else if upper.starts_with("QUIT") {
+            c.write_str("221 bye\r\n");
+            break;
+        } else {
+            c.write_str("500 unknown\r\n");
+        }
+    }
+    c.close(); l.close();
+}
+
+fn test_send_completes_full_state_machine() -> int {
+    spawn_thread _fake_smtp(43525);
+    sleep_ms(300);
+    let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43525);
+    let m: *Mail = Mail::new();
+    m.from = "alice@x"; m.to.push("bob@x"); m.subject = "t"; m.body = "hi";
+    let r: !int = c.send(m);
+    assert!(r.ok);
+    return 0;
+}
+
+fn test_multiple_recipients_all_succeed() -> int {
+    spawn_thread _fake_smtp(43526);
+    sleep_ms(300);
+    let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43526);
+    let m: *Mail = Mail::new();
+    m.from = "a@x"; m.to.push("to1@x"); m.to.push("to2@x");
+    m.cc.push("cc1@x"); m.bcc.push("bcc1@x");
+    m.subject = "s"; m.body = "b";
+    let r: !int = c.send(m);
+    assert!(r.ok);
+    return 0;
+}
+
+fn _rejecting_server(port: int) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("220 fake ready\r\n");
+    let buf: *u8 = malloc(4096) as *u8;
+    while true {
+        let n: int = c.read(buf as *void, 4096);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+        let upper: string = s.to_upper().trim();
+        if upper.starts_with("EHLO") {
+            c.write_str("250 ok\r\n");
+        } else if upper.starts_with("MAIL FROM") {
+            c.write_str("550 sender refused\r\n");
+        } else if upper.starts_with("QUIT") {
+            c.write_str("221 bye\r\n"); break;
+        } else {
+            c.write_str("500 unknown\r\n");
+        }
+    }
+    c.close(); l.close();
+}
+
+fn test_client_surfaces_server_550_error() -> int {
+    spawn_thread _rejecting_server(43527);
+    sleep_ms(300);
+    let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43527);
+    let m: *Mail = Mail::new();
+    m.from = "x@x"; m.to.push("y@x"); m.subject = "s"; m.body = "b";
+    let r: !int = c.send(m);
+    assert_not!(r.ok);
+    assert!(r.err.contains("550"));
+    return 0;
+}

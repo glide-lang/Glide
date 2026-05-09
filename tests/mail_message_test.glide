@@ -1,0 +1,116 @@
+import stdlib::testing::*;
+import stdlib::mail::message::*;
+
+fn _basic() -> *Mail {
+    let m: *Mail = Mail::new();
+    m.from = "alice@example.com";
+    m.to.push("bob@example.com");
+    m.subject = "ping";
+    m.body = "hello";
+    return m;
+}
+
+fn test_plain_text_only_layout() -> int {
+    let m: *Mail = _basic();
+    let w: string = m.to_rfc5322();
+    assert!(w.contains("From: alice@example.com"));
+    assert!(w.contains("To: bob@example.com"));
+    assert!(w.contains("Subject: ping"));
+    assert!(w.contains("MIME-Version: 1.0"));
+    assert!(w.contains("Content-Type: text/plain; charset=UTF-8"));
+    assert!(w.contains("\r\n\r\nhello"));
+    assert_not!(w.contains("multipart"));
+    return 0;
+}
+
+fn test_html_alternative_layout() -> int {
+    let m: *Mail = _basic();
+    let h: ?string = some("<p>HTML body</p>");
+    m.html = h;
+    let w: string = m.to_rfc5322();
+    assert!(w.contains("multipart/alternative"));
+    assert!(w.contains("Content-Type: text/plain"));
+    assert!(w.contains("Content-Type: text/html"));
+    assert!(w.contains("hello"));
+    assert!(w.contains("<p>HTML body</p>"));
+    return 0;
+}
+
+fn test_attachment_mixed_layout() -> int {
+    let m: *Mail = _basic();
+    let a: *Attachment = malloc(sizeof(Attachment)) as *Attachment;
+    a.filename = "doc.txt";
+    a.mime_type = "text/plain";
+    a.data = "attached body";
+    m.attachments.push(a);
+    let w: string = m.to_rfc5322();
+    assert!(w.contains("multipart/mixed"));
+    assert!(w.contains("filename=\"doc.txt\""));
+    assert!(w.contains("Content-Transfer-Encoding: base64"));
+    return 0;
+}
+
+fn test_attachment_and_html_nested_layout() -> int {
+    let m: *Mail = _basic();
+    let h: ?string = some("<i>html</i>");
+    m.html = h;
+    let a: *Attachment = malloc(sizeof(Attachment)) as *Attachment;
+    a.filename = "x.bin"; a.mime_type = "application/octet-stream"; a.data = "z";
+    m.attachments.push(a);
+    let w: string = m.to_rfc5322();
+    assert!(w.contains("multipart/mixed"));
+    assert!(w.contains("multipart/alternative"));
+    assert!(w.contains("application/octet-stream"));
+    return 0;
+}
+
+fn test_recipient_lists_join_with_comma() -> int {
+    let m: *Mail = Mail::new();
+    m.from = "a@x";
+    m.to.push("b@x"); m.to.push("c@x");
+    m.cc.push("d@x");
+    m.subject = "s"; m.body = "y";
+    let w: string = m.to_rfc5322();
+    assert!(w.contains("To: b@x, c@x"));
+    assert!(w.contains("Cc: d@x"));
+    return 0;
+}
+
+fn test_bcc_not_emitted_in_headers() -> int {
+    let m: *Mail = _basic();
+    m.bcc.push("eve@x");
+    let w: string = m.to_rfc5322();
+    assert_not!(w.contains("Bcc:"));
+    assert_not!(w.contains("eve@x"));
+    return 0;
+}
+
+fn test_message_id_auto_includes_from_domain() -> int {
+    let m: *Mail = _basic();
+    let w: string = m.to_rfc5322();
+    assert!(w.contains("@example.com>"));
+    assert!(w.contains("Message-Id: <"));
+    return 0;
+}
+
+fn test_parse_round_trip_basic() -> int {
+    let raw: string = "From: a@x\r\nTo: b@x\r\nSubject: hi\r\n\r\nbody";
+    let r: !*Mail = parse_mail(raw);
+    assert!(r.ok);
+    assert_str_eq!(r.val.from, "a@x");
+    assert_eq!(r.val.to.len(), 1);
+    assert_str_eq!(r.val.to.get(0), "b@x");
+    assert_str_eq!(r.val.subject, "hi");
+    assert_str_eq!(r.val.body, "body");
+    return 0;
+}
+
+fn test_parse_folded_header() -> int {
+    let raw: string = "Subject: hello\r\n there\r\nFrom: a@x\r\n\r\nbody";
+    let r: !*Mail = parse_mail(raw);
+    assert!(r.ok);
+    // Folded "hello\r\n there" → "hello there"
+    assert!(r.val.subject.contains("hello"));
+    assert!(r.val.subject.contains("there"));
+    return 0;
+}

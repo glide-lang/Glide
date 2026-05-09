@@ -1,0 +1,88 @@
+import stdlib::testing::*;
+import stdlib::net::*;
+import stdlib::mail::imap::*;
+
+fn _fake_imap(port: int) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("* OK fake IMAP ready\r\n");
+    let buf: *u8 = malloc(4096) as *u8;
+    while true {
+        let n: int = c.read(buf as *void, 4096);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+        let sp: int = s.index_of(" ");
+        if sp < 0 { continue; }
+        let tag: string = s.substring(0, sp);
+        let upper: string = s.to_upper();
+        if upper.contains("LOGIN") {
+            c.write_str(tag.concat(" OK login complete\r\n"));
+        } else if upper.contains("SELECT") {
+            c.write_str("* 3 EXISTS\r\n* 0 RECENT\r\n");
+            c.write_str(tag.concat(" OK SELECT complete\r\n"));
+        } else if upper.contains("FETCH") {
+            let body: string = "From: a@x\r\nSubject: hi\r\n\r\nbody";
+            c.write_str("* 1 FETCH (BODY[] {28}\r\n");
+            c.write_str(body);
+            c.write_str("\r\n");
+            c.write_str(tag.concat(" OK FETCH complete\r\n"));
+        } else if upper.contains("STORE") {
+            c.write_str("* 1 FETCH (FLAGS (\\Seen))\r\n");
+            c.write_str(tag.concat(" OK STORE complete\r\n"));
+        } else if upper.contains("LOGOUT") {
+            c.write_str("* BYE\r\n");
+            c.write_str(tag.concat(" OK LOGOUT complete\r\n"));
+            break;
+        }
+    }
+    c.close(); l.close();
+}
+
+fn test_login_select_returns_count() -> int {
+    spawn_thread _fake_imap(42243);
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42243, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("alice", "pwd");
+    let count: !int = p.select("INBOX");
+    assert!(count.ok);
+    assert_eq!(count.val, 3);
+    p.logout();
+    p.close();
+    return 0;
+}
+
+fn test_fetch_captures_literal() -> int {
+    spawn_thread _fake_imap(42244);
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42244, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p");
+    p.select("INBOX");
+    let body: !string = p.fetch(1);
+    assert!(body.ok);
+    assert_eq!(body.val.len(), 28);
+    assert!(body.val.starts_with("From: a@x"));
+    p.logout();
+    p.close();
+    return 0;
+}
+
+fn test_store_flag_succeeds() -> int {
+    spawn_thread _fake_imap(42245);
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42245, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p");
+    p.select("INBOX");
+    let r: !int = p.store_flag(1, "\\Seen", true);
+    assert!(r.ok);
+    p.logout();
+    p.close();
+    return 0;
+}

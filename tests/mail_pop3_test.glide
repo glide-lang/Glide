@@ -1,0 +1,94 @@
+import stdlib::testing::*;
+import stdlib::net::*;
+import stdlib::mail::pop3::*;
+
+fn _fake_pop3(port: int) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("+OK fake POP3 ready\r\n");
+    let buf: *u8 = malloc(4096) as *u8;
+    while true {
+        let n: int = c.read(buf as *void, 4096);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+        let upper: string = s.to_upper();
+        if      upper.starts_with("USER")  { c.write_str("+OK user\r\n"); }
+        else if upper.starts_with("PASS")  { c.write_str("+OK logged in\r\n"); }
+        else if upper.starts_with("STAT")  { c.write_str("+OK 2 1024\r\n"); }
+        else if upper.starts_with("LIST")  { c.write_str("+OK 2 messages\r\n1 512\r\n2 512\r\n.\r\n"); }
+        else if upper.starts_with("RETR")  { c.write_str("+OK 12 octets\r\nhello world\r\n.\r\n"); }
+        else if upper.starts_with("DELE")  { c.write_str("+OK deleted\r\n"); }
+        else if upper.starts_with("NOOP")  { c.write_str("+OK\r\n"); }
+        else if upper.starts_with("QUIT")  { c.write_str("+OK bye\r\n"); break; }
+        else                                { c.write_str("-ERR unknown\r\n"); }
+    }
+    c.close(); l.close();
+}
+
+fn test_login_and_stat() -> int {
+    spawn_thread _fake_pop3(42210);
+    sleep_ms(300);
+    let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42210, false);
+    assert!(s.ok);
+    let p: *Pop3Session = s.val;
+    let l: !int = p.login("alice", "pwd");
+    assert!(l.ok);
+    let info: !*Pop3MsgInfo = p.stat();
+    assert!(info.ok);
+    assert_eq!(info.val.idx, 2);
+    assert_eq!(info.val.size, 1024);
+    p.quit();
+    p.close();
+    return 0;
+}
+
+fn test_list_returns_msg_infos() -> int {
+    spawn_thread _fake_pop3(42211);
+    sleep_ms(300);
+    let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42211, false);
+    assert!(s.ok);
+    let p: *Pop3Session = s.val;
+    p.login("a", "p");
+    let r: !*Vector<*Pop3MsgInfo> = p.list();
+    assert!(r.ok);
+    assert_eq!(r.val.len(), 2);
+    assert_eq!(r.val.get(0).idx, 1);
+    assert_eq!(r.val.get(0).size, 512);
+    assert_eq!(r.val.get(1).idx, 2);
+    p.quit();
+    p.close();
+    return 0;
+}
+
+fn test_retrieve_returns_message_body() -> int {
+    spawn_thread _fake_pop3(42212);
+    sleep_ms(300);
+    let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42212, false);
+    assert!(s.ok);
+    let p: *Pop3Session = s.val;
+    p.login("a", "p");
+    let r: !string = p.retrieve(1);
+    assert!(r.ok);
+    assert_str_eq!(r.val, "hello world");
+    p.quit();
+    p.close();
+    return 0;
+}
+
+fn test_delete_and_noop() -> int {
+    spawn_thread _fake_pop3(42213);
+    sleep_ms(300);
+    let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42213, false);
+    assert!(s.ok);
+    let p: *Pop3Session = s.val;
+    p.login("a", "p");
+    let d: !int = p.delete(1);
+    assert!(d.ok);
+    let nn: !int = p.noop();
+    assert!(nn.ok);
+    p.quit();
+    p.close();
+    return 0;
+}
