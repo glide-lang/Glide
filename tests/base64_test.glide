@@ -1,0 +1,46 @@
+import stdlib::testing::*;
+import stdlib::base64::*;
+
+fn check_vector(raw: string, encoded: string) {
+    assert_str_eq!(b64_encode(raw), encoded);
+    let decoded: !string = b64_decode(encoded);
+    assert!(decoded.ok);
+    assert_str_eq!(decoded.val, raw);
+}
+
+fn test_rfc_4648_vectors() -> int {
+    check_vector("", "");
+    check_vector("f", "Zg==");
+    check_vector("fo", "Zm8=");
+    check_vector("foo", "Zm9v");
+    check_vector("foob", "Zm9vYg==");
+    check_vector("fooba", "Zm9vYmE=");
+    check_vector("foobar", "Zm9vYmFy");
+    return 0;
+}
+
+fn test_round_trip() -> int {
+    let original: string = "hello, Glide base64: 0123456789 + /";
+    let encoded: string = b64_encode(original);
+    let decoded: !string = b64_decode(encoded);
+    assert!(decoded.ok);
+    assert_str_eq!(decoded.val, original);
+    return 0;
+}
+
+fn test_decode_accepts_missing_padding() -> int {
+    let one: !string = b64_decode("Zg");
+    assert!(one.ok);
+    assert_str_eq!(one.val, "f");
+
+    let two: !string = b64_decode("Zm8");
+    assert!(two.ok);
+    assert_str_eq!(two.val, "fo");
+    return 0;
+}
+
+fn test_decode_rejects_invalid_chars() -> int {
+    let bad: !string = b64_decode("Zm$v");
+    assert!(!bad.ok);
+    return 0;
+}
