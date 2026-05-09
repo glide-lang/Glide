@@ -37,6 +37,8 @@ pub struct ImapSession {
     is_tls: bool,
     rx_buf: string,
     tag_counter: int,
+    /// Tag of the in-flight IDLE command — empty when not idling.
+    idle_tag: string,
 }
 
 impl ImapSession {
@@ -48,6 +50,7 @@ impl ImapSession {
         s.is_tls = use_tls;
         s.rx_buf = "";
         s.tag_counter = 0;
+        s.idle_tag = "";
 
         if use_tls {
             let cfg: *TlsConfig = TlsConfig::client();
@@ -208,6 +211,55 @@ impl ImapSession {
                 return err("imap: ".concat(line));
             }
             // Untagged line during APPEND (rare) — ignore.
+        }
+        return ok(0);
+    }
+
+    /// Enter IDLE mode (RFC 2177). The server starts pushing untagged
+    /// updates (`* 5 EXISTS`, `* 5 RECENT`, `* 3 EXPUNGE`, etc.) until
+    /// the client sends `DONE`. After this returns ok, drive the loop
+    /// with `idle_next()` and call `idle_stop()` to exit cleanly.
+    pub fn idle_start(self: *ImapSession) -> !int {
+        let tag: string = self._next_tag();
+        self.idle_tag = tag;
+        let _w: !int = self._write(tag.concat(" IDLE\r\n"));
+        let cont: !string = self._read_line();
+        if !cont.ok { return err(cont.err); }
+        if !cont.val.starts_with("+") {
+            return err("imap: IDLE expected `+`, got ".concat(cont.val));
+        }
+        return ok(0);
+    }
+
+    /// Block until the next untagged line. Returns the raw line. Any
+    /// timeout configured on the underlying TLS/TCP stream applies —
+    /// when it fires, the underlying read errors out and the err
+    /// surfaces here. Loop on this and break when your application
+    /// signals shutdown (e.g. via a chan / Atomic flag).
+    pub fn idle_next(self: *ImapSession) -> !string {
+        return self._read_line();
+    }
+
+    /// Send `DONE` and drain replies until the IDLE-tagged OK arrives.
+    /// Any pending untagged lines that were already on the wire are
+    /// silently consumed; pull them via `idle_next()` first if you
+    /// need them.
+    pub fn idle_stop(self: *ImapSession) -> !int {
+        let tag: string = self.idle_tag;
+        if tag.eq("") { return err("imap: idle_stop without idle_start"); }
+        let _w: !int = self._write("DONE\r\n");
+        while true {
+            let lr: !string = self._read_line();
+            if !lr.ok { return err(lr.err); }
+            let line: string = lr.val;
+            if line.starts_with(tag.concat(" ")) {
+                self.idle_tag = "";
+                let after: string = line.substring(tag.len() + 1, line.len());
+                if after.starts_with("OK") { return ok(0); }
+                return err("imap: ".concat(line));
+            }
+            // Untagged update arrived between our DONE and the OK —
+            // discard. Real apps should pump idle_next() first.
         }
         return ok(0);
     }

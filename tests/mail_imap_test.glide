@@ -227,6 +227,92 @@ fn test_append_without_flags() -> int {
     return 0;
 }
 
+// ---- IDLE ----
+
+fn _idle_server(port: int) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("* OK ready\r\n");
+    let buf: *u8 = malloc(4096) as *u8;
+    let mut idle_tag: string = "";
+    while true {
+        let n: int = c.read(buf as *void, 4096);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+        if !idle_tag.eq("") {
+            if s.to_upper().starts_with("DONE") {
+                c.write_str(idle_tag.concat(" OK IDLE done\r\n"));
+                idle_tag = "";
+            }
+            continue;
+        }
+        let sp: int = s.index_of(" ");
+        if sp < 0 { continue; }
+        let tag: string = s.substring(0, sp);
+        let upper: string = s.to_upper();
+        if upper.contains("LOGIN")  { c.write_str(tag.concat(" OK\r\n")); }
+        else if upper.contains("SELECT") {
+            c.write_str("* 5 EXISTS\r\n");
+            c.write_str(tag.concat(" OK\r\n"));
+        }
+        else if upper.contains("IDLE") {
+            c.write_str("+ idling\r\n");
+            idle_tag = tag;
+            sleep_ms(50);
+            c.write_str("* 6 EXISTS\r\n");
+            sleep_ms(20);
+            c.write_str("* 7 EXISTS\r\n");
+        }
+        else if upper.contains("LOGOUT") {
+            c.write_str("* BYE\r\n");
+            c.write_str(tag.concat(" OK\r\n"));
+            break;
+        }
+    }
+    c.close(); l.close();
+}
+
+fn test_idle_pushes_updates_and_stops() -> int {
+    spawn_thread _idle_server(42255);
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42255, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p"); p.select("INBOX");
+
+    let st: !int = p.idle_start();
+    assert!(st.ok);
+
+    let l1: !string = p.idle_next();
+    assert!(l1.ok);
+    assert!(l1.val.contains("EXISTS"));
+    let l2: !string = p.idle_next();
+    assert!(l2.ok);
+    assert!(l2.val.contains("EXISTS"));
+
+    let stop: !int = p.idle_stop();
+    assert!(stop.ok);
+
+    p.logout(); p.close();
+    return 0;
+}
+
+fn test_idle_stop_without_start_errors() -> int {
+    // Use the same fake server but skip idle_start.
+    spawn_thread _idle_server(42256);
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42256, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p");
+    let stop: !int = p.idle_stop();
+    assert_not!(stop.ok);
+    p.logout(); p.close();
+    return 0;
+}
+
 fn test_store_flag_succeeds() -> int {
     spawn_thread _fake_imap(42245);
     sleep_ms(300);
