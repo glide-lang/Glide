@@ -127,6 +127,91 @@ impl ImapSession {
         return ok(0);
     }
 
+    /// Run a SEARCH against the currently-selected mailbox. The
+    /// `criteria` string is appended verbatim after `SEARCH ` — pass
+    /// any RFC 3501 §6.4.4 keyword(s):
+    ///   "ALL" / "UNSEEN" / "SEEN" / "FLAGGED" / "DELETED" / "RECENT"
+    ///   "FROM \"alice@x\""    "SUBJECT \"meeting\""
+    ///   "SINCE 1-Jan-2026"   "BEFORE 31-Dec-2026"
+    ///   "LARGER 1024"         "SMALLER 100000"
+    ///   "BODY \"keyword\""    "TEXT \"keyword\""
+    ///   "FROM x SUBJECT y"    (juxtaposition = AND)
+    ///   "OR FROM x FROM y"    "NOT DELETED"
+    /// Returns the sequence numbers of matching messages.
+    pub fn search(self: *ImapSession, criteria: string) -> !*Vector<int> {
+        let cmd: string = "SEARCH ".concat(criteria);
+        let r: !*ImapResponse = self._cmd(cmd);
+        if !r.ok { return err(r.err); }
+        let out: *Vector<int> = Vector::new();
+        for let i: int = 0; i < r.val.untagged.len(); i++ {
+            let line: string = r.val.untagged.get(i);
+            if !line.starts_with("* SEARCH") { continue; }
+            // "* SEARCH 2 4 6" or "* SEARCH" (empty)
+            let rest: string = line.substring(8, line.len()).trim();
+            if rest.len() == 0 { continue; }
+            let parts: *Vector<string> = rest.split(" ");
+            for let j: int = 0; j < parts.len(); j++ {
+                let p: string = parts.get(j).trim();
+                if p.len() == 0 { continue; }
+                let nr: !int = p.try_parse_int();
+                if nr.ok { out.push(nr.val); }
+            }
+        }
+        return ok(out);
+    }
+
+    /// Convenience: search for unread messages.
+    pub fn search_unseen(self: *ImapSession) -> !*Vector<int> {
+        return self.search("UNSEEN");
+    }
+
+    /// Convenience: search by sender. The address is wrapped in
+    /// quotes; the IMAP server matches it as a substring of the
+    /// `From:` header.
+    pub fn search_from(self: *ImapSession, addr: string) -> !*Vector<int> {
+        return self.search("FROM \"".concat(addr).concat("\""));
+    }
+
+    /// APPEND a raw RFC 5322 message into `mailbox`. `flags` is the
+    /// space-separated flag list (without parens, without leading
+    /// backslash escaped; e.g. `"\\Seen \\Flagged"`). Pass `""` for
+    /// no flags. Useful for moving messages between mailboxes
+    /// (Sent / Drafts) without losing server-side state.
+    pub fn append(self: *ImapSession, mailbox: string, flags: string,
+                  message: string) -> !int {
+        let mut head: string = "APPEND \"".concat(mailbox).concat("\"");
+        if flags.len() > 0 {
+            head = head.concat(" (").concat(flags).concat(")");
+        }
+        let n: int = message.len();
+        head = head.concat(" {").concat(_imap_itos(n)).concat("}");
+
+        let tag: string = self._next_tag();
+        let _w: !int = self._write(tag.concat(" ").concat(head).concat("\r\n"));
+        // Server replies with "+ ..." continuation request, then we
+        // send the literal followed by CRLF.
+        let cont: !string = self._read_line();
+        if !cont.ok { return err(cont.err); }
+        if !cont.val.starts_with("+") {
+            return err("imap: APPEND expected continuation, got ".concat(cont.val));
+        }
+        let _w2: !int = self._write(message);
+        let _w3: !int = self._write("\r\n");
+        // Now read until tagged response.
+        while true {
+            let lr: !string = self._read_line();
+            if !lr.ok { return err(lr.err); }
+            let line: string = lr.val;
+            if line.starts_with(tag.concat(" ")) {
+                let after: string = line.substring(tag.len() + 1, line.len());
+                if after.starts_with("OK") { return ok(0); }
+                return err("imap: ".concat(line));
+            }
+            // Untagged line during APPEND (rare) — ignore.
+        }
+        return ok(0);
+    }
+
     pub fn logout(self: *ImapSession) -> !int {
         let _r: !*ImapResponse = self._cmd("LOGOUT");
         if !_r.ok { return err(_r.err); }
@@ -197,7 +282,8 @@ impl ImapSession {
             let line: string = lr.val;
             if line.starts_with(tag.concat(" ")) {
                 resp.tagged = line;
-                if line.contains(" OK ") { return ok(resp); }
+                let after: string = line.substring(tag.len() + 1, line.len());
+                if after.starts_with("OK") { return ok(resp); }
                 return err("imap: ".concat(line));
             }
             resp.untagged.push(line);
@@ -223,7 +309,8 @@ impl ImapSession {
             let line: string = lr.val;
             if line.starts_with(tag.concat(" ")) {
                 resp.tagged = line;
-                if line.contains(" OK ") { return ok(resp); }
+                let after: string = line.substring(tag.len() + 1, line.len());
+                if after.starts_with("OK") { return ok(resp); }
                 return err("imap: ".concat(line));
             }
             resp.untagged.push(line);

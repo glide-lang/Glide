@@ -72,6 +72,161 @@ fn test_fetch_captures_literal() -> int {
     return 0;
 }
 
+// ---- SEARCH ----
+
+fn _search_server(port: int, search_reply: string) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("* OK ready\r\n");
+    let buf: *u8 = malloc(4096) as *u8;
+    while true {
+        let n: int = c.read(buf as *void, 4096);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+        let sp: int = s.index_of(" ");
+        if sp < 0 { continue; }
+        let tag: string = s.substring(0, sp);
+        let upper: string = s.to_upper();
+        if upper.contains("LOGIN") { c.write_str(tag.concat(" OK\r\n")); }
+        else if upper.contains("SELECT") {
+            c.write_str("* 5 EXISTS\r\n");
+            c.write_str(tag.concat(" OK\r\n"));
+        }
+        else if upper.contains("SEARCH") {
+            c.write_str(search_reply);
+            c.write_str(tag.concat(" OK\r\n"));
+        }
+        else if upper.contains("LOGOUT") {
+            c.write_str("* BYE\r\n");
+            c.write_str(tag.concat(" OK\r\n"));
+            break;
+        }
+    }
+    c.close(); l.close();
+}
+
+fn test_search_returns_seq_numbers() -> int {
+    spawn_thread _search_server(42250, "* SEARCH 2 4 6\r\n");
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42250, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p"); p.select("INBOX");
+    let r: !*Vector<int> = p.search("UNSEEN");
+    assert!(r.ok);
+    assert_eq!(r.val.len(), 3);
+    assert_eq!(r.val.get(0), 2);
+    assert_eq!(r.val.get(1), 4);
+    assert_eq!(r.val.get(2), 6);
+    p.logout(); p.close();
+    return 0;
+}
+
+fn test_search_empty_result() -> int {
+    spawn_thread _search_server(42251, "* SEARCH\r\n");
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42251, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p"); p.select("INBOX");
+    let r: !*Vector<int> = p.search("UNSEEN");
+    assert!(r.ok);
+    assert_eq!(r.val.len(), 0);
+    p.logout(); p.close();
+    return 0;
+}
+
+fn test_search_from_helper_quotes_addr() -> int {
+    spawn_thread _search_server(42252, "* SEARCH 1\r\n");
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42252, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p"); p.select("INBOX");
+    let r: !*Vector<int> = p.search_from("alice@example.com");
+    assert!(r.ok);
+    assert_eq!(r.val.len(), 1);
+    p.logout(); p.close();
+    return 0;
+}
+
+// ---- APPEND ----
+
+fn _append_server(port: int) {
+    let l: *Listener = Listener::bind(port);
+    let c: *Conn = l.accept();
+    c.write_str("* OK ready\r\n");
+    let buf: *u8 = malloc(8192) as *u8;
+    let mut append_size: int = 0;
+    let mut append_tag: string = "";
+    let mut append_acc: string = "";
+    while true {
+        let n: int = c.read(buf as *void, 8192);
+        if n <= 0 { break; }
+        let s: string = malloc(n + 1) as string;
+        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        (s as *u8)[n] = 0 as u8;
+
+        if append_size > 0 {
+            append_acc = append_acc.concat(s);
+            if append_acc.len() >= append_size + 2 {
+                c.write_str(append_tag.concat(" OK APPEND completed\r\n"));
+                append_size = 0; append_acc = "";
+            }
+            continue;
+        }
+        let sp: int = s.index_of(" ");
+        if sp < 0 { continue; }
+        let tag: string = s.substring(0, sp);
+        let upper: string = s.to_upper();
+        if upper.contains("LOGIN") { c.write_str(tag.concat(" OK\r\n")); }
+        else if upper.contains("APPEND") {
+            let open: int = s.index_of("{");
+            let close: int = s.index_of("}");
+            if open >= 0 && close > open {
+                let nstr: string = s.substring(open + 1, close);
+                let nr: !int = nstr.try_parse_int();
+                if nr.ok { append_size = nr.val; append_tag = tag; }
+            }
+            c.write_str("+ ready\r\n");
+        } else if upper.contains("LOGOUT") {
+            c.write_str("* BYE\r\n");
+            c.write_str(tag.concat(" OK\r\n"));
+            break;
+        }
+    }
+    c.close(); l.close();
+}
+
+fn test_append_succeeds() -> int {
+    spawn_thread _append_server(42253);
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42253, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p");
+    let msg: string = "From: a@x\r\nSubject: drafted\r\n\r\nbody";
+    let r: !int = p.append("Drafts", "\\Seen", msg);
+    assert!(r.ok);
+    p.logout(); p.close();
+    return 0;
+}
+
+fn test_append_without_flags() -> int {
+    spawn_thread _append_server(42254);
+    sleep_ms(300);
+    let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42254, false);
+    assert!(s.ok);
+    let p: *ImapSession = s.val;
+    p.login("a", "p");
+    let r: !int = p.append("INBOX", "", "From: x\r\n\r\nbody");
+    assert!(r.ok);
+    p.logout(); p.close();
+    return 0;
+}
+
 fn test_store_flag_succeeds() -> int {
     spawn_thread _fake_imap(42245);
     sleep_ms(300);
