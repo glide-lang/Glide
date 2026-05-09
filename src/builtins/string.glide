@@ -7,6 +7,26 @@ fn _ws(c: int) -> bool {
 }
 
 impl string {
+    /// Lexicographic comparison. Returns a negative int if `self` sorts
+    /// before `other`, 0 if equal, a positive int if it sorts after.
+    /// Compares byte-by-byte (UTF-8 ordering matches code-point ordering
+    /// for ASCII; multi-byte sequences sort by raw byte order).
+    pub fn cmp(self: string, other: string) -> int {
+        let n: int = self.len();
+        let m: int = other.len();
+        let mut k: int = n;
+        if m < k { k = m; }
+        for let i: int = 0; i < k; i++ {
+            let a: int = self.at(i).to_int();
+            let b: int = other.at(i).to_int();
+            if a < b { return -1; }
+            if a > b { return 1; }
+        }
+        if n < m { return -1; }
+        if n > m { return 1; }
+        return 0;
+    }
+
     pub fn contains(self: string, sub: string) -> bool {
         return self.index_of(sub) >= 0;
     }

@@ -514,4 +514,24 @@ impl Vector<string> {
         }
         return out;
     }
+
+    /// Lexicographically largest element, or `none` if the vector is empty.
+    pub fn max(self: *Vector<string>) -> ?string {
+        if self.len == 0 { return none(); }
+        let mut m: string = self.data[0];
+        for let i: int = 1; i < self.len; i++ {
+            if self.data[i].cmp(m) > 0 { m = self.data[i]; }
+        }
+        return some(m);
+    }
+
+    /// Lexicographically smallest element, or `none` if empty.
+    pub fn min(self: *Vector<string>) -> ?string {
+        if self.len == 0 { return none(); }
+        let mut m: string = self.data[0];
+        for let i: int = 1; i < self.len; i++ {
+            if self.data[i].cmp(m) < 0 { m = self.data[i]; }
+        }
+        return some(m);
+    }
 }

@@ -130,6 +130,7 @@ fn stdlib_method_ret(ty_name: string, method: string) -> *Type {
     if ty_name.eq("string") {
         if method.eq("len") { return ty_named("int"); }
         if method.eq("eq") { return ty_named("bool"); }
+        if method.eq("cmp") { return ty_named("int"); }
         if method.eq("at") { return ty_named("char"); }
         if method.eq("concat") { return ty_named("string"); }
         if method.eq("substring") { return ty_named("string"); }
