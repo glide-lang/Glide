@@ -135,26 +135,26 @@ pub fn h2_preface() -> string {
 /// announce our settings, or with FrameFlag::ack() to ack the peer's.
 pub fn settings_payload_empty() -> string { return ""; }
 
-/// 8-byte SETTINGS payload with one (key, value). Repeat to send more.
-pub fn settings_pair(key: int, value: int) -> string {
-    let mut s: string = "";
-    s = s.concat(((key   >> 8) & 255 as char).to_string());
-    s = s.concat(( key         & 255 as char).to_string());
-    s = s.concat(((value >> 24) & 255 as char).to_string());
-    s = s.concat(((value >> 16) & 255 as char).to_string());
-    s = s.concat(((value >>  8) & 255 as char).to_string());
-    s = s.concat(( value        & 255 as char).to_string());
-    return s;
+/// Append a single 6-byte SETTINGS entry (16-bit key + 32-bit value).
+/// Settings keys (RFC 7540 §6.5.2):
+///   0x1 HEADER_TABLE_SIZE       0x2 ENABLE_PUSH
+///   0x3 MAX_CONCURRENT_STREAMS  0x4 INITIAL_WINDOW_SIZE
+///   0x5 MAX_FRAME_SIZE          0x6 MAX_HEADER_LIST_SIZE
+pub fn settings_pair_to(buf: *ByteBuffer, key: int, value: int) {
+    buf.push(((key >> 8)    & 255) as u8);
+    buf.push(( key          & 255) as u8);
+    buf.push(((value >> 24) & 255) as u8);
+    buf.push(((value >> 16) & 255) as u8);
+    buf.push(((value >>  8) & 255) as u8);
+    buf.push(( value        & 255) as u8);
 }
 
-/// WINDOW_UPDATE payload: 31-bit increment, top bit reserved.
-pub fn window_update_payload(increment: int) -> string {
-    let mut s: string = "";
-    s = s.concat(((increment >> 24) & 127 as char).to_string());
-    s = s.concat(((increment >> 16) & 255 as char).to_string());
-    s = s.concat(((increment >>  8) & 255 as char).to_string());
-    s = s.concat(( increment        & 255 as char).to_string());
-    return s;
+/// Append a 4-byte WINDOW_UPDATE payload (31-bit increment + reserved bit).
+pub fn window_update_to(buf: *ByteBuffer, increment: int) {
+    buf.push(((increment >> 24) & 127) as u8);
+    buf.push(((increment >> 16) & 255) as u8);
+    buf.push(((increment >>  8) & 255) as u8);
+    buf.push(( increment        & 255) as u8);
 }
 
 // ===========================================================================
@@ -176,9 +176,16 @@ pub struct H2Conn {
 
 impl H2Conn {
     /// Wrap an already-handshaked TlsStream that negotiated ALPN h2.
-    /// Sends the connection preface + an initial empty SETTINGS. The
-    /// peer's SETTINGS arrives during the response read; the ACK is
-    /// sent inline by `_read_response`.
+    /// Sends:
+    ///   * the connection preface (24-byte magic)
+    ///   * a SETTINGS frame advertising INITIAL_WINDOW_SIZE = 1 MiB
+    ///     and ENABLE_PUSH = 0 — server learns we want big stream
+    ///     windows and don't accept push promises
+    ///   * a connection-level WINDOW_UPDATE adding ~960 KiB to take
+    ///     the connection window up to ~1 MiB (default 64 KiB)
+    ///
+    /// The peer's SETTINGS arrives during the response read; the ACK
+    /// is sent inline by `_read_response`.
     pub fn over(tls: *TlsStream) -> !*H2Conn {
         let c: *H2Conn = malloc(sizeof(H2Conn)) as *H2Conn;
         c.tls = tls;
@@ -195,7 +202,22 @@ impl H2Conn {
         for let i: int = 0; i < preface.len(); i++ {
             buf.push(preface.at(i).to_int() as u8);
         }
-        write_frame(buf, FrameType::settings(), 0, 0, "");
+
+        // SETTINGS payload: 2 entries × 6 bytes = 12 bytes.
+        let settings: *ByteBuffer = ByteBuffer::new();
+        defer settings.free();
+        settings_pair_to(settings, 2, 0);          // ENABLE_PUSH = false
+        settings_pair_to(settings, 4, 1048576);     // INITIAL_WINDOW_SIZE = 1 MiB
+        write_frame_bytes(buf, FrameType::settings(), 0, 0, settings);
+
+        // Connection-level WINDOW_UPDATE: bump conn window from 64 KiB
+        // default up to ~1 MiB so the server doesn't pause when a body
+        // crosses the 64 KiB mark before our per-DATA replenish runs.
+        let wu: *ByteBuffer = ByteBuffer::new();
+        defer wu.free();
+        window_update_to(wu, 983041);   // 1 MiB - 65535
+        write_frame_bytes(buf, FrameType::window_update(), 0, 0, wu);
+
         let w: !int = tls.write_bytes(buf.data, buf.len);
         if !w.ok { return err(w.err); }
         return ok(c);
@@ -312,6 +334,22 @@ impl H2Conn {
             }
             if h.frame_type == FrameType::data() {
                 _bb_append(body, payload);
+                // Replenish flow-control windows for the bytes we
+                // just consumed: one for the stream, one for the
+                // connection. RFC 7540 §6.9 — both windows shrink
+                // when DATA arrives and must be topped up explicitly.
+                if h.length > 0 {
+                    let wbuf: *ByteBuffer = ByteBuffer::new();
+                    window_update_to(wbuf, h.length);
+                    let frame: *ByteBuffer = ByteBuffer::new();
+                    write_frame_bytes(frame, FrameType::window_update(),
+                                       0, h.stream_id, wbuf);
+                    write_frame_bytes(frame, FrameType::window_update(),
+                                       0, 0, wbuf);
+                    let _: !int = self.tls.write_bytes(frame.data, frame.len);
+                    wbuf.free();
+                    frame.free();
+                }
                 if (h.flags & FrameFlag::end_stream()) != 0 { stream_closed = true; }
                 continue;
             }
