@@ -1,0 +1,193 @@
+import stdlib::testing::*;
+import stdlib::iter::*;
+
+fn _double(x: int) -> int { return x * 2; }
+fn _square(x: int) -> int { return x * x; }
+fn _to_str(x: int) -> string {
+    if x == 1 { return "one"; }
+    if x == 2 { return "two"; }
+    if x == 3 { return "three"; }
+    return "?";
+}
+fn _is_positive(x: int) -> bool { return x > 0; }
+fn _is_even(x: int) -> bool { return x % 2 == 0; }
+fn _lt5(x: int) -> bool { return x < 5; }
+fn _gte3(x: int) -> bool { return x >= 3; }
+fn _add(a: int, b: int) -> int { return a + b; }
+
+fn test_iter_range_basic() -> int {
+    let v: *Vector<int> = iter_range(1, 5);
+    assert_eq!(v.len(), 4);
+    assert_eq!(v.get(0), 1);
+    assert_eq!(v.get(3), 4);
+    return 0;
+}
+
+fn test_iter_range_empty_when_end_le_start() -> int {
+    let v: *Vector<int> = iter_range(5, 5);
+    assert_eq!(v.len(), 0);
+    return 0;
+}
+
+fn test_iter_range_step_basic() -> int {
+    let v: *Vector<int> = iter_range_step(0, 10, 3);
+    assert_eq!(v.len(), 4);
+    assert_eq!(v.get(0), 0);
+    assert_eq!(v.get(1), 3);
+    assert_eq!(v.get(3), 9);
+    return 0;
+}
+
+fn test_iter_repeat_n_copies() -> int {
+    let v: *Vector<int> = iter_repeat(7, 5);
+    assert_eq!(v.len(), 5);
+    assert_eq!(v.get(0), 7);
+    assert_eq!(v.get(4), 7);
+    return 0;
+}
+
+fn test_iter_map_doubles() -> int {
+    let v: *Vector<int> = iter_range(1, 5);
+    let m: *Vector<int> = iter_map(v, _double);
+    assert_eq!(m.len(), 4);
+    assert_eq!(m.get(0), 2);
+    assert_eq!(m.get(3), 8);
+    return 0;
+}
+
+fn test_iter_map_int_to_string() -> int {
+    let v: *Vector<int> = iter_range(1, 4);
+    let names: *Vector<string> = iter_map(v, _to_str);
+    assert_eq!(names.len(), 3);
+    assert_str_eq!(names.get(0), "one");
+    assert_str_eq!(names.get(2), "three");
+    return 0;
+}
+
+fn test_iter_filter_keeps_matches() -> int {
+    let v: *Vector<int> = iter_range(0 - 2, 5);
+    let pos: *Vector<int> = iter_filter(v, _is_positive);
+    assert_eq!(pos.len(), 4);
+    assert_eq!(pos.get(0), 1);
+    assert_eq!(pos.get(3), 4);
+    return 0;
+}
+
+fn test_iter_take_first_n() -> int {
+    let v: *Vector<int> = iter_range(0, 10);
+    let t: *Vector<int> = iter_take(v, 3);
+    assert_eq!(t.len(), 3);
+    assert_eq!(t.get(2), 2);
+    return 0;
+}
+
+fn test_iter_take_more_than_len_caps() -> int {
+    let v: *Vector<int> = iter_range(0, 3);
+    let t: *Vector<int> = iter_take(v, 100);
+    assert_eq!(t.len(), 3);
+    return 0;
+}
+
+fn test_iter_skip_drops_first_n() -> int {
+    let v: *Vector<int> = iter_range(0, 10);
+    let s: *Vector<int> = iter_skip(v, 7);
+    assert_eq!(s.len(), 3);
+    assert_eq!(s.get(0), 7);
+    assert_eq!(s.get(2), 9);
+    return 0;
+}
+
+fn test_iter_take_while_stops_at_first_false() -> int {
+    let v: *Vector<int> = iter_range(0, 10);
+    let t: *Vector<int> = iter_take_while(v, _lt5);
+    assert_eq!(t.len(), 5);
+    assert_eq!(t.get(4), 4);
+    return 0;
+}
+
+fn test_iter_skip_while_starts_at_first_false() -> int {
+    let v: *Vector<int> = iter_range(0, 6);
+    let s: *Vector<int> = iter_skip_while(v, _lt5);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s.get(0), 5);
+    return 0;
+}
+
+fn test_iter_fold_sums() -> int {
+    let v: *Vector<int> = iter_range(1, 5);
+    let total: int = iter_fold(v, 0, _add);
+    assert_eq!(total, 10);
+    return 0;
+}
+
+fn test_iter_count_matches_len() -> int {
+    let v: *Vector<int> = iter_range(0, 7);
+    assert_eq!(iter_count(v), 7);
+    return 0;
+}
+
+fn test_iter_any_true_when_one_matches() -> int {
+    let v: *Vector<int> = iter_range(1, 6);
+    assert!(iter_any(v, _is_even));
+    return 0;
+}
+
+fn test_iter_all_false_when_one_fails() -> int {
+    let v: *Vector<int> = iter_range(1, 6);
+    assert_not!(iter_all(v, _is_even));
+    return 0;
+}
+
+fn test_iter_find_some_on_hit() -> int {
+    let v: *Vector<int> = iter_range(1, 10);
+    let r: ?int = iter_find(v, _gte3);
+    assert!(r.has);
+    assert_eq!(r.val, 3);
+    return 0;
+}
+
+fn test_iter_find_none_on_miss() -> int {
+    let v: *Vector<int> = iter_range(0 - 5, 0 - 1);
+    let r: ?int = iter_find(v, _is_positive);
+    assert_not!(r.has);
+    return 0;
+}
+
+fn test_iter_sum_int() -> int {
+    let v: *Vector<int> = iter_range(1, 5);
+    assert_eq!(iter_sum_int(v), 10);
+    return 0;
+}
+
+fn test_iter_max_int_some() -> int {
+    let v: *Vector<int> = Vector::new();
+    v.push(3); v.push(7); v.push(1); v.push(5);
+    let r: ?int = iter_max_int(v);
+    assert!(r.has);
+    assert_eq!(r.val, 7);
+    return 0;
+}
+
+fn test_iter_max_int_empty() -> int {
+    let v: *Vector<int> = Vector::new();
+    let r: ?int = iter_max_int(v);
+    assert_not!(r.has);
+    return 0;
+}
+
+fn test_iter_min_int_some() -> int {
+    let v: *Vector<int> = Vector::new();
+    v.push(3); v.push(7); v.push(1); v.push(5);
+    let r: ?int = iter_min_int(v);
+    assert!(r.has);
+    assert_eq!(r.val, 1);
+    return 0;
+}
+
+fn test_iter_chain_map_filter_sum() -> int {
+    let v: *Vector<int> = iter_range(1, 6);
+    let m: *Vector<int> = iter_map(v, _square);
+    let f: *Vector<int> = iter_filter(m, _is_even);
+    assert_eq!(iter_sum_int(f), 20);
+    return 0;
+}

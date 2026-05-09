@@ -1,25 +1,23 @@
-// Iterator trait — pull-style streams.
+// stdlib::iter — Iterator trait + eager combinators on `Vector<T>`.
 //
-// Implement `next() -> ?Self::Item` on any struct to expose a sequence of
-// values consumed lazily. Used by helpers that want to walk arbitrary
-// collections without knowing the concrete element type up front.
+//   fn double(x: int) -> int { return x * 2; }
+//   fn keep_pos(x: int) -> bool { return x > 0; }
 //
-// ```glide
-// import "src/stdlib/iter.glide";
+//   let v: *Vector<int> = iter_range(0 - 3, 5);            // [-3..4]
+//   let m* = iter_map(v, double);
+//   let f* = iter_filter(m, keep_pos);
+//   let total: int = iter_sum_int(f);                      // 2+4+6+8 = 20
 //
-// struct Counter { i: int, max: int }
-// impl Iterator for Counter {
-//     type Item = int;
-//     fn next(self: *Counter) -> ?int {
-//         if self.i >= self.max { return none(); }
-//         self.i = self.i + 1;
-//         return some(self.i - 1);
-//     }
-// }
+// Each transformer (`map`, `filter`, `take`, `skip`, `take_while`,
+// `skip_while`) returns a fresh `*Vector<U>` — caller owns it (use
+// `let v* = ...` for auto-drop). Reducers (`fold`, `count`, `any`,
+// `all`, `find`, `sum_int`, `max_int`, `min_int`) read the vector and
+// return a value. Constructors (`range`, `range_step`, `repeat`) build
+// new vectors.
 //
-// let c: Counter = Counter { i: 0, max: 3 };
-// let r: ?int = c.next();   // some(0)
-// ```
+// All combinators take fn pointers, not closures-with-capture (Sprint 3
+// deferred). Define top-level `fn name(...) { ... }` or use anonymous
+// fns without capturing outer vars: `fn(x: int) -> int { return x + 1; }`.
 
 pub trait Iterator {
     type Item;
@@ -36,4 +34,177 @@ impl<T> Iterator for VecIter<T> {
         self.idx = self.idx + 1;
         return some(v);
     }
+}
+
+// ============================================================================
+// Transformers (return *Vector<U>; caller owns)
+// ============================================================================
+
+/// Apply `f` to each element, returning a new Vector.
+pub fn iter_map<T, U>(v: *Vector<T>, f: fn(T) -> U) -> *Vector<U> {
+    let out: *Vector<U> = Vector::new();
+    for let i: int = 0; i < v.len(); i++ {
+        let item: T = v.get(i);
+        out.push(f(item));
+    }
+    return out;
+}
+
+/// Keep only elements where `p` returns true.
+pub fn iter_filter<T>(v: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+    let out: *Vector<T> = Vector::new();
+    for let i: int = 0; i < v.len(); i++ {
+        let item: T = v.get(i);
+        if p(item) { out.push(item); }
+    }
+    return out;
+}
+
+/// First `n` elements (or all if `n` exceeds length).
+pub fn iter_take<T>(v: *Vector<T>, n: int) -> *Vector<T> {
+    let out: *Vector<T> = Vector::new();
+    let mut limit: int = n;
+    if limit > v.len() { limit = v.len(); }
+    if limit < 0 { limit = 0; }
+    for let i: int = 0; i < limit; i++ { out.push(v.get(i)); }
+    return out;
+}
+
+/// Drop first `n` elements; return the rest.
+pub fn iter_skip<T>(v: *Vector<T>, n: int) -> *Vector<T> {
+    let out: *Vector<T> = Vector::new();
+    let mut start: int = n;
+    if start < 0 { start = 0; }
+    for let i: int = start; i < v.len(); i++ { out.push(v.get(i)); }
+    return out;
+}
+
+/// Take elements until `p` returns false (then stop).
+pub fn iter_take_while<T>(v: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+    let out: *Vector<T> = Vector::new();
+    for let i: int = 0; i < v.len(); i++ {
+        let item: T = v.get(i);
+        if !p(item) { return out; }
+        out.push(item);
+    }
+    return out;
+}
+
+/// Skip elements while `p` returns true; keep the rest from first false.
+pub fn iter_skip_while<T>(v: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+    let out: *Vector<T> = Vector::new();
+    let mut skipping: bool = true;
+    for let i: int = 0; i < v.len(); i++ {
+        let item: T = v.get(i);
+        if skipping {
+            if !p(item) { skipping = false; out.push(item); }
+        } else {
+            out.push(item);
+        }
+    }
+    return out;
+}
+
+// ============================================================================
+// Reducers (return value)
+// ============================================================================
+
+/// Fold over the vector. `f(acc, item)` returns the new accumulator.
+pub fn iter_fold<T, U>(v: *Vector<T>, init: U, f: fn(U, T) -> U) -> U {
+    let mut acc: U = init;
+    for let i: int = 0; i < v.len(); i++ {
+        let item: T = v.get(i);
+        acc = f(acc, item);
+    }
+    return acc;
+}
+
+/// Number of elements. Same as `v.len()`; provided for API symmetry.
+pub fn iter_count<T>(v: *Vector<T>) -> int { return v.len(); }
+
+/// `true` if any element matches `p`. Short-circuits on first hit.
+pub fn iter_any<T>(v: *Vector<T>, p: fn(T) -> bool) -> bool {
+    for let i: int = 0; i < v.len(); i++ {
+        if p(v.get(i)) { return true; }
+    }
+    return false;
+}
+
+/// `true` if all elements match `p`. Short-circuits on first miss.
+pub fn iter_all<T>(v: *Vector<T>, p: fn(T) -> bool) -> bool {
+    for let i: int = 0; i < v.len(); i++ {
+        if !p(v.get(i)) { return false; }
+    }
+    return true;
+}
+
+/// First element matching `p`, or `none` if no match.
+pub fn iter_find<T>(v: *Vector<T>, p: fn(T) -> bool) -> ?T {
+    for let i: int = 0; i < v.len(); i++ {
+        let item: T = v.get(i);
+        if p(item) { return some(item); }
+    }
+    return none();
+}
+
+// ============================================================================
+// Type-specific reducers (avoid generic numeric constraints)
+// ============================================================================
+
+/// Sum of `int` elements.
+pub fn iter_sum_int(v: *Vector<int>) -> int {
+    let mut acc: int = 0;
+    for let i: int = 0; i < v.len(); i++ { acc = acc + v.get(i); }
+    return acc;
+}
+
+/// Max of `int` elements; `none` for empty vector.
+pub fn iter_max_int(v: *Vector<int>) -> ?int {
+    if v.len() == 0 { return none(); }
+    let mut m: int = v.get(0);
+    for let i: int = 1; i < v.len(); i++ {
+        let x: int = v.get(i);
+        if x > m { m = x; }
+    }
+    return some(m);
+}
+
+/// Min of `int` elements; `none` for empty vector.
+pub fn iter_min_int(v: *Vector<int>) -> ?int {
+    if v.len() == 0 { return none(); }
+    let mut m: int = v.get(0);
+    for let i: int = 1; i < v.len(); i++ {
+        let x: int = v.get(i);
+        if x < m { m = x; }
+    }
+    return some(m);
+}
+
+// ============================================================================
+// Constructors
+// ============================================================================
+
+/// `[start, end)` as a `Vector<int>`. Empty if `end <= start`.
+pub fn iter_range(start: int, end: int) -> *Vector<int> {
+    let out: *Vector<int> = Vector::new();
+    let mut i: int = start;
+    while i < end { out.push(i); i = i + 1; }
+    return out;
+}
+
+/// `[start, start+step, start+2*step, ...)` up to (but not including) `end`.
+/// Returns empty if `step <= 0` or `end <= start`.
+pub fn iter_range_step(start: int, end: int, step: int) -> *Vector<int> {
+    let out: *Vector<int> = Vector::new();
+    if step <= 0 { return out; }
+    let mut i: int = start;
+    while i < end { out.push(i); i = i + step; }
+    return out;
+}
+
+/// `n` copies of `value`. Empty if `n <= 0`.
+pub fn iter_repeat<T>(value: T, n: int) -> *Vector<T> {
+    let out: *Vector<T> = Vector::new();
+    for let i: int = 0; i < n; i++ { out.push(value); }
+    return out;
 }
