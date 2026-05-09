@@ -12311,6 +12311,7 @@ void   forward_decl_generic_monos (CG*   g, Type*   t) {
         if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
             HashMap_insert__bool((g-> emitted_monos ), mangled, true);
             printf("%s %s %s %s %s\n", "typedef struct ", mangled, " ", mangled, ";");
+            ((void(*)(CG*, Type*))emit_struct_mono)(g, t);
         }
     }
     if (((t-> inner )  !=  NULL)) {
