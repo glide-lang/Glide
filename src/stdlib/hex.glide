@@ -1,0 +1,65 @@
+fn _byte_value(c: char) -> int {
+    let mut n: int = c.to_int();
+    if n < 0 { n = n + 256; }
+    return n;
+}
+
+fn _hex_digit(n: int) -> string {
+    if n < 10 { return ((48 + n) as char).to_string(); }
+    return ((87 + n) as char).to_string();
+}
+
+fn _hex_value(c: char) -> int {
+    let n: int = c.to_int();
+    if n >= 48 && n <= 57 { return n - 48; }
+    if n >= 97 && n <= 102 { return n - 87; }
+    if n >= 65 && n <= 70 { return n - 55; }
+    return -1;
+}
+
+/// Lowercase hex of every byte. Two hex digits per input byte.
+///
+/// ```glide
+/// hex_encode("ABC");    // "414243"
+/// hex_encode("");       // ""
+/// ```
+pub fn hex_encode(s: string) -> string {
+    let mut out: string = "";
+    let n: int = s.len();
+    let mut i: int = 0;
+    while i < n {
+        let b: int = _byte_value(s.at(i));
+        out = out.concat(_hex_digit(b / 16));
+        out = out.concat(_hex_digit(b % 16));
+        i = i + 1;
+    }
+    return out;
+}
+
+/// Inverse of `hex_encode`. Accepts upper- and lower-case digits; both
+/// `"414243"` and `"414243".to_upper()` round-trip the same. Rejects
+/// odd-length input or non-hex bytes with `err`.
+///
+/// ```glide
+/// let r: !string = hex_decode("414243");
+/// if r.ok { println!(r.val); }      // "ABC"
+///
+/// let bad: !string = hex_decode("xy");
+/// if !bad.ok { println!(bad.err); } // "non-hex char"
+/// ```
+pub fn hex_decode(s: string) -> !string {
+    let n: int = s.len();
+    if n % 2 != 0 { return err("odd length"); }
+
+    let mut out: string = "";
+    let mut i: int = 0;
+    while i < n {
+        let hi: int = _hex_value(s.at(i));
+        let lo: int = _hex_value(s.at(i + 1));
+        if hi < 0 || lo < 0 { return err("non-hex char"); }
+
+        out = out.concat(((hi * 16 + lo) as char).to_string());
+        i = i + 2;
+    }
+    return ok(out);
+}
