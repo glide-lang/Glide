@@ -1332,6 +1332,13 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 }
             }
             if stripped != null && stripped.kind == TY_GENERIC {
+                // Specialized impl wins (`impl Vector<int> { fn sum() }`):
+                // its mangled fn already lives in g.fns with concrete ret_ty.
+                let spec_prefix: string = mangle_generic(stripped.name, stripped.args);
+                let spec_name: string = spec_prefix.concat("_").concat(e.lhs.field);
+                if g.fns.contains(spec_name) {
+                    return g.fns.get(spec_name).fn_ret_ty;
+                }
                 let mname: string = stripped.name.concat("_").concat(e.lhs.field);
                 if g.generic_fns.contains(mname) {
                     let template: Stmt = g.generic_fns.get(mname);
@@ -1726,18 +1733,23 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
             stripped = strip_ptr(rt);
         }
         if stripped != null && stripped.kind == TY_GENERIC {
-            let mname: string = stripped.name.concat("_").concat(method);
-            if g.generic_fns.contains(mname) {
-                let template: Stmt = g.generic_fns.get(mname);
-                let full_args: *Vector<Type> = resolve_method_call_args(
-                    g, e, &template, stripped.args);
-                if full_args != null {
-                    let mangled: string = mangle_generic(mname, full_args);
-                    register_fn_mono_signature(g, mangled, &template, full_args);
-                    if !g.emitted_monos.contains(mangled) {
-                        g.emitted_monos.insert(mangled, true);
-                        let entry: FnMonoEntry = FnMonoEntry { name: template.name, args: full_args };
-                        g.fn_mono_queue.push(entry);
+            // Specialized impl already concrete — nothing to mono.
+            let spec_prefix: string = mangle_generic(stripped.name, stripped.args);
+            let spec_name: string = spec_prefix.concat("_").concat(method);
+            if !g.fns.contains(spec_name) {
+                let mname: string = stripped.name.concat("_").concat(method);
+                if g.generic_fns.contains(mname) {
+                    let template: Stmt = g.generic_fns.get(mname);
+                    let full_args: *Vector<Type> = resolve_method_call_args(
+                        g, e, &template, stripped.args);
+                    if full_args != null {
+                        let mangled: string = mangle_generic(mname, full_args);
+                        register_fn_mono_signature(g, mangled, &template, full_args);
+                        if !g.emitted_monos.contains(mangled) {
+                            g.emitted_monos.insert(mangled, true);
+                            let entry: FnMonoEntry = FnMonoEntry { name: template.name, args: full_args };
+                            g.fn_mono_queue.push(entry);
+                        }
                     }
                 }
             }
@@ -2673,6 +2685,34 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 }
                 print!("))");
                 return;
+            }
+
+            // Specialized concrete impl (e.g. `impl Vector<int> { fn sum() }`).
+            // The mangled prefix `Vector__int` already exists in g.fns as a
+            // concrete fn — emit a direct call, no mono needed. Wins over the
+            // generic family below when both define the same method name.
+            if stripped != null && stripped.kind == TY_GENERIC {
+                let spec_prefix: string = mangle_generic(stripped.name, stripped.args);
+                let spec_name: string = spec_prefix.concat("_").concat(method);
+                if g.fns.contains(spec_name) {
+                    print!(spec_name);
+                    print!("(");
+                    let spec_needs_addr: bool = recv_ty != null
+                        && recv_ty.kind != TY_POINTER
+                        && recv_ty.kind != TY_BORROW
+                        && recv_ty.kind != TY_BORROW_MUT;
+                    if spec_needs_addr { print!("&"); }
+                    emit_expr(g, recv);
+                    if e.args != null {
+                        for let i: int = 0; i < e.args.len(); i++ {
+                            print!(", ");
+                            let a: Expr = e.args.get(i);
+                            emit_expr(g, &a);
+                        }
+                    }
+                    print!(")");
+                    return;
+                }
             }
 
             // Generic method on a generic receiver (e.g. `v.push(x)` on
@@ -4210,6 +4250,9 @@ fn emit_impl(g: *CG, s: *Stmt) {
     if s.impl_target != null && s.impl_target.kind == TY_NAMED {
         prefix = s.impl_target.name;
     }
+    if s.impl_target != null && s.impl_target.kind == TY_GENERIC {
+        prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
+    }
     // `impl T in NS { ... }` mangles to `NS_T_method` so two libs can each add
     // a `red()` method to `string` without colliding at link time. Bare
     // `impl T { ... }` keeps the unprefixed `T_method` name for back-compat.
@@ -4279,6 +4322,9 @@ fn emit_impl_fwd_decls(g: *CG, s: *Stmt) {
     let mut prefix: string = "X";
     if s.impl_target != null && s.impl_target.kind == TY_NAMED {
         prefix = s.impl_target.name;
+    }
+    if s.impl_target != null && s.impl_target.kind == TY_GENERIC {
+        prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
     }
     if s.import_path != null && !s.import_path.eq("") {
         prefix = s.import_path.concat("_").concat(prefix);
@@ -4752,6 +4798,12 @@ pub fn emit_program(program: *Vector<Stmt>) {
            && s.impl_target != null && s.impl_methods != null {
             let mut prefix: string = "X";
             if s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
+            // `impl Vector<int> { ... }` — concrete specialization on a
+            // generic type. Mangled prefix is `Vector__int` so it doesn't
+            // collide with the generic `impl<T> Vector<T>` family.
+            if s.impl_target.kind == TY_GENERIC {
+                prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
+            }
             // `impl T in NS` registers as `NS_T_method` so two libs can both
             // add e.g. `red()` to string without colliding. Bare `impl T` keeps
             // the unprefixed `T_method` name for back-compat.
