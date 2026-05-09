@@ -1,0 +1,287 @@
+// UDP datagram sockets. Connectionless: send_to / recv_from track the
+// peer address per packet rather than maintaining a stream.
+//
+// ```glide
+// import stdlib::net::udp::*;
+// import stdlib::net::ip::*;
+//
+// let any: *IpAddr = IpAddr::unspec_v4();
+// let bind_addr: *SocketAddr = SocketAddr::new(any, 5000);
+// let s: !*UdpSocket = UdpSocket::bind(bind_addr);
+// if !s.ok { println!(s.err); return 1; }
+// let sock: *UdpSocket = s.val;
+// defer sock.close();
+//
+// let payload: string = "ping";
+// let dst: *SocketAddr = ... ;
+// sock.send_to(payload, dst);
+//
+// let r: !*UdpRecv = sock.recv_from(1500);
+// if r.ok { println!(r.val.data); }
+// ```
+
+import stdlib::net::ip::*;
+
+c_raw! {
+    #ifndef GLIDE_NET_UDP_HELPERS_DEFINED
+    #define GLIDE_NET_UDP_HELPERS_DEFINED
+    #ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    typedef SOCKET __glide_udp_t;
+    #define __GLIDE_UDP_INVALID INVALID_SOCKET
+    #else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    typedef int __glide_udp_t;
+    #define __GLIDE_UDP_INVALID (-1)
+    #endif
+    #include <string.h>
+    #include <stdlib.h>
+    #include <stdint.h>
+
+    static int __glide_udp_init_done = 0;
+    static void __glide_udp_init(void) {
+        if (__glide_udp_init_done) return;
+        #ifdef _WIN32
+        WSADATA w;
+        WSAStartup(MAKEWORD(2,2), &w);
+        #endif
+        __glide_udp_init_done = 1;
+    }
+
+    // Bind to family / packed v4 (or v6 hi/lo) / port. Returns the fd as
+    // int64_t (or -1 on failure). family is 4 or 6.
+    static int64_t __glide_udp_bind(int family, int64_t v4,
+                                     int64_t v6_hi, int64_t v6_lo, int port) {
+        __glide_udp_init();
+        __glide_udp_t s;
+        if (family == 6) {
+            s = socket(AF_INET6, SOCK_DGRAM, 0);
+            if (s == __GLIDE_UDP_INVALID) return -1;
+            struct sockaddr_in6 a;
+            memset(&a, 0, sizeof(a));
+            a.sin6_family = AF_INET6;
+            a.sin6_port = htons((uint16_t)port);
+            unsigned char* p = (unsigned char*)&a.sin6_addr;
+            for (int i = 0; i < 8; i++) p[i]   = (unsigned char)((v6_hi >> (56 - i*8)) & 0xff);
+            for (int i = 0; i < 8; i++) p[8+i] = (unsigned char)((v6_lo >> (56 - i*8)) & 0xff);
+            if (bind(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
+                #ifdef _WIN32
+                closesocket(s);
+                #else
+                close(s);
+                #endif
+                return -1;
+            }
+        } else {
+            s = socket(AF_INET, SOCK_DGRAM, 0);
+            if (s == __GLIDE_UDP_INVALID) return -1;
+            struct sockaddr_in a;
+            memset(&a, 0, sizeof(a));
+            a.sin_family = AF_INET;
+            a.sin_port = htons((uint16_t)port);
+            uint32_t packed = (uint32_t)v4;
+            a.sin_addr.s_addr = htonl(packed);
+            if (bind(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
+                #ifdef _WIN32
+                closesocket(s);
+                #else
+                close(s);
+                #endif
+                return -1;
+            }
+        }
+        return (int64_t)s;
+    }
+
+    // Send `n` bytes of `data` to the given address. Returns bytes sent
+    // or -1 on error.
+    static int64_t __glide_udp_send_to(int64_t fd, const char* data, int n,
+                                        int family, int64_t v4,
+                                        int64_t v6_hi, int64_t v6_lo, int port) {
+        __glide_udp_t s = (__glide_udp_t)fd;
+        if (family == 6) {
+            struct sockaddr_in6 a;
+            memset(&a, 0, sizeof(a));
+            a.sin6_family = AF_INET6;
+            a.sin6_port = htons((uint16_t)port);
+            unsigned char* p = (unsigned char*)&a.sin6_addr;
+            for (int i = 0; i < 8; i++) p[i]   = (unsigned char)((v6_hi >> (56 - i*8)) & 0xff);
+            for (int i = 0; i < 8; i++) p[8+i] = (unsigned char)((v6_lo >> (56 - i*8)) & 0xff);
+            return (int64_t)sendto(s, data, n, 0, (struct sockaddr*)&a, sizeof(a));
+        }
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof(a));
+        a.sin_family = AF_INET;
+        a.sin_port = htons((uint16_t)port);
+        a.sin_addr.s_addr = htonl((uint32_t)v4);
+        return (int64_t)sendto(s, data, n, 0, (struct sockaddr*)&a, sizeof(a));
+    }
+
+    // Recv: caller passes a pre-allocated buffer. Returns:
+    //   bytes_read (>=0)              — copies into buf, fills out_*
+    //   -1                            — error
+    static int64_t __glide_udp_recv_from(int64_t fd, void* buf, int max,
+                                          int* out_family, int64_t* out_v4,
+                                          int64_t* out_v6_hi, int64_t* out_v6_lo,
+                                          int* out_port) {
+        __glide_udp_t s = (__glide_udp_t)fd;
+        struct sockaddr_storage src;
+        socklen_t slen = sizeof(src);
+        int n = recvfrom(s, (char*)buf, max, 0, (struct sockaddr*)&src, &slen);
+        if (n < 0) return -1;
+        if (src.ss_family == AF_INET) {
+            struct sockaddr_in* a = (struct sockaddr_in*)&src;
+            *out_family = 4;
+            *out_v4 = (int64_t)ntohl((uint32_t)a->sin_addr.s_addr);
+            *out_v6_hi = 0; *out_v6_lo = 0;
+            *out_port = (int)ntohs(a->sin_port);
+        } else if (src.ss_family == AF_INET6) {
+            struct sockaddr_in6* a = (struct sockaddr_in6*)&src;
+            *out_family = 6;
+            *out_v4 = 0;
+            unsigned char* p = (unsigned char*)&a->sin6_addr;
+            int64_t hi = 0, lo = 0;
+            for (int i = 0; i < 8; i++) hi = (hi << 8) | p[i];
+            for (int i = 0; i < 8; i++) lo = (lo << 8) | p[8+i];
+            *out_v6_hi = hi; *out_v6_lo = lo;
+            *out_port = (int)ntohs(a->sin6_port);
+        } else {
+            *out_family = 0; *out_v4 = 0; *out_v6_hi = 0; *out_v6_lo = 0; *out_port = 0;
+        }
+        return (int64_t)n;
+    }
+
+    static void __glide_udp_close(int64_t fd) {
+        __glide_udp_t s = (__glide_udp_t)fd;
+        #ifdef _WIN32
+        closesocket(s);
+        #else
+        close(s);
+        #endif
+    }
+    #endif
+}
+
+extern fn __glide_udp_bind(family: int, v4: i64, v6_hi: i64, v6_lo: i64, port: int) -> i64;
+extern fn __glide_udp_send_to(fd: i64, data: string, n: int,
+                              family: int, v4: i64, v6_hi: i64, v6_lo: i64, port: int) -> i64;
+extern fn __glide_udp_recv_from(fd: i64, buf: *void, max: int,
+                                out_family: *int, out_v4: *i64,
+                                out_v6_hi: *i64, out_v6_lo: *i64,
+                                out_port: *int) -> i64;
+extern fn __glide_udp_close(fd: i64);
+
+pub struct UdpSocket {
+    pub fd: i64,
+}
+
+/// One received datagram: payload + sender address.
+pub struct UdpRecv {
+    pub data: string,
+    pub from: *SocketAddr,
+}
+
+impl UdpSocket {
+    /// Bind a UDP socket to the given local address. Use
+    /// `IpAddr::unspec_v4()` (or v6) to listen on every interface.
+    pub fn bind(addr: *SocketAddr) -> !*UdpSocket {
+        let mut family: int = 4;
+        let mut v4: i64 = 0;
+        let mut v6_hi: i64 = 0;
+        let mut v6_lo: i64 = 0;
+        if addr.ip.is_v4() {
+            family = 4;
+            v4 = addr.ip.v4 as i64;
+        } else {
+            family = 6;
+            v6_hi = addr.ip.v6_hi;
+            v6_lo = addr.ip.v6_lo;
+        }
+        let fd: i64 = __glide_udp_bind(family, v4, v6_hi, v6_lo, addr.port);
+        if fd < 0 { return err("udp: bind failed"); }
+        let s: *UdpSocket = malloc(sizeof(UdpSocket)) as *UdpSocket;
+        s.fd = fd;
+        return ok(s);
+    }
+
+    /// Convenience: bind on `0.0.0.0:port` (all v4 interfaces).
+    pub fn bind_port(port: int) -> !*UdpSocket {
+        let any: *IpAddr = IpAddr::unspec_v4();
+        let addr: *SocketAddr = SocketAddr::new(any, port);
+        return UdpSocket::bind(addr);
+    }
+
+    /// Send `data` to `dst`. Returns the number of bytes sent (or err
+    /// on failure). UDP doesn't fragment user-mode payloads — keep
+    /// each call ≤ 1472 bytes for safe v4 over Ethernet.
+    pub fn send_to(self: *UdpSocket, data: string, dst: *SocketAddr) -> !int {
+        let mut family: int = 4;
+        let mut v4: i64 = 0;
+        let mut v6_hi: i64 = 0;
+        let mut v6_lo: i64 = 0;
+        if dst.ip.is_v4() {
+            family = 4;
+            v4 = dst.ip.v4 as i64;
+        } else {
+            family = 6;
+            v6_hi = dst.ip.v6_hi;
+            v6_lo = dst.ip.v6_lo;
+        }
+        let n: i64 = __glide_udp_send_to(self.fd, data, data.len(),
+                                          family, v4, v6_hi, v6_lo, dst.port);
+        if n < 0 { return err("udp: send_to failed"); }
+        return ok(n as int);
+    }
+
+    /// Block until a datagram arrives. `max` caps payload size — bytes
+    /// past `max` are silently dropped by the kernel.
+    pub fn recv_from(self: *UdpSocket, max: int) -> !*UdpRecv {
+        let buf: *u8 = malloc(max) as *u8;
+        let mut fam: int = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut port: int = 0;
+        let n: i64 = __glide_udp_recv_from(self.fd, buf as *void, max,
+                                            &fam, &v4, &hi, &lo, &port);
+        if n < 0 { free(buf as *void); return err("udp: recv_from failed"); }
+        // Copy bytes into a Glide string. recvfrom doesn't NUL-terminate.
+        let data: string = _bytes_to_string(buf, n as int);
+        free(buf as *void);
+        let mut ip: *IpAddr;
+        if fam == 4 {
+            ip = IpAddr::v4((v4 as int >> 24) & 255, (v4 as int >> 16) & 255,
+                            (v4 as int >>  8) & 255,  v4 as int        & 255);
+        } else {
+            ip = IpAddr::v6(hi, lo);
+        }
+        let addr: *SocketAddr = SocketAddr::new(ip, port);
+        let r: *UdpRecv = malloc(sizeof(UdpRecv)) as *UdpRecv;
+        r.data = data;
+        r.from = addr;
+        return ok(r);
+    }
+
+    pub fn close(self: *UdpSocket) {
+        __glide_udp_close(self.fd);
+        free(self as *void);
+    }
+}
+
+c_raw! {
+    // Build a Glide string (NUL-terminated heap copy) from a byte buffer
+    // of arbitrary content. Inserts a NUL at position n, so embedded
+    // NULs in the data WILL truncate when read via string.len(). Use
+    // ByteBuffer if you need binary-safe transport.
+    static const char* _bytes_to_string(unsigned char* p, int n) {
+        char* out = (char*)malloc((size_t)(n + 1));
+        memcpy(out, p, (size_t)n);
+        out[n] = 0;
+        return out;
+    }
+}
+extern fn _bytes_to_string(p: *u8, n: int) -> string;
