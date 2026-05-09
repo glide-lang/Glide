@@ -2276,6 +2276,19 @@ fn subst_expr(e: *Expr, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
             n.str_val = mangle_generic(e.str_val, args);
         }
     }
+    // Rewrite `T::method` when T is one of this fn's type parameters.
+    // At mono time T is concrete; emit the path with the substituted
+    // type name (e.g. `T::from_json` -> `int::from_json` for T=int)
+    // so the existing EX_PATH codegen lowers it to the right symbol.
+    if e.kind == EX_PATH && params != null && args != null {
+        for let i: int = 0; i < params.len(); i++ {
+            if params.get(i).eq(e.str_val) && i < args.len() {
+                let a: Type = args.get(i);
+                n.str_val = mangle_type(&a);
+                break;
+            }
+        }
+    }
     return n;
 }
 

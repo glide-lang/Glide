@@ -196,6 +196,10 @@ pub struct Typer {
     pub owned_locals: *HashMap<bool>,   // names that must not escape (auto-drop)
     pub borrows: *Vector<BorrowEvent>,  // active let-bound borrows; save/restore per block
     pub current_ret: *Type,
+    // Type parameters of the enclosing fn (e.g. `["T", "U"]`). Used by
+    // EX_PATH resolution: `T::method(v)` is valid inside a `<T: Trait>`
+    // body when T is one of these. Null/empty outside any generic fn.
+    pub current_type_params: *Vector<string>,
     pub current_origin: string,    // file the typer is currently checking
     // Per-file visibility: `<origin>::<name>` -> bool. A name is visible
     // from file `F` only if it appears in `F`'s visibility set. Selective
@@ -238,6 +242,19 @@ pub struct Typer {
     pub diagnostics: *Vector<DiagEntry>,
 }
 
+// Free helper: looks up `name` in the enclosing fn's type parameter
+// list. Used by EX_PATH resolution to allow `T::method(v)` when T is
+// a generic type parameter — the actual concrete type is substituted
+// later at monomorphization time.
+fn _is_current_type_param(t: *Typer, name: string) -> bool {
+    if t.current_type_params == null { return false; }
+    if name == null || name.eq("") { return false; }
+    for let i: int = 0; i < t.current_type_params.len(); i++ {
+        if t.current_type_params.get(i).eq(name) { return true; }
+    }
+    return false;
+}
+
 impl Typer {
     pub fn new() -> *Typer {
         let t: *Typer = __glide_palloc(sizeof(Typer)) as *Typer;
@@ -256,6 +273,7 @@ impl Typer {
         t.borrows = bw;
         t.diagnostics = dg;
         t.current_ret = null;
+        t.current_type_params = null;
         t.current_origin = "";
         let vis: *HashMap<bool> = HashMap::new();
         t.visibility = vis;
@@ -892,6 +910,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let saved_owned: *HashMap<bool> = t.owned_locals;
     let saved_borrows: *Vector<BorrowEvent> = t.borrows;
     let saved_ret: *Type = t.current_ret;
+    let saved_tps: *Vector<string> = t.current_type_params;
     let new_scope: *HashMap<Type> = HashMap::new();
     let new_owned: *HashMap<bool> = HashMap::new();
     let new_borrows: *Vector<BorrowEvent> = Vector::new();
@@ -899,6 +918,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.owned_locals = new_owned;
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
+    t.current_type_params = s.type_params;
 
     if s.fn_params != null {
         for let i: int = 0; i < s.fn_params.len(); i++ {
@@ -928,6 +948,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.owned_locals = saved_owned;
     t.borrows = saved_borrows;
     t.current_ret = saved_ret;
+    t.current_type_params = saved_tps;
 }
 
 fn check_stmt(t: *Typer, s: *Stmt) {
@@ -1630,11 +1651,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let pname: string = prefix.concat("_").concat(e.lhs.field);
             // Allow if any of: prefix is a known type (struct/enum), the
             // mangled `<Type>_<method>` is registered (covers C-runtime
-            // types like `Arena`), or the prefix is a module path the file
-            // is allowed to use.
+            // types like `Arena`), the prefix is a module path the file
+            // is allowed to use, or the prefix is a generic type
+            // parameter of the enclosing fn (`<T: Trait>` then
+            // `T::method(v)` resolves at monomorphization time).
             let is_type: bool = t.structs.contains(prefix);
             let is_known_method: bool = t.fns.contains(pname);
-            if !is_type && !is_known_method && !t.is_module_path_allowed(prefix) {
+            let is_type_param: bool = _is_current_type_param(t, prefix);
+            if !is_type && !is_known_method && !is_type_param && !t.is_module_path_allowed(prefix) {
                 t.err(e.lhs.line, e.lhs.column,
                     "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
                 return null;
@@ -1700,7 +1724,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         let pname: string = prefix.concat("_").concat(e.field);
         let is_type: bool = t.structs.contains(prefix);
         let is_known_method: bool = t.fns.contains(pname);
-        if !is_type && !is_known_method && !t.is_module_path_allowed(prefix) {
+        let is_type_param: bool = _is_current_type_param(t, prefix);
+        if !is_type && !is_known_method && !is_type_param && !t.is_module_path_allowed(prefix) {
             t.err(e.line, e.column,
                 "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
             return null;
