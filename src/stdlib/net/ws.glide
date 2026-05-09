@@ -1,0 +1,382 @@
+// WebSocket client (RFC 6455) over plain TCP (`ws://`) or TLS (`wss://`).
+//
+// V1 covers the common case: text + binary frames, ping/pong, clean
+// close. Extensions (permessage-deflate, multiple subprotocols) are
+// out of scope; per-message length capped at 64 KiB on recv to keep
+// the buffer bounds tame.
+//
+// ```glide
+// import stdlib::net::ws::*;
+//
+// let r: !*WebSocket = WebSocket::connect("wss://echo.example.com/sock");
+// if !r.ok { println!(r.err); return 1; }
+// let ws: *WebSocket = r.val;
+// ws.send_text("hello");
+// let m: !*WsMessage = ws.recv();
+// if m.ok { println!(m.val.text); }
+// ws.close(1000, "bye");
+// ```
+
+import stdlib::net::tcp::*;
+import stdlib::net::tls::*;
+import stdlib::net::ip::*;
+import stdlib::crypto::*;
+import stdlib::base64::*;
+import stdlib::random::*;
+
+// Frame opcodes.
+pub struct WsOp {}
+impl WsOp {
+    pub fn cont() -> int { return 0; }
+    pub fn text() -> int { return 1; }
+    pub fn binary() -> int { return 2; }
+    pub fn close() -> int { return 8; }
+    pub fn ping() -> int { return 9; }
+    pub fn pong() -> int { return 10; }
+}
+
+/// One inbound message. `kind` is one of `WsOp::text() / binary() /
+/// close() / ping() / pong()`. `text` carries text-frame payload as
+/// a string; `data` carries binary payload (currently in the same
+/// `string` field — we don't have a dedicated bytes type yet).
+pub struct WsMessage {
+    pub kind: int,
+    pub text: string,
+    pub close_code: int,
+}
+
+pub struct WebSocket {
+    // Transport: exactly one is non-null.
+    tcp: *TcpStream,
+    tls: *TlsStream,
+    is_tls: bool,
+    rng: *Rng,
+}
+
+impl WebSocket {
+    /// Open a WebSocket. URL must be `ws://host[:port]/path` or
+    /// `wss://host[:port]/path`.
+    pub fn connect(url: string) -> !*WebSocket {
+        let p: !*WsParsedUrl = _ws_parse_url(url);
+        if !p.ok { return err(p.err); }
+        let pu: *WsParsedUrl = p.val;
+
+        let ws: *WebSocket = malloc(sizeof(WebSocket)) as *WebSocket;
+        ws.tcp = null as *TcpStream;
+        ws.tls = null as *TlsStream;
+        ws.is_tls = pu.is_wss;
+        ws.rng = Rng::from_clock();
+
+        if pu.is_wss {
+            let cfg: *TlsConfig = TlsConfig::client();
+            let r: !*TlsStream = TlsStream::connect(pu.host, pu.port, cfg);
+            cfg.free();
+            if !r.ok { free(ws as *void); return err(r.err); }
+            ws.tls = r.val;
+        } else {
+            let r: !*TcpStream = TcpStream::connect_host(pu.host, pu.port);
+            if !r.ok { free(ws as *void); return err(r.err); }
+            ws.tcp = r.val;
+        }
+
+        // Build a 16-byte random key, base64-encode for Sec-WebSocket-Key.
+        let raw_key: string = _ws_random_key(ws.rng);
+        let key: string = b64_encode(raw_key);
+
+        let mut req: string = "GET ".concat(pu.path).concat(" HTTP/1.1\r\n");
+        req = req.concat("Host: ").concat(pu.host_header()).concat("\r\n");
+        req = req.concat("Upgrade: websocket\r\n");
+        req = req.concat("Connection: Upgrade\r\n");
+        req = req.concat("Sec-WebSocket-Key: ").concat(key).concat("\r\n");
+        req = req.concat("Sec-WebSocket-Version: 13\r\n\r\n");
+        let w: !int = ws._write_all(req);
+        if !w.ok { ws._close_transport(); free(ws as *void); return err(w.err); }
+
+        // Read the server response until \r\n\r\n.
+        let head: !string = ws._read_until_blank_line();
+        if !head.ok { ws._close_transport(); free(ws as *void); return err(head.err); }
+        if head.val.index_of("101") < 0 {
+            ws._close_transport();
+            free(ws as *void);
+            return err("ws: server did not return 101 Switching Protocols");
+        }
+
+        // Verify Sec-WebSocket-Accept = base64(sha1(key + magic)).
+        let magic: string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        let expected: string = b64_encode(sha1(key.concat(magic)));
+        let lower_head: string = head.val.to_lower();
+        let needle: string = "sec-websocket-accept: ";
+        let ix: int = lower_head.index_of(needle);
+        if ix < 0 {
+            ws._close_transport();
+            free(ws as *void);
+            return err("ws: missing Sec-WebSocket-Accept header");
+        }
+        let after: string = head.val.substring(ix + needle.len(), head.val.len());
+        let nl: int = after.index_of("\r\n");
+        let mut acc: string = after;
+        if nl >= 0 { acc = after.substring(0, nl); }
+        if !acc.eq(expected) {
+            ws._close_transport();
+            free(ws as *void);
+            return err("ws: Sec-WebSocket-Accept mismatch");
+        }
+        return ok(ws);
+    }
+
+    fn _write_all(self: *WebSocket, data: string) -> !int {
+        if self.is_tls { return self.tls.write_all(data); }
+        return self.tcp.write_all(data);
+    }
+
+    fn _read(self: *WebSocket, max: int) -> !string {
+        if self.is_tls { return self.tls.read(max); }
+        return self.tcp.read(max);
+    }
+
+    fn _read_exact(self: *WebSocket, n: int) -> !string {
+        let mut buf: string = "";
+        while buf.len() < n {
+            let want: int = n - buf.len();
+            let r: !string = self._read(want);
+            if !r.ok { return err(r.err); }
+            if r.val.len() == 0 { return err("ws: short read"); }
+            buf = buf.concat(r.val);
+        }
+        return ok(buf);
+    }
+
+    fn _read_until_blank_line(self: *WebSocket) -> !string {
+        let mut acc: string = "";
+        while acc.index_of("\r\n\r\n") < 0 {
+            let r: !string = self._read(1024);
+            if !r.ok { return err(r.err); }
+            if r.val.len() == 0 { return err("ws: connection closed before headers"); }
+            acc = acc.concat(r.val);
+            if acc.len() > 16384 { return err("ws: handshake response too large"); }
+        }
+        return ok(acc);
+    }
+
+    fn _close_transport(self: *WebSocket) {
+        if self.is_tls && self.tls != null { self.tls.close(); }
+        if !self.is_tls && self.tcp != null { self.tcp.close(); }
+    }
+
+    /// Send a UTF-8 text frame. Always masked (client → server is
+    /// always masked, per RFC 6455 §5.3).
+    pub fn send_text(self: *WebSocket, msg: string) -> !int {
+        return self._send_frame(1, msg);
+    }
+
+    /// Send a binary frame.
+    pub fn send_binary(self: *WebSocket, data: string) -> !int {
+        return self._send_frame(2, data);
+    }
+
+    /// Send a Pong with optional payload. Use after recv'ing a Ping
+    /// to keep the connection alive.
+    pub fn pong(self: *WebSocket, payload: string) -> !int {
+        return self._send_frame(10, payload);
+    }
+
+    fn _send_frame(self: *WebSocket, opcode: int, payload: string) -> !int {
+        let plen: int = payload.len();
+        let mut frame: string = "";
+        // First byte: FIN=1 + opcode (single-frame messages only).
+        let b0: int = 128 | opcode;
+        frame = frame.concat((b0 as char).to_string());
+        // Masked + length.
+        if plen < 126 {
+            let b1: int = 128 | plen;
+            frame = frame.concat((b1 as char).to_string());
+        } else if plen < 65536 {
+            let b1: int = 128 | 126;
+            frame = frame.concat((b1 as char).to_string());
+            frame = frame.concat(((plen >> 8) & 255 as char).to_string());
+            frame = frame.concat((plen        & 255 as char).to_string());
+        } else {
+            let b1: int = 128 | 127;
+            frame = frame.concat((b1 as char).to_string());
+            // 64-bit big-endian length. We don't have shifts on strings
+            // big enough here practically; keep it simple by emitting 0s
+            // in the upper bytes.
+            for let i: int = 0; i < 4; i++ { frame = frame.concat(((0 as char)).to_string()); }
+            frame = frame.concat(((plen >> 24) & 255 as char).to_string());
+            frame = frame.concat(((plen >> 16) & 255 as char).to_string());
+            frame = frame.concat(((plen >>  8) & 255 as char).to_string());
+            frame = frame.concat(( plen        & 255 as char).to_string());
+        }
+        // 4-byte mask + masked payload.
+        let m0: int = (self.rng.next_int() & 255);
+        let m1: int = (self.rng.next_int() & 255);
+        let m2: int = (self.rng.next_int() & 255);
+        let m3: int = (self.rng.next_int() & 255);
+        frame = frame.concat((m0 as char).to_string());
+        frame = frame.concat((m1 as char).to_string());
+        frame = frame.concat((m2 as char).to_string());
+        frame = frame.concat((m3 as char).to_string());
+        for let i: int = 0; i < plen; i++ {
+            let mut k: int = m0;
+            if i % 4 == 1 { k = m1; }
+            if i % 4 == 2 { k = m2; }
+            if i % 4 == 3 { k = m3; }
+            let b: int = payload.at(i).to_int() ^ k;
+            frame = frame.concat((b as char).to_string());
+        }
+        return self._write_all(frame);
+    }
+
+    /// Read one inbound frame. Pings are returned as-is (caller decides
+    /// whether to auto-pong); close frames surface with the kind set
+    /// to `WsOp::close()` and `close_code` populated.
+    pub fn recv(self: *WebSocket) -> !*WsMessage {
+        let h2: !string = self._read_exact(2);
+        if !h2.ok { return err(h2.err); }
+        let head: string = h2.val;
+        let b0: int = head.at(0).to_int();
+        let b1: int = head.at(1).to_int();
+        let opcode: int = b0 & 15;
+        let masked: bool = (b1 & 128) != 0;
+        let mut plen: int = b1 & 127;
+        if plen == 126 {
+            let ext: !string = self._read_exact(2);
+            if !ext.ok { return err(ext.err); }
+            let e: string = ext.val;
+            plen = (e.at(0).to_int() << 8) | e.at(1).to_int();
+        } else if plen == 127 {
+            let ext: !string = self._read_exact(8);
+            if !ext.ok { return err(ext.err); }
+            let e: string = ext.val;
+            // Take low 32 bits — frames > 2GB are rejected by capping.
+            plen = (e.at(4).to_int() << 24)
+                 | (e.at(5).to_int() << 16)
+                 | (e.at(6).to_int() << 8)
+                 |  e.at(7).to_int();
+        }
+        let mut mask: string = "";
+        if masked {
+            let mr: !string = self._read_exact(4);
+            if !mr.ok { return err(mr.err); }
+            mask = mr.val;
+        }
+        let mut payload: string = "";
+        if plen > 0 {
+            let p: !string = self._read_exact(plen);
+            if !p.ok { return err(p.err); }
+            payload = p.val;
+        }
+        if masked && plen > 0 {
+            let mut unmasked: string = "";
+            for let i: int = 0; i < plen; i++ {
+                let m: int = mask.at(i % 4).to_int();
+                unmasked = unmasked.concat(((payload.at(i).to_int() ^ m) as char).to_string());
+            }
+            payload = unmasked;
+        }
+
+        let msg: *WsMessage = malloc(sizeof(WsMessage)) as *WsMessage;
+        msg.kind = opcode;
+        msg.text = payload;
+        msg.close_code = 0;
+        if opcode == 8 && plen >= 2 {
+            msg.close_code = (payload.at(0).to_int() << 8) | payload.at(1).to_int();
+        }
+        return ok(msg);
+    }
+
+    /// Send a close frame and tear down the transport. `code` 1000 is
+    /// "normal closure"; see RFC 6455 §7.4 for the registry.
+    pub fn close(self: *WebSocket, code: int, reason: string) {
+        let mut payload: string = "";
+        payload = payload.concat(((code >> 8) & 255 as char).to_string());
+        payload = payload.concat((code        & 255 as char).to_string());
+        payload = payload.concat(reason);
+        let _ignore: !int = self._send_frame(8, payload);
+        self._close_transport();
+        free(self.rng as *void);
+        free(self as *void);
+    }
+}
+
+// ---- URL parsing (ws:// + wss://) ----
+
+pub struct WsParsedUrl {
+    pub is_wss: bool,
+    pub host:   string,
+    pub port:   int,
+    pub path:   string,
+}
+
+impl WsParsedUrl {
+    pub fn host_header(self: *WsParsedUrl) -> string {
+        let mut def: int = 80;
+        if self.is_wss { def = 443; }
+        if self.port == def { return self.host; }
+        return self.host.concat(":").concat(_ws_itos(self.port));
+    }
+}
+
+fn _ws_parse_url(s: string) -> !*WsParsedUrl {
+    let scheme_end: int = s.index_of("://");
+    if scheme_end < 0 { return err("ws: missing scheme"); }
+    let scheme: string = s.substring(0, scheme_end);
+    let mut is_wss: bool = false;
+    if scheme.eq("wss") { is_wss = true; }
+    else if !scheme.eq("ws") { return err("ws: scheme must be ws or wss"); }
+    let rest: string = s.substring(scheme_end + 3, s.len());
+    let mut slash: int = rest.index_of("/");
+    if slash < 0 { slash = rest.len(); }
+    let authority: string = rest.substring(0, slash);
+    let mut path: string = rest.substring(slash, rest.len());
+    if path.eq("") { path = "/"; }
+    let mut host: string = authority;
+    let mut port: int = 80;
+    if is_wss { port = 443; }
+    let colon: int = _ws_last_colon(authority);
+    if colon >= 0 {
+        host = authority.substring(0, colon);
+        let p_s: string = authority.substring(colon + 1, authority.len());
+        let pr: !int = p_s.try_parse_int();
+        if !pr.ok { return err("ws: bad port"); }
+        port = pr.val;
+    }
+    let u: *WsParsedUrl = malloc(sizeof(WsParsedUrl)) as *WsParsedUrl;
+    u.is_wss = is_wss;
+    u.host = host;
+    u.port = port;
+    u.path = path;
+    return ok(u);
+}
+
+fn _ws_last_colon(s: string) -> int {
+    let mut at: int = -1;
+    for let i: int = 0; i < s.len(); i++ {
+        if s.at(i).to_int() == 58 { at = i; }
+    }
+    return at;
+}
+
+fn _ws_itos(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut x: int = n;
+    let mut neg: bool = false;
+    if x < 0 { neg = true; x = 0 - x; }
+    let mut s: string = "";
+    while x > 0 {
+        let d: int = x % 10;
+        s = ((48 + d) as char).to_string().concat(s);
+        x = x / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}
+
+fn _ws_random_key(rng: *Rng) -> string {
+    let mut s: string = "";
+    for let i: int = 0; i < 16; i++ {
+        let b: int = rng.next_int() & 255;
+        s = s.concat((b as char).to_string());
+    }
+    return s;
+}

@@ -962,6 +962,11 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
 // Pick a C compiler. Prefers the bundled Zig CC under runtime/zig/ next to
 // the glide executable; falls back to $CC, then to plain `cc` on PATH.
 fn pick_cc() -> string {
+    // $CC wins when set — lets users with native gcc / clang override
+    // the bundled zig (which doesn't see msys2 ucrt library paths and
+    // thus fails to find openssl etc).
+    let env: string = __glide_getenv("CC");
+    if !env.eq("") { return env; }
     let exe_dir: string = __glide_exe_dir();
     if !exe_dir.eq("") {
         let mut zig: string = exe_dir.concat("/runtime/zig/zig");
@@ -970,8 +975,6 @@ fn pick_cc() -> string {
             return "\"".concat(zig).concat("\" cc");
         }
     }
-    let env: string = __glide_getenv("CC");
-    if !env.eq("") { return env; }
     return "cc";
 }
 

@@ -192,6 +192,87 @@ c_raw! {
         out[64] = 0;
         return out;
     }
+
+    // ---- SHA-1 (RFC 3174) ----
+    //
+    // Cryptographically broken since 2017 — do NOT use for password
+    // hashing or anything security-sensitive. The single legitimate v1
+    // use is RFC 6455 WebSocket handshake, which mandates SHA-1.
+
+    #define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+
+    static void __glide_sha1_compress(uint32_t H[5], const uint8_t block[64]) {
+        uint32_t W[80];
+        for (int i = 0; i < 16; i++) {
+            W[i] = ((uint32_t)block[i*4]   << 24)
+                 | ((uint32_t)block[i*4+1] << 16)
+                 | ((uint32_t)block[i*4+2] << 8)
+                 |  (uint32_t)block[i*4+3];
+        }
+        for (int i = 16; i < 80; i++) {
+            W[i] = ROTL32(W[i-3] ^ W[i-8] ^ W[i-14] ^ W[i-16], 1);
+        }
+        uint32_t a = H[0], b = H[1], c = H[2], d = H[3], e = H[4];
+        for (int i = 0; i < 80; i++) {
+            uint32_t f, k;
+            if (i < 20)      { f = (b & c) | ((~b) & d);          k = 0x5A827999; }
+            else if (i < 40) { f = b ^ c ^ d;                     k = 0x6ED9EBA1; }
+            else if (i < 60) { f = (b & c) | (b & d) | (c & d);   k = 0x8F1BBCDC; }
+            else             { f = b ^ c ^ d;                     k = 0xCA62C1D6; }
+            uint32_t t = ROTL32(a, 5) + f + e + k + W[i];
+            e = d; d = c; c = ROTL32(b, 30); b = a; a = t;
+        }
+        H[0]+=a; H[1]+=b; H[2]+=c; H[3]+=d; H[4]+=e;
+    }
+
+    static void __glide_sha1_raw(const uint8_t* p, int64_t n, uint8_t out[20]) {
+        uint32_t H[5] = { 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0 };
+        int64_t total = n;
+        while (n >= 64) { __glide_sha1_compress(H, p); p += 64; n -= 64; }
+        uint8_t tail[128];
+        memcpy(tail, p, (size_t)n);
+        tail[n] = 0x80;
+        int64_t pad_end;
+        if (n + 1 + 8 <= 64) pad_end = 56;
+        else                 pad_end = 120;
+        for (int64_t i = n + 1; i < pad_end; i++) tail[i] = 0;
+        uint64_t bit_len = (uint64_t)total * 8;
+        for (int i = 0; i < 8; i++) {
+            tail[pad_end + i] = (uint8_t)(bit_len >> (56 - i*8));
+        }
+        __glide_sha1_compress(H, tail);
+        if (pad_end == 120) __glide_sha1_compress(H, tail + 64);
+        for (int i = 0; i < 5; i++) {
+            out[i*4]   = (uint8_t)(H[i] >> 24);
+            out[i*4+1] = (uint8_t)(H[i] >> 16);
+            out[i*4+2] = (uint8_t)(H[i] >> 8);
+            out[i*4+3] = (uint8_t)(H[i]);
+        }
+    }
+
+    static const char* __glide_sha1_str(const char* s) {
+        int64_t n = (int64_t)strlen(s);
+        uint8_t digest[20];
+        __glide_sha1_raw((const uint8_t*)s, n, digest);
+        char* out = (char*)malloc(21);
+        memcpy(out, digest, 20);
+        out[20] = 0;
+        return out;
+    }
+
+    static const char* __glide_sha1_hex_str(const char* s) {
+        int64_t n = (int64_t)strlen(s);
+        uint8_t digest[20];
+        __glide_sha1_raw((const uint8_t*)s, n, digest);
+        char* out = (char*)malloc(41);
+        static const char H[] = "0123456789abcdef";
+        for (int i = 0; i < 20; i++) {
+            out[i*2]   = H[(digest[i] >> 4) & 0xf];
+            out[i*2+1] = H[digest[i] & 0xf];
+        }
+        out[40] = 0;
+        return out;
+    }
     #endif
 }
 
@@ -199,6 +280,8 @@ extern fn __glide_sha256_str(s: string) -> string;
 extern fn __glide_sha256_hex_str(s: string) -> string;
 extern fn __glide_hmac_sha256_str(key: string, msg: string) -> string;
 extern fn __glide_hmac_sha256_hex_str(key: string, msg: string) -> string;
+extern fn __glide_sha1_str(s: string) -> string;
+extern fn __glide_sha1_hex_str(s: string) -> string;
 
 /// SHA-256 over `data`, returned as a 32-byte raw string. Useful when
 /// you need to feed the digest into another binary protocol; for human
@@ -238,4 +321,17 @@ pub fn hmac_sha256(key: string, msg: string) -> string {
 /// ```
 pub fn hmac_sha256_hex(key: string, msg: string) -> string {
     return __glide_hmac_sha256_hex_str(key, msg);
+}
+
+/// SHA-1 of `data`. Returns 20 raw bytes. **Cryptographically broken**
+/// — use only for legacy protocols that mandate SHA-1 (notably the
+/// RFC 6455 WebSocket handshake). For everything else, prefer SHA-256.
+pub fn sha1(data: string) -> string {
+    return __glide_sha1_str(data);
+}
+
+/// SHA-1 of `data`, returned as 40 lowercase hex chars. Same caveat
+/// as `sha1`.
+pub fn sha1_hex(data: string) -> string {
+    return __glide_sha1_hex_str(data);
 }
