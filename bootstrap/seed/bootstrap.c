@@ -24261,6 +24261,10 @@ bool   parse_program_into (Vector__Stmt*   stmts, const char*   path, Vector__Pa
 }
 
 const char*   pick_cc (void) {
+    const char*   env = ((const char*(*)(const char*))__glide_getenv)("CC");
+    if ((!__glide_string_eq(env, ""))) {
+        return env;
+    }
     const char*   exe_dir = ((const char*(*)(void))__glide_exe_dir)();
     if ((!__glide_string_eq(exe_dir, ""))) {
         const char*   zig = __glide_string_concat(exe_dir, "/runtime/zig/zig");
@@ -24270,10 +24274,6 @@ const char*   pick_cc (void) {
         if (((bool(*)(const char*))__glide_file_exists)(zig)) {
             return __glide_string_concat(__glide_string_concat("\"", zig), "\" cc");
         }
-    }
-    const char*   env = ((const char*(*)(const char*))__glide_getenv)("CC");
-    if ((!__glide_string_eq(env, ""))) {
-        return env;
     }
     return "cc";
 }
@@ -24326,7 +24326,7 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
     const char*   cmd = cc;
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " \""), tmp_c), "\""));
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " -o \""), out_path), "\""));
-    (cmd  =  __glide_string_concat(cmd, " -O2 -w -lpthread -lm"));
+    (cmd  =  __glide_string_concat(cmd, " -O2 -w -lpthread -lm -lssl -lcrypto"));
     if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         (cmd  =  __glide_string_concat(cmd, " -lws2_32"));
     }

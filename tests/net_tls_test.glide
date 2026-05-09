@@ -1,0 +1,53 @@
+import stdlib::testing::*;
+import stdlib::net::tls::*;
+import stdlib::http::client::*;
+
+// Live-internet tests — skip via env-var if offline. Each opens a real
+// connection to example.com and walks through TLS 1.2/1.3.
+
+fn test_tls_config_defaults() -> int {
+    let c: *TlsConfig = TlsConfig::client();
+    defer c.free();
+    assert!(c.verify);
+    assert_eq!(c.min_proto, 2);
+    return 0;
+}
+
+fn test_tls_config_insecure() -> int {
+    let c: *TlsConfig = TlsConfig::client_insecure();
+    defer c.free();
+    assert_not!(c.verify);
+    return 0;
+}
+
+fn test_https_get_example_com() -> int {
+    let url: string = "https://example.com/";
+    let r: !*HttpResponse = http_get(url);
+    assert!(r.ok);
+    assert_eq!(r.val.status, 200);
+    assert!(r.val.body.contains("Example Domain"));
+    return 0;
+}
+
+fn test_tls_handshake_yields_modern_version() -> int {
+    let host: string = "example.com";
+    let cfg: *TlsConfig = TlsConfig::client();
+    defer cfg.free();
+    let r: !*TlsStream = TlsStream::connect(host, 443, cfg);
+    assert!(r.ok);
+    let s: *TlsStream = r.val;
+    let v: int = s.version();
+    // Must be TLS 1.2 (2) or 1.3 (3); modern servers refuse 1.0/1.1.
+    assert!(v >= 2);
+    s.close();
+    return 0;
+}
+
+fn test_tls_invalid_host_errors_out() -> int {
+    let cfg: *TlsConfig = TlsConfig::client();
+    defer cfg.free();
+    let host: string = "definitely-not-real-xyz123.invalid";
+    let r: !*TlsStream = TlsStream::connect(host, 443, cfg);
+    assert_not!(r.ok);
+    return 0;
+}
