@@ -1,0 +1,27 @@
+/// Concatenate every element of `parts` with `sep` between them.
+/// Equivalent to the `Vector<string>::join` method; provided as a free
+/// function for callers that prefer the procedural form.
+///
+/// ```glide
+/// let v: *Vector<string> = Vector::new();
+/// v.push_all!("a", "b", "c");
+/// string_join(v, ", ");   // "a, b, c"
+/// string_join(v, "");     // "abc"
+/// ```
+pub fn string_join(parts: *Vector<string>, sep: string) -> string {
+    let n: int = parts.len();
+    if n == 0 {
+        return "";
+    }
+    if n == 1 {
+        return parts.get(0);
+    }
+
+    let mut out: string = parts.get(0);
+    let mut i: int = 1;
+    while i < n {
+        out = out.concat(sep).concat(parts.get(i));
+        i = i + 1;
+    }
+    return out;
+}

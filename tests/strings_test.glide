@@ -1,0 +1,47 @@
+import stdlib::testing::*;
+import stdlib::strings::*;
+
+fn test_join_empty_vec() -> int {
+    let parts: *Vector<string> = Vector::new();
+    defer parts.free();
+    assert_str_eq!(string_join(parts, ","), "");
+    return 0;
+}
+
+fn test_join_single_elem() -> int {
+    let parts: *Vector<string> = Vector::new();
+    defer parts.free();
+    parts.push("a");
+    assert_str_eq!(string_join(parts, ","), "a");
+    return 0;
+}
+
+fn test_join_comma_sep() -> int {
+    let parts: *Vector<string> = Vector::new();
+    defer parts.free();
+    parts.push("a");
+    parts.push("b");
+    parts.push("c");
+    assert_str_eq!(string_join(parts, ","), "a,b,c");
+    return 0;
+}
+
+fn test_join_empty_sep() -> int {
+    let parts: *Vector<string> = Vector::new();
+    defer parts.free();
+    parts.push("a");
+    parts.push("b");
+    parts.push("c");
+    assert_str_eq!(string_join(parts, ""), "abc");
+    return 0;
+}
+
+fn test_join_spaced_dash_sep() -> int {
+    let parts: *Vector<string> = Vector::new();
+    defer parts.free();
+    parts.push("a");
+    parts.push("b");
+    parts.push("c");
+    assert_str_eq!(string_join(parts, " - "), "a - b - c");
+    return 0;
+}
