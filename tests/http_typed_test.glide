@@ -15,10 +15,8 @@ pub struct StructLegal {
 impl JsonBind for StructLegal {
     fn from_json(v: *JsonValue) -> !StructLegal {
         if v.kind != JSON_OBJECT { return err("expected object"); }
-        let nome_r: !string = json_get_string(v, "nome");
-        if !nome_r.ok { return err(nome_r.err); }
         return ok(StructLegal {
-            nome:  nome_r.val,
+            nome:  json_get_string(v, "nome")?,
             idade: json_opt_int(v, "idade"),
             extra: json_get_any(v, "extra"),
         });
