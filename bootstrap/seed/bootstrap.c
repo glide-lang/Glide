@@ -4467,6 +4467,7 @@ void   lift_anons_in_expr (CG*   g, Expr*   e);
 void   lift_anons_in_stmt (CG*   g, Stmt*   s);
 Type*   resolve_assoc_recursive (CG*   g, Type*   t);
 Type*   resolve_concrete_assoc (CG*   g, Type*   t);
+void   forward_decl_generic_monos (CG*   g, Type*   t);
 void   collect_result_in_type (CG*   g, Type*   t);
 void   collect_result_in_expr (CG*   g, Expr*   e);
 void   collect_result_in_stmt (CG*   g, Stmt*   s);
@@ -12301,6 +12302,31 @@ Type*   resolve_concrete_assoc (CG*   g, Type*   t) {
     return NULL;
 }
 
+void   forward_decl_generic_monos (CG*   g, Type*   t) {
+    if ((t  ==  NULL)) {
+        return;
+    }
+    if (((((t-> kind )  ==  TY_GENERIC)  &&  ((t-> name )  !=  NULL))  &&  ((t-> args )  !=  NULL))) {
+        const char*   mangled = ((const char*(*)(const char*, Vector__Type*))mangle_generic)((t-> name ), (t-> args ));
+        if ((!HashMap_contains__bool((g-> emitted_monos ), mangled))) {
+            HashMap_insert__bool((g-> emitted_monos ), mangled, true);
+            printf("%s %s %s %s %s\n", "typedef struct ", mangled, " ", mangled, ";");
+        }
+    }
+    if (((t-> inner )  !=  NULL)) {
+        ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (t-> inner ));
+    }
+    if (((t-> fnptr_ret )  !=  NULL)) {
+        ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (t-> fnptr_ret ));
+    }
+    if (((t-> args )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
+            Type   a = Vector_get__Type((t-> args ), i);
+            ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (&a));
+        }
+    }
+}
+
 void   collect_result_in_type (CG*   g, Type*   t) {
     if ((t  ==  NULL)) {
         return;
@@ -16987,6 +17013,7 @@ void   emit_program (Vector__Stmt*   program) {
     }
     for (int   i = 0; (i  <  Vector_len__Type((g-> result_types ))); i++) {
         Type   t = Vector_get__Type((g-> result_types ), i);
+        ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (&t));
         if (((t. kind )  !=  TY_NAMED)) {
             continue;
         }
@@ -17020,6 +17047,7 @@ void   emit_program (Vector__Stmt*   program) {
     ((void(*)(CG*))emit_result_runtime)(g);
     for (int   i = 0; (i  <  Vector_len__Type((g-> option_types ))); i++) {
         Type   t = Vector_get__Type((g-> option_types ), i);
+        ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (&t));
         if (((t. kind )  !=  TY_NAMED)) {
             continue;
         }
@@ -17053,6 +17081,7 @@ void   emit_program (Vector__Stmt*   program) {
     ((void(*)(CG*))emit_option_runtime)(g);
     for (int   i = 0; (i  <  Vector_len__Type((g-> optres_types ))); i++) {
         Type   t = Vector_get__Type((g-> optres_types ), i);
+        ((void(*)(CG*, Type*))forward_decl_generic_monos)(g, (&t));
         if (((t. kind )  !=  TY_NAMED)) {
             continue;
         }
