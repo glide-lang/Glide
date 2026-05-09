@@ -3729,6 +3729,7 @@ typedef struct  MacroParam  {
      const char*   name;
      bool   is_variadic;
      const char*   separator;
+     const char*   kind;
 }  MacroParam ;
 
 typedef struct  Stmt  {
@@ -4518,6 +4519,7 @@ const char*   type_to_c (Type*   t);
 const char*   fnptr_cast_str (Type*   t);
 const char*   mangle_generic (const char*   name, Vector__Type*   args);
 const char*   mangle_type (Type*   t);
+Type*   _infer_generic_call_ret (CG*   g, Expr*   call, Stmt*   template);
 Vector__Type*   resolve_method_call_args (CG*   g, Expr*   call, Stmt*   template, Vector__Type*   recv_args);
 bool   try_mono_call (CG*   g, Expr*   call, Type*   ret_hint);
 Type*   callee_param_ty (CG*   g, Expr*   e, int   i);
@@ -7796,8 +7798,8 @@ Vector__MacroParam*   parse_macro_matchers (Parser*   p) {
             const char*   bname = Parser_expect_ident(p);
             Parser_expect_op(p, ":");
             const char*   kind = Parser_expect_ident(p);
-            if ((!__glide_string_eq(kind, "expr"))) {
-                Parser_err(p, "only `:expr` matchers supported in v1");
+            if ((((!__glide_string_eq(kind, "expr"))  &&  (!__glide_string_eq(kind, "ty")))  &&  (!__glide_string_eq(kind, "ident")))) {
+                Parser_err(p, "matcher kind must be `expr`, `ty`, or `ident`");
             }
             Parser_expect_op(p, ")");
             const char*   sep = "";
@@ -7806,7 +7808,7 @@ Vector__MacroParam*   parse_macro_matchers (Parser*   p) {
                 Parser_advance(p);
             }
             Parser_expect_op(p, "*");
-            MacroParam   mp = (( MacroParam ){. name  = bname, . is_variadic  = true, . separator  = sep});
+            MacroParam   mp = (( MacroParam ){. name  = bname, . is_variadic  = true, . separator  = sep, . kind  = kind});
             Vector_push__MacroParam(out, mp);
         } else {
             if (Parser_at_op(p, "$")) {
@@ -7814,13 +7816,13 @@ Vector__MacroParam*   parse_macro_matchers (Parser*   p) {
                 const char*   bname = Parser_expect_ident(p);
                 Parser_expect_op(p, ":");
                 const char*   kind = Parser_expect_ident(p);
-                if ((!__glide_string_eq(kind, "expr"))) {
-                    Parser_err(p, "only `:expr` matchers supported in v1");
+                if ((((!__glide_string_eq(kind, "expr"))  &&  (!__glide_string_eq(kind, "ty")))  &&  (!__glide_string_eq(kind, "ident")))) {
+                    Parser_err(p, "matcher kind must be `expr`, `ty`, or `ident`");
                 }
-                MacroParam   mp = (( MacroParam ){. name  = bname, . is_variadic  = false, . separator  = ""});
+                MacroParam   mp = (( MacroParam ){. name  = bname, . is_variadic  = false, . separator  = "", . kind  = kind});
                 Vector_push__MacroParam(out, mp);
             } else {
-                Parser_err(p, "expected `$name:expr` or `$($name:expr),*` in macro matcher list");
+                Parser_err(p, "expected `$name:<kind>` or `$($name:<kind>),*` in macro matcher list");
                 Parser_advance(p);
             }
         }
@@ -13699,7 +13701,7 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
             }
             if (HashMap_contains__Stmt((g-> generic_fns ), nm)) {
                 Stmt   gn = HashMap_get__Stmt((g-> generic_fns ), nm);
-                return (gn. fn_ret_ty );
+                return ((Type*(*)(CG*, Expr*, Stmt*))_infer_generic_call_ret)(g, e, (&gn));
             }
         }
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_PATH))) {
@@ -13710,7 +13712,8 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                     return (HashMap_get__Stmt((g-> fns ), resolved). fn_ret_ty );
                 }
                 if (HashMap_contains__Stmt((g-> generic_fns ), resolved)) {
-                    return (HashMap_get__Stmt((g-> generic_fns ), resolved). fn_ret_ty );
+                    Stmt   gn = HashMap_get__Stmt((g-> generic_fns ), resolved);
+                    return ((Type*(*)(CG*, Expr*, Stmt*))_infer_generic_call_ret)(g, e, (&gn));
                 }
             }
             const char*   pname = __glide_string_concat(__glide_string_concat(((const char*(*)(CG*, const char*))resolve_type_prefix)(g, ((e-> lhs )-> str_val )), "_"), ((e-> lhs )-> field ));
@@ -13718,7 +13721,8 @@ Type*   infer_for_codegen (CG*   g, Expr*   e) {
                 return (HashMap_get__Stmt((g-> fns ), pname). fn_ret_ty );
             }
             if (HashMap_contains__Stmt((g-> generic_fns ), pname)) {
-                return (HashMap_get__Stmt((g-> generic_fns ), pname). fn_ret_ty );
+                Stmt   gn = HashMap_get__Stmt((g-> generic_fns ), pname);
+                return ((Type*(*)(CG*, Expr*, Stmt*))_infer_generic_call_ret)(g, e, (&gn));
             }
         }
         if ((((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))) {
@@ -14014,6 +14018,45 @@ const char*   mangle_type (Type*   t) {
     return "void";
 }
 
+Type*   _infer_generic_call_ret (CG*   g, Expr*   call, Stmt*   template) {
+    if ((template  ==  NULL)) {
+        return NULL;
+    }
+    if ((((template-> type_params )  ==  NULL)  ||  (Vector_len__string((template-> type_params ))  ==  0))) {
+        return (template-> fn_ret_ty );
+    }
+    HashMap__Type*   bindings = ((HashMap__Type*(*)(void))HashMap_new__Type)();
+    if ((((call-> args )  !=  NULL)  &&  ((template-> fn_params )  !=  NULL))) {
+        int   n = Vector_len__Param((template-> fn_params ));
+        if ((Vector_len__Expr((call-> args ))  <  n)) {
+            (n  =  Vector_len__Expr((call-> args )));
+        }
+        for (int   i = 0; (i  <  n); i++) {
+            Param   p = Vector_get__Param((template-> fn_params ), i);
+            Expr   a = Vector_get__Expr((call-> args ), i);
+            Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
+            if (((at  !=  NULL)  &&  ((p. ty )  !=  NULL))) {
+                ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((p. ty ), at, (template-> type_params ), bindings);
+            }
+        }
+    }
+    Vector__Type*   derived = ((Vector__Type*(*)(void))Vector_new__Type)();
+    bool   all = true;
+    for (int   i = 0; (i  <  Vector_len__string((template-> type_params ))); i++) {
+        const char*   tn = Vector_get__string((template-> type_params ), i);
+        if ((!HashMap_contains__Type(bindings, tn))) {
+            (all  =  false);
+            break;
+        }
+        Vector_push__Type(derived, HashMap_get__Type(bindings, tn));
+    }
+    HashMap_free__Type(bindings);
+    if ((!all)) {
+        return (template-> fn_ret_ty );
+    }
+    return ((Type*(*)(Type*, Vector__string*, Vector__Type*))subst_type)((template-> fn_ret_ty ), (template-> type_params ), derived);
+}
+
 Vector__Type*   resolve_method_call_args (CG*   g, Expr*   call, Stmt*   template, Vector__Type*   recv_args) {
     if (((template-> type_params )  ==  NULL)) {
         return recv_args;
@@ -14193,17 +14236,50 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
             if ((HashMap_contains__Stmt((g-> generic_fns ), mname)  &&  ((struct_def. type_params )  !=  NULL))) {
                 Stmt   mtmpl = HashMap_get__Stmt((g-> generic_fns ), mname);
                 HashMap__Type*   bindings = ((HashMap__Type*(*)(void))HashMap_new__Type)();
-                if (((((e-> args )  !=  NULL)  &&  ((mtmpl. fn_params )  !=  NULL))  &&  (Vector_len__Param((mtmpl. fn_params ))  >  0))) {
-                    int   n = (Vector_len__Param((mtmpl. fn_params ))  -  1);
+                int   self_off = 0;
+                if ((((mtmpl. fn_params )  !=  NULL)  &&  (Vector_len__Param((mtmpl. fn_params ))  >  0))) {
+                    Param   first_p = Vector_get__Param((mtmpl. fn_params ), 0);
+                    if ((((first_p. name )  !=  NULL)  &&  __glide_string_eq((first_p. name ), "self"))) {
+                        (self_off  =  1);
+                    }
+                }
+                if (((((e-> args )  !=  NULL)  &&  ((mtmpl. fn_params )  !=  NULL))  &&  (Vector_len__Param((mtmpl. fn_params ))  >  self_off))) {
+                    int   n = (Vector_len__Param((mtmpl. fn_params ))  -  self_off);
                     if ((Vector_len__Expr((e-> args ))  <  n)) {
                         (n  =  Vector_len__Expr((e-> args )));
                     }
                     for (int   i = 0; (i  <  n); i++) {
-                        Param   p = Vector_get__Param((mtmpl. fn_params ), (i  +  1));
+                        Param   p = Vector_get__Param((mtmpl. fn_params ), (i  +  self_off));
                         Expr   a = Vector_get__Expr((e-> args ), i);
                         Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
                         if (((at  !=  NULL)  &&  ((p. ty )  !=  NULL))) {
                             ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((p. ty ), at, (mtmpl. type_params ), bindings);
+                        }
+                    }
+                }
+                const char*   inner_method = ((recv-> lhs )-> field );
+                const char*   inner_mname = __glide_string_concat(__glide_string_concat(family, "_"), inner_method);
+                if (HashMap_contains__Stmt((g-> generic_fns ), inner_mname)) {
+                    Stmt   inner_tmpl = HashMap_get__Stmt((g-> generic_fns ), inner_mname);
+                    int   inner_off = 0;
+                    if ((((inner_tmpl. fn_params )  !=  NULL)  &&  (Vector_len__Param((inner_tmpl. fn_params ))  >  0))) {
+                        Param   p0 = Vector_get__Param((inner_tmpl. fn_params ), 0);
+                        if ((((p0. name )  !=  NULL)  &&  __glide_string_eq((p0. name ), "self"))) {
+                            (inner_off  =  1);
+                        }
+                    }
+                    if (((((recv-> args )  !=  NULL)  &&  ((inner_tmpl. fn_params )  !=  NULL))  &&  (Vector_len__Param((inner_tmpl. fn_params ))  >  inner_off))) {
+                        int   n2 = (Vector_len__Param((inner_tmpl. fn_params ))  -  inner_off);
+                        if ((Vector_len__Expr((recv-> args ))  <  n2)) {
+                            (n2  =  Vector_len__Expr((recv-> args )));
+                        }
+                        for (int   i = 0; (i  <  n2); i++) {
+                            Param   p = Vector_get__Param((inner_tmpl. fn_params ), (i  +  inner_off));
+                            Expr   a = Vector_get__Expr((recv-> args ), i);
+                            Type*   at = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (&a));
+                            if (((at  !=  NULL)  &&  ((p. ty )  !=  NULL))) {
+                                ((void(*)(Type*, Type*, Vector__string*, HashMap__Type*))unify_for_inference)((p. ty ), at, (struct_def. type_params ), bindings);
+                            }
                         }
                     }
                 }
@@ -14219,6 +14295,12 @@ void   prescan_expr (CG*   g, Expr*   e, Type*   ret_hint) {
                 }
                 if ((all  &&  (Vector_len__Type(derived)  >  0))) {
                     (chain_recv_hint  =  ((Type*(*)(Type*))ty_pointer)(((Type*(*)(const char*, Vector__Type*))ty_generic)(family, derived)));
+                    const char*   mangled_struct = ((const char*(*)(const char*, Vector__Type*))mangle_generic)(((chain_recv_hint-> inner )-> name ), ((chain_recv_hint-> inner )-> args ));
+                    if ((!HashMap_contains__bool((g-> emitted_monos ), mangled_struct))) {
+                        HashMap_insert__bool((g-> emitted_monos ), mangled_struct, true);
+                        printf("%s %s %s %s %s\n", "typedef struct ", mangled_struct, " ", mangled_struct, ";");
+                        ((void(*)(CG*, Type*))emit_struct_mono)(g, (chain_recv_hint-> inner ));
+                    }
                     Vector_push__Type((g-> struct_mono_queue ), (*(chain_recv_hint-> inner )));
                     ((void(*)(CG*, Expr*, Type*))prescan_expr)(g, recv, chain_recv_hint);
                 }
@@ -15392,9 +15474,21 @@ void   emit_expr (CG*   g, Expr*   e) {
                     }
                     printf("%s", mangled);
                     printf("%s", "(");
-                    bool   needs_addr = ((((recv_ty  !=  NULL)  &&  ((recv_ty-> kind )  !=  TY_POINTER))  &&  ((recv_ty-> kind )  !=  TY_BORROW))  &&  ((recv_ty-> kind )  !=  TY_BORROW_MUT));
+                    bool   p_is_ptr = true;
+                    if ((((template. fn_params )  !=  NULL)  &&  (Vector_len__Param((template. fn_params ))  >  0))) {
+                        Param   first = Vector_get__Param((template. fn_params ), 0);
+                        if ((((((first. ty )  !=  NULL)  &&  (((first. ty )-> kind )  !=  TY_POINTER))  &&  (((first. ty )-> kind )  !=  TY_BORROW))  &&  (((first. ty )-> kind )  !=  TY_BORROW_MUT))) {
+                            (p_is_ptr  =  false);
+                        }
+                    }
+                    bool   r_is_ptr = ((recv_ty  !=  NULL)  &&  ((((recv_ty-> kind )  ==  TY_POINTER)  ||  ((recv_ty-> kind )  ==  TY_BORROW))  ||  ((recv_ty-> kind )  ==  TY_BORROW_MUT)));
+                    bool   needs_addr = (p_is_ptr  &&  (!r_is_ptr));
+                    bool   needs_deref = ((!p_is_ptr)  &&  r_is_ptr);
                     if (needs_addr) {
                         printf("%s", "&");
+                    }
+                    if (needs_deref) {
+                        printf("%s", "*");
                     }
                     ((void(*)(CG*, Expr*))emit_expr)(g, recv);
                     if (((e-> args )  !=  NULL)) {
