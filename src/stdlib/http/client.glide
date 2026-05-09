@@ -62,7 +62,13 @@ pub struct HttpClient {
     /// automatic Set-Cookie ingestion + Cookie: header attachment
     /// across requests.
     pub jar: *CookieJar,
-    // Future: pool, timeout, tls_config.
+    /// When `true`, skip TLS certificate validation. Local dev only —
+    /// production code MUST keep this off so MITM is impossible.
+    pub tls_insecure: bool,
+    /// Per-request total timeout in milliseconds (covers connect +
+    /// send + receive). `0` disables. Applied via SO_RCVTIMEO /
+    /// SO_SNDTIMEO on the underlying socket.
+    pub timeout_ms: int,
 }
 
 impl HttpClient {
@@ -71,6 +77,8 @@ impl HttpClient {
         c.user_agent = "glide/0.1";
         c.max_redirects = 5;
         c.jar = null as *CookieJar;
+        c.tls_insecure = false;
+        c.timeout_ms = 0;
         return c;
     }
 
@@ -149,11 +157,14 @@ impl HttpClient {
 
         let mut raw_body: string = "";
         if url.scheme.eq("https") {
-            let cfg: *TlsConfig = TlsConfig::client();
+            let cfg: *TlsConfig;
+            if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
+            else                  { cfg = TlsConfig::client(); }
             let s: !*TlsStream = TlsStream::connect(url.host, url.port, cfg);
             cfg.free();
             if !s.ok { return err(s.err); }
             let stream: *TlsStream = s.val;
+            if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
             let w: !int = stream.write_all(wire);
             if !w.ok { stream.close(); return err(w.err); }
             let raw: !string = stream.read_to_end();
@@ -164,6 +175,7 @@ impl HttpClient {
             let s: !*TcpStream = TcpStream::connect_host(url.host, url.port);
             if !s.ok { return err(s.err); }
             let stream: *TcpStream = s.val;
+            if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
             let w: !int = stream.write_all(wire);
             if !w.ok { stream.close(); return err(w.err); }
             let raw: !string = stream.read_to_end();

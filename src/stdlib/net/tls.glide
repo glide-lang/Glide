@@ -229,7 +229,9 @@ c_raw! {
         #else
         close(h->sock);
         #endif
-        SSL_CTX_free(h->ctx);
+        // ctx may be null when this handle was produced by a listener;
+        // the listener owns the shared SSL_CTX and frees it on close.
+        if (h->ctx != NULL) SSL_CTX_free(h->ctx);
         free(h);
     }
 
@@ -250,6 +252,119 @@ c_raw! {
         // SSL_version returns TLS1_VERSION (0x0301) ... TLS1_3_VERSION (0x0304)
         return SSL_version(h->ssl);
     }
+
+    // ---- server side ----
+
+    typedef struct __glide_tls_listener {
+        SSL_CTX*       ctx;
+        __glide_tls_sock listen_fd;
+    } __glide_tls_listener;
+
+    static void* __glide_tls_listen(int port, const char* cert_path,
+                                     const char* key_path) {
+        __glide_tls_init();
+        SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+        if (ctx == NULL) return NULL;
+        if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0) {
+            SSL_CTX_free(ctx); return NULL;
+        }
+        if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0) {
+            SSL_CTX_free(ctx); return NULL;
+        }
+        if (!SSL_CTX_check_private_key(ctx)) { SSL_CTX_free(ctx); return NULL; }
+
+        __glide_tls_sock s = socket(AF_INET, SOCK_STREAM, 0);
+        if (s == __GLIDE_TLS_INVALID) { SSL_CTX_free(ctx); return NULL; }
+        int one = 1;
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof(a));
+        a.sin_family = AF_INET;
+        a.sin_port = htons((uint16_t)port);
+        a.sin_addr.s_addr = htonl(0);
+        if (bind(s, (struct sockaddr*)&a, sizeof(a)) != 0
+            || listen(s, 128) != 0) {
+            #ifdef _WIN32
+            closesocket(s);
+            #else
+            close(s);
+            #endif
+            SSL_CTX_free(ctx);
+            return NULL;
+        }
+        __glide_tls_listener* l = (__glide_tls_listener*)malloc(sizeof(__glide_tls_listener));
+        l->ctx = ctx; l->listen_fd = s;
+        return (void*)l;
+    }
+
+    // Block on accept; wrap the new socket in SSL and run SSL_accept.
+    // Returns a __glide_tls_handle (compatible with read/write/close)
+    // or NULL on accept/handshake failure.
+    static void* __glide_tls_accept(void* lp) {
+        __glide_tls_listener* l = (__glide_tls_listener*)lp;
+        struct sockaddr_storage src;
+        socklen_t slen = sizeof(src);
+        __glide_tls_sock c = accept(l->listen_fd, (struct sockaddr*)&src, &slen);
+        if (c == __GLIDE_TLS_INVALID) return NULL;
+        SSL* ssl = SSL_new(l->ctx);
+        if (ssl == NULL) {
+            #ifdef _WIN32
+            closesocket(c);
+            #else
+            close(c);
+            #endif
+            return NULL;
+        }
+        SSL_set_fd(ssl, (int)c);
+        if (SSL_accept(ssl) <= 0) {
+            SSL_free(ssl);
+            #ifdef _WIN32
+            closesocket(c);
+            #else
+            close(c);
+            #endif
+            return NULL;
+        }
+        // Reuse the same handle struct as client-side. ctx pointer is
+        // shared with the listener — DON'T free it on stream close;
+        // null it out so __glide_tls_close skips SSL_CTX_free.
+        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
+        h->ctx = NULL;       // shared with listener; not freed by stream
+        h->ssl = ssl;
+        h->sock = c;
+        h->last_err[0] = 0;
+        return (void*)h;
+    }
+
+    static void __glide_tls_listener_close(void* lp) {
+        __glide_tls_listener* l = (__glide_tls_listener*)lp;
+        if (l == NULL) return;
+        #ifdef _WIN32
+        closesocket(l->listen_fd);
+        #else
+        close(l->listen_fd);
+        #endif
+        SSL_CTX_free(l->ctx);
+        free(l);
+    }
+
+    // Apply send + receive timeouts on the underlying TCP socket.
+    // OpenSSL doesn't have its own timer, but SSL_read/SSL_write
+    // bottom out in send/recv which honour SO_RCVTIMEO / SO_SNDTIMEO.
+    static void __glide_tls_set_timeout(void* hp, int ms) {
+        __glide_tls_handle* h = (__glide_tls_handle*)hp;
+        #ifdef _WIN32
+        DWORD v = (DWORD)ms;
+        setsockopt(h->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&v, sizeof(v));
+        setsockopt(h->sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&v, sizeof(v));
+        #else
+        struct timeval tv;
+        tv.tv_sec = ms / 1000;
+        tv.tv_usec = (ms % 1000) * 1000;
+        setsockopt(h->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(h->sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        #endif
+    }
     #endif
 }
 
@@ -261,6 +376,10 @@ extern fn __glide_tls_read(h: *void, buf: *void, max: int) -> i64;
 extern fn __glide_tls_close(h: *void);
 extern fn __glide_tls_alpn(h: *void) -> string;
 extern fn __glide_tls_version(h: *void) -> int;
+extern fn __glide_tls_set_timeout(h: *void, ms: int);
+extern fn __glide_tls_listen(port: int, cert_path: string, key_path: string) -> *void;
+extern fn __glide_tls_accept(listener: *void) -> *void;
+extern fn __glide_tls_listener_close(listener: *void);
 
 /// Configuration for an outbound TLS connection.
 pub struct TlsConfig {
@@ -396,8 +515,50 @@ impl TlsStream {
         return 0;
     }
 
+    /// Apply read + write timeouts on the underlying TCP socket.
+    /// SSL_read/SSL_write inherit SO_RCVTIMEO / SO_SNDTIMEO.
+    pub fn set_timeout_ms(self: *TlsStream, ms: int) {
+        __glide_tls_set_timeout(self.handle, ms);
+    }
+
     pub fn close(self: *TlsStream) {
         __glide_tls_close(self.handle);
+        free(self as *void);
+    }
+}
+
+/// Server-side listener: holds the SSL_CTX with cert+key plus the
+/// underlying TCP listening socket. `accept` blocks for the next
+/// client and returns a TlsStream after the handshake succeeds.
+pub struct TlsListener {
+    handle: *void,
+}
+
+impl TlsListener {
+    /// Bind on `0.0.0.0:port`, load `cert_path` (PEM cert + chain) and
+    /// `key_path` (PEM private key), and start listening. On any I/O
+    /// or cert error returns `err` with a generic message — call
+    /// `openssl errstr` against the OpenSSL log if you need detail.
+    pub fn bind(port: int, cert_path: string, key_path: string) -> !*TlsListener {
+        let h: *void = __glide_tls_listen(port, cert_path, key_path);
+        if h == null { return err("tls_listener: bind/cert/key failure"); }
+        let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
+        l.handle = h;
+        return ok(l);
+    }
+
+    /// Wait for the next client; run TLS handshake; return a stream
+    /// ready for read/write. Skips clients whose handshake fails.
+    pub fn accept(self: *TlsListener) -> !*TlsStream {
+        let h: *void = __glide_tls_accept(self.handle);
+        if h == null { return err("tls_listener: accept/handshake failure"); }
+        let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
+        s.handle = h;
+        return ok(s);
+    }
+
+    pub fn close(self: *TlsListener) {
+        __glide_tls_listener_close(self.handle);
         free(self as *void);
     }
 }

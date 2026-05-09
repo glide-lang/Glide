@@ -102,6 +102,23 @@ c_raw! {
         close((__glide_tcp_h)fd);
         #endif
     }
+
+    // Apply send + receive timeouts on the socket. `ms` of 0 disables.
+    // POSIX uses struct timeval; Windows takes a DWORD of milliseconds.
+    static void __glide_tcp_set_timeout(int64_t fd, int ms) {
+        __glide_tcp_h s = (__glide_tcp_h)fd;
+        #ifdef _WIN32
+        DWORD v = (DWORD)ms;
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&v, sizeof(v));
+        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&v, sizeof(v));
+        #else
+        struct timeval tv;
+        tv.tv_sec = ms / 1000;
+        tv.tv_usec = (ms % 1000) * 1000;
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        #endif
+    }
     #endif
 }
 
@@ -109,6 +126,7 @@ extern fn __glide_tcp_connect(family: int, v4: i64, v6_hi: i64, v6_lo: i64, port
 extern fn __glide_tcp_send(fd: i64, data: string, n: int) -> i64;
 extern fn __glide_tcp_recv(fd: i64, buf: *void, max: int) -> i64;
 extern fn __glide_tcp_close_h(fd: i64);
+extern fn __glide_tcp_set_timeout(fd: i64, ms: int);
 // `_bytes_to_string` comes from net::ip via the import above.
 
 pub struct TcpStream {
@@ -206,6 +224,13 @@ impl TcpStream {
             out = out.concat(r.val);
         }
         return ok(out);
+    }
+
+    /// Apply a read + write timeout in milliseconds. `0` disables.
+    /// Backed by SO_RCVTIMEO / SO_SNDTIMEO — the kernel reports a
+    /// short read once the timer fires.
+    pub fn set_timeout_ms(self: *TcpStream, ms: int) {
+        __glide_tcp_set_timeout(self.fd, ms);
     }
 
     pub fn close(self: *TcpStream) {

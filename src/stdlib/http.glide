@@ -27,6 +27,8 @@ import stdlib::net::*;
 import stdlib::http_status::*;
 import stdlib::os::*;
 
+import stdlib::net::tls::*;
+
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
 // C HTTP parser (bootstrap/runtime/http_parse.c). Drops the
@@ -393,6 +395,109 @@ fn _accept_loop(port: int, handler: fn(*HttpRequest) -> HttpResponse) {
             spawn _handle_conn(c, handler);
         }
     }
+}
+
+// ---- HTTPS server ------------------------------------------------------
+//
+// Same handler signature as http_listen. Reuses the same Glide-side
+// request parser; the wire bytes flow through TlsStream instead of
+// the raw Conn. No keep-alive, no chunked transfer — single-shot
+// request/response per connection. Plenty for v1.
+
+fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
+    // Read until \r\n\r\n + Content-Length bytes, or until peer closes.
+    let mut acc: string = "";
+    let mut have_head: bool = false;
+    let mut head_end: int = 0;
+    let mut content_len: int = 0;
+    while !have_head {
+        let r: !string = s.read(8192);
+        if !r.ok { s.close(); return; }
+        if r.val.len() == 0 { s.close(); return; }
+        acc = acc.concat(r.val);
+        let p: int = acc.index_of("\r\n\r\n");
+        if p >= 0 {
+            head_end = p + 4;
+            have_head = true;
+            // Pull Content-Length out of the head we've got.
+            let head: string = acc.substring(0, p);
+            let lower: string = head.to_lower();
+            let cl_at: int = lower.index_of("content-length:");
+            if cl_at >= 0 {
+                let after: string = head.substring(cl_at + 15, head.len());
+                let nl: int = after.index_of("\r\n");
+                let mut v: string = after;
+                if nl >= 0 { v = after.substring(0, nl); }
+                let pr: !int = v.trim().try_parse_int();
+                if pr.ok { content_len = pr.val; }
+            }
+        }
+        if acc.len() > 1024 * 1024 { s.close(); return; }
+    }
+    while acc.len() < head_end + content_len {
+        let r: !string = s.read(8192);
+        if !r.ok { s.close(); return; }
+        if r.val.len() == 0 { break; }
+        acc = acc.concat(r.val);
+    }
+
+    // Parse via the existing C parser to keep the format exactly
+    // identical to plain HTTP.
+    let g: *void = hp_parse_glide(acc as *void, acc.len());
+    let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
+    if g != null {
+        let req: HttpRequest = HttpRequest {
+            method:        hp_glide_method(g),
+            path:          hp_glide_path(g),
+            version:       hp_glide_version(g),
+            headers_block: hp_glide_headers_block(g),
+            body:          hp_glide_body(g),
+        };
+        resp = handler(&req);
+        hp_glide_free(g);
+    }
+    let wlen: int = hp_build_response(resp.status, status_text(resp.status),
+                                       resp.body as *void, resp.body.len(),
+                                       resp.headers_block, 0);
+    let buf_ptr: *void = hp_resp_buf_ptr();
+    // The C builder writes wlen bytes into a static buffer; copy to
+    // a Glide string and send via TlsStream.write_all.
+    let mut wire: string = "";
+    let mut bp: *u8 = buf_ptr as *u8;
+    for let i: int = 0; i < wlen; i++ {
+        let b: int = bp[i] as int;
+        wire = wire.concat((b as char).to_string());
+    }
+    let _ignore: !int = s.write_all(wire);
+    s.close();
+}
+
+/// Listen for HTTPS connections on `port` with `cert_path` and
+/// `key_path` (both PEM). Each accepted client is dispatched to
+/// `handler` after the TLS handshake succeeds.
+///
+/// ```glide
+/// fn root(req: *HttpRequest) -> HttpResponse {
+///     return HttpResponse::ok().body("hello over TLS!");
+/// }
+///
+/// fn main() -> int {
+///     https_listen(8443, "cert.pem", "key.pem", root);
+///     return 0;
+/// }
+/// ```
+pub fn https_listen(port: int, cert_path: string, key_path: string,
+                    handler: fn(*HttpRequest) -> HttpResponse) -> !int {
+    let lr: !*TlsListener = TlsListener::bind(port, cert_path, key_path);
+    if !lr.ok { return err(lr.err); }
+    let l: *TlsListener = lr.val;
+    println!("https: listening on :", port);
+    while true {
+        let sr: !*TlsStream = l.accept();
+        if !sr.ok { continue; }
+        spawn_thread _handle_tls_conn(sr.val, handler);
+    }
+    return ok(0);
 }
 
 /// Like `http_listen` but bound to N worker threads, each with its own
