@@ -1,15 +1,9 @@
-// Procedural-macro interpreter (Phase 1 — spec, no impl yet).
+// Procedural-macro interpreter (Phase 1).
 //
-// This file holds the contract for the interpreter that runs proc-macro
-// fns at compile time. Implementation lands in a follow-up commit.
-//
-// ============================================================
-// Why an interpreter (not dlopen / subprocess / static plugin)
-// ============================================================
-//
-// See `project_proc_macros_design.md`. tl;dr: deterministic +
-// cross-platform + same-file authorship + no .so/.dll churn.
-// Cost: one-time ~600 LOC interpreter inside the compiler.
+// Spec for the supported subset of Glide + the IValue tagged union +
+// the calling convention lives in `project_proc_macros_design.md` and
+// at the top of this file before the impl. Read those before adding
+// new node kinds.
 //
 // ============================================================
 // Supported subset of Glide
@@ -23,98 +17,924 @@
 //
 // EXPRESSIONS:
 //   EX_INT, EX_FLOAT, EX_STRING, EX_BOOL, EX_CHAR, EX_NULL
-//   EX_IDENT, EX_BINARY, EX_UNARY (no UN_ADDR/UN_DEREF — pointer math
-//     belongs in extern fns, which macros can't call anyway)
-//   EX_CALL — receiver is EX_IDENT / EX_PATH / EX_MEMBER
-//   EX_MEMBER — field access on Stmt/Expr/Type/Field/Param/Attr/Vector/HashMap
-//   EX_INDEX — Vector lookup (for HashMap use `.get(k)`)
-//   EX_PATH — `Type::method` static dispatch
-//   EX_CAST — primitive widening only (`n as int`, `c as int`)
-//   EX_ASSIGN — `x = y` and `obj.field = y`
+//   EX_IDENT, EX_BINARY, EX_UNARY (no UN_ADDR/UN_DEREF)
+//   EX_CALL, EX_MEMBER, EX_INDEX, EX_PATH, EX_CAST, EX_ASSIGN
 //   EX_BLOCK, EX_IF
 //
-// NOT supported (macro fn that uses any of these is rejected at
-// registration time):
-//   extern fn calls, c_raw blocks, defer / defer_err
-//   spawn / spawn_thread / channels / select!
-//   match (deferred — adds complexity; can come in v2)
-//   closures / fn-pointer values stored in vars (only fn-named call)
-//   generics in macro fn body (mono'd by the compiler beforehand)
+// NOT supported: extern fn calls, c_raw, defer/defer_err, spawn,
+// channels, select!, match (deferred), closures, generics in body.
 //
 // ============================================================
-// Built-in surface (what the macro can call directly)
+// Built-in surface (native intrinsics)
 // ============================================================
 //
-// AST CONSTRUCTORS (all from `ast.glide`):
-//   expr_int, expr_float, expr_string, expr_bool, expr_char, expr_null
-//   expr_ident, expr_binary, expr_unary, expr_call, expr_member,
-//   expr_path, expr_struct_lit, expr_cast, expr_index
-//   stmt_let, stmt_const, stmt_return, stmt_expr, stmt_if, stmt_while,
-//   stmt_for, stmt_block, stmt_struct, stmt_fn, stmt_impl, stmt_enum
-//   ty_named, ty_pointer, ty_borrow, ty_borrow_mut, ty_generic,
-//   ty_option, ty_result, ty_optres, ty_dyn
+// AST constructors: expr_int, expr_string, expr_ident, expr_bool,
+//   expr_null, expr_call, expr_member, expr_path, expr_binary,
+//   expr_unary, expr_cast, stmt_let, stmt_return, stmt_expr,
+//   stmt_if, stmt_block, stmt_fn, stmt_impl, ty_named, ty_pointer,
+//   ty_generic, ty_option, ty_result.
 //
-// CONTAINER OPS:
-//   `Vector::new()` — returns an empty Vector<T> (T is whatever the
-//     caller pushes; the interpreter is dynamically typed for these)
-//   `v.push(x)`, `v.pop()`, `v.len()`, `v.get(i)`, `v.set(i, x)`,
-//     `v.clear()`, `v.is_empty()`
-//   `HashMap::new()`, `m.insert(k, v)`, `m.get(k)`, `m.contains(k)`,
-//     `m.remove(k)`, `m.len()`, `m.keys()`, `m.values()`
+// Container ops: Vector::new, push, pop, len, get, set, clear, is_empty.
+//   HashMap::new, insert, get, contains, remove, len, keys.
 //
-// STRING OPS (mirrors `impl string`):
-//   `s.len()`, `s.eq(o)`, `s.concat(o)`, `s.substring(a, b)`,
-//   `s.starts_with(p)`, `s.ends_with(p)`, `s.contains(sub)`,
-//   `s.index_of(sub)`, `s.split(sep)`, `s.to_upper()`, `s.to_lower()`,
-//   `s.trim()`, `s.is_empty()`, `s.at(i)`
+// String ops: len, eq, concat, substring, starts_with, ends_with,
+//   contains, index_of, split, to_upper, to_lower, trim, is_empty, at.
 //
-// PRINT (for diagnostics):
-//   `println!`, `print!`, `format!` — same as runtime
+// Print: println!, print!, format! (same surface as runtime; here
+//   they go through Glide's own runtime since we run inside the
+//   compiler).
 //
 // ============================================================
 // Calling convention
 // ============================================================
 //
-// The expander invokes:
-//
-//   interp_call(macro_fn: *Stmt, args: *Vector<IValue>) -> IValue
-//
-// Where `IValue` is a tagged union:
-//
-//   pub const IV_NULL:    int = 0;
-//   pub const IV_INT:     int = 1;
-//   pub const IV_BOOL:    int = 2;
-//   pub const IV_STRING:  int = 3;
-//   pub const IV_F64:     int = 4;
-//   pub const IV_CHAR:    int = 5;
-//   pub const IV_PTR:     int = 6;     // wraps a real *Stmt/*Expr/*Type/etc.
-//   pub const IV_VECTOR:  int = 7;     // dynamically-typed *Vector<IValue>
-//   pub const IV_HASHMAP: int = 8;     // dynamically-typed *HashMap<IValue>
-//
-// AST values flow as IV_PTR with `ty_tag` distinguishing "Stmt" /
-// "Expr" / "Type" / "Field" / "Param" / "Attr". Field access on these
-// is hard-coded against the known Glide layout — the interpreter
-// reads `(stmt-ptr).kind` directly.
-//
-// `IV_VECTOR` / `IV_HASHMAP` are distinct from `IV_PTR { ty_tag:
-// "Vector" }` because Glide's `*Vector<T>` carries its element type
-// statically; in the interpreter they're heterogeneous.
-//
-// ============================================================
-// Hygiene (Phase 3 — placeholder here)
-// ============================================================
-//
-// Idents constructed via `expr_ident("name")` get a unique suffix
-// `__macro_<call_id>__<name>` injected by `interp_call`. Opt-out:
-// `expr_ident_unsafe("name")` (or attribute on the proc fn).
-//
-// ============================================================
-// Errors
-// ============================================================
-//
-// Any unsupported stmt/expr the interpreter encounters becomes a
-// diagnostic at the macro fn's site that says exactly what the
-// macro tried to do. The use-site of the macro gets a follow-up
-// "macro expansion failed" diagnostic pointing at it.
+// Expander builds a `*Vector<IValue>` of argument values, then calls
+// `interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>)`.
+// Returns an IValue. Diagnostics accumulate in `it.diagnostics`.
 
-// (impl follows in the next commit)
+import stdlib::hashmap::*;
+import ast;
+
+// ---- IValue tagged union ----------------------------------------------
+
+pub const IV_NULL:    int = 0;
+pub const IV_INT:     int = 1;
+pub const IV_BOOL:    int = 2;
+pub const IV_STRING:  int = 3;
+pub const IV_F64:     int = 4;
+pub const IV_CHAR:    int = 5;
+pub const IV_PTR:     int = 6;     // wraps a *Stmt/*Expr/*Type/*Field/*Param/*Attr
+pub const IV_VECTOR:  int = 7;     // *Vector<IValue>
+pub const IV_HASHMAP: int = 8;     // *HashMap<IValue>
+
+pub struct IValue {
+    pub kind: int,
+    pub i: int,
+    pub b: bool,
+    pub s: string,
+    pub f: f64,
+    pub c: char,
+    pub p: *void,
+    pub ty_tag: string,                 // IV_PTR discriminator
+    pub vec: *Vector<IValue>,
+    pub map: *HashMap<IValue>,
+}
+
+pub fn iv_null() -> IValue {
+    return IValue {
+        kind: IV_NULL, i: 0, b: false, s: "", f: 0.0, c: 0 as char,
+        p: null, ty_tag: "", vec: null, map: null,
+    };
+}
+
+pub fn iv_int(n: int) -> IValue {
+    let mut v: IValue = iv_null();
+    v.kind = IV_INT;
+    v.i = n;
+    return v;
+}
+
+pub fn iv_bool(b: bool) -> IValue {
+    let mut v: IValue = iv_null();
+    v.kind = IV_BOOL;
+    v.b = b;
+    return v;
+}
+
+pub fn iv_string(s: string) -> IValue {
+    let mut v: IValue = iv_null();
+    v.kind = IV_STRING;
+    v.s = s;
+    return v;
+}
+
+pub fn iv_char(c: char) -> IValue {
+    let mut v: IValue = iv_null();
+    v.kind = IV_CHAR;
+    v.c = c;
+    return v;
+}
+
+pub fn iv_ptr(p: *void, tag: string) -> IValue {
+    let mut v: IValue = iv_null();
+    v.kind = IV_PTR;
+    v.p = p;
+    v.ty_tag = tag;
+    return v;
+}
+
+pub fn iv_vector(vec: *Vector<IValue>) -> IValue {
+    let mut v: IValue = iv_null();
+    v.kind = IV_VECTOR;
+    v.vec = vec;
+    return v;
+}
+
+pub fn iv_hashmap(map: *HashMap<IValue>) -> IValue {
+    let mut v: IValue = iv_null();
+    v.kind = IV_HASHMAP;
+    v.map = map;
+    return v;
+}
+
+// ---- Interp state -----------------------------------------------------
+
+// Control-flow flag set by stmts. Loops and call boundaries inspect it
+// to decide whether to keep going / unwind.
+pub const CF_NORMAL:   int = 0;
+pub const CF_RETURN:   int = 1;
+pub const CF_BREAK:    int = 2;
+pub const CF_CONTINUE: int = 3;
+pub const CF_ERROR:    int = 4;
+
+pub struct Interp {
+    // Stack of scopes. Each scope is name -> IValue. interp_call pushes
+    // a fresh scope on entry, pops on exit. Control-flow stmts and
+    // assignments walk the stack from top to find the binding.
+    pub scopes: *Vector<*HashMap<IValue>>,
+
+    // User-defined fns reachable from macro bodies. Looked up by name
+    // when interpreting a call whose callee isn't a built-in
+    // intrinsic.
+    pub user_fns: *HashMap<Stmt>,
+
+    // Control-flow signal. Set to CF_RETURN by ST_RETURN, CF_BREAK by
+    // ST_BREAK, CF_CONTINUE by ST_CONTINUE. interp_call resets it to
+    // CF_NORMAL on entry; loops drain it on each iteration.
+    pub control: int,
+
+    // Value carried by ST_RETURN until interp_call picks it up.
+    pub return_val: IValue,
+
+    // Accumulated diagnostics. Each entry is a single human-readable
+    // line; the expander surfaces them at the use site.
+    pub diagnostics: *Vector<string>,
+}
+
+impl Interp {
+    pub fn new() -> *Interp {
+        let it: *Interp = malloc(sizeof(Interp)) as *Interp;
+        let scopes: *Vector<*HashMap<IValue>> = Vector::new();
+        let ufns: *HashMap<Stmt> = HashMap::new();
+        let diags: *Vector<string> = Vector::new();
+        it.scopes = scopes;
+        it.user_fns = ufns;
+        it.control = CF_NORMAL;
+        it.return_val = iv_null();
+        it.diagnostics = diags;
+        return it;
+    }
+
+    // Register every fn in `program` so the interpreter can call them.
+    // Macro fn bodies typically reach helpers in the same module via
+    // plain ident calls.
+    pub fn register_fns(self: *Interp, program: *Vector<Stmt>) {
+        for let i: int = 0; i < program.len(); i++ {
+            let s: Stmt = program.get(i);
+            if s.kind == ST_FN && s.name != null && !s.name.eq("") {
+                self.user_fns.insert(s.name, s);
+            }
+        }
+    }
+
+    pub fn err(self: *Interp, msg: string) {
+        self.diagnostics.push(msg);
+        self.control = CF_ERROR;
+    }
+}
+
+// Look up `name` in the scope stack from top to bottom. Returns
+// `iv_null()` if not found (and pushes a diagnostic).
+fn scope_get(it: *Interp, name: string) -> IValue {
+    if it.scopes.len() == 0 {
+        it.err("scope_get: empty scope stack");
+        return iv_null();
+    }
+    let mut i: int = it.scopes.len() - 1;
+    while i >= 0 {
+        let sc: *HashMap<IValue> = it.scopes.get(i);
+        if sc.contains(name) { return sc.get(name); }
+        i = i - 1;
+    }
+    it.err("undefined name: ".concat(name));
+    return iv_null();
+}
+
+// Define a new binding in the topmost scope. Used by ST_LET / ST_CONST.
+fn scope_define(it: *Interp, name: string, v: IValue) {
+    if it.scopes.len() == 0 {
+        it.err("scope_define: empty scope stack");
+        return;
+    }
+    let top: *HashMap<IValue> = it.scopes.get(it.scopes.len() - 1);
+    top.insert(name, v);
+}
+
+// Update an existing binding (walks up). Falls back to topmost scope
+// when the name isn't found anywhere — mirrors Glide's `let mut`
+// semantics where the binding is fixed at first declaration.
+fn scope_assign(it: *Interp, name: string, v: IValue) {
+    let mut i: int = it.scopes.len() - 1;
+    while i >= 0 {
+        let sc: *HashMap<IValue> = it.scopes.get(i);
+        if sc.contains(name) { sc.insert(name, v); return; }
+        i = i - 1;
+    }
+    it.err("assign to undefined: ".concat(name));
+}
+
+// ---- public entry point -----------------------------------------------
+
+// Run `fn_stmt` with the given positional `args`. Returns the value
+// the fn returned (or iv_null() if it didn't return one explicitly,
+// or an error happened during execution — check it.diagnostics).
+pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue {
+    let saved_control: int = it.control;
+    let saved_return: IValue = it.return_val;
+    it.control = CF_NORMAL;
+    it.return_val = iv_null();
+
+    let scope: *HashMap<IValue> = HashMap::new();
+    if fn_stmt.fn_params != null {
+        for let i: int = 0; i < fn_stmt.fn_params.len(); i++ {
+            let p: Param = fn_stmt.fn_params.get(i);
+            let val: IValue = iv_null();
+            if i < args.len() { scope.insert(p.name, args.get(i)); }
+            else { scope.insert(p.name, val); }
+        }
+    }
+    it.scopes.push(scope);
+
+    if fn_stmt.fn_body != null {
+        for let i: int = 0; i < fn_stmt.fn_body.len(); i++ {
+            let stmt: Stmt = fn_stmt.fn_body.get(i);
+            interp_stmt(it, &stmt);
+            if it.control == CF_RETURN { break; }
+            if it.control == CF_ERROR { break; }
+        }
+    }
+
+    let _: *HashMap<IValue> = it.scopes.pop();
+    let ret: IValue = it.return_val;
+
+    it.control = saved_control;
+    it.return_val = saved_return;
+    return ret;
+}
+
+// ---- stmt interpretation ---------------------------------------------
+
+pub fn interp_stmt(it: *Interp, s: *Stmt) {
+    if s == null { return; }
+    if s.kind == ST_LET || s.kind == ST_CONST {
+        let mut v: IValue = iv_null();
+        if s.let_value != null { v = interp_expr(it, s.let_value); }
+        if it.control == CF_ERROR { return; }
+        scope_define(it, s.name, v);
+        return;
+    }
+    if s.kind == ST_RETURN {
+        let mut v: IValue = iv_null();
+        if s.expr_value != null { v = interp_expr(it, s.expr_value); }
+        if it.control == CF_ERROR { return; }
+        it.return_val = v;
+        it.control = CF_RETURN;
+        return;
+    }
+    if s.kind == ST_EXPR {
+        if s.expr_value != null { let _: IValue = interp_expr(it, s.expr_value); }
+        return;
+    }
+    if s.kind == ST_BLOCK {
+        interp_block(it, s.then_body);
+        return;
+    }
+    if s.kind == ST_IF {
+        let cond: IValue = interp_expr(it, s.cond);
+        if it.control == CF_ERROR { return; }
+        if cond.kind != IV_BOOL { it.err("if condition is not bool"); return; }
+        if cond.b {
+            interp_block(it, s.then_body);
+        } else if s.else_body != null {
+            interp_block(it, s.else_body);
+        }
+        return;
+    }
+    if s.kind == ST_WHILE {
+        while true {
+            let cond: IValue = interp_expr(it, s.cond);
+            if it.control == CF_ERROR { return; }
+            if cond.kind != IV_BOOL { it.err("while condition is not bool"); return; }
+            if !cond.b { break; }
+            interp_block(it, s.then_body);
+            if it.control == CF_RETURN || it.control == CF_ERROR { return; }
+            if it.control == CF_BREAK { it.control = CF_NORMAL; break; }
+            if it.control == CF_CONTINUE { it.control = CF_NORMAL; }
+        }
+        return;
+    }
+    if s.kind == ST_FOR {
+        if s.for_init != null { interp_stmt(it, s.for_init); }
+        if it.control == CF_ERROR { return; }
+        while true {
+            if s.cond != null {
+                let cond: IValue = interp_expr(it, s.cond);
+                if it.control == CF_ERROR { return; }
+                if cond.kind != IV_BOOL { it.err("for condition is not bool"); return; }
+                if !cond.b { break; }
+            }
+            interp_block(it, s.then_body);
+            if it.control == CF_RETURN || it.control == CF_ERROR { return; }
+            if it.control == CF_BREAK { it.control = CF_NORMAL; break; }
+            if it.control == CF_CONTINUE { it.control = CF_NORMAL; }
+            if s.for_step != null { let _: IValue = interp_expr(it, s.for_step); }
+            if it.control == CF_ERROR { return; }
+        }
+        return;
+    }
+    if s.kind == ST_BREAK { it.control = CF_BREAK; return; }
+    if s.kind == ST_CONTINUE { it.control = CF_CONTINUE; return; }
+
+    it.err("unsupported stmt kind in macro body");
+}
+
+fn interp_block(it: *Interp, body: *Vector<Stmt>) {
+    if body == null { return; }
+    let block_scope: *HashMap<IValue> = HashMap::new();
+    it.scopes.push(block_scope);
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        interp_stmt(it, &s);
+        if it.control != CF_NORMAL { break; }
+    }
+    let _: *HashMap<IValue> = it.scopes.pop();
+}
+
+// ---- expr interpretation ---------------------------------------------
+
+pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
+    if e == null { return iv_null(); }
+    if e.kind == EX_INT { return iv_int(e.int_val as int); }
+    if e.kind == EX_BOOL { return iv_bool(e.bool_val); }
+    if e.kind == EX_STRING { return iv_string(e.str_val); }
+    if e.kind == EX_NULL { return iv_null(); }
+    if e.kind == EX_IDENT { return scope_get(it, e.str_val); }
+    if e.kind == EX_BINARY { return interp_binop(it, e); }
+    if e.kind == EX_UNARY { return interp_unop(it, e); }
+    if e.kind == EX_CALL { return interp_call_expr(it, e); }
+    if e.kind == EX_MEMBER { return interp_member_read(it, e); }
+    if e.kind == EX_INDEX { return interp_index(it, e); }
+    if e.kind == EX_ASSIGN { return interp_assign(it, e); }
+    if e.kind == EX_CAST { return interp_cast(it, e); }
+    if e.kind == EX_PATH { return interp_path(it, e); }
+
+    it.err("unsupported expr kind in macro body");
+    return iv_null();
+}
+
+fn interp_binop(it: *Interp, e: *Expr) -> IValue {
+    // Short-circuit logical ops first.
+    if e.op_code == OP_AND {
+        let l: IValue = interp_expr(it, e.lhs);
+        if it.control == CF_ERROR { return iv_null(); }
+        if l.kind != IV_BOOL || !l.b { return iv_bool(false); }
+        let r: IValue = interp_expr(it, e.rhs);
+        if it.control == CF_ERROR { return iv_null(); }
+        return iv_bool(r.kind == IV_BOOL && r.b);
+    }
+    if e.op_code == OP_OR {
+        let l: IValue = interp_expr(it, e.lhs);
+        if it.control == CF_ERROR { return iv_null(); }
+        if l.kind == IV_BOOL && l.b { return iv_bool(true); }
+        let r: IValue = interp_expr(it, e.rhs);
+        if it.control == CF_ERROR { return iv_null(); }
+        return iv_bool(r.kind == IV_BOOL && r.b);
+    }
+    let l: IValue = interp_expr(it, e.lhs);
+    if it.control == CF_ERROR { return iv_null(); }
+    let r: IValue = interp_expr(it, e.rhs);
+    if it.control == CF_ERROR { return iv_null(); }
+
+    // String concat via `+` is NOT supported — Glide uses `.concat()`.
+    // Comparison on strings via `eq` method, not `==`. So binary ops
+    // here are int/bool only.
+    if e.op_code == OP_ADD { return iv_int(l.i + r.i); }
+    if e.op_code == OP_SUB { return iv_int(l.i - r.i); }
+    if e.op_code == OP_MUL { return iv_int(l.i * r.i); }
+    if e.op_code == OP_DIV {
+        if r.i == 0 { it.err("division by zero"); return iv_null(); }
+        return iv_int(l.i / r.i);
+    }
+    if e.op_code == OP_MOD {
+        if r.i == 0 { it.err("modulo by zero"); return iv_null(); }
+        return iv_int(l.i % r.i);
+    }
+    if e.op_code == OP_EQ {
+        if l.kind == IV_INT  && r.kind == IV_INT  { return iv_bool(l.i == r.i); }
+        if l.kind == IV_BOOL && r.kind == IV_BOOL { return iv_bool(l.b == r.b); }
+        if l.kind == IV_NULL && r.kind == IV_NULL { return iv_bool(true); }
+        if l.kind == IV_NULL || r.kind == IV_NULL { return iv_bool(l.kind == r.kind); }
+        if l.kind == IV_PTR  && r.kind == IV_PTR  { return iv_bool(l.p == r.p); }
+        return iv_bool(false);
+    }
+    if e.op_code == OP_NE {
+        let eq: IValue = _eq_helper(l, r);
+        return iv_bool(!eq.b);
+    }
+    if e.op_code == OP_LT { return iv_bool(l.i <  r.i); }
+    if e.op_code == OP_LE { return iv_bool(l.i <= r.i); }
+    if e.op_code == OP_GT { return iv_bool(l.i >  r.i); }
+    if e.op_code == OP_GE { return iv_bool(l.i >= r.i); }
+
+    it.err("unsupported binary op");
+    return iv_null();
+}
+
+fn _eq_helper(l: IValue, r: IValue) -> IValue {
+    if l.kind == IV_INT  && r.kind == IV_INT  { return iv_bool(l.i == r.i); }
+    if l.kind == IV_BOOL && r.kind == IV_BOOL { return iv_bool(l.b == r.b); }
+    if l.kind == IV_NULL && r.kind == IV_NULL { return iv_bool(true); }
+    if l.kind == IV_NULL || r.kind == IV_NULL { return iv_bool(l.kind == r.kind); }
+    if l.kind == IV_PTR  && r.kind == IV_PTR  { return iv_bool(l.p == r.p); }
+    return iv_bool(false);
+}
+
+fn interp_unop(it: *Interp, e: *Expr) -> IValue {
+    let v: IValue = interp_expr(it, e.operand);
+    if it.control == CF_ERROR { return iv_null(); }
+    if e.op_code == UN_NEG {
+        if v.kind != IV_INT { it.err("unary `-` requires int"); return iv_null(); }
+        return iv_int(-v.i);
+    }
+    if e.op_code == UN_NOT {
+        if v.kind != IV_BOOL { it.err("unary `!` requires bool"); return iv_null(); }
+        return iv_bool(!v.b);
+    }
+    it.err("unsupported unary op");
+    return iv_null();
+}
+
+fn interp_cast(it: *Interp, e: *Expr) -> IValue {
+    let v: IValue = interp_expr(it, e.lhs);
+    if it.control == CF_ERROR { return iv_null(); }
+    if e.cast_to == null { return v; }
+    if e.cast_to.kind != TY_NAMED { return v; }
+    let n: string = e.cast_to.name;
+    if n.eq("int") || n.eq("i32") || n.eq("i64") {
+        if v.kind == IV_CHAR { return iv_int(v.c.to_int()); }
+        return v;
+    }
+    if n.eq("char") {
+        if v.kind == IV_INT { return iv_char(v.i as char); }
+        return v;
+    }
+    if n.eq("bool") { return v; }
+    if n.eq("string") { return v; }
+    return v;
+}
+
+fn interp_index(it: *Interp, e: *Expr) -> IValue {
+    let coll: IValue = interp_expr(it, e.lhs);
+    if it.control == CF_ERROR { return iv_null(); }
+    let idx: IValue = interp_expr(it, e.rhs);
+    if it.control == CF_ERROR { return iv_null(); }
+    if coll.kind != IV_VECTOR {
+        it.err("index target is not a Vector");
+        return iv_null();
+    }
+    if idx.kind != IV_INT {
+        it.err("index is not int");
+        return iv_null();
+    }
+    if idx.i < 0 || idx.i >= coll.vec.len() {
+        it.err("index out of range");
+        return iv_null();
+    }
+    return coll.vec.get(idx.i);
+}
+
+fn interp_assign(it: *Interp, e: *Expr) -> IValue {
+    let rhs: IValue = interp_expr(it, e.rhs);
+    if it.control == CF_ERROR { return iv_null(); }
+    if e.lhs.kind == EX_IDENT {
+        scope_assign(it, e.lhs.str_val, rhs);
+        return rhs;
+    }
+    // Field assign on a Stmt/Expr/Type is not supported in v1 — macro
+    // authors should construct fresh nodes via the expr_*/stmt_*
+    // helpers rather than mutate compiler-owned AST.
+    it.err("assignment target must be an identifier");
+    return iv_null();
+}
+
+fn interp_path(it: *Interp, e: *Expr) -> IValue {
+    // EX_PATH without surrounding EX_CALL is an enum variant or a
+    // bare const ref. The interpreter doesn't track enums, but the
+    // compiler emits ast/stmt kind constants like `ST_FN` as ints,
+    // and they're already accessible via plain identifiers since
+    // they're top-level `pub const`. Reaching this branch usually
+    // means the user wrote `Foo::Bar` for a type-attached path —
+    // unsupported.
+    it.err("unsupported path expression in macro body");
+    return iv_null();
+}
+
+// ---- call dispatch ----------------------------------------------------
+
+fn interp_call_expr(it: *Interp, e: *Expr) -> IValue {
+    let callee: *Expr = e.lhs;
+    if callee == null { it.err("call without callee"); return iv_null(); }
+
+    // Evaluate args left-to-right.
+    let args: *Vector<IValue> = Vector::new();
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let v: IValue = interp_expr(it, &a);
+            if it.control == CF_ERROR { return iv_null(); }
+            args.push(v);
+        }
+    }
+
+    // Plain ident call — built-in intrinsic OR user fn.
+    if callee.kind == EX_IDENT {
+        let name: string = callee.str_val;
+        let ret: IValue = builtin_call(it, name, args);
+        if it.control != CF_ERROR { return ret; }
+        // builtin_call set CF_ERROR if name was unknown — try user fn.
+        if it.user_fns.contains(name) {
+            it.control = CF_NORMAL;
+            it.diagnostics.pop();        // drop the "unknown intrinsic" diag
+            let ufn: Stmt = it.user_fns.get(name);
+            return interp_call(it, &ufn, args);
+        }
+        return ret;
+    }
+
+    // `Type::method(args)` — static call. Vector::new / HashMap::new
+    // are the common cases; everything else lands in builtin_call too.
+    if callee.kind == EX_PATH {
+        let key: string = callee.str_val.concat("::").concat(callee.field);
+        return builtin_call(it, key, args);
+    }
+
+    // `recv.method(args)` — instance call. Evaluate the receiver and
+    // dispatch on its kind.
+    if callee.kind == EX_MEMBER {
+        let recv: IValue = interp_expr(it, callee.lhs);
+        if it.control == CF_ERROR { return iv_null(); }
+        return method_call(it, recv, callee.field, args);
+    }
+
+    it.err("unsupported call shape");
+    return iv_null();
+}
+
+fn interp_member_read(it: *Interp, e: *Expr) -> IValue {
+    let recv: IValue = interp_expr(it, e.lhs);
+    if it.control == CF_ERROR { return iv_null(); }
+    return member_read(it, recv, e.field);
+}
+
+// ---- built-in call dispatch table ------------------------------------
+
+fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
+    // Vector::new / HashMap::new
+    if name.eq("Vector::new") {
+        let v: *Vector<IValue> = Vector::new();
+        return iv_vector(v);
+    }
+    if name.eq("HashMap::new") {
+        let m: *HashMap<IValue> = HashMap::new();
+        return iv_hashmap(m);
+    }
+
+    // AST primitive constructors (stdlib::ast.glide). Only the subset
+    // macros realistically need is wired up. Add more on demand.
+    if name.eq("expr_int") {
+        let n: int = _arg_int(it, args, 0);
+        return iv_ptr(expr_int(n, 0, 0) as *void, "Expr");
+    }
+    if name.eq("expr_string") {
+        let s: string = _arg_string(it, args, 0);
+        return iv_ptr(expr_string(s, 0, 0) as *void, "Expr");
+    }
+    if name.eq("expr_bool") {
+        let b: bool = _arg_bool(it, args, 0);
+        return iv_ptr(expr_bool(b, 0, 0) as *void, "Expr");
+    }
+    if name.eq("expr_null") {
+        return iv_ptr(expr_null(0, 0) as *void, "Expr");
+    }
+    if name.eq("expr_ident") {
+        let n: string = _arg_string(it, args, 0);
+        return iv_ptr(expr_ident(n, 0, 0) as *void, "Expr");
+    }
+    if name.eq("ty_named") {
+        let n: string = _arg_string(it, args, 0);
+        return iv_ptr(ty_named(n) as *void, "Type");
+    }
+    if name.eq("ty_pointer") {
+        let inner: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
+        return iv_ptr(ty_pointer(inner) as *void, "Type");
+    }
+
+    // String ops as free fns (the `s.method()` form goes through
+    // method_call below, but a few are also exposed positionally).
+    if name.eq("println") || name.eq("print") {
+        // Treat any println/print invocation from a macro body as
+        // diagnostic only — write the stringified args to the
+        // interpreter's diagnostic channel, not to stdout.
+        let mut out: string = "";
+        for let i: int = 0; i < args.len(); i++ {
+            if i > 0 { out = out.concat(" "); }
+            out = out.concat(_iv_to_display(args.get(i)));
+        }
+        it.diagnostics.push(out);
+        return iv_null();
+    }
+
+    it.err("unknown intrinsic: ".concat(name));
+    return iv_null();
+}
+
+// ---- method dispatch on receiver kind --------------------------------
+
+fn method_call(it: *Interp, recv: IValue, name: string, args: *Vector<IValue>) -> IValue {
+    if recv.kind == IV_STRING { return string_method(it, recv.s, name, args); }
+    if recv.kind == IV_VECTOR { return vector_method(it, recv.vec, name, args); }
+    if recv.kind == IV_HASHMAP { return hashmap_method(it, recv.map, name, args); }
+    if recv.kind == IV_INT && name.eq("to_string") { return iv_string(recv.i.to_string()); }
+    if recv.kind == IV_PTR { return ptr_method(it, recv, name, args); }
+
+    it.err("method `".concat(name).concat("` on unsupported receiver"));
+    return iv_null();
+}
+
+fn string_method(it: *Interp, s: string, name: string, args: *Vector<IValue>) -> IValue {
+    if name.eq("len") { return iv_int(s.len()); }
+    if name.eq("is_empty") { return iv_bool(s.len() == 0); }
+    if name.eq("eq") { return iv_bool(s.eq(_arg_string(it, args, 0))); }
+    if name.eq("concat") { return iv_string(s.concat(_arg_string(it, args, 0))); }
+    if name.eq("starts_with") { return iv_bool(s.starts_with(_arg_string(it, args, 0))); }
+    if name.eq("ends_with") { return iv_bool(s.ends_with(_arg_string(it, args, 0))); }
+    if name.eq("contains") { return iv_bool(s.contains(_arg_string(it, args, 0))); }
+    if name.eq("index_of") { return iv_int(s.index_of(_arg_string(it, args, 0))); }
+    if name.eq("substring") {
+        let a: int = _arg_int(it, args, 0);
+        let b: int = _arg_int(it, args, 1);
+        return iv_string(s.substring(a, b));
+    }
+    if name.eq("to_upper") { return iv_string(s.to_upper()); }
+    if name.eq("to_lower") { return iv_string(s.to_lower()); }
+    if name.eq("trim") { return iv_string(s.trim()); }
+    if name.eq("at") {
+        let i: int = _arg_int(it, args, 0);
+        return iv_char(s.at(i));
+    }
+    if name.eq("to_string") { return iv_string(s); }
+    it.err("string has no method `".concat(name).concat("`"));
+    return iv_null();
+}
+
+fn vector_method(it: *Interp, v: *Vector<IValue>, name: string, args: *Vector<IValue>) -> IValue {
+    if name.eq("len") { return iv_int(v.len()); }
+    if name.eq("is_empty") { return iv_bool(v.len() == 0); }
+    if name.eq("push") {
+        if args.len() < 1 { it.err("push requires 1 arg"); return iv_null(); }
+        v.push(args.get(0));
+        return iv_null();
+    }
+    if name.eq("pop") {
+        if v.len() == 0 { return iv_null(); }
+        return v.pop();
+    }
+    if name.eq("get") {
+        let i: int = _arg_int(it, args, 0);
+        if i < 0 || i >= v.len() { it.err("vector get out of range"); return iv_null(); }
+        return v.get(i);
+    }
+    if name.eq("set") {
+        let i: int = _arg_int(it, args, 0);
+        if i < 0 || i >= v.len() { it.err("vector set out of range"); return iv_null(); }
+        if args.len() < 2 { it.err("set requires 2 args"); return iv_null(); }
+        v.set(i, args.get(1));
+        return iv_null();
+    }
+    if name.eq("clear") { v.clear(); return iv_null(); }
+    it.err("Vector has no method `".concat(name).concat("`"));
+    return iv_null();
+}
+
+fn hashmap_method(it: *Interp, m: *HashMap<IValue>, name: string, args: *Vector<IValue>) -> IValue {
+    if name.eq("len") { return iv_int(m.len()); }
+    if name.eq("is_empty") { return iv_bool(m.is_empty()); }
+    if name.eq("contains") { return iv_bool(m.contains(_arg_string(it, args, 0))); }
+    if name.eq("get") {
+        let k: string = _arg_string(it, args, 0);
+        if !m.contains(k) { it.err("HashMap.get missing key: ".concat(k)); return iv_null(); }
+        return m.get(k);
+    }
+    if name.eq("insert") {
+        let k: string = _arg_string(it, args, 0);
+        if args.len() < 2 { it.err("insert requires 2 args"); return iv_null(); }
+        m.insert(k, args.get(1));
+        return iv_null();
+    }
+    if name.eq("remove") { return iv_bool(m.remove(_arg_string(it, args, 0))); }
+    if name.eq("clear") { m.clear(); return iv_null(); }
+    it.err("HashMap has no method `".concat(name).concat("`"));
+    return iv_null();
+}
+
+// ---- IV_PTR field access + method calls -------------------------------
+
+// Read a field on a wrapped *Stmt / *Expr / *Type / *Field / *Param /
+// *Attr. Each tag has its own handler. Most fields are exposed as
+// IV_PTR / IV_INT / IV_STRING; collection-typed fields surface as
+// IV_VECTOR (but the underlying storage stays the compiler-owned
+// Vector — reads + iteration only, no push from inside the macro).
+fn member_read(it: *Interp, recv: IValue, field: string) -> IValue {
+    if recv.kind == IV_VECTOR && field.eq("len") { return iv_int(recv.vec.len()); }
+    if recv.kind == IV_HASHMAP && field.eq("len") { return iv_int(recv.map.len()); }
+    if recv.kind != IV_PTR {
+        it.err("field access on a non-pointer value");
+        return iv_null();
+    }
+    if recv.ty_tag.eq("Stmt") { return stmt_field(it, recv.p as *Stmt, field); }
+    if recv.ty_tag.eq("Expr") { return expr_field(it, recv.p as *Expr, field); }
+    if recv.ty_tag.eq("Type") { return type_field(it, recv.p as *Type, field); }
+    if recv.ty_tag.eq("Field") { return field_field(it, recv.p as *Field, field); }
+    if recv.ty_tag.eq("Param") { return param_field(it, recv.p as *Param, field); }
+    if recv.ty_tag.eq("Attr") { return attr_field(it, recv.p as *Attr, field); }
+    it.err("unknown ptr tag: ".concat(recv.ty_tag));
+    return iv_null();
+}
+
+fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
+    if s == null { return iv_null(); }
+    if f.eq("kind") { return iv_int(s.kind); }
+    if f.eq("name") { return iv_string(s.name); }
+    if f.eq("line") { return iv_int(s.line); }
+    if f.eq("column") { return iv_int(s.column); }
+    if f.eq("is_pub") { return iv_bool(s.is_pub); }
+    if f.eq("struct_fields") {
+        // Wrap the Vector<Field> as IV_VECTOR<IValue> by lifting each
+        // Field into a fresh IV_PTR.
+        let out: *Vector<IValue> = Vector::new();
+        if s.struct_fields != null {
+            for let i: int = 0; i < s.struct_fields.len(); i++ {
+                let fld: Field = s.struct_fields.get(i);
+                let pf: *Field = malloc(sizeof(Field)) as *Field;
+                *pf = fld;
+                out.push(iv_ptr(pf as *void, "Field"));
+            }
+        }
+        return iv_vector(out);
+    }
+    if f.eq("type_params") {
+        let out: *Vector<IValue> = Vector::new();
+        if s.type_params != null {
+            for let i: int = 0; i < s.type_params.len(); i++ {
+                out.push(iv_string(s.type_params.get(i)));
+            }
+        }
+        return iv_vector(out);
+    }
+    if f.eq("attrs") {
+        let out: *Vector<IValue> = Vector::new();
+        if s.attrs != null {
+            for let i: int = 0; i < s.attrs.len(); i++ {
+                let a: Attr = s.attrs.get(i);
+                let pa: *Attr = malloc(sizeof(Attr)) as *Attr;
+                *pa = a;
+                out.push(iv_ptr(pa as *void, "Attr"));
+            }
+        }
+        return iv_vector(out);
+    }
+    it.err("Stmt has no field `".concat(f).concat("`"));
+    return iv_null();
+}
+
+fn expr_field(it: *Interp, e: *Expr, f: string) -> IValue {
+    if e == null { return iv_null(); }
+    if f.eq("kind") { return iv_int(e.kind); }
+    if f.eq("int_val") { return iv_int(e.int_val as int); }
+    if f.eq("str_val") { return iv_string(e.str_val); }
+    if f.eq("bool_val") { return iv_bool(e.bool_val); }
+    if f.eq("op_code") { return iv_int(e.op_code); }
+    if f.eq("line") { return iv_int(e.line); }
+    if f.eq("column") { return iv_int(e.column); }
+    if f.eq("field") { return iv_string(e.field); }
+    if f.eq("lhs") {
+        if e.lhs == null { return iv_null(); }
+        return iv_ptr(e.lhs as *void, "Expr");
+    }
+    if f.eq("rhs") {
+        if e.rhs == null { return iv_null(); }
+        return iv_ptr(e.rhs as *void, "Expr");
+    }
+    if f.eq("operand") {
+        if e.operand == null { return iv_null(); }
+        return iv_ptr(e.operand as *void, "Expr");
+    }
+    it.err("Expr has no field `".concat(f).concat("`"));
+    return iv_null();
+}
+
+fn type_field(it: *Interp, t: *Type, f: string) -> IValue {
+    if t == null { return iv_null(); }
+    if f.eq("kind") { return iv_int(t.kind); }
+    if f.eq("name") { return iv_string(t.name); }
+    if f.eq("inner") {
+        if t.inner == null { return iv_null(); }
+        return iv_ptr(t.inner as *void, "Type");
+    }
+    it.err("Type has no field `".concat(f).concat("`"));
+    return iv_null();
+}
+
+fn field_field(it: *Interp, fld: *Field, f: string) -> IValue {
+    if fld == null { return iv_null(); }
+    if f.eq("name") { return iv_string(fld.name); }
+    if f.eq("ty") {
+        if fld.ty == null { return iv_null(); }
+        return iv_ptr(fld.ty as *void, "Type");
+    }
+    if f.eq("is_pub") { return iv_bool(fld.is_pub); }
+    it.err("Field has no field `".concat(f).concat("`"));
+    return iv_null();
+}
+
+fn param_field(it: *Interp, p: *Param, f: string) -> IValue {
+    if p == null { return iv_null(); }
+    if f.eq("name") { return iv_string(p.name); }
+    if f.eq("ty") {
+        if p.ty == null { return iv_null(); }
+        return iv_ptr(p.ty as *void, "Type");
+    }
+    it.err("Param has no field `".concat(f).concat("`"));
+    return iv_null();
+}
+
+fn attr_field(it: *Interp, a: *Attr, f: string) -> IValue {
+    if a == null { return iv_null(); }
+    if f.eq("name") { return iv_string(a.name); }
+    it.err("Attr has no field `".concat(f).concat("`"));
+    return iv_null();
+}
+
+fn ptr_method(it: *Interp, recv: IValue, name: string, args: *Vector<IValue>) -> IValue {
+    // Most ptr-targeted methods are field reads spelled with `()` in
+    // user code (`s.kind()` etc); v1 doesn't surface any setters.
+    return member_read(it, recv, name);
+}
+
+// ---- arg coercion helpers --------------------------------------------
+
+fn _arg_int(it: *Interp, args: *Vector<IValue>, i: int) -> int {
+    if i >= args.len() { it.err("missing arg"); return 0; }
+    let v: IValue = args.get(i);
+    if v.kind != IV_INT { it.err("expected int arg"); return 0; }
+    return v.i;
+}
+
+fn _arg_string(it: *Interp, args: *Vector<IValue>, i: int) -> string {
+    if i >= args.len() { it.err("missing arg"); return ""; }
+    let v: IValue = args.get(i);
+    if v.kind != IV_STRING { it.err("expected string arg"); return ""; }
+    return v.s;
+}
+
+fn _arg_bool(it: *Interp, args: *Vector<IValue>, i: int) -> bool {
+    if i >= args.len() { it.err("missing arg"); return false; }
+    let v: IValue = args.get(i);
+    if v.kind != IV_BOOL { it.err("expected bool arg"); return false; }
+    return v.b;
+}
+
+fn _arg_ptr(it: *Interp, args: *Vector<IValue>, i: int, want_tag: string) -> *void {
+    if i >= args.len() { it.err("missing arg"); return null; }
+    let v: IValue = args.get(i);
+    if v.kind == IV_NULL { return null; }
+    if v.kind != IV_PTR { it.err("expected pointer arg"); return null; }
+    if !v.ty_tag.eq(want_tag) {
+        it.err("pointer arg tag mismatch: want ".concat(want_tag).concat(", got ").concat(v.ty_tag));
+        return null;
+    }
+    return v.p;
+}
+
+// ---- value display (for diagnostic println) -------------------------
+
+fn _iv_to_display(v: IValue) -> string {
+    if v.kind == IV_NULL { return "null"; }
+    if v.kind == IV_INT { return v.i.to_string(); }
+    if v.kind == IV_BOOL { if v.b { return "true"; } return "false"; }
+    if v.kind == IV_STRING { return v.s; }
+    if v.kind == IV_PTR { return "<ptr:".concat(v.ty_tag).concat(">"); }
+    if v.kind == IV_VECTOR { return "<vector len=".concat(v.vec.len().to_string()).concat(">"); }
+    if v.kind == IV_HASHMAP { return "<hashmap len=".concat(v.map.len().to_string()).concat(">"); }
+    return "<value>";
+}
