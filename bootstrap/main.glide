@@ -1025,7 +1025,7 @@ fn run_build(src_path: string, out_path: string, target: string, then_run: bool)
     let mut cmd: string = cc;
     cmd = cmd.concat(" \"").concat(tmp_c).concat("\"");
     cmd = cmd.concat(" -o \"").concat(out_path).concat("\"");
-    cmd = cmd.concat(" -O2 -w -lpthread -lm -lssl -lcrypto");
+    cmd = cmd.concat(" -O2 -w -lpthread -lm -lssl -lcrypto -lz");
     if __glide_is_windows() != 0 { cmd = cmd.concat(" -lws2_32"); }
     if !target.eq("") {
         cmd = cmd.concat(" --target=").concat(target);

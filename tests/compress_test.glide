@@ -1,0 +1,121 @@
+// gzip_mw response compression. Skipped for tiny bodies, already-
+// compressed Content-Types, and clients that don't advertise gzip.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::compress::*;
+
+fn _big_body() -> string {
+    // > 1024 bytes (the gzip threshold) so the path actually fires.
+    let mut s: string = "";
+    let mut i: int = 0;
+    while i < 50 {
+        s = s.concat("Lorem ipsum dolor sit amet, consectetur adipiscing elit. ");
+        i = i + 1;
+    }
+    return s;
+}
+
+fn _req(accept_enc: string) -> HttpRequest {
+    let mut h: string = "";
+    if accept_enc.len() > 0 {
+        h = "Accept-Encoding: ".concat(accept_enc).concat("\r\n");
+    }
+    return HttpRequest {
+        method:        "GET",
+        path:          "/",
+        version:       "HTTP/1.1",
+        headers_block: h,
+        body:          "",
+        params:        null,
+        queries:       null,
+        headers_cache: null,
+    };
+}
+
+fn _chain_only(handler: fn(*HttpRequest) -> HttpResponse) -> *Chain {
+    let c: *Chain = malloc(sizeof(Chain)) as *Chain;
+    let m: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
+    c.idx = 0;
+    c.mws = m;
+    c.handler = handler;
+    return c;
+}
+
+fn _h_text_big(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text(_big_body());
+}
+
+fn _h_text_small(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("hi");
+}
+
+fn _h_image(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::with_status(200)
+        .set("Content-Type", "image/png")
+        .body(_big_body());
+}
+
+fn _h_already_encoded(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text(_big_body()).set("Content-Encoding", "br");
+}
+
+fn _has_gzip_magic(body: string) -> bool {
+    if body.len() < 3 { return false; }
+    let b0: int = body.at(0).to_int();
+    let b1: int = body.at(1).to_int();
+    let b2: int = body.at(2).to_int();
+    return b0 == 31 && b1 == 139 && b2 == 8;   // 0x1f 0x8b 0x08
+}
+
+// ---- tests ----------------------------------------------------------
+
+fn test_gzip_compresses_large_body() -> int {
+    let req: HttpRequest = _req("gzip");
+    let c: *Chain = _chain_only(_h_text_big);
+    c.req = &req;
+    let resp: HttpResponse = gzip_mw(&req, c);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.header("Content-Encoding"), "gzip");
+    assert!(_has_gzip_magic(resp.body));
+    assert!(resp.body.len() < _big_body().len());
+    return 0;
+}
+
+fn test_no_accept_encoding_no_compression() -> int {
+    let req: HttpRequest = _req("");
+    let c: *Chain = _chain_only(_h_text_big);
+    c.req = &req;
+    let resp: HttpResponse = gzip_mw(&req, c);
+    assert_str_eq!(resp.header("Content-Encoding"), "");
+    return 0;
+}
+
+fn test_small_body_no_compression() -> int {
+    let req: HttpRequest = _req("gzip");
+    let c: *Chain = _chain_only(_h_text_small);
+    c.req = &req;
+    let resp: HttpResponse = gzip_mw(&req, c);
+    assert_str_eq!(resp.header("Content-Encoding"), "");
+    assert_str_eq!(resp.body, "hi");
+    return 0;
+}
+
+fn test_image_content_type_skipped() -> int {
+    let req: HttpRequest = _req("gzip");
+    let c: *Chain = _chain_only(_h_image);
+    c.req = &req;
+    let resp: HttpResponse = gzip_mw(&req, c);
+    assert_str_eq!(resp.header("Content-Encoding"), "");
+    return 0;
+}
+
+fn test_already_encoded_skipped() -> int {
+    let req: HttpRequest = _req("gzip");
+    let c: *Chain = _chain_only(_h_already_encoded);
+    c.req = &req;
+    let resp: HttpResponse = gzip_mw(&req, c);
+    assert_str_eq!(resp.header("Content-Encoding"), "br");
+    return 0;
+}
