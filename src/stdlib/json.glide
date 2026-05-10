@@ -779,3 +779,54 @@ pub trait JsonBind {
     fn from_json(v: *JsonValue) -> !Self;
     fn to_json(self: *Self) -> *JsonValue;
 }
+
+/// Blanket: any `Vector<T>` whose `T` implements `JsonBind` is itself
+/// JSON-bindable. Maps a JSON array to a `Vector<T>` (and back).
+///
+/// Element-level `from_json` failures bubble up via `?`, so the first
+/// bad element fails the whole parse — there's no silent skipping.
+/// Empty arrays parse to empty vectors; non-array input errors with
+/// `"expected array"`.
+///
+/// Pair with `@derive(JsonBind)` on the element struct to get a
+/// no-boilerplate `Vector<T>` ⇄ JSON path:
+///
+/// ```glide
+/// @derive(JsonBind)
+/// pub struct Pet { pub name: string, pub age: int }
+///
+/// let xs: *Vector<Pet> = Vector::new();
+/// xs.push(Pet { name: "rex", age: 4 });
+/// xs.push(Pet { name: "tom", age: 7 });
+///
+/// let s: string = (xs).to_json().emit();
+/// // [{"name":"rex","age":4},{"name":"tom","age":7}]
+///
+/// let r: !Vector<Pet> = Vector::from_json(JsonValue::parse(s));
+/// ```
+impl<T: JsonBind> JsonBind for Vector<T> {
+    fn from_json(v: *JsonValue) -> !Vector<T> {
+        if v == null || v.kind != JSON_ARRAY {
+            return err("expected array");
+        }
+        let out: *Vector<T> = Vector::new();
+        let mut i: int = 0;
+        while i < v.len() {
+            let item: T = T::from_json(v.at(i))?;
+            out.push(item);
+            i = i + 1;
+        }
+        return ok(*out);
+    }
+
+    fn to_json(self: *Vector<T>) -> *JsonValue {
+        let arr: *JsonValue = JsonValue::array();
+        let mut i: int = 0;
+        while i < self.len() {
+            let item: T = self.get(i);
+            arr.arr_push((&item).to_json());
+            i = i + 1;
+        }
+        return arr;
+    }
+}
