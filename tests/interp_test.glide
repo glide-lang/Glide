@@ -1,0 +1,180 @@
+import stdlib::testing::*;
+import stdlib::hashmap::*;
+import bootstrap::ast::*;
+import bootstrap::interp::*;
+
+// Build the AST for `fn add(a: int, b: int) -> int { return a + b; }`
+// programmatically so the interpreter has something concrete to chew
+// on without going through the parser.
+fn _build_add_fn() -> *Stmt {
+    let body: *Vector<Stmt> = Vector::new();
+    let lhs: *Expr = expr_ident("a", 0, 0);
+    let rhs: *Expr = expr_ident("b", 0, 0);
+    let sum: *Expr = expr_binary(OP_ADD, lhs, rhs);
+    body.push(*stmt_return(sum, 0, 0));
+
+    let params: *Vector<Param> = Vector::new();
+    params.push(Param { name: "a", ty: ty_named("int") });
+    params.push(Param { name: "b", ty: ty_named("int") });
+
+    let s: *Stmt = stmt_fn("add", params, ty_named("int"), body, 0, 0);
+    return s;
+}
+
+// `fn fact(n: int) -> int { if n <= 1 { return 1; } return n * fact(n - 1); }`
+fn _build_fact_fn() -> *Stmt {
+    let body: *Vector<Stmt> = Vector::new();
+
+    // if n <= 1 { return 1; }
+    let cond: *Expr = expr_binary(OP_LE, expr_ident("n", 0, 0), expr_int(1, 0, 0));
+    let then_body: *Vector<Stmt> = Vector::new();
+    then_body.push(*stmt_return(expr_int(1, 0, 0), 0, 0));
+    let else_body: *Vector<Stmt> = null;
+    body.push(*stmt_if(cond, then_body, else_body, 0, 0));
+
+    // return n * fact(n - 1);
+    let n_minus_1_args: *Vector<Expr> = Vector::new();
+    n_minus_1_args.push(*expr_binary(OP_SUB, expr_ident("n", 0, 0), expr_int(1, 0, 0)));
+    let recur: *Expr = expr_call(expr_ident("fact", 0, 0), n_minus_1_args);
+    let mul: *Expr = expr_binary(OP_MUL, expr_ident("n", 0, 0), recur);
+    body.push(*stmt_return(mul, 0, 0));
+
+    let params: *Vector<Param> = Vector::new();
+    params.push(Param { name: "n", ty: ty_named("int") });
+
+    return stmt_fn("fact", params, ty_named("int"), body, 0, 0);
+}
+
+// ---- tests ------------------------------------------------------------
+
+fn test_add_two_ints() -> int {
+    let it: *Interp = Interp::new();
+    let add_fn: *Stmt = _build_add_fn();
+
+    let args: *Vector<IValue> = Vector::new();
+    args.push(iv_int(7));
+    args.push(iv_int(35));
+
+    let r: IValue = interp_call(it, add_fn, args);
+    assert_eq!(r.kind, IV_INT);
+    assert_eq!(r.i, 42);
+    assert_eq!(it.diagnostics.len(), 0);
+    return 0;
+}
+
+fn test_recursive_factorial() -> int {
+    let it: *Interp = Interp::new();
+    let fact_fn: *Stmt = _build_fact_fn();
+    it.user_fns.insert("fact", *fact_fn);
+
+    let args: *Vector<IValue> = Vector::new();
+    args.push(iv_int(5));
+
+    let r: IValue = interp_call(it, fact_fn, args);
+    assert_eq!(r.kind, IV_INT);
+    assert_eq!(r.i, 120);     // 5! = 120
+    return 0;
+}
+
+fn test_string_concat_via_method() -> int {
+    // fn greet(name: string) -> string { return "hi, ".concat(name); }
+    let body: *Vector<Stmt> = Vector::new();
+    let lit: *Expr = expr_string("hi, ", 0, 0);
+    let arg_list: *Vector<Expr> = Vector::new();
+    arg_list.push(*expr_ident("name", 0, 0));
+    let call: *Expr = expr_call(expr_member(lit, "concat"), arg_list);
+    body.push(*stmt_return(call, 0, 0));
+
+    let params: *Vector<Param> = Vector::new();
+    params.push(Param { name: "name", ty: ty_named("string") });
+    let greet_fn: *Stmt = stmt_fn("greet", params, ty_named("string"), body, 0, 0);
+
+    let it: *Interp = Interp::new();
+    let args: *Vector<IValue> = Vector::new();
+    args.push(iv_string("alice"));
+    let r: IValue = interp_call(it, greet_fn, args);
+    assert_eq!(r.kind, IV_STRING);
+    assert_str_eq!(r.s, "hi, alice");
+    return 0;
+}
+
+fn test_for_loop_sum() -> int {
+    // fn sum_to(n: int) -> int {
+    //     let mut acc = 0;
+    //     for let i = 0; i < n; i = i + 1 { acc = acc + i; }
+    //     return acc;
+    // }
+    let body: *Vector<Stmt> = Vector::new();
+    body.push(*stmt_let("acc", ty_named("int"), expr_int(0, 0, 0), true, 0, 0));
+
+    let init: *Stmt = stmt_let("i", ty_named("int"), expr_int(0, 0, 0), true, 0, 0);
+    let cond: *Expr = expr_binary(OP_LT, expr_ident("i", 0, 0), expr_ident("n", 0, 0));
+    let step: *Expr = expr_assign(OP_ASSIGN,
+        expr_ident("i", 0, 0),
+        expr_binary(OP_ADD, expr_ident("i", 0, 0), expr_int(1, 0, 0)));
+    let inner: *Vector<Stmt> = Vector::new();
+    let acc_assign: *Expr = expr_assign(OP_ASSIGN,
+        expr_ident("acc", 0, 0),
+        expr_binary(OP_ADD, expr_ident("acc", 0, 0), expr_ident("i", 0, 0)));
+    inner.push(*stmt_expr(acc_assign));
+    body.push(*stmt_for(init, cond, step, inner, 0, 0));
+    body.push(*stmt_return(expr_ident("acc", 0, 0), 0, 0));
+
+    let params: *Vector<Param> = Vector::new();
+    params.push(Param { name: "n", ty: ty_named("int") });
+    let sum_fn: *Stmt = stmt_fn("sum_to", params, ty_named("int"), body, 0, 0);
+
+    let it: *Interp = Interp::new();
+    let args: *Vector<IValue> = Vector::new();
+    args.push(iv_int(10));
+    let r: IValue = interp_call(it, sum_fn, args);
+    assert_eq!(r.kind, IV_INT);
+    assert_eq!(r.i, 45);     // 0+1+...+9
+    return 0;
+}
+
+fn test_vector_intrinsic() -> int {
+    // fn make() -> int {
+    //     let v = Vector::new();
+    //     v.push(10); v.push(20); v.push(30);
+    //     return v.len();
+    // }
+    let body: *Vector<Stmt> = Vector::new();
+    let vnew: *Expr = expr_call(expr_path("Vector", "new", 0, 0), Vector::new());
+    let no_ty: *Type = null;
+    body.push(*stmt_let("v", no_ty, vnew, false, 0, 0));
+
+    let push_args: *Vector<Expr> = Vector::new();
+    push_args.push(*expr_int(10, 0, 0));
+    body.push(*stmt_expr(expr_call(expr_member(expr_ident("v", 0, 0), "push"), push_args)));
+
+    let push_args2: *Vector<Expr> = Vector::new();
+    push_args2.push(*expr_int(20, 0, 0));
+    body.push(*stmt_expr(expr_call(expr_member(expr_ident("v", 0, 0), "push"), push_args2)));
+
+    let push_args3: *Vector<Expr> = Vector::new();
+    push_args3.push(*expr_int(30, 0, 0));
+    body.push(*stmt_expr(expr_call(expr_member(expr_ident("v", 0, 0), "push"), push_args3)));
+
+    let len_call: *Expr = expr_call(expr_member(expr_ident("v", 0, 0), "len"), Vector::new());
+    body.push(*stmt_return(len_call, 0, 0));
+
+    let make_fn: *Stmt = stmt_fn("make", Vector::new(), ty_named("int"), body, 0, 0);
+    let it: *Interp = Interp::new();
+    let r: IValue = interp_call(it, make_fn, Vector::new());
+    assert_eq!(r.kind, IV_INT);
+    assert_eq!(r.i, 3);
+    return 0;
+}
+
+fn test_diagnostic_on_undefined_name() -> int {
+    // fn bad() -> int { return undefined_thing; }
+    let body: *Vector<Stmt> = Vector::new();
+    body.push(*stmt_return(expr_ident("undefined_thing", 0, 0), 0, 0));
+    let bad_fn: *Stmt = stmt_fn("bad", Vector::new(), ty_named("int"), body, 0, 0);
+
+    let it: *Interp = Interp::new();
+    let _r: IValue = interp_call(it, bad_fn, Vector::new());
+    assert!(it.diagnostics.len() > 0);
+    return 0;
+}
