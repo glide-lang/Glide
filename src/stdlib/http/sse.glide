@@ -1,0 +1,76 @@
+// Server-Sent Events (SSE) — `text/event-stream` over chunked
+// Transfer-Encoding. Builds on top of `ChunkSource` so SSE handlers
+// just produce events; the server frames + flushes them.
+//
+// Usage:
+//   pub struct Pulse(idx: int)
+//
+//   impl ChunkSource for Pulse {
+//       fn next_chunk(self: *Pulse) -> ?string {
+//           if self.idx >= 5 { return none(); }
+//           self.idx = self.idx + 1;
+//           return some(sse_format(SseEvent {
+//               event: "tick",
+//               data:  self.idx.to_string(),
+//           }));
+//       }
+//   }
+//
+//   @handler
+//   fn ticks(req: *HttpRequest) -> HttpResponse {
+//       let p: *Pulse = malloc(sizeof(Pulse)) as *Pulse;
+//       p.idx = 0;
+//       return sse_response(p);
+//   }
+
+import stdlib::http::*;
+
+pub struct SseEvent {
+    pub event: string,    // event name (e.g. "tick"); empty = no `event:` line
+    pub data:  string,    // payload; embedded \n is broken into multiple data: lines
+    pub id:    string,    // optional event id (empty = omit)
+}
+
+/// Build the wire bytes for one SSE event. Multiple `data: ...` lines
+/// are emitted when `data` contains `\n`; the spec joins them on the
+/// client side.
+///
+/// ```glide
+/// sse_format(SseEvent { event: "tick", data: "1", id: "" });
+/// // event: tick\ndata: 1\n\n
+/// ```
+pub fn sse_format(e: SseEvent) -> string {
+    let mut out: string = "";
+    if e.event.len() > 0 {
+        out = out.concat("event: ").concat(e.event).concat("\n");
+    }
+    if e.id.len() > 0 {
+        out = out.concat("id: ").concat(e.id).concat("\n");
+    }
+    let lines: *Vector<string> = e.data.split("\n");
+    let mut i: int = 0;
+    while i < lines.len() {
+        out = out.concat("data: ").concat(lines.get(i)).concat("\n");
+        i = i + 1;
+    }
+    out = out.concat("\n");
+    return out;
+}
+
+/// Wrap a state-pointer + next-fn pair into a streaming response with
+/// the right Content-Type and cache-busting headers for SSE.
+/// Equivalent to:
+///
+///   HttpResponse::ok()
+///       .set("Content-Type", "text/event-stream")
+///       .set("Cache-Control", "no-cache")
+///       .set("X-Accel-Buffering", "no")
+///       .stream(state, next)
+pub fn sse_response(state: *void,
+                    next: fn(*void) -> ?string) -> HttpResponse {
+    return HttpResponse::ok()
+        .set("Content-Type", "text/event-stream")
+        .set("Cache-Control", "no-cache")
+        .set("X-Accel-Buffering", "no")
+        .stream(state, next);
+}
