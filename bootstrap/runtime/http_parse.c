@@ -335,6 +335,14 @@ void* hp_parse_glide(void* buf, int len)
         return NULL;
     }
 
+    /* Validate field lengths to prevent integer overflow and heap buffer overrun. */
+    if (r->method_len > 64 || r->path_len > 8192 || r->body_len > (1 << 20))
+        return NULL;
+    for (int i = 0; i < r->n_headers; i++) {
+        if (r->headers[i].name_len > 256 || r->headers[i].value_len > 8192)
+            return NULL;
+    }
+
     /* Compute the header block size first; the rest are known directly. */
     size_t hsz = 0;
     for (int i = 0; i < r->n_headers; i++) {
