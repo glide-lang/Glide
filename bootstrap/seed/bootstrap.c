@@ -3891,6 +3891,8 @@ typedef struct  Interp  {
      int   control;
      IValue   return_val;
      Vector__string*   diagnostics;
+     int   next_call_id;
+     int   current_call_id;
 }  Interp ;
 
 typedef struct  MacroBinding  {
@@ -4397,6 +4399,10 @@ const char*   token_kind_name (int   k);
 Type*   ty_fnptr (Vector__Type*   params, Type*   ret);
 Type*   ty_generic (const char*   name, Vector__Type*   args);
 void   ast_fill_defaults (Stmt*   s);
+Param*   make_param (const char*   name, Type*   ty);
+Field*   make_field (const char*   name, Type*   ty, bool   is_pub);
+Expr*   expr_ident_unsafe (const char*   name, int   line, int   col);
+Stmt*   stmt_let_unsafe (const char*   name, Type*   ty, Expr*   value, bool   is_mut, int   line, int   col);
 Type*   ty_named (const char*   name);
 Type*   ty_result (Type*   inner);
 Type*   ty_option (Type*   inner);
@@ -4520,6 +4526,7 @@ Interp*   Interp_new (void);
 void   Interp_register_fns (Interp*   self, Vector__Stmt*   program);
 void   Interp_err (Interp*   self, const char*   msg);
 IValue   scope_get (Interp*   it, const char*   name);
+int   _well_known_const (const char*   name);
 void   scope_define (Interp*   it, const char*   name, IValue   v);
 void   scope_assign (Interp*   it, const char*   name, IValue   v);
 IValue   interp_call (Interp*   it, Stmt*   fn_stmt, Vector__IValue*   args);
@@ -5460,6 +5467,8 @@ int   Vector_len__Field (Vector__Field*   self);
 Field   Vector_get__Field (Vector__Field*   self, int   i);
 int   Vector_len__Attr (Vector__Attr*   self);
 Attr   Vector_get__Attr (Vector__Attr*   self, int   i);
+int   Vector_len__Type (Vector__Type*   self);
+Type   Vector_get__Type (Vector__Type*   self, int   i);
 Vector__TypeMacro*   Vector_new__TypeMacro (void);
 void   Vector_push__TypeMacro (Vector__TypeMacro*   self, TypeMacro   x);
 HashMap__ProcMacroDef*   HashMap_new__ProcMacroDef (void);
@@ -5480,8 +5489,6 @@ void   HashMap_insert__bool (HashMap__bool*   self, const char*   k, bool   v);
 bool   HashMap_contains__bool (HashMap__bool*   self, const char*   k);
 void   Vector_free__Stmt (Vector__Stmt*   self);
 void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x);
-int   Vector_len__Type (Vector__Type*   self);
-Type   Vector_get__Type (Vector__Type*   self, int   i);
 HashMap__FnSig*   HashMap_new__FnSig (void);
 HashMap__Type*   HashMap_new__Type (void);
 Vector__BorrowEvent*   Vector_new__BorrowEvent (void);
@@ -7300,6 +7307,29 @@ void   ast_fill_defaults (Stmt*   s) {
             Vector_set__Stmt((s-> impl_methods ), i, inner);
         }
     }
+}
+
+Param*   make_param (const char*   name, Type*   ty) {
+    Param*   p = (( Param* )((void*(*)(size_t))malloc)(sizeof( Param )));
+    ((p-> name )  =  name);
+    ((p-> ty )  =  ty);
+    return p;
+}
+
+Field*   make_field (const char*   name, Type*   ty, bool   is_pub) {
+    Field*   f = (( Field* )((void*(*)(size_t))malloc)(sizeof( Field )));
+    ((f-> name )  =  name);
+    ((f-> ty )  =  ty);
+    ((f-> is_pub )  =  is_pub);
+    return f;
+}
+
+Expr*   expr_ident_unsafe (const char*   name, int   line, int   col) {
+    return ((Expr*(*)(const char*, int, int))expr_ident)(name, line, col);
+}
+
+Stmt*   stmt_let_unsafe (const char*   name, Type*   ty, Expr*   value, bool   is_mut, int   line, int   col) {
+    return ((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(name, ty, value, is_mut, line, col);
 }
 
 Type*   ty_named (const char*   name) {
@@ -10240,6 +10270,8 @@ Interp*   Interp_new (void) {
     ((it-> control )  =  CF_NORMAL);
     ((it-> return_val )  =  ((IValue(*)(void))iv_null)());
     ((it-> diagnostics )  =  diags);
+    ((it-> next_call_id )  =  1);
+    ((it-> current_call_id )  =  0);
     return it;
 }
 
@@ -10270,8 +10302,151 @@ IValue   scope_get (Interp*   it, const char*   name) {
         }
         (i  =  (i  -  1));
     }
+    int   k = ((int(*)(const char*))_well_known_const)(name);
+    if ((k  >=  0)) {
+        return ((IValue(*)(int))iv_int)(k);
+    }
     Interp_err(it, __glide_string_concat("undefined name: ", name));
     return ((IValue(*)(void))iv_null)();
+}
+
+int   _well_known_const (const char*   name) {
+    if (__glide_string_eq(name, "ST_LET")) {
+        return ST_LET;
+    }
+    if (__glide_string_eq(name, "ST_RETURN")) {
+        return ST_RETURN;
+    }
+    if (__glide_string_eq(name, "ST_EXPR")) {
+        return ST_EXPR;
+    }
+    if (__glide_string_eq(name, "ST_IF")) {
+        return ST_IF;
+    }
+    if (__glide_string_eq(name, "ST_WHILE")) {
+        return ST_WHILE;
+    }
+    if (__glide_string_eq(name, "ST_BLOCK")) {
+        return ST_BLOCK;
+    }
+    if (__glide_string_eq(name, "ST_FN")) {
+        return ST_FN;
+    }
+    if (__glide_string_eq(name, "ST_BREAK")) {
+        return ST_BREAK;
+    }
+    if (__glide_string_eq(name, "ST_CONTINUE")) {
+        return ST_CONTINUE;
+    }
+    if (__glide_string_eq(name, "ST_STRUCT")) {
+        return ST_STRUCT;
+    }
+    if (__glide_string_eq(name, "ST_IMPL")) {
+        return ST_IMPL;
+    }
+    if (__glide_string_eq(name, "ST_CONST")) {
+        return ST_CONST;
+    }
+    if (__glide_string_eq(name, "ST_FOR")) {
+        return ST_FOR;
+    }
+    if (__glide_string_eq(name, "ST_ENUM")) {
+        return ST_ENUM;
+    }
+    if (__glide_string_eq(name, "ST_TRAIT")) {
+        return ST_TRAIT;
+    }
+    if (__glide_string_eq(name, "EX_INT")) {
+        return EX_INT;
+    }
+    if (__glide_string_eq(name, "EX_STRING")) {
+        return EX_STRING;
+    }
+    if (__glide_string_eq(name, "EX_BOOL")) {
+        return EX_BOOL;
+    }
+    if (__glide_string_eq(name, "EX_IDENT")) {
+        return EX_IDENT;
+    }
+    if (__glide_string_eq(name, "EX_BINARY")) {
+        return EX_BINARY;
+    }
+    if (__glide_string_eq(name, "EX_UNARY")) {
+        return EX_UNARY;
+    }
+    if (__glide_string_eq(name, "EX_CALL")) {
+        return EX_CALL;
+    }
+    if (__glide_string_eq(name, "EX_MEMBER")) {
+        return EX_MEMBER;
+    }
+    if (__glide_string_eq(name, "EX_PATH")) {
+        return EX_PATH;
+    }
+    if (__glide_string_eq(name, "TY_NAMED")) {
+        return TY_NAMED;
+    }
+    if (__glide_string_eq(name, "TY_POINTER")) {
+        return TY_POINTER;
+    }
+    if (__glide_string_eq(name, "TY_BORROW")) {
+        return TY_BORROW;
+    }
+    if (__glide_string_eq(name, "TY_BORROW_MUT")) {
+        return TY_BORROW_MUT;
+    }
+    if (__glide_string_eq(name, "TY_GENERIC")) {
+        return TY_GENERIC;
+    }
+    if (__glide_string_eq(name, "TY_RESULT")) {
+        return TY_RESULT;
+    }
+    if (__glide_string_eq(name, "TY_OPTION")) {
+        return TY_OPTION;
+    }
+    if (__glide_string_eq(name, "TY_OPT_RESULT")) {
+        return TY_OPT_RESULT;
+    }
+    if (__glide_string_eq(name, "OP_ADD")) {
+        return OP_ADD;
+    }
+    if (__glide_string_eq(name, "OP_SUB")) {
+        return OP_SUB;
+    }
+    if (__glide_string_eq(name, "OP_MUL")) {
+        return OP_MUL;
+    }
+    if (__glide_string_eq(name, "OP_EQ")) {
+        return OP_EQ;
+    }
+    if (__glide_string_eq(name, "OP_NE")) {
+        return OP_NE;
+    }
+    if (__glide_string_eq(name, "OP_LT")) {
+        return OP_LT;
+    }
+    if (__glide_string_eq(name, "OP_GT")) {
+        return OP_GT;
+    }
+    if (__glide_string_eq(name, "OP_AND")) {
+        return OP_AND;
+    }
+    if (__glide_string_eq(name, "OP_OR")) {
+        return OP_OR;
+    }
+    if (__glide_string_eq(name, "UN_NEG")) {
+        return UN_NEG;
+    }
+    if (__glide_string_eq(name, "UN_NOT")) {
+        return UN_NOT;
+    }
+    if (__glide_string_eq(name, "UN_DEREF")) {
+        return UN_DEREF;
+    }
+    if (__glide_string_eq(name, "UN_ADDR")) {
+        return UN_ADDR;
+    }
+    return (-1);
 }
 
 void   scope_define (Interp*   it, const char*   name, IValue   v) {
@@ -10299,8 +10474,13 @@ void   scope_assign (Interp*   it, const char*   name, IValue   v) {
 IValue   interp_call (Interp*   it, Stmt*   fn_stmt, Vector__IValue*   args) {
     int   saved_control = (it-> control );
     IValue   saved_return = (it-> return_val );
+    int   saved_call_id = (it-> current_call_id );
     ((it-> control )  =  CF_NORMAL);
     ((it-> return_val )  =  ((IValue(*)(void))iv_null)());
+    if (((it-> current_call_id )  ==  0)) {
+        ((it-> current_call_id )  =  (it-> next_call_id ));
+        ((it-> next_call_id )  =  ((it-> next_call_id )  +  1));
+    }
     HashMap__IValue*   scope = ((HashMap__IValue*(*)(void))HashMap_new__IValue)();
     if (((fn_stmt-> fn_params )  !=  NULL)) {
         for (int   i = 0; (i  <  Vector_len__Param((fn_stmt-> fn_params ))); i++) {
@@ -10330,6 +10510,7 @@ IValue   interp_call (Interp*   it, Stmt*   fn_stmt, Vector__IValue*   args) {
     IValue   ret = (it-> return_val );
     ((it-> control )  =  saved_control);
     ((it-> return_val )  =  saved_return);
+    ((it-> current_call_id )  =  saved_call_id);
     return ret;
 }
 
@@ -10828,11 +11009,37 @@ IValue   builtin_call (Interp*   it, const char*   name, Vector__IValue*   args)
     }
     if (__glide_string_eq(name, "expr_ident")) {
         const char*   n = ((const char*(*)(Interp*, Vector__IValue*, int))_arg_string)(it, args, 0);
+        const char*   final_name = n;
+        if (((it-> current_call_id )  !=  0)) {
+            (final_name  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("__macro_", __glide_int_to_string((it-> current_call_id ))), "__"), n));
+        }
+        return ((IValue(*)(void*, const char*))iv_ptr)((( void* )((Expr*(*)(const char*, int, int))expr_ident)(final_name, 0, 0)), "Expr");
+    }
+    if (__glide_string_eq(name, "expr_ident_unsafe")) {
+        const char*   n = ((const char*(*)(Interp*, Vector__IValue*, int))_arg_string)(it, args, 0);
         return ((IValue(*)(void*, const char*))iv_ptr)((( void* )((Expr*(*)(const char*, int, int))expr_ident)(n, 0, 0)), "Expr");
     }
     if (__glide_string_eq(name, "ty_named")) {
         const char*   n = ((const char*(*)(Interp*, Vector__IValue*, int))_arg_string)(it, args, 0);
         return ((IValue(*)(void*, const char*))iv_ptr)((( void* )((Type*(*)(const char*))ty_named)(n)), "Type");
+    }
+    if (__glide_string_eq(name, "make_param")) {
+        const char*   n = ((const char*(*)(Interp*, Vector__IValue*, int))_arg_string)(it, args, 0);
+        Type*   t = (( Type* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 1, "Type"));
+        Param*   p = (( Param* )((void*(*)(size_t))malloc)(sizeof( Param )));
+        ((p-> name )  =  n);
+        ((p-> ty )  =  t);
+        return ((IValue(*)(void*, const char*))iv_ptr)((( void* )p), "Param");
+    }
+    if (__glide_string_eq(name, "make_field")) {
+        const char*   n = ((const char*(*)(Interp*, Vector__IValue*, int))_arg_string)(it, args, 0);
+        Type*   t = (( Type* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 1, "Type"));
+        bool   is_pub = ((bool(*)(Interp*, Vector__IValue*, int))_arg_bool)(it, args, 2);
+        Field*   f = (( Field* )((void*(*)(size_t))malloc)(sizeof( Field )));
+        ((f-> name )  =  n);
+        ((f-> ty )  =  t);
+        ((f-> is_pub )  =  is_pub);
+        return ((IValue(*)(void*, const char*))iv_ptr)((( void* )f), "Field");
     }
     if (__glide_string_eq(name, "ty_pointer")) {
         Type*   inner = (( Type* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 0, "Type"));
@@ -10898,6 +11105,17 @@ IValue   builtin_call (Interp*   it, const char*   name, Vector__IValue*   args)
         return ((IValue(*)(void*, const char*))iv_ptr)((( void* )((Stmt*(*)(Expr*))stmt_expr)(e)), "Stmt");
     }
     if (__glide_string_eq(name, "stmt_let")) {
+        const char*   n = ((const char*(*)(Interp*, Vector__IValue*, int))_arg_string)(it, args, 0);
+        const char*   final_name = n;
+        if (((it-> current_call_id )  !=  0)) {
+            (final_name  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("__macro_", __glide_int_to_string((it-> current_call_id ))), "__"), n));
+        }
+        Type*   ty = (( Type* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 1, "Type"));
+        Expr*   v = (( Expr* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 2, "Expr"));
+        bool   is_mut = ((bool(*)(Interp*, Vector__IValue*, int))_arg_bool)(it, args, 3);
+        return ((IValue(*)(void*, const char*))iv_ptr)((( void* )((Stmt*(*)(const char*, Type*, Expr*, bool, int, int))stmt_let)(final_name, ty, v, is_mut, 0, 0)), "Stmt");
+    }
+    if (__glide_string_eq(name, "stmt_let_unsafe")) {
         const char*   n = ((const char*(*)(Interp*, Vector__IValue*, int))_arg_string)(it, args, 0);
         Type*   ty = (( Type* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 1, "Type"));
         Expr*   v = (( Expr* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 2, "Expr"));
@@ -11202,6 +11420,36 @@ IValue   stmt_field (Interp*   it, Stmt*   s, const char*   f) {
         }
         return ((IValue(*)(Vector__IValue*))iv_vector)(out);
     }
+    if (__glide_string_eq(f, "fn_ret_ty")) {
+        if (((s-> fn_ret_ty )  ==  NULL)) {
+            return ((IValue(*)(void))iv_null)();
+        }
+        return ((IValue(*)(void*, const char*))iv_ptr)((( void* )(s-> fn_ret_ty )), "Type");
+    }
+    if (__glide_string_eq(f, "fn_params")) {
+        Vector__IValue*   out = ((Vector__IValue*(*)(void))Vector_new__IValue)();
+        if (((s-> fn_params )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
+                Param   p = Vector_get__Param((s-> fn_params ), i);
+                Param*   pp = (( Param* )((void*(*)(size_t))malloc)(sizeof( Param )));
+                ((*pp)  =  p);
+                Vector_push__IValue(out, ((IValue(*)(void*, const char*))iv_ptr)((( void* )pp), "Param"));
+            }
+        }
+        return ((IValue(*)(Vector__IValue*))iv_vector)(out);
+    }
+    if (__glide_string_eq(f, "fn_body")) {
+        Vector__IValue*   out = ((Vector__IValue*(*)(void))Vector_new__IValue)();
+        if (((s-> fn_body )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
+                Stmt   bs = Vector_get__Stmt((s-> fn_body ), i);
+                Stmt*   pp = (( Stmt* )((void*(*)(size_t))malloc)(sizeof( Stmt )));
+                ((*pp)  =  bs);
+                Vector_push__IValue(out, ((IValue(*)(void*, const char*))iv_ptr)((( void* )pp), "Stmt"));
+            }
+        }
+        return ((IValue(*)(Vector__IValue*))iv_vector)(out);
+    }
     Interp_err(it, __glide_string_concat(__glide_string_concat("Stmt has no field `", f), "`"));
     return ((IValue(*)(void))iv_null)();
 }
@@ -11271,6 +11519,18 @@ IValue   type_field (Interp*   it, Type*   t, const char*   f) {
             return ((IValue(*)(void))iv_null)();
         }
         return ((IValue(*)(void*, const char*))iv_ptr)((( void* )(t-> inner )), "Type");
+    }
+    if (__glide_string_eq(f, "args")) {
+        Vector__IValue*   out = ((Vector__IValue*(*)(void))Vector_new__IValue)();
+        if (((t-> args )  !=  NULL)) {
+            for (int   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
+                Type   a = Vector_get__Type((t-> args ), i);
+                Type*   pa = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
+                ((*pa)  =  a);
+                Vector_push__IValue(out, ((IValue(*)(void*, const char*))iv_ptr)((( void* )pa), "Type"));
+            }
+        }
+        return ((IValue(*)(Vector__IValue*))iv_vector)(out);
     }
     Interp_err(it, __glide_string_concat(__glide_string_concat("Type has no field `", f), "`"));
     return ((IValue(*)(void))iv_null)();
@@ -11629,21 +11889,39 @@ void   _run_attr (Interp*   it, Stmt*   fn_stmt, Stmt*   target, Vector__Stmt*  
     Vector__IValue*   args = ((Vector__IValue*(*)(void))Vector_new__IValue)();
     Vector_push__IValue(args, ((IValue(*)(void*, const char*))iv_ptr)((( void* )target), "Stmt"));
     IValue   r = ((IValue(*)(Interp*, Stmt*, Vector__IValue*))interp_call)(it, fn_stmt, args);
-    if (((r. kind )  !=  IV_PTR)) {
-        return;
-    }
-    if ((!__glide_string_eq((r. ty_tag ), "Stmt"))) {
-        return;
-    }
-    Stmt*   ps = (( Stmt* )(r. p ));
-    if ((ps  ==  NULL)) {
-        return;
-    }
-    ((ps-> origin )  =  (target-> origin ));
-    ((ps-> is_pub )  =  (target-> is_pub ));
     int   last = (Vector_len__Stmt(out)  -  1);
-    if ((last  >=  0)) {
+    if ((last  <  0)) {
+        return;
+    }
+    if ((((r. kind )  ==  IV_PTR)  &&  __glide_string_eq((r. ty_tag ), "Stmt"))) {
+        Stmt*   ps = (( Stmt* )(r. p ));
+        if ((ps  ==  NULL)) {
+            return;
+        }
+        ((void(*)(Stmt*))ast_fill_defaults)(ps);
+        ((ps-> origin )  =  (target-> origin ));
+        ((ps-> is_pub )  =  (target-> is_pub ));
         Vector_set__Stmt(out, last, (*ps));
+        return;
+    }
+    if (((r. kind )  ==  IV_VECTOR)) {
+        Stmt   _ = Vector_pop__Stmt(out);
+        for (int   i = 0; (i  <  Vector_len__IValue((r. vec ))); i++) {
+            IValue   elem = Vector_get__IValue((r. vec ), i);
+            if (((elem. kind )  !=  IV_PTR)) {
+                continue;
+            }
+            if ((!__glide_string_eq((elem. ty_tag ), "Stmt"))) {
+                continue;
+            }
+            Stmt*   ps = (( Stmt* )(elem. p ));
+            if ((ps  !=  NULL)) {
+                ((void(*)(Stmt*))ast_fill_defaults)(ps);
+                ((ps-> origin )  =  (target-> origin ));
+                ((ps-> is_pub )  =  (target-> is_pub ));
+                Vector_push__Stmt(out, (*ps));
+            }
+        }
     }
 }
 
@@ -28530,14 +28808,6 @@ HashMap__FnSig*   HashMap_new__FnSig (void) {
     return m;
 }
 
-Type   Vector_get__Type (Vector__Type*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Type (Vector__Type*   self) {
-    return (self-> len );
-}
-
 void   Vector_push__DiagEntry (Vector__DiagEntry*   self, DiagEntry   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
@@ -28768,6 +29038,14 @@ Vector__TypeMacro*   Vector_new__TypeMacro (void) {
     ((v-> cap )  =  0);
     ((v-> is_arena )  =  arena);
     return v;
+}
+
+Type   Vector_get__Type (Vector__Type*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Type (Vector__Type*   self) {
+    return (self-> len );
 }
 
 Attr   Vector_get__Attr (Vector__Attr*   self, int   i) {
