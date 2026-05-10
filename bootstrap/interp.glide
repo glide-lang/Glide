@@ -355,7 +355,7 @@ pub fn interp_stmt(it: *Interp, s: *Stmt) {
     if s.kind == ST_BREAK { it.control = CF_BREAK; return; }
     if s.kind == ST_CONTINUE { it.control = CF_CONTINUE; return; }
 
-    it.err("unsupported stmt kind in macro body");
+    it.err("unsupported stmt kind in macro body: ".concat(s.kind.to_string()));
 }
 
 fn interp_block(it: *Interp, body: *Vector<Stmt>) {
@@ -388,7 +388,7 @@ pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
     if e.kind == EX_CAST { return interp_cast(it, e); }
     if e.kind == EX_PATH { return interp_path(it, e); }
 
-    it.err("unsupported expr kind in macro body");
+    it.err("unsupported expr kind in macro body: ".concat(e.kind.to_string()));
     return iv_null();
 }
 
@@ -470,7 +470,15 @@ fn interp_unop(it: *Interp, e: *Expr) -> IValue {
         if v.kind != IV_BOOL { it.err("unary `!` requires bool"); return iv_null(); }
         return iv_bool(!v.b);
     }
-    it.err("unsupported unary op");
+    // `*` and `&` on IValues are no-ops in the interpreter — every
+    // IValue is effectively a heap-backed reference already, so
+    // there's nothing to deref/addr at runtime. Macro authors still
+    // write them in source so AST-construction code reads cleanly
+    // (e.g. `out.push(*stmt_fn(...))` or `body.push(*stmt_return(...))`).
+    if e.op_code == UN_DEREF || e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT {
+        return v;
+    }
+    it.err("unsupported unary op: ".concat(e.op_code.to_string()));
     return iv_null();
 }
 
@@ -637,6 +645,110 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
     if name.eq("ty_pointer") {
         let inner: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
         return iv_ptr(ty_pointer(inner) as *void, "Type");
+    }
+    if name.eq("ty_option") {
+        let inner: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
+        return iv_ptr(ty_option(inner) as *void, "Type");
+    }
+    if name.eq("ty_result") {
+        let inner: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
+        return iv_ptr(ty_result(inner) as *void, "Type");
+    }
+    if name.eq("expr_binary") {
+        let op: int = _arg_int(it, args, 0);
+        let lhs: *Expr = _arg_ptr(it, args, 1, "Expr") as *Expr;
+        let rhs: *Expr = _arg_ptr(it, args, 2, "Expr") as *Expr;
+        return iv_ptr(expr_binary(op, lhs, rhs) as *void, "Expr");
+    }
+    if name.eq("expr_unary") {
+        let op: int = _arg_int(it, args, 0);
+        let operand: *Expr = _arg_ptr(it, args, 1, "Expr") as *Expr;
+        return iv_ptr(expr_unary(op, operand, 0, 0) as *void, "Expr");
+    }
+    if name.eq("expr_call") {
+        let callee: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        let aiv: IValue = args.get(1);
+        let call_args: *Vector<Expr> = _vec_to_expr_vec(it, aiv);
+        return iv_ptr(expr_call(callee, call_args) as *void, "Expr");
+    }
+    if name.eq("expr_member") {
+        let obj: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        let field: string = _arg_string(it, args, 1);
+        return iv_ptr(expr_member(obj, field) as *void, "Expr");
+    }
+    if name.eq("expr_path") {
+        let ty: string = _arg_string(it, args, 0);
+        let mem: string = _arg_string(it, args, 1);
+        return iv_ptr(expr_path(ty, mem, 0, 0) as *void, "Expr");
+    }
+    if name.eq("expr_index") {
+        let obj: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        let idx: *Expr = _arg_ptr(it, args, 1, "Expr") as *Expr;
+        return iv_ptr(expr_index(obj, idx) as *void, "Expr");
+    }
+    if name.eq("expr_assign") {
+        let op: int = _arg_int(it, args, 0);
+        let lhs: *Expr = _arg_ptr(it, args, 1, "Expr") as *Expr;
+        let rhs: *Expr = _arg_ptr(it, args, 2, "Expr") as *Expr;
+        return iv_ptr(expr_assign(op, lhs, rhs) as *void, "Expr");
+    }
+    if name.eq("expr_cast") {
+        let inner: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        let target: *Type = _arg_ptr(it, args, 1, "Type") as *Type;
+        return iv_ptr(expr_cast(inner, target) as *void, "Expr");
+    }
+    if name.eq("stmt_return") {
+        let v: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        return iv_ptr(stmt_return(v, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("stmt_expr") {
+        let e: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        return iv_ptr(stmt_expr(e) as *void, "Stmt");
+    }
+    if name.eq("stmt_let") {
+        let n: string = _arg_string(it, args, 0);
+        let ty: *Type = _arg_ptr(it, args, 1, "Type") as *Type;
+        let v: *Expr = _arg_ptr(it, args, 2, "Expr") as *Expr;
+        let is_mut: bool = _arg_bool(it, args, 3);
+        return iv_ptr(stmt_let(n, ty, v, is_mut, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("stmt_if") {
+        let cond: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        let then_iv: IValue = args.get(1);
+        let then_b: *Vector<Stmt> = _vec_to_stmt_vec(it, then_iv);
+        let else_b: *Vector<Stmt> = null;
+        if args.len() > 2 {
+            let else_iv: IValue = args.get(2);
+            if else_iv.kind == IV_VECTOR { else_b = _vec_to_stmt_vec(it, else_iv); }
+        }
+        return iv_ptr(stmt_if(cond, then_b, else_b, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("stmt_while") {
+        let cond: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
+        let body_iv: IValue = args.get(1);
+        let body: *Vector<Stmt> = _vec_to_stmt_vec(it, body_iv);
+        return iv_ptr(stmt_while(cond, body, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("stmt_fn") {
+        let n: string = _arg_string(it, args, 0);
+        let params_iv: IValue = args.get(1);
+        let params: *Vector<Param> = _vec_to_param_vec(it, params_iv);
+        let ret_ty: *Type = _arg_ptr(it, args, 2, "Type") as *Type;
+        let body_iv: IValue = args.get(3);
+        let body: *Vector<Stmt> = _vec_to_stmt_vec(it, body_iv);
+        return iv_ptr(stmt_fn(n, params, ret_ty, body, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("stmt_struct") {
+        let n: string = _arg_string(it, args, 0);
+        let fields_iv: IValue = args.get(1);
+        let fields: *Vector<Field> = _vec_to_field_vec(it, fields_iv);
+        return iv_ptr(stmt_struct(n, fields, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("stmt_impl") {
+        let target: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
+        let methods_iv: IValue = args.get(1);
+        let methods: *Vector<Stmt> = _vec_to_stmt_vec(it, methods_iv);
+        return iv_ptr(stmt_impl(target, methods, 0, 0) as *void, "Stmt");
     }
 
     // String ops as free fns (the `s.method()` form goes through
@@ -912,6 +1024,62 @@ fn _arg_bool(it: *Interp, args: *Vector<IValue>, i: int) -> bool {
     let v: IValue = args.get(i);
     if v.kind != IV_BOOL { it.err("expected bool arg"); return false; }
     return v.b;
+}
+
+// Convert an IV_VECTOR of IV_PTR { Stmt } into a real *Vector<Stmt>
+// the AST constructors can swallow. Items not matching the expected
+// tag are skipped (the macro author's mistake — surfaces as missing
+// stmts in the output).
+fn _vec_to_stmt_vec(it: *Interp, v: IValue) -> *Vector<Stmt> {
+    let out: *Vector<Stmt> = Vector::new();
+    if v.kind != IV_VECTOR { return out; }
+    for let i: int = 0; i < v.vec.len(); i++ {
+        let elem: IValue = v.vec.get(i);
+        if elem.kind == IV_PTR && elem.ty_tag.eq("Stmt") && elem.p != null {
+            let ps: *Stmt = elem.p as *Stmt;
+            out.push(*ps);
+        }
+    }
+    return out;
+}
+
+fn _vec_to_expr_vec(it: *Interp, v: IValue) -> *Vector<Expr> {
+    let out: *Vector<Expr> = Vector::new();
+    if v.kind != IV_VECTOR { return out; }
+    for let i: int = 0; i < v.vec.len(); i++ {
+        let elem: IValue = v.vec.get(i);
+        if elem.kind == IV_PTR && elem.ty_tag.eq("Expr") && elem.p != null {
+            let pe: *Expr = elem.p as *Expr;
+            out.push(*pe);
+        }
+    }
+    return out;
+}
+
+fn _vec_to_param_vec(it: *Interp, v: IValue) -> *Vector<Param> {
+    let out: *Vector<Param> = Vector::new();
+    if v.kind != IV_VECTOR { return out; }
+    for let i: int = 0; i < v.vec.len(); i++ {
+        let elem: IValue = v.vec.get(i);
+        if elem.kind == IV_PTR && elem.ty_tag.eq("Param") && elem.p != null {
+            let p: *Param = elem.p as *Param;
+            out.push(*p);
+        }
+    }
+    return out;
+}
+
+fn _vec_to_field_vec(it: *Interp, v: IValue) -> *Vector<Field> {
+    let out: *Vector<Field> = Vector::new();
+    if v.kind != IV_VECTOR { return out; }
+    for let i: int = 0; i < v.vec.len(); i++ {
+        let elem: IValue = v.vec.get(i);
+        if elem.kind == IV_PTR && elem.ty_tag.eq("Field") && elem.p != null {
+            let f: *Field = elem.p as *Field;
+            out.push(*f);
+        }
+    }
+    return out;
 }
 
 fn _arg_ptr(it: *Interp, args: *Vector<IValue>, i: int, want_tag: string) -> *void {

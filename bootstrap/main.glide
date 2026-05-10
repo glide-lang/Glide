@@ -23,6 +23,7 @@ import lexer;
 import ast;
 import parser;
 import expander;
+import interp;
 import lower;
 import typer;
 import codegen;

@@ -1,5 +1,6 @@
 import stdlib::hashmap::*;
 import ast;
+import interp;
 
 // Macro expander. Runs after the parser (so the body and call args are
 // already AST), before typer/codegen.
@@ -62,7 +63,164 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
         cleaned.push(s);
     }
     expand_in_program(cleaned, static_macros, type_macros);
-    return cleaned;
+
+    // Procedural macro expansion runs AFTER declarative macro_rules!
+    // expansion so a derive can sit on top of a `macro` use site.
+    return expand_proc_macros(cleaned);
+}
+
+// ---- procedural macros -----------------------------------------------
+
+// Tag for what shape of input the proc fn takes — picked from the
+// `@proc_<kind>(Name)` attribute on the fn decl.
+pub const PMK_DERIVE:     int = 0;   // input: *Stmt (the @derive'd struct/enum)
+pub const PMK_ATTR:       int = 1;   // input: *Stmt (the annotated decl)
+pub const PMK_FN_AST:     int = 2;   // input: *Vector<Expr> (call-site args)
+pub const PMK_FN_STR:     int = 3;   // input: string (single string-lit arg)
+
+pub struct ProcMacroDef {
+    pub kind: int,
+    pub fn_stmt: Stmt,
+}
+
+// Walk the program, find @proc_<kind>(Name) fn defs, register them,
+// then walk again and dispatch every @derive(Name) / @<name> use site
+// through the interpreter. Output stmts are spliced into the program;
+// the original site keeps its non-attr behaviour (the struct still
+// exists, the fn still exists, etc).
+fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
+    // Pre-pass: register proc fn defs by name, indexed by kind.
+    let registry: *HashMap<ProcMacroDef> = HashMap::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_FN { continue; }
+        if s.attrs == null || s.attrs.len() == 0 { continue; }
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            let kind: int = _proc_kind_for(a.name);
+            if kind < 0 { continue; }
+            // First arg of @proc_<kind>(Name) is the registered name.
+            if a.args == null || a.args.len() == 0 { continue; }
+            let name_expr: Expr = a.args.get(0);
+            if name_expr.kind != EX_IDENT { continue; }
+            registry.insert(name_expr.str_val, ProcMacroDef { kind: kind, fn_stmt: s });
+        }
+    }
+    if registry.len() == 0 { return program; }
+
+    // Macro execution allocates Stmts/Exprs/strings via the same
+    // helpers the parser uses, all of which route through the palloc
+    // arena. The arena is short-lived (it can be popped between
+    // expander and codegen), so anything we'd otherwise hand back to
+    // codegen would dangle. Disable palloc for the entire macro pass
+    // so allocations land on libc malloc and outlive the arena.
+    let saved_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+
+    // Make the registered proc fns + the rest of the program callable
+    // from inside any executed proc fn (so a derive can call helpers
+    // declared elsewhere in the same module).
+    let it: *Interp = Interp::new();
+    it.register_fns(program);
+
+    // Main pass: rebuild the program. For each stmt, dispatch every
+    // @derive(Name) / @<name> attribute it carries.
+    let out: *Vector<Stmt> = Vector::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        out.push(s);
+        if s.attrs == null || s.attrs.len() == 0 { continue; }
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            // @derive(A, B, C) — fan out one dispatch per arg.
+            if a.name.eq("derive") {
+                if a.args == null { continue; }
+                for let k: int = 0; k < a.args.len(); k++ {
+                    let ne: Expr = a.args.get(k);
+                    if ne.kind != EX_IDENT { continue; }
+                    if !registry.contains(ne.str_val) { continue; }
+                    let pm: ProcMacroDef = registry.get(ne.str_val);
+                    if pm.kind != PMK_DERIVE { continue; }
+                    _run_derive(it, &pm.fn_stmt, &s, out);
+                }
+                continue;
+            }
+            // Bare @<name> — attribute-style on a fn/struct.
+            if registry.contains(a.name) {
+                let pm: ProcMacroDef = registry.get(a.name);
+                if pm.kind == PMK_ATTR {
+                    _run_attr(it, &pm.fn_stmt, &s, out);
+                }
+            }
+        }
+    }
+    if it.diagnostics.len() > 0 {
+        for let i: int = 0; i < it.diagnostics.len(); i++ {
+            println!("proc-macro:", it.diagnostics.get(i));
+        }
+    }
+    __glide_palloc_set(saved_arena);
+    return out;
+}
+
+fn _proc_kind_for(name: string) -> int {
+    if name.eq("proc_derive") { return PMK_DERIVE; }
+    if name.eq("proc_attr") { return PMK_ATTR; }
+    if name.eq("proc_macro") { return PMK_FN_AST; }
+    if name.eq("proc_macro_str") { return PMK_FN_STR; }
+    return -1;
+}
+
+// Invoke a derive proc fn with the @derive'd Stmt as input. Expected
+// return: an IV_VECTOR of IV_PTR { ty_tag: "Stmt" }. Each element
+// inherits the target's `origin` (so the typer's visibility check
+// treats them as if the user wrote them inline) and `is_pub` (so a
+// derived helper on a pub struct stays accessible). Then it's
+// appended to `out` so it lands right after the original decl.
+fn _run_derive(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
+    let args: *Vector<IValue> = Vector::new();
+    args.push(iv_ptr(target as *void, "Stmt"));
+    let r: IValue = interp_call(it, fn_stmt, args);
+    if r.kind != IV_VECTOR { return; }
+    for let i: int = 0; i < r.vec.len(); i++ {
+        let elem: IValue = r.vec.get(i);
+        if elem.kind != IV_PTR { continue; }
+        if !elem.ty_tag.eq("Stmt") { continue; }
+        let ps: *Stmt = elem.p as *Stmt;
+        if ps != null {
+            // Inherit origin from the use site so the typer's visibility
+            // check accepts the synth fn as if user-written. is_pub
+            // also inherits so a derived helper on a pub struct stays
+            // accessible to siblings.
+            ps.origin = target.origin;
+            ps.is_pub = target.is_pub;
+            // Stmts built by the AST constructor intrinsics palloc'd
+            // their fields; `attrs` was never assigned and stays null.
+            // Codegen tolerates null attrs but some downstream passes
+            // walk it unguarded — give it a fresh empty Vector to be
+            // safe.
+            if ps.attrs == null { ps.attrs = Vector::new(); }
+            out.push(*ps);
+        }
+    }
+}
+
+// Invoke an attribute proc fn — input is the annotated decl, output
+// is one *Stmt that REPLACES it. v1 keeps it simple: the attr macro
+// can return a fresh Stmt; we overwrite the last entry of `out`
+// (which is the original decl pushed moments ago by the caller).
+fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
+    let args: *Vector<IValue> = Vector::new();
+    args.push(iv_ptr(target as *void, "Stmt"));
+    let r: IValue = interp_call(it, fn_stmt, args);
+    if r.kind != IV_PTR { return; }
+    if !r.ty_tag.eq("Stmt") { return; }
+    let ps: *Stmt = r.p as *Stmt;
+    if ps == null { return; }
+    ps.origin = target.origin;
+    ps.is_pub = target.is_pub;
+    let last: int = out.len() - 1;
+    if last >= 0 { out.set(last, *ps); }
 }
 
 fn type_owner_name(t: *Type) -> string {
