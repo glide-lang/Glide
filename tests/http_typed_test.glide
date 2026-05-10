@@ -59,6 +59,7 @@ fn _post(body: string) -> HttpResponse {
         body:          body,
         params:        null,
         queries:       null,
+        headers_cache: null,
     };
     return _handler(&req);
 }

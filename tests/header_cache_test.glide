@@ -1,0 +1,59 @@
+// Lazy request-header cache. First .header() lookup parses the raw
+// block once; later lookups hit the in-memory hashmap.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+
+fn _req(headers: string) -> HttpRequest {
+    return HttpRequest {
+        method:        "GET",
+        path:          "/",
+        version:       "HTTP/1.1",
+        headers_block: headers,
+        body:          "",
+        params:        null,
+        queries:       null,
+        headers_cache: null,
+    };
+}
+
+fn test_cache_starts_null_and_lazy_inits() -> int {
+    let r: HttpRequest = _req("Host: localhost\r\nUser-Agent: glide\r\n");
+    assert!(r.headers_cache == null);
+    let _v: string = r.header("Host");
+    assert!(r.headers_cache != null);   // built on first call
+    return 0;
+}
+
+fn test_lookup_is_case_insensitive() -> int {
+    let r: HttpRequest = _req("X-Foo: bar\r\n");
+    assert_str_eq!(r.header("x-foo"), "bar");
+    assert_str_eq!(r.header("X-FOO"), "bar");
+    assert_str_eq!(r.header("X-Foo"), "bar");
+    return 0;
+}
+
+fn test_missing_header_returns_empty() -> int {
+    let r: HttpRequest = _req("Host: localhost\r\n");
+    assert_str_eq!(r.header("X-Missing"), "");
+    return 0;
+}
+
+fn test_repeated_header_keeps_first() -> int {
+    let r: HttpRequest = _req("X-Dup: a\r\nX-Dup: b\r\n");
+    // Cache stores the first hit. Headers that legitimately repeat
+    // (Set-Cookie, Vary) need raw-block walking — out of scope for v1.
+    assert_str_eq!(r.header("X-Dup"), "a");
+    return 0;
+}
+
+fn test_repeated_lookup_is_cached() -> int {
+    let r: HttpRequest = _req("X-Foo: 1\r\n");
+    let v1: string = r.header("X-Foo");
+    let cached_after_first: *HashMap<string> = r.headers_cache;
+    let v2: string = r.header("X-Foo");
+    let cached_after_second: *HashMap<string> = r.headers_cache;
+    assert_str_eq!(v1, v2);
+    assert!(cached_after_first == cached_after_second);   // same instance
+    return 0;
+}

@@ -37,6 +37,7 @@ fn _post(body: string) -> HttpRequest {
         body:          body,
         params:        null,
         queries:       null,
+        headers_cache: null,
     };
 }
 
@@ -49,6 +50,7 @@ fn _get() -> HttpRequest {
         body:          "",
         params:        null,
         queries:       null,
+        headers_cache: null,
     };
 }
 

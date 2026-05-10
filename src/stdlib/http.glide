@@ -66,29 +66,31 @@ pub struct HttpRequest {
     pub body:          string,
     pub params:        *HashMap<string>,
     pub queries:       *HashMap<string>,
+    /// Lazy header cache. Built on the first `header()` lookup; reused
+    /// after. Construction is O(headers); each subsequent lookup is
+    /// O(1). Init `null` — the lookup builds it.
+    pub headers_cache: *HashMap<string>,
 }
 
 impl HttpRequest {
     /// Look up a header by name, case-insensitive. Returns `""` when
-    /// missing. Linear scan over the raw block — fine for the common
-    /// case of small header sets.
+    /// missing. The first call parses `headers_block` into a hashmap
+    /// keyed by lower-cased name; subsequent calls hit the cache.
+    /// For headers that legitimately repeat (`Set-Cookie`, `Vary`)
+    /// the cache holds the *first* value — use `headers(name)` on
+    /// the response side or pull lines out of `headers_block`
+    /// directly if you need every value.
     ///
     /// ```glide
     /// let host: string = req.header("Host");
     /// ```
     pub fn header(self: *HttpRequest, name: string) -> string {
-        let want: string = name.to_lower();
-        let lines: *Vector<string> = self.headers_block.split("\r\n");
-        for let i: int = 0; i < lines.len(); i++ {
-            let h: string = lines.get(i);
-            let colon: int = _find(h, ":", 0);
-            if colon < 0 { continue; }
-            let n: string = h.substring(0, colon).trim().to_lower();
-            if n.eq(want) {
-                return h.substring(colon + 1, h.len()).trim();
-            }
+        if self.headers_cache == null {
+            self.headers_cache = _build_header_cache(self.headers_block);
         }
-        return "";
+        let want: string = name.to_lower();
+        if !self.headers_cache.contains(want) { return ""; }
+        return self.headers_cache.get(want);
     }
 
     /// Path parameter captured by the router. Returns `""` for an
@@ -436,6 +438,26 @@ fn _parse_query(path: string) -> *HashMap<string> {
     return m;
 }
 
+// Lazy cache constructor. Walks `block` once, splits on CRLF, and
+// stores name (lower-cased) → first value. Repeat headers keep the
+// first one — use the raw block walk if you need every line.
+fn _build_header_cache(block: string) -> *HashMap<string> {
+    let m: *HashMap<string> = HashMap::new();
+    let lines: *Vector<string> = block.split("\r\n");
+    let mut i: int = 0;
+    while i < lines.len() {
+        let line: string = lines.get(i);
+        i = i + 1;
+        if line.len() == 0 { continue; }
+        let colon: int = _find(line, ":", 0);
+        if colon < 0 { continue; }
+        let n: string = line.substring(0, colon).trim().to_lower();
+        if m.contains(n) { continue; }   // first wins
+        m.insert(n, line.substring(colon + 1, line.len()).trim());
+    }
+    return m;
+}
+
 // Drop every header line whose name (case-insensitive) matches
 // `name` from the raw block. Returns the block with those lines
 // removed and the rest preserved verbatim. Used by `set` to make
@@ -538,6 +560,7 @@ pub fn parse_http_request(raw: string) -> !HttpRequest {
         body:          body,
         params:        null,
         queries:       null,
+        headers_cache: null,
     });
 }
 
@@ -630,6 +653,7 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
                 body:          hp_glide_body(g),
                 params:        null,
                 queries:       null,
+                headers_cache: null,
             };
             resp = handler(&req);
             hp_glide_free(g);
@@ -767,6 +791,7 @@ fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
             body:          hp_glide_body(g),
             params:        null,
             queries:       null,
+            headers_cache: null,
         };
         resp = handler(&req);
         hp_glide_free(g);

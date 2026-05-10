@@ -54,6 +54,7 @@ fn _req(method: string, path: string) -> HttpRequest {
         body:          "",
         params:        nope,
         queries:       nope,
+        headers_cache: null,
     };
 }
 
