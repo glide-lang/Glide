@@ -1,0 +1,166 @@
+// `@handler` proc macro — Axum-style typed handler ergonomics.
+//
+// Reads the user fn's signature and emits two stmts:
+//   1. The user fn renamed to `_user_<name>` (preserves their typed
+//      body intact so they can call it directly if useful).
+//   2. A wrapper fn keeping the original name, signed as
+//      `fn(*HttpRequest) -> HttpResponse` so the existing router
+//      (which still takes the fn-pointer shape) accepts it without
+//      any widening.
+//
+// v1 supports these param shapes:
+//   - `req: *HttpRequest` — passed straight through
+//   - `body: Json<T>` — bound by parsing the request body via
+//     `T::from_json`, mapped to 422 on bind failure / 400 on parse
+//     failure (same semantics as the manual pattern in
+//     tests/http_typed_test.glide)
+//
+// And these return shapes:
+//   - `HttpResponse` — passthrough
+//   - `Json<T>` — wrapped into HttpResponse via the existing
+//     `IntoResponse for Json<T>` trait impl
+
+import bootstrap::ast::*;
+import bootstrap::interp::*;
+
+@proc_attr(handler)
+fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
+    let out: *Vector<Stmt> = Vector::new();
+
+    let user_name: string = s.name;
+    let renamed: string = "_user_".concat(user_name);
+    let user_params: *Vector<Param> = s.fn_params;
+    let user_ret_ty: *Type = s.fn_ret_ty;
+    let user_body: *Vector<Stmt> = s.fn_body;
+
+    // 1) Emit the renamed user fn — same params, same body, same ret.
+    out.push(*stmt_fn(renamed, user_params, user_ret_ty, user_body, 0, 0));
+
+    // 2) Wrapper fn(*HttpRequest) -> HttpResponse.
+    let wrapper_body: *Vector<Stmt> = Vector::new();
+    let call_args: *Vector<Expr> = Vector::new();
+
+    let mut i: int = 0;
+    while i < user_params.len() {
+        let p: Param = user_params.get(i);
+        let pname: string = p.name;
+        let pty: *Type = p.ty;
+
+        if _is_request_ptr(pty) {
+            call_args.push(*expr_ident_unsafe("req", 0, 0));
+            i = i + 1;
+            continue;
+        }
+
+        let inner_name: string = _json_inner_name(pty);
+        if !inner_name.eq("") {
+            let no_ty: *Type = null;
+
+            // let __body_r = req.body_json();
+            let body_call: *Expr = expr_call(
+                expr_member(expr_ident_unsafe("req", 0, 0), "body_json"),
+                Vector::new());
+            let body_r_name: string = pname.concat("__body_r");
+            wrapper_body.push(*stmt_let(body_r_name, no_ty, body_call, false, 0, 0));
+
+            // if !__body_r.ok { return HttpResponse::with_status(400).text(__body_r.err); }
+            wrapper_body.push(*_bind_err_check(body_r_name, 400));
+
+            // let __t_r = T::from_json(__body_r.val);
+            let from_json_args: *Vector<Expr> = Vector::new();
+            from_json_args.push(*expr_member(expr_ident(body_r_name, 0, 0), "val"));
+            let from_json_call: *Expr = expr_call(
+                expr_path(inner_name, "from_json", 0, 0), from_json_args);
+            let t_r_name: string = pname.concat("__t_r");
+            wrapper_body.push(*stmt_let(t_r_name, no_ty, from_json_call, false, 0, 0));
+
+            // if !__t_r.ok { return HttpResponse::with_status(422).text(__t_r.err); }
+            wrapper_body.push(*_bind_err_check(t_r_name, 422));
+
+            // let body = Json::wrap(__t_r.val);
+            let wrap_args: *Vector<Expr> = Vector::new();
+            wrap_args.push(*expr_member(expr_ident(t_r_name, 0, 0), "val"));
+            let wrap_call: *Expr = expr_call(
+                expr_path("Json", "wrap", 0, 0), wrap_args);
+            wrapper_body.push(*stmt_let(pname, no_ty, wrap_call, false, 0, 0));
+
+            call_args.push(*expr_ident(pname, 0, 0));
+            i = i + 1;
+            continue;
+        }
+
+        // Unsupported param type — passthrough by name (typer surfaces
+        // a real error pointing at the call site).
+        call_args.push(*expr_ident(pname, 0, 0));
+        i = i + 1;
+    }
+
+    // return _user_<name>(args);                       // ret = HttpResponse
+    // return _user_<name>(args).into_response();       // ret = Json<T>
+    let user_call: *Expr = expr_call(expr_ident_unsafe(renamed, 0, 0), call_args);
+    let mut ret_expr: *Expr = user_call;
+    if user_ret_ty != null {
+        if !_json_inner_name(user_ret_ty).eq("") {
+            ret_expr = expr_call(
+                expr_member(user_call, "into_response"),
+                Vector::new());
+        }
+    }
+    wrapper_body.push(*stmt_return(ret_expr, 0, 0));
+
+    let wrap_params: *Vector<Param> = mk_req_params();
+    out.push(*stmt_fn(user_name, wrap_params, ty_named("HttpResponse"),
+                       wrapper_body, 0, 0));
+    return out;
+}
+
+// Build a single-param `req: *HttpRequest` list via the `make_param`
+// intrinsic from `ast`, sidestepping EX_STRUCT_LIT (not supported
+// in v1 of the interpreter).
+fn mk_req_params() -> *Vector<Param> {
+    let v: *Vector<Param> = Vector::new();
+    let p: *Param = make_param("req", ty_pointer(ty_named("HttpRequest")));
+    v.push(*p);
+    return v;
+}
+
+// True iff `t` looks like `*HttpRequest`.
+fn _is_request_ptr(t: *Type) -> bool {
+    if t == null { return false; }
+    if t.kind != TY_POINTER { return false; }
+    if t.inner == null { return false; }
+    if t.inner.kind != TY_NAMED { return false; }
+    return t.inner.name.eq("HttpRequest");
+}
+
+// If `t` is `Json<T>`, return T's name. Otherwise "" (empty string).
+// Returning the name string sidesteps the interpreter's lack of
+// EX_SIZEOF / explicit `malloc(sizeof(Type))` support — the macro
+// only needs T's name to emit `T::from_json(...)` calls.
+fn _json_inner_name(t: *Type) -> string {
+    if t == null { return ""; }
+    if t.kind != TY_GENERIC { return ""; }
+    if !t.name.eq("Json") { return ""; }
+    if t.args == null { return ""; }
+    if t.args.len() == 0 { return ""; }
+    let inner: Type = t.args.get(0);
+    return inner.name;
+}
+
+// Build `if !<name>.ok { return HttpResponse::with_status(<status>).text(<name>.err); }`
+fn _bind_err_check(var_name: string, status: int) -> *Stmt {
+    let cond: *Expr = expr_unary(
+        UN_NOT, expr_member(expr_ident(var_name, 0, 0), "ok"), 0, 0);
+    let with_status_args: *Vector<Expr> = Vector::new();
+    with_status_args.push(*expr_int(status, 0, 0));
+    let resp_call: *Expr = expr_call(
+        expr_path("HttpResponse", "with_status", 0, 0), with_status_args);
+    let text_args: *Vector<Expr> = Vector::new();
+    text_args.push(*expr_member(expr_ident(var_name, 0, 0), "err"));
+    let text_call: *Expr = expr_call(
+        expr_member(resp_call, "text"), text_args);
+    let then_body: *Vector<Stmt> = Vector::new();
+    then_body.push(*stmt_return(text_call, 0, 0));
+    let no_else: *Vector<Stmt> = null;
+    return stmt_if(cond, then_body, no_else, 0, 0);
+}

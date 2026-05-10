@@ -1,0 +1,80 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::typed::*;
+import stdlib::http::handler::*;
+import stdlib::json::*;
+
+pub struct Pet {
+    pub name: string,
+    pub age: int,
+}
+
+impl JsonBind for Pet {
+    fn from_json(v: *JsonValue) -> !Pet {
+        if v.kind != JSON_OBJECT { return err("expected object"); }
+        return ok(Pet {
+            name: json_get_string(v, "name")?,
+            age:  json_get_int(v, "age")?,
+        });
+    }
+
+    fn to_json(self: *Pet) -> *JsonValue {
+        let v: *JsonValue = json_object();
+        json_obj_set(v, "name", json_string(self.name));
+        json_obj_set(v, "age",  json_int(self.age));
+        return v;
+    }
+}
+
+@handler
+fn echo_pet(body: Json<Pet>) -> Json<Pet> {
+    return Json::wrap(body.val);
+}
+
+@handler
+fn always_ok(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("alive");
+}
+
+fn _post(body: string) -> HttpRequest {
+    return HttpRequest {
+        method:        "POST",
+        path:          "/pets",
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          body,
+        params:        null,
+        queries:       null,
+    };
+}
+
+fn test_handler_echoes_typed_body() -> int {
+    let req: HttpRequest = _post("{\"name\":\"rex\",\"age\":4}");
+    let r: HttpResponse = echo_pet(&req);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.header("Content-Type"), "application/json");
+    assert_str_eq!(r.body, "{\"name\":\"rex\",\"age\":4}");
+    return 0;
+}
+
+fn test_handler_returns_400_on_invalid_body() -> int {
+    let req: HttpRequest = _post("not json at all");
+    let r: HttpResponse = echo_pet(&req);
+    assert_eq!(r.status, 400);
+    return 0;
+}
+
+fn test_handler_returns_422_on_missing_field() -> int {
+    let req: HttpRequest = _post("{\"name\":\"rex\"}");
+    let r: HttpResponse = echo_pet(&req);
+    assert_eq!(r.status, 422);
+    return 0;
+}
+
+fn test_handler_passthrough_request() -> int {
+    let req: HttpRequest = _post("");
+    let r: HttpResponse = always_ok(&req);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "alive");
+    return 0;
+}
