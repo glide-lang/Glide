@@ -234,6 +234,10 @@ impl HttpResponse {
     /// header is the caller's job; the v1 just appends to the raw
     /// block in insertion order, which is what the wire format wants.
     ///
+    /// CR/LF in `name` or `value` would let an attacker inject
+    /// arbitrary header lines (CRLF injection) — those bytes are
+    /// stripped before the value lands on the wire.
+    ///
     /// ```glide
     /// HttpResponse::ok()
     ///     .set("Content-Type", "application/json")
@@ -241,9 +245,11 @@ impl HttpResponse {
     ///     .body("{}");
     /// ```
     pub fn set(self: HttpResponse, name: string, value: string) -> HttpResponse {
+        let safe_name: string = _strip_crlf(name);
+        let safe_value: string = _strip_crlf(value);
         return HttpResponse {
             status: self.status,
-            headers_block: self.headers_block.concat(name).concat(": ").concat(value).concat("\r\n"),
+            headers_block: self.headers_block.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
             body: self.body,
         };
     }
@@ -403,6 +409,24 @@ fn _parse_query(path: string) -> *HashMap<string> {
         m.insert(kk, vv);
     }
     return m;
+}
+
+// Strip CR (0x0D) and LF (0x0A) from a string. Used to sanitise
+// header names/values before they land on the wire — without this,
+// a header value containing "\r\nSet-Cookie: evil=1" would inject a
+// brand new header (CRLF injection).
+fn _strip_crlf(s: string) -> string {
+    let n: int = s.len();
+    let mut out: string = "";
+    let mut i: int = 0;
+    while i < n {
+        let c: int = s.at(i).to_int();
+        if c != 13 && c != 10 {
+            out = out.concat(s.substring(i, i + 1));
+        }
+        i = i + 1;
+    }
+    return out;
 }
 
 // Find the first occurrence of `needle` inside `s`, starting at byte
