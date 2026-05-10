@@ -4,24 +4,26 @@
 // with `?` (no surrogate handling yet — full UTF-16 decoding is on the
 // roadmap).
 //
-// Build values with the `json_*` constructors, mutate arrays/objects
-// with `json_arr_push` / `json_obj_set`, read them back with
-// `json_get` (object) / `json_at` (array) / `json_as_*` accessors, and
-// round-trip with `json_parse` / `json_emit`.
+// API style: operations on a value are method calls; constructors and
+// the parser are static methods on `JsonValue`. Build with
+// `JsonValue::object()` / `JsonValue::int(n)` / `JsonValue::string(s)`,
+// mutate with `v.obj_set(k, x)` / `v.arr_push(x)`, read back with
+// `v.get(k)` / `v.at(i)` / `v.as_string()`, and round-trip with
+// `JsonValue::parse(s)` / `v.emit()`.
 //
 // ```glide
 // import stdlib::json::*;
 //
 // // Build
-// let user: *JsonValue = json_object();
-// json_obj_set(user, "name", json_string("alice"));
-// json_obj_set(user, "age",  json_int(30));
-// let s: string = json_emit(user);   // {"name":"alice","age":30}
+// let user: *JsonValue = JsonValue::object();
+// user.obj_set("name", JsonValue::string("alice"));
+// user.obj_set("age",  JsonValue::int(30));
+// let s: string = user.emit();   // {"name":"alice","age":30}
 //
 // // Parse
-// let parsed: *JsonValue = json_parse(s);
-// let name: *JsonValue = json_get(parsed, "name");
-// println!(json_as_string(name));    // alice
+// let parsed: *JsonValue = JsonValue::parse(s);
+// let name: *JsonValue = parsed.get("name");
+// println!(name.as_string());    // alice
 // ```
 
 import stdlib::hashmap::*;
@@ -45,257 +47,503 @@ pub struct JsonValue {
     pub obj_vals: *Vector<JsonValue>,
 }
 
-// ---- constructors -------------------------------------------------------
-
-/// JSON `null`.
-///
-/// ```glide
-/// let v: *JsonValue = json_null();
-/// json_emit(v);   // "null"
-/// ```
-pub fn json_null() -> *JsonValue {
-    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
-    v.kind = JSON_NULL;
-    return v;
+fn _missing_key_err(key: string) -> string {
+    return "missing key \"".concat(key).concat("\"");
 }
 
-/// JSON boolean.
-///
-/// ```glide
-/// json_emit(json_bool(true));    // "true"
-/// json_emit(json_bool(false));   // "false"
-/// ```
-pub fn json_bool(b: bool) -> *JsonValue {
-    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
-    v.kind = JSON_BOOL;
-    v.b = b;
-    return v;
+fn _wrong_type_err(key: string, want: string) -> string {
+    return "field \"".concat(key).concat("\" is not ").concat(want);
 }
 
-/// JSON integer (kept as `int` until parsed back as a float).
-///
-/// ```glide
-/// json_emit(json_int(42));   // "42"
-/// ```
-pub fn json_int(n: int) -> *JsonValue {
-    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
-    v.kind = JSON_INT;
-    v.i = n;
-    return v;
-}
+impl JsonValue {
+    // ---- constructors (static) -----------------------------------------
 
-/// JSON floating-point number. Always emits as a float (no automatic
-/// demotion to integer even for whole values).
-///
-/// ```glide
-/// json_emit(json_float(3.14));   // "3.140000"
-/// ```
-pub fn json_float(f: f64) -> *JsonValue {
-    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
-    v.kind = JSON_FLOAT;
-    v.f = f;
-    return v;
-}
-
-/// JSON string. The value is escaped at emit time, so callers pass raw
-/// text (no manual quoting).
-///
-/// ```glide
-/// json_emit(json_string("hi"));        // "\"hi\""
-/// json_emit(json_string("a\"b"));      // "\"a\\\"b\""
-/// ```
-pub fn json_string(s: string) -> *JsonValue {
-    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
-    v.kind = JSON_STRING;
-    v.s = s;
-    return v;
-}
-
-/// Empty JSON array. Use `json_arr_push` to append elements.
-///
-/// ```glide
-/// let a: *JsonValue = json_array();
-/// json_arr_push(a, json_int(1));
-/// json_arr_push(a, json_int(2));
-/// json_emit(a);    // "[1,2]"
-/// ```
-pub fn json_array() -> *JsonValue {
-    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
-    v.kind = JSON_ARRAY;
-    let arr: *Vector<JsonValue> = Vector::new();
-    v.arr = arr;
-    return v;
-}
-
-/// Empty JSON object. Use `json_obj_set` to add `key: value` pairs.
-///
-/// ```glide
-/// let o: *JsonValue = json_object();
-/// json_obj_set(o, "name", json_string("bob"));
-/// json_obj_set(o, "age",  json_int(7));
-/// json_emit(o);    // "{\"name\":\"bob\",\"age\":7}"
-/// ```
-pub fn json_object() -> *JsonValue {
-    let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
-    v.kind = JSON_OBJECT;
-    let keys: *Vector<string> = Vector::new();
-    let vals: *Vector<JsonValue> = Vector::new();
-    v.obj_keys = keys;
-    v.obj_vals = vals;
-    return v;
-}
-
-// ---- mutators -----------------------------------------------------------
-
-/// Append `v` to a JSON array. No-op when `arr` isn't an array.
-///
-/// ```glide
-/// let a: *JsonValue = json_array();
-/// json_arr_push(a, json_string("first"));
-/// json_arr_push(a, json_string("second"));
-/// json_len(a);   // 2
-/// ```
-pub fn json_arr_push(arr: *JsonValue, v: *JsonValue) {
-    if arr == null || arr.kind != JSON_ARRAY { return; }
-    arr.arr.push(*v);
-}
-
-/// Set `key` → `v` on a JSON object. Duplicate keys append rather than
-/// overwrite — JSON tolerates duplicates and `json_get` returns the
-/// first hit. Use `json_obj_replace` (TODO) when overwriting matters.
-///
-/// ```glide
-/// let o: *JsonValue = json_object();
-/// json_obj_set(o, "x", json_int(1));
-/// json_obj_set(o, "y", json_int(2));
-/// json_emit(o);   // "{\"x\":1,\"y\":2}"
-/// ```
-pub fn json_obj_set(obj: *JsonValue, key: string, v: *JsonValue) {
-    if obj == null || obj.kind != JSON_OBJECT { return; }
-    obj.obj_keys.push(key);
-    obj.obj_vals.push(*v);
-}
-
-// ---- accessors ----------------------------------------------------------
-
-/// Look up `key` on an object. Returns `null` when absent or when `v`
-/// isn't an object.
-///
-/// ```glide
-/// let o: *JsonValue = json_parse("{\"name\":\"alice\"}");
-/// let name: *JsonValue = json_get(o, "name");
-/// json_as_string(name);    // "alice"
-/// json_get(o, "missing");  // null
-/// ```
-pub fn json_get(v: *JsonValue, key: string) -> *JsonValue {
-    if v == null || v.kind != JSON_OBJECT { return null; }
-    for let i: int = 0; i < v.obj_keys.len(); i++ {
-        if v.obj_keys.get(i).eq(key) {
-            let val: JsonValue = v.obj_vals.get(i);
-            let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
-            *p = val;
-            return p;
-        }
+    /// JSON `null`.
+    ///
+    /// ```glide
+    /// let v: *JsonValue = JsonValue::null();
+    /// v.emit();   // "null"
+    /// ```
+    pub fn null() -> *JsonValue {
+        let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+        v.kind = JSON_NULL;
+        return v;
     }
-    return null;
+
+    /// JSON boolean.
+    ///
+    /// ```glide
+    /// JsonValue::bool(true).emit();    // "true"
+    /// JsonValue::bool(false).emit();   // "false"
+    /// ```
+    pub fn bool(b: bool) -> *JsonValue {
+        let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+        v.kind = JSON_BOOL;
+        v.b = b;
+        return v;
+    }
+
+    /// JSON integer (kept as `int` until parsed back as a float).
+    ///
+    /// ```glide
+    /// JsonValue::int(42).emit();   // "42"
+    /// ```
+    pub fn int(n: int) -> *JsonValue {
+        let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+        v.kind = JSON_INT;
+        v.i = n;
+        return v;
+    }
+
+    /// JSON floating-point number. Always emits as a float (no automatic
+    /// demotion to integer even for whole values).
+    ///
+    /// ```glide
+    /// JsonValue::float(3.14).emit();   // "3.140000"
+    /// ```
+    pub fn float(f: f64) -> *JsonValue {
+        let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+        v.kind = JSON_FLOAT;
+        v.f = f;
+        return v;
+    }
+
+    /// JSON string. The value is escaped at emit time, so callers pass
+    /// raw text (no manual quoting).
+    ///
+    /// ```glide
+    /// JsonValue::string("hi").emit();        // "\"hi\""
+    /// JsonValue::string("a\"b").emit();      // "\"a\\\"b\""
+    /// ```
+    pub fn string(s: string) -> *JsonValue {
+        let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+        v.kind = JSON_STRING;
+        v.s = s;
+        return v;
+    }
+
+    /// Empty JSON array. Use `arr_push` to append elements.
+    ///
+    /// ```glide
+    /// let a: *JsonValue = JsonValue::array();
+    /// a.arr_push(JsonValue::int(1));
+    /// a.arr_push(JsonValue::int(2));
+    /// a.emit();    // "[1,2]"
+    /// ```
+    pub fn array() -> *JsonValue {
+        let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+        v.kind = JSON_ARRAY;
+        let arr: *Vector<JsonValue> = Vector::new();
+        v.arr = arr;
+        return v;
+    }
+
+    /// Empty JSON object. Use `obj_set` to add `key: value` pairs.
+    ///
+    /// ```glide
+    /// let o: *JsonValue = JsonValue::object();
+    /// o.obj_set("name", JsonValue::string("bob"));
+    /// o.obj_set("age",  JsonValue::int(7));
+    /// o.emit();    // "{\"name\":\"bob\",\"age\":7}"
+    /// ```
+    pub fn object() -> *JsonValue {
+        let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
+        v.kind = JSON_OBJECT;
+        let keys: *Vector<string> = Vector::new();
+        let vals: *Vector<JsonValue> = Vector::new();
+        v.obj_keys = keys;
+        v.obj_vals = vals;
+        return v;
+    }
+
+    /// Parse a JSON document. Lenient: malformed input may produce a
+    /// partially populated tree rather than an error.
+    ///
+    /// ```glide
+    /// let v: *JsonValue = JsonValue::parse("{\"name\":\"alice\",\"age\":30}");
+    /// v.get("name").as_string();   // "alice"
+    /// v.get("age").as_int();       // 30
+    /// ```
+    pub fn parse(src: string) -> *JsonValue {
+        let p: JsonParser = JsonParser { src: src, pos: 0, n: src.len() };
+        return _jp_value(&p);
+    }
+
+    /// Wrap `s` in double quotes and escape JSON-special bytes (`"`,
+    /// `\`, CR, LF, tab, control bytes).
+    ///
+    /// ```glide
+    /// JsonValue::escape("hi");        // "\"hi\""
+    /// JsonValue::escape("a\nb");      // "\"a\\nb\""
+    /// ```
+    pub fn escape(s: string) -> string {
+        let mut out: string = "\"";
+        let n: int = s.len();
+        for let i: int = 0; i < n; i++ {
+            let c: int = s.at(i).to_int();
+            if c == 34       { out = out.concat("\\\""); }
+            else if c == 92  { out = out.concat("\\\\"); }
+            else if c == 10  { out = out.concat("\\n"); }
+            else if c == 13  { out = out.concat("\\r"); }
+            else if c == 9   { out = out.concat("\\t"); }
+            else if c < 32   { out = out.concat("?"); }
+            else             { out = out.concat(s.substring(i, i + 1)); }
+        }
+        return out.concat("\"");
+    }
+
+    // ---- mutators (instance) -------------------------------------------
+
+    /// Append `v` to a JSON array. No-op when `self` isn't an array.
+    ///
+    /// ```glide
+    /// let a: *JsonValue = JsonValue::array();
+    /// a.arr_push(JsonValue::string("first"));
+    /// a.arr_push(JsonValue::string("second"));
+    /// a.len();   // 2
+    /// ```
+    pub fn arr_push(self: *JsonValue, v: *JsonValue) {
+        if self == null || self.kind != JSON_ARRAY { return; }
+        self.arr.push(*v);
+    }
+
+    /// Set `key` → `v` on a JSON object. Duplicate keys append rather
+    /// than overwrite — JSON tolerates duplicates and `get` returns the
+    /// first hit.
+    ///
+    /// ```glide
+    /// let o: *JsonValue = JsonValue::object();
+    /// o.obj_set("x", JsonValue::int(1));
+    /// o.obj_set("y", JsonValue::int(2));
+    /// o.emit();   // "{\"x\":1,\"y\":2}"
+    /// ```
+    pub fn obj_set(self: *JsonValue, key: string, v: *JsonValue) {
+        if self == null || self.kind != JSON_OBJECT { return; }
+        self.obj_keys.push(key);
+        self.obj_vals.push(*v);
+    }
+
+    // ---- accessors (instance) ------------------------------------------
+
+    /// Look up `key` on an object. Returns `null` when absent or when
+    /// `self` isn't an object.
+    ///
+    /// ```glide
+    /// let o: *JsonValue = JsonValue::parse("{\"name\":\"alice\"}");
+    /// o.get("name").as_string();   // "alice"
+    /// o.get("missing");            // null
+    /// ```
+    pub fn get(self: *JsonValue, key: string) -> *JsonValue {
+        if self == null || self.kind != JSON_OBJECT { return null; }
+        for let i: int = 0; i < self.obj_keys.len(); i++ {
+            if self.obj_keys.get(i).eq(key) {
+                let val: JsonValue = self.obj_vals.get(i);
+                let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
+                *p = val;
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /// Read element `idx` from an array. Returns `null` for out-of-range
+    /// or when `self` isn't an array.
+    ///
+    /// ```glide
+    /// let a: *JsonValue = JsonValue::parse("[10, 20, 30]");
+    /// a.at(1).as_int();   // 20
+    /// a.at(99);           // null
+    /// ```
+    pub fn at(self: *JsonValue, idx: int) -> *JsonValue {
+        if self == null || self.kind != JSON_ARRAY { return null; }
+        if idx < 0 || idx >= self.arr.len() { return null; }
+        let val: JsonValue = self.arr.get(idx);
+        let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
+        *p = val;
+        return p;
+    }
+
+    /// Length of an array (number of elements) or object (number of
+    /// keys), or `0` for scalars / `null`.
+    ///
+    /// ```glide
+    /// JsonValue::parse("[1,2,3]").len();              // 3
+    /// JsonValue::parse("{\"a\":1,\"b\":2}").len();    // 2
+    /// JsonValue::int(7).len();                        // 0
+    /// ```
+    pub fn len(self: *JsonValue) -> int {
+        if self == null { return 0; }
+        if self.kind == JSON_ARRAY  { return self.arr.len(); }
+        if self.kind == JSON_OBJECT { return self.obj_keys.len(); }
+        return 0;
+    }
+
+    /// Read as string. Empty string for non-strings / `null`.
+    ///
+    /// ```glide
+    /// JsonValue::string("hi").as_string();   // "hi"
+    /// JsonValue::int(42).as_string();        // ""
+    /// ```
+    pub fn as_string(self: *JsonValue) -> string {
+        if self == null || self.kind != JSON_STRING { return ""; }
+        return self.s;
+    }
+
+    /// Read as integer. Float values truncate toward zero; non-numbers
+    /// / `null` return `0`.
+    ///
+    /// ```glide
+    /// JsonValue::int(42).as_int();           // 42
+    /// JsonValue::float(3.9).as_int();        // 3
+    /// JsonValue::string("nope").as_int();    // 0
+    /// ```
+    pub fn as_int(self: *JsonValue) -> int {
+        if self == null { return 0; }
+        if self.kind == JSON_INT { return self.i; }
+        if self.kind == JSON_FLOAT { return self.f as int; }
+        return 0;
+    }
+
+    /// Read as float. Integer values are coerced; non-numbers / `null`
+    /// return `0.0`.
+    ///
+    /// ```glide
+    /// JsonValue::float(3.14).as_float();     // 3.14
+    /// JsonValue::int(7).as_float();          // 7.0
+    /// ```
+    pub fn as_float(self: *JsonValue) -> f64 {
+        if self == null { return 0.0; }
+        if self.kind == JSON_FLOAT { return self.f; }
+        if self.kind == JSON_INT { return self.i as f64; }
+        return 0.0;
+    }
+
+    /// Read as bool. Non-bools / `null` return `false`.
+    ///
+    /// ```glide
+    /// JsonValue::bool(true).as_bool();    // true
+    /// JsonValue::int(1).as_bool();        // false  (no truthy coercion)
+    /// ```
+    pub fn as_bool(self: *JsonValue) -> bool {
+        if self == null || self.kind != JSON_BOOL { return false; }
+        return self.b;
+    }
+
+    /// `true` for JSON `null` (or a Glide `null` pointer); `false` for
+    /// any other kind.
+    ///
+    /// ```glide
+    /// JsonValue::null().is_null();    // true
+    /// JsonValue::int(0).is_null();    // false
+    /// ```
+    pub fn is_null(self: *JsonValue) -> bool {
+        if self == null { return true; }
+        return self.kind == JSON_NULL;
+    }
+
+    /// Serialise to a compact (no whitespace) string. Heap-owned by the
+    /// caller.
+    ///
+    /// ```glide
+    /// let o: *JsonValue = JsonValue::object();
+    /// o.obj_set("x", JsonValue::int(1));
+    /// o.obj_set("y", JsonValue::array());
+    /// o.emit();   // "{\"x\":1,\"y\":[]}"
+    /// ```
+    pub fn emit(self: *JsonValue) -> string {
+        if self == null { return "null"; }
+        if self.kind == JSON_NULL  { return "null"; }
+        if self.kind == JSON_BOOL  { if self.b { return "true"; } return "false"; }
+        if self.kind == JSON_INT   { return format!("{}", self.i); }
+        if self.kind == JSON_FLOAT { return format!("{}", self.f); }
+        if self.kind == JSON_STRING { return JsonValue::escape(self.s); }
+        if self.kind == JSON_ARRAY {
+            let mut out: string = "[";
+            let n: int = self.arr.len();
+            for let i: int = 0; i < n; i++ {
+                if i > 0 { out = out.concat(","); }
+                let e: JsonValue = self.arr.get(i);
+                out = out.concat((&e).emit());
+            }
+            return out.concat("]");
+        }
+        if self.kind == JSON_OBJECT {
+            let mut out: string = "{";
+            let n: int = self.obj_keys.len();
+            for let i: int = 0; i < n; i++ {
+                if i > 0 { out = out.concat(","); }
+                out = out.concat(JsonValue::escape(self.obj_keys.get(i)));
+                out = out.concat(":");
+                let val: JsonValue = self.obj_vals.get(i);
+                out = out.concat((&val).emit());
+            }
+            return out.concat("}");
+        }
+        return "null";
+    }
+
+    // ---- typed object accessors (instance) -----------------------------
+
+    /// Read a required string field. Errors when the key is missing,
+    /// the value is `null`, or the value is a non-string JSON type.
+    ///
+    /// ```glide
+    /// // {"nome": "alice"}
+    /// let r: !string = v.get_string("nome");
+    /// if r.ok { println!(r.val); }    // "alice"
+    /// ```
+    pub fn get_string(self: *JsonValue, key: string) -> !string {
+        if self.kind != JSON_OBJECT { return err("not an object"); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+        if f.kind != JSON_STRING { return err(_wrong_type_err(key, "a string")); }
+        return ok(f.s);
+    }
+
+    /// Read a required int field. Accepts JSON int only — JSON float
+    /// values like `3.0` count as "wrong type" for explicit integer
+    /// parsing.
+    ///
+    /// ```glide
+    /// // {"idade": 12}
+    /// let r: !int = v.get_int("idade");
+    /// if r.ok { println!(r.val); }    // 12
+    /// ```
+    pub fn get_int(self: *JsonValue, key: string) -> !int {
+        if self.kind != JSON_OBJECT { return err("not an object"); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+        if f.kind != JSON_INT { return err(_wrong_type_err(key, "an int")); }
+        return ok(f.i);
+    }
+
+    /// Read a required bool field.
+    ///
+    /// ```glide
+    /// // {"active": true}
+    /// let r: !bool = v.get_bool("active");
+    /// if r.ok { println!(r.val); }    // true
+    /// ```
+    pub fn get_bool(self: *JsonValue, key: string) -> !bool {
+        if self.kind != JSON_OBJECT { return err("not an object"); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+        if f.kind != JSON_BOOL { return err(_wrong_type_err(key, "a bool")); }
+        return ok(f.b);
+    }
+
+    /// Read a required float field. Tolerant: a JSON int promotes to
+    /// f64 rather than counting as a wrong type, so `{"x": 1}` still
+    /// parses for a `f64`-typed `x`.
+    ///
+    /// ```glide
+    /// // {"score": 3.14}
+    /// let r: !f64 = v.get_float("score");
+    /// if r.ok { println!(r.val); }    // 3.14
+    /// ```
+    pub fn get_float(self: *JsonValue, key: string) -> !f64 {
+        if self.kind != JSON_OBJECT { return err("not an object"); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+        if f.kind == JSON_FLOAT { return ok(f.f); }
+        if f.kind == JSON_INT   { return ok(f.i as f64); }
+        return err(_wrong_type_err(key, "a number"));
+    }
+
+    /// Optional string. `none` on missing key, JSON null, or wrong type.
+    ///
+    /// ```glide
+    /// match v.opt_string("nick") {
+    ///     some(s) => println!("nick=", s),
+    ///     none()  => println!("no nick"),
+    /// }
+    /// ```
+    pub fn opt_string(self: *JsonValue, key: string) -> ?string {
+        if self.kind != JSON_OBJECT { return none(); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind != JSON_STRING { return none(); }
+        return some(f.s);
+    }
+
+    /// Optional int. `none` on missing key, JSON null, or wrong type.
+    pub fn opt_int(self: *JsonValue, key: string) -> ?int {
+        if self.kind != JSON_OBJECT { return none(); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind != JSON_INT { return none(); }
+        return some(f.i);
+    }
+
+    /// Optional bool. `none` on missing key, JSON null, or wrong type.
+    pub fn opt_bool(self: *JsonValue, key: string) -> ?bool {
+        if self.kind != JSON_OBJECT { return none(); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind != JSON_BOOL { return none(); }
+        return some(f.b);
+    }
+
+    /// Optional float. JSON int promotes to f64.
+    pub fn opt_float(self: *JsonValue, key: string) -> ?f64 {
+        if self.kind != JSON_OBJECT { return none(); }
+        let f: *JsonValue = self.get(key);
+        if f == null { return none(); }
+        if f.kind == JSON_FLOAT { return some(f.f); }
+        if f.kind == JSON_INT   { return some(f.i as f64); }
+        return none();
+    }
+
+    /// Read a nested object. Returns the raw `*JsonValue` so callers
+    /// can further drill via `get_*` / `opt_*`.
+    ///
+    /// ```glide
+    /// // {"addr": {"city": "Rio"}}
+    /// let addr: !*JsonValue = v.get_object("addr");
+    /// if addr.ok {
+    ///     let city: !string = addr.val.get_string("city");
+    /// }
+    /// ```
+    pub fn get_object(self: *JsonValue, key: string) -> !*JsonValue {
+        if self.kind != JSON_OBJECT { return err("not an object"); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+        if f.kind != JSON_OBJECT { return err(_wrong_type_err(key, "an object")); }
+        return ok(f);
+    }
+
+    /// Read a nested array. Returns the raw `*JsonValue` so callers
+    /// can walk it via `len()` + `at(i)`.
+    ///
+    /// ```glide
+    /// // {"tags": ["a", "b"]}
+    /// let tags: !*JsonValue = v.get_array("tags");
+    /// if tags.ok {
+    ///     for let i: int = 0; i < tags.val.len(); i++ {
+    ///         println!(tags.val.at(i).as_string());
+    ///     }
+    /// }
+    /// ```
+    pub fn get_array(self: *JsonValue, key: string) -> !*JsonValue {
+        if self.kind != JSON_OBJECT { return err("not an object"); }
+        let f: *JsonValue = self.get(key);
+        if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
+        if f.kind != JSON_ARRAY { return err(_wrong_type_err(key, "an array")); }
+        return ok(f);
+    }
+
+    /// Read any value at `key` regardless of JSON type — useful when a
+    /// struct has a "dynamic" pass-through field.
+    ///
+    /// ```glide
+    /// // {"meta": <anything>}
+    /// let raw: *JsonValue = v.get_any("meta");
+    /// if raw != null { println!(raw.emit()); }
+    /// ```
+    pub fn get_any(self: *JsonValue, key: string) -> *JsonValue {
+        if self.kind != JSON_OBJECT { return null; }
+        return self.get(key);
+    }
 }
 
-/// Read element `idx` from an array. Returns `null` for out-of-range
-/// or when `v` isn't an array.
-///
-/// ```glide
-/// let a: *JsonValue = json_parse("[10, 20, 30]");
-/// json_as_int(json_at(a, 1));   // 20
-/// json_at(a, 99);               // null
-/// ```
-pub fn json_at(v: *JsonValue, idx: int) -> *JsonValue {
-    if v == null || v.kind != JSON_ARRAY { return null; }
-    if idx < 0 || idx >= v.arr.len() { return null; }
-    let val: JsonValue = v.arr.get(idx);
-    let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
-    *p = val;
-    return p;
-}
-
-/// Length of an array (number of elements) or object (number of keys),
-/// or `0` for scalars / `null`.
-///
-/// ```glide
-/// json_len(json_parse("[1,2,3]"));            // 3
-/// json_len(json_parse("{\"a\":1,\"b\":2}"));  // 2
-/// json_len(json_int(7));                      // 0
-/// ```
-pub fn json_len(v: *JsonValue) -> int {
-    if v == null { return 0; }
-    if v.kind == JSON_ARRAY  { return v.arr.len(); }
-    if v.kind == JSON_OBJECT { return v.obj_keys.len(); }
-    return 0;
-}
-
-/// Read as string. Empty string for non-strings / `null`.
-///
-/// ```glide
-/// json_as_string(json_string("hi"));   // "hi"
-/// json_as_string(json_int(42));        // ""
-/// ```
-pub fn json_as_string(v: *JsonValue) -> string {
-    if v == null || v.kind != JSON_STRING { return ""; }
-    return v.s;
-}
-
-/// Read as integer. Float values truncate toward zero; non-numbers /
-/// `null` return `0`.
-///
-/// ```glide
-/// json_as_int(json_int(42));           // 42
-/// json_as_int(json_float(3.9));        // 3
-/// json_as_int(json_string("nope"));    // 0
-/// ```
-pub fn json_as_int(v: *JsonValue) -> int {
-    if v == null { return 0; }
-    if v.kind == JSON_INT { return v.i; }
-    if v.kind == JSON_FLOAT { return v.f as int; }
-    return 0;
-}
-
-/// Read as float. Integer values are coerced; non-numbers / `null`
-/// return `0.0`.
-///
-/// ```glide
-/// json_as_float(json_float(3.14));     // 3.14
-/// json_as_float(json_int(7));          // 7.0
-/// ```
-pub fn json_as_float(v: *JsonValue) -> f64 {
-    if v == null { return 0.0; }
-    if v.kind == JSON_FLOAT { return v.f; }
-    if v.kind == JSON_INT { return v.i as f64; }
-    return 0.0;
-}
-
-/// Read as bool. Non-bools / `null` return `false`.
-///
-/// ```glide
-/// json_as_bool(json_bool(true));    // true
-/// json_as_bool(json_int(1));        // false  (no truthy coercion)
-/// ```
-pub fn json_as_bool(v: *JsonValue) -> bool {
-    if v == null || v.kind != JSON_BOOL { return false; }
-    return v.b;
-}
-
-/// `true` for JSON `null` (or a Glide `null` pointer); `false` for any
-/// other kind.
-///
-/// ```glide
-/// json_is_null(json_null());        // true
-/// json_is_null(json_int(0));        // false
-/// ```
-pub fn json_is_null(v: *JsonValue) -> bool {
-    if v == null { return true; }
-    return v.kind == JSON_NULL;
-}
-
-// ---- parser -------------------------------------------------------------
+// ---- parser internals ---------------------------------------------------
 
 pub struct JsonParser {
     pub src: string,
@@ -329,7 +577,7 @@ fn _jp_value(p: *JsonParser) -> *JsonValue {
 }
 
 fn _jp_object(p: *JsonParser) -> *JsonValue {
-    let obj: *JsonValue = json_object();
+    let obj: *JsonValue = JsonValue::object();
     p.pos = p.pos + 1; // consume '{'
     _jp_skip_ws(p);
     if _jp_peek(p) == 125 { p.pos = p.pos + 1; return obj; }
@@ -340,7 +588,7 @@ fn _jp_object(p: *JsonParser) -> *JsonValue {
         _jp_skip_ws(p);
         if _jp_peek(p) == 58 { p.pos = p.pos + 1; }
         let v: *JsonValue = _jp_value(p);
-        if v == null { v = json_null(); }
+        if v == null { v = JsonValue::null(); }
         obj.obj_keys.push(k.s);
         obj.obj_vals.push(*v);
         _jp_skip_ws(p);
@@ -353,7 +601,7 @@ fn _jp_object(p: *JsonParser) -> *JsonValue {
 }
 
 fn _jp_array(p: *JsonParser) -> *JsonValue {
-    let arr: *JsonValue = json_array();
+    let arr: *JsonValue = JsonValue::array();
     p.pos = p.pos + 1;
     _jp_skip_ws(p);
     if _jp_peek(p) == 93 { p.pos = p.pos + 1; return arr; }
@@ -388,8 +636,8 @@ fn _jp_string_value(p: *JsonParser) -> *JsonValue {
     }
     let raw: string = p.src.substring(start, p.pos);
     if _jp_peek(p) == 34 { p.pos = p.pos + 1; }
-    if !has_escape { return json_string(raw); }
-    return json_string(_jp_unescape(raw));
+    if !has_escape { return JsonValue::string(raw); }
+    return JsonValue::string(_jp_unescape(raw));
 }
 
 fn _jp_unescape(raw: string) -> string {
@@ -409,7 +657,6 @@ fn _jp_unescape(raw: string) -> string {
         if e == 34  { out = out.concat("\""); continue; }
         if e == 92  { out = out.concat("\\"); continue; }
         if e == 47  { out = out.concat("/"); continue; }
-        // \uXXXX — simplified pass-through (full surrogate decoding pending).
         if e == 117 && i + 4 <= n {
             i = i + 4;
             out = out.concat("?");
@@ -421,14 +668,14 @@ fn _jp_unescape(raw: string) -> string {
 
 fn _jp_bool(p: *JsonParser) -> *JsonValue {
     let c: int = _jp_peek(p);
-    if c == 116 { p.pos = p.pos + 4; return json_bool(true); }
+    if c == 116 { p.pos = p.pos + 4; return JsonValue::bool(true); }
     p.pos = p.pos + 5;
-    return json_bool(false);
+    return JsonValue::bool(false);
 }
 
 fn _jp_null(p: *JsonParser) -> *JsonValue {
     p.pos = p.pos + 4;
-    return json_null();
+    return JsonValue::null();
 }
 
 fn _jp_pow10(n: int) -> f64 {
@@ -457,7 +704,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
     if _jp_peek(p) == 101 || _jp_peek(p) == 69 { is_float = true; }
     if !is_float {
         if neg { int_part = -int_part; }
-        return json_int(int_part);
+        return JsonValue::int(int_part);
     }
 
     let mut frac_part: int = 0;
@@ -494,295 +741,35 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
     let mut v: f64 = (int_part as f64) + (frac_part as f64) / _jp_pow10(frac_digits);
     v = v * _jp_pow10(exp_val);
     if neg { v = -v; }
-    return json_float(v);
-}
-
-/// Parse a JSON document. Lenient: malformed input may produce a
-/// partially populated tree rather than an error. For strict parsing
-/// (errors on unexpected tokens), `try_parse` is on the roadmap.
-///
-/// ```glide
-/// let v: *JsonValue = json_parse("{\"name\":\"alice\",\"age\":30}");
-/// json_as_string(json_get(v, "name"));   // "alice"
-/// json_as_int(json_get(v, "age"));       // 30
-/// ```
-pub fn json_parse(src: string) -> *JsonValue {
-    let p: JsonParser = JsonParser { src: src, pos: 0, n: src.len() };
-    return _jp_value(&p);
-}
-
-// ---- emitter ------------------------------------------------------------
-
-/// Wrap `s` in double quotes and escape JSON-special bytes (`"`, `\`,
-/// CR, LF, tab, control bytes).
-///
-/// ```glide
-/// json_escape("hi");           // "\"hi\""
-/// json_escape("a\nb");         // "\"a\\nb\""
-/// ```
-pub fn json_escape(s: string) -> string {
-    let mut out: string = "\"";
-    let n: int = s.len();
-    for let i: int = 0; i < n; i++ {
-        let c: int = s.at(i).to_int();
-        if c == 34       { out = out.concat("\\\""); }
-        else if c == 92  { out = out.concat("\\\\"); }
-        else if c == 10  { out = out.concat("\\n"); }
-        else if c == 13  { out = out.concat("\\r"); }
-        else if c == 9   { out = out.concat("\\t"); }
-        else if c < 32   { out = out.concat("?"); }
-        else             { out = out.concat(s.substring(i, i + 1)); }
-    }
-    return out.concat("\"");
-}
-
-/// Serialise a JSON value to a compact (no whitespace) string. The
-/// returned string is heap-owned by the caller.
-///
-/// ```glide
-/// let o: *JsonValue = json_object();
-/// json_obj_set(o, "x", json_int(1));
-/// json_obj_set(o, "y", json_array());
-/// json_emit(o);   // "{\"x\":1,\"y\":[]}"
-/// ```
-pub fn json_emit(v: *JsonValue) -> string {
-    if v == null { return "null"; }
-    if v.kind == JSON_NULL  { return "null"; }
-    if v.kind == JSON_BOOL  { if v.b { return "true"; } return "false"; }
-    if v.kind == JSON_INT   { return format!("{}", v.i); }
-    if v.kind == JSON_FLOAT { return format!("{}", v.f); }
-    if v.kind == JSON_STRING { return json_escape(v.s); }
-    if v.kind == JSON_ARRAY {
-        let mut out: string = "[";
-        let n: int = v.arr.len();
-        for let i: int = 0; i < n; i++ {
-            if i > 0 { out = out.concat(","); }
-            let e: JsonValue = v.arr.get(i);
-            out = out.concat(json_emit(&e));
-        }
-        return out.concat("]");
-    }
-    if v.kind == JSON_OBJECT {
-        let mut out: string = "{";
-        let n: int = v.obj_keys.len();
-        for let i: int = 0; i < n; i++ {
-            if i > 0 { out = out.concat(","); }
-            out = out.concat(json_escape(v.obj_keys.get(i)));
-            out = out.concat(":");
-            let val: JsonValue = v.obj_vals.get(i);
-            out = out.concat(json_emit(&val));
-        }
-        return out.concat("}");
-    }
-    return "null";
-}
-
-// ---- typed object accessors -----------------------------------------------
-
-// Type-checked field reads. Each `json_get_<type>` returns `!T`: ok with
-// the value when the key is present *and* the JSON type matches, err
-// otherwise. The optional variants (`json_opt_<type>`) return `?T`:
-// some on a present-and-correct field, none when the key is missing,
-// null, or the wrong type. Pair the typed getters with a manual
-// `Foo::from_json(v) -> !Foo` impl on user structs to bind incoming
-// JSON into a typed value with one validation path.
-
-fn _missing_key_err(key: string) -> string {
-    return "missing key \"".concat(key).concat("\"");
-}
-
-fn _wrong_type_err(key: string, want: string) -> string {
-    return "field \"".concat(key).concat("\" is not ").concat(want);
-}
-
-/// Read a required string field. Errors when the key is missing, the
-/// value is `null`, or the value is a non-string JSON type.
-///
-/// ```glide
-/// // {"nome": "alice"}
-/// let r: !string = json_get_string(v, "nome");
-/// if r.ok { println!(r.val); }    // "alice"
-/// ```
-pub fn json_get_string(v: *JsonValue, key: string) -> !string {
-    if v.kind != JSON_OBJECT { return err("not an object"); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
-    if f.kind != JSON_STRING { return err(_wrong_type_err(key, "a string")); }
-    return ok(f.s);
-}
-
-/// Read a required int field. Accepts JSON int only — JSON float values
-/// like `3.0` count as "wrong type" for explicit integer parsing.
-///
-/// ```glide
-/// // {"idade": 12}
-/// let r: !int = json_get_int(v, "idade");
-/// if r.ok { println!(r.val); }    // 12
-/// ```
-pub fn json_get_int(v: *JsonValue, key: string) -> !int {
-    if v.kind != JSON_OBJECT { return err("not an object"); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
-    if f.kind != JSON_INT { return err(_wrong_type_err(key, "an int")); }
-    return ok(f.i);
-}
-
-/// Read a required bool field.
-///
-/// ```glide
-/// // {"active": true}
-/// let r: !bool = json_get_bool(v, "active");
-/// if r.ok { println!(r.val); }    // true
-/// ```
-pub fn json_get_bool(v: *JsonValue, key: string) -> !bool {
-    if v.kind != JSON_OBJECT { return err("not an object"); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
-    if f.kind != JSON_BOOL { return err(_wrong_type_err(key, "a bool")); }
-    return ok(f.b);
-}
-
-/// Read a required float field. Tolerant: a JSON int promotes to f64
-/// rather than counting as a wrong type, so `{"x": 1}` still parses
-/// for a `f64`-typed `x`.
-///
-/// ```glide
-/// // {"score": 3.14}
-/// let r: !f64 = json_get_float(v, "score");
-/// if r.ok { println!(r.val); }    // 3.14
-/// ```
-pub fn json_get_float(v: *JsonValue, key: string) -> !f64 {
-    if v.kind != JSON_OBJECT { return err("not an object"); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
-    if f.kind == JSON_FLOAT { return ok(f.f); }
-    if f.kind == JSON_INT   { return ok(f.i as f64); }
-    return err(_wrong_type_err(key, "a number"));
-}
-
-/// Optional string. `none` on missing key, JSON null, or wrong type.
-///
-/// ```glide
-/// match json_opt_string(v, "nick") {
-///     some(s) => println!("nick=", s),
-///     none()  => println!("no nick"),
-/// }
-/// ```
-pub fn json_opt_string(v: *JsonValue, key: string) -> ?string {
-    if v.kind != JSON_OBJECT { return none(); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind != JSON_STRING { return none(); }
-    return some(f.s);
-}
-
-/// Optional int. `none` on missing key, JSON null, or wrong type.
-pub fn json_opt_int(v: *JsonValue, key: string) -> ?int {
-    if v.kind != JSON_OBJECT { return none(); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind != JSON_INT { return none(); }
-    return some(f.i);
-}
-
-/// Optional bool. `none` on missing key, JSON null, or wrong type.
-pub fn json_opt_bool(v: *JsonValue, key: string) -> ?bool {
-    if v.kind != JSON_OBJECT { return none(); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind != JSON_BOOL { return none(); }
-    return some(f.b);
-}
-
-/// Optional float. JSON int promotes to f64.
-pub fn json_opt_float(v: *JsonValue, key: string) -> ?f64 {
-    if v.kind != JSON_OBJECT { return none(); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null { return none(); }
-    if f.kind == JSON_FLOAT { return some(f.f); }
-    if f.kind == JSON_INT   { return some(f.i as f64); }
-    return none();
-}
-
-/// Read a nested object. Returns the raw `*JsonValue` so callers can
-/// further drill via `json_get_*` / `json_opt_*`. Errors when the key
-/// is missing or the value is not a JSON object.
-///
-/// ```glide
-/// // {"addr": {"city": "Rio"}}
-/// let addr: !*JsonValue = json_get_object(v, "addr");
-/// if addr.ok {
-///     let city: !string = json_get_string(addr.val, "city");
-/// }
-/// ```
-pub fn json_get_object(v: *JsonValue, key: string) -> !*JsonValue {
-    if v.kind != JSON_OBJECT { return err("not an object"); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
-    if f.kind != JSON_OBJECT { return err(_wrong_type_err(key, "an object")); }
-    return ok(f);
-}
-
-/// Read a nested array. Returns the raw `*JsonValue` so callers can
-/// walk it via `json_len(v)` + `json_at(v, i)`.
-///
-/// ```glide
-/// // {"tags": ["a", "b"]}
-/// let tags: !*JsonValue = json_get_array(v, "tags");
-/// if tags.ok {
-///     for let i: int = 0; i < json_len(tags.val); i++ {
-///         println!(json_as_string(json_at(tags.val, i)));
-///     }
-/// }
-/// ```
-pub fn json_get_array(v: *JsonValue, key: string) -> !*JsonValue {
-    if v.kind != JSON_OBJECT { return err("not an object"); }
-    let f: *JsonValue = json_get(v, key);
-    if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
-    if f.kind != JSON_ARRAY { return err(_wrong_type_err(key, "an array")); }
-    return ok(f);
-}
-
-/// Read any value at `key` regardless of JSON type — useful when a
-/// struct has a "dynamic" pass-through field that wants to keep the
-/// raw subtree for later inspection. Returns `null` (a Glide null
-/// pointer, not a JSON null) when the key is absent.
-///
-/// ```glide
-/// // {"meta": <anything>}
-/// let raw: *JsonValue = json_get_any(v, "meta");
-/// if raw != null { println!(json_emit(raw)); }
-/// ```
-pub fn json_get_any(v: *JsonValue, key: string) -> *JsonValue {
-    if v.kind != JSON_OBJECT { return null; }
-    return json_get(v, key);
+    return JsonValue::float(v);
 }
 
 // ---- JsonBind trait ----------------------------------------------------
 
 /// Two-way JSON binding. User structs that implement this trait can
-/// flow through the typed handler helpers (`bind_json!`,
-/// `Json<T>::respond`, `HttpResponse::ok().json_of(...)`) without
-/// hand-rolling the parse and emit ceremony at every call site.
+/// flow through the typed handler helpers (`json_respond`,
+/// `HttpResponse::ok().json_of(...)`, the `@handler` proc macro)
+/// without hand-rolling the parse and emit ceremony.
 ///
 /// ```glide
-/// struct StructLegal {
-///     pub nome:  string,
-///     pub idade: ?int,
+/// struct Pet {
+///     pub name: string,
+///     pub age:  ?int,
 /// }
 ///
-/// impl JsonBind for StructLegal {
-///     fn from_json(v: *JsonValue) -> !StructLegal {
+/// impl JsonBind for Pet {
+///     fn from_json(v: *JsonValue) -> !Pet {
 ///         if v.kind != JSON_OBJECT { return err("expected object"); }
-///         let nome_r: !string = json_get_string(v, "nome");
-///         if !nome_r.ok { return err(nome_r.err); }
-///         return ok(StructLegal {
-///             nome:  nome_r.val,
-///             idade: json_opt_int(v, "idade"),
+///         return ok(Pet {
+///             name: v.get_string("name")?,
+///             age:  v.opt_int("age"),
 ///         });
 ///     }
-///     fn to_json(self: *StructLegal) -> *JsonValue {
-///         let v: *JsonValue = json_object();
-///         json_obj_set(v, "nome", json_string(self.nome));
-///         if self.idade.has {
-///             json_obj_set(v, "idade", json_int(self.idade.val));
+///     fn to_json(self: *Pet) -> *JsonValue {
+///         let v: *JsonValue = JsonValue::object();
+///         v.obj_set("name", JsonValue::string(self.name));
+///         if self.age.has {
+///             v.obj_set("age", JsonValue::int(self.age.val));
 ///         }
 ///         return v;
 ///     }
