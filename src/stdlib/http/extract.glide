@@ -1,0 +1,311 @@
+// Typed handler-param extractors. Lets `@handler` accept any param
+// whose type implements `FromRequest`, instead of hard-coding the two
+// shapes (`*HttpRequest` and `Json<T>`) the macro understood before.
+//
+// Surface:
+//   - `FromRequest` trait               — every extractor implements this
+//   - `impl FromRequest for *HttpRequest`  — passthrough (also a no-op
+//                                           in the macro special-case)
+//   - `Bearer { token }`                — `Authorization: Bearer …`
+//   - `Headers { req }`                 — full header bag
+//   - `Authorization<S: AuthScheme>`    — generic auth wrapper
+//   - `Basic { user, pass }`            — `Authorization: Basic …`
+//   - `Path<T: FromPath>`               — typed route param (special-
+//                                          cased in the macro: lookup
+//                                          uses the param's name)
+//
+// Json<T>'s extractor lives as an inherent method on Json<T> (in
+// stdlib::http::typed) because the typer's static-trait-method
+// dispatch shadows when an inherent impl block coexists on the same
+// generic type. Same call surface either way: the @handler macro
+// reaches every extractor through `T::from_request(req)`.
+//
+// Error → status mapping. `err_status()` would be the obvious surface,
+// but generic extractors (`Json<T>`, `Authorization<S>`, `Path<T>`)
+// can't carry a no-T-in-sig static method through the typer's
+// monomorphiser today — the symbol comes out unmangled and the linker
+// barfs. Workaround: extractors prefix their err strings with
+// `"<status>:"` (e.g. `"401:missing token"`); the macro feeds the
+// raw err to `extract_error_response`, which parses the prefix and
+// builds the right `HttpResponse`. Plain (no-prefix) errs default
+// to 422.
+
+import stdlib::http::*;
+import stdlib::http::typed::*;
+import stdlib::json::*;
+
+// ---- core trait --------------------------------------------------------
+
+/// Pull a typed value out of an incoming request. Implementors decide
+/// (a) how to extract, (b) what HTTP status to return when extraction
+/// fails (encoded as a `"<status>:<msg>"` prefix on the err string).
+///
+/// ```glide
+/// pub struct ApiKey { pub key: string }
+///
+/// impl FromRequest for ApiKey {
+///     fn from_request(req: *HttpRequest) -> !ApiKey {
+///         let v: string = req.header("X-Api-Key");
+///         if v.len() == 0 { return err("401:missing X-Api-Key"); }
+///         return ok(ApiKey { key: v });
+///     }
+/// }
+///
+/// // Now usable as a handler param:
+/// // @handler fn h(key: ApiKey) -> HttpResponse { ... }
+/// ```
+pub trait FromRequest {
+    /// Build `Self` from `req`. Err string carries the status as
+    /// `"<code>:<message>"` (e.g. `"401:missing token"`); plain
+    /// strings default to 422 in the wrapper.
+    fn from_request(req: *HttpRequest) -> !Self;
+}
+
+// ---- identity: *HttpRequest -------------------------------------------
+//
+// The @handler macro short-circuits this with a direct passthrough so
+// the call doesn't even reach FromRequest, but having the impl keeps
+// the trait closed under "every handler param type".
+
+impl FromRequest for *HttpRequest {
+    fn from_request(req: *HttpRequest) -> !*HttpRequest { return ok(req); }
+}
+
+// ---- Bearer token -----------------------------------------------------
+
+/// Token extracted from `Authorization: Bearer <token>`. Stripping the
+/// scheme prefix is mechanical so the handler can validate the token
+/// directly (HMAC verify, DB lookup, etc).
+///
+/// ```glide
+/// @handler
+/// fn protected(auth: Bearer) -> HttpResponse {
+///     if !valid(auth.token) { return HttpResponse::with_status(403); }
+///     return HttpResponse::ok().text("hi");
+/// }
+/// ```
+pub struct Bearer {
+    pub token: string,
+}
+
+impl FromRequest for Bearer {
+    fn from_request(req: *HttpRequest) -> !Bearer {
+        let h: string = req.header("Authorization");
+        if h.len() == 0 { return err("401:missing Authorization header"); }
+        if !h.starts_with("Bearer ") { return err("401:expected Bearer scheme"); }
+        return ok(Bearer { token: h.substring(7, h.len()) });
+    }
+}
+
+// ---- Header bag -------------------------------------------------------
+
+/// Direct access to request headers from a handler. The wrapper just
+/// pins the request pointer; lookups go through `req.header(name)`
+/// (case-insensitive linear scan) on demand.
+///
+/// ```glide
+/// @handler
+/// fn echo_ua(headers: Headers) -> HttpResponse {
+///     return HttpResponse::ok().text(headers.get("User-Agent"));
+/// }
+/// ```
+pub struct Headers {
+    pub req: *HttpRequest,
+}
+
+impl Headers {
+    /// Same lookup as `req.header(name)` — case-insensitive, `""` when
+    /// missing.
+    pub fn get(self: *Headers, name: string) -> string {
+        return self.req.header(name);
+    }
+
+    /// True iff a header with `name` is present and non-empty.
+    pub fn has(self: *Headers, name: string) -> bool {
+        return self.req.header(name).len() > 0;
+    }
+}
+
+impl FromRequest for Headers {
+    fn from_request(req: *HttpRequest) -> !Headers {
+        return ok(Headers { req: req });
+    }
+}
+
+// ---- generic Authorization<Scheme> -----------------------------------
+
+/// Parse the `Authorization` header into a typed scheme value.
+/// Implementors get the raw header (including the "Bearer " / "Basic "
+/// prefix) and decide how to validate it.
+pub trait AuthScheme {
+    fn parse(value: string) -> !Self;
+    fn name() -> string;
+}
+
+/// Generic auth wrapper. `Authorization<Bearer>` extracts a Bearer
+/// token; `Authorization<Basic>` extracts user+pass. The 401 status
+/// + "missing/wrong scheme" semantics are shared.
+pub struct Authorization<S> {
+    pub scheme: S,
+}
+
+impl<S: AuthScheme> Authorization<S> {
+    /// Inherent-impl extractor (mirrors `Json::from_request`'s shape:
+    /// concrete inherent rather than trait so the static-method mono
+    /// resolves cleanly through the @handler macro).
+    pub fn from_request(req: *HttpRequest) -> !Authorization<S> {
+        let h: string = req.header("Authorization");
+        if h.len() == 0 { return err("401:missing Authorization header"); }
+        let s_r: !S = S::parse(h);
+        if !s_r.ok { return err("401:".concat(s_r.err)); }
+        return ok(Authorization { scheme: s_r.val });
+    }
+}
+
+// Bearer doubles as an AuthScheme so `Authorization<Bearer>` is a
+// drop-in for `Bearer` when you want the wrapper symmetry with other
+// schemes. The header parsing logic is identical.
+impl AuthScheme for Bearer {
+    fn parse(v: string) -> !Bearer {
+        if !v.starts_with("Bearer ") { return err("not Bearer scheme"); }
+        return ok(Bearer { token: v.substring(7, v.len()) });
+    }
+    fn name() -> string { return "Bearer"; }
+}
+
+// ---- Basic auth -------------------------------------------------------
+
+/// Decoded user + password from `Authorization: Basic base64(user:pass)`.
+///
+/// Note: v1 doesn't decode base64 — it treats the value after `Basic `
+/// as the literal `user:pass` string. Hook in `stdlib::base64::decode`
+/// when ready.
+pub struct Basic {
+    pub user: string,
+    pub pass: string,
+}
+
+impl AuthScheme for Basic {
+    fn parse(v: string) -> !Basic {
+        if !v.starts_with("Basic ") { return err("not Basic scheme"); }
+        let raw: string = v.substring(6, v.len());
+        let colon: int = _index_of(raw, ":");
+        if colon < 0 { return err("malformed Basic value: no ':'"); }
+        return ok(Basic {
+            user: raw.substring(0, colon),
+            pass: raw.substring(colon + 1, raw.len()),
+        });
+    }
+    fn name() -> string { return "Basic"; }
+}
+
+// ---- Path<T> typed route param ---------------------------------------
+
+/// One-byte conversion for typed path params. Reused for Query<T>
+/// fields too once we ship that.
+pub trait FromPath {
+    fn from_path(s: string) -> !Self;
+}
+
+impl FromPath for string {
+    fn from_path(s: string) -> !string { return ok(s); }
+}
+
+impl FromPath for int {
+    fn from_path(s: string) -> !int {
+        let r: !int = s.try_parse_int();
+        if !r.ok { return err("not an int: ".concat(s)); }
+        return ok(r.val);
+    }
+}
+
+impl FromPath for bool {
+    fn from_path(s: string) -> !bool {
+        if s.eq("true") || s.eq("1") { return ok(true); }
+        if s.eq("false") || s.eq("0") { return ok(false); }
+        return err("not a bool: ".concat(s));
+    }
+}
+
+/// Typed access to a `:name` path segment captured by the router.
+///
+/// **Special-cased by the @handler macro.** The lookup key is the
+/// PARAM IDENT — `fn h(id: Path<int>)` extracts `req.param("id")` and
+/// converts via `int::from_path`. There's no annotation overhead.
+///
+/// ```glide
+/// // route /users/:id
+/// @handler
+/// fn get_user(id: Path<int>) -> HttpResponse {
+///     return HttpResponse::ok().text("user #".concat(id.val.to_string()));
+/// }
+/// ```
+pub struct Path<T> {
+    pub val: T,
+}
+
+impl<T: FromPath> Path<T> {
+    /// Extract a `:name` path param and convert to T. Called by the
+    /// macro; users can call it manually too.
+    pub fn extract(req: *HttpRequest, name: string) -> !Path<T> {
+        let raw: string = req.param(name);
+        if raw.len() == 0 { return err("404:missing path param: ".concat(name)); }
+        let v_r: !T = T::from_path(raw);
+        if !v_r.ok { return err("400:".concat(v_r.err)); }
+        return ok(Path { val: v_r.val });
+    }
+}
+
+// `HttpResponse::from_extract_err` — translates an extractor's err
+// string into a response. Lives as a static method so the @handler
+// macro can emit `HttpResponse::from_extract_err(...)` via path
+// syntax, without forcing user code to add an extra import. The
+// implementation is below in the impl block — declared here in
+// extract.glide because it's part of the extractor surface.
+
+// ---- internal helpers -------------------------------------------------
+
+impl HttpResponse {
+    /// Translate an extractor's err string into a response. The
+    /// extractor encodes the desired status as a `"<code>:<message>"`
+    /// prefix (e.g. `"401:missing token"`); plain strings default to
+    /// 422. Used by the `@handler` macro on every `from_request`
+    /// failure path; user code can call it too when wrapping an
+    /// extractor manually.
+    ///
+    /// ```glide
+    /// let r: !Bearer = Bearer::from_request(req);
+    /// if !r.ok { return HttpResponse::from_extract_err(r.err); }
+    /// ```
+    pub fn from_extract_err(err_str: string) -> HttpResponse {
+        let colon: int = _index_of(err_str, ":");
+        if colon > 0 && colon <= 4 {
+            let prefix: string = err_str.substring(0, colon);
+            let p_r: !int = prefix.try_parse_int();
+            if p_r.ok {
+                let msg: string = err_str.substring(colon + 1, err_str.len());
+                return HttpResponse::with_status(p_r.val).text(msg);
+            }
+        }
+        return HttpResponse::with_status(422).text(err_str);
+    }
+}
+
+fn _index_of(s: string, needle: string) -> int {
+    let n: int = s.len();
+    let m: int = needle.len();
+    if m == 0 { return 0; }
+    if m > n { return -1; }
+    let mut i: int = 0;
+    while i + m <= n {
+        let mut k: int = 0;
+        let mut hit: bool = true;
+        while k < m {
+            if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
+            k = k + 1;
+        }
+        if hit { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
