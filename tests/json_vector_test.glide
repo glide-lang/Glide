@@ -1,0 +1,60 @@
+import stdlib::testing::*;
+import stdlib::json::*;
+import stdlib::json::derive::*;
+
+@derive(JsonBind)
+pub struct Pet {
+    pub name: string,
+    pub age:  int,
+}
+
+fn _xs() -> *Vector<Pet> {
+    let v: *Vector<Pet> = Vector::new();
+    v.push(Pet { name: "rex", age: 4 });
+    v.push(Pet { name: "tom", age: 7 });
+    return v;
+}
+
+fn test_round_trip() -> int {
+    let xs: *Vector<Pet> = _xs();
+    let s: string = (xs).to_json().emit();
+    assert_str_eq!(s, "[{\"name\":\"rex\",\"age\":4},{\"name\":\"tom\",\"age\":7}]");
+
+    let r: !Vector<Pet> = Vector::from_json(JsonValue::parse(s));
+    assert!(r.ok);
+    let back: Vector<Pet> = r.val;
+    assert_eq!(back.len(), 2);
+    assert_str_eq!(back.get(0).name, "rex");
+    assert_eq!(back.get(1).age, 7);
+    return 0;
+}
+
+fn test_empty_array_round_trip() -> int {
+    let v: *Vector<Pet> = Vector::new();
+    let s: string = (v).to_json().emit();
+    assert_str_eq!(s, "[]");
+
+    let r: !Vector<Pet> = Vector::from_json(JsonValue::parse(s));
+    assert!(r.ok);
+    assert_eq!(r.val.len(), 0);
+    return 0;
+}
+
+fn test_non_array_input_errors() -> int {
+    let r: !Vector<Pet> = Vector::from_json(JsonValue::parse("{\"name\":\"rex\",\"age\":4}"));
+    assert_not!(r.ok);
+    return 0;
+}
+
+fn test_bad_element_fails_whole_parse() -> int {
+    let payload: string = "[{\"name\":\"rex\",\"age\":4}, {\"name\":\"tom\"}]";
+    let r: !Vector<Pet> = Vector::from_json(JsonValue::parse(payload));
+    assert_not!(r.ok);
+    return 0;
+}
+
+fn test_null_input_errors() -> int {
+    let r: !Vector<Pet> = Vector::from_json(null);
+    assert_not!(r.ok);
+    return 0;
+}
