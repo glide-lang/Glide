@@ -4714,6 +4714,9 @@ Expr*   arm_value_expr (MatchArm*   a);
 Type*   arm_value_type (CG*   g, MatchArm*   a);
 void   emit_match_arm_value (CG*   g, MatchArm*   a);
 void   emit_arm_typeof_probe (CG*   g, Vector__MatchArm*   arms);
+bool   _is_dyn_ptr (Type*   t);
+void   _emit_null_for (Type*   t);
+Type*   _field_ty_in_struct (CG*   g, const char*   struct_name, const char*   field_name);
 void   emit_expr (CG*   g, Expr*   e);
 void   emit_asm_stmt (CG*   g, Stmt*   s, int   depth);
 void   emit_stmt (CG*   g, Stmt*   s, int   depth);
@@ -17247,6 +17250,46 @@ void   emit_arm_typeof_probe (CG*   g, Vector__MatchArm*   arms) {
     printf("%s", "); })");
 }
 
+bool   _is_dyn_ptr (Type*   t) {
+    if ((t  ==  NULL)) {
+        return false;
+    }
+    if (((t-> kind )  !=  TY_POINTER)) {
+        return false;
+    }
+    if (((t-> inner )  ==  NULL)) {
+        return false;
+    }
+    return (((t-> inner )-> kind )  ==  TY_DYN);
+}
+
+void   _emit_null_for (Type*   t) {
+    if (((bool(*)(Type*))_is_dyn_ptr)(t)) {
+        printf("%s %s %s", "((", ((const char*(*)(Type*))type_to_c)(t), "){0})");
+        return;
+    }
+    printf("%s", "NULL");
+}
+
+Type*   _field_ty_in_struct (CG*   g, const char*   struct_name, const char*   field_name) {
+    if ((((g-> structs )  ==  NULL)  ||  (!HashMap_contains__Stmt((g-> structs ), struct_name)))) {
+        return NULL;
+    }
+    Stmt   sd = HashMap_get__Stmt((g-> structs ), struct_name);
+    if (((sd. struct_fields )  ==  NULL)) {
+        return NULL;
+    }
+    for (int   i = 0; (i  <  Vector_len__Field((sd. struct_fields ))); i++) {
+        Field   f = Vector_get__Field((sd. struct_fields ), i);
+        if (__glide_string_eq((f. name ), field_name)) {
+            Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
+            ((*p)  =  (*(f. ty )));
+            return p;
+        }
+    }
+    return NULL;
+}
+
 void   emit_expr (CG*   g, Expr*   e) {
     if ((e  ==  NULL)) {
         printf("%s", "/* null */");
@@ -17447,6 +17490,26 @@ void   emit_expr (CG*   g, Expr*   e) {
             ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
             printf("%s", "))");
             return;
+        }
+        if ((((e-> op_code )  ==  OP_EQ)  ||  ((e-> op_code )  ==  OP_NE))) {
+            Type*   lt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> lhs ));
+            Type*   rt = ((Type*(*)(CG*, Expr*))infer_for_codegen)(g, (e-> rhs ));
+            bool   lhs_dyn = ((bool(*)(Type*))_is_dyn_ptr)(lt);
+            bool   rhs_dyn = ((bool(*)(Type*))_is_dyn_ptr)(rt);
+            bool   lhs_null = (((e-> lhs )  !=  NULL)  &&  (((e-> lhs )-> kind )  ==  EX_NULL));
+            bool   rhs_null = (((e-> rhs )  !=  NULL)  &&  (((e-> rhs )-> kind )  ==  EX_NULL));
+            if ((lhs_dyn  &&  rhs_null)) {
+                printf("%s", "((");
+                ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
+                printf("%s %s %s", ").vtable ", ((const char*(*)(int))op_to_c)((e-> op_code )), " NULL)");
+                return;
+            }
+            if ((rhs_dyn  &&  lhs_null)) {
+                printf("%s %s %s", "(NULL ", ((const char*(*)(int))op_to_c)((e-> op_code )), " (");
+                ((void(*)(CG*, Expr*))emit_expr)(g, (e-> rhs ));
+                printf("%s", ").vtable)");
+                return;
+            }
         }
         printf("%s", "(");
         ((void(*)(CG*, Expr*))emit_expr)(g, (e-> lhs ));
@@ -18064,8 +18127,16 @@ void   emit_expr (CG*   g, Expr*   e) {
                 if ((i  >  0)) {
                     printf("%s", ", ");
                 }
-                printf("%s %s %s", ".", ((const char*(*)(const char*))c_safe_ident)(Vector_get__string((e-> field_names ), i)), " = ");
+                const char*   fname = Vector_get__string((e-> field_names ), i);
+                printf("%s %s %s", ".", ((const char*(*)(const char*))c_safe_ident)(fname), " = ");
                 Expr   v = Vector_get__Expr((e-> args ), i);
+                if (((v. kind )  ==  EX_NULL)) {
+                    Type*   fty = ((Type*(*)(CG*, const char*, const char*))_field_ty_in_struct)(g, (e-> str_val ), fname);
+                    if (((bool(*)(Type*))_is_dyn_ptr)(fty)) {
+                        ((void(*)(Type*))_emit_null_for)(fty);
+                        continue;
+                    }
+                }
                 ((void(*)(CG*, Expr*))emit_expr)(g, (&v));
             }
         }
@@ -18262,7 +18333,11 @@ void   emit_stmt (CG*   g, Stmt*   s, int   depth) {
         } else {
             if (((s-> let_value )  !=  NULL)) {
                 printf("%s", " = ");
-                ((void(*)(CG*, Expr*))emit_expr)(g, (s-> let_value ));
+                if (((((s-> let_value )-> kind )  ==  EX_NULL)  &&  ((bool(*)(Type*))_is_dyn_ptr)((s-> let_ty )))) {
+                    ((void(*)(Type*))_emit_null_for)((s-> let_ty ));
+                } else {
+                    ((void(*)(CG*, Expr*))emit_expr)(g, (s-> let_value ));
+                }
             }
             printf("%s\n", ";");
         }
@@ -19650,6 +19725,7 @@ void   emit_program (Vector__Stmt*   program) {
                 continue;
             }
             if ((((ts. kind )  ==  ST_STRUCT)  &&  (((ts. type_params )  ==  NULL)  ||  (Vector_len__string((ts. type_params ))  ==  0)))) {
+                ((void(*)(CG*, Stmt*))_forward_decl_field_monos)(g, (&ts));
                 printf("%s\n", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("typedef struct ", (ts. name )), " "), (ts. name )), ";"));
                 ((void(*)(Stmt*))emit_struct)((&ts));
                 HashMap_insert__bool((g-> emitted_named ), tn, true);
