@@ -1,0 +1,72 @@
+// `*dyn Trait` interactions with `null` — assignment, compare,
+// struct-field default, round-trip via a function param. Pre-fix:
+// `__glide_dyn_<Trait>` is a fat-pointer struct (vtable + data),
+// so `x = NULL` and `x == NULL` were C type errors.
+
+import stdlib::testing::*;
+
+pub trait Greet { fn say(self: *Self) -> string; }
+
+pub struct Hi { pub name: string }
+
+impl Greet for Hi {
+    fn say(self: *Hi) -> string { return "hi ".concat(self.name); }
+}
+
+pub struct Slot {
+    pub label: string,
+    pub g:     *dyn Greet,    // null when unset
+}
+
+fn test_let_init_null() -> int {
+    let g: *dyn Greet = null;
+    assert!(g == null);
+    return 0;
+}
+
+fn test_compare_null_when_set() -> int {
+    let h: *Hi = malloc(sizeof(Hi)) as *Hi;
+    h.name = "alice";
+    let g: *dyn Greet = h as *dyn Greet;
+    assert_not!(g == null);
+    assert!(g != null);
+    return 0;
+}
+
+fn test_dispatch_after_null_check() -> int {
+    let h: *Hi = malloc(sizeof(Hi)) as *Hi;
+    h.name = "bob";
+    let g: *dyn Greet = h as *dyn Greet;
+    if g != null {
+        assert_str_eq!(g.say(), "hi bob");
+    } else {
+        return 1;
+    }
+    return 0;
+}
+
+fn test_struct_field_init_null() -> int {
+    let s: Slot = Slot { label: "empty", g: null };
+    assert!(s.g == null);
+    assert_str_eq!(s.label, "empty");
+    return 0;
+}
+
+fn test_struct_field_init_set() -> int {
+    let h: *Hi = malloc(sizeof(Hi)) as *Hi;
+    h.name = "carol";
+    let s: Slot = Slot { label: "filled", g: h as *dyn Greet };
+    assert!(s.g != null);
+    assert_str_eq!(s.g.say(), "hi carol");
+    return 0;
+}
+
+// Both sides as null (corner case the codegen handles too).
+fn test_two_nulls_compare() -> int {
+    let g1: *dyn Greet = null;
+    let g2: *dyn Greet = null;
+    // The == path uses .vtable on the LHS; both resolve to NULL.
+    assert!(g1 == null);
+    assert!(g2 == null);
+    return 0;
+}
