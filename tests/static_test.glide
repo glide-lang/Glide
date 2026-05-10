@@ -1,0 +1,82 @@
+import stdlib::testing::*;
+import stdlib::fs::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::static::*;
+
+extern fn __glide_static_test_mkdir(path: string);
+extern fn __glide_static_test_root() -> string;
+
+c_raw! {
+    #ifdef _WIN32
+    #include <direct.h>
+    static void __glide_static_test_mkdir(const char* path) { _mkdir(path); }
+    #else
+    #include <sys/stat.h>
+    static void __glide_static_test_mkdir(const char* path) { mkdir(path, 0777); }
+    #endif
+
+    static const char* __glide_static_test_root(void) {
+        const char* base = getenv("TMPDIR");
+        if (!base || !base[0]) base = getenv("TEMP");
+        if (!base || !base[0]) base = "/tmp";
+        size_t n = strlen(base);
+        const char* leaf = "glide_static_test";
+        char sep = '/';
+        if (n > 0 && (base[n - 1] == '/' || base[n - 1] == '\\')) sep = 0;
+        char* out = (char*)malloc(n + strlen(leaf) + 3);
+        if (sep) snprintf(out, n + strlen(leaf) + 3, "%s/%s", base, leaf);
+        else snprintf(out, n + strlen(leaf) + 3, "%s%s", base, leaf);
+        return out;
+    }
+}
+
+fn _static_req(path: string) -> HttpRequest {
+    return HttpRequest {
+        method:        "GET",
+        path:          path,
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          "",
+        params:        null,
+        queries:       null,
+    };
+}
+
+fn _static_router() -> *Router {
+    let root: string = __glide_static_test_root();
+    __glide_static_test_mkdir(root);
+    fs_write(root.concat("/app.css"), "body{color:red;}");
+    let r: *Router = Router::new();
+    serve_dir(r, StaticOpts { root: root, url_prefix: "/static" });
+    return r;
+}
+
+fn test_serves_known_file_with_mime() -> int {
+    let r: *Router = _static_router();
+    defer r.free();
+    let req: HttpRequest = _static_req("/static/app.css");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "body{color:red;}");
+    assert_str_eq!(resp.header("Content-Type"), "text/css; charset=utf-8");
+    return 0;
+}
+
+fn test_missing_path_returns_404() -> int {
+    let r: *Router = _static_router();
+    defer r.free();
+    let req: HttpRequest = _static_req("/static/missing.txt");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 404);
+    return 0;
+}
+
+fn test_dotdot_path_returns_403() -> int {
+    let r: *Router = _static_router();
+    defer r.free();
+    let req: HttpRequest = _static_req("/static/bad..txt");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 403);
+    return 0;
+}

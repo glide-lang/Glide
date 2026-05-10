@@ -1,0 +1,52 @@
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::fs::*;
+
+pub struct StaticOpts {
+    pub root:       string,
+    pub url_prefix: string,
+}
+
+c_raw! {
+    static const char* __glide_static_root = "";
+}
+
+extern fn __glide_static_root_set(root: string);
+extern fn __glide_static_root_get() -> string;
+
+c_raw! {
+    void __glide_static_root_set(const char* root) { __glide_static_root = root; }
+    const char* __glide_static_root_get(void) { return __glide_static_root; }
+}
+
+fn _static_mime(path: string) -> string {
+    let ext: string = fs_extension(path);
+    if ext.eq("html") { return "text/html; charset=utf-8"; }
+    if ext.eq("css") { return "text/css; charset=utf-8"; }
+    if ext.eq("js") { return "application/javascript"; }
+    if ext.eq("json") { return "application/json"; }
+    if ext.eq("png") { return "image/png"; }
+    if ext.eq("jpg") { return "image/jpeg"; }
+    if ext.eq("jpeg") { return "image/jpeg"; }
+    if ext.eq("svg") { return "image/svg+xml"; }
+    if ext.eq("txt") { return "text/plain; charset=utf-8"; }
+    return "application/octet-stream";
+}
+
+fn _static_handler(req: *HttpRequest) -> HttpResponse {
+    let filepath: string = req.param("filepath");
+    if filepath.index_of("..") >= 0 {
+        return HttpResponse::with_status(403).text("forbidden");
+    }
+    let disk: string = __glide_static_root_get().concat("/").concat(filepath);
+    if !fs_exists(disk) {
+        return HttpResponse::with_status(404).text("not found");
+    }
+    let body: string = fs_read(disk);
+    return HttpResponse::ok().set("Content-Type", _static_mime(disk)).body(body);
+}
+
+pub fn serve_dir(r: *Router, opts: StaticOpts) {
+    __glide_static_root_set(opts.root);
+    r.get(opts.url_prefix.concat("/*filepath"), _static_handler);
+}
