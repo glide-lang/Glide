@@ -1,0 +1,112 @@
+import stdlib::testing::*;
+import stdlib::json::*;
+import stdlib::json::derive::*;
+
+// All-required-primitives struct.
+@derive(JsonBind)
+pub struct Pet {
+    pub name: string,
+    pub age:  int,
+    pub good: bool,
+}
+
+// Mixed required + optional.
+@derive(JsonBind)
+pub struct Profile {
+    pub user: string,
+    pub age:  ?int,
+    pub bio:  ?string,
+}
+
+// Float field.
+@derive(JsonBind)
+pub struct Reading {
+    pub label: string,
+    pub value: f64,
+}
+
+// ---- round-trip ------------------------------------------------------
+
+fn test_pet_to_from_json() -> int {
+    let p: Pet = Pet { name: "rex", age: 4, good: true };
+    let v: *JsonValue = p.to_json();
+    let s: string = v.emit();
+    assert_str_eq!(s, "{\"name\":\"rex\",\"age\":4,\"good\":true}");
+
+    let parsed: *JsonValue = JsonValue::parse(s);
+    let r: !Pet = Pet::from_json(parsed);
+    assert!(r.ok);
+    let p2: Pet = r.val;
+    assert_str_eq!(p2.name, "rex");
+    assert_eq!(p2.age, 4);
+    assert!(p2.good);
+    return 0;
+}
+
+fn test_reading_float_round_trip() -> int {
+    let r0: Reading = Reading { label: "temp", value: 21.5 };
+    let s: string = r0.to_json().emit();
+    let parsed: *JsonValue = JsonValue::parse(s);
+    let r: !Reading = Reading::from_json(parsed);
+    assert!(r.ok);
+    assert_str_eq!(r.val.label, "temp");
+    return 0;
+}
+
+// ---- error paths ----------------------------------------------------
+
+fn test_missing_required_field_errors() -> int {
+    let v: *JsonValue = JsonValue::parse("{\"name\":\"rex\"}");
+    let r: !Pet = Pet::from_json(v);
+    assert_not!(r.ok);
+    return 0;
+}
+
+fn test_wrong_type_errors() -> int {
+    let v: *JsonValue = JsonValue::parse("{\"name\":\"rex\",\"age\":\"four\",\"good\":true}");
+    let r: !Pet = Pet::from_json(v);
+    assert_not!(r.ok);
+    return 0;
+}
+
+// ---- optional fields -------------------------------------------------
+
+fn test_optional_present() -> int {
+    let v: *JsonValue = JsonValue::parse("{\"user\":\"alice\",\"age\":30,\"bio\":\"hi\"}");
+    let r: !Profile = Profile::from_json(v);
+    assert!(r.ok);
+    let p: Profile = r.val;
+    assert!(p.age.has);
+    assert_eq!(p.age.val, 30);
+    assert!(p.bio.has);
+    assert_str_eq!(p.bio.val, "hi");
+    return 0;
+}
+
+fn test_optional_absent() -> int {
+    let v: *JsonValue = JsonValue::parse("{\"user\":\"bob\"}");
+    let r: !Profile = Profile::from_json(v);
+    assert!(r.ok);
+    let p: Profile = r.val;
+    assert_not!(p.age.has);
+    assert_not!(p.bio.has);
+    return 0;
+}
+
+fn test_optional_emit_omits_absent_fields() -> int {
+    let i: ?int = none();
+    let b: ?string = none();
+    let p: Profile = Profile { user: "carol", age: i, bio: b };
+    let s: string = p.to_json().emit();
+    assert_str_eq!(s, "{\"user\":\"carol\"}");
+    return 0;
+}
+
+fn test_optional_emit_includes_present_fields() -> int {
+    let i: ?int = some(7);
+    let b: ?string = none();
+    let p: Profile = Profile { user: "dan", age: i, bio: b };
+    let s: string = p.to_json().emit();
+    assert_str_eq!(s, "{\"user\":\"dan\",\"age\":7}");
+    return 0;
+}
