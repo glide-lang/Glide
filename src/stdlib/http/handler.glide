@@ -55,6 +55,13 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
         let inner_name: string = _json_inner_name(pty);
         if !inner_name.eq("") {
             let no_ty: *Type = null;
+            // Full inner type — needed as a let-ty hint so the typer can
+            // back-infer T when `T = Vector<X>` etc. Without this hint,
+            // `Vector::from_json(...)` monomorphises to `Vector<T>` with
+            // a literal unresolved T and codegen emits `Vector__T`.
+            let inner_ty: *Type = _json_inner(pty);
+            let t_r_let_ty: *Type = ty_result(inner_ty);
+            let body_let_ty: *Type = pty;
 
             // let __body_r = req.body_json();
             let body_call: *Expr = expr_call(
@@ -66,23 +73,23 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
             // if !__body_r.ok { return HttpResponse::with_status(400).text(__body_r.err); }
             wrapper_body.push(*_bind_err_check(body_r_name, 400));
 
-            // let __t_r = T::from_json(__body_r.val);
+            // let __t_r: !T = T::from_json(__body_r.val);
             let from_json_args: *Vector<Expr> = Vector::new();
             from_json_args.push(*expr_member(expr_ident(body_r_name, 0, 0), "val"));
             let from_json_call: *Expr = expr_call(
                 expr_path(inner_name, "from_json", 0, 0), from_json_args);
             let t_r_name: string = pname.concat("__t_r");
-            wrapper_body.push(*stmt_let(t_r_name, no_ty, from_json_call, false, 0, 0));
+            wrapper_body.push(*stmt_let(t_r_name, t_r_let_ty, from_json_call, false, 0, 0));
 
             // if !__t_r.ok { return HttpResponse::with_status(422).text(__t_r.err); }
             wrapper_body.push(*_bind_err_check(t_r_name, 422));
 
-            // let body = Json::wrap(__t_r.val);
+            // let body: Json<T> = Json::wrap(__t_r.val);
             let wrap_args: *Vector<Expr> = Vector::new();
             wrap_args.push(*expr_member(expr_ident(t_r_name, 0, 0), "val"));
             let wrap_call: *Expr = expr_call(
                 expr_path("Json", "wrap", 0, 0), wrap_args);
-            wrapper_body.push(*stmt_let(pname, no_ty, wrap_call, false, 0, 0));
+            wrapper_body.push(*stmt_let(pname, body_let_ty, wrap_call, false, 0, 0));
 
             call_args.push(*expr_ident(pname, 0, 0));
             i = i + 1;
@@ -133,10 +140,10 @@ fn _is_request_ptr(t: *Type) -> bool {
     return t.inner.name.eq("HttpRequest");
 }
 
-// If `t` is `Json<T>`, return T's name. Otherwise "" (empty string).
-// Returning the name string sidesteps the interpreter's lack of
-// EX_SIZEOF / explicit `malloc(sizeof(Type))` support — the macro
-// only needs T's name to emit `T::from_json(...)` calls.
+// If `t` is `Json<T>`, return T's head name. Used to emit the path
+// `T::from_json(...)`. For `Json<Vector<Todo>>` this returns "Vector"
+// (head of the inner type) — the typer pairs it with the let-ty hint
+// to monomorphise correctly.
 fn _json_inner_name(t: *Type) -> string {
     if t == null { return ""; }
     if t.kind != TY_GENERIC { return ""; }
@@ -145,6 +152,26 @@ fn _json_inner_name(t: *Type) -> string {
     if t.args.len() == 0 { return ""; }
     let inner: Type = t.args.get(0);
     return inner.name;
+}
+
+// Full inner type behind `Json<T>` — `Json<Vector<Todo>>` returns the
+// `Vector<Todo>` Type (with its own type args intact). Lets the macro
+// pin let-types so generic-of-generic monomorphisation works.
+//
+// Compiled-path body below mallocs a heap copy. Interpreter
+// short-circuits via the `_json_inner` intrinsic in interp.glide,
+// which returns the original *Type that already lives in the AST
+// arena.
+fn _json_inner(t: *Type) -> *Type {
+    if t == null { return null; }
+    if t.kind != TY_GENERIC { return null; }
+    if !t.name.eq("Json") { return null; }
+    if t.args == null { return null; }
+    if t.args.len() == 0 { return null; }
+    let inner: Type = t.args.get(0);
+    let p: *Type = malloc(sizeof(Type)) as *Type;
+    *p = inner;
+    return p;
 }
 
 // Build `if !<name>.ok { return HttpResponse::with_status(<status>).text(<name>.err); }`

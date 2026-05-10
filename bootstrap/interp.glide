@@ -970,6 +970,20 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         let vals: *Vector<Expr> = _vec_to_expr_vec(it, vals_iv);
         return iv_ptr(expr_struct_lit(type_name, names, vals, 0, 0) as *void, "Expr");
     }
+    if name.eq("_json_inner") {
+        // Short-circuit handler.glide's _json_inner so the interp can
+        // return the underlying *Type directly without going through
+        // the compiled malloc-and-copy path. Used by @handler to set
+        // let-tys for `Json<C<T>>`-style nested-generic params.
+        let t: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
+        if t == null { return iv_ptr(null as *void, "Type"); }
+        if t.kind != TY_GENERIC { return iv_ptr(null as *void, "Type"); }
+        if t.args == null || t.args.len() == 0 { return iv_ptr(null as *void, "Type"); }
+        let inner: Type = t.args.get(0);
+        let p: *Type = malloc(sizeof(Type)) as *Type;
+        *p = inner;
+        return iv_ptr(p as *void, "Type");
+    }
 
     // String ops as free fns (the `s.method()` form goes through
     // method_call below, but a few are also exposed positionally).
