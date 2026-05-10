@@ -1,0 +1,112 @@
+// `*dyn Trait` dispatch with method signatures returning generic
+// types (`?T`, `!T`). Pre-fix, the codegen emitted the vtable struct
+// + thunk forward decls BEFORE `__glide_option_<T>_t` /
+// `__glide_result_<T>_t` typedefs, so the C compiler treated those
+// typenames as implicit-int and mis-typed every method.
+//
+// Also exercises both self-shapes:
+//   self: *Self  (pointer)  -> thunk casts `(Type*)self_p`
+//   self: Self   (by value) -> thunk derefs `*(Type*)self_p`
+
+import stdlib::testing::*;
+
+// ---- ?T return + self: *Self ----------------------------------------
+
+pub trait Producer {
+    fn next(self: *Self) -> ?string;
+}
+
+pub struct Counter {
+    pub idx: int,
+    pub max: int,
+}
+
+impl Producer for Counter {
+    fn next(self: *Counter) -> ?string {
+        if self.idx >= self.max { return none(); }
+        self.idx = self.idx + 1;
+        return some("v=".concat(self.idx.to_string()));
+    }
+}
+
+fn _take_dyn(p: *dyn Producer) -> ?string {
+    return p.next();
+}
+
+fn test_dyn_with_option_return_pointer_self() -> int {
+    let c: *Counter = malloc(sizeof(Counter)) as *Counter;
+    c.idx = 0; c.max = 3;
+    let dp: *dyn Producer = c as *dyn Producer;
+    let r1: ?string = _take_dyn(dp);
+    assert!(r1.has); assert_str_eq!(r1.val, "v=1");
+    let r2: ?string = _take_dyn(dp);
+    assert!(r2.has); assert_str_eq!(r2.val, "v=2");
+    let r3: ?string = _take_dyn(dp);
+    assert!(r3.has); assert_str_eq!(r3.val, "v=3");
+    let r4: ?string = _take_dyn(dp);
+    assert_not!(r4.has);
+    return 0;
+}
+
+// ---- !T return + self: *Self ----------------------------------------
+
+pub trait Loader {
+    fn load(self: *Self, key: string) -> !int;
+}
+
+pub struct StaticStore {
+    pub k: string,
+    pub v: int,
+}
+
+impl Loader for StaticStore {
+    fn load(self: *StaticStore, key: string) -> !int {
+        if !self.k.eq(key) { return err("missing key"); }
+        return ok(self.v);
+    }
+}
+
+fn _try_load(l: *dyn Loader, k: string) -> !int {
+    return l.load(k);
+}
+
+fn test_dyn_with_result_return() -> int {
+    let s: *StaticStore = malloc(sizeof(StaticStore)) as *StaticStore;
+    s.k = "answer";
+    s.v = 42;
+    let dl: *dyn Loader = s as *dyn Loader;
+    let r1: !int = _try_load(dl, "answer");
+    assert!(r1.ok); assert_eq!(r1.val, 42);
+    let r2: !int = _try_load(dl, "nope");
+    assert_not!(r2.ok);
+    return 0;
+}
+
+// ---- multiple impls of the same trait + dynamic dispatch ------------
+
+pub struct Doubler { pub last: int }
+
+impl Producer for Doubler {
+    fn next(self: *Doubler) -> ?string {
+        self.last = self.last * 2;
+        if self.last > 16 { return none(); }
+        return some("d=".concat(self.last.to_string()));
+    }
+}
+
+fn test_dyn_dispatch_picks_impl() -> int {
+    let c: *Counter = malloc(sizeof(Counter)) as *Counter;
+    c.idx = 0; c.max = 1;
+    let d: *Doubler = malloc(sizeof(Doubler)) as *Doubler;
+    d.last = 1;
+
+    let p1: *dyn Producer = c as *dyn Producer;
+    let p2: *dyn Producer = d as *dyn Producer;
+
+    let r1: ?string = _take_dyn(p1);
+    assert!(r1.has); assert_str_eq!(r1.val, "v=1");
+
+    let r2: ?string = _take_dyn(p2);
+    assert!(r2.has); assert_str_eq!(r2.val, "d=2");
+    return 0;
+}
