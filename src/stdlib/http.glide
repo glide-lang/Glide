@@ -230,9 +230,9 @@ impl HttpResponse {
         };
     }
 
-    /// Append a header line. Replacement of an existing same-name
-    /// header is the caller's job; the v1 just appends to the raw
-    /// block in insertion order, which is what the wire format wants.
+    /// Set a header, REPLACING any existing line with the same name
+    /// (case-insensitive). For headers that legitimately repeat per
+    /// value (`Set-Cookie`, `Vary`, …) use `add` instead.
     ///
     /// CR/LF in `name` or `value` would let an attacker inject
     /// arbitrary header lines (CRLF injection) — those bytes are
@@ -241,10 +241,31 @@ impl HttpResponse {
     /// ```glide
     /// HttpResponse::ok()
     ///     .set("Content-Type", "application/json")
-    ///     .set("Cache-Control", "no-store")
-    ///     .body("{}");
+    ///     .set("Content-Type", "text/plain")     // replaces the JSON one
+    ///     .body("hi");
     /// ```
     pub fn set(self: HttpResponse, name: string, value: string) -> HttpResponse {
+        let safe_name: string = _strip_crlf(name);
+        let safe_value: string = _strip_crlf(value);
+        let stripped: string = _drop_header(self.headers_block, safe_name);
+        return HttpResponse {
+            status: self.status,
+            headers_block: stripped.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
+            body: self.body,
+        };
+    }
+
+    /// Append a header line — preserves any existing same-name line.
+    /// Use for headers that legitimately repeat (`Set-Cookie`, `Vary`,
+    /// `Link`); use `set` for everything else.
+    ///
+    /// ```glide
+    /// HttpResponse::ok()
+    ///     .add("Set-Cookie", "session=abc")
+    ///     .add("Set-Cookie", "csrf=xyz")
+    ///     .body("hi");
+    /// ```
+    pub fn add(self: HttpResponse, name: string, value: string) -> HttpResponse {
         let safe_name: string = _strip_crlf(name);
         let safe_value: string = _strip_crlf(value);
         return HttpResponse {
@@ -319,14 +340,18 @@ impl HttpResponse {
         return HttpResponse::with_status(302).set("Location", url);
     }
 
-    /// Append a `Set-Cookie` header with `name=value`. Multiple cookies
-    /// are legal; each call appends another line.
+    /// Append a `Set-Cookie` header with `name=value`. Routes through
+    /// `add` (not `set`) so multiple cookies on the same response
+    /// don't replace each other.
     ///
     /// ```glide
-    /// HttpResponse::ok().cookie("session", "abc123").body("ok");
+    /// HttpResponse::ok()
+    ///     .cookie("session", "abc123")
+    ///     .cookie("csrf",    "xyz")
+    ///     .body("ok");
     /// ```
     pub fn cookie(self: HttpResponse, name: string, value: string) -> HttpResponse {
-        return self.set("Set-Cookie", name.concat("=").concat(value));
+        return self.add("Set-Cookie", name.concat("=").concat(value));
     }
 
     /// Look up a header by name, case-insensitive. Returns `""` when
@@ -409,6 +434,33 @@ fn _parse_query(path: string) -> *HashMap<string> {
         m.insert(kk, vv);
     }
     return m;
+}
+
+// Drop every header line whose name (case-insensitive) matches
+// `name` from the raw block. Returns the block with those lines
+// removed and the rest preserved verbatim. Used by `set` to make
+// it replace rather than append.
+fn _drop_header(block: string, name: string) -> string {
+    if block.len() == 0 { return block; }
+    let want: string = name.to_lower();
+    let lines: *Vector<string> = block.split("\r\n");
+    let mut out: string = "";
+    let mut i: int = 0;
+    while i < lines.len() {
+        let line: string = lines.get(i);
+        i = i + 1;
+        if line.len() == 0 { continue; }   // empty trailing element from split
+        let colon: int = _find(line, ":", 0);
+        if colon < 0 {
+            // Not a real header line — preserve as-is.
+            out = out.concat(line).concat("\r\n");
+            continue;
+        }
+        let n: string = line.substring(0, colon).trim().to_lower();
+        if n.eq(want) { continue; }   // drop the match
+        out = out.concat(line).concat("\r\n");
+    }
+    return out;
 }
 
 // Strip CR (0x0D) and LF (0x0A) from a string. Used to sanitise
