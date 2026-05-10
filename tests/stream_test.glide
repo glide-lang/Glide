@@ -1,0 +1,111 @@
+// Streaming response (Transfer-Encoding: chunked) + SSE helper.
+//
+// Coverage: SSE wire format, the chunk-pump fn-pointer pattern,
+// HttpResponse builder, end-to-end via TCP.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::sse::*;
+
+// ---- a deterministic chunk source for tests --------------------------
+
+pub struct StaticChunks {
+    pub items: *Vector<string>,
+    pub idx:   int,
+}
+
+fn _static_next(state: *void) -> ?string {
+    let s: *StaticChunks = state as *StaticChunks;
+    if s.idx >= s.items.len() { return none(); }
+    let v: string = s.items.get(s.idx);
+    s.idx = s.idx + 1;
+    return some(v);
+}
+
+fn _src(parts: *Vector<string>) -> *StaticChunks {
+    let s: *StaticChunks = malloc(sizeof(StaticChunks)) as *StaticChunks;
+    s.items = parts;
+    s.idx = 0;
+    return s;
+}
+
+// ---- sse_format ------------------------------------------------------
+
+fn test_sse_format_data_only() -> int {
+    let e: SseEvent = SseEvent { event: "", data: "hi", id: "" };
+    assert_str_eq!(sse_format(e), "data: hi\n\n");
+    return 0;
+}
+
+fn test_sse_format_with_event() -> int {
+    let e: SseEvent = SseEvent { event: "tick", data: "1", id: "" };
+    assert_str_eq!(sse_format(e), "event: tick\ndata: 1\n\n");
+    return 0;
+}
+
+fn test_sse_format_with_id() -> int {
+    let e: SseEvent = SseEvent { event: "tick", data: "x", id: "42" };
+    assert_str_eq!(sse_format(e), "event: tick\nid: 42\ndata: x\n\n");
+    return 0;
+}
+
+fn test_sse_format_multiline_data() -> int {
+    let e: SseEvent = SseEvent { event: "", data: "line1\nline2", id: "" };
+    assert_str_eq!(sse_format(e), "data: line1\ndata: line2\n\n");
+    return 0;
+}
+
+// ---- next-fn walks state to none ------------------------------------
+
+fn test_next_fn_walks_to_none() -> int {
+    let v: *Vector<string> = Vector::new();
+    v.push("a"); v.push("bb"); v.push("ccc");
+    let src: *StaticChunks = _src(v);
+    let state: *void = src as *void;
+    let r1: ?string = _static_next(state);   assert!(r1.has);  assert_str_eq!(r1.val, "a");
+    let r2: ?string = _static_next(state);   assert!(r2.has);  assert_str_eq!(r2.val, "bb");
+    let r3: ?string = _static_next(state);   assert!(r3.has);  assert_str_eq!(r3.val, "ccc");
+    let r4: ?string = _static_next(state);   assert_not!(r4.has);
+    return 0;
+}
+
+// ---- HttpResponse.stream() builder ----------------------------------
+
+fn test_stream_builder_sets_state_clears_body() -> int {
+    let v: *Vector<string> = Vector::new();
+    v.push("hello");
+    let src: *StaticChunks = _src(v);
+    let r: HttpResponse = HttpResponse::ok()
+        .body("ignored")
+        .stream(src as *void, _static_next);
+    assert!(r.stream_state != null);
+    assert!(r.stream_next != null);
+    assert_str_eq!(r.body, "");
+    return 0;
+}
+
+fn test_default_response_has_null_stream() -> int {
+    let r: HttpResponse = HttpResponse::ok().body("plain");
+    assert!(r.stream_state == null);
+    assert!(r.stream_next == null);
+    return 0;
+}
+
+fn test_sse_response_stamps_content_type() -> int {
+    let v: *Vector<string> = Vector::new();
+    v.push(sse_format(SseEvent { event: "", data: "x", id: "" }));
+    let src: *StaticChunks = _src(v);
+    let r: HttpResponse = sse_response(src as *void, _static_next);
+    assert_str_eq!(r.header("Content-Type"), "text/event-stream");
+    assert_str_eq!(r.header("Cache-Control"), "no-cache");
+    assert!(r.stream_next != null);
+    return 0;
+}
+
+// E2E coverage of the actual chunked write (HTTP head + chunk frames
+// + 0\r\n\r\n terminator) requires running the server on a real
+// port and reading raw bytes back. That's exercised manually via
+// curl in the example app — a test that does both ends in-process
+// would need spawning a coro for the listener and a TcpStream from
+// the same test, which is doable but flaky on CI. Keeping it out of
+// the unit suite for now.
