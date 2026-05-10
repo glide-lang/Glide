@@ -3239,6 +3239,7 @@ typedef struct  Field   Field ;
 typedef struct  EnumVariant   EnumVariant ;
 typedef struct  MatchArm   MatchArm ;
 typedef struct  MacroParam   MacroParam ;
+typedef struct  Attr   Attr ;
 typedef struct  Stmt   Stmt ;
 typedef struct  StructLitField   StructLitField ;
 typedef struct  ParseDiag   ParseDiag ;
@@ -3337,6 +3338,7 @@ typedef struct  Vector__MatchArm   Vector__MatchArm ;
 typedef struct  Vector__Field   Vector__Field ;
 typedef struct  Vector__EnumVariant   Vector__EnumVariant ;
 typedef struct  Vector__MacroParam   Vector__MacroParam ;
+typedef struct  Vector__Attr   Vector__Attr ;
 typedef struct  Vector__SelectArm   Vector__SelectArm ;
 typedef struct  Vector__ParseDiag   Vector__ParseDiag ;
 typedef struct  HashMap__Stmt   HashMap__Stmt ;
@@ -3368,6 +3370,7 @@ typedef struct  Field   Field ;
 typedef struct  EnumVariant   EnumVariant ;
 typedef struct  MatchArm   MatchArm ;
 typedef struct  MacroParam   MacroParam ;
+typedef struct  Attr   Attr ;
 typedef struct  Stmt   Stmt ;
 typedef struct  StructLitField   StructLitField ;
 typedef struct  ParseDiag   ParseDiag ;
@@ -3477,6 +3480,13 @@ struct  Vector__EnumVariant  {
 
 struct  Vector__MacroParam  {
      MacroParam*   data;
+     int   len;
+     int   cap;
+     bool   is_arena;
+};
+
+struct  Vector__Attr  {
+     Attr*   data;
      int   len;
      int   cap;
      bool   is_arena;
@@ -3732,6 +3742,13 @@ typedef struct  MacroParam  {
      const char*   kind;
 }  MacroParam ;
 
+typedef struct  Attr  {
+     const char*   name;
+     Vector__Expr*   args;
+     int   line;
+     int   column;
+}  Attr ;
+
 typedef struct  Stmt  {
      int   kind;
      int   line;
@@ -3777,6 +3794,7 @@ typedef struct  Stmt  {
      bool   is_spawn_thread;
      bool   is_naked;
      const char*   cfg_target;
+     Vector__Attr*   attrs;
      Vector__string*   asm_strings;
      Vector__string*   asm_out_constraints;
      Vector__Expr*   asm_out_exprs;
@@ -5161,6 +5179,10 @@ int main(int __glide_main_argc, char** __glide_main_argv);
 
 
 
+
+
+
+
 Vector__string*   Vector_new__string (void);
 void   Vector_push__string (Vector__string*   self, const char*   x);
 int   Vector_len__string (Vector__string*   self);
@@ -5173,6 +5195,11 @@ void   Vector_free__ParseDiag (Vector__ParseDiag*   self);
 void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x);
 Vector__Stmt*   Vector_new__Stmt (void);
 void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x);
+Vector__Attr*   Vector_new__Attr (void);
+void   Vector_push__Expr (Vector__Expr*   self, Expr   x);
+int   Vector_len__Expr (Vector__Expr*   self);
+Expr   Vector_get__Expr (Vector__Expr*   self, int   i);
+void   Vector_push__Attr (Vector__Attr*   self, Attr   x);
 Vector__MacroParam*   Vector_new__MacroParam (void);
 void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x);
 Vector__Param*   Vector_new__Param (void);
@@ -5189,13 +5216,10 @@ int   Vector_len__Param (Vector__Param*   self);
 Param   Vector_get__Param (Vector__Param*   self, int   i);
 void   Vector_set__Param (Vector__Param*   self, int   i, Param   x);
 void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x);
-void   Vector_push__Expr (Vector__Expr*   self, Expr   x);
 Vector__MatchArm*   Vector_new__MatchArm (void);
 void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x);
 Vector__SelectArm*   Vector_new__SelectArm (void);
 void   Vector_push__SelectArm (Vector__SelectArm*   self, SelectArm   x);
-int   Vector_len__Expr (Vector__Expr*   self);
-Expr   Vector_get__Expr (Vector__Expr*   self, int   i);
 Stmt   Vector_pop__Stmt (Vector__Stmt*   self);
 int   Vector_len__ParseDiag (Vector__ParseDiag*   self);
 ParseDiag   Vector_get__ParseDiag (Vector__ParseDiag*   self, int   i);
@@ -7633,22 +7657,41 @@ Vector__Stmt*   parse_program (Parser*   p) {
 
 Stmt*   parse_top_stmt (Parser*   p) {
     const char*   cfg = "";
-    if (Parser_at_op(p, "@")) {
+    Vector__Attr*   attrs_collected = ((Vector__Attr*(*)(void))Vector_new__Attr)();
+    while (Parser_at_op(p, "@")) {
+        int   at_line = ((p-> current ). line );
+        int   at_col = ((p-> current ). column );
         Parser_advance(p);
-        const char*   attr = Parser_expect_ident(p);
-        if ((!__glide_string_eq(attr, "cfg"))) {
-            Parser_err(p, "only `@cfg(\"...\")` attributes are supported");
+        const char*   attr_name = Parser_expect_ident(p);
+        Vector__Expr*   arg_exprs = ((Vector__Expr*(*)(void))Vector_new__Expr)();
+        if (Parser_eat_op(p, "(")) {
+            while (((!Parser_at_op(p, ")"))  &&  (!Parser_at_eof(p)))) {
+                Expr*   e = ((Expr*(*)(Parser*, int))parse_expr)(p, 0);
+                if ((e  !=  NULL)) {
+                    Vector_push__Expr(arg_exprs, (*e));
+                }
+                if ((!Parser_eat_op(p, ","))) {
+                    break;
+                }
+            }
+            Parser_expect_op(p, ")");
         }
-        Parser_expect_op(p, "(");
-        if ((((p-> current ). kind )  !=  TOK_STRING)) {
-            Parser_err(p, "expected `\"windows\"` or `\"posix\"`");
-        }
-        const char*   lex = ((p-> current ). lexeme );
-        (cfg  =  __glide_string_substring(lex, 1, (__glide_string_len(lex)  -  1)));
-        Parser_advance(p);
-        Parser_expect_op(p, ")");
-        if (((!__glide_string_eq(cfg, "windows"))  &&  (!__glide_string_eq(cfg, "posix")))) {
-            Parser_err(p, "unknown cfg target — expected `windows` or `posix`");
+        if (__glide_string_eq(attr_name, "cfg")) {
+            if ((Vector_len__Expr(arg_exprs)  ==  1)) {
+                Expr   a0 = Vector_get__Expr(arg_exprs, 0);
+                if (((a0. kind )  ==  EX_STRING)) {
+                    (cfg  =  (a0. str_val ));
+                } else {
+                    Parser_err(p, "@cfg expects a string literal: \"windows\" or \"posix\"");
+                }
+            } else {
+                Parser_err(p, "@cfg expects exactly one argument");
+            }
+            if (((!__glide_string_eq(cfg, "windows"))  &&  (!__glide_string_eq(cfg, "posix")))) {
+                Parser_err(p, "unknown cfg target — expected `windows` or `posix`");
+            }
+        } else {
+            Vector_push__Attr(attrs_collected, (( Attr ){. name  = attr_name, . args  = arg_exprs, . line  = at_line, . column  = at_col}));
         }
     }
     bool   is_pub = false;
@@ -7662,6 +7705,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
                 ((s-> is_pub )  =  is_pub);
                 ((s-> fn_body )  =  NULL);
                 ((s-> cfg_target )  =  cfg);
+                ((s-> attrs )  =  attrs_collected);
             }
             return s;
         }
@@ -7681,6 +7725,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
             ((s-> is_pub )  =  is_pub);
             ((s-> is_naked )  =  is_naked_fn);
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -7692,6 +7737,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -7700,6 +7746,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -7708,6 +7755,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -7716,6 +7764,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -7723,6 +7772,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         Stmt*   s = ((Stmt*(*)(Parser*))parse_impl)(p);
         if ((s  !=  NULL)) {
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -7731,6 +7781,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -7744,6 +7795,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         Parser_advance(p);
         Stmt*   s = ((Stmt*(*)(const char*, int, int))stmt_craw)(body, line, col);
         ((s-> cfg_target )  =  cfg);
+        ((s-> attrs )  =  attrs_collected);
         return s;
     }
     if (Parser_at_kw(p, "macro")) {
@@ -7751,6 +7803,7 @@ Stmt*   parse_top_stmt (Parser*   p) {
         if ((s  !=  NULL)) {
             ((s-> is_pub )  =  is_pub);
             ((s-> cfg_target )  =  cfg);
+            ((s-> attrs )  =  attrs_collected);
         }
         return s;
     }
@@ -26845,14 +26898,6 @@ Stmt   Vector_pop__Stmt (Vector__Stmt*   self) {
     return (self-> data )[(self-> len )];
 }
 
-Expr   Vector_get__Expr (Vector__Expr*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Expr (Vector__Expr*   self) {
-    return (self-> len );
-}
-
 void   Vector_push__SelectArm (Vector__SelectArm*   self, SelectArm   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
@@ -26931,31 +26976,6 @@ Vector__MatchArm*   Vector_new__MatchArm (void) {
     ((v-> cap )  =  0);
     ((v-> is_arena )  =  arena);
     return v;
-}
-
-void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        Expr*   new_data;
-        if ((self-> is_arena )) {
-            (new_data  =  (( Expr* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Expr )))));
-        } else {
-            (new_data  =  (( Expr* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Expr )))));
-        }
-        for (int   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            ((void(*)(void*))free)((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
 }
 
 void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x) {
@@ -27174,6 +27194,79 @@ Vector__MacroParam*   Vector_new__MacroParam (void) {
         (v  =  (( Vector__MacroParam* )((void*(*)(int))__glide_palloc)(sizeof( Vector__MacroParam ))));
     } else {
         (v  =  (( Vector__MacroParam* )((void*(*)(size_t))malloc)(sizeof( Vector__MacroParam ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+void   Vector_push__Attr (Vector__Attr*   self, Attr   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        Attr*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( Attr* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Attr )))));
+        } else {
+            (new_data  =  (( Attr* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Attr )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            ((void(*)(void*))free)((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Expr   Vector_get__Expr (Vector__Expr*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Expr (Vector__Expr*   self) {
+    return (self-> len );
+}
+
+void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        Expr*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( Expr* )((void*(*)(int))__glide_palloc)((new_cap  *  sizeof( Expr )))));
+        } else {
+            (new_data  =  (( Expr* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( Expr )))));
+        }
+        for (int   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            ((void(*)(void*))free)((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__Attr*   Vector_new__Attr (void) {
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
+    Vector__Attr*   v;
+    if (arena) {
+        (v  =  (( Vector__Attr* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Attr ))));
+    } else {
+        (v  =  (( Vector__Attr* )((void*(*)(size_t))malloc)(sizeof( Vector__Attr ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
