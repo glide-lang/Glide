@@ -8,128 +8,128 @@ fn _near(a: f64, b: f64) -> bool {
 }
 
 fn test_emit_primitives() -> int {
-    assert_str_eq!(json_emit(json_null()), "null");
-    assert_str_eq!(json_emit(json_bool(true)), "true");
-    assert_str_eq!(json_emit(json_bool(false)), "false");
-    assert_str_eq!(json_emit(json_int(42)), "42");
-    assert_str_eq!(json_emit(json_int(-7)), "-7");
-    assert_str_eq!(json_emit(json_string("hi")), "\"hi\"");
+    assert_str_eq!(JsonValue::null().emit(), "null");
+    assert_str_eq!(JsonValue::bool(true).emit(), "true");
+    assert_str_eq!(JsonValue::bool(false).emit(), "false");
+    assert_str_eq!(JsonValue::int(42).emit(), "42");
+    assert_str_eq!(JsonValue::int(-7).emit(), "-7");
+    assert_str_eq!(JsonValue::string("hi").emit(), "\"hi\"");
     return 0;
 }
 
 fn test_emit_escape() -> int {
-    assert_str_eq!(json_emit(json_string("a\"b")), "\"a\\\"b\"");
-    assert_str_eq!(json_emit(json_string("a\nb")), "\"a\\nb\"");
-    assert_str_eq!(json_emit(json_string("a\\b")), "\"a\\\\b\"");
+    assert_str_eq!(JsonValue::string("a\"b").emit(), "\"a\\\"b\"");
+    assert_str_eq!(JsonValue::string("a\nb").emit(), "\"a\\nb\"");
+    assert_str_eq!(JsonValue::string("a\\b").emit(), "\"a\\\\b\"");
     return 0;
 }
 
 fn test_emit_array() -> int {
-    let a: *JsonValue = json_array();
-    json_arr_push(a, json_int(1));
-    json_arr_push(a, json_int(2));
-    json_arr_push(a, json_int(3));
-    assert_str_eq!(json_emit(a), "[1,2,3]");
+    let a: *JsonValue = JsonValue::array();
+    a.arr_push(JsonValue::int(1));
+    a.arr_push(JsonValue::int(2));
+    a.arr_push(JsonValue::int(3));
+    assert_str_eq!(a.emit(), "[1,2,3]");
 
-    let empty: *JsonValue = json_array();
-    assert_str_eq!(json_emit(empty), "[]");
+    let empty: *JsonValue = JsonValue::array();
+    assert_str_eq!(empty.emit(), "[]");
     return 0;
 }
 
 fn test_emit_object() -> int {
-    let o: *JsonValue = json_object();
-    json_obj_set(o, "a", json_int(1));
-    json_obj_set(o, "b", json_string("hi"));
-    assert_str_eq!(json_emit(o), "{\"a\":1,\"b\":\"hi\"}");
+    let o: *JsonValue = JsonValue::object();
+    o.obj_set("a", JsonValue::int(1));
+    o.obj_set("b", JsonValue::string("hi"));
+    assert_str_eq!(o.emit(), "{\"a\":1,\"b\":\"hi\"}");
 
-    let empty: *JsonValue = json_object();
-    assert_str_eq!(json_emit(empty), "{}");
+    let empty: *JsonValue = JsonValue::object();
+    assert_str_eq!(empty.emit(), "{}");
     return 0;
 }
 
 fn test_emit_nested() -> int {
-    let o: *JsonValue = json_object();
-    let arr: *JsonValue = json_array();
-    json_arr_push(arr, json_int(1));
-    json_arr_push(arr, json_int(2));
-    json_obj_set(o, "xs", arr);
-    json_obj_set(o, "ok", json_bool(true));
-    assert_str_eq!(json_emit(o), "{\"xs\":[1,2],\"ok\":true}");
+    let o: *JsonValue = JsonValue::object();
+    let arr: *JsonValue = JsonValue::array();
+    arr.arr_push(JsonValue::int(1));
+    arr.arr_push(JsonValue::int(2));
+    o.obj_set("xs", arr);
+    o.obj_set("ok", JsonValue::bool(true));
+    assert_str_eq!(o.emit(), "{\"xs\":[1,2],\"ok\":true}");
     return 0;
 }
 
 fn test_parse_primitives() -> int {
-    assert!(json_is_null(json_parse("null")));
-    assert!(json_as_bool(json_parse("true")));
-    assert_not!(json_as_bool(json_parse("false")));
-    assert_eq!(json_as_int(json_parse("42")), 42);
-    assert_eq!(json_as_int(json_parse("-7")), -7);
-    assert_str_eq!(json_as_string(json_parse("\"hi\"")), "hi");
+    assert!(JsonValue::parse("null").is_null());
+    assert!(JsonValue::parse("true").as_bool());
+    assert_not!(JsonValue::parse("false").as_bool());
+    assert_eq!(JsonValue::parse("42").as_int(), 42);
+    assert_eq!(JsonValue::parse("-7").as_int(), -7);
+    assert_str_eq!(JsonValue::parse("\"hi\"").as_string(), "hi");
     return 0;
 }
 
 fn test_parse_array() -> int {
-    let v: *JsonValue = json_parse("[1, 2, 3]");
-    assert_eq!(json_len(v), 3);
-    assert_eq!(json_as_int(json_at(v, 0)), 1);
-    assert_eq!(json_as_int(json_at(v, 1)), 2);
-    assert_eq!(json_as_int(json_at(v, 2)), 3);
+    let v: *JsonValue = JsonValue::parse("[1, 2, 3]");
+    assert_eq!(v.len(), 3);
+    assert_eq!(v.at(0).as_int(), 1);
+    assert_eq!(v.at(1).as_int(), 2);
+    assert_eq!(v.at(2).as_int(), 3);
     return 0;
 }
 
 fn test_parse_object() -> int {
-    let v: *JsonValue = json_parse("{\"name\": \"alice\", \"age\": 30}");
-    assert_eq!(json_len(v), 2);
-    assert_str_eq!(json_as_string(json_get(v, "name")), "alice");
-    assert_eq!(json_as_int(json_get(v, "age")), 30);
-    let missing: *JsonValue = json_get(v, "nope");
+    let v: *JsonValue = JsonValue::parse("{\"name\": \"alice\", \"age\": 30}");
+    assert_eq!(v.len(), 2);
+    assert_str_eq!(v.get("name").as_string(), "alice");
+    assert_eq!(v.get("age").as_int(), 30);
+    let missing: *JsonValue = v.get("nope");
     assert!(missing == null);
     return 0;
 }
 
 fn test_parse_nested() -> int {
-    let v: *JsonValue = json_parse("{\"items\":[{\"id\":1},{\"id\":2}]}");
-    let items: *JsonValue = json_get(v, "items");
-    assert_eq!(json_len(items), 2);
+    let v: *JsonValue = JsonValue::parse("{\"items\":[{\"id\":1},{\"id\":2}]}");
+    let items: *JsonValue = v.get("items");
+    assert_eq!(items.len(), 2);
 
-    let first: *JsonValue = json_at(items, 0);
-    assert_eq!(json_as_int(json_get(first, "id")), 1);
-    let second: *JsonValue = json_at(items, 1);
-    assert_eq!(json_as_int(json_get(second, "id")), 2);
+    let first: *JsonValue = items.at(0);
+    assert_eq!(first.get("id").as_int(), 1);
+    let second: *JsonValue = items.at(1);
+    assert_eq!(second.get("id").as_int(), 2);
     return 0;
 }
 
 fn test_parse_float() -> int {
-    let v: *JsonValue = json_parse("3.14");
+    let v: *JsonValue = JsonValue::parse("3.14");
     assert_eq!(v.kind, JSON_FLOAT);
-    assert!(_near(json_as_float(v), 3.14));
+    assert!(_near(v.as_float(), 3.14));
 
-    let exp: *JsonValue = json_parse("1.5e2");
-    assert!(_near(json_as_float(exp), 150.0));
+    let exp: *JsonValue = JsonValue::parse("1.5e2");
+    assert!(_near(exp.as_float(), 150.0));
 
-    let neg: *JsonValue = json_parse("-0.5");
-    assert!(_near(json_as_float(neg), -0.5));
+    let neg: *JsonValue = JsonValue::parse("-0.5");
+    assert!(_near(neg.as_float(), -0.5));
     return 0;
 }
 
 fn test_parse_string_escapes() -> int {
-    let v: *JsonValue = json_parse("\"a\\nb\\tc\\\"d\"");
-    assert_str_eq!(json_as_string(v), "a\nb\tc\"d");
+    let v: *JsonValue = JsonValue::parse("\"a\\nb\\tc\\\"d\"");
+    assert_str_eq!(v.as_string(), "a\nb\tc\"d");
     return 0;
 }
 
 fn test_round_trip() -> int {
-    let o: *JsonValue = json_object();
-    json_obj_set(o, "name", json_string("alice"));
-    json_obj_set(o, "age",  json_int(30));
-    json_obj_set(o, "ok",   json_bool(true));
-    json_obj_set(o, "nada", json_null());
+    let o: *JsonValue = JsonValue::object();
+    o.obj_set("name", JsonValue::string("alice"));
+    o.obj_set("age",  JsonValue::int(30));
+    o.obj_set("ok",   JsonValue::bool(true));
+    o.obj_set("nada", JsonValue::null());
 
-    let s: string = json_emit(o);
-    let parsed: *JsonValue = json_parse(s);
-    assert_str_eq!(json_as_string(json_get(parsed, "name")), "alice");
-    assert_eq!(json_as_int(json_get(parsed, "age")), 30);
-    assert!(json_as_bool(json_get(parsed, "ok")));
-    assert!(json_is_null(json_get(parsed, "nada")));
+    let s: string = o.emit();
+    let parsed: *JsonValue = JsonValue::parse(s);
+    assert_str_eq!(parsed.get("name").as_string(), "alice");
+    assert_eq!(parsed.get("age").as_int(), 30);
+    assert!(parsed.get("ok").as_bool());
+    assert!(parsed.get("nada").is_null());
     return 0;
 }

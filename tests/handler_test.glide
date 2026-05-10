@@ -13,15 +13,15 @@ impl JsonBind for Pet {
     fn from_json(v: *JsonValue) -> !Pet {
         if v.kind != JSON_OBJECT { return err("expected object"); }
         return ok(Pet {
-            name: json_get_string(v, "name")?,
-            age:  json_get_int(v, "age")?,
+            name: v.get_string("name")?,
+            age:  v.get_int("age")?,
         });
     }
 
     fn to_json(self: *Pet) -> *JsonValue {
-        let v: *JsonValue = json_object();
-        json_obj_set(v, "name", json_string(self.name));
-        json_obj_set(v, "age",  json_int(self.age));
+        let v: *JsonValue = JsonValue::object();
+        v.obj_set("name", JsonValue::string(self.name));
+        v.obj_set("age",  JsonValue::int(self.age));
         return v;
     }
 }

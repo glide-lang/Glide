@@ -11,17 +11,17 @@ import stdlib::json::*;
 //
 //   1. user struct with required + optional + dynamic fields
 //   2. `Foo::from_json(v: *JsonValue) -> !Foo` static method that uses
-//      `json_get_*` / `json_opt_*` / `json_get_any` to validate and bind
+//      `v.get_*` / `v.opt_*` / `v.get_any` to validate and bind
 //   3. handler calls `req.body_json()` -> `Foo::from_json(...)`,
 //      surfaces err as 400, otherwise runs business logic
 //   4. response built with `HttpResponse::ok().json_of(...)` for a
 //      typed reply
 //
-// Required fields → `json_get_<type>(...)` returns `!T`; missing or
+// Required fields → `v.get_<type>(...)` returns `!T`; missing or
 //   wrong type bubbles up via err.
-// Optional fields → `json_opt_<type>(...)` returns `?T`; missing or
+// Optional fields → `v.opt_<type>(...)` returns `?T`; missing or
 //   wrong type collapses to `none`.
-// Dynamic fields → `json_get_any(...)` returns the raw `*JsonValue` so
+// Dynamic fields → `v.get_any(...)` returns the raw `*JsonValue` so
 //   the struct can keep an arbitrary subtree for later inspection.
 
 pub struct UpdateUser {
@@ -33,23 +33,23 @@ pub struct UpdateUser {
 impl UpdateUser {
     pub fn from_json(v: *JsonValue) -> !UpdateUser {
         if v.kind != JSON_OBJECT { return err("expected object"); }
-        let nome_r: !string = json_get_string(v, "nome");
+        let nome_r: !string = v.get_string("nome");
         if !nome_r.ok { return err(nome_r.err); }
         return ok(UpdateUser {
             nome:  nome_r.val,
-            idade: json_opt_int(v, "idade"),
-            extra: json_get_any(v, "extra"),
+            idade: v.opt_int("idade"),
+            extra: v.get_any("extra"),
         });
     }
 
     pub fn to_json(self: *UpdateUser) -> *JsonValue {
-        let v: *JsonValue = json_object();
-        json_obj_set(v, "nome", json_string(self.nome));
+        let v: *JsonValue = JsonValue::object();
+        v.obj_set("nome", JsonValue::string(self.nome));
         if self.idade.has {
-            json_obj_set(v, "idade", json_int(self.idade.val));
+            v.obj_set("idade", JsonValue::int(self.idade.val));
         }
         if self.extra != null {
-            json_obj_set(v, "extra", self.extra);
+            v.obj_set("extra", self.extra);
         }
         return v;
     }
@@ -145,9 +145,9 @@ fn test_optional_wrong_type_drops_to_none() -> int {
 }
 
 fn test_response_json_of() -> int {
-    let v: *JsonValue = json_object();
-    json_obj_set(v, "ok", json_bool(true));
-    json_obj_set(v, "n",  json_int(42));
+    let v: *JsonValue = JsonValue::object();
+    v.obj_set("ok", JsonValue::bool(true));
+    v.obj_set("n",  JsonValue::int(42));
     let resp: HttpResponse = HttpResponse::ok().json_of(v);
     assert_str_eq!(resp.header("Content-Type"), "application/json");
     assert_str_eq!(resp.body, "{\"ok\":true,\"n\":42}");
@@ -155,33 +155,33 @@ fn test_response_json_of() -> int {
 }
 
 fn test_typed_getters_directly() -> int {
-    let v: *JsonValue = json_parse("{\"a\":\"hi\", \"n\":7, \"x\":3.14, \"f\":true}");
+    let v: *JsonValue = JsonValue::parse("{\"a\":\"hi\", \"n\":7, \"x\":3.14, \"f\":true}");
 
-    let a: !string = json_get_string(v, "a");
+    let a: !string = v.get_string("a");
     assert!(a.ok);
     assert_str_eq!(a.val, "hi");
 
-    let n: !int = json_get_int(v, "n");
+    let n: !int = v.get_int("n");
     assert!(n.ok);
     assert_eq!(n.val, 7);
 
-    let x: !f64 = json_get_float(v, "x");
+    let x: !f64 = v.get_float("x");
     assert!(x.ok);
 
-    let f: !bool = json_get_bool(v, "f");
+    let f: !bool = v.get_bool("f");
     assert!(f.ok);
     assert!(f.val);
 
     // wrong type
-    let bad: !int = json_get_int(v, "a");
+    let bad: !int = v.get_int("a");
     assert_not!(bad.ok);
 
     // missing key
-    let miss: !string = json_get_string(v, "zzz");
+    let miss: !string = v.get_string("zzz");
     assert_not!(miss.ok);
 
     // float promotes from int
-    let promoted: !f64 = json_get_float(v, "n");
+    let promoted: !f64 = v.get_float("n");
     assert!(promoted.ok);
 
     return 0;
