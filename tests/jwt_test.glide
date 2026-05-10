@@ -1,0 +1,40 @@
+import stdlib::testing::*;
+import stdlib::http::jwt::*;
+
+fn _good_token() -> string {
+    return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoyMDAwMDAwMDAwfQ.l75NdhxM20b1bRvLAroDgz9tuRRwkw2he2KpsoGxYq4";
+}
+
+fn _expired_token() -> string {
+    return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxfQ.SLxIoHWf6x_YA2w_mvksZFKxmp7oEjG1LdtP7uPtCnQ";
+}
+
+fn test_known_good_hs256_token() -> int {
+    let claims: !JwtClaims = jwt_verify(_good_token(), "secret");
+    assert!(claims.ok);
+    assert_str_eq!(claims.val.sub, "alice");
+    assert_eq!(claims.val.iat, 1700000000);
+    assert_eq!(claims.val.exp, 2000000000);
+    return 0;
+}
+
+fn test_wrong_key_bad_signature() -> int {
+    let claims: !JwtClaims = jwt_verify(_good_token(), "wrong");
+    assert!(!claims.ok);
+    assert_str_eq!(claims.err, "401:bad signature");
+    return 0;
+}
+
+fn test_malformed_string() -> int {
+    let claims: !JwtClaims = jwt_verify("not-a-jwt", "secret");
+    assert!(!claims.ok);
+    assert_str_eq!(claims.err, "400:malformed jwt");
+    return 0;
+}
+
+fn test_expired_token() -> int {
+    let claims: !JwtClaims = jwt_verify(_expired_token(), "secret");
+    assert!(!claims.ok);
+    assert_str_eq!(claims.err, "401:expired");
+    return 0;
+}

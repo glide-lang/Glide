@@ -1,0 +1,128 @@
+import stdlib::base64::*;
+import stdlib::crypto::*;
+import stdlib::http::*;
+import stdlib::json::*;
+
+pub struct JwtClaims {
+    pub sub: string,
+    pub exp: int,
+    pub iat: int,
+    pub raw: *JsonValue,
+}
+
+extern fn __glide_jwt_now() -> int;
+extern fn __glide_jwt_b64url_to_hex(s: string) -> string;
+
+c_raw! {
+    #include <time.h>
+
+    int __glide_jwt_now(void) {
+        return (int)time(NULL);
+    }
+
+    static int __glide_jwt_b64url_val(char c) {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '-' || c == '+') return 62;
+        if (c == '_' || c == '/') return 63;
+        return -1;
+    }
+
+    const char* __glide_jwt_b64url_to_hex(const char* s) {
+        static const char* hx = "0123456789abcdef";
+        size_t n = strlen(s);
+        unsigned char* bytes = (unsigned char*)malloc(n + 4);
+        size_t out_n = 0;
+        size_t i = 0;
+        while (i < n) {
+            if (s[i] == '=') break;
+            int v0 = __glide_jwt_b64url_val(s[i]);
+            int v1 = (i + 1 < n) ? __glide_jwt_b64url_val(s[i + 1]) : -1;
+            if (v0 < 0 || v1 < 0) {
+                char* bad = (char*)malloc(1);
+                bad[0] = 0;
+                free(bytes);
+                return bad;
+            }
+            int have2 = (i + 2 < n && s[i + 2] != '=');
+            int have3 = (i + 3 < n && s[i + 3] != '=');
+            int v2 = have2 ? __glide_jwt_b64url_val(s[i + 2]) : 0;
+            int v3 = have3 ? __glide_jwt_b64url_val(s[i + 3]) : 0;
+            if ((have2 && v2 < 0) || (have3 && v3 < 0)) {
+                char* bad = (char*)malloc(1);
+                bad[0] = 0;
+                free(bytes);
+                return bad;
+            }
+            bytes[out_n++] = (unsigned char)((v0 << 2) | (v1 >> 4));
+            if (have2) bytes[out_n++] = (unsigned char)(((v1 & 15) << 4) | (v2 >> 2));
+            if (have3) bytes[out_n++] = (unsigned char)(((v2 & 3) << 6) | v3);
+            i += 4;
+        }
+        char* hex = (char*)malloc(out_n * 2 + 1);
+        for (size_t j = 0; j < out_n; j++) {
+            hex[j * 2] = hx[bytes[j] >> 4];
+            hex[j * 2 + 1] = hx[bytes[j] & 15];
+        }
+        hex[out_n * 2] = 0;
+        free(bytes);
+        return hex;
+    }
+}
+
+fn _b64url_decode(s: string) -> !string {
+    let mut b: string = s.replace("-", "+").replace("_", "/");
+    while b.len() % 4 != 0 {
+        b = b.concat("=");
+    }
+    return b64_decode(b);
+}
+
+fn _json_int_or_zero(v: *JsonValue, key: string) -> int {
+    let f: *JsonValue = v.get(key);
+    if f == null { return 0; }
+    if f.kind != JSON_INT { return 0; }
+    return f.i;
+}
+
+pub fn jwt_verify(token: string, key: string) -> !JwtClaims {
+    let parts: *Vector<string> = token.split(".");
+    if parts.len() != 3 {
+        return err("400:malformed jwt");
+    }
+
+    let payload_r: !string = _b64url_decode(parts.get(1));
+    if !payload_r.ok {
+        return err("400:malformed jwt");
+    }
+
+    let raw: *JsonValue = JsonValue::parse(payload_r.val);
+    if raw == null || raw.kind != JSON_OBJECT {
+        return err("400:malformed jwt");
+    }
+
+    let sub_v: *JsonValue = raw.get("sub");
+    if sub_v == null || sub_v.kind != JSON_STRING {
+        return err("400:malformed jwt");
+    }
+
+    let signing_input: string = parts.get(0).concat(".").concat(parts.get(1));
+    let expected_hex: string = hmac_sha256_hex(key, signing_input);
+    let got_hex: string = __glide_jwt_b64url_to_hex(parts.get(2));
+    if !got_hex.eq(expected_hex) {
+        return err("401:bad signature");
+    }
+
+    let exp: int = _json_int_or_zero(raw, "exp");
+    if exp != 0 && __glide_jwt_now() > exp {
+        return err("401:expired");
+    }
+
+    return ok(JwtClaims {
+        sub: sub_v.s,
+        exp: exp,
+        iat: _json_int_or_zero(raw, "iat"),
+        raw: raw,
+    });
+}
