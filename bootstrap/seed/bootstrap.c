@@ -26990,7 +26990,7 @@ int   run_build (const char*   src_path, const char*   out_path, const char*   t
     const char*   cmd = cc;
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " \""), tmp_c), "\""));
     (cmd  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(cmd, " -o \""), out_path), "\""));
-    (cmd  =  __glide_string_concat(cmd, " -O2 -w -lpthread -lm -lssl -lcrypto"));
+    (cmd  =  __glide_string_concat(cmd, " -O2 -w -lpthread -lm -lssl -lcrypto -lz"));
     if ((((int(*)(void))__glide_is_windows)()  !=  0)) {
         (cmd  =  __glide_string_concat(cmd, " -lws2_32"));
     }
