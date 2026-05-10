@@ -1,0 +1,120 @@
+// Procedural-macro interpreter (Phase 1 — spec, no impl yet).
+//
+// This file holds the contract for the interpreter that runs proc-macro
+// fns at compile time. Implementation lands in a follow-up commit.
+//
+// ============================================================
+// Why an interpreter (not dlopen / subprocess / static plugin)
+// ============================================================
+//
+// See `project_proc_macros_design.md`. tl;dr: deterministic +
+// cross-platform + same-file authorship + no .so/.dll churn.
+// Cost: one-time ~600 LOC interpreter inside the compiler.
+//
+// ============================================================
+// Supported subset of Glide
+// ============================================================
+//
+// STATEMENTS:
+//   ST_LET, ST_CONST, ST_EXPR, ST_BLOCK, ST_RETURN
+//   ST_IF (with else), ST_WHILE
+//   ST_FOR (3-clause: `for let i = lo; i < hi; i++ { ... }`)
+//   ST_BREAK, ST_CONTINUE
+//
+// EXPRESSIONS:
+//   EX_INT, EX_FLOAT, EX_STRING, EX_BOOL, EX_CHAR, EX_NULL
+//   EX_IDENT, EX_BINARY, EX_UNARY (no UN_ADDR/UN_DEREF — pointer math
+//     belongs in extern fns, which macros can't call anyway)
+//   EX_CALL — receiver is EX_IDENT / EX_PATH / EX_MEMBER
+//   EX_MEMBER — field access on Stmt/Expr/Type/Field/Param/Attr/Vector/HashMap
+//   EX_INDEX — Vector lookup (for HashMap use `.get(k)`)
+//   EX_PATH — `Type::method` static dispatch
+//   EX_CAST — primitive widening only (`n as int`, `c as int`)
+//   EX_ASSIGN — `x = y` and `obj.field = y`
+//   EX_BLOCK, EX_IF
+//
+// NOT supported (macro fn that uses any of these is rejected at
+// registration time):
+//   extern fn calls, c_raw blocks, defer / defer_err
+//   spawn / spawn_thread / channels / select!
+//   match (deferred — adds complexity; can come in v2)
+//   closures / fn-pointer values stored in vars (only fn-named call)
+//   generics in macro fn body (mono'd by the compiler beforehand)
+//
+// ============================================================
+// Built-in surface (what the macro can call directly)
+// ============================================================
+//
+// AST CONSTRUCTORS (all from `ast.glide`):
+//   expr_int, expr_float, expr_string, expr_bool, expr_char, expr_null
+//   expr_ident, expr_binary, expr_unary, expr_call, expr_member,
+//   expr_path, expr_struct_lit, expr_cast, expr_index
+//   stmt_let, stmt_const, stmt_return, stmt_expr, stmt_if, stmt_while,
+//   stmt_for, stmt_block, stmt_struct, stmt_fn, stmt_impl, stmt_enum
+//   ty_named, ty_pointer, ty_borrow, ty_borrow_mut, ty_generic,
+//   ty_option, ty_result, ty_optres, ty_dyn
+//
+// CONTAINER OPS:
+//   `Vector::new()` — returns an empty Vector<T> (T is whatever the
+//     caller pushes; the interpreter is dynamically typed for these)
+//   `v.push(x)`, `v.pop()`, `v.len()`, `v.get(i)`, `v.set(i, x)`,
+//     `v.clear()`, `v.is_empty()`
+//   `HashMap::new()`, `m.insert(k, v)`, `m.get(k)`, `m.contains(k)`,
+//     `m.remove(k)`, `m.len()`, `m.keys()`, `m.values()`
+//
+// STRING OPS (mirrors `impl string`):
+//   `s.len()`, `s.eq(o)`, `s.concat(o)`, `s.substring(a, b)`,
+//   `s.starts_with(p)`, `s.ends_with(p)`, `s.contains(sub)`,
+//   `s.index_of(sub)`, `s.split(sep)`, `s.to_upper()`, `s.to_lower()`,
+//   `s.trim()`, `s.is_empty()`, `s.at(i)`
+//
+// PRINT (for diagnostics):
+//   `println!`, `print!`, `format!` — same as runtime
+//
+// ============================================================
+// Calling convention
+// ============================================================
+//
+// The expander invokes:
+//
+//   interp_call(macro_fn: *Stmt, args: *Vector<IValue>) -> IValue
+//
+// Where `IValue` is a tagged union:
+//
+//   pub const IV_NULL:    int = 0;
+//   pub const IV_INT:     int = 1;
+//   pub const IV_BOOL:    int = 2;
+//   pub const IV_STRING:  int = 3;
+//   pub const IV_F64:     int = 4;
+//   pub const IV_CHAR:    int = 5;
+//   pub const IV_PTR:     int = 6;     // wraps a real *Stmt/*Expr/*Type/etc.
+//   pub const IV_VECTOR:  int = 7;     // dynamically-typed *Vector<IValue>
+//   pub const IV_HASHMAP: int = 8;     // dynamically-typed *HashMap<IValue>
+//
+// AST values flow as IV_PTR with `ty_tag` distinguishing "Stmt" /
+// "Expr" / "Type" / "Field" / "Param" / "Attr". Field access on these
+// is hard-coded against the known Glide layout — the interpreter
+// reads `(stmt-ptr).kind` directly.
+//
+// `IV_VECTOR` / `IV_HASHMAP` are distinct from `IV_PTR { ty_tag:
+// "Vector" }` because Glide's `*Vector<T>` carries its element type
+// statically; in the interpreter they're heterogeneous.
+//
+// ============================================================
+// Hygiene (Phase 3 — placeholder here)
+// ============================================================
+//
+// Idents constructed via `expr_ident("name")` get a unique suffix
+// `__macro_<call_id>__<name>` injected by `interp_call`. Opt-out:
+// `expr_ident_unsafe("name")` (or attribute on the proc fn).
+//
+// ============================================================
+// Errors
+// ============================================================
+//
+// Any unsupported stmt/expr the interpreter encounters becomes a
+// diagnostic at the macro fn's site that says exactly what the
+// macro tried to do. The use-site of the macro gets a follow-up
+// "macro expansion failed" diagnostic pointing at it.
+
+// (impl follows in the next commit)
