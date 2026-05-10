@@ -176,29 +176,43 @@ impl HttpRequest {
     }
 }
 
+/// Source of body chunks for a streaming response. The server polls
+/// `next_chunk` repeatedly and writes each return value as one
+/// `Transfer-Encoding: chunked` chunk; `none()` ends the stream.
+///
+/// Implementors hold their own state — the server doesn't snapshot
+/// anything between calls. Glide has no closures, so the typical
+/// pattern is a struct with cursor / iterator fields plus an
+/// `impl ChunkSource for MyStruct` that walks them.
+///
+/// ```glide
+/// pub struct Counter { pub idx: int, pub total: int }
+///
+/// impl ChunkSource for Counter {
+///     fn next_chunk(self: *Counter) -> ?string {
+///         if self.idx >= self.total { return none(); }
+///         self.idx = self.idx + 1;
+///         return some("tick=".concat(self.idx.to_string()).concat("\n"));
+///     }
+/// }
+/// ```
+pub trait ChunkSource {
+    fn next_chunk(self: *Self) -> ?string;
+}
+
 /// Outgoing response. Build with `HttpResponse::ok()` /
 /// `HttpResponse::with_status(n)` then chain the setters; status codes
 /// fall back to a generic reason phrase when unknown.
 ///
-/// Streaming bodies use `stream_state` (an opaque `*void` carrying
-/// the iterator state) plus `stream_next` (a fn pointer that takes
-/// the state and returns `?string` — `none()` ends the stream).
-/// `stream_next == null` means "buffered body" (the common case);
-/// `body` is then used and `stream_state` is ignored. Pair via
-/// `.stream(state, next_fn)`.
-///
-/// The two-field shape (instead of a `*dyn ChunkSource` trait
-/// object) sidesteps a runtime concern: `*dyn Trait` in Glide is a
-/// fat pointer struct, not a raw pointer, and the typer doesn't
-/// translate `*dyn Trait != null` into the equivalent vtable
-/// non-null check. The fn-pointer encoding is functionally
-/// equivalent and easier to detect.
+/// `stream_src` is `null` for buffered responses (the common case).
+/// Set it via `.stream(source)` when the body should flow over the
+/// wire one chunk at a time — the server emits
+/// `Transfer-Encoding: chunked` and ignores `body`.
 pub struct HttpResponse {
     pub status:        int,
     pub headers_block: string,
     pub body:          string,
-    pub stream_state:  *void,
-    pub stream_next:   fn(*void) -> ?string,
+    pub stream_src:    *dyn ChunkSource,
 }
 
 impl HttpResponse {
@@ -214,8 +228,7 @@ impl HttpResponse {
             status: code,
             headers_block: "",
             body: "",
-            stream_state: null,
-            stream_next: null,
+            stream_src: null,
         };
     }
 
@@ -247,8 +260,7 @@ impl HttpResponse {
             status: self.status,
             headers_block: self.headers_block,
             body: s,
-            stream_state: self.stream_state,
-            stream_next: self.stream_next,
+            stream_src: self.stream_src,
         };
     }
 
@@ -274,8 +286,7 @@ impl HttpResponse {
             status: self.status,
             headers_block: stripped.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
             body: self.body,
-            stream_state: self.stream_state,
-            stream_next: self.stream_next,
+            stream_src: self.stream_src,
         };
     }
 
@@ -296,8 +307,7 @@ impl HttpResponse {
             status: self.status,
             headers_block: self.headers_block.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
             body: self.body,
-            stream_state: self.stream_state,
-            stream_next: self.stream_next,
+            stream_src: self.stream_src,
         };
     }
 
@@ -311,8 +321,7 @@ impl HttpResponse {
             status: code,
             headers_block: self.headers_block,
             body: self.body,
-            stream_state: self.stream_state,
-            stream_next: self.stream_next,
+            stream_src: self.stream_src,
         };
     }
 
@@ -338,14 +347,12 @@ impl HttpResponse {
     ///     return HttpResponse::ok().stream(src);
     /// }
     /// ```
-    pub fn stream(self: HttpResponse, state: *void,
-                  next: fn(*void) -> ?string) -> HttpResponse {
+    pub fn stream(self: HttpResponse, source: *dyn ChunkSource) -> HttpResponse {
         return HttpResponse {
             status: self.status,
             headers_block: self.headers_block,
             body: "",
-            stream_state: state,
-            stream_next: next,
+            stream_src: source,
         };
     }
 
@@ -692,14 +699,14 @@ fn _format_chunked_head(r: *HttpResponse, keep_alive: bool) -> string {
     return out;
 }
 
-// Pump every chunk from `next(state)` to `c`, framed as
+// Pump every chunk from `src.next_chunk()` to `c`, framed as
 // `<hex-length>\r\n<data>\r\n`, terminated by `0\r\n\r\n`. Empty
 // strings are emitted as zero-length frames (spec-legal, mostly
 // useless); none() ends the stream.
-fn _pump_chunks(c: *Conn, state: *void, next: fn(*void) -> ?string) {
+fn _pump_chunks(c: *Conn, src: *dyn ChunkSource) {
     let crlf: string = "\r\n";
     while true {
-        let r: ?string = next(state);
+        let r: ?string = src.next_chunk();
         if !r.has { break; }
         let chunk: string = r.val;
         let prefix: string = _hex_len(chunk.len()).concat(crlf);
@@ -718,10 +725,10 @@ fn _pump_chunks(c: *Conn, state: *void, next: fn(*void) -> ?string) {
 // (single static buffer, single write); streamed responses emit
 // header bytes manually then pump chunks.
 fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
-    if resp.stream_next != null {
+    if resp.stream_src != null {
         let head: string = _format_chunked_head(resp, keep);
         c.write(head as *void, head.len());
-        _pump_chunks(c, resp.stream_state, resp.stream_next);
+        _pump_chunks(c, resp.stream_src);
         return;
     }
     let mut keep_i: int = 0;

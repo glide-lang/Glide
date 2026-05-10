@@ -1,6 +1,6 @@
 // Streaming response (Transfer-Encoding: chunked) + SSE helper.
 //
-// Coverage: SSE wire format, the chunk-pump fn-pointer pattern, the
+// Coverage: SSE wire format, ChunkSource trait dispatch, the
 // HttpResponse builder. E2E coverage of the chunked write itself
 // requires running the listener + a TcpStream from the same test;
 // exercised manually via curl.
@@ -9,19 +9,20 @@ import stdlib::testing::*;
 import stdlib::http::*;
 import stdlib::http::sse::*;
 
-// ---- a deterministic chunk source for tests --------------------------
+// ---- a deterministic ChunkSource for tests ---------------------------
 
 pub struct StaticChunks {
     pub items: *Vector<string>,
     pub idx:   int,
 }
 
-fn _static_next(state: *void) -> ?string {
-    let s: *StaticChunks = state as *StaticChunks;
-    if s.idx >= s.items.len() { return none(); }
-    let v: string = s.items.get(s.idx);
-    s.idx = s.idx + 1;
-    return some(v);
+impl ChunkSource for StaticChunks {
+    fn next_chunk(self: *StaticChunks) -> ?string {
+        if self.idx >= self.items.len() { return none(); }
+        let s: string = self.items.get(self.idx);
+        self.idx = self.idx + 1;
+        return some(s);
+    }
 }
 
 fn _src(parts: *Vector<string>) -> *StaticChunks {
@@ -57,39 +58,35 @@ fn test_sse_format_multiline_data() -> int {
     return 0;
 }
 
-// ---- next-fn walks state to none ------------------------------------
+// ---- ChunkSource trait walk -----------------------------------------
 
-fn test_next_fn_walks_to_none() -> int {
+fn test_chunk_source_walks_to_none() -> int {
     let v: *Vector<string> = Vector::new();
     v.push("a"); v.push("bb"); v.push("ccc");
     let src: *StaticChunks = _src(v);
-    let state: *void = src as *void;
-    let r1: ?string = _static_next(state);   assert!(r1.has);  assert_str_eq!(r1.val, "a");
-    let r2: ?string = _static_next(state);   assert!(r2.has);  assert_str_eq!(r2.val, "bb");
-    let r3: ?string = _static_next(state);   assert!(r3.has);  assert_str_eq!(r3.val, "ccc");
-    let r4: ?string = _static_next(state);   assert_not!(r4.has);
+    let r1: ?string = src.next_chunk();   assert!(r1.has);  assert_str_eq!(r1.val, "a");
+    let r2: ?string = src.next_chunk();   assert!(r2.has);  assert_str_eq!(r2.val, "bb");
+    let r3: ?string = src.next_chunk();   assert!(r3.has);  assert_str_eq!(r3.val, "ccc");
+    let r4: ?string = src.next_chunk();   assert_not!(r4.has);
     return 0;
 }
 
 // ---- HttpResponse.stream() builder ----------------------------------
 
-fn test_stream_builder_sets_state_clears_body() -> int {
+fn test_stream_builder_sets_src_clears_body() -> int {
     let v: *Vector<string> = Vector::new();
     v.push("hello");
     let src: *StaticChunks = _src(v);
-    let r: HttpResponse = HttpResponse::ok()
-        .body("ignored")
-        .stream(src as *void, _static_next);
-    assert!(r.stream_state != null);
-    assert!(r.stream_next != null);
+    let dyn_src: *dyn ChunkSource = src as *dyn ChunkSource;
+    let r: HttpResponse = HttpResponse::ok().body("ignored").stream(dyn_src);
+    assert!(r.stream_src != null);
     assert_str_eq!(r.body, "");
     return 0;
 }
 
-fn test_default_response_has_null_stream() -> int {
+fn test_default_response_has_null_stream_src() -> int {
     let r: HttpResponse = HttpResponse::ok().body("plain");
-    assert!(r.stream_state == null);
-    assert!(r.stream_next == null);
+    assert!(r.stream_src == null);
     return 0;
 }
 
@@ -97,9 +94,10 @@ fn test_sse_response_stamps_content_type() -> int {
     let v: *Vector<string> = Vector::new();
     v.push(sse_format(SseEvent { event: "", data: "x", id: "" }));
     let src: *StaticChunks = _src(v);
-    let r: HttpResponse = sse_response(src as *void, _static_next);
+    let dyn_src: *dyn ChunkSource = src as *dyn ChunkSource;
+    let r: HttpResponse = sse_response(dyn_src);
     assert_str_eq!(r.header("Content-Type"), "text/event-stream");
     assert_str_eq!(r.header("Cache-Control"), "no-cache");
-    assert!(r.stream_next != null);
+    assert!(r.stream_src != null);
     return 0;
 }

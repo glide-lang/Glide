@@ -57,20 +57,18 @@ pub fn sse_format(e: SseEvent) -> string {
     return out;
 }
 
-/// Wrap a state-pointer + next-fn pair into a streaming response with
-/// the right Content-Type and cache-busting headers for SSE.
-/// Equivalent to:
+/// Wrap `source` in a streaming response with the right
+/// Content-Type and cache-busting headers for SSE. Equivalent to:
 ///
 ///   HttpResponse::ok()
 ///       .set("Content-Type", "text/event-stream")
 ///       .set("Cache-Control", "no-cache")
 ///       .set("X-Accel-Buffering", "no")
-///       .stream(state, next)
-pub fn sse_response(state: *void,
-                    next: fn(*void) -> ?string) -> HttpResponse {
+///       .stream(source)
+pub fn sse_response(source: *dyn ChunkSource) -> HttpResponse {
     return HttpResponse::ok()
         .set("Content-Type", "text/event-stream")
         .set("Cache-Control", "no-cache")
         .set("X-Accel-Buffering", "no")
-        .stream(state, next);
+        .stream(source);
 }
