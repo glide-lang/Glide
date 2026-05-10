@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-05-10
 
 ### Language
 
@@ -9,11 +9,214 @@
   single expression of the same type; codegen lowers it to a C ternary
   so there's no extra runtime cost. `else` is required.
   Statement-position `if` (with `{ stmt; stmt; }` blocks) is unchanged.
+- **`match` as expression**: same pattern — `let v = match e { Foo => a, Bar => b };`.
+  Each arm body terminates in `return val;`; arm types must match.
+- **block as expression**: `let x = { stmt; stmt; return val; };` —
+  yields the `return val` expression, lets and side effects run before.
 - **Integer-literal widening**: literals that don't fit in 32-bit `int`
   (e.g. `19_999_999_998`) now infer as `i64` instead of silently
   truncating. The most visible effect was inside macros like
   `assert_eq!` that did `let __t = $a;` and dropped i64 constants on
   the floor.
+- **Tuple-struct sugar**: `struct ApiKey(key: string)` is sugar for
+  `struct ApiKey { pub key: string }`. Implicit-pub on every field;
+  brace form stays the way to declare private fields.
+- **`?T` / `!T` / `?!T`**: option, result, and option-of-result types
+  with `?` postfix propagation, polymorphic `?`, and `??` coalesce
+  operator. `none → err` coercion when `?T` flows into a `!U` return.
+- **`defer_err`**: `defer_err <expr>;` runs only on err-return paths
+  (`return err(...)` and `?` propagation). Pairs with `defer` for
+  cleanups that fire on every exit.
+- **Associated types in traits**: `type Item;` in a trait, `type Item = T;`
+  in the impl. `Self::Item` resolves at impl-site.
+- **Trait `<T: A + B>` bounds**: enforced at call sites; checked across
+  generic fn / generic struct / generic impl.
+- **`*dyn Trait` dispatch**: trait-object fat pointer (vtable + data).
+  Compares to `null`, assigns from concrete `*T`, and round-trips
+  through fn params + struct fields.
+- **`select!` block**: `select!` over `chan<T>` arms — `recv`, `send`,
+  `Some/None recv`, `default`. Polling-loop lowering today; true
+  parking deferred.
+- **inline asm**: `asm [volatile] { "instr" : outs : ins : clobbers }`
+  GCC-style; pairs with `@cfg("...")` for per-platform fns.
+- **naked fns**: `@naked fn foo() { asm { … } }` skips prologue/epilogue.
+- **string interpolation**: `format!("user={user.name}, age={user.age}")`
+  with field access in placeholders.
+- **`@cfg("windows" | "posix")` attribute**: gates fns + structs by
+  target OS. Compiles into `#ifdef _WIN32` / `#ifndef _WIN32`.
+- **`c_raw! { … }` blocks**: raw C/asm payload emitted verbatim. Used
+  heavily in stdlib for low-level helpers (signal handlers, atomics,
+  pthread, OpenSSL, zlib, time).
+
+### Procedural macros
+
+- **`macro_rules!`-style**: user-defined `macro name!(matchers) { body }`
+  with `:expr`, `:ty`, `:ident` matchers and `$(... ),*` repetition.
+- **Type-attached macros**: `impl T { macro name!(...) }` with
+  receiver-style invocation `recv.name!(args)` and qualified
+  `Type::name!(args)` form.
+- **Procedural macros (Phases 0–5)**: AST-typed + raw-string flavours,
+  embedded interpreter (no dlopen), same-module dispatch:
+  - `@proc_derive(Name)` — derives from struct annotation
+    (`@derive(Name) struct Foo { … }`)
+  - `@proc_attr(Name)` — modifies an annotated decl
+    (`@<name> fn foo() { … }`)
+  - `@proc_macro(Name)` / `@proc_macro_str(Name)` — fn-like macros
+- **Hygiene by default**: ident emitted via `expr_ident` gets a
+  per-call suffix (`__macro_<id>__name`) so macros can't collide
+  with caller-side names. Opt-out via `expr_ident_unsafe` /
+  `stmt_let_unsafe`.
+- **Dual-site error diagnostics**: macro fn body line + use-site line
+  reported on every diagnostic, with `it.diagnostics` channel.
+- **`@derive(JsonBind)`**: ships in stdlib::json::derive — derives
+  the `JsonBind` trait for primitive-field structs (string, int,
+  bool, f64, plus their `?T` variants).
+- **`@handler`**: ships in stdlib::http::handler — Axum-style typed
+  handler ergonomics. See HTTP section below.
+
+### HTTP stack
+
+A complete HTTP stack landed:
+
+- **`stdlib::net`**: TCP, UDP, DNS, IP types, TLS via OpenSSL,
+  HTTP/1.1 client (http://) and HTTPS, WebSocket (ws + wss),
+  HTTP/2 (HPACK + frames + ALPN, Phase D).
+- **`stdlib::http`**: `HttpRequest`, `HttpResponse` (chainable
+  builder), `http_listen` (single-worker), `http_listen_workers`
+  (multi-worker via SO_REUSEPORT), `https_listen`. Set replaces
+  same-name headers; `add` appends; `cookie` routes through `add`.
+  CRLF injection blocked in `set` / `cookie`. Lazy header cache on
+  HttpRequest. Chunked-encoding writer for streaming responses.
+- **`stdlib::http::router`**: method-aware Router with `:param` +
+  `*wildcard` segments, `r.use_mw(mw)` middleware (Express-style
+  `Chain` + `chain_next`), `r.scope(prefix, sub)` nested routers,
+  `r.state(p)` shared state slot, `..` path traversal block at
+  dispatch.
+- **`stdlib::http::typed` + `stdlib::http::handler`**: `Json<T>`
+  wrapper, `JsonBind` trait, `IntoResponse` trait, `json_respond`,
+  `@handler` proc-attr macro for typed param binding + auto 400/422.
+- **`stdlib::http::extract`**: `FromRequest` trait + extractors:
+  `*HttpRequest`, `Bearer`, `Headers`, `Authorization<S: AuthScheme>`,
+  `Basic`, `Path<T: FromPath>`, `State<T>`. Error → status mapping
+  via `"<code>:<msg>"` prefix on err strings. `@handler` accepts
+  unlimited typed params via this trait.
+- **`stdlib::http::cors`**: CORS middleware via global config slot;
+  `install_cors(cfg)` + `cors_mw`; preflight 204 + ACAO/ACAM/ACAH.
+- **`stdlib::http::static`**: `serve_dir(r, opts)` — wildcard route
+  mounting, mime detect, 404/403 traversal block.
+- **`stdlib::http::jwt`**: HS256 verify with `JwtClaims` (sub/exp/
+  iat/raw); error prefixes for `@handler` extract path.
+- **`stdlib::http::multipart`**: builder + `MultipartForm` parser
+  (`FromRequest` impl) — `fields` / `files` / `UploadedFile`.
+- **`stdlib::http::compress`**: `gzip_mw` middleware via zlib;
+  skips small bodies + already-compressed Content-Types + responses
+  without `Accept-Encoding: gzip`.
+- **`stdlib::http::sse`**: SSE wire format helper + `sse_response`;
+  builds on the chunked streaming path.
+- **`stdlib::http::client`**: `HttpClient` with redirects, cookies,
+  forms, multipart, timeouts, basic + bearer auth.
+
+### JSON
+
+- **Method-style API** (replaces free-fn style):
+  `JsonValue::object()` / `int(n)` / `string(s)` / `parse(s)` ctors
+  on the type; `v.obj_set(k, x)` / `v.arr_push(x)` / `v.get(k)` /
+  `v.emit()` instance methods. Typed accessors:
+  `v.get_string(k)?` / `v.get_int(k)?` / `v.get_bool(k)?` /
+  `v.get_float(k)?` / `v.opt_<t>(k)`.
+- **`JsonBind` trait**: two-way struct ⇄ JSON binding;
+  `from_json(v: *JsonValue) -> !Self` / `to_json(self: *Self) -> *JsonValue`.
+- **`@derive(JsonBind)`**: auto-impls for primitive-field structs.
+- **`impl<T: JsonBind> JsonBind for Vector<T>`**: blanket impl;
+  `Vector<Pet>` round-trips with element-error propagation via `?`.
+
+### Stdlib expansions
+
+- **`stdlib::testing`**: macro-driven assertion framework + per-file
+  synth main + `glide test` / `glide test --golden` runners with
+  CRLF-normalised diffs.
+- **`stdlib::time`**: Time/Duration with Weekday/Month, Stopwatch,
+  `after` / `tick` channels, `format(spec)`, `truncate` / `round`,
+  `parse_rfc3339`.
+- **`stdlib::os` (31 fns)**: host + process identity, env, dirs;
+  `!T` error model.
+- **`stdlib::env`**: `env_set` / `unset` / `all` / `expand` + `EnvKV`.
+- **`stdlib::process` v1**: `Command` builder + `Child` +
+  `process_kill` / `exists`. fork+exec POSIX, CreateProcess Win.
+- **`stdlib::signal` v1**: `signal_chan` + `select!` integration via
+  POSIX self-pipe (Linux/macOS/BSD) or `SetConsoleCtrlHandler`
+  (Windows). `signal_raise` for self-trigger tests.
+- **`stdlib::iter` (16 combinators)**: eager combinators over
+  `Vector<T>`. `<T, U>` generic fn with fn-pointer args end-to-end.
+- **`Vector<T>` chain methods + reducers**: `v.map(f).filter(p).sum()`.
+  11 generic methods + 3 specialised int reducers (sum / max / min).
+- **`stdlib::sync`**: `Mutex<T>`, `Atomic`, `WaitGroup` via pthread +
+  C11 atomics through `c_raw`.
+- **`stdlib::crypto`**: SHA-256 + HMAC-SHA-256 (RFC 6234 + 2104,
+  NIST vectors verified).
+- **`stdlib::argparse`**: pure-Glide CLI flag + positional parser
+  (~370 LOC). Long + short flags, 3 types, `--help` auto-generated.
+- **`stdlib::mail`**: SMTP / POP3 / IMAP clients + RFC 5322 message +
+  MIME builder.
+
+### Stdlib internals
+
+- **Slim `runtime/stdlib.c`** (174 lines, ABI only): fs/os/env/io
+  primitives moved to `c_raw` blocks inside the matching stdlib
+  modules. Older glide binaries that still carry the bodies in their
+  embedded stdlib.c don't see the new defines, so `c_raw` blocks stay
+  inactive during a bootstrap-step rebuild.
+- **`builtins/` vs `stdlib/` split**: `src/builtins/` is auto-injected
+  into every compile (3 files); `src/stdlib/` requires explicit
+  `import "src/stdlib/X.glide"`.
+
+### Concurrency
+
+- **M:N coroutines**: `spawn` submits a coroutine to the M:N
+  scheduler; `spawn_thread` keeps the explicit pthread escape hatch.
+- **Runtime architecture v3**: own asm context switch, Vyukov chan,
+  work-stealing, lazy mmap stacks, task pool. Reactor with epoll on
+  Linux; serial fallback on Windows / macOS / BSD until IOCP/kqueue
+  land.
+- **HTTP perf state**: 200k req/s single-worker on bare metal Ubuntu
+  i3-8100 (86% of nginx). WSL numbers are virtualisation artifacts.
+
+### Compiler fixes
+
+- **Forward-decl pass for generic monos**: `*Vector<*X>` returns
+  monomorphise cleanly even when the inner type is itself generic.
+- **Type-tree `subst` no longer mutates input**: trait sigs are
+  shared across impls; clone-on-descend instead of polluting
+  downstream.
+- **`@handler` nested-generic monomorphisation**: `Json<Vector<T>>`
+  propagates T through `Json::wrap.into_response()` chains.
+  `let_ty` hint pinning at macro emit sites.
+- **`*dyn Trait` runtime ordering**: vtable + thunk forward decls
+  emit AFTER `__glide_option_<T>_t` / `__glide_result_<T>_t`
+  typedefs, so trait methods returning `?T` / `!T` don't collide
+  with implicit-int. Thunk auto-detects `self: *Self` vs `self: Self`
+  for cast vs deref.
+- **`*dyn Trait` null compare / assign / struct-lit init**: fat-
+  pointer struct gets zero-init (`(__glide_dyn_T){0}`) instead of
+  literal NULL; `x == null` translates to `x.vtable == NULL`.
+- **`stmt_impl_trait` + `expr_struct_lit` interp intrinsics**: lets
+  proc-derive macros emit trait impls + struct literals without
+  field-setter intrinsics.
+- **`?T` / `!T` constants exposed in interp**: `UN_TRY`,
+  `OP_COALESCE`, `EX_STRUCT_LIT` etc. addressable from macro fn
+  bodies.
+- **HTTP/2 NUL-truncated read pipeline**: binary-safe via
+  `TlsStream::read_bytes` + H2Conn ByteBuffer rx ring + HPACK
+  explicit-len (frame headers `00 00 XX` no longer truncate to .len()=0).
+
+### Known issues
+
+- **`mail_smtp` / `mail_pop3` / `mail_imap` tests fail**: the
+  in-process pattern (spawn_thread fake server + main connect)
+  trips a runtime TCP recv error on the same OS thread. The mail
+  clients themselves work against real servers; only the
+  in-process integration tests fail. Real fix needs investigation
+  of reactor + spawn_thread interaction.
 
 ### LSP performance
 
@@ -74,10 +277,11 @@ for transitively-imported files (~70 MiB / file × 18 files). Reducing
 it further needs a smaller AST representation or a lazy-import scheme
 that doesn't parse symbol bodies until they're queried.
 
-## 0.1.0 — 2026-05-05
+## 0.0.1 (preview) — 2026-05-05
 
-First release. Glide is a self-hosted, plug-and-play systems language with
-no Rust or system C compiler required.
+Early preview tagged at the bootstrap milestone (now superseded by 0.1.0).
+Glide is a self-hosted, plug-and-play systems language with no Rust or
+system C compiler required.
 
 ### Language
 
