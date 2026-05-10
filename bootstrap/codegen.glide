@@ -2549,6 +2549,47 @@ fn emit_arm_typeof_probe(g: *CG, arms: *Vector<MatchArm>) {
     print!("); })");
 }
 
+// True iff `t` is `*dyn Trait` — i.e. a pointer to a dyn trait
+// object. The C representation is the fat-pointer struct
+// `__glide_dyn_<Trait>` (vtable + data), not a raw pointer, so any
+// site that handles `null` against this type needs special-casing
+// (struct-zero-init for assignment; .vtable field for compare).
+fn _is_dyn_ptr(t: *Type) -> bool {
+    if t == null { return false; }
+    if t.kind != TY_POINTER { return false; }
+    if t.inner == null { return false; }
+    return t.inner.kind == TY_DYN;
+}
+
+// Emit a "null" appropriate for the expected type. For `*dyn Trait`
+// the fat-pointer struct gets zero-initialised (vtable=NULL,
+// data=NULL); for everything else, plain `NULL`.
+fn _emit_null_for(t: *Type) {
+    if _is_dyn_ptr(t) {
+        print!("((", type_to_c(t), "){0})");
+        return;
+    }
+    print!("NULL");
+}
+
+// Look up the type of `field_name` on `struct_name` via g.structs.
+// Returns null when the struct or field isn't found (codegen falls
+// back to plain NULL emit, which is the existing behaviour).
+fn _field_ty_in_struct(g: *CG, struct_name: string, field_name: string) -> *Type {
+    if g.structs == null || !g.structs.contains(struct_name) { return null; }
+    let sd: Stmt = g.structs.get(struct_name);
+    if sd.struct_fields == null { return null; }
+    for let i: int = 0; i < sd.struct_fields.len(); i++ {
+        let f: Field = sd.struct_fields.get(i);
+        if f.name.eq(field_name) {
+            let p: *Type = malloc(sizeof(Type)) as *Type;
+            *p = *f.ty;
+            return p;
+        }
+    }
+    return null;
+}
+
 // ---- expressions ---------------------------------------------------------
 
 pub fn emit_expr(g: *CG, e: *Expr) {
@@ -2714,6 +2755,27 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             print!("(("); emit_expr(g, e.lhs); print!(") ? ("); emit_expr(g, e.lhs);
             print!(") : ("); emit_expr(g, e.rhs); print!("))");
             return;
+        }
+        // `*dyn Trait` compares to null: the C representation is a
+        // fat-pointer struct, so `(x == NULL)` doesn't compile.
+        // Translate to a check on the `vtable` slot (NULL when the
+        // dyn was zero-initialised, set to a real vtable otherwise).
+        if e.op_code == OP_EQ || e.op_code == OP_NE {
+            let lt: *Type = infer_for_codegen(g, e.lhs);
+            let rt: *Type = infer_for_codegen(g, e.rhs);
+            let lhs_dyn: bool = _is_dyn_ptr(lt);
+            let rhs_dyn: bool = _is_dyn_ptr(rt);
+            let lhs_null: bool = e.lhs != null && e.lhs.kind == EX_NULL;
+            let rhs_null: bool = e.rhs != null && e.rhs.kind == EX_NULL;
+            if lhs_dyn && rhs_null {
+                print!("(("); emit_expr(g, e.lhs); print!(").vtable ", op_to_c(e.op_code), " NULL)");
+                return;
+            }
+            if rhs_dyn && lhs_null {
+                print!("(NULL ", op_to_c(e.op_code), " (");
+                emit_expr(g, e.rhs); print!(").vtable)");
+                return;
+            }
         }
         print!("(");
         emit_expr(g, e.lhs);
@@ -3399,8 +3461,18 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         if e.field_names != null && e.args != null {
             for let i: int = 0; i < e.args.len(); i++ {
                 if i > 0 { print!(", "); }
-                print!(".", c_safe_ident(e.field_names.get(i)), " = ");
+                let fname: string = e.field_names.get(i);
+                print!(".", c_safe_ident(fname), " = ");
                 let v: Expr = e.args.get(i);
+                // `null` against a `*dyn Trait` field needs the
+                // fat-pointer zero-init, not literal NULL.
+                if v.kind == EX_NULL {
+                    let fty: *Type = _field_ty_in_struct(g, e.str_val, fname);
+                    if _is_dyn_ptr(fty) {
+                        _emit_null_for(fty);
+                        continue;
+                    }
+                }
                 emit_expr(g, &v);
             }
         }
@@ -3617,7 +3689,13 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         } else {
             if s.let_value != null {
                 print!(" = ");
-                emit_expr(g, s.let_value);
+                // `let p: *dyn Foo = null;` — fat-pointer struct
+                // can't take literal NULL; emit zero-init.
+                if s.let_value.kind == EX_NULL && _is_dyn_ptr(s.let_ty) {
+                    _emit_null_for(s.let_ty);
+                } else {
+                    emit_expr(g, s.let_value);
+                }
             }
             println!(";");
         }
@@ -4938,6 +5016,9 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // Pre-emit struct bodies for every Type that appears as an `impl Trait
     // for Type` target where Trait is dyn-used. The thunks emitted by
     // emit_dyn_runtime do `*(Type*)self_p`, which needs the full definition.
+    // Each struct's field types may reference generic mono structs
+    // (Vector<T>, HashMap<V>, etc.); forward-decl those before emitting
+    // the struct body so the field types are in scope.
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_IMPL { continue; }
@@ -4951,6 +5032,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             if ts.name == null || ts.name.eq("") { continue; }
             if !ts.name.eq(tn) { continue; }
             if ts.kind == ST_STRUCT && (ts.type_params == null || ts.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &ts);
                 println!("typedef struct ".concat(ts.name).concat(" ").concat(ts.name).concat(";"));
                 emit_struct(&ts);
                 g.emitted_named.insert(tn, true);
