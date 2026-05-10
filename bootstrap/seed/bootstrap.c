@@ -3893,6 +3893,12 @@ typedef struct  Interp  {
      Vector__string*   diagnostics;
      int   next_call_id;
      int   current_call_id;
+     int   current_macro_line;
+     int   current_macro_col;
+     const char*   current_macro_origin;
+     int   current_use_line;
+     int   current_use_col;
+     const char*   current_use_origin;
 }  Interp ;
 
 typedef struct  MacroBinding  {
@@ -4525,6 +4531,7 @@ IValue   iv_hashmap (HashMap__IValue*   map);
 Interp*   Interp_new (void);
 void   Interp_register_fns (Interp*   self, Vector__Stmt*   program);
 void   Interp_err (Interp*   self, const char*   msg);
+void   Interp_set_use_site (Interp*   self, int   line, int   col, const char*   origin);
 IValue   scope_get (Interp*   it, const char*   name);
 int   _well_known_const (const char*   name);
 void   scope_define (Interp*   it, const char*   name, IValue   v);
@@ -10272,6 +10279,12 @@ Interp*   Interp_new (void) {
     ((it-> diagnostics )  =  diags);
     ((it-> next_call_id )  =  1);
     ((it-> current_call_id )  =  0);
+    ((it-> current_macro_line )  =  0);
+    ((it-> current_macro_col )  =  0);
+    ((it-> current_macro_origin )  =  "");
+    ((it-> current_use_line )  =  0);
+    ((it-> current_use_col )  =  0);
+    ((it-> current_use_origin )  =  "");
     return it;
 }
 
@@ -10285,8 +10298,21 @@ void   Interp_register_fns (Interp*   self, Vector__Stmt*   program) {
 }
 
 void   Interp_err (Interp*   self, const char*   msg) {
-    Vector_push__string((self-> diagnostics ), msg);
+    const char*   formatted = msg;
+    if (((!__glide_string_eq((self-> current_macro_origin ), ""))  ||  ((self-> current_macro_line )  >  0))) {
+        (formatted  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat((self-> current_macro_origin ), ":"), __glide_int_to_string((self-> current_macro_line ))), ":"), __glide_int_to_string((self-> current_macro_col ))), ": macro fn: "), msg));
+    }
+    if (((!__glide_string_eq((self-> current_use_origin ), ""))  ||  ((self-> current_use_line )  >  0))) {
+        (formatted  =  __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(formatted, "\n  "), (self-> current_use_origin )), ":"), __glide_int_to_string((self-> current_use_line ))), ":"), __glide_int_to_string((self-> current_use_col ))), ": macro use site"));
+    }
+    Vector_push__string((self-> diagnostics ), formatted);
     ((self-> control )  =  CF_ERROR);
+}
+
+void   Interp_set_use_site (Interp*   self, int   line, int   col, const char*   origin) {
+    ((self-> current_use_line )  =  line);
+    ((self-> current_use_col )  =  col);
+    ((self-> current_use_origin )  =  origin);
 }
 
 IValue   scope_get (Interp*   it, const char*   name) {
@@ -10475,6 +10501,12 @@ IValue   interp_call (Interp*   it, Stmt*   fn_stmt, Vector__IValue*   args) {
     int   saved_control = (it-> control );
     IValue   saved_return = (it-> return_val );
     int   saved_call_id = (it-> current_call_id );
+    const char*   saved_macro_origin = (it-> current_macro_origin );
+    int   saved_macro_line = (it-> current_macro_line );
+    int   saved_macro_col = (it-> current_macro_col );
+    if ((((fn_stmt  !=  NULL)  &&  ((fn_stmt-> origin )  !=  NULL))  &&  (!__glide_string_eq((fn_stmt-> origin ), "")))) {
+        ((it-> current_macro_origin )  =  (fn_stmt-> origin ));
+    }
     ((it-> control )  =  CF_NORMAL);
     ((it-> return_val )  =  ((IValue(*)(void))iv_null)());
     if (((it-> current_call_id )  ==  0)) {
@@ -10511,12 +10543,19 @@ IValue   interp_call (Interp*   it, Stmt*   fn_stmt, Vector__IValue*   args) {
     ((it-> control )  =  saved_control);
     ((it-> return_val )  =  saved_return);
     ((it-> current_call_id )  =  saved_call_id);
+    ((it-> current_macro_origin )  =  saved_macro_origin);
+    ((it-> current_macro_line )  =  saved_macro_line);
+    ((it-> current_macro_col )  =  saved_macro_col);
     return ret;
 }
 
 void   interp_stmt (Interp*   it, Stmt*   s) {
     if ((s  ==  NULL)) {
         return;
+    }
+    if (((s-> line )  >  0)) {
+        ((it-> current_macro_line )  =  (s-> line ));
+        ((it-> current_macro_col )  =  (s-> column ));
     }
     if ((((s-> kind )  ==  ST_LET)  ||  ((s-> kind )  ==  ST_CONST))) {
         IValue   v = ((IValue(*)(void))iv_null)();
@@ -10667,6 +10706,10 @@ void   interp_block (Interp*   it, Vector__Stmt*   body) {
 IValue   interp_expr (Interp*   it, Expr*   e) {
     if ((e  ==  NULL)) {
         return ((IValue(*)(void))iv_null)();
+    }
+    if (((e-> line )  >  0)) {
+        ((it-> current_macro_line )  =  (e-> line ));
+        ((it-> current_macro_col )  =  (e-> column ));
     }
     if (((e-> kind )  ==  EX_INT)) {
         return ((IValue(*)(int))iv_int)((( int )(e-> int_val )));
@@ -11837,7 +11880,7 @@ Vector__Stmt*   expand_proc_macros (Vector__Stmt*   program) {
     }
     if ((Vector_len__string((it-> diagnostics ))  >  0)) {
         for (int   i = 0; (i  <  Vector_len__string((it-> diagnostics ))); i++) {
-            printf("%s %s\n", "proc-macro:", Vector_get__string((it-> diagnostics ), i));
+            printf("%s %s\n", "error: proc-macro:", Vector_get__string((it-> diagnostics ), i));
         }
     }
     ((void(*)(void*))__glide_palloc_set)(saved_arena);
@@ -11861,6 +11904,7 @@ int   _proc_kind_for (const char*   name) {
 }
 
 void   _run_derive (Interp*   it, Stmt*   fn_stmt, Stmt*   target, Vector__Stmt*   out) {
+    Interp_set_use_site(it, (target-> line ), (target-> column ), (target-> origin ));
     Vector__IValue*   args = ((Vector__IValue*(*)(void))Vector_new__IValue)();
     Vector_push__IValue(args, ((IValue(*)(void*, const char*))iv_ptr)((( void* )target), "Stmt"));
     IValue   r = ((IValue(*)(Interp*, Stmt*, Vector__IValue*))interp_call)(it, fn_stmt, args);
@@ -11886,6 +11930,7 @@ void   _run_derive (Interp*   it, Stmt*   fn_stmt, Stmt*   target, Vector__Stmt*
 }
 
 void   _run_attr (Interp*   it, Stmt*   fn_stmt, Stmt*   target, Vector__Stmt*   out) {
+    Interp_set_use_site(it, (target-> line ), (target-> column ), (target-> origin ));
     Vector__IValue*   args = ((Vector__IValue*(*)(void))Vector_new__IValue)();
     Vector_push__IValue(args, ((IValue(*)(void*, const char*))iv_ptr)((( void* )target), "Stmt"));
     IValue   r = ((IValue(*)(Interp*, Stmt*, Vector__IValue*))interp_call)(it, fn_stmt, args);
