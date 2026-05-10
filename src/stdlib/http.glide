@@ -179,10 +179,23 @@ impl HttpRequest {
 /// Outgoing response. Build with `HttpResponse::ok()` /
 /// `HttpResponse::with_status(n)` then chain the setters; status codes
 /// fall back to a generic reason phrase when unknown.
+///
+/// Streaming bodies use `stream_state` (an opaque `*void` carrying
+/// the iterator state) plus `stream_next` (a fn pointer that takes
+/// the state and returns `?string` — `none()` ends the stream).
+/// `stream_next == null` means "buffered body" (the common case);
+/// `body` is then used and `stream_state` is ignored. Pair via
+/// `.stream(state, next_fn)`.
+///
+/// The two-field shape (instead of a `*dyn ChunkSource` trait
+/// object) sidesteps a codegen ordering bug around dyn-trait
+/// vtables + nested generic types. Functionally equivalent.
 pub struct HttpResponse {
     pub status:        int,
     pub headers_block: string,
     pub body:          string,
+    pub stream_state:  *void,
+    pub stream_next:   fn(*void) -> ?string,
 }
 
 impl HttpResponse {
@@ -198,6 +211,8 @@ impl HttpResponse {
             status: code,
             headers_block: "",
             body: "",
+            stream_state: null,
+            stream_next: null,
         };
     }
 
@@ -229,6 +244,8 @@ impl HttpResponse {
             status: self.status,
             headers_block: self.headers_block,
             body: s,
+            stream_state: self.stream_state,
+            stream_next: self.stream_next,
         };
     }
 
@@ -254,6 +271,8 @@ impl HttpResponse {
             status: self.status,
             headers_block: stripped.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
             body: self.body,
+            stream_state: self.stream_state,
+            stream_next: self.stream_next,
         };
     }
 
@@ -274,6 +293,8 @@ impl HttpResponse {
             status: self.status,
             headers_block: self.headers_block.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
             body: self.body,
+            stream_state: self.stream_state,
+            stream_next: self.stream_next,
         };
     }
 
@@ -287,6 +308,41 @@ impl HttpResponse {
             status: code,
             headers_block: self.headers_block,
             body: self.body,
+            stream_state: self.stream_state,
+            stream_next: self.stream_next,
+        };
+    }
+
+    /// Stream the response body via `source`. The server emits
+    /// `Transfer-Encoding: chunked` and walks `source.next_chunk()`
+    /// until it returns `none()`. The buffered `body` is ignored
+    /// once a stream source is set.
+    ///
+    /// ```glide
+    /// pub struct Lines { pub items: *Vector<string>, pub idx: int }
+    /// impl ChunkSource for Lines {
+    ///     fn next_chunk(self: *Lines) -> ?string {
+    ///         if self.idx >= self.items.len() { return none(); }
+    ///         let s: string = self.items.get(self.idx);
+    ///         self.idx = self.idx + 1;
+    ///         return some(s.concat("\n"));
+    ///     }
+    /// }
+    ///
+    /// fn handler(req: *HttpRequest) -> HttpResponse {
+    ///     let src: *Lines = malloc(sizeof(Lines)) as *Lines;
+    ///     src.items = ...;  src.idx = 0;
+    ///     return HttpResponse::ok().stream(src);
+    /// }
+    /// ```
+    pub fn stream(self: HttpResponse, state: *void,
+                  next: fn(*void) -> ?string) -> HttpResponse {
+        return HttpResponse {
+            status: self.status,
+            headers_block: self.headers_block,
+            body: "",
+            stream_state: state,
+            stream_next: next,
         };
     }
 
@@ -603,6 +659,76 @@ fn _format_response(r: *HttpResponse, keep_alive: bool) -> string {
     return out;
 }
 
+// Lower-case hex of `n`. Used for the chunk-length prefix in
+// Transfer-Encoding: chunked frames.
+fn _hex_len(n: int) -> string {
+    if n == 0 { return "0"; }
+    let chars: string = "0123456789abcdef";
+    let mut x: int = n;
+    let mut s: string = "";
+    while x > 0 {
+        let nib: int = x & 15;
+        s = chars.at(nib).to_string().concat(s);
+        x = x / 16;
+    }
+    return s;
+}
+
+// Build the head bytes (status line + headers + blank line) for a
+// chunked-encoded response. Same shape as `_format_response` minus
+// the body and minus Content-Length, plus `Transfer-Encoding: chunked`.
+fn _format_chunked_head(r: *HttpResponse, keep_alive: bool) -> string {
+    let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status))
+                              .concat(" ").concat(status_text(r.status))
+                              .concat("\r\n");
+    out = out.concat("Transfer-Encoding: chunked\r\n");
+    if keep_alive { out = out.concat("Connection: keep-alive\r\n"); }
+    else          { out = out.concat("Connection: close\r\n"); }
+    if r.headers_block.len() > 0 { out = out.concat(r.headers_block); }
+    out = out.concat("\r\n");
+    return out;
+}
+
+// Pump every chunk from `next(state)` to `c`, framed as
+// `<hex-length>\r\n<data>\r\n`, terminated by `0\r\n\r\n`. Empty
+// strings from next are emitted as zero-length frames (spec-legal,
+// mostly useless); none() ends the stream.
+fn _pump_chunks(c: *Conn, state: *void, next: fn(*void) -> ?string) {
+    let crlf: string = "\r\n";
+    while true {
+        let r: ?string = next(state);
+        if !r.has { break; }
+        let chunk: string = r.val;
+        let prefix: string = _hex_len(chunk.len()).concat(crlf);
+        c.write(prefix as *void, prefix.len());
+        if chunk.len() > 0 {
+            c.write(chunk as *void, chunk.len());
+        }
+        c.write(crlf as *void, 2);
+    }
+    let term: string = "0\r\n\r\n";
+    c.write(term as *void, 5);
+}
+
+// Pick the right wire-emit path based on whether the response carries
+// a stream source. Buffered responses go through the C builder
+// (single static buffer, single write); streamed responses emit
+// header bytes manually then pump chunks.
+fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
+    if resp.stream_next != null {
+        let head: string = _format_chunked_head(resp, keep);
+        c.write(head as *void, head.len());
+        _pump_chunks(c, resp.stream_state, resp.stream_next);
+        return;
+    }
+    let mut keep_i: int = 0;
+    if keep { keep_i = 1; }
+    let wlen: int = hp_build_response(resp.status, status_text(resp.status),
+                                      resp.body as *void, resp.body.len(),
+                                      resp.headers_block, keep_i);
+    c.write(hp_resp_buf_ptr(), wlen);
+}
+
 /// Render a response as wire bytes. Used by the server loop; exposed
 /// so callers can pipe responses elsewhere (a logger, a recorder).
 /// Always emits `Connection: close` — the in-process keep-alive path
@@ -658,12 +784,7 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
             resp = handler(&req);
             hp_glide_free(g);
         }
-        let mut keep_i: int = 0;
-        if keep { keep_i = 1; }
-        let wlen: int = hp_build_response(resp.status, status_text(resp.status),
-                                          resp.body as *void, resp.body.len(),
-                                          resp.headers_block, keep_i);
-        c.write(hp_resp_buf_ptr(), wlen);
+        _write_response(c, &resp, keep);
         if !keep { break; }
     }
     c.close();

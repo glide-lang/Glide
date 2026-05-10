@@ -645,12 +645,7 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
             resp = r.dispatch(&req);
             hp_glide_free(g);
         }
-        let mut keep_i: int = 0;
-        if keep { keep_i = 1; }
-        let wlen: int = hp_build_response(resp.status, status_text(resp.status),
-                                          resp.body as *void, resp.body.len(),
-                                          resp.headers_block, keep_i);
-        c.write(hp_resp_buf_ptr(), wlen);
+        _write_response(c, &resp, keep);
         if !keep { break; }
     }
     c.close();
