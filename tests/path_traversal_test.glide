@@ -1,0 +1,73 @@
+// Path traversal block in Router::dispatch — `..` segments are
+// rejected as 400 before any route matches. A wildcard route like
+// `/static/*rest` would otherwise let a careless handler read
+// outside its root.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+
+fn h_ok(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("ok");
+}
+
+fn _req(path: string) -> HttpRequest {
+    let nope: *HashMap<string> = null;
+    return HttpRequest {
+        method:        "GET",
+        path:          path,
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          "",
+        params:        nope,
+        queries:       nope,
+    };
+}
+
+fn test_dotdot_segment_blocked_on_literal_route() -> int {
+    let r: *Router = Router::new();
+    r.get("/files", h_ok);
+    let req: HttpRequest = _req("/files/../etc");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 400);
+    return 0;
+}
+
+fn test_dotdot_segment_blocked_on_wildcard() -> int {
+    let r: *Router = Router::new();
+    r.get("/static/*rest", h_ok);
+    let req: HttpRequest = _req("/static/../etc/passwd");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 400);
+    return 0;
+}
+
+fn test_dotdot_at_root_blocked() -> int {
+    let r: *Router = Router::new();
+    r.get("/", h_ok);
+    let req: HttpRequest = _req("/..");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 400);
+    return 0;
+}
+
+fn test_double_dot_in_segment_name_allowed() -> int {
+    // `foo..bar` is a literal name with two dots — not a `..` segment.
+    let r: *Router = Router::new();
+    r.get("/foo..bar", h_ok);
+    let req: HttpRequest = _req("/foo..bar");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    return 0;
+}
+
+fn test_single_dot_segment_allowed() -> int {
+    // `.` is a no-op segment. We don't normalise it (the router is
+    // path-string based, not VFS-based) but we don't block it either.
+    let r: *Router = Router::new();
+    r.get("/files", h_ok);
+    let req: HttpRequest = _req("/files");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    return 0;
+}

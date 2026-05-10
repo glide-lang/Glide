@@ -1,0 +1,79 @@
+// HttpResponse::set replaces same-name headers; HttpResponse::add
+// appends. Cookies route through `add` so multiple Set-Cookie lines
+// coexist.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+
+fn test_set_replaces_existing_header() -> int {
+    let r: HttpResponse = HttpResponse::ok()
+        .set("Content-Type", "application/json")
+        .set("Content-Type", "text/plain");
+    assert_str_eq!(r.header("Content-Type"), "text/plain");
+    let all: *Vector<string> = r.headers("Content-Type");
+    assert_eq!(all.len(), 1);
+    return 0;
+}
+
+fn test_set_is_case_insensitive() -> int {
+    let r: HttpResponse = HttpResponse::ok()
+        .set("Content-Type", "a/b")
+        .set("content-type", "c/d");
+    let all: *Vector<string> = r.headers("Content-Type");
+    assert_eq!(all.len(), 1);
+    assert_str_eq!(r.header("Content-Type"), "c/d");
+    return 0;
+}
+
+fn test_add_appends_existing_header() -> int {
+    let r: HttpResponse = HttpResponse::ok()
+        .add("Set-Cookie", "session=abc")
+        .add("Set-Cookie", "csrf=xyz");
+    let all: *Vector<string> = r.headers("Set-Cookie");
+    assert_eq!(all.len(), 2);
+    assert_str_eq!(all.get(0), "session=abc");
+    assert_str_eq!(all.get(1), "csrf=xyz");
+    return 0;
+}
+
+fn test_cookie_uses_add_semantics() -> int {
+    let r: HttpResponse = HttpResponse::ok()
+        .cookie("session", "abc")
+        .cookie("csrf", "xyz");
+    let all: *Vector<string> = r.headers("Set-Cookie");
+    assert_eq!(all.len(), 2);
+    assert_str_eq!(all.get(0), "session=abc");
+    assert_str_eq!(all.get(1), "csrf=xyz");
+    return 0;
+}
+
+fn test_set_after_add_replaces_all_matching() -> int {
+    let r: HttpResponse = HttpResponse::ok()
+        .add("Vary", "Accept")
+        .add("Vary", "Origin")
+        .set("Vary", "*");
+    let all: *Vector<string> = r.headers("Vary");
+    assert_eq!(all.len(), 1);
+    assert_str_eq!(all.get(0), "*");
+    return 0;
+}
+
+fn test_set_preserves_other_headers() -> int {
+    let r: HttpResponse = HttpResponse::ok()
+        .set("X-Foo", "1")
+        .set("X-Bar", "2")
+        .set("X-Foo", "3");
+    assert_str_eq!(r.header("X-Foo"), "3");
+    assert_str_eq!(r.header("X-Bar"), "2");
+    return 0;
+}
+
+fn test_text_chain_replaces_content_type() -> int {
+    // .text() and .json() each call .set("Content-Type", ...).
+    // Chaining should leave only the last one.
+    let r: HttpResponse = HttpResponse::ok().json("{}").text("hi");
+    let all: *Vector<string> = r.headers("Content-Type");
+    assert_eq!(all.len(), 1);
+    assert!(r.header("Content-Type").starts_with("text/plain"));
+    return 0;
+}
