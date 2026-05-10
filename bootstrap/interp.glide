@@ -334,6 +334,15 @@ fn _well_known_const(name: string) -> int {
     if name.eq("UN_NOT") { return UN_NOT; }
     if name.eq("UN_DEREF") { return UN_DEREF; }
     if name.eq("UN_ADDR") { return UN_ADDR; }
+    if name.eq("UN_ADDR_MUT") { return UN_ADDR_MUT; }
+    if name.eq("UN_BIT_NOT") { return UN_BIT_NOT; }
+    if name.eq("UN_TRY") { return UN_TRY; }
+    if name.eq("OP_LE") { return OP_LE; }
+    if name.eq("OP_GE") { return OP_GE; }
+    if name.eq("OP_DIV") { return OP_DIV; }
+    if name.eq("OP_MOD") { return OP_MOD; }
+    if name.eq("OP_COALESCE") { return OP_COALESCE; }
+    if name.eq("EX_STRUCT_LIT") { return EX_STRUCT_LIT; }
     return -1;
 }
 
@@ -946,6 +955,21 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         let methods: *Vector<Stmt> = _vec_to_stmt_vec(it, methods_iv);
         return iv_ptr(stmt_impl(target, methods, 0, 0) as *void, "Stmt");
     }
+    if name.eq("stmt_impl_trait") {
+        let target: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
+        let trait_name: string = _arg_string(it, args, 1);
+        let methods_iv: IValue = args.get(2);
+        let methods: *Vector<Stmt> = _vec_to_stmt_vec(it, methods_iv);
+        return iv_ptr(stmt_impl_trait(target, trait_name, methods, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("expr_struct_lit") {
+        let type_name: string = _arg_string(it, args, 0);
+        let names_iv: IValue = args.get(1);
+        let names: *Vector<string> = _vec_to_string_vec(it, names_iv);
+        let vals_iv: IValue = args.get(2);
+        let vals: *Vector<Expr> = _vec_to_expr_vec(it, vals_iv);
+        return iv_ptr(expr_struct_lit(type_name, names, vals, 0, 0) as *void, "Expr");
+    }
 
     // String ops as free fns (the `s.method()` form goes through
     // method_call below, but a few are also exposed positionally).
@@ -1314,6 +1338,16 @@ fn _vec_to_field_vec(it: *Interp, v: IValue) -> *Vector<Field> {
             let f: *Field = elem.p as *Field;
             out.push(*f);
         }
+    }
+    return out;
+}
+
+fn _vec_to_string_vec(it: *Interp, v: IValue) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    if v.kind != IV_VECTOR { return out; }
+    for let i: int = 0; i < v.vec.len(); i++ {
+        let elem: IValue = v.vec.get(i);
+        if elem.kind == IV_STRING { out.push(elem.s); }
     }
     return out;
 }

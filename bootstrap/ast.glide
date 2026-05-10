@@ -732,6 +732,16 @@ pub fn stmt_impl(target: *Type, methods: *Vector<Stmt>, line: int, col: int) -> 
     return s;
 }
 
+// `impl <trait_name> for <target> { methods... }`. Used by proc-derive
+// macros — the parser sets `impl_trait_name` on a regular stmt_impl,
+// but macro emitters need a single-call constructor since the
+// interpreter has no field setters.
+pub fn stmt_impl_trait(target: *Type, trait_name: string, methods: *Vector<Stmt>, line: int, col: int) -> *Stmt {
+    let s: *Stmt = stmt_impl(target, methods, line, col);
+    s.impl_trait_name = trait_name;
+    return s;
+}
+
 pub fn stmt_if(cond: *Expr, then_body: *Vector<Stmt>, else_body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_IF;
