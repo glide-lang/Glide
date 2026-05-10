@@ -173,13 +173,27 @@ pub struct Interp {
     // Hygiene: every interp_call invocation gets a fresh call_id
     // (next_call_id++). expr_ident("name") synthesises
     // `__macro_<call_id>__name` so generated bindings can never
-    // collide with caller-site names. expr_ident_unsafe("name")
+    // collide with caller-side names. expr_ident_unsafe("name")
     // bypasses the suffix when the macro deliberately wants to
     // reference a caller-side ident. current_call_id is 0 when no
     // macro is executing — saves the suffix-injection branch from
     // firing on AST built outside a macro context.
     pub next_call_id: int,
     pub current_call_id: int,
+
+    // Diagnostics tracking — interp_stmt / interp_expr keep
+    // current_macro_line/col pointing at the AST node currently
+    // executing so `it.err(...)` knows which source line in the
+    // macro fn body to blame. interp_call snapshots the macro
+    // fn's origin file for the same purpose. The expander seeds
+    // current_use_* before each invocation so diagnostics also
+    // surface the @derive / @<name> use site.
+    pub current_macro_line: int,
+    pub current_macro_col: int,
+    pub current_macro_origin: string,
+    pub current_use_line: int,
+    pub current_use_col: int,
+    pub current_use_origin: string,
 }
 
 impl Interp {
@@ -195,6 +209,12 @@ impl Interp {
         it.diagnostics = diags;
         it.next_call_id = 1;
         it.current_call_id = 0;
+        it.current_macro_line = 0;
+        it.current_macro_col = 0;
+        it.current_macro_origin = "";
+        it.current_use_line = 0;
+        it.current_use_col = 0;
+        it.current_use_origin = "";
         return it;
     }
 
@@ -211,8 +231,35 @@ impl Interp {
     }
 
     pub fn err(self: *Interp, msg: string) {
-        self.diagnostics.push(msg);
+        // Two-site format: macro-fn body location (where the
+        // intrinsic / unsupported node was hit) + the use site
+        // (where the @derive / @<name> annotation lives). Either
+        // can be empty when not yet known; the expander threads
+        // both in before each interp_call.
+        let mut formatted: string = msg;
+        if !self.current_macro_origin.eq("") || self.current_macro_line > 0 {
+            formatted = self.current_macro_origin
+                .concat(":").concat(self.current_macro_line.to_string())
+                .concat(":").concat(self.current_macro_col.to_string())
+                .concat(": macro fn: ").concat(msg);
+        }
+        if !self.current_use_origin.eq("") || self.current_use_line > 0 {
+            formatted = formatted.concat("\n  ")
+                .concat(self.current_use_origin)
+                .concat(":").concat(self.current_use_line.to_string())
+                .concat(":").concat(self.current_use_col.to_string())
+                .concat(": macro use site");
+        }
+        self.diagnostics.push(formatted);
         self.control = CF_ERROR;
+    }
+
+    // Called by the expander before each interp_call so error
+    // messages can blame the @derive / @<name> use site too.
+    pub fn set_use_site(self: *Interp, line: int, col: int, origin: string) {
+        self.current_use_line = line;
+        self.current_use_col = col;
+        self.current_use_origin = origin;
     }
 }
 
@@ -322,6 +369,12 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
     let saved_control: int = it.control;
     let saved_return: IValue = it.return_val;
     let saved_call_id: int = it.current_call_id;
+    let saved_macro_origin: string = it.current_macro_origin;
+    let saved_macro_line: int = it.current_macro_line;
+    let saved_macro_col: int = it.current_macro_col;
+    if fn_stmt != null && fn_stmt.origin != null && !fn_stmt.origin.eq("") {
+        it.current_macro_origin = fn_stmt.origin;
+    }
     it.control = CF_NORMAL;
     it.return_val = iv_null();
     // Hygiene: top-level macro invocation gets a fresh call_id. Helper
@@ -361,6 +414,9 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
     it.control = saved_control;
     it.return_val = saved_return;
     it.current_call_id = saved_call_id;
+    it.current_macro_origin = saved_macro_origin;
+    it.current_macro_line = saved_macro_line;
+    it.current_macro_col = saved_macro_col;
     return ret;
 }
 
@@ -368,6 +424,10 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
 
 pub fn interp_stmt(it: *Interp, s: *Stmt) {
     if s == null { return; }
+    if s.line > 0 {
+        it.current_macro_line = s.line;
+        it.current_macro_col = s.column;
+    }
     if s.kind == ST_LET || s.kind == ST_CONST {
         let mut v: IValue = iv_null();
         if s.let_value != null { v = interp_expr(it, s.let_value); }
@@ -456,6 +516,10 @@ fn interp_block(it: *Interp, body: *Vector<Stmt>) {
 
 pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
     if e == null { return iv_null(); }
+    if e.line > 0 {
+        it.current_macro_line = e.line;
+        it.current_macro_col = e.column;
+    }
     if e.kind == EX_INT { return iv_int(e.int_val as int); }
     if e.kind == EX_BOOL { return iv_bool(e.bool_val); }
     if e.kind == EX_STRING { return iv_string(e.str_val); }

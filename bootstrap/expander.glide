@@ -156,7 +156,7 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     }
     if it.diagnostics.len() > 0 {
         for let i: int = 0; i < it.diagnostics.len(); i++ {
-            println!("proc-macro:", it.diagnostics.get(i));
+            println!("error: proc-macro:", it.diagnostics.get(i));
         }
     }
     __glide_palloc_set(saved_arena);
@@ -178,6 +178,7 @@ fn _proc_kind_for(name: string) -> int {
 // derived helper on a pub struct stays accessible). Then it's
 // appended to `out` so it lands right after the original decl.
 fn _run_derive(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
+    it.set_use_site(target.line, target.column, target.origin);
     let args: *Vector<IValue> = Vector::new();
     args.push(iv_ptr(target as *void, "Stmt"));
     let r: IValue = interp_call(it, fn_stmt, args);
@@ -211,6 +212,7 @@ fn _run_derive(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
 // Either return shape inherits origin + is_pub from the use site
 // and runs through ast_fill_defaults so codegen reads safely.
 fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
+    it.set_use_site(target.line, target.column, target.origin);
     let args: *Vector<IValue> = Vector::new();
     args.push(iv_ptr(target as *void, "Stmt"));
     let r: IValue = interp_call(it, fn_stmt, args);
