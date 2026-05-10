@@ -1,0 +1,44 @@
+// Tuple-struct syntax — `struct Name(field: type, ...)` is sugar for
+// `struct Name { pub field: type, ... }`. Implicit-pub on every field;
+// brace-form stays the way to declare private fields.
+
+import stdlib::testing::*;
+
+struct ApiKey(key: string)
+
+struct Pair(first: int, second: int)
+
+struct Nested(label: string, pair: Pair)
+
+
+fn test_single_field() -> int {
+    let k: ApiKey = ApiKey { key: "secret-123" };
+    assert_str_eq!(k.key, "secret-123");
+    return 0;
+}
+
+fn test_multi_field() -> int {
+    let p: Pair = Pair { first: 1, second: 2 };
+    assert_eq!(p.first, 1);
+    assert_eq!(p.second, 2);
+    return 0;
+}
+
+fn test_nested_tuple_struct() -> int {
+    let inner: Pair = Pair { first: 10, second: 20 };
+    let n: Nested = Nested { label: "hi", pair: inner };
+    assert_str_eq!(n.label, "hi");
+    assert_eq!(n.pair.first, 10);
+    return 0;
+}
+
+fn test_fields_implicitly_pub() -> int {
+    // If the field weren't pub, this would be a compile error
+    // (private field accessed from outside the defining module).
+    // Tests run in a synth main file so "outside" is a stretch, but
+    // the parser must mark these fields pub for the rule to apply
+    // when other modules use the type.
+    let k: ApiKey = ApiKey { key: "x" };
+    let _consume: string = k.key;
+    return 0;
+}
