@@ -1,0 +1,158 @@
+// End-to-end @handler tests with the new extractors. Confirms the
+// macro emits the right `T::from_request(req)` / `Path::extract`
+// chains, that errors map to the status encoded in the err prefix,
+// and that the user fn body sees the typed param.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::extract::*;
+import stdlib::http::handler::*;
+
+fn _no_params() -> *HashMap<string> {
+    let m: *HashMap<string> = null;
+    return m;
+}
+
+fn _get(headers: string, params: *HashMap<string>) -> HttpRequest {
+    return HttpRequest {
+        method:        "GET",
+        path:          "/x",
+        version:       "HTTP/1.1",
+        headers_block: headers,
+        body:          "",
+        params:        params,
+        queries:       null,
+    };
+}
+
+// ---- Bearer ---------------------------------------------------------
+
+@handler
+fn protected(auth: Bearer) -> HttpResponse {
+    return HttpResponse::ok().text("token=".concat(auth.token));
+}
+
+fn test_bearer_handler_ok() -> int {
+    let req: HttpRequest = _get("Authorization: Bearer abc\r\n", _no_params());
+    let r: HttpResponse = protected(&req);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "token=abc");
+    return 0;
+}
+
+fn test_bearer_handler_missing_returns_401() -> int {
+    let req: HttpRequest = _get("", _no_params());
+    let r: HttpResponse = protected(&req);
+    assert_eq!(r.status, 401);
+    return 0;
+}
+
+// ---- Headers --------------------------------------------------------
+
+@handler
+fn echo_user_agent(headers: Headers) -> HttpResponse {
+    return HttpResponse::ok().text(headers.get("User-Agent"));
+}
+
+fn test_headers_handler_reads_value() -> int {
+    let req: HttpRequest = _get("User-Agent: glide-test\r\n", _no_params());
+    let r: HttpResponse = echo_user_agent(&req);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "glide-test");
+    return 0;
+}
+
+// ---- Authorization<Basic> ------------------------------------------
+
+@handler
+fn login(creds: Authorization<Basic>) -> HttpResponse {
+    return HttpResponse::ok().text(creds.scheme.user.concat(":").concat(creds.scheme.pass));
+}
+
+fn test_authorization_basic_handler() -> int {
+    let req: HttpRequest = _get("Authorization: Basic alice:s3cret\r\n", _no_params());
+    let r: HttpResponse = login(&req);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "alice:s3cret");
+    return 0;
+}
+
+fn test_authorization_handler_missing_returns_401() -> int {
+    let req: HttpRequest = _get("", _no_params());
+    let r: HttpResponse = login(&req);
+    assert_eq!(r.status, 401);
+    return 0;
+}
+
+// ---- Path<T> --------------------------------------------------------
+
+@handler
+fn show_id(id: Path<int>) -> HttpResponse {
+    return HttpResponse::ok().text("id=".concat(id.val.to_string()));
+}
+
+fn _with_param(k: string, v: string) -> HttpRequest {
+    let p: *HashMap<string> = HashMap::new();
+    p.insert(k, v);
+    return _get("", p);
+}
+
+fn test_path_int_handler_ok() -> int {
+    let req: HttpRequest = _with_param("id", "42");
+    let r: HttpResponse = show_id(&req);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "id=42");
+    return 0;
+}
+
+fn test_path_int_handler_invalid_returns_400() -> int {
+    let req: HttpRequest = _with_param("id", "notanint");
+    let r: HttpResponse = show_id(&req);
+    assert_eq!(r.status, 400);
+    return 0;
+}
+
+fn test_path_missing_returns_404() -> int {
+    let req: HttpRequest = _get("", _no_params());
+    let r: HttpResponse = show_id(&req);
+    assert_eq!(r.status, 404);
+    return 0;
+}
+
+// ---- multiple extractors in one signature -------------------------
+
+@handler
+fn multi(auth: Bearer, id: Path<int>, headers: Headers) -> HttpResponse {
+    return HttpResponse::ok().text(
+        "auth=".concat(auth.token)
+            .concat(" id=").concat(id.val.to_string())
+            .concat(" ua=").concat(headers.get("User-Agent")));
+}
+
+fn test_multi_extractor_handler_ok() -> int {
+    let p: *HashMap<string> = HashMap::new();
+    p.insert("id", "7");
+    let req: HttpRequest = HttpRequest {
+        method:        "GET",
+        path:          "/x",
+        version:       "HTTP/1.1",
+        headers_block: "Authorization: Bearer t\r\nUser-Agent: glide\r\n",
+        body:          "",
+        params:        p,
+        queries:       null,
+    };
+    let r: HttpResponse = multi(&req);
+    assert_eq!(r.status, 200);
+    assert_str_eq!(r.body, "auth=t id=7 ua=glide");
+    return 0;
+}
+
+fn test_multi_extractor_first_failure_short_circuits() -> int {
+    // Missing Bearer — should 401 before path/headers run.
+    let p: *HashMap<string> = HashMap::new();
+    p.insert("id", "7");
+    let req: HttpRequest = _get("", p);
+    let r: HttpResponse = multi(&req);
+    assert_eq!(r.status, 401);
+    return 0;
+}

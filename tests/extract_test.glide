@@ -1,0 +1,161 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::extract::*;
+
+fn _req_with_headers(h: string) -> HttpRequest {
+    return HttpRequest {
+        method:        "GET",
+        path:          "/x",
+        version:       "HTTP/1.1",
+        headers_block: h,
+        body:          "",
+        params:        null,
+        queries:       null,
+    };
+}
+
+// ---- Bearer ----------------------------------------------------------
+
+fn test_bearer_extracts_token() -> int {
+    let r: HttpRequest = _req_with_headers("Authorization: Bearer abc123\r\n");
+    let b: !Bearer = Bearer::from_request(&r);
+    assert!(b.ok);
+    assert_str_eq!(b.val.token, "abc123");
+    return 0;
+}
+
+fn test_bearer_missing_header_errs_401() -> int {
+    let r: HttpRequest = _req_with_headers("");
+    let b: !Bearer = Bearer::from_request(&r);
+    assert_not!(b.ok);
+    assert!(b.err.starts_with("401:"));
+    return 0;
+}
+
+fn test_bearer_wrong_scheme_errs_401() -> int {
+    let r: HttpRequest = _req_with_headers("Authorization: Basic abc\r\n");
+    let b: !Bearer = Bearer::from_request(&r);
+    assert_not!(b.ok);
+    assert!(b.err.starts_with("401:"));
+    return 0;
+}
+
+// ---- Headers --------------------------------------------------------
+
+fn test_headers_get() -> int {
+    let r: HttpRequest = _req_with_headers("X-Foo: bar\r\nUser-Agent: glide/1\r\n");
+    let h: !Headers = Headers::from_request(&r);
+    assert!(h.ok);
+    assert_str_eq!(h.val.get("X-Foo"), "bar");
+    assert_str_eq!(h.val.get("user-agent"), "glide/1");
+    assert_str_eq!(h.val.get("missing"), "");
+    return 0;
+}
+
+fn test_headers_has() -> int {
+    let r: HttpRequest = _req_with_headers("Host: localhost\r\n");
+    let h: !Headers = Headers::from_request(&r);
+    assert!(h.ok);
+    assert!(h.val.has("Host"));
+    assert_not!(h.val.has("X-Custom"));
+    return 0;
+}
+
+// ---- Authorization<Bearer> -----------------------------------------
+
+fn test_authorization_bearer() -> int {
+    let r: HttpRequest = _req_with_headers("Authorization: Bearer xyz\r\n");
+    let a: !Authorization<Bearer> = Authorization::from_request(&r);
+    assert!(a.ok);
+    assert_str_eq!(a.val.scheme.token, "xyz");
+    return 0;
+}
+
+fn test_authorization_bearer_missing() -> int {
+    let r: HttpRequest = _req_with_headers("");
+    let a: !Authorization<Bearer> = Authorization::from_request(&r);
+    assert_not!(a.ok);
+    return 0;
+}
+
+// ---- Authorization<Basic> ------------------------------------------
+
+fn test_authorization_basic() -> int {
+    let r: HttpRequest = _req_with_headers("Authorization: Basic alice:secret\r\n");
+    let a: !Authorization<Basic> = Authorization::from_request(&r);
+    assert!(a.ok);
+    assert_str_eq!(a.val.scheme.user, "alice");
+    assert_str_eq!(a.val.scheme.pass, "secret");
+    return 0;
+}
+
+fn test_authorization_basic_malformed() -> int {
+    let r: HttpRequest = _req_with_headers("Authorization: Basic noColon\r\n");
+    let a: !Authorization<Basic> = Authorization::from_request(&r);
+    assert_not!(a.ok);
+    return 0;
+}
+
+// ---- Path<T> --------------------------------------------------------
+
+fn _req_with_param(name: string, v: string) -> HttpRequest {
+    let p: *HashMap<string> = HashMap::new();
+    p.insert(name, v);
+    return HttpRequest {
+        method:        "GET",
+        path:          "/x",
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          "",
+        params:        p,
+        queries:       null,
+    };
+}
+
+fn test_path_string() -> int {
+    let r: HttpRequest = _req_with_param("name", "alice");
+    let p: !Path<string> = Path::extract(&r, "name");
+    assert!(p.ok);
+    assert_str_eq!(p.val.val, "alice");
+    return 0;
+}
+
+fn test_path_int() -> int {
+    let r: HttpRequest = _req_with_param("id", "42");
+    let p: !Path<int> = Path::extract(&r, "id");
+    assert!(p.ok);
+    assert_eq!(p.val.val, 42);
+    return 0;
+}
+
+fn test_path_int_invalid_errs_400() -> int {
+    let r: HttpRequest = _req_with_param("id", "notanint");
+    let p: !Path<int> = Path::extract(&r, "id");
+    assert_not!(p.ok);
+    assert!(p.err.starts_with("400:"));
+    return 0;
+}
+
+fn test_path_missing_errs_404() -> int {
+    let r: HttpRequest = _req_with_param("other", "x");
+    let p: !Path<int> = Path::extract(&r, "id");
+    assert_not!(p.ok);
+    assert!(p.err.starts_with("404:"));
+    return 0;
+}
+
+// ---- HttpResponse::from_extract_err -------------------------------
+
+fn test_from_extract_err_with_prefix() -> int {
+    let r: HttpResponse = HttpResponse::from_extract_err("401:bad token");
+    assert_eq!(r.status, 401);
+    assert_str_eq!(r.body, "bad token");
+    return 0;
+}
+
+fn test_from_extract_err_no_prefix_defaults_422() -> int {
+    let r: HttpResponse = HttpResponse::from_extract_err("plain message");
+    assert_eq!(r.status, 422);
+    assert_str_eq!(r.body, "plain message");
+    return 0;
+}
