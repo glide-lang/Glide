@@ -1,0 +1,81 @@
+// State<T> extractor end-to-end. Confirms the global slot pattern,
+// the @handler macro special-case, and round-trip through `r.state(p)`.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::extract::*;
+import stdlib::http::handler::*;
+
+// Tuple-struct syntax doubles as a smoke test for the new parser feature.
+struct Counter(value: int)
+
+@handler
+fn read_count(state: State<Counter>) -> HttpResponse {
+    return HttpResponse::ok().text("count=".concat(state.val.value.to_string()));
+}
+
+@handler
+fn read_count_no_state() -> HttpResponse {
+    let s_r: !State<Counter> = State::extract(null);
+    if !s_r.ok { return HttpResponse::with_status(500).text(s_r.err); }
+    return HttpResponse::ok();
+}
+
+fn _empty_req() -> HttpRequest {
+    let nope: *HashMap<string> = null;
+    return HttpRequest {
+        method:        "GET",
+        path:          "/",
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          "",
+        params:        nope,
+        queries:       nope,
+    };
+}
+
+fn test_state_handler_reads_value() -> int {
+    let r: *Router = Router::new();
+    let c: *Counter = malloc(sizeof(Counter)) as *Counter;
+    c.value = 42;
+    r.state(c as *void);
+
+    let req: HttpRequest = _empty_req();
+    let resp: HttpResponse = read_count(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "count=42");
+    return 0;
+}
+
+fn test_state_handler_returns_500_when_unset() -> int {
+    let r: *Router = Router::new();
+    // Reset slot so this test can't see leftover state from earlier
+    // tests in the same process.
+    r.state(null);
+    let req: HttpRequest = _empty_req();
+    let resp: HttpResponse = read_count(&req);
+    assert_eq!(resp.status, 500);
+    return 0;
+}
+
+fn test_state_chain_returns_router() -> int {
+    let r: *Router = Router::new();
+    let c: *Counter = malloc(sizeof(Counter)) as *Counter;
+    c.value = 7;
+    let same: *Router = r.state(c as *void);
+    assert!(same == r);
+    return 0;
+}
+
+fn test_state_extract_directly() -> int {
+    let r: *Router = Router::new();
+    let c: *Counter = malloc(sizeof(Counter)) as *Counter;
+    c.value = 99;
+    r.state(c as *void);
+
+    let s: !State<Counter> = State::extract(null);
+    assert!(s.ok);
+    assert_eq!(s.val.val.value, 99);
+    return 0;
+}

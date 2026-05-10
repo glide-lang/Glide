@@ -1,0 +1,160 @@
+// Nested router via Router::scope. Sub-router routes mount under a
+// prefix on the parent; sub-router middleware runs as per-route mw
+// (after parent.mw, before the handler) for those routes only.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+
+c_raw! {
+    static int __sc_parent_calls = 0;
+    static int __sc_sub_calls    = 0;
+    void __sc_reset(void)         { __sc_parent_calls = 0; __sc_sub_calls = 0; }
+    int  __sc_parent_get(void)    { return __sc_parent_calls; }
+    int  __sc_sub_get(void)       { return __sc_sub_calls; }
+    void __sc_parent_inc(void)    { __sc_parent_calls++; }
+    void __sc_sub_inc(void)       { __sc_sub_calls++; }
+}
+
+extern fn __sc_reset();
+extern fn __sc_parent_get() -> int;
+extern fn __sc_sub_get() -> int;
+extern fn __sc_parent_inc();
+extern fn __sc_sub_inc();
+
+fn mw_parent(req: *HttpRequest, c: *Chain) -> HttpResponse {
+    __sc_parent_inc();
+    return chain_next(c);
+}
+
+fn mw_sub(req: *HttpRequest, c: *Chain) -> HttpResponse {
+    __sc_sub_inc();
+    return chain_next(c);
+}
+
+fn h_root(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("root");
+}
+
+fn h_users(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("users");
+}
+
+fn h_user_by_id(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("user=".concat(req.param("id")));
+}
+
+fn _req(method: string, path: string) -> HttpRequest {
+    let nope: *HashMap<string> = null;
+    return HttpRequest {
+        method:        method,
+        path:          path,
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          "",
+        params:        nope,
+        queries:       nope,
+    };
+}
+
+// ---- tests ----------------------------------------------------------
+
+fn test_scope_mounts_routes_under_prefix() -> int {
+    let api: *Router = Router::new();
+    api.get("/users", h_users);
+
+    let r: *Router = Router::new();
+    r.scope("/api/v1", api);
+
+    let req: HttpRequest = _req("GET", "/api/v1/users");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "users");
+    return 0;
+}
+
+fn test_scope_preserves_param_segments() -> int {
+    let api: *Router = Router::new();
+    api.get("/users/:id", h_user_by_id);
+
+    let r: *Router = Router::new();
+    r.scope("/api/v1", api);
+
+    let req: HttpRequest = _req("GET", "/api/v1/users/42");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "user=42");
+    return 0;
+}
+
+fn test_scope_unrelated_path_404s() -> int {
+    let api: *Router = Router::new();
+    api.get("/users", h_users);
+
+    let r: *Router = Router::new();
+    r.scope("/api/v1", api);
+
+    let req: HttpRequest = _req("GET", "/users");   // no prefix
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 404);
+    return 0;
+}
+
+fn test_scope_runs_parent_then_sub_middleware() -> int {
+    __sc_reset();
+    let api: *Router = Router::new();
+    api.use_mw(mw_sub);
+    api.get("/users", h_users);
+
+    let r: *Router = Router::new();
+    r.use_mw(mw_parent);
+    r.scope("/api", api);
+
+    let req: HttpRequest = _req("GET", "/api/users");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_eq!(__sc_parent_get(), 1);
+    assert_eq!(__sc_sub_get(), 1);
+    return 0;
+}
+
+fn test_scope_sub_mw_does_not_run_for_non_scoped_routes() -> int {
+    __sc_reset();
+    let api: *Router = Router::new();
+    api.use_mw(mw_sub);
+    api.get("/users", h_users);
+
+    let r: *Router = Router::new();
+    r.use_mw(mw_parent);
+    r.scope("/api", api);
+    r.get("/", h_root);   // not scoped
+
+    let req: HttpRequest = _req("GET", "/");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "root");
+    assert_eq!(__sc_parent_get(), 1);
+    assert_eq!(__sc_sub_get(), 0);
+    return 0;
+}
+
+fn test_scope_normalises_trailing_slash_in_prefix() -> int {
+    let api: *Router = Router::new();
+    api.get("/users", h_users);
+
+    let r: *Router = Router::new();
+    r.scope("/api/", api);   // trailing slash should be stripped
+
+    let req: HttpRequest = _req("GET", "/api/users");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    return 0;
+}
+
+fn test_scope_returns_self_for_chaining() -> int {
+    let api: *Router = Router::new();
+    let r: *Router = Router::new();
+    let same: *Router = r.scope("/api", api);
+    assert!(same == r);
+    return 0;
+}

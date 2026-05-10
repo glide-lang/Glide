@@ -1,0 +1,157 @@
+// Middleware composition. Chain runs before the route handler in
+// registration order. Each mw can call chain_next(c) to continue or
+// return a response directly to short-circuit.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+
+c_raw! {
+    static int __test_log_calls = 0;
+    static int __test_log_method_after = 0;  // resp status seen by logger
+    void __test_log_reset(void)         { __test_log_calls = 0; __test_log_method_after = 0; }
+    int  __test_log_calls_get(void)     { return __test_log_calls; }
+    void __test_log_calls_inc(void)     { __test_log_calls++; }
+    int  __test_log_after_get(void)     { return __test_log_method_after; }
+    void __test_log_after_set(int x)    { __test_log_method_after = x; }
+}
+
+extern fn __test_log_reset();
+extern fn __test_log_calls_get() -> int;
+extern fn __test_log_calls_inc();
+extern fn __test_log_after_get() -> int;
+extern fn __test_log_after_set(x: int);
+
+// ---- middlewares ----------------------------------------------------
+
+fn mw_logger(req: *HttpRequest, c: *Chain) -> HttpResponse {
+    __test_log_calls_inc();
+    let resp: HttpResponse = chain_next(c);
+    __test_log_after_set(resp.status);
+    return resp;
+}
+
+fn mw_block_unauthed(req: *HttpRequest, c: *Chain) -> HttpResponse {
+    if req.header("Authorization").len() == 0 {
+        return HttpResponse::with_status(401).text("no auth");
+    }
+    return chain_next(c);
+}
+
+fn mw_inject_header_into_response(req: *HttpRequest, c: *Chain) -> HttpResponse {
+    let resp: HttpResponse = chain_next(c);
+    return resp.set("X-Mw-Stamp", "1");
+}
+
+// ---- handlers -------------------------------------------------------
+
+fn h_ok(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("hi");
+}
+
+// ---- request builders -----------------------------------------------
+
+fn _req(method: string, path: string, headers: string) -> HttpRequest {
+    let nope: *HashMap<string> = null;
+    return HttpRequest {
+        method:        method,
+        path:          path,
+        version:       "HTTP/1.1",
+        headers_block: headers,
+        body:          "",
+        params:        nope,
+        queries:       nope,
+    };
+}
+
+// ---- tests ----------------------------------------------------------
+
+fn test_single_middleware_runs_before_handler() -> int {
+    __test_log_reset();
+    let r: *Router = Router::new();
+    r.use_mw(mw_logger);
+    r.get("/x", h_ok);
+
+    let req: HttpRequest = _req("GET", "/x", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_eq!(__test_log_calls_get(), 1);
+    // Logger saw the route response after chain_next returned.
+    assert_eq!(__test_log_after_get(), 200);
+    return 0;
+}
+
+fn test_middleware_short_circuits() -> int {
+    __test_log_reset();
+    let r: *Router = Router::new();
+    r.use_mw(mw_logger);
+    r.use_mw(mw_block_unauthed);
+    r.get("/x", h_ok);
+
+    // No Authorization header — second mw returns 401, route never runs.
+    let req: HttpRequest = _req("GET", "/x", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 401);
+    // Logger ran (it's first), saw the 401.
+    assert_eq!(__test_log_calls_get(), 1);
+    assert_eq!(__test_log_after_get(), 401);
+    return 0;
+}
+
+fn test_middleware_passes_through_when_authed() -> int {
+    __test_log_reset();
+    let r: *Router = Router::new();
+    r.use_mw(mw_logger);
+    r.use_mw(mw_block_unauthed);
+    r.get("/x", h_ok);
+
+    let req: HttpRequest = _req("GET", "/x", "Authorization: Bearer t\r\n");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    return 0;
+}
+
+fn test_middleware_can_modify_response() -> int {
+    let r: *Router = Router::new();
+    r.use_mw(mw_inject_header_into_response);
+    r.get("/x", h_ok);
+
+    let req: HttpRequest = _req("GET", "/x", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.header("X-Mw-Stamp"), "1");
+    return 0;
+}
+
+fn test_chain_runs_in_registration_order() -> int {
+    __test_log_reset();
+    let r: *Router = Router::new();
+    r.use_mw(mw_logger);                          // counts 1, sees 200 after
+    r.use_mw(mw_inject_header_into_response);     // adds header
+    r.get("/x", h_ok);
+
+    let req: HttpRequest = _req("GET", "/x", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.header("X-Mw-Stamp"), "1");
+    assert_eq!(__test_log_calls_get(), 1);
+    assert_eq!(__test_log_after_get(), 200);
+    return 0;
+}
+
+fn test_no_middleware_runs_handler_directly() -> int {
+    let r: *Router = Router::new();
+    r.get("/x", h_ok);
+    let req: HttpRequest = _req("GET", "/x", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "hi");
+    return 0;
+}
+
+fn test_use_mw_returns_self_for_chaining() -> int {
+    let r: *Router = Router::new();
+    let same: *Router = r.use_mw(mw_logger);
+    assert!(same == r);
+    return 0;
+}
