@@ -5465,6 +5465,8 @@ void   Vector_push__IValue (Vector__IValue*   self, IValue   x);
 bool   HashMap_contains__Stmt (HashMap__Stmt*   self, const char*   k);
 const char*   Vector_pop__string (Vector__string*   self);
 Stmt   HashMap_get__Stmt (HashMap__Stmt*   self, const char*   k);
+int   Vector_len__Type (Vector__Type*   self);
+Type   Vector_get__Type (Vector__Type*   self, int   i);
 IValue   Vector_pop__IValue (Vector__IValue*   self);
 void   Vector_set__IValue (Vector__IValue*   self, int   i, IValue   x);
 void   Vector_clear__IValue (Vector__IValue*   self);
@@ -5476,8 +5478,6 @@ int   Vector_len__Field (Vector__Field*   self);
 Field   Vector_get__Field (Vector__Field*   self, int   i);
 int   Vector_len__Attr (Vector__Attr*   self);
 Attr   Vector_get__Attr (Vector__Attr*   self, int   i);
-int   Vector_len__Type (Vector__Type*   self);
-Type   Vector_get__Type (Vector__Type*   self, int   i);
 Vector__TypeMacro*   Vector_new__TypeMacro (void);
 void   Vector_push__TypeMacro (Vector__TypeMacro*   self, TypeMacro   x);
 HashMap__ProcMacroDef*   HashMap_new__ProcMacroDef (void);
@@ -11254,6 +11254,22 @@ IValue   builtin_call (Interp*   it, const char*   name, Vector__IValue*   args)
         IValue   vals_iv = Vector_get__IValue(args, 2);
         Vector__Expr*   vals = ((Vector__Expr*(*)(Interp*, IValue))_vec_to_expr_vec)(it, vals_iv);
         return ((IValue(*)(void*, const char*))iv_ptr)((( void* )((Expr*(*)(const char*, Vector__string*, Vector__Expr*, int, int))expr_struct_lit)(type_name, names, vals, 0, 0)), "Expr");
+    }
+    if (__glide_string_eq(name, "_json_inner")) {
+        Type*   t = (( Type* )((void*(*)(Interp*, Vector__IValue*, int, const char*))_arg_ptr)(it, args, 0, "Type"));
+        if ((t  ==  NULL)) {
+            return ((IValue(*)(void*, const char*))iv_ptr)((( void* )NULL), "Type");
+        }
+        if (((t-> kind )  !=  TY_GENERIC)) {
+            return ((IValue(*)(void*, const char*))iv_ptr)((( void* )NULL), "Type");
+        }
+        if ((((t-> args )  ==  NULL)  ||  (Vector_len__Type((t-> args ))  ==  0))) {
+            return ((IValue(*)(void*, const char*))iv_ptr)((( void* )NULL), "Type");
+        }
+        Type   inner = Vector_get__Type((t-> args ), 0);
+        Type*   p = (( Type* )((void*(*)(size_t))malloc)(sizeof( Type )));
+        ((*p)  =  inner);
+        return ((IValue(*)(void*, const char*))iv_ptr)((( void* )p), "Type");
     }
     if ((__glide_string_eq(name, "println")  ||  __glide_string_eq(name, "print"))) {
         const char*   out = "";
@@ -29149,14 +29165,6 @@ Vector__TypeMacro*   Vector_new__TypeMacro (void) {
     return v;
 }
 
-Type   Vector_get__Type (Vector__Type*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Type (Vector__Type*   self) {
-    return (self-> len );
-}
-
 Attr   Vector_get__Attr (Vector__Attr*   self, int   i) {
     return (self-> data )[i];
 }
@@ -29225,6 +29233,14 @@ void   Vector_set__IValue (Vector__IValue*   self, int   i, IValue   x) {
 IValue   Vector_pop__IValue (Vector__IValue*   self) {
     ((self-> len )  =  ((self-> len )  -  1));
     return (self-> data )[(self-> len )];
+}
+
+Type   Vector_get__Type (Vector__Type*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Type (Vector__Type*   self) {
+    return (self-> len );
 }
 
 Stmt   HashMap_get__Stmt (HashMap__Stmt*   self, const char*   k) {
