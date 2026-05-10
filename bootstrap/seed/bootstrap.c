@@ -4396,6 +4396,7 @@ bool   is_keyword (const char*   s);
 const char*   token_kind_name (int   k);
 Type*   ty_fnptr (Vector__Type*   params, Type*   ret);
 Type*   ty_generic (const char*   name, Vector__Type*   args);
+void   ast_fill_defaults (Stmt*   s);
 Type*   ty_named (const char*   name);
 Type*   ty_result (Type*   inner);
 Type*   ty_option (Type*   inner);
@@ -5396,33 +5397,33 @@ int   Vector_len__string (Vector__string*   self);
 const char*   Vector_get__string (Vector__string*   self, int   i);
 Vector__EnvKV*   Vector_new__EnvKV (void);
 void   Vector_push__EnvKV (Vector__EnvKV*   self, EnvKV   x);
+Vector__Attr*   Vector_new__Attr (void);
+Vector__Param*   Vector_new__Param (void);
+Vector__Stmt*   Vector_new__Stmt (void);
+Vector__Field*   Vector_new__Field (void);
+int   Vector_len__Stmt (Vector__Stmt*   self);
+Stmt   Vector_get__Stmt (Vector__Stmt*   self, int   i);
+void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x);
 Vector__Expr*   Vector_new__Expr (void);
 Vector__ParseDiag*   Vector_new__ParseDiag (void);
 void   Vector_free__ParseDiag (Vector__ParseDiag*   self);
 void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x);
-Vector__Stmt*   Vector_new__Stmt (void);
 void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x);
-Vector__Attr*   Vector_new__Attr (void);
 void   Vector_push__Expr (Vector__Expr*   self, Expr   x);
 int   Vector_len__Expr (Vector__Expr*   self);
 Expr   Vector_get__Expr (Vector__Expr*   self, int   i);
 void   Vector_push__Attr (Vector__Attr*   self, Attr   x);
 Vector__MacroParam*   Vector_new__MacroParam (void);
 void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x);
-Vector__Param*   Vector_new__Param (void);
 void   Vector_push__Param (Vector__Param*   self, Param   x);
-Vector__Field*   Vector_new__Field (void);
 void   Vector_push__Field (Vector__Field*   self, Field   x);
 Vector__EnumVariant*   Vector_new__EnumVariant (void);
 Vector__Type*   Vector_new__Type (void);
 void   Vector_push__Type (Vector__Type*   self, Type   x);
 void   Vector_push__EnumVariant (Vector__EnumVariant*   self, EnumVariant   x);
-int   Vector_len__Stmt (Vector__Stmt*   self);
-Stmt   Vector_get__Stmt (Vector__Stmt*   self, int   i);
 int   Vector_len__Param (Vector__Param*   self);
 Param   Vector_get__Param (Vector__Param*   self, int   i);
 void   Vector_set__Param (Vector__Param*   self, int   i, Param   x);
-void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x);
 Vector__MatchArm*   Vector_new__MatchArm (void);
 void   Vector_push__MatchArm (Vector__MatchArm*   self, MatchArm   x);
 Vector__SelectArm*   Vector_new__SelectArm (void);
@@ -7209,6 +7210,96 @@ Type*   ty_generic (const char*   name, Vector__Type*   args) {
     ((t-> inner )  =  NULL);
     ((t-> args )  =  args);
     return t;
+}
+
+void   ast_fill_defaults (Stmt*   s) {
+    if ((s  ==  NULL)) {
+        return;
+    }
+    if (((s-> origin )  ==  NULL)) {
+        ((s-> origin )  =  "");
+    }
+    if (((s-> doc_comment )  ==  NULL)) {
+        ((s-> doc_comment )  =  "");
+    }
+    if (((s-> name )  ==  NULL)) {
+        ((s-> name )  =  "");
+    }
+    if (((s-> cfg_target )  ==  NULL)) {
+        ((s-> cfg_target )  =  "");
+    }
+    if (((s-> impl_trait_name )  ==  NULL)) {
+        ((s-> impl_trait_name )  =  "");
+    }
+    if (((s-> import_path )  ==  NULL)) {
+        ((s-> import_path )  =  "");
+    }
+    if (((s-> import_short )  ==  NULL)) {
+        ((s-> import_short )  =  "");
+    }
+    if (((s-> macro_rep_sep )  ==  NULL)) {
+        ((s-> macro_rep_sep )  =  "");
+    }
+    if (((s-> attrs )  ==  NULL)) {
+        Vector__Attr*   v = ((Vector__Attr*(*)(void))Vector_new__Attr)();
+        ((s-> attrs )  =  v);
+    }
+    if ((((s-> fn_params )  ==  NULL)  &&  ((s-> kind )  ==  ST_FN))) {
+        Vector__Param*   v = ((Vector__Param*(*)(void))Vector_new__Param)();
+        ((s-> fn_params )  =  v);
+    }
+    if ((((s-> fn_body )  ==  NULL)  &&  ((s-> kind )  ==  ST_FN))) {
+        Vector__Stmt*   v = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+        ((s-> fn_body )  =  v);
+    }
+    if ((((s-> struct_fields )  ==  NULL)  &&  ((s-> kind )  ==  ST_STRUCT))) {
+        Vector__Field*   v = ((Vector__Field*(*)(void))Vector_new__Field)();
+        ((s-> struct_fields )  =  v);
+    }
+    if ((((s-> impl_methods )  ==  NULL)  &&  ((s-> kind )  ==  ST_IMPL))) {
+        Vector__Stmt*   v = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
+        ((s-> impl_methods )  =  v);
+    }
+    if (((s-> trait_supers )  ==  NULL)) {
+        Vector__string*   v = ((Vector__string*(*)(void))Vector_new__string)();
+        ((s-> trait_supers )  =  v);
+    }
+    if (((s-> type_params )  ==  NULL)) {
+        Vector__string*   v = ((Vector__string*(*)(void))Vector_new__string)();
+        ((s-> type_params )  =  v);
+    }
+    if (((s-> type_param_bounds )  ==  NULL)) {
+        Vector__string*   v = ((Vector__string*(*)(void))Vector_new__string)();
+        ((s-> type_param_bounds )  =  v);
+    }
+    if (((s-> fn_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
+            Stmt   inner = Vector_get__Stmt((s-> fn_body ), i);
+            ((void(*)(Stmt*))ast_fill_defaults)((&inner));
+            Vector_set__Stmt((s-> fn_body ), i, inner);
+        }
+    }
+    if (((s-> then_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+            Stmt   inner = Vector_get__Stmt((s-> then_body ), i);
+            ((void(*)(Stmt*))ast_fill_defaults)((&inner));
+            Vector_set__Stmt((s-> then_body ), i, inner);
+        }
+    }
+    if (((s-> else_body )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
+            Stmt   inner = Vector_get__Stmt((s-> else_body ), i);
+            ((void(*)(Stmt*))ast_fill_defaults)((&inner));
+            Vector_set__Stmt((s-> else_body ), i, inner);
+        }
+    }
+    if (((s-> impl_methods )  !=  NULL)) {
+        for (int   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
+            Stmt   inner = Vector_get__Stmt((s-> impl_methods ), i);
+            ((void(*)(Stmt*))ast_fill_defaults)((&inner));
+            Vector_set__Stmt((s-> impl_methods ), i, inner);
+        }
+    }
 }
 
 Type*   ty_named (const char*   name) {
@@ -11526,11 +11617,9 @@ void   _run_derive (Interp*   it, Stmt*   fn_stmt, Stmt*   target, Vector__Stmt*
         }
         Stmt*   ps = (( Stmt* )(elem. p ));
         if ((ps  !=  NULL)) {
+            ((void(*)(Stmt*))ast_fill_defaults)(ps);
             ((ps-> origin )  =  (target-> origin ));
             ((ps-> is_pub )  =  (target-> is_pub ));
-            if (((ps-> attrs )  ==  NULL)) {
-                ((ps-> attrs )  =  ((Vector__Attr*(*)(void))Vector_new__Attr)());
-            }
             Vector_push__Stmt(out, (*ps));
         }
     }
@@ -29044,10 +29133,6 @@ Vector__MatchArm*   Vector_new__MatchArm (void) {
     return v;
 }
 
-void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x) {
-    ((self-> data )[i]  =  x);
-}
-
 void   Vector_set__Param (Vector__Param*   self, int   i, Param   x) {
     ((self-> data )[i]  =  x);
 }
@@ -29057,14 +29142,6 @@ Param   Vector_get__Param (Vector__Param*   self, int   i) {
 }
 
 int   Vector_len__Param (Vector__Param*   self) {
-    return (self-> len );
-}
-
-Stmt   Vector_get__Stmt (Vector__Stmt*   self, int   i) {
-    return (self-> data )[i];
-}
-
-int   Vector_len__Stmt (Vector__Stmt*   self) {
     return (self-> len );
 }
 
@@ -29173,21 +29250,6 @@ void   Vector_push__Field (Vector__Field*   self, Field   x) {
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
-Vector__Field*   Vector_new__Field (void) {
-    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
-    Vector__Field*   v;
-    if (arena) {
-        (v  =  (( Vector__Field* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Field ))));
-    } else {
-        (v  =  (( Vector__Field* )((void*(*)(size_t))malloc)(sizeof( Vector__Field ))));
-    }
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    ((v-> is_arena )  =  arena);
-    return v;
-}
-
 void   Vector_push__Param (Vector__Param*   self, Param   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
@@ -29211,21 +29273,6 @@ void   Vector_push__Param (Vector__Param*   self, Param   x) {
     }
     ((self-> data )[(self-> len )]  =  x);
     ((self-> len )  =  ((self-> len )  +  1));
-}
-
-Vector__Param*   Vector_new__Param (void) {
-    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
-    Vector__Param*   v;
-    if (arena) {
-        (v  =  (( Vector__Param* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Param ))));
-    } else {
-        (v  =  (( Vector__Param* )((void*(*)(size_t))malloc)(sizeof( Vector__Param ))));
-    }
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    ((v-> is_arena )  =  arena);
-    return v;
 }
 
 void   Vector_push__MacroParam (Vector__MacroParam*   self, MacroParam   x) {
@@ -29326,21 +29373,6 @@ void   Vector_push__Expr (Vector__Expr*   self, Expr   x) {
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
-Vector__Attr*   Vector_new__Attr (void) {
-    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
-    Vector__Attr*   v;
-    if (arena) {
-        (v  =  (( Vector__Attr* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Attr ))));
-    } else {
-        (v  =  (( Vector__Attr* )((void*(*)(size_t))malloc)(sizeof( Vector__Attr ))));
-    }
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    ((v-> is_arena )  =  arena);
-    return v;
-}
-
 void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x) {
     if (((self-> len )  ==  (self-> cap ))) {
         int   new_cap = 4;
@@ -29364,21 +29396,6 @@ void   Vector_push__Stmt (Vector__Stmt*   self, Stmt   x) {
     }
     ((self-> data )[(self-> len )]  =  x);
     ((self-> len )  =  ((self-> len )  +  1));
-}
-
-Vector__Stmt*   Vector_new__Stmt (void) {
-    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
-    Vector__Stmt*   v;
-    if (arena) {
-        (v  =  (( Vector__Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Stmt ))));
-    } else {
-        (v  =  (( Vector__Stmt* )((void*(*)(size_t))malloc)(sizeof( Vector__Stmt ))));
-    }
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    ((v-> is_arena )  =  arena);
-    return v;
 }
 
 void   Vector_push__ParseDiag (Vector__ParseDiag*   self, ParseDiag   x) {
@@ -29438,6 +29455,78 @@ Vector__Expr*   Vector_new__Expr (void) {
         (v  =  (( Vector__Expr* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Expr ))));
     } else {
         (v  =  (( Vector__Expr* )((void*(*)(size_t))malloc)(sizeof( Vector__Expr ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+void   Vector_set__Stmt (Vector__Stmt*   self, int   i, Stmt   x) {
+    ((self-> data )[i]  =  x);
+}
+
+Stmt   Vector_get__Stmt (Vector__Stmt*   self, int   i) {
+    return (self-> data )[i];
+}
+
+int   Vector_len__Stmt (Vector__Stmt*   self) {
+    return (self-> len );
+}
+
+Vector__Field*   Vector_new__Field (void) {
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
+    Vector__Field*   v;
+    if (arena) {
+        (v  =  (( Vector__Field* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Field ))));
+    } else {
+        (v  =  (( Vector__Field* )((void*(*)(size_t))malloc)(sizeof( Vector__Field ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+Vector__Stmt*   Vector_new__Stmt (void) {
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
+    Vector__Stmt*   v;
+    if (arena) {
+        (v  =  (( Vector__Stmt* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Stmt ))));
+    } else {
+        (v  =  (( Vector__Stmt* )((void*(*)(size_t))malloc)(sizeof( Vector__Stmt ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+Vector__Param*   Vector_new__Param (void) {
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
+    Vector__Param*   v;
+    if (arena) {
+        (v  =  (( Vector__Param* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Param ))));
+    } else {
+        (v  =  (( Vector__Param* )((void*(*)(size_t))malloc)(sizeof( Vector__Param ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
+}
+
+Vector__Attr*   Vector_new__Attr (void) {
+    bool   arena = (((int(*)(void))__glide_palloc_active)()  !=  0);
+    Vector__Attr*   v;
+    if (arena) {
+        (v  =  (( Vector__Attr* )((void*(*)(int))__glide_palloc)(sizeof( Vector__Attr ))));
+    } else {
+        (v  =  (( Vector__Attr* )((void*(*)(size_t))malloc)(sizeof( Vector__Attr ))));
     }
     ((v-> data )  =  NULL);
     ((v-> len )  =  0);
