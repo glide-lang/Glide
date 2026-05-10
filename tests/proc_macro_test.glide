@@ -1,0 +1,59 @@
+import stdlib::testing::*;
+import bootstrap::ast::*;
+import bootstrap::interp::*;
+
+// ---- a tiny derive --------------------------------------------------
+//
+// Synthesises `<TypeName>_field_count() -> int` for every annotated
+// struct, returning the number of fields the struct declared. Verifies
+// the full pipeline: @proc_derive registration, @derive use-site
+// dispatch, AST construction with concat'd names, ast_fill_defaults
+// keeping the synth Stmt codegen-clean, and the generated fn actually
+// runs at runtime.
+
+@proc_derive(FieldCount)
+fn derive_field_count(s: *Stmt) -> *Vector<Stmt> {
+    let out: *Vector<Stmt> = Vector::new();
+    let body: *Vector<Stmt> = Vector::new();
+    let n: int = s.struct_fields.len();
+    body.push(*stmt_return(expr_int(n, 0, 0), 0, 0));
+    let no_params: *Vector<Param> = Vector::new();
+    let fn_name: string = s.name.concat("_field_count");
+    out.push(*stmt_fn(fn_name, no_params, ty_named("int"), body, 0, 0));
+    return out;
+}
+
+@derive(FieldCount)
+pub struct PetA {
+    pub name: string,
+    pub age: int,
+}
+
+@derive(FieldCount)
+pub struct PetB {
+    pub name: string,
+    pub age: int,
+    pub kind: string,
+    pub owner: string,
+}
+
+@derive(FieldCount)
+pub struct EmptyA {
+}
+
+// ---- tests --------------------------------------------------------
+
+fn test_two_field_struct() -> int {
+    assert_eq!(PetA_field_count(), 2);
+    return 0;
+}
+
+fn test_four_field_struct() -> int {
+    assert_eq!(PetB_field_count(), 4);
+    return 0;
+}
+
+fn test_empty_struct() -> int {
+    assert_eq!(EmptyA_field_count(), 0);
+    return 0;
+}
