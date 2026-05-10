@@ -1,0 +1,54 @@
+import stdlib::testing::*;
+import bootstrap::ast::*;
+import bootstrap::interp::*;
+
+// Each derive synthesises `<TypeName>_value() -> int` with body:
+//
+//   let x = 7;
+//   return x;
+//
+// Hygiene means the `x` the macro creates is mangled to
+// `__macro_<call_id>__x` so it can NEVER bind to a caller-side `x`.
+
+@proc_derive(WithLocal)
+fn derive_with_local(s: *Stmt) -> *Vector<Stmt> {
+    let out: *Vector<Stmt> = Vector::new();
+    let body: *Vector<Stmt> = Vector::new();
+    let no_ty: *Type = null;
+    body.push(*stmt_let("x", no_ty, expr_int(7, 0, 0), false, 0, 0));
+    body.push(*stmt_return(expr_ident("x", 0, 0), 0, 0));
+    let no_params: *Vector<Param> = Vector::new();
+    let fn_name: string = s.name.concat("_value");
+    out.push(*stmt_fn(fn_name, no_params, ty_named("int"), body, 0, 0));
+    return out;
+}
+
+@derive(WithLocal)
+pub struct A {
+    pub anything: int,
+}
+
+@derive(WithLocal)
+pub struct B {
+    pub anything: int,
+}
+
+// ---- tests --------------------------------------------------------
+
+fn test_macro_local_returns_its_own_value() -> int {
+    // Caller-side `x` doesn't capture the macro's `x` because
+    // hygiene mangled the macro's binding to `__macro_<id>__x`.
+    let x: int = 100;
+    assert_eq!(A_value(), 7);
+    assert_eq!(x, 100);
+    return 0;
+}
+
+fn test_two_derives_dont_collide() -> int {
+    // Two @derive sites both emit a `let x = ...` body; each got
+    // a different call_id when the macro ran, so the two `x`
+    // bindings are distinct symbols.
+    assert_eq!(A_value(), 7);
+    assert_eq!(B_value(), 7);
+    return 0;
+}
