@@ -383,6 +383,95 @@ pub struct Stmt {
     pub select_arms: *Vector<SelectArm>,
 }
 
+// ---- Defaults helper (proc-macro outputs) -------------------------------
+
+// Fill in every Stmt field that codegen / typer / lower walks
+// unconditionally. Stmts produced by `stmt_fn` / `stmt_struct` / etc.
+// only set the handful of fields they care about; everything else
+// stays as palloc's calloc-zeroed bytes — null Vector pointers and
+// null strings, which crash downstream walks. Procedural macros call
+// this on every Stmt they emit before splicing it into the program.
+pub fn ast_fill_defaults(s: *Stmt) {
+    if s == null { return; }
+    if s.origin == null { s.origin = ""; }
+    if s.doc_comment == null { s.doc_comment = ""; }
+    if s.name == null { s.name = ""; }
+    if s.cfg_target == null { s.cfg_target = ""; }
+    if s.impl_trait_name == null { s.impl_trait_name = ""; }
+    if s.import_path == null { s.import_path = ""; }
+    if s.import_short == null { s.import_short = ""; }
+    if s.macro_rep_sep == null { s.macro_rep_sep = ""; }
+    if s.attrs == null {
+        let v: *Vector<Attr> = Vector::new();
+        s.attrs = v;
+    }
+    if s.fn_params == null && s.kind == ST_FN {
+        let v: *Vector<Param> = Vector::new();
+        s.fn_params = v;
+    }
+    if s.fn_body == null && s.kind == ST_FN {
+        let v: *Vector<Stmt> = Vector::new();
+        s.fn_body = v;
+    }
+    if s.struct_fields == null && s.kind == ST_STRUCT {
+        let v: *Vector<Field> = Vector::new();
+        s.struct_fields = v;
+    }
+    if s.impl_methods == null && s.kind == ST_IMPL {
+        let v: *Vector<Stmt> = Vector::new();
+        s.impl_methods = v;
+    }
+    if s.trait_supers == null {
+        let v: *Vector<string> = Vector::new();
+        s.trait_supers = v;
+    }
+    if s.type_params == null {
+        let v: *Vector<string> = Vector::new();
+        s.type_params = v;
+    }
+    if s.type_param_bounds == null {
+        let v: *Vector<string> = Vector::new();
+        s.type_param_bounds = v;
+    }
+    // Macros don't emit imports / enums / matches / asm / select! /
+    // associated types in v1; leaving those Vectors null is fine
+    // because codegen only walks them when the kind matches (e.g.
+    // ST_ASM for asm_strings). If a macro ever needs to emit one
+    // of those, add a fresh `Vector::new()` here for the relevant
+    // T — it triggers an extra mono in codegen but otherwise costs
+    // nothing.
+    // Recurse into the fn body so nested stmts (e.g. an emitted
+    // ST_RETURN with its expr_value) also get their defaults.
+    if s.fn_body != null {
+        for let i: int = 0; i < s.fn_body.len(); i++ {
+            let inner: Stmt = s.fn_body.get(i);
+            ast_fill_defaults(&inner);
+            s.fn_body.set(i, inner);
+        }
+    }
+    if s.then_body != null {
+        for let i: int = 0; i < s.then_body.len(); i++ {
+            let inner: Stmt = s.then_body.get(i);
+            ast_fill_defaults(&inner);
+            s.then_body.set(i, inner);
+        }
+    }
+    if s.else_body != null {
+        for let i: int = 0; i < s.else_body.len(); i++ {
+            let inner: Stmt = s.else_body.get(i);
+            ast_fill_defaults(&inner);
+            s.else_body.set(i, inner);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: int = 0; i < s.impl_methods.len(); i++ {
+            let inner: Stmt = s.impl_methods.get(i);
+            ast_fill_defaults(&inner);
+            s.impl_methods.set(i, inner);
+        }
+    }
+}
+
 // ---- Constructors --------------------------------------------------------
 
 pub fn ty_named(name: string) -> *Type {

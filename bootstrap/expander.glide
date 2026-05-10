@@ -191,15 +191,14 @@ fn _run_derive(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
             // Inherit origin from the use site so the typer's visibility
             // check accepts the synth fn as if user-written. is_pub
             // also inherits so a derived helper on a pub struct stays
-            // accessible to siblings.
+            // accessible to siblings. ast_fill_defaults populates
+            // every Vector / string field that codegen / typer walk
+            // unguarded — Stmts built by the AST constructor intrinsics
+            // only set the handful of fields the constructor cares
+            // about; everything else is null after palloc.
+            ast_fill_defaults(ps);
             ps.origin = target.origin;
             ps.is_pub = target.is_pub;
-            // Stmts built by the AST constructor intrinsics palloc'd
-            // their fields; `attrs` was never assigned and stays null.
-            // Codegen tolerates null attrs but some downstream passes
-            // walk it unguarded — give it a fresh empty Vector to be
-            // safe.
-            if ps.attrs == null { ps.attrs = Vector::new(); }
             out.push(*ps);
         }
     }
