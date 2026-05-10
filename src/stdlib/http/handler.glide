@@ -8,17 +8,20 @@
 //      (which still takes the fn-pointer shape) accepts it without
 //      any widening.
 //
-// v1 supports these param shapes:
-//   - `req: *HttpRequest` — passed straight through
-//   - `body: Json<T>` — bound by parsing the request body via
-//     `T::from_json`, mapped to 422 on bind failure / 400 on parse
-//     failure (same semantics as the manual pattern in
-//     tests/http_typed_test.glide)
+// Param dispatch (in order):
+//   - `req: *HttpRequest`   passthrough optimisation, no extract
+//   - `body: Json<T>`       built-in: body_json + T::from_json + wrap;
+//                            400 on parse / 422 on bind (T: JsonBind)
+//   - `name: Path<T>`       `Path::extract(req, "name")` — the param
+//                            ident is the path-key lookup (T: FromPath)
+//   - any other type T      `T::from_request(req)` via FromRequest;
+//                            err string carries the status as a
+//                            `"<code>:<msg>"` prefix consumed by
+//                            `HttpResponse::from_extract_err`
 //
-// And these return shapes:
-//   - `HttpResponse` — passthrough
-//   - `Json<T>` — wrapped into HttpResponse via the existing
-//     `IntoResponse for Json<T>` trait impl
+// Return shape:
+//   - `HttpResponse`        passthrough
+//   - `Json<T>`             wrapped via `IntoResponse`
 
 import bootstrap::ast::*;
 import bootstrap::interp::*;
@@ -46,19 +49,23 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
         let pname: string = p.name;
         let pty: *Type = p.ty;
 
+        // ---- *HttpRequest passthrough ----------------------------------
         if _is_request_ptr(pty) {
             call_args.push(*expr_ident_unsafe("req", 0, 0));
             i = i + 1;
             continue;
         }
 
+        // ---- Json<T> built-in path -------------------------------------
+        // Kept as a special-case (rather than going through FromRequest)
+        // because the typer's static-trait-method dispatch on Json<T>
+        // collides with its inherent `wrap` method during mono — the
+        // generic-of-generic mono key for `Json::from_request` ends up
+        // unmangled. Keeping the hand-rolled body_json + T::from_json
+        // chain sidesteps that path.
         let inner_name: string = _json_inner_name(pty);
         if !inner_name.eq("") {
             let no_ty: *Type = null;
-            // Full inner type — needed as a let-ty hint so the typer can
-            // back-infer T when `T = Vector<X>` etc. Without this hint,
-            // `Vector::from_json(...)` monomorphises to `Vector<T>` with
-            // a literal unresolved T and codegen emits `Vector__T`.
             let inner_ty: *Type = _json_inner(pty);
             let t_r_let_ty: *Type = ty_result(inner_ty);
             let body_let_ty: *Type = pty;
@@ -71,7 +78,7 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
             wrapper_body.push(*stmt_let(body_r_name, no_ty, body_call, false, 0, 0));
 
             // if !__body_r.ok { return HttpResponse::with_status(400).text(__body_r.err); }
-            wrapper_body.push(*_bind_err_check(body_r_name, 400));
+            wrapper_body.push(*_bind_err_check_static(body_r_name, 400));
 
             // let __t_r: !T = T::from_json(__body_r.val);
             let from_json_args: *Vector<Expr> = Vector::new();
@@ -82,7 +89,7 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
             wrapper_body.push(*stmt_let(t_r_name, t_r_let_ty, from_json_call, false, 0, 0));
 
             // if !__t_r.ok { return HttpResponse::with_status(422).text(__t_r.err); }
-            wrapper_body.push(*_bind_err_check(t_r_name, 422));
+            wrapper_body.push(*_bind_err_check_static(t_r_name, 422));
 
             // let body: Json<T> = Json::wrap(__t_r.val);
             let wrap_args: *Vector<Expr> = Vector::new();
@@ -96,9 +103,48 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
             continue;
         }
 
-        // Unsupported param type — passthrough by name (typer surfaces
-        // a real error pointing at the call site).
-        call_args.push(*expr_ident(pname, 0, 0));
+        // ---- Path<T> special case --------------------------------------
+        // Lookup key = the param's IDENT name.
+        if _is_path_generic(pty) {
+            let r_name: string = pname.concat("__path_r");
+            let extract_args: *Vector<Expr> = Vector::new();
+            extract_args.push(*expr_ident_unsafe("req", 0, 0));
+            extract_args.push(*expr_string(pname, 0, 0));
+            let extract_call: *Expr = expr_call(
+                expr_path("Path", "extract", 0, 0), extract_args);
+            wrapper_body.push(*stmt_let_unsafe(
+                r_name, ty_result(pty), extract_call, false, 0, 0));
+            wrapper_body.push(*_bind_err_check_extract(r_name));
+            wrapper_body.push(*stmt_let_unsafe(
+                pname, pty,
+                expr_member(expr_ident_unsafe(r_name, 0, 0), "val"),
+                false, 0, 0));
+            call_args.push(*expr_ident_unsafe(pname, 0, 0));
+            i = i + 1;
+            continue;
+        }
+
+        // ---- generic FromRequest dispatch ------------------------------
+        let head: string = _head_name(pty);
+        if head.eq("") {
+            call_args.push(*expr_ident_unsafe(pname, 0, 0));
+            i = i + 1;
+            continue;
+        }
+
+        let r_name: string = pname.concat("__ext_r");
+        let from_req_args: *Vector<Expr> = Vector::new();
+        from_req_args.push(*expr_ident_unsafe("req", 0, 0));
+        let from_req_call: *Expr = expr_call(
+            expr_path(head, "from_request", 0, 0), from_req_args);
+        wrapper_body.push(*stmt_let_unsafe(
+            r_name, ty_result(pty), from_req_call, false, 0, 0));
+        wrapper_body.push(*_bind_err_check_extract(r_name));
+        wrapper_body.push(*stmt_let_unsafe(
+            pname, pty,
+            expr_member(expr_ident_unsafe(r_name, 0, 0), "val"),
+            false, 0, 0));
+        call_args.push(*expr_ident_unsafe(pname, 0, 0));
         i = i + 1;
     }
 
@@ -140,10 +186,25 @@ fn _is_request_ptr(t: *Type) -> bool {
     return t.inner.name.eq("HttpRequest");
 }
 
-// If `t` is `Json<T>`, return T's head name. Used to emit the path
-// `T::from_json(...)`. For `Json<Vector<Todo>>` this returns "Vector"
-// (head of the inner type) — the typer pairs it with the let-ty hint
-// to monomorphise correctly.
+// True iff `t` looks like `Path<X>`.
+fn _is_path_generic(t: *Type) -> bool {
+    if t == null { return false; }
+    if t.kind != TY_GENERIC { return false; }
+    return t.name.eq("Path");
+}
+
+// Head identifier of a type — `Json<Vector<Todo>>` -> "Json",
+// `Bearer` -> "Bearer", `Authorization<Basic>` -> "Authorization".
+fn _head_name(t: *Type) -> string {
+    if t == null { return ""; }
+    if t.kind == TY_NAMED { return t.name; }
+    if t.kind == TY_GENERIC { return t.name; }
+    return "";
+}
+
+// If `t` is `Json<T>`, return T's head name. Used to decide whether
+// the return needs a `.into_response()` wrap. For `Json<Vector<Todo>>`
+// this returns "Vector" — non-empty, so the wrap fires.
 fn _json_inner_name(t: *Type) -> string {
     if t == null { return ""; }
     if t.kind != TY_GENERIC { return ""; }
@@ -155,13 +216,8 @@ fn _json_inner_name(t: *Type) -> string {
 }
 
 // Full inner type behind `Json<T>` — `Json<Vector<Todo>>` returns the
-// `Vector<Todo>` Type (with its own type args intact). Lets the macro
-// pin let-types so generic-of-generic monomorphisation works.
-//
-// Compiled-path body below mallocs a heap copy. Interpreter
-// short-circuits via the `_json_inner` intrinsic in interp.glide,
-// which returns the original *Type that already lives in the AST
-// arena.
+// `Vector<Todo>` Type. Lets the macro pin let-tys so generic-of-
+// generic monomorphisation works.
 fn _json_inner(t: *Type) -> *Type {
     if t == null { return null; }
     if t.kind != TY_GENERIC { return null; }
@@ -174,8 +230,10 @@ fn _json_inner(t: *Type) -> *Type {
     return p;
 }
 
-// Build `if !<name>.ok { return HttpResponse::with_status(<status>).text(<name>.err); }`
-fn _bind_err_check(var_name: string, status: int) -> *Stmt {
+// `if !<name>.ok { return HttpResponse::with_status(<status>).text(<name>.err); }`
+// Static integer status — used by the Json<T> built-in path where
+// the macro picks 400/422 itself.
+fn _bind_err_check_static(var_name: string, status: int) -> *Stmt {
     let cond: *Expr = expr_unary(
         UN_NOT, expr_member(expr_ident(var_name, 0, 0), "ok"), 0, 0);
     let with_status_args: *Vector<Expr> = Vector::new();
@@ -188,6 +246,24 @@ fn _bind_err_check(var_name: string, status: int) -> *Stmt {
         expr_member(resp_call, "text"), text_args);
     let then_body: *Vector<Stmt> = Vector::new();
     then_body.push(*stmt_return(text_call, 0, 0));
+    let no_else: *Vector<Stmt> = null;
+    return stmt_if(cond, then_body, no_else, 0, 0);
+}
+
+// `if !<name>.ok { return HttpResponse::from_extract_err(<name>.err); }`.
+// Used by Path<T> + the FromRequest fallthrough — the extractor encodes
+// its preferred status as a `"<code>:<msg>"` prefix on the err string;
+// `HttpResponse::from_extract_err` parses the prefix and builds the
+// response.
+fn _bind_err_check_extract(var_name: string) -> *Stmt {
+    let cond: *Expr = expr_unary(
+        UN_NOT, expr_member(expr_ident_unsafe(var_name, 0, 0), "ok"), 0, 0);
+    let err_args: *Vector<Expr> = Vector::new();
+    err_args.push(*expr_member(expr_ident_unsafe(var_name, 0, 0), "err"));
+    let mapper_call: *Expr = expr_call(
+        expr_path("HttpResponse", "from_extract_err", 0, 0), err_args);
+    let then_body: *Vector<Stmt> = Vector::new();
+    then_body.push(*stmt_return(mapper_call, 0, 0));
     let no_else: *Vector<Stmt> = null;
     return stmt_if(cond, then_body, no_else, 0, 0);
 }
