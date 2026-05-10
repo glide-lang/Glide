@@ -1,0 +1,77 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::cors::*;
+
+fn _cors_req(method: string) -> HttpRequest {
+    return HttpRequest {
+        method:        method,
+        path:          "/",
+        version:       "HTTP/1.1",
+        headers_block: "",
+        body:          "",
+        params:        null,
+        queries:       null,
+    };
+}
+
+fn _cors_next(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().text("ok");
+}
+
+fn _cors_chain(req: *HttpRequest) -> *Chain {
+    let c: *Chain = malloc(sizeof(Chain)) as *Chain;
+    let m: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
+    c.idx = 0;
+    c.mws = m;
+    c.handler = _cors_next;
+    c.req = req;
+    return c;
+}
+
+fn test_preflight_options_returns_204_with_headers() -> int {
+    install_cors(CorsConfig::permissive());
+    let req: HttpRequest = _cors_req("OPTIONS");
+    let c: *Chain = _cors_chain(&req);
+    let resp: HttpResponse = cors_mw(&req, c);
+    assert_eq!(resp.status, 204);
+    assert_str_eq!(resp.header("Access-Control-Allow-Origin"), "*");
+    assert_str_eq!(resp.header("Access-Control-Allow-Methods"), "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+    assert_str_eq!(resp.header("Access-Control-Allow-Headers"), "Content-Type, Authorization");
+    return 0;
+}
+
+fn test_normal_get_gets_cors_headers() -> int {
+    install_cors(CorsConfig {
+        origin: "https://app.example.com",
+        methods: "GET, POST",
+        headers: "Content-Type",
+        credentials: false,
+        max_age: 0,
+    });
+    let req: HttpRequest = _cors_req("GET");
+    let c: *Chain = _cors_chain(&req);
+    let resp: HttpResponse = cors_mw(&req, c);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "ok");
+    assert_str_eq!(resp.header("Access-Control-Allow-Origin"), "https://app.example.com");
+    assert_str_eq!(resp.header("Access-Control-Allow-Methods"), "GET, POST");
+    assert_str_eq!(resp.header("Access-Control-Allow-Headers"), "Content-Type");
+    return 0;
+}
+
+fn test_credentials_true_adds_header() -> int {
+    install_cors(CorsConfig {
+        origin: "https://app.example.com",
+        methods: "GET",
+        headers: "Authorization",
+        credentials: true,
+        max_age: 600,
+    });
+    let req: HttpRequest = _cors_req("GET");
+    let c: *Chain = _cors_chain(&req);
+    let resp: HttpResponse = cors_mw(&req, c);
+    assert_str_eq!(resp.header("Access-Control-Allow-Credentials"), "true");
+    assert_str_eq!(resp.header("Access-Control-Max-Age"), "600");
+    return 0;
+}
