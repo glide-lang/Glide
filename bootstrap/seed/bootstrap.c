@@ -8388,11 +8388,19 @@ Stmt*   parse_struct (Parser*   p) {
     const char*   name = Parser_expect_ident(p);
     Vector__string*   tps_bounds = ((Vector__string*(*)(void))Vector_new__string)();
     Vector__string*   tps = ((Vector__string*(*)(Parser*, Vector__string*))parse_type_params_with_bounds)(p, tps_bounds);
-    Parser_expect_op(p, "{");
+    bool   is_tuple = false;
+    const char*   open = "{";
+    const char*   close = "}";
+    if (Parser_at_op(p, "(")) {
+        (is_tuple  =  true);
+        (open  =  "(");
+        (close  =  ")");
+    }
+    Parser_expect_op(p, open);
     Vector__Field*   fields = ((Vector__Field*(*)(void))Vector_new__Field)();
-    while (((!Parser_at_op(p, "}"))  &&  (!Parser_at_eof(p)))) {
+    while (((!Parser_at_op(p, close))  &&  (!Parser_at_eof(p)))) {
         const char*   fdoc = ((p-> current ). doc );
-        bool   fpub = false;
+        bool   fpub = is_tuple;
         if (Parser_eat_kw(p, "pub")) {
             (fpub  =  true);
         } else {
@@ -8409,7 +8417,7 @@ Stmt*   parse_struct (Parser*   p) {
             break;
         }
     }
-    Parser_expect_op(p, "}");
+    Parser_expect_op(p, close);
     Stmt*   s = ((Stmt*(*)(const char*, Vector__Field*, int, int))stmt_struct)(name, fields, line, col);
     if ((s  !=  NULL)) {
         ((s-> type_params )  =  tps);
