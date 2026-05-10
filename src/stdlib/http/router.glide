@@ -240,6 +240,20 @@ fn _match_path(route_segs: *Vector<RouteSegment>, path: string,
     return i == ns && j == np;
 }
 
+// True iff any path segment is exactly `..` (encoded `%2E%2E` is
+// out of scope for v1; we're handling raw text). Empty + `.` are
+// fine. Picked at the segment boundary to avoid false positives on
+// e.g. `/foo..bar/baz` (literal name with two dots).
+fn _has_dotdot(path: string) -> bool {
+    let parts: *Vector<string> = path.split("/");
+    let mut i: int = 0;
+    while i < parts.len() {
+        if parts.get(i).eq("..") { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
 // ---- default handlers -------------------------------------------------
 
 fn _default_not_found(req: *HttpRequest) -> HttpResponse {
@@ -520,6 +534,15 @@ impl Router {
     /// ```
     pub fn dispatch(self: *Router, req: *HttpRequest) -> HttpResponse {
         let path: string = req.path_only();
+        // Reject `..` segments before the route table. A literal-text
+        // pattern can't normally hit them (each segment is matched
+        // exactly), but a wildcard like `/static/*rest` would let
+        // them flow through into the captured `rest` and a careless
+        // file-server handler could read outside its root. Cheap to
+        // block once here than to remember everywhere downstream.
+        if _has_dotdot(path) {
+            return HttpResponse::with_status(400).text("bad path");
+        }
         let method: string = req.method.to_upper();
         for let i: int = 0; i < self.routes.len(); i++ {
             let route: Route = self.routes.get(i);
