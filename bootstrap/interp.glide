@@ -169,6 +169,17 @@ pub struct Interp {
     // Accumulated diagnostics. Each entry is a single human-readable
     // line; the expander surfaces them at the use site.
     pub diagnostics: *Vector<string>,
+
+    // Hygiene: every interp_call invocation gets a fresh call_id
+    // (next_call_id++). expr_ident("name") synthesises
+    // `__macro_<call_id>__name` so generated bindings can never
+    // collide with caller-site names. expr_ident_unsafe("name")
+    // bypasses the suffix when the macro deliberately wants to
+    // reference a caller-side ident. current_call_id is 0 when no
+    // macro is executing — saves the suffix-injection branch from
+    // firing on AST built outside a macro context.
+    pub next_call_id: int,
+    pub current_call_id: int,
 }
 
 impl Interp {
@@ -182,6 +193,8 @@ impl Interp {
         it.control = CF_NORMAL;
         it.return_val = iv_null();
         it.diagnostics = diags;
+        it.next_call_id = 1;
+        it.current_call_id = 0;
         return it;
     }
 
@@ -203,8 +216,11 @@ impl Interp {
     }
 }
 
-// Look up `name` in the scope stack from top to bottom. Returns
-// `iv_null()` if not found (and pushes a diagnostic).
+// Look up `name` in the scope stack from top to bottom. Falls back
+// to a small table of well-known top-level consts (the AST kind
+// codes etc.) so macros can write `t.kind == TY_POINTER` without
+// the interpreter walking the entire program for `pub const`s.
+// Returns `iv_null()` and pushes a diagnostic if neither resolves.
 fn scope_get(it: *Interp, name: string) -> IValue {
     if it.scopes.len() == 0 {
         it.err("scope_get: empty scope stack");
@@ -216,8 +232,62 @@ fn scope_get(it: *Interp, name: string) -> IValue {
         if sc.contains(name) { return sc.get(name); }
         i = i - 1;
     }
+    let k: int = _well_known_const(name);
+    if k >= 0 { return iv_int(k); }
     it.err("undefined name: ".concat(name));
     return iv_null();
+}
+
+// Well-known top-level consts macros routinely reach for. Keeps
+// scope_get O(1) (linear in the number of well-known names) without
+// having to crawl every `pub const` in the program.
+fn _well_known_const(name: string) -> int {
+    if name.eq("ST_LET") { return ST_LET; }
+    if name.eq("ST_RETURN") { return ST_RETURN; }
+    if name.eq("ST_EXPR") { return ST_EXPR; }
+    if name.eq("ST_IF") { return ST_IF; }
+    if name.eq("ST_WHILE") { return ST_WHILE; }
+    if name.eq("ST_BLOCK") { return ST_BLOCK; }
+    if name.eq("ST_FN") { return ST_FN; }
+    if name.eq("ST_BREAK") { return ST_BREAK; }
+    if name.eq("ST_CONTINUE") { return ST_CONTINUE; }
+    if name.eq("ST_STRUCT") { return ST_STRUCT; }
+    if name.eq("ST_IMPL") { return ST_IMPL; }
+    if name.eq("ST_CONST") { return ST_CONST; }
+    if name.eq("ST_FOR") { return ST_FOR; }
+    if name.eq("ST_ENUM") { return ST_ENUM; }
+    if name.eq("ST_TRAIT") { return ST_TRAIT; }
+    if name.eq("EX_INT") { return EX_INT; }
+    if name.eq("EX_STRING") { return EX_STRING; }
+    if name.eq("EX_BOOL") { return EX_BOOL; }
+    if name.eq("EX_IDENT") { return EX_IDENT; }
+    if name.eq("EX_BINARY") { return EX_BINARY; }
+    if name.eq("EX_UNARY") { return EX_UNARY; }
+    if name.eq("EX_CALL") { return EX_CALL; }
+    if name.eq("EX_MEMBER") { return EX_MEMBER; }
+    if name.eq("EX_PATH") { return EX_PATH; }
+    if name.eq("TY_NAMED") { return TY_NAMED; }
+    if name.eq("TY_POINTER") { return TY_POINTER; }
+    if name.eq("TY_BORROW") { return TY_BORROW; }
+    if name.eq("TY_BORROW_MUT") { return TY_BORROW_MUT; }
+    if name.eq("TY_GENERIC") { return TY_GENERIC; }
+    if name.eq("TY_RESULT") { return TY_RESULT; }
+    if name.eq("TY_OPTION") { return TY_OPTION; }
+    if name.eq("TY_OPT_RESULT") { return TY_OPT_RESULT; }
+    if name.eq("OP_ADD") { return OP_ADD; }
+    if name.eq("OP_SUB") { return OP_SUB; }
+    if name.eq("OP_MUL") { return OP_MUL; }
+    if name.eq("OP_EQ") { return OP_EQ; }
+    if name.eq("OP_NE") { return OP_NE; }
+    if name.eq("OP_LT") { return OP_LT; }
+    if name.eq("OP_GT") { return OP_GT; }
+    if name.eq("OP_AND") { return OP_AND; }
+    if name.eq("OP_OR") { return OP_OR; }
+    if name.eq("UN_NEG") { return UN_NEG; }
+    if name.eq("UN_NOT") { return UN_NOT; }
+    if name.eq("UN_DEREF") { return UN_DEREF; }
+    if name.eq("UN_ADDR") { return UN_ADDR; }
+    return -1;
 }
 
 // Define a new binding in the topmost scope. Used by ST_LET / ST_CONST.
@@ -251,8 +321,19 @@ fn scope_assign(it: *Interp, name: string, v: IValue) {
 pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue {
     let saved_control: int = it.control;
     let saved_return: IValue = it.return_val;
+    let saved_call_id: int = it.current_call_id;
     it.control = CF_NORMAL;
     it.return_val = iv_null();
+    // Hygiene: top-level macro invocation gets a fresh call_id. Helper
+    // fns called from inside that macro INHERIT the parent's call_id,
+    // so identifier suffixes stay consistent across the whole
+    // expansion (a `let x` in the parent body matches `expr_ident("x")`
+    // emitted by a helper, and vice versa). Without this, each helper
+    // would mint a different suffix and decls/refs would mismatch.
+    if it.current_call_id == 0 {
+        it.current_call_id = it.next_call_id;
+        it.next_call_id = it.next_call_id + 1;
+    }
 
     let scope: *HashMap<IValue> = HashMap::new();
     if fn_stmt.fn_params != null {
@@ -279,6 +360,7 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
 
     it.control = saved_control;
     it.return_val = saved_return;
+    it.current_call_id = saved_call_id;
     return ret;
 }
 
@@ -635,12 +717,45 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         return iv_ptr(expr_null(0, 0) as *void, "Expr");
     }
     if name.eq("expr_ident") {
+        // Hygiene: idents synthesised inside a macro get a per-call
+        // suffix injected so they can't collide with caller-side
+        // names. Bypass via `expr_ident_unsafe` when the macro
+        // deliberately wants to reference a caller-side ident.
+        let n: string = _arg_string(it, args, 0);
+        let mut final_name: string = n;
+        if it.current_call_id != 0 {
+            final_name = "__macro_".concat(it.current_call_id.to_string()).concat("__").concat(n);
+        }
+        return iv_ptr(expr_ident(final_name, 0, 0) as *void, "Expr");
+    }
+    if name.eq("expr_ident_unsafe") {
         let n: string = _arg_string(it, args, 0);
         return iv_ptr(expr_ident(n, 0, 0) as *void, "Expr");
     }
     if name.eq("ty_named") {
         let n: string = _arg_string(it, args, 0);
         return iv_ptr(ty_named(n) as *void, "Type");
+    }
+    if name.eq("make_param") {
+        // Build a fresh Param. Native intrinsic so the interpreter
+        // avoids EX_STRUCT_LIT (not supported in v1) when a macro
+        // wants `Param { name: ..., ty: ... }`.
+        let n: string = _arg_string(it, args, 0);
+        let t: *Type = _arg_ptr(it, args, 1, "Type") as *Type;
+        let p: *Param = malloc(sizeof(Param)) as *Param;
+        p.name = n;
+        p.ty = t;
+        return iv_ptr(p as *void, "Param");
+    }
+    if name.eq("make_field") {
+        let n: string = _arg_string(it, args, 0);
+        let t: *Type = _arg_ptr(it, args, 1, "Type") as *Type;
+        let is_pub: bool = _arg_bool(it, args, 2);
+        let f: *Field = malloc(sizeof(Field)) as *Field;
+        f.name = n;
+        f.ty = t;
+        f.is_pub = is_pub;
+        return iv_ptr(f as *void, "Field");
     }
     if name.eq("ty_pointer") {
         let inner: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
@@ -706,6 +821,23 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         return iv_ptr(stmt_expr(e) as *void, "Stmt");
     }
     if name.eq("stmt_let") {
+        // Hygiene: same suffix as expr_ident so a `let x = ...`
+        // synthesised here matches the `expr_ident("x")` that
+        // references it later in the same macro call.
+        let n: string = _arg_string(it, args, 0);
+        let mut final_name: string = n;
+        if it.current_call_id != 0 {
+            final_name = "__macro_".concat(it.current_call_id.to_string()).concat("__").concat(n);
+        }
+        let ty: *Type = _arg_ptr(it, args, 1, "Type") as *Type;
+        let v: *Expr = _arg_ptr(it, args, 2, "Expr") as *Expr;
+        let is_mut: bool = _arg_bool(it, args, 3);
+        return iv_ptr(stmt_let(final_name, ty, v, is_mut, 0, 0) as *void, "Stmt");
+    }
+    if name.eq("stmt_let_unsafe") {
+        // Opt-out: emit `let <name> = ...` with the literal name,
+        // no per-call suffix. Pair with `expr_ident_unsafe` for
+        // references.
         let n: string = _arg_string(it, args, 0);
         let ty: *Type = _arg_ptr(it, args, 1, "Type") as *Type;
         let v: *Expr = _arg_ptr(it, args, 2, "Expr") as *Expr;
@@ -925,6 +1057,34 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
         }
         return iv_vector(out);
     }
+    if f.eq("fn_ret_ty") {
+        if s.fn_ret_ty == null { return iv_null(); }
+        return iv_ptr(s.fn_ret_ty as *void, "Type");
+    }
+    if f.eq("fn_params") {
+        let out: *Vector<IValue> = Vector::new();
+        if s.fn_params != null {
+            for let i: int = 0; i < s.fn_params.len(); i++ {
+                let p: Param = s.fn_params.get(i);
+                let pp: *Param = malloc(sizeof(Param)) as *Param;
+                *pp = p;
+                out.push(iv_ptr(pp as *void, "Param"));
+            }
+        }
+        return iv_vector(out);
+    }
+    if f.eq("fn_body") {
+        let out: *Vector<IValue> = Vector::new();
+        if s.fn_body != null {
+            for let i: int = 0; i < s.fn_body.len(); i++ {
+                let bs: Stmt = s.fn_body.get(i);
+                let pp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *pp = bs;
+                out.push(iv_ptr(pp as *void, "Stmt"));
+            }
+        }
+        return iv_vector(out);
+    }
     it.err("Stmt has no field `".concat(f).concat("`"));
     return iv_null();
 }
@@ -962,6 +1122,18 @@ fn type_field(it: *Interp, t: *Type, f: string) -> IValue {
     if f.eq("inner") {
         if t.inner == null { return iv_null(); }
         return iv_ptr(t.inner as *void, "Type");
+    }
+    if f.eq("args") {
+        let out: *Vector<IValue> = Vector::new();
+        if t.args != null {
+            for let i: int = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                let pa: *Type = malloc(sizeof(Type)) as *Type;
+                *pa = a;
+                out.push(iv_ptr(pa as *void, "Type"));
+            }
+        }
+        return iv_vector(out);
     }
     it.err("Type has no field `".concat(f).concat("`"));
     return iv_null();

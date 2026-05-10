@@ -205,21 +205,43 @@ fn _run_derive(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
 }
 
 // Invoke an attribute proc fn — input is the annotated decl, output
-// is one *Stmt that REPLACES it. v1 keeps it simple: the attr macro
-// can return a fresh Stmt; we overwrite the last entry of `out`
-// (which is the original decl pushed moments ago by the caller).
+// is either a single *Stmt (replaces the original 1:1) or a
+// *Vector<Stmt> (replaces the original with the whole list, useful
+// when the macro needs to emit a renamed user fn AND a wrapper).
+// Either return shape inherits origin + is_pub from the use site
+// and runs through ast_fill_defaults so codegen reads safely.
 fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
     let args: *Vector<IValue> = Vector::new();
     args.push(iv_ptr(target as *void, "Stmt"));
     let r: IValue = interp_call(it, fn_stmt, args);
-    if r.kind != IV_PTR { return; }
-    if !r.ty_tag.eq("Stmt") { return; }
-    let ps: *Stmt = r.p as *Stmt;
-    if ps == null { return; }
-    ps.origin = target.origin;
-    ps.is_pub = target.is_pub;
     let last: int = out.len() - 1;
-    if last >= 0 { out.set(last, *ps); }
+    if last < 0 { return; }
+    if r.kind == IV_PTR && r.ty_tag.eq("Stmt") {
+        let ps: *Stmt = r.p as *Stmt;
+        if ps == null { return; }
+        ast_fill_defaults(ps);
+        ps.origin = target.origin;
+        ps.is_pub = target.is_pub;
+        out.set(last, *ps);
+        return;
+    }
+    if r.kind == IV_VECTOR {
+        // Drop the original placeholder, then push every emitted Stmt
+        // in order. Empty vector = drop with no replacement.
+        let _: Stmt = out.pop();
+        for let i: int = 0; i < r.vec.len(); i++ {
+            let elem: IValue = r.vec.get(i);
+            if elem.kind != IV_PTR { continue; }
+            if !elem.ty_tag.eq("Stmt") { continue; }
+            let ps: *Stmt = elem.p as *Stmt;
+            if ps != null {
+                ast_fill_defaults(ps);
+                ps.origin = target.origin;
+                ps.is_pub = target.is_pub;
+                out.push(*ps);
+            }
+        }
+    }
 }
 
 fn type_owner_name(t: *Type) -> string {

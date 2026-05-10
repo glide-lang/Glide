@@ -474,6 +474,45 @@ pub fn ast_fill_defaults(s: *Stmt) {
 
 // ---- Constructors --------------------------------------------------------
 
+// Heap-allocate a fresh Param. Same payload as `Param { name, ty }`
+// but reachable from inside a procedural macro body — the interpreter
+// short-circuits to the native intrinsic with the same name (it
+// can't evaluate `EX_STRUCT_LIT` in v1), and compiled code falls
+// through to this implementation.
+pub fn make_param(name: string, ty: *Type) -> *Param {
+    let p: *Param = malloc(sizeof(Param)) as *Param;
+    p.name = name;
+    p.ty = ty;
+    return p;
+}
+
+// Heap-allocate a fresh Field. Same trick as `make_param` for the
+// EX_STRUCT_LIT-free path through the interpreter.
+pub fn make_field(name: string, ty: *Type, is_pub: bool) -> *Field {
+    let f: *Field = malloc(sizeof(Field)) as *Field;
+    f.name = name;
+    f.ty = ty;
+    f.is_pub = is_pub;
+    return f;
+}
+
+// Hygiene opt-out: build an EX_IDENT with the literal name, no
+// per-call macro suffix injected. Compiled call from inside a macro
+// fn body resolves through the interpreter's `expr_ident_unsafe`
+// intrinsic; calls from outside a macro context (typer-time test
+// fixtures, the macro fn's own compiled-Glide path) hit this
+// implementation instead.
+pub fn expr_ident_unsafe(name: string, line: int, col: int) -> *Expr {
+    return expr_ident(name, line, col);
+}
+
+// Hygiene opt-out for let bindings: emit a `let <name> = ...` with
+// the literal name. Same passthrough trick as expr_ident_unsafe.
+pub fn stmt_let_unsafe(name: string, ty: *Type, value: *Expr,
+                       is_mut: bool, line: int, col: int) -> *Stmt {
+    return stmt_let(name, ty, value, is_mut, line, col);
+}
+
 pub fn ty_named(name: string) -> *Type {
     let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_NAMED;
