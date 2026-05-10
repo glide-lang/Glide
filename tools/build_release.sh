@@ -67,8 +67,7 @@ esac
 
 NAME="glide-${TARGET_OS}-${TARGET_ARCH}-${VERSION}"
 STAGE="dist/${NAME}"
-HOST_GLIDE="glide${HOST_OS:+$([ "$HOST_OS" = windows ] && echo .exe)}"
-[ "$HOST_OS" = windows ] && HOST_GLIDE="glide.exe" || HOST_GLIDE="glide"
+if [ "$HOST_OS" = "windows" ]; then HOST_GLIDE="glide.exe"; else HOST_GLIDE="glide"; fi
 
 if [ ! -x "$HOST_GLIDE" ]; then
     echo "no host $HOST_GLIDE found in repo root. Build it first:" >&2
@@ -99,8 +98,18 @@ if [ "$TARGET_OS" != "$HOST_OS" ] || [ "$TARGET_ARCH" != "$HOST_ARCH" ]; then
         else
             wget --show-progress -O "$TMP/zig.${ZEXT}" "$URL"
         fi
+        # Prefer system unzip; fall back to Python's zipfile so the
+        # script doesn't require an extra apt install on minimal hosts.
         ( cd "$TMP" && \
-          if [ "$ZEXT" = "zip" ]; then unzip -q "zig.${ZEXT}"; else tar -xf "zig.${ZEXT}"; fi )
+          if [ "$ZEXT" = "zip" ]; then \
+              if command -v unzip >/dev/null 2>&1; then \
+                  unzip -q "zig.${ZEXT}"; \
+              else \
+                  python3 -c "import zipfile, sys; zipfile.ZipFile('zig.${ZEXT}').extractall('.')"; \
+              fi; \
+          else \
+              tar -xf "zig.${ZEXT}"; \
+          fi )
         mkdir -p dist/staging
         mv "$TMP/$ZNAME" "$TARGET_ZIG_DIR"
         rm -rf "$TMP"
@@ -141,8 +150,10 @@ case "$TARGET_OS" in
         ( cd dist && rm -f "${NAME}.zip" && \
           if command -v zip >/dev/null 2>&1; then \
               zip -qr "${NAME}.zip" "$NAME"; \
-          else \
+          elif command -v powershell >/dev/null 2>&1; then \
               powershell -NoProfile -Command "Compress-Archive -Path '$NAME' -DestinationPath '${NAME}.zip' -Force"; \
+          else \
+              python3 -c "import shutil; shutil.make_archive('${NAME}', 'zip', '.', '$NAME')"; \
           fi )
         ARCHIVE="dist/${NAME}.zip"
         ;;
