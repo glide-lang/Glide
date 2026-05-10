@@ -188,8 +188,11 @@ impl HttpRequest {
 /// `.stream(state, next_fn)`.
 ///
 /// The two-field shape (instead of a `*dyn ChunkSource` trait
-/// object) sidesteps a codegen ordering bug around dyn-trait
-/// vtables + nested generic types. Functionally equivalent.
+/// object) sidesteps a runtime concern: `*dyn Trait` in Glide is a
+/// fat pointer struct, not a raw pointer, and the typer doesn't
+/// translate `*dyn Trait != null` into the equivalent vtable
+/// non-null check. The fn-pointer encoding is functionally
+/// equivalent and easier to detect.
 pub struct HttpResponse {
     pub status:        int,
     pub headers_block: string,
@@ -691,8 +694,8 @@ fn _format_chunked_head(r: *HttpResponse, keep_alive: bool) -> string {
 
 // Pump every chunk from `next(state)` to `c`, framed as
 // `<hex-length>\r\n<data>\r\n`, terminated by `0\r\n\r\n`. Empty
-// strings from next are emitted as zero-length frames (spec-legal,
-// mostly useless); none() ends the stream.
+// strings are emitted as zero-length frames (spec-legal, mostly
+// useless); none() ends the stream.
 fn _pump_chunks(c: *Conn, state: *void, next: fn(*void) -> ?string) {
     let crlf: string = "\r\n";
     while true {

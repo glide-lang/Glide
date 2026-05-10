@@ -1,7 +1,9 @@
 // Streaming response (Transfer-Encoding: chunked) + SSE helper.
 //
-// Coverage: SSE wire format, the chunk-pump fn-pointer pattern,
-// HttpResponse builder, end-to-end via TCP.
+// Coverage: SSE wire format, the chunk-pump fn-pointer pattern, the
+// HttpResponse builder. E2E coverage of the chunked write itself
+// requires running the listener + a TcpStream from the same test;
+// exercised manually via curl.
 
 import stdlib::testing::*;
 import stdlib::http::*;
@@ -101,11 +103,3 @@ fn test_sse_response_stamps_content_type() -> int {
     assert!(r.stream_next != null);
     return 0;
 }
-
-// E2E coverage of the actual chunked write (HTTP head + chunk frames
-// + 0\r\n\r\n terminator) requires running the server on a real
-// port and reading raw bytes back. That's exercised manually via
-// curl in the example app — a test that does both ends in-process
-// would need spawning a coro for the listener and a TcpStream from
-// the same test, which is doable but flaky on CI. Keeping it out of
-// the unit suite for now.
