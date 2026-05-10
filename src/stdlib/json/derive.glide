@@ -1,0 +1,177 @@
+// `@derive(JsonBind)` proc-derive macro.
+//
+// Synthesises an `impl JsonBind for <Struct> { from_json, to_json }`
+// block by walking the struct's fields and dispatching on field type:
+//
+//   string                 ->  v.get_string("f")?           ⇄  JsonValue::string(self.f)
+//   int                    ->  v.get_int("f")?              ⇄  JsonValue::int(self.f)
+//   bool                   ->  v.get_bool("f")?             ⇄  JsonValue::bool(self.f)
+//   f64                    ->  v.get_float("f")?            ⇄  JsonValue::float(self.f)
+//   ?string / ?int / ...   ->  v.opt_<t>("f")               ⇄  if self.f.has { ... }
+//
+// Anything else (nested structs, *Vector, *JsonValue) is unsupported in
+// v1 — the generated code names a `JsonValue::<unknown>` ctor and the
+// typer surfaces a clear error pointing at the use site. Hand-write the
+// `impl JsonBind` for those structs.
+//
+// ```glide
+// import stdlib::json::*;
+// import stdlib::json::derive::*;
+//
+// @derive(JsonBind)
+// pub struct Pet {
+//     pub name: string,
+//     pub age:  int,
+//     pub tag:  ?string,
+// }
+//
+// // Pet now has from_json / to_json, ready for json_respond / Json<Pet>.
+// ```
+
+import bootstrap::ast::*;
+import bootstrap::interp::*;
+
+@proc_derive(JsonBind)
+fn derive_json_bind(s: *Stmt) -> *Vector<Stmt> {
+    let methods: *Vector<Stmt> = Vector::new();
+    methods.push(*_emit_from_json(s));
+    methods.push(*_emit_to_json(s));
+
+    let target: *Type = ty_named(s.name);
+    let impl_stmt: *Stmt = stmt_impl_trait(target, "JsonBind", methods, 0, 0);
+
+    let out: *Vector<Stmt> = Vector::new();
+    out.push(*impl_stmt);
+    return out;
+}
+
+// ---- from_json --------------------------------------------------------
+
+fn _emit_from_json(s: *Stmt) -> *Stmt {
+    let body: *Vector<Stmt> = Vector::new();
+
+    // return ok(<Struct> {
+    //     f1: v.get_<t>("f1")?,
+    //     f2: v.opt_<t>("f2"),
+    //     ...
+    // });
+    let names: *Vector<string> = Vector::new();
+    let vals:  *Vector<Expr>   = Vector::new();
+    let n: int = s.struct_fields.len();
+    let mut i: int = 0;
+    while i < n {
+        let f: Field = s.struct_fields.get(i);
+        names.push(f.name);
+        vals.push(*_field_read_expr(f.name, f.ty));
+        i = i + 1;
+    }
+    let lit: *Expr = expr_struct_lit(s.name, names, vals, 0, 0);
+
+    let ok_args: *Vector<Expr> = Vector::new();
+    ok_args.push(*lit);
+    let ok_call: *Expr = expr_call(expr_ident_unsafe("ok", 0, 0), ok_args);
+    body.push(*stmt_return(ok_call, 0, 0));
+
+    let params: *Vector<Param> = Vector::new();
+    params.push(*make_param("v", ty_pointer(ty_named("JsonValue"))));
+    let ret: *Type = ty_result(ty_named(s.name));
+    return stmt_fn("from_json", params, ret, body, 0, 0);
+}
+
+// One field's read expression for the `Foo { ... }` literal.
+//
+//   ty == ?T  ->  v.opt_<t>("name")              (returns ?T)
+//   ty == T   ->  v.get_<t>("name")?             (returns T, propagates err)
+fn _field_read_expr(name: string, ty: *Type) -> *Expr {
+    let v_ref: *Expr = expr_ident_unsafe("v", 0, 0);
+    let key_args: *Vector<Expr> = Vector::new();
+    key_args.push(*expr_string(name, 0, 0));
+
+    if ty.kind == TY_OPTION {
+        let suffix: string = _prim_suffix(ty.inner);
+        let method: string = "opt_".concat(suffix);
+        return expr_call(expr_member(v_ref, method), key_args);
+    }
+    let method: string = "get_".concat(_prim_suffix(ty));
+    let call: *Expr = expr_call(expr_member(v_ref, method), key_args);
+    return expr_unary(UN_TRY, call, 0, 0);
+}
+
+// ---- to_json ----------------------------------------------------------
+
+fn _emit_to_json(s: *Stmt) -> *Stmt {
+    let body: *Vector<Stmt> = Vector::new();
+
+    // let __out: *JsonValue = JsonValue::object();
+    let out_name: string = "__jb_out";
+    let no_args: *Vector<Expr> = Vector::new();
+    let obj_call: *Expr = expr_call(
+        expr_path("JsonValue", "object", 0, 0), no_args);
+    body.push(*stmt_let_unsafe(
+        out_name, ty_pointer(ty_named("JsonValue")),
+        obj_call, false, 0, 0));
+
+    let n: int = s.struct_fields.len();
+    let mut i: int = 0;
+    while i < n {
+        let f: Field = s.struct_fields.get(i);
+        body.push(*_field_write_stmt(out_name, f.name, f.ty));
+        i = i + 1;
+    }
+
+    body.push(*stmt_return(expr_ident_unsafe(out_name, 0, 0), 0, 0));
+
+    let params: *Vector<Param> = Vector::new();
+    params.push(*make_param("self", ty_pointer(ty_named(s.name))));
+    let ret: *Type = ty_pointer(ty_named("JsonValue"));
+    return stmt_fn("to_json", params, ret, body, 0, 0);
+}
+
+// One field's write stmt for the `__out.obj_set(...)` chain.
+//
+//   ty == T   ->  __out.obj_set("name", JsonValue::<t>(self.name));
+//   ty == ?T  ->  if self.name.has {
+//                     __out.obj_set("name", JsonValue::<t>(self.name.val));
+//                 }
+fn _field_write_stmt(out_name: string, name: string, ty: *Type) -> *Stmt {
+    let self_ref: *Expr = expr_ident_unsafe("self", 0, 0);
+    let out_ref: *Expr = expr_ident_unsafe(out_name, 0, 0);
+    let self_field: *Expr = expr_member(self_ref, name);
+
+    if ty.kind == TY_OPTION {
+        let cond: *Expr = expr_member(self_field, "has");
+        let inner_val: *Expr = expr_member(self_field, "val");
+        let then_body: *Vector<Stmt> = Vector::new();
+        then_body.push(*_obj_set_stmt(out_ref, name, ty.inner, inner_val));
+        return stmt_if(cond, then_body, null, 0, 0);
+    }
+    return _obj_set_stmt(out_ref, name, ty, self_field);
+}
+
+// `__out.obj_set("<name>", JsonValue::<t>(<val>))` as a stmt.
+fn _obj_set_stmt(out_ref: *Expr, name: string, ty: *Type, val: *Expr) -> *Stmt {
+    let ctor_args: *Vector<Expr> = Vector::new();
+    ctor_args.push(*val);
+    let ctor: *Expr = expr_call(
+        expr_path("JsonValue", _prim_suffix(ty), 0, 0), ctor_args);
+
+    let set_args: *Vector<Expr> = Vector::new();
+    set_args.push(*expr_string(name, 0, 0));
+    set_args.push(*ctor);
+    let set_call: *Expr = expr_call(expr_member(out_ref, "obj_set"), set_args);
+    return stmt_expr(set_call);
+}
+
+// Map a primitive Glide type to the JsonValue ctor / accessor suffix.
+// `string` / `int` / `bool` / `f64` are the only types the typed JSON
+// surface speaks today; anything else returns "" so the generated code
+// names a missing JsonValue::<empty> ctor and the typer flags it.
+fn _prim_suffix(ty: *Type) -> string {
+    if ty == null { return ""; }
+    if ty.kind != TY_NAMED { return ""; }
+    if ty.name.eq("string") { return "string"; }
+    if ty.name.eq("int")    { return "int"; }
+    if ty.name.eq("bool")   { return "bool"; }
+    if ty.name.eq("f64")    { return "float"; }
+    return "";
+}
