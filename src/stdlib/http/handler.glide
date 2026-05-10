@@ -124,6 +124,28 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
             continue;
         }
 
+        // ---- State<T> special case -------------------------------------
+        // Inherent extract on a generic type — same trick as Path<T>:
+        // the macro emits `State::extract(req)` with let-ty `!State<T>`
+        // pinning the inner T for monomorphisation.
+        if _is_state_generic(pty) {
+            let r_name: string = pname.concat("__state_r");
+            let extract_args: *Vector<Expr> = Vector::new();
+            extract_args.push(*expr_ident_unsafe("req", 0, 0));
+            let extract_call: *Expr = expr_call(
+                expr_path("State", "extract", 0, 0), extract_args);
+            wrapper_body.push(*stmt_let_unsafe(
+                r_name, ty_result(pty), extract_call, false, 0, 0));
+            wrapper_body.push(*_bind_err_check_extract(r_name));
+            wrapper_body.push(*stmt_let_unsafe(
+                pname, pty,
+                expr_member(expr_ident_unsafe(r_name, 0, 0), "val"),
+                false, 0, 0));
+            call_args.push(*expr_ident_unsafe(pname, 0, 0));
+            i = i + 1;
+            continue;
+        }
+
         // ---- generic FromRequest dispatch ------------------------------
         let head: string = _head_name(pty);
         if head.eq("") {
@@ -191,6 +213,13 @@ fn _is_path_generic(t: *Type) -> bool {
     if t == null { return false; }
     if t.kind != TY_GENERIC { return false; }
     return t.name.eq("Path");
+}
+
+// True iff `t` looks like `State<X>`.
+fn _is_state_generic(t: *Type) -> bool {
+    if t == null { return false; }
+    if t.kind != TY_GENERIC { return false; }
+    return t.name.eq("State");
 }
 
 // Head identifier of a type — `Json<Vector<Todo>>` -> "Json",

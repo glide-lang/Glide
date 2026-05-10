@@ -63,6 +63,25 @@ extern fn hp_build_response(status: int, status_txt: string,
                             extra_headers: string, keep_alive: int) -> int;
 extern fn hp_resp_buf_ptr() -> *void;
 
+// ---- shared state pointer ---------------------------------------------
+//
+// Single slot per process holds the user's State<T>. Set via
+// `Router::state(p)`, read by `State::extract(req)` in extract.glide.
+// One slot keeps the API simple and matches the common single-router
+// shape; multi-router apps must coordinate manually.
+
+c_raw! {
+    static void* __glide_router_state_ptr = 0;
+}
+
+extern fn __glide_router_state_get() -> *void;
+extern fn __glide_router_state_set(p: *void);
+
+c_raw! {
+    void* __glide_router_state_get(void)    { return __glide_router_state_ptr; }
+    void  __glide_router_state_set(void* p) { __glide_router_state_ptr = p; }
+}
+
 // ---- segment kinds ----------------------------------------------------
 
 pub const RS_LITERAL:  int = 0;
@@ -81,11 +100,17 @@ pub struct RouteSegment {
 }
 
 /// One row of the routing table.
+///
+/// `local_mws` is the per-route middleware chain — populated when the
+/// route was mounted via `Router::scope(prefix, sub)`. Parent
+/// middleware runs first, then `local_mws` (in registration order),
+/// then the handler.
 pub struct Route {
-    pub method:   string,
-    pub pattern:  string,
-    pub segments: *Vector<RouteSegment>,
-    pub handler:  fn(*HttpRequest) -> HttpResponse,
+    pub method:    string,
+    pub pattern:   string,
+    pub segments:  *Vector<RouteSegment>,
+    pub handler:   fn(*HttpRequest) -> HttpResponse,
+    pub local_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
 }
 
 // Wildcard sentinel for `Router::any`. `dispatch` matches any verb when
@@ -93,11 +118,50 @@ pub struct Route {
 pub const ANY_METHOD: string = "*";
 
 /// HTTP method router. Stores routes in declaration order; the first
-/// match wins. A separate "not found" handler runs when no route
-/// matches; defaults to a plain 404 with body `"not found"`.
+/// match wins. Middleware in `mw` runs before the matched handler in
+/// registration order. A separate "not found" handler covers
+/// no-match dispatches; defaults to a plain 404 with body
+/// `"not found"`.
 pub struct Router {
     pub routes:    *Vector<Route>,
+    pub mw:        *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
     pub not_found: fn(*HttpRequest) -> HttpResponse,
+}
+
+/// Per-dispatch chain context. Threaded through every middleware so
+/// each can call `chain_next(c)` to advance to the next middleware
+/// (or the route handler when the middleware list is exhausted).
+/// Middleware that returns without calling `chain_next` short-
+/// circuits the chain — the rest of the middleware AND the route
+/// handler are skipped.
+pub struct Chain {
+    pub idx:     int,
+    pub mws:     *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
+    pub handler: fn(*HttpRequest) -> HttpResponse,
+    pub req:     *HttpRequest,
+}
+
+/// Advance the middleware chain. The first call from inside
+/// middleware N runs middleware N+1; once the list is exhausted the
+/// route handler runs.
+///
+/// ```glide
+/// fn logger(req: *HttpRequest, c: *Chain) -> HttpResponse {
+///     println!("[", req.method, "] ", req.path);
+///     let resp: HttpResponse = chain_next(c);
+///     println!("  -> ", resp.status);
+///     return resp;
+/// }
+/// ```
+pub fn chain_next(c: *Chain) -> HttpResponse {
+    if c == null { return HttpResponse::with_status(500).text("nil chain"); }
+    if c.idx >= c.mws.len() {
+        let h: fn(*HttpRequest) -> HttpResponse = c.handler;
+        return h(c.req);
+    }
+    let mw: fn(*HttpRequest, *Chain) -> HttpResponse = c.mws.get(c.idx);
+    c.idx = c.idx + 1;
+    return mw(c.req, c);
 }
 
 // ---- pattern compilation / matching -----------------------------------
@@ -182,6 +246,49 @@ fn _default_not_found(req: *HttpRequest) -> HttpResponse {
     return HttpResponse::with_status(404).text("not found");
 }
 
+// Build a Chain over `parent_mws ++ local_mws` ending in `handler`
+// and kick it off. Concatenating per-dispatch is small relative to
+// the rest of the request cost; deferring a more aggressive
+// per-route precomputation until profiling demands it.
+fn _run_chain(parent_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
+              local_mws:  *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
+              handler:    fn(*HttpRequest) -> HttpResponse,
+              req:        *HttpRequest) -> HttpResponse {
+    let plen: int = 0;
+    if parent_mws != null { plen = parent_mws.len(); }
+    let llen: int = 0;
+    if local_mws != null { llen = local_mws.len(); }
+    if plen + llen == 0 {
+        let h: fn(*HttpRequest) -> HttpResponse = handler;
+        return h(req);
+    }
+    let combined: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
+    let mut i: int = 0;
+    while i < plen { combined.push(parent_mws.get(i)); i = i + 1; }
+    i = 0;
+    while i < llen { combined.push(local_mws.get(i)); i = i + 1; }
+    let c: *Chain = malloc(sizeof(Chain)) as *Chain;
+    c.idx = 0;
+    c.mws = combined;
+    c.handler = handler;
+    c.req = req;
+    let resp: HttpResponse = chain_next(c);
+    free(c as *void);
+    return resp;
+}
+
+// Normalise a scope prefix: ensure it starts with `/` and doesn't
+// end with one (so `prefix + pattern` is always single-/'d).
+fn _normalise_prefix(p: string) -> string {
+    let mut out: string = p;
+    if out.len() == 0 { return ""; }
+    if !out.starts_with("/") { out = "/".concat(out); }
+    while out.len() > 1 && out.ends_with("/") {
+        out = out.substring(0, out.len() - 1);
+    }
+    return out;
+}
+
 // ---- Router methods ---------------------------------------------------
 
 impl Router {
@@ -195,8 +302,120 @@ impl Router {
         let r: *Router = malloc(sizeof(Router)) as *Router;
         let v: *Vector<Route> = Vector::new();
         r.routes = v;
+        let m: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
+        r.mw = m;
         r.not_found = _default_not_found;
         return r;
+    }
+
+    /// Register a middleware. Runs before the route handler in
+    /// registration order. Each middleware can:
+    ///
+    /// - Call `chain_next(c)` to advance to the next middleware (and
+    ///   eventually the route handler). The returned `HttpResponse`
+    ///   may be inspected/mutated and returned from the middleware
+    ///   itself ("after"-style behaviour).
+    /// - Return without calling `chain_next` to short-circuit — the
+    ///   rest of the chain plus the route handler are skipped.
+    ///
+    /// Returns `self` so the call chains.
+    ///
+    /// ```glide
+    /// fn auth(req: *HttpRequest, c: *Chain) -> HttpResponse {
+    ///     if req.header("Authorization").len() == 0 {
+    ///         return HttpResponse::with_status(401).text("no auth");
+    ///     }
+    ///     return chain_next(c);
+    /// }
+    ///
+    /// let r: *Router = Router::new();
+    /// r.use_mw(auth);
+    /// r.get("/me", whoami);
+    /// ```
+    pub fn use_mw(self: *Router,
+                  mw: fn(*HttpRequest, *Chain) -> HttpResponse) -> *Router {
+        self.mw.push(mw);
+        return self;
+    }
+
+    /// Mount `sub` under `prefix`. Every route declared on `sub` is
+    /// re-registered on `self` with the prefix prepended; the sub-
+    /// router's middleware chain becomes per-route middleware that
+    /// runs **after** the parent's chain and **before** the handler.
+    /// Recurses naturally through nested scopes — middleware
+    /// accumulates.
+    ///
+    /// ```glide
+    /// let api: *Router = Router::new();
+    /// api.use_mw(auth);
+    /// api.get("/users/:id", get_user);
+    ///
+    /// let r: *Router = Router::new();
+    /// r.use_mw(logger);
+    /// r.scope("/api/v1", api);
+    /// // Now `/api/v1/users/42` runs: logger -> auth -> get_user
+    /// ```
+    ///
+    /// Returns `self` for chaining. Doesn't borrow `sub` — copies the
+    /// route entries — so the caller is free to drop or reuse the
+    /// sub-router after the call.
+    pub fn scope(self: *Router, prefix: string, sub: *Router) -> *Router {
+        let normalised: string = _normalise_prefix(prefix);
+        let mut i: int = 0;
+        while i < sub.routes.len() {
+            let r: Route = sub.routes.get(i);
+            let new_pattern: string = normalised.concat(r.pattern);
+            // Sub-router's `mw` becomes per-route middleware that
+            // runs after parent.mw (set on self) and before the
+            // route handler. Plus any local_mws the sub-route
+            // already carried (chained scopes).
+            let mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
+            let mut j: int = 0;
+            while j < sub.mw.len() {
+                mws.push(sub.mw.get(j));
+                j = j + 1;
+            }
+            j = 0;
+            while j < r.local_mws.len() {
+                mws.push(r.local_mws.get(j));
+                j = j + 1;
+            }
+            self.routes.push(Route {
+                method:    r.method,
+                pattern:   new_pattern,
+                segments:  _compile_pattern(new_pattern),
+                handler:   r.handler,
+                local_mws: mws,
+            });
+            i = i + 1;
+        }
+        return self;
+    }
+
+    /// Inject application state. Pass any `*T`; handlers receive it via
+    /// the `State<T>` extractor. The pointer is stored process-wide (one
+    /// slot per process), so a single router owns the state and
+    /// fn-pointer handlers can reach it without closure capture.
+    ///
+    /// ```glide
+    /// let db: *Db = open_db();
+    /// let r: *Router = Router::new();
+    /// r.state(db as *void);
+    /// r.get("/users/:id", get_user);
+    /// r.listen(8080);
+    ///
+    /// // Inside the handler:
+    /// @handler
+    /// fn get_user(state: State<Db>, id: Path<int>) -> Json<User> {
+    ///     return Json::wrap(state.val.find(id.val));
+    /// }
+    /// ```
+    ///
+    /// Returns `self` so the call chains. v1 supports a single global
+    /// state slot — multiple Routers in the same process share it.
+    pub fn state(self: *Router, p: *void) -> *Router {
+        __glide_router_state_set(p);
+        return self;
     }
 
     /// Register `handler` for `method` + `pattern`. The method match is
@@ -209,11 +428,13 @@ impl Router {
     /// ```
     pub fn route(self: *Router, method: string, pattern: string,
                  handler: fn(*HttpRequest) -> HttpResponse) {
+        let empty: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
         self.routes.push(Route {
-            method:   method.to_upper(),
-            pattern:  pattern,
-            segments: _compile_pattern(pattern),
-            handler:  handler,
+            method:    method.to_upper(),
+            pattern:   pattern,
+            segments:  _compile_pattern(pattern),
+            handler:   handler,
+            local_mws: empty,
         });
     }
 
@@ -287,10 +508,11 @@ impl Router {
         self.not_found = handler;
     }
 
-    /// Walk the route table; on first match, populate `req.params` and
-    /// dispatch. Falls back to the not-found handler when no route
-    /// fits. Mutates `req.params` in place — pass a freshly-built
-    /// `HttpRequest`, not a long-lived pointer.
+    /// Walk the route table; on first match, populate `req.params`,
+    /// run the middleware chain, then dispatch the handler. Falls back
+    /// to the not-found handler when no route fits. Mutates
+    /// `req.params` in place — pass a freshly-built `HttpRequest`,
+    /// not a long-lived pointer.
     ///
     /// ```glide
     /// let req: HttpRequest = ...;
@@ -305,13 +527,13 @@ impl Router {
             let params: *HashMap<string> = HashMap::new();
             if _match_path(route.segments, path, params) {
                 req.params = params;
-                let h: fn(*HttpRequest) -> HttpResponse = route.handler;
-                return h(req);
+                return _run_chain(self.mw, route.local_mws,
+                                  route.handler, req);
             }
             params.free();
         }
-        let nf: fn(*HttpRequest) -> HttpResponse = self.not_found;
-        return nf(req);
+        let empty_local: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
+        return _run_chain(self.mw, empty_local, self.not_found, req);
     }
 
     /// Release the route table and the router struct. Pair with `defer`.

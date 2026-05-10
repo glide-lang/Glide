@@ -199,6 +199,46 @@ impl AuthScheme for Basic {
     fn name() -> string { return "Basic"; }
 }
 
+// ---- State<T> shared application state -------------------------------
+
+extern fn __glide_router_state_get() -> *void;
+
+/// Application state injected via `Router::state(p)`. The handler
+/// reaches it without closure capture or globals — just declare a
+/// `state: State<Db>` (or whatever T) param and let `@handler` do
+/// the lookup.
+///
+/// **Special-cased by the macro.** Like `Path<T>`, the macro emits
+/// `State::extract(req)` and pins the let-ty so T monomorphises
+/// correctly. Empty state slot returns 500.
+///
+/// ```glide
+/// // setup
+/// let db: *Db = open_db();
+/// let r: *Router = Router::new();
+/// r.state(db as *void);
+///
+/// // handler
+/// @handler
+/// fn list_users(state: State<Db>) -> Json<UserList> {
+///     return Json::wrap(state.val.all_users());
+/// }
+/// ```
+pub struct State<T> {
+    pub val: *T,
+}
+
+impl<T> State<T> {
+    /// Read the state slot and cast to `*T`. Errors with status 500
+    /// when no state was registered (likely a startup bug — `r.state(...)`
+    /// must be called before `r.listen(...)`).
+    pub fn extract(req: *HttpRequest) -> !State<T> {
+        let p: *void = __glide_router_state_get();
+        if p == null { return err("500:no application state set on router"); }
+        return ok(State { val: p as *T });
+    }
+}
+
 // ---- Path<T> typed route param ---------------------------------------
 
 /// One-byte conversion for typed path params. Reused for Query<T>
