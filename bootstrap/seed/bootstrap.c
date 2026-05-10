@@ -3266,7 +3266,6 @@ typedef struct  FieldHit   FieldHit ;
 typedef struct  ImportInfo   ImportInfo ;
 typedef struct  UseSite   UseSite ;
 
-
 #ifndef __GLIDE_RESULT_int_GUARD
 #define __GLIDE_RESULT_int_GUARD
 typedef struct __glide_result_int_t { int ok; int val; const char* err; } __glide_result_int_t;
@@ -3327,6 +3326,7 @@ typedef struct __glide_option_string_t { int has; const char* val; } __glide_opt
 static __glide_option_string_t __glide_some_string(const char* v) { __glide_option_string_t o; o.has = 1; o.val = v; return o; }
 static __glide_option_string_t __glide_none_string(void) { __glide_option_string_t o; o.has = 0; return o; }
 #endif
+
 
 typedef struct  Vector__string   Vector__string ;
 typedef struct  Vector__int   Vector__int ;
@@ -15348,10 +15348,17 @@ void   emit_dyn_runtime (CG*   g, Vector__Stmt*   program) {
             }
             printf("%s\n", ") {");
             bool   is_void = (((m. fn_ret_ty )  ==  NULL)  ||  ((((m. fn_ret_ty )-> kind )  ==  TY_NAMED)  &&  __glide_string_eq(((m. fn_ret_ty )-> name ), "void")));
+            const char*   self_expr = __glide_string_concat(__glide_string_concat("*(", type_name), "*)self_p");
+            if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  0))) {
+                Param   p0 = Vector_get__Param((m. fn_params ), 0);
+                if ((((p0. ty )  !=  NULL)  &&  (((p0. ty )-> kind )  ==  TY_POINTER))) {
+                    (self_expr  =  __glide_string_concat(__glide_string_concat("(", type_name), "*)self_p"));
+                }
+            }
             if (is_void) {
-                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", type_name), "_"), (m. name )), "(*("), type_name), "*)self_p"));
+                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    ", type_name), "_"), (m. name )), "("), self_expr));
             } else {
-                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    return ", type_name), "_"), (m. name )), "(*("), type_name), "*)self_p"));
+                printf("%s", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("    return ", type_name), "_"), (m. name )), "("), self_expr));
             }
             if ((((m. fn_params )  !=  NULL)  &&  (Vector_len__Param((m. fn_params ))  >  1))) {
                 for (int   j = 1; (j  <  Vector_len__Param((m. fn_params ))); j++) {
@@ -19655,7 +19662,6 @@ void   emit_program (Vector__Stmt*   program) {
             }
         }
     }
-    ((void(*)(CG*, Vector__Stmt*))emit_dyn_runtime)(g, program);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((((s. kind )  ==  ST_FN)  &&  ((s. type_params )  !=  NULL))  &&  (Vector_len__string((s. type_params ))  >  0))) {
@@ -19777,6 +19783,7 @@ void   emit_program (Vector__Stmt*   program) {
         }
     }
     ((void(*)(CG*))emit_optres_runtime)(g);
+    ((void(*)(CG*, Vector__Stmt*))emit_dyn_runtime)(g, program);
     for (int   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
         Stmt   s = Vector_get__Stmt(program, i);
         if (((s. kind )  !=  ST_IMPL)) {
