@@ -488,15 +488,34 @@ fn parse_struct(p: *Parser) -> *Stmt {
     let name: string = p.expect_ident();
     let tps_bounds: *Vector<string> = Vector::new();
     let tps: *Vector<string> = parse_type_params_with_bounds(p, tps_bounds);
-    p.expect_op("{");
+
+    // Two field-list shapes:
+    //   struct Name { pub a: T, pub b: U }       full form
+    //   struct Name(a: T, b: U)                  compact form: implicit
+    //                                            pub on every field, no
+    //                                            doc-comment slots
+    // The compact form is sugar — same Stmt produced as the full form
+    // with `is_pub = true` on every field. Useful for value-types like
+    // ApiKey, Token, Wrapper where the boilerplate noise dominates.
+    let mut is_tuple: bool = false;
+    let mut open: string = "{";
+    let mut close: string = "}";
+    if p.at_op("(") {
+        is_tuple = true;
+        open = "(";
+        close = ")";
+    }
+    p.expect_op(open);
+
     let fields: *Vector<Field> = Vector::new();
-    while !p.at_op("}") && !p.at_eof() {
+    while !p.at_op(close) && !p.at_eof() {
         let fdoc: string = p.current.doc;
         // Three equivalent ways to mark a field exported across files:
         //   pub field: T,    // long form
         //   !field: T,       // short prefix sigil (field-only shortcut)
-        // Bare `field: T,` stays private (default).
-        let mut fpub: bool = false;
+        // Bare `field: T,` stays private (default) in the brace form.
+        // In the tuple form every field is implicitly pub.
+        let mut fpub: bool = is_tuple;
         if p.eat_kw("pub") { fpub = true; }
         else if p.eat_op("!") { fpub = true; }
         let fname: string = p.expect_ident();
@@ -506,7 +525,7 @@ fn parse_struct(p: *Parser) -> *Stmt {
         fields.push(f);
         if !p.eat_op(",") { break; }
     }
-    p.expect_op("}");
+    p.expect_op(close);
     let s: *Stmt = stmt_struct(name, fields, line, col);
     if s != null {
         s.type_params = tps; s.type_param_bounds = tps_bounds;
