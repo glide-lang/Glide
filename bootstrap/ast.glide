@@ -241,6 +241,17 @@ pub struct MacroParam {
     pub kind: string,           // matcher kind: "expr" (default), "ty", "ident"
 }
 
+// `@name(args)` attribute attached to a top-level decl. `args` are
+// parsed as expressions for uniformity (the proc-macro infra reads
+// the str_val of EX_IDENT / EX_STRING args). Empty args (`@name`)
+// leaves args.len() == 0.
+pub struct Attr {
+    pub name: string,
+    pub args: *Vector<Expr>,
+    pub line: int,
+    pub column: int,
+}
+
 pub struct Stmt {
     pub kind: int,
     pub line: int,
@@ -343,6 +354,13 @@ pub struct Stmt {
     // "" = no guard; "windows" wraps decl in `#ifdef _WIN32`; "posix" wraps
     // it in `#ifndef _WIN32`. Used to write per-platform asm/naked fns.
     pub cfg_target: string,
+
+    // Generic attribute list — any `@<name>(...)` not handled as a built-in
+    // (currently `@cfg`) lands here in source order. Procedural macro
+    // declarations (`@proc_derive(Name)`, `@proc_attr(Name)`,
+    // `@proc_macro(Name)`, `@proc_macro_str(Name)`) and use sites
+    // (`@derive(Name)`, `@<name>`) are read from this list by the expander.
+    pub attrs: *Vector<Attr>,
 
     // ST_ASM payload. `asm_strings` are the instruction lines (each becomes
     // its own quoted line in the emitted __asm__). The three operand vectors

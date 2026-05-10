@@ -182,22 +182,47 @@ pub fn parse_program(p: *Parser) -> *Vector<Stmt> {
 }
 
 pub fn parse_top_stmt(p: *Parser) -> *Stmt {
-    // `@cfg("windows")` / `@cfg("posix")` — wrap the next decl in a #ifdef
-    // guard so per-platform fns (typically naked asm context switches) can
-    // coexist in the same source file.
+    // Collect a sequence of `@<name>(args)` (or `@<name>`) attributes.
+    // `@cfg("windows")` / `@cfg("posix")` is recognised inline (sets
+    // `cfg_target` directly so the existing #ifdef guard logic works
+    // unchanged); every other attribute lands in `attrs` for the
+    // expander to interpret.
     let mut cfg: string = "";
-    if p.at_op("@") {
+    let attrs_collected: *Vector<Attr> = Vector::new();
+    while p.at_op("@") {
+        let at_line: int = p.current.line;
+        let at_col: int = p.current.column;
         p.advance();
-        let attr: string = p.expect_ident();
-        if !attr.eq("cfg") { p.err("only `@cfg(\"...\")` attributes are supported"); }
-        p.expect_op("(");
-        if p.current.kind != TOK_STRING { p.err("expected `\"windows\"` or `\"posix\"`"); }
-        let lex: string = p.current.lexeme;
-        cfg = lex.substring(1, lex.len() - 1);
-        p.advance();
-        p.expect_op(")");
-        if !cfg.eq("windows") && !cfg.eq("posix") {
-            p.err("unknown cfg target — expected `windows` or `posix`");
+        let attr_name: string = p.expect_ident();
+        let arg_exprs: *Vector<Expr> = Vector::new();
+        if p.eat_op("(") {
+            while !p.at_op(")") && !p.at_eof() {
+                let e: *Expr = parse_expr(p, 0);
+                if e != null { arg_exprs.push(*e); }
+                if !p.eat_op(",") { break; }
+            }
+            p.expect_op(")");
+        }
+        if attr_name.eq("cfg") {
+            // Special-case: keep cfg as a string field for codegen's #ifdef
+            // emission. Expects exactly one string-literal arg.
+            if arg_exprs.len() == 1 {
+                let a0: Expr = arg_exprs.get(0);
+                if a0.kind == EX_STRING { cfg = a0.str_val; }
+                else { p.err("@cfg expects a string literal: \"windows\" or \"posix\""); }
+            } else {
+                p.err("@cfg expects exactly one argument");
+            }
+            if !cfg.eq("windows") && !cfg.eq("posix") {
+                p.err("unknown cfg target — expected `windows` or `posix`");
+            }
+        } else {
+            attrs_collected.push(Attr {
+                name: attr_name,
+                args: arg_exprs,
+                line: at_line,
+                column: at_col,
+            });
         }
     }
 
@@ -211,7 +236,7 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     if p.eat_kw("extern") {
         if p.at_kw("fn") {
             let s: *Stmt = parse_fn(p);
-            if s != null { s.is_pub = is_pub; s.fn_body = null; s.cfg_target = cfg; }
+            if s != null { s.is_pub = is_pub; s.fn_body = null; s.cfg_target = cfg; s.attrs = attrs_collected; }
             return s;
         }
         // `extern type Foo;` etc — for now, skip the line.
@@ -227,17 +252,17 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
 
     if p.at_kw("fn") {
         let s: *Stmt = parse_fn(p);
-        if s != null { s.is_pub = is_pub; s.is_naked = is_naked_fn; s.cfg_target = cfg; }
+        if s != null { s.is_pub = is_pub; s.is_naked = is_naked_fn; s.cfg_target = cfg; s.attrs = attrs_collected; }
         return s;
     }
     if is_naked_fn { p.err("`naked` only applies to `fn`"); }
 
-    if p.at_kw("let") { let s: *Stmt = parse_let(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
-    if p.at_kw("const") { let s: *Stmt = parse_const(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
-    if p.at_kw("struct") { let s: *Stmt = parse_struct(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
-    if p.at_kw("enum") { let s: *Stmt = parse_enum(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
-    if p.at_kw("impl") { let s: *Stmt = parse_impl(p); if s != null { s.cfg_target = cfg; } return s; }
-    if p.at_kw("trait") { let s: *Stmt = parse_trait(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; } return s; }
+    if p.at_kw("let") { let s: *Stmt = parse_let(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
+    if p.at_kw("const") { let s: *Stmt = parse_const(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
+    if p.at_kw("struct") { let s: *Stmt = parse_struct(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
+    if p.at_kw("enum") { let s: *Stmt = parse_enum(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
+    if p.at_kw("impl") { let s: *Stmt = parse_impl(p); if s != null { s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
+    if p.at_kw("trait") { let s: *Stmt = parse_trait(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
     if p.at_kw("import") { return parse_import(p); }
     // `c_raw! { ... }` at top level — emitted at the top of the generated .c.
     if p.current.kind == TOK_RAW_BLOCK {
@@ -246,12 +271,12 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
         let body: string = p.current.lexeme;
         p.advance();
         let s: *Stmt = stmt_craw(body, line, col);
-        s.cfg_target = cfg;
+        s.cfg_target = cfg; s.attrs = attrs_collected;
         return s;
     }
     if p.at_kw("macro") {
         let s: *Stmt = parse_macro_def(p);
-        if s != null { s.is_pub = is_pub; s.cfg_target = cfg; }
+        if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; }
         return s;
     }
 
