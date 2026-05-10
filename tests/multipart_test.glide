@@ -1,0 +1,122 @@
+// MultipartForm extractor — parses multipart/form-data into typed
+// fields + files.
+
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::multipart::*;
+
+fn _req(ct: string, body: string) -> HttpRequest {
+    return HttpRequest {
+        method:        "POST",
+        path:          "/upload",
+        version:       "HTTP/1.1",
+        headers_block: "Content-Type: ".concat(ct).concat("\r\n"),
+        body:          body,
+        params:        null,
+        queries:       null,
+        headers_cache: null,
+    };
+}
+
+fn _build(boundary: string, parts: string) -> string {
+    let mut out: string = "--".concat(boundary).concat("\r\n");
+    out = out.concat(parts);
+    out = out.concat("--").concat(boundary).concat("--\r\n");
+    return out;
+}
+
+fn test_single_text_field() -> int {
+    let body: string = _build("XYZ",
+        "Content-Disposition: form-data; name=\"user\"\r\n\r\nalice\r\n");
+    let req: HttpRequest = _req("multipart/form-data; boundary=XYZ", body);
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert!(r.ok);
+    assert!(r.val.fields.contains("user"));
+    assert_str_eq!(r.val.fields.get("user"), "alice");
+    assert_eq!(r.val.files.len(), 0);
+    return 0;
+}
+
+fn test_single_file() -> int {
+    let body: string = _build("BND",
+        "Content-Disposition: form-data; name=\"avatar\"; filename=\"pic.png\"\r\nContent-Type: image/png\r\n\r\nPNGBYTES\r\n");
+    let req: HttpRequest = _req("multipart/form-data; boundary=BND", body);
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert!(r.ok);
+    assert_eq!(r.val.files.len(), 1);
+    let f: UploadedFile = r.val.files.get(0);
+    assert_str_eq!(f.name, "avatar");
+    assert_str_eq!(f.filename, "pic.png");
+    assert_str_eq!(f.content_type, "image/png");
+    assert_str_eq!(f.body, "PNGBYTES");
+    return 0;
+}
+
+fn test_mixed_fields_and_files() -> int {
+    let mut parts: string = "Content-Disposition: form-data; name=\"user\"\r\n\r\nalice\r\n";
+    parts = parts.concat("--XYZ\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhi there\r\n");
+    parts = parts.concat("--XYZ\r\nContent-Disposition: form-data; name=\"file1\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nAAA\r\n");
+    parts = parts.concat("--XYZ\r\nContent-Disposition: form-data; name=\"file2\"; filename=\"b.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nBBB\r\n");
+    let body: string = _build("XYZ", parts);
+    let req: HttpRequest = _req("multipart/form-data; boundary=XYZ", body);
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert!(r.ok);
+    assert_eq!(r.val.fields.len(), 2);
+    assert_str_eq!(r.val.fields.get("user"), "alice");
+    assert_str_eq!(r.val.fields.get("note"), "hi there");
+    assert_eq!(r.val.files.len(), 2);
+    let f1: UploadedFile = r.val.files.get(0);
+    assert_str_eq!(f1.filename, "a.txt");
+    assert_str_eq!(f1.body, "AAA");
+    let f2: UploadedFile = r.val.files.get(1);
+    assert_str_eq!(f2.filename, "b.bin");
+    assert_str_eq!(f2.body, "BBB");
+    return 0;
+}
+
+fn test_default_content_type_for_file_without_one() -> int {
+    let body: string = _build("XYZ",
+        "Content-Disposition: form-data; name=\"x\"; filename=\"x.bin\"\r\n\r\nDATA\r\n");
+    let req: HttpRequest = _req("multipart/form-data; boundary=XYZ", body);
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert!(r.ok);
+    let f: UploadedFile = r.val.files.get(0);
+    assert_str_eq!(f.content_type, "application/octet-stream");
+    return 0;
+}
+
+fn test_quoted_boundary_in_content_type() -> int {
+    let body: string = _build("X-Y-Z",
+        "Content-Disposition: form-data; name=\"k\"\r\n\r\nv\r\n");
+    let req: HttpRequest = _req("multipart/form-data; boundary=\"X-Y-Z\"", body);
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert!(r.ok);
+    assert_str_eq!(r.val.fields.get("k"), "v");
+    return 0;
+}
+
+fn test_non_multipart_content_type_errs_400() -> int {
+    let req: HttpRequest = _req("application/json", "{}");
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert_not!(r.ok);
+    assert!(r.err.starts_with("400:"));
+    return 0;
+}
+
+fn test_missing_boundary_errs_400() -> int {
+    let req: HttpRequest = _req("multipart/form-data", "");
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert_not!(r.ok);
+    assert!(r.err.starts_with("400:"));
+    return 0;
+}
+
+fn test_malformed_no_terminator_errs_400() -> int {
+    // Missing closing `--` after boundary.
+    let body: string = "--XYZ\r\nContent-Disposition: form-data; name=\"k\"\r\n\r\nv\r\n";
+    let req: HttpRequest = _req("multipart/form-data; boundary=XYZ", body);
+    let r: !MultipartForm = MultipartForm::from_request(&req);
+    assert_not!(r.ok);
+    assert!(r.err.starts_with("400:"));
+    return 0;
+}
