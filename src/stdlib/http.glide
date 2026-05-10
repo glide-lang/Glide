@@ -149,24 +149,24 @@ impl HttpRequest {
     }
 
     /// Parse the request body as JSON. Returns `err` when the body is
-    /// empty or not valid JSON. Pair with the typed `json_get_*` /
-    /// `json_opt_*` helpers (or a hand-written `Foo::from_json`) to
+    /// empty or not valid JSON. Pair with the typed `get_*` / `opt_*`
+    /// methods on `JsonValue` (or a hand-written `Foo::from_json`) to
     /// bind the value into a typed struct.
     ///
     /// ```glide
     /// let v: !*JsonValue = req.body_json();
     /// if !v.ok { return HttpResponse::with_status(400).text(v.err); }
-    /// let nome: !string = json_get_string(v.val, "nome");
+    /// let nome: !string = v.val.get_string("nome");
     /// ```
     pub fn body_json(self: *HttpRequest) -> !*JsonValue {
         if self.body.len() == 0 { return err("empty body"); }
-        let v: *JsonValue = json_parse(self.body);
+        let v: *JsonValue = JsonValue::parse(self.body);
         if v == null { return err("invalid json"); }
-        // json_parse silently returns JSON_NULL when the first char
-        // looks like the start of `null` even when the rest is garbage
-        // (`"not json"` matches because of the leading `n`). Reject the
-        // pair "non-empty body parsed to JSON null but body isn't
-        // literally `null`" — almost always a malformed payload.
+        // JsonValue::parse silently returns JSON_NULL when the first
+        // char looks like the start of `null` even when the rest is
+        // garbage (`"not json"` matches because of the leading `n`).
+        // Reject the pair "non-empty body parsed to JSON null but body
+        // isn't literally `null`" — almost always a malformed payload.
         if v.kind == JSON_NULL && !self.body.trim().eq("null") {
             return err("invalid json");
         }
@@ -288,18 +288,18 @@ impl HttpResponse {
         return self.set("Content-Type", "application/json").body(s);
     }
 
-    /// Same as `.json(...)` but takes a `*JsonValue` and emits it via
-    /// `json_emit`. Use when the response is built up via
-    /// `json_object` / `json_obj_set` / `json_arr_push` instead of a
+    /// Same as `.json(...)` but takes a `*JsonValue` and serialises it
+    /// via `v.emit()`. Use when the response is built up with
+    /// `JsonValue::object()` / `obj_set` / `arr_push` instead of a
     /// hand-written string.
     ///
     /// ```glide
-    /// let v: *JsonValue = json_object();
-    /// json_obj_set(v, "ok", json_bool(true));
+    /// let v: *JsonValue = JsonValue::object();
+    /// v.obj_set("ok", JsonValue::bool(true));
     /// HttpResponse::ok().json_of(v);
     /// ```
     pub fn json_of(self: HttpResponse, v: *JsonValue) -> HttpResponse {
-        return self.set("Content-Type", "application/json").body(json_emit(v));
+        return self.set("Content-Type", "application/json").body(v.emit());
     }
 
     /// 302 redirect to `url`. Chainable; the caller can swap to 301
