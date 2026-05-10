@@ -193,7 +193,11 @@ c_raw! {
     static pthread_once_t __glide_sig_init_once = PTHREAD_ONCE_INIT;
     static pthread_t __glide_sig_reader;
 
-    static void __glide_sig_handler(int sig) {
+    // Renamed from __glide_sig_handler to avoid collision with the
+    // panic-trap installer in bootstrap/runtime/stdlib.c, which
+    // catches SIGSEGV/SIGABRT/SIGFPE for the user. Both helpers
+    // would otherwise wind up in the same translation unit.
+    static void __glide_user_sig_handler(int sig) {
         if (sig < 0 || sig >= 64) return;
         unsigned char b = (unsigned char)sig;
         ssize_t n;
@@ -230,7 +234,7 @@ c_raw! {
         __glide_sig_chans[sig] = c;
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = __glide_sig_handler;
+        sa.sa_handler = __glide_user_sig_handler;
         sigemptyset(&sa.sa_mask);
         sa.sa_flags = SA_RESTART;
         sigaction(sig, &sa, NULL);
