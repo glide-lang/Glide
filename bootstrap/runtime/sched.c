@@ -41,7 +41,12 @@ static inline void __glide_spin_unlock(__glide_spin_t* l) {
    Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)
    need pointer-map metadata + copy/relocate — TBD. */
 #define __GLIDE_STACK_GUARD 4096
-static int __glide_stack_size = 4096;
+/* 4 KiB was enough for the original micro-benchmarks but any real
+   handler (HTTP request parser, JSON encode, .concat chains) easily
+   spills past it and crashes on the guard page. 64 KiB matches Go's
+   initial goroutine stack and costs ~64 KiB of virtual + a single
+   page of physical per idle coro on Linux/macOS. */
+static int __glide_stack_size = 65536;
 
 /* Custom assembly context switch — replaces Win32 Fibers and POSIX
    ucontext.h with our own portable, ABI-correct register flip. The
@@ -151,6 +156,11 @@ typedef struct __glide_task {
                                        migrate the coro across OS threads (Win64
                                        SEH/TIB invariants make resumed-on-other-
                                        thread fragile, so first-run-only steal). */
+    void*               palloc_arena; /* per-coro active arena slot. Wired
+                                         through __glide_task_arena_get/set;
+                                         keeps cooperative concurrency from
+                                         scribbling on each other's
+                                         __glide_palloc_active globally. */
     struct __glide_task* next;       /* link in per-worker ready queue */
     struct __glide_task* wait_next;  /* link in chan wait list */
     /* Park hand-off: if non-null on switch-back to worker fiber,
@@ -722,6 +732,7 @@ void __glide_free_task(__glide_task* t) {
     t->state = 0; t->has_run = 0;
     t->wait_next = NULL;
     t->park_lock = NULL; t->park_spin = NULL; t->park_list = NULL;
+    t->palloc_arena = NULL;
     if (__glide_tls_pool_count < __GLIDE_TLS_POOL_MAX) {
         t->next = __glide_tls_pool;
         __glide_tls_pool = t;
@@ -992,4 +1003,22 @@ void __glide_unpark_one(__glide_task** list) {
     __glide_q_push_to(t->home_worker, t);
 }
 
+/* Per-coro arena accessors. The Glide-side __glide_palloc / _get / _set
+   live in src/builtins/builtins.glide (emitted earlier in the same TU)
+   and forward-declare these. When running inside a coroutine, the
+   arena slot lives in the task struct so cooperative yields can't
+   cross-pollute. Outside a coro (main thread, OS thread spawned via
+   spawn_thread that hasn't installed a task) we return -1 and the
+   builtins fall back to the file-local g_palloc_active. */
+int __glide_task_is_active(void) {
+    return __glide_cur_task != NULL ? 1 : 0;
+}
+void* __glide_task_arena_get(void) {
+    return __glide_cur_task != NULL ? __glide_cur_task->palloc_arena : NULL;
+}
+void __glide_task_arena_set(void* a) {
+    if (__glide_cur_task != NULL) {
+        __glide_cur_task->palloc_arena = a;
+    }
+}
 

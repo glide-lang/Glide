@@ -232,6 +232,30 @@ c_raw! {
     // __glide_palloc_free.
     static PArena* g_palloc_active = NULL;
 
+    // When running inside a coroutine, the active arena pointer lives in
+    // the coro's task struct (in bootstrap/runtime/sched.c) instead of
+    // the file-local global above. Cooperative yields between coros
+    // would otherwise let coro B's `__glide_palloc_set` clobber coro A's
+    // arena mid-handler. The three accessors are emitted by sched.c
+    // later in the same TU; we forward-declare them here.
+    extern int   __glide_task_is_active(void);
+    extern void* __glide_task_arena_get(void);
+    extern void  __glide_task_arena_set(void* a);
+
+    static inline PArena* __glide_active_arena(void) {
+        if (__glide_task_is_active()) {
+            return (PArena*)__glide_task_arena_get();
+        }
+        return g_palloc_active;
+    }
+    static inline void __glide_active_arena_set(PArena* a) {
+        if (__glide_task_is_active()) {
+            __glide_task_arena_set((void*)a);
+            return;
+        }
+        g_palloc_active = a;
+    }
+
     // 256 MiB cap on per-chunk size. Without it, the previous policy
     // doubled the chunk on every grow — a 1 GB parse would commit
     // 16+32+...+512 ≈ 1 GiB of unused tail, and an 8 GB parse would
@@ -261,10 +285,19 @@ c_raw! {
     }
     #endif
 
+    // Starting chunk size for a fresh arena. 64 KiB matches the typical
+    // HTTP request working set (one parse + a few concat / substring
+    // calls); LSP / build arenas hit the doubling path and reach
+    // multi-MB after a handful of grows. The previous 16 MiB initial
+    // sized for the worst case meant 200 concurrent coros reserved 3.2 GB
+    // of virtual memory up front and the per-request arena flow OOM'd
+    // mmap on hosts with tight address space.
+    #define GLIDE_PALLOC_CHUNK_INITIAL (64 * 1024)
+
     static PArena* __glide_palloc_chunk(PArena* top, int min_size) {
         int new_cap;
         if (top == NULL) {
-            new_cap = 16 * 1024 * 1024;
+            new_cap = GLIDE_PALLOC_CHUNK_INITIAL;
         } else if (top->cap < GLIDE_PALLOC_CHUNK_MAX) {
             new_cap = top->cap * 2;
             if (new_cap > GLIDE_PALLOC_CHUNK_MAX) new_cap = GLIDE_PALLOC_CHUNK_MAX;
@@ -286,15 +319,17 @@ c_raw! {
 
     void* __glide_palloc(int size) {
         if (size <= 0) size = 1;
-        if (g_palloc_active == NULL) {
+        PArena* a = __glide_active_arena();
+        if (a == NULL) {
             return calloc(1, (size_t)size);
         }
         int aligned = (size + 7) & ~7;
-        if (g_palloc_active->used + aligned > g_palloc_active->cap) {
-            g_palloc_active = __glide_palloc_chunk(g_palloc_active, aligned);
+        if (a->used + aligned > a->cap) {
+            a = __glide_palloc_chunk(a, aligned);
+            __glide_active_arena_set(a);
         }
-        void* p = g_palloc_active->head + g_palloc_active->used;
-        g_palloc_active->used += aligned;
+        void* p = a->head + a->used;
+        a->used += aligned;
         memset(p, 0, (size_t)size);
         return p;
     }
@@ -303,7 +338,7 @@ c_raw! {
     // pair with __glide_palloc_set when you want allocations to flow
     // into it.
     void* __glide_palloc_make(void) {
-        return (void*)__glide_palloc_chunk(NULL, 16 * 1024 * 1024);
+        return (void*)__glide_palloc_chunk(NULL, 0);
     }
 
     // Free every chunk reachable from a given arena handle. Safe on
@@ -320,11 +355,11 @@ c_raw! {
     }
 
     int __glide_palloc_active(void) {
-        return g_palloc_active != NULL ? 1 : 0;
+        return __glide_active_arena() != NULL ? 1 : 0;
     }
 
-    void* __glide_palloc_get(void) { return (void*)g_palloc_active; }
-    void __glide_palloc_set(void* a) { g_palloc_active = (PArena*)a; }
+    void* __glide_palloc_get(void) { return (void*)__glide_active_arena(); }
+    void __glide_palloc_set(void* a) { __glide_active_arena_set((PArena*)a); }
 
     // True when `p` was handed out by some chunk in the *active* arena
     // (only). Used by __glide_pfree to skip free() on bump-allocated
@@ -332,7 +367,7 @@ c_raw! {
     // not-owned here; they're managed via __glide_palloc_free instead.
     int __glide_palloc_owns(void* p) {
         if (p == NULL) return 0;
-        PArena* a = g_palloc_active;
+        PArena* a = __glide_active_arena();
         while (a != NULL) {
             unsigned char* base = a->head;
             if ((unsigned char*)p >= base && (unsigned char*)p < base + a->cap) return 1;
