@@ -3807,18 +3807,131 @@ fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>, root: *Vector<Stmt>) {
     for let i: int = 0; i < n; i++ {
         let s: Stmt = body.get(i);
         if s.kind == ST_LET && !s.is_auto_owned {
+            // Stmt-local opt-out: `@allow("unfreed-alloc")` on the `let`
+            // itself silences the warning without polluting the
+            // enclosing fn. Either alias is recognised.
+            if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") { continue; }
             let kind: int = _alloc_kind(s.let_value);
             if kind != 0 {
                 // Scan the entire fn body (not just the current block) so a
                 // `defer foo.free()` registered in a nested if/while still counts.
-                if !alloc_is_freed_in_body(s.name, kind, root) {
-                    t.warn(s.line, s.column, _alloc_code(kind), _alloc_msg(kind, s.name));
-                }
+                if alloc_is_freed_in_body(s.name, kind, root) { continue; }
+                // Heuristic ownership-escape suppression. If the
+                // resource is stored in a struct field, pushed into a
+                // container, or handed to any non-free fn, we assume
+                // the receiver takes over the lifetime. The warning
+                // only fires for true "let, never reference again,
+                // never free" cases.
+                if alloc_escapes_in_body(s.name, kind, root) { continue; }
+                t.warn(s.line, s.column, _alloc_code(kind), _alloc_msg(kind, s.name));
             }
         }
         if s.then_body != null { check_arena_in_body(t, s.then_body, root); }
         if s.else_body != null { check_arena_in_body(t, s.else_body, root); }
     }
+}
+
+// Conservative escape detection: returns true when `name` is observed
+// in any of these contexts anywhere in the fn body.
+//   - assigned to a struct field      (obj.f = name)
+//   - subscript-stored                 (arr[i] = name)
+//   - returned                         (return name; / return ok(name); etc.)
+//   - passed as arg to any call where the callee is NOT a known free fn
+//     (so `vec.push(name)`, `process(name)`, `Box::wrap(name)` all
+//     count as ownership transfer)
+//
+// Heuristic — won't catch every pattern, but eliminates the
+// false-positive cases where the analyzer can't see the cleanup is
+// happening elsewhere. The user can still annotate `@allow(...)` for
+// the cases this misses.
+fn alloc_escapes_in_body(name: string, kind: int, body: *Vector<Stmt>) -> bool {
+    let n: int = body.len();
+    for let i: int = 0; i < n; i++ {
+        let s: Stmt = body.get(i);
+        if stmt_lets_name_escape(&s, name, kind) { return true; }
+    }
+    return false;
+}
+
+fn stmt_lets_name_escape(s: *Stmt, name: string, kind: int) -> bool {
+    if s == null { return false; }
+    // `return name;` (and `return ok(name)`, etc.)
+    if s.kind == ST_RETURN && s.expr_value != null
+       && expr_mentions_ident(s.expr_value, name) { return true; }
+    if s.let_value != null && expr_passes_to_non_free(s.let_value, name, kind) { return true; }
+    if s.expr_value != null && expr_passes_to_non_free(s.expr_value, name, kind) { return true; }
+    if s.cond != null && expr_passes_to_non_free(s.cond, name, kind) { return true; }
+    if s.for_step != null && expr_passes_to_non_free(s.for_step, name, kind) { return true; }
+    if s.then_body != null {
+        for let i: int = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            if stmt_lets_name_escape(&b, name, kind) { return true; }
+        }
+    }
+    if s.else_body != null {
+        for let i: int = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            if stmt_lets_name_escape(&b, name, kind) { return true; }
+        }
+    }
+    return false;
+}
+
+fn _is_free_call_for(callee_name: string, kind: int) -> bool {
+    if kind == 1 { return callee_name.eq("free"); }  // arena uses method form, but be permissive
+    if kind == 2 { return callee_name.eq("free"); }
+    if kind == 3 { return callee_name.eq("__glide_palloc_free"); }
+    return false;
+}
+
+fn expr_passes_to_non_free(e: *Expr, name: string, kind: int) -> bool {
+    if e == null { return false; }
+    // Assignment to anything except `name` itself counts as escape:
+    //   self.field = name
+    //   arr[i] = name
+    //   x = name              (alias — still escapes our local scope)
+    if e.kind == EX_ASSIGN && e.rhs != null && expr_mentions_ident(e.rhs, name) {
+        return true;
+    }
+    // Function / method call passing `name` as an arg, where the
+    // callee isn't the matching free fn.
+    if e.kind == EX_CALL && e.lhs != null && e.args != null {
+        let mut callee: string = "";
+        if e.lhs.kind == EX_IDENT { callee = e.lhs.str_val; }
+        else if e.lhs.kind == EX_PATH { callee = e.lhs.field; }
+        else if e.lhs.kind == EX_MEMBER { callee = e.lhs.field; }
+        let mut name_in_args: bool = false;
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if expr_strips_to_ident(&a, name) { name_in_args = true; break; }
+        }
+        if name_in_args && !_is_free_call_for(callee, kind) { return true; }
+    }
+    if e.lhs != null && expr_passes_to_non_free(e.lhs, name, kind) { return true; }
+    if e.rhs != null && expr_passes_to_non_free(e.rhs, name, kind) { return true; }
+    if e.operand != null && expr_passes_to_non_free(e.operand, name, kind) { return true; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if expr_passes_to_non_free(&a, name, kind) { return true; }
+        }
+    }
+    return false;
+}
+
+fn expr_mentions_ident(e: *Expr, name: string) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq(name) { return true; }
+    if e.lhs != null && expr_mentions_ident(e.lhs, name) { return true; }
+    if e.rhs != null && expr_mentions_ident(e.rhs, name) { return true; }
+    if e.operand != null && expr_mentions_ident(e.operand, name) { return true; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if expr_mentions_ident(&a, name) { return true; }
+        }
+    }
+    return false;
 }
 
 fn _alloc_code(kind: int) -> string {
@@ -4442,10 +4555,22 @@ fn _collect_deprecated_fns(program: *Vector<Stmt>, dep: *HashMap<string>) {
             if reason != null { dep.insert(s.name, reason); }
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
+            // Methods inside `impl Type { ... }` get keyed under
+            // `Type::method` so `Type::method()` calls hit only that
+            // entry; we also keep the bare name as a fallback for
+            // `obj.method()` style calls where the call site can't tell
+            // the receiver type without type info.
+            let mut owner: string = "";
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 let reason: string = _deprecated_reason(&m);
-                if reason != null { dep.insert(m.name, reason); }
+                if reason == null { continue; }
+                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), reason); }
+                // Only register the bare-name fallback if nothing's
+                // there yet — preserves the older (and more specific)
+                // entry when two impls share a method name.
+                if !dep.contains(m.name) { dep.insert(m.name, reason); }
             }
         }
     }
@@ -4487,13 +4612,33 @@ fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>) {
     if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null {
         let head: *Expr = e.lhs;
-        let mut name: string = "";
-        if head.kind == EX_IDENT { name = head.str_val; }
-        else if head.kind == EX_PATH { name = head.field; }
-        else if head.kind == EX_MEMBER { name = head.field; }
-        if !name.eq("") && dep.contains(name) {
-            let reason: string = dep.get(name);
-            let mut msg: string = "function `".concat(name).concat("` is deprecated");
+        let mut key: string = "";
+        let mut display: string = "";
+        // EX_PATH `Type::method` — use the qualified key directly and
+        // do NOT fall back to the bare method name. Falling back would
+        // incorrectly flag `New::make()` when only `Old::make` is
+        // deprecated. Free fns + static ctors at the top level land in
+        // the index unqualified, so a EX_PATH where `str_val` was the
+        // module / namespace still resolves via the unqualified key —
+        // we just refuse the bare-name fallback when the qualified form
+        // is what the user wrote.
+        if head.kind == EX_PATH {
+            key = head.str_val.concat("::").concat(head.field);
+            display = key;
+        } else if head.kind == EX_IDENT {
+            key = head.str_val; display = head.str_val;
+        } else if head.kind == EX_MEMBER {
+            // Receiver type isn't available without typer info; fall
+            // back to the bare method name. If multiple impls share a
+            // method name and only some are deprecated, the call site
+            // can be made specific by writing `Type::method(obj, …)`
+            // instead of `obj.method(…)`, or by annotating with
+            // `@allow("deprecated-fn")`.
+            key = head.field; display = head.field;
+        }
+        if !key.eq("") && dep.contains(key) {
+            let reason: string = dep.get(key);
+            let mut msg: string = "function `".concat(display).concat("` is deprecated");
             if !reason.eq("") { msg = msg.concat(": ").concat(reason); }
             t.warn(e.line, e.column, "deprecated-fn", msg);
         }

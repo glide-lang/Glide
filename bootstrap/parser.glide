@@ -662,6 +662,31 @@ fn parse_impl(p: *Parser) -> *Stmt {
         // so hover can render it. The lexer attaches doc to the next non-doc
         // token, which is `pub` (if present) or `fn`/`macro` otherwise.
         let doc: string = p.current.doc;
+        // Member-level attributes: `@deprecated(...)`, `@allow(...)`, etc.
+        // Collected in source order so the lint passes can read them
+        // off `Stmt.attrs`.
+        let mem_attrs: *Vector<Attr> = Vector::new();
+        while p.at_op("@") {
+            let at_line: int = p.current.line;
+            let at_col: int = p.current.column;
+            p.advance();
+            let nm: string = p.expect_ident();
+            let arg_exprs: *Vector<Expr> = Vector::new();
+            if p.eat_op("(") {
+                while !p.at_op(")") && !p.at_eof() {
+                    let e: *Expr = parse_expr(p, 0);
+                    if e != null { arg_exprs.push(*e); }
+                    if !p.eat_op(",") { break; }
+                }
+                p.expect_op(")");
+            }
+            mem_attrs.push(Attr {
+                name: nm,
+                args: arg_exprs,
+                line: at_line,
+                column: at_col,
+            });
+        }
         let mut is_pub: bool = false;
         if p.eat_kw("pub") { is_pub = true; }
         // Associated type definition: `type Item = ConcreteType;`
@@ -679,6 +704,7 @@ fn parse_impl(p: *Parser) -> *Stmt {
             if m != null {
                 m.is_pub = is_pub;
                 if doc != null && !doc.eq("") { m.doc_comment = doc; }
+                if mem_attrs.len() > 0 { m.attrs = mem_attrs; }
                 methods.push(*m);
             }
         } else if p.at_kw("macro") {
@@ -686,6 +712,7 @@ fn parse_impl(p: *Parser) -> *Stmt {
             if m != null {
                 m.is_pub = is_pub;
                 if doc != null && !doc.eq("") { m.doc_comment = doc; }
+                if mem_attrs.len() > 0 { m.attrs = mem_attrs; }
                 methods.push(*m);
             }
         } else {
@@ -971,8 +998,41 @@ fn parse_stmt(p: *Parser) -> *Stmt {
     if p.current.kind == TOK_IDENT && p.current.lexeme.eq("select") && p.peek_op("!") {
         return parse_select_macro(p);
     }
-    if p.at_kw("let") { return parse_let(p); }
-    if p.at_kw("const") { return parse_const(p); }
+    // Stmt-local attributes: `@allow(...) let x = …;`. Mirrors the
+    // top-level form so lints can be suppressed at the binding the
+    // user actually means, not the whole enclosing fn.
+    let body_attrs: *Vector<Attr> = Vector::new();
+    while p.at_op("@") {
+        let at_line: int = p.current.line;
+        let at_col: int = p.current.column;
+        p.advance();
+        let nm: string = p.expect_ident();
+        let arg_exprs: *Vector<Expr> = Vector::new();
+        if p.eat_op("(") {
+            while !p.at_op(")") && !p.at_eof() {
+                let e: *Expr = parse_expr(p, 0);
+                if e != null { arg_exprs.push(*e); }
+                if !p.eat_op(",") { break; }
+            }
+            p.expect_op(")");
+        }
+        body_attrs.push(Attr {
+            name: nm,
+            args: arg_exprs,
+            line: at_line,
+            column: at_col,
+        });
+    }
+    if p.at_kw("let") {
+        let s: *Stmt = parse_let(p);
+        if s != null && body_attrs.len() > 0 { s.attrs = body_attrs; }
+        return s;
+    }
+    if p.at_kw("const") {
+        let s: *Stmt = parse_const(p);
+        if s != null && body_attrs.len() > 0 { s.attrs = body_attrs; }
+        return s;
+    }
     if p.at_kw("return") { return parse_return(p); }
     if p.at_kw("if") { return parse_if(p); }
     if p.at_kw("while") { return parse_while(p); }
