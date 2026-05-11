@@ -6,7 +6,7 @@ import fmt;       // for fmt_type signatures
 
 // `glide doc`: walk every `*.glide` under the project root, parse it,
 // pull out top-level `pub` items + their `///` doc comments, and emit
-// a tiny static HTML site under `target/doc/`. Each source file maps
+// a tiny static HTML site under `build/doc/`. Each source file maps
 // to one HTML page; the index lists modules with a short blurb.
 //
 // We don't try to be rustdoc — no cross-linking, no search. Goal is
@@ -34,7 +34,7 @@ extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
 
 pub fn run_doc(root_dir: string, open_after: bool, serve_port: int) -> int {
-    let out_dir: string = root_dir.concat("/target/doc");
+    let out_dir: string = root_dir.concat("/build/doc");
     if !fs_mkdir_p(out_dir) {
         println!("doc: could not create", out_dir);
         return 1;

@@ -1161,20 +1161,20 @@ fn _path_eq(a: string, b: string, win: bool) -> bool {
 }
 
 // Compute the build output path when the user didn't pass `-o`. In a
-// project, every build lands under `<root>/target/<name>[.exe]` so the
-// tree stays clean (à la `cargo`'s target/). Outside a project the
-// fall-back depends on whether we're about to run the binary:
+// project, every build lands under `<root>/build/<name>[.exe]` so the
+// tree stays clean. Outside a project the fall-back depends on whether
+// we're about to run the binary:
 //
 //   - `glide build foo.glide`  → a.exe / a.out in CWD (back-compat)
 //   - `glide run foo.glide`    → temp dir (no CWD pollution)
 fn _default_out_path(project_root: string, project_name: string, then_run: bool) -> string {
     if !project_root.eq("") {
-        let target_dir: string = project_root.concat("/target");
-        fs_mkdir_p(target_dir);
+        let build_dir: string = project_root.concat("/build");
+        fs_mkdir_p(build_dir);
         let mut name: string = project_name;
         if name.eq("") { name = "app"; }
         if __glide_is_windows() != 0 { name = name.concat(".exe"); }
-        return target_dir.concat("/").concat(name);
+        return build_dir.concat("/").concat(name);
     }
     if then_run {
         let tmp: string = _temp_dir();
@@ -1219,9 +1219,9 @@ fn run_clean() -> int {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("clean: no glide.glide found"); return 1; }
     fs_remove_dir_rec(root.concat("/glide_modules"));
-    fs_remove_dir_rec(root.concat("/target"));
+    fs_remove_dir_rec(root.concat("/build"));
     fs_remove_file(root.concat("/glide.lock"));
-    println!("clean: removed glide_modules/, target/ and glide.lock");
+    println!("clean: removed glide_modules/, build/ and glide.lock");
     return 0;
 }
 
@@ -2036,7 +2036,7 @@ fn main() -> int {
     }
 
     // `doc [--open] [--serve[=<port>]]` — emit static HTML for every
-    // pub item with a `///` docstring to target/doc/. `--open` shells
+    // pub item with a `///` docstring to build/doc/. `--open` shells
     // out to the platform browser launcher; `--serve` boots a tiny
     // HTTP server on the chosen port (default 3030) so the browser
     // can hit http://127.0.0.1:<port>/ directly.

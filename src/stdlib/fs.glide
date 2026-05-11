@@ -647,7 +647,8 @@ fn _walk_dir_into(out: *Vector<string>, dir: string, suffix: string) {
         let sub: string = subs.get(i);
         if sub.eq("") { continue; }
         if sub.eq("glide_modules") { continue; }
-        if sub.eq("target") { continue; }
+        if sub.eq("build") { continue; }
+        if sub.eq("target") { continue; }  // legacy + rust subproject dirs
         if sub.eq("node_modules") { continue; }
         _walk_dir_into(out, dir.concat("/").concat(sub), suffix);
     }
