@@ -8,6 +8,13 @@ extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
 extern fn __glide_file_exists(path: string) -> bool;
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
+extern fn __glide_fs_mkdir_p(path: string) -> bool;
+extern fn __glide_fs_write_bytes(path: string, data: *void, n: int) -> bool;
+extern fn __glide_fs_write_slice(path: string, data: string, offset: int, n: int) -> bool;
+extern fn __glide_fs_is_dir(path: string) -> bool;
+extern fn __glide_fs_read_bytes(path: string, out_len: *int) -> *void;
+extern fn __glide_fs_symlink(target: string, link: string) -> bool;
+extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
 c_raw! {
     #ifdef GLIDE_FS_VIA_CRAW
@@ -106,6 +113,134 @@ c_raw! {
         return out;
     }
     #endif
+    #endif
+
+    // mkdir -p (idempotent) + binary write helpers + is_dir probe. These
+    // back the package-manager fetch path (cache dirs + extracted files);
+    // user code reaches them through `fs_mkdir_p` / `fs_write_bytes` /
+    // `fs_is_dir`.
+    #ifndef GLIDE_FS_MKDIR_DEFINED
+    #define GLIDE_FS_MKDIR_DEFINED
+    #ifdef _WIN32
+    #include <direct.h>
+    #include <sys/stat.h>
+    static bool __glide_fs_is_dir(const char* path) {
+        struct _stat st;
+        if (_stat(path, &st) != 0) return false;
+        return (st.st_mode & _S_IFDIR) != 0;
+    }
+    static bool __glide_fs_mkdir_one(const char* path) {
+        if (__glide_fs_is_dir(path)) return true;
+        return _mkdir(path) == 0;
+    }
+    #else
+    #include <sys/stat.h>
+    #include <sys/types.h>
+    static bool __glide_fs_is_dir(const char* path) {
+        struct stat st;
+        if (stat(path, &st) != 0) return false;
+        return S_ISDIR(st.st_mode);
+    }
+    static bool __glide_fs_mkdir_one(const char* path) {
+        if (__glide_fs_is_dir(path)) return true;
+        return mkdir(path, 0755) == 0;
+    }
+    #endif
+    static bool __glide_fs_mkdir_p(const char* path) {
+        if (!path || !*path) return false;
+        size_t n = strlen(path);
+        char* buf = (char*)malloc(n + 1);
+        if (!buf) return false;
+        memcpy(buf, path, n + 1);
+        // Walk separators left-to-right, mkdir each prefix. Drive
+        // letters (`C:`) and the leading slash of UNC / posix-absolute
+        // paths can't be created; we ignore mkdir failures on the
+        // intermediate prefixes and only require the final leaf to
+        // exist as a directory at the end.
+        for (size_t i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '/' || c == '\\') {
+                if (i == 0) continue;
+                // Skip drive-letter prefix on Windows: `C:` followed by
+                // a separator. We rely on the drive root already existing.
+                if (i == 2 && buf[1] == ':') continue;
+                buf[i] = 0;
+                __glide_fs_mkdir_one(buf);
+                buf[i] = c;
+            }
+        }
+        __glide_fs_mkdir_one(buf);
+        bool ok = __glide_fs_is_dir(buf);
+        free(buf);
+        return ok;
+    }
+    static bool __glide_fs_write_bytes(const char* path, void* data, int n) {
+        FILE* f = fopen(path, "wb");
+        if (!f) return false;
+        size_t wrote = (n > 0 && data) ? fwrite(data, 1, (size_t)n, f) : 0;
+        fclose(f);
+        return wrote == (size_t)n;
+    }
+    // Slice a Glide string (which may contain embedded NULs — strings
+    // returned from __glide_string_from_buf are length-prefixed) and
+    // write `n` bytes starting at `offset` to `path`. No bounds check;
+    // callers must guarantee `offset + n` is in range.
+    static bool __glide_fs_write_slice(const char* path, const char* data, int offset, int n) {
+        FILE* f = fopen(path, "wb");
+        if (!f) return false;
+        size_t wrote = (n > 0 && data) ? fwrite(data + offset, 1, (size_t)n, f) : 0;
+        fclose(f);
+        return wrote == (size_t)n;
+    }
+    // Cross-platform "make `link` point at `target` as a directory".
+    // Idempotent: if `link` already exists we leave it alone and report
+    // success. POSIX: `symlink(2)`. Windows: directory junction via
+    // `mklink /J` (no admin needed, unlike a true symlink).
+    #include <stdio.h>
+    #include <stdlib.h>
+    #ifdef _WIN32
+    static bool __glide_fs_symlink(const char* target, const char* link) {
+        if (__glide_fs_is_dir(link)) return true;
+        // Translate forward slashes to backslashes — mklink needs them
+        // on the target argument. We copy both inputs because they may
+        // be in read-only segments.
+        size_t tn = strlen(target), ln = strlen(link);
+        char* tb = (char*)malloc(tn + 1);
+        char* lb = (char*)malloc(ln + 1);
+        if (!tb || !lb) { free(tb); free(lb); return false; }
+        for (size_t i = 0; i <= tn; i++) tb[i] = (target[i] == '/') ? '\\' : target[i];
+        for (size_t i = 0; i <= ln; i++) lb[i] = (link[i]   == '/') ? '\\' : link[i];
+        char cmd[2048];
+        snprintf(cmd, sizeof(cmd), "cmd /c mklink /J \"%s\" \"%s\" >NUL 2>&1", lb, tb);
+        int rc = system(cmd);
+        free(tb); free(lb);
+        return rc == 0;
+    }
+    #else
+    #include <unistd.h>
+    static bool __glide_fs_symlink(const char* target, const char* link) {
+        if (__glide_fs_is_dir(link)) return true;
+        return symlink(target, link) == 0;
+    }
+    #endif
+
+    // Binary read. Returns the malloc'd payload + length via out-param.
+    // Caller wraps the pointer with `__glide_string_from_buf(buf, *out_len)`
+    // to get a length-prefixed Glide string that survives embedded NULs
+    // (unlike `read_file`, which truncates at the first 0x00).
+    static void* __glide_fs_read_bytes(const char* path, int* out_len) {
+        *out_len = 0;
+        FILE* f = fopen(path, "rb");
+        if (!f) return NULL;
+        fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+        if (n < 0) { fclose(f); return NULL; }
+        char* buf = (char*)malloc((size_t)n + 1);
+        if (!buf) { fclose(f); return NULL; }
+        size_t got = fread(buf, 1, (size_t)n, f); fclose(f);
+        buf[got] = 0;
+        *out_len = (int)got;
+        return buf;
+    }
     #endif
     #endif // GLIDE_FS_VIA_CRAW
 }
@@ -260,4 +395,74 @@ pub fn fs_lines_count(path: string) -> int {
 pub fn fs_read_or_default(path: string, fallback: string) -> string {
     if !__glide_file_exists(path) { return fallback; }
     return read_file(path);
+}
+
+/// Create `path` and any missing parent directories. Idempotent — a
+/// pre-existing directory at any step is treated as success. Returns
+/// `false` only on a real error (permissions, file-in-the-way, …).
+///
+/// ```glide
+/// if !fs_mkdir_p("cache/sub/leaf") { eprintln("can't make cache"); }
+/// ```
+pub fn fs_mkdir_p(path: string) -> bool { return __glide_fs_mkdir_p(path); }
+
+/// `true` if `path` is an existing directory. Distinguishes "directory"
+/// from "file" — `fs_exists` returns true for either.
+///
+/// ```glide
+/// if fs_is_dir(".git") { /* it's a repo */ }
+/// ```
+pub fn fs_is_dir(path: string) -> bool { return __glide_fs_is_dir(path); }
+
+/// Write `n` bytes from `data` to `path` in binary mode, replacing any
+/// existing file. Returns `true` on success. Use this instead of
+/// `fs_write` when the payload contains embedded NULs (binary data,
+/// gzip output, …).
+///
+/// ```glide
+/// fs_write_bytes("out.bin", buf, 1024);
+/// ```
+pub fn fs_write_bytes(path: string, data: *void, n: int) -> bool {
+    return __glide_fs_write_bytes(path, data, n);
+}
+
+/// Write a length-bounded slice of `data` (`n` bytes starting at
+/// `offset`) to `path` in binary mode. Use for extracting binary
+/// content from an in-memory archive without copying through Glide-side
+/// `substring` (which would force an extra alloc).
+///
+/// ```glide
+/// fs_write_slice("out/file.bin", archive_bytes, header_end, file_size);
+/// ```
+pub fn fs_write_slice(path: string, data: string, offset: int, n: int) -> bool {
+    return __glide_fs_write_slice(path, data, offset, n);
+}
+
+/// Read `path` as raw bytes, returning a Glide string that survives
+/// embedded NULs (unlike `fs_read`, which truncates at the first 0x00).
+/// `out_len` receives the exact byte count. Returns `""` and 0 on
+/// failure.
+///
+/// ```glide
+/// let mut n: int = 0;
+/// let buf: string = fs_read_bytes("archive.tar.gz", &n);
+/// if n > 0 { /* hand off to tar / gzip helpers */ }
+/// ```
+pub fn fs_read_bytes(path: string, out_len: *int) -> string {
+    let raw: *void = __glide_fs_read_bytes(path, out_len);
+    if raw == null { return ""; }
+    return __glide_string_from_buf(raw, *out_len);
+}
+
+/// Make `link` a directory-shaped symlink to `target`. Idempotent —
+/// existing links are left alone. POSIX uses `symlink(2)`; Windows
+/// uses a directory junction (`mklink /J`), which doesn't require
+/// admin privileges. Returns `true` on success or when `link` already
+/// exists.
+///
+/// ```glide
+/// fs_symlink("/cache/abc123", "./glide_modules/auth");
+/// ```
+pub fn fs_symlink(target: string, link: string) -> bool {
+    return __glide_fs_symlink(target, link);
 }

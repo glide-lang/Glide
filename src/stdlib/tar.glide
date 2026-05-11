@@ -1,0 +1,191 @@
+import stdlib::fs::*;
+
+// USTAR / GNU tar reader. Reads a tar archive held in memory as a
+// Glide string (binary-safe since strings come from
+// `__glide_string_from_buf`) and writes each regular file or
+// directory entry to `out_dir`.
+//
+// Recognised entry types:
+//   '0' / 0x00  regular file        — written to disk
+//   '5'          directory          — mkdir
+//   'L'          GNU long name      — buffered for the next header
+//   'x' / 'g'    pax header         — skipped
+//
+// `strip_components` discards that many leading path segments before
+// applying the entry name. Github tarballs always wrap content under
+// a top-level `<repo>-<sha>/` directory, so callers fetching from
+// codeload pass `strip_components = 1`.
+
+const _BLK: int = 512;
+
+extern fn __glide_buf_byte(s: string, i: int) -> int;
+extern fn __glide_buf_substring(s: string, start: int, end: int) -> string;
+
+c_raw! {
+    // Direct memory access. The default `string.at(i)` works for any
+    // offset (it indexes a char* without consulting strlen), but
+    // `string.substring(a, b)` calls `strlen(s)` to clamp `b` — broken
+    // for binary buffers with embedded NULs (the archive's first NUL
+    // is in the pax data, way before any file entry). `__glide_buf_*`
+    // ignore strlen entirely.
+    static int __glide_buf_byte(const char* s, int i) {
+        return (int)((unsigned char)s[i]);
+    }
+    #include <stdlib.h>
+    #include <string.h>
+    static const char* __glide_buf_substring(const char* s, int start, int end) {
+        int len = end - start;
+        if (len < 0) len = 0;
+        char* out = (char*)malloc((size_t)len + 1);
+        if (len > 0) memcpy(out, s + start, (size_t)len);
+        out[len] = 0;
+        return out;
+    }
+}
+
+/// Extract a tar archive in memory into `out_dir`. Returns the number
+/// of regular files written, or -1 if the archive looks malformed.
+/// `strip_components` is identical to GNU tar's `--strip-components`.
+///
+/// ```glide
+/// let n: int = tar_extract(decoded_bytes, decoded_bytes.len(),
+///                          "/tmp/extract", 1);
+/// if n < 0 { eprintln("bad archive"); }
+/// ```
+pub fn tar_extract(data: string, n: int, out_dir: string, strip_components: int) -> int {
+    fs_mkdir_p(out_dir);
+    let mut pos: int = 0;
+    let mut count: int = 0;
+    let mut pending_long: string = "";
+
+    while pos + _BLK <= n {
+        if _block_all_zero(data, pos) { break; }
+
+        let name: string = _entry_name(data, pos, pending_long);
+        pending_long = "";
+
+        let size: int = _read_octal(data, pos + 124, 12);
+        let typeflag: int = __glide_buf_byte(data, pos + 156);
+        pos = pos + _BLK;
+
+        let payload: int = pos;
+        let next: int = pos + _round_blk(size);
+
+        if typeflag == 76 {  // 'L'
+            pending_long = _slice_to_string(data, payload, size);
+            pos = next;
+            continue;
+        }
+        if typeflag == 120 || typeflag == 103 {  // 'x' / 'g'
+            pos = next;
+            continue;
+        }
+
+        let stripped: string = _strip_components(name, strip_components);
+        if stripped.eq("") { pos = next; continue; }
+        let target: string = out_dir.concat("/").concat(stripped);
+
+        if typeflag == 53 {  // '5' directory
+            fs_mkdir_p(target);
+        } else if typeflag == 48 || typeflag == 0 {  // '0' or NUL = file
+            _ensure_parent(target);
+            if !fs_write_slice(target, data, payload, size) { return -1; }
+            count = count + 1;
+        }
+        pos = next;
+    }
+    return count;
+}
+
+fn _block_all_zero(s: string, pos: int) -> bool {
+    for let i: int = 0; i < _BLK; i++ {
+        if __glide_buf_byte(s, pos + i) != 0 { return false; }
+    }
+    return true;
+}
+
+// Compose the entry name from the prefix + name fields, with the
+// GNU long-name buffer winning when present.
+fn _entry_name(s: string, pos: int, pending_long: string) -> string {
+    if !pending_long.eq("") { return pending_long; }
+    let name: string = _slice_cstr(s, pos, 100);
+    let prefix: string = _slice_cstr(s, pos + 345, 155);
+    if prefix.eq("") { return name; }
+    return prefix.concat("/").concat(name);
+}
+
+// Tar header strings are NUL-padded fixed-width fields. Read up to
+// `max` bytes, stopping at the first NUL. Use the buf-aware substring
+// helper since `string.substring` clamps by `strlen` and breaks on
+// binary buffers.
+fn _slice_cstr(s: string, pos: int, max: int) -> string {
+    let mut end: int = pos;
+    let limit: int = pos + max;
+    while end < limit && __glide_buf_byte(s, end) != 0 { end = end + 1; }
+    if end == pos { return ""; }
+    return __glide_buf_substring(s, pos, end);
+}
+
+// `n` bytes copied as-is (including embedded NULs would survive, but
+// long-name buffers are themselves NUL-terminated so we trim).
+fn _slice_to_string(s: string, pos: int, n: int) -> string {
+    let mut end: int = pos + n;
+    if end > pos && __glide_buf_byte(s, end - 1) == 0 { end = end - 1; }
+    if end <= pos { return ""; }
+    return __glide_buf_substring(s, pos, end);
+}
+
+// Octal field: ASCII digits, optionally space-padded on either side,
+// NUL- or space-terminated. Skips leading whitespace, stops at first
+// non-octal byte.
+fn _read_octal(s: string, pos: int, len: int) -> int {
+    let mut i: int = pos;
+    let end: int = pos + len;
+    while i < end {
+        let b: int = __glide_buf_byte(s, i);
+        if b != 32 && b != 0 { break; }
+        i = i + 1;
+    }
+    let mut acc: int = 0;
+    while i < end {
+        let b: int = __glide_buf_byte(s, i);
+        if b < 48 || b > 55 { break; }
+        acc = (acc * 8) + (b - 48);
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn _round_blk(n: int) -> int {
+    if n <= 0 { return 0; }
+    return ((n + _BLK - 1) / _BLK) * _BLK;
+}
+
+// Skip `strip` leading `/`-separated segments. Returns "" if there
+// aren't enough segments — the entry is then ignored.
+fn _strip_components(path: string, strip: int) -> string {
+    if strip <= 0 { return path; }
+    let mut idx: int = 0;
+    let mut remaining: int = strip;
+    while remaining > 0 && idx < path.len() {
+        let c: int = path.at(idx).to_int();
+        if c == 47 || c == 92 { remaining = remaining - 1; }
+        idx = idx + 1;
+    }
+    if remaining > 0 { return ""; }
+    if idx >= path.len() { return ""; }
+    // Normal strings here (entry names from `_slice_cstr` already used
+    // the buf-aware substring), so `path.substring` is safe.
+    return path.substring(idx, path.len());
+}
+
+// Make every parent directory of `target` exist on disk.
+fn _ensure_parent(target: string) {
+    let mut cut: int = -1;
+    for let i: int = 0; i < target.len(); i++ {
+        let c: int = target.at(i).to_int();
+        if c == 47 || c == 92 { cut = i; }
+    }
+    if cut <= 0 { return; }
+    fs_mkdir_p(target.substring(0, cut));
+}

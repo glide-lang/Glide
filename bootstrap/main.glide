@@ -31,6 +31,7 @@ import json;
 import fmt;
 import lsp;
 import manifest;
+import fetch;
 
 fn print_indent(n: int) {
     for let i: int = 0; i < n; i++ { print!("  "); }
@@ -747,7 +748,45 @@ fn print_usage() {
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
     println!("  glide fmt <file> [--write] (pretty-print to stdout, or rewrite in place)");
+    println!("  glide fetch [path]         (download git deps from glide.glide)");
     println!("  glide lsp                  (language server on stdio)");
+}
+
+// `glide fetch [path]` entry point. Walks up from `path` looking for a
+// glide.glide, then downloads every git dep that isn't already cached.
+fn run_fetch(start: string) -> int {
+    let root: string = find_manifest_root(start);
+    if root.eq("") {
+        println!("fetch: no glide.glide found above", start);
+        return 1;
+    }
+    let m: *Manifest = read_manifest(root);
+    if m == null {
+        println!("fetch: could not parse", root.concat("/glide.glide"));
+        return 1;
+    }
+    let fetched: int = fetch_all(m);
+    if fetched == 0 { println!("fetch: everything up to date"); }
+    link_all(m);
+    // Snapshot the resolved revs into glide.lock so the next build is
+    // reproducible. We trust the manifest's `rev` here — when fetch
+    // gains hash verification this becomes the resolved commit SHA.
+    let lf: *Lockfile = lockfile_from_manifest(m);
+    write_lockfile(root, lf);
+    return 0;
+}
+
+// Auto-fetch path used by build/run/test: walks up from the source
+// file, parses the manifest if any, fetches missing git deps. Failures
+// are non-fatal — the resolver will surface a clean "alias not found"
+// error if a dep didn't make it.
+fn auto_fetch_for(src_path: string) {
+    let dir: string = parent_dir(src_path);
+    let root: string = find_manifest_root(dir);
+    if root.eq("") { return; }
+    let m: *Manifest = read_manifest(root);
+    if m == null { return; }
+    fetch_all(m);
 }
 
 // `merge_parse_diags` moved to typer.glide so the LSP can reach it
@@ -1019,6 +1058,10 @@ fn pick_cc() -> string {
 }
 
 fn run_build(src_path: string, out_path: string, target: string, then_run: bool) -> int {
+    // 0. Auto-fetch missing git deps from the project's glide.glide
+    //    before we start parsing anything. No-op when there's no manifest.
+    auto_fetch_for(src_path);
+
     // 1. Parse
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
@@ -1355,6 +1398,14 @@ fn main() -> int {
 
     // `lsp` takes no positional file arg.
     if cmd.eq("lsp") { return lsp_main(); }
+
+    // `fetch [path]` — walk the manifest at <path>'s closest glide.glide
+    // and download every missing git dep. Default <path> = ".".
+    if cmd.eq("fetch") {
+        let mut start: string = ".";
+        if argc >= 3 { start = args_at(2); }
+        return run_fetch(start);
+    }
 
     // `test [path]`           — run *_test.glide files (default cwd).
     // `test --golden <dir>`   — run each <dir>/*.glide and diff stdout

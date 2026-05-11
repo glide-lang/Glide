@@ -1,0 +1,78 @@
+// gzip / deflate helpers. Links `-lz` (already pulled in by
+// stdlib::http::compress for the response middleware).
+//
+// Decoding is needed for the package manager's tarball fetch — github's
+// codeload endpoints only serve gzipped tar archives.
+
+extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
+extern fn __glide_gunzip_decode(input: string, in_len: int, out_len_ptr: *int) -> *void;
+
+c_raw! {
+    #include <zlib.h>
+    #include <stdint.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    // Inflate a gzip-wrapped stream. Doubles the output buffer on
+    // demand — typical compression ratios mean ~3x is plenty, but
+    // we resize unconditionally if zlib reports Z_BUF_ERROR. Returns
+    // a fresh malloc'd buffer; NULL on any error. `*out_len` ends up
+    // at the decompressed byte count.
+    void* __glide_gunzip_decode(const char* input, int in_len, int* out_len) {
+        if (in_len <= 0) { *out_len = 0; return NULL; }
+        size_t cap = (size_t)in_len * 4 + 64;
+        unsigned char* buf = (unsigned char*)malloc(cap);
+        if (!buf) { *out_len = 0; return NULL; }
+
+        z_stream zs;
+        memset(&zs, 0, sizeof(zs));
+        // 15 + 32 = auto-detect gzip OR zlib wrapper.
+        if (inflateInit2(&zs, 15 + 32) != Z_OK) {
+            free(buf); *out_len = 0; return NULL;
+        }
+        zs.next_in  = (Bytef*)input;
+        zs.avail_in = (uInt)in_len;
+        zs.next_out = buf;
+        zs.avail_out = (uInt)cap;
+
+        for (;;) {
+            int rc = inflate(&zs, Z_NO_FLUSH);
+            if (rc == Z_STREAM_END) break;
+            if (rc == Z_OK && zs.avail_out > 0) continue;
+            if (rc != Z_OK && rc != Z_BUF_ERROR) {
+                inflateEnd(&zs); free(buf); *out_len = 0; return NULL;
+            }
+            size_t old_total = zs.total_out;
+            size_t new_cap = cap * 2;
+            unsigned char* nb = (unsigned char*)realloc(buf, new_cap);
+            if (!nb) { inflateEnd(&zs); free(buf); *out_len = 0; return NULL; }
+            buf = nb;
+            zs.next_out  = buf + old_total;
+            zs.avail_out = (uInt)(new_cap - old_total);
+            cap = new_cap;
+        }
+        *out_len = (int)zs.total_out;
+        inflateEnd(&zs);
+        return buf;
+    }
+}
+
+/// Decompress a gzip-wrapped or zlib-wrapped buffer.
+///
+/// Returns the decoded bytes as a *void buffer plus the byte count
+/// through `out_len`. On any decode error the buffer is null and
+/// `out_len` is zero. Caller is responsible for `free`ing the buffer
+/// (or wrapping it via `__glide_string_from_buf` and letting the GC
+/// take ownership).
+///
+/// ```glide
+/// let mut out_len: int = 0;
+/// let buf: *void = gzip_decode(payload, payload.len(), &out_len);
+/// if buf != null {
+///     let decoded: string = __glide_string_from_buf(buf, out_len);
+///     free(buf);
+/// }
+/// ```
+pub fn gzip_decode(input: string, in_len: int, out_len: *int) -> *void {
+    return __glide_gunzip_decode(input, in_len, out_len);
+}
