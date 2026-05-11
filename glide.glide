@@ -1,0 +1,10 @@
+// Manifest for the Glide compiler itself. `glide install .` reads this
+// to know which file to build (the bootstrap driver) and what to name
+// the produced binary.
+let manifest: Package = Package {
+    name:    "glide",
+    version: "0.1.0",
+    bin:     "bootstrap/main.glide",
+    deps: vec_of(
+    ),
+};
