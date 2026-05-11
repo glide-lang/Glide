@@ -25,15 +25,22 @@ fn test_run_with_capture_out() -> int {
 }
 
 fn test_run_program_not_found() -> int {
-    // POSIX fork+exec semantics: when execvp fails the child `_exit(127)`s.
-    // The parent's waitpid still succeeds, so `Command::run` returns
-    // `ok(ProcessResult { exit_code: 127 })` rather than err. Detecting the
-    // exec failure as an error needs a CLOEXEC-pipe handshake (Rust-style)
-    // which v1 doesn't ship — assert against the conventional 127 instead.
     let c* = Command::new("definitely-not-a-real-glide-test-program");
     let r: !ProcessResult = c.run();
-    assert!(r.ok);
-    assert_eq!(r.val.exit_code, 127);
+    if os_is_windows() {
+        // Windows: CreateProcess fails synchronously when the program
+        // doesn't exist, so `run` propagates an err and there's no
+        // exit code to inspect.
+        assert!(!r.ok);
+    } else {
+        // POSIX: fork+exec semantics — when execvp fails the child
+        // `_exit(127)`s. The parent's waitpid still succeeds, so
+        // `Command::run` returns `ok(ProcessResult { exit_code: 127 })`
+        // rather than err. Detecting the exec failure as an err needs
+        // a CLOEXEC-pipe handshake (Rust-style) which v1 doesn't ship.
+        assert!(r.ok);
+        assert_eq!(r.val.exit_code, 127);
+    }
     return 0;
 }
 
