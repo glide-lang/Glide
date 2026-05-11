@@ -1,0 +1,139 @@
+// Runtime stack walking. Two backends:
+//   - POSIX: glibc/macOS `backtrace()` + `backtrace_symbols()` from
+//     <execinfo.h>. Symbols need `-rdynamic` at link time (the Glide
+//     compiler adds it automatically on POSIX targets).
+//   - Windows: `CaptureStackBackTrace` + `SymFromAddr` from DbgHelp,
+//     linked via `-ldbghelp`.
+//
+//     fn buggy(n: int) -> int {
+//         if n == 0 {
+//             for line in stack_trace() { println!(line); }
+//             return -1;
+//         }
+//         return buggy(n - 1);
+//     }
+//
+// Output is whatever the platform unwinder hands back — typically
+// `binary(function+0xoffset) [0xaddr]` on POSIX, `function+0xoffset`
+// on Windows. Lines are best-effort; with `-O2` plus frame-pointer
+// omission you may get less detail than expected.
+
+extern fn __glide_stack_trace_str(skip: int) -> string;
+
+c_raw! {
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    #ifdef _WIN32
+    #include <windows.h>
+    #include <DbgHelp.h>
+    #pragma comment(lib, "DbgHelp.lib")
+    static int __glide_bt_initialised = 0;
+
+    static const char* __glide_stack_trace_str(int skip) {
+        void* frames[64];
+        if (skip < 0) skip = 0;
+        if (skip > 32) skip = 32;
+        USHORT n = CaptureStackBackTrace((DWORD)(skip + 1), 64, frames, NULL);
+        if (n == 0) return "";
+
+        HANDLE proc = GetCurrentProcess();
+        if (!__glide_bt_initialised) {
+            SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+            SymInitialize(proc, NULL, TRUE);
+            __glide_bt_initialised = 1;
+        }
+
+        char symbuf[sizeof(SYMBOL_INFO) + 512];
+        PSYMBOL_INFO sym = (PSYMBOL_INFO)symbuf;
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 511;
+
+        // Estimate buffer size: 256 bytes per frame is plenty for
+        // function name + offset + line number.
+        size_t cap = (size_t)n * 256;
+        char* out = (char*)malloc(cap);
+        out[0] = 0;
+        size_t off = 0;
+        for (USHORT i = 0; i < n; i++) {
+            DWORD64 addr = (DWORD64)(uintptr_t)frames[i];
+            char line[512];
+            int wrote;
+            if (SymFromAddr(proc, addr, NULL, sym)) {
+                IMAGEHLP_LINE64 il;
+                DWORD disp;
+                il.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+                if (SymGetLineFromAddr64(proc, addr, &disp, &il)) {
+                    wrote = snprintf(line, sizeof(line), "%s (%s:%lu)",
+                                     sym->Name, il.FileName, (unsigned long)il.LineNumber);
+                } else {
+                    wrote = snprintf(line, sizeof(line), "%s+0x%llx",
+                                     sym->Name, (unsigned long long)(addr - sym->Address));
+                }
+            } else {
+                wrote = snprintf(line, sizeof(line), "0x%llx", (unsigned long long)addr);
+            }
+            if (off + (size_t)wrote + 2 > cap) break;
+            if (off > 0) { out[off++] = '\n'; }
+            memcpy(out + off, line, (size_t)wrote);
+            off += (size_t)wrote;
+            out[off] = 0;
+        }
+        return out;
+    }
+    #else
+    #include <execinfo.h>
+
+    static const char* __glide_stack_trace_str(int skip) {
+        if (skip < 0) skip = 0;
+        void* frames[64];
+        int n = backtrace(frames, 64);
+        if (n <= 0) return "";
+        int start = skip + 1;   // +1 to drop this fn itself
+        if (start >= n) return "";
+        char** sym = backtrace_symbols(frames + start, n - start);
+        if (!sym) return "";
+        size_t total = 0;
+        for (int i = 0; i < n - start; i++) total += strlen(sym[i]) + 1;
+        char* out = (char*)malloc(total + 1);
+        size_t off = 0;
+        for (int i = 0; i < n - start; i++) {
+            size_t l = strlen(sym[i]);
+            if (off > 0) out[off++] = '\n';
+            memcpy(out + off, sym[i], l);
+            off += l;
+        }
+        out[off] = 0;
+        free(sym);
+        return out;
+    }
+    #endif
+}
+
+/// Return the current call stack, one frame per element. The first
+/// entry is `stack_trace`'s caller; the unwinder itself is filtered
+/// out. Returns an empty vector when the platform can't walk the
+/// stack (typically -O2 with frame pointers omitted).
+///
+/// ```glide
+/// fn buggy() {
+///     for f in stack_trace() { println!(f); }
+/// }
+/// ```
+pub fn stack_trace() -> *Vector<string> {
+    return _split_trace(__glide_stack_trace_str(0));
+}
+
+/// Same as `stack_trace` but skips the first `n` frames closest to
+/// the caller. Useful when the caller is itself a thin shim (e.g. a
+/// `log_error!` macro expansion) that should be hidden.
+pub fn stack_trace_skip(n: int) -> *Vector<string> {
+    return _split_trace(__glide_stack_trace_str(n));
+}
+
+fn _split_trace(raw: string) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    if raw.eq("") { return out; }
+    return raw.split("\n");
+}
