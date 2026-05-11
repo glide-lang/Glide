@@ -1008,11 +1008,38 @@ fn keyword_doc(name: string) -> string {
     if name.eq("defer") {
         return "```glide\ndefer expr;\n```\n\n---\n\nRun `expr` at function exit (LIFO with other defers, before any `return`). Used for cleanup.\n\n```glide\nlet v: *Vector<int> = Vector::new();\ndefer v.free();\n```";
     }
+    if name.eq("defer_err") {
+        return "```glide\ndefer_err expr;\n```\n\n---\n\nLike `defer`, but only fires when the function returns an `Err` / `!T` failure value. Lets you tear down half-built state without running the same code on the happy path.\n\n```glide\nlet conn: *Conn = open();\ndefer_err conn.close();          // only closes on error\nlet r: !int = conn.do_thing()?;\n// success → conn lives on\n```";
+    }
     if name.eq("spawn") {
         return "```glide\nspawn fn_call(args);\n```\n\n---\n\nRun the call on a new pthread. Detached — no join handle.\n\n```glide\nspawn worker(c);\n```";
     }
     if name.eq("chan") {
         return "```glide\nlet c: chan<T> = make_chan(cap);\n```\n\n---\n\nTyped concurrent channel. Pair with `send(c, x)`, `recv(c)`, `close(c)`.";
+    }
+    if name.eq("select") {
+        return "```glide\nselect! {\n    case x = recv(c1) => { ... }\n    case Some(v) = recv(c2) => { ... }   // close-aware\n    case send(c3, x) => { ... }\n    default => { ... }\n}\n```\n\n---\n\nMultiplex over chan operations. The first arm whose op completes wins; with a `default` arm the macro is non-blocking. `Some(v)`-bound receive returns `None` when the channel closes.";
+    }
+    if name.eq("dyn") {
+        return "```glide\n*dyn Trait\n```\n\n---\n\nA pointer to an erased-type value that implements `Trait`. Dispatch is dynamic (vtable lookup) instead of monomorphised — useful for heterogeneous containers and runtime polymorphism.\n\n```glide\nlet w: *dyn Writer = &my_struct;\nw.write(\"hi\");\n```";
+    }
+    if name.eq("trait") {
+        return "```glide\ntrait Name {\n    fn method(self: *Self, ...) -> T;\n    fn defaulted(self: *Self) -> int { return 0; }   // default impl\n}\n```\n\n---\n\nA set of method signatures (with optional default bodies) that types can implement via `impl Trait for T`. Used as bound `T: Trait` for generic constraints and via `*dyn Trait` for dynamic dispatch.";
+    }
+    if name.eq("interface") {
+        return "```glide\ninterface Name { fn method(self: *Self, ...) -> T; }\n```\n\n---\n\nLegacy alias for `trait`. New code should prefer `trait`.";
+    }
+    if name.eq("Self") {
+        return "```glide\nfn method(self: *Self) -> Self { ... }\n```\n\n---\n\nInside a `trait` / `impl` declaration, refers to the implementing type. Resolved to the concrete type at instantiation time.";
+    }
+    if name.eq("naked") {
+        return "```glide\nnaked fn name(args) -> T { asm! { ... } }\n```\n\n---\n\nFunction emitted with `__attribute__((naked))` — no prologue / epilogue. Body must contain only `asm!` blocks; calling convention is raw, so you assemble the entire stack frame yourself.";
+    }
+    if name.eq("asm") {
+        return "```glide\nasm! [volatile] {\n    \"instr\"\n    \"instr\"\n    : \"=c\"(out), ...      // outputs\n    : \"c\"(in), ...        // inputs\n    : \"clobber\", ...      // clobbers\n}\n```\n\n---\n\nInline assembly. Maps to GCC's extended-asm form. Sections are positional — leave a blank `:` to skip a slot.";
+    }
+    if name.eq("volatile") {
+        return "```glide\nasm! volatile { ... }\n```\n\n---\n\nMarker on an `asm!` block that tells the compiler not to reorder or eliminate it even if its outputs aren't observed.";
     }
     if name.eq("move") {
         return "```glide\nmove fn(args) -> ret { body }\n```\n\n---\n\nClosure prefix that captures referenced locals by move (one-shot, releases the source). Without `move`, an `fn` expression with captures isn't allowed.";
@@ -2812,10 +2839,12 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     kws.push("trait"); kws.push("dyn"); kws.push("Self"); kws.push("in");
     kws.push("if"); kws.push("else"); kws.push("while"); kws.push("for");
     kws.push("return"); kws.push("break"); kws.push("continue");
-    kws.push("match"); kws.push("defer"); kws.push("spawn"); kws.push("import");
+    kws.push("match"); kws.push("defer"); kws.push("defer_err");
+    kws.push("spawn"); kws.push("import");
     kws.push("pub"); kws.push("extern"); kws.push("true"); kws.push("false"); kws.push("null");
     kws.push("as"); kws.push("sizeof"); kws.push("type"); kws.push("move"); kws.push("chan");
-    kws.push("naked"); kws.push("asm"); kws.push("c_raw"); kws.push("macro");
+    kws.push("naked"); kws.push("asm"); kws.push("volatile");
+    kws.push("c_raw"); kws.push("macro"); kws.push("select");
     for let i: int = 0; i < kws.len(); i++ {
         let k: string = kws.get(i);
         if seen.contains(k) { continue; }
@@ -3089,6 +3118,8 @@ fn is_glide_keyword(w: string) -> bool {
     if w.eq("Self") { return true; } if w.eq("in") { return true; }
     if w.eq("chan") { return true; } if w.eq("true") { return true; }
     if w.eq("false") { return true; } if w.eq("null") { return true; }
+    if w.eq("defer_err") { return true; } if w.eq("select") { return true; }
+    if w.eq("trait") { return true; } if w.eq("interface") { return true; }
     return false;
 }
 
