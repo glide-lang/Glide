@@ -29,6 +29,7 @@ const _BENCH_WARMUPS:    int = 3;
 extern fn _bench_bump_total();
 extern fn _bench_get_total() -> int;
 extern fn _bench_get_failed() -> int;
+extern fn __glide_bench_consume(p: *void);
 
 c_raw! {
     #ifndef GLIDE_BENCH_DEFINED
@@ -38,7 +39,33 @@ c_raw! {
     static void _bench_bump_total(void) { __bench_total_g++; }
     static int  _bench_get_total(void)  { return __bench_total_g; }
     static int  _bench_get_failed(void) { return __bench_failed_g; }
+
+    // Dead-code sink. Writing through a volatile pointer forces the
+    // compiler to keep whatever produced `p` alive — defeats -O2
+    // eliminating bench bodies whose result isn't observed otherwise.
+    static volatile void* __bench_sink_g = (void*)0;
+    static void __glide_bench_consume(void* p) {
+        __bench_sink_g = p;
+    }
     #endif
+}
+
+impl Bencher {
+    /// Force the compiler to treat `p` as observed so the producing
+    /// computation can't be optimised away. Pass `&x` for primitives
+    /// (`b.consume(&total)`) or the value directly for pointer-shaped
+    /// types (strings, *Vector, *Struct).
+    ///
+    /// ```glide
+    /// pub fn bench_sum(b: *Bencher) {
+    ///     let mut total: int = 0;
+    ///     for let i: int = 0; i < b.n; i++ { total = total + i; }
+    ///     b.consume(&total);   // keep `total` alive
+    /// }
+    /// ```
+    pub fn consume(self: *Bencher, p: *void) {
+        __glide_bench_consume(p);
+    }
 }
 
 /// Run one named bench with an auto-tuned iteration count.
