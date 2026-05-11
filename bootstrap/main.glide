@@ -19,6 +19,7 @@ import stdlib::fs::*;
 import stdlib::os::*;
 import stdlib::env::*;
 import stdlib::io::*;
+import stdlib::spinner::*;
 import lexer;
 import ast;
 import parser;
@@ -1220,17 +1221,30 @@ fn pick_cc() -> string {
 }
 
 fn run_build(src_path: string, out_path: string, target: string, then_run: bool) -> int {
+    return run_build_q(src_path, out_path, target, then_run, false);
+}
+
+// Same as `run_build` but with a `quiet` knob — the test / golden
+// runners drive lots of builds in a row and the spinner-per-build
+// would flood the log in non-TTY mode (no in-place redraw).
+fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool) -> int {
     // 0. Auto-fetch missing git deps from the project's glide.glide
     //    before we start parsing anything. No-op when there's no manifest.
     auto_fetch_for(src_path);
 
+    if !quiet { spinner_start("parsing ".concat(src_path)); }
+
     // 1. Parse
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !parse_program_into(stmts, src_path, pdiags) { return 1; }
+    if !parse_program_into(stmts, src_path, pdiags) {
+        if !quiet { spinner_finish(false, "parse failed"); }
+        return 1;
+    }
 
     // 2. Type-check. Abort the build before codegen if the user file has
     //    errors (e.g. infinite-recursion, type mismatches).
+    if !quiet { spinner_set("typechecking"); }
     let t: *Typer = Typer::new();
     merge_parse_diags(t, pdiags);
     build_visibility(t, stmts);
@@ -1250,21 +1264,24 @@ fn run_build(src_path: string, out_path: string, target: string, then_run: bool)
     if errors > 0 {
         let mut tail: string = "could not compile due to 1 previous error";
         if errors > 1 { tail = "could not compile due to ".concat(int_to_str(errors)).concat(" previous errors"); }
+        if !quiet { spinner_finish(false, ""); }
         println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(tail));
         return 1;
     }
 
     // 3. Emit C to a temp file by saving stdout, redirecting, then restoring.
+    if !quiet { spinner_set("emitting C"); }
     let tmp_c: string = out_path.concat(".__glide.c");
     let saved: int = __glide_redirect_to(tmp_c);
     if saved < 0 {
-        println!("could not open temp file:", tmp_c);
+        if !quiet { spinner_finish(false, "could not open temp file: ".concat(tmp_c)); }
         return 1;
     }
     emit_program(stmts);
     __glide_restore_stdout(saved);
 
-    // 3. Build the cc command.
+    // 4. Build the cc command.
+    if !quiet { spinner_set("compiling C -> ".concat(out_path)); }
     let cc: string = pick_cc();
     let mut cmd: string = cc;
     cmd = cmd.concat(" \"").concat(tmp_c).concat("\"");
@@ -1285,10 +1302,13 @@ fn run_build(src_path: string, out_path: string, target: string, then_run: bool)
 
     let rc: int = __glide_shell(cmd);
     if rc != 0 {
+        if !quiet { spinner_finish(false, ""); }
         println!("compilation failed (cc exit", rc, ")");
         println!("preserved C source at:", tmp_c);
         return rc;
     }
+
+    if !quiet { spinner_finish(true, "built ".concat(out_path)); }
 
     if then_run {
         let mut prefix: string = "./";
@@ -1401,7 +1421,7 @@ fn run_test(path: string) -> int {
 
         println!(col_blue().concat("running").concat(col_reset()), f,
                  "(", test_fns.len(), "tests )");
-        let rc: int = run_build(tmp_path, out_path, "", true);
+        let rc: int = run_build_q(tmp_path, out_path, "", true, true);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -1426,7 +1446,7 @@ fn run_test(path: string) -> int {
 fn _golden_build_and_run(src: string, out_txt: string) -> int {
     let mut exe: string = "__glide_golden.exe";
     if __glide_is_windows() == 0 { exe = "__glide_golden"; }
-    let rc_build: int = run_build(src, exe, "", false);
+    let rc_build: int = run_build_q(src, exe, "", false, true);
     if rc_build != 0 { return -1; }
     let mut prefix: string = "./";
     if __glide_is_windows() != 0 { prefix = ".\\"; }

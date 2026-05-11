@@ -1,6 +1,8 @@
 import stdlib::fs::*;
 import stdlib::compress::*;
 import stdlib::tar::*;
+import stdlib::spinner::*;
+import ast;       // for int_to_str
 import manifest;
 
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
@@ -23,13 +25,14 @@ pub fn ensure_fetched(m: *Manifest, d: ManifestDep) -> string {
         println!("fetch:", d.name, "- could not create cache dir");
         return "";
     }
-    println!("fetch:", d.name, d.path, d.rev);
 
     let url: string = _codeload_url(d.path, d.rev);
     if url.eq("") {
         println!("fetch:", d.name, "- unsupported host (only github.com so far)");
         return "";
     }
+
+    spinner_start("fetching ".concat(d.name).concat(" (").concat(d.path).concat("@").concat(d.rev).concat(")"));
 
     // Download tarball to a tmp file via curl. We shell out instead of
     // pulling in stdlib::http to keep the bootstrap compiler from
@@ -39,33 +42,34 @@ pub fn ensure_fetched(m: *Manifest, d: ManifestDep) -> string {
     let cmd: string = "curl -fsSL -o \"".concat(tmp).concat("\" \"").concat(url).concat("\"");
     let rc: int = __glide_shell(cmd);
     if rc != 0 {
-        println!("fetch:", d.name, "- curl failed (exit", rc, "); is curl on PATH?");
+        spinner_finish(false, d.name.concat(" - curl failed (is curl on PATH?)"));
         return "";
     }
 
-    // Slurp the archive (binary-safe), inflate, then walk the tar.
+    spinner_set("inflating ".concat(d.name));
     let mut read_len: int = 0;
     let archive_gz: string = fs_read_bytes(tmp, &read_len);
     if read_len <= 0 {
-        println!("fetch:", d.name, "- empty download");
+        spinner_finish(false, d.name.concat(" - empty download"));
         return "";
     }
     let mut decoded_len: int = 0;
     let raw: *void = gzip_decode(archive_gz, read_len, &decoded_len);
     if raw == null || decoded_len <= 0 {
-        println!("fetch:", d.name, "- gunzip failed");
+        spinner_finish(false, d.name.concat(" - gunzip failed"));
         return "";
     }
     let archive: string = __glide_string_from_buf(raw, decoded_len);
     free(raw);
 
+    spinner_set("extracting ".concat(d.name));
     // codeload tarballs wrap content under a single `<repo>-<rev>` dir.
     let extracted: int = tar_extract(archive, decoded_len, cache, 1);
     if extracted < 0 {
-        println!("fetch:", d.name, "- bad archive");
+        spinner_finish(false, d.name.concat(" - bad archive"));
         return "";
     }
-    println!("fetch:", d.name, "- extracted", extracted, "files");
+    spinner_finish(true, d.name.concat(" (").concat(int_to_str(extracted)).concat(" files)"));
     _link_in_project(m, d, cache);
     return cache;
 }

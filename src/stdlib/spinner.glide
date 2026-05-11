@@ -1,0 +1,190 @@
+// Minimalist progress spinner. One animator at a time — calling
+// `spinner_start` while another is live silently replaces it.
+//
+//     spinner_start("compiling…");
+//     ... long-running work ...
+//     spinner_set("linking…");
+//     ... more work ...
+//     spinner_finish(true, "built target/my_app");
+//
+// A background pthread redraws every 80ms with the next braille frame.
+// When stdout isn't a TTY (piped to a file, CI without a PTY) the
+// animation is suppressed and only the final `finish` line prints, so
+// log files stay clean.
+
+extern fn __glide_spinner_start(msg: string);
+extern fn __glide_spinner_set(msg: string);
+extern fn __glide_spinner_finish(ok: bool, msg: string);
+
+c_raw! {
+    #include <pthread.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <time.h>
+    #ifdef _WIN32
+    #include <io.h>
+    #define __glide_isatty(fd) _isatty(fd)
+    #define __glide_fileno(f)  _fileno(f)
+    #else
+    #include <unistd.h>
+    #define __glide_isatty(fd) isatty(fd)
+    #define __glide_fileno(f)  fileno(f)
+    #endif
+
+    #ifndef GLIDE_SPINNER_DEFINED
+    #define GLIDE_SPINNER_DEFINED
+
+    // Forward decls — `start` calls `finish` to replace a live spinner.
+    void __glide_spinner_start(const char* msg);
+    void __glide_spinner_set(const char* msg);
+    void __glide_spinner_finish(bool ok, const char* msg);
+
+    static const char* __glide_spin_frames[] = {
+        "\xE2\xA0\x8B",  // ⠋
+        "\xE2\xA0\x99",  // ⠙
+        "\xE2\xA0\xB9",  // ⠹
+        "\xE2\xA0\xB8",  // ⠸
+        "\xE2\xA0\xBC",  // ⠼
+        "\xE2\xA0\xB4",  // ⠴
+        "\xE2\xA0\xA6",  // ⠦
+        "\xE2\xA0\xA7",  // ⠧
+        "\xE2\xA0\x87",  // ⠇
+        "\xE2\xA0\x8F",  // ⠏
+    };
+    static const int __glide_spin_frame_count = 10;
+
+    static pthread_t       __glide_spin_thread;
+    static pthread_mutex_t __glide_spin_mu  = PTHREAD_MUTEX_INITIALIZER;
+    static int             __glide_spin_active = 0;
+    static int             __glide_spin_tty    = 0;
+    static char            __glide_spin_msg[512];
+
+    static void __glide_spin_sleep_ms(int ms) {
+        #ifdef _WIN32
+        struct timespec ts; ts.tv_sec = ms / 1000;
+        ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+        nanosleep(&ts, NULL);
+        #else
+        struct timespec ts; ts.tv_sec = ms / 1000;
+        ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+        nanosleep(&ts, NULL);
+        #endif
+    }
+
+    // Erase to end of line + carriage return — leaves the cursor at
+    // column 0 with no leftover characters from a longer previous frame.
+    static void __glide_spin_clear_line(void) {
+        fputs("\r\x1b[K", stdout);
+        fflush(stdout);
+    }
+
+    static void* __glide_spin_loop(void* _arg) {
+        int frame = 0;
+        while (1) {
+            pthread_mutex_lock(&__glide_spin_mu);
+            int active = __glide_spin_active;
+            char local[512];
+            memcpy(local, __glide_spin_msg, sizeof(local));
+            pthread_mutex_unlock(&__glide_spin_mu);
+            if (!active) break;
+            fputs("\r", stdout);
+            fputs(__glide_spin_frames[frame % __glide_spin_frame_count], stdout);
+            fputc(' ', stdout);
+            fputs(local, stdout);
+            fputs("\x1b[K", stdout);
+            fflush(stdout);
+            frame++;
+            __glide_spin_sleep_ms(80);
+        }
+        return NULL;
+    }
+
+    void __glide_spinner_start(const char* msg) {
+        pthread_mutex_lock(&__glide_spin_mu);
+        if (__glide_spin_active) {
+            pthread_mutex_unlock(&__glide_spin_mu);
+            __glide_spinner_finish(true, "");
+            pthread_mutex_lock(&__glide_spin_mu);
+        }
+        __glide_spin_tty = __glide_isatty(__glide_fileno(stdout));
+        strncpy(__glide_spin_msg, msg ? msg : "", sizeof(__glide_spin_msg) - 1);
+        __glide_spin_msg[sizeof(__glide_spin_msg) - 1] = 0;
+        __glide_spin_active = 1;
+        pthread_mutex_unlock(&__glide_spin_mu);
+        if (!__glide_spin_tty) {
+            // Non-interactive: just print the start message once, no animator.
+            fputs(msg ? msg : "", stdout);
+            fputc('\n', stdout);
+            fflush(stdout);
+            pthread_mutex_lock(&__glide_spin_mu);
+            __glide_spin_active = 0;
+            pthread_mutex_unlock(&__glide_spin_mu);
+            return;
+        }
+        pthread_create(&__glide_spin_thread, NULL, __glide_spin_loop, NULL);
+    }
+
+    void __glide_spinner_set(const char* msg) {
+        pthread_mutex_lock(&__glide_spin_mu);
+        if (!__glide_spin_active) {
+            pthread_mutex_unlock(&__glide_spin_mu);
+            // No live animator (non-TTY path): emit a fresh status line.
+            fputs(msg ? msg : "", stdout);
+            fputc('\n', stdout);
+            fflush(stdout);
+            return;
+        }
+        strncpy(__glide_spin_msg, msg ? msg : "", sizeof(__glide_spin_msg) - 1);
+        __glide_spin_msg[sizeof(__glide_spin_msg) - 1] = 0;
+        pthread_mutex_unlock(&__glide_spin_mu);
+    }
+
+    void __glide_spinner_finish(bool ok, const char* msg) {
+        pthread_mutex_lock(&__glide_spin_mu);
+        int was_active = __glide_spin_active;
+        int was_tty    = __glide_spin_tty;
+        __glide_spin_active = 0;
+        pthread_mutex_unlock(&__glide_spin_mu);
+        if (was_active && was_tty) {
+            pthread_join(__glide_spin_thread, NULL);
+            __glide_spin_clear_line();
+        }
+        if (msg && *msg) {
+            fputs(ok ? "\xE2\x9C\x93 " : "\xE2\x9C\x97 ", stdout);  // ✓ / ✗
+            fputs(msg, stdout);
+            fputc('\n', stdout);
+            fflush(stdout);
+        }
+    }
+    #endif
+}
+
+/// Start a spinner with `msg` as the initial status. Replaces any
+/// active spinner. On a non-TTY stdout the animation is skipped and
+/// `msg` prints as a plain line; `spinner_finish` still emits its
+/// final line so log scrapers see the result.
+///
+/// ```glide
+/// spinner_start("compiling…");
+/// ```
+pub fn spinner_start(msg: string) { __glide_spinner_start(msg); }
+
+/// Update the live spinner's status text. No-op when no spinner is
+/// active. On non-TTY stdouts this emits a fresh status line.
+///
+/// ```glide
+/// spinner_set("linking…");
+/// ```
+pub fn spinner_set(msg: string) { __glide_spinner_set(msg); }
+
+/// Stop the animator (joining its pthread), clear the spinner line,
+/// then print `✓ msg` (when `ok`) or `✗ msg` (when not). Pass an empty
+/// `msg` to suppress the final line — useful when an enclosing pass
+/// will print its own summary.
+///
+/// ```glide
+/// spinner_finish(true,  "built target/my_app");
+/// spinner_finish(false, "compile failed");
+/// ```
+pub fn spinner_finish(ok: bool, msg: string) { __glide_spinner_finish(ok, msg); }
