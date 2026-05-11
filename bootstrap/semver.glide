@@ -1,0 +1,162 @@
+// Minimal SemVer 2.0 parsing + comparison + Minimum Version Selection.
+//
+// The package manager uses this to reconcile transitive dep version
+// requests. Same idea as `go mod`'s MVS — when several deps in the
+// graph reference the same module at different revs, pick the highest
+// minimum that everyone declares; raise an error if those revs span
+// incompatible major versions (semver invariant: only major bumps may
+// break the API).
+//
+// Non-semver revs (branch names, commit shas) pass through as opaque
+// `is_semver=false` values and never win against a semver. Two
+// distinct opaque revs for the same URL fall back to "first wins"
+// with a warning.
+
+import ast;     // int_to_str
+
+pub struct SemVer {
+    pub major:      int,
+    pub minor:      int,
+    pub patch:      int,
+    pub prerelease: string,    // "" = release (sorts after `pre`)
+    pub raw:        string,    // original input, for display + opaque fallback
+    pub is_semver:  bool,
+}
+
+/// Parse `s` into a SemVer. Accepts leading `v` (e.g. `v1.2.3`).
+/// Trailing `+build` metadata is recognised and discarded — it has no
+/// ordering semantics per the spec. Returns `is_semver=false` for
+/// anything that doesn't fit the `<int>.<int>.<int>[-pre]` shape so the
+/// caller can fall back to string-equality comparison.
+///
+/// ```glide
+/// let v: SemVer = parse_semver("v1.2.3-beta.1");
+/// // v.major=1 v.minor=2 v.patch=3 v.prerelease="beta.1"
+/// ```
+pub fn parse_semver(s: string) -> SemVer {
+    let mut v: SemVer;
+    v.major = 0; v.minor = 0; v.patch = 0;
+    v.prerelease = "";
+    v.raw = s;
+    v.is_semver = false;
+    if s.eq("") { return v; }
+
+    let mut i: int = 0;
+    if s.at(0).to_int() == 118 { i = 1; }   // skip leading 'v'
+
+    let n: int = s.len();
+    let mut major: int = -1;
+    let mut minor: int = -1;
+    let mut patch: int = -1;
+
+    let mut tmp: int = 0;
+    let mut have: bool = false;
+    while i < n {
+        let c: int = s.at(i).to_int();
+        if c >= 48 && c <= 57 { tmp = tmp * 10 + (c - 48); have = true; i = i + 1; continue; }
+        break;
+    }
+    if !have { return v; }
+    major = tmp;
+
+    if i >= n || s.at(i).to_int() != 46 { return v; }   // expect '.'
+    i = i + 1; tmp = 0; have = false;
+    while i < n {
+        let c: int = s.at(i).to_int();
+        if c >= 48 && c <= 57 { tmp = tmp * 10 + (c - 48); have = true; i = i + 1; continue; }
+        break;
+    }
+    if !have { return v; }
+    minor = tmp;
+
+    if i >= n || s.at(i).to_int() != 46 { return v; }
+    i = i + 1; tmp = 0; have = false;
+    while i < n {
+        let c: int = s.at(i).to_int();
+        if c >= 48 && c <= 57 { tmp = tmp * 10 + (c - 48); have = true; i = i + 1; continue; }
+        break;
+    }
+    if !have { return v; }
+    patch = tmp;
+
+    // Optional prerelease (`-foo`) and build (`+bar`).
+    let mut pre_start: int = -1;
+    let mut pre_end: int = n;
+    if i < n && s.at(i).to_int() == 45 {
+        pre_start = i + 1;
+        let mut k: int = pre_start;
+        while k < n && s.at(k).to_int() != 43 { k = k + 1; }
+        pre_end = k;
+        i = k;
+    }
+    if i < n && s.at(i).to_int() == 43 {
+        // Build metadata — ignored for comparison, just consume.
+        while i < n { i = i + 1; }
+    }
+    if i != n && pre_start < 0 { return v; }
+
+    v.major = major;
+    v.minor = minor;
+    v.patch = patch;
+    if pre_start >= 0 && pre_end > pre_start {
+        v.prerelease = s.substring(pre_start, pre_end);
+    }
+    v.is_semver = true;
+    return v;
+}
+
+/// `-1` if `a < b`, `0` if equal, `1` if `a > b`. Order over semver
+/// values per the spec: major / minor / patch / prerelease. A release
+/// outranks any prerelease at the same major.minor.patch.
+///
+/// ```glide
+/// semver_cmp(parse_semver("1.2.0"), parse_semver("1.2.3"))   //   -1
+/// semver_cmp(parse_semver("1.0.0"), parse_semver("1.0.0-rc"))//    1
+/// ```
+pub fn semver_cmp(a: SemVer, b: SemVer) -> int {
+    if !a.is_semver && !b.is_semver { return _strcmp(a.raw, b.raw); }
+    if !a.is_semver { return -1; }
+    if !b.is_semver { return 1; }
+    if a.major != b.major { if a.major < b.major { return -1; } return 1; }
+    if a.minor != b.minor { if a.minor < b.minor { return -1; } return 1; }
+    if a.patch != b.patch { if a.patch < b.patch { return -1; } return 1; }
+    if a.prerelease.eq(b.prerelease) { return 0; }
+    if a.prerelease.eq("") { return 1; }
+    if b.prerelease.eq("") { return -1; }
+    return _strcmp(a.prerelease, b.prerelease);
+}
+
+/// `true` when `a` and `b` share a major version. The semver social
+/// contract: only major bumps may break the API, so versions across
+/// the same major line are mutually substitutable.
+pub fn semver_compatible(a: SemVer, b: SemVer) -> bool {
+    if !a.is_semver || !b.is_semver { return false; }
+    return a.major == b.major;
+}
+
+fn _strcmp(a: string, b: string) -> int {
+    let n: int = a.len();
+    let m: int = b.len();
+    let lim: int = if n < m { n } else { m };
+    for let i: int = 0; i < lim; i++ {
+        let ca: int = a.at(i).to_int();
+        let cb: int = b.at(i).to_int();
+        if ca < cb { return -1; }
+        if ca > cb { return 1; }
+    }
+    if n < m { return -1; }
+    if n > m { return 1; }
+    return 0;
+}
+
+/// Pretty-print a SemVer back to canonical form (`major.minor.patch`
+/// plus `-prerelease` when present). Falls back to the raw input for
+/// non-semver values.
+pub fn semver_format(v: SemVer) -> string {
+    if !v.is_semver { return v.raw; }
+    let mut out: string = int_to_str(v.major).concat(".")
+        .concat(int_to_str(v.minor)).concat(".")
+        .concat(int_to_str(v.patch));
+    if !v.prerelease.eq("") { out = out.concat("-").concat(v.prerelease); }
+    return out;
+}

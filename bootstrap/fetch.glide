@@ -6,6 +6,7 @@ import stdlib::spinner::*;
 import stdlib::crypto::*;
 import ast;       // for int_to_str
 import manifest;
+import semver;
 
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 extern fn __glide_shell(cmd: string) -> int;
@@ -265,6 +266,119 @@ pub fn fetch_all(m: *Manifest) -> int {
         if !dir.eq("") && !before { fetched = fetched + 1; }
     }
     return fetched;
+}
+
+// Walk the resolved dep graph and report version conflicts. For each
+// URL that appears with more than one rev across the graph, parse the
+// candidates as semver, pick the highest minimum that satisfies
+// everyone (Go-MVS), and print a one-line resolution. Incompatible
+// majors raise a hard error since the semver contract says they can't
+// be transparently substituted.
+//
+// This pass is purely advisory today — each subgraph still resolves
+// imports through its own manifest, so two majors of the same lib
+// coexist in the cache. The report tells the user what to pin in
+// their root manifest if they want a single shared version.
+pub fn mvs_report(m: *Manifest) -> int {
+    if m == null { return 0; }
+    let urls: *Vector<string> = Vector::new();
+    let revs: *Vector<string> = Vector::new();
+    let seen_pairs: *HashMap<bool> = HashMap::new();
+    _collect_url_revs(m, urls, revs, seen_pairs);
+
+    let mut errors: int = 0;
+    let unique: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < urls.len(); i++ {
+        let u: string = urls.get(i);
+        if unique.contains(u) { continue; }
+        unique.insert(u, true);
+        if _resolve_one(u, urls, revs) { errors = errors + 1; }
+    }
+    return errors;
+}
+
+fn _collect_url_revs(m: *Manifest, urls: *Vector<string>, revs: *Vector<string>, seen: *HashMap<bool>) {
+    if m == null { return; }
+    for let i: int = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        if d.kind != DEP_GIT { continue; }
+        let key: string = d.path.concat("@").concat(d.rev);
+        if seen.contains(key) { continue; }
+        seen.insert(key, true);
+        urls.push(d.path);
+        revs.push(d.rev);
+        let cache: string = dep_cache_dir(m, d);
+        if cache.eq("") { continue; }
+        let sub_m: *Manifest = read_manifest(cache);
+        if sub_m == null { continue; }
+        _collect_url_revs(sub_m, urls, revs, seen);
+    }
+}
+
+// Resolve a single URL. Returns true when an unrecoverable error was
+// emitted (incompatible majors); false on a clean resolution / single
+// rev / opaque-only fallback.
+fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> bool {
+    let candidates: *Vector<string> = Vector::new();
+    for let i: int = 0; i < urls.len(); i++ {
+        if urls.get(i).eq(url) {
+            let r: string = revs.get(i);
+            if !_contains_str(candidates, r) { candidates.push(r); }
+        }
+    }
+    if candidates.len() <= 1 { return false; }
+
+    // Sort candidates into semver / opaque buckets.
+    let mut semvers: *Vector<SemVer> = Vector::new();
+    let mut opaque: *Vector<string> = Vector::new();
+    for let i: int = 0; i < candidates.len(); i++ {
+        let s: string = candidates.get(i);
+        let v: SemVer = parse_semver(s);
+        if v.is_semver { semvers.push(v); }
+        else { opaque.push(s); }
+    }
+
+    if semvers.len() == 0 {
+        println!("mvs:", url, "- multiple opaque revs", _join(candidates, ", "), "- using first");
+        return false;
+    }
+
+    // Highest semver wins. Check major compatibility against everyone.
+    let mut best: SemVer = semvers.get(0);
+    let mut conflict: bool = false;
+    for let i: int = 1; i < semvers.len(); i++ {
+        let v: SemVer = semvers.get(i);
+        if !semver_compatible(best, v) { conflict = true; }
+        if semver_cmp(v, best) > 0 {
+            if !semver_compatible(best, v) { conflict = true; }
+            best = v;
+        }
+    }
+    if conflict {
+        println!("mvs ERROR:", url, "- incompatible majors among", _join(candidates, ", "),
+                 "- pin a single major in your root manifest");
+        return true;
+    }
+    println!("mvs:", url, "-> ", semver_format(best),
+             "(highest of", _join(candidates, ", "), ")",
+             if opaque.len() > 0 { " (opaque revs present, ignored)" } else { "" });
+    return false;
+}
+
+fn _contains_str(v: *Vector<string>, s: string) -> bool {
+    for let i: int = 0; i < v.len(); i++ {
+        if v.get(i).eq(s) { return true; }
+    }
+    return false;
+}
+
+fn _join(v: *Vector<string>, sep: string) -> string {
+    let mut out: string = "";
+    for let i: int = 0; i < v.len(); i++ {
+        if i > 0 { out = out.concat(sep); }
+        out = out.concat(v.get(i));
+    }
+    return out;
 }
 
 // Recognise `github.com/<user>/<repo>` and build the codeload URL.

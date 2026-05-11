@@ -780,11 +780,12 @@ fn run_fetch(start: string) -> int {
     let fetched: int = fetch_all(m);
     if fetched == 0 { println!("fetch: everything up to date"); }
     link_all(m);
+    let mvs_errors: int = mvs_report(m);
     // Snapshot the resolved revs into glide.lock so the next build is
-    // reproducible. We trust the manifest's `rev` here — when fetch
-    // gains hash verification this becomes the resolved commit SHA.
+    // reproducible.
     let lf: *Lockfile = lockfile_from_manifest(m);
     write_lockfile(root, lf);
+    if mvs_errors > 0 { return 1; }
     return 0;
 }
 
