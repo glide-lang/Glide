@@ -56,8 +56,20 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: boo
     }
 
     if modules.len() == 0 {
+        // No docs to render — but `--ai` should still drop AGENTS.md
+        // so the user can wire up agent rules on day one, before any
+        // pub item exists.
+        if emit_ai {
+            let agents_path: string = root_dir.concat("/AGENTS.md");
+            if __glide_file_exists(agents_path) {
+                println!("doc: AGENTS.md already present, leaving as-is");
+            } else {
+                _write_agents_md(agents_path);
+                println!("doc: wrote agent-rules file ->", agents_path);
+            }
+        }
         println!("doc: no `pub` items with docs found under", root_dir);
-        return 1;
+        return if emit_ai { 0 } else { 1 };
     }
 
     let css: string = _doc_css();
@@ -75,6 +87,13 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: boo
         let llms_path: string = out_dir.concat("/llms.txt");
         _write_llms_txt(llms_path, modules);
         println!("doc: wrote LLM-friendly summary ->", llms_path);
+        let agents_path: string = root_dir.concat("/AGENTS.md");
+        if __glide_file_exists(agents_path) {
+            println!("doc: AGENTS.md already present, leaving as-is");
+        } else {
+            _write_agents_md(agents_path);
+            println!("doc: wrote agent-rules file ->", agents_path);
+        }
     }
 
     if serve_port > 0 {
@@ -83,6 +102,96 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: boo
     }
     if open_after { _open_in_browser(index_path); }
     return 0;
+}
+
+// Drop an AGENTS.md at the project root. Format follows the
+// convention adopted by Claude Code, OpenAI Codex, and modern Cursor —
+// the agent reads it before doing anything else and treats the
+// directives inside as mandatory context. Static template: a
+// language overview + a forced redirect to `build/doc/llms.txt` for
+// the actual API surface + the project conventions every Glide
+// user should know.
+fn _write_agents_md(path: string) {
+    let body: string =
+        "# Glide — agent context\n"
+        .concat("\n")
+        .concat("**Read this file every time you touch Glide code in this repo.**\n")
+        .concat("\n")
+        .concat("## 1. Required reading\n")
+        .concat("\n")
+        .concat("Before generating, editing, or reviewing any `.glide` file:\n")
+        .concat("\n")
+        .concat("1. Open `build/doc/llms.txt`. Every `pub` item in the project\n")
+        .concat("   and its dependencies lives there in plain text. If the file is\n")
+        .concat("   missing, regenerate with `glide doc --ai`.\n")
+        .concat("2. Scan the module(s) you'll be modifying for existing\n")
+        .concat("   conventions, then match them.\n")
+        .concat("\n")
+        .concat("This is not optional. The Glide stdlib has idioms that differ\n")
+        .concat("from Rust, Go, and C — guessing leads to non-compiling output.\n")
+        .concat("\n")
+        .concat("## 2. Language quick-reference\n")
+        .concat("\n")
+        .concat("- **Errors as values**: `!T` (Result), `?T` (Option), `?!T`\n")
+        .concat("  (Option-Result). No exceptions. Propagate with `?` postfix.\n")
+        .concat("- **Memory**: arena-allocated by default. `let v* = T { … };`\n")
+        .concat("  is auto-dropped at block exit. Raw allocation via `malloc`\n")
+        .concat("  + `defer free(p)` is supported but rare.\n")
+        .concat("- **Concurrency**: M:N coroutines via `spawn fn_call(args);`.\n")
+        .concat("  Channels typed as `chan<T>`; `make_chan(cap)`, `c.send(x)`,\n")
+        .concat("  `c.recv()`, `c.close()`. OS threads via `spawn_thread`.\n")
+        .concat("- **Methods**: `impl T { fn method(self: *T, …) }`. Macros\n")
+        .concat("  attached to types follow the same shape.\n")
+        .concat("- **Traits + dyn**: `trait T { fn m(self: *Self) }` with\n")
+        .concat("  optional default bodies. `*dyn T` for vtable dispatch.\n")
+        .concat("- **Generics**: `fn f<T>(v: T)`. Bounds via `T: Trait + Trait`.\n")
+        .concat("  Monomorphised; the compiler emits one C fn per concrete T.\n")
+        .concat("- **Doc comments**: `///` triple-slash above the decl. Fenced\n")
+        .concat("  examples in `\\`\\`\\`glide`. Sample output lives as a\n")
+        .concat("  trailing `// result` line — keep this style.\n")
+        .concat("\n")
+        .concat("## 3. Project commands\n")
+        .concat("\n")
+        .concat("```\n")
+        .concat("glide new <name> [--lib]    scaffold a project\n")
+        .concat("glide run                   build + run from the manifest\n")
+        .concat("glide build                 build only\n")
+        .concat("glide test [path]           run *_test.glide files\n")
+        .concat("glide bench [path]          run *_bench.glide microbenchmarks\n")
+        .concat("glide doc --ai              regenerate llms.txt for THIS file\n")
+        .concat("glide add <name> <url> <rev>     add a git dep\n")
+        .concat("glide add --local <name> <path>  add a path dep\n")
+        .concat("glide fetch                 pull declared deps\n")
+        .concat("glide clean                 wipe build/ + glide_modules/ + glide.lock\n")
+        .concat("```\n")
+        .concat("\n")
+        .concat("## 4. House rules\n")
+        .concat("\n")
+        .concat("- Don't write `try` / `catch`; use `!T` + `?` propagation.\n")
+        .concat("- Don't malloc without a paired `defer free(…)` unless the\n")
+        .concat("  value is owned by an arena.\n")
+        .concat("- Don't use `*chan<T>` parameters when `chan<T>` suffices —\n")
+        .concat("  the value already IS a pointer at the C layer.\n")
+        .concat("- Don't import `stdlib::http` from a bootstrap context\n")
+        .concat("  (`JsonValue` collides with `bootstrap/json.glide`).\n")
+        .concat("- Prefer the method form (`v.push(x)`) over the free fn\n")
+        .concat("  form (`push(v, x)`) — matches `stdlib::*` conventions.\n")
+        .concat("\n")
+        .concat("## 5. Tool-specific notes\n")
+        .concat("\n")
+        .concat("- **Claude Code / Codex**: this file loads automatically.\n")
+        .concat("- **Cursor**: also reads `AGENTS.md`; for older versions,\n")
+        .concat("  copy this file to `.cursorrules`.\n")
+        .concat("- **Continue / Aider / others**: point your config at this\n")
+        .concat("  file or copy its contents into the tool's rules file.\n")
+        .concat("\n")
+        .concat("---\n")
+        .concat("\n")
+        .concat("_This file is auto-generated by `glide doc --ai` only when it\n")
+        .concat("doesn't already exist. Subsequent runs leave your customisations\n")
+        .concat("alone; the `build/doc/llms.txt` reference is regenerated every\n")
+        .concat("time._\n");
+    write_file(path, body);
 }
 
 // Emit a flat plain-text summary intended for LLM ingestion. Follows
