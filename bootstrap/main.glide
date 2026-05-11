@@ -756,6 +756,8 @@ fn print_usage() {
     println!("  glide fetch [path]         (download git deps from glide.glide)");
     println!("  glide update               (refresh every git dep + rewrite lock)");
     println!("  glide clean                (drop glide_modules/ + glide.lock)");
+    println!("  glide install <path>");
+    println!("  glide install <git-url> <rev>");
     println!("  glide lsp                  (language server on stdio)");
 }
 
@@ -939,6 +941,171 @@ fn run_update() -> int {
     let lf: *Lockfile = lockfile_from_manifest(m);
     write_lockfile(root, lf);
     return 0;
+}
+
+// `glide install <target> [rev]`:
+//
+//   glide install .                            # CWD project
+//   glide install ../my_tool                   # local path
+//   glide install github.com/u/r v1.0          # fetch + build + install
+//
+// Builds the target project's binary (`bin` from the manifest, default
+// `src/main.glide`), copies it to `~/.glide/bin/<name>`, and warns
+// when that directory isn't on PATH. Local installs build in place;
+// git installs pull through the same fetch + cache path as `glide
+// fetch`.
+fn run_install(argc: int) -> int {
+    if argc < 3 {
+        println!("usage: glide install <path>");
+        println!("       glide install <git-url> <rev>");
+        return 1;
+    }
+    let target: string = args_at(2);
+
+    let mut project_root: string = "";
+    if _looks_like_url(target) {
+        if argc < 4 {
+            println!("install: git URL needs a rev (tag / branch / commit)");
+            return 1;
+        }
+        let rev: string = args_at(3);
+        project_root = _fetch_for_install(target, rev);
+        if project_root.eq("") { return 1; }
+    } else {
+        project_root = target;
+        if !fs_is_dir(project_root) {
+            println!("install: not a directory:", project_root);
+            return 1;
+        }
+    }
+
+    let m: *Manifest = read_manifest(project_root);
+    if m == null {
+        println!("install: no glide.glide in", project_root);
+        return 1;
+    }
+    if m.name.eq("") {
+        println!("install: manifest has no name field");
+        return 1;
+    }
+
+    let bin_src: string = project_root.concat("/").concat(m.bin);
+    let mut bin_name: string = m.name;
+    if __glide_is_windows() != 0 { bin_name = bin_name.concat(".exe"); }
+
+    let install_dir: string = _bin_root();
+    if !fs_mkdir_p(install_dir) {
+        println!("install: could not create", install_dir);
+        return 1;
+    }
+    let final_path: string = install_dir.concat("/").concat(bin_name);
+
+    // Build straight to the install path. Saves a copy step and keeps
+    // the spinner's progress output coherent.
+    let rc: int = run_build(bin_src, final_path, "", false);
+    if rc != 0 { return rc; }
+
+    println!("installed", m.name, "->", final_path);
+    _warn_if_not_on_path(install_dir);
+    return 0;
+}
+
+// `~/.glide/bin` — sits next to the dep cache. Created lazily.
+fn _bin_root() -> string {
+    let home: !string = os_home_dir();
+    if !home.ok {
+        let tmp: string = __glide_getenv("TMP");
+        if !tmp.eq("") { return tmp.concat("/.glide/bin"); }
+        return "./.glide_bin";
+    }
+    return home.val.concat("/.glide/bin");
+}
+
+// Heuristic for `glide install` arg classification. Anything that
+// looks like a hostname or http(s) URL goes through the fetcher;
+// everything else is a local path.
+fn _looks_like_url(s: string) -> bool {
+    if s.starts_with("http://")  { return true; }
+    if s.starts_with("https://") { return true; }
+    if s.starts_with("git@")     { return true; }
+    if s.starts_with("github.com/") { return true; }
+    if s.starts_with("gitlab.com/") { return true; }
+    if s.starts_with("bitbucket.org/") { return true; }
+    return false;
+}
+
+// Stand up a one-shot manifest with `target` as a single git dep and
+// drive the existing fetch path through it. Returns the cache dir on
+// success, "" on failure.
+fn _fetch_for_install(url: string, rev: string) -> string {
+    let synthetic: ManifestDep;
+    synthetic.name = "_install_target";
+    synthetic.kind = DEP_GIT;
+    synthetic.path = url;
+    synthetic.rev  = rev;
+
+    // `dep_cache_dir` only reads `path` + `rev` for git deps, so an
+    // empty manifest works as the carrier.
+    let m: *Manifest = __glide_palloc(sizeof(Manifest)) as *Manifest;
+    m.name = "";
+    m.version = "";
+    m.bin = "src/main.glide";
+    m.deps = Vector::new();
+    m.root_dir = ".";
+
+    return ensure_fetched(m, synthetic);
+}
+
+// Warn (don't fail) when `dir` isn't on PATH — the user's shell needs
+// a restart or a manual export to actually pick up the installed bin.
+fn _warn_if_not_on_path(dir: string) {
+    let path_env: string = __glide_getenv("PATH");
+    if path_env.eq("") { return; }
+    if _path_contains(path_env, dir) { return; }
+    println!("");
+    println!("note:", dir, "is not on your PATH.");
+    if __glide_is_windows() != 0 {
+        println!("      add it via: setx PATH \"%PATH%;".concat(dir).concat("\""));
+    } else {
+        println!("      add `export PATH=\"".concat(dir).concat(":$PATH\"` to your shell rc."));
+    }
+}
+
+// Split `path_env` on the platform separator (`;` on Windows, `:` on
+// POSIX) and look for an exact match with `dir`. Comparison is
+// case-sensitive on POSIX and case-insensitive on Windows.
+fn _path_contains(path_env: string, dir: string) -> bool {
+    let sep_char: int = 58;  // ':' POSIX
+    if __glide_is_windows() != 0 { sep_char = 59; }  // ';'
+    let mut start: int = 0;
+    let n: int = path_env.len();
+    let win: bool = __glide_is_windows() != 0;
+    for let i: int = 0; i <= n; i++ {
+        let at_end: bool = i == n;
+        let c: int = 0;
+        if !at_end { c = path_env.at(i).to_int(); }
+        if at_end || c == sep_char {
+            let seg: string = path_env.substring(start, i);
+            if _path_eq(seg, dir, win) { return true; }
+            start = i + 1;
+        }
+    }
+    return false;
+}
+
+fn _path_eq(a: string, b: string, win: bool) -> bool {
+    if !win { return a.eq(b); }
+    if a.len() != b.len() { return false; }
+    for let i: int = 0; i < a.len(); i++ {
+        let ca: int = a.at(i).to_int();
+        let cb: int = b.at(i).to_int();
+        if ca >= 65 && ca <= 90 { ca = ca + 32; }
+        if cb >= 65 && cb <= 90 { cb = cb + 32; }
+        if ca == 92 { ca = 47; }
+        if cb == 92 { cb = 47; }
+        if ca != cb { return false; }
+    }
+    return true;
 }
 
 // `glide clean` — wipe the per-project state. Doesn't touch the global
@@ -1617,6 +1784,12 @@ fn main() -> int {
     // cache (~/.glide/cache) is left alone since other projects share it.
     if cmd.eq("clean") {
         return run_clean();
+    }
+
+    // `install <path>` / `install <git-url> <rev>` — build the target
+    // and copy its binary into ~/.glide/bin.
+    if cmd.eq("install") {
+        return run_install(argc);
     }
 
     // `test [path]`           — run *_test.glide files (default cwd).
