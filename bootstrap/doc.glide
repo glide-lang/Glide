@@ -111,6 +111,8 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: boo
 // language overview + a forced redirect to `build/doc/llms.txt` for
 // the actual API surface + the project conventions every Glide
 // user should know.
+pub fn write_agents_md(path: string) { _write_agents_md(path); }
+
 fn _write_agents_md(path: string) {
     let body: string =
         "# Glide — agent context\n"

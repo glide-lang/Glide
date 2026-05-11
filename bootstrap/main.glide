@@ -754,7 +754,7 @@ fn print_usage() {
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
     println!("  glide fmt <file> [--write] (pretty-print to stdout, or rewrite in place)");
-    println!("  glide new <name> [--lib]   (scaffold a new binary or library project)");
+    println!("  glide new <name> [--lib] [--ai] [--no-vcs]");
     println!("  glide add <name> <git-url> <rev>");
     println!("  glide add --local <name> <path>");
     println!("  glide remove <name>        (drop a dep from glide.glide)");
@@ -823,8 +823,10 @@ fn auto_fetch_for(src_path: string) {
 //                          project name comes from the CWD's basename.
 // `--lib` produces a library project: `src/lib.glide` with a sample
 // `pub fn` instead of `src/main.glide`, and the manifest omits `bin`.
-// Either way, refuses to clobber an existing `glide.glide`.
-fn run_new(name: string, is_lib: bool) -> int {
+// `--ai` drops AGENTS.md so any agent landing in the repo starts
+// with the rules loaded. `--no-vcs` skips the default `git init`.
+// Refuses to clobber an existing `glide.glide`.
+fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> int {
     let mut target_dir: string = name;
     let mut proj_name: string = name;
     let scaffold_in_place: bool = name.eq(".") || name.eq("./") || fs_is_dir(name);
@@ -910,6 +912,31 @@ fn run_new(name: string, is_lib: bool) -> int {
             }
         }
     }
+    // .gitignore (only if missing — user may have curated their own)
+    let gi_path: string = target_dir.concat("/.gitignore");
+    if !__glide_file_exists(gi_path) {
+        write_file(gi_path, _starter_gitignore());
+    }
+
+    // AGENTS.md when `--ai` is on.
+    if emit_ai {
+        let agents_path: string = target_dir.concat("/AGENTS.md");
+        if !__glide_file_exists(agents_path) {
+            write_agents_md(agents_path);
+        }
+    }
+
+    // git init by default; `--no-vcs` opts out. Silent on absent git
+    // — no point pretending the scaffold failed because the user
+    // doesn't have git installed.
+    if init_vcs && !__glide_file_exists(target_dir.concat("/.git")) {
+        let cmd: string = "git -C \"".concat(target_dir).concat("\" init -q");
+        let rc: int = __glide_shell(cmd);
+        if rc != 0 {
+            println!("(git init skipped — `git` not on PATH or init failed)");
+        }
+    }
+
     let kind: string = if is_lib { "library" } else { "binary" };
     if scaffold_in_place {
         println!("created", kind, "project", proj_name, "in", target_dir);
@@ -917,6 +944,38 @@ fn run_new(name: string, is_lib: bool) -> int {
         println!("created", kind, "project", target_dir.concat("/"));
     }
     return 0;
+}
+
+// Default ignore list dropped at scaffold time. Covers build outputs,
+// dep cache symlinks, the test/bench/golden synth files the drivers
+// regenerate, Windows debug symbols, and IDE / OS artefacts.
+fn _starter_gitignore() -> string {
+    return "# Glide build output\n"
+        .concat("/build\n")
+        .concat("/target\n")
+        .concat("/glide_modules\n")
+        .concat("\n")
+        .concat("# Compiler intermediates + temp executables\n")
+        .concat("*.__glide.c\n")
+        .concat("__glide_run_tmp*\n")
+        .concat("__glide_test_run*\n")
+        .concat("__glide_bench_run*\n")
+        .concat("__glide_golden*\n")
+        .concat("\n")
+        .concat("# Native build artefacts\n")
+        .concat("*.exe\n")
+        .concat("*.pdb\n")
+        .concat("*.dll\n")
+        .concat("*.dylib\n")
+        .concat("*.so\n")
+        .concat("a.out\n")
+        .concat("\n")
+        .concat("# OS / editor\n")
+        .concat(".DS_Store\n")
+        .concat("Thumbs.db\n")
+        .concat(".idea/\n")
+        .concat(".vscode/\n")
+        .concat("*.swp\n");
 }
 
 // Last `/` or `\\`-separated segment of `path`. Drops a trailing
@@ -2076,21 +2135,27 @@ fn main() -> int {
         return run_fetch(start);
     }
 
-    // `new <name> [--lib]` — scaffold a fresh project directory.
-    // `glide new .` scaffolds into CWD using the dir basename as the
-    // project name; `--lib` produces a library project (no `bin`,
-    // src/lib.glide with a sample pub fn).
+    // `new <name> [--lib] [--ai] [--no-vcs]` — scaffold a fresh
+    // project directory. `glide new .` scaffolds into CWD using the
+    // dir basename as the project name; `--lib` produces a library
+    // project (no `bin`, src/lib.glide with a sample pub fn); `--ai`
+    // drops AGENTS.md alongside; `--no-vcs` skips the default git
+    // init.
     if cmd.eq("new") {
-        if argc < 3 { println!("usage: glide new <name> [--lib]"); return 1; }
+        if argc < 3 { println!("usage: glide new <name> [--lib] [--ai] [--no-vcs]"); return 1; }
         let mut new_name: string = "";
         let mut is_lib: bool = false;
+        let mut emit_ai: bool = false;
+        let mut init_vcs: bool = true;
         for let i: int = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.eq("--lib") { is_lib = true; continue; }
+            if a.eq("--ai") { emit_ai = true; continue; }
+            if a.eq("--no-vcs") { init_vcs = false; continue; }
             if new_name.eq("") { new_name = a; }
         }
-        if new_name.eq("") { println!("usage: glide new <name> [--lib]"); return 1; }
-        return run_new(new_name, is_lib);
+        if new_name.eq("") { println!("usage: glide new <name> [--lib] [--ai] [--no-vcs]"); return 1; }
+        return run_new(new_name, is_lib, emit_ai, init_vcs);
     }
 
     // `add` — write a new entry into the nearest glide.glide:
