@@ -781,12 +781,17 @@ fn run_fetch(start: string) -> int {
         println!("fetch: could not parse", root.concat("/glide.glide"));
         return 1;
     }
+    // Pass 1: walk the dep graph and fetch every (url, rev) the
+    // manifest tree mentions. Populates the cache so pass 2 has
+    // sub-manifests to inspect.
     let fetched: int = fetch_all(m);
     if fetched == 0 { println!("fetch: everything up to date"); }
+    // Pass 2: Go-MVS over the populated cache. Sets the global
+    // override so the link + lockfile steps see the resolved rev.
+    let mvs_errors: int = mvs_resolve(m);
+    // Symlinks and lockfile entries now route every URL through the
+    // resolved rev — `dep_cache_dir` consults the override map.
     link_all(m);
-    let mvs_errors: int = mvs_report(m);
-    // Snapshot the resolved revs into glide.lock so the next build is
-    // reproducible.
     let lf: *Lockfile = lockfile_from_manifest(m);
     write_lockfile(root, lf);
     if mvs_errors > 0 { return 1; }

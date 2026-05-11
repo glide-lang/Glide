@@ -47,6 +47,30 @@ extern fn __glide_getenv(name: string) -> string;
 extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
 
+// Process-wide MVS override map. `mvs_resolve` (in fetch.glide) sets
+// it after walking the dep graph; `dep_cache_dir` reads it so every
+// reference to a given URL — direct dep, transitive, lockfile writer
+// — lands on the same cache slot. Pointer-shaped because Glide can't
+// stash a *HashMap<string> in a c_raw static directly.
+extern fn __glide_mvs_set_override(p: *void);
+extern fn __glide_mvs_get_override() -> *void;
+
+c_raw! {
+    static void* __glide_mvs_override_g = (void*)0;
+    static void __glide_mvs_set_override(void* p) { __glide_mvs_override_g = p; }
+    static void* __glide_mvs_get_override(void)   { return __glide_mvs_override_g; }
+}
+
+pub fn mvs_set_override(m: *HashMap<string>) {
+    __glide_mvs_set_override(m as *void);
+}
+
+pub fn mvs_get_override() -> *HashMap<string> {
+    let p: *void = __glide_mvs_get_override();
+    if p == null { return null; }
+    return p as *HashMap<string>;
+}
+
 // Walk up from `start_dir` looking for a `glide.glide`. Returns "" when none
 // is found before the filesystem root. Stops climbing once the path is empty
 // or equal to its own parent (root reached).
@@ -337,17 +361,23 @@ pub fn lockfile_from_manifest(m: *Manifest) -> *Lockfile {
 }
 
 fn _collect_lock_recursive(m: *Manifest, out: *Vector<LockEntry>, seen: *HashMap<bool>) {
+    let ov: *HashMap<string> = mvs_get_override();
     for let i: int = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if d.kind != DEP_GIT { continue; }
-        let key: string = d.path.concat("@").concat(d.rev);
+        // Apply the MVS override before deduping so two parents that
+        // declared different revs of the same URL collapse to one
+        // entry with the resolved rev.
+        let mut eff_rev: string = d.rev;
+        if ov != null && ov.contains(d.path) { eff_rev = ov.get(d.path); }
+        let key: string = d.path.concat("@").concat(eff_rev);
         if seen.contains(key) { continue; }
         seen.insert(key, true);
 
         let e: LockEntry;
         e.name = d.name;
         e.url  = d.path;
-        e.rev  = d.rev;
+        e.rev  = eff_rev;
         e.hash = read_dep_hash(m, d);
         out.push(e);
 
@@ -536,13 +566,21 @@ pub fn cache_root() -> string {
 // Where a given dep lives (or would live) on disk. Path deps resolve
 // against the manifest's own directory; git deps are content-addressed
 // by sha256(url + "@" + rev) under the cache root.
+//
+// If an MVS override map is live, git deps consult it first — every
+// reference to a given URL routes to the resolved rev's cache slot,
+// not the parent's declared rev. That's what makes "v1.5 wins over
+// v1.0 for github.com/x/logger" actually unify on disk.
 pub fn dep_cache_dir(m: *Manifest, d: ManifestDep) -> string {
     if d.kind == DEP_PATH {
         if d.path.len() > 0 && d.path.at(0).to_int() == 47 { return d.path; }
         return m.root_dir.concat("/").concat(d.path);
     }
     if d.kind == DEP_GIT {
-        let key: string = d.path.concat("@").concat(d.rev);
+        let mut rev: string = d.rev;
+        let ov: *HashMap<string> = mvs_get_override();
+        if ov != null && ov.contains(d.path) { rev = ov.get(d.path); }
+        let key: string = d.path.concat("@").concat(rev);
         return cache_root().concat("/").concat(sha256_hex(key));
     }
     return "";

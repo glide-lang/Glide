@@ -268,34 +268,42 @@ pub fn fetch_all(m: *Manifest) -> int {
     return fetched;
 }
 
-// Walk the resolved dep graph and report version conflicts. For each
-// URL that appears with more than one rev across the graph, parse the
-// candidates as semver, pick the highest minimum that satisfies
-// everyone (Go-MVS), and print a one-line resolution. Incompatible
-// majors raise a hard error since the semver contract says they can't
-// be transparently substituted.
+// Walk the resolved dep graph and resolve version conflicts via
+// Go-MVS. For each URL that appears with more than one rev across the
+// graph, parse the candidates as semver, pick the highest minimum that
+// satisfies everyone, and unify the cache: the resolved rev becomes
+// the only one any reference to that URL fetches from. Incompatible
+// majors raise a hard error.
 //
-// This pass is purely advisory today — each subgraph still resolves
-// imports through its own manifest, so two majors of the same lib
-// coexist in the cache. The report tells the user what to pin in
-// their root manifest if they want a single shared version.
-pub fn mvs_report(m: *Manifest) -> int {
+// Side effect: installs a process-wide override map (`mvs_set_override`)
+// so subsequent `dep_cache_dir` calls — including transitive walks and
+// `lockfile_from_manifest` — agree on the same selected rev.
+pub fn mvs_resolve(m: *Manifest) -> int {
     if m == null { return 0; }
     let urls: *Vector<string> = Vector::new();
     let revs: *Vector<string> = Vector::new();
     let seen_pairs: *HashMap<bool> = HashMap::new();
     _collect_url_revs(m, urls, revs, seen_pairs);
 
+    let resolved: *HashMap<string> = HashMap::new();
     let mut errors: int = 0;
     let unique: *HashMap<bool> = HashMap::new();
     for let i: int = 0; i < urls.len(); i++ {
         let u: string = urls.get(i);
         if unique.contains(u) { continue; }
         unique.insert(u, true);
-        if _resolve_one(u, urls, revs) { errors = errors + 1; }
+        let winner: string = _resolve_one(u, urls, revs);
+        if winner.eq("") { errors = errors + 1; continue; }
+        resolved.insert(u, winner);
     }
+    mvs_set_override(resolved);
     return errors;
 }
+
+// Back-compat shim. Earlier callers used `mvs_report` for the same
+// behaviour; the rename to `mvs_resolve` better matches what the pass
+// actually does now (it forces unification, not just a report).
+pub fn mvs_report(m: *Manifest) -> int { return mvs_resolve(m); }
 
 fn _collect_url_revs(m: *Manifest, urls: *Vector<string>, revs: *Vector<string>, seen: *HashMap<bool>) {
     if m == null { return; }
@@ -315,10 +323,11 @@ fn _collect_url_revs(m: *Manifest, urls: *Vector<string>, revs: *Vector<string>,
     }
 }
 
-// Resolve a single URL. Returns true when an unrecoverable error was
-// emitted (incompatible majors); false on a clean resolution / single
-// rev / opaque-only fallback.
-fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> bool {
+// Resolve a single URL. Returns the winning rev string on success, or
+// "" when no clean resolution exists (incompatible majors). Single-rev
+// URLs return that rev unchanged so the caller can blindly install it
+// into the override map regardless of whether there was a conflict.
+fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> string {
     let candidates: *Vector<string> = Vector::new();
     for let i: int = 0; i < urls.len(); i++ {
         if urls.get(i).eq(url) {
@@ -326,7 +335,8 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> bo
             if !_contains_str(candidates, r) { candidates.push(r); }
         }
     }
-    if candidates.len() <= 1 { return false; }
+    if candidates.len() == 1 { return candidates.get(0); }
+    if candidates.len() == 0 { return ""; }
 
     // Sort candidates into semver / opaque buckets.
     let mut semvers: *Vector<SemVer> = Vector::new();
@@ -340,7 +350,7 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> bo
 
     if semvers.len() == 0 {
         println!("mvs:", url, "- multiple opaque revs", _join(candidates, ", "), "- using first");
-        return false;
+        return candidates.get(0);
     }
 
     // Highest semver wins. Check major compatibility against everyone.
@@ -357,12 +367,13 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> bo
     if conflict {
         println!("mvs ERROR:", url, "- incompatible majors among", _join(candidates, ", "),
                  "- pin a single major in your root manifest");
-        return true;
+        return "";
     }
-    println!("mvs:", url, "-> ", semver_format(best),
+    let winner: string = semver_format(best);
+    println!("mvs:", url, "-> ", winner,
              "(highest of", _join(candidates, ", "), ")",
              if opaque.len() > 0 { " (opaque revs present, ignored)" } else { "" });
-    return false;
+    return winner;
 }
 
 fn _contains_str(v: *Vector<string>, s: string) -> bool {
