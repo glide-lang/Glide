@@ -1918,12 +1918,7 @@ fn main() -> int {
     // `--version` / `-v` / `-V` / `--v` / `version` — print and exit.
     if cmd.eq("--version") || cmd.eq("--v")
        || cmd.eq("-v") || cmd.eq("-V") || cmd.eq("version") {
-        // Concat instead of `println!("glide", GLIDE_VERSION)` — passing
-        // a `const string` directly to a `println!` variadic arg gets
-        // codegen'd as `%p` instead of `%s` (open compiler bug); a
-        // method call result is treated as a plain string and prints
-        // correctly.
-        println!("glide ".concat(GLIDE_VERSION));
+        println!("glide", GLIDE_VERSION);
         return 0;
     }
 

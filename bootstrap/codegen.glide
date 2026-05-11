@@ -1151,6 +1151,12 @@ pub struct CG {
     // method-call return types can be looked up when the receiver is a
     // `*dyn Trait`.
     pub traits: *HashMap<Stmt>,
+    // Top-level `const NAME: T = ...` table. Populated in the same
+    // pre-scan that registers fns/structs/enums, so `infer_for_codegen`
+    // can resolve a bare `NAME` ident the same way the typer does.
+    // Before this existed, a const-typed string in `println!` codegen'd
+    // as `%p` (printf'd a pointer) instead of `%s`.
+    pub consts: *HashMap<Type>,
 }
 
 impl CG {
@@ -1208,6 +1214,8 @@ impl CG {
         g.dyn_traits = dt;
         let trts: *HashMap<Stmt> = HashMap::new();
         g.traits = trts;
+        let cs: *HashMap<Type> = HashMap::new();
+        g.consts = cs;
         return g;
     }
 
@@ -1326,6 +1334,15 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     if e.kind == EX_IDENT {
         let local: *Type = g.lookup(e.str_val);
         if local != null { return local; }
+        // Top-level const: registered in the same pre-scan as fns.
+        // Without this, `println!("v=", VERSION)` codegen'd `%p` for the
+        // const-typed arg and printed a raw pointer.
+        if g.consts.contains(e.str_val) {
+            let ty: Type = g.consts.get(e.str_val);
+            let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            *p = ty;
+            return p;
+        }
         // Top-level fn name as a value: build TY_FNPTR from its signature so
         // generic-fn arg unification can bind type vars from `fn(T) -> U`
         // patterns. e.g. `iter_map(v, _double)` infers U=int from _double's
@@ -5194,6 +5211,9 @@ pub fn emit_program(program: *Vector<Stmt>) {
         if s.kind == ST_ENUM {
             g.enums.insert(s.name, s);
             register_alias_suffixes(g, mod_path, s.name);
+        }
+        if s.kind == ST_CONST && s.let_ty != null {
+            g.consts.insert(s.name, *s.let_ty);
         }
         if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0)
            && s.impl_target != null && s.impl_methods != null {
