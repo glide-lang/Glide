@@ -17,6 +17,7 @@ extern fn __glide_fs_symlink(target: string, link: string) -> bool;
 extern fn __glide_fs_remove_file(path: string) -> bool;
 extern fn __glide_fs_remove_dir_rec(path: string) -> bool;
 extern fn __glide_fs_copy_file(src: string, dst: string) -> bool;
+extern fn __glide_fs_list_dirs(path: string) -> string;
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
 c_raw! {
@@ -224,6 +225,80 @@ c_raw! {
     static bool __glide_fs_symlink(const char* target, const char* link) {
         if (__glide_fs_is_dir(link)) return true;
         return symlink(target, link) == 0;
+    }
+    #endif
+
+    // Newline-separated list of immediate subdirectories of `path`.
+    // Hidden entries (starting with `.`) and `..` / `.` are skipped.
+    // Sorted ascending so output is stable. Returns "" on a missing
+    // directory.
+    #ifdef _WIN32
+    static const char* __glide_fs_list_dirs(const char* path) {
+        char pattern[1024];
+        snprintf(pattern, sizeof(pattern), "%s\\*", path);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+            const char* nm = fd.cFileName;
+            if (nm[0] == '.') continue;
+            size_t nm_n = strlen(nm);
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
+    }
+    #else
+    static const char* __glide_fs_list_dirs(const char* path) {
+        DIR* d = opendir(path);
+        if (!d) return "";
+        char** names = NULL; int n = 0; int cap = 0;
+        struct dirent* e;
+        char buf[2048];
+        while ((e = readdir(d)) != NULL) {
+            const char* nm = e->d_name;
+            if (nm[0] == '.') continue;
+            snprintf(buf, sizeof(buf), "%s/%s", path, nm);
+            struct stat st;
+            if (stat(buf, &st) != 0) continue;
+            if (!S_ISDIR(st.st_mode)) continue;
+            size_t nm_n = strlen(nm);
+            if (n == cap) { cap = cap ? cap * 2 : 16; names = (char**)realloc(names, (size_t)cap * sizeof(char*)); }
+            char* dup = (char*)malloc(nm_n + 1); memcpy(dup, nm, nm_n + 1);
+            names[n++] = dup;
+        }
+        closedir(d);
+        if (n == 0) { free(names); return ""; }
+        qsort(names, (size_t)n, sizeof(char*), __glide_strcmp_qsort);
+        size_t total = 0; for (int i = 0; i < n; i++) total += strlen(names[i]) + 1;
+        char* out = (char*)malloc(total);
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(names[i]);
+            memcpy(out + off, names[i], l); off += l;
+            if (i + 1 < n) out[off++] = '\n';
+            free(names[i]);
+        }
+        out[off] = 0;
+        free(names);
+        return out;
     }
     #endif
 
@@ -541,3 +616,39 @@ pub fn fs_remove_dir_rec(path: string) -> bool { return __glide_fs_remove_dir_re
 /// fs_copy_file("target/my_app", "/usr/local/bin/my_app");
 /// ```
 pub fn fs_copy_file(src: string, dst: string) -> bool { return __glide_fs_copy_file(src, dst); }
+
+/// Recursively list every file under `dir` whose name ends in
+/// `suffix` (pass `""` to keep all). Returns full relative paths,
+/// not basenames. Skips dot-prefixed directories (`.git`,
+/// `.glide_*`) plus `glide_modules/` and `target/` so doc / lint
+/// passes don't crawl deps or build output. Sorted ascending so
+/// output is stable across platforms.
+///
+/// ```glide
+/// let files: *Vector<string> = fs_list_rec("src", ".glide");
+/// ```
+pub fn fs_list_rec(dir: string, suffix: string) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    _walk_dir_into(out, dir, suffix);
+    return out;
+}
+
+fn _walk_dir_into(out: *Vector<string>, dir: string, suffix: string) {
+    let files: *Vector<string> = fs_list(dir, suffix);
+    for let i: int = 0; i < files.len(); i++ {
+        let f: string = files.get(i);
+        if f.eq("") { continue; }
+        out.push(dir.concat("/").concat(f));
+    }
+    let subs_raw: string = __glide_fs_list_dirs(dir);
+    if subs_raw.eq("") { return; }
+    let subs: *Vector<string> = subs_raw.split("\n");
+    for let i: int = 0; i < subs.len(); i++ {
+        let sub: string = subs.get(i);
+        if sub.eq("") { continue; }
+        if sub.eq("glide_modules") { continue; }
+        if sub.eq("target") { continue; }
+        if sub.eq("node_modules") { continue; }
+        _walk_dir_into(out, dir.concat("/").concat(sub), suffix);
+    }
+}

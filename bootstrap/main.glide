@@ -33,6 +33,7 @@ import fmt;
 import lsp;
 import manifest;
 import fetch;
+import doc;
 
 fn print_indent(n: int) {
     for let i: int = 0; i < n; i++ { print!("  "); }
@@ -758,6 +759,7 @@ fn print_usage() {
     println!("  glide clean                (drop glide_modules/ + glide.lock)");
     println!("  glide install <path>");
     println!("  glide install <git-url> <rev>");
+    println!("  glide doc [--open]         (render /// docs to target/doc/)");
     println!("  glide lsp                  (language server on stdio)");
 }
 
@@ -1790,6 +1792,19 @@ fn main() -> int {
     // and copy its binary into ~/.glide/bin.
     if cmd.eq("install") {
         return run_install(argc);
+    }
+
+    // `doc [--open]` — emit static HTML for every pub item with a
+    // `///` docstring to target/doc/. `--open` shells out to the
+    // platform browser launcher after generating.
+    if cmd.eq("doc") {
+        let mut want_open: bool = false;
+        for let i: int = 2; i < argc; i++ {
+            if args_at(i).eq("--open") { want_open = true; }
+        }
+        let root: string = find_manifest_root(".");
+        let target_root: string = if root.eq("") { "." } else { root };
+        return run_doc(target_root, want_open);
     }
 
     // `test [path]`           — run *_test.glide files (default cwd).

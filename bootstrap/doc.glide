@@ -1,0 +1,422 @@
+import stdlib::fs::*;
+import ast;
+import lexer;
+import parser;
+import fmt;       // for fmt_type signatures
+
+// `glide doc`: walk every `*.glide` under the project root, parse it,
+// pull out top-level `pub` items + their `///` doc comments, and emit
+// a tiny static HTML site under `target/doc/`. Each source file maps
+// to one HTML page; the index lists modules with a short blurb.
+//
+// We don't try to be rustdoc — no cross-linking, no search. Goal is
+// "browseable reference for the API surface you exposed", and the
+// expectation is that the user reads `///` content directly in source.
+
+pub struct DocItem {
+    pub kind: int,         // 1=fn, 2=struct, 3=enum, 4=const, 5=trait, 6=impl, 7=macro
+    pub name: string,
+    pub signature: string, // single-line rendered head
+    pub doc: string,       // raw `///` block, with leading `///` stripped
+    pub line: int,
+}
+
+pub struct DocModule {
+    pub origin:   string,           // source file path
+    pub display:  string,           // pretty module path for headings/links
+    pub slug:     string,           // safe HTML filename (no slashes)
+    pub items:    *Vector<DocItem>,
+    pub blurb:    string,           // first non-empty doc line, for the index
+}
+
+extern fn __glide_file_exists(path: string) -> bool;
+extern fn read_file(path: string) -> string;
+extern fn write_file(path: string, content: string) -> bool;
+
+pub fn run_doc(root_dir: string, open_after: bool) -> int {
+    let out_dir: string = root_dir.concat("/target/doc");
+    if !fs_mkdir_p(out_dir) {
+        println!("doc: could not create", out_dir);
+        return 1;
+    }
+
+    let files: *Vector<string> = fs_list_rec(root_dir, ".glide");
+    let modules: *Vector<DocModule> = _vec_modules();
+
+    let mut total_items: int = 0;
+    for let i: int = 0; i < files.len(); i++ {
+        let f: string = files.get(i);
+        // Skip the project's own manifest and any tests sitting in `tests/`.
+        if _ends_with(f, "/glide.glide") || _ends_with(f, "/glide.lock") { continue; }
+        let m: *DocModule = _scan_file(f, root_dir);
+        if m == null { continue; }
+        if m.items.len() == 0 { continue; }
+        modules.push(*m);
+        total_items = total_items + m.items.len();
+    }
+
+    if modules.len() == 0 {
+        println!("doc: no `pub` items with docs found under", root_dir);
+        return 1;
+    }
+
+    let css: string = _doc_css();
+    write_file(out_dir.concat("/style.css"), css);
+    _write_index(out_dir, modules);
+    for let i: int = 0; i < modules.len(); i++ {
+        let m: DocModule = modules.get(i);
+        _write_module_page(out_dir, &m);
+    }
+
+    let index_path: string = out_dir.concat("/index.html");
+    println!("doc: wrote", modules.len(), "modules /", total_items, "items ->", index_path);
+    if open_after { _open_in_browser(index_path); }
+    return 0;
+}
+
+fn _scan_file(path: string, root: string) -> *DocModule {
+    let src: string = read_file(path);
+    if src.eq("") { return null; }
+    let lex: *Lexer = Lexer::new(src);
+    let p: *Parser = Parser::new(lex);
+    let parsed: *Vector<Stmt> = parse_program(p);
+
+    let items_vec: *Vector<DocItem> = Vector::new();
+    let m: *DocModule = __glide_palloc(sizeof(DocModule)) as *DocModule;
+    m.origin = path;
+    m.display = _module_display(path, root);
+    m.slug = _slug(m.display);
+    m.items = items_vec;
+    m.blurb = "";
+
+    for let i: int = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        if !s.is_pub { continue; }
+        let kind: int = _stmt_kind_to_doc(s.kind);
+        if kind == 0 { continue; }
+        let doc: string = _strip_triple_slash(s.doc_comment);
+        let sig: string = _signature(&s);
+        let it: DocItem;
+        it.kind = kind;
+        it.name = s.name;
+        it.signature = sig;
+        it.doc = doc;
+        it.line = s.line;
+        items_vec.push(it);
+        if m.blurb.eq("") {
+            m.blurb = _first_line(doc);
+        }
+    }
+    return m;
+}
+
+// 1=fn, 2=struct, 3=enum, 4=const, 5=trait, 7=macro. impl blocks
+// (ST_IMPL=6) are visited at the file level but their methods are
+// not surfaced — the methods live inside the type's own page.
+fn _stmt_kind_to_doc(k: int) -> int {
+    if k == ST_FN { return 1; }
+    if k == ST_STRUCT { return 2; }
+    if k == ST_ENUM { return 3; }
+    if k == ST_CONST { return 4; }
+    if k == ST_TRAIT { return 5; }
+    if k == ST_MACRO_DEF { return 7; }
+    return 0;
+}
+
+fn _signature(s: *Stmt) -> string {
+    if s.kind == ST_FN { return _fn_signature(s); }
+    if s.kind == ST_STRUCT { return "struct ".concat(s.name); }
+    if s.kind == ST_ENUM { return "enum ".concat(s.name); }
+    if s.kind == ST_CONST {
+        let mut head: string = "const ".concat(s.name);
+        if s.let_ty != null { head = head.concat(": ").concat(fmt_type(s.let_ty)); }
+        return head;
+    }
+    if s.kind == ST_TRAIT { return "trait ".concat(s.name); }
+    if s.kind == ST_MACRO_DEF { return "macro ".concat(s.name).concat("!"); }
+    return s.name;
+}
+
+fn _fn_signature(s: *Stmt) -> string {
+    let mut out: string = "fn ".concat(s.name).concat("(");
+    if s.fn_params != null {
+        for let i: int = 0; i < s.fn_params.len(); i++ {
+            if i > 0 { out = out.concat(", "); }
+            let p: Param = s.fn_params.get(i);
+            out = out.concat(p.name).concat(": ").concat(fmt_type(p.ty));
+        }
+    }
+    out = out.concat(")");
+    if s.fn_ret_ty != null { out = out.concat(" -> ").concat(fmt_type(s.fn_ret_ty)); }
+    return out;
+}
+
+// Strip the `/// ` (or `///`) prefix from every line of `raw`.
+fn _strip_triple_slash(raw: string) -> string {
+    if raw == null || raw.eq("") { return ""; }
+    let lines: *Vector<string> = raw.split("\n");
+    let mut out: string = "";
+    for let i: int = 0; i < lines.len(); i++ {
+        let mut ln: string = lines.get(i);
+        let mut k: int = 0;
+        while k < ln.len() && ln.at(k).to_int() == 32 { k = k + 1; }
+        if k + 3 <= ln.len() && ln.at(k).to_int() == 47
+            && ln.at(k + 1).to_int() == 47 && ln.at(k + 2).to_int() == 47 {
+            let after: int = k + 3;
+            let mut start: int = after;
+            if start < ln.len() && ln.at(start).to_int() == 32 { start = start + 1; }
+            ln = ln.substring(start, ln.len());
+        } else if k + 2 <= ln.len() && ln.at(k).to_int() == 47 && ln.at(k + 1).to_int() == 47 {
+            // Legacy `//` comments — keep as plain text.
+            ln = ln.substring(k + 2, ln.len());
+            if ln.len() > 0 && ln.at(0).to_int() == 32 { ln = ln.substring(1, ln.len()); }
+        }
+        if i > 0 { out = out.concat("\n"); }
+        out = out.concat(ln);
+    }
+    return out;
+}
+
+fn _first_line(doc: string) -> string {
+    if doc.eq("") { return ""; }
+    let lines: *Vector<string> = doc.split("\n");
+    for let i: int = 0; i < lines.len(); i++ {
+        let ln: string = lines.get(i).trim();
+        if !ln.eq("") { return ln; }
+    }
+    return "";
+}
+
+// Convert e.g. "src/stdlib/json.glide" -> "stdlib::json".
+fn _module_display(path: string, root: string) -> string {
+    let mut rel: string = path;
+    let r: string = root.concat("/");
+    if rel.starts_with(r) { rel = rel.substring(r.len(), rel.len()); }
+    if rel.starts_with("src/") { rel = rel.substring(4, rel.len()); }
+    if rel.len() > 6 && rel.substring(rel.len() - 6, rel.len()).eq(".glide") {
+        rel = rel.substring(0, rel.len() - 6);
+    }
+    let mut out: string = "";
+    for let i: int = 0; i < rel.len(); i++ {
+        let c: int = rel.at(i).to_int();
+        if c == 47 || c == 92 { out = out.concat("::"); }
+        else { out = out.concat(rel.substring(i, i + 1)); }
+    }
+    return out;
+}
+
+fn _slug(display: string) -> string {
+    let mut out: string = "";
+    for let i: int = 0; i < display.len(); i++ {
+        let c: int = display.at(i).to_int();
+        if c == 58 {
+            // Collapse `::` into `_` once.
+            if i + 1 < display.len() && display.at(i + 1).to_int() == 58 {
+                out = out.concat("_");
+                i = i + 1;
+            }
+        } else {
+            out = out.concat(display.substring(i, i + 1));
+        }
+    }
+    return out;
+}
+
+fn _ends_with(s: string, suffix: string) -> bool {
+    if suffix.len() > s.len() { return false; }
+    return s.substring(s.len() - suffix.len(), s.len()).eq(suffix);
+}
+
+// HTML escape: `<` `>` `&` `"`.
+fn _esc(s: string) -> string {
+    let mut out: string = "";
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c == 60 { out = out.concat("&lt;"); }
+        else if c == 62 { out = out.concat("&gt;"); }
+        else if c == 38 { out = out.concat("&amp;"); }
+        else if c == 34 { out = out.concat("&quot;"); }
+        else { out = out.concat(s.substring(i, i + 1)); }
+    }
+    return out;
+}
+
+// Tiny markdown renderer covering the Glide doc style:
+//   - paragraphs separated by blank lines
+//   - fenced code blocks: ```glide ... ```
+//   - inline `code`
+//   - leading `#` / `##` headings
+fn _render_markdown(md: string) -> string {
+    if md.eq("") { return ""; }
+    let lines: *Vector<string> = md.split("\n");
+    let mut out: string = "";
+    let mut in_code: bool = false;
+    let mut para: string = "";
+    for let i: int = 0; i < lines.len(); i++ {
+        let raw: string = lines.get(i);
+        let trimmed: string = raw.trim();
+        if in_code {
+            if trimmed.starts_with("```") {
+                out = out.concat("</code></pre>\n");
+                in_code = false;
+            } else {
+                out = out.concat(_esc(raw)).concat("\n");
+            }
+            continue;
+        }
+        if trimmed.starts_with("```") {
+            if !para.eq("") { out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n"); para = ""; }
+            out = out.concat("<pre><code class=\"glide\">");
+            in_code = true;
+            continue;
+        }
+        if trimmed.eq("") {
+            if !para.eq("") {
+                out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n");
+                para = "";
+            }
+            continue;
+        }
+        if trimmed.starts_with("# ") {
+            if !para.eq("") { out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n"); para = ""; }
+            out = out.concat("<h3>").concat(_inline_md(trimmed.substring(2, trimmed.len()))).concat("</h3>\n");
+            continue;
+        }
+        if trimmed.starts_with("## ") {
+            if !para.eq("") { out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n"); para = ""; }
+            out = out.concat("<h4>").concat(_inline_md(trimmed.substring(3, trimmed.len()))).concat("</h4>\n");
+            continue;
+        }
+        if !para.eq("") { para = para.concat(" "); }
+        para = para.concat(trimmed);
+    }
+    if !para.eq("") {
+        out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n");
+    }
+    if in_code { out = out.concat("</code></pre>\n"); }
+    return out;
+}
+
+// Inline markdown: just backtick → <code>. Escape everything else.
+fn _inline_md(s: string) -> string {
+    let mut out: string = "";
+    let mut in_code: bool = false;
+    let mut buf: string = "";
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c == 96 {
+            if in_code {
+                out = out.concat("<code>").concat(_esc(buf)).concat("</code>");
+                buf = "";
+                in_code = false;
+            } else {
+                out = out.concat(_esc(buf));
+                buf = "";
+                in_code = true;
+            }
+            continue;
+        }
+        buf = buf.concat(s.substring(i, i + 1));
+    }
+    if in_code { out = out.concat("`").concat(_esc(buf)); }
+    else { out = out.concat(_esc(buf)); }
+    return out;
+}
+
+fn _doc_css() -> string {
+    return "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:880px;margin:2em auto;padding:0 1em;color:#222;line-height:1.5}\n".concat(
+        "h1{border-bottom:2px solid #444;padding-bottom:.2em}\n").concat(
+        "h2{margin-top:2em;color:#0066aa}\n").concat(
+        "h3{margin-top:1.5em;color:#444}\n").concat(
+        ".item{margin:1.5em 0;padding:.6em 1em;background:#f7f7f7;border-left:3px solid #999;border-radius:0 4px 4px 0}\n").concat(
+        ".sig{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.95em;font-weight:600;color:#0066aa}\n").concat(
+        ".kind{display:inline-block;font-size:.75em;padding:.1em .5em;background:#0066aa;color:white;border-radius:3px;margin-right:.5em;vertical-align:middle}\n").concat(
+        "pre{background:#1e1e1e;color:#e8e8e8;padding:.8em 1em;border-radius:4px;overflow-x:auto}\n").concat(
+        "code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.9em}\n").concat(
+        "p code{background:#eee;padding:.1em .3em;border-radius:3px;color:#0066aa}\n").concat(
+        "a{color:#0066aa;text-decoration:none}\n").concat(
+        "a:hover{text-decoration:underline}\n").concat(
+        ".mod{padding:.7em 0;border-bottom:1px solid #eee}\n").concat(
+        ".mod-name{font-family:'SF Mono',Menlo,Consolas,monospace;font-weight:600}\n").concat(
+        ".mod-blurb{color:#666;margin-top:.2em}\n");
+}
+
+fn _kind_label(kind: int) -> string {
+    if kind == 1 { return "fn"; }
+    if kind == 2 { return "struct"; }
+    if kind == 3 { return "enum"; }
+    if kind == 4 { return "const"; }
+    if kind == 5 { return "trait"; }
+    if kind == 7 { return "macro"; }
+    return "?";
+}
+
+fn _write_index(out_dir: string, modules: *Vector<DocModule>) {
+    let mut html: string = _html_head("API reference", ".");
+    html = html.concat("<h1>API reference</h1>\n");
+    for let i: int = 0; i < modules.len(); i++ {
+        let m: DocModule = modules.get(i);
+        html = html.concat("<div class=\"mod\">\n");
+        html = html.concat("  <div class=\"mod-name\"><a href=\"").concat(m.slug).concat(".html\">").concat(_esc(m.display)).concat("</a></div>\n");
+        if !m.blurb.eq("") {
+            html = html.concat("  <div class=\"mod-blurb\">").concat(_esc(m.blurb)).concat("</div>\n");
+        }
+        html = html.concat("</div>\n");
+    }
+    html = html.concat(_html_tail());
+    write_file(out_dir.concat("/index.html"), html);
+}
+
+fn _write_module_page(out_dir: string, m: *DocModule) {
+    let mut html: string = _html_head(m.display, ".");
+    html = html.concat("<p><a href=\"index.html\">&larr; index</a></p>\n");
+    html = html.concat("<h1>").concat(_esc(m.display)).concat("</h1>\n");
+    html = html.concat("<p class=\"mod-blurb\">defined in <code>").concat(_esc(m.origin)).concat("</code></p>\n");
+
+    for let i: int = 0; i < m.items.len(); i++ {
+        let it: DocItem = m.items.get(i);
+        html = html.concat("<div class=\"item\" id=\"").concat(_esc(it.name)).concat("\">\n");
+        html = html.concat("  <div><span class=\"kind\">").concat(_kind_label(it.kind))
+            .concat("</span><span class=\"sig\">").concat(_esc(it.signature)).concat("</span></div>\n");
+        if !it.doc.eq("") {
+            html = html.concat(_render_markdown(it.doc));
+        }
+        html = html.concat("</div>\n");
+    }
+    html = html.concat(_html_tail());
+    write_file(out_dir.concat("/").concat(m.slug).concat(".html"), html);
+}
+
+fn _html_head(title: string, css_prefix: string) -> string {
+    return "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+        .concat("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n")
+        .concat("<title>").concat(_esc(title)).concat(" — glide doc</title>\n")
+        .concat("<link rel=\"stylesheet\" href=\"").concat(css_prefix).concat("/style.css\">\n")
+        .concat("</head><body>\n");
+}
+
+fn _html_tail() -> string {
+    return "<hr><p style=\"color:#aaa;font-size:.85em\">generated by <code>glide doc</code></p>\n</body></html>\n";
+}
+
+// Glide's typer doesn't know how to mono `Vector::new()` for *DocModule
+// in a struct-field-position init — pre-bind to a local, the same dance
+// as `read_manifest` in manifest.glide.
+fn _vec_modules() -> *Vector<DocModule> {
+    let v: *Vector<DocModule> = Vector::new();
+    return v;
+}
+
+extern fn __glide_shell(cmd: string) -> int;
+extern fn __glide_is_windows() -> int;
+
+fn _open_in_browser(path: string) {
+    let mut cmd: string = "";
+    if __glide_is_windows() != 0 {
+        cmd = "cmd /c start \"\" \"".concat(path).concat("\"");
+    } else {
+        // xdg-open works on Linux, open works on macOS — try both.
+        cmd = "xdg-open \"".concat(path).concat("\" 2>/dev/null || open \"").concat(path).concat("\" 2>/dev/null");
+    }
+    __glide_shell(cmd);
+}
