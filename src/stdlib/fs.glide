@@ -601,7 +601,12 @@ pub fn fs_write_slice(path: string, data: string, offset: int, n: int) -> bool {
 pub fn fs_read_bytes(path: string, out_len: *int) -> string {
     let raw: *void = __glide_fs_read_bytes(path, out_len);
     if raw == null { return ""; }
-    return __glide_string_from_buf(raw, *out_len);
+    let s: string = __glide_string_from_buf(raw, *out_len);
+    // The C side malloc'd `raw` so we own it. `__glide_string_from_buf`
+    // copies into an arena-tracked buffer; without this free the
+    // original allocation is leaked for the lifetime of the process.
+    free(raw);
+    return s;
 }
 
 /// Make `link` a directory-shaped symlink to `target`. Idempotent —

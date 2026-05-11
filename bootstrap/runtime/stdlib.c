@@ -43,7 +43,12 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
    convert one read buffer. */
 const char* __glide_string_from_buf(void* buf, int n) {
     if (n < 0) n = 0;
-    char* out = (char*)malloc((size_t)n + 1);
+    // Arena-aware: when an arena is active the result is reclaimed at
+    // arena drop; otherwise __glide_palloc falls back to calloc and the
+    // pointer is safely freed by __glide_pfree at scope exit. Using raw
+    // malloc here detaches the string from the lifecycle Glide expects
+    // and leaks N+1 bytes per call.
+    char* out = (char*)__glide_palloc(n + 1);
     if (n > 0) memcpy(out, buf, (size_t)n);
     out[n] = 0;
     return out;
