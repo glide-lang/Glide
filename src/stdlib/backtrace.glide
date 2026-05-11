@@ -82,7 +82,7 @@ c_raw! {
         }
         return out;
     }
-    #else
+    #elif defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__)
     #include <execinfo.h>
 
     static const char* __glide_stack_trace_str(int skip) {
@@ -108,6 +108,10 @@ c_raw! {
         free(sym);
         return out;
     }
+    #else
+    // musl + other libcs without execinfo.h. Stack walking degrades to
+    // a no-op stub; users still get the rest of the runtime.
+    static const char* __glide_stack_trace_str(int skip) { (void)skip; return ""; }
     #endif
 }
 

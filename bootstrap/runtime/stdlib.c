@@ -139,8 +139,11 @@ __attribute__((constructor)) static void __glide_install_trap(void) {
 }
 #else
 #include <signal.h>
-#include <execinfo.h>
 #include <unistd.h>
+#if defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__)
+#include <execinfo.h>
+#define GLIDE_HAVE_BACKTRACE 1
+#endif
 static void __glide_sig_handler(int sig) {
     const char* name = "unknown";
     const char* hint = "";
@@ -150,9 +153,13 @@ static void __glide_sig_handler(int sig) {
     fflush(stdout);
     fprintf(stderr, "\n\x1b[1;31mfatal\x1b[0m: %s (signal %d)\n", name, sig);
     if (hint[0]) fprintf(stderr, "  \x1b[1;36m=\x1b[0m %s\n", hint);
+#ifdef GLIDE_HAVE_BACKTRACE
     void* frames[32]; int n = backtrace(frames, 32);
     fprintf(stderr, "stack trace (%d frames):\n", n);
     backtrace_symbols_fd(frames, n, 2);
+#else
+    fprintf(stderr, "stack trace: unavailable on this libc\n");
+#endif
     _exit(128 + sig);
 }
 __attribute__((constructor)) static void __glide_install_trap(void) {
