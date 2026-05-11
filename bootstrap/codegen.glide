@@ -111,6 +111,18 @@ fn _cg_replace(s: string, find: string, repl: string) -> string {
     return out;
 }
 
+// Emit a chan-method receiver with `deref_n` leading `*`s. Used by
+// the `.send` / `.recv` / `.close` method shim so a `*chan<T>` arg
+// passes the inner chan pointer to the helper instead of a
+// pointer-to-chan-pointer.
+fn _emit_chan_recv(g: *CG, e: *Expr, deref_n: int) {
+    if deref_n <= 0 { emit_expr(g, e); return; }
+    print!("(");
+    for let i: int = 0; i < deref_n; i++ { print!("*"); }
+    emit_expr(g, e);
+    print!(")");
+}
+
 fn format_spec_for(t: *Type) -> string {
     if t == null { return "%p"; }
     if t.kind != TY_NAMED { return "%p"; }
@@ -2976,9 +2988,21 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 let m: string = mangle_type(&inner);
                 let mut nargs: int = 0;
                 if e.args != null { nargs = e.args.len(); }
+                // `chan<T>` lowers to `__glide_chan_T_t*` on the C side
+                // already, so the send/recv/close helpers want one level
+                // of pointer. A Glide-side `*chan<T>` (or `**chan<T>`)
+                // adds extra indirection — emit one deref per pointer
+                // wrapper to drop back to the helper's expected shape.
+                let mut deref_n: int = 0;
+                let mut t: *Type = recv_ty;
+                while t != null && (t.kind == TY_POINTER
+                                || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) {
+                    deref_n = deref_n + 1;
+                    t = t.inner;
+                }
                 if mname.eq("send") && nargs == 1 {
                     print!("__glide_send_".concat(m).concat("("));
-                    emit_expr(g, recv_e);
+                    _emit_chan_recv(g, recv_e, deref_n);
                     print!(", ");
                     let v: Expr = e.args.get(0);
                     emit_expr(g, &v);
@@ -2987,13 +3011,13 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 }
                 if mname.eq("recv") && nargs == 0 {
                     print!("__glide_recv_".concat(m).concat("("));
-                    emit_expr(g, recv_e);
+                    _emit_chan_recv(g, recv_e, deref_n);
                     print!(")");
                     return;
                 }
                 if mname.eq("close") && nargs == 0 {
                     print!("__glide_close_".concat(m).concat("("));
-                    emit_expr(g, recv_e);
+                    _emit_chan_recv(g, recv_e, deref_n);
                     print!(")");
                     return;
                 }

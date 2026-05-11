@@ -1,11 +1,11 @@
 import stdlib::testing::*;
 
-fn _producer(c: *chan<int>, v: int) {
+fn _producer(c: chan<int>, v: int) {
     sleep_ms(15);
     c.send(v);
 }
 
-fn _closer(c: *chan<int>) {
+fn _closer(c: chan<int>) {
     sleep_ms(15);
     c.close();
 }
