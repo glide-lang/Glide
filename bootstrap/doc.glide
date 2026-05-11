@@ -443,22 +443,27 @@ fn _render_markdown(md: string) -> string {
     let lines: *Vector<string> = md.split("\n");
     let mut out: string = "";
     let mut in_code: bool = false;
+    let mut code_lang: string = "";
+    let mut code_buf: string = "";
     let mut para: string = "";
     for let i: int = 0; i < lines.len(); i++ {
         let raw: string = lines.get(i);
         let trimmed: string = raw.trim();
         if in_code {
             if trimmed.starts_with("```") {
-                out = out.concat("</code></pre>\n");
+                out = out.concat(_render_code_frame(code_lang, code_buf));
                 in_code = false;
+                code_buf = "";
+                code_lang = "";
             } else {
-                out = out.concat(_esc(raw)).concat("\n");
+                if !code_buf.eq("") { code_buf = code_buf.concat("\n"); }
+                code_buf = code_buf.concat(raw);
             }
             continue;
         }
         if trimmed.starts_with("```") {
             if !para.eq("") { out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n"); para = ""; }
-            out = out.concat("<pre><code class=\"glide\">");
+            code_lang = trimmed.substring(3, trimmed.len()).trim();
             in_code = true;
             continue;
         }
@@ -485,8 +490,138 @@ fn _render_markdown(md: string) -> string {
     if !para.eq("") {
         out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n");
     }
-    if in_code { out = out.concat("</code></pre>\n"); }
+    if in_code {
+        out = out.concat(_render_code_frame(code_lang, code_buf));
+    }
     return out;
+}
+
+// Render a fenced code block as a windowed frame (title bar + 3 dots),
+// running Glide-flavoured syntax highlighting when the language tag is
+// empty, "glide", or absent. Anything else (e.g. ```bash) is escaped
+// verbatim — keeping shell snippets readable without false highlights.
+fn _render_code_frame(lang: string, code: string) -> string {
+    let mut title: string = "glide";
+    if !lang.eq("") { title = lang; }
+    let mut body: string = "";
+    if lang.eq("") || lang.eq("glide") {
+        body = _highlight_glide(code);
+    } else {
+        body = _esc(code);
+    }
+    return "<div class=\"code-frame\">\n"
+        .concat("  <div class=\"code-frame-bar\">\n")
+        .concat("    <span class=\"dot\"></span><span class=\"dot\"></span><span class=\"dot\"></span>\n")
+        .concat("    <span class=\"code-frame-title\">").concat(_esc(title)).concat("</span>\n")
+        .concat("  </div>\n")
+        .concat("  <pre class=\"code\"><code>").concat(body).concat("</code></pre>\n")
+        .concat("</div>\n");
+}
+
+// Single-pass, byte-level highlighter. Walks the source emitting either
+// `<span class="...">word</span>` for classified tokens or HTML-escaped
+// passthroughs for everything else. Classification:
+//   //...     -> .cmt   (line comments)
+//   "..."     -> .str   (double-quoted, with `\` escape skip)
+//   12 / 1.5  -> .num
+//   identifier -> .kw / .ty / .fn  via `_classify_ident`
+// We don't model nested expressions or string interpolation slots —
+// good enough for the docstring snippets without dragging a real lexer in.
+fn _highlight_glide(src: string) -> string {
+    let mut out: string = "";
+    let mut i: int = 0;
+    let n: int = src.len();
+    while i < n {
+        let c: int = src.at(i).to_int();
+        // Line comment: `//` ... EOL
+        if c == 47 && i + 1 < n && src.at(i + 1).to_int() == 47 {
+            let mut j: int = i;
+            while j < n && src.at(j).to_int() != 10 { j = j + 1; }
+            out = out.concat("<span class=\"cmt\">").concat(_esc(src.substring(i, j))).concat("</span>");
+            i = j;
+            continue;
+        }
+        // String literal — naive: skips one char after `\`.
+        if c == 34 {
+            let mut j: int = i + 1;
+            while j < n {
+                let cj: int = src.at(j).to_int();
+                if cj == 92 && j + 1 < n { j = j + 2; continue; }
+                if cj == 34 { j = j + 1; break; }
+                j = j + 1;
+            }
+            out = out.concat("<span class=\"str\">").concat(_esc(src.substring(i, j))).concat("</span>");
+            i = j;
+            continue;
+        }
+        // Number
+        if c >= 48 && c <= 57 {
+            let mut j: int = i;
+            while j < n {
+                let cj: int = src.at(j).to_int();
+                if (cj >= 48 && cj <= 57) || cj == 46 || cj == 95 { j = j + 1; }
+                else { break; }
+            }
+            out = out.concat("<span class=\"num\">").concat(src.substring(i, j)).concat("</span>");
+            i = j;
+            continue;
+        }
+        // Identifier (letter / underscore start)
+        let is_id_start: bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+        if is_id_start {
+            let mut j: int = i;
+            while j < n {
+                let cj: int = src.at(j).to_int();
+                let cont: bool = (cj >= 65 && cj <= 90) || (cj >= 97 && cj <= 122)
+                              || (cj >= 48 && cj <= 57) || cj == 95;
+                if cont { j = j + 1; } else { break; }
+            }
+            let word: string = src.substring(i, j);
+            let cls: string = _classify_ident(word, src, j, n);
+            if !cls.eq("") {
+                out = out.concat("<span class=\"").concat(cls).concat("\">").concat(word).concat("</span>");
+            } else {
+                out = out.concat(word);
+            }
+            i = j;
+            continue;
+        }
+        // Anything else: escape and emit one char.
+        out = out.concat(_esc(src.substring(i, i + 1)));
+        i = i + 1;
+    }
+    return out;
+}
+
+fn _classify_ident(word: string, src: string, j: int, n: int) -> string {
+    if _is_kw_word(word) { return "kw"; }
+    if _is_ty_word(word) { return "ty"; }
+    // ident followed by `(` -> function call
+    if j < n && src.at(j).to_int() == 40 { return "fn"; }
+    // Capitalised identifier — likely a struct / trait / enum.
+    let c0: int = word.at(0).to_int();
+    if c0 >= 65 && c0 <= 90 { return "ty"; }
+    return "";
+}
+
+fn _is_kw_word(w: string) -> bool {
+    return w.eq("fn") || w.eq("let") || w.eq("mut") || w.eq("if") || w.eq("else")
+        || w.eq("while") || w.eq("for") || w.eq("in") || w.eq("return")
+        || w.eq("spawn") || w.eq("spawn_thread") || w.eq("defer") || w.eq("defer_err")
+        || w.eq("import") || w.eq("pub") || w.eq("extern") || w.eq("struct")
+        || w.eq("enum") || w.eq("trait") || w.eq("impl") || w.eq("match")
+        || w.eq("break") || w.eq("continue") || w.eq("where") || w.eq("const")
+        || w.eq("true") || w.eq("false") || w.eq("null") || w.eq("as")
+        || w.eq("sizeof") || w.eq("self") || w.eq("Self") || w.eq("use")
+        || w.eq("dyn") || w.eq("select") || w.eq("ok") || w.eq("err")
+        || w.eq("some") || w.eq("none");
+}
+
+fn _is_ty_word(w: string) -> bool {
+    return w.eq("int") || w.eq("bool") || w.eq("string") || w.eq("void")
+        || w.eq("float") || w.eq("double") || w.eq("byte") || w.eq("char")
+        || w.eq("i32") || w.eq("i64") || w.eq("u32") || w.eq("u64")
+        || w.eq("chan");
 }
 
 // Inline markdown: just backtick → <code>. Escape everything else.
@@ -516,21 +651,72 @@ fn _inline_md(s: string) -> string {
 }
 
 fn _doc_css() -> string {
-    return "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:880px;margin:2em auto;padding:0 1em;color:#222;line-height:1.5}\n".concat(
-        "h1{border-bottom:2px solid #444;padding-bottom:.2em}\n").concat(
-        "h2{margin-top:2em;color:#0066aa}\n").concat(
-        "h3{margin-top:1.5em;color:#444}\n").concat(
-        ".item{margin:1.5em 0;padding:.6em 1em;background:#f7f7f7;border-left:3px solid #999;border-radius:0 4px 4px 0}\n").concat(
-        ".sig{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.95em;font-weight:600;color:#0066aa}\n").concat(
-        ".kind{display:inline-block;font-size:.75em;padding:.1em .5em;background:#0066aa;color:white;border-radius:3px;margin-right:.5em;vertical-align:middle}\n").concat(
-        "pre{background:#1e1e1e;color:#e8e8e8;padding:.8em 1em;border-radius:4px;overflow-x:auto}\n").concat(
-        "code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.9em}\n").concat(
-        "p code{background:#eee;padding:.1em .3em;border-radius:3px;color:#0066aa}\n").concat(
-        "a{color:#0066aa;text-decoration:none}\n").concat(
-        "a:hover{text-decoration:underline}\n").concat(
-        ".mod{padding:.7em 0;border-bottom:1px solid #eee}\n").concat(
-        ".mod-name{font-family:'SF Mono',Menlo,Consolas,monospace;font-weight:600}\n").concat(
-        ".mod-blurb{color:#666;margin-top:.2em}\n");
+    return ":root{--bg:#0b1020;--bg-2:#0f1530;--panel:#121a36;--border:#1e2a5e;--border-soft:#1a2247;--text:#e7ecff;--text-dim:#a4adcf;--muted:#6b769d;--accent:#6b8afd;--accent-2:#3b5bdb;--kw:#c084fc;--fn:#8ab4ff;--ty:#5eead4;--str:#f5b76b;--num:#f08fb8;--cmt:#5b6794;--radius:10px;--radius-lg:14px;--container:1080px}\n".concat(
+        "*{box-sizing:border-box}\n").concat(
+        "html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}\n").concat(
+        "body{background:radial-gradient(900px 480px at 80% -10%,rgba(59,91,219,0.18),transparent 60%),radial-gradient(700px 400px at -10% 20%,rgba(107,138,253,0.10),transparent 55%),var(--bg);min-height:100vh}\n").concat(
+        "a{color:var(--accent);text-decoration:none;transition:color 120ms ease}\n").concat(
+        "a:hover{color:#9bb0ff}\n").concat(
+        "code,pre{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:13.5px}\n").concat(
+        "h1,h2,h3,h4,h5{margin:0;letter-spacing:-0.02em;color:#f4f6ff;font-weight:600}\n").concat(
+        "p{margin:0 0 1em 0}p:last-child{margin-bottom:0}\n").concat(
+        ".nav{display:flex;align-items:center;justify-content:space-between;max-width:var(--container);margin:0 auto;padding:22px 28px}\n").concat(
+        ".brand{display:inline-flex;align-items:baseline;gap:8px;font-weight:600;font-size:18px;color:var(--text);letter-spacing:-0.02em}\n").concat(
+        ".brand:hover{color:var(--text)}\n").concat(
+        ".brand-sub{color:var(--muted);font-weight:400;font-size:14.5px;font-family:'JetBrains Mono',monospace}\n").concat(
+        ".nav-links{display:flex;align-items:center;gap:24px}\n").concat(
+        ".nav-links a{color:var(--text-dim);font-size:14.5px;font-weight:500}\n").concat(
+        ".nav-links a:hover{color:var(--text)}\n").concat(
+        "main{max-width:var(--container);margin:0 auto;padding:0 28px 80px}\n").concat(
+        ".hero{padding:40px 0 28px}\n").concat(
+        ".hero h1{font-size:clamp(28px,3.6vw,40px);line-height:1.1;letter-spacing:-0.03em;margin-bottom:12px}\n").concat(
+        ".hero .lede{color:var(--text-dim);font-size:16.5px;max-width:680px}\n").concat(
+        ".eyebrow{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--accent);padding:5px 10px;border:1px solid rgba(107,138,253,0.30);border-radius:999px;background:rgba(107,138,253,0.06);margin-bottom:18px}\n").concat(
+        ".back{display:inline-block;margin-bottom:14px;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--text-dim)}\n").concat(
+        ".back:hover{color:var(--accent)}\n").concat(
+        ".origin{color:var(--muted);font-size:14px;margin-bottom:6px}\n").concat(
+        ".origin code{background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff;font-size:12.5px}\n").concat(
+        ".modules{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:14px}\n").concat(
+        ".module-card{background:linear-gradient(180deg,rgba(30,42,94,0.30),rgba(15,21,48,0.55));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:18px 20px;transition:border-color 160ms ease,transform 160ms ease}\n").concat(
+        ".module-card:hover{border-color:rgba(107,138,253,0.45);transform:translateY(-1px)}\n").concat(
+        ".module-card h3{font-size:15.5px;margin-bottom:6px;font-family:'JetBrains Mono',monospace;font-weight:600}\n").concat(
+        ".module-card h3 a{color:var(--text)}\n").concat(
+        ".module-card h3 a:hover{color:var(--accent)}\n").concat(
+        ".module-card .blurb{color:var(--text-dim);font-size:14px;margin-bottom:10px}\n").concat(
+        ".module-card .counts{color:var(--muted);font-size:12.5px;font-family:'JetBrains Mono',monospace;margin:0}\n").concat(
+        ".toc{background:linear-gradient(180deg,rgba(30,42,94,0.22),rgba(15,21,48,0.40));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:16px 20px;margin:18px 0 30px}\n").concat(
+        ".toc h4{font-size:11.5px;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:12px;font-weight:600}\n").concat(
+        ".toc ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,1fr);gap:6px 18px}\n").concat(
+        ".toc li{font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;align-items:baseline;gap:8px}\n").concat(
+        ".toc li a{color:var(--text-dim)}\n").concat(
+        ".toc li a:hover{color:var(--accent)}\n").concat(
+        ".toc li .toc-kind{display:inline-block;min-width:46px;color:var(--muted);font-size:11px;text-transform:lowercase}\n").concat(
+        ".items{display:flex;flex-direction:column;gap:22px}\n").concat(
+        ".item{background:linear-gradient(180deg,rgba(30,42,94,0.22),rgba(15,21,48,0.40));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:22px 24px;scroll-margin-top:24px}\n").concat(
+        ".item-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}\n").concat(
+        ".kind{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:6px;background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.22);color:var(--accent);text-transform:lowercase;letter-spacing:0.02em}\n").concat(
+        ".kind-struct{color:#5eead4;background:rgba(94,234,212,0.10);border-color:rgba(94,234,212,0.24)}\n").concat(
+        ".kind-trait{color:#c084fc;background:rgba(192,132,252,0.10);border-color:rgba(192,132,252,0.24)}\n").concat(
+        ".kind-enum{color:#f08fb8;background:rgba(240,143,184,0.10);border-color:rgba(240,143,184,0.24)}\n").concat(
+        ".kind-macro{color:#f5b76b;background:rgba(245,183,107,0.10);border-color:rgba(245,183,107,0.24)}\n").concat(
+        ".kind-const{color:#ffd166;background:rgba(255,209,102,0.10);border-color:rgba(255,209,102,0.24)}\n").concat(
+        ".sig{font-family:'JetBrains Mono',monospace;font-size:14px;color:#d8dfff;word-break:break-word}\n").concat(
+        ".doc{color:var(--text-dim);font-size:15px;line-height:1.65}\n").concat(
+        ".doc p{margin:0 0 10px 0}.doc p:last-child{margin-bottom:0}\n").concat(
+        ".doc h3,.doc h4{color:#f4f6ff;margin-top:16px;margin-bottom:8px;font-size:15px}\n").concat(
+        ".doc code{font-size:12.5px;background:rgba(107,138,253,0.12);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff}\n").concat(
+        ".code-frame{background:linear-gradient(180deg,#0f1633 0%,#0c1228 100%);border:1px solid var(--border-soft);border-radius:var(--radius);overflow:hidden;margin:10px 0 14px;box-shadow:0 1px 0 rgba(255,255,255,0.04) inset}\n").concat(
+        ".code-frame-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border-soft)}\n").concat(
+        ".dot{width:9px;height:9px;border-radius:50%;background:#2a335a}\n").concat(
+        ".code-frame-title{margin-left:8px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)}\n").concat(
+        "pre.code{margin:0;padding:18px 20px;overflow-x:auto;background:transparent;color:#d8dfff;line-height:1.65;font-size:13px}\n").concat(
+        "pre.code code{background:transparent;padding:0;border:0;color:inherit;font-size:13px}\n").concat(
+        ".kw{color:var(--kw)}.fn{color:var(--fn)}.ty{color:var(--ty)}.str{color:var(--str)}.num{color:var(--num)}.cmt{color:var(--cmt);font-style:italic}\n").concat(
+        ".footer{border-top:1px solid var(--border-soft);background:rgba(8,12,30,0.4);margin-top:60px}\n").concat(
+        ".footer-row{max-width:var(--container);margin:0 auto;padding:24px 28px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:13px;flex-wrap:wrap;gap:12px}\n").concat(
+        ".footer-row a{color:var(--muted)}.footer-row a:hover{color:var(--accent)}\n").concat(
+        ".footer-row code{background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff;font-size:12px}\n").concat(
+        "@media (max-width:720px){.modules{grid-template-columns:1fr}.toc ul{grid-template-columns:1fr}main{padding:0 20px 60px}.nav-links{gap:14px}}\n");
 }
 
 fn _kind_label(kind: int) -> string {
@@ -544,51 +730,112 @@ fn _kind_label(kind: int) -> string {
 }
 
 fn _write_index(out_dir: string, modules: *Vector<DocModule>) {
+    let mut total_items: int = 0;
+    for let i: int = 0; i < modules.len(); i++ {
+        total_items = total_items + modules.get(i).items.len();
+    }
     let mut html: string = _html_head("API reference", ".");
-    html = html.concat("<h1>API reference</h1>\n");
+    html = html.concat("<section class=\"hero\">\n")
+        .concat("  <div class=\"eyebrow\">api reference</div>\n")
+        .concat("  <h1>Glide modules</h1>\n")
+        .concat("  <p class=\"lede\">")
+        .concat(int_to_str(modules.len())).concat(" modules, ")
+        .concat(int_to_str(total_items)).concat(" public items. ")
+        .concat("Auto-generated from <code>///</code> doc comments — each card opens its own page.</p>\n")
+        .concat("</section>\n");
+    html = html.concat("<section class=\"modules\">\n");
     for let i: int = 0; i < modules.len(); i++ {
         let m: DocModule = modules.get(i);
-        html = html.concat("<div class=\"mod\">\n");
-        html = html.concat("  <div class=\"mod-name\"><a href=\"").concat(m.slug).concat(".html\">").concat(_esc(m.display)).concat("</a></div>\n");
+        html = html.concat("  <article class=\"module-card\">\n");
+        html = html.concat("    <h3><a href=\"").concat(m.slug).concat(".html\">").concat(_esc(m.display)).concat("</a></h3>\n");
         if !m.blurb.eq("") {
-            html = html.concat("  <div class=\"mod-blurb\">").concat(_esc(m.blurb)).concat("</div>\n");
+            html = html.concat("    <p class=\"blurb\">").concat(_esc(m.blurb)).concat("</p>\n");
         }
-        html = html.concat("</div>\n");
+        html = html.concat("    <p class=\"counts\">")
+            .concat(int_to_str(m.items.len())).concat(" item");
+        if m.items.len() != 1 { html = html.concat("s"); }
+        html = html.concat("</p>\n");
+        html = html.concat("  </article>\n");
     }
+    html = html.concat("</section>\n");
     html = html.concat(_html_tail());
     write_file(out_dir.concat("/index.html"), html);
 }
 
 fn _write_module_page(out_dir: string, m: *DocModule) {
     let mut html: string = _html_head(m.display, ".");
-    html = html.concat("<p><a href=\"index.html\">&larr; index</a></p>\n");
-    html = html.concat("<h1>").concat(_esc(m.display)).concat("</h1>\n");
-    html = html.concat("<p class=\"mod-blurb\">defined in <code>").concat(_esc(m.origin)).concat("</code></p>\n");
+    html = html.concat("<section class=\"hero\">\n")
+        .concat("  <a class=\"back\" href=\"index.html\">← all modules</a>\n")
+        .concat("  <div class=\"eyebrow\">module</div>\n")
+        .concat("  <h1>").concat(_esc(m.display)).concat("</h1>\n")
+        .concat("  <p class=\"origin\">defined in <code>").concat(_esc(m.origin)).concat("</code></p>\n");
+    if !m.blurb.eq("") {
+        html = html.concat("  <p class=\"lede\">").concat(_esc(m.blurb)).concat("</p>\n");
+    }
+    html = html.concat("</section>\n");
 
+    if m.items.len() > 1 {
+        html = html.concat("<nav class=\"toc\">\n")
+            .concat("  <h4>Items in this module</h4>\n")
+            .concat("  <ul>\n");
+        for let i: int = 0; i < m.items.len(); i++ {
+            let it: DocItem = m.items.get(i);
+            html = html.concat("    <li><span class=\"toc-kind\">")
+                .concat(_kind_label(it.kind)).concat("</span><a href=\"#")
+                .concat(_esc(it.name)).concat("\">").concat(_esc(it.name)).concat("</a></li>\n");
+        }
+        html = html.concat("  </ul>\n</nav>\n");
+    }
+
+    html = html.concat("<section class=\"items\">\n");
     for let i: int = 0; i < m.items.len(); i++ {
         let it: DocItem = m.items.get(i);
-        html = html.concat("<div class=\"item\" id=\"").concat(_esc(it.name)).concat("\">\n");
-        html = html.concat("  <div><span class=\"kind\">").concat(_kind_label(it.kind))
-            .concat("</span><span class=\"sig\">").concat(_esc(it.signature)).concat("</span></div>\n");
+        let klabel: string = _kind_label(it.kind);
+        html = html.concat("  <article class=\"item\" id=\"").concat(_esc(it.name)).concat("\">\n");
+        html = html.concat("    <div class=\"item-head\">\n");
+        html = html.concat("      <span class=\"kind kind-").concat(klabel).concat("\">").concat(klabel).concat("</span>\n");
+        html = html.concat("      <span class=\"sig\">").concat(_esc(it.signature)).concat("</span>\n");
+        html = html.concat("    </div>\n");
         if !it.doc.eq("") {
-            html = html.concat(_render_markdown(it.doc));
+            html = html.concat("    <div class=\"doc\">\n").concat(_render_markdown(it.doc)).concat("    </div>\n");
         }
-        html = html.concat("</div>\n");
+        html = html.concat("  </article>\n");
     }
+    html = html.concat("</section>\n");
     html = html.concat(_html_tail());
     write_file(out_dir.concat("/").concat(m.slug).concat(".html"), html);
 }
 
 fn _html_head(title: string, css_prefix: string) -> string {
-    return "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+    return "<!doctype html>\n<html lang=\"en\"><head>\n"
+        .concat("<meta charset=\"utf-8\">\n")
         .concat("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n")
+        .concat("<meta name=\"theme-color\" content=\"#0b1020\">\n")
         .concat("<title>").concat(_esc(title)).concat(" — glide doc</title>\n")
+        .concat("<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n")
+        .concat("<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n")
+        .concat("<link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap\" rel=\"stylesheet\">\n")
         .concat("<link rel=\"stylesheet\" href=\"").concat(css_prefix).concat("/style.css\">\n")
-        .concat("</head><body>\n");
+        .concat("</head><body>\n")
+        .concat("<header class=\"nav\">\n")
+        .concat("  <a class=\"brand\" href=\"index.html\"><span>glide</span><span class=\"brand-sub\">/ docs</span></a>\n")
+        .concat("  <nav class=\"nav-links\">\n")
+        .concat("    <a href=\"index.html\">Modules</a>\n")
+        .concat("    <a href=\"https://github.com/Murilinho145SG/Glide\" rel=\"noopener\">GitHub</a>\n")
+        .concat("  </nav>\n")
+        .concat("</header>\n")
+        .concat("<main>\n");
 }
 
 fn _html_tail() -> string {
-    return "<hr><p style=\"color:#aaa;font-size:.85em\">generated by <code>glide doc</code></p>\n</body></html>\n";
+    return "</main>\n"
+        .concat("<footer class=\"footer\">\n")
+        .concat("  <div class=\"footer-row\">\n")
+        .concat("    <span>generated by <code>glide doc</code></span>\n")
+        .concat("    <a href=\"https://github.com/Murilinho145SG/Glide\" rel=\"noopener\">github.com/Murilinho145SG/Glide</a>\n")
+        .concat("  </div>\n")
+        .concat("</footer>\n")
+        .concat("</body></html>\n");
 }
 
 // Glide's typer doesn't know how to mono `Vector::new()` for *DocModule
