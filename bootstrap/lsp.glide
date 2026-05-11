@@ -766,6 +766,8 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_large_return(t, stmts);
     analysis_trait_conformance(t, stmts);
     analysis_deprecated_calls(t, stmts);
+    analysis_unstable_calls(t, stmts);
+    analysis_custom_lints(t, stmts);
 }
 
 // For each `impl Trait for Type { ... }` walk the trait's method names
@@ -3780,7 +3782,7 @@ fn analysis_arena_not_freed(t: *Typer, program: *Vector<Stmt>) {
         if s.kind != ST_FN || s.fn_body == null { continue; }
         if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") { continue; }
         t.current_origin = s.origin;
-        check_arena_in_body(t, s.fn_body, s.fn_body);
+        check_arena_in_body(t, s.fn_body, s.fn_body, false);
     }
 }
 
@@ -3802,14 +3804,16 @@ fn _alloc_kind(v: *Expr) -> int {
     return 0;
 }
 
-fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>, root: *Vector<Stmt>) {
+fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>, root: *Vector<Stmt>, suppress: bool) {
     let n: int = body.len();
     for let i: int = 0; i < n; i++ {
         let s: Stmt = body.get(i);
         if s.kind == ST_LET && !s.is_auto_owned {
             // Stmt-local opt-out: `@allow("unfreed-alloc")` on the `let`
             // itself silences the warning without polluting the
-            // enclosing fn. Either alias is recognised.
+            // enclosing fn. Either alias is recognised. The `suppress`
+            // flag propagates a parent block's `@allow`.
+            if suppress { continue; }
             if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") { continue; }
             let kind: int = _alloc_kind(s.let_value);
             if kind != 0 {
@@ -3826,8 +3830,13 @@ fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>, root: *Vector<Stmt>) {
                 t.warn(s.line, s.column, _alloc_code(kind), _alloc_msg(kind, s.name));
             }
         }
-        if s.then_body != null { check_arena_in_body(t, s.then_body, root); }
-        if s.else_body != null { check_arena_in_body(t, s.else_body, root); }
+        // Block-level `@allow("...")` on if/while/for/block/etc. — add
+        // it to the active suppression set for the recursive walk.
+        let sub_suppress: bool = suppress
+            || _has_allow(&s, "unfreed-alloc")
+            || _has_allow(&s, "arena-not-freed");
+        if s.then_body != null { check_arena_in_body(t, s.then_body, root, sub_suppress); }
+        if s.else_body != null { check_arena_in_body(t, s.else_body, root, sub_suppress); }
     }
 }
 
@@ -4508,50 +4517,239 @@ fn analysis_large_return(t: *Typer, program: *Vector<Stmt>) {
     structs.free();
 }
 
-// Emit a `deprecated-fn` warning at every call site of a function (or
-// path method) marked `@deprecated("reason")`. The reason is interpolated
-// into the message so the editor surfaces guidance inline. Functions
-// can also be silenced at the call site via `@allow("deprecated-fn")`.
+// Emit a warning at every call site of a function (or path method)
+// marked with the given attribute. Used by `@deprecated` /
+// `@unstable` / any future attribute-driven lint. The reason string
+// is interpolated into the message so the editor surfaces guidance
+// inline. Suppression via `@allow("<lint-code>")` on the calling
+// function or local stmt.
 //
-// Recognised forms:
-//   @deprecated                       — no reason
-//   @deprecated("use Foo::bar instead")
-//
-// The check matches by name; method dispatch (e.g. `obj.old()`) matches
-// the method name regardless of receiver type so a single deprecation
-// applies across every impl.
+// `attr_name`: e.g. "deprecated" / "unstable"
+// `lint_code`: warning code to emit, e.g. "deprecated-fn"
+// `what`:      English noun used in the message ("deprecated"/"unstable")
 pub fn analysis_deprecated_calls(t: *Typer, program: *Vector<Stmt>) {
-    // Index every deprecated fn by name. Maps `name` → reason
-    // (empty string when @deprecated had no argument).
+    _run_attr_call_lint(t, program, "deprecated", "deprecated-fn", "deprecated");
+}
+
+pub fn analysis_unstable_calls(t: *Typer, program: *Vector<Stmt>) {
+    _run_attr_call_lint(t, program, "unstable", "unstable-fn", "unstable");
+}
+
+// User-defined call-site lints declared via `@lint("<category>", "<reason>")`.
+// First arg is the warning code (prefixed with `lint:` so it can't
+// collide with the built-in codes); second arg is the message. The
+// pass is otherwise identical to deprecated/unstable so suppression
+// (`@allow("lint:<category>")`), block-level scoping, EX_PATH /
+// EX_MEMBER resolution, and the impl-method qualified-key behaviour
+// all come along for free.
+//
+// Example:
+//   @lint("blocking_io", "blocks the coro scheduler — call from spawn_thread")
+//   pub fn read_sync(path: string) -> string { … }
+//
+// Call sites then surface `lint:blocking_io: blocks the coro
+// scheduler — call from spawn_thread` as a warning the user can
+// silence with `@allow("lint:blocking_io")`.
+pub fn analysis_custom_lints(t: *Typer, program: *Vector<Stmt>) {
+    // First pass: collect every category that appears. Then run one
+    // resolution pass per category. Two-pass keeps each per-category
+    // HashMap local — Glide's generic monomorphization can't easily
+    // express HashMap<*HashMap<string>>, so we re-walk the program
+    // per category instead of nesting maps.
+    let cats: *Vector<string> = _collect_lint_categories(program);
+    for let i: int = 0; i < cats.len(); i++ {
+        let cat: string = cats.get(i);
+        let dep: *HashMap<string> = HashMap::new();
+        _build_lint_index_for_cat(program, cat, dep);
+        let code: string = "lint:".concat(cat);
+        let what: string = "flagged by `".concat(code).concat("`");
+        _run_call_lint_with_index(t, program, dep, code, what);
+        dep.free();
+    }
+}
+
+// Walk the program once and collect every category string that
+// appears as the first arg of any `@lint(...)`. Deduplicated.
+fn _collect_lint_categories(program: *Vector<Stmt>) -> *Vector<string> {
+    let seen: *HashMap<bool> = HashMap::new();
+    let out: *Vector<string> = Vector::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN { _gather_lint_cats(&s, seen, out); }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                _gather_lint_cats(&m, seen, out);
+            }
+        }
+    }
+    seen.free();
+    return out;
+}
+
+fn _gather_lint_cats(s: *Stmt, seen: *HashMap<bool>, out: *Vector<string>) {
+    if s == null || s.attrs == null { return; }
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("lint") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
+        let cat_expr: Expr = a.args.get(0);
+        if cat_expr.kind != EX_STRING { continue; }
+        if seen.contains(cat_expr.str_val) { continue; }
+        seen.insert(cat_expr.str_val, true);
+        out.push(cat_expr.str_val);
+    }
+}
+
+// For a single category, build the fn-name → reason index. Mirrors
+// the structure of `_collect_attr_fns` so the existing call-site
+// scanner can drive it.
+fn _build_lint_index_for_cat(program: *Vector<Stmt>, cat: string, dep: *HashMap<string>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN {
+            let r: string = _lint_reason_for_cat(&s, cat);
+            if r != null { dep.insert(s.name, r); }
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            let mut owner: string = "";
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                let r: string = _lint_reason_for_cat(&m, cat);
+                if r == null { continue; }
+                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), r); }
+                if !dep.contains(m.name) { dep.insert(m.name, r); }
+            }
+        }
+    }
+}
+
+fn _lint_reason_for_cat(s: *Stmt, cat: string) -> string {
+    if s == null || s.attrs == null { return null; }
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("lint") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
+        let cat_expr: Expr = a.args.get(0);
+        if cat_expr.kind != EX_STRING { continue; }
+        if !cat_expr.str_val.eq(cat) { continue; }
+        if a.args.len() > 1 {
+            let r_expr: Expr = a.args.get(1);
+            if r_expr.kind == EX_STRING { return r_expr.str_val; }
+        }
+        return "";
+    }
+    return null;
+}
+
+// Variant of `_run_attr_call_lint` that takes a pre-built index +
+// emits a custom code. Used by `analysis_custom_lints` to drive the
+// shared scanner without rebuilding the dep map for each call.
+fn _run_call_lint_with_index(t: *Typer, program: *Vector<Stmt>, dep: *HashMap<string>, lint_code: string, what: string) {
+    if dep.len() == 0 { return; }
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            if _has_allow(&s, lint_code) { continue; }
+            t.current_origin = s.origin;
+            let scope: *HashMap<string> = HashMap::new();
+            _seed_scope_from_params(&s, scope, "");
+            _scan_calls_in_body(t, s.fn_body, dep, lint_code, what, scope);
+            scope.free();
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            let mut owner: string = "";
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, lint_code) { continue; }
+                t.current_origin = m.origin;
+                let scope: *HashMap<string> = HashMap::new();
+                _seed_scope_from_params(&m, scope, owner);
+                _scan_calls_in_body(t, m.fn_body, dep, lint_code, what, scope);
+                scope.free();
+            }
+        }
+    }
+}
+
+fn _run_attr_call_lint(t: *Typer, program: *Vector<Stmt>, attr_name: string, lint_code: string, what: string) {
     let dep: *HashMap<string> = HashMap::new();
-    _collect_deprecated_fns(program, dep);
+    _collect_attr_fns(program, dep, attr_name);
     if dep.len() == 0 { dep.free(); return; }
 
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
-            if _has_allow(&s, "deprecated-fn") { continue; }
+            if _has_allow(&s, lint_code) { continue; }
             t.current_origin = s.origin;
-            _scan_calls_in_body(t, s.fn_body, dep);
+            let scope: *HashMap<string> = HashMap::new();
+            // Top-level fn: seed scope with the declared param types
+            // so `obj.method()` inside the body can resolve receiver
+            // types through `Type::method` lookups.
+            _seed_scope_from_params(&s, scope, "");
+            _scan_calls_in_body(t, s.fn_body, dep, lint_code, what, scope);
+            scope.free();
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
+            // Inside `impl Type { ... }`, `self` is bound to the
+            // owner. Surface that to the receiver lookup so
+            // `self.old()` resolves to `Type::old`.
+            let mut owner: string = "";
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body == null { continue; }
-                if _has_allow(&m, "deprecated-fn") { continue; }
+                if _has_allow(&m, lint_code) { continue; }
                 t.current_origin = m.origin;
-                _scan_calls_in_body(t, m.fn_body, dep);
+                let scope: *HashMap<string> = HashMap::new();
+                _seed_scope_from_params(&m, scope, owner);
+                _scan_calls_in_body(t, m.fn_body, dep, lint_code, what, scope);
+                scope.free();
             }
         }
     }
     dep.free();
 }
 
-fn _collect_deprecated_fns(program: *Vector<Stmt>, dep: *HashMap<string>) {
+// Walk a fn's declared params, recording each `name: Type` binding so
+// receiver lookups inside the body can resolve `name.method()` to
+// `Type::method`. `self_owner` is the impl target name (used to
+// auto-type the implicit `self` param).
+fn _seed_scope_from_params(s: *Stmt, scope: *HashMap<string>, self_owner: string) {
+    if s == null || s.fn_params == null { return; }
+    for let i: int = 0; i < s.fn_params.len(); i++ {
+        let p: Param = s.fn_params.get(i);
+        if p.name.eq("self") && !self_owner.eq("") {
+            scope.insert("self", self_owner);
+            continue;
+        }
+        let n: string = _type_root_name(p.ty);
+        if !n.eq("") { scope.insert(p.name, n); }
+    }
+}
+
+// Strip pointers / borrows down to the underlying TY_NAMED and return
+// its `name`. Returns "" when the type isn't a plain named ref —
+// generics, function pointers, etc. fall through and the receiver
+// lookup uses the bare-name fallback at the call site.
+fn _type_root_name(ty: *Type) -> string {
+    if ty == null { return ""; }
+    if ty.kind == TY_NAMED { return ty.name; }
+    if ty.kind == TY_POINTER || ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT {
+        return _type_root_name(ty.inner);
+    }
+    if ty.kind == TY_GENERIC { return ty.name; }   // e.g. `Vector<int>` → "Vector"
+    return "";
+}
+
+fn _collect_attr_fns(program: *Vector<Stmt>, dep: *HashMap<string>, attr_name: string) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN {
-            let reason: string = _deprecated_reason(&s);
+            let reason: string = _attr_reason(&s, attr_name);
             if reason != null { dep.insert(s.name, reason); }
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
@@ -4564,7 +4762,7 @@ fn _collect_deprecated_fns(program: *Vector<Stmt>, dep: *HashMap<string>) {
             if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                let reason: string = _deprecated_reason(&m);
+                let reason: string = _attr_reason(&m, attr_name);
                 if reason == null { continue; }
                 if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), reason); }
                 // Only register the bare-name fallback if nothing's
@@ -4576,13 +4774,14 @@ fn _collect_deprecated_fns(program: *Vector<Stmt>, dep: *HashMap<string>) {
     }
 }
 
-// Returns the @deprecated reason string, or null if the item isn't
-// deprecated. Empty string means @deprecated with no argument.
-fn _deprecated_reason(s: *Stmt) -> string {
+// Returns the attribute's reason string, or null if the item doesn't
+// carry the attribute. Empty string means the attribute was present
+// without an argument (e.g. `@deprecated`).
+fn _attr_reason(s: *Stmt, attr_name: string) -> string {
     if s == null || s.attrs == null { return null; }
     for let i: int = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
-        if !a.name.eq("deprecated") { continue; }
+        if !a.name.eq(attr_name) { continue; }
         if a.args == null || a.args.len() == 0 { return ""; }
         let v: Expr = a.args.get(0);
         if v.kind == EX_STRING { return v.str_val; }
@@ -4591,65 +4790,89 @@ fn _deprecated_reason(s: *Stmt) -> string {
     return null;
 }
 
-fn _scan_calls_in_body(t: *Typer, body: *Vector<Stmt>, dep: *HashMap<string>) {
+fn _scan_calls_in_body(t: *Typer, body: *Vector<Stmt>, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        _scan_calls_in_stmt(t, &s, dep);
+        _scan_calls_in_stmt(t, &s, dep, lint_code, what, scope);
     }
 }
 
-fn _scan_calls_in_stmt(t: *Typer, s: *Stmt, dep: *HashMap<string>) {
+fn _scan_calls_in_stmt(t: *Typer, s: *Stmt, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
     if s == null { return; }
-    if s.let_value != null { _scan_calls_in_expr(t, s.let_value, dep); }
-    if s.expr_value != null { _scan_calls_in_expr(t, s.expr_value, dep); }
-    if s.cond != null { _scan_calls_in_expr(t, s.cond, dep); }
-    if s.for_step != null { _scan_calls_in_expr(t, s.for_step, dep); }
-    if s.then_body != null { _scan_calls_in_body(t, s.then_body, dep); }
-    if s.else_body != null { _scan_calls_in_body(t, s.else_body, dep); }
+    // Stmt / block-level opt-out — `@allow("deprecated-fn")` on the
+    // let, defer, block, if, while, etc. mutes the warning for every
+    // call inside this stmt's subtree. Bubbling stops here so a
+    // narrower scope below won't accidentally re-enable.
+    if _has_allow(s, lint_code) { return; }
+    if s.let_value != null { _scan_calls_in_expr(t, s.let_value, dep, lint_code, what, scope); }
+    if s.expr_value != null { _scan_calls_in_expr(t, s.expr_value, dep, lint_code, what, scope); }
+    if s.cond != null { _scan_calls_in_expr(t, s.cond, dep, lint_code, what, scope); }
+    if s.for_step != null { _scan_calls_in_expr(t, s.for_step, dep, lint_code, what, scope); }
+    // Record `let name: Type = ...` into the receiver-resolution
+    // scope so `name.method()` farther down resolves to
+    // `Type::method` instead of falling back to the bare name. Only
+    // annotated lets contribute — untyped bindings stay invisible to
+    // the heuristic.
+    if s.kind == ST_LET && s.let_ty != null {
+        let n: string = _type_root_name(s.let_ty);
+        if !n.eq("") { scope.insert(s.name, n); }
+    }
+    if s.then_body != null { _scan_calls_in_body(t, s.then_body, dep, lint_code, what, scope); }
+    if s.else_body != null { _scan_calls_in_body(t, s.else_body, dep, lint_code, what, scope); }
 }
 
-fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>) {
+fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
     if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null {
         let head: *Expr = e.lhs;
         let mut key: string = "";
         let mut display: string = "";
-        // EX_PATH `Type::method` — use the qualified key directly and
-        // do NOT fall back to the bare method name. Falling back would
-        // incorrectly flag `New::make()` when only `Old::make` is
-        // deprecated. Free fns + static ctors at the top level land in
-        // the index unqualified, so a EX_PATH where `str_val` was the
-        // module / namespace still resolves via the unqualified key —
-        // we just refuse the bare-name fallback when the qualified form
-        // is what the user wrote.
         if head.kind == EX_PATH {
+            // `Type::method` — qualified key, strict (no bare fallback).
             key = head.str_val.concat("::").concat(head.field);
             display = key;
         } else if head.kind == EX_IDENT {
             key = head.str_val; display = head.str_val;
         } else if head.kind == EX_MEMBER {
-            // Receiver type isn't available without typer info; fall
-            // back to the bare method name. If multiple impls share a
-            // method name and only some are deprecated, the call site
-            // can be made specific by writing `Type::method(obj, …)`
-            // instead of `obj.method(…)`, or by annotating with
-            // `@allow("deprecated-fn")`.
-            key = head.field; display = head.field;
+            // `obj.method()` — try to resolve `obj` to its declared
+            // type via the local scope. When the receiver type IS
+            // known, only the qualified `Type::method` key is
+            // consulted (no bare-name fallback) so an annotated
+            // method in one impl doesn't bleed into unrelated impls
+            // that share the method name. When the receiver type
+            // can't be resolved (chained expressions, untyped let,
+            // etc.) we still fall back to the bare method name.
+            let method: string = head.field;
+            let mut receiver_known: bool = false;
+            let mut qualified: string = "";
+            if head.lhs != null && head.lhs.kind == EX_IDENT {
+                let recv: string = head.lhs.str_val;
+                if scope.contains(recv) {
+                    receiver_known = true;
+                    let ty_name: string = scope.get(recv);
+                    qualified = ty_name.concat("::").concat(method);
+                }
+            }
+            if receiver_known {
+                key = qualified; display = qualified;
+            } else {
+                key = method; display = method;
+            }
         }
         if !key.eq("") && dep.contains(key) {
             let reason: string = dep.get(key);
-            let mut msg: string = "function `".concat(display).concat("` is deprecated");
+            let mut msg: string = "function `".concat(display).concat("` is ").concat(what);
             if !reason.eq("") { msg = msg.concat(": ").concat(reason); }
-            t.warn(e.line, e.column, "deprecated-fn", msg);
+            t.warn(e.line, e.column, lint_code, msg);
         }
     }
-    if e.lhs != null { _scan_calls_in_expr(t, e.lhs, dep); }
-    if e.rhs != null { _scan_calls_in_expr(t, e.rhs, dep); }
-    if e.operand != null { _scan_calls_in_expr(t, e.operand, dep); }
+    if e.lhs != null { _scan_calls_in_expr(t, e.lhs, dep, lint_code, what, scope); }
+    if e.rhs != null { _scan_calls_in_expr(t, e.rhs, dep, lint_code, what, scope); }
+    if e.operand != null { _scan_calls_in_expr(t, e.operand, dep, lint_code, what, scope); }
     if e.args != null {
         for let i: int = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            _scan_calls_in_expr(t, &a, dep);
+            _scan_calls_in_expr(t, &a, dep, lint_code, what, scope);
         }
     }
 }

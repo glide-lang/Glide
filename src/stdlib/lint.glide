@@ -1,0 +1,83 @@
+// Compile-time lint hooks. Glide ships the following built-in
+// warning codes plus a hatch for user-defined ones:
+//
+//   `unused-var`          local `let` is never read
+//   `unused-param`        fn param is never read
+//   `unused-fn`           fn is never called (or referenced as a value)
+//   `unnecessary-mut`     `let mut` that's never reassigned
+//   `arena-not-freed`     `Arena::new(...)` without `.free()` / `defer`
+//   `unfreed-alloc`       `malloc(...)` / `__glide_palloc_make()` ditto
+//   `deprecated-fn`       call to a fn marked `@deprecated`
+//   `unstable-fn`         call to a fn marked `@unstable`
+//   `lint:<category>`     call to a fn marked `@lint("<category>", …)`
+//   `addr-of-temporary`   `return &Foo { … }` / similar dangling refs
+//   `missing-return`      non-`-> void` fn has a path that falls off
+//   `large-return`        fn returns a struct >64 bytes by value
+//
+// Every warning above can be silenced with `@allow("<code>")` on the
+// surrounding item: the fn, an inner `let`, a block, an `if`/`while`,
+// or any stmt the warning is emitted inside. Multiple codes can be
+// listed: `@allow("unfreed-alloc", "deprecated-fn")`.
+//
+// # Custom lints
+//
+// To attach a project-specific warning to a fn, annotate it with
+// `@lint("<category>", "<reason>")`. The category becomes the
+// warning code (prefixed with `lint:`), and the reason is the
+// inline message:
+//
+// ```glide
+// @lint("blocking_io", "blocks the coro scheduler — use spawn_thread")
+// pub fn read_sync(path: string) -> string { ... }
+// ```
+//
+// Every call site of `read_sync` now surfaces:
+//
+// ```
+// ! lint:blocking_io
+//   function `read_sync` is flagged by `lint:blocking_io`:
+//     blocks the coro scheduler — use spawn_thread
+// ```
+//
+// Suppress at a call site with `@allow("lint:blocking_io")`. Stacks
+// with `@deprecated` / `@unstable` — a single fn can carry both, and
+// each call site emits one warning per attribute.
+//
+// # Status indicators
+//
+// `@deprecated("reason")` and `@unstable("reason")` are common
+// patterns the language pre-defines so editors can style them
+// (e.g. strikethrough). Underneath they're equivalent to:
+//
+//   `@lint("deprecated-fn", "reason")`   (with the bare code, not prefixed)
+//   `@lint("unstable-fn", "reason")`
+//
+// Prefer the named forms — they're the documented surface.
+//
+// # Suppression scope
+//
+// `@allow` follows the AST: on a fn, it covers the whole body; on a
+// block, just that block; on a single `let`, just that statement.
+// Lints don't propagate up — a narrower `@allow` doesn't silence
+// warnings emitted before it in the same outer scope.
+
+pub const LINT_DEPRECATED_FN: string  = "deprecated-fn";
+pub const LINT_UNSTABLE_FN: string    = "unstable-fn";
+pub const LINT_UNFREED_ALLOC: string  = "unfreed-alloc";
+pub const LINT_ARENA_NOT_FREED: string = "arena-not-freed";
+pub const LINT_UNUSED_VAR: string     = "unused-var";
+pub const LINT_UNUSED_PARAM: string   = "unused-param";
+pub const LINT_UNUSED_FN: string      = "unused-fn";
+pub const LINT_UNNECESSARY_MUT: string = "unnecessary-mut";
+
+/// Build the canonical `lint:<category>` code from a category name.
+/// Useful when an editor or build tool wants to filter / format
+/// custom-lint diagnostics programmatically.
+///
+/// ```glide
+/// let code: string = lint_code("blocking_io");
+/// // result: "lint:blocking_io"
+/// ```
+pub fn lint_code(category: string) -> string {
+    return "lint:".concat(category);
+}
