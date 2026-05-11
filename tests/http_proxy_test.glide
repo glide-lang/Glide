@@ -1,0 +1,90 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::client::*;
+import stdlib::http::proxy::*;
+
+fn _cfg() -> ReverseProxyConfig {
+    let cfg: ReverseProxyConfig = ReverseProxyConfig::to("http://127.0.0.1:9000/");
+    cfg.strip_prefix = "/api";
+    return cfg;
+}
+
+fn _req(method: string, path: string, headers: string, body: string) -> *HttpRequest {
+    let nope: *HashMap<string> = null;
+    let req: *HttpRequest = malloc(sizeof(HttpRequest)) as *HttpRequest;
+    req.method = method;
+    req.path = path;
+    req.version = "HTTP/1.1";
+    req.headers_block = headers;
+    req.body = body;
+    req.params = nope;
+    req.queries = nope;
+    req.headers_cache = null;
+    return req;
+}
+
+fn test_proxy_target_url_strips_mount_prefix() -> int {
+    let cfg: ReverseProxyConfig = _cfg();
+    assert_str_eq!(proxy_target_url(&cfg, "/api/users?active=1"),
+                   "http://127.0.0.1:9000/users?active=1");
+    assert_str_eq!(proxy_target_url(&cfg, "/api"),
+                   "http://127.0.0.1:9000/");
+    return 0;
+}
+
+fn test_proxy_request_filter_drops_hop_by_hop_headers() -> int {
+    let block: string = "Host: public.example\r\nConnection: upgrade\r\nUpgrade: websocket\r\nContent-Length: 4\r\nX-Trace: abc\r\n";
+    let out: string = proxy_filter_request_headers(block, false);
+    assert!(!out.contains("Host:"));
+    assert!(!out.contains("Connection:"));
+    assert!(!out.contains("Upgrade:"));
+    assert!(!out.contains("Content-Length:"));
+    assert!(out.contains("X-Trace: abc"));
+    return 0;
+}
+
+fn test_proxy_request_filter_can_preserve_host() -> int {
+    let block: string = "Host: public.example\r\nX-Trace: abc\r\n";
+    let out: string = proxy_filter_request_headers(block, true);
+    assert!(out.contains("Host: public.example"));
+    assert!(out.contains("X-Trace: abc"));
+    return 0;
+}
+
+fn test_proxy_build_upstream_request_adds_forwarded_headers() -> int {
+    let cfg: ReverseProxyConfig = _cfg();
+    let req: *HttpRequest = _req("POST", "/api/items",
+        "Host: public.example\r\nContent-Type: application/json\r\n",
+        "{\"ok\":true}");
+    let out: *HttpClientRequest = proxy_build_upstream_request(&cfg, req);
+    assert_str_eq!(out.url, "http://127.0.0.1:9000/items");
+    assert_str_eq!(out.method, "POST");
+    assert_str_eq!(out.body, "{\"ok\":true}");
+    assert!(out.headers.contains("Content-Type: application/json"));
+    assert!(out.headers.contains("X-Forwarded-Host: public.example"));
+    assert!(out.headers.contains("X-Forwarded-Proto: http"));
+    assert!(out.headers.contains("X-Original-URI: /api/items"));
+    assert!(out.headers.contains("Content-Length: 11"));
+    return 0;
+}
+
+fn test_proxy_response_filter_keeps_end_to_end_headers() -> int {
+    let block: string = "Content-Length: 2\r\nConnection: close\r\nTransfer-Encoding: chunked\r\nSet-Cookie: a=1\r\nX-App: ok\r\n";
+    let out: string = proxy_filter_response_headers(block);
+    assert!(!out.contains("Content-Length:"));
+    assert!(!out.contains("Connection:"));
+    assert!(!out.contains("Transfer-Encoding:"));
+    assert!(out.contains("Set-Cookie: a=1"));
+    assert!(out.contains("X-App: ok"));
+    return 0;
+}
+
+fn test_proxy_rewrite_location_absolute_upstream_url() -> int {
+    let loc: string = proxy_rewrite_location(
+        "http://127.0.0.1:9000/login",
+        "http://127.0.0.1:9000/",
+        "https://public.example/api");
+    assert_str_eq!(loc, "https://public.example/api/login");
+    assert_str_eq!(proxy_rewrite_location("/local", "http://up", "https://pub"), "/local");
+    return 0;
+}

@@ -1160,6 +1160,46 @@ fn _path_eq(a: string, b: string, win: bool) -> bool {
     return true;
 }
 
+// Compute the build output path when the user didn't pass `-o`. In a
+// project, every build lands under `<root>/target/<name>[.exe]` so the
+// tree stays clean (à la `cargo`'s target/). Outside a project the
+// fall-back depends on whether we're about to run the binary:
+//
+//   - `glide build foo.glide`  → a.exe / a.out in CWD (back-compat)
+//   - `glide run foo.glide`    → temp dir (no CWD pollution)
+fn _default_out_path(project_root: string, project_name: string, then_run: bool) -> string {
+    if !project_root.eq("") {
+        let target_dir: string = project_root.concat("/target");
+        fs_mkdir_p(target_dir);
+        let mut name: string = project_name;
+        if name.eq("") { name = "app"; }
+        if __glide_is_windows() != 0 { name = name.concat(".exe"); }
+        return target_dir.concat("/").concat(name);
+    }
+    if then_run {
+        let tmp: string = _temp_dir();
+        let mut name: string = "glide_run_tmp";
+        if __glide_is_windows() != 0 { name = name.concat(".exe"); }
+        return tmp.concat("/").concat(name);
+    }
+    if __glide_is_windows() != 0 { return "a.exe"; }
+    return "a.out";
+}
+
+// Best-effort system temp dir lookup. Windows uses TEMP/TMP; POSIX
+// falls back to /tmp.
+fn _temp_dir() -> string {
+    let win: bool = __glide_is_windows() != 0;
+    let env_name: string = if win { "TEMP" } else { "TMPDIR" };
+    let mut t: string = __glide_getenv(env_name);
+    if t.eq("") { t = __glide_getenv("TMP"); }
+    if t.eq("") {
+        if win { return "."; }
+        return "/tmp";
+    }
+    return t;
+}
+
 // Parse a decimal port string. Returns 0 on any non-digit or overflow.
 fn _parse_port(s: string) -> int {
     if s.eq("") { return 0; }
@@ -1179,8 +1219,9 @@ fn run_clean() -> int {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("clean: no glide.glide found"); return 1; }
     fs_remove_dir_rec(root.concat("/glide_modules"));
+    fs_remove_dir_rec(root.concat("/target"));
     fs_remove_file(root.concat("/glide.lock"));
-    println!("clean: removed glide_modules/ and glide.lock");
+    println!("clean: removed glide_modules/, target/ and glide.lock");
     return 0;
 }
 
@@ -1545,6 +1586,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         println!("preserved C source at:", tmp_c);
         return rc;
     }
+
+    // Build succeeded — the intermediate .__glide.c next to the
+    // binary served its purpose. Wipe it so target/ only carries the
+    // executable (failure path keeps it for debugging).
+    fs_remove_file(tmp_c);
 
     if !quiet { spinner_finish(true, "built ".concat(out_path)); }
 
@@ -2047,17 +2093,49 @@ fn main() -> int {
         }
     }
 
+    // No positional source: project mode for `build` / `run`. Resolve
+    // `src_path` from the nearest glide.glide's `bin` field — same
+    // contract as `cargo run` in a package directory.
+    let mut src_path: string = "";
+    let mut project_root: string = "";
+    let mut project_name: string = "";
     if src_arg_idx >= argc {
-        print_usage();
-        return 1;
+        if mode == MODE_BUILD || mode == MODE_RUN {
+            let root: string = find_manifest_root(".");
+            if root.eq("") {
+                println!("no glide.glide found; run `glide build <file>` or scaffold with `glide new <name>`");
+                return 1;
+            }
+            let m: *Manifest = read_manifest(root);
+            if m == null || m.bin.eq("") {
+                println!("manifest has no `bin` field");
+                return 1;
+            }
+            project_root = root;
+            project_name = m.name;
+            src_path = root.concat("/").concat(m.bin);
+        } else {
+            print_usage();
+            return 1;
+        }
+    } else {
+        src_path = args_at(src_arg_idx);
+        let root: string = find_manifest_root(parent_dir(src_path));
+        if !root.eq("") {
+            let m: *Manifest = read_manifest(root);
+            if m != null {
+                project_root = root;
+                project_name = m.name;
+            }
+        }
     }
-    let src_path: string = args_at(src_arg_idx);
 
     // Parse remaining flags: -o <out>, --target=<triple>, --write
     let mut out_path: string = "";
     let mut target: string = "";
     let mut write_in_place: bool = false;
-    for let i: int = src_arg_idx + 1; i < argc; i++ {
+    let flag_start: int = if src_arg_idx >= argc { 2 } else { src_arg_idx + 1 };
+    for let i: int = flag_start; i < argc; i++ {
         let a: string = args_at(i);
         if a.eq("-o") && (i + 1) < argc {
             out_path = args_at(i + 1);
@@ -2073,13 +2151,13 @@ fn main() -> int {
 
     if mode == MODE_BUILD {
         if out_path.eq("") {
-            if __glide_is_windows() != 0 { out_path = "a.exe"; } else { out_path = "a.out"; }
+            out_path = _default_out_path(project_root, project_name, false);
         }
         return run_build(src_path, out_path, target, false);
     }
     if mode == MODE_RUN {
         if out_path.eq("") {
-            if __glide_is_windows() != 0 { out_path = "__glide_run_tmp.exe"; } else { out_path = "__glide_run_tmp"; }
+            out_path = _default_out_path(project_root, project_name, true);
         }
         return run_build(src_path, out_path, target, true);
     }

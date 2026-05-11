@@ -1,0 +1,166 @@
+// Tiny REST API showing the @handler proc-macro on top of
+// stdlib::http + stdlib::http::router. Backing store is a HashMap
+// kept in-process — no DB, no migrations.
+//
+// Each route is a typed Glide fn. The `@handler` proc macro reads
+// the signature and emits the wrapper that the router (which still
+// takes `fn(*HttpRequest) -> HttpResponse`) actually mounts:
+//
+//   - `body: Json<T>`     -> macro calls `req.body_json()` +
+//                            `T::from_json(...)` and surfaces 400 /
+//                            422 automatically.
+//   - `req: *HttpRequest` -> passed through unchanged.
+//   - `-> Json<T>`        -> macro calls `.into_response()` so the
+//                            wrapper returns HttpResponse.
+//   - `-> HttpResponse`   -> returned as-is.
+//
+// Routes:
+//   GET  /users          -> list every user
+//   GET  /users/:id      -> read one user (mixed 200 / 404)
+//   POST /users          -> create from JSON body
+//
+// Run:
+//   glide build examples/users_api.glide -o /tmp/users_api
+//   /tmp/users_api &
+//   curl -s localhost:8080/users
+//   curl -s -X POST -d '{"id":"42","name":"alice","age":30}' localhost:8080/users
+//   curl -s localhost:8080/users/42
+
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::typed::*;
+import stdlib::http::handler::*;
+import stdlib::hashmap::*;
+import stdlib::json::*;
+
+// ---- domain ------------------------------------------------------------
+
+pub struct User {
+    pub id:   string,
+    pub name: string,
+    pub age:  int,
+}
+
+impl JsonBind for User {
+    fn from_json(v: *JsonValue) -> !User {
+        if v.kind != JSON_OBJECT { return err("expected object"); }
+        return ok(User {
+            id:   v.get_string("id")?,
+            name: v.get_string("name")?,
+            age:  v.get_int("age")?,
+        });
+    }
+
+    fn to_json(self: *User) -> *JsonValue {
+        let v: *JsonValue = JsonValue::object();
+        v.obj_set("id",   JsonValue::string(self.id));
+        v.obj_set("name", JsonValue::string(self.name));
+        v.obj_set("age",  JsonValue::int(self.age));
+        return v;
+    }
+}
+
+// Wrapper struct so list_users can return `Json<UserList>` instead of
+// hand-rolling the array. Emits as `{"users":[...]}` — a top-level
+// object scales better than a top-level array (room for paging meta).
+pub struct UserList {
+    pub users: *Vector<User>,
+}
+
+impl JsonBind for UserList {
+    fn from_json(v: *JsonValue) -> !UserList {
+        return err("UserList is response-only");
+    }
+
+    fn to_json(self: *UserList) -> *JsonValue {
+        let arr: *JsonValue = JsonValue::array();
+        for let i: int = 0; i < self.users.len(); i++ {
+            let u: User = self.users.get(i);
+            arr.arr_push(u.to_json());
+        }
+        let obj: *JsonValue = JsonValue::object();
+        obj.obj_set("users", arr);
+        return obj;
+    }
+}
+
+// ---- store -------------------------------------------------------------
+//
+// Glide doesn't have top-level `let` for globals, so the singleton lives
+// behind a getter. First call allocates the map and stashes the pointer
+// in a C static; every later call returns the same pointer.
+
+c_raw! {
+    static void* __users_store_ptr = 0;
+}
+
+extern fn __users_store_ptr_get() -> *void;
+extern fn __users_store_ptr_set(p: *void);
+
+c_raw! {
+    void* __users_store_ptr_get(void)    { return __users_store_ptr; }
+    void  __users_store_ptr_set(void* p) { __users_store_ptr = p; }
+}
+
+fn store() -> *HashMap<User> {
+    let p: *void = __users_store_ptr_get();
+    if p == null {
+        let m: *HashMap<User> = HashMap::new();
+        __users_store_ptr_set(m as *void);
+        return m;
+    }
+    return p as *HashMap<User>;
+}
+
+// ---- handlers ----------------------------------------------------------
+
+@handler
+fn list_users() -> Json<UserList> {
+    let s: *HashMap<User> = store();
+    let xs: *Vector<User> = Vector::new();
+    let ks: *Vector<string> = s.keys();
+    for let i: int = 0; i < ks.len(); i++ {
+        xs.push(s.get(ks.get(i)));
+    }
+    return Json::wrap(UserList { users: xs });
+}
+
+// Mixed 200 / 404 → HttpResponse return type. The macro still passes
+// `req` through, so route params keep working.
+@handler
+fn get_user(req: *HttpRequest) -> HttpResponse {
+    let s: *HashMap<User> = store();
+    let id: string = req.param("id");
+    if !s.contains(id) {
+        let nf: *JsonValue = JsonValue::object();
+        nf.obj_set("error", JsonValue::string("user not found"));
+        nf.obj_set("id",    JsonValue::string(id));
+        return HttpResponse::with_status(404).json_of(nf);
+    }
+    let u: User = s.get(id);
+    return json_respond(u);
+}
+
+// Body bound by the macro: `req.body_json()` failure -> 400,
+// `User::from_json` failure -> 422. Reaching the body means
+// `body.val` is a fully-validated User.
+@handler
+fn create_user(body: Json<User>) -> Json<User> {
+    let u: User = body.val;
+    store().insert(u.id, u);
+    return Json::wrap(u);
+}
+
+// ---- entrypoint --------------------------------------------------------
+
+fn main() -> int {
+    let r: *Router = Router::new();
+    r.get("/users",     list_users);
+    r.get("/users/:id", get_user);
+    r.post("/users",    create_user);
+
+    println!("listening on :8080");
+    let res: !int = r.listen(8080);
+    if !res.ok { println!("listen failed:", res.err); return 1; }
+    return 0;
+}

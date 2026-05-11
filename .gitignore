@@ -15,6 +15,11 @@
 /dist
 *.__glide.c
 __glide_run_tmp*
+# Test/bench/doc runner scratch — regenerated per invocation, never
+# meant to live in source control.
+__glide_test_run*
+__glide_bench_run*
+__glide_golden*
 
 .DS_Store
 Thumbs.db
