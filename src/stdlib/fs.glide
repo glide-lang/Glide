@@ -17,6 +17,7 @@ extern fn __glide_fs_symlink(target: string, link: string) -> bool;
 extern fn __glide_fs_remove_file(path: string) -> bool;
 extern fn __glide_fs_remove_dir_rec(path: string) -> bool;
 extern fn __glide_fs_copy_file(src: string, dst: string) -> bool;
+extern fn __glide_fs_copy_dir_rec(src: string, dst: string) -> bool;
 extern fn __glide_fs_list_dirs(path: string) -> string;
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
@@ -301,6 +302,32 @@ c_raw! {
         return out;
     }
     #endif
+
+    // Recursive directory copy. Shells out because doing it by hand
+    // means walking the tree on both sides — `cp -r` / `xcopy /S` are
+    // already efficient. Pre-creates the destination so xcopy doesn't
+    // prompt "is it a file or directory?".
+    static bool __glide_fs_copy_dir_rec(const char* src, const char* dst) {
+        if (!__glide_fs_is_dir(src)) return false;
+        __glide_fs_mkdir_p(dst);
+        #ifdef _WIN32
+        size_t sn = strlen(src), dn = strlen(dst);
+        char* sb = (char*)malloc(sn + 1);
+        char* db = (char*)malloc(dn + 1);
+        if (!sb || !db) { free(sb); free(db); return false; }
+        for (size_t i = 0; i <= sn; i++) sb[i] = (src[i] == '/') ? '\\' : src[i];
+        for (size_t i = 0; i <= dn; i++) db[i] = (dst[i] == '/') ? '\\' : dst[i];
+        char cmd[4096];
+        snprintf(cmd, sizeof(cmd), "xcopy /S /E /I /Y /Q \"%s\" \"%s\" >NUL 2>&1", sb, db);
+        int rc = system(cmd);
+        free(sb); free(db);
+        return rc == 0;
+        #else
+        char cmd[4096];
+        snprintf(cmd, sizeof(cmd), "cp -r \"%s\"/. \"%s\"/", src, dst);
+        return system(cmd) == 0;
+        #endif
+    }
 
     // Binary-safe file copy. Overwrites the destination. Returns false
     // on any I/O error (missing source, write-protected dest, …).
@@ -616,6 +643,17 @@ pub fn fs_remove_dir_rec(path: string) -> bool { return __glide_fs_remove_dir_re
 /// fs_copy_file("target/my_app", "/usr/local/bin/my_app");
 /// ```
 pub fn fs_copy_file(src: string, dst: string) -> bool { return __glide_fs_copy_file(src, dst); }
+
+/// Recursively copy `src` directory into `dst`, creating `dst` if
+/// missing. Shells out to `cp -r` (POSIX) or `xcopy /S` (Windows).
+/// Returns `false` on any I/O error.
+///
+/// ```glide
+/// fs_copy_dir_rec("src", "/install/dir/src");
+/// ```
+pub fn fs_copy_dir_rec(src: string, dst: string) -> bool {
+    return __glide_fs_copy_dir_rec(src, dst);
+}
 
 /// Recursively list every file under `dir` whose name ends in
 /// `suffix` (pass `""` to keep all). Returns full relative paths,

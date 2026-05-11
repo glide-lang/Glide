@@ -1163,6 +1163,23 @@ fn run_install(argc: int) -> int {
     let rc: int = run_build(bin_src, final_path, "", false);
     if rc != 0 { return rc; }
 
+    // Compiler-style installs ship a `src/` tree alongside the binary
+    // so the installed glide can find its own stdlib + builtins
+    // wherever the user invokes it. Detected by the presence of
+    // `src/builtins/builtins.glide` — generic enough for any tool
+    // that wants to ride the same convention.
+    let src_origin: string = project_root.concat("/src");
+    if __glide_file_exists(src_origin.concat("/builtins/builtins.glide")) {
+        let src_dest: string = install_dir.concat("/src");
+        fs_remove_dir_rec(src_dest);
+        if fs_copy_dir_rec(src_origin, src_dest) {
+            println!("installed runtime ->", src_dest);
+        } else {
+            println!("warning: could not copy", src_origin, "->", src_dest,
+                     "(install/build will fall back to CWD lookup)");
+        }
+    }
+
     println!("installed", m.name, "->", final_path);
     _ensure_on_path(install_dir);
     return 0;
