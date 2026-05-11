@@ -763,6 +763,7 @@ fn print_usage() {
     println!("  glide clean                (drop glide_modules/ + glide.lock)");
     println!("  glide install <path>");
     println!("  glide install <git-url> <rev>");
+    println!("  glide target <list|add|remove|dir>  (cross-compile sysroots)");
     println!("  glide doc [--open] [--serve[=<port>]] [--ai] [--stdlib]");
     println!("  glide bench [path]         (run *_bench.glide microbenchmarks)");
     println!("  glide lsp                  (language server on stdio)");
@@ -1748,6 +1749,33 @@ fn _have_on_path(prog: string) -> bool {
     return __glide_shell(cmd) == 0;
 }
 
+// Root for cached cross-compile sysroots (`glide target add ...`
+// writes here; `--target=<triple>` reads). Mirrors `_bin_root()` shape.
+fn _target_root() -> string {
+    let home: !string = os_home_dir();
+    if !home.ok {
+        let tmp: string = __glide_getenv("TMP");
+        if !tmp.eq("") { return tmp.concat("/.glide/targets"); }
+        return "./.glide_targets";
+    }
+    return home.val.concat("/.glide/targets");
+}
+
+// Directory holding the cached sysroot for `triple` (if installed).
+// Layout: <_target_root()>/<triple>/{include,lib}/.
+fn _target_dir(triple: string) -> string {
+    return _target_root().concat("/").concat(triple);
+}
+
+// Returns true when a usable sysroot is cached for `triple` — checked
+// by probing for the openssl ssl.h header which every TLS-aware
+// cross build needs.
+fn _has_target_sysroot(triple: string) -> bool {
+    if triple.eq("") { return false; }
+    let probe: string = _target_dir(triple).concat("/include/openssl/ssl.h");
+    return __glide_file_exists(probe);
+}
+
 // Parse the OS field out of a Zig triple. Accepts e.g.:
 //   x86_64-linux-gnu       -> "linux"
 //   aarch64-macos-none     -> "macos"
@@ -1765,6 +1793,145 @@ fn _target_os(triple: string) -> string {
         return os;
     }
     return "";
+}
+
+// Triples we know how to fetch a sysroot for. Order matters: the
+// first entry is what `glide target list` highlights as the default
+// suggestion. Extend as we publish more.
+fn _known_targets() -> *Vector<string> {
+    let v: *Vector<string> = Vector::new();
+    v.push("x86_64-linux-musl");
+    return v;
+}
+
+fn _is_known_target(triple: string) -> bool {
+    let v: *Vector<string> = _known_targets();
+    for let i: int = 0; i < v.len(); i++ {
+        if v.get(i).eq(triple) { return true; }
+    }
+    return false;
+}
+
+// `glide target` dispatcher. Subcommands:
+//   list           show installed + available targets
+//   dir            print the cache root
+//   add <triple>   fetch + stage a sysroot for cross-compilation
+//   remove <t>     drop a cached sysroot (`rm` works too)
+fn run_target(argc: int) -> int {
+    if argc < 3 { _print_target_help(); return 1; }
+    let sub: string = args_at(2);
+    if sub.eq("list") || sub.eq("ls") { return _target_list(); }
+    if sub.eq("dir") {
+        println!(_target_root());
+        return 0;
+    }
+    if sub.eq("add") {
+        if argc < 4 { println!("usage: glide target add <triple>"); return 1; }
+        return _target_add(args_at(3));
+    }
+    if sub.eq("remove") || sub.eq("rm") {
+        if argc < 4 { println!("usage: glide target remove <triple>"); return 1; }
+        return _target_remove(args_at(3));
+    }
+    _print_target_help();
+    return 1;
+}
+
+fn _print_target_help() {
+    println!("usage: glide target <subcommand>");
+    println!("");
+    println!("Subcommands:");
+    println!("  list                    show installed + available targets");
+    println!("  dir                     print the cache root");
+    println!("  add <triple>            fetch the sysroot for a target");
+    println!("  remove <triple>         drop a cached sysroot");
+    println!("");
+    println!("Targets ship the headers + static libs (openssl, zlib)");
+    println!("that the bundled zig toolchain doesn't carry, so");
+    println!("`glide build --target=<triple>` can produce a binary");
+    println!("that uses stdlib::http / stdlib::net without manual");
+    println!("setup. Sysroots install under:", _target_root());
+}
+
+fn _target_list() -> int {
+    let known: *Vector<string> = _known_targets();
+    println!("Targets available for `glide target add`:");
+    for let i: int = 0; i < known.len(); i++ {
+        let t: string = known.get(i);
+        let mut tag: string = "  available";
+        if _has_target_sysroot(t) { tag = "  installed"; }
+        println!(tag, " ", t);
+    }
+    println!("");
+    println!("Cache root:", _target_root());
+    return 0;
+}
+
+fn _target_add(triple: string) -> int {
+    if !_is_known_target(triple) {
+        println!("target:", triple, "is not a known target.");
+        println!("Run `glide target list` to see what's available.");
+        return 1;
+    }
+    if _has_target_sysroot(triple) {
+        println!("target:", triple, "is already installed at", _target_dir(triple));
+        return 0;
+    }
+    let root: string = _target_root();
+    if !fs_mkdir_p(root) {
+        println!("target: could not create cache root:", root);
+        return 1;
+    }
+    let archive_name: string = "glide-sysroot-".concat(triple).concat("-").concat(GLIDE_VERSION).concat(".tar.gz");
+    let url: string = "https://github.com/glide-lang/Glide/releases/download/v"
+        .concat(GLIDE_VERSION).concat("/").concat(archive_name);
+    let tmp_archive: string = root.concat("/.glide_target_fetch.tar.gz");
+    spinner_start("fetching ".concat(triple).concat(" (").concat(archive_name).concat(")"));
+    let curl_cmd: string = "curl -fsSL -o \"".concat(tmp_archive).concat("\" \"").concat(url).concat("\"");
+    let rc_fetch: int = __glide_shell(curl_cmd);
+    if rc_fetch != 0 {
+        spinner_finish(false, "");
+        println!("target: download failed (curl exit", rc_fetch, ")");
+        println!("       url:", url);
+        fs_remove_file(tmp_archive);
+        return 1;
+    }
+    spinner_set("extracting ".concat(triple));
+    let dest: string = _target_dir(triple);
+    fs_remove_dir_rec(dest);
+    if !fs_mkdir_p(dest) {
+        spinner_finish(false, "");
+        println!("target: could not create", dest);
+        fs_remove_file(tmp_archive);
+        return 1;
+    }
+    let tar_cmd: string = "tar -xzf \"".concat(tmp_archive).concat("\" -C \"").concat(dest).concat("\"");
+    let rc_tar: int = __glide_shell(tar_cmd);
+    fs_remove_file(tmp_archive);
+    if rc_tar != 0 {
+        spinner_finish(false, "");
+        println!("target: extraction failed (tar exit", rc_tar, ")");
+        fs_remove_dir_rec(dest);
+        return 1;
+    }
+    if !_has_target_sysroot(triple) {
+        spinner_finish(false, "");
+        println!("target: archive extracted but openssl headers missing — bad bundle?");
+        return 1;
+    }
+    spinner_finish(true, "installed ".concat(triple).concat(" -> ").concat(dest));
+    return 0;
+}
+
+fn _target_remove(triple: string) -> int {
+    let dir: string = _target_dir(triple);
+    if !fs_is_dir(dir) {
+        println!("target:", triple, "is not installed.");
+        return 1;
+    }
+    fs_remove_dir_rec(dir);
+    println!("removed", triple, "->", dir);
+    return 0;
 }
 
 fn run_build(src_path: string, out_path: string, target: string, then_run: bool) -> int {
@@ -1859,17 +2026,25 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     }
     if win_target {
         cmd = cmd.concat(" -lws2_32 -ldbghelp");
-    } else {
-        // -rdynamic exports non-static symbols so backtrace_symbols()
-        // can label frames with function names instead of bare addrs.
+    } else if !cross {
+        // -rdynamic only on host POSIX builds — cross builds use static
+        // linking where dynamic symbol export isn't applicable.
         cmd = cmd.concat(" -rdynamic");
     }
-    // openssl + zlib only get linked when not cross-compiling — host
-    // builds have them in the usual lib search path; cross builds would
-    // need a sysroot we don't ship. Users who need TLS in cross builds
-    // can supply their own libs via $CC + custom flags.
+    // Resolve openssl / crypto / zlib:
+    //   - host:    libs live wherever the system cc looks. Always add.
+    //   - cross:   we ship per-target sysroots via `glide target add`.
+    //              When the sysroot is present, point zig cc at it and
+    //              force static linkage so the resulting binary stays
+    //              self-contained. When it's missing, fall back to a
+    //              link without TLS + a hint pointing at `glide target`.
     if !cross {
         cmd = cmd.concat(" -lssl -lcrypto -lz");
+    } else if _has_target_sysroot(target) {
+        let sysroot: string = _target_dir(target);
+        cmd = cmd.concat(" -I\"").concat(sysroot).concat("/include\"");
+        cmd = cmd.concat(" -L\"").concat(sysroot).concat("/lib\"");
+        cmd = cmd.concat(" -static -lssl -lcrypto -lz");
     }
 
     // On Windows, system() runs the command via `cmd.exe /c <cmd>`. When the
@@ -1885,6 +2060,15 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         if !quiet { spinner_finish(false, ""); }
         println!("compilation failed (cc exit", rc, ")");
         println!("preserved C source at:", tmp_c);
+        // If we hit a cross build without a sysroot, the user almost
+        // always wanted TLS. Surface the fix proactively — no need
+        // for them to grep the docs.
+        if cross && !_has_target_sysroot(target) && _is_known_target(target) {
+            println!("");
+            println!("hint: this target has no sysroot cached. If your code uses");
+            println!("      stdlib::http or stdlib::net, install one with:");
+            println!("        glide target add", target);
+        }
         return rc;
     }
 
@@ -2337,6 +2521,15 @@ fn main() -> int {
     // cache (~/.glide/cache) is left alone since other projects share it.
     if cmd.eq("clean") {
         return run_clean();
+    }
+
+    // `target {list,add,remove,dir}` — manage cross-compile sysroots
+    // cached under ~/.glide/targets/. Each sysroot bundles the headers
+    // + static libs that the target platform needs for openssl / zlib,
+    // so `glide build --target=<triple>` produces a self-contained
+    // binary instead of failing at link time.
+    if cmd.eq("target") {
+        return run_target(argc);
     }
 
     // `install <path>` / `install <git-url> <rev>` — build the target

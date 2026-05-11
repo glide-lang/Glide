@@ -236,14 +236,33 @@ glide update
 glide clean
 glide install <path>
 glide install <git-url> <rev>
-glide lsp                                     # LSP server on stdio
+glide target <list|add|remove|dir> [<triple>]   # cross-compile sysroots
+glide lsp                                       # LSP server on stdio
 glide --version
 ```
 
-Cross-compile via `--target=<triple>` — any target the bundled C
-toolchain supports: `x86_64-linux-{gnu,musl}`,
-`aarch64-linux-{gnu,musl}`, `x86_64-windows-{gnu,msvc}`,
-`aarch64-macos`, `x86_64-macos`, `riscv64-linux-musl`, and others.
+### Cross-compile
+
+The bundled Zig toolchain handles the codegen and link for any target
+in `--target=<triple>` (`x86_64-linux-musl`, `x86_64-linux-gnu`,
+`aarch64-macos-none`, `x86_64-windows-gnu`, etc).
+
+For targets where your program touches `stdlib::http` or
+`stdlib::net`, install a sysroot first — it bundles the openssl /
+zlib headers + static libs that Zig doesn't carry, so the resulting
+binary stays self-contained:
+
+```bash
+glide target add x86_64-linux-musl     # ~13MB download, one-time
+glide build --target=x86_64-linux-musl # produces a static ELF
+```
+
+The same project builds on Linux / macOS / Windows from a Windows
+host — no Docker, no WSL.
+
+Targets that don't use TLS / compression don't need a sysroot —
+the cross-compile flow falls back to a TLS-less link, which is
+fine for command-line tools and CPU-bound code.
 
 ## build from source
 
