@@ -204,16 +204,21 @@ fn parse_dep_call(v: *Expr) -> ManifestDep {
 //
 //     let lock: Lockfile = Lockfile {
 //         entries: vec_of(
-//             LockEntry::git("logger", "github.com/x/logger", "v1.0.0"),
+//             LockEntry::git("logger", "github.com/x/logger", "v1.0.0",
+//                            "sha256:abc..."),
 //         ),
 //     };
 //
 // Path deps don't get an entry — they have no immutable identity.
+// The 4-arg form carries a SHA-256 of the downloaded archive (or the
+// git tree, for clone-based fetches); the 3-arg form is accepted on
+// read for back-compat with phase-2 lockfiles.
 
 pub struct LockEntry {
     pub name: string,
     pub url:  string,
     pub rev:  string,
+    pub hash: string,   // sha256:<hex>  ("" when unknown)
 }
 
 pub struct Lockfile {
@@ -269,6 +274,7 @@ fn _parse_lock_call(v: *Expr) -> LockEntry {
     e.name = "";
     e.url  = "";
     e.rev  = "";
+    e.hash = "";
     if v == null || v.kind != EX_CALL { return e; }
     let callee: *Expr = v.lhs;
     if callee == null || callee.kind != EX_PATH { return e; }
@@ -282,6 +288,11 @@ fn _parse_lock_call(v: *Expr) -> LockEntry {
     e.name = a0.str_val;
     e.url  = a1.str_val;
     e.rev  = a2.str_val;
+    // 4-arg form (new): optional content hash.
+    if args.len() >= 4 {
+        let a3: Expr = args.get(3);
+        if a3.kind == EX_STRING { e.hash = a3.str_val; }
+    }
     return e;
 }
 
@@ -299,7 +310,11 @@ pub fn write_lockfile(root_dir: string, lf: *Lockfile) -> bool {
             out = out.concat("        LockEntry::git(\"");
             out = out.concat(e.name).concat("\", \"");
             out = out.concat(e.url).concat("\", \"");
-            out = out.concat(e.rev).concat("\"),\n");
+            out = out.concat(e.rev).concat("\"");
+            if !e.hash.eq("") {
+                out = out.concat(", \"").concat(e.hash).concat("\"");
+            }
+            out = out.concat("),\n");
         }
     }
     out = out.concat("    ),\n");
@@ -307,23 +322,56 @@ pub fn write_lockfile(root_dir: string, lf: *Lockfile) -> bool {
     return write_file(path, out);
 }
 
-// Build a fresh lockfile from the manifest's git deps. Path deps have
-// no immutable identity and are omitted.
+// Build a fresh lockfile by walking the manifest's git deps
+// transitively — each fetched dep's own glide.glide is parsed and
+// its deps appended. Cycles are caught by an (url, rev) seen-set.
+// Path deps are skipped (no immutable identity).
 pub fn lockfile_from_manifest(m: *Manifest) -> *Lockfile {
     let entries_vec: *Vector<LockEntry> = Vector::new();
     let lf: *Lockfile = __glide_palloc(sizeof(Lockfile)) as *Lockfile;
     lf.entries = entries_vec;
     if m == null { return lf; }
+    let seen: *HashMap<bool> = HashMap::new();
+    _collect_lock_recursive(m, lf.entries, seen);
+    return lf;
+}
+
+fn _collect_lock_recursive(m: *Manifest, out: *Vector<LockEntry>, seen: *HashMap<bool>) {
     for let i: int = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if d.kind != DEP_GIT { continue; }
+        let key: string = d.path.concat("@").concat(d.rev);
+        if seen.contains(key) { continue; }
+        seen.insert(key, true);
+
         let e: LockEntry;
         e.name = d.name;
         e.url  = d.path;
         e.rev  = d.rev;
-        lf.entries.push(e);
+        e.hash = read_dep_hash(m, d);
+        out.push(e);
+
+        // Recurse into the dep's own manifest if it's already fetched
+        // and declared its own deps.
+        let cache: string = dep_cache_dir(m, d);
+        if cache.eq("") { continue; }
+        let sub_m: *Manifest = read_manifest(cache);
+        if sub_m == null { continue; }
+        _collect_lock_recursive(sub_m, out, seen);
     }
-    return lf;
+}
+
+// Recover the sha256 hash a previous fetch stashed alongside the cache
+// dir. Empty string when the dep hasn't been fetched yet or the file
+// is missing for some other reason (older phase-2 caches, manual
+// inserts, …).
+pub fn read_dep_hash(m: *Manifest, d: ManifestDep) -> string {
+    let dir: string = dep_cache_dir(m, d);
+    if dir.eq("") { return ""; }
+    let path: string = dir.concat("/.glide_hash");
+    if !__glide_file_exists(path) { return ""; }
+    let s: string = read_file(path);
+    return s.trim();
 }
 
 // Given an alias and the manifest, return the directory the alias resolves

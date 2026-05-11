@@ -1,7 +1,9 @@
+import stdlib::hashmap::*;
 import stdlib::fs::*;
 import stdlib::compress::*;
 import stdlib::tar::*;
 import stdlib::spinner::*;
+import stdlib::crypto::*;
 import ast;       // for int_to_str
 import manifest;
 
@@ -9,14 +11,46 @@ extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 extern fn __glide_shell(cmd: string) -> int;
 extern fn __glide_is_windows() -> int;
 extern fn __glide_getenv(name: string) -> string;
+extern fn __glide_list_dir(path: string, suffix: string) -> string;
+extern fn __glide_file_exists(path: string) -> bool;
+extern fn read_file(path: string) -> string;
 extern fn free(p: *void);
 
-// Ensure a git dep is present in the cache. Idempotent — a directory
-// containing any extracted file counts as already-fetched and skips
-// the network round-trip. Returns the cache dir on success, or empty
-// on any failure.
+// Public entry: ensure a git dep + everything it transitively depends
+// on is present in the cache. Idempotent — already-cached deps short
+// circuit. Recurses through each fetched dep's own `glide.glide`, so
+// the user's manifest only has to declare its direct deps.
 pub fn ensure_fetched(m: *Manifest, d: ManifestDep) -> string {
+    let seen: *HashMap<bool> = HashMap::new();
+    return _ensure_rec(m, d, seen);
+}
+
+fn _ensure_rec(m: *Manifest, d: ManifestDep, seen: *HashMap<bool>) -> string {
     if d.kind != DEP_GIT { return dep_cache_dir(m, d); }
+    let key: string = d.path.concat("@").concat(d.rev);
+    if seen.contains(key) { return dep_cache_dir(m, d); }
+    seen.insert(key, true);
+
+    let cache: string = _ensure_single(m, d);
+    if cache.eq("") { return ""; }
+
+    // Walk the dep's own manifest, if any. Each transitive dep goes
+    // into the same global cache, content-addressed by url@rev — so
+    // two parents pulling the same library share one copy.
+    let dep_m: *Manifest = read_manifest(cache);
+    if dep_m == null { return cache; }
+    for let i: int = 0; i < dep_m.deps.len(); i++ {
+        let sub: ManifestDep = dep_m.deps.get(i);
+        if sub.kind == DEP_PATH { continue; }  // path deps make no sense across cache boundaries
+        _ensure_rec(dep_m, sub, seen);
+    }
+    return cache;
+}
+
+// Fetch a single dep into the cache. Tries codeload tarball first (fast,
+// no git binary needed); falls back to `git clone` for non-github hosts
+// or when the codeload URL is otherwise rejected.
+fn _ensure_single(m: *Manifest, d: ManifestDep) -> string {
     let cache: string = dep_cache_dir(m, d);
     if cache.eq("") { return ""; }
     if fs_is_dir(cache) && _has_any_entry(cache) { return cache; }
@@ -26,58 +60,176 @@ pub fn ensure_fetched(m: *Manifest, d: ManifestDep) -> string {
         return "";
     }
 
-    let url: string = _codeload_url(d.path, d.rev);
-    if url.eq("") {
-        println!("fetch:", d.name, "- unsupported host (only github.com so far)");
-        return "";
-    }
-
     spinner_start("fetching ".concat(d.name).concat(" (").concat(d.path).concat("@").concat(d.rev).concat(")"));
 
-    // Download tarball to a tmp file via curl. We shell out instead of
-    // pulling in stdlib::http to keep the bootstrap compiler from
-    // pulling in stdlib::json (which collides with bootstrap/json.glide's
-    // own JsonValue at the C-typedef level).
-    let tmp: string = cache.concat("/.glide_fetch.tar.gz");
-    let cmd: string = "curl -fsSL -o \"".concat(tmp).concat("\" \"").concat(url).concat("\"");
-    let rc: int = __glide_shell(cmd);
-    if rc != 0 {
-        spinner_finish(false, d.name.concat(" - curl failed (is curl on PATH?)"));
+    let url: string = _codeload_url(d.path, d.rev);
+    let mut hash: string = "";
+    let mut ok: bool = false;
+
+    if !url.eq("") {
+        hash = _try_tarball(d, url, cache);
+        if !hash.eq("") { ok = true; }
+    }
+    if !ok {
+        // Either non-github host or tarball errored — try git clone.
+        spinner_set("git clone ".concat(d.name));
+        hash = _try_git_clone(d, cache);
+        if !hash.eq("") { ok = true; }
+    }
+
+    if !ok {
+        spinner_finish(false, d.name.concat(" - fetch failed"));
+        // Wipe the half-populated cache so the next attempt re-fetches
+        // from scratch instead of treating the empty marker as success.
+        fs_remove_dir_rec(cache);
         return "";
     }
 
-    spinner_set("inflating ".concat(d.name));
-    let mut read_len: int = 0;
-    let archive_gz: string = fs_read_bytes(tmp, &read_len);
-    if read_len <= 0 {
-        spinner_finish(false, d.name.concat(" - empty download"));
-        return "";
-    }
-    let mut decoded_len: int = 0;
-    let raw: *void = gzip_decode(archive_gz, read_len, &decoded_len);
-    if raw == null || decoded_len <= 0 {
-        spinner_finish(false, d.name.concat(" - gunzip failed"));
-        return "";
-    }
-    let archive: string = __glide_string_from_buf(raw, decoded_len);
-    free(raw);
-
-    spinner_set("extracting ".concat(d.name));
-    // codeload tarballs wrap content under a single `<repo>-<rev>` dir.
-    let extracted: int = tar_extract(archive, decoded_len, cache, 1);
-    if extracted < 0 {
-        spinner_finish(false, d.name.concat(" - bad archive"));
-        return "";
-    }
-    spinner_finish(true, d.name.concat(" (").concat(int_to_str(extracted)).concat(" files)"));
+    // Stash the content hash next to the source. lockfile_from_manifest
+    // reads this back when writing glide.lock.
+    fs_write(cache.concat("/.glide_hash"), hash);
+    spinner_finish(true, d.name);
     _link_in_project(m, d, cache);
     return cache;
 }
 
+// Returns `sha256:<hex>` on success, "" on any failure.
+fn _try_tarball(d: ManifestDep, url: string, cache: string) -> string {
+    let tmp: string = cache.concat("/.glide_fetch.tar.gz");
+    let cmd: string = "curl -fsSL -o \"".concat(tmp).concat("\" \"").concat(url).concat("\"");
+    let rc: int = __glide_shell(cmd);
+    if rc != 0 { return ""; }
+
+    spinner_set("inflating ".concat(d.name));
+    let mut read_len: int = 0;
+    let archive_gz: string = fs_read_bytes(tmp, &read_len);
+    if read_len <= 0 { return ""; }
+
+    // Hash the raw tarball — the SHA covers EXACTLY what the network
+    // delivered, not the post-extract on-disk state (which would
+    // depend on file ordering, mtime jitter, etc).
+    let hash: string = "sha256:".concat(sha256_hex(archive_gz));
+
+    let mut decoded_len: int = 0;
+    let raw: *void = gzip_decode(archive_gz, read_len, &decoded_len);
+    if raw == null || decoded_len <= 0 { return ""; }
+    let archive: string = __glide_string_from_buf(raw, decoded_len);
+    free(raw);
+
+    spinner_set("extracting ".concat(d.name));
+    let extracted: int = tar_extract(archive, decoded_len, cache, 1);
+    if extracted < 0 { return ""; }
+    return hash;
+}
+
+// Fallback for non-github hosts (gitlab, bitbucket, self-hosted) or
+// when codeload rejected the URL. We try `--branch` first (works for
+// tags and branch names); if that fails we fall back to a full clone
+// followed by `git checkout <rev>` so raw commit SHAs work too.
+fn _try_git_clone(d: ManifestDep, cache: string) -> string {
+    // git clone refuses to write into a non-empty dir; nuke the
+    // half-populated cache first.
+    fs_remove_dir_rec(cache);
+    let url: string = _normalise_git_url(d.path);
+
+    // Attempt 1: shallow clone of a specific branch/tag.
+    let cmd1: string =
+        "git clone --depth=1 --quiet --branch \"".concat(d.rev)
+        .concat("\" \"").concat(url)
+        .concat("\" \"").concat(cache).concat("\"");
+    let rc1: int = __glide_shell(cmd1);
+    if rc1 == 0 {
+        return _git_tree_hash(cache);
+    }
+
+    // Attempt 2: full clone + checkout (for raw commit SHAs).
+    let cmd2: string =
+        "git clone --quiet \"".concat(url)
+        .concat("\" \"").concat(cache).concat("\"");
+    let rc2: int = __glide_shell(cmd2);
+    if rc2 != 0 { return ""; }
+    let checkout: string =
+        "git -C \"".concat(cache).concat("\" checkout --quiet \"").concat(d.rev).concat("\"");
+    let rc3: int = __glide_shell(checkout);
+    if rc3 != 0 { return ""; }
+    return _git_tree_hash(cache);
+}
+
+// Read the clone's HEAD commit SHA by parsing `.git/HEAD` directly.
+// Avoids the platform-specific shell-redirect dance (cmd.exe vs sh)
+// and works without spawning a process. Returns "git:<sha>" or
+// "git:unknown" on any structural mismatch.
+fn _git_tree_hash(cache: string) -> string {
+    let head_path: string = cache.concat("/.git/HEAD");
+    if !__glide_file_exists(head_path) { return "git:unknown"; }
+    let head: string = read_file(head_path).trim();
+
+    // Detached HEAD: the file holds the SHA directly (40 hex chars).
+    if head.len() == 40 && _is_hex(head) { return "git:".concat(head); }
+
+    // Symbolic ref: `ref: refs/heads/<branch>`. Follow it to the
+    // matching loose ref or fall through to packed-refs.
+    if head.starts_with("ref: ") {
+        let ref_path: string = head.substring(5, head.len()).trim();
+        let loose: string = cache.concat("/.git/").concat(ref_path);
+        if __glide_file_exists(loose) {
+            let sha: string = read_file(loose).trim();
+            if !sha.eq("") { return "git:".concat(sha); }
+        }
+        let packed: string = cache.concat("/.git/packed-refs");
+        if __glide_file_exists(packed) {
+            let body: string = read_file(packed);
+            let lines: *Vector<string> = body.split("\n");
+            for let i: int = 0; i < lines.len(); i++ {
+                let ln: string = lines.get(i);
+                if ln.eq("") { continue; }
+                if ln.at(0).to_int() == 35 { continue; }   // '#'
+                let sp: int = _index_of(ln, " ");
+                if sp <= 0 { continue; }
+                let sha: string = ln.substring(0, sp);
+                let name: string = ln.substring(sp + 1, ln.len()).trim();
+                if name.eq(ref_path) { return "git:".concat(sha); }
+            }
+        }
+    }
+    return "git:unknown";
+}
+
+fn _is_hex(s: string) -> bool {
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        let ok: bool = (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+        if !ok { return false; }
+    }
+    return true;
+}
+
+fn _index_of(s: string, needle: string) -> int {
+    if needle.len() == 0 || needle.len() > s.len() { return -1; }
+    let m: int = needle.len();
+    for let i: int = 0; i + m <= s.len(); i++ {
+        let mut hit: bool = true;
+        for let j: int = 0; j < m; j++ {
+            if s.at(i + j).to_int() != needle.at(j).to_int() { hit = false; break; }
+        }
+        if hit { return i; }
+    }
+    return -1;
+}
+
+// `github.com/u/r` → `https://github.com/u/r`. Already-qualified
+// URLs (http(s)/git@) pass through unchanged so users can supply
+// SSH form for private repos.
+fn _normalise_git_url(url: string) -> string {
+    if url.starts_with("https://") { return url; }
+    if url.starts_with("http://")  { return url; }
+    if url.starts_with("git@")     { return url; }
+    if url.starts_with("ssh://")   { return url; }
+    return "https://".concat(url);
+}
+
 // Create `<project>/glide_modules/<alias>` pointing at the cache dir
-// so the user can browse deps locally. Path deps get the same
-// treatment for symmetry — the link target is whatever
-// `dep_cache_dir` resolved to.
+// so the user can browse deps locally.
 fn _link_in_project(m: *Manifest, d: ManifestDep, target: string) {
     if m == null || m.root_dir.eq("") || target.eq("") { return; }
     let modules: string = m.root_dir.concat("/glide_modules");
@@ -86,8 +238,6 @@ fn _link_in_project(m: *Manifest, d: ManifestDep, target: string) {
     fs_symlink(target, link);
 }
 
-// Walk every dep and ensure a glide_modules/<alias> link exists, even
-// for path deps that didn't need a fetch.
 pub fn link_all(m: *Manifest) {
     if m == null { return; }
     for let i: int = 0; i < m.deps.len(); i++ {
@@ -99,26 +249,26 @@ pub fn link_all(m: *Manifest) {
     }
 }
 
-// Walk every dep in the manifest and fetch git ones. Path deps are
-// already on disk so they're skipped silently. Returns the count of
-// deps that needed a network round-trip.
+// Walk every dep in the manifest and fetch git ones (transitively).
+// Path deps are already on disk so they're skipped silently. Returns
+// the count of deps that needed a network round-trip (direct only —
+// transitive fetches don't change the surface count).
 pub fn fetch_all(m: *Manifest) -> int {
     if m == null { return 0; }
     let mut fetched: int = 0;
+    let seen: *HashMap<bool> = HashMap::new();
     for let i: int = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if d.kind != DEP_GIT { continue; }
         let before: bool = fs_is_dir(dep_cache_dir(m, d));
-        let dir: string = ensure_fetched(m, d);
+        let dir: string = _ensure_rec(m, d, seen);
         if !dir.eq("") && !before { fetched = fetched + 1; }
     }
     return fetched;
 }
 
-// Recognise `github.com/<user>/<repo>` and build the codeload URL. The
-// rev can be a tag, branch, or commit hash — codeload accepts all
-// three. Non-github URLs return "" so the caller can fall back to
-// `git clone` (deferred).
+// Recognise `github.com/<user>/<repo>` and build the codeload URL.
+// Non-github URLs return "" so the caller falls back to git clone.
 fn _codeload_url(url: string, rev: string) -> string {
     let stripped: string = _strip_scheme(url);
     if !stripped.starts_with("github.com/") { return ""; }
@@ -137,11 +287,6 @@ fn _strip_scheme(url: string) -> string {
     return url;
 }
 
-// Cheap "is this cache directory populated?" check. Reuses the
-// directory listing helper since `fs_is_dir(cache)` alone can't tell
-// us whether the previous fetch finished or aborted mid-extract.
 fn _has_any_entry(dir: string) -> bool {
     return !__glide_list_dir(dir, "").eq("");
 }
-
-extern fn __glide_list_dir(path: string, suffix: string) -> string;
