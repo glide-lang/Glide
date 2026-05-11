@@ -33,7 +33,7 @@ extern fn __glide_file_exists(path: string) -> bool;
 extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
 
-pub fn run_doc(root_dir: string, open_after: bool, serve_port: int) -> int {
+pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: bool) -> int {
     let out_dir: string = root_dir.concat("/build/doc");
     if !fs_mkdir_p(out_dir) {
         println!("doc: could not create", out_dir);
@@ -70,12 +70,52 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: int) -> int {
 
     let index_path: string = out_dir.concat("/index.html");
     println!("doc: wrote", modules.len(), "modules /", total_items, "items ->", index_path);
+
+    if emit_ai {
+        let llms_path: string = out_dir.concat("/llms.txt");
+        _write_llms_txt(llms_path, modules);
+        println!("doc: wrote LLM-friendly summary ->", llms_path);
+    }
+
     if serve_port > 0 {
         if open_after { _open_in_browser("http://127.0.0.1:".concat(int_to_str(serve_port)).concat("/")); }
         return doc_serve(out_dir, serve_port);
     }
     if open_after { _open_in_browser(index_path); }
     return 0;
+}
+
+// Emit a flat plain-text summary intended for LLM ingestion. Follows
+// the llmstxt.org shape: each module is an `## <module>` heading,
+// every pub item gets a `### <kind> <signature>` subheading followed
+// by its raw docstring. No HTML, no escaping — assistants pasted
+// these into a chat get the full surface area in tokens cheaply.
+fn _write_llms_txt(path: string, modules: *Vector<DocModule>) {
+    let mut out: string =
+        "# Glide API reference (LLM ingest)\n\n"
+        .concat("Auto-generated from `///` doc comments by `glide doc --ai`.\n")
+        .concat("Each module section lists its `pub` items in source order with\n")
+        .concat("the signature on one line and the raw docstring (markdown)\n")
+        .concat("immediately after.\n\n");
+    for let i: int = 0; i < modules.len(); i++ {
+        let m: DocModule = modules.get(i);
+        out = out.concat("## ").concat(m.display).concat("\n");
+        out = out.concat("source: ").concat(m.origin).concat("\n");
+        if !m.blurb.eq("") {
+            out = out.concat("\n").concat(m.blurb).concat("\n");
+        }
+        out = out.concat("\n");
+        for let j: int = 0; j < m.items.len(); j++ {
+            let it: DocItem = m.items.get(j);
+            out = out.concat("### ").concat(_kind_label(it.kind)).concat(" ")
+                     .concat(it.signature).concat("\n");
+            if !it.doc.eq("") {
+                out = out.concat(it.doc).concat("\n");
+            }
+            out = out.concat("\n");
+        }
+    }
+    write_file(path, out);
 }
 
 fn _scan_file(path: string, root: string) -> *DocModule {

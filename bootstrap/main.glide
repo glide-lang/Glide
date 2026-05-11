@@ -754,7 +754,7 @@ fn print_usage() {
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
     println!("  glide fmt <file> [--write] (pretty-print to stdout, or rewrite in place)");
-    println!("  glide new <name>           (scaffold a new project)");
+    println!("  glide new <name> [--lib]   (scaffold a new binary or library project)");
     println!("  glide add <name> <git-url> <rev>");
     println!("  glide add --local <name> <path>");
     println!("  glide remove <name>        (drop a dep from glide.glide)");
@@ -763,7 +763,7 @@ fn print_usage() {
     println!("  glide clean                (drop glide_modules/ + glide.lock)");
     println!("  glide install <path>");
     println!("  glide install <git-url> <rev>");
-    println!("  glide doc [--open] [--serve[=<port>]]");
+    println!("  glide doc [--open] [--serve[=<port>]] [--ai]");
     println!("  glide bench [path]         (run *_bench.glide microbenchmarks)");
     println!("  glide lsp                  (language server on stdio)");
 }
@@ -821,8 +821,10 @@ fn auto_fetch_for(src_path: string) {
 //   - `glide new <name>`: creates `<name>/` (errors if it exists).
 //   - `glide new .`     : scaffolds into the current directory; the
 //                          project name comes from the CWD's basename.
+// `--lib` produces a library project: `src/lib.glide` with a sample
+// `pub fn` instead of `src/main.glide`, and the manifest omits `bin`.
 // Either way, refuses to clobber an existing `glide.glide`.
-fn run_new(name: string) -> int {
+fn run_new(name: string, is_lib: bool) -> int {
     let mut target_dir: string = name;
     let mut proj_name: string = name;
     let scaffold_in_place: bool = name.eq(".") || name.eq("./") || fs_is_dir(name);
@@ -858,11 +860,15 @@ fn run_new(name: string) -> int {
         println!("new: could not create", src_dir);
         return 1;
     }
+    // Libraries declare `bin: ""` so `glide build` / `install` see
+    // the project as non-executable and bail with a clear message
+    // instead of trying to build a missing main.
+    let bin_field: string = if is_lib { "" } else { "src/main.glide" };
     let manifest_body: string =
         "let manifest: Package = Package {\n"
         .concat("    name:    \"").concat(proj_name).concat("\",\n")
         .concat("    version: \"0.1.0\",\n")
-        .concat("    bin:     \"src/main.glide\",\n")
+        .concat("    bin:     \"").concat(bin_field).concat("\",\n")
         .concat("    deps: vec_of(\n")
         .concat("    ),\n")
         .concat("};\n");
@@ -870,25 +876,45 @@ fn run_new(name: string) -> int {
         println!("new: could not write glide.glide");
         return 1;
     }
-    // Don't overwrite an existing src/main.glide — the user may have
-    // started with hand-written code before turning the dir into a
-    // Glide project.
-    let main_path: string = target_dir.concat("/src/main.glide");
-    if !__glide_file_exists(main_path) {
-        let main_body: string =
-            "fn main() -> int {\n"
-            .concat("    println!(\"hello from ").concat(proj_name).concat("\");\n")
-            .concat("    return 0;\n")
-            .concat("}\n");
-        if !write_file(main_path, main_body) {
-            println!("new: could not write src/main.glide");
-            return 1;
+    // Don't overwrite an existing src/main.glide / src/lib.glide —
+    // the user may have started with hand-written code before turning
+    // the dir into a Glide project.
+    if is_lib {
+        let lib_path: string = target_dir.concat("/src/lib.glide");
+        if !__glide_file_exists(lib_path) {
+            let lib_body: string =
+                "/// Greet someone by name.\n"
+                .concat("///\n")
+                .concat("/// ```glide\n")
+                .concat("/// let s: string = hello(\"world\");   // \"hello, world\"\n")
+                .concat("/// ```\n")
+                .concat("pub fn hello(name: string) -> string {\n")
+                .concat("    return \"hello, \".concat(name);\n")
+                .concat("}\n");
+            if !write_file(lib_path, lib_body) {
+                println!("new: could not write src/lib.glide");
+                return 1;
+            }
+        }
+    } else {
+        let main_path: string = target_dir.concat("/src/main.glide");
+        if !__glide_file_exists(main_path) {
+            let main_body: string =
+                "fn main() -> int {\n"
+                .concat("    println!(\"hello from ").concat(proj_name).concat("\");\n")
+                .concat("    return 0;\n")
+                .concat("}\n");
+            if !write_file(main_path, main_body) {
+                println!("new: could not write src/main.glide");
+                return 1;
+            }
         }
     }
+    let kind: string = if is_lib { "library" } else { "binary" };
     if scaffold_in_place {
-        println!("created glide project", proj_name, "in", target_dir);
+        println!("created", kind, "project", proj_name, "in", target_dir);
     } else {
-        println!("created", target_dir.concat("/"));
+        println!("created", kind, "project", target_dir.concat("/"));
     }
     return 0;
 }
@@ -2050,10 +2076,21 @@ fn main() -> int {
         return run_fetch(start);
     }
 
-    // `new <name>` — scaffold a fresh project directory.
+    // `new <name> [--lib]` — scaffold a fresh project directory.
+    // `glide new .` scaffolds into CWD using the dir basename as the
+    // project name; `--lib` produces a library project (no `bin`,
+    // src/lib.glide with a sample pub fn).
     if cmd.eq("new") {
-        if argc < 3 { println!("usage: glide new <name>"); return 1; }
-        return run_new(args_at(2));
+        if argc < 3 { println!("usage: glide new <name> [--lib]"); return 1; }
+        let mut new_name: string = "";
+        let mut is_lib: bool = false;
+        for let i: int = 2; i < argc; i++ {
+            let a: string = args_at(i);
+            if a.eq("--lib") { is_lib = true; continue; }
+            if new_name.eq("") { new_name = a; }
+        }
+        if new_name.eq("") { println!("usage: glide new <name> [--lib]"); return 1; }
+        return run_new(new_name, is_lib);
     }
 
     // `add` — write a new entry into the nearest glide.glide:
@@ -2103,10 +2140,12 @@ fn main() -> int {
     if cmd.eq("doc") {
         let mut want_open: bool = false;
         let mut serve_port: int = 0;
+        let mut emit_ai: bool = false;
         for let i: int = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.eq("--open") { want_open = true; continue; }
             if a.eq("--serve") { serve_port = 3030; continue; }
+            if a.eq("--ai") { emit_ai = true; continue; }
             if a.len() > 8 && a.substring(0, 8).eq("--serve=") {
                 let n: string = a.substring(8, a.len());
                 let parsed: int = _parse_port(n);
@@ -2116,7 +2155,7 @@ fn main() -> int {
         }
         let root: string = find_manifest_root(".");
         let target_root: string = if root.eq("") { "." } else { root };
-        return run_doc(target_root, want_open, serve_port);
+        return run_doc(target_root, want_open, serve_port, emit_ai);
     }
 
     // `test [path]`           — run *_test.glide files (default cwd).
@@ -2167,8 +2206,14 @@ fn main() -> int {
                 return 1;
             }
             let m: *Manifest = read_manifest(root);
-            if m == null || m.bin.eq("") {
-                println!("manifest has no `bin` field");
+            if m == null {
+                println!("could not parse glide.glide at", root);
+                return 1;
+            }
+            if m.bin.eq("") {
+                println!(m.name, "is a library project (no `bin`).");
+                println!("nothing to build/run — import it from another project:");
+                println!("  import", m.name.concat("::…;"));
                 return 1;
             }
             project_root = root;
