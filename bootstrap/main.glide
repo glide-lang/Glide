@@ -742,6 +742,10 @@ const MODE_CHECK: int = 3;
 const MODE_FMT: int = 4;
 const MODE_TEST: int = 5;
 
+// Bumped manually on release. `glide --version` reads it; same value
+// lives in glide.glide at the repo root (kept in sync by hand for now).
+const GLIDE_VERSION: string = "0.1.0";
+
 fn print_usage() {
     println!("Glide compiler");
     println!("usage:");
@@ -1910,6 +1914,24 @@ fn main() -> int {
         return 1;
     }
     let cmd: string = args_at(1);
+
+    // `--version` / `-v` / `-V` / `--v` / `version` — print and exit.
+    if cmd.eq("--version") || cmd.eq("--v")
+       || cmd.eq("-v") || cmd.eq("-V") || cmd.eq("version") {
+        // Concat instead of `println!("glide", GLIDE_VERSION)` — passing
+        // a `const string` directly to a `println!` variadic arg gets
+        // codegen'd as `%p` instead of `%s` (open compiler bug); a
+        // method call result is treated as a plain string and prints
+        // correctly.
+        println!("glide ".concat(GLIDE_VERSION));
+        return 0;
+    }
+
+    // `--help` / `-h` — same as no-args, but exit 0 instead of 1.
+    if cmd.eq("--help") || cmd.eq("-h") || cmd.eq("help") {
+        print_usage();
+        return 0;
+    }
 
     // `lsp` takes no positional file arg.
     if cmd.eq("lsp") { return lsp_main(); }
