@@ -39,6 +39,7 @@ import lower;        // for lower_program
 import typer;        // for types_compat / merge_parse_diags
 import json;
 import fmt;
+import manifest;     // for project-aware completion (Manifest, dep_cache_dir, …)
 
 // FFI to runtime helpers (defined in codegen runtime emit / stdlib::os c_raw).
 extern fn read_file(path: string) -> string;
@@ -103,6 +104,15 @@ pub struct LspState {
     pub docs: *HashMap<LspDoc>,
     pub shutdown_requested: bool,
     pub stdlib_index: *Vector<ImportableSym>,
+    /// Project-local importable symbols: the user's own modules under
+    /// the project's `src/` tree plus every dep (path or git) declared
+    /// in `glide.glide`. Built once when the first doc opens from a
+    /// project that has a manifest; cached after.
+    pub project_index: *Vector<ImportableSym>,
+    /// Manifest root we built `project_index` for. Used to detect when
+    /// the user opened a doc in a different project and the index
+    /// needs to be rebuilt.
+    pub project_root: string,
     // Path -> parse_program output. Populated lazily on first parse of
     // each transitive import (builtins + stdlib + user-imported files);
     // hits skip the lex/parse work on every keystroke. The user's
@@ -124,6 +134,9 @@ pub fn lsp_state_new() -> *LspState {
     s.shutdown_requested = false;
     let idx: *Vector<ImportableSym> = Vector::new();
     s.stdlib_index = idx;
+    let pidx: *Vector<ImportableSym> = Vector::new();
+    s.project_index = pidx;
+    s.project_root = "";
     let pc: *HashMap<*Vector<Stmt>> = HashMap::new();
     s.parse_cache = pc;
     s.last_arena = null;
@@ -328,79 +341,160 @@ fn drop_glide_ext(name: string) -> string {
 fn populate_stdlib_index(state: *LspState) {
     let dir: string = find_stdlib_dir();
     if dir.eq("") { return; }
+    _index_stdlib_subtree(state, dir, "stdlib");
+}
+
+// Walk `dir` recursively. Each `.glide` file becomes an importable
+// module under `module_prefix::<filename-without-extension>`; each
+// subdirectory recurses with the prefix extended. So `src/stdlib/http`
+// becomes `stdlib::http`, `src/stdlib/http/client.glide` becomes
+// `stdlib::http::client`, and so on.
+fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string) {
     let files: *Vector<string> = fs_list_dir(dir, ".glide");
-    if files == null { return; }
-    for let i: int = 0; i < files.len(); i++ {
-        let fname: string = files.get(i);
-        let path: string = dir.concat("/").concat(fname);
-        let src: string = read_file(path);
-        if src.eq("") { continue; }
-        let mod_name: string = drop_glide_ext(fname);
-        let module: string = "stdlib::".concat(mod_name);
-        let lex: *Lexer = Lexer::new(src);
-        let par: *Parser = Parser::new(lex);
-        let stmts: *Vector<Stmt> = parse_program(par);
-        if stmts == null { continue; }
-        // Track exported symbol names so the module entry can list them
-        // in its hover-doc summary.
-        let mut summary: string = "";
-        let mut count: int = 0;
-        for let j: int = 0; j < stmts.len(); j++ {
-            let s: Stmt = stmts.get(j);
-            if !s.is_pub { continue; }
-            if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
-               && s.kind != ST_CONST && s.kind != ST_TRAIT { continue; }
-            let mut sig: string = "";
-            let mut label_extra: string = "";
-            let mut snip: string = s.name;
-            let mut has_snip: bool = false;
-            if s.kind == ST_FN {
-                sig = fn_signature(&s);
-                label_extra = fn_label_extra(&s);
-                snip = fn_snippet(&s);
-                has_snip = true;
-            }
-            else if s.kind == ST_STRUCT { sig = "struct ".concat(s.name); }
-            else if s.kind == ST_ENUM { sig = "enum ".concat(s.name); }
-            else if s.kind == ST_TRAIT { sig = "trait ".concat(s.name); }
-            else if s.kind == ST_CONST { sig = "const ".concat(s.name); }
-            let sym: ImportableSym = ImportableSym {
-                name: s.name,
-                kind: s.kind,
-                module: module,
-                signature: sig,
-                label_extra: label_extra,
-                doc: s.doc_comment,
-                snippet: snip,
-                has_snippet: has_snip,
-            };
-            state.stdlib_index.push(sym);
-            if count < 12 {
-                if !summary.eq("") { summary = summary.concat(", "); }
-                summary = summary.concat("`").concat(s.name).concat("`");
-            } else if count == 12 {
-                summary = summary.concat(", …");
-            }
-            count = count + 1;
+    if files != null {
+        for let i: int = 0; i < files.len(); i++ {
+            let fname: string = files.get(i);
+            if fname.eq("") { continue; }
+            let path: string = dir.concat("/").concat(fname);
+            let mod_name: string = drop_glide_ext(fname);
+            let module: string = module_prefix.concat("::").concat(mod_name);
+            _index_one_module(state, path, mod_name, module);
         }
-        // Module entry — the header reads "Glide stdlib module" and the
-        // exported names follow on the next line.
-        let mut mdoc: string = "Glide stdlib module.";
-        if !summary.eq("") {
-            mdoc = mdoc.concat("\n\nExports: ").concat(summary).concat(".");
-        }
-        let mod_sym: ImportableSym = ImportableSym {
-            name: mod_name,
-            kind: SYMKIND_MODULE,
-            module: module,
-            signature: "module ".concat(mod_name),
-            label_extra: "",
-            doc: mdoc,
-            snippet: mod_name.concat("::"),
-            has_snippet: true,
-        };
-        state.stdlib_index.push(mod_sym);
     }
+    let subs_raw: string = __glide_fs_list_dirs(dir);
+    if subs_raw.eq("") { return; }
+    let subs: *Vector<string> = subs_raw.split("\n");
+    for let i: int = 0; i < subs.len(); i++ {
+        let sub: string = subs.get(i);
+        if sub.eq("") { continue; }
+        let child_dir: string = dir.concat("/").concat(sub);
+        let child_pref: string = module_prefix.concat("::").concat(sub);
+        _index_stdlib_subtree(state, child_dir, child_pref);
+    }
+}
+
+// Rebuild `state.project_index` if the doc at `uri` belongs to a Glide
+// project we haven't indexed yet. No-op when there's no `glide.glide`
+// above the file, or when we already indexed this project.
+fn _refresh_project_index(state: *LspState, uri: string) {
+    let path: string = uri_to_path(uri);
+    if path.eq("") { return; }
+    let dir: string = parent_dir(path);
+    let root: string = find_manifest_root(dir);
+    if root.eq("") { return; }
+    if state.project_root.eq(root) { return; }
+    state.project_root = root;
+    // Rebuild from scratch.
+    let fresh: *Vector<ImportableSym> = Vector::new();
+    state.project_index = fresh;
+    // Project's own modules under `<root>/src/`.
+    let src_dir: string = root.concat("/src");
+    if __glide_file_exists(src_dir) {
+        let proj_name: string = _project_namespace(root);
+        _index_stdlib_subtree(state, src_dir, proj_name);
+    }
+    // Each declared dep — path deps point at a sibling dir, git deps at
+    // the cache slot. Indexing covers both because dep_cache_dir picks
+    // the right one already.
+    let m: *Manifest = read_manifest(root);
+    if m == null { return; }
+    for let i: int = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        let dep_root: string = dep_cache_dir(m, d);
+        if dep_root.eq("") || !__glide_file_exists(dep_root) { continue; }
+        let dep_src: string = dep_root.concat("/src");
+        if __glide_file_exists(dep_src) {
+            _index_stdlib_subtree(state, dep_src, d.name);
+        } else {
+            _index_stdlib_subtree(state, dep_root, d.name);
+        }
+    }
+}
+
+// Read the `name` field from `<root>/glide.glide` so the project's
+// own modules live under the user-chosen namespace (e.g. `my_app`).
+// Falls back to the directory's basename for malformed manifests.
+fn _project_namespace(root: string) -> string {
+    let m: *Manifest = read_manifest(root);
+    if m != null && !m.name.eq("") { return m.name; }
+    // basename(root) fallback.
+    let mut cut: int = -1;
+    for let i: int = 0; i < root.len(); i++ {
+        let c: int = root.at(i).to_int();
+        if c == 47 || c == 92 { cut = i; }
+    }
+    if cut < 0 || cut + 1 >= root.len() { return "project"; }
+    return root.substring(cut + 1, root.len());
+}
+
+// Parse one source file and append every pub item to the index, plus
+// a SYMKIND_MODULE entry for the module itself.
+fn _index_one_module(state: *LspState, path: string, mod_name: string, module: string) {
+    let src: string = read_file(path);
+    if src.eq("") { return; }
+    let lex: *Lexer = Lexer::new(src);
+    let par: *Parser = Parser::new(lex);
+    let stmts: *Vector<Stmt> = parse_program(par);
+    if stmts == null { return; }
+    // Track exported symbol names so the module entry can list them
+    // in its hover-doc summary.
+    let mut summary: string = "";
+    let mut count: int = 0;
+    for let j: int = 0; j < stmts.len(); j++ {
+        let s: Stmt = stmts.get(j);
+        if !s.is_pub { continue; }
+        if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
+           && s.kind != ST_CONST && s.kind != ST_TRAIT { continue; }
+        let mut sig: string = "";
+        let mut label_extra: string = "";
+        let mut snip: string = s.name;
+        let mut has_snip: bool = false;
+        if s.kind == ST_FN {
+            sig = fn_signature(&s);
+            label_extra = fn_label_extra(&s);
+            snip = fn_snippet(&s);
+            has_snip = true;
+        }
+        else if s.kind == ST_STRUCT { sig = "struct ".concat(s.name); }
+        else if s.kind == ST_ENUM { sig = "enum ".concat(s.name); }
+        else if s.kind == ST_TRAIT { sig = "trait ".concat(s.name); }
+        else if s.kind == ST_CONST { sig = "const ".concat(s.name); }
+        let sym: ImportableSym = ImportableSym {
+            name: s.name,
+            kind: s.kind,
+            module: module,
+            signature: sig,
+            label_extra: label_extra,
+            doc: s.doc_comment,
+            snippet: snip,
+            has_snippet: has_snip,
+        };
+        state.stdlib_index.push(sym);
+        if count < 12 {
+            if !summary.eq("") { summary = summary.concat(", "); }
+            summary = summary.concat("`").concat(s.name).concat("`");
+        } else if count == 12 {
+            summary = summary.concat(", …");
+        }
+        count = count + 1;
+    }
+    // Module entry — the header reads "Glide stdlib module" and the
+    // exported names follow on the next line.
+    let mut mdoc: string = "Glide stdlib module.";
+    if !summary.eq("") {
+        mdoc = mdoc.concat("\n\nExports: ").concat(summary).concat(".");
+    }
+    let mod_sym: ImportableSym = ImportableSym {
+        name: mod_name,
+        kind: SYMKIND_MODULE,
+        module: module,
+        signature: "module ".concat(mod_name),
+        label_extra: "",
+        doc: mdoc,
+        snippet: mod_name.concat("::"),
+        has_snippet: true,
+    };
+    state.stdlib_index.push(mod_sym);
 }
 
 // Compact label suffix for fn items, gopls-style: `(a: int, b: int) -> int`.
@@ -440,6 +534,9 @@ fn fn_snippet(s: *Stmt) -> string {
 // Helper: directory listing with a suffix filter. Mirrors fs_list from
 // stdlib::fs but stays inside the LSP module to avoid the import dep.
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
+extern fn __glide_fs_list_dirs(path: string) -> string;
+extern fn __glide_file_exists(path: string) -> bool;
+extern fn parent_dir(path: string) -> string;
 fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
     let raw: string = __glide_list_dir(dir, suffix);
     if raw.eq("") { return Vector::new(); }
@@ -604,6 +701,11 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: null };
     state.docs.insert(uri, doc);
     if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
+    // Refresh project_index when the user opens a doc from a different
+    // Glide project. Walks up from the file's directory looking for a
+    // `glide.glide` manifest; populates symbols from the project's own
+    // src/ tree plus every declared dep (path + git cache dir).
+    _refresh_project_index(state, uri);
     run_analysis_and_publish(uri, text, state);
 }
 
@@ -885,8 +987,162 @@ fn find_top_decl(stmts: *Vector<Stmt>, name: string) -> *Stmt {
     for let i: int = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if (s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
-            || s.kind == ST_CONST || s.kind == ST_MACRO_DEF)
+            || s.kind == ST_CONST || s.kind == ST_MACRO_DEF
+            || s.kind == ST_TRAIT)
            && s.name.eq(name) {
+            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *p = s;
+            return p;
+        }
+    }
+    return null;
+}
+
+// Find a local binding (let / param) named `name` inside `host` that's
+// in scope at `before_line` (0-indexed). Walks the fn body recursively,
+// drilling into nested blocks; returns the lexically-closest match so
+// shadowing-by-block works the way users expect.
+fn find_local_decl(host: *Stmt, name: string, before_line: int) -> *Stmt {
+    if host == null { return null; }
+    // Params first — they're "above" every line of the body.
+    if host.fn_params != null {
+        for let i: int = 0; i < host.fn_params.len(); i++ {
+            let p: Param = host.fn_params.get(i);
+            if !p.name.eq(name) { continue; }
+            // Synthesise a Stmt at the fn's name position so callers
+            // can reuse range_for_decl_name + path_to_uri.
+            let s: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            s.kind = ST_LET;
+            s.name = p.name;
+            s.let_ty = p.ty;
+            s.let_value = null;
+            s.is_mut = false;
+            s.line = host.name_line;
+            s.column = host.name_col;
+            s.name_line = host.name_line;
+            s.name_col = host.name_col;
+            s.name_len = p.name.len();
+            s.origin = host.origin;
+            return s;
+        }
+    }
+    return _find_let_in_block(host.fn_body, name, before_line);
+}
+
+fn _find_let_in_block(body: *Vector<Stmt>, name: string, before_line: int) -> *Stmt {
+    if body == null { return null; }
+    let mut best: *Stmt = null;
+    let mut best_line: int = -1;
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        // Lets visible at `before_line` if their decl line is at or
+        // before it. Track the closest (max line ≤ before_line).
+        if s.kind == ST_LET && s.name.eq(name) && (s.line - 1) <= before_line {
+            if s.line > best_line {
+                best_line = s.line;
+                let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *p = s;
+                best = p;
+            }
+        }
+        // Recurse into nested scopes — shadowing wins over outer lets.
+        if s.then_body != null {
+            let inner: *Stmt = _find_let_in_block(s.then_body, name, before_line);
+            if inner != null && inner.line > best_line {
+                best_line = inner.line;
+                best = inner;
+            }
+        }
+        if s.else_body != null {
+            let inner: *Stmt = _find_let_in_block(s.else_body, name, before_line);
+            if inner != null && inner.line > best_line {
+                best_line = inner.line;
+                best = inner;
+            }
+        }
+        if s.fn_body != null && s.kind != ST_FN {
+            let inner: *Stmt = _find_let_in_block(s.fn_body, name, before_line);
+            if inner != null && inner.line > best_line {
+                best_line = inner.line;
+                best = inner;
+            }
+        }
+        if s.for_init != null && s.for_init.then_body != null {
+            let inner: *Stmt = _find_let_in_block(s.for_init.then_body, name, before_line);
+            if inner != null && inner.line > best_line {
+                best_line = inner.line;
+                best = inner;
+            }
+        }
+    }
+    return best;
+}
+
+// Macros are looked up by their unqualified name (without the trailing
+// `!`). Walks top-level `macro` defs first, then any `impl T { macro
+// ... }` blocks. Returns the first hit.
+fn find_macro_def(stmts: *Vector<Stmt>, name: string) -> *Stmt {
+    if stmts == null { return null; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_MACRO_DEF && s.name.eq(name) {
+            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *p = s;
+            return p;
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_MACRO_DEF && m.name.eq(name) {
+                    let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                    *p = m;
+                    return p;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+// Proc macros live on a fn declaration tagged with `@proc_derive(Name)`,
+// `@proc_attr(Name)`, `@proc_macro(Name)`, or `@proc_macro_str(Name)`.
+// Clicking on `Name` inside `@derive(Name)` / `@Name` should jump to
+// that fn. Walks every fn looking for a matching attr+arg pair.
+fn find_proc_macro_fn(stmts: *Vector<Stmt>, name: string) -> *Stmt {
+    if stmts == null { return null; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_FN || s.attrs == null { continue; }
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            let n: string = a.name;
+            let is_proc: bool = n.eq("proc_derive") || n.eq("proc_attr")
+                             || n.eq("proc_macro") || n.eq("proc_macro_str");
+            if !is_proc { continue; }
+            if a.args == null || a.args.len() == 0 { continue; }
+            let arg0: Expr = a.args.get(0);
+            if arg0.kind != EX_IDENT { continue; }
+            if !arg0.str_val.eq(name) { continue; }
+            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *p = s;
+            return p;
+        }
+    }
+    return null;
+}
+
+// Find a struct field decl. Field nodes don't carry their own line
+// info, so we jump to the struct's name instead — close enough that
+// the user lands on the right declaration to scan visually.
+fn find_struct_field(stmts: *Vector<Stmt>, type_name: string, field: string) -> *Stmt {
+    if stmts == null { return null; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_STRUCT || !s.name.eq(type_name) { continue; }
+        if s.struct_fields == null { continue; }
+        for let j: int = 0; j < s.struct_fields.len(); j++ {
+            let f: Field = s.struct_fields.get(j);
+            if !f.name.eq(field) { continue; }
             let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *p = s;
             return p;
@@ -1677,32 +1933,90 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     let word: string = word_at(doc.text, line0, col0);
     if word.eq("") { lsp_send_response(id, json_null()); return; }
 
-    // First try qualified resolution so `Vector::new` and `v.push` jump to
-    // the impl method. cursor_before_partial walks back over ident chars,
-    // so passing the cursor anywhere inside the word lands on the start of
-    // the partial, where the helpers can see `::` or `.` right before it.
     let mut decl: *Stmt = null;
-    let path_q: string = path_qualifier_before(doc.text, line0, col0);
-    if !path_q.eq("") {
-        decl = find_method_in_impl(doc.stmts, path_q, word);
+
+    // 0) Cursor on a segment of an `import a::b::c;` line — jump to the
+    //    resolved .glide file. Walks doc.stmts for the ST_IMPORT whose
+    //    line matches the cursor; its `import_path` already holds the
+    //    fully-resolved on-disk path.
+    let imp: *Stmt = _find_import_on_line(doc.stmts, line0, uri);
+    if imp != null && imp.import_path != null && !imp.import_path.eq("") {
+        let target: string = path_to_uri(imp.import_path);
+        let loc: *JsonValue = json_object();
+        json_obj_set(loc, "uri", json_string(target));
+        let zero: *JsonValue = json_object();
+        let zero_start: *JsonValue = json_object();
+        json_obj_set(zero_start, "line", json_int(0));
+        json_obj_set(zero_start, "character", json_int(0));
+        let zero_end: *JsonValue = json_object();
+        json_obj_set(zero_end, "line", json_int(0));
+        json_obj_set(zero_end, "character", json_int(0));
+        json_obj_set(zero, "start", zero_start);
+        json_obj_set(zero, "end", zero_end);
+        json_obj_set(loc, "range", zero);
+        lsp_send_response(id, loc);
+        return;
     }
+
+    // 1) Cursor on `name` in `name!(...)` — jump to the macro def. Also
+    //    handles type-attached macros via `find_macro_def`.
+    if decl == null && _ident_followed_by_bang(doc.text, line0, col0, word.len()) {
+        decl = find_macro_def(doc.stmts, word);
+    }
+
+    // 2) Cursor on `Name` inside `@derive(Name)` / `@Name` / a proc-macro
+    //    arg — jump to the fn decorated with `@proc_<kind>(Name)`.
+    if decl == null && _inside_proc_attr_arg(doc.text, line0, col0) {
+        decl = find_proc_macro_fn(doc.stmts, word);
+    }
+
+    // 3) `Vector::new` (or `Vector::with_cap`, etc) — impl method.
+    if decl == null {
+        let path_q: string = path_qualifier_before(doc.text, line0, col0);
+        if !path_q.eq("") {
+            decl = find_method_in_impl(doc.stmts, path_q, word);
+        }
+    }
+
+    // 4) `var.method` and `var.field` — resolve the receiver's type, then
+    //    look up the method first, falling back to a struct field decl.
     if decl == null {
         let mem_var: string = member_qualifier_before(doc.text, line0, col0);
         if !mem_var.eq("") {
             let var_type: string = lookup_local_type(doc.stmts, line0, mem_var);
             if !var_type.eq("") {
                 decl = find_method_in_impl(doc.stmts, var_type, word);
+                if decl == null {
+                    decl = find_struct_field(doc.stmts, var_type, word);
+                }
             }
         }
     }
-    // Chained inline ctor: `Vector::new().push_all` — derive the receiver type
-    // from the `Type::ctor()` paren-balanced lookback used by completion.
+
+    // 5) Chained inline ctor: `Vector::new().push_all` — derive the
+    //    receiver type from the `Type::ctor()` paren-balanced lookback
+    //    used by completion.
     if decl == null {
         let chain_ty: string = chained_ctor_qualifier_before(doc.text, line0, col0);
         if !chain_ty.eq("") {
             decl = find_method_in_impl(doc.stmts, chain_ty, word);
+            if decl == null {
+                decl = find_struct_field(doc.stmts, chain_ty, word);
+            }
         }
     }
+
+    // 6) Local binding (let / param) above the cursor in the containing
+    //    fn. Shadowing-aware via the inner-most match.
+    if decl == null {
+        let host: *Stmt = fn_containing(doc.stmts, line0);
+        if host != null {
+            decl = find_local_decl(host, word, line0);
+        }
+    }
+
+    // 7) Last resort: any top-level decl with the right name (fn, struct,
+    //    enum, const, trait, macro).
     if decl == null { decl = find_top_decl(doc.stmts, word); }
     if decl == null { lsp_send_response(id, json_null()); return; }
 
@@ -1716,6 +2030,96 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     json_obj_set(loc, "uri", json_string(target_uri));
     json_obj_set(loc, "range", range_for_decl_name(decl));
     lsp_send_response(id, loc);
+}
+
+// True when the character immediately after `<word>` at (line0, col0)
+// is `!`, marking a macro call site.
+fn _ident_followed_by_bang(text: string, line0: int, col0: int, _word_len: int) -> bool {
+    let off: int = _line_col_offset(text, line0, col0);
+    if off < 0 { return false; }
+    // Walk forward past any remaining ident chars in case col0 sits
+    // mid-word, then check the next byte.
+    let n: int = text.len();
+    let mut i: int = off;
+    while i < n {
+        let c: int = text.at(i).to_int();
+        let is_id: bool = (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+                       || (c >= 48 && c <= 57) || c == 95;
+        if !is_id { break; }
+        i = i + 1;
+    }
+    return i < n && text.at(i).to_int() == 33;
+}
+
+// True when (line0, col0) sits on an ident that's the first arg of a
+// proc-macro attribute call: `@<attr>(<ident>, …)`. Walks back from the
+// word start past whitespace + `(` + `<ident>` looking for an `@`.
+fn _inside_proc_attr_arg(text: string, line0: int, col0: int) -> bool {
+    let off: int = _line_col_offset(text, line0, col0);
+    if off < 0 { return false; }
+    // Skip back over the current word.
+    let mut i: int = off;
+    while i > 0 {
+        let c: int = text.at(i - 1).to_int();
+        let is_id: bool = (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+                       || (c >= 48 && c <= 57) || c == 95;
+        if !is_id { break; }
+        i = i - 1;
+    }
+    // Optional whitespace + `(`.
+    while i > 0 && text.at(i - 1).to_int() == 32 { i = i - 1; }
+    if i == 0 || text.at(i - 1).to_int() != 40 { return false; }
+    i = i - 1;
+    // Walk back over the attribute name.
+    while i > 0 {
+        let c: int = text.at(i - 1).to_int();
+        let is_id: bool = (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+                       || (c >= 48 && c <= 57) || c == 95;
+        if !is_id { break; }
+        i = i - 1;
+    }
+    return i > 0 && text.at(i - 1).to_int() == 64;
+}
+
+// Pick the ST_IMPORT stmt whose source line matches the cursor line
+// (1-indexed in Stmt.line, 0-indexed in LSP), constrained to the
+// document the user is editing so a stdlib file's imports don't
+// match. Returns null when the cursor isn't on an import line.
+fn _find_import_on_line(stmts: *Vector<Stmt>, line0: int, doc_uri: string) -> *Stmt {
+    if stmts == null { return null; }
+    let want_path: string = uri_to_path(doc_uri);
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPORT { continue; }
+        if !s.origin.eq(want_path) { continue; }
+        if (s.line - 1) == line0 {
+            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *p = s;
+            return p;
+        }
+    }
+    return null;
+}
+
+// Convert an LSP (line, character) to a flat byte offset into `text`.
+// Returns -1 when the position is outside the document.
+fn _line_col_offset(text: string, line0: int, col0: int) -> int {
+    let n: int = text.len();
+    let mut line: int = 0;
+    let mut col: int = 0;
+    for let i: int = 0; i < n; i++ {
+        if line == line0 && col == col0 { return i; }
+        let c: int = text.at(i).to_int();
+        if c == 10 {
+            if line == line0 { return i; }
+            line = line + 1;
+            col = 0;
+        } else {
+            col = col + 1;
+        }
+    }
+    if line == line0 && col == col0 { return n; }
+    return -1;
 }
 
 // LSP CompletionItemKind:
@@ -2051,9 +2455,10 @@ fn import_brace_module(text: string, line0: int, col0: int) -> string {
 //   "stdlib::math::" → uncommon, falls through (modules don't nest yet)
 fn list_import_path_children(state: *LspState, prefix: string,
                              items: *JsonValue, seen: *HashMap<bool>) {
-    if prefix.eq("") || prefix.eq("stdlib::") {
-        // Always offer the `stdlib` namespace at the top.
-        if prefix.eq("") && !seen.contains("stdlib") {
+    if prefix.eq("") {
+        // Top-level namespaces. `stdlib` always, plus project deps
+        // registered through the manifest at didOpen time.
+        if !seen.contains("stdlib") {
             seen.insert("stdlib", true);
             let no_edit_n: *JsonValue = null;
             json_arr_push(items, rich_completion_item(
@@ -2061,19 +2466,64 @@ fn list_import_path_children(state: *LspState, prefix: string,
                 "Glide standard library root.", "", "stdlib::", false,
                 no_edit_n));
         }
-        if prefix.eq("stdlib::") && state.stdlib_index != null {
-            let n: int = state.stdlib_index.len();
-            for let i: int = 0; i < n; i++ {
-                let sym: ImportableSym = state.stdlib_index.get(i);
-                if sym.kind != SYMKIND_MODULE { continue; }
-                if seen.contains(sym.name) { continue; }
-                seen.insert(sym.name, true);
-                let no_edit_m: *JsonValue = null;
-                json_arr_push(items, rich_completion_item(
-                    sym.name, "", 9, sym.signature,
-                    sym.doc, "", sym.name, false, no_edit_m));
-            }
+        if state.project_index != null {
+            _list_project_top_namespaces(state, items, seen);
         }
+        return;
+    }
+    if state.stdlib_index != null {
+        _list_index_children(state.stdlib_index, prefix, items, seen);
+    }
+    if state.project_index != null {
+        _list_index_children(state.project_index, prefix, items, seen);
+    }
+}
+
+// Walk an index, filter modules whose `module` field starts with
+// `prefix`, and emit the next segment. So `prefix = "stdlib::"`
+// yields each top-level stdlib module; `prefix = "stdlib::http::"`
+// yields `client`, `cookies`, `form`, etc.
+fn _list_index_children(idx: *Vector<ImportableSym>, prefix: string,
+                        items: *JsonValue, seen: *HashMap<bool>) {
+    let n: int = idx.len();
+    for let i: int = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != SYMKIND_MODULE { continue; }
+        if !sym.module.starts_with(prefix) { continue; }
+        // The remainder after `prefix` should be exactly one segment
+        // (no further `::`). That gives the IMMEDIATE child only —
+        // otherwise `stdlib::` would list `stdlib::http::client` too.
+        let rest: string = sym.module.substring(prefix.len(), sym.module.len());
+        if rest.eq("") { continue; }
+        if rest.contains("::") { continue; }
+        if seen.contains(rest) { continue; }
+        seen.insert(rest, true);
+        let no_edit: *JsonValue = null;
+        json_arr_push(items, rich_completion_item(
+            rest, "", 9, sym.signature, sym.doc, "", rest, false, no_edit));
+    }
+}
+
+// Project-side namespaces (dep aliases from `glide.glide` + the
+// project's own top-level modules). Each becomes a first-segment
+// suggestion at `import `.
+fn _list_project_top_namespaces(state: *LspState, items: *JsonValue, seen: *HashMap<bool>) {
+    let idx: *Vector<ImportableSym> = state.project_index;
+    let n: int = idx.len();
+    for let i: int = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != SYMKIND_MODULE { continue; }
+        // Top-level alias is whatever comes before the first `::`.
+        let mod: string = sym.module;
+        let mut first: string = mod;
+        let p: int = mod.index_of("::");
+        if p > 0 { first = mod.substring(0, p); }
+        if seen.contains(first) { continue; }
+        seen.insert(first, true);
+        let no_edit: *JsonValue = null;
+        json_arr_push(items, rich_completion_item(
+            first, "", 9, "namespace ".concat(first),
+            "Project / dep namespace.", "", first.concat("::"), false, no_edit));
     }
 }
 
@@ -2244,40 +2694,44 @@ fn pretty_module(origin: string) -> string {
 // list the available submodules instead of symbols.
 fn list_module_members(state: *LspState, path: string,
                        items: *JsonValue, seen: *HashMap<bool>) {
-    if state.stdlib_index == null { return; }
-    let n: int = state.stdlib_index.len();
-
-    // `stdlib::|` — the user is drilling into the namespace; list
-    // available modules (math, hashmap, time, …).
-    if path.eq("stdlib") {
-        let mods: *HashMap<bool> = HashMap::new();
-        for let i: int = 0; i < n; i++ {
-            let sym: ImportableSym = state.stdlib_index.get(i);
-            // Module is "stdlib::math" — cut everything before the first ::
-            let m: string = sym.module;
-            let cut: int = find_substr(m, "::");
-            let leaf: string = m;
-            if cut >= 0 { leaf = m.substring(cut + 2, m.len()); }
-            if mods.contains(leaf) { continue; }
-            mods.insert(leaf, true);
-            if seen.contains(leaf) { continue; }
-            seen.insert(leaf, true);
-            let no_edit: *JsonValue = null;
-            let item: *JsonValue = rich_completion_item(
-                leaf, "", 9, "module ".concat(leaf),
-                "stdlib submodule", "", leaf, false, no_edit);
-            json_arr_push(items, item);
-        }
-        mods.free();
-        return;
+    if state.stdlib_index != null {
+        _list_module_members_from(state.stdlib_index, path, items, seen);
     }
+    if state.project_index != null {
+        _list_module_members_from(state.project_index, path, items, seen);
+    }
+}
 
-    // Match by full ("stdlib::math") or short ("math") path.
+fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
+                             items: *JsonValue, seen: *HashMap<bool>) {
+    let n: int = idx.len();
+
+    // Pass 1: list immediate child modules. `path = "stdlib"` yields
+    // every top-level stdlib module; `path = "stdlib::http"` yields
+    // client/cookies/h2/etc. Same shape works for project namespaces.
+    let prefix: string = path.concat("::");
+    let mods: *HashMap<bool> = HashMap::new();
     for let i: int = 0; i < n; i++ {
-        let sym: ImportableSym = state.stdlib_index.get(i);
-        // Skip the module's own self-entry — it would surface as
-        // `hashmap::hashmap` otherwise. Only real members of the module
-        // belong in this list.
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != SYMKIND_MODULE { continue; }
+        if !sym.module.starts_with(prefix) { continue; }
+        let rest: string = sym.module.substring(prefix.len(), sym.module.len());
+        if rest.eq("") || rest.contains("::") { continue; }
+        if mods.contains(rest) { continue; }
+        mods.insert(rest, true);
+        if seen.contains(rest) { continue; }
+        seen.insert(rest, true);
+        let no_edit: *JsonValue = null;
+        json_arr_push(items, rich_completion_item(
+            rest, "", 9, "module ".concat(rest),
+            "submodule of `".concat(path).concat("`"), "", rest, false, no_edit));
+    }
+    mods.free();
+
+    // Pass 2: members of the module whose path equals `path`. Accept
+    // the short leaf too so the user can type either form.
+    for let i: int = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
         if sym.kind == SYMKIND_MODULE { continue; }
         let m: string = sym.module;
         let cut: int = find_substr(m, "::");
@@ -2286,8 +2740,6 @@ fn list_module_members(state: *LspState, path: string,
         if !m.eq(path) && !leaf.eq(path) { continue; }
         if seen.contains(sym.name) { continue; }
         seen.insert(sym.name, true);
-        // No auto-import edit: the user is already typing the qualified
-        // path, the symbol is reachable as-is once they finish.
         let no_edit2: *JsonValue = null;
         let item: *JsonValue = rich_completion_item(
             sym.name, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
@@ -2803,36 +3255,15 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     if state.stdlib_index != null && state.stdlib_index.len() > 0 {
         let imps: *HashMap<ImportInfo> = current_imports(doc.text);
         let insert_line: int = find_import_insertion_pos(doc.text);
-        let n_idx: int = state.stdlib_index.len();
-        for let i: int = 0; i < n_idx; i++ {
-            let sym: ImportableSym = state.stdlib_index.get(i);
-            if seen.contains(sym.name) { continue; }
-            seen.insert(sym.name, true);
-            let mut existing: *ImportInfo = null;
-            if imps.contains(sym.module) {
-                let info_val: ImportInfo = imps.get(sym.module);
-                existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
-                *existing = info_val;
-            }
-            let is_module: bool = (sym.kind == SYMKIND_MODULE);
-            let edit: *JsonValue = build_import_edit(
-                sym.name, sym.module, existing, insert_line, is_module);
-            let item: *JsonValue = rich_completion_item(
-                sym.name,
-                sym.label_extra,
-                ci_kind_for_stmt_kind(sym.kind),
-                sym.signature,
-                sym.doc,
-                sym.module,
-                sym.snippet,
-                sym.has_snippet,
-                edit);
-            json_arr_push(items, item);
+        _emit_index_items(state.stdlib_index, imps, insert_line, items, seen);
+        if state.project_index != null {
+            _emit_index_items(state.project_index, imps, insert_line, items, seen);
         }
         imps.free();
     }
 
     // 4. Glide keywords.
+    // (helper for the bare-ident loop above lives below `handle_completion`)
     let kws: *Vector<string> = Vector::new();
     kws.push("let"); kws.push("const"); kws.push("mut"); kws.push("fn");
     kws.push("struct"); kws.push("enum"); kws.push("impl"); kws.push("interface");
@@ -2854,6 +3285,34 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
 
     seen.free();
     lsp_send_response(id, items);
+}
+
+// Push completion items for every symbol in `idx` that isn't already
+// in `seen`. Reused for the bare-ident path across both stdlib and
+// project indexes.
+fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
+                     insert_line: int, items: *JsonValue,
+                     seen: *HashMap<bool>) {
+    let n: int = idx.len();
+    for let i: int = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if seen.contains(sym.name) { continue; }
+        seen.insert(sym.name, true);
+        let mut existing: *ImportInfo = null;
+        if imps.contains(sym.module) {
+            let info_val: ImportInfo = imps.get(sym.module);
+            existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+            *existing = info_val;
+        }
+        let is_module: bool = (sym.kind == SYMKIND_MODULE);
+        let edit: *JsonValue = build_import_edit(
+            sym.name, sym.module, existing, insert_line, is_module);
+        let item: *JsonValue = rich_completion_item(
+            sym.name, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
+            sym.signature, sym.doc, sym.module,
+            sym.snippet, sym.has_snippet, edit);
+        json_arr_push(items, item);
+    }
 }
 
 // Walks the program collecting every usage of `name` as an identifier.
