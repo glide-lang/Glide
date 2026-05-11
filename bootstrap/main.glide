@@ -1679,18 +1679,18 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
 // Pick a C compiler. Prefers the bundled Zig CC under runtime/zig/ next to
 // the glide executable; falls back to $CC, then to plain `cc` on PATH.
 fn pick_cc() -> string {
-    // $CC wins when set — lets users with native gcc / clang override
-    // the bundled zig (which doesn't see msys2 ucrt library paths and
-    // thus fails to find openssl etc).
+    // Resolution for *host* builds (no `--target=` flag):
+    //   1. $CC (explicit user override)
+    //   2. plain `cc` on PATH (gcc / clang / MSYS2 / Apple CLT)
+    //
+    // Notably we don't fall through to the bundled zig. Vanilla zig from
+    // ziglang.org doesn't ship openssl/crypto/zlib in its sysroot, so
+    // host programs that link against them (anything touching
+    // stdlib::http or stdlib::compress) fail to resolve at link time.
+    // The bundled zig is reserved for `--target=<triple>` cross builds,
+    // which drop those libs by design.
     let env: string = __glide_getenv("CC");
     if !env.eq("") { return env; }
-    // For host builds we only accept a *bundled* zig (next to the glide
-    // binary, or in `./runtime/zig/` of a source checkout) — those come
-    // with their sysroot prepared so libssl/libcrypto/libz resolve. A
-    // bare system `zig` on PATH almost never has those paths wired up,
-    // so we'd rather fall back to `cc` than break host builds with TLS.
-    let zig: string = _find_bundled_zig();
-    if !zig.eq("") { return "\"".concat(zig).concat("\" cc"); }
     return "cc";
 }
 

@@ -171,6 +171,25 @@ iwr https://github.com/glide-lang/Glide/releases/latest/download/install.ps1 -Us
 Open a new shell once the installer finishes; `glide --version`
 should print the installed version.
 
+### Requirements
+
+Glide hands off the final link step to a system C compiler so host
+programs can resolve `libssl` / `libcrypto` / `libz` for the stdlib's
+HTTP / TLS / compression layers.
+
+- **Linux** — `gcc` (every distro). `apt install build-essential`,
+  `dnf install gcc`, or the equivalent for your package manager.
+- **macOS** — Xcode Command Line Tools (`xcode-select --install`).
+- **Windows** — MSYS2 with the UCRT64 runtime is the smoothest path:
+  `winget install MSYS2.MSYS2`, then in MSYS2 shell:
+  `pacman -S mingw-w64-ucrt-x86_64-{gcc,openssl,zlib}`. Add
+  `C:\msys64\ucrt64\bin` to your PATH so `cc.exe` is reachable.
+  MSVC, MinGW-w64 (standalone), and clang also work as long as
+  `cc` resolves on PATH.
+
+The bundled Zig toolchain (shipped in `<install>/runtime/zig/`) is
+used for `--target=<triple>` cross-compilation, not for host builds.
+
 ## quick start
 
 ```bash
