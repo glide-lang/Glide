@@ -6,9 +6,12 @@
 //   * Linux: the fd is registered with epoll and the calling coro is
 //     parked until the kernel reports readiness; the worker is freed
 //     to run other tasks in the meantime.
-//   * Windows / macOS / BSD: fall back to blocking sync I/O for now
-//     (TODO IOCP / kqueue). The Glide-side surface stays identical, so
-//     code written today is ready for the async transparently.
+//   * Windows / macOS / BSD: blocking sync I/O. The Glide-side surface
+//     is identical on every platform, so user code is portable; what
+//     differs is whether the call yields the worker (Linux) or pins
+//     it (everywhere else). The async backends for IOCP and kqueue
+//     are tracked as separate epics; until they land, non-Linux
+//     servers handle one connection at a time per accept loop.
 
 extern fn listen_tcp(port: int) -> int;
 extern fn listen_tcp_reuseport(port: int) -> int;

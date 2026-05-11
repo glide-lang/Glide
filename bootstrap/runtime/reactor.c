@@ -6,8 +6,9 @@
 // task. A single dedicated `reactor` pthread owns the epoll fd and
 // drives the wakeup loop.
 //
-// On Windows / macOS / BSD we currently fall back to the blocking
-// sync calls in socket.c (TODO: IOCP / kqueue). The Glide-side API
+// On Windows / macOS / BSD we fall back to the blocking sync calls in
+// socket.c. IOCP and kqueue are separate runtime backends scoped out
+// to their own epics. The Glide-side API
 // (`accept_tcp_async` / `tcp_read_async` / `tcp_write_async`) is
 // platform-portable so net.glide can call the async names everywhere
 // without #ifdef.

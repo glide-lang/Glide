@@ -88,11 +88,11 @@ pub fn proxy_build_upstream_request(cfg: *ReverseProxyConfig,
     if host.len() > 0 {
         out.set("X-Forwarded-Host", host);
     }
-    // TODO: detect TLS termination at the server boundary and emit
-    // `https` here. The current http_listen path doesn't expose the
-    // connection's scheme on HttpRequest, so we hardcode "http" until
-    // it does.
-    out.set("X-Forwarded-Proto", "http");
+    // `req.tls` is set by `https_listen`'s connection handler; plain
+    // `http_listen` leaves it false. Downstreams use the header to
+    // build absolute URLs that match the scheme the client actually saw.
+    if req.tls { out.set("X-Forwarded-Proto", "https"); }
+    else       { out.set("X-Forwarded-Proto", "http"); }
     out.set("X-Forwarded-Method", req.method);
     out.set("X-Original-URI", req.path);
 

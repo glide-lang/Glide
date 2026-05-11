@@ -66,6 +66,10 @@ pub struct HttpRequest {
     pub body:          string,
     pub params:        *HashMap<string>,
     pub queries:       *HashMap<string>,
+    /// `true` when the request arrived over TLS (i.e. through
+    /// `https_listen`). Reverse-proxy middleware uses this to stamp the
+    /// right `X-Forwarded-Proto` value.
+    pub tls:           bool,
     /// Lazy header cache. Built on the first `header()` lookup; reused
     /// after. Construction is O(headers); each subsequent lookup is
     /// O(1). Init `null` — the lookup builds it.
@@ -626,6 +630,7 @@ pub fn parse_http_request(raw: string) -> !HttpRequest {
         body:          body,
         params:        null,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     });
 }
@@ -789,6 +794,7 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
                 body:          hp_glide_body(g),
                 params:        null,
                 queries:       null,
+                tls:           false,
                 headers_cache: null,
             };
             resp = handler(&req);
@@ -922,6 +928,7 @@ fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
             body:          hp_glide_body(g),
             params:        null,
             queries:       null,
+            tls:           true,
             headers_cache: null,
         };
         resp = handler(&req);

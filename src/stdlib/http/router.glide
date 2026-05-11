@@ -640,6 +640,7 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
                 body:          hp_glide_body(g),
                 params:        null,
                 queries:       null,
+                tls:           false,
                 headers_cache: null,
             };
             resp = r.dispatch(&req);
