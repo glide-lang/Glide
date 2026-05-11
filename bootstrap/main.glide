@@ -1180,6 +1180,21 @@ fn run_install(argc: int) -> int {
         }
     }
 
+    // Same idea for `runtime/zig/`. Without it, `--target=<triple>`
+    // builds can't find a cross-capable cc. Optional — we skip
+    // silently when there's no zig in the source tree.
+    let zig_origin: string = project_root.concat("/runtime/zig");
+    if fs_is_dir(zig_origin) {
+        let zig_dest: string = install_dir.concat("/runtime/zig");
+        fs_remove_dir_rec(zig_dest);
+        if fs_copy_dir_rec(zig_origin, zig_dest) {
+            println!("installed toolchain ->", zig_dest);
+        } else {
+            println!("warning: could not copy", zig_origin, "->", zig_dest,
+                     "(cross-compile will fall back to system zig if present)");
+        }
+    }
+
     println!("installed", m.name, "->", final_path);
     _ensure_on_path(install_dir);
     return 0;
@@ -1658,15 +1673,87 @@ fn pick_cc() -> string {
     // thus fails to find openssl etc).
     let env: string = __glide_getenv("CC");
     if !env.eq("") { return env; }
+    // For host builds we only accept a *bundled* zig (next to the glide
+    // binary, or in `./runtime/zig/` of a source checkout) — those come
+    // with their sysroot prepared so libssl/libcrypto/libz resolve. A
+    // bare system `zig` on PATH almost never has those paths wired up,
+    // so we'd rather fall back to `cc` than break host builds with TLS.
+    let zig: string = _find_bundled_zig();
+    if !zig.eq("") { return "\"".concat(zig).concat("\" cc"); }
+    return "cc";
+}
+
+// Compile backend specifically for `--target=<triple>`. Plain `cc` (gcc)
+// doesn't grok the `--target=` syntax, so cross-compile *requires* zig.
+// Returns the backend command on success, or a human-readable error on
+// failure. Resolution order matches `pick_cc` but skips $CC (which may
+// well be host-only gcc).
+fn pick_cc_for_target() -> !string {
+    let zig: string = _find_zig();
+    if zig.eq("") {
+        return err("--target requires zig (not found beside the glide binary, in ./runtime/zig/, or on PATH).\n"
+            .concat("  Install with: bash tools/install_toolchain.sh   (POSIX)\n")
+            .concat("               powershell -f tools/install_toolchain.ps1   (Windows)\n")
+            .concat("  Or install zig system-wide and re-run."));
+    }
+    return ok("\"".concat(zig).concat("\" cc"));
+}
+
+// Bundled zig (next to the binary or in the source tree). Cross-compile
+// also accepts a system `zig` on PATH via `_find_zig` — but host builds
+// don't, because system zigs typically lack the openssl/zlib sysroot.
+fn _find_bundled_zig() -> string {
+    let win: bool = __glide_is_windows() != 0;
     let exe_dir: string = __glide_exe_dir();
     if !exe_dir.eq("") {
-        let mut zig: string = exe_dir.concat("/runtime/zig/zig");
-        if __glide_is_windows() != 0 { zig = zig.concat(".exe"); }
-        if __glide_file_exists(zig) {
-            return "\"".concat(zig).concat("\" cc");
-        }
+        let mut p: string = exe_dir.concat("/runtime/zig/zig");
+        if win { p = p.concat(".exe"); }
+        if __glide_file_exists(p) { return p; }
     }
-    return "cc";
+    let mut local: string = "runtime/zig/zig";
+    if win { local = local.concat(".exe"); }
+    if __glide_file_exists(local) { return local; }
+    return "";
+}
+
+// Any usable zig — bundled first, then `zig` on PATH. Used by
+// cross-compile, which doesn't link the heavy host-only libs and so
+// doesn't need a configured sysroot.
+fn _find_zig() -> string {
+    let bundled: string = _find_bundled_zig();
+    if !bundled.eq("") { return bundled; }
+    if _have_on_path("zig") { return "zig"; }
+    return "";
+}
+
+// `command -v` / `where` thin wrapper. Returns true if the program
+// resolves on PATH.
+fn _have_on_path(prog: string) -> bool {
+    let cmd: string = if __glide_is_windows() != 0 {
+        "where ".concat(prog).concat(" >nul 2>&1")
+    } else {
+        "command -v ".concat(prog).concat(" >/dev/null 2>&1")
+    };
+    return __glide_shell(cmd) == 0;
+}
+
+// Parse the OS field out of a Zig triple. Accepts e.g.:
+//   x86_64-linux-gnu       -> "linux"
+//   aarch64-macos-none     -> "macos"
+//   x86_64-windows-gnu     -> "windows"
+//   riscv64-linux-musl     -> "linux"
+// Returns "" if the triple isn't recognisable.
+fn _target_os(triple: string) -> string {
+    if triple.eq("") { return ""; }
+    let parts: *Vector<string> = triple.split("-");
+    if parts.len() < 2 { return ""; }
+    let os: string = parts.get(1);
+    if os.eq("linux") || os.eq("macos") || os.eq("darwin")
+        || os.eq("windows") || os.eq("freebsd") || os.eq("netbsd")
+        || os.eq("openbsd") || os.eq("wasi") {
+        return os;
+    }
+    return "";
 }
 
 fn run_build(src_path: string, out_path: string, target: string, then_run: bool) -> int {
@@ -1731,20 +1818,47 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
 
     // 4. Build the cc command.
     if !quiet { spinner_set("compiling C -> ".concat(out_path)); }
-    let cc: string = pick_cc();
+    let cross: bool = !target.eq("");
+    let mut cc: string = "";
+    if cross {
+        let pick: !string = pick_cc_for_target();
+        if !pick.ok {
+            if !quiet { spinner_finish(false, ""); }
+            println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(pick.err));
+            return 1;
+        }
+        cc = pick.val;
+    } else {
+        cc = pick_cc();
+    }
     let mut cmd: string = cc;
     cmd = cmd.concat(" \"").concat(tmp_c).concat("\"");
     cmd = cmd.concat(" -o \"").concat(out_path).concat("\"");
-    cmd = cmd.concat(" -O2 -w -lpthread -lm -lssl -lcrypto -lz");
-    if __glide_is_windows() != 0 {
+    cmd = cmd.concat(" -O2 -w -lpthread -lm");
+    if cross {
+        cmd = cmd.concat(" --target=").concat(target);
+    }
+    // Pick platform-specific flags from the target when cross-compiling,
+    // otherwise from the host. zig's `--target=` toggles its libc /
+    // linker; the rest is winsock/dbghelp vs rdynamic.
+    let mut win_target: bool = __glide_is_windows() != 0;
+    if cross {
+        let os: string = _target_os(target);
+        if !os.eq("") { win_target = os.eq("windows"); }
+    }
+    if win_target {
         cmd = cmd.concat(" -lws2_32 -ldbghelp");
     } else {
         // -rdynamic exports non-static symbols so backtrace_symbols()
         // can label frames with function names instead of bare addrs.
         cmd = cmd.concat(" -rdynamic");
     }
-    if !target.eq("") {
-        cmd = cmd.concat(" --target=").concat(target);
+    // openssl + zlib only get linked when not cross-compiling — host
+    // builds have them in the usual lib search path; cross builds would
+    // need a sysroot we don't ship. Users who need TLS in cross builds
+    // can supply their own libs via $CC + custom flags.
+    if !cross {
+        cmd = cmd.concat(" -lssl -lcrypto -lz");
     }
 
     // On Windows, system() runs the command via `cmd.exe /c <cmd>`. When the
