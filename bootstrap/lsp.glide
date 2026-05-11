@@ -3976,6 +3976,12 @@ fn collect_calls_expr(e: *Expr, out: *HashMap<bool>) {
         }
         if e.lhs.kind == EX_MEMBER { out.insert(e.lhs.field, true); }
     }
+    // Any free-standing identifier reference counts as a use too — covers
+    // function pointers passed as args (`http_listen(8090, my_handler)`)
+    // or stored in structs / vectors. False positives (a non-fn variable
+    // happening to share a name) only suppress the warning, which is the
+    // safer failure mode.
+    if e.kind == EX_IDENT { out.insert(e.str_val, true); }
     if e.lhs != null { collect_calls_expr(e.lhs, out); }
     if e.rhs != null { collect_calls_expr(e.rhs, out); }
     if e.operand != null { collect_calls_expr(e.operand, out); }
