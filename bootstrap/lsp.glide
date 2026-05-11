@@ -765,6 +765,7 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_missing_return(t, stmts);
     analysis_large_return(t, stmts);
     analysis_trait_conformance(t, stmts);
+    analysis_deprecated_calls(t, stmts);
 }
 
 // For each `impl Trait for Type { ... }` walk the trait's method names
@@ -3747,49 +3748,176 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
     return false;
 }
 
+// Returns true when the enclosing item carries `@allow("<code>")` (or
+// `@allow("<code1>", "<code2>", ...)`). Lets users mark intentional
+// patterns the heuristics don't recognise without polluting the global
+// warning stream. Currently the allow list is matched verbatim — no
+// hierarchy yet (no `@allow("alloc")` umbrella for sub-codes).
+fn _has_allow(s: *Stmt, code: string) -> bool {
+    if s == null || s.attrs == null { return false; }
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("allow") { continue; }
+        if a.args == null { continue; }
+        for let j: int = 0; j < a.args.len(); j++ {
+            let v: Expr = a.args.get(j);
+            if v.kind == EX_STRING && v.str_val.eq(code) { return true; }
+        }
+    }
+    return false;
+}
+
 // `let arena: *Arena = Arena::new(...)` without a paired `defer arena.free()`
-// or `arena.free()` somewhere later in the scope is a leak.
-// `let arena* = Arena::new(...)` is fine — auto-drop handles it.
+// or `arena.free()` somewhere later in the scope is a leak. Same shape
+// applies to raw `malloc(n)` (paired free) and `__glide_palloc_make()`
+// (paired __glide_palloc_free). `let x* = Arena::new(...)` is fine —
+// auto-drop handles it. `@allow("unfreed-alloc")` on the enclosing fn
+// silences the warning for intentional escape-hatch patterns
+// (e.g. ownership handed off to a caller through a raw pointer).
 fn analysis_arena_not_freed(t: *Typer, program: *Vector<Stmt>) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN || s.fn_body == null { continue; }
+        if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") { continue; }
         t.current_origin = s.origin;
-        check_arena_in_body(t, s.fn_body);
+        check_arena_in_body(t, s.fn_body, s.fn_body);
     }
 }
 
-fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>) {
+// Tag for the kind of resource a `let` is binding. Drives which paired
+// cleanup we look for downstream.
+//   0 = not a tracked resource
+//   1 = Arena::new(...)         → arena.free()
+//   2 = malloc(...)              → free(arena)
+//   3 = __glide_palloc_make()    → __glide_palloc_free(arena)
+fn _alloc_kind(v: *Expr) -> int {
+    if v == null { return 0; }
+    // `malloc(n) as *u8` — peel the cast.
+    if v.kind == EX_CAST && v.lhs != null { return _alloc_kind(v.lhs); }
+    if v.kind != EX_CALL || v.lhs == null { return 0; }
+    let head: *Expr = v.lhs;
+    if head.kind == EX_PATH && head.str_val.eq("Arena") && head.field.eq("new") { return 1; }
+    if head.kind == EX_IDENT && head.str_val.eq("malloc") { return 2; }
+    if head.kind == EX_IDENT && head.str_val.eq("__glide_palloc_make") { return 3; }
+    return 0;
+}
+
+fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>, root: *Vector<Stmt>) {
     let n: int = body.len();
     for let i: int = 0; i < n; i++ {
         let s: Stmt = body.get(i);
         if s.kind == ST_LET && !s.is_auto_owned {
-            // Detect `Arena::new(...)` initializer (ignore type annot — we
-            // recognize the constructor pattern).
-            let v: *Expr = s.let_value;
-            if v != null && v.kind == EX_CALL && v.lhs != null
-               && v.lhs.kind == EX_PATH && v.lhs.str_val.eq("Arena")
-               && v.lhs.field.eq("new") {
-                if !arena_is_freed_in_body(s.name, body, i + 1) {
-                    t.warn(s.line, s.column, "arena-not-freed",
-                        "arena `".concat(s.name)
-                        .concat("` is never freed (use `let ").concat(s.name)
-                        .concat("* = Arena::new(...)` or add `defer ").concat(s.name)
-                        .concat(".free()`)"));
+            let kind: int = _alloc_kind(s.let_value);
+            if kind != 0 {
+                // Scan the entire fn body (not just the current block) so a
+                // `defer foo.free()` registered in a nested if/while still counts.
+                if !alloc_is_freed_in_body(s.name, kind, root) {
+                    t.warn(s.line, s.column, _alloc_code(kind), _alloc_msg(kind, s.name));
                 }
             }
         }
-        if s.then_body != null { check_arena_in_body(t, s.then_body); }
-        if s.else_body != null { check_arena_in_body(t, s.else_body); }
+        if s.then_body != null { check_arena_in_body(t, s.then_body, root); }
+        if s.else_body != null { check_arena_in_body(t, s.else_body, root); }
     }
 }
 
-fn arena_is_freed_in_body(name: string, body: *Vector<Stmt>, start: int) -> bool {
-    let n: int = body.len();
-    for let i: int = start; i < n; i++ {
-        let s: Stmt = body.get(i);
-        if stmt_calls_method(&s, name, "free") { return true; }
+fn _alloc_code(kind: int) -> string {
+    if kind == 1 { return "arena-not-freed"; }
+    return "unfreed-alloc";
+}
+
+fn _alloc_msg(kind: int, name: string) -> string {
+    if kind == 1 {
+        return "arena `".concat(name).concat("` is never freed (use `let ")
+            .concat(name).concat("* = Arena::new(...)` or add `defer ")
+            .concat(name).concat(".free()`)");
     }
+    if kind == 2 {
+        return "allocation `".concat(name).concat("` is never freed (add `defer free(")
+            .concat(name).concat(")` after the malloc, or `@allow(\"unfreed-alloc\")` if the handle escapes the fn)");
+    }
+    return "palloc arena `".concat(name).concat("` is never freed (add `__glide_palloc_free(")
+        .concat(name).concat(")` or `@allow(\"unfreed-alloc\")` if the handle escapes the fn)");
+}
+
+fn alloc_is_freed_in_body(name: string, kind: int, body: *Vector<Stmt>) -> bool {
+    let n: int = body.len();
+    for let i: int = 0; i < n; i++ {
+        let s: Stmt = body.get(i);
+        if stmt_frees_resource(&s, name, kind) { return true; }
+    }
+    return false;
+}
+
+fn stmt_frees_resource(s: *Stmt, name: string, kind: int) -> bool {
+    if s == null { return false; }
+    if kind == 1 {
+        if stmt_calls_method(s, name, "free") { return true; }
+    }
+    if kind == 2 {
+        if stmt_calls_fn_with(s, "free", name) { return true; }
+    }
+    if kind == 3 {
+        if stmt_calls_fn_with(s, "__glide_palloc_free", name) { return true; }
+    }
+    // Returning the resource counts as ownership transfer.
+    if s.expr_value != null && expr_returns_ident(s.expr_value, name) { return true; }
+    return false;
+}
+
+fn stmt_calls_fn_with(s: *Stmt, fn_name: string, arg_name: string) -> bool {
+    if s == null { return false; }
+    if s.expr_value != null && expr_calls_fn_with(s.expr_value, fn_name, arg_name) { return true; }
+    if s.let_value  != null && expr_calls_fn_with(s.let_value,  fn_name, arg_name) { return true; }
+    if s.cond       != null && expr_calls_fn_with(s.cond,       fn_name, arg_name) { return true; }
+    if s.then_body != null {
+        for let i: int = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            if stmt_calls_fn_with(&b, fn_name, arg_name) { return true; }
+        }
+    }
+    if s.else_body != null {
+        for let i: int = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            if stmt_calls_fn_with(&b, fn_name, arg_name) { return true; }
+        }
+    }
+    return false;
+}
+
+fn expr_calls_fn_with(e: *Expr, fn_name: string, arg_name: string) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.lhs.str_val.eq(fn_name) && e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if expr_strips_to_ident(&a, arg_name) { return true; }
+        }
+    }
+    if e.lhs != null && expr_calls_fn_with(e.lhs, fn_name, arg_name) { return true; }
+    if e.rhs != null && expr_calls_fn_with(e.rhs, fn_name, arg_name) { return true; }
+    if e.operand != null && expr_calls_fn_with(e.operand, fn_name, arg_name) { return true; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if expr_calls_fn_with(&a, fn_name, arg_name) { return true; }
+        }
+    }
+    return false;
+}
+
+// Match `name` or `name as T` — strip the cast and check the inner
+// identifier so `free(x as *void)` still counts as freeing `x`.
+fn expr_strips_to_ident(e: *Expr, name: string) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq(name) { return true; }
+    if e.kind == EX_CAST && e.lhs != null { return expr_strips_to_ident(e.lhs, name); }
+    return false;
+}
+
+fn expr_returns_ident(e: *Expr, name: string) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq(name) { return true; }
     return false;
 }
 
@@ -4265,6 +4393,120 @@ fn analysis_large_return(t: *Typer, program: *Vector<Stmt>) {
         }
     }
     structs.free();
+}
+
+// Emit a `deprecated-fn` warning at every call site of a function (or
+// path method) marked `@deprecated("reason")`. The reason is interpolated
+// into the message so the editor surfaces guidance inline. Functions
+// can also be silenced at the call site via `@allow("deprecated-fn")`.
+//
+// Recognised forms:
+//   @deprecated                       — no reason
+//   @deprecated("use Foo::bar instead")
+//
+// The check matches by name; method dispatch (e.g. `obj.old()`) matches
+// the method name regardless of receiver type so a single deprecation
+// applies across every impl.
+pub fn analysis_deprecated_calls(t: *Typer, program: *Vector<Stmt>) {
+    // Index every deprecated fn by name. Maps `name` → reason
+    // (empty string when @deprecated had no argument).
+    let dep: *HashMap<string> = HashMap::new();
+    _collect_deprecated_fns(program, dep);
+    if dep.len() == 0 { dep.free(); return; }
+
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            if _has_allow(&s, "deprecated-fn") { continue; }
+            t.current_origin = s.origin;
+            _scan_calls_in_body(t, s.fn_body, dep);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, "deprecated-fn") { continue; }
+                t.current_origin = m.origin;
+                _scan_calls_in_body(t, m.fn_body, dep);
+            }
+        }
+    }
+    dep.free();
+}
+
+fn _collect_deprecated_fns(program: *Vector<Stmt>, dep: *HashMap<string>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN {
+            let reason: string = _deprecated_reason(&s);
+            if reason != null { dep.insert(s.name, reason); }
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                let reason: string = _deprecated_reason(&m);
+                if reason != null { dep.insert(m.name, reason); }
+            }
+        }
+    }
+}
+
+// Returns the @deprecated reason string, or null if the item isn't
+// deprecated. Empty string means @deprecated with no argument.
+fn _deprecated_reason(s: *Stmt) -> string {
+    if s == null || s.attrs == null { return null; }
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("deprecated") { continue; }
+        if a.args == null || a.args.len() == 0 { return ""; }
+        let v: Expr = a.args.get(0);
+        if v.kind == EX_STRING { return v.str_val; }
+        return "";
+    }
+    return null;
+}
+
+fn _scan_calls_in_body(t: *Typer, body: *Vector<Stmt>, dep: *HashMap<string>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _scan_calls_in_stmt(t, &s, dep);
+    }
+}
+
+fn _scan_calls_in_stmt(t: *Typer, s: *Stmt, dep: *HashMap<string>) {
+    if s == null { return; }
+    if s.let_value != null { _scan_calls_in_expr(t, s.let_value, dep); }
+    if s.expr_value != null { _scan_calls_in_expr(t, s.expr_value, dep); }
+    if s.cond != null { _scan_calls_in_expr(t, s.cond, dep); }
+    if s.for_step != null { _scan_calls_in_expr(t, s.for_step, dep); }
+    if s.then_body != null { _scan_calls_in_body(t, s.then_body, dep); }
+    if s.else_body != null { _scan_calls_in_body(t, s.else_body, dep); }
+}
+
+fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null {
+        let head: *Expr = e.lhs;
+        let mut name: string = "";
+        if head.kind == EX_IDENT { name = head.str_val; }
+        else if head.kind == EX_PATH { name = head.field; }
+        else if head.kind == EX_MEMBER { name = head.field; }
+        if !name.eq("") && dep.contains(name) {
+            let reason: string = dep.get(name);
+            let mut msg: string = "function `".concat(name).concat("` is deprecated");
+            if !reason.eq("") { msg = msg.concat(": ").concat(reason); }
+            t.warn(e.line, e.column, "deprecated-fn", msg);
+        }
+    }
+    if e.lhs != null { _scan_calls_in_expr(t, e.lhs, dep); }
+    if e.rhs != null { _scan_calls_in_expr(t, e.rhs, dep); }
+    if e.operand != null { _scan_calls_in_expr(t, e.operand, dep); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _scan_calls_in_expr(t, &a, dep);
+        }
+    }
 }
 
 // ---- Main loop ---------------------------------------------------------
