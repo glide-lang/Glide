@@ -37,6 +37,13 @@ pub struct TypeMacro {
 // "Owner::name" for impl-scoped macros), then expand all macro calls in place
 // and strip the defs themselves so later passes never see them.
 pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
+    // Pre-pass: rewrite compile-time location macros (file!, line!,
+    // column!, function!) into literal expressions before any other
+    // expansion runs. Walking the original AST means the values come
+    // from the user's source position, not whatever scope a later
+    // expansion lands in.
+    rewrite_location_macros(program);
+
     let static_macros: *HashMap<Stmt> = HashMap::new();
     let type_macros: *Vector<TypeMacro> = Vector::new();
     let cleaned: *Vector<Stmt> = Vector::new();
@@ -67,6 +74,108 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // Procedural macro expansion runs AFTER declarative macro_rules!
     // expansion so a derive can sit on top of a `macro` use site.
     return expand_proc_macros(cleaned);
+}
+
+// ---- compile-time location macros ---------------------------------------
+//
+// `file!()`, `line!()`, `column!()`, `function!()` expand to literal
+// values pulled from the call site (and its enclosing fn name) before
+// any other macro expansion runs. They cost zero at runtime — every
+// occurrence is replaced with an EX_STRING or EX_INT literal in the
+// AST.
+//
+// Usage idiom for caller-info logging, à la Rust's `Location::caller`:
+//
+//     pub fn log_err(file: string, line: int, msg: string) { ... }
+//     // call site:
+//     log_err(file!(), line!(), "boom");
+
+pub fn rewrite_location_macros(program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let mut s: Stmt = program.get(i);
+        let file: string = s.origin;
+        _rewrite_loc_stmt(&s, file, "");
+        program.set(i, s);
+    }
+}
+
+fn _rewrite_loc_stmt(s: *Stmt, file: string, in_fn: string) {
+    if s == null { return; }
+    let mut fn_name: string = in_fn;
+    if s.kind == ST_FN { fn_name = s.name; }
+    if s.kind == ST_IMPL && s.impl_methods != null {
+        _rewrite_loc_block(s.impl_methods, file, in_fn);
+        return;
+    }
+    if s.let_value  != null { _rewrite_loc_expr(s.let_value,  file, fn_name); }
+    if s.expr_value != null { _rewrite_loc_expr(s.expr_value, file, fn_name); }
+    if s.cond       != null { _rewrite_loc_expr(s.cond,       file, fn_name); }
+    if s.fn_body    != null { _rewrite_loc_block(s.fn_body,   file, fn_name); }
+    if s.then_body  != null { _rewrite_loc_block(s.then_body, file, fn_name); }
+    if s.else_body  != null { _rewrite_loc_block(s.else_body, file, fn_name); }
+    if s.for_init   != null { _rewrite_loc_stmt(s.for_init,   file, fn_name); }
+}
+
+fn _rewrite_loc_block(stmts: *Vector<Stmt>, file: string, in_fn: string) {
+    for let i: int = 0; i < stmts.len(); i++ {
+        let mut s: Stmt = stmts.get(i);
+        _rewrite_loc_stmt(&s, file, in_fn);
+        stmts.set(i, s);
+    }
+}
+
+fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
+    if e == null { return; }
+    if e.kind == EX_MACRO && _is_location_macro_call(e) {
+        _replace_with_location_literal(e, file, in_fn);
+        return;
+    }
+    if e.lhs     != null { _rewrite_loc_expr(e.lhs,     file, in_fn); }
+    if e.rhs     != null { _rewrite_loc_expr(e.rhs,     file, in_fn); }
+    if e.operand != null { _rewrite_loc_expr(e.operand, file, in_fn); }
+    if e.args    != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let mut a: Expr = e.args.get(i);
+            _rewrite_loc_expr(&a, file, in_fn);
+            e.args.set(i, a);
+        }
+    }
+    if e.fn_expr_body != null { _rewrite_loc_block(e.fn_expr_body, file, in_fn); }
+}
+
+fn _is_location_macro_call(e: *Expr) -> bool {
+    if e.macro_recv != null { return false; }
+    if e.macro_owner != null && !e.macro_owner.eq("") { return false; }
+    if e.args != null && e.args.len() != 0 { return false; }
+    let n: string = e.str_val;
+    if n.eq("file") || n.eq("line") || n.eq("column") || n.eq("function") {
+        return true;
+    }
+    return false;
+}
+
+fn _replace_with_location_literal(e: *Expr, file: string, in_fn: string) {
+    let name: string = e.str_val;
+    if name.eq("file") {
+        e.kind = EX_STRING;
+        e.str_val = file;
+        return;
+    }
+    if name.eq("line") {
+        e.kind = EX_INT;
+        e.int_val = e.line as i64;
+        return;
+    }
+    if name.eq("column") {
+        e.kind = EX_INT;
+        e.int_val = e.column as i64;
+        return;
+    }
+    if name.eq("function") {
+        e.kind = EX_STRING;
+        e.str_val = in_fn;
+        return;
+    }
 }
 
 // ---- procedural macros -----------------------------------------------
