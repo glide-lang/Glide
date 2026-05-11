@@ -1,0 +1,189 @@
+import stdlib::http::*;
+import stdlib::http::client::*;
+
+/// Reverse-proxy configuration. The minimal setup is an upstream
+/// origin such as `http://127.0.0.1:9000`; the proxy forwards the
+/// incoming method, path, body and safe end-to-end headers.
+///
+/// `strip_prefix` is useful for mounting an app under a local prefix:
+/// with `strip_prefix = "/api"`, `/api/users?x=1` is sent upstream as
+/// `/users?x=1`.
+pub struct ReverseProxyConfig {
+    pub upstream: string,
+    pub strip_prefix: string,
+    pub preserve_host: bool,
+    pub rewrite_location: bool,
+    pub public_base: string,
+    pub timeout_ms: int,
+    pub tls_insecure: bool,
+}
+
+impl ReverseProxyConfig {
+    /// Build a reverse-proxy config with conservative defaults.
+    ///
+    /// ```glide
+    /// let cfg: ReverseProxyConfig = ReverseProxyConfig::to("http://127.0.0.1:9000");
+    /// http_listen(8080, fn(req) { return reverse_proxy(&cfg, req); });
+    /// ```
+    pub fn to(upstream: string) -> ReverseProxyConfig {
+        return ReverseProxyConfig {
+            upstream: upstream,
+            strip_prefix: "",
+            preserve_host: false,
+            rewrite_location: false,
+            public_base: "",
+            timeout_ms: 30000,
+            tls_insecure: false,
+        };
+    }
+}
+
+/// Forward `req` to `cfg.upstream` and lower the upstream response
+/// back into the server-side `HttpResponse` shape. Network and parse
+/// errors become `502 Bad Gateway`.
+pub fn reverse_proxy(cfg: *ReverseProxyConfig, req: *HttpRequest) -> HttpResponse {
+    let out_req: *HttpClientRequest = proxy_build_upstream_request(cfg, req);
+    let c: *HttpClient = HttpClient::new();
+    c.timeout_ms = cfg.timeout_ms;
+    c.tls_insecure = cfg.tls_insecure;
+
+    let rr: !*HttpResponse = c.do_once(out_req);
+    free(out_req as *void);
+    free(c as *void);
+    if !rr.ok {
+        return HttpResponse::with_status(502)
+            .set("Content-Type", "text/plain; charset=utf-8")
+            .body("bad gateway: ".concat(rr.err));
+    }
+
+    let upstream_resp: *HttpResponse = rr.val;
+    // `with_status(...).body(...)` builds the response shell; the
+    // header block is written wholesale because we're replacing
+    // (filtered) the upstream's block, not appending individual entries
+    // — there's no builder method for that on HttpResponse.
+    let mut resp: HttpResponse = HttpResponse::with_status(upstream_resp.status)
+        .body(upstream_resp.body);
+    resp.headers_block = proxy_filter_response_headers(upstream_resp.headers_block);
+
+    if cfg.rewrite_location {
+        let loc: string = upstream_resp.header("Location");
+        if loc.len() > 0 {
+            let rewritten: string = proxy_rewrite_location(loc, cfg.upstream, cfg.public_base);
+            resp = resp.set("Location", rewritten);
+        }
+    }
+    return resp;
+}
+
+/// Build the client request that `reverse_proxy` will send upstream.
+/// Exposed for tests and for custom proxy pipelines that want to
+/// inspect or adjust the request before calling `HttpClient::do`.
+pub fn proxy_build_upstream_request(cfg: *ReverseProxyConfig,
+                                    req: *HttpRequest) -> *HttpClientRequest {
+    let target: string = proxy_target_url(cfg, req.path);
+    let out: *HttpClientRequest = HttpClientRequest::new(req.method, target);
+    out.headers = proxy_filter_request_headers(req.headers_block, cfg.preserve_host);
+
+    let host: string = req.header("Host");
+    if host.len() > 0 {
+        out.set("X-Forwarded-Host", host);
+    }
+    // TODO: detect TLS termination at the server boundary and emit
+    // `https` here. The current http_listen path doesn't expose the
+    // connection's scheme on HttpRequest, so we hardcode "http" until
+    // it does.
+    out.set("X-Forwarded-Proto", "http");
+    out.set("X-Forwarded-Method", req.method);
+    out.set("X-Original-URI", req.path);
+
+    // Forward the body even for GET/HEAD. RFC 7230 allows it; some
+    // upstreams care, most ignore it. Filtering by method would lose
+    // information for the ones that DO care.
+    if req.body.len() > 0 {
+        out.body_str(req.body);
+    }
+    return out;
+}
+
+/// Compute the upstream URL for a request path.
+pub fn proxy_target_url(cfg: *ReverseProxyConfig, path: string) -> string {
+    let base: string = _proxy_trim_right_slash(cfg.upstream);
+    let mut p: string = path;
+    if cfg.strip_prefix.len() > 0 && !cfg.strip_prefix.eq("/") && path.starts_with(cfg.strip_prefix) {
+        p = path.substring(cfg.strip_prefix.len(), path.len());
+        if p.len() == 0 { p = "/"; }
+        else if p.starts_with("?") { p = "/".concat(p); }
+        else if !p.starts_with("/") { p = "/".concat(p); }
+    }
+    if !p.starts_with("/") { p = "/".concat(p); }
+    return base.concat(p);
+}
+
+/// Drop hop-by-hop headers from the request before proxying. `Host`
+/// is also dropped unless `preserve_host` is true, because the client
+/// transport will stamp the upstream host by default.
+pub fn proxy_filter_request_headers(block: string, preserve_host: bool) -> string {
+    return _proxy_filter_headers(block, preserve_host, true);
+}
+
+/// Drop hop-by-hop and framing headers from an upstream response. The
+/// local server re-emits `Content-Length` and `Connection` itself.
+pub fn proxy_filter_response_headers(block: string) -> string {
+    return _proxy_filter_headers(block, true, false);
+}
+
+/// Rewrite an absolute upstream `Location` value to the public proxy
+/// base. Relative locations are left untouched.
+pub fn proxy_rewrite_location(loc: string, upstream: string, public_base: string) -> string {
+    if public_base.len() == 0 { return loc; }
+    let up: string = _proxy_trim_right_slash(upstream);
+    // `pub` parses fine as an identifier here (the lexer reserves it
+    // only in declaration position) but reads as keyword to a human;
+    // `pub_base` is the same idea spelled clearly.
+    let pub_base: string = _proxy_trim_right_slash(public_base);
+    if up.eq("") || pub_base.eq("") { return loc; }
+    if loc.eq(up) { return pub_base.concat("/"); }
+    if loc.starts_with(up.concat("/")) {
+        return pub_base.concat(loc.substring(up.len(), loc.len()));
+    }
+    return loc;
+}
+
+fn _proxy_filter_headers(block: string, preserve_host: bool, request_side: bool) -> string {
+    let lines: *Vector<string> = block.split("\r\n");
+    let mut out: string = "";
+    for let i: int = 0; i < lines.len(); i++ {
+        let line: string = lines.get(i);
+        if line.len() == 0 { continue; }
+        let colon: int = line.index_of(":");
+        if colon < 0 { continue; }
+        let name: string = line.substring(0, colon).trim();
+        let lower: string = name.to_lower();
+        if _proxy_is_hop_header(lower) { continue; }
+        if lower.eq("content-length") { continue; }
+        if request_side && lower.eq("host") && !preserve_host { continue; }
+        out = out.concat(line).concat("\r\n");
+    }
+    return out;
+}
+
+fn _proxy_is_hop_header(lower: string) -> bool {
+    if lower.eq("connection") { return true; }
+    if lower.eq("keep-alive") { return true; }
+    if lower.eq("proxy-authenticate") { return true; }
+    if lower.eq("proxy-authorization") { return true; }
+    if lower.eq("te") { return true; }
+    if lower.eq("trailer") { return true; }
+    if lower.eq("transfer-encoding") { return true; }
+    if lower.eq("upgrade") { return true; }
+    return false;
+}
+
+fn _proxy_trim_right_slash(s: string) -> string {
+    let mut end: int = s.len();
+    while end > 0 && s.at(end - 1).to_int() == 47 {
+        end = end - 1;
+    }
+    if end == 0 { return ""; }
+    return s.substring(0, end);
+}
