@@ -174,6 +174,13 @@ impl HttpClient {
         return err("http_client: redirect loop exited unexpectedly");
     }
 
+    /// Send one request and return the response without following
+    /// redirects. Useful for reverse proxies and crawlers that need to
+    /// preserve 30x responses exactly as the upstream emitted them.
+    pub fn do_once(self: *HttpClient, req: *HttpClientRequest) -> !*HttpResponse {
+        return self._do_once(req.method, req.url, req.headers, req.body);
+    }
+
     fn _do_h2(self: *HttpClient, stream: *TlsStream, method: string,
               url: *ParsedUrl, extra_headers: string,
               body: string) -> !*HttpResponse {

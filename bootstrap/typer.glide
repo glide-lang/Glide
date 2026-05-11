@@ -553,6 +553,15 @@ fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
     if want.kind == TY_NAMED && type_var_contains(tps, want.name) { return true; }
     if (want.kind == TY_POINTER || want.kind == TY_BORROW || want.kind == TY_BORROW_MUT)
        && (got.kind == TY_POINTER || got.kind == TY_BORROW || got.kind == TY_BORROW_MUT) {
+        // `null` is typed as `*void` by infer_expr — accept it against
+        // any pointer-shaped parameter so `stmt_if(cond, then_b, null, …)`
+        // and other "no else branch" patterns type-check cleanly.
+        if got.inner != null && got.inner.kind == TY_NAMED && got.inner.name.eq("void") {
+            return true;
+        }
+        if want.inner != null && want.inner.kind == TY_NAMED && want.inner.name.eq("void") {
+            return true;
+        }
         return arg_compat(want.inner, got.inner, tps);
     }
     if want.kind == TY_RESULT && got.kind == TY_RESULT {
