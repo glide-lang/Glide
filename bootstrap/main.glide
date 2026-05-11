@@ -746,6 +746,69 @@ const MODE_TEST: int = 5;
 // lives in glide.glide at the repo root (kept in sync by hand for now).
 const GLIDE_VERSION: string = "0.1.0";
 
+// Active `--lint-as-error=<code>` list, parsed from argv before any
+// build / check runs. Lives in a c_raw global so the diagnostic
+// loops in `run_build_q` / `MODE_CHECK` / `glide lint` can consult
+// it without threading another param through every signature.
+extern fn __glide_deny_set(p: *void);
+extern fn __glide_deny_get() -> *void;
+
+c_raw! {
+    static void* __glide_deny_g = (void*)0;
+    static void __glide_deny_set(void* p) { __glide_deny_g = p; }
+    static void* __glide_deny_get(void)   { return __glide_deny_g; }
+}
+
+fn deny_codes() -> *Vector<string> {
+    let p: *void = __glide_deny_get();
+    if p == null { return null; }
+    return p as *Vector<string>;
+}
+
+fn set_deny_codes(v: *Vector<string>) {
+    __glide_deny_set(v as *void);
+}
+
+// True when a warning's diagnostic code matches any active
+// `--lint-as-error` token. Reuses the group / prefix matching from
+// the @allow logic so `--lint-as-error=alloc` covers all alloc lints
+// and `--lint-as-error=lint:io*` matches every custom lint starting
+// with `io`. `all` / `*` promote every warning.
+fn _is_lint_promoted(code: string) -> bool {
+    let dl: *Vector<string> = deny_codes();
+    if dl == null { return false; }
+    for let i: int = 0; i < dl.len(); i++ {
+        if _code_matches_deny(dl.get(i), code) { return true; }
+    }
+    return false;
+}
+
+fn _code_matches_deny(token: string, code: string) -> bool {
+    if token.eq(code) { return true; }
+    if token.eq("all") || token.eq("*") { return true; }
+    if token.eq("alloc") {
+        if code.eq("unfreed-alloc") || code.eq("arena-not-freed") { return true; }
+    }
+    if token.eq("unused") {
+        if code.eq("unused-var") || code.eq("unused-param")
+           || code.eq("unused-fn") || code.eq("unnecessary-mut") { return true; }
+    }
+    if token.eq("experimental") {
+        if code.eq("unstable-fn") || code.eq("deprecated-fn") { return true; }
+    }
+    if token.eq("lint") || token.eq("lint:*") {
+        if code.starts_with("lint:") { return true; }
+    }
+    if token.len() > 1 {
+        let last: int = token.at(token.len() - 1).to_int();
+        if last == 42 {
+            let prefix: string = token.substring(0, token.len() - 1);
+            if code.starts_with(prefix) { return true; }
+        }
+    }
+    return false;
+}
+
 fn print_usage() {
     println!("Glide compiler");
     println!("usage:");
@@ -753,6 +816,7 @@ fn print_usage() {
     println!("  glide run <file>");
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
+    println!("  glide lint [file]          (run all lints; project bin by default)");
     println!("  glide fmt <file> [--write] (pretty-print to stdout, or rewrite in place)");
     println!("  glide new <name> [--lib] [--ai] [--no-vcs]");
     println!("  glide add <name> <git-url> <rev>");
@@ -1416,6 +1480,130 @@ fn _parse_port(s: string) -> int {
     return acc;
 }
 
+// Render one diagnostic as a single JSON object on its own line —
+// the `jsonl` format CI tools and editor plugins parse cheaply. Keys
+// are stable: severity ("error"/"warning"/"info"), code, message,
+// file (relative path), line/col (1-based), end_line/end_col.
+fn _diag_to_jsonl(d: *DiagEntry, fallback_path: string) -> string {
+    let mut path: string = d.origin;
+    if path == null || path.eq("") { path = fallback_path; }
+    let mut sev: string = "info";
+    if d.severity == 1 { sev = "error"; }
+    else if d.severity == 2 { sev = "warning"; }
+    let mut out: string = "{";
+    out = out.concat("\"severity\":\"").concat(sev).concat("\"");
+    out = out.concat(",\"code\":\"").concat(_json_esc(d.code)).concat("\"");
+    out = out.concat(",\"file\":\"").concat(_json_esc(path)).concat("\"");
+    out = out.concat(",\"line\":").concat(int_to_str(d.line));
+    out = out.concat(",\"col\":").concat(int_to_str(d.col));
+    out = out.concat(",\"end_line\":").concat(int_to_str(d.end_line));
+    out = out.concat(",\"end_col\":").concat(int_to_str(d.end_col));
+    out = out.concat(",\"message\":\"").concat(_json_esc(d.message)).concat("\"");
+    out = out.concat("}");
+    return out;
+}
+
+// Minimal string escaper for the keys/values above. Covers `"`, `\\`,
+// control chars below 0x20, and newlines/tabs. JSON-spec compliant
+// for ASCII; non-ASCII bytes pass through unchanged (UTF-8).
+fn _json_esc(s: string) -> string {
+    if s == null { return ""; }
+    let mut out: string = "";
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c == 34 { out = out.concat("\\\""); }
+        else if c == 92 { out = out.concat("\\\\"); }
+        else if c == 10 { out = out.concat("\\n"); }
+        else if c == 13 { out = out.concat("\\r"); }
+        else if c == 9 { out = out.concat("\\t"); }
+        else if c < 32 { out = out.concat(" "); }
+        else { out = out.concat(s.substring(i, i + 1)); }
+    }
+    return out;
+}
+
+fn _wants_json(argc: int) -> bool {
+    for let i: int = 0; i < argc; i++ {
+        if args_at(i).eq("--json") { return true; }
+    }
+    return false;
+}
+
+// `glide lint <file>` — parse, type-check, run every extra analysis,
+// print every diagnostic from the user's file (plus imports when
+// `--all` is set), and exit 1 if anything fired. Honors
+// `--lint-as-error=<code>` to promote selected warnings into the
+// failing set; otherwise warnings are reported but the run still
+// exits 0 unless there are actual errors. `--json` emits a JSON
+// object per diagnostic on its own line for machine ingestion.
+fn run_lint(src_path: string, argc: int) -> int {
+    let stmts: *Vector<Stmt> = Vector::new();
+    let pdiags: *Vector<ParseDiag> = Vector::new();
+    if !parse_program_into(stmts, src_path, pdiags) {
+        // Parser already printed its diagnostics; bail.
+        return 1;
+    }
+
+    let t: *Typer = Typer::new();
+    merge_parse_diags(t, pdiags);
+    build_visibility(t, stmts);
+    t.enforce_visibility = true;
+    check_program(t, stmts);
+    run_extra_analyses(t, stmts);
+
+    let mut want_all: bool = false;
+    for let k: int = 0; k < argc; k++ {
+        if args_at(k).eq("--all") { want_all = true; }
+    }
+    let json: bool = _wants_json(argc);
+    let src_text: string = read_file(src_path);
+    let mut errors: int = 0;
+    let mut warnings: int = 0;
+    let mut promoted: int = 0;
+    let mut last_path: string = "";
+    let mut last_snip: string = src_text;
+    for let i: int = 0; i < t.diagnostics.len(); i++ {
+        let d: DiagEntry = t.diagnostics.get(i);
+        let mut path: string = d.origin;
+        if path.eq("") { path = src_path; }
+        if !want_all && !path.eq(src_path) { continue; }
+        let promote: bool = d.severity == 2 && _is_lint_promoted(d.code);
+        if json {
+            println!(_diag_to_jsonl(&d, src_path));
+        } else {
+            let mut snippet: string = src_text;
+            if !path.eq(src_path) {
+                if !path.eq(last_path) {
+                    last_snip = read_file(path);
+                    last_path = path;
+                }
+                snippet = last_snip;
+            }
+            print_pretty_diag(d, snippet, path);
+        }
+        if d.severity == 1 { errors = errors + 1; }
+        else if d.severity == 2 {
+            warnings = warnings + 1;
+            if promote { promoted = promoted + 1; }
+        }
+    }
+    t.free();
+
+    if !json {
+        println!("");
+        let mut summary: string = "lint: ".concat(int_to_str(errors)).concat(" error");
+        if errors != 1 { summary = summary.concat("s"); }
+        summary = summary.concat(", ").concat(int_to_str(warnings)).concat(" warning");
+        if warnings != 1 { summary = summary.concat("s"); }
+        if promoted > 0 {
+            summary = summary.concat(" (").concat(int_to_str(promoted)).concat(" promoted via --lint-as-error)");
+        }
+        println!(summary);
+    }
+    if errors > 0 || promoted > 0 { return 1; }
+    return 0;
+}
+
 // `glide clean` — wipe the per-project state. Doesn't touch the global
 // cache (other projects share it).
 fn run_clean() -> int {
@@ -1972,8 +2160,13 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         let mut dpath: string = d.origin;
         if dpath.eq("") { dpath = src_path; }
         if !dpath.eq(src_path) { continue; }
+        // Promote warning → error when `--lint-as-error=<code>` matches.
+        // We don't mutate the original entry (it stays in the typer's
+        // diagnostic list at severity 2), but we count it against the
+        // error budget so the build refuses.
+        let promoted: bool = d.severity == 2 && _is_lint_promoted(d.code);
         print_pretty_diag(d, src_text, dpath);
-        if d.severity == 1 { errors = errors + 1; }
+        if d.severity == 1 || promoted { errors = errors + 1; }
     }
     if errors > 0 {
         let mut tail: string = "could not compile due to 1 previous error";
@@ -2450,6 +2643,25 @@ fn main() -> int {
         print_usage();
         return 1;
     }
+    // Scan for the global lint promotion flag before dispatch so every
+    // subcommand (build / run / check / lint) sees the same setting.
+    // Repeatable: `--lint-as-error=deprecated-fn --lint-as-error=unused`.
+    // Also accepts `--lint-as-error=all` to deny every warning.
+    let deny: *Vector<string> = Vector::new();
+    let flag_prefix: string = "--lint-as-error=";
+    let flag_len: int = flag_prefix.len();
+    for let i: int = 0; i < argc; i++ {
+        let a: string = args_at(i);
+        if a.len() <= flag_len { continue; }
+        if !a.substring(0, flag_len).eq(flag_prefix) { continue; }
+        let val: string = a.substring(flag_len, a.len());
+        let toks: *Vector<string> = val.split(",");
+        for let j: int = 0; j < toks.len(); j++ {
+            let tk: string = toks.get(j).trim();
+            if !tk.eq("") { deny.push(tk); }
+        }
+    }
+    if deny.len() > 0 { set_deny_codes(deny); }
     let cmd: string = args_at(1);
 
     // `--version` / `-v` / `-V` / `--v` / `version` — print and exit.
@@ -2521,6 +2733,35 @@ fn main() -> int {
     // cache (~/.glide/cache) is left alone since other projects share it.
     if cmd.eq("clean") {
         return run_clean();
+    }
+
+    // `lint [file]` — run the lint analyses without producing an
+    // artifact. Same diagnostic pipeline as `glide check`, but the
+    // banner / exit policy is tuned for CI: `--lint-as-error=<code>`
+    // promotes warnings to errors; `--all` shows diagnostics from
+    // imported files; exit 1 when anything fires, 0 when clean.
+    if cmd.eq("lint") {
+        let mut target: string = "";
+        for let i: int = 2; i < argc; i++ {
+            let a: string = args_at(i);
+            if a.len() > 0 && a.at(0).to_int() == 45 { continue; }   // skip flags
+            target = a; break;
+        }
+        if target.eq("") {
+            // Project mode: read manifest, lint the `bin` file.
+            let root: string = find_manifest_root(".");
+            if root.eq("") {
+                println!("no glide.glide found; pass a file to lint or run inside a project");
+                return 1;
+            }
+            let m: *Manifest = read_manifest(root);
+            if m == null || m.bin.eq("") {
+                println!("project has no `bin` to lint; pass a file explicitly");
+                return 1;
+            }
+            target = root.concat("/").concat(m.bin);
+        }
+        return run_lint(target, argc);
     }
 
     // `target {list,add,remove,dir}` — manage cross-compile sysroots
@@ -2728,30 +2969,36 @@ fn main() -> int {
         run_extra_analyses(t, stmts);
         let src_text: string = read_file(src_path);
         let mut user_errors: int = 0;
+        let json: bool = _wants_json(argc);
+        let mut want_all: bool = false;
+        for let k: int = 0; k < argc; k++ {
+            if args_at(k).eq("--all") { want_all = true; }
+        }
         for let i: int = 0; i < t.diagnostics.len(); i++ {
             let d: DiagEntry = t.diagnostics.get(i);
             let mut path: string = d.origin;
             if path.eq("") { path = src_path; }
-            // Only print diags from the user's file by default. `--all` shows
-            // diagnostics from imported files as well.
-            let mut want_all: bool = false;
-            for let k: int = 0; k < argc; k++ {
-                if args_at(k).eq("--all") { want_all = true; }
-            }
             if !want_all && !path.eq(src_path) { continue; }
-            let mut snippet: string = src_text;
-            if !path.eq(src_path) { snippet = read_file(path); }
-            print_pretty_diag(d, snippet, path);
-            if d.severity == 1 { user_errors = user_errors + 1; }
+            let promoted: bool = d.severity == 2 && _is_lint_promoted(d.code);
+            if json {
+                println!(_diag_to_jsonl(&d, src_path));
+            } else {
+                let mut snippet: string = src_text;
+                if !path.eq(src_path) { snippet = read_file(path); }
+                print_pretty_diag(d, snippet, path);
+            }
+            if d.severity == 1 || promoted { user_errors = user_errors + 1; }
         }
         if user_errors > 0 {
-            let mut tail: string = "found 1 error";
-            if user_errors > 1 { tail = "found ".concat(int_to_str(user_errors)).concat(" errors"); }
-            println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(tail));
+            if !json {
+                let mut tail: string = "found 1 error";
+                if user_errors > 1 { tail = "found ".concat(int_to_str(user_errors)).concat(" errors"); }
+                println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(tail));
+            }
             t.free();
             return 1;
         }
-        println!(col_blue().concat("ok").concat(col_reset()));
+        if !json { println!(col_blue().concat("ok").concat(col_reset())); }
         t.free();
         return 0;
     }

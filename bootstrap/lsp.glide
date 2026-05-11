@@ -3750,11 +3750,44 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
     return false;
 }
 
-// Returns true when the enclosing item carries `@allow("<code>")` (or
-// `@allow("<code1>", "<code2>", ...)`). Lets users mark intentional
-// patterns the heuristics don't recognise without polluting the global
-// warning stream. Currently the allow list is matched verbatim — no
-// hierarchy yet (no `@allow("alloc")` umbrella for sub-codes).
+// Lint-code grouping: `@allow("alloc")` is shorthand for both
+// `unfreed-alloc` and `arena-not-freed`; `@allow("unused")` covers
+// every `unused-*`; `@allow("experimental")` covers the
+// stability codes; `@allow("lint")` (or `@allow("lint:*")`) silences
+// every user-defined `lint:<category>` warning. Anything starting
+// with `lint:` matches the corresponding custom-lint code verbatim.
+fn _code_in_group(allow_token: string, code: string) -> bool {
+    if allow_token.eq(code) { return true; }
+    if allow_token.eq("all") || allow_token.eq("*") { return true; }
+    if allow_token.eq("alloc") {
+        if code.eq("unfreed-alloc") || code.eq("arena-not-freed") { return true; }
+    }
+    if allow_token.eq("unused") {
+        if code.eq("unused-var") || code.eq("unused-param")
+           || code.eq("unused-fn") || code.eq("unnecessary-mut") { return true; }
+    }
+    if allow_token.eq("experimental") {
+        if code.eq("unstable-fn") || code.eq("deprecated-fn") { return true; }
+    }
+    if allow_token.eq("lint") || allow_token.eq("lint:*") {
+        if code.starts_with("lint:") { return true; }
+    }
+    // Glob-style prefix: `@allow("lint:io_*")` matches every custom
+    // category that begins with `io_`. Plain trailing `*` only.
+    if allow_token.len() > 1 {
+        let last: int = allow_token.at(allow_token.len() - 1).to_int();
+        if last == 42 {
+            let prefix: string = allow_token.substring(0, allow_token.len() - 1);
+            if code.starts_with(prefix) { return true; }
+        }
+    }
+    return false;
+}
+
+// Returns true when the enclosing item carries `@allow("<code>")` —
+// matched either verbatim or via the group / prefix logic above. Lets
+// users mark intentional patterns the heuristics don't recognise
+// without polluting the global warning stream.
 fn _has_allow(s: *Stmt, code: string) -> bool {
     if s == null || s.attrs == null { return false; }
     for let i: int = 0; i < s.attrs.len(); i++ {
@@ -3763,7 +3796,7 @@ fn _has_allow(s: *Stmt, code: string) -> bool {
         if a.args == null { continue; }
         for let j: int = 0; j < a.args.len(); j++ {
             let v: Expr = a.args.get(j);
-            if v.kind == EX_STRING && v.str_val.eq(code) { return true; }
+            if v.kind == EX_STRING && _code_in_group(v.str_val, code) { return true; }
         }
     }
     return false;
