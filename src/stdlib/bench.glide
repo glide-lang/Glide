@@ -1,0 +1,168 @@
+// Microbenchmark runner. Mirrors the testing module's shape — user
+// declares `pub fn bench_foo(b: *Bencher)` and the `glide bench`
+// driver synthesises a main() that calls each through `bench_run`.
+//
+//     pub fn bench_string_concat(b: *Bencher) {
+//         for let i: int = 0; i < b.n; i++ {
+//             let s: string = "hello".concat(" world");
+//         }
+//     }
+//
+// `b.n` is auto-tuned: the runner re-invokes the user fn with a
+// growing `n` until total elapsed crosses 500 ms (or it hits a hard
+// 100M cap), then divides to get ns/op. Three quick warmup calls
+// before the timed pass shake out any one-shot init cost.
+
+extern fn now_ns() -> i64;
+
+pub struct Bencher {
+    pub n: int,
+}
+
+const _BENCH_TARGET_NS:  i64 = 500000000;   //   500 ms — minimum sample window
+const _BENCH_MAX_ITERS:  int = 100000000;   // 100 M — hard ceiling
+const _BENCH_WARMUPS:    int = 3;
+
+// Process-wide counters live in C-side static vars so `bench_summary`
+// can read aggregate state without Glide-level mutable globals
+// (which the typer rejects at top level).
+extern fn _bench_bump_total();
+extern fn _bench_get_total() -> int;
+extern fn _bench_get_failed() -> int;
+
+c_raw! {
+    #ifndef GLIDE_BENCH_DEFINED
+    #define GLIDE_BENCH_DEFINED
+    static int __bench_total_g = 0;
+    static int __bench_failed_g = 0;
+    static void _bench_bump_total(void) { __bench_total_g++; }
+    static int  _bench_get_total(void)  { return __bench_total_g; }
+    static int  _bench_get_failed(void) { return __bench_failed_g; }
+    #endif
+}
+
+/// Run one named bench with an auto-tuned iteration count.
+/// `f` receives the Bencher; the user's loop must respect `b.n`.
+///
+/// ```glide
+/// bench_run("bench_concat", bench_concat);
+/// ```
+pub fn bench_run(name: string, f: fn(*Bencher)) {
+    let b: *Bencher = malloc(sizeof(Bencher)) as *Bencher;
+
+    // Warmup: dwarfs out one-time init (lazy module loaders, the
+    // first malloc, jit-style hot-path priming on the C side).
+    b.n = 1;
+    for let i: int = 0; i < _BENCH_WARMUPS; i++ { f(b); }
+
+    let mut n: int = 100;
+    let mut elapsed: i64 = 0;
+    let mut last_n: int = n;
+    while true {
+        b.n = n;
+        let t0: i64 = now_ns();
+        f(b);
+        elapsed = now_ns() - t0;
+        last_n = n;
+        if elapsed >= _BENCH_TARGET_NS { break; }
+        if n >= _BENCH_MAX_ITERS { break; }
+        // Scale by the ratio of (target / elapsed), but cap each jump
+        // at 10x so a near-instant first pass doesn't immediately blow
+        // through the iter ceiling.
+        let next_n: int = _scale_iters(n, elapsed);
+        if next_n <= n { n = n + 1; }
+        else { n = next_n; }
+    }
+
+    let total_ops: i64 = last_n as i64;
+    let ns_per_op: i64 = elapsed / total_ops;
+    _bench_bump_total();
+    _print_row(name, last_n, ns_per_op, elapsed);
+}
+
+/// Final summary line — total benches run.
+/// Returns the count of failed benches for an exit-code-friendly main.
+pub fn bench_summary() -> int {
+    println!("");
+    println!("bench result:", _bench_get_total(), "bench(es)");
+    return _bench_get_failed();
+}
+
+fn _scale_iters(cur: int, elapsed: i64) -> int {
+    if elapsed <= 0 { return cur * 10; }
+    let target: i64 = _BENCH_TARGET_NS;
+    let mut factor: i64 = target / elapsed;
+    if factor < 2 { factor = 2; }
+    if factor > 10 { factor = 10; }
+    let mut nxt: i64 = (cur as i64) * factor;
+    if nxt > (_BENCH_MAX_ITERS as i64) { nxt = _BENCH_MAX_ITERS as i64; }
+    return nxt as int;
+}
+
+// Single bench row: `<name>  <iters>  <ns/op>  (total <ms>)`.
+fn _print_row(name: string, iters: int, ns_per_op: i64, elapsed: i64) {
+    let ms: i64 = elapsed / 1000000;
+    println!(_pad_right(name, 36),
+             _pad_left(_with_commas(iters as i64), 14),
+             _pad_left(_with_commas(ns_per_op), 12), "ns/op",
+             "(", ms, "ms total)");
+}
+
+fn _pad_right(s: string, width: int) -> string {
+    if s.len() >= width { return s; }
+    let mut out: string = s;
+    let need: int = width - s.len();
+    for let i: int = 0; i < need; i++ { out = out.concat(" "); }
+    return out;
+}
+
+fn _pad_left(s: string, width: int) -> string {
+    if s.len() >= width { return s; }
+    let mut out: string = "";
+    let need: int = width - s.len();
+    for let i: int = 0; i < need; i++ { out = out.concat(" "); }
+    return out.concat(s);
+}
+
+// Insert thousands separators into a decimal int. Same as Go's
+// "%'d" but hand-rolled because Glide's println doesn't format.
+fn _with_commas(n: i64) -> string {
+    let mut neg: bool = false;
+    let mut v: i64 = n;
+    if v < 0 { neg = true; v = -v; }
+    let raw: string = _i64_to_str(v);
+    let len: int = raw.len();
+    let mut out: string = "";
+    for let i: int = 0; i < len; i++ {
+        if i > 0 && ((len - i) % 3) == 0 { out = out.concat(","); }
+        out = out.concat(raw.substring(i, i + 1));
+    }
+    if neg { return "-".concat(out); }
+    return out;
+}
+
+fn _i64_to_str(n: i64) -> string {
+    if n == 0 { return "0"; }
+    let mut buf: string = "";
+    let mut v: i64 = n;
+    while v > 0 {
+        let d: int = (v % 10) as int;
+        let digit: string = _digit_char(d);
+        buf = digit.concat(buf);
+        v = v / 10;
+    }
+    return buf;
+}
+
+fn _digit_char(d: int) -> string {
+    if d == 0 { return "0"; }
+    if d == 1 { return "1"; }
+    if d == 2 { return "2"; }
+    if d == 3 { return "3"; }
+    if d == 4 { return "4"; }
+    if d == 5 { return "5"; }
+    if d == 6 { return "6"; }
+    if d == 7 { return "7"; }
+    if d == 8 { return "8"; }
+    return "9";
+}
