@@ -627,6 +627,13 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
         let n: int = c.read(buf as *void, 8192);
         if n <= 0 { break; }
 
+        // Per-request arena — see http.glide::_handle_conn for the
+        // rationale. The router does extra path-segment splits and
+        // param HashMap builds per dispatch so it actually allocates
+        // more per request than the bare handler does.
+        let prev: *void = __glide_palloc_get();
+        __glide_palloc_set(__glide_palloc_make());
+
         let g: *void = hp_parse_glide(buf as *void, n);
         let mut keep: bool = false;
         let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
@@ -647,6 +654,11 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
             hp_glide_free(g);
         }
         _write_response(c, &resp, keep);
+
+        let arena_head: *void = __glide_palloc_get();
+        __glide_palloc_set(prev);
+        __glide_palloc_free(arena_head);
+
         if !keep { break; }
     }
     c.close();

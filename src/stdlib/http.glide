@@ -796,6 +796,14 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
         let n: int = c.read(buf as *void, 8192);
         if n <= 0 { break; }
 
+        // Per-request arena: every .concat / .substring / header lookup
+        // the handler triggers bumps into here and is reclaimed in bulk
+        // when we restore + free. Without it those allocations fall
+        // through to libc malloc with no owner and grow the RSS by
+        // 5-50KB/req depending on what the handler touches.
+        let prev: *void = __glide_palloc_get();
+        __glide_palloc_set(__glide_palloc_make());
+
         let g: *void = hp_parse_glide(buf as *void, n);
         let mut keep: bool = false;
         let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
@@ -819,6 +827,15 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
             hp_glide_free(g);
         }
         _write_response(c, &resp, keep);
+
+        // Re-read the active arena head: if the handler grew it,
+        // palloc_chunk prepended new chunks and the make() return is
+        // now buried at the tail of the list. Free has to start from
+        // the current top.
+        let arena_head: *void = __glide_palloc_get();
+        __glide_palloc_set(prev);
+        __glide_palloc_free(arena_head);
+
         if !keep { break; }
     }
     c.close();
@@ -904,6 +921,10 @@ fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
         let n: int = rr.val;
         if n <= 0 { break; }
 
+        // Per-request arena — see _handle_conn for rationale.
+        let prev: *void = __glide_palloc_get();
+        __glide_palloc_set(__glide_palloc_make());
+
         let g: *void = hp_parse_glide(buf as *void, n);
         let mut keep: bool = false;
         let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
@@ -924,6 +945,11 @@ fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
             hp_glide_free(g);
         }
         _write_response_tls(s, &resp, keep);
+
+        let arena_head: *void = __glide_palloc_get();
+        __glide_palloc_set(prev);
+        __glide_palloc_free(arena_head);
+
         if !keep { break; }
     }
     s.close();
