@@ -817,40 +817,100 @@ fn auto_fetch_for(src_path: string) {
 //       glide.glide        (canonical manifest, empty deps list)
 //       src/main.glide     (hello-world)
 //
-// Refuses to overwrite an existing directory.
+// Scaffolds into `name`. Two shapes:
+//   - `glide new <name>`: creates `<name>/` (errors if it exists).
+//   - `glide new .`     : scaffolds into the current directory; the
+//                          project name comes from the CWD's basename.
+// Either way, refuses to clobber an existing `glide.glide`.
 fn run_new(name: string) -> int {
-    if fs_is_dir(name) || __glide_file_exists(name) {
-        println!("new:", name, "already exists");
-        return 1;
+    let mut target_dir: string = name;
+    let mut proj_name: string = name;
+    let scaffold_in_place: bool = name.eq(".") || name.eq("./") || fs_is_dir(name);
+
+    if scaffold_in_place {
+        // Resolve the project name from the directory we're landing in.
+        let mut dir: string = name;
+        if name.eq(".") || name.eq("./") {
+            let r: !string = os_cwd();
+            if !r.ok {
+                println!("new: could not resolve current directory");
+                return 1;
+            }
+            dir = r.val;
+        }
+        target_dir = name;
+        proj_name = _basename(dir);
+        if proj_name.eq("") { proj_name = "project"; }
+        // Already a Glide project? Don't clobber.
+        if __glide_file_exists(target_dir.concat("/glide.glide")) {
+            println!("new:", target_dir, "already contains a glide.glide");
+            return 1;
+        }
+    } else {
+        if __glide_file_exists(name) {
+            println!("new:", name, "already exists");
+            return 1;
+        }
     }
-    let src_dir: string = name.concat("/src");
+
+    let src_dir: string = target_dir.concat("/src");
     if !fs_mkdir_p(src_dir) {
         println!("new: could not create", src_dir);
         return 1;
     }
     let manifest_body: string =
         "let manifest: Package = Package {\n"
-        .concat("    name:    \"").concat(name).concat("\",\n")
+        .concat("    name:    \"").concat(proj_name).concat("\",\n")
         .concat("    version: \"0.1.0\",\n")
         .concat("    bin:     \"src/main.glide\",\n")
         .concat("    deps: vec_of(\n")
         .concat("    ),\n")
         .concat("};\n");
-    if !write_file(name.concat("/glide.glide"), manifest_body) {
+    if !write_file(target_dir.concat("/glide.glide"), manifest_body) {
         println!("new: could not write glide.glide");
         return 1;
     }
-    let main_body: string =
-        "fn main() -> int {\n"
-        .concat("    println!(\"hello from ").concat(name).concat("\");\n")
-        .concat("    return 0;\n")
-        .concat("}\n");
-    if !write_file(name.concat("/src/main.glide"), main_body) {
-        println!("new: could not write src/main.glide");
-        return 1;
+    // Don't overwrite an existing src/main.glide — the user may have
+    // started with hand-written code before turning the dir into a
+    // Glide project.
+    let main_path: string = target_dir.concat("/src/main.glide");
+    if !__glide_file_exists(main_path) {
+        let main_body: string =
+            "fn main() -> int {\n"
+            .concat("    println!(\"hello from ").concat(proj_name).concat("\");\n")
+            .concat("    return 0;\n")
+            .concat("}\n");
+        if !write_file(main_path, main_body) {
+            println!("new: could not write src/main.glide");
+            return 1;
+        }
     }
-    println!("created", name.concat("/"));
+    if scaffold_in_place {
+        println!("created glide project", proj_name, "in", target_dir);
+    } else {
+        println!("created", target_dir.concat("/"));
+    }
     return 0;
+}
+
+// Last `/` or `\\`-separated segment of `path`. Drops a trailing
+// separator first so `basename("/foo/bar/")` is `bar`.
+fn _basename(path: string) -> string {
+    let mut end: int = path.len();
+    while end > 0 {
+        let c: int = path.at(end - 1).to_int();
+        if c == 47 || c == 92 { end = end - 1; }
+        else { break; }
+    }
+    let mut start: int = 0;
+    let mut i: int = 0;
+    while i < end {
+        let c: int = path.at(i).to_int();
+        if c == 47 || c == 92 { start = i + 1; }
+        i = i + 1;
+    }
+    if start >= end { return ""; }
+    return path.substring(start, end);
 }
 
 // `glide add` dispatcher. Two shapes:
