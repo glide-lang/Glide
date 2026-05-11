@@ -1348,6 +1348,20 @@ fn _default_out_path(project_root: string, project_name: string, then_run: bool)
     return "a.out";
 }
 
+// Scratch directory for transient build artefacts (test/bench wrappers,
+// golden runners, etc). In a project we drop them under `build/` so the
+// tree stays clean; outside a project we fall back to the system temp
+// dir. Created lazily — callers can assume it exists on success.
+fn _scratch_dir() -> string {
+    let root: string = find_manifest_root(".");
+    if !root.eq("") {
+        let d: string = root.concat("/build");
+        fs_mkdir_p(d);
+        return d;
+    }
+    return _temp_dir();
+}
+
 // Best-effort system temp dir lookup. Windows uses TEMP/TMP; POSIX
 // falls back to /tmp.
 fn _temp_dir() -> string {
@@ -1832,9 +1846,10 @@ fn run_bench(path: string) -> int {
 
     let mut total_files: int = 0;
     let mut failed_files: int = 0;
-    let tmp_path: string = "__glide_bench_run.glide";
-    let mut out_path: string = "__glide_bench_run.exe";
-    if __glide_is_windows() == 0 { out_path = "__glide_bench_run"; }
+    let scratch: string = _scratch_dir();
+    let tmp_path: string = scratch.concat("/__glide_bench_run.glide");
+    let mut out_path: string = scratch.concat("/__glide_bench_run.exe");
+    if __glide_is_windows() == 0 { out_path = scratch.concat("/__glide_bench_run"); }
 
     for let i: int = 0; i < files.len(); i++ {
         let f: string = files.get(i);
@@ -1938,9 +1953,10 @@ fn run_test(path: string) -> int {
 
     let mut total_files: int = 0;
     let mut failed_files: int = 0;
-    let tmp_path: string = "__glide_test_run.glide";
-    let mut out_path: string = "__glide_test_run.exe";
-    if __glide_is_windows() == 0 { out_path = "__glide_test_run"; }
+    let scratch: string = _scratch_dir();
+    let tmp_path: string = scratch.concat("/__glide_test_run.glide");
+    let mut out_path: string = scratch.concat("/__glide_test_run.exe");
+    if __glide_is_windows() == 0 { out_path = scratch.concat("/__glide_test_run"); }
 
     for let i: int = 0; i < files.len(); i++ {
         let f: string = files.get(i);
@@ -1991,16 +2007,15 @@ fn run_test(path: string) -> int {
 
 // Build `name` (a `*.glide` path) into a fresh executable, run it with
 // stdout captured to `out_txt`, and return the run's exit code (or -1 if
-// the build itself failed). Build artefacts go in the cwd alongside
-// `__glide_golden.exe`; cleanup is best-effort.
+// the build itself failed). Build artefacts go under `_scratch_dir()`
+// (project `build/` or system temp); cleanup is best-effort.
 fn _golden_build_and_run(src: string, out_txt: string) -> int {
-    let mut exe: string = "__glide_golden.exe";
-    if __glide_is_windows() == 0 { exe = "__glide_golden"; }
+    let scratch: string = _scratch_dir();
+    let mut exe: string = scratch.concat("/__glide_golden.exe");
+    if __glide_is_windows() == 0 { exe = scratch.concat("/__glide_golden"); }
     let rc_build: int = run_build_q(src, exe, "", false, true);
     if rc_build != 0 { return -1; }
-    let mut prefix: string = "./";
-    if __glide_is_windows() != 0 { prefix = ".\\"; }
-    let cmd: string = "\"".concat(prefix).concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
+    let cmd: string = "\"".concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
     let mut wrapped: string = cmd;
     if __glide_is_windows() != 0 {
         wrapped = "\"".concat(cmd).concat("\"");
