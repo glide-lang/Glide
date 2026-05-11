@@ -63,15 +63,28 @@ pub fn find_manifest_root(start_dir: string) -> string {
     return "";
 }
 
-// Trim the trailing `/seg` (or `\seg`) from `dir`. Returns `dir` unchanged
-// when there's no separator left to drop.
+// Trim the trailing `/seg` (or `\seg`) from `dir`. Handles a few
+// relative-path edge cases so `find_manifest_root` can walk upward
+// from a `parent_dir(...)` result like "src" (CWD-relative single
+// segment) without prematurely bailing.
 fn parent_of(dir: string) -> string {
+    if dir.eq("") { return ""; }
+    if dir.eq(".") { return ".."; }
     let mut cut: int = -1;
     for let i: int = 0; i < dir.len(); i++ {
         let c: int = dir.at(i).to_int();
         if c == 47 || c == 92 { cut = i; }
     }
-    if cut <= 0 { return ""; }
+    if cut < 0 {
+        // No separator left: treat single-segment paths as CWD-relative
+        // and bounce them up to ".". From there `parent_of(".")` keeps
+        // climbing via "..", which the find loop tolerates.
+        return ".";
+    }
+    if cut == 0 {
+        // Path is "/foo" — climbed to root. Stop here.
+        return "";
+    }
     return dir.substring(0, cut);
 }
 
@@ -325,6 +338,138 @@ pub fn manifest_resolve_alias(m: *Manifest, alias: string) -> string {
         return dep_cache_dir(m, d);
     }
     return "";
+}
+
+// ---- manifest text editor ----------------------------------------------
+//
+// `glide add` / `glide remove` mutate the manifest by editing the source
+// text directly. An AST round-trip would lose comments and the user's
+// chosen formatting; the text-edit path keeps the file unchanged outside
+// the `deps:` body. The canonical shape (produced by `glide new`) is:
+//
+//     deps: vec_of(
+//         Dep::path("foo", "../foo"),
+//         Dep::git("bar", "github.com/x/bar", "v1.0"),
+//     ),
+//
+// `manifest_add_dep_line` inserts before the closing `)` of `vec_of(`,
+// matching parentheses to be safe with nested calls.
+
+pub fn manifest_add_dep_line(root_dir: string, dep_line: string) -> bool {
+    let path: string = root_dir.concat("/glide.glide");
+    let src: string = read_file(path);
+    if src.eq("") { return false; }
+    let edited: string = _insert_dep_in_vec_of(src, dep_line);
+    if edited.eq("") { return false; }
+    return write_file(path, edited);
+}
+
+pub fn manifest_remove_dep(root_dir: string, name: string) -> bool {
+    let path: string = root_dir.concat("/glide.glide");
+    let src: string = read_file(path);
+    if src.eq("") { return false; }
+    let edited: string = _drop_dep_line(src, name);
+    if edited.eq("") { return false; }
+    return write_file(path, edited);
+}
+
+// Walk forward from the first `vec_of(` after a `deps:` token, matching
+// parentheses, and insert `dep_line` (plus a trailing newline) right
+// before the matching `)`. Returns "" on any structural mismatch so the
+// caller can report a clean error instead of mangling the file.
+fn _insert_dep_in_vec_of(src: string, dep_line: string) -> string {
+    let deps_idx: int = _find_after(src, 0, "deps:");
+    if deps_idx < 0 { return ""; }
+    let vec_idx: int = _find_after(src, deps_idx, "vec_of(");
+    if vec_idx < 0 { return ""; }
+    let open: int = vec_idx + 7;
+    let close: int = _matching_close(src, open - 1);
+    if close < 0 { return ""; }
+
+    // Scan back from `close` past trailing whitespace + newline to find
+    // the insertion point. We want the new line to land on its own line
+    // just before the indented `)`.
+    let mut line_start: int = close;
+    while line_start > open
+       && _at(src, line_start - 1) != 10
+       && _at(src, line_start - 1) != 13 {
+        line_start = line_start - 1;
+    }
+
+    let head: string = src.substring(0, line_start);
+    let tail: string = src.substring(line_start, src.len());
+    return head.concat(dep_line).concat("\n").concat(tail);
+}
+
+// Find the closing paren that matches the `(` at `open_idx`. -1 on
+// unbalanced input. Skips parens inside `"..."` string literals.
+fn _matching_close(src: string, open_idx: int) -> int {
+    let mut depth: int = 0;
+    let mut in_str: bool = false;
+    let mut i: int = open_idx;
+    while i < src.len() {
+        let c: int = _at(src, i);
+        if in_str {
+            if c == 92 && (i + 1) < src.len() { i = i + 2; continue; }
+            if c == 34 { in_str = false; }
+        } else if c == 34 {
+            in_str = true;
+        } else if c == 40 {
+            depth = depth + 1;
+        } else if c == 41 {
+            depth = depth - 1;
+            if depth == 0 { return i; }
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn _find_after(src: string, from: int, needle: string) -> int {
+    let n: int = src.len();
+    let m: int = needle.len();
+    if m == 0 || from < 0 || from + m > n { return -1; }
+    for let i: int = from; i + m <= n; i++ {
+        let mut hit: bool = true;
+        for let j: int = 0; j < m; j++ {
+            if _at(src, i + j) != needle.at(j).to_int() { hit = false; break; }
+        }
+        if hit { return i; }
+    }
+    return -1;
+}
+
+fn _at(s: string, i: int) -> int { return s.at(i).to_int(); }
+
+// Drop the line containing the dep entry for `name`. Matches both
+// `Dep::path("name", ...)` and `Dep::git("name", ...)`.
+fn _drop_dep_line(src: string, name: string) -> string {
+    let n: int = src.len();
+    let needle_path: string = "Dep::path(\"".concat(name).concat("\"");
+    let needle_git:  string = "Dep::git(\"".concat(name).concat("\"");
+    let mut line_start: int = 0;
+    let mut out: string = "";
+    let mut dropped: bool = false;
+    for let i: int = 0; i < n; i++ {
+        if _at(src, i) != 10 { continue; }
+        let line: string = src.substring(line_start, i);
+        if line.contains(needle_path) || line.contains(needle_git) {
+            dropped = true;
+        } else {
+            out = out.concat(line).concat("\n");
+        }
+        line_start = i + 1;
+    }
+    if line_start < n {
+        let tail: string = src.substring(line_start, n);
+        if tail.contains(needle_path) || tail.contains(needle_git) {
+            dropped = true;
+        } else {
+            out = out.concat(tail);
+        }
+    }
+    if !dropped { return ""; }
+    return out;
 }
 
 // Top-level cache directory, `~/.glide/cache/`. Created on demand by the

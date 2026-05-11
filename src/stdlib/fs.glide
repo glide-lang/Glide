@@ -14,6 +14,8 @@ extern fn __glide_fs_write_slice(path: string, data: string, offset: int, n: int
 extern fn __glide_fs_is_dir(path: string) -> bool;
 extern fn __glide_fs_read_bytes(path: string, out_len: *int) -> *void;
 extern fn __glide_fs_symlink(target: string, link: string) -> bool;
+extern fn __glide_fs_remove_file(path: string) -> bool;
+extern fn __glide_fs_remove_dir_rec(path: string) -> bool;
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
 c_raw! {
@@ -223,6 +225,34 @@ c_raw! {
         return symlink(target, link) == 0;
     }
     #endif
+
+    // Remove a single file. Returns true on success or when the file
+    // didn't exist; only false on a real I/O error.
+    static bool __glide_fs_remove_file(const char* path) {
+        if (remove(path) == 0) return true;
+        return !__glide_file_exists(path);
+    }
+    // Recursive directory delete. Shells out so we don't have to walk
+    // entries by hand. Returns true on success or when the dir didn't
+    // exist.
+    static bool __glide_fs_remove_dir_rec(const char* path) {
+        if (!__glide_fs_is_dir(path)) return true;
+        #ifdef _WIN32
+        size_t n = strlen(path);
+        char* tb = (char*)malloc(n + 1);
+        if (!tb) return false;
+        for (size_t i = 0; i <= n; i++) tb[i] = (path[i] == '/') ? '\\' : path[i];
+        char cmd[2048];
+        snprintf(cmd, sizeof(cmd), "rmdir /S /Q \"%s\" >NUL 2>&1", tb);
+        int rc = system(cmd);
+        free(tb);
+        return rc == 0;
+        #else
+        char cmd[2048];
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", path);
+        return system(cmd) == 0;
+        #endif
+    }
 
     // Binary read. Returns the malloc'd payload + length via out-param.
     // Caller wraps the pointer with `__glide_string_from_buf(buf, *out_len)`
@@ -466,3 +496,21 @@ pub fn fs_read_bytes(path: string, out_len: *int) -> string {
 pub fn fs_symlink(target: string, link: string) -> bool {
     return __glide_fs_symlink(target, link);
 }
+
+/// Delete a single file. Returns `true` on success or when the file
+/// is already absent (idempotent). Returns `false` only on a real
+/// I/O error (permissions, mount issues).
+///
+/// ```glide
+/// fs_remove_file("glide.lock");
+/// ```
+pub fn fs_remove_file(path: string) -> bool { return __glide_fs_remove_file(path); }
+
+/// Recursively delete `path` and everything under it. Idempotent —
+/// missing paths report success. Shells out to `rm -rf` (POSIX) or
+/// `rmdir /S /Q` (Windows) so the implementation stays small.
+///
+/// ```glide
+/// fs_remove_dir_rec("glide_modules");
+/// ```
+pub fn fs_remove_dir_rec(path: string) -> bool { return __glide_fs_remove_dir_rec(path); }

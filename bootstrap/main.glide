@@ -748,7 +748,13 @@ fn print_usage() {
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
     println!("  glide fmt <file> [--write] (pretty-print to stdout, or rewrite in place)");
+    println!("  glide new <name>           (scaffold a new project)");
+    println!("  glide add <name> <git-url> <rev>");
+    println!("  glide add --local <name> <path>");
+    println!("  glide remove <name>        (drop a dep from glide.glide)");
     println!("  glide fetch [path]         (download git deps from glide.glide)");
+    println!("  glide update               (refresh every git dep + rewrite lock)");
+    println!("  glide clean                (drop glide_modules/ + glide.lock)");
     println!("  glide lsp                  (language server on stdio)");
 }
 
@@ -787,6 +793,162 @@ fn auto_fetch_for(src_path: string) {
     let m: *Manifest = read_manifest(root);
     if m == null { return; }
     fetch_all(m);
+}
+
+// `glide new <name>` — scaffold a new project. Layout:
+//
+//     <name>/
+//       glide.glide        (canonical manifest, empty deps list)
+//       src/main.glide     (hello-world)
+//
+// Refuses to overwrite an existing directory.
+fn run_new(name: string) -> int {
+    if fs_is_dir(name) || __glide_file_exists(name) {
+        println!("new:", name, "already exists");
+        return 1;
+    }
+    let src_dir: string = name.concat("/src");
+    if !fs_mkdir_p(src_dir) {
+        println!("new: could not create", src_dir);
+        return 1;
+    }
+    let manifest_body: string =
+        "let manifest: Package = Package {\n"
+        .concat("    name:    \"").concat(name).concat("\",\n")
+        .concat("    version: \"0.1.0\",\n")
+        .concat("    bin:     \"src/main.glide\",\n")
+        .concat("    deps: vec_of(\n")
+        .concat("    ),\n")
+        .concat("};\n");
+    if !write_file(name.concat("/glide.glide"), manifest_body) {
+        println!("new: could not write glide.glide");
+        return 1;
+    }
+    let main_body: string =
+        "fn main() -> int {\n"
+        .concat("    println!(\"hello from ").concat(name).concat("\");\n")
+        .concat("    return 0;\n")
+        .concat("}\n");
+    if !write_file(name.concat("/src/main.glide"), main_body) {
+        println!("new: could not write src/main.glide");
+        return 1;
+    }
+    println!("created", name.concat("/"));
+    return 0;
+}
+
+// `glide add` dispatcher. Two shapes:
+//   glide add --local <name> <path>
+//   glide add <name> <git-url> <rev>
+fn run_add(argc: int) -> int {
+    let root: string = find_manifest_root(".");
+    if root.eq("") { println!("add: no glide.glide found"); return 1; }
+
+    let mut is_local: bool = false;
+    let positional: *Vector<string> = Vector::new();
+    for let i: int = 2; i < argc; i++ {
+        let a: string = args_at(i);
+        if a.eq("--local") { is_local = true; continue; }
+        positional.push(a);
+    }
+
+    if is_local {
+        if positional.len() < 2 {
+            println!("usage: glide add --local <name> <path>");
+            return 1;
+        }
+        let dep_name: string = positional.get(0);
+        let dep_path: string = positional.get(1);
+        let line: string = "        Dep::path(\"".concat(dep_name)
+            .concat("\", \"").concat(dep_path).concat("\"),");
+        if !manifest_add_dep_line(root, line) {
+            println!("add: could not edit manifest");
+            return 1;
+        }
+        println!("added path dep:", dep_name, "->", dep_path);
+        return 0;
+    }
+
+    if positional.len() < 3 {
+        println!("usage: glide add <name> <git-url> <rev>");
+        println!("       glide add --local <name> <path>");
+        return 1;
+    }
+    let dep_name: string = positional.get(0);
+    let dep_url:  string = positional.get(1);
+    let dep_rev:  string = positional.get(2);
+    let line: string = "        Dep::git(\"".concat(dep_name)
+        .concat("\", \"").concat(dep_url)
+        .concat("\", \"").concat(dep_rev).concat("\"),");
+    if !manifest_add_dep_line(root, line) {
+        println!("add: could not edit manifest");
+        return 1;
+    }
+    println!("added git dep:", dep_name, dep_url, dep_rev);
+    // Pull it down immediately so the next build doesn't surprise, and
+    // refresh the lockfile to record the new entry.
+    let m: *Manifest = read_manifest(root);
+    if m != null {
+        fetch_all(m);
+        link_all(m);
+        let lf: *Lockfile = lockfile_from_manifest(m);
+        write_lockfile(root, lf);
+    }
+    return 0;
+}
+
+fn run_remove(name: string) -> int {
+    let root: string = find_manifest_root(".");
+    if root.eq("") { println!("remove: no glide.glide found"); return 1; }
+    if !manifest_remove_dep(root, name) {
+        println!("remove: no dep named", name);
+        return 1;
+    }
+    // Drop the glide_modules link too so a stale junction doesn't
+    // shadow a future re-add.
+    let link: string = root.concat("/glide_modules/").concat(name);
+    if fs_is_dir(link) { fs_remove_dir_rec(link); }
+    println!("removed:", name);
+    return 0;
+}
+
+// `glide update` — force-refresh every git dep. Path deps are
+// untouched. Wipes the lockfile too so the next fetch writes a fresh
+// snapshot.
+fn run_update() -> int {
+    let root: string = find_manifest_root(".");
+    if root.eq("") { println!("update: no glide.glide found"); return 1; }
+    let m: *Manifest = read_manifest(root);
+    if m == null { println!("update: could not parse glide.glide"); return 1; }
+
+    for let i: int = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        if d.kind != DEP_GIT { continue; }
+        let cache: string = dep_cache_dir(m, d);
+        if !cache.eq("") && fs_is_dir(cache) {
+            fs_remove_dir_rec(cache);
+            println!("update:", d.name, "- cache cleared");
+        }
+    }
+    fs_remove_file(root.concat("/glide.lock"));
+
+    let fetched: int = fetch_all(m);
+    if fetched == 0 { println!("update: nothing to fetch"); }
+    link_all(m);
+    let lf: *Lockfile = lockfile_from_manifest(m);
+    write_lockfile(root, lf);
+    return 0;
+}
+
+// `glide clean` — wipe the per-project state. Doesn't touch the global
+// cache (other projects share it).
+fn run_clean() -> int {
+    let root: string = find_manifest_root(".");
+    if root.eq("") { println!("clean: no glide.glide found"); return 1; }
+    fs_remove_dir_rec(root.concat("/glide_modules"));
+    fs_remove_file(root.concat("/glide.lock"));
+    println!("clean: removed glide_modules/ and glide.lock");
+    return 0;
 }
 
 // `merge_parse_diags` moved to typer.glide so the LSP can reach it
@@ -1405,6 +1567,36 @@ fn main() -> int {
         let mut start: string = ".";
         if argc >= 3 { start = args_at(2); }
         return run_fetch(start);
+    }
+
+    // `new <name>` — scaffold a fresh project directory.
+    if cmd.eq("new") {
+        if argc < 3 { println!("usage: glide new <name>"); return 1; }
+        return run_new(args_at(2));
+    }
+
+    // `add` — write a new entry into the nearest glide.glide:
+    //   glide add --local <name> <path>       path dep
+    //   glide add <name> <git-url> <rev>      git dep
+    if cmd.eq("add") {
+        return run_add(argc);
+    }
+
+    // `remove <name>` — drop the matching dep entry.
+    if cmd.eq("remove") {
+        if argc < 3 { println!("usage: glide remove <name>"); return 1; }
+        return run_remove(args_at(2));
+    }
+
+    // `update` — wipe glide.lock + each git dep's cache dir, then refetch.
+    if cmd.eq("update") {
+        return run_update();
+    }
+
+    // `clean` — drop the per-project glide_modules/ + glide.lock. Global
+    // cache (~/.glide/cache) is left alone since other projects share it.
+    if cmd.eq("clean") {
+        return run_clean();
     }
 
     // `test [path]`           — run *_test.glide files (default cwd).
