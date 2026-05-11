@@ -33,7 +33,7 @@ extern fn __glide_file_exists(path: string) -> bool;
 extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
 
-pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: bool) -> int {
+pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: bool, include_stdlib: bool) -> int {
     let out_dir: string = root_dir.concat("/build/doc");
     if !fs_mkdir_p(out_dir) {
         println!("doc: could not create", out_dir);
@@ -53,6 +53,27 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: int, emit_ai: boo
         if m.items.len() == 0 { continue; }
         modules.push(*m);
         total_items = total_items + m.items.len();
+    }
+
+    // `--stdlib`: walk the compiler-bundled standard library too. Each
+    // file is scanned with the stdlib's `src/` as its display root, so
+    // modules surface as `stdlib::hashmap`, `stdlib::http::client`,
+    // etc. — matching the user-facing import path.
+    if include_stdlib {
+        let std_root: string = _find_stdlib_src_root();
+        if std_root.eq("") {
+            println!("doc: could not locate the bundled stdlib");
+        } else {
+            let std_files: *Vector<string> = fs_list_rec(std_root.concat("/stdlib"), ".glide");
+            for let i: int = 0; i < std_files.len(); i++ {
+                let f: string = std_files.get(i);
+                let m: *DocModule = _scan_file(f, std_root);
+                if m == null { continue; }
+                if m.items.len() == 0 { continue; }
+                modules.push(*m);
+                total_items = total_items + m.items.len();
+            }
+        }
     }
 
     if modules.len() == 0 {
@@ -228,6 +249,22 @@ fn _write_llms_txt(path: string, modules: *Vector<DocModule>) {
     }
     write_file(path, out);
 }
+
+// Find the `src/` directory that holds the bundled `stdlib/` tree.
+// Same probe `bootstrap/lsp.glide` uses for its stdlib index: prefer
+// the installed-binary layout (`<exe>/src/stdlib/...`), fall back to
+// running inside a source checkout (`./src/stdlib/...`).
+fn _find_stdlib_src_root() -> string {
+    let exe_dir: string = __glide_exe_dir();
+    if !exe_dir.eq("") {
+        let probe: string = exe_dir.concat("/src/stdlib/hashmap.glide");
+        if __glide_file_exists(probe) { return exe_dir.concat("/src"); }
+    }
+    if __glide_file_exists("src/stdlib/hashmap.glide") { return "src"; }
+    return "";
+}
+
+extern fn __glide_exe_dir() -> string;
 
 fn _scan_file(path: string, root: string) -> *DocModule {
     let src: string = read_file(path);

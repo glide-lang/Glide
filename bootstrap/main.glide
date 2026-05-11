@@ -763,7 +763,7 @@ fn print_usage() {
     println!("  glide clean                (drop glide_modules/ + glide.lock)");
     println!("  glide install <path>");
     println!("  glide install <git-url> <rev>");
-    println!("  glide doc [--open] [--serve[=<port>]] [--ai]");
+    println!("  glide doc [--open] [--serve[=<port>]] [--ai] [--stdlib]");
     println!("  glide bench [path]         (run *_bench.glide microbenchmarks)");
     println!("  glide lsp                  (language server on stdio)");
 }
@@ -2206,11 +2206,13 @@ fn main() -> int {
         let mut want_open: bool = false;
         let mut serve_port: int = 0;
         let mut emit_ai: bool = false;
+        let mut include_stdlib: bool = false;
         for let i: int = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.eq("--open") { want_open = true; continue; }
             if a.eq("--serve") { serve_port = 3030; continue; }
             if a.eq("--ai") { emit_ai = true; continue; }
+            if a.eq("--stdlib") { include_stdlib = true; continue; }
             if a.len() > 8 && a.substring(0, 8).eq("--serve=") {
                 let n: string = a.substring(8, a.len());
                 let parsed: int = _parse_port(n);
@@ -2220,7 +2222,7 @@ fn main() -> int {
         }
         let root: string = find_manifest_root(".");
         let target_root: string = if root.eq("") { "." } else { root };
-        return run_doc(target_root, want_open, serve_port, emit_ai);
+        return run_doc(target_root, want_open, serve_port, emit_ai, include_stdlib);
     }
 
     // `test [path]`           — run *_test.glide files (default cwd).
