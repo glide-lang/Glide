@@ -1010,7 +1010,7 @@ fn run_install(argc: int) -> int {
     if rc != 0 { return rc; }
 
     println!("installed", m.name, "->", final_path);
-    _warn_if_not_on_path(install_dir);
+    _ensure_on_path(install_dir);
     return 0;
 }
 
@@ -1060,19 +1060,58 @@ fn _fetch_for_install(url: string, rev: string) -> string {
     return ensure_fetched(m, synthetic);
 }
 
-// Warn (don't fail) when `dir` isn't on PATH — the user's shell needs
-// a restart or a manual export to actually pick up the installed bin.
-fn _warn_if_not_on_path(dir: string) {
+// Make sure `dir` ends up on the user's PATH. On Windows we do the
+// modification ourselves (PowerShell touching HKCU\Environment) so the
+// next shell sees the bin without the user copying a setx line by hand.
+// On POSIX we still just print the export — picking the right rc file
+// (`~/.zshrc` vs `~/.bash_profile` vs `~/.config/fish/config.fish`)
+// without trampling the user's setup is too noisy.
+fn _ensure_on_path(dir: string) {
     let path_env: string = __glide_getenv("PATH");
-    if path_env.eq("") { return; }
-    if _path_contains(path_env, dir) { return; }
-    println!("");
-    println!("note:", dir, "is not on your PATH.");
+    if !path_env.eq("") && _path_contains(path_env, dir) { return; }
     if __glide_is_windows() != 0 {
-        println!("      add it via: setx PATH \"%PATH%;".concat(dir).concat("\""));
+        _add_to_user_path_win(dir);
     } else {
+        println!("");
+        println!("note:", dir, "is not on your PATH.");
         println!("      add `export PATH=\"".concat(dir).concat(":$PATH\"` to your shell rc."));
     }
+}
+
+// Modify the user-scope PATH via PowerShell. We avoid `setx PATH
+// "%PATH%;..."` because %PATH% at runtime is the SYSTEM+USER merge —
+// setx would duplicate every system entry into the user PATH. Reading
+// only the User scope lets us append cleanly.
+fn _add_to_user_path_win(dir: string) {
+    let bs: string = _to_backslashes(dir);
+    let ps: string =
+        "$p = [Environment]::GetEnvironmentVariable('PATH', 'User');"
+        .concat(" if ($p -eq $null) { $p = '' };")
+        .concat(" if (-not $p.Contains('").concat(bs).concat("')) {")
+        .concat(" if ($p -eq '') { $new = '").concat(bs).concat("' } else { $new = $p + ';").concat(bs).concat("' };")
+        .concat(" [Environment]::SetEnvironmentVariable('PATH', $new, 'User');")
+        .concat(" Write-Host 'glide: added' '").concat(bs).concat("' 'to user PATH'")
+        .concat(" } else { Write-Host 'glide: already on user PATH' }");
+    let cmd: string = "powershell -NoProfile -Command \"".concat(ps).concat("\"");
+    let rc: int = __glide_shell(cmd);
+    if rc != 0 {
+        println!("");
+        println!("note: could not modify PATH automatically (powershell missing?).");
+        println!("      run manually:");
+        println!("        setx PATH \"%PATH%;", bs, "\"");
+    } else {
+        println!("(restart your shell to pick up the new PATH)");
+    }
+}
+
+fn _to_backslashes(s: string) -> string {
+    let mut out: string = "";
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c == 47 { out = out.concat("\\"); }
+        else       { out = out.concat(s.substring(i, i + 1)); }
+    }
+    return out;
 }
 
 // Split `path_env` on the platform separator (`;` on Windows, `:` on
