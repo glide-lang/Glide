@@ -1,0 +1,6 @@
+import demo_lib::greeter;
+
+fn main() -> int {
+    greeter::hello("manifest_demo");
+    return 0;
+}

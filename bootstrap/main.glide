@@ -30,6 +30,7 @@ import codegen;
 import json;
 import fmt;
 import lsp;
+import manifest;
 
 fn print_indent(n: int) {
     for let i: int = 0; i < n; i++ { print!("  "); }
@@ -513,6 +514,12 @@ fn parent_dir(path: string) -> string {
 // prefix is implicit so user code never has to type it - `src/` is the
 // language's source root, not part of its public namespace.
 fn resolve_import(base: string, ipath: string) -> string {
+    // Manifest alias: if `base` lives under a `glide.glide`-rooted project,
+    // try to rewrite the leading segment of `ipath` against the manifest's
+    // declared deps. A hit short-circuits the rest of the fallback chain.
+    let manifest_hit: string = resolve_via_manifest(base, ipath);
+    if !manifest_hit.eq("") { return manifest_hit; }
+
     let mut from_file: string = ipath;
     if !base.eq("") { from_file = base.concat("/").concat(ipath); }
     if __glide_file_exists(from_file) { return from_file; }
@@ -527,6 +534,38 @@ fn resolve_import(base: string, ipath: string) -> string {
         if __glide_file_exists(exe_src) { return exe_src; }
     }
     return from_file;
+}
+
+// Try to resolve `ipath` (e.g. "auth/session.glide") against the nearest
+// `glide.glide` manifest above `base`. Returns "" when there's no manifest,
+// no matching alias, or the rewritten target doesn't exist on disk.
+//
+// Path layout tried for a hit: `<dep_dir>/<rest>`, then `<dep_dir>/src/<rest>`.
+fn resolve_via_manifest(base: string, ipath: string) -> string {
+    let mut start: string = base;
+    if start.eq("") { start = "."; }
+    let root: string = find_manifest_root(start);
+    if root.eq("") { return ""; }
+    let m: *Manifest = read_manifest(root);
+    if m == null || m.deps.len() == 0 { return ""; }
+
+    // First path segment (before '/' or '\') is the alias candidate.
+    let mut cut: int = ipath.len();
+    for let i: int = 0; i < ipath.len(); i++ {
+        let c: int = ipath.at(i).to_int();
+        if c == 47 || c == 92 { cut = i; break; }
+    }
+    if cut <= 0 || cut >= ipath.len() { return ""; }
+    let alias: string = ipath.substring(0, cut);
+    let dep_dir: string = manifest_resolve_alias(m, alias);
+    if dep_dir.eq("") { return ""; }
+
+    let rest: string = ipath.substring(cut + 1, ipath.len());
+    let direct: string = dep_dir.concat("/").concat(rest);
+    if __glide_file_exists(direct) { return direct; }
+    let under_src: string = dep_dir.concat("/src/").concat(rest);
+    if __glide_file_exists(under_src) { return under_src; }
+    return "";
 }
 
 // FFI to libc + driver helpers (defined in the runtime emit).

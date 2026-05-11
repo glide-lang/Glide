@@ -1,0 +1,201 @@
+import stdlib::hashmap::*;
+import stdlib::fs::*;
+import ast;
+import lexer;
+import parser;
+
+// `glide.glide` is the project manifest. It's Glide source, but the CLI
+// does NOT compile or run it — it just parses with the existing parser
+// and walks the AST to pull out literal fields. Shape:
+//
+//     let manifest: Package = Package {
+//         name:    "my_app",
+//         version: "0.1.0",
+//         bin:     "src/main.glide",   // optional, default src/main.glide
+//         deps: vec_of(
+//             Dep::path("auth", "../auth"),
+//             Dep::git("logger", "github.com/x/logger", "v1.0.0"),
+//         ),
+//     };
+//
+// Identifiers `Package` / `Dep::path` / `Dep::git` / `vec_of` are
+// recognised positionally — they don't need to be declared anywhere.
+// Any unrecognised shape is a soft error: we keep parsing the rest.
+
+pub const DEP_PATH: int = 0;
+pub const DEP_GIT:  int = 1;
+
+pub struct ManifestDep {
+    pub name: string,    // alias used in `import <name>::...`
+    pub kind: int,       // DEP_PATH | DEP_GIT
+    pub path: string,    // DEP_PATH: filesystem path; DEP_GIT: URL
+    pub rev:  string,    // DEP_GIT: tag or commit hash; empty for DEP_PATH
+}
+
+pub struct Manifest {
+    pub name:     string,
+    pub version:  string,
+    pub bin:      string,
+    pub deps:     *Vector<ManifestDep>,
+    pub root_dir: string,   // absolute or repo-relative dir holding glide.glide
+}
+
+extern fn __glide_file_exists(path: string) -> bool;
+extern fn __glide_getenv(name: string) -> string;
+extern fn read_file(path: string) -> string;
+
+// Walk up from `start_dir` looking for a `glide.glide`. Returns "" when none
+// is found before the filesystem root. Stops climbing once the path is empty
+// or equal to its own parent (root reached).
+pub fn find_manifest_root(start_dir: string) -> string {
+    let mut dir: string = start_dir;
+    if dir.eq("") { dir = "."; }
+    for let i: int = 0; i < 64; i++ {
+        let cand: string = dir.concat("/glide.glide");
+        if __glide_file_exists(cand) { return dir; }
+        let parent: string = parent_of(dir);
+        if parent.eq(dir) || parent.eq("") { return ""; }
+        dir = parent;
+    }
+    return "";
+}
+
+// Trim the trailing `/seg` (or `\seg`) from `dir`. Returns `dir` unchanged
+// when there's no separator left to drop.
+fn parent_of(dir: string) -> string {
+    let mut cut: int = -1;
+    for let i: int = 0; i < dir.len(); i++ {
+        let c: int = dir.at(i).to_int();
+        if c == 47 || c == 92 { cut = i; }
+    }
+    if cut <= 0 { return ""; }
+    return dir.substring(0, cut);
+}
+
+// Parse `<root_dir>/glide.glide` and extract the top-level `Package { ... }`
+// struct literal. Returns null if the file is missing or has no recognisable
+// Package binding. Diagnostics are dropped — the CLI surfaces a single
+// "manifest unreadable" error one level up.
+pub fn read_manifest(root_dir: string) -> *Manifest {
+    let path: string = root_dir.concat("/glide.glide");
+    let src: string = read_file(path);
+    if src.eq("") { return null; }
+
+    let lex: *Lexer = Lexer::new(src);
+    let p: *Parser = Parser::new(lex);
+    let parsed: *Vector<Stmt> = parse_program(p);
+
+    // Local-bind the new vector first — `m.deps = Vector::new()` in
+    // struct-field position still trips codegen's forward-decl for some
+    // generic monomorphisations (see project_compiler_bugs.md).
+    let deps_vec: *Vector<ManifestDep> = Vector::new();
+    let m: *Manifest = __glide_palloc(sizeof(Manifest)) as *Manifest;
+    m.name = "";
+    m.version = "";
+    m.bin = "src/main.glide";
+    m.deps = deps_vec;
+    m.root_dir = root_dir;
+
+    for let i: int = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        if s.kind != ST_LET { continue; }
+        let v: *Expr = s.let_value;
+        if v == null || v.kind != EX_STRUCT_LIT { continue; }
+        if !v.str_val.eq("Package") { continue; }
+        fill_from_struct_lit(m, v);
+    }
+    return m;
+}
+
+fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
+    if v.field_names == null || v.args == null { return; }
+    let n: int = v.field_names.len();
+    for let i: int = 0; i < n; i++ {
+        let name: string = v.field_names.get(i);
+        let val: Expr = v.args.get(i);
+        if name.eq("name")    && val.kind == EX_STRING { m.name = val.str_val; }
+        if name.eq("version") && val.kind == EX_STRING { m.version = val.str_val; }
+        if name.eq("bin")     && val.kind == EX_STRING { m.bin = val.str_val; }
+        if name.eq("deps") { collect_deps(m.deps, &val); }
+    }
+}
+
+// `deps:` accepts `vec_of(Dep::path(...), Dep::git(...))` or a bare array
+// literal `[Dep::path(...), Dep::git(...)]`. Anything else is silently
+// ignored — the user sees an empty deps list and can fix it.
+fn collect_deps(out: *Vector<ManifestDep>, v: *Expr) {
+    if v == null { return; }
+    if v.kind == EX_CALL {
+        let callee: *Expr = v.lhs;
+        if callee != null && callee.kind == EX_IDENT && callee.str_val.eq("vec_of") {
+            for let i: int = 0; i < v.args.len(); i++ {
+                let arg: Expr = v.args.get(i);
+                let d: ManifestDep = parse_dep_call(&arg);
+                if !d.name.eq("") { out.push(d); }
+            }
+        }
+        return;
+    }
+    // Array literal not yet wired through the parser as a single Expr kind
+    // we can match here — vec_of(...) is the canonical form for now.
+}
+
+fn parse_dep_call(v: *Expr) -> ManifestDep {
+    let d: ManifestDep;
+    d.name = "";
+    d.kind = DEP_PATH;
+    d.path = "";
+    d.rev  = "";
+    if v == null || v.kind != EX_CALL { return d; }
+    let callee: *Expr = v.lhs;
+    if callee == null || callee.kind != EX_PATH { return d; }
+    if !callee.str_val.eq("Dep") { return d; }
+
+    let method: string = callee.field;
+    let args: *Vector<Expr> = v.args;
+    if args == null { return d; }
+
+    if method.eq("path") && args.len() >= 2 {
+        let a0: Expr = args.get(0);
+        let a1: Expr = args.get(1);
+        if a0.kind == EX_STRING && a1.kind == EX_STRING {
+            d.name = a0.str_val;
+            d.kind = DEP_PATH;
+            d.path = a1.str_val;
+        }
+        return d;
+    }
+    if method.eq("git") && args.len() >= 3 {
+        let a0: Expr = args.get(0);
+        let a1: Expr = args.get(1);
+        let a2: Expr = args.get(2);
+        if a0.kind == EX_STRING && a1.kind == EX_STRING && a2.kind == EX_STRING {
+            d.name = a0.str_val;
+            d.kind = DEP_GIT;
+            d.path = a1.str_val;
+            d.rev  = a2.str_val;
+        }
+        return d;
+    }
+    return d;
+}
+
+// Given an alias and the manifest, return the directory the alias resolves
+// to (an absolute or repo-relative filesystem path). Empty string when the
+// alias isn't declared, or when the dep is non-path and not yet fetched.
+pub fn manifest_resolve_alias(m: *Manifest, alias: string) -> string {
+    if m == null { return ""; }
+    for let i: int = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        if !d.name.eq(alias) { continue; }
+        if d.kind == DEP_PATH {
+            // Path deps resolve relative to the manifest's own directory.
+            if d.path.len() > 0 && d.path.at(0).to_int() == 47 { return d.path; }
+            return m.root_dir.concat("/").concat(d.path);
+        }
+        // DEP_GIT: post-fetch the source lives under <cache>/<hash>; until
+        // Fase 2 ships, treat as unresolved so the existing fallbacks fire.
+        return "";
+    }
+    return "";
+}

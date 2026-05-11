@@ -1,0 +1,3 @@
+pub fn hello(who: string) {
+    println!("hello,", who, "— greetings from demo_lib");
+}

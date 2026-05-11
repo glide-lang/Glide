@@ -1,0 +1,10 @@
+// Project manifest. The CLI reads only the `Package { ... }` struct
+// literal — the file is never compiled or run.
+let manifest: Package = Package {
+    name:    "manifest_demo",
+    version: "0.1.0",
+    bin:     "src/main.glide",
+    deps: vec_of(
+        Dep::path("demo_lib", "../manifest_demo_lib"),
+    ),
+};
