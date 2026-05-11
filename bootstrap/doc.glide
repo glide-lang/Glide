@@ -33,7 +33,7 @@ extern fn __glide_file_exists(path: string) -> bool;
 extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
 
-pub fn run_doc(root_dir: string, open_after: bool) -> int {
+pub fn run_doc(root_dir: string, open_after: bool, serve_port: int) -> int {
     let out_dir: string = root_dir.concat("/target/doc");
     if !fs_mkdir_p(out_dir) {
         println!("doc: could not create", out_dir);
@@ -70,6 +70,10 @@ pub fn run_doc(root_dir: string, open_after: bool) -> int {
 
     let index_path: string = out_dir.concat("/index.html");
     println!("doc: wrote", modules.len(), "modules /", total_items, "items ->", index_path);
+    if serve_port > 0 {
+        if open_after { _open_in_browser("http://127.0.0.1:".concat(int_to_str(serve_port)).concat("/")); }
+        return doc_serve(out_dir, serve_port);
+    }
     if open_after { _open_in_browser(index_path); }
     return 0;
 }
@@ -419,4 +423,148 @@ fn _open_in_browser(path: string) {
         cmd = "xdg-open \"".concat(path).concat("\" 2>/dev/null || open \"").concat(path).concat("\" 2>/dev/null");
     }
     __glide_shell(cmd);
+}
+
+// ---- tiny built-in HTTP server (for `glide doc --serve`) ----------------
+//
+// Single-threaded BSD sockets in c_raw — bootstrap can't import
+// stdlib::http (json typedef collision) and the project doesn't have
+// a server-side primitive in stdlib::net. ~140 lines of C is cheaper
+// than untangling that.
+
+extern fn __glide_doc_serve(dir: string, port: int) -> int;
+
+c_raw! {
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    typedef SOCKET __doc_sock;
+    #define __DOC_INVALID INVALID_SOCKET
+    #define __doc_close closesocket
+    static int __doc_sock_init(void) {
+        WSADATA wsa;
+        return WSAStartup(MAKEWORD(2, 2), &wsa);
+    }
+    #else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    typedef int __doc_sock;
+    #define __DOC_INVALID (-1)
+    #define __doc_close close
+    static int __doc_sock_init(void) { return 0; }
+    #endif
+
+    static const char* __doc_mime(const char* path) {
+        const char* d = strrchr(path, '.');
+        if (!d) return "text/plain; charset=utf-8";
+        if (!strcmp(d, ".html")) return "text/html; charset=utf-8";
+        if (!strcmp(d, ".htm"))  return "text/html; charset=utf-8";
+        if (!strcmp(d, ".css"))  return "text/css; charset=utf-8";
+        if (!strcmp(d, ".js"))   return "application/javascript; charset=utf-8";
+        if (!strcmp(d, ".json")) return "application/json; charset=utf-8";
+        if (!strcmp(d, ".svg"))  return "image/svg+xml";
+        if (!strcmp(d, ".png"))  return "image/png";
+        if (!strcmp(d, ".jpg"))  return "image/jpeg";
+        if (!strcmp(d, ".jpeg")) return "image/jpeg";
+        return "text/plain; charset=utf-8";
+    }
+
+    // Reject `..` segments and absolute paths so a curl can't escape
+    // the serve root via `/etc/passwd` style traversal.
+    static int __doc_safe_path(const char* uri) {
+        if (uri[0] != '/') return 0;
+        if (strstr(uri, "..")) return 0;
+        return 1;
+    }
+
+    static void __doc_reply_404(__doc_sock cs) {
+        const char* body = "404 not found";
+        char hdr[256];
+        int n = snprintf(hdr, sizeof(hdr),
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+            (int)strlen(body));
+        send(cs, hdr, n, 0);
+        send(cs, body, (int)strlen(body), 0);
+    }
+
+    int __glide_doc_serve(const char* dir, int port) {
+        if (__doc_sock_init() != 0) return 1;
+        __doc_sock ls = socket(AF_INET, SOCK_STREAM, 0);
+        if (ls == __DOC_INVALID) return 1;
+        int yes = 1;
+        setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons((unsigned short)port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (bind(ls, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+            __doc_close(ls);
+            return 1;
+        }
+        if (listen(ls, 16) != 0) {
+            __doc_close(ls);
+            return 1;
+        }
+        fprintf(stderr, "doc: serving %s on http://127.0.0.1:%d/  (Ctrl-C to stop)\n", dir, port);
+        fflush(stderr);
+        char req[4096];
+        char path[2048];
+        char fbuf[8192];
+        for (;;) {
+            struct sockaddr_in caddr;
+            #ifdef _WIN32
+            int clen = sizeof(caddr);
+            #else
+            socklen_t clen = sizeof(caddr);
+            #endif
+            __doc_sock cs = accept(ls, (struct sockaddr*)&caddr, &clen);
+            if (cs == __DOC_INVALID) continue;
+            int got = recv(cs, req, sizeof(req) - 1, 0);
+            if (got <= 0) { __doc_close(cs); continue; }
+            req[got] = 0;
+            // Parse the request line: `GET <uri> HTTP/1.x`.
+            if (strncmp(req, "GET ", 4) != 0) { __doc_close(cs); continue; }
+            char* uri = req + 4;
+            char* sp = strchr(uri, ' ');
+            if (sp) *sp = 0;
+            // Strip the optional query string.
+            char* q = strchr(uri, '?');
+            if (q) *q = 0;
+            if (!__doc_safe_path(uri)) { __doc_reply_404(cs); __doc_close(cs); continue; }
+            // Map `/` → `index.html`. Otherwise join dir + uri.
+            if (uri[0] == '/' && uri[1] == 0) uri = "/index.html";
+            snprintf(path, sizeof(path), "%s%s", dir, uri);
+            FILE* f = fopen(path, "rb");
+            if (!f) { __doc_reply_404(cs); __doc_close(cs); continue; }
+            fseek(f, 0, SEEK_END);
+            long size = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            char hdr[512];
+            int hn = snprintf(hdr, sizeof(hdr),
+                "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
+                __doc_mime(path), size);
+            send(cs, hdr, hn, 0);
+            while (size > 0) {
+                size_t want = size > (long)sizeof(fbuf) ? sizeof(fbuf) : (size_t)size;
+                size_t r = fread(fbuf, 1, want, f);
+                if (r == 0) break;
+                send(cs, fbuf, (int)r, 0);
+                size -= r;
+            }
+            fclose(f);
+            __doc_close(cs);
+        }
+        __doc_close(ls);
+        return 0;
+    }
+}
+
+pub fn doc_serve(dir: string, port: int) -> int {
+    return __glide_doc_serve(dir, port);
 }
