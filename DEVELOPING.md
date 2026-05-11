@@ -10,8 +10,8 @@ The compiler is written in Glide. To break the chicken-and-egg, `bootstrap/seed/
 # 1. Build the seed binary (any cc — gcc, clang, MinGW, ...)
 cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm
 
-# 2. Fetch the bundled Zig toolchain (used as the C backend)
-bash tools/install_zig.sh
+# 2. Fetch the bundled C toolchain (used as the codegen backend)
+bash tools/install_toolchain.sh
 
 # 3. Use the seed to build the real compiler
 ./glide_seed build bootstrap/main.glide -o glide
@@ -60,10 +60,10 @@ tests/              *_test.glide files driven by `glide test`.
 bench/              concurrency benchmarks vs Go.
 
 tools/
-  install_zig.{sh,ps1}    download a Zig release into runtime/zig/
-  install.{sh,ps1}        install a Glide release archive
-  build_release.sh        package glide+stdlib+Zig into a tarball/zip
-  gen_icons.py            rasterize the logo SVG to PNGs
+  install_toolchain.{sh,ps1}  download the bundled C toolchain into runtime/zig/
+  install.{sh,ps1}            install a Glide release archive
+  build_release.sh            package glide+stdlib+toolchain into a tarball/zip
+  gen_icons.py                rasterize the logo SVG to PNGs
 
 zed-extension/      Zed editor support (LSP wiring + tree-sitter)
 vscode-extension/   VSCode extension (LSP wiring + tmLanguage)

@@ -76,7 +76,7 @@ if [ ! -x "$HOST_GLIDE" ]; then
     exit 1
 fi
 if [ ! -d runtime/zig ]; then
-    echo "no runtime/zig/ found. Run tools/install_zig.sh first." >&2
+    echo "no runtime/zig/ found. Run tools/install_toolchain.sh first." >&2
     exit 1
 fi
 

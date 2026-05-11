@@ -222,7 +222,7 @@ glide --version
 ```
 
 Cross-compile via `--target=<triple>` — any target the bundled C
-toolchain (Zig) supports: `x86_64-linux-{gnu,musl}`,
+toolchain supports: `x86_64-linux-{gnu,musl}`,
 `aarch64-linux-{gnu,musl}`, `x86_64-windows-{gnu,msvc}`,
 `aarch64-macos`, `x86_64-macos`, `riscv64-linux-musl`, and others.
 
@@ -239,7 +239,7 @@ cd Glide
 cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm           # POSIX
 cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lws2_32  # Windows
 
-bash tools/install_zig.sh                                # fetch the bundled C toolchain
+bash tools/install_toolchain.sh                          # fetch the bundled C toolchain
 ./glide_seed build bootstrap/main.glide -o glide         # self-host
 ./glide install .                                        # drop the binary into ~/.glide/bin
 ```
