@@ -910,6 +910,7 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_deprecated_calls(t, stmts);
     analysis_unstable_calls(t, stmts);
     analysis_custom_lints(t, stmts);
+    analysis_null_deref(t, stmts);
     // Must run last — consumes diagnostics emitted by every other pass
     // to decide whether each @expect was fulfilled.
     analysis_expect_fulfillment(t, stmts);
@@ -5513,6 +5514,159 @@ fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: st
             let a: Expr = e.args.get(i);
             _scan_calls_in_expr(t, &a, dep, lint_code, what, scope);
         }
+    }
+}
+
+// Flow-sensitive null-deref lint. For each fn body we walk stmts in
+// source order keeping a small map `name → null?` derived from let
+// inits and assignments. Whenever an expression dereferences (or
+// member-accesses) an identifier we know to be currently null, we
+// emit `null-deref` at the deref site. Reassigning the var to a
+// non-null expression clears the flag; conditional branches reset
+// the map for that scope since we can't track per-branch state
+// without a full data-flow framework.
+//
+// What this catches:
+//   let p: *T = null;
+//   p.foo();              // null-deref
+//   *p                    // null-deref
+//
+//   let p: *T = null;
+//   if c { p = make(); }
+//   p.foo();              // null-deref (branch may have skipped the init)
+//
+// What it doesn't (yet):
+//   - flow through fn parameters (no annotation for "may be null")
+//   - aliases (`let q = p;` doesn't propagate the null bit)
+//   - mutable rebinding after early-return on null
+pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            if _has_allow(&s, "null-deref") { continue; }
+            t.current_origin = s.origin;
+            let nulls: *HashMap<bool> = HashMap::new();
+            _scan_null_body(t, s.fn_body, nulls);
+            nulls.free();
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, "null-deref") { continue; }
+                t.current_origin = m.origin;
+                let nulls: *HashMap<bool> = HashMap::new();
+                _scan_null_body(t, m.fn_body, nulls);
+                nulls.free();
+            }
+        }
+    }
+}
+
+fn _scan_null_body(t: *Typer, body: *Vector<Stmt>, nulls: *HashMap<bool>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _scan_null_stmt(t, &s, nulls);
+    }
+}
+
+fn _scan_null_stmt(t: *Typer, s: *Stmt, nulls: *HashMap<bool>) {
+    if s == null { return; }
+    // Walk RHS exprs first so derefs inside them get checked before
+    // the let-binding decides anything.
+    if s.let_value != null { _scan_null_expr(t, s.let_value, nulls); }
+    if s.expr_value != null { _scan_null_expr(t, s.expr_value, nulls); }
+    if s.cond != null { _scan_null_expr(t, s.cond, nulls); }
+    if s.for_step != null { _scan_null_expr(t, s.for_step, nulls); }
+
+    // Track the binding.
+    if s.kind == ST_LET && s.name != null && !s.name.eq("") {
+        if s.let_value != null && s.let_value.kind == EX_NULL {
+            nulls.insert(s.name, true);
+        } else {
+            // Defined to something concrete — definitely not null.
+            if nulls.contains(s.name) { nulls.insert(s.name, false); }
+        }
+    }
+    if s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+       && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT
+       && s.expr_value.rhs != null {
+        let nm: string = s.expr_value.lhs.str_val;
+        if s.expr_value.rhs.kind == EX_NULL { nulls.insert(nm, true); }
+        else if nulls.contains(nm) { nulls.insert(nm, false); }
+    }
+    // Conditional + loop bodies invalidate our knowledge — we don't
+    // track per-branch state. Anything we know about a name before
+    // entering an if/while/for might be wrong on the other side.
+    if s.then_body != null {
+        _scan_null_body(t, s.then_body, nulls);
+        _invalidate_assigned(s.then_body, nulls);
+    }
+    if s.else_body != null {
+        _scan_null_body(t, s.else_body, nulls);
+        _invalidate_assigned(s.else_body, nulls);
+    }
+}
+
+// After running a conditional/loop body, mark every name that body
+// might have assigned as "unknown" so subsequent stmts don't trust
+// the pre-branch null bit. Simple over-approximation.
+fn _invalidate_assigned(body: *Vector<Stmt>, nulls: *HashMap<bool>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+           && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT {
+            let nm: string = s.expr_value.lhs.str_val;
+            if nulls.contains(nm) { nulls.insert(nm, false); }
+        }
+        if s.then_body != null { _invalidate_assigned(s.then_body, nulls); }
+        if s.else_body != null { _invalidate_assigned(s.else_body, nulls); }
+    }
+}
+
+// Walk an expr, emitting `null-deref` at every deref / member /
+// method call against an identifier that's currently known-null.
+fn _scan_null_expr(t: *Typer, e: *Expr, nulls: *HashMap<bool>) {
+    if e == null { return; }
+    // *p — direct deref
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null {
+        _check_null_target(t, e.operand, nulls, e.line, e.column);
+    }
+    // p.field — member access does an implicit deref
+    if e.kind == EX_MEMBER && e.lhs != null {
+        _check_null_target(t, e.lhs, nulls, e.line, e.column);
+    }
+    // p.method(...) — same shape as member
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.lhs != null {
+        _check_null_target(t, e.lhs.lhs, nulls, e.line, e.column);
+    }
+    // p[i] — index deref
+    if e.kind == EX_INDEX && e.lhs != null {
+        _check_null_target(t, e.lhs, nulls, e.line, e.column);
+    }
+    if e.lhs != null { _scan_null_expr(t, e.lhs, nulls); }
+    if e.rhs != null { _scan_null_expr(t, e.rhs, nulls); }
+    if e.operand != null { _scan_null_expr(t, e.operand, nulls); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _scan_null_expr(t, &a, nulls);
+        }
+    }
+}
+
+fn _check_null_target(t: *Typer, target: *Expr, nulls: *HashMap<bool>, line: int, col: int) {
+    if target == null { return; }
+    // Direct `*null` / `null.foo()` — definite bug.
+    if target.kind == EX_NULL {
+        t.warn(line, col, "null-deref",
+            "dereferencing the `null` literal — this will segfault at runtime");
+        return;
+    }
+    if target.kind == EX_IDENT && nulls.contains(target.str_val) && nulls.get(target.str_val) {
+        t.warn(line, col, "null-deref",
+            "`".concat(target.str_val).concat("` is `null` at this point — deref will segfault. Reassign or guard with `if ").concat(target.str_val).concat(" != null { … }`"));
     }
 }
 
