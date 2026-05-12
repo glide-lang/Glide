@@ -2292,18 +2292,29 @@ fn fn_containing(stmts: *Vector<Stmt>, line0: int) -> *Stmt {
 
 // Recursively collect names declared in body up to `before_line` (0-indexed).
 fn collect_locals(body: *Vector<Stmt>, before_line: int, out: *Vector<Stmt>) {
-    if body == null { return; }
+    if body == null { _lsp_log("    cl: body=null"); return; }
+    _lsp_log("    cl: enter len=".concat(int_to_str(body.len())));
     for let i: int = 0; i < body.len(); i++ {
+        _lsp_log("    cl: i=".concat(int_to_str(i)));
         let s: Stmt = body.get(i);
+        _lsp_log("    cl: got kind=".concat(int_to_str(s.kind)).concat(" line=").concat(int_to_str(s.line)));
         if s.kind == ST_LET && (s.line - 1) < before_line {
             out.push(s);
         }
         if s.kind == ST_FOR && s.for_init != null {
+            _lsp_log("    cl: for_init recurse");
             collect_locals_stmt(s.for_init, before_line, out);
         }
-        if s.then_body != null { collect_locals(s.then_body, before_line, out); }
-        if s.else_body != null { collect_locals(s.else_body, before_line, out); }
+        if s.then_body != null {
+            _lsp_log("    cl: then_body recurse");
+            collect_locals(s.then_body, before_line, out);
+        }
+        if s.else_body != null {
+            _lsp_log("    cl: else_body recurse");
+            collect_locals(s.else_body, before_line, out);
+        }
     }
+    _lsp_log("    cl: exit");
 }
 
 fn collect_locals_stmt(s: *Stmt, before_line: int, out: *Vector<Stmt>) {
@@ -3317,28 +3328,41 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         _lsp_log("  completion: collect_locals");
         let locals: *Vector<Stmt> = Vector::new();
         collect_locals(host.fn_body, line0, locals);
+        _lsp_log("  completion: locals=".concat(int_to_str(locals.len())));
         for let i: int = 0; i < locals.len(); i++ {
+            _lsp_log("  completion: local[".concat(int_to_str(i)).concat("]"));
             let s: Stmt = locals.get(i);
+            _lsp_log("  completion: local kind=".concat(int_to_str(s.kind)).concat(" name='").concat(s.name).concat("'"));
             if seen.contains(s.name) { continue; }
             seen.insert(s.name, true);
             let mut sig: string = "local ".concat(s.name);
-            if s.let_ty != null { sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty)); }
+            if s.let_ty != null {
+                _lsp_log("  completion: type_to_string_pretty");
+                sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty));
+            }
+            _lsp_log("  completion: rich_completion_item");
             let no_edit_l: *JsonValue = null;
             let item: *JsonValue = rich_completion_item(
                 s.name, "", 6, sig, "", "", "", false, no_edit_l);
             json_arr_push(items, item);
         }
+        _lsp_log("  completion: locals loop done");
     }
+    _lsp_log("  completion: post-host block");
 
     // 2. Top-level decls (incl. static macros). Decls from stdlib that
     // were transitively loaded by an existing import still get a
     // build_import_edit pass so that selective imports are merged
     // (`{PI}` → `{PI, min_int}`) when the user picks a name that's
     // not yet listed.
+    _lsp_log("  completion: current_imports");
     let imps2: *HashMap<ImportInfo> = current_imports(doc.text);
+    _lsp_log("  completion: find_import_insertion_pos");
     let insert_line2: int = find_import_insertion_pos(doc.text);
+    _lsp_log("  completion: top-level loop start");
     if doc.stmts != null {
         for let i: int = 0; i < doc.stmts.len(); i++ {
+            if (i % 50) == 0 { _lsp_log("  completion: top i=".concat(int_to_str(i))); }
             let s: Stmt = doc.stmts.get(i);
             if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
                && s.kind != ST_CONST && s.kind != ST_MACRO_DEF { continue; }
