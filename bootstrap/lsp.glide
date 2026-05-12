@@ -5619,62 +5619,93 @@ fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<stri
     }
 }
 fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>) {
-    // If any guard `if p == null` / `if p != null` exists for a param,
-    // skip it (the body presumably handles the null case).
-    let guarded: *HashMap<bool> = HashMap::new();
-    _ndp_collect_guards(m.fn_body, guarded);
-    // Walk body collecting derefs by param name.
-    let derefed: *HashMap<bool> = HashMap::new();
-    _ndp_collect_derefs(m.fn_body, derefed);
+    // Walk the body in source order. For each param, find the FIRST
+    // event that mentions it: a guard (`if p == null` cond) or a
+    // deref. A guard-first means the body handles null; a deref-first
+    // means the body relies on caller-supplied non-null. Only the
+    // latter set requires non-null args.
+    let unprotected: *HashMap<bool> = HashMap::new();   // param -> first-seen-was-deref
+    let seen_guard: *HashMap<bool> = HashMap::new();
+    _ndp_walk_order(m.fn_body, unprotected, seen_guard);
     let mut idxs: string = "";
     for let i: int = 0; i < m.fn_params.len(); i++ {
         let p: Param = m.fn_params.get(i);
-        // Only pointer params can be null. Skip everything else.
         if p.ty == null || p.ty.kind != TY_POINTER { continue; }
-        if !derefed.contains(p.name) { continue; }
-        if guarded.contains(p.name) { continue; }
+        if !unprotected.contains(p.name) { continue; }
+        if !unprotected.get(p.name) { continue; }   // guarded first
         if idxs.eq("") { idxs = i.to_string(); }
         else { idxs = idxs.concat(",").concat(i.to_string()); }
     }
-    guarded.free(); derefed.free();
+    unprotected.free(); seen_guard.free();
     if !idxs.eq("") {
         deref_params.insert(m.name, idxs);
     }
 }
-fn _ndp_collect_guards(body: *Vector<Stmt>, guarded: *HashMap<bool>) {
+// Walks body in source order. For each name, the first event wins:
+// guard sets `unprotected[name] = false` (and never overwritten),
+// deref sets `unprotected[name] = true` if no entry exists yet.
+fn _ndp_walk_order(body: *Vector<Stmt>, unprotected: *HashMap<bool>, seen_guard: *HashMap<bool>) {
     if body == null { return; }
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.cond != null { _ndp_guards_in_expr(s.cond, guarded); }
-        if s.then_body != null { _ndp_collect_guards(s.then_body, guarded); }
-        if s.else_body != null { _ndp_collect_guards(s.else_body, guarded); }
+        // Process cond before bodies — a guard registers before
+        // the protected uses inside the branch.
+        if s.cond != null {
+            let gnames: *Vector<string> = Vector::new();
+            _ndp_collect_guarded_names(s.cond, gnames);
+            for let j: int = 0; j < gnames.len(); j++ {
+                let n: string = gnames.get(j);
+                if !unprotected.contains(n) {
+                    unprotected.insert(n, false);   // guard-first
+                }
+                seen_guard.insert(n, true);
+            }
+            // Also check derefs in the cond expression itself.
+            _ndp_record_derefs_in_expr_ordered(s.cond, unprotected, seen_guard);
+            gnames.free();
+        }
+        if s.expr_value != null { _ndp_record_derefs_in_expr_ordered(s.expr_value, unprotected, seen_guard); }
+        if s.let_value != null { _ndp_record_derefs_in_expr_ordered(s.let_value, unprotected, seen_guard); }
+        if s.then_body != null { _ndp_walk_order(s.then_body, unprotected, seen_guard); }
+        if s.else_body != null { _ndp_walk_order(s.else_body, unprotected, seen_guard); }
     }
 }
-fn _ndp_guards_in_expr(e: *Expr, guarded: *HashMap<bool>) {
+fn _ndp_collect_guarded_names(e: *Expr, names: *Vector<string>) {
     if e == null { return; }
     if e.kind == EX_BINARY && (e.op_code == OP_EQ || e.op_code == OP_NE)
        && e.lhs != null && e.rhs != null {
-        if e.lhs.kind == EX_IDENT && e.rhs.kind == EX_NULL {
-            guarded.insert(e.lhs.str_val, true);
-        }
-        if e.rhs.kind == EX_IDENT && e.lhs.kind == EX_NULL {
-            guarded.insert(e.rhs.str_val, true);
-        }
+        if e.lhs.kind == EX_IDENT && e.rhs.kind == EX_NULL { names.push(e.lhs.str_val); }
+        if e.rhs.kind == EX_IDENT && e.lhs.kind == EX_NULL { names.push(e.rhs.str_val); }
     }
-    if e.lhs != null { _ndp_guards_in_expr(e.lhs, guarded); }
-    if e.rhs != null { _ndp_guards_in_expr(e.rhs, guarded); }
-    if e.operand != null { _ndp_guards_in_expr(e.operand, guarded); }
+    if e.lhs != null { _ndp_collect_guarded_names(e.lhs, names); }
+    if e.rhs != null { _ndp_collect_guarded_names(e.rhs, names); }
+    if e.operand != null { _ndp_collect_guarded_names(e.operand, names); }
 }
-fn _ndp_collect_derefs(body: *Vector<Stmt>, derefed: *HashMap<bool>) {
-    if body == null { return; }
-    for let i: int = 0; i < body.len(); i++ {
-        let s: Stmt = body.get(i);
-        if s.expr_value != null { _ndp_derefs_in_expr(s.expr_value, derefed); }
-        if s.let_value != null { _ndp_derefs_in_expr(s.let_value, derefed); }
-        if s.cond != null { _ndp_derefs_in_expr(s.cond, derefed); }
-        if s.then_body != null { _ndp_collect_derefs(s.then_body, derefed); }
-        if s.else_body != null { _ndp_collect_derefs(s.else_body, derefed); }
+fn _ndp_record_derefs_in_expr_ordered(e: *Expr, unprotected: *HashMap<bool>,
+                                     seen_guard: *HashMap<bool>) {
+    if e == null { return; }
+    let target: string = _ndp_deref_target(e);
+    if !target.eq("") && !unprotected.contains(target) {
+        // First event for this name is a deref → mark unprotected.
+        unprotected.insert(target, true);
     }
+    if e.lhs != null { _ndp_record_derefs_in_expr_ordered(e.lhs, unprotected, seen_guard); }
+    if e.rhs != null { _ndp_record_derefs_in_expr_ordered(e.rhs, unprotected, seen_guard); }
+    if e.operand != null { _ndp_record_derefs_in_expr_ordered(e.operand, unprotected, seen_guard); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _ndp_record_derefs_in_expr_ordered(&a, unprotected, seen_guard);
+        }
+    }
+}
+fn _ndp_deref_target(e: *Expr) -> string {
+    if e == null { return ""; }
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null
+       && e.operand.kind == EX_IDENT { return e.operand.str_val; }
+    if e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT { return e.lhs.str_val; }
+    if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT { return e.lhs.str_val; }
+    return "";
 }
 fn _ndp_derefs_in_expr(e: *Expr, derefed: *HashMap<bool>) {
     if e == null { return; }
@@ -5888,49 +5919,62 @@ pub fn analysis_bad_free(t: *Typer, program: *Vector<Stmt>) {
             if _has_allow(&s, "bad-free") { continue; }
             t.current_origin = s.origin;
             let tys: *HashMap<string> = HashMap::new();
-            _bf_scan_body(t, s.fn_body, tys);
+            _bf_scan_body(t, s.fn_body, tys, "");
             tys.free();
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
+            // Detect a collection self-destructor: `impl Vector<T> {
+            // fn free(self: *Vector<T>) { ... } }`. Only inside such
+            // a method is `free(self as *void)` a legitimate pattern;
+            // outside, calling libc free on a Vector / HashMap value
+            // leaks its internal buffers.
+            let impl_target: string = "";
+            if s.impl_target != null {
+                if s.impl_target.kind == TY_NAMED { impl_target = s.impl_target.name; }
+                else if s.impl_target.kind == TY_GENERIC { impl_target = s.impl_target.name; }
+            }
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body == null { continue; }
                 if _has_allow(&m, "bad-free") { continue; }
-                // Methods inherit origin from the impl block (parser
-                // doesn't tag each method individually).
                 if s.origin != null && !s.origin.eq("") {
                     t.current_origin = s.origin;
                 }
+                let mut self_destructor_of: string = "";
+                if m.name.eq("free") && (impl_target.eq("Vector") || impl_target.eq("HashMap")) {
+                    self_destructor_of = impl_target;
+                }
                 let tys: *HashMap<string> = HashMap::new();
-                _bf_scan_body(t, m.fn_body, tys);
+                _bf_scan_body(t, m.fn_body, tys, self_destructor_of);
                 tys.free();
             }
         }
     }
 }
 
-fn _bf_scan_body(t: *Typer, body: *Vector<Stmt>, tys: *HashMap<string>) {
+fn _bf_scan_body(t: *Typer, body: *Vector<Stmt>, tys: *HashMap<string>, self_destructor_of: string) {
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        _bf_scan_stmt(t, &s, tys);
+        _bf_scan_stmt(t, &s, tys, self_destructor_of);
     }
 }
 
-fn _bf_scan_stmt(t: *Typer, s: *Stmt, tys: *HashMap<string>) {
+fn _bf_scan_stmt(t: *Typer, s: *Stmt, tys: *HashMap<string>, self_destructor_of: string) {
     if s == null { return; }
-    // Track `let name: T = ...` so we know each variable's type.
     if s.kind == ST_LET && s.name != null && !s.name.eq("") && s.let_ty != null {
-        tys.insert(s.name, _bf_ty_tag(s.let_ty));
+        // Use bad-free-specific tag to distinguish managed value types
+        // (`string` = arena string, must not free) from raw pointer
+        // buffers (`*string` = char-array allocation, free is fine).
+        tys.insert(s.name, _bf_ty_tag_for_free(s.let_ty));
     }
-    // `defer free(...)` lands here with the call hanging off expr_value.
-    if s.expr_value != null { _bf_check_expr(t, s.expr_value, tys); }
-    if s.let_value != null { _bf_check_expr(t, s.let_value, tys); }
-    if s.cond != null { _bf_check_expr(t, s.cond, tys); }
-    if s.then_body != null { _bf_scan_body(t, s.then_body, tys); }
-    if s.else_body != null { _bf_scan_body(t, s.else_body, tys); }
+    if s.expr_value != null { _bf_check_expr(t, s.expr_value, tys, self_destructor_of); }
+    if s.let_value != null { _bf_check_expr(t, s.let_value, tys, self_destructor_of); }
+    if s.cond != null { _bf_check_expr(t, s.cond, tys, self_destructor_of); }
+    if s.then_body != null { _bf_scan_body(t, s.then_body, tys, self_destructor_of); }
+    if s.else_body != null { _bf_scan_body(t, s.else_body, tys, self_destructor_of); }
 }
 
-fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
+fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>, self_destructor_of: string) {
     if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
        && e.lhs.str_val.eq("free")
@@ -5945,31 +5989,61 @@ fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
             if tag.eq("string") {
                 t.warn(e.line, e.column, "bad-free",
                     "`free(".concat(probe.str_val).concat(")` corrupts the heap — strings are arena-managed and freed automatically. Remove this line."));
-            } else if (tag.eq("Vector") || tag.eq("HashMap"))
-                      && !probe.str_val.eq("self") {
+            } else if tag.eq("Vector") || tag.eq("HashMap") {
                 // Vector / HashMap own internal buffers (keys/values/
                 // data array). libc free on the outer struct leaks
-                // those buffers AND tries to free arena/malloc memory
-                // depending on the constructor. The .free() method
-                // releases everything correctly.
+                // those buffers; .free() releases everything.
                 //
-                // Exception: `free(self as *void)` inside the type's
-                // own destructor is legitimate — that's how `.free()`
-                // releases the outer struct after walking its fields.
-                t.warn(e.line, e.column, "bad-free",
-                    "`free(".concat(probe.str_val).concat(")` leaks `").concat(probe.str_val).concat("`'s internal buffers — call `").concat(probe.str_val).concat(".free()` so the destructor releases keys/values/data first."));
+                // Exemption: inside `impl Vector { fn free(self) { … } }`
+                // (or HashMap), `free(self as *void)` is the LAST step
+                // of the destructor releasing the outer struct. Only
+                // skip when the freed name is literally `self` AND
+                // the enclosing fn is that exact destructor.
+                if probe.str_val.eq("self") && tag.eq(self_destructor_of) {
+                    // legitimate destructor finalizer
+                } else {
+                    t.warn(e.line, e.column, "bad-free",
+                        "`free(".concat(probe.str_val).concat(")` leaks `").concat(probe.str_val).concat("`'s internal buffers — call `").concat(probe.str_val).concat(".free()` so the destructor releases keys/values/data first."));
+                }
             }
         }
     }
-    if e.lhs != null { _bf_check_expr(t, e.lhs, tys); }
-    if e.rhs != null { _bf_check_expr(t, e.rhs, tys); }
-    if e.operand != null { _bf_check_expr(t, e.operand, tys); }
+    if e.lhs != null { _bf_check_expr(t, e.lhs, tys, self_destructor_of); }
+    if e.rhs != null { _bf_check_expr(t, e.rhs, tys, self_destructor_of); }
+    if e.operand != null { _bf_check_expr(t, e.operand, tys, self_destructor_of); }
     if e.args != null {
         for let i: int = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            _bf_check_expr(t, &a, tys);
+            _bf_check_expr(t, &a, tys, self_destructor_of);
         }
     }
+}
+
+// Tag specialized for bad-free's rules. Distinguishes managed value
+// types (Glide `string`) from raw buffers (`*string` = char-array).
+// `*Vector<T>` / `*HashMap<V>` still resolve to their collection
+// name since those are always passed as pointers.
+fn _bf_ty_tag_for_free(ty: *Type) -> string {
+    if ty == null { return ""; }
+    // `string` value — arena-managed, must not be freed.
+    if ty.kind == TY_NAMED && ty.name.eq("string") { return "string"; }
+    // `*string` is a raw char-array — `free()` is fine, skip.
+    if ty.kind == TY_POINTER && ty.inner != null
+       && ty.inner.kind == TY_NAMED && ty.inner.name.eq("string") {
+        return "";
+    }
+    // Pointer to Vector / HashMap (whether TY_NAMED or TY_GENERIC).
+    if ty.kind == TY_POINTER && ty.inner != null {
+        let mut inner_name: string = "";
+        if ty.inner.kind == TY_NAMED { inner_name = ty.inner.name; }
+        else if ty.inner.kind == TY_GENERIC { inner_name = ty.inner.name; }
+        if inner_name.eq("Vector") || inner_name.eq("HashMap") { return inner_name; }
+        // Other pointer types — return the inner name as a fallback
+        // so callers can still match (e.g. for tracking impl targets).
+        return inner_name;
+    }
+    if ty.kind == TY_GENERIC { return ty.name; }
+    return "";
 }
 
 // Reduce a Type to a short tag we can store in a HashMap<string>.
@@ -6733,7 +6807,6 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>,
                  warned: *HashMap<bool>) {
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        // Any `?` inside this stmt's exprs is an early exit point.
         if s.expr_value != null && _ler_expr_has_try(s.expr_value) {
             _mu_flag_held(t, held, held_col, warned, s.line, "?-propagation");
         }
@@ -6742,7 +6815,6 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>,
         }
         if s.expr_value != null { _mu_update_state(s.expr_value, held, held_col); }
         if s.let_value != null { _mu_update_state(s.let_value, held, held_col); }
-        // Return / break / continue: every still-held lock leaks.
         if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
             let exit_label: string = "return";
             if s.kind == ST_BREAK { exit_label = "break"; }
@@ -6750,14 +6822,54 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>,
             _mu_flag_held(t, held, held_col, warned, s.line, exit_label);
             return;
         }
-        // `defer x.unlock()` registers a guaranteed release; treat as
-        // immediate unlock (covers all subsequent exits).
         if s.kind == ST_DEFER && s.expr_value != null {
             let nm: string = _mu_unlock_target(s.expr_value);
-            if !nm.eq("") && held.contains(nm) { held.remove(nm); }
+            if !nm.eq("") && held.contains(nm) { held.remove(nm); held_col.remove(nm); }
         }
-        if s.then_body != null { _mu_walk_path(t, s.then_body, held, held_col, warned); }
-        if s.else_body != null { _mu_walk_path(t, s.else_body, held, held_col, warned); }
+        // For if/else, walk each branch with its own copy of the
+        // held state so a lock acquired only in one branch doesn't
+        // leak into the other. After both branches, merge: a name
+        // is "held after" iff held in EITHER branch (worst case for
+        // leak detection — drives a warning if any path leaves it
+        // held at a later exit).
+        if s.then_body != null || s.else_body != null {
+            let snap: *HashMap<int> = _mu_clone_int(held);
+            let snap_col: *HashMap<int> = _mu_clone_int(held_col);
+            let then_held: *HashMap<int> = _mu_clone_int(held);
+            let then_col: *HashMap<int> = _mu_clone_int(held_col);
+            if s.then_body != null { _mu_walk_path(t, s.then_body, then_held, then_col, warned); }
+            let else_held: *HashMap<int> = _mu_clone_int(snap);
+            let else_col: *HashMap<int> = _mu_clone_int(snap_col);
+            if s.else_body != null { _mu_walk_path(t, s.else_body, else_held, else_col, warned); }
+            // Merge: union of both branches' remaining held names.
+            held.clear();
+            held_col.clear();
+            _mu_merge_into(then_held, then_col, held, held_col);
+            _mu_merge_into(else_held, else_col, held, held_col);
+            then_held.free(); then_col.free();
+            else_held.free(); else_col.free();
+            snap.free(); snap_col.free();
+        }
+    }
+}
+fn _mu_clone_int(src: *HashMap<int>) -> *HashMap<int> {
+    let out: *HashMap<int> = HashMap::new();
+    let ks: *Vector<string> = src.keys();
+    for let i: int = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        out.insert(k, src.get(k));
+    }
+    return out;
+}
+fn _mu_merge_into(src: *HashMap<int>, src_col: *HashMap<int>,
+                  dst: *HashMap<int>, dst_col: *HashMap<int>) {
+    let ks: *Vector<string> = src.keys();
+    for let i: int = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        if !dst.contains(k) {
+            dst.insert(k, src.get(k));
+            if src_col.contains(k) { dst_col.insert(k, src_col.get(k)); }
+        }
     }
 }
 fn _mu_flag_held(t: *Typer, held: *HashMap<int>, held_col: *HashMap<int>,
@@ -6829,20 +6941,23 @@ pub fn analysis_chan_leak(t: *Typer, program: *Vector<Stmt>) {
     }
 }
 fn _cl_check_fn(t: *Typer, body: *Vector<Stmt>) {
-    // Two-step: first pass collects every chan declared at the
-    // top level of this fn. Second pass verifies a close() reaches
-    // every exit path. A close inside a conditional branch only
-    // covers that branch; the lint flags the chan unless every
-    // path through the fn closes it.
+    // Two-step: collect every chan; then walk paths reporting at
+    // every exit point that leaves the chan open. An exit is
+    // return/break/continue at any depth, OR fall-off-the-end of
+    // the top-level body.
     let chans: *HashMap<int> = HashMap::new();
     let chans_col: *HashMap<int> = HashMap::new();
     _cl_collect_chans(body, chans, chans_col);
     let names: *Vector<string> = chans.keys();
     for let i: int = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
-        if !_cl_all_paths_close(body, nm, false) {
+        let mut warned: bool = false;
+        let r: int = _cl_walk(t, body, nm, false, chans.get(nm), chans_col.get(nm), &warned);
+        // r encodes: 0 = falls through with closed=false (top-level
+        // leak), 1 = closed at end, 2 = always exits before fall-through
+        if r == 0 && !warned {
             t.warn(chans.get(nm), chans_col.get(nm), "chan-leak",
-                "channel `".concat(nm).concat("` isn't `close()`d on every path — receivers parked on `recv()` will hang forever on the missing branch; close it before each exit"));
+                "channel `".concat(nm).concat("` reaches the end of the fn without `close()` on the fall-through path — every exit must close before receivers can stop waiting"));
         }
     }
     chans.free(); chans_col.free();
@@ -6859,34 +6974,54 @@ fn _cl_collect_chans(body: *Vector<Stmt>, chans: *HashMap<int>, chans_col: *Hash
         if s.else_body != null { _cl_collect_chans(s.else_body, chans, chans_col); }
     }
 }
-// True when EVERY exit path through `body` (fall-through, return,
-// break) hits a `chan.close()` for `nm`. `found_above` carries the
-// "we already closed it before entering this scope" flag down.
-fn _cl_all_paths_close(body: *Vector<Stmt>, nm: string, found_above: bool) -> bool {
-    let mut closed: bool = found_above;
+// Walk `body`. Side-effect: warns once (via `*warned`) at the first
+// return/break/continue where chan `nm` is still open. Return value:
+//   0 = body falls through with closed=false
+//   1 = body falls through with closed=true
+//   2 = body never falls through (every path returned/break'd)
+// The caller composes these for if/else merging.
+fn _cl_walk(t: *Typer, body: *Vector<Stmt>, nm: string, closed_in: bool,
+            chan_line: int, chan_col: int, warned: *bool) -> int {
+    let mut closed: bool = closed_in;
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         if s.expr_value != null && _cl_expr_closes(s.expr_value, nm) { closed = true; }
         if s.let_value != null && _cl_expr_closes(s.let_value, nm) { closed = true; }
-        // A bare return / break before the close means this path
-        // leaves the chan open.
         if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
-            return closed;
+            if !closed && !*warned {
+                let exit_label: string = "return";
+                if s.kind == ST_BREAK { exit_label = "break"; }
+                if s.kind == ST_CONTINUE { exit_label = "continue"; }
+                t.warn(chan_line, chan_col, "chan-leak",
+                    "channel `".concat(nm).concat("` is still open at this ").concat(exit_label).concat(" — `close()` it before exiting so receivers can stop"));
+                *warned = true;
+            }
+            return 2;
         }
-        // An if / else: both branches must close (or the chan must
-        // already be closed above). If there's no else, the implicit
-        // else falls through with the current `closed` state.
         if s.kind == ST_IF {
-            let then_ok: bool = s.then_body == null
-                || _cl_all_paths_close(s.then_body, nm, closed);
-            let else_ok: bool = s.else_body != null
-                && _cl_all_paths_close(s.else_body, nm, closed);
-            // If both branches close, the chan is closed after the if.
-            // Otherwise we conservatively keep the prior state.
-            if then_ok && else_ok { closed = true; }
+            let mut fall_state: int = 0;
+            if closed { fall_state = 1; }
+            let mut then_r: int = fall_state;
+            if s.then_body != null {
+                then_r = _cl_walk(t, s.then_body, nm, closed, chan_line, chan_col, warned);
+            }
+            let mut else_r: int = fall_state;
+            if s.else_body != null {
+                else_r = _cl_walk(t, s.else_body, nm, closed, chan_line, chan_col, warned);
+            }
+            // Merge: if both never fall through, outer doesn't either.
+            // Otherwise take the AND of fall-through closed states
+            // (a branch that exited contributes nothing to the merge).
+            if then_r == 2 && else_r == 2 { return 2; }
+            let mut new_closed: bool = true;
+            let mut any_fall: bool = false;
+            if then_r != 2 { any_fall = true; if then_r == 0 { new_closed = false; } }
+            if else_r != 2 { any_fall = true; if else_r == 0 { new_closed = false; } }
+            if !any_fall { return 2; }
+            closed = new_closed;
         }
     }
-    return closed;
+    return closed ? 1 : 0;
 }
 fn _cl_expr_closes(e: *Expr, nm: string) -> bool {
     if e == null { return false; }
