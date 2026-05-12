@@ -228,6 +228,14 @@ fn handle_initialize(req: *JsonValue) {
     json_obj_set(rename_caps, "prepareProvider", json_bool(true));
     json_obj_set(caps, "renameProvider", rename_caps);
     json_obj_set(caps, "documentFormattingProvider", json_bool(true));
+    // Quick-fix code actions. Server reads `context.diagnostics` for
+    // entries carrying a `data.fix` from us and returns CodeAction[]
+    // with WorkspaceEdit.
+    let cap_ca: *JsonValue = json_object();
+    let kinds: *JsonValue = json_array();
+    json_arr_push(kinds, json_string("quickfix"));
+    json_obj_set(cap_ca, "codeActionKinds", kinds);
+    json_obj_set(caps, "codeActionProvider", cap_ca);
     let comp: *JsonValue = json_object();
     let trig: *JsonValue = json_array();
     json_arr_push(trig, json_string("."));
@@ -276,6 +284,50 @@ fn diag_to_json(d: *DiagEntry) -> *JsonValue {
         let tags: *JsonValue = json_array();
         json_arr_push(tags, json_int(d.tag));
         json_obj_set(dj, "tags", tags);
+    }
+    // When the analysis attached a mechanical fix, stash it in the
+    // `data` field. Editors hand `context.diagnostics` back on
+    // `textDocument/codeAction`, so the code-action handler reads
+    // these fields without re-running the analysis.
+    //
+    // Two paths:
+    //   - explicit fix via `warn_with_fix` (fix_line > 0)
+    //   - implicit fix derived from the code: `unused-{var,param}`
+    //     get an "insert `_` at the diag range start" fix. Mirrors
+    //     what `glide fix` does so the editor's quick-fix and the
+    //     CLI fixer agree.
+    let mut has_fix: bool = false;
+    let mut fr_sl: int = 0; let mut fr_sc: int = 0;
+    let mut fr_el: int = 0; let mut fr_ec: int = 0;
+    let mut new_text: string = "";
+    if !d.fix_replacement.eq("") || d.fix_line > 0 {
+        has_fix = true;
+        fr_sl = d.fix_line - 1;  if fr_sl < 0 { fr_sl = 0; }
+        fr_sc = d.fix_col - 1;   if fr_sc < 0 { fr_sc = 0; }
+        fr_el = d.fix_end_line - 1; if fr_el < 0 { fr_el = 0; }
+        fr_ec = d.fix_end_col - 1; if fr_ec < 0 { fr_ec = 0; }
+        new_text = d.fix_replacement;
+    } else if d.code.eq("unused-var") || d.code.eq("unused-param") {
+        has_fix = true;
+        fr_sl = line0; fr_sc = col0; fr_el = line0; fr_ec = col0;
+        new_text = "_";
+    }
+    if has_fix {
+        let data: *JsonValue = json_object();
+        let fix: *JsonValue = json_object();
+        let fr: *JsonValue = json_object();
+        let fs: *JsonValue = json_object();
+        let fe: *JsonValue = json_object();
+        json_obj_set(fs, "line", json_int(fr_sl));
+        json_obj_set(fs, "character", json_int(fr_sc));
+        json_obj_set(fe, "line", json_int(fr_el));
+        json_obj_set(fe, "character", json_int(fr_ec));
+        json_obj_set(fr, "start", fs);
+        json_obj_set(fr, "end", fe);
+        json_obj_set(fix, "range", fr);
+        json_obj_set(fix, "newText", json_string(new_text));
+        json_obj_set(data, "fix", fix);
+        json_obj_set(dj, "data", data);
     }
     return dj;
 }
@@ -604,6 +656,11 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     __glide_palloc_set(cur_arena);
 
     let path: string = uri_to_path(uri);
+    // Pick up the project's lint config (`lint.deny` / `lint.allow` /
+    // preset) so the editor surfaces the same warnings + promotions
+    // the CLI does. Re-applied on every dispatch — manifest edits
+    // take effect after the next save without restarting the LSP.
+    _lsp_apply_manifest_lint(_lsp_parent_dir(path));
     let stmts: *Vector<Stmt> = Vector::new();
     let loaded: *HashMap<bool> = HashMap::new();
 
@@ -3628,6 +3685,87 @@ fn handle_formatting(req: *JsonValue, state: *LspState) {
     lsp_send_response(id, arr);
 }
 
+// `textDocument/codeAction` — read `context.diagnostics` from the
+// request, look at each entry's `data.fix` field (set by us in
+// `diag_to_json`), and synthesize a CodeAction with a WorkspaceEdit
+// that applies the replacement. No re-analysis needed: the editor
+// hands back the diagnostic objects we published, including the
+// `data` blob.
+fn handle_code_action(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let ctx: *JsonValue = json_get(params, "context");
+    let diags: *JsonValue = json_get(ctx, "diagnostics");
+
+    let out: *JsonValue = json_array();
+    let n: int = _json_arr_len(diags);
+    if n == 0 {
+        lsp_send_response(id, out);
+        return;
+    }
+    for let i: int = 0; i < n; i++ {
+        let d: *JsonValue = json_at(diags, i);
+        let data: *JsonValue = json_get(d, "data");
+        if data == null { continue; }
+        let fix: *JsonValue = json_get(data, "fix");
+        if fix == null { continue; }
+        let new_text: string = json_as_string(json_get(fix, "newText"));
+        let fr: *JsonValue = json_get(fix, "range");
+        if fr == null { continue; }
+        let code: string = json_as_string(json_get(d, "code"));
+        let msg: string = json_as_string(json_get(d, "message"));
+
+        let action: *JsonValue = json_object();
+        let title: string = _code_action_title(code, new_text);
+        json_obj_set(action, "title", json_string(title));
+        json_obj_set(action, "kind", json_string("quickfix"));
+
+        // Mark the action as fixing the original diagnostic so editors
+        // can dim or auto-clear it after applying.
+        let dlist: *JsonValue = json_array();
+        json_arr_push(dlist, d);
+        json_obj_set(action, "diagnostics", dlist);
+
+        // Build the WorkspaceEdit { changes: { uri: [TextEdit] } }
+        let edit: *JsonValue = json_object();
+        let changes: *JsonValue = json_object();
+        let edits: *JsonValue = json_array();
+        let te: *JsonValue = json_object();
+        json_obj_set(te, "range", fr);
+        json_obj_set(te, "newText", json_string(new_text));
+        json_arr_push(edits, te);
+        json_obj_set(changes, uri, edits);
+        json_obj_set(edit, "changes", changes);
+        json_obj_set(action, "edit", edit);
+
+        // Silence the "msg is unused" warning — kept in scope for
+        // future use (e.g. enriching the title with the diag message).
+        let _msg_used: string = msg;
+        json_arr_push(out, action);
+    }
+    lsp_send_response(id, out);
+}
+
+// json_array doesn't expose a length helper; reach into the field
+// directly. Returns 0 when the value isn't an array (or is null).
+fn _json_arr_len(v: *JsonValue) -> int {
+    if v == null { return 0; }
+    if v.kind != JSON_ARRAY { return 0; }
+    if v.arr == null { return 0; }
+    return v.arr.len();
+}
+
+fn _code_action_title(code: string, new_text: string) -> string {
+    if code.eq("unused-var")  { return "Prefix with `_`"; }
+    if code.eq("unused-param"){ return "Prefix with `_`"; }
+    if code.eq("unused-fn")   { return "Prefix with `_`"; }
+    if code.eq("unnecessary-mut") { return "Remove `mut`"; }
+    if new_text.eq("") { return "Apply fix (delete)"; }
+    return "Apply fix";
+}
+
 // ---- Custom analysis passes --------------------------------------------
 
 // Walk a fn body collecting let names, then walk again to find references.
@@ -3790,6 +3928,45 @@ fn _code_in_group(allow_token: string, code: string) -> bool {
 // Project-wide allow list (`lint.allow` from the manifest). Same
 // c_raw global as main.glide; we just need the getter here.
 extern fn __glide_proj_allow_get() -> *void;
+extern fn __glide_proj_allow_set(p: *void);
+extern fn __glide_deny_set(p: *void);
+extern fn __glide_deny_get() -> *void;
+
+// Compact `parent_dir(path)` — `main.glide`'s is not `pub`, so we
+// keep a local copy here. Same behaviour: strip trailing `/seg` or
+// `\seg`, return "" when there's no separator.
+fn _lsp_parent_dir(path: string) -> string {
+    let n: int = path.len();
+    let mut last: int = -1;
+    for let i: int = 0; i < n; i++ {
+        let c: int = path.at(i).to_int();
+        if c == 47 || c == 92 { last = i; }
+    }
+    if last < 0 { return ""; }
+    return path.substring(0, last);
+}
+
+// Wire the project's `lint.deny` / `lint.allow` from the nearest
+// `glide.glide` into the process-wide globals. Idempotent.
+fn _lsp_apply_manifest_lint(start_dir: string) {
+    let root: string = find_manifest_root(start_dir);
+    if root.eq("") { return; }
+    let m: *Manifest = read_manifest(root);
+    if m == null { return; }
+    if m.lint_deny != null && m.lint_deny.len() > 0 {
+        let p: *void = __glide_deny_get();
+        let merged: *Vector<string> = Vector::new();
+        if p != null {
+            let existing: *Vector<string> = p as *Vector<string>;
+            for let i: int = 0; i < existing.len(); i++ { merged.push(existing.get(i)); }
+        }
+        for let i: int = 0; i < m.lint_deny.len(); i++ { merged.push(m.lint_deny.get(i)); }
+        __glide_deny_set(merged as *void);
+    }
+    if m.lint_allow != null && m.lint_allow.len() > 0 {
+        __glide_proj_allow_set(m.lint_allow as *void);
+    }
+}
 
 fn _project_allow_matches(code: string) -> bool {
     let p: *void = __glide_proj_allow_get();
@@ -5175,6 +5352,7 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); return false; }
     if method.eq("textDocument/rename") { handle_rename(req, state); return false; }
     if method.eq("textDocument/formatting") { handle_formatting(req, state); return false; }
+    if method.eq("textDocument/codeAction") { handle_code_action(req, state); return false; }
     // Any unhandled request gets an empty-result reply so clients don't hang.
     let id: *JsonValue = json_get(req, "id");
     if id != null { lsp_send_response(id, json_null()); }
