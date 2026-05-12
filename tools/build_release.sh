@@ -148,6 +148,11 @@ cp README.md "$STAGE/" 2>/dev/null || true
 cp LICENSE "$STAGE/" 2>/dev/null || true
 
 # ---- Archive ----
+# MSYS/MinGW-bash on Windows host can't `chmod +x` POSIX-style — the
+# NTFS layer ignores it, and the tar wires up the binary at 0644. Use
+# python's tarfile (portable, present on every host we ship from) to
+# fix mode-per-file: 0755 for the binaries that need to be runnable,
+# 0644 for everything else.
 echo ">> Archiving"
 case "$TARGET_OS" in
     windows)
@@ -162,7 +167,23 @@ case "$TARGET_OS" in
         ARCHIVE="dist/${NAME}.zip"
         ;;
     linux|macos)
-        ( cd dist && tar -czf "${NAME}.tar.gz" "$NAME" )
+        python3 - <<PYEOF
+import os, tarfile
+name = "${NAME}"
+src = os.path.join("dist", name)
+out = os.path.join("dist", f"{name}.tar.gz")
+exec_files = {f"{name}/glide", f"{name}/runtime/zig/zig"}
+def fix(ti):
+    if ti.isdir():
+        ti.mode = 0o755
+    elif ti.name in exec_files:
+        ti.mode = 0o755
+    else:
+        ti.mode = 0o644
+    return ti
+with tarfile.open(out, "w:gz") as t:
+    t.add(src, arcname=name, filter=fix)
+PYEOF
         ARCHIVE="dist/${NAME}.tar.gz"
         ;;
 esac
