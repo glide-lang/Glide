@@ -2304,29 +2304,18 @@ fn fn_containing(stmts: *Vector<Stmt>, line0: int) -> *Stmt {
 
 // Recursively collect names declared in body up to `before_line` (0-indexed).
 fn collect_locals(body: *Vector<Stmt>, before_line: int, out: *Vector<Stmt>) {
-    if body == null { _lsp_log("    cl: body=null"); return; }
-    _lsp_log("    cl: enter len=".concat(int_to_str(body.len())));
+    if body == null { return; }
     for let i: int = 0; i < body.len(); i++ {
-        _lsp_log("    cl: i=".concat(int_to_str(i)));
         let s: Stmt = body.get(i);
-        _lsp_log("    cl: got kind=".concat(int_to_str(s.kind)).concat(" line=").concat(int_to_str(s.line)));
         if s.kind == ST_LET && (s.line - 1) < before_line {
             out.push(s);
         }
         if s.kind == ST_FOR && s.for_init != null {
-            _lsp_log("    cl: for_init recurse");
             collect_locals_stmt(s.for_init, before_line, out);
         }
-        if s.then_body != null {
-            _lsp_log("    cl: then_body recurse");
-            collect_locals(s.then_body, before_line, out);
-        }
-        if s.else_body != null {
-            _lsp_log("    cl: else_body recurse");
-            collect_locals(s.else_body, before_line, out);
-        }
+        if s.then_body != null { collect_locals(s.then_body, before_line, out); }
+        if s.else_body != null { collect_locals(s.else_body, before_line, out); }
     }
-    _lsp_log("    cl: exit");
 }
 
 fn collect_locals_stmt(s: *Stmt, before_line: int, out: *Vector<Stmt>) {
@@ -3262,29 +3251,16 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     let pos: *JsonValue = json_get(params, "position");
     let line0: int = json_as_int(json_get(pos, "line"));
     let col0: int = json_as_int(json_get(pos, "character"));
-    _lsp_log("  completion enter @".concat(int_to_str(line0)).concat(":").concat(int_to_str(col0)));
-
-    if !state.docs.contains(uri) {
-        _lsp_log("  completion: no doc for uri — returning []");
-        lsp_send_response(id, json_array());
-        return;
-    }
+    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
-    if doc.stmts == null {
-        _lsp_log("  completion: doc.stmts is NULL — returning []");
-        lsp_send_response(id, json_array());
-        return;
-    }
-    _lsp_log("  completion: doc.stmts has ".concat(int_to_str(doc.stmts.len())).concat(" stmts"));
+    if doc.stmts == null { lsp_send_response(id, json_array()); return; }
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
 
-    _lsp_log("  completion: import_context_kind");
     // Import-path completion: cursor sits inside `import …;`. The
     // helper returns the module path the user has typed so far
     // ("", "stdlib", "stdlib::hashmap"); we list the matching child.
     let imp_kind: int = import_context_kind(doc.text, line0, col0);
-    _lsp_log("  completion: imp_kind=".concat(int_to_str(imp_kind)));
     if imp_kind == IMPCTX_PATH {
         let prefix: string = import_path_prefix(doc.text, line0, col0);
         list_import_path_children(state, prefix, items, seen);
@@ -3302,12 +3278,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         }
     }
 
-    _lsp_log("  completion: module_path_before");
     // Module-path completion: cursor right after `module::` or
     // `stdlib::module::`. Lists every `pub` symbol from that module.
     // Single-segment `stdlib::` lists the submodules instead.
     let mod_path: string = module_path_before(doc.text, line0, col0);
-    _lsp_log("  completion: mod_path='".concat(mod_path).concat("'"));
     if !mod_path.eq("") && state.stdlib_index != null {
         list_module_members(state, mod_path, items, seen);
         seen.free();
@@ -3315,10 +3289,8 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
-    _lsp_log("  completion: path_qualifier_before");
     // Path completion: cursor is right after `Type::` (or `Type::partial`).
     let qualifier: string = path_qualifier_before(doc.text, line0, col0);
-    _lsp_log("  completion: qualifier='".concat(qualifier).concat("'"));
     if !qualifier.eq("") {
         // After `Type::` only static methods (no `self`) make sense.
         list_methods_for_type(doc.stmts, qualifier, items, seen, false);
@@ -3327,12 +3299,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
-    _lsp_log("  completion: member_qualifier_before");
     // Member completion: cursor is right after `var.` (or `var.partial`).
     // Resolve the local's type and list its struct fields plus the
     // instance methods (those whose first param is `self`).
     let member_var: string = member_qualifier_before(doc.text, line0, col0);
-    _lsp_log("  completion: member_var='".concat(member_var).concat("'"));
     if !member_var.eq("") {
         let var_type: string = lookup_local_type(doc.stmts, line0, member_var);
         if !var_type.eq("") {
@@ -3345,12 +3315,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
-    _lsp_log("  completion: chained_ctor");
     // Chained inline ctor: `Vector::new().` — list instance methods on the
     // type itself (we don't try to resolve T here; method names are the same
     // for any monomorphization).
     let chain_ty: string = chained_ctor_qualifier_before(doc.text, line0, col0);
-    _lsp_log("  completion: chain_ty='".concat(chain_ty).concat("'"));
     if !chain_ty.eq("") {
         list_fields_for_type(doc.stmts, chain_ty, items, seen);
         list_methods_for_type(doc.stmts, chain_ty, items, seen, true);
@@ -3359,10 +3327,8 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
-    _lsp_log("  completion: fn_containing");
     // 1. Locals in scope (params + lets above the cursor in the containing fn).
     let host: *Stmt = fn_containing(doc.stmts, line0);
-    _lsp_log("  completion: host?=".concat(if host == null { "null" } else { "set" }));
     if host != null {
         if host.fn_params != null {
             for let i: int = 0; i < host.fn_params.len(); i++ {
@@ -3377,81 +3343,45 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 }
             }
         }
-        _lsp_log("  completion: collect_locals");
         let locals: *Vector<Stmt> = Vector::new();
         collect_locals(host.fn_body, line0, locals);
-        _lsp_log("  completion: locals=".concat(int_to_str(locals.len())));
         for let i: int = 0; i < locals.len(); i++ {
-            _lsp_log("  completion: local[".concat(int_to_str(i)).concat("]"));
             let s: Stmt = locals.get(i);
-            _lsp_log("  completion: local kind=".concat(int_to_str(s.kind)).concat(" name='").concat(s.name).concat("'"));
             if seen.contains(s.name) { continue; }
             seen.insert(s.name, true);
             let mut sig: string = "local ".concat(s.name);
-            if s.let_ty != null {
-                _lsp_log("  completion: type_to_string_pretty");
-                sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty));
-            }
-            _lsp_log("  completion: rich_completion_item");
+            if s.let_ty != null { sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty)); }
             let no_edit_l: *JsonValue = null;
             let item: *JsonValue = rich_completion_item(
                 s.name, "", 6, sig, "", "", "", false, no_edit_l);
             json_arr_push(items, item);
         }
-        _lsp_log("  completion: locals loop done");
     }
-    _lsp_log("  completion: post-host block");
 
     // 2. Top-level decls (incl. static macros). Decls from stdlib that
     // were transitively loaded by an existing import still get a
     // build_import_edit pass so that selective imports are merged
     // (`{PI}` → `{PI, min_int}`) when the user picks a name that's
     // not yet listed.
-    _lsp_log("  completion: current_imports");
     let imps2: *HashMap<ImportInfo> = current_imports(doc.text);
-    _lsp_log("  completion: find_import_insertion_pos");
     let insert_line2: int = find_import_insertion_pos(doc.text);
-    _lsp_log("  completion: top-level loop start");
     if doc.stmts != null {
         for let i: int = 0; i < doc.stmts.len(); i++ {
-            if i >= 295 { _lsp_log("  completion: top i=".concat(int_to_str(i))); }
             let s: Stmt = doc.stmts.get(i);
-            if i >= 295 {
-                _lsp_log("  completion: got, kind=".concat(int_to_str(s.kind)));
-                let nm_ok: bool = s.name != null;
-                _lsp_log("  completion: name?=".concat(if nm_ok { "set" } else { "null" }));
-                if nm_ok {
-                    let l: int = s.name.len();
-                    _lsp_log("  completion: name len=".concat(int_to_str(l)));
-                    if l > 0 && l < 256 { _lsp_log("  completion: name='".concat(s.name).concat("'")); }
-                }
-                let or_ok: bool = s.origin != null;
-                _lsp_log("  completion: origin?=".concat(if or_ok { "set" } else { "null" }));
-                if or_ok {
-                    let ol: int = s.origin.len();
-                    _lsp_log("  completion: origin len=".concat(int_to_str(ol)));
-                    if ol > 0 && ol < 512 { _lsp_log("  completion: origin='".concat(s.origin).concat("'")); }
-                }
-            }
             if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
                && s.kind != ST_CONST && s.kind != ST_MACRO_DEF { continue; }
-            if i >= 295 { _lsp_log("  top: passed kind filter"); }
             // Static macros are inserted as `name!` to get the bang for free.
             let mut label: string = s.name;
             if s.kind == ST_MACRO_DEF { label = s.name.concat("!"); }
             if seen.contains(label) { continue; }
             seen.insert(label, true);
-            if i >= 295 { _lsp_log("  top: building sig"); }
             let mut sig: string = "";
             let mut label_extra: string = "";
             let mut snip: string = label;
             let mut has_snip: bool = false;
             if s.kind == ST_FN {
-                if i >= 295 { _lsp_log("  top: fn_signature"); }
                 sig = fn_signature(&s);
-                if i >= 295 { _lsp_log("  top: fn_label_extra"); }
                 label_extra = fn_label_extra(&s);
-                if i >= 295 { _lsp_log("  top: fn_snippet"); }
                 snip = fn_snippet(&s);
                 has_snip = true;
             }
@@ -3462,7 +3392,6 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 if s.let_ty != null { sig = sig.concat(": ").concat(type_to_string_pretty(s.let_ty)); }
             }
             else if s.kind == ST_MACRO_DEF { sig = macro_signature(&s); }
-            if i >= 295 { _lsp_log("  top: module/docc"); }
             let mut module: string = "";
             if s.origin != null { module = pretty_module(s.origin); }
             let mut docc: string = "";
@@ -3472,7 +3401,6 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             // Builtins / own-doc decls always pass null.
             let mut decl_edit: *JsonValue = null;
             if module.len() >= 8 && module.substring(0, 8).eq("stdlib::") {
-                if i >= 295 { _lsp_log("  top: build_import_edit"); }
                 let mut existing: *ImportInfo = null;
                 if imps2.contains(module) {
                     let info_val: ImportInfo = imps2.get(module);
@@ -3481,17 +3409,14 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 }
                 decl_edit = build_import_edit(label, module, existing, insert_line2, false);
             }
-            if i >= 295 { _lsp_log("  top: rich_completion_item"); }
             let item: *JsonValue = rich_completion_item(
                 label, label_extra, ci_kind_for(&s),
                 sig, docc, module, snip, has_snip,
                 decl_edit);
-            if i >= 295 { _lsp_log("  top: json_arr_push"); }
             json_arr_push(items, item);
         }
     }
 
-    _lsp_log("  completion: stage 2b (builtin macros)");
     // 2b. Builtin macros.
     let builtins: *Vector<string> = Vector::new();
     builtins.push("println!"); builtins.push("print!"); builtins.push("format!");
@@ -3505,7 +3430,6 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         else if bn.eq("format!") { bdetail = "format!(\"fmt\", args...) — formatted string"; }
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
-    _lsp_log("  completion: stage 3 (auto-import)");
 
     // 3. Auto-import suggestions: surface every `pub` symbol from
     // src/stdlib/ that the user hasn't imported yet. Each item carries
@@ -3558,15 +3482,9 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
                      insert_line: int, items: *JsonValue,
                      seen: *HashMap<bool>) {
     let n: int = idx.len();
-    _lsp_log("    emit_index: n=".concat(int_to_str(n)));
     for let i: int = 0; i < n; i++ {
-        if (i % 100) == 0 { _lsp_log("    emit_index: i=".concat(int_to_str(i))); }
         let sym: ImportableSym = idx.get(i);
-        let nm_ok: bool = sym.name != null;
-        if !nm_ok {
-            _lsp_log("    emit_index: i=".concat(int_to_str(i)).concat(" name=null SKIP"));
-            continue;
-        }
+        if sym.name == null { continue; }
         if seen.contains(sym.name) { continue; }
         seen.insert(sym.name, true);
         let mut existing: *ImportInfo = null;
@@ -3584,7 +3502,6 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
             sym.snippet, sym.has_snippet, edit);
         json_arr_push(items, item);
     }
-    _lsp_log("    emit_index: done");
 }
 
 // Walks the program collecting every usage of `name` as an identifier.
