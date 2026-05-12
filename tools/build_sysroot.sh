@@ -79,6 +79,10 @@ echo ">> Assembling sysroot"
 [ -f "${STAGING}/usr/include/zlib.h" ]  || { echo "zlib.h missing" >&2; exit 1; }
 cp -r "${STAGING}/usr/include/openssl" "${SYSROOT}/include/"
 cp "${STAGING}/usr/include/zlib.h" "${SYSROOT}/include/"
+# zlib.h #includes zconf.h — without the sibling header zlib.h is
+# unusable.
+[ -f "${STAGING}/usr/include/zconf.h" ] || { echo "zconf.h missing" >&2; exit 1; }
+cp "${STAGING}/usr/include/zconf.h" "${SYSROOT}/include/"
 
 # Static libs: usr/lib/libssl.a + libcrypto.a + lib/libz.a
 [ -f "${STAGING}/usr/lib/libssl.a" ]    || { echo "libssl.a missing" >&2; exit 1; }

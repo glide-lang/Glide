@@ -57,10 +57,14 @@ else
     TARGET_OS="${TARGET##*-}"
 fi
 
-# Map our short OS names to Zig's triplet vocabulary.
+# Map our short OS names to Zig's triplet vocabulary. Linux uses musl
+# (not glibc) so the bundled glide binary stays self-contained — and
+# the matching sysroot under ~/.glide/targets/x86_64-linux-musl
+# carries the zlib + openssl headers / static libs that the stdlib
+# c_raw blocks need.
 case "$TARGET_OS" in
     windows) ZIG_TRIPLE="${TARGET_ARCH}-windows-gnu";  EXE_EXT=".exe" ;;
-    linux)   ZIG_TRIPLE="${TARGET_ARCH}-linux-gnu";    EXE_EXT="" ;;
+    linux)   ZIG_TRIPLE="${TARGET_ARCH}-linux-musl";   EXE_EXT="" ;;
     macos)   ZIG_TRIPLE="${TARGET_ARCH}-macos-none";   EXE_EXT="" ;;
     *) echo "unsupported target OS: $TARGET_OS" >&2; exit 1 ;;
 esac
