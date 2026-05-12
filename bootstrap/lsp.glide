@@ -911,6 +911,7 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_unstable_calls(t, stmts);
     analysis_custom_lints(t, stmts);
     analysis_null_deref(t, stmts);
+    analysis_bad_free(t, stmts);
     // Must run last — consumes diagnostics emitted by every other pass
     // to decide whether each @expect was fulfilled.
     analysis_expect_fulfillment(t, stmts);
@@ -5668,6 +5669,110 @@ fn _check_null_target(t: *Typer, target: *Expr, nulls: *HashMap<bool>, line: int
         t.warn(line, col, "null-deref",
             "`".concat(target.str_val).concat("` is `null` at this point — deref will segfault. Reassign or guard with `if ").concat(target.str_val).concat(" != null { … }`"));
     }
+}
+
+// Catches `free(x)` / `defer free(x)` where `x` is a Glide `string`.
+// Strings in Glide are always allocated through the per-coro arena
+// (palloc), so calling libc `free()` on one corrupts the heap and
+// double-frees on the next arena drop. The arena handles cleanup
+// automatically — the right fix is to delete the `free` call.
+//
+// Scope is intentionally narrow: only `let s: string = ...; free(s)`
+// fires the warning. Vector / HashMap aren't included because their
+// destructors (`p.free()` on a struct's `*Vector<…>` field) are
+// legitimate uses; an interprocedural check would be needed to
+// distinguish "this is the destructor releasing its own field" from
+// "this is user code reaching into an arena-managed value".
+pub fn analysis_bad_free(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            if _has_allow(&s, "bad-free") { continue; }
+            t.current_origin = s.origin;
+            let tys: *HashMap<string> = HashMap::new();
+            _bf_scan_body(t, s.fn_body, tys);
+            tys.free();
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, "bad-free") { continue; }
+                // Methods inherit origin from the impl block (parser
+                // doesn't tag each method individually).
+                if s.origin != null && !s.origin.eq("") {
+                    t.current_origin = s.origin;
+                }
+                let tys: *HashMap<string> = HashMap::new();
+                _bf_scan_body(t, m.fn_body, tys);
+                tys.free();
+            }
+        }
+    }
+}
+
+fn _bf_scan_body(t: *Typer, body: *Vector<Stmt>, tys: *HashMap<string>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _bf_scan_stmt(t, &s, tys);
+    }
+}
+
+fn _bf_scan_stmt(t: *Typer, s: *Stmt, tys: *HashMap<string>) {
+    if s == null { return; }
+    // Track `let name: T = ...` so we know each variable's type.
+    if s.kind == ST_LET && s.name != null && !s.name.eq("") && s.let_ty != null {
+        tys.insert(s.name, _bf_ty_tag(s.let_ty));
+    }
+    // `defer free(...)` lands here with the call hanging off expr_value.
+    if s.expr_value != null { _bf_check_expr(t, s.expr_value, tys); }
+    if s.let_value != null { _bf_check_expr(t, s.let_value, tys); }
+    if s.cond != null { _bf_check_expr(t, s.cond, tys); }
+    if s.then_body != null { _bf_scan_body(t, s.then_body, tys); }
+    if s.else_body != null { _bf_scan_body(t, s.else_body, tys); }
+}
+
+fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.lhs.str_val.eq("free")
+       && e.args != null && e.args.len() == 1 {
+        let arg: Expr = e.args.get(0);
+        // Peel `as *void` / `as *u8` / any cast.
+        let mut probe: *Expr = &arg;
+        while probe != null && probe.kind == EX_CAST { probe = probe.lhs; }
+        if probe != null && probe.kind == EX_IDENT
+           && tys.contains(probe.str_val) {
+            let tag: string = tys.get(probe.str_val);
+            if tag.eq("string") {
+                t.warn(e.line, e.column, "bad-free",
+                    "`free(".concat(probe.str_val).concat(")` corrupts the heap — strings are arena-managed and freed automatically. Remove this line."));
+            }
+        }
+    }
+    if e.lhs != null { _bf_check_expr(t, e.lhs, tys); }
+    if e.rhs != null { _bf_check_expr(t, e.rhs, tys); }
+    if e.operand != null { _bf_check_expr(t, e.operand, tys); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _bf_check_expr(t, &a, tys);
+        }
+    }
+}
+
+// Reduce a Type to a short tag we can store in a HashMap<string>.
+// Returns "" for types we don't care about.
+fn _bf_ty_tag(ty: *Type) -> string {
+    if ty == null { return ""; }
+    if ty.kind == TY_NAMED { return ty.name; }
+    if ty.kind == TY_POINTER && ty.inner != null {
+        // *Vector<T> / *HashMap<V> / *T — keep the inner head name.
+        if ty.inner.kind == TY_NAMED { return ty.inner.name; }
+        if ty.inner.kind == TY_GENERIC { return ty.inner.name; }
+    }
+    if ty.kind == TY_GENERIC { return ty.name; }
+    return "";
 }
 
 // ---- Main loop ---------------------------------------------------------

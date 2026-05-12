@@ -1267,8 +1267,10 @@ impl CG {
         // println!() inserts a space between each printf arg — that
         // would break the directive ('#line  4  " ".../foo.glide  "').
         // Build the whole line as one string and emit it via a single
-        // printf arg.
-        let dir: string = "#line ".concat(line.to_string()).concat(" \"").concat(norm).concat("\"");
+        // printf arg. Leading '\n' guarantees column-1 placement even
+        // when the previous emit (e.g. a c_raw! block) didn't end with
+        // a newline; the C preprocessor requires `#line` at col 1.
+        let dir: string = "\n#line ".concat(line.to_string()).concat(" \"").concat(norm).concat("\"");
         println!(dir);
         self.last_line_dir = line;
         self.last_origin_dir = path;
