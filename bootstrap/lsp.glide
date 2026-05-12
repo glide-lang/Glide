@@ -912,6 +912,16 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_custom_lints(t, stmts);
     analysis_null_deref(t, stmts);
     analysis_bad_free(t, stmts);
+    analysis_string_eq_op(t, stmts);
+    analysis_unused_import(t, stmts);
+    analysis_arena_set_unbalanced(t, stmts);
+    analysis_coro_blocking(t, stmts);
+    analysis_unhandled_result(t, stmts);
+    analysis_ignored_option(t, stmts);
+    analysis_use_after_free(t, stmts);
+    analysis_mutex_unbalanced(t, stmts);
+    analysis_chan_leak(t, stmts);
+    analysis_leak_on_early_return(t, stmts);
     // Must run last — consumes diagnostics emitted by every other pass
     // to decide whether each @expect was fulfilled.
     analysis_expect_fulfillment(t, stmts);
@@ -5773,6 +5783,922 @@ fn _bf_ty_tag(ty: *Type) -> string {
     }
     if ty.kind == TY_GENERIC { return ty.name; }
     return "";
+}
+
+// ============================================================================
+// === Batch of bug-prevention lints                                        ===
+// ============================================================================
+// Ten lints sharing a common helper layer: type-tag tracking via let
+// bindings, scope-aware walking of fn bodies, and a thin set of pure
+// heuristics. Each one is intentionally narrow — we'd rather miss a
+// case than flag legitimate code, so suppressions stay rare.
+
+// Walk every fn / impl method, invoking `cb` with each one paired with
+// the inferred origin file. `cb` is responsible for the body analysis.
+// Centralizes the boilerplate every per-fn lint repeats.
+
+// ---------- string-eq-with-== --------------------------------------------
+// Glide strings are NUL-terminated `const char*`. The C `==` compares
+// pointers, not content — `s == "foo"` is almost always wrong (returns
+// true only when both sides reference the same interned literal).
+// `.eq()` does the actual byte comparison.
+pub fn analysis_string_eq_op(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            if _has_allow(&s, "string-eq-op") { continue; }
+            t.current_origin = s.origin;
+            let tys: *HashMap<string> = HashMap::new();
+            _seq_scan_body(t, s.fn_body, tys);
+            tys.free();
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, "string-eq-op") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                let tys: *HashMap<string> = HashMap::new();
+                _seq_scan_body(t, m.fn_body, tys);
+                tys.free();
+            }
+        }
+    }
+}
+fn _seq_scan_body(t: *Typer, body: *Vector<Stmt>, tys: *HashMap<string>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_LET && s.name != null && !s.name.eq("") && s.let_ty != null {
+            tys.insert(s.name, _bf_ty_tag(s.let_ty));
+        }
+        if s.expr_value != null { _seq_check_expr(t, s.expr_value, tys); }
+        if s.let_value != null { _seq_check_expr(t, s.let_value, tys); }
+        if s.cond != null { _seq_check_expr(t, s.cond, tys); }
+        if s.then_body != null { _seq_scan_body(t, s.then_body, tys); }
+        if s.else_body != null { _seq_scan_body(t, s.else_body, tys); }
+    }
+}
+fn _seq_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && (e.op_code == OP_EQ || e.op_code == OP_NE)
+       && e.lhs != null && e.rhs != null {
+        // `s == null` / `s != null` is a legitimate pointer-presence
+        // check — strings ARE nullable in Glide. Skip those.
+        if e.lhs.kind == EX_NULL || e.rhs.kind == EX_NULL { /* skip */ }
+        else {
+        let lhs_str: bool = _seq_is_string_expr(e.lhs, tys);
+        let rhs_str: bool = _seq_is_string_expr(e.rhs, tys);
+        if lhs_str || rhs_str {
+            let op_name: string = "==";
+            if e.op_code == OP_NE { op_name = "!="; }
+            let suggest: string = ".eq(…)";
+            if e.op_code == OP_NE { suggest = "!… .eq(…)"; }
+            t.warn(e.line, e.column, "string-eq-op",
+                "`".concat(op_name).concat("` on strings compares pointers, not bytes — use `").concat(suggest).concat("` for the actual comparison"));
+        }
+        }
+    }
+    if e.lhs != null { _seq_check_expr(t, e.lhs, tys); }
+    if e.rhs != null { _seq_check_expr(t, e.rhs, tys); }
+    if e.operand != null { _seq_check_expr(t, e.operand, tys); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _seq_check_expr(t, &a, tys);
+        }
+    }
+}
+fn _seq_is_string_expr(e: *Expr, tys: *HashMap<string>) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_STRING { return true; }
+    if e.kind == EX_IDENT && tys.contains(e.str_val) {
+        return tys.get(e.str_val).eq("string");
+    }
+    return false;
+}
+
+// ---------- unused-import ------------------------------------------------
+// `import X::specific;` where no use of `specific` is found in the
+// file. Wildcard / re-export forms aren't checked (impossible without
+// dragging in module metadata). False-positive risk: a name might be
+// referenced via macro expansion that we don't track here.
+pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>) {
+    // Collect all identifiers referenced anywhere in the file. One
+    // pass; we don't separate scopes because imports are top-level.
+    let used: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_IMPORT { continue; }
+        _ui_collect_stmt(&s, used);
+    }
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPORT { continue; }
+        if _has_allow(&s, "unused-import") { continue; }
+        if s.import_wildcard { continue; }
+        if s.imported_items == null || s.imported_items.len() == 0 { continue; }
+        t.current_origin = s.origin;
+        let mut any_used: bool = false;
+        for let j: int = 0; j < s.imported_items.len(); j++ {
+            let n: string = s.imported_items.get(j);
+            if used.contains(n) { any_used = true; break; }
+        }
+        if !any_used {
+            let first: string = s.imported_items.get(0);
+            t.warn(s.line, s.column, "unused-import",
+                "import of `".concat(first).concat("` is never referenced in this file — remove it"));
+        }
+    }
+    used.free();
+}
+fn _ui_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
+    if s == null { return; }
+    if s.let_value != null { _ui_collect_expr(s.let_value, used); }
+    if s.expr_value != null { _ui_collect_expr(s.expr_value, used); }
+    if s.cond != null { _ui_collect_expr(s.cond, used); }
+    if s.then_body != null {
+        for let i: int = 0; i < s.then_body.len(); i++ {
+            let c: Stmt = s.then_body.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+    if s.else_body != null {
+        for let i: int = 0; i < s.else_body.len(); i++ {
+            let c: Stmt = s.else_body.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+    if s.fn_body != null {
+        for let i: int = 0; i < s.fn_body.len(); i++ {
+            let c: Stmt = s.fn_body.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: int = 0; i < s.impl_methods.len(); i++ {
+            let c: Stmt = s.impl_methods.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+}
+fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_IDENT { used.insert(e.str_val, true); }
+    if e.kind == EX_MEMBER && e.field != null { used.insert(e.field, true); }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT {
+        used.insert(e.lhs.str_val, true);
+    }
+    if e.lhs != null { _ui_collect_expr(e.lhs, used); }
+    if e.rhs != null { _ui_collect_expr(e.rhs, used); }
+    if e.operand != null { _ui_collect_expr(e.operand, used); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _ui_collect_expr(&a, used);
+        }
+    }
+}
+
+// ---------- arena-set-without-restore ------------------------------------
+// `__glide_palloc_set(arena)` makes that arena the active one for all
+// allocations until the next set. Without a paired `_set(prev)` (or a
+// `defer __glide_palloc_set(prev)` registered immediately after), the
+// arena leaks across return paths — the same bug that caused the LSP
+// completion crash earlier.
+pub fn analysis_arena_set_unbalanced(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "arena-set") {
+            t.current_origin = s.origin;
+            _asu_check_fn(t, s.fn_body, s.line, s.column);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "arena-set") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                _asu_check_fn(t, m.fn_body, m.line, m.column);
+            }
+        }
+    }
+}
+fn _asu_check_fn(t: *Typer, body: *Vector<Stmt>, fn_line: int, fn_col: int) {
+    let mut sets: int = 0;
+    let mut defer_sets: int = 0;
+    let mut first_set_line: int = 0;
+    let mut first_set_col: int = 0;
+    _asu_walk(body, &sets, &defer_sets, &first_set_line, &first_set_col, false);
+    // Each non-defer set must be balanced by either another set (the
+    // restore) or a defer set (the restore-via-defer).
+    if sets > 0 && (defer_sets + sets) < (sets * 2) {
+        t.warn(first_set_line, first_set_col, "arena-set",
+            "`__glide_palloc_set(arena)` has no matching restore — add `defer __glide_palloc_set(prev);` immediately after the set");
+    }
+}
+fn _asu_walk(body: *Vector<Stmt>, sets: *int, defer_sets: *int,
+             fline: *int, fcol: *int, in_defer: bool) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_DEFER && s.expr_value != null {
+            // Any palloc_set inside a defer counts as a restore —
+            // even `_set(prev)` carries a non-null arg, and defers
+            // fire on every exit so the restore is guaranteed.
+            if _asu_is_palloc_set_any(s.expr_value) { *defer_sets = *defer_sets + 1; }
+        } else if s.expr_value != null && _asu_is_palloc_set_active(s.expr_value) {
+            // Only `_set(<non-null>)` needs a balancing restore.
+            // `_set(null)` IS a restore (drops the active arena).
+            *sets = *sets + 1;
+            if *fline == 0 { *fline = s.line; *fcol = s.column; }
+        } else if s.expr_value != null && _asu_is_palloc_set_any(s.expr_value) {
+            // Bare `_set(null)` or `_set(prev)` — count as restore.
+            *defer_sets = *defer_sets + 1;
+        }
+        if s.then_body != null { _asu_walk(s.then_body, sets, defer_sets, fline, fcol, in_defer); }
+        if s.else_body != null { _asu_walk(s.else_body, sets, defer_sets, fline, fcol, in_defer); }
+    }
+}
+fn _asu_is_palloc_set_any(e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_IDENT { return false; }
+    return e.lhs.str_val.eq("__glide_palloc_set");
+}
+fn _asu_is_palloc_set_active(e: *Expr) -> bool {
+    if !_asu_is_palloc_set_any(e) { return false; }
+    if e.args == null || e.args.len() != 1 { return false; }
+    let arg: Expr = e.args.get(0);
+    // Treat `_set(<arena-creating call>)` as the "active set" — that's
+    // the form that actually starts a per-scope arena and needs a
+    // restore. `_set(prev)` / `_set(null)` / `_set(saved_var)` are
+    // restores, not new sets. Heuristic: look for a call to
+    // `__glide_palloc_make` somewhere inside the arg.
+    return _asu_arg_creates_arena(&arg);
+}
+fn _asu_arg_creates_arena(e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.lhs.str_val.eq("__glide_palloc_make") { return true; }
+    if e.lhs != null && _asu_arg_creates_arena(e.lhs) { return true; }
+    if e.operand != null && _asu_arg_creates_arena(e.operand) { return true; }
+    return false;
+}
+
+// ---------- coro-blocking ------------------------------------------------
+// `spawn` submits a call to the M:N scheduler — if the called fn does
+// sync IO (fs_read, sync TCP, blocking sleep) it stalls the worker
+// thread, defeating the point. We resolve the spawn target's body and
+// walk it looking for blocking helpers; for `spawn_thread` we don't
+// warn (a pthread is supposed to block).
+pub fn analysis_coro_blocking(t: *Typer, program: *Vector<Stmt>) {
+    let blocking: *HashMap<bool> = HashMap::new();
+    blocking.insert("fs_read", true);
+    blocking.insert("fs_read_bytes", true);
+    blocking.insert("fs_write", true);
+    blocking.insert("fs_write_bytes", true);
+    blocking.insert("fs_append", true);
+    blocking.insert("fs_copy", true);
+    blocking.insert("__glide_sleep_ms_blocking", true);
+    blocking.insert("process_run", true);
+    blocking.insert("http_get_sync", true);
+    // Build name → body so spawn lookups can walk the target.
+    let bodies: *HashMap<*Vector<Stmt>> = HashMap::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null { bodies.insert(s.name, s.fn_body); }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body != null { bodies.insert(m.name, m.fn_body); }
+            }
+        }
+    }
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "coro-blocking") {
+            t.current_origin = s.origin;
+            _cb_scan_for_spawn(t, s.fn_body, blocking, bodies);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "coro-blocking") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                _cb_scan_for_spawn(t, m.fn_body, blocking, bodies);
+            }
+        }
+    }
+    bodies.free();
+    blocking.free();
+}
+fn _cb_scan_for_spawn(t: *Typer, body: *Vector<Stmt>, blocking: *HashMap<bool>,
+                     bodies: *HashMap<*Vector<Stmt>>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_SPAWN && !s.is_spawn_thread && s.expr_value != null
+           && s.expr_value.kind == EX_CALL && s.expr_value.lhs != null
+           && s.expr_value.lhs.kind == EX_IDENT {
+            let tgt: string = s.expr_value.lhs.str_val;
+            // Direct: spawn fs_read(...) — blocking name spawned.
+            if blocking.contains(tgt) {
+                t.warn(s.expr_value.line, s.expr_value.column, "coro-blocking",
+                    "`".concat(tgt).concat("` blocks the worker thread — use `spawn_thread` instead of `spawn`"));
+            } else if bodies.contains(tgt) {
+                let target_body: *Vector<Stmt> = bodies.get(tgt);
+                _cb_walk_for_blocking(t, target_body, blocking, tgt, s.line);
+            }
+        }
+        if s.then_body != null { _cb_scan_for_spawn(t, s.then_body, blocking, bodies); }
+        if s.else_body != null { _cb_scan_for_spawn(t, s.else_body, blocking, bodies); }
+    }
+}
+fn _cb_walk_for_blocking(t: *Typer, body: *Vector<Stmt>, blocking: *HashMap<bool>,
+                        spawn_target: string, spawn_line: int) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.expr_value != null { _cb_check_blocking_call(t, s.expr_value, blocking, spawn_target); }
+        if s.let_value != null { _cb_check_blocking_call(t, s.let_value, blocking, spawn_target); }
+        if s.then_body != null { _cb_walk_for_blocking(t, s.then_body, blocking, spawn_target, spawn_line); }
+        if s.else_body != null { _cb_walk_for_blocking(t, s.else_body, blocking, spawn_target, spawn_line); }
+    }
+}
+fn _cb_check_blocking_call(t: *Typer, e: *Expr, blocking: *HashMap<bool>, spawned: string) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && blocking.contains(e.lhs.str_val) {
+        t.warn(e.line, e.column, "coro-blocking",
+            "`".concat(e.lhs.str_val).concat("` blocks the worker thread — reached from `spawn ").concat(spawned).concat("()`. Use `spawn_thread` instead, or call the async variant"));
+    }
+    if e.lhs != null { _cb_check_blocking_call(t, e.lhs, blocking, spawned); }
+    if e.rhs != null { _cb_check_blocking_call(t, e.rhs, blocking, spawned); }
+    if e.operand != null { _cb_check_blocking_call(t, e.operand, blocking, spawned); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _cb_check_blocking_call(t, &a, blocking, spawned);
+        }
+    }
+}
+
+// ---------- unhandled-result ---------------------------------------------
+// Calling a `fn -> !T` and discarding the value silently swallows the
+// error. Accepted forms: `x?`, `let _ = …`, `let bound = …`, `match …`,
+// or `return …`. Bare `ST_EXPR` with a `!T`-returning call is the bug.
+pub fn analysis_unhandled_result(t: *Typer, program: *Vector<Stmt>) {
+    let ret_kinds: *HashMap<int> = HashMap::new();
+    _ur_collect_sigs(program, ret_kinds);
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "unhandled-result") {
+            t.current_origin = s.origin;
+            _ur_walk(t, s.fn_body, ret_kinds);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "unhandled-result") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                _ur_walk(t, m.fn_body, ret_kinds);
+            }
+        }
+    }
+    ret_kinds.free();
+}
+fn _ur_collect_sigs(program: *Vector<Stmt>, ret_kinds: *HashMap<int>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_ret_ty != null {
+            ret_kinds.insert(s.name, s.fn_ret_ty.kind);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_ret_ty != null {
+                    ret_kinds.insert(m.name, m.fn_ret_ty.kind);
+                }
+            }
+        }
+    }
+}
+fn _ur_walk(t: *Typer, body: *Vector<Stmt>, ret_kinds: *HashMap<int>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_EXPR && s.expr_value != null {
+            _ur_check_call(t, s.expr_value, ret_kinds);
+        }
+        if s.then_body != null { _ur_walk(t, s.then_body, ret_kinds); }
+        if s.else_body != null { _ur_walk(t, s.else_body, ret_kinds); }
+        if s.fn_body != null { _ur_walk(t, s.fn_body, ret_kinds); }
+    }
+}
+fn _ur_check_call(t: *Typer, e: *Expr, ret_kinds: *HashMap<int>) {
+    if e == null { return; }
+    // `?` is enough — already propagating.
+    if e.kind == EX_UNARY && e.op_code == UN_TRY { return; }
+    if e.kind != EX_CALL { return; }
+    let fn_name: string = "";
+    if e.lhs != null && e.lhs.kind == EX_IDENT { fn_name = e.lhs.str_val; }
+    else if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null { fn_name = e.lhs.field; }
+    else { return; }
+    if !ret_kinds.contains(fn_name) { return; }
+    let k: int = ret_kinds.get(fn_name);
+    if k == TY_RESULT || k == TY_OPT_RESULT {
+        t.warn(e.line, e.column, "unhandled-result",
+            "`".concat(fn_name).concat("` returns a `!T` whose error is being discarded — propagate with `").concat(fn_name).concat("?` or bind with `let r = ").concat(fn_name).concat("(...)`"));
+    }
+}
+
+// ---------- ignored-option -----------------------------------------------
+// `.val` on a `?T` reaches into the payload regardless of whether it's
+// some or none — reading the none branch is UB. Accepted shape:
+// `if x.is_some() { … x.val … }` or `let v = x?`. Anything else is a
+// landmine. We detect only the simplest case: a `.val` access whose
+// receiver is an EX_IDENT typed as `?T` (no `is_some` check above it
+// in the same straight-line block).
+pub fn analysis_ignored_option(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "ignored-option") {
+            t.current_origin = s.origin;
+            let opts: *HashMap<bool> = HashMap::new();
+            let checked: *HashMap<bool> = HashMap::new();
+            _io_scan(t, s.fn_body, opts, checked);
+            opts.free();
+            checked.free();
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "ignored-option") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                let opts: *HashMap<bool> = HashMap::new();
+                let checked: *HashMap<bool> = HashMap::new();
+                _io_scan(t, m.fn_body, opts, checked);
+                opts.free();
+                checked.free();
+            }
+        }
+    }
+}
+fn _io_scan(t: *Typer, body: *Vector<Stmt>, opts: *HashMap<bool>, checked: *HashMap<bool>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_LET && s.name != null && s.let_ty != null
+           && s.let_ty.kind == TY_OPTION {
+            opts.insert(s.name, true);
+        }
+        let gated: string = "";
+        let mut negated: bool = false;
+        if s.cond != null {
+            // Recognise `if x.is_some() { … }` (then_body is the safe
+            // branch) AND the inverse guard `if !x.has { early-exit }`
+            // / `if x.is_none() { early-exit }` (rest of the OUTER
+            // body becomes safe). The inverse form is what tight
+            // loops use: `if !r.has { break; }` then read `r.val`.
+            gated = _io_extract_check_unsigned(s.cond);
+            if !gated.eq("") {
+                negated = _io_is_negated_check(s.cond)
+                          || _io_is_none_check(s.cond);
+            }
+        }
+        if !gated.eq("") && !negated && s.then_body != null {
+            let was_checked: bool = checked.contains(gated);
+            checked.insert(gated, true);
+            _io_scan(t, s.then_body, opts, checked);
+            if !was_checked { checked.insert(gated, false); }
+        } else if s.then_body != null {
+            _io_scan(t, s.then_body, opts, checked);
+        }
+        if s.else_body != null { _io_scan(t, s.else_body, opts, checked); }
+        if s.expr_value != null { _io_check_expr(t, s.expr_value, opts, checked); }
+        if s.let_value != null { _io_check_expr(t, s.let_value, opts, checked); }
+        // After a guard like `if !r.has { break/return/continue }`,
+        // every subsequent sibling stmt is safe to read r.val.
+        if !gated.eq("") && negated && s.then_body != null
+           && _io_body_is_early_exit(s.then_body) {
+            checked.insert(gated, true);
+        }
+    }
+}
+fn _io_extract_check_unsigned(e: *Expr) -> string {
+    // Like _io_extract_check but strips the outer `!`.
+    if e == null { return ""; }
+    if e.kind == EX_UNARY && e.operand != null { return _io_extract_check_unsigned(e.operand); }
+    return _io_extract_check(e);
+}
+fn _io_is_negated_check(e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_UNARY { return true; }
+    return false;
+}
+fn _io_is_none_check(e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.field != null && e.lhs.field.eq("is_none") { return true; }
+    return false;
+}
+fn _io_body_is_early_exit(body: *Vector<Stmt>) -> bool {
+    if body == null || body.len() == 0 { return false; }
+    let last: Stmt = body.get(body.len() - 1);
+    if last.kind == ST_RETURN || last.kind == ST_BREAK
+       || last.kind == ST_CONTINUE { return true; }
+    return false;
+}
+fn _io_extract_check(e: *Expr) -> string {
+    if e == null { return ""; }
+    // `x.is_some()` — method form.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.field != null && e.lhs.field.eq("is_some")
+       && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+        return e.lhs.lhs.str_val;
+    }
+    // `x.has` — direct field access on the option struct (used in
+    // tight loops where the method-call overhead matters).
+    if e.kind == EX_MEMBER && e.field != null && e.field.eq("has")
+       && e.lhs != null && e.lhs.kind == EX_IDENT {
+        return e.lhs.str_val;
+    }
+    // `!x.is_some()` / `!x.has` — recurse through the unary !.
+    if e.kind == EX_UNARY && e.operand != null {
+        return _io_extract_check(e.operand);
+    }
+    return "";
+}
+fn _io_check_expr(t: *Typer, e: *Expr, opts: *HashMap<bool>, checked: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_MEMBER && e.field != null && e.field.eq("val")
+       && e.lhs != null && e.lhs.kind == EX_IDENT
+       && opts.contains(e.lhs.str_val) {
+        let nm: string = e.lhs.str_val;
+        if !(checked.contains(nm) && checked.get(nm)) {
+            t.warn(e.line, e.column, "ignored-option",
+                "`".concat(nm).concat(".val` reads the payload without checking `").concat(nm).concat(".is_some()` — guard with `if ").concat(nm).concat(".is_some() { … }` or unwrap via `let v = ").concat(nm).concat("?;`"));
+        }
+    }
+    if e.lhs != null { _io_check_expr(t, e.lhs, opts, checked); }
+    if e.rhs != null { _io_check_expr(t, e.rhs, opts, checked); }
+    if e.operand != null { _io_check_expr(t, e.operand, opts, checked); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _io_check_expr(t, &a, opts, checked);
+        }
+    }
+}
+
+// ---------- use-after-free -----------------------------------------------
+// `x.free()` invalidates `x`. Any subsequent use in the same block is a
+// dangling-pointer access — exactly the shape of the LSP completion
+// crash. `defer x.free()` is fine (fires at scope exit, value is still
+// valid throughout the block).
+pub fn analysis_use_after_free(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "use-after-free") {
+            t.current_origin = s.origin;
+            let freed: *HashMap<bool> = HashMap::new();
+            _uaf_scan(t, s.fn_body, freed);
+            freed.free();
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "use-after-free") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                let freed: *HashMap<bool> = HashMap::new();
+                _uaf_scan(t, m.fn_body, freed);
+                freed.free();
+            }
+        }
+    }
+}
+fn _uaf_scan(t: *Typer, body: *Vector<Stmt>, freed: *HashMap<bool>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        // Defer doesn't mark freed — fires at scope exit only.
+        if s.kind == ST_DEFER { continue; }
+        // A return / propagation marks the end of this control-flow
+        // path. Any siblings after a return are reached via a different
+        // path (else-branch fall-through up the chain) where the freed
+        // state shouldn't carry. Clearing avoids the common pattern
+        // `if c { x.free(); return; } x.free();` warning on the second
+        // free.
+        if s.kind == ST_RETURN { freed.clear(); continue; }
+        // Reassignment clears the freed bit.
+        if s.kind == ST_LET && s.name != null && freed.contains(s.name) {
+            freed.insert(s.name, false);
+        }
+        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+           && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT
+           && freed.contains(s.expr_value.lhs.str_val) {
+            freed.insert(s.expr_value.lhs.str_val, false);
+        }
+        // The free call itself is allowed even though `x` appears in
+        // it. Detect the free target up-front and skip its receiver
+        // when we walk the expression.
+        let mut free_target: string = "";
+        if s.expr_value != null { free_target = _uaf_free_target(s.expr_value); }
+        if s.expr_value != null { _uaf_check_expr(t, s.expr_value, freed, free_target); }
+        if s.let_value != null { _uaf_check_expr(t, s.let_value, freed, ""); }
+        if s.cond != null { _uaf_check_expr(t, s.cond, freed, ""); }
+        if !free_target.eq("") { freed.insert(free_target, true); }
+        if s.then_body != null { _uaf_scan(t, s.then_body, freed); }
+        if s.else_body != null { _uaf_scan(t, s.else_body, freed); }
+    }
+}
+fn _uaf_free_target(e: *Expr) -> string {
+    if e == null { return ""; }
+    if e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_MEMBER { return ""; }
+    if e.lhs.field == null || !e.lhs.field.eq("free") { return ""; }
+    if e.lhs.lhs == null || e.lhs.lhs.kind != EX_IDENT { return ""; }
+    return e.lhs.lhs.str_val;
+}
+fn _uaf_check_expr(t: *Typer, e: *Expr, freed: *HashMap<bool>, skip: string) {
+    if e == null { return; }
+    if e.kind == EX_IDENT && freed.contains(e.str_val) && freed.get(e.str_val)
+       && !e.str_val.eq(skip) {
+        t.warn(e.line, e.column, "use-after-free",
+            "`".concat(e.str_val).concat("` was freed earlier in this scope — accessing it is a dangling-pointer read"));
+        return;
+    }
+    if e.lhs != null { _uaf_check_expr(t, e.lhs, freed, skip); }
+    if e.rhs != null { _uaf_check_expr(t, e.rhs, freed, skip); }
+    if e.operand != null { _uaf_check_expr(t, e.operand, freed, skip); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _uaf_check_expr(t, &a, freed, skip);
+        }
+    }
+}
+
+// ---------- mutex-not-unlocked -------------------------------------------
+// Every `m.lock()` needs an `m.unlock()` in the same block / fn. The
+// check is balance-based (count locks vs unlocks per name); deeper
+// control-flow checking would require building a CFG, but unbalanced
+// counts already catch the common shapes.
+pub fn analysis_mutex_unbalanced(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "mutex-unbalanced") {
+            t.current_origin = s.origin;
+            _mu_check_fn(t, s.fn_body);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "mutex-unbalanced") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                _mu_check_fn(t, m.fn_body);
+            }
+        }
+    }
+}
+fn _mu_check_fn(t: *Typer, body: *Vector<Stmt>) {
+    let locks: *HashMap<int> = HashMap::new();
+    let unlocks: *HashMap<int> = HashMap::new();
+    let first_lock_line: *HashMap<int> = HashMap::new();
+    let first_lock_col: *HashMap<int> = HashMap::new();
+    _mu_walk(body, locks, unlocks, first_lock_line, first_lock_col);
+    let names: *Vector<string> = locks.keys();
+    for let i: int = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        let nl: int = locks.get(nm);
+        let mut nu: int = 0;
+        if unlocks.contains(nm) { nu = unlocks.get(nm); }
+        if nl > nu {
+            t.warn(first_lock_line.get(nm), first_lock_col.get(nm), "mutex-unbalanced",
+                "`".concat(nm).concat(".lock()` has no matching `.unlock()` on every path — use `defer ").concat(nm).concat(".unlock();` right after the lock so all returns release it"));
+        }
+    }
+    locks.free(); unlocks.free();
+    first_lock_line.free(); first_lock_col.free();
+}
+fn _mu_walk(body: *Vector<Stmt>, locks: *HashMap<int>, unlocks: *HashMap<int>,
+            fll: *HashMap<int>, flc: *HashMap<int>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.expr_value != null { _mu_check_expr(s.expr_value, locks, unlocks, fll, flc); }
+        if s.let_value != null { _mu_check_expr(s.let_value, locks, unlocks, fll, flc); }
+        if s.then_body != null { _mu_walk(s.then_body, locks, unlocks, fll, flc); }
+        if s.else_body != null { _mu_walk(s.else_body, locks, unlocks, fll, flc); }
+    }
+}
+fn _mu_check_expr(e: *Expr, locks: *HashMap<int>, unlocks: *HashMap<int>,
+                  fll: *HashMap<int>, flc: *HashMap<int>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.field != null && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+        let recv: string = e.lhs.lhs.str_val;
+        if e.lhs.field.eq("lock") {
+            let mut c: int = 0;
+            if locks.contains(recv) { c = locks.get(recv); }
+            locks.insert(recv, c + 1);
+            if !fll.contains(recv) { fll.insert(recv, e.line); flc.insert(recv, e.column); }
+        }
+        if e.lhs.field.eq("unlock") {
+            let mut c: int = 0;
+            if unlocks.contains(recv) { c = unlocks.get(recv); }
+            unlocks.insert(recv, c + 1);
+        }
+    }
+    if e.lhs != null { _mu_check_expr(e.lhs, locks, unlocks, fll, flc); }
+    if e.rhs != null { _mu_check_expr(e.rhs, locks, unlocks, fll, flc); }
+    if e.operand != null { _mu_check_expr(e.operand, locks, unlocks, fll, flc); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _mu_check_expr(&a, locks, unlocks, fll, flc);
+        }
+    }
+}
+
+// ---------- chan-leak ----------------------------------------------------
+// A chan with receivers in a `while let v = c.recv()` (or similar)
+// needs SOMEONE to call `c.close()` — otherwise the receivers block
+// forever and the program never terminates. We approximate by
+// flagging any chan declared in a fn that has no `close()` anywhere
+// in that fn.
+pub fn analysis_chan_leak(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "chan-leak") {
+            t.current_origin = s.origin;
+            _cl_check_fn(t, s.fn_body);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "chan-leak") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                _cl_check_fn(t, m.fn_body);
+            }
+        }
+    }
+}
+fn _cl_check_fn(t: *Typer, body: *Vector<Stmt>) {
+    let chans: *HashMap<int> = HashMap::new();      // name -> line
+    let chans_col: *HashMap<int> = HashMap::new();
+    let closed: *HashMap<bool> = HashMap::new();
+    _cl_walk(body, chans, chans_col, closed);
+    let names: *Vector<string> = chans.keys();
+    for let i: int = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if !closed.contains(nm) {
+            t.warn(chans.get(nm), chans_col.get(nm), "chan-leak",
+                "channel `".concat(nm).concat("` is never `close()`d — any `recv()` loop will hang forever; close it when the producer is done"));
+        }
+    }
+    chans.free(); chans_col.free(); closed.free();
+}
+fn _cl_walk(body: *Vector<Stmt>, chans: *HashMap<int>, chans_col: *HashMap<int>,
+            closed: *HashMap<bool>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_LET && s.name != null && s.let_ty != null
+           && s.let_ty.kind == TY_GENERIC && s.let_ty.name.eq("chan") {
+            chans.insert(s.name, s.line);
+            chans_col.insert(s.name, s.column);
+        }
+        if s.expr_value != null { _cl_check_close(s.expr_value, closed); }
+        if s.let_value != null { _cl_check_close(s.let_value, closed); }
+        if s.then_body != null { _cl_walk(s.then_body, chans, chans_col, closed); }
+        if s.else_body != null { _cl_walk(s.else_body, chans, chans_col, closed); }
+    }
+}
+fn _cl_check_close(e: *Expr, closed: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.field != null && e.lhs.field.eq("close")
+       && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+        closed.insert(e.lhs.lhs.str_val, true);
+    }
+    if e.lhs != null { _cl_check_close(e.lhs, closed); }
+    if e.rhs != null { _cl_check_close(e.rhs, closed); }
+    if e.operand != null { _cl_check_close(e.operand, closed); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _cl_check_close(&a, closed);
+        }
+    }
+}
+
+// ---------- leak-on-early-return -----------------------------------------
+// `let x = make(); … x?; defer x.free();` — the `?` propagation fires
+// before the defer registers, leaking x on the error path. The fix is
+// to register the defer *immediately* after the binding.
+pub fn analysis_leak_on_early_return(t: *Typer, program: *Vector<Stmt>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "leak-on-early-return") {
+            t.current_origin = s.origin;
+            _ler_check_fn(t, s.fn_body);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || _has_allow(&m, "leak-on-early-return") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
+                _ler_check_fn(t, m.fn_body);
+            }
+        }
+    }
+}
+fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
+    // First pass: find every defer x.free() and remember the stmt index.
+    let defer_idx: *HashMap<int> = HashMap::new();    // name -> idx of defer
+    let alloc_idx: *HashMap<int> = HashMap::new();    // name -> idx of let
+    let alloc_line: *HashMap<int> = HashMap::new();   // name -> source line of defer
+    let alloc_col: *HashMap<int> = HashMap::new();
+    let returning: *Vector<int> = Vector::new();      // idx of ?/return stmts
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_LET && s.name != null && s.let_value != null
+           && _ler_is_allocating_call(s.let_value) {
+            alloc_idx.insert(s.name, i);
+        }
+        if s.kind == ST_DEFER && s.expr_value != null {
+            // Three shapes count as "this defer releases x":
+            //   defer x.free()              — method call
+            //   defer free(x as *void)      — raw free of a pointer
+            //   defer __glide_palloc_free(x)
+            let nm: string = _ler_defer_target(s.expr_value);
+            if !nm.eq("") {
+                defer_idx.insert(nm, i);
+                alloc_line.insert(nm, s.line);
+                alloc_col.insert(nm, s.column);
+            }
+        }
+        if _ler_has_early_exit(&s) { returning.push(i); }
+    }
+    let names: *Vector<string> = defer_idx.keys();
+    for let i: int = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if !alloc_idx.contains(nm) { continue; }
+        let a: int = alloc_idx.get(nm);
+        let d: int = defer_idx.get(nm);
+        if d <= a + 1 { continue; }  // defer placed right after alloc — safe
+        for let k: int = 0; k < returning.len(); k++ {
+            let r: int = returning.get(k);
+            if r > a && r < d {
+                t.warn(alloc_line.get(nm), alloc_col.get(nm), "leak-on-early-return",
+                    "`defer ".concat(nm).concat(".free()` is registered after an early exit on line — move it right after `let ").concat(nm).concat(" = …;` so the cleanup also fires on the error path"));
+                break;
+            }
+        }
+    }
+    defer_idx.free(); alloc_idx.free();
+    alloc_line.free(); alloc_col.free();
+}
+fn _ler_defer_target(e: *Expr) -> string {
+    if e == null { return ""; }
+    // x.free()
+    let mc: string = _uaf_free_target(e);
+    if !mc.eq("") { return mc; }
+    // free(x as *void) / __glide_palloc_free(x)
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && (e.lhs.str_val.eq("free") || e.lhs.str_val.eq("__glide_palloc_free"))
+       && e.args != null && e.args.len() == 1 {
+        let arg: Expr = e.args.get(0);
+        let mut probe: *Expr = &arg;
+        while probe != null && probe.kind == EX_CAST { probe = probe.lhs; }
+        if probe != null && probe.kind == EX_IDENT { return probe.str_val; }
+    }
+    return "";
+}
+fn _ler_is_allocating_call(e: *Expr) -> bool {
+    if e == null { return false; }
+    // Peel cast wrappers: `malloc(n) as *T`, common at every alloc site.
+    let mut p: *Expr = e;
+    while p != null && p.kind == EX_CAST { p = p.lhs; }
+    if p == null { return false; }
+    if p.kind == EX_CALL && p.lhs != null && p.lhs.kind == EX_IDENT {
+        let n: string = p.lhs.str_val;
+        if n.eq("malloc") || n.eq("__glide_palloc_make") { return true; }
+    }
+    if p.kind == EX_CALL && p.lhs != null && p.lhs.kind == EX_MEMBER
+       && p.lhs.field != null && p.lhs.field.eq("new") { return true; }
+    return false;
+}
+fn _ler_has_early_exit(s: *Stmt) -> bool {
+    if s == null { return false; }
+    if s.kind == ST_RETURN { return true; }
+    if s.expr_value != null && _ler_expr_has_try(s.expr_value) { return true; }
+    if s.let_value != null && _ler_expr_has_try(s.let_value) { return true; }
+    return false;
+}
+fn _ler_expr_has_try(e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_UNARY && e.op_code == UN_TRY { return true; }
+    if e.lhs != null && _ler_expr_has_try(e.lhs) { return true; }
+    if e.rhs != null && _ler_expr_has_try(e.rhs) { return true; }
+    if e.operand != null && _ler_expr_has_try(e.operand) { return true; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if _ler_expr_has_try(&a) { return true; }
+        }
+    }
+    return false;
 }
 
 // ---- Main loop ---------------------------------------------------------
