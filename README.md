@@ -152,6 +152,35 @@ Bundled with the compiler:
 - Tree-sitter grammar in `glide-grammar/`; Zed extension in
   `zed-extension/`; VS Code extension in `vscode-extension/`.
 
+### Lints
+
+`glide lint <file>` (and the LSP) run a suite of bug-prevention checks
+beyond plain type-checking. Each fires with a code that `@allow(...)`
+on the enclosing fn or impl method can silence locally; `glide lint
+--lint-as-error` promotes them to errors for CI.
+
+| Code | Catches |
+| --- | --- |
+| `null-deref` | Dereferencing a name provably bound to `null` (let, branch flow, or via a callee whose param is dereferenced without guard). |
+| `bad-free` | `free()` on a Glide `string`, `*Vector<T>`, or `*HashMap<V>` — all are arena-managed or have a `.free()` destructor. |
+| `string-eq-op` | `==` / `!=` between two strings — compares pointers, not bytes. Use `.eq()`. |
+| `unused-import` | `import X::{a, b};` where neither name is referenced in the file. |
+| `arena-set` | `__glide_palloc_set(make())` without a paired restore in the same scope. |
+| `coro-blocking` | `spawn fn()` reaches a known-blocking helper (sync fs/process/http). Use `spawn_thread` or the async variant. |
+| `unhandled-result` | Bare-stmt call to a fn returning `!T` whose error is discarded. Method calls are resolved by receiver type so overloads (`Conn.write -> int` vs `TcpStream.write -> !int`) are distinguished. |
+| `ignored-option` | `.val` access on a `?T` without a preceding `is_some()` / `.has` guard. |
+| `use-after-free` | Reading a name after `.free()` was called on it in the same scope. |
+| `mutex-unbalanced` | `.lock()` still held at any exit (return, `?` propagation, break/continue, fall-off-end) without a matching `.unlock()` or `defer x.unlock();`. |
+| `chan-leak` | Channel declared but missing `close()` on at least one exit path. Receivers in `while let v = c.recv()` would hang there. |
+| `leak-on-early-return` | `defer x.free()` placed after a `?` propagation that can fire before the defer registers. |
+
+Plus the existing `unused-var`, `unused-param`, `unused-fn`,
+`unnecessary-mut`, `arena-not-freed`, `addr-of-temporary`,
+`dead-code`, `missing-return`, `large-return`, `trait-conformance`,
+`deprecated-fn`, `unstable-fn` from the original lint pass, and the
+user-defined `@lint("category", "reason")` mechanism for per-project
+warnings.
+
 ## install
 
 Per-user install — no admin rights needed.
@@ -227,6 +256,7 @@ glide fmt <file> [--write]
 glide test [path]
 glide test --golden <dir>
 glide bench [path]
+glide lint <file> [--lint-as-error] [--json]
 glide doc [--open] [--serve[=<port>]] [--ai]
 glide add <name> <git-url> <rev>
 glide add --local <name> <path>
