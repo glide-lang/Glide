@@ -41,6 +41,59 @@ import json;
 import fmt;
 import manifest;     // for project-aware completion (Manifest, dep_cache_dir, …)
 
+// LSP diagnostic log. Opens (truncate) on lsp_main entry and redirects
+// stderr there so SIGSEGV traps from the runtime land in the same
+// stream — gives the user one file (`~/.glide/lsp.log`) to share when
+// the editor's server-output panel is empty after a crash.
+extern fn __glide_lsp_log_open(path: string);
+extern fn __glide_lsp_log(msg: string);
+
+c_raw! {
+    #include <stdio.h>
+    #include <time.h>
+    static FILE* __glide_lsp_log_fp = NULL;
+    void __glide_lsp_log_open(const char* path) {
+        if (path == NULL || !*path) return;
+        __glide_lsp_log_fp = fopen(path, "w");
+        if (!__glide_lsp_log_fp) return;
+        setvbuf(__glide_lsp_log_fp, NULL, _IONBF, 0);   /* unbuffered: crash-time data survives */
+        /* Redirect stderr into the log so SIGSEGV handlers (and any
+           rogue fprintf(stderr, ...)) end up in the same place. */
+        int fd = fileno(__glide_lsp_log_fp);
+        if (fd >= 0) {
+            fflush(stderr);
+            dup2(fd, fileno(stderr));
+        }
+    }
+    void __glide_lsp_log(const char* msg) {
+        if (__glide_lsp_log_fp == NULL || msg == NULL) return;
+        time_t t = time(NULL);
+        struct tm* lt = localtime(&t);
+        if (lt) {
+            fprintf(__glide_lsp_log_fp, "[%02d:%02d:%02d] %s\n",
+                lt->tm_hour, lt->tm_min, lt->tm_sec, msg);
+        } else {
+            fprintf(__glide_lsp_log_fp, "%s\n", msg);
+        }
+    }
+}
+
+fn _lsp_log(msg: string) { __glide_lsp_log(msg); }
+
+// `~/.glide/lsp.log` on POSIX, `%USERPROFILE%\.glide\lsp.log` on Windows.
+// Falls back to TMP if the home dir lookup fails.
+fn _lsp_log_path() -> string {
+    let up: string = __glide_getenv("USERPROFILE");
+    if !up.eq("") { return up.concat("/.glide/lsp.log"); }
+    let h: string = __glide_getenv("HOME");
+    if !h.eq("") { return h.concat("/.glide/lsp.log"); }
+    let tmp: string = __glide_getenv("TMP");
+    if !tmp.eq("") { return tmp.concat("/glide-lsp.log"); }
+    return "glide-lsp.log";
+}
+
+extern fn __glide_getenv(name: string) -> string;
+
 // FFI to runtime helpers (defined in codegen runtime emit / stdlib::os c_raw).
 extern fn read_file(path: string) -> string;
 extern fn __glide_read_line() -> string;
@@ -631,6 +684,7 @@ fn stmt_lower_free_children(s: *Stmt) {
 }
 
 fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
+    _lsp_log("  analyze enter: ".concat(uri));
     // Save the request-scoped arena (set by lsp_main for the duration
     // of this dispatch); we restore it at the end so any post-pipeline
     // handler scratch keeps flowing into the request arena and gets
@@ -670,6 +724,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // leaking a fresh copy of the deny/allow lists per keystroke.
     let mroot: string = find_manifest_root(_lsp_parent_dir(path));
     if !mroot.eq("") && !mroot.eq(state.lint_applied_root) {
+        _lsp_log("    manifest lint apply: ".concat(mroot));
         _lsp_apply_manifest_lint(mroot);
         // Save the root on libc heap so the next-doc-arena reset
         // doesn't invalidate the cache key.
@@ -677,6 +732,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
         __glide_palloc_set(null);
         state.lint_applied_root = _strdup_libc(mroot);
         __glide_palloc_set(prev);
+        _lsp_log("    manifest lint applied");
     }
     let stmts: *Vector<Stmt> = Vector::new();
     let loaded: *HashMap<bool> = HashMap::new();
@@ -3718,6 +3774,7 @@ fn handle_code_action(req: *JsonValue, state: *LspState) {
 
     let out: *JsonValue = json_array();
     let n: int = _json_arr_len(diags);
+    _lsp_log("  codeAction: ".concat(int_to_str(n)).concat(" diags"));
     if n == 0 {
         lsp_send_response(id, out);
         return;
@@ -5436,13 +5493,27 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
 
 pub fn lsp_main() -> int {
     __glide_set_binary_io();
+    // Open ~/.glide/lsp.log (truncate per session) and redirect
+    // stderr there so the SIGSEGV trap handler's stack trace
+    // lands in the same file editors can't easily surface.
+    let log_path: string = _lsp_log_path();
+    __glide_lsp_log_open(log_path);
+    _lsp_log("--- lsp boot ---");
+    _lsp_log(GLIDE_VERSION);
     let state: *LspState = lsp_state_new();
     while true {
         let raw: string = lsp_read_message();
-        if raw.eq("") { break; }
+        if raw.eq("") {
+            _lsp_log("read_message: EOF — exiting");
+            break;
+        }
         let req: *JsonValue = json_parse(raw);
         let mut should_exit: bool = false;
         if req != null {
+            let method_v: *JsonValue = json_get(req, "method");
+            let mid: *JsonValue = json_get(req, "id");
+            let method_s: string = json_as_string(method_v);
+            _lsp_log("> ".concat(method_s).concat(" id=").concat(int_to_str(json_as_int(mid))));
             // Per-request arena. Every Vector / HashMap / __glide_palloc
             // call inside the handler — completion's `seen` map, hover's
             // `uses` Vector, all the concat'd item labels and signatures,
@@ -5455,6 +5526,7 @@ pub fn lsp_main() -> int {
             let req_arena_initial: *void = __glide_palloc_make();
             __glide_palloc_set(req_arena_initial);
             should_exit = lsp_dispatch(req, state);
+            _lsp_log("< done ".concat(method_s));
             // Read the final head — when dispatch grows the arena past
             // the initial chunk, palloc_chunk prepends new ones so the
             // free has to start from the latest head, not the make()
@@ -5472,6 +5544,7 @@ pub fn lsp_main() -> int {
         c_raw! { if (raw  !=  NULL) free((char*)(raw )); }
         if should_exit { break; }
     }
+    _lsp_log("--- lsp shutdown ---");
     return 0;
 }
 
