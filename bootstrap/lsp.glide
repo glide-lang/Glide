@@ -4487,10 +4487,14 @@ fn check_unused_params_fn(t: *Typer, fnstmt: *Stmt) {
         }
         if !used {
             t.current_origin = fnstmt.origin;
-            // Param positions aren't tracked individually yet; aim at the fn
-            // name (close enough that the editor still surfaces the warning
-            // on the right declaration).
-            t.warn_unused_range(fnstmt.name_line, fnstmt.name_col, fnstmt.name_len, "unused-param",
+            // Aim at the param identifier itself so the editor squiggle
+            // and `glide fix` land on the right token. Falls back to
+            // the fn name if the parser didn't fill in a position
+            // (e.g. synthesized params).
+            let mut pl: int = p.name_line;
+            let mut pc: int = p.name_col;
+            if pl == 0 { pl = fnstmt.name_line; pc = fnstmt.name_col; }
+            t.warn_unused_range(pl, pc, p.name.len(), "unused-param",
                 "parameter `".concat(p.name).concat("` of `")
                 .concat(fnstmt.name).concat("` is never used (prefix with `_` to silence)"));
         }
@@ -4705,25 +4709,65 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
     _collect_expectations(program, pending);
     if pending.len() == 0 { pending.free(); return; }
 
-    // Phase 1: walk t.diagnostics; for each @expect, try to match a
-    // warning at the same origin + line + code. Matches are added to
-    // `consumed` so we can rebuild the diagnostics list without them.
-    let consumed: *HashMap<bool> = HashMap::new();   // key: idx of consumed diag
+    // Build two structures from `pending`:
+    //   - stmt-local entries (pe_line == pe_end_line) get indexed by
+    //     `origin|line|code` for O(1) lookup
+    //   - fn-scope entries (pe_line < pe_end_line) stay in a flat list
+    //     because each diagnostic has to range-check against them
+    let index: *HashMap<string> = HashMap::new();
+    let ranged: *Vector<int> = Vector::new();
     for let i: int = 0; i < pending.len(); i++ {
-        let mut pe: ExpectPending = pending.get(i);
-        for let j: int = 0; j < t.diagnostics.len(); j++ {
-            let idx_key: string = int_to_str(j);
-            if consumed.contains(idx_key) { continue; }
-            let d: DiagEntry = t.diagnostics.get(j);
-            if d.severity != 2 { continue; }                 // only warnings
-            if !d.code.eq(pe.pe_code) { continue; }
-            if !d.origin.eq(pe.pe_origin) { continue; }
-            if d.line != pe.pe_line { continue; }
-            consumed.insert(idx_key, true);
-            pe.pe_done = true;
-            pending.set(i, pe);
-            break;
+        let pe: ExpectPending = pending.get(i);
+        if pe.pe_line == pe.pe_end_line {
+            let key: string = _expect_key(pe.pe_origin, pe.pe_line, pe.pe_code);
+            let cur: string = if index.contains(key) { index.get(key) } else { "" };
+            index.insert(key, cur.concat(" ").concat(int_to_str(i)));
+        } else {
+            ranged.push(i);
         }
+    }
+
+    // Single sweep over diagnostics — try the precise index first,
+    // then fall back to range scan for fn-scope @expects.
+    let consumed: *HashMap<bool> = HashMap::new();
+    for let j: int = 0; j < t.diagnostics.len(); j++ {
+        let d: DiagEntry = t.diagnostics.get(j);
+        if d.severity != 2 { continue; }
+        let mut matched: bool = false;
+
+        let key: string = _expect_key(d.origin, d.line, d.code);
+        if index.contains(key) {
+            let bucket: string = index.get(key);
+            let toks: *Vector<string> = bucket.trim().split(" ");
+            for let k: int = 0; k < toks.len(); k++ {
+                let t_tok: string = toks.get(k);
+                if t_tok.eq("") { continue; }
+                let idx: int = _expect_str_to_int(t_tok);
+                let pe: ExpectPending = pending.get(idx);
+                if pe.pe_done { continue; }
+                let mut updated: ExpectPending = pe;
+                updated.pe_done = true;
+                pending.set(idx, updated);
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            for let k: int = 0; k < ranged.len(); k++ {
+                let idx: int = ranged.get(k);
+                let pe: ExpectPending = pending.get(idx);
+                if pe.pe_done { continue; }
+                if !pe.pe_origin.eq(d.origin) { continue; }
+                if !pe.pe_code.eq(d.code) { continue; }
+                if d.line < pe.pe_line || d.line > pe.pe_end_line { continue; }
+                let mut updated: ExpectPending = pe;
+                updated.pe_done = true;
+                pending.set(idx, updated);
+                matched = true;
+                break;
+            }
+        }
+        if matched { consumed.insert(int_to_str(j), true); }
     }
 
     // Phase 2: rebuild diagnostics list without consumed entries.
@@ -4751,9 +4795,30 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
     pending.free();
 }
 
+// Compact key for the @expect index. Three parts joined by `|` is
+// fine because none of them can contain `|` in legal source
+// (origins are file paths, codes are ident-like, lines are ints).
+fn _expect_key(origin: string, line: int, code: string) -> string {
+    return origin.concat("|").concat(int_to_str(line)).concat("|").concat(code);
+}
+
+// Local ASCII int parser. The lsp module doesn't import stdlib helpers
+// and parse_int_lexeme lives in the parser module — easier to inline a
+// 10-line function than thread an import.
+fn _expect_str_to_int(s: string) -> int {
+    let mut acc: int = 0;
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c < 48 || c > 57 { return acc; }
+        acc = acc * 10 + (c - 48);
+    }
+    return acc;
+}
+
 struct ExpectPending {
     pe_code: string,
-    pe_line: int,
+    pe_line: int,        // start of the matching range (inclusive)
+    pe_end_line: int,    // end of the matching range (inclusive); == pe_line for stmt-local
     pe_col: int,
     pe_origin: string,
     pe_done: bool,
@@ -4762,18 +4827,65 @@ struct ExpectPending {
 fn _collect_expectations(program: *Vector<Stmt>, out: *Vector<ExpectPending>) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        _gather_expects_in_stmt(&s, "", out);
+        // Fn-level `@expect("...")` covers the whole body — match
+        // anywhere from the fn's first line through the last stmt's
+        // line. Useful when the warning fires on a sub-expression
+        // and the user just wants to assert "somewhere in here".
         if s.kind == ST_FN && s.fn_body != null {
+            _gather_expects_in_fn(&s, s.fn_body, out);
             _gather_expects_in_body(s.fn_body, s.origin, out);
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body == null { continue; }
+                _gather_expects_in_fn(&m, m.fn_body, out);
                 _gather_expects_in_body(m.fn_body, m.origin, out);
             }
         }
     }
+}
+
+fn _gather_expects_in_fn(s: *Stmt, body: *Vector<Stmt>, out: *Vector<ExpectPending>) {
+    if s == null || s.attrs == null { return; }
+    let end_line: int = _max_line_in_body(body, s.line);
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("expect") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
+        let v: Expr = a.args.get(0);
+        if v.kind != EX_STRING { continue; }
+        let pe: ExpectPending = ExpectPending {
+            pe_code: v.str_val,
+            pe_line: s.line,
+            pe_end_line: end_line,
+            pe_col: s.column,
+            pe_origin: s.origin,
+            pe_done: false,
+        };
+        out.push(pe);
+    }
+}
+
+// Approximate the last line of a fn body — uses the highest `line`
+// field seen across nested stmts. Good enough for matching @expect
+// ranges; not source-precise but resilient to the parser not
+// tracking explicit end positions.
+fn _max_line_in_body(body: *Vector<Stmt>, fallback: int) -> int {
+    let mut best: int = fallback;
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.line > best { best = s.line; }
+        if s.then_body != null {
+            let sub: int = _max_line_in_body(s.then_body, best);
+            if sub > best { best = sub; }
+        }
+        if s.else_body != null {
+            let sub: int = _max_line_in_body(s.else_body, best);
+            if sub > best { best = sub; }
+        }
+    }
+    return best;
 }
 
 fn _gather_expects_in_body(body: *Vector<Stmt>, origin: string, out: *Vector<ExpectPending>) {
@@ -4796,6 +4908,7 @@ fn _gather_expects_in_stmt(s: *Stmt, origin: string, out: *Vector<ExpectPending>
         let pe: ExpectPending = ExpectPending {
             pe_code: v.str_val,
             pe_line: s.line,
+            pe_end_line: s.line,    // stmt-local: single line
             pe_col: s.column,
             pe_origin: origin,
             pe_done: false,

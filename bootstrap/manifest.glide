@@ -166,11 +166,63 @@ fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
         if name.eq("version") && val.kind == EX_STRING { m.version = val.str_val; }
         if name.eq("bin")     && val.kind == EX_STRING { m.bin = val.str_val; }
         if name.eq("deps") { collect_deps(m.deps, &val); }
-        // `lint: Lint { deny: vec_of("..."), allow: vec_of("...") }`
-        // — both sub-fields are optional. Other shapes are ignored
-        // so the manifest grammar stays small.
-        if name.eq("lint") && val.kind == EX_STRUCT_LIT { _collect_lint_cfg(m, &val); }
+        if name.eq("lint") {
+            // Two surface forms:
+            //   lint: "strict"                            — preset shortcut
+            //   lint: Lint { deny: …, allow: … }          — explicit
+            // Future presets land in `_apply_lint_preset`.
+            if val.kind == EX_STRING { _apply_lint_preset(m, val.str_val); }
+            else if val.kind == EX_STRUCT_LIT {
+                _collect_lint_cfg(m, &val);
+                // Inside the struct, `preset: "strict"` is also
+                // accepted so users can combine a preset with extra
+                // bespoke entries.
+                _maybe_apply_struct_preset(m, &val);
+            }
+        }
     }
+}
+
+fn _maybe_apply_struct_preset(m: *Manifest, v: *Expr) {
+    if v.field_names == null || v.args == null { return; }
+    for let i: int = 0; i < v.field_names.len(); i++ {
+        let fname: string = v.field_names.get(i);
+        let fval: Expr = v.args.get(i);
+        if fname.eq("preset") && fval.kind == EX_STRING {
+            _apply_lint_preset(m, fval.str_val);
+        }
+    }
+}
+
+// Expand a preset name into its `deny` / `allow` set.
+//   "strict" — deprecated + unstable + alloc + unused + every custom
+//              lint:* — anything user code should fix before shipping.
+//   "ci"     — same as strict but adds `all`, promoting every warning
+//              to an error so build-pipelines stay clean.
+//   "lib"    — deprecated / unstable only; tolerates the unused-*
+//              family so utility libraries don't churn on
+//              not-yet-imported helpers.
+fn _apply_lint_preset(m: *Manifest, name: string) {
+    if name.eq("strict") {
+        m.lint_deny.push("deprecated-fn");
+        m.lint_deny.push("unstable-fn");
+        m.lint_deny.push("alloc");
+        m.lint_deny.push("unused");
+        m.lint_deny.push("lint:*");
+        return;
+    }
+    if name.eq("ci") {
+        m.lint_deny.push("all");
+        return;
+    }
+    if name.eq("lib") {
+        m.lint_deny.push("deprecated-fn");
+        m.lint_deny.push("unstable-fn");
+        m.lint_allow.push("unused");
+        return;
+    }
+    // Unknown preset — silently ignore; the user can mix with
+    // explicit deny / allow lists in the same struct.
 }
 
 fn _collect_lint_cfg(m: *Manifest, v: *Expr) {

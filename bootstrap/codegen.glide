@@ -2193,7 +2193,7 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
             let pt: *Type = subst_type(p.ty, template.type_params, args);
             let resolved: *Type = resolve_assoc_recursive(g, pt);
             collect_result_in_type(g, resolved);
-            let np: Param = Param { name: p.name, ty: resolved };
+            let np: Param = Param { name: p.name, ty: resolved, name_line: p.name_line, name_col: p.name_col };
             ps.push(np);
         }
         synth.fn_params = ps;
@@ -5509,7 +5509,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
                 let p: Param = template.fn_params.get(i);
                 let pt: *Type = subst_type(p.ty, template.type_params, e.args);
                 pt = resolve_assoc_recursive(g, pt);
-                let np: Param = Param { name: p.name, ty: pt };
+                let np: Param = Param { name: p.name, ty: pt, name_line: p.name_line, name_col: p.name_col };
                 new_params_v.push(np);
             }
         }

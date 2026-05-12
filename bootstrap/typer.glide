@@ -42,6 +42,11 @@ pub fn merge_parse_diags(t: *Typer, pdiags: *Vector<ParseDiag>) {
             message: d.msg,
             origin: d.origin,
             tag: 0,
+            fix_line: 0,
+            fix_col: 0,
+            fix_end_line: 0,
+            fix_end_col: 0,
+            fix_replacement: "",
         };
         t.diagnostics.push(e);
     }
@@ -186,6 +191,17 @@ pub struct DiagEntry {
     pub message: string,
     pub origin: string,      // source file path (set from t.current_origin)
     pub tag: int,            // 0 = none, 1 = Unnecessary (faded), 2 = Deprecated (struck-through)
+    // Optional mechanical fix. `fix_replacement` is the text to splice
+    // in over the range `(fix_line, fix_col)..(fix_end_line, fix_end_col)`.
+    // Zero-width range (start == end) is an insertion. Empty
+    // replacement on a non-zero range is a deletion. Empty
+    // replacement on a zero-width range means the diagnostic has no
+    // mechanical fix and `glide fix` skips it.
+    pub fix_line: int,
+    pub fix_col: int,
+    pub fix_end_line: int,
+    pub fix_end_col: int,
+    pub fix_replacement: string,
 }
 
 pub struct Typer {
@@ -344,6 +360,9 @@ impl Typer {
             severity: severity, code: code, message: msg,
             origin: origin,
             tag: tag,
+            fix_line: 0, fix_col: 0,
+            fix_end_line: 0, fix_end_col: 0,
+            fix_replacement: "",
         };
         self.diagnostics.push(e);
     }
@@ -370,6 +389,33 @@ impl Typer {
             severity: 2, code: code, message: msg,
             origin: origin,
             tag: 1,
+            fix_line: 0, fix_col: 0,
+            fix_end_line: 0, fix_end_col: 0,
+            fix_replacement: "",
+        };
+        self.diagnostics.push(e);
+    }
+
+    // Emit a warning with an attached mechanical fix. `glide fix`
+    // reads the (fix_line, fix_col)..(fix_end_line, fix_end_col)
+    // range and replaces it with `replacement`. Pass a zero-width
+    // range to insert; an empty replacement to delete.
+    fn warn_with_fix(self: *Typer, line: int, col: int, end_len: int,
+                     code: string, msg: string,
+                     fl: int, fc: int, fel: int, fec: int, repl: string) {
+        let mut origin: string = self.current_origin;
+        if origin == null { origin = ""; }
+        let mut e_len: int = end_len;
+        if e_len < 1 { e_len = 1; }
+        let e: DiagEntry = DiagEntry {
+            line: line, col: col,
+            end_line: line, end_col: col + e_len,
+            severity: 2, code: code, message: msg,
+            origin: origin,
+            tag: 1,
+            fix_line: fl, fix_col: fc,
+            fix_end_line: fel, fix_end_col: fec,
+            fix_replacement: repl,
         };
         self.diagnostics.push(e);
     }
@@ -395,6 +441,9 @@ impl Typer {
             severity: 1, code: code, message: msg,
             origin: origin,
             tag: 0,
+            fix_line: 0, fix_col: 0,
+            fix_end_line: 0, fix_end_col: 0,
+            fix_replacement: "",
         };
         self.diagnostics.push(e);
         self.error_count = self.error_count + 1;

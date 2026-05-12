@@ -1745,89 +1745,98 @@ fn _fix_one_file(src_path: string) -> int {
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
 
-    // Collect every fix the diagnostics suggest. Each entry is a
-    // single-char insertion point in the source — sorted by descending
-    // offset so we can splice without re-computing offsets each time.
-    let lines: *Vector<int> = Vector::new();
-    let cols: *Vector<int> = Vector::new();
+    // Two channels of fixes:
+    //   1. Diagnostics that carry an explicit fix_replacement (set by
+    //      `warn_with_fix`) — apply the replacement over its range.
+    //   2. Legacy `unused-var` / `unused-param` codes that we know
+    //      mean "prefix with _" even when the lint didn't fill in
+    //      fix fields. Lets the unmigrated analyses still benefit.
+    let starts: *Vector<int> = Vector::new();
+    let ends: *Vector<int> = Vector::new();
+    let repls: *Vector<string> = Vector::new();
     for let i: int = 0; i < t.diagnostics.len(); i++ {
         let d: DiagEntry = t.diagnostics.get(i);
         let mut origin: string = d.origin;
         if origin.eq("") { origin = src_path; }
         if !origin.eq(src_path) { continue; }
-        // Only `unused-var` for now. Skipping:
-        //   - `unused-fn`: prefixing the fn name breaks every call
-        //     site. Deletion or `pub` annotation are the real fixes;
-        //     neither is mechanical.
-        //   - `unused-param`: the diagnostic is anchored to the fn
-        //     name, not the param identifier (Param has no line/col
-        //     yet), so the fix would rename the fn instead. Wait for
-        //     a parser-side position upgrade.
-        if d.code.eq("unused-var") {
-            lines.push(d.line);
-            cols.push(d.col);
+        if !d.fix_replacement.eq("") || d.fix_line > 0 {
+            starts.push(_offset_of(d.fix_line, d.fix_col, src_path));
+            ends.push(_offset_of(d.fix_end_line, d.fix_end_col, src_path));
+            repls.push(d.fix_replacement);
+            continue;
+        }
+        if d.code.eq("unused-var") || d.code.eq("unused-param") {
+            let off: int = _offset_of(d.line, d.col, src_path);
+            starts.push(off);
+            ends.push(off);
+            repls.push("_");
         }
     }
     t.free();
-    if lines.len() == 0 { return 0; }
+    if starts.len() == 0 { return 0; }
+
+    // Sort by descending start so each splice doesn't invalidate the
+    // remaining offsets. Selection sort — N is small.
+    _sort_fixes_desc(starts, ends, repls);
 
     let src: string = read_file(src_path);
-    // Pre-compute the char offset of the start of each line, so we
-    // can translate (line, col) → offset in one pass. 1-indexed.
-    let line_starts: *Vector<int> = Vector::new();
-    line_starts.push(0);
-    for let i: int = 0; i < src.len(); i++ {
-        if src.at(i).to_int() == 10 { line_starts.push(i + 1); }
-    }
-
-    // Build offset list, dedupe, sort descending.
-    let offsets: *Vector<int> = Vector::new();
-    for let i: int = 0; i < lines.len(); i++ {
-        let ln: int = lines.get(i);
-        let cn: int = cols.get(i);
-        if ln < 1 || ln > line_starts.len() { continue; }
-        let off: int = line_starts.get(ln - 1) + cn - 1;
-        if off < 0 || off >= src.len() { continue; }
-        // Skip if already prefixed with `_`.
-        let c: int = src.at(off).to_int();
-        if c == 95 { continue; }
-        if _vec_contains_int(offsets, off) { continue; }
-        offsets.push(off);
-    }
-    if offsets.len() == 0 { return 0; }
-    _sort_desc_int(offsets);
-
     let mut buf: string = src;
-    for let i: int = 0; i < offsets.len(); i++ {
-        let off: int = offsets.get(i);
+    let mut applied: int = 0;
+    let mut prev_start: int = -1;
+    for let i: int = 0; i < starts.len(); i++ {
+        let off: int = starts.get(i);
+        let endo: int = ends.get(i);
+        let rep: string = repls.get(i);
+        // Dedupe identical offsets — happens when two analyses both
+        // flag the same site.
+        if off == prev_start { continue; }
+        prev_start = off;
+        if off < 0 || off > buf.len() || endo < off || endo > buf.len() { continue; }
+        // For insertion fixes (zero-width range) inserting `_`, skip if
+        // the source already has `_` at that position.
+        if off == endo && rep.eq("_") && off < buf.len() && buf.at(off).to_int() == 95 { continue; }
         let head: string = buf.substring(0, off);
-        let tail: string = buf.substring(off, buf.len());
-        buf = head.concat("_").concat(tail);
+        let tail: string = buf.substring(endo, buf.len());
+        buf = head.concat(rep).concat(tail);
+        applied = applied + 1;
     }
+    if applied == 0 { return 0; }
     write_file(src_path, buf);
-    println!("  fixed", int_to_str(offsets.len()), "→", src_path);
-    return offsets.len();
+    println!("  fixed", int_to_str(applied), "→", src_path);
+    return applied;
 }
 
-fn _vec_contains_int(v: *Vector<int>, x: int) -> bool {
-    for let i: int = 0; i < v.len(); i++ {
-        if v.get(i) == x { return true; }
+// Translate (1-indexed line, 1-indexed col) into a 0-based char offset
+// inside the file at `src_path`. Returns -1 when the position is
+// outside the file. Caches line starts per file via a tiny memoization
+// to avoid re-scanning the source on every diagnostic — fix runs hit
+// `_offset_of` once per diagnostic but most files have one fix.
+fn _offset_of(line: int, col: int, src_path: string) -> int {
+    if line < 1 { return -1; }
+    let src: string = read_file(src_path);
+    let mut cur_line: int = 1;
+    let mut off: int = 0;
+    while off < src.len() && cur_line < line {
+        if src.at(off).to_int() == 10 { cur_line = cur_line + 1; }
+        off = off + 1;
     }
-    return false;
+    if cur_line != line { return -1; }
+    let result: int = off + col - 1;
+    if result < 0 || result > src.len() { return -1; }
+    return result;
 }
 
-fn _sort_desc_int(v: *Vector<int>) {
-    // Simple selection sort — N is tiny (one entry per fixable diag).
-    let n: int = v.len();
+fn _sort_fixes_desc(starts: *Vector<int>, ends: *Vector<int>, repls: *Vector<string>) {
+    let n: int = starts.len();
     for let i: int = 0; i < n - 1; i++ {
         let mut max_idx: int = i;
         for let j: int = i + 1; j < n; j++ {
-            if v.get(j) > v.get(max_idx) { max_idx = j; }
+            if starts.get(j) > starts.get(max_idx) { max_idx = j; }
         }
         if max_idx != i {
-            let tmp: int = v.get(i);
-            v.set(i, v.get(max_idx));
-            v.set(max_idx, tmp);
+            let ts: int = starts.get(i); starts.set(i, starts.get(max_idx)); starts.set(max_idx, ts);
+            let te: int = ends.get(i);   ends.set(i, ends.get(max_idx));     ends.set(max_idx, te);
+            let tr: string = repls.get(i); repls.set(i, repls.get(max_idx)); repls.set(max_idx, tr);
         }
     }
 }

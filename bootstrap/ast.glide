@@ -214,6 +214,12 @@ pub struct SelectArm {
 pub struct Param {
     pub name: string,
     pub ty: *Type,
+    // Source position of the param's name identifier. Filled by the
+    // parser; analyses use it to anchor diagnostics at the right
+    // token (e.g. unused-param points at `y`, not at the fn name)
+    // and `glide fix` reuses it to splice in `_` prefixes.
+    pub name_line: int,
+    pub name_col: int,
 }
 
 pub struct Field {

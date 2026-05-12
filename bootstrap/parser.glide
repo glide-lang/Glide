@@ -390,10 +390,12 @@ fn parse_fn(p: *Parser) -> *Stmt {
             variadic = true;
             break;
         }
+        let pn_line: int = p.current.line;
+        let pn_col: int = p.current.column;
         let pname: string = p.expect_ident();
         p.expect_op(":");
         let pty: *Type = parse_type(p);
-        let prm: Param = Param { name: pname, ty: pty };
+        let prm: Param = Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col };
         params.push(prm);
         if !p.eat_op(",") { break; }
     }
@@ -597,7 +599,7 @@ fn parse_trait(p: *Parser) -> *Stmt {
             let aname: string = p.expect_ident();
             p.expect_op(";");
             let no_ty: *Type = null;
-            assocs.push(Param { name: aname, ty: no_ty });
+            assocs.push(Param { name: aname, ty: no_ty, name_line: 0, name_col: 0 });
             continue;
         }
         if p.at_kw("fn") {
@@ -696,7 +698,7 @@ fn parse_impl(p: *Parser) -> *Stmt {
             p.expect_op("=");
             let aty: *Type = parse_type(p);
             p.expect_op(";");
-            assocs.push(Param { name: aname, ty: aty });
+            assocs.push(Param { name: aname, ty: aty, name_line: 0, name_col: 0 });
             continue;
         }
         if p.at_kw("fn") {
@@ -2036,10 +2038,12 @@ fn parse_prefix(p: *Parser) -> *Expr {
             p.expect_op("(");
             let params: *Vector<Param> = Vector::new();
             while !p.at_op(")") && !p.at_eof() {
+                let pn_line: int = p.current.line;
+                let pn_col: int = p.current.column;
                 let pname: string = p.expect_ident();
                 p.expect_op(":");
                 let pty: *Type = parse_type(p);
-                params.push(Param { name: pname, ty: pty });
+                params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col });
                 if !p.eat_op(",") { break; }
             }
             p.expect_op(")");
@@ -2057,10 +2061,12 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 p.expect_op("(");
                 let params: *Vector<Param> = Vector::new();
                 while !p.at_op(")") && !p.at_eof() {
+                    let pn_line: int = p.current.line;
+                    let pn_col: int = p.current.column;
                     let pname: string = p.expect_ident();
                     p.expect_op(":");
                     let pty: *Type = parse_type(p);
-                    params.push(Param { name: pname, ty: pty });
+                    params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col });
                     if !p.eat_op(",") { break; }
                 }
                 p.expect_op(")");
