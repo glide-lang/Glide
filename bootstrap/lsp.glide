@@ -487,6 +487,13 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string) {
 // Rebuild `state.project_index` if the doc at `uri` belongs to a Glide
 // project we haven't indexed yet. No-op when there's no `glide.glide`
 // above the file, or when we already indexed this project.
+//
+// Critical: the index OUTLIVES the request that triggered its build,
+// so we switch the active arena to null before the build and all
+// allocations (Vector, strings, ImportableSym entries) land on libc
+// heap. Otherwise the request-scoped arena gets freed at end of
+// dispatch and `state.project_index` dangles until the next access
+// crashes the LSP.
 fn _refresh_project_index(state: *LspState, uri: string) {
     let path: string = uri_to_path(uri);
     if path.eq("") { return; }
@@ -494,11 +501,13 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     let root: string = find_manifest_root(dir);
     if root.eq("") { return; }
     if state.project_root.eq(root) { return; }
-    state.project_root = root;
-    // Rebuild from scratch.
+
+    let prev_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+
+    state.project_root = root.concat("");   // libc-heap copy
     let fresh: *Vector<ImportableSym> = Vector::new();
     state.project_index = fresh;
-    // Project's own modules under `<root>/src/`.
     let src_dir: string = root.concat("/src");
     if __glide_file_exists(src_dir) {
         let proj_name: string = _project_namespace(root);
@@ -508,18 +517,21 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     // the cache slot. Indexing covers both because dep_cache_dir picks
     // the right one already.
     let m: *Manifest = read_manifest(root);
-    if m == null { return; }
-    for let i: int = 0; i < m.deps.len(); i++ {
-        let d: ManifestDep = m.deps.get(i);
-        let dep_root: string = dep_cache_dir(m, d);
-        if dep_root.eq("") || !__glide_file_exists(dep_root) { continue; }
-        let dep_src: string = dep_root.concat("/src");
-        if __glide_file_exists(dep_src) {
-            _index_stdlib_subtree(state, dep_src, d.name);
-        } else {
-            _index_stdlib_subtree(state, dep_root, d.name);
+    if m != null {
+        for let i: int = 0; i < m.deps.len(); i++ {
+            let d: ManifestDep = m.deps.get(i);
+            let dep_root: string = dep_cache_dir(m, d);
+            if dep_root.eq("") || !__glide_file_exists(dep_root) { continue; }
+            let dep_src: string = dep_root.concat("/src");
+            if __glide_file_exists(dep_src) {
+                _index_stdlib_subtree(state, dep_src, d.name);
+            } else {
+                _index_stdlib_subtree(state, dep_root, d.name);
+            }
         }
     }
+
+    __glide_palloc_set(prev_arena);
 }
 
 // Read the `name` field from `<root>/glide.glide` so the project's
@@ -3362,22 +3374,44 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     _lsp_log("  completion: top-level loop start");
     if doc.stmts != null {
         for let i: int = 0; i < doc.stmts.len(); i++ {
-            if (i % 50) == 0 { _lsp_log("  completion: top i=".concat(int_to_str(i))); }
+            if i >= 295 { _lsp_log("  completion: top i=".concat(int_to_str(i))); }
             let s: Stmt = doc.stmts.get(i);
+            if i >= 295 {
+                _lsp_log("  completion: got, kind=".concat(int_to_str(s.kind)));
+                let nm_ok: bool = s.name != null;
+                _lsp_log("  completion: name?=".concat(if nm_ok { "set" } else { "null" }));
+                if nm_ok {
+                    let l: int = s.name.len();
+                    _lsp_log("  completion: name len=".concat(int_to_str(l)));
+                    if l > 0 && l < 256 { _lsp_log("  completion: name='".concat(s.name).concat("'")); }
+                }
+                let or_ok: bool = s.origin != null;
+                _lsp_log("  completion: origin?=".concat(if or_ok { "set" } else { "null" }));
+                if or_ok {
+                    let ol: int = s.origin.len();
+                    _lsp_log("  completion: origin len=".concat(int_to_str(ol)));
+                    if ol > 0 && ol < 512 { _lsp_log("  completion: origin='".concat(s.origin).concat("'")); }
+                }
+            }
             if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
                && s.kind != ST_CONST && s.kind != ST_MACRO_DEF { continue; }
+            if i >= 295 { _lsp_log("  top: passed kind filter"); }
             // Static macros are inserted as `name!` to get the bang for free.
             let mut label: string = s.name;
             if s.kind == ST_MACRO_DEF { label = s.name.concat("!"); }
             if seen.contains(label) { continue; }
             seen.insert(label, true);
+            if i >= 295 { _lsp_log("  top: building sig"); }
             let mut sig: string = "";
             let mut label_extra: string = "";
             let mut snip: string = label;
             let mut has_snip: bool = false;
             if s.kind == ST_FN {
+                if i >= 295 { _lsp_log("  top: fn_signature"); }
                 sig = fn_signature(&s);
+                if i >= 295 { _lsp_log("  top: fn_label_extra"); }
                 label_extra = fn_label_extra(&s);
+                if i >= 295 { _lsp_log("  top: fn_snippet"); }
                 snip = fn_snippet(&s);
                 has_snip = true;
             }
@@ -3388,6 +3422,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 if s.let_ty != null { sig = sig.concat(": ").concat(type_to_string_pretty(s.let_ty)); }
             }
             else if s.kind == ST_MACRO_DEF { sig = macro_signature(&s); }
+            if i >= 295 { _lsp_log("  top: module/docc"); }
             let mut module: string = "";
             if s.origin != null { module = pretty_module(s.origin); }
             let mut docc: string = "";
@@ -3397,6 +3432,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             // Builtins / own-doc decls always pass null.
             let mut decl_edit: *JsonValue = null;
             if module.len() >= 8 && module.substring(0, 8).eq("stdlib::") {
+                if i >= 295 { _lsp_log("  top: build_import_edit"); }
                 let mut existing: *ImportInfo = null;
                 if imps2.contains(module) {
                     let info_val: ImportInfo = imps2.get(module);
@@ -3405,14 +3441,17 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 }
                 decl_edit = build_import_edit(label, module, existing, insert_line2, false);
             }
+            if i >= 295 { _lsp_log("  top: rich_completion_item"); }
             let item: *JsonValue = rich_completion_item(
                 label, label_extra, ci_kind_for(&s),
                 sig, docc, module, snip, has_snip,
                 decl_edit);
+            if i >= 295 { _lsp_log("  top: json_arr_push"); }
             json_arr_push(items, item);
         }
     }
 
+    _lsp_log("  completion: stage 2b (builtin macros)");
     // 2b. Builtin macros.
     let builtins: *Vector<string> = Vector::new();
     builtins.push("println!"); builtins.push("print!"); builtins.push("format!");
@@ -3426,6 +3465,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         else if bn.eq("format!") { bdetail = "format!(\"fmt\", args...) — formatted string"; }
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
+    _lsp_log("  completion: stage 3 (auto-import)");
 
     // 3. Auto-import suggestions: surface every `pub` symbol from
     // src/stdlib/ that the user hasn't imported yet. Each item carries
@@ -3478,8 +3518,15 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
                      insert_line: int, items: *JsonValue,
                      seen: *HashMap<bool>) {
     let n: int = idx.len();
+    _lsp_log("    emit_index: n=".concat(int_to_str(n)));
     for let i: int = 0; i < n; i++ {
+        if (i % 100) == 0 { _lsp_log("    emit_index: i=".concat(int_to_str(i))); }
         let sym: ImportableSym = idx.get(i);
+        let nm_ok: bool = sym.name != null;
+        if !nm_ok {
+            _lsp_log("    emit_index: i=".concat(int_to_str(i)).concat(" name=null SKIP"));
+            continue;
+        }
         if seen.contains(sym.name) { continue; }
         seen.insert(sym.name, true);
         let mut existing: *ImportInfo = null;
@@ -3497,6 +3544,7 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
             sym.snippet, sym.has_snippet, edit);
         json_arr_push(items, item);
     }
+    _lsp_log("    emit_index: done");
 }
 
 // Walks the program collecting every usage of `name` as an identifier.
