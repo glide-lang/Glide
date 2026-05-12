@@ -2728,18 +2728,18 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "labelDetails", ld);
     }
 
-    // detail: `<signature>    <module>` so editors that render
-    // detail as a single dim line in the completion dropdown (Zed,
-    // some Neovim setups) still surface the source package. LSP 3.17
-    // clients ALSO get the module via labelDetails.description above
-    // — they'll show both, but the description field is the canonical
-    // right-aligned slot for gopls / rust-analyzer style.
-    // Tail format uses two trailing spaces so the module reads as a
-    // separate chunk from the signature on editors that wrap.
+    // detail: `<signature>   [<module>]`. Editors that render detail
+    // as a single dim line in the completion dropdown (Zed, parts of
+    // Neovim) can't paint slices of a string in different colors, so
+    // we wrap the module in brackets — the universal "this is a
+    // metadata tag, not part of the signature" cue. LSP 3.17 clients
+    // ALSO get the module via labelDetails.description above for the
+    // rust-analyzer / gopls right-aligned layout.
     let mut det: string = signature;
     if !module.eq("") {
-        if det.eq("") { det = module; }
-        else { det = det.concat("  ").concat(module); }
+        let tag: string = "[".concat(module).concat("]");
+        if det.eq("") { det = tag; }
+        else { det = det.concat("   ").concat(tag); }
     }
     if !det.eq("") { json_obj_set(it, "detail", json_string(det)); }
 
