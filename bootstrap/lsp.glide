@@ -2728,17 +2728,15 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "labelDetails", ld);
     }
 
-    // detail: `<module> — <signature>`. LSP 3.17 clients ALSO get the
-    // module right-aligned via labelDetails.description (gopls layout),
-    // but most editors only render `detail` next to the label — so we
-    // duplicate it there. Format: `stdlib::http — fn http_listen(port: int, …)`.
-    let mut det: string = "";
-    if !module.eq("") { det = module; }
-    if !signature.eq("") {
-        if det.eq("") { det = signature; }
-        else { det = det.concat(" — ").concat(signature); }
-    }
-    if !det.eq("") { json_obj_set(it, "detail", json_string(det)); }
+    // detail: full one-line signature only. The module is carried
+    // separately in labelDetails.description above so 3.17-aware
+    // clients render it dimmed / right-aligned (the gopls + rust-
+    // analyzer layout). Keeping it OUT of detail avoids the editor
+    // painting it in its normal foreground color next to the
+    // signature, which is the wrong visual weight for a package hint.
+    // For older clients the module still appears at the bottom of the
+    // documentation popup ("From `stdlib::math`") so nothing is lost.
+    if !signature.eq("") { json_obj_set(it, "detail", json_string(signature)); }
 
     // filterText: makes the item discoverable from a wider range of
     // queries. Several editors (Zed, VS Code at lower setting) use a
