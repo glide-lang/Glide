@@ -1169,6 +1169,15 @@ pub struct CG {
     // Before this existed, a const-typed string in `println!` codegen'd
     // as `%p` (printf'd a pointer) instead of `%s`.
     pub consts: *HashMap<Type>,
+    // Source mapping for crash traces. `current_origin` is the Glide
+    // source file currently being emitted (set per-fn / per-impl).
+    // `last_line_dir` + `last_origin_dir` track the latest emitted
+    // `#line N "file"` directive so we only emit one when the
+    // (file, line) pair actually changes — avoids ballooning the C
+    // output with a directive per stmt when many stmts share a line.
+    pub current_origin: string,
+    pub last_line_dir: int,
+    pub last_origin_dir: string,
 }
 
 impl CG {
@@ -1228,7 +1237,41 @@ impl CG {
         g.traits = trts;
         let cs: *HashMap<Type> = HashMap::new();
         g.consts = cs;
+        g.current_origin = "";
+        g.last_line_dir = 0;
+        g.last_origin_dir = "";
         return g;
+    }
+
+    // Emit `#line <line> "<file>"` so the resulting DWARF / debug info
+    // points at the Glide source instead of the generated C. We only
+    // emit when (file, line) changed from the previous directive, and
+    // we forward-slash the path so the C preprocessor accepts it on
+    // Windows without escape headaches.
+    fn emit_line_dir(self: *CG, line: int, origin: string) {
+        if line <= 0 { return; }
+        let path: string;
+        if origin == null || origin.eq("") { path = self.current_origin; }
+        else { path = origin; }
+        if path == null || path.eq("") { return; }
+        if line == self.last_line_dir && path.eq(self.last_origin_dir) { return; }
+        // Normalize backslashes to forward-slashes for C string-literal
+        // safety. We don't escape quotes — Glide source paths don't
+        // legally contain `"`.
+        let n: int = path.len();
+        let mut norm: string = "";
+        for let i: int = 0; i < n; i++ {
+            if path.at(i).to_int() == 92 { norm = norm.concat("/"); }
+            else { norm = norm.concat(path.substring(i, i + 1)); }
+        }
+        // println!() inserts a space between each printf arg — that
+        // would break the directive ('#line  4  " ".../foo.glide  "').
+        // Build the whole line as one string and emit it via a single
+        // printf arg.
+        let dir: string = "#line ".concat(line.to_string()).concat(" \"").concat(norm).concat("\"");
+        println!(dir);
+        self.last_line_dir = line;
+        self.last_origin_dir = path;
     }
 
     // Flush err-only deferred cleanups (LIFO). Called from ST_RETURN when
@@ -3598,6 +3641,7 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: int) {
 
 pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
     if s == null { return; }
+    g.emit_line_dir(s.line, s.origin);
     if s.kind == ST_LET || s.kind == ST_CONST {
         // Auto-drop modes:
         //   struct_lit_auto: `let p: *T = T { ... }` rewrites RHS to malloc+init.
@@ -4600,6 +4644,13 @@ fn infer_let_types_in_program(g: *CG, program: *Vector<Stmt>) {
 
 fn emit_fn(g: *CG, s: *Stmt) {
     let is_main: bool = s.name.eq("main");
+    // Track this fn's source origin so emit_stmt's `#line` directives
+    // resolve against the right Glide file. The signature line itself
+    // is emitted first (no directive yet) so a stack frame pointing
+    // at the fn-entry shows the fn's declared line, not its caller.
+    let saved_origin: string = g.current_origin;
+    if s.origin != null && !s.origin.eq("") { g.current_origin = s.origin; }
+    g.emit_line_dir(s.line, g.current_origin);
     if is_main {
         // The user's main is renamed to __glide_user_main; a real C `main`
         // wrapper at the end of this fn handles arg init, scheduler bring-up
@@ -4649,6 +4700,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.err_defer_stack = saved_err_defer;
     g.auto_drop_stack = saved_drop;
     g.current_ret_ty = saved_ret;
+    g.current_origin = saved_origin;
     println!("}");
 
     // Real C `main` wrapper: runs scheduler init/shutdown around the user's
@@ -4663,6 +4715,8 @@ fn emit_fn(g: *CG, s: *Stmt) {
 
 fn emit_impl(g: *CG, s: *Stmt) {
     if s.impl_methods == null { return; }
+    let saved_origin: string = g.current_origin;
+    if s.origin != null && !s.origin.eq("") { g.current_origin = s.origin; }
     let mut prefix: string = "X";
     if s.impl_target != null && s.impl_target.kind == TY_NAMED {
         prefix = s.impl_target.name;
@@ -4680,6 +4734,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         let m: Stmt = s.impl_methods.get(i);
         // Mangle method name: Type_method.
         let mangled: string = prefix.concat("_").concat(m.name);
+        g.emit_line_dir(m.line, g.current_origin);
         // Emit a fn with mangled name.
         let mut saved_name: string = m.name;
         // We can't mutate the Stmt easily here; emit signature inline then body.
@@ -4729,6 +4784,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         println!("}");
         println!("");
     }
+    g.current_origin = saved_origin;
 }
 
 // Emit forward declarations for an `impl T { ... }` block's methods. Same
@@ -5523,6 +5579,13 @@ pub fn emit_program(program: *Vector<Stmt>) {
                 if nb != null { new_body.push(*nb); }
             }
         }
+        // Source mapping for the mono: inherits the template's origin
+        // + signature line so crash traces point at the generic fn.
+        let saved_origin: string = g.current_origin;
+        if template.origin != null && !template.origin.eq("") {
+            g.current_origin = template.origin;
+        }
+        g.emit_line_dir(template.line, g.current_origin);
         // Emit the specialized fn.
         print!(type_to_c(new_ret), " ", mangled, "(");
         if new_params_v.len() == 0 {
@@ -5556,6 +5619,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         g.current_ret_ty = saved_ret_mono;
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
+        g.current_origin = saved_origin;
         println!("}");
         println!("");
     }
