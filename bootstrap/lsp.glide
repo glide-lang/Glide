@@ -125,6 +125,11 @@ pub struct LspState {
     // palloc_get would then return null and we'd never free the
     // arena's many MB of pipeline allocations.
     pub last_arena: *void,
+    // Last manifest root we applied lint config from. Cached so we
+    // don't reparse the manifest + reset the global deny/allow on
+    // every keystroke (the lists also live on libc heap, so
+    // re-applying would leak the previous instance).
+    pub lint_applied_root: string,
 }
 
 pub fn lsp_state_new() -> *LspState {
@@ -140,6 +145,7 @@ pub fn lsp_state_new() -> *LspState {
     let pc: *HashMap<*Vector<Stmt>> = HashMap::new();
     s.parse_cache = pc;
     s.last_arena = null;
+    s.lint_applied_root = "";
     populate_stdlib_index(s);
     return s;
 }
@@ -658,9 +664,20 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     let path: string = uri_to_path(uri);
     // Pick up the project's lint config (`lint.deny` / `lint.allow` /
     // preset) so the editor surfaces the same warnings + promotions
-    // the CLI does. Re-applied on every dispatch — manifest edits
-    // take effect after the next save without restarting the LSP.
-    _lsp_apply_manifest_lint(_lsp_parent_dir(path));
+    // the CLI does. Cached by manifest root: applied once per project,
+    // then short-circuited on subsequent calls. Restart the LSP after
+    // editing the manifest for changes to take effect — avoids
+    // leaking a fresh copy of the deny/allow lists per keystroke.
+    let mroot: string = find_manifest_root(_lsp_parent_dir(path));
+    if !mroot.eq("") && !mroot.eq(state.lint_applied_root) {
+        _lsp_apply_manifest_lint(mroot);
+        // Save the root on libc heap so the next-doc-arena reset
+        // doesn't invalidate the cache key.
+        let prev: *void = __glide_palloc_get();
+        __glide_palloc_set(null);
+        state.lint_applied_root = _strdup_libc(mroot);
+        __glide_palloc_set(prev);
+    }
     let stmts: *Vector<Stmt> = Vector::new();
     let loaded: *HashMap<bool> = HashMap::new();
 
@@ -3714,36 +3731,60 @@ fn handle_code_action(req: *JsonValue, state: *LspState) {
         let new_text: string = json_as_string(json_get(fix, "newText"));
         let fr: *JsonValue = json_get(fix, "range");
         if fr == null { continue; }
+
+        // Pull positions out as ints + rebuild fresh JsonValue trees
+        // for the response. We can't share JsonValue subtrees with
+        // the incoming request: lsp_send_response calls json_free on
+        // the whole reply, which would walk into the shared Vector
+        // pointers and clobber memory the request handler still
+        // tries to free on dispatch teardown.
+        let fr_start: *JsonValue = json_get(fr, "start");
+        let fr_end:   *JsonValue = json_get(fr, "end");
+        let sl: int = json_as_int(json_get(fr_start, "line"));
+        let sc: int = json_as_int(json_get(fr_start, "character"));
+        let el: int = json_as_int(json_get(fr_end,   "line"));
+        let ec: int = json_as_int(json_get(fr_end,   "character"));
+
         let code: string = json_as_string(json_get(d, "code"));
-        let msg: string = json_as_string(json_get(d, "message"));
 
         let action: *JsonValue = json_object();
         let title: string = _code_action_title(code, new_text);
         json_obj_set(action, "title", json_string(title));
         json_obj_set(action, "kind", json_string("quickfix"));
 
-        // Mark the action as fixing the original diagnostic so editors
-        // can dim or auto-clear it after applying.
-        let dlist: *JsonValue = json_array();
-        json_arr_push(dlist, d);
-        json_obj_set(action, "diagnostics", dlist);
-
         // Build the WorkspaceEdit { changes: { uri: [TextEdit] } }
+        // with a freshly-allocated range so we don't alias the
+        // request's JsonValues.
         let edit: *JsonValue = json_object();
         let changes: *JsonValue = json_object();
         let edits: *JsonValue = json_array();
         let te: *JsonValue = json_object();
-        json_obj_set(te, "range", fr);
+        let r: *JsonValue = json_object();
+        let s_obj: *JsonValue = json_object();
+        let e_obj: *JsonValue = json_object();
+        json_obj_set(s_obj, "line", json_int(sl));
+        json_obj_set(s_obj, "character", json_int(sc));
+        json_obj_set(e_obj, "line", json_int(el));
+        json_obj_set(e_obj, "character", json_int(ec));
+        json_obj_set(r, "start", s_obj);
+        json_obj_set(r, "end", e_obj);
+        json_obj_set(te, "range", r);
         json_obj_set(te, "newText", json_string(new_text));
         json_arr_push(edits, te);
         json_obj_set(changes, uri, edits);
         json_obj_set(edit, "changes", changes);
         json_obj_set(action, "edit", edit);
-
-        // Silence the "msg is unused" warning — kept in scope for
-        // future use (e.g. enriching the title with the diag message).
-        let _msg_used: string = msg;
         json_arr_push(out, action);
+
+        // Free the wrappers we allocated via json_get / json_at for
+        // the incoming data; their inner Vectors are owned by the
+        // request and stay alive until lsp_main's outer free.
+        free(d as *void);
+        free(data as *void);
+        free(fix as *void);
+        free(fr as *void);
+        if fr_start != null { free(fr_start as *void); }
+        if fr_end != null { free(fr_end as *void); }
     }
     lsp_send_response(id, out);
 }
@@ -3948,24 +3989,58 @@ fn _lsp_parent_dir(path: string) -> string {
 
 // Wire the project's `lint.deny` / `lint.allow` from the nearest
 // `glide.glide` into the process-wide globals. Idempotent.
+//
+// Critical: the Vector / string entries we stash in the deny / allow
+// globals OUTLIVE the doc arena. If we let them allocate in the
+// active arena (set just before this fn runs), the very next
+// reanalysis frees the doc arena and the global pointers turn into
+// dangling references, crashing on the next read. Switch the active
+// arena to null (libc heap) around the construction so the data
+// survives across reanalyses. Per-invocation strings inside the
+// manifest parse still land in the doc arena and are freed cleanly.
 fn _lsp_apply_manifest_lint(start_dir: string) {
     let root: string = find_manifest_root(start_dir);
     if root.eq("") { return; }
     let m: *Manifest = read_manifest(root);
     if m == null { return; }
+
+    let prev_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+
     if m.lint_deny != null && m.lint_deny.len() > 0 {
         let p: *void = __glide_deny_get();
         let merged: *Vector<string> = Vector::new();
         if p != null {
             let existing: *Vector<string> = p as *Vector<string>;
-            for let i: int = 0; i < existing.len(); i++ { merged.push(existing.get(i)); }
+            for let i: int = 0; i < existing.len(); i++ {
+                let s: string = existing.get(i);
+                merged.push(_strdup_libc(s));
+            }
         }
-        for let i: int = 0; i < m.lint_deny.len(); i++ { merged.push(m.lint_deny.get(i)); }
+        for let i: int = 0; i < m.lint_deny.len(); i++ {
+            merged.push(_strdup_libc(m.lint_deny.get(i)));
+        }
         __glide_deny_set(merged as *void);
     }
     if m.lint_allow != null && m.lint_allow.len() > 0 {
-        __glide_proj_allow_set(m.lint_allow as *void);
+        let copy: *Vector<string> = Vector::new();
+        for let i: int = 0; i < m.lint_allow.len(); i++ {
+            copy.push(_strdup_libc(m.lint_allow.get(i)));
+        }
+        __glide_proj_allow_set(copy as *void);
     }
+
+    __glide_palloc_set(prev_arena);
+}
+
+// Copy `s` onto whatever arena is currently active. Used by
+// _lsp_apply_manifest_lint with active=null so the resulting string
+// lands on libc heap and outlives every doc-arena reset.
+fn _strdup_libc(s: string) -> string {
+    // `.substring(0, len)` allocates a fresh buffer rather than
+    // sharing the source pointer, which is what we want — `.concat("")`
+    // may short-circuit when the rhs is empty.
+    return s.substring(0, s.len());
 }
 
 fn _project_allow_matches(code: string) -> bool {
