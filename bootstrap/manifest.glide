@@ -40,6 +40,11 @@ pub struct Manifest {
     pub bin:      string,
     pub deps:     *Vector<ManifestDep>,
     pub root_dir: string,   // absolute or repo-relative dir holding glide.glide
+    // Optional lint config. `lint.deny` populates `--lint-as-error`
+    // for every build / lint / check inside the project; `lint.allow`
+    // becomes the project-wide silencing list. Empty when absent.
+    pub lint_deny:  *Vector<string>,
+    pub lint_allow: *Vector<string>,
 }
 
 extern fn __glide_file_exists(path: string) -> bool;
@@ -129,12 +134,16 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     // struct-field position still trips codegen's forward-decl for some
     // generic monomorphisations (see project_compiler_bugs.md).
     let deps_vec: *Vector<ManifestDep> = Vector::new();
+    let lint_deny_vec: *Vector<string> = Vector::new();
+    let lint_allow_vec: *Vector<string> = Vector::new();
     let m: *Manifest = __glide_palloc(sizeof(Manifest)) as *Manifest;
     m.name = "";
     m.version = "";
     m.bin = "src/main.glide";
     m.deps = deps_vec;
     m.root_dir = root_dir;
+    m.lint_deny = lint_deny_vec;
+    m.lint_allow = lint_allow_vec;
 
     for let i: int = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
@@ -157,6 +166,33 @@ fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
         if name.eq("version") && val.kind == EX_STRING { m.version = val.str_val; }
         if name.eq("bin")     && val.kind == EX_STRING { m.bin = val.str_val; }
         if name.eq("deps") { collect_deps(m.deps, &val); }
+        // `lint: Lint { deny: vec_of("..."), allow: vec_of("...") }`
+        // — both sub-fields are optional. Other shapes are ignored
+        // so the manifest grammar stays small.
+        if name.eq("lint") && val.kind == EX_STRUCT_LIT { _collect_lint_cfg(m, &val); }
+    }
+}
+
+fn _collect_lint_cfg(m: *Manifest, v: *Expr) {
+    if v == null || v.field_names == null || v.args == null { return; }
+    for let i: int = 0; i < v.field_names.len(); i++ {
+        let fname: string = v.field_names.get(i);
+        let fval: Expr = v.args.get(i);
+        if fname.eq("deny") { _collect_lint_strings(m.lint_deny, &fval); }
+        else if fname.eq("allow") { _collect_lint_strings(m.lint_allow, &fval); }
+    }
+}
+
+fn _collect_lint_strings(out: *Vector<string>, v: *Expr) {
+    if v == null { return; }
+    if v.kind == EX_CALL {
+        let callee: *Expr = v.lhs;
+        if callee != null && callee.kind == EX_IDENT && callee.str_val.eq("vec_of") {
+            for let i: int = 0; i < v.args.len(); i++ {
+                let a: Expr = v.args.get(i);
+                if a.kind == EX_STRING { out.push(a.str_val); }
+            }
+        }
     }
 }
 

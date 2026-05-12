@@ -768,6 +768,9 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_deprecated_calls(t, stmts);
     analysis_unstable_calls(t, stmts);
     analysis_custom_lints(t, stmts);
+    // Must run last — consumes diagnostics emitted by every other pass
+    // to decide whether each @expect was fulfilled.
+    analysis_expect_fulfillment(t, stmts);
 }
 
 // For each `impl Trait for Type { ... }` walk the trait's method names
@@ -3784,11 +3787,25 @@ fn _code_in_group(allow_token: string, code: string) -> bool {
     return false;
 }
 
-// Returns true when the enclosing item carries `@allow("<code>")` —
-// matched either verbatim or via the group / prefix logic above. Lets
-// users mark intentional patterns the heuristics don't recognise
-// without polluting the global warning stream.
+// Project-wide allow list (`lint.allow` from the manifest). Same
+// c_raw global as main.glide; we just need the getter here.
+extern fn __glide_proj_allow_get() -> *void;
+
+fn _project_allow_matches(code: string) -> bool {
+    let p: *void = __glide_proj_allow_get();
+    if p == null { return false; }
+    let v: *Vector<string> = p as *Vector<string>;
+    for let i: int = 0; i < v.len(); i++ {
+        if _code_in_group(v.get(i), code) { return true; }
+    }
+    return false;
+}
+
+// Returns true when either the enclosing item carries
+// `@allow("<code>")`, or the project's `lint.allow = [...]` covers it.
+// Matched either verbatim or via the group / prefix logic above.
 fn _has_allow(s: *Stmt, code: string) -> bool {
+    if _project_allow_matches(code) { return true; }
     if s == null || s.attrs == null { return false; }
     for let i: int = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
@@ -4674,6 +4691,117 @@ fn _lint_reason_for_cat(s: *Stmt, cat: string) -> string {
         return "";
     }
     return null;
+}
+
+// Walk the diagnostic stream against every `@expect("<code>")`
+// attribute in the program. Each `@expect` is either fulfilled (we
+// remove the matching warning so it doesn't pollute the output) or
+// unfulfilled (we emit a `unfulfilled-expectation` error pointing at
+// the annotation). Useful for self-tests of the lint passes — you
+// write the offending pattern, slap `@expect` on it, and the test
+// only fails when the lint stops working.
+pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
+    let pending: *Vector<ExpectPending> = Vector::new();
+    _collect_expectations(program, pending);
+    if pending.len() == 0 { pending.free(); return; }
+
+    // Phase 1: walk t.diagnostics; for each @expect, try to match a
+    // warning at the same origin + line + code. Matches are added to
+    // `consumed` so we can rebuild the diagnostics list without them.
+    let consumed: *HashMap<bool> = HashMap::new();   // key: idx of consumed diag
+    for let i: int = 0; i < pending.len(); i++ {
+        let mut pe: ExpectPending = pending.get(i);
+        for let j: int = 0; j < t.diagnostics.len(); j++ {
+            let idx_key: string = int_to_str(j);
+            if consumed.contains(idx_key) { continue; }
+            let d: DiagEntry = t.diagnostics.get(j);
+            if d.severity != 2 { continue; }                 // only warnings
+            if !d.code.eq(pe.pe_code) { continue; }
+            if !d.origin.eq(pe.pe_origin) { continue; }
+            if d.line != pe.pe_line { continue; }
+            consumed.insert(idx_key, true);
+            pe.pe_done = true;
+            pending.set(i, pe);
+            break;
+        }
+    }
+
+    // Phase 2: rebuild diagnostics list without consumed entries.
+    if consumed.len() > 0 {
+        let kept: *Vector<DiagEntry> = Vector::new();
+        for let i: int = 0; i < t.diagnostics.len(); i++ {
+            let key: string = int_to_str(i);
+            if consumed.contains(key) { continue; }
+            kept.push(t.diagnostics.get(i));
+        }
+        t.diagnostics = kept;
+    }
+
+    // Phase 3: emit `unfulfilled-expectation` errors for the
+    // expectations no diagnostic satisfied.
+    for let i: int = 0; i < pending.len(); i++ {
+        let pe: ExpectPending = pending.get(i);
+        if pe.pe_done { continue; }
+        t.current_origin = pe.pe_origin;
+        t.err_code(pe.pe_line, pe.pe_col, "unfulfilled-expectation",
+            "@expect(\"".concat(pe.pe_code).concat("\") on this stmt did not match any emitted diagnostic"));
+    }
+
+    consumed.free();
+    pending.free();
+}
+
+struct ExpectPending {
+    pe_code: string,
+    pe_line: int,
+    pe_col: int,
+    pe_origin: string,
+    pe_done: bool,
+}
+
+fn _collect_expectations(program: *Vector<Stmt>, out: *Vector<ExpectPending>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        _gather_expects_in_stmt(&s, "", out);
+        if s.kind == ST_FN && s.fn_body != null {
+            _gather_expects_in_body(s.fn_body, s.origin, out);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null { continue; }
+                _gather_expects_in_body(m.fn_body, m.origin, out);
+            }
+        }
+    }
+}
+
+fn _gather_expects_in_body(body: *Vector<Stmt>, origin: string, out: *Vector<ExpectPending>) {
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _gather_expects_in_stmt(&s, origin, out);
+        if s.then_body != null { _gather_expects_in_body(s.then_body, origin, out); }
+        if s.else_body != null { _gather_expects_in_body(s.else_body, origin, out); }
+    }
+}
+
+fn _gather_expects_in_stmt(s: *Stmt, origin: string, out: *Vector<ExpectPending>) {
+    if s == null || s.attrs == null { return; }
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("expect") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
+        let v: Expr = a.args.get(0);
+        if v.kind != EX_STRING { continue; }
+        let pe: ExpectPending = ExpectPending {
+            pe_code: v.str_val,
+            pe_line: s.line,
+            pe_col: s.column,
+            pe_origin: origin,
+            pe_done: false,
+        };
+        out.push(pe);
+    }
 }
 
 // Variant of `_run_attr_call_lint` that takes a pre-built index +

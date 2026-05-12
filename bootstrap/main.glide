@@ -750,13 +750,21 @@ const GLIDE_VERSION: string = "0.1.0";
 // build / check runs. Lives in a c_raw global so the diagnostic
 // loops in `run_build_q` / `MODE_CHECK` / `glide lint` can consult
 // it without threading another param through every signature.
+// Project-wide allow list (from `glide.glide`'s `lint.allow`) lives
+// alongside, consulted by `_has_allow` in lsp.glide.
 extern fn __glide_deny_set(p: *void);
 extern fn __glide_deny_get() -> *void;
+extern fn __glide_proj_allow_set(p: *void);
+extern fn __glide_proj_allow_get() -> *void;
 
 c_raw! {
     static void* __glide_deny_g = (void*)0;
     static void __glide_deny_set(void* p) { __glide_deny_g = p; }
     static void* __glide_deny_get(void)   { return __glide_deny_g; }
+
+    static void* __glide_proj_allow_g = (void*)0;
+    static void __glide_proj_allow_set(void* p) { __glide_proj_allow_g = p; }
+    static void* __glide_proj_allow_get(void)   { return __glide_proj_allow_g; }
 }
 
 fn deny_codes() -> *Vector<string> {
@@ -767,6 +775,40 @@ fn deny_codes() -> *Vector<string> {
 
 fn set_deny_codes(v: *Vector<string>) {
     __glide_deny_set(v as *void);
+}
+
+fn set_project_allow(v: *Vector<string>) {
+    __glide_proj_allow_set(v as *void);
+}
+
+// Apply a manifest's lint config to the process-wide deny / allow
+// globals. Idempotent — re-applying with the same manifest is fine.
+fn apply_manifest_lint(m: *Manifest) {
+    if m == null { return; }
+    if m.lint_deny != null && m.lint_deny.len() > 0 {
+        let existing: *Vector<string> = deny_codes();
+        let merged: *Vector<string> = Vector::new();
+        if existing != null {
+            for let i: int = 0; i < existing.len(); i++ { merged.push(existing.get(i)); }
+        }
+        for let i: int = 0; i < m.lint_deny.len(); i++ { merged.push(m.lint_deny.get(i)); }
+        set_deny_codes(merged);
+    }
+    if m.lint_allow != null && m.lint_allow.len() > 0 {
+        set_project_allow(m.lint_allow);
+    }
+}
+
+// Best-effort: walk up from `start_dir` looking for a manifest; if
+// found and it carries a `lint` block, apply it. Used by build /
+// check / lint entry points so the project's lint policy is picked
+// up automatically without each command rewiring it.
+fn apply_lint_for(start_dir: string) {
+    let root: string = find_manifest_root(start_dir);
+    if root.eq("") { return; }
+    let m: *Manifest = read_manifest(root);
+    if m == null { return; }
+    apply_manifest_lint(m);
 }
 
 // True when a warning's diagnostic code matches any active
@@ -809,6 +851,21 @@ fn _code_matches_deny(token: string, code: string) -> bool {
     return false;
 }
 
+// True when the project's `lint.allow` (from `glide.glide`) covers a
+// diagnostic code. Used to drop suppressed warnings from the diag
+// stream at the emit-time loops, so manifest-wide silencing works
+// across every analysis — including the ones (unused-var, etc.) that
+// don't consult `_has_allow` on a per-item basis.
+fn _project_allow_drop(code: string) -> bool {
+    let p: *void = __glide_proj_allow_get();
+    if p == null { return false; }
+    let v: *Vector<string> = p as *Vector<string>;
+    for let i: int = 0; i < v.len(); i++ {
+        if _code_matches_deny(v.get(i), code) { return true; }
+    }
+    return false;
+}
+
 fn print_usage() {
     println!("Glide compiler");
     println!("usage:");
@@ -817,6 +874,7 @@ fn print_usage() {
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
     println!("  glide lint [file]          (run all lints; project bin by default)");
+    println!("  glide fix [file]           (apply mechanical fixes — unused-* prefix _)");
     println!("  glide fmt <file> [--write] (pretty-print to stdout, or rewrite in place)");
     println!("  glide new <name> [--lib] [--ai] [--no-vcs]");
     println!("  glide add <name> <git-url> <rev>");
@@ -1529,21 +1587,88 @@ fn _wants_json(argc: int) -> bool {
     return false;
 }
 
-// `glide lint <file>` — parse, type-check, run every extra analysis,
-// print every diagnostic from the user's file (plus imports when
-// `--all` is set), and exit 1 if anything fired. Honors
-// `--lint-as-error=<code>` to promote selected warnings into the
-// failing set; otherwise warnings are reported but the run still
-// exits 0 unless there are actual errors. `--json` emits a JSON
-// object per diagnostic on its own line for machine ingestion.
-fn run_lint(src_path: string, argc: int) -> int {
+// Counters returned by `_lint_one_file` so the directory walker can
+// aggregate per-file results into a single summary line.
+struct LintCounts {
+    errors: int,
+    warnings: int,
+    promoted: int,
+    parse_failed: bool,
+}
+
+// `glide lint <target>` — `target` is either a file or a directory.
+// File: run the analyses on it. Directory: walk every `.glide` under
+// it (using fs_list_rec, same helper `glide doc` uses) and aggregate
+// per-file counts. `--all` shows diagnostics from imported files;
+// `--json` emits one JSON object per diagnostic (no summary).
+// `--lint-as-error=<code>` promotes warnings into the failing set.
+fn run_lint(target: string, argc: int) -> int {
+    let json: bool = _wants_json(argc);
+    let mut want_all: bool = false;
+    for let k: int = 0; k < argc; k++ {
+        if args_at(k).eq("--all") { want_all = true; }
+    }
+
+    let mut files: *Vector<string> = Vector::new();
+    if fs_is_dir(target) {
+        files = fs_list_rec(target, ".glide");
+    } else {
+        files.push(target);
+    }
+    // Don't lint manifests — they're a literal `Package {…}` binding
+    // with no code worth surfacing diagnostics on.
+    let kept: *Vector<string> = Vector::new();
+    for let i: int = 0; i < files.len(); i++ {
+        let f: string = files.get(i);
+        if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") { continue; }
+        kept.push(f);
+    }
+
+    let mut total_errors: int = 0;
+    let mut total_warnings: int = 0;
+    let mut total_promoted: int = 0;
+    let mut bad_parses: int = 0;
+    for let i: int = 0; i < kept.len(); i++ {
+        let f: string = kept.get(i);
+        let r: LintCounts = _lint_one_file(f, want_all, json);
+        total_errors = total_errors + r.errors;
+        total_warnings = total_warnings + r.warnings;
+        total_promoted = total_promoted + r.promoted;
+        if r.parse_failed { bad_parses = bad_parses + 1; }
+    }
+
+    if !json {
+        println!("");
+        let mut summary: string = "lint: ".concat(int_to_str(total_errors)).concat(" error");
+        if total_errors != 1 { summary = summary.concat("s"); }
+        summary = summary.concat(", ").concat(int_to_str(total_warnings)).concat(" warning");
+        if total_warnings != 1 { summary = summary.concat("s"); }
+        if kept.len() > 1 {
+            summary = summary.concat(" across ").concat(int_to_str(kept.len())).concat(" files");
+        }
+        if total_promoted > 0 {
+            summary = summary.concat(" (").concat(int_to_str(total_promoted)).concat(" promoted via --lint-as-error)");
+        }
+        println!(summary);
+    }
+    if total_errors > 0 || total_promoted > 0 || bad_parses > 0 { return 1; }
+    return 0;
+}
+
+// Run the lint pipeline on a single file and return per-file counts.
+// Diagnostics are printed inline (or JSON-emitted) as they come, so
+// the caller doesn't need to re-serialise.
+fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
+    let mut r: LintCounts = LintCounts {
+        errors: 0, warnings: 0, promoted: 0, parse_failed: false,
+    };
+    apply_lint_for(parent_dir(src_path));
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
     if !parse_program_into(stmts, src_path, pdiags) {
-        // Parser already printed its diagnostics; bail.
-        return 1;
+        r.parse_failed = true;
+        return r;
     }
-
     let t: *Typer = Typer::new();
     merge_parse_diags(t, pdiags);
     build_visibility(t, stmts);
@@ -1551,15 +1676,7 @@ fn run_lint(src_path: string, argc: int) -> int {
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
 
-    let mut want_all: bool = false;
-    for let k: int = 0; k < argc; k++ {
-        if args_at(k).eq("--all") { want_all = true; }
-    }
-    let json: bool = _wants_json(argc);
     let src_text: string = read_file(src_path);
-    let mut errors: int = 0;
-    let mut warnings: int = 0;
-    let mut promoted: int = 0;
     let mut last_path: string = "";
     let mut last_snip: string = src_text;
     for let i: int = 0; i < t.diagnostics.len(); i++ {
@@ -1567,6 +1684,7 @@ fn run_lint(src_path: string, argc: int) -> int {
         let mut path: string = d.origin;
         if path.eq("") { path = src_path; }
         if !want_all && !path.eq(src_path) { continue; }
+        if d.severity == 2 && _project_allow_drop(d.code) { continue; }
         let promote: bool = d.severity == 2 && _is_lint_promoted(d.code);
         if json {
             println!(_diag_to_jsonl(&d, src_path));
@@ -1581,27 +1699,144 @@ fn run_lint(src_path: string, argc: int) -> int {
             }
             print_pretty_diag(d, snippet, path);
         }
-        if d.severity == 1 { errors = errors + 1; }
+        if d.severity == 1 { r.errors = r.errors + 1; }
         else if d.severity == 2 {
-            warnings = warnings + 1;
-            if promote { promoted = promoted + 1; }
+            r.warnings = r.warnings + 1;
+            if promote { r.promoted = r.promoted + 1; }
         }
     }
     t.free();
+    return r;
+}
 
-    if !json {
-        println!("");
-        let mut summary: string = "lint: ".concat(int_to_str(errors)).concat(" error");
-        if errors != 1 { summary = summary.concat("s"); }
-        summary = summary.concat(", ").concat(int_to_str(warnings)).concat(" warning");
-        if warnings != 1 { summary = summary.concat("s"); }
-        if promoted > 0 {
-            summary = summary.concat(" (").concat(int_to_str(promoted)).concat(" promoted via --lint-as-error)");
-        }
-        println!(summary);
+// `glide fix <target>` — apply mechanical auto-fixes inferred from
+// the lint stream. Currently handles `unused-{var,param,fn}` by
+// prefixing the named binding with `_`. Other repairs (removing
+// `mut`, inserting `defer free(...)`, etc.) need source-text token
+// scanning we haven't wired yet; they're a natural next iteration.
+fn run_fix(target: string) -> int {
+    let mut files: *Vector<string> = Vector::new();
+    if fs_is_dir(target) {
+        files = fs_list_rec(target, ".glide");
+    } else {
+        files.push(target);
     }
-    if errors > 0 || promoted > 0 { return 1; }
+    let mut total_changed: int = 0;
+    let mut total_edits: int = 0;
+    for let i: int = 0; i < files.len(); i++ {
+        let f: string = files.get(i);
+        if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") { continue; }
+        let n: int = _fix_one_file(f);
+        if n > 0 { total_changed = total_changed + 1; total_edits = total_edits + n; }
+    }
+    println!("fix:", int_to_str(total_edits), "edits across", int_to_str(total_changed), "files");
     return 0;
+}
+
+fn _fix_one_file(src_path: string) -> int {
+    apply_lint_for(parent_dir(src_path));
+    let stmts: *Vector<Stmt> = Vector::new();
+    let pdiags: *Vector<ParseDiag> = Vector::new();
+    if !parse_program_into(stmts, src_path, pdiags) { return 0; }
+    let t: *Typer = Typer::new();
+    merge_parse_diags(t, pdiags);
+    build_visibility(t, stmts);
+    t.enforce_visibility = true;
+    check_program(t, stmts);
+    run_extra_analyses(t, stmts);
+
+    // Collect every fix the diagnostics suggest. Each entry is a
+    // single-char insertion point in the source — sorted by descending
+    // offset so we can splice without re-computing offsets each time.
+    let lines: *Vector<int> = Vector::new();
+    let cols: *Vector<int> = Vector::new();
+    for let i: int = 0; i < t.diagnostics.len(); i++ {
+        let d: DiagEntry = t.diagnostics.get(i);
+        let mut origin: string = d.origin;
+        if origin.eq("") { origin = src_path; }
+        if !origin.eq(src_path) { continue; }
+        // Only `unused-var` for now. Skipping:
+        //   - `unused-fn`: prefixing the fn name breaks every call
+        //     site. Deletion or `pub` annotation are the real fixes;
+        //     neither is mechanical.
+        //   - `unused-param`: the diagnostic is anchored to the fn
+        //     name, not the param identifier (Param has no line/col
+        //     yet), so the fix would rename the fn instead. Wait for
+        //     a parser-side position upgrade.
+        if d.code.eq("unused-var") {
+            lines.push(d.line);
+            cols.push(d.col);
+        }
+    }
+    t.free();
+    if lines.len() == 0 { return 0; }
+
+    let src: string = read_file(src_path);
+    // Pre-compute the char offset of the start of each line, so we
+    // can translate (line, col) → offset in one pass. 1-indexed.
+    let line_starts: *Vector<int> = Vector::new();
+    line_starts.push(0);
+    for let i: int = 0; i < src.len(); i++ {
+        if src.at(i).to_int() == 10 { line_starts.push(i + 1); }
+    }
+
+    // Build offset list, dedupe, sort descending.
+    let offsets: *Vector<int> = Vector::new();
+    for let i: int = 0; i < lines.len(); i++ {
+        let ln: int = lines.get(i);
+        let cn: int = cols.get(i);
+        if ln < 1 || ln > line_starts.len() { continue; }
+        let off: int = line_starts.get(ln - 1) + cn - 1;
+        if off < 0 || off >= src.len() { continue; }
+        // Skip if already prefixed with `_`.
+        let c: int = src.at(off).to_int();
+        if c == 95 { continue; }
+        if _vec_contains_int(offsets, off) { continue; }
+        offsets.push(off);
+    }
+    if offsets.len() == 0 { return 0; }
+    _sort_desc_int(offsets);
+
+    let mut buf: string = src;
+    for let i: int = 0; i < offsets.len(); i++ {
+        let off: int = offsets.get(i);
+        let head: string = buf.substring(0, off);
+        let tail: string = buf.substring(off, buf.len());
+        buf = head.concat("_").concat(tail);
+    }
+    write_file(src_path, buf);
+    println!("  fixed", int_to_str(offsets.len()), "→", src_path);
+    return offsets.len();
+}
+
+fn _vec_contains_int(v: *Vector<int>, x: int) -> bool {
+    for let i: int = 0; i < v.len(); i++ {
+        if v.get(i) == x { return true; }
+    }
+    return false;
+}
+
+fn _sort_desc_int(v: *Vector<int>) {
+    // Simple selection sort — N is tiny (one entry per fixable diag).
+    let n: int = v.len();
+    for let i: int = 0; i < n - 1; i++ {
+        let mut max_idx: int = i;
+        for let j: int = i + 1; j < n; j++ {
+            if v.get(j) > v.get(max_idx) { max_idx = j; }
+        }
+        if max_idx != i {
+            let tmp: int = v.get(i);
+            v.set(i, v.get(max_idx));
+            v.set(max_idx, tmp);
+        }
+    }
+}
+
+// Plain ASCII suffix check, since stdlib::str is not in scope here.
+fn _ends_with_str(s: string, suffix: string) -> bool {
+    if s == null || suffix == null { return false; }
+    if suffix.len() > s.len() { return false; }
+    return s.substring(s.len() - suffix.len(), s.len()).eq(suffix);
 }
 
 // `glide clean` — wipe the per-project state. Doesn't touch the global
@@ -2133,6 +2368,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // 0. Auto-fetch missing git deps from the project's glide.glide
     //    before we start parsing anything. No-op when there's no manifest.
     auto_fetch_for(src_path);
+    apply_lint_for(parent_dir(src_path));
 
     if !quiet { spinner_start("parsing ".concat(src_path)); }
 
@@ -2160,6 +2396,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         let mut dpath: string = d.origin;
         if dpath.eq("") { dpath = src_path; }
         if !dpath.eq(src_path) { continue; }
+        // Drop warnings the project's `lint.allow` covers (manifest-wide).
+        if d.severity == 2 && _project_allow_drop(d.code) { continue; }
         // Promote warning → error when `--lint-as-error=<code>` matches.
         // We don't mutate the original entry (it stays in the typer's
         // diagnostic list at severity 2), but we count it against the
@@ -2735,6 +2973,34 @@ fn main() -> int {
         return run_clean();
     }
 
+    // `fix [file]` — apply mechanical auto-fixes for the lints that
+    // ship a known repair. Today: prefix `unused-{var,param,fn}` with
+    // `_`. Reads each file, splices in the underscores at the
+    // diagnostic positions, writes back. Edits are applied in reverse
+    // source order so earlier offsets stay valid.
+    if cmd.eq("fix") {
+        let mut target: string = "";
+        for let i: int = 2; i < argc; i++ {
+            let a: string = args_at(i);
+            if a.len() > 0 && a.at(0).to_int() == 45 { continue; }
+            target = a; break;
+        }
+        if target.eq("") {
+            let root: string = find_manifest_root(".");
+            if root.eq("") {
+                println!("no glide.glide found; pass a file to fix or run inside a project");
+                return 1;
+            }
+            let m: *Manifest = read_manifest(root);
+            if m == null || m.bin.eq("") {
+                println!("project has no `bin` to fix; pass a file explicitly");
+                return 1;
+            }
+            target = root.concat("/").concat(m.bin);
+        }
+        return run_fix(target);
+    }
+
     // `lint [file]` — run the lint analyses without producing an
     // artifact. Same diagnostic pipeline as `glide check`, but the
     // banner / exit policy is tuned for CI: `--lint-as-error=<code>`
@@ -2961,6 +3227,7 @@ fn main() -> int {
     if !parse_program_into(stmts, src_path, pdiags) { return 1; }
 
     if mode == MODE_CHECK {
+        apply_lint_for(parent_dir(src_path));
         let t: *Typer = Typer::new();
         merge_parse_diags(t, pdiags);
         build_visibility(t, stmts);
@@ -2979,6 +3246,7 @@ fn main() -> int {
             let mut path: string = d.origin;
             if path.eq("") { path = src_path; }
             if !want_all && !path.eq(src_path) { continue; }
+            if d.severity == 2 && _project_allow_drop(d.code) { continue; }
             let promoted: bool = d.severity == 2 && _is_lint_promoted(d.code);
             if json {
                 println!(_diag_to_jsonl(&d, src_path));
