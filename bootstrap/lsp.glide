@@ -2739,12 +2739,17 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "labelDetails", ld);
     }
 
-    // detail: full one-line signature only. The source module is carried
-    // separately in labelDetails.description so 3.17-aware clients render
-    // it right-aligned in muted color (the gopls layout). For older
-    // clients the module still appears at the bottom of the documentation
-    // popup ("From `stdlib::math`") so nothing is lost.
-    if !signature.eq("") { json_obj_set(it, "detail", json_string(signature)); }
+    // detail: `<module> — <signature>`. LSP 3.17 clients ALSO get the
+    // module right-aligned via labelDetails.description (gopls layout),
+    // but most editors only render `detail` next to the label — so we
+    // duplicate it there. Format: `stdlib::http — fn http_listen(port: int, …)`.
+    let mut det: string = "";
+    if !module.eq("") { det = module; }
+    if !signature.eq("") {
+        if det.eq("") { det = signature; }
+        else { det = det.concat(" — ").concat(signature); }
+    }
+    if !det.eq("") { json_obj_set(it, "detail", json_string(det)); }
 
     // filterText: makes the item discoverable from a wider range of
     // queries. Several editors (Zed, VS Code at lower setting) use a
@@ -2824,27 +2829,62 @@ fn ascii_to_lower(s: string) -> string {
 //   .../src/stdlib/math.glide   -> "stdlib::math"
 //   .../src/builtins/vector.glide -> "builtins::vector"
 //   anything else (the user's own file) -> ""
+// Convert an absolute source path into a Glide module path so the
+// editor can show "stdlib::http" / "stdlib::http::router" /
+// "builtins::vector" next to each completion item.
+//
+// Strategy:
+//   1. Normalise separators so the rest of the logic works on either
+//      `/` or `\` paths (Windows file:// URIs come with backslashes).
+//   2. Split into segments.
+//   3. Find the first "stdlib" or "builtins" segment from the right.
+//      Everything after it (joined by `::`, with `.glide` stripped
+//      from the last segment) is the module path.
+//   4. Fall back to "" for paths that aren't under either tree —
+//      the user's own files don't get a synthetic label (callers can
+//      decide whether to label them by project name separately).
 fn pretty_module(origin: string) -> string {
     if origin == null || origin.eq("") { return ""; }
-    let n: int = origin.len();
-    let norm: string = origin;
-    // Walk backwards finding the last two path components.
-    let mut last_sep: int = -1;
-    let mut prev_sep: int = -1;
-    for let i: int = n - 1; i >= 0; i-- {
-        let c: int = norm.at(i).to_int();
+    let parts: *Vector<string> = _split_path(origin);
+    if parts.len() < 2 { return ""; }
+    // Walk back to the last "stdlib" or "builtins" segment.
+    let mut anchor: int = -1;
+    let mut prefix: string = "";
+    for let i: int = parts.len() - 1; i >= 0; i-- {
+        let seg: string = parts.get(i);
+        if seg.eq("stdlib") { anchor = i; prefix = "stdlib"; break; }
+        if seg.eq("builtins") { anchor = i; prefix = "builtins"; break; }
+    }
+    if anchor < 0 { return ""; }
+    let mut out: string = prefix;
+    for let i: int = anchor + 1; i < parts.len(); i++ {
+        let mut seg: string = parts.get(i);
+        if i == parts.len() - 1 { seg = drop_glide_ext(seg); }
+        // Collapse `builtins::builtins` / `stdlib::stdlib` to the
+        // single root — the file at the root of the namespace
+        // shouldn't read like it lives in its own sub-module.
+        if i == parts.len() - 1 && seg.eq(prefix) { continue; }
+        out = out.concat("::").concat(seg);
+    }
+    return out;
+}
+
+// Path split that accepts both `/` and `\`. Empty segments (leading
+// slash, doubled separator) are dropped.
+fn _split_path(p: string) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    if p == null { return out; }
+    let n: int = p.len();
+    let mut start: int = 0;
+    for let i: int = 0; i < n; i++ {
+        let c: int = p.at(i).to_int();
         if c == 47 || c == 92 {
-            if last_sep < 0 { last_sep = i; }
-            else if prev_sep < 0 { prev_sep = i; break; }
+            if i > start { out.push(p.substring(start, i)); }
+            start = i + 1;
         }
     }
-    if last_sep < 0 || prev_sep < 0 { return ""; }
-    let parent: string = norm.substring(prev_sep + 1, last_sep);
-    let leaf: string = norm.substring(last_sep + 1, n);
-    let stem: string = drop_glide_ext(leaf);
-    if parent.eq("stdlib") { return "stdlib::".concat(stem); }
-    if parent.eq("builtins") { return "builtins::".concat(stem); }
-    return "";
+    if start < n { out.push(p.substring(start, n)); }
+    return out;
 }
 
 // Push completion items for every `pub` symbol whose module path matches
