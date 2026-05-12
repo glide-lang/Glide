@@ -6165,16 +6165,13 @@ pub fn analysis_unhandled_result(t: *Typer, program: *Vector<Stmt>) {
 fn _ur_collect_sigs(program: *Vector<Stmt>, ret_kinds: *HashMap<int>) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        // Only free fns are indexed — method overloads share names
+        // across impls (e.g. Conn.write -> int vs TcpStream.write ->
+        // !int), and we can't pick the right one without typer
+        // support. The call-site check only flags bare-name calls,
+        // so impl methods would never be looked up anyway.
         if s.kind == ST_FN && s.fn_ret_ty != null {
             ret_kinds.insert(s.name, s.fn_ret_ty.kind);
-        }
-        if s.kind == ST_IMPL && s.impl_methods != null {
-            for let j: int = 0; j < s.impl_methods.len(); j++ {
-                let m: Stmt = s.impl_methods.get(j);
-                if m.fn_ret_ty != null {
-                    ret_kinds.insert(m.name, m.fn_ret_ty.kind);
-                }
-            }
         }
     }
 }
@@ -6194,10 +6191,14 @@ fn _ur_check_call(t: *Typer, e: *Expr, ret_kinds: *HashMap<int>) {
     // `?` is enough — already propagating.
     if e.kind == EX_UNARY && e.op_code == UN_TRY { return; }
     if e.kind != EX_CALL { return; }
-    let fn_name: string = "";
-    if e.lhs != null && e.lhs.kind == EX_IDENT { fn_name = e.lhs.str_val; }
-    else if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null { fn_name = e.lhs.field; }
-    else { return; }
+    // Only handle bare fn calls (`foo(...)`). Method-style calls
+    // (`x.foo(...)`) need receiver-type resolution to pick the right
+    // overload — two fns named `write` can return different types
+    // (Conn.write -> int vs TcpStream.write -> !int), and without
+    // type-tracking we'd false-positive based on whichever fn was
+    // inserted last into the name map.
+    if e.lhs == null || e.lhs.kind != EX_IDENT { return; }
+    let fn_name: string = e.lhs.str_val;
     if !ret_kinds.contains(fn_name) { return; }
     let k: int = ret_kinds.get(fn_name);
     if k == TY_RESULT || k == TY_OPT_RESULT {
