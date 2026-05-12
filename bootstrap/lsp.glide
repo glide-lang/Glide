@@ -3199,16 +3199,29 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     let pos: *JsonValue = json_get(params, "position");
     let line0: int = json_as_int(json_get(pos, "line"));
     let col0: int = json_as_int(json_get(pos, "character"));
+    _lsp_log("  completion enter @".concat(int_to_str(line0)).concat(":").concat(int_to_str(col0)));
 
-    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
+    if !state.docs.contains(uri) {
+        _lsp_log("  completion: no doc for uri — returning []");
+        lsp_send_response(id, json_array());
+        return;
+    }
     let doc: LspDoc = state.docs.get(uri);
+    if doc.stmts == null {
+        _lsp_log("  completion: doc.stmts is NULL — returning []");
+        lsp_send_response(id, json_array());
+        return;
+    }
+    _lsp_log("  completion: doc.stmts has ".concat(int_to_str(doc.stmts.len())).concat(" stmts"));
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
 
+    _lsp_log("  completion: import_context_kind");
     // Import-path completion: cursor sits inside `import …;`. The
     // helper returns the module path the user has typed so far
     // ("", "stdlib", "stdlib::hashmap"); we list the matching child.
     let imp_kind: int = import_context_kind(doc.text, line0, col0);
+    _lsp_log("  completion: imp_kind=".concat(int_to_str(imp_kind)));
     if imp_kind == IMPCTX_PATH {
         let prefix: string = import_path_prefix(doc.text, line0, col0);
         list_import_path_children(state, prefix, items, seen);
@@ -3226,10 +3239,12 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         }
     }
 
+    _lsp_log("  completion: module_path_before");
     // Module-path completion: cursor right after `module::` or
     // `stdlib::module::`. Lists every `pub` symbol from that module.
     // Single-segment `stdlib::` lists the submodules instead.
     let mod_path: string = module_path_before(doc.text, line0, col0);
+    _lsp_log("  completion: mod_path='".concat(mod_path).concat("'"));
     if !mod_path.eq("") && state.stdlib_index != null {
         list_module_members(state, mod_path, items, seen);
         seen.free();
@@ -3237,8 +3252,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
+    _lsp_log("  completion: path_qualifier_before");
     // Path completion: cursor is right after `Type::` (or `Type::partial`).
     let qualifier: string = path_qualifier_before(doc.text, line0, col0);
+    _lsp_log("  completion: qualifier='".concat(qualifier).concat("'"));
     if !qualifier.eq("") {
         // After `Type::` only static methods (no `self`) make sense.
         list_methods_for_type(doc.stmts, qualifier, items, seen, false);
@@ -3247,10 +3264,12 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
+    _lsp_log("  completion: member_qualifier_before");
     // Member completion: cursor is right after `var.` (or `var.partial`).
     // Resolve the local's type and list its struct fields plus the
     // instance methods (those whose first param is `self`).
     let member_var: string = member_qualifier_before(doc.text, line0, col0);
+    _lsp_log("  completion: member_var='".concat(member_var).concat("'"));
     if !member_var.eq("") {
         let var_type: string = lookup_local_type(doc.stmts, line0, member_var);
         if !var_type.eq("") {
@@ -3263,10 +3282,12 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
+    _lsp_log("  completion: chained_ctor");
     // Chained inline ctor: `Vector::new().` — list instance methods on the
     // type itself (we don't try to resolve T here; method names are the same
     // for any monomorphization).
     let chain_ty: string = chained_ctor_qualifier_before(doc.text, line0, col0);
+    _lsp_log("  completion: chain_ty='".concat(chain_ty).concat("'"));
     if !chain_ty.eq("") {
         list_fields_for_type(doc.stmts, chain_ty, items, seen);
         list_methods_for_type(doc.stmts, chain_ty, items, seen, true);
@@ -3275,8 +3296,10 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
+    _lsp_log("  completion: fn_containing");
     // 1. Locals in scope (params + lets above the cursor in the containing fn).
     let host: *Stmt = fn_containing(doc.stmts, line0);
+    _lsp_log("  completion: host?=".concat(if host == null { "null" } else { "set" }));
     if host != null {
         if host.fn_params != null {
             for let i: int = 0; i < host.fn_params.len(); i++ {
@@ -3291,6 +3314,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                 }
             }
         }
+        _lsp_log("  completion: collect_locals");
         let locals: *Vector<Stmt> = Vector::new();
         collect_locals(host.fn_body, line0, locals);
         for let i: int = 0; i < locals.len(); i++ {
