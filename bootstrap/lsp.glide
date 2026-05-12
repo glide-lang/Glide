@@ -2728,18 +2728,18 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "labelDetails", ld);
     }
 
-    // detail: `<signature>   [<module>]`. Editors that render detail
-    // as a single dim line in the completion dropdown (Zed, parts of
-    // Neovim) can't paint slices of a string in different colors, so
-    // we wrap the module in brackets — the universal "this is a
-    // metadata tag, not part of the signature" cue. LSP 3.17 clients
+    // detail: `[<module>]  <signature>`. Module *leads* the line so
+    // long signatures truncate on the right without hiding the source
+    // package — Zed and similar editors can't paint slices of a
+    // string in different colors, so we wrap the module in brackets
+    // as the universal "this is a metadata tag" cue. LSP 3.17 clients
     // ALSO get the module via labelDetails.description above for the
     // rust-analyzer / gopls right-aligned layout.
-    let mut det: string = signature;
-    if !module.eq("") {
-        let tag: string = "[".concat(module).concat("]");
-        if det.eq("") { det = tag; }
-        else { det = det.concat("   ").concat(tag); }
+    let mut det: string = "";
+    if !module.eq("") { det = "[".concat(module).concat("]"); }
+    if !signature.eq("") {
+        if det.eq("") { det = signature; }
+        else { det = det.concat("  ").concat(signature); }
     }
     if !det.eq("") { json_obj_set(it, "detail", json_string(det)); }
 
