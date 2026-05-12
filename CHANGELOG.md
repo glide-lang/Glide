@@ -358,9 +358,9 @@ gopls / rust-analyzer's `core::iter` indicator style.
 
 ### Toolchain + docs
 
-- `tools/build_release.sh` now handles all three artefacts: Windows
-  zip, Linux tar.gz, and the sysroot bundle. `dist/` layout
-  documented in the script header.
+- `tools/build_release.sh` packages the host + cross-compile glide
+  binaries (Windows zip, Linux tar.gz). `tools/build_sysroot.sh`
+  builds the sysroot bundle separately from Alpine APKs.
 - `README.md` gains a Lints reference table and `glide lint` command
   entry.
 - `AGENTS.md` template (emitted by `glide doc --ai` / `glide new
@@ -368,15 +368,6 @@ gopls / rust-analyzer's `core::iter` indicator style.
   rule it enforces plus canonical patterns for arena brackets, mutex
   defers, `?` propagation, and option unwrap. Agents land in a repo
   with the full lint surface documented before generating code.
-
-### Known issues
-
-- **`mail_smtp` / `mail_pop3` / `mail_imap` tests fail**: the
-  in-process pattern (spawn_thread fake server + main connect)
-  trips a runtime TCP recv error on the same OS thread. The mail
-  clients themselves work against real servers; only the
-  in-process integration tests fail. Real fix needs investigation
-  of reactor + spawn_thread interaction.
 
 ### LSP performance
 
