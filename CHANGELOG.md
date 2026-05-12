@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — 2026-05-10
+## 0.1.0 — 2026-05-12
 
 ### Language
 
@@ -208,6 +208,166 @@ A complete HTTP stack landed:
 - **HTTP/2 NUL-truncated read pipeline**: binary-safe via
   `TlsStream::read_bytes` + H2Conn ByteBuffer rx ring + HPACK
   explicit-len (frame headers `00 00 XX` no longer truncate to .len()=0).
+
+### Bug-prevention lints
+
+`glide lint <file>` (and the LSP) run a suite of static checks beyond
+plain type-checking. Every code is suppressible with `@allow("<code>")`
+on the enclosing fn / impl method, and `glide lint --lint-as-error`
+promotes them to errors for CI. Custom user lints can be declared via
+`@lint("category", "reason")` on any fn.
+
+New codes shipped in this release:
+
+- **`null-deref`** — flow-sensitive: warns on `*p` / `p.field` /
+  `p.method()` / `p[i]` where `p` is provably null in scope (let-bound
+  to `null`, or callee param that's dereferenced without a guard).
+  Interprocedural arm: passing `null` literal to a fn whose param is
+  dereferenced unconditionally fires at the arg position.
+- **`bad-free`** — `free(s)` where `s: string` is a heap corruption
+  (strings are arena-managed). Same for `free(v)` where `v: *Vector<T>`
+  or `*HashMap<V>` — those have `.free()` destructors that release
+  internal buffers first. Vector/HashMap own destructors are exempted.
+- **`string-eq-op`** — `==` / `!=` between two strings compares
+  pointers, not bytes. Suggests `s.eq(other)`.
+- **`unused-import`** — `import X::{a, b};` where neither name is
+  referenced in the file. Wildcard imports are not flagged.
+- **`arena-set`** — `__glide_palloc_set(make())` without a paired
+  restore in scope leaks the arena bracket.
+- **`coro-blocking`** — `spawn fn();` where the target body calls a
+  known-blocking helper (sync fs / process / http). Resolves
+  spawn-target via fn-name lookup so the warning fires at the
+  blocking call site, naming the spawn that reached it.
+- **`unhandled-result`** — calling a fn returning `!T` and discarding
+  the value. Method calls are resolved by receiver type, so
+  `Conn.write -> int` and `TcpStream.write -> !int` (same method
+  name, different impl targets) are correctly distinguished.
+- **`ignored-option`** — `.val` on a `?T` without a preceding
+  `is_some()` / `.has` guard. Recognises the negated-guard idiom
+  `if !r.has { break; } ... r.val` and treats subsequent siblings as
+  safe.
+- **`use-after-free`** — flow-sensitive: accessing `x` after `x.free()`
+  in the same scope. `defer x.free()` doesn't trip (fires at scope
+  exit, not registration). Reassignment clears the freed bit.
+- **`mutex-unbalanced`** — path-aware: every `.lock()` must be
+  released on every exit (return / `?` / break / continue /
+  fall-off-end). `defer m.unlock();` immediately after the lock
+  satisfies the check across all branches. If/else are walked with
+  independent held-state copies and merged conservatively.
+- **`chan-leak`** — path-aware: a `chan<T>` declared in a fn must be
+  `close()`d on every exit path. A close in only one branch of an
+  if/else fails the check unless both branches close. Receivers
+  parked on `recv()` would otherwise hang forever.
+- **`leak-on-early-return`** — `defer x.free()` placed after a `?`
+  propagation that can fire before the defer registers. Suggests
+  moving the defer to the line immediately after the binding.
+
+Plus the pre-existing pass: `unused-var`, `unused-param`, `unused-fn`,
+`unnecessary-mut`, `arena-not-freed`, `addr-of-temporary`,
+`dead-code`, `missing-return`, `large-return`, `trait-conformance`,
+`deprecated-fn`, `unstable-fn`.
+
+The set is conservative — each lint targets a specific class of bug,
+zero false positives observed across `bootstrap/main.glide`,
+`src/stdlib/{vector, hashmap, http, argparse, sync, net, json}.glide`
+during the QA pass.
+
+### Crash diagnostics
+
+When a Glide program traps (`SIGSEGV`, divide-by-zero, stack overflow,
+optimiser-turned-trap), the runtime now prints a usable backtrace.
+
+- **Source-mapped frames**: codegen emits `#line N "<source>.glide"`
+  before each statement, so DWARF / addr2line resolve crash addresses
+  back to the original `.glide` file and line — not the generated
+  `<exe>.__glide.c`.
+- **Unified stack trace on Windows**: dbghelp (for system DLL frames)
+  and addr2line (for user-code frames) are combined into a single
+  numbered list. Previously the user-code frames printed as raw hex,
+  with addr2line output in a separate appendix the reader had to
+  cross-reference manually. `-lpsapi` is now part of the cc command
+  to support `GetModuleInformation` for ASLR-adjusted addresses.
+- **Fault address + access type**: on `0xC0000005` we print
+  `= faulting <read|write|execute> of address <ptr>` so the reader
+  doesn't have to decode `ExceptionInformation` themselves.
+
+### Cross-compilation with TLS
+
+`glide target add x86_64-linux-musl` pulls a ~13 MB sysroot bundling
+the OpenSSL 3.3 headers + `libssl.a` / `libcrypto.a` / `libz.a`. With
+the sysroot installed, `glide build --target=x86_64-linux-musl`
+produces a fully static ELF — `stdlib::http::HttpClient`,
+`stdlib::net::tls`, and the HTTPS server included — from any host.
+
+- New `glide target {list,add,remove,dir}` subcommands manage the
+  sysroot cache at `~/.glide/targets/<triple>/`.
+- Build pipeline picks the bundled Zig as cc for cross targets and
+  the host's system cc (gcc / clang) for host builds, so the OS-
+  specific link line stays correct.
+- Sysroot bundle is built from Alpine APKs (`openssl-libs-static`,
+  `zlib-static`) via `tools/build_sysroot.sh`.
+
+### HTTP server lifecycle
+
+The server hot path leaked memory until the next OS-level pressure
+event — every handler allocated through the global arena slot, and
+nothing reclaimed it. Fixed across three layers:
+
+- **Per-request arena bracket**: `_handle_conn`, `_handle_tls_conn`,
+  and the router handler now wrap the body in `make → set → handle →
+  restore prev → free`. Transient strings (concat / substring / split
+  results from inside the handler) are reclaimed in one mmap-unmap
+  per request.
+- **Coro-local arena slot**: the active-arena pointer used to be a
+  file-static, so cooperative yields between coros let one handler's
+  `palloc_set` clobber another's. Moved into the task struct, with
+  `__glide_task_arena_get` / `_set` accessors emitted by `sched.c`.
+  Idle coros pay zero, busy ones each see their own bracket.
+- **`__glide_string_from_buf` is arena-tracked**: the per-byte concat
+  was the dominant allocation in the parse path. Replaced with a
+  single `__glide_palloc(n+1)` + `memcpy` so the result is reclaimed
+  with the rest of the request arena.
+
+### LSP stability fixes
+
+Three use-after-free crashes that surfaced during heavy-edit traffic
+on bootstrap-sized projects:
+
+- **Project index allocated in request arena**: `_refresh_project_index`
+  ran during `textDocument/completion`, allocating its `*HashMap<Stmt>`
+  inside the request arena that was freed before the next request.
+  The next completion crashed on the dangling reference. Save / null /
+  restore the active arena around the index build so the index lives
+  on libc heap.
+- **Code-action JsonValue shared subtrees**: building the response
+  involved assigning `out.array_val = req.array_val` which made both
+  JsonValues co-own the same inner Vector. `json_free(req)` then
+  freed memory the response still pointed to. Deep-clone instead.
+- **Manifest lint state**: `_lsp_apply_manifest_lint` allocated its
+  `lint_deny` / `lint_allow` vectors in the request arena. Subsequent
+  reads (during diagnostic emission) read freed memory. Same arena-
+  save/null/restore pattern as the project index.
+
+### LSP completion polish
+
+Completion items now carry a `[module]` tag in the detail string so
+the popup distinguishes `http_listen` (from `stdlib::http`) from
+`http_listen` in user code at a glance. The tag is positioned at the
+HEAD of the detail field so long signatures don't clip it — matches
+gopls / rust-analyzer's `core::iter` indicator style.
+
+### Toolchain + docs
+
+- `tools/build_release.sh` now handles all three artefacts: Windows
+  zip, Linux tar.gz, and the sysroot bundle. `dist/` layout
+  documented in the script header.
+- `README.md` gains a Lints reference table and `glide lint` command
+  entry.
+- `AGENTS.md` template (emitted by `glide doc --ai` / `glide new
+  --ai`) gains a §5 Lints section enumerating every code with the
+  rule it enforces plus canonical patterns for arena brackets, mutex
+  defers, `?` propagation, and option unwrap. Agents land in a repo
+  with the full lint surface documented before generating code.
 
 ### Known issues
 
