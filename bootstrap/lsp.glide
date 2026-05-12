@@ -2728,15 +2728,20 @@ fn rich_completion_item(label: string, label_extra: string, kind: int,
         json_obj_set(it, "labelDetails", ld);
     }
 
-    // detail: full one-line signature only. The module is carried
-    // separately in labelDetails.description above so 3.17-aware
-    // clients render it dimmed / right-aligned (the gopls + rust-
-    // analyzer layout). Keeping it OUT of detail avoids the editor
-    // painting it in its normal foreground color next to the
-    // signature, which is the wrong visual weight for a package hint.
-    // For older clients the module still appears at the bottom of the
-    // documentation popup ("From `stdlib::math`") so nothing is lost.
-    if !signature.eq("") { json_obj_set(it, "detail", json_string(signature)); }
+    // detail: `<signature>    <module>` so editors that render
+    // detail as a single dim line in the completion dropdown (Zed,
+    // some Neovim setups) still surface the source package. LSP 3.17
+    // clients ALSO get the module via labelDetails.description above
+    // — they'll show both, but the description field is the canonical
+    // right-aligned slot for gopls / rust-analyzer style.
+    // Tail format uses two trailing spaces so the module reads as a
+    // separate chunk from the signature on editors that wrap.
+    let mut det: string = signature;
+    if !module.eq("") {
+        if det.eq("") { det = module; }
+        else { det = det.concat("  ").concat(module); }
+    }
+    if !det.eq("") { json_obj_set(it, "detail", json_string(det)); }
 
     // filterText: makes the item discoverable from a wider range of
     // queries. Several editors (Zed, VS Code at lower setting) use a
