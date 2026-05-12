@@ -5551,6 +5551,14 @@ fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: st
 //   - aliases (`let q = p;` doesn't propagate the null bit)
 //   - mutable rebinding after early-return on null
 pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
+    // First pass: for every fn, identify which param indices are
+    // dereferenced (or member-accessed) somewhere in the body
+    // WITHOUT a preceding null-check. Those params are "non-null
+    // required" — passing null literal to them at a call site is
+    // an immediate crash.
+    let deref_params: *HashMap<string> = HashMap::new();   // fn name -> ","-joined indices
+    _ndp_collect_param_derefs(program, deref_params);
+
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
@@ -5558,6 +5566,9 @@ pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
             t.current_origin = s.origin;
             let nulls: *HashMap<bool> = HashMap::new();
             _scan_null_body(t, s.fn_body, nulls);
+            // Interprocedural pass: at each call site, look up
+            // the callee's deref-param set and warn for null args.
+            _ndp_check_calls_in_body(t, s.fn_body, deref_params);
             nulls.free();
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
@@ -5568,10 +5579,187 @@ pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
                 t.current_origin = m.origin;
                 let nulls: *HashMap<bool> = HashMap::new();
                 _scan_null_body(t, m.fn_body, nulls);
+                _ndp_check_calls_in_body(t, m.fn_body, deref_params);
                 nulls.free();
             }
         }
     }
+    deref_params.free();
+}
+
+// Compute which param indices are dereferenced unconditionally inside
+// each fn body. "Unconditionally" = the body has no `if p == null`
+// or `if p != null` guard ANYWHERE protecting the access. The result
+// is conservative: if the body looks tricky, we don't include the
+// index.
+fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<string>) {
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && s.fn_params != null {
+            _ndp_index_one_fn(&s, deref_params);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
+            let tname: string = "";
+            if s.impl_target.kind == TY_NAMED { tname = s.impl_target.name; }
+            else if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || m.fn_params == null { continue; }
+                _ndp_index_one_fn(&m, deref_params);
+                if !tname.eq("") {
+                    // Also index under `<Type>::<method>` so callers
+                    // doing `x.method(null)` can resolve.
+                    let key: string = tname.concat("::").concat(m.name);
+                    if deref_params.contains(m.name) {
+                        deref_params.insert(key, deref_params.get(m.name));
+                    }
+                }
+            }
+        }
+    }
+}
+fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>) {
+    // If any guard `if p == null` / `if p != null` exists for a param,
+    // skip it (the body presumably handles the null case).
+    let guarded: *HashMap<bool> = HashMap::new();
+    _ndp_collect_guards(m.fn_body, guarded);
+    // Walk body collecting derefs by param name.
+    let derefed: *HashMap<bool> = HashMap::new();
+    _ndp_collect_derefs(m.fn_body, derefed);
+    let mut idxs: string = "";
+    for let i: int = 0; i < m.fn_params.len(); i++ {
+        let p: Param = m.fn_params.get(i);
+        // Only pointer params can be null. Skip everything else.
+        if p.ty == null || p.ty.kind != TY_POINTER { continue; }
+        if !derefed.contains(p.name) { continue; }
+        if guarded.contains(p.name) { continue; }
+        if idxs.eq("") { idxs = i.to_string(); }
+        else { idxs = idxs.concat(",").concat(i.to_string()); }
+    }
+    guarded.free(); derefed.free();
+    if !idxs.eq("") {
+        deref_params.insert(m.name, idxs);
+    }
+}
+fn _ndp_collect_guards(body: *Vector<Stmt>, guarded: *HashMap<bool>) {
+    if body == null { return; }
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.cond != null { _ndp_guards_in_expr(s.cond, guarded); }
+        if s.then_body != null { _ndp_collect_guards(s.then_body, guarded); }
+        if s.else_body != null { _ndp_collect_guards(s.else_body, guarded); }
+    }
+}
+fn _ndp_guards_in_expr(e: *Expr, guarded: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && (e.op_code == OP_EQ || e.op_code == OP_NE)
+       && e.lhs != null && e.rhs != null {
+        if e.lhs.kind == EX_IDENT && e.rhs.kind == EX_NULL {
+            guarded.insert(e.lhs.str_val, true);
+        }
+        if e.rhs.kind == EX_IDENT && e.lhs.kind == EX_NULL {
+            guarded.insert(e.rhs.str_val, true);
+        }
+    }
+    if e.lhs != null { _ndp_guards_in_expr(e.lhs, guarded); }
+    if e.rhs != null { _ndp_guards_in_expr(e.rhs, guarded); }
+    if e.operand != null { _ndp_guards_in_expr(e.operand, guarded); }
+}
+fn _ndp_collect_derefs(body: *Vector<Stmt>, derefed: *HashMap<bool>) {
+    if body == null { return; }
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.expr_value != null { _ndp_derefs_in_expr(s.expr_value, derefed); }
+        if s.let_value != null { _ndp_derefs_in_expr(s.let_value, derefed); }
+        if s.cond != null { _ndp_derefs_in_expr(s.cond, derefed); }
+        if s.then_body != null { _ndp_collect_derefs(s.then_body, derefed); }
+        if s.else_body != null { _ndp_collect_derefs(s.else_body, derefed); }
+    }
+}
+fn _ndp_derefs_in_expr(e: *Expr, derefed: *HashMap<bool>) {
+    if e == null { return; }
+    // `*p`
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null
+       && e.operand.kind == EX_IDENT {
+        derefed.insert(e.operand.str_val, true);
+    }
+    // `p.field` and `p.method(...)` — both implicitly deref p.
+    if e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT {
+        derefed.insert(e.lhs.str_val, true);
+    }
+    // `p[i]` — also deref.
+    if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT {
+        derefed.insert(e.lhs.str_val, true);
+    }
+    if e.lhs != null { _ndp_derefs_in_expr(e.lhs, derefed); }
+    if e.rhs != null { _ndp_derefs_in_expr(e.rhs, derefed); }
+    if e.operand != null { _ndp_derefs_in_expr(e.operand, derefed); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _ndp_derefs_in_expr(&a, derefed);
+        }
+    }
+}
+// Walk a body and flag every call site where a null literal hits
+// a known-non-null-required param of the callee.
+fn _ndp_check_calls_in_body(t: *Typer, body: *Vector<Stmt>,
+                           deref_params: *HashMap<string>) {
+    if body == null { return; }
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.expr_value != null { _ndp_check_calls_in_expr(t, s.expr_value, deref_params); }
+        if s.let_value != null { _ndp_check_calls_in_expr(t, s.let_value, deref_params); }
+        if s.cond != null { _ndp_check_calls_in_expr(t, s.cond, deref_params); }
+        if s.then_body != null { _ndp_check_calls_in_body(t, s.then_body, deref_params); }
+        if s.else_body != null { _ndp_check_calls_in_body(t, s.else_body, deref_params); }
+    }
+}
+fn _ndp_check_calls_in_expr(t: *Typer, e: *Expr, deref_params: *HashMap<string>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.args != null {
+        let fname: string = e.lhs.str_val;
+        if deref_params.contains(fname) {
+            let idxs: string = deref_params.get(fname);
+            // Parse comma-joined indices.
+            let mut buf: string = "";
+            let n: int = idxs.len();
+            for let k: int = 0; k <= n; k++ {
+                if k == n || idxs.at(k).to_int() == 44 {
+                    if !buf.eq("") {
+                        let idx: int = _ndp_atoi(buf);
+                        if idx >= 0 && idx < e.args.len() {
+                            let a: Expr = e.args.get(idx);
+                            if a.kind == EX_NULL {
+                                t.warn(a.line, a.column, "null-deref",
+                                    "passing `null` to `".concat(fname).concat("` — param at index ").concat(idx.to_string()).concat(" is dereferenced without a null-check; this call will segfault"));
+                            }
+                        }
+                        buf = "";
+                    }
+                } else { buf = buf.concat(idxs.substring(k, k + 1)); }
+            }
+        }
+    }
+    if e.lhs != null { _ndp_check_calls_in_expr(t, e.lhs, deref_params); }
+    if e.rhs != null { _ndp_check_calls_in_expr(t, e.rhs, deref_params); }
+    if e.operand != null { _ndp_check_calls_in_expr(t, e.operand, deref_params); }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _ndp_check_calls_in_expr(t, &a, deref_params);
+        }
+    }
+}
+fn _ndp_atoi(s: string) -> int {
+    let mut n: int = 0;
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c < 48 || c > 57 { return -1; }
+        n = n * 10 + (c - 48);
+    }
+    return n;
 }
 
 fn _scan_null_body(t: *Typer, body: *Vector<Stmt>, nulls: *HashMap<bool>) {
@@ -5757,6 +5945,19 @@ fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
             if tag.eq("string") {
                 t.warn(e.line, e.column, "bad-free",
                     "`free(".concat(probe.str_val).concat(")` corrupts the heap — strings are arena-managed and freed automatically. Remove this line."));
+            } else if (tag.eq("Vector") || tag.eq("HashMap"))
+                      && !probe.str_val.eq("self") {
+                // Vector / HashMap own internal buffers (keys/values/
+                // data array). libc free on the outer struct leaks
+                // those buffers AND tries to free arena/malloc memory
+                // depending on the constructor. The .free() method
+                // releases everything correctly.
+                //
+                // Exception: `free(self as *void)` inside the type's
+                // own destructor is legitimate — that's how `.free()`
+                // releases the outer struct after walking its fields.
+                t.warn(e.line, e.column, "bad-free",
+                    "`free(".concat(probe.str_val).concat(")` leaks `").concat(probe.str_val).concat("`'s internal buffers — call `").concat(probe.str_val).concat(".free()` so the destructor releases keys/values/data first."));
             }
         }
     }
@@ -6507,62 +6708,101 @@ pub fn analysis_mutex_unbalanced(t: *Typer, program: *Vector<Stmt>) {
     }
 }
 fn _mu_check_fn(t: *Typer, body: *Vector<Stmt>) {
-    let locks: *HashMap<int> = HashMap::new();
-    let unlocks: *HashMap<int> = HashMap::new();
-    let first_lock_line: *HashMap<int> = HashMap::new();
-    let first_lock_col: *HashMap<int> = HashMap::new();
-    _mu_walk(body, locks, unlocks, first_lock_line, first_lock_col);
-    let names: *Vector<string> = locks.keys();
+    // Path-aware: walk stmts in order with `held` = the set of names
+    // currently locked. Every exit path (return / ?-propagation /
+    // break / continue / fall-off-the-end) must clear `held`. We
+    // detect `?` operators inside expressions because each is a
+    // potential early return.
+    let held: *HashMap<int> = HashMap::new();        // name -> line of lock
+    let held_col: *HashMap<int> = HashMap::new();
+    let warned: *HashMap<bool> = HashMap::new();
+    _mu_walk_path(t, body, held, held_col, warned);
+    // Names still held at fall-through end of fn are bugs too.
+    let names: *Vector<string> = held.keys();
     for let i: int = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
-        let nl: int = locks.get(nm);
-        let mut nu: int = 0;
-        if unlocks.contains(nm) { nu = unlocks.get(nm); }
-        if nl > nu {
-            t.warn(first_lock_line.get(nm), first_lock_col.get(nm), "mutex-unbalanced",
-                "`".concat(nm).concat(".lock()` has no matching `.unlock()` on every path — use `defer ").concat(nm).concat(".unlock();` right after the lock so all returns release it"));
-        }
+        if warned.contains(nm) { continue; }
+        t.warn(held.get(nm), held_col.get(nm), "mutex-unbalanced",
+            "`".concat(nm).concat(".lock()` falls off the end of the fn without `.unlock()` — release it on every exit (a `defer ").concat(nm).concat(".unlock();` right after the lock covers all returns)"));
+        warned.insert(nm, true);
     }
-    locks.free(); unlocks.free();
-    first_lock_line.free(); first_lock_col.free();
+    held.free(); held_col.free(); warned.free();
 }
-fn _mu_walk(body: *Vector<Stmt>, locks: *HashMap<int>, unlocks: *HashMap<int>,
-            fll: *HashMap<int>, flc: *HashMap<int>) {
+fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>,
+                 held: *HashMap<int>, held_col: *HashMap<int>,
+                 warned: *HashMap<bool>) {
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.expr_value != null { _mu_check_expr(s.expr_value, locks, unlocks, fll, flc); }
-        if s.let_value != null { _mu_check_expr(s.let_value, locks, unlocks, fll, flc); }
-        if s.then_body != null { _mu_walk(s.then_body, locks, unlocks, fll, flc); }
-        if s.else_body != null { _mu_walk(s.else_body, locks, unlocks, fll, flc); }
+        // Any `?` inside this stmt's exprs is an early exit point.
+        if s.expr_value != null && _ler_expr_has_try(s.expr_value) {
+            _mu_flag_held(t, held, held_col, warned, s.line, "?-propagation");
+        }
+        if s.let_value != null && _ler_expr_has_try(s.let_value) {
+            _mu_flag_held(t, held, held_col, warned, s.line, "?-propagation");
+        }
+        if s.expr_value != null { _mu_update_state(s.expr_value, held, held_col); }
+        if s.let_value != null { _mu_update_state(s.let_value, held, held_col); }
+        // Return / break / continue: every still-held lock leaks.
+        if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
+            let exit_label: string = "return";
+            if s.kind == ST_BREAK { exit_label = "break"; }
+            if s.kind == ST_CONTINUE { exit_label = "continue"; }
+            _mu_flag_held(t, held, held_col, warned, s.line, exit_label);
+            return;
+        }
+        // `defer x.unlock()` registers a guaranteed release; treat as
+        // immediate unlock (covers all subsequent exits).
+        if s.kind == ST_DEFER && s.expr_value != null {
+            let nm: string = _mu_unlock_target(s.expr_value);
+            if !nm.eq("") && held.contains(nm) { held.remove(nm); }
+        }
+        if s.then_body != null { _mu_walk_path(t, s.then_body, held, held_col, warned); }
+        if s.else_body != null { _mu_walk_path(t, s.else_body, held, held_col, warned); }
     }
 }
-fn _mu_check_expr(e: *Expr, locks: *HashMap<int>, unlocks: *HashMap<int>,
-                  fll: *HashMap<int>, flc: *HashMap<int>) {
+fn _mu_flag_held(t: *Typer, held: *HashMap<int>, held_col: *HashMap<int>,
+                 warned: *HashMap<bool>, exit_line: int, exit_kind: string) {
+    let names: *Vector<string> = held.keys();
+    for let i: int = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if warned.contains(nm) { continue; }
+        t.warn(held.get(nm), held_col.get(nm), "mutex-unbalanced",
+            "`".concat(nm).concat(".lock()` is still held at the ").concat(exit_kind).concat(" — wrap it with `defer ").concat(nm).concat(".unlock();` so every exit path releases the lock"));
+        warned.insert(nm, true);
+    }
+}
+fn _mu_update_state(e: *Expr, held: *HashMap<int>, held_col: *HashMap<int>) {
     if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
        && e.lhs.field != null && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
         let recv: string = e.lhs.lhs.str_val;
-        if e.lhs.field.eq("lock") {
-            let mut c: int = 0;
-            if locks.contains(recv) { c = locks.get(recv); }
-            locks.insert(recv, c + 1);
-            if !fll.contains(recv) { fll.insert(recv, e.line); flc.insert(recv, e.column); }
+        if e.lhs.field.eq("lock") && !held.contains(recv) {
+            held.insert(recv, e.line);
+            held_col.insert(recv, e.column);
         }
-        if e.lhs.field.eq("unlock") {
-            let mut c: int = 0;
-            if unlocks.contains(recv) { c = unlocks.get(recv); }
-            unlocks.insert(recv, c + 1);
+        if e.lhs.field.eq("unlock") && held.contains(recv) {
+            held.remove(recv);
+            held_col.remove(recv);
         }
     }
-    if e.lhs != null { _mu_check_expr(e.lhs, locks, unlocks, fll, flc); }
-    if e.rhs != null { _mu_check_expr(e.rhs, locks, unlocks, fll, flc); }
-    if e.operand != null { _mu_check_expr(e.operand, locks, unlocks, fll, flc); }
+    if e.lhs != null { _mu_update_state(e.lhs, held, held_col); }
+    if e.rhs != null { _mu_update_state(e.rhs, held, held_col); }
+    if e.operand != null { _mu_update_state(e.operand, held, held_col); }
     if e.args != null {
         for let i: int = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            _mu_check_expr(&a, locks, unlocks, fll, flc);
+            _mu_update_state(&a, held, held_col);
         }
     }
+}
+fn _mu_unlock_target(e: *Expr) -> string {
+    if e == null { return ""; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.field != null && e.lhs.field.eq("unlock")
+       && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+        return e.lhs.lhs.str_val;
+    }
+    return "";
 }
 
 // ---------- chan-leak ----------------------------------------------------
@@ -6589,22 +6829,25 @@ pub fn analysis_chan_leak(t: *Typer, program: *Vector<Stmt>) {
     }
 }
 fn _cl_check_fn(t: *Typer, body: *Vector<Stmt>) {
-    let chans: *HashMap<int> = HashMap::new();      // name -> line
+    // Two-step: first pass collects every chan declared at the
+    // top level of this fn. Second pass verifies a close() reaches
+    // every exit path. A close inside a conditional branch only
+    // covers that branch; the lint flags the chan unless every
+    // path through the fn closes it.
+    let chans: *HashMap<int> = HashMap::new();
     let chans_col: *HashMap<int> = HashMap::new();
-    let closed: *HashMap<bool> = HashMap::new();
-    _cl_walk(body, chans, chans_col, closed);
+    _cl_collect_chans(body, chans, chans_col);
     let names: *Vector<string> = chans.keys();
     for let i: int = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
-        if !closed.contains(nm) {
+        if !_cl_all_paths_close(body, nm, false) {
             t.warn(chans.get(nm), chans_col.get(nm), "chan-leak",
-                "channel `".concat(nm).concat("` is never `close()`d — any `recv()` loop will hang forever; close it when the producer is done"));
+                "channel `".concat(nm).concat("` isn't `close()`d on every path — receivers parked on `recv()` will hang forever on the missing branch; close it before each exit"));
         }
     }
-    chans.free(); chans_col.free(); closed.free();
+    chans.free(); chans_col.free();
 }
-fn _cl_walk(body: *Vector<Stmt>, chans: *HashMap<int>, chans_col: *HashMap<int>,
-            closed: *HashMap<bool>) {
+fn _cl_collect_chans(body: *Vector<Stmt>, chans: *HashMap<int>, chans_col: *HashMap<int>) {
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         if s.kind == ST_LET && s.name != null && s.let_ty != null
@@ -6612,28 +6855,55 @@ fn _cl_walk(body: *Vector<Stmt>, chans: *HashMap<int>, chans_col: *HashMap<int>,
             chans.insert(s.name, s.line);
             chans_col.insert(s.name, s.column);
         }
-        if s.expr_value != null { _cl_check_close(s.expr_value, closed); }
-        if s.let_value != null { _cl_check_close(s.let_value, closed); }
-        if s.then_body != null { _cl_walk(s.then_body, chans, chans_col, closed); }
-        if s.else_body != null { _cl_walk(s.else_body, chans, chans_col, closed); }
+        if s.then_body != null { _cl_collect_chans(s.then_body, chans, chans_col); }
+        if s.else_body != null { _cl_collect_chans(s.else_body, chans, chans_col); }
     }
 }
-fn _cl_check_close(e: *Expr, closed: *HashMap<bool>) {
-    if e == null { return; }
+// True when EVERY exit path through `body` (fall-through, return,
+// break) hits a `chan.close()` for `nm`. `found_above` carries the
+// "we already closed it before entering this scope" flag down.
+fn _cl_all_paths_close(body: *Vector<Stmt>, nm: string, found_above: bool) -> bool {
+    let mut closed: bool = found_above;
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.expr_value != null && _cl_expr_closes(s.expr_value, nm) { closed = true; }
+        if s.let_value != null && _cl_expr_closes(s.let_value, nm) { closed = true; }
+        // A bare return / break before the close means this path
+        // leaves the chan open.
+        if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
+            return closed;
+        }
+        // An if / else: both branches must close (or the chan must
+        // already be closed above). If there's no else, the implicit
+        // else falls through with the current `closed` state.
+        if s.kind == ST_IF {
+            let then_ok: bool = s.then_body == null
+                || _cl_all_paths_close(s.then_body, nm, closed);
+            let else_ok: bool = s.else_body != null
+                && _cl_all_paths_close(s.else_body, nm, closed);
+            // If both branches close, the chan is closed after the if.
+            // Otherwise we conservatively keep the prior state.
+            if then_ok && else_ok { closed = true; }
+        }
+    }
+    return closed;
+}
+fn _cl_expr_closes(e: *Expr, nm: string) -> bool {
+    if e == null { return false; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
        && e.lhs.field != null && e.lhs.field.eq("close")
-       && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
-        closed.insert(e.lhs.lhs.str_val, true);
-    }
-    if e.lhs != null { _cl_check_close(e.lhs, closed); }
-    if e.rhs != null { _cl_check_close(e.rhs, closed); }
-    if e.operand != null { _cl_check_close(e.operand, closed); }
+       && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT
+       && e.lhs.lhs.str_val.eq(nm) { return true; }
+    if e.lhs != null && _cl_expr_closes(e.lhs, nm) { return true; }
+    if e.rhs != null && _cl_expr_closes(e.rhs, nm) { return true; }
+    if e.operand != null && _cl_expr_closes(e.operand, nm) { return true; }
     if e.args != null {
         for let i: int = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            _cl_check_close(&a, closed);
+            if _cl_expr_closes(&a, nm) { return true; }
         }
     }
+    return false;
 }
 
 // ---------- leak-on-early-return -----------------------------------------
