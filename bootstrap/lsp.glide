@@ -6142,68 +6142,121 @@ fn _cb_check_blocking_call(t: *Typer, e: *Expr, blocking: *HashMap<bool>, spawne
 // Calling a `fn -> !T` and discarding the value silently swallows the
 // error. Accepted forms: `x?`, `let _ = …`, `let bound = …`, `match …`,
 // or `return …`. Bare `ST_EXPR` with a `!T`-returning call is the bug.
+//
+// Method calls (`x.foo()`) are resolved by looking up the receiver's
+// declared type from let bindings and consulting a per-type method
+// table — so `Conn.write -> int` and `TcpStream.write -> !int` get
+// distinguished even though they share a method name.
 pub fn analysis_unhandled_result(t: *Typer, program: *Vector<Stmt>) {
     let ret_kinds: *HashMap<int> = HashMap::new();
-    _ur_collect_sigs(program, ret_kinds);
+    let method_rets: *HashMap<int> = HashMap::new();
+    _ur_collect_sigs(program, ret_kinds, method_rets);
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null && !_has_allow(&s, "unhandled-result") {
             t.current_origin = s.origin;
-            _ur_walk(t, s.fn_body, ret_kinds);
+            let tys: *HashMap<string> = HashMap::new();
+            _ur_seed_params(s.fn_params, tys);
+            _ur_walk(t, s.fn_body, ret_kinds, method_rets, tys);
+            tys.free();
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body == null || _has_allow(&m, "unhandled-result") { continue; }
                 if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
-                _ur_walk(t, m.fn_body, ret_kinds);
+                let tys: *HashMap<string> = HashMap::new();
+                _ur_seed_params(m.fn_params, tys);
+                _ur_walk(t, m.fn_body, ret_kinds, method_rets, tys);
+                tys.free();
             }
         }
     }
     ret_kinds.free();
+    method_rets.free();
 }
-fn _ur_collect_sigs(program: *Vector<Stmt>, ret_kinds: *HashMap<int>) {
+fn _ur_seed_params(params: *Vector<Param>, tys: *HashMap<string>) {
+    if params == null { return; }
+    for let i: int = 0; i < params.len(); i++ {
+        let p: Param = params.get(i);
+        if p.ty != null && !p.name.eq("") {
+            tys.insert(p.name, _bf_ty_tag(p.ty));
+        }
+    }
+}
+fn _ur_collect_sigs(program: *Vector<Stmt>, ret_kinds: *HashMap<int>,
+                    method_rets: *HashMap<int>) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        // Only free fns are indexed — method overloads share names
-        // across impls (e.g. Conn.write -> int vs TcpStream.write ->
-        // !int), and we can't pick the right one without typer
-        // support. The call-site check only flags bare-name calls,
-        // so impl methods would never be looked up anyway.
         if s.kind == ST_FN && s.fn_ret_ty != null {
             ret_kinds.insert(s.name, s.fn_ret_ty.kind);
         }
+        if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
+            let tname: string = "";
+            if s.impl_target.kind == TY_NAMED { tname = s.impl_target.name; }
+            else if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+            if tname.eq("") { continue; }
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_ret_ty != null {
+                    let key: string = tname.concat("::").concat(m.name);
+                    method_rets.insert(key, m.fn_ret_ty.kind);
+                }
+            }
+        }
     }
 }
-fn _ur_walk(t: *Typer, body: *Vector<Stmt>, ret_kinds: *HashMap<int>) {
+fn _ur_walk(t: *Typer, body: *Vector<Stmt>, ret_kinds: *HashMap<int>,
+            method_rets: *HashMap<int>, tys: *HashMap<string>) {
     for let i: int = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.kind == ST_EXPR && s.expr_value != null {
-            _ur_check_call(t, s.expr_value, ret_kinds);
+        if s.kind == ST_LET && s.name != null && !s.name.eq("") && s.let_ty != null {
+            tys.insert(s.name, _bf_ty_tag(s.let_ty));
         }
-        if s.then_body != null { _ur_walk(t, s.then_body, ret_kinds); }
-        if s.else_body != null { _ur_walk(t, s.else_body, ret_kinds); }
-        if s.fn_body != null { _ur_walk(t, s.fn_body, ret_kinds); }
+        if s.kind == ST_EXPR && s.expr_value != null {
+            _ur_check_call(t, s.expr_value, ret_kinds, method_rets, tys);
+        }
+        if s.then_body != null { _ur_walk(t, s.then_body, ret_kinds, method_rets, tys); }
+        if s.else_body != null { _ur_walk(t, s.else_body, ret_kinds, method_rets, tys); }
+        if s.fn_body != null { _ur_walk(t, s.fn_body, ret_kinds, method_rets, tys); }
     }
 }
-fn _ur_check_call(t: *Typer, e: *Expr, ret_kinds: *HashMap<int>) {
+fn _ur_check_call(t: *Typer, e: *Expr, ret_kinds: *HashMap<int>,
+                  method_rets: *HashMap<int>, tys: *HashMap<string>) {
     if e == null { return; }
     // `?` is enough — already propagating.
     if e.kind == EX_UNARY && e.op_code == UN_TRY { return; }
-    if e.kind != EX_CALL { return; }
-    // Only handle bare fn calls (`foo(...)`). Method-style calls
-    // (`x.foo(...)`) need receiver-type resolution to pick the right
-    // overload — two fns named `write` can return different types
-    // (Conn.write -> int vs TcpStream.write -> !int), and without
-    // type-tracking we'd false-positive based on whichever fn was
-    // inserted last into the name map.
-    if e.lhs == null || e.lhs.kind != EX_IDENT { return; }
-    let fn_name: string = e.lhs.str_val;
-    if !ret_kinds.contains(fn_name) { return; }
-    let k: int = ret_kinds.get(fn_name);
+    if e.kind != EX_CALL || e.lhs == null { return; }
+
+    let fn_label: string = "";
+    let mut k: int = -1;
+
+    if e.lhs.kind == EX_IDENT {
+        // Bare fn: `foo(…)`.
+        let n: string = e.lhs.str_val;
+        if !ret_kinds.contains(n) { return; }
+        fn_label = n;
+        k = ret_kinds.get(n);
+    } else if e.lhs.kind == EX_MEMBER && e.lhs.field != null
+              && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+        // Method: `x.foo(…)`. Resolve x's declared type and look up
+        // the per-type method table. Skip when receiver type isn't
+        // tracked (param / let-without-annotation / chain receiver).
+        let recv: string = e.lhs.lhs.str_val;
+        if !tys.contains(recv) { return; }
+        let tname: string = tys.get(recv);
+        if tname.eq("") { return; }
+        let key: string = tname.concat("::").concat(e.lhs.field);
+        if !method_rets.contains(key) { return; }
+        fn_label = recv.concat(".").concat(e.lhs.field);
+        k = method_rets.get(key);
+    } else {
+        return;
+    }
+
     if k == TY_RESULT || k == TY_OPT_RESULT {
         t.warn(e.line, e.column, "unhandled-result",
-            "`".concat(fn_name).concat("` returns a `!T` whose error is being discarded — propagate with `").concat(fn_name).concat("?` or bind with `let r = ").concat(fn_name).concat("(...)`"));
+            "`".concat(fn_label).concat("` returns a `!T` whose error is being discarded — propagate with `?` or bind with `let r = …`"));
     }
 }
 
