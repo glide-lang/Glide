@@ -117,6 +117,7 @@ __attribute__((constructor)) static void __glide_enable_vt(void) {
 }
 #endif
 #ifdef _WIN32
+#include <dbghelp.h>
 static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     const char* name = "unhandled exception";
@@ -128,10 +129,125 @@ static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {
     fflush(stdout);
     fprintf(stderr, "\n\x1b[1;31mfatal\x1b[0m: %s (code 0x%lx)\n", name, (unsigned long)code);
     if (hint[0]) fprintf(stderr, "  \x1b[1;36m=\x1b[0m %s\n", hint);
+    // For access violations, the second ExceptionInformation entry is
+    // the offending memory address. Telling the user "you tried to
+    // read 0x0" is a big leg up vs raw stack frames.
+    if (code == 0xC0000005 && ep->ExceptionRecord->NumberParameters >= 2) {
+        ULONG_PTR fault_addr = ep->ExceptionRecord->ExceptionInformation[1];
+        ULONG_PTR op = ep->ExceptionRecord->ExceptionInformation[0];
+        const char* op_s = (op == 0) ? "read" : (op == 1) ? "write" : "execute";
+        fprintf(stderr, "  \x1b[1;36m=\x1b[0m faulting %s of address %p\n", op_s, (void*)fault_addr);
+    }
+    // Symbolicate. SymInitialize + SymFromAddr resolves to function
+    // names; SymGetLineFromAddr64 maps the IP back to the emitted C
+    // file + line. Needs `-g` at link time and a populated symbol
+    // search path — both default-on in glide's build pipeline.
+    HANDLE proc = GetCurrentProcess();
+    static int sym_inited = 0;
+    if (!sym_inited) {
+        SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
+        sym_inited = SymInitialize(proc, NULL, TRUE);
+    }
     void* frames[32];
     USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);
-    fprintf(stderr, "stack trace (%u frames; pipe through addr2line for source lines):\n", n);
-    for (USHORT i = 0; i < n; i++) fprintf(stderr, "  #%-2u  %p\n", i, frames[i]);
+    fprintf(stderr, "stack trace (%u frames):\n", n);
+    char sym_buf[sizeof(SYMBOL_INFO) + 256];
+    SYMBOL_INFO* sym = (SYMBOL_INFO*)sym_buf;
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen = 255;
+    IMAGEHLP_LINE64 line;
+    line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+    int unresolved = 0;
+    void* unresolved_frames[32];
+    for (USHORT i = 0; i < n; i++) {
+        DWORD64 addr = (DWORD64)(uintptr_t)frames[i];
+        const char* fn_name = NULL;
+        if (sym_inited && SymFromAddr(proc, addr, NULL, sym)) {
+            fn_name = sym->Name;
+        }
+        DWORD displ = 0;
+        if (sym_inited && fn_name && SymGetLineFromAddr64(proc, addr, &displ, &line)) {
+            fprintf(stderr, "  #%-2u  %s  at  %s:%lu\n",
+                i, fn_name, line.FileName, (unsigned long)line.LineNumber);
+        } else if (fn_name) {
+            fprintf(stderr, "  #%-2u  %s  (%p)\n", i, fn_name, frames[i]);
+        } else {
+            fprintf(stderr, "  #%-2u  %p\n", i, frames[i]);
+            if (unresolved < 32) unresolved_frames[unresolved++] = frames[i];
+        }
+    }
+    // Mingw/zig emit DWARF in the PE, which dbghelp can't read — so
+    // every frame inside the user's own EXE shows as `?`. Print the
+    // ready-to-paste `addr2line` invocation. Addresses are translated
+    // from runtime VAs (subject to ASLR) back into the binary's
+    // ImageBase-relative VAs so addr2line, which only sees the
+    // on-disk PE headers, can resolve them.
+    if (unresolved > 0) {
+        char exe[MAX_PATH] = {0};
+        DWORD got = GetModuleFileNameA(NULL, exe, sizeof(exe));
+        if (got > 0 && got < sizeof(exe)) {
+            HMODULE hmod = GetModuleHandleA(NULL);
+            ULONG_PTR runtime_base = (ULONG_PTR)hmod;
+            // The OptionalHeader.ImageBase in the LOADED module gets
+            // patched by the Windows loader to whatever ASLR picked,
+            // so it equals runtime_base. Re-read it from the on-disk
+            // EXE so we know the original value addr2line will see.
+            ULONG_PTR image_base = runtime_base;
+            FILE* f = fopen(exe, "rb");
+            if (f) {
+                IMAGE_DOS_HEADER dos;
+                if (fread(&dos, sizeof(dos), 1, f) == 1
+                    && dos.e_magic == IMAGE_DOS_SIGNATURE
+                    && fseek(f, dos.e_lfanew, SEEK_SET) == 0) {
+                    IMAGE_NT_HEADERS nt;
+                    if (fread(&nt, sizeof(nt), 1, f) == 1
+                        && nt.Signature == IMAGE_NT_SIGNATURE) {
+                        image_base = (ULONG_PTR)nt.OptionalHeader.ImageBase;
+                    }
+                }
+                fclose(f);
+            }
+            // Build the addr2line argument list (the in-binary
+            // virtual addresses, ASLR-adjusted).
+            char addrs[32 * 24] = {0};
+            int addrs_len = 0;
+            for (int i = 0; i < unresolved; i++) {
+                ULONG_PTR va = (ULONG_PTR)unresolved_frames[i];
+                ULONG_PTR adj = (va - runtime_base) + image_base;
+                addrs_len += snprintf(addrs + addrs_len,
+                    sizeof(addrs) - addrs_len, " 0x%llx", (unsigned long long)adj);
+            }
+            // Try running addr2line in-process so the user sees named
+            // frames immediately — common mingw / msys2 toolchain ships
+            // it on PATH. Fall back to the copy-paste hint otherwise.
+            char cmd[1024];
+            int cmd_len = snprintf(cmd, sizeof(cmd),
+                "addr2line -e \"%s\" -fpC%s 2>nul", exe, addrs);
+            (void)cmd_len;
+            FILE* a2l = _popen(cmd, "r");
+            if (a2l) {
+                char line_buf[1024];
+                int got_any = 0;
+                while (fgets(line_buf, sizeof(line_buf), a2l)) {
+                    if (!got_any) {
+                        fprintf(stderr, "\n  \x1b[1;36m=\x1b[0m resolved via addr2line:\n");
+                        got_any = 1;
+                    }
+                    fprintf(stderr, "      %s", line_buf);
+                }
+                int rc = _pclose(a2l);
+                if (got_any && rc == 0) {
+                    // Successful resolution — done.
+                } else {
+                    fprintf(stderr, "\n  \x1b[1;36m=\x1b[0m resolve unresolved frames with:\n");
+                    fprintf(stderr, "      addr2line -e \"%s\" -fpC%s\n", exe, addrs);
+                }
+            } else {
+                fprintf(stderr, "\n  \x1b[1;36m=\x1b[0m resolve unresolved frames with:\n");
+                fprintf(stderr, "      addr2line -e \"%s\" -fpC%s\n", exe, addrs);
+            }
+        }
+    }
     fflush(stderr);
     ExitProcess((UINT)code);
     return EXCEPTION_CONTINUE_SEARCH;

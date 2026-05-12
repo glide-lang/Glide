@@ -2452,7 +2452,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     let mut cmd: string = cc;
     cmd = cmd.concat(" \"").concat(tmp_c).concat("\"");
     cmd = cmd.concat(" -o \"").concat(out_path).concat("\"");
-    cmd = cmd.concat(" -O2 -w -lpthread -lm");
+    // `-g` ships debug info so the runtime trap handler can resolve
+    // each frame's instruction pointer back to a function name and
+    // source line via dbghelp (Windows) / addr2line (POSIX). Cheap —
+    // adds a few MB to the binary, no runtime cost.
+    cmd = cmd.concat(" -O2 -g -w -lpthread -lm");
     if cross {
         cmd = cmd.concat(" --target=").concat(target);
     }
