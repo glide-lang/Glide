@@ -118,6 +118,7 @@ __attribute__((constructor)) static void __glide_enable_vt(void) {
 #endif
 #ifdef _WIN32
 #include <dbghelp.h>
+#include <psapi.h>
 static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     const char* name = "unhandled exception";
@@ -150,103 +151,157 @@ static LONG WINAPI __glide_seh_handler(EXCEPTION_POINTERS* ep) {
     }
     void* frames[32];
     USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);
-    fprintf(stderr, "stack trace (%u frames):\n", n);
     char sym_buf[sizeof(SYMBOL_INFO) + 256];
     SYMBOL_INFO* sym = (SYMBOL_INFO*)sym_buf;
     sym->SizeOfStruct = sizeof(SYMBOL_INFO);
     sym->MaxNameLen = 255;
     IMAGEHLP_LINE64 line;
     line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-    int unresolved = 0;
-    void* unresolved_frames[32];
+
+    // Resolve dbghelp output for every frame up-front. User-code
+    // frames inside the EXE go through addr2line, system DLL frames
+    // through dbghelp. By gathering both before we print we can lay
+    // out one unified trace instead of two disjoint lists.
+    typedef struct { char text[512]; } FrameLine;
+    FrameLine lines[32];
+    for (USHORT i = 0; i < 32; i++) { lines[i].text[0] = 0; }
+
+    // Identify which frames came out of the running EXE — we'll
+    // batch those through addr2line for source-level resolution.
+    HMODULE hmod = GetModuleHandleA(NULL);
+    ULONG_PTR runtime_base = (ULONG_PTR)hmod;
+    ULONG_PTR runtime_end = runtime_base;
+    MODULEINFO mi;
+    if (GetModuleInformation(proc, hmod, &mi, sizeof(mi))) {
+        runtime_end = runtime_base + mi.SizeOfImage;
+    }
+    int user_frame_idx[32];
+    ULONG_PTR user_frame_addrs[32];  // ASLR-adjusted, for addr2line
+    int n_user = 0;
+
+    // Read on-disk ImageBase once — addr2line resolves against the
+    // PE-baked address, not the runtime ASLR'd one.
+    ULONG_PTR image_base = runtime_base;
+    char exe[MAX_PATH] = {0};
+    DWORD got = GetModuleFileNameA(NULL, exe, sizeof(exe));
+    if (got > 0 && got < sizeof(exe)) {
+        FILE* f = fopen(exe, "rb");
+        if (f) {
+            IMAGE_DOS_HEADER dos;
+            if (fread(&dos, sizeof(dos), 1, f) == 1
+                && dos.e_magic == IMAGE_DOS_SIGNATURE
+                && fseek(f, dos.e_lfanew, SEEK_SET) == 0) {
+                IMAGE_NT_HEADERS nt;
+                if (fread(&nt, sizeof(nt), 1, f) == 1
+                    && nt.Signature == IMAGE_NT_SIGNATURE) {
+                    image_base = (ULONG_PTR)nt.OptionalHeader.ImageBase;
+                }
+            }
+            fclose(f);
+        }
+    }
+
     for (USHORT i = 0; i < n; i++) {
-        DWORD64 addr = (DWORD64)(uintptr_t)frames[i];
+        ULONG_PTR addr = (ULONG_PTR)frames[i];
+        // User-code frame: stash for batch addr2line resolution.
+        if (addr >= runtime_base && addr < runtime_end && got > 0) {
+            user_frame_idx[n_user] = i;
+            user_frame_addrs[n_user] = (addr - runtime_base) + image_base;
+            n_user++;
+            continue;
+        }
+        // System DLL frame: try dbghelp.
         const char* fn_name = NULL;
-        if (sym_inited && SymFromAddr(proc, addr, NULL, sym)) {
+        if (sym_inited && SymFromAddr(proc, (DWORD64)addr, NULL, sym)) {
             fn_name = sym->Name;
         }
         DWORD displ = 0;
-        if (sym_inited && fn_name && SymGetLineFromAddr64(proc, addr, &displ, &line)) {
-            fprintf(stderr, "  #%-2u  %s  at  %s:%lu\n",
-                i, fn_name, line.FileName, (unsigned long)line.LineNumber);
+        if (sym_inited && fn_name
+            && SymGetLineFromAddr64(proc, (DWORD64)addr, &displ, &line)) {
+            snprintf(lines[i].text, sizeof(lines[i].text),
+                "%s  at  %s:%lu", fn_name, line.FileName,
+                (unsigned long)line.LineNumber);
         } else if (fn_name) {
-            fprintf(stderr, "  #%-2u  %s  (%p)\n", i, fn_name, frames[i]);
+            snprintf(lines[i].text, sizeof(lines[i].text),
+                "%s", fn_name);
         } else {
-            fprintf(stderr, "  #%-2u  %p\n", i, frames[i]);
-            if (unresolved < 32) unresolved_frames[unresolved++] = frames[i];
+            snprintf(lines[i].text, sizeof(lines[i].text),
+                "0x%p", (void*)addr);
         }
     }
-    // Mingw/zig emit DWARF in the PE, which dbghelp can't read — so
-    // every frame inside the user's own EXE shows as `?`. Print the
-    // ready-to-paste `addr2line` invocation. Addresses are translated
-    // from runtime VAs (subject to ASLR) back into the binary's
-    // ImageBase-relative VAs so addr2line, which only sees the
-    // on-disk PE headers, can resolve them.
-    if (unresolved > 0) {
-        char exe[MAX_PATH] = {0};
-        DWORD got = GetModuleFileNameA(NULL, exe, sizeof(exe));
-        if (got > 0 && got < sizeof(exe)) {
-            HMODULE hmod = GetModuleHandleA(NULL);
-            ULONG_PTR runtime_base = (ULONG_PTR)hmod;
-            // The OptionalHeader.ImageBase in the LOADED module gets
-            // patched by the Windows loader to whatever ASLR picked,
-            // so it equals runtime_base. Re-read it from the on-disk
-            // EXE so we know the original value addr2line will see.
-            ULONG_PTR image_base = runtime_base;
-            FILE* f = fopen(exe, "rb");
-            if (f) {
-                IMAGE_DOS_HEADER dos;
-                if (fread(&dos, sizeof(dos), 1, f) == 1
-                    && dos.e_magic == IMAGE_DOS_SIGNATURE
-                    && fseek(f, dos.e_lfanew, SEEK_SET) == 0) {
-                    IMAGE_NT_HEADERS nt;
-                    if (fread(&nt, sizeof(nt), 1, f) == 1
-                        && nt.Signature == IMAGE_NT_SIGNATURE) {
-                        image_base = (ULONG_PTR)nt.OptionalHeader.ImageBase;
-                    }
+
+    // Spawn addr2line once for all user-code frames. The mingw/zig
+    // pipeline emits DWARF, which dbghelp can't read; addr2line is
+    // shipped with the same toolchain so it's on PATH for any glide
+    // user. -fpC prints "func at file:line" on one line per address.
+    int a2l_ok = 0;
+    if (n_user > 0) {
+        char addrs[32 * 24] = {0};
+        int addrs_len = 0;
+        for (int k = 0; k < n_user; k++) {
+            addrs_len += snprintf(addrs + addrs_len,
+                sizeof(addrs) - addrs_len,
+                " 0x%llx", (unsigned long long)user_frame_addrs[k]);
+        }
+        char cmd[1024];
+        snprintf(cmd, sizeof(cmd),
+            "addr2line -e \"%s\" -fpsC%s 2>nul", exe, addrs);
+        FILE* a2l = _popen(cmd, "r");
+        if (a2l) {
+            int k = 0;
+            char line_buf[1024];
+            while (k < n_user && fgets(line_buf, sizeof(line_buf), a2l)) {
+                // Strip trailing newline.
+                size_t L = strlen(line_buf);
+                while (L > 0 && (line_buf[L-1] == '\n' || line_buf[L-1] == '\r')) {
+                    line_buf[--L] = 0;
                 }
-                fclose(f);
+                if (L == 0) continue;
+                int idx = user_frame_idx[k++];
+                snprintf(lines[idx].text, sizeof(lines[idx].text),
+                    "%s", line_buf);
             }
-            // Build the addr2line argument list (the in-binary
-            // virtual addresses, ASLR-adjusted).
-            char addrs[32 * 24] = {0};
-            int addrs_len = 0;
-            for (int i = 0; i < unresolved; i++) {
-                ULONG_PTR va = (ULONG_PTR)unresolved_frames[i];
-                ULONG_PTR adj = (va - runtime_base) + image_base;
-                addrs_len += snprintf(addrs + addrs_len,
-                    sizeof(addrs) - addrs_len, " 0x%llx", (unsigned long long)adj);
+            int rc = _pclose(a2l);
+            a2l_ok = (k > 0 && rc == 0);
+            // Frames addr2line didn't fill get a raw-address placeholder
+            // (-s already gave us basenames; if we got nothing, fall
+            // back to a copy-paste hint at the end).
+            while (k < n_user) {
+                int idx = user_frame_idx[k];
+                snprintf(lines[idx].text, sizeof(lines[idx].text),
+                    "0x%llx (in %s)",
+                    (unsigned long long)user_frame_addrs[k],
+                    exe);
+                k++;
             }
-            // Try running addr2line in-process so the user sees named
-            // frames immediately — common mingw / msys2 toolchain ships
-            // it on PATH. Fall back to the copy-paste hint otherwise.
-            char cmd[1024];
-            int cmd_len = snprintf(cmd, sizeof(cmd),
-                "addr2line -e \"%s\" -fpC%s 2>nul", exe, addrs);
-            (void)cmd_len;
-            FILE* a2l = _popen(cmd, "r");
-            if (a2l) {
-                char line_buf[1024];
-                int got_any = 0;
-                while (fgets(line_buf, sizeof(line_buf), a2l)) {
-                    if (!got_any) {
-                        fprintf(stderr, "\n  \x1b[1;36m=\x1b[0m resolved via addr2line:\n");
-                        got_any = 1;
-                    }
-                    fprintf(stderr, "      %s", line_buf);
-                }
-                int rc = _pclose(a2l);
-                if (got_any && rc == 0) {
-                    // Successful resolution — done.
-                } else {
-                    fprintf(stderr, "\n  \x1b[1;36m=\x1b[0m resolve unresolved frames with:\n");
-                    fprintf(stderr, "      addr2line -e \"%s\" -fpC%s\n", exe, addrs);
-                }
-            } else {
-                fprintf(stderr, "\n  \x1b[1;36m=\x1b[0m resolve unresolved frames with:\n");
-                fprintf(stderr, "      addr2line -e \"%s\" -fpC%s\n", exe, addrs);
+        } else {
+            for (int k = 0; k < n_user; k++) {
+                int idx = user_frame_idx[k];
+                snprintf(lines[idx].text, sizeof(lines[idx].text),
+                    "0x%llx (in %s)",
+                    (unsigned long long)user_frame_addrs[k],
+                    exe);
             }
         }
+    }
+
+    // Single unified stack trace.
+    fprintf(stderr, "stack trace (%u frames):\n", n);
+    for (USHORT i = 0; i < n; i++) {
+        fprintf(stderr, "  #%-2u  %s\n", i, lines[i].text);
+    }
+    if (n_user > 0 && !a2l_ok) {
+        // addr2line didn't run or didn't produce output — print the
+        // copy-paste hint so the user can resolve manually.
+        char addrs[32 * 24] = {0};
+        int addrs_len = 0;
+        for (int k = 0; k < n_user; k++) {
+            addrs_len += snprintf(addrs + addrs_len,
+                sizeof(addrs) - addrs_len,
+                " 0x%llx", (unsigned long long)user_frame_addrs[k]);
+        }
+        fprintf(stderr, "\n  \x1b[1;36m=\x1b[0m resolve user frames with:\n");
+        fprintf(stderr, "      addr2line -e \"%s\" -fpsC%s\n", exe, addrs);
     }
     fflush(stderr);
     ExitProcess((UINT)code);
