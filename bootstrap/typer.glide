@@ -169,23 +169,127 @@ fn _type_references_any(t: *Type, names: *Vector<string>) -> bool {
     return false;
 }
 
+// Head of a type, used by the hint gate: "Json<Res>" -> "Json", "*Foo" ->
+// "Foo", "!int" -> "Result", "?int" -> "Option", "?!int" -> "OptResult".
+fn _type_head_name(t: *Type) -> string {
+    if t == null { return ""; }
+    if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT {
+        return _type_head_name(t.inner);
+    }
+    if t.kind == TY_RESULT { return "Result"; }
+    if t.kind == TY_OPTION { return "Option"; }
+    if t.kind == TY_OPT_RESULT { return "OptResult"; }
+    if t.kind == TY_NAMED { return t.name; }
+    if t.kind == TY_GENERIC { return t.name; }
+    return "";
+}
+
+// Comma-joined membership test. "Json,Result" contains "Json" -> true.
+fn _csv_contains(csv: string, needle: string) -> bool {
+    if csv == null || csv.eq("") { return false; }
+    let n: int = csv.len();
+    let mut start: int = 0;
+    let mut i: int = 0;
+    while i <= n {
+        let at_end: bool = i == n;
+        let mut sep: bool = at_end;
+        if !at_end { if csv.at(i).to_int() == 44 { sep = true; } }
+        if sep {
+            let seg: string = csv.substring(start, i);
+            if seg.eq(needle) { return true; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Replace every `%key%` in `tpl` with `value`. We use `%...%` (not the
+// usual `${...}`) because the Glide lexer parses `${expr}` as a string-
+// interpolation macro and synthesises an EX_MACRO call on attribute
+// args — which trips the EX_STRING check upstream.
+fn _tpl_replace(tpl: string, key: string, value: string) -> string {
+    if tpl == null || tpl.eq("") { return tpl; }
+    let pat: string = "%".concat(key).concat("%");
+    let pl: int = pat.len();
+    let tl: int = tpl.len();
+    let mut out: string = "";
+    let mut i: int = 0;
+    while i < tl {
+        if i + pl <= tl && tpl.substring(i, i + pl).eq(pat) {
+            out = out.concat(value);
+            i = i + pl;
+        } else {
+            out = out.concat(tpl.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+// Param count of a fn / fn-ptr type. -1 for non-fnptr.
+fn _fnptr_arity(t: *Type) -> int {
+    if t == null || t.kind != TY_FNPTR { return -1; }
+    if t.args == null { return 0; }
+    return t.args.len();
+}
+
+// True if the `got_param_shape` gate accepts `got`'s arity. Supported
+// values: "" (any), "0", "1+".
+fn _param_shape_ok(shape: string, got: *Type) -> bool {
+    if shape == null || shape.eq("") { return true; }
+    let n: int = _fnptr_arity(got);
+    if n < 0 { return true; }
+    if shape.eq("0") { return n == 0; }
+    if shape.eq("1+") { return n >= 1; }
+    if shape.eq("any") { return true; }
+    return true;
+}
+
 // If `want` is a fn-ptr whose return type matches a registered
 // `@suggest_for_fnptr` hint, return the hint message prefixed with
 // `\n  hint: `. Empty when there's no match. Lets proc-macro authors
 // surface "annotate with @handler" (or similar) when a user passes
 // a raw fn where a wrapped fn-ptr was expected.
-fn _fnptr_hint(t: *Typer, want: *Type) -> string {
+//
+// Message template supports `${want}` / `${got}` / `${want_ret}` /
+// `${got_ret}` / `${got_name}` placeholders that the typer fills in
+// at emit time. Optional `@suggest_when_got_returns` /
+// `@suggest_when_got_params` companion attrs gate the hint to user
+// fns the proc-macro can actually wrap.
+fn _fnptr_hint(t: *Typer, want: *Type, got: *Type, got_name: string) -> string {
     if t == null || want == null { return ""; }
     if want.kind != TY_FNPTR { return ""; }
     if want.fnptr_ret == null { return ""; }
     if want.fnptr_ret.kind != TY_NAMED { return ""; }
     if t.fnptr_hints == null { return ""; }
     let ret_name: string = want.fnptr_ret.name;
+    let got_ret_head: string = if got != null && got.kind == TY_FNPTR && got.fnptr_ret != null {
+        _type_head_name(got.fnptr_ret)
+    } else { "" };
     for let i: int = 0; i < t.fnptr_hints.len(); i++ {
         let h: FnptrHint = t.fnptr_hints.get(i);
-        if h.ret_type_name.eq(ret_name) {
-            return "\n  hint: ".concat(h.message);
+        if !h.ret_type_name.eq(ret_name) { continue; }
+        // Got-side gate: optional return-head allow list.
+        if !h.got_ret_heads.eq("") && !got_ret_head.eq("") {
+            if !_csv_contains(h.got_ret_heads, got_ret_head) { continue; }
         }
+        // Got-side gate: optional param-shape constraint.
+        if !_param_shape_ok(h.got_param_shape, got) { continue; }
+        // Substitute placeholders.
+        let want_str: string = type_to_string(want);
+        let got_str: string = if got != null { type_to_string(got) } else { "" };
+        let want_ret_str: string = type_to_string(want.fnptr_ret);
+        let got_ret_str: string = if got != null && got.kind == TY_FNPTR && got.fnptr_ret != null {
+            type_to_string(got.fnptr_ret)
+        } else { "" };
+        let mut msg: string = h.message;
+        msg = _tpl_replace(msg, "want", want_str);
+        msg = _tpl_replace(msg, "got", got_str);
+        msg = _tpl_replace(msg, "want_ret", want_ret_str);
+        msg = _tpl_replace(msg, "got_ret", got_ret_str);
+        msg = _tpl_replace(msg, "got_name", got_name);
+        return "\n  hint: ".concat(msg);
     }
     return "";
 }
@@ -374,6 +478,15 @@ pub struct Typer {
 pub struct FnptrHint {
     pub ret_type_name: string,
     pub message: string,
+    // Optional gate: comma-joined list of return-type heads the GOT fn
+    // can have for this hint to fire. e.g. `"Json,Result,Option"` means
+    // "only show this hint if the user's fn returns Json<T>, !T, or ?T".
+    // Empty string = always fire on want-side match.
+    pub got_ret_heads: string,
+    // Optional gate: comma-joined list of param-shape requirements.
+    // For now we support simple counts: `"0"`, `"any"`, `"1+"`. The
+    // typer's matcher decides; default = always match.
+    pub got_param_shape: string,
 }
 
 // Free helper: looks up `name` in the enclosing fn's type parameter
@@ -707,7 +820,12 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
 
     // Collect `@suggest_for_fnptr(RetType, "message")` annotations from
     // every fn in the program. Each entry: hint shown when a fn-ptr arg
-    // mismatch's expected return type matches `RetType`.
+    // mismatch's expected return type matches `RetType` (the "want"
+    // side). Optional companion attrs tighten the gate further so the
+    // hint only fires on user fns the macro can actually wrap:
+    //
+    //   @suggest_when_got_returns(Json, Result, Option, HttpResponse)
+    //   @suggest_when_got_params("0")     // 0 / 1+ / any
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN || s.attrs == null { continue; }
@@ -719,9 +837,30 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             let msg_arg: Expr = a.args.get(1);
             if ret_arg.kind != EX_IDENT { continue; }
             if msg_arg.kind != EX_STRING { continue; }
+            // Companion gates (same fn's other attrs).
+            let mut got_heads: string = "";
+            let mut got_params: string = "";
+            for let k: int = 0; k < s.attrs.len(); k++ {
+                let b: Attr = s.attrs.get(k);
+                if b.name == null { continue; }
+                if b.name.eq("suggest_when_got_returns") && b.args != null {
+                    for let m: int = 0; m < b.args.len(); m++ {
+                        let pe: Expr = b.args.get(m);
+                        if pe.kind != EX_IDENT { continue; }
+                        if !got_heads.eq("") { got_heads = got_heads.concat(","); }
+                        got_heads = got_heads.concat(pe.str_val);
+                    }
+                }
+                if b.name.eq("suggest_when_got_params") && b.args != null && b.args.len() >= 1 {
+                    let pe: Expr = b.args.get(0);
+                    if pe.kind == EX_STRING { got_params = pe.str_val; }
+                }
+            }
             let h: FnptrHint = FnptrHint {
                 ret_type_name: ret_arg.str_val,
                 message: msg_arg.str_val,
+                got_ret_heads: got_heads,
+                got_param_shape: got_params,
             };
             t.fnptr_hints.push(h);
         }
@@ -1818,11 +1957,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                 }
                             }
                             if !arg_compat(want_p, at, msig.type_params) {
+                                let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
                                 t.err(a.line, a.column,
                                     "arg ".concat(p.name).concat(" type mismatch: expected ")
                                     .concat(type_to_string(want_p))
                                     .concat(", got ").concat(type_to_string(at))
-                                    .concat(_fnptr_hint(t, want_p)));
+                                    .concat(_fnptr_hint(t, want_p, at, got_name)));
                             }
                         }
                     } else if e.args != null {
@@ -1917,11 +2057,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             }
                             let at: *Type = infer_expr(t, &a);
                             if !arg_compat(p.ty, at, sig.type_params) {
+                                let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
                                 t.err(a.line, a.column,
                                     "arg ".concat(p.name)
                                     .concat(" type mismatch: expected ").concat(type_to_string(p.ty))
                                     .concat(", got ").concat(type_to_string(at))
-                                    .concat(_fnptr_hint(t, p.ty)));
+                                    .concat(_fnptr_hint(t, p.ty, at, got_name)));
                             }
                         }
                         // Walk variadic tail args for nested type errors but

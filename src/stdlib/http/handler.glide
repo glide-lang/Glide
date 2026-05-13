@@ -51,7 +51,9 @@ import bootstrap::interp::*;
 /// - `HttpResponse`           — passthrough
 /// - `Json<T>`                — auto `.into_response()`
 @proc_attr(handler)
-@suggest_for_fnptr(HttpResponse, "annotate the source fn with `@handler` (from stdlib::http::handler) to auto-extract typed params and wrap the return into HttpResponse")
+@suggest_for_fnptr(HttpResponse,
+  "fn `%got_name%` has shape %got%. Annotate it with `@handler` (from stdlib::http::handler) so the macro auto-extracts typed params and wraps the return into %want_ret% — the shape `r.get(...)` needs.")
+@suggest_when_got_returns(Json, HttpResponse, Result, Option, OptResult)
 fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
 
