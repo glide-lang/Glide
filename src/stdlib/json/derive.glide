@@ -31,6 +31,23 @@
 import bootstrap::ast::*;
 import bootstrap::interp::*;
 
+/// Auto-generates `impl JsonBind for <Struct> { from_json, to_json }`
+/// from the struct's fields. Primitive fields (`int`, `f64`, `bool`,
+/// `string`) and their `?T` variants are recognised; nested structs
+/// need their own `@derive(JsonBind)` or hand-written impl.
+///
+/// ```glide
+/// @derive(JsonBind)
+/// pub struct User {
+///     pub name:  string,
+///     pub age:   ?int,    // optional field — missing in JSON -> none()
+///     pub admin: bool,
+/// }
+/// // User now has User::from_json(v) and user.to_json(), so
+/// // Json<User> extracts/responds round-trip.
+/// ```
+///
+/// Field name preserved as-is in the JSON object (no auto camelCase).
 @proc_derive(JsonBind)
 fn derive_json_bind(s: *Stmt) -> *Vector<Stmt> {
     let methods: *Vector<Stmt> = Vector::new();

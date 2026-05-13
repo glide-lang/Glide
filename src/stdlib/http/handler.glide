@@ -26,6 +26,30 @@
 import bootstrap::ast::*;
 import bootstrap::interp::*;
 
+/// Axum-style typed handler. Wraps a fn so its params can be typed
+/// extractors (`Json<T>`, `Path<T>`, `Bearer`, `Headers`, `State<T>`,
+/// or any `FromRequest` impl) and its return can be `HttpResponse` or
+/// `Json<T>`. The macro generates a wrapper fn(*HttpRequest) ->
+/// HttpResponse around the user fn, so the existing router still works.
+///
+/// ```glide
+/// @handler
+/// fn show(id: Path<int>) -> Json<User> {
+///     return Json::wrap(load_user(id.val));
+/// }
+/// r.get("/users/:id", show);
+/// ```
+///
+/// Param dispatch (in order):
+/// - `*HttpRequest`           — passthrough
+/// - `Json<T>`                — `req.body_json()` + `T::from_json` (400/422)
+/// - `Path<T>`                — `Path::extract(req, "<param-name>")`
+/// - `State<T>`               — `State::extract(req)`
+/// - any other `T`            — `T::from_request(req)` via `FromRequest`
+///
+/// Return shape:
+/// - `HttpResponse`           — passthrough
+/// - `Json<T>`                — auto `.into_response()`
 @proc_attr(handler)
 fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
