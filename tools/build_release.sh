@@ -22,7 +22,7 @@
 
 set -e
 
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 ZIG_VERSION="${ZIG_VERSION:-0.14.1}"
 TARGET=""
 
@@ -136,8 +136,13 @@ fi
 # `src/builtins/` is auto-injected by the compiler; `src/stdlib/` ships
 # alongside it so user code can `import "src/stdlib/X.glide"`.
 echo ">> Staging $STAGE"
-rm -rf "$STAGE/src" "$STAGE/runtime"
+rm -rf "$STAGE/src" "$STAGE/runtime" "$STAGE/bootstrap"
 cp -r src "$STAGE/"
+# Bootstrap source ships so proc-macro impls (handler.glide, derive.glide)
+# can resolve their `import bootstrap::ast::*` / `import bootstrap::interp::*`
+# at expand-time, and so the LSP surfaces goto/hover for `Stmt`/`Expr`/
+# `Type` inside the proc-fns.
+cp -r bootstrap "$STAGE/"
 mkdir -p "$STAGE/runtime"
 if [ -n "$TARGET_ZIG_DIR" ]; then
     cp -r "$TARGET_ZIG_DIR" "$STAGE/runtime/zig"
