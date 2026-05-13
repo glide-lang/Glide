@@ -3,7 +3,7 @@
 // the produced binary.
 let manifest: Package = Package {
     name:    "glide",
-    version: "0.1.0",
+    version: "0.1.1",
     bin:     "bootstrap/main.glide",
     deps: vec_of(
     ),

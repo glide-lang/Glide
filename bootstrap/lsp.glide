@@ -317,7 +317,7 @@ fn handle_initialize(req: *JsonValue) {
     json_obj_set(result, "capabilities", caps);
     let info: *JsonValue = json_object();
     json_obj_set(info, "name", json_string("glide-lsp"));
-    json_obj_set(info, "version", json_string("0.1.0"));
+    json_obj_set(info, "version", json_string("0.1.1"));
     json_obj_set(result, "serverInfo", info);
     lsp_send_response(id, result);
 }

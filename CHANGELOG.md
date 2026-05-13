@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.1.1 — 2026-05-13
+
+### LSP / Editor
+
+- Member completion chain resolver (`r.listen(8080).` ->
+  `[ok, val, err]` from `!int`; `var.method(args).` walks
+  recursive). Strings, comments, char literals never trigger
+  completion. Member context never falls through to the bare-ident
+  list (was dumping 500+ globals).
+- Closure params + nested-block lets visible to `.` completion.
+- Macros (`assert!`, free + proc) appear in bare-ident completion
+  with auto-import edits. `@<attr>` and `@derive(Name)` are
+  context-aware.
+- Hover + goto on proc-macro names (`@derive(JsonBind)`,
+  `@handler`) land on the registered impl fn. Hover on builtin
+  attrs (`@cfg`, `@derive`, etc.) shows a one-line description.
+- documentHighlight / references / rename now walk type
+  annotations, attribute args, member fields, struct literals,
+  EX_PATH heads + tails, and closures.
+- Drop synth-position diagnostics so proc-macro outputs don't
+  surface spurious `unused-param` on line 1.
+- Goto on `import a::b::c;` returns null when the resolved path
+  doesn't exist (was crashing Zed worktrees with bogus URIs).
+
+### Typer
+
+- Method-call return type resolved through the impl registry +
+  owner-type-param substitution (`*Vector<int>.get()` -> `int`,
+  `r.listen(8080)` -> `!int`).
+- Bare fn idents type as real TY_FNPTR. Passing `fn() -> Json<X>`
+  to `r.get("/", _)` errors with the full shape at typecheck time
+  instead of segfaulting at runtime.
+- Method-call arg list compared against the impl params.
+- `unused-import` walks attr args, type annotations, and closure
+  param types so `@derive(JsonBind)` and `fn(req: *HttpRequest)`
+  count as uses.
+- Selective imports accept proc-macro registered names
+  (`import stdlib::http::handler::handler;`) and `ST_TRAIT` items.
+- New `@suggest_for_fnptr(ReturnType, "...")` attribute lets
+  proc-macro authors attach context-aware hints to fn-ptr-arg
+  mismatches. Companion gates: `@suggest_when_got_returns(...)` /
+  `@suggest_when_got_params("0" | "1+" | "any")`. Template
+  placeholders: `%got_name%`, `%got%`, `%got_ret%`, `%want%`,
+  `%want_ret%`.
+
+### Codegen + expander
+
+- Closure-lift writes back to `e.args` so a fn passed as call arg
+  doesn't get re-lifted with a second id, breaking the forward-decl
+  pass (`__glide_anon_1` undeclared at C link).
+- `strip_compile_time_only` drops `@proc_<kind>` impl fns + their
+  bootstrap/* helpers before codegen — user binaries stop emitting
+  references to `Stmt` / `Expr` / `Type` carriers the installed
+  `~/.glide/bin/src/` doesn't ship.
+
+### Grammar
+
+- Generic `@<name>` / `@<name>(args)` rule covers `@derive`,
+  `@handler`, `@proc_*`, etc. Highlights as `@attribute`. Tree-
+  sitter parser.c regenerated; zed-extension grammar commit
+  bumped.
+
+### Stdlib
+
+- `@handler` and `@derive(JsonBind)` carry `///` doc-comments so
+  hover shows usage + example. `@handler` also carries
+  `@suggest_for_fnptr(HttpResponse, ...)` so passing a non-handler
+  fn to `r.get(...)` surfaces an annotated hint.
+
+### Install
+
+- `glide install` now copies `<project>/bootstrap/` to
+  `<install_dir>/bootstrap/` alongside `src/`. Lets proc-macros
+  (which `import bootstrap::ast::*`) resolve their AST helpers
+  outside the dev repo, and lets the LSP surface goto/hover for
+  `Stmt` / `Expr` / `Type` inside proc-fns.
+
 ## 0.1.0 — 2026-05-12
 
 ### Language
