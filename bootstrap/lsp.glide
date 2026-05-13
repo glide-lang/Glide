@@ -2042,6 +2042,15 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
             if pm.doc_comment != null && !pm.doc_comment.eq("") {
                 content = content.concat("\n\n---\n\n").concat(pm.doc_comment);
             }
+        } else {
+            // Builtin attribute (`@cfg`, `@derive`, `@expect`, `@allow`,
+            // `@deprecated`, `@lint`, `@proc_*`). Show a one-line
+            // description so hovering the attr name itself produces a
+            // card instead of null.
+            let bi: string = _builtin_attr_doc(word);
+            if !bi.eq("") {
+                content = "```glide\n@".concat(word).concat("\n```\n\n---\n\n").concat(bi);
+            }
         }
     }
 
@@ -2314,9 +2323,13 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     // 0) Cursor on a segment of an `import a::b::c;` line — jump to the
     //    resolved .glide file. Walks doc.stmts for the ST_IMPORT whose
     //    line matches the cursor; its `import_path` already holds the
-    //    fully-resolved on-disk path.
+    //    fully-resolved on-disk path. We only jump when the path
+    //    actually exists; otherwise we'd hand Zed a bogus URI (the
+    //    resolver's "first attempt" fallback for unfound imports), it'd
+    //    try to canonicalize it and log a worktree error.
     let imp: *Stmt = _find_import_on_line(doc.stmts, line0, uri);
-    if imp != null && imp.import_path != null && !imp.import_path.eq("") {
+    if imp != null && imp.import_path != null && !imp.import_path.eq("")
+       && __glide_file_exists(imp.import_path) {
         let target: string = path_to_uri(imp.import_path);
         let loc: *JsonValue = json_object();
         json_obj_set(loc, "uri", json_string(target));
@@ -2398,10 +2411,17 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     if decl == null { lsp_send_response(id, json_null()); return; }
 
     // Build the URI from the decl's origin so jumps to stdlib (Vector,
-    // HashMap, ...) actually open the right file.
+    // HashMap, ...) actually open the right file. Verify the origin
+    // exists on disk — origins of stmts pulled from a failed transitive
+    // import (file not found) get set to the resolver's "first attempt"
+    // path. Returning that to Zed makes it log a worktree canonicalize
+    // error. Fall back to the current doc when the path doesn't resolve.
     let mut target_uri: string = uri;
-    if decl.origin != null && !decl.origin.eq("") {
+    if decl.origin != null && !decl.origin.eq("") && __glide_file_exists(decl.origin) {
         target_uri = path_to_uri(decl.origin);
+    } else if decl.origin != null && !decl.origin.eq("") {
+        lsp_send_response(id, json_null());
+        return;
     }
     let loc: *JsonValue = json_object();
     json_obj_set(loc, "uri", json_string(target_uri));
@@ -2456,6 +2476,44 @@ fn _inside_proc_attr_arg(text: string, line0: int, col0: int) -> bool {
         i = i - 1;
     }
     return i > 0 && text.at(i - 1).to_int() == 64;
+}
+
+// One-line descriptions for compiler-recognised attribute names. Returns
+// "" for anything that isn't a builtin so the caller can fall back to
+// the proc-macro registry / top-level decl lookup.
+fn _builtin_attr_doc(name: string) -> string {
+    if name == null { return ""; }
+    if name.eq("cfg") {
+        return "Per-platform guard: `@cfg(\"windows\")` wraps the decl in `#ifdef _WIN32`, `@cfg(\"posix\")` in `#ifndef _WIN32`. Applied to fn / struct / impl / const.";
+    }
+    if name.eq("derive") {
+        return "Apply one or more proc-derive macros to the next struct: `@derive(JsonBind, Debug)`. Each arg names a fn registered via `@proc_derive(Name)`.";
+    }
+    if name.eq("expect") {
+        return "Test-only: assert that the next decl raises a diagnostic with the given code. `@expect(\"unused-var\")`. The diag is swallowed when the expectation matches.";
+    }
+    if name.eq("allow") {
+        return "Silence a specific lint on the next decl. `@allow(\"unused-var\")` / `@allow(\"deprecated-fn\")`.";
+    }
+    if name.eq("deprecated") {
+        return "Mark a decl as deprecated. Optional reason: `@deprecated(\"use Foo::new instead\")`. Calls surface a `deprecated-fn` warning.";
+    }
+    if name.eq("lint") {
+        return "Per-decl lint promotion: `@lint(\"unused-var\", \"error\")` makes the named lint hard-fail on this decl only.";
+    }
+    if name.eq("proc_attr") {
+        return "Register the annotated fn as the implementation of an attribute proc-macro. `@proc_attr(handler)` lets user code write `@handler` on fns / structs.";
+    }
+    if name.eq("proc_derive") {
+        return "Register the annotated fn as a derive proc-macro. `@proc_derive(JsonBind)` lets user code write `@derive(JsonBind)` on structs.";
+    }
+    if name.eq("proc_macro") {
+        return "Register the annotated fn as a function-style proc-macro that takes a typed AST and returns a Vector<Stmt>. `@proc_macro(name)` lets user code write `name!(...)`.";
+    }
+    if name.eq("proc_macro_str") {
+        return "Register the annotated fn as a function-style proc-macro that takes its body as a raw string. `@proc_macro_str(name)` for templating / lit-style use.";
+    }
+    return "";
 }
 
 // True when the cursor sits on the identifier of a bare attribute like
