@@ -6075,6 +6075,10 @@ fn check_unused_params_fn(t: *Typer, fnstmt: *Stmt) {
     if fnstmt.fn_body == null { return; }
     if fnstmt.fn_params == null { return; }
     if fnstmt.is_naked { return; }                          // params accessed via raw calling-conv regs
+    // Synthesised fns (proc-macro outputs with line == 0) — the user
+    // can't fix the `_` here, and the warning would anchor at line 1
+    // of their file. Skip.
+    if fnstmt.line <= 0 { return; }
     for let i: int = 0; i < fnstmt.fn_params.len(); i++ {
         let p: Param = fnstmt.fn_params.get(i);
         if p.name.eq("self") { continue; }

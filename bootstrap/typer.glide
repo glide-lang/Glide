@@ -585,6 +585,11 @@ impl Typer {
     }
 
     fn push_diag_tag(self: *Typer, line: int, col: int, severity: int, code: string, msg: string, tag: int) {
+        // Synth-position diagnostics (proc-macro outputs, builtin
+        // surrogates) anchor at line 0 and render at line 1 in the
+        // editor — useless to the user, since they can't fix the
+        // generated code. Drop them at the source.
+        if line <= 0 { return; }
         let mut origin: string = self.current_origin;
         if origin == null { origin = ""; }
         let e: DiagEntry = DiagEntry {
