@@ -92,6 +92,21 @@ pub fn type_to_string(t: *Type) -> string {
     if t.kind == TY_OPT_RESULT { return "?!".concat(type_to_string(t.inner)); }
     if t.kind == TY_DYN { return "dyn ".concat(t.name); }
     if t.kind == TY_ASSOC { return type_to_string(t.inner).concat("::").concat(t.name); }
+    if t.kind == TY_FNPTR {
+        let mut s: string = "fn(";
+        if t.args != null {
+            for let i: int = 0; i < t.args.len(); i++ {
+                if i > 0 { s = s.concat(", "); }
+                let a: Type = t.args.get(i);
+                s = s.concat(type_to_string(&a));
+            }
+        }
+        s = s.concat(")");
+        if t.fnptr_ret != null {
+            s = s.concat(" -> ").concat(type_to_string(t.fnptr_ret));
+        }
+        return s;
+    }
     return "<ty?>";
 }
 
@@ -133,6 +148,72 @@ fn is_unknown_type(t: *Type) -> bool {
     return t.kind == TY_NAMED && t.name.eq("__unknown__");
 }
 
+// True if `t` (recursively) names any of the strings in `names`. Used to
+// detect still-generic return types after impl-param subst so we fall back
+// to null (permissive) instead of surfacing an unresolved `T` upstream.
+fn _type_references_any(t: *Type, names: *Vector<string>) -> bool {
+    if t == null || names == null { return false; }
+    if t.kind == TY_NAMED {
+        for let i: int = 0; i < names.len(); i++ {
+            if t.name.eq(names.get(i)) { return true; }
+        }
+        return false;
+    }
+    if t.inner != null && _type_references_any(t.inner, names) { return true; }
+    if t.args != null {
+        for let i: int = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            if _type_references_any(&a, names) { return true; }
+        }
+    }
+    return false;
+}
+
+// Minimal subst for method-call return-type inference. Walks the type tree
+// and rewrites any TY_NAMED whose name appears in `params` with the
+// corresponding entry of `args`. Mirrors codegen's `subst_type` for just
+// the shapes we hit during inference.
+fn _subst_type_local(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
+    if t == null { return null; }
+    if t.kind == TY_NAMED && params != null {
+        for let i: int = 0; i < params.len(); i++ {
+            if t.name.eq(params.get(i)) {
+                let a: Type = args.get(i);
+                let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *p = a;
+                return p;
+            }
+        }
+        return t;
+    }
+    if t.kind == TY_POINTER { return ty_pointer(_subst_type_local(t.inner, params, args)); }
+    if t.kind == TY_RESULT  { return ty_result(_subst_type_local(t.inner, params, args)); }
+    if t.kind == TY_OPTION  { return ty_option(_subst_type_local(t.inner, params, args)); }
+    if t.kind == TY_OPT_RESULT { return ty_optres(_subst_type_local(t.inner, params, args)); }
+    if t.kind == TY_BORROW {
+        let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+        p.kind = TY_BORROW; p.inner = _subst_type_local(t.inner, params, args);
+        return p;
+    }
+    if t.kind == TY_BORROW_MUT {
+        let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+        p.kind = TY_BORROW_MUT; p.inner = _subst_type_local(t.inner, params, args);
+        return p;
+    }
+    if t.kind == TY_GENERIC {
+        let new_args: *Vector<Type> = Vector::new();
+        if t.args != null {
+            for let i: int = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                let sa: *Type = _subst_type_local(&a, params, args);
+                if sa != null { new_args.push(*sa); }
+            }
+        }
+        return ty_generic(t.name, new_args);
+    }
+    return t;
+}
+
 pub fn types_compat(want: *Type, got: *Type) -> bool {
     // If either side couldn't be inferred (the typer is permissive and many
     // expressions still return null), don't pretend it's a mismatch — that
@@ -170,6 +251,11 @@ pub struct FnSig {
     // site after inferring the concrete type for each T from the args.
     pub type_params: *Vector<string>,
     pub type_param_bounds: *Vector<string>,
+    // For impl methods: the owning impl block's `<T, U>` (separate from the
+    // method's own `type_params` — usually empty). Lets method-call type
+    // inference substitute `T` in the return type using the receiver's
+    // concrete args (`*Vector<int>.get()` -> int, not T).
+    pub owner_type_params: *Vector<string>,
 }
 
 // ---- typer state ---------------------------------------------------------
@@ -485,6 +571,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             if ty != null { t.module_scope.insert(s.name, *ty); }
         }
         if s.kind == ST_FN {
+            let no_owner: *Vector<string> = null;
             let sig: FnSig = FnSig {
                 name: s.name,
                 params: s.fn_params,
@@ -492,6 +579,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 is_variadic: s.is_variadic,
                 type_params: s.type_params,
                 type_param_bounds: s.type_param_bounds,
+                owner_type_params: no_owner,
             };
             t.fns.insert(s.name, sig);
         }
@@ -548,6 +636,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                             is_variadic: m.is_variadic,
                             type_params: m.type_params,
                             type_param_bounds: m.type_param_bounds,
+                            owner_type_params: s.type_params,
                         };
                         t.fns.insert(fname, sig);
                     }
@@ -1466,13 +1555,34 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             *p = ty;
             return p;
         }
-        // Maybe it's a function name
+        // Maybe it's a function name. Build a real TY_FNPTR from the
+        // registered signature so passing `handler` to a `r.get(...,
+        // fn(*HttpRequest) -> HttpResponse)` arg actually type-checks
+        // the return shape. Without this the call accepts any fn name
+        // and the mismatch only surfaces at runtime as a segfault
+        // (`Json<Res>` returned where `HttpResponse` was expected ABI-
+        // smashes the receiver pointer chain).
         if t.fns.contains(e.str_val) {
             if !t.is_visible(e.str_val) {
                 t.err(e.line, e.column, "name `".concat(e.str_val).concat("` is not in scope; add an `import` for it"));
                 return null;
             }
-            return ty_named("__fn__");  // placeholder; full fn-pointer support later
+            let sig: FnSig = t.fns.get(e.str_val);
+            // Generic fns can't be expressed as a concrete fn-ptr (we
+            // don't know the mono args here). Fall back to the legacy
+            // placeholder so the call site stays permissive.
+            if sig.type_params != null && sig.type_params.len() > 0 {
+                return ty_named("__fn__");
+            }
+            let params: *Vector<Type> = Vector::new();
+            if sig.params != null {
+                for let i: int = 0; i < sig.params.len(); i++ {
+                    let p: Param = sig.params.get(i);
+                    if p.ty == null { return ty_named("__fn__"); }
+                    params.push(*p.ty);
+                }
+            }
+            return ty_fnptr(params, sig.ret_type);
         }
         t.err(e.line, e.column, "unknown name `".concat(e.str_val).concat("`"));
         return null;
@@ -1609,6 +1719,88 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         t.err(e.line, e.column, "`chan.close` takes no arguments");
                     }
                     return ty_named("void");
+                }
+            }
+            // Impl method lookup: `recv.method(args)` -> `<Type>_method` in
+            // the fn registry. Without this the call's return type leaks as
+            // null and the surrounding check (e.g. `return r.listen()`) lets
+            // `!int` slip past a fn declared `-> int`, surfacing only at C
+            // compile time. Falls through to the generic args-walk below if
+            // the method isn't a known impl entry.
+            let stripped: *Type = strip_ptr(recv_ty);
+            if stripped != null && (stripped.kind == TY_NAMED || stripped.kind == TY_GENERIC) {
+                let mkey: string = stripped.name.concat("_").concat(mname);
+                if t.fns.contains(mkey) {
+                    let msig: FnSig = t.fns.get(mkey);
+                    // Check each arg against the matching impl param. Skip the
+                    // implicit `self` param (params[0]). Without this, passing
+                    // a `fn(*HttpRequest) -> Json<X>` to `r.get("/", handler)`
+                    // where Router::get wants `fn(*HttpRequest) -> HttpResponse`
+                    // gets silently accepted — the ABI mismatch then crashes
+                    // at runtime.
+                    if e.args != null && msig.params != null {
+                        let alen: int = e.args.len();
+                        let plen: int = msig.params.len();
+                        // params[0] = self, so user args map to params[1..plen]
+                        for let i: int = 0; i < alen; i++ {
+                            let a: Expr = e.args.get(i);
+                            let at: *Type = infer_expr(t, &a);
+                            let pidx: int = i + 1;
+                            if pidx >= plen { continue; }
+                            let p: Param = msig.params.get(pidx);
+                            if p.ty == null { continue; }
+                            // Substitute owner type params in the expected
+                            // type, mirroring how the return type is fixed
+                            // up below.
+                            let mut want_p: *Type = p.ty;
+                            if stripped.kind == TY_GENERIC && stripped.args != null
+                               && msig.owner_type_params != null
+                               && msig.owner_type_params.len() == stripped.args.len() {
+                                want_p = _subst_type_local(p.ty, msig.owner_type_params, stripped.args);
+                                if _type_references_any(want_p, msig.owner_type_params) {
+                                    continue;  // can't resolve, skip check
+                                }
+                            }
+                            if !arg_compat(want_p, at, msig.type_params) {
+                                t.err(a.line, a.column,
+                                    "arg ".concat(p.name).concat(" type mismatch: expected ")
+                                    .concat(type_to_string(want_p))
+                                    .concat(", got ").concat(type_to_string(at)));
+                            }
+                        }
+                    } else if e.args != null {
+                        for let i: int = 0; i < e.args.len(); i++ {
+                            let a: Expr = e.args.get(i);
+                            let _u: *Type = infer_expr(t, &a);
+                        }
+                    }
+                    // Substitute the impl's `<T, U>` in the return type using
+                    // the receiver's concrete args. `*Vector<int>.get()` ->
+                    // int, not the placeholder T. Without subst, downstream
+                    // `let x: int = v.get(0)` fires a spurious "got T".
+                    if stripped.kind == TY_GENERIC && stripped.args != null
+                       && msig.owner_type_params != null
+                       && msig.owner_type_params.len() == stripped.args.len() {
+                        let substituted: *Type = _subst_type_local(msig.ret_type, msig.owner_type_params, stripped.args);
+                        // Receiver still generic? (`HashMap::new()` with no
+                        // annotation -> *HashMap<V>, then `m.get(k)` would
+                        // resolve to V again). Fall back to null so the
+                        // surrounding check stays permissive — we don't know
+                        // the concrete value type without flow-sensitive
+                        // inference.
+                        if _type_references_any(substituted, msig.owner_type_params) {
+                            return null;
+                        }
+                        return substituted;
+                    }
+                    // Non-generic owner: return the raw ret_type only if it
+                    // doesn't reference the method's own type params; otherwise
+                    // we'd surface an unresolved `T` upstream.
+                    if msig.type_params != null && msig.type_params.len() > 0
+                       && _type_references_any(msig.ret_type, msig.type_params) {
+                        return null;
+                    }
+                    return msig.ret_type;
                 }
             }
         }

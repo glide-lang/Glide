@@ -1937,7 +1937,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
             if s.origin == null || !s.origin.eq(f) { continue; }
             if s.name == null || s.name.eq("") { continue; }
             if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
-               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF {
+               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF || s.kind == ST_TRAIT {
                 t.visibility.insert(f.concat("::").concat(s.name), true);
             }
         }
@@ -1948,7 +1948,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
             if !path_is_builtin(s.origin) { continue; }
             if s.name == null || s.name.eq("") { continue; }
             if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
-               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF {
+               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF || s.kind == ST_TRAIT {
                 t.visibility.insert(f.concat("::").concat(s.name), true);
             }
         }
@@ -1971,9 +1971,35 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                         if ts.origin == null || !ts.origin.eq(target) { continue; }
                         if ts.name == null || !ts.name.eq(nm) { continue; }
                         if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
-                           || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF {
+                           || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF
+                           || ts.kind == ST_TRAIT {
                             found_any = true;
                             if ts.is_pub { found_pub = true; break; }
+                        }
+                    }
+                    // Proc-macro registrations: `@proc_attr(handler)` on a
+                    // private impl fn makes `handler` callable as `@handler`
+                    // file-wide. Users want to spell the import as
+                    // `import stdlib::http::handler::handler;` — treat the
+                    // attr arg as the exported name.
+                    if !found_any {
+                        for let m: int = 0; m < stmts.len(); m++ {
+                            let ts: Stmt = stmts.get(m);
+                            if ts.origin == null || !ts.origin.eq(target) { continue; }
+                            if ts.kind != ST_FN || ts.attrs == null { continue; }
+                            for let aa: int = 0; aa < ts.attrs.len(); aa++ {
+                                let at: Attr = ts.attrs.get(aa);
+                                if at.name == null { continue; }
+                                if !at.name.eq("proc_attr") && !at.name.eq("proc_derive")
+                                   && !at.name.eq("proc_macro") && !at.name.eq("proc_macro_str") {
+                                    continue;
+                                }
+                                if at.args == null || at.args.len() == 0 { continue; }
+                                let ne: Expr = at.args.get(0);
+                                if ne.kind != EX_IDENT { continue; }
+                                if ne.str_val.eq(nm) { found_any = true; found_pub = true; break; }
+                            }
+                            if found_pub { break; }
                         }
                     }
                     if found_pub {
@@ -1994,7 +2020,8 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                     if ts.name == null || ts.name.eq("") { continue; }
                     if !ts.is_pub { continue; }
                     if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
-                       || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF {
+                       || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF
+                       || ts.kind == ST_TRAIT {
                         t.visibility.insert(f.concat("::").concat(ts.name), true);
                     }
                 }
@@ -2431,7 +2458,15 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         if !quiet { spinner_finish(false, "could not open temp file: ".concat(tmp_c)); }
         return 1;
     }
-    emit_program(stmts);
+    // Drop proc-macro impl fns + their bootstrap/* AST helpers — the
+    // interp consumed them already, and the installed `~/.glide/bin/src`
+    // ships no `bootstrap/`, so leaving them in stmts makes codegen emit
+    // C referencing `Stmt`/`Expr`/`Type`/`Param` that the user binary
+    // has no typedefs for. The visibility / typer passes above need
+    // the proc-fns intact (import check reads `@proc_<kind>(Name)`),
+    // which is why we strip here, not in `expand_macros`.
+    let codegen_stmts: *Vector<Stmt> = strip_compile_time_only(stmts);
+    emit_program(codegen_stmts);
     __glide_restore_stdout(saved);
 
     // 4. Build the cc command.
@@ -3285,6 +3320,6 @@ fn main() -> int {
     }
 
     // MODE_EMIT
-    emit_program(stmts);
+    emit_program(strip_compile_time_only(stmts));
     return 0;
 }

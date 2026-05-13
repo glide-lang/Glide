@@ -132,11 +132,24 @@ pub struct LspDoc {
     pub text: string,
     pub version: int,
     pub stmts: *Vector<Stmt>,
+    // Macro-def shapes harvested BEFORE `expand_macros` consumes them.
+    // Used by completion (free macros surface as `name!`, proc-attrs as
+    // `@name`, proc-derives inside `@derive(...)`). The post-expansion
+    // `stmts` has none of these, so without the pre-pass copy the
+    // completion list misses every macro the user can actually call.
+    pub macro_defs: *Vector<Stmt>,
+    pub impl_macro_defs: *Vector<Stmt>,
+    pub proc_attrs: *Vector<string>,
+    pub proc_derives: *Vector<string>,
+    pub proc_macros: *Vector<string>,
 }
 
 // Marker kind for the synthetic "module" entries produced per stdlib
 // file. Out-of-band of the AST's ST_* kind range so it can't collide.
 pub const SYMKIND_MODULE: int = -1;
+pub const SYMKIND_PROC_ATTR: int = -2;     // fn carrying `@proc_attr(Name)`
+pub const SYMKIND_PROC_DERIVE: int = -3;   // fn carrying `@proc_derive(Name)`
+pub const SYMKIND_PROC_MACRO: int = -4;    // fn carrying `@proc_macro(Name)` / `@proc_macro_str(Name)`
 
 // One importable symbol from src/stdlib/. Built once at server startup
 // and reused by completion to surface auto-import suggestions. Mirrors
@@ -565,26 +578,90 @@ fn _index_one_module(state: *LspState, path: string, mod_name: string, module: s
     let mut count: int = 0;
     for let j: int = 0; j < stmts.len(); j++ {
         let s: Stmt = stmts.get(j);
-        if !s.is_pub { continue; }
+        // Proc-macro fns register globally via their `@proc_<kind>(Name)`
+        // attribute; they don't need to be `pub` (stdlib convention keeps
+        // the impl helper private). Other stmts still require pub for
+        // cross-file visibility.
+        let mut is_proc_fn: bool = false;
+        if s.kind == ST_FN && s.attrs != null {
+            for let kk: int = 0; kk < s.attrs.len(); kk++ {
+                let aa: Attr = s.attrs.get(kk);
+                if aa.name == null { continue; }
+                if aa.name.eq("proc_attr") || aa.name.eq("proc_derive")
+                   || aa.name.eq("proc_macro") || aa.name.eq("proc_macro_str") {
+                    is_proc_fn = true;
+                    break;
+                }
+            }
+        }
+        if !s.is_pub && !is_proc_fn { continue; }
         if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
-           && s.kind != ST_CONST && s.kind != ST_TRAIT { continue; }
+           && s.kind != ST_CONST && s.kind != ST_TRAIT && s.kind != ST_MACRO_DEF { continue; }
         let mut sig: string = "";
         let mut label_extra: string = "";
         let mut snip: string = s.name;
         let mut has_snip: bool = false;
+        // Default: kind matches the AST kind. Overridden below for fns
+        // wearing a `@proc_<kind>(Name)` attribute so they show up under
+        // `@<name>` / `@derive(Name)` completion instead of the bare-ident
+        // list.
+        let mut sym_kind: int = s.kind;
+        let mut sym_name: string = s.name;
         if s.kind == ST_FN {
             sig = fn_signature(&s);
             label_extra = fn_label_extra(&s);
             snip = fn_snippet(&s);
             has_snip = true;
+            // Proc-macro registration: `@proc_<kind>(Name)`. The user-
+            // facing name is the attr arg, not the impl fn name.
+            if s.attrs != null {
+                for let k: int = 0; k < s.attrs.len(); k++ {
+                    let a: Attr = s.attrs.get(k);
+                    if a.name == null { continue; }
+                    if a.args == null || a.args.len() == 0 { continue; }
+                    let ne: Expr = a.args.get(0);
+                    if ne.kind != EX_IDENT { continue; }
+                    if a.name.eq("proc_attr") {
+                        sym_kind = SYMKIND_PROC_ATTR;
+                        sym_name = ne.str_val;
+                        sig = "proc-attr ".concat(ne.str_val);
+                        label_extra = "";
+                        snip = ne.str_val;
+                        has_snip = false;
+                        break;
+                    }
+                    if a.name.eq("proc_derive") {
+                        sym_kind = SYMKIND_PROC_DERIVE;
+                        sym_name = ne.str_val;
+                        sig = "proc-derive ".concat(ne.str_val);
+                        label_extra = "";
+                        snip = ne.str_val;
+                        has_snip = false;
+                        break;
+                    }
+                    if a.name.eq("proc_macro") || a.name.eq("proc_macro_str") {
+                        sym_kind = SYMKIND_PROC_MACRO;
+                        sym_name = ne.str_val;
+                        sig = "proc-macro ".concat(ne.str_val);
+                        label_extra = "";
+                        snip = ne.str_val.concat("!");
+                        has_snip = false;
+                        break;
+                    }
+                }
+            }
         }
         else if s.kind == ST_STRUCT { sig = "struct ".concat(s.name); }
         else if s.kind == ST_ENUM { sig = "enum ".concat(s.name); }
         else if s.kind == ST_TRAIT { sig = "trait ".concat(s.name); }
         else if s.kind == ST_CONST { sig = "const ".concat(s.name); }
+        else if s.kind == ST_MACRO_DEF {
+            sig = macro_signature(&s);
+            sym_name = s.name;   // user calls it as `name!`
+        }
         let sym: ImportableSym = ImportableSym {
-            name: s.name,
-            kind: s.kind,
+            name: sym_name,
+            kind: sym_kind,
             module: module,
             signature: sig,
             label_extra: label_extra,
@@ -765,6 +842,17 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // aren't relexed/reparsed on every keystroke.
     load_into_str_with_cache(stmts, text, path, loaded, pdiags, state.parse_cache);
 
+    // Harvest macro definitions (free `macro foo!()`, `impl T { macro x!() }`,
+    // proc-macro fns) BEFORE expand_macros runs — it consumes the defs into
+    // a private registry and drops them from the output. Completion needs
+    // the names to surface `name!`, `@attr`, `@derive(Name)`.
+    let macro_defs: *Vector<Stmt> = Vector::new();
+    let impl_macro_defs: *Vector<Stmt> = Vector::new();
+    let proc_attrs: *Vector<string> = Vector::new();
+    let proc_derives: *Vector<string> = Vector::new();
+    let proc_macros: *Vector<string> = Vector::new();
+    _harvest_macro_defs(stmts, macro_defs, impl_macro_defs, proc_attrs, proc_derives, proc_macros);
+
     // Expand macros and lower surface-syntax sugar (for-in -> for) so the
     // typer sees the same shapes the build pipeline does. Without this,
     // anything inside a `for x in expr { ... }` body never gets type-checked
@@ -793,6 +881,11 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     if state.docs.contains(uri) {
         let d: LspDoc = state.docs.get(uri);
         d.stmts = stmts;
+        d.macro_defs = macro_defs;
+        d.impl_macro_defs = impl_macro_defs;
+        d.proc_attrs = proc_attrs;
+        d.proc_derives = proc_derives;
+        d.proc_macros = proc_macros;
         state.docs.insert(uri, d);
     }
 
@@ -840,7 +933,13 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
         let prev: LspDoc = state.docs.get(uri);
         prev_text = prev.text;
     }
-    let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: null };
+    let no_macro_v: *Vector<Stmt> = null;
+    let no_str_v: *Vector<string> = null;
+    let doc: LspDoc = LspDoc {
+        uri: uri, text: text, version: version, stmts: null,
+        macro_defs: no_macro_v, impl_macro_defs: no_macro_v,
+        proc_attrs: no_str_v, proc_derives: no_str_v, proc_macros: no_str_v,
+    };
     state.docs.insert(uri, doc);
     if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
     // Refresh project_index when the user opens a doc from a different
@@ -871,7 +970,13 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
         prev_stmts = prev.stmts;
         prev_text = prev.text;
     }
-    let doc: LspDoc = LspDoc { uri: uri, text: text, version: version, stmts: prev_stmts };
+    let no_macro_v2: *Vector<Stmt> = null;
+    let no_str_v2: *Vector<string> = null;
+    let doc: LspDoc = LspDoc {
+        uri: uri, text: text, version: version, stmts: prev_stmts,
+        macro_defs: no_macro_v2, impl_macro_defs: no_macro_v2,
+        proc_attrs: no_str_v2, proc_derives: no_str_v2, proc_macros: no_str_v2,
+    };
     state.docs.insert(uri, doc);
     if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
     run_analysis_and_publish(uri, text, state);
@@ -1205,6 +1310,17 @@ fn _find_let_in_block(body: *Vector<Stmt>, name: string, before_line: int) -> *S
                 best = p;
             }
         }
+        // for-init's own let (`for let i = 0; ...`).
+        if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET
+           && s.for_init.name != null && s.for_init.name.eq(name)
+           && (s.for_init.line - 1) <= before_line {
+            if s.for_init.line > best_line {
+                best_line = s.for_init.line;
+                let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *p = *s.for_init;
+                best = p;
+            }
+        }
         // Recurse into nested scopes — shadowing wins over outer lets.
         if s.then_body != null {
             let inner: *Stmt = _find_let_in_block(s.then_body, name, before_line);
@@ -1234,8 +1350,75 @@ fn _find_let_in_block(body: *Vector<Stmt>, name: string, before_line: int) -> *S
                 best = inner;
             }
         }
+        // Match arm bodies.
+        if s.kind == ST_MATCH && s.arms != null {
+            for let j: int = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                let inner: *Stmt = _find_let_in_block(arm.body, name, before_line);
+                if inner != null && inner.line > best_line {
+                    best_line = inner.line;
+                    best = inner;
+                }
+            }
+        }
+        // Closures embedded in this stmt's expressions.
+        let ce1: *Stmt = _find_let_in_expr(s.let_value, name, before_line);
+        if ce1 != null && ce1.line > best_line { best_line = ce1.line; best = ce1; }
+        let ce2: *Stmt = _find_let_in_expr(s.expr_value, name, before_line);
+        if ce2 != null && ce2.line > best_line { best_line = ce2.line; best = ce2; }
+        let ce3: *Stmt = _find_let_in_expr(s.cond, name, before_line);
+        if ce3 != null && ce3.line > best_line { best_line = ce3.line; best = ce3; }
+        let ce4: *Stmt = _find_let_in_expr(s.for_step, name, before_line);
+        if ce4 != null && ce4.line > best_line { best_line = ce4.line; best = ce4; }
     }
     return best;
+}
+
+// Walk an expression looking for an EX_FNEXPR that binds `name` as a param
+// or contains a matching let in its body. Mirrors `_expr_var_type` but
+// returns the synthesised / found Stmt so hover & goto-def can resolve to
+// closure params, not just user-written let statements.
+fn _find_let_in_expr(e: *Expr, name: string, before_line: int) -> *Stmt {
+    if e == null { return null; }
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: int = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null && p.name.eq(name) {
+                    let st: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                    st.kind = ST_LET;
+                    st.name = p.name;
+                    st.let_ty = p.ty;
+                    st.let_value = null;
+                    st.is_mut = false;
+                    st.line = e.line;
+                    st.column = e.column;
+                    st.name_line = e.line;
+                    st.name_col = e.column;
+                    st.name_len = p.name.len();
+                    return st;
+                }
+            }
+        }
+        if e.fn_expr_body != null && e.line - 1 <= before_line {
+            let r: *Stmt = _find_let_in_block(e.fn_expr_body, name, before_line);
+            if r != null { return r; }
+        }
+    }
+    let r1: *Stmt = _find_let_in_expr(e.lhs, name, before_line);
+    if r1 != null { return r1; }
+    let r2: *Stmt = _find_let_in_expr(e.rhs, name, before_line);
+    if r2 != null { return r2; }
+    let r3: *Stmt = _find_let_in_expr(e.operand, name, before_line);
+    if r3 != null { return r3; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let ra: *Stmt = _find_let_in_expr(&a, name, before_line);
+            if ra != null { return ra; }
+        }
+    }
+    return null;
 }
 
 // Macros are looked up by their unqualified name (without the trailing
@@ -1828,9 +2011,42 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
     let word: string = word_at(doc.text, line0, col0);
     if word.eq("") { lsp_send_response(id, json_null()); return; }
 
-    let decl: *Stmt = find_top_decl(doc.stmts, word);
+    let mut decl: *Stmt = null;
     let mut content: string = "";
-    if decl != null {
+
+    // Proc-macro name inside `@derive(Name)` / `@Name(...)` / `@Name`:
+    // resolve via the registry of fns wearing `@proc_<kind>(Name)`. Has
+    // to run before `find_top_decl(word)` because the registered name
+    // (e.g. JsonBind) usually doesn't match any top-level decl — the
+    // impl fn is private and named differently (`derive_json_bind`).
+    if _inside_proc_attr_arg(doc.text, line0, col0)
+       || _on_bare_attribute_name(doc.text, line0, col0) {
+        let pm: *Stmt = find_proc_macro_fn(doc.stmts, word);
+        if pm != null {
+            decl = pm;
+            // Render as `@proc_<kind>(Name)` instead of the impl fn's
+            // signature — that's what the user actually wrote, and it
+            // tells them what shape of macro they're invoking.
+            let mut kind_label: string = "proc-macro";
+            if pm.attrs != null {
+                for let i: int = 0; i < pm.attrs.len(); i++ {
+                    let a: Attr = pm.attrs.get(i);
+                    if a.name == null { continue; }
+                    if a.name.eq("proc_derive") { kind_label = "proc-derive"; break; }
+                    if a.name.eq("proc_attr")   { kind_label = "proc-attr"; break; }
+                    if a.name.eq("proc_macro")  { kind_label = "proc-macro"; break; }
+                    if a.name.eq("proc_macro_str") { kind_label = "proc-macro (str)"; break; }
+                }
+            }
+            content = "```glide\n".concat(kind_label).concat(" ").concat(word).concat("\n```");
+            if pm.doc_comment != null && !pm.doc_comment.eq("") {
+                content = content.concat("\n\n---\n\n").concat(pm.doc_comment);
+            }
+        }
+    }
+
+    if decl == null && content.eq("") { decl = find_top_decl(doc.stmts, word); }
+    if decl != null && content.eq("") {
         if decl.kind == ST_FN { content = "```glide\n".concat(fn_signature(decl)).concat("\n```"); }
         else if decl.kind == ST_STRUCT {
             content = "```glide\nstruct ".concat(decl.name).concat("\n```");
@@ -1855,7 +2071,7 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
     // Local: search the fn body for a `let` (or `for let`) by name, and the
     // fn's params, so hover on a variable shows its type.
     if content.eq("") {
-        let host: *Stmt = fn_containing(doc.stmts, line0);
+        let host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
         if host != null {
             if host.fn_params != null {
                 for let i: int = 0; i < host.fn_params.len(); i++ {
@@ -2124,9 +2340,10 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
         decl = find_macro_def(doc.stmts, word);
     }
 
-    // 2) Cursor on `Name` inside `@derive(Name)` / `@Name` / a proc-macro
-    //    arg — jump to the fn decorated with `@proc_<kind>(Name)`.
-    if decl == null && _inside_proc_attr_arg(doc.text, line0, col0) {
+    // 2) Cursor on `Name` inside `@derive(Name)` / `@Name(...)` / `@Name`
+    //    — jump to the fn decorated with `@proc_<kind>(Name)`.
+    if decl == null && (_inside_proc_attr_arg(doc.text, line0, col0)
+                        || _on_bare_attribute_name(doc.text, line0, col0)) {
         decl = find_proc_macro_fn(doc.stmts, word);
     }
 
@@ -2143,7 +2360,7 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     if decl == null {
         let mem_var: string = member_qualifier_before(doc.text, line0, col0);
         if !mem_var.eq("") {
-            let var_type: string = lookup_local_type(doc.stmts, line0, mem_var);
+            let var_type: string = lookup_local_type(doc.stmts, line0, mem_var, uri_to_path(uri));
             if !var_type.eq("") {
                 decl = find_method_in_impl(doc.stmts, var_type, word);
                 if decl == null {
@@ -2169,7 +2386,7 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     // 6) Local binding (let / param) above the cursor in the containing
     //    fn. Shadowing-aware via the inner-most match.
     if decl == null {
-        let host: *Stmt = fn_containing(doc.stmts, line0);
+        let host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
         if host != null {
             decl = find_local_decl(host, word, line0);
         }
@@ -2241,6 +2458,23 @@ fn _inside_proc_attr_arg(text: string, line0: int, col0: int) -> bool {
     return i > 0 && text.at(i - 1).to_int() == 64;
 }
 
+// True when the cursor sits on the identifier of a bare attribute like
+// `@handler` (no args / no parens). Used by hover + goto so clicking on
+// the attribute name itself resolves to the registered proc-fn.
+fn _on_bare_attribute_name(text: string, line0: int, col0: int) -> bool {
+    let off: int = _line_col_offset(text, line0, col0);
+    if off < 0 { return false; }
+    let mut i: int = off;
+    while i > 0 {
+        let c: int = text.at(i - 1).to_int();
+        let is_id: bool = (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+                       || (c >= 48 && c <= 57) || c == 95;
+        if !is_id { break; }
+        i = i - 1;
+    }
+    return i > 0 && text.at(i - 1).to_int() == 64;
+}
+
 // Pick the ST_IMPORT stmt whose source line matches the cursor line
 // (1-indexed in Stmt.line, 0-indexed in LSP), constrained to the
 // document the user is editing so a stdlib file's imports don't
@@ -2296,13 +2530,18 @@ fn ci_kind_for(s: *Stmt) -> int {
 
 // Walk the doc, find the fn that contains the cursor (line0 0-indexed).
 // Used for scope-local completion.
-fn fn_containing(stmts: *Vector<Stmt>, line0: int) -> *Stmt {
+// `path` filters by `s.origin` so fns from imported files don't shadow the
+// user's own fn — without it a fn at line N in any stdlib/builtin file
+// would beat a user fn at an earlier line, breaking hover / completion /
+// goto on locals.
+fn fn_containing(stmts: *Vector<Stmt>, line0: int, path: string) -> *Stmt {
     if stmts == null { return null; }
     let mut best: *Stmt = null;
     let mut best_line: int = -1;
     for let i: int = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.kind != ST_FN || s.fn_body == null { continue; }
+        if !path.eq("") && s.origin != null && !s.origin.eq(path) { continue; }
         let start: int = s.line - 1;
         if start <= line0 && start > best_line {
             best_line = start;
@@ -2315,6 +2554,9 @@ fn fn_containing(stmts: *Vector<Stmt>, line0: int) -> *Stmt {
 }
 
 // Recursively collect names declared in body up to `before_line` (0-indexed).
+// Descends through nested blocks, match arms and closures embedded in
+// expressions so identifiers bound inside `r.get("/", fn(req) { let x = ... })`
+// still show up in the completion list when the cursor sits in the closure body.
 fn collect_locals(body: *Vector<Stmt>, before_line: int, out: *Vector<Stmt>) {
     if body == null { return; }
     for let i: int = 0; i < body.len(); i++ {
@@ -2327,12 +2569,83 @@ fn collect_locals(body: *Vector<Stmt>, before_line: int, out: *Vector<Stmt>) {
         }
         if s.then_body != null { collect_locals(s.then_body, before_line, out); }
         if s.else_body != null { collect_locals(s.else_body, before_line, out); }
+        if s.kind == ST_MATCH && s.arms != null {
+            for let j: int = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                collect_locals(arm.body, before_line, out);
+            }
+        }
+        _collect_locals_in_expr(s.let_value, before_line, out);
+        _collect_locals_in_expr(s.expr_value, before_line, out);
+        _collect_locals_in_expr(s.cond, before_line, out);
+        _collect_locals_in_expr(s.for_step, before_line, out);
     }
 }
 
 fn collect_locals_stmt(s: *Stmt, before_line: int, out: *Vector<Stmt>) {
     if s == null { return; }
     if s.kind == ST_LET && (s.line - 1) < before_line { out.push(*s); }
+}
+
+fn _collect_locals_in_expr(e: *Expr, before_line: int, out: *Vector<Stmt>) {
+    if e == null { return; }
+    if e.kind == EX_FNEXPR && e.fn_expr_body != null && e.line - 1 <= before_line {
+        collect_locals(e.fn_expr_body, before_line, out);
+    }
+    _collect_locals_in_expr(e.lhs, before_line, out);
+    _collect_locals_in_expr(e.rhs, before_line, out);
+    _collect_locals_in_expr(e.operand, before_line, out);
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _collect_locals_in_expr(&a, before_line, out);
+        }
+    }
+}
+
+// Collect every closure param whose enclosing closure body covers the
+// cursor line. Recursive so nested closures stack: `fn(a) { fn(b) { <c> } }`
+// surfaces both `a` and `b` at cursor `<c>`. Used by the completion handler
+// to advertise closure params alongside the host fn's regular params.
+fn collect_active_closure_params(body: *Vector<Stmt>, line0: int, out: *Vector<Param>) {
+    if body == null { return; }
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.then_body != null { collect_active_closure_params(s.then_body, line0, out); }
+        if s.else_body != null { collect_active_closure_params(s.else_body, line0, out); }
+        if s.kind == ST_MATCH && s.arms != null {
+            for let j: int = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                collect_active_closure_params(arm.body, line0, out);
+            }
+        }
+        _collect_closure_params_in_expr(s.let_value, line0, out);
+        _collect_closure_params_in_expr(s.expr_value, line0, out);
+        _collect_closure_params_in_expr(s.cond, line0, out);
+        _collect_closure_params_in_expr(s.for_step, line0, out);
+    }
+}
+
+fn _collect_closure_params_in_expr(e: *Expr, line0: int, out: *Vector<Param>) {
+    if e == null { return; }
+    if e.kind == EX_FNEXPR && e.fn_expr_body != null && e.line - 1 <= line0 {
+        if e.fn_expr_params != null {
+            for let i: int = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                out.push(p);
+            }
+        }
+        collect_active_closure_params(e.fn_expr_body, line0, out);
+    }
+    _collect_closure_params_in_expr(e.lhs, line0, out);
+    _collect_closure_params_in_expr(e.rhs, line0, out);
+    _collect_closure_params_in_expr(e.operand, line0, out);
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _collect_closure_params_in_expr(&a, line0, out);
+        }
+    }
 }
 
 fn completion_item(label: string, kind: int, detail: string) -> *JsonValue {
@@ -3140,43 +3453,668 @@ fn chained_ctor_qualifier_before(text: string, line0: int, col0: int) -> string 
     return text.substring(k + 1, j - 1);
 }
 
-// Best-effort lookup of the type a local was declared with. Walks the fn
-// containing the cursor, finds the matching let, and returns the underlying
-// generic / named type as a string we can match against impl targets.
-fn lookup_local_type(stmts: *Vector<Stmt>, line0: int, var: string) -> string {
-    let host: *Stmt = fn_containing(stmts, line0);
-    if host == null || host.fn_body == null { return ""; }
-    if host.fn_params != null {
-        for let i: int = 0; i < host.fn_params.len(); i++ {
-            let pp: Param = host.fn_params.get(i);
-            if pp.name.eq(var) {
-                let mut t: *Type = pp.ty;
-                while t != null && (t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) { t = t.inner; }
-                if t == null { return ""; }
-                if t.kind == TY_NAMED { return t.name; }
-                if t.kind == TY_GENERIC { return t.name; }
-                return "";
+// Strip pointer/borrow wrappers and return the underlying type's simple
+// name (`*Vector<int>` -> "Vector"). Empty string when the type isn't a
+// named / generic carrier we can match against impls.
+fn _type_simple_name(t: *Type) -> string {
+    let mut x: *Type = t;
+    while x != null && (x.kind == TY_POINTER || x.kind == TY_BORROW || x.kind == TY_BORROW_MUT) {
+        x = x.inner;
+    }
+    if x == null { return ""; }
+    if x.kind == TY_NAMED { return x.name; }
+    if x.kind == TY_GENERIC { return x.name; }
+    return "";
+}
+
+// Resolve a `let` to its receiver type name. Honors the explicit annotation
+// first; falls back to recognising `Type::ctor()` on the RHS so
+// `let r = Router::new();` yields "Router".
+fn _let_simple_type(s: *Stmt) -> string {
+    if s == null { return ""; }
+    if s.let_ty != null {
+        let n: string = _type_simple_name(s.let_ty);
+        if !n.eq("") { return n; }
+    }
+    if s.let_value != null && s.let_value.kind == EX_CALL && s.let_value.lhs != null
+       && s.let_value.lhs.kind == EX_PATH {
+        return s.let_value.lhs.str_val;
+    }
+    return "";
+}
+
+// Recursively walks `body` looking for the type of `var` visible at `line0`.
+// Descends through nested blocks (if/while/for/match) AND through closures
+// (EX_FNEXPR) embedded in expressions, so `req` inside `r.get("/", fn(req: *X) {
+// req.<cursor> })` correctly resolves to `X`. Innermost binding wins —
+// shadowing across closure boundaries is honoured.
+fn _scope_var_type(body: *Vector<Stmt>, line0: int, var: string) -> string {
+    if body == null { return ""; }
+    let mut found: string = "";
+    let mut container_idx: int = -1;
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.line - 1 > line0 { break; }
+        if s.kind == ST_LET && s.name != null && s.name.eq(var) && s.line - 1 < line0 {
+            let n: string = _let_simple_type(&s);
+            if !n.eq("") { found = n; }
+        }
+        if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET
+           && s.for_init.name != null && s.for_init.name.eq(var)
+           && s.for_init.line - 1 <= line0 {
+            let n: string = _let_simple_type(s.for_init);
+            if !n.eq("") { found = n; }
+        }
+        container_idx = i;
+    }
+    if container_idx >= 0 {
+        let s: Stmt = body.get(container_idx);
+        let r1: string = _scope_var_type(s.then_body, line0, var);
+        if !r1.eq("") { return r1; }
+        let r2: string = _scope_var_type(s.else_body, line0, var);
+        if !r2.eq("") { return r2; }
+        if s.kind == ST_MATCH && s.arms != null {
+            for let j: int = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                let ra: string = _scope_var_type(arm.body, line0, var);
+                if !ra.eq("") { return ra; }
             }
         }
+        let re1: string = _expr_var_type(s.let_value, line0, var);
+        if !re1.eq("") { return re1; }
+        let re2: string = _expr_var_type(s.expr_value, line0, var);
+        if !re2.eq("") { return re2; }
+        let re3: string = _expr_var_type(s.cond, line0, var);
+        if !re3.eq("") { return re3; }
+        let re4: string = _expr_var_type(s.for_step, line0, var);
+        if !re4.eq("") { return re4; }
     }
-    let n: int = host.fn_body.len();
-    for let i: int = 0; i < n; i++ {
-        let s: Stmt = host.fn_body.get(i);
-        if s.kind != ST_LET { continue; }
-        if !s.name.eq(var) { continue; }
-        // Explicit annotation wins.
-        if s.let_ty != null {
-            let mut t: *Type = s.let_ty;
-            while t != null && (t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) { t = t.inner; }
-            if t != null && (t.kind == TY_NAMED || t.kind == TY_GENERIC) { return t.name; }
+    return found;
+}
+
+// Walks an expression tree for an EX_FNEXPR whose params/body bind `var`
+// at the cursor line. Used by `_scope_var_type` to look through closures
+// passed as call args, struct-lit field values, etc.
+fn _expr_var_type(e: *Expr, line0: int, var: string) -> string {
+    if e == null { return ""; }
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: int = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null && p.name.eq(var) {
+                    return _type_simple_name(p.ty);
+                }
+            }
         }
-        // Else recognize `Generic::new()` style RHS.
-        if s.let_value != null && s.let_value.kind == EX_CALL && s.let_value.lhs != null
-           && s.let_value.lhs.kind == EX_PATH {
-            return s.let_value.lhs.str_val;
+        if e.fn_expr_body != null && e.line - 1 <= line0 {
+            let rb: string = _scope_var_type(e.fn_expr_body, line0, var);
+            if !rb.eq("") { return rb; }
+        }
+    }
+    let r1: string = _expr_var_type(e.lhs, line0, var);
+    if !r1.eq("") { return r1; }
+    let r2: string = _expr_var_type(e.rhs, line0, var);
+    if !r2.eq("") { return r2; }
+    let r3: string = _expr_var_type(e.operand, line0, var);
+    if !r3.eq("") { return r3; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let ra: string = _expr_var_type(&a, line0, var);
+            if !ra.eq("") { return ra; }
         }
     }
     return "";
+}
+
+// Best-effort lookup of the type a local was declared with. Walks the fn
+// containing the cursor, descends into nested blocks and closures, finds
+// the matching let / param, and returns the underlying generic / named
+// type name we can match against impl targets.
+fn lookup_local_type(stmts: *Vector<Stmt>, line0: int, var: string, path: string) -> string {
+    let host: *Stmt = fn_containing(stmts, line0, path);
+    if host == null || host.fn_body == null { return ""; }
+    // Inner scopes win over the host's own params (shadowing).
+    let inner: string = _scope_var_type(host.fn_body, line0, var);
+    if !inner.eq("") { return inner; }
+    if host.fn_params != null {
+        for let i: int = 0; i < host.fn_params.len(); i++ {
+            let pp: Param = host.fn_params.get(i);
+            if pp.name.eq(var) { return _type_simple_name(pp.ty); }
+        }
+    }
+    return "";
+}
+
+// ---- AST-typed chain resolution -----------------------------------------
+//
+// Below: a text-walking resolver that returns the receiver's *Type
+// (not just a name) for arbitrary chains like `r.listen(8080).`,
+// `Type::new().method().`, `v[0].`, `req.headers.`. Plus a member-listing
+// helper that handles `!T`, `?T`, `?!T`, named structs and chan types.
+// Lets the completion handler suppress the 500+-item "every visible
+// symbol" fallback any time the cursor sits after a `.` we can't resolve.
+
+// Detect attribute-style completion contexts.
+//   0 = not in an attribute
+//   1 = right after `@` (bare attr name, e.g. `@h|`, `@derive`)
+//   2 = inside `@derive(...)` arg list
+fn _attribute_context(text: string, end_pos: int) -> int {
+    // Walk back over any partial ident already typed after `@` / `(` / `,`.
+    let mut i: int = end_pos - 1;
+    while i >= 0 {
+        let c: int = text.at(i).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+           || (c >= 48 && c <= 57) || c == 95 { i = i - 1; } else { break; }
+    }
+    if i < 0 { return 0; }
+    let here: int = text.at(i).to_int();
+    if here == 64 { return 1; }  // `@`
+    // Inside `@derive(<...>)` — walk further left looking for an unmatched
+    // `(` preceded by `derive` preceded by `@`.
+    if here == 40 || here == 44 || here == 32 {
+        let mut j: int = i;
+        while j > 0 {
+            let c2: int = text.at(j).to_int();
+            if c2 == 10 { return 0; }
+            if c2 == 40 {
+                let name_end: int = j;
+                let mut k: int = name_end - 1;
+                while k >= 0 {
+                    let cc: int = text.at(k).to_int();
+                    if (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122)
+                       || (cc >= 48 && cc <= 57) || cc == 95 { k = k - 1; }
+                    else { break; }
+                }
+                if k < 0 { return 0; }
+                let attr_name: string = text.substring(k + 1, name_end);
+                if k >= 0 && text.at(k).to_int() == 64 && attr_name.eq("derive") {
+                    return 2;
+                }
+                return 0;
+            }
+            j = j - 1;
+        }
+    }
+    return 0;
+}
+
+fn _push_attr_completions(doc: LspDoc, state: *LspState, items: *JsonValue, seen: *HashMap<bool>) {
+    // Built-in attributes recognised by the compiler.
+    let builtins: *Vector<string> = Vector::new();
+    builtins.push("cfg"); builtins.push("derive"); builtins.push("expect");
+    builtins.push("allow"); builtins.push("deprecated"); builtins.push("lint");
+    builtins.push("proc_attr"); builtins.push("proc_derive");
+    builtins.push("proc_macro"); builtins.push("proc_macro_str");
+    for let i: int = 0; i < builtins.len(); i++ {
+        let nm: string = builtins.get(i);
+        if seen.contains(nm) { continue; }
+        seen.insert(nm, true);
+        json_arr_push(items, completion_item(nm, 2, "attribute"));
+    }
+    // Locally registered proc-attrs (already imported).
+    if doc.proc_attrs != null {
+        for let i: int = 0; i < doc.proc_attrs.len(); i++ {
+            let nm: string = doc.proc_attrs.get(i);
+            if seen.contains(nm) { continue; }
+            seen.insert(nm, true);
+            json_arr_push(items, completion_item(nm, 2, "proc-attr"));
+        }
+    }
+    // Non-imported proc-attrs from stdlib / project index — surface with
+    // an auto-import edit so the user can pick `@handler` without first
+    // typing `import stdlib::http::handler;`.
+    _push_proc_index_items(state.stdlib_index, doc, SYMKIND_PROC_ATTR, "proc-attr", 2, items, seen);
+    _push_proc_index_items(state.project_index, doc, SYMKIND_PROC_ATTR, "proc-attr", 2, items, seen);
+}
+
+fn _push_derive_completions(doc: LspDoc, state: *LspState, items: *JsonValue, seen: *HashMap<bool>) {
+    if doc.proc_derives != null {
+        for let i: int = 0; i < doc.proc_derives.len(); i++ {
+            let nm: string = doc.proc_derives.get(i);
+            if seen.contains(nm) { continue; }
+            seen.insert(nm, true);
+            json_arr_push(items, completion_item(nm, 7, "derive"));  // 7 = Class
+        }
+    }
+    _push_proc_index_items(state.stdlib_index, doc, SYMKIND_PROC_DERIVE, "derive", 7, items, seen);
+    _push_proc_index_items(state.project_index, doc, SYMKIND_PROC_DERIVE, "derive", 7, items, seen);
+}
+
+// Walk an importable-symbol index for entries of `want_kind` and push a
+// completion item with the auto-import edit, so the user can pick a
+// proc-derive / proc-attr without having to know which stdlib submodule
+// it lives in.
+fn _push_proc_index_items(idx: *Vector<ImportableSym>, doc: LspDoc,
+                           want_kind: int, detail: string, ci_kind: int,
+                           items: *JsonValue, seen: *HashMap<bool>) {
+    if idx == null { return; }
+    let imps: *HashMap<ImportInfo> = current_imports(doc.text);
+    let insert_line: int = find_import_insertion_pos(doc.text);
+    for let i: int = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != want_kind { continue; }
+        if sym.name == null || seen.contains(sym.name) { continue; }
+        seen.insert(sym.name, true);
+        let mut existing: *ImportInfo = null;
+        if imps.contains(sym.module) {
+            let info_val: ImportInfo = imps.get(sym.module);
+            existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+            *existing = info_val;
+        }
+        let edit: *JsonValue = build_import_edit(
+            sym.name, sym.module, existing, insert_line, false);
+        let item: *JsonValue = rich_completion_item(
+            sym.name, "", ci_kind,
+            detail.concat(" ").concat(sym.name), sym.doc, sym.module,
+            sym.name, false, edit);
+        json_arr_push(items, item);
+    }
+    imps.free();
+}
+
+// Walk every loaded stmt (user file + builtins + transitively-imported
+// stdlib modules) collecting macro definitions and proc-macro
+// registrations. Run before `expand_macros` consumes them so the
+// completion handler still has the names.
+fn _harvest_macro_defs(
+    stmts: *Vector<Stmt>,
+    out_macros: *Vector<Stmt>,
+    out_impl_macros: *Vector<Stmt>,
+    out_attrs: *Vector<string>,
+    out_derives: *Vector<string>,
+    out_fns: *Vector<string>,
+) {
+    if stmts == null { return; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_MACRO_DEF && s.name != null { out_macros.push(s); continue; }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: int = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_MACRO_DEF && m.name != null { out_impl_macros.push(m); }
+            }
+        }
+        if s.kind == ST_FN && s.attrs != null {
+            for let j: int = 0; j < s.attrs.len(); j++ {
+                let a: Attr = s.attrs.get(j);
+                if a.name == null { continue; }
+                if a.args == null || a.args.len() == 0 { continue; }
+                let ne: Expr = a.args.get(0);
+                if ne.kind != EX_IDENT { continue; }
+                if a.name.eq("proc_attr")        { out_attrs.push(ne.str_val); }
+                else if a.name.eq("proc_derive") { out_derives.push(ne.str_val); }
+                else if a.name.eq("proc_macro")     { out_fns.push(ne.str_val); }
+                else if a.name.eq("proc_macro_str") { out_fns.push(ne.str_val); }
+            }
+        }
+    }
+}
+
+// True if the cursor at (`line0`, `col0`) sits inside a string literal,
+// char literal, or `//` line comment. Walks from start-of-file tracking
+// state so multi-line strings (rare but legal — the lexer keeps reading
+// until the closing `"`) are handled correctly. Block-comment style
+// `/* ... */` isn't lexed by Glide so it's left out.
+fn _cursor_in_string_or_comment(text: string, line0: int, col0: int) -> bool {
+    let n: int = text.len();
+    let mut pos: int = 0;
+    let mut line: int = 0;
+    while pos < n && line < line0 {
+        if text.at(pos).to_int() == 10 { line = line + 1; }
+        pos = pos + 1;
+    }
+    let mut target: int = pos + col0;
+    if target > n { target = n; }
+    let mut in_str: bool = false;
+    let mut in_chr: bool = false;
+    let mut in_lc: bool = false;
+    let mut i: int = 0;
+    while i < target {
+        let c: int = text.at(i).to_int();
+        // Line comment: lasts until newline. Reset at newline.
+        if in_lc {
+            if c == 10 { in_lc = false; }
+            i = i + 1;
+            continue;
+        }
+        if in_str {
+            if c == 92 && i + 1 < target { i = i + 2; continue; }  // \X
+            if c == 34 { in_str = false; }
+            i = i + 1;
+            continue;
+        }
+        if in_chr {
+            if c == 92 && i + 1 < target { i = i + 2; continue; }
+            if c == 39 { in_chr = false; }
+            i = i + 1;
+            continue;
+        }
+        if c == 34 { in_str = true; i = i + 1; continue; }
+        if c == 39 { in_chr = true; i = i + 1; continue; }
+        if c == 47 && i + 1 < target && text.at(i + 1).to_int() == 47 {
+            in_lc = true;
+            i = i + 2;
+            continue;
+        }
+        i = i + 1;
+    }
+    return in_str || in_chr || in_lc;
+}
+
+fn _match_paren_back(text: string, close_pos: int) -> int {
+    if close_pos < 0 { return -1; }
+    if text.at(close_pos).to_int() != 41 { return -1; }
+    let mut depth: int = 1;
+    let mut i: int = close_pos - 1;
+    while i >= 0 {
+        let c: int = text.at(i).to_int();
+        if c == 41 { depth = depth + 1; }
+        else if c == 40 { depth = depth - 1; if depth == 0 { return i; } }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn _match_brack_back(text: string, close_pos: int) -> int {
+    if close_pos < 0 { return -1; }
+    if text.at(close_pos).to_int() != 93 { return -1; }
+    let mut depth: int = 1;
+    let mut i: int = close_pos - 1;
+    while i >= 0 {
+        let c: int = text.at(i).to_int();
+        if c == 93 { depth = depth + 1; }
+        else if c == 91 { depth = depth - 1; if depth == 0 { return i; } }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn _ident_start_back(text: string, end_i: int) -> int {
+    let mut i: int = end_i;
+    while i >= 0 {
+        let c: int = text.at(i).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 {
+            i = i - 1;
+        } else { break; }
+    }
+    return i + 1;
+}
+
+// Strip pointer/borrow wrappers and return the resulting node. null on null.
+fn _strip_ptr_borrow(t: *Type) -> *Type {
+    let mut x: *Type = t;
+    while x != null && (x.kind == TY_POINTER || x.kind == TY_BORROW || x.kind == TY_BORROW_MUT) {
+        x = x.inner;
+    }
+    return x;
+}
+
+// Find an impl method named `method_name` on `type_name`, return its
+// declared return type. null if not found.
+fn _impl_method_ret(stmts: *Vector<Stmt>, type_name: string, method_name: string) -> *Type {
+    if stmts == null { return null; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_target == null || s.impl_target.name == null
+           || !s.impl_target.name.eq(type_name) { continue; }
+        if s.impl_methods == null { continue; }
+        for let j: int = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind != ST_FN || m.name == null || !m.name.eq(method_name) { continue; }
+            return m.fn_ret_ty;
+        }
+    }
+    return null;
+}
+
+// Resolve a method call on a receiver type to its return type.
+fn _method_ret_type(stmts: *Vector<Stmt>, recv: *Type, method_name: string) -> *Type {
+    let x: *Type = _strip_ptr_borrow(recv);
+    if x == null { return null; }
+    if x.kind != TY_NAMED && x.kind != TY_GENERIC { return null; }
+    return _impl_method_ret(stmts, x.name, method_name);
+}
+
+// Look up a struct field type by struct + field name.
+fn _struct_field_type(stmts: *Vector<Stmt>, recv: *Type, field_name: string) -> *Type {
+    let x: *Type = _strip_ptr_borrow(recv);
+    if x == null { return null; }
+    if x.kind != TY_NAMED && x.kind != TY_GENERIC { return null; }
+    if stmts == null { return null; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_STRUCT || !s.name.eq(x.name) { continue; }
+        if s.struct_fields == null { continue; }
+        for let j: int = 0; j < s.struct_fields.len(); j++ {
+            let f: Field = s.struct_fields.get(j);
+            if f.name.eq(field_name) { return f.ty; }
+        }
+    }
+    return null;
+}
+
+// Look up a top-level fn's return type by name.
+fn _fn_ret_type(stmts: *Vector<Stmt>, fn_name: string) -> *Type {
+    if stmts == null { return null; }
+    for let i: int = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_FN && s.name != null && s.name.eq(fn_name) {
+            return s.fn_ret_ty;
+        }
+    }
+    return null;
+}
+
+// Look up a local (let / param / closure-param / for-init / etc.) by name
+// at the cursor line and return its AST type — strips nothing so callers
+// can see `*HttpRequest`, `!int`, `?string` etc. as-is.
+fn _local_type_node(stmts: *Vector<Stmt>, line0: int, var: string, path: string) -> *Type {
+    let host: *Stmt = fn_containing(stmts, line0, path);
+    if host == null { return null; }
+    if host.fn_params != null {
+        for let i: int = 0; i < host.fn_params.len(); i++ {
+            let p: Param = host.fn_params.get(i);
+            if p.name.eq(var) { return p.ty; }
+        }
+    }
+    return _scope_var_node(host.fn_body, line0, var, stmts);
+}
+
+fn _scope_var_node(body: *Vector<Stmt>, line0: int, var: string, root: *Vector<Stmt>) -> *Type {
+    if body == null { return null; }
+    let mut found: *Type = null;
+    let mut container_idx: int = -1;
+    for let i: int = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.line - 1 > line0 { break; }
+        if s.kind == ST_LET && s.name != null && s.name.eq(var) && s.line - 1 < line0 {
+            let n: *Type = _let_node_type(&s, root);
+            if n != null { found = n; }
+        }
+        if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET
+           && s.for_init.name != null && s.for_init.name.eq(var)
+           && s.for_init.line - 1 <= line0 {
+            let n: *Type = _let_node_type(s.for_init, root);
+            if n != null { found = n; }
+        }
+        container_idx = i;
+    }
+    if container_idx >= 0 {
+        let s: Stmt = body.get(container_idx);
+        let r1: *Type = _scope_var_node(s.then_body, line0, var, root);
+        if r1 != null { return r1; }
+        let r2: *Type = _scope_var_node(s.else_body, line0, var, root);
+        if r2 != null { return r2; }
+        if s.kind == ST_MATCH && s.arms != null {
+            for let j: int = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                let ra: *Type = _scope_var_node(arm.body, line0, var, root);
+                if ra != null { return ra; }
+            }
+        }
+        let re1: *Type = _expr_var_node(s.let_value, line0, var, root);
+        if re1 != null { return re1; }
+        let re2: *Type = _expr_var_node(s.expr_value, line0, var, root);
+        if re2 != null { return re2; }
+        let re3: *Type = _expr_var_node(s.cond, line0, var, root);
+        if re3 != null { return re3; }
+        let re4: *Type = _expr_var_node(s.for_step, line0, var, root);
+        if re4 != null { return re4; }
+    }
+    return found;
+}
+
+fn _expr_var_node(e: *Expr, line0: int, var: string, root: *Vector<Stmt>) -> *Type {
+    if e == null { return null; }
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: int = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null && p.name.eq(var) { return p.ty; }
+            }
+        }
+        if e.fn_expr_body != null && e.line - 1 <= line0 {
+            let rb: *Type = _scope_var_node(e.fn_expr_body, line0, var, root);
+            if rb != null { return rb; }
+        }
+    }
+    let r1: *Type = _expr_var_node(e.lhs, line0, var, root);
+    if r1 != null { return r1; }
+    let r2: *Type = _expr_var_node(e.rhs, line0, var, root);
+    if r2 != null { return r2; }
+    let r3: *Type = _expr_var_node(e.operand, line0, var, root);
+    if r3 != null { return r3; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let ra: *Type = _expr_var_node(&a, line0, var, root);
+            if ra != null { return ra; }
+        }
+    }
+    return null;
+}
+
+// Type of a let's binding: explicit annotation first, then `Type::ctor()`
+// RHS lookup (Router::new() -> *Router, Vector::new() -> *Vector<T>).
+fn _let_node_type(s: *Stmt, root: *Vector<Stmt>) -> *Type {
+    if s == null { return null; }
+    if s.let_ty != null { return s.let_ty; }
+    if s.let_value != null && s.let_value.kind == EX_CALL && s.let_value.lhs != null
+       && s.let_value.lhs.kind == EX_PATH {
+        let t_name: string = s.let_value.lhs.str_val;
+        let m_name: string = s.let_value.lhs.field;
+        return _impl_method_ret(root, t_name, m_name);
+    }
+    return null;
+}
+
+// Resolve the type of the expression text ending at `end_pos` (exclusive)
+// in `text`. Recursive walker: handles ident, `x.field`, `x.method(args)`,
+// `Type::method(args)`, chained variants, and `v[i]` indexing. Returns
+// null when we can't resolve. Robust to expressions that don't end with
+// a parseable token (lets us answer completion at `expr.|`).
+fn _chain_resolve_type(text: string, end_pos: int, stmts: *Vector<Stmt>, line0: int, path: string) -> *Type {
+    if end_pos <= 0 || stmts == null { return null; }
+    let last_i: int = end_pos - 1;
+    let c: int = text.at(last_i).to_int();
+
+    // Call: `…(args)`
+    if c == 41 {
+        let open_i: int = _match_paren_back(text, last_i);
+        if open_i < 0 { return null; }
+        let m_start: int = _ident_start_back(text, open_i - 1);
+        let m_end: int = open_i;
+        if m_start >= m_end { return null; }
+        let method_name: string = text.substring(m_start, m_end);
+        let pre_i: int = m_start - 1;
+        if pre_i < 0 {
+            return _fn_ret_type(stmts, method_name);
+        }
+        let pc: int = text.at(pre_i).to_int();
+        if pc == 46 {
+            let recv: *Type = _chain_resolve_type(text, pre_i, stmts, line0, path);
+            return _method_ret_type(stmts, recv, method_name);
+        }
+        if pre_i >= 1 && pc == 58 && text.at(pre_i - 1).to_int() == 58 {
+            let t_end: int = pre_i - 1;
+            let t_start: int = _ident_start_back(text, t_end - 1);
+            if t_start >= t_end { return null; }
+            let type_name: string = text.substring(t_start, t_end);
+            return _impl_method_ret(stmts, type_name, method_name);
+        }
+        return _fn_ret_type(stmts, method_name);
+    }
+
+    // Indexing: `…[idx]` — for Vector<T>[i] return T.
+    if c == 93 {
+        let open_i: int = _match_brack_back(text, last_i);
+        if open_i < 0 { return null; }
+        let recv: *Type = _chain_resolve_type(text, open_i, stmts, line0, path);
+        let x: *Type = _strip_ptr_borrow(recv);
+        if x != null && x.kind == TY_GENERIC && x.args != null && x.args.len() > 0 {
+            let a: Type = x.args.get(0);
+            let p: *Type = malloc(sizeof(Type)) as *Type;
+            *p = a;
+            return p;
+        }
+        return null;
+    }
+
+    // Ident or member field
+    if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 {
+        let i_start: int = _ident_start_back(text, last_i);
+        let ident: string = text.substring(i_start, end_pos);
+        let pre_i: int = i_start - 1;
+        if pre_i < 0 {
+            return _local_type_node(stmts, line0, ident, path);
+        }
+        let pc: int = text.at(pre_i).to_int();
+        if pc == 46 {
+            let recv: *Type = _chain_resolve_type(text, pre_i, stmts, line0, path);
+            return _struct_field_type(stmts, recv, ident);
+        }
+        return _local_type_node(stmts, line0, ident, path);
+    }
+
+    return null;
+}
+
+// Push members of the receiver type into `items`. Handles `!T` (ok/val/err),
+// `?T` (has/val), `?!T` (has/ok/val/err), and named/generic types via the
+// existing list_fields/list_methods/list_chan helpers.
+fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValue, seen: *HashMap<bool>) {
+    if ty == null { return; }
+    let x: *Type = _strip_ptr_borrow(ty);
+    if x == null { return; }
+    if x.kind == TY_RESULT {
+        let inner_pretty: string = type_to_string_pretty(x.inner);
+        if !seen.contains("ok")  { seen.insert("ok",  true); json_arr_push(items, completion_item("ok",  5, "bool")); }
+        if !seen.contains("val") { seen.insert("val", true); json_arr_push(items, completion_item("val", 5, inner_pretty)); }
+        if !seen.contains("err") { seen.insert("err", true); json_arr_push(items, completion_item("err", 5, "string")); }
+        return;
+    }
+    if x.kind == TY_OPTION {
+        let inner_pretty: string = type_to_string_pretty(x.inner);
+        if !seen.contains("has") { seen.insert("has", true); json_arr_push(items, completion_item("has", 5, "bool")); }
+        if !seen.contains("val") { seen.insert("val", true); json_arr_push(items, completion_item("val", 5, inner_pretty)); }
+        return;
+    }
+    if x.kind == TY_OPT_RESULT {
+        let inner_pretty: string = type_to_string_pretty(x.inner);
+        if !seen.contains("has") { seen.insert("has", true); json_arr_push(items, completion_item("has", 5, "bool")); }
+        if !seen.contains("ok")  { seen.insert("ok",  true); json_arr_push(items, completion_item("ok",  5, "bool")); }
+        if !seen.contains("val") { seen.insert("val", true); json_arr_push(items, completion_item("val", 5, inner_pretty)); }
+        if !seen.contains("err") { seen.insert("err", true); json_arr_push(items, completion_item("err", 5, "string")); }
+        return;
+    }
+    if x.kind == TY_NAMED || x.kind == TY_GENERIC {
+        list_fields_for_type(stmts, x.name, items, seen);
+        list_methods_for_type(stmts, x.name, items, seen, true);
+        list_chan_methods_for_type(x.name, items, seen);
+        return;
+    }
 }
 
 fn list_fields_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonValue, seen: *HashMap<bool>) {
@@ -3269,6 +4207,13 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
     if doc.stmts == null { lsp_send_response(id, json_array()); return; }
+    // Editors trigger completion on `.` / `:` even inside string and char
+    // literals (Zed/VSCode don't know about Glide's lexer). Bail out before
+    // we list anything — typing `"x.y"` should never offer field names.
+    if _cursor_in_string_or_comment(doc.text, line0, col0) {
+        lsp_send_response(id, json_array());
+        return;
+    }
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
 
@@ -3314,36 +4259,54 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
 
-    // Member completion: cursor is right after `var.` (or `var.partial`).
-    // Resolve the local's type and list its struct fields plus the
-    // instance methods (those whose first param is `self`).
-    let member_var: string = member_qualifier_before(doc.text, line0, col0);
-    if !member_var.eq("") {
-        let var_type: string = lookup_local_type(doc.stmts, line0, member_var);
-        if !var_type.eq("") {
-            list_fields_for_type(doc.stmts, var_type, items, seen);
-            list_methods_for_type(doc.stmts, var_type, items, seen, true);
-            list_chan_methods_for_type(var_type, items, seen);
+    // Member completion: cursor sits right after a `.`. Unified resolver
+    // handles `var.`, `var.method(args).`, `Type::new().`, `expr.field.`,
+    // `v[i].`, and arbitrary chains. The text-walker returns the receiver's
+    // AST type so we can surface `!T`/`?T` virtual fields (ok/val/err,
+    // has/val) the same way as struct fields. Always early-returns once
+    // we know the cursor is in member position — never falls through to
+    // bare-ident completion, which would dump every visible symbol.
+    let _cursor_p: int = cursor_before_partial(doc.text, line0, col0);
+    if _cursor_p >= 1 && doc.text.at(_cursor_p - 1).to_int() == 46 {
+        let recv_ty: *Type = _chain_resolve_type(doc.text, _cursor_p - 1, doc.stmts, line0, uri_to_path(uri));
+        if recv_ty != null {
+            _list_members_for_type_node(recv_ty, doc.stmts, items, seen);
+        }
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+    // Stray `::` with no resolvable type before it: empty list, never the
+    // dump-every-global fallback. `path_qualifier_before` already handles
+    // the happy path; this is the safety net.
+    if _cursor_p >= 2 && doc.text.at(_cursor_p - 1).to_int() == 58
+       && doc.text.at(_cursor_p - 2).to_int() == 58 {
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+
+    // Attribute context. Cursor sits inside `@<partial>` (declaration-side
+    // proc-attr) or inside `@derive(<partial>)` (derive list). Surface
+    // proc-attrs / proc-derives + the handful of built-in attribute names
+    // the compiler recognises (`cfg`, `expect`, `allow`, `deprecated`,
+    // `lint`, `proc_attr`, `proc_derive`, `proc_macro`, `proc_macro_str`).
+    let _attr_ctx: int = _attribute_context(doc.text, _cursor_p);
+    if _attr_ctx != 0 {
+        if _attr_ctx == 1 {
+            // After `@` — bare attribute name.
+            _push_attr_completions(doc, state, items, seen);
+        } else {
+            // Inside `@derive(...)` — derive list.
+            _push_derive_completions(doc, state, items, seen);
         }
         seen.free();
         lsp_send_response(id, items);
         return;
     }
 
-    // Chained inline ctor: `Vector::new().` — list instance methods on the
-    // type itself (we don't try to resolve T here; method names are the same
-    // for any monomorphization).
-    let chain_ty: string = chained_ctor_qualifier_before(doc.text, line0, col0);
-    if !chain_ty.eq("") {
-        list_fields_for_type(doc.stmts, chain_ty, items, seen);
-        list_methods_for_type(doc.stmts, chain_ty, items, seen, true);
-        seen.free();
-        lsp_send_response(id, items);
-        return;
-    }
-
     // 1. Locals in scope (params + lets above the cursor in the containing fn).
-    let host: *Stmt = fn_containing(doc.stmts, line0);
+    let host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
     if host != null {
         if host.fn_params != null {
             for let i: int = 0; i < host.fn_params.len(); i++ {
@@ -3357,6 +4320,19 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
                     json_arr_push(items, item);
                 }
             }
+        }
+        // Closure params from any enclosing closure whose body covers the cursor.
+        let cps: *Vector<Param> = Vector::new();
+        collect_active_closure_params(host.fn_body, line0, cps);
+        for let i: int = 0; i < cps.len(); i++ {
+            let p: Param = cps.get(i);
+            if p.name == null || seen.contains(p.name) { continue; }
+            seen.insert(p.name, true);
+            let sig: string = "param ".concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+            let no_edit_cp: *JsonValue = null;
+            let item: *JsonValue = rich_completion_item(
+                p.name, "", 6, sig, "", "", "", false, no_edit_cp);
+            json_arr_push(items, item);
         }
         let locals: *Vector<Stmt> = Vector::new();
         collect_locals(host.fn_body, line0, locals);
@@ -3385,6 +4361,11 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             let s: Stmt = doc.stmts.get(i);
             if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
                && s.kind != ST_CONST && s.kind != ST_MACRO_DEF { continue; }
+            if s.name == null { continue; }
+            // Hide compiler-internal symbols (`__glide_*`, `__rt_*`, leading
+            // `_` privates). Users never call these directly; surfacing them
+            // bloats the completion list with C-runtime plumbing.
+            if s.name.len() >= 2 && s.name.at(0).to_int() == 95 { continue; }
             // Static macros are inserted as `name!` to get the bang for free.
             let mut label: string = s.name;
             if s.kind == ST_MACRO_DEF { label = s.name.concat("!"); }
@@ -3446,6 +4427,31 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
 
+    // 2c. User + stdlib macros harvested before expand_macros consumed
+    // them. Surface as `name!`. Doc.macro_defs covers free macros
+    // (`assert!`, `bail!`, etc); proc_macros covers `@proc_macro(foo)`
+    // fns invoked as `foo!(...)`.
+    if doc.macro_defs != null {
+        for let i: int = 0; i < doc.macro_defs.len(); i++ {
+            let md: Stmt = doc.macro_defs.get(i);
+            if md.name == null { continue; }
+            if md.name.len() >= 1 && md.name.at(0).to_int() == 95 { continue; }
+            let mlabel: string = md.name.concat("!");
+            if seen.contains(mlabel) { continue; }
+            seen.insert(mlabel, true);
+            json_arr_push(items, completion_item(mlabel, 2, macro_signature(&md)));
+        }
+    }
+    if doc.proc_macros != null {
+        for let i: int = 0; i < doc.proc_macros.len(); i++ {
+            let pn: string = doc.proc_macros.get(i);
+            let plabel: string = pn.concat("!");
+            if seen.contains(plabel) { continue; }
+            seen.insert(plabel, true);
+            json_arr_push(items, completion_item(plabel, 2, "proc-macro"));
+        }
+    }
+
     // 3. Auto-import suggestions: surface every `pub` symbol from
     // src/stdlib/ that the user hasn't imported yet. Each item carries
     // labelDetails + documentation (markdown) + a snippet (for fns) +
@@ -3500,8 +4506,16 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
     for let i: int = 0; i < n; i++ {
         let sym: ImportableSym = idx.get(i);
         if sym.name == null { continue; }
-        if seen.contains(sym.name) { continue; }
-        seen.insert(sym.name, true);
+        // Proc-attrs / proc-derives surface only under `@<...>` /
+        // `@derive(...)` contexts, not in the bare-ident suggestion bag.
+        // Free macros appear here as `name!` (so `assert` typed at top
+        // level offers `assert!` with auto-import).
+        if sym.kind == SYMKIND_PROC_ATTR || sym.kind == SYMKIND_PROC_DERIVE
+           || sym.kind == SYMKIND_PROC_MACRO { continue; }
+        let mut label: string = sym.name;
+        if sym.kind == ST_MACRO_DEF { label = sym.name.concat("!"); }
+        if seen.contains(label) { continue; }
+        seen.insert(label, true);
         let mut existing: *ImportInfo = null;
         if imps.contains(sym.module) {
             let info_val: ImportInfo = imps.get(sym.module);
@@ -3512,7 +4526,7 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
         let edit: *JsonValue = build_import_edit(
             sym.name, sym.module, existing, insert_line, is_module);
         let item: *JsonValue = rich_completion_item(
-            sym.name, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
+            label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
             sym.signature, sym.doc, sym.module,
             sym.snippet, sym.has_snippet, edit);
         json_arr_push(items, item);
@@ -5039,25 +6053,26 @@ fn _build_lint_index_for_cat(program: *Vector<Stmt>, cat: string, dep: *HashMap<
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN {
-            let r: string = _lint_reason_for_cat(&s, cat);
-            if r != null { dep.insert(s.name, r); }
+            let r: ?string = _lint_reason_for_cat(&s, cat);
+            if r.has { dep.insert(s.name, r.val); }
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             let mut owner: string = "";
             if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                let r: string = _lint_reason_for_cat(&m, cat);
-                if r == null { continue; }
-                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), r); }
-                if !dep.contains(m.name) { dep.insert(m.name, r); }
+                let r: ?string = _lint_reason_for_cat(&m, cat);
+                if !r.has { continue; }
+                let rv: string = r.val;
+                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), rv); }
+                if !dep.contains(m.name) { dep.insert(m.name, rv); }
             }
         }
     }
 }
 
-fn _lint_reason_for_cat(s: *Stmt, cat: string) -> string {
-    if s == null || s.attrs == null { return null; }
+fn _lint_reason_for_cat(s: *Stmt, cat: string) -> ?string {
+    if s == null || s.attrs == null { return none(); }
     for let i: int = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
         if !a.name.eq("lint") { continue; }
@@ -5067,11 +6082,11 @@ fn _lint_reason_for_cat(s: *Stmt, cat: string) -> string {
         if !cat_expr.str_val.eq(cat) { continue; }
         if a.args.len() > 1 {
             let r_expr: Expr = a.args.get(1);
-            if r_expr.kind == EX_STRING { return r_expr.str_val; }
+            if r_expr.kind == EX_STRING { return some(r_expr.str_val); }
         }
-        return "";
+        return some("");
     }
-    return null;
+    return none();
 }
 
 // Walk the diagnostic stream against every `@expect("<code>")`
@@ -5400,8 +6415,8 @@ fn _collect_attr_fns(program: *Vector<Stmt>, dep: *HashMap<string>, attr_name: s
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN {
-            let reason: string = _attr_reason(&s, attr_name);
-            if reason != null { dep.insert(s.name, reason); }
+            let reason: ?string = _attr_reason(&s, attr_name);
+            if reason.has { dep.insert(s.name, reason.val); }
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             // Methods inside `impl Type { ... }` get keyed under
@@ -5413,13 +6428,14 @@ fn _collect_attr_fns(program: *Vector<Stmt>, dep: *HashMap<string>, attr_name: s
             if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                let reason: string = _attr_reason(&m, attr_name);
-                if reason == null { continue; }
-                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), reason); }
+                let reason: ?string = _attr_reason(&m, attr_name);
+                if !reason.has { continue; }
+                let rv: string = reason.val;
+                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), rv); }
                 // Only register the bare-name fallback if nothing's
                 // there yet — preserves the older (and more specific)
                 // entry when two impls share a method name.
-                if !dep.contains(m.name) { dep.insert(m.name, reason); }
+                if !dep.contains(m.name) { dep.insert(m.name, rv); }
             }
         }
     }
@@ -5428,17 +6444,17 @@ fn _collect_attr_fns(program: *Vector<Stmt>, dep: *HashMap<string>, attr_name: s
 // Returns the attribute's reason string, or null if the item doesn't
 // carry the attribute. Empty string means the attribute was present
 // without an argument (e.g. `@deprecated`).
-fn _attr_reason(s: *Stmt, attr_name: string) -> string {
-    if s == null || s.attrs == null { return null; }
+fn _attr_reason(s: *Stmt, attr_name: string) -> ?string {
+    if s == null || s.attrs == null { return none(); }
     for let i: int = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
         if !a.name.eq(attr_name) { continue; }
-        if a.args == null || a.args.len() == 0 { return ""; }
+        if a.args == null || a.args.len() == 0 { return some(""); }
         let v: Expr = a.args.get(0);
-        if v.kind == EX_STRING { return v.str_val; }
-        return "";
+        if v.kind == EX_STRING { return some(v.str_val); }
+        return some("");
     }
-    return null;
+    return none();
 }
 
 fn _scan_calls_in_body(t: *Typer, body: *Vector<Stmt>, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
@@ -6191,6 +7207,40 @@ fn _ui_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
     if s.let_value != null { _ui_collect_expr(s.let_value, used); }
     if s.expr_value != null { _ui_collect_expr(s.expr_value, used); }
     if s.cond != null { _ui_collect_expr(s.cond, used); }
+    if s.for_step != null { _ui_collect_expr(s.for_step, used); }
+    if s.for_init != null { _ui_collect_stmt(s.for_init, used); }
+    if s.scrutinee != null { _ui_collect_expr(s.scrutinee, used); }
+    // Attribute args: `@derive(JsonBind)`, `@expect("code")`, `@allow("x")`,
+    // procedural macro use sites. Each arg expression's idents count as
+    // uses of the corresponding import.
+    if s.attrs != null {
+        for let i: int = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.args == null { continue; }
+            for let j: int = 0; j < a.args.len(); j++ {
+                let ae: Expr = a.args.get(j);
+                _ui_collect_expr(&ae, used);
+            }
+        }
+    }
+    // Types appearing in annotations / signatures / fields count as uses.
+    // Without this, `fn(req: *HttpRequest)` and `let r: *Router = ...` look
+    // like the imports `HttpRequest` / `Router` are dead code.
+    _ui_collect_type(s.let_ty, used);
+    _ui_collect_type(s.fn_ret_ty, used);
+    _ui_collect_type(s.impl_target, used);
+    if s.fn_params != null {
+        for let i: int = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            _ui_collect_type(p.ty, used);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: int = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            _ui_collect_type(f.ty, used);
+        }
+    }
     if s.then_body != null {
         for let i: int = 0; i < s.then_body.len(); i++ {
             let c: Stmt = s.then_body.get(i);
@@ -6215,6 +7265,17 @@ fn _ui_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
             _ui_collect_stmt(&c, used);
         }
     }
+    if s.arms != null {
+        for let i: int = 0; i < s.arms.len(); i++ {
+            let a: MatchArm = s.arms.get(i);
+            if a.body != null {
+                for let j: int = 0; j < a.body.len(); j++ {
+                    let c: Stmt = a.body.get(j);
+                    _ui_collect_stmt(&c, used);
+                }
+            }
+        }
+    }
 }
 fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
     if e == null { return; }
@@ -6223,6 +7284,34 @@ fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT {
         used.insert(e.lhs.str_val, true);
     }
+    // `Type::method(...)` — both the type and the method count as a use of
+    // the imported `Type` / `method` name. Without this `Router::new()`
+    // looks like Router was imported and abandoned.
+    if e.kind == EX_PATH {
+        if e.str_val != null { used.insert(e.str_val, true); }
+        if e.field != null { used.insert(e.field, true); }
+    }
+    // Anonymous fns can hold params + return-type annotations that name
+    // imported types. Walk those before descending into the body.
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: int = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                _ui_collect_type(p.ty, used);
+            }
+        }
+        _ui_collect_type(e.cast_to, used);
+        if e.fn_expr_body != null {
+            for let i: int = 0; i < e.fn_expr_body.len(); i++ {
+                let bs: Stmt = e.fn_expr_body.get(i);
+                _ui_collect_stmt(&bs, used);
+            }
+        }
+    }
+    // Cast targets (`expr as *Foo`) and sizeof(Type) usages.
+    if e.kind == EX_CAST || e.kind == EX_SIZEOF { _ui_collect_type(e.cast_to, used); }
+    // Struct literal names the type explicitly.
+    if e.kind == EX_STRUCT_LIT && e.str_val != null { used.insert(e.str_val, true); }
     if e.lhs != null { _ui_collect_expr(e.lhs, used); }
     if e.rhs != null { _ui_collect_expr(e.rhs, used); }
     if e.operand != null { _ui_collect_expr(e.operand, used); }
@@ -6232,6 +7321,22 @@ fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
             _ui_collect_expr(&a, used);
         }
     }
+}
+// Walk a type tree, marking every named carrier as a use. Catches
+// `*HttpRequest`, `Vector<Router>`, `?HttpResponse`, etc.
+fn _ui_collect_type(t: *Type, used: *HashMap<bool>) {
+    if t == null { return; }
+    if t.kind == TY_NAMED && t.name != null { used.insert(t.name, true); }
+    if t.kind == TY_GENERIC && t.name != null { used.insert(t.name, true); }
+    if t.inner != null { _ui_collect_type(t.inner, used); }
+    if t.args != null {
+        for let i: int = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            _ui_collect_type(&a, used);
+        }
+    }
+    // For TY_FNPTR `args` carries the param types and `fnptr_ret` the ret.
+    if t.fnptr_ret != null { _ui_collect_type(t.fnptr_ret, used); }
 }
 
 // ---------- arena-set-without-restore ------------------------------------
@@ -7021,7 +8126,8 @@ fn _cl_walk(t: *Typer, body: *Vector<Stmt>, nm: string, closed_in: bool,
             closed = new_closed;
         }
     }
-    return closed ? 1 : 0;
+    if closed { return 1; }
+    return 0;
 }
 fn _cl_expr_closes(e: *Expr, nm: string) -> bool {
     if e == null { return false; }
@@ -7199,7 +8305,6 @@ pub fn lsp_main() -> int {
     let log_path: string = _lsp_log_path();
     __glide_lsp_log_open(log_path);
     _lsp_log("--- lsp boot ---");
-    _lsp_log(GLIDE_VERSION);
     let state: *LspState = lsp_state_new();
     while true {
         let raw: string = lsp_read_message();

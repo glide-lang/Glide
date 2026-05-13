@@ -272,6 +272,90 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     return out;
 }
 
+// Drop compile-time-only stmts (proc-macro impls + their bootstrap/*
+// AST helpers + the private helper fns sitting alongside them) from
+// `program`. Called by the build / LSP pipeline AFTER the typer has
+// validated imports and conformance — the import check still wants to
+// see the proc-fn carrying its `@proc_<kind>(Name)` attribute, so we
+// can't strip inside `expand_macros`.
+pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
+    if program == null { return program; }
+    // Pre-pass: any origin containing at least one `@proc_<kind>` fn is
+    // a compile-time-only file — its private helpers (`_emit_from_json`,
+    // `_field_read_expr`, ...) call into bootstrap::ast and have no
+    // business in userland codegen either.
+    let pm_origins: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_FN || s.attrs == null || s.origin == null { continue; }
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            if a.name == null { continue; }
+            if a.name.eq("proc_attr") || a.name.eq("proc_derive")
+               || a.name.eq("proc_macro") || a.name.eq("proc_macro_str") {
+                pm_origins.insert(s.origin, true);
+                break;
+            }
+        }
+    }
+    // No proc-macros in the program → nothing to strip. The bootstrap
+    // self-build hits this path (it doesn't use proc-derives), and we
+    // must NOT drop bootstrap/* origins there since bootstrap IS the
+    // user code in that context.
+    if pm_origins.len() == 0 { return program; }
+    let out: *Vector<Stmt> = Vector::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.origin != null && pm_origins.contains(s.origin) { continue; }
+        if _is_compile_time_only(&s) { continue; }
+        out.push(s);
+    }
+    return out;
+}
+
+// A stmt is compile-time-only when it exists solely to support the
+// procedural-macro interpreter: the proc-fn impls themselves, plus any
+// helper from `bootstrap/*` (AST struct typedefs, expr_/stmt_/ty_
+// constructors, the embedded interp module). After the interp has run
+// the derive/attr expansions, none of these reach userland — leaving
+// them in the program forces codegen to emit C that references
+// `Stmt`/`Expr`/`Type`/`Param` carriers that aren't shipped with
+// `~/.glide/bin/src/` (the installed tree only has builtins + stdlib).
+fn _is_compile_time_only(s: *Stmt) -> bool {
+    if s == null { return false; }
+    // Anything from `bootstrap/*` (the compiler's own source tree) is
+    // only used to back the proc-macro interpreter at compile time.
+    if s.origin != null {
+        let o: string = s.origin;
+        let n: int = o.len();
+        let mut i: int = 0;
+        while i + 9 < n {
+            let c0: int = o.at(i).to_int();
+            let prev_ok: bool = i == 0 || o.at(i - 1).to_int() == 47 || o.at(i - 1).to_int() == 92;
+            if prev_ok && c0 == 98 && o.at(i + 1).to_int() == 111
+               && o.at(i + 2).to_int() == 111 && o.at(i + 3).to_int() == 116
+               && o.at(i + 4).to_int() == 115 && o.at(i + 5).to_int() == 116
+               && o.at(i + 6).to_int() == 114 && o.at(i + 7).to_int() == 97
+               && o.at(i + 8).to_int() == 112 && o.at(i + 9).to_int() == 47 {
+                return true;
+            }
+            i = i + 1;
+        }
+    }
+    // Or a fn carrying a `@proc_<kind>(Name)` attribute.
+    if s.kind == ST_FN && s.attrs != null {
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            if a.name == null { continue; }
+            if a.name.eq("proc_attr") || a.name.eq("proc_derive")
+               || a.name.eq("proc_macro") || a.name.eq("proc_macro_str") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 fn _proc_kind_for(name: string) -> int {
     if name.eq("proc_derive") { return PMK_DERIVE; }
     if name.eq("proc_attr") { return PMK_ATTR; }
