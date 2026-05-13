@@ -1303,6 +1303,25 @@ fn run_install(argc: int) -> int {
         }
     }
 
+    // Proc-macro support: ship `bootstrap/` alongside `src/` so
+    // `stdlib::http::handler` and `stdlib::json::derive` can resolve
+    // their `import bootstrap::ast::*` / `import bootstrap::interp::*`
+    // at proc-macro expand time. Without these, the LSP can't surface
+    // `Stmt`/`Expr`/`Type` types for goto/hover inside the proc fns,
+    // and the install can't act as a host for user-authored proc
+    // macros either.
+    let bs_origin: string = project_root.concat("/bootstrap");
+    if fs_is_dir(bs_origin) {
+        let bs_dest: string = install_dir.concat("/bootstrap");
+        fs_remove_dir_rec(bs_dest);
+        if fs_copy_dir_rec(bs_origin, bs_dest) {
+            println!("installed bootstrap ->", bs_dest);
+        } else {
+            println!("warning: could not copy", bs_origin, "->", bs_dest,
+                     "(proc-macros may lose goto/hover on bootstrap types)");
+        }
+    }
+
     // Same idea for `runtime/zig/`. Without it, `--target=<triple>`
     // builds can't find a cross-capable cc. Optional — we skip
     // silently when there's no zig in the source tree.
