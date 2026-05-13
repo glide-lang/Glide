@@ -37,6 +37,7 @@
   "asm"
   "volatile"
   "dyn"
+  "defer_err"
 ] @keyword
 
 ; Self type
@@ -44,6 +45,11 @@
 
 ; @cfg(...) attribute
 (cfg_attr "@" @attribute "cfg" @attribute)
+
+; Generic proc-macro attributes: @derive(...), @handler, @proc_macro,
+; @proc_derive(Name), etc. The `@` and the attribute name share the
+; @attribute color so the whole tag reads as one token.
+(proc_attr "@" @attribute name: (identifier) @attribute)
 
 ; trait + supertraits
 (trait_decl name: (identifier) @type)
@@ -96,7 +102,7 @@
 [
   "+" "-" "/" "%" "*"
   "==" "!=" "<" "<=" ">" ">="
-  "&&" "||"
+  "&&" "||" "??"
   "&" "|" "^" "~" "<<" ">>"
   "=" "+=" "-=" "*=" "/=" "%=" "&=" "|=" "^=" "<<=" ">>="
   "++" "--"

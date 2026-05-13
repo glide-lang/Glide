@@ -874,6 +874,10 @@
             "named": false
           },
           {
+            "type": "??",
+            "named": false
+          },
+          {
             "type": "^",
             "named": false
           },
@@ -1043,6 +1047,10 @@
           "named": true
         },
         {
+          "type": "defer_err_stmt",
+          "named": true
+        },
+        {
           "type": "defer_stmt",
           "named": true
         },
@@ -1139,6 +1147,14 @@
           "named": true
         },
         {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "pointer_type",
           "named": true
         },
@@ -1187,6 +1203,14 @@
         },
         {
           "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -1469,6 +1493,14 @@
           "named": true
         },
         {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "parenthesized",
           "named": true
         },
@@ -1567,6 +1599,14 @@
           "named": true
         },
         {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "pointer_type",
           "named": true
         },
@@ -1625,6 +1665,14 @@
           },
           {
             "type": "named_type",
+            "named": true
+          },
+          {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
             "named": true
           },
           {
@@ -1761,6 +1809,121 @@
     "type": "continue_stmt",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "defer_err_stmt",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "array_literal",
+          "named": true
+        },
+        {
+          "type": "assignment",
+          "named": true
+        },
+        {
+          "type": "binary_expr",
+          "named": true
+        },
+        {
+          "type": "bool_literal",
+          "named": true
+        },
+        {
+          "type": "call_expr",
+          "named": true
+        },
+        {
+          "type": "cast_expr",
+          "named": true
+        },
+        {
+          "type": "char_literal",
+          "named": true
+        },
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "fn_expr",
+          "named": true
+        },
+        {
+          "type": "identifier_expr",
+          "named": true
+        },
+        {
+          "type": "index_expr",
+          "named": true
+        },
+        {
+          "type": "macro_call",
+          "named": true
+        },
+        {
+          "type": "macro_var_expr",
+          "named": true
+        },
+        {
+          "type": "member_expr",
+          "named": true
+        },
+        {
+          "type": "method_macro_call",
+          "named": true
+        },
+        {
+          "type": "new_expr",
+          "named": true
+        },
+        {
+          "type": "null_literal",
+          "named": true
+        },
+        {
+          "type": "number_literal",
+          "named": true
+        },
+        {
+          "type": "parenthesized",
+          "named": true
+        },
+        {
+          "type": "path_expr",
+          "named": true
+        },
+        {
+          "type": "path_macro_call",
+          "named": true
+        },
+        {
+          "type": "postfix_expr",
+          "named": true
+        },
+        {
+          "type": "sizeof_expr",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        },
+        {
+          "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "unary_expr",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "defer_stmt",
@@ -1963,6 +2126,14 @@
           "named": true
         },
         {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "pointer_type",
           "named": true
         },
@@ -2149,6 +2320,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -2282,6 +2461,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -2306,6 +2493,10 @@
       "types": [
         {
           "type": "cfg_attr",
+          "named": true
+        },
+        {
+          "type": "proc_attr",
           "named": true
         },
         {
@@ -2368,6 +2559,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -2420,6 +2619,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -2468,6 +2675,14 @@
         },
         {
           "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -3008,6 +3223,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -3459,6 +3682,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -3868,6 +4099,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -3937,6 +4176,14 @@
           },
           {
             "type": "named_type",
+            "named": true
+          },
+          {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
             "named": true
           },
           {
@@ -4366,6 +4613,10 @@
         },
         {
           "type": "continue_stmt",
+          "named": true
+        },
+        {
+          "type": "defer_err_stmt",
           "named": true
         },
         {
@@ -5097,6 +5348,124 @@
     }
   },
   {
+    "type": "option_result_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "borrow_mut_type",
+          "named": true
+        },
+        {
+          "type": "borrow_type",
+          "named": true
+        },
+        {
+          "type": "chan_type",
+          "named": true
+        },
+        {
+          "type": "dyn_type",
+          "named": true
+        },
+        {
+          "type": "fn_ptr_type",
+          "named": true
+        },
+        {
+          "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
+          "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "result_type",
+          "named": true
+        },
+        {
+          "type": "self_type",
+          "named": true
+        },
+        {
+          "type": "slice_type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "option_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "borrow_mut_type",
+          "named": true
+        },
+        {
+          "type": "borrow_type",
+          "named": true
+        },
+        {
+          "type": "chan_type",
+          "named": true
+        },
+        {
+          "type": "dyn_type",
+          "named": true
+        },
+        {
+          "type": "fn_ptr_type",
+          "named": true
+        },
+        {
+          "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
+          "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "result_type",
+          "named": true
+        },
+        {
+          "type": "self_type",
+          "named": true
+        },
+        {
+          "type": "slice_type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "param",
     "named": true,
     "fields": {
@@ -5136,6 +5505,14 @@
           },
           {
             "type": "named_type",
+            "named": true
+          },
+          {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
             "named": true
           },
           {
@@ -5493,6 +5870,14 @@
           "named": true
         },
         {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "pointer_type",
           "named": true
         },
@@ -5630,6 +6015,132 @@
     }
   },
   {
+    "type": "proc_attr",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "array_literal",
+          "named": true
+        },
+        {
+          "type": "assignment",
+          "named": true
+        },
+        {
+          "type": "binary_expr",
+          "named": true
+        },
+        {
+          "type": "bool_literal",
+          "named": true
+        },
+        {
+          "type": "call_expr",
+          "named": true
+        },
+        {
+          "type": "cast_expr",
+          "named": true
+        },
+        {
+          "type": "char_literal",
+          "named": true
+        },
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "fn_expr",
+          "named": true
+        },
+        {
+          "type": "identifier_expr",
+          "named": true
+        },
+        {
+          "type": "index_expr",
+          "named": true
+        },
+        {
+          "type": "macro_call",
+          "named": true
+        },
+        {
+          "type": "macro_var_expr",
+          "named": true
+        },
+        {
+          "type": "member_expr",
+          "named": true
+        },
+        {
+          "type": "method_macro_call",
+          "named": true
+        },
+        {
+          "type": "new_expr",
+          "named": true
+        },
+        {
+          "type": "null_literal",
+          "named": true
+        },
+        {
+          "type": "number_literal",
+          "named": true
+        },
+        {
+          "type": "parenthesized",
+          "named": true
+        },
+        {
+          "type": "path_expr",
+          "named": true
+        },
+        {
+          "type": "path_macro_call",
+          "named": true
+        },
+        {
+          "type": "postfix_expr",
+          "named": true
+        },
+        {
+          "type": "sizeof_expr",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        },
+        {
+          "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "unary_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "raw_brace_block",
     "named": true,
     "fields": {},
@@ -5674,6 +6185,14 @@
         },
         {
           "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -5843,6 +6362,14 @@
           "named": true
         },
         {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "pointer_type",
           "named": true
         },
@@ -5891,6 +6418,14 @@
         },
         {
           "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -6167,6 +6702,58 @@
       "required": false,
       "types": [
         {
+          "type": "borrow_mut_type",
+          "named": true
+        },
+        {
+          "type": "borrow_type",
+          "named": true
+        },
+        {
+          "type": "chan_type",
+          "named": true
+        },
+        {
+          "type": "dyn_type",
+          "named": true
+        },
+        {
+          "type": "fn_ptr_type",
+          "named": true
+        },
+        {
+          "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
+          "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "proc_attr",
+          "named": true
+        },
+        {
+          "type": "result_type",
+          "named": true
+        },
+        {
+          "type": "self_type",
+          "named": true
+        },
+        {
+          "type": "slice_type",
+          "named": true
+        },
+        {
           "type": "struct_field",
           "named": true
         },
@@ -6217,6 +6804,14 @@
           },
           {
             "type": "named_type",
+            "named": true
+          },
+          {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
             "named": true
           },
           {
@@ -6482,6 +7077,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -6544,6 +7147,14 @@
             "named": true
           },
           {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
             "type": "pointer_type",
             "named": true
           },
@@ -6593,6 +7204,14 @@
         },
         {
           "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -6893,6 +7512,14 @@
           },
           {
             "type": "named_type",
+            "named": true
+          },
+          {
+            "type": "option_result_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
             "named": true
           },
           {
@@ -7316,6 +7943,10 @@
     "named": false
   },
   {
+    "type": "??",
+    "named": false
+  },
+  {
     "type": "@",
     "named": false
   },
@@ -7386,6 +8017,10 @@
   },
   {
     "type": "defer",
+    "named": false
+  },
+  {
+    "type": "defer_err",
     "named": false
   },
   {

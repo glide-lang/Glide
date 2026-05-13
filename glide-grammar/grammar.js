@@ -134,6 +134,7 @@ module.exports = grammar({
     // ---- declarations ----
 
     fn_decl: $ => seq(
+      repeat($.proc_attr),
       optional($.cfg_attr),
       optional('pub'),
       optional('naked'),
@@ -146,6 +147,25 @@ module.exports = grammar({
     ),
 
     cfg_attr: $ => seq('@', 'cfg', '(', $.string_literal, ')'),
+
+    // Generic procedural-macro attribute: `@<name>` or `@<name>(args)`.
+    // Covers `@derive(JsonBind)`, `@handler`, `@proc_derive(Name)`,
+    // `@proc_attr(Name)`, etc. The grammar accepts any identifier so
+    // proc fns the user declares get highlighted the same way as the
+    // built-in attrs.
+    proc_attr: $ => seq(
+      '@',
+      field('name', $.identifier),
+      optional(seq(
+        '(',
+        optional(seq(
+          $._expression,
+          repeat(seq(',', $._expression)),
+          optional(','),
+        )),
+        ')',
+      )),
+    ),
 
     type_params: $ => seq(
       '<',
@@ -207,17 +227,33 @@ module.exports = grammar({
     ),
 
     struct_decl: $ => seq(
+      repeat($.proc_attr),
       optional('pub'),
       'struct',
       field('name', $.identifier),
       optional($.type_params),
-      '{',
-      optional(seq(
-        $.struct_field,
-        repeat(seq(',', $.struct_field)),
-        optional(','),
-      )),
-      '}',
+      choice(
+        seq(
+          '{',
+          optional(seq(
+            $.struct_field,
+            repeat(seq(',', $.struct_field)),
+            optional(','),
+          )),
+          '}',
+        ),
+        // Tuple-struct sugar: `struct Wrap(T1, T2);`
+        seq(
+          '(',
+          optional(seq(
+            $._type,
+            repeat(seq(',', $._type)),
+            optional(','),
+          )),
+          ')',
+          ';',
+        ),
+      ),
     ),
 
     struct_field: $ => seq(
@@ -336,6 +372,7 @@ module.exports = grammar({
       $.return_stmt,
       $.spawn_stmt,
       $.defer_stmt,
+      $.defer_err_stmt,
       $.break_stmt,
       $.continue_stmt,
       $.asm_block,
@@ -531,7 +568,8 @@ module.exports = grammar({
 
     return_stmt: $ => seq('return', optional($._expression), ';'),
     spawn_stmt:  $ => seq('spawn', $._expression, ';'),
-    defer_stmt:  $ => seq('defer', $._expression, ';'),
+    defer_stmt:     $ => seq('defer',     $._expression, ';'),
+    defer_err_stmt: $ => seq('defer_err', $._expression, ';'),
     break_stmt:  $ => seq('break', ';'),
     continue_stmt: $ => seq('continue', ';'),
 
@@ -552,13 +590,23 @@ module.exports = grammar({
       $.slice_type,
       $.fn_ptr_type,
       $.result_type,
+      $.option_type,
+      $.option_result_type,
     ),
 
     self_type: _ => 'Self',
 
     dyn_type: $ => seq('dyn', field('trait', $.identifier)),
 
-    result_type: $ => seq('!', $._type),
+    // Postfix-on-prefix-position type modifiers:
+    //   !T  — error-only result (the value never lands on success).
+    //   ?T  — optional, `Some(T)` / `None`.
+    //   ?!T — combined option+result, `None | Ok(T) | Err(string)`.
+    // option_result_type gets higher prec so `?!T` doesn't parse as
+    // `option_type(result_type(T))` and then trip up.
+    result_type:        $ => seq('!', $._type),
+    option_type:        $ => prec(1, seq('?', $._type)),
+    option_result_type: $ => prec(2, seq('?', '!', $._type)),
 
     named_type:      $ => prec.right(seq(
       $.identifier,
@@ -610,6 +658,7 @@ module.exports = grammar({
     binary_expr: $ => choice(
       ...[
         ['||', PREC.or],
+        ['??', PREC.or],
         ['&&', PREC.and],
         ['|',  PREC.bit_or],
         ['^',  PREC.bit_xor],
