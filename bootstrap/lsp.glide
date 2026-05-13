@@ -4597,14 +4597,66 @@ struct UseSite { line: int, col: int }
 
 fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
     if e == null { return; }
-    if e.kind == EX_IDENT && e.str_val.eq(name) {
+    // Synthesised exprs (line == 0) don't map to a position in the user's
+    // file — surfacing them as highlights anchored at (0, 0) makes the
+    // editor light up column 0 of line 1 on every hover. Recurse into
+    // children but never emit a hit ourselves.
+    let has_pos: bool = e.line > 0;
+    if has_pos && e.kind == EX_IDENT && e.str_val.eq(name) {
         let u: UseSite = UseSite { line: e.line, col: e.column };
         out.push(u);
     }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH
+    if has_pos && e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH
        && e.lhs.str_val.eq(name) {
         let u: UseSite = UseSite { line: e.line, col: e.column };
         out.push(u);
+    }
+    // `Type::method` outside an EX_CALL (function-pointer slot, enum
+    // variant ctor, ...). Without this `Router::new` typed standalone
+    // doesn't highlight.
+    if has_pos && e.kind == EX_PATH {
+        if e.str_val != null && e.str_val.eq(name) {
+            let u: UseSite = UseSite { line: e.line, col: e.column };
+            out.push(u);
+        }
+        if e.field != null && e.field.eq(name) {
+            let u: UseSite = UseSite { line: e.line, col: e.column };
+            out.push(u);
+        }
+    }
+    // `recv.field` / `recv.method(...)` — member name itself.
+    if has_pos && e.kind == EX_MEMBER && e.field != null && e.field.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
+    // `Foo { a: ..., b: ... }` — struct literal type + field names.
+    if has_pos && e.kind == EX_STRUCT_LIT && e.str_val != null && e.str_val.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
+    // `expr as *Foo` / `sizeof(Foo)` — type names in cast / sizeof slots.
+    if (e.kind == EX_CAST || e.kind == EX_SIZEOF) && e.cast_to != null {
+        _collect_type_uses(e.cast_to, name, out, e.line, e.column);
+    }
+    // Closure params + their annotations + body.
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: int = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null && p.name.eq(name) {
+                    let u: UseSite = UseSite { line: e.line, col: e.column };
+                    out.push(u);
+                }
+                _collect_type_uses(p.ty, name, out, e.line, e.column);
+            }
+        }
+        _collect_type_uses(e.cast_to, name, out, e.line, e.column);
+        if e.fn_expr_body != null {
+            for let i: int = 0; i < e.fn_expr_body.len(); i++ {
+                let bs: Stmt = e.fn_expr_body.get(i);
+                collect_uses_in_stmt(&bs, name, out);
+            }
+        }
     }
     if e.lhs != null { collect_uses_in_expr(e.lhs, name, out); }
     if e.rhs != null { collect_uses_in_expr(e.rhs, name, out); }
@@ -4617,28 +4669,107 @@ fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
     }
 }
 
+// Walk a type tree, recording an occurrence of `name` at the carrier
+// position (`carrier_line`/`carrier_col`) for every TY_NAMED /
+// TY_GENERIC whose name matches. We don't have per-segment positions
+// inside type nodes, so highlights anchor at the enclosing
+// declaration's position — close enough to be useful and never
+// wrong-file. Skip when the carrier has no position (line == 0):
+// those come from synthesised stmts (proc-macro outputs, etc.) and
+// would dump bogus (0,0) highlights all over the file.
+fn _collect_type_uses(t: *Type, name: string, out: *Vector<UseSite>, carrier_line: int, carrier_col: int) {
+    if t == null { return; }
+    if carrier_line == 0 { return; }
+    if t.kind == TY_NAMED && t.name != null && t.name.eq(name) {
+        let u: UseSite = UseSite { line: carrier_line, col: carrier_col };
+        out.push(u);
+    }
+    if t.kind == TY_GENERIC && t.name != null && t.name.eq(name) {
+        let u: UseSite = UseSite { line: carrier_line, col: carrier_col };
+        out.push(u);
+    }
+    if t.inner != null { _collect_type_uses(t.inner, name, out, carrier_line, carrier_col); }
+    if t.args != null {
+        for let i: int = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            _collect_type_uses(&a, name, out, carrier_line, carrier_col);
+        }
+    }
+    if t.fnptr_ret != null { _collect_type_uses(t.fnptr_ret, name, out, carrier_line, carrier_col); }
+}
+
 fn collect_uses_in_stmt(s: *Stmt, name: string, out: *Vector<UseSite>) {
     if s == null { return; }
-    // Declaration site of fn / struct / enum / const / let — anchor at the
-    // name position so highlight / find-refs land on the identifier itself,
-    // not the leading `let` / `fn` / `struct` keyword.
-    if (s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM || s.kind == ST_CONST)
-       && s.name.eq(name) {
+    // Declaration site of fn / struct / enum / const / let / trait / macro
+    // — anchor at the name position so highlight / find-refs land on the
+    // identifier itself, not the leading `let` / `fn` / `struct` keyword.
+    if (s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+        || s.kind == ST_CONST || s.kind == ST_TRAIT || s.kind == ST_MACRO_DEF)
+       && s.name != null && s.name.eq(name) {
         let mut nl: int = s.name_line; let mut nc: int = s.name_col;
         if nl == 0 { nl = s.line; nc = s.column; }
         let u: UseSite = UseSite { line: nl, col: nc };
         out.push(u);
     }
-    if s.kind == ST_LET && s.name.eq(name) {
+    if s.kind == ST_LET && s.name != null && s.name.eq(name) {
         let mut nl: int = s.name_line; let mut nc: int = s.name_col;
         if nl == 0 { nl = s.line; nc = s.column; }
         let u: UseSite = UseSite { line: nl, col: nc };
         out.push(u);
+    }
+    // Type annotations: `let r: *Router`, `fn(req: *HttpRequest) -> Json<Res>`,
+    // `struct Foo { f: T }`, `impl Foo`. Anchor at the stmt's own line/col
+    // since fields/params/types don't carry their own positions.
+    _collect_type_uses(s.let_ty, name, out, s.line, s.column);
+    _collect_type_uses(s.fn_ret_ty, name, out, s.line, s.column);
+    _collect_type_uses(s.impl_target, name, out, s.line, s.column);
+    if s.fn_params != null {
+        for let i: int = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            if p.name != null && p.name.eq(name) {
+                let mut nl: int = p.name_line; let mut nc: int = p.name_col;
+                if nl == 0 { nl = s.line; nc = s.column; }
+                if nl > 0 {
+                    let u: UseSite = UseSite { line: nl, col: nc };
+                    out.push(u);
+                }
+            }
+            // Prefer the param's own position (closer to where the type
+            // is written) over the fn-stmt's. Falls back to the stmt if
+            // the param has no position info.
+            let mut tl: int = p.name_line; let mut tc: int = p.name_col;
+            if tl == 0 { tl = s.line; tc = s.column; }
+            _collect_type_uses(p.ty, name, out, tl, tc);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: int = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            if f.name != null && f.name.eq(name) {
+                let u: UseSite = UseSite { line: s.line, col: s.column };
+                out.push(u);
+            }
+            _collect_type_uses(f.ty, name, out, s.line, s.column);
+        }
+    }
+    // `@derive(Name)`, `@expect("code")`, `@Name`, etc — pick up the
+    // attribute args. Without this `@derive(JsonBind)` doesn't highlight
+    // JsonBind.
+    if s.attrs != null {
+        for let i: int = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.args == null { continue; }
+            for let j: int = 0; j < a.args.len(); j++ {
+                let ae: Expr = a.args.get(j);
+                collect_uses_in_expr(&ae, name, out);
+            }
+        }
     }
     if s.let_value != null { collect_uses_in_expr(s.let_value, name, out); }
     if s.expr_value != null { collect_uses_in_expr(s.expr_value, name, out); }
     if s.cond != null { collect_uses_in_expr(s.cond, name, out); }
     if s.for_step != null { collect_uses_in_expr(s.for_step, name, out); }
+    if s.scrutinee != null { collect_uses_in_expr(s.scrutinee, name, out); }
     if s.for_init != null { collect_uses_in_stmt(s.for_init, name, out); }
     if s.then_body != null {
         for let i: int = 0; i < s.then_body.len(); i++ {
@@ -4662,6 +4793,17 @@ fn collect_uses_in_stmt(s: *Stmt, name: string, out: *Vector<UseSite>) {
         for let i: int = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             collect_uses_in_stmt(&m, name, out);
+        }
+    }
+    if s.arms != null {
+        for let i: int = 0; i < s.arms.len(); i++ {
+            let a: MatchArm = s.arms.get(i);
+            if a.body != null {
+                for let j: int = 0; j < a.body.len(); j++ {
+                    let b: Stmt = a.body.get(j);
+                    collect_uses_in_stmt(&b, name, out);
+                }
+            }
         }
     }
 }
@@ -4705,6 +4847,7 @@ fn handle_references(req: *JsonValue, state: *LspState) {
     let arr: *JsonValue = json_array();
     for let i: int = 0; i < uses.len(); i++ {
         let u: UseSite = uses.get(i);
+        if u.line <= 0 { continue; }
         let loc: *JsonValue = json_object();
         json_obj_set(loc, "uri", json_string(uri));
         json_obj_set(loc, "range", use_to_range(&u, word.len()));
@@ -4737,6 +4880,10 @@ fn handle_document_highlight(req: *JsonValue, state: *LspState) {
     let arr: *JsonValue = json_array();
     for let i: int = 0; i < uses.len(); i++ {
         let u: UseSite = uses.get(i);
+        // Drop synthesised hits (line == 0). They come from proc-macro
+        // outputs or other compiler-injected stmts and would highlight
+        // column 0 of line 1 with no real text underneath.
+        if u.line <= 0 { continue; }
         let h: *JsonValue = json_object();
         json_obj_set(h, "range", use_to_range(&u, word.len()));
         json_obj_set(h, "kind", json_int(1));     // 1 = Text (read), 2 = Read, 3 = Write
@@ -4772,6 +4919,9 @@ fn handle_rename(req: *JsonValue, state: *LspState) {
     let edits: *JsonValue = json_array();
     for let i: int = 0; i < uses.len(); i++ {
         let u: UseSite = uses.get(i);
+        // Skip synthesised hits — renaming would otherwise insert at
+        // (0,0), which the editor applies as an actual file edit.
+        if u.line <= 0 { continue; }
         let edit: *JsonValue = json_object();
         json_obj_set(edit, "range", use_to_range(&u, word.len()));
         json_obj_set(edit, "newText", json_string(new_name));
