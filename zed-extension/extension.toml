@@ -16,5 +16,5 @@ languages = ["Glide"]
 
 [grammars.glide]
 repository = "https://github.com/glide-lang/Glide"
-commit     = "1081fceb8eb0e7564626835576fbd84261cefef1"
+commit     = "453891aea07960ec5fb055e3726178f32abe85f8"
 path       = "glide-grammar"
