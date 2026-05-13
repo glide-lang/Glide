@@ -2,7 +2,7 @@
 #
 # Usage:
 #   # local archive
-#   .\tools\install.ps1 -Archive .\dist\glide-windows-x86_64-0.1.0.zip
+#   .\tools\install.ps1 -Archive .\dist\glide-windows-x86_64-0.1.1.zip
 #
 #   # remote (after release is published)
 #   irm https://github.com/.../releases/download/.../install.ps1 | iex
@@ -11,7 +11,7 @@
 # user PATH (no admin needed).
 
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.1.1",
     [string]$Archive = "",
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\Glide",
     [string]$DownloadUrlBase = ""
