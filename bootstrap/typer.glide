@@ -169,6 +169,27 @@ fn _type_references_any(t: *Type, names: *Vector<string>) -> bool {
     return false;
 }
 
+// If `want` is a fn-ptr whose return type matches a registered
+// `@suggest_for_fnptr` hint, return the hint message prefixed with
+// `\n  hint: `. Empty when there's no match. Lets proc-macro authors
+// surface "annotate with @handler" (or similar) when a user passes
+// a raw fn where a wrapped fn-ptr was expected.
+fn _fnptr_hint(t: *Typer, want: *Type) -> string {
+    if t == null || want == null { return ""; }
+    if want.kind != TY_FNPTR { return ""; }
+    if want.fnptr_ret == null { return ""; }
+    if want.fnptr_ret.kind != TY_NAMED { return ""; }
+    if t.fnptr_hints == null { return ""; }
+    let ret_name: string = want.fnptr_ret.name;
+    for let i: int = 0; i < t.fnptr_hints.len(); i++ {
+        let h: FnptrHint = t.fnptr_hints.get(i);
+        if h.ret_type_name.eq(ret_name) {
+            return "\n  hint: ".concat(h.message);
+        }
+    }
+    return "";
+}
+
 // Minimal subst for method-call return-type inference. Walks the type tree
 // and rewrites any TY_NAMED whose name appears in `params` with the
 // corresponding entry of `args`. Mirrors codegen's `subst_type` for just
@@ -342,6 +363,17 @@ pub struct Typer {
     pub enums: *HashMap<string>,
     pub error_count: int,
     pub diagnostics: *Vector<DiagEntry>,
+    // Proc-macro authors can attach `@suggest_for_fnptr(RetType, "msg")`
+    // to their impl fn so any fn-ptr-arg mismatch whose expected return
+    // type matches `RetType` gets the hint appended. Lets `@handler` say
+    // "annotate with @handler" without baking HTTP knowledge into the
+    // typer.
+    pub fnptr_hints: *Vector<FnptrHint>,
+}
+
+pub struct FnptrHint {
+    pub ret_type_name: string,
+    pub message: string,
 }
 
 // Free helper: looks up `name` in the enclosing fn's type parameter
@@ -395,6 +427,8 @@ impl Typer {
         let en: *HashMap<string> = HashMap::new();
         t.enums = en;
         t.error_count = 0;
+        let fh: *Vector<FnptrHint> = Vector::new();
+        t.fnptr_hints = fh;
         return t;
     }
 
@@ -668,6 +702,28 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                     .concat("::").concat(a.name);
                 t.assoc_table.insert(key, *a.ty);
             }
+        }
+    }
+
+    // Collect `@suggest_for_fnptr(RetType, "message")` annotations from
+    // every fn in the program. Each entry: hint shown when a fn-ptr arg
+    // mismatch's expected return type matches `RetType`.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_FN || s.attrs == null { continue; }
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            if a.name == null || !a.name.eq("suggest_for_fnptr") { continue; }
+            if a.args == null || a.args.len() < 2 { continue; }
+            let ret_arg: Expr = a.args.get(0);
+            let msg_arg: Expr = a.args.get(1);
+            if ret_arg.kind != EX_IDENT { continue; }
+            if msg_arg.kind != EX_STRING { continue; }
+            let h: FnptrHint = FnptrHint {
+                ret_type_name: ret_arg.str_val,
+                message: msg_arg.str_val,
+            };
+            t.fnptr_hints.push(h);
         }
     }
 }
@@ -1765,7 +1821,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                 t.err(a.line, a.column,
                                     "arg ".concat(p.name).concat(" type mismatch: expected ")
                                     .concat(type_to_string(want_p))
-                                    .concat(", got ").concat(type_to_string(at)));
+                                    .concat(", got ").concat(type_to_string(at))
+                                    .concat(_fnptr_hint(t, want_p)));
                             }
                         }
                     } else if e.args != null {
@@ -1861,7 +1918,10 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             let at: *Type = infer_expr(t, &a);
                             if !arg_compat(p.ty, at, sig.type_params) {
                                 t.err(a.line, a.column,
-                                    "arg ".concat(p.name).concat(" type mismatch"));
+                                    "arg ".concat(p.name)
+                                    .concat(" type mismatch: expected ").concat(type_to_string(p.ty))
+                                    .concat(", got ").concat(type_to_string(at))
+                                    .concat(_fnptr_hint(t, p.ty)));
                             }
                         }
                         // Walk variadic tail args for nested type errors but
