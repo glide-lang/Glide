@@ -280,14 +280,30 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
 // can't strip inside `expand_macros`.
 pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
     if program == null { return program; }
+    // First pass: collect origins that contain `fn main`. Those are user
+    // programs (or test-runner synth files) — even if they also define a
+    // `@proc_<kind>` fn, the rest of their stmts (struct decls, helper
+    // fns, fn main itself) belong in codegen output. Only the @proc fn
+    // itself plus bootstrap helpers get stripped from these files via
+    // _is_compile_time_only below.
+    let main_origins: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_FN || s.origin == null { continue; }
+        if s.name != null && s.name.eq("main") {
+            main_origins.insert(s.origin, true);
+        }
+    }
     // Pre-pass: any origin containing at least one `@proc_<kind>` fn is
     // a compile-time-only file — its private helpers (`_emit_from_json`,
     // `_field_read_expr`, ...) call into bootstrap::ast and have no
-    // business in userland codegen either.
+    // business in userland codegen either. Files that also define
+    // `fn main` are spared — they're user code, not pure proc-macro libs.
     let pm_origins: *HashMap<bool> = HashMap::new();
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN || s.attrs == null || s.origin == null { continue; }
+        if main_origins.contains(s.origin) { continue; }
         for let j: int = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             if a.name == null { continue; }
