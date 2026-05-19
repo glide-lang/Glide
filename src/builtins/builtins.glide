@@ -230,7 +230,15 @@ c_raw! {
     // names the one __glide_palloc draws from; the rest stay alive but
     // inert until their owner explicitly hands them back via
     // __glide_palloc_free.
-    static PArena* g_palloc_active = NULL;
+    //
+    // Thread-local: the per-request arena setup in stdlib::http's
+    // _handle_conn runs inside `spawn_thread` (a pthread, not a coro),
+    // so it can't park its arena into the coro task struct. If
+    // g_palloc_active were a process-wide global, a concurrent main
+    // thread calling http_get → `out.concat(chunk)` would land its
+    // allocation in the server thread's per-request arena and lose it
+    // when that arena is freed. Per-thread storage isolates the two.
+    static _Thread_local PArena* g_palloc_active = NULL;
 
     // When running inside a coroutine, the active arena pointer lives in
     // the coro's task struct (in bootstrap/runtime/sched.c) instead of
