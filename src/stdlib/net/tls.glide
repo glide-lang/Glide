@@ -389,8 +389,55 @@ c_raw! {
         __glide_tls_sock listen_fd;
     } __glide_tls_listener;
 
+    // Server-side ALPN preference list. Picked at handshake time by
+    // __glide_tls_server_alpn_select_cb from the client's offered
+    // protocols. Stored as the wire-format wire (1-byte length-prefixed)
+    // attached to the SSL_CTX via SSL_CTX_set_alpn_select_cb's `arg`.
+    typedef struct __glide_tls_alpn_pref {
+        unsigned char* wire;
+        int            wire_len;
+    } __glide_tls_alpn_pref;
+
+    static int __glide_tls_server_alpn_select_cb(SSL* ssl,
+                                                  const unsigned char** out,
+                                                  unsigned char* outlen,
+                                                  const unsigned char* in,
+                                                  unsigned int inlen,
+                                                  void* arg) {
+        (void)ssl;
+        __glide_tls_alpn_pref* pref = (__glide_tls_alpn_pref*)arg;
+        if (pref == NULL || pref->wire == NULL || pref->wire_len <= 0) {
+            return SSL_TLSEXT_ERR_NOACK;
+        }
+        // Walk our preference list (server's choice) and return the
+        // first one that's also in the client's list. This matches
+        // OpenSSL's `SSL_select_next_proto` "server preference" mode.
+        const unsigned char* p = pref->wire;
+        const unsigned char* p_end = pref->wire + pref->wire_len;
+        while (p < p_end) {
+            unsigned char plen = *p;
+            const unsigned char* pname = p + 1;
+            if (pname + plen > p_end) break;
+            const unsigned char* q = in;
+            while (q < in + inlen) {
+                unsigned char qlen = *q;
+                const unsigned char* qname = q + 1;
+                if (qname + qlen > in + inlen) break;
+                if (qlen == plen && memcmp(qname, pname, plen) == 0) {
+                    *out = qname;
+                    *outlen = qlen;
+                    return SSL_TLSEXT_ERR_OK;
+                }
+                q = qname + qlen;
+            }
+            p = pname + plen;
+        }
+        return SSL_TLSEXT_ERR_NOACK;
+    }
+
     static void* __glide_tls_listen(int port, const char* cert_path,
-                                     const char* key_path) {
+                                     const char* key_path,
+                                     const char* alpn_csv) {
         __glide_tls_init();
         SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
         if (ctx == NULL) return NULL;
@@ -401,6 +448,23 @@ c_raw! {
             SSL_CTX_free(ctx); return NULL;
         }
         if (!SSL_CTX_check_private_key(ctx)) { SSL_CTX_free(ctx); return NULL; }
+
+        // Install ALPN select callback when csv non-empty. The pref
+        // wire-buffer is heap-allocated and intentionally leaked: it
+        // outlives every connection accepted on this listener (closed
+        // only at process exit alongside the listener).
+        if (alpn_csv != NULL && alpn_csv[0] != 0) {
+            int wire_len = 0;
+            unsigned char* wire = __glide_tls_alpn_pack(alpn_csv, &wire_len);
+            if (wire != NULL && wire_len > 0) {
+                __glide_tls_alpn_pref* pref =
+                    (__glide_tls_alpn_pref*)malloc(sizeof(*pref));
+                pref->wire = wire;
+                pref->wire_len = wire_len;
+                SSL_CTX_set_alpn_select_cb(ctx,
+                    __glide_tls_server_alpn_select_cb, (void*)pref);
+            }
+        }
 
         __glide_tls_sock s = socket(AF_INET, SOCK_STREAM, 0);
         if (s == __GLIDE_TLS_INVALID) { SSL_CTX_free(ctx); return NULL; }
@@ -542,7 +606,7 @@ extern fn __glide_tls_alpn(h: *void) -> string;
 extern fn __glide_tls_version(h: *void) -> int;
 extern fn __glide_tls_cipher(h: *void) -> string;
 extern fn __glide_tls_set_timeout(h: *void, ms: int);
-extern fn __glide_tls_listen(port: int, cert_path: string, key_path: string) -> *void;
+extern fn __glide_tls_listen(port: int, cert_path: string, key_path: string, alpn_csv: string) -> *void;
 extern fn __glide_tls_accept(listener: *void) -> *void;
 extern fn __glide_tls_listener_close(listener: *void);
 extern fn __glide_tls_server_attach(fd: i64, cert_path: string, key_path: string) -> *void;
@@ -878,7 +942,29 @@ impl TlsListener {
     /// }
     /// ```
     pub fn bind(port: int, cert_path: string, key_path: string) -> !*TlsListener {
-        let h: *void = __glide_tls_listen(port, cert_path, key_path);
+        let h: *void = __glide_tls_listen(port, cert_path, key_path, "");
+        if h == null { return err("tls_listener: bind/cert/key failure"); }
+        let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
+        l.handle = h;
+        return ok(l);
+    }
+
+    /// Same as `bind` but advertises ALPN protocols (CSV, server-pref
+    /// order — first matching client offer wins). Used by `https_listen`
+    /// to advertise `h2,http/1.1` so HTTP/2-capable clients negotiate
+    /// the binary protocol on connect and HTTP/1.1 clients still work.
+    ///
+    /// ```glide
+    /// let r: !*TlsListener =
+    ///     TlsListener::bind_alpn(443, "cert.pem", "key.pem", "h2,http/1.1");
+    /// while r.ok {
+    ///     let s: !*TlsStream = r.val.accept();
+    ///     if s.ok { spawn handle(s.val); }
+    /// }
+    /// ```
+    pub fn bind_alpn(port: int, cert_path: string, key_path: string,
+                     alpn_csv: string) -> !*TlsListener {
+        let h: *void = __glide_tls_listen(port, cert_path, key_path, alpn_csv);
         if h == null { return err("tls_listener: bind/cert/key failure"); }
         let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
         l.handle = h;

@@ -19,7 +19,7 @@ c_raw! {
     }
     #endif
 }
-extern fn _bytes_to_string(p: *u8, n: int) -> string;
+pub extern fn _bytes_to_string(p: *u8, n: int) -> string;
 
 /// A v4 or v6 address. `kind` is 4 or 6; the other fields are
 /// meaningful only for the matching kind.
