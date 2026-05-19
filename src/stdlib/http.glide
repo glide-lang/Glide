@@ -31,6 +31,7 @@ import stdlib::url::*;
 import stdlib::json::*;
 
 import stdlib::net::tls::*;
+import stdlib::http::h2::*;
 
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
@@ -992,16 +993,34 @@ fn _write_response_tls(s: *TlsStream, resp: *HttpResponse, keep: bool) {
 /// ```
 pub fn https_listen(port: int, cert_path: string, key_path: string,
                     handler: fn(*HttpRequest) -> HttpResponse) -> !int {
-    let lr: !*TlsListener = TlsListener::bind(port, cert_path, key_path);
+    // Advertise both protocols. Clients with h2 support negotiate the
+    // binary protocol via ALPN; HTTP/1.1-only clients fall back
+    // transparently. The accept loop branches on `s.alpn()`.
+    let lr: !*TlsListener = TlsListener::bind_alpn(port, cert_path, key_path,
+                                                    "h2,http/1.1");
     if !lr.ok { return err(lr.err); }
     let l: *TlsListener = lr.val;
     println!("https: listening on :", port);
     while true {
         let sr: !*TlsStream = l.accept();
         if !sr.ok { continue; }
-        spawn_thread _handle_tls_conn(sr.val, handler);
+        spawn_thread _handle_tls_dispatch(sr.val, handler);
     }
     return ok(0);
+}
+
+// Pick HTTP/1.1 vs HTTP/2 based on negotiated ALPN. `h2_serve` lives
+// in stdlib::http::h2; we resolve via the cross-module call (no import
+// needed here since the typer's same-package linkage finds it). When
+// ALPN didn't negotiate anything (h2 capable client but only http/1.1
+// offered, or no ALPN at all) we fall back to HTTP/1.1.
+fn _handle_tls_dispatch(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
+    let alpn: string = s.alpn();
+    if alpn.eq("h2") {
+        h2_serve(s, handler);
+        return;
+    }
+    _handle_tls_conn(s, handler);
 }
 
 /// Like `http_listen` but bound to N worker threads, each with its own
