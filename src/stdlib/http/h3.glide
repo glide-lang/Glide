@@ -1202,6 +1202,15 @@ c_raw! {
         }
         SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
         SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION);
+        // OpenSSL 3.5 QUIC TLS API requires early-data slack so server
+        // can stash crypto frames during handshake even when we don't
+        // use 0-RTT app data. Upstream ngtcp2 example sets it to max.
+        SSL_CTX_set_max_early_data(ctx, 0xFFFFFFFFu);
+        SSL_CTX_set_options(ctx,
+            (SSL_OP_ALL & ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS) |
+            SSL_OP_SINGLE_ECDH_USE |
+            SSL_OP_CIPHER_SERVER_PREFERENCE |
+            SSL_OP_NO_ANTI_REPLAY);
         if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0
             || SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0
             || !SSL_CTX_check_private_key(ctx)) {
@@ -1256,13 +1265,19 @@ c_raw! {
         getsockname(s->sock, (struct sockaddr*)&s->local, &s->local_len);
 
         // 4. SSL setup.
+        // Per upstream ngtcp2 example: create the ossl ctx FIRST (no SSL
+        // attached yet), then build SSL, then ctx_set_ssl, then
+        // configure_server_session, then SSL_set_app_data, then
+        // SSL_set_accept_state, then enable early data.
+        if (ngtcp2_crypto_ossl_ctx_new(&s->oc, NULL) != 0) goto fail;
         s->ssl = SSL_new(l->ssl_ctx);
+        ngtcp2_crypto_ossl_ctx_set_ssl(s->oc, s->ssl);
+        if (ngtcp2_crypto_ossl_configure_server_session(s->ssl) != 0) goto fail;
         s->conn_ref.get_conn = __glide_h3_srv_get_conn_cb;
         s->conn_ref.user_data = s;
         SSL_set_app_data(s->ssl, &s->conn_ref);
         SSL_set_accept_state(s->ssl);
-        if (ngtcp2_crypto_ossl_configure_server_session(s->ssl) != 0) goto fail;
-        if (ngtcp2_crypto_ossl_ctx_new(&s->oc, s->ssl) != 0) goto fail;
+        SSL_set_quic_tls_early_data_enabled(s->ssl, 1);
 
         // 5. Callbacks. Most are server-side reuses of crypto helpers.
         ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
