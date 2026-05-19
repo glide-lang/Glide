@@ -2537,7 +2537,10 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     //              self-contained. When it's missing, fall back to a
     //              link without TLS + a hint pointing at `glide target`.
     if !cross {
-        cmd = cmd.concat(" -lssl -lcrypto -lz");
+        // HTTP/3 stack (stdlib::http::h3) needs ngtcp2 + nghttp3. They
+        // sit AFTER openssl on the link line so the linker resolves
+        // their crypto symbol deps against openssl (right-to-left).
+        cmd = cmd.concat(" -lssl -lcrypto -lz -lngtcp2 -lngtcp2_crypto_ossl -lnghttp3");
     } else if _has_target_sysroot(target) {
         let sysroot: string = _target_dir(target);
         cmd = cmd.concat(" -I\"").concat(sysroot).concat("/include\"");

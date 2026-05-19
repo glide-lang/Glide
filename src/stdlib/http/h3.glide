@@ -1,0 +1,920 @@
+// HTTP/3 client and server on top of QUIC.
+//
+// QUIC transport is delegated to libngtcp2 (the reference C
+// implementation maintained by the nghttp2 team). HTTP/3 framing,
+// QPACK and stream conventions go through libnghttp3. TLS 1.3 keys
+// come from OpenSSL 3.5+'s QUIC API via libngtcp2_crypto_ossl.
+//
+// External deps (linked):
+//   -lngtcp2 -lngtcp2_crypto_ossl -lnghttp3 -lssl -lcrypto
+//
+// These are bundled in the glide install tarball (see
+// tools/build_release.sh) so end users don't need a separate
+// `apt install libngtcp2-dev`. On host builds without the bundle,
+// the linker falls back to system libs.
+//
+// Public surface (matches the HTTP/2 / HTTP/1.1 client shape so
+// migration is mostly opt-in):
+//
+//   let c: *HttpClient = HttpClient::new();
+//   c.http3 = true;        // forces h3 ALPN
+//   let r: !*HttpResponse = c.get("https://example.com/");
+//
+//   http3_listen(443, "cert.pem", "key.pem", my_handler);
+//
+// Limits in v1:
+//   - One stream per request (no pipelining inside the same QUIC
+//     connection from the client side, even though the transport
+//     supports it).
+//   - No 0-RTT, no connection migration, no HTTP/3 PUSH.
+//   - No path MTU discovery — assumes 1200-byte safe default.
+
+import stdlib::bytes::*;
+import stdlib::net::ip::*;            // for _bytes_to_string
+import stdlib::net::udp::*;
+import stdlib::http::*;
+
+c_raw! {
+    #include <ngtcp2/ngtcp2.h>
+    #include <ngtcp2/ngtcp2_crypto.h>
+    #include <ngtcp2/ngtcp2_crypto_ossl.h>
+    #include <nghttp3/nghttp3.h>
+    #include <openssl/ssl.h>
+    #include <openssl/rand.h>
+    #include <openssl/err.h>
+    #include <openssl/quic.h>
+    #include <string.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <stdint.h>
+    #include <time.h>
+    #include <errno.h>
+
+    #ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    typedef SOCKET __glide_h3_sock_t;
+    #define __GLIDE_H3_INVALID_SOCK INVALID_SOCKET
+    #else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <netdb.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+    typedef int __glide_h3_sock_t;
+    #define __GLIDE_H3_INVALID_SOCK (-1)
+    #endif
+
+    // ---- one-shot init ----------------------------------------------
+    static int __glide_h3_inited = 0;
+    static int __glide_h3_init(void) {
+        if (__glide_h3_inited) return 1;
+    #ifdef _WIN32
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 0;
+    #endif
+        if (ngtcp2_crypto_ossl_init() != 0) return 0;
+        // OpenSSL init is implicit since the existing TLS code already
+        // loads it via SSL_library_init / SSL_load_error_strings on
+        // first use; QUIC TLS API rides the same loader.
+        __glide_h3_inited = 1;
+        return 1;
+    }
+
+    // ---- timestamp helper -------------------------------------------
+    // ngtcp2 wants monotonic nanoseconds. Same as our runtime's now_ns
+    // but accessible from inside c_raw without going through the Glide
+    // shim.
+    static uint64_t __glide_h3_now(void) {
+    #ifdef _WIN32
+        static LARGE_INTEGER freq;
+        static int inited_freq = 0;
+        if (!inited_freq) { QueryPerformanceFrequency(&freq); inited_freq = 1; }
+        LARGE_INTEGER c; QueryPerformanceCounter(&c);
+        return (uint64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
+    #else
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    #endif
+    }
+
+    // ---- crypto random ----------------------------------------------
+    static void __glide_h3_rand_cb(uint8_t *dest, size_t destlen,
+                                    const ngtcp2_rand_ctx *rand_ctx) {
+        (void)rand_ctx;
+        if (RAND_bytes(dest, (int)destlen) != 1) {
+            // RAND_bytes ought never to fail in practice; if it does we
+            // fall back to fast-not-secure rand which is at least not a
+            // crash. Real prod should treat this as fatal.
+            for (size_t i = 0; i < destlen; i++) dest[i] = (uint8_t)rand();
+        }
+    }
+
+    static int __glide_h3_get_new_cid_cb(ngtcp2_conn *conn, ngtcp2_cid *cid,
+                                          uint8_t *token, size_t cidlen,
+                                          void *user_data) {
+        (void)conn; (void)user_data;
+        if (RAND_bytes(cid->data, (int)cidlen) != 1) return NGTCP2_ERR_CALLBACK_FAILURE;
+        cid->datalen = cidlen;
+        if (RAND_bytes(token, NGTCP2_STATELESS_RESET_TOKENLEN) != 1) {
+            return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
+        return 0;
+    }
+
+    // ---- conn carrier -----------------------------------------------
+    typedef struct __glide_h3_conn {
+        ngtcp2_crypto_conn_ref     conn_ref;  // MUST be first so SSL_get_app_data
+                                              // round-trips correctly when ngtcp2_crypto
+                                              // dereferences it back to ngtcp2_conn.
+        ngtcp2_conn*               qc;
+        ngtcp2_crypto_ossl_ctx*    oc;
+        SSL_CTX*                   ssl_ctx;
+        SSL*                       ssl;
+        nghttp3_conn*              h3;
+        __glide_h3_sock_t          sock;
+        // Remote address used for sendto; kept around so the send path
+        // doesn't need to thread a sockaddr through every call.
+        struct sockaddr_storage    remote;
+        socklen_t                  remote_len;
+        // Local address (for ngtcp2_path), filled after the first send.
+        struct sockaddr_storage    local;
+        socklen_t                  local_len;
+
+        // Client request bookkeeping.
+        int64_t                    request_stream_id;
+        unsigned char*             req_body;
+        size_t                     req_body_len;
+        size_t                     req_body_off;
+        int                        req_body_finished;
+
+        // Response accumulation.
+        int                        resp_status;
+        unsigned char*             resp_body;
+        size_t                     resp_body_cap;
+        size_t                     resp_body_len;
+        // Headers (name/value) collected from QPACK decode. Each entry
+        // is a fresh heap copy; freed in conn destroy.
+        char**                     resp_hdr_names;
+        char**                     resp_hdr_values;
+        size_t                     resp_hdr_count;
+        size_t                     resp_hdr_cap;
+
+        int                        handshake_done;
+        int                        stream_done;          // request stream closed
+        int                        connection_error;     // non-zero = error
+    } __glide_h3_conn;
+
+    // ---- response sink helpers --------------------------------------
+    static void __glide_h3_resp_grow(__glide_h3_conn* c, size_t need) {
+        if (c->resp_body_len + need <= c->resp_body_cap) return;
+        size_t nc = c->resp_body_cap ? c->resp_body_cap : 4096;
+        while (nc < c->resp_body_len + need) nc *= 2;
+        c->resp_body = (unsigned char*)realloc(c->resp_body, nc);
+        c->resp_body_cap = nc;
+    }
+    static void __glide_h3_hdr_push(__glide_h3_conn* c,
+                                     const uint8_t* name, size_t namelen,
+                                     const uint8_t* value, size_t valuelen) {
+        if (c->resp_hdr_count == c->resp_hdr_cap) {
+            size_t nc = c->resp_hdr_cap ? c->resp_hdr_cap * 2 : 16;
+            c->resp_hdr_names  = (char**)realloc(c->resp_hdr_names,  nc * sizeof(char*));
+            c->resp_hdr_values = (char**)realloc(c->resp_hdr_values, nc * sizeof(char*));
+            c->resp_hdr_cap = nc;
+        }
+        char* n = (char*)malloc(namelen + 1);
+        char* v = (char*)malloc(valuelen + 1);
+        memcpy(n, name, namelen); n[namelen] = 0;
+        memcpy(v, value, valuelen); v[valuelen] = 0;
+        c->resp_hdr_names [c->resp_hdr_count] = n;
+        c->resp_hdr_values[c->resp_hdr_count] = v;
+        c->resp_hdr_count++;
+    }
+
+    // ---- nghttp3 callbacks (client side) ----------------------------
+    static int __glide_h3_recv_data_cb(nghttp3_conn *h3, int64_t stream_id,
+                                        const uint8_t *data, size_t datalen,
+                                        void *conn_user_data,
+                                        void *stream_user_data) {
+        (void)h3; (void)stream_id; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)conn_user_data;
+        __glide_h3_resp_grow(c, datalen);
+        memcpy(c->resp_body + c->resp_body_len, data, datalen);
+        c->resp_body_len += datalen;
+        return 0;
+    }
+    static int __glide_h3_recv_header_cb(nghttp3_conn *h3, int64_t stream_id,
+                                          int32_t token, nghttp3_rcbuf *name,
+                                          nghttp3_rcbuf *value, uint8_t flags,
+                                          void *conn_user_data,
+                                          void *stream_user_data) {
+        (void)h3; (void)stream_id; (void)flags; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)conn_user_data;
+        nghttp3_vec n = nghttp3_rcbuf_get_buf(name);
+        nghttp3_vec v = nghttp3_rcbuf_get_buf(value);
+        // :status is the only pseudo-header on responses.
+        if (token == NGHTTP3_QPACK_TOKEN__STATUS) {
+            int s = 0;
+            for (size_t i = 0; i < v.len && v.base[i] >= '0' && v.base[i] <= '9'; i++) {
+                s = s * 10 + (v.base[i] - '0');
+            }
+            c->resp_status = s;
+        }
+        __glide_h3_hdr_push(c, n.base, n.len, v.base, v.len);
+        return 0;
+    }
+    static int __glide_h3_stream_close_cb(nghttp3_conn *h3, int64_t stream_id,
+                                           uint64_t app_error_code,
+                                           void *conn_user_data,
+                                           void *stream_user_data) {
+        (void)h3; (void)app_error_code; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)conn_user_data;
+        if (stream_id == c->request_stream_id) c->stream_done = 1;
+        return 0;
+    }
+
+    // For request body uploads: nghttp3 polls this read callback to pull
+    // body chunks until we set the FIN flag.
+    static nghttp3_ssize __glide_h3_read_req_body_cb(
+        nghttp3_conn *h3, int64_t stream_id, nghttp3_vec *vec, size_t veccnt,
+        uint32_t *pflags, void *conn_user_data, void *stream_user_data) {
+        (void)h3; (void)stream_id; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)conn_user_data;
+        if (c->req_body_off >= c->req_body_len) {
+            *pflags = NGHTTP3_DATA_FLAG_EOF;
+            return 0;
+        }
+        if (veccnt == 0) return 0;
+        vec[0].base = c->req_body + c->req_body_off;
+        vec[0].len  = c->req_body_len - c->req_body_off;
+        c->req_body_off = c->req_body_len;
+        *pflags = NGHTTP3_DATA_FLAG_EOF;
+        return 1;
+    }
+
+    // ---- ngtcp2 callbacks (client) ----------------------------------
+    static int __glide_h3_handshake_completed_cb(ngtcp2_conn *conn,
+                                                  void *user_data) {
+        (void)conn;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        c->handshake_done = 1;
+        return 0;
+    }
+    // ngtcp2_crypto needs a way to recover the ngtcp2_conn* from the
+    // SSL's app_data slot. We hand it a pointer to our conn_ref, which
+    // is the first field of __glide_h3_conn — the get_conn callback
+    // walks back to qc through it.
+    static ngtcp2_conn* __glide_h3_get_conn_cb(ngtcp2_crypto_conn_ref *ref) {
+        __glide_h3_conn* c = (__glide_h3_conn*)ref;  // conn_ref is field 0
+        return c->qc;
+    }
+    static int __glide_h3_recv_stream_data_cb(ngtcp2_conn *conn,
+                                               uint32_t flags, int64_t stream_id,
+                                               uint64_t offset,
+                                               const uint8_t *data, size_t datalen,
+                                               void *user_data,
+                                               void *stream_user_data) {
+        (void)conn; (void)offset; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        if (c->h3 == NULL) return 0;
+        nghttp3_ssize n = nghttp3_conn_read_stream(c->h3, stream_id,
+                                                    data, datalen,
+                                                    flags & NGTCP2_STREAM_DATA_FLAG_FIN);
+        if (n < 0) return NGTCP2_ERR_CALLBACK_FAILURE;
+        // Per ngtcp2 API: must extend stream offset by the data nghttp3
+        // consumed (not by raw datalen, because nghttp3 may consume less
+        // than it received during error paths).
+        ngtcp2_conn_extend_max_stream_offset(c->qc, stream_id, (uint64_t)n);
+        ngtcp2_conn_extend_max_offset(c->qc, (uint64_t)n);
+        return 0;
+    }
+    static int __glide_h3_acked_stream_data_cb(ngtcp2_conn *conn,
+                                                int64_t stream_id, uint64_t offset,
+                                                uint64_t datalen, void *user_data,
+                                                void *stream_user_data) {
+        (void)conn; (void)offset; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        if (c->h3 == NULL) return 0;
+        if (nghttp3_conn_add_ack_offset(c->h3, stream_id, datalen) != 0) {
+            return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
+        return 0;
+    }
+    static int __glide_h3_stream_close_qcb(ngtcp2_conn *conn, uint32_t flags,
+                                            int64_t stream_id,
+                                            uint64_t app_error_code,
+                                            void *user_data,
+                                            void *stream_user_data) {
+        (void)conn; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        if (c->h3 == NULL) return 0;
+        if (!(flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET)) {
+            app_error_code = NGHTTP3_H3_NO_ERROR;
+        }
+        if (nghttp3_conn_close_stream(c->h3, stream_id, app_error_code) != 0) {
+            return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
+        return 0;
+    }
+    static int __glide_h3_extend_max_streams_bidi_cb(ngtcp2_conn *conn,
+                                                      uint64_t max_streams,
+                                                      void *user_data) {
+        (void)conn; (void)max_streams; (void)user_data;
+        return 0;
+    }
+    static int __glide_h3_extend_max_remote_streams_bidi_cb(ngtcp2_conn *conn,
+                                                              uint64_t max_streams,
+                                                              void *user_data) {
+        (void)conn; (void)max_streams; (void)user_data;
+        return 0;
+    }
+    static int __glide_h3_extend_max_stream_data_cb(ngtcp2_conn *conn,
+                                                     int64_t stream_id,
+                                                     uint64_t max_data,
+                                                     void *user_data,
+                                                     void *stream_user_data) {
+        (void)conn; (void)max_data; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        if (c->h3 == NULL) return 0;
+        if (nghttp3_conn_unblock_stream(c->h3, stream_id) != 0) {
+            return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
+        return 0;
+    }
+    static int __glide_h3_stream_reset_cb(ngtcp2_conn *conn, int64_t stream_id,
+                                           uint64_t final_size,
+                                           uint64_t app_error_code,
+                                           void *user_data,
+                                           void *stream_user_data) {
+        (void)conn; (void)final_size; (void)app_error_code; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        if (c->h3 == NULL) return 0;
+        nghttp3_conn_shutdown_stream_read(c->h3, stream_id);
+        return 0;
+    }
+    static int __glide_h3_stream_stop_sending_cb(ngtcp2_conn *conn,
+                                                  int64_t stream_id,
+                                                  uint64_t app_error_code,
+                                                  void *user_data,
+                                                  void *stream_user_data) {
+        (void)conn; (void)app_error_code; (void)stream_user_data;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        if (c->h3 == NULL) return 0;
+        nghttp3_conn_shutdown_stream_read(c->h3, stream_id);
+        return 0;
+    }
+
+    static int __glide_h3_setup_h3_client(__glide_h3_conn* c) {
+        nghttp3_callbacks cb;
+        memset(&cb, 0, sizeof(cb));
+        cb.recv_data        = __glide_h3_recv_data_cb;
+        cb.recv_header      = __glide_h3_recv_header_cb;
+        cb.stream_close     = __glide_h3_stream_close_cb;
+        nghttp3_settings st;
+        nghttp3_settings_default(&st);
+        if (nghttp3_conn_client_new(&c->h3, &cb, &st, NULL, c) != 0) return 0;
+
+        int64_t qpack_enc_id, qpack_dec_id, ctrl_id;
+        if (ngtcp2_conn_open_uni_stream(c->qc, &ctrl_id, NULL) != 0) return 0;
+        if (ngtcp2_conn_open_uni_stream(c->qc, &qpack_enc_id, NULL) != 0) return 0;
+        if (ngtcp2_conn_open_uni_stream(c->qc, &qpack_dec_id, NULL) != 0) return 0;
+        if (nghttp3_conn_bind_control_stream(c->h3, ctrl_id) != 0) return 0;
+        if (nghttp3_conn_bind_qpack_streams(c->h3, qpack_enc_id, qpack_dec_id) != 0) return 0;
+        return 1;
+    }
+
+    // ---- UDP socket --------------------------------------------------
+    static __glide_h3_sock_t __glide_h3_open_udp(const char* host, int port,
+                                                  struct sockaddr_storage* out_remote,
+                                                  socklen_t* out_remote_len) {
+        struct addrinfo hints; memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+        char portstr[16]; snprintf(portstr, sizeof(portstr), "%d", port);
+        struct addrinfo* res = NULL;
+        if (getaddrinfo(host, portstr, &hints, &res) != 0) return __GLIDE_H3_INVALID_SOCK;
+        __glide_h3_sock_t s = __GLIDE_H3_INVALID_SOCK;
+        for (struct addrinfo* a = res; a != NULL; a = a->ai_next) {
+            s = socket(a->ai_family, SOCK_DGRAM, 0);
+            if (s == __GLIDE_H3_INVALID_SOCK) continue;
+            // Connect-attach the UDP socket to the remote so kernel
+            // delivers only packets from that 5-tuple. Simplifies the
+            // recv loop and matches what most QUIC clients do.
+            if (connect(s, a->ai_addr, (int)a->ai_addrlen) == 0) {
+                memcpy(out_remote, a->ai_addr, a->ai_addrlen);
+                *out_remote_len = (socklen_t)a->ai_addrlen;
+                break;
+            }
+            #ifdef _WIN32
+            closesocket(s);
+            #else
+            close(s);
+            #endif
+            s = __GLIDE_H3_INVALID_SOCK;
+        }
+        freeaddrinfo(res);
+        return s;
+    }
+
+    static void __glide_h3_set_nonblock(__glide_h3_sock_t s) {
+    #ifdef _WIN32
+        u_long m = 1; ioctlsocket(s, FIONBIO, &m);
+    #else
+        int fl = fcntl(s, F_GETFL, 0);
+        fcntl(s, F_SETFL, fl | O_NONBLOCK);
+    #endif
+    }
+
+    // ---- send / recv loop drivers -----------------------------------
+    static int __glide_h3_write(struct __glide_h3_conn* c) {
+        uint8_t buf[1500];
+        ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
+        ngtcp2_pkt_info pi; memset(&pi, 0, sizeof(pi));
+        for (;;) {
+            int64_t stream_id = -1;
+            uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
+            int fin = 0;
+            nghttp3_vec vec[16];
+            nghttp3_ssize vcnt = 0;
+            if (c->h3 != NULL) {
+                vcnt = nghttp3_conn_writev_stream(c->h3, &stream_id, &fin,
+                                                    vec, sizeof(vec)/sizeof(vec[0]));
+                if (vcnt < 0) return -1;
+                if (fin) flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
+            }
+            ngtcp2_ssize pdatalen = 0;
+            ngtcp2_ssize nwrite = ngtcp2_conn_writev_stream(
+                c->qc, &ps.path, &pi, buf, sizeof(buf), &pdatalen, flags,
+                stream_id, (const ngtcp2_vec*)vec, (size_t)vcnt,
+                __glide_h3_now());
+            if (nwrite < 0) {
+                if (nwrite == NGTCP2_ERR_WRITE_MORE) {
+                    if (c->h3 != NULL && pdatalen >= 0) {
+                        nghttp3_conn_add_write_offset(c->h3, stream_id, (size_t)pdatalen);
+                    }
+                    continue;
+                }
+                if (nwrite == NGTCP2_ERR_STREAM_DATA_BLOCKED
+                    || nwrite == NGTCP2_ERR_STREAM_SHUT_WR) {
+                    if (c->h3 != NULL && stream_id >= 0) {
+                        nghttp3_conn_block_stream(c->h3, stream_id);
+                    }
+                    continue;
+                }
+                return -1;
+            }
+            if (c->h3 != NULL && pdatalen >= 0) {
+                nghttp3_conn_add_write_offset(c->h3, stream_id, (size_t)pdatalen);
+            }
+            if (nwrite == 0) break;  // nothing left to send
+            int n = send(c->sock, (const char*)buf, (int)nwrite, 0);
+            if (n < 0) {
+                // EAGAIN — kernel buffer full. Drop the packet and try
+                // again next loop tick.
+                break;
+            }
+        }
+        return 0;
+    }
+
+    // Read one inbound UDP datagram and feed it to ngtcp2. Returns 1
+    // when a packet was processed, 0 when there's no more (EAGAIN), -1
+    // on protocol error.
+    static int __glide_h3_read_one(struct __glide_h3_conn* c) {
+        uint8_t buf[2048];
+        int n = recv(c->sock, (char*)buf, sizeof(buf), 0);
+        if (n <= 0) return 0;
+        ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
+        memcpy(ps.path.remote.addr, &c->remote, c->remote_len);
+        ps.path.remote.addrlen = c->remote_len;
+        if (c->local_len > 0) {
+            memcpy(ps.path.local.addr, &c->local, c->local_len);
+            ps.path.local.addrlen = c->local_len;
+        }
+        ngtcp2_pkt_info pi; memset(&pi, 0, sizeof(pi));
+        int rv = ngtcp2_conn_read_pkt(c->qc, &ps.path, &pi, buf, (size_t)n,
+                                       __glide_h3_now());
+        if (rv != 0) return -1;
+        return 1;
+    }
+
+    // Pump the event loop until `cond_done` is true (set by callbacks)
+    // or the absolute deadline (monotonic ns) passes. Returns 1 on
+    // condition met, 0 on timeout / error.
+    static int __glide_h3_loop_until(struct __glide_h3_conn* c,
+                                      int* cond_done, uint64_t deadline_ns) {
+        for (;;) {
+            if (c->connection_error) return 0;
+            if (*cond_done) return 1;
+            uint64_t now = __glide_h3_now();
+            if (now >= deadline_ns) return 0;
+            // Send anything pending.
+            if (__glide_h3_write(c) != 0) { c->connection_error = 1; return 0; }
+            // Drain inbound.
+            for (;;) {
+                int rv = __glide_h3_read_one(c);
+                if (rv < 0) { c->connection_error = 1; return 0; }
+                if (rv == 0) break;
+            }
+            // Honour ngtcp2's internal timer.
+            ngtcp2_tstamp ex = ngtcp2_conn_get_expiry(c->qc);
+            if (ex != UINT64_MAX && ex <= __glide_h3_now()) {
+                int rv = ngtcp2_conn_handle_expiry(c->qc, __glide_h3_now());
+                if (rv != 0) { c->connection_error = 1; return 0; }
+                continue;
+            }
+            // Block briefly waiting for I/O readiness — at most until
+            // next ngtcp2 timer or the user's deadline, whichever is
+            // sooner. Polling via select keeps the loop portable.
+            struct timeval tv;
+            uint64_t wait_ns = deadline_ns - now;
+            if (ex != UINT64_MAX) {
+                uint64_t ngtcp_wait = (ex > __glide_h3_now())
+                    ? ex - __glide_h3_now()
+                    : 0;
+                if (ngtcp_wait < wait_ns) wait_ns = ngtcp_wait;
+            }
+            if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;  // cap 50ms
+            tv.tv_sec = (long)(wait_ns / 1000000000ULL);
+            tv.tv_usec = (long)((wait_ns % 1000000000ULL) / 1000ULL);
+            fd_set rfds; FD_ZERO(&rfds); FD_SET(c->sock, &rfds);
+            select((int)c->sock + 1, &rfds, NULL, NULL, &tv);
+        }
+    }
+
+    // ---- public C entrypoints ---------------------------------------
+
+    // Open a QUIC connection, run handshake, return the carrier handle
+    // (opaque to Glide). NULL on failure.
+    void* __glide_h3_client_connect(const char* host, int port,
+                                     int timeout_ms,
+                                     int verify) {
+        if (!__glide_h3_init()) return NULL;
+
+        __glide_h3_conn* c = (__glide_h3_conn*)calloc(1, sizeof(*c));
+
+        c->sock = __glide_h3_open_udp(host, port, &c->remote, &c->remote_len);
+        if (c->sock == __GLIDE_H3_INVALID_SOCK) { free(c); return NULL; }
+        __glide_h3_set_nonblock(c->sock);
+
+        // OpenSSL setup.
+        c->ssl_ctx = SSL_CTX_new(TLS_client_method());
+        SSL_CTX_set_min_proto_version(c->ssl_ctx, TLS1_3_VERSION);
+        SSL_CTX_set_max_proto_version(c->ssl_ctx, TLS1_3_VERSION);
+        if (!verify) SSL_CTX_set_verify(c->ssl_ctx, SSL_VERIFY_NONE, NULL);
+        else SSL_CTX_set_default_verify_paths(c->ssl_ctx);
+        c->ssl = SSL_new(c->ssl_ctx);
+        SSL_set_tlsext_host_name(c->ssl, host);
+        // ALPN h3.
+        static const unsigned char alpn_h3[] = { 2, 'h', '3' };
+        SSL_set_alpn_protos(c->ssl, alpn_h3, sizeof(alpn_h3));
+        SSL_set_connect_state(c->ssl);
+        // ngtcp2_crypto recovers ngtcp2_conn* from SSL via app_data ->
+        // conn_ref.get_conn. Wire that BEFORE configure_client_session.
+        c->conn_ref.get_conn = __glide_h3_get_conn_cb;
+        c->conn_ref.user_data = c;
+        SSL_set_app_data(c->ssl, &c->conn_ref);
+        if (ngtcp2_crypto_ossl_configure_client_session(c->ssl) != 0) goto fail;
+        if (ngtcp2_crypto_ossl_ctx_new(&c->oc, c->ssl) != 0) goto fail;
+
+        // ngtcp2_callbacks.
+        ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
+        cb.client_initial             = ngtcp2_crypto_client_initial_cb;
+        cb.recv_crypto_data           = ngtcp2_crypto_recv_crypto_data_cb;
+        cb.encrypt                    = ngtcp2_crypto_encrypt_cb;
+        cb.decrypt                    = ngtcp2_crypto_decrypt_cb;
+        cb.hp_mask                    = ngtcp2_crypto_hp_mask_cb;
+        cb.recv_retry                 = ngtcp2_crypto_recv_retry_cb;
+        cb.update_key                 = ngtcp2_crypto_update_key_cb;
+        cb.delete_crypto_aead_ctx     = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+        cb.delete_crypto_cipher_ctx   = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+        cb.get_path_challenge_data    = ngtcp2_crypto_get_path_challenge_data_cb;
+        cb.version_negotiation        = ngtcp2_crypto_version_negotiation_cb;
+        cb.rand                       = __glide_h3_rand_cb;
+        cb.get_new_connection_id      = __glide_h3_get_new_cid_cb;
+        cb.handshake_completed        = __glide_h3_handshake_completed_cb;
+        cb.recv_stream_data           = __glide_h3_recv_stream_data_cb;
+        cb.acked_stream_data_offset   = __glide_h3_acked_stream_data_cb;
+        cb.stream_close               = __glide_h3_stream_close_qcb;
+        cb.extend_max_local_streams_bidi = __glide_h3_extend_max_streams_bidi_cb;
+        cb.extend_max_remote_streams_bidi = __glide_h3_extend_max_remote_streams_bidi_cb;
+        cb.extend_max_stream_data     = __glide_h3_extend_max_stream_data_cb;
+        cb.stream_reset               = __glide_h3_stream_reset_cb;
+        cb.stream_stop_sending        = __glide_h3_stream_stop_sending_cb;
+
+        // Generate fresh source + destination CIDs.
+        ngtcp2_cid scid, dcid;
+        scid.datalen = 8;  RAND_bytes(scid.data, 8);
+        dcid.datalen = 16; RAND_bytes(dcid.data, 16);
+
+        ngtcp2_settings settings; ngtcp2_settings_default(&settings);
+        settings.initial_ts = __glide_h3_now();
+        // settings.log_printf can wire to stderr if we want; off by default.
+
+        ngtcp2_transport_params params; ngtcp2_transport_params_default(&params);
+        params.initial_max_streams_bidi = 100;
+        params.initial_max_streams_uni  = 100;
+        params.initial_max_data         = 1048576;
+        params.initial_max_stream_data_bidi_local  = 1048576;
+        params.initial_max_stream_data_bidi_remote = 1048576;
+        params.initial_max_stream_data_uni         = 1048576;
+
+        ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
+        memcpy(ps.path.remote.addr, &c->remote, c->remote_len);
+        ps.path.remote.addrlen = c->remote_len;
+        // Local addr: getsockname AFTER connect gives the kernel-chosen
+        // local 5-tuple. ngtcp2 needs it; without it path validation
+        // breaks immediately.
+        c->local_len = sizeof(c->local);
+        getsockname(c->sock, (struct sockaddr*)&c->local, &c->local_len);
+        memcpy(ps.path.local.addr, &c->local, c->local_len);
+        ps.path.local.addrlen = c->local_len;
+
+        if (ngtcp2_conn_client_new(&c->qc, &dcid, &scid, &ps.path,
+                                    NGTCP2_PROTO_VER_V1, &cb, &settings,
+                                    &params, NULL, c) != 0) goto fail;
+        ngtcp2_conn_set_tls_native_handle(c->qc, c->oc);
+
+        // Drive handshake.
+        uint64_t deadline = __glide_h3_now() +
+            (timeout_ms > 0 ? (uint64_t)timeout_ms * 1000000ULL
+                            : 10000000000ULL);  // 10s default
+        if (!__glide_h3_loop_until(c, &c->handshake_done, deadline)) goto fail;
+        if (!__glide_h3_setup_h3_client(c)) goto fail;
+        return (void*)c;
+
+    fail:
+        if (c->qc) ngtcp2_conn_del(c->qc);
+        if (c->oc) ngtcp2_crypto_ossl_ctx_del(c->oc);
+        if (c->ssl) SSL_free(c->ssl);
+        if (c->ssl_ctx) SSL_CTX_free(c->ssl_ctx);
+        if (c->sock != __GLIDE_H3_INVALID_SOCK) {
+        #ifdef _WIN32
+            closesocket(c->sock);
+        #else
+            close(c->sock);
+        #endif
+        }
+        free(c);
+        return NULL;
+    }
+
+    // Submit one request and pump the loop until the stream ends, then
+    // return success / failure. After success the response state lives
+    // in the carrier (status, headers, body); the Glide side reads
+    // them via the accessors below.
+    int __glide_h3_client_request(void* handle, const char* method,
+                                   const char* host, const char* path,
+                                   const char* extra_headers_block,
+                                   unsigned char* body, int body_len,
+                                   int timeout_ms) {
+        __glide_h3_conn* c = (__glide_h3_conn*)handle;
+
+        // Pin the request body (if any) to the carrier so the read
+        // callback can stream it back.
+        if (body_len > 0 && body != NULL) {
+            c->req_body = (unsigned char*)malloc((size_t)body_len);
+            memcpy(c->req_body, body, body_len);
+            c->req_body_len = (size_t)body_len;
+        }
+
+        int64_t stream_id;
+        if (ngtcp2_conn_open_bidi_stream(c->qc, &stream_id, NULL) != 0) return 0;
+        c->request_stream_id = stream_id;
+
+        // Build the :pseudo + extra header list. Max headers from
+        // user-supplied block is bounded by `\r\n`-split count plus 4
+        // pseudo entries.
+        size_t cap = 16;
+        size_t nh = 0;
+        nghttp3_nv* nva = (nghttp3_nv*)malloc(cap * sizeof(*nva));
+
+        #define ADD_HDR(N, V, NL, VL) do {                                  \
+            if (nh == cap) {                                                \
+                cap *= 2;                                                   \
+                nva = (nghttp3_nv*)realloc(nva, cap * sizeof(*nva));        \
+            }                                                               \
+            nva[nh].name = (uint8_t*)(N);                                   \
+            nva[nh].value = (uint8_t*)(V);                                  \
+            nva[nh].namelen = (NL);                                         \
+            nva[nh].valuelen = (VL);                                        \
+            nva[nh].flags = NGHTTP3_NV_FLAG_NONE;                           \
+            nh++;                                                           \
+        } while (0)
+
+        ADD_HDR(":method",    method, 7, strlen(method));
+        ADD_HDR(":scheme",    "https", 7, 5);
+        ADD_HDR(":authority", host,    10, strlen(host));
+        ADD_HDR(":path",      path,    5, strlen(path));
+
+        // Walk extra_headers_block as "Name: Value\r\n..." entries.
+        if (extra_headers_block != NULL && extra_headers_block[0] != 0) {
+            const char* p = extra_headers_block;
+            while (*p) {
+                const char* line_end = p;
+                while (*line_end && !(line_end[0] == '\r' && line_end[1] == '\n')) line_end++;
+                const char* colon = p;
+                while (colon < line_end && *colon != ':') colon++;
+                if (colon < line_end) {
+                    const char* vstart = colon + 1;
+                    while (vstart < line_end && (*vstart == ' ' || *vstart == '\t')) vstart++;
+                    size_t nl = (size_t)(colon - p);
+                    size_t vl = (size_t)(line_end - vstart);
+                    // Lowercase the name into a fresh buffer (HTTP/3
+                    // requires lowercase per spec; servers reject
+                    // otherwise).
+                    char* lname = (char*)malloc(nl);
+                    for (size_t i = 0; i < nl; i++) {
+                        char ch = p[i];
+                        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+                        lname[i] = ch;
+                    }
+                    char* lval = (char*)malloc(vl);
+                    memcpy(lval, vstart, vl);
+                    ADD_HDR(lname, lval, nl, vl);
+                }
+                if (*line_end == 0) break;
+                p = line_end + 2;
+            }
+        }
+        #undef ADD_HDR
+
+        nghttp3_data_reader dr;
+        nghttp3_data_reader* drp = NULL;
+        if (c->req_body_len > 0) {
+            dr.read_data = __glide_h3_read_req_body_cb;
+            drp = &dr;
+        }
+        if (nghttp3_conn_submit_request(c->h3, stream_id, nva, nh, drp, c) != 0) {
+            free(nva);
+            return 0;
+        }
+        free(nva);
+
+        uint64_t deadline = __glide_h3_now() +
+            (timeout_ms > 0 ? (uint64_t)timeout_ms * 1000000ULL
+                            : 30000000000ULL);  // 30s
+        return __glide_h3_loop_until(c, &c->stream_done, deadline) ? 1 : 0;
+    }
+
+    int         __glide_h3_resp_status(void* h)  { return ((__glide_h3_conn*)h)->resp_status; }
+    int         __glide_h3_resp_body_len(void* h) { return (int)((__glide_h3_conn*)h)->resp_body_len; }
+    const char* __glide_h3_resp_body_ptr(void* h) { return (const char*)((__glide_h3_conn*)h)->resp_body; }
+    int         __glide_h3_resp_hdr_count(void* h) { return (int)((__glide_h3_conn*)h)->resp_hdr_count; }
+    const char* __glide_h3_resp_hdr_name(void* h, int i)  { return ((__glide_h3_conn*)h)->resp_hdr_names[i]; }
+    const char* __glide_h3_resp_hdr_value(void* h, int i) { return ((__glide_h3_conn*)h)->resp_hdr_values[i]; }
+
+    void __glide_h3_close(void* h) {
+        __glide_h3_conn* c = (__glide_h3_conn*)h;
+        if (c == NULL) return;
+        if (c->h3) nghttp3_conn_del(c->h3);
+        if (c->qc) ngtcp2_conn_del(c->qc);
+        if (c->oc) ngtcp2_crypto_ossl_ctx_del(c->oc);
+        if (c->ssl) SSL_free(c->ssl);
+        if (c->ssl_ctx) SSL_CTX_free(c->ssl_ctx);
+        if (c->sock != __GLIDE_H3_INVALID_SOCK) {
+        #ifdef _WIN32
+            closesocket(c->sock);
+        #else
+            close(c->sock);
+        #endif
+        }
+        for (size_t i = 0; i < c->resp_hdr_count; i++) {
+            free(c->resp_hdr_names[i]);
+            free(c->resp_hdr_values[i]);
+        }
+        free(c->resp_hdr_names);
+        free(c->resp_hdr_values);
+        free(c->resp_body);
+        free(c->req_body);
+        free(c);
+    }
+}
+
+extern fn __glide_h3_client_connect(host: string, port: int, timeout_ms: int, verify: int) -> *void;
+extern fn __glide_h3_client_request(handle: *void, method: string, host: string, path: string,
+                                     extra_headers_block: string,
+                                     body: *u8, body_len: int, timeout_ms: int) -> int;
+extern fn __glide_h3_resp_status(h: *void) -> int;
+extern fn __glide_h3_resp_body_len(h: *void) -> int;
+extern fn __glide_h3_resp_body_ptr(h: *void) -> string;
+extern fn __glide_h3_resp_hdr_count(h: *void) -> int;
+extern fn __glide_h3_resp_hdr_name(h: *void, i: int) -> string;
+extern fn __glide_h3_resp_hdr_value(h: *void, i: int) -> string;
+extern fn __glide_h3_close(h: *void);
+extern fn __glide_string_from_buf(p: *void, n: int) -> string;
+
+/// Single-shot HTTP/3 GET. Opens a QUIC connection, performs the TLS 1.3
+/// + QUIC handshake (ALPN `h3`), sends one request stream and reads the
+/// response back. Returns the response (status, headers, body) wrapped
+/// in the existing `HttpResponse` shape.
+///
+/// `tls_insecure = true` disables certificate verification — local dev
+/// against self-signed certs only.
+///
+/// ```glide
+/// let r: !*HttpResponse = http3_get("https://example.com/", false);
+/// if r.ok { println!(r.val.status); println!(r.val.body); }
+/// ```
+pub fn http3_get(url: string, tls_insecure: bool) -> !*HttpResponse {
+    return http3_request("GET", url, "", "", tls_insecure);
+}
+
+/// Generic single-shot HTTP/3 request. `method` is `"GET"`, `"POST"`,
+/// `"PUT"`, etc; `extra_headers` is a CRLF-joined `Name: Value` block
+/// (same shape as `HttpClientRequest.headers`); `body` is the request
+/// payload.
+///
+/// ```glide
+/// let r: !*HttpResponse = http3_request(
+///     "POST", "https://api.example.com/x", "Content-Type: application/json\r\n",
+///     "{\"hi\":1}", false);
+/// ```
+pub fn http3_request(method: string, url: string, extra_headers: string,
+                      body: string, tls_insecure: bool) -> !*HttpResponse {
+    let parsed: !*ParsedH3Url = _h3_parse_url(url);
+    if !parsed.ok { return err(parsed.err); }
+    let pu: *ParsedH3Url = parsed.val;
+
+    let mut verify: int = 1;
+    if tls_insecure { verify = 0; }
+    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify);
+    if h == null { return err("http3: connect/handshake failed"); }
+
+    let body_len: int = body.len();
+    let ok: int = __glide_h3_client_request(h, method, pu.host, pu.path,
+                                              extra_headers,
+                                              body as *u8, body_len, 30000);
+    if ok == 0 {
+        __glide_h3_close(h);
+        return err("http3: request failed");
+    }
+
+    let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
+    r.status = __glide_h3_resp_status(h);
+    let blen: int = __glide_h3_resp_body_len(h);
+    r.body = __glide_string_from_buf(__glide_h3_resp_body_ptr(h) as *void, blen);
+
+    let mut hb: string = "";
+    let n: int = __glide_h3_resp_hdr_count(h);
+    for let i: int = 0; i < n; i++ {
+        let name: string = __glide_h3_resp_hdr_name(h, i);
+        let value: string = __glide_h3_resp_hdr_value(h, i);
+        if name.eq(":status") { continue; }
+        if hb.len() > 0 { hb = hb.concat("\r\n"); }
+        hb = hb.concat(name).concat(": ").concat(value);
+    }
+    r.headers_block = hb;
+
+    __glide_h3_close(h);
+    return ok(r);
+}
+
+// ---- tiny URL parser tailored to https://host:port/path -----------
+
+pub struct ParsedH3Url {
+    pub host: string,
+    pub port: int,
+    pub path: string,
+}
+
+fn _h3_parse_url(s: string) -> !*ParsedH3Url {
+    let scheme_end: int = s.index_of("://");
+    if scheme_end < 0 { return err("http3: missing scheme"); }
+    let scheme: string = s.substring(0, scheme_end);
+    if !scheme.eq("https") && !scheme.eq("h3") {
+        return err("http3: scheme must be https (got `".concat(scheme).concat("`)"));
+    }
+    let rest: string = s.substring(scheme_end + 3, s.len());
+    let mut slash: int = rest.index_of("/");
+    if slash < 0 { slash = rest.len(); }
+    let authority: string = rest.substring(0, slash);
+    let mut path: string = rest.substring(slash, rest.len());
+    if path.eq("") { path = "/"; }
+
+    let mut host: string = authority;
+    let mut port: int = 443;
+    let colon: int = _last_colon(authority);
+    if colon >= 0 && (authority.len() == 0 || authority.at(0).to_int() != 91) {
+        host = authority.substring(0, colon);
+        let p_s: string = authority.substring(colon + 1, authority.len());
+        let pr: !int = p_s.try_parse_int();
+        if !pr.ok { return err("http3: bad port"); }
+        port = pr.val;
+    }
+
+    let u: *ParsedH3Url = malloc(sizeof(ParsedH3Url)) as *ParsedH3Url;
+    u.host = host;
+    u.port = port;
+    u.path = path;
+    return ok(u);
+}
+
+fn _last_colon(s: string) -> int {
+    let mut at: int = -1;
+    for let i: int = 0; i < s.len(); i++ {
+        if s.at(i).to_int() == 58 { at = i; }
+    }
+    return at;
+}
