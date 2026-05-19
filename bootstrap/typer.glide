@@ -151,6 +151,43 @@ fn is_unknown_type(t: *Type) -> bool {
 // True if `t` (recursively) names any of the strings in `names`. Used to
 // detect still-generic return types after impl-param subst so we fall back
 // to null (permissive) instead of surfacing an unresolved `T` upstream.
+// Infer method-level type-params (`<U>` on `fn fold<U>(init: U, f: fn(U,T) -> U) -> U`)
+// from the call's args, then substitute them into the return type. `params_after_self`
+// is the method's param list with the implicit self stripped; `arg_types` is the inferred
+// type of each user-supplied arg in lockstep. Returns the rewritten return type.
+//
+// Without this, calling `v.fold(0, _add)` on `*Vector<int>` returns the literal `U` named
+// type — the owner-type subst above only handles the impl block's `<T>`, not the method's
+// own `<U>`. `extract_for_var` walks each (param, arg) pair to locate U's concrete binding.
+fn _infer_method_tparams(ret: *Type, method_tparams: *Vector<string>,
+                          params_after_self: *Vector<Param>,
+                          arg_types: *Vector<*Type>) -> *Type {
+    if ret == null || method_tparams == null || method_tparams.len() == 0 { return ret; }
+    if params_after_self == null || arg_types == null { return ret; }
+    let plen: int = params_after_self.len();
+    let alen: int = arg_types.len();
+    let n: int = if plen < alen { plen } else { alen };
+    let names: *Vector<string> = Vector::new();
+    let bound: *Vector<Type> = Vector::new();
+    for let ti: int = 0; ti < method_tparams.len(); ti++ {
+        let tp_name: string = method_tparams.get(ti);
+        let mut concrete: *Type = null;
+        for let i: int = 0; i < n; i++ {
+            let p: Param = params_after_self.get(i);
+            let at: *Type = arg_types.get(i);
+            if p.ty == null || at == null { continue; }
+            let extracted: *Type = extract_for_var(p.ty, at, tp_name);
+            if extracted != null { concrete = extracted; break; }
+        }
+        if concrete != null {
+            names.push(tp_name);
+            bound.push(*concrete);
+        }
+    }
+    if names.len() == 0 { return ret; }
+    return _subst_type_local(ret, names, bound);
+}
+
 fn _type_references_any(t: *Type, names: *Vector<string>) -> bool {
     if t == null || names == null { return false; }
     if t.kind == TY_NAMED {
@@ -777,10 +814,26 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             if s.impl_target.kind == TY_NAMED { tname = s.impl_target.name; }
             if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
             if !tname.eq("") {
+                // Specialized impls on concrete arg types (`impl Vector<int>`)
+                // register under a fully-qualified key — `Vector<int>_max` —
+                // so they don't collide with sibling specializations or the
+                // generic `impl<T> Vector<T>` entry. Lookup tries the
+                // specialized key first, falls back to the bare name.
+                let mut is_specialized: bool = false;
+                if s.impl_target.kind == TY_GENERIC && s.impl_target.args != null
+                   && s.impl_target.args.len() > 0
+                   && (s.type_params == null || s.type_params.len() == 0) {
+                    is_specialized = true;
+                }
+                let key_prefix: string = if is_specialized {
+                    type_to_string(s.impl_target)
+                } else {
+                    tname
+                };
                 for let j: int = 0; j < s.impl_methods.len(); j++ {
                     let m: Stmt = s.impl_methods.get(j);
                     if m.kind == ST_FN {
-                        let fname: string = tname.concat("_").concat(m.name);
+                        let fname: string = key_prefix.concat("_").concat(m.name);
                         let sig: FnSig = FnSig {
                             name: fname,
                             params: m.fn_params,
@@ -989,6 +1042,26 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
     }
     if param_ty.kind == TY_OPT_RESULT && arg_ty.kind == TY_OPT_RESULT {
         return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
+    }
+    // Fn pointers: pair-wise on args + return so `fn(*T) -> U` matched against
+    // `fn(*int) -> int` extracts both T and U. Without this, method-level type
+    // params that appear only inside an fn-ptr param (e.g. `Mutex.with<U>(f: fn(*T) -> U) -> U`)
+    // never bind and the return type leaks the literal `U`.
+    if param_ty.kind == TY_FNPTR && arg_ty.kind == TY_FNPTR {
+        if param_ty.args != null && arg_ty.args != null
+           && param_ty.args.len() == arg_ty.args.len() {
+            for let i: int = 0; i < param_ty.args.len(); i++ {
+                let pa_v: Type = param_ty.args.get(i);
+                let aa_v: Type = arg_ty.args.get(i);
+                let pa_p: *Type = malloc(sizeof(Type)) as *Type;
+                let aa_p: *Type = malloc(sizeof(Type)) as *Type;
+                *pa_p = pa_v;
+                *aa_p = aa_v;
+                let r: *Type = extract_for_var(pa_p, aa_p, var_name);
+                if r != null { return r; }
+            }
+        }
+        return extract_for_var(param_ty.fnptr_ret, arg_ty.fnptr_ret, var_name);
     }
     return null;
 }
@@ -1929,8 +2002,20 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // the method isn't a known impl entry.
             let stripped: *Type = strip_ptr(recv_ty);
             if stripped != null && (stripped.kind == TY_NAMED || stripped.kind == TY_GENERIC) {
-                let mkey: string = stripped.name.concat("_").concat(mname);
-                if t.fns.contains(mkey) {
+                // Try the specialized key first (`Vector<int>_max` for
+                // `*Vector<int>.max()`); fall back to the bare-name key
+                // (`Vector_max` for the generic `impl<T> Vector<T>`). Without
+                // this, three sibling specializations all collide under
+                // `Vector_max` and the last-registered one wins.
+                let mut mkey: string = "";
+                let specialized: string = type_to_string(stripped).concat("_").concat(mname);
+                if t.fns.contains(specialized) {
+                    mkey = specialized;
+                } else {
+                    let generic_key: string = stripped.name.concat("_").concat(mname);
+                    if t.fns.contains(generic_key) { mkey = generic_key; }
+                }
+                if !mkey.eq("") {
                     let msig: FnSig = t.fns.get(mkey);
                     // Check each arg against the matching impl param. Skip the
                     // implicit `self` param (params[0]). Without this, passing
@@ -1938,6 +2023,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     // where Router::get wants `fn(*HttpRequest) -> HttpResponse`
                     // gets silently accepted — the ABI mismatch then crashes
                     // at runtime.
+                    let user_arg_types: *Vector<*Type> = Vector::new();
+                    let params_after_self: *Vector<Param> = Vector::new();
                     if e.args != null && msig.params != null {
                         let alen: int = e.args.len();
                         let plen: int = msig.params.len();
@@ -1945,9 +2032,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         for let i: int = 0; i < alen; i++ {
                             let a: Expr = e.args.get(i);
                             let at: *Type = infer_expr(t, &a);
+                            user_arg_types.push(at);
                             let pidx: int = i + 1;
                             if pidx >= plen { continue; }
                             let p: Param = msig.params.get(pidx);
+                            params_after_self.push(p);
                             if p.ty == null { continue; }
                             // Substitute owner type params in the expected
                             // type, mirroring how the return type is fixed
@@ -1973,7 +2062,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     } else if e.args != null {
                         for let i: int = 0; i < e.args.len(); i++ {
                             let a: Expr = e.args.get(i);
-                            let _u: *Type = infer_expr(t, &a);
+                            let at: *Type = infer_expr(t, &a);
+                            user_arg_types.push(at);
                         }
                     }
                     // Substitute the impl's `<T, U>` in the return type using
@@ -1983,7 +2073,25 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     if stripped.kind == TY_GENERIC && stripped.args != null
                        && msig.owner_type_params != null
                        && msig.owner_type_params.len() == stripped.args.len() {
-                        let substituted: *Type = _subst_type_local(msig.ret_type, msig.owner_type_params, stripped.args);
+                        let mut substituted: *Type = _subst_type_local(msig.ret_type, msig.owner_type_params, stripped.args);
+                        // Now resolve any method-level `<U>` in the return by
+                        // walking each user arg against its substituted param
+                        // type. `v.fold(0, _add)` on `*Vector<int>`: owner subst
+                        // turned the ret from `U` into `U` (unchanged — only T
+                        // was bound). This pass binds `U` to `int` via `init: U`
+                        // matched against the literal `0`.
+                        if msig.type_params != null && msig.type_params.len() > 0
+                           && _type_references_any(substituted, msig.type_params) {
+                            let subst_params: *Vector<Param> = Vector::new();
+                            for let i: int = 0; i < params_after_self.len(); i++ {
+                                let p: Param = params_after_self.get(i);
+                                let np: Param = p;
+                                np.ty = _subst_type_local(p.ty, msig.owner_type_params, stripped.args);
+                                subst_params.push(np);
+                            }
+                            substituted = _infer_method_tparams(substituted, msig.type_params,
+                                                                  subst_params, user_arg_types);
+                        }
                         // Receiver still generic? (`HashMap::new()` with no
                         // annotation -> *HashMap<V>, then `m.get(k)` would
                         // resolve to V again). Fall back to null so the
@@ -1995,14 +2103,22 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         }
                         return substituted;
                     }
-                    // Non-generic owner: return the raw ret_type only if it
-                    // doesn't reference the method's own type params; otherwise
-                    // we'd surface an unresolved `T` upstream.
+                    // Non-generic owner: bind method-level type params from args
+                    // before falling back to null. `m.with(_inc)` on `*Mutex<int>`:
+                    // owner is generic (Mutex<T>) so this branch shouldn't fire,
+                    // but for plain impls like `impl Foo { fn bar<U>(x: U) -> U }`
+                    // we still need to resolve U from the args.
+                    let mut substituted2: *Type = msig.ret_type;
                     if msig.type_params != null && msig.type_params.len() > 0
-                       && _type_references_any(msig.ret_type, msig.type_params) {
+                       && _type_references_any(substituted2, msig.type_params) {
+                        substituted2 = _infer_method_tparams(substituted2, msig.type_params,
+                                                              params_after_self, user_arg_types);
+                    }
+                    if msig.type_params != null && msig.type_params.len() > 0
+                       && _type_references_any(substituted2, msig.type_params) {
                         return null;
                     }
-                    return msig.ret_type;
+                    return substituted2;
                 }
             }
         }
