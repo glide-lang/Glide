@@ -2245,6 +2245,29 @@ fn _target_dir(triple: string) -> string {
     return _target_root().concat("/").concat(triple);
 }
 
+// Path to the host-architecture static-lib bundle shipped with the
+// glide install. `tools/build_release.sh --bundle-libs` stages
+// `lib/{libssl.a, libcrypto.a, libz.a, libngtcp2.a,
+// libngtcp2_crypto_ossl.a, libnghttp3.a}` alongside the binary; host
+// builds prefer those statics over system dynamic libs, eliminating
+// the `apt install libssl-dev / libngtcp2-dev` prerequisite for end
+// users.
+//
+// Returns "" when no bundle is present so the caller falls back to
+// system dynamic linkage.
+fn _host_lib_bundle_dir() -> string {
+    let exe_dir: string = __glide_exe_dir();
+    if exe_dir.eq("") { return ""; }
+    // Install-style layout (~/.glide/bin/glide → ~/.glide/lib/) first;
+    // inline layout (lib/ as a sibling of the binary in the dist
+    // tarball) second.
+    let install_lib: string = exe_dir.concat("/../lib");
+    if fs_exists(install_lib.concat("/libssl.a")) { return install_lib; }
+    let inline_lib: string = exe_dir.concat("/lib");
+    if fs_exists(inline_lib.concat("/libssl.a")) { return inline_lib; }
+    return "";
+}
+
 // Returns true when a usable sysroot is cached for `triple` — checked
 // by probing for the openssl ssl.h header which every TLS-aware
 // cross build needs.
@@ -2540,12 +2563,33 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // HTTP/3 stack (stdlib::http::h3) needs ngtcp2 + nghttp3. They
         // sit AFTER openssl on the link line so the linker resolves
         // their crypto symbol deps against openssl (right-to-left).
-        cmd = cmd.concat(" -lssl -lcrypto -lz -lngtcp2 -lngtcp2_crypto_ossl -lnghttp3");
+        //
+        // Bundle-aware: if the install ships `<install>/lib/<host_triple>/`
+        // with the matching static libs, point -L there and force static
+        // linkage on those names. Drops the `apt install libssl-dev /
+        // libngtcp2-dev` prerequisite for end users — the install tarball
+        // becomes self-sufficient. Falls back to system libs when the
+        // bundle dir isn't present.
+        let bundle: string = _host_lib_bundle_dir();
+        if !bundle.eq("") && fs_exists(bundle.concat("/libssl.a")) {
+            cmd = cmd.concat(" -L\"").concat(bundle).concat("\"");
+            cmd = cmd.concat(" -l:libngtcp2_crypto_ossl.a -l:libngtcp2.a -l:libnghttp3.a");
+            cmd = cmd.concat(" -l:libssl.a -l:libcrypto.a -l:libz.a");
+        } else {
+            cmd = cmd.concat(" -lssl -lcrypto -lz -lngtcp2 -lngtcp2_crypto_ossl -lnghttp3");
+        }
     } else if _has_target_sysroot(target) {
         let sysroot: string = _target_dir(target);
         cmd = cmd.concat(" -I\"").concat(sysroot).concat("/include\"");
         cmd = cmd.concat(" -L\"").concat(sysroot).concat("/lib\"");
-        cmd = cmd.concat(" -static -lssl -lcrypto -lz");
+        // Static-link everything from the sysroot. Include ngtcp2 +
+        // nghttp3 when the sysroot ships them (h3-capable cross builds);
+        // older sysroots without h3 libs fall back to TLS-only.
+        if fs_exists(sysroot.concat("/lib/libngtcp2.a")) {
+            cmd = cmd.concat(" -static -lngtcp2_crypto_ossl -lngtcp2 -lnghttp3 -lssl -lcrypto -lz");
+        } else {
+            cmd = cmd.concat(" -static -lssl -lcrypto -lz");
+        }
     }
 
     // On Windows, system() runs the command via `cmd.exe /c <cmd>`. When the

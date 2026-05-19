@@ -25,11 +25,22 @@ set -e
 VERSION="${VERSION:-0.1.1}"
 ZIG_VERSION="${ZIG_VERSION:-0.14.1}"
 TARGET=""
+# Path to a directory of static libs to bundle into the release tarball
+# (under `lib/`). Expected to contain libssl.a, libcrypto.a, libz.a,
+# libngtcp2.a, libngtcp2_crypto_ossl.a, libnghttp3.a — once present
+# bootstrap/main.glide prefers these over system dynamic libs, so end
+# users don't need `apt install libssl-dev libngtcp2-dev` to build
+# Glide programs that use stdlib::http / stdlib::http::h3.
+#
+# Skipped when empty (release tarball still works but assumes the user
+# has the libs installed system-wide).
+BUNDLE_LIBS=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --target=*) TARGET="${1#--target=}"; shift ;;
-        --version=*) VERSION="${1#--version=}"; shift ;;
+        --target=*)      TARGET="${1#--target=}"; shift ;;
+        --version=*)     VERSION="${1#--version=}"; shift ;;
+        --bundle-libs=*) BUNDLE_LIBS="${1#--bundle-libs=}"; shift ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -151,6 +162,26 @@ else
 fi
 cp README.md "$STAGE/" 2>/dev/null || true
 cp LICENSE "$STAGE/" 2>/dev/null || true
+
+# ---- Stage bundled static libs (optional) ----
+# When `--bundle-libs=<dir>` was given, copy the .a files into `lib/`
+# so bootstrap/main.glide picks them up via `_host_lib_bundle_dir`.
+# Required set: libssl libcrypto libz libngtcp2 libngtcp2_crypto_ossl
+# libnghttp3. Missing entries are tolerated — the linker falls back to
+# system dynamic libs for whatever isn't bundled (so the install still
+# builds non-h3 code on hosts without ngtcp2).
+if [ -n "$BUNDLE_LIBS" ] && [ -d "$BUNDLE_LIBS" ]; then
+    echo ">> Bundling static libs from $BUNDLE_LIBS"
+    mkdir -p "$STAGE/lib"
+    for lib in libssl.a libcrypto.a libz.a libngtcp2.a libngtcp2_crypto_ossl.a libnghttp3.a; do
+        if [ -f "$BUNDLE_LIBS/$lib" ]; then
+            cp "$BUNDLE_LIBS/$lib" "$STAGE/lib/"
+            echo "   + $lib"
+        else
+            echo "   - $lib (skipped — not found)"
+        fi
+    done
+fi
 
 # ---- Archive ----
 # MSYS/MinGW-bash on Windows host can't `chmod +x` POSIX-style — the
