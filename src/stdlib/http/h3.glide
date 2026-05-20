@@ -1983,10 +1983,10 @@ pub fn h3_make_self_signed_cert(cert_path: string, key_path: string,
 /// Concurrency: a single C reader thread owns the UDP socket and demuxes
 /// inbound packets across up to 64 simultaneous connections, advancing
 /// each via ngtcp2 + nghttp3. Each accepted connection is dispatched to
-/// `handler` on its own coro, so slow handlers don't block other clients'
-/// handshakes or response delivery. Stream-level concurrency within a
-/// connection (HTTP/3 PUSH, streaming response bodies, 0-RTT) is not
-/// supported in v1.
+/// `handler` on its own pthread, so slow handlers don't block other
+/// clients' handshake completion or accept dispatch. Stream-level
+/// concurrency within a connection (HTTP/3 PUSH, streaming response
+/// bodies, 0-RTT) is not supported in v1.
 pub fn http3_listen(port: int, cert_path: string, key_path: string,
                      handler: fn(*HttpRequest) -> HttpResponse) -> !int {
     let lp: *void = __glide_h3_listen(port, cert_path, key_path);
@@ -1995,7 +1995,7 @@ pub fn http3_listen(port: int, cert_path: string, key_path: string,
     while true {
         let h: *void = __glide_h3_accept(lp);
         if h == null { continue; }
-        _h3_dispatch(h, handler);
+        spawn_thread _h3_dispatch(h, handler);
     }
     __glide_h3_listener_close(lp);
     return ok(0);
@@ -2003,10 +2003,9 @@ pub fn http3_listen(port: int, cert_path: string, key_path: string,
 
 // Per-accepted-connection dispatch: build the HttpRequest from C-side
 // fields, invoke the user handler, send response back through the reader
-// thread. The reader thread continues to demux + advance other conns
-// while this runs, so I/O multiplexes even if handler dispatch is
-// serialized here. Users wanting handler-level concurrency can spawn
-// from inside their handler.
+// thread, close the conn. Runs on a dedicated pthread (spawn_thread, not
+// spawn) — the send_response call blocks on a pthread cond_wait which
+// would pin a Glide coro's underlying OS thread and starve the runtime.
 fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
     let blen: int = __glide_h3_srv_req_body_len(h);
     let body_str: string = __glide_string_from_buf(
