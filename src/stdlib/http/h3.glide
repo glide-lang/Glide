@@ -933,6 +933,17 @@ c_raw! {
         int                        resp_submitted;  // nghttp3_conn_submit_response called
         int                        connection_done;
 
+        // Streaming mode: handler returned an HttpResponse with stream_src
+        // set, so the dispatch pthread feeds body bytes incrementally via
+        // push_chunk + end_streaming. Same resp_body/resp_body_off buffer
+        // is reused as a sliding window — chunks land at len, the
+        // data_reader callback delivers [off..len), bumping off. EOF flag
+        // is set by end_streaming.
+        int                        streaming;
+        int                        stream_eof;
+        int                        stream_was_blocked;
+        size_t                     stream_buf_cap;
+
         int                        handshake_done;
         int                        connection_error;
     } __glide_h3_server_state;
@@ -1039,18 +1050,42 @@ c_raw! {
     }
 
     // Response body source — nghttp3 polls this until we set EOF.
+    // Two modes:
+    //   - Buffered: resp_body holds the full payload; one shot, return all
+    //     remaining bytes + EOF.
+    //   - Streaming: same buffer is a sliding window. Whatever's between
+    //     off and len has been pushed by Glide. Return that. If empty and
+    //     !eof, mark the stream blocked and return WOULDBLOCK; push_chunk
+    //     will resume the stream when more arrives.
     static nghttp3_ssize __glide_h3_srv_read_resp_cb(
         nghttp3_conn *h3, int64_t stream_id, nghttp3_vec *vec, size_t veccnt,
         uint32_t *pflags, void *conn_user_data, void *stream_user_data) {
         (void)h3; (void)stream_id; (void)stream_user_data;
         __glide_h3_server_state* s = (__glide_h3_server_state*)conn_user_data;
-        if (s->resp_body_off >= s->resp_body_len) {
+        if (veccnt == 0) return 0;
+        size_t avail = s->resp_body_len - s->resp_body_off;
+        if (s->streaming) {
+            if (avail == 0) {
+                if (s->stream_eof) {
+                    *pflags = NGHTTP3_DATA_FLAG_EOF;
+                    return 0;
+                }
+                s->stream_was_blocked = 1;
+                return NGHTTP3_ERR_WOULDBLOCK;
+            }
+            vec[0].base = s->resp_body + s->resp_body_off;
+            vec[0].len  = avail;
+            s->resp_body_off = s->resp_body_len;
+            if (s->stream_eof) *pflags = NGHTTP3_DATA_FLAG_EOF;
+            return 1;
+        }
+        // Buffered (single-shot) path.
+        if (avail == 0) {
             *pflags = NGHTTP3_DATA_FLAG_EOF;
             return 0;
         }
-        if (veccnt == 0) return 0;
         vec[0].base = s->resp_body + s->resp_body_off;
-        vec[0].len  = s->resp_body_len - s->resp_body_off;
+        vec[0].len  = avail;
         s->resp_body_off = s->resp_body_len;
         *pflags = NGHTTP3_DATA_FLAG_EOF;
         return 1;
@@ -1541,7 +1576,7 @@ c_raw! {
             }
         }
         nghttp3_data_reader dr; dr.read_data = __glide_h3_srv_read_resp_cb;
-        nghttp3_data_reader* drp = (s->resp_body_len > 0) ? &dr : NULL;
+        nghttp3_data_reader* drp = (s->resp_body_len > 0 || s->streaming) ? &dr : NULL;
         int rv = nghttp3_conn_submit_response(s->h3, s->request_stream_id,
                                                 nva, nh, drp);
         free(nva);
@@ -1651,6 +1686,7 @@ c_raw! {
                 if (s->st == H3_ST_RESPONDING && !s->resp_submitted) {
                     if (__glide_h3_srv_submit_response_now(s) == 0) {
                         s->resp_submitted = 1;
+                        notify = 1;
                     } else {
                         s->connection_error = 1;
                     }
@@ -1664,11 +1700,24 @@ c_raw! {
                     notify = 1;
                 }
                 if (s->st == H3_ST_RESPONDING && s->resp_submitted) {
-                    // Response packetized + sent. The client's ACKs may
-                    // never come (clients often hard-close), so don't
-                    // wait — flip a flag the close path picks up.
-                    s->connection_done = 1;
-                    notify = 1;
+                    int is_done;
+                    if (s->streaming) {
+                        // Streaming: done only when Glide marked EOF and
+                        // the sliding buffer has been fully drained by
+                        // the data_reader. Otherwise more chunks may be
+                        // on the way via push_chunk.
+                        is_done = s->stream_eof
+                                  && (s->resp_body_off >= s->resp_body_len);
+                    } else {
+                        // One-shot: the first write pass packetized the
+                        // whole response. Clients often hard-close after
+                        // receiving it, so don't wait for ACKs.
+                        is_done = 1;
+                    }
+                    if (is_done) {
+                        s->connection_done = 1;
+                        notify = 1;
+                    }
                 }
                 if (s->connection_error) notify = 1;
             }
@@ -1844,6 +1893,93 @@ c_raw! {
         // next pass.
     }
 
+    // ---- streaming response API -------------------------------------
+    // The dispatch pthread drives the stream by calling begin → push* →
+    // end while the reader thread feeds bytes out via the data_reader
+    // callback (which pulls from resp_body[off..len)). All state writes
+    // go through the listener lock; the reader thread observes them on
+    // each pass.
+
+    int __glide_h3_srv_begin_streaming(void* h, int status,
+                                         const char* headers_block) {
+        __glide_h3_server_state* s = (__glide_h3_server_state*)h;
+        __glide_h3_listener* l = s->l;
+        if (l == NULL) return 0;
+        pthread_mutex_lock(&l->lock);
+        if (s->connection_error) { pthread_mutex_unlock(&l->lock); return 0; }
+        s->resp_status = status;
+        if (headers_block != NULL && headers_block[0] != 0) {
+            s->resp_headers_block = strdup(headers_block);
+        }
+        s->streaming = 1;
+        // Allocate a starter ring; push_chunk grows as needed.
+        s->stream_buf_cap = 8192;
+        s->resp_body = (unsigned char*)malloc(s->stream_buf_cap);
+        s->resp_body_len = 0;
+        s->resp_body_off = 0;
+        s->st = H3_ST_RESPONDING;
+        // Wait for the reader to actually call submit_response — once
+        // resp_submitted is set we can start pushing chunks.
+        while (!s->resp_submitted && !s->connection_error) {
+            pthread_cond_wait(&l->cond, &l->lock);
+        }
+        int ok = !s->connection_error;
+        pthread_mutex_unlock(&l->lock);
+        return ok ? 1 : 0;
+    }
+
+    int __glide_h3_srv_push_chunk(void* h, uint8_t* data, int len) {
+        if (len <= 0) return 1;
+        __glide_h3_server_state* s = (__glide_h3_server_state*)h;
+        __glide_h3_listener* l = s->l;
+        if (l == NULL) return 0;
+        pthread_mutex_lock(&l->lock);
+        if (s->connection_error) { pthread_mutex_unlock(&l->lock); return 0; }
+        // Compact the sliding window when off has eaten enough of the
+        // buffer to make growing wasteful.
+        if (s->resp_body_off > 0 && s->resp_body_off == s->resp_body_len) {
+            s->resp_body_off = 0;
+            s->resp_body_len = 0;
+        } else if (s->resp_body_off > s->stream_buf_cap / 2) {
+            size_t live = s->resp_body_len - s->resp_body_off;
+            memmove(s->resp_body, s->resp_body + s->resp_body_off, live);
+            s->resp_body_off = 0;
+            s->resp_body_len = live;
+        }
+        // Grow if needed.
+        while (s->resp_body_len + (size_t)len > s->stream_buf_cap) {
+            s->stream_buf_cap *= 2;
+            s->resp_body = (unsigned char*)realloc(s->resp_body, s->stream_buf_cap);
+        }
+        memcpy(s->resp_body + s->resp_body_len, data, (size_t)len);
+        s->resp_body_len += (size_t)len;
+        if (s->stream_was_blocked && s->h3) {
+            nghttp3_conn_resume_stream(s->h3, s->request_stream_id);
+            s->stream_was_blocked = 0;
+        }
+        pthread_mutex_unlock(&l->lock);
+        return 1;
+    }
+
+    int __glide_h3_srv_end_streaming(void* h) {
+        __glide_h3_server_state* s = (__glide_h3_server_state*)h;
+        __glide_h3_listener* l = s->l;
+        if (l == NULL) return 0;
+        pthread_mutex_lock(&l->lock);
+        if (s->connection_error) { pthread_mutex_unlock(&l->lock); return 0; }
+        s->stream_eof = 1;
+        if (s->stream_was_blocked && s->h3) {
+            nghttp3_conn_resume_stream(s->h3, s->request_stream_id);
+            s->stream_was_blocked = 0;
+        }
+        while (!s->connection_done && !s->connection_error) {
+            pthread_cond_wait(&l->cond, &l->lock);
+        }
+        int ok = !s->connection_error;
+        pthread_mutex_unlock(&l->lock);
+        return ok ? 1 : 0;
+    }
+
     void __glide_h3_listener_close(void* lp) {
         __glide_h3_listener* l = (__glide_h3_listener*)lp;
         if (l == NULL) return;
@@ -1939,6 +2075,10 @@ extern fn __glide_h3_srv_req_body_ptr(h: *void) -> string;
 extern fn __glide_h3_srv_req_body_len(h: *void) -> int;
 extern fn __glide_h3_srv_send_response(h: *void, status: int, headers_block: string,
                                         body: *u8, body_len: int) -> int;
+extern fn __glide_h3_srv_begin_streaming(h: *void, status: int,
+                                          headers_block: string) -> int;
+extern fn __glide_h3_srv_push_chunk(h: *void, data: *u8, len: int) -> int;
+extern fn __glide_h3_srv_end_streaming(h: *void) -> int;
 extern fn __glide_h3_srv_close(h: *void);
 extern fn __glide_h3_listener_close(lp: *void);
 extern fn __glide_h3_make_self_signed(cert_path: string, key_path: string,
@@ -2028,10 +2168,28 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
         headers_cache: null,
     };
     let resp: HttpResponse = handler(&req);
-    let _r: int = __glide_h3_srv_send_response(h, resp.status,
-                                                 resp.headers_block,
-                                                 resp.body as *u8,
-                                                 resp.body.len());
+    if resp.stream_src != null {
+        // Streaming: begin (sets up nghttp3 with the data_reader), pump
+        // chunks until the source signals EOF, then end. Reader thread
+        // delivers each chunk over the wire as flow control allows.
+        let _b: int = __glide_h3_srv_begin_streaming(h, resp.status,
+                                                       resp.headers_block);
+        let src: *dyn ChunkSource = resp.stream_src;
+        while true {
+            let nxt: ?string = src.next_chunk();
+            if !nxt.has { break; }
+            let chunk: string = nxt.val;
+            if chunk.len() > 0 {
+                let _p: int = __glide_h3_srv_push_chunk(h, chunk as *u8, chunk.len());
+            }
+        }
+        let _e: int = __glide_h3_srv_end_streaming(h);
+    } else {
+        let _r: int = __glide_h3_srv_send_response(h, resp.status,
+                                                     resp.headers_block,
+                                                     resp.body as *u8,
+                                                     resp.body.len());
+    }
     __glide_h3_srv_close(h);
 }
 
