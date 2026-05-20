@@ -28,13 +28,8 @@
 //     supports it).
 //   - No 0-RTT, no connection migration, no HTTP/3 PUSH.
 //   - No path MTU discovery — assumes 1200-byte safe default.
-//   - SERVER: handshake is WIP. The accept path drives the QUIC TLS
-//     state machine via ngtcp2_crypto_ossl, but on the OpenSSL side
-//     the ServerHello never gets generated even though ClientHello
-//     was received. Likely missing a `SSL_set_quic_tls_transport_params`
-//     or initial-DH preroll step that the upstream ngtcp2 server
-//     examples use. Client side works end-to-end against real-world
-//     h3 endpoints (cloudflare.com etc), so the bug is server-only.
+//   - Server handles one connection at a time. Concurrent connections
+//     wait in the kernel UDP buffer until the current one finishes.
 
 import stdlib::bytes::*;
 import stdlib::net::ip::*;            // for _bytes_to_string
@@ -1017,10 +1012,40 @@ c_raw! {
 
     // ---- ngtcp2 server callbacks (most reused, plus a server-specific
     // recv_client_initial bridging) ----
+    // Stand up the nghttp3 server conn + the three uni streams (control,
+    // qpack encoder, qpack decoder) the moment 1RTT keys are ready. The
+    // ngtcp2 recv_stream_data callback consults s->h3 to forward STREAM
+    // frame payloads into nghttp3 — if it fires before this runs, the
+    // request data is dropped on the floor.
+    static int __glide_h3_srv_setup_h3(__glide_h3_server_state* s) {
+        nghttp3_callbacks ncb; memset(&ncb, 0, sizeof(ncb));
+        ncb.recv_data    = __glide_h3_srv_recv_data_cb;
+        ncb.recv_header  = __glide_h3_srv_recv_header_cb;
+        ncb.end_headers  = __glide_h3_srv_end_headers_cb;
+        ncb.end_stream   = __glide_h3_srv_end_stream_cb;
+        ncb.stream_close = __glide_h3_srv_stream_close_cb;
+        nghttp3_settings nst; nghttp3_settings_default(&nst);
+        if (nghttp3_conn_server_new(&s->h3, &ncb, &nst, NULL, s) != 0) return -1;
+        int64_t ctrl_id, qpack_enc_id, qpack_dec_id;
+        if (ngtcp2_conn_open_uni_stream(s->qc, &ctrl_id, NULL) != 0) return -1;
+        if (ngtcp2_conn_open_uni_stream(s->qc, &qpack_enc_id, NULL) != 0) return -1;
+        if (ngtcp2_conn_open_uni_stream(s->qc, &qpack_dec_id, NULL) != 0) return -1;
+        nghttp3_conn_bind_control_stream(s->h3, ctrl_id);
+        nghttp3_conn_bind_qpack_streams(s->h3, qpack_enc_id, qpack_dec_id);
+        return 0;
+    }
+
     static int __glide_h3_srv_handshake_completed_cb(ngtcp2_conn *conn,
                                                        void *user_data) {
         (void)conn;
         __glide_h3_server_state* s = (__glide_h3_server_state*)user_data;
+        // Set up nghttp3 + control/qpack streams NOW so the recv_stream_data
+        // callback can forward incoming STREAM frames to nghttp3 the
+        // moment they arrive. If we deferred this to after the handshake
+        // loop, any 1RTT data the client sent in parallel with its
+        // post-handshake messages would be silently dropped (s->h3
+        // would still be NULL when recv_stream_data fires).
+        if (__glide_h3_srv_setup_h3(s) != 0) return NGTCP2_ERR_CALLBACK_FAILURE;
         s->handshake_done = 1;
         return 0;
     }
@@ -1299,9 +1324,24 @@ c_raw! {
             free(s);
             return NULL;
         }
-        ngtcp2_cid dcid_orig, scid_local;
-        memcpy(dcid_orig.data, vc.dcid, vc.dcidlen);
-        dcid_orig.datalen = vc.dcidlen;
+        // Parse CIDs from the client's first packet:
+        //   vc.dcid: the DCID the client invented for its first packet.
+        //     This becomes params.original_dcid (the QUIC transport
+        //     parameter) so the client can verify the server saw what
+        //     it sent.
+        //   vc.scid: the CLIENT's chosen SCID. This becomes our peer
+        //     CID — the address we send replies to. Per ngtcp2 docs:
+        //     "|dcid| is a Destination Connection ID, and is usually
+        //      the Connection ID that appears in client Initial packet
+        //      as Source Connection ID." Passing vc.dcid here (which
+        //     I did originally) makes ngtcp2 set conn.dcid.current.cid
+        //     to the wrong value; subsequent client packets all get
+        //     discarded with "mismatched SCID" and the handshake stalls.
+        ngtcp2_cid client_dcid, client_scid, scid_local;
+        memcpy(client_dcid.data, vc.dcid, vc.dcidlen);
+        client_dcid.datalen = vc.dcidlen;
+        memcpy(client_scid.data, vc.scid, vc.scidlen);
+        client_scid.datalen = vc.scidlen;
         scid_local.datalen = NGTCP2_MIN_INITIAL_DCIDLEN;
         RAND_bytes(scid_local.data, (int)scid_local.datalen);
 
@@ -1358,7 +1398,7 @@ c_raw! {
         params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
         params.active_connection_id_limit          = 7;
         params.max_udp_payload_size                = 1452;
-        params.original_dcid                       = dcid_orig;
+        params.original_dcid                       = client_dcid;
         params.original_dcid_present               = 1;
 
         ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
@@ -1371,7 +1411,9 @@ c_raw! {
         // can then safely run SSL_set_app_data(conn_ref) — the get_conn
         // callback dereferences s->qc, which would still be NULL had we
         // built the SSL before the conn.
-        if (ngtcp2_conn_server_new(&s->qc, &dcid_orig, &scid_local, &ps.path,
+        // First arg = client's SCID (where we send replies to). Not the
+        // client's DCID — that goes into params.original_dcid above.
+        if (ngtcp2_conn_server_new(&s->qc, &client_scid, &scid_local, &ps.path,
                                     NGTCP2_PROTO_VER_V1, &cb, &settings,
                                     &params, NULL, s) != 0) goto fail;
 
@@ -1437,22 +1479,7 @@ c_raw! {
         }
         if (s->connection_error) goto fail;
 
-        // 8. Set up nghttp3 server-side.
-        nghttp3_callbacks ncb; memset(&ncb, 0, sizeof(ncb));
-        ncb.recv_data       = __glide_h3_srv_recv_data_cb;
-        ncb.recv_header     = __glide_h3_srv_recv_header_cb;
-        ncb.end_headers     = __glide_h3_srv_end_headers_cb;
-        ncb.end_stream      = __glide_h3_srv_end_stream_cb;
-        ncb.stream_close    = __glide_h3_srv_stream_close_cb;
-        nghttp3_settings nst; nghttp3_settings_default(&nst);
-        if (nghttp3_conn_server_new(&s->h3, &ncb, &nst, NULL, s) != 0) goto fail;
-
-        int64_t ctrl_id, qpack_enc_id, qpack_dec_id;
-        if (ngtcp2_conn_open_uni_stream(s->qc, &ctrl_id, NULL) != 0) goto fail;
-        if (ngtcp2_conn_open_uni_stream(s->qc, &qpack_enc_id, NULL) != 0) goto fail;
-        if (ngtcp2_conn_open_uni_stream(s->qc, &qpack_dec_id, NULL) != 0) goto fail;
-        nghttp3_conn_bind_control_stream(s->h3, ctrl_id);
-        nghttp3_conn_bind_qpack_streams(s->h3, qpack_enc_id, qpack_dec_id);
+        // 8. nghttp3 setup happened inside handshake_completed cb.
 
         // 9. Drive read loop until the request is complete.
         deadline = __glide_h3_now() + 30000000000ULL;
