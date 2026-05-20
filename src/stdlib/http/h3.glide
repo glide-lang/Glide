@@ -56,6 +56,7 @@ c_raw! {
     #include <stdint.h>
     #include <time.h>
     #include <errno.h>
+    #include <pthread.h>
 
     #ifdef _WIN32
     #include <winsock2.h>
@@ -862,17 +863,51 @@ c_raw! {
     // here. For benchmark / production use the multi-conn rewrite is the
     // next step.
 
+    // Per-connection state machine driven by the listener's reader
+    // thread. State transitions:
+    //   HANDSHAKING → REQ_READY (request fully arrived; pushed onto
+    //                            listener->ready[], picked up by accept)
+    //              → HANDLER_RUNNING (Glide popped from ready[], handler
+    //                                  is running on a coro)
+    //              → RESPONDING (Glide called send_response; reader
+    //                            queues data + writes)
+    //              → REAP (Glide called close; reader frees on next pass)
+    // CONN_ERROR is a sink for fatal protocol errors.
+    enum __glide_h3_conn_st {
+        H3_ST_HANDSHAKING     = 0,
+        H3_ST_REQ_READY       = 1,
+        H3_ST_HANDLER_RUNNING = 2,
+        H3_ST_RESPONDING      = 3,
+        H3_ST_REAP            = 4,
+        H3_ST_CONN_ERROR      = 5,
+    };
+
+    struct __glide_h3_listener; // fwd
+
     typedef struct __glide_h3_server_state {
         ngtcp2_crypto_conn_ref     conn_ref;     // MUST be first
         ngtcp2_conn*               qc;
         ngtcp2_crypto_ossl_ctx*    oc;
         SSL*                       ssl;
         nghttp3_conn*              h3;
+        struct __glide_h3_listener* l;            // owning listener (set by create_conn)
         __glide_h3_sock_t          sock;
         struct sockaddr_storage    remote;
         socklen_t                  remote_len;
         struct sockaddr_storage    local;
         socklen_t                  local_len;
+
+        // CID lookup keys for the reader's demux table. orig_dcid is the
+        // random DCID the client picked for its first Initial; we keep
+        // it so retransmitted Initials still route here. my_scid is the
+        // CID we issued — every post-Initial client packet's DCID equals
+        // this value.
+        ngtcp2_cid                 orig_dcid;
+        ngtcp2_cid                 my_scid;
+
+        // State machine knob — toggled by the reader and (under
+        // listener->lock) by Glide.
+        int                        st;
 
         // Incoming request bookkeeping.
         int64_t                    request_stream_id;
@@ -891,14 +926,11 @@ c_raw! {
 
         // Outgoing response (set by Glide once the handler runs).
         int                        resp_status;
-        char**                     resp_hdr_names;
-        char**                     resp_hdr_values;
-        size_t                     resp_hdr_count;
-        size_t                     resp_hdr_cap;
+        char*                      resp_headers_block; // CRLF-joined "Name: Value"
         unsigned char*             resp_body;
         size_t                     resp_body_len;
         size_t                     resp_body_off;
-        int                        response_done;   // last data write finished
+        int                        resp_submitted;  // nghttp3_conn_submit_response called
         int                        connection_done;
 
         int                        handshake_done;
@@ -1207,13 +1239,87 @@ c_raw! {
         return 0;
     }
 
-    // Bound listener handle exposed to Glide. Just owns the UDP socket
-    // + SSL_CTX so accept can build per-conn state cheaply.
+    // Bound listener handle exposed to Glide.
+    //
+    // Owns the UDP socket + SSL_CTX, plus the reader thread that demuxes
+    // incoming packets across all active connections. The reader thread
+    // is the sole owner of ngtcp2 / nghttp3 / SSL state — Glide just
+    // observes via accept() (pops from ready[]) and signals via
+    // send_response / close (under listener->lock).
+    #define __GLIDE_H3_MAX_CONNS 64
+
     typedef struct __glide_h3_listener {
         __glide_h3_sock_t sock;
         SSL_CTX*          ssl_ctx;
         int               port;
+
+        // Active conns. The reader thread is the only writer; Glide
+        // readers (accept / send_response / close) lock the mutex before
+        // touching anything. ready[] points into conns[] — entries are
+        // added when a conn finishes request reception and removed when
+        // accept() returns them.
+        struct __glide_h3_server_state* conns[__GLIDE_H3_MAX_CONNS];
+        int                              n_conns;
+        struct __glide_h3_server_state* ready[__GLIDE_H3_MAX_CONNS];
+        int                              n_ready;
+
+        pthread_t        reader_tid;
+        pthread_mutex_t  lock;
+        pthread_cond_t   cond;      // signaled when n_ready grows or a
+                                     // RESPONDING/REAP request is posted
+        int              reader_running;
+        int              shutdown;
     } __glide_h3_listener;
+
+    // ---- conn registry helpers (must hold listener->lock) -----------
+
+    // Linear lookup by either of the conn's CIDs. With cap=64 this is
+    // ~constant for any practical load.
+    static __glide_h3_server_state* __glide_h3_lookup_conn(
+        __glide_h3_listener* l, const uint8_t* dcid, size_t dcidlen) {
+        for (int i = 0; i < l->n_conns; i++) {
+            __glide_h3_server_state* s = l->conns[i];
+            if (s->orig_dcid.datalen == dcidlen
+                && memcmp(s->orig_dcid.data, dcid, dcidlen) == 0) return s;
+            if (s->my_scid.datalen == dcidlen
+                && memcmp(s->my_scid.data, dcid, dcidlen) == 0) return s;
+        }
+        return NULL;
+    }
+
+    static int __glide_h3_register_conn(__glide_h3_listener* l,
+                                          __glide_h3_server_state* s) {
+        if (l->n_conns >= __GLIDE_H3_MAX_CONNS) return 0;
+        l->conns[l->n_conns++] = s;
+        return 1;
+    }
+
+    static void __glide_h3_unregister_conn(__glide_h3_listener* l,
+                                             __glide_h3_server_state* s) {
+        for (int i = 0; i < l->n_conns; i++) {
+            if (l->conns[i] == s) {
+                l->conns[i] = l->conns[l->n_conns - 1];
+                l->n_conns--;
+                break;
+            }
+        }
+        for (int i = 0; i < l->n_ready; i++) {
+            if (l->ready[i] == s) {
+                l->ready[i] = l->ready[l->n_ready - 1];
+                l->n_ready--;
+                break;
+            }
+        }
+    }
+
+    static void __glide_h3_mark_ready(__glide_h3_listener* l,
+                                        __glide_h3_server_state* s) {
+        if (l->n_ready >= __GLIDE_H3_MAX_CONNS) return;
+        for (int i = 0; i < l->n_ready; i++) {
+            if (l->ready[i] == s) return;
+        }
+        l->ready[l->n_ready++] = s;
+    }
 
     static __glide_h3_sock_t __glide_h3_bind_udp(int port) {
         struct addrinfo hints; memset(&hints, 0, sizeof(hints));
@@ -1262,6 +1368,342 @@ c_raw! {
         return SSL_TLSEXT_ERR_NOACK;
     }
 
+    // ---- conn lifecycle helpers (reader-thread context) -------------
+
+    // Frees per-conn state. Must be called with no other thread touching
+    // the conn (i.e. after it's been unregistered from listener->conns).
+    static void __glide_h3_destroy_conn(__glide_h3_server_state* s) {
+        if (s == NULL) return;
+        if (s->qc) ngtcp2_conn_del(s->qc);
+        if (s->oc) ngtcp2_crypto_ossl_ctx_del(s->oc);
+        if (s->ssl) SSL_free(s->ssl);
+        if (s->h3) nghttp3_conn_del(s->h3);
+        free(s->req_method);
+        free(s->req_path);
+        free(s->req_authority);
+        free(s->req_headers_block);
+        free(s->req_body);
+        free(s->resp_body);
+        free(s->resp_headers_block);
+        free(s);
+    }
+
+    // Build a new server-side conn from the first Initial packet. Sets
+    // up ngtcp2_conn, SSL, registers CIDs on the conn struct, and feeds
+    // the first packet (which derives Initial keys via the crypto helper).
+    // Returns NULL on any failure; caller doesn't need to free anything.
+    static __glide_h3_server_state* __glide_h3_create_conn(
+        __glide_h3_listener* l,
+        const ngtcp2_version_cid* vc,
+        const uint8_t* pktbuf, size_t pktlen,
+        const struct sockaddr_storage* remote, socklen_t remote_len) {
+        __glide_h3_server_state* s =
+            (__glide_h3_server_state*)calloc(1, sizeof(*s));
+        s->sock = l->sock;
+        s->l = l;
+        s->request_stream_id = -1;
+        s->st = H3_ST_HANDSHAKING;
+        memcpy(&s->remote, remote, remote_len);
+        s->remote_len = remote_len;
+
+        ngtcp2_cid client_dcid, client_scid;
+        memcpy(client_dcid.data, vc->dcid, vc->dcidlen);
+        client_dcid.datalen = vc->dcidlen;
+        memcpy(client_scid.data, vc->scid, vc->scidlen);
+        client_scid.datalen = vc->scidlen;
+        s->orig_dcid = client_dcid;
+        s->my_scid.datalen = NGTCP2_MIN_INITIAL_DCIDLEN;
+        RAND_bytes(s->my_scid.data, (int)s->my_scid.datalen);
+
+        // Concrete local address (see notes in the original single-conn
+        // accept for why loopback wildcard gets rewritten to 127.0.0.1).
+        s->local_len = sizeof(s->local);
+        getsockname(s->sock, (struct sockaddr*)&s->local, &s->local_len);
+        if (((struct sockaddr*)&s->local)->sa_family == AF_INET) {
+            struct sockaddr_in* sl = (struct sockaddr_in*)&s->local;
+            if (sl->sin_addr.s_addr == 0) sl->sin_addr.s_addr = htonl(0x7f000001);
+        }
+
+        ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
+        cb.recv_client_initial        = ngtcp2_crypto_recv_client_initial_cb;
+        cb.recv_crypto_data           = ngtcp2_crypto_recv_crypto_data_cb;
+        cb.encrypt                    = ngtcp2_crypto_encrypt_cb;
+        cb.decrypt                    = ngtcp2_crypto_decrypt_cb;
+        cb.hp_mask                    = ngtcp2_crypto_hp_mask_cb;
+        cb.update_key                 = ngtcp2_crypto_update_key_cb;
+        cb.delete_crypto_aead_ctx     = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+        cb.delete_crypto_cipher_ctx   = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+        cb.get_path_challenge_data    = ngtcp2_crypto_get_path_challenge_data_cb;
+        cb.version_negotiation        = ngtcp2_crypto_version_negotiation_cb;
+        cb.rand                       = __glide_h3_rand_cb;
+        cb.get_new_connection_id      = __glide_h3_get_new_cid_cb;
+        cb.handshake_completed        = __glide_h3_srv_handshake_completed_cb;
+        cb.recv_stream_data           = __glide_h3_srv_recv_stream_data_cb;
+        cb.acked_stream_data_offset   = __glide_h3_srv_acked_stream_data_cb;
+        cb.stream_close               = __glide_h3_srv_stream_close_qcb;
+        cb.stream_open                = __glide_h3_srv_stream_open_cb;
+        cb.extend_max_stream_data     = __glide_h3_srv_extend_max_stream_data_cb;
+        cb.stream_reset               = __glide_h3_srv_stream_reset_cb;
+        cb.stream_stop_sending        = __glide_h3_srv_stream_stop_sending_cb;
+
+        ngtcp2_settings settings; ngtcp2_settings_default(&settings);
+        settings.initial_ts = __glide_h3_now();
+
+        ngtcp2_transport_params params; ngtcp2_transport_params_default(&params);
+        params.initial_max_streams_bidi = 100;
+        params.initial_max_streams_uni  = 100;
+        params.initial_max_data         = 1048576;
+        params.initial_max_stream_data_bidi_local  = 1048576;
+        params.initial_max_stream_data_bidi_remote = 1048576;
+        params.initial_max_stream_data_uni         = 1048576;
+        params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
+        params.active_connection_id_limit          = 7;
+        params.max_udp_payload_size                = 1452;
+        params.original_dcid                       = client_dcid;
+        params.original_dcid_present               = 1;
+
+        ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
+        memcpy(ps.path.remote.addr, &s->remote, s->remote_len);
+        ps.path.remote.addrlen = s->remote_len;
+        memcpy(ps.path.local.addr, &s->local, s->local_len);
+        ps.path.local.addrlen = s->local_len;
+
+        if (ngtcp2_conn_server_new(&s->qc, &client_scid, &s->my_scid, &ps.path,
+                                    NGTCP2_PROTO_VER_V1, &cb, &settings,
+                                    &params, NULL, s) != 0) goto fail;
+
+        s->ssl = SSL_new(l->ssl_ctx);
+        if (ngtcp2_crypto_ossl_ctx_new(&s->oc, s->ssl) != 0) goto fail;
+        if (ngtcp2_crypto_ossl_configure_server_session(s->ssl) != 0) goto fail;
+        s->conn_ref.get_conn = __glide_h3_srv_get_conn_cb;
+        s->conn_ref.user_data = s;
+        SSL_set_app_data(s->ssl, &s->conn_ref);
+        SSL_set_accept_state(s->ssl);
+        SSL_set_quic_tls_early_data_enabled(s->ssl, 1);
+        ngtcp2_conn_set_tls_native_handle(s->qc, s->oc);
+
+        ngtcp2_pkt_info pi; memset(&pi, 0, sizeof(pi));
+        if (ngtcp2_conn_read_pkt(s->qc, &ps.path, &pi, pktbuf, pktlen,
+                                   __glide_h3_now()) != 0) goto fail;
+
+        return s;
+
+    fail:
+        __glide_h3_destroy_conn(s);
+        return NULL;
+    }
+
+    // Encode the Glide-side response into nghttp3's submit_response API.
+    // Called by the reader thread once Glide flips s->st to RESPONDING.
+    static int __glide_h3_srv_submit_response_now(__glide_h3_server_state* s) {
+        size_t cap = 16; size_t nh = 0;
+        nghttp3_nv* nva = (nghttp3_nv*)malloc(cap * sizeof(*nva));
+        char status_str[8];
+        snprintf(status_str, sizeof(status_str), "%d", s->resp_status);
+        char* status_buf = strdup(status_str);
+        nva[nh].name = (uint8_t*)":status";
+        nva[nh].namelen = 7;
+        nva[nh].value = (uint8_t*)status_buf;
+        nva[nh].valuelen = strlen(status_buf);
+        nva[nh].flags = NGHTTP3_NV_FLAG_NONE;
+        nh++;
+        if (s->resp_headers_block != NULL && s->resp_headers_block[0] != 0) {
+            const char* p = s->resp_headers_block;
+            while (*p) {
+                const char* line_end = p;
+                while (*line_end && !(line_end[0] == '\r' && line_end[1] == '\n')) line_end++;
+                const char* colon = p;
+                while (colon < line_end && *colon != ':') colon++;
+                if (colon < line_end) {
+                    const char* vstart = colon + 1;
+                    while (vstart < line_end && (*vstart == ' ' || *vstart == '\t')) vstart++;
+                    size_t nl = (size_t)(colon - p);
+                    size_t vl = (size_t)(line_end - vstart);
+                    if (nh == cap) {
+                        cap *= 2;
+                        nva = (nghttp3_nv*)realloc(nva, cap * sizeof(*nva));
+                    }
+                    char* lname = (char*)malloc(nl);
+                    for (size_t i = 0; i < nl; i++) {
+                        char ch = p[i];
+                        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+                        lname[i] = ch;
+                    }
+                    char* lval = (char*)malloc(vl);
+                    memcpy(lval, vstart, vl);
+                    nva[nh].name = (uint8_t*)lname; nva[nh].namelen = nl;
+                    nva[nh].value = (uint8_t*)lval; nva[nh].valuelen = vl;
+                    nva[nh].flags = NGHTTP3_NV_FLAG_NONE;
+                    nh++;
+                }
+                if (*line_end == 0) break;
+                p = line_end + 2;
+            }
+        }
+        nghttp3_data_reader dr; dr.read_data = __glide_h3_srv_read_resp_cb;
+        nghttp3_data_reader* drp = (s->resp_body_len > 0) ? &dr : NULL;
+        int rv = nghttp3_conn_submit_response(s->h3, s->request_stream_id,
+                                                nva, nh, drp);
+        free(nva);
+        return rv;
+    }
+
+    // Reader thread main loop. Owns all conn state — Glide only observes
+    // via accept()/send_response()/close() under listener->lock.
+    static void* __glide_h3_reader_thread(void* arg) {
+        __glide_h3_listener* l = (__glide_h3_listener*)arg;
+        __glide_h3_set_nonblock(l->sock);
+        uint8_t pktbuf[2048];
+
+        while (1) {
+            pthread_mutex_lock(&l->lock);
+            if (l->shutdown) { pthread_mutex_unlock(&l->lock); break; }
+            // Earliest conn expiry caps the select timeout.
+            uint64_t now = __glide_h3_now();
+            uint64_t earliest = now + 50000000ULL; // 50 ms idle cap
+            for (int i = 0; i < l->n_conns; i++) {
+                __glide_h3_server_state* s = l->conns[i];
+                if (s->qc && !s->connection_error) {
+                    ngtcp2_tstamp ex = ngtcp2_conn_get_expiry(s->qc);
+                    if (ex != UINT64_MAX && ex < earliest) earliest = ex;
+                }
+                // A pending response submission also needs immediate
+                // attention — drop the timeout so the loop iterates now.
+                if (s->st == H3_ST_RESPONDING && !s->resp_submitted) earliest = now;
+                if (s->st == H3_ST_REAP) earliest = now;
+            }
+            pthread_mutex_unlock(&l->lock);
+
+            uint64_t to_us = (earliest > now) ? (earliest - now) / 1000ULL : 0;
+            if (to_us > 50000) to_us = 50000;
+            fd_set rfds; FD_ZERO(&rfds); FD_SET(l->sock, &rfds);
+            struct timeval tv;
+            tv.tv_sec  = (long)(to_us / 1000000);
+            tv.tv_usec = (long)(to_us % 1000000);
+            select((int)l->sock + 1, &rfds, NULL, NULL, &tv);
+
+            // Drain all available packets.
+            for (;;) {
+                struct sockaddr_storage from; socklen_t fromlen = sizeof(from);
+                int n = recvfrom(l->sock, (char*)pktbuf, sizeof(pktbuf), 0,
+                                  (struct sockaddr*)&from, &fromlen);
+                if (n <= 0) break;
+                if (n < 1) continue;
+
+                pthread_mutex_lock(&l->lock);
+                __glide_h3_server_state* s = NULL;
+                ngtcp2_version_cid vc;
+                int has_vc = (ngtcp2_pkt_decode_version_cid(&vc, pktbuf,
+                                                              (size_t)n,
+                                                              NGTCP2_MAX_CIDLEN) == 0);
+                if (has_vc) {
+                    s = __glide_h3_lookup_conn(l, vc.dcid, vc.dcidlen);
+                    if (s == NULL) {
+                        int is_initial = (pktbuf[0] & 0x80) != 0
+                                         && ((pktbuf[0] & 0x30) >> 4) == 0;
+                        if (is_initial && l->n_conns < __GLIDE_H3_MAX_CONNS) {
+                            s = __glide_h3_create_conn(l, &vc, pktbuf, (size_t)n,
+                                                         &from, fromlen);
+                            if (s) __glide_h3_register_conn(l, s);
+                            pthread_mutex_unlock(&l->lock);
+                            continue;  // already fed the packet
+                        }
+                    }
+                } else {
+                    // Short header: DCID is bytes [1..1+cidlen). Our SCIDs
+                    // are always NGTCP2_MIN_INITIAL_DCIDLEN bytes.
+                    if ((pktbuf[0] & 0x80) == 0
+                        && (size_t)n >= 1 + NGTCP2_MIN_INITIAL_DCIDLEN) {
+                        s = __glide_h3_lookup_conn(l, pktbuf + 1,
+                                                     NGTCP2_MIN_INITIAL_DCIDLEN);
+                    }
+                }
+                if (s != NULL && s->qc && !s->connection_error) {
+                    memcpy(&s->remote, &from, fromlen);
+                    s->remote_len = fromlen;
+                    ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
+                    memcpy(ps.path.remote.addr, &s->remote, s->remote_len);
+                    ps.path.remote.addrlen = s->remote_len;
+                    memcpy(ps.path.local.addr, &s->local, s->local_len);
+                    ps.path.local.addrlen = s->local_len;
+                    ngtcp2_pkt_info pi; memset(&pi, 0, sizeof(pi));
+                    if (ngtcp2_conn_read_pkt(s->qc, &ps.path, &pi, pktbuf,
+                                               (size_t)n, __glide_h3_now()) != 0) {
+                        s->connection_error = 1;
+                    }
+                }
+                pthread_mutex_unlock(&l->lock);
+            }
+
+            // Per-conn state transitions + writes + reaping.
+            pthread_mutex_lock(&l->lock);
+            int notify = 0;
+            for (int i = 0; i < l->n_conns; i++) {
+                __glide_h3_server_state* s = l->conns[i];
+                if (s->qc && !s->connection_error) {
+                    ngtcp2_tstamp ex = ngtcp2_conn_get_expiry(s->qc);
+                    if (ex != UINT64_MAX && ex <= __glide_h3_now()) {
+                        if (ngtcp2_conn_handle_expiry(s->qc, __glide_h3_now()) != 0) {
+                            s->connection_error = 1;
+                        }
+                    }
+                }
+                if (s->st == H3_ST_RESPONDING && !s->resp_submitted) {
+                    if (__glide_h3_srv_submit_response_now(s) == 0) {
+                        s->resp_submitted = 1;
+                    } else {
+                        s->connection_error = 1;
+                    }
+                }
+                if (s->qc && !s->connection_error) {
+                    if (__glide_h3_srv_write(s) != 0) s->connection_error = 1;
+                }
+                if (s->st == H3_ST_HANDSHAKING && s->request_ready) {
+                    s->st = H3_ST_REQ_READY;
+                    __glide_h3_mark_ready(l, s);
+                    notify = 1;
+                }
+                if (s->st == H3_ST_RESPONDING && s->resp_submitted) {
+                    // Response packetized + sent. The client's ACKs may
+                    // never come (clients often hard-close), so don't
+                    // wait — flip a flag the close path picks up.
+                    s->connection_done = 1;
+                    notify = 1;
+                }
+                if (s->connection_error) notify = 1;
+            }
+
+            // Reap closed / errored conns.
+            int i = 0;
+            while (i < l->n_conns) {
+                __glide_h3_server_state* s = l->conns[i];
+                int reap = (s->st == H3_ST_REAP)
+                           || (s->connection_error && s->st != H3_ST_REQ_READY
+                               && s->st != H3_ST_HANDLER_RUNNING);
+                if (reap) {
+                    __glide_h3_unregister_conn(l, s);
+                    __glide_h3_destroy_conn(s);
+                    notify = 1;
+                    continue; // slot got swapped
+                }
+                i++;
+            }
+            if (notify) pthread_cond_broadcast(&l->cond);
+            pthread_mutex_unlock(&l->lock);
+        }
+
+        // Shutdown: free remaining conns.
+        pthread_mutex_lock(&l->lock);
+        for (int i = 0; i < l->n_conns; i++) {
+            __glide_h3_destroy_conn(l->conns[i]);
+            l->conns[i] = NULL;
+        }
+        l->n_conns = 0;
+        l->n_ready = 0;
+        pthread_mutex_unlock(&l->lock);
+        return NULL;
+    }
+
     void* __glide_h3_listen(int port, const char* cert_path,
                              const char* key_path) {
         if (!__glide_h3_init()) return NULL;
@@ -1307,249 +1749,43 @@ c_raw! {
         SSL_CTX_set_default_verify_paths(ctx);
         static const unsigned char sid_ctx[] = "glide-h3-server";
         SSL_CTX_set_session_id_context(ctx, sid_ctx, sizeof(sid_ctx) - 1);
-        __glide_h3_listener* l = (__glide_h3_listener*)malloc(sizeof(*l));
+        __glide_h3_listener* l = (__glide_h3_listener*)calloc(1, sizeof(*l));
         l->sock = sock; l->ssl_ctx = ctx; l->port = port;
+        pthread_mutex_init(&l->lock, NULL);
+        pthread_cond_init(&l->cond, NULL);
+        if (pthread_create(&l->reader_tid, NULL,
+                            __glide_h3_reader_thread, l) != 0) {
+            pthread_cond_destroy(&l->cond);
+            pthread_mutex_destroy(&l->lock);
+            SSL_CTX_free(ctx);
+            #ifdef _WIN32
+            closesocket(sock);
+            #else
+            close(sock);
+            #endif
+            free(l);
+            return NULL;
+        }
+        l->reader_running = 1;
         return (void*)l;
     }
 
-    // Accept one connection: blocks on recvfrom for an Initial packet,
-    // creates ngtcp2_conn server-side, drives handshake, sets up nghttp3
-    // server conn, and waits for the first complete request. Returns the
-    // per-conn state; Glide calls accessors to read req_method / req_path /
-    // req_headers_block / req_body, then fills resp_* and calls finish.
+    // Wait for the next connection that's finished its handshake + has
+    // a complete request ready for the handler. Reader thread pushes
+    // conns onto listener->ready[] and broadcasts on the cond; we pop.
     void* __glide_h3_accept(void* lp) {
         __glide_h3_listener* l = (__glide_h3_listener*)lp;
-        __glide_h3_server_state* s =
-            (__glide_h3_server_state*)calloc(1, sizeof(*s));
-        s->sock = l->sock;
-        s->request_stream_id = -1;
-
-        // 1. Block on the first INITIAL packet of a new connection. The
-        // socket may have been left non-blocking by a previous accept
-        // (set during the handshake loop), so reset it. Then loop until
-        // we get a long-header Initial — leftover short-header / 1RTT
-        // packets from the prior connection that the client sent after
-        // its FIN may still be queued in the UDP recv buffer.
-        __glide_h3_set_blocking(s->sock);
-        uint8_t pktbuf[2048];
-        ngtcp2_version_cid vc;
-        int n;
-        for (;;) {
-            s->remote_len = sizeof(s->remote);
-            n = recvfrom(s->sock, (char*)pktbuf, sizeof(pktbuf), 0,
-                          (struct sockaddr*)&s->remote, &s->remote_len);
-            if (n <= 0) { free(s); return NULL; }
-            // Reject obvious non-Initials: short header (bit 0x80 clear)
-            // or long-header packets that aren't Initial (type bits 4-5
-            // of byte 0 must be 0 for Initial in QUIC v1).
-            if ((pktbuf[0] & 0x80) == 0) continue;
-            if (((pktbuf[0] & 0x30) >> 4) != 0) continue;
-            if (ngtcp2_pkt_decode_version_cid(&vc, pktbuf, (size_t)n,
-                                                NGTCP2_MAX_CIDLEN) != 0) continue;
-            break;
+        pthread_mutex_lock(&l->lock);
+        while (l->n_ready == 0 && !l->shutdown) {
+            pthread_cond_wait(&l->cond, &l->lock);
         }
-        // Parse CIDs from the client's first packet:
-        //   vc.dcid: the DCID the client invented for its first packet.
-        //     This becomes params.original_dcid (the QUIC transport
-        //     parameter) so the client can verify the server saw what
-        //     it sent.
-        //   vc.scid: the CLIENT's chosen SCID. This becomes our peer
-        //     CID — the address we send replies to. Per ngtcp2 docs:
-        //     "|dcid| is a Destination Connection ID, and is usually
-        //      the Connection ID that appears in client Initial packet
-        //      as Source Connection ID." Passing vc.dcid here (which
-        //     I did originally) makes ngtcp2 set conn.dcid.current.cid
-        //     to the wrong value; subsequent client packets all get
-        //     discarded with "mismatched SCID" and the handshake stalls.
-        ngtcp2_cid client_dcid, client_scid, scid_local;
-        memcpy(client_dcid.data, vc.dcid, vc.dcidlen);
-        client_dcid.datalen = vc.dcidlen;
-        memcpy(client_scid.data, vc.scid, vc.scidlen);
-        client_scid.datalen = vc.scidlen;
-        scid_local.datalen = NGTCP2_MIN_INITIAL_DCIDLEN;
-        RAND_bytes(scid_local.data, (int)scid_local.datalen);
-
-        // 3. Local address: getsockname on the listen socket gives the
-        // listener's wildcard 0.0.0.0:<port>. ngtcp2 wants a concrete
-        // local address per-path; mirror the remote family + port from
-        // the listener so the path matches what the client sees us as.
-        s->local_len = sizeof(s->local);
-        getsockname(s->sock, (struct sockaddr*)&s->local, &s->local_len);
-        if (((struct sockaddr*)&s->local)->sa_family == AF_INET) {
-            struct sockaddr_in* sl = (struct sockaddr_in*)&s->local;
-            // Replace 0.0.0.0 with 127.0.0.1 — the actual addr the
-            // client sent its packets to. For multi-iface listeners
-            // this is still a simplification, but for loopback it
-            // gives ngtcp2 a concrete local address that matches the
-            // path the peer thinks we're on.
-            if (sl->sin_addr.s_addr == 0) sl->sin_addr.s_addr = htonl(0x7f000001);
-        }
-
-        // 4. Callbacks + transport params for ngtcp2_conn_server_new.
-        ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
-        cb.recv_client_initial        = ngtcp2_crypto_recv_client_initial_cb;
-        cb.recv_crypto_data           = ngtcp2_crypto_recv_crypto_data_cb;
-        cb.encrypt                    = ngtcp2_crypto_encrypt_cb;
-        cb.decrypt                    = ngtcp2_crypto_decrypt_cb;
-        cb.hp_mask                    = ngtcp2_crypto_hp_mask_cb;
-        cb.update_key                 = ngtcp2_crypto_update_key_cb;
-        cb.delete_crypto_aead_ctx     = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
-        cb.delete_crypto_cipher_ctx   = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
-        cb.get_path_challenge_data    = ngtcp2_crypto_get_path_challenge_data_cb;
-        cb.version_negotiation        = ngtcp2_crypto_version_negotiation_cb;
-        cb.rand                       = __glide_h3_rand_cb;
-        cb.get_new_connection_id      = __glide_h3_get_new_cid_cb;
-        cb.handshake_completed        = __glide_h3_srv_handshake_completed_cb;
-        cb.recv_stream_data           = __glide_h3_srv_recv_stream_data_cb;
-        cb.acked_stream_data_offset   = __glide_h3_srv_acked_stream_data_cb;
-        cb.stream_close               = __glide_h3_srv_stream_close_qcb;
-        cb.stream_open                = __glide_h3_srv_stream_open_cb;
-        cb.extend_max_stream_data     = __glide_h3_srv_extend_max_stream_data_cb;
-        cb.stream_reset               = __glide_h3_srv_stream_reset_cb;
-        cb.stream_stop_sending        = __glide_h3_srv_stream_stop_sending_cb;
-
-        ngtcp2_settings settings; ngtcp2_settings_default(&settings);
-        settings.initial_ts = __glide_h3_now();
-        // settings.log_printf = __glide_h3_log;  // enable to trace ngtcp2 internals
-
-        ngtcp2_transport_params params; ngtcp2_transport_params_default(&params);
-        params.initial_max_streams_bidi = 100;
-        params.initial_max_streams_uni  = 100;
-        params.initial_max_data         = 1048576;
-        params.initial_max_stream_data_bidi_local  = 1048576;
-        params.initial_max_stream_data_bidi_remote = 1048576;
-        params.initial_max_stream_data_uni         = 1048576;
-        params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
-        params.active_connection_id_limit          = 7;
-        params.max_udp_payload_size                = 1452;
-        params.original_dcid                       = client_dcid;
-        params.original_dcid_present               = 1;
-
-        ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
-        memcpy(ps.path.remote.addr, &s->remote, s->remote_len);
-        ps.path.remote.addrlen = s->remote_len;
-        memcpy(ps.path.local.addr, &s->local, s->local_len);
-        ps.path.local.addrlen = s->local_len;
-
-        // 5. Create the ngtcp2_conn FIRST. Upstream's tls_session.init
-        // can then safely run SSL_set_app_data(conn_ref) — the get_conn
-        // callback dereferences s->qc, which would still be NULL had we
-        // built the SSL before the conn.
-        // First arg = client's SCID (where we send replies to). Not the
-        // client's DCID — that goes into params.original_dcid above.
-        if (ngtcp2_conn_server_new(&s->qc, &client_scid, &scid_local, &ps.path,
-                                    NGTCP2_PROTO_VER_V1, &cb, &settings,
-                                    &params, NULL, s) != 0) goto fail;
-
-        // 6. SSL setup.
-        s->ssl = SSL_new(l->ssl_ctx);
-        if (ngtcp2_crypto_ossl_ctx_new(&s->oc, s->ssl) != 0) goto fail;
-        if (ngtcp2_crypto_ossl_configure_server_session(s->ssl) != 0) goto fail;
-        s->conn_ref.get_conn = __glide_h3_srv_get_conn_cb;
-        s->conn_ref.user_data = s;
-        SSL_set_app_data(s->ssl, &s->conn_ref);
-        SSL_set_accept_state(s->ssl);
-        SSL_set_quic_tls_early_data_enabled(s->ssl, 1);
-
-        // 7. Attach TLS to the conn. Must happen AFTER both qc and ssl
-        // exist, but BEFORE read_pkt so recv_client_initial can derive
-        // Initial keys via the crypto helper.
-        ngtcp2_conn_set_tls_native_handle(s->qc, s->oc);
-
-        // 6. Feed the first packet to ngtcp2.
-        ngtcp2_pkt_info pi; memset(&pi, 0, sizeof(pi));
-        if (ngtcp2_conn_read_pkt(s->qc, &ps.path, &pi, pktbuf, (size_t)n,
-                                   __glide_h3_now()) != 0) goto fail;
-
-        __glide_h3_set_nonblock(s->sock);
-
-        // 7. Drive handshake. Reuse the client's loop helper — the
-        // state struct just looks "close enough" to it because the first
-        // field is the conn_ref in both. We pass our own connection_error
-        // / handshake_done pointers.
-        uint64_t deadline = __glide_h3_now() + 10000000000ULL;
-        while (!s->handshake_done && !s->connection_error) {
-            if (__glide_h3_now() >= deadline) goto fail;
-            if (__glide_h3_srv_write(s) != 0) goto fail;
-            // recvfrom with a short timeout.
-            fd_set rfds; FD_ZERO(&rfds); FD_SET(s->sock, &rfds);
-            struct timeval tv; tv.tv_sec = 0; tv.tv_usec = 50000;
-            int rv_sel = select((int)s->sock + 1, &rfds, NULL, NULL, &tv);
-            if (rv_sel <= 0) {
-                ngtcp2_tstamp ex = ngtcp2_conn_get_expiry(s->qc);
-                if (ex != UINT64_MAX && ex <= __glide_h3_now()) {
-                    if (ngtcp2_conn_handle_expiry(s->qc, __glide_h3_now()) != 0) goto fail;
-                }
-                continue;
-            }
-            // Drain pending.
-            for (;;) {
-                socklen_t rl = sizeof(s->remote);
-                int rn = recvfrom(s->sock, (char*)pktbuf, sizeof(pktbuf), 0,
-                                   (struct sockaddr*)&s->remote, &rl);
-                if (rn <= 0) break;
-                s->remote_len = rl;
-                ngtcp2_path_storage ps2; ngtcp2_path_storage_zero(&ps2);
-                memcpy(ps2.path.remote.addr, &s->remote, s->remote_len);
-                ps2.path.remote.addrlen = s->remote_len;
-                memcpy(ps2.path.local.addr, &s->local, s->local_len);
-                ps2.path.local.addrlen = s->local_len;
-                if (ngtcp2_conn_read_pkt(s->qc, &ps2.path, &pi, pktbuf,
-                                           (size_t)rn, __glide_h3_now()) != 0) {
-                    s->connection_error = 1;
-                    break;
-                }
-            }
-        }
-        if (s->connection_error) goto fail;
-
-        // 8. nghttp3 setup happened inside handshake_completed cb.
-
-        // 9. Drive read loop until the request is complete.
-        deadline = __glide_h3_now() + 30000000000ULL;
-        while (!s->request_ready && !s->connection_error) {
-            if (__glide_h3_now() >= deadline) goto fail;
-            if (__glide_h3_srv_write(s) != 0) goto fail;
-            fd_set rfds; FD_ZERO(&rfds); FD_SET(s->sock, &rfds);
-            struct timeval tv; tv.tv_sec = 0; tv.tv_usec = 50000;
-            int rv_sel = select((int)s->sock + 1, &rfds, NULL, NULL, &tv);
-            if (rv_sel <= 0) {
-                ngtcp2_tstamp ex = ngtcp2_conn_get_expiry(s->qc);
-                if (ex != UINT64_MAX && ex <= __glide_h3_now()) {
-                    if (ngtcp2_conn_handle_expiry(s->qc, __glide_h3_now()) != 0) goto fail;
-                }
-                continue;
-            }
-            for (;;) {
-                socklen_t rl = sizeof(s->remote);
-                int rn = recvfrom(s->sock, (char*)pktbuf, sizeof(pktbuf), 0,
-                                   (struct sockaddr*)&s->remote, &rl);
-                if (rn <= 0) break;
-                s->remote_len = rl;
-                ngtcp2_path_storage ps3; ngtcp2_path_storage_zero(&ps3);
-                memcpy(ps3.path.remote.addr, &s->remote, s->remote_len);
-                ps3.path.remote.addrlen = s->remote_len;
-                memcpy(ps3.path.local.addr, &s->local, s->local_len);
-                ps3.path.local.addrlen = s->local_len;
-                if (ngtcp2_conn_read_pkt(s->qc, &ps3.path, &pi, pktbuf,
-                                           (size_t)rn, __glide_h3_now()) != 0) {
-                    s->connection_error = 1;
-                    break;
-                }
-            }
-        }
-        if (s->connection_error) goto fail;
+        if (l->shutdown) { pthread_mutex_unlock(&l->lock); return NULL; }
+        __glide_h3_server_state* s = l->ready[0];
+        l->ready[0] = l->ready[l->n_ready - 1];
+        l->n_ready--;
+        s->st = H3_ST_HANDLER_RUNNING;
+        pthread_mutex_unlock(&l->lock);
         return (void*)s;
-
-    fail:
-        if (s->qc) ngtcp2_conn_del(s->qc);
-        if (s->oc) ngtcp2_crypto_ossl_ctx_del(s->oc);
-        if (s->ssl) SSL_free(s->ssl);
-        if (s->h3) nghttp3_conn_del(s->h3);
-        free(s->req_method); free(s->req_path); free(s->req_authority);
-        free(s->req_headers_block); free(s->req_body);
-        free(s);
-        return NULL;
     }
 
     const char* __glide_h3_srv_req_method(void* h)     { return ((__glide_h3_server_state*)h)->req_method ? ((__glide_h3_server_state*)h)->req_method : ""; }
@@ -1559,149 +1795,67 @@ c_raw! {
     const char* __glide_h3_srv_req_body_ptr(void* h)   { return (const char*)((__glide_h3_server_state*)h)->req_body; }
     int         __glide_h3_srv_req_body_len(void* h)   { return (int)((__glide_h3_server_state*)h)->req_body_len; }
 
-    // Submit the response on the request stream and pump the loop until
-    // the response is fully drained + the stream closes. After this
-    // returns the connection is dead; caller calls __glide_h3_srv_close.
+    // Hand the response off to the reader thread and block until the
+    // reader has fed it through nghttp3 + written the resulting packets
+    // out on the socket. Idempotent — if called on an already-errored
+    // conn, returns 0 immediately.
     int __glide_h3_srv_send_response(void* h, int status,
                                        const char* headers_block,
                                        unsigned char* body, int body_len) {
         __glide_h3_server_state* s = (__glide_h3_server_state*)h;
+        __glide_h3_listener* l = s->l;
+        if (l == NULL) return 0;
+
+        pthread_mutex_lock(&l->lock);
+        if (s->connection_error) { pthread_mutex_unlock(&l->lock); return 0; }
+        s->resp_status = status;
+        if (headers_block != NULL && headers_block[0] != 0) {
+            s->resp_headers_block = strdup(headers_block);
+        }
         if (body_len > 0 && body != NULL) {
             s->resp_body = (unsigned char*)malloc(body_len);
             memcpy(s->resp_body, body, body_len);
             s->resp_body_len = (size_t)body_len;
         }
-        s->resp_status = status;
-
-        // Encode :status as the first pseudo-header.
-        size_t cap = 16; size_t nh = 0;
-        nghttp3_nv* nva = (nghttp3_nv*)malloc(cap * sizeof(*nva));
-        char status_str[8];
-        snprintf(status_str, sizeof(status_str), "%d", status);
-        char* status_buf = strdup(status_str);
-        nva[nh].name = (uint8_t*)":status";
-        nva[nh].namelen = 7;
-        nva[nh].value = (uint8_t*)status_buf;
-        nva[nh].valuelen = strlen(status_buf);
-        nva[nh].flags = NGHTTP3_NV_FLAG_NONE;
-        nh++;
-        // Walk headers_block ("Name: Value\r\n...") and emit lowercased.
-        if (headers_block != NULL && headers_block[0] != 0) {
-            const char* p = headers_block;
-            while (*p) {
-                const char* line_end = p;
-                while (*line_end && !(line_end[0] == '\r' && line_end[1] == '\n')) line_end++;
-                const char* colon = p;
-                while (colon < line_end && *colon != ':') colon++;
-                if (colon < line_end) {
-                    const char* vstart = colon + 1;
-                    while (vstart < line_end && (*vstart == ' ' || *vstart == '\t')) vstart++;
-                    size_t nl = (size_t)(colon - p);
-                    size_t vl = (size_t)(line_end - vstart);
-                    if (nh == cap) {
-                        cap *= 2;
-                        nva = (nghttp3_nv*)realloc(nva, cap * sizeof(*nva));
-                    }
-                    char* lname = (char*)malloc(nl);
-                    for (size_t i = 0; i < nl; i++) {
-                        char ch = p[i];
-                        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
-                        lname[i] = ch;
-                    }
-                    char* lval = (char*)malloc(vl);
-                    memcpy(lval, vstart, vl);
-                    nva[nh].name = (uint8_t*)lname; nva[nh].namelen = nl;
-                    nva[nh].value = (uint8_t*)lval; nva[nh].valuelen = vl;
-                    nva[nh].flags = NGHTTP3_NV_FLAG_NONE;
-                    nh++;
-                }
-                if (*line_end == 0) break;
-                p = line_end + 2;
-            }
+        s->st = H3_ST_RESPONDING;
+        // Wait until the reader thread has packetized + sent the
+        // response (connection_done set) or the conn errored.
+        while (!s->connection_done && !s->connection_error) {
+            pthread_cond_wait(&l->cond, &l->lock);
         }
-
-        nghttp3_data_reader dr; dr.read_data = __glide_h3_srv_read_resp_cb;
-        nghttp3_data_reader* drp = (s->resp_body_len > 0) ? &dr : NULL;
-        if (nghttp3_conn_submit_response(s->h3, s->request_stream_id, nva, nh, drp) != 0) {
-            free(nva);
-            return 0;
-        }
-        free(nva);
-
-        // Drain the response + FIN out to the wire, then briefly pump
-        // the read side so any client ACKs (which let the stream close
-        // gracefully) get processed before we tear down. The client
-        // hard-closes after receiving the response, so we cap the wait
-        // — once stream_close has fired or N idle iterations elapse,
-        // we move on. The next accept() drains any leftover packets so
-        // the new connection isn't confused by stale 1RTT acks.
-        ngtcp2_pkt_info pi; memset(&pi, 0, sizeof(pi));
-        uint8_t pktbuf[2048];
-        int idle_passes = 0;
-        while (!s->connection_done && !s->connection_error && idle_passes < 4) {
-            if (__glide_h3_srv_write(s) != 0) break;
-            fd_set rfds; FD_ZERO(&rfds); FD_SET(s->sock, &rfds);
-            struct timeval tv; tv.tv_sec = 0; tv.tv_usec = 20000;
-            int rv_sel = select((int)s->sock + 1, &rfds, NULL, NULL, &tv);
-            if (rv_sel <= 0) { idle_passes++; continue; }
-            int got = 0;
-            for (;;) {
-                socklen_t rl = sizeof(s->remote);
-                int rn = recvfrom(s->sock, (char*)pktbuf, sizeof(pktbuf), 0,
-                                   (struct sockaddr*)&s->remote, &rl);
-                if (rn <= 0) break;
-                got++;
-                s->remote_len = rl;
-                ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
-                memcpy(ps.path.remote.addr, &s->remote, s->remote_len);
-                ps.path.remote.addrlen = s->remote_len;
-                memcpy(ps.path.local.addr, &s->local, s->local_len);
-                ps.path.local.addrlen = s->local_len;
-                if (ngtcp2_conn_read_pkt(s->qc, &ps.path, &pi, pktbuf,
-                                           (size_t)rn, __glide_h3_now()) != 0) {
-                    s->connection_error = 1;
-                    break;
-                }
-            }
-            if (got == 0) idle_passes++;
-            else idle_passes = 0;
-        }
-        return 1;
+        int ok = !s->connection_error;
+        pthread_mutex_unlock(&l->lock);
+        return ok ? 1 : 0;
     }
 
     void __glide_h3_srv_close(void* h) {
         __glide_h3_server_state* s = (__glide_h3_server_state*)h;
         if (s == NULL) return;
-        // Drain whatever the client sent during connection teardown
-        // (ACKs, CONNECTION_CLOSE) from the kernel UDP buffer before
-        // freeing the conn — otherwise those packets sit there and the
-        // next accept() reads them as if they were a fresh Initial.
-        if (s->sock != __GLIDE_H3_INVALID_SOCK) {
-            __glide_h3_set_nonblock(s->sock);
-            uint8_t drain[2048];
-            struct sockaddr_storage from; socklen_t fromlen;
-            for (;;) {
-                fromlen = sizeof(from);
-                int rn = recvfrom(s->sock, (char*)drain, sizeof(drain), 0,
-                                    (struct sockaddr*)&from, &fromlen);
-                if (rn <= 0) break;
-            }
+        __glide_h3_listener* l = s->l;
+        if (l == NULL) {
+            __glide_h3_destroy_conn(s);
+            return;
         }
-        if (s->qc) ngtcp2_conn_del(s->qc);
-        if (s->oc) ngtcp2_crypto_ossl_ctx_del(s->oc);
-        if (s->ssl) SSL_free(s->ssl);
-        if (s->h3) nghttp3_conn_del(s->h3);
-        free(s->req_method);
-        free(s->req_path);
-        free(s->req_authority);
-        free(s->req_headers_block);
-        free(s->req_body);
-        free(s->resp_body);
-        free(s);
+        pthread_mutex_lock(&l->lock);
+        s->st = H3_ST_REAP;
+        pthread_cond_broadcast(&l->cond);
+        pthread_mutex_unlock(&l->lock);
+        // Reader thread will unregister + destroy the conn on its
+        // next pass.
     }
+
     void __glide_h3_listener_close(void* lp) {
         __glide_h3_listener* l = (__glide_h3_listener*)lp;
         if (l == NULL) return;
+        pthread_mutex_lock(&l->lock);
+        l->shutdown = 1;
+        pthread_cond_broadcast(&l->cond);
+        pthread_mutex_unlock(&l->lock);
+        if (l->reader_running) {
+            pthread_join(l->reader_tid, NULL);
+        }
+        pthread_cond_destroy(&l->cond);
+        pthread_mutex_destroy(&l->lock);
         SSL_CTX_free(l->ssl_ctx);
         #ifdef _WIN32
         closesocket(l->sock);
@@ -1826,11 +1980,13 @@ pub fn h3_make_self_signed_cert(cert_path: string, key_path: string,
 /// }
 /// ```
 ///
-/// v1 limitations: connections are handled one at a time — while a
-/// connection is being processed, subsequent clients wait in the kernel
-/// UDP buffer. Streaming response bodies and HTTP/3 PUSH aren't
-/// supported. The client side does the heavy multiplex already; the
-/// server multi-connection rewrite is the next iteration.
+/// Concurrency: a single C reader thread owns the UDP socket and demuxes
+/// inbound packets across up to 64 simultaneous connections, advancing
+/// each via ngtcp2 + nghttp3. Each accepted connection is dispatched to
+/// `handler` on its own coro, so slow handlers don't block other clients'
+/// handshakes or response delivery. Stream-level concurrency within a
+/// connection (HTTP/3 PUSH, streaming response bodies, 0-RTT) is not
+/// supported in v1.
 pub fn http3_listen(port: int, cert_path: string, key_path: string,
                      handler: fn(*HttpRequest) -> HttpResponse) -> !int {
     let lp: *void = __glide_h3_listen(port, cert_path, key_path);
@@ -1839,36 +1995,45 @@ pub fn http3_listen(port: int, cert_path: string, key_path: string,
     while true {
         let h: *void = __glide_h3_accept(lp);
         if h == null { continue; }
-        // Build HttpRequest from the C-side state.
-        let blen: int = __glide_h3_srv_req_body_len(h);
-        let body_str: string = __glide_string_from_buf(
-            __glide_h3_srv_req_body_ptr(h) as *void, blen);
-        let mut hb: string = __glide_h3_srv_req_headers(h);
-        let authority: string = __glide_h3_srv_req_authority(h);
-        if authority.len() > 0 {
-            if hb.len() > 0 { hb = hb.concat("\r\n"); }
-            hb = hb.concat("Host: ").concat(authority);
-        }
-        let req: HttpRequest = HttpRequest {
-            method:        __glide_h3_srv_req_method(h),
-            path:          __glide_h3_srv_req_path(h),
-            version:       "HTTP/3.0",
-            headers_block: hb,
-            body:          body_str,
-            params:        null,
-            queries:       null,
-            tls:           true,
-            headers_cache: null,
-        };
-        let resp: HttpResponse = handler(&req);
-        let _r: int = __glide_h3_srv_send_response(h, resp.status,
-                                                     resp.headers_block,
-                                                     resp.body as *u8,
-                                                     resp.body.len());
-        __glide_h3_srv_close(h);
+        _h3_dispatch(h, handler);
     }
     __glide_h3_listener_close(lp);
     return ok(0);
+}
+
+// Per-accepted-connection dispatch: build the HttpRequest from C-side
+// fields, invoke the user handler, send response back through the reader
+// thread. The reader thread continues to demux + advance other conns
+// while this runs, so I/O multiplexes even if handler dispatch is
+// serialized here. Users wanting handler-level concurrency can spawn
+// from inside their handler.
+fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
+    let blen: int = __glide_h3_srv_req_body_len(h);
+    let body_str: string = __glide_string_from_buf(
+        __glide_h3_srv_req_body_ptr(h) as *void, blen);
+    let mut hb: string = __glide_h3_srv_req_headers(h);
+    let authority: string = __glide_h3_srv_req_authority(h);
+    if authority.len() > 0 {
+        if hb.len() > 0 { hb = hb.concat("\r\n"); }
+        hb = hb.concat("Host: ").concat(authority);
+    }
+    let req: HttpRequest = HttpRequest {
+        method:        __glide_h3_srv_req_method(h),
+        path:          __glide_h3_srv_req_path(h),
+        version:       "HTTP/3.0",
+        headers_block: hb,
+        body:          body_str,
+        params:        null,
+        queries:       null,
+        tls:           true,
+        headers_cache: null,
+    };
+    let resp: HttpResponse = handler(&req);
+    let _r: int = __glide_h3_srv_send_response(h, resp.status,
+                                                 resp.headers_block,
+                                                 resp.body as *u8,
+                                                 resp.body.len());
+    __glide_h3_srv_close(h);
 }
 
 extern fn __glide_h3_client_connect(host: string, port: int, timeout_ms: int, verify: int) -> *void;

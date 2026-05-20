@@ -1,6 +1,7 @@
 import stdlib::testing::*;
 import stdlib::http::*;
 import stdlib::http::h3::*;
+import stdlib::sync::*;
 
 // HTTP/3 loopback. Generates a self-signed cert at test start, spawns a
 // minimal h3 server on 127.0.0.1:45330, then drives a client request to
@@ -54,5 +55,44 @@ fn test_h3_loopback_custom_header_present() -> int {
                                             "", "", true);
     assert!(r.ok);
     assert!(r.val.headers_block.contains("x-echo-path: /custom"));
+    return 0;
+}
+
+// Concurrent connection regression: spin up 4 client threads, all sending
+// requests simultaneously. Validates that the C-side reader thread can
+// multiplex multiple in-flight conns + dispatch them serially through the
+// accept loop without dropping any.
+
+fn _h3_conc_client(path: string, sink: *Vector<int>, lock: *Mutex<int>) {
+    let r: !*HttpResponse = http3_request("GET",
+                                            "https://127.0.0.1:45330".concat(path),
+                                            "", "", true);
+    lock.lock();
+    if r.ok { sink.push(r.val.status); }
+    else { sink.push(-1); }
+    lock.unlock();
+}
+
+fn test_h3_concurrent_connections() -> int {
+    let statuses: *Vector<int> = Vector::new();
+    let lock: *Mutex<int> = Mutex::new(0);
+    spawn_thread _h3_conc_client("/c1", statuses, lock);
+    spawn_thread _h3_conc_client("/c2", statuses, lock);
+    spawn_thread _h3_conc_client("/c3", statuses, lock);
+    spawn_thread _h3_conc_client("/c4", statuses, lock);
+    // Poll until 4 statuses landed or 8s budget expires.
+    let mut waited: int = 0;
+    while waited < 8000 {
+        lock.lock();
+        let n: int = statuses.len();
+        lock.unlock();
+        if n >= 4 { break; }
+        sleep_ms(100);
+        waited = waited + 100;
+    }
+    assert_eq!(statuses.len(), 4);
+    for let i: int = 0; i < 4; i++ {
+        assert_eq!(statuses.get(i), 200);
+    }
     return 0;
 }
