@@ -45,6 +45,11 @@ c_raw! {
     #include <openssl/rand.h>
     #include <openssl/err.h>
     #include <openssl/quic.h>
+    #include <openssl/pem.h>
+    #include <openssl/x509v3.h>
+    #include <openssl/evp.h>
+    #include <openssl/ec.h>
+    #include <openssl/obj_mac.h>
     #include <string.h>
     #include <stdio.h>
     #include <stdlib.h>
@@ -449,6 +454,15 @@ c_raw! {
     #else
         int fl = fcntl(s, F_GETFL, 0);
         fcntl(s, F_SETFL, fl | O_NONBLOCK);
+    #endif
+    }
+
+    static void __glide_h3_set_blocking(__glide_h3_sock_t s) {
+    #ifdef _WIN32
+        u_long m = 0; ioctlsocket(s, FIONBIO, &m);
+    #else
+        int fl = fcntl(s, F_GETFL, 0);
+        fcntl(s, F_SETFL, fl & ~O_NONBLOCK);
     #endif
     }
 
@@ -1310,19 +1324,29 @@ c_raw! {
         s->sock = l->sock;
         s->request_stream_id = -1;
 
-        // 1. Block on first packet to get peer address.
+        // 1. Block on the first INITIAL packet of a new connection. The
+        // socket may have been left non-blocking by a previous accept
+        // (set during the handshake loop), so reset it. Then loop until
+        // we get a long-header Initial — leftover short-header / 1RTT
+        // packets from the prior connection that the client sent after
+        // its FIN may still be queued in the UDP recv buffer.
+        __glide_h3_set_blocking(s->sock);
         uint8_t pktbuf[2048];
-        s->remote_len = sizeof(s->remote);
-        int n = recvfrom(s->sock, (char*)pktbuf, sizeof(pktbuf), 0,
-                          (struct sockaddr*)&s->remote, &s->remote_len);
-        if (n <= 0) { free(s); return NULL; }
-
-        // 2. Parse header to extract SCID/DCID for the response side.
         ngtcp2_version_cid vc;
-        if (ngtcp2_pkt_decode_version_cid(&vc, pktbuf, (size_t)n,
-                                            NGTCP2_MAX_CIDLEN) != 0) {
-            free(s);
-            return NULL;
+        int n;
+        for (;;) {
+            s->remote_len = sizeof(s->remote);
+            n = recvfrom(s->sock, (char*)pktbuf, sizeof(pktbuf), 0,
+                          (struct sockaddr*)&s->remote, &s->remote_len);
+            if (n <= 0) { free(s); return NULL; }
+            // Reject obvious non-Initials: short header (bit 0x80 clear)
+            // or long-header packets that aren't Initial (type bits 4-5
+            // of byte 0 must be 0 for Initial in QUIC v1).
+            if ((pktbuf[0] & 0x80) == 0) continue;
+            if (((pktbuf[0] & 0x30) >> 4) != 0) continue;
+            if (ngtcp2_pkt_decode_version_cid(&vc, pktbuf, (size_t)n,
+                                                NGTCP2_MAX_CIDLEN) != 0) continue;
+            break;
         }
         // Parse CIDs from the client's first packet:
         //   vc.dcid: the DCID the client invented for its first packet.
@@ -1603,32 +1627,30 @@ c_raw! {
             return 0;
         }
         free(nva);
-        // No EOF flag needed; the data_reader signals EOF inline. When
-        // submit_response was called with drp=NULL (no body), nghttp3
-        // marks the stream as outbound-FIN itself.
 
-        // Drive write/read loop until the stream + connection close.
+        // Drain the response + FIN out to the wire, then briefly pump
+        // the read side so any client ACKs (which let the stream close
+        // gracefully) get processed before we tear down. The client
+        // hard-closes after receiving the response, so we cap the wait
+        // — once stream_close has fired or N idle iterations elapse,
+        // we move on. The next accept() drains any leftover packets so
+        // the new connection isn't confused by stale 1RTT acks.
         ngtcp2_pkt_info pi; memset(&pi, 0, sizeof(pi));
-        uint64_t deadline = __glide_h3_now() + 30000000000ULL;
         uint8_t pktbuf[2048];
-        while (!s->connection_done && !s->connection_error) {
-            if (__glide_h3_now() >= deadline) break;
+        int idle_passes = 0;
+        while (!s->connection_done && !s->connection_error && idle_passes < 4) {
             if (__glide_h3_srv_write(s) != 0) break;
             fd_set rfds; FD_ZERO(&rfds); FD_SET(s->sock, &rfds);
-            struct timeval tv; tv.tv_sec = 0; tv.tv_usec = 50000;
+            struct timeval tv; tv.tv_sec = 0; tv.tv_usec = 20000;
             int rv_sel = select((int)s->sock + 1, &rfds, NULL, NULL, &tv);
-            if (rv_sel <= 0) {
-                ngtcp2_tstamp ex = ngtcp2_conn_get_expiry(s->qc);
-                if (ex != UINT64_MAX && ex <= __glide_h3_now()) {
-                    if (ngtcp2_conn_handle_expiry(s->qc, __glide_h3_now()) != 0) break;
-                }
-                continue;
-            }
+            if (rv_sel <= 0) { idle_passes++; continue; }
+            int got = 0;
             for (;;) {
                 socklen_t rl = sizeof(s->remote);
                 int rn = recvfrom(s->sock, (char*)pktbuf, sizeof(pktbuf), 0,
                                    (struct sockaddr*)&s->remote, &rl);
                 if (rn <= 0) break;
+                got++;
                 s->remote_len = rl;
                 ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
                 memcpy(ps.path.remote.addr, &s->remote, s->remote_len);
@@ -1641,6 +1663,8 @@ c_raw! {
                     break;
                 }
             }
+            if (got == 0) idle_passes++;
+            else idle_passes = 0;
         }
         return 1;
     }
@@ -1648,6 +1672,21 @@ c_raw! {
     void __glide_h3_srv_close(void* h) {
         __glide_h3_server_state* s = (__glide_h3_server_state*)h;
         if (s == NULL) return;
+        // Drain whatever the client sent during connection teardown
+        // (ACKs, CONNECTION_CLOSE) from the kernel UDP buffer before
+        // freeing the conn — otherwise those packets sit there and the
+        // next accept() reads them as if they were a fresh Initial.
+        if (s->sock != __GLIDE_H3_INVALID_SOCK) {
+            __glide_h3_set_nonblock(s->sock);
+            uint8_t drain[2048];
+            struct sockaddr_storage from; socklen_t fromlen;
+            for (;;) {
+                fromlen = sizeof(from);
+                int rn = recvfrom(s->sock, (char*)drain, sizeof(drain), 0,
+                                    (struct sockaddr*)&from, &fromlen);
+                if (rn <= 0) break;
+            }
+        }
         if (s->qc) ngtcp2_conn_del(s->qc);
         if (s->oc) ngtcp2_crypto_ossl_ctx_del(s->oc);
         if (s->ssl) SSL_free(s->ssl);
@@ -1671,6 +1710,69 @@ c_raw! {
         #endif
         free(l);
     }
+
+    // Generates an ECDSA-P256 self-signed X509 cert + key and writes them
+    // to the given PEM file paths. SAN extension covers DNS:localhost and
+    // IP:127.0.0.1 so the cert is usable for loopback dev servers.
+    // Returns 0 on success, -1 on any OpenSSL failure.
+    int __glide_h3_make_self_signed(const char* cert_path, const char* key_path,
+                                      const char* cn, int days) {
+        EVP_PKEY* pkey = NULL;
+        EVP_PKEY_CTX* pctx = NULL;
+        X509* x = NULL;
+        BIO* bio_cert = NULL;
+        BIO* bio_key = NULL;
+        int rc = -1;
+
+        pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
+        if (pctx == NULL) goto out;
+        if (EVP_PKEY_keygen_init(pctx) <= 0) goto out;
+        if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(pctx, NID_X9_62_prime256v1) <= 0) goto out;
+        if (EVP_PKEY_keygen(pctx, &pkey) <= 0) goto out;
+
+        x = X509_new();
+        if (x == NULL) goto out;
+        X509_set_version(x, 2);
+        ASN1_INTEGER_set(X509_get_serialNumber(x), 1);
+        X509_gmtime_adj(X509_get_notBefore(x), 0);
+        X509_gmtime_adj(X509_get_notAfter(x), (long)days * 24L * 3600L);
+        X509_set_pubkey(x, pkey);
+
+        X509_NAME* name = X509_get_subject_name(x);
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                    (const unsigned char*)cn, -1, -1, 0);
+        X509_set_issuer_name(x, name);
+
+        X509V3_CTX v3ctx;
+        X509V3_set_ctx_nodb(&v3ctx);
+        X509V3_set_ctx(&v3ctx, x, x, NULL, NULL, 0);
+        X509_EXTENSION* ext = X509V3_EXT_conf_nid(NULL, &v3ctx,
+                                                    NID_subject_alt_name,
+                                                    "DNS:localhost,IP:127.0.0.1");
+        if (ext) {
+            X509_add_ext(x, ext, -1);
+            X509_EXTENSION_free(ext);
+        }
+
+        if (X509_sign(x, pkey, EVP_sha256()) == 0) goto out;
+
+        bio_cert = BIO_new_file(cert_path, "w");
+        if (bio_cert == NULL) goto out;
+        if (PEM_write_bio_X509(bio_cert, x) == 0) goto out;
+
+        bio_key = BIO_new_file(key_path, "w");
+        if (bio_key == NULL) goto out;
+        if (PEM_write_bio_PrivateKey(bio_key, pkey, NULL, NULL, 0, NULL, NULL) == 0) goto out;
+
+        rc = 0;
+    out:
+        if (bio_cert) BIO_free(bio_cert);
+        if (bio_key) BIO_free(bio_key);
+        if (x) X509_free(x);
+        if (pkey) EVP_PKEY_free(pkey);
+        if (pctx) EVP_PKEY_CTX_free(pctx);
+        return rc;
+    }
 }
 
 extern fn __glide_h3_listen(port: int, cert_path: string, key_path: string) -> *void;
@@ -1685,6 +1787,26 @@ extern fn __glide_h3_srv_send_response(h: *void, status: int, headers_block: str
                                         body: *u8, body_len: int) -> int;
 extern fn __glide_h3_srv_close(h: *void);
 extern fn __glide_h3_listener_close(lp: *void);
+extern fn __glide_h3_make_self_signed(cert_path: string, key_path: string,
+                                        cn: string, days: int) -> int;
+
+/// Generates an ECDSA-P256 self-signed X.509 certificate valid for the
+/// next `days` days and writes it as PEM to `cert_path` and `key_path`.
+/// The SAN extension covers `DNS:localhost` and `IP:127.0.0.1`, so it's
+/// usable as-is for local dev servers and loopback tests.
+///
+/// ```glide
+/// let r: !int = h3_make_self_signed_cert("cert.pem", "key.pem", "localhost", 365);
+/// if !r.ok { return 1; }
+/// http3_listen(4443, "cert.pem", "key.pem", my_handler);
+/// // result: ok(0) on success
+/// ```
+pub fn h3_make_self_signed_cert(cert_path: string, key_path: string,
+                                  cn: string, days: int) -> !int {
+    let rc: int = __glide_h3_make_self_signed(cert_path, key_path, cn, days);
+    if rc != 0 { return err("h3: failed to generate self-signed cert"); }
+    return ok(0);
+}
 
 /// Run an HTTP/3 server on `port` (UDP), accepting one connection at a
 /// time. Each accepted client gets its full request dispatched to
@@ -1704,10 +1826,11 @@ extern fn __glide_h3_listener_close(lp: *void);
 /// }
 /// ```
 ///
-/// v1 limitations: one connection at a time (subsequent clients wait in
-/// the kernel UDP buffer until the current one finishes), no streaming
-/// response bodies, no PUSH. The client side does the heavy multiplex
-/// already; the server multiplex rewrite is the next iteration.
+/// v1 limitations: connections are handled one at a time — while a
+/// connection is being processed, subsequent clients wait in the kernel
+/// UDP buffer. Streaming response bodies and HTTP/3 PUSH aren't
+/// supported. The client side does the heavy multiplex already; the
+/// server multi-connection rewrite is the next iteration.
 pub fn http3_listen(port: int, cert_path: string, key_path: string,
                      handler: fn(*HttpRequest) -> HttpResponse) -> !int {
     let lp: *void = __glide_h3_listen(port, cert_path, key_path);

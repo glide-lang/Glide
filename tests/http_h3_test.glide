@@ -1,0 +1,58 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::h3::*;
+
+// HTTP/3 loopback. Generates a self-signed cert at test start, spawns a
+// minimal h3 server on 127.0.0.1:45330, then drives a client request to
+// it. Locks in the server-side handshake + nghttp3 wiring (regression
+// guard for the SCID + nghttp3-timing bugs fixed in 7a07bd1).
+
+fn _h3_handler(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok()
+        .set("X-Echo-Path", req.path)
+        .body("h3 echo: ".concat(req.path));
+}
+
+fn _h3_server_thread() {
+    let r: !int = http3_listen(45330, "h3_test_cert.pem", "h3_test_key.pem",
+                                _h3_handler);
+    if !r.ok { println!("h3 server: ${r.err}"); }
+}
+
+fn _start_h3_server() -> bool {
+    let cr: !int = h3_make_self_signed_cert("h3_test_cert.pem",
+                                              "h3_test_key.pem",
+                                              "localhost", 30);
+    if !cr.ok { return false; }
+    spawn_thread _h3_server_thread();
+    sleep_ms(500);
+    return true;
+}
+
+fn test_h3_loopback_get_returns_200() -> int {
+    if !_start_h3_server() { return 1; }
+    let r: !*HttpResponse = http3_request("GET",
+                                            "https://127.0.0.1:45330/hello",
+                                            "", "", true);
+    assert!(r.ok);
+    assert_eq!(r.val.status, 200);
+    return 0;
+}
+
+fn test_h3_loopback_body_echoes_path() -> int {
+    let r: !*HttpResponse = http3_request("GET",
+                                            "https://127.0.0.1:45330/foo/bar",
+                                            "", "", true);
+    assert!(r.ok);
+    assert_str_eq!(r.val.body, "h3 echo: /foo/bar");
+    return 0;
+}
+
+fn test_h3_loopback_custom_header_present() -> int {
+    let r: !*HttpResponse = http3_request("GET",
+                                            "https://127.0.0.1:45330/custom",
+                                            "", "", true);
+    assert!(r.ok);
+    assert!(r.val.headers_block.contains("x-echo-path: /custom"));
+    return 0;
+}
