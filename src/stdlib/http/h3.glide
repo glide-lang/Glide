@@ -106,6 +106,30 @@ c_raw! {
     #endif
     }
 
+    // ngtcp2 log printf (fmt + ...) → stderr.
+    static void __glide_h3_log(void *user_data, const char *fmt, ...) {
+        (void)user_data;
+        va_list ap;
+        va_start(ap, fmt);
+        fprintf(stderr, "[ngtcp2] ");
+        vfprintf(stderr, fmt, ap);
+        fprintf(stderr, "\n");
+        va_end(ap);
+    }
+
+    // Detect IPv4/IPv6 numeric hosts. SNI must NOT carry an IP per RFC
+    // 6066 — if it does, OpenSSL emits a degenerate ClientHello with
+    // no SNI extension and the peer's TLS reads it as truncated.
+    static int __glide_h3_is_numeric_host(const char *h) {
+        if (h == NULL || *h == 0) return 0;
+        if (strchr(h, ':') != NULL) return 1;  // colon → IPv6 literal
+        // IPv4: all bytes are digit or '.'
+        for (const char *p = h; *p; p++) {
+            if (!((*p >= '0' && *p <= '9') || *p == '.')) return 0;
+        }
+        return 1;
+    }
+
     // ---- crypto random ----------------------------------------------
     static void __glide_h3_rand_cb(uint8_t *dest, size_t destlen,
                                     const ngtcp2_rand_ctx *rand_ctx) {
@@ -568,25 +592,36 @@ c_raw! {
         if (c->sock == __GLIDE_H3_INVALID_SOCK) { free(c); return NULL; }
         __glide_h3_set_nonblock(c->sock);
 
-        // OpenSSL setup.
+        // OpenSSL setup. Order matches upstream
+        // examples/tls_client_session_ossl.cc:
+        //   SSL_new → ctx_new(&oc, ssl) → configure_client_session →
+        //   SSL_set_app_data → SSL_set_connect_state →
+        //   SSL_set_alpn_protos → SSL_set_tlsext_host_name
+        // SNI gets "localhost" rather than the IP when host is numeric,
+        // because RFC 6066 forbids IPs in the SNI extension; sending
+        // "127.0.0.1" makes OpenSSL emit a truncated ClientHello with
+        // no SNI and tiny extension set (~120 bytes total) that any
+        // QUIC server reads as incomplete and stalls handshake on.
         c->ssl_ctx = SSL_CTX_new(TLS_client_method());
         SSL_CTX_set_min_proto_version(c->ssl_ctx, TLS1_3_VERSION);
         SSL_CTX_set_max_proto_version(c->ssl_ctx, TLS1_3_VERSION);
         if (!verify) SSL_CTX_set_verify(c->ssl_ctx, SSL_VERIFY_NONE, NULL);
         else SSL_CTX_set_default_verify_paths(c->ssl_ctx);
         c->ssl = SSL_new(c->ssl_ctx);
-        SSL_set_tlsext_host_name(c->ssl, host);
-        // ALPN h3.
-        static const unsigned char alpn_h3[] = { 2, 'h', '3' };
-        SSL_set_alpn_protos(c->ssl, alpn_h3, sizeof(alpn_h3));
-        SSL_set_connect_state(c->ssl);
-        // ngtcp2_crypto recovers ngtcp2_conn* from SSL via app_data ->
-        // conn_ref.get_conn. Wire that BEFORE configure_client_session.
+        if (ngtcp2_crypto_ossl_ctx_new(&c->oc, c->ssl) != 0) goto fail;
+        if (ngtcp2_crypto_ossl_configure_client_session(c->ssl) != 0) goto fail;
         c->conn_ref.get_conn = __glide_h3_get_conn_cb;
         c->conn_ref.user_data = c;
         SSL_set_app_data(c->ssl, &c->conn_ref);
-        if (ngtcp2_crypto_ossl_configure_client_session(c->ssl) != 0) goto fail;
-        if (ngtcp2_crypto_ossl_ctx_new(&c->oc, c->ssl) != 0) goto fail;
+        SSL_set_connect_state(c->ssl);
+        static const unsigned char alpn_h3[] = { 2, 'h', '3' };
+        SSL_set_alpn_protos(c->ssl, alpn_h3, sizeof(alpn_h3));
+        // SNI: substitute "localhost" for numeric IPs per upstream.
+        if (__glide_h3_is_numeric_host(host)) {
+            SSL_set_tlsext_host_name(c->ssl, "localhost");
+        } else {
+            SSL_set_tlsext_host_name(c->ssl, host);
+        }
 
         // ngtcp2_callbacks.
         ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
@@ -620,7 +655,7 @@ c_raw! {
 
         ngtcp2_settings settings; ngtcp2_settings_default(&settings);
         settings.initial_ts = __glide_h3_now();
-        // settings.log_printf can wire to stderr if we want; off by default.
+        // settings.log_printf = __glide_h3_log;  // enable to trace ngtcp2 internals
 
         ngtcp2_transport_params params; ngtcp2_transport_params_default(&params);
         params.initial_max_streams_bidi = 100;
@@ -629,6 +664,8 @@ c_raw! {
         params.initial_max_stream_data_bidi_local  = 1048576;
         params.initial_max_stream_data_bidi_remote = 1048576;
         params.initial_max_stream_data_uni         = 1048576;
+        params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
+        params.active_connection_id_limit          = 7;
 
         ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
         memcpy(ps.path.remote.addr, &c->remote, c->remote_len);
@@ -1297,6 +1334,7 @@ c_raw! {
 
         ngtcp2_settings settings; ngtcp2_settings_default(&settings);
         settings.initial_ts = __glide_h3_now();
+        // settings.log_printf = __glide_h3_log;  // enable to trace ngtcp2 internals
 
         ngtcp2_transport_params params; ngtcp2_transport_params_default(&params);
         params.initial_max_streams_bidi = 100;
@@ -1305,6 +1343,8 @@ c_raw! {
         params.initial_max_stream_data_bidi_local  = 1048576;
         params.initial_max_stream_data_bidi_remote = 1048576;
         params.initial_max_stream_data_uni         = 1048576;
+        params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
+        params.active_connection_id_limit          = 7;
         params.original_dcid                       = dcid_orig;
         params.original_dcid_present               = 1;
 
