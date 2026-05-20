@@ -1211,6 +1211,11 @@ c_raw! {
             SSL_OP_SINGLE_ECDH_USE |
             SSL_OP_CIPHER_SERVER_PREFERENCE |
             SSL_OP_NO_ANTI_REPLAY);
+        // Pin TLS 1.3 cipher suites + groups to the QUIC-mandated set.
+        SSL_CTX_set_ciphersuites(ctx,
+            "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
+        SSL_CTX_set1_groups_list(ctx, "X25519:P-256:P-384:P-521");
+        SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
         if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0
             || SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0
             || !SSL_CTX_check_private_key(ctx)) {
@@ -1223,6 +1228,9 @@ c_raw! {
             return NULL;
         }
         SSL_CTX_set_alpn_select_cb(ctx, __glide_h3_srv_alpn_select, NULL);
+        SSL_CTX_set_default_verify_paths(ctx);
+        static const unsigned char sid_ctx[] = "glide-h3-server";
+        SSL_CTX_set_session_id_context(ctx, sid_ctx, sizeof(sid_ctx) - 1);
         __glide_h3_listener* l = (__glide_h3_listener*)malloc(sizeof(*l));
         l->sock = sock; l->ssl_ctx = ctx; l->port = port;
         return (void*)l;
@@ -1264,22 +1272,7 @@ c_raw! {
         s->local_len = sizeof(s->local);
         getsockname(s->sock, (struct sockaddr*)&s->local, &s->local_len);
 
-        // 4. SSL setup.
-        // Per upstream ngtcp2 example: create the ossl ctx FIRST (no SSL
-        // attached yet), then build SSL, then ctx_set_ssl, then
-        // configure_server_session, then SSL_set_app_data, then
-        // SSL_set_accept_state, then enable early data.
-        if (ngtcp2_crypto_ossl_ctx_new(&s->oc, NULL) != 0) goto fail;
-        s->ssl = SSL_new(l->ssl_ctx);
-        ngtcp2_crypto_ossl_ctx_set_ssl(s->oc, s->ssl);
-        if (ngtcp2_crypto_ossl_configure_server_session(s->ssl) != 0) goto fail;
-        s->conn_ref.get_conn = __glide_h3_srv_get_conn_cb;
-        s->conn_ref.user_data = s;
-        SSL_set_app_data(s->ssl, &s->conn_ref);
-        SSL_set_accept_state(s->ssl);
-        SSL_set_quic_tls_early_data_enabled(s->ssl, 1);
-
-        // 5. Callbacks. Most are server-side reuses of crypto helpers.
+        // 4. Callbacks + transport params for ngtcp2_conn_server_new.
         ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
         cb.recv_client_initial        = ngtcp2_crypto_recv_client_initial_cb;
         cb.recv_crypto_data           = ngtcp2_crypto_recv_crypto_data_cb;
@@ -1321,9 +1314,27 @@ c_raw! {
         memcpy(ps.path.local.addr, &s->local, s->local_len);
         ps.path.local.addrlen = s->local_len;
 
+        // 5. Create the ngtcp2_conn FIRST. Upstream's tls_session.init
+        // can then safely run SSL_set_app_data(conn_ref) — the get_conn
+        // callback dereferences s->qc, which would still be NULL had we
+        // built the SSL before the conn.
         if (ngtcp2_conn_server_new(&s->qc, &dcid_orig, &scid_local, &ps.path,
                                     NGTCP2_PROTO_VER_V1, &cb, &settings,
                                     &params, NULL, s) != 0) goto fail;
+
+        // 6. SSL setup.
+        s->ssl = SSL_new(l->ssl_ctx);
+        if (ngtcp2_crypto_ossl_ctx_new(&s->oc, s->ssl) != 0) goto fail;
+        if (ngtcp2_crypto_ossl_configure_server_session(s->ssl) != 0) goto fail;
+        s->conn_ref.get_conn = __glide_h3_srv_get_conn_cb;
+        s->conn_ref.user_data = s;
+        SSL_set_app_data(s->ssl, &s->conn_ref);
+        SSL_set_accept_state(s->ssl);
+        SSL_set_quic_tls_early_data_enabled(s->ssl, 1);
+
+        // 7. Attach TLS to the conn. Must happen AFTER both qc and ssl
+        // exist, but BEFORE read_pkt so recv_client_initial can derive
+        // Initial keys via the crypto helper.
         ngtcp2_conn_set_tls_native_handle(s->qc, s->oc);
 
         // 6. Feed the first packet to ngtcp2.
