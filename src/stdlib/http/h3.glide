@@ -1305,9 +1305,21 @@ c_raw! {
         scid_local.datalen = NGTCP2_MIN_INITIAL_DCIDLEN;
         RAND_bytes(scid_local.data, (int)scid_local.datalen);
 
-        // 3. Local address: getsockname on the listen socket.
+        // 3. Local address: getsockname on the listen socket gives the
+        // listener's wildcard 0.0.0.0:<port>. ngtcp2 wants a concrete
+        // local address per-path; mirror the remote family + port from
+        // the listener so the path matches what the client sees us as.
         s->local_len = sizeof(s->local);
         getsockname(s->sock, (struct sockaddr*)&s->local, &s->local_len);
+        if (((struct sockaddr*)&s->local)->sa_family == AF_INET) {
+            struct sockaddr_in* sl = (struct sockaddr_in*)&s->local;
+            // Replace 0.0.0.0 with 127.0.0.1 — the actual addr the
+            // client sent its packets to. For multi-iface listeners
+            // this is still a simplification, but for loopback it
+            // gives ngtcp2 a concrete local address that matches the
+            // path the peer thinks we're on.
+            if (sl->sin_addr.s_addr == 0) sl->sin_addr.s_addr = htonl(0x7f000001);
+        }
 
         // 4. Callbacks + transport params for ngtcp2_conn_server_new.
         ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
@@ -1345,6 +1357,7 @@ c_raw! {
         params.initial_max_stream_data_uni         = 1048576;
         params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
         params.active_connection_id_limit          = 7;
+        params.max_udp_payload_size                = 1452;
         params.original_dcid                       = dcid_orig;
         params.original_dcid_present               = 1;
 
