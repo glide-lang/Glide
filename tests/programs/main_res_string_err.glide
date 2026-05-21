@@ -1,0 +1,3 @@
+fn main() -> !string {
+    return err("bad string");
+}

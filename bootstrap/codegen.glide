@@ -4666,6 +4666,78 @@ fn infer_let_types_in_program(g: *CG, program: *Vector<Stmt>) {
     g.scope.clear();
 }
 
+// True iff `t` is the literal `void` named type, or a missing return type.
+fn _main_ret_is_void(t: *Type) -> bool {
+    if t == null { return true; }
+    if t.kind == TY_NAMED && t.name.eq("void") { return true; }
+    return false;
+}
+
+// C return type for the renamed __glide_user_main. Mirrors the user's
+// declared return — the C `main` wrapper below converts whatever shape
+// they picked into an exit code.
+fn _main_user_c_ret(t: *Type) -> string {
+    if _main_ret_is_void(t) { return "void"; }
+    if t.kind == TY_NAMED && t.name.eq("int") { return "int"; }
+    if t.kind == TY_RESULT && t.inner != null {
+        let m: string = mangle_type(t.inner);
+        return "__glide_result_".concat(m).concat("_t");
+    }
+    return type_to_c(t);
+}
+
+// User picked `fn main(argc: int, argv: **char) -> ...` — backward compat.
+fn _main_takes_argv(s: *Stmt) -> bool {
+    if s.fn_params == null { return false; }
+    if s.fn_params.len() != 2 { return false; }
+    return true;
+}
+
+// Emit the C `main(argc, argv)` wrapper that adapts the user's renamed
+// main (whatever its signature) into a process exit code. Handles
+// scheduler init/shutdown around the call.
+fn _emit_main_wrapper(s: *Stmt) {
+    let ret_ty: *Type = s.fn_ret_ty;
+    let takes_argv: bool = _main_takes_argv(s);
+    let call_args: string = "";
+    if takes_argv { call_args = "argc, argv"; }
+    println!("int main(int argc, char** argv) {");
+    println!("    __glide_args_init(argc, argv);");
+    println!("    __glide_sched_init();");
+    if _main_ret_is_void(ret_ty) {
+        println!("    __glide_user_main(".concat(call_args).concat(");"));
+        println!("    __glide_sched_shutdown();");
+        println!("    return 0;");
+    } else if ret_ty.kind == TY_NAMED && ret_ty.name.eq("int") {
+        println!("    int __glide_rc = __glide_user_main(".concat(call_args).concat(");"));
+        println!("    __glide_sched_shutdown();");
+        println!("    return __glide_rc;");
+    } else if ret_ty.kind == TY_RESULT && ret_ty.inner != null {
+        let m: string = mangle_type(ret_ty.inner);
+        let rt: string = "__glide_result_".concat(m).concat("_t");
+        println!("    ".concat(rt).concat(" __glide_rc = __glide_user_main(").concat(call_args).concat(");"));
+        println!("    __glide_sched_shutdown();");
+        println!("    if (!__glide_rc.ok) {");
+        println!("        fprintf(stderr, \"%s\\n\", __glide_rc.err ? __glide_rc.err : \"error\");");
+        println!("        return 1;");
+        println!("    }");
+        let inner: *Type = ret_ty.inner;
+        if inner != null && inner.kind == TY_NAMED && inner.name.eq("int") {
+            println!("    return __glide_rc.val;");
+        } else if inner != null && inner.kind == TY_NAMED && inner.name.eq("string") {
+            println!("    if (__glide_rc.val) { fputs(__glide_rc.val, stdout); fputc('\\n', stdout); }");
+            println!("    return 0;");
+        } else {
+            println!("    return 0;");
+        }
+    } else {
+        println!("    (void)__glide_user_main(".concat(call_args).concat(");"));
+        println!("    __glide_sched_shutdown();");
+        println!("    return 0;");
+    }
+    println!("}");
+}
+
 fn emit_fn(g: *CG, s: *Stmt) {
     let is_main: bool = s.name.eq("main");
     // Track this fn's source origin so emit_stmt's `#line` directives
@@ -4676,11 +4748,16 @@ fn emit_fn(g: *CG, s: *Stmt) {
     if s.origin != null && !s.origin.eq("") { g.current_origin = s.origin; }
     g.emit_line_dir(s.line, g.current_origin);
     if is_main {
-        // The user's main is renamed to __glide_user_main; a real C `main`
-        // wrapper at the end of this fn handles arg init, scheduler bring-up
-        // and graceful shutdown (which drains pending coroutines). Doing it
-        // inline avoids the libc-teardown ordering bug atexit had.
-        println!("int __glide_user_main(int __glide_main_argc, char** __glide_main_argv) {");
+        // User's main is renamed to __glide_user_main so the C wrapper
+        // below owns the real `main` symbol. Signature mirrors the user's
+        // declared return + params (`fn main()`, `fn main() -> !`, etc.);
+        // the wrapper adapts it into a process exit code.
+        let main_ret_c: string = _main_user_c_ret(s.fn_ret_ty);
+        let main_params: string = "void";
+        if _main_takes_argv(s) {
+            main_params = "int __glide_main_argc, char** __glide_main_argv";
+        }
+        println!(main_ret_c.concat(" __glide_user_main(").concat(main_params).concat(") {"));
     } else {
         emit_fn_signature(s);
         println!(" {");
@@ -4728,12 +4805,13 @@ fn emit_fn(g: *CG, s: *Stmt) {
     println!("}");
 
     // Real C `main` wrapper: runs scheduler init/shutdown around the user's
-    // body. Drains pending coroutines before exiting so `spawn worker(); main`
-    // returns waits for `worker` to finish (predictable for tests; long-running
-    // servers stay in main's loop and never reach this point).
+    // body and adapts whatever shape the user's main has into a process
+    // exit code. Drains pending coroutines before exiting so `spawn worker();
+    // main returns` waits for `worker` to finish (predictable for tests;
+    // long-running servers stay in main's loop and never reach this point).
     if is_main {
         println!("");
-        print!(include_str!("bootstrap/runtime/main_wrapper.c"));
+        _emit_main_wrapper(s);
     }
 }
 

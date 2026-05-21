@@ -1,0 +1,4 @@
+fn main() -> ! {
+    println!("doing work");
+    return ok();
+}
