@@ -138,6 +138,11 @@ c_raw! {
         if (__glide_fs_is_dir(path)) return true;
         return _mkdir(path) == 0;
     }
+    static long long __glide_fs_size(const char* path) {
+        struct _stat64 st;
+        if (_stat64(path, &st) != 0) return -1;
+        return (long long)st.st_size;
+    }
     #else
     #include <sys/stat.h>
     #include <sys/types.h>
@@ -149,6 +154,11 @@ c_raw! {
     static bool __glide_fs_mkdir_one(const char* path) {
         if (__glide_fs_is_dir(path)) return true;
         return mkdir(path, 0755) == 0;
+    }
+    static long long __glide_fs_size(const char* path) {
+        struct stat st;
+        if (stat(path, &st) != 0) return -1;
+        return (long long)st.st_size;
     }
     #endif
     static bool __glide_fs_mkdir_p(const char* path) {
@@ -425,6 +435,17 @@ pub fn fs_write(path: string, content: string) -> bool { return write_file(path,
 /// }
 /// ```
 pub fn fs_exists(path: string) -> bool { return __glide_file_exists(path); }
+
+extern fn __glide_fs_size(path: string) -> i64;
+
+/// Size of a file on disk in bytes. Returns -1 if the path doesn't
+/// exist or stat fails. Cheap — one stat syscall, no file open.
+///
+/// ```glide
+/// let n: i64 = fs_size("favicon.ico");
+/// if n > 0 { /* serve it */ }
+/// ```
+pub fn fs_size(path: string) -> i64 { return __glide_fs_size(path); }
 
 /// List filenames directly under `dir` (no recursion). Returns names
 /// only, not full paths. Filter by suffix (e.g. `".glide"`); pass `""`

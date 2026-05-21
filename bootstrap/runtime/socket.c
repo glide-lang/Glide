@@ -2,6 +2,8 @@
 #ifdef _WIN32
 # include <winsock2.h>
 # include <ws2tcpip.h>
+# include <mswsock.h>      /* TransmitFile */
+# include <windows.h>      /* CreateFileA, HANDLE, GetFileSizeEx */
 typedef SOCKET __glide_sock_t;
 static int __glide_wsa_inited = 0;
 static void __glide_wsa_ensure(void) {
@@ -12,11 +14,16 @@ static void __glide_wsa_ensure(void) {
 #else
 # include <sys/socket.h>
 # include <sys/uio.h>       /* writev */
+# include <sys/stat.h>      /* fstat */
 # include <netinet/in.h>
 # include <netinet/tcp.h>   /* TCP_NODELAY */
 # include <unistd.h>
+# include <fcntl.h>         /* open */
 # include <arpa/inet.h>
 # include <errno.h>
+# ifdef __linux__
+#  include <sys/sendfile.h>
+# endif
 typedef int __glide_sock_t;
 static void __glide_wsa_ensure(void) {}
 #endif
@@ -148,6 +155,69 @@ int tcp_write(int fd, void* buf, int n) {
 #else
     int w = (int)write(fd, buf, (size_t)n);
     return w < 0 ? -1 : w;
+#endif
+}
+
+/* Zero-copy file transfer to a socket. On Linux: sendfile() pulls
+   bytes from the file's page cache straight into the socket buffer.
+   On Windows: TransmitFile() does the same DMA path. On macOS / BSD:
+   sendfile() with a slightly different signature. Returns total
+   bytes sent, or -1 on error. */
+int tcp_sendfile_from_path(int sock_fd, const char* path) {
+    if (path == NULL || path[0] == 0) return -1;
+#ifdef _WIN32
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    LARGE_INTEGER sz;
+    if (!GetFileSizeEx(h, &sz)) { CloseHandle(h); return -1; }
+    BOOL ok = TransmitFile((SOCKET)sock_fd, h, (DWORD)sz.QuadPart, 0,
+                            NULL, NULL, 0);
+    CloseHandle(h);
+    return ok ? (int)sz.QuadPart : -1;
+#elif defined(__linux__)
+    int file_fd = open(path, O_RDONLY);
+    if (file_fd < 0) return -1;
+    struct stat st;
+    if (fstat(file_fd, &st) != 0) { close(file_fd); return -1; }
+    off_t offset = 0;
+    size_t remaining = (size_t)st.st_size;
+    int total = 0;
+    while (remaining > 0) {
+        ssize_t s = sendfile(sock_fd, file_fd, &offset, remaining);
+        if (s > 0) { total += (int)s; remaining -= (size_t)s; continue; }
+        if (s < 0 && errno == EINTR) continue;
+        break;
+    }
+    close(file_fd);
+    return total > 0 ? total : -1;
+#else
+    /* macOS / BSD: sendfile signature differs across BSD flavours;
+       fall back to read+write for now. */
+    int file_fd = open(path, O_RDONLY);
+    if (file_fd < 0) return -1;
+    char buf[65536];
+    int total = 0;
+    for (;;) {
+        ssize_t r = read(file_fd, buf, sizeof(buf));
+        if (r == 0) break;
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            close(file_fd);
+            return total > 0 ? total : -1;
+        }
+        ssize_t off = 0;
+        while (off < r) {
+            ssize_t w = write(sock_fd, buf + off, (size_t)(r - off));
+            if (w > 0) { off += w; continue; }
+            if (w < 0 && errno == EINTR) continue;
+            close(file_fd);
+            return total > 0 ? total : -1;
+        }
+        total += (int)r;
+    }
+    close(file_fd);
+    return total;
 #endif
 }
 

@@ -29,6 +29,7 @@ import stdlib::os::*;
 import stdlib::hashmap::*;
 import stdlib::url::*;
 import stdlib::json::*;
+import stdlib::fs::*;
 
 import stdlib::net::tls::*;
 import stdlib::http::h2::*;
@@ -221,6 +222,12 @@ pub struct HttpResponse {
     pub headers_block: string,
     pub body:          string,
     pub stream_src:    *dyn ChunkSource,
+    /// When non-empty, the server transfers this file's contents
+    /// directly from disk to socket via sendfile / TransmitFile — no
+    /// userspace buffer, no body memcpy. `body` is ignored on this
+    /// path; the file's size is used for Content-Length. See
+    /// `HttpResponse::file(path, mime)`.
+    pub file_path:     string,
 }
 
 impl HttpResponse {
@@ -237,6 +244,7 @@ impl HttpResponse {
             headers_block: "",
             body: "",
             stream_src: null,
+            file_path: "",
         };
     }
 
@@ -269,6 +277,7 @@ impl HttpResponse {
             headers_block: self.headers_block,
             body: s,
             stream_src: self.stream_src,
+            file_path: self.file_path,
         };
     }
 
@@ -295,6 +304,7 @@ impl HttpResponse {
             headers_block: stripped.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
             body: self.body,
             stream_src: self.stream_src,
+            file_path: self.file_path,
         };
     }
 
@@ -316,6 +326,7 @@ impl HttpResponse {
             headers_block: self.headers_block.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
             body: self.body,
             stream_src: self.stream_src,
+            file_path: self.file_path,
         };
     }
 
@@ -330,6 +341,7 @@ impl HttpResponse {
             headers_block: self.headers_block,
             body: self.body,
             stream_src: self.stream_src,
+            file_path: self.file_path,
         };
     }
 
@@ -361,6 +373,28 @@ impl HttpResponse {
             headers_block: self.headers_block,
             body: "",
             stream_src: source,
+            file_path: "",
+        };
+    }
+
+    /// Serve a file from disk via zero-copy sendfile. The body's
+    /// Content-Length is taken from the file's size; `mime` populates
+    /// `Content-Type`. Reads no bytes into userspace — the kernel DMAs
+    /// from the page cache straight into the socket buffer.
+    ///
+    /// ```glide
+    /// fn handler(req: *HttpRequest) -> HttpResponse {
+    ///     return HttpResponse::file("/var/www/index.html",
+    ///                                "text/html; charset=utf-8");
+    /// }
+    /// ```
+    pub fn file(path: string, mime: string) -> HttpResponse {
+        return HttpResponse {
+            status: 200,
+            headers_block: "Content-Type: ".concat(mime).concat("\r\n"),
+            body: "",
+            stream_src: null,
+            file_path: path,
         };
     }
 
@@ -760,6 +794,24 @@ fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
     }
     let mut keep_i: int = 0;
     if keep { keep_i = 1; }
+    // sendfile path: stat the file for Content-Length, ship the
+    // headers via the per-thread response buffer, then hand the body
+    // straight from the kernel page cache to the socket. No userspace
+    // memcpy, no read into Glide string.
+    if resp.file_path.len() > 0 {
+        let fsize: int = fs_size(resp.file_path);
+        if fsize >= 0 {
+            let hlen: int = hp_build_response_header(resp.status,
+                                                       status_text(resp.status),
+                                                       fsize,
+                                                       resp.headers_block, keep_i);
+            c.write(hp_resp_buf_ptr(), hlen);
+            let _s: int = c.sendfile(resp.file_path);
+            return;
+        }
+        // stat failed: fall through to empty body 200 (caller could
+        // have prefiltered with fs_exists).
+    }
     let body_len: int = resp.body.len();
     // For bodies larger than ~512B, build only the header in the
     // per-thread response buffer and ship header + body in a single

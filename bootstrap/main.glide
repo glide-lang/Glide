@@ -2546,7 +2546,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         if !os.eq("") { win_target = os.eq("windows"); }
     }
     if win_target {
-        cmd = cmd.concat(" -lws2_32 -ldbghelp -lpsapi");
+        cmd = cmd.concat(" -lws2_32 -lmswsock -ldbghelp -lpsapi");
     } else if !cross {
         // -rdynamic only on host POSIX builds — cross builds use static
         // linking where dynamic symbol export isn't applicable.

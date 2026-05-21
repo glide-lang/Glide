@@ -42,8 +42,10 @@ fn _static_handler(req: *HttpRequest) -> HttpResponse {
     if !fs_exists(disk) {
         return HttpResponse::with_status(404).text("not found");
     }
-    let body: string = fs_read(disk);
-    return HttpResponse::ok().set("Content-Type", _static_mime(disk)).body(body);
+    // Zero-copy serve: the wire bytes go file → kernel page cache →
+    // socket buffer via sendfile/TransmitFile. No userspace allocation
+    // for the body, no fs_read into a Glide string.
+    return HttpResponse::file(disk, _static_mime(disk));
 }
 
 pub fn serve_dir(r: *Router, opts: StaticOpts) {

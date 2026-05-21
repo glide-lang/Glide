@@ -19,6 +19,7 @@ extern fn accept_tcp_async(listener: int) -> int;
 extern fn tcp_read_async(fd: int, buf: *void, max: int) -> int;
 extern fn tcp_write_async(fd: int, buf: *void, n: int) -> int;
 extern fn tcp_writev2_async(fd: int, buf1: *void, n1: int, buf2: *void, n2: int) -> int;
+extern fn tcp_sendfile_from_path(fd: int, path: string) -> int;
 extern fn tcp_close(fd: int);
 
 pub struct Listener { pub fd: int }
@@ -156,6 +157,16 @@ impl Conn {
     /// syscall a sequential pair of writes would cost.
     pub fn write2(self: *Conn, buf1: *void, n1: int, buf2: *void, n2: int) -> int {
         return tcp_writev2_async(self.fd, buf1, n1, buf2, n2);
+    }
+
+    /// Zero-copy file → socket transfer. Linux: sendfile(); Windows:
+    /// TransmitFile(); macOS / BSD: read+write loop (sendfile API
+    /// varies). Skips the userspace round-trip for static file
+    /// serving — disk pages go straight from the kernel page cache
+    /// into the socket buffer. Returns total bytes sent (file size on
+    /// success) or -1 on error.
+    pub fn sendfile(self: *Conn, path: string) -> int {
+        return tcp_sendfile_from_path(self.fd, path);
     }
 
     /// Close the connection and free the struct. After `close()`, the

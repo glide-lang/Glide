@@ -59,7 +59,11 @@ fn test_serves_known_file_with_mime() -> int {
     let req: HttpRequest = _static_req("/static/app.css");
     let resp: HttpResponse = r.dispatch(&req);
     assert_eq!(resp.status, 200);
-    assert_str_eq!(resp.body, "body{color:red;}");
+    // The static handler routes through HttpResponse::file → the
+    // wire path uses sendfile; resp.body stays empty by design and
+    // the actual bytes live on disk. Verify via file_path instead.
+    assert!(resp.file_path.len() > 0);
+    assert_str_eq!(fs_read(resp.file_path), "body{color:red;}");
     assert_str_eq!(resp.header("Content-Type"), "text/css; charset=utf-8");
     return 0;
 }
