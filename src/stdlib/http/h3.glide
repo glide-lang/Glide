@@ -155,6 +155,50 @@ c_raw! {
         return 0;
     }
 
+    // ---- anti-replay sliding window (server side, defined early so
+    // recv_stream_data_cb can call the helpers when 0-RTT lands).
+    #define __GLIDE_H3_REPLAY_RING 1024
+    #define __GLIDE_H3_REPLAY_TTL_NS (10ULL * 1000000000ULL)  // 10s
+
+    // Tracks the FNV-1a hash of the SSL session id for each accepted
+    // 0-RTT conn. A second conn that presents the same id within the
+    // TTL has its 0-RTT data refused — RFC 9001 §5.6 / RFC 8470 require
+    // this so an attacker who captures the encrypted 0-RTT flight
+    // can't replay it.
+    typedef struct __glide_h3_replay_store {
+        uint64_t        hashes[__GLIDE_H3_REPLAY_RING];
+        uint64_t        expires[__GLIDE_H3_REPLAY_RING];
+        int             next_slot;
+        pthread_mutex_t lock;
+    } __glide_h3_replay_store;
+
+    static uint64_t __glide_h3_fnv1a(const uint8_t* data, size_t len) {
+        uint64_t h = 1469598103934665603ULL;
+        for (size_t i = 0; i < len; i++) {
+            h ^= (uint64_t)data[i];
+            h *= 1099511628211ULL;
+        }
+        return h;
+    }
+
+    static int __glide_h3_replay_check_and_insert(__glide_h3_replay_store* r,
+                                                    uint64_t h) {
+        pthread_mutex_lock(&r->lock);
+        uint64_t now = __glide_h3_now();
+        for (int i = 0; i < __GLIDE_H3_REPLAY_RING; i++) {
+            if (r->hashes[i] == h && r->expires[i] > now) {
+                pthread_mutex_unlock(&r->lock);
+                return 1;
+            }
+        }
+        int slot = r->next_slot;
+        r->next_slot = (slot + 1) % __GLIDE_H3_REPLAY_RING;
+        r->hashes[slot] = h;
+        r->expires[slot] = now + __GLIDE_H3_REPLAY_TTL_NS;
+        pthread_mutex_unlock(&r->lock);
+        return 0;
+    }
+
     // ---- 0-RTT session cache types (defined early so the conn carrier
     // can dereference cache->lock from inside callbacks; the helper
     // functions that operate on these stay further down in the file).
@@ -1542,6 +1586,12 @@ c_raw! {
         // this + the method to decide whether to honour or reject with
         // 425 Too Early.
         int                        req_was_0rtt;
+
+        // Backref to the listener's anti-replay store. Pinned at conn
+        // creation so the recv callback (which compiles before the
+        // listener struct does) can reach it without dereferencing the
+        // forward-declared `struct __glide_h3_listener*` field.
+        __glide_h3_replay_store*   replay;
     } __glide_h3_server_state;
 
     // ngtcp2 server-side connection ref → ngtcp2_conn lookup.
@@ -1735,10 +1785,27 @@ c_raw! {
         (void)conn; (void)offset; (void)stream_user_data;
         __glide_h3_server_state* s = (__glide_h3_server_state*)user_data;
         // Stream data arriving before the handshake finishes is 0-RTT
-        // early data. Remember that fact so the dispatch path can
-        // enforce HTTP idempotency (RFC 9001 §5.6 — 0-RTT MUST NOT
-        // carry non-idempotent methods).
-        if (!s->handshake_done) s->req_was_0rtt = 1;
+        // early data. Remember that fact (so dispatch can enforce
+        // idempotency per RFC 9001 §5.6) and run anti-replay: the same
+        // session id appearing twice within a TTL window is rejected
+        // here, before we forward the data to nghttp3.
+        if (!s->handshake_done && !s->req_was_0rtt) {
+            s->req_was_0rtt = 1;
+            if (s->ssl != NULL && s->replay != NULL) {
+                SSL_SESSION* sess = SSL_get_session(s->ssl);
+                if (sess != NULL) {
+                    unsigned int idlen = 0;
+                    const unsigned char* id = SSL_SESSION_get_id(sess, &idlen);
+                    if (idlen > 0) {
+                        uint64_t h = __glide_h3_fnv1a(id, idlen);
+                        if (__glide_h3_replay_check_and_insert(s->replay, h)) {
+                            s->connection_error = 1;
+                            return 0;  // drop the data
+                        }
+                    }
+                }
+            }
+        }
         if (s->h3 == NULL) return 0;
         nghttp3_ssize n = nghttp3_conn_read_stream(s->h3, stream_id,
                                                     data, datalen,
@@ -1888,6 +1955,7 @@ c_raw! {
         __glide_h3_sock_t sock;
         SSL_CTX*          ssl_ctx;
         int               port;
+        __glide_h3_replay_store replay;
 
         // Active conns. The reader thread is the only writer; Glide
         // readers (accept / send_response / close) lock the mutex before
@@ -2037,6 +2105,7 @@ c_raw! {
             (__glide_h3_server_state*)calloc(1, sizeof(*s));
         s->sock = l->sock;
         s->l = l;
+        s->replay = &l->replay;
         s->request_stream_id = -1;
         s->st = H3_ST_HANDSHAKING;
         memcpy(&s->remote, remote, remote_len);
@@ -2413,10 +2482,12 @@ c_raw! {
         l->sock = sock; l->ssl_ctx = ctx; l->port = port;
         pthread_mutex_init(&l->lock, NULL);
         pthread_cond_init(&l->cond, NULL);
+        pthread_mutex_init(&l->replay.lock, NULL);
         if (pthread_create(&l->reader_tid, NULL,
                             __glide_h3_reader_thread, l) != 0) {
             pthread_cond_destroy(&l->cond);
             pthread_mutex_destroy(&l->lock);
+            pthread_mutex_destroy(&l->replay.lock);
             SSL_CTX_free(ctx);
             #ifdef _WIN32
             closesocket(sock);
@@ -2604,6 +2675,7 @@ c_raw! {
         }
         pthread_cond_destroy(&l->cond);
         pthread_mutex_destroy(&l->lock);
+        pthread_mutex_destroy(&l->replay.lock);
         SSL_CTX_free(l->ssl_ctx);
         #ifdef _WIN32
         closesocket(l->sock);
