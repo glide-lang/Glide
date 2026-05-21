@@ -40,6 +40,34 @@ pub fn openapi_main(src_path: string) -> int {
     return 0;
 }
 
+// `glide routes <file>` - one line per route, METHOD PATH -> handler.
+// Used by the Zed `/glide-routes` slash command and any other consumer
+// that wants a compact text listing without the full OpenAPI surface.
+pub fn routes_main(src_path: string) -> int {
+    let stmts: *Vector<Stmt> = _openapi_load(src_path);
+    if stmts == null { return 1; }
+    let routes: *Vector<OARoute> = _collect_routes(stmts);
+    let mut max_method: int = 6;
+    let mut max_path: int = 10;
+    for let i: int = 0; i < routes.len(); i++ {
+        let r: OARoute = routes.get(i);
+        if r.method.len() > max_method { max_method = r.method.len(); }
+        if r.path.len() > max_path { max_path = r.path.len(); }
+    }
+    for let i: int = 0; i < routes.len(); i++ {
+        let r: OARoute = routes.get(i);
+        let mut line: string = r.method;
+        let mut pad: int = max_method - r.method.len() + 2;
+        while pad > 0 { line = line.concat(" "); pad = pad - 1; }
+        line = line.concat(r.path);
+        let mut pad2: int = max_path - r.path.len() + 2;
+        while pad2 > 0 { line = line.concat(" "); pad2 = pad2 - 1; }
+        line = line.concat("-> ").concat(r.handler_name);
+        println!(line);
+    }
+    return 0;
+}
+
 fn _openapi_load(path: string) -> *Vector<Stmt> {
     let src: string = read_file(path);
     if src.eq("") {

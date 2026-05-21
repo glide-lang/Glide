@@ -18,3 +18,7 @@ languages = ["Glide"]
 repository = "https://github.com/glide-lang/Glide"
 commit     = "453891aea07960ec5fb055e3726178f32abe85f8"
 path       = "glide-grammar"
+
+[slash_commands.glide-routes]
+description       = "List @route'd handlers in a Glide file"
+requires_argument = true

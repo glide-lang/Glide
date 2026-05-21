@@ -237,7 +237,12 @@ pub fn _validate_path(path: string) -> string {
 // in `params`. Wildcards `*name` map to `name: Path<string>`. Mismatch
 // surfaces as a compile-time diagnostic so a typo doesn't degrade to
 // a runtime 400/404.
+//
+// Handlers that take a single `req: *HttpRequest` are opting out of the
+// typed-extraction sugar — they'll read params via `req.param("id")`
+// themselves. Skip the check entirely in that shape.
 pub fn _validate_path_params(path: string, params: *Vector<Param>) -> string {
+    if _is_raw_request_handler(params) { return ""; }
     let n: int = path.len();
     let mut i: int = 0;
     while i < n {
@@ -267,6 +272,16 @@ pub fn _validate_path_params(path: string, params: *Vector<Param>) -> string {
         i = i + 1;
     }
     return "";
+}
+
+fn _is_raw_request_handler(params: *Vector<Param>) -> bool {
+    if params == null || params.len() != 1 { return false; }
+    let p: Param = params.get(0);
+    if p.ty == null { return false; }
+    if p.ty.kind != TY_POINTER { return false; }
+    if p.ty.inner == null { return false; }
+    if p.ty.inner.kind != TY_NAMED { return false; }
+    return p.ty.inner.name.eq("HttpRequest");
 }
 
 pub fn _is_route_attr_name(n: string) -> bool {

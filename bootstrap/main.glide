@@ -3040,6 +3040,13 @@ fn main() -> int {
         return openapi_main(args_at(2));
     }
 
+    // `routes <file.glide>` — compact `METHOD PATH -> handler` listing,
+    // consumed by editor integrations (Zed `/glide-routes` slash cmd).
+    if cmd.eq("routes") {
+        if argc < 3 { println!("usage: glide routes <file.glide>"); return 1; }
+        return routes_main(args_at(2));
+    }
+
     // `fetch [path]` — walk the manifest at <path>'s closest glide.glide
     // and download every missing git dep. Default <path> = ".".
     if cmd.eq("fetch") {
