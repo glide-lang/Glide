@@ -1,0 +1,30 @@
+// NLL: borrow ends at last use. Each of these would fail under the
+// pre-NLL "borrow held until end of scope" rule.
+
+fn nll_basic() {
+    let mut n: int = 1;
+    let r: &int = &n;
+    println!(*r);            // last use of r
+    n = 2;                   // ok: r dead
+}
+
+fn nll_two_borrows_serial() {
+    let mut n: int = 0;
+    let a: &int = &n;
+    println!(*a);            // a dies
+    let b: &mut int = &mut n;
+    *b = *b + 1;             // ok: a no longer alive
+}
+
+fn nll_borrow_then_consume() {
+    let mut v: int = 10;
+    let r: &int = &v;
+    let copy: int = *r;      // last r use
+    v = copy * 2;            // ok
+}
+
+fn main() {
+    nll_basic();
+    nll_two_borrows_serial();
+    nll_borrow_then_consume();
+}

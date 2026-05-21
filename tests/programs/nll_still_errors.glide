@@ -1,0 +1,14 @@
+// NLL doesn't relax: if the first borrow IS still used after taking
+// a second one, the existing overlap-borrow error stays.
+
+fn still_errors() {
+    let mut n: int = 0;
+    let a: &int = &n;
+    let b: &mut int = &mut n;    // ERROR: a still used below
+    *b = 1;
+    println!(*a);
+}
+
+fn main() {
+    still_errors();
+}

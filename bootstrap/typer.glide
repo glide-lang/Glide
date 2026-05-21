@@ -425,6 +425,11 @@ pub struct FnSig {
 pub struct BorrowEvent {
     pub source: string,
     pub is_mut: bool,
+    // The let-binder that holds this borrow (`r` in `let r = &x`). Used
+    // by NLL kill-after-last-use: a block walker scans the remaining
+    // stmts after each step; an event whose binder no longer appears is
+    // dropped so subsequent mutation of `source` is allowed.
+    pub binder: string,
 }
 
 // Severity levels match LSP's DiagnosticSeverity:
@@ -1196,6 +1201,88 @@ fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: int, 
 
 // ---- borrow tracking helpers --------------------------------------------
 
+// `e` (or any sub-expression) reads the binder `name`. Recursive walk
+// over the AST fields the parser populates - enough to catch reads in
+// args, member chains, unary/binary ops, casts, and nested fn-exprs.
+fn _expr_uses_name(e: *Expr, name: string) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq(name) { return true; }
+    if e.lhs != null && _expr_uses_name(e.lhs, name) { return true; }
+    if e.rhs != null && _expr_uses_name(e.rhs, name) { return true; }
+    if e.operand != null && _expr_uses_name(e.operand, name) { return true; }
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if _expr_uses_name(&a, name) { return true; }
+        }
+    }
+    if e.fn_expr_body != null {
+        for let i: int = 0; i < e.fn_expr_body.len(); i++ {
+            let b: Stmt = e.fn_expr_body.get(i);
+            if _stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    return false;
+}
+
+fn _stmt_uses_name(s: *Stmt, name: string) -> bool {
+    if s == null { return false; }
+    if s.let_value != null && _expr_uses_name(s.let_value, name) { return true; }
+    if s.expr_value != null && _expr_uses_name(s.expr_value, name) { return true; }
+    if s.cond != null && _expr_uses_name(s.cond, name) { return true; }
+    if s.for_step != null && _expr_uses_name(s.for_step, name) { return true; }
+    if s.for_init != null && _stmt_uses_name(s.for_init, name) { return true; }
+    if s.then_body != null {
+        for let i: int = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            if _stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    if s.else_body != null {
+        for let i: int = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            if _stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    if s.fn_body != null {
+        for let i: int = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            if _stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    return false;
+}
+
+fn _body_uses_name_after(body: *Vector<Stmt>, idx: int, name: string) -> bool {
+    let n: int = body.len();
+    let mut i: int = idx + 1;
+    while i < n {
+        let s: Stmt = body.get(i);
+        if _stmt_uses_name(&s, name) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// NLL: after `check_stmt` returns, scan the rest of the block for any
+// reference to each active borrow's binder. Drop events whose binder is
+// never used again - subsequent mutations of `source` then pass.
+fn kill_dead_borrows(t: *Typer, body: *Vector<Stmt>, idx: int) {
+    let mut i: int = t.borrows.len() - 1;
+    while i >= 0 {
+        let ev: BorrowEvent = t.borrows.get(i);
+        if !ev.binder.eq("") && !_body_uses_name_after(body, idx, ev.binder) {
+            let last_idx: int = t.borrows.len() - 1;
+            if i != last_idx {
+                let last_ev: BorrowEvent = t.borrows.get(last_idx);
+                t.borrows.set(i, last_ev);
+            }
+            let _: BorrowEvent = t.borrows.pop();
+        }
+        i = i - 1;
+    }
+}
+
 fn count_borrows(t: *Typer, name: string, want_mut: bool) -> int {
     let n: int = t.borrows.len();
     let mut c: int = 0;
@@ -1206,7 +1293,8 @@ fn count_borrows(t: *Typer, name: string, want_mut: bool) -> int {
     return c;
 }
 
-fn record_borrow(t: *Typer, source: string, is_mut: bool, line: int, col: int) {
+fn record_borrow(t: *Typer, source: string, is_mut: bool, binder: string,
+                  line: int, col: int) {
     let n_shared: int = count_borrows(t, source, false);
     let n_mut: int = count_borrows(t, source, true);
     if is_mut {
@@ -1222,7 +1310,7 @@ fn record_borrow(t: *Typer, source: string, is_mut: bool, line: int, col: int) {
                 .concat("` as immutable: already mutably borrowed"));
         }
     }
-    let ev: BorrowEvent = BorrowEvent { source: source, is_mut: is_mut };
+    let ev: BorrowEvent = BorrowEvent { source: source, is_mut: is_mut, binder: binder };
     t.borrows.push(ev);
 }
 
@@ -1353,6 +1441,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
         for let i: int = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             check_stmt(t, &b);
+            kill_dead_borrows(t, s.fn_body, i);
         }
         let rc: *Expr = first_unconditional_self_call(s.fn_body, s.name);
         if rc != null {
@@ -1396,6 +1485,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             for let i: int = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
+                kill_dead_borrows(t, s.then_body, i);
             }
             exit_borrow_scope(t, saved);
         }
@@ -1404,6 +1494,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             for let i: int = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
                 check_stmt(t, &b);
+                kill_dead_borrows(t, s.else_body, i);
             }
             exit_borrow_scope(t, saved);
         }
@@ -1439,6 +1530,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             for let i: int = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
+                kill_dead_borrows(t, s.then_body, i);
             }
             exit_borrow_scope(t, saved);
         }
@@ -1456,6 +1548,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             for let i: int = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
+                kill_dead_borrows(t, s.then_body, i);
             }
             exit_borrow_scope(t, saved);
         }
@@ -1470,6 +1563,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             for let i: int = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
+                kill_dead_borrows(t, s.then_body, i);
             }
         }
         exit_borrow_scope(t, saved);
@@ -1481,6 +1575,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             for let i: int = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
+                kill_dead_borrows(t, s.then_body, i);
             }
             exit_borrow_scope(t, saved);
         }
@@ -1635,7 +1730,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         && s.let_value.operand != null && s.let_value.operand.kind == EX_IDENT {
         let src: string = s.let_value.operand.str_val;
         let is_mut: bool = s.let_value.op_code == UN_ADDR_MUT;
-        record_borrow(t, src, is_mut, s.line, s.column);
+        record_borrow(t, src, is_mut, s.name, s.line, s.column);
     }
 }
 

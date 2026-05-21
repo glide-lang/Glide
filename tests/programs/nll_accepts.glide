@@ -1,0 +1,36 @@
+// Without NLL these were "borrow live until end of scope" errors.
+// With NLL the first borrow dies at its last use line, so the second
+// borrow lands clean.
+
+fn case_immut_then_mut() {
+    let mut n: int = 0;
+    let a: &int = &n;
+    println!(*a);                // last use of a
+    let b: &mut int = &mut n;    // ok: a dead
+    *b = 1;
+    println!(*b);
+}
+
+fn case_mut_then_immut() {
+    let mut n: int = 0;
+    let a: &mut int = &mut n;
+    *a = 5;                      // last use of a
+    let b: &int = &n;            // ok: a dead
+    println!(*b);
+}
+
+fn case_chain() {
+    let mut x: int = 1;
+    let r1: &int = &x;
+    println!(*r1);
+    let r2: &int = &x;
+    println!(*r2);
+    let r3: &int = &x;
+    println!(*r3);
+}
+
+fn main() {
+    case_immut_then_mut();
+    case_mut_then_immut();
+    case_chain();
+}
