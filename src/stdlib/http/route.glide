@@ -62,24 +62,73 @@ fn impl_route(s: *Stmt) -> *Vector<Stmt> {
 
     let out: *Vector<Stmt> = _emit_handler_wrapper(s, user_name, renamed);
 
-    // fn _route_register_<name>(r: *Router) { r.<method>(<path>, <name>); }
+    let mws: *Vector<string> = _read_middlewares(s);
     let reg_name: string = "_route_register_".concat(user_name);
     let reg_params: *Vector<Param> = Vector::new();
     reg_params.push(*make_param("r", ty_pointer(ty_named("Router"))));
-
-    let call_args: *Vector<Expr> = Vector::new();
-    call_args.push(*expr_string(path, 0, 0));
-    call_args.push(*expr_ident_unsafe(user_name, 0, 0));
-    let reg_call: *Expr = expr_call(
-        expr_member(expr_ident_unsafe("r", 0, 0), method),
-        call_args);
-
-    let reg_body: *Vector<Stmt> = Vector::new();
-    reg_body.push(*stmt_expr(reg_call));
+    let reg_body: *Vector<Stmt> = _emit_register_body(method, path, user_name, mws);
 
     let no_ret: *Type = null;
     out.push(*stmt_fn(reg_name, reg_params, no_ret, reg_body, 0, 0));
     return out;
+}
+
+// Read every `@middleware(a, b, c)` sibling attr on `s` and return the
+// idents in order. Multiple `@middleware(...)` stack (rare but allowed).
+fn _read_middlewares(s: *Stmt) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    if s.attrs == null { return out; }
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("middleware") { continue; }
+        if a.args == null { continue; }
+        for let j: int = 0; j < a.args.len(); j++ {
+            let arg: Expr = a.args.get(j);
+            if arg.kind == EX_IDENT { out.push(arg.str_val); }
+        }
+    }
+    return out;
+}
+
+// Plain register body when no middlewares are stacked:
+//     r.<method>(<path>, <handler>);
+// With middlewares:
+//     let mws = Vector::new(); mws.push(a); mws.push(b);
+//     r.route_with("<METHOD>", <path>, mws, <handler>);
+fn _emit_register_body(method: string, path: string, handler: string,
+                        mws: *Vector<string>) -> *Vector<Stmt> {
+    let body: *Vector<Stmt> = Vector::new();
+    if mws == null || mws.len() == 0 {
+        let args: *Vector<Expr> = Vector::new();
+        args.push(*expr_string(path, 0, 0));
+        args.push(*expr_ident_unsafe(handler, 0, 0));
+        let call: *Expr = expr_call(
+            expr_member(expr_ident_unsafe("r", 0, 0), method), args);
+        body.push(*stmt_expr(call));
+        return body;
+    }
+
+    // let mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
+    let new_call: *Expr = expr_call(
+        expr_path("Vector", "new", 0, 0), Vector::new());
+    body.push(*stmt_let_unsafe("mws", null, new_call, false, 0, 0));
+    for let i: int = 0; i < mws.len(); i++ {
+        let mw_name: string = mws.get(i);
+        let push_args: *Vector<Expr> = Vector::new();
+        push_args.push(*expr_ident_unsafe(mw_name, 0, 0));
+        let push_call: *Expr = expr_call(
+            expr_member(expr_ident_unsafe("mws", 0, 0), "push"), push_args);
+        body.push(*stmt_expr(push_call));
+    }
+    let rw_args: *Vector<Expr> = Vector::new();
+    rw_args.push(*expr_string(method.to_upper(), 0, 0));
+    rw_args.push(*expr_string(path, 0, 0));
+    rw_args.push(*expr_ident_unsafe("mws", 0, 0));
+    rw_args.push(*expr_ident_unsafe(handler, 0, 0));
+    let rw_call: *Expr = expr_call(
+        expr_member(expr_ident_unsafe("r", 0, 0), "route_with"), rw_args);
+    body.push(*stmt_expr(rw_call));
+    return body;
 }
 
 // `@listen(port)` on `fn main` rewrites main to set up a Router, run

@@ -1,0 +1,87 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+
+fn _mk_req(method: string, path: string, hdr: string) -> HttpRequest {
+    return HttpRequest {
+        method: method, path: path, version: "HTTP/1.1",
+        headers_block: hdr, body: "",
+        params: null, queries: null, tls: false, headers_cache: null,
+    };
+}
+
+fn require_token(req: *HttpRequest, chain: *Chain) -> HttpResponse {
+    if !req.header("X-Token").eq("secret") {
+        return HttpResponse::with_status(401).text("unauthorized");
+    }
+    return chain_next(chain);
+}
+
+fn add_audit(req: *HttpRequest, chain: *Chain) -> HttpResponse {
+    let resp: HttpResponse = chain_next(chain);
+    return resp.set("X-Audit", "1");
+}
+
+@get("/public")
+fn public_route() -> HttpResponse {
+    return HttpResponse::ok().text("open");
+}
+
+@get("/locked")
+@middleware(require_token)
+fn locked() -> HttpResponse {
+    return HttpResponse::ok().text("secret-data");
+}
+
+@get("/audited")
+@middleware(require_token, add_audit)
+fn audited() -> HttpResponse {
+    return HttpResponse::ok().text("audited");
+}
+
+fn test_public_route_no_mw() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/public", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    return 0;
+}
+
+fn test_locked_without_token_returns_401() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/locked", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 401);
+    return 0;
+}
+
+fn test_locked_with_token_returns_200() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/locked", "X-Token: secret\r\n");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    return 0;
+}
+
+fn test_audited_chain_in_order() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/audited", "X-Token: secret\r\n");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.header("X-Audit"), "1");
+    return 0;
+}
+
+fn test_audited_blocked_by_first_mw() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/audited", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 401);
+    return 0;
+}

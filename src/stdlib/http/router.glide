@@ -510,6 +510,22 @@ impl Router {
         self.route(ANY_METHOD, pattern, handler);
     }
 
+    /// Same shape as `route()` but with a per-route middleware list. The
+    /// router-level `use_mw` chain runs first, then `mws` (in order),
+    /// then `handler`. Used by the `@middleware(...)` proc-attr to wire
+    /// route-scoped middlewares without losing the global chain.
+    pub fn route_with(self: *Router, method: string, pattern: string,
+                      mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
+                      handler: fn(*HttpRequest) -> HttpResponse) {
+        self.routes.push(Route {
+            method:    method.to_upper(),
+            pattern:   pattern,
+            segments:  _compile_pattern(pattern),
+            handler:   handler,
+            local_mws: mws,
+        });
+    }
+
     /// Override the default 404 handler.
     ///
     /// ```glide
