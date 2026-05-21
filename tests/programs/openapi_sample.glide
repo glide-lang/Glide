@@ -1,0 +1,39 @@
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+import stdlib::json::*;
+
+pub struct User {
+    pub id: int,
+    pub name: string,
+    pub active: bool,
+}
+
+pub struct UserList {
+    pub users: *Vector<User>,
+    pub total: int,
+}
+
+@get("/health")
+fn health() -> HttpResponse {
+    return HttpResponse::ok().text("ok");
+}
+
+@get("/users/:id")
+fn show(id: Path<int>) -> Json<User> {
+    return Json::wrap(User { id: id.val, name: "alice", active: true });
+}
+
+@post("/users")
+fn create(body: Json<User>) -> Json<User> {
+    return Json::wrap(body.val);
+}
+
+@get("/users")
+fn list_all() -> Json<UserList> {
+    let users: *Vector<User> = Vector::new();
+    return Json::wrap(UserList { users: users, total: 0 });
+}
+
+@listen(8080)
+fn main() {}

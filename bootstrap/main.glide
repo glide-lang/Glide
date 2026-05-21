@@ -31,6 +31,7 @@ import codegen;
 import json;
 import fmt;
 import lsp;
+import openapi;
 import manifest;
 import fetch;
 import doc;
@@ -3031,6 +3032,13 @@ fn main() -> int {
 
     // `lsp` takes no positional file arg.
     if cmd.eq("lsp") { return lsp_main(); }
+
+    // `openapi <file.glide>` — emit OpenAPI 3.0.3 YAML for every
+    // @route'd handler reachable from <file>.
+    if cmd.eq("openapi") {
+        if argc < 3 { println!("usage: glide openapi <file.glide>"); return 1; }
+        return openapi_main(args_at(2));
+    }
 
     // `fetch [path]` — walk the manifest at <path>'s closest glide.glide
     // and download every missing git dep. Default <path> = ".".
