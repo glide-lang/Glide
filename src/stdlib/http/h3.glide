@@ -1188,18 +1188,12 @@ c_raw! {
             SSL_set_tlsext_host_name(c->ssl, host);
         }
 
-        // ngtcp2_callbacks. The 0-RTT wrapper is opt-in via GLIDE_H3_0RTT=1
-        // because server-side response delivery on a 0-RTT-resumed conn
-        // stalls: server processes Initial fine, but s->h3 is still
-        // NULL inside recv_stream_data when 0-RTT data arrives (the
-        // setup runs in handshake_completed, which fires after the
-        // first stream data), so the request HEADERS get dropped before
-        // nghttp3 sees them. Moving the setup earlier breaks the
-        // non-0-RTT path because ngtcp2 rejects open_uni_stream before
-        // Initial keys land. Needs a buffering layer to be solved
-        // properly; until then the 0-RTT wire path is gated.
+        // ngtcp2_callbacks. When 0-RTT is in play (cache hit yielded
+        // a session), swap in a wrapper that calls the crypto helper
+        // then submits the pending request via nghttp3 from inside the
+        // client_initial path so its stream data ships as 0-RTT.
         ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
-        if (c->early_data_attempted && getenv("GLIDE_H3_0RTT")) {
+        if (c->early_data_attempted) {
             cb.client_initial         = __glide_h3_client_initial_0rtt_cb;
         } else {
             cb.client_initial         = ngtcp2_crypto_client_initial_cb;
@@ -1272,9 +1266,7 @@ c_raw! {
         if (cached_tp != NULL && cached_tp_len > 0) {
             if (ngtcp2_conn_decode_and_set_0rtt_transport_params(
                     c->qc, cached_tp, (size_t)cached_tp_len) == 0) {
-                if (getenv("GLIDE_H3_0RTT") && __glide_h3_setup_h3_client(c)) {
-                    c->h3_ready_early = 1;
-                }
+                if (__glide_h3_setup_h3_client(c)) c->h3_ready_early = 1;
             }
             free(cached_tp);
             cached_tp = NULL;
@@ -1592,7 +1584,24 @@ c_raw! {
         // listener struct does) can reach it without dereferencing the
         // forward-declared `struct __glide_h3_listener*` field.
         __glide_h3_replay_store*   replay;
+
+        // Buffer for stream data that arrives BEFORE nghttp3 is up
+        // (i.e. 0-RTT data: server's handshake_completed runs the
+        // setup, but recv_stream_data fires during the first
+        // ngtcp2_conn_read_pkt call which is before handshake_completed).
+        // Linked list of (stream_id, offset, bytes, fin), replayed
+        // through nghttp3_conn_read_stream once h3 is up.
+        struct __glide_h3_srv_pending* pending_head;
+        struct __glide_h3_srv_pending* pending_tail;
     } __glide_h3_server_state;
+
+    typedef struct __glide_h3_srv_pending {
+        int64_t  stream_id;
+        uint8_t* data;
+        size_t   len;
+        int      fin;
+        struct __glide_h3_srv_pending* next;
+    } __glide_h3_srv_pending;
 
     // ngtcp2 server-side connection ref → ngtcp2_conn lookup.
     static ngtcp2_conn* __glide_h3_srv_get_conn_cb(ngtcp2_crypto_conn_ref *ref) {
@@ -1762,17 +1771,20 @@ c_raw! {
         return 0;
     }
 
+    static int __glide_h3_srv_flush_pending(__glide_h3_server_state* s);
+
     static int __glide_h3_srv_handshake_completed_cb(ngtcp2_conn *conn,
                                                        void *user_data) {
         (void)conn;
         __glide_h3_server_state* s = (__glide_h3_server_state*)user_data;
-        // Set up nghttp3 + control/qpack streams NOW so the recv_stream_data
-        // callback can forward incoming STREAM frames to nghttp3 the
-        // moment they arrive. If we deferred this to after the handshake
-        // loop, any 1RTT data the client sent in parallel with its
-        // post-handshake messages would be silently dropped (s->h3
-        // would still be NULL when recv_stream_data fires).
+        // Set up nghttp3 NOW so the recv_stream_data callback can forward
+        // incoming STREAM frames the moment they arrive (1-RTT case).
+        // For the 0-RTT path, recv_stream_data fires DURING
+        // ngtcp2_conn_read_pkt for the first Initial — before this cb
+        // ever runs — so the early-data bytes get parked in
+        // s->pending_*. Drain them now through the freshly-wired h3.
         if (__glide_h3_srv_setup_h3(s) != 0) return NGTCP2_ERR_CALLBACK_FAILURE;
+        __glide_h3_srv_flush_pending(s);
         s->handshake_done = 1;
         return 0;
     }
@@ -1806,13 +1818,55 @@ c_raw! {
                 }
             }
         }
-        if (s->h3 == NULL) return 0;
+        // If nghttp3 isn't up yet (the 0-RTT case — setup happens in
+        // handshake_completed but data lands here during read_pkt of
+        // the very first Initial), buffer the bytes and replay them
+        // once h3 is ready. Otherwise feed nghttp3 directly.
+        if (s->h3 == NULL) {
+            __glide_h3_srv_pending* p =
+                (__glide_h3_srv_pending*)calloc(1, sizeof(*p));
+            if (p == NULL) return 0;
+            p->stream_id = stream_id;
+            p->fin = (flags & NGTCP2_STREAM_DATA_FLAG_FIN) ? 1 : 0;
+            if (datalen > 0) {
+                p->data = (uint8_t*)malloc(datalen);
+                memcpy(p->data, data, datalen);
+                p->len = datalen;
+            }
+            if (s->pending_tail) s->pending_tail->next = p;
+            else                  s->pending_head = p;
+            s->pending_tail = p;
+            // Pretend we consumed it so ngtcp2 doesn't complain about
+            // flow control. We'll account for the bytes when replaying.
+            ngtcp2_conn_extend_max_stream_offset(s->qc, stream_id, (uint64_t)datalen);
+            ngtcp2_conn_extend_max_offset(s->qc, (uint64_t)datalen);
+            return 0;
+        }
         nghttp3_ssize n = nghttp3_conn_read_stream(s->h3, stream_id,
                                                     data, datalen,
                                                     flags & NGTCP2_STREAM_DATA_FLAG_FIN);
         if (n < 0) return NGTCP2_ERR_CALLBACK_FAILURE;
         ngtcp2_conn_extend_max_stream_offset(s->qc, stream_id, (uint64_t)n);
         ngtcp2_conn_extend_max_offset(s->qc, (uint64_t)n);
+        return 0;
+    }
+
+    // Replay buffered pre-h3 stream data through nghttp3 in the order
+    // it arrived. Called from handshake_completed once setup_h3 has
+    // wired up s->h3. Frees each entry as it's processed.
+    static int __glide_h3_srv_flush_pending(__glide_h3_server_state* s) {
+        while (s->pending_head != NULL) {
+            __glide_h3_srv_pending* p = s->pending_head;
+            s->pending_head = p->next;
+            if (s->pending_head == NULL) s->pending_tail = NULL;
+            if (s->h3 != NULL && p->len > 0) {
+                nghttp3_ssize n = nghttp3_conn_read_stream(
+                    s->h3, p->stream_id, p->data, p->len, p->fin);
+                (void)n; // bytes already accounted for via extend_max_*
+            }
+            free(p->data);
+            free(p);
+        }
         return 0;
     }
     static int __glide_h3_srv_acked_stream_data_cb(ngtcp2_conn *conn,
@@ -2082,6 +2136,14 @@ c_raw! {
         if (s->oc) ngtcp2_crypto_ossl_ctx_del(s->oc);
         if (s->ssl) SSL_free(s->ssl);
         if (s->h3) nghttp3_conn_del(s->h3);
+        // Drain any un-replayed pending data (e.g. if the conn errored
+        // before handshake_completed ran the flush).
+        while (s->pending_head != NULL) {
+            __glide_h3_srv_pending* p = s->pending_head;
+            s->pending_head = p->next;
+            free(p->data);
+            free(p);
+        }
         free(s->req_method);
         free(s->req_path);
         free(s->req_authority);

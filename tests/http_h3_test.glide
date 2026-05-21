@@ -203,6 +203,34 @@ fn test_h3_session_cache_resumes() -> int {
 // Cache persistence: save → free → new → load round-trips the entries.
 // The cache is empty on the new instance until load picks up the file.
 
+// End-to-end 0-RTT: a fresh cache observes accepted=0 after the first
+// (cold) request, then accepted=1 after the second (warm) one. This
+// locks in that early data actually engages on the wire — the cache's
+// stamped ticket gets installed via SSL_set_session, the custom
+// client_initial cb submits the request via nghttp3 with 0-RTT keys,
+// the server's recv_stream_data buffers the headers before nghttp3 is
+// up, and handshake_completed flushes the buffer through nghttp3 so
+// the handler still runs and sends a real response.
+
+fn test_h3_0rtt_engages_on_warm_cache() -> int {
+    let cache: *H3SessionCache = H3SessionCache::new();
+    defer cache.free();
+    let r1: !*HttpResponse = http3_request_cached("GET",
+                                                    "https://127.0.0.1:45330/cold",
+                                                    "", "", true, cache);
+    assert!(r1.ok);
+    assert_eq!(cache.accepted(), 0);
+    sleep_ms(300);  // let the ticket land via new_session_cb
+    let r2: !*HttpResponse = http3_request_cached("GET",
+                                                    "https://127.0.0.1:45330/warm",
+                                                    "", "", true, cache);
+    assert!(r2.ok);
+    assert_eq!(r2.val.status, 200);
+    // The server accepted 0-RTT — saved an RTT vs a full handshake.
+    assert_eq!(cache.accepted(), 1);
+    return 0;
+}
+
 fn test_h3_cache_persistence_round_trip() -> int {
     let path: string = "h3_cache_test.bin";
     let cache1: *H3SessionCache = H3SessionCache::new();
