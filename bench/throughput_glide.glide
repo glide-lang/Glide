@@ -1,6 +1,8 @@
 // Throughput: spawn N short-lived coros that do trivial work and exit.
 // Measures pure spawn+schedule+exit cost.
 
+extern fn __glide_perf_dump();
+
 fn worker(id: int, c: chan<int>) {
     c.send(id);
 }
@@ -16,5 +18,6 @@ fn main() -> int {
         sum = sum + c.recv();
     }
     println!("sum", sum);
+    __glide_perf_dump();
     return 0;
 }

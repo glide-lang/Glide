@@ -99,8 +99,16 @@ static int __glide_try_recv_@M@(__glide_chan_@M@_t* c, @TC@* out) {
    handing the task back to its worker queue. q_push_to has its own spinlock and
    can stall for tens of ns; holding chan->mu over that serializes senders/recvers
    needlessly. */
+extern atomic_long __glide_perf_wake_ns;
+extern atomic_long __glide_perf_wake_calls;
+static inline long long __glide_perf_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
 static void __glide_wake_recv_@M@(__glide_chan_@M@_t* c) {
     if (c->coro_recv_waiters == NULL && atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) == 0) return;
+    long long t0 = __glide_perf_now_ns();
     __glide_task* unparked = NULL;
     int signal_cv = 0;
     pthread_mutex_lock(&c->mu);
@@ -114,9 +122,13 @@ static void __glide_wake_recv_@M@(__glide_chan_@M@_t* c) {
     if (signal_cv) pthread_cond_signal(&c->not_empty);
     pthread_mutex_unlock(&c->mu);
     if (unparked) __glide_q_push_to(unparked->home_worker, unparked);
+    atomic_fetch_add_explicit(&__glide_perf_wake_ns,
+        __glide_perf_now_ns() - t0, memory_order_relaxed);
+    atomic_fetch_add_explicit(&__glide_perf_wake_calls, 1, memory_order_relaxed);
 }
 static void __glide_wake_send_@M@(__glide_chan_@M@_t* c) {
     if (c->coro_send_waiters == NULL && atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) == 0) return;
+    long long t0 = __glide_perf_now_ns();
     __glide_task* unparked = NULL;
     int signal_cv = 0;
     pthread_mutex_lock(&c->mu);
@@ -130,6 +142,9 @@ static void __glide_wake_send_@M@(__glide_chan_@M@_t* c) {
     if (signal_cv) pthread_cond_signal(&c->not_full);
     pthread_mutex_unlock(&c->mu);
     if (unparked) __glide_q_push_to(unparked->home_worker, unparked);
+    atomic_fetch_add_explicit(&__glide_perf_wake_ns,
+        __glide_perf_now_ns() - t0, memory_order_relaxed);
+    atomic_fetch_add_explicit(&__glide_perf_wake_calls, 1, memory_order_relaxed);
 }
 
 static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {

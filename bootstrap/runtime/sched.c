@@ -942,6 +942,8 @@ atomic_long __glide_perf_spin_parks  = 0;
 atomic_long __glide_perf_unparks     = 0;
 atomic_long __glide_perf_q_pushes    = 0;
 atomic_long __glide_perf_cv_signals  = 0;
+atomic_long __glide_perf_wake_ns     = 0;
+atomic_long __glide_perf_wake_calls  = 0;
 
 void __glide_perf_dump(void) {
     long p  = atomic_exchange(&__glide_perf_parks, 0);
@@ -949,9 +951,13 @@ void __glide_perf_dump(void) {
     long u  = atomic_exchange(&__glide_perf_unparks, 0);
     long q  = atomic_exchange(&__glide_perf_q_pushes, 0);
     long cs = atomic_exchange(&__glide_perf_cv_signals, 0);
+    long wn = atomic_exchange(&__glide_perf_wake_ns, 0);
+    long wc = atomic_exchange(&__glide_perf_wake_calls, 0);
+    long avg = wc > 0 ? wn / wc : 0;
     fprintf(stderr,
-            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld\n",
-            p, sp, u, q, cs);
+            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld\n"
+            "             wake_calls=%ld wake_total_ns=%ld wake_avg_ns=%ld\n",
+            p, sp, u, q, cs, wc, wn, avg);
 }
 
 int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
