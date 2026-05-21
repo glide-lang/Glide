@@ -25,6 +25,7 @@
 #include <netinet/tcp.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <pthread.h>
 
 extern void* hp_parse_glide(void* buf, int len);
 extern int   hp_glide_wants_close(void* g);
@@ -161,30 +162,32 @@ static int sm_set_events(int ep, sm_conn_t* c, uint32_t events) {
     return epoll_ctl(ep, EPOLL_CTL_MOD, c->fd, &ev);
 }
 
-int __glide_http_sm_hello_run(int port) {
+static int sm_listener_bind(int port) {
     int listener = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (listener < 0) return -1;
-
     int one = 1;
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 #ifdef SO_REUSEPORT
     setsockopt(listener, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
 #endif
-
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port        = htons((uint16_t)port);
     if (bind(listener, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(listener);
-        return -1;
+        close(listener); return -1;
     }
     if (listen(listener, 1024) < 0) {
-        close(listener);
-        return -1;
+        close(listener); return -1;
     }
     sm_set_nonblock(listener);
+    return listener;
+}
+
+static int sm_worker_loop(int port) {
+    int listener = sm_listener_bind(port);
+    if (listener < 0) return -1;
 
     int ep = epoll_create1(EPOLL_CLOEXEC);
     if (ep < 0) { close(listener); return -1; }
@@ -262,10 +265,46 @@ int __glide_http_sm_hello_run(int port) {
     return 0;
 }
 
+int __glide_http_sm_hello_run(int port) {
+    return sm_worker_loop(port);
+}
+
+typedef struct { int port; } sm_worker_arg_t;
+static void* sm_worker_thread(void* arg) {
+    sm_worker_arg_t* a = (sm_worker_arg_t*)arg;
+    int port = a->port;
+    free(a);
+    (void)sm_worker_loop(port);
+    return NULL;
+}
+
+int __glide_http_sm_hello_run_n(int port, int n) {
+    if (n < 1) n = 1;
+    int probe = sm_listener_bind(port);
+    if (probe < 0) return -1;
+    close(probe);
+    for (int i = 1; i < n; i++) {
+        sm_worker_arg_t* a = (sm_worker_arg_t*)malloc(sizeof(*a));
+        a->port = port;
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, sm_worker_thread, a) != 0) {
+            free(a);
+            continue;
+        }
+        pthread_detach(tid);
+    }
+    return sm_worker_loop(port);
+}
+
 #else
 
 int __glide_http_sm_hello_run(int port) {
     (void)port;
+    return -1;
+}
+
+int __glide_http_sm_hello_run_n(int port, int n) {
+    (void)port; (void)n;
     return -1;
 }
 

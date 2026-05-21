@@ -1,6 +1,10 @@
 import stdlib::http::*;
+import stdlib::os::*;
 
 fn main() -> int {
-    let _r: !int = http_listen_sm_hello(8080);
+    let mut workers: int = 4;
+    let r: !int = os_cpu_count();
+    if r.ok { workers = r.val; if workers > 8 { workers = 8; } }
+    let _s: !int = http_listen_sm_hello_workers(8080, workers);
     return 0;
 }

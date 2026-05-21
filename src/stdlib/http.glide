@@ -1132,6 +1132,7 @@ pub fn http_listen_workers(port: int, n: int,
 }
 
 extern fn __glide_http_sm_hello_run(port: int) -> int;
+extern fn __glide_http_sm_hello_run_n(port: int, n: int) -> int;
 
 /// Coroutine-free hello-world HTTP/1.1 server. Bench baseline for the
 /// cost of the coro layer in `http_listen`. Linux only; returns `err`
@@ -1139,5 +1140,13 @@ extern fn __glide_http_sm_hello_run(port: int) -> int;
 pub fn http_listen_sm_hello(port: int) -> !int {
     let rc: int = __glide_http_sm_hello_run(port);
     if rc < 0 { return err("http_listen_sm_hello: bind/listen failed"); }
+    return ok(0);
+}
+
+/// Multi-worker variant. Spawns `n` pthread workers, each with its own
+/// SO_REUSEPORT listener + epoll loop; the kernel load-balances accepts.
+pub fn http_listen_sm_hello_workers(port: int, n: int) -> !int {
+    let rc: int = __glide_http_sm_hello_run_n(port, n);
+    if rc < 0 { return err("http_listen_sm_hello_workers: bind/listen failed"); }
     return ok(0);
 }
