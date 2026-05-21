@@ -1,0 +1,11 @@
+// Direct return of an arena.alloc result from a local arena.
+fn make_buf() -> *int {
+    let arena: *Arena = Arena::new(64);
+    defer arena.free();
+    return arena.alloc(sizeof(int)) as *int;   // ERROR
+}
+
+fn main() {
+    let x: *int = make_buf();
+    println!(*x);
+}

@@ -463,6 +463,17 @@ pub struct Typer {
     pub scope: *HashMap<Type>,          // current scope: name -> Type (heap-alloc'd)
     pub module_scope: *HashMap<Type>,   // top-level consts (visible inside any fn body)
     pub owned_locals: *HashMap<bool>,   // names that must not escape (auto-drop)
+    // Local `*Arena` bindings declared in the current fn body. Anything
+    // allocated from one of these can't escape via return - the caller
+    // would read freed memory after this fn's `defer arena.free()` ran.
+    // Params and globals never enter this map; their lifetimes are the
+    // caller's problem.
+    pub arena_locals: *HashMap<bool>,
+    // Per-name: the arena ident this value derives from (only populated
+    // when the source arena is currently local). `let p: *T = a.create(T)`
+    // sets arena_origin[p] = "a"; return p then triggers the escape
+    // check against arena_locals.
+    pub arena_origin: *HashMap<string>,
     pub borrows: *Vector<BorrowEvent>,  // active let-bound borrows; save/restore per block
     pub current_ret: *Type,
     // Type parameters of the enclosing fn (e.g. `["T", "U"]`). Used by
@@ -552,6 +563,8 @@ impl Typer {
         let scope: *HashMap<Type> = HashMap::new();
         let mscope: *HashMap<Type> = HashMap::new();
         let owned: *HashMap<bool> = HashMap::new();
+        let ar_locals: *HashMap<bool> = HashMap::new();
+        let ar_origin: *HashMap<string> = HashMap::new();
         let bw: *Vector<BorrowEvent> = Vector::new();
         let dg: *Vector<DiagEntry> = Vector::new();
         t.fns = fns;
@@ -559,6 +572,8 @@ impl Typer {
         t.scope = scope;
         t.module_scope = mscope;
         t.owned_locals = owned;
+        t.arena_locals = ar_locals;
+        t.arena_origin = ar_origin;
         t.borrows = bw;
         t.diagnostics = dg;
         t.current_ret = null;
@@ -1199,6 +1214,44 @@ fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: int, 
     }
 }
 
+// ---- arena escape tracking ----------------------------------------------
+
+// True for `*Arena` and any pointer typedef whose Named target is "Arena".
+fn _is_arena_type(ty: *Type) -> bool {
+    if ty == null { return false; }
+    if ty.kind != TY_POINTER { return false; }
+    if ty.inner == null { return false; }
+    if ty.inner.kind != TY_NAMED { return false; }
+    return ty.inner.name.eq("Arena");
+}
+
+// If `e` is `<ident>.<method>(...)` where the receiver is a known local
+// arena, return the arena's name. Otherwise "". Doesn't chase
+// field/path receivers - those are out of scope for v1.
+fn _arena_method_origin(t: *Typer, e: *Expr) -> string {
+    if e == null || e.kind != EX_CALL { return ""; }
+    if e.lhs == null || e.lhs.kind != EX_MEMBER { return ""; }
+    let recv: *Expr = e.lhs.lhs;
+    if recv == null || recv.kind != EX_IDENT { return ""; }
+    if !t.arena_locals.contains(recv.str_val) { return ""; }
+    return recv.str_val;
+}
+
+// Look up the arena that a value derives from. Handles direct method
+// calls on a local arena receiver, plus aliasing via prior `let p = q`,
+// plus pass-through casts (`arena.alloc(n) as *T`).
+fn _expr_arena_origin(t: *Typer, e: *Expr) -> string {
+    if e == null { return ""; }
+    if e.kind == EX_CAST { return _expr_arena_origin(t, e.lhs); }
+    if e.kind == EX_IDENT {
+        if t.arena_origin.contains(e.str_val) {
+            return t.arena_origin.get(e.str_val);
+        }
+        return "";
+    }
+    return _arena_method_origin(t, e);
+}
+
 // ---- borrow tracking helpers --------------------------------------------
 
 // `e` (or any sub-expression) reads the binder `name`. Recursive walk
@@ -1416,14 +1469,20 @@ fn first_unconditional_self_call(body: *Vector<Stmt>, name: string) -> *Expr {
 fn check_fn(t: *Typer, s: *Stmt) {
     let saved_scope: *HashMap<Type> = t.scope;
     let saved_owned: *HashMap<bool> = t.owned_locals;
+    let saved_arena_locals: *HashMap<bool> = t.arena_locals;
+    let saved_arena_origin: *HashMap<string> = t.arena_origin;
     let saved_borrows: *Vector<BorrowEvent> = t.borrows;
     let saved_ret: *Type = t.current_ret;
     let saved_tps: *Vector<string> = t.current_type_params;
     let new_scope: *HashMap<Type> = HashMap::new();
     let new_owned: *HashMap<bool> = HashMap::new();
+    let new_arena_locals: *HashMap<bool> = HashMap::new();
+    let new_arena_origin: *HashMap<string> = HashMap::new();
     let new_borrows: *Vector<BorrowEvent> = Vector::new();
     t.scope = new_scope;
     t.owned_locals = new_owned;
+    t.arena_locals = new_arena_locals;
+    t.arena_origin = new_arena_origin;
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
     t.current_type_params = s.type_params;
@@ -1452,9 +1511,13 @@ fn check_fn(t: *Typer, s: *Stmt) {
 
     t.scope.free();
     t.owned_locals.free();
+    t.arena_locals.free();
+    t.arena_origin.free();
     t.borrows.free();
     t.scope = saved_scope;
     t.owned_locals = saved_owned;
+    t.arena_locals = saved_arena_locals;
+    t.arena_origin = saved_arena_origin;
     t.borrows = saved_borrows;
     t.current_ret = saved_ret;
     t.current_type_params = saved_tps;
@@ -1732,6 +1795,27 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         let is_mut: bool = s.let_value.op_code == UN_ADDR_MUT;
         record_borrow(t, src, is_mut, s.name, s.line, s.column);
     }
+
+    // Arena escape tracking:
+    //   `let arena: *Arena = ...`                  -> arena_locals[name]
+    //   `let arena: *Arena = <existing_local_arena>` -> propagate
+    //   `let p: *T = local_arena.method(...)`      -> arena_origin[p] = "local_arena"
+    //   `let p: *T = q` where q is in arena_origin -> propagate
+    if s.kind == ST_LET && s.name != null && !s.name.eq("") {
+        if _is_arena_type(s.let_ty) {
+            let mut treat_as_local: bool = true;
+            if s.let_value != null && s.let_value.kind == EX_IDENT
+                && !t.arena_locals.contains(s.let_value.str_val) {
+                // `let arena2: *Arena = arena_param` - param-owned arena
+                // stays out of arena_locals (its lifetime is the caller's).
+                treat_as_local = false;
+            }
+            if treat_as_local { t.arena_locals.insert(s.name, true); }
+        } else if s.let_value != null {
+            let origin: string = _expr_arena_origin(t, s.let_value);
+            if !origin.eq("") { t.arena_origin.insert(s.name, origin); }
+        }
+    }
 }
 
 fn check_return(t: *Typer, s: *Stmt) {
@@ -1749,6 +1833,16 @@ fn check_return(t: *Typer, s: *Stmt) {
         return;
     }
     let e: *Expr = s.expr_value;
+
+    // Arena escape: pointer derived from a local `*Arena` must not leave
+    // the fn - the caller would dereference into freed memory after the
+    // arena's `defer free()` ran.
+    let arena_src: string = _expr_arena_origin(t, e);
+    if !arena_src.eq("") && t.arena_locals.contains(arena_src) {
+        t.err_code(s.line, s.column, "arena-escape",
+            "returned pointer derives from local arena `".concat(arena_src)
+            .concat("`; the caller would read freed memory. Accept the arena as a parameter so its lifetime is owned by the caller."));
+    }
 
     // Borrow rule: cannot return an owned local (auto-drop would free it).
     if e.kind == EX_IDENT && t.owned_locals.contains(e.str_val) {
