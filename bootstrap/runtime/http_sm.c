@@ -1,0 +1,274 @@
+/* Coroutine-free hello-world HTTP/1.1 server. Single epoll loop in the
+   caller's thread; each conn lives in an sm_conn_t pointed at from
+   epoll_event.data.ptr. Response body is hardcoded so the delta vs.
+   http_listen with a Glide handler returning "hello!" measures the
+   coro layer's overhead. Pipelining via hp_glide_consumed + memmove;
+   no spawn, no chan, no park.
+
+   Linux only. Windows / macOS / BSD fall through to a stub that
+   returns -1 until IOCP / kqueue land. */
+
+#ifndef GLIDE_HTTP_SM_DEFINED
+#define GLIDE_HTTP_SM_DEFINED
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <errno.h>
+
+#ifdef __linux__
+
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+extern void* hp_parse_glide(void* buf, int len);
+extern int   hp_glide_wants_close(void* g);
+extern int   hp_glide_consumed(void* g);
+extern void  hp_glide_free(void* g);
+
+#define SM_BUF_SIZE 8192
+
+typedef enum {
+    SM_READING = 0,
+    SM_WRITING = 1,
+    SM_CLOSED  = 2,
+} sm_state_t;
+
+typedef struct {
+    int        fd;
+    sm_state_t state;
+    int        keep_alive;
+    int        read_len;
+    int        write_len;
+    int        write_off;
+    char       read_buf[SM_BUF_SIZE];
+    char       write_buf[SM_BUF_SIZE];
+} sm_conn_t;
+
+static void sm_set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+static const char SM_RESP_KEEP[] =
+    "HTTP/1.1 200 OK\r\n"
+    "Server: glide-sm\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 6\r\n"
+    "Connection: keep-alive\r\n"
+    "\r\n"
+    "hello!";
+static const char SM_RESP_CLOSE[] =
+    "HTTP/1.1 200 OK\r\n"
+    "Server: glide-sm\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 6\r\n"
+    "Connection: close\r\n"
+    "\r\n"
+    "hello!";
+
+static sm_conn_t* sm_new_conn(int fd) {
+    sm_conn_t* c = (sm_conn_t*)malloc(sizeof(sm_conn_t));
+    if (!c) return NULL;
+    c->fd = fd;
+    c->state = SM_READING;
+    c->keep_alive = 0;
+    c->read_len = 0;
+    c->write_len = 0;
+    c->write_off = 0;
+    return c;
+}
+
+static void sm_close(sm_conn_t* c, int ep) {
+    epoll_ctl(ep, EPOLL_CTL_DEL, c->fd, NULL);
+    close(c->fd);
+    free(c);
+}
+
+/* Returns 1 if a request parsed (state -> SM_WRITING), 0 if blocked on
+   EAGAIN, -1 on hard error / EOF. */
+static int sm_advance_read(sm_conn_t* c) {
+    while (c->read_len < SM_BUF_SIZE) {
+        ssize_t n = read(c->fd, c->read_buf + c->read_len,
+                         (size_t)(SM_BUF_SIZE - c->read_len));
+        if (n > 0) {
+            c->read_len += (int)n;
+        } else if (n == 0) {
+            return -1;
+        } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            break;
+        } else if (errno == EINTR) {
+            continue;
+        } else {
+            return -1;
+        }
+    }
+    if (c->read_len == 0) return 0;
+
+    void* g = hp_parse_glide(c->read_buf, c->read_len);
+    if (!g) {
+        if (c->read_len >= SM_BUF_SIZE) return -1;
+        return 0;
+    }
+
+    c->keep_alive = !hp_glide_wants_close(g);
+    int consumed  = hp_glide_consumed(g);
+    hp_glide_free(g);
+
+    int leftover = c->read_len - consumed;
+    if (leftover < 0) leftover = 0;
+    if (leftover > 0 && consumed > 0) {
+        memmove(c->read_buf, c->read_buf + consumed, (size_t)leftover);
+    }
+    c->read_len = leftover;
+
+    const char* src = c->keep_alive ? SM_RESP_KEEP  : SM_RESP_CLOSE;
+    int rn          = c->keep_alive ? (int)sizeof(SM_RESP_KEEP) - 1
+                                    : (int)sizeof(SM_RESP_CLOSE) - 1;
+    memcpy(c->write_buf, src, (size_t)rn);
+    c->write_len = rn;
+    c->write_off = 0;
+    c->state = SM_WRITING;
+    return 1;
+}
+
+static int sm_advance_write(sm_conn_t* c) {
+    while (c->write_off < c->write_len) {
+        ssize_t n = write(c->fd, c->write_buf + c->write_off,
+                          (size_t)(c->write_len - c->write_off));
+        if (n > 0) {
+            c->write_off += (int)n;
+        } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return 0;
+        } else if (n < 0 && errno == EINTR) {
+            continue;
+        } else {
+            return -1;
+        }
+    }
+    return 1;
+}
+
+static int sm_set_events(int ep, sm_conn_t* c, uint32_t events) {
+    struct epoll_event ev;
+    ev.events = events;
+    ev.data.ptr = c;
+    return epoll_ctl(ep, EPOLL_CTL_MOD, c->fd, &ev);
+}
+
+int __glide_http_sm_hello_run(int port) {
+    int listener = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (listener < 0) return -1;
+
+    int one = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+    setsockopt(listener, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+#endif
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port        = htons((uint16_t)port);
+    if (bind(listener, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(listener);
+        return -1;
+    }
+    if (listen(listener, 1024) < 0) {
+        close(listener);
+        return -1;
+    }
+    sm_set_nonblock(listener);
+
+    int ep = epoll_create1(EPOLL_CLOEXEC);
+    if (ep < 0) { close(listener); return -1; }
+
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events  = EPOLLIN;
+    ev.data.ptr = NULL;
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, listener, &ev) < 0) {
+        close(ep); close(listener); return -1;
+    }
+
+    struct epoll_event evs[256];
+    for (;;) {
+        int n = epoll_wait(ep, evs, 256, -1);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int i = 0; i < n; i++) {
+            void* p = evs[i].data.ptr;
+            uint32_t m = evs[i].events;
+            if (p == NULL) {
+                for (;;) {
+                    int cfd = accept4(listener, NULL, NULL,
+                                       SOCK_NONBLOCK | SOCK_CLOEXEC);
+                    if (cfd < 0) break;
+                    int yes = 1;
+                    setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY,
+                               &yes, sizeof(yes));
+                    sm_conn_t* c = sm_new_conn(cfd);
+                    if (!c) { close(cfd); continue; }
+                    struct epoll_event cev;
+                    cev.events = EPOLLIN | EPOLLRDHUP;
+                    cev.data.ptr = c;
+                    if (epoll_ctl(ep, EPOLL_CTL_ADD, cfd, &cev) < 0) {
+                        close(cfd); free(c);
+                    }
+                }
+                continue;
+            }
+            sm_conn_t* c = (sm_conn_t*)p;
+            if (m & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                if (c->state == SM_READING) (void)sm_advance_read(c);
+                sm_close(c, ep);
+                continue;
+            }
+            int closed = 0;
+            int want_out = 0;
+            for (;;) {
+                if (c->state == SM_READING) {
+                    int r = sm_advance_read(c);
+                    if (r < 0) { closed = 1; break; }
+                    if (r == 0) break;
+                }
+                if (c->state == SM_WRITING) {
+                    int w = sm_advance_write(c);
+                    if (w < 0) { closed = 1; break; }
+                    if (w == 0) { want_out = 1; break; }
+                    if (!c->keep_alive) { closed = 1; break; }
+                    c->write_len = 0; c->write_off = 0;
+                    c->state = SM_READING;
+                }
+            }
+            if (closed) { sm_close(c, ep); continue; }
+            if (want_out) {
+                sm_set_events(ep, c, EPOLLOUT | EPOLLRDHUP);
+            } else if (c->state == SM_READING) {
+                sm_set_events(ep, c, EPOLLIN | EPOLLRDHUP);
+            }
+        }
+    }
+    close(ep);
+    close(listener);
+    return 0;
+}
+
+#else
+
+int __glide_http_sm_hello_run(int port) {
+    (void)port;
+    return -1;
+}
+
+#endif
+
+#endif

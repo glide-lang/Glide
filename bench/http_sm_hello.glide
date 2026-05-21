@@ -1,0 +1,6 @@
+import stdlib::http::*;
+
+fn main() -> int {
+    let _r: !int = http_listen_sm_hello(8080);
+    return 0;
+}

@@ -1130,3 +1130,14 @@ pub fn http_listen_workers(port: int, n: int,
     _accept_loop(port, handler);
     return ok(0);
 }
+
+extern fn __glide_http_sm_hello_run(port: int) -> int;
+
+/// Coroutine-free hello-world HTTP/1.1 server. Bench baseline for the
+/// cost of the coro layer in `http_listen`. Linux only; returns `err`
+/// elsewhere.
+pub fn http_listen_sm_hello(port: int) -> !int {
+    let rc: int = __glide_http_sm_hello_run(port);
+    if rc < 0 { return err("http_listen_sm_hello: bind/listen failed"); }
+    return ok(0);
+}
