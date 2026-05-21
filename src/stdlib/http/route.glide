@@ -71,6 +71,74 @@ fn impl_route(s: *Stmt) -> *Vector<Stmt> {
     return out;
 }
 
+// `@app(port)` on `fn main` rewrites main to set up a Router, run the
+// user body with `r` in scope (when declared as `fn main(r: *Router)`),
+// register every @route'd fn, and call `r.listen(port)`. The emitted
+// main has return type `!int` so listen's `bind failed` propagates
+// through Phase 0's wrapper into a non-zero exit code.
+@proc_attr(app)
+fn impl_app(s: *Stmt) -> *Vector<Stmt> {
+    let mut port: int = 8080;
+    if s.attrs != null {
+        for let i: int = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if !a.name.eq("app") { continue; }
+            if a.args != null && a.args.len() > 0 {
+                let pe: Expr = a.args.get(0);
+                if pe.kind == EX_INT { port = pe.int_val as int; }
+            }
+            break;
+        }
+    }
+
+    let new_body: *Vector<Stmt> = Vector::new();
+
+    // let r: *Router = Router::new();
+    let router_init: *Expr = expr_call(
+        expr_path("Router", "new", 0, 0), Vector::new());
+    new_body.push(*stmt_let_unsafe("r",
+        ty_pointer(ty_named("Router")), router_init, false, 0, 0));
+
+    if s.fn_body != null {
+        for let i: int = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            new_body.push(b);
+        }
+    }
+
+    let prog: *Vector<Stmt> = __program__();
+    for let i: int = 0; i < prog.len(); i++ {
+        let p: Stmt = prog.get(i);
+        if p.kind != ST_FN { continue; }
+        if p.attrs == null { continue; }
+        for let j: int = 0; j < p.attrs.len(); j++ {
+            let a: Attr = p.attrs.get(j);
+            if !_is_route_attr_name(a.name) { continue; }
+            let reg_name: string = "_route_register_".concat(p.name);
+            let reg_args: *Vector<Expr> = Vector::new();
+            reg_args.push(*expr_ident_unsafe("r", 0, 0));
+            new_body.push(*stmt_expr(expr_call(
+                expr_ident_unsafe(reg_name, 0, 0), reg_args)));
+            break;
+        }
+    }
+
+    // return r.listen(port);
+    let listen_args: *Vector<Expr> = Vector::new();
+    listen_args.push(*expr_int(port, 0, 0));
+    let listen_call: *Expr = expr_call(
+        expr_member(expr_ident_unsafe("r", 0, 0), "listen"),
+        listen_args);
+    new_body.push(*stmt_return(listen_call, 0, 0));
+
+    let main_params: *Vector<Param> = Vector::new();
+    let main_ret_ty: *Type = ty_result(ty_named("int"));
+
+    let out: *Vector<Stmt> = Vector::new();
+    out.push(*stmt_fn("main", main_params, main_ret_ty, new_body, 0, 0));
+    return out;
+}
+
 pub fn _is_route_attr_name(n: string) -> bool {
     if n.eq("route") { return true; }
     if n.eq("get") { return true; }

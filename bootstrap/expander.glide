@@ -265,9 +265,11 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
 
     // Make the registered proc fns + the rest of the program callable
     // from inside any executed proc fn (so a derive can call helpers
-    // declared elsewhere in the same module).
+    // declared elsewhere in the same module). Expose the program
+    // snapshot via `__program__()` for macros that walk siblings.
     let it: *Interp = Interp::new();
     it.register_fns(program);
+    it.program = program;
 
     // Main pass: rebuild the program. For each stmt, dispatch every
     // @derive(Name) / @<name> attribute it carries.

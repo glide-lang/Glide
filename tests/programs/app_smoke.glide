@@ -1,0 +1,12 @@
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+
+@get("/health")
+fn health() -> HttpResponse {
+    return HttpResponse::ok().text("ok");
+}
+
+@app(8080)
+fn main() {
+}

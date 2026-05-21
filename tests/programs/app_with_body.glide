@@ -1,0 +1,13 @@
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+
+@get("/")
+fn index() -> HttpResponse {
+    return HttpResponse::ok().text("hello");
+}
+
+@app(7777)
+fn main(r: *Router) {
+    println!("server starting on :7777");
+}
