@@ -233,6 +233,15 @@ c_raw! {
         int                        early_data_attempted;
         int                        early_data_accepted;
         int                        h3_ready_early;  // nghttp3 set up pre-handshake (0-RTT path)
+
+        // Request that needs to ship as 0-RTT early data. Stashed by
+        // client_request before the loop runs; submitted from the
+        // custom client_initial callback so it lands just after ngtcp2
+        // installs 0-RTT keys but before the first writev_stream emits.
+        char*                      pending_method;
+        char*                      pending_host;
+        char*                      pending_path;
+        char*                      pending_headers_block;
     } __glide_h3_conn;
 
     // ---- response sink helpers --------------------------------------
@@ -442,6 +451,96 @@ c_raw! {
         __glide_h3_conn* c = (__glide_h3_conn*)user_data;
         if (c->h3 == NULL) return 0;
         nghttp3_conn_shutdown_stream_read(c->h3, stream_id);
+        return 0;
+    }
+
+    // ---- 0-RTT request submission from client_initial callback -----
+    //
+    // Opens the request stream and pushes the headers + body into
+    // nghttp3 from inside ngtcp2's client_initial path. The crypto
+    // helper installs 0-RTT keys before this runs, so the very next
+    // writev_stream call packetizes the stream data as 0-RTT.
+
+    static int __glide_h3_client_submit_pending(__glide_h3_conn* c) {
+        if (c->pending_method == NULL || c->h3 == NULL) return 0;
+
+        int64_t stream_id;
+        if (ngtcp2_conn_open_bidi_stream(c->qc, &stream_id, NULL) != 0) return -1;
+        c->request_stream_id = stream_id;
+
+        size_t cap = 16, nh = 0;
+        nghttp3_nv* nva = (nghttp3_nv*)malloc(cap * sizeof(*nva));
+        #define ADD_HDR_0RTT(N, V, NL, VL) do {                            \
+            if (nh == cap) {                                               \
+                cap *= 2;                                                  \
+                nva = (nghttp3_nv*)realloc(nva, cap * sizeof(*nva));       \
+            }                                                              \
+            nva[nh].name = (uint8_t*)(N);                                  \
+            nva[nh].value = (uint8_t*)(V);                                 \
+            nva[nh].namelen = (NL);                                        \
+            nva[nh].valuelen = (VL);                                       \
+            nva[nh].flags = NGHTTP3_NV_FLAG_NONE;                          \
+            nh++;                                                          \
+        } while (0)
+
+        ADD_HDR_0RTT(":method",    c->pending_method, 7, strlen(c->pending_method));
+        ADD_HDR_0RTT(":scheme",    "https", 7, 5);
+        ADD_HDR_0RTT(":authority", c->pending_host, 10, strlen(c->pending_host));
+        ADD_HDR_0RTT(":path",      c->pending_path, 5, strlen(c->pending_path));
+
+        if (c->pending_headers_block != NULL && c->pending_headers_block[0] != 0) {
+            const char* p = c->pending_headers_block;
+            while (*p) {
+                const char* line_end = p;
+                while (*line_end && !(line_end[0] == '\r' && line_end[1] == '\n')) line_end++;
+                const char* colon = p;
+                while (colon < line_end && *colon != ':') colon++;
+                if (colon < line_end) {
+                    const char* vstart = colon + 1;
+                    while (vstart < line_end && (*vstart == ' ' || *vstart == '\t')) vstart++;
+                    size_t nl = (size_t)(colon - p);
+                    size_t vl = (size_t)(line_end - vstart);
+                    char* lname = (char*)malloc(nl);
+                    for (size_t i = 0; i < nl; i++) {
+                        char ch = p[i];
+                        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+                        lname[i] = ch;
+                    }
+                    char* lval = (char*)malloc(vl);
+                    memcpy(lval, vstart, vl);
+                    ADD_HDR_0RTT(lname, lval, nl, vl);
+                }
+                if (*line_end == 0) break;
+                p = line_end + 2;
+            }
+        }
+        #undef ADD_HDR_0RTT
+
+        nghttp3_data_reader dr;
+        nghttp3_data_reader* drp = NULL;
+        if (c->req_body_len > 0) {
+            dr.read_data = __glide_h3_read_req_body_cb;
+            drp = &dr;
+        }
+        int rv = nghttp3_conn_submit_request(c->h3, stream_id, nva, nh, drp, c);
+        free(nva);
+        return rv == 0 ? 0 : -1;
+    }
+
+    // Wraps the crypto helper's client_initial cb so we can hook in
+    // right after 0-RTT keys land but before the first writev_stream.
+    // When a pending request is pinned (h3_ready_early + 0-RTT cache
+    // hit), submit it here so its stream data ships as 0-RTT.
+    static int __glide_h3_client_initial_0rtt_cb(ngtcp2_conn *conn,
+                                                   void *user_data) {
+        int rv = ngtcp2_crypto_client_initial_cb(conn, user_data);
+        if (rv != 0) return rv;
+        __glide_h3_conn* c = (__glide_h3_conn*)user_data;
+        if (c->pending_method != NULL) {
+            if (__glide_h3_client_submit_pending(c) != 0) {
+                return NGTCP2_ERR_CALLBACK_FAILURE;
+            }
+        }
         return 0;
     }
 
@@ -683,6 +782,140 @@ c_raw! {
         return v;
     }
 
+    // ---- disk persistence ------------------------------------------
+    // File format (little-endian):
+    //   magic   u32  'GH3C' = 0x47483343
+    //   version u32  1
+    //   n       u32  entry count
+    //   entry × n:
+    //     host_len u32, host bytes
+    //     port     u32
+    //     sess_len u32, sess bytes (i2d_SSL_SESSION)
+    //     tp_len   u32, tp bytes
+    //     expires  u64  ns since monotonic epoch
+    //
+    // Best-effort: corrupt / mismatched-magic files reset to empty
+    // cache. Expired entries are pruned on load. Caller decides when
+    // to persist (e.g. on shutdown).
+
+    static void __glide_h3_write_u32(FILE* f, uint32_t v) {
+        uint8_t b[4];
+        b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8);
+        b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24);
+        fwrite(b, 1, 4, f);
+    }
+    static void __glide_h3_write_u64(FILE* f, uint64_t v) {
+        uint8_t b[8];
+        for (int i = 0; i < 8; i++) b[i] = (uint8_t)(v >> (i * 8));
+        fwrite(b, 1, 8, f);
+    }
+    static int __glide_h3_read_u32(FILE* f, uint32_t* out) {
+        uint8_t b[4];
+        if (fread(b, 1, 4, f) != 4) return 0;
+        *out = (uint32_t)b[0] | ((uint32_t)b[1] << 8)
+               | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+        return 1;
+    }
+    static int __glide_h3_read_u64(FILE* f, uint64_t* out) {
+        uint8_t b[8];
+        if (fread(b, 1, 8, f) != 8) return 0;
+        uint64_t v = 0;
+        for (int i = 0; i < 8; i++) v |= ((uint64_t)b[i]) << (i * 8);
+        *out = v;
+        return 1;
+    }
+
+    int __glide_h3_session_cache_save(void* h, const char* path) {
+        if (h == NULL || path == NULL) return 0;
+        __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
+        FILE* f = fopen(path, "wb");
+        if (f == NULL) return 0;
+        pthread_mutex_lock(&c->lock);
+        __glide_h3_write_u32(f, 0x47483343u);  // 'GH3C'
+        __glide_h3_write_u32(f, 1u);            // version
+        // Count live entries (skip expired).
+        uint64_t now = __glide_h3_now();
+        uint32_t live = 0;
+        for (int i = 0; i < c->n_entries; i++) {
+            if (c->entries[i].expires_ns == 0
+                || c->entries[i].expires_ns > now) live++;
+        }
+        __glide_h3_write_u32(f, live);
+        for (int i = 0; i < c->n_entries; i++) {
+            __glide_h3_cached_session* e = &c->entries[i];
+            if (e->expires_ns != 0 && e->expires_ns <= now) continue;
+            uint32_t hl = e->host ? (uint32_t)strlen(e->host) : 0;
+            __glide_h3_write_u32(f, hl);
+            if (hl > 0) fwrite(e->host, 1, hl, f);
+            __glide_h3_write_u32(f, (uint32_t)e->port);
+            __glide_h3_write_u32(f, (uint32_t)e->session_der_len);
+            if (e->session_der_len > 0) fwrite(e->session_der, 1, e->session_der_len, f);
+            __glide_h3_write_u32(f, (uint32_t)e->tp_bytes_len);
+            if (e->tp_bytes_len > 0) fwrite(e->tp_bytes, 1, e->tp_bytes_len, f);
+            __glide_h3_write_u64(f, e->expires_ns);
+        }
+        pthread_mutex_unlock(&c->lock);
+        fclose(f);
+        return 1;
+    }
+
+    int __glide_h3_session_cache_load(void* h, const char* path) {
+        if (h == NULL || path == NULL) return 0;
+        __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
+        FILE* f = fopen(path, "rb");
+        if (f == NULL) return 0;
+        uint32_t magic, version, count;
+        if (!__glide_h3_read_u32(f, &magic) || magic != 0x47483343u) { fclose(f); return 0; }
+        if (!__glide_h3_read_u32(f, &version) || version != 1u) { fclose(f); return 0; }
+        if (!__glide_h3_read_u32(f, &count)) { fclose(f); return 0; }
+        pthread_mutex_lock(&c->lock);
+        // Wipe current state.
+        for (int i = 0; i < c->n_entries; i++) {
+            __glide_h3_cache_entry_clear(&c->entries[i]);
+        }
+        c->n_entries = 0;
+        uint64_t now = __glide_h3_now();
+        int loaded = 0;
+        for (uint32_t i = 0; i < count && i < __GLIDE_H3_CACHE_CAP; i++) {
+            uint32_t hl, port, sl, tl;
+            if (!__glide_h3_read_u32(f, &hl)) break;
+            char* host = (char*)malloc(hl + 1);
+            if (hl > 0 && fread(host, 1, hl, f) != hl) { free(host); break; }
+            host[hl] = 0;
+            if (!__glide_h3_read_u32(f, &port)) { free(host); break; }
+            if (!__glide_h3_read_u32(f, &sl)) { free(host); break; }
+            uint8_t* sb = NULL;
+            if (sl > 0) {
+                sb = (uint8_t*)malloc(sl);
+                if (fread(sb, 1, sl, f) != sl) { free(host); free(sb); break; }
+            }
+            if (!__glide_h3_read_u32(f, &tl)) { free(host); free(sb); break; }
+            uint8_t* tb = NULL;
+            if (tl > 0) {
+                tb = (uint8_t*)malloc(tl);
+                if (fread(tb, 1, tl, f) != tl) { free(host); free(sb); free(tb); break; }
+            }
+            uint64_t exp;
+            if (!__glide_h3_read_u64(f, &exp)) { free(host); free(sb); free(tb); break; }
+            if (exp != 0 && exp <= now) {
+                free(host); free(sb); free(tb);
+                continue;
+            }
+            __glide_h3_cached_session* e = &c->entries[c->n_entries++];
+            e->host = host;
+            e->port = (int)port;
+            e->session_der = sb;
+            e->session_der_len = sl;
+            e->tp_bytes = tb;
+            e->tp_bytes_len = tl;
+            e->expires_ns = exp;
+            loaded++;
+        }
+        pthread_mutex_unlock(&c->lock);
+        fclose(f);
+        return loaded;
+    }
+
     void __glide_h3_session_cache_free(void* h) {
         if (h == NULL) return;
         __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
@@ -871,11 +1104,13 @@ c_raw! {
         c->conn_ref.user_data = c;
         SSL_set_app_data(c->ssl, &c->conn_ref);
         SSL_set_connect_state(c->ssl);
-        SSL_set_quic_tls_early_data_enabled(c->ssl, 1);
 
         // 0-RTT path: probe the cache. On hit we install the cached
         // SSL_SESSION here and stash the 0-RTT TPs to apply on the
         // ngtcp2_conn right after it's created below.
+        // Order matters: SSL_set_session BEFORE
+        // SSL_set_quic_tls_early_data_enabled so OpenSSL can read the
+        // session's max_early_data when deciding to enable.
         uint8_t* cached_tp = NULL;
         int      cached_tp_len = 0;
         if (c->cache != NULL) {
@@ -898,6 +1133,7 @@ c_raw! {
                 free(sess_der);
             }
         }
+        SSL_set_quic_tls_early_data_enabled(c->ssl, 1);
 
         static const unsigned char alpn_h3[] = { 2, 'h', '3' };
         SSL_set_alpn_protos(c->ssl, alpn_h3, sizeof(alpn_h3));
@@ -908,9 +1144,18 @@ c_raw! {
             SSL_set_tlsext_host_name(c->ssl, host);
         }
 
-        // ngtcp2_callbacks.
+        // ngtcp2_callbacks. The 0-RTT wrapper is opt-in via env var
+        // because the server-side response delivery on the 0-RTT-
+        // resumed connection has a known stall on loopback that
+        // hasn't been root-caused. Without GLIDE_H3_0RTT=1 we keep
+        // session resumption (smaller ClientHello, no fresh cert
+        // verify) but the request still ships as 1-RTT.
         ngtcp2_callbacks cb; memset(&cb, 0, sizeof(cb));
-        cb.client_initial             = ngtcp2_crypto_client_initial_cb;
+        if (c->early_data_attempted && getenv("GLIDE_H3_0RTT")) {
+            cb.client_initial         = __glide_h3_client_initial_0rtt_cb;
+        } else {
+            cb.client_initial         = ngtcp2_crypto_client_initial_cb;
+        }
         cb.recv_crypto_data           = ngtcp2_crypto_recv_crypto_data_cb;
         cb.encrypt                    = ngtcp2_crypto_encrypt_cb;
         cb.decrypt                    = ngtcp2_crypto_decrypt_cb;
@@ -979,7 +1224,11 @@ c_raw! {
         if (cached_tp != NULL && cached_tp_len > 0) {
             if (ngtcp2_conn_decode_and_set_0rtt_transport_params(
                     c->qc, cached_tp, (size_t)cached_tp_len) == 0) {
-                if (__glide_h3_setup_h3_client(c)) {
+                // Mirror the cb gate above: only stand up nghttp3 early
+                // (which lets client_request stash a pending submit
+                // instead of running its own open+submit) when 0-RTT
+                // is opted-in.
+                if (getenv("GLIDE_H3_0RTT") && __glide_h3_setup_h3_client(c)) {
                     c->h3_ready_early = 1;
                 }
             }
@@ -1015,6 +1264,10 @@ c_raw! {
         #endif
         }
         if (c->cached_host) free(c->cached_host);
+        if (c->pending_method) free(c->pending_method);
+        if (c->pending_host) free(c->pending_host);
+        if (c->pending_path) free(c->pending_path);
+        if (c->pending_headers_block) free(c->pending_headers_block);
         free(c);
         return NULL;
     }
@@ -1038,11 +1291,25 @@ c_raw! {
             c->req_body_len = (size_t)body_len;
         }
 
-        // 0-RTT path: connect returned with nghttp3 already wired but the
-        // handshake loop deferred. Submitting the request here puts the
-        // stream data into nghttp3 ahead of the first writev_stream call,
-        // so it ships as 0-RTT in the Initial flight.
-        if (c->h3 == NULL && !c->h3_ready_early) {
+        // 0-RTT path: connect returned with nghttp3 already wired and a
+        // custom client_initial callback registered. Stash the request
+        // info on the conn so the callback can submit it once 0-RTT
+        // keys are derived, then just drive the loop to ship the data.
+        if (c->h3_ready_early) {
+            c->pending_method        = strdup(method);
+            c->pending_host          = strdup(host);
+            c->pending_path          = strdup(path);
+            c->pending_headers_block = (extra_headers_block && extra_headers_block[0])
+                                        ? strdup(extra_headers_block) : NULL;
+            uint64_t deadline = __glide_h3_now() +
+                (timeout_ms > 0 ? (uint64_t)timeout_ms * 1000000ULL
+                                : 30000000000ULL);
+            return __glide_h3_loop_until(c, &c->stream_done, deadline) ? 1 : 0;
+        }
+
+        // Non-cached path: existing flow opens the bidi stream and
+        // submits the request inline.
+        if (c->h3 == NULL) {
             if (!__glide_h3_setup_h3_client(c)) return 0;
         }
 
@@ -1164,6 +1431,10 @@ c_raw! {
         free(c->resp_body);
         free(c->req_body);
         if (c->cached_host) free(c->cached_host);
+        if (c->pending_method) free(c->pending_method);
+        if (c->pending_host) free(c->pending_host);
+        if (c->pending_path) free(c->pending_path);
+        if (c->pending_headers_block) free(c->pending_headers_block);
         free(c);
     }
 
@@ -2024,7 +2295,17 @@ c_raw! {
                 if (s->qc && !s->connection_error) {
                     if (__glide_h3_srv_write(s) != 0) s->connection_error = 1;
                 }
-                if (s->st == H3_ST_HANDSHAKING && s->request_ready) {
+                // Promote to REQ_READY when the request fully arrived AND
+                // the handshake is done. For 0-RTT, request_ready may
+                // fire BEFORE handshake_done (early data lands in the
+                // first packet flight); dispatching the handler before
+                // we have 1-RTT keys means the response would have to
+                // ship over 0-RTT (server-side 0-RTT for responses
+                // doesn't exist) and stalls. Waiting for handshake_done
+                // pushes dispatch to the moment we can actually reply.
+                if (s->st == H3_ST_HANDSHAKING
+                    && s->request_ready
+                    && s->handshake_done) {
                     s->st = H3_ST_REQ_READY;
                     __glide_h3_mark_ready(l, s);
                     notify = 1;
@@ -2546,6 +2827,8 @@ extern fn __glide_h3_session_cache_new() -> *void;
 extern fn __glide_h3_session_cache_free(handle: *void);
 extern fn __glide_h3_session_cache_attempts(handle: *void) -> int;
 extern fn __glide_h3_session_cache_accepted(handle: *void) -> int;
+extern fn __glide_h3_session_cache_save(handle: *void, path: string) -> int;
+extern fn __glide_h3_session_cache_load(handle: *void, path: string) -> int;
 extern fn __glide_h3_early_data_accepted(conn_handle: *void) -> int;
 extern fn __glide_h3_client_request(handle: *void, method: string, host: string, path: string,
                                      extra_headers_block: string,
@@ -2667,6 +2950,25 @@ impl H3SessionCache {
     /// (i.e. saved 1 RTT). `attempts - accepted` is the rejection count.
     pub fn accepted(self: *H3SessionCache) -> int {
         return __glide_h3_session_cache_accepted(self.handle);
+    }
+    /// Serialise the cache to a binary file (magic + version + N entries).
+    /// Survives across process restarts so cold-start clients can pick
+    /// up a previously cached session. Returns true on success.
+    ///
+    /// ```glide
+    /// let c: *H3SessionCache = H3SessionCache::new();
+    /// // ...do work...
+    /// c.save("h3-sessions.bin");
+    /// ```
+    pub fn save(self: *H3SessionCache, path: string) -> bool {
+        return __glide_h3_session_cache_save(self.handle, path) != 0;
+    }
+    /// Read entries from a binary file produced by `save`. Expired
+    /// entries are dropped on load. Wipes whatever the cache held first.
+    /// Returns the number of entries loaded (0 on missing file or
+    /// corrupt format — safe to call before save has ever run).
+    pub fn load(self: *H3SessionCache, path: string) -> int {
+        return __glide_h3_session_cache_load(self.handle, path);
     }
 }
 
