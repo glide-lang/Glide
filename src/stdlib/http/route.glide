@@ -46,6 +46,17 @@ fn impl_route(s: *Stmt) -> *Vector<Stmt> {
     passthrough.push(*s);
     if path.eq("") || method.eq("") { return passthrough; }
 
+    let path_err: string = _validate_path(path);
+    if !path_err.eq("") {
+        println!("error: @", method, " on `", s.name, "`: ", path_err);
+        return passthrough;
+    }
+    let align_err: string = _validate_path_params(path, s.fn_params);
+    if !align_err.eq("") {
+        println!("error: @", method, " on `", s.name, "`: ", align_err);
+        return passthrough;
+    }
+
     let user_name: string = s.name;
     let renamed: string = "_user_".concat(user_name);
 
@@ -71,18 +82,18 @@ fn impl_route(s: *Stmt) -> *Vector<Stmt> {
     return out;
 }
 
-// `@app(port)` on `fn main` rewrites main to set up a Router, run the
-// user body with `r` in scope (when declared as `fn main(r: *Router)`),
+// `@listen(port)` on `fn main` rewrites main to set up a Router, run
+// the user body with `r` in scope (when declared as `fn main(r: *Router)`),
 // register every @route'd fn, and call `r.listen(port)`. The emitted
 // main has return type `!int` so listen's `bind failed` propagates
 // through Phase 0's wrapper into a non-zero exit code.
-@proc_attr(app)
-fn impl_app(s: *Stmt) -> *Vector<Stmt> {
+@proc_attr(listen)
+fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
     let mut port: int = 8080;
     if s.attrs != null {
         for let i: int = 0; i < s.attrs.len(); i++ {
             let a: Attr = s.attrs.get(i);
-            if !a.name.eq("app") { continue; }
+            if !a.name.eq("listen") { continue; }
             if a.args != null && a.args.len() > 0 {
                 let pe: Expr = a.args.get(0);
                 if pe.kind == EX_INT { port = pe.int_val as int; }
@@ -107,6 +118,8 @@ fn impl_app(s: *Stmt) -> *Vector<Stmt> {
     }
 
     let prog: *Vector<Stmt> = __program__();
+    let seen: *Vector<string> = Vector::new();
+    let owners: *Vector<string> = Vector::new();
     for let i: int = 0; i < prog.len(); i++ {
         let p: Stmt = prog.get(i);
         if p.kind != ST_FN { continue; }
@@ -114,6 +127,20 @@ fn impl_app(s: *Stmt) -> *Vector<Stmt> {
         for let j: int = 0; j < p.attrs.len(); j++ {
             let a: Attr = p.attrs.get(j);
             if !_is_route_attr_name(a.name) { continue; }
+            let key: string = _route_key(p, a);
+            if !key.eq("") {
+                let mut dup_idx: int = -1;
+                for let k: int = 0; k < seen.len(); k++ {
+                    if seen.get(k).eq(key) { dup_idx = k; break; }
+                }
+                if dup_idx >= 0 {
+                    println!("error: duplicate route ", key, " on `",
+                             p.name, "`; first defined on `",
+                             owners.get(dup_idx), "`");
+                }
+                seen.push(key);
+                owners.push(p.name);
+            }
             let reg_name: string = "_route_register_".concat(p.name);
             let reg_args: *Vector<Expr> = Vector::new();
             reg_args.push(*expr_ident_unsafe("r", 0, 0));
@@ -139,6 +166,60 @@ fn impl_app(s: *Stmt) -> *Vector<Stmt> {
     return out;
 }
 
+// `/`, `/foo`, `/foo/:id`, `/static/*rest` — basic shape check. Returns
+// "" when ok, otherwise a single-line error describing the first
+// offence so the diagnostic stays scannable.
+pub fn _validate_path(path: string) -> string {
+    let n: int = path.len();
+    if n == 0 { return "path is empty"; }
+    if path.at(0).to_int() != 47 { return "path must start with `/`"; }
+    let mut i: int = 1;
+    while i < n {
+        let c: int = path.at(i).to_int();
+        if c == 47 && path.at(i - 1).to_int() == 47 {
+            return "path has empty segment (`//`)";
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// For each `:name` segment in `path`, look for a matching `name: Path<T>`
+// in `params`. Wildcards `*name` map to `name: Path<string>`. Mismatch
+// surfaces as a compile-time diagnostic so a typo doesn't degrade to
+// a runtime 400/404.
+pub fn _validate_path_params(path: string, params: *Vector<Param>) -> string {
+    let n: int = path.len();
+    let mut i: int = 0;
+    while i < n {
+        let c: int = path.at(i).to_int();
+        if c == 58 || c == 42 {
+            let mut j: int = i + 1;
+            while j < n && path.at(j).to_int() != 47 { j = j + 1; }
+            let seg: string = path.substring(i + 1, j);
+            if seg.eq("") { return "path has empty `:` / `*` param"; }
+            if params == null { return "path expects a Path<T> param for `".concat(seg).concat("`"); }
+            let mut found: bool = false;
+            for let k: int = 0; k < params.len(); k++ {
+                let p: Param = params.get(k);
+                if p.name.eq(seg) {
+                    if p.ty != null && p.ty.kind == TY_GENERIC && p.ty.name.eq("Path") {
+                        found = true;
+                    }
+                    break;
+                }
+            }
+            if !found {
+                return "path declares `".concat(seg).concat("` but handler has no `").concat(seg).concat(": Path<T>` param");
+            }
+            i = j;
+            continue;
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
 pub fn _is_route_attr_name(n: string) -> bool {
     if n.eq("route") { return true; }
     if n.eq("get") { return true; }
@@ -162,6 +243,8 @@ fn macro_routes(args: *Vector<Expr>) -> *Vector<Stmt> {
     if args == null || args.len() == 0 { return out; }
     let router_arg: Expr = args.get(0);
 
+    let seen: *Vector<string> = Vector::new();
+    let owners: *Vector<string> = Vector::new();
     let prog: *Vector<Stmt> = __program__();
     for let i: int = 0; i < prog.len(); i++ {
         let p: Stmt = prog.get(i);
@@ -170,6 +253,20 @@ fn macro_routes(args: *Vector<Expr>) -> *Vector<Stmt> {
         for let j: int = 0; j < p.attrs.len(); j++ {
             let a: Attr = p.attrs.get(j);
             if !_is_route_attr_name(a.name) { continue; }
+            let key: string = _route_key(p, a);
+            if !key.eq("") {
+                let mut dup_idx: int = -1;
+                for let k: int = 0; k < seen.len(); k++ {
+                    if seen.get(k).eq(key) { dup_idx = k; break; }
+                }
+                if dup_idx >= 0 {
+                    println!("error: duplicate route ", key, " on `",
+                             p.name, "`; first defined on `",
+                             owners.get(dup_idx), "`");
+                }
+                seen.push(key);
+                owners.push(p.name);
+            }
             let reg_name: string = "_route_register_".concat(p.name);
             let reg_args: *Vector<Expr> = Vector::new();
             reg_args.push(router_arg);
@@ -180,4 +277,25 @@ fn macro_routes(args: *Vector<Expr>) -> *Vector<Stmt> {
         }
     }
     return out;
+}
+
+// "<method>|<path>" — used as the dup-detection key. Returns "" when the
+// attribute doesn't decode into a method+path pair (malformed @route).
+fn _route_key(s: Stmt, a: Attr) -> string {
+    let mut method: string = "";
+    let mut path: string = "";
+    if a.name.eq("route") {
+        if a.args == null || a.args.len() < 2 { return ""; }
+        let m_arg: Expr = a.args.get(0);
+        let p_arg: Expr = a.args.get(1);
+        if m_arg.kind == EX_IDENT { method = m_arg.str_val.to_lower(); }
+        if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+    } else {
+        method = a.name;
+        if a.args == null || a.args.len() < 1 { return ""; }
+        let p_arg: Expr = a.args.get(0);
+        if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+    }
+    if method.eq("") || path.eq("") { return ""; }
+    return method.concat("|").concat(path);
 }

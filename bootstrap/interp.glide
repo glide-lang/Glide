@@ -1063,6 +1063,8 @@ fn method_call(it: *Interp, recv: IValue, name: string, args: *Vector<IValue>) -
     if recv.kind == IV_STRING { return string_method(it, recv.s, name, args); }
     if recv.kind == IV_VECTOR { return vector_method(it, recv.vec, name, args); }
     if recv.kind == IV_HASHMAP { return hashmap_method(it, recv.map, name, args); }
+    if recv.kind == IV_CHAR && name.eq("to_int") { return iv_int(recv.c.to_int()); }
+    if recv.kind == IV_CHAR && name.eq("to_string") { return iv_string(recv.c.to_string()); }
     if recv.kind == IV_INT && name.eq("to_string") { return iv_string(recv.i.to_string()); }
     if recv.kind == IV_PTR { return ptr_method(it, recv, name, args); }
 

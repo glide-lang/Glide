@@ -1,0 +1,10 @@
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+
+@get("missing-slash")
+fn bad() -> HttpResponse {
+    return HttpResponse::ok().text("nope");
+}
+
+fn main() {}

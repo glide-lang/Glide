@@ -12,6 +12,6 @@ fn echo(req: *HttpRequest) -> HttpResponse {
     return HttpResponse::ok().body(req.body);
 }
 
-@app(9090)
+@listen(9090)
 fn main(r: *Router) {
 }

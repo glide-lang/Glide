@@ -7,7 +7,7 @@ fn index() -> HttpResponse {
     return HttpResponse::ok().text("hello");
 }
 
-@app(7777)
+@listen(7777)
 fn main(r: *Router) {
     println!("server starting on :7777");
 }

@@ -1,0 +1,10 @@
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+
+@get("/users/:id")
+fn show(uid: Path<int>) -> HttpResponse {
+    return HttpResponse::ok().text("nope");
+}
+
+fn main() {}
