@@ -1,0 +1,18 @@
+// Arena owned by the caller -> safe to pass the derived value into
+// the spawned task (caller controls the lifetime).
+fn process(p: *int) {
+    println!(*p);
+}
+
+fn outer(arena: *Arena) {
+    let p: *int = arena.alloc(sizeof(int)) as *int;
+    *p = 99;
+    spawn process(p);              // ok: arena came from caller
+}
+
+fn main() {
+    let arena: *Arena = Arena::new(64);
+    defer arena.free();
+    outer(arena);
+    sleep_ms(10);                  // give the coro a moment to run
+}

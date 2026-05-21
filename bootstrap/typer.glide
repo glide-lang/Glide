@@ -1536,6 +1536,10 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         if s.expr_value != null { infer_expr(t, s.expr_value); }
         return;
     }
+    if s.kind == ST_SPAWN {
+        check_spawn(t, s);
+        return;
+    }
     if s.kind == ST_IF {
         if s.cond != null {
             let ct: *Type = infer_expr(t, s.cond);
@@ -1815,6 +1819,33 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
             let origin: string = _expr_arena_origin(t, s.let_value);
             if !origin.eq("") { t.arena_origin.insert(s.name, origin); }
         }
+    }
+}
+
+// `spawn fn(args)` / `spawn_thread fn(args)`: each captured arg is now
+// owned by a task that may outlive the calling fn. Anything derived
+// from a local arena would dangle once the calling fn's `defer
+// arena.free()` runs - the coro / pthread might still be alive.
+//
+// Conservative rule: reject any arg whose region resolves to a local
+// arena. The user can clone into an owned value or pass a longer-lived
+// arena explicitly.
+fn check_spawn(t: *Typer, s: *Stmt) {
+    if s.expr_value == null { return; }
+    let call: *Expr = s.expr_value;
+    let _ret: *Type = infer_expr(t, call);
+    if call.args == null { return; }
+    let kind: string = "spawn";
+    if s.is_spawn_thread { kind = "spawn_thread"; }
+    for let i: int = 0; i < call.args.len(); i++ {
+        let a: Expr = call.args.get(i);
+        let origin: string = _expr_arena_origin(t, &a);
+        if origin.eq("") { continue; }
+        if !t.arena_locals.contains(origin) { continue; }
+        t.err_code(a.line, a.column, "spawn-arena-escape",
+            kind.concat(" captures a value derived from local arena `")
+            .concat(origin)
+            .concat("`; the arena is freed when this fn returns but the spawned task may still run. Copy the data into an owned value first, or pass a longer-lived arena from the caller."));
     }
 }
 

@@ -1,0 +1,16 @@
+// Spawn capturing a value derived from a local arena = UAF waiting.
+fn process(p: *int) {
+    println!(*p);
+}
+
+fn outer() {
+    let arena: *Arena = Arena::new(64);
+    defer arena.free();
+    let p: *int = arena.alloc(sizeof(int)) as *int;
+    *p = 42;
+    spawn process(p);              // ERROR: p derives from local arena
+}
+
+fn main() {
+    outer();
+}
