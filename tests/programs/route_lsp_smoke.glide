@@ -1,0 +1,17 @@
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+
+@get("/health")
+fn health() -> HttpResponse { return HttpResponse::ok().text("ok"); }
+
+@post("/users")
+fn create() -> HttpResponse { return HttpResponse::ok().text("created"); }
+
+@get("/users/:id")
+fn show(id: Path<int>) -> HttpResponse {
+    return HttpResponse::ok().text("user");
+}
+
+@listen(8080)
+fn main() {}

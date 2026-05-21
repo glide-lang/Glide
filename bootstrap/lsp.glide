@@ -132,6 +132,12 @@ pub struct LspDoc {
     pub text: string,
     pub version: int,
     pub stmts: *Vector<Stmt>,
+    // Pre-`expand_macros` snapshot. Lets documentSymbol / glide/routeList
+    // / any future per-attribute query read the user's source-level fns
+    // with their original @get/@post/@route attrs intact, before
+    // expansion replaces them with `_user_*` + `_route_register_*`
+    // companions.
+    pub pre_expand_stmts: *Vector<Stmt>,
     // Macro-def shapes harvested BEFORE `expand_macros` consumes them.
     // Used by completion (free macros surface as `name!`, proc-attrs as
     // `@name`, proc-derives inside `@derive(...)`). The post-expansion
@@ -853,6 +859,14 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     let proc_macros: *Vector<string> = Vector::new();
     _harvest_macro_defs(stmts, macro_defs, impl_macro_defs, proc_attrs, proc_derives, proc_macros);
 
+    // Snapshot the source-level stmts so documentSymbol / routeList can
+    // read attrs that expand_macros will consume. Stmts are pushed by
+    // value but their inner Vec pointers (attrs / fn_body / ...) still
+    // alias the originals — that's fine: expand_macros builds a new
+    // result Vector rather than mutating these structs in place.
+    let pre_expand_stmts: *Vector<Stmt> = Vector::new();
+    for let i: int = 0; i < stmts.len(); i++ { pre_expand_stmts.push(stmts.get(i)); }
+
     // Expand macros and lower surface-syntax sugar (for-in -> for) so the
     // typer sees the same shapes the build pipeline does. Without this,
     // anything inside a `for x in expr { ... }` body never gets type-checked
@@ -881,6 +895,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     if state.docs.contains(uri) {
         let d: LspDoc = state.docs.get(uri);
         d.stmts = stmts;
+        d.pre_expand_stmts = pre_expand_stmts;
         d.macro_defs = macro_defs;
         d.impl_macro_defs = impl_macro_defs;
         d.proc_attrs = proc_attrs;
@@ -937,6 +952,7 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     let no_str_v: *Vector<string> = null;
     let doc: LspDoc = LspDoc {
         uri: uri, text: text, version: version, stmts: null,
+        pre_expand_stmts: no_macro_v,
         macro_defs: no_macro_v, impl_macro_defs: no_macro_v,
         proc_attrs: no_str_v, proc_derives: no_str_v, proc_macros: no_str_v,
     };
@@ -974,6 +990,7 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
     let no_str_v2: *Vector<string> = null;
     let doc: LspDoc = LspDoc {
         uri: uri, text: text, version: version, stmts: prev_stmts,
+        pre_expand_stmts: no_macro_v2,
         macro_defs: no_macro_v2, impl_macro_defs: no_macro_v2,
         proc_attrs: no_str_v2, proc_derives: no_str_v2, proc_macros: no_str_v2,
     };
@@ -2282,16 +2299,27 @@ fn handle_document_symbol(req: *JsonValue, state: *LspState) {
     let doc: LspDoc = state.docs.get(uri);
     let path: string = uri_to_path(uri);
     let arr: *JsonValue = json_array();
-    if doc.stmts != null {
-        for let i: int = 0; i < doc.stmts.len(); i++ {
-            let s: Stmt = doc.stmts.get(i);
+    // Walk the pre-expansion snapshot so route attrs survive — also
+    // keeps the outline showing the user's source-level fns instead of
+    // the synth `_user_*` / `_route_register_*` companions the macro
+    // injects.
+    let src_stmts: *Vector<Stmt> = doc.pre_expand_stmts;
+    if src_stmts == null { src_stmts = doc.stmts; }
+    if src_stmts != null {
+        for let i: int = 0; i < src_stmts.len(); i++ {
+            let s: Stmt = src_stmts.get(i);
             if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM && s.kind != ST_CONST {
                 continue;
             }
             // Skip stmts from other files (stdlib + imports).
             if !s.origin.eq("") && !s.origin.eq(path) { continue; }
             let sym: *JsonValue = json_object();
-            json_obj_set(sym, "name", json_string(s.name));
+            let route_tag: string = route_tag_for(&s);
+            let mut display: string = s.name;
+            if !route_tag.eq("") {
+                display = route_tag.concat(" ").concat(s.name);
+            }
+            json_obj_set(sym, "name", json_string(display));
             let mut detail: string = "";
             if s.kind == ST_FN { detail = fn_signature(&s); }
             json_obj_set(sym, "detail", json_string(detail));
@@ -2302,6 +2330,111 @@ fn handle_document_symbol(req: *JsonValue, state: *LspState) {
         }
     }
     lsp_send_response(id, arr);
+}
+
+// "[GET /health]" tag for a stmt carrying @get/@post/etc, "" otherwise.
+// Mirrors the @route attribute decode in src/stdlib/http/route.glide so
+// the LSP outline shows the same routing surface the macro will register.
+fn route_tag_for(s: *Stmt) -> string {
+    if s == null || s.kind != ST_FN || s.attrs == null { return ""; }
+    for let i: int = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !_is_lsp_route_attr(a.name) { continue; }
+        let mut method: string = "";
+        let mut path: string = "";
+        if a.name.eq("route") {
+            if a.args == null || a.args.len() < 2 { continue; }
+            let m_arg: Expr = a.args.get(0);
+            let p_arg: Expr = a.args.get(1);
+            if m_arg.kind == EX_IDENT { method = m_arg.str_val; }
+            if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+        } else {
+            method = a.name;
+            if a.args == null || a.args.len() < 1 { continue; }
+            let p_arg: Expr = a.args.get(0);
+            if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+        }
+        if method.eq("") || path.eq("") { continue; }
+        return "[".concat(method.to_upper()).concat(" ").concat(path).concat("]");
+    }
+    return "";
+}
+
+fn _is_lsp_route_attr(n: string) -> bool {
+    if n.eq("route") { return true; }
+    if n.eq("get") { return true; }
+    if n.eq("post") { return true; }
+    if n.eq("put") { return true; }
+    if n.eq("delete") { return true; }
+    if n.eq("patch") { return true; }
+    if n.eq("head") { return true; }
+    if n.eq("options") { return true; }
+    if n.eq("any") { return true; }
+    return false;
+}
+
+// Custom LSP method `glide/routeList`. Walks every open document for
+// fns carrying a @route/@get/@post/etc attribute and returns:
+//
+//   [{ "method": "GET", "path": "/users/:id", "handler": "show",
+//      "uri": "file:///...users.glide", "line": 12, "column": 3 }, ...]
+//
+// Foundation for editor route sidebars (Zed extension, VS Code panel,
+// etc). Clients can render the list, group by method or file, and
+// jump to each handler via the line/column.
+fn handle_route_list(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let arr: *JsonValue = json_array();
+    let uris: *Vector<string> = state.docs.keys();
+    for let i: int = 0; i < uris.len(); i++ {
+        let uri: string = uris.get(i);
+        let doc: LspDoc = state.docs.get(uri);
+        let path: string = uri_to_path(uri);
+        let src_stmts: *Vector<Stmt> = doc.pre_expand_stmts;
+        if src_stmts == null { src_stmts = doc.stmts; }
+        if src_stmts == null { continue; }
+        for let j: int = 0; j < src_stmts.len(); j++ {
+            let s: Stmt = src_stmts.get(j);
+            if s.kind != ST_FN || s.attrs == null { continue; }
+            if !s.origin.eq("") && !s.origin.eq(path) { continue; }
+            for let k: int = 0; k < s.attrs.len(); k++ {
+                let a: Attr = s.attrs.get(k);
+                if !_is_lsp_route_attr(a.name) { continue; }
+                let mut method: string = "";
+                let mut route_path: string = "";
+                if a.name.eq("route") {
+                    if a.args == null || a.args.len() < 2 { continue; }
+                    let m_arg: Expr = a.args.get(0);
+                    let p_arg: Expr = a.args.get(1);
+                    if m_arg.kind == EX_IDENT { method = m_arg.str_val; }
+                    if p_arg.kind == EX_STRING { route_path = p_arg.str_val; }
+                } else {
+                    method = a.name;
+                    if a.args == null || a.args.len() < 1 { continue; }
+                    let p_arg: Expr = a.args.get(0);
+                    if p_arg.kind == EX_STRING { route_path = p_arg.str_val; }
+                }
+                if method.eq("") || route_path.eq("") { continue; }
+                let entry: *JsonValue = json_object();
+                json_obj_set(entry, "method", json_string(method.to_upper()));
+                json_obj_set(entry, "path", json_string(route_path));
+                json_obj_set(entry, "handler", json_string(s.name));
+                json_obj_set(entry, "uri", json_string(uri));
+                let mut nl: int = s.name_line;
+                let mut nc: int = s.name_col;
+                if nl == 0 { nl = s.line; nc = s.column; }
+                if nl < 1 { nl = 1; }
+                if nc < 1 { nc = 1; }
+                json_obj_set(entry, "line", json_int(nl - 1));
+                json_obj_set(entry, "column", json_int(nc - 1));
+                json_arr_push(arr, entry);
+                break;
+            }
+        }
+    }
+    let result: *JsonValue = json_object();
+    json_obj_set(result, "routes", arr);
+    lsp_send_response(id, result);
 }
 
 fn handle_definition(req: *JsonValue, state: *LspState) {
@@ -8503,6 +8636,7 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     if method.eq("textDocument/rename") { handle_rename(req, state); return false; }
     if method.eq("textDocument/formatting") { handle_formatting(req, state); return false; }
     if method.eq("textDocument/codeAction") { handle_code_action(req, state); return false; }
+    if method.eq("glide/routeList") { handle_route_list(req, state); return false; }
     // Any unhandled request gets an empty-result reply so clients don't hang.
     let id: *JsonValue = json_get(req, "id");
     if id != null { lsp_send_response(id, json_null()); }
