@@ -171,6 +171,35 @@ fn test_h3_streaming_chunks() -> int {
     return 0;
 }
 
+// Session cache: a fresh H3SessionCache observes attempts=0/accepted=0.
+// After the first request, the new_session callback stamps a ticket into
+// the cache (asynchronously — OpenSSL sends NewSessionTicket post-
+// handshake, so we sleep briefly to give the client thread a chance to
+// process it). The second request finds the ticket and bumps attempts.
+
+fn test_h3_session_cache_resumes() -> int {
+    let cache: *H3SessionCache = H3SessionCache::new();
+    defer cache.free();
+    assert_eq!(cache.attempts(), 0);
+
+    let r1: !*HttpResponse = http3_request_cached("GET",
+                                                    "https://127.0.0.1:45330/x",
+                                                    "", "", true, cache);
+    assert!(r1.ok);
+    // First request: cold cache, no attempt.
+    assert_eq!(cache.attempts(), 0);
+    // Give the ticket time to land via new_session_cb.
+    sleep_ms(200);
+
+    let r2: !*HttpResponse = http3_request_cached("GET",
+                                                    "https://127.0.0.1:45330/y",
+                                                    "", "", true, cache);
+    assert!(r2.ok);
+    // Second request found the cached session and tried to resume.
+    assert_eq!(cache.attempts(), 1);
+    return 0;
+}
+
 fn test_h3_parallel_handlers() -> int {
     spawn_thread _h3_slow_server_thread();
     sleep_ms(500);

@@ -155,6 +155,29 @@ c_raw! {
         return 0;
     }
 
+    // ---- 0-RTT session cache types (defined early so the conn carrier
+    // can dereference cache->lock from inside callbacks; the helper
+    // functions that operate on these stay further down in the file).
+    typedef struct __glide_h3_cached_session {
+        char*     host;
+        int       port;
+        uint8_t*  session_der;
+        size_t    session_der_len;
+        uint8_t*  tp_bytes;
+        size_t    tp_bytes_len;
+        uint64_t  expires_ns;
+    } __glide_h3_cached_session;
+
+    #define __GLIDE_H3_CACHE_CAP 32
+
+    typedef struct __glide_h3_session_cache {
+        __glide_h3_cached_session entries[__GLIDE_H3_CACHE_CAP];
+        int                       n_entries;
+        int                       attempts;
+        int                       accepted;
+        pthread_mutex_t           lock;
+    } __glide_h3_session_cache;
+
     // ---- conn carrier -----------------------------------------------
     typedef struct __glide_h3_conn {
         ngtcp2_crypto_conn_ref     conn_ref;  // MUST be first so SSL_get_app_data
@@ -196,6 +219,19 @@ c_raw! {
         int                        handshake_done;
         int                        stream_done;          // request stream closed
         int                        connection_error;     // non-zero = error
+
+        // 0-RTT cache integration. When `cache` is non-null, the conn
+        // both consumes (lookup on connect) and produces (store on
+        // ticket arrival) cache entries. `cached_host` / `cached_port`
+        // identify the key for storage. `early_data_accepted` is set by
+        // the handshake_completed callback inspecting
+        // SSL_get_early_data_status — Glide reads it to verify 0-RTT
+        // actually engaged.
+        struct __glide_h3_session_cache* cache;
+        char*                      cached_host;
+        int                        cached_port;
+        int                        early_data_attempted;
+        int                        early_data_accepted;
     } __glide_h3_conn;
 
     // ---- response sink helpers --------------------------------------
@@ -291,6 +327,17 @@ c_raw! {
         (void)conn;
         __glide_h3_conn* c = (__glide_h3_conn*)user_data;
         c->handshake_done = 1;
+        if (c->early_data_attempted && c->ssl != NULL) {
+            // OpenSSL records whether the server accepted the 0-RTT
+            // data we sent. SSL_EARLY_DATA_ACCEPTED == 2 means yes.
+            c->early_data_accepted =
+                (SSL_get_early_data_status(c->ssl) == SSL_EARLY_DATA_ACCEPTED);
+            if (c->early_data_accepted && c->cache != NULL) {
+                pthread_mutex_lock(&c->cache->lock);
+                c->cache->accepted++;
+                pthread_mutex_unlock(&c->cache->lock);
+            }
+        }
         return 0;
     }
     // ngtcp2_crypto needs a way to recover the ngtcp2_conn* from the
@@ -587,16 +634,209 @@ c_raw! {
         }
     }
 
+    // ---- 0-RTT session cache helpers (client side) ------------------
+    //
+    // Stores per-(host, port) the serialized SSL_SESSION + ngtcp2 0-RTT
+    // transport params from a prior successful conn. On a fresh conn,
+    // the cache is probed; if there's a hit and the entry hasn't expired,
+    // the client installs the session + 0-RTT TPs and submits the request
+    // via early data, saving 1 RTT vs. a full handshake.
+    //
+    // In-memory only in v1; persistence comes later. Linear lookup with
+    // cap=32 is fine — caches are typically per-process-per-host. Struct
+    // typedefs live near the conn carrier earlier in the file so the
+    // handshake callback can dereference cache fields.
+
+    static void __glide_h3_cache_entry_clear(__glide_h3_cached_session* e) {
+        if (e->host) { free(e->host); e->host = NULL; }
+        if (e->session_der) { free(e->session_der); e->session_der = NULL; }
+        if (e->tp_bytes) { free(e->tp_bytes); e->tp_bytes = NULL; }
+        e->session_der_len = 0;
+        e->tp_bytes_len = 0;
+        e->port = 0;
+        e->expires_ns = 0;
+    }
+
+    void* __glide_h3_session_cache_new(void) {
+        __glide_h3_session_cache* c =
+            (__glide_h3_session_cache*)calloc(1, sizeof(*c));
+        pthread_mutex_init(&c->lock, NULL);
+        return c;
+    }
+
+    int __glide_h3_session_cache_attempts(void* h) {
+        if (h == NULL) return 0;
+        __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
+        pthread_mutex_lock(&c->lock);
+        int v = c->attempts;
+        pthread_mutex_unlock(&c->lock);
+        return v;
+    }
+
+    int __glide_h3_session_cache_accepted(void* h) {
+        if (h == NULL) return 0;
+        __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
+        pthread_mutex_lock(&c->lock);
+        int v = c->accepted;
+        pthread_mutex_unlock(&c->lock);
+        return v;
+    }
+
+    void __glide_h3_session_cache_free(void* h) {
+        if (h == NULL) return;
+        __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
+        pthread_mutex_lock(&c->lock);
+        for (int i = 0; i < c->n_entries; i++) {
+            __glide_h3_cache_entry_clear(&c->entries[i]);
+        }
+        pthread_mutex_unlock(&c->lock);
+        pthread_mutex_destroy(&c->lock);
+        free(c);
+    }
+
+    // Store a (host, port) → (session, tp) entry. ttl_seconds controls
+    // freshness; lookups beyond ttl get evicted. Idempotent — calling
+    // again with the same (host, port) replaces the prior entry.
+    void __glide_h3_session_cache_store(void* h, const char* host, int port,
+                                          const uint8_t* session_der,
+                                          int session_der_len,
+                                          const uint8_t* tp_bytes,
+                                          int tp_bytes_len,
+                                          int ttl_seconds) {
+        if (h == NULL || host == NULL) return;
+        __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
+        pthread_mutex_lock(&c->lock);
+        // Replace existing entry for this host:port if any.
+        int slot = -1;
+        for (int i = 0; i < c->n_entries; i++) {
+            if (c->entries[i].port == port
+                && c->entries[i].host
+                && strcmp(c->entries[i].host, host) == 0) {
+                __glide_h3_cache_entry_clear(&c->entries[i]);
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            if (c->n_entries < __GLIDE_H3_CACHE_CAP) {
+                slot = c->n_entries++;
+            } else {
+                // Cache full: evict slot 0 (oldest in insertion order).
+                __glide_h3_cache_entry_clear(&c->entries[0]);
+                memmove(&c->entries[0], &c->entries[1],
+                        sizeof(c->entries[0]) * (__GLIDE_H3_CACHE_CAP - 1));
+                memset(&c->entries[__GLIDE_H3_CACHE_CAP - 1], 0,
+                        sizeof(c->entries[0]));
+                slot = __GLIDE_H3_CACHE_CAP - 1;
+            }
+        }
+        __glide_h3_cached_session* e = &c->entries[slot];
+        e->host = strdup(host);
+        e->port = port;
+        if (session_der_len > 0 && session_der != NULL) {
+            e->session_der = (uint8_t*)malloc(session_der_len);
+            memcpy(e->session_der, session_der, session_der_len);
+            e->session_der_len = (size_t)session_der_len;
+        }
+        if (tp_bytes_len > 0 && tp_bytes != NULL) {
+            e->tp_bytes = (uint8_t*)malloc(tp_bytes_len);
+            memcpy(e->tp_bytes, tp_bytes, tp_bytes_len);
+            e->tp_bytes_len = (size_t)tp_bytes_len;
+        }
+        e->expires_ns = __glide_h3_now() + (uint64_t)ttl_seconds * 1000000000ULL;
+        pthread_mutex_unlock(&c->lock);
+    }
+
+    // Look up a (host, port) entry. On hit, copies session_der + tp_bytes
+    // into freshly malloc'd buffers; caller frees. Returns 1 on hit, 0
+    // on miss / expired.
+    int __glide_h3_session_cache_lookup(void* h, const char* host, int port,
+                                          uint8_t** out_session, int* out_session_len,
+                                          uint8_t** out_tp, int* out_tp_len) {
+        if (h == NULL || host == NULL) return 0;
+        __glide_h3_session_cache* c = (__glide_h3_session_cache*)h;
+        pthread_mutex_lock(&c->lock);
+        for (int i = 0; i < c->n_entries; i++) {
+            __glide_h3_cached_session* e = &c->entries[i];
+            if (e->port == port && e->host && strcmp(e->host, host) == 0) {
+                if (e->expires_ns != 0 && e->expires_ns < __glide_h3_now()) {
+                    // Expired: evict.
+                    __glide_h3_cache_entry_clear(e);
+                    memmove(e, e + 1, sizeof(*e) * (c->n_entries - i - 1));
+                    memset(&c->entries[c->n_entries - 1], 0, sizeof(*e));
+                    c->n_entries--;
+                    pthread_mutex_unlock(&c->lock);
+                    return 0;
+                }
+                *out_session = (uint8_t*)malloc(e->session_der_len);
+                memcpy(*out_session, e->session_der, e->session_der_len);
+                *out_session_len = (int)e->session_der_len;
+                *out_tp = (uint8_t*)malloc(e->tp_bytes_len);
+                memcpy(*out_tp, e->tp_bytes, e->tp_bytes_len);
+                *out_tp_len = (int)e->tp_bytes_len;
+                pthread_mutex_unlock(&c->lock);
+                return 1;
+            }
+        }
+        pthread_mutex_unlock(&c->lock);
+        return 0;
+    }
+
+    // Capture freshly-issued session tickets back into the cache that
+    // owns this conn. Wired via SSL_CTX_sess_set_new_cb when the user
+    // passed a cache to client_connect. The SSL_SESSION carries both
+    // the TLS resumption secret and OpenSSL's record of max_early_data —
+    // we also encode ngtcp2's 0-RTT-eligible transport params so the
+    // next conn can submit early data with matching flow control.
+    static int __glide_h3_new_session_cb(SSL* ssl, SSL_SESSION* sess) {
+        ngtcp2_crypto_conn_ref* ref = (ngtcp2_crypto_conn_ref*)SSL_get_app_data(ssl);
+        if (ref == NULL || ref->user_data == NULL) return 0;
+        __glide_h3_conn* c = (__glide_h3_conn*)ref->user_data;
+        if (c->cache == NULL || c->cached_host == NULL) return 0;
+
+        int len = i2d_SSL_SESSION(sess, NULL);
+        if (len <= 0) return 0;
+        uint8_t* sbuf = (uint8_t*)malloc((size_t)len);
+        if (sbuf == NULL) return 0;
+        uint8_t* p = sbuf;
+        if (i2d_SSL_SESSION(sess, &p) <= 0) { free(sbuf); return 0; }
+
+        uint8_t tp_buf[512];
+        ngtcp2_ssize tp_len = 0;
+        if (c->qc != NULL) {
+            tp_len = ngtcp2_conn_encode_0rtt_transport_params(
+                c->qc, tp_buf, sizeof(tp_buf));
+        }
+        if (tp_len > 0) {
+            __glide_h3_session_cache_store(c->cache, c->cached_host, c->cached_port,
+                                            sbuf, len, tp_buf, (int)tp_len,
+                                            24 * 3600);
+        }
+        free(sbuf);
+        return 0;  // OpenSSL frees the SSL_SESSION — we serialized.
+    }
+
     // ---- public C entrypoints ---------------------------------------
 
     // Open a QUIC connection, run handshake, return the carrier handle
-    // (opaque to Glide). NULL on failure.
+    // (opaque to Glide). When `cache_handle` is non-null, the conn
+    // probes it for a session ticket keyed by (host, port); on a hit,
+    // OpenSSL session resumption kicks in and ngtcp2 picks up the
+    // server's prior transport params for 0-RTT. The handshake
+    // completion callback writes any new ticket back to the cache.
+    // NULL on failure.
     void* __glide_h3_client_connect(const char* host, int port,
                                      int timeout_ms,
-                                     int verify) {
+                                     int verify,
+                                     void* cache_handle) {
         if (!__glide_h3_init()) return NULL;
 
         __glide_h3_conn* c = (__glide_h3_conn*)calloc(1, sizeof(*c));
+        c->cache = (__glide_h3_session_cache*)cache_handle;
+        if (c->cache != NULL) {
+            c->cached_host = strdup(host);
+            c->cached_port = port;
+        }
 
         c->sock = __glide_h3_open_udp(host, port, &c->remote, &c->remote_len);
         if (c->sock == __GLIDE_H3_INVALID_SOCK) { free(c); return NULL; }
@@ -617,6 +857,12 @@ c_raw! {
         SSL_CTX_set_max_proto_version(c->ssl_ctx, TLS1_3_VERSION);
         if (!verify) SSL_CTX_set_verify(c->ssl_ctx, SSL_VERIFY_NONE, NULL);
         else SSL_CTX_set_default_verify_paths(c->ssl_ctx);
+        if (c->cache != NULL) {
+            // Capture new tickets so the cache can stamp them back.
+            SSL_CTX_set_session_cache_mode(c->ssl_ctx,
+                SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
+            SSL_CTX_sess_set_new_cb(c->ssl_ctx, __glide_h3_new_session_cb);
+        }
         c->ssl = SSL_new(c->ssl_ctx);
         if (ngtcp2_crypto_ossl_ctx_new(&c->oc, c->ssl) != 0) goto fail;
         if (ngtcp2_crypto_ossl_configure_client_session(c->ssl) != 0) goto fail;
@@ -624,6 +870,34 @@ c_raw! {
         c->conn_ref.user_data = c;
         SSL_set_app_data(c->ssl, &c->conn_ref);
         SSL_set_connect_state(c->ssl);
+        SSL_set_quic_tls_early_data_enabled(c->ssl, 1);
+
+        // 0-RTT path: probe the cache. On hit we install the cached
+        // SSL_SESSION here and stash the 0-RTT TPs to apply on the
+        // ngtcp2_conn right after it's created below.
+        uint8_t* cached_tp = NULL;
+        int      cached_tp_len = 0;
+        if (c->cache != NULL) {
+            uint8_t* sess_der = NULL;
+            int sess_der_len = 0;
+            if (__glide_h3_session_cache_lookup(c->cache, host, port,
+                                                  &sess_der, &sess_der_len,
+                                                  &cached_tp, &cached_tp_len)) {
+                const unsigned char* sp = sess_der;
+                SSL_SESSION* sess = d2i_SSL_SESSION(NULL, &sp,
+                                                    (long)sess_der_len);
+                if (sess != NULL) {
+                    SSL_set_session(c->ssl, sess);
+                    SSL_SESSION_free(sess);
+                    c->early_data_attempted = 1;
+                    pthread_mutex_lock(&c->cache->lock);
+                    c->cache->attempts++;
+                    pthread_mutex_unlock(&c->cache->lock);
+                }
+                free(sess_der);
+            }
+        }
+
         static const unsigned char alpn_h3[] = { 2, 'h', '3' };
         SSL_set_alpn_protos(c->ssl, alpn_h3, sizeof(alpn_h3));
         // SNI: substitute "localhost" for numeric IPs per upstream.
@@ -693,6 +967,17 @@ c_raw! {
                                     &params, NULL, c) != 0) goto fail;
         ngtcp2_conn_set_tls_native_handle(c->qc, c->oc);
 
+        // Apply cached 0-RTT transport params (only if we got a hit
+        // above). ngtcp2 uses them to seed initial flow control budgets
+        // for early-data submissions before the real TPs land via the
+        // server's response.
+        if (cached_tp != NULL && cached_tp_len > 0) {
+            ngtcp2_conn_decode_and_set_0rtt_transport_params(
+                c->qc, cached_tp, (size_t)cached_tp_len);
+            free(cached_tp);
+            cached_tp = NULL;
+        }
+
         // Drive handshake.
         uint64_t deadline = __glide_h3_now() +
             (timeout_ms > 0 ? (uint64_t)timeout_ms * 1000000ULL
@@ -702,6 +987,7 @@ c_raw! {
         return (void*)c;
 
     fail:
+        if (cached_tp) free(cached_tp);
         if (c->qc) ngtcp2_conn_del(c->qc);
         if (c->oc) ngtcp2_crypto_ossl_ctx_del(c->oc);
         if (c->ssl) SSL_free(c->ssl);
@@ -713,6 +999,7 @@ c_raw! {
             close(c->sock);
         #endif
         }
+        if (c->cached_host) free(c->cached_host);
         free(c);
         return NULL;
     }
@@ -822,6 +1109,14 @@ c_raw! {
     const char* __glide_h3_resp_hdr_name(void* h, int i)  { return ((__glide_h3_conn*)h)->resp_hdr_names[i]; }
     const char* __glide_h3_resp_hdr_value(void* h, int i) { return ((__glide_h3_conn*)h)->resp_hdr_values[i]; }
 
+    // After a successful conn, returns 1 if the server accepted the
+    // 0-RTT data we sent (cache hit + server agreed), 0 otherwise.
+    int __glide_h3_early_data_accepted(void* h) {
+        __glide_h3_conn* c = (__glide_h3_conn*)h;
+        if (c == NULL) return 0;
+        return c->early_data_accepted ? 1 : 0;
+    }
+
     void __glide_h3_close(void* h) {
         __glide_h3_conn* c = (__glide_h3_conn*)h;
         if (c == NULL) return;
@@ -845,6 +1140,7 @@ c_raw! {
         free(c->resp_hdr_values);
         free(c->resp_body);
         free(c->req_body);
+        if (c->cached_host) free(c->cached_host);
         free(c);
     }
 
@@ -2193,7 +2489,13 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
     __glide_h3_srv_close(h);
 }
 
-extern fn __glide_h3_client_connect(host: string, port: int, timeout_ms: int, verify: int) -> *void;
+extern fn __glide_h3_client_connect(host: string, port: int, timeout_ms: int,
+                                     verify: int, cache_handle: *void) -> *void;
+extern fn __glide_h3_session_cache_new() -> *void;
+extern fn __glide_h3_session_cache_free(handle: *void);
+extern fn __glide_h3_session_cache_attempts(handle: *void) -> int;
+extern fn __glide_h3_session_cache_accepted(handle: *void) -> int;
+extern fn __glide_h3_early_data_accepted(conn_handle: *void) -> int;
 extern fn __glide_h3_client_request(handle: *void, method: string, host: string, path: string,
                                      extra_headers_block: string,
                                      body: *u8, body_len: int, timeout_ms: int) -> int;
@@ -2240,7 +2542,8 @@ pub fn http3_request(method: string, url: string, extra_headers: string,
 
     let mut verify: int = 1;
     if tls_insecure { verify = 0; }
-    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify);
+    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify,
+                                                 null);
     if h == null { return err("http3: connect/handshake failed"); }
 
     let body_len: int = body.len();
@@ -2268,6 +2571,91 @@ pub fn http3_request(method: string, url: string, extra_headers: string,
     }
     r.headers_block = hb;
 
+    __glide_h3_close(h);
+    return ok(r);
+}
+
+/// Caches TLS session tickets + ngtcp2 0-RTT transport params so repeat
+/// requests to the same host can skip a full handshake. Pass a single
+/// `H3SessionCache` across multiple `http3_request_cached` calls and the
+/// second + later connections to the same `(host, port)` will resume
+/// the prior TLS session and send the request as 0-RTT (saves ~1 RTT).
+///
+/// In-memory only in v1 — the cache lives as long as the
+/// `H3SessionCache` does. Call `free()` to release.
+///
+/// ```glide
+/// let c: *H3SessionCache = H3SessionCache::new();
+/// defer c.free();
+/// let r1: !*HttpResponse = http3_request_cached("GET", url, "", "", false, c);
+/// // r1 went through a full handshake; ticket cached.
+/// let r2: !*HttpResponse = http3_request_cached("GET", url, "", "", false, c);
+/// // r2 resumed the prior session.
+/// ```
+pub struct H3SessionCache {
+    handle: *void,
+}
+
+impl H3SessionCache {
+    pub fn new() -> *H3SessionCache {
+        let c: *H3SessionCache = malloc(sizeof(H3SessionCache)) as *H3SessionCache;
+        c.handle = __glide_h3_session_cache_new();
+        return c;
+    }
+    pub fn free(self: *H3SessionCache) {
+        __glide_h3_session_cache_free(self.handle);
+        self.handle = null;
+    }
+    /// How many connect calls found a cached session for their target
+    /// (host, port) and installed it on the SSL — i.e. how many tried
+    /// 0-RTT. Doesn't say whether the server accepted; see `accepted`.
+    pub fn attempts(self: *H3SessionCache) -> int {
+        return __glide_h3_session_cache_attempts(self.handle);
+    }
+    /// How many connects had their 0-RTT data accepted by the server
+    /// (i.e. saved 1 RTT). `attempts - accepted` is the rejection count.
+    pub fn accepted(self: *H3SessionCache) -> int {
+        return __glide_h3_session_cache_accepted(self.handle);
+    }
+}
+
+/// Same shape as `http3_request` but threads a `H3SessionCache` for
+/// TLS session resumption + 0-RTT early data on repeat calls to the
+/// same host. Safe to call concurrently from multiple threads against
+/// the same cache (internal mutex serialises store/lookup).
+pub fn http3_request_cached(method: string, url: string, extra_headers: string,
+                              body: string, tls_insecure: bool,
+                              cache: *H3SessionCache) -> !*HttpResponse {
+    let parsed: !*ParsedH3Url = _h3_parse_url(url);
+    if !parsed.ok { return err(parsed.err); }
+    let pu: *ParsedH3Url = parsed.val;
+    let mut verify: int = 1;
+    if tls_insecure { verify = 0; }
+    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify,
+                                                 cache.handle);
+    if h == null { return err("http3: connect/handshake failed"); }
+    let body_len: int = body.len();
+    let ok: int = __glide_h3_client_request(h, method, pu.host, pu.path,
+                                              extra_headers,
+                                              body as *u8, body_len, 30000);
+    if ok == 0 {
+        __glide_h3_close(h);
+        return err("http3: request failed");
+    }
+    let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
+    r.status = __glide_h3_resp_status(h);
+    let blen: int = __glide_h3_resp_body_len(h);
+    r.body = __glide_string_from_buf(__glide_h3_resp_body_ptr(h) as *void, blen);
+    let mut hb: string = "";
+    let n: int = __glide_h3_resp_hdr_count(h);
+    for let i: int = 0; i < n; i++ {
+        let name: string = __glide_h3_resp_hdr_name(h, i);
+        let value: string = __glide_h3_resp_hdr_value(h, i);
+        if name.eq(":status") { continue; }
+        if hb.len() > 0 { hb = hb.concat("\r\n"); }
+        hb = hb.concat(name).concat(": ").concat(value);
+    }
+    r.headers_block = hb;
     __glide_h3_close(h);
     return ok(r);
 }
