@@ -564,6 +564,21 @@ pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
         }
         return builtin_call(it, e.str_val, interp_args);
     }
+    if e.kind == EX_POSTINC || e.kind == EX_POSTDEC {
+        if e.lhs == null || e.lhs.kind != EX_IDENT {
+            it.err("`++` / `--` only supported on plain identifiers in macro body");
+            return iv_null();
+        }
+        let old: IValue = scope_get(it, e.lhs.str_val);
+        if old.kind != IV_INT {
+            it.err("`++` / `--` requires int operand in macro body");
+            return iv_null();
+        }
+        let delta: int = 1;
+        if e.kind == EX_POSTDEC { delta = -1; }
+        scope_assign(it, e.lhs.str_val, iv_int(old.i + delta));
+        return old;
+    }
 
     it.err("unsupported expr kind in macro body: ".concat(e.kind.to_string()));
     return iv_null();

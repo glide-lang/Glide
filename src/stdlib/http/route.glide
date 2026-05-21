@@ -23,10 +23,8 @@ fn impl_route(s: *Stmt) -> *Vector<Stmt> {
     let mut method: string = "";
     let mut path: string = "";
     if s.attrs != null {
-        let mut i: int = 0;
-        while i < s.attrs.len() {
+        for let i: int = 0; i < s.attrs.len(); i++ {
             let a: Attr = s.attrs.get(i);
-            i = i + 1;
             if !_is_route_attr_name(a.name) { continue; }
             if a.name.eq("route") {
                 if a.args == null || a.args.len() < 2 { continue; }
@@ -97,16 +95,12 @@ fn macro_routes(args: *Vector<Expr>) -> *Vector<Stmt> {
     let router_arg: Expr = args.get(0);
 
     let prog: *Vector<Stmt> = __program__();
-    let mut i: int = 0;
-    while i < prog.len() {
+    for let i: int = 0; i < prog.len(); i++ {
         let p: Stmt = prog.get(i);
-        i = i + 1;
         if p.kind != ST_FN { continue; }
         if p.attrs == null { continue; }
-        let mut j: int = 0;
-        while j < p.attrs.len() {
+        for let j: int = 0; j < p.attrs.len(); j++ {
             let a: Attr = p.attrs.get(j);
-            j = j + 1;
             if !_is_route_attr_name(a.name) { continue; }
             let reg_name: string = "_route_register_".concat(p.name);
             let reg_args: *Vector<Expr> = Vector::new();

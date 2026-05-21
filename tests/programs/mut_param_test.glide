@@ -1,0 +1,8 @@
+fn double_in_place(mut a: int) -> int {
+    a = a * 2;
+    return a;
+}
+
+fn main() {
+    println!(double_in_place(5));
+}
