@@ -278,12 +278,49 @@ int tcp_write_async(int fd, void* buf, int n) {
     return sent;
 }
 
+/* Async writev across two iovecs; same parking discipline as
+   tcp_write_async. The HTTP server uses this to ship the response
+   header + body in one syscall without first memcpy'ing the body
+   into a combined buffer. */
+int tcp_writev2_async(int fd, void* buf1, int n1, void* buf2, int n2) {
+    if (n1 < 0) n1 = 0;
+    if (n2 < 0) n2 = 0;
+    int total = n1 + n2;
+    if (total == 0) return 0;
+    struct iovec iov[2];
+    iov[0].iov_base = buf1; iov[0].iov_len = (size_t)n1;
+    iov[1].iov_base = buf2; iov[1].iov_len = (size_t)n2;
+    int sent = 0;
+    while (sent < total) {
+        struct iovec cur[2];
+        int n_cur = 0;
+        size_t skip = (size_t)sent;
+        for (int i = 0; i < 2; i++) {
+            if (iov[i].iov_len == 0) continue;
+            if (skip >= iov[i].iov_len) { skip -= iov[i].iov_len; continue; }
+            cur[n_cur].iov_base = (char*)iov[i].iov_base + skip;
+            cur[n_cur].iov_len  = iov[i].iov_len - skip;
+            n_cur++;
+            skip = 0;
+        }
+        ssize_t w = writev(fd, cur, n_cur);
+        if (w > 0) { sent += (int)w; continue; }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            if (!__glide_io_park_write(fd)) return sent > 0 ? sent : -1;
+            continue;
+        }
+        return sent > 0 ? sent : -1;
+    }
+    return sent;
+}
+
 #else  /* not Linux: fall back to blocking sync I/O for now. */
 
 /* Forward decls from socket.c so the names link clean. */
 extern int  accept_tcp(int listener);
 extern int  tcp_read(int fd, void* buf, int max);
 extern int  tcp_write(int fd, void* buf, int n);
+extern int  tcp_writev2(int fd, void* buf1, int n1, void* buf2, int n2);
 
 int accept_tcp_async(int listener) {
     return accept_tcp(listener);
@@ -295,6 +332,10 @@ int tcp_read_async(int fd, void* buf, int max) {
 
 int tcp_write_async(int fd, void* buf, int n) {
     return tcp_write(fd, buf, n);
+}
+
+int tcp_writev2_async(int fd, void* buf1, int n1, void* buf2, int n2) {
+    return tcp_writev2(fd, buf1, n1, buf2, n2);
 }
 
 #endif  /* GLIDE_REACTOR_HAVE_EPOLL */

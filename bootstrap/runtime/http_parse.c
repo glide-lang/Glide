@@ -615,6 +615,60 @@ int hp_build_response(int status, const char* status_txt,
     return (int)(p - hp_resp_buf);
 }
 
+/* Same wire format as hp_build_response but stops at the end of the
+   header block — i.e. just before the body memcpy. The HTTP server
+   uses this when it's going to ship the body via writev so the body
+   bytes never get copied into hp_resp_buf. body_len is still required
+   because it goes in the Content-Length header. */
+int hp_build_response_header(int status, const char* status_txt,
+                              int body_len,
+                              const char* extra_headers, int keep_alive)
+{
+    size_t need = 64
+                + (status_txt ? strlen(status_txt) : 2)
+                + (extra_headers ? strlen(extra_headers) : 0)
+                + 32
+                + 8 + HP_DATE_LEN;
+    if (need > hp_resp_cap) {
+        size_t cap = hp_resp_cap ? hp_resp_cap : 1024;
+        while (cap < need) cap *= 2;
+        free(hp_resp_buf);
+        hp_resp_buf = (char*)malloc(cap);
+        hp_resp_cap = cap;
+    }
+    char* p = hp_resp_buf;
+    memcpy(p, "HTTP/1.1 ", 9); p += 9;
+    p += hp_itoa(p, status);
+    *p++ = ' ';
+    if (status_txt) {
+        size_t l = strlen(status_txt);
+        memcpy(p, status_txt, l); p += l;
+    } else {
+        memcpy(p, "OK", 2); p += 2;
+    }
+    memcpy(p, "\r\nContent-Length: ", 18); p += 18;
+    p += hp_itoa(p, body_len);
+    if (keep_alive) {
+        memcpy(p, "\r\nConnection: keep-alive\r\n", 26); p += 26;
+    } else {
+        memcpy(p, "\r\nConnection: close\r\n", 21); p += 21;
+    }
+    memcpy(p, "Date: ", 6); p += 6;
+    p += hp_get_date(p);
+    memcpy(p, "\r\n", 2); p += 2;
+    if (extra_headers) {
+        size_t l = strlen(extra_headers);
+        if (l > 0) {
+            memcpy(p, extra_headers, l); p += l;
+            if (l < 2 || p[-2] != '\r' || p[-1] != '\n') {
+                memcpy(p, "\r\n", 2); p += 2;
+            }
+        }
+    }
+    memcpy(p, "\r\n", 2); p += 2;
+    return (int)(p - hp_resp_buf);
+}
+
 /* Hand the per-thread response buffer back to Glide as a (void*, len)
    pair. The buffer is owned by the runtime — Glide must not free it. */
 void* hp_resp_buf_ptr(void) { return (void*)hp_resp_buf; }

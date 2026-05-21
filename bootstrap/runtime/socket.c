@@ -11,10 +11,12 @@ static void __glide_wsa_ensure(void) {
 }
 #else
 # include <sys/socket.h>
+# include <sys/uio.h>       /* writev */
 # include <netinet/in.h>
 # include <netinet/tcp.h>   /* TCP_NODELAY */
 # include <unistd.h>
 # include <arpa/inet.h>
+# include <errno.h>
 typedef int __glide_sock_t;
 static void __glide_wsa_ensure(void) {}
 #endif
@@ -146,6 +148,52 @@ int tcp_write(int fd, void* buf, int n) {
 #else
     int w = (int)write(fd, buf, (size_t)n);
     return w < 0 ? -1 : w;
+#endif
+}
+
+/* Gather-write two buffers in one syscall (writev / WSASend). The HTTP
+   server uses this so the response's header + body ship in one TCP
+   segment without the kernel having to coalesce two writes, and
+   without us memcpy'ing the body into a combined buffer. Returns
+   total bytes sent or -1 on hard error before any byte landed. */
+int tcp_writev2(int fd, void* buf1, int n1, void* buf2, int n2) {
+    if (n1 < 0) n1 = 0;
+    if (n2 < 0) n2 = 0;
+    int total = n1 + n2;
+    if (total == 0) return 0;
+#ifdef _WIN32
+    WSABUF bufs[2];
+    bufs[0].buf = (CHAR*)buf1; bufs[0].len = (ULONG)n1;
+    bufs[1].buf = (CHAR*)buf2; bufs[1].len = (ULONG)n2;
+    DWORD nbufs = (DWORD)((n1 > 0 ? 1u : 0u) + (n2 > 0 ? 1u : 0u));
+    int start = (n1 > 0 ? 0 : 1);
+    DWORD sent = 0;
+    int rv = WSASend((SOCKET)fd, &bufs[start], nbufs, &sent, 0, NULL, NULL);
+    if (rv != 0) return -1;
+    return (int)sent;
+#else
+    struct iovec iov[2];
+    iov[0].iov_base = buf1; iov[0].iov_len = (size_t)n1;
+    iov[1].iov_base = buf2; iov[1].iov_len = (size_t)n2;
+    int sent = 0;
+    while (sent < total) {
+        struct iovec cur[2];
+        int n_cur = 0;
+        size_t skip = (size_t)sent;
+        for (int i = 0; i < 2; i++) {
+            if (iov[i].iov_len == 0) continue;
+            if (skip >= iov[i].iov_len) { skip -= iov[i].iov_len; continue; }
+            cur[n_cur].iov_base = (char*)iov[i].iov_base + skip;
+            cur[n_cur].iov_len  = iov[i].iov_len - skip;
+            n_cur++;
+            skip = 0;
+        }
+        ssize_t w = writev(fd, cur, n_cur);
+        if (w > 0) { sent += (int)w; continue; }
+        if (w < 0 && (errno == EINTR)) continue;
+        return sent > 0 ? sent : -1;
+    }
+    return sent;
 #endif
 }
 

@@ -18,6 +18,7 @@ extern fn listen_tcp_reuseport(port: int) -> int;
 extern fn accept_tcp_async(listener: int) -> int;
 extern fn tcp_read_async(fd: int, buf: *void, max: int) -> int;
 extern fn tcp_write_async(fd: int, buf: *void, n: int) -> int;
+extern fn tcp_writev2_async(fd: int, buf1: *void, n1: int, buf2: *void, n2: int) -> int;
 extern fn tcp_close(fd: int);
 
 pub struct Listener { pub fd: int }
@@ -146,6 +147,15 @@ impl Conn {
     /// ```
     pub fn write_str(self: *Conn, s: string) -> int {
         return tcp_write_async(self.fd, s as *void, s.len());
+    }
+
+    /// Gather-write two buffers in one writev / WSASend syscall. The
+    /// HTTP server uses this to ship a response's header + body without
+    /// the kernel having to assemble two TCP segments — saves both the
+    /// userspace memcpy that hp_build_response would do and the extra
+    /// syscall a sequential pair of writes would cost.
+    pub fn write2(self: *Conn, buf1: *void, n1: int, buf2: *void, n2: int) -> int {
+        return tcp_writev2_async(self.fd, buf1, n1, buf2, n2);
     }
 
     /// Close the connection and free the struct. After `close()`, the

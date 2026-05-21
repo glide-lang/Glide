@@ -46,6 +46,9 @@ extern fn hp_glide_headers_block(g: *void) -> string;
 extern fn hp_glide_body(g: *void) -> string;
 extern fn hp_glide_free(g: *void);
 extern fn hp_glide_wants_close(g: *void) -> int;
+extern fn hp_build_response_header(status: int, status_txt: string,
+                                    body_len: int,
+                                    extra_headers: string, keep_alive: int) -> int;
 extern fn hp_build_response(status: int, status_txt: string,
                             body: *void, body_len: int,
                             extra_headers: string, keep_alive: int) -> int;
@@ -757,8 +760,24 @@ fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
     }
     let mut keep_i: int = 0;
     if keep { keep_i = 1; }
+    let body_len: int = resp.body.len();
+    // For bodies larger than ~512B, build only the header in the
+    // per-thread response buffer and ship header + body in a single
+    // writev — skips the body memcpy hp_build_response would have done.
+    // Tiny bodies still take the one-write path because writev's iov
+    // gather doesn't pay off when memcpy is faster than two syscalls
+    // and the SACK/Nagle interactions on a fully-built packet are
+    // simpler.
+    if body_len >= 512 {
+        let hlen: int = hp_build_response_header(resp.status,
+                                                   status_text(resp.status),
+                                                   body_len,
+                                                   resp.headers_block, keep_i);
+        c.write2(hp_resp_buf_ptr(), hlen, resp.body as *void, body_len);
+        return;
+    }
     let wlen: int = hp_build_response(resp.status, status_text(resp.status),
-                                      resp.body as *void, resp.body.len(),
+                                      resp.body as *void, body_len,
                                       resp.headers_block, keep_i);
     c.write(hp_resp_buf_ptr(), wlen);
 }
