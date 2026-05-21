@@ -1,0 +1,87 @@
+import stdlib::testing::*;
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::route::*;
+
+@get("/health")
+fn r_health() -> HttpResponse {
+    return HttpResponse::ok().text("ok");
+}
+
+@post("/echo")
+fn r_echo(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().body(req.body);
+}
+
+@put("/update")
+fn r_update(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::with_status(202).text("accepted");
+}
+
+@delete("/del")
+fn r_del() -> HttpResponse {
+    return HttpResponse::with_status(204);
+}
+
+fn _mk_req(method: string, path: string, body: string) -> HttpRequest {
+    return HttpRequest {
+        method: method, path: path, version: "HTTP/1.1",
+        headers_block: "", body: body,
+        params: null, queries: null, tls: false, headers_cache: null,
+    };
+}
+
+fn test_get_health_returns_200() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/health", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    return 0;
+}
+
+fn test_post_echo_returns_body() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("POST", "/echo", "hello");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 200);
+    assert_str_eq!(resp.body, "hello");
+    return 0;
+}
+
+fn test_put_returns_202() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("PUT", "/update", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 202);
+    return 0;
+}
+
+fn test_delete_returns_204() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("DELETE", "/del", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 204);
+    return 0;
+}
+
+fn test_unknown_route_returns_404() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/nope", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 404);
+    return 0;
+}
+
+fn test_method_mismatch_returns_404() -> int {
+    let r: *Router = Router::new();
+    routes!(r);
+    let req: HttpRequest = _mk_req("GET", "/echo", "");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 404);
+    return 0;
+}

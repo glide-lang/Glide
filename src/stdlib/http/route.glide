@@ -1,0 +1,121 @@
+// `@route(METHOD, "/path")` + sugar attrs `@get/@post/@put/@delete/
+// @patch/@head/@options/@any`. Wraps the user fn the same way
+// `@handler` does (typed param extraction → `fn(*HttpRequest) ->
+// HttpResponse`) and emits a `_route_register_<name>(r: *Router)` fn
+// that calls the matching `r.<method>(path, handler)`. The companion
+// `routes!(r)` proc-macro walks the program for every @route'd fn
+// and emits the register calls inline.
+
+import bootstrap::ast::*;
+import bootstrap::interp::*;
+import stdlib::http::handler::*;
+
+@proc_attr(route)
+@proc_attr(get)
+@proc_attr(post)
+@proc_attr(put)
+@proc_attr(delete)
+@proc_attr(patch)
+@proc_attr(head)
+@proc_attr(options)
+@proc_attr(any)
+fn impl_route(s: *Stmt) -> *Vector<Stmt> {
+    let mut method: string = "";
+    let mut path: string = "";
+    if s.attrs != null {
+        let mut i: int = 0;
+        while i < s.attrs.len() {
+            let a: Attr = s.attrs.get(i);
+            i = i + 1;
+            if !_is_route_attr_name(a.name) { continue; }
+            if a.name.eq("route") {
+                if a.args == null || a.args.len() < 2 { continue; }
+                let m_arg: Expr = a.args.get(0);
+                let p_arg: Expr = a.args.get(1);
+                if m_arg.kind == EX_IDENT { method = m_arg.str_val.to_lower(); }
+                if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+            } else {
+                method = a.name;
+                if a.args == null || a.args.len() < 1 { continue; }
+                let p_arg: Expr = a.args.get(0);
+                if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+            }
+            if !path.eq("") { break; }
+        }
+    }
+
+    let passthrough: *Vector<Stmt> = Vector::new();
+    passthrough.push(*s);
+    if path.eq("") || method.eq("") { return passthrough; }
+
+    let user_name: string = s.name;
+    let renamed: string = "_user_".concat(user_name);
+
+    let out: *Vector<Stmt> = _emit_handler_wrapper(s, user_name, renamed);
+
+    // fn _route_register_<name>(r: *Router) { r.<method>(<path>, <name>); }
+    let reg_name: string = "_route_register_".concat(user_name);
+    let reg_params: *Vector<Param> = Vector::new();
+    reg_params.push(*make_param("r", ty_pointer(ty_named("Router"))));
+
+    let call_args: *Vector<Expr> = Vector::new();
+    call_args.push(*expr_string(path, 0, 0));
+    call_args.push(*expr_ident_unsafe(user_name, 0, 0));
+    let reg_call: *Expr = expr_call(
+        expr_member(expr_ident_unsafe("r", 0, 0), method),
+        call_args);
+
+    let reg_body: *Vector<Stmt> = Vector::new();
+    reg_body.push(*stmt_expr(reg_call));
+
+    let no_ret: *Type = null;
+    out.push(*stmt_fn(reg_name, reg_params, no_ret, reg_body, 0, 0));
+    return out;
+}
+
+pub fn _is_route_attr_name(n: string) -> bool {
+    if n.eq("route") { return true; }
+    if n.eq("get") { return true; }
+    if n.eq("post") { return true; }
+    if n.eq("put") { return true; }
+    if n.eq("delete") { return true; }
+    if n.eq("patch") { return true; }
+    if n.eq("head") { return true; }
+    if n.eq("options") { return true; }
+    if n.eq("any") { return true; }
+    return false;
+}
+
+// `routes!(r)` — emit `_route_register_<name>(r);` for every @route'd
+// fn in the program. Walks the original program snapshot exposed via
+// the `__program__()` builtin so the order matches source declaration
+// order; cross-file routes are picked up after the importer resolves.
+@proc_macro(routes)
+fn macro_routes(args: *Vector<Expr>) -> *Vector<Stmt> {
+    let out: *Vector<Stmt> = Vector::new();
+    if args == null || args.len() == 0 { return out; }
+    let router_arg: Expr = args.get(0);
+
+    let prog: *Vector<Stmt> = __program__();
+    let mut i: int = 0;
+    while i < prog.len() {
+        let p: Stmt = prog.get(i);
+        i = i + 1;
+        if p.kind != ST_FN { continue; }
+        if p.attrs == null { continue; }
+        let mut j: int = 0;
+        while j < p.attrs.len() {
+            let a: Attr = p.attrs.get(j);
+            j = j + 1;
+            if !_is_route_attr_name(a.name) { continue; }
+            let reg_name: string = "_route_register_".concat(p.name);
+            let reg_args: *Vector<Expr> = Vector::new();
+            reg_args.push(router_arg);
+            let call: *Expr = expr_call(
+                expr_ident_unsafe(reg_name, 0, 0), reg_args);
+            out.push(*stmt_expr(call));
+            break;
+        }
+    }
+    return out;
+}

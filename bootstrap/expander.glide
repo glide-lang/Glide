@@ -69,7 +69,44 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
         }
         cleaned.push(s);
     }
-    expand_in_program(cleaned, static_macros, type_macros);
+
+    // Pre-pass: register PMK_FN_AST proc macros so `name!(args)` calls
+    // can dispatch through them during the macro_rules pass. PMK_ATTR
+    // and PMK_DERIVE are picked up by expand_proc_macros after.
+    let proc_registry: *HashMap<ProcMacroDef> = HashMap::new();
+    let mut has_fn_ast: bool = false;
+    for let i: int = 0; i < cleaned.len(); i++ {
+        let s: Stmt = cleaned.get(i);
+        if s.kind != ST_FN || s.attrs == null { continue; }
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            let kind: int = _proc_kind_for(a.name);
+            if kind < 0 { continue; }
+            if a.args == null || a.args.len() == 0 { continue; }
+            let ne: Expr = a.args.get(0);
+            if ne.kind != EX_IDENT { continue; }
+            proc_registry.insert(ne.str_val, ProcMacroDef { kind: kind, fn_stmt: s });
+            if kind == PMK_FN_AST { has_fn_ast = true; }
+        }
+    }
+
+    let mut fn_ast_interp: *Interp = null;
+    if has_fn_ast {
+        let saved_arena: *void = __glide_palloc_get();
+        __glide_palloc_set(null);
+        fn_ast_interp = Interp::new();
+        fn_ast_interp.register_fns(cleaned);
+        fn_ast_interp.program = cleaned;
+        __glide_palloc_set(saved_arena);
+    }
+
+    expand_in_program(cleaned, static_macros, type_macros, proc_registry, fn_ast_interp);
+
+    if fn_ast_interp != null && fn_ast_interp.diagnostics.len() > 0 {
+        for let i: int = 0; i < fn_ast_interp.diagnostics.len(); i++ {
+            println!("proc-macro: ", fn_ast_interp.diagnostics.get(i));
+        }
+    }
 
     // Procedural macro expansion runs AFTER declarative macro_rules!
     // expansion so a derive can sit on top of a `macro` use site.
@@ -508,17 +545,19 @@ fn expr_references_self(e: *Expr) -> bool {
 
 // Walk every fn / impl-method body in the program and expand macros found at
 // statement position.
-fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>) {
+fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>,
+                      tm: *Vector<TypeMacro>,
+                      pr: *HashMap<ProcMacroDef>, it: *Interp) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
-            s.fn_body = expand_in_block(s.fn_body, sm, tm);
+            s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it);
             program.set(i, s);
         } else if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: int = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body != null {
-                    m.fn_body = expand_in_block(m.fn_body, sm, tm);
+                    m.fn_body = expand_in_block(m.fn_body, sm, tm, pr, it);
                     s.impl_methods.set(j, m);
                 }
             }
@@ -527,14 +566,16 @@ fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<Typ
     }
 }
 
-fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>) -> *Vector<Stmt> {
+fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>,
+                    tm: *Vector<TypeMacro>,
+                    pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
     for let i: int = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         // Macro at statement position: `name!(args);` becomes ST_EXPR holding
         // an EX_MACRO. Replace it with the expansion's stmts.
         if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_MACRO {
-            let expanded: *Vector<Stmt> = try_expand_call(s.expr_value, sm, tm);
+            let expanded: *Vector<Stmt> = try_expand_call(s.expr_value, sm, tm, pr, it);
             if expanded != null {
                 for let k: int = 0; k < expanded.len(); k++ {
                     let e: Stmt = expanded.get(k);
@@ -544,11 +585,11 @@ fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMac
             }
         }
         // Recurse into children that hold stmt blocks.
-        if s.then_body != null { s.then_body = expand_in_block(s.then_body, sm, tm); }
-        if s.else_body != null { s.else_body = expand_in_block(s.else_body, sm, tm); }
-        if s.fn_body != null { s.fn_body = expand_in_block(s.fn_body, sm, tm); }
+        if s.then_body != null { s.then_body = expand_in_block(s.then_body, sm, tm, pr, it); }
+        if s.else_body != null { s.else_body = expand_in_block(s.else_body, sm, tm, pr, it); }
+        if s.fn_body != null { s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it); }
         if s.for_init != null && s.for_init.then_body != null {
-            s.for_init.then_body = expand_in_block(s.for_init.then_body, sm, tm);
+            s.for_init.then_body = expand_in_block(s.for_init.then_body, sm, tm, pr, it);
         }
         out.push(s);
     }
@@ -557,7 +598,8 @@ fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMac
 
 // Returns the expansion stmts on success, or null if `call` doesn't name a
 // known user macro (e.g. it's a builtin like `println!`).
-fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>) -> *Vector<Stmt> {
+fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
+                    pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Vector<Stmt> {
     if call == null || call.kind != EX_MACRO { return null; }
     // `Type::name!(args)` — qualified type-attached.
     //   * Instance form (body uses `self`): the first arg is the receiver,
@@ -609,13 +651,60 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>) -> *
         }
         return null;
     }
-    if !sm.contains(call.str_val) { return null; }
-    let def: Stmt = sm.get(call.str_val);
-    // Body-less stub (`macro name!(matchers);`) — declared for docs / LSP
-    // only. Skip expansion so codegen's native handling can fire.
-    if def.then_body == null { return null; }
-    let no_recv: *Expr = null;
-    return expand_with_def_recv(call, &def, no_recv);
+    if sm.contains(call.str_val) {
+        let def: Stmt = sm.get(call.str_val);
+        // Body-less stub (`macro name!(matchers);`) — declared for docs / LSP
+        // only. Skip expansion so codegen's native handling can fire.
+        if def.then_body == null { return null; }
+        let no_recv: *Expr = null;
+        return expand_with_def_recv(call, &def, no_recv);
+    }
+    // Fall through to PMK_FN_AST proc-macros (e.g. `routes!(r)`). The
+    // expander wired these up before this pass, so we just dispatch
+    // through the interp with the call's args as a Vector<Expr>.
+    if pr != null && it != null && pr.contains(call.str_val) {
+        let pm: ProcMacroDef = pr.get(call.str_val);
+        if pm.kind == PMK_FN_AST {
+            return _run_fn_ast(it, &pm.fn_stmt, call);
+        }
+    }
+    return null;
+}
+
+// Invoke a @proc_macro fn-style macro. The fn signature is
+// `fn impl(args: *Vector<Expr>) -> *Vector<Stmt>`; we wrap the call's
+// args in IV_VECTOR<IV_PTR{Expr}> so the macro body can read them
+// via the same `args.get(0).str_val` shape derives use on Stmt fields.
+fn _run_fn_ast(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Vector<Stmt> {
+    it.set_use_site(call.line, call.column, "");
+    let saved_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+    let elem_args: *Vector<IValue> = Vector::new();
+    if call.args != null {
+        for let i: int = 0; i < call.args.len(); i++ {
+            let ea: Expr = call.args.get(i);
+            let pe: *Expr = malloc(sizeof(Expr)) as *Expr;
+            *pe = ea;
+            elem_args.push(iv_ptr(pe as *void, "Expr"));
+        }
+    }
+    let invoke_args: *Vector<IValue> = Vector::new();
+    invoke_args.push(iv_vector(elem_args));
+    let r: IValue = interp_call(it, fn_stmt, invoke_args);
+    __glide_palloc_set(saved_arena);
+    let out: *Vector<Stmt> = Vector::new();
+    if r.kind != IV_VECTOR { return out; }
+    for let i: int = 0; i < r.vec.len(); i++ {
+        let elem: IValue = r.vec.get(i);
+        if elem.kind != IV_PTR { continue; }
+        if !elem.ty_tag.eq("Stmt") { continue; }
+        let ps: *Stmt = elem.p as *Stmt;
+        if ps != null {
+            ast_fill_defaults(ps);
+            out.push(*ps);
+        }
+    }
+    return out;
 }
 
 fn expand_with_def(call: *Expr, def: *Stmt) -> *Vector<Stmt> {

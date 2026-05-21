@@ -194,6 +194,13 @@ pub struct Interp {
     pub current_use_line: int,
     pub current_use_col: int,
     pub current_use_origin: string,
+
+    // Program snapshot exposed to macros via `__program__()`. The
+    // expander sets this once (the original AST, pre-expansion) so
+    // every macro invocation sees the same view regardless of source
+    // order. Macros that don't need it ignore it; the field stays
+    // null when no proc-macro pass is running.
+    pub program: *Vector<Stmt>,
 }
 
 impl Interp {
@@ -215,6 +222,7 @@ impl Interp {
         it.current_use_line = 0;
         it.current_use_col = 0;
         it.current_use_origin = "";
+        it.program = null;
         return it;
     }
 
@@ -542,6 +550,20 @@ pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
     if e.kind == EX_ASSIGN { return interp_assign(it, e); }
     if e.kind == EX_CAST { return interp_cast(it, e); }
     if e.kind == EX_PATH { return interp_path(it, e); }
+    if e.kind == EX_MACRO {
+        // Diagnostic-only println!/print!/format! invoked from a macro
+        // body. Route through builtin_call which sinks them into
+        // it.diagnostics. Other macros aren't expanded here (no infinite
+        // recursion); they're left as their stringified form.
+        let interp_args: *Vector<IValue> = Vector::new();
+        if e.args != null {
+            for let i: int = 0; i < e.args.len(); i++ {
+                let arg_expr: Expr = e.args.get(i);
+                interp_args.push(interp_expr(it, &arg_expr));
+            }
+        }
+        return builtin_call(it, e.str_val, interp_args);
+    }
 
     it.err("unsupported expr kind in macro body: ".concat(e.kind.to_string()));
     return iv_null();
@@ -762,6 +784,22 @@ fn interp_member_read(it: *Interp, e: *Expr) -> IValue {
 // ---- built-in call dispatch table ------------------------------------
 
 fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
+    // __program__() — returns the program snapshot the expander set
+    // on this interp (null → empty vector). Macros use it to discover
+    // siblings, e.g. `routes!()` walking all @route'd fns.
+    if name.eq("__program__") {
+        let out: *Vector<IValue> = Vector::new();
+        if it.program != null {
+            for let i: int = 0; i < it.program.len(); i++ {
+                let st: Stmt = it.program.get(i);
+                let ps: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *ps = st;
+                out.push(iv_ptr(ps as *void, "Stmt"));
+            }
+        }
+        return iv_vector(out);
+    }
+
     // Vector::new / HashMap::new
     if name.eq("Vector::new") {
         let v: *Vector<IValue> = Vector::new();
@@ -1267,6 +1305,20 @@ fn param_field(it: *Interp, p: *Param, f: string) -> IValue {
 fn attr_field(it: *Interp, a: *Attr, f: string) -> IValue {
     if a == null { return iv_null(); }
     if f.eq("name") { return iv_string(a.name); }
+    if f.eq("line") { return iv_int(a.line); }
+    if f.eq("column") { return iv_int(a.column); }
+    if f.eq("args") {
+        let out: *Vector<IValue> = Vector::new();
+        if a.args != null {
+            for let i: int = 0; i < a.args.len(); i++ {
+                let e: Expr = a.args.get(i);
+                let pe: *Expr = malloc(sizeof(Expr)) as *Expr;
+                *pe = e;
+                out.push(iv_ptr(pe as *void, "Expr"));
+            }
+        }
+        return iv_vector(out);
+    }
     it.err("Attr has no field `".concat(f).concat("`"));
     return iv_null();
 }

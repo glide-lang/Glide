@@ -55,16 +55,23 @@ import bootstrap::interp::*;
   "fn `%got_name%` has shape %got%. Annotate it with `@handler` (from stdlib::http::handler) so the macro auto-extracts typed params and wraps the return into %want_ret% — the shape `r.get(...)` needs.")
 @suggest_when_got_returns(Json, HttpResponse, Result, Option, OptResult)
 fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
+    return _emit_handler_wrapper(s, s.name, "_user_".concat(s.name));
+}
+
+// Shared wrap logic used by both `@handler` and `@get/@post/etc`. Emits
+// the user fn renamed to `renamed_name` (preserving the original typed
+// body) plus a `fn(*HttpRequest) -> HttpResponse` wrapper at
+// `wrapper_name` that calls it with each param extracted from the
+// request. Param dispatch table is documented above.
+pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: string) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
 
-    let user_name: string = s.name;
-    let renamed: string = "_user_".concat(user_name);
     let user_params: *Vector<Param> = s.fn_params;
     let user_ret_ty: *Type = s.fn_ret_ty;
     let user_body: *Vector<Stmt> = s.fn_body;
 
     // 1) Emit the renamed user fn — same params, same body, same ret.
-    out.push(*stmt_fn(renamed, user_params, user_ret_ty, user_body, 0, 0));
+    out.push(*stmt_fn(renamed_name, user_params, user_ret_ty, user_body, 0, 0));
 
     // 2) Wrapper fn(*HttpRequest) -> HttpResponse.
     let wrapper_body: *Vector<Stmt> = Vector::new();
@@ -199,7 +206,7 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
 
     // return _user_<name>(args);                       // ret = HttpResponse
     // return _user_<name>(args).into_response();       // ret = Json<T>
-    let user_call: *Expr = expr_call(expr_ident_unsafe(renamed, 0, 0), call_args);
+    let user_call: *Expr = expr_call(expr_ident_unsafe(renamed_name, 0, 0), call_args);
     let mut ret_expr: *Expr = user_call;
     if user_ret_ty != null {
         if !_json_inner_name(user_ret_ty).eq("") {
@@ -211,7 +218,7 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
     wrapper_body.push(*stmt_return(ret_expr, 0, 0));
 
     let wrap_params: *Vector<Param> = mk_req_params();
-    out.push(*stmt_fn(user_name, wrap_params, ty_named("HttpResponse"),
+    out.push(*stmt_fn(wrapper_name, wrap_params, ty_named("HttpResponse"),
                        wrapper_body, 0, 0));
     return out;
 }
