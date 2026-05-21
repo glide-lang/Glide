@@ -232,6 +232,7 @@ c_raw! {
         int                        cached_port;
         int                        early_data_attempted;
         int                        early_data_accepted;
+        int                        h3_ready_early;  // nghttp3 set up pre-handshake (0-RTT path)
     } __glide_h3_conn;
 
     // ---- response sink helpers --------------------------------------
@@ -939,7 +940,7 @@ c_raw! {
 
         ngtcp2_settings settings; ngtcp2_settings_default(&settings);
         settings.initial_ts = __glide_h3_now();
-        // settings.log_printf = __glide_h3_log;  // enable to trace ngtcp2 internals
+        if (getenv("GLIDE_H3_DEBUG")) settings.log_printf = __glide_h3_log;
 
         ngtcp2_transport_params params; ngtcp2_transport_params_default(&params);
         params.initial_max_streams_bidi = 100;
@@ -970,13 +971,27 @@ c_raw! {
         // Apply cached 0-RTT transport params (only if we got a hit
         // above). ngtcp2 uses them to seed initial flow control budgets
         // for early-data submissions before the real TPs land via the
-        // server's response.
+        // server's response. When 0-RTT params are set, we also set up
+        // nghttp3 here (before the handshake loop) so the caller can
+        // submit a request via early data — the first writev_stream
+        // call after this point will produce Initial + 0-RTT packets
+        // that bundle the stream data.
         if (cached_tp != NULL && cached_tp_len > 0) {
-            ngtcp2_conn_decode_and_set_0rtt_transport_params(
-                c->qc, cached_tp, (size_t)cached_tp_len);
+            if (ngtcp2_conn_decode_and_set_0rtt_transport_params(
+                    c->qc, cached_tp, (size_t)cached_tp_len) == 0) {
+                if (__glide_h3_setup_h3_client(c)) {
+                    c->h3_ready_early = 1;
+                }
+            }
             free(cached_tp);
             cached_tp = NULL;
         }
+
+        // 0-RTT path: nghttp3 is already up via cache + h3_ready_early.
+        // Skip the handshake loop here — client_request will drive both
+        // the handshake and the request in one go, so the request data
+        // rides out as 0-RTT in the first packet flight.
+        if (c->h3_ready_early) return (void*)c;
 
         // Drive handshake.
         uint64_t deadline = __glide_h3_now() +
@@ -1021,6 +1036,14 @@ c_raw! {
             c->req_body = (unsigned char*)malloc((size_t)body_len);
             memcpy(c->req_body, body, body_len);
             c->req_body_len = (size_t)body_len;
+        }
+
+        // 0-RTT path: connect returned with nghttp3 already wired but the
+        // handshake loop deferred. Submitting the request here puts the
+        // stream data into nghttp3 ahead of the first writev_stream call,
+        // so it ships as 0-RTT in the Initial flight.
+        if (c->h3 == NULL && !c->h3_ready_early) {
+            if (!__glide_h3_setup_h3_client(c)) return 0;
         }
 
         int64_t stream_id;
@@ -1242,6 +1265,12 @@ c_raw! {
 
         int                        handshake_done;
         int                        connection_error;
+
+        // Set if stream data arrived before handshake completed, i.e.
+        // the request was sent as 0-RTT early data. Dispatch consults
+        // this + the method to decide whether to honour or reject with
+        // 425 Too Early.
+        int                        req_was_0rtt;
     } __glide_h3_server_state;
 
     // ngtcp2 server-side connection ref → ngtcp2_conn lookup.
@@ -1434,6 +1463,11 @@ c_raw! {
                                                     void *stream_user_data) {
         (void)conn; (void)offset; (void)stream_user_data;
         __glide_h3_server_state* s = (__glide_h3_server_state*)user_data;
+        // Stream data arriving before the handshake finishes is 0-RTT
+        // early data. Remember that fact so the dispatch path can
+        // enforce HTTP idempotency (RFC 9001 §5.6 — 0-RTT MUST NOT
+        // carry non-idempotent methods).
+        if (!s->handshake_done) s->req_was_0rtt = 1;
         if (s->h3 == NULL) return 0;
         nghttp3_ssize n = nghttp3_conn_read_stream(s->h3, stream_id,
                                                     data, datalen,
@@ -2133,6 +2167,7 @@ c_raw! {
         return (void*)s;
     }
 
+    int         __glide_h3_srv_req_was_0rtt(void* h)    { return ((__glide_h3_server_state*)h)->req_was_0rtt; }
     const char* __glide_h3_srv_req_method(void* h)     { return ((__glide_h3_server_state*)h)->req_method ? ((__glide_h3_server_state*)h)->req_method : ""; }
     const char* __glide_h3_srv_req_path(void* h)       { return ((__glide_h3_server_state*)h)->req_path ? ((__glide_h3_server_state*)h)->req_path : "/"; }
     const char* __glide_h3_srv_req_authority(void* h)  { return ((__glide_h3_server_state*)h)->req_authority ? ((__glide_h3_server_state*)h)->req_authority : ""; }
@@ -2363,6 +2398,7 @@ c_raw! {
 
 extern fn __glide_h3_listen(port: int, cert_path: string, key_path: string) -> *void;
 extern fn __glide_h3_accept(listener: *void) -> *void;
+extern fn __glide_h3_srv_req_was_0rtt(h: *void) -> int;
 extern fn __glide_h3_srv_req_method(h: *void) -> string;
 extern fn __glide_h3_srv_req_path(h: *void) -> string;
 extern fn __glide_h3_srv_req_authority(h: *void) -> string;
@@ -2452,8 +2488,23 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
         if hb.len() > 0 { hb = hb.concat("\r\n"); }
         hb = hb.concat("Host: ").concat(authority);
     }
+    let method: string = __glide_h3_srv_req_method(h);
+    // RFC 9001 §5.6 + RFC 8470: 0-RTT data is replayable, so the server
+    // MUST NOT accept non-idempotent requests in early data. Reject with
+    // 425 Too Early and let the client retry over 1-RTT.
+    if __glide_h3_srv_req_was_0rtt(h) != 0
+        && !method.eq("GET") && !method.eq("HEAD") {
+        let bad: HttpResponse = HttpResponse::with_status(425)
+            .body("0-RTT replay risk: retry without early data");
+        let _r: int = __glide_h3_srv_send_response(h, bad.status,
+                                                     bad.headers_block,
+                                                     bad.body as *u8,
+                                                     bad.body.len());
+        __glide_h3_srv_close(h);
+        return;
+    }
     let req: HttpRequest = HttpRequest {
-        method:        __glide_h3_srv_req_method(h),
+        method:        method,
         path:          __glide_h3_srv_req_path(h),
         version:       "HTTP/3.0",
         headers_block: hb,
