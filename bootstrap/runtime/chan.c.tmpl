@@ -101,11 +101,7 @@ static int __glide_try_recv_@M@(__glide_chan_@M@_t* c, @TC@* out) {
    needlessly. */
 extern atomic_long __glide_perf_wake_ns;
 extern atomic_long __glide_perf_wake_calls;
-static inline long long __glide_perf_now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-}
+extern long long __glide_perf_now_ns(void);
 static void __glide_wake_recv_@M@(__glide_chan_@M@_t* c) {
     if (c->coro_recv_waiters == NULL && atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) == 0) return;
     long long t0 = __glide_perf_now_ns();

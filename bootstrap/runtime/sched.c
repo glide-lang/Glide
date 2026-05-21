@@ -945,6 +945,12 @@ atomic_long __glide_perf_cv_signals  = 0;
 atomic_long __glide_perf_wake_ns     = 0;
 atomic_long __glide_perf_wake_calls  = 0;
 
+long long __glide_perf_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+
 void __glide_perf_dump(void) {
     long p  = atomic_exchange(&__glide_perf_parks, 0);
     long sp = atomic_exchange(&__glide_perf_spin_parks, 0);
