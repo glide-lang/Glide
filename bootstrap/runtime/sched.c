@@ -25,6 +25,8 @@ static inline void __glide_spin_lock(__glide_spin_t* l) {
         while (atomic_load_explicit(l, memory_order_relaxed) == 1) {
 #if defined(__x86_64__) || defined(_M_X64)
             __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+            __asm__ __volatile__("yield" ::: "memory");
 #endif
         }
     }
@@ -61,7 +63,18 @@ static int __glide_stack_size = 65536;
    caller's stack frame by the compiler before it called us, so we don't
    touch them. SysV marks XMM as caller-saved → no extra work there. */
 typedef struct {
-#ifdef _WIN32
+#if defined(__aarch64__) || defined(_M_ARM64)
+    /* AArch64 (AAPCS64): callee-saved x19-x28, fp (x29), lr (x30),
+       d8-d15 (low 64 of v8-v15). sp goes through a GP reg via mov. */
+    void* sp;
+    void* x19; void* x20; void* x21; void* x22;
+    void* x23; void* x24; void* x25; void* x26;
+    void* x27; void* x28;
+    void* fp;            /* x29 */
+    void* lr;            /* x30 - first switch returns into trampoline */
+    double d8;  double d9;  double d10; double d11;
+    double d12; double d13; double d14; double d15;
+#elif defined(_WIN32)
     void* rsp; void* rbx; void* rbp;
     void* rdi; void* rsi;
     void* r12; void* r13; void* r14; void* r15;
@@ -76,7 +89,37 @@ __attribute__((naked, noinline))
 static void __glide_ctx_switch(
     __glide_coro_ctx* from __attribute__((unused)),
     __glide_coro_ctx* to   __attribute__((unused))) {
-#ifdef _WIN32
+#if defined(__aarch64__) || defined(_M_ARM64)
+    /* AAPCS64: from=x0, to=x1. Save sp through x9 (sp can't be used as
+       a base register in stp). stp pairs 16-byte-aligned doublets. */
+    __asm__(
+        "mov x9, sp\n\t"
+        "str x9,  [x0,   #0]\n\t"
+        "stp x19, x20, [x0,  #8]\n\t"
+        "stp x21, x22, [x0, #24]\n\t"
+        "stp x23, x24, [x0, #40]\n\t"
+        "stp x25, x26, [x0, #56]\n\t"
+        "stp x27, x28, [x0, #72]\n\t"
+        "stp x29, x30, [x0, #88]\n\t"
+        "stp  d8,  d9, [x0, #104]\n\t"
+        "stp d10, d11, [x0, #120]\n\t"
+        "stp d12, d13, [x0, #136]\n\t"
+        "stp d14, d15, [x0, #152]\n\t"
+        "ldr x9,  [x1,   #0]\n\t"
+        "mov sp, x9\n\t"
+        "ldp x19, x20, [x1,  #8]\n\t"
+        "ldp x21, x22, [x1, #24]\n\t"
+        "ldp x23, x24, [x1, #40]\n\t"
+        "ldp x25, x26, [x1, #56]\n\t"
+        "ldp x27, x28, [x1, #72]\n\t"
+        "ldp x29, x30, [x1, #88]\n\t"
+        "ldp  d8,  d9, [x1, #104]\n\t"
+        "ldp d10, d11, [x1, #120]\n\t"
+        "ldp d12, d13, [x1, #136]\n\t"
+        "ldp d14, d15, [x1, #152]\n\t"
+        "ret\n\t"
+    );
+#elif defined(_WIN32)
     /* Win64 ABI: from=%rcx, to=%rdx. XMM area starts at offset 72. */
     __asm__(
         "movq %rsp,   0(%rcx)\n\t"
@@ -474,11 +517,11 @@ static void __glide_free_stack(void* base, size_t total) {
 #endif
 }
 
-/* Plant trampoline address at the top of the stack so the first
-   ctx_switch into this ctx pops it and `ret`s into the trampoline.
-   16-byte alignment matches the AMD64 call ABI: we save RSP at a
-   16-aligned address; `ret` bumps RSP by 8 so trampoline entry sees
-   RSP%16==8 (which is what `call` would have left). */
+/* Plant trampoline so the first ctx_switch into this ctx returns into
+   the trampoline. x86-64 pushes the address onto the new stack and
+   relies on `ret`; AArch64 sets `lr` (x30) directly in the saved ctx
+   and `ret` jumps to lr. SP stays 16-byte aligned per AAPCS64 / AMD64
+   call ABI either way. */
 static void __glide_coro_init(__glide_task* t) {
     size_t total = 0;
     t->stack = __glide_alloc_stack(&total);
@@ -486,12 +529,23 @@ static void __glide_coro_init(__glide_task* t) {
     char* top = (char*)t->stack + total;
     top -= 16;                       /* headroom — never write past top */
     uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    t->ctx.sp = (void*)sp;
+    t->ctx.lr = (void*)__glide_coro_trampoline;
+    t->ctx.x19 = 0; t->ctx.x20 = 0; t->ctx.x21 = 0; t->ctx.x22 = 0;
+    t->ctx.x23 = 0; t->ctx.x24 = 0; t->ctx.x25 = 0; t->ctx.x26 = 0;
+    t->ctx.x27 = 0; t->ctx.x28 = 0;
+    t->ctx.fp = 0;
+    t->ctx.d8  = 0; t->ctx.d9  = 0; t->ctx.d10 = 0; t->ctx.d11 = 0;
+    t->ctx.d12 = 0; t->ctx.d13 = 0; t->ctx.d14 = 0; t->ctx.d15 = 0;
+#else
     *(void**)sp = (void*)__glide_coro_trampoline;
     t->ctx.rsp = (void*)sp;
     t->ctx.rbx = 0; t->ctx.rbp = 0;
     t->ctx.r12 = 0; t->ctx.r13 = 0; t->ctx.r14 = 0; t->ctx.r15 = 0;
 #ifdef _WIN32
     t->ctx.rdi = 0; t->ctx.rsi = 0;
+#endif
 #endif
 }
 
@@ -668,6 +722,16 @@ static void __glide_reset_ctx(__glide_task* t) {
     char* top = (char*)t->stack + t->stack_total;
     top -= 16;
     uintptr_t sp = ((uintptr_t)top) & ~(uintptr_t)15;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    t->ctx.sp = (void*)sp;
+    t->ctx.lr = (void*)__glide_coro_trampoline;
+    t->ctx.x19 = 0; t->ctx.x20 = 0; t->ctx.x21 = 0; t->ctx.x22 = 0;
+    t->ctx.x23 = 0; t->ctx.x24 = 0; t->ctx.x25 = 0; t->ctx.x26 = 0;
+    t->ctx.x27 = 0; t->ctx.x28 = 0;
+    t->ctx.fp = 0;
+    t->ctx.d8  = 0; t->ctx.d9  = 0; t->ctx.d10 = 0; t->ctx.d11 = 0;
+    t->ctx.d12 = 0; t->ctx.d13 = 0; t->ctx.d14 = 0; t->ctx.d15 = 0;
+#else
     *(void**)sp = (void*)__glide_coro_trampoline;
     t->ctx.rsp = (void*)sp;
     /* GP/XMM regs zeroed via 8-byte stores — faster than memset for
@@ -681,6 +745,7 @@ static void __glide_reset_ctx(__glide_task* t) {
     x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=0; x[5]=0; x[6]=0; x[7]=0;
     x[8]=0; x[9]=0; x[10]=0; x[11]=0; x[12]=0; x[13]=0; x[14]=0; x[15]=0;
     x[16]=0; x[17]=0; x[18]=0; x[19]=0;
+#endif
 #endif
 }
 

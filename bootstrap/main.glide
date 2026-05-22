@@ -2303,6 +2303,7 @@ fn _target_os(triple: string) -> string {
 fn _known_targets() -> *Vector<string> {
     let v: *Vector<string> = Vector::new();
     v.push("x86_64-linux-musl");
+    v.push("aarch64-linux-musl");
     return v;
 }
 

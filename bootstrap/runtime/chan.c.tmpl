@@ -154,6 +154,8 @@ static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
     for (int s = 0; s < 256; s++) {
 #if defined(__x86_64__) || defined(_M_X64)
         __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        __asm__ __volatile__("yield" ::: "memory");
 #endif
         if (__glide_try_send_@M@(c, v)) {
             __glide_wake_recv_@M@(c);
@@ -190,6 +192,8 @@ static @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {
     for (int s = 0; s < 256; s++) {
 #if defined(__x86_64__) || defined(_M_X64)
         __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        __asm__ __volatile__("yield" ::: "memory");
 #endif
         if (__glide_try_recv_@M@(c, &v)) {
             __glide_wake_send_@M@(c);
@@ -226,6 +230,8 @@ static int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {
     for (int s = 0; s < 256; s++) {
 #if defined(__x86_64__) || defined(_M_X64)
         __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        __asm__ __volatile__("yield" ::: "memory");
 #endif
         if (__glide_try_recv_@M@(c, out)) {
             __glide_wake_send_@M@(c);
