@@ -28,6 +28,23 @@ typedef int __glide_sock_t;
 static void __glide_wsa_ensure(void) {}
 #endif
 
+/* Whether SO_REUSEPORT on this OS actually load-balances accepts.
+   Linux: yes (canonical implementation).
+   FreeBSD: only with SO_REUSEPORT_LB (which we don't toggle today)
+            - plain SO_REUSEPORT here is shared-bind, last-write wins.
+   macOS / OpenBSD / NetBSD / DragonFly: SO_REUSEPORT exists but doesn't
+   load-balance - last bind wins traffic.
+   Windows: no SO_REUSEPORT at all (SO_REUSEADDR is unrelated).
+   stdlib branches on this to pick between "each worker binds" (Linux
+   path) and "one shared listener, N accept threads" (everyone else). */
+int __glide_has_reuseport_balance(void) {
+#ifdef __linux__
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 /* Turn off Nagle on a freshly-accepted conn. With keep-alive +
    small responses, Nagle would otherwise hold a write back up
    to 40 ms waiting for an ACK to coalesce, dropping req/s by an

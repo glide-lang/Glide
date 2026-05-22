@@ -457,9 +457,32 @@ static __glide_spin_t __glide_stack_pool_spin = 0;
    SIGSEGV/EXCEPTION_ACCESS_VIOLATION instead of silently corrupting the
    neighbour stack. Returns the LOW address of the whole region; usable
    stack starts at `base + __GLIDE_STACK_GUARD`. */
+/* Cached page size for the running host. Apple Silicon uses a native
+   16 KB page; x86_64 Linux/Win/Mac all use 4 KB. mmap/mprotect/VirtualAlloc
+   round to whole pages, so any rounding done here MUST match the kernel's
+   page or guard-page protection ends up covering the wrong region (or
+   straddling two stacks at once). Looked up once on first call; harmless
+   data race for the racy first writes since both threads converge on the
+   same constant. */
+static size_t __glide_host_page_size(void) {
+    static size_t cached = 0;
+    if (cached) return cached;
+    size_t p = 4096;
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    if (si.dwPageSize > 0) p = (size_t)si.dwPageSize;
+#else
+    long sc = sysconf(_SC_PAGESIZE);
+    if (sc > 0) p = (size_t)sc;
+#endif
+    cached = p;
+    return p;
+}
+
 static void* __glide_alloc_stack(size_t* out_total) {
     size_t total = (size_t)__glide_stack_size + __GLIDE_STACK_GUARD;
-    size_t page = 4096;
+    size_t page = __glide_host_page_size();
     total = (total + page - 1) & ~(page - 1);
     /* Pool fast path. */
     __glide_spin_lock(&__glide_stack_pool_spin);

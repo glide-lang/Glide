@@ -620,17 +620,33 @@ impl Router {
     /// r.listen_workers(8080, 4);
     /// ```
     pub fn listen_workers(self: *Router, port: int, n: int) -> !int {
-        let probe: *Listener = Listener::bind_reuseport(port);
-        if !probe.ok() { return err("bind failed"); }
-        probe.close();
-        println!("http: listening on :", port, " across ", n, " worker(s)");
+        // Linux: REUSEPORT path - each worker binds its own listener.
+        // Elsewhere: shared listener + N accept threads (kernel
+        // serializes accept() on the shared fd). See http_listen_workers
+        // for the rationale.
+        if os_has_reuseport_balance() {
+            let probe: *Listener = Listener::bind_reuseport(port);
+            if !probe.ok() { return err("bind failed"); }
+            probe.close();
+            println!("http: listening on :", port, " across ", n, " worker(s)");
+            let mut spawned: int = 1;
+            while spawned < n {
+                spawn_thread _router_accept_loop(port, self);
+                spawned = spawned + 1;
+            }
+            _router_accept_loop(port, self);
+            return ok(0);
+        }
 
+        let shared: *Listener = Listener::bind(port);
+        if !shared.ok() { return err("bind failed"); }
+        println!("http: listening on :", port, " across ", n, " worker(s) [shared fd]");
         let mut spawned: int = 1;
         while spawned < n {
-            spawn_thread _router_accept_loop(port, self);
+            spawn_thread _router_accept_loop_shared(shared, self);
             spawned = spawned + 1;
         }
-        _router_accept_loop(port, self);
+        _router_accept_loop_shared(shared, self);
         return ok(0);
     }
 }
@@ -684,6 +700,10 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
 fn _router_accept_loop(port: int, r: *Router) {
     let l: *Listener = Listener::bind_reuseport(port);
     if !l.ok() { return; }
+    _router_accept_loop_shared(l, r);
+}
+
+fn _router_accept_loop_shared(l: *Listener, r: *Router) {
     let has_reactor: bool = os_has_async_io();
     while true {
         let c: *Conn = l.accept();

@@ -961,12 +961,18 @@ pub fn http_listen(port: int, handler: fn(*HttpRequest) -> HttpResponse) -> !int
     return ok(0);
 }
 
-// One accept loop, runs in either main or a spawned pthread. Each
-// loop owns its own SO_REUSEPORT-bound listener; the kernel
-// load-balances accepts across them.
+// One accept loop, runs in either main or a spawned pthread. On Linux
+// each worker owns its own SO_REUSEPORT-bound listener and the kernel
+// load-balances accepts. On platforms without REUSEPORT load-balance
+// the caller passes a shared listener (l != null).
 fn _accept_loop(port: int, handler: fn(*HttpRequest) -> HttpResponse) {
     let l: *Listener = Listener::bind_reuseport(port);
     if !l.ok() { return; }
+    _accept_loop_shared(l, handler);
+}
+
+fn _accept_loop_shared(l: *Listener,
+                       handler: fn(*HttpRequest) -> HttpResponse) {
     let has_reactor: bool = os_has_async_io();
     while true {
         let c: *Conn = l.accept();
@@ -1115,20 +1121,42 @@ fn _handle_tls_dispatch(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse
 /// ```
 pub fn http_listen_workers(port: int, n: int,
                            handler: fn(*HttpRequest) -> HttpResponse) -> !int {
-    // Probe-bind once on the calling thread so the caller sees a clean
-    // error if the port is unusable. Drop it before spawning so every
-    // worker creates its own listener inside _accept_loop.
-    let probe: *Listener = Listener::bind_reuseport(port);
-    if !probe.ok() { return err("bind failed"); }
-    probe.close();
-    println!("http: listening on :", port, " across ", n, " worker(s)");
+    // Two strategies depending on whether the OS kernel actually
+    // load-balances accepts when N processes bind with SO_REUSEPORT.
+    //
+    // Linux: yes - each worker creates its own listener (highest
+    // throughput, kernel splits the accept queue per worker).
+    //
+    // macOS / *BSD / Windows: no - either SO_REUSEPORT doesn't
+    // load-balance (last bind wins traffic, so N-1 workers sit idle)
+    // or it doesn't exist at all. We bind once on main and share the
+    // listener fd across N accept threads; the kernel serializes
+    // accept() calls on the shared listener which is correct but
+    // slightly slower than the REUSEPORT path.
+    if os_has_reuseport_balance() {
+        let probe: *Listener = Listener::bind_reuseport(port);
+        if !probe.ok() { return err("bind failed"); }
+        probe.close();
+        println!("http: listening on :", port, " across ", n, " worker(s)");
+        let mut spawned: int = 1;
+        while spawned < n {
+            spawn_thread _accept_loop(port, handler);
+            spawned = spawned + 1;
+        }
+        _accept_loop(port, handler);
+        return ok(0);
+    }
 
+    // Shared-listener fallback.
+    let shared: *Listener = Listener::bind(port);
+    if !shared.ok() { return err("bind failed"); }
+    println!("http: listening on :", port, " across ", n, " worker(s) [shared fd]");
     let mut spawned: int = 1;
     while spawned < n {
-        spawn_thread _accept_loop(port, handler);
+        spawn_thread _accept_loop_shared(shared, handler);
         spawned = spawned + 1;
     }
-    _accept_loop(port, handler);
+    _accept_loop_shared(shared, handler);
     return ok(0);
 }
 

@@ -16,6 +16,7 @@
 
 extern fn __glide_is_windows() -> int;
 extern fn __glide_reactor_active() -> int;
+extern fn __glide_has_reuseport_balance() -> int;
 
 extern fn __glide_os_name() -> string;
 extern fn __glide_os_arch() -> string;
@@ -567,6 +568,24 @@ pub fn os_is_linux() -> bool { return __glide_os_name().eq("linux"); }
 /// else                 { handle(c); }
 /// ```
 pub fn os_has_async_io() -> bool { return __glide_reactor_active() != 0; }
+
+/// `true` when `SO_REUSEPORT` on this OS actually load-balances accepts
+/// across multiple listeners bound to the same port (Linux only today).
+/// `false` on macOS / *BSD / Windows where the syscall either has
+/// last-write-wins semantics or doesn't exist - in those cases a worker
+/// pool should bind one shared listener and have N threads `accept()`
+/// on it instead of each owning its own bind.
+///
+/// ```glide
+/// if os_has_reuseport_balance() {
+///     // each worker binds with bind_reuseport, kernel balances
+/// } else {
+///     // bind once, share the listener across N accept threads
+/// }
+/// ```
+pub fn os_has_reuseport_balance() -> bool {
+    return __glide_has_reuseport_balance() != 0;
+}
 
 /// `true` only on macOS / Darwin. `os_is_posix()` is also true.
 ///
