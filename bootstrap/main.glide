@@ -2597,8 +2597,10 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // On Windows, system() runs the command via `cmd.exe /c <cmd>`. When the
     // command itself starts with a quoted path containing backslashes / spaces,
     // cmd.exe's parser strips outer quotes inconsistently. Wrap the whole
-    // thing in an extra layer so /c sees it as one argument.
-    if __glide_is_windows() != 0 {
+    // thing in an extra layer ONLY when the cc binary is itself quoted - the
+    // outer wrap conflicts with cmd.exe's parsing when the inner paths are
+    // also quoted, so skip it for the common case of an unquoted cc on PATH.
+    if __glide_is_windows() != 0 && cc.starts_with("\"") {
         cmd = "\"".concat(cmd).concat("\"");
     }
 

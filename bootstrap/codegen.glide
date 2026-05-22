@@ -5116,20 +5116,6 @@ pub fn emit_program(program: *Vector<Stmt>) {
 
     emit_stdlib_runtime();
 
-    // Top-level `c_raw! { ... }` blocks: emit the bodies verbatim right after the
-    // stdlib runtime so they can declare types/macros/extern globals that the rest
-    // of the user code references. Order matches source order so users can split
-    // raw payloads across files predictably.
-    for let i: int = 0; i < program.len(); i++ {
-        let s: Stmt = program.get(i);
-        if s.kind == ST_CRAW {
-            emit_cfg_open(s.cfg_target);
-            print!(s.name);
-            println!("");
-            emit_cfg_close(s.cfg_target);
-        }
-    }
-
     let g: *CG = CG::new();
 
     // Register generic struct templates up front so that runtime emitters
@@ -5161,6 +5147,22 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
     emit_scheduler_runtime();
     emit_socket_runtime();
+
+    // Top-level `c_raw! { ... }` blocks: emit verbatim AFTER the runtime
+    // so they can `#ifdef` against macros set by socket.c / reactor.c (e.g.
+    // bootstrap fallbacks gated on __GLIDE_RUNTIME_HAS_REACTOR_ACTIVE).
+    // Still before user code, so they remain visible to the rest of the
+    // emit. Order matches source order so users can split raw payloads
+    // across files predictably.
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_CRAW {
+            emit_cfg_open(s.cfg_target);
+            print!(s.name);
+            println!("");
+            emit_cfg_close(s.cfg_target);
+        }
+    }
 
     // Forward typedef every concrete user struct/enum up front. Subsequent
     // pre-emit passes (chan-inner bodies, result-inner bodies, etc.) emit
