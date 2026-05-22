@@ -2529,8 +2529,21 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         cc = pick_cc();
     }
     let mut cmd: string = cc;
-    cmd = cmd.concat(" \"").concat(tmp_c).concat("\"");
-    cmd = cmd.concat(" -o \"").concat(out_path).concat("\"");
+    // Quote paths only when they have a space - cmd.exe /c on Windows
+    // strips/transforms double quotes in subtle ways that confuse cc's
+    // input-file detection, which then hands the raw .c off to ld
+    // instead of compiling it first (ld returns 1, build fails).
+    // Spaces force quoting; the common case stays bare.
+    if tmp_c.contains(" ") {
+        cmd = cmd.concat(" \"").concat(tmp_c).concat("\"");
+    } else {
+        cmd = cmd.concat(" ").concat(tmp_c);
+    }
+    if out_path.contains(" ") {
+        cmd = cmd.concat(" -o \"").concat(out_path).concat("\"");
+    } else {
+        cmd = cmd.concat(" -o ").concat(out_path);
+    }
     // `-g` ships debug info so the runtime trap handler can resolve
     // each frame's instruction pointer back to a function name and
     // source line via dbghelp (Windows) / addr2line (POSIX). Cheap —

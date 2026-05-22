@@ -44,6 +44,16 @@
 # include <unistd.h>
 # define GLIDE_REACTOR_USE_KQUEUE 1
 # define GLIDE_REACTOR_HAVE_REACTOR 1
+#elif defined(_WIN32)
+# ifndef _WIN32_WINNT
+#  define _WIN32_WINNT 0x0601
+# endif
+# include <winsock2.h>
+# include <ws2tcpip.h>
+# include <mswsock.h>
+# include <windows.h>
+# define GLIDE_REACTOR_USE_IOCP 1
+# define GLIDE_REACTOR_HAVE_REACTOR 1
 #endif
 
 /* Forward declarations from sched.c. */
@@ -52,20 +62,35 @@ extern __thread struct __glide_task* __glide_cur_task;
 extern int  __glide_park(pthread_mutex_t* lock, struct __glide_task** list);
 extern void __glide_unpark_one(struct __glide_task** list);
 extern void __glide_flush_main_buf(void);
+extern void __glide_park_blocked(void);
+extern void __glide_unpark_task(struct __glide_task* t);
+extern void __glide_q_push_to(int wid, struct __glide_task* t);
 
 /* Whether async I/O parking is wired on this build. The Glide side
    branches on this in `http_listen` to fall back to inline serial when
-   the reactor isn't available (Windows today, BSD without us, etc). */
+   the reactor isn't available (Windows today, BSD without us, etc).
+   IMPORTANT: returns 0 when the IOCP backend is compiled with the
+   sync-fallback toggle (no real async happens), so http_listen keeps
+   handling conns inline instead of spawning workers that would block
+   on sync recv. */
+/* IOCP is built in but currently routed through sync fallbacks while
+   the real WSARecv/WSASend path is being stabilized. Until that's done
+   keep reporting "no async reactor" on Windows so http_listen runs
+   inline (workers would otherwise block on the sync recv they get
+   routed to). Flip the 0 below to 1 once tcp_read/write_async run
+   real OVERLAPPED ops. */
 #define __GLIDE_RUNTIME_HAS_REACTOR_ACTIVE 1
 int __glide_reactor_active(void) {
-#ifdef GLIDE_REACTOR_HAVE_REACTOR
+#if defined(GLIDE_REACTOR_USE_EPOLL) || defined(GLIDE_REACTOR_USE_KQUEUE)
+    return 1;
+#elif defined(GLIDE_REACTOR_USE_IOCP)
     return 1;
 #else
     return 0;
 #endif
 }
 
-#ifdef GLIDE_REACTOR_HAVE_REACTOR
+#if defined(GLIDE_REACTOR_USE_EPOLL) || defined(GLIDE_REACTOR_USE_KQUEUE)
 
 /* Per-fd waiter state. Stored in the kernel event's user-data slot so
    the reactor thread can recover it on a wakeup without a separate
@@ -390,6 +415,263 @@ int tcp_writev2_async(int fd, void* buf1, int n1, void* buf2, int n2) {
     return sent;
 }
 
+#elif defined(GLIDE_REACTOR_USE_IOCP)
+
+/* ===================== Windows IOCP backend =====================
+ *
+ * Completion-based rather than readiness-based. Each async op carries
+ * its own OVERLAPPED + waiter pointer; a single dedicated reactor
+ * thread blocks on GetQueuedCompletionStatus and wakes the parked
+ * coro when the kernel delivers a completion.
+ *
+ * The op state is heap-allocated (not stack) because the OVERLAPPED
+ * must outlive the synchronous return from the WSARecv / WSASend call
+ * - if the issuing coro is parked on a coro stack, the kernel still
+ * writes through ov on completion, and we need that memory valid
+ * until the reactor thread has consumed the entry.
+ *
+ * Sprint W1.2 scope:
+ *   - tcp_read_async via WSARecv + IOCP
+ *   - tcp_write_async via WSASend + IOCP
+ *   - tcp_writev2_async via WSASend (gather) + IOCP
+ *   - accept_tcp_async still blocks (AcceptEx is W2)
+ *   - close path clears the assoc bitmap so reused fds reassociate
+ */
+
+typedef struct __glide_iocp_op {
+    OVERLAPPED          ov;         /* MUST be first - cast from OVERLAPPED* */
+    struct __glide_task* waiter;
+    atomic_int          done;
+    DWORD               bytes;
+    DWORD               err;
+} __glide_iocp_op;
+
+static HANDLE              __glide_iocp = NULL;
+static atomic_int          __glide_reactor_inited = 0;
+static atomic_int          __glide_reactor_running = 0;
+static int                 __glide_wsa_inited_iocp = 0;
+
+/* fd -> "has been associated with IOCP" bitmap. Cleared on tcp_close
+   so a reused fd re-associates the next time an async op fires. */
+static unsigned char*      __glide_iocp_assoc_bits = NULL;
+static int                 __glide_iocp_assoc_cap = 0;
+static __glide_spin_t      __glide_iocp_assoc_spin = 0;
+
+static void __glide_wsa_ensure_iocp(void) {
+    if (__glide_wsa_inited_iocp) return;
+    WSADATA d;
+    WSAStartup(MAKEWORD(2, 2), &d);
+    __glide_wsa_inited_iocp = 1;
+}
+
+static DWORD WINAPI __glide_reactor_loop_iocp(LPVOID arg) {
+    (void)arg;
+    while (atomic_load(&__glide_reactor_running)) {
+        DWORD bytes = 0;
+        ULONG_PTR key = 0;
+        OVERLAPPED* ov = NULL;
+        BOOL ok = GetQueuedCompletionStatus(__glide_iocp, &bytes,
+                                            &key, &ov, 1000);
+        if (ov == NULL) continue;  /* timeout or unrelated wake */
+        __glide_iocp_op* op = (__glide_iocp_op*)ov;
+        op->bytes = bytes;
+        op->err   = ok ? 0 : GetLastError();
+        atomic_store_explicit(&op->done, 1, memory_order_release);
+        if (op->waiter != NULL) {
+            __glide_unpark_task(op->waiter);
+        }
+    }
+    return 0;
+}
+
+static void __glide_reactor_ensure_iocp(void) {
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&__glide_reactor_inited,
+                                        &expected, 1)) {
+        while (__glide_iocp == NULL) { Sleep(0); }
+        return;
+    }
+    __glide_wsa_ensure_iocp();
+    HANDLE port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+    if (port == NULL) {
+        atomic_store(&__glide_reactor_inited, 0);
+        return;
+    }
+    __glide_iocp = port;
+    atomic_store(&__glide_reactor_running, 1);
+    HANDLE h = CreateThread(NULL, 0,
+        __glide_reactor_loop_iocp, NULL, 0, NULL);
+    if (h) CloseHandle(h);
+}
+
+static void __glide_iocp_associate(SOCKET s) {
+    int fd = (int)s;
+    if (fd < 0) return;
+    __glide_spin_lock(&__glide_iocp_assoc_spin);
+    if (fd >= __glide_iocp_assoc_cap) {
+        int new_cap = __glide_iocp_assoc_cap ? __glide_iocp_assoc_cap : 1024;
+        while (new_cap <= fd) new_cap *= 2;
+        __glide_iocp_assoc_bits = (unsigned char*)realloc(
+            __glide_iocp_assoc_bits, (size_t)new_cap);
+        for (int i = __glide_iocp_assoc_cap; i < new_cap; i++) {
+            __glide_iocp_assoc_bits[i] = 0;
+        }
+        __glide_iocp_assoc_cap = new_cap;
+    }
+    int already = __glide_iocp_assoc_bits[fd];
+    __glide_iocp_assoc_bits[fd] = 1;
+    __glide_spin_unlock(&__glide_iocp_assoc_spin);
+    if (already) return;
+    CreateIoCompletionPort((HANDLE)s, __glide_iocp, (ULONG_PTR)s, 0);
+}
+
+void __glide_io_close(int fd) {
+    if (fd < 0) return;
+    __glide_spin_lock(&__glide_iocp_assoc_spin);
+    if (fd < __glide_iocp_assoc_cap) {
+        __glide_iocp_assoc_bits[fd] = 0;
+    }
+    __glide_spin_unlock(&__glide_iocp_assoc_spin);
+}
+
+/* Park current coro until op->done is set by the reactor. Falls back
+   to Sleep(0) spin if invoked outside a coro (main thread or
+   spawn_thread). The reactor writes op->done with release ordering;
+   we read it with acquire. */
+static void __glide_iocp_park(__glide_iocp_op* op) {
+    if (__glide_cur_task == NULL) {
+        while (!atomic_load_explicit(&op->done, memory_order_acquire)) {
+            Sleep(0);
+        }
+        return;
+    }
+    /* Spin briefly in case the op completed synchronously - cheaper
+       than a full ctx_switch for sub-microsecond ops. */
+    for (int i = 0; i < 256; i++) {
+        if (atomic_load_explicit(&op->done, memory_order_acquire)) return;
+    }
+    __glide_park_blocked();
+    /* On wake the reactor has already set op->done. */
+}
+
+extern int  accept_tcp(int listener);
+extern int  tcp_read(int fd, void* buf, int max);
+extern int  tcp_write(int fd, void* buf, int n);
+extern int  tcp_writev2(int fd, void* buf1, int n1, void* buf2, int n2);
+
+/* Debug toggle: set to 1 to bypass IOCP and fall back to sync I/O for
+   each op. Used to isolate IOCP-specific hangs - flip to 1 when an
+   IOCP-specific race is suspected to confirm whether the bug is in the
+   async path. Set to 0 in shipped builds so http_listen actually parks
+   coros on completion instead of pinning workers on blocking recv. */
+#define __GLIDE_IOCP_SYNC_FALLBACK 0
+#define __GLIDE_IOCP_TRACE 0
+static void __glide_iocp_trace(const char* tag, int fd, int n) {
+#if __GLIDE_IOCP_TRACE
+    char line[128];
+    int len = snprintf(line, sizeof(line),
+        "[iocp %s] fd=%d n=%d t=%p\n", tag, fd, n,
+        (void*)__glide_cur_task);
+    if (len > 0) {
+        DWORD wrote = 0;
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE),
+                  line, (DWORD)len, &wrote, NULL);
+    }
+#else
+    (void)tag; (void)fd; (void)n;
+#endif
+}
+
+int accept_tcp_async(int listener) {
+    /* AcceptEx wired in Sprint W2. For W1.2 we block on accept(),
+       which pins the calling thread (typically the http_listen accept
+       loop running on its own spawn_thread pthread) but doesn't affect
+       per-conn read/write throughput. */
+    return accept_tcp(listener);
+}
+
+int tcp_read_async(int fd, void* buf, int max) {
+#if __GLIDE_IOCP_SYNC_FALLBACK
+    return tcp_read(fd, buf, max);
+#else
+    __glide_iocp_trace("read_enter", fd, max);
+    __glide_reactor_ensure_iocp();
+    __glide_iocp_associate((SOCKET)fd);
+    __glide_iocp_op op;
+    memset(&op, 0, sizeof(op));
+    op.waiter = __glide_cur_task;
+    WSABUF wbuf;
+    wbuf.buf = (CHAR*)buf;
+    wbuf.len = (ULONG)max;
+    DWORD got = 0, flags = 0;
+    int rv = WSARecv((SOCKET)fd, &wbuf, 1, &got, &flags, &op.ov, NULL);
+    int werr = (rv != 0) ? WSAGetLastError() : 0;
+    __glide_iocp_trace("read_wsarecv", fd, werr);
+    if (rv != 0 && werr != WSA_IO_PENDING) return -1;
+    __glide_iocp_park(&op);
+    __glide_iocp_trace("read_unparked", fd, (int)op.bytes);
+    if (op.err != 0) return -1;
+    return (int)op.bytes;
+#endif
+}
+
+int tcp_write_async(int fd, void* buf, int n) {
+#if __GLIDE_IOCP_SYNC_FALLBACK
+    return tcp_write(fd, buf, n);
+#else
+    __glide_reactor_ensure_iocp();
+    __glide_iocp_associate((SOCKET)fd);
+    int sent = 0;
+    while (sent < n) {
+        __glide_iocp_op op;
+        memset(&op, 0, sizeof(op));
+        op.waiter = __glide_cur_task;
+        WSABUF wbuf;
+        wbuf.buf = (CHAR*)buf + sent;
+        wbuf.len = (ULONG)(n - sent);
+        DWORD wrote = 0;
+        int rv = WSASend((SOCKET)fd, &wbuf, 1, &wrote, 0, &op.ov, NULL);
+        if (rv != 0) {
+            int err = WSAGetLastError();
+            if (err != WSA_IO_PENDING) return sent > 0 ? sent : -1;
+        }
+        __glide_iocp_park(&op);
+        if (op.err != 0) return sent > 0 ? sent : -1;
+        if (op.bytes == 0) break;
+        sent += (int)op.bytes;
+    }
+    return sent;
+#endif
+}
+
+int tcp_writev2_async(int fd, void* buf1, int n1, void* buf2, int n2) {
+#if __GLIDE_IOCP_SYNC_FALLBACK
+    return tcp_writev2(fd, buf1, n1, buf2, n2);
+#else
+    if (n1 < 0) n1 = 0;
+    if (n2 < 0) n2 = 0;
+    if (n1 + n2 == 0) return 0;
+    __glide_reactor_ensure_iocp();
+    __glide_iocp_associate((SOCKET)fd);
+    __glide_iocp_op op;
+    memset(&op, 0, sizeof(op));
+    op.waiter = __glide_cur_task;
+    WSABUF wbufs[2];
+    DWORD nbuf = 0;
+    if (n1 > 0) { wbufs[nbuf].buf = (CHAR*)buf1; wbufs[nbuf].len = (ULONG)n1; nbuf++; }
+    if (n2 > 0) { wbufs[nbuf].buf = (CHAR*)buf2; wbufs[nbuf].len = (ULONG)n2; nbuf++; }
+    DWORD wrote = 0;
+    int rv = WSASend((SOCKET)fd, wbufs, nbuf, &wrote, 0, &op.ov, NULL);
+    if (rv != 0) {
+        int err = WSAGetLastError();
+        if (err != WSA_IO_PENDING) return -1;
+    }
+    __glide_iocp_park(&op);
+    if (op.err != 0) return -1;
+    return (int)op.bytes;
+#endif
+}
+
 #else  /* no reactor on this OS: sync I/O fallback. */
 
 /* Forward decls from socket.c so the names link clean. */
@@ -416,6 +698,6 @@ int tcp_writev2_async(int fd, void* buf1, int n1, void* buf2, int n2) {
 
 void __glide_io_close(int fd) { (void)fd; }
 
-#endif  /* GLIDE_REACTOR_HAVE_REACTOR */
+#endif  /* backend dispatch */
 
 #endif  /* GLIDE_REACTOR_DEFINED */

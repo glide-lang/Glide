@@ -286,17 +286,16 @@ int tcp_writev2(int fd, void* buf1, int n1, void* buf2, int n2) {
 }
 
 /* Defined in reactor.c (same translation unit). Tears down per-fd
-   waiter state so a recycled fd is not seen as already-registered
-   the next time tcp_read_async/write_async parks on it. */
-#ifndef _WIN32
+   waiter state (POSIX) or clears the IOCP assoc bitmap (Windows) so
+   a recycled fd is not seen as already-registered the next time an
+   async op tries to park on it. */
 void __glide_io_close(int fd);
-#endif
 
 void tcp_close(int fd) {
+    __glide_io_close(fd);
 #ifdef _WIN32
     closesocket((SOCKET)fd);
 #else
-    __glide_io_close(fd);
     close(fd);
 #endif
 }

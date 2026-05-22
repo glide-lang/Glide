@@ -4702,6 +4702,7 @@ fn _emit_main_wrapper(s: *Stmt) {
     let call_args: string = "";
     if takes_argv { call_args = "argc, argv"; }
     println!("int main(int argc, char** argv) {");
+    println!("    __glide_is_main_tls = 1;");
     println!("    __glide_args_init(argc, argv);");
     println!("    __glide_sched_init();");
     if _main_ret_is_void(ret_ty) {

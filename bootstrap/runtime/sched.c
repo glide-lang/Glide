@@ -872,6 +872,11 @@ void __glide_free_task(__glide_task* t) {
 static _Thread_local __glide_task* __glide_main_buf_head = NULL;
 static _Thread_local __glide_task* __glide_main_buf_tail = NULL;
 static _Thread_local int __glide_main_buf_count = 0;
+/* Set on the program's main thread by the entrypoint wrapper. Foreign
+   pthreads (spawn_thread'd accept loops, IOCP reactor, etc) leave it
+   at 0, which steers __glide_spawn to push direct instead of
+   buffering for an end-of-batch flush that may never come. */
+_Thread_local int __glide_is_main_tls = 0;
 static void __glide_flush_main_buf(void) {
     if (!__glide_main_buf_head) return;
     /* Match the per-thread sticky worker chosen by __glide_pick_worker
@@ -900,13 +905,28 @@ void __glide_spawn(__glide_task_fn fn, void* arg) {
         __glide_q_push_to(t->home_worker, t);
         return;
     }
-    /* Outside (main / pthread): buffer locally, flush in batches. */
-    t->next = NULL;
-    if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;
-    else __glide_main_buf_head = t;
-    __glide_main_buf_tail = t;
-    __glide_main_buf_count++;
-    if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) __glide_flush_main_buf();
+    /* Outside a coro: main batches its high-frequency spawn burst into
+       a per-thread buffer that flushes at __GLIDE_MAIN_BATCH or on the
+       next pending_count(). Foreign pthreads (e.g. the spawn_thread'd
+       accept loops in http.glide) don't share that flush cadence - if
+       they buffer, the first 31 spawns sit unprocessed until a 32nd
+       arrives. They push direct instead. The per-thread buf is TLS so
+       there's no shared state to race on; we just need a way to tell
+       "main" from "foreign pthread", which is the __glide_is_main_tls
+       flag set by the entrypoint wrapper. */
+    if (__glide_is_main_tls) {
+        t->next = NULL;
+        if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;
+        else __glide_main_buf_head = t;
+        __glide_main_buf_tail = t;
+        __glide_main_buf_count++;
+        if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) {
+            __glide_flush_main_buf();
+        }
+        return;
+    }
+    /* Foreign pthread: push direct. */
+    __glide_q_push_to(t->home_worker, t);
 }
 
 void yield_now(void) {
@@ -914,6 +934,26 @@ void yield_now(void) {
     if (!t) return;
     t->state = 0;
     __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+}
+
+/* Park current coro into state=blocked and yield to its worker. The
+   caller is responsible for arranging the wake (e.g. IOCP reactor
+   calls __glide_unpark_task once the I/O completes). No-op when not
+   running inside a coro. */
+void __glide_park_blocked(void) {
+    __glide_task* t = __glide_cur_task;
+    if (!t) return;
+    t->state = 2;
+    __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
+}
+
+/* Wake a previously-parked coro from any thread (typically the IOCP
+   reactor thread). Pushes onto the coro's home worker queue so the
+   worker pops it on its next tick. Safe to call before the coro
+   actually parks - q_push_to handles the queue race. */
+void __glide_unpark_task(__glide_task* t) {
+    if (t == NULL) return;
+    __glide_q_push_to(t->home_worker, t);
 }
 
 int pending_count(void) {
