@@ -25,6 +25,7 @@ c_raw! {
     #ifdef GLIDE_FS_VIA_CRAW
     #ifndef GLIDE_FS_HELPERS_DEFINED
     #define GLIDE_FS_HELPERS_DEFINED
+    #include <stdint.h>
     static const char* read_file(const char* path) {
         FILE* f = fopen(path, "rb");
         if (!f) return "";
@@ -138,10 +139,10 @@ c_raw! {
         if (__glide_fs_is_dir(path)) return true;
         return _mkdir(path) == 0;
     }
-    static long long __glide_fs_size(const char* path) {
+    static int64_t __glide_fs_size(const char* path) {
         struct _stat64 st;
         if (_stat64(path, &st) != 0) return -1;
-        return (long long)st.st_size;
+        return (int64_t)st.st_size;
     }
     #else
     #include <sys/stat.h>
@@ -155,10 +156,10 @@ c_raw! {
         if (__glide_fs_is_dir(path)) return true;
         return mkdir(path, 0755) == 0;
     }
-    static long long __glide_fs_size(const char* path) {
+    static int64_t __glide_fs_size(const char* path) {
         struct stat st;
         if (stat(path, &st) != 0) return -1;
-        return (long long)st.st_size;
+        return (int64_t)st.st_size;
     }
     #endif
     static bool __glide_fs_mkdir_p(const char* path) {
