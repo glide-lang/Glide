@@ -943,18 +943,19 @@ pub fn http_listen(port: int, handler: fn(*HttpRequest) -> HttpResponse) -> !int
     let l: *Listener = Listener::bind(port);
     if !l.ok() { return err("bind failed"); }
     println!("http: listening on :", port);
-    let win: bool = os_is_windows();
+    // Only spawn-per-conn when the reactor is wired (epoll on Linux,
+    // kqueue on macOS/BSD). Without it, read/write block the calling
+    // thread - spawn would just pin a worker per slow client until
+    // the request completes, defeating the purpose. Inline serial is
+    // the only correct fallback there.
+    let has_reactor: bool = os_has_async_io();
     while true {
         let c: *Conn = l.accept();
         if !c.ok() { c.close(); continue; }
-        if win {
-            // Windows: no reactor yet, run the handler inline so the
-            // single read/write doesn't block a worker forever.
-            _handle_conn(c, handler);
-        } else {
-            // Linux: reactor parks the coro on read/write, so spawn
-            // gives us thousands of concurrent connections per thread.
+        if has_reactor {
             spawn _handle_conn(c, handler);
+        } else {
+            _handle_conn(c, handler);
         }
     }
     return ok(0);
@@ -966,14 +967,14 @@ pub fn http_listen(port: int, handler: fn(*HttpRequest) -> HttpResponse) -> !int
 fn _accept_loop(port: int, handler: fn(*HttpRequest) -> HttpResponse) {
     let l: *Listener = Listener::bind_reuseport(port);
     if !l.ok() { return; }
-    let win: bool = os_is_windows();
+    let has_reactor: bool = os_has_async_io();
     while true {
         let c: *Conn = l.accept();
         if !c.ok() { c.close(); continue; }
-        if win {
-            _handle_conn(c, handler);
-        } else {
+        if has_reactor {
             spawn _handle_conn(c, handler);
+        } else {
+            _handle_conn(c, handler);
         }
     }
 }

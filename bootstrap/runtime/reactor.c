@@ -1,21 +1,24 @@
 // ============================ I/O reactor ================================
 //
-// Async wrappers for accept / read / write that, on Linux, register the
-// fd with epoll and park the calling coroutine until the kernel says
-// the fd is ready. The worker thread is then free to pick up another
-// task. A single dedicated `reactor` pthread owns the epoll fd and
-// drives the wakeup loop.
+// Async wrappers for accept / read / write that register the fd with the
+// kernel's readiness primitive and park the calling coroutine until the
+// kernel says the fd is ready. The worker thread is then free to pick up
+// another task. A single dedicated `reactor` pthread owns the poll fd
+// and drives the wakeup loop.
 //
-// On Windows / macOS / BSD we fall back to the blocking sync calls in
-// socket.c. IOCP and kqueue are separate runtime backends scoped out
-// to their own epics. The Glide-side API
-// (`accept_tcp_async` / `tcp_read_async` / `tcp_write_async`) is
+// Two backends share the file:
+//   * Linux  -> epoll                    (level-triggered)
+//   * Apple / *BSD -> kqueue              (level-triggered)
+// On Windows we fall back to the blocking sync calls in socket.c. IOCP
+// is a separate epic with its own completion-based shape. The Glide-side
+// API (`accept_tcp_async` / `tcp_read_async` / `tcp_write_async`) is
 // platform-portable so net.glide can call the async names everywhere
 // without #ifdef.
 //
-// Wakeup model — level-triggered for now (simplest correct shape).
-// Switch to EPOLLET + drain loops once the parser layer is settled
-// and we have benchmarks to justify the complexity bump.
+// `__glide_reactor_active()` lets stdlib branch on "do we have async
+// I/O or not" instead of guessing by OS - on macOS/BSD we DO have a
+// reactor, so http_listen's `if win { inline } else { spawn }` would
+// previously deadlock workers there.
 
 #ifndef GLIDE_REACTOR_DEFINED
 #define GLIDE_REACTOR_DEFINED
@@ -31,7 +34,16 @@
 # include <sys/epoll.h>
 # include <fcntl.h>
 # include <unistd.h>
-# define GLIDE_REACTOR_HAVE_EPOLL 1
+# define GLIDE_REACTOR_USE_EPOLL 1
+# define GLIDE_REACTOR_HAVE_REACTOR 1
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
+# include <sys/types.h>
+# include <sys/event.h>
+# include <sys/time.h>
+# include <fcntl.h>
+# include <unistd.h>
+# define GLIDE_REACTOR_USE_KQUEUE 1
+# define GLIDE_REACTOR_HAVE_REACTOR 1
 #endif
 
 /* Forward declarations from sched.c. */
@@ -41,32 +53,42 @@ extern int  __glide_park(pthread_mutex_t* lock, struct __glide_task** list);
 extern void __glide_unpark_one(struct __glide_task** list);
 extern void __glide_flush_main_buf(void);
 
-#ifdef GLIDE_REACTOR_HAVE_EPOLL
+/* Whether async I/O parking is wired on this build. The Glide side
+   branches on this in `http_listen` to fall back to inline serial when
+   the reactor isn't available (Windows today, BSD without us, etc). */
+int __glide_reactor_active(void) {
+#ifdef GLIDE_REACTOR_HAVE_REACTOR
+    return 1;
+#else
+    return 0;
+#endif
+}
 
-/* Per-fd waiter state. Stored in epoll_event.data.ptr so the reactor
-   thread can recover it on a wakeup without a separate lookup. Two
-   wait lists per fd because read and write may park independently.
-   The lock is a spinlock because the critical sections — link or
-   unlink one task on the wait list — are 5-10 ns. pthread_mutex was
-   2.5 % of the keep-alive HTTP hot path's CPU. */
+#ifdef GLIDE_REACTOR_HAVE_REACTOR
+
+/* Per-fd waiter state. Stored in the kernel event's user-data slot so
+   the reactor thread can recover it on a wakeup without a separate
+   lookup. Two wait lists per fd because read and write may park
+   independently. The lock is a spinlock because the critical sections
+   - link or unlink one task on the wait list - are 5-10 ns. */
 typedef struct __glide_io_waiter {
     int fd;
     __glide_spin_t spin;
     struct __glide_task* read_waiters;
     struct __glide_task* write_waiters;
-    int registered;             /* 1 once added to epoll */
+    int registered;             /* 1 once added to reactor */
 } __glide_io_waiter;
 
 extern int  __glide_spin_park(__glide_spin_t* lock, struct __glide_task** list);
 
-/* Tiny open-addressing fd → waiter map. fds in a long-running server
+/* Tiny open-addressing fd -> waiter map. fds in a long-running server
    reuse low numbers, so a flat array is plenty (and faster than a
    hashmap). Grows on demand. */
 static __glide_io_waiter** __glide_waiters = NULL;
 static int                 __glide_waiters_cap = 0;
 static pthread_mutex_t     __glide_waiters_mu = PTHREAD_MUTEX_INITIALIZER;
 
-static int                 __glide_epoll_fd = -1;
+static int                 __glide_reactor_fd = -1;   /* epoll or kqueue fd */
 static pthread_t           __glide_reactor_thr;
 static atomic_int          __glide_reactor_inited = 0;
 static atomic_int          __glide_reactor_running = 0;
@@ -87,7 +109,6 @@ static __glide_io_waiter* __glide_io_get_or_create(int fd) {
     if (!w) {
         w = (__glide_io_waiter*)calloc(1, sizeof(__glide_io_waiter));
         w->fd = fd;
-        /* spin starts at 0 from calloc, no init needed */
         __glide_waiters[fd] = w;
     }
     pthread_mutex_unlock(&__glide_waiters_mu);
@@ -96,27 +117,37 @@ static __glide_io_waiter* __glide_io_get_or_create(int fd) {
 
 static void __glide_io_register(__glide_io_waiter* w) {
     if (w->registered) return;
+#ifdef GLIDE_REACTOR_USE_EPOLL
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events  = EPOLLIN | EPOLLOUT | EPOLLRDHUP;   /* level-triggered */
     ev.data.ptr = w;
-    if (epoll_ctl(__glide_epoll_fd, EPOLL_CTL_ADD, w->fd, &ev) == 0) {
+    if (epoll_ctl(__glide_reactor_fd, EPOLL_CTL_ADD, w->fd, &ev) == 0) {
         w->registered = 1;
     } else if (errno == EEXIST) {
-        w->registered = 1;        /* someone added it concurrently */
+        w->registered = 1;
     }
+#elif defined(GLIDE_REACTOR_USE_KQUEUE)
+    /* kqueue needs separate kevent entries for READ and WRITE filters.
+       Default is level-triggered (matches epoll). udata carries the
+       waiter ptr the reactor loop dereferences on wakeup. */
+    struct kevent ch[2];
+    EV_SET(&ch[0], w->fd, EVFILT_READ,  EV_ADD, 0, 0, w);
+    EV_SET(&ch[1], w->fd, EVFILT_WRITE, EV_ADD, 0, 0, w);
+    if (kevent(__glide_reactor_fd, ch, 2, NULL, 0, NULL) >= 0) {
+        w->registered = 1;
+    } else if (errno == EEXIST) {
+        w->registered = 1;
+    }
+#endif
 }
 
 static void* __glide_reactor_loop(void* arg) {
     (void)arg;
-    /* Bigger batch + longer block: each wake processes more events for
-       the price of one syscall, and we don't tick uselessly while there
-       is nothing to do. Sched_shutdown atomically flips reactor_running
-       and writes 1 byte to a stub fd if we ever need an instant wake;
-       for now the workload always has fds in the interest list. */
+#ifdef GLIDE_REACTOR_USE_EPOLL
     struct epoll_event evs[256];
     while (atomic_load(&__glide_reactor_running)) {
-        int n = epoll_wait(__glide_epoll_fd, evs, 256, 1000);
+        int n = epoll_wait(__glide_reactor_fd, evs, 256, 1000);
         if (n < 0) {
             if (errno == EINTR) continue;
             break;
@@ -128,10 +159,8 @@ static void* __glide_reactor_loop(void* arg) {
             /* Skip the lock entirely when there is nobody to wake. The
                read carries a torn-list risk for one direction, but a
                level-triggered fd that still has data ready will trip
-               the next epoll_wait cycle anyway, so a missed wake here
-               just defers by one tick. The win: zero-waiter wakeups
-               (from spurious EPOLLOUT during write completion) cost
-               no mutex traffic on the hot path. */
+               the next poll cycle anyway, so a missed wake here just
+               defers by one tick. */
             int rd_ready = (m & (EPOLLIN  | EPOLLERR | EPOLLHUP | EPOLLRDHUP))
                             && w->read_waiters;
             int wr_ready = (m & (EPOLLOUT | EPOLLERR | EPOLLHUP))
@@ -139,7 +168,7 @@ static void* __glide_reactor_loop(void* arg) {
             if (!rd_ready && !wr_ready) continue;
             __glide_spin_lock(&w->spin);
             if (rd_ready) {
-                while (w->read_waiters) __glide_unpark_one(&w->read_waiters);
+                while (w->read_waiters)  __glide_unpark_one(&w->read_waiters);
             }
             if (wr_ready) {
                 while (w->write_waiters) __glide_unpark_one(&w->write_waiters);
@@ -147,6 +176,37 @@ static void* __glide_reactor_loop(void* arg) {
             __glide_spin_unlock(&w->spin);
         }
     }
+#elif defined(GLIDE_REACTOR_USE_KQUEUE)
+    struct kevent evs[256];
+    struct timespec ts;
+    ts.tv_sec = 1;
+    ts.tv_nsec = 0;
+    while (atomic_load(&__glide_reactor_running)) {
+        int n = kevent(__glide_reactor_fd, NULL, 0, evs, 256, &ts);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int i = 0; i < n; i++) {
+            __glide_io_waiter* w = (__glide_io_waiter*)evs[i].udata;
+            if (!w) continue;
+            int is_read  = (evs[i].filter == EVFILT_READ);
+            int is_write = (evs[i].filter == EVFILT_WRITE);
+            int eof_err  = (evs[i].flags & (EV_EOF | EV_ERROR)) != 0;
+            int rd_ready = (is_read  || eof_err) && w->read_waiters;
+            int wr_ready = (is_write || eof_err) && w->write_waiters;
+            if (!rd_ready && !wr_ready) continue;
+            __glide_spin_lock(&w->spin);
+            if (rd_ready) {
+                while (w->read_waiters)  __glide_unpark_one(&w->read_waiters);
+            }
+            if (wr_ready) {
+                while (w->write_waiters) __glide_unpark_one(&w->write_waiters);
+            }
+            __glide_spin_unlock(&w->spin);
+        }
+    }
+#endif
     return NULL;
 }
 
@@ -154,12 +214,20 @@ static void __glide_reactor_ensure(void) {
     int expected = 0;
     if (!atomic_compare_exchange_strong(&__glide_reactor_inited,
                                         &expected, 1)) {
-        /* another thread is initialising; spin briefly until done. */
-        while (__glide_epoll_fd < 0) { /* spin */ }
+        while (__glide_reactor_fd < 0) { /* spin until other thread inits */ }
         return;
     }
-    __glide_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-    if (__glide_epoll_fd < 0) {
+#ifdef GLIDE_REACTOR_USE_EPOLL
+    __glide_reactor_fd = epoll_create1(EPOLL_CLOEXEC);
+#elif defined(GLIDE_REACTOR_USE_KQUEUE)
+    __glide_reactor_fd = kqueue();
+    if (__glide_reactor_fd >= 0) {
+        /* kqueue() takes no flags; set CLOEXEC after the fact. */
+        int fl = fcntl(__glide_reactor_fd, F_GETFD, 0);
+        if (fl >= 0) fcntl(__glide_reactor_fd, F_SETFD, fl | FD_CLOEXEC);
+    }
+#endif
+    if (__glide_reactor_fd < 0) {
         atomic_store(&__glide_reactor_inited, 0);
         return;
     }
@@ -175,9 +243,9 @@ static void __glide_set_nonblocking(int fd) {
 
 /* Tear down our reactor state for `fd` before the caller calls close().
    The kernel implicitly drops a closed fd from the interest list, but
-   we cache `registered` per-waiter — without this hook a fd that gets
-   recycled to a new connection would never be re-added to epoll, and
-   the next read/write park on it would block forever. Also wake any
+   we cache `registered` per-waiter - without this hook a fd that gets
+   recycled to a new connection would never be re-added to the reactor,
+   and the next read/write park on it would block forever. Also wake any
    coros still parked on the fd so they don't sit on a dead handle. */
 void __glide_io_close(int fd) {
     if (fd < 0) return;
@@ -186,8 +254,15 @@ void __glide_io_close(int fd) {
     pthread_mutex_unlock(&__glide_waiters_mu);
     if (!w) return;
     __glide_spin_lock(&w->spin);
-    if (w->registered && __glide_epoll_fd >= 0) {
-        epoll_ctl(__glide_epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+    if (w->registered && __glide_reactor_fd >= 0) {
+#ifdef GLIDE_REACTOR_USE_EPOLL
+        epoll_ctl(__glide_reactor_fd, EPOLL_CTL_DEL, fd, NULL);
+#elif defined(GLIDE_REACTOR_USE_KQUEUE)
+        struct kevent ch[2];
+        EV_SET(&ch[0], fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
+        EV_SET(&ch[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+        kevent(__glide_reactor_fd, ch, 2, NULL, 0, NULL);
+#endif
         w->registered = 0;
     }
     while (w->read_waiters)  __glide_unpark_one(&w->read_waiters);
@@ -215,7 +290,7 @@ static int __glide_io_park_write(int fd) {
 
 /* __glide_tcp_nodelay is `static` in socket.c. Both files share the
    same translation unit (codegen concats them) so we can call directly,
-   but reactor.c is included after socket.c — no forward decl needed. */
+   but reactor.c is included after socket.c - no forward decl needed. */
 
 int accept_tcp_async(int listener) {
     __glide_set_nonblocking(listener);
@@ -228,7 +303,7 @@ int accept_tcp_async(int listener) {
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             if (!__glide_io_park_read(listener)) {
-                /* not in a coro — flush any pending main-spawned coros so
+                /* not in a coro - flush any pending main-spawned coros so
                    they can run on the workers while main blocks here, then
                    fall back to blocking accept. */
                 __glide_flush_main_buf();
@@ -250,7 +325,7 @@ int accept_tcp_async(int listener) {
 
 /* tcp_*_async assume the fd was made non-blocking when it was accepted
    (accept_tcp_async does that once). Re-running fcntl(F_GETFL)+fcntl(F_SETFL)
-   on every call costs two syscalls per read/write — measurable on the
+   on every call costs two syscalls per read/write - measurable on the
    keep-alive hot path. */
 int tcp_read_async(int fd, void* buf, int max) {
     while (1) {
@@ -314,7 +389,7 @@ int tcp_writev2_async(int fd, void* buf1, int n1, void* buf2, int n2) {
     return sent;
 }
 
-#else  /* not Linux: fall back to blocking sync I/O for now. */
+#else  /* no reactor on this OS: sync I/O fallback. */
 
 /* Forward decls from socket.c so the names link clean. */
 extern int  accept_tcp(int listener);
@@ -338,6 +413,8 @@ int tcp_writev2_async(int fd, void* buf1, int n1, void* buf2, int n2) {
     return tcp_writev2(fd, buf1, n1, buf2, n2);
 }
 
-#endif  /* GLIDE_REACTOR_HAVE_EPOLL */
+void __glide_io_close(int fd) { (void)fd; }
+
+#endif  /* GLIDE_REACTOR_HAVE_REACTOR */
 
 #endif  /* GLIDE_REACTOR_DEFINED */

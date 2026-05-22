@@ -15,6 +15,7 @@
 //   - signal handling                    → `stdlib::signal`  (planned)
 
 extern fn __glide_is_windows() -> int;
+extern fn __glide_reactor_active() -> int;
 
 extern fn __glide_os_name() -> string;
 extern fn __glide_os_arch() -> string;
@@ -551,6 +552,21 @@ pub fn os_is_posix() -> bool { return __glide_is_windows() == 0; }
 /// if os_is_linux() { read_proc_meminfo(); }
 /// ```
 pub fn os_is_linux() -> bool { return __glide_os_name().eq("linux"); }
+
+/// `true` when the async I/O reactor (epoll on Linux, kqueue on
+/// macOS/BSD) is wired and parking coroutines on socket readiness.
+/// `false` on Windows and any other platform where the reactor
+/// falls back to blocking sync I/O.
+///
+/// HTTP servers branch on this to decide whether to spawn a coroutine
+/// per connection (safe with a reactor) or serve serially inline (the
+/// only correct behaviour when read/write block the calling thread).
+///
+/// ```glide
+/// if os_has_async_io() { spawn handle(c); }
+/// else                 { handle(c); }
+/// ```
+pub fn os_has_async_io() -> bool { return __glide_reactor_active() != 0; }
 
 /// `true` only on macOS / Darwin. `os_is_posix()` is also true.
 ///

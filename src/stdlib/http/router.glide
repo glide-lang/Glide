@@ -599,14 +599,14 @@ impl Router {
         let l: *Listener = Listener::bind(port);
         if !l.ok() { return err("bind failed"); }
         println!("http: listening on :", port);
-        let win: bool = os_is_windows();
+        let has_reactor: bool = os_has_async_io();
         while true {
             let c: *Conn = l.accept();
             if !c.ok() { c.close(); continue; }
-            if win {
-                _router_handle_conn(c, self);
-            } else {
+            if has_reactor {
                 spawn _router_handle_conn(c, self);
+            } else {
+                _router_handle_conn(c, self);
             }
         }
         return ok(0);
@@ -684,14 +684,14 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
 fn _router_accept_loop(port: int, r: *Router) {
     let l: *Listener = Listener::bind_reuseport(port);
     if !l.ok() { return; }
-    let win: bool = os_is_windows();
+    let has_reactor: bool = os_has_async_io();
     while true {
         let c: *Conn = l.accept();
         if !c.ok() { c.close(); continue; }
-        if win {
-            _router_handle_conn(c, r);
-        } else {
+        if has_reactor {
             spawn _router_handle_conn(c, r);
+        } else {
+            _router_handle_conn(c, r);
         }
     }
 }
