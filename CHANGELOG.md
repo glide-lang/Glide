@@ -1,5 +1,87 @@
 # Changelog
 
+## unreleased
+
+### Cross-platform
+
+- **kqueue reactor backend** for macOS, FreeBSD, OpenBSD, NetBSD,
+  and DragonFly. Replaces the sync I/O fallback those platforms
+  silently fell into via the `if os_is_windows() { ... } else
+  { spawn ... }` branch in `http_listen`, which on macOS/BSD sent
+  every accepted conn through a sync `read` that pinned its
+  worker thread.
+- **AArch64 (ARM64) context switch** — `__glide_ctx_switch` now
+  carries an `stp`/`ldp` backend that saves x19-x30 + d8-d15. Plus
+  a `yield` (vs `pause`) hint in the spin loops and the
+  `aarch64-linux-musl` triple registered for cross builds. Lets
+  Glide run on Apple Silicon / Graviton / Pi 4-5 / any aarch64
+  host. Sysroot tarball still has to ship before
+  `glide target add aarch64-linux-musl` resolves.
+- **Page size detected at runtime** (`sysconf(_SC_PAGESIZE)` /
+  `GetSystemInfo`). The previous hardcoded 4 KiB rounded the
+  guard page off the wrong slot on Apple Silicon (16 KiB native
+  pages) so a stack overflow could corrupt the next coro's stack
+  instead of tripping the guard.
+- **SO_REUSEPORT dispatch per-OS**. `http_listen_workers` and
+  `Router::listen_workers` now branch on
+  `os_has_reuseport_balance()` (Linux: each worker binds; macOS /
+  BSD / Windows: bind once + share the fd across N accept
+  threads). Previously the spawn path serialised on the silent
+  shared-bind semantics in macOS / BSD.
+- **IOCP reactor for Windows**. `tcp_read_async` /
+  `tcp_write_async` / `tcp_writev2_async` issue OVERLAPPED ops
+  against `WSARecv` / `WSASend`; a dedicated reactor thread
+  drains `GetQueuedCompletionStatus` and unparks the issuing
+  coro. `http_listen` now spawns one coro per connection on
+  Windows — `os_has_async_io()` returns 1 there. `accept_tcp_async`
+  is still blocking (AcceptEx is a follow-up).
+
+### Codegen + bootstrap
+
+- Top-level `c_raw! { ... }` blocks emit AFTER the runtime
+  templates (scheduler + sockets + reactor) instead of before, so
+  bootstrap fallbacks in stdlib can `#ifdef`-guard against
+  symbols the runtime promised to provide
+  (`__GLIDE_RUNTIME_HAS_REACTOR_ACTIVE` etc).
+- `cc` invocation on Windows no longer wraps everything in an
+  outer `"..."`. The wrap was meant to handle a quoted cc path
+  with spaces, but it broke `cmd.exe /c` parsing whenever the
+  inner argv already had quoted paths, leaving collect2 with the
+  raw `.c` file as a "linker input" instead of a compiled `.o`.
+- New TLS flag `__glide_is_main_tls` set on the C main thread.
+  `__glide_spawn` from a foreign pthread (e.g. an http_listen
+  accept loop running on its own `spawn_thread`) now pushes onto
+  the worker queue directly instead of buffering up to a batch of
+  32 that may never arrive. The first 31 conns of a server thread
+  used to sit unprocessed waiting for conn #32.
+
+### Ownership
+
+- **Non-lexical lifetimes**: a borrow's lifetime ends at its last
+  use rather than at scope close, so `&mut self.a` followed by
+  `&mut self.b` (with no use of the first borrow after the second
+  begins) is now accepted.
+- **Arena escape detection**: returning a value that derives from
+  a locally-declared `*Arena` is a compile error
+  (`arena-escape`). Arenas passed in as fn params are unchanged.
+- **Spawn capture lifetime**: `spawn f(p)` where `p` derives from
+  a local arena is now a compile error
+  (`spawn-arena-escape`). Copy the data out (`let x = *p;`) or
+  hand the spawn task a longer-lived arena.
+- **Free-then-use detection** on methods: reading a binding after
+  `x.free()` errors with `use-after-free` regardless of whether
+  `x` was a `*Vector`, `*Arena`, or any other type whose `.free()`
+  reclaims its backing memory.
+
+### Runtime
+
+- TLS handshake honours a configurable timeout (`set_tls_timeout`
+  default 5 s, override via `Listener::accept_raw` + `attach`).
+  Was blocking the accept loop indefinitely whenever a client
+  opened a TCP conn and then never wrote the ClientHello.
+- `__glide_fs_size` returns `i64` matching the Glide-side extern
+  shape; the previous 32-bit return overflowed at 2 GiB.
+
 ## 0.1.1 — 2026-05-13
 
 ### LSP / Editor

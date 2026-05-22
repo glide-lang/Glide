@@ -181,6 +181,27 @@ Plus the existing `unused-var`, `unused-param`, `unused-fn`,
 user-defined `@lint("category", "reason")` mechanism for per-project
 warnings.
 
+## platforms
+
+| Platform | Compiler / CLI | HTTP server I/O |
+| --- | --- | --- |
+| Linux x86_64 | ✅ tested in CI + production | ✅ epoll reactor, M:N coros |
+| Windows x86_64 | ✅ tested locally | ✅ IOCP reactor, M:N coros |
+| macOS x86_64 | ⚠️ code in tree, not hardware-verified | ⚠️ kqueue reactor |
+| macOS arm64 (M1/M2/M3) | ⚠️ ctx switch + 16 KB page size in tree, not verified | ⚠️ kqueue reactor |
+| FreeBSD / OpenBSD / NetBSD / DragonFly | ⚠️ code in tree, not verified | ⚠️ kqueue reactor |
+| Linux arm64 (Graviton / Pi 4-5) | ⚠️ aarch64 ctx switch in tree; sysroot tarball pending | ⚠️ epoll reactor (inherits Linux path) |
+| Windows arm64 | ⚠️ ctx switch in tree, not verified | ⚠️ IOCP (inherits Windows path) |
+
+The Linux x86_64 row is what `glide-lang.org` runs in production. The
+Windows x86_64 row was validated in May 2026 once the IOCP reactor
+landed — `http_listen` now spawns one coro per connection on Windows
+instead of falling back to a serial accept loop. The remaining ⚠️
+rows mean the source tree carries the platform-specific code paths
+(ctx switch, reactor backend, syscall wrappers) but they haven't been
+exercised on real hardware yet; bug reports from those platforms are
+the fastest way to flip them to ✅.
+
 ## install
 
 Per-user install — no admin rights needed.
