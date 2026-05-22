@@ -56,6 +56,7 @@ extern void __glide_flush_main_buf(void);
 /* Whether async I/O parking is wired on this build. The Glide side
    branches on this in `http_listen` to fall back to inline serial when
    the reactor isn't available (Windows today, BSD without us, etc). */
+#define __GLIDE_RUNTIME_HAS_REACTOR_ACTIVE 1
 int __glide_reactor_active(void) {
 #ifdef GLIDE_REACTOR_HAVE_REACTOR
     return 1;

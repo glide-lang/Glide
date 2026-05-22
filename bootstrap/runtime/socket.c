@@ -37,6 +37,7 @@ static void __glide_wsa_ensure(void) {}
    Windows: no SO_REUSEPORT at all (SO_REUSEADDR is unrelated).
    stdlib branches on this to pick between "each worker binds" (Linux
    path) and "one shared listener, N accept threads" (everyone else). */
+#define __GLIDE_RUNTIME_HAS_REUSEPORT_BALANCE 1
 int __glide_has_reuseport_balance(void) {
 #ifdef __linux__
     return 1;
