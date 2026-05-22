@@ -3386,18 +3386,19 @@ fn main() -> int {
             }
             if d.severity == 1 || promoted { user_errors = user_errors + 1; }
         }
+        let mut check_exit: int = 0;
         if user_errors > 0 {
             if !json {
                 let mut tail: string = "found 1 error";
                 if user_errors > 1 { tail = "found ".concat(int_to_str(user_errors)).concat(" errors"); }
                 println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(tail));
             }
-            t.free();
-            return 1;
+            check_exit = 1;
+        } else if !json {
+            println!(col_blue().concat("ok").concat(col_reset()));
         }
-        if !json { println!(col_blue().concat("ok").concat(col_reset())); }
         t.free();
-        return 0;
+        return check_exit;
     }
 
     // MODE_EMIT

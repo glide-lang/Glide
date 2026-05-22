@@ -490,6 +490,23 @@ c_raw! {
         return (void*)l;
     }
 
+    // Cap SSL_accept's internal reads/writes so a silent client (slowloris
+    // probe or scanner mid-handshake disconnect) can't park the accept
+    // loop forever. Applied after `accept()` returns the fresh fd.
+    static void __glide_tls_set_handshake_timeout(__glide_tls_sock c, int secs) {
+        #ifdef _WIN32
+        DWORD ms = (DWORD)(secs * 1000);
+        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+        setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&ms, sizeof(ms));
+        #else
+        struct timeval tv;
+        tv.tv_sec = secs;
+        tv.tv_usec = 0;
+        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        #endif
+    }
+
     // Block on accept; wrap the new socket in SSL and run SSL_accept.
     // Returns a __glide_tls_handle (compatible with read/write/close)
     // or NULL on accept/handshake failure.
@@ -499,6 +516,7 @@ c_raw! {
         socklen_t slen = sizeof(src);
         __glide_tls_sock c = accept(l->listen_fd, (struct sockaddr*)&src, &slen);
         if (c == __GLIDE_TLS_INVALID) return NULL;
+        __glide_tls_set_handshake_timeout(c, 5);
         SSL* ssl = SSL_new(l->ctx);
         if (ssl == NULL) {
             #ifdef _WIN32
@@ -518,11 +536,85 @@ c_raw! {
             #endif
             return NULL;
         }
+        // Clear the handshake-time read/write timeouts now that the
+        // payload phase begins; the handler may legitimately keep a
+        // keep-alive connection idle for tens of seconds.
+        {
+            #ifdef _WIN32
+            DWORD zero = 0;
+            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&zero, sizeof(zero));
+            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&zero, sizeof(zero));
+            #else
+            struct timeval zero = { .tv_sec = 0, .tv_usec = 0 };
+            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &zero, sizeof(zero));
+            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &zero, sizeof(zero));
+            #endif
+        }
         // Reuse the same handle struct as client-side. ctx pointer is
         // shared with the listener — DON'T free it on stream close;
         // null it out so __glide_tls_close skips SSL_CTX_free.
         __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
         h->ctx = NULL;       // shared with listener; not freed by stream
+        h->ssl = ssl;
+        h->sock = c;
+        h->last_err[0] = 0;
+        return (void*)h;
+    }
+
+    // TCP-only accept — returns the raw socket as an i64 (or -1 on
+    // failure). Companion to __glide_tls_accept_attach below. Lets the
+    // caller offload SSL_accept to a worker pthread so the accept loop
+    // never blocks on a slow / silent handshake.
+    static int64_t __glide_tls_accept_raw(void* lp) {
+        __glide_tls_listener* l = (__glide_tls_listener*)lp;
+        struct sockaddr_storage src;
+        socklen_t slen = sizeof(src);
+        __glide_tls_sock c = accept(l->listen_fd, (struct sockaddr*)&src, &slen);
+        if (c == __GLIDE_TLS_INVALID) return (int64_t)-1;
+        return (int64_t)c;
+    }
+
+    // Run SSL_accept on a previously TCP-accepted fd, reusing the
+    // listener's SSL_CTX (shared cert/key/ALPN state). Returns a
+    // stream handle on success, NULL on failure. The fd is closed
+    // by this fn when the handshake fails.
+    static void* __glide_tls_accept_attach(void* lp, int64_t fd) {
+        __glide_tls_listener* l = (__glide_tls_listener*)lp;
+        __glide_tls_sock c = (__glide_tls_sock)fd;
+        __glide_tls_set_handshake_timeout(c, 5);
+        SSL* ssl = SSL_new(l->ctx);
+        if (ssl == NULL) {
+            #ifdef _WIN32
+            closesocket(c);
+            #else
+            close(c);
+            #endif
+            return NULL;
+        }
+        SSL_set_fd(ssl, (int)c);
+        if (SSL_accept(ssl) <= 0) {
+            SSL_free(ssl);
+            #ifdef _WIN32
+            closesocket(c);
+            #else
+            close(c);
+            #endif
+            return NULL;
+        }
+        // Clear the timeouts the same way __glide_tls_accept does.
+        {
+            #ifdef _WIN32
+            DWORD zero = 0;
+            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&zero, sizeof(zero));
+            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&zero, sizeof(zero));
+            #else
+            struct timeval zero = { .tv_sec = 0, .tv_usec = 0 };
+            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &zero, sizeof(zero));
+            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &zero, sizeof(zero));
+            #endif
+        }
+        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
+        h->ctx = NULL;
         h->ssl = ssl;
         h->sock = c;
         h->last_err[0] = 0;
@@ -608,6 +700,8 @@ extern fn __glide_tls_cipher(h: *void) -> string;
 extern fn __glide_tls_set_timeout(h: *void, ms: int);
 extern fn __glide_tls_listen(port: int, cert_path: string, key_path: string, alpn_csv: string) -> *void;
 extern fn __glide_tls_accept(listener: *void) -> *void;
+extern fn __glide_tls_accept_raw(listener: *void) -> i64;
+extern fn __glide_tls_accept_attach(listener: *void, fd: i64) -> *void;
 extern fn __glide_tls_listener_close(listener: *void);
 extern fn __glide_tls_server_attach(fd: i64, cert_path: string, key_path: string) -> *void;
 
@@ -984,6 +1078,40 @@ impl TlsListener {
     pub fn accept(self: *TlsListener) -> !*TlsStream {
         let h: *void = __glide_tls_accept(self.handle);
         if h == null { return err("tls_listener: accept/handshake failure"); }
+        let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
+        s.handle = h;
+        return ok(s);
+    }
+
+    /// TCP-only accept. Returns the raw socket fd, leaving SSL_accept
+    /// for the caller (typically on a worker pthread via `attach()`).
+    /// Splitting the two means the accept loop never blocks on a
+    /// slow or silent TLS handshake — a single misbehaving client
+    /// can no longer hold up every queued connection.
+    ///
+    /// ```glide
+    /// let l: *TlsListener = TlsListener::bind(443, "cert.pem", "key.pem").val;
+    /// loop {
+    ///     let fd: !i64 = l.accept_raw();
+    ///     if !fd.ok { sleep_ms(10); continue; }
+    ///     spawn_thread || {
+    ///         let s: !*TlsStream = l.attach(fd.val);
+    ///         if s.ok { handle(s.val); }
+    ///     };
+    /// }
+    /// ```
+    pub fn accept_raw(self: *TlsListener) -> !i64 {
+        let fd: i64 = __glide_tls_accept_raw(self.handle);
+        if fd < 0 { return err("tls_listener: tcp accept failed"); }
+        return ok(fd);
+    }
+
+    /// Complete the TLS handshake on a fd previously returned by
+    /// `accept_raw`. Reuses the listener's certificate context. The fd
+    /// is closed automatically on handshake failure.
+    pub fn attach(self: *TlsListener, fd: i64) -> !*TlsStream {
+        let h: *void = __glide_tls_accept_attach(self.handle, fd);
+        if h == null { return err("tls_listener: handshake failed on attached fd"); }
         let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
         s.handle = h;
         return ok(s);
