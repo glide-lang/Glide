@@ -1,0 +1,9 @@
+// Single `.free()` at the very end -> no use after, no error.
+
+fn main() {
+    let arena: *Arena = Arena::new(64);
+    let p: *int = arena.alloc(sizeof(int)) as *int;
+    *p = 42;
+    println!(*p);
+    arena.free();
+}

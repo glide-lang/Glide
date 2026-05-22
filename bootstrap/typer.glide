@@ -474,6 +474,10 @@ pub struct Typer {
     // sets arena_origin[p] = "a"; return p then triggers the escape
     // check against arena_locals.
     pub arena_origin: *HashMap<string>,
+    // Names that have had a `.free()` (or similar consume) call against
+    // them in the current fn body. Subsequent reads error with
+    // `use-after-free`.
+    pub consumed_locals: *HashMap<bool>,
     pub borrows: *Vector<BorrowEvent>,  // active let-bound borrows; save/restore per block
     pub current_ret: *Type,
     // Type parameters of the enclosing fn (e.g. `["T", "U"]`). Used by
@@ -565,6 +569,7 @@ impl Typer {
         let owned: *HashMap<bool> = HashMap::new();
         let ar_locals: *HashMap<bool> = HashMap::new();
         let ar_origin: *HashMap<string> = HashMap::new();
+        let consumed: *HashMap<bool> = HashMap::new();
         let bw: *Vector<BorrowEvent> = Vector::new();
         let dg: *Vector<DiagEntry> = Vector::new();
         t.fns = fns;
@@ -574,6 +579,7 @@ impl Typer {
         t.owned_locals = owned;
         t.arena_locals = ar_locals;
         t.arena_origin = ar_origin;
+        t.consumed_locals = consumed;
         t.borrows = bw;
         t.diagnostics = dg;
         t.current_ret = null;
@@ -1471,6 +1477,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let saved_owned: *HashMap<bool> = t.owned_locals;
     let saved_arena_locals: *HashMap<bool> = t.arena_locals;
     let saved_arena_origin: *HashMap<string> = t.arena_origin;
+    let saved_consumed: *HashMap<bool> = t.consumed_locals;
     let saved_borrows: *Vector<BorrowEvent> = t.borrows;
     let saved_ret: *Type = t.current_ret;
     let saved_tps: *Vector<string> = t.current_type_params;
@@ -1478,11 +1485,13 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let new_owned: *HashMap<bool> = HashMap::new();
     let new_arena_locals: *HashMap<bool> = HashMap::new();
     let new_arena_origin: *HashMap<string> = HashMap::new();
+    let new_consumed: *HashMap<bool> = HashMap::new();
     let new_borrows: *Vector<BorrowEvent> = Vector::new();
     t.scope = new_scope;
     t.owned_locals = new_owned;
     t.arena_locals = new_arena_locals;
     t.arena_origin = new_arena_origin;
+    t.consumed_locals = new_consumed;
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
     t.current_type_params = s.type_params;
@@ -1513,11 +1522,13 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.owned_locals.free();
     t.arena_locals.free();
     t.arena_origin.free();
+    t.consumed_locals.free();
     t.borrows.free();
     t.scope = saved_scope;
     t.owned_locals = saved_owned;
     t.arena_locals = saved_arena_locals;
     t.arena_origin = saved_arena_origin;
+    t.consumed_locals = saved_consumed;
     t.borrows = saved_borrows;
     t.current_ret = saved_ret;
     t.current_type_params = saved_tps;
@@ -2029,6 +2040,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_IDENT {
+        // Use-after-free: a `<name>.free()` earlier in the fn flagged
+        // this binding; reading it now would touch reclaimed memory.
+        // Type lookup continues so downstream diagnostics still resolve.
+        if t.consumed_locals.contains(e.str_val) {
+            t.err_code(e.line, e.column, "use-after-free",
+                "value `".concat(e.str_val)
+                .concat("` was freed earlier in this function; subsequent reads touch reclaimed memory"));
+        }
         // Locals + parameters always win; visibility check skipped for them.
         if t.scope.contains(e.str_val) {
             let ty: Type = t.scope.get(e.str_val);
@@ -2181,6 +2200,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.lhs != null {
             let mname: string = e.lhs.field;
             let recv_ty: *Type = infer_expr(t, e.lhs.lhs);
+            // Use-after-free: `<ident>.free()` consumes the receiver.
+            // Mark AFTER recv_ty was read so the receiver's own EX_IDENT
+            // check doesn't fire on this very call.
+            if mname.eq("free") && e.lhs.lhs.kind == EX_IDENT {
+                t.consumed_locals.insert(e.lhs.lhs.str_val, true);
+            }
             let inner: *Type = chan_inner(recv_ty);
             if inner != null {
                 let mut nargs: int = 0;
