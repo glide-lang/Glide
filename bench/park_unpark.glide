@@ -1,0 +1,48 @@
+// Park/unpark latency micro-bench. Two coros ping-pong an int through
+// a cap-1 chan. Each cycle forces send + recv to alternate, parking
+// whichever side ran ahead.
+//
+// SM-1 (state-machine park CAS) is expected to halve this number on
+// pure-coro workloads by replacing the mutex+condvar in wake_send /
+// wake_recv with an atomic CAS on task->state. Track the delta here.
+
+extern fn now_ns() -> i64;
+
+const N: int = 100000;
+const SENTINEL: int = -1;
+
+fn ponger(rx: chan<int>, tx: chan<int>) {
+    while true {
+        let v: int = rx.recv();
+        if v == SENTINEL { return; }
+        tx.send(v + 1);
+    }
+}
+
+fn main() -> int {
+    let to_pong: chan<int> = make_chan(1);
+    let from_pong: chan<int> = make_chan(1);
+    spawn ponger(to_pong, from_pong);
+
+    // Warm-up.
+    for let w: int = 0; w < 100; w = w + 1 {
+        to_pong.send(0);
+        let _: int = from_pong.recv();
+    }
+
+    let t0: i64 = now_ns();
+    for let i: int = 0; i < N; i = i + 1 {
+        to_pong.send(i);
+        let _: int = from_pong.recv();
+    }
+    let t1: i64 = now_ns();
+
+    // Tell ponger to exit so main can drain cleanly.
+    to_pong.send(SENTINEL);
+
+    let elapsed_ns: i64 = t1 - t0;
+    let per_cycle_ns: i64 = elapsed_ns / (N as i64);
+    println!("park-unpark", N, "cycles total_ns:", elapsed_ns,
+             "avg_ns/cycle:", per_cycle_ns);
+    return 0;
+}
