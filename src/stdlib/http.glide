@@ -1162,6 +1162,8 @@ pub fn http_listen_workers(port: int, n: int,
 
 extern fn __glide_http_sm_hello_run(port: int) -> int;
 extern fn __glide_http_sm_hello_run_n(port: int, n: int) -> int;
+extern fn __glide_http_sm_run_with(port: int, n: int,
+                                   h: fn(string, string) -> string) -> int;
 
 /// Coroutine-free hello-world HTTP/1.1 server. Bench baseline for the
 /// cost of the coro layer in `http_listen`. Linux only; returns `err`
@@ -1177,5 +1179,36 @@ pub fn http_listen_sm_hello(port: int) -> !int {
 pub fn http_listen_sm_hello_workers(port: int, n: int) -> !int {
     let rc: int = __glide_http_sm_hello_run_n(port, n);
     if rc < 0 { return err("http_listen_sm_hello_workers: bind/listen failed"); }
+    return ok(0);
+}
+
+/// Coroutine-free HTTP/1.1 server with a user `@leaf` handler. The
+/// handler runs inline on each worker's epoll thread when a request
+/// is parsed; it MUST be marked `@leaf` (no chan / sleep / I/O — the
+/// runtime aborts if it parks). The framing emits a 200 OK +
+/// text/plain response wrapping the returned body.
+///
+/// Trade-off vs `http_listen_workers`: ~70% faster on hello-world
+/// workloads (no coro spawn, no stack page commit, no ctx_switch),
+/// at the cost of handler restrictions and no per-request state.
+/// Use for hot health checks, JSON endpoints, static-ish responses.
+///
+/// Linux only. Errors on macOS / *BSD / Windows until SM lands there.
+///
+/// ```glide
+/// @leaf
+/// fn hello(method: string, _path: string) -> string {
+///     return "hello\n";
+/// }
+///
+/// fn main() -> int {
+///     http_listen_sm_workers(8080, 4, hello);
+///     return 0;
+/// }
+/// ```
+pub fn http_listen_sm_workers(port: int, n: int,
+                              h: fn(string, string) -> string) -> !int {
+    let rc: int = __glide_http_sm_run_with(port, n, h);
+    if rc < 0 { return err("http_listen_sm_workers: bind/listen failed"); }
     return ok(0);
 }

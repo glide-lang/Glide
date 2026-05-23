@@ -31,6 +31,17 @@ extern void* hp_parse_glide(void* buf, int len);
 extern int   hp_glide_wants_close(void* g);
 extern int   hp_glide_consumed(void* g);
 extern void  hp_glide_free(void* g);
+extern const char* hp_glide_method(void* g);
+extern const char* hp_glide_path(void* g);
+
+/* User-supplied @leaf handler. Called inline on the worker's epoll
+   thread when a request finishes parsing. Returns the response body
+   as a NUL-terminated Glide string; the SM framing emits 200 OK +
+   text/plain headers around it. Set via __glide_http_sm_run_with;
+   when NULL the SM falls through to the hard-coded "hello!" path. */
+typedef const char* (*sm_glide_handler_t)(const char* method,
+                                           const char* path);
+static sm_glide_handler_t g_sm_handler = NULL;
 
 #define SM_BUF_SIZE 8192
 
@@ -119,6 +130,33 @@ static int sm_advance_read(sm_conn_t* c) {
 
     c->keep_alive = !hp_glide_wants_close(g);
     int consumed  = hp_glide_consumed(g);
+
+    /* Fast path: hardcoded "hello!" response (the original SM bench). */
+    if (g_sm_handler == NULL) {
+        hp_glide_free(g);
+        int leftover = c->read_len - consumed;
+        if (leftover < 0) leftover = 0;
+        if (leftover > 0 && consumed > 0) {
+            memmove(c->read_buf, c->read_buf + consumed, (size_t)leftover);
+        }
+        c->read_len = leftover;
+        const char* src = c->keep_alive ? SM_RESP_KEEP  : SM_RESP_CLOSE;
+        int rn          = c->keep_alive ? (int)sizeof(SM_RESP_KEEP) - 1
+                                        : (int)sizeof(SM_RESP_CLOSE) - 1;
+        memcpy(c->write_buf, src, (size_t)rn);
+        c->write_len = rn;
+        c->write_off = 0;
+        c->state = SM_WRITING;
+        return 1;
+    }
+
+    /* Handler path: invoke the user's @leaf function inline on this
+       worker's epoll thread. The handler MUST not park (no chan, no
+       sleep, no I/O); if it does, the runtime will abort it via the
+       __glide_park guard. */
+    const char* method = hp_glide_method(g);
+    const char* path   = hp_glide_path(g);
+    const char* body   = g_sm_handler(method, path);
     hp_glide_free(g);
 
     int leftover = c->read_len - consumed;
@@ -128,11 +166,47 @@ static int sm_advance_read(sm_conn_t* c) {
     }
     c->read_len = leftover;
 
-    const char* src = c->keep_alive ? SM_RESP_KEEP  : SM_RESP_CLOSE;
-    int rn          = c->keep_alive ? (int)sizeof(SM_RESP_KEEP) - 1
-                                    : (int)sizeof(SM_RESP_CLOSE) - 1;
-    memcpy(c->write_buf, src, (size_t)rn);
-    c->write_len = rn;
+    int body_len = body ? (int)strlen(body) : 0;
+    /* Two pre-baked header prefixes. Skipping snprintf saves ~80 ns
+       per response on this hot path. */
+    static const char HDR_KEEP[]  =
+        "HTTP/1.1 200 OK\r\n"
+        "Server: glide-sm\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: keep-alive\r\n"
+        "Content-Length: ";
+    static const char HDR_CLOSE[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Server: glide-sm\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "Content-Length: ";
+    const char* hdr = c->keep_alive ? HDR_KEEP : HDR_CLOSE;
+    int hdr_len     = c->keep_alive ? (int)sizeof(HDR_KEEP)  - 1
+                                    : (int)sizeof(HDR_CLOSE) - 1;
+    if (hdr_len + 12 + 4 + body_len > SM_BUF_SIZE) {
+        /* response wouldn't fit — bail. */
+        return -1;
+    }
+    memcpy(c->write_buf, hdr, (size_t)hdr_len);
+    char digits[12];
+    int  d = 0;
+    if (body_len == 0) { digits[d++] = '0'; }
+    else {
+        int v = body_len;
+        char tmp[12]; int t = 0;
+        while (v > 0) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
+        while (t > 0) digits[d++] = tmp[--t];
+    }
+    memcpy(c->write_buf + hdr_len, digits, (size_t)d);
+    c->write_buf[hdr_len + d    ] = '\r';
+    c->write_buf[hdr_len + d + 1] = '\n';
+    c->write_buf[hdr_len + d + 2] = '\r';
+    c->write_buf[hdr_len + d + 3] = '\n';
+    if (body_len > 0) {
+        memcpy(c->write_buf + hdr_len + d + 4, body, (size_t)body_len);
+    }
+    c->write_len = hdr_len + d + 4 + body_len;
     c->write_off = 0;
     c->state = SM_WRITING;
     return 1;
@@ -296,6 +370,16 @@ int __glide_http_sm_hello_run_n(int port, int n) {
     return sm_worker_loop(port);
 }
 
+/* User-handler variant of the SM server. Stores the handler in the
+   global g_sm_handler and then runs N workers exactly like the hello
+   path. The handler is invoked inline from each worker's epoll loop;
+   it MUST be @leaf (no chan / sleep / I/O), otherwise __glide_park
+   will trip on the worker pthread and the process aborts. */
+int __glide_http_sm_run_with(int port, int n, sm_glide_handler_t h) {
+    g_sm_handler = h;
+    return __glide_http_sm_hello_run_n(port, n);
+}
+
 #else
 
 int __glide_http_sm_hello_run(int port) {
@@ -305,6 +389,11 @@ int __glide_http_sm_hello_run(int port) {
 
 int __glide_http_sm_hello_run_n(int port, int n) {
     (void)port; (void)n;
+    return -1;
+}
+
+int __glide_http_sm_run_with(int port, int n, void* h) {
+    (void)port; (void)n; (void)h;
     return -1;
 }
 
