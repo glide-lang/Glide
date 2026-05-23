@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
+axum = "0.7"
 
 [[bin]]
 name = "park_unpark_coro_clean"
@@ -17,6 +18,10 @@ path = "massive_concurrency.rs"
 [[bin]]
 name = "spawn_1m"
 path = "spawn_1m.rs"
+
+[[bin]]
+name = "axum_hello"
+path = "axum_hello.rs"
 
 [profile.release]
 opt-level = 3
