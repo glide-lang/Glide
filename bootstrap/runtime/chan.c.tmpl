@@ -111,6 +111,24 @@ static int __glide_try_recv_@M@(__glide_chan_@M@_t* c, @TC@* out) {
    core) before we eat the cross-core park cost. */
 extern int __glide_chan_spin_count;
 
+/* TLS flag the SM HTTP worker sets while a user handler runs. The
+   non-coro chan slow path (cond_wait) would deadlock the SM worker
+   pthread if a handler accidentally blocks on a chan; instead we
+   abort with a clear message at the entry to the slow path. */
+extern _Thread_local int __glide_in_sm_handler;
+#include <stdio.h>
+static inline void __glide_abort_if_in_sm_handler(const char* op) {
+    if (__glide_in_sm_handler) {
+        fprintf(stderr,
+            "[glide] FATAL: HTTP handler tried to %s on a chan.\n"
+            "  http_listen_workers handlers must be non-blocking.\n"
+            "  Either drop the blocking call, or switch to\n"
+            "  http_listen_workers_blocking which spawns a coro per\n"
+            "  connection so chan ops are safe.\n", op);
+        abort();
+    }
+}
+
 /* Pop one parker off the wait list under chan->mu, then drop the lock BEFORE
    handing the task back to its worker queue. q_push_to has its own spinlock and
    can stall for tens of ns; holding chan->mu over that serializes senders/recvers
@@ -203,6 +221,7 @@ static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
        Flush main's pending spawn buffer first so workers see them
        while we block on cv. cv_send_waiters bumped before cond_wait
        so concurrent wake_recv knows to signal. */
+    __glide_abort_if_in_sm_handler("send");
     __glide_flush_main_buf();
     pthread_mutex_lock(&c->mu);
     for (;;) {
@@ -253,6 +272,7 @@ static @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {
         memset(&v, 0, sizeof(v));
         return v;
     }
+    __glide_abort_if_in_sm_handler("recv");
     __glide_flush_main_buf();
     pthread_mutex_lock(&c->mu);
     for (;;) {
@@ -303,6 +323,7 @@ static int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {
         __glide_spin_unlock(&c->coro_lock);
         return 0;
     }
+    __glide_abort_if_in_sm_handler("recv");
     __glide_flush_main_buf();
     pthread_mutex_lock(&c->mu);
     for (;;) {
