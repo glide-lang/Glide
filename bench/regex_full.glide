@@ -1,0 +1,110 @@
+import stdlib::regex::*;
+
+fn check(label: string, got: bool, want: bool) -> int {
+    if got == want { println!("OK  ", label); return 0; }
+    println!("FAIL", label, "got=", got, "want=", want);
+    return 1;
+}
+
+fn check_s(label: string, got: string, want: string) -> int {
+    if got.eq(want) { println!("OK  ", label, "=", got); return 0; }
+    println!("FAIL", label, "got=", got, "want=", want);
+    return 1;
+}
+
+fn main() -> int {
+    let mut fails: int = 0;
+
+    // Literals + classes
+    let r1: !*Regex = Regex::compile("hello");
+    if !r1.ok { println!("compile r1 fail:", r1.err); return 1; }
+    fails = fails + check("literal", r1.val.matches("say hello world"), true);
+    fails = fails + check("literal no", r1.val.matches("nope"), false);
+
+    // Classes
+    let r2: !*Regex = Regex::compile("\\d{3}-\\d{4}");
+    if !r2.ok { println!("compile r2 fail:", r2.err); return 1; }
+    fails = fails + check("\\d{3}-\\d{4}", r2.val.matches("call 555-1234 today"), true);
+    fails = fails + check("\\d{3}-\\d{4} no", r2.val.matches("call 55-1234"), false);
+
+    // Alternation + groups
+    let r3: !*Regex = Regex::compile("(cat|dog|bird)s?");
+    if !r3.ok { println!("compile r3 fail:", r3.err); return 1; }
+    fails = fails + check("alt", r3.val.matches("two dogs"), true);
+    fails = fails + check("alt no", r3.val.matches("fish"), false);
+
+    // Email-ish
+    let r4: !*Regex = Regex::compile("([\\w.]+)@([\\w.]+)");
+    if !r4.ok { println!("compile r4 fail:", r4.err); return 1; }
+    let mo: ?*Match = r4.val.find("contact: alice@example.com please");
+    if !mo.has { println!("FAIL email find"); fails = fails + 1; }
+    else {
+        fails = fails + check_s("email user", mo.val.group(1), "alice");
+        fails = fails + check_s("email host", mo.val.group(2), "example.com");
+    }
+
+    // Anchors
+    let r5: !*Regex = Regex::compile("^abc$");
+    if !r5.ok { println!("compile r5 fail:", r5.err); return 1; }
+    fails = fails + check("^abc$ yes", r5.val.matches("abc"), true);
+    fails = fails + check("^abc$ no",  r5.val.matches("xabc"), false);
+
+    // Case-insensitive
+    let r6: !*Regex = Regex::compile_with("hello", "i");
+    if !r6.ok { println!("compile r6 fail:", r6.err); return 1; }
+    fails = fails + check("/i", r6.val.matches("Say HELLO World"), true);
+
+    // Quantifiers — lazy vs greedy
+    let r7: !*Regex = Regex::compile("<.+?>");
+    if !r7.ok { println!("compile r7 fail:", r7.err); return 1; }
+    let mo7: ?*Match = r7.val.find("<a><b>");
+    if mo7.has { fails = fails + check_s("lazy <.+?>", mo7.val.full(), "<a>"); }
+    else       { println!("FAIL lazy find"); fails = fails + 1; }
+
+    // Backrefs
+    let r8: !*Regex = Regex::compile("(\\w+) \\1");
+    if !r8.ok { println!("compile r8 fail:", r8.err); return 1; }
+    fails = fails + check("backref", r8.val.matches("hi hi there"), true);
+    fails = fails + check("backref no", r8.val.matches("hi bye"), false);
+
+    // Named groups
+    let r9: !*Regex = Regex::compile("(?<year>\\d{4})-(?<mon>\\d{2})-(?<day>\\d{2})");
+    if !r9.ok { println!("compile r9 fail:", r9.err); return 1; }
+    let mo9: ?*Match = r9.val.find("date 2026-05-23 today");
+    if mo9.has {
+        fails = fails + check_s("named year", mo9.val.named("year"), "2026");
+        fails = fails + check_s("named mon",  mo9.val.named("mon"), "05");
+        fails = fails + check_s("named day",  mo9.val.named("day"), "23");
+    } else { println!("FAIL named find"); fails = fails + 1; }
+
+    // Lookahead
+    let r10: !*Regex = Regex::compile("\\d+(?=px)");
+    if !r10.ok { println!("compile r10 fail:", r10.err); return 1; }
+    let mo10: ?*Match = r10.val.find("size 24px tall");
+    if mo10.has { fails = fails + check_s("lookahead", mo10.val.full(), "24"); }
+    else        { println!("FAIL lookahead"); fails = fails + 1; }
+
+    // Negative lookahead
+    let r11: !*Regex = Regex::compile("\\d+(?!px)");
+    if !r11.ok { println!("compile r11 fail:", r11.err); return 1; }
+    let mo11: ?*Match = r11.val.find("size 24px and 50 wide");
+    if mo11.has { fails = fails + check_s("neg lookahead", mo11.val.full(), "50"); }
+    else        { println!("FAIL neg lookahead"); fails = fails + 1; }
+
+    // replace_all with backref
+    let r12: !*Regex = Regex::compile("(\\w+)=(\\w+)");
+    if !r12.ok { println!("compile r12 fail:", r12.err); return 1; }
+    fails = fails + check_s("replace_all $1/$2",
+        r12.val.replace_all("a=1, b=2", "$2=$1"),
+        "1=a, 2=b");
+
+    // split
+    let r13: !*Regex = Regex::compile("[,;\\s]+");
+    if !r13.ok { println!("compile r13 fail:", r13.err); return 1; }
+    let parts: *Vector<string> = r13.val.split("foo,bar; baz qux");
+    fails = fails + check("split count", parts.len() == 4, true);
+
+    if fails == 0 { println!("\nALL OK"); return 0; }
+    println!("\n", fails, "FAILURES");
+    return 1;
+}

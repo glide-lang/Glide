@@ -1,0 +1,1651 @@
+// stdlib::regex — pure-Glide PCRE-like regex engine.
+//
+// Backtracking VM compiled from a parse tree. Supports:
+//   - Literals + escapes (`\n` `\t` `\r` `\xHH` `\\` `\.` etc.)
+//   - Character classes `[abc]` `[a-z]` `[^a-z]` `[a-zA-Z0-9_]`
+//   - Predefined: `\d \D \w \W \s \S`
+//   - Quantifiers greedy and lazy: `*` `+` `?` `{n}` `{n,}` `{n,m}`
+//   - Alternation `a|b|c`
+//   - Capturing groups `(...)`, non-capturing `(?:...)`, named `(?<n>...)`
+//   - Anchors: `^` `$` `\A` `\z` `\b` `\B`
+//   - Backreferences: `\1`..`\9` and `\k<name>`
+//   - Lookaround: `(?=...)` `(?!...)` `(?<=...)` `(?<!...)`
+//     (lookbehind requires fixed-width subpattern)
+//   - Flags: `i` (case-insens), `m` (multiline), `s` (dot-all), `x` (extended)
+//   - Inline flags: `(?i)` or `(?i:subpattern)`
+//
+// ```glide
+// import stdlib::regex::*;
+//
+// let r: !*Regex = Regex::compile("(\\d+)-(\\d+)");
+// if !r.ok { println!("bad pattern:", r.err); return 1; }
+// let re: *Regex = r.val;
+//
+// if re.matches("phone: 555-1234")   { println!("hit"); }
+//
+// match re.find("phone: 555-1234") {
+//     some(m) => println!(m.full(), m.group(1), m.group(2)),
+//     none()  => println!("no match"),
+// }
+//
+// re.replace_all("a1-2 b3-4", "X");        // "a X b X"
+// re.split("alpha,beta;gamma");            // [...] (with `,|;`)
+// ```
+
+import stdlib::hashmap::*;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+// Opcodes for the bytecode VM.
+pub const RX_OP_CHAR:    int = 1;   // arg_a: byte
+pub const RX_OP_ANY:     int = 2;   // any byte except '\n'
+pub const RX_OP_ANY_NL:  int = 3;   // any byte (dot-all)
+pub const RX_OP_CLASS:   int = 4;   // arg_a: class id
+pub const RX_OP_BOL:     int = 5;   // ^
+pub const RX_OP_EOL:     int = 6;   // $
+pub const RX_OP_STR_BEG: int = 7;   // \A
+pub const RX_OP_STR_END: int = 8;   // \z
+pub const RX_OP_WORDB:   int = 9;   // \b
+pub const RX_OP_NWORDB:  int = 10;  // \B
+pub const RX_OP_JMP:     int = 11;  // arg_a: target pc
+pub const RX_OP_SPLIT:   int = 12;  // try arg_a first, on backtrack arg_b
+pub const RX_OP_SAVE:    int = 13;  // arg_a: capture slot
+pub const RX_OP_BACKREF: int = 14;  // arg_a: group #
+pub const RX_OP_ASSERT:  int = 15;  // arg_a: kind, arg_b: end_pc
+pub const RX_OP_ASRT_END:int = 16;  // assertion body terminator
+pub const RX_OP_MATCH:   int = 17;
+
+// Flags.
+pub const RX_FLAG_I: int = 1;   // case-insensitive
+pub const RX_FLAG_M: int = 2;   // ^/$ match around \n
+pub const RX_FLAG_S: int = 4;   // . matches \n
+pub const RX_FLAG_X: int = 8;   // extended (whitespace + # comments ignored)
+pub const RX_FLAG_U: int = 16;  // ungreedy (flip greediness)
+
+// Assertion kinds.
+pub const RX_AHEAD_POS:  int = 0;
+pub const RX_AHEAD_NEG:  int = 1;
+pub const RX_BEHIND_POS: int = 2;
+pub const RX_BEHIND_NEG: int = 3;
+
+pub const RX_MAX_GROUPS: int = 64;
+
+// ============================================================================
+// Character classes
+// ============================================================================
+
+// `ranges` stores [lo1, hi1, lo2, hi2, ...] inclusive byte ranges.
+pub struct CharClass {
+    ranges: *Vector<int>,
+    negated: bool,
+}
+
+impl CharClass {
+    pub fn new() -> *CharClass {
+        let c: *CharClass = malloc(sizeof(CharClass)) as *CharClass;
+        let r: *Vector<int> = Vector::new();
+        c.ranges = r;
+        c.negated = false;
+        return c;
+    }
+
+    pub fn add(self: *CharClass, lo: int, hi: int) {
+        self.ranges.push(lo);
+        self.ranges.push(hi);
+    }
+
+    pub fn contains(self: *CharClass, b: int) -> bool {
+        let n: int = self.ranges.len();
+        let mut i: int = 0;
+        while i < n {
+            let lo: int = self.ranges.get(i);
+            let hi: int = self.ranges.get(i + 1);
+            if b >= lo && b <= hi {
+                if self.negated { return false; }
+                return true;
+            }
+            i = i + 2;
+        }
+        if self.negated { return true; }
+        return false;
+    }
+}
+
+// Predefined: \d, \w, \s. Returns a fresh CharClass.
+fn _class_digit() -> *CharClass {
+    let c: *CharClass = CharClass::new();
+    c.add(48, 57); // 0-9
+    return c;
+}
+fn _class_word() -> *CharClass {
+    let c: *CharClass = CharClass::new();
+    c.add(48, 57);   // 0-9
+    c.add(65, 90);   // A-Z
+    c.add(97, 122);  // a-z
+    c.add(95, 95);   // _
+    return c;
+}
+fn _class_space() -> *CharClass {
+    let c: *CharClass = CharClass::new();
+    c.add(9, 9);     // \t
+    c.add(10, 10);   // \n
+    c.add(11, 11);   // \v
+    c.add(12, 12);   // \f
+    c.add(13, 13);   // \r
+    c.add(32, 32);   // ' '
+    return c;
+}
+
+fn _is_word_byte(b: int) -> bool {
+    if b >= 48 && b <= 57 { return true; }
+    if b >= 65 && b <= 90 { return true; }
+    if b >= 97 && b <= 122 { return true; }
+    if b == 95 { return true; }
+    return false;
+}
+
+fn _to_lower(b: int) -> int {
+    if b >= 65 && b <= 90 { return b + 32; }
+    return b;
+}
+
+// ============================================================================
+// AST
+// ============================================================================
+
+pub const RX_AST_LIT:    int = 1;
+pub const RX_AST_ANY:    int = 2;
+pub const RX_AST_CLASS:  int = 3;
+pub const RX_AST_CONCAT: int = 4;
+pub const RX_AST_ALT:    int = 5;
+pub const RX_AST_QUANT:  int = 6;
+pub const RX_AST_GROUP:  int = 7;
+pub const RX_AST_ANCHOR: int = 8;
+pub const RX_AST_BACK:   int = 9;
+pub const RX_AST_LOOK:   int = 10;
+
+pub struct RxNode {
+    kind: int,
+    // literal: byte
+    lit: int,
+    // class
+    cls: *CharClass,
+    // concat / alt
+    children: *Vector<*RxNode>,
+    // quant
+    min: int,
+    max: int,        // -1 = infinity
+    greedy: bool,
+    inner: *RxNode,
+    // group
+    group_num: int,  // 0 = non-capturing
+    group_name: string,
+    // anchor: 1=^, 2=$, 3=\A, 4=\z, 5=\b, 6=\B
+    anchor_kind: int,
+    // backref
+    backref_num: int,
+    // lookaround
+    look_kind: int,
+}
+
+fn _node_new(kind: int) -> *RxNode {
+    let n: *RxNode = calloc(1, sizeof(RxNode)) as *RxNode;
+    n.kind = kind;
+    n.max = -1;
+    let cs: *Vector<*RxNode> = Vector::new();
+    n.children = cs;
+    return n;
+}
+
+// ============================================================================
+// Parser
+// ============================================================================
+
+pub struct RxParser {
+    pat: string,
+    pos: int,
+    flags: int,
+    group_count: int,
+    group_names: *Vector<string>,
+    name_to_idx: *HashMap<int>,
+    err: string,
+}
+
+fn _parser_new(pat: string, flags: int) -> *RxParser {
+    let p: *RxParser = malloc(sizeof(RxParser)) as *RxParser;
+    p.pat = pat;
+    p.pos = 0;
+    p.flags = flags;
+    p.group_count = 0;
+    let gn: *Vector<string> = Vector::new();
+    p.group_names = gn;
+    let nm: *HashMap<int> = HashMap::new();
+    p.name_to_idx = nm;
+    p.err = "";
+    return p;
+}
+
+fn _peek(p: *RxParser) -> int {
+    if p.pos >= p.pat.len() { return -1; }
+    return p.pat.at(p.pos).to_int();
+}
+
+fn _peek_at(p: *RxParser, off: int) -> int {
+    let i: int = p.pos + off;
+    if i < 0 || i >= p.pat.len() { return -1; }
+    return p.pat.at(i).to_int();
+}
+
+fn _advance(p: *RxParser) -> int {
+    if p.pos >= p.pat.len() { return -1; }
+    let c: int = p.pat.at(p.pos).to_int();
+    p.pos = p.pos + 1;
+    return c;
+}
+
+fn _fail(p: *RxParser, msg: string) -> *RxNode {
+    if p.err.eq("") { p.err = msg; }
+    return null as *RxNode;
+}
+
+// Skip whitespace and `#` line comments when /x flag is set.
+fn _skip_ws(p: *RxParser) {
+    if (p.flags & RX_FLAG_X) == 0 { return; }
+    while p.pos < p.pat.len() {
+        let c: int = p.pat.at(p.pos).to_int();
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            p.pos = p.pos + 1;
+        } else if c == 35 { // '#'
+            while p.pos < p.pat.len() && p.pat.at(p.pos).to_int() != 10 {
+                p.pos = p.pos + 1;
+            }
+        } else {
+            return;
+        }
+    }
+}
+
+fn _parse_int_until(p: *RxParser, sentinel: int) -> int {
+    let mut v: int = 0;
+    let mut any: bool = false;
+    while p.pos < p.pat.len() {
+        let c: int = p.pat.at(p.pos).to_int();
+        if c < 48 || c > 57 { return -1; }
+        if c == sentinel { return -1; }
+        v = v * 10 + (c - 48);
+        any = true;
+        p.pos = p.pos + 1;
+    }
+    if !any { return -1; }
+    return v;
+}
+
+// Parse an escape sequence (just past the backslash). Returns a node
+// (literal / class / anchor / backref) or null on error.
+fn _parse_escape(p: *RxParser) -> *RxNode {
+    if p.pos >= p.pat.len() {
+        return _fail(p, "trailing backslash");
+    }
+    let c: int = _advance(p);
+    if c == 110 { // n
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 10; return n;
+    }
+    if c == 116 { // t
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 9; return n;
+    }
+    if c == 114 { // r
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 13; return n;
+    }
+    if c == 102 { // f
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 12; return n;
+    }
+    if c == 118 { // v
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 11; return n;
+    }
+    if c == 48 { // 0
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 0; return n;
+    }
+    if c == 97 { // a (bell)
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 7; return n;
+    }
+    if c == 101 { // e (esc)
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = 27; return n;
+    }
+    if c == 120 { // \xHH
+        if p.pos + 2 > p.pat.len() { return _fail(p, "incomplete \\x"); }
+        let h1: int = _hex(p.pat.at(p.pos).to_int());
+        let h2: int = _hex(p.pat.at(p.pos + 1).to_int());
+        if h1 < 0 || h2 < 0 { return _fail(p, "bad \\x digit"); }
+        p.pos = p.pos + 2;
+        let n: *RxNode = _node_new(RX_AST_LIT); n.lit = h1 * 16 + h2; return n;
+    }
+    if c == 100 { // d
+        let n: *RxNode = _node_new(RX_AST_CLASS); n.cls = _class_digit(); return n;
+    }
+    if c == 68 { // D
+        let n: *RxNode = _node_new(RX_AST_CLASS);
+        let cc: *CharClass = _class_digit(); cc.negated = true;
+        n.cls = cc; return n;
+    }
+    if c == 119 { // w
+        let n: *RxNode = _node_new(RX_AST_CLASS); n.cls = _class_word(); return n;
+    }
+    if c == 87 { // W
+        let n: *RxNode = _node_new(RX_AST_CLASS);
+        let cc: *CharClass = _class_word(); cc.negated = true;
+        n.cls = cc; return n;
+    }
+    if c == 115 { // s
+        let n: *RxNode = _node_new(RX_AST_CLASS); n.cls = _class_space(); return n;
+    }
+    if c == 83 { // S
+        let n: *RxNode = _node_new(RX_AST_CLASS);
+        let cc: *CharClass = _class_space(); cc.negated = true;
+        n.cls = cc; return n;
+    }
+    if c == 98 { // b
+        let n: *RxNode = _node_new(RX_AST_ANCHOR); n.anchor_kind = 5; return n;
+    }
+    if c == 66 { // B
+        let n: *RxNode = _node_new(RX_AST_ANCHOR); n.anchor_kind = 6; return n;
+    }
+    if c == 65 { // A
+        let n: *RxNode = _node_new(RX_AST_ANCHOR); n.anchor_kind = 3; return n;
+    }
+    if c == 122 { // z
+        let n: *RxNode = _node_new(RX_AST_ANCHOR); n.anchor_kind = 4; return n;
+    }
+    if c == 90 { // Z = end (or before final newline) — treat as \z
+        let n: *RxNode = _node_new(RX_AST_ANCHOR); n.anchor_kind = 4; return n;
+    }
+    if c >= 49 && c <= 57 { // \1..\9
+        let n: *RxNode = _node_new(RX_AST_BACK);
+        n.backref_num = c - 48;
+        return n;
+    }
+    if c == 107 { // \k<name>
+        if _peek(p) != 60 { return _fail(p, "expected '<' after \\k"); }
+        p.pos = p.pos + 1;
+        let start: int = p.pos;
+        while p.pos < p.pat.len() && p.pat.at(p.pos).to_int() != 62 {
+            p.pos = p.pos + 1;
+        }
+        if p.pos >= p.pat.len() { return _fail(p, "unterminated \\k<name>"); }
+        let name: string = p.pat.substring(start, p.pos);
+        p.pos = p.pos + 1; // past '>'
+        if p.name_to_idx.contains(name) {
+            let n: *RxNode = _node_new(RX_AST_BACK);
+            n.backref_num = p.name_to_idx.get(name);
+            return n;
+        }
+        return _fail(p, "unknown group name in \\k");
+    }
+    // Default: literal
+    let n: *RxNode = _node_new(RX_AST_LIT); n.lit = c; return n;
+}
+
+fn _hex(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48; }
+    if c >= 65 && c <= 70 { return c - 55; }
+    if c >= 97 && c <= 102 { return c - 87; }
+    return -1;
+}
+
+// Parse one [...] class, position is just past the opening '['.
+fn _parse_class(p: *RxParser) -> *RxNode {
+    let cc: *CharClass = CharClass::new();
+    if _peek(p) == 94 { // '^'
+        cc.negated = true;
+        p.pos = p.pos + 1;
+    }
+    let mut first: bool = true;
+    while p.pos < p.pat.len() {
+        let c: int = p.pat.at(p.pos).to_int();
+        if c == 93 && !first { // ']'
+            p.pos = p.pos + 1;
+            let n: *RxNode = _node_new(RX_AST_CLASS); n.cls = cc;
+            return n;
+        }
+        first = false;
+
+        let lo: int;
+        if c == 92 { // backslash
+            p.pos = p.pos + 1;
+            let esc: int = _class_escape(p, cc);
+            if esc < 0 { continue; } // class kind already added
+            lo = esc;
+        } else {
+            lo = c;
+            p.pos = p.pos + 1;
+        }
+
+        // Range?
+        if _peek(p) == 45 && _peek_at(p, 1) != 93 && _peek_at(p, 1) != -1 {
+            p.pos = p.pos + 1; // '-'
+            let cc2: int = _peek(p);
+            let hi: int;
+            if cc2 == 92 {
+                p.pos = p.pos + 1;
+                hi = _class_escape(p, cc);
+                if hi < 0 { continue; }
+            } else {
+                hi = cc2;
+                p.pos = p.pos + 1;
+            }
+            cc.add(lo, hi);
+        } else {
+            cc.add(lo, lo);
+        }
+    }
+    return _fail(p, "unterminated character class");
+}
+
+// Handle escape inside [...]. Returns the literal byte to add (caller
+// builds the range), or -1 if a multi-char class (\d, \w, \s) was
+// already merged into `cc`.
+fn _class_escape(p: *RxParser, cc: *CharClass) -> int {
+    if p.pos >= p.pat.len() {
+        _fail(p, "trailing \\ in class");
+        return -1;
+    }
+    let c: int = _advance(p);
+    if c == 110 { return 10; }
+    if c == 116 { return 9; }
+    if c == 114 { return 13; }
+    if c == 102 { return 12; }
+    if c == 118 { return 11; }
+    if c == 97  { return 7; }
+    if c == 101 { return 27; }
+    if c == 48  { return 0; }
+    if c == 120 {
+        if p.pos + 2 > p.pat.len() { _fail(p, "incomplete \\x"); return -1; }
+        let h1: int = _hex(p.pat.at(p.pos).to_int());
+        let h2: int = _hex(p.pat.at(p.pos + 1).to_int());
+        if h1 < 0 || h2 < 0 { _fail(p, "bad \\x digit"); return -1; }
+        p.pos = p.pos + 2;
+        return h1 * 16 + h2;
+    }
+    if c == 100 {
+        let dg: *CharClass = _class_digit();
+        _merge_class(cc, dg);
+        return -1;
+    }
+    if c == 68 {
+        cc.add(0, 47); cc.add(58, 255);
+        return -1;
+    }
+    if c == 119 {
+        let w: *CharClass = _class_word();
+        _merge_class(cc, w);
+        return -1;
+    }
+    if c == 87 {
+        cc.add(0, 47); cc.add(58, 64); cc.add(91, 94); cc.add(96, 96); cc.add(123, 255);
+        return -1;
+    }
+    if c == 115 {
+        let s: *CharClass = _class_space();
+        _merge_class(cc, s);
+        return -1;
+    }
+    if c == 83 {
+        // \S inside class: everything except whitespace bytes
+        cc.add(0, 8); cc.add(14, 31); cc.add(33, 255);
+        return -1;
+    }
+    return c;
+}
+
+fn _merge_class(dst: *CharClass, src: *CharClass) {
+    let n: int = src.ranges.len();
+    let mut i: int = 0;
+    while i < n {
+        dst.add(src.ranges.get(i), src.ranges.get(i + 1));
+        i = i + 2;
+    }
+}
+
+// Forward declarations done implicitly by Glide (fns are hoisted).
+
+// Parse alternation: `term ('|' term)*`.
+fn _parse_alt(p: *RxParser) -> *RxNode {
+    let left: *RxNode = _parse_concat(p);
+    if left == null { return null as *RxNode; }
+    if _peek(p) != 124 { return left; } // '|'
+    let alt: *RxNode = _node_new(RX_AST_ALT);
+    alt.children.push(left);
+    while _peek(p) == 124 {
+        p.pos = p.pos + 1;
+        let r: *RxNode = _parse_concat(p);
+        if r == null { return null as *RxNode; }
+        alt.children.push(r);
+    }
+    return alt;
+}
+
+// Parse concatenation: sequence of quantified atoms until `)` or `|` or end.
+fn _parse_concat(p: *RxParser) -> *RxNode {
+    let cat: *RxNode = _node_new(RX_AST_CONCAT);
+    while true {
+        _skip_ws(p);
+        let c: int = _peek(p);
+        if c == -1 || c == 41 || c == 124 { break; } // ')' or '|'
+        let atom: *RxNode = _parse_atom(p);
+        if atom == null { return null as *RxNode; }
+        let q: *RxNode = _maybe_quantify(p, atom);
+        if q == null { return null as *RxNode; }
+        cat.children.push(q);
+    }
+    if cat.children.len() == 1 {
+        return cat.children.get(0);
+    }
+    return cat;
+}
+
+// Parse one atom (literal, class, group, anchor, escape).
+fn _parse_atom(p: *RxParser) -> *RxNode {
+    let c: int = _peek(p);
+    if c == 40 { // '('
+        return _parse_group(p);
+    }
+    if c == 91 { // '['
+        p.pos = p.pos + 1;
+        return _parse_class(p);
+    }
+    if c == 46 { // '.'
+        p.pos = p.pos + 1;
+        return _node_new(RX_AST_ANY);
+    }
+    if c == 94 { // '^'
+        p.pos = p.pos + 1;
+        let n: *RxNode = _node_new(RX_AST_ANCHOR); n.anchor_kind = 1; return n;
+    }
+    if c == 36 { // '$'
+        p.pos = p.pos + 1;
+        let n: *RxNode = _node_new(RX_AST_ANCHOR); n.anchor_kind = 2; return n;
+    }
+    if c == 92 { // '\\'
+        p.pos = p.pos + 1;
+        return _parse_escape(p);
+    }
+    // Literal byte. ?, *, +, { without a preceding atom are errors but
+    // we let the quantifier check after `_parse_atom` handle it.
+    if c == 42 || c == 43 || c == 63 || c == 123 || c == 125 || c == 93 || c == 41 || c == 124 {
+        return _fail(p, "unexpected metachar");
+    }
+    p.pos = p.pos + 1;
+    let n: *RxNode = _node_new(RX_AST_LIT); n.lit = c; return n;
+}
+
+// Parse `(...)` — capturing, non-capturing, named, or lookaround.
+fn _parse_group(p: *RxParser) -> *RxNode {
+    p.pos = p.pos + 1; // past '('
+    let mut capturing: bool = true;
+    let mut name: string = "";
+    let mut is_look: bool = false;
+    let mut look_kind: int = 0;
+    let mut inline_flags_only: bool = false;
+    let saved_flags: int = p.flags;
+
+    if _peek(p) == 63 { // '?'
+        p.pos = p.pos + 1;
+        let c2: int = _peek(p);
+        if c2 == 58 { // ':'
+            p.pos = p.pos + 1;
+            capturing = false;
+        } else if c2 == 61 { // '='  lookahead pos
+            p.pos = p.pos + 1; is_look = true; look_kind = RX_AHEAD_POS;
+        } else if c2 == 33 { // '!'  lookahead neg
+            p.pos = p.pos + 1; is_look = true; look_kind = RX_AHEAD_NEG;
+        } else if c2 == 60 { // '<' — named group OR lookbehind
+            p.pos = p.pos + 1;
+            let c3: int = _peek(p);
+            if c3 == 61 { // '<=' lookbehind pos
+                p.pos = p.pos + 1; is_look = true; look_kind = RX_BEHIND_POS;
+            } else if c3 == 33 { // '<!' lookbehind neg
+                p.pos = p.pos + 1; is_look = true; look_kind = RX_BEHIND_NEG;
+            } else {
+                // named: (?<name>...)
+                let start: int = p.pos;
+                while p.pos < p.pat.len() && p.pat.at(p.pos).to_int() != 62 {
+                    p.pos = p.pos + 1;
+                }
+                if p.pos >= p.pat.len() { return _fail(p, "unterminated (?<name>"); }
+                name = p.pat.substring(start, p.pos);
+                p.pos = p.pos + 1; // past '>'
+            }
+        } else if c2 == 80 { // 'P' — Python-style (?P<name>...)
+            p.pos = p.pos + 1;
+            if _peek(p) != 60 { return _fail(p, "expected '<' after (?P"); }
+            p.pos = p.pos + 1;
+            let start: int = p.pos;
+            while p.pos < p.pat.len() && p.pat.at(p.pos).to_int() != 62 {
+                p.pos = p.pos + 1;
+            }
+            if p.pos >= p.pat.len() { return _fail(p, "unterminated (?P<name>"); }
+            name = p.pat.substring(start, p.pos);
+            p.pos = p.pos + 1;
+        } else {
+            // Inline flags (?ims) or (?ims:subpattern) or (?ims-x:subpattern)
+            let mut on: int = 0;
+            let mut off: int = 0;
+            let mut neg: bool = false;
+            while p.pos < p.pat.len() {
+                let fc: int = p.pat.at(p.pos).to_int();
+                if fc == 41 || fc == 58 { break; }
+                if fc == 45 { neg = true; p.pos = p.pos + 1; continue; }
+                let bit: int = _flag_bit(fc);
+                if bit == 0 { return _fail(p, "bad flag in (?...)"); }
+                if neg { off = off | bit; } else { on = on | bit; }
+                p.pos = p.pos + 1;
+            }
+            p.flags = (p.flags | on);
+            if off != 0 { p.flags = p.flags ^ (p.flags & off); }
+            if _peek(p) == 41 { // (?ims) — set flags from here on, emit empty concat
+                p.pos = p.pos + 1;
+                return _node_new(RX_AST_CONCAT);
+            }
+            // (?ims:subpattern) — scoped
+            if _peek(p) != 58 { return _fail(p, "expected ':' or ')' after flags"); }
+            p.pos = p.pos + 1;
+            inline_flags_only = true;
+            capturing = false;
+        }
+    }
+
+    let group_num: int = 0;
+    let mut g: int = 0;
+    if capturing && !is_look {
+        p.group_count = p.group_count + 1;
+        g = p.group_count;
+        if !name.eq("") {
+            p.name_to_idx.insert(name, g);
+            // Pad group_names to size g.
+            while p.group_names.len() < g {
+                p.group_names.push("");
+            }
+            p.group_names.set(g - 1, name);
+        } else {
+            while p.group_names.len() < g {
+                p.group_names.push("");
+            }
+        }
+    }
+
+    let body: *RxNode = _parse_alt(p);
+    if body == null { return null as *RxNode; }
+    if _peek(p) != 41 { return _fail(p, "expected ')'"); }
+    p.pos = p.pos + 1;
+
+    if inline_flags_only {
+        p.flags = saved_flags;
+        return body;
+    }
+
+    if is_look {
+        let n: *RxNode = _node_new(RX_AST_LOOK);
+        n.look_kind = look_kind;
+        n.inner = body;
+        return n;
+    }
+    if !capturing {
+        return body;
+    }
+    let n: *RxNode = _node_new(RX_AST_GROUP);
+    n.group_num = g;
+    n.group_name = name;
+    n.inner = body;
+    return n;
+}
+
+fn _flag_bit(c: int) -> int {
+    if c == 105 { return RX_FLAG_I; }
+    if c == 109 { return RX_FLAG_M; }
+    if c == 115 { return RX_FLAG_S; }
+    if c == 120 { return RX_FLAG_X; }
+    if c == 85  { return RX_FLAG_U; }
+    return 0;
+}
+
+// Parse an optional quantifier suffix on `atom`.
+fn _maybe_quantify(p: *RxParser, atom: *RxNode) -> *RxNode {
+    let c: int = _peek(p);
+    if c != 42 && c != 43 && c != 63 && c != 123 { return atom; }
+    let mut min: int = 0;
+    let mut max: int = -1;
+    if c == 42 { p.pos = p.pos + 1; }
+    else if c == 43 { p.pos = p.pos + 1; min = 1; }
+    else if c == 63 { p.pos = p.pos + 1; max = 1; }
+    else {
+        // {n} / {n,} / {n,m}
+        p.pos = p.pos + 1;
+        let mut nv: int = 0;
+        let mut any: bool = false;
+        while p.pos < p.pat.len() {
+            let dc: int = p.pat.at(p.pos).to_int();
+            if dc < 48 || dc > 57 { break; }
+            nv = nv * 10 + (dc - 48); any = true; p.pos = p.pos + 1;
+        }
+        if !any { return _fail(p, "bad quantifier"); }
+        min = nv;
+        let nc: int = _peek(p);
+        if nc == 44 { // ','
+            p.pos = p.pos + 1;
+            let mut mv: int = 0;
+            let mut mset: bool = false;
+            while p.pos < p.pat.len() {
+                let dc: int = p.pat.at(p.pos).to_int();
+                if dc < 48 || dc > 57 { break; }
+                mv = mv * 10 + (dc - 48); mset = true; p.pos = p.pos + 1;
+            }
+            if mset { max = mv; } else { max = -1; }
+        } else {
+            max = nv;
+        }
+        if _peek(p) != 125 { return _fail(p, "expected '}'"); }
+        p.pos = p.pos + 1;
+    }
+    let mut greedy: bool = true;
+    if _peek(p) == 63 { // lazy
+        p.pos = p.pos + 1;
+        greedy = false;
+    }
+    if (p.flags & RX_FLAG_U) != 0 { greedy = !greedy; }
+    let q: *RxNode = _node_new(RX_AST_QUANT);
+    q.min = min; q.max = max; q.greedy = greedy; q.inner = atom;
+    return q;
+}
+
+// ============================================================================
+// Compiler (AST -> bytecode)
+// ============================================================================
+
+pub struct RxCompiler {
+    op: *Vector<int>,
+    a:  *Vector<int>,
+    b:  *Vector<int>,
+    classes: *Vector<*CharClass>,
+    flags: int,
+}
+
+fn _compiler_new(flags: int) -> *RxCompiler {
+    let c: *RxCompiler = malloc(sizeof(RxCompiler)) as *RxCompiler;
+    let op: *Vector<int> = Vector::new();
+    let a:  *Vector<int> = Vector::new();
+    let b:  *Vector<int> = Vector::new();
+    let cs: *Vector<*CharClass> = Vector::new();
+    c.op = op; c.a = a; c.b = b; c.classes = cs;
+    c.flags = flags;
+    return c;
+}
+
+fn _emit(c: *RxCompiler, op: int, a: int, b: int) -> int {
+    let pc: int = c.op.len();
+    c.op.push(op); c.a.push(a); c.b.push(b);
+    return pc;
+}
+
+fn _patch_a(c: *RxCompiler, pc: int, v: int) { c.a.set(pc, v); }
+fn _patch_b(c: *RxCompiler, pc: int, v: int) { c.b.set(pc, v); }
+
+fn _add_class(c: *RxCompiler, cls: *CharClass) -> int {
+    let id: int = c.classes.len();
+    c.classes.push(cls);
+    return id;
+}
+
+fn _compile_node(c: *RxCompiler, n: *RxNode) {
+    if n.kind == RX_AST_LIT {
+        let v: int = n.lit;
+        if (c.flags & RX_FLAG_I) != 0 && _is_alpha(v) {
+            let cc: *CharClass = CharClass::new();
+            cc.add(_to_lower(v), _to_lower(v));
+            cc.add(_to_upper(v), _to_upper(v));
+            let id: int = _add_class(c, cc);
+            _emit(c, RX_OP_CLASS, id, 0);
+        } else {
+            _emit(c, RX_OP_CHAR, v, 0);
+        }
+        return;
+    }
+    if n.kind == RX_AST_ANY {
+        if (c.flags & RX_FLAG_S) != 0 {
+            _emit(c, RX_OP_ANY_NL, 0, 0);
+        } else {
+            _emit(c, RX_OP_ANY, 0, 0);
+        }
+        return;
+    }
+    if n.kind == RX_AST_CLASS {
+        let cls: *CharClass = n.cls;
+        if (c.flags & RX_FLAG_I) != 0 {
+            _classfold(cls);
+        }
+        let id: int = _add_class(c, cls);
+        _emit(c, RX_OP_CLASS, id, 0);
+        return;
+    }
+    if n.kind == RX_AST_CONCAT {
+        for let i: int = 0; i < n.children.len(); i++ {
+            _compile_node(c, n.children.get(i));
+        }
+        return;
+    }
+    if n.kind == RX_AST_ALT {
+        // a|b|c   ==>   SPLIT L1 L2; <a>; JMP END; L1: SPLIT L3 L4; <b>; JMP END; L3: <c>; END:
+        let nk: int = n.children.len();
+        let jmps: *Vector<int> = Vector::new();
+        let mut split_pc: int = -1;
+        for let i: int = 0; i < nk; i++ {
+            if i < nk - 1 {
+                split_pc = _emit(c, RX_OP_SPLIT, 0, 0);
+                let body_start: int = c.op.len();
+                _patch_a(c, split_pc, body_start);
+                _compile_node(c, n.children.get(i));
+                let jp: int = _emit(c, RX_OP_JMP, 0, 0);
+                jmps.push(jp);
+                let next_alt: int = c.op.len();
+                _patch_b(c, split_pc, next_alt);
+            } else {
+                _compile_node(c, n.children.get(i));
+            }
+        }
+        let end_pc: int = c.op.len();
+        for let i: int = 0; i < jmps.len(); i++ {
+            _patch_a(c, jmps.get(i), end_pc);
+        }
+        return;
+    }
+    if n.kind == RX_AST_QUANT {
+        _compile_quant(c, n);
+        return;
+    }
+    if n.kind == RX_AST_GROUP {
+        _emit(c, RX_OP_SAVE, 2 * n.group_num, 0);
+        _compile_node(c, n.inner);
+        _emit(c, RX_OP_SAVE, 2 * n.group_num + 1, 0);
+        return;
+    }
+    if n.kind == RX_AST_ANCHOR {
+        if n.anchor_kind == 1 { _emit(c, RX_OP_BOL, 0, 0); return; }
+        if n.anchor_kind == 2 { _emit(c, RX_OP_EOL, 0, 0); return; }
+        if n.anchor_kind == 3 { _emit(c, RX_OP_STR_BEG, 0, 0); return; }
+        if n.anchor_kind == 4 { _emit(c, RX_OP_STR_END, 0, 0); return; }
+        if n.anchor_kind == 5 { _emit(c, RX_OP_WORDB, 0, 0); return; }
+        if n.anchor_kind == 6 { _emit(c, RX_OP_NWORDB, 0, 0); return; }
+        return;
+    }
+    if n.kind == RX_AST_BACK {
+        _emit(c, RX_OP_BACKREF, n.backref_num, 0);
+        return;
+    }
+    if n.kind == RX_AST_LOOK {
+        // ASSERT_BEGIN(kind, end_pc); <inner>; ASSERT_END
+        let pc: int = _emit(c, RX_OP_ASSERT, n.look_kind, 0);
+        _compile_node(c, n.inner);
+        let end: int = _emit(c, RX_OP_ASRT_END, 0, 0);
+        _patch_b(c, pc, end);
+        return;
+    }
+}
+
+fn _is_alpha(b: int) -> bool {
+    if b >= 65 && b <= 90 { return true; }
+    if b >= 97 && b <= 122 { return true; }
+    return false;
+}
+fn _to_upper(b: int) -> int {
+    if b >= 97 && b <= 122 { return b - 32; }
+    return b;
+}
+
+// Apply case-folding to every range in `cls` (mutates in place).
+fn _classfold(cls: *CharClass) {
+    let n: int = cls.ranges.len();
+    let to_add: *Vector<int> = Vector::new();
+    let mut i: int = 0;
+    while i < n {
+        let lo: int = cls.ranges.get(i);
+        let hi: int = cls.ranges.get(i + 1);
+        let a_lo: int = 97; let a_hi: int = 122;
+        let A_lo: int = 65; let A_hi: int = 90;
+        // overlap with a-z?
+        let l1: int = if lo > a_lo { lo } else { a_lo };
+        let h1: int = if hi < a_hi { hi } else { a_hi };
+        if l1 <= h1 { to_add.push(l1 - 32); to_add.push(h1 - 32); }
+        // overlap with A-Z?
+        let l2: int = if lo > A_lo { lo } else { A_lo };
+        let h2: int = if hi < A_hi { hi } else { A_hi };
+        if l2 <= h2 { to_add.push(l2 + 32); to_add.push(h2 + 32); }
+        i = i + 2;
+    }
+    for let j: int = 0; j < to_add.len(); j = j + 2 {
+        cls.add(to_add.get(j), to_add.get(j + 1));
+    }
+}
+
+fn _compile_quant(c: *RxCompiler, n: *RxNode) {
+    let min: int = n.min;
+    let max: int = n.max;
+    let greedy: bool = n.greedy;
+    let inner: *RxNode = n.inner;
+
+    // Emit the mandatory `min` copies of inner.
+    for let i: int = 0; i < min; i++ {
+        _compile_node(c, inner);
+    }
+
+    if max < 0 {
+        // Unbounded: L: SPLIT body end (or end body for lazy); body; JMP L; end
+        let split_pc: int = _emit(c, RX_OP_SPLIT, 0, 0);
+        let body_start: int = c.op.len();
+        _compile_node(c, inner);
+        _emit(c, RX_OP_JMP, split_pc, 0);
+        let end_pc: int = c.op.len();
+        if greedy {
+            _patch_a(c, split_pc, body_start);
+            _patch_b(c, split_pc, end_pc);
+        } else {
+            _patch_a(c, split_pc, end_pc);
+            _patch_b(c, split_pc, body_start);
+        }
+        return;
+    }
+    // Bounded extra (max - min) copies, each optional via SPLIT.
+    let extra: int = max - min;
+    if extra < 0 { return; }
+    let split_pcs: *Vector<int> = Vector::new();
+    for let i: int = 0; i < extra; i++ {
+        let split_pc: int = _emit(c, RX_OP_SPLIT, 0, 0);
+        split_pcs.push(split_pc);
+        let body_start: int = c.op.len();
+        _compile_node(c, inner);
+        if greedy {
+            _patch_a(c, split_pc, body_start);
+            // arg_b set later to end
+        } else {
+            _patch_b(c, split_pc, body_start);
+        }
+    }
+    let end_pc: int = c.op.len();
+    for let i: int = 0; i < split_pcs.len(); i++ {
+        let pc: int = split_pcs.get(i);
+        if greedy { _patch_b(c, pc, end_pc); }
+        else      { _patch_a(c, pc, end_pc); }
+    }
+}
+
+// ============================================================================
+// Regex + Match types
+// ============================================================================
+
+pub struct Regex {
+    pub pattern: string,
+    pub flags: int,
+    pub n_groups: int,
+    op: *Vector<int>,
+    a:  *Vector<int>,
+    b:  *Vector<int>,
+    classes: *Vector<*CharClass>,
+    group_names: *Vector<string>,
+    name_to_idx: *HashMap<int>,
+}
+
+pub struct Match {
+    pub input: string,
+    pub start: int,
+    pub end: int,
+    caps: *Vector<int>,    // [start1, end1, start2, end2, ...] for groups 1..n
+    group_names: *Vector<string>,
+    name_to_idx: *HashMap<int>,
+}
+
+impl Match {
+    /// The full matched substring.
+    ///
+    /// ```glide
+    /// let m: *Match = re.find("hi world").val;
+    /// m.full();   // "hi"
+    /// ```
+    pub fn full(self: *Match) -> string {
+        return self.input.substring(self.start, self.end);
+    }
+
+    /// Returns the capture for group `i`. Group 0 is the full match.
+    /// Returns "" for missing/uncaptured groups (use `group_opt` to
+    /// distinguish missing from empty).
+    pub fn group(self: *Match, i: int) -> string {
+        if i == 0 { return self.full(); }
+        let idx: int = (i - 1) * 2;
+        if idx + 1 >= self.caps.len() { return ""; }
+        let s: int = self.caps.get(idx);
+        let e: int = self.caps.get(idx + 1);
+        if s < 0 || e < 0 { return ""; }
+        return self.input.substring(s, e);
+    }
+
+    /// Returns `some` if group `i` participated in the match.
+    pub fn group_opt(self: *Match, i: int) -> ?string {
+        if i == 0 { return some(self.full()); }
+        let idx: int = (i - 1) * 2;
+        if idx + 1 >= self.caps.len() { return none(); }
+        let s: int = self.caps.get(idx);
+        let e: int = self.caps.get(idx + 1);
+        if s < 0 || e < 0 { return none(); }
+        return some(self.input.substring(s, e));
+    }
+
+    /// Named capture lookup.
+    pub fn named(self: *Match, name: string) -> string {
+        if self.name_to_idx.contains(name) {
+            return self.group(self.name_to_idx.get(name));
+        }
+        return "";
+    }
+
+    pub fn named_opt(self: *Match, name: string) -> ?string {
+        if self.name_to_idx.contains(name) {
+            return self.group_opt(self.name_to_idx.get(name));
+        }
+        return none();
+    }
+
+    /// Number of capturing groups (excluding group 0).
+    pub fn n_groups(self: *Match) -> int {
+        return self.caps.len() / 2;
+    }
+}
+
+// ============================================================================
+// VM
+// ============================================================================
+
+// One entry on the backtrack stack.
+// kind: 0 = restore (pc, sp, n_save); 1 = save-undo (slot, old_value)
+struct VmFrame {
+    kind: int,
+    pc: int,
+    sp: int,
+    saves_mark: int,  // length of saves stack when this frame was pushed
+}
+
+// Stack of (slot, old_value) so we can roll back captures on backtrack.
+struct SaveLog {
+    slot: int,
+    old: int,
+}
+
+fn _wordy(input: string, i: int) -> bool {
+    if i < 0 || i >= input.len() { return false; }
+    return _is_word_byte(input.at(i).to_int());
+}
+
+// Run the bytecode VM on `input` starting at `start`. Returns
+// (matched, captures) — captures is a Vector with [start1, end1, ...]
+// for groups 1..n_groups. If matched is true, `end_sp` indicates the
+// match end position.
+fn _vm_run(re: *Regex, input: string, start: int, end_pc: int) -> *Vector<int> {
+    // Returns: [matched (0/1), end_sp, cap0s, cap0e, cap1s, cap1e, ...]
+    let n_caps: int = (re.n_groups + 1) * 2;
+    let saves: *Vector<int> = Vector::new();  // packed (slot, old) pairs
+    let stack_pc: *Vector<int> = Vector::new();
+    let stack_sp: *Vector<int> = Vector::new();
+    let stack_mark: *Vector<int> = Vector::new();
+    let caps: *Vector<int> = Vector::new();
+    for let i: int = 0; i < n_caps; i++ { caps.push(-1); }
+
+    let len: int = input.len();
+    let mut pc: int = 0;
+    let mut sp: int = start;
+
+    let result: *Vector<int> = Vector::new();
+    let real_end_pc: int = if end_pc < 0 { re.op.len() } else { end_pc };
+
+    while true {
+        if pc >= real_end_pc {
+            // Ran off the end — treat as failure (only OP_MATCH terminates).
+            if !_vm_backtrack(stack_pc, stack_sp, stack_mark, saves, caps) {
+                result.push(0); result.push(0);
+                return result;
+            }
+            pc = stack_pc.get(stack_pc.len() - 1);
+            sp = stack_sp.get(stack_sp.len() - 1);
+            stack_pc.pop(); stack_sp.pop(); stack_mark.pop();
+            continue;
+        }
+        let op: int = re.op.get(pc);
+        let aa: int = re.a.get(pc);
+        let bb: int = re.b.get(pc);
+
+        if op == RX_OP_MATCH {
+            result.push(1);
+            result.push(sp);
+            for let i: int = 0; i < n_caps; i++ { result.push(caps.get(i)); }
+            return result;
+        }
+        if op == RX_OP_CHAR {
+            if sp < len && input.at(sp).to_int() == aa { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_ANY {
+            if sp < len && input.at(sp).to_int() != 10 { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_ANY_NL {
+            if sp < len { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_CLASS {
+            if sp < len {
+                let cc: *CharClass = re.classes.get(aa);
+                if cc.contains(input.at(sp).to_int()) { pc = pc + 1; sp = sp + 1; continue; }
+            }
+        } else if op == RX_OP_BOL {
+            let multi: bool = (re.flags & RX_FLAG_M) != 0;
+            if sp == 0 { pc = pc + 1; continue; }
+            if multi && input.at(sp - 1).to_int() == 10 { pc = pc + 1; continue; }
+        } else if op == RX_OP_EOL {
+            let multi: bool = (re.flags & RX_FLAG_M) != 0;
+            if sp == len { pc = pc + 1; continue; }
+            if multi && input.at(sp).to_int() == 10 { pc = pc + 1; continue; }
+        } else if op == RX_OP_STR_BEG {
+            if sp == 0 { pc = pc + 1; continue; }
+        } else if op == RX_OP_STR_END {
+            if sp == len { pc = pc + 1; continue; }
+        } else if op == RX_OP_WORDB {
+            let a_w: bool = _wordy(input, sp - 1);
+            let b_w: bool = _wordy(input, sp);
+            if a_w != b_w { pc = pc + 1; continue; }
+        } else if op == RX_OP_NWORDB {
+            let a_w: bool = _wordy(input, sp - 1);
+            let b_w: bool = _wordy(input, sp);
+            if a_w == b_w { pc = pc + 1; continue; }
+        } else if op == RX_OP_JMP {
+            pc = aa; continue;
+        } else if op == RX_OP_SPLIT {
+            stack_pc.push(bb);
+            stack_sp.push(sp);
+            stack_mark.push(saves.len());
+            pc = aa; continue;
+        } else if op == RX_OP_SAVE {
+            saves.push(aa);
+            saves.push(caps.get(aa));
+            caps.set(aa, sp);
+            pc = pc + 1; continue;
+        } else if op == RX_OP_BACKREF {
+            let g: int = aa;
+            let s: int = caps.get(2 * g);
+            let e: int = caps.get(2 * g + 1);
+            if s < 0 || e < 0 {
+                // Uncaptured group — fail
+            } else {
+                let blen: int = e - s;
+                if sp + blen <= len {
+                    let mut ok: bool = true;
+                    let icase: bool = (re.flags & RX_FLAG_I) != 0;
+                    for let k: int = 0; k < blen; k++ {
+                        let ca: int = input.at(s + k).to_int();
+                        let cb: int = input.at(sp + k).to_int();
+                        if icase {
+                            if _to_lower(ca) != _to_lower(cb) { ok = false; break; }
+                        } else {
+                            if ca != cb { ok = false; break; }
+                        }
+                    }
+                    if ok { pc = pc + 1; sp = sp + blen; continue; }
+                }
+            }
+        } else if op == RX_OP_ASSERT {
+            // Run sub-VM from pc+1 until matching ASRT_END at bb.
+            let kind: int = aa;
+            let ok: bool = _run_assertion(re, input, sp, pc + 1, bb, caps, kind);
+            let want: bool = (kind == RX_AHEAD_POS || kind == RX_BEHIND_POS);
+            if ok == want { pc = bb + 1; continue; }
+        } else if op == RX_OP_ASRT_END {
+            // Reached during sub-VM (shouldn't happen at top level — treat as match).
+            // But handled inside _run_assertion via its own end_pc.
+            result.push(1); result.push(sp);
+            for let i: int = 0; i < n_caps; i++ { result.push(caps.get(i)); }
+            return result;
+        }
+
+        // Fall-through: this opcode failed. Backtrack.
+        if !_vm_backtrack(stack_pc, stack_sp, stack_mark, saves, caps) {
+            result.push(0); result.push(0);
+            return result;
+        }
+        pc = stack_pc.get(stack_pc.len() - 1);
+        sp = stack_sp.get(stack_sp.len() - 1);
+        stack_pc.pop(); stack_sp.pop(); stack_mark.pop();
+    }
+}
+
+// Pop one backtrack frame, undoing any saves logged after that frame
+// was pushed. Returns false if the stack was empty (overall failure).
+fn _vm_backtrack(stack_pc: *Vector<int>, stack_sp: *Vector<int>, stack_mark: *Vector<int>,
+                  saves: *Vector<int>, caps: *Vector<int>) -> bool {
+    if stack_pc.len() == 0 { return false; }
+    let mark: int = stack_mark.get(stack_mark.len() - 1);
+    while saves.len() > mark {
+        let old: int = saves.get(saves.len() - 1);
+        let slot: int = saves.get(saves.len() - 2);
+        caps.set(slot, old);
+        saves.pop(); saves.pop();
+    }
+    return true;
+}
+
+// Run a lookaround sub-VM. For lookahead, start at sp; for lookbehind,
+// scan input[0..sp] trying every possible start (variable-width OK).
+// Captures are inherited and updated on success.
+fn _run_assertion(re: *Regex, input: string, sp: int,
+                  body_pc: int, end_pc: int, caps: *Vector<int>, kind: int) -> bool {
+    if kind == RX_AHEAD_POS || kind == RX_AHEAD_NEG {
+        return _run_sub(re, input, sp, body_pc, end_pc, caps);
+    }
+    // Lookbehind: try every start in [0..sp] (longest first for greediness).
+    let mut start: int = sp;
+    while start >= 0 {
+        let len_before: int = caps.len();
+        let snap: *Vector<int> = Vector::new();
+        for let i: int = 0; i < len_before; i++ { snap.push(caps.get(i)); }
+        if _run_sub_anchored(re, input, start, sp, body_pc, end_pc, caps) {
+            return true;
+        }
+        // Restore captures on miss (sub_anchored may have mutated).
+        for let i: int = 0; i < len_before; i++ { caps.set(i, snap.get(i)); }
+        start = start - 1;
+    }
+    return false;
+}
+
+// Run sub-VM at body_pc..end_pc starting at sp. Succeed if reaches ASRT_END.
+fn _run_sub(re: *Regex, input: string, sp_in: int,
+             body_pc: int, end_pc: int, caps: *Vector<int>) -> bool {
+    let saves: *Vector<int> = Vector::new();
+    let stack_pc: *Vector<int> = Vector::new();
+    let stack_sp: *Vector<int> = Vector::new();
+    let stack_mark: *Vector<int> = Vector::new();
+    let len: int = input.len();
+    let mut pc: int = body_pc;
+    let mut sp: int = sp_in;
+    while true {
+        if pc == end_pc {
+            // Discard mutations on success? Most engines do; but for
+            // simplicity captures inside lookaround persist.
+            return true;
+        }
+        if pc < body_pc || pc > end_pc {
+            // Out of bounds — fail.
+            if !_vm_backtrack(stack_pc, stack_sp, stack_mark, saves, caps) { return false; }
+            pc = stack_pc.get(stack_pc.len() - 1);
+            sp = stack_sp.get(stack_sp.len() - 1);
+            stack_pc.pop(); stack_sp.pop(); stack_mark.pop();
+            continue;
+        }
+        let op: int = re.op.get(pc);
+        let aa: int = re.a.get(pc);
+        let bb: int = re.b.get(pc);
+        if op == RX_OP_ASRT_END { return true; }
+        if op == RX_OP_CHAR {
+            if sp < len && input.at(sp).to_int() == aa { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_ANY {
+            if sp < len && input.at(sp).to_int() != 10 { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_ANY_NL {
+            if sp < len { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_CLASS {
+            if sp < len {
+                let cc: *CharClass = re.classes.get(aa);
+                if cc.contains(input.at(sp).to_int()) { pc = pc + 1; sp = sp + 1; continue; }
+            }
+        } else if op == RX_OP_BOL {
+            let multi: bool = (re.flags & RX_FLAG_M) != 0;
+            if sp == 0 { pc = pc + 1; continue; }
+            if multi && input.at(sp - 1).to_int() == 10 { pc = pc + 1; continue; }
+        } else if op == RX_OP_EOL {
+            let multi: bool = (re.flags & RX_FLAG_M) != 0;
+            if sp == len { pc = pc + 1; continue; }
+            if multi && input.at(sp).to_int() == 10 { pc = pc + 1; continue; }
+        } else if op == RX_OP_STR_BEG {
+            if sp == 0 { pc = pc + 1; continue; }
+        } else if op == RX_OP_STR_END {
+            if sp == len { pc = pc + 1; continue; }
+        } else if op == RX_OP_WORDB {
+            let a_w: bool = _wordy(input, sp - 1);
+            let b_w: bool = _wordy(input, sp);
+            if a_w != b_w { pc = pc + 1; continue; }
+        } else if op == RX_OP_NWORDB {
+            let a_w: bool = _wordy(input, sp - 1);
+            let b_w: bool = _wordy(input, sp);
+            if a_w == b_w { pc = pc + 1; continue; }
+        } else if op == RX_OP_JMP {
+            pc = aa; continue;
+        } else if op == RX_OP_SPLIT {
+            stack_pc.push(bb); stack_sp.push(sp); stack_mark.push(saves.len());
+            pc = aa; continue;
+        } else if op == RX_OP_SAVE {
+            saves.push(aa); saves.push(caps.get(aa)); caps.set(aa, sp);
+            pc = pc + 1; continue;
+        } else if op == RX_OP_BACKREF {
+            let g: int = aa;
+            let s: int = caps.get(2 * g);
+            let e: int = caps.get(2 * g + 1);
+            if s >= 0 && e >= 0 {
+                let blen: int = e - s;
+                if sp + blen <= len {
+                    let mut ok: bool = true;
+                    let icase: bool = (re.flags & RX_FLAG_I) != 0;
+                    for let k: int = 0; k < blen; k++ {
+                        let ca: int = input.at(s + k).to_int();
+                        let cb: int = input.at(sp + k).to_int();
+                        if icase {
+                            if _to_lower(ca) != _to_lower(cb) { ok = false; break; }
+                        } else {
+                            if ca != cb { ok = false; break; }
+                        }
+                    }
+                    if ok { pc = pc + 1; sp = sp + blen; continue; }
+                }
+            }
+        } else if op == RX_OP_ASSERT {
+            // Nested assertion.
+            let kind2: int = aa;
+            let ok: bool = _run_assertion(re, input, sp, pc + 1, bb, caps, kind2);
+            let want: bool = (kind2 == RX_AHEAD_POS || kind2 == RX_BEHIND_POS);
+            if ok == want { pc = bb + 1; continue; }
+        }
+        // Fail; backtrack.
+        if !_vm_backtrack(stack_pc, stack_sp, stack_mark, saves, caps) { return false; }
+        pc = stack_pc.get(stack_pc.len() - 1);
+        sp = stack_sp.get(stack_sp.len() - 1);
+        stack_pc.pop(); stack_sp.pop(); stack_mark.pop();
+    }
+}
+
+// Run sub-VM starting at `start`, requiring it to consume exactly up to `end`.
+fn _run_sub_anchored(re: *Regex, input: string, start: int, end: int,
+                      body_pc: int, end_pc: int, caps: *Vector<int>) -> bool {
+    let saves: *Vector<int> = Vector::new();
+    let stack_pc: *Vector<int> = Vector::new();
+    let stack_sp: *Vector<int> = Vector::new();
+    let stack_mark: *Vector<int> = Vector::new();
+    let len: int = input.len();
+    let mut pc: int = body_pc;
+    let mut sp: int = start;
+    while true {
+        if pc == end_pc {
+            if sp == end { return true; }
+            if !_vm_backtrack(stack_pc, stack_sp, stack_mark, saves, caps) { return false; }
+            pc = stack_pc.get(stack_pc.len() - 1);
+            sp = stack_sp.get(stack_sp.len() - 1);
+            stack_pc.pop(); stack_sp.pop(); stack_mark.pop();
+            continue;
+        }
+        let op: int = re.op.get(pc);
+        let aa: int = re.a.get(pc);
+        let bb: int = re.b.get(pc);
+        if op == RX_OP_ASRT_END {
+            if sp == end { return true; }
+        } else if op == RX_OP_CHAR {
+            if sp < len && input.at(sp).to_int() == aa { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_ANY {
+            if sp < len && input.at(sp).to_int() != 10 { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_ANY_NL {
+            if sp < len { pc = pc + 1; sp = sp + 1; continue; }
+        } else if op == RX_OP_CLASS {
+            if sp < len {
+                let cc: *CharClass = re.classes.get(aa);
+                if cc.contains(input.at(sp).to_int()) { pc = pc + 1; sp = sp + 1; continue; }
+            }
+        } else if op == RX_OP_JMP {
+            pc = aa; continue;
+        } else if op == RX_OP_SPLIT {
+            stack_pc.push(bb); stack_sp.push(sp); stack_mark.push(saves.len());
+            pc = aa; continue;
+        } else if op == RX_OP_SAVE {
+            saves.push(aa); saves.push(caps.get(aa)); caps.set(aa, sp);
+            pc = pc + 1; continue;
+        } else if op == RX_OP_BOL || op == RX_OP_STR_BEG {
+            if sp == 0 { pc = pc + 1; continue; }
+        } else if op == RX_OP_EOL || op == RX_OP_STR_END {
+            if sp == len { pc = pc + 1; continue; }
+        } else if op == RX_OP_WORDB {
+            if _wordy(input, sp - 1) != _wordy(input, sp) { pc = pc + 1; continue; }
+        } else if op == RX_OP_NWORDB {
+            if _wordy(input, sp - 1) == _wordy(input, sp) { pc = pc + 1; continue; }
+        }
+        if !_vm_backtrack(stack_pc, stack_sp, stack_mark, saves, caps) { return false; }
+        pc = stack_pc.get(stack_pc.len() - 1);
+        sp = stack_sp.get(stack_sp.len() - 1);
+        stack_pc.pop(); stack_sp.pop(); stack_mark.pop();
+    }
+}
+
+// ============================================================================
+// Regex impl
+// ============================================================================
+
+impl Regex {
+    /// Compile `pattern` with no flags. Returns `!*Regex` (error
+    /// string in `err` if the pattern is invalid).
+    ///
+    /// ```glide
+    /// let r: !*Regex = Regex::compile("\\w+@\\w+\\.\\w+");
+    /// if !r.ok { println!("bad pattern:", r.err); return 1; }
+    /// ```
+    pub fn compile(pattern: string) -> !*Regex {
+        return Regex::compile_with(pattern, "");
+    }
+
+    /// Compile with flag string (any subset of `imsxU`).
+    pub fn compile_with(pattern: string, flag_str: string) -> !*Regex {
+        let mut flags: int = 0;
+        for let i: int = 0; i < flag_str.len(); i++ {
+            let bit: int = _flag_bit(flag_str.at(i).to_int());
+            if bit == 0 { return err("unknown flag in flag string"); }
+            flags = flags | bit;
+        }
+        let p: *RxParser = _parser_new(pattern, flags);
+        let ast: *RxNode = _parse_alt(p);
+        if ast == null || !p.err.eq("") {
+            return err(p.err);
+        }
+        if p.pos < p.pat.len() {
+            return err("trailing characters in pattern");
+        }
+        let c: *RxCompiler = _compiler_new(p.flags);
+        // Wrap in implicit group 0 saves so the full-match span is captured.
+        _emit(c, RX_OP_SAVE, 0, 0);
+        _compile_node(c, ast);
+        _emit(c, RX_OP_SAVE, 1, 0);
+        _emit(c, RX_OP_MATCH, 0, 0);
+        let re: *Regex = malloc(sizeof(Regex)) as *Regex;
+        re.pattern = pattern;
+        re.flags = p.flags;
+        re.n_groups = p.group_count;
+        re.op = c.op; re.a = c.a; re.b = c.b;
+        re.classes = c.classes;
+        re.group_names = p.group_names;
+        re.name_to_idx = p.name_to_idx;
+        return ok(re);
+    }
+
+    /// `true` if any substring matches the pattern.
+    ///
+    /// ```glide
+    /// let r: *Regex = Regex::compile("\\d+").val;
+    /// r.matches("hi 42 there");   // true
+    /// r.matches("nothing");        // false
+    /// ```
+    pub fn matches(self: *Regex, s: string) -> bool {
+        let m: ?*Match = self.find(s);
+        return m.has;
+    }
+
+    /// `true` if the pattern matches the entire string (anchored).
+    pub fn matches_full(self: *Regex, s: string) -> bool {
+        let m: ?*Match = self.find(s);
+        if !m.has { return false; }
+        return m.val.start == 0 && m.val.end == s.len();
+    }
+
+    /// First match, or `none`.
+    pub fn find(self: *Regex, s: string) -> ?*Match {
+        return self.find_at(s, 0);
+    }
+
+    /// First match starting at byte offset `from`.
+    pub fn find_at(self: *Regex, s: string, from: int) -> ?*Match {
+        let mut i: int = from;
+        let len: int = s.len();
+        while true {
+            if i > len { break; }
+            let r: *Vector<int> = _vm_run(self, s, i, -1);
+            if r.get(0) == 1 {
+                let end_sp: int = r.get(1);
+                let m: *Match = malloc(sizeof(Match)) as *Match;
+                m.input = s;
+                m.start = r.get(2);  // saves[0] = sp at first OP_SAVE 0
+                m.end = r.get(3);
+                let caps: *Vector<int> = Vector::new();
+                for let k: int = 4; k < r.len(); k++ { caps.push(r.get(k)); }
+                m.caps = caps;
+                m.group_names = self.group_names;
+                m.name_to_idx = self.name_to_idx;
+                if m.start < 0 { m.start = i; }
+                if m.end < 0 { m.end = end_sp; }
+                return some(m);
+            }
+            i = i + 1;
+        }
+        return none();
+    }
+
+    /// All non-overlapping matches. Empty matches advance by one byte
+    /// to avoid infinite loops.
+    pub fn find_all(self: *Regex, s: string) -> *Vector<*Match> {
+        let out: *Vector<*Match> = Vector::new();
+        let mut i: int = 0;
+        let len: int = s.len();
+        while true {
+            let m: ?*Match = self.find_at(s, i);
+            if !m.has { break; }
+            let mt: *Match = m.val;
+            out.push(mt);
+            if mt.end == mt.start { i = mt.end + 1; }
+            else                  { i = mt.end; }
+            if i > len { break; }
+        }
+        return out;
+    }
+
+    /// Replace the first match. `repl` supports `$0..$9` backreferences
+    /// and `$$` for a literal `$`.
+    pub fn replace(self: *Regex, s: string, repl: string) -> string {
+        let m: ?*Match = self.find(s);
+        if !m.has { return s; }
+        let mt: *Match = m.val;
+        let before: string = s.substring(0, mt.start);
+        let after: string = s.substring(mt.end, s.len());
+        return before.concat(_expand_repl(repl, mt)).concat(after);
+    }
+
+    /// Replace every non-overlapping match.
+    pub fn replace_all(self: *Regex, s: string, repl: string) -> string {
+        let all: *Vector<*Match> = self.find_all(s);
+        if all.len() == 0 { return s; }
+        let mut out: string = "";
+        let mut last: int = 0;
+        for let i: int = 0; i < all.len(); i++ {
+            let mt: *Match = all.get(i);
+            out = out.concat(s.substring(last, mt.start));
+            out = out.concat(_expand_repl(repl, mt));
+            last = mt.end;
+        }
+        out = out.concat(s.substring(last, s.len()));
+        return out;
+    }
+
+    /// Replace each match with the result of `f(match)`.
+    pub fn replace_with(self: *Regex, s: string, f: fn(*Match) -> string) -> string {
+        let all: *Vector<*Match> = self.find_all(s);
+        if all.len() == 0 { return s; }
+        let mut out: string = "";
+        let mut last: int = 0;
+        for let i: int = 0; i < all.len(); i++ {
+            let mt: *Match = all.get(i);
+            out = out.concat(s.substring(last, mt.start));
+            out = out.concat(f(mt));
+            last = mt.end;
+        }
+        out = out.concat(s.substring(last, s.len()));
+        return out;
+    }
+
+    /// Split `s` on every non-overlapping match of this regex.
+    pub fn split(self: *Regex, s: string) -> *Vector<string> {
+        let out: *Vector<string> = Vector::new();
+        let all: *Vector<*Match> = self.find_all(s);
+        let mut last: int = 0;
+        for let i: int = 0; i < all.len(); i++ {
+            let mt: *Match = all.get(i);
+            out.push(s.substring(last, mt.start));
+            last = mt.end;
+        }
+        out.push(s.substring(last, s.len()));
+        return out;
+    }
+}
+
+// Expand $0..$9 and ${name} in `repl` using `m`.
+fn _expand_repl(repl: string, m: *Match) -> string {
+    let mut out: string = "";
+    let n: int = repl.len();
+    let mut i: int = 0;
+    while i < n {
+        let c: int = repl.at(i).to_int();
+        if c == 36 && i + 1 < n { // '$'
+            let nx: int = repl.at(i + 1).to_int();
+            if nx == 36 { out = out.concat("$"); i = i + 2; continue; }
+            if nx >= 48 && nx <= 57 {
+                let g: int = nx - 48;
+                out = out.concat(m.group(g));
+                i = i + 2; continue;
+            }
+            if nx == 123 { // ${name}
+                let mut j: int = i + 2;
+                while j < n && repl.at(j).to_int() != 125 { j = j + 1; }
+                if j < n {
+                    let nm: string = repl.substring(i + 2, j);
+                    out = out.concat(m.named(nm));
+                    i = j + 1; continue;
+                }
+            }
+        }
+        out = out.concat(repl.substring(i, i + 1));
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================================
+// Free-function convenience API
+// ============================================================================
+
+/// Shorthand for `Regex::compile(pat).val.matches(s)`. Compiles on every
+/// call — prefer keeping a `*Regex` around for hot loops.
+pub fn regex_matches(pat: string, s: string) -> bool {
+    let r: !*Regex = Regex::compile(pat);
+    if !r.ok { return false; }
+    return r.val.matches(s);
+}
+
+/// Shorthand for `Regex::compile(pat).val.find(s)`.
+pub fn regex_find(pat: string, s: string) -> ?*Match {
+    let r: !*Regex = Regex::compile(pat);
+    if !r.ok { return none(); }
+    return r.val.find(s);
+}
+
+/// Shorthand for `Regex::compile(pat).val.replace_all(s, repl)`.
+pub fn regex_replace_all(pat: string, s: string, repl: string) -> string {
+    let r: !*Regex = Regex::compile(pat);
+    if !r.ok { return s; }
+    return r.val.replace_all(s, repl);
+}
