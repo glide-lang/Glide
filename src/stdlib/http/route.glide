@@ -137,15 +137,28 @@ fn _emit_register_body(method: string, path: string, handler: string,
 // main has return type `!int` so listen's `bind failed` propagates
 // through Phase 0's wrapper into a non-zero exit code.
 @proc_attr(listen)
+@proc_attr(listen_workers)
 fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
     let mut port: int = 8080;
+    let mut workers: int = 1;  // 0 means "use r.listen" (single-thread serial/coro)
     if s.attrs != null {
         for let i: int = 0; i < s.attrs.len(); i++ {
             let a: Attr = s.attrs.get(i);
-            if !a.name.eq("listen") { continue; }
+            if !a.name.eq("listen") && !a.name.eq("listen_workers") { continue; }
+            let multi: bool = a.name.eq("listen_workers");
             if a.args != null && a.args.len() > 0 {
                 let pe: Expr = a.args.get(0);
                 if pe.kind == EX_INT { port = pe.int_val as int; }
+            }
+            if multi {
+                if a.args != null && a.args.len() >= 2 {
+                    let ne: Expr = a.args.get(1);
+                    if ne.kind == EX_INT { workers = ne.int_val as int; }
+                } else {
+                    workers = 4;   // sensible default if user wrote @listen_workers(port)
+                }
+            } else {
+                workers = 0;
             }
             break;
         }
@@ -199,11 +212,15 @@ fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
         }
     }
 
-    // return r.listen(port);
+    // return r.listen(port);    // @listen
+    // or
+    // return r.listen_workers(port, n);   // @listen_workers
     let listen_args: *Vector<Expr> = Vector::new();
     listen_args.push(*expr_int(port, 0, 0));
+    let method_name: string = if workers > 0 { "listen_workers" } else { "listen" };
+    if workers > 0 { listen_args.push(*expr_int(workers, 0, 0)); }
     let listen_call: *Expr = expr_call(
-        expr_member(expr_ident_unsafe("r", 0, 0), "listen"),
+        expr_member(expr_ident_unsafe("r", 0, 0), method_name),
         listen_args);
     new_body.push(*stmt_return(listen_call, 0, 0));
 
