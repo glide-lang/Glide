@@ -135,39 +135,45 @@ static void* __glide_uring_loop(void* arg) {
     return NULL;
 }
 
-static int __glide_uring_init(void) {
-    int once_done = atomic_load_explicit(&__glide_uring_ready, memory_order_acquire);
-    if (once_done) return once_done > 0;
+static pthread_once_t __glide_uring_init_once = PTHREAD_ONCE_INIT;
+static void __glide_uring_init_inner(void) {
     const char* env = getenv("GLIDE_REACTOR");
     if (!env || strcmp(env, "uring") != 0) {
         atomic_store_explicit(&__glide_uring_ready, -1, memory_order_release);
-        return 0;
+        return;
     }
     struct io_uring_params p;
     memset(&p, 0, sizeof(p));
-    /* Try SQPOLL first: kernel polls the SQ on its own thread, so we
-       skip the io_uring_enter syscall entirely in steady state. */
-    p.flags = IORING_SETUP_SQPOLL;
-    p.sq_thread_idle = 2000;   /* ms before kernel SQ poller sleeps */
+    /* Try SQPOLL first (kernel polls SQ → zero syscalls). On kernels
+       or container configs that block IORING_SETUP_SQPOLL (needs
+       CAP_SYS_NICE on <5.13), fall back to plain mode where each
+       submit costs one io_uring_enter syscall. */
+    const char* nosq = getenv("GLIDE_URING_NOSQPOLL");
+    if (!nosq) {
+        p.flags = IORING_SETUP_SQPOLL;
+        p.sq_thread_idle = 2000;
+    }
     int r = io_uring_queue_init_params(4096, &__glide_ring, &p);
     if (r < 0) {
         memset(&p, 0, sizeof(p));
         r = io_uring_queue_init_params(4096, &__glide_ring, &p);
         if (r < 0) {
             atomic_store_explicit(&__glide_uring_ready, -1, memory_order_release);
-            return 0;
+            return;
         }
     }
     atomic_store_explicit(&__glide_uring_running, 1, memory_order_release);
     pthread_create(&__glide_uring_thr, NULL, __glide_uring_loop, NULL);
     pthread_detach(__glide_uring_thr);
     atomic_store_explicit(&__glide_uring_ready, 1, memory_order_release);
-    return 1;
 }
 
 static inline int __glide_uring_active(void) {
     int v = atomic_load_explicit(&__glide_uring_ready, memory_order_acquire);
-    if (v == 0) v = __glide_uring_init() ? 1 : -1;
+    if (v == 0) {
+        pthread_once(&__glide_uring_init_once, __glide_uring_init_inner);
+        v = atomic_load_explicit(&__glide_uring_ready, memory_order_acquire);
+    }
     return v > 0;
 }
 
