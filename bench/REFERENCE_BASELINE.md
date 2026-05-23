@@ -20,6 +20,61 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
+## HTTP state-machine fast path with @leaf handler (2026-05-23)
+
+The C state-machine HTTP server (`bench/http_sm_hello.glide`) was
+already running at 178k req/s — but only with a hardcoded "hello!"
+response. To make it useful, expose a hook for user `@leaf` handlers:
+
+```glide
+@leaf
+fn hello(_method: string, _path: string) -> string {
+    return "hello\n";
+}
+
+fn main() -> int {
+    http_listen_sm_workers(8080, 4, hello);
+    return 0;
+}
+```
+
+Each worker is a real pthread running its own epoll loop + per-conn
+state machine in C. When a request finishes parsing, the C code
+inlines a call into the user's `@leaf` handler. The handler returns
+the body as a Glide string; the C framing emits 200 OK + text/plain
+headers around it. No coro spawn, no stack page commit, no
+ctx_switch. The `@leaf` contract enforces that the handler can't
+park — runtime aborts if it tries.
+
+Median across 3 runs, 4 workers, 2 wrk threads / 200 conns / 5s:
+
+| Server | req/s | vs Glide coro-per-conn | vs Axum |
+|---|---|---|---|
+| **Axum (Tokio 0.7)** | 189 007 | 1.76× | 1.00× |
+| **Glide SM + @leaf** | **180 781** | **1.68×** | **0.95×** |
+| nginx 4w | 174 138 | 1.62× | 0.92× |
+| Glide SM hardcoded | 178 527 | 1.66× | 0.94× |
+| Glide handler coro-per-conn | 107 424 | 1.00× | 0.57× |
+
+The handler call overhead is essentially zero — 180k with user
+@leaf handler ≈ 178k hardcoded "hello!". The C trampoline + Glide
+string return path adds ~0% cost vs a hand-coded C response.
+
+**Why this is the win:** the 70% gap to Axum that existed in
+`http_listen` (coro-per-conn) was almost entirely the coro layer,
+not syscalls or HTTP parsing. Stripping the coro and inlining the
+handler lands Glide within 5% of Axum on hello-world HTTP/1.1.
+
+Restrictions:
+- Linux only (epoll-based). macOS / *BSD / Windows fall through.
+- Handler MUST be `@leaf` — no chan, sleep, I/O, or non-leaf calls.
+- Response is text/plain + status 200. Full
+  `HttpRequest`/`HttpResponse` API stays on the coro-per-conn path
+  for cases that need other status codes / content types / headers.
+
+For health checks, hot JSON endpoints, prometheus scrapers, this is
+the fast path. Use `http_listen_workers` for full-feature handlers.
+
 ## io_uring backend (2026-05-23, Linux 6.8, liburing 2.5)
 
 Opt-in via `GLIDE_REACTOR=uring`. SQPOLL mode by default — kernel
@@ -84,6 +139,7 @@ of them, accept queues stay shallow under load.
 | **park_unpark_coro_clean** ns/cycle, default | 3 140 | 267 | 159 | spin-budget tradeoff |
 | **massive_concurrency** bytes/task (regular coro, 100k parked, Linux) | 4 288 | 9 051 | 403 | tokio 10× lighter than regular coro |
 | **leaf_footprint** bytes/task (`@leaf` task, 100k–1M, Linux) | **192** | n/a (Go has no stackless variant) | 403 | **Glide leaf wins** (2.1× lighter than tokio) |
+| **HTTP hello req/s** (`http_listen_sm_workers` + `@leaf`, 4 cores) | **180 781** | — (no Go equiv) | 189 007 (Axum) | **Glide at 95% of Axum** |
 
 ### Original pre-Phase-A baseline (for diff)
 
