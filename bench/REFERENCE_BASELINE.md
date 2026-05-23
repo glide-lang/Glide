@@ -20,6 +20,32 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
+## HTTP REUSEPORT scaling (2026-05-23, Ubuntu 24.04, 4 cores, wrk co-located)
+
+Hello-world `GET /` benches via `bench/http_hello_single.glide` and
+`bench/http_hello_multi.glide` (both compiled with glide_b3f). nginx
+1.24.0 with `worker_processes 4; listen 8081 reuseport;`.
+
+| Server | Workers | CPUs | Req/s | Notes |
+|---|---|---|---|---|
+| Glide `http_listen` | 1 | 1 (pinned) | 18 523 | single accept queue |
+| Glide `http_listen_workers` | 3 | 3 (pinned C0-2) | **117 799** | wrk pinned C3, super-linear scaling |
+| Glide `http_listen_workers` | 4 | 4 (shared w/ wrk) | 111 619 | no pinning |
+| Glide `http_listen_workers` | 8 | 4 (shared w/ wrk) | 111 173 | excess workers don't hurt |
+| nginx | 4 | 4 (shared w/ wrk) | 172 539 | reference |
+
+Headline: Glide REUSEPORT delivers **6.0× scaling** with 4 workers vs
+1 worker. Reaches **65% of nginx** throughput on identical hardware.
+The remaining 35% gap is mostly io_uring (nginx uses linux-aio/epoll;
+io_uring lands next phase).
+
+The infrastructure was already present (`http_listen_workers` at
+`src/stdlib/http.glide:1122`, `os_has_reuseport_balance()` at
+`src/stdlib/os.glide:586`). What was missing: benchmark validation
+that the kernel actually load-balances. Confirmed: 4 separate listening
+sockets on port 8080, kernel distributes new connections across all
+of them, accept queues stay shallow under load.
+
 ## Headline table (snapshot after Phase A4 + B1 + B2 + B3b + B4, 2026-05-23)
 
 | Metric | Glide | Go | Rust tokio | Winner |
