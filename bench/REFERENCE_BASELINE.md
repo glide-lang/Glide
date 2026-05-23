@@ -20,7 +20,16 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
-## Headline table
+## Headline table (snapshot after Phase A4 + B1 + B2, 2026-05-23)
+
+| Metric | Glide | Go | Rust tokio | Winner |
+|---|---|---|---|---|
+| **spawn_1m total ms** (1M tasks created, drained) | **113 Win / 160 Lin** | 107 | 515 | Go ≈ Glide (Rust 5× slower) |
+| **park_unpark_coro_clean** ns/cycle, `GLIDE_CHAN_SPIN=0` | **270** | 267 | 159 | Rust > Go ≈ Glide |
+| **park_unpark_coro_clean** ns/cycle, default | 3 200 | 267 | 159 | spin-budget tradeoff |
+| **massive_concurrency** bytes/task (100k parked, Linux) | 4 288 | 9 051 | **403** | tokio 10× lighter than Glide, Glide 2.1× lighter than Go |
+
+### Original pre-Phase-A baseline (for diff)
 
 | Metric | Glide | Go | Rust tokio | Winner |
 |---|---|---|---|---|
@@ -243,7 +252,7 @@ not RSS — Linux only commits the touched pages. A parker function
 that does nothing touches 1 page of stack, so RSS ≈ task struct
 (few hundred B) + the chan-waiter slot + amortised reactor entry.
 
-### park_unpark_coro_clean on Linux
+### park_unpark_coro_clean on Linux — pre Phase B
 
 | Mode | ns/cycle |
 |---|---|
@@ -255,9 +264,27 @@ is more expensive when the wake target is a parked worker thread
 than the Windows equivalent. Pinning doesn't help because the cost
 is in the cv-wake itself, not in cross-core migration.
 
-This 23 µs/cycle is what Phase B reduces to ~200 ns by lowering
-leaf-fn coros into a state machine that runs directly on the
-spawning thread (no cv-wake at all).
+### park_unpark_coro_clean on Linux — after Phase B1 + B2 (2026-05-23)
+
+| Mode | ns/cycle | vs Go |
+|---|---|---|
+| `GLIDE_CHAN_SPIN=0` (multi or single worker) | **270** | tied (Go 267) |
+| Default (spin=32 multi-worker) | 3 200 | 12× slower |
+| `GLIDE_CHAN_SPIN=8` (intermediate) | 1 020 | 4× slower |
+
+The Phase B improvement came from two stacked fixes:
+- **B1**: chan slow-path spin budget dropped from 256 PAUSEs to 32
+  by default (n_workers==1 → 0). Each PAUSE on this host costs
+  ~80 ns; 256 PAUSEs per chan op was ~13 µs of pure waste when
+  the producer was the same thread.
+- **B2**: per-worker `runnext` slot bypasses the queue spinlock +
+  cv-signal path when an unparker pushes to its own worker
+  (mirrors Go's runtime2.go `P.runnext`).
+
+The default `spin=32` cost (3.2 µs) is intentional — it's a budget
+for cross-core handoffs in HTTP-style workloads where a producer
+on another core is about to push within ~1 µs. Override via
+`GLIDE_CHAN_SPIN=N` (clamps to [0, 1024]).
 
 ### Stack-grow handler — POSIX status
 
