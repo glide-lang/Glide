@@ -11,4 +11,6 @@ fn root() -> HttpResponse {
 }
 
 @listen_workers(8080, 4)
-fn main() { }
+fn main() {
+    println!("main body executing");
+}
