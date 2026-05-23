@@ -2618,7 +2618,23 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             cmd = cmd.concat(" -l:libngtcp2_crypto_ossl.a -l:libngtcp2.a -l:libnghttp3.a");
             cmd = cmd.concat(" -l:libssl.a -l:libcrypto.a -l:libz.a");
         } else {
-            cmd = cmd.concat(" -lssl -lcrypto -lz -lngtcp2 -lngtcp2_crypto_ossl -lnghttp3");
+            // Order matters for static-lib resolution: linker is one-pass
+            // left-to-right and pulls .o files from a -l only to resolve
+            // refs seen earlier. `-lngtcp2_crypto_ossl` references symbols
+            // from `-lngtcp2`, so the crypto lib MUST come first.
+            //
+            // The OpenSSL 3.5+ build of ngtcp2 (required for h3.glide's
+            // `ngtcp2_crypto_ossl_*` symbols) typically lives at
+            // /usr/local/lib while system apt may ship an older
+            // libngtcp2 that lacks the *_2-suffixed API. Add the local
+            // prefixes explicitly so they come first in search.
+            if fs_exists("/usr/local/lib/libngtcp2_crypto_ossl.a") {
+                cmd = cmd.concat(" -L/usr/local/lib");
+            }
+            if fs_exists("/opt/openssl35/lib/libssl.so") {
+                cmd = cmd.concat(" -I/opt/openssl35/include -L/opt/openssl35/lib -Wl,-rpath,/opt/openssl35/lib");
+            }
+            cmd = cmd.concat(" -lngtcp2_crypto_ossl -lngtcp2 -lnghttp3 -lssl -lcrypto -lz");
         }
     } else if _has_target_sysroot(target) {
         let sysroot: string = _target_dir(target);
