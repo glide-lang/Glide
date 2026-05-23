@@ -1,4 +1,4 @@
-// Macro test — empty user body, no println.
+// Macro test — explicit int main.
 import stdlib::http::*;
 import stdlib::http::router::*;
 import stdlib::http::handler::*;
@@ -10,4 +10,6 @@ fn root() -> HttpResponse {
 }
 
 @listen(9999)
-fn main() { }
+fn main() -> int {
+    return 0;
+}
