@@ -1,0 +1,14 @@
+// Smoke test for the @listen_workers macro. main() is empty — the
+// macro injects Router::new + route registrations + r.listen_workers.
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::handler::*;
+import stdlib::http::route::*;
+
+@get("/")
+fn root() -> HttpResponse {
+    return HttpResponse::ok().body("hello\n");
+}
+
+@listen_workers(8080, 4)
+fn main() { }
