@@ -578,8 +578,29 @@ static void __glide_coro_destroy(__glide_task* t) {
     t->stack_total = 0;
 }
 
+static atomic_int __glide_pin_workers_enabled = 0;
+static void __glide_maybe_pin_worker(int wid) {
+    if (!atomic_load_explicit(&__glide_pin_workers_enabled, memory_order_relaxed)) return;
+    /* Pin worker `wid` to CPU `wid % ncpu`. Eliminates the OS scheduler
+       migrations that produce 100x bimodal latency on micro-benches.
+       Default off; bench harness sets GLIDE_PIN_WORKERS=1 at sched
+       init. Real workloads usually don't want this (preempts the OS's
+       load-balancing) - it's a measurement tool. */
+#ifdef _WIN32
+    DWORD_PTR mask = ((DWORD_PTR)1) << (wid & 63);
+    SetThreadAffinityMask(GetCurrentThread(), mask);
+#elif defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(wid % CPU_SETSIZE, &set);
+    pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+#endif
+    /* macOS / *BSD: no portable per-thread affinity. Skip. */
+}
+
 static void* __glide_worker_main(void* arg) {
     __glide_my_worker = (int)(intptr_t)arg;
+    __glide_maybe_pin_worker(__glide_my_worker);
 #ifdef _WIN32
     /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit
        to the coro's region while it runs and back to ours between switches. */
@@ -655,6 +676,10 @@ void __glide_sched_init(void) {
     if (env_stk) {
         int n = atoi(env_stk);
         if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */
+    }
+    const char* env_pin = getenv("GLIDE_PIN_WORKERS");
+    if (env_pin && env_pin[0] != 0 && env_pin[0] != '0') {
+        atomic_store_explicit(&__glide_pin_workers_enabled, 1, memory_order_relaxed);
     }
     const char* env = getenv("GLIDE_WORKERS");
     if (env) __glide_n_workers = atoi(env);

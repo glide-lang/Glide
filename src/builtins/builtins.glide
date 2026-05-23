@@ -411,8 +411,54 @@ c_raw! {
         if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return -1;
         return (int)(pmc.WorkingSetSize / (1024*1024));
     }
+    long long __glide_proc_rss_bytes(void) {
+        PROCESS_MEMORY_COUNTERS pmc;
+        if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return -1;
+        return (long long)pmc.WorkingSetSize;
+    }
+    #elif defined(__linux__)
+    /* /proc/self/statm: size resident shared text lib data dt
+       resident is the second field, in pages. */
+    int __glide_proc_rss_mb(void) {
+        FILE* f = fopen("/proc/self/statm", "r");
+        if (!f) return -1;
+        long sz = 0, res = 0;
+        if (fscanf(f, "%ld %ld", &sz, &res) != 2) { fclose(f); return -1; }
+        fclose(f);
+        long page = sysconf(_SC_PAGESIZE);
+        if (page <= 0) page = 4096;
+        return (int)((long long)res * page / (1024 * 1024));
+    }
+    long long __glide_proc_rss_bytes(void) {
+        FILE* f = fopen("/proc/self/statm", "r");
+        if (!f) return -1;
+        long sz = 0, res = 0;
+        if (fscanf(f, "%ld %ld", &sz, &res) != 2) { fclose(f); return -1; }
+        fclose(f);
+        long page = sysconf(_SC_PAGESIZE);
+        if (page <= 0) page = 4096;
+        return (long long)res * page;
+    }
+    #elif defined(__APPLE__)
+    /* Mach task_info: TASK_BASIC_INFO has resident_size. */
+    #include <mach/mach.h>
+    int __glide_proc_rss_mb(void) {
+        struct mach_task_basic_info info;
+        mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+        if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                      (task_info_t)&info, &count) != KERN_SUCCESS) return -1;
+        return (int)(info.resident_size / (1024 * 1024));
+    }
+    long long __glide_proc_rss_bytes(void) {
+        struct mach_task_basic_info info;
+        mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+        if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                      (task_info_t)&info, &count) != KERN_SUCCESS) return -1;
+        return (long long)info.resident_size;
+    }
     #else
     int __glide_proc_rss_mb(void) { return -1; }
+    long long __glide_proc_rss_bytes(void) { return -1; }
     #endif
 }
 
@@ -427,3 +473,22 @@ pub extern fn __glide_pfree(p: *void);
 pub extern fn __glide_palloc_total_bytes() -> int;
 pub extern fn __glide_palloc_chunks() -> int;
 pub extern fn __glide_proc_rss_mb() -> int;
+pub extern fn __glide_proc_rss_bytes() -> i64;
+
+/// Resident-set size of the current process in megabytes (1 MiB =
+/// 1024×1024). Returns -1 if the platform doesn't expose it.
+///
+/// ```glide
+/// println!("rss:", mem_rss_mb(), "MB");
+/// ```
+pub fn mem_rss_mb() -> int { return __glide_proc_rss_mb(); }
+
+/// Resident-set size of the current process in bytes. Returns -1 if
+/// the platform doesn't expose it. Useful for per-task memory math
+/// (divide by N tasks for bytes-per-task).
+///
+/// ```glide
+/// let rss: i64 = mem_rss_bytes();
+/// println!("per-task:", rss / (n as i64), "bytes");
+/// ```
+pub fn mem_rss_bytes() -> i64 { return __glide_proc_rss_bytes(); }
