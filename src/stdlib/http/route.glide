@@ -139,6 +139,7 @@ fn _emit_register_body(method: string, path: string, handler: string,
 @proc_attr(listen)
 @proc_attr(listen_workers)
 fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
+    println!("[impl_listen] firing on fn name=", s.name);
     let mut port: int = 8080;
     let mut workers: int = 1;  // 0 means "use r.listen" (single-thread serial/coro)
     if s.attrs != null {
