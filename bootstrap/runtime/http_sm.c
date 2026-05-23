@@ -34,6 +34,11 @@ extern void  hp_glide_free(void* g);
 extern const char* hp_glide_method(void* g);
 extern const char* hp_glide_path(void* g);
 
+/* TLS flag the runtime's park guard checks. When non-zero, __glide_park
+   knows it's running inside an SM HTTP handler and aborts instead of
+   falling through to cond_wait (which would hang the worker pthread). */
+extern _Thread_local int __glide_in_sm_handler;
+
 /* User-supplied @leaf handler. Called inline on the worker's epoll
    thread when a request finishes parsing. Returns the response body
    as a NUL-terminated Glide string; the SM framing emits 200 OK +
@@ -141,10 +146,14 @@ static int sm_advance_read(sm_conn_t* c) {
     int consumed  = hp_glide_consumed(g);
 
     /* Rich-API dispatch: Glide-side trampoline builds HttpRequest,
-       invokes the user @leaf handler, returns pre-formatted response
-       bytes. C side just copies + writes. */
+       invokes the user handler, returns pre-formatted response bytes.
+       C side just copies + writes. The __glide_in_sm_handler flag
+       guards against handlers that try to park (the runtime's park
+       path aborts with a friendly message). */
     if (g_sm_dispatch != NULL) {
+        __glide_in_sm_handler = 1;
         const char* resp = g_sm_dispatch(g, g_sm_user_handler, c->keep_alive);
+        __glide_in_sm_handler = 0;
         hp_glide_free(g);
         int leftover = c->read_len - consumed;
         if (leftover < 0) leftover = 0;

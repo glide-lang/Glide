@@ -1101,28 +1101,26 @@ fn _handle_tls_dispatch(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse
     _handle_tls_conn(s, handler);
 }
 
-/// Multi-worker HTTP/1.1 server, state-machine fast path.
+/// Multi-worker HTTP/1.1 server — the standard, fast path.
 ///
 /// Each worker is a real pthread running its own epoll loop + per-conn
-/// state machine in C. Requests are parsed in C; the handler is
-/// invoked inline on the worker's epoll thread when a request
-/// finishes parsing — no coroutine spawn, no per-conn stack page,
-/// no ctx_switch. Reaches ~95% of Axum/Tokio on hello-world HTTP/1.1
-/// (~180k req/s on a 4-core box).
+/// state machine in C. The handler is invoked inline on the worker's
+/// epoll thread — no coroutine spawn, no per-conn stack page, no
+/// ctx_switch. Reaches ~84% of Axum/Tokio on hello-world HTTP/1.1
+/// (~159k req/s on a 4-core box).
 ///
-/// **The handler MUST be `@leaf`.** That means: no `chan.send` / `chan.recv`,
-/// no `sleep_ms`, no I/O that parks (TCP/HTTP client calls, file reads
-/// via the async reactor, etc). If the handler reaches `__glide_park`
-/// at runtime, the SM worker aborts with a clear error. For handlers
-/// that need to park (database queries, downstream HTTP, etc), use
-/// `http_listen_workers_coro` instead — same signature, slower (~107k
-/// req/s) but unrestricted.
+/// **Handlers must be non-blocking.** That means: no `chan.send` /
+/// `chan.recv`, no `sleep_ms`, no I/O that parks (TCP/HTTP client
+/// calls, file reads via the async reactor, etc). If the handler
+/// tries to block, the runtime aborts with a friendly message
+/// pointing at `http_listen_workers_blocking` — a coroutine-per-conn
+/// variant that accepts handlers which do park, at lower throughput
+/// (~107k req/s).
 ///
-/// Linux only for now (epoll-based). On macOS / *BSD / Windows the
-/// function falls back to the coroutine path automatically.
+/// Linux only for the fast path (epoll-based). On macOS / *BSD /
+/// Windows the function automatically routes to the blocking variant.
 ///
 /// ```glide
-/// @leaf
 /// fn root(req: *HttpRequest) -> HttpResponse {
 ///     return HttpResponse::ok().body("hello, ".concat(req.path));
 /// }
@@ -1141,22 +1139,24 @@ pub fn http_listen_workers(port: int, n: int,
                                                   _glide_sm_dispatch,
                                                   handler as *void);
     if sm_rc >= 0 { return ok(0); }
-    return http_listen_workers_coro(port, n, handler);
+    return http_listen_workers_blocking(port, n, handler);
 }
 
-/// Coroutine-per-conn HTTP/1.1 server — the unrestricted path for
-/// handlers that need to park (chan ops, sleep, downstream I/O).
-/// Slower than `http_listen_workers` (~107k vs ~180k req/s on the
-/// reference 4-core box) but accepts arbitrary handlers, including
-/// ones not marked `@leaf`.
+/// Coroutine-per-conn HTTP/1.1 server — the **blocking-capable** path
+/// for handlers that genuinely need to park inside the request flow
+/// (database queries, downstream HTTP, chan synchronisation, etc).
+/// Spawns a coro per accepted connection so blocking ops inside the
+/// handler are safe — they park that connection's coro, not the
+/// underlying worker thread. Slower than `http_listen_workers`
+/// (~107k vs ~159k req/s on the reference 4-core box) but unrestricted.
 ///
 /// Two strategies depending on whether the OS kernel actually
 /// load-balances accepts when N processes bind with SO_REUSEPORT:
 /// Linux balances → each worker owns its own listener; macOS /
 /// *BSD / Windows share a single listener fd across N accept
 /// threads.
-pub fn http_listen_workers_coro(port: int, n: int,
-                                handler: fn(*HttpRequest) -> HttpResponse) -> !int {
+pub fn http_listen_workers_blocking(port: int, n: int,
+                                    handler: fn(*HttpRequest) -> HttpResponse) -> !int {
     if os_has_reuseport_balance() {
         let probe: *Listener = Listener::bind_reuseport(port);
         if !probe.ok() { return err("bind failed"); }

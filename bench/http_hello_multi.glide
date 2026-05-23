@@ -3,7 +3,6 @@
 import stdlib::http::*;
 import stdlib::env::*;
 
-@leaf
 fn hello(_req: *HttpRequest) -> HttpResponse {
     let res: HttpResponse = HttpResponse::ok();
     return res.body("hello\n");

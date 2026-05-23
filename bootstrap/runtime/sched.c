@@ -594,6 +594,14 @@ static _Thread_local int __glide_my_worker = -1;
    to the queue. Mirrors Go's runnext optimisation: chan handoff inside
    the same P stays in registers / L1 without touching shared state. */
 static _Thread_local __glide_task* __glide_run_next = NULL;
+
+/* Set to 1 while an SM HTTP worker is inside a user handler. The
+   __glide_park path checks this and aborts if the handler tries to
+   block on chan/sleep/I/O — the SM thread isn't a coro, has no task
+   ctx, and would otherwise hang the entire worker on cond_wait. The
+   abort gives the user an actionable message pointing them at
+   http_listen_workers_blocking. */
+_Thread_local int __glide_in_sm_handler = 0;
 /* Worker's saved context. Each OS thread has its own — when a coro
    parks/yields, we ctx_switch INTO this so the worker resumes its
    loop right after the call site. */
@@ -1585,6 +1593,20 @@ void __glide_perf_dump(void) {
 int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
     __glide_task* t = __glide_cur_task;
     if (!t) {
+        /* Inside an SM HTTP worker's user handler — the worker pthread
+           has no task struct and can't ctx_switch. Falling through to
+           cond_wait would deadlock the entire worker. Abort with a
+           message pointing the user at the blocking-capable variant. */
+        if (__glide_in_sm_handler) {
+            if (lock) pthread_mutex_unlock(lock);
+            fprintf(stderr,
+                "[glide] FATAL: HTTP handler tried to park (chan / sleep / I/O).\n"
+                "  http_listen_workers handlers must be non-blocking. Either:\n"
+                "    - remove the blocking call from the handler\n"
+                "    - or switch to http_listen_workers_blocking, which spawns\n"
+                "      a coro per connection so blocking ops are safe.\n");
+            abort();
+        }
         /* Not in a coro — release the wait-list mutex the caller locked
            (so the reactor pthread / other coros can still touch it),
            flush main's pending spawn buffer so the workers see them
