@@ -1,13 +1,12 @@
 // Smoke test for the friendly abort when an http_listen_workers
-// handler tries to block. Should die immediately on the first
-// request with the runtime guidance message; if we removed the
-// abort it would silently hang the worker.
+// handler tries to block on chan. Should die on the first request
+// with the runtime guidance message.
 
 import stdlib::http::*;
-import stdlib::time::*;
 
 fn bad_handler(_req: *HttpRequest) -> HttpResponse {
-    sleep_ms(50);  // PARKS the runtime — must abort the SM worker
+    let c: chan<int> = make_chan(1);
+    let _: int = c.recv();  // parks — no sender will ever come
     return HttpResponse::ok().body("never");
 }
 
