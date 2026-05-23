@@ -32,6 +32,7 @@
 
 import stdlib::http::*;
 import stdlib::http::typed::*;
+import stdlib::http::form::*;
 import stdlib::json::*;
 
 // ---- core trait --------------------------------------------------------
@@ -293,6 +294,148 @@ impl<T: FromPath> Path<T> {
         let v_r: !T = T::from_path(raw);
         if !v_r.ok { return err("400:".concat(v_r.err)); }
         return ok(Path { val: v_r.val });
+    }
+}
+
+/// Typed access to a `?name=value` query-string param.
+///
+/// **Special-cased by the @handler macro.** The lookup key is the
+/// PARAM IDENT: `fn h(page: Query<int>)` extracts `req.query("page")`
+/// and parses to `int`. Missing → 400.
+///
+/// ```glide
+/// // GET /search?page=2&q=glide
+/// @handler
+/// fn search(page: Query<int>, q: Query<string>) -> HttpResponse {
+///     return HttpResponse::ok().text(
+///         "page=".concat(page.val.to_string()).concat(" q=").concat(q.val));
+/// }
+/// ```
+pub struct Query<T> {
+    pub val: T,
+}
+
+impl<T: FromPath> Query<T> {
+    /// Read query param `name` and convert. Reuses `FromPath` for
+    /// type conversion since query strings are also URL-encoded
+    /// scalars; same conversion rules apply.
+    pub fn extract(req: *HttpRequest, name: string) -> !Query<T> {
+        let raw: string = req.query(name);
+        if raw.len() == 0 { return err("400:missing query param: ".concat(name)); }
+        let v_r: !T = T::from_path(raw);
+        if !v_r.ok { return err("400:".concat(v_r.err)); }
+        return ok(Query { val: v_r.val });
+    }
+}
+
+/// Whole-form extractor for `application/x-www-form-urlencoded` POSTs.
+/// Wraps the parsed `FormData` so the handler can do `f.get("name")`.
+/// Errors with 415 if the Content-Type doesn't match, 400 if the body
+/// fails to parse.
+///
+/// ```glide
+/// @handler
+/// fn submit(form: Form) -> HttpResponse {
+///     let user: string = form.get("user");
+///     let pass: string = form.get("pass");
+///     return HttpResponse::ok().text("welcome, ".concat(user));
+/// }
+/// ```
+pub struct Form {
+    pub data: *FormData,
+}
+
+impl FromRequest for Form {
+    fn from_request(req: *HttpRequest) -> !Form {
+        let ct: string = req.header("Content-Type").to_lower();
+        if !ct.starts_with("application/x-www-form-urlencoded") {
+            return err("415:expected application/x-www-form-urlencoded");
+        }
+        let r: !*FormData = form_decode(req.body);
+        if !r.ok { return err("400:".concat(r.err)); }
+        return ok(Form { data: r.val });
+    }
+}
+
+impl Form {
+    /// First value for `name`. Returns `""` when not present.
+    pub fn get(self: *Form, name: string) -> string {
+        for let i: int = 0; i < self.data.len(); i++ {
+            if self.data.name_at(i).eq(name) { return self.data.value_at(i); }
+        }
+        return "";
+    }
+
+    /// `true` iff at least one field with `name` is present.
+    pub fn has(self: *Form, name: string) -> bool {
+        for let i: int = 0; i < self.data.len(); i++ {
+            if self.data.name_at(i).eq(name) { return true; }
+        }
+        return false;
+    }
+}
+
+/// Request-side cookie bag — wraps the `Cookie:` header so handlers
+/// can look up individual cookies. Read-only; setting cookies on the
+/// response uses `HttpResponse::cookie(name, value)`.
+///
+/// ```glide
+/// @handler
+/// fn me(cookies: Cookies) -> HttpResponse {
+///     let sid: string = cookies.get("session");
+///     if sid.eq("") { return HttpResponse::with_status(401).text("login"); }
+///     return HttpResponse::ok().text("session=".concat(sid));
+/// }
+/// ```
+pub struct Cookies {
+    pub header: string,
+}
+
+impl FromRequest for Cookies {
+    fn from_request(req: *HttpRequest) -> !Cookies {
+        return ok(Cookies { header: req.header("Cookie") });
+    }
+}
+
+impl Cookies {
+    /// Look up a cookie by name. Returns `""` when absent. Walks the
+    /// header string each call — cheap (cookies are short, typically
+    /// 1-5 entries) but cache if you call repeatedly in the same
+    /// handler.
+    pub fn get(self: *Cookies, name: string) -> string {
+        let h: string = self.header;
+        let n: int = h.len();
+        if n == 0 { return ""; }
+        let mut i: int = 0;
+        let target_len: int = name.len();
+        while i < n {
+            while i < n && (h.at(i).to_int() == 32 || h.at(i).to_int() == 9) {
+                i = i + 1;
+            }
+            let start: int = i;
+            while i < n && h.at(i).to_int() != 61 && h.at(i).to_int() != 59 {
+                i = i + 1;
+            }
+            let key_end: int = i;
+            if i < n && h.at(i).to_int() == 61 {
+                i = i + 1;
+                let v_start: int = i;
+                while i < n && h.at(i).to_int() != 59 {
+                    i = i + 1;
+                }
+                if (key_end - start) == target_len
+                   && h.substring(start, key_end).eq(name) {
+                    return h.substring(v_start, i);
+                }
+            }
+            if i < n && h.at(i).to_int() == 59 { i = i + 1; }
+        }
+        return "";
+    }
+
+    /// `true` iff the named cookie is present.
+    pub fn has(self: *Cookies, name: string) -> bool {
+        return self.get(name).len() > 0;
     }
 }
 
