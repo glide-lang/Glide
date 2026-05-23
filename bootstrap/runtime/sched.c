@@ -217,6 +217,12 @@ typedef struct __glide_task {
                                        stack — paid 0 RSS pages per parked
                                        task (the task is never parked: it
                                        runs to completion in one go). */
+    int                 io_result;   /* completion-based I/O result, set by
+                                       the io_uring reactor thread before
+                                       unparking. The task reads this after
+                                       returning from __glide_park_blocked
+                                       to surface bytes-read / bytes-sent /
+                                       new-fd back to the caller. */
     int                 has_run;     /* 0 if never run; once 1, we never
                                        migrate the coro across OS threads (Win64
                                        SEH/TIB invariants make resumed-on-other-

@@ -36,6 +36,10 @@
 # include <unistd.h>
 # define GLIDE_REACTOR_USE_EPOLL 1
 # define GLIDE_REACTOR_HAVE_REACTOR 1
+# if defined(GLIDE_HAS_IO_URING) || __has_include(<liburing.h>)
+#  include <liburing.h>
+#  define GLIDE_REACTOR_HAS_IO_URING 1
+# endif
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
 # include <sys/types.h>
 # include <sys/event.h>
@@ -89,6 +93,125 @@ int __glide_reactor_active(void) {
     return 0;
 #endif
 }
+
+/* ======================== io_uring backend ============================
+ *
+ * Linux 5.1+ completion-based I/O. submit (SQE) carries the buffer +
+ * task pointer; the kernel performs the operation and posts a CQE
+ * with the result. A single reactor thread drains the CQ and unparks
+ * the matching task. Compared to epoll (readiness model) this saves
+ * the syscall back into recv/write after the wake and lets the kernel
+ * batch ops via SQPOLL — in steady state HTTP load there are zero
+ * io_uring_enter syscalls because the kernel polls the SQ on its own
+ * pthread. Enabled opt-in via GLIDE_REACTOR=uring; epoll stays the
+ * default until io_uring proves stable across the suite.
+ */
+#ifdef GLIDE_REACTOR_HAS_IO_URING
+
+static struct io_uring   __glide_ring;
+static atomic_int        __glide_uring_ready = 0;
+static __glide_spin_t    __glide_uring_sqe_lock = 0;
+static pthread_t         __glide_uring_thr;
+static atomic_int        __glide_uring_running = 0;
+
+static void* __glide_uring_loop(void* arg) {
+    (void)arg;
+    while (atomic_load_explicit(&__glide_uring_running, memory_order_acquire)) {
+        struct io_uring_cqe* cqe = NULL;
+        /* io_uring_wait_cqe blocks until a CQE arrives or signal. */
+        int r = io_uring_wait_cqe(&__glide_ring, &cqe);
+        if (r < 0) {
+            if (r == -EINTR) continue;
+            break;
+        }
+        struct __glide_task* t = (struct __glide_task*)io_uring_cqe_get_data(cqe);
+        int res = cqe->res;
+        io_uring_cqe_seen(&__glide_ring, cqe);
+        if (t) {
+            t->io_result = res;
+            __glide_unpark_task(t);
+        }
+    }
+    return NULL;
+}
+
+static int __glide_uring_init(void) {
+    int once_done = atomic_load_explicit(&__glide_uring_ready, memory_order_acquire);
+    if (once_done) return once_done > 0;
+    const char* env = getenv("GLIDE_REACTOR");
+    if (!env || strcmp(env, "uring") != 0) {
+        atomic_store_explicit(&__glide_uring_ready, -1, memory_order_release);
+        return 0;
+    }
+    struct io_uring_params p;
+    memset(&p, 0, sizeof(p));
+    /* Try SQPOLL first: kernel polls the SQ on its own thread, so we
+       skip the io_uring_enter syscall entirely in steady state. */
+    p.flags = IORING_SETUP_SQPOLL;
+    p.sq_thread_idle = 2000;   /* ms before kernel SQ poller sleeps */
+    int r = io_uring_queue_init_params(4096, &__glide_ring, &p);
+    if (r < 0) {
+        memset(&p, 0, sizeof(p));
+        r = io_uring_queue_init_params(4096, &__glide_ring, &p);
+        if (r < 0) {
+            atomic_store_explicit(&__glide_uring_ready, -1, memory_order_release);
+            return 0;
+        }
+    }
+    atomic_store_explicit(&__glide_uring_running, 1, memory_order_release);
+    pthread_create(&__glide_uring_thr, NULL, __glide_uring_loop, NULL);
+    pthread_detach(__glide_uring_thr);
+    atomic_store_explicit(&__glide_uring_ready, 1, memory_order_release);
+    return 1;
+}
+
+static inline int __glide_uring_active(void) {
+    int v = atomic_load_explicit(&__glide_uring_ready, memory_order_acquire);
+    if (v == 0) v = __glide_uring_init() ? 1 : -1;
+    return v > 0;
+}
+
+/* Submit an SQE + park current coro until completion. Returns the
+   cqe->res (bytes count for recv/send, fd for accept, -errno on err).
+   Returns -1 if not in a coro or SQE/submit fails. */
+static int __glide_uring_submit_wait(void (*prep)(struct io_uring_sqe*, void*),
+                                      void* prep_ctx) {
+    struct __glide_task* t = __glide_cur_task;
+    if (!t) return -1;
+    __glide_spin_lock(&__glide_uring_sqe_lock);
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&__glide_ring);
+    if (!sqe) {
+        __glide_spin_unlock(&__glide_uring_sqe_lock);
+        return -1;
+    }
+    prep(sqe, prep_ctx);
+    io_uring_sqe_set_data(sqe, t);
+    /* SQPOLL: kernel polls; this becomes a no-op. Non-SQPOLL: one
+       io_uring_enter syscall. Either way we batch in flight. */
+    io_uring_submit(&__glide_ring);
+    __glide_spin_unlock(&__glide_uring_sqe_lock);
+    t->io_result = 0;
+    __glide_park_blocked();
+    return t->io_result;
+}
+
+struct __glide_uring_recv_ctx { int fd; void* buf; unsigned len; };
+static void __glide_uring_prep_recv(struct io_uring_sqe* sqe, void* p) {
+    struct __glide_uring_recv_ctx* c = (struct __glide_uring_recv_ctx*)p;
+    io_uring_prep_recv(sqe, c->fd, c->buf, c->len, 0);
+}
+struct __glide_uring_send_ctx { int fd; const void* buf; unsigned len; };
+static void __glide_uring_prep_send(struct io_uring_sqe* sqe, void* p) {
+    struct __glide_uring_send_ctx* c = (struct __glide_uring_send_ctx*)p;
+    io_uring_prep_send(sqe, c->fd, c->buf, c->len, MSG_NOSIGNAL);
+}
+struct __glide_uring_accept_ctx { int fd; };
+static void __glide_uring_prep_accept(struct io_uring_sqe* sqe, void* p) {
+    struct __glide_uring_accept_ctx* c = (struct __glide_uring_accept_ctx*)p;
+    io_uring_prep_accept(sqe, c->fd, NULL, NULL, 0);
+}
+
+#endif /* GLIDE_REACTOR_HAS_IO_URING */
 
 #if defined(GLIDE_REACTOR_USE_EPOLL) || defined(GLIDE_REACTOR_USE_KQUEUE)
 
@@ -319,6 +442,17 @@ static int __glide_io_park_write(int fd) {
    but reactor.c is included after socket.c - no forward decl needed. */
 
 int accept_tcp_async(int listener) {
+#ifdef GLIDE_REACTOR_HAS_IO_URING
+    if (__glide_uring_active() && __glide_cur_task) {
+        struct __glide_uring_accept_ctx c = { listener };
+        int fd = __glide_uring_submit_wait(__glide_uring_prep_accept, &c);
+        if (fd >= 0) {
+            __glide_set_nonblocking(fd);
+            __glide_tcp_nodelay(fd);
+        }
+        return fd;
+    }
+#endif
     __glide_set_nonblocking(listener);
     while (1) {
         int c = accept(listener, NULL, NULL);
@@ -354,6 +488,13 @@ int accept_tcp_async(int listener) {
    on every call costs two syscalls per read/write - measurable on the
    keep-alive hot path. */
 int tcp_read_async(int fd, void* buf, int max) {
+#ifdef GLIDE_REACTOR_HAS_IO_URING
+    if (__glide_uring_active() && __glide_cur_task) {
+        struct __glide_uring_recv_ctx c = { fd, buf, (unsigned)max };
+        int n = __glide_uring_submit_wait(__glide_uring_prep_recv, &c);
+        return n;
+    }
+#endif
     while (1) {
         int n = (int)read(fd, buf, (size_t)max);
         if (n >= 0) return n;
@@ -366,6 +507,18 @@ int tcp_read_async(int fd, void* buf, int max) {
 }
 
 int tcp_write_async(int fd, void* buf, int n) {
+#ifdef GLIDE_REACTOR_HAS_IO_URING
+    if (__glide_uring_active() && __glide_cur_task) {
+        int sent = 0;
+        while (sent < n) {
+            struct __glide_uring_send_ctx c = { fd, (const char*)buf + sent, (unsigned)(n - sent) };
+            int w = __glide_uring_submit_wait(__glide_uring_prep_send, &c);
+            if (w > 0) { sent += w; continue; }
+            return sent > 0 ? sent : (w < 0 ? -1 : sent);
+        }
+        return sent;
+    }
+#endif
     int sent = 0;
     while (sent < n) {
         int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));
