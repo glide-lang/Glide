@@ -1,0 +1,20 @@
+// HTTP/2 server smoke test. Uses https_listen which auto-negotiates
+// HTTP/2 via ALPN — h2.glide dispatches when the client advertises h2.
+import stdlib::http::*;
+import stdlib::env::*;
+
+fn hello(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().body("hello-h2 path=".concat(req.path));
+}
+
+fn main() -> int {
+    let cert: string = env_get("CERT");
+    let key: string = env_get("KEY");
+    if cert.eq("") || key.eq("") {
+        println!("set CERT and KEY env to PEM paths");
+        return 1;
+    }
+    let r: !int = https_listen(8443, cert, key, hello);
+    if !r.ok { println!("listen failed:", r.err); return 1; }
+    return 0;
+}
