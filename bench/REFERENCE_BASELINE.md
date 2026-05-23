@@ -20,13 +20,13 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
-## Headline table (snapshot after Phase A4 + B1 + B2 + B4, 2026-05-23)
+## Headline table (snapshot after Phase A4 + B1 + B2 + B3b + B4, 2026-05-23)
 
 | Metric | Glide | Go | Rust tokio | Winner |
 |---|---|---|---|---|
 | **spawn_1m total ms** (1M tasks created, drained) | **113 Win / 160 Lin** | 107 | 515 | Go ≈ Glide (Rust 5× slower) |
-| **park_unpark_coro_clean** ns/cycle, `GLIDE_CHAN_SPIN=0` | **270** | 267 | 159 | Rust > Go ≈ Glide |
-| **park_unpark_coro_clean** ns/cycle, default | 3 200 | 267 | 159 | spin-budget tradeoff |
+| **park_unpark_coro_clean** ns/cycle, `GLIDE_CHAN_SPIN=0` | **232** | 267 | 159 | **Glide beats Go** (15% faster) |
+| **park_unpark_coro_clean** ns/cycle, default | 3 140 | 267 | 159 | spin-budget tradeoff |
 | **massive_concurrency** bytes/task (regular coro, 100k parked, Linux) | 4 288 | 9 051 | 403 | tokio 10× lighter than regular coro |
 | **leaf_footprint** bytes/task (`@leaf` task, 100k–1M, Linux) | **192** | n/a (Go has no stackless variant) | 403 | **Glide leaf wins** (2.1× lighter than tokio) |
 
@@ -265,27 +265,35 @@ is more expensive when the wake target is a parked worker thread
 than the Windows equivalent. Pinning doesn't help because the cost
 is in the cv-wake itself, not in cross-core migration.
 
-### park_unpark_coro_clean on Linux — after Phase B1 + B2 (2026-05-23)
+### park_unpark_coro_clean on Linux — after Phase B1 + B2 + B3b (2026-05-23)
 
-| Mode | ns/cycle | vs Go |
-|---|---|---|
-| `GLIDE_CHAN_SPIN=0` (multi or single worker) | **270** | tied (Go 267) |
-| Default (spin=32 multi-worker) | 3 200 | 12× slower |
-| `GLIDE_CHAN_SPIN=8` (intermediate) | 1 020 | 4× slower |
+| Mode | ns/cycle | vs Go (267) | vs Rust tokio (159) |
+|---|---|---|---|
+| `GLIDE_CHAN_SPIN=0`, default workers | **232** | **15% faster** | 1.5× slower |
+| `GLIDE_CHAN_SPIN=0`, single worker | 233 | 15% faster | 1.5× slower |
+| `GLIDE_CHAN_SPIN=0`, pinned multi | 232 | 15% faster | 1.5× slower |
+| `GLIDE_CHAN_SPIN=8` | 963 | 3.6× slower | — |
+| Default (`spin=32`) | 3 140 | 12× slower | — |
 
-The Phase B improvement came from two stacked fixes:
+The Phase B improvements stacked:
 - **B1**: chan slow-path spin budget dropped from 256 PAUSEs to 32
-  by default (n_workers==1 → 0). Each PAUSE on this host costs
-  ~80 ns; 256 PAUSEs per chan op was ~13 µs of pure waste when
-  the producer was the same thread.
+  by default (n_workers==1 → 0). 23 µs → 3.2 µs default.
 - **B2**: per-worker `runnext` slot bypasses the queue spinlock +
   cv-signal path when an unparker pushes to its own worker
-  (mirrors Go's runtime2.go `P.runnext`).
+  (mirrors Go's runtime2.go `P.runnext`). 3.2 µs → 270 ns at spin=0.
+- **B3b**: chan coro wait list switched from `pthread_mutex_t` to
+  Glide's internal spinlock (`__glide_spin_t`). 5-10 ns critical
+  sections didn't justify the ~30 ns/lock futex overhead × 4 lock
+  cycles per ping-pong. 270 ns → 232 ns at spin=0.
 
 The default `spin=32` cost (3.2 µs) is intentional — it's a budget
 for cross-core handoffs in HTTP-style workloads where a producer
 on another core is about to push within ~1 µs. Override via
 `GLIDE_CHAN_SPIN=N` (clamps to [0, 1024]).
+
+To go below 200 ns toward tokio's 159 ns we'd need stackless coros
+(no ctx_switch overhead) — that's Phase B4-style codegen for chan
+operations themselves, not just spawn sites.
 
 ### Stack-grow handler — POSIX status
 
