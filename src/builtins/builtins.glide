@@ -411,7 +411,7 @@ c_raw! {
         if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return -1;
         return (int)(pmc.WorkingSetSize / (1024*1024));
     }
-    long long __glide_proc_rss_bytes(void) {
+    int64_t __glide_proc_rss_bytes(void) {
         PROCESS_MEMORY_COUNTERS pmc;
         if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return -1;
         return (long long)pmc.WorkingSetSize;
@@ -429,7 +429,7 @@ c_raw! {
         if (page <= 0) page = 4096;
         return (int)((long long)res * page / (1024 * 1024));
     }
-    long long __glide_proc_rss_bytes(void) {
+    int64_t __glide_proc_rss_bytes(void) {
         FILE* f = fopen("/proc/self/statm", "r");
         if (!f) return -1;
         long sz = 0, res = 0;
@@ -449,7 +449,7 @@ c_raw! {
                       (task_info_t)&info, &count) != KERN_SUCCESS) return -1;
         return (int)(info.resident_size / (1024 * 1024));
     }
-    long long __glide_proc_rss_bytes(void) {
+    int64_t __glide_proc_rss_bytes(void) {
         struct mach_task_basic_info info;
         mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
         if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
@@ -458,7 +458,7 @@ c_raw! {
     }
     #else
     int __glide_proc_rss_mb(void) { return -1; }
-    long long __glide_proc_rss_bytes(void) { return -1; }
+    int64_t __glide_proc_rss_bytes(void) { return -1; }
     #endif
 }
 
