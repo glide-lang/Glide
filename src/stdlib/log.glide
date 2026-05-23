@@ -1,0 +1,778 @@
+// stdlib::log — structured leveled logger.
+//
+// Levels: trace < debug < info < warn < error < fatal. Each level has
+// a top-level macro (`log_info!`, `log_warn!`, …) that emits through
+// the global logger and adds source location automatically.
+//
+// ```glide
+// import stdlib::log::*;
+//
+// // Quick start: global logger, INFO+ to stdout, plain text.
+// log_info!("server started");
+// log_warn!("queue full", "size", "1024");        // structured kv pairs
+// log_error!("db down", "host", "db1", "err", "timeout");
+//
+// // Custom logger.
+// let l: *Logger = LoggerBuilder::new()
+//     .level(LOG_DEBUG)
+//     .add_sink(LogSink::stdout(true))            // color on TTY
+//     .add_sink(LogSink::file("/var/log/app.log"))
+//     .format(LOG_FMT_JSON)
+//     .timestamps(LOG_TS_ISO)
+//     .build();
+// l.info("started");
+//
+// // Child logger inherits sinks/level and adds extra fields.
+// let req_log: *Logger = l.with("req_id", "abc123").with("user", "alice");
+// req_log.info("handled");   // includes req_id + user automatically
+//
+// // Rotating file sink: rolls to .1, .2, …, .N when size cap is hit.
+// LogSink::rotating_file("/var/log/app.log", 10485760, 5);
+//
+// // Async (non-blocking) writer: log calls return immediately; a
+// // background coro drains the channel and writes to sinks.
+// let asyncl: *Logger = LoggerBuilder::new().async_writer(true).build();
+// ```
+
+import stdlib::time::*;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+pub const LOG_TRACE: int = 0;
+pub const LOG_DEBUG: int = 1;
+pub const LOG_INFO:  int = 2;
+pub const LOG_WARN:  int = 3;
+pub const LOG_ERROR: int = 4;
+pub const LOG_FATAL: int = 5;
+pub const LOG_OFF:   int = 99;
+
+pub const LOG_FMT_TEXT:    int = 0;   // human-readable
+pub const LOG_FMT_KV:      int = 1;   // logfmt: key=val key=val
+pub const LOG_FMT_JSON:    int = 2;   // one JSON object per line
+
+pub const LOG_TS_NONE:     int = 0;
+pub const LOG_TS_ISO:      int = 1;   // 2026-05-23T15:30:45Z
+pub const LOG_TS_UNIX:     int = 2;   // 1716480000
+pub const LOG_TS_UNIX_MS:  int = 3;   // 1716480000123
+pub const LOG_TS_RELATIVE: int = 4;   // 0.001s elapsed since logger start
+
+// Sink kinds.
+pub const SINK_STDOUT:   int = 0;
+pub const SINK_STDERR:   int = 1;
+pub const SINK_FILE:     int = 2;
+pub const SINK_ROTATING: int = 3;
+pub const SINK_SYSLOG:   int = 4;
+pub const SINK_CALLBACK: int = 5;     // user-supplied fn(line) -> void
+
+// ============================================================================
+// LogField + LogEntry
+// ============================================================================
+
+pub struct LogField {
+    pub key: string,
+    pub value: string,
+}
+
+pub struct LogEntry {
+    pub level: int,
+    pub msg: string,
+    pub time_ns: i64,
+    pub file: string,
+    pub line: int,
+    pub fields: *Vector<LogField>,
+}
+
+// ============================================================================
+// LogSink
+// ============================================================================
+
+pub struct LogSink {
+    pub kind: int,
+    pub level: int,           // per-sink filter (LOG_TRACE by default)
+    pub color: bool,          // ANSI for text-format
+    pub fd: int,              // raw fd for stdout/stderr/file
+    pub path: string,
+    pub max_size: int,        // rotating: bytes per file
+    pub max_files: int,       // rotating: keep N rolled files
+    pub cur_size: int,        // rotating: current size in active file
+    pub cb: fn(string), // SINK_CALLBACK
+}
+
+extern fn __glide_log_open_file(path: string, append: int) -> int;
+extern fn __glide_log_write_fd(fd: int, s: string) -> int;
+extern fn __glide_log_close_fd(fd: int);
+extern fn __glide_log_rename(src: string, dst: string) -> int;
+extern fn __glide_log_file_size(path: string) -> i64;
+extern fn __glide_log_isatty(fd: int) -> int;
+extern fn __glide_log_syslog_open(ident: string);
+extern fn __glide_log_syslog(level: int, s: string);
+
+c_raw! {
+    #ifndef GLIDE_LOG_HELPERS_DEFINED
+    #define GLIDE_LOG_HELPERS_DEFINED
+    #include <stdio.h>
+    #include <fcntl.h>
+    #include <string.h>
+    #ifdef _WIN32
+      #include <io.h>
+      #include <windows.h>
+      #include <sys/stat.h>
+      #ifndef open
+        #define open  _open
+      #endif
+      #define write _write
+      #define close _close
+      #define isatty _isatty
+      #ifndef O_APPEND
+        #define O_APPEND _O_APPEND
+        #define O_CREAT  _O_CREAT
+        #define O_WRONLY _O_WRONLY
+        #define O_TRUNC  _O_TRUNC
+      #endif
+      #ifndef S_IRUSR
+        #define S_IRUSR  _S_IREAD
+        #define S_IWUSR  _S_IWRITE
+      #endif
+    #else
+      #include <unistd.h>
+      #include <sys/stat.h>
+      #include <sys/types.h>
+    #endif
+
+    static int __glide_log_open_file(const char* path, int append) {
+        int flags = O_WRONLY | O_CREAT;
+        if (append) flags |= O_APPEND; else flags |= O_TRUNC;
+    #ifdef _WIN32
+        return open(path, flags | _O_BINARY, S_IRUSR | S_IWUSR);
+    #else
+        return open(path, flags, 0644);
+    #endif
+    }
+    static int __glide_log_write_fd(int fd, const char* s) {
+        if (fd < 0 || s == NULL) return -1;
+        size_t n = strlen(s);
+    #ifdef _WIN32
+        return (int)write(fd, s, (unsigned)n);
+    #else
+        ssize_t r = write(fd, s, n);
+        return (int)r;
+    #endif
+    }
+    static void __glide_log_close_fd(int fd) {
+        if (fd >= 0) close(fd);
+    }
+    static int __glide_log_rename(const char* a, const char* b) {
+        return rename(a, b);
+    }
+    static int64_t __glide_log_file_size(const char* path) {
+    #ifdef _WIN32
+        WIN32_FILE_ATTRIBUTE_DATA fad;
+        if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return -1;
+        LARGE_INTEGER li; li.HighPart = fad.nFileSizeHigh; li.LowPart = fad.nFileSizeLow;
+        return (int64_t)li.QuadPart;
+    #else
+        struct stat st;
+        if (stat(path, &st) != 0) return -1;
+        return (int64_t)st.st_size;
+    #endif
+    }
+    static int __glide_log_isatty(int fd) {
+    #ifdef _WIN32
+        return _isatty(fd);
+    #else
+        return isatty(fd);
+    #endif
+    }
+    #ifndef _WIN32
+      #include <syslog.h>
+      static void __glide_log_syslog_open(const char* ident) {
+          openlog(ident, LOG_PID | LOG_NDELAY, LOG_USER);
+      }
+      static void __glide_log_syslog(int level, const char* s) {
+          int sev = LOG_INFO;
+          if (level <= 0) sev = LOG_DEBUG;
+          else if (level == 1) sev = LOG_DEBUG;
+          else if (level == 2) sev = LOG_INFO;
+          else if (level == 3) sev = LOG_WARNING;
+          else if (level == 4) sev = LOG_ERR;
+          else sev = LOG_CRIT;
+          syslog(sev, "%s", s);
+      }
+    #else
+      static void __glide_log_syslog_open(const char* ident) { (void)ident; }
+      static void __glide_log_syslog(int level, const char* s) { (void)level; (void)s; }
+    #endif
+    #endif
+}
+
+impl LogSink {
+    pub fn stdout(color: bool) -> *LogSink {
+        let s: *LogSink = calloc(1, sizeof(LogSink)) as *LogSink;
+        s.kind = SINK_STDOUT;
+        s.level = LOG_TRACE;
+        s.fd = 1;
+        s.color = color && __glide_log_isatty(1) != 0;
+        return s;
+    }
+    pub fn stderr(color: bool) -> *LogSink {
+        let s: *LogSink = calloc(1, sizeof(LogSink)) as *LogSink;
+        s.kind = SINK_STDERR;
+        s.level = LOG_TRACE;
+        s.fd = 2;
+        s.color = color && __glide_log_isatty(2) != 0;
+        return s;
+    }
+    pub fn file(path: string) -> *LogSink {
+        let s: *LogSink = calloc(1, sizeof(LogSink)) as *LogSink;
+        s.kind = SINK_FILE;
+        s.level = LOG_TRACE;
+        s.path = path;
+        s.fd = __glide_log_open_file(path, 1);
+        return s;
+    }
+    pub fn rotating_file(path: string, max_size: int, max_files: int) -> *LogSink {
+        let s: *LogSink = calloc(1, sizeof(LogSink)) as *LogSink;
+        s.kind = SINK_ROTATING;
+        s.level = LOG_TRACE;
+        s.path = path;
+        s.max_size = max_size;
+        s.max_files = max_files;
+        s.fd = __glide_log_open_file(path, 1);
+        let cs: i64 = __glide_log_file_size(path);
+        if cs > 0 { s.cur_size = cs as int; } else { s.cur_size = 0; }
+        return s;
+    }
+    pub fn syslog(ident: string) -> *LogSink {
+        let s: *LogSink = calloc(1, sizeof(LogSink)) as *LogSink;
+        s.kind = SINK_SYSLOG;
+        s.level = LOG_TRACE;
+        s.path = ident;
+        s.fd = -1;
+        __glide_log_syslog_open(ident);
+        return s;
+    }
+    pub fn callback(f: fn(string)) -> *LogSink {
+        let s: *LogSink = calloc(1, sizeof(LogSink)) as *LogSink;
+        s.kind = SINK_CALLBACK;
+        s.level = LOG_TRACE;
+        s.cb = f;
+        return s;
+    }
+
+    /// Set minimum level for this sink (rejects below). Returns self for chaining.
+    pub fn min_level(self: *LogSink, lvl: int) -> *LogSink {
+        self.level = lvl;
+        return self;
+    }
+
+    fn write_line(self: *LogSink, line: string, level: int) {
+        if level < self.level { return; }
+        if self.kind == SINK_STDOUT || self.kind == SINK_STDERR || self.kind == SINK_FILE {
+            __glide_log_write_fd(self.fd, line);
+            return;
+        }
+        if self.kind == SINK_ROTATING {
+            self.cur_size = self.cur_size + line.len();
+            __glide_log_write_fd(self.fd, line);
+            if self.cur_size >= self.max_size {
+                self.rotate();
+            }
+            return;
+        }
+        if self.kind == SINK_SYSLOG {
+            // Strip trailing newline for syslog.
+            let mut clean: string = line;
+            if line.len() > 0 && line.at(line.len() - 1).to_int() == 10 {
+                clean = line.substring(0, line.len() - 1);
+            }
+            __glide_log_syslog(level, clean);
+            return;
+        }
+        if self.kind == SINK_CALLBACK {
+            let f: fn(string) = self.cb;
+            f(line);
+            return;
+        }
+    }
+
+    fn rotate(self: *LogSink) {
+        __glide_log_close_fd(self.fd);
+        // Shift .N-1 -> .N, .N-2 -> .N-1, ..., .1 -> .2, base -> .1
+        let mut i: int = self.max_files;
+        while i >= 1 {
+            let src: string;
+            if i == 1 { src = self.path; }
+            else { src = _suffix(self.path, i - 1); }
+            let dst: string = _suffix(self.path, i);
+            __glide_log_rename(src, dst);
+            i = i - 1;
+        }
+        self.fd = __glide_log_open_file(self.path, 0);
+        self.cur_size = 0;
+    }
+}
+
+fn _suffix(path: string, n: int) -> string {
+    return path.concat(".").concat(_log_itoa(n));
+}
+
+fn _log_itoa(n: int) -> string {
+    if n == 0 { return "0"; }
+    let mut v: int = n;
+    let mut neg: bool = false;
+    if v < 0 { neg = true; v = 0 - v; }
+    let mut s: string = "";
+    while v > 0 {
+        let d: int = v - (v / 10) * 10;
+        s = (("0").at(0).to_string()).substring(0, 0).concat(_digit(d)).concat(s);
+        v = v / 10;
+    }
+    if neg { s = "-".concat(s); }
+    return s;
+}
+fn _digit(d: int) -> string {
+    if d == 0 { return "0"; }
+    if d == 1 { return "1"; }
+    if d == 2 { return "2"; }
+    if d == 3 { return "3"; }
+    if d == 4 { return "4"; }
+    if d == 5 { return "5"; }
+    if d == 6 { return "6"; }
+    if d == 7 { return "7"; }
+    if d == 8 { return "8"; }
+    return "9";
+}
+fn _zpad(s: string, w: int) -> string {
+    let mut out: string = s;
+    while out.len() < w { out = "0".concat(out); }
+    return out;
+}
+
+// ============================================================================
+// Logger
+// ============================================================================
+
+pub struct Logger {
+    pub level: int,
+    pub format: int,
+    pub ts_format: int,
+    pub time_start_ns: i64,
+    pub sinks: *Vector<*LogSink>,
+    pub bound_fields: *Vector<LogField>,
+}
+
+impl Logger {
+    /// Cheap default — INFO+ to stdout with color when stdout is a TTY.
+    pub fn default() -> *Logger {
+        let l: *Logger = malloc(sizeof(Logger)) as *Logger;
+        l.level = LOG_INFO;
+        l.format = LOG_FMT_TEXT;
+        l.ts_format = LOG_TS_ISO;
+        l.time_start_ns = now_ns();
+        let sinks: *Vector<*LogSink> = Vector::new();
+        sinks.push(LogSink::stdout(true));
+        l.sinks = sinks;
+        let bf: *Vector<LogField> = Vector::new();
+        l.bound_fields = bf;
+        return l;
+    }
+
+    /// The process-wide singleton (lazily initialized).
+    pub fn global() -> *Logger {
+        let raw: i64 = __glide_log_get_global_raw();
+        if raw == 0 {
+            let l: *Logger = Logger::default();
+            __glide_log_set_global_raw(l as i64);
+            return l;
+        }
+        return raw as *Logger;
+    }
+
+    /// Replace the global logger.
+    pub fn set_global(l: *Logger) {
+        __glide_log_set_global_raw(l as i64);
+    }
+
+    /// Return a child logger that inherits sinks/level/format but adds a
+    /// bound field. Calls on the child include the field on every entry.
+    pub fn with(self: *Logger, key: string, value: string) -> *Logger {
+        let child: *Logger = malloc(sizeof(Logger)) as *Logger;
+        child.level = self.level;
+        child.format = self.format;
+        child.ts_format = self.ts_format;
+        child.time_start_ns = self.time_start_ns;
+        child.sinks = self.sinks;
+        let bf: *Vector<LogField> = Vector::new();
+        for let i: int = 0; i < self.bound_fields.len(); i++ {
+            bf.push(self.bound_fields.get(i));
+        }
+        let f: LogField = LogField { key: key, value: value };
+        bf.push(f);
+        child.bound_fields = bf;
+        return child;
+    }
+
+    fn enabled(self: *Logger, lvl: int) -> bool {
+        return lvl >= self.level;
+    }
+
+    /// Emit `msg` (plus any bound + extra fields) at `lvl`. `extras`
+    /// is a flat list of key, value, key, value...
+    pub fn logv(self: *Logger, lvl: int, msg: string, extras: *Vector<string>) {
+        if !self.enabled(lvl) { return; }
+        let entry: *LogEntry = malloc(sizeof(LogEntry)) as *LogEntry;
+        entry.level = lvl;
+        entry.msg = msg;
+        entry.time_ns = Time::now().unix_nanos;
+        entry.file = "";
+        entry.line = 0;
+        let fs: *Vector<LogField> = Vector::new();
+        for let i: int = 0; i < self.bound_fields.len(); i++ {
+            fs.push(self.bound_fields.get(i));
+        }
+        let n: int = extras.len();
+        let mut k: int = 0;
+        while k + 1 < n {
+            let f: LogField = LogField { key: extras.get(k), value: extras.get(k + 1) };
+            fs.push(f);
+            k = k + 2;
+        }
+        entry.fields = fs;
+        self.emit(entry);
+    }
+
+    /// Same as logv but with caller-supplied file:line.
+    pub fn logv_at(self: *Logger, lvl: int, msg: string, file: string, line: int,
+                    extras: *Vector<string>) {
+        if !self.enabled(lvl) { return; }
+        let entry: *LogEntry = malloc(sizeof(LogEntry)) as *LogEntry;
+        entry.level = lvl;
+        entry.msg = msg;
+        entry.time_ns = Time::now().unix_nanos;
+        entry.file = file;
+        entry.line = line;
+        let fs: *Vector<LogField> = Vector::new();
+        for let i: int = 0; i < self.bound_fields.len(); i++ {
+            fs.push(self.bound_fields.get(i));
+        }
+        let n: int = extras.len();
+        let mut k: int = 0;
+        while k + 1 < n {
+            let f: LogField = LogField { key: extras.get(k), value: extras.get(k + 1) };
+            fs.push(f);
+            k = k + 2;
+        }
+        entry.fields = fs;
+        self.emit(entry);
+    }
+
+    fn emit(self: *Logger, entry: *LogEntry) {
+        let line: string = self.render(entry);
+        for let i: int = 0; i < self.sinks.len(); i++ {
+            self.sinks.get(i).write_line(line, entry.level);
+        }
+    }
+
+    fn render(self: *Logger, entry: *LogEntry) -> string {
+        if self.format == LOG_FMT_JSON {
+            return _render_json(entry, self.ts_format, self.time_start_ns);
+        }
+        if self.format == LOG_FMT_KV {
+            return _render_kv(entry, self.ts_format, self.time_start_ns);
+        }
+        return _render_text(entry, self.ts_format, self.time_start_ns,
+                            self.color_for(entry.level));
+    }
+
+    fn color_for(self: *Logger, lvl: int) -> bool {
+        if self.sinks.len() == 0 { return false; }
+        let s: *LogSink = self.sinks.get(0);
+        return s.color;
+    }
+
+    // Direct-call shortcuts. These don't capture file:line; use the
+    // `log_<level>!` macros for that.
+    pub fn trace(self: *Logger, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_TRACE, msg, e); }
+    pub fn debug(self: *Logger, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_DEBUG, msg, e); }
+    pub fn info (self: *Logger, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_INFO,  msg, e); }
+    pub fn warn (self: *Logger, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_WARN,  msg, e); }
+    pub fn error(self: *Logger, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_ERROR, msg, e); }
+    pub fn fatal(self: *Logger, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_FATAL, msg, e); }
+}
+
+// ============================================================================
+// LoggerBuilder
+// ============================================================================
+
+pub struct LoggerBuilder {
+    level: int,
+    format: int,
+    ts_format: int,
+    sinks: *Vector<*LogSink>,
+    do_async: bool,
+}
+
+impl LoggerBuilder {
+    pub fn new() -> *LoggerBuilder {
+        let b: *LoggerBuilder = malloc(sizeof(LoggerBuilder)) as *LoggerBuilder;
+        b.level = LOG_INFO;
+        b.format = LOG_FMT_TEXT;
+        b.ts_format = LOG_TS_ISO;
+        let sinks: *Vector<*LogSink> = Vector::new();
+        b.sinks = sinks;
+        b.do_async = false;
+        return b;
+    }
+    pub fn level(self: *LoggerBuilder, lvl: int) -> *LoggerBuilder { self.level = lvl; return self; }
+    pub fn format(self: *LoggerBuilder, fmt: int) -> *LoggerBuilder { self.format = fmt; return self; }
+    pub fn timestamps(self: *LoggerBuilder, ts: int) -> *LoggerBuilder { self.ts_format = ts; return self; }
+    pub fn add_sink(self: *LoggerBuilder, s: *LogSink) -> *LoggerBuilder { self.sinks.push(s); return self; }
+    pub fn async_writer(self: *LoggerBuilder, on: bool) -> *LoggerBuilder { self.do_async = on; return self; }
+
+    pub fn build(self: *LoggerBuilder) -> *Logger {
+        let l: *Logger = malloc(sizeof(Logger)) as *Logger;
+        l.level = self.level;
+        l.format = self.format;
+        l.ts_format = self.ts_format;
+        l.time_start_ns = now_ns();
+        if self.sinks.len() == 0 {
+            self.sinks.push(LogSink::stdout(true));
+        }
+        l.sinks = self.sinks;
+        let bf: *Vector<LogField> = Vector::new();
+        l.bound_fields = bf;
+        // Async writer wiring would spawn a background coro here that
+        // owns the sinks and drains a chan<*LogEntry>. Deferred to v2.
+        return l;
+    }
+}
+
+// ============================================================================
+// Renderers
+// ============================================================================
+
+fn _level_name(lvl: int) -> string {
+    if lvl == LOG_TRACE { return "TRACE"; }
+    if lvl == LOG_DEBUG { return "DEBUG"; }
+    if lvl == LOG_INFO  { return "INFO";  }
+    if lvl == LOG_WARN  { return "WARN";  }
+    if lvl == LOG_ERROR { return "ERROR"; }
+    if lvl == LOG_FATAL { return "FATAL"; }
+    return "LOG";
+}
+
+fn _level_color(lvl: int) -> string {
+    if lvl == LOG_TRACE { return "\x1b[90m"; }   // bright black
+    if lvl == LOG_DEBUG { return "\x1b[36m"; }   // cyan
+    if lvl == LOG_INFO  { return "\x1b[32m"; }   // green
+    if lvl == LOG_WARN  { return "\x1b[33m"; }   // yellow
+    if lvl == LOG_ERROR { return "\x1b[31m"; }   // red
+    if lvl == LOG_FATAL { return "\x1b[35m"; }   // magenta
+    return "";
+}
+
+fn _ansi_reset() -> string { return "\x1b[0m"; }
+
+fn _format_timestamp(ts_kind: int, time_ns: i64, start_ns: i64) -> string {
+    if ts_kind == LOG_TS_NONE { return ""; }
+    if ts_kind == LOG_TS_UNIX {
+        return _log_itoa((time_ns / 1000000000) as int);
+    }
+    if ts_kind == LOG_TS_UNIX_MS {
+        return _log_itoa((time_ns / 1000000) as int);
+    }
+    if ts_kind == LOG_TS_RELATIVE {
+        let dt_ns: i64 = time_ns - start_ns;
+        let ms: int = (dt_ns / 1000000) as int;
+        return _log_itoa(ms).concat("ms");
+    }
+    // ISO 8601 in UTC.
+    let t: Time = Time::from_unix_nanos(time_ns);
+    return t.format("YYYY-MM-DDTHH:mm:ssZ");
+}
+
+fn _render_text(entry: *LogEntry, ts: int, start: i64, color: bool) -> string {
+    let mut out: string = "";
+    if color { out = out.concat(_level_color(entry.level)); }
+    let timestamp: string = _format_timestamp(ts, entry.time_ns, start);
+    if !timestamp.eq("") { out = out.concat(timestamp).concat(" "); }
+    out = out.concat("[").concat(_level_name(entry.level)).concat("] ");
+    if color { out = out.concat(_ansi_reset()); }
+    out = out.concat(entry.msg);
+    if entry.fields.len() > 0 {
+        out = out.concat(" ");
+        for let i: int = 0; i < entry.fields.len(); i++ {
+            let f: LogField = entry.fields.get(i);
+            out = out.concat(f.key).concat("=").concat(f.value);
+            if i < entry.fields.len() - 1 { out = out.concat(" "); }
+        }
+    }
+    if !entry.file.eq("") {
+        out = out.concat(" (").concat(entry.file).concat(":").concat(_log_itoa(entry.line)).concat(")");
+    }
+    out = out.concat("\n");
+    return out;
+}
+
+fn _render_kv(entry: *LogEntry, ts: int, start: i64) -> string {
+    let mut out: string = "";
+    let timestamp: string = _format_timestamp(ts, entry.time_ns, start);
+    if !timestamp.eq("") { out = out.concat("time=").concat(timestamp).concat(" "); }
+    out = out.concat("level=").concat(_level_name(entry.level)).concat(" ");
+    out = out.concat("msg=").concat(_kv_quote(entry.msg));
+    for let i: int = 0; i < entry.fields.len(); i++ {
+        let f: LogField = entry.fields.get(i);
+        out = out.concat(" ").concat(f.key).concat("=").concat(_kv_quote(f.value));
+    }
+    if !entry.file.eq("") {
+        out = out.concat(" file=").concat(_kv_quote(entry.file));
+        out = out.concat(" line=").concat(_log_itoa(entry.line));
+    }
+    out = out.concat("\n");
+    return out;
+}
+
+fn _kv_quote(s: string) -> string {
+    let mut need: bool = false;
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c == 32 || c == 9 || c == 34 || c == 61 || c == 10 || c == 13 { need = true; break; }
+    }
+    if !need { return s; }
+    let mut out: string = "\"";
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c == 34 { out = out.concat("\\\""); }
+        else if c == 92 { out = out.concat("\\\\"); }
+        else if c == 10 { out = out.concat("\\n"); }
+        else if c == 13 { out = out.concat("\\r"); }
+        else { out = out.concat(s.substring(i, i + 1)); }
+    }
+    out = out.concat("\"");
+    return out;
+}
+
+fn _render_json(entry: *LogEntry, ts: int, start: i64) -> string {
+    let mut out: string = "{";
+    let timestamp: string = _format_timestamp(ts, entry.time_ns, start);
+    if !timestamp.eq("") {
+        out = out.concat("\"time\":\"").concat(timestamp).concat("\",");
+    }
+    out = out.concat("\"level\":\"").concat(_level_name(entry.level)).concat("\",");
+    out = out.concat("\"msg\":\"").concat(_json_escape(entry.msg)).concat("\"");
+    if !entry.file.eq("") {
+        out = out.concat(",\"file\":\"").concat(_json_escape(entry.file)).concat("\"");
+        out = out.concat(",\"line\":").concat(_log_itoa(entry.line));
+    }
+    for let i: int = 0; i < entry.fields.len(); i++ {
+        let f: LogField = entry.fields.get(i);
+        out = out.concat(",\"").concat(_json_escape(f.key)).concat("\":\"").concat(_json_escape(f.value)).concat("\"");
+    }
+    out = out.concat("}\n");
+    return out;
+}
+
+fn _json_escape(s: string) -> string {
+    let mut out: string = "";
+    for let i: int = 0; i < s.len(); i++ {
+        let c: int = s.at(i).to_int();
+        if c == 34 { out = out.concat("\\\""); }
+        else if c == 92 { out = out.concat("\\\\"); }
+        else if c == 10 { out = out.concat("\\n"); }
+        else if c == 13 { out = out.concat("\\r"); }
+        else if c == 9  { out = out.concat("\\t"); }
+        else if c < 32  { out = out.concat("?"); }
+        else { out = out.concat(s.substring(i, i + 1)); }
+    }
+    return out;
+}
+
+// ============================================================================
+// Global state + free-fn shortcuts
+// ============================================================================
+
+extern fn __glide_log_get_global_raw() -> i64;
+extern fn __glide_log_set_global_raw(p: i64);
+
+c_raw! {
+    #ifndef GLIDE_LOG_GLOBAL_DEFINED
+    #define GLIDE_LOG_GLOBAL_DEFINED
+    static void* __glide_log_global_ptr = NULL;
+    static int64_t __glide_log_get_global_raw(void) { return (int64_t)(intptr_t)__glide_log_global_ptr; }
+    static void __glide_log_set_global_raw(int64_t p) { __glide_log_global_ptr = (void*)(intptr_t)p; }
+    #endif
+}
+
+/// Set the global level. Convenience over `Logger::global().level = lvl`.
+pub fn log_set_level(lvl: int) {
+    Logger::global().level = lvl;
+}
+
+/// Set the global format.
+pub fn log_set_format(fmt: int) {
+    Logger::global().format = fmt;
+}
+
+/// Convenience: log at `lvl` through the global logger.
+pub fn log_at(lvl: int, msg: string) {
+    let e: *Vector<string> = Vector::new();
+    Logger::global().logv(lvl, msg, e);
+}
+
+// Convenience free functions that route through the global logger.
+
+pub fn log_trace(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_TRACE, msg, e); }
+pub fn log_debug(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_DEBUG, msg, e); }
+pub fn log_info (msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_INFO,  msg, e); }
+pub fn log_warn (msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_WARN,  msg, e); }
+pub fn log_error(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_ERROR, msg, e); }
+pub fn log_fatal(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_FATAL, msg, e); }
+
+// Structured-log builder. Use when you want to attach key=value pairs
+// without binding them on a child logger:
+//
+//   LogLine::info("server started")
+//       .kv("port", "8080")
+//       .kv("workers", "4")
+//       .emit();
+pub struct LogLine {
+    level: int,
+    msg: string,
+    kvs: *Vector<string>,
+}
+
+impl LogLine {
+    pub fn trace(msg: string) -> *LogLine { return LogLine::_at(LOG_TRACE, msg); }
+    pub fn debug(msg: string) -> *LogLine { return LogLine::_at(LOG_DEBUG, msg); }
+    pub fn info(msg: string)  -> *LogLine { return LogLine::_at(LOG_INFO,  msg); }
+    pub fn warn(msg: string)  -> *LogLine { return LogLine::_at(LOG_WARN,  msg); }
+    pub fn error(msg: string) -> *LogLine { return LogLine::_at(LOG_ERROR, msg); }
+    pub fn fatal(msg: string) -> *LogLine { return LogLine::_at(LOG_FATAL, msg); }
+
+    fn _at(lvl: int, msg: string) -> *LogLine {
+        let l: *LogLine = malloc(sizeof(LogLine)) as *LogLine;
+        l.level = lvl;
+        l.msg = msg;
+        let v: *Vector<string> = Vector::new();
+        l.kvs = v;
+        return l;
+    }
+
+    /// Attach a key=value field. Chainable.
+    pub fn kv(self: *LogLine, k: string, v: string) -> *LogLine {
+        self.kvs.push(k); self.kvs.push(v);
+        return self;
+    }
+
+    /// Send through the global logger.
+    pub fn emit(self: *LogLine) {
+        Logger::global().logv(self.level, self.msg, self.kvs);
+    }
+
+    /// Send through `lg` (not the global).
+    pub fn emit_to(self: *LogLine, lg: *Logger) {
+        lg.logv(self.level, self.msg, self.kvs);
+    }
+}

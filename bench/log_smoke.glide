@@ -1,0 +1,38 @@
+import stdlib::log::*;
+
+fn main() -> int {
+    log_info("hello from default logger");
+    log_warn("be careful");
+    log_error("something broke");
+
+    LogLine::info("server started")
+        .kv("port", "8080")
+        .kv("workers", "4")
+        .emit();
+
+    // Custom logger: JSON format to stderr
+    let l: *Logger = LoggerBuilder::new()
+        .level(LOG_DEBUG)
+        .format(LOG_FMT_JSON)
+        .add_sink(LogSink::stderr(false))
+        .build();
+    l.info("custom logger up");
+    l.debug("debug visible here");
+
+    // Child logger with bound fields
+    let req: *Logger = l.with("req_id", "abc123").with("user", "alice");
+    req.info("handled request");
+
+    // KV format
+    let kv: *Logger = LoggerBuilder::new()
+        .format(LOG_FMT_KV)
+        .add_sink(LogSink::stdout(false))
+        .build();
+    kv.info("logfmt line");
+    LogLine::warn("with kv")
+        .kv("retries", "3")
+        .kv("error", "spaces in here need quoting")
+        .emit_to(kv);
+
+    return 0;
+}

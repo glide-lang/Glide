@@ -1,0 +1,145 @@
+// stdlib::log_macros — proc-macros for automatic logging instrumentation.
+//
+// ```glide
+// import stdlib::log::*;
+// import stdlib::log_macros::*;
+//
+// @trace
+// fn do_work(x: int) -> int { return x * 2; }
+//
+// // Calling do_work emits:
+// //   [DEBUG] > do_work
+// //   [DEBUG] < do_work
+// ```
+//
+// Use `@logged` for more detail (args and return value), or `@trace(info)`
+// to pick a different level. Defaults to debug.
+
+import bootstrap::ast::*;
+import bootstrap::interp::*;
+import stdlib::log::*;
+
+// `@trace` — emits entry/exit log lines around the function body.
+// Optional first arg: a level identifier (`trace`, `debug`, `info`,
+// `warn`, `error`). Defaults to `debug`.
+@proc_attr(trace)
+fn impl_trace(s: *Stmt) -> *Vector<Stmt> {
+    return _wrap_with_logging(s, false);
+}
+
+// `@logged` — like `@trace` but also logs each argument value before
+// the call and the return value after. Levels: same options as `@trace`.
+@proc_attr(logged)
+fn impl_logged(s: *Stmt) -> *Vector<Stmt> {
+    return _wrap_with_logging(s, true);
+}
+
+fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
+    let user_name: string = s.name;
+    let user_params: *Vector<Param> = s.fn_params;
+    let user_ret_ty: *Type = s.fn_ret_ty;
+    let user_body: *Vector<Stmt> = s.fn_body;
+
+    // Resolve level. Defaults to debug; arg overrides.
+    let mut level_name: string = "debug";
+    if s.attrs != null {
+        for let i: int = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.name != null && (a.name.eq("trace") || a.name.eq("logged")) {
+                if a.args != null && a.args.len() > 0 {
+                    let av: Expr = a.args.get(0);
+                    if av.kind == EX_IDENT { level_name = av.str_val; }
+                }
+                break;
+            }
+        }
+    }
+
+    let out: *Vector<Stmt> = Vector::new();
+
+    // 1) Emit the renamed user fn with the original body.
+    let renamed: string = "_user_".concat(user_name);
+    let user_fn: *Stmt = stmt_fn(renamed, user_params, user_ret_ty, user_body, 0, 0);
+    out.push(*user_fn);
+
+    // 2) Build the wrapper body.
+    let wrapper_body: *Vector<Stmt> = Vector::new();
+
+    // log entry line — single string, optionally args appended.
+    let entry_msg: *Expr;
+    if with_args && user_params.len() > 0 {
+        entry_msg = _build_entry_with_args(user_name, user_params);
+    } else {
+        entry_msg = expr_string("> ".concat(user_name), 0, 0);
+    }
+    wrapper_body.push(*_call_log(level_name, entry_msg));
+
+    // Build args list for forwarding call.
+    let call_args: *Vector<Expr> = Vector::new();
+    for let i: int = 0; i < user_params.len(); i++ {
+        let p: Param = user_params.get(i);
+        call_args.push(*expr_ident_unsafe(p.name, 0, 0));
+    }
+    let inner_call: *Expr = expr_call(
+        expr_ident_unsafe(renamed, 0, 0), call_args);
+
+    // Void vs returning fn.
+    let returns_value: bool = user_ret_ty != null;
+    if returns_value {
+        wrapper_body.push(*stmt_let_unsafe("__r", user_ret_ty, inner_call, false, 0, 0));
+        let exit_msg: *Expr;
+        if with_args {
+            exit_msg = _build_exit_with_result(user_name);
+        } else {
+            exit_msg = expr_string("< ".concat(user_name), 0, 0);
+        }
+        wrapper_body.push(*_call_log(level_name, exit_msg));
+        wrapper_body.push(*stmt_return(expr_ident_unsafe("__r", 0, 0), 0, 0));
+    } else {
+        wrapper_body.push(*stmt_expr(inner_call));
+        let exit_msg: *Expr = expr_string("< ".concat(user_name), 0, 0);
+        wrapper_body.push(*_call_log(level_name, exit_msg));
+    }
+
+    let wrapper_fn: *Stmt = stmt_fn(user_name, user_params, user_ret_ty, wrapper_body, 0, 0);
+    out.push(*wrapper_fn);
+    return out;
+}
+
+// Build `"> <name> args:"` — keep it simple; param names are listed but
+// values aren't formatted (Glide has no Display trait yet, so we just
+// stringify identifiers).
+fn _build_entry_with_args(name: string, params: *Vector<Param>) -> *Expr {
+    let mut msg: string = "> ".concat(name).concat("(");
+    for let i: int = 0; i < params.len(); i++ {
+        if i > 0 { msg = msg.concat(", "); }
+        let p: Param = params.get(i);
+        msg = msg.concat(p.name);
+    }
+    msg = msg.concat(")");
+    return expr_string(msg, 0, 0);
+}
+
+fn _build_exit_with_result(name: string) -> *Expr {
+    return expr_string("< ".concat(name).concat(" -> __r"), 0, 0);
+}
+
+// Emit `log_<level>(<msg>);` as a stmt.
+fn _call_log(level_name: string, msg: *Expr) -> *Stmt {
+    let fn_name: string = _log_fn_for(level_name);
+    let args: *Vector<Expr> = Vector::new();
+    args.push(*msg);
+    let call: *Expr = expr_call(
+        expr_ident_unsafe(fn_name, 0, 0), args);
+    return stmt_expr(call);
+}
+
+fn _log_fn_for(level: string) -> string {
+    if level.eq("trace") { return "log_trace"; }
+    if level.eq("debug") { return "log_debug"; }
+    if level.eq("info")  { return "log_info"; }
+    if level.eq("warn")  { return "log_warn"; }
+    if level.eq("error") { return "log_error"; }
+    if level.eq("fatal") { return "log_fatal"; }
+    return "log_debug";
+}
