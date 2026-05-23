@@ -24,24 +24,37 @@ Glide's spawn cost stays ahead of Go's.
 
 `http_listen_workers(port, n, handler)` was reworked to use the C
 state-machine path as the standard implementation. The handler
-signature stays the familiar `fn(*HttpRequest) -> HttpResponse`, but
-the routing through the SM bypasses coro-per-conn overhead. Handler
-MUST be `@leaf`; the runtime aborts if it parks.
+signature stays the familiar `fn(*HttpRequest) -> HttpResponse`.
 
-For handlers that need to park (chan ops, sleep, downstream HTTP/DB
-calls), the old behaviour is preserved under `http_listen_workers_coro`
-— same signature, slower but unrestricted.
+**No annotation required.** The default is the fast path; if the
+handler accidentally blocks (chan / sleep / I/O), the runtime aborts
+the worker with a friendly message pointing at the blocking variant.
+
+For handlers that genuinely need to block (database, downstream HTTP,
+chan synchronisation), use `http_listen_workers_blocking` — same
+signature, ~107k req/s, spawns a coro per connection so blocking ops
+park the coro instead of the worker pthread.
 
 ```glide
-@leaf
 fn root(req: *HttpRequest) -> HttpResponse {
     return HttpResponse::ok().body("hello, ".concat(req.path));
 }
 
 fn main() -> int {
-    http_listen_workers(8080, 4, root);  // SM path, ~160k req/s
+    http_listen_workers(8080, 4, root);  // SM path by default, ~160k req/s
     return 0;
 }
+```
+
+No `@leaf` needed. If the handler blocks at runtime (`chan.recv`,
+`sleep_ms`, etc), the worker aborts with:
+
+```
+[glide] FATAL: HTTP handler tried to recv on a chan.
+  http_listen_workers handlers must be non-blocking.
+  Either drop the blocking call, or switch to
+  http_listen_workers_blocking which spawns a coro per
+  connection so chan ops are safe.
 ```
 
 Median across 3 runs, 4 workers, wrk 2t/200c/5s:
