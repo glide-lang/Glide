@@ -20,6 +20,55 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
+## HTTP stdlib expansion (2026-05-23, post-bench)
+
+The HTTP server got four new layers without changing the public
+listen API:
+
+1. **Router SM fast path**. `r.listen_workers(port, n)` now routes
+   through the C state-machine HTTP server (159k req/s headline).
+   `r.listen_workers_blocking(port, n)` keeps the coro-per-conn
+   shape for handlers that need to park. Validated at 152k req/s on
+   the same 4-core box that previously did 107k via the coro path.
+
+2. **Static file middleware** (`stdlib::http::static`). Mounts a
+   directory at a URL prefix. Production basics: weak ETag from
+   file size, `If-None-Match` → 304, traversal guard (rejects `..`
+   segments + NUL bytes + absolute paths), `index.html` for
+   directory paths, configurable `Cache-Control`, expanded MIME
+   map (html/css/js/png/jpg/svg/woff2/mp4/wasm/…). Serves via the
+   existing `HttpResponse::file` zero-copy sendfile path.
+
+3. **SSE (Server-Sent Events)** (`stdlib::http::sse`).
+   `SseEvent::data / named` constructors, `sse_format` framer,
+   `sse_comment / sse_keepalive` heartbeat helpers, `sse_retry`
+   client-retry hint, `sse_last_event_id(req)` reconnect helper,
+   `SseChannel` chan-backed fan-out source. Sentinel-based close
+   via `SSE_END`. SSE handlers BLOCK (the chunk source parks
+   between events) so run them on
+   `r.listen_workers_blocking(...)`, not the SM fast path.
+
+4. **New `@handler` extractors** (`stdlib::http::extract`):
+    * `Form` — `application/x-www-form-urlencoded` body, with
+      `.get(name)` / `.has(name)`. 415 on wrong Content-Type, 400
+      on parse fail.
+    * `Query<T>` — `?name=value` extraction with type conversion via
+      `FromPath`. Lookup key is the param ident, mirror of `Path<T>`.
+      `@handler`-special-cased same as `Path<T>`.
+    * `Cookies` — wraps the `Cookie:` header with `.get(name)` /
+      `.has(name)`. Walks the header per lookup (cheap; cookies are
+      typically short).
+
+Smoke test (`bench/http_extractors_smoke.glide`) exercises all three
+extractors via `@handler` + `r.listen_workers`:
+
+```
+GET /search?q=glide&page=2          → q=glide page=2
+GET /me                             → "login" HTTP 401
+GET /me [Cookie: session=xyz789]    → sid=xyz789
+POST /submit user=alice&pass=secret → welcome alice
+```
+
 ## HTTP API standardization: http_listen_workers is now SM-default (2026-05-23)
 
 `http_listen_workers(port, n, handler)` was reworked to use the C
