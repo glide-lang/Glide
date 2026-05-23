@@ -20,6 +20,35 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
+## io_uring backend (2026-05-23, Linux 6.8, liburing 2.5)
+
+Opt-in via `GLIDE_REACTOR=uring`. SQPOLL mode by default — kernel
+polls SQ on its own pthread, zero `io_uring_enter` syscalls in
+steady state. Falls back to plain mode on hosts where SQPOLL is
+blocked (older kernels need CAP_SYS_NICE). Disable SQPOLL with
+`GLIDE_URING_NOSQPOLL=1`.
+
+| Backend | 4 workers req/s | vs epoll | Notes |
+|---|---|---|---|
+| epoll (default) | 110 089 | 1.00× | readiness model, syscall per op |
+| io_uring + SQPOLL | 125 750 | 1.14× | best config seen |
+| io_uring no-SQPOLL | 43 279 | 0.39× | syscall per submit, lots of read errors |
+| nginx (reference) | 172 539 | 1.57× | hand-tuned C, epoll edge-triggered |
+
+io_uring with SQPOLL on Linux 6.8 gives +14% throughput at the
+4-worker sweep, but the SQPOLL kernel thread saturates around
+125k req/s on this hardware (one CPU bound). The win is real but
+modest at this hardware ceiling.
+
+**Open improvements:**
+- Per-worker uring instances (4 SQPOLL threads instead of 1)
+- Multi-shot accept (single SQE produces many CQE)
+- Batched send via IOSQE_IO_LINK
+- IORING_REGISTER_FILES to skip fd lookup
+- Linked sendfile for static file serving
+
+These need 200-500 LOC each; deferred to a focused io_uring sprint.
+
 ## HTTP REUSEPORT scaling (2026-05-23, Ubuntu 24.04, 4 cores, wrk co-located)
 
 Hello-world `GET /` benches via `bench/http_hello_single.glide` and
