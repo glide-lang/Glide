@@ -571,6 +571,14 @@ static atomic_int __glide_rr = 0;        /* round-robin spawn counter */
 /* __glide_cur_task is defined earlier so the stack-grow fault handler
    can reference it. */
 static _Thread_local int __glide_my_worker = -1;
+
+/* Per-worker "run next" slot — bypasses the queue spinlock + cv-signal
+   path when an unparker pushes to its OWN worker. The worker's pop loop
+   consults this slot before grabbing the queue lock. Holds AT MOST one
+   task; a second same-worker push spills the previous slot value back
+   to the queue. Mirrors Go's runnext optimisation: chan handoff inside
+   the same P stays in registers / L1 without touching shared state. */
+static _Thread_local __glide_task* __glide_run_next = NULL;
 /* Worker's saved context. Each OS thread has its own — when a coro
    parks/yields, we ctx_switch INTO this so the worker resumes its
    loop right after the call site. */
@@ -597,6 +605,21 @@ extern atomic_long __glide_perf_q_pushes;
 extern atomic_long __glide_perf_cv_signals;
 
 static void __glide_q_push_to(int wid, __glide_task* t) {
+    /* Same-worker push: park the task in the per-worker run-next slot.
+       The worker is currently executing US (this function is called
+       from inside a coro or the worker's own callback), so reading /
+       writing __glide_run_next is purely thread-local — no atomics or
+       lock needed. If the slot was already occupied (an earlier
+       same-worker push hasn't been consumed), spill that older task
+       to the FIFO so we don't lose it. */
+    if (wid == __glide_my_worker) {
+        __glide_task* prev = __glide_run_next;
+        __glide_run_next = t;
+        atomic_fetch_add_explicit(&__glide_perf_q_pushes, 1, memory_order_relaxed);
+        if (prev == NULL) return;
+        t = prev;          /* fall through and FIFO-queue the spilled task */
+        wid = __glide_my_worker;
+    }
     __glide_wq* q = &__glide_wqs[wid];
     __glide_spin_lock(&q->spin);
     t->next = NULL;
@@ -688,6 +711,15 @@ static __glide_task* __glide_try_steal(void) {
 }
 
 static __glide_task* __glide_q_pop_my(void) {
+    /* Run-next bypass: same-worker pushes land here first (see
+       __glide_q_push_to). Pure TLS read — no spinlock, no cache-line
+       bounce, no atomic. Most of the chan handoff fast path stays on
+       this branch when both ends of the chan run on the same worker. */
+    if (__glide_run_next != NULL) {
+        __glide_task* t = __glide_run_next;
+        __glide_run_next = NULL;
+        return t;
+    }
     __glide_wq* q = &__glide_wqs[__glide_my_worker];
     while (!atomic_load_explicit(&__glide_shutdown, memory_order_relaxed)) {
         __glide_spin_lock(&q->spin);
