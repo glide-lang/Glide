@@ -2,44 +2,83 @@
 // Transfer-Encoding. Builds on top of `ChunkSource` so SSE handlers
 // just produce events; the server frames + flushes them.
 //
-// Usage:
-//   pub struct Pulse(idx: int)
+// Two integration shapes, pick by handler:
 //
-//   impl ChunkSource for Pulse {
-//       fn next_chunk(self: *Pulse) -> ?string {
-//           if self.idx >= 5 { return none(); }
-//           self.idx = self.idx + 1;
-//           return some(sse_format(SseEvent {
-//               event: "tick",
-//               data:  self.idx.to_string(),
-//           }));
-//       }
-//   }
+// 1. **Producer-driven** (timer ticks, log tail, stateful generators):
+//    your `ChunkSource` impl computes the next event each call.
 //
-//   @handler
-//   fn ticks(req: *HttpRequest) -> HttpResponse {
-//       let p: *Pulse = malloc(sizeof(Pulse)) as *Pulse;
-//       p.idx = 0;
-//       return sse_response(p);
-//   }
+//    ```glide
+//    pub struct Pulse { pub idx: int }
+//    impl ChunkSource for Pulse {
+//        fn next_chunk(self: *Pulse) -> ?string {
+//            if self.idx >= 5 { return none(); }
+//            self.idx = self.idx + 1;
+//            return some(sse_format(SseEvent::data(self.idx.to_string())));
+//        }
+//    }
+//    fn ticks(_req: *HttpRequest) -> HttpResponse {
+//        let p: *Pulse = malloc(sizeof(Pulse)) as *Pulse; p.idx = 0;
+//        return sse_response(p);
+//    }
+//    ```
+//
+// 2. **Fan-out via chan** (broadcast pubsub from elsewhere in the app):
+//    `SseChannel` wraps a chan and yields events as senders push.
+//    Handler returns the wrapped source; the request stays open until
+//    the chan closes (client disconnect drops the writer, which closes
+//    the chan downstream).
+//
+//    ```glide
+//    let events: chan<SseEvent> = make_chan(64);
+//    fn stream(_req: *HttpRequest) -> HttpResponse {
+//        let src: *SseChannel = SseChannel::new(&events);
+//        return sse_response(src as *dyn ChunkSource);
+//    }
+//    ```
+//
+// SSE handlers BLOCK (chan parks, generator pauses between events).
+// Run them on the coro-per-conn server: `r.listen_workers_blocking(...)`
+// or `http_listen_workers_blocking(...)`. The fast SM path is for
+// non-blocking handlers only.
 
 import stdlib::http::*;
 
+/// One Server-Sent Event. Fields map directly to wire lines:
+///   `event:` (optional name), `id:` (optional ID for Last-Event-ID),
+///   `data:` (one or many lines), `retry:` (ms before client retry, 0 = omit).
 pub struct SseEvent {
-    pub event: string,    // event name (e.g. "tick"); empty = no `event:` line
-    pub data:  string,    // payload; embedded \n is broken into multiple data: lines
-    pub id:    string,    // optional event id (empty = omit)
+    pub event: string,
+    pub id:    string,
+    pub data:  string,
+    pub retry: int,
 }
 
-/// Build the wire bytes for one SSE event. Multiple `data: ...` lines
-/// are emitted when `data` contains `\n`; the spec joins them on the
-/// client side.
+impl SseEvent {
+    /// Build a data-only event with no event name / id / retry. The
+    /// common case: `SseEvent::data("hello")` becomes `data: hello\n\n`.
+    pub fn data(payload: string) -> SseEvent {
+        return SseEvent { event: "", id: "", data: payload, retry: 0 };
+    }
+
+    /// Named event (e.g. `"tick"`, `"chat"`). Client listens via
+    /// `evtSource.addEventListener("tick", ...)`.
+    pub fn named(name: string, payload: string) -> SseEvent {
+        return SseEvent { event: name, id: "", data: payload, retry: 0 };
+    }
+}
+
+/// Serialize an event to wire bytes. Multi-line data emits one
+/// `data: ...` per line (per spec; the client joins them on `\n`).
+/// Empty event = single blank line (a keepalive frame).
 ///
 /// ```glide
-/// sse_format(SseEvent { event: "tick", data: "1", id: "" });
-/// // event: tick\ndata: 1\n\n
+/// sse_format(SseEvent::named("tick", "1"));
+/// // -> "event: tick\ndata: 1\n\n"
 /// ```
 pub fn sse_format(e: SseEvent) -> string {
+    if e.event.len() == 0 && e.id.len() == 0 && e.data.len() == 0 && e.retry == 0 {
+        return "\n";
+    }
     let mut out: string = "";
     if e.event.len() > 0 {
         out = out.concat("event: ").concat(e.event).concat("\n");
@@ -47,28 +86,95 @@ pub fn sse_format(e: SseEvent) -> string {
     if e.id.len() > 0 {
         out = out.concat("id: ").concat(e.id).concat("\n");
     }
-    let lines: *Vector<string> = e.data.split("\n");
-    let mut i: int = 0;
-    while i < lines.len() {
-        out = out.concat("data: ").concat(lines.get(i)).concat("\n");
-        i = i + 1;
+    if e.retry > 0 {
+        out = out.concat("retry: ").concat(e.retry.to_string()).concat("\n");
+    }
+    if e.data.len() > 0 {
+        let lines: *Vector<string> = e.data.split("\n");
+        let mut i: int = 0;
+        while i < lines.len() {
+            out = out.concat("data: ").concat(lines.get(i)).concat("\n");
+            i = i + 1;
+        }
     }
     out = out.concat("\n");
     return out;
 }
 
-/// Wrap `source` in a streaming response with the right
-/// Content-Type and cache-busting headers for SSE. Equivalent to:
+/// SSE comment line — useful as a heartbeat / keepalive so the
+/// connection doesn't time out on intermediaries (nginx default
+/// proxy_read_timeout = 60s). Pair with a timer to emit every ~15-30s.
 ///
-///   HttpResponse::ok()
-///       .set("Content-Type", "text/event-stream")
-///       .set("Cache-Control", "no-cache")
-///       .set("X-Accel-Buffering", "no")
-///       .stream(source)
+/// ```glide
+/// // ": heartbeat\n\n"
+/// sse_comment("heartbeat");
+/// ```
+pub fn sse_comment(text: string) -> string {
+    return ":".concat(text).concat("\n\n");
+}
+
+/// Standard heartbeat frame — just a colon + double newline, no
+/// payload. Smaller than `sse_comment("ping")` on the wire.
+pub fn sse_keepalive() -> string {
+    return ":\n\n";
+}
+
+/// Pull the client's `Last-Event-ID` header. When the browser
+/// reconnects after a transient drop it sends back the last `id:`
+/// it saw. Empty string when the header is absent.
+pub fn sse_last_event_id(req: *HttpRequest) -> string {
+    return req.header("Last-Event-ID");
+}
+
+/// Wrap `source` in a streaming response with the right
+/// Content-Type and cache-busting headers for SSE.
+///
+/// Headers set:
+///   * `Content-Type: text/event-stream`
+///   * `Cache-Control: no-cache`
+///   * `X-Accel-Buffering: no` — disables buffering on nginx proxies
+///   * `Connection: keep-alive`
 pub fn sse_response(source: *dyn ChunkSource) -> HttpResponse {
     return HttpResponse::ok()
         .set("Content-Type", "text/event-stream")
         .set("Cache-Control", "no-cache")
         .set("X-Accel-Buffering", "no")
+        .set("Connection", "keep-alive")
         .stream(source);
+}
+
+/// Fan-out source over a chan. Each event sent into the chan becomes
+/// a frame on the client. To END the stream, send a sentinel event
+/// where `event.event` equals `SSE_END` — the source treats that as
+/// EOF and signals chunked transfer to close.
+///
+/// ```glide
+/// let events: chan<SseEvent> = make_chan(64);
+/// fn stream(_req: *HttpRequest) -> HttpResponse {
+///     let src: *SseChannel = SseChannel::new(&events);
+///     return sse_response(src as *dyn ChunkSource);
+/// }
+/// // elsewhere: events.send(SseEvent::named("ping", "1"));
+/// // close: events.send(SseEvent { event: SSE_END, ... });
+/// ```
+pub const SSE_END: string = "__close__";
+
+pub struct SseChannel {
+    pub ch: *chan<SseEvent>,
+}
+
+impl SseChannel {
+    pub fn new(ch: *chan<SseEvent>) -> *SseChannel {
+        let s: *SseChannel = malloc(sizeof(SseChannel)) as *SseChannel;
+        s.ch = ch;
+        return s;
+    }
+}
+
+impl ChunkSource for SseChannel {
+    fn next_chunk(self: *SseChannel) -> ?string {
+        let ev: SseEvent = self.ch.recv();
+        if ev.event.eq(SSE_END) { return none(); }
+        return some(sse_format(ev));
+    }
 }
