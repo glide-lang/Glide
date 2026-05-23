@@ -222,6 +222,11 @@ fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
     let listen_call: *Expr = expr_call(
         expr_member(expr_ident_unsafe("r", 0, 0), method_name),
         listen_args);
+    // DEBUG: trace marker
+    let trace_args: *Vector<Expr> = Vector::new();
+    trace_args.push(*expr_string("[macro] about to call listen", 0, 0));
+    new_body.push(*stmt_expr(expr_call(
+        expr_ident_unsafe("println", 0, 0), trace_args)));
     new_body.push(*stmt_return(listen_call, 0, 0));
 
     let main_params: *Vector<Param> = Vector::new();
