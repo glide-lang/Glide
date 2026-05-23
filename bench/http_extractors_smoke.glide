@@ -2,27 +2,33 @@
 import stdlib::http::*;
 import stdlib::http::router::*;
 import stdlib::http::handler::*;
-import stdlib::http::route::*;
 import stdlib::http::extract::*;
 
-@get("/search")
+@handler
 fn search(q: Query<string>, page: Query<int>) -> HttpResponse {
     return HttpResponse::ok().text(
         "q=".concat(q.val).concat(" page=").concat(page.val.to_string()));
 }
 
-@post("/submit")
+@handler
 fn submit(form: Form) -> HttpResponse {
     let user: string = form.get("user");
     return HttpResponse::ok().text("welcome ".concat(user));
 }
 
-@get("/me")
+@handler
 fn me(cookies: Cookies) -> HttpResponse {
     let sid: string = cookies.get("session");
     if sid.eq("") { return HttpResponse::with_status(401).text("login"); }
     return HttpResponse::ok().text("sid=".concat(sid));
 }
 
-@listen_workers(8080, 4)
-fn main() { }
+fn main() -> int {
+    let r: *Router = Router::new();
+    r.get("/search", search);
+    r.post("/submit", submit);
+    r.get("/me", me);
+    let res: !int = r.listen_workers(8080, 4);
+    if !res.ok { println!("listen failed:", res.err); return 1; }
+    return 0;
+}
