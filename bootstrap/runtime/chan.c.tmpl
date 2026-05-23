@@ -16,13 +16,19 @@ struct __glide_chan_@M@_t {
     char _pad3[56];
     /* Slow path: blocking + close */
     atomic_int closed;
-    pthread_mutex_t mu;
+    /* coro wait list guard — spinlock, not mutex. Critical sections
+       are 5-10 ns of list pop/push; pthread_mutex would pay ~30 ns
+       per lock/unlock pair on Linux (futex syscall overhead even
+       when uncontended). On a ping-pong cycle that's 4 lock cycles
+       = ~120 ns saved going to spin. */
+    __glide_spin_t  coro_lock;
+    pthread_mutex_t mu;       /* protects cv_*_waiters + cond_wait calls */
     pthread_cond_t  not_empty;
     pthread_cond_t  not_full;
     /* counts of cv_waiters so fast-path can skip mutex+signal when 0 */
     atomic_int cv_recv_waiters;
     atomic_int cv_send_waiters;
-    /* coro waiter lists, walked only under mu */
+    /* coro waiter lists, walked only under coro_lock */
     struct __glide_task* coro_recv_waiters;
     struct __glide_task* coro_send_waiters;
 };
@@ -41,6 +47,7 @@ static __glide_chan_@M@_t* __glide_make_chan_@M@(int cap) {
     atomic_store(&c->enq_pos, 0);
     atomic_store(&c->deq_pos, 0);
     atomic_store(&c->closed, 0);
+    atomic_store(&c->coro_lock, 0);
     pthread_mutex_init(&c->mu, NULL);
     pthread_cond_init(&c->not_empty, NULL);
     pthread_cond_init(&c->not_full, NULL);
@@ -115,17 +122,19 @@ static void __glide_wake_recv_@M@(__glide_chan_@M@_t* c) {
     if (c->coro_recv_waiters == NULL && atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) == 0) return;
     long long t0 = __glide_perf_now_ns();
     __glide_task* unparked = NULL;
-    int signal_cv = 0;
-    pthread_mutex_lock(&c->mu);
+    __glide_spin_lock(&c->coro_lock);
     if (c->coro_recv_waiters) {
         unparked = c->coro_recv_waiters;
         c->coro_recv_waiters = unparked->wait_next;
         unparked->wait_next = NULL;
         unparked->state = 0;
     }
-    if (atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) > 0) signal_cv = 1;
-    if (signal_cv) pthread_cond_signal(&c->not_empty);
-    pthread_mutex_unlock(&c->mu);
+    __glide_spin_unlock(&c->coro_lock);
+    if (atomic_load_explicit(&c->cv_recv_waiters, memory_order_relaxed) > 0) {
+        pthread_mutex_lock(&c->mu);
+        pthread_cond_signal(&c->not_empty);
+        pthread_mutex_unlock(&c->mu);
+    }
     if (unparked) __glide_q_push_to(unparked->home_worker, unparked);
     atomic_fetch_add_explicit(&__glide_perf_wake_ns,
         __glide_perf_now_ns() - t0, memory_order_relaxed);
@@ -135,17 +144,19 @@ static void __glide_wake_send_@M@(__glide_chan_@M@_t* c) {
     if (c->coro_send_waiters == NULL && atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) == 0) return;
     long long t0 = __glide_perf_now_ns();
     __glide_task* unparked = NULL;
-    int signal_cv = 0;
-    pthread_mutex_lock(&c->mu);
+    __glide_spin_lock(&c->coro_lock);
     if (c->coro_send_waiters) {
         unparked = c->coro_send_waiters;
         c->coro_send_waiters = unparked->wait_next;
         unparked->wait_next = NULL;
         unparked->state = 0;
     }
-    if (atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) > 0) signal_cv = 1;
-    if (signal_cv) pthread_cond_signal(&c->not_full);
-    pthread_mutex_unlock(&c->mu);
+    __glide_spin_unlock(&c->coro_lock);
+    if (atomic_load_explicit(&c->cv_send_waiters, memory_order_relaxed) > 0) {
+        pthread_mutex_lock(&c->mu);
+        pthread_cond_signal(&c->not_full);
+        pthread_mutex_unlock(&c->mu);
+    }
     if (unparked) __glide_q_push_to(unparked->home_worker, unparked);
     atomic_fetch_add_explicit(&__glide_perf_wake_ns,
         __glide_perf_now_ns() - t0, memory_order_relaxed);
@@ -171,7 +182,24 @@ static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
             return;
         }
     }
-    /* Slow path: still full. Take mutex, retry, then block. */
+    /* Slow path: still full. For a coro caller we use the spinlock-
+       protected wait list; for a non-coro caller (main, foreign
+       pthread) we fall back to mu+cv_wait. */
+    if (__glide_cur_task != NULL) {
+        __glide_spin_lock(&c->coro_lock);
+        for (;;) {
+            if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
+            if (__glide_try_send_@M@(c, v)) {
+                __glide_spin_unlock(&c->coro_lock);
+                __glide_wake_recv_@M@(c);
+                return;
+            }
+            __glide_spin_park(&c->coro_lock, &c->coro_send_waiters);
+            __glide_spin_lock(&c->coro_lock);
+        }
+        __glide_spin_unlock(&c->coro_lock);
+        return;
+    }
     pthread_mutex_lock(&c->mu);
     for (;;) {
         if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
@@ -180,13 +208,9 @@ static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
             __glide_wake_recv_@M@(c);
             return;
         }
-        if (__glide_park(&c->mu, &c->coro_send_waiters)) {
-            pthread_mutex_lock(&c->mu);
-        } else {
-            atomic_fetch_add_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);
-            pthread_cond_wait(&c->not_full, &c->mu);
-            atomic_fetch_sub_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);
-        }
+        atomic_fetch_add_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);
+        pthread_cond_wait(&c->not_full, &c->mu);
+        atomic_fetch_sub_explicit(&c->cv_send_waiters, 1, memory_order_relaxed);
     }
     pthread_mutex_unlock(&c->mu);
 }
@@ -209,6 +233,22 @@ static @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {
             return v;
         }
     }
+    if (__glide_cur_task != NULL) {
+        __glide_spin_lock(&c->coro_lock);
+        for (;;) {
+            if (__glide_try_recv_@M@(c, &v)) {
+                __glide_spin_unlock(&c->coro_lock);
+                __glide_wake_send_@M@(c);
+                return v;
+            }
+            if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
+            __glide_spin_park(&c->coro_lock, &c->coro_recv_waiters);
+            __glide_spin_lock(&c->coro_lock);
+        }
+        __glide_spin_unlock(&c->coro_lock);
+        memset(&v, 0, sizeof(v));
+        return v;
+    }
     pthread_mutex_lock(&c->mu);
     for (;;) {
         if (__glide_try_recv_@M@(c, &v)) {
@@ -217,13 +257,9 @@ static @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {
             return v;
         }
         if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
-        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {
-            pthread_mutex_lock(&c->mu);
-        } else {
-            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
-            pthread_cond_wait(&c->not_empty, &c->mu);
-            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
-        }
+        atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
+        pthread_cond_wait(&c->not_empty, &c->mu);
+        atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
     }
     pthread_mutex_unlock(&c->mu);
     memset(&v, 0, sizeof(v));
@@ -247,6 +283,21 @@ static int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {
             return 1;
         }
     }
+    if (__glide_cur_task != NULL) {
+        __glide_spin_lock(&c->coro_lock);
+        for (;;) {
+            if (__glide_try_recv_@M@(c, out)) {
+                __glide_spin_unlock(&c->coro_lock);
+                __glide_wake_send_@M@(c);
+                return 1;
+            }
+            if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
+            __glide_spin_park(&c->coro_lock, &c->coro_recv_waiters);
+            __glide_spin_lock(&c->coro_lock);
+        }
+        __glide_spin_unlock(&c->coro_lock);
+        return 0;
+    }
     pthread_mutex_lock(&c->mu);
     for (;;) {
         if (__glide_try_recv_@M@(c, out)) {
@@ -255,25 +306,23 @@ static int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {
             return 1;
         }
         if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
-        if (__glide_park(&c->mu, &c->coro_recv_waiters)) {
-            pthread_mutex_lock(&c->mu);
-        } else {
-            atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
-            pthread_cond_wait(&c->not_empty, &c->mu);
-            atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
-        }
+        atomic_fetch_add_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
+        pthread_cond_wait(&c->not_empty, &c->mu);
+        atomic_fetch_sub_explicit(&c->cv_recv_waiters, 1, memory_order_relaxed);
     }
     pthread_mutex_unlock(&c->mu);
     return 0;
 }
 
 static void __glide_close_@M@(__glide_chan_@M@_t* c) {
-    pthread_mutex_lock(&c->mu);
     atomic_store_explicit(&c->closed, 1, memory_order_release);
-    /* Drain coro waiter lists. */
+    /* Drain coro waiter lists under spinlock. */
+    __glide_spin_lock(&c->coro_lock);
     while (c->coro_send_waiters) __glide_unpark_one(&c->coro_send_waiters);
     while (c->coro_recv_waiters) __glide_unpark_one(&c->coro_recv_waiters);
+    __glide_spin_unlock(&c->coro_lock);
     /* Wake all cv waiters. */
+    pthread_mutex_lock(&c->mu);
     pthread_cond_broadcast(&c->not_empty);
     pthread_cond_broadcast(&c->not_full);
     pthread_mutex_unlock(&c->mu);
