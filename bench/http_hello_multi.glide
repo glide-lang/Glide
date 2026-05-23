@@ -1,0 +1,20 @@
+// HTTP hello-world server — N-worker SO_REUSEPORT.
+// Compare against http_hello_single.glide for the REUSEPORT scaling factor.
+import stdlib::http::*;
+import stdlib::env::*;
+
+fn hello(_req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().with_body("hello\n");
+}
+
+fn main() -> int {
+    let mut port: int = 8080;
+    let env_port: string = env_get("HTTP_PORT");
+    if !env_port.eq("") { port = env_port.parse_int(); }
+    let mut n: int = 4;
+    let env_n: string = env_get("HTTP_WORKERS");
+    if !env_n.eq("") { n = env_n.parse_int(); }
+    let r: !int = http_listen_workers(port, n, hello);
+    if !r.ok { println!("listen failed:", r.err_msg); return 1; }
+    return 0;
+}
