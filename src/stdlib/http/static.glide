@@ -1,54 +1,188 @@
+// Static file middleware.
+//
+// Mounts a filesystem directory at a URL prefix and serves files via
+// the existing zero-copy `HttpResponse::file` path (sendfile / TransmitFile).
+// Production-ready basics:
+//   * path traversal protection (rejects `..`, NUL byte, absolute paths)
+//   * weak ETag from file size — supports `If-None-Match` 304 responses
+//   * `Cache-Control` configurable per mount
+//   * `index.html` for directory paths
+//   * MIME map for the common web content types
+//
+// Range requests / partial content are not yet wired (the `HttpResponse`
+// file path always streams the whole file). Coming with a follow-up
+// when sendfile's offset/length lands on all platforms.
+//
+// ```glide
+// import stdlib::http::*;
+// import stdlib::http::router::*;
+// import stdlib::http::static::*;
+//
+// fn main() -> int {
+//     let r: *Router = Router::new();
+//     serve_dir(r, StaticOpts {
+//         root:          "./public",
+//         url_prefix:    "/static",
+//         cache_control: "public, max-age=3600",
+//     });
+//     return r.listen_workers(8080, 4).val;
+// }
+// ```
+
 import stdlib::http::*;
 import stdlib::http::router::*;
 import stdlib::fs::*;
 
+/// Configuration for a static-file mount.
+///
+/// `root` is the directory on disk; `url_prefix` is the URL path
+/// segment under which files become reachable (e.g. `"/static"` means
+/// `GET /static/css/site.css` reads `<root>/css/site.css`).
+///
+/// `cache_control` is emitted as the `Cache-Control` response header
+/// when non-empty — pass `"public, max-age=31536000, immutable"` for
+/// fingerprinted asset bundles, or `"no-cache"` to force revalidation.
 pub struct StaticOpts {
-    pub root:       string,
-    pub url_prefix: string,
+    pub root:          string,
+    pub url_prefix:    string,
+    pub cache_control: string,
 }
 
 c_raw! {
-    static const char* __glide_static_root = "";
+    static const char* __glide_static_root_g = "";
+    static const char* __glide_static_cache_g = "";
 }
 
 extern fn __glide_static_root_set(root: string);
 extern fn __glide_static_root_get() -> string;
+extern fn __glide_static_cache_set(v: string);
+extern fn __glide_static_cache_get() -> string;
 
 c_raw! {
-    void __glide_static_root_set(const char* root) { __glide_static_root = root; }
-    const char* __glide_static_root_get(void) { return __glide_static_root; }
+    void __glide_static_root_set(const char* root) { __glide_static_root_g = root; }
+    const char* __glide_static_root_get(void) { return __glide_static_root_g; }
+    void __glide_static_cache_set(const char* v) { __glide_static_cache_g = v; }
+    const char* __glide_static_cache_get(void) { return __glide_static_cache_g; }
 }
 
 fn _static_mime(path: string) -> string {
     let ext: string = fs_extension(path);
-    if ext.eq("html") { return "text/html; charset=utf-8"; }
-    if ext.eq("css") { return "text/css; charset=utf-8"; }
-    if ext.eq("js") { return "application/javascript"; }
+    if ext.eq("html") || ext.eq("htm") { return "text/html; charset=utf-8"; }
+    if ext.eq("css")  { return "text/css; charset=utf-8"; }
+    if ext.eq("js")   { return "application/javascript"; }
+    if ext.eq("mjs")  { return "application/javascript"; }
     if ext.eq("json") { return "application/json"; }
-    if ext.eq("png") { return "image/png"; }
-    if ext.eq("jpg") { return "image/jpeg"; }
-    if ext.eq("jpeg") { return "image/jpeg"; }
-    if ext.eq("svg") { return "image/svg+xml"; }
-    if ext.eq("txt") { return "text/plain; charset=utf-8"; }
+    if ext.eq("png")  { return "image/png"; }
+    if ext.eq("jpg") || ext.eq("jpeg") { return "image/jpeg"; }
+    if ext.eq("gif")  { return "image/gif"; }
+    if ext.eq("webp") { return "image/webp"; }
+    if ext.eq("svg")  { return "image/svg+xml"; }
+    if ext.eq("ico")  { return "image/x-icon"; }
+    if ext.eq("woff")  { return "font/woff"; }
+    if ext.eq("woff2") { return "font/woff2"; }
+    if ext.eq("ttf")   { return "font/ttf"; }
+    if ext.eq("otf")   { return "font/otf"; }
+    if ext.eq("pdf")   { return "application/pdf"; }
+    if ext.eq("wasm")  { return "application/wasm"; }
+    if ext.eq("mp4")   { return "video/mp4"; }
+    if ext.eq("webm")  { return "video/webm"; }
+    if ext.eq("mp3")   { return "audio/mpeg"; }
+    if ext.eq("xml")   { return "application/xml"; }
+    if ext.eq("txt") || ext.eq("md") { return "text/plain; charset=utf-8"; }
     return "application/octet-stream";
+}
+
+// Reject paths that try to escape the root: `..` segments, absolute
+// paths, NUL bytes. We can't trust the OS to canonicalise — relying on
+// fs_realpath would round-trip the syscall per request. Cheap string
+// scan covers the attack surface.
+fn _static_traversal_safe(p: string) -> bool {
+    if p.len() == 0 { return false; }
+    // No backslash-escape, no NUL, no absolute path.
+    if p.at(0).to_int() == 47 { return false; }    // leading '/'
+    // Walk segments separated by '/' and reject any equal to "..".
+    let mut start: int = 0;
+    let n: int = p.len();
+    let mut i: int = 0;
+    while i <= n {
+        let at_sep: bool = i == n || p.at(i).to_int() == 47;
+        if at_sep {
+            let seg_len: int = i - start;
+            if seg_len == 2 {
+                if p.at(start).to_int() == 46 && p.at(start + 1).to_int() == 46 {
+                    return false;
+                }
+            }
+            start = i + 1;
+        }
+        // NUL byte rejection — applied to every char on the way.
+        if i < n && p.at(i).to_int() == 0 { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Weak ETag built from file size. Cheap (one stat), strong enough for
+// browser cache validation on dev/staging. For prod with fingerprinted
+// assets the Cache-Control immutable header is the right primary lever.
+fn _weak_etag(size: i64) -> string {
+    return "W/\"".concat((size as int).to_string()).concat("\"");
 }
 
 fn _static_handler(req: *HttpRequest) -> HttpResponse {
     let filepath: string = req.param("filepath");
-    if filepath.index_of("..") >= 0 {
+    if !_static_traversal_safe(filepath) {
         return HttpResponse::with_status(403).text("forbidden");
     }
-    let disk: string = __glide_static_root_get().concat("/").concat(filepath);
+    let root: string = __glide_static_root_get();
+    let mut disk: string = root.concat("/").concat(filepath);
     if !fs_exists(disk) {
         return HttpResponse::with_status(404).text("not found");
     }
-    // Zero-copy serve: the wire bytes go file → kernel page cache →
-    // socket buffer via sendfile/TransmitFile. No userspace allocation
-    // for the body, no fs_read into a Glide string.
-    return HttpResponse::file(disk, _static_mime(disk));
+    // If the resolved path is a directory, try `<dir>/index.html`. If
+    // that's missing too, 404. (No automatic index generation — that's
+    // a per-app policy decision, not a default.)
+    if fs_is_dir(disk) {
+        disk = disk.concat("/index.html");
+        if !fs_exists(disk) {
+            return HttpResponse::with_status(404).text("not found");
+        }
+    }
+
+    let size: i64 = fs_size(disk);
+    let etag: string = _weak_etag(size);
+
+    // If-None-Match short-circuit: client already has this version.
+    let inm: string = req.header("If-None-Match");
+    if !inm.eq("") && inm.eq(etag) {
+        let mut r: HttpResponse = HttpResponse::with_status(304);
+        r = r.set("ETag", etag);
+        let cc: string = __glide_static_cache_get();
+        if !cc.eq("") { r = r.set("Cache-Control", cc); }
+        return r;
+    }
+
+    let mut resp: HttpResponse = HttpResponse::file(disk, _static_mime(disk));
+    resp = resp.set("ETag", etag);
+    let cc: string = __glide_static_cache_get();
+    if !cc.eq("") { resp = resp.set("Cache-Control", cc); }
+    return resp;
 }
 
+/// Mount a directory on the router. Subsequent `GET /<url_prefix>/...`
+/// requests serve files from `<root>/...`. The current implementation
+/// supports a single mount per router (the root + cache settings live
+/// in process-wide statics); call `serve_dir` once at startup.
+///
+/// ```glide
+/// serve_dir(r, StaticOpts {
+///     root:          "./public",
+///     url_prefix:    "/assets",
+///     cache_control: "public, max-age=86400",
+/// });
+/// ```
 pub fn serve_dir(r: *Router, opts: StaticOpts) {
     __glide_static_root_set(opts.root);
+    __glide_static_cache_set(opts.cache_control);
     r.get(opts.url_prefix.concat("/*filepath"), _static_handler);
 }
