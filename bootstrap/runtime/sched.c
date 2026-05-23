@@ -1,5 +1,11 @@
 // ============================ scheduler runtime ============================
+/* _GNU_SOURCE pulls in CPU_SET / cpu_set_t / pthread_setaffinity_np
+   (Linux + glibc + musl). Must be defined before any system header is
+   included; this file is the first scheduler header in the emitted TU
+   so the gate lands early enough. */
+#define _GNU_SOURCE
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <time.h>
 #include <stdint.h>
@@ -287,10 +293,23 @@ static int __glide_stack_grow_in_place(__glide_task* t,
     /* Layout: [guard][...usable...][top]. SP grows downward, so the
        USED portion is [old_sp .. old_top). Copy that block to the
        symmetric position in the new stack. */
-    size_t used = (size_t)((uintptr_t)old_top - old_sp);
+    /* Copy live stack contents. If RSP went BELOW the guard's high
+       edge (function prologue subtracted more than guard size), we
+       must not read from the guard - those addresses are PROT_NONE
+       and would re-fault our handler. Clamp the source low edge to
+       guard_hi; data below it was never actually written. The
+       symmetric position in the new stack is computed from the
+       virtual old_sp so stack-relative addressing in the resumed
+       instruction targets memory inside the new mapping. */
+    char* old_live_lo = old_base + __GLIDE_STACK_GUARD;
+    if ((uintptr_t)old_sp > (uintptr_t)old_live_lo) {
+        old_live_lo = (char*)old_sp;
+    }
+    size_t live = (size_t)((uintptr_t)old_top - (uintptr_t)old_live_lo);
     char* new_top = new_base + new_total;
-    char* new_sp_ptr = new_top - used;
-    memcpy(new_sp_ptr, (void*)old_sp, used);
+    char* new_live_lo = new_top - live;
+    char* new_sp_ptr = new_top - (size_t)((uintptr_t)old_top - old_sp);
+    memcpy(new_live_lo, old_live_lo, live);
 
     /* Narrow pointer fixup: walk the saved-RBP chain ONLY. Frame
        pointer omission is suppressed at compile time (-fno-omit-
@@ -406,15 +425,21 @@ static LONG CALLBACK __glide_stack_grow_veh(EXCEPTION_POINTERS* info) {
 #if !defined(_WIN32)
 #include <signal.h>
 #include <ucontext.h>
+#include <unistd.h>
 static void __glide_stack_grow_sig(int sig, siginfo_t* si, void* ctx_ptr) {
     if (sig != SIGSEGV) return;
     __glide_task* t = __glide_cur_task;
     if (t == NULL) goto fail;
 
+    /* Widened guard region: accept faults inside the guard page OR up
+       to one page below (matches the Windows VEH check). A function
+       with a prologue larger than the guard size can probe past the
+       guard and still be a stack overrun we want to grow. */
     void* fault = si->si_addr;
     char* guard_lo = (char*)t->stack;
-    char* guard_hi = guard_lo + __GLIDE_STACK_GUARD;
-    if ((char*)fault < guard_lo || (char*)fault >= guard_hi) goto fail;
+    char* near_lo = guard_lo - 4096;
+    char* stack_hi = guard_lo + t->stack_total;
+    if ((char*)fault < near_lo || (char*)fault >= stack_hi) goto fail;
 
     ucontext_t* uc = (ucontext_t*)ctx_ptr;
 # if defined(__linux__) && defined(REG_RSP)

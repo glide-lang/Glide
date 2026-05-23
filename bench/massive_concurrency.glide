@@ -16,9 +16,16 @@
 // Override the count with GLIDE_MASSIVE_N=<int>; default 100k so
 // the bench finishes quickly on a stock dev box.
 
+import stdlib::env::*;
+
 extern fn now_ns() -> i64;
-extern fn env_get(name: string) -> string;
 extern fn sleep_ms(ms: int);
+extern fn __glide_bench_exit(code: int);
+
+c_raw! {
+    #include <stdlib.h>
+    static void __glide_bench_exit(int code) { fflush(stdout); fflush(stderr); _Exit(code); }
+}
 
 fn parker(c: chan<int>) {
     /* Block forever; the chan never gets a sender. Each parked coro
@@ -55,5 +62,6 @@ fn main() -> int {
              "rss_after_mb:", after_bytes / (1024 * 1024),
              "delta_mb:", total_bytes / (1024 * 1024),
              "bytes_per_task:", per_task_bytes);
+    __glide_bench_exit(0);
     return 0;
 }

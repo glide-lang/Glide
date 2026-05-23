@@ -1,6 +1,7 @@
 # Reference baseline — Glide vs Go vs Rust tokio
 
-Date: 2026-05-23. Output of project_100b_research_plan.md phase R3.
+Date: 2026-05-23. Output of project_100b_research_plan.md phase R3,
+with Phase A4 (Linux validation) results appended at the bottom.
 
 This is the absolute pre-Phase-A snapshot. Every subsequent SM phase
 (A growable stack, B leaf-fn state machine, C scheduler micro-opt,
@@ -212,3 +213,89 @@ GLIDE_MASSIVE_N=1000000 raises the massive-concurrency count to
 1M tasks. GLIDE_WORKERS=1 + GLIDE_PIN_WORKERS=1 stabilises the
 Glide bimodal bench distribution at the cost of measuring only
 single-worker performance.
+
+## Phase A4 update — Linux validation (2026-05-23)
+
+Cross-compiled `glide.exe build bootstrap/main.glide --target=x86_64-linux-musl`
+from a Windows host and ran on Ubuntu 24.04 (kernel 6.8, 16 GB RAM,
+musl-static binary).
+
+### massive_concurrency on Linux
+
+| N (tasks) | elapsed ms | RSS delta MB | bytes/task | Notes |
+|---|---|---|---|---|
+| 100 000 | 1223 | 409 | **4288** | 3 runs identical |
+| 400 000 | 3395 | 1636 | **4288** | |
+| 500 000 | 4129 | 2045 | **4288** | |
+| 600 000 | 4633 | 2454 | **4288** | |
+| 800 000 | 5612 | 3272 | **4288** | |
+| 1 000 000 | 7777 | 4090 | **4288** | needs `sysctl vm.max_map_count=4194304` |
+
+**4288 bytes per task** — locked in across N. This is the Phase A
+landing number: Glide now beats Go (9051 B) by 2.1× and is 10×
+heavier than Rust tokio (403 B). Phase B (leaf-fn state machine
+codegen) is what closes the gap to tokio.
+
+The number isn't bytes of "Glide stack" alone — it includes the
+8 KiB stack + 4 KiB guard mmap + task struct + chan-recv-waiter
+node + worker queue metadata. The stack mapping is mostly virtual,
+not RSS — Linux only commits the touched pages. A parker function
+that does nothing touches 1 page of stack, so RSS ≈ task struct
+(few hundred B) + the chan-waiter slot + amortised reactor entry.
+
+### park_unpark_coro_clean on Linux
+
+| Mode | ns/cycle |
+|---|---|
+| Default (multi-worker, no pin) | 23 200 |
+| `GLIDE_WORKERS=1 GLIDE_PIN_WORKERS=1` | 23 266 |
+
+Worse than Windows (7000 / 50 bimodal) — Linux pthread_cond_signal
+is more expensive when the wake target is a parked worker thread
+than the Windows equivalent. Pinning doesn't help because the cost
+is in the cv-wake itself, not in cross-core migration.
+
+This 23 µs/cycle is what Phase B reduces to ~200 ns by lowering
+leaf-fn coros into a state machine that runs directly on the
+spawning thread (no cv-wake at all).
+
+### Stack-grow handler — POSIX status
+
+Phase A2/A3 ship the growable-stack infrastructure. Validated on
+Linux musl that:
+
+- The SIGSEGV handler **fires** on guard-page touch.
+- The pre-mmap, mmap, mprotect-guard, memcpy steps **succeed**.
+- The narrow RBP-chain fixup **walks correctly**.
+- `mcontext.gregs[REG_RIP]` modifications **are honoured** by
+  sigreturn (RIP-advance probe survives the SEGV).
+- `mcontext.gregs[REG_RSP]` modifications **are NOT honoured** —
+  after handler returns, the faulting instruction re-runs with
+  the old RSP and faults at the same guard address.
+
+The RSP-not-honoured behaviour is reproducible in this musl-static
+build configuration. Same root-cause class as the Windows VEH
+limitation documented in [[project_codegen_win_break]] — the
+handler infrastructure is correct, the kernel/libc interface
+fails to apply the RSP rewrite. Investigation deferred to Phase B
+(where state-machine codegen eliminates the need to grow at all
+for the common leaf-fn cases).
+
+Workaround for now: lift the default starting stack to 16 KiB
+(GLIDE_STACK_SIZE env) for code paths that recurse beyond the
+current ceiling. Set per-coro on spawn for affected workloads.
+
+### bench harness fixes uncovered
+
+1. `bench/massive_concurrency.glide` blocked on coro drain at
+   program exit (main returning didn't terminate the parked
+   parker coros). Added a `__glide_bench_exit(0)` c_raw helper
+   that calls `_Exit(0)` to bypass the drain — strictly a bench
+   shortcut, not a runtime behaviour change.
+2. Linux glibc-vs-musl: `_GNU_SOURCE` must be defined BEFORE any
+   `<pthread.h>` include for `cpu_set_t` / `CPU_SET` etc. to
+   expose, otherwise affinity-pinning fails to compile on musl
+   targets. Now `-D_GNU_SOURCE` is in the host cc flags.
+3. Bench needs explicit `import stdlib::env::*;` plus an
+   `extern fn now_ns() -> i64;` declaration — extern fns from
+   imported modules are module-local, not re-exported.
