@@ -35,3 +35,7 @@ a.glide
 # Test/bench artifacts
 *.exe
 !~/.cargo/bin/glide.exe
+
+# Rust bench artifacts
+bench/rust/target/
+bench/rust/Cargo.lock
