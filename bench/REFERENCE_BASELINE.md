@@ -20,14 +20,15 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
-## Headline table (snapshot after Phase A4 + B1 + B2, 2026-05-23)
+## Headline table (snapshot after Phase A4 + B1 + B2 + B4, 2026-05-23)
 
 | Metric | Glide | Go | Rust tokio | Winner |
 |---|---|---|---|---|
 | **spawn_1m total ms** (1M tasks created, drained) | **113 Win / 160 Lin** | 107 | 515 | Go ≈ Glide (Rust 5× slower) |
 | **park_unpark_coro_clean** ns/cycle, `GLIDE_CHAN_SPIN=0` | **270** | 267 | 159 | Rust > Go ≈ Glide |
 | **park_unpark_coro_clean** ns/cycle, default | 3 200 | 267 | 159 | spin-budget tradeoff |
-| **massive_concurrency** bytes/task (100k parked, Linux) | 4 288 | 9 051 | **403** | tokio 10× lighter than Glide, Glide 2.1× lighter than Go |
+| **massive_concurrency** bytes/task (regular coro, 100k parked, Linux) | 4 288 | 9 051 | 403 | tokio 10× lighter than regular coro |
+| **leaf_footprint** bytes/task (`@leaf` task, 100k–1M, Linux) | **192** | n/a (Go has no stackless variant) | 403 | **Glide leaf wins** (2.1× lighter than tokio) |
 
 ### Original pre-Phase-A baseline (for diff)
 
@@ -311,6 +312,35 @@ for the common leaf-fn cases).
 Workaround for now: lift the default starting stack to 16 KiB
 (GLIDE_STACK_SIZE env) for code paths that recurse beyond the
 current ceiling. Set per-coro on spawn for affected workloads.
+
+### Phase B4: @leaf attribute + stackless spawn
+
+Add `@leaf` on a function so the spawn site emits `__glide_spawn_leaf`
+instead of `__glide_spawn`. The leaf path allocates only a task struct
+(~168 B) — no per-task stack mmap, no ctx struct init. The worker
+dispatches leaf tasks inline on its own pthread stack with no
+ctx_switch. A leaf function that mis-marks itself and reaches
+`__glide_park` (chan op / sleep / I/O) aborts with a clear error
+instead of deadlocking silently.
+
+Bench `bench/leaf_footprint.glide` spawns N leaf tasks that spin on
+a release atomic. With 8 workers, only 8 spin at a time; the rest
+queue. Sample RSS while the queue is full:
+
+| N (leaf tasks) | RSS delta MB | bytes/task |
+|---|---|---|
+| 100 000 | 19 | **199** |
+| 500 000 | 92 | **192** |
+| 1 000 000 | 184 | **192** |
+
+192 B/task — beats Rust tokio (403 B) by 2.1×, beats Glide regular
+coro (4288 B) by 22×, beats Go goroutine (9051 B) by 47×. This is the
+"tokio-class footprint" deliverable for the 100B plan.
+
+The leaf path is opt-in (via `@leaf`); regular `spawn` still pays the
+4 KB stack page for code that may yield. Phase D (packing) is the
+next lever — fold the task struct itself onto a shared slab so
+multiple tasks share a cache line.
 
 ### bench harness fixes uncovered
 

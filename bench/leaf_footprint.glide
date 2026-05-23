@@ -1,0 +1,104 @@
+// Stackless leaf-task footprint. Spawn N tasks marked @leaf that each
+// just bump an atomic counter and exit. With Phase B4 the per-task
+// allocation skips the 4-KB stack-page commit and only pays the
+// sizeof(__glide_task) record cost — expected <200 B/task vs 4288
+// B/task for a regular coro.
+//
+// Bench dance:
+//   1. Spawn N leaf tasks. Each spins on a release flag (atomic).
+//   2. Wait for all N to mark "arrived" via another atomic counter.
+//   3. Sample RSS — every task is parked-running on a worker thread.
+//   4. Release. Tasks exit.
+//
+// The "spin on release flag" loop is leaf-legal: pure atomic load,
+// no chan, no sleep, no I/O. With 8 workers, only 8 tasks actually
+// spin at once; the rest queue waiting for a worker. Queued leaf
+// tasks pay only their task struct + the queue link slot, ~200 B.
+
+import stdlib::env::*;
+
+extern fn now_ns() -> i64;
+extern fn sleep_ms(ms: int);
+extern fn __glide_bench_exit(code: int);
+extern fn leaf_arrive_and_wait(arrived: *i64, release: *i64);
+extern fn atomic_load_i64(p: *i64) -> i64;
+extern fn atomic_store_i64(p: *i64, v: i64);
+
+c_raw! {
+    #include <stdlib.h>
+    #include <stdint.h>
+    #include <stdatomic.h>
+
+    static void __glide_bench_exit(int code) {
+        fflush(stdout); fflush(stderr); _Exit(code);
+    }
+
+    static void leaf_arrive_and_wait(int64_t* arrived, int64_t* release) {
+        atomic_fetch_add((_Atomic(int64_t)*)arrived, 1);
+        while (atomic_load((_Atomic(int64_t)*)release) == 0) {
+#if defined(__x86_64__) || defined(_M_X64)
+            __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+            __asm__ __volatile__("yield" ::: "memory");
+#endif
+        }
+    }
+
+    static int64_t atomic_load_i64(int64_t* p) {
+        return (int64_t)atomic_load((_Atomic(int64_t)*)p);
+    }
+
+    static void atomic_store_i64(int64_t* p, int64_t v) {
+        atomic_store((_Atomic(int64_t)*)p, v);
+    }
+}
+
+@leaf
+fn parker_leaf(arrived: *i64, release: *i64) {
+    leaf_arrive_and_wait(arrived, release);
+}
+
+fn main() -> int {
+    let mut n: int = 1000;
+    let env_n: string = env_get("GLIDE_LEAF_N");
+    if !env_n.eq("") { n = env_n.parse_int(); }
+
+    let baseline_bytes: i64 = (mem_rss_mb() as i64) * 1024 * 1024;
+
+    let mut arrived: i64 = 0;
+    let mut release: i64 = 0;
+    let arrived_p: *i64 = &arrived;
+    let release_p: *i64 = &release;
+
+    let t0: i64 = now_ns();
+    for let i: int = 0; i < n; i = i + 1 {
+        spawn parker_leaf(arrived_p, release_p);
+    }
+
+    /* Wait for every task to enter the spin loop. The 8 active workers
+       cycle through the queued tasks one at a time; queued tasks aren't
+       yet "arrived". With leaf inlining there's no queueing back-pressure
+       so this completes in ~workers iterations once the queue drains. */
+    /* But we ONLY have 8 workers, so only 8 will be 'arrived' at any
+       given moment — the rest are in the queue, not running.
+       Sample RSS while the queue is at full depth (before they drain). */
+    sleep_ms(200);
+
+    let after_bytes: i64 = (mem_rss_mb() as i64) * 1024 * 1024;
+    let arrived_now: i64 = atomic_load_i64(arrived_p);
+    let delta_bytes: i64 = after_bytes - baseline_bytes;
+    let per_task: i64 = delta_bytes / (n as i64);
+    let t1: i64 = now_ns();
+
+    println!("leaf", n, "tasks elapsed_ms:", (t1 - t0) / 1000000,
+             "arrived:", arrived_now,
+             "rss_baseline_mb:", baseline_bytes / (1024 * 1024),
+             "rss_after_mb:", after_bytes / (1024 * 1024),
+             "delta_mb:", delta_bytes / (1024 * 1024),
+             "bytes_per_task:", per_task);
+
+    atomic_store_i64(release_p, 1);
+    sleep_ms(50);
+    __glide_bench_exit(0);
+    return 0;
+}
