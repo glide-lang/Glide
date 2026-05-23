@@ -2548,7 +2548,14 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // each frame's instruction pointer back to a function name and
     // source line via dbghelp (Windows) / addr2line (POSIX). Cheap —
     // adds a few MB to the binary, no runtime cost.
-    cmd = cmd.concat(" -O2 -g -w -lpthread -lm");
+    /* -fno-omit-frame-pointer is required for the stack-grow fault
+       handler's saved-RBP chain walk (sched.c). Without it the C
+       compiler at -O2 strips frame pointers, RBP becomes a
+       general-purpose register, and the chain walk reads garbage.
+       Cost: ~1-2% in hot loops (one reserved register, two extra
+       prologue/epilogue ops). Worth it for the deep-recursion
+       safety net the grow handler provides. */
+    cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -lpthread -lm");
     if cross {
         cmd = cmd.concat(" --target=").concat(target);
     }

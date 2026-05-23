@@ -292,33 +292,56 @@ static int __glide_stack_grow_in_place(__glide_task* t,
     char* new_sp_ptr = new_top - used;
     memcpy(new_sp_ptr, (void*)old_sp, used);
 
-    /* Conservative pointer fixup: any 8-byte aligned slot in the
-       copied region whose value falls inside the OLD stack range
-       gets rebased by (new_sp_ptr - old_sp). Catches saved frame
-       pointers + any &local stored on stack. False positives are
-       possible (an int that happens to alias the range) but
-       statistically rare for typical stack contents; the trade-off
-       is that we don't have GC-style type metadata to consult. */
+    /* Narrow pointer fixup: walk the saved-RBP chain ONLY. Frame
+       pointer omission is suppressed at compile time (-fno-omit-
+       frame-pointer in main.glide's cc invocation), so each frame
+       has its caller's saved RBP at [RBP+0] and return address at
+       [RBP+8]. We walk from the current RBP downward through the
+       chain, rebasing each saved value that still points into the
+       OLD stack.
+
+       Why not the previous conservative scan: it adjusted ANY 8-
+       byte aligned value in old_range, including int locals that
+       happened to alias the range. Deep non-tail recursion with
+       fat locals reproduced a hang there (Phase A2 notes). Walking
+       only the RBP chain is correctness-equivalent in the common
+       case AND zero false positives - the only sites that need
+       rebasing are exactly the frame links the chain visits.
+
+       Limitation: if user code stored `&local` somewhere on the
+       stack outside the FP chain (e.g. spilled into another
+       local), that pointer goes stale after grow. Glide today
+       doesn't generate that pattern from safe code; arenas /
+       malloc / hashmap heap-allocate. If a future case needs it,
+       add it then - don't pay for it today. */
     intptr_t delta = (intptr_t)((uintptr_t)new_sp_ptr - old_sp);
     uintptr_t old_lo = (uintptr_t)old_base;
     uintptr_t old_hi = (uintptr_t)old_top;
-    char* p = new_sp_ptr;
-    char* p_end = new_top;
-    /* Align to 8 - SP is 16-byte aligned at fn entry per AMD64 ABI,
-       so this round-up is a no-op in practice but keeps us safe if
-       the fault hit between alignment points. */
-    while ((uintptr_t)p & 7) p++;
-    for (; p + sizeof(uintptr_t) <= p_end; p += sizeof(uintptr_t)) {
-        uintptr_t v = *(uintptr_t*)p;
-        if (v >= old_lo && v < old_hi) {
-            *(uintptr_t*)p = (uintptr_t)((intptr_t)v + delta);
-        }
+
+    /* Fix up the register-held frame pointer first - we use it as
+       the walk anchor. */
+    uintptr_t cur_fp_new = 0;
+    if (fp_inout && old_fp >= old_lo && old_fp < old_hi) {
+        cur_fp_new = (uintptr_t)((intptr_t)old_fp + delta);
+        *fp_inout = cur_fp_new;
+    }
+    /* Walk the saved-RBP chain on the NEW stack. At each frame, the
+       saved RBP slot still holds the OLD address; replace with the
+       NEW address (+delta). Stop when the chain exits the stack
+       range (either we've walked off the live region, or the
+       outermost frame had a null / sentinel RBP). */
+    uintptr_t walk = cur_fp_new;
+    int max_frames = 1 << 20;   /* defence against a corrupt chain */
+    while (walk >= (uintptr_t)new_sp_ptr &&
+           walk + sizeof(uintptr_t) <= (uintptr_t)new_top &&
+           max_frames-- > 0) {
+        uintptr_t saved_old = *(uintptr_t*)walk;
+        if (saved_old < old_lo || saved_old >= old_hi) break;
+        uintptr_t saved_new = (uintptr_t)((intptr_t)saved_old + delta);
+        *(uintptr_t*)walk = saved_new;
+        walk = saved_new;
     }
 
-    /* Fix up the register-held frame pointer if it points into old. */
-    if (fp_inout && old_fp >= old_lo && old_fp < old_hi) {
-        *fp_inout = (uintptr_t)((intptr_t)old_fp + delta);
-    }
     *sp_inout = (uintptr_t)new_sp_ptr;
 
     /* Swap the task's stack record over to the new region. The
@@ -353,10 +376,19 @@ static LONG CALLBACK __glide_stack_grow_veh(EXCEPTION_POINTERS* info) {
     __glide_task* t = __glide_cur_task;
     if (t == NULL) return EXCEPTION_CONTINUE_SEARCH;
 
+    /* Accept any fault whose address is "near" this coro's stack:
+       the guard page itself OR up to one page BELOW the guard. A
+       function with a big prologue (sub rsp, N where N > guard_size)
+       lands its first probe below the guard - still ours, still
+       want to grow rather than die. Anything beyond one page of
+       overshoot is a wild pointer, not a stack overrun, and we
+       drop to CONTINUE_SEARCH so the OS can produce a proper
+       crash dump. */
     void* fault = (void*)rec->ExceptionInformation[1];
-    char* guard_lo = (char*)t->stack;
-    char* guard_hi = guard_lo + __GLIDE_STACK_GUARD;
-    if ((char*)fault < guard_lo || (char*)fault >= guard_hi) {
+    char* stack_lo = (char*)t->stack;
+    char* stack_hi = stack_lo + t->stack_total;
+    char* near_lo = stack_lo - 4096;
+    if ((char*)fault < near_lo || (char*)fault >= stack_hi) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
@@ -416,16 +448,13 @@ static int __glide_stack_grow_enabled = 0;
 static void __glide_stack_grow_init(void) {
     if (__glide_stack_grow_inited) return;
     __glide_stack_grow_inited = 1;
-    /* Opt-in for now: the conservative-scan pointer fixup is known to
-       handle small overruns but get derailed on deep recursive frames
-       (depth ~500 hangs on stress tests during Phase A2 bring-up).
-       Until the fixup is narrowed to the saved-RBP chain or made
-       type-aware (A3), keep the handler dormant by default so the
-       suite stays clean. Real workloads that hit the 8 KiB guard
-       still see a normal SIGSEGV / EXCEPTION_ACCESS_VIOLATION and
-       can bump GLIDE_CORO_STACK manually. */
+    /* On by default after A3 narrowed the pointer fixup to the
+       saved-RBP chain only (zero false-positives). Opt OUT with
+       GLIDE_STACK_GROW=0 if a regression is suspected; the OS
+       then falls back to a normal access violation when a coro
+       exceeds its 8 KiB starting stack. */
     const char* env = getenv("GLIDE_STACK_GROW");
-    if (!env || env[0] == '\0' || env[0] == '0') return;
+    if (env && env[0] == '0') return;
     __glide_stack_grow_enabled = 1;
 #ifdef _WIN32
     /* First in chain so we beat any debugger / CRT handler. */
