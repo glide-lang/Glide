@@ -1,16 +1,13 @@
-// Manual router setup — no macros — to isolate macro issue.
+// Macro test — empty user body, no println.
 import stdlib::http::*;
 import stdlib::http::router::*;
+import stdlib::http::handler::*;
+import stdlib::http::route::*;
 
-fn root(_req: *HttpRequest) -> HttpResponse {
+@get("/")
+fn root() -> HttpResponse {
     return HttpResponse::ok().body("hello\n");
 }
 
-fn main() -> int {
-    let r: *Router = Router::new();
-    r.get("/", root);
-    println!("about to listen_workers");
-    let res: !int = r.listen_workers(9999, 4);
-    println!("listen returned ok=", res.ok, " err=", res.err);
-    return 0;
-}
+@listen(9999)
+fn main() { }
