@@ -139,7 +139,6 @@ fn _emit_register_body(method: string, path: string, handler: string,
 @proc_attr(listen)
 @proc_attr(listen_workers)
 fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
-    println!("[impl_listen] firing on fn name=", s.name);
     let mut port: int = 8080;
     let mut workers: int = 1;  // 0 means "use r.listen" (single-thread serial/coro)
     if s.attrs != null {
@@ -218,16 +217,14 @@ fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
     // return r.listen_workers(port, n);   // @listen_workers
     let listen_args: *Vector<Expr> = Vector::new();
     listen_args.push(*expr_int(port, 0, 0));
-    let method_name: string = if workers > 0 { "listen_workers" } else { "listen" };
-    if workers > 0 { listen_args.push(*expr_int(workers, 0, 0)); }
+    let mut method_name: string = "listen";
+    if workers > 0 {
+        method_name = "listen_workers";
+        listen_args.push(*expr_int(workers, 0, 0));
+    }
     let listen_call: *Expr = expr_call(
         expr_member(expr_ident_unsafe("r", 0, 0), method_name),
         listen_args);
-    // DEBUG: trace marker
-    let trace_args: *Vector<Expr> = Vector::new();
-    trace_args.push(*expr_string("[macro] about to call listen", 0, 0));
-    new_body.push(*stmt_expr(expr_call(
-        expr_ident_unsafe("println", 0, 0), trace_args)));
     new_body.push(*stmt_return(listen_call, 0, 0));
 
     let main_params: *Vector<Param> = Vector::new();
