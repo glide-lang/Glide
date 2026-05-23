@@ -1,0 +1,18 @@
+// Smoke test for the friendly abort when an http_listen_workers
+// handler tries to block. Should die immediately on the first
+// request with the runtime guidance message; if we removed the
+// abort it would silently hang the worker.
+
+import stdlib::http::*;
+import stdlib::time::*;
+
+fn bad_handler(_req: *HttpRequest) -> HttpResponse {
+    sleep_ms(50);  // PARKS the runtime — must abort the SM worker
+    return HttpResponse::ok().body("never");
+}
+
+fn main() -> int {
+    let r: !int = http_listen_workers(8080, 2, bad_handler);
+    if !r.ok { println!("listen failed:", r.err); return 1; }
+    return 0;
+}
