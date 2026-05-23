@@ -10,6 +10,7 @@
 // the same worker thread.
 
 extern fn now_ns() -> i64;
+extern fn __glide_perf_dump();
 
 const N: int = 100000;
 const SENTINEL: int = -1;
@@ -51,5 +52,6 @@ fn main() -> int {
     let per_cycle_ns: i64 = elapsed_ns / (N as i64);
     println!("coro-coro park-unpark", N, "cycles total_ns:", elapsed_ns,
              "avg_ns/cycle:", per_cycle_ns);
+    __glide_perf_dump();
     return 0;
 }

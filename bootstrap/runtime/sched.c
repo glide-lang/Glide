@@ -543,6 +543,9 @@ static int __glide_timer_inited = 0;
 static __glide_wq* __glide_wqs = NULL;
 static int __glide_q_inited = 0;
 static int __glide_n_workers = 0;
+/* Spin budget chan ops use before paying park cost (see chan.c.tmpl).
+   Initialised by sched_init from worker count + GLIDE_CHAN_SPIN env. */
+int __glide_chan_spin_count = 32;
 static pthread_t* __glide_workers = NULL;
 /* Pending count, sharded per worker so increments and decrements don't all bounce
    the same cache line. Spawn increments shards[home_worker]; the worker that runs
@@ -998,6 +1001,21 @@ void __glide_sched_init(void) {
     for (int i = 0; i < __glide_n_workers; i++) {
         pthread_mutex_init(&__glide_wqs[i].mu, NULL);
         pthread_cond_init(&__glide_wqs[i].cv, NULL);
+    }
+    /* Pick chan spin count based on worker count + env override. With
+       a single worker the producer of any chan op MUST be this thread
+       (other coros are scheduled on this same worker), so spinning is
+       pure waste — skip to park immediately. With multi-worker, a
+       brief PAUSE catches near-miss producers on other cores before
+       eating cross-core park cost. 32 was the historical default; the
+       bench harness showed 256 (the previous constant) added ~7 µs
+       per cycle on park-heavy paths with zero benefit when the
+       producer is the same thread. */
+    __glide_chan_spin_count = (__glide_n_workers > 1) ? 32 : 0;
+    const char* env_spin = getenv("GLIDE_CHAN_SPIN");
+    if (env_spin) {
+        int n = atoi(env_spin);
+        if (n >= 0 && n <= 1024) __glide_chan_spin_count = n;
     }
     /* One shard per worker plus one for non-coro callers (main / arbitrary OS threads). */
     __glide_pending_n_shards = __glide_n_workers + 1;

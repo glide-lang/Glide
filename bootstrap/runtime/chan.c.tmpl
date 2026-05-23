@@ -95,6 +95,15 @@ static int __glide_try_recv_@M@(__glide_chan_@M@_t* c, @TC@* out) {
     return 1;
 }
 
+/* Spin count BEFORE paying park cost on a full/empty chan op. Set
+   once at sched_init from worker count + env override. With only one
+   worker (or two cooperating coros on the same worker), the producer
+   is THIS thread — spinning waiting for itself is pure waste, so we
+   skip to park immediately. With multiple workers, a brief PAUSE-spin
+   catches the near-miss case (producer about to push from another
+   core) before we eat the cross-core park cost. */
+extern int __glide_chan_spin_count;
+
 /* Pop one parker off the wait list under chan->mu, then drop the lock BEFORE
    handing the task back to its worker queue. q_push_to has its own spinlock and
    can stall for tens of ns; holding chan->mu over that serializes senders/recvers
@@ -151,7 +160,7 @@ static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
         return;
     }
     /* Brief spin — consumer may free a slot any nanosecond. */
-    for (int s = 0; s < 256; s++) {
+    for (int s = 0; s < __glide_chan_spin_count; s++) {
 #if defined(__x86_64__) || defined(_M_X64)
         __asm__ __volatile__("pause" ::: "memory");
 #elif defined(__aarch64__) || defined(_M_ARM64)
@@ -189,7 +198,7 @@ static @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {
         return v;
     }
     /* Brief spin before paying cv_wait cost — producer may be 1 cell behind. */
-    for (int s = 0; s < 256; s++) {
+    for (int s = 0; s < __glide_chan_spin_count; s++) {
 #if defined(__x86_64__) || defined(_M_X64)
         __asm__ __volatile__("pause" ::: "memory");
 #elif defined(__aarch64__) || defined(_M_ARM64)
@@ -227,7 +236,7 @@ static int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {
         return 1;
     }
     /* Spin briefly before cv_wait. */
-    for (int s = 0; s < 256; s++) {
+    for (int s = 0; s < __glide_chan_spin_count; s++) {
 #if defined(__x86_64__) || defined(_M_X64)
         __asm__ __volatile__("pause" ::: "memory");
 #elif defined(__aarch64__) || defined(_M_ARM64)
