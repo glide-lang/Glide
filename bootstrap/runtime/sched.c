@@ -1605,36 +1605,6 @@ int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
     t->park_lock = lock;
     t->park_list = list;
     t->state = 2;
-    /* Direct handoff: if there's a runnable task in our worker's
-       runnext slot, ctx_switch DIRECTLY to it instead of bouncing
-       through the worker's pop loop. We perform the wait-list link
-       + lock drop inline (what worker_main does on state==2) so the
-       next coro can safely race the wake_recv path against us.
-       Saves one ctx_switch + one pop dispatch per park cycle —
-       this is the cross-coro fast path for tight chan ping-pong. */
-    __glide_task* next = __glide_run_next;
-    if (next != NULL && !next->is_leaf) {
-        __glide_run_next = NULL;
-        if (t->park_list) {
-            t->wait_next = *t->park_list;
-            *t->park_list = t;
-            t->park_list = NULL;
-        }
-        if (t->park_lock) {
-            pthread_mutex_unlock(t->park_lock);
-            t->park_lock = NULL;
-        }
-        __glide_cur_task = next;
-        if (!next->has_run) __glide_reset_ctx(next);
-        next->state = 1;
-        next->has_run = 1;
-#ifdef _WIN32
-        __glide_tib_set_stack((char*)next->stack + next->stack_total, next->stack);
-#endif
-        atomic_fetch_add_explicit(&__glide_perf_direct_hits, 1, memory_order_relaxed);
-        __glide_ctx_switch(&t->ctx, &next->ctx);
-        return 1;
-    }
     __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
     return 1;
 }
@@ -1654,30 +1624,6 @@ int __glide_spin_park(__glide_spin_t* lock, __glide_task** list) {
     t->park_spin = lock;
     t->park_list = list;
     t->state = 2;
-    /* Same direct-handoff fast path as __glide_park — see above. */
-    __glide_task* next = __glide_run_next;
-    if (next != NULL && !next->is_leaf) {
-        __glide_run_next = NULL;
-        if (t->park_list) {
-            t->wait_next = *t->park_list;
-            *t->park_list = t;
-            t->park_list = NULL;
-        }
-        if (t->park_spin) {
-            __glide_spin_unlock(t->park_spin);
-            t->park_spin = NULL;
-        }
-        __glide_cur_task = next;
-        if (!next->has_run) __glide_reset_ctx(next);
-        next->state = 1;
-        next->has_run = 1;
-#ifdef _WIN32
-        __glide_tib_set_stack((char*)next->stack + next->stack_total, next->stack);
-#endif
-        atomic_fetch_add_explicit(&__glide_perf_direct_hits, 1, memory_order_relaxed);
-        __glide_ctx_switch(&t->ctx, &next->ctx);
-        return 1;
-    }
     __glide_ctx_switch(&t->ctx, &__glide_worker_ctx);
     return 1;
 }
