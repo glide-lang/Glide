@@ -47,6 +47,20 @@ import stdlib::hashmap::*;
 
 extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
 
+// File-private C global so listen_workers can stash the router for the
+// SM dispatcher to recover on each request. Single router per process,
+// which is the universal pattern — every example has one main router.
+// (If/when multi-router needs surface, replace with a TLS slot keyed
+// per-worker-thread or by listening fd.)
+extern fn __glide_router_sm_set(r: *void);
+extern fn __glide_router_sm_get() -> *void;
+
+c_raw! {
+    static void* __glide_router_sm_state = (void*)0;
+    static void __glide_router_sm_set(void* r) { __glide_router_sm_state = r; }
+    static void* __glide_router_sm_get(void) { return __glide_router_sm_state; }
+}
+
 // Same C HTTP parser ABI the http.glide server loop uses. Re-declared
 // here so the router can run its own accept loop without round-tripping
 // through a fn-pointer handler.
@@ -612,18 +626,26 @@ impl Router {
         return ok(0);
     }
 
-    /// Multi-worker variant: `n` accept loops, each on its own
-    /// SO_REUSEPORT listener. Behaves like `http_listen_workers` but
-    /// dispatches through the router instead of a raw fn-pointer.
+    /// Multi-worker variant: routes through the C state-machine HTTP
+    /// server for max throughput (~159k req/s on a 4-core box,
+    /// SO_REUSEPORT load-balanced). Handlers attached to this router
+    /// MUST be non-blocking — no `chan.send/recv`, no `sleep_ms`, no
+    /// I/O that parks. If a handler tries to block, the runtime aborts
+    /// with a message pointing at `listen_workers_blocking`.
     ///
     /// ```glide
     /// r.listen_workers(8080, 4);
     /// ```
     pub fn listen_workers(self: *Router, port: int, n: int) -> !int {
-        // Linux: REUSEPORT path - each worker binds its own listener.
-        // Elsewhere: shared listener + N accept threads (kernel
-        // serializes accept() on the shared fd). See http_listen_workers
-        // for the rationale.
+        __glide_router_sm_set(self as *void);
+        return http_listen_workers(port, n, _router_sm_dispatch);
+    }
+
+    /// Coroutine-per-conn variant for routes whose handlers genuinely
+    /// need to block (database queries, downstream HTTP calls, chan
+    /// synchronisation). Slower than `listen_workers` (~107k vs ~159k
+    /// req/s on the reference 4-core box) but unrestricted.
+    pub fn listen_workers_blocking(self: *Router, port: int, n: int) -> !int {
         if os_has_reuseport_balance() {
             let probe: *Listener = Listener::bind_reuseport(port);
             if !probe.ok() { return err("bind failed"); }
@@ -649,6 +671,15 @@ impl Router {
         _router_accept_loop_shared(shared, self);
         return ok(0);
     }
+}
+
+// Free fn-pointer that http_listen_workers' SM dispatch calls. Recovers
+// the router from the C-side TLS slot listen_workers stashed it in.
+// Free fn rather than method so it has the plain
+// fn(*HttpRequest) -> HttpResponse shape http_listen_workers expects.
+fn _router_sm_dispatch(req: *HttpRequest) -> HttpResponse {
+    let r: *Router = __glide_router_sm_get() as *Router;
+    return r.dispatch(req);
 }
 
 // ---- server loop (mirror of http.glide _handle_conn but with router) --
