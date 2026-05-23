@@ -1,0 +1,28 @@
+// HTTP hello via the @handler proc macro (Axum-style ergonomic
+// typed handler) + @leaf for the SM fast path. The macro expands
+// the user fn into a fn(*HttpRequest) -> HttpResponse wrapper and
+// propagates @leaf onto it, so http_listen_workers picks the SM
+// path automatically.
+
+import stdlib::http::*;
+import stdlib::http::handler::*;
+import stdlib::env::*;
+
+@handler
+@leaf
+fn hello() -> HttpResponse {
+    let res: HttpResponse = HttpResponse::ok();
+    return res.body("hello\n");
+}
+
+fn main() -> int {
+    let mut port: int = 8080;
+    let env_port: string = env_get("HTTP_PORT");
+    if !env_port.eq("") { port = env_port.parse_int(); }
+    let mut n: int = 4;
+    let env_n: string = env_get("HTTP_WORKERS");
+    if !env_n.eq("") { n = env_n.parse_int(); }
+    let r: !int = http_listen_workers(port, n, hello);
+    if !r.ok { println!("listen failed:", r.err); return 1; }
+    return 0;
+}

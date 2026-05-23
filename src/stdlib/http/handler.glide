@@ -70,8 +70,24 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
     let user_ret_ty: *Type = s.fn_ret_ty;
     let user_body: *Vector<Stmt> = s.fn_body;
 
+    // Detect whether the user stamped `@leaf` on their handler. We
+    // propagate that attribute to BOTH the renamed user fn and the
+    // emitted wrapper — without it, the SM-fast-path http_listen_workers
+    // path would either reject the handler at runtime or fall back to
+    // the slower coro path. The promise belongs to the user (don't park),
+    // so we just copy it through.
+    let mut has_leaf: bool = false;
+    if s.attrs != null {
+        for let ai: int = 0; ai < s.attrs.len(); ai++ {
+            let a: Attr = s.attrs.get(ai);
+            if a.name != null && a.name.eq("leaf") { has_leaf = true; break; }
+        }
+    }
+
     // 1) Emit the renamed user fn — same params, same body, same ret.
-    out.push(*stmt_fn(renamed_name, user_params, user_ret_ty, user_body, 0, 0));
+    let user_fn: *Stmt = stmt_fn(renamed_name, user_params, user_ret_ty, user_body, 0, 0);
+    if has_leaf { _attach_leaf_attr(user_fn); }
+    out.push(*user_fn);
 
     // 2) Wrapper fn(*HttpRequest) -> HttpResponse.
     let wrapper_body: *Vector<Stmt> = Vector::new();
@@ -218,9 +234,28 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
     wrapper_body.push(*stmt_return(ret_expr, 0, 0));
 
     let wrap_params: *Vector<Param> = mk_req_params();
-    out.push(*stmt_fn(wrapper_name, wrap_params, ty_named("HttpResponse"),
-                       wrapper_body, 0, 0));
+    let wrapper_fn: *Stmt = stmt_fn(wrapper_name, wrap_params,
+                                     ty_named("HttpResponse"),
+                                     wrapper_body, 0, 0);
+    if has_leaf { _attach_leaf_attr(wrapper_fn); }
+    out.push(*wrapper_fn);
     return out;
+}
+
+// Attach an `@leaf` Attr to a freshly-built Stmt so the generated
+// wrapper participates in the SM fast path on the http_listen_workers
+// call site. Builds the attr by hand because the proc-macro interp
+// doesn't yet expose a quote-attr helper.
+fn _attach_leaf_attr(s: *Stmt) {
+    let attrs: *Vector<Attr> = Vector::new();
+    let a: Attr = Attr {
+        name:   "leaf",
+        args:   Vector::new(),
+        line:   0,
+        column: 0,
+    };
+    attrs.push(a);
+    s.attrs = attrs;
 }
 
 // Build a single-param `req: *HttpRequest` list via the `make_param`
