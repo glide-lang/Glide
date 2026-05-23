@@ -370,13 +370,18 @@ int __glide_http_sm_hello_run_n(int port, int n) {
     return sm_worker_loop(port);
 }
 
-/* User-handler variant of the SM server. Stores the handler in the
-   global g_sm_handler and then runs N workers exactly like the hello
-   path. The handler is invoked inline from each worker's epoll loop;
-   it MUST be @leaf (no chan / sleep / I/O), otherwise __glide_park
-   will trip on the worker pthread and the process aborts. */
-int __glide_http_sm_run_with(int port, int n, sm_glide_handler_t h) {
-    g_sm_handler = h;
+/* User-handler variant of the SM server. The handler param is typed
+   void* because Glide's codegen emits fn-pointer externs that way —
+   the forward decl in the .__glide.c file uses `void* h` and we have
+   to match it. We cast back to sm_glide_handler_t internally; the
+   Glide-side type system enforced fn(string,string)->string at the
+   spawn site so the underlying ABI matches.
+
+   The handler runs inline on each worker's epoll loop. It MUST be
+   @leaf (no chan / sleep / I/O); the runtime aborts the worker if it
+   reaches __glide_park. */
+int __glide_http_sm_run_with(int port, int n, void* h) {
+    g_sm_handler = (sm_glide_handler_t)h;
     return __glide_http_sm_hello_run_n(port, n);
 }
 
