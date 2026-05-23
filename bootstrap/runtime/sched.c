@@ -1551,6 +1551,7 @@ atomic_long __glide_perf_cv_signals  = 0;
 atomic_long __glide_perf_wake_ns     = 0;
 atomic_long __glide_perf_wake_calls  = 0;
 atomic_long __glide_perf_stack_grows = 0;
+atomic_long __glide_perf_direct_hits = 0;
 
 long long __glide_perf_now_ns(void) {
     struct timespec ts;
@@ -1567,11 +1568,12 @@ void __glide_perf_dump(void) {
     long wn = atomic_exchange(&__glide_perf_wake_ns, 0);
     long wc = atomic_exchange(&__glide_perf_wake_calls, 0);
     long sg = atomic_exchange(&__glide_perf_stack_grows, 0);
+    long dh = atomic_exchange(&__glide_perf_direct_hits, 0);
     long avg = wc > 0 ? wn / wc : 0;
     fprintf(stderr,
-            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld stack_grows=%ld\n"
+            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld stack_grows=%ld direct_hits=%ld\n"
             "             wake_calls=%ld wake_total_ns=%ld wake_avg_ns=%ld\n",
-            p, sp, u, q, cs, sg, wc, wn, avg);
+            p, sp, u, q, cs, sg, dh, wc, wn, avg);
 }
 
 int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
@@ -1629,6 +1631,7 @@ int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
 #ifdef _WIN32
         __glide_tib_set_stack((char*)next->stack + next->stack_total, next->stack);
 #endif
+        atomic_fetch_add_explicit(&__glide_perf_direct_hits, 1, memory_order_relaxed);
         __glide_ctx_switch(&t->ctx, &next->ctx);
         return 1;
     }
@@ -1671,6 +1674,7 @@ int __glide_spin_park(__glide_spin_t* lock, __glide_task** list) {
 #ifdef _WIN32
         __glide_tib_set_stack((char*)next->stack + next->stack_total, next->stack);
 #endif
+        atomic_fetch_add_explicit(&__glide_perf_direct_hits, 1, memory_order_relaxed);
         __glide_ctx_switch(&t->ctx, &next->ctx);
         return 1;
     }
