@@ -20,6 +20,45 @@ Glide's spawn cost stays ahead of Go's.
   `bench/park_unpark_coro_clean*.{glide,go,rs}` and
   `bench/massive_concurrency*.{glide,go,rs}`.
 
+## HTTP API standardization: http_listen_workers is now SM-default (2026-05-23)
+
+`http_listen_workers(port, n, handler)` was reworked to use the C
+state-machine path as the standard implementation. The handler
+signature stays the familiar `fn(*HttpRequest) -> HttpResponse`, but
+the routing through the SM bypasses coro-per-conn overhead. Handler
+MUST be `@leaf`; the runtime aborts if it parks.
+
+For handlers that need to park (chan ops, sleep, downstream HTTP/DB
+calls), the old behaviour is preserved under `http_listen_workers_coro`
+— same signature, slower but unrestricted.
+
+```glide
+@leaf
+fn root(req: *HttpRequest) -> HttpResponse {
+    return HttpResponse::ok().body("hello, ".concat(req.path));
+}
+
+fn main() -> int {
+    http_listen_workers(8080, 4, root);  // SM path, ~160k req/s
+    return 0;
+}
+```
+
+Median across 3 runs, 4 workers, wrk 2t/200c/5s:
+
+| Server | req/s | vs Axum |
+|---|---|---|
+| Axum (Tokio 0.7) | 188 517 | 1.00× |
+| Glide SM bare-strings (`fn(string,string)->string`) | 176 687 | 0.94× |
+| nginx 4w | 174 170 | 0.92× |
+| **Glide `http_listen_workers` (rich API)** | **159 039** | **0.84×** |
+| Glide `http_listen_workers_coro` (coro-per-conn) | 107 424 | 0.57× |
+
+The 10% cost of the rich API vs bare-strings comes from Glide-side
+string concats inside `_format_response`. Future work to land that
+back in C: serialize HttpResponse field-by-field instead of through
+the existing Glide formatter.
+
 ## HTTP state-machine fast path with @leaf handler (2026-05-23)
 
 The C state-machine HTTP server (`bench/http_sm_hello.glide`) was
@@ -139,7 +178,8 @@ of them, accept queues stay shallow under load.
 | **park_unpark_coro_clean** ns/cycle, default | 3 140 | 267 | 159 | spin-budget tradeoff |
 | **massive_concurrency** bytes/task (regular coro, 100k parked, Linux) | 4 288 | 9 051 | 403 | tokio 10× lighter than regular coro |
 | **leaf_footprint** bytes/task (`@leaf` task, 100k–1M, Linux) | **192** | n/a (Go has no stackless variant) | 403 | **Glide leaf wins** (2.1× lighter than tokio) |
-| **HTTP hello req/s** (`http_listen_sm_workers` + `@leaf`, 4 cores) | **180 781** | — (no Go equiv) | 189 007 (Axum) | **Glide at 95% of Axum** |
+| **HTTP hello req/s** (`http_listen_workers` rich API + `@leaf`, 4 cores) | **159 039** | — | 188 517 (Axum) | Glide at 84% of Axum |
+| **HTTP hello req/s** (`http_listen_sm_workers` bare strings + `@leaf`, 4 cores) | **176 687** | — | 188 517 (Axum) | **Glide at 94% of Axum** |
 
 ### Original pre-Phase-A baseline (for diff)
 
