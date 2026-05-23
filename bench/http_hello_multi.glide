@@ -5,7 +5,7 @@ import stdlib::env::*;
 
 fn hello(_req: *HttpRequest) -> HttpResponse {
     let res: HttpResponse = HttpResponse::ok();
-    return res.with_body("hello\n");
+    return res.body("hello\n");
 }
 
 fn main() -> int {
