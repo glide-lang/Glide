@@ -43,6 +43,15 @@ typedef const char* (*sm_glide_handler_t)(const char* method,
                                            const char* path);
 static sm_glide_handler_t g_sm_handler = NULL;
 
+/* Rich-API dispatch: takes the parser glob + user handler ptr +
+   keep_alive flag and returns the full pre-formatted response bytes
+   (status line + headers + body). Glide-side trampoline builds the
+   HttpRequest from hp_glide_* getters, invokes the user's @leaf
+   handler, and formats the resulting HttpResponse. */
+typedef const char* (*sm_dispatch_t)(void* g, void* user_handler, int keep_alive);
+static sm_dispatch_t g_sm_dispatch = NULL;
+static void*         g_sm_user_handler = NULL;
+
 #define SM_BUF_SIZE 8192
 
 typedef enum {
@@ -130,6 +139,28 @@ static int sm_advance_read(sm_conn_t* c) {
 
     c->keep_alive = !hp_glide_wants_close(g);
     int consumed  = hp_glide_consumed(g);
+
+    /* Rich-API dispatch: Glide-side trampoline builds HttpRequest,
+       invokes the user @leaf handler, returns pre-formatted response
+       bytes. C side just copies + writes. */
+    if (g_sm_dispatch != NULL) {
+        const char* resp = g_sm_dispatch(g, g_sm_user_handler, c->keep_alive);
+        hp_glide_free(g);
+        int leftover = c->read_len - consumed;
+        if (leftover < 0) leftover = 0;
+        if (leftover > 0 && consumed > 0) {
+            memmove(c->read_buf, c->read_buf + consumed, (size_t)leftover);
+        }
+        c->read_len = leftover;
+        if (!resp) return -1;
+        int resp_len = (int)strlen(resp);
+        if (resp_len > SM_BUF_SIZE) return -1;
+        memcpy(c->write_buf, resp, (size_t)resp_len);
+        c->write_len = resp_len;
+        c->write_off = 0;
+        c->state = SM_WRITING;
+        return 1;
+    }
 
     /* Fast path: hardcoded "hello!" response (the original SM bench). */
     if (g_sm_handler == NULL) {
@@ -385,6 +416,16 @@ int __glide_http_sm_run_with(int port, int n, void* h) {
     return __glide_http_sm_hello_run_n(port, n);
 }
 
+/* Rich-API entry point: dispatch is the Glide trampoline that builds
+   HttpRequest, invokes user_handler, and serializes the resulting
+   HttpResponse. Both pointers are void* because Glide-emitted externs
+   pass fn-pointers / heap pointers that way; we cast inside. */
+int __glide_http_sm_run_dispatch(int port, int n, void* dispatch, void* user_handler) {
+    g_sm_dispatch     = (sm_dispatch_t)dispatch;
+    g_sm_user_handler = user_handler;
+    return __glide_http_sm_hello_run_n(port, n);
+}
+
 #else
 
 int __glide_http_sm_hello_run(int port) {
@@ -399,6 +440,11 @@ int __glide_http_sm_hello_run_n(int port, int n) {
 
 int __glide_http_sm_run_with(int port, int n, void* h) {
     (void)port; (void)n; (void)h;
+    return -1;
+}
+
+int __glide_http_sm_run_dispatch(int port, int n, void* dispatch, void* user) {
+    (void)port; (void)n; (void)dispatch; (void)user;
     return -1;
 }
 

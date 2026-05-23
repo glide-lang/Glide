@@ -1101,19 +1101,32 @@ fn _handle_tls_dispatch(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse
     _handle_tls_conn(s, handler);
 }
 
-/// Like `http_listen` but bound to N worker threads, each with its own
-/// SO_REUSEPORT listener. The kernel load-balances accepts across the
-/// N threads; per-conn coroutines still feed the shared M:N scheduler,
-/// so handler work parallelises across all worker pthreads.
+/// Multi-worker HTTP/1.1 server, state-machine fast path.
 ///
-/// `n` is the total number of accept threads. The current OS thread
-/// runs the last loop, the other `n - 1` are spawned via `spawn_thread`.
-/// Picks `n = 1` collapses to the same behaviour as `http_listen`.
+/// Each worker is a real pthread running its own epoll loop + per-conn
+/// state machine in C. Requests are parsed in C; the handler is
+/// invoked inline on the worker's epoll thread when a request
+/// finishes parsing — no coroutine spawn, no per-conn stack page,
+/// no ctx_switch. Reaches ~95% of Axum/Tokio on hello-world HTTP/1.1
+/// (~180k req/s on a 4-core box).
 ///
-/// Returns `err` only if the very first bind fails. Subsequent threads
-/// that fail to bind die silently — the kernel decides how many fit.
+/// **The handler MUST be `@leaf`.** That means: no `chan.send` / `chan.recv`,
+/// no `sleep_ms`, no I/O that parks (TCP/HTTP client calls, file reads
+/// via the async reactor, etc). If the handler reaches `__glide_park`
+/// at runtime, the SM worker aborts with a clear error. For handlers
+/// that need to park (database queries, downstream HTTP, etc), use
+/// `http_listen_workers_coro` instead — same signature, slower (~107k
+/// req/s) but unrestricted.
+///
+/// Linux only for now (epoll-based). On macOS / *BSD / Windows the
+/// function falls back to the coroutine path automatically.
 ///
 /// ```glide
+/// @leaf
+/// fn root(req: *HttpRequest) -> HttpResponse {
+///     return HttpResponse::ok().body("hello, ".concat(req.path));
+/// }
+///
 /// fn main() -> int {
 ///     http_listen_workers(8080, 4, root);
 ///     return 0;
@@ -1121,23 +1134,34 @@ fn _handle_tls_dispatch(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse
 /// ```
 pub fn http_listen_workers(port: int, n: int,
                            handler: fn(*HttpRequest) -> HttpResponse) -> !int {
-    // Two strategies depending on whether the OS kernel actually
-    // load-balances accepts when N processes bind with SO_REUSEPORT.
-    //
-    // Linux: yes - each worker creates its own listener (highest
-    // throughput, kernel splits the accept queue per worker).
-    //
-    // macOS / *BSD / Windows: no - either SO_REUSEPORT doesn't
-    // load-balance (last bind wins traffic, so N-1 workers sit idle)
-    // or it doesn't exist at all. We bind once on main and share the
-    // listener fd across N accept threads; the kernel serializes
-    // accept() calls on the shared listener which is correct but
-    // slightly slower than the REUSEPORT path.
+    // Try the SM fast path first. On Linux it'll succeed; on other
+    // platforms the C side returns -1 and we fall through to the
+    // coroutine-per-conn implementation below.
+    let sm_rc: int = __glide_http_sm_run_dispatch(port, n,
+                                                  _glide_sm_dispatch,
+                                                  handler as *void);
+    if sm_rc >= 0 { return ok(0); }
+    return http_listen_workers_coro(port, n, handler);
+}
+
+/// Coroutine-per-conn HTTP/1.1 server — the unrestricted path for
+/// handlers that need to park (chan ops, sleep, downstream I/O).
+/// Slower than `http_listen_workers` (~107k vs ~180k req/s on the
+/// reference 4-core box) but accepts arbitrary handlers, including
+/// ones not marked `@leaf`.
+///
+/// Two strategies depending on whether the OS kernel actually
+/// load-balances accepts when N processes bind with SO_REUSEPORT:
+/// Linux balances → each worker owns its own listener; macOS /
+/// *BSD / Windows share a single listener fd across N accept
+/// threads.
+pub fn http_listen_workers_coro(port: int, n: int,
+                                handler: fn(*HttpRequest) -> HttpResponse) -> !int {
     if os_has_reuseport_balance() {
         let probe: *Listener = Listener::bind_reuseport(port);
         if !probe.ok() { return err("bind failed"); }
         probe.close();
-        println!("http: listening on :", port, " across ", n, " worker(s)");
+        println!("http: listening on :", port, " across ", n, " worker(s) [coro]");
         let mut spawned: int = 1;
         while spawned < n {
             spawn_thread _accept_loop(port, handler);
@@ -1146,11 +1170,9 @@ pub fn http_listen_workers(port: int, n: int,
         _accept_loop(port, handler);
         return ok(0);
     }
-
-    // Shared-listener fallback.
     let shared: *Listener = Listener::bind(port);
     if !shared.ok() { return err("bind failed"); }
-    println!("http: listening on :", port, " across ", n, " worker(s) [shared fd]");
+    println!("http: listening on :", port, " across ", n, " worker(s) [coro, shared fd]");
     let mut spawned: int = 1;
     while spawned < n {
         spawn_thread _accept_loop_shared(shared, handler);
@@ -1164,6 +1186,33 @@ extern fn __glide_http_sm_hello_run(port: int) -> int;
 extern fn __glide_http_sm_hello_run_n(port: int, n: int) -> int;
 extern fn __glide_http_sm_run_with(port: int, n: int,
                                    h: fn(string, string) -> string) -> int;
+extern fn __glide_http_sm_run_dispatch(port: int, n: int,
+                                       dispatch: fn(*void, *void, int) -> string,
+                                       user_handler: *void) -> int;
+
+/// Internal trampoline called by the C state-machine HTTP worker when
+/// a request finishes parsing. Builds the HttpRequest from the parser
+/// glob, invokes the user handler, and returns the pre-formatted
+/// response bytes for the SM to write back. The user handler MUST
+/// be `@leaf` — runs inline on the SM worker's epoll thread; if it
+/// parks, the runtime aborts the worker via __glide_park guard.
+fn _glide_sm_dispatch(g: *void, user: *void, keep_alive: int) -> string {
+    let h: fn(*HttpRequest) -> HttpResponse =
+        user as fn(*HttpRequest) -> HttpResponse;
+    let req: HttpRequest = HttpRequest {
+        method:        hp_glide_method(g),
+        path:          hp_glide_path(g),
+        version:       hp_glide_version(g),
+        headers_block: hp_glide_headers_block(g),
+        body:          hp_glide_body(g),
+        params:        null,
+        queries:       null,
+        tls:           false,
+        headers_cache: null,
+    };
+    let resp: HttpResponse = h(&req);
+    return _format_response(&resp, keep_alive != 0);
+}
 
 /// Coroutine-free hello-world HTTP/1.1 server. Bench baseline for the
 /// cost of the coro layer in `http_listen`. Linux only; returns `err`
