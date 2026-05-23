@@ -4,7 +4,8 @@ import stdlib::http::*;
 import stdlib::env::*;
 
 fn hello(_req: *HttpRequest) -> HttpResponse {
-    return HttpResponse::ok().with_body("hello\n");
+    let res: HttpResponse = HttpResponse::ok();
+    return res.with_body("hello\n");
 }
 
 fn main() -> int {
@@ -15,6 +16,6 @@ fn main() -> int {
     let env_n: string = env_get("HTTP_WORKERS");
     if !env_n.eq("") { n = env_n.parse_int(); }
     let r: !int = http_listen_workers(port, n, hello);
-    if !r.ok { println!("listen failed:", r.err_msg); return 1; }
+    if !r.ok { println!("listen failed:", r.err); return 1; }
     return 0;
 }
