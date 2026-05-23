@@ -232,6 +232,233 @@ int __glide_park(pthread_mutex_t* lock, __glide_task** list);
 void __glide_free_task(__glide_task* t);
 static void __glide_reset_ctx(__glide_task* t);
 static void __glide_flush_main_buf(void);
+extern atomic_long __glide_perf_stack_grows;
+
+/* The current coroutine on this OS thread, for the stack-grow handler
+   to identify which task's guard page faulted. Real definition is
+   here so the handler (a few lines below) can reference it; the rest
+   of the file uses the same symbol. Defined once with init via the
+   "tentative def + later assignment" pattern won't compile under
+   `_Thread_local`, so we use a single full definition. */
+static _Thread_local __glide_task* __glide_cur_task = NULL;
+
+/* Growable stack cap. Hitting this is treated as a real overflow:
+   the fault handler returns CONTINUE_SEARCH and the OS kills the
+   process with a normal access violation, dumping a backtrace. */
+#define __GLIDE_STACK_MAX (8 * 1024 * 1024)
+
+/* The actual grow: allocate 2x current size, copy the live portion,
+   conservatively relocate stack-internal pointers, hand back the new
+   SP/FP. Called from the platform-specific fault handler below.
+   Returns 1 on success (caller resumes execution on new stack) or 0
+   on failure (caller lets the OS terminate the process). */
+static int __glide_stack_grow_in_place(__glide_task* t,
+                                        uintptr_t* sp_inout,
+                                        uintptr_t* fp_inout) {
+    char* old_base = (char*)t->stack;
+    size_t old_total = t->stack_total;
+    char* old_top = old_base + old_total;
+    uintptr_t old_sp = *sp_inout;
+    uintptr_t old_fp = fp_inout ? *fp_inout : 0;
+
+    /* Sanity: only grow when SP is in the guard region of THIS task.
+       Otherwise the fault is some other access violation we shouldn't
+       hijack. */
+    if (old_sp < (uintptr_t)old_base ||
+        old_sp >= (uintptr_t)old_top) return 0;
+    if (old_total >= __GLIDE_STACK_MAX) return 0;
+
+    size_t new_total = old_total * 2;
+    if (new_total > __GLIDE_STACK_MAX) new_total = __GLIDE_STACK_MAX;
+
+#ifdef _WIN32
+    char* new_base = (char*)VirtualAlloc(NULL, new_total,
+                                         MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    if (!new_base) return 0;
+    DWORD old_prot;
+    VirtualProtect(new_base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old_prot);
+#else
+    char* new_base = (char*)mmap(NULL, new_total, PROT_READ|PROT_WRITE,
+                                 MAP_ANON|MAP_PRIVATE, -1, 0);
+    if (new_base == MAP_FAILED) return 0;
+    mprotect(new_base, __GLIDE_STACK_GUARD, PROT_NONE);
+#endif
+
+    /* Layout: [guard][...usable...][top]. SP grows downward, so the
+       USED portion is [old_sp .. old_top). Copy that block to the
+       symmetric position in the new stack. */
+    size_t used = (size_t)((uintptr_t)old_top - old_sp);
+    char* new_top = new_base + new_total;
+    char* new_sp_ptr = new_top - used;
+    memcpy(new_sp_ptr, (void*)old_sp, used);
+
+    /* Conservative pointer fixup: any 8-byte aligned slot in the
+       copied region whose value falls inside the OLD stack range
+       gets rebased by (new_sp_ptr - old_sp). Catches saved frame
+       pointers + any &local stored on stack. False positives are
+       possible (an int that happens to alias the range) but
+       statistically rare for typical stack contents; the trade-off
+       is that we don't have GC-style type metadata to consult. */
+    intptr_t delta = (intptr_t)((uintptr_t)new_sp_ptr - old_sp);
+    uintptr_t old_lo = (uintptr_t)old_base;
+    uintptr_t old_hi = (uintptr_t)old_top;
+    char* p = new_sp_ptr;
+    char* p_end = new_top;
+    /* Align to 8 - SP is 16-byte aligned at fn entry per AMD64 ABI,
+       so this round-up is a no-op in practice but keeps us safe if
+       the fault hit between alignment points. */
+    while ((uintptr_t)p & 7) p++;
+    for (; p + sizeof(uintptr_t) <= p_end; p += sizeof(uintptr_t)) {
+        uintptr_t v = *(uintptr_t*)p;
+        if (v >= old_lo && v < old_hi) {
+            *(uintptr_t*)p = (uintptr_t)((intptr_t)v + delta);
+        }
+    }
+
+    /* Fix up the register-held frame pointer if it points into old. */
+    if (fp_inout && old_fp >= old_lo && old_fp < old_hi) {
+        *fp_inout = (uintptr_t)((intptr_t)old_fp + delta);
+    }
+    *sp_inout = (uintptr_t)new_sp_ptr;
+
+    /* Swap the task's stack record over to the new region. The
+       handler returns and the kernel resumes on the new SP. */
+    t->stack = new_base;
+    t->stack_total = new_total;
+
+    /* Free the old region. Safe because we already memcpy'd the live
+       portion AND no other thread is executing on it (this coro is
+       paused inside the fault handler). */
+#ifdef _WIN32
+    VirtualFree(old_base, 0, MEM_RELEASE);
+#else
+    munmap(old_base, old_total);
+#endif
+
+    atomic_fetch_add_explicit(&__glide_perf_stack_grows, 1, memory_order_relaxed);
+    return 1;
+}
+
+#ifdef _WIN32
+/* VEH that catches access violations on a coro's guard page and grows
+   the stack. Returns CONTINUE_EXECUTION so the faulting instruction
+   re-runs against the larger stack. Non-coro faults or faults outside
+   any coro's guard region fall through to CONTINUE_SEARCH and become
+   normal access violations. */
+static LONG CALLBACK __glide_stack_grow_veh(EXCEPTION_POINTERS* info) {
+    EXCEPTION_RECORD* rec = info->ExceptionRecord;
+    if (rec->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    __glide_task* t = __glide_cur_task;
+    if (t == NULL) return EXCEPTION_CONTINUE_SEARCH;
+
+    void* fault = (void*)rec->ExceptionInformation[1];
+    char* guard_lo = (char*)t->stack;
+    char* guard_hi = guard_lo + __GLIDE_STACK_GUARD;
+    if ((char*)fault < guard_lo || (char*)fault >= guard_hi) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    uintptr_t sp = info->ContextRecord->Rsp;
+    uintptr_t fp = info->ContextRecord->Rbp;
+    if (!__glide_stack_grow_in_place(t, &sp, &fp)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    info->ContextRecord->Rsp = sp;
+    info->ContextRecord->Rbp = fp;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+#endif
+
+#if !defined(_WIN32)
+#include <signal.h>
+#include <ucontext.h>
+static void __glide_stack_grow_sig(int sig, siginfo_t* si, void* ctx_ptr) {
+    if (sig != SIGSEGV) return;
+    __glide_task* t = __glide_cur_task;
+    if (t == NULL) goto fail;
+
+    void* fault = si->si_addr;
+    char* guard_lo = (char*)t->stack;
+    char* guard_hi = guard_lo + __GLIDE_STACK_GUARD;
+    if ((char*)fault < guard_lo || (char*)fault >= guard_hi) goto fail;
+
+    ucontext_t* uc = (ucontext_t*)ctx_ptr;
+# if defined(__linux__) && defined(REG_RSP)
+    uintptr_t sp = (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+    uintptr_t fp = (uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+    if (!__glide_stack_grow_in_place(t, &sp, &fp)) goto fail;
+    uc->uc_mcontext.gregs[REG_RSP] = (greg_t)sp;
+    uc->uc_mcontext.gregs[REG_RBP] = (greg_t)fp;
+    return;
+# elif defined(__APPLE__)
+    uintptr_t sp = (uintptr_t)uc->uc_mcontext->__ss.__rsp;
+    uintptr_t fp = (uintptr_t)uc->uc_mcontext->__ss.__rbp;
+    if (!__glide_stack_grow_in_place(t, &sp, &fp)) goto fail;
+    uc->uc_mcontext->__ss.__rsp = sp;
+    uc->uc_mcontext->__ss.__rbp = fp;
+    return;
+# else
+    goto fail;
+# endif
+
+fail:
+    /* Reset to default handler and re-raise so the user gets the
+       normal access-violation backtrace instead of an infinite loop. */
+    signal(SIGSEGV, SIG_DFL);
+    raise(SIGSEGV);
+}
+#endif
+
+static int __glide_stack_grow_inited = 0;
+static int __glide_stack_grow_enabled = 0;
+static void __glide_stack_grow_init(void) {
+    if (__glide_stack_grow_inited) return;
+    __glide_stack_grow_inited = 1;
+    /* Opt-in for now: the conservative-scan pointer fixup is known to
+       handle small overruns but get derailed on deep recursive frames
+       (depth ~500 hangs on stress tests during Phase A2 bring-up).
+       Until the fixup is narrowed to the saved-RBP chain or made
+       type-aware (A3), keep the handler dormant by default so the
+       suite stays clean. Real workloads that hit the 8 KiB guard
+       still see a normal SIGSEGV / EXCEPTION_ACCESS_VIOLATION and
+       can bump GLIDE_CORO_STACK manually. */
+    const char* env = getenv("GLIDE_STACK_GROW");
+    if (!env || env[0] == '\0' || env[0] == '0') return;
+    __glide_stack_grow_enabled = 1;
+#ifdef _WIN32
+    /* First in chain so we beat any debugger / CRT handler. */
+    AddVectoredExceptionHandler(1, __glide_stack_grow_veh);
+#else
+    /* Per-thread sigaltstack so the handler doesn't run on the
+       (already overflowed) coro stack. Each worker_main installs
+       its own via __glide_stack_grow_thread_init below. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = __glide_stack_grow_sig;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigaction(SIGSEGV, &sa, NULL);
+#endif
+}
+
+#if !defined(_WIN32)
+static __thread void* __glide_sigaltstack_buf = NULL;
+static void __glide_stack_grow_thread_init(void) {
+    if (__glide_sigaltstack_buf != NULL) return;
+    size_t sz = SIGSTKSZ < 16384 ? 16384 : SIGSTKSZ;
+    __glide_sigaltstack_buf = malloc(sz);
+    if (!__glide_sigaltstack_buf) return;
+    stack_t ss;
+    ss.ss_sp = __glide_sigaltstack_buf;
+    ss.ss_size = sz;
+    ss.ss_flags = 0;
+    sigaltstack(&ss, NULL);
+}
+#else
+static void __glide_stack_grow_thread_init(void) {}
+#endif
 
 /* Per-worker queue: each worker pops only from its own queue, so a
    fiber that first ran on worker A always continues on A. This avoids
@@ -284,7 +511,8 @@ static int __glide_pending_sum(void) {
 static atomic_int __glide_shutdown = 0;
 static atomic_int __glide_rr = 0;        /* round-robin spawn counter */
 
-static _Thread_local __glide_task* __glide_cur_task = NULL;
+/* __glide_cur_task is defined earlier so the stack-grow fault handler
+   can reference it. */
 static _Thread_local int __glide_my_worker = -1;
 /* Worker's saved context. Each OS thread has its own — when a coro
    parks/yields, we ctx_switch INTO this so the worker resumes its
@@ -608,6 +836,7 @@ static void __glide_maybe_pin_worker(int wid) {
 static void* __glide_worker_main(void* arg) {
     __glide_my_worker = (int)(intptr_t)arg;
     __glide_maybe_pin_worker(__glide_my_worker);
+    __glide_stack_grow_thread_init();
 #ifdef _WIN32
     /* Snapshot the OS thread's real stack so we can swap TIB.StackBase/Limit
        to the coro's region while it runs and back to ours between switches. */
@@ -679,6 +908,10 @@ void __glide_sched_init(void) {
        bench scripts to read parks/q_pushes/cv_signals across a wrk run. */
     signal(SIGUSR2, __glide_perf_sigusr2);
 #endif
+    /* Install the guard-page fault handler (VEH on Windows, SIGSEGV
+       sigaction on POSIX). The actual sigaltstack per-worker setup
+       happens inside worker_main. */
+    __glide_stack_grow_init();
     const char* env_stk = getenv("GLIDE_CORO_STACK");
     if (env_stk) {
         int n = atoi(env_stk);
@@ -1104,6 +1337,7 @@ atomic_long __glide_perf_q_pushes    = 0;
 atomic_long __glide_perf_cv_signals  = 0;
 atomic_long __glide_perf_wake_ns     = 0;
 atomic_long __glide_perf_wake_calls  = 0;
+atomic_long __glide_perf_stack_grows = 0;
 
 long long __glide_perf_now_ns(void) {
     struct timespec ts;
@@ -1119,11 +1353,12 @@ void __glide_perf_dump(void) {
     long cs = atomic_exchange(&__glide_perf_cv_signals, 0);
     long wn = atomic_exchange(&__glide_perf_wake_ns, 0);
     long wc = atomic_exchange(&__glide_perf_wake_calls, 0);
+    long sg = atomic_exchange(&__glide_perf_stack_grows, 0);
     long avg = wc > 0 ? wn / wc : 0;
     fprintf(stderr,
-            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld\n"
+            "[glide perf] parks=%ld spin_parks=%ld unparks=%ld q_pushes=%ld cv_signals=%ld stack_grows=%ld\n"
             "             wake_calls=%ld wake_total_ns=%ld wake_avg_ns=%ld\n",
-            p, sp, u, q, cs, wc, wn, avg);
+            p, sp, u, q, cs, sg, wc, wn, avg);
 }
 
 int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
