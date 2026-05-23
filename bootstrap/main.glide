@@ -2561,7 +2561,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
        __has_include so the build still works on hosts without
        liburing-dev (the io_uring code is then #ifdef'd out). */
     let mut want_uring: bool = false;
-    if !cross && __glide_is_windows() == 0 && __glide_is_macos() == 0 {
+    if !cross && __glide_is_windows() == 0 {
         if fs_exists("/usr/include/liburing.h")
            || fs_exists("/usr/local/include/liburing.h") {
             want_uring = true;
