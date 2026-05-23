@@ -2555,7 +2555,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
        Cost: ~1-2% in hot loops (one reserved register, two extra
        prologue/epilogue ops). Worth it for the deep-recursion
        safety net the grow handler provides. */
-    cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -D_GNU_SOURCE -lpthread -lm");
+    cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -D_GNU_SOURCE -Wno-error=implicit-function-declaration -lpthread -lm");
     if cross {
         cmd = cmd.concat(" --target=").concat(target);
     }

@@ -3948,13 +3948,41 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         let mut n_args: int = 0;
         if call != null && call.args != null { n_args = call.args.len(); }
 
+        // Leaf detection: if the spawned function carries the `@leaf`
+        // attribute, the runtime can dispatch it inline on the worker
+        // thread without ever mmaping a coro stack — paying ~sizeof(task)
+        // bytes of RSS instead of ~4 KB (Linux page floor). The function
+        // is contractually leaf: no chan ops, no sleep, no I/O. If it
+        // attempts to park anyway, __glide_park aborts with a clear
+        // message (see sched.c).
+        let mut is_leaf_call: bool = false;
+        if call != null && call.lhs != null && call.lhs.kind == EX_IDENT
+           && g.fns.contains(call.lhs.str_val) {
+            let target: Stmt = g.fns.get(call.lhs.str_val);
+            if target.attrs != null {
+                for let ai: int = 0; ai < target.attrs.len(); ai++ {
+                    let a: Attr = target.attrs.get(ai);
+                    if a.name != null && a.name.eq("leaf") {
+                        is_leaf_call = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // spawn_thread (real OS pthread) is incompatible with leaf —
+        // pthread_create needs a function-shaped entry that takes void*
+        // and returns void*, and we don't want to pay pthread cost for
+        // a "leaf" anyway.
+        if s.is_spawn_thread { is_leaf_call = false; }
+        let spawn_fn: string = if is_leaf_call { "__glide_spawn_leaf" } else { "__glide_spawn" };
+
         // Zero-arg fast path — skip the malloc/free of an empty struct.
         if n_args == 0 {
             ind(depth);
             if s.is_spawn_thread {
                 println!("{ pthread_t __tid; pthread_create(&__tid, NULL, __glide_spawn_stub_".concat(ids).concat(", NULL); pthread_detach(__tid); }"));
             } else {
-                println!("__glide_spawn(__glide_spawn_stub_".concat(ids).concat(", NULL);"));
+                println!(spawn_fn.concat("(__glide_spawn_stub_").concat(ids).concat(", NULL);"));
             }
             return;
         }
@@ -3975,7 +4003,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             ind(depth + 1); println!("pthread_create(&__tid, NULL, __glide_spawn_stub_".concat(ids).concat(", __args);"));
             ind(depth + 1); println!("pthread_detach(__tid);");
         } else {
-            ind(depth + 1); println!("__glide_spawn(__glide_spawn_stub_".concat(ids).concat(", __args);"));
+            ind(depth + 1); println!(spawn_fn.concat("(__glide_spawn_stub_").concat(ids).concat(", __args);"));
         }
         ind(depth); println!("}");
         return;

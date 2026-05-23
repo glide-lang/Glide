@@ -208,6 +208,15 @@ typedef struct __glide_task {
     int                 home_worker; /* worker that currently owns this coro;
                                        updated on steal so future unparks land
                                        on the thief's queue (cache-warm). */
+    int                 is_leaf;     /* 1 if the function this task entered
+                                       provably never yields (no chan ops, no
+                                       sleep, no I/O — only computes and
+                                       returns). The worker runs leaf tasks
+                                       INLINE on its own pthread stack, with
+                                       no ctx_switch and no per-task mmap'd
+                                       stack — paid 0 RSS pages per parked
+                                       task (the task is never parked: it
+                                       runs to completion in one go). */
     int                 has_run;     /* 0 if never run; once 1, we never
                                        migrate the coro across OS threads (Win64
                                        SEH/TIB invariants make resumed-on-other-
@@ -922,6 +931,55 @@ static void __glide_maybe_pin_worker(int wid) {
     /* macOS / *BSD: no portable per-thread affinity. Skip. */
 }
 
+/* Separate pool for stackless leaf tasks. These never had a stack
+   allocated, so we can't recycle them into the main pool (the main
+   pool's pop path assumes a usable stack). Keeping a dedicated pool
+   also keeps the leaf task struct cold for the common case where
+   programs only spawn full coros. */
+static __glide_task* __glide_leaf_pool = NULL;
+static __glide_spin_t __glide_leaf_pool_spin = 0;
+static int __glide_leaf_pool_count = 0;
+#define __GLIDE_LEAF_POOL_MAX 65536
+
+static __glide_task* __glide_alloc_leaf_task(void) {
+    __glide_spin_lock(&__glide_leaf_pool_spin);
+    __glide_task* t = __glide_leaf_pool;
+    if (t) {
+        __glide_leaf_pool = t->next;
+        __glide_leaf_pool_count--;
+        __glide_spin_unlock(&__glide_leaf_pool_spin);
+        t->next = NULL;
+        t->state = 0;
+        t->has_run = 0;
+        t->is_leaf = 1;
+        return t;
+    }
+    __glide_spin_unlock(&__glide_leaf_pool_spin);
+    /* Fresh leaf task — calloc gives us a zero-initialised struct, so
+       stack/stack_total/ctx are all NULL/0. No mmap, no coro_init. */
+    t = (__glide_task*)calloc(1, sizeof(__glide_task));
+    t->is_leaf = 1;
+    return t;
+}
+
+static void __glide_free_leaf_task(__glide_task* t) {
+    /* Wipe transient fields before returning to pool. */
+    t->state = 0; t->has_run = 0;
+    t->wait_next = NULL;
+    t->park_lock = NULL; t->park_spin = NULL; t->park_list = NULL;
+    t->palloc_arena = NULL;
+    __glide_spin_lock(&__glide_leaf_pool_spin);
+    if (__glide_leaf_pool_count < __GLIDE_LEAF_POOL_MAX) {
+        t->next = __glide_leaf_pool;
+        __glide_leaf_pool = t;
+        __glide_leaf_pool_count++;
+        __glide_spin_unlock(&__glide_leaf_pool_spin);
+        return;
+    }
+    __glide_spin_unlock(&__glide_leaf_pool_spin);
+    free(t);
+}
+
 static void* __glide_worker_main(void* arg) {
     __glide_my_worker = (int)(intptr_t)arg;
     __glide_maybe_pin_worker(__glide_my_worker);
@@ -938,6 +996,21 @@ static void* __glide_worker_main(void* arg) {
     while (!atomic_load(&__glide_shutdown)) {
         __glide_task* t = __glide_q_pop_my();
         if (!t) break;
+        /* Stackless leaf task: run inline on the worker thread, no
+           ctx_switch, no per-task stack. The function MUST not yield
+           (no chan ops, no sleep, no I/O); the compiler marks the
+           call site as leaf based on the callee's @[leaf] attribute.
+           If a leaf-marked function transitively reaches __glide_park,
+           the park path catches the missing ctx and aborts. */
+        if (t->is_leaf) {
+            __glide_cur_task = t;
+            t->state = 1;
+            t->entry(t->arg);
+            __glide_cur_task = NULL;
+            __glide_free_leaf_task(t);
+            atomic_fetch_sub_explicit(&__glide_pending_shards[__glide_my_worker].v, 1, memory_order_acq_rel);
+            continue;
+        }
         __glide_cur_task = t;
         if (!t->has_run) __glide_reset_ctx(t);
         t->state = 1;
@@ -1298,6 +1371,42 @@ void __glide_spawn(__glide_task_fn fn, void* arg) {
     __glide_q_push_to(t->home_worker, t);
 }
 
+/* Stackless spawn for leaf functions — coros marked at the call site
+   as never-yielding. We allocate a tiny task record (no stack mmap,
+   no ctx init) and queue it. The worker dispatches it inline on its
+   own pthread stack (see worker_main), so a parked-pending leaf task
+   costs ~sizeof(__glide_task) bytes of RSS, not 4 KB+ of stack page.
+
+   Safety: if a leaf-marked function accidentally calls something that
+   parks (e.g. someone changes the body later without removing the
+   @[leaf] attribute), the inline call will reach __glide_park and
+   try to ctx_switch into a NULL ctx. We catch this in __glide_park
+   and panic with a clear message. */
+void __glide_spawn_leaf(__glide_task_fn fn, void* arg) {
+    __glide_task* t = __glide_alloc_leaf_task();
+    t->entry = fn;
+    t->arg = arg;
+    t->home_worker = __glide_pick_worker();
+    int __sidx = (__glide_my_worker >= 0) ? __glide_my_worker : __glide_n_workers;
+    atomic_fetch_add_explicit(&__glide_pending_shards[__sidx].v, 1, memory_order_relaxed);
+    if (__glide_cur_task != NULL && __glide_my_worker >= 0) {
+        __glide_q_push_to(t->home_worker, t);
+        return;
+    }
+    if (__glide_is_main_tls) {
+        t->next = NULL;
+        if (__glide_main_buf_tail) __glide_main_buf_tail->next = t;
+        else __glide_main_buf_head = t;
+        __glide_main_buf_tail = t;
+        __glide_main_buf_count++;
+        if (__glide_main_buf_count >= __GLIDE_MAIN_BATCH) {
+            __glide_flush_main_buf();
+        }
+        return;
+    }
+    __glide_q_push_to(t->home_worker, t);
+}
+
 void yield_now(void) {
     __glide_task* t = __glide_cur_task;
     if (!t) return;
@@ -1475,6 +1584,20 @@ int __glide_park(pthread_mutex_t* lock, __glide_task** list) {
         if (lock) pthread_mutex_unlock(lock);
         __glide_flush_main_buf();
         return 0;
+    }
+    if (t->is_leaf) {
+        /* A function marked @[leaf] at the spawn site reached a park
+           point — chan op, sleep, or I/O. The compiler should have
+           rejected this; if we're here at runtime, the analysis was
+           wrong or the user lied with @[leaf]. We have no stack to
+           ctx_switch out to, so the program would deadlock silently.
+           Abort with a clear message instead. */
+        if (lock) pthread_mutex_unlock(lock);
+        fprintf(stderr,
+            "[glide] FATAL: function marked @[leaf] attempted to park "
+            "(chan op / sleep / I/O). The @[leaf] contract requires the "
+            "spawned function to compute and return without ever yielding.\n");
+        abort();
     }
     atomic_fetch_add_explicit(&__glide_perf_parks, 1, memory_order_relaxed);
     t->park_lock = lock;
