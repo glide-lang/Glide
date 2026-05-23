@@ -43,12 +43,19 @@ static inline void __glide_spin_unlock(__glide_spin_t* l) {
    Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)
    need pointer-map metadata + copy/relocate — TBD. */
 #define __GLIDE_STACK_GUARD 4096
-/* 4 KiB was enough for the original micro-benchmarks but any real
-   handler (HTTP request parser, JSON encode, .concat chains) easily
-   spills past it and crashes on the guard page. 64 KiB matches Go's
-   initial goroutine stack and costs ~64 KiB of virtual + a single
-   page of physical per idle coro on Linux/macOS. */
-static int __glide_stack_size = 65536;
+/* Phase A baby step (2026-05-23): defaulted at 8 KiB instead of the
+   previous 64 KiB. Suite stays 71/72 at 8 KiB. The empirical floor
+   on Glide's current stdlib is around 5 KiB - at 4.5 KiB the suite
+   takes a wrong turn through what looks like an uncontrolled stack
+   overflow (one process grew to ~1 GiB). 8 KiB leaves 3 KiB
+   headroom over that floor.
+   Cuts virtual reservation per coro 8x. 1M coros now fit in 8 GiB
+   virtual (vs 64 GiB before). RSS is page-touch-dependent but the
+   floor drops at the same ratio.
+   Real growable stacks (Go-style copy + pointer fixup) are the
+   Phase A2-A4 work; this commit ships the cheap win first.
+   Override via GLIDE_CORO_STACK (bytes). */
+static int __glide_stack_size = 8192;
 
 /* Custom assembly context switch — replaces Win32 Fibers and POSIX
    ucontext.h with our own portable, ABI-correct register flip. The
