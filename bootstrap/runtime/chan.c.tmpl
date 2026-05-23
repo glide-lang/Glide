@@ -182,9 +182,8 @@ static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
             return;
         }
     }
-    /* Slow path: still full. For a coro caller we use the spinlock-
-       protected wait list; for a non-coro caller (main, foreign
-       pthread) we fall back to mu+cv_wait. */
+    /* Coro caller: use the spinlock-protected wait list for fast
+       park/unpark. */
     if (__glide_cur_task != NULL) {
         __glide_spin_lock(&c->coro_lock);
         for (;;) {
@@ -200,6 +199,11 @@ static void __glide_send_@M@(__glide_chan_@M@_t* c, @TC@ v) {
         __glide_spin_unlock(&c->coro_lock);
         return;
     }
+    /* Non-coro caller (main, foreign pthread): mu + cond_wait path.
+       Flush main's pending spawn buffer first so workers see them
+       while we block on cv. cv_send_waiters bumped before cond_wait
+       so concurrent wake_recv knows to signal. */
+    __glide_flush_main_buf();
     pthread_mutex_lock(&c->mu);
     for (;;) {
         if (atomic_load_explicit(&c->closed, memory_order_acquire)) break;
@@ -249,6 +253,7 @@ static @TC@ __glide_recv_@M@(__glide_chan_@M@_t* c) {
         memset(&v, 0, sizeof(v));
         return v;
     }
+    __glide_flush_main_buf();
     pthread_mutex_lock(&c->mu);
     for (;;) {
         if (__glide_try_recv_@M@(c, &v)) {
@@ -298,6 +303,7 @@ static int __glide_recv_into_@M@(__glide_chan_@M@_t* c, @TC@* out) {
         __glide_spin_unlock(&c->coro_lock);
         return 0;
     }
+    __glide_flush_main_buf();
     pthread_mutex_lock(&c->mu);
     for (;;) {
         if (__glide_try_recv_@M@(c, out)) {
