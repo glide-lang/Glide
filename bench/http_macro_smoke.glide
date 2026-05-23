@@ -9,5 +9,5 @@ fn root() -> HttpResponse {
     return HttpResponse::ok().body("hello\n");
 }
 
-@listen(9999)
+@listen_workers(9999, 4)
 fn main() { }
