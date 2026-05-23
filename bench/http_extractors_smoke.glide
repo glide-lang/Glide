@@ -1,0 +1,28 @@
+// Smoke test: Query<T>, Form, Cookies extractors via @handler.
+import stdlib::http::*;
+import stdlib::http::router::*;
+import stdlib::http::handler::*;
+import stdlib::http::route::*;
+import stdlib::http::extract::*;
+
+@get("/search")
+fn search(q: Query<string>, page: Query<int>) -> HttpResponse {
+    return HttpResponse::ok().text(
+        "q=".concat(q.val).concat(" page=").concat(page.val.to_string()));
+}
+
+@post("/submit")
+fn submit(form: Form) -> HttpResponse {
+    let user: string = form.get("user");
+    return HttpResponse::ok().text("welcome ".concat(user));
+}
+
+@get("/me")
+fn me(cookies: Cookies) -> HttpResponse {
+    let sid: string = cookies.get("session");
+    if sid.eq("") { return HttpResponse::with_status(401).text("login"); }
+    return HttpResponse::ok().text("sid=".concat(sid));
+}
+
+@listen_workers(8080, 4)
+fn main() { }
