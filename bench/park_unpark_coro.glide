@@ -1,0 +1,48 @@
+// Coro-to-coro park/unpark latency. Two SPAWNED coros ping-pong - main
+// is just the driver that waits for results via a final chan. This is
+// the path SM-1's spin park optimizes: wakes between coros skip the
+// pthread_mutex + pthread_cond_signal pair that the cv_wait path needs
+// for foreign-pthread waiters.
+//
+// Compare against park_unpark.glide which has main on one end of the
+// loop (cv path) - the two together tell us whether a workload is
+// dominated by coro-coro or coro-pthread synchronization.
+
+extern fn now_ns() -> i64;
+
+const N: int = 100000;
+const SENTINEL: int = -1;
+
+fn pinger(rx: chan<int>, tx: chan<int>, done: chan<i64>) {
+    let t0: i64 = now_ns();
+    for let i: int = 0; i < N; i = i + 1 {
+        tx.send(i);
+        let _: int = rx.recv();
+    }
+    let t1: i64 = now_ns();
+    tx.send(SENTINEL);
+    done.send(t1 - t0);
+}
+
+fn ponger(rx: chan<int>, tx: chan<int>) {
+    while true {
+        let v: int = rx.recv();
+        if v == SENTINEL { return; }
+        tx.send(v + 1);
+    }
+}
+
+fn main() -> int {
+    let to_pong: chan<int> = make_chan(1024);
+    let from_pong: chan<int> = make_chan(1024);
+    let done: chan<i64> = make_chan(1024);
+
+    spawn pinger(from_pong, to_pong, done);
+    spawn ponger(to_pong, from_pong);
+
+    let elapsed_ns: i64 = done.recv();
+    let per_cycle_ns: i64 = elapsed_ns / (N as i64);
+    println!("coro-coro park-unpark", N, "cycles total_ns:", elapsed_ns,
+             "avg_ns/cycle:", per_cycle_ns);
+    return 0;
+}

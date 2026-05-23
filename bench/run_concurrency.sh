@@ -39,9 +39,20 @@ for name in "${BENCHES[@]}"; do
   if [[ ! -f "$src" ]]; then
     echo "## $name"; echo "_missing source: $src_"; echo; continue
   fi
-  "$GLIDE" build "$src" -o "$exe" >/dev/null 2>&1 || {
-    echo "## $name"; echo "_build failed_"; echo; continue
-  }
+  # glide.exe writes diagnostics + spinner to stdout during build,
+  # then internally `__glide_redirect_to(tmp_c)` re-points fd 1 at
+  # the emitted .c file. If our parent shell hands glide.exe a closed
+  # / null stdout, the spinner status text gets spliced into the .c
+  # file. Pipe build output through a buffer that gets discarded only
+  # after build returns, so glide.exe sees a writable fd 1 during the
+  # emit phase.
+  buildlog=$(mktemp)
+  "$GLIDE" build "$src" -o "$exe" >"$buildlog" 2>&1
+  rc=$?
+  rm -f "$buildlog"
+  if [[ $rc -ne 0 ]]; then
+    echo "## $name"; echo "_build failed (rc=$rc)_"; echo; continue
+  fi
   echo "## $name"
   echo
   printf '```\n'
