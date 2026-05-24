@@ -11,8 +11,8 @@ fn test_emit_primitives() -> i32 {
     assert_str_eq!(JsonValue::null().emit(), "null");
     assert_str_eq!(JsonValue::bool(true).emit(), "true");
     assert_str_eq!(JsonValue::bool(false).emit(), "false");
-    assert_str_eq!(JsonValue::i32(42).emit(), "42");
-    assert_str_eq!(JsonValue::i32(-7).emit(), "-7");
+    assert_str_eq!(JsonValue::int(42).emit(), "42");
+    assert_str_eq!(JsonValue::int(-7).emit(), "-7");
     assert_str_eq!(JsonValue::string("hi").emit(), "\"hi\"");
     return 0;
 }
@@ -26,9 +26,9 @@ fn test_emit_escape() -> i32 {
 
 fn test_emit_array() -> i32 {
     let a: *JsonValue = JsonValue::array();
-    a.arr_push(JsonValue::i32(1));
-    a.arr_push(JsonValue::i32(2));
-    a.arr_push(JsonValue::i32(3));
+    a.arr_push(JsonValue::int(1));
+    a.arr_push(JsonValue::int(2));
+    a.arr_push(JsonValue::int(3));
     assert_str_eq!(a.emit(), "[1,2,3]");
 
     let empty: *JsonValue = JsonValue::array();
@@ -38,7 +38,7 @@ fn test_emit_array() -> i32 {
 
 fn test_emit_object() -> i32 {
     let o: *JsonValue = JsonValue::object();
-    o.obj_set("a", JsonValue::i32(1));
+    o.obj_set("a", JsonValue::int(1));
     o.obj_set("b", JsonValue::string("hi"));
     assert_str_eq!(o.emit(), "{\"a\":1,\"b\":\"hi\"}");
 
@@ -50,8 +50,8 @@ fn test_emit_object() -> i32 {
 fn test_emit_nested() -> i32 {
     let o: *JsonValue = JsonValue::object();
     let arr: *JsonValue = JsonValue::array();
-    arr.arr_push(JsonValue::i32(1));
-    arr.arr_push(JsonValue::i32(2));
+    arr.arr_push(JsonValue::int(1));
+    arr.arr_push(JsonValue::int(2));
     o.obj_set("xs", arr);
     o.obj_set("ok", JsonValue::bool(true));
     assert_str_eq!(o.emit(), "{\"xs\":[1,2],\"ok\":true}");
@@ -121,7 +121,7 @@ fn test_parse_string_escapes() -> i32 {
 fn test_round_trip() -> i32 {
     let o: *JsonValue = JsonValue::object();
     o.obj_set("name", JsonValue::string("alice"));
-    o.obj_set("age",  JsonValue::i32(30));
+    o.obj_set("age",  JsonValue::int(30));
     o.obj_set("ok",   JsonValue::bool(true));
     o.obj_set("nada", JsonValue::null());
 

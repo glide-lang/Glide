@@ -26,7 +26,7 @@ impl JsonBind for StructLegal {
         let v: *JsonValue = JsonValue::object();
         v.obj_set("nome", JsonValue::string(self.nome));
         if self.idade.has {
-            v.obj_set("idade", JsonValue::i32(self.idade.val));
+            v.obj_set("idade", JsonValue::int(self.idade.val));
         }
         if self.extra != null {
             v.obj_set("extra", self.extra);

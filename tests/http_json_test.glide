@@ -46,7 +46,7 @@ impl UpdateUser {
         let v: *JsonValue = JsonValue::object();
         v.obj_set("nome", JsonValue::string(self.nome));
         if self.idade.has {
-            v.obj_set("idade", JsonValue::i32(self.idade.val));
+            v.obj_set("idade", JsonValue::int(self.idade.val));
         }
         if self.extra != null {
             v.obj_set("extra", self.extra);
@@ -148,7 +148,7 @@ fn test_optional_wrong_type_drops_to_none() -> i32 {
 fn test_response_json_of() -> i32 {
     let v: *JsonValue = JsonValue::object();
     v.obj_set("ok", JsonValue::bool(true));
-    v.obj_set("n",  JsonValue::i32(42));
+    v.obj_set("n",  JsonValue::int(42));
     let resp: HttpResponse = HttpResponse::ok().json_of(v);
     assert_str_eq!(resp.header("Content-Type"), "application/json");
     assert_str_eq!(resp.body, "{\"ok\":true,\"n\":42}");

@@ -704,7 +704,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
     if _jp_peek(p) == 101 || _jp_peek(p) == 69 { is_float = true; }
     if !is_float {
         if neg { int_part = -int_part; }
-        return JsonValue::i32(int_part);
+        return JsonValue::int(int_part);
     }
 
     let mut frac_part: i32 = 0;
@@ -741,7 +741,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
     let mut v: f64 = (int_part as f64) + (frac_part as f64) / _jp_pow10(frac_digits);
     v = v * _jp_pow10(exp_val);
     if neg { v = -v; }
-    return JsonValue::f64(v);
+    return JsonValue::float(v);
 }
 
 // ---- JsonBind trait ----------------------------------------------------

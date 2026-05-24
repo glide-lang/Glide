@@ -95,7 +95,11 @@ def migrate(text):
             while j < n and (text[j].isalnum() or text[j] == "_"):
                 j += 1
             w = text[i:j]
-            if w in MAP and prev_word != "fn":
+            # Carve-outs: the `fn <name>` definition keeps its name, and a
+            # `Type::int(...)` method call (`::int`) is a method name, not a
+            # type — both must survive (e.g. the JSON ctors `JsonValue::int`).
+            after_colons = i >= 2 and text[i - 1] == ":" and text[i - 2] == ":"
+            if w in MAP and prev_word != "fn" and not after_colons:
                 out.append(MAP[w])
             else:
                 out.append(w)

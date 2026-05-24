@@ -21,7 +21,7 @@ impl JsonBind for Pet {
     fn to_json(self: *Pet) -> *JsonValue {
         let v: *JsonValue = JsonValue::object();
         v.obj_set("name", JsonValue::string(self.name));
-        v.obj_set("age",  JsonValue::i32(self.age));
+        v.obj_set("age",  JsonValue::int(self.age));
         return v;
     }
 }
