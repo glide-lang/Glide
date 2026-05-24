@@ -4323,6 +4323,46 @@ fn _chain_resolve_type(text: string, end_pos: int, stmts: *Vector<Stmt>, line0: 
 // Push members of the receiver type into `items`. Handles `!T` (ok/val/err),
 // `?T` (has/val), `?!T` (has/ok/val/err), and named/generic types via the
 // existing list_fields/list_methods/list_chan helpers.
+// Push one primitive-type method completion with a doc + example. `ret` is
+// the return type shown in the signature.
+fn _prim_method(items: *JsonValue, seen: *HashMap<bool>, name: string, ret: string, doc: string) {
+    if seen.contains(name) { return; }
+    seen.insert(name, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(
+        name, "", 2, name.concat("(self) -> ").concat(ret), doc, "", "", false, no_edit));
+}
+
+// Methods on the primitive types. These are lowered by codegen, not written
+// in Glide source, so member completion (`c.` / `n.` / `b.`) would otherwise
+// show nothing for them — surface them here with a summary + a fenced
+// `glide` example, the same shape the documented stdlib uses.
+fn _list_primitive_methods(type_name: string, items: *JsonValue, seen: *HashMap<bool>) {
+    if type_name.eq("char") {
+        _prim_method(items, seen, "to_int", "int",
+            "The character's numeric code point.\n\n```glide\nlet c: char = 'A';\nc.to_int();   // 65\n```");
+        _prim_method(items, seen, "to_string", "string",
+            "A one-character `string` holding this char.\n\n```glide\n'x'.to_string();   // \"x\"\n```");
+        _prim_method(items, seen, "is_digit", "bool",
+            "True for `'0'` through `'9'`.\n\n```glide\n'7'.is_digit();   // true\n'a'.is_digit();   // false\n```");
+        _prim_method(items, seen, "is_alpha", "bool",
+            "True for an ASCII letter (`a`-`z` / `A`-`Z`).\n\n```glide\n'a'.is_alpha();   // true\n```");
+        return;
+    }
+    if type_name.eq("int") {
+        _prim_method(items, seen, "abs", "int",
+            "Absolute value.\n\n```glide\nlet n: int = -5;\nn.abs();   // 5\n```");
+        _prim_method(items, seen, "to_string", "string",
+            "Decimal text for this integer.\n\n```glide\nlet n: int = 42;\nn.to_string();   // \"42\"\n```");
+        return;
+    }
+    if type_name.eq("bool") {
+        _prim_method(items, seen, "to_string", "string",
+            "`\"true\"` or `\"false\"`.\n\n```glide\nlet ok: bool = true;\nok.to_string();   // \"true\"\n```");
+        return;
+    }
+}
+
 fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValue, seen: *HashMap<bool>) {
     if ty == null { return; }
     let x: *Type = _strip_ptr_borrow(ty);
@@ -4351,6 +4391,7 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
     if x.kind == TY_NAMED || x.kind == TY_GENERIC {
         list_fields_for_type(stmts, x.name, items, seen);
         list_methods_for_type(stmts, x.name, items, seen, true);
+        _list_primitive_methods(x.name, items, seen);
         list_chan_methods_for_type(x.name, items, seen);
         return;
     }
@@ -4417,7 +4458,13 @@ fn list_methods_for_type(stmts: *Vector<Stmt>, type_name: string,
                 if !want_self && has_self { continue; }
                 if seen.contains(m.name) { continue; }
                 seen.insert(m.name, true);
-                json_arr_push(items, completion_item(m.name, 2, fn_signature(&m)));
+                // Carry the `///` doc comment so method completion shows the
+                // summary + example on hover, not just the signature.
+                let mut mdoc: string = "";
+                if m.doc_comment != null { mdoc = m.doc_comment; }
+                let no_edit_m: *JsonValue = null;
+                json_arr_push(items, rich_completion_item(
+                    m.name, "", 2, fn_signature(&m), mdoc, "", "", false, no_edit_m));
             } else if m.kind == ST_MACRO_DEF {
                 // Mirror the fn filter: instance macros (body uses `self`)
                 // belong to `v.` completion; static-in-impl macros (no self)
