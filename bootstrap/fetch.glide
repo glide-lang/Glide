@@ -226,6 +226,8 @@ fn _normalise_git_url(url: string) -> string {
     if url.starts_with("http://")  { return url; }
     if url.starts_with("git@")     { return url; }
     if url.starts_with("ssh://")   { return url; }
+    if url.starts_with("git://")   { return url; }
+    if url.starts_with("file://")  { return url; }   // local / mirror remotes
     return "https://".concat(url);
 }
 
