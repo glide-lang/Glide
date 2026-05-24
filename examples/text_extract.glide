@@ -1,0 +1,37 @@
+// text_extract — text processing with Glide's pure-Glide regex engine.
+//
+//   glide run examples/text_extract.glide
+//
+// Shows: `stdlib::regex` (a PCRE-like engine written entirely in Glide),
+// `!T` error handling with `.ok` / `.val` / `.err`, named capture groups,
+// `find_all`, and `replace_all`.
+
+import stdlib::regex::*;
+
+fn main() -> int {
+    let text: string = "order 1042 shipped, order 87 pending, order 9001 shipped";
+
+    // 1) Every run of digits.
+    let digits: !*Regex = Regex::compile("\\d+");
+    if !digits.ok { println!("regex error:", digits.err); return 1; }
+    let nums: *Vector<*Match> = digits.val.find_all(text);
+    print!("numbers found:");
+    for let i: int = 0; i < nums.len(); i = i + 1 {
+        print!(" ");
+        print!(nums.get(i).full());
+    }
+    println!("");
+
+    // 2) Named capture groups: pull (id, status) out of each "order ..." entry.
+    let entry: !*Regex = Regex::compile("order (?<id>\\d+) (?<status>\\w+)");
+    if !entry.ok { println!("regex error:", entry.err); return 1; }
+    let hits: *Vector<*Match> = entry.val.find_all(text);
+    for let i: int = 0; i < hits.len(); i = i + 1 {
+        let m: *Match = hits.get(i);
+        println!("  order", m.named("id"), "->", m.named("status"));
+    }
+
+    // 3) Redact every number.
+    println!("redacted:", digits.val.replace_all(text, "###"));
+    return 0;
+}
