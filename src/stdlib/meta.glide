@@ -1,0 +1,34 @@
+// stdlib::meta — stable surface for compile-time / macro-authoring libraries.
+//
+// A library that ships a `@proc_macro` / `@proc_attr` / `@proc_derive` builds
+// AST nodes that the compiler splices into the consumer AT COMPILE TIME (the
+// macro runs in the compiler's embedded interpreter, before codegen — so a
+// dependency can resolve work before the program ever reaches runtime).
+//
+// Import THIS module for the node types + constructors instead of reaching
+// into the compiler's own `bootstrap::ast`. The names are identical, but this
+// surface is the curated, supported entry point: a macro lib that imports
+// `stdlib::meta` is insulated from internal compiler refactors and reads as a
+// normal dependency rather than poking at the compiler's guts.
+//
+// ```glide
+// import stdlib::meta::*;
+//
+// // `answer!()` expands to the literal `42` at every call site.
+// @proc_macro(answer)
+// fn impl_answer(args: *Vector<Expr>) -> *Vector<Stmt> {
+//     let out: *Vector<Stmt> = Vector::new();
+//     out.push(*stmt_expr(expr_int(42, 0, 0)));
+//     return out;
+// }
+// ```
+//
+// What you get: the `Expr` / `Stmt` / `Type` / `Param` / `Attr` node structs,
+// the `EX_*` / `ST_*` / `TY_*` / `UN_*` kind constants, and the `expr_*` /
+// `stmt_*` / `ty_*` constructors used to build replacement AST. The macro
+// fn's input is the call's `*Vector<Expr>` (fn-style) or the annotated
+// `*Stmt` (attr / derive); its output is the `*Vector<Stmt>` spliced in.
+//
+// Macro impls are stripped from the consumer's generated binary (they exist
+// only at compile time), so importing this module adds no runtime weight.
+pub import bootstrap::ast::*;
