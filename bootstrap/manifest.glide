@@ -11,14 +11,22 @@ import parser;
 // and walks the AST to pull out literal fields. Shape:
 //
 //     let manifest: Package = Package {
-//         name:    "my_app",
-//         version: "0.1.0",
-//         bin:     "src/main.glide",   // optional, default src/main.glide
+//         name:        "my_app",
+//         version:     "0.1.0",
+//         description: "what it does",        // optional metadata
+//         author:      "Ada <ada@example.com>",
+//         license:     "MIT",
+//         repository:  "github.com/ada/my_app",
+//         bin:         "src/main.glide",      // optional, default src/main.glide
+//         target:      "x86_64-linux-musl",   // optional cross-compile default
 //         deps: vec_of(
 //             Dep::path("auth", "../auth"),
 //             Dep::git("logger", "github.com/x/logger", "v1.0.0"),
 //         ),
 //     };
+//
+// The metadata fields (description / author / license / repository) are
+// optional and informational; unknown fields are ignored.
 //
 // Identifiers `Package` / `Dep::path` / `Dep::git` / `vec_of` are
 // recognised positionally — they don't need to be declared anywhere.
@@ -37,6 +45,13 @@ pub struct ManifestDep {
 pub struct Manifest {
     pub name:     string,
     pub version:  string,
+    // Optional package metadata. Informational today (recorded so the
+    // manifest can carry it for tooling / a future `glide publish`); not
+    // consumed by the build itself.
+    pub author:      string,   // "Name <email>" or free text
+    pub license:     string,   // SPDX id (e.g. "MIT") or free text
+    pub description: string,   // one-line summary
+    pub repository:  string,   // source URL
     pub bin:      string,
     pub deps:     *Vector<ManifestDep>,
     pub root_dir: string,   // absolute or repo-relative dir holding glide.glide
@@ -145,6 +160,10 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     let m: *Manifest = __glide_palloc(sizeof(Manifest)) as *Manifest;
     m.name = "";
     m.version = "";
+    m.author = "";
+    m.license = "";
+    m.description = "";
+    m.repository = "";
     m.bin = "src/main.glide";
     m.deps = deps_vec;
     m.root_dir = root_dir;
@@ -169,10 +188,14 @@ fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
     for let i: int = 0; i < n; i++ {
         let name: string = v.field_names.get(i);
         let val: Expr = v.args.get(i);
-        if name.eq("name")    && val.kind == EX_STRING { m.name = val.str_val; }
-        if name.eq("version") && val.kind == EX_STRING { m.version = val.str_val; }
-        if name.eq("bin")     && val.kind == EX_STRING { m.bin = val.str_val; }
-        if name.eq("target")  && val.kind == EX_STRING { m.target = val.str_val; }
+        if name.eq("name")        && val.kind == EX_STRING { m.name = val.str_val; }
+        if name.eq("version")     && val.kind == EX_STRING { m.version = val.str_val; }
+        if name.eq("author")      && val.kind == EX_STRING { m.author = val.str_val; }
+        if name.eq("license")     && val.kind == EX_STRING { m.license = val.str_val; }
+        if name.eq("description") && val.kind == EX_STRING { m.description = val.str_val; }
+        if name.eq("repository")  && val.kind == EX_STRING { m.repository = val.str_val; }
+        if name.eq("bin")         && val.kind == EX_STRING { m.bin = val.str_val; }
+        if name.eq("target")      && val.kind == EX_STRING { m.target = val.str_val; }
         if name.eq("deps") { collect_deps(m.deps, &val); }
         if name.eq("lint") {
             // Two surface forms:

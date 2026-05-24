@@ -992,9 +992,13 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> int {
     let bin_field: string = if is_lib { "" } else { "src/main.glide" };
     let manifest_body: string =
         "let manifest: Package = Package {\n"
-        .concat("    name:    \"").concat(proj_name).concat("\",\n")
-        .concat("    version: \"0.1.0\",\n")
-        .concat("    bin:     \"").concat(bin_field).concat("\",\n")
+        .concat("    name:        \"").concat(proj_name).concat("\",\n")
+        .concat("    version:     \"0.1.0\",\n")
+        .concat("    description: \"\",\n")
+        .concat("    author:      \"\",\n")
+        .concat("    license:     \"\",\n")
+        .concat("    repository:  \"\",\n")
+        .concat("    bin:         \"").concat(bin_field).concat("\",\n")
         .concat("    deps: vec_of(\n")
         .concat("    ),\n")
         .concat("};\n");
