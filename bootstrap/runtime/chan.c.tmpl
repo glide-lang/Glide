@@ -116,6 +116,12 @@ extern int __glide_chan_spin_count;
    pthread if a handler accidentally blocks on a chan; instead we
    abort with a clear message at the entry to the slow path. */
 extern _Thread_local int __glide_in_sm_handler;
+/* This template is emitted once per distinct chan<T> element type. The
+   abort helper below is type-independent, so guard it against the
+   resulting duplicate definition when a program uses two or more chan
+   types (e.g. a signal chan + a select chan). */
+#ifndef __GLIDE_ABORT_IF_IN_SM_HANDLER_DEFINED
+#define __GLIDE_ABORT_IF_IN_SM_HANDLER_DEFINED
 #include <stdio.h>
 static inline void __glide_abort_if_in_sm_handler(const char* op) {
     if (__glide_in_sm_handler) {
@@ -128,6 +134,7 @@ static inline void __glide_abort_if_in_sm_handler(const char* op) {
         abort();
     }
 }
+#endif
 
 /* Pop one parker off the wait list under chan->mu, then drop the lock BEFORE
    handing the task back to its worker queue. q_push_to has its own spinlock and
