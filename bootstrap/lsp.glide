@@ -885,6 +885,14 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
 
     let t: *Typer = Typer::new();
     merge_parse_diags(t, pdiags);
+    // Match the build / `glide check` pipeline: register the import-derived
+    // visibility table and enforce it, so the editor flags unknown
+    // functions / missing imports / out-of-scope names — not just the
+    // null-safety + arity checks that run unconditionally. The doc's
+    // builtins + transitive imports are already loaded into `stmts` above,
+    // so every legit cross-file symbol is registered and won't false-flag.
+    build_visibility(t, stmts);
+    t.enforce_visibility = true;
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
 
@@ -2480,10 +2488,14 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
         return;
     }
 
-    // 1) Cursor on `name` in `name!(...)` — jump to the macro def. Also
-    //    handles type-attached macros via `find_macro_def`.
+    // 1) Cursor on `name` in `name!(...)` — jump to the macro def. Tries
+    //    free / type-attached `macro` defs first, then function-like
+    //    proc-macros (`@proc_macro(name)` fns, e.g. `info!`). Without the
+    //    proc-macro fallback, `info!` would slip to the same-named `info`
+    //    fn further down.
     if decl == null && _ident_followed_by_bang(doc.text, line0, col0, word.len()) {
         decl = find_macro_def(doc.stmts, word);
+        if decl == null { decl = find_proc_macro_fn(doc.stmts, word); }
     }
 
     // 2) Cursor on `Name` inside `@derive(Name)` / `@Name(...)` / `@Name`
@@ -3436,7 +3448,12 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
     mods.free();
 
     // Pass 2: members of the module whose path equals `path`. Accept
-    // the short leaf too so the user can type either form.
+    // the short leaf too so the user can type either form. Also fold in
+    // the function-like proc-macros from the module's `_macros` sibling
+    // (e.g. `stdlib::log_macros` for `stdlib::log`) as `name!` — they're
+    // re-exported by the base module and `log::info!(...)` is a valid
+    // qualified macro call, so `log::inf` should offer `info!`.
+    let pm_mod: string = path.concat("_macros");
     for let i: int = 0; i < n; i++ {
         let sym: ImportableSym = idx.get(i);
         if sym.kind == SYMKIND_MODULE { continue; }
@@ -3444,12 +3461,21 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
         let cut: int = find_substr(m, "::");
         let mut leaf: string = m;
         if cut >= 0 { leaf = m.substring(cut + 2, m.len()); }
-        if !m.eq(path) && !leaf.eq(path) { continue; }
-        if seen.contains(sym.name) { continue; }
-        seen.insert(sym.name, true);
+        let own: bool = m.eq(path) || leaf.eq(path);
+        let pm_reexport: bool = sym.kind == SYMKIND_PROC_MACRO
+                                && (m.eq(pm_mod) || leaf.eq(pm_mod));
+        if !own && !pm_reexport { continue; }
+        // proc-attrs / proc-derives aren't callable as `mod::name`.
+        if sym.kind == SYMKIND_PROC_ATTR || sym.kind == SYMKIND_PROC_DERIVE { continue; }
+        let mut label: string = sym.name;
+        if sym.kind == SYMKIND_PROC_MACRO || sym.kind == ST_MACRO_DEF {
+            label = sym.name.concat("!");
+        }
+        if seen.contains(label) { continue; }
+        seen.insert(label, true);
         let no_edit2: *JsonValue = null;
         let item: *JsonValue = rich_completion_item(
-            sym.name, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
+            label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
             sym.signature, sym.doc, sym.module,
             sym.snippet, sym.has_snippet, no_edit2);
         json_arr_push(items, item);
@@ -4198,6 +4224,12 @@ fn _let_node_type(s: *Stmt, root: *Vector<Stmt>) -> *Type {
         let m_name: string = s.let_value.lhs.field;
         return _impl_method_ret(root, t_name, m_name);
     }
+    // `let v = ret();` — infer from a plain function call's return type, so
+    // `v.` completes even without a type annotation.
+    if s.let_value != null && s.let_value.kind == EX_CALL && s.let_value.lhs != null
+       && s.let_value.lhs.kind == EX_IDENT {
+        return _fn_ret_type(root, s.let_value.lhs.str_val);
+    }
     return null;
 }
 
@@ -4461,7 +4493,13 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     if _cursor_p >= 1 && doc.text.at(_cursor_p - 1).to_int() == 46 {
         let recv_ty: *Type = _chain_resolve_type(doc.text, _cursor_p - 1, doc.stmts, line0, uri_to_path(uri));
         if recv_ty != null {
-            _list_members_for_type_node(recv_ty, doc.stmts, items, seen);
+            // List members off the PRE-expansion snapshot: expand_macros
+            // consumes type-attached `macro` defs out of doc.stmts, so the
+            // post-expansion set has the fns but not the macros. pre_expand
+            // still carries them, so `v.push_a` can offer `push_all!`.
+            let mut mstmts: *Vector<Stmt> = doc.stmts;
+            if doc.pre_expand_stmts != null { mstmts = doc.pre_expand_stmts; }
+            _list_members_for_type_node(recv_ty, mstmts, items, seen);
         }
         seen.free();
         lsp_send_response(id, items);
@@ -4532,7 +4570,19 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             if seen.contains(s.name) { continue; }
             seen.insert(s.name, true);
             let mut sig: string = "local ".concat(s.name);
-            if s.let_ty != null { sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty)); }
+            if s.let_ty != null {
+                sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty));
+            } else if s.let_value != null {
+                // No annotation — infer the type for the hint, same as
+                // member completion: `Type::ctor()` / plain fn-call returns
+                // (_let_node_type), falling back to literals/idents
+                // (lsp_infer_expr). So `let v = ret()` shows `*Vector<int>`.
+                let mut inferred: *Type = _let_node_type(&s, doc.stmts);
+                if inferred == null { inferred = lsp_infer_expr(doc.stmts, host, s.let_value); }
+                if inferred != null {
+                    sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(inferred));
+                }
+            }
             let no_edit_l: *JsonValue = null;
             let item: *JsonValue = rich_completion_item(
                 s.name, "", 6, sig, "", "", "", false, no_edit_l);
@@ -4701,24 +4751,38 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
         // `@derive(...)` contexts, not in the bare-ident suggestion bag.
         // Free macros appear here as `name!` (so `assert` typed at top
         // level offers `assert!` with auto-import).
-        if sym.kind == SYMKIND_PROC_ATTR || sym.kind == SYMKIND_PROC_DERIVE
-           || sym.kind == SYMKIND_PROC_MACRO { continue; }
+        // Proc-attrs / proc-derives surface only under `@<...>` /
+        // `@derive(...)` contexts, not in the bare-ident bag. Function-like
+        // proc-macros (`info!`, `routes!`) DO belong here — surfaced as
+        // `name!` so typing `info` offers `info!` with an auto-import.
+        if sym.kind == SYMKIND_PROC_ATTR || sym.kind == SYMKIND_PROC_DERIVE { continue; }
         let mut label: string = sym.name;
+        let mut imp_module: string = sym.module;
         if sym.kind == ST_MACRO_DEF { label = sym.name.concat("!"); }
+        if sym.kind == SYMKIND_PROC_MACRO {
+            label = sym.name.concat("!");
+            // The defining file is conventionally `X_macros`, re-exported by
+            // the base module `X` (which also carries the fns the macro
+            // expands to). Steer the auto-import at `X`, not the macro lib.
+            let ml: int = imp_module.len();
+            if ml > 7 && imp_module.substring(ml - 7, ml).eq("_macros") {
+                imp_module = imp_module.substring(0, ml - 7);
+            }
+        }
         if seen.contains(label) { continue; }
         seen.insert(label, true);
         let mut existing: *ImportInfo = null;
-        if imps.contains(sym.module) {
-            let info_val: ImportInfo = imps.get(sym.module);
+        if imps.contains(imp_module) {
+            let info_val: ImportInfo = imps.get(imp_module);
             existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
             *existing = info_val;
         }
         let is_module: bool = (sym.kind == SYMKIND_MODULE);
         let edit: *JsonValue = build_import_edit(
-            sym.name, sym.module, existing, insert_line, is_module);
+            sym.name, imp_module, existing, insert_line, is_module);
         let item: *JsonValue = rich_completion_item(
             label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
-            sym.signature, sym.doc, sym.module,
+            sym.signature, sym.doc, imp_module,
             sym.snippet, sym.has_snippet, edit);
         json_arr_push(items, item);
     }
