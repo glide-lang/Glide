@@ -31,23 +31,37 @@ from Rust, Go, and C — guessing leads to non-compiling output.
   optional default bodies. `*dyn T` for vtable dispatch.
 - **Generics**: `fn f<T>(v: T)`. Bounds via `T: Trait + Trait`.
   Monomorphised; the compiler emits one C fn per concrete T.
-- **Doc comments**: `///` triple-slash above the decl. Fenced
-  examples in `\`\`\`glide`. Sample output lives as a
+- **Macros**: builtins `println!` / `format!` / `assert!`;
+  string interpolation `"x={x}"`; `select!` over channels.
+  Procedural macros by attribute (`@derive(JsonBind)`,
+  `@handler`, `@logged`, `@trace`) and function-like
+  `info!` / `warn!` / `error!` / … from `stdlib::log`.
+- **Doc comments**: `///` triple-slash above the decl. Put
+  examples in fenced ```glide blocks; show sample output as a
   trailing `// result` line — keep this style.
 
 ## 3. Project commands
 
 ```
-glide new <name> [--lib]    scaffold a project
-glide run                   build + run from the manifest
-glide build                 build only
-glide test [path]           run *_test.glide files
-glide bench [path]          run *_bench.glide microbenchmarks
-glide doc --ai              regenerate llms.txt for THIS file
+glide new <name> [--lib] [--ai]   scaffold a project
+glide run                        build + run from the manifest
+glide build [--target=<triple>]  build only (sysroot auto-fetched for cross)
+glide check <file>               parse + type-check, no codegen
+glide test [path]                run *_test.glide files
+glide bench [path]               run *_bench.glide microbenchmarks
+glide lint [file]                run all lints (project bin by default)
+glide fix [file]                 apply mechanical fixes
+glide fmt <file> [--write]       pretty-print, or rewrite in place
+glide doc --ai                   regenerate llms.txt for THIS file
 glide add <name> <url> <rev>     add a git dep
 glide add --local <name> <path>  add a path dep
-glide fetch                 pull declared deps
-glide clean                 wipe build/ + glide_modules/ + glide.lock
+glide remove <name>              drop a dep from glide.glide
+glide fetch                      pull declared deps
+glide update                     refresh git deps + rewrite lock
+glide install <path|git-url>     install a glide binary/tool
+glide target <list|add|remove>   manage cross-compile sysroots
+glide clean                      wipe build/ + glide_modules/ + glide.lock
+glide lsp                        language server on stdio
 ```
 
 ## 4. House rules
@@ -62,7 +76,68 @@ glide clean                 wipe build/ + glide_modules/ + glide.lock
 - Prefer the method form (`v.push(x)`) over the free fn
   form (`push(v, x)`) — matches `stdlib::*` conventions.
 
-## 5. Tool-specific notes
+## 5. Lints (compiler-enforced patterns)
+
+`glide lint <file>` and the LSP run these checks. Each fires
+a lint code that `@allow("<code>")` on the enclosing fn or
+impl method silences. Don't suppress without a justification
+in a comment — the lint usually points at a real bug.
+
+- `null-deref` — using `*p` / `p.field` / `p[i]` where `p` is
+  provably null (let-bound, or callee param dereferenced
+  without an `if p == null` guard).
+- `bad-free` — never `free()` on a Glide `string`, `*Vector`,
+  or `*HashMap`. Strings are arena-managed; collections have
+  `.free()` destructors that release internal buffers first.
+- `string-eq-op` — `==` / `!=` on strings is pointer compare,
+  not byte compare. Always use `s.eq(other)`.
+- `unhandled-result` — calling a `!T`-returning fn and
+  discarding the value silently swallows the error. Use
+  `f(...)?`, `let _ = f(...)`, or `let bound = f(...)`.
+- `ignored-option` — `.val` on a `?T` without a preceding
+  `is_some()` / `.has` guard reads UB on the none branch.
+- `use-after-free` — accessing `x` after `x.free()` in the
+  same scope is a dangling-pointer read.
+- `arena-set` — `__glide_palloc_set(arena)` without a paired
+  `defer __glide_palloc_set(prev);` leaks the arena bracket.
+- `coro-blocking` — calling sync I/O (`fs_read`, `process_run`,
+  etc.) inside a `spawn fn();` stalls the M:N worker. Switch
+  to `spawn_thread` or the async variant.
+- `mutex-unbalanced` — every `.lock()` needs `.unlock()` on
+  every exit (return / `?` / break / continue / fall-through).
+  The idiom is `m.lock(); defer m.unlock();` right after.
+- `chan-leak` — channels missing `close()` on any path will
+  leave receivers parked forever on `recv()`.
+- `leak-on-early-return` — register `defer x.free();`
+  IMMEDIATELY after the allocation, never after a `?`.
+
+Patterns to follow as default form:
+
+```glide
+// open a coro-arena bracket
+let prev: *void = __glide_palloc_get();
+__glide_palloc_set(__glide_palloc_make());
+defer __glide_palloc_set(prev);
+defer __glide_palloc_free(__glide_palloc_get());
+
+// allocation + cleanup
+let v: *Vector<int> = Vector::new();
+defer v.free();
+
+// mutex
+m.lock();
+defer m.unlock();
+
+// fallible call
+let x: int = parse(s)?;
+
+// option unwrap with check
+let r: ?int = lookup(k);
+if !r.has { return err("missing"); }
+let v: int = r.val;
+```
+
+## 6. Tool-specific notes
 
 - **Claude Code / Codex**: this file loads automatically.
 - **Cursor**: also reads `AGENTS.md`; for older versions,
