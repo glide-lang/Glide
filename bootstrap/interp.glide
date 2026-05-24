@@ -201,6 +201,18 @@ pub struct Interp {
     // order. Macros that don't need it ignore it; the field stays
     // null when no proc-macro pass is running.
     pub program: *Vector<Stmt>,
+
+    // Macro-namespacing context (set by the expander; used to resolve a
+    // BARE `name!()` to the right dep when several define the same name).
+    //  - macro_cur_origin: file the macro call is being expanded in.
+    //  - macro_name_mods: bare macro name -> "\n"-joined origin module
+    //    paths that define it (so >1 entry means a cross-dep collision).
+    //  - macro_file_imports: set of "<origin>\n<module-leaf>" pairs — does
+    //    that file import that module (so a bare call can pick the imported
+    //    one). Stays null outside the proc-macro pass.
+    pub macro_cur_origin: string,
+    pub macro_name_mods: *HashMap<string>,
+    pub macro_file_imports: *HashMap<bool>,
 }
 
 impl Interp {
@@ -223,6 +235,9 @@ impl Interp {
         it.current_use_col = 0;
         it.current_use_origin = "";
         it.program = null;
+        it.macro_cur_origin = "";
+        it.macro_name_mods = null;
+        it.macro_file_imports = null;
         return it;
     }
 

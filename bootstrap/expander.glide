@@ -74,6 +74,10 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // can dispatch through them during the macro_rules pass. PMK_ATTR
     // and PMK_DERIVE are picked up by expand_proc_macros after.
     let proc_registry: *HashMap<ProcMacroDef> = HashMap::new();
+    // Bare macro name -> "\n"-joined origin module paths defining it. >1
+    // distinct module = cross-dep collision; bare resolution then needs the
+    // call file's imports to disambiguate.
+    let name_mods: *HashMap<string> = HashMap::new();
     let mut has_fn_ast: bool = false;
     for let i: int = 0; i < cleaned.len(); i++ {
         let s: Stmt = cleaned.get(i);
@@ -96,10 +100,34 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
             // owns the bare slot (e.g. both `stdlib::log` and an external
             // `logger` defining `info!`).
             _register_qualified(proc_registry, ne.str_val, pmdef);
+            // Track which modules define this bare name (for collision-aware
+            // bare resolution).
+            let mp: string = _macro_module_of(s.origin);
+            if !mp.eq("") {
+                if name_mods.contains(ne.str_val) {
+                    let cur: string = name_mods.get(ne.str_val);
+                    if !_joined_has(cur, mp) {
+                        name_mods.insert(ne.str_val, cur.concat("\n").concat(mp));
+                    }
+                } else {
+                    name_mods.insert(ne.str_val, mp);
+                }
+            }
             // Both AST and EXPR fn-macros run in the interpreter at expand
             // time, so either one requires building the interp.
             if kind == PMK_FN_AST || kind == PMK_FN_EXPR { has_fn_ast = true; }
         }
+    }
+
+    // File -> imported modules, for collision-aware bare resolution. Keyed
+    // `<importing-file-origin>\n<imported-module-leaf>` -> true.
+    let file_imports: *HashMap<bool> = HashMap::new();
+    for let i: int = 0; i < cleaned.len(); i++ {
+        let s: Stmt = cleaned.get(i);
+        if s.kind != ST_IMPORT || s.origin == null { continue; }
+        let leaf: string = _import_leaf(s.import_path);
+        if leaf.eq("") { continue; }
+        file_imports.insert(s.origin.concat("\n").concat(leaf), true);
     }
 
     let mut fn_ast_interp: *Interp = null;
@@ -109,6 +137,8 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
         fn_ast_interp = Interp::new();
         fn_ast_interp.register_fns(cleaned);
         fn_ast_interp.program = cleaned;
+        fn_ast_interp.macro_name_mods = name_mods;
+        fn_ast_interp.macro_file_imports = file_imports;
         __glide_palloc_set(saved_arena);
     }
 
@@ -483,6 +513,34 @@ fn _macro_module_of(origin: string) -> string {
     return out;
 }
 
+// True if a "\n"-joined list already contains `item` as a whole entry.
+fn _joined_has(joined: string, item: string) -> bool {
+    let parts: *Vector<string> = joined.split("\n");
+    for let i: int = 0; i < parts.len(); i++ {
+        if parts.get(i).eq(item) { return true; }
+    }
+    return false;
+}
+
+// Leaf module name an `import` statement brings in. Strips `.glide` and
+// returns the last segment after `/`, `\`, or `::` — so `import logger;`,
+// `import stdlib::log;`, and `import a/b/logger.glide` all yield the leaf
+// the user would qualify with.
+fn _import_leaf(ip: string) -> string {
+    if ip == null || ip.eq("") { return ""; }
+    let mut s: string = ip;
+    let n: int = s.len();
+    if n > 6 && s.substring(n - 6, n).eq(".glide") { s = s.substring(0, n - 6); }
+    let m: int = s.len();
+    let mut last: int = 0;
+    for let i: int = 0; i < m; i++ {
+        let c: int = s.at(i).to_int();
+        if c == 47 || c == 92 { last = i + 1; }
+        if c == 58 && i + 1 < m && s.at(i + 1).to_int() == 58 { last = i + 2; }
+    }
+    return s.substring(last, m);
+}
+
 // Leaf of a `::`-path ("stdlib::log" -> "log").
 fn _module_leaf(mp: string) -> string {
     if mp == null { return ""; }
@@ -642,6 +700,9 @@ fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>,
                       pr: *HashMap<ProcMacroDef>, it: *Interp) {
     for let i: int = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        // Tell bare-macro resolution which file this stmt came from, so a
+        // collision is disambiguated against THAT file's imports.
+        if it != null && s.origin != null { it.macro_cur_origin = s.origin; }
         if s.kind == ST_FN && s.fn_body != null {
             s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it);
             program.set(i, s);
@@ -783,6 +844,56 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
         if def.then_body == null { return null; }
         let no_recv: *Expr = null;
         return expand_with_def_recv(call, &def, no_recv);
+    }
+    // Bare `name!()` proc-macro. When several deps define the same name,
+    // disambiguate by the imports of the file this call lives in: resolve to
+    // the one imported dep, or error if none / more than one is imported.
+    // A single-definition name keeps the permissive path (no import needed).
+    if pr != null && it != null && it.macro_name_mods != null
+       && it.macro_name_mods.contains(call.str_val) {
+        let joined: string = it.macro_name_mods.get(call.str_val);
+        let mods: *Vector<string> = joined.split("\n");
+        if mods.len() > 1 {
+            let mut chosen: string = "";
+            let mut nchosen: int = 0;
+            let cur_mod: string = _macro_module_of(it.macro_cur_origin);
+            for let mi: int = 0; mi < mods.len(); mi++ {
+                let m: string = mods.get(mi);
+                let mut imp: bool = m.eq(cur_mod);   // defined in the same file
+                if !imp && it.macro_file_imports != null {
+                    let key: string = it.macro_cur_origin.concat("\n").concat(_module_leaf(m));
+                    if it.macro_file_imports.contains(key) { imp = true; }
+                }
+                if imp { chosen = m; nchosen = nchosen + 1; }
+            }
+            if nchosen == 1 {
+                let qk: string = chosen.concat("::").concat(call.str_val);
+                if pr.contains(qk) {
+                    let pmc: ProcMacroDef = pr.get(qk);
+                    if pmc.kind == PMK_FN_AST { return _run_fn_ast(it, &pmc.fn_stmt, call); }
+                }
+            } else {
+                // 0 imported (none in scope) or >1 imported (genuinely
+                // ambiguous): force the user to qualify. Print the guidance
+                // AND expand to a reference the typer rejects, so the build
+                // fails hard instead of silently dropping the call.
+                let mut listed: string = "";
+                for let mi: int = 0; mi < mods.len(); mi++ {
+                    if mi > 0 { listed = listed.concat(", "); }
+                    listed = listed.concat(mods.get(mi));
+                }
+                it.diagnostics.push("ambiguous macro `".concat(call.str_val)
+                    .concat("!`: defined in ").concat(listed)
+                    .concat(" — qualify it, e.g. `").concat(_module_leaf(mods.get(0)))
+                    .concat("::").concat(call.str_val).concat("!(...)`"));
+                let poison: *Vector<Stmt> = Vector::new();
+                let pid: *Expr = expr_ident(
+                    "__glide_ambiguous_macro__".concat(call.str_val).concat("__qualify_with_dep_prefix"),
+                    call.line, call.column);
+                poison.push(*stmt_expr(expr_call(pid, Vector::new())));
+                return poison;
+            }
+        }
     }
     // Fall through to PMK_FN_AST proc-macros (e.g. `routes!(r)`). The
     // expander wired these up before this pass, so we just dispatch
