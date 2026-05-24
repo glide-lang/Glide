@@ -597,6 +597,26 @@ fn _arg_span(a: *Expr) -> int {
     return 1;
 }
 
+// Count `{}` placeholders in a `format!` string. Mirrors codegen's lowering
+// exactly: a `{` immediately followed by `}` is one hole (consuming one arg),
+// scanning advances past both; everything else is a literal char. There is no
+// `{{` escape — codegen emits a lone `{` verbatim.
+fn _count_fmt_placeholders(raw: string) -> int {
+    if raw == null { return 0; }
+    let n: int = raw.len();
+    let mut i: int = 0;
+    let mut count: int = 0;
+    while i < n {
+        if raw.at(i).to_int() == 123 && i + 1 < n && raw.at(i + 1).to_int() == 125 {
+            count = count + 1;
+            i = i + 2;
+        } else {
+            i = i + 1;
+        }
+    }
+    return count;
+}
+
 // True when `n` names a real type: a primitive (list mirrors codegen's
 // `type_to_c`), a declared struct/enum (t.structs holds both), a type
 // parameter in scope, or `Self`. Empty = inferred, treated as known.
@@ -2799,13 +2819,35 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_MACRO {
-        // macros generally return string or void; just walk args
+        // `format!("…{}…", args)` — the `{}` placeholders must match the
+        // argument count (codegen consumes one arg per `{}`; a shortfall
+        // reads a missing printf arg = UB). Only checked when the format is
+        // a string literal. `println!`/`print!` space-join their args (no
+        // placeholders), so their `{}` are literal and not checked.
+        if e.str_val != null && e.str_val.eq("format") && e.args != null && e.args.len() > 0 {
+            let first: Expr = e.args.get(0);
+            if first.kind == EX_STRING {
+                let holes: int = _count_fmt_placeholders(first.str_val);
+                let supplied: int = e.args.len() - 1;
+                if holes != supplied {
+                    t.err_code_range(first.line, first.column, _arg_span(&first), "format-args",
+                        "format! has ".concat(int_to_str(holes))
+                        .concat(" `{}` placeholder").concat(if holes == 1 { "" } else { "s" })
+                        .concat(" but ").concat(int_to_str(supplied))
+                        .concat(if supplied == 1 { " argument" } else { " arguments" })
+                        .concat(if supplied == 1 { " was" } else { " were" })
+                        .concat(" supplied"));
+                }
+            }
+        }
+        // Walk args for nested errors.
         if e.args != null {
             for let i: int = 0; i < e.args.len(); i++ {
                 let a: Expr = e.args.get(i);
                 let _u7: *Type = infer_expr(t, &a);
             }
         }
+        if e.str_val != null && e.str_val.eq("format") { return ty_named("string"); }
         return null;
     }
 
