@@ -4419,6 +4419,47 @@ fn list_methods_for_type(stmts: *Vector<Stmt>, type_name: string,
     }
 }
 
+// True when the cursor (partial-word start at `p`) sits in a type-annotation
+// position: right after `:` (but not `::`), after `->`, or after `<` (generic
+// arg). Used to offer primitive type names there. Generous on purpose — a
+// false positive (e.g. a struct-literal `field:`) only adds a few type names
+// to the list, which the prefix filter hides.
+fn _in_type_position(text: string, p: int) -> bool {
+    let mut i: int = p - 1;
+    while i >= 0 {
+        let c: int = text.at(i).to_int();
+        if c == 32 || c == 9 { i = i - 1; continue; }   // skip spaces/tabs
+        break;
+    }
+    if i < 0 { return false; }
+    let c: int = text.at(i).to_int();
+    if c == 58 {                                          // ':'
+        if i >= 1 && text.at(i - 1).to_int() == 58 { return false; }   // '::' — module path
+        return true;
+    }
+    if c == 62 && i >= 1 && text.at(i - 1).to_int() == 45 { return true; }   // '->' return type
+    if c == 60 { return true; }                           // '<' generic arg
+    return false;
+}
+
+// Offer the primitive type names (mirrors the typer's `_is_known_type_name`
+// list) as completions. Kind 22 = Struct, so they render as types.
+fn _push_primitive_types(items: *JsonValue, seen: *HashMap<bool>) {
+    let prims: *Vector<string> = Vector::new();
+    prims.push("int");  prims.push("uint"); prims.push("long"); prims.push("ulong");
+    prims.push("i8");   prims.push("i16");  prims.push("i32");  prims.push("i64");
+    prims.push("u8");   prims.push("u16");  prims.push("u32");  prims.push("u64");
+    prims.push("usize"); prims.push("isize");
+    prims.push("float"); prims.push("f32"); prims.push("f64");
+    prims.push("bool"); prims.push("char"); prims.push("string"); prims.push("void");
+    for let i: int = 0; i < prims.len(); i++ {
+        let p: string = prims.get(i);
+        if seen.contains(p) { continue; }
+        seen.insert(p, true);
+        json_arr_push(items, completion_item(p, 22, "primitive type"));
+    }
+}
+
 fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -4429,7 +4470,22 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     let col0: int = json_as_int(json_get(pos, "character"));
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
-    if doc.stmts == null { lsp_send_response(id, json_array()); return; }
+    if doc.stmts == null {
+        // The buffer doesn't parse into an AST yet — typically a half-typed
+        // `let x: ` whose empty type trips the parser. The symbol-based
+        // completion can't run, but if the cursor is in a type slot we can
+        // still offer the primitive type names off the raw text, so type
+        // completion works mid-edit instead of going silent.
+        let it0: *JsonValue = json_array();
+        let p0: int = cursor_before_partial(doc.text, line0, col0);
+        if !_cursor_in_string_or_comment(doc.text, line0, col0) && _in_type_position(doc.text, p0) {
+            let seen0: *HashMap<bool> = HashMap::new();
+            _push_primitive_types(it0, seen0);
+            seen0.free();
+        }
+        lsp_send_response(id, it0);
+        return;
+    }
     // Editors trigger completion on `.` / `:` even inside string and char
     // literals (Zed/VSCode don't know about Glide's lexer). Bail out before
     // we list anything — typing `"x.y"` should never offer field names.
@@ -4439,6 +4495,25 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     }
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
+
+    // Type-annotation position (`: T`, `-> T`, `<T>`): seed the list with the
+    // primitive type names + the enclosing fn/impl type params up front, so
+    // they survive whichever branch handles (or early-returns) this request.
+    // `_in_type_position` excludes `.` and `::`, so this never fires in member
+    // or module-path context.
+    let _tp_p: int = cursor_before_partial(doc.text, line0, col0);
+    if _in_type_position(doc.text, _tp_p) {
+        _push_primitive_types(items, seen);
+        let tphost: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
+        if tphost != null && tphost.type_params != null {
+            for let i: int = 0; i < tphost.type_params.len(); i++ {
+                let tp: string = tphost.type_params.get(i);
+                if tp == null || seen.contains(tp) { continue; }
+                seen.insert(tp, true);
+                json_arr_push(items, completion_item(tp, 25, "type parameter"));
+            }
+        }
+    }
 
     // Import-path completion: cursor sits inside `import …;`. The
     // helper returns the module path the user has typed so far
