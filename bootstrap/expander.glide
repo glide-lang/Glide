@@ -37,6 +37,10 @@ pub struct TypeMacro {
 // "Owner::name" for impl-scoped macros), then expand all macro calls in place
 // and strip the defs themselves so later passes never see them.
 pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
+    // Clear the custom-lint sink so each compile (and each LSP analyze in
+    // the long-running server) starts fresh — pass_diag calls accumulate
+    // into it during this run and the typer drains it afterwards.
+    __glide_pd_reset();
     // Pre-pass: rewrite compile-time location macros (file!, line!,
     // column!, function!) into literal expressions before any other
     // expansion runs. Walking the original AST means the values come

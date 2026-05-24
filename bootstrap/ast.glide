@@ -1053,3 +1053,58 @@ pub fn expr_struct_lit(type_name: string, names: *Vector<string>, values: *Vecto
     e.field = "";
     return e;
 }
+
+// ---- custom-lint sink (pass_diag) ---------------------------------------
+//
+// A compiler pass or macro calls `pass_diag(...)` to emit a diagnostic — a
+// custom lint. The call is recorded in a process-global sink at expand time;
+// the typer drains it into its own diagnostics before they're printed, so a
+// pass-emitted lint gets the same location rendering + `code` suppression +
+// build-failing-on-error treatment as a built-in check. Lives in `bootstrap`
+// (compiler-only), so it adds nothing to a compiled user program.
+
+extern fn __glide_pd_push(line: int, col: int, severity: int, code: string, msg: string);
+extern fn __glide_pd_count() -> int;
+extern fn __glide_pd_line(i: int) -> int;
+extern fn __glide_pd_col(i: int) -> int;
+extern fn __glide_pd_sev(i: int) -> int;
+extern fn __glide_pd_code(i: int) -> string;
+extern fn __glide_pd_msg(i: int) -> string;
+extern fn __glide_pd_reset();
+
+c_raw! {
+    #define GLIDE_PD_MAX 8192
+    static int gl_pd_n = 0;
+    static int gl_pd_line[GLIDE_PD_MAX];
+    static int gl_pd_col[GLIDE_PD_MAX];
+    static int gl_pd_sev[GLIDE_PD_MAX];
+    static const char* gl_pd_code[GLIDE_PD_MAX];
+    static const char* gl_pd_msg[GLIDE_PD_MAX];
+    static void __glide_pd_push(int line, int col, int severity, const char* code, const char* msg) {
+        if (gl_pd_n >= GLIDE_PD_MAX) return;
+        gl_pd_line[gl_pd_n] = line; gl_pd_col[gl_pd_n] = col; gl_pd_sev[gl_pd_n] = severity;
+        gl_pd_code[gl_pd_n] = code ? code : ""; gl_pd_msg[gl_pd_n] = msg ? msg : "";
+        gl_pd_n++;
+    }
+    static int __glide_pd_count(void) { return gl_pd_n; }
+    static int __glide_pd_line(int i) { return (i >= 0 && i < gl_pd_n) ? gl_pd_line[i] : 0; }
+    static int __glide_pd_col(int i)  { return (i >= 0 && i < gl_pd_n) ? gl_pd_col[i] : 0; }
+    static int __glide_pd_sev(int i)  { return (i >= 0 && i < gl_pd_n) ? gl_pd_sev[i] : 1; }
+    static const char* __glide_pd_code(int i) { return (i >= 0 && i < gl_pd_n) ? gl_pd_code[i] : ""; }
+    static const char* __glide_pd_msg(int i)  { return (i >= 0 && i < gl_pd_n) ? gl_pd_msg[i] : ""; }
+    static void __glide_pd_reset(void) { gl_pd_n = 0; }
+}
+
+/// Emit a diagnostic from a compiler pass or macro — a custom lint.
+///
+/// `severity` 1 = error (fails the build), 2 = warning. `code` is a short
+/// kebab-case id the user can silence with `@allow("<code>")`. `line`/`col`
+/// point at the offending source (pass the `.line` / `.column` of the AST
+/// node you flagged).
+///
+/// ```glide
+/// pass_diag(s.line, s.column, 1, "no-todo", "TODO left in shipped code");
+/// ```
+pub fn pass_diag(line: int, col: int, severity: int, code: string, msg: string) {
+    __glide_pd_push(line, col, severity, code, msg);
+}

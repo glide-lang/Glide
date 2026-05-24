@@ -1531,6 +1531,31 @@ pub fn check_program(t: *Typer, program: *Vector<Stmt>) {
         t.current_origin = s.origin;
         check_top(t, &s);
     }
+    _drain_pass_diags(t);
+}
+
+// Merge custom-lint diagnostics emitted by compiler passes / macros via
+// `pass_diag(...)` (recorded in a process-global sink during expansion) into
+// the typer's own list, so they print with location + a suppressible `code`
+// and count toward the error total (severity 1 fails the build).
+fn _drain_pass_diags(t: *Typer) {
+    let n: int = __glide_pd_count();
+    for let i: int = 0; i < n; i++ {
+        let line: int = __glide_pd_line(i);
+        let col: int = __glide_pd_col(i);
+        let sev: int = __glide_pd_sev(i);
+        let e: DiagEntry = DiagEntry {
+            line: line, col: col,
+            end_line: line, end_col: col + 1,
+            severity: sev, code: __glide_pd_code(i), message: __glide_pd_msg(i),
+            origin: "", tag: 0,
+            fix_line: 0, fix_col: 0,
+            fix_end_line: 0, fix_end_col: 0,
+            fix_replacement: "",
+        };
+        t.diagnostics.push(e);
+        if sev == 1 { t.error_count = t.error_count + 1; }
+    }
 }
 
 fn check_top(t: *Typer, s: *Stmt) {

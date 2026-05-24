@@ -840,6 +840,14 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         return iv_hashmap(m);
     }
 
+    // Custom-lint emission from a pass/macro. Routes into the global sink
+    // the typer drains; the macro body just calls `pass_diag(...)`.
+    if name.eq("pass_diag") {
+        pass_diag(_arg_int(it, args, 0), _arg_int(it, args, 1), _arg_int(it, args, 2),
+                  _arg_string(it, args, 3), _arg_string(it, args, 4));
+        return iv_null();
+    }
+
     // AST primitive constructors (stdlib::ast.glide). Only the subset
     // macros realistically need is wired up. Add more on demand.
     if name.eq("expr_int") {
