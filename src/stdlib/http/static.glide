@@ -158,14 +158,14 @@ fn _static_handler(req: *HttpRequest) -> HttpResponse {
         let mut r: HttpResponse = HttpResponse::with_status(304);
         r = r.set("ETag", etag);
         let cc: string = __glide_static_cache_get();
-        if !cc.eq("") { r = r.set("Cache-Control", cc); }
+        if cc != null && !cc.eq("") { r = r.set("Cache-Control", cc); }
         return r;
     }
 
     let mut resp: HttpResponse = HttpResponse::file(disk, _static_mime(disk));
     resp = resp.set("ETag", etag);
     let cc: string = __glide_static_cache_get();
-    if !cc.eq("") { resp = resp.set("Cache-Control", cc); }
+    if cc != null && !cc.eq("") { resp = resp.set("Cache-Control", cc); }
     return resp;
 }
 
@@ -183,6 +183,9 @@ fn _static_handler(req: *HttpRequest) -> HttpResponse {
 /// ```
 pub fn serve_dir(r: *Router, opts: StaticOpts) {
     __glide_static_root_set(opts.root);
-    __glide_static_cache_set(opts.cache_control);
+    // An unset `cache_control` field is null; storing it would make the
+    // handler's `get().eq(...)` dereference null. Normalise to "".
+    let cc: string = if opts.cache_control != null { opts.cache_control } else { "" };
+    __glide_static_cache_set(cc);
     r.get(opts.url_prefix.concat("/*filepath"), _static_handler);
 }
