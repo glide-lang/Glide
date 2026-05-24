@@ -153,8 +153,11 @@ fn stdlib_method_ret(ty_name: string, method: string) -> *Type {
         if method.eq("is_alpha") { return ty_named("bool"); }
         if method.eq("to_string") { return ty_named("string"); }
     }
-    if ty_name.eq("int") {
-        if method.eq("abs") { return ty_named("int"); }
+    if _is_int_family(ty_name) {
+        // `abs` keeps the receiver's own width (i64.abs() -> i64); `to_string`
+        // works on every int type now (codegen routes them all through the
+        // 64-bit __glide_int_* runtime helpers).
+        if method.eq("abs") { return ty_named(ty_name); }
         if method.eq("to_string") { return ty_named("string"); }
     }
     if ty_name.eq("bool") {
@@ -1092,11 +1095,18 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: int) {
 // `int_to_str` and `digit_str` moved to ast.glide so expander.glide can
 // reach them without a circular import.
 
+// Any fixed-width integer type (the canonical family). The legacy `int` etc.
+// are already normalised to these by `_normalize_prim`.
+fn _is_int_family(name: string) -> bool {
+    if name.eq("i8")  || name.eq("i16") || name.eq("i32") || name.eq("i64") { return true; }
+    if name.eq("u8")  || name.eq("u16") || name.eq("u32") || name.eq("u64") { return true; }
+    if name.eq("usize") || name.eq("isize") { return true; }
+    return false;
+}
+
 fn is_stdlib_primitive(name: string) -> bool {
-    if name.eq("int") { return true; }
-    if name.eq("uint") { return true; }
-    if name.eq("long") { return true; }
-    if name.eq("float") { return true; }
+    if _is_int_family(name) { return true; }
+    if name.eq("f32") || name.eq("f64") { return true; }
     if name.eq("char") { return true; }
     if name.eq("bool") { return true; }
     if name.eq("string") { return true; }
@@ -1666,7 +1676,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
 pub fn type_to_c(t: *Type) -> string {
     if t == null { return "void"; }
     if t.kind == TY_NAMED {
-        let n: string = t.name;
+        let n: string = _normalize_prim(t.name);
         if n.eq("int")    { return "int"; }
         if n.eq("uint")   { return "unsigned int"; }
         if n.eq("long")   { return "long"; }
@@ -3287,7 +3297,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                             println!("");
                             return;
                         } else {
-                            fn_name = "__glide_".concat(prefix).concat("_").concat(method);
+                            // Every int width shares the `__glide_int_*`
+                            // runtime helpers (i64-wide), so map the family to
+                            // the `int` prefix; char/bool/string keep their own.
+                            let mut rt_prefix: string = prefix;
+                            if _is_int_family(prefix) { rt_prefix = "int"; }
+                            fn_name = "__glide_".concat(rt_prefix).concat("_").concat(method);
                         }
                     }
                 } else {

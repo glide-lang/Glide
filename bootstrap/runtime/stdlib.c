@@ -64,10 +64,13 @@ static const char* __glide_char_to_string(char c) {
     out[0] = c; out[1] = 0;
     return out;
 }
-static int __glide_int_abs(int n) { return n < 0 ? -n : n; }
-static const char* __glide_int_to_string(int n) {
+/* 64-bit so every int width (i8..i64, isize) shares one routine; narrower
+   types promote losslessly and the result is assigned back to the caller's
+   own type. */
+static long long __glide_int_abs(long long n) { return n < 0 ? -n : n; }
+static const char* __glide_int_to_string(long long n) {
     char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%d", n);
+    int len = snprintf(buf, sizeof(buf), "%lld", n);
     char* out = (char*)__glide_palloc(len + 1);
     memcpy(out, buf, (size_t)len + 1);
     return out;

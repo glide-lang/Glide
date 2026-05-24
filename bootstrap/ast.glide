@@ -523,10 +523,25 @@ pub fn stmt_let_unsafe(name: string, ty: *Type, value: *Expr,
     return stmt_let(name, ty, value, is_mut, line, col);
 }
 
+// Canonical numeric type names are the fixed-width `iN` / `uN` / `fN` family.
+// The legacy C-style spellings are accepted as aliases and normalised here,
+// the single point every named type flows through — so old source keeps
+// compiling while the canonical names take over. `int`/`uint` are 32-bit
+// (their historical width); `long`/`ulong` collapse to fixed 64-bit (killing
+// the platform-dependent C `long`); `float` is 64-bit double.
+pub fn _normalize_prim(name: string) -> string {
+    if name.eq("int")   { return "i32"; }
+    if name.eq("uint")  { return "u32"; }
+    if name.eq("long")  { return "i64"; }
+    if name.eq("ulong") { return "u64"; }
+    if name.eq("float") { return "f64"; }
+    return name;
+}
+
 pub fn ty_named(name: string) -> *Type {
     let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_NAMED;
-    t.name = name;
+    t.name = _normalize_prim(name);
     t.inner = null;
     return t;
 }

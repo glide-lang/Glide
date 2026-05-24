@@ -186,9 +186,14 @@ fn _obj_set_stmt(out_ref: *Expr, name: string, ty: *Type, val: *Expr) -> *Stmt {
 fn _prim_suffix(ty: *Type) -> string {
     if ty == null { return ""; }
     if ty.kind != TY_NAMED { return ""; }
-    if ty.name.eq("string") { return "string"; }
-    if ty.name.eq("int")    { return "int"; }
-    if ty.name.eq("bool")   { return "bool"; }
-    if ty.name.eq("f64")    { return "float"; }
+    let n: string = ty.name;
+    if n.eq("string") { return "string"; }
+    if n.eq("bool")   { return "bool"; }
+    // Any int width binds through the int JSON ctor/getter (the legacy `int`
+    // is normalised to `i32`, so match the whole canonical family).
+    if n.eq("int") || n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
+       || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
+       || n.eq("usize") || n.eq("isize") { return "int"; }
+    if n.eq("f32") || n.eq("f64") || n.eq("float") { return "float"; }
     return "";
 }

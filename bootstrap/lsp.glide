@@ -4349,11 +4349,14 @@ fn _list_primitive_methods(type_name: string, items: *JsonValue, seen: *HashMap<
             "True for an ASCII letter (`a`-`z` / `A`-`Z`).\n\n```glide\n'a'.is_alpha();   // true\n```");
         return;
     }
-    if type_name.eq("int") {
-        _prim_method(items, seen, "abs", "int",
-            "Absolute value.\n\n```glide\nlet n: int = -5;\nn.abs();   // 5\n```");
+    if type_name.eq("int") || type_name.eq("i8") || type_name.eq("i16")
+       || type_name.eq("i32") || type_name.eq("i64")
+       || type_name.eq("u8") || type_name.eq("u16") || type_name.eq("u32")
+       || type_name.eq("u64") || type_name.eq("usize") || type_name.eq("isize") {
+        _prim_method(items, seen, "abs", type_name,
+            "Absolute value.\n\n```glide\nlet n: i32 = -5;\nn.abs();   // 5\n```");
         _prim_method(items, seen, "to_string", "string",
-            "Decimal text for this integer.\n\n```glide\nlet n: int = 42;\nn.to_string();   // \"42\"\n```");
+            "Decimal text for this integer.\n\n```glide\nlet n: i32 = 42;\nn.to_string();   // \"42\"\n```");
         return;
     }
     if type_name.eq("bool") {
@@ -4508,12 +4511,14 @@ fn _in_type_position(text: string, p: int) -> bool {
 // Offer the primitive type names (mirrors the typer's `_is_known_type_name`
 // list) as completions. Kind 22 = Struct, so they render as types.
 fn _push_primitive_types(items: *JsonValue, seen: *HashMap<bool>) {
+    // Canonical fixed-width family only — the legacy `int`/`uint`/`long`/
+    // `ulong`/`float` spellings still compile (normalised to these) but are
+    // no longer offered, so new code standardises on `iN` / `uN` / `fN`.
     let prims: *Vector<string> = Vector::new();
-    prims.push("int");  prims.push("uint"); prims.push("long"); prims.push("ulong");
     prims.push("i8");   prims.push("i16");  prims.push("i32");  prims.push("i64");
     prims.push("u8");   prims.push("u16");  prims.push("u32");  prims.push("u64");
     prims.push("usize"); prims.push("isize");
-    prims.push("float"); prims.push("f32"); prims.push("f64");
+    prims.push("f32");  prims.push("f64");
     prims.push("bool"); prims.push("char"); prims.push("string"); prims.push("void");
     for let i: int = 0; i < prims.len(); i++ {
         let p: string = prims.get(i);
