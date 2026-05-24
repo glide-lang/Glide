@@ -4230,6 +4230,16 @@ fn _let_node_type(s: *Stmt, root: *Vector<Stmt>) -> *Type {
        && s.let_value.lhs.kind == EX_IDENT {
         return _fn_ret_type(root, s.let_value.lhs.str_val);
     }
+    // `let s = "x"; / let n = 5;` — infer the primitive type from a literal
+    // initializer, so `s.` completes string methods without an annotation.
+    if s.let_value != null {
+        let lv: int = s.let_value.kind;
+        if lv == EX_STRING { return ty_named("string"); }
+        if lv == EX_INT    { return ty_named("int"); }
+        if lv == EX_FLOAT  { return ty_named("float"); }
+        if lv == EX_BOOL   { return ty_named("bool"); }
+        if lv == EX_CHAR   { return ty_named("char"); }
+    }
     return null;
 }
 
@@ -4269,6 +4279,12 @@ fn _chain_resolve_type(text: string, end_pos: int, stmts: *Vector<Stmt>, line0: 
         }
         return _fn_ret_type(stmts, method_name);
     }
+
+    // Literal receiver: `"".` → string, `'x'.` → char. A quote/apostrophe
+    // immediately before the `.` is the close of a literal, so member
+    // completion works directly on literals (`"".len()`).
+    if c == 34 { return ty_named("string"); }
+    if c == 39 { return ty_named("char"); }
 
     // Indexing: `…[idx]` — for Vector<T>[i] return T.
     if c == 93 {
