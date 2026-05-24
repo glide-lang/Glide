@@ -152,7 +152,9 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
 
     // Procedural macro expansion runs AFTER declarative macro_rules!
     // expansion so a derive can sit on top of a `macro` use site.
-    return expand_proc_macros(cleaned);
+    let after_proc: *Vector<Stmt> = expand_proc_macros(cleaned);
+    // Compiler passes run last, over the fully-expanded program.
+    return run_proc_passes(after_proc);
 }
 
 // ---- compile-time location macros ---------------------------------------
@@ -390,7 +392,7 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
             if a.name == null { continue; }
             if a.name.eq("proc_attr") || a.name.eq("proc_derive")
                || a.name.eq("proc_macro") || a.name.eq("proc_macro_str")
-               || a.name.eq("proc_macro_expr") {
+               || a.name.eq("proc_macro_expr") || a.name.eq("proc_pass") {
                 pm_origins.insert(s.origin, true);
                 break;
             }
@@ -447,7 +449,7 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
             if a.name == null { continue; }
             if a.name.eq("proc_attr") || a.name.eq("proc_derive")
                || a.name.eq("proc_macro") || a.name.eq("proc_macro_str")
-               || a.name.eq("proc_macro_expr") {
+               || a.name.eq("proc_macro_expr") || a.name.eq("proc_pass") {
                 return true;
             }
         }
@@ -1000,6 +1002,92 @@ fn rewrite_expr_macros(e: *Expr, pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Ex
         }
     }
     return e;
+}
+
+// Invoke a @proc_pass(name) fn. Signature is
+// `fn impl(program: *Vector<Stmt>) -> *Vector<Stmt>`; the whole program is
+// marshalled in as IV_VECTOR<IV_PTR{Stmt}> and the returned vector becomes
+// the new program. On any non-vector return the original program is kept.
+fn _run_pass(it: *Interp, fn_stmt: *Stmt, program: *Vector<Stmt>) -> *Vector<Stmt> {
+    let saved: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+    let elems: *Vector<IValue> = Vector::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let st: Stmt = program.get(i);
+        let ps: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+        *ps = st;
+        elems.push(iv_ptr(ps as *void, "Stmt"));
+    }
+    let invoke: *Vector<IValue> = Vector::new();
+    invoke.push(iv_vector(elems));
+    let r: IValue = interp_call(it, fn_stmt, invoke);
+    __glide_palloc_set(saved);
+    if r.kind != IV_VECTOR { return program; }
+    let out: *Vector<Stmt> = Vector::new();
+    for let i: int = 0; i < r.vec.len(); i++ {
+        let elem: IValue = r.vec.get(i);
+        if elem.kind != IV_PTR { continue; }
+        if !elem.ty_tag.eq("Stmt") { continue; }
+        let ps: *Stmt = elem.p as *Stmt;
+        if ps != null {
+            if ps.origin != null && !ps.origin.eq("") {
+                // A copied original carries its origin and is already
+                // complete — push it VERBATIM. (Running ast_fill_defaults
+                // here would hand an extern fn, whose `fn_body == null` is
+                // the "declaration only" signal, an empty body and make
+                // codegen emit a definition that clashes with the runtime.)
+                out.push(*ps);
+            } else {
+                // Freshly-injected stmt: fill in the fields the interp left
+                // null, and give it a builtin-prelude origin so it's globally
+                // visible (the typer's visibility is origin-keyed) and still
+                // reaches codegen.
+                ast_fill_defaults(ps);
+                ps.origin = "src/builtins/__glide_pass_injected.glide";
+                out.push(*ps);
+            }
+        }
+    }
+    return out;
+}
+
+// Run every `@proc_pass(name)` fn over the whole post-macro-expansion
+// program. Each pass receives the program as `*Vector<Stmt>` and returns a
+// (possibly transformed) program; passes chain in source order. This is the
+// deepest extension point: a dependency can rewrite the AST program-wide,
+// inject helpers, or run a custom analysis — all at compile time, before the
+// typer + codegen ever see the program. Pass impls are stripped from the
+// consumer binary (compile-time only).
+fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
+    let passes: *Vector<Stmt> = Vector::new();
+    for let i: int = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_FN || s.attrs == null { continue; }
+        for let j: int = 0; j < s.attrs.len(); j++ {
+            let a: Attr = s.attrs.get(j);
+            if a.name != null && a.name.eq("proc_pass") { passes.push(s); break; }
+        }
+    }
+    if passes.len() == 0 { return program; }
+
+    let saved: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+    let it: *Interp = Interp::new();
+    it.register_fns(program);
+    let mut cur: *Vector<Stmt> = program;
+    for let i: int = 0; i < passes.len(); i++ {
+        let pf: Stmt = passes.get(i);
+        it.program = cur;
+        it.register_fns(cur);
+        cur = _run_pass(it, &pf, cur);
+    }
+    __glide_palloc_set(saved);
+    if it.diagnostics.len() > 0 {
+        for let i: int = 0; i < it.diagnostics.len(); i++ {
+            println!("proc-pass:", it.diagnostics.get(i));
+        }
+    }
+    return cur;
 }
 
 fn expand_with_def(call: *Expr, def: *Stmt) -> *Vector<Stmt> {
