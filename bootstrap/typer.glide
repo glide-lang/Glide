@@ -114,10 +114,6 @@ fn is_int_type(t: *Type) -> bool {
     if t == null { return false; }
     if t.kind != TY_NAMED { return false; }
     let n: string = t.name;
-    if n.eq("int")  { return true; }
-    if n.eq("uint") { return true; }
-    if n.eq("long") { return true; }
-    if n.eq("ulong") { return true; }
     if n.eq("i8")  { return true; }
     if n.eq("i16") { return true; }
     if n.eq("i32") { return true; }
@@ -135,7 +131,7 @@ fn is_int_type(t: *Type) -> bool {
 fn is_float_type(t: *Type) -> bool {
     if t == null { return false; }
     if t.kind != TY_NAMED { return false; }
-    return t.name.eq("float") || t.name.eq("f32") || t.name.eq("f64");
+    return t.name.eq("f32") || t.name.eq("f64");
 }
 
 fn is_bool_type(t: *Type) -> bool {
@@ -623,17 +619,30 @@ fn _count_fmt_placeholders(raw: string) -> i32 {
 fn _is_known_type_name(t: *Typer, n: string) -> bool {
     if n == null || n.eq("") { return true; }
     if n.eq("Self") || n.eq("__fn__") || n.eq("__fn_ptr__") { return true; }
-    if n.eq("int") || n.eq("uint") || n.eq("long") || n.eq("ulong")
-       || n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
+    if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
        || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
        || n.eq("usize") || n.eq("isize")
-       || n.eq("float") || n.eq("f32") || n.eq("f64")
+       || n.eq("f32") || n.eq("f64")
        || n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") {
         return true;
     }
     if t.structs.contains(n) { return true; }
     if _is_current_type_param(t, n) { return true; }
     return false;
+}
+
+// `unknown type `X`` message, with a `; use `iN`` hint when `X` is a retired
+// C-style numeric spelling, so the migration path is obvious at the use site.
+fn _unknown_type_msg(n: string) -> string {
+    let mut msg: string = "unknown type `".concat(n).concat("`");
+    let mut hint: string = "";
+    if n.eq("int")   { hint = "i32"; }
+    if n.eq("uint")  { hint = "u32"; }
+    if n.eq("long")  { hint = "i64"; }
+    if n.eq("ulong") { hint = "u64"; }
+    if n.eq("float") { hint = "f64"; }
+    if !hint.eq("") { msg = msg.concat("; use `").concat(hint).concat("`"); }
+    return msg;
 }
 
 // Recursively flag any unknown named type inside an annotation. `dyn`
@@ -651,7 +660,7 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.line > 0 { pl = ty.line; pc = ty.col; }
     if ty.kind == TY_NAMED {
         if !_is_known_type_name(t, ty.name) {
-            t.err_code_range(pl, pc, ty.name.len(), "", "unknown type `".concat(ty.name).concat("`"));
+            t.err_code_range(pl, pc, ty.name.len(), "", _unknown_type_msg(ty.name));
         }
         return;
     }
@@ -901,10 +910,10 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                     if s.let_value.int_val > 2147483647 || s.let_value.int_val < -2147483648 {
                         ty = ty_named("i64");
                     } else {
-                        ty = ty_named("int");
+                        ty = ty_named("i32");
                     }
                 }
-                else if s.let_value.kind == EX_FLOAT { ty = ty_named("float"); }
+                else if s.let_value.kind == EX_FLOAT { ty = ty_named("f64"); }
                 else if s.let_value.kind == EX_STRING { ty = ty_named("string"); }
                 else if s.let_value.kind == EX_BOOL { ty = ty_named("bool"); }
                 else if s.let_value.kind == EX_CHAR { ty = ty_named("char"); }
@@ -2123,9 +2132,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if e.int_val > 2147483647 || e.int_val < -2147483648 {
             return ty_named("i64");
         }
-        return ty_named("int");
+        return ty_named("i32");
     }
-    if e.kind == EX_FLOAT { return ty_named("float"); }
+    if e.kind == EX_FLOAT { return ty_named("f64"); }
     if e.kind == EX_STRING { return ty_named("string"); }
     if e.kind == EX_BOOL { return ty_named("bool"); }
     if e.kind == EX_CHAR { return ty_named("char"); }
@@ -2598,7 +2607,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             } else {
                 let a: Expr = e.args.get(0);
                 let at: *Type = infer_expr(t, &a);
-                let want: *Type = ty_named("int");
+                let want: *Type = ty_named("i32");
                 if !types_compat(want, at) {
                     t.err(a.line, a.column,
                         "make_chan capacity must be int, got ".concat(type_to_string(at)));

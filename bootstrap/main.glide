@@ -1052,7 +1052,7 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> i32 {
         let main_path: string = target_dir.concat("/src/main.glide");
         if !__glide_file_exists(main_path) {
             let main_body: string =
-                "fn main() -> int {\n"
+                "fn main() -> i32 {\n"
                 .concat("    println!(\"hello from ").concat(proj_name).concat("\");\n")
                 .concat("    return 0;\n")
                 .concat("}\n");
@@ -2923,7 +2923,7 @@ fn run_bench(path: string) -> i32 {
         // Synth: prepend the bench module, append a main() that pipes
         // every bench_* through `bench_run`.
         let mut synth: string = "import stdlib::bench::*;\n".concat(src);
-        synth = synth.concat("\n\nfn main() -> int {\n");
+        synth = synth.concat("\n\nfn main() -> i32 {\n");
         for let j: i32 = 0; j < bench_fns.len(); j++ {
             let name: string = bench_fns.get(j);
             synth = synth.concat("    bench_run(\"").concat(name).concat("\", ").concat(name).concat(");\n");
@@ -3030,7 +3030,7 @@ fn run_test(path: string) -> i32 {
         // Synthesise: prepend testing import (idempotent — loader dedups),
         // append a main() that calls each test_* in declaration order.
         let mut synth: string = "import stdlib::testing::*;\n".concat(src);
-        synth = synth.concat("\n\nfn main() -> int {\n");
+        synth = synth.concat("\n\nfn main() -> i32 {\n");
         for let j: i32 = 0; j < test_fns.len(); j++ {
             let name: string = test_fns.get(j);
             synth = synth.concat("    test_begin(\"").concat(name).concat("\");\n");

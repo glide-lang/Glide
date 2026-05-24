@@ -140,15 +140,15 @@ fn format_spec_for(t: *Type) -> string {
 
 fn stdlib_method_ret(ty_name: string, method: string) -> *Type {
     if ty_name.eq("string") {
-        if method.eq("len") { return ty_named("int"); }
+        if method.eq("len") { return ty_named("i32"); }
         if method.eq("eq") { return ty_named("bool"); }
-        if method.eq("cmp") { return ty_named("int"); }
+        if method.eq("cmp") { return ty_named("i32"); }
         if method.eq("at") { return ty_named("char"); }
         if method.eq("concat") { return ty_named("string"); }
         if method.eq("substring") { return ty_named("string"); }
     }
     if ty_name.eq("char") {
-        if method.eq("to_int") { return ty_named("int"); }
+        if method.eq("to_int") { return ty_named("i32"); }
         if method.eq("is_digit") { return ty_named("bool"); }
         if method.eq("is_alpha") { return ty_named("bool"); }
         if method.eq("to_string") { return ty_named("string"); }
@@ -1095,8 +1095,7 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: i32) {
 // `int_to_str` and `digit_str` moved to ast.glide so expander.glide can
 // reach them without a circular import.
 
-// Any fixed-width integer type (the canonical family). The legacy `int` etc.
-// are already normalised to these by `_normalize_prim`.
+// Any fixed-width integer type (the canonical family).
 fn _is_int_family(name: string) -> bool {
     if name.eq("i8")  || name.eq("i16") || name.eq("i32") || name.eq("i64") { return true; }
     if name.eq("u8")  || name.eq("u16") || name.eq("u32") || name.eq("u64") { return true; }
@@ -1395,9 +1394,9 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.int_val > 2147483647 || e.int_val < -2147483648 {
             return ty_named("i64");
         }
-        return ty_named("int");
+        return ty_named("i32");
     }
-    if e.kind == EX_FLOAT { return ty_named("float"); }
+    if e.kind == EX_FLOAT { return ty_named("f64"); }
     if e.kind == EX_STRING { return ty_named("string"); }
     if e.kind == EX_BOOL { return ty_named("bool"); }
     if e.kind == EX_CHAR { return ty_named("char"); }
@@ -1481,7 +1480,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         }
         if stripped.kind == TY_OPT_RESULT {
             if e.field.eq("val") { return stripped.inner; }
-            if e.field.eq("tag") { return ty_named("int"); }
+            if e.field.eq("tag") { return ty_named("i32"); }
             if e.field.eq("err") { return ty_named("string"); }
             return null;
         }
@@ -1539,12 +1538,12 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.lhs != null && e.lhs.kind == EX_IDENT {
             let nm: string = e.lhs.str_val;
             // Stdlib runtime fns.
-            if nm.eq("args_count") { return ty_named("int"); }
+            if nm.eq("args_count") { return ty_named("i32"); }
             if nm.eq("args_at") { return ty_named("string"); }
             if nm.eq("read_file") { return ty_named("string"); }
             if nm.eq("write_file") { return ty_named("bool"); }
             if nm.eq("now_ns") { return ty_named("i64"); }
-            if nm.eq("pending_count") { return ty_named("int"); }
+            if nm.eq("pending_count") { return ty_named("i32"); }
             if nm.eq("malloc") || nm.eq("calloc") { return ty_pointer(ty_named("void")); }
             if g.fns.contains(nm) {
                 let s: Stmt = g.fns.get(nm);
@@ -1676,11 +1675,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
 pub fn type_to_c(t: *Type) -> string {
     if t == null { return "void"; }
     if t.kind == TY_NAMED {
-        let n: string = _normalize_prim(t.name);
-        if n.eq("int")    { return "int"; }
-        if n.eq("uint")   { return "unsigned int"; }
-        if n.eq("long")   { return "long"; }
-        if n.eq("ulong")  { return "unsigned long"; }
+        let n: string = t.name;
         if n.eq("i8")     { return "int8_t"; }
         if n.eq("i16")    { return "int16_t"; }
         if n.eq("i32")    { return "int32_t"; }
@@ -1691,7 +1686,6 @@ pub fn type_to_c(t: *Type) -> string {
         if n.eq("u64")    { return "uint64_t"; }
         if n.eq("usize")  { return "size_t"; }
         if n.eq("isize")  { return "ptrdiff_t"; }
-        if n.eq("float")  { return "double"; }
         if n.eq("f32")    { return "float"; }
         if n.eq("f64")    { return "double"; }
         if n.eq("bool")   { return "bool"; }
@@ -2610,7 +2604,7 @@ fn arm_value_expr(a: *MatchArm) -> *Expr {
 
 fn arm_value_type(g: *CG, a: *MatchArm) -> *Type {
     let v: *Expr = arm_value_expr(a);
-    if v == null { return ty_named("int"); }
+    if v == null { return ty_named("i32"); }
     return infer_for_codegen(g, v);
 }
 
@@ -4302,7 +4296,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: i32) {
                     // it in scope so the body's `i` references type-resolve to
                     // int (otherwise printf-style macros emit `%p` → hex).
                     print!("int ", fname);
-                    g.declare(s.for_init.name, ty_named("int"));
+                    g.declare(s.for_init.name, ty_named("i32"));
                 }
                 if s.for_init.let_value != null {
                     print!(" = "); emit_expr(g, s.for_init.let_value);

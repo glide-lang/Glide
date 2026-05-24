@@ -1567,24 +1567,24 @@ fn builtin_macro_doc(name: string) -> string {
 fn keyword_doc(name: string) -> string {
     // Bindings.
     if name.eq("let") {
-        return "```glide\nlet name [: T] = expr;\n```\n\n---\n\nDeclares an immutable local binding. Add `mut` to allow reassignment, drop the type annotation when it can be inferred from the initializer.\n\n```glide\nlet x: int = 42;\nlet v = Vector::new();          // type inferred\nlet mut count: int = 0;\n```";
+        return "```glide\nlet name [: T] = expr;\n```\n\n---\n\nDeclares an immutable local binding. Add `mut` to allow reassignment, drop the type annotation when it can be inferred from the initializer.\n\n```glide\nlet x: i32 = 42;\nlet v = Vector::new();          // type inferred\nlet mut count: i32 = 0;\n```";
     }
     if name.eq("mut") {
-        return "```glide\nlet mut name = expr;\n```\n\n---\n\nMarks a `let` binding as reassignable. Without `mut`, the binding is immutable.\n\n```glide\nlet mut n: int = 0;\nn = n + 1;                       // ok\n```";
+        return "```glide\nlet mut name = expr;\n```\n\n---\n\nMarks a `let` binding as reassignable. Without `mut`, the binding is immutable.\n\n```glide\nlet mut n: i32 = 0;\nn = n + 1;                       // ok\n```";
     }
     if name.eq("const") {
-        return "```glide\nconst NAME [: T] = expr;\n```\n\n---\n\nFile-scope constant. Lowered to a `#define` in C. The initializer must be a compile-time literal.\n\n```glide\nconst MAX: int = 1024;\nconst NAME: string = \"glide\";\n```";
+        return "```glide\nconst NAME [: T] = expr;\n```\n\n---\n\nFile-scope constant. Lowered to a `#define` in C. The initializer must be a compile-time literal.\n\n```glide\nconst MAX: i32 = 1024;\nconst NAME: string = \"glide\";\n```";
     }
 
     // Types and items.
     if name.eq("fn") {
-        return "```glide\nfn name(params) [-> T] { body }\n```\n\n---\n\nDeclare a function. Params are `name: type`. Omit `-> T` for void.\n\n```glide\nfn add(a: int, b: int) -> int {\n    return a + b;\n}\n```";
+        return "```glide\nfn name(params) [-> T] { body }\n```\n\n---\n\nDeclare a function. Params are `name: type`. Omit `-> T` for void.\n\n```glide\nfn add(a: i32, b: i32) -> i32 {\n    return a + b;\n}\n```";
     }
     if name.eq("struct") {
-        return "```glide\nstruct Name { field: T, ... }\n```\n\n---\n\nDeclare a value-type record. Fields are `name: type`, comma-separated.\n\n```glide\nstruct Point { x: int, y: int }\nlet p: Point = Point { x: 1, y: 2 };\n```";
+        return "```glide\nstruct Name { field: T, ... }\n```\n\n---\n\nDeclare a value-type record. Fields are `name: type`, comma-separated.\n\n```glide\nstruct Point { x: i32, y: i32 }\nlet p: Point = Point { x: 1, y: 2 };\n```";
     }
     if name.eq("enum") {
-        return "```glide\nenum Name { Variant, Variant(T1, T2), ... }\n```\n\n---\n\nTagged union. Each variant can carry zero or more positional payloads.\n\n```glide\nenum Shape { Circle(float), Square(int) }\nlet s: Shape = Shape::Circle(3.14);\n```";
+        return "```glide\nenum Name { Variant, Variant(T1, T2), ... }\n```\n\n---\n\nTagged union. Each variant can carry zero or more positional payloads.\n\n```glide\nenum Shape { Circle(f64), Square(i32) }\nlet s: Shape = Shape::Circle(3.14);\n```";
     }
     if name.eq("impl") {
         return "```glide\nimpl T { fn method(self: *T, ...) { ... } }\n```\n\n---\n\nAttach methods (and macros) to a type. The first param `self: *T` makes the method instance-callable as `value.method(args)`.\n\n```glide\nimpl Counter {\n    fn bump(self: *Counter) { self.n = self.n + 1; }\n}\n```";
@@ -1596,7 +1596,7 @@ fn keyword_doc(name: string) -> string {
         return "```glide\ntype Alias = ExistingType;\n```\n\n---\n\nDefine a type alias. Resolved transparently — the alias and the original are interchangeable.\n\n```glide\ntype Bytes = []u8;\n```";
     }
     if name.eq("macro") {
-        return "```glide\nmacro name!(matchers) { body }\n```\n\n---\n\nDeclare a `macro_rules`-style macro. Matchers use `$x:expr` and the variadic form `$($x:expr),*`. Inside an `impl`, body referring to `self` makes it instance-style.\n\n```glide\nmacro vec_of!($($x:expr),*) {\n    let v: *Vector<int> = Vector::new();\n    $( v.push($x); )*\n}\n```";
+        return "```glide\nmacro name!(matchers) { body }\n```\n\n---\n\nDeclare a `macro_rules`-style macro. Matchers use `$x:expr` and the variadic form `$($x:expr),*`. Inside an `impl`, body referring to `self` makes it instance-style.\n\n```glide\nmacro vec_of!($($x:expr),*) {\n    let v: *Vector<i32> = Vector::new();\n    $( v.push($x); )*\n}\n```";
     }
 
     // Control flow.
@@ -1630,10 +1630,10 @@ fn keyword_doc(name: string) -> string {
 
     // Memory & runtime.
     if name.eq("defer") {
-        return "```glide\ndefer expr;\n```\n\n---\n\nRun `expr` at function exit (LIFO with other defers, before any `return`). Used for cleanup.\n\n```glide\nlet v: *Vector<int> = Vector::new();\ndefer v.free();\n```";
+        return "```glide\ndefer expr;\n```\n\n---\n\nRun `expr` at function exit (LIFO with other defers, before any `return`). Used for cleanup.\n\n```glide\nlet v: *Vector<i32> = Vector::new();\ndefer v.free();\n```";
     }
     if name.eq("defer_err") {
-        return "```glide\ndefer_err expr;\n```\n\n---\n\nLike `defer`, but only fires when the function returns an `Err` / `!T` failure value. Lets you tear down half-built state without running the same code on the happy path.\n\n```glide\nlet conn: *Conn = open();\ndefer_err conn.close();          // only closes on error\nlet r: !int = conn.do_thing()?;\n// success → conn lives on\n```";
+        return "```glide\ndefer_err expr;\n```\n\n---\n\nLike `defer`, but only fires when the function returns an `Err` / `!T` failure value. Lets you tear down half-built state without running the same code on the happy path.\n\n```glide\nlet conn: *Conn = open();\ndefer_err conn.close();          // only closes on error\nlet r: !i32 = conn.do_thing()?;\n// success → conn lives on\n```";
     }
     if name.eq("spawn") {
         return "```glide\nspawn fn_call(args);\n```\n\n---\n\nRun the call on a new pthread. Detached — no join handle.\n\n```glide\nspawn worker(c);\n```";
@@ -1648,7 +1648,7 @@ fn keyword_doc(name: string) -> string {
         return "```glide\n*dyn Trait\n```\n\n---\n\nA pointer to an erased-type value that implements `Trait`. Dispatch is dynamic (vtable lookup) instead of monomorphised — useful for heterogeneous containers and runtime polymorphism.\n\n```glide\nlet w: *dyn Writer = &my_struct;\nw.write(\"hi\");\n```";
     }
     if name.eq("trait") {
-        return "```glide\ntrait Name {\n    fn method(self: *Self, ...) -> T;\n    fn defaulted(self: *Self) -> int { return 0; }   // default impl\n}\n```\n\n---\n\nA set of method signatures (with optional default bodies) that types can implement via `impl Trait for T`. Used as bound `T: Trait` for generic constraints and via `*dyn Trait` for dynamic dispatch.";
+        return "```glide\ntrait Name {\n    fn method(self: *Self, ...) -> T;\n    fn defaulted(self: *Self) -> i32 { return 0; }   // default impl\n}\n```\n\n---\n\nA set of method signatures (with optional default bodies) that types can implement via `impl Trait for T`. Used as bound `T: Trait` for generic constraints and via `*dyn Trait` for dynamic dispatch.";
     }
     if name.eq("interface") {
         return "```glide\ninterface Name { fn method(self: *Self, ...) -> T; }\n```\n\n---\n\nLegacy alias for `trait`. New code should prefer `trait`.";
@@ -1672,7 +1672,7 @@ fn keyword_doc(name: string) -> string {
         return "```glide\nlet p: *T = new T { field: value, ... };\n```\n\n---\n\nHeap-allocate a struct (raw — no auto-drop). Pair with `free` later.\n\nFor auto-dropped allocation use `let p: *T = T { ... };` (no `new`) instead.";
     }
     if name.eq("as") {
-        return "```glide\nexpr as T\n```\n\n---\n\nExplicit cast between numeric types or pointer types. Compiles to a C cast.\n\n```glide\nlet n: int = some_long as int;\nlet p: *void = buf as *void;\n```";
+        return "```glide\nexpr as T\n```\n\n---\n\nExplicit cast between numeric types or pointer types. Compiles to a C cast.\n\n```glide\nlet n: i32 = some_long as i32;\nlet p: *void = buf as *void;\n```";
     }
     if name.eq("sizeof") {
         return "```glide\nsizeof(T)\n```\n\n---\n\nByte size of a type, like C's `sizeof`. Returns `usize`.";
@@ -1817,8 +1817,8 @@ fn word_at(text: string, line0: i32, col0: i32) -> string {
 // a method call that constrains the type parameter. Single-T case only.
 fn lsp_infer_expr(stmts: *Vector<Stmt>, host: *Stmt, e: *Expr) -> *Type {
     if e == null { return null; }
-    if e.kind == EX_INT { return ty_named("int"); }
-    if e.kind == EX_FLOAT { return ty_named("float"); }
+    if e.kind == EX_INT { return ty_named("i32"); }
+    if e.kind == EX_FLOAT { return ty_named("f64"); }
     if e.kind == EX_STRING { return ty_named("string"); }
     if e.kind == EX_BOOL { return ty_named("bool"); }
     if e.kind == EX_CHAR { return ty_named("char"); }
@@ -2008,8 +2008,8 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
             }
             header = header.concat(": *").concat(gen_name).concat("<").concat(t_str).concat(">");
             inferred = true;
-        } else if e.kind == EX_INT    { header = header.concat(": int"); inferred = true; }
-        else if e.kind == EX_FLOAT  { header = header.concat(": float"); inferred = true; }
+        } else if e.kind == EX_INT    { header = header.concat(": i32"); inferred = true; }
+        else if e.kind == EX_FLOAT  { header = header.concat(": f64"); inferred = true; }
         else if e.kind == EX_STRING { header = header.concat(": string"); inferred = true; }
         else if e.kind == EX_BOOL   { header = header.concat(": bool"); inferred = true; }
         else if e.kind == EX_CHAR   { header = header.concat(": char"); inferred = true; }
@@ -4235,8 +4235,8 @@ fn _let_node_type(s: *Stmt, root: *Vector<Stmt>) -> *Type {
     if s.let_value != null {
         let lv: i32 = s.let_value.kind;
         if lv == EX_STRING { return ty_named("string"); }
-        if lv == EX_INT    { return ty_named("int"); }
-        if lv == EX_FLOAT  { return ty_named("float"); }
+        if lv == EX_INT    { return ty_named("i32"); }
+        if lv == EX_FLOAT  { return ty_named("f64"); }
         if lv == EX_BOOL   { return ty_named("bool"); }
         if lv == EX_CHAR   { return ty_named("char"); }
     }

@@ -19,7 +19,7 @@ fn derive_field_count(s: *Stmt) -> *Vector<Stmt> {
     body.push(*stmt_return(expr_int(n, 0, 0), 0, 0));
     let no_params: *Vector<Param> = Vector::new();
     let fn_name: string = s.name.concat("_field_count");
-    out.push(*stmt_fn(fn_name, no_params, ty_named("int"), body, 0, 0));
+    out.push(*stmt_fn(fn_name, no_params, ty_named("i32"), body, 0, 0));
     return out;
 }
 

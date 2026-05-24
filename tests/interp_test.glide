@@ -14,10 +14,10 @@ fn _build_add_fn() -> *Stmt {
     body.push(*stmt_return(sum, 0, 0));
 
     let params: *Vector<Param> = Vector::new();
-    params.push(Param { name: "a", ty: ty_named("int") });
-    params.push(Param { name: "b", ty: ty_named("int") });
+    params.push(Param { name: "a", ty: ty_named("i32") });
+    params.push(Param { name: "b", ty: ty_named("i32") });
 
-    let s: *Stmt = stmt_fn("add", params, ty_named("int"), body, 0, 0);
+    let s: *Stmt = stmt_fn("add", params, ty_named("i32"), body, 0, 0);
     return s;
 }
 
@@ -40,9 +40,9 @@ fn _build_fact_fn() -> *Stmt {
     body.push(*stmt_return(mul, 0, 0));
 
     let params: *Vector<Param> = Vector::new();
-    params.push(Param { name: "n", ty: ty_named("int") });
+    params.push(Param { name: "n", ty: ty_named("i32") });
 
-    return stmt_fn("fact", params, ty_named("int"), body, 0, 0);
+    return stmt_fn("fact", params, ty_named("i32"), body, 0, 0);
 }
 
 // ---- tests ------------------------------------------------------------
@@ -105,9 +105,9 @@ fn test_for_loop_sum() -> i32 {
     //     return acc;
     // }
     let body: *Vector<Stmt> = Vector::new();
-    body.push(*stmt_let("acc", ty_named("int"), expr_int(0, 0, 0), true, 0, 0));
+    body.push(*stmt_let("acc", ty_named("i32"), expr_int(0, 0, 0), true, 0, 0));
 
-    let init: *Stmt = stmt_let("i", ty_named("int"), expr_int(0, 0, 0), true, 0, 0);
+    let init: *Stmt = stmt_let("i", ty_named("i32"), expr_int(0, 0, 0), true, 0, 0);
     let cond: *Expr = expr_binary(OP_LT, expr_ident("i", 0, 0), expr_ident("n", 0, 0));
     let step: *Expr = expr_assign(OP_ASSIGN,
         expr_ident("i", 0, 0),
@@ -121,8 +121,8 @@ fn test_for_loop_sum() -> i32 {
     body.push(*stmt_return(expr_ident("acc", 0, 0), 0, 0));
 
     let params: *Vector<Param> = Vector::new();
-    params.push(Param { name: "n", ty: ty_named("int") });
-    let sum_fn: *Stmt = stmt_fn("sum_to", params, ty_named("int"), body, 0, 0);
+    params.push(Param { name: "n", ty: ty_named("i32") });
+    let sum_fn: *Stmt = stmt_fn("sum_to", params, ty_named("i32"), body, 0, 0);
 
     let it: *Interp = Interp::new();
     let args: *Vector<IValue> = Vector::new();
@@ -159,7 +159,7 @@ fn test_vector_intrinsic() -> i32 {
     let len_call: *Expr = expr_call(expr_member(expr_ident("v", 0, 0), "len"), Vector::new());
     body.push(*stmt_return(len_call, 0, 0));
 
-    let make_fn: *Stmt = stmt_fn("make", Vector::new(), ty_named("int"), body, 0, 0);
+    let make_fn: *Stmt = stmt_fn("make", Vector::new(), ty_named("i32"), body, 0, 0);
     let it: *Interp = Interp::new();
     let r: IValue = interp_call(it, make_fn, Vector::new());
     assert_eq!(r.kind, IV_INT);
@@ -171,7 +171,7 @@ fn test_diagnostic_on_undefined_name() -> i32 {
     // fn bad() -> int { return undefined_thing; }
     let body: *Vector<Stmt> = Vector::new();
     body.push(*stmt_return(expr_ident("undefined_thing", 0, 0), 0, 0));
-    let bad_fn: *Stmt = stmt_fn("bad", Vector::new(), ty_named("int"), body, 0, 0);
+    let bad_fn: *Stmt = stmt_fn("bad", Vector::new(), ty_named("i32"), body, 0, 0);
 
     let it: *Interp = Interp::new();
     let _r: IValue = interp_call(it, bad_fn, Vector::new());

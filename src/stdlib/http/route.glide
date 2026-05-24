@@ -228,7 +228,7 @@ fn impl_listen(s: *Stmt) -> *Vector<Stmt> {
     new_body.push(*stmt_return(listen_call, 0, 0));
 
     let main_params: *Vector<Param> = Vector::new();
-    let main_ret_ty: *Type = ty_result(ty_named("int"));
+    let main_ret_ty: *Type = ty_result(ty_named("i32"));
 
     let out: *Vector<Stmt> = Vector::new();
     out.push(*stmt_fn("main", main_params, main_ret_ty, new_body, 0, 0));

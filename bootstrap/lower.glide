@@ -179,7 +179,7 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
 
     if hi != null {
         // Range form.
-        let init: *Stmt = stmt_let(var_name, ty_named("int"), lo_or_iter, true, line, col);
+        let init: *Stmt = stmt_let(var_name, ty_named("i32"), lo_or_iter, true, line, col);
         if init != null {
             init.name_line = s.name_line; init.name_col = s.name_col; init.name_len = s.name_len;
         }
@@ -200,7 +200,7 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     let bind_iter: *Stmt = stmt_let(it_name, no_ty, lo_or_iter, false, line, col);
     block_body.push(*bind_iter);
 
-    let init: *Stmt = stmt_let(idx_name, ty_named("int"), expr_int(0, line, col), true, line, col);
+    let init: *Stmt = stmt_let(idx_name, ty_named("i32"), expr_int(0, line, col), true, line, col);
     let len_call: *Expr = expr_call(expr_member(expr_ident(it_name, line, col), "len"), Vector::new());
     let cond: *Expr = expr_binary(OP_LT, expr_ident(idx_name, line, col), len_call);
     let step: *Expr = expr_postinc(expr_ident(idx_name, line, col));
