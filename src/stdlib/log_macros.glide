@@ -71,7 +71,9 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
     // 2) Build the wrapper body.
     let wrapper_body: *Vector<Stmt> = Vector::new();
 
-    // log entry line — single string, optionally args appended.
+    // log entry line. `@trace` (with_args=false) is a bare flow marker
+    // (`> name`); `@logged` (with_args=true) interpolates the actual
+    // argument values (`> name(4, 6)`).
     let entry_msg: *Expr;
     if with_args && user_params.len() > 0 {
         entry_msg = _build_entry_with_args(user_name, user_params);
@@ -79,6 +81,14 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
         entry_msg = expr_string("> ".concat(user_name), 0, 0);
     }
     wrapper_body.push(*_call_log(level_name, entry_msg));
+
+    // Start the duration timer (only `@logged` measures + reports time).
+    // `let __log_t0: i64 = stdlib::log::trace_now_ns();`
+    if with_args {
+        let now_call: *Expr = expr_call(
+            expr_path("stdlib::log", "trace_now_ns", 0, 0), Vector::new());
+        wrapper_body.push(*stmt_let_unsafe("__log_t0", ty_named("i64"), now_call, false, 0, 0));
+    }
 
     // Build args list for forwarding call.
     let call_args: *Vector<Expr> = Vector::new();
@@ -95,7 +105,7 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
         wrapper_body.push(*stmt_let_unsafe("__r", user_ret_ty, inner_call, false, 0, 0));
         let exit_msg: *Expr;
         if with_args {
-            exit_msg = _build_exit_with_result(user_name);
+            exit_msg = _build_exit_logged(user_name, true);
         } else {
             exit_msg = expr_string("< ".concat(user_name), 0, 0);
         }
@@ -103,7 +113,12 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
         wrapper_body.push(*stmt_return(expr_ident_unsafe("__r", 0, 0), 0, 0));
     } else {
         wrapper_body.push(*stmt_expr(inner_call));
-        let exit_msg: *Expr = expr_string("< ".concat(user_name), 0, 0);
+        let exit_msg: *Expr;
+        if with_args {
+            exit_msg = _build_exit_logged(user_name, false);
+        } else {
+            exit_msg = expr_string("< ".concat(user_name), 0, 0);
+        }
         wrapper_body.push(*_call_log(level_name, exit_msg));
     }
 
@@ -112,22 +127,43 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
     return out;
 }
 
-// Build `"> <name> args:"` — keep it simple; param names are listed but
-// values aren't formatted (Glide has no Display trait yet, so we just
-// stringify identifiers).
+// Entry line for `@logged`: `format!("> name({}, {})", p0, p1)`, so the
+// real argument VALUES are interpolated at call time (one `{}` per param).
 fn _build_entry_with_args(name: string, params: *Vector<Param>) -> *Expr {
-    let mut msg: string = "> ".concat(name).concat("(");
+    let mut spec: string = "> ".concat(name).concat("(");
     for let i: int = 0; i < params.len(); i++ {
-        if i > 0 { msg = msg.concat(", "); }
-        let p: Param = params.get(i);
-        msg = msg.concat(p.name);
+        if i > 0 { spec = spec.concat(", "); }
+        spec = spec.concat("{}");
     }
-    msg = msg.concat(")");
-    return expr_string(msg, 0, 0);
+    spec = spec.concat(")");
+    let fmt_args: *Vector<Expr> = Vector::new();
+    fmt_args.push(*expr_string(spec, 0, 0));
+    for let i: int = 0; i < params.len(); i++ {
+        let p: Param = params.get(i);
+        fmt_args.push(*expr_ident_unsafe(p.name, 0, 0));
+    }
+    return expr_macro("format", fmt_args, 0, 0);
 }
 
-fn _build_exit_with_result(name: string) -> *Expr {
-    return expr_string("< ".concat(name).concat(" -> __r"), 0, 0);
+// Exit line for `@logged`. Reports the elapsed time since `__log_t0` and,
+// for a non-void fn, the return value: `< name -> {} ({})` or `< name ({})`.
+// The duration is rendered by `stdlib::log::trace_since_str(__log_t0)`.
+fn _build_exit_logged(name: string, returns_value: bool) -> *Expr {
+    let since_args: *Vector<Expr> = Vector::new();
+    since_args.push(*expr_ident_unsafe("__log_t0", 0, 0));
+    let since_call: *Expr = expr_call(
+        expr_path("stdlib::log", "trace_since_str", 0, 0), since_args);
+
+    let fmt_args: *Vector<Expr> = Vector::new();
+    if returns_value {
+        fmt_args.push(*expr_string("< ".concat(name).concat(" -> {} ({})"), 0, 0));
+        fmt_args.push(*expr_ident_unsafe("__r", 0, 0));
+        fmt_args.push(*since_call);
+    } else {
+        fmt_args.push(*expr_string("< ".concat(name).concat(" ({})"), 0, 0));
+        fmt_args.push(*since_call);
+    }
+    return expr_macro("format", fmt_args, 0, 0);
 }
 
 // Emit `log_<level>(<msg>);` as a stmt.

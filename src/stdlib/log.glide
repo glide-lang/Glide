@@ -742,19 +742,51 @@ pub fn log_set_format(fmt: int) {
 }
 
 /// Convenience: log at `lvl` through the global logger.
-pub fn log_at(lvl: int, msg: string) {
+///
+/// ```glide
+/// import stdlib::log;
+/// log::at(LOG_INFO, "ready");
+/// ```
+pub fn at(lvl: int, msg: string) {
     let e: *Vector<string> = Vector::new();
     Logger::global().logv(lvl, msg, e);
 }
 
-// Convenience free functions that route through the global logger.
+// Convenience free functions that route through the global logger. With a
+// qualified import they read as `log::info(...)`, `log::error(...)`, etc.
+// For println!-style formatting use the `info!` / `warn!` / … macros
+// (import stdlib::log::*).
 
-pub fn log_trace(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_TRACE, msg, e); }
-pub fn log_debug(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_DEBUG, msg, e); }
-pub fn log_info (msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_INFO,  msg, e); }
-pub fn log_warn (msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_WARN,  msg, e); }
-pub fn log_error(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_ERROR, msg, e); }
-pub fn log_fatal(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_FATAL, msg, e); }
+/// Log `msg` at TRACE through the global logger. `log::trace("…")`.
+pub fn trace(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_TRACE, msg, e); }
+/// Log `msg` at DEBUG through the global logger. `log::debug("…")`.
+pub fn debug(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_DEBUG, msg, e); }
+/// Log `msg` at INFO through the global logger. `log::info("…")`.
+pub fn info (msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_INFO,  msg, e); }
+/// Log `msg` at WARN through the global logger. `log::warn("…")`.
+pub fn warn (msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_WARN,  msg, e); }
+/// Log `msg` at ERROR through the global logger. `log::error("…")`.
+pub fn error(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_ERROR, msg, e); }
+/// Log `msg` at FATAL through the global logger. `log::fatal("…")`.
+pub fn fatal(msg: string) { let e: *Vector<string> = Vector::new(); Logger::global().logv(LOG_FATAL, msg, e); }
+
+// Timing helpers backing `@logged` (the proc-attr in stdlib::log_macros).
+// The macro brackets the wrapped call with a `trace_now_ns()` mark and a
+// `trace_since_str(mark)` read; both are emitted as `stdlib::log::…` calls,
+// so they resolve no matter how the user imported the module.
+
+/// Monotonic timestamp (nanoseconds) for measuring a call's duration.
+pub fn trace_now_ns() -> i64 { return time_now_ns(); }
+
+/// Elapsed time since a `trace_now_ns()` mark, scaled to a readable unit
+/// (`340ns` / `12.3us` / `4.5ms` / `1.2s`) with one fractional digit.
+pub fn trace_since_str(start_ns: i64) -> string {
+    let ns: i64 = time_since_ns(start_ns);
+    if ns < 1000        { return format!("{}ns", ns); }
+    if ns < 1000000     { return format!("{}.{}us", ns / 1000, (ns % 1000) / 100); }
+    if ns < 1000000000  { return format!("{}.{}ms", ns / 1000000, (ns % 1000000) / 100000); }
+    return format!("{}.{}s", ns / 1000000000, (ns % 1000000000) / 100000000);
+}
 
 // Structured-log builder. Use when you want to attach key=value pairs
 // without binding them on a child logger:
