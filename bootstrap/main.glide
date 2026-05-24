@@ -559,7 +559,25 @@ fn resolve_via_manifest(base: string, ipath: string) -> string {
         let c: int = ipath.at(i).to_int();
         if c == 47 || c == 92 { cut = i; break; }
     }
-    if cut <= 0 || cut >= ipath.len() { return ""; }
+
+    // Bare `import <alias>;` (no sub-path): resolve to the dep's library
+    // entry. Prefer `src/<alias>.glide` (so the module name matches the
+    // package and `<alias>::fn` resolves), then the older `src/lib.glide`,
+    // then a top-level `<alias>.glide`.
+    if cut >= ipath.len() {
+        let mut alias0: string = ipath;
+        if alias0.ends_with(".glide") { alias0 = alias0.substring(0, alias0.len() - 6); }
+        let dep0: string = manifest_resolve_alias(m, alias0);
+        if dep0.eq("") { return ""; }
+        let e1: string = dep0.concat("/src/").concat(alias0).concat(".glide");
+        if __glide_file_exists(e1) { return e1; }
+        let e2: string = dep0.concat("/src/lib.glide");
+        if __glide_file_exists(e2) { return e2; }
+        let e3: string = dep0.concat("/").concat(alias0).concat(".glide");
+        if __glide_file_exists(e3) { return e3; }
+        return "";
+    }
+    if cut <= 0 { return ""; }
     let alias: string = ipath.substring(0, cut);
     let dep_dir: string = manifest_resolve_alias(m, alias);
     if dep_dir.eq("") { return ""; }
@@ -1010,7 +1028,11 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> int {
     // the user may have started with hand-written code before turning
     // the dir into a Glide project.
     if is_lib {
-        let lib_path: string = target_dir.concat("/src/lib.glide");
+        // Library entry is `src/<name>.glide` so the module name equals the
+        // package name: a consumer writes `import <name>;` and calls
+        // `<name>::fn(...)`. (`module_path_from_path` derives the module
+        // from the path after `src/`, so the filename IS the namespace.)
+        let lib_path: string = target_dir.concat("/src/").concat(proj_name).concat(".glide");
         if !__glide_file_exists(lib_path) {
             let lib_body: string =
                 "/// Greet someone by name.\n"
@@ -1022,7 +1044,7 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> int {
                 .concat("    return \"hello, \".concat(name);\n")
                 .concat("}\n");
             if !write_file(lib_path, lib_body) {
-                println!("new: could not write src/lib.glide");
+                println!("new: could not write", lib_path);
                 return 1;
             }
         }
@@ -3461,13 +3483,17 @@ fn main() -> int {
                 src_path = root.concat("/").concat(m.bin);
             } else if mode == MODE_CHECK {
                 // Library project: no `bin`, so check the conventional
-                // `src/lib.glide` entry (type-checks it + everything it
-                // imports). `glide build`/`run` reject libs below.
+                // entry (type-checks it + everything it imports). Prefer
+                // `src/<name>.glide` (current scaffold), fall back to the
+                // older `src/lib.glide`. `glide build`/`run` reject libs below.
+                let named_entry: string = root.concat("/src/").concat(m.name).concat(".glide");
                 let lib_entry: string = root.concat("/src/lib.glide");
-                if __glide_file_exists(lib_entry) {
+                if __glide_file_exists(named_entry) {
+                    src_path = named_entry;
+                } else if __glide_file_exists(lib_entry) {
                     src_path = lib_entry;
                 } else {
-                    println!(m.name, "is a library with no `src/lib.glide` to check; pass a file: `glide check <file>`");
+                    println!(m.name, "is a library with no `src/".concat(m.name).concat(".glide` to check; pass a file: `glide check <file>`"));
                     return 1;
                 }
             } else {
