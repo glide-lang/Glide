@@ -263,7 +263,13 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     if p.at_kw("enum") { let s: *Stmt = parse_enum(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
     if p.at_kw("impl") { let s: *Stmt = parse_impl(p); if s != null { s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
     if p.at_kw("trait") { let s: *Stmt = parse_trait(p); if s != null { s.is_pub = is_pub; s.cfg_target = cfg; s.attrs = attrs_collected; } return s; }
-    if p.at_kw("import") { return parse_import(p); }
+    if p.at_kw("import") {
+        // `pub import …;` re-exports the imported symbols: any file that
+        // imports THIS module then sees them too (barrel/prelude pattern).
+        let s: *Stmt = parse_import(p);
+        if s != null { s.is_pub = is_pub; }
+        return s;
+    }
     // `c_raw! { ... }` at top level — emitted at the top of the generated .c.
     if p.current.kind == TOK_RAW_BLOCK {
         let line: int = p.current.line;

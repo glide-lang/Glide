@@ -1890,6 +1890,39 @@ fn run_clean() -> int {
 //   * `N` is brought in by an `import` statement in `F`:
 //     - `import a::b::c::N;` / `import a::b::c::{N, ...};` — selective
 //     - `import a::b::c::*;` / `import "..."`              — all pub from target
+// Insert into `into_f`'s visibility every name `target` exports: its own
+// `pub` decls, plus — transitively — the exports of any module `target`
+// pulls in with `pub import` (re-export). `seen` guards cyclic re-export
+// graphs. This is what lets a barrel/prelude file collect symbols from
+// several files and expose them under one import.
+fn _bring_exports(t: *Typer, stmts: *Vector<Stmt>, target: string, into_f: string, seen: *HashMap<bool>) {
+    if target == null || target.eq("") { return; }
+    if seen.contains(target) { return; }
+    seen.insert(target, true);
+    for let k: int = 0; k < stmts.len(); k++ {
+        let ts: Stmt = stmts.get(k);
+        if ts.origin == null || !ts.origin.eq(target) { continue; }
+        // Own pub decls.
+        if ts.name != null && !ts.name.eq("") && ts.is_pub {
+            if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
+               || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF
+               || ts.kind == ST_TRAIT {
+                t.visibility.insert(into_f.concat("::").concat(ts.name), true);
+            }
+        }
+        // Re-exported modules: `pub import X::*;` / `pub import X::item;`.
+        if ts.kind == ST_IMPORT && ts.is_pub && ts.import_path != null {
+            if ts.imported_items != null && ts.imported_items.len() > 0 {
+                for let m: int = 0; m < ts.imported_items.len(); m++ {
+                    t.visibility.insert(into_f.concat("::").concat(ts.imported_items.get(m)), true);
+                }
+            } else {
+                _bring_exports(t, stmts, ts.import_path, into_f, seen);
+            }
+        }
+    }
+}
+
 fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
     // Module-level setup: record every loaded file's full module path (so
     // fully qualified `a::b::c::Item` calls always work, no import needed),
@@ -2032,19 +2065,18 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                             "`".concat(nm).concat("` is not declared in `").concat(target).concat("`"));
                     }
                 }
+            } else if !seen_files.contains(target) {
+                // The import resolved to no loaded file → the module doesn't
+                // exist (typo, wrong path, missing dep). `seen_files` holds
+                // every origin actually parsed, so a miss is conclusive.
+                t.push_diag(s.line, s.column, 1, "unresolved-import",
+                    "cannot find module `".concat(module_path_from_path(target))
+                    .concat("` to import"));
             } else {
-                // Wildcard / sibling: every PUB name from the target file.
-                for let k: int = 0; k < stmts.len(); k++ {
-                    let ts: Stmt = stmts.get(k);
-                    if ts.origin == null || !ts.origin.eq(target) { continue; }
-                    if ts.name == null || ts.name.eq("") { continue; }
-                    if !ts.is_pub { continue; }
-                    if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
-                       || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF
-                       || ts.kind == ST_TRAIT {
-                        t.visibility.insert(f.concat("::").concat(ts.name), true);
-                    }
-                }
+                // Wildcard / sibling: every PUB name from the target file,
+                // plus anything the target re-exports via `pub import`.
+                let seen_reexport: *HashMap<bool> = HashMap::new();
+                _bring_exports(t, stmts, target, f, seen_reexport);
             }
         }
     }
