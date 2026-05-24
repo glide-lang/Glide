@@ -89,7 +89,13 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
             if a.args == null || a.args.len() == 0 { continue; }
             let ne: Expr = a.args.get(0);
             if ne.kind != EX_IDENT { continue; }
-            proc_registry.insert(ne.str_val, ProcMacroDef { kind: kind, fn_stmt: s });
+            let pmdef: ProcMacroDef = ProcMacroDef { kind: kind, fn_stmt: s };
+            proc_registry.insert(ne.str_val, pmdef);
+            // Also under `<module>::name` / `<leaf>::name` so a qualified
+            // `dep::name!` resolves to THIS dep's macro even when another dep
+            // owns the bare slot (e.g. both `stdlib::log` and an external
+            // `logger` defining `info!`).
+            _register_qualified(proc_registry, ne.str_val, pmdef);
             // Both AST and EXPR fn-macros run in the interpreter at expand
             // time, so either one requires building the interp.
             if kind == PMK_FN_AST || kind == PMK_FN_EXPR { has_fn_ast = true; }
@@ -440,6 +446,69 @@ fn _pm_key(kind: int, name: string) -> string {
     return name;
 }
 
+// Module path ("stdlib::log") for a macro's origin file, mirroring
+// main.glide's module_path_from_path: drop the `.glide` suffix + everything
+// up to the LAST `src/`, rewrite `/`/`\` to `::`. Used to register macros
+// under module-qualified keys so `dep::name!` resolves to a SPECIFIC dep's
+// macro even when another dep defines the same bare name.
+fn _macro_module_of(origin: string) -> string {
+    if origin == null || origin.eq("") { return ""; }
+    let mut s: string = origin;
+    let n: int = s.len();
+    if n > 6 {
+        let tail: string = s.substring(n - 6, n);
+        if tail.eq(".glide") { s = s.substring(0, n - 6); }
+    }
+    let len0: int = s.len();
+    let mut cut: int = -1;
+    let mut k: int = 0;
+    while k + 3 < len0 {
+        if s.at(k).to_int() == 115 && s.at(k + 1).to_int() == 114 && s.at(k + 2).to_int() == 99 {
+            let after: int = s.at(k + 3).to_int();
+            let before_ok: bool = k == 0 || s.at(k - 1).to_int() == 47 || s.at(k - 1).to_int() == 92;
+            if before_ok && (after == 47 || after == 92) { cut = k + 4; }
+        }
+        k = k + 1;
+    }
+    if cut >= 0 { s = s.substring(cut, len0); }
+    let mut out: string = "";
+    let mut i: int = 0;
+    let len: int = s.len();
+    while i < len {
+        let c: int = s.at(i).to_int();
+        if c == 47 || c == 92 { out = out.concat("::"); }
+        else { out = out.concat(s.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    return out;
+}
+
+// Leaf of a `::`-path ("stdlib::log" -> "log").
+fn _module_leaf(mp: string) -> string {
+    if mp == null { return ""; }
+    let n: int = mp.len();
+    let mut last: int = -1;
+    for let i: int = 0; i + 1 < n; i++ {
+        if mp.at(i).to_int() == 58 && mp.at(i + 1).to_int() == 58 { last = i + 2; }
+    }
+    if last < 0 { return mp; }
+    return mp.substring(last, n);
+}
+
+// Register a fn-macro under its module-qualified keys (`<full>::name` and
+// `<leaf>::name`) in addition to the bare name, so a qualified call picks the
+// macro from THAT module/dep instead of whatever last won the bare slot.
+fn _register_qualified(pr: *HashMap<ProcMacroDef>, name: string, def: ProcMacroDef) {
+    let origin: string = def.fn_stmt.origin;
+    let mp: string = _macro_module_of(origin);
+    if mp.eq("") { return; }
+    pr.insert(mp.concat("::").concat(name), def);
+    let leaf: string = _module_leaf(mp);
+    if !leaf.eq("") && !leaf.eq(mp) {
+        pr.insert(leaf.concat("::").concat(name), def);
+    }
+}
+
 // Invoke a derive proc fn with the @derive'd Stmt as input. Expected
 // return: an IV_VECTOR of IV_PTR { ty_tag: "Stmt" }. Each element
 // inherits the target's `origin` (so the typer's visibility check
@@ -672,15 +741,20 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
                 return expand_with_def_recv(synth, &entry.def, recv_p);
             }
         }
-        // Not a type-attached macro. A function-like proc-macro spelled
-        // through a module path — `log::info!(...)` — registers globally by
-        // its bare name; the qualifier is just the module the user reached
-        // it through. Dispatch it so `log::info!` works like `info!` (its
-        // expansion is fully-qualified, so it resolves either way).
-        if pr != null && it != null && pr.contains(call.str_val) {
-            let pm: ProcMacroDef = pr.get(call.str_val);
-            if pm.kind == PMK_FN_AST {
-                return _run_fn_ast(it, &pm.fn_stmt, call);
+        // Function-like proc-macro reached through a module path —
+        // `log::info!(...)` / `logger::info!(...)`. Match the qualifier
+        // against the macro's origin module FIRST (so two deps defining the
+        // same bare name each resolve correctly), then fall back to the bare
+        // slot for the common single-definition case.
+        if pr != null && it != null {
+            let qkey: string = call.macro_owner.concat("::").concat(call.str_val);
+            if pr.contains(qkey) {
+                let pmq: ProcMacroDef = pr.get(qkey);
+                if pmq.kind == PMK_FN_AST { return _run_fn_ast(it, &pmq.fn_stmt, call); }
+            }
+            if pr.contains(call.str_val) {
+                let pm: ProcMacroDef = pr.get(call.str_val);
+                if pm.kind == PMK_FN_AST { return _run_fn_ast(it, &pm.fn_stmt, call); }
             }
         }
         return null;
