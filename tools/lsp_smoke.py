@@ -298,6 +298,18 @@ case_completion_has("type position offers wide primitives",
     {"line":1,"character":11},
     ["i32","i128","u128","i256","u256"])
 
+# Member completion on a bare integer literal: `43.` -> int methods.
+case_completion_has("int literal offers methods",
+    'fn main() -> i32 {\n    let a = 43.\n    return 0;\n}',
+    {"line":1,"character":15},
+    ["abs","to_string"])
+
+# Path completion on a 256-bit type: `u256::` -> the `from` constructor.
+case_completion_has("u256 path offers from",
+    'fn main() -> i32 {\n    let a: u256 = u256::from(1);\n    return 0;\n}',
+    {"line":1,"character":24},
+    ["from"])
+
 # ---- summary ----
 print()
 passed = sum(1 for _, ok in results if ok)
