@@ -1113,12 +1113,43 @@ fn _is_int_family(name: string) -> bool {
     return false;
 }
 
+// Unsigned <=64-bit ints. Their methods route through `__glide_uint_*` (%llu),
+// not the signed `__glide_int_*`, so to_string is correct above i64 max.
+fn _is_uint_family(name: string) -> bool {
+    if name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64") { return true; }
+    if name.eq("usize") { return true; }
+    return false;
+}
+
 // `"u256"` / `"i256"` if `t` is a 256-bit int (the software-struct types whose
 // operators dispatch to `__glide_<ty>_<op>` runtime fns), else `""`.
 fn _u256_ty(t: *Type) -> string {
     if t == null || t.kind != TY_NAMED { return ""; }
     if t.name.eq("u256") { return "u256"; }
     if t.name.eq("i256") { return "i256"; }
+    return "";
+}
+
+// C expression for the associated constant `<inttype>::MAX` / `::MIN`. Returns
+// "" when `ty` isn't an integer primitive. The <=64-bit widths use <stdint.h>
+// limit macros; 128-bit fold the all-ones pattern; 256-bit call struct-valued
+// runtime helpers. Doubles as the "is this a valid int-constant type" predicate.
+fn _int_limit_c(ty: string, hi: bool) -> string {
+    if ty.eq("i8")    { if hi { return "INT8_MAX"; }  return "INT8_MIN"; }
+    if ty.eq("i16")   { if hi { return "INT16_MAX"; } return "INT16_MIN"; }
+    if ty.eq("i32")   { if hi { return "INT32_MAX"; } return "INT32_MIN"; }
+    if ty.eq("i64")   { if hi { return "INT64_MAX"; } return "INT64_MIN"; }
+    if ty.eq("u8")    { if hi { return "UINT8_MAX"; }  return "0"; }
+    if ty.eq("u16")   { if hi { return "UINT16_MAX"; } return "0"; }
+    if ty.eq("u32")   { if hi { return "UINT32_MAX"; } return "0"; }
+    if ty.eq("u64")   { if hi { return "UINT64_MAX"; } return "0"; }
+    if ty.eq("usize") { if hi { return "SIZE_MAX"; }    return "0"; }
+    if ty.eq("isize") { if hi { return "PTRDIFF_MAX"; } return "PTRDIFF_MIN"; }
+    if ty.eq("i128")  { if hi { return "((__int128)((~(unsigned __int128)0) >> 1))"; }
+                        return "(-((__int128)((~(unsigned __int128)0) >> 1)) - 1)"; }
+    if ty.eq("u128")  { if hi { return "(~(unsigned __int128)0)"; } return "((unsigned __int128)0)"; }
+    if ty.eq("i256")  { if hi { return "__glide_i256_max()"; } return "__glide_i256_min()"; }
+    if ty.eq("u256")  { if hi { return "__glide_u256_max()"; } return "__glide_u256_min()"; }
     return "";
 }
 
@@ -1684,6 +1715,12 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_PATH {
+        // Associated int constants `i32::MAX` / `u64::MIN` are values of the
+        // int type — needed so println!/format! pick the right format spec.
+        if (e.field.eq("MAX") || e.field.eq("MIN"))
+           && !_int_limit_c(e.str_val, true).eq("") {
+            return ty_named(e.str_val);
+        }
         let qual: string = e.str_val.concat("::").concat(e.field);
         if g.module_aliases.contains(qual) {
             let resolved: string = g.module_aliases.get(qual);
@@ -3375,6 +3412,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                             let mut rt_prefix: string = prefix;
                             if prefix.eq("i128") { rt_prefix = "i128"; }
                             else if prefix.eq("u128") { rt_prefix = "u128"; }
+                            else if _is_uint_family(prefix) { rt_prefix = "uint"; }
                             else if _is_int_family(prefix) { rt_prefix = "int"; }
                             fn_name = "__glide_".concat(rt_prefix).concat("_").concat(method);
                         }
@@ -3516,6 +3554,11 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_PATH {
+        // Associated int constants: `i32::MAX` / `u64::MIN` / `u256::MAX` …
+        if e.field.eq("MAX") || e.field.eq("MIN") {
+            let lim: string = _int_limit_c(e.str_val, e.field.eq("MAX"));
+            if !lim.eq("") { print!(lim); return; }
+        }
         // First try the full qualified form `<prefix>::<field>` as a free
         // function alias (e.g. `stdlib::math::min_int`). Falls back to the
         // legacy `<Type>_<field>` form, with the `Type` prefix resolved

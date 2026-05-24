@@ -136,6 +136,17 @@ fn is_float_type(t: *Type) -> bool {
     return t.name.eq("f32") || t.name.eq("f64");
 }
 
+// True if `n` names an integer primitive (any width). Used to type the
+// associated constants `<inttype>::MAX` / `::MIN`.
+fn _is_int_prim_name(n: string) -> bool {
+    if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
+       || n.eq("i128") || n.eq("i256") { return true; }
+    if n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
+       || n.eq("u128") || n.eq("u256") { return true; }
+    if n.eq("usize") || n.eq("isize") { return true; }
+    return false;
+}
+
 fn is_bool_type(t: *Type) -> bool {
     if t == null { return false; }
     return t.kind == TY_NAMED && t.name.eq("bool");
@@ -2821,6 +2832,10 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_PATH {
+        // Associated int constants: `i32::MAX` / `u64::MIN` type as the int.
+        if (e.field.eq("MAX") || e.field.eq("MIN")) && _is_int_prim_name(e.str_val) {
+            return ty_named(e.str_val);
+        }
         let prefix: string = e.str_val;
         let pname: string = prefix.concat("_").concat(e.field);
         let is_type: bool = t.structs.contains(prefix);

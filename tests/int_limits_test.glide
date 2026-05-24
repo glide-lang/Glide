@@ -1,0 +1,41 @@
+// Associated int constants: `<inttype>::MAX` / `::MIN` across widths.
+import stdlib::testing::*;
+
+fn test_i32_limits() -> i32 {
+    let mx: i32 = i32::MAX;
+    let mn: i32 = i32::MIN;
+    assert_str_eq!(mx.to_string(), "2147483647");
+    assert_str_eq!(mn.to_string(), "-2147483648");
+    return 0;
+}
+
+fn test_i64_u64_limits() -> i32 {
+    let a: i64 = i64::MAX;
+    let b: u64 = u64::MAX;
+    let c: u64 = u64::MIN;
+    assert_str_eq!(a.to_string(), "9223372036854775807");
+    assert_str_eq!(b.to_string(), "18446744073709551615");
+    assert_str_eq!(c.to_string(), "0");
+    return 0;
+}
+
+fn test_small_widths() -> i32 {
+    let a: u8 = u8::MAX;
+    let b: i8 = i8::MIN;
+    assert_str_eq!(a.to_string(), "255");
+    assert_str_eq!(b.to_string(), "-128");
+    return 0;
+}
+
+fn test_i128_limits() -> i32 {
+    let mx: i128 = i128::MAX;
+    assert_str_eq!(mx.to_string(), "170141183460469231731687303715884105727");
+    return 0;
+}
+
+fn test_u256_max() -> i32 {
+    let mx: u256 = u256::MAX;
+    assert_str_eq!(mx.to_string(),
+        "115792089237316195423570985008687907853269984665640564039457584007913129639935");
+    return 0;
+}

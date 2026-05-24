@@ -4663,6 +4663,20 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             json_arr_push(items, completion_item("from",
                 3, qualifier.concat("::from(n) — build from an integer")));
         }
+        // Every integer primitive exposes the `MAX` / `MIN` associated
+        // constants (e.g. `i32::MAX`). Floats are excluded.
+        if _is_canon_prim(qualifier) && !qualifier.eq("f32") && !qualifier.eq("f64") {
+            if !seen.contains("MAX") {
+                seen.insert("MAX", true);
+                json_arr_push(items, completion_item("MAX", 21,
+                    "largest value of ".concat(qualifier)));
+            }
+            if !seen.contains("MIN") {
+                seen.insert("MIN", true);
+                json_arr_push(items, completion_item("MIN", 21,
+                    "smallest value of ".concat(qualifier)));
+            }
+        }
         seen.free();
         lsp_send_response(id, items);
         return;

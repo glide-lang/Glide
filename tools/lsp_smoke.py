@@ -304,11 +304,17 @@ case_completion_has("int literal offers methods",
     {"line":1,"character":15},
     ["abs","to_string"])
 
-# Path completion on a 256-bit type: `u256::` -> the `from` constructor.
-case_completion_has("u256 path offers from",
+# Path completion on a 256-bit type: `u256::` -> `from` + `MAX`/`MIN`.
+case_completion_has("u256 path offers from + limits",
     'fn main() -> i32 {\n    let a: u256 = u256::from(1);\n    return 0;\n}',
     {"line":1,"character":24},
-    ["from"])
+    ["from","MAX","MIN"])
+
+# `i32::` -> the MAX / MIN associated constants.
+case_completion_has("int type path offers limits",
+    'fn main() -> i32 {\n    let a: i32 = i32::MAX;\n    return 0;\n}',
+    {"line":1,"character":22},
+    ["MAX","MIN"])
 
 # Bare-identifier position offers primitive type names too (editor filters
 # `i3` -> `i32`); regression for completion going silent on a partial type.

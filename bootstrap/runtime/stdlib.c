@@ -274,6 +274,21 @@ static __glide_u256 __glide_i256_or(__glide_u256 a, __glide_u256 b)  { return __
 static __glide_u256 __glide_i256_xor(__glide_u256 a, __glide_u256 b) { return __glide_u256_xor(a, b); }
 static __glide_u256 __glide_i256_shl(__glide_u256 a, __glide_u256 b) { return __glide_u256_shl(a, b); }
 static __glide_u256 __glide_i256_shr(__glide_u256 a, __glide_u256 b) { return __glide_u256_shr(a, b); }
+/* limits for `u256::MAX` / `i256::MIN` etc. (structs, so not C constants) */
+static __glide_u256 __glide_u256_max(void) { __glide_u256 r; r.d[0]=~0ULL; r.d[1]=~0ULL; r.d[2]=~0ULL; r.d[3]=~0ULL; return r; }
+static __glide_u256 __glide_u256_min(void) { return __glide_u256_from_u64(0); }
+static __glide_u256 __glide_i256_max(void) { __glide_u256 r; r.d[0]=~0ULL; r.d[1]=~0ULL; r.d[2]=~0ULL; r.d[3]=0x7fffffffffffffffULL; return r; }
+static __glide_u256 __glide_i256_min(void) { __glide_u256 r; r.d[0]=0; r.d[1]=0; r.d[2]=0; r.d[3]=0x8000000000000000ULL; return r; }
+/* Unsigned <=64-bit to_string: the signed __glide_int_to_string truncates
+   values above i64 max (u64::MAX would print as -1). */
+static const char* __glide_uint_to_string(unsigned long long n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%llu", n);
+    char* out = (char*)__glide_palloc(len + 1);
+    memcpy(out, buf, (size_t)len + 1);
+    return out;
+}
+static unsigned long long __glide_uint_abs(unsigned long long n) { return n; }
 static const char* __glide_bool_to_string(bool b) { return b ? "true" : "false"; }
 #include <stdarg.h>
 static const char* __glide_format(const char* fmt, ...) {
