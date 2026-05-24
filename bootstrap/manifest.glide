@@ -45,6 +45,12 @@ pub struct Manifest {
     // becomes the project-wide silencing list. Empty when absent.
     pub lint_deny:  *Vector<string>,
     pub lint_allow: *Vector<string>,
+    // Default cross-compile target as a Zig triple (e.g.
+    // "x86_64-linux-musl"). `glide build` with no `--target=` flag uses
+    // this, so a project can be cross-compiled with a bare `glide build`.
+    // Empty = build for the host. Ignored by `glide run` (you can't run a
+    // foreign binary on the host).
+    pub target: string,
 }
 
 extern fn __glide_file_exists(path: string) -> bool;
@@ -144,6 +150,7 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     m.root_dir = root_dir;
     m.lint_deny = lint_deny_vec;
     m.lint_allow = lint_allow_vec;
+    m.target = "";
 
     for let i: int = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
@@ -165,6 +172,7 @@ fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
         if name.eq("name")    && val.kind == EX_STRING { m.name = val.str_val; }
         if name.eq("version") && val.kind == EX_STRING { m.version = val.str_val; }
         if name.eq("bin")     && val.kind == EX_STRING { m.bin = val.str_val; }
+        if name.eq("target")  && val.kind == EX_STRING { m.target = val.str_val; }
         if name.eq("deps") { collect_deps(m.deps, &val); }
         if name.eq("lint") {
             // Two surface forms:
