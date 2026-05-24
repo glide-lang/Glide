@@ -131,6 +131,9 @@ fn format_spec_for(t: *Type) -> string {
     if n.eq("uint") || n.eq("u8") || n.eq("u16") || n.eq("u32") { return "%u"; }
     if n.eq("i64") || n.eq("isize") || n.eq("long") { return "%lld"; }
     if n.eq("u64") || n.eq("usize") || n.eq("ulong") { return "%llu"; }
+    // 128-bit ints have no printf length modifier; the arg emit converts them
+    // to a string via __glide_i128_to_string / __glide_u128_to_string.
+    if n.eq("i128") || n.eq("u128") { return "%s"; }
     if n.eq("float") || n.eq("f32") || n.eq("f64") { return "%g"; }
     if n.eq("char") { return "%c"; }
     if n.eq("string") { return "%s"; }
@@ -1099,6 +1102,7 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: i32) {
 fn _is_int_family(name: string) -> bool {
     if name.eq("i8")  || name.eq("i16") || name.eq("i32") || name.eq("i64") { return true; }
     if name.eq("u8")  || name.eq("u16") || name.eq("u32") || name.eq("u64") { return true; }
+    if name.eq("i128") || name.eq("u128") { return true; }
     if name.eq("usize") || name.eq("isize") { return true; }
     return false;
 }
@@ -1684,6 +1688,8 @@ pub fn type_to_c(t: *Type) -> string {
         if n.eq("u16")    { return "uint16_t"; }
         if n.eq("u32")    { return "uint32_t"; }
         if n.eq("u64")    { return "uint64_t"; }
+        if n.eq("i128")   { return "__int128"; }
+        if n.eq("u128")   { return "unsigned __int128"; }
         if n.eq("usize")  { return "size_t"; }
         if n.eq("isize")  { return "ptrdiff_t"; }
         if n.eq("f32")    { return "float"; }
@@ -3291,11 +3297,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                             println!("");
                             return;
                         } else {
-                            // Every int width shares the `__glide_int_*`
-                            // runtime helpers (i64-wide), so map the family to
-                            // the `int` prefix; char/bool/string keep their own.
+                            // The <=64-bit int widths share the i64-wide
+                            // `__glide_int_*` helpers; 128-bit ints have their
+                            // own (printf can't format __int128). char/bool/
+                            // string keep their own prefix.
                             let mut rt_prefix: string = prefix;
-                            if _is_int_family(prefix) { rt_prefix = "int"; }
+                            if prefix.eq("i128") { rt_prefix = "i128"; }
+                            else if prefix.eq("u128") { rt_prefix = "u128"; }
+                            else if _is_int_family(prefix) { rt_prefix = "int"; }
                             fn_name = "__glide_".concat(rt_prefix).concat("_").concat(method);
                         }
                     }
@@ -3505,6 +3514,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         print!("(unsigned long long)(");
                         emit_expr(g, &a);
                         print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("i128") {
+                        print!("__glide_i128_to_string(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("u128") {
+                        print!("__glide_u128_to_string(");
+                        emit_expr(g, &a);
+                        print!(")");
                     } else {
                         emit_expr(g, &a);
                     }
@@ -3560,6 +3577,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     } else if at != null && at.kind == TY_NAMED
                               && (at.name.eq("u64") || at.name.eq("usize") || at.name.eq("ulong")) {
                         print!("(unsigned long long)(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("i128") {
+                        print!("__glide_i128_to_string(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("u128") {
+                        print!("__glide_u128_to_string(");
                         emit_expr(g, &a);
                         print!(")");
                     } else {

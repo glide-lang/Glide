@@ -4352,7 +4352,8 @@ fn _list_primitive_methods(type_name: string, items: *JsonValue, seen: *HashMap<
     if type_name.eq("int") || type_name.eq("i8") || type_name.eq("i16")
        || type_name.eq("i32") || type_name.eq("i64")
        || type_name.eq("u8") || type_name.eq("u16") || type_name.eq("u32")
-       || type_name.eq("u64") || type_name.eq("usize") || type_name.eq("isize") {
+       || type_name.eq("u64") || type_name.eq("i128") || type_name.eq("u128")
+       || type_name.eq("usize") || type_name.eq("isize") {
         _prim_method(items, seen, "abs", type_name,
             "Absolute value.\n\n```glide\nlet n: i32 = -5;\nn.abs();   // 5\n```");
         _prim_method(items, seen, "to_string", "string",
@@ -4512,11 +4513,12 @@ fn _in_type_position(text: string, p: i32) -> bool {
 // list) as completions. Kind 22 = Struct, so they render as types.
 fn _push_primitive_types(items: *JsonValue, seen: *HashMap<bool>) {
     // Canonical fixed-width family only — the legacy `int`/`uint`/`long`/
-    // `ulong`/`float` spellings still compile (normalised to these) but are
-    // no longer offered, so new code standardises on `iN` / `uN` / `fN`.
+    // `ulong`/`float` spellings are retired (they now error with a hint), so
+    // new code standardises on `iN` / `uN` / `fN`.
     let prims: *Vector<string> = Vector::new();
     prims.push("i8");   prims.push("i16");  prims.push("i32");  prims.push("i64");
     prims.push("u8");   prims.push("u16");  prims.push("u32");  prims.push("u64");
+    prims.push("i128"); prims.push("u128");
     prims.push("usize"); prims.push("isize");
     prims.push("f32");  prims.push("f64");
     prims.push("bool"); prims.push("char"); prims.push("string"); prims.push("void");
@@ -6462,6 +6464,7 @@ fn type_size_bytes(t: *Type, structs: *HashMap<Stmt>) -> i32 {
         if n.eq("int") || n.eq("uint") || n.eq("i32") || n.eq("u32") || n.eq("f32") { return 4; }
         if n.eq("long") || n.eq("ulong") || n.eq("i64") || n.eq("u64")
            || n.eq("usize") || n.eq("isize") || n.eq("float") || n.eq("f64") { return 8; }
+        if n.eq("i128") || n.eq("u128") { return 16; }
         if n.eq("string") { return 8; }             // const char*
         if n.eq("void") { return 0; }
         if structs.contains(n) {

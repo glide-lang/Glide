@@ -75,6 +75,33 @@ static const char* __glide_int_to_string(long long n) {
     memcpy(out, buf, (size_t)len + 1);
     return out;
 }
+/* 128-bit helpers. printf has no length modifier for __int128, so to_string
+   builds the digits by hand. abs negates through the unsigned domain so
+   INT128_MIN doesn't overflow. */
+static const char* __glide_u128_to_string(unsigned __int128 n) {
+    char tmp[40];
+    int t = 0;
+    if (n == 0) { tmp[t++] = '0'; }
+    while (n > 0) { tmp[t++] = (char)('0' + (int)(n % 10)); n /= 10; }
+    char* out = (char*)__glide_palloc(t + 1);
+    for (int i = 0; i < t; i++) out[i] = tmp[t - 1 - i];
+    out[t] = '\0';
+    return out;
+}
+static const char* __glide_i128_to_string(__int128 n) {
+    if (n < 0) {
+        unsigned __int128 m = (unsigned __int128)(-(n + 1)) + 1;
+        const char* s = __glide_u128_to_string(m);
+        size_t len = strlen(s);
+        char* out = (char*)__glide_palloc(len + 2);
+        out[0] = '-';
+        memcpy(out + 1, s, len + 1);
+        return out;
+    }
+    return __glide_u128_to_string((unsigned __int128)n);
+}
+static __int128 __glide_i128_abs(__int128 n) { return n < 0 ? -n : n; }
+static unsigned __int128 __glide_u128_abs(unsigned __int128 n) { return n; }
 static const char* __glide_bool_to_string(bool b) { return b ? "true" : "false"; }
 #include <stdarg.h>
 static const char* __glide_format(const char* fmt, ...) {

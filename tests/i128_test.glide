@@ -1,0 +1,32 @@
+// 128-bit integers: arithmetic beyond i64, to_string (no printf spec), abs.
+import stdlib::testing::*;
+
+fn test_i128_arithmetic_beyond_i64() -> i32 {
+    let b: i128 = 1000000000;          // 1e9
+    let big: i128 = b * b * b;         // 1e27, far past i64's ~9.2e18
+    assert_str_eq!(big.to_string(), "1000000000000000000000000000");
+    return 0;
+}
+
+fn test_i128_negative_and_abs() -> i32 {
+    let n: i128 = 0 - 1000000000;
+    let sq: i128 = n * n * n;          // -1e27
+    assert_str_eq!(sq.to_string(), "-1000000000000000000000000000");
+    assert_str_eq!(sq.abs().to_string(), "1000000000000000000000000000");
+    return 0;
+}
+
+fn test_u128_arithmetic_beyond_u64() -> i32 {
+    let b: u128 = 10000000000;         // 1e10
+    let big: u128 = b * b * b;         // 1e30, past u64's ~1.8e19
+    assert_str_eq!(big.to_string(), "1000000000000000000000000000000");
+    return 0;
+}
+
+fn test_i128_small_values() -> i32 {
+    let x: i128 = 42;
+    assert_str_eq!(x.to_string(), "42");
+    let z: i128 = 0;
+    assert_str_eq!(z.to_string(), "0");
+    return 0;
+}

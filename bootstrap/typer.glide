@@ -122,6 +122,8 @@ fn is_int_type(t: *Type) -> bool {
     if n.eq("u16") { return true; }
     if n.eq("u32") { return true; }
     if n.eq("u64") { return true; }
+    if n.eq("i128") { return true; }
+    if n.eq("u128") { return true; }
     if n.eq("usize") { return true; }
     if n.eq("isize") { return true; }
     if n.eq("char") { return true; }
@@ -621,6 +623,7 @@ fn _is_known_type_name(t: *Typer, n: string) -> bool {
     if n.eq("Self") || n.eq("__fn__") || n.eq("__fn_ptr__") { return true; }
     if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
        || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
+       || n.eq("i128") || n.eq("u128")
        || n.eq("usize") || n.eq("isize")
        || n.eq("f32") || n.eq("f64")
        || n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") {
