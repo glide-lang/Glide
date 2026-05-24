@@ -85,12 +85,14 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
             // Only function-like macros are dispatched by `name!(…)`; an
             // attr/derive sharing the name (e.g. `@proc_attr(trace)` vs the
             // `trace!` macro) must NOT overwrite the fn entry here.
-            if kind != PMK_FN_AST && kind != PMK_FN_STR { continue; }
+            if kind != PMK_FN_AST && kind != PMK_FN_STR && kind != PMK_FN_EXPR { continue; }
             if a.args == null || a.args.len() == 0 { continue; }
             let ne: Expr = a.args.get(0);
             if ne.kind != EX_IDENT { continue; }
             proc_registry.insert(ne.str_val, ProcMacroDef { kind: kind, fn_stmt: s });
-            if kind == PMK_FN_AST { has_fn_ast = true; }
+            // Both AST and EXPR fn-macros run in the interpreter at expand
+            // time, so either one requires building the interp.
+            if kind == PMK_FN_AST || kind == PMK_FN_EXPR { has_fn_ast = true; }
         }
     }
 
@@ -227,6 +229,7 @@ pub const PMK_DERIVE:     int = 0;   // input: *Stmt (the @derive'd struct/enum)
 pub const PMK_ATTR:       int = 1;   // input: *Stmt (the annotated decl)
 pub const PMK_FN_AST:     int = 2;   // input: *Vector<Expr> (call-site args)
 pub const PMK_FN_STR:     int = 3;   // input: string (single string-lit arg)
+pub const PMK_FN_EXPR:    int = 4;   // input: *Vector<Expr>; OUTPUT: *Expr (compile-time value)
 
 pub struct ProcMacroDef {
     pub kind: int,
@@ -350,7 +353,8 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
             let a: Attr = s.attrs.get(j);
             if a.name == null { continue; }
             if a.name.eq("proc_attr") || a.name.eq("proc_derive")
-               || a.name.eq("proc_macro") || a.name.eq("proc_macro_str") {
+               || a.name.eq("proc_macro") || a.name.eq("proc_macro_str")
+               || a.name.eq("proc_macro_expr") {
                 pm_origins.insert(s.origin, true);
                 break;
             }
@@ -406,7 +410,8 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
             let a: Attr = s.attrs.get(j);
             if a.name == null { continue; }
             if a.name.eq("proc_attr") || a.name.eq("proc_derive")
-               || a.name.eq("proc_macro") || a.name.eq("proc_macro_str") {
+               || a.name.eq("proc_macro") || a.name.eq("proc_macro_str")
+               || a.name.eq("proc_macro_expr") {
                 return true;
             }
         }
@@ -419,6 +424,7 @@ fn _proc_kind_for(name: string) -> int {
     if name.eq("proc_attr") { return PMK_ATTR; }
     if name.eq("proc_macro") { return PMK_FN_AST; }
     if name.eq("proc_macro_str") { return PMK_FN_STR; }
+    if name.eq("proc_macro_expr") { return PMK_FN_EXPR; }
     return -1;
 }
 
@@ -579,6 +585,12 @@ fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>,
                 }
             }
             program.set(i, s);
+        } else if (s.kind == ST_LET || s.kind == ST_CONST) && s.let_value != null {
+            // Top-level `const X = answer!();` / `let X = ...;`: expand any
+            // expression-position macro in the initializer so the value is
+            // baked at compile time.
+            s.let_value = rewrite_expr_macros(s.let_value, pr, it);
+            program.set(i, s);
         }
     }
 }
@@ -607,6 +619,17 @@ fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>,
         if s.fn_body != null { s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it); }
         if s.for_init != null && s.for_init.then_body != null {
             s.for_init.then_body = expand_in_block(s.for_init.then_body, sm, tm, pr, it);
+        }
+        // Expression-position macros (@proc_macro_expr) in this statement's
+        // expressions: replace each `name!(...)` value node with the
+        // expression the macro returns.
+        s.let_value = rewrite_expr_macros(s.let_value, pr, it);
+        s.expr_value = rewrite_expr_macros(s.expr_value, pr, it);
+        s.cond = rewrite_expr_macros(s.cond, pr, it);
+        s.for_step = rewrite_expr_macros(s.for_step, pr, it);
+        if s.for_init != null {
+            s.for_init.let_value = rewrite_expr_macros(s.for_init.let_value, pr, it);
+            s.for_init.expr_value = rewrite_expr_macros(s.for_init.expr_value, pr, it);
         }
         out.push(s);
     }
@@ -733,6 +756,65 @@ fn _run_fn_ast(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Vector<Stmt> {
         }
     }
     return out;
+}
+
+// Invoke a @proc_macro_expr fn-style macro. Signature is
+// `fn impl(args: *Vector<Expr>) -> *Expr`; unlike _run_fn_ast it returns a
+// SINGLE expression node that REPLACES the macro call in-place, so the macro
+// produces a compile-time VALUE usable anywhere an expression is (let RHS,
+// call arg, return, operand). Returns null if the macro didn't hand back an
+// Expr (the caller then leaves the original node untouched).
+fn _run_fn_expr(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Expr {
+    it.set_use_site(call.line, call.column, "");
+    let saved_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+    let elem_args: *Vector<IValue> = Vector::new();
+    if call.args != null {
+        for let i: int = 0; i < call.args.len(); i++ {
+            let ea: Expr = call.args.get(i);
+            let pe: *Expr = malloc(sizeof(Expr)) as *Expr;
+            *pe = ea;
+            elem_args.push(iv_ptr(pe as *void, "Expr"));
+        }
+    }
+    let invoke_args: *Vector<IValue> = Vector::new();
+    invoke_args.push(iv_vector(elem_args));
+    let r: IValue = interp_call(it, fn_stmt, invoke_args);
+    __glide_palloc_set(saved_arena);
+    if r.kind != IV_PTR { return null; }
+    if !r.ty_tag.eq("Expr") { return null; }
+    let pe: *Expr = r.p as *Expr;
+    return pe;
+}
+
+// Recursively rewrite EXPRESSION-position macro calls. A `name!(...)` node
+// whose name is a registered @proc_macro_expr is replaced by the expression
+// the macro returns. Walks bottom-up (inner macros first) so a macro can be
+// fed the already-expanded result of a nested one.
+fn rewrite_expr_macros(e: *Expr, pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Expr {
+    if e == null { return e; }
+    if pr == null || it == null { return e; }
+    e.lhs = rewrite_expr_macros(e.lhs, pr, it);
+    e.rhs = rewrite_expr_macros(e.rhs, pr, it);
+    e.operand = rewrite_expr_macros(e.operand, pr, it);
+    e.macro_recv = rewrite_expr_macros(e.macro_recv, pr, it);
+    if e.args != null {
+        for let i: int = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let pa: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+            *pa = a;
+            let na: *Expr = rewrite_expr_macros(pa, pr, it);
+            if na != null { e.args.set(i, *na); }
+        }
+    }
+    if e.kind == EX_MACRO && e.str_val != null && pr.contains(e.str_val) {
+        let pm: ProcMacroDef = pr.get(e.str_val);
+        if pm.kind == PMK_FN_EXPR {
+            let rep: *Expr = _run_fn_expr(it, &pm.fn_stmt, e);
+            if rep != null { return rep; }
+        }
+    }
+    return e;
 }
 
 fn expand_with_def(call: *Expr, def: *Stmt) -> *Vector<Stmt> {
