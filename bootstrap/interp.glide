@@ -912,6 +912,12 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         let call_args: *Vector<Expr> = _vec_to_expr_vec(it, aiv);
         return iv_ptr(expr_call(callee, call_args) as *void, "Expr");
     }
+    if name.eq("expr_macro") {
+        let mname: string = _arg_string(it, args, 0);
+        let miv: IValue = args.get(1);
+        let macro_args: *Vector<Expr> = _vec_to_expr_vec(it, miv);
+        return iv_ptr(expr_macro(mname, macro_args, 0, 0) as *void, "Expr");
+    }
     if name.eq("expr_member") {
         let obj: *Expr = _arg_ptr(it, args, 0, "Expr") as *Expr;
         let field: string = _arg_string(it, args, 1);

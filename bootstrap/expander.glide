@@ -634,6 +634,17 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
                 return expand_with_def_recv(synth, &entry.def, recv_p);
             }
         }
+        // Not a type-attached macro. A function-like proc-macro spelled
+        // through a module path — `log::info!(...)` — registers globally by
+        // its bare name; the qualifier is just the module the user reached
+        // it through. Dispatch it so `log::info!` works like `info!` (its
+        // expansion is fully-qualified, so it resolves either way).
+        if pr != null && it != null && pr.contains(call.str_val) {
+            let pm: ProcMacroDef = pr.get(call.str_val);
+            if pm.kind == PMK_FN_AST {
+                return _run_fn_ast(it, &pm.fn_stmt, call);
+            }
+        }
         return null;
     }
     // `recv.name!(args)` — receiver-style. Match by macro name only; if

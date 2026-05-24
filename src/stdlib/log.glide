@@ -35,6 +35,12 @@
 // ```
 
 import stdlib::time::*;
+// Pull in the logging proc-macros (info!/warn!/@trace/…) so a single
+// `import stdlib::log::*;` brings both the runtime fns and the macros.
+// log_macros has no dependency back on this module, so there's no cycle;
+// its proc-macro fns live in their own origin and are stripped before
+// codegen, so they add no weight to the compiled binary.
+import stdlib::log_macros::*;
 
 // ============================================================================
 // Constants
@@ -486,7 +492,7 @@ impl Logger {
                             self.color_for(entry.level));
     }
 
-    fn color_for(self: *Logger, lvl: int) -> bool {
+    fn color_for(self: *Logger, _lvl: int) -> bool {
         if self.sinks.len() == 0 { return false; }
         let s: *LogSink = self.sinks.get(0);
         return s.color;
@@ -574,6 +580,9 @@ fn _level_color(lvl: int) -> string {
 }
 
 fn _ansi_reset() -> string { return "\x1b[0m"; }
+fn _ansi_dim() -> string { return "\x1b[2m"; }    // faint — timestamps, fields, source loc
+fn _ansi_bold() -> string { return "\x1b[1m"; }   // level tag
+
 
 fn _format_timestamp(ts_kind: int, time_ns: i64, start_ns: i64) -> string {
     if ts_kind == LOG_TS_NONE { return ""; }
@@ -595,22 +604,39 @@ fn _format_timestamp(ts_kind: int, time_ns: i64, start_ns: i64) -> string {
 
 fn _render_text(entry: *LogEntry, ts: int, start: i64, color: bool) -> string {
     let mut out: string = "";
-    if color { out = out.concat(_level_color(entry.level)); }
+    // Timestamp — dim, never tinted with the level colour.
     let timestamp: string = _format_timestamp(ts, entry.time_ns, start);
-    if !timestamp.eq("") { out = out.concat(timestamp).concat(" "); }
-    out = out.concat("[").concat(_level_name(entry.level)).concat("] ");
-    if color { out = out.concat(_ansi_reset()); }
-    out = out.concat(entry.msg);
+    if !timestamp.eq("") {
+        if color { out = out.concat(_ansi_dim()).concat(timestamp).concat(_ansi_reset()); }
+        else { out = out.concat(timestamp); }
+        out = out.concat(" ");
+    }
+    // Level — bold + level colour, padded to 5 so messages align. The
+    // colour stops at the tag; nothing else on the line is tinted.
+    let lvl: string = _level_name(entry.level);
+    if color {
+        out = out.concat(_ansi_bold()).concat(_level_color(entry.level)).concat(lvl).concat(_ansi_reset());
+    } else {
+        out = out.concat(lvl);
+    }
+    out = out.concat(" ").concat(entry.msg);
+    // Fields — dim `key=value`, so they read as secondary to the message.
     if entry.fields.len() > 0 {
         out = out.concat(" ");
+        if color { out = out.concat(_ansi_dim()); }
         for let i: int = 0; i < entry.fields.len(); i++ {
             let f: LogField = entry.fields.get(i);
             out = out.concat(f.key).concat("=").concat(f.value);
             if i < entry.fields.len() - 1 { out = out.concat(" "); }
         }
+        if color { out = out.concat(_ansi_reset()); }
     }
+    // Source location — dim.
     if !entry.file.eq("") {
-        out = out.concat(" (").concat(entry.file).concat(":").concat(_log_itoa(entry.line)).concat(")");
+        out = out.concat(" ");
+        if color { out = out.concat(_ansi_dim()); }
+        out = out.concat("(").concat(entry.file).concat(":").concat(_log_itoa(entry.line)).concat(")");
+        if color { out = out.concat(_ansi_reset()); }
     }
     out = out.concat("\n");
     return out;

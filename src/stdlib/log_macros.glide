@@ -1,15 +1,18 @@
-// stdlib::log_macros — proc-macros for automatic logging instrumentation.
+// stdlib::log_macros — logging proc-macros (info!/warn!/… + @trace/@logged).
+//
+// You don't import this module directly: `stdlib::log` re-imports it, so a
+// single `import stdlib::log::*;` brings the runtime fns AND these macros.
+// It lives in its own file because the codegen strip drops every stmt in a
+// file that defines a proc-macro — keeping the macros here lets log.glide's
+// runtime fns (Logger, info, …) survive into the binary.
 //
 // ```glide
 // import stdlib::log::*;
-// import stdlib::log_macros::*;
 //
 // @trace
-// fn do_work(x: int) -> int { return x * 2; }
+// fn do_work(x: int) -> int { return x * 2; }   // logs `> do_work` / `< do_work`
 //
-// // Calling do_work emits:
-// //   [DEBUG] > do_work
-// //   [DEBUG] < do_work
+// info!("user {} connected", name);             // println!-style, logs at INFO
 // ```
 //
 // Use `@logged` for more detail (args and return value), or `@trace(info)`
@@ -17,7 +20,10 @@
 
 import bootstrap::ast::*;
 import bootstrap::interp::*;
-import stdlib::log::*;
+// NB: no `import stdlib::log` — these proc-macros only build AST (by
+// name), so they don't depend on the log runtime. Keeping them
+// independent lets `log.glide` import THIS module without a cycle, so a
+// single `import stdlib::log::*;` brings the fns and registers the macros.
 
 // `@trace` — emits entry/exit log lines around the function body.
 // Optional first arg: a level identifier (`trace`, `debug`, `info`,
@@ -135,11 +141,80 @@ fn _call_log(level_name: string, msg: *Expr) -> *Stmt {
 }
 
 fn _log_fn_for(level: string) -> string {
-    if level.eq("trace") { return "log_trace"; }
-    if level.eq("debug") { return "log_debug"; }
-    if level.eq("info")  { return "log_info"; }
-    if level.eq("warn")  { return "log_warn"; }
-    if level.eq("error") { return "log_error"; }
-    if level.eq("fatal") { return "log_fatal"; }
-    return "log_debug";
+    if level.eq("trace") { return "trace"; }
+    if level.eq("debug") { return "debug"; }
+    if level.eq("info")  { return "info"; }
+    if level.eq("warn")  { return "warn"; }
+    if level.eq("error") { return "error"; }
+    if level.eq("fatal") { return "fatal"; }
+    return "debug";
+}
+
+// println!-style logging macros.
+//
+// ```glide
+// import stdlib::log::*;
+//
+// info!("user {} connected from {}", name, ip);
+// warn!("disk {}% full", pct);
+// error!("request failed: {}", err);
+// ```
+//
+// `info!(fmt, args…)` formats exactly like `println!`/`format!` and logs
+// the result at the matching level through the global logger. It expands
+// to `info(format!(fmt, args…))`, so the level fns must be in scope —
+// `import stdlib::log::*;` brings both the fns and these macros.
+@proc_macro(trace)
+fn impl_m_trace(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "trace"); }
+@proc_macro(debug)
+fn impl_m_debug(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "debug"); }
+@proc_macro(info)
+fn impl_m_info(args: *Vector<Expr>)  -> *Vector<Stmt> { return _log_macro(args, "info"); }
+@proc_macro(warn)
+fn impl_m_warn(args: *Vector<Expr>)  -> *Vector<Stmt> { return _log_macro(args, "warn"); }
+@proc_macro(error)
+fn impl_m_error(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "error"); }
+@proc_macro(fatal)
+fn impl_m_fatal(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "fatal"); }
+
+// Expand `<level>!(fmt, args…)` to the statement `<level>(format!(fmt, args…))`.
+// The call args are forwarded verbatim into a `format!` macro node, which
+// codegen lowers with the same formatting machinery as println!.
+fn _log_macro(args: *Vector<Expr>, level_fn: string) -> *Vector<Stmt> {
+    let out: *Vector<Stmt> = Vector::new();
+    if args == null || args.len() == 0 { return out; }
+    let fmt_args: *Vector<Expr> = Vector::new();
+    let first: Expr = args.get(0);
+    if first.kind == EX_STRING {
+        // First arg is a literal format string — printf-style. Pass the
+        // whole arg list straight through: `info!("x={}", x)`.
+        for let i: int = 0; i < args.len(); i++ {
+            fmt_args.push(args.get(i));
+        }
+    } else {
+        // No format string given — synthesise one ("{}" per value) so
+        // `info!(v[0])` / `info!(a, b)` just print the value(s), like a
+        // bare `println!(x)` would. The args become format arguments.
+        let mut spec: string = "";
+        for let i: int = 0; i < args.len(); i++ {
+            if i > 0 { spec = spec.concat(" "); }
+            spec = spec.concat("{}");
+        }
+        fmt_args.push(*expr_string(spec, 0, 0));
+        for let i: int = 0; i < args.len(); i++ {
+            fmt_args.push(args.get(i));
+        }
+    }
+    let fmt_expr: *Expr = expr_macro("format", fmt_args, 0, 0);
+    let call_args: *Vector<Expr> = Vector::new();
+    call_args.push(*fmt_expr);
+    // Expand to the FULLY-QUALIFIED `stdlib::log::<level>(format!(…))`.
+    // A full module path resolves no matter how the user imported log
+    // (`use stdlib::log;` qualified, `stdlib::log::*` glob, or via the
+    // bare `info!` vs qualified `log::info!` spelling) — it never relies
+    // on a bare `info` fn being in scope.
+    let callee: *Expr = expr_path("stdlib::log", level_fn, 0, 0);
+    let call: *Expr = expr_call(callee, call_args);
+    out.push(*stmt_expr(call));
+    return out;
 }
