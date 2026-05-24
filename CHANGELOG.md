@@ -82,6 +82,60 @@
 - `__glide_fs_size` returns `i64` matching the Glide-side extern
   shape; the previous 32-bit return overflowed at 2 GiB.
 
+### Standard library
+
+- **Logging macros**: `info!` / `warn!` / `error!` / `debug!` /
+  `trace!` / `fatal!` format like `println!` and route through the
+  global logger. A single `import stdlib::log::*;` brings both the
+  runtime fns and the macros. A bare value (`info!(x)`) is wrapped in
+  `"{}"` automatically.
+- **`@logged` reports values + timing**: the entry line interpolates
+  the actual argument values, the exit line adds the return value and
+  the elapsed time (`> add(4, 6)` / `< add -> 10 (981.2us)`). `@trace`
+  stays a lightweight enter/exit flow marker. Level via `@logged(info)`.
+
+### Language + modules
+
+- **`pub import X::*`** re-exports the imported names, so a barrel
+  module can collect symbols from several files under one import.
+- **First-use generic element inference**: `let v = Vector::new()`
+  followed by `v.push(32)` fixes `v` to `Vector<int>`, so a later
+  `v.push("x")` is flagged. Previously the unbound element type let
+  any push through.
+
+### Diagnostics
+
+- **Aggressive semantic checks**: unknown function / name / method /
+  field / type-in-annotation, wrong argument count, and argument-type
+  mismatch are now reported for bare fns, `Type::method`, and instance
+  methods (including inside proc-macro expansions).
+- **Exact spans**: every diagnostic underlines the precise offending
+  token (the method name, the field, the type, the argument) instead
+  of an approximate one-character mark at the expression start.
+
+### Tooling
+
+- **Plug-and-play cross-compile**: the target sysroot is auto-fetched
+  on `glide build --target=...`, a `target` field in `glide.glide`
+  sets a default, and the linker only pulls the heavy libs the program
+  actually references. `glide target list/add` manage sysroots.
+- **LSP**: enforces visibility (unknown symbols are flagged live, as
+  in `glide check`), completes macros and members, jumps to a
+  proc-macro definition on goto, and shows inferred-type hints.
+
+### Fixes
+
+- **proc-macro registry namespaced by kind**, so `@trace` (the
+  function-tracing attribute) and `trace!` (the logging macro) no
+  longer overwrite each other. `@trace` had silently become a no-op.
+- **Static handler** tolerates an unset `cache_control`: it was
+  storing a null and dereferencing it on the next request.
+- **Codegen** dedupes the chan SM-handler abort helper across chan
+  monomorphizations; a program using two or more `chan<T>` types hit
+  a duplicate-symbol C error.
+- **Spinner** writes progress to stderr, so it no longer corrupts
+  stdout during C emission.
+
 ## 0.1.1 — 2026-05-13
 
 ### LSP / Editor
