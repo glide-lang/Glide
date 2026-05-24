@@ -2451,6 +2451,32 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             user_arg_types.push(at);
                         }
                     }
+                    // First-use element binding. When the receiver is a plain
+                    // local whose generic element is still an unbound owner
+                    // type param (`v` from `let v = Vector::new()` is stored as
+                    // `*Vector<T>`), infer the element from this call's args and
+                    // rewrite the local's scope type. That concretizes the
+                    // element so LATER calls + the return are checked:
+                    // `v.push(32); v.push("x")` then flags the second push,
+                    // which an unbound `*Vector<T>` would silently accept.
+                    if e.lhs.lhs.kind == EX_IDENT
+                       && stripped.kind == TY_GENERIC && stripped.args != null
+                       && msig.owner_type_params != null
+                       && msig.owner_type_params.len() > 0
+                       && _type_references_any(stripped, msig.owner_type_params) {
+                        let bound_recv: *Type = _infer_method_tparams(stripped, msig.owner_type_params,
+                                                                      params_after_self, user_arg_types);
+                        // Only commit a FULLY concrete element — never bind to
+                        // another unbound param (e.g. forwarding an outer
+                        // generic fn's own `T`).
+                        if bound_recv != null && !_type_references_any(bound_recv, msig.owner_type_params) {
+                            let mut committed: *Type = bound_recv;
+                            if recv_ty != null && recv_ty.kind == TY_POINTER {
+                                committed = ty_pointer(bound_recv);
+                            }
+                            t.scope.insert(e.lhs.lhs.str_val, *committed);
+                        }
+                    }
                     // Substitute the impl's `<T, U>` in the return type using
                     // the receiver's concrete args. `*Vector<int>.get()` ->
                     // int, not the placeholder T. Without subst, downstream
