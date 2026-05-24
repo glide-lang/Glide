@@ -77,11 +77,26 @@ fn test_missing_path_returns_404() -> int {
     return 0;
 }
 
-fn test_dotdot_path_returns_403() -> int {
+fn test_dotdot_path_rejected() -> int {
     let r: *Router = _static_router();
     defer r.free();
+    // A `..` path SEGMENT is a traversal attempt. The router rejects it
+    // up front with 400 ("bad path") before any handler runs, so the
+    // file is never served. (The static handler keeps its own 403
+    // traversal guard as defense-in-depth for non-router callers.)
+    let req: HttpRequest = _static_req("/static/../secret.txt");
+    let resp: HttpResponse = r.dispatch(&req);
+    assert_eq!(resp.status, 400);
+    return 0;
+}
+
+fn test_dotdot_in_name_is_404() -> int {
+    let r: *Router = _static_router();
+    defer r.free();
+    // Dots inside a single segment are a legitimate filename, not a
+    // traversal — it resolves normally and 404s because it's missing.
     let req: HttpRequest = _static_req("/static/bad..txt");
     let resp: HttpResponse = r.dispatch(&req);
-    assert_eq!(resp.status, 403);
+    assert_eq!(resp.status, 404);
     return 0;
 }
