@@ -310,6 +310,13 @@ case_completion_has("u256 path offers from",
     {"line":1,"character":24},
     ["from"])
 
+# Bare-identifier position offers primitive type names too (editor filters
+# `i3` -> `i32`); regression for completion going silent on a partial type.
+case_completion_has("identifier position offers primitives",
+    'fn main() -> i32 {\n    let n = 1;\n    i3\n    return 0;\n}',
+    {"line":2,"character":6},
+    ["i32"])
+
 # ---- summary ----
 print()
 passed = sum(1 for _, ok in results if ok)

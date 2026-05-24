@@ -4776,6 +4776,13 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         }
     }
 
+    // Primitive type names (i32, u256, …) are valid in both type and
+    // expression position (annotations, `u256::from(n)`, casts), and the
+    // type-position branch above only seeds them when the cursor is clearly
+    // in a type slot. Offer them here too so a bare prefix completes (`i3`
+    // → `i32`); the editor filters by what's typed. Idempotent via `seen`.
+    _push_primitive_types(items, seen);
+
     // 2. Top-level decls (incl. static macros). Decls from stdlib that
     // were transitively loaded by an existing import still get a
     // build_import_edit pass so that selective imports are merged
