@@ -134,6 +134,8 @@ fn format_spec_for(t: *Type) -> string {
     // 128-bit ints have no printf length modifier; the arg emit converts them
     // to a string via __glide_i128_to_string / __glide_u128_to_string.
     if n.eq("i128") || n.eq("u128") { return "%s"; }
+    // 256-bit ints are software structs, printed via their to_string helper.
+    if n.eq("i256") || n.eq("u256") { return "%s"; }
     if n.eq("float") || n.eq("f32") || n.eq("f64") { return "%g"; }
     if n.eq("char") { return "%c"; }
     if n.eq("string") { return "%s"; }
@@ -160,6 +162,10 @@ fn stdlib_method_ret(ty_name: string, method: string) -> *Type {
         // `abs` keeps the receiver's own width (i64.abs() -> i64); `to_string`
         // works on every int type now (codegen routes them all through the
         // 64-bit __glide_int_* runtime helpers).
+        if method.eq("abs") { return ty_named(ty_name); }
+        if method.eq("to_string") { return ty_named("string"); }
+    }
+    if ty_name.eq("u256") || ty_name.eq("i256") {
         if method.eq("abs") { return ty_named(ty_name); }
         if method.eq("to_string") { return ty_named("string"); }
     }
@@ -1107,8 +1113,34 @@ fn _is_int_family(name: string) -> bool {
     return false;
 }
 
+// `"u256"` / `"i256"` if `t` is a 256-bit int (the software-struct types whose
+// operators dispatch to `__glide_<ty>_<op>` runtime fns), else `""`.
+fn _u256_ty(t: *Type) -> string {
+    if t == null || t.kind != TY_NAMED { return ""; }
+    if t.name.eq("u256") { return "u256"; }
+    if t.name.eq("i256") { return "i256"; }
+    return "";
+}
+
+// Runtime fn suffix for an arithmetic/bitwise op on a 256-bit int, or "" if
+// `op` is a comparison (handled via `_cmp`) or not applicable.
+fn _u256_arith_fn(op: i32) -> string {
+    if op == OP_ADD { return "add"; }
+    if op == OP_SUB { return "sub"; }
+    if op == OP_MUL { return "mul"; }
+    if op == OP_DIV { return "div"; }
+    if op == OP_MOD { return "mod"; }
+    if op == OP_BIT_AND { return "and"; }
+    if op == OP_BIT_OR  { return "or"; }
+    if op == OP_BIT_XOR { return "xor"; }
+    if op == OP_SHL { return "shl"; }
+    if op == OP_SHR { return "shr"; }
+    return "";
+}
+
 fn is_stdlib_primitive(name: string) -> bool {
     if _is_int_family(name) { return true; }
+    if name.eq("u256") || name.eq("i256") { return true; }
     if name.eq("f32") || name.eq("f64") { return true; }
     if name.eq("char") { return true; }
     if name.eq("bool") { return true; }
@@ -1538,6 +1570,11 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_CALL {
+        // 256-bit constructors `u256::from` / `i256::from` yield their type.
+        if e.lhs != null && e.lhs.kind == EX_PATH && e.lhs.field.eq("from")
+           && (e.lhs.str_val.eq("u256") || e.lhs.str_val.eq("i256")) {
+            return ty_named(e.lhs.str_val);
+        }
         // Direct fn ident
         if e.lhs != null && e.lhs.kind == EX_IDENT {
             let nm: string = e.lhs.str_val;
@@ -1690,6 +1727,8 @@ pub fn type_to_c(t: *Type) -> string {
         if n.eq("u64")    { return "uint64_t"; }
         if n.eq("i128")   { return "__int128"; }
         if n.eq("u128")   { return "unsigned __int128"; }
+        // i256/u256 share one software struct (signed ops reinterpret the bits).
+        if n.eq("i256") || n.eq("u256") { return "__glide_u256"; }
         if n.eq("usize")  { return "size_t"; }
         if n.eq("isize")  { return "ptrdiff_t"; }
         if n.eq("f32")    { return "float"; }
@@ -2883,6 +2922,26 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 return;
             }
         }
+        // 256-bit ints are software structs; C `+`/`<`/... don't apply, so
+        // route every operator to its `__glide_<ty>_<op>` runtime helper.
+        let mut bn256: string = _u256_ty(infer_for_codegen(g, e.lhs));
+        if bn256.eq("") { bn256 = _u256_ty(infer_for_codegen(g, e.rhs)); }
+        if !bn256.eq("") {
+            if e.op_code == OP_EQ || e.op_code == OP_NE || e.op_code == OP_LT
+               || e.op_code == OP_LE || e.op_code == OP_GT || e.op_code == OP_GE {
+                print!("(__glide_".concat(bn256).concat("_cmp("));
+                emit_expr(g, e.lhs); print!(", "); emit_expr(g, e.rhs);
+                print!(") ", op_to_c(e.op_code), " 0)");
+                return;
+            }
+            let afn: string = _u256_arith_fn(e.op_code);
+            if !afn.eq("") {
+                print!("__glide_".concat(bn256).concat("_").concat(afn).concat("("));
+                emit_expr(g, e.lhs); print!(", "); emit_expr(g, e.rhs);
+                print!(")");
+                return;
+            }
+        }
         print!("(");
         emit_expr(g, e.lhs);
         print!(" ", op_to_c(e.op_code), " ");
@@ -3000,6 +3059,18 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_CALL {
+        // 256-bit constructors: `u256::from(n)` / `i256::from(n)` build the
+        // software struct from an int (printf/`=` can't, since it's a struct).
+        if e.lhs != null && e.lhs.kind == EX_PATH && e.lhs.field.eq("from")
+           && (e.lhs.str_val.eq("u256") || e.lhs.str_val.eq("i256")) {
+            print!("__glide_".concat(e.lhs.str_val).concat("_from_i64("));
+            if e.args != null && e.args.len() > 0 {
+                let a0: Expr = e.args.get(0);
+                emit_expr(g, &a0);
+            }
+            print!(")");
+            return;
+        }
         // Enum ctor: `Shape::Circle(5)` → struct lit. Also accepts the
         // module-qualified form `mod::path::Shape::Circle(5)` by resolving
         // the prefix back to the bare enum name first. Only fires when the
@@ -3522,6 +3593,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         print!("__glide_u128_to_string(");
                         emit_expr(g, &a);
                         print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("u256") {
+                        print!("__glide_u256_to_string(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("i256") {
+                        print!("__glide_i256_to_string(");
+                        emit_expr(g, &a);
+                        print!(")");
                     } else {
                         emit_expr(g, &a);
                     }
@@ -3585,6 +3664,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         print!(")");
                     } else if at != null && at.kind == TY_NAMED && at.name.eq("u128") {
                         print!("__glide_u128_to_string(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("u256") {
+                        print!("__glide_u256_to_string(");
+                        emit_expr(g, &a);
+                        print!(")");
+                    } else if at != null && at.kind == TY_NAMED && at.name.eq("i256") {
+                        print!("__glide_i256_to_string(");
                         emit_expr(g, &a);
                         print!(")");
                     } else {

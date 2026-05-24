@@ -623,7 +623,7 @@ fn _is_known_type_name(t: *Typer, n: string) -> bool {
     if n.eq("Self") || n.eq("__fn__") || n.eq("__fn_ptr__") { return true; }
     if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
        || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
-       || n.eq("i128") || n.eq("u128")
+       || n.eq("i128") || n.eq("u128") || n.eq("i256") || n.eq("u256")
        || n.eq("usize") || n.eq("isize")
        || n.eq("f32") || n.eq("f64")
        || n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") {
@@ -2370,6 +2370,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_CALL {
+        // 256-bit constructors: `u256::from(n)` / `i256::from(n)`. These name
+        // a primitive (not a struct/module), so resolve them here before the
+        // generic path machinery would flag `u256` as an unknown module.
+        if e.lhs != null && e.lhs.kind == EX_PATH && e.lhs.field.eq("from")
+           && (e.lhs.str_val.eq("u256") || e.lhs.str_val.eq("i256")) {
+            return ty_named(e.lhs.str_val);
+        }
         // Borrow check: forbid aliased borrows of the same source within
         // a single call (`&x + &mut x`, `&mut x + &mut x`).
         check_call_aliasing(t, e);

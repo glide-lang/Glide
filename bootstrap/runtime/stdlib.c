@@ -102,6 +102,178 @@ static const char* __glide_i128_to_string(__int128 n) {
 }
 static __int128 __glide_i128_abs(__int128 n) { return n < 0 ? -n : n; }
 static unsigned __int128 __glide_u128_abs(unsigned __int128 n) { return n; }
+
+/* ---- 256-bit integers (software, 4x u64 limbs, d[0] least significant) ----
+   One C struct backs both u256 and i256; the signed ops reinterpret the same
+   two's-complement bits. Native C has no >128-bit int, so every operator the
+   compiler emits for these types routes here. */
+typedef struct { unsigned long long d[4]; } __glide_u256;
+
+static __glide_u256 __glide_u256_from_u64(unsigned long long v) {
+    __glide_u256 r; r.d[0] = v; r.d[1] = 0; r.d[2] = 0; r.d[3] = 0; return r;
+}
+static __glide_u256 __glide_u256_from_i64(long long v) {
+    __glide_u256 r; r.d[0] = (unsigned long long)v;
+    unsigned long long ext = (v < 0) ? ~0ULL : 0ULL;
+    r.d[1] = ext; r.d[2] = ext; r.d[3] = ext; return r;
+}
+static int __glide_u256_is_zero(__glide_u256 a) {
+    return (a.d[0] | a.d[1] | a.d[2] | a.d[3]) == 0;
+}
+static __glide_u256 __glide_u256_add(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 r; unsigned __int128 carry = 0;
+    for (int i = 0; i < 4; i++) {
+        unsigned __int128 s = (unsigned __int128)a.d[i] + b.d[i] + carry;
+        r.d[i] = (unsigned long long)s; carry = s >> 64;
+    }
+    return r;
+}
+static __glide_u256 __glide_u256_sub(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 r; unsigned __int128 borrow = 0;
+    for (int i = 0; i < 4; i++) {
+        unsigned __int128 s = (unsigned __int128)a.d[i] - b.d[i] - borrow;
+        r.d[i] = (unsigned long long)s; borrow = (s >> 64) & 1;
+    }
+    return r;
+}
+static __glide_u256 __glide_u256_mul(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 r; for (int i = 0; i < 4; i++) r.d[i] = 0;
+    for (int i = 0; i < 4; i++) {
+        unsigned __int128 carry = 0;
+        for (int j = 0; i + j < 4; j++) {
+            unsigned __int128 cur = (unsigned __int128)r.d[i + j]
+                + (unsigned __int128)a.d[i] * b.d[j] + carry;
+            r.d[i + j] = (unsigned long long)cur; carry = cur >> 64;
+        }
+    }
+    return r;
+}
+static int __glide_u256_cmp(__glide_u256 a, __glide_u256 b) {
+    for (int i = 3; i >= 0; i--) {
+        if (a.d[i] < b.d[i]) return -1;
+        if (a.d[i] > b.d[i]) return 1;
+    }
+    return 0;
+}
+static __glide_u256 __glide_u256_and(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 r; for (int i = 0; i < 4; i++) r.d[i] = a.d[i] & b.d[i]; return r;
+}
+static __glide_u256 __glide_u256_or(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 r; for (int i = 0; i < 4; i++) r.d[i] = a.d[i] | b.d[i]; return r;
+}
+static __glide_u256 __glide_u256_xor(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 r; for (int i = 0; i < 4; i++) r.d[i] = a.d[i] ^ b.d[i]; return r;
+}
+static __glide_u256 __glide_u256_shl(__glide_u256 a, __glide_u256 bsh) {
+    unsigned long long n = bsh.d[0] & 255;
+    __glide_u256 r; for (int i = 0; i < 4; i++) r.d[i] = 0;
+    int limb = (int)(n / 64), bit = (int)(n % 64);
+    for (int i = 3; i >= 0; i--) {
+        int src = i - limb; if (src < 0) continue;
+        r.d[i] |= a.d[src] << bit;
+        if (bit && src - 1 >= 0) r.d[i] |= a.d[src - 1] >> (64 - bit);
+    }
+    return r;
+}
+static __glide_u256 __glide_u256_shr(__glide_u256 a, __glide_u256 bsh) {
+    unsigned long long n = bsh.d[0] & 255;
+    __glide_u256 r; for (int i = 0; i < 4; i++) r.d[i] = 0;
+    int limb = (int)(n / 64), bit = (int)(n % 64);
+    for (int i = 0; i < 4; i++) {
+        int src = i + limb; if (src > 3) continue;
+        r.d[i] |= a.d[src] >> bit;
+        if (bit && src + 1 <= 3) r.d[i] |= a.d[src + 1] << (64 - bit);
+    }
+    return r;
+}
+static void __glide_u256_divmod(__glide_u256 a, __glide_u256 b,
+                                __glide_u256* q, __glide_u256* rem) {
+    __glide_u256 quo; for (int i = 0; i < 4; i++) quo.d[i] = 0;
+    __glide_u256 r;   for (int i = 0; i < 4; i++) r.d[i] = 0;
+    if (__glide_u256_is_zero(b)) { *q = quo; *rem = r; return; }
+    for (int bit = 255; bit >= 0; bit--) {
+        unsigned long long carry = 0;   /* r <<= 1 */
+        for (int i = 0; i < 4; i++) {
+            unsigned long long nc = r.d[i] >> 63;
+            r.d[i] = (r.d[i] << 1) | carry; carry = nc;
+        }
+        r.d[0] |= (a.d[bit / 64] >> (bit % 64)) & 1ULL;
+        if (__glide_u256_cmp(r, b) >= 0) {
+            r = __glide_u256_sub(r, b);
+            quo.d[bit / 64] |= (1ULL << (bit % 64));
+        }
+    }
+    *q = quo; *rem = r;
+}
+static __glide_u256 __glide_u256_div(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 q, r; __glide_u256_divmod(a, b, &q, &r); return q;
+}
+static __glide_u256 __glide_u256_mod(__glide_u256 a, __glide_u256 b) {
+    __glide_u256 q, r; __glide_u256_divmod(a, b, &q, &r); return r;
+}
+static const char* __glide_u256_to_string(__glide_u256 a) {
+    if (__glide_u256_is_zero(a)) { char* z = (char*)__glide_palloc(2); z[0] = '0'; z[1] = 0; return z; }
+    char tmp[80]; int t = 0;
+    __glide_u256 ten = __glide_u256_from_u64(10);
+    while (!__glide_u256_is_zero(a)) {
+        __glide_u256 q, r; __glide_u256_divmod(a, ten, &q, &r);
+        tmp[t++] = (char)('0' + (int)r.d[0]); a = q;
+    }
+    char* out = (char*)__glide_palloc(t + 1);
+    for (int i = 0; i < t; i++) out[i] = tmp[t - 1 - i];
+    out[t] = 0; return out;
+}
+static __glide_u256 __glide_u256_abs(__glide_u256 a) { return a; }  /* unsigned: identity */
+/* ---- i256: signed view over the same bits ---- */
+static int __glide_i256_is_neg(__glide_u256 a) { return (int)((a.d[3] >> 63) & 1); }
+static __glide_u256 __glide_i256_neg(__glide_u256 a) {
+    __glide_u256 r; for (int i = 0; i < 4; i++) r.d[i] = ~a.d[i];
+    return __glide_u256_add(r, __glide_u256_from_u64(1));
+}
+static __glide_u256 __glide_i256_abs(__glide_u256 a) {
+    return __glide_i256_is_neg(a) ? __glide_i256_neg(a) : a;
+}
+static int __glide_i256_cmp(__glide_u256 a, __glide_u256 b) {
+    int na = __glide_i256_is_neg(a), nb = __glide_i256_is_neg(b);
+    if (na != nb) return na ? -1 : 1;
+    return __glide_u256_cmp(a, b);
+}
+static const char* __glide_i256_to_string(__glide_u256 a) {
+    if (__glide_i256_is_neg(a)) {
+        __glide_u256 m = __glide_i256_neg(a);
+        const char* s = __glide_u256_to_string(m);
+        size_t len = strlen(s);
+        char* out = (char*)__glide_palloc(len + 2);
+        out[0] = '-'; memcpy(out + 1, s, len + 1); return out;
+    }
+    return __glide_u256_to_string(a);
+}
+static __glide_u256 __glide_i256_div(__glide_u256 a, __glide_u256 b) {
+    int na = __glide_i256_is_neg(a), nb = __glide_i256_is_neg(b);
+    __glide_u256 ua = na ? __glide_i256_neg(a) : a;
+    __glide_u256 ub = nb ? __glide_i256_neg(b) : b;
+    __glide_u256 q = __glide_u256_div(ua, ub);
+    return (na ^ nb) ? __glide_i256_neg(q) : q;
+}
+static __glide_u256 __glide_i256_mod(__glide_u256 a, __glide_u256 b) {
+    int na = __glide_i256_is_neg(a);
+    __glide_u256 ua = na ? __glide_i256_neg(a) : a;
+    __glide_u256 ub = __glide_i256_is_neg(b) ? __glide_i256_neg(b) : b;
+    __glide_u256 r = __glide_u256_mod(ua, ub);
+    return na ? __glide_i256_neg(r) : r;
+}
+/* i256 add/sub/mul/bitwise/shift are bit-identical to u256 (two's complement);
+   alias so codegen can emit a uniform `__glide_<ty>_<op>` per operand type. */
+static __glide_u256 __glide_i256_from_i64(long long v) { return __glide_u256_from_i64(v); }
+static __glide_u256 __glide_i256_from_u64(unsigned long long v) { return __glide_u256_from_u64(v); }
+static __glide_u256 __glide_i256_add(__glide_u256 a, __glide_u256 b) { return __glide_u256_add(a, b); }
+static __glide_u256 __glide_i256_sub(__glide_u256 a, __glide_u256 b) { return __glide_u256_sub(a, b); }
+static __glide_u256 __glide_i256_mul(__glide_u256 a, __glide_u256 b) { return __glide_u256_mul(a, b); }
+static __glide_u256 __glide_i256_and(__glide_u256 a, __glide_u256 b) { return __glide_u256_and(a, b); }
+static __glide_u256 __glide_i256_or(__glide_u256 a, __glide_u256 b)  { return __glide_u256_or(a, b); }
+static __glide_u256 __glide_i256_xor(__glide_u256 a, __glide_u256 b) { return __glide_u256_xor(a, b); }
+static __glide_u256 __glide_i256_shl(__glide_u256 a, __glide_u256 b) { return __glide_u256_shl(a, b); }
+static __glide_u256 __glide_i256_shr(__glide_u256 a, __glide_u256 b) { return __glide_u256_shr(a, b); }
 static const char* __glide_bool_to_string(bool b) { return b ? "true" : "false"; }
 #include <stdarg.h>
 static const char* __glide_format(const char* fmt, ...) {

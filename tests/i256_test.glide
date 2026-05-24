@@ -1,0 +1,48 @@
+// 256-bit integers: software-struct types, explicit construction (u256::from),
+// operators dispatched to runtime, signed/unsigned to_string, division.
+import stdlib::testing::*;
+
+fn test_u256_mul_beyond_u128() -> i32 {
+    let b: u256 = u256::from(1000000000);     // 1e9
+    let big: u256 = b * b * b * b;            // 1e36, past u128's ~3.4e38? no, well past u64/u128 range use
+    assert_str_eq!(big.to_string(), "1000000000000000000000000000000000000");
+    return 0;
+}
+
+fn test_u256_div_and_mod() -> i32 {
+    let a: u256 = u256::from(1000000000);
+    let big: u256 = a * a * a * a;            // 1e36
+    let q: u256 = big / a;                    // 1e27
+    assert_str_eq!(q.to_string(), "1000000000000000000000000000");
+    let r: u256 = big % a;                    // 0
+    assert_str_eq!(r.to_string(), "0");
+    return 0;
+}
+
+fn test_u256_compare() -> i32 {
+    let a: u256 = u256::from(100);
+    let b: u256 = u256::from(200);
+    assert!(a < b);
+    assert!(b > a);
+    assert!(!(a > b));
+    let c: u256 = u256::from(100);
+    assert!(a == c);
+    return 0;
+}
+
+fn test_i256_signed_and_abs() -> i32 {
+    let n: i256 = i256::from(0 - 1000000000);
+    let big: i256 = i256::from(1000000000000000000);
+    let m: i256 = n * big;                    // -1e27
+    assert_str_eq!(m.to_string(), "-1000000000000000000000000000");
+    assert_str_eq!(m.abs().to_string(), "1000000000000000000000000000");
+    return 0;
+}
+
+fn test_u256_add_sub() -> i32 {
+    let a: u256 = u256::from(5000000000);
+    let b: u256 = u256::from(3000000000);
+    assert_str_eq!((a + b).to_string(), "8000000000");
+    assert_str_eq!((a - b).to_string(), "2000000000");
+    return 0;
+}
