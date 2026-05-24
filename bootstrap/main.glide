@@ -3439,10 +3439,10 @@ fn main() -> int {
     let mut project_name: string = "";
     let mut manifest_target: string = "";
     if src_arg_idx >= argc {
-        if mode == MODE_BUILD || mode == MODE_RUN {
+        if mode == MODE_BUILD || mode == MODE_RUN || mode == MODE_CHECK {
             let root: string = find_manifest_root(".");
             if root.eq("") {
-                println!("no glide.glide found; run `glide build <file>` or scaffold with `glide new <name>`");
+                println!("no glide.glide found; run `glide", cmd.concat(" <file>` or scaffold with `glide new <name>`"));
                 return 1;
             }
             let m: *Manifest = read_manifest(root);
@@ -3450,16 +3450,28 @@ fn main() -> int {
                 println!("could not parse glide.glide at", root);
                 return 1;
             }
-            if m.bin.eq("") {
+            project_root = root;
+            project_name = m.name;
+            manifest_target = m.target;
+            if !m.bin.eq("") {
+                src_path = root.concat("/").concat(m.bin);
+            } else if mode == MODE_CHECK {
+                // Library project: no `bin`, so check the conventional
+                // `src/lib.glide` entry (type-checks it + everything it
+                // imports). `glide build`/`run` reject libs below.
+                let lib_entry: string = root.concat("/src/lib.glide");
+                if __glide_file_exists(lib_entry) {
+                    src_path = lib_entry;
+                } else {
+                    println!(m.name, "is a library with no `src/lib.glide` to check; pass a file: `glide check <file>`");
+                    return 1;
+                }
+            } else {
                 println!(m.name, "is a library project (no `bin`).");
                 println!("nothing to build/run — import it from another project:");
                 println!("  import", m.name.concat("::…;"));
                 return 1;
             }
-            project_root = root;
-            project_name = m.name;
-            manifest_target = m.target;
-            src_path = root.concat("/").concat(m.bin);
         } else {
             print_usage();
             return 1;
