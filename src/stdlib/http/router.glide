@@ -29,7 +29,7 @@
 //     return HttpResponse::with_status(201).json(req.body);
 // }
 //
-// fn main() -> int {
+// fn main() -> i32 {
 //     let r: *Router = Router::new();
 //     defer r.free();
 //     r.get("/", root);
@@ -434,7 +434,7 @@ impl Router {
     ///
     /// // Inside the handler:
     /// @handler
-    /// fn get_user(state: State<Db>, id: Path<int>) -> Json<User> {
+    /// fn get_user(state: State<Db>, id: Path<i32>) -> Json<User> {
     ///     return Json::wrap(state.val.find(id.val));
     /// }
     /// ```

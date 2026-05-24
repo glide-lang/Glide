@@ -8,7 +8,7 @@
 //    your `ChunkSource` impl computes the next event each call.
 //
 //    ```glide
-//    pub struct Pulse { pub idx: int }
+//    pub struct Pulse { pub idx: i32 }
 //    impl ChunkSource for Pulse {
 //        fn next_chunk(self: *Pulse) -> ?string {
 //            if self.idx >= 5 { return none(); }

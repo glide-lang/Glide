@@ -18,7 +18,7 @@
 // if !s.ok { return 1; }
 // let p: *ImapSession = s.val;
 // p.login("alice", "secret");
-// let count: !int = p.select("INBOX");
+// let count: !i32 = p.select("INBOX");
 // if count.ok && count.val > 0 {
 //     let raw: !string = p.fetch(1);
 //     if raw.ok { println!(raw.val); }
@@ -89,7 +89,7 @@ impl ImapSession {
     /// require an "app password" rather than the regular account password.
     ///
     /// ```glide
-    /// let r: !int = session.login("me@gmail.com", "abcd-efgh-ijkl-mnop");
+    /// let r: !i32 = session.login("me@gmail.com", "abcd-efgh-ijkl-mnop");
     /// if !r.ok { eprintln(r.err); }
     /// ```
     pub fn login(self: *ImapSession, user: string, pass: string) -> !i32 {
@@ -107,7 +107,7 @@ impl ImapSession {
     /// read-write.
     ///
     /// ```glide
-    /// let r: !int = session.select("INBOX");
+    /// let r: !i32 = session.select("INBOX");
     /// if r.ok { println!(r.val, "messages"); }
     /// ```
     pub fn select(self: *ImapSession, mailbox: string) -> !i32 {
@@ -180,8 +180,8 @@ impl ImapSession {
     /// Returns the sequence numbers of matching messages.
     ///
     /// ```glide
-    /// let r: !*Vector<int> = session.search("UNSEEN SUBJECT \"alert\"");
-    /// if r.ok { for let i: int = 0; i < r.val.len(); i++ {
+    /// let r: !*Vector<i32> = session.search("UNSEEN SUBJECT \"alert\"");
+    /// if r.ok { for let i: i32 = 0; i < r.val.len(); i++ {
     ///     println!("msg #", r.val.get(i));
     /// }}
     /// ```
@@ -210,7 +210,7 @@ impl ImapSession {
     /// Convenience: search for unread messages.
     ///
     /// ```glide
-    /// let r: !*Vector<int> = session.search_unseen();
+    /// let r: !*Vector<i32> = session.search_unseen();
     /// if r.ok { println!(r.val.len(), "unread"); }
     /// ```
     pub fn search_unseen(self: *ImapSession) -> !*Vector<i32> {
@@ -222,7 +222,7 @@ impl ImapSession {
     /// `From:` header.
     ///
     /// ```glide
-    /// let r: !*Vector<int> = session.search_from("alice@example.com");
+    /// let r: !*Vector<i32> = session.search_from("alice@example.com");
     /// if r.ok { println!("from alice:", r.val.len()); }
     /// ```
     pub fn search_from(self: *ImapSession, addr: string) -> !*Vector<i32> {

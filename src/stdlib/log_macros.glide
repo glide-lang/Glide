@@ -10,7 +10,7 @@
 // import stdlib::log::*;
 //
 // @trace
-// fn do_work(x: int) -> int { return x * 2; }   // logs `> do_work` / `< do_work`
+// fn do_work(x: i32) -> i32 { return x * 2; }   // logs `> do_work` / `< do_work`
 //
 // info!("user {} connected", name);             // println!-style, logs at INFO
 // ```

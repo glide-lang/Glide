@@ -406,7 +406,7 @@ impl JsonValue {
     ///
     /// ```glide
     /// // {"idade": 12}
-    /// let r: !int = v.get_int("idade");
+    /// let r: !i32 = v.get_int("idade");
     /// if r.ok { println!(r.val); }    // 12
     /// ```
     pub fn get_int(self: *JsonValue, key: string) -> !i32 {
@@ -516,7 +516,7 @@ impl JsonValue {
     /// // {"tags": ["a", "b"]}
     /// let tags: !*JsonValue = v.get_array("tags");
     /// if tags.ok {
-    ///     for let i: int = 0; i < tags.val.len(); i++ {
+    ///     for let i: i32 = 0; i < tags.val.len(); i++ {
     ///         println!(tags.val.at(i).as_string());
     ///     }
     /// }
@@ -754,7 +754,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
 /// ```glide
 /// struct Pet {
 ///     pub name: string,
-///     pub age:  ?int,
+///     pub age:  ?i32,
 /// }
 ///
 /// impl JsonBind for Pet {
@@ -793,7 +793,7 @@ pub trait JsonBind {
 ///
 /// ```glide
 /// @derive(JsonBind)
-/// pub struct Pet { pub name: string, pub age: int }
+/// pub struct Pet { pub name: string, pub age: i32 }
 ///
 /// let xs: *Vector<Pet> = Vector::new();
 /// xs.push(Pet { name: "rex", age: 4 });

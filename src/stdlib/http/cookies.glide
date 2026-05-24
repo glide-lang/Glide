@@ -124,7 +124,7 @@ impl CookieJar {
     ///
     /// ```glide
     /// let all: *Vector<*Cookie> = jar.all();
-    /// for let i: int = 0; i < all.len(); i++ {
+    /// for let i: i32 = 0; i < all.len(); i++ {
     ///     let c: *Cookie = all.get(i);
     ///     println!(c.name, "=", c.value);
     /// }

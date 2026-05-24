@@ -74,7 +74,7 @@ impl Rng {
     /// would let the high bit make it negative).
     ///
     /// ```glide
-    /// let n: int = r.next_int();        // 0 .. 2^31-1
+    /// let n: i32 = r.next_int();        // 0 .. 2^31-1
     /// ```
     pub fn next_int(self: *Rng) -> i32 {
         let v: i64 = self.next_i64();
@@ -88,8 +88,8 @@ impl Rng {
     /// range; fine for the small ranges this is normally called with.
     ///
     /// ```glide
-    /// let dice: int = r.range(1, 7);    // d6 → 1..=6
-    /// let pct:  int = r.range(0, 100);  // 0..=99
+    /// let dice: i32 = r.range(1, 7);    // d6 → 1..=6
+    /// let pct:  i32 = r.range(0, 100);  // 0..=99
     /// ```
     pub fn range(self: *Rng, lo: i32, hi: i32) -> i32 {
         if hi <= lo { return lo; }

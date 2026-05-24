@@ -48,7 +48,7 @@ c_raw! {
 /// `strip_components` is identical to GNU tar's `--strip-components`.
 ///
 /// ```glide
-/// let n: int = tar_extract(decoded_bytes, decoded_bytes.len(),
+/// let n: i32 = tar_extract(decoded_bytes, decoded_bytes.len(),
 ///                          "/tmp/extract", 1);
 /// if n < 0 { eprintln("bad archive"); }
 /// ```

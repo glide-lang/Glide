@@ -854,7 +854,7 @@ impl TlsStream {
     /// common case.
     ///
     /// ```glide
-    /// let r: !int = stream.write("hello");
+    /// let r: !i32 = stream.write("hello");
     /// if r.ok { println!("sent", r.val, "bytes"); }
     /// ```
     pub fn write(self: *TlsStream, data: string) -> !i32 {
@@ -912,7 +912,7 @@ impl TlsStream {
     /// ```glide
     /// let buf: *u8 = malloc(8192) as *u8;
     /// defer free(buf as *void);
-    /// let r: !int = stream.read_bytes(buf, 8192);
+    /// let r: !i32 = stream.read_bytes(buf, 8192);
     /// if r.ok && r.val > 0 { /* process buf[0..r.val] */ }
     /// ```
     pub fn read_bytes(self: *TlsStream, buf: *u8, max: i32) -> !i32 {

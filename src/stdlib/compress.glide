@@ -66,7 +66,7 @@ c_raw! {
 /// take ownership).
 ///
 /// ```glide
-/// let mut out_len: int = 0;
+/// let mut out_len: i32 = 0;
 /// let buf: *void = gzip_decode(payload, payload.len(), &out_len);
 /// if buf != null {
 ///     let decoded: string = __glide_string_from_buf(buf, out_len);

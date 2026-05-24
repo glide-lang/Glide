@@ -44,7 +44,7 @@ macro print!($($arg:expr),*);
 ///
 /// ```glide
 /// let s: string = format!("hello, {}!", "world");
-/// let n: int = 7;
+/// let n: i32 = 7;
 /// let label: string = format!("count: {}, double: {}", n, n * 2);
 /// ```
 ///
@@ -93,10 +93,10 @@ extern fn printf(fmt: string, ...) -> i32;
 /// # Examples
 ///
 /// ```glide
-/// let c: chan<int> = make_chan(8);
+/// let c: chan<i32> = make_chan(8);
 /// spawn worker(c);
 /// for _ in 0..5 {
-///     let n: int = c.recv();
+///     let n: i32 = c.recv();
 ///     println!(n);
 /// }
 /// ```
@@ -147,7 +147,7 @@ extern fn free(p: *void);
 /// Number of CLI arguments (mirrors C's `argc`).
 ///
 /// ```glide
-/// for let i: int = 0; i < args_count(); i++ {
+/// for let i: i32 = 0; i < args_count(); i++ {
 ///     println!(args_at(i));
 /// }
 /// ```

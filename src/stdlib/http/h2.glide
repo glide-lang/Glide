@@ -58,7 +58,7 @@ impl FrameType {
 /// they're never used on the same frame type.
 ///
 /// ```glide
-/// let f: int = FrameFlag::end_headers() | FrameFlag::end_stream();
+/// let f: i32 = FrameFlag::end_headers() | FrameFlag::end_stream();
 /// write_frame_bytes(buf, FrameType::headers(), f, 1, hdr_payload);
 /// ```
 pub struct FrameFlag {}
@@ -109,7 +109,7 @@ pub fn write_frame(buf: *ByteBuffer, frame_type: i32, flags: i32,
 /// enc.encode_header(hdrs, ":method", "GET");
 /// enc.encode_header(hdrs, ":path", "/");
 /// let buf: *ByteBuffer = ByteBuffer::new();   defer buf.free();
-/// let f: int = FrameFlag::end_headers() | FrameFlag::end_stream();
+/// let f: i32 = FrameFlag::end_headers() | FrameFlag::end_stream();
 /// write_frame_bytes(buf, FrameType::headers(), f, 1, hdrs);
 /// ```
 pub fn write_frame_bytes(buf: *ByteBuffer, frame_type: i32, flags: i32,

@@ -332,10 +332,10 @@ impl string {
     /// as `err(...)` so callers can react to bad input.
     ///
     /// ```glide
-    /// let r: !int = "42".try_parse_int();
+    /// let r: !i32 = "42".try_parse_int();
     /// if r.ok { println!(r.val); }   // 42
     ///
-    /// let bad: !int = "abc".try_parse_int();
+    /// let bad: !i32 = "abc".try_parse_int();
     /// if !bad.ok { println!(bad.err); }   // "non-digit byte"
     /// ```
     pub fn try_parse_int(self: string) -> !i32 {

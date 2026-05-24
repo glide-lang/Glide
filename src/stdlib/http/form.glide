@@ -67,7 +67,7 @@ impl FormData {
     /// the form.
     ///
     /// ```glide
-    /// for let i: int = 0; i < f.len(); i++ {
+    /// for let i: i32 = 0; i < f.len(); i++ {
     ///     println!(f.name_at(i), "=", f.value_at(i));
     /// }
     /// ```
@@ -101,7 +101,7 @@ impl FormData {
 /// ```glide
 /// let r: !*FormData = form_decode("user=alice&pass=s3cret%21");
 /// if r.ok {
-///     for let i: int = 0; i < r.val.len(); i++ {
+///     for let i: i32 = 0; i < r.val.len(); i++ {
 ///         println!(r.val.name_at(i), "=", r.val.value_at(i));
 ///     }
 /// }

@@ -542,7 +542,7 @@ pub fn fs_extension(path: string) -> string {
 /// Returns `0` for empty / missing files.
 ///
 /// ```glide
-/// let n: int = fs_lines_count("README.md");
+/// let n: i32 = fs_lines_count("README.md");
 /// println!("readme has", n, "lines");
 /// ```
 pub fn fs_lines_count(path: string) -> i32 {
@@ -616,7 +616,7 @@ pub fn fs_write_slice(path: string, data: string, offset: i32, n: i32) -> bool {
 /// failure.
 ///
 /// ```glide
-/// let mut n: int = 0;
+/// let mut n: i32 = 0;
 /// let buf: string = fs_read_bytes("archive.tar.gz", &n);
 /// if n > 0 { /* hand off to tar / gzip helpers */ }
 /// ```

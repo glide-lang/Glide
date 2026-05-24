@@ -6,7 +6,7 @@
 /// you must release it explicitly:
 ///
 /// ```glide
-/// let v: *Vector<int> = Vector::new();
+/// let v: *Vector<i32> = Vector::new();
 /// defer v.free();
 ///
 /// v.push(1);
@@ -32,7 +32,7 @@ impl<T> Vector<T> {
     /// Create an empty vector with no allocation. The first `push` allocates.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();
+    /// let v: *Vector<i32> = Vector::new();
     /// defer v.free();
     /// ```
     fn new() -> *Vector<T> {
@@ -55,9 +55,9 @@ impl<T> Vector<T> {
     /// the geometric growth chain.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::with_cap(1024);
+    /// let v: *Vector<i32> = Vector::with_cap(1024);
     /// defer v.free();
-    /// for let i: int = 0; i < 1024; i++ { v.push(i); }
+    /// for let i: i32 = 0; i < 1024; i++ { v.push(i); }
     /// ```
     fn with_cap(cap: i32) -> *Vector<T> {
         let arena: bool = __glide_palloc_active() != 0;
@@ -86,7 +86,7 @@ impl<T> Vector<T> {
     /// when the buffer is full, so the amortised cost is O(1).
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();
+    /// let v: *Vector<i32> = Vector::new();
     /// defer v.free();
     /// v.push(10);
     /// v.push(20);
@@ -119,10 +119,10 @@ impl<T> Vector<T> {
     /// vector is empty - callers must check `is_empty()` first.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();
+    /// let v: *Vector<i32> = Vector::new();
     /// defer v.free();
     /// v.push(1); v.push(2); v.push(3);
-    /// let last: int = v.pop();   // 3
+    /// let last: i32 = v.pop();   // 3
     /// ```
     fn pop(self: *Vector<T>) -> T {
         self.len = self.len - 1;
@@ -133,7 +133,7 @@ impl<T> Vector<T> {
     /// `len()` is undefined behaviour.
     ///
     /// ```glide
-    /// let x: int = v.get(0);
+    /// let x: i32 = v.get(0);
     /// ```
     fn get(self: *Vector<T>, i: i32) -> T {
         return self.data[i];
@@ -152,7 +152,7 @@ impl<T> Vector<T> {
     /// Number of initialised elements currently held.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// let v: *Vector<i32> = Vector::new();  defer v.free();
     /// v.push_all!(1, 2, 3);
     /// v.len();   // 3
     /// ```
@@ -163,7 +163,7 @@ impl<T> Vector<T> {
     /// `true` when `len() == 0`.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();
+    /// let v: *Vector<i32> = Vector::new();
     /// defer v.free();
     /// if v.is_empty() { println!("nothing here"); }
     /// ```
@@ -205,10 +205,10 @@ impl<T> Vector<T> {
     /// use a linear `remove(i)` if order matters.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();
+    /// let v: *Vector<i32> = Vector::new();
     /// defer v.free();
     /// v.push_all!(10, 20, 30, 40);
-    /// let removed: int = v.swap_remove(1);   // 20
+    /// let removed: i32 = v.swap_remove(1);   // 20
     /// // v is now [10, 40, 30]
     /// ```
     fn swap_remove(self: *Vector<T>, i: i32) -> T {
@@ -223,7 +223,7 @@ impl<T> Vector<T> {
     /// Reverse the elements in place. O(n).
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();
+    /// let v: *Vector<i32> = Vector::new();
     /// defer v.free();
     /// v.push_all!(1, 2, 3);
     /// v.reverse();
@@ -257,8 +257,8 @@ impl<T> Vector<T> {
     /// Append every element of `other` to `self`. `other` is left intact.
     ///
     /// ```glide
-    /// let a: *Vector<int> = Vector::new();  defer a.free();
-    /// let b: *Vector<int> = Vector::new();  defer b.free();
+    /// let a: *Vector<i32> = Vector::new();  defer a.free();
+    /// let b: *Vector<i32> = Vector::new();  defer b.free();
     /// a.push_all!(1, 2);
     /// b.push_all!(3, 4);
     /// a.extend(b);
@@ -289,7 +289,7 @@ impl<T> Vector<T> {
     /// Pair with `defer` to make leaks impossible:
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();
+    /// let v: *Vector<i32> = Vector::new();
     /// defer v.free();
     /// // ...use v...
     /// ```
@@ -319,9 +319,9 @@ impl<T> Vector<T> {
     /// iterating is undefined behaviour.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// let v: *Vector<i32> = Vector::new();  defer v.free();
     /// v.push_all!(10, 20, 30);
-    /// let it: *VecIter<int> = v.iter();
+    /// let it: *VecIter<i32> = v.iter();
     /// while true {
     ///     match it.next() {
     ///         some(x) => println!(x),
@@ -339,10 +339,10 @@ impl<T> Vector<T> {
     /// Apply `f` to each element; return a new Vector.
     ///
     /// ```glide
-    /// fn double(x: int) -> int { return x * 2; }
-    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// fn double(x: i32) -> i32 { return x * 2; }
+    /// let v: *Vector<i32> = Vector::new();  defer v.free();
     /// v.push_all!(1, 2, 3);
-    /// let doubled: *Vector<int> = v.map(double);   // [2, 4, 6]
+    /// let doubled: *Vector<i32> = v.map(double);   // [2, 4, 6]
     /// defer doubled.free();
     /// ```
     fn map<U>(self: *Vector<T>, f: fn(T) -> U) -> *Vector<U> {
@@ -356,10 +356,10 @@ impl<T> Vector<T> {
     /// Keep only elements where `p` returns true.
     ///
     /// ```glide
-    /// fn is_even(x: int) -> bool { return x % 2 == 0; }
-    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// fn is_even(x: i32) -> bool { return x % 2 == 0; }
+    /// let v: *Vector<i32> = Vector::new();  defer v.free();
     /// v.push_all!(1, 2, 3, 4, 5);
-    /// let evens: *Vector<int> = v.filter(is_even);   // [2, 4]
+    /// let evens: *Vector<i32> = v.filter(is_even);   // [2, 4]
     /// defer evens.free();
     /// ```
     fn filter(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
@@ -375,7 +375,7 @@ impl<T> Vector<T> {
     ///
     /// ```glide
     /// v.push_all!(1, 2, 3, 4, 5);
-    /// let head: *Vector<int> = v.take(3);   // [1, 2, 3]
+    /// let head: *Vector<i32> = v.take(3);   // [1, 2, 3]
     /// v.take(99).len();                     // 5  (clamped)
     /// ```
     fn take(self: *Vector<T>, n: i32) -> *Vector<T> {
@@ -391,7 +391,7 @@ impl<T> Vector<T> {
     ///
     /// ```glide
     /// v.push_all!(1, 2, 3, 4, 5);
-    /// let tail: *Vector<int> = v.skip(2);   // [3, 4, 5]
+    /// let tail: *Vector<i32> = v.skip(2);   // [3, 4, 5]
     /// ```
     fn skip(self: *Vector<T>, n: i32) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
@@ -404,7 +404,7 @@ impl<T> Vector<T> {
     /// Take elements until `p` returns false (then stop).
     ///
     /// ```glide
-    /// fn lt5(x: int) -> bool { return x < 5; }
+    /// fn lt5(x: i32) -> bool { return x < 5; }
     /// v.push_all!(1, 3, 7, 2, 9);
     /// v.take_while(lt5);   // [1, 3]   (stops at 7)
     /// ```
@@ -421,7 +421,7 @@ impl<T> Vector<T> {
     /// Skip elements while `p` returns true; keep the rest from first false.
     ///
     /// ```glide
-    /// fn lt5(x: int) -> bool { return x < 5; }
+    /// fn lt5(x: i32) -> bool { return x < 5; }
     /// v.push_all!(1, 3, 7, 2, 9);
     /// v.skip_while(lt5);   // [7, 2, 9]
     /// ```
@@ -442,7 +442,7 @@ impl<T> Vector<T> {
     /// Fold over the vector. `f(acc, item)` returns the new accumulator.
     ///
     /// ```glide
-    /// fn add(acc: int, x: int) -> int { return acc + x; }
+    /// fn add(acc: i32, x: i32) -> i32 { return acc + x; }
     /// v.push_all!(1, 2, 3, 4);
     /// v.fold(0, add);     // 10
     /// v.fold(100, add);   // 110
@@ -458,7 +458,7 @@ impl<T> Vector<T> {
     /// `true` if any element matches `p`. Short-circuits on first hit.
     ///
     /// ```glide
-    /// fn is_neg(x: int) -> bool { return x < 0; }
+    /// fn is_neg(x: i32) -> bool { return x < 0; }
     /// v.push_all!(1, 2, -3, 4);
     /// v.any(is_neg);   // true
     /// ```
@@ -473,7 +473,7 @@ impl<T> Vector<T> {
     /// Empty vector returns `true` (vacuous truth).
     ///
     /// ```glide
-    /// fn is_pos(x: int) -> bool { return x > 0; }
+    /// fn is_pos(x: i32) -> bool { return x > 0; }
     /// v.push_all!(1, 2, 3);
     /// v.all(is_pos);   // true
     /// ```
@@ -487,7 +487,7 @@ impl<T> Vector<T> {
     /// First element matching `p`, or `none` if no match.
     ///
     /// ```glide
-    /// fn is_even(x: int) -> bool { return x % 2 == 0; }
+    /// fn is_even(x: i32) -> bool { return x % 2 == 0; }
     /// v.push_all!(1, 3, 4, 7);
     /// match v.find(is_even) {
     ///     some(x) => println!(x),   // 4
@@ -512,7 +512,7 @@ impl<T> VecIter<T> {
     /// Yield the next element, or `none` at end of sequence.
     ///
     /// ```glide
-    /// let it: *VecIter<int> = v.iter();
+    /// let it: *VecIter<i32> = v.iter();
     /// while true {
     ///     match it.next() {
     ///         some(x) => println!(x),
@@ -535,7 +535,7 @@ impl Vector<i32> {
     /// Sum of all elements. Empty vector returns 0.
     ///
     /// ```glide
-    /// let v: *Vector<int> = Vector::new();  defer v.free();
+    /// let v: *Vector<i32> = Vector::new();  defer v.free();
     /// v.push_all!(1, 2, 3, 4);
     /// v.sum();   // 10
     /// ```

@@ -11,7 +11,7 @@
 //
 // pub struct StructLegal {
 //     pub nome:  string,
-//     pub idade: ?int,
+//     pub idade: ?i32,
 // }
 //
 // impl JsonBind for StructLegal {

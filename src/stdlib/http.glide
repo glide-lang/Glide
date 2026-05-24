@@ -195,7 +195,7 @@ impl HttpRequest {
 /// `impl ChunkSource for MyStruct` that walks them.
 ///
 /// ```glide
-/// pub struct Counter { pub idx: int, pub total: int }
+/// pub struct Counter { pub idx: i32, pub total: i32 }
 ///
 /// impl ChunkSource for Counter {
 ///     fn next_chunk(self: *Counter) -> ?string {
@@ -351,7 +351,7 @@ impl HttpResponse {
     /// once a stream source is set.
     ///
     /// ```glide
-    /// pub struct Lines { pub items: *Vector<string>, pub idx: int }
+    /// pub struct Lines { pub items: *Vector<string>, pub idx: i32 }
     /// impl ChunkSource for Lines {
     ///     fn next_chunk(self: *Lines) -> ?string {
     ///         if self.idx >= self.items.len() { return none(); }
@@ -493,7 +493,7 @@ impl HttpResponse {
     ///
     /// ```glide
     /// let cookies: *Vector<string> = resp.headers("Set-Cookie");
-    /// for let i: int = 0; i < cookies.len(); i++ { println!(cookies.get(i)); }
+    /// for let i: i32 = 0; i < cookies.len(); i++ { println!(cookies.get(i)); }
     /// ```
     pub fn headers(self: *HttpResponse, name: string) -> *Vector<string> {
         let want: string = name.to_lower();
@@ -934,7 +934,7 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
 ///     return HttpResponse::ok().body("hello, ".concat(req.path));
 /// }
 ///
-/// fn main() -> int {
+/// fn main() -> i32 {
 ///     http_listen(8080, root);
 ///     return 0;
 /// }
@@ -1064,7 +1064,7 @@ fn _write_response_tls(s: *TlsStream, resp: *HttpResponse, keep: bool) {
 ///     return HttpResponse::ok().body("hello over TLS!");
 /// }
 ///
-/// fn main() -> int {
+/// fn main() -> i32 {
 ///     https_listen(8443, "cert.pem", "key.pem", root);
 ///     return 0;
 /// }
@@ -1125,7 +1125,7 @@ fn _handle_tls_dispatch(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse
 ///     return HttpResponse::ok().body("hello, ".concat(req.path));
 /// }
 ///
-/// fn main() -> int {
+/// fn main() -> i32 {
 ///     http_listen_workers(8080, 4, root);
 ///     return 0;
 /// }
@@ -1250,7 +1250,7 @@ pub fn http_listen_sm_hello_workers(port: i32, n: i32) -> !i32 {
 ///     return "hello\n";
 /// }
 ///
-/// fn main() -> int {
+/// fn main() -> i32 {
 ///     http_listen_sm_workers(8080, 4, hello);
 ///     return 0;
 /// }

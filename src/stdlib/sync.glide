@@ -8,7 +8,7 @@
 // import stdlib::sync::*;
 //
 // // Mutex — guarded mutable state.
-// let m: *Mutex<int> = Mutex::new(0);
+// let m: *Mutex<i32> = Mutex::new(0);
 // defer m.free();
 // m.lock(); m.set(m.get() + 1); m.unlock();
 //
@@ -16,13 +16,13 @@
 // let a: *Atomic = Atomic::new(0);
 // defer a.free();
 // a.add(1);                  // returns previous value
-// let v: int = a.load();
+// let v: i32 = a.load();
 //
 // // WaitGroup — block until N coros finish.
 // let wg: *WaitGroup = WaitGroup::new();
 // defer wg.free();
 // wg.add(3);
-// for let i: int = 0; i < 3; i++ { spawn worker(wg); }
+// for let i: i32 = 0; i < 3; i++ { spawn worker(wg); }
 // wg.wait();
 // ```
 //
@@ -158,7 +158,7 @@ impl<T> Mutex<T> {
     /// Build a fresh mutex wrapping `initial`. The mutex starts unlocked.
     ///
     /// ```glide
-    /// let m: *Mutex<int> = Mutex::new(0);
+    /// let m: *Mutex<i32> = Mutex::new(0);
     /// defer m.free();
     /// ```
     pub fn new(initial: T) -> *Mutex<T> {
@@ -190,7 +190,7 @@ impl<T> Mutex<T> {
     ///
     /// ```glide
     /// m.lock();
-    /// let v: int = m.get();
+    /// let v: i32 = m.get();
     /// m.unlock();
     /// ```
     pub fn get(self: *Mutex<T>) -> T { return self.inner; }
@@ -210,8 +210,8 @@ impl<T> Mutex<T> {
     /// support unwinding yet, so this currently means a normal return).
     ///
     /// ```glide
-    /// fn bump(p: *int) -> int { *p = *p + 1; return *p; }
-    /// let after: int = m.with(bump);
+    /// fn bump(p: *i32) -> i32 { *p = *p + 1; return *p; }
+    /// let after: i32 = m.with(bump);
     /// ```
     pub fn with<U>(self: *Mutex<T>, f: fn(*T) -> U) -> U {
         __glide_mutex_lock(self.handle);
@@ -224,7 +224,7 @@ impl<T> Mutex<T> {
     /// pointer is dangling after this call. Pair with `defer`.
     ///
     /// ```glide
-    /// let m: *Mutex<int> = Mutex::new(0);
+    /// let m: *Mutex<i32> = Mutex::new(0);
     /// defer m.free();
     /// ```
     pub fn free(self: *Mutex<T>) {
@@ -323,7 +323,7 @@ impl WaitGroup {
     /// let wg: *WaitGroup = WaitGroup::new();
     /// defer wg.free();
     /// wg.add(3);
-    /// for let i: int = 0; i < 3; i++ { spawn worker(wg); }
+    /// for let i: i32 = 0; i < 3; i++ { spawn worker(wg); }
     /// wg.wait();
     /// ```
     pub fn new() -> *WaitGroup {

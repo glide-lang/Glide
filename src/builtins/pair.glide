@@ -3,8 +3,8 @@
 /// need to return two things use this struct.
 ///
 /// ```glide
-/// fn divmod(a: int, b: int) -> *Pair<int, int> {
-///     let p: *Pair<int, int> = malloc(sizeof(Pair<int, int>)) as *Pair<int, int>;
+/// fn divmod(a: i32, b: i32) -> *Pair<i32, i32> {
+///     let p: *Pair<i32, i32> = malloc(sizeof(Pair<i32, i32>)) as *Pair<i32, i32>;
 ///     p.first = a / b;
 ///     p.second = a % b;
 ///     return p;
@@ -23,7 +23,7 @@ impl<K, V> Pair<K, V> {
     /// Build a heap-allocated Pair. Caller owns the result.
     ///
     /// ```glide
-    /// let p: *Pair<int, string> = Pair::new(42, "answer");
+    /// let p: *Pair<i32, string> = Pair::new(42, "answer");
     /// p.first;     // 42
     /// p.second;    // "answer"
     /// ```

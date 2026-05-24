@@ -638,7 +638,7 @@ pub fn os_pid() -> i32 { return __glide_pid(); }
 /// `Err("ppid not available")` because the API doesn't expose it cheaply.
 ///
 /// ```glide
-/// let r: !int = os_ppid();
+/// let r: !i32 = os_ppid();
 /// if r.ok { println!("parent:", r.val); }
 /// ```
 pub fn os_ppid() -> !i32 {
@@ -650,7 +650,7 @@ pub fn os_ppid() -> !i32 {
 /// POSIX user ID. `Err` on Windows (no numeric UID concept).
 ///
 /// ```glide
-/// let u: !int = os_uid();
+/// let u: !i32 = os_uid();
 /// if u.ok && u.val == 0 { println!("running as root"); }
 /// ```
 pub fn os_uid() -> !i32 {
@@ -662,7 +662,7 @@ pub fn os_uid() -> !i32 {
 /// POSIX group ID. `Err` on Windows.
 ///
 /// ```glide
-/// let g: !int = os_gid();
+/// let g: !i32 = os_gid();
 /// if g.ok { println!("gid:", g.val); }
 /// ```
 pub fn os_gid() -> !i32 {
@@ -769,7 +769,7 @@ pub fn os_exe_dir() -> !string {
 /// Number of logical CPUs available to the process.
 ///
 /// ```glide
-/// let r: !int = os_cpu_count();
+/// let r: !i32 = os_cpu_count();
 /// if r.ok { println!(r.val, "threads"); }
 /// ```
 pub fn os_cpu_count() -> !i32 {
@@ -782,7 +782,7 @@ pub fn os_cpu_count() -> !i32 {
 /// platform doesn't expose a clean count (e.g. some Linux containers).
 ///
 /// ```glide
-/// let r: !int = os_cpu_count_physical();
+/// let r: !i32 = os_cpu_count_physical();
 /// if r.ok { println!(r.val, "physical cores"); }
 /// ```
 pub fn os_cpu_count_physical() -> !i32 {
@@ -795,7 +795,7 @@ pub fn os_cpu_count_physical() -> !i32 {
 /// Apple Silicon and some ARM Linux.
 ///
 /// ```glide
-/// let r: !int = os_page_size();
+/// let r: !i32 = os_page_size();
 /// if r.ok { println!("page:", r.val, "bytes"); }
 /// ```
 pub fn os_page_size() -> !i32 {
@@ -808,7 +808,7 @@ pub fn os_page_size() -> !i32 {
 ///
 /// ```glide
 /// let r: !u64 = os_memory_total();
-/// if r.ok { println!("RAM:", (r.val / 1024 / 1024) as int, "MiB"); }
+/// if r.ok { println!("RAM:", (r.val / 1024 / 1024) as i32, "MiB"); }
 /// ```
 pub fn os_memory_total() -> !u64 {
     let n: u64 = __glide_memory_total();
@@ -821,7 +821,7 @@ pub fn os_memory_total() -> !u64 {
 ///
 /// ```glide
 /// let r: !u64 = os_memory_free();
-/// if r.ok { println!("free:", (r.val / 1024 / 1024) as int, "MiB"); }
+/// if r.ok { println!("free:", (r.val / 1024 / 1024) as i32, "MiB"); }
 /// ```
 pub fn os_memory_free() -> !u64 {
     let n: u64 = __glide_memory_free();
@@ -956,7 +956,7 @@ pub fn os_is_tty(fd: i32) -> bool { return __glide_is_tty(fd) != 0; }
 /// a 1-liner convenience for trivial cases (`os_shell("ls -la > out")`).
 ///
 /// ```glide
-/// let r: !int = os_shell("ls -la");
+/// let r: !i32 = os_shell("ls -la");
 /// if r.ok { println!("exited", r.val); }
 /// ```
 pub fn os_shell(cmd: string) -> !i32 {

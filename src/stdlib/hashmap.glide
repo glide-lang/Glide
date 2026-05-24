@@ -7,7 +7,7 @@
 /// All operations except `resize` are amortised O(1). Resize is O(n).
 ///
 /// ```glide
-/// let m: *HashMap<int> = HashMap::new();
+/// let m: *HashMap<i32> = HashMap::new();
 /// defer m.free();
 ///
 /// m.insert("one", 1);
@@ -41,7 +41,7 @@ impl<V> HashMap<V> {
     /// Create an empty map with no allocation. The first `insert` allocates.
     ///
     /// ```glide
-    /// let m: *HashMap<int> = HashMap::new();
+    /// let m: *HashMap<i32> = HashMap::new();
     /// defer m.free();
     /// ```
     fn new() -> *HashMap<V> {
@@ -64,7 +64,7 @@ impl<V> HashMap<V> {
     /// Number of live entries currently held.
     ///
     /// ```glide
-    /// let m: *HashMap<int> = HashMap::new();  defer m.free();
+    /// let m: *HashMap<i32> = HashMap::new();  defer m.free();
     /// m.insert("a", 1);
     /// m.insert("b", 2);
     /// m.len();   // 2
@@ -75,7 +75,7 @@ impl<V> HashMap<V> {
     /// for diagnostics; most callers want `len()` instead.
     ///
     /// ```glide
-    /// let m: *HashMap<int> = HashMap::new();
+    /// let m: *HashMap<i32> = HashMap::new();
     /// m.cap();              // 0   (no allocation yet)
     /// m.insert("a", 1);
     /// m.cap();              // 8   (initial table size)
@@ -123,7 +123,7 @@ impl<V> HashMap<V> {
     ///
     /// ```glide
     /// if m.contains("count") {
-    ///     let n: int = m.get("count");
+    ///     let n: i32 = m.get("count");
     /// }
     /// ```
     fn get(self: *HashMap<V>, k: string) -> V {
@@ -231,7 +231,7 @@ impl<V> HashMap<V> {
     /// `true` when the map holds zero entries.
     ///
     /// ```glide
-    /// let m: *HashMap<int> = HashMap::new();
+    /// let m: *HashMap<i32> = HashMap::new();
     /// m.is_empty();          // true
     /// m.insert("a", 1);
     /// m.is_empty();          // false
@@ -245,7 +245,7 @@ impl<V> HashMap<V> {
     /// ```glide
     /// m.insert("a", 1); m.insert("b", 2);
     /// let ks: *Vector<string> = m.keys();
-    /// for let i: int = 0; i < ks.len(); i++ { println!(ks.get(i)); }
+    /// for let i: i32 = 0; i < ks.len(); i++ { println!(ks.get(i)); }
     /// ```
     fn keys(self: *HashMap<V>) -> *Vector<string> {
         let out: *Vector<string> = Vector::new();
@@ -261,7 +261,7 @@ impl<V> HashMap<V> {
     ///
     /// ```glide
     /// m.insert("a", 1); m.insert("b", 2);
-    /// let vs: *Vector<int> = m.values();
+    /// let vs: *Vector<i32> = m.values();
     /// vs.sum();    // 3
     /// ```
     fn values(self: *HashMap<V>) -> *Vector<V> {
@@ -276,9 +276,9 @@ impl<V> HashMap<V> {
     /// keys and the transformed values. The original map is unchanged.
     ///
     /// ```glide
-    /// fn square(x: int) -> int { return x * x; }
+    /// fn square(x: i32) -> i32 { return x * x; }
     /// m.insert("a", 2); m.insert("b", 3);
-    /// let m2: *HashMap<int> = m.map_values(square);
+    /// let m2: *HashMap<i32> = m.map_values(square);
     /// m2.get("b");   // 9
     /// ```
     fn map_values<U>(self: *HashMap<V>, f: fn(V) -> U) -> *HashMap<U> {
@@ -298,9 +298,9 @@ impl<V> HashMap<V> {
     ///
     /// ```glide
     /// m.insert("a", 1); m.insert("b", 2);
-    /// let es: *Vector<*Pair<string, int>> = m.entries();
-    /// for let i: int = 0; i < es.len(); i++ {
-    ///     let p: *Pair<string, int> = es.get(i);
+    /// let es: *Vector<*Pair<string, i32>> = m.entries();
+    /// for let i: i32 = 0; i < es.len(); i++ {
+    ///     let p: *Pair<string, i32> = es.get(i);
     ///     println!(p.first, "->", p.second);
     /// }
     /// ```
@@ -336,7 +336,7 @@ impl<V> HashMap<V> {
     /// Pair with `defer` so leaks are impossible:
     ///
     /// ```glide
-    /// let m: *HashMap<int> = HashMap::new();
+    /// let m: *HashMap<i32> = HashMap::new();
     /// defer m.free();
     /// ```
     fn free(self: *HashMap<V>) {

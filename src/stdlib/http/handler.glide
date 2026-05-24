@@ -34,7 +34,7 @@ import bootstrap::interp::*;
 ///
 /// ```glide
 /// @handler
-/// fn show(id: Path<int>) -> Json<User> {
+/// fn show(id: Path<i32>) -> Json<User> {
 ///     return Json::wrap(load_user(id.val));
 /// }
 /// r.get("/users/:id", show);

@@ -313,7 +313,7 @@ impl HpackDecoder {
     /// let dec: *HpackDecoder = HpackDecoder::new();
     /// let r: !*Vector<*HpackHeader> = dec.decode_block(payload, payload.len());
     /// if r.ok {
-    ///     for let i: int = 0; i < r.val.len(); i++ {
+    ///     for let i: i32 = 0; i < r.val.len(); i++ {
     ///         let h: *HpackHeader = r.val.get(i);
     ///         println!(h.name, ":", h.value);
     ///     }
@@ -339,7 +339,7 @@ impl HpackDecoder {
     /// ```glide
     /// let r: !*Vector<*HpackHeader> = dec.decode_block(payload, payload.len());
     /// if r.ok {
-    ///     for let i: int = 0; i < r.val.len(); i++ {
+    ///     for let i: i32 = 0; i < r.val.len(); i++ {
     ///         let h: *HpackHeader = r.val.get(i);
     ///         if h.name.eq(":status") { println!("status:", h.value); }
     ///     }

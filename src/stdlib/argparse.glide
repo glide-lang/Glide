@@ -4,20 +4,20 @@
 // ```glide
 // import stdlib::argparse::*;
 //
-// fn main() -> int {
+// fn main() -> i32 {
 //     let p: *ArgParser = ArgParser::new("greet", "Say hello to someone");
 //     defer p.free();
 //     p.add_string("name", "n", "world", "who to greet");
 //     p.add_int   ("count", "c", 1,       "number of greetings");
 //     p.add_bool  ("verbose", "v", false, "extra output");
 //
-//     let r: !int = p.parse_argv();
+//     let r: !i32 = p.parse_argv();
 //     if !r.ok { println!("error: ${r.msg}"); return 2; }
 //     if p.help_requested() { p.print_help(); return 0; }
 //
 //     let who: string = p.get_string("name");
-//     let n:   int    = p.get_int("count");
-//     for let i: int = 0; i < n; i++ { println!("hello, ${who}!"); }
+//     let n:   i32    = p.get_int("count");
+//     for let i: i32 = 0; i < n; i++ { println!("hello, ${who}!"); }
 //     return 0;
 // }
 // ```
@@ -159,7 +159,7 @@ impl ArgParser {
     /// Read a parsed int flag.
     ///
     /// ```glide
-    /// let n: int = p.get_int("count");
+    /// let n: i32 = p.get_int("count");
     /// ```
     pub fn get_int(self: *ArgParser, long: string) -> i32 {
         return self.int_flags.get(long).value;
@@ -179,7 +179,7 @@ impl ArgParser {
     ///
     /// ```glide
     /// let files: *Vector<string> = p.positional();
-    /// for let i: int = 0; i < files.len(); i++ { fs_read(files.get(i)); }
+    /// for let i: i32 = 0; i < files.len(); i++ { fs_read(files.get(i)); }
     /// ```
     pub fn positional(self: *ArgParser) -> *Vector<string> {
         return self.positional;
@@ -227,7 +227,7 @@ impl ArgParser {
     /// success or `err(message)` on the first malformed token.
     ///
     /// ```glide
-    /// let r: !int = p.parse_argv();
+    /// let r: !i32 = p.parse_argv();
     /// if !r.ok { eprintln(r.err); env_exit(2); }
     /// ```
     pub fn parse_argv(self: *ArgParser) -> !i32 {

@@ -58,8 +58,8 @@ impl Bencher {
     ///
     /// ```glide
     /// pub fn bench_sum(b: *Bencher) {
-    ///     let mut total: int = 0;
-    ///     for let i: int = 0; i < b.n; i++ { total = total + i; }
+    ///     let mut total: i32 = 0;
+    ///     for let i: i32 = 0; i < b.n; i++ { total = total + i; }
     ///     b.consume(&total);   // keep `total` alive
     /// }
     /// ```

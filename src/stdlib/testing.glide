@@ -9,13 +9,13 @@
 // ```glide
 // import stdlib::testing::*;
 //
-// fn test_addition() -> int {
+// fn test_addition() -> i32 {
 //     assert_eq!(2 + 2, 4);
 //     assert!(true);
 //     return 0;
 // }
 //
-// fn test_string() -> int {
+// fn test_string() -> i32 {
 //     assert_str_eq!("foo".concat("bar"), "foobar");
 //     return 0;
 // }
@@ -77,7 +77,7 @@ pub macro assert!($cond:expr) {
 /// regular string expression, so string interpolation works:
 ///
 /// ```glide
-/// let n: int = compute();
+/// let n: i32 = compute();
 /// assert_msg!(n > 0, "expected positive, got ${n}");
 /// ```
 pub macro assert_msg!($cond:expr, $msg:expr) {

@@ -117,7 +117,7 @@ impl Conn {
     ///
     /// ```glide
     /// let buf: *u8 = malloc(1024) as *u8;
-    /// let n: int = c.read(buf as *void, 1024);
+    /// let n: i32 = c.read(buf as *void, 1024);
     /// if n <= 0 { c.close(); return; }
     /// ```
     pub fn read(self: *Conn, buf: *void, max: i32) -> i32 {
@@ -129,9 +129,9 @@ impl Conn {
     /// buffer.
     ///
     /// ```glide
-    /// let mut sent: int = 0;
+    /// let mut sent: i32 = 0;
     /// while sent < n {
-    ///     let k: int = c.write(buf as *void, n - sent);
+    ///     let k: i32 = c.write(buf as *void, n - sent);
     ///     if k <= 0 { break; }
     ///     sent = sent + k;
     /// }

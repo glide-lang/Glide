@@ -194,7 +194,7 @@ impl TcpStream {
     /// byte is sent.
     ///
     /// ```glide
-    /// let r: !int = stream.write("hi");
+    /// let r: !i32 = stream.write("hi");
     /// if r.ok { println!("wrote", r.val, "bytes"); }
     /// ```
     pub fn write(self: *TcpStream, data: string) -> !i32 {

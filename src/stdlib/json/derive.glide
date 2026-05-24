@@ -21,7 +21,7 @@
 // @derive(JsonBind)
 // pub struct Pet {
 //     pub name: string,
-//     pub age:  int,
+//     pub age:  i32,
 //     pub tag:  ?string,
 // }
 //
@@ -40,7 +40,7 @@ import bootstrap::interp::*;
 /// @derive(JsonBind)
 /// pub struct User {
 ///     pub name:  string,
-///     pub age:   ?int,    // optional field — missing in JSON -> none()
+///     pub age:   ?i32,    // optional field — missing in JSON -> none()
 ///     pub admin: bool,
 /// }
 /// // User now has User::from_json(v) and user.to_json(), so

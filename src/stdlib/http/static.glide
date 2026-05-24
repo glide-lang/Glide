@@ -18,7 +18,7 @@
 // import stdlib::http::router::*;
 // import stdlib::http::static::*;
 //
-// fn main() -> int {
+// fn main() -> i32 {
 //     let r: *Router = Router::new();
 //     serve_dir(r, StaticOpts {
 //         root:          "./public",

@@ -125,14 +125,14 @@ pub const E:  f64 = 2.718281828459045;
 /// Smaller of two ints.
 ///
 /// ```glide
-/// let a: int = min_int(7, 3);   // 3
+/// let a: i32 = min_int(7, 3);   // 3
 /// ```
 pub fn min_int(a: i32, b: i32) -> i32 { if a < b { return a; } return b; }
 
 /// Larger of two ints.
 ///
 /// ```glide
-/// let a: int = max_int(7, 3);   // 7
+/// let a: i32 = max_int(7, 3);   // 7
 /// ```
 pub fn max_int(a: i32, b: i32) -> i32 { if a > b { return a; } return b; }
 

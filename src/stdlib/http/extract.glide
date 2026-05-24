@@ -277,7 +277,7 @@ impl FromPath for bool {
 /// ```glide
 /// // route /users/:id
 /// @handler
-/// fn get_user(id: Path<int>) -> HttpResponse {
+/// fn get_user(id: Path<i32>) -> HttpResponse {
 ///     return HttpResponse::ok().text("user #".concat(id.val.to_string()));
 /// }
 /// ```
@@ -306,7 +306,7 @@ impl<T: FromPath> Path<T> {
 /// ```glide
 /// // GET /search?page=2&q=glide
 /// @handler
-/// fn search(page: Query<int>, q: Query<string>) -> HttpResponse {
+/// fn search(page: Query<i32>, q: Query<string>) -> HttpResponse {
 ///     return HttpResponse::ok().text(
 ///         "page=".concat(page.val.to_string()).concat(" q=").concat(q.val));
 /// }

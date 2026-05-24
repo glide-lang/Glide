@@ -10,7 +10,7 @@
 // let p: *Pop3Session = s.val;
 // p.login("alice", "secret");
 // let lst: *Vector<*Pop3MsgInfo> = p.list().val;
-// for let i: int = 0; i < lst.len(); i++ {
+// for let i: i32 = 0; i < lst.len(); i++ {
 //     let raw: !string = p.retrieve(lst.get(i).idx);
 //     if raw.ok { println!(raw.val); }
 // }
@@ -80,7 +80,7 @@ impl Pop3Session {
     /// only via this path (basic auth, no AUTH PLAIN ceremony).
     ///
     /// ```glide
-    /// let r: !int = session.login("me@example.com", "app-password");
+    /// let r: !i32 = session.login("me@example.com", "app-password");
     /// if !r.ok { eprintln(r.err); }
     /// ```
     pub fn login(self: *Pop3Session, user: string, pass: string) -> !i32 {
@@ -118,7 +118,7 @@ impl Pop3Session {
     /// ```glide
     /// let r: !*Vector<*Pop3MsgInfo> = session.list();
     /// if r.ok {
-    ///     for let i: int = 0; i < r.val.len(); i++ {
+    ///     for let i: i32 = 0; i < r.val.len(); i++ {
     ///         let m: *Pop3MsgInfo = r.val.get(i);
     ///         println!("#", m.idx, "size", m.size);
     ///     }

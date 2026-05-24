@@ -11,7 +11,7 @@
 //
 // let r: !*Vector<*IpAddr> = resolve("example.com");
 // if r.ok {
-//     for let i: int = 0; i < r.val.len(); i++ {
+//     for let i: i32 = 0; i < r.val.len(); i++ {
 //         println!(r.val.get(i).to_string());
 //     }
 // }
@@ -155,7 +155,7 @@ extern fn __glide_dns_free(r: *void);
 /// ```glide
 /// let r: !*Vector<*IpAddr> = resolve("example.com");
 /// if r.ok {
-///     for let i: int = 0; i < r.val.len(); i++ {
+///     for let i: i32 = 0; i < r.val.len(); i++ {
 ///         println!(r.val.get(i).to_string());
 ///     }
 /// }

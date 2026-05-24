@@ -17,7 +17,7 @@
 // m.to.push("bob@example.com");
 // m.subject = "ping";
 // m.body = "hi";
-// let r: !int = c.send(m);
+// let r: !i32 = c.send(m);
 // ```
 
 import stdlib::net::tcp::*;
@@ -82,7 +82,7 @@ impl SmtpClient {
     /// let m: *Mail = Mail::new();
     /// m.from = "me@x.com"; m.to.push("you@y.com");
     /// m.subject = "hi"; m.body = "hello";
-    /// let r: !int = c.send(m);
+    /// let r: !i32 = c.send(m);
     /// if !r.ok { eprintln(r.err); }
     /// ```
     pub fn send(self: *SmtpClient, mail: *Mail) -> !i32 {
@@ -102,7 +102,7 @@ impl SmtpClient {
     /// ```glide
     /// let r: !*SmtpSession = c.connect();
     /// if r.ok {
-    ///     for let i: int = 0; i < msgs.len(); i++ {
+    ///     for let i: i32 = 0; i < msgs.len(); i++ {
     ///         r.val.send_mail(msgs.get(i));
     ///     }
     ///     r.val.quit();
@@ -198,7 +198,7 @@ impl SmtpSession {
     /// a human-readable status code.
     ///
     /// ```glide
-    /// let r: !int = session.send_mail(mail);
+    /// let r: !i32 = session.send_mail(mail);
     /// if r.ok { println!("delivered"); }
     /// ```
     pub fn send_mail(self: *SmtpSession, mail: *Mail) -> !i32 {
