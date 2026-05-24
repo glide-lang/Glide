@@ -2093,16 +2093,29 @@ fn module_path_from_path(path: string) -> string {
         let tail: string = s.substring(n - 6, n);
         if tail.eq(".glide") { s = s.substring(0, n - 6); }
     }
+    // Strip everything up to and including the LAST `src/` (or `src\`)
+    // segment. A leading-only strip breaks on the installed layout, where
+    // the path is absolute (`C:\…\.glide\bin\src\stdlib\log.glide`) and
+    // `src` sits mid-path — then the module would come out as
+    // `C:::…::bin::src::stdlib::log` instead of `stdlib::log`, and the
+    // typer's `module_full_paths` lookup for a fully-qualified call like
+    // `stdlib::log::info(...)` (emitted by the log macros) would miss,
+    // making it early-out before type-checking the call's arguments.
     let len0: int = s.len();
-    if len0 >= 4 {
-        let c0: int = s.at(0).to_int();
-        let c1: int = s.at(1).to_int();
-        let c2: int = s.at(2).to_int();
-        let c3: int = s.at(3).to_int();
-        if c0 == 115 && c1 == 114 && c2 == 99 && (c3 == 47 || c3 == 92) {
-            s = s.substring(4, len0);
+    let mut cut: int = -1;
+    let mut k: int = 0;
+    while k + 3 < len0 {
+        if s.at(k).to_int() == 115 && s.at(k + 1).to_int() == 114
+           && s.at(k + 2).to_int() == 99 {
+            let after: int = s.at(k + 3).to_int();
+            let before_ok: bool = k == 0 || s.at(k - 1).to_int() == 47 || s.at(k - 1).to_int() == 92;
+            if before_ok && (after == 47 || after == 92) {
+                cut = k + 4;
+            }
         }
+        k = k + 1;
     }
+    if cut >= 0 { s = s.substring(cut, len0); }
     let mut out: string = "";
     let mut i: int = 0;
     let len: int = s.len();
