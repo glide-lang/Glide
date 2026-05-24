@@ -13,7 +13,7 @@ import stdlib::http::sse::*;
 
 pub struct StaticChunks {
     pub items: *Vector<string>,
-    pub idx:   int,
+    pub idx:   i32,
 }
 
 impl ChunkSource for StaticChunks {
@@ -34,25 +34,25 @@ fn _src(parts: *Vector<string>) -> *StaticChunks {
 
 // ---- sse_format ------------------------------------------------------
 
-fn test_sse_format_data_only() -> int {
+fn test_sse_format_data_only() -> i32 {
     let e: SseEvent = SseEvent { event: "", data: "hi", id: "" };
     assert_str_eq!(sse_format(e), "data: hi\n\n");
     return 0;
 }
 
-fn test_sse_format_with_event() -> int {
+fn test_sse_format_with_event() -> i32 {
     let e: SseEvent = SseEvent { event: "tick", data: "1", id: "" };
     assert_str_eq!(sse_format(e), "event: tick\ndata: 1\n\n");
     return 0;
 }
 
-fn test_sse_format_with_id() -> int {
+fn test_sse_format_with_id() -> i32 {
     let e: SseEvent = SseEvent { event: "tick", data: "x", id: "42" };
     assert_str_eq!(sse_format(e), "event: tick\nid: 42\ndata: x\n\n");
     return 0;
 }
 
-fn test_sse_format_multiline_data() -> int {
+fn test_sse_format_multiline_data() -> i32 {
     let e: SseEvent = SseEvent { event: "", data: "line1\nline2", id: "" };
     assert_str_eq!(sse_format(e), "data: line1\ndata: line2\n\n");
     return 0;
@@ -60,7 +60,7 @@ fn test_sse_format_multiline_data() -> int {
 
 // ---- ChunkSource trait walk -----------------------------------------
 
-fn test_chunk_source_walks_to_none() -> int {
+fn test_chunk_source_walks_to_none() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push("a"); v.push("bb"); v.push("ccc");
     let src: *StaticChunks = _src(v);
@@ -73,7 +73,7 @@ fn test_chunk_source_walks_to_none() -> int {
 
 // ---- HttpResponse.stream() builder ----------------------------------
 
-fn test_stream_builder_sets_src_clears_body() -> int {
+fn test_stream_builder_sets_src_clears_body() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push("hello");
     let src: *StaticChunks = _src(v);
@@ -84,13 +84,13 @@ fn test_stream_builder_sets_src_clears_body() -> int {
     return 0;
 }
 
-fn test_default_response_has_null_stream_src() -> int {
+fn test_default_response_has_null_stream_src() -> i32 {
     let r: HttpResponse = HttpResponse::ok().body("plain");
     assert!(r.stream_src == null);
     return 0;
 }
 
-fn test_sse_response_stamps_content_type() -> int {
+fn test_sse_response_stamps_content_type() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push(sse_format(SseEvent { event: "", data: "x", id: "" }));
     let src: *StaticChunks = _src(v);

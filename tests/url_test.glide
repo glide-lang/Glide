@@ -1,53 +1,53 @@
 import stdlib::testing::*;
 import stdlib::url::*;
 
-fn test_encode_space() -> int {
+fn test_encode_space() -> i32 {
     assert_str_eq!(url_encode("hello world"), "hello%20world");
     return 0;
 }
 
-fn test_encode_reserved() -> int {
+fn test_encode_reserved() -> i32 {
     assert_str_eq!(url_encode("a/b?c=d&e=f"), "a%2Fb%3Fc%3Dd%26e%3Df");
     return 0;
 }
 
-fn test_encode_unreserved() -> int {
+fn test_encode_unreserved() -> i32 {
     assert_str_eq!(url_encode("test_~-."), "test_~-.");
     return 0;
 }
 
-fn test_encode_utf8() -> int {
+fn test_encode_utf8() -> i32 {
     assert_str_eq!(url_encode("héllo"), "h%C3%A9llo");
     return 0;
 }
 
-fn test_decode_lowercase_hex_utf8() -> int {
+fn test_decode_lowercase_hex_utf8() -> i32 {
     let r: !string = url_decode("%c3%a9");
     assert!(r.ok);
     assert_str_eq!(r.val, "é");
     return 0;
 }
 
-fn test_decode_keeps_plus_literal() -> int {
+fn test_decode_keeps_plus_literal() -> i32 {
     let r: !string = url_decode("a+b");
     assert!(r.ok);
     assert_str_eq!(r.val, "a+b");
     return 0;
 }
 
-fn test_decode_rejects_non_hex() -> int {
+fn test_decode_rejects_non_hex() -> i32 {
     let r: !string = url_decode("%X");
     assert!(!r.ok);
     return 0;
 }
 
-fn test_decode_rejects_short_escape() -> int {
+fn test_decode_rejects_short_escape() -> i32 {
     let r: !string = url_decode("%2");
     assert!(!r.ok);
     return 0;
 }
 
-fn test_round_trip_mixed() -> int {
+fn test_round_trip_mixed() -> i32 {
     let src: string = "azAZ09-_.~/?:#[]@!$&'()*+,;= hé";
     let encoded: string = url_encode(src);
     let decoded: !string = url_decode(encoded);

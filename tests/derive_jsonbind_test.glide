@@ -6,7 +6,7 @@ import stdlib::json::derive::*;
 @derive(JsonBind)
 pub struct Pet {
     pub name: string,
-    pub age:  int,
+    pub age:  i32,
     pub good: bool,
 }
 
@@ -14,7 +14,7 @@ pub struct Pet {
 @derive(JsonBind)
 pub struct Profile {
     pub user: string,
-    pub age:  ?int,
+    pub age:  ?i32,
     pub bio:  ?string,
 }
 
@@ -27,7 +27,7 @@ pub struct Reading {
 
 // ---- round-trip ------------------------------------------------------
 
-fn test_pet_to_from_json() -> int {
+fn test_pet_to_from_json() -> i32 {
     let p: Pet = Pet { name: "rex", age: 4, good: true };
     let v: *JsonValue = p.to_json();
     let s: string = v.emit();
@@ -43,7 +43,7 @@ fn test_pet_to_from_json() -> int {
     return 0;
 }
 
-fn test_reading_float_round_trip() -> int {
+fn test_reading_float_round_trip() -> i32 {
     let r0: Reading = Reading { label: "temp", value: 21.5 };
     let s: string = r0.to_json().emit();
     let parsed: *JsonValue = JsonValue::parse(s);
@@ -55,14 +55,14 @@ fn test_reading_float_round_trip() -> int {
 
 // ---- error paths ----------------------------------------------------
 
-fn test_missing_required_field_errors() -> int {
+fn test_missing_required_field_errors() -> i32 {
     let v: *JsonValue = JsonValue::parse("{\"name\":\"rex\"}");
     let r: !Pet = Pet::from_json(v);
     assert_not!(r.ok);
     return 0;
 }
 
-fn test_wrong_type_errors() -> int {
+fn test_wrong_type_errors() -> i32 {
     let v: *JsonValue = JsonValue::parse("{\"name\":\"rex\",\"age\":\"four\",\"good\":true}");
     let r: !Pet = Pet::from_json(v);
     assert_not!(r.ok);
@@ -71,7 +71,7 @@ fn test_wrong_type_errors() -> int {
 
 // ---- optional fields -------------------------------------------------
 
-fn test_optional_present() -> int {
+fn test_optional_present() -> i32 {
     let v: *JsonValue = JsonValue::parse("{\"user\":\"alice\",\"age\":30,\"bio\":\"hi\"}");
     let r: !Profile = Profile::from_json(v);
     assert!(r.ok);
@@ -83,7 +83,7 @@ fn test_optional_present() -> int {
     return 0;
 }
 
-fn test_optional_absent() -> int {
+fn test_optional_absent() -> i32 {
     let v: *JsonValue = JsonValue::parse("{\"user\":\"bob\"}");
     let r: !Profile = Profile::from_json(v);
     assert!(r.ok);
@@ -93,8 +93,8 @@ fn test_optional_absent() -> int {
     return 0;
 }
 
-fn test_optional_emit_omits_absent_fields() -> int {
-    let i: ?int = none();
+fn test_optional_emit_omits_absent_fields() -> i32 {
+    let i: ?i32 = none();
     let b: ?string = none();
     let p: Profile = Profile { user: "carol", age: i, bio: b };
     let s: string = p.to_json().emit();
@@ -102,8 +102,8 @@ fn test_optional_emit_omits_absent_fields() -> int {
     return 0;
 }
 
-fn test_optional_emit_includes_present_fields() -> int {
-    let i: ?int = some(7);
+fn test_optional_emit_includes_present_fields() -> i32 {
+    let i: ?i32 = some(7);
     let b: ?string = none();
     let p: Profile = Profile { user: "dan", age: i, bio: b };
     let s: string = p.to_json().emit();

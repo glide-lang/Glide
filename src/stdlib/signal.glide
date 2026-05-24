@@ -37,7 +37,7 @@ pub enum Signal {
     Usr2,       // SIGUSR2 = 12
     Pipe,       // SIGPIPE = 13
     Term,       // SIGTERM = 15
-    Other(int), // qualquer signum não listado acima
+    Other(i32), // qualquer signum não listado acima
 }
 
 impl Signal {
@@ -48,7 +48,7 @@ impl Signal {
     /// Signal::Term.to_int();         // 15
     /// Signal::Other(42).to_int();    // 42
     /// ```
-    pub fn to_int(self: Signal) -> int {
+    pub fn to_int(self: Signal) -> i32 {
         match self {
             Hup     => { return 1; }
             Int     => { return 2; }
@@ -70,7 +70,7 @@ impl Signal {
     /// Signal::from_int(2);    // Signal::Int
     /// Signal::from_int(99);   // Signal::Other(99)
     /// ```
-    pub fn from_int(n: int) -> Signal {
+    pub fn from_int(n: i32) -> Signal {
         if n == 1  { return Signal::Hup; }
         if n == 2  { return Signal::Int; }
         if n == 3  { return Signal::Quit; }
@@ -108,14 +108,14 @@ impl Signal {
 // Internal helper called from the c_raw reader thread to push signum onto
 // the typed chan<Signal>. Defined Glide-side so c_raw doesn't need
 // Signal's private struct layout to construct the value.
-pub fn _signal_push(c: chan<Signal>, n: int) {
+pub fn _signal_push(c: chan<Signal>, n: i32) {
     c.send(Signal::from_int(n));
 }
 
-extern fn __glide_signal_chan(sig: int) -> chan<Signal>;
-extern fn __glide_signal_default(sig: int) -> int;
-extern fn __glide_signal_ignore(sig: int) -> int;
-extern fn __glide_signal_raise(sig: int) -> int;
+extern fn __glide_signal_chan(sig: i32) -> chan<Signal>;
+extern fn __glide_signal_default(sig: i32) -> i32;
+extern fn __glide_signal_ignore(sig: i32) -> i32;
+extern fn __glide_signal_raise(sig: i32) -> i32;
 
 c_raw! {
     #ifdef GLIDE_SIGNAL_VIA_CRAW

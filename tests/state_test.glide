@@ -8,7 +8,7 @@ import stdlib::http::extract::*;
 import stdlib::http::handler::*;
 
 // Tuple-struct syntax doubles as a smoke test for the new parser feature.
-struct Counter(value: int)
+struct Counter(value: i32)
 
 @handler
 fn read_count(state: State<Counter>) -> HttpResponse {
@@ -36,7 +36,7 @@ fn _empty_req() -> HttpRequest {
     };
 }
 
-fn test_state_handler_reads_value() -> int {
+fn test_state_handler_reads_value() -> i32 {
     let r: *Router = Router::new();
     let c: *Counter = malloc(sizeof(Counter)) as *Counter;
     c.value = 42;
@@ -49,7 +49,7 @@ fn test_state_handler_reads_value() -> int {
     return 0;
 }
 
-fn test_state_handler_returns_500_when_unset() -> int {
+fn test_state_handler_returns_500_when_unset() -> i32 {
     let r: *Router = Router::new();
     // Reset slot so this test can't see leftover state from earlier
     // tests in the same process.
@@ -60,7 +60,7 @@ fn test_state_handler_returns_500_when_unset() -> int {
     return 0;
 }
 
-fn test_state_chain_returns_router() -> int {
+fn test_state_chain_returns_router() -> i32 {
     let r: *Router = Router::new();
     let c: *Counter = malloc(sizeof(Counter)) as *Counter;
     c.value = 7;
@@ -69,7 +69,7 @@ fn test_state_chain_returns_router() -> int {
     return 0;
 }
 
-fn test_state_extract_directly() -> int {
+fn test_state_extract_directly() -> i32 {
     let r: *Router = Router::new();
     let c: *Counter = malloc(sizeof(Counter)) as *Counter;
     c.value = 99;

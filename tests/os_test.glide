@@ -1,51 +1,51 @@
 import stdlib::testing::*;
 import stdlib::os::*;
 
-fn test_os_name_is_supported() -> int {
+fn test_os_name_is_supported() -> i32 {
     let name: string = os_name();
     let ok: bool = name.eq("windows") || name.eq("linux") || name.eq("macos");
     assert_msg!(ok, "unexpected os_name: ${name}");
     return 0;
 }
 
-fn test_os_arch_is_non_empty() -> int {
+fn test_os_arch_is_non_empty() -> i32 {
     assert!(os_arch().len() > 0);
     return 0;
 }
 
-fn test_os_windows_and_posix_are_exclusive() -> int {
+fn test_os_windows_and_posix_are_exclusive() -> i32 {
     assert_not!(os_is_windows() && os_is_posix());
     assert!(os_is_windows() || os_is_posix());
     return 0;
 }
 
-fn test_os_path_sep_matches_platform() -> int {
+fn test_os_path_sep_matches_platform() -> i32 {
     let mut expected: string = "/";
     if os_is_windows() { expected = "\\"; }
     assert_str_eq!(os_path_sep(), expected);
     return 0;
 }
 
-fn test_os_path_list_sep_matches_platform() -> int {
+fn test_os_path_list_sep_matches_platform() -> i32 {
     let mut expected: string = ":";
     if os_is_windows() { expected = ";"; }
     assert_str_eq!(os_path_list_sep(), expected);
     return 0;
 }
 
-fn test_os_line_sep_matches_platform() -> int {
+fn test_os_line_sep_matches_platform() -> i32 {
     let mut expected: string = "\n";
     if os_is_windows() { expected = "\r\n"; }
     assert_str_eq!(os_line_sep(), expected);
     return 0;
 }
 
-fn test_os_is_linux_implies_is_posix() -> int {
+fn test_os_is_linux_implies_is_posix() -> i32 {
     if os_is_linux() { assert!(os_is_posix()); }
     return 0;
 }
 
-fn test_os_is_macos_implies_is_posix() -> int {
+fn test_os_is_macos_implies_is_posix() -> i32 {
     if os_is_macos() { assert!(os_is_posix()); }
     return 0;
 }

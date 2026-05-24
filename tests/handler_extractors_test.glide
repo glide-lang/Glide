@@ -33,7 +33,7 @@ fn protected(auth: Bearer) -> HttpResponse {
     return HttpResponse::ok().text("token=".concat(auth.token));
 }
 
-fn test_bearer_handler_ok() -> int {
+fn test_bearer_handler_ok() -> i32 {
     let req: HttpRequest = _get("Authorization: Bearer abc\r\n", _no_params());
     let r: HttpResponse = protected(&req);
     assert_eq!(r.status, 200);
@@ -41,7 +41,7 @@ fn test_bearer_handler_ok() -> int {
     return 0;
 }
 
-fn test_bearer_handler_missing_returns_401() -> int {
+fn test_bearer_handler_missing_returns_401() -> i32 {
     let req: HttpRequest = _get("", _no_params());
     let r: HttpResponse = protected(&req);
     assert_eq!(r.status, 401);
@@ -55,7 +55,7 @@ fn echo_user_agent(headers: Headers) -> HttpResponse {
     return HttpResponse::ok().text(headers.get("User-Agent"));
 }
 
-fn test_headers_handler_reads_value() -> int {
+fn test_headers_handler_reads_value() -> i32 {
     let req: HttpRequest = _get("User-Agent: glide-test\r\n", _no_params());
     let r: HttpResponse = echo_user_agent(&req);
     assert_eq!(r.status, 200);
@@ -70,7 +70,7 @@ fn login(creds: Authorization<Basic>) -> HttpResponse {
     return HttpResponse::ok().text(creds.scheme.user.concat(":").concat(creds.scheme.pass));
 }
 
-fn test_authorization_basic_handler() -> int {
+fn test_authorization_basic_handler() -> i32 {
     let req: HttpRequest = _get("Authorization: Basic alice:s3cret\r\n", _no_params());
     let r: HttpResponse = login(&req);
     assert_eq!(r.status, 200);
@@ -78,7 +78,7 @@ fn test_authorization_basic_handler() -> int {
     return 0;
 }
 
-fn test_authorization_handler_missing_returns_401() -> int {
+fn test_authorization_handler_missing_returns_401() -> i32 {
     let req: HttpRequest = _get("", _no_params());
     let r: HttpResponse = login(&req);
     assert_eq!(r.status, 401);
@@ -88,7 +88,7 @@ fn test_authorization_handler_missing_returns_401() -> int {
 // ---- Path<T> --------------------------------------------------------
 
 @handler
-fn show_id(id: Path<int>) -> HttpResponse {
+fn show_id(id: Path<i32>) -> HttpResponse {
     return HttpResponse::ok().text("id=".concat(id.val.to_string()));
 }
 
@@ -98,7 +98,7 @@ fn _with_param(k: string, v: string) -> HttpRequest {
     return _get("", p);
 }
 
-fn test_path_int_handler_ok() -> int {
+fn test_path_int_handler_ok() -> i32 {
     let req: HttpRequest = _with_param("id", "42");
     let r: HttpResponse = show_id(&req);
     assert_eq!(r.status, 200);
@@ -106,14 +106,14 @@ fn test_path_int_handler_ok() -> int {
     return 0;
 }
 
-fn test_path_int_handler_invalid_returns_400() -> int {
+fn test_path_int_handler_invalid_returns_400() -> i32 {
     let req: HttpRequest = _with_param("id", "notanint");
     let r: HttpResponse = show_id(&req);
     assert_eq!(r.status, 400);
     return 0;
 }
 
-fn test_path_missing_returns_404() -> int {
+fn test_path_missing_returns_404() -> i32 {
     let req: HttpRequest = _get("", _no_params());
     let r: HttpResponse = show_id(&req);
     assert_eq!(r.status, 404);
@@ -123,14 +123,14 @@ fn test_path_missing_returns_404() -> int {
 // ---- multiple extractors in one signature -------------------------
 
 @handler
-fn multi(auth: Bearer, id: Path<int>, headers: Headers) -> HttpResponse {
+fn multi(auth: Bearer, id: Path<i32>, headers: Headers) -> HttpResponse {
     return HttpResponse::ok().text(
         "auth=".concat(auth.token)
             .concat(" id=").concat(id.val.to_string())
             .concat(" ua=").concat(headers.get("User-Agent")));
 }
 
-fn test_multi_extractor_handler_ok() -> int {
+fn test_multi_extractor_handler_ok() -> i32 {
     let p: *HashMap<string> = HashMap::new();
     p.insert("id", "7");
     let req: HttpRequest = HttpRequest {
@@ -149,7 +149,7 @@ fn test_multi_extractor_handler_ok() -> int {
     return 0;
 }
 
-fn test_multi_extractor_first_failure_short_circuits() -> int {
+fn test_multi_extractor_first_failure_short_circuits() -> i32 {
     // Missing Bearer — should 401 before path/headers run.
     let p: *HashMap<string> = HashMap::new();
     p.insert("id", "7");

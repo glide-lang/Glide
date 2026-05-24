@@ -12,34 +12,34 @@
 //
 // Pipeline: lexer -> parser -> expander -> lower -> typer -> codegen.
 
-pub const TOK_EOF: int = 0;
-pub const TOK_IDENT: int = 1;
-pub const TOK_INT: int = 2;
-pub const TOK_FLOAT: int = 3;
-pub const TOK_STRING: int = 4;
-pub const TOK_CHAR: int = 5;
-pub const TOK_KEYWORD: int = 6;
-pub const TOK_OP: int = 7;
-pub const TOK_ERROR: int = 8;
+pub const TOK_EOF: i32 = 0;
+pub const TOK_IDENT: i32 = 1;
+pub const TOK_INT: i32 = 2;
+pub const TOK_FLOAT: i32 = 3;
+pub const TOK_STRING: i32 = 4;
+pub const TOK_CHAR: i32 = 5;
+pub const TOK_KEYWORD: i32 = 6;
+pub const TOK_OP: i32 = 7;
+pub const TOK_ERROR: i32 = 8;
 // Raw C/asm payload captured by `c_raw!{ ... }`. Lexer scans bytes verbatim
 // between matching braces, no token interpretation. Lexeme = body content
 // (without surrounding `c_raw!{` `}`).
-pub const TOK_RAW_BLOCK: int = 9;
+pub const TOK_RAW_BLOCK: i32 = 9;
 
 pub struct Token {
-    pub kind: int,
+    pub kind: i32,
     pub lexeme: string,
-    pub line: int,
-    pub column: int,
+    pub line: i32,
+    pub column: i32,
     pub doc: string,        // contiguous `//` block above this token (LSP hover)
 }
 
 pub struct Lexer {
     pub src: string,
-    pub src_len: int,
-    pub pos: int,
-    pub line: int,
-    pub column: int,
+    pub src_len: i32,
+    pub pos: i32,
+    pub line: i32,
+    pub column: i32,
     // Doc comment buffer: contiguous run of `//` comments immediately above
     // the next token. Reset by a blank line. Block comments don't touch it.
     pub pending_doc: string,
@@ -66,8 +66,8 @@ impl Lexer {
         return self.src.at(self.pos);
     }
 
-    fn peek_at(self: *Lexer, offset: int) -> char {
-        let i: int = self.pos + offset;
+    fn peek_at(self: *Lexer, offset: i32) -> char {
+        let i: i32 = self.pos + offset;
         if i >= self.src_len { return '\0'; }
         return self.src.at(i);
     }
@@ -84,11 +84,11 @@ impl Lexer {
     }
 
     fn skip_trivia(self: *Lexer) {
-        let mut newlines_in_row: int = 0;
+        let mut newlines_in_row: i32 = 0;
         let mut had_doc: bool = false;
         while self.pos < self.src_len {
             let c: char = self.peek();
-            let ci: int = c.to_int();
+            let ci: i32 = c.to_int();
             if ci == 10 {
                 // Newline: a blank line (>= 2 consecutive) breaks the doc
                 // comment chain — discard whatever was being built up.
@@ -115,7 +115,7 @@ impl Lexer {
                     }
                     // Skip a single leading space after the slash run.
                     if self.pos < self.src_len && self.peek().to_int() == 32 { self.advance(); }
-                    let line_start: int = self.pos;
+                    let line_start: i32 = self.pos;
                     while self.pos < self.src_len {
                         let cc: char = self.peek();
                         if cc.to_int() == 10 { break; }
@@ -158,16 +158,16 @@ impl Lexer {
         let doc: string = self.pending_doc;
         self.pending_doc = "";
 
-        let start_line: int = self.line;
-        let start_col: int = self.column;
-        let start_pos: int = self.pos;
+        let start_line: i32 = self.line;
+        let start_col: i32 = self.column;
+        let start_pos: i32 = self.pos;
 
         if self.pos >= self.src_len {
             return Token { kind: TOK_EOF, lexeme: "", line: start_line, column: start_col, doc: doc };
         }
 
         let c: char = self.peek();
-        let ci: int = c.to_int();
+        let ci: i32 = c.to_int();
 
         // identifier / keyword
         if c.is_alpha() || ci == 95 {
@@ -186,19 +186,19 @@ impl Lexer {
             // already cooked, and we'd lose comment whitespace plus original layout.
             // Accepts whitespace between `!` and `{` for ergonomics.
             if lex.eq("c_raw") && self.pos < self.src_len && self.src.at(self.pos).to_int() == 33 {
-                let mut probe: int = self.pos + 1;
+                let mut probe: i32 = self.pos + 1;
                 while probe < self.src_len {
-                    let pc: int = self.src.at(probe).to_int();
+                    let pc: i32 = self.src.at(probe).to_int();
                     if pc == 32 || pc == 9 || pc == 10 || pc == 13 { probe = probe + 1; } else { break; }
                 }
                 if probe < self.src_len && self.src.at(probe).to_int() == 123 {
                     // Fast-forward over `!`, optional whitespace, and `{`. Then capture body.
                     while self.pos <= probe { self.advance(); }
-                    let body_start: int = self.pos;
-                    let mut depth: int = 1;
+                    let body_start: i32 = self.pos;
+                    let mut depth: i32 = 1;
                     while self.pos < self.src_len && depth > 0 {
                         let cc: char = self.peek();
-                        let ic: int = cc.to_int();
+                        let ic: i32 = cc.to_int();
                         if ic == 123 { depth = depth + 1; }
                         else if ic == 125 { depth = depth - 1; if depth == 0 { break; } }
                         self.advance();
@@ -210,7 +210,7 @@ impl Lexer {
                     return Token { kind: TOK_RAW_BLOCK, lexeme: body, line: start_line, column: start_col, doc: doc };
                 }
             }
-            let mut kind: int = TOK_IDENT;
+            let mut kind: i32 = TOK_IDENT;
             if is_keyword(lex) { kind = TOK_KEYWORD; }
             return Token { kind: kind, lexeme: lex, line: start_line, column: start_col, doc: doc };
         }
@@ -239,7 +239,7 @@ impl Lexer {
                 }
             }
             let lex: string = self.src.substring(start_pos, self.pos);
-            let mut kind: int = TOK_INT;
+            let mut kind: i32 = TOK_INT;
             if is_float { kind = TOK_FLOAT; }
             return Token { kind: kind, lexeme: lex, line: start_line, column: start_col, doc: doc };
         }
@@ -349,7 +349,7 @@ pub fn is_keyword(s: string) -> bool {
     return false;
 }
 
-pub fn token_kind_name(k: int) -> string {
+pub fn token_kind_name(k: i32) -> string {
     if k == TOK_EOF { return "EOF"; }
     if k == TOK_IDENT { return "IDENT"; }
     if k == TOK_INT { return "INT"; }

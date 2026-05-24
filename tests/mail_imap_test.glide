@@ -2,18 +2,18 @@ import stdlib::testing::*;
 import stdlib::net::*;
 import stdlib::mail::imap::*;
 
-fn _fake_imap(port: int) {
+fn _fake_imap(port: i32) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("* OK fake IMAP ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: int = c.read(buf as *void, 4096);
+        let n: i32 = c.read(buf as *void, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
-        let sp: int = s.index_of(" ");
+        let sp: i32 = s.index_of(" ");
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
@@ -40,14 +40,14 @@ fn _fake_imap(port: int) {
     c.close(); l.close();
 }
 
-fn test_login_select_returns_count() -> int {
+fn test_login_select_returns_count() -> i32 {
     spawn_thread _fake_imap(42243);
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42243, false);
     assert!(s.ok);
     let p: *ImapSession = s.val;
     p.login("alice", "pwd");
-    let count: !int = p.select("INBOX");
+    let count: !i32 = p.select("INBOX");
     assert!(count.ok);
     assert_eq!(count.val, 3);
     p.logout();
@@ -55,7 +55,7 @@ fn test_login_select_returns_count() -> int {
     return 0;
 }
 
-fn test_fetch_captures_literal() -> int {
+fn test_fetch_captures_literal() -> i32 {
     spawn_thread _fake_imap(42244);
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42244, false);
@@ -74,18 +74,18 @@ fn test_fetch_captures_literal() -> int {
 
 // ---- SEARCH ----
 
-fn _search_server(port: int, search_reply: string) {
+fn _search_server(port: i32, search_reply: string) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("* OK ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: int = c.read(buf as *void, 4096);
+        let n: i32 = c.read(buf as *void, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
-        let sp: int = s.index_of(" ");
+        let sp: i32 = s.index_of(" ");
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
@@ -107,14 +107,14 @@ fn _search_server(port: int, search_reply: string) {
     c.close(); l.close();
 }
 
-fn test_search_returns_seq_numbers() -> int {
+fn test_search_returns_seq_numbers() -> i32 {
     spawn_thread _search_server(42250, "* SEARCH 2 4 6\r\n");
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42250, false);
     assert!(s.ok);
     let p: *ImapSession = s.val;
     p.login("a", "p"); p.select("INBOX");
-    let r: !*Vector<int> = p.search("UNSEEN");
+    let r: !*Vector<i32> = p.search("UNSEEN");
     assert!(r.ok);
     assert_eq!(r.val.len(), 3);
     assert_eq!(r.val.get(0), 2);
@@ -124,28 +124,28 @@ fn test_search_returns_seq_numbers() -> int {
     return 0;
 }
 
-fn test_search_empty_result() -> int {
+fn test_search_empty_result() -> i32 {
     spawn_thread _search_server(42251, "* SEARCH\r\n");
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42251, false);
     assert!(s.ok);
     let p: *ImapSession = s.val;
     p.login("a", "p"); p.select("INBOX");
-    let r: !*Vector<int> = p.search("UNSEEN");
+    let r: !*Vector<i32> = p.search("UNSEEN");
     assert!(r.ok);
     assert_eq!(r.val.len(), 0);
     p.logout(); p.close();
     return 0;
 }
 
-fn test_search_from_helper_quotes_addr() -> int {
+fn test_search_from_helper_quotes_addr() -> i32 {
     spawn_thread _search_server(42252, "* SEARCH 1\r\n");
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42252, false);
     assert!(s.ok);
     let p: *ImapSession = s.val;
     p.login("a", "p"); p.select("INBOX");
-    let r: !*Vector<int> = p.search_from("alice@example.com");
+    let r: !*Vector<i32> = p.search_from("alice@example.com");
     assert!(r.ok);
     assert_eq!(r.val.len(), 1);
     p.logout(); p.close();
@@ -154,19 +154,19 @@ fn test_search_from_helper_quotes_addr() -> int {
 
 // ---- APPEND ----
 
-fn _append_server(port: int) {
+fn _append_server(port: i32) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("* OK ready\r\n");
     let buf: *u8 = malloc(8192) as *u8;
-    let mut append_size: int = 0;
+    let mut append_size: i32 = 0;
     let mut append_tag: string = "";
     let mut append_acc: string = "";
     while true {
-        let n: int = c.read(buf as *void, 8192);
+        let n: i32 = c.read(buf as *void, 8192);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
 
         if append_size > 0 {
@@ -177,17 +177,17 @@ fn _append_server(port: int) {
             }
             continue;
         }
-        let sp: int = s.index_of(" ");
+        let sp: i32 = s.index_of(" ");
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
         if upper.contains("LOGIN") { c.write_str(tag.concat(" OK\r\n")); }
         else if upper.contains("APPEND") {
-            let open: int = s.index_of("{");
-            let close: int = s.index_of("}");
+            let open: i32 = s.index_of("{");
+            let close: i32 = s.index_of("}");
             if open >= 0 && close > open {
                 let nstr: string = s.substring(open + 1, close);
-                let nr: !int = nstr.try_parse_int();
+                let nr: !i32 = nstr.try_parse_int();
                 if nr.ok { append_size = nr.val; append_tag = tag; }
             }
             c.write_str("+ ready\r\n");
@@ -200,7 +200,7 @@ fn _append_server(port: int) {
     c.close(); l.close();
 }
 
-fn test_append_succeeds() -> int {
+fn test_append_succeeds() -> i32 {
     spawn_thread _append_server(42253);
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42253, false);
@@ -208,20 +208,20 @@ fn test_append_succeeds() -> int {
     let p: *ImapSession = s.val;
     p.login("a", "p");
     let msg: string = "From: a@x\r\nSubject: drafted\r\n\r\nbody";
-    let r: !int = p.append("Drafts", "\\Seen", msg);
+    let r: !i32 = p.append("Drafts", "\\Seen", msg);
     assert!(r.ok);
     p.logout(); p.close();
     return 0;
 }
 
-fn test_append_without_flags() -> int {
+fn test_append_without_flags() -> i32 {
     spawn_thread _append_server(42254);
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42254, false);
     assert!(s.ok);
     let p: *ImapSession = s.val;
     p.login("a", "p");
-    let r: !int = p.append("INBOX", "", "From: x\r\n\r\nbody");
+    let r: !i32 = p.append("INBOX", "", "From: x\r\n\r\nbody");
     assert!(r.ok);
     p.logout(); p.close();
     return 0;
@@ -229,17 +229,17 @@ fn test_append_without_flags() -> int {
 
 // ---- IDLE ----
 
-fn _idle_server(port: int) {
+fn _idle_server(port: i32) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("* OK ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     let mut idle_tag: string = "";
     while true {
-        let n: int = c.read(buf as *void, 4096);
+        let n: i32 = c.read(buf as *void, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
         if !idle_tag.eq("") {
             if s.to_upper().starts_with("DONE") {
@@ -248,7 +248,7 @@ fn _idle_server(port: int) {
             }
             continue;
         }
-        let sp: int = s.index_of(" ");
+        let sp: i32 = s.index_of(" ");
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
@@ -274,7 +274,7 @@ fn _idle_server(port: int) {
     c.close(); l.close();
 }
 
-fn test_idle_pushes_updates_and_stops() -> int {
+fn test_idle_pushes_updates_and_stops() -> i32 {
     spawn_thread _idle_server(42255);
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42255, false);
@@ -282,7 +282,7 @@ fn test_idle_pushes_updates_and_stops() -> int {
     let p: *ImapSession = s.val;
     p.login("a", "p"); p.select("INBOX");
 
-    let st: !int = p.idle_start();
+    let st: !i32 = p.idle_start();
     assert!(st.ok);
 
     let l1: !string = p.idle_next();
@@ -292,14 +292,14 @@ fn test_idle_pushes_updates_and_stops() -> int {
     assert!(l2.ok);
     assert!(l2.val.contains("EXISTS"));
 
-    let stop: !int = p.idle_stop();
+    let stop: !i32 = p.idle_stop();
     assert!(stop.ok);
 
     p.logout(); p.close();
     return 0;
 }
 
-fn test_idle_stop_without_start_errors() -> int {
+fn test_idle_stop_without_start_errors() -> i32 {
     // Use the same fake server but skip idle_start.
     spawn_thread _idle_server(42256);
     sleep_ms(300);
@@ -307,13 +307,13 @@ fn test_idle_stop_without_start_errors() -> int {
     assert!(s.ok);
     let p: *ImapSession = s.val;
     p.login("a", "p");
-    let stop: !int = p.idle_stop();
+    let stop: !i32 = p.idle_stop();
     assert_not!(stop.ok);
     p.logout(); p.close();
     return 0;
 }
 
-fn test_store_flag_succeeds() -> int {
+fn test_store_flag_succeeds() -> i32 {
     spawn_thread _fake_imap(42245);
     sleep_ms(300);
     let s: !*ImapSession = ImapSession::connect("127.0.0.1", 42245, false);
@@ -321,7 +321,7 @@ fn test_store_flag_succeeds() -> int {
     let p: *ImapSession = s.val;
     p.login("a", "p");
     p.select("INBOX");
-    let r: !int = p.store_flag(1, "\\Seen", true);
+    let r: !i32 = p.store_flag(1, "\\Seen", true);
     assert!(r.ok);
     p.logout();
     p.close();

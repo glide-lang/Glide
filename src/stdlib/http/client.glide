@@ -77,7 +77,7 @@ impl HttpClientRequest {
 /// free functions which build a default client per call.
 pub struct HttpClient {
     pub user_agent: string,
-    pub max_redirects: int,
+    pub max_redirects: i32,
     /// Optional cookie jar — assign a `CookieJar::new()` to enable
     /// automatic Set-Cookie ingestion + Cookie: header attachment
     /// across requests.
@@ -88,7 +88,7 @@ pub struct HttpClient {
     /// Per-request total timeout in milliseconds (covers connect +
     /// send + receive). `0` disables. Applied via SO_RCVTIMEO /
     /// SO_SNDTIMEO on the underlying socket.
-    pub timeout_ms: int,
+    pub timeout_ms: i32,
     /// Try HTTP/2 over TLS via ALPN. Falls back to HTTP/1.1
     /// transparently when the server doesn't negotiate `h2`. No effect
     /// on `http://` URLs (h2c upgrade not implemented).
@@ -135,7 +135,7 @@ impl HttpClient {
         let mut current_method: string = req.method;
         let mut current_body: string = req.body;
         let mut current_headers: string = req.headers;
-        let mut hops: int = 0;
+        let mut hops: i32 = 0;
         while true {
             let r: !*HttpResponse = self._do_once(current_method, current_url,
                                                   current_headers, current_body);
@@ -211,10 +211,10 @@ impl HttpClient {
         // Parse the user's extra_headers block ("Name: Value\r\n...")
         // and surface lowercased name/value pairs.
         let lines: *Vector<string> = extra_headers.split("\r\n");
-        for let i: int = 0; i < lines.len(); i++ {
+        for let i: i32 = 0; i < lines.len(); i++ {
             let l: string = lines.get(i);
             if l.len() == 0 { continue; }
-            let colon: int = l.index_of(":");
+            let colon: i32 = l.index_of(":");
             if colon < 0 { continue; }
             let n: string = l.substring(0, colon).trim().to_lower();
             let v: string = l.substring(colon + 1, l.len()).trim();
@@ -238,7 +238,7 @@ impl HttpClient {
         resp.status = h2r.status;
         resp.body = h2r.body;
         let mut block: string = "";
-        for let i: int = 0; i < h2r.headers.len(); i++ {
+        for let i: i32 = 0; i < h2r.headers.len(); i++ {
             let h: *HpackHeader = h2r.headers.get(i);
             if block.len() > 0 { block = block.concat("\r\n"); }
             block = block.concat(h.name).concat(": ").concat(h.value);
@@ -297,7 +297,7 @@ impl HttpClient {
                 return r;
             }
 
-            let w: !int = stream.write_all(wire);
+            let w: !i32 = stream.write_all(wire);
             if !w.ok { stream.close(); return err(w.err); }
             let raw: !string = stream.read_to_end();
             stream.close();
@@ -308,7 +308,7 @@ impl HttpClient {
             if !s.ok { return err(s.err); }
             let stream: *TcpStream = s.val;
             if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
-            let w: !int = stream.write_all(wire);
+            let w: !i32 = stream.write_all(wire);
             if !w.ok { stream.close(); return err(w.err); }
             let raw: !string = stream.read_to_end();
             stream.close();
@@ -433,7 +433,7 @@ pub fn http_post_json(url: string, body: string) -> !*HttpResponse {
 pub struct ParsedUrl {
     pub scheme: string,
     pub host:   string,
-    pub port:   int,
+    pub port:   i32,
     pub path:   string,
 }
 
@@ -446,7 +446,7 @@ impl ParsedUrl {
     /// // For "https://example.com:8443/foo": returns "example.com:8443"
     /// ```
     pub fn host_header(self: *ParsedUrl) -> string {
-        let mut default_port: int = 80;
+        let mut default_port: i32 = 80;
         if self.scheme.eq("https") { default_port = 443; }
         if self.port == default_port { return self.host; }
         return self.host.concat(":").concat(_hcli_itos(self.port));
@@ -455,13 +455,13 @@ impl ParsedUrl {
 
 fn _hcli_parse_url(s: string) -> !*ParsedUrl {
     // scheme://
-    let scheme_end: int = s.index_of("://");
+    let scheme_end: i32 = s.index_of("://");
     if scheme_end < 0 { return err("url: missing scheme"); }
     let scheme: string = s.substring(0, scheme_end);
     let rest: string = s.substring(scheme_end + 3, s.len());
 
     // Find the first slash that ends authority.
-    let mut slash: int = rest.index_of("/");
+    let mut slash: i32 = rest.index_of("/");
     if slash < 0 { slash = rest.len(); }
     let authority: string = rest.substring(0, slash);
     let mut path: string = rest.substring(slash, rest.len());
@@ -470,25 +470,25 @@ fn _hcli_parse_url(s: string) -> !*ParsedUrl {
     // host:port split (only the last `:` — IPv6 literals would need
     // bracket-aware parsing; a v6 host is wrapped in `[...]` per RFC 3986).
     let mut host: string = authority;
-    let mut port: int = 80;
+    let mut port: i32 = 80;
     if scheme.eq("https") { port = 443; }
     if authority.len() > 0 && authority.at(0).to_int() == 91 {
         // [v6]:port
-        let close: int = authority.index_of("]");
+        let close: i32 = authority.index_of("]");
         if close < 0 { return err("url: missing ']' in v6 host"); }
         host = authority.substring(1, close);
         if close + 1 < authority.len() && authority.at(close + 1).to_int() == 58 {
             let p_s: string = authority.substring(close + 2, authority.len());
-            let pr: !int = p_s.try_parse_int();
+            let pr: !i32 = p_s.try_parse_int();
             if !pr.ok { return err("url: bad port"); }
             port = pr.val;
         }
     } else {
-        let colon: int = _hcli_last_colon(authority);
+        let colon: i32 = _hcli_last_colon(authority);
         if colon >= 0 {
             host = authority.substring(0, colon);
             let p_s: string = authority.substring(colon + 1, authority.len());
-            let pr: !int = p_s.try_parse_int();
+            let pr: !i32 = p_s.try_parse_int();
             if !pr.ok { return err("url: bad port"); }
             port = pr.val;
         }
@@ -502,9 +502,9 @@ fn _hcli_parse_url(s: string) -> !*ParsedUrl {
     return ok(u);
 }
 
-fn _hcli_last_colon(s: string) -> int {
-    let mut at: int = -1;
-    for let i: int = 0; i < s.len(); i++ {
+fn _hcli_last_colon(s: string) -> i32 {
+    let mut at: i32 = -1;
+    for let i: i32 = 0; i < s.len(); i++ {
         if s.at(i).to_int() == 58 { at = i; }
     }
     return at;
@@ -513,7 +513,7 @@ fn _hcli_last_colon(s: string) -> int {
 // ---- response parser ----
 
 fn _hcli_parse_response(raw: string) -> !*HttpResponse {
-    let head_end: int = raw.index_of("\r\n\r\n");
+    let head_end: i32 = raw.index_of("\r\n\r\n");
     if head_end < 0 { return err("http_client: malformed response (no header terminator)"); }
     let head: string = raw.substring(0, head_end);
     let body: string = raw.substring(head_end + 4, raw.len());
@@ -522,18 +522,18 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     if lines.len() == 0 { return err("http_client: empty header"); }
     let status_line: string = lines.get(0);
     // "HTTP/1.1 200 OK"
-    let p1: int = status_line.index_of(" ");
+    let p1: i32 = status_line.index_of(" ");
     if p1 < 0 { return err("http_client: malformed status line"); }
     let after: string = status_line.substring(p1 + 1, status_line.len());
-    let p2: int = after.index_of(" ");
+    let p2: i32 = after.index_of(" ");
     let mut code_s: string = after;
     if p2 >= 0 { code_s = after.substring(0, p2); }
-    let cr: !int = code_s.try_parse_int();
+    let cr: !i32 = code_s.try_parse_int();
     if !cr.ok { return err("http_client: bad status code"); }
 
     // Headers block: every line after the status line, joined with \r\n.
     let mut hdr: string = "";
-    for let i: int = 1; i < lines.len(); i++ {
+    for let i: i32 = 1; i < lines.len(); i++ {
         if hdr.len() > 0 { hdr = hdr.concat("\r\n"); }
         hdr = hdr.concat(lines.get(i));
     }
@@ -545,7 +545,7 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     return ok(r);
 }
 
-fn _hcli_is_redirect(status: int) -> bool {
+fn _hcli_is_redirect(status: i32) -> bool {
     return status == 301 || status == 302 || status == 303
         || status == 307 || status == 308;
 }
@@ -566,7 +566,7 @@ fn _hcli_resolve_url(base: string, loc: string) -> !string {
         return ok(bu.scheme.concat(":").concat(loc));
     }
     let mut auth: string = bu.host;
-    let mut def: int = 80;
+    let mut def: i32 = 80;
     if bu.scheme.eq("https") { def = 443; }
     if bu.port != def {
         auth = auth.concat(":").concat(_hcli_itos(bu.port));
@@ -576,20 +576,20 @@ fn _hcli_resolve_url(base: string, loc: string) -> !string {
     }
     // Path-relative: drop the basename of bu.path and append loc.
     let mut dir: string = "/";
-    let last_slash: int = _last_index_of(bu.path, "/");
+    let last_slash: i32 = _last_index_of(bu.path, "/");
     if last_slash >= 0 {
         dir = bu.path.substring(0, last_slash + 1);
     }
     return ok(bu.scheme.concat("://").concat(auth).concat(dir).concat(loc));
 }
 
-fn _last_index_of(s: string, needle: string) -> int {
-    let n: int = s.len();
-    let m: int = needle.len();
+fn _last_index_of(s: string, needle: string) -> i32 {
+    let n: i32 = s.len();
+    let m: i32 = needle.len();
     if m == 0 || m > n { return -1; }
-    let mut i: int = n - m;
+    let mut i: i32 = n - m;
     while i >= 0 {
-        let mut k: int = 0;
+        let mut k: i32 = 0;
         let mut hit: bool = true;
         while k < m {
             if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
@@ -607,7 +607,7 @@ fn _last_index_of(s: string, needle: string) -> int {
 fn _hcli_strip_content_headers(block: string) -> string {
     let lines: *Vector<string> = block.split("\r\n");
     let mut out: string = "";
-    for let i: int = 0; i < lines.len(); i++ {
+    for let i: i32 = 0; i < lines.len(); i++ {
         let line: string = lines.get(i);
         if line.len() == 0 { continue; }
         let lower: string = line.to_lower();
@@ -618,14 +618,14 @@ fn _hcli_strip_content_headers(block: string) -> string {
     return out;
 }
 
-fn _hcli_itos(n: int) -> string {
+fn _hcli_itos(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut x: int = n;
+    let mut x: i32 = n;
     let mut neg: bool = false;
     if x < 0 { neg = true; x = 0 - x; }
     let mut s: string = "";
     while x > 0 {
-        let d: int = x % 10;
+        let d: i32 = x % 10;
         s = ((48 + d) as char).to_string().concat(s);
         x = x / 10;
     }

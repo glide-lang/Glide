@@ -5,12 +5,12 @@ import stdlib::json::*;
 
 pub struct JwtClaims {
     pub sub: string,
-    pub exp: int,
-    pub iat: int,
+    pub exp: i32,
+    pub iat: i32,
     pub raw: *JsonValue,
 }
 
-extern fn __glide_jwt_now() -> int;
+extern fn __glide_jwt_now() -> i32;
 extern fn __glide_jwt_b64url_to_hex(s: string) -> string;
 
 c_raw! {
@@ -79,7 +79,7 @@ fn _b64url_decode(s: string) -> !string {
     return b64_decode(b);
 }
 
-fn _json_int_or_zero(v: *JsonValue, key: string) -> int {
+fn _json_int_or_zero(v: *JsonValue, key: string) -> i32 {
     let f: *JsonValue = v.get(key);
     if f == null { return 0; }
     if f.kind != JSON_INT { return 0; }
@@ -114,7 +114,7 @@ pub fn jwt_verify(token: string, key: string) -> !JwtClaims {
         return err("401:bad signature");
     }
 
-    let exp: int = _json_int_or_zero(raw, "exp");
+    let exp: i32 = _json_int_or_zero(raw, "exp");
     if exp != 0 && __glide_jwt_now() > exp {
         return err("401:expired");
     }

@@ -16,13 +16,13 @@ fn _h3_handler(req: *HttpRequest) -> HttpResponse {
 }
 
 fn _h3_server_thread() {
-    let r: !int = http3_listen(45330, "h3_test_cert.pem", "h3_test_key.pem",
+    let r: !i32 = http3_listen(45330, "h3_test_cert.pem", "h3_test_key.pem",
                                 _h3_handler);
     if !r.ok { println!("h3 server: ${r.err}"); }
 }
 
 fn _start_h3_server() -> bool {
-    let cr: !int = h3_make_self_signed_cert("h3_test_cert.pem",
+    let cr: !i32 = h3_make_self_signed_cert("h3_test_cert.pem",
                                               "h3_test_key.pem",
                                               "localhost", 30);
     if !cr.ok { return false; }
@@ -31,7 +31,7 @@ fn _start_h3_server() -> bool {
     return true;
 }
 
-fn test_h3_loopback_get_returns_200() -> int {
+fn test_h3_loopback_get_returns_200() -> i32 {
     if !_start_h3_server() { return 1; }
     let r: !*HttpResponse = http3_request("GET",
                                             "https://127.0.0.1:45330/hello",
@@ -41,7 +41,7 @@ fn test_h3_loopback_get_returns_200() -> int {
     return 0;
 }
 
-fn test_h3_loopback_body_echoes_path() -> int {
+fn test_h3_loopback_body_echoes_path() -> i32 {
     let r: !*HttpResponse = http3_request("GET",
                                             "https://127.0.0.1:45330/foo/bar",
                                             "", "", true);
@@ -50,7 +50,7 @@ fn test_h3_loopback_body_echoes_path() -> int {
     return 0;
 }
 
-fn test_h3_loopback_custom_header_present() -> int {
+fn test_h3_loopback_custom_header_present() -> i32 {
     let r: !*HttpResponse = http3_request("GET",
                                             "https://127.0.0.1:45330/custom",
                                             "", "", true);
@@ -64,7 +64,7 @@ fn test_h3_loopback_custom_header_present() -> int {
 // multiplex multiple in-flight conns + dispatch them serially through the
 // accept loop without dropping any.
 
-fn _h3_conc_client(path: string, sink: *Vector<int>, lock: *Mutex<int>) {
+fn _h3_conc_client(path: string, sink: *Vector<i32>, lock: *Mutex<i32>) {
     let r: !*HttpResponse = http3_request("GET",
                                             "https://127.0.0.1:45330".concat(path),
                                             "", "", true);
@@ -74,25 +74,25 @@ fn _h3_conc_client(path: string, sink: *Vector<int>, lock: *Mutex<int>) {
     lock.unlock();
 }
 
-fn test_h3_concurrent_connections() -> int {
-    let statuses: *Vector<int> = Vector::new();
-    let lock: *Mutex<int> = Mutex::new(0);
+fn test_h3_concurrent_connections() -> i32 {
+    let statuses: *Vector<i32> = Vector::new();
+    let lock: *Mutex<i32> = Mutex::new(0);
     spawn_thread _h3_conc_client("/c1", statuses, lock);
     spawn_thread _h3_conc_client("/c2", statuses, lock);
     spawn_thread _h3_conc_client("/c3", statuses, lock);
     spawn_thread _h3_conc_client("/c4", statuses, lock);
     // Poll until 4 statuses landed or 8s budget expires.
-    let mut waited: int = 0;
+    let mut waited: i32 = 0;
     while waited < 8000 {
         lock.lock();
-        let n: int = statuses.len();
+        let n: i32 = statuses.len();
         lock.unlock();
         if n >= 4 { break; }
         sleep_ms(100);
         waited = waited + 100;
     }
     assert_eq!(statuses.len(), 4);
-    for let i: int = 0; i < 4; i++ {
+    for let i: i32 = 0; i < 4; i++ {
         assert_eq!(statuses.get(i), 200);
     }
     return 0;
@@ -109,12 +109,12 @@ fn _h3_slow_handler(req: *HttpRequest) -> HttpResponse {
 }
 
 fn _h3_slow_server_thread() {
-    let r: !int = http3_listen(45331, "h3_test_cert.pem", "h3_test_key.pem",
+    let r: !i32 = http3_listen(45331, "h3_test_cert.pem", "h3_test_key.pem",
                                 _h3_slow_handler);
     if !r.ok { println!("h3 slow server: ${r.err}"); }
 }
 
-fn _h3_slow_client(path: string, sink: *Vector<int>, lock: *Mutex<int>) {
+fn _h3_slow_client(path: string, sink: *Vector<i32>, lock: *Mutex<i32>) {
     let r: !*HttpResponse = http3_request("GET",
                                             "https://127.0.0.1:45331".concat(path),
                                             "", "", true);
@@ -130,8 +130,8 @@ fn _h3_slow_client(path: string, sink: *Vector<int>, lock: *Mutex<int>) {
 // chunks, then EOF. Client receives the concatenated body.
 
 pub struct H3Ticker {
-    pub idx: int,
-    pub total: int,
+    pub idx: i32,
+    pub total: i32,
 }
 
 impl ChunkSource for H3Ticker {
@@ -152,12 +152,12 @@ fn _h3_stream_handler(_req: *HttpRequest) -> HttpResponse {
 }
 
 fn _h3_stream_server_thread() {
-    let r: !int = http3_listen(45332, "h3_test_cert.pem", "h3_test_key.pem",
+    let r: !i32 = http3_listen(45332, "h3_test_cert.pem", "h3_test_key.pem",
                                 _h3_stream_handler);
     if !r.ok { println!("h3 stream server: ${r.err}"); }
 }
 
-fn test_h3_streaming_chunks() -> int {
+fn test_h3_streaming_chunks() -> i32 {
     spawn_thread _h3_stream_server_thread();
     sleep_ms(500);
 
@@ -177,7 +177,7 @@ fn test_h3_streaming_chunks() -> int {
 // handshake, so we sleep briefly to give the client thread a chance to
 // process it). The second request finds the ticket and bumps attempts.
 
-fn test_h3_session_cache_resumes() -> int {
+fn test_h3_session_cache_resumes() -> i32 {
     let cache: *H3SessionCache = H3SessionCache::new();
     defer cache.free();
     assert_eq!(cache.attempts(), 0);
@@ -212,7 +212,7 @@ fn test_h3_session_cache_resumes() -> int {
 // up, and handshake_completed flushes the buffer through nghttp3 so
 // the handler still runs and sends a real response.
 
-fn test_h3_0rtt_engages_on_warm_cache() -> int {
+fn test_h3_0rtt_engages_on_warm_cache() -> i32 {
     let cache: *H3SessionCache = H3SessionCache::new();
     defer cache.free();
     let r1: !*HttpResponse = http3_request_cached("GET",
@@ -231,7 +231,7 @@ fn test_h3_0rtt_engages_on_warm_cache() -> int {
     return 0;
 }
 
-fn test_h3_cache_persistence_round_trip() -> int {
+fn test_h3_cache_persistence_round_trip() -> i32 {
     let path: string = "h3_cache_test.bin";
     let cache1: *H3SessionCache = H3SessionCache::new();
     let r: !*HttpResponse = http3_request_cached("GET",
@@ -249,34 +249,34 @@ fn test_h3_cache_persistence_round_trip() -> int {
 
     let cache2: *H3SessionCache = H3SessionCache::new();
     defer cache2.free();
-    let loaded: int = cache2.load(path);
+    let loaded: i32 = cache2.load(path);
     // At least one entry survived save→load.
     assert!(loaded >= 1);
     return 0;
 }
 
-fn test_h3_parallel_handlers() -> int {
+fn test_h3_parallel_handlers() -> i32 {
     spawn_thread _h3_slow_server_thread();
     sleep_ms(500);
 
-    let statuses: *Vector<int> = Vector::new();
-    let lock: *Mutex<int> = Mutex::new(0);
-    let t0: int = Time::now().unix_millis() as int;
+    let statuses: *Vector<i32> = Vector::new();
+    let lock: *Mutex<i32> = Mutex::new(0);
+    let t0: i32 = Time::now().unix_millis() as i32;
     spawn_thread _h3_slow_client("/p1", statuses, lock);
     spawn_thread _h3_slow_client("/p2", statuses, lock);
     spawn_thread _h3_slow_client("/p3", statuses, lock);
     spawn_thread _h3_slow_client("/p4", statuses, lock);
 
-    let mut waited: int = 0;
+    let mut waited: i32 = 0;
     while waited < 3000 {
         lock.lock();
-        let n: int = statuses.len();
+        let n: i32 = statuses.len();
         lock.unlock();
         if n >= 4 { break; }
         sleep_ms(50);
         waited = waited + 50;
     }
-    let elapsed: int = (Time::now().unix_millis() as int) - t0;
+    let elapsed: i32 = (Time::now().unix_millis() as i32) - t0;
     assert_eq!(statuses.len(), 4);
     // Parallel: ~400-1500ms on loopback. Serial would be 1600ms+ before
     // including handshake overhead. 1500ms cap is the line that separates

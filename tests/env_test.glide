@@ -13,12 +13,12 @@ fn _has_path() -> bool {
     return has_path;
 }
 
-fn test_env_args_count_is_non_negative() -> int {
+fn test_env_args_count_is_non_negative() -> i32 {
     assert!(env_args_count() >= 0);
     return 0;
 }
 
-fn test_env_args_matches_user_args_when_present() -> int {
+fn test_env_args_matches_user_args_when_present() -> i32 {
     let args: *Vector<string> = env_args();
     defer args.free();
 
@@ -28,22 +28,22 @@ fn test_env_args_matches_user_args_when_present() -> int {
     return 0;
 }
 
-fn test_env_get_path_is_available() -> int {
+fn test_env_get_path_is_available() -> i32 {
     assert!(_path_value().len() > 0);
     return 0;
 }
 
-fn test_env_has_path_is_available() -> int {
+fn test_env_has_path_is_available() -> i32 {
     assert!(_has_path());
     return 0;
 }
 
-fn test_env_args_at_out_of_range_is_empty() -> int {
+fn test_env_args_at_out_of_range_is_empty() -> i32 {
     assert_str_eq!(env_args_at(env_args_count() + 100), "");
     return 0;
 }
 
-fn test_env_set_get_roundtrip() -> int {
+fn test_env_set_get_roundtrip() -> i32 {
     let r: ! = env_set("GLIDE_TEST_VAR_A", "alpha");
     assert!(r.ok);
     assert_str_eq!(env_get("GLIDE_TEST_VAR_A"), "alpha");
@@ -52,7 +52,7 @@ fn test_env_set_get_roundtrip() -> int {
     return 0;
 }
 
-fn test_env_set_overwrite() -> int {
+fn test_env_set_overwrite() -> i32 {
     let _r1: ! = env_set("GLIDE_TEST_VAR_B", "first");
     let _r2: ! = env_set("GLIDE_TEST_VAR_B", "second");
     assert_str_eq!(env_get("GLIDE_TEST_VAR_B"), "second");
@@ -60,7 +60,7 @@ fn test_env_set_overwrite() -> int {
     return 0;
 }
 
-fn test_env_unset_clears() -> int {
+fn test_env_unset_clears() -> i32 {
     let _r: ! = env_set("GLIDE_TEST_VAR_C", "to-be-removed");
     let u: ! = env_unset("GLIDE_TEST_VAR_C");
     assert!(u.ok);
@@ -69,11 +69,11 @@ fn test_env_unset_clears() -> int {
     return 0;
 }
 
-fn test_env_all_contains_set_var() -> int {
+fn test_env_all_contains_set_var() -> i32 {
     let _r: ! = env_set("GLIDE_TEST_VAR_D", "marker");
     let all: *Vector<EnvKV> = env_all();
     let mut found_value: string = "";
-    for let i: int = 0; i < all.len(); i++ {
+    for let i: i32 = 0; i < all.len(); i++ {
         let kv: EnvKV = all.get(i);
         if kv.key.eq("GLIDE_TEST_VAR_D") { found_value = kv.value; break; }
     }
@@ -82,14 +82,14 @@ fn test_env_all_contains_set_var() -> int {
     return 0;
 }
 
-fn test_env_expand_bare() -> int {
+fn test_env_expand_bare() -> i32 {
     let _r: ! = env_set("GLIDE_TEST_VAR_E", "blue");
     assert_str_eq!(env_expand("color is $GLIDE_TEST_VAR_E"), "color is blue");
     let _u: ! = env_unset("GLIDE_TEST_VAR_E");
     return 0;
 }
 
-fn test_env_expand_braces() -> int {
+fn test_env_expand_braces() -> i32 {
     let _r: ! = env_set("GLIDE_TEST_VAR_F", "green");
     let template: string = "color is $".concat("{GLIDE_TEST_VAR_F}!");
     assert_str_eq!(env_expand(template), "color is green!");
@@ -97,19 +97,19 @@ fn test_env_expand_braces() -> int {
     return 0;
 }
 
-fn test_env_expand_windows_style() -> int {
+fn test_env_expand_windows_style() -> i32 {
     let _r: ! = env_set("GLIDE_TEST_VAR_G", "red");
     assert_str_eq!(env_expand("color is %GLIDE_TEST_VAR_G%"), "color is red");
     let _u: ! = env_unset("GLIDE_TEST_VAR_G");
     return 0;
 }
 
-fn test_env_expand_missing_var_empty() -> int {
+fn test_env_expand_missing_var_empty() -> i32 {
     assert_str_eq!(env_expand("[$NEVER_EXISTS_GLIDE]"), "[]");
     return 0;
 }
 
-fn test_env_expand_no_vars_unchanged() -> int {
+fn test_env_expand_no_vars_unchanged() -> i32 {
     assert_str_eq!(env_expand("plain text, no dollars"), "plain text, no dollars");
     return 0;
 }

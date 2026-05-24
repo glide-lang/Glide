@@ -36,8 +36,8 @@ import manifest;
 import fetch;
 import doc;
 
-fn print_indent(n: int) {
-    for let i: int = 0; i < n; i++ { print!("  "); }
+fn print_indent(n: i32) {
+    for let i: i32 = 0; i < n; i++ { print!("  "); }
 }
 
 fn print_type(t: *Type) {
@@ -47,7 +47,7 @@ fn print_type(t: *Type) {
     print!("<ty?>");
 }
 
-fn op_name(op: int) -> string {
+fn op_name(op: i32) -> string {
     if op == OP_ADD { return "+"; }
     if op == OP_SUB { return "-"; }
     if op == OP_MUL { return "*"; }
@@ -58,7 +58,7 @@ fn op_name(op: int) -> string {
     return "?";
 }
 
-fn print_expr(e: *Expr, indent: int) {
+fn print_expr(e: *Expr, indent: i32) {
     if e == null { print_indent(indent); println!("<null>"); return; }
     print_indent(indent);
     if e.kind == EX_INT { println!("Int", e.int_val); return; }
@@ -75,7 +75,7 @@ fn print_expr(e: *Expr, indent: int) {
         println!("Call");
         print_expr(e.lhs, indent + 1);
         print_indent(indent + 1); println!("args:", e.args.len());
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             print_expr(&a, indent + 2);
         }
@@ -84,18 +84,18 @@ fn print_expr(e: *Expr, indent: int) {
     println!("<expr kind ", e.kind, ">");
 }
 
-fn print_stmt(s: *Stmt, indent: int) {
+fn print_stmt(s: *Stmt, indent: i32) {
     if s == null { print_indent(indent); println!("<null stmt>"); return; }
     print_indent(indent);
     if s.kind == ST_FN {
         print!("Fn ", s.name, " (");
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             if i > 0 { print!(", "); }
             let prm: Param = s.fn_params.get(i);
             print!(prm.name, ": "); print_type(prm.ty);
         }
         print!(") -> "); print_type(s.fn_ret_ty); println!("");
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             print_stmt(&b, indent + 1);
         }
@@ -136,7 +136,7 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
     let p: *Parser = Parser::new(lex);
     let parsed: *Vector<Stmt> = parse_program(p);
     if pdiags != null && p.diags != null {
-        for let k: int = 0; k < p.diags.len(); k++ {
+        for let k: i32 = 0; k < p.diags.len(); k++ {
             let d: ParseDiag = p.diags.get(k);
             d.origin = origin;
             pdiags.push(d);
@@ -149,12 +149,12 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
     // this O(N) over Stmts.
     let auto_loads: *Vector<string> = Vector::new();
     let auto_seen: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < parsed.len(); i++ {
+    for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
         collect_path_files_in_stmt(&s, auto_loads, auto_seen);
     }
     let dir: string = parent_dir(origin);
-    for let i: int = 0; i < auto_loads.len(); i++ {
+    for let i: i32 = 0; i < auto_loads.len(); i++ {
         let cand: string = auto_loads.get(i);
         let resolved: string = resolve_import(dir, cand);
         if __glide_file_exists(resolved) {
@@ -162,7 +162,7 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
         }
     }
 
-    for let i: int = 0; i < parsed.len(); i++ {
+    for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
         if s.kind == ST_IMPORT {
             // Decide whether the trailing path segment names a file (module
@@ -176,8 +176,8 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
             let unq: string = strip_quotes(s.import_path);
             let mut resolved: string = resolve_import(dir, unq);
             let mut multi_seg: bool = false;
-            for let k: int = 0; k < unq.len() - 1; k++ {
-                let cc: int = unq.at(k).to_int();
+            for let k: i32 = 0; k < unq.len() - 1; k++ {
+                let cc: i32 = unq.at(k).to_int();
                 if cc == 47 || cc == 92 { multi_seg = true; break; }
             }
             if multi_seg && s.imported_items == null && !s.import_wildcard
@@ -221,7 +221,7 @@ pub fn load_into_str_with_cache(stmts: *Vector<Stmt>, src: string, origin: strin
     let p: *Parser = Parser::new(lex);
     let parsed: *Vector<Stmt> = parse_program(p);
     if pdiags != null && p.diags != null {
-        for let k: int = 0; k < p.diags.len(); k++ {
+        for let k: i32 = 0; k < p.diags.len(); k++ {
             let d: ParseDiag = p.diags.get(k);
             d.origin = origin;
             pdiags.push(d);
@@ -266,7 +266,7 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         // so the heap-side concat lands in libc malloc.
         let heap_key: string = path.concat("");
         if pdiags != null && p.diags != null {
-            for let k: int = 0; k < p.diags.len(); k++ {
+            for let k: i32 = 0; k < p.diags.len(); k++ {
                 let d: ParseDiag = p.diags.get(k);
                 d.origin = heap_key;
                 pdiags.push(d);
@@ -274,7 +274,7 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         }
         p.free();
         lex.free();
-        for let i: int = 0; i < parsed_raw.len(); i++ {
+        for let i: i32 = 0; i < parsed_raw.len(); i++ {
             let s: Stmt = parsed_raw.get(i);
             s.origin = heap_key;
             parsed_raw.set(i, s);
@@ -303,12 +303,12 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
 fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
     let auto_loads: *Vector<string> = Vector::new();
     let auto_seen: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < parsed.len(); i++ {
+    for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
         collect_path_files_in_stmt(&s, auto_loads, auto_seen);
     }
     let dir: string = parent_dir(origin);
-    for let i: int = 0; i < auto_loads.len(); i++ {
+    for let i: i32 = 0; i < auto_loads.len(); i++ {
         let cand: string = auto_loads.get(i);
         let resolved: string = resolve_import(dir, cand);
         if __glide_file_exists(resolved) {
@@ -318,14 +318,14 @@ fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, origin: 
     auto_loads.free();
     auto_seen.free();
 
-    for let i: int = 0; i < parsed.len(); i++ {
+    for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
         if s.kind == ST_IMPORT {
             let unq: string = strip_quotes(s.import_path);
             let mut resolved: string = resolve_import(dir, unq);
             let mut multi_seg: bool = false;
-            for let k: int = 0; k < unq.len() - 1; k++ {
-                let cc: int = unq.at(k).to_int();
+            for let k: i32 = 0; k < unq.len() - 1; k++ {
+                let cc: i32 = unq.at(k).to_int();
                 if cc == 47 || cc == 92 { multi_seg = true; break; }
             }
             if multi_seg && s.imported_items == null && !s.import_wildcard
@@ -370,7 +370,7 @@ pub fn load_builtins_dir_with_cache(stmts: *Vector<Stmt>, dir: string, loaded: *
         load_into_with_cache(stmts, builtins, loaded, pdiags, cache);
     }
     let names: *Vector<string> = listing.split("\n");
-    for let i: int = 0; i < names.len(); i++ {
+    for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
         if nm.eq("") { continue; }
         if nm.eq("builtins.glide") { continue; }
@@ -393,7 +393,7 @@ fn collect_path_files_in_expr(e: *Expr, out: *Vector<string>, seen: *HashMap<boo
             // the existing dispatch; auto-loading them would either fail
             // (no `Vector.glide`) or hit case-insensitive FS bugs.
             let mut multi: bool = false;
-            for let k: int = 0; k + 1 < prefix.len(); k++ {
+            for let k: i32 = 0; k + 1 < prefix.len(); k++ {
                 if prefix.at(k).to_int() == 58 && prefix.at(k + 1).to_int() == 58 {
                     multi = true;
                     break;
@@ -402,8 +402,8 @@ fn collect_path_files_in_expr(e: *Expr, out: *Vector<string>, seen: *HashMap<boo
             seen.insert(prefix, true);
             if multi {
                 let mut path: string = "";
-                let n: int = prefix.len();
-                let mut i: int = 0;
+                let n: i32 = prefix.len();
+                let mut i: i32 = 0;
                 while i < n {
                     if i + 1 < n && prefix.at(i).to_int() == 58 && prefix.at(i + 1).to_int() == 58 {
                         path = path.concat("/");
@@ -422,7 +422,7 @@ fn collect_path_files_in_expr(e: *Expr, out: *Vector<string>, seen: *HashMap<boo
     if e.rhs != null { collect_path_files_in_expr(e.rhs, out, seen); }
     if e.operand != null { collect_path_files_in_expr(e.operand, out, seen); }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             collect_path_files_in_expr(&a, out, seen);
         }
@@ -435,25 +435,25 @@ fn collect_path_files_in_stmt(s: *Stmt, out: *Vector<string>, seen: *HashMap<boo
     if s.expr_value != null { collect_path_files_in_expr(s.expr_value, out, seen); }
     if s.cond != null { collect_path_files_in_expr(s.cond, out, seen); }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             collect_path_files_in_stmt(&b, out, seen);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             collect_path_files_in_stmt(&b, out, seen);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             collect_path_files_in_stmt(&b, out, seen);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             collect_path_files_in_stmt(&m, out, seen);
         }
@@ -463,12 +463,12 @@ fn collect_path_files_in_stmt(s: *Stmt, out: *Vector<string>, seen: *HashMap<boo
 // Drop the trailing `/<name>.glide` from an import path. Returns "" if
 // there is no `/` separator (single-segment paths have no parent).
 fn drop_last_path_segment(path: string) -> string {
-    let n: int = path.len();
+    let n: i32 = path.len();
     if n < 7 { return ""; }
     let stem: string = path.substring(0, n - 6);
-    let mut last: int = -1;
-    for let i: int = 0; i < stem.len(); i++ {
-        let c: int = stem.at(i).to_int();
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i < stem.len(); i++ {
+        let c: i32 = stem.at(i).to_int();
         if c == 47 || c == 92 { last = i; }
     }
     if last < 0 { return ""; }
@@ -477,12 +477,12 @@ fn drop_last_path_segment(path: string) -> string {
 
 // Trailing identifier of an import path: `stdlib/math.glide` -> `math`.
 fn last_path_segment(path: string) -> string {
-    let n: int = path.len();
+    let n: i32 = path.len();
     if n < 7 { return ""; }
     let stem: string = path.substring(0, n - 6);
-    let mut last: int = -1;
-    for let i: int = 0; i < stem.len(); i++ {
-        let c: int = stem.at(i).to_int();
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i < stem.len(); i++ {
+        let c: i32 = stem.at(i).to_int();
         if c == 47 || c == 92 { last = i; }
     }
     if last < 0 { return stem; }
@@ -490,17 +490,17 @@ fn last_path_segment(path: string) -> string {
 }
 
 fn strip_quotes(s: string) -> string {
-    let n: int = s.len();
+    let n: i32 = s.len();
     if n < 2 { return s; }
     if s.at(0).to_int() != 34 { return s; }
     return s.substring(1, n - 1);
 }
 
 fn parent_dir(path: string) -> string {
-    let n: int = path.len();
-    let mut last: int = -1;
-    for let i: int = 0; i < n; i++ {
-        let c: int = path.at(i).to_int();
+    let n: i32 = path.len();
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i < n; i++ {
+        let c: i32 = path.at(i).to_int();
         if c == 47 || c == 92 { last = i; }
     }
     if last < 0 { return ""; }
@@ -554,9 +554,9 @@ fn resolve_via_manifest(base: string, ipath: string) -> string {
     if m == null || m.deps.len() == 0 { return ""; }
 
     // First path segment (before '/' or '\') is the alias candidate.
-    let mut cut: int = ipath.len();
-    for let i: int = 0; i < ipath.len(); i++ {
-        let c: int = ipath.at(i).to_int();
+    let mut cut: i32 = ipath.len();
+    for let i: i32 = 0; i < ipath.len(); i++ {
+        let c: i32 = ipath.at(i).to_int();
         if c == 47 || c == 92 { cut = i; break; }
     }
 
@@ -591,9 +591,9 @@ fn resolve_via_manifest(base: string, ipath: string) -> string {
 }
 
 // FFI to libc + driver helpers (defined in the runtime emit).
-extern fn __glide_redirect_to(path: string) -> int;
-extern fn __glide_restore_stdout(saved: int);
-extern fn __glide_shell(cmd: string) -> int;
+extern fn __glide_redirect_to(path: string) -> i32;
+extern fn __glide_restore_stdout(saved: i32);
+extern fn __glide_shell(cmd: string) -> i32;
 extern fn __glide_exe_path() -> string;
 extern fn __glide_exe_dir() -> string;
 // Newline-separated listing of files under `path` whose name ends in `suffix`.
@@ -602,7 +602,7 @@ extern fn __glide_exe_dir() -> string;
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 
 extern fn __glide_getenv(name: string) -> string;
-extern fn __glide_is_windows() -> int;
+extern fn __glide_is_windows() -> i32;
 extern fn __glide_file_exists(path: string) -> bool;
 // File I/O for the compiler driver itself. `stdlib::fs` wraps these for
 // user-visible API; the bootstrap binary needs them raw.
@@ -618,12 +618,12 @@ fn col_blue() -> string   { if use_color() { return "\x1b[1;36m"; } return ""; }
 fn col_bold() -> string   { if use_color() { return "\x1b[1m"; } return ""; }
 fn col_reset() -> string  { if use_color() { return "\x1b[0m"; } return ""; }
 
-fn nth_line(src: string, n: int) -> string {
+fn nth_line(src: string, n: i32) -> string {
     if n < 1 { return ""; }
-    let total: int = src.len();
-    let mut line: int = 1;
-    let mut start: int = 0;
-    let mut i: int = 0;
+    let total: i32 = src.len();
+    let mut line: i32 = 1;
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
     while i < total {
         if src.at(i).to_int() == 10 {
             if line == n { return src.substring(start, i); }
@@ -636,17 +636,17 @@ fn nth_line(src: string, n: int) -> string {
     return "";
 }
 
-fn int_width(n: int) -> int {
-    let mut x: int = n;
+fn int_width(n: i32) -> i32 {
+    let mut x: i32 = n;
     if x < 0 { x = -x; }
-    let mut w: int = 1;
+    let mut w: i32 = 1;
     while x >= 10 { x = x / 10; w = w + 1; }
     return w;
 }
 
-fn repeat_char(ch: string, n: int) -> string {
+fn repeat_char(ch: string, n: i32) -> string {
     let mut s: string = "";
-    for let i: int = 0; i < n; i++ { s = s.concat(ch); }
+    for let i: i32 = 0; i < n; i++ { s = s.concat(ch); }
     return s;
 }
 
@@ -717,23 +717,23 @@ fn print_pretty_diag(d: DiagEntry, src: string, src_path: string) {
     //   N ┊  <line>
     //     ┊  ━━━━━
     let line_text: string = nth_line(src, d.line);
-    let gw: int = int_width(d.line);
+    let gw: i32 = int_width(d.line);
     let pad: string = repeat_char(" ", gw);
     let bar: string = glyph_pipe();
     println!(dim_blue.concat(int_to_str(d.line)).concat(" ").concat(bar).concat(" ").concat(reset).concat(line_text));
 
-    let mut col0: int = d.col;
+    let mut col0: i32 = d.col;
     if col0 < 1 { col0 = 1; }
-    let mut span: int = d.end_col - d.col;
+    let mut span: i32 = d.end_col - d.col;
     if span < 1 { span = 1; }
     // Mirror the leading whitespace verbatim (tabs stay tabs) so the
     // underline lands under the offending span at any terminal tab width.
     let mut indent: string = "";
-    let mut k: int = 0;
-    let mut limit: int = col0 - 1;
+    let mut k: i32 = 0;
+    let mut limit: i32 = col0 - 1;
     if limit > line_text.len() { limit = line_text.len(); }
     while k < limit {
-        let ch: int = line_text.at(k).to_int();
+        let ch: i32 = line_text.at(k).to_int();
         if ch == 9 { indent = indent.concat("\t"); }
         else { indent = indent.concat(" "); }
         k = k + 1;
@@ -754,12 +754,12 @@ fn print_pretty_diag(d: DiagEntry, src: string, src_path: string) {
     println!("");
 }
 
-const MODE_EMIT: int = 0;
-const MODE_BUILD: int = 1;
-const MODE_RUN: int = 2;
-const MODE_CHECK: int = 3;
-const MODE_FMT: int = 4;
-const MODE_TEST: int = 5;
+const MODE_EMIT: i32 = 0;
+const MODE_BUILD: i32 = 1;
+const MODE_RUN: i32 = 2;
+const MODE_CHECK: i32 = 3;
+const MODE_FMT: i32 = 4;
+const MODE_TEST: i32 = 5;
 
 // Bumped manually on release. `glide --version` reads it; same value
 // lives in glide.glide at the repo root (kept in sync by hand for now).
@@ -808,9 +808,9 @@ fn apply_manifest_lint(m: *Manifest) {
         let existing: *Vector<string> = deny_codes();
         let merged: *Vector<string> = Vector::new();
         if existing != null {
-            for let i: int = 0; i < existing.len(); i++ { merged.push(existing.get(i)); }
+            for let i: i32 = 0; i < existing.len(); i++ { merged.push(existing.get(i)); }
         }
-        for let i: int = 0; i < m.lint_deny.len(); i++ { merged.push(m.lint_deny.get(i)); }
+        for let i: i32 = 0; i < m.lint_deny.len(); i++ { merged.push(m.lint_deny.get(i)); }
         set_deny_codes(merged);
     }
     if m.lint_allow != null && m.lint_allow.len() > 0 {
@@ -838,7 +838,7 @@ fn apply_lint_for(start_dir: string) {
 fn _is_lint_promoted(code: string) -> bool {
     let dl: *Vector<string> = deny_codes();
     if dl == null { return false; }
-    for let i: int = 0; i < dl.len(); i++ {
+    for let i: i32 = 0; i < dl.len(); i++ {
         if _code_matches_deny(dl.get(i), code) { return true; }
     }
     return false;
@@ -861,7 +861,7 @@ fn _code_matches_deny(token: string, code: string) -> bool {
         if code.starts_with("lint:") { return true; }
     }
     if token.len() > 1 {
-        let last: int = token.at(token.len() - 1).to_int();
+        let last: i32 = token.at(token.len() - 1).to_int();
         if last == 42 {
             let prefix: string = token.substring(0, token.len() - 1);
             if code.starts_with(prefix) { return true; }
@@ -879,7 +879,7 @@ fn _project_allow_drop(code: string) -> bool {
     let p: *void = __glide_proj_allow_get();
     if p == null { return false; }
     let v: *Vector<string> = p as *Vector<string>;
-    for let i: int = 0; i < v.len(); i++ {
+    for let i: i32 = 0; i < v.len(); i++ {
         if _code_matches_deny(v.get(i), code) { return true; }
     }
     return false;
@@ -912,7 +912,7 @@ fn print_usage() {
 
 // `glide fetch [path]` entry point. Walks up from `path` looking for a
 // glide.glide, then downloads every git dep that isn't already cached.
-fn run_fetch(start: string) -> int {
+fn run_fetch(start: string) -> i32 {
     let root: string = find_manifest_root(start);
     if root.eq("") {
         println!("fetch: no glide.glide found above", start);
@@ -926,11 +926,11 @@ fn run_fetch(start: string) -> int {
     // Pass 1: walk the dep graph and fetch every (url, rev) the
     // manifest tree mentions. Populates the cache so pass 2 has
     // sub-manifests to inspect.
-    let fetched: int = fetch_all(m);
+    let fetched: i32 = fetch_all(m);
     if fetched == 0 { println!("fetch: everything up to date"); }
     // Pass 2: Go-MVS over the populated cache. Sets the global
     // override so the link + lockfile steps see the resolved rev.
-    let mvs_errors: int = mvs_resolve(m);
+    let mvs_errors: i32 = mvs_resolve(m);
     // Symlinks and lockfile entries now route every URL through the
     // resolved rev — `dep_cache_dir` consults the override map.
     link_all(m);
@@ -968,7 +968,7 @@ fn auto_fetch_for(src_path: string) {
 // `--ai` drops AGENTS.md so any agent landing in the repo starts
 // with the rules loaded. `--no-vcs` skips the default `git init`.
 // Refuses to clobber an existing `glide.glide`.
-fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> int {
+fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> i32 {
     let mut target_dir: string = name;
     let mut proj_name: string = name;
     let scaffold_in_place: bool = name.eq(".") || name.eq("./") || fs_is_dir(name);
@@ -1081,7 +1081,7 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> int {
     // doesn't have git installed.
     if init_vcs && !__glide_file_exists(target_dir.concat("/.git")) {
         let cmd: string = "git -C \"".concat(target_dir).concat("\" init -q");
-        let rc: int = __glide_shell(cmd);
+        let rc: i32 = __glide_shell(cmd);
         if rc != 0 {
             println!("(git init skipped — `git` not on PATH or init failed)");
         }
@@ -1131,16 +1131,16 @@ fn _starter_gitignore() -> string {
 // Last `/` or `\\`-separated segment of `path`. Drops a trailing
 // separator first so `basename("/foo/bar/")` is `bar`.
 fn _basename(path: string) -> string {
-    let mut end: int = path.len();
+    let mut end: i32 = path.len();
     while end > 0 {
-        let c: int = path.at(end - 1).to_int();
+        let c: i32 = path.at(end - 1).to_int();
         if c == 47 || c == 92 { end = end - 1; }
         else { break; }
     }
-    let mut start: int = 0;
-    let mut i: int = 0;
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
     while i < end {
-        let c: int = path.at(i).to_int();
+        let c: i32 = path.at(i).to_int();
         if c == 47 || c == 92 { start = i + 1; }
         i = i + 1;
     }
@@ -1151,13 +1151,13 @@ fn _basename(path: string) -> string {
 // `glide add` dispatcher. Two shapes:
 //   glide add --local <name> <path>
 //   glide add <name> <git-url> <rev>
-fn run_add(argc: int) -> int {
+fn run_add(argc: i32) -> i32 {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("add: no glide.glide found"); return 1; }
 
     let mut is_local: bool = false;
     let positional: *Vector<string> = Vector::new();
-    for let i: int = 2; i < argc; i++ {
+    for let i: i32 = 2; i < argc; i++ {
         let a: string = args_at(i);
         if a.eq("--local") { is_local = true; continue; }
         positional.push(a);
@@ -1208,7 +1208,7 @@ fn run_add(argc: int) -> int {
     return 0;
 }
 
-fn run_remove(name: string) -> int {
+fn run_remove(name: string) -> i32 {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("remove: no glide.glide found"); return 1; }
     if !manifest_remove_dep(root, name) {
@@ -1226,13 +1226,13 @@ fn run_remove(name: string) -> int {
 // `glide update` — force-refresh every git dep. Path deps are
 // untouched. Wipes the lockfile too so the next fetch writes a fresh
 // snapshot.
-fn run_update() -> int {
+fn run_update() -> i32 {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("update: no glide.glide found"); return 1; }
     let m: *Manifest = read_manifest(root);
     if m == null { println!("update: could not parse glide.glide"); return 1; }
 
-    for let i: int = 0; i < m.deps.len(); i++ {
+    for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if d.kind != DEP_GIT { continue; }
         let cache: string = dep_cache_dir(m, d);
@@ -1243,7 +1243,7 @@ fn run_update() -> int {
     }
     fs_remove_file(root.concat("/glide.lock"));
 
-    let fetched: int = fetch_all(m);
+    let fetched: i32 = fetch_all(m);
     if fetched == 0 { println!("update: nothing to fetch"); }
     link_all(m);
     let lf: *Lockfile = lockfile_from_manifest(m);
@@ -1262,7 +1262,7 @@ fn run_update() -> int {
 // when that directory isn't on PATH. Local installs build in place;
 // git installs pull through the same fetch + cache path as `glide
 // fetch`.
-fn run_install(argc: int) -> int {
+fn run_install(argc: i32) -> i32 {
     if argc < 3 {
         println!("usage: glide install <path>");
         println!("       glide install <git-url> <rev>");
@@ -1310,7 +1310,7 @@ fn run_install(argc: int) -> int {
 
     // Build straight to the install path. Saves a copy step and keeps
     // the spinner's progress output coherent.
-    let rc: int = run_build(bin_src, final_path, "", false);
+    let rc: i32 = run_build(bin_src, final_path, "", false);
     if rc != 0 { return rc; }
 
     // Compiler-style installs ship a `src/` tree alongside the binary
@@ -1448,7 +1448,7 @@ fn _add_to_user_path_win(dir: string) {
         .concat(" Write-Host 'glide: added' '").concat(bs).concat("' 'to user PATH'")
         .concat(" } else { Write-Host 'glide: already on user PATH' }");
     let cmd: string = "powershell -NoProfile -Command \"".concat(ps).concat("\"");
-    let rc: int = __glide_shell(cmd);
+    let rc: i32 = __glide_shell(cmd);
     if rc != 0 {
         println!("");
         println!("note: could not modify PATH automatically (powershell missing?).");
@@ -1461,8 +1461,8 @@ fn _add_to_user_path_win(dir: string) {
 
 fn _to_backslashes(s: string) -> string {
     let mut out: string = "";
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if c == 47 { out = out.concat("\\"); }
         else       { out = out.concat(s.substring(i, i + 1)); }
     }
@@ -1473,14 +1473,14 @@ fn _to_backslashes(s: string) -> string {
 // POSIX) and look for an exact match with `dir`. Comparison is
 // case-sensitive on POSIX and case-insensitive on Windows.
 fn _path_contains(path_env: string, dir: string) -> bool {
-    let sep_char: int = 58;  // ':' POSIX
+    let sep_char: i32 = 58;  // ':' POSIX
     if __glide_is_windows() != 0 { sep_char = 59; }  // ';'
-    let mut start: int = 0;
-    let n: int = path_env.len();
+    let mut start: i32 = 0;
+    let n: i32 = path_env.len();
     let win: bool = __glide_is_windows() != 0;
-    for let i: int = 0; i <= n; i++ {
+    for let i: i32 = 0; i <= n; i++ {
         let at_end: bool = i == n;
-        let c: int = 0;
+        let c: i32 = 0;
         if !at_end { c = path_env.at(i).to_int(); }
         if at_end || c == sep_char {
             let seg: string = path_env.substring(start, i);
@@ -1494,9 +1494,9 @@ fn _path_contains(path_env: string, dir: string) -> bool {
 fn _path_eq(a: string, b: string, win: bool) -> bool {
     if !win { return a.eq(b); }
     if a.len() != b.len() { return false; }
-    for let i: int = 0; i < a.len(); i++ {
-        let ca: int = a.at(i).to_int();
-        let cb: int = b.at(i).to_int();
+    for let i: i32 = 0; i < a.len(); i++ {
+        let ca: i32 = a.at(i).to_int();
+        let cb: i32 = b.at(i).to_int();
         if ca >= 65 && ca <= 90 { ca = ca + 32; }
         if cb >= 65 && cb <= 90 { cb = cb + 32; }
         if ca == 92 { ca = 47; }
@@ -1572,11 +1572,11 @@ fn _temp_dir() -> string {
 }
 
 // Parse a decimal port string. Returns 0 on any non-digit or overflow.
-fn _parse_port(s: string) -> int {
+fn _parse_port(s: string) -> i32 {
     if s.eq("") { return 0; }
-    let mut acc: int = 0;
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    let mut acc: i32 = 0;
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if c < 48 || c > 57 { return 0; }
         acc = (acc * 10) + (c - 48);
         if acc > 65535 { return 0; }
@@ -1613,8 +1613,8 @@ fn _diag_to_jsonl(d: *DiagEntry, fallback_path: string) -> string {
 fn _json_esc(s: string) -> string {
     if s == null { return ""; }
     let mut out: string = "";
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if c == 34 { out = out.concat("\\\""); }
         else if c == 92 { out = out.concat("\\\\"); }
         else if c == 10 { out = out.concat("\\n"); }
@@ -1626,8 +1626,8 @@ fn _json_esc(s: string) -> string {
     return out;
 }
 
-fn _wants_json(argc: int) -> bool {
-    for let i: int = 0; i < argc; i++ {
+fn _wants_json(argc: i32) -> bool {
+    for let i: i32 = 0; i < argc; i++ {
         if args_at(i).eq("--json") { return true; }
     }
     return false;
@@ -1636,9 +1636,9 @@ fn _wants_json(argc: int) -> bool {
 // Counters returned by `_lint_one_file` so the directory walker can
 // aggregate per-file results into a single summary line.
 struct LintCounts {
-    errors: int,
-    warnings: int,
-    promoted: int,
+    errors: i32,
+    warnings: i32,
+    promoted: i32,
     parse_failed: bool,
 }
 
@@ -1648,10 +1648,10 @@ struct LintCounts {
 // per-file counts. `--all` shows diagnostics from imported files;
 // `--json` emits one JSON object per diagnostic (no summary).
 // `--lint-as-error=<code>` promotes warnings into the failing set.
-fn run_lint(target: string, argc: int) -> int {
+fn run_lint(target: string, argc: i32) -> i32 {
     let json: bool = _wants_json(argc);
     let mut want_all: bool = false;
-    for let k: int = 0; k < argc; k++ {
+    for let k: i32 = 0; k < argc; k++ {
         if args_at(k).eq("--all") { want_all = true; }
     }
 
@@ -1664,17 +1664,17 @@ fn run_lint(target: string, argc: int) -> int {
     // Don't lint manifests — they're a literal `Package {…}` binding
     // with no code worth surfacing diagnostics on.
     let kept: *Vector<string> = Vector::new();
-    for let i: int = 0; i < files.len(); i++ {
+    for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") { continue; }
         kept.push(f);
     }
 
-    let mut total_errors: int = 0;
-    let mut total_warnings: int = 0;
-    let mut total_promoted: int = 0;
-    let mut bad_parses: int = 0;
-    for let i: int = 0; i < kept.len(); i++ {
+    let mut total_errors: i32 = 0;
+    let mut total_warnings: i32 = 0;
+    let mut total_promoted: i32 = 0;
+    let mut bad_parses: i32 = 0;
+    for let i: i32 = 0; i < kept.len(); i++ {
         let f: string = kept.get(i);
         let r: LintCounts = _lint_one_file(f, want_all, json);
         total_errors = total_errors + r.errors;
@@ -1725,7 +1725,7 @@ fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
     let src_text: string = read_file(src_path);
     let mut last_path: string = "";
     let mut last_snip: string = src_text;
-    for let i: int = 0; i < t.diagnostics.len(); i++ {
+    for let i: i32 = 0; i < t.diagnostics.len(); i++ {
         let d: DiagEntry = t.diagnostics.get(i);
         let mut path: string = d.origin;
         if path.eq("") { path = src_path; }
@@ -1760,26 +1760,26 @@ fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
 // prefixing the named binding with `_`. Other repairs (removing
 // `mut`, inserting `defer free(...)`, etc.) need source-text token
 // scanning we haven't wired yet; they're a natural next iteration.
-fn run_fix(target: string) -> int {
+fn run_fix(target: string) -> i32 {
     let mut files: *Vector<string> = Vector::new();
     if fs_is_dir(target) {
         files = fs_list_rec(target, ".glide");
     } else {
         files.push(target);
     }
-    let mut total_changed: int = 0;
-    let mut total_edits: int = 0;
-    for let i: int = 0; i < files.len(); i++ {
+    let mut total_changed: i32 = 0;
+    let mut total_edits: i32 = 0;
+    for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") { continue; }
-        let n: int = _fix_one_file(f);
+        let n: i32 = _fix_one_file(f);
         if n > 0 { total_changed = total_changed + 1; total_edits = total_edits + n; }
     }
     println!("fix:", int_to_str(total_edits), "edits across", int_to_str(total_changed), "files");
     return 0;
 }
 
-fn _fix_one_file(src_path: string) -> int {
+fn _fix_one_file(src_path: string) -> i32 {
     apply_lint_for(parent_dir(src_path));
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
@@ -1797,10 +1797,10 @@ fn _fix_one_file(src_path: string) -> int {
     //   2. Legacy `unused-var` / `unused-param` codes that we know
     //      mean "prefix with _" even when the lint didn't fill in
     //      fix fields. Lets the unmigrated analyses still benefit.
-    let starts: *Vector<int> = Vector::new();
-    let ends: *Vector<int> = Vector::new();
+    let starts: *Vector<i32> = Vector::new();
+    let ends: *Vector<i32> = Vector::new();
     let repls: *Vector<string> = Vector::new();
-    for let i: int = 0; i < t.diagnostics.len(); i++ {
+    for let i: i32 = 0; i < t.diagnostics.len(); i++ {
         let d: DiagEntry = t.diagnostics.get(i);
         let mut origin: string = d.origin;
         if origin.eq("") { origin = src_path; }
@@ -1812,7 +1812,7 @@ fn _fix_one_file(src_path: string) -> int {
             continue;
         }
         if d.code.eq("unused-var") || d.code.eq("unused-param") {
-            let off: int = _offset_of(d.line, d.col, src_path);
+            let off: i32 = _offset_of(d.line, d.col, src_path);
             starts.push(off);
             ends.push(off);
             repls.push("_");
@@ -1827,11 +1827,11 @@ fn _fix_one_file(src_path: string) -> int {
 
     let src: string = read_file(src_path);
     let mut buf: string = src;
-    let mut applied: int = 0;
-    let mut prev_start: int = -1;
-    for let i: int = 0; i < starts.len(); i++ {
-        let off: int = starts.get(i);
-        let endo: int = ends.get(i);
+    let mut applied: i32 = 0;
+    let mut prev_start: i32 = -1;
+    for let i: i32 = 0; i < starts.len(); i++ {
+        let off: i32 = starts.get(i);
+        let endo: i32 = ends.get(i);
         let rep: string = repls.get(i);
         // Dedupe identical offsets — happens when two analyses both
         // flag the same site.
@@ -1857,31 +1857,31 @@ fn _fix_one_file(src_path: string) -> int {
 // outside the file. Caches line starts per file via a tiny memoization
 // to avoid re-scanning the source on every diagnostic — fix runs hit
 // `_offset_of` once per diagnostic but most files have one fix.
-fn _offset_of(line: int, col: int, src_path: string) -> int {
+fn _offset_of(line: i32, col: i32, src_path: string) -> i32 {
     if line < 1 { return -1; }
     let src: string = read_file(src_path);
-    let mut cur_line: int = 1;
-    let mut off: int = 0;
+    let mut cur_line: i32 = 1;
+    let mut off: i32 = 0;
     while off < src.len() && cur_line < line {
         if src.at(off).to_int() == 10 { cur_line = cur_line + 1; }
         off = off + 1;
     }
     if cur_line != line { return -1; }
-    let result: int = off + col - 1;
+    let result: i32 = off + col - 1;
     if result < 0 || result > src.len() { return -1; }
     return result;
 }
 
-fn _sort_fixes_desc(starts: *Vector<int>, ends: *Vector<int>, repls: *Vector<string>) {
-    let n: int = starts.len();
-    for let i: int = 0; i < n - 1; i++ {
-        let mut max_idx: int = i;
-        for let j: int = i + 1; j < n; j++ {
+fn _sort_fixes_desc(starts: *Vector<i32>, ends: *Vector<i32>, repls: *Vector<string>) {
+    let n: i32 = starts.len();
+    for let i: i32 = 0; i < n - 1; i++ {
+        let mut max_idx: i32 = i;
+        for let j: i32 = i + 1; j < n; j++ {
             if starts.get(j) > starts.get(max_idx) { max_idx = j; }
         }
         if max_idx != i {
-            let ts: int = starts.get(i); starts.set(i, starts.get(max_idx)); starts.set(max_idx, ts);
-            let te: int = ends.get(i);   ends.set(i, ends.get(max_idx));     ends.set(max_idx, te);
+            let ts: i32 = starts.get(i); starts.set(i, starts.get(max_idx)); starts.set(max_idx, ts);
+            let te: i32 = ends.get(i);   ends.set(i, ends.get(max_idx));     ends.set(max_idx, te);
             let tr: string = repls.get(i); repls.set(i, repls.get(max_idx)); repls.set(max_idx, tr);
         }
     }
@@ -1896,7 +1896,7 @@ fn _ends_with_str(s: string, suffix: string) -> bool {
 
 // `glide clean` — wipe the per-project state. Doesn't touch the global
 // cache (other projects share it).
-fn run_clean() -> int {
+fn run_clean() -> i32 {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("clean: no glide.glide found"); return 1; }
     fs_remove_dir_rec(root.concat("/glide_modules"));
@@ -1925,7 +1925,7 @@ fn _bring_exports(t: *Typer, stmts: *Vector<Stmt>, target: string, into_f: strin
     if target == null || target.eq("") { return; }
     if seen.contains(target) { return; }
     seen.insert(target, true);
-    for let k: int = 0; k < stmts.len(); k++ {
+    for let k: i32 = 0; k < stmts.len(); k++ {
         let ts: Stmt = stmts.get(k);
         if ts.origin == null || !ts.origin.eq(target) { continue; }
         // Own pub decls.
@@ -1939,7 +1939,7 @@ fn _bring_exports(t: *Typer, stmts: *Vector<Stmt>, target: string, into_f: strin
         // Re-exported modules: `pub import X::*;` / `pub import X::item;`.
         if ts.kind == ST_IMPORT && ts.is_pub && ts.import_path != null {
             if ts.imported_items != null && ts.imported_items.len() > 0 {
-                for let m: int = 0; m < ts.imported_items.len(); m++ {
+                for let m: i32 = 0; m < ts.imported_items.len(); m++ {
                     t.visibility.insert(into_f.concat("::").concat(ts.imported_items.get(m)), true);
                 }
             } else {
@@ -1955,7 +1955,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
     // and capture every `import a::b::c;` (pure module form) into
     // `module_imports[<origin>::<short>]` for partial-path enforcement.
     let seen_files: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.origin == null || s.origin.eq("") { continue; }
         if !seen_files.contains(s.origin) {
@@ -1973,7 +1973,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
     // it defines. Stored as `<origin>::<name>` keys. Also harvest struct
     // field privacy info for cross-file `obj.field` enforcement.
     let defines_at: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.origin == null || s.origin.eq("") { continue; }
         if s.name == null || s.name.eq("") { continue; }
@@ -1983,7 +1983,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
         }
         if s.kind == ST_STRUCT && s.struct_fields != null {
             t.struct_origin.insert(s.name, s.origin);
-            for let k: int = 0; k < s.struct_fields.len(); k++ {
+            for let k: i32 = 0; k < s.struct_fields.len(); k++ {
                 let f: Field = s.struct_fields.get(k);
                 if f.is_pub {
                     t.field_pub.insert(s.name.concat("::").concat(f.name), true);
@@ -1997,7 +1997,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
     let origins: *Vector<string> = Vector::new();
     let seen: *HashMap<bool> = HashMap::new();
     let builtin_files: *Vector<string> = Vector::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.origin == null || s.origin.eq("") { continue; }
         if !seen.contains(s.origin) {
@@ -2008,10 +2008,10 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
     }
 
     // Step 3: for every origin file `F`, accumulate visible names.
-    for let i: int = 0; i < origins.len(); i++ {
+    for let i: i32 = 0; i < origins.len(); i++ {
         let f: string = origins.get(i);
         // Own decls.
-        for let j: int = 0; j < stmts.len(); j++ {
+        for let j: i32 = 0; j < stmts.len(); j++ {
             let s: Stmt = stmts.get(j);
             if s.origin == null || !s.origin.eq(f) { continue; }
             if s.name == null || s.name.eq("") { continue; }
@@ -2021,7 +2021,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
             }
         }
         // Prelude (src/builtins/* contents).
-        for let j: int = 0; j < stmts.len(); j++ {
+        for let j: i32 = 0; j < stmts.len(); j++ {
             let s: Stmt = stmts.get(j);
             if s.origin == null { continue; }
             if !path_is_builtin(s.origin) { continue; }
@@ -2033,7 +2033,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
         }
         // Explicit imports from this file. Only `pub` items from the
         // target are exposed - cross-file privacy is enforced here.
-        for let j: int = 0; j < stmts.len(); j++ {
+        for let j: i32 = 0; j < stmts.len(); j++ {
             let s: Stmt = stmts.get(j);
             if s.kind != ST_IMPORT { continue; }
             if s.origin == null || !s.origin.eq(f) { continue; }
@@ -2041,11 +2041,11 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
             if target == null { continue; }
             if s.imported_items != null && s.imported_items.len() > 0 {
                 // Selective: each named item must be pub in the target.
-                for let k: int = 0; k < s.imported_items.len(); k++ {
+                for let k: i32 = 0; k < s.imported_items.len(); k++ {
                     let nm: string = s.imported_items.get(k);
                     let mut found_pub: bool = false;
                     let mut found_any: bool = false;
-                    for let m: int = 0; m < stmts.len(); m++ {
+                    for let m: i32 = 0; m < stmts.len(); m++ {
                         let ts: Stmt = stmts.get(m);
                         if ts.origin == null || !ts.origin.eq(target) { continue; }
                         if ts.name == null || !ts.name.eq(nm) { continue; }
@@ -2062,11 +2062,11 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                     // `import stdlib::http::handler::handler;` — treat the
                     // attr arg as the exported name.
                     if !found_any {
-                        for let m: int = 0; m < stmts.len(); m++ {
+                        for let m: i32 = 0; m < stmts.len(); m++ {
                             let ts: Stmt = stmts.get(m);
                             if ts.origin == null || !ts.origin.eq(target) { continue; }
                             if ts.kind != ST_FN || ts.attrs == null { continue; }
-                            for let aa: int = 0; aa < ts.attrs.len(); aa++ {
+                            for let aa: i32 = 0; aa < ts.attrs.len(); aa++ {
                                 let at: Attr = ts.attrs.get(aa);
                                 if at.name == null { continue; }
                                 if !at.name.eq("proc_attr") && !at.name.eq("proc_derive")
@@ -2114,7 +2114,7 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
 fn module_path_from_path(path: string) -> string {
     if path == null || path.eq("") { return ""; }
     let mut s: string = path;
-    let n: int = s.len();
+    let n: i32 = s.len();
     if n > 6 {
         let tail: string = s.substring(n - 6, n);
         if tail.eq(".glide") { s = s.substring(0, n - 6); }
@@ -2127,13 +2127,13 @@ fn module_path_from_path(path: string) -> string {
     // typer's `module_full_paths` lookup for a fully-qualified call like
     // `stdlib::log::info(...)` (emitted by the log macros) would miss,
     // making it early-out before type-checking the call's arguments.
-    let len0: int = s.len();
-    let mut cut: int = -1;
-    let mut k: int = 0;
+    let len0: i32 = s.len();
+    let mut cut: i32 = -1;
+    let mut k: i32 = 0;
     while k + 3 < len0 {
         if s.at(k).to_int() == 115 && s.at(k + 1).to_int() == 114
            && s.at(k + 2).to_int() == 99 {
-            let after: int = s.at(k + 3).to_int();
+            let after: i32 = s.at(k + 3).to_int();
             let before_ok: bool = k == 0 || s.at(k - 1).to_int() == 47 || s.at(k - 1).to_int() == 92;
             if before_ok && (after == 47 || after == 92) {
                 cut = k + 4;
@@ -2143,10 +2143,10 @@ fn module_path_from_path(path: string) -> string {
     }
     if cut >= 0 { s = s.substring(cut, len0); }
     let mut out: string = "";
-    let mut i: int = 0;
-    let len: int = s.len();
+    let mut i: i32 = 0;
+    let len: i32 = s.len();
     while i < len {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c == 47 || c == 92 { out = out.concat("::"); }
         else { out = out.concat(s.substring(i, i + 1)); }
         i = i + 1;
@@ -2159,14 +2159,14 @@ fn module_path_from_path(path: string) -> string {
 fn path_is_builtin(path: string) -> bool {
     if path == null { return false; }
     let needle: string = "src/builtins/";
-    let n: int = path.len();
-    let m: int = needle.len();
+    let n: i32 = path.len();
+    let m: i32 = needle.len();
     if m > n { return false; }
-    for let i: int = 0; i + m <= n; i++ {
+    for let i: i32 = 0; i + m <= n; i++ {
         let mut matched: bool = true;
-        for let j: int = 0; j < m; j++ {
-            let c: int = path.at(i + j).to_int();
-            let d: int = needle.at(j).to_int();
+        for let j: i32 = 0; j < m; j++ {
+            let c: i32 = path.at(i + j).to_int();
+            let d: i32 = needle.at(j).to_int();
             // accept '\\' as equivalent to '/' so installer paths match.
             if c == 92 { c = 47; }
             if d == 92 { d = 47; }
@@ -2189,7 +2189,7 @@ fn load_builtins_dir(stmts: *Vector<Stmt>, dir: string, loaded: *HashMap<bool>, 
         load_into(stmts, builtins, loaded, pdiags);
     }
     let names: *Vector<string> = listing.split("\n");
-    for let i: int = 0; i < names.len(); i++ {
+    for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
         if nm.eq("") { continue; }
         if nm.eq("builtins.glide") { continue; }
@@ -2220,7 +2220,7 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
     let expanded: *Vector<Stmt> = expand_macros(stmts);
     let lowered: *Vector<Stmt> = lower_program(expanded);
     stmts.clear();
-    for let i: int = 0; i < lowered.len(); i++ {
+    for let i: i32 = 0; i < lowered.len(); i++ {
         let s: Stmt = lowered.get(i);
         stmts.push(s);
     }
@@ -2384,7 +2384,7 @@ fn _known_targets() -> *Vector<string> {
 
 fn _is_known_target(triple: string) -> bool {
     let v: *Vector<string> = _known_targets();
-    for let i: int = 0; i < v.len(); i++ {
+    for let i: i32 = 0; i < v.len(); i++ {
         if v.get(i).eq(triple) { return true; }
     }
     return false;
@@ -2395,7 +2395,7 @@ fn _is_known_target(triple: string) -> bool {
 //   dir            print the cache root
 //   add <triple>   fetch + stage a sysroot for cross-compilation
 //   remove <t>     drop a cached sysroot (`rm` works too)
-fn run_target(argc: int) -> int {
+fn run_target(argc: i32) -> i32 {
     if argc < 3 { _print_target_help(); return 1; }
     let sub: string = args_at(2);
     if sub.eq("list") || sub.eq("ls") { return _target_list(); }
@@ -2440,11 +2440,11 @@ fn _target_desc(triple: string) -> string {
     return "";
 }
 
-fn _target_list() -> int {
+fn _target_list() -> i32 {
     let known: *Vector<string> = _known_targets();
     println!("Cross-compile targets — fetched automatically on first build:");
     println!("");
-    for let i: int = 0; i < known.len(); i++ {
+    for let i: i32 = 0; i < known.len(); i++ {
         let t: string = known.get(i);
         let mut tag: string = "available";
         if _has_target_sysroot(t) { tag = "installed"; }
@@ -2461,7 +2461,7 @@ fn _target_list() -> int {
     return 0;
 }
 
-fn _target_add(triple: string) -> int {
+fn _target_add(triple: string) -> i32 {
     if !_is_known_target(triple) {
         println!("target:", triple, "is not a known target.");
         println!("Run `glide target list` to see what's available.");
@@ -2482,7 +2482,7 @@ fn _target_add(triple: string) -> int {
     let tmp_archive: string = root.concat("/.glide_target_fetch.tar.gz");
     spinner_start("fetching ".concat(triple).concat(" (").concat(archive_name).concat(")"));
     let curl_cmd: string = "curl -fsSL -o \"".concat(tmp_archive).concat("\" \"").concat(url).concat("\"");
-    let rc_fetch: int = __glide_shell(curl_cmd);
+    let rc_fetch: i32 = __glide_shell(curl_cmd);
     if rc_fetch != 0 {
         spinner_finish(false, "");
         println!("target: download failed (curl exit", rc_fetch, ")");
@@ -2500,7 +2500,7 @@ fn _target_add(triple: string) -> int {
         return 1;
     }
     let tar_cmd: string = "tar -xzf \"".concat(tmp_archive).concat("\" -C \"").concat(dest).concat("\"");
-    let rc_tar: int = __glide_shell(tar_cmd);
+    let rc_tar: i32 = __glide_shell(tar_cmd);
     fs_remove_file(tmp_archive);
     if rc_tar != 0 {
         spinner_finish(false, "");
@@ -2517,7 +2517,7 @@ fn _target_add(triple: string) -> int {
     return 0;
 }
 
-fn _target_remove(triple: string) -> int {
+fn _target_remove(triple: string) -> i32 {
     let dir: string = _target_dir(triple);
     if !fs_is_dir(dir) {
         println!("target:", triple, "is not installed.");
@@ -2528,14 +2528,14 @@ fn _target_remove(triple: string) -> int {
     return 0;
 }
 
-fn run_build(src_path: string, out_path: string, target: string, then_run: bool) -> int {
+fn run_build(src_path: string, out_path: string, target: string, then_run: bool) -> i32 {
     return run_build_q(src_path, out_path, target, then_run, false);
 }
 
 // Same as `run_build` but with a `quiet` knob — the test / golden
 // runners drive lots of builds in a row and the spinner-per-build
 // would flood the log in non-TTY mode (no in-place redraw).
-fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool) -> int {
+fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool) -> i32 {
     // 0. Auto-fetch missing git deps from the project's glide.glide
     //    before we start parsing anything. No-op when there's no manifest.
     auto_fetch_for(src_path);
@@ -2561,8 +2561,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     check_program(t, stmts);
     run_extra_analyses(t, stmts);
     let src_text: string = read_file(src_path);
-    let mut errors: int = 0;
-    for let i: int = 0; i < t.diagnostics.len(); i++ {
+    let mut errors: i32 = 0;
+    for let i: i32 = 0; i < t.diagnostics.len(); i++ {
         let d: DiagEntry = t.diagnostics.get(i);
         let mut dpath: string = d.origin;
         if dpath.eq("") { dpath = src_path; }
@@ -2588,7 +2588,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // 3. Emit C to a temp file by saving stdout, redirecting, then restoring.
     if !quiet { spinner_set("emitting C"); }
     let tmp_c: string = out_path.concat(".__glide.c");
-    let saved: int = __glide_redirect_to(tmp_c);
+    let saved: i32 = __glide_redirect_to(tmp_c);
     if saved < 0 {
         if !quiet { spinner_finish(false, "could not open temp file: ".concat(tmp_c)); }
         return 1;
@@ -2804,7 +2804,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         cmd = "\"".concat(cmd).concat("\"");
     }
 
-    let rc: int = __glide_shell(cmd);
+    let rc: i32 = __glide_shell(cmd);
     if rc != 0 {
         if !quiet { spinner_finish(false, ""); }
         println!("compilation failed (cc exit", rc, ")");
@@ -2852,22 +2852,22 @@ fn scan_bench_fns(src: string) -> *Vector<string> {
     let names: *Vector<string> = Vector::new();
     let lines: *Vector<string> = src.split("\n");
     let prefix: string = "fn bench_";
-    for let i: int = 0; i < lines.len(); i++ {
+    for let i: i32 = 0; i < lines.len(); i++ {
         let raw: string = lines.get(i);
         let trimmed: string = raw.trim();
         let mut body: string = trimmed;
         if body.starts_with("pub ") {
             body = body.substring(4, body.len());
-            let mut k: int = 0;
+            let mut k: i32 = 0;
             while k < body.len() && body.at(k).to_int() == 32 { k = k + 1; }
             body = body.substring(k, body.len());
         }
         if !body.starts_with(prefix) { continue; }
         let after: string = body.substring(3, body.len());
-        let n: int = after.len();
-        let mut end: int = 0;
+        let n: i32 = after.len();
+        let mut end: i32 = 0;
         while end < n {
-            let c: int = after.at(end).to_int();
+            let c: i32 = after.at(end).to_int();
             if c == 40 || c == 32 || c == 9 { break; }
             end = end + 1;
         }
@@ -2880,7 +2880,7 @@ fn scan_bench_fns(src: string) -> *Vector<string> {
 // `glide bench [path]` — for every `*_bench.glide` under `path` (or
 // the single file passed), synth a main() that runs each `bench_*`
 // through `bench_run`, build, execute.
-fn run_bench(path: string) -> int {
+fn run_bench(path: string) -> i32 {
     let mut search_path: string = path;
     if search_path.eq("") { search_path = "."; }
 
@@ -2895,21 +2895,21 @@ fn run_bench(path: string) -> int {
             return 1;
         }
         let names: *Vector<string> = raw.split("\n");
-        for let i: int = 0; i < names.len(); i++ {
+        for let i: i32 = 0; i < names.len(); i++ {
             let nm: string = names.get(i);
             if nm.eq("") { continue; }
             files.push(search_path.concat("/").concat(nm));
         }
     }
 
-    let mut total_files: int = 0;
-    let mut failed_files: int = 0;
+    let mut total_files: i32 = 0;
+    let mut failed_files: i32 = 0;
     let scratch: string = _scratch_dir();
     let tmp_path: string = scratch.concat("/__glide_bench_run.glide");
     let mut out_path: string = scratch.concat("/__glide_bench_run.exe");
     if __glide_is_windows() == 0 { out_path = scratch.concat("/__glide_bench_run"); }
 
-    for let i: int = 0; i < files.len(); i++ {
+    for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         let src: string = read_file(f);
         if src.eq("") { continue; }
@@ -2924,7 +2924,7 @@ fn run_bench(path: string) -> int {
         // every bench_* through `bench_run`.
         let mut synth: string = "import stdlib::bench::*;\n".concat(src);
         synth = synth.concat("\n\nfn main() -> int {\n");
-        for let j: int = 0; j < bench_fns.len(); j++ {
+        for let j: i32 = 0; j < bench_fns.len(); j++ {
             let name: string = bench_fns.get(j);
             synth = synth.concat("    bench_run(\"").concat(name).concat("\", ").concat(name).concat(");\n");
         }
@@ -2937,7 +2937,7 @@ fn run_bench(path: string) -> int {
 
         println!(col_blue().concat("benching").concat(col_reset()), f,
                  "(", bench_fns.len(), "bench(es) )");
-        let rc: int = run_build_q(tmp_path, out_path, "", true, true);
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -2955,24 +2955,24 @@ fn scan_test_fns(src: string) -> *Vector<string> {
     let names: *Vector<string> = Vector::new();
     let lines: *Vector<string> = src.split("\n");
     let prefix: string = "fn test_";
-    for let i: int = 0; i < lines.len(); i++ {
+    for let i: i32 = 0; i < lines.len(); i++ {
         let raw: string = lines.get(i);
         let trimmed: string = raw.trim();
         let mut body: string = trimmed;
         if body.starts_with("pub ") {
             body = body.substring(4, body.len());
             // Allow extra whitespace after `pub`.
-            let mut k: int = 0;
+            let mut k: i32 = 0;
             while k < body.len() && body.at(k).to_int() == 32 { k = k + 1; }
             body = body.substring(k, body.len());
         }
         if !body.starts_with(prefix) { continue; }
         // Strip the `fn ` and read the identifier up to `(` or whitespace.
         let after: string = body.substring(3, body.len());
-        let n: int = after.len();
-        let mut end: int = 0;
+        let n: i32 = after.len();
+        let mut end: i32 = 0;
         while end < n {
-            let c: int = after.at(end).to_int();
+            let c: i32 = after.at(end).to_int();
             if c == 40 || c == 32 || c == 9 { break; }
             end = end + 1;
         }
@@ -2986,7 +2986,7 @@ fn scan_test_fns(src: string) -> *Vector<string> {
 // files under `path`. Per-file: scan, synthesise a `main()` that calls each
 // test in order, hand off to the regular build+run pipeline. Aggregate exit
 // codes; non-zero if any file's run reported failed assertions.
-fn run_test(path: string) -> int {
+fn run_test(path: string) -> i32 {
     let mut search_path: string = path;
     if search_path.eq("") { search_path = "."; }
 
@@ -3002,21 +3002,21 @@ fn run_test(path: string) -> int {
             return 1;
         }
         let names: *Vector<string> = raw.split("\n");
-        for let i: int = 0; i < names.len(); i++ {
+        for let i: i32 = 0; i < names.len(); i++ {
             let nm: string = names.get(i);
             if nm.eq("") { continue; }
             files.push(search_path.concat("/").concat(nm));
         }
     }
 
-    let mut total_files: int = 0;
-    let mut failed_files: int = 0;
+    let mut total_files: i32 = 0;
+    let mut failed_files: i32 = 0;
     let scratch: string = _scratch_dir();
     let tmp_path: string = scratch.concat("/__glide_test_run.glide");
     let mut out_path: string = scratch.concat("/__glide_test_run.exe");
     if __glide_is_windows() == 0 { out_path = scratch.concat("/__glide_test_run"); }
 
-    for let i: int = 0; i < files.len(); i++ {
+    for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         let src: string = read_file(f);
         if src.eq("") { continue; }
@@ -3031,7 +3031,7 @@ fn run_test(path: string) -> int {
         // append a main() that calls each test_* in declaration order.
         let mut synth: string = "import stdlib::testing::*;\n".concat(src);
         synth = synth.concat("\n\nfn main() -> int {\n");
-        for let j: int = 0; j < test_fns.len(); j++ {
+        for let j: i32 = 0; j < test_fns.len(); j++ {
             let name: string = test_fns.get(j);
             synth = synth.concat("    test_begin(\"").concat(name).concat("\");\n");
             synth = synth.concat("    if ").concat(name).concat("() == 0 { test_pass(); }\n");
@@ -3045,7 +3045,7 @@ fn run_test(path: string) -> int {
 
         println!(col_blue().concat("running").concat(col_reset()), f,
                  "(", test_fns.len(), "tests )");
-        let rc: int = run_build_q(tmp_path, out_path, "", true, true);
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3067,11 +3067,11 @@ fn run_test(path: string) -> int {
 // stdout captured to `out_txt`, and return the run's exit code (or -1 if
 // the build itself failed). Build artefacts go under `_scratch_dir()`
 // (project `build/` or system temp); cleanup is best-effort.
-fn _golden_build_and_run(src: string, out_txt: string) -> int {
+fn _golden_build_and_run(src: string, out_txt: string) -> i32 {
     let scratch: string = _scratch_dir();
     let mut exe: string = scratch.concat("/__glide_golden.exe");
     if __glide_is_windows() == 0 { exe = scratch.concat("/__glide_golden"); }
-    let rc_build: int = run_build_q(src, exe, "", false, true);
+    let rc_build: i32 = run_build_q(src, exe, "", false, true);
     if rc_build != 0 { return -1; }
     let cmd: string = "\"".concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
     let mut wrapped: string = cmd;
@@ -3085,10 +3085,10 @@ fn _golden_build_and_run(src: string, out_txt: string) -> int {
 // even when the producer emitted LF, so the .expected file (typically
 // LF) won't match unless we strip them on read-back.
 fn _golden_normalize(s: string) -> string {
-    let n: int = s.len();
+    let n: i32 = s.len();
     let mut out: string = "";
-    for let i: int = 0; i < n; i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < n; i++ {
+        let c: i32 = s.at(i).to_int();
         if c == 13 { continue; }
         out = out.concat(s.substring(i, i + 1));
     }
@@ -3099,25 +3099,25 @@ fn _golden_normalize(s: string) -> string {
 // to 60 chars of context on each side. Anchors the eye in long outputs
 // without dumping a full diff.
 fn _golden_show_diff(actual: string, expected: string) {
-    let na: int = actual.len();
-    let ne: int = expected.len();
-    let mut i: int = 0;
+    let na: i32 = actual.len();
+    let ne: i32 = expected.len();
+    let mut i: i32 = 0;
     while i < na && i < ne && actual.at(i).to_int() == expected.at(i).to_int() {
         i = i + 1;
     }
-    let mut line: int = 1;
-    let mut col: int = 1;
-    for let k: int = 0; k < i; k++ {
+    let mut line: i32 = 1;
+    let mut col: i32 = 1;
+    for let k: i32 = 0; k < i; k++ {
         if actual.at(k).to_int() == 10 { line = line + 1; col = 1; }
         else { col = col + 1; }
     }
-    let mut win_a_lo: int = 0;
+    let mut win_a_lo: i32 = 0;
     if i > 30 { win_a_lo = i - 30; }
-    let mut win_a_hi: int = na;
+    let mut win_a_hi: i32 = na;
     if i + 30 < na { win_a_hi = i + 30; }
-    let mut win_e_lo: int = 0;
+    let mut win_e_lo: i32 = 0;
     if i > 30 { win_e_lo = i - 30; }
-    let mut win_e_hi: int = ne;
+    let mut win_e_hi: i32 = ne;
     if i + 30 < ne { win_e_hi = i + 30; }
     println!("        first diff at line", line, "col", col);
     println!("        actual:   ", actual.substring(win_a_lo, win_a_hi));
@@ -3128,7 +3128,7 @@ fn _golden_show_diff(actual: string, expected: string) {
 // has a sibling `<name>.expected`, build it, run it, and diff stdout
 // against the file. Files without a `.expected` sibling are skipped
 // (they'd be examples that aren't yet pinned).
-fn run_golden(dir: string) -> int {
+fn run_golden(dir: string) -> i32 {
     let mut search_dir: string = dir;
     if search_dir.eq("") { search_dir = "."; }
     let raw: string = __glide_list_dir(search_dir, ".glide");
@@ -3139,11 +3139,11 @@ fn run_golden(dir: string) -> int {
     let names: *Vector<string> = raw.split("\n");
 
     let stdout_path: string = "__glide_golden_stdout.txt";
-    let mut passed: int = 0;
-    let mut failed: int = 0;
-    let mut skipped: int = 0;
+    let mut passed: i32 = 0;
+    let mut failed: i32 = 0;
+    let mut skipped: i32 = 0;
 
-    for let i: int = 0; i < names.len(); i++ {
+    for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
         if nm.eq("") { continue; }
         // Skip helper test files — those are L1, not goldens.
@@ -3161,7 +3161,7 @@ fn run_golden(dir: string) -> int {
         }
         let expected: string = read_file(expected_path);
 
-        let rc: int = _golden_build_and_run(src, stdout_path);
+        let rc: i32 = _golden_build_and_run(src, stdout_path);
         if rc < 0 {
             failed = failed + 1;
             println!(col_red().concat("FAIL").concat(col_reset()), src, "(build failed)");
@@ -3193,8 +3193,8 @@ fn run_golden(dir: string) -> int {
     return 0;
 }
 
-fn main() -> int {
-    let argc: int = args_count();
+fn main() -> i32 {
+    let argc: i32 = args_count();
     if argc < 2 {
         print_usage();
         return 1;
@@ -3205,14 +3205,14 @@ fn main() -> int {
     // Also accepts `--lint-as-error=all` to deny every warning.
     let deny: *Vector<string> = Vector::new();
     let flag_prefix: string = "--lint-as-error=";
-    let flag_len: int = flag_prefix.len();
-    for let i: int = 0; i < argc; i++ {
+    let flag_len: i32 = flag_prefix.len();
+    for let i: i32 = 0; i < argc; i++ {
         let a: string = args_at(i);
         if a.len() <= flag_len { continue; }
         if !a.substring(0, flag_len).eq(flag_prefix) { continue; }
         let val: string = a.substring(flag_len, a.len());
         let toks: *Vector<string> = val.split(",");
-        for let j: int = 0; j < toks.len(); j++ {
+        for let j: i32 = 0; j < toks.len(); j++ {
             let tk: string = toks.get(j).trim();
             if !tk.eq("") { deny.push(tk); }
         }
@@ -3270,7 +3270,7 @@ fn main() -> int {
         let mut is_lib: bool = false;
         let mut emit_ai: bool = false;
         let mut init_vcs: bool = true;
-        for let i: int = 2; i < argc; i++ {
+        for let i: i32 = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.eq("--lib") { is_lib = true; continue; }
             if a.eq("--ai") { emit_ai = true; continue; }
@@ -3312,7 +3312,7 @@ fn main() -> int {
     // source order so earlier offsets stay valid.
     if cmd.eq("fix") {
         let mut target: string = "";
-        for let i: int = 2; i < argc; i++ {
+        for let i: i32 = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.len() > 0 && a.at(0).to_int() == 45 { continue; }
             target = a; break;
@@ -3340,7 +3340,7 @@ fn main() -> int {
     // imported files; exit 1 when anything fires, 0 when clean.
     if cmd.eq("lint") {
         let mut target: string = "";
-        for let i: int = 2; i < argc; i++ {
+        for let i: i32 = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.len() > 0 && a.at(0).to_int() == 45 { continue; }   // skip flags
             target = a; break;
@@ -3393,10 +3393,10 @@ fn main() -> int {
     // can hit http://127.0.0.1:<port>/ directly.
     if cmd.eq("doc") {
         let mut want_open: bool = false;
-        let mut serve_port: int = 0;
+        let mut serve_port: i32 = 0;
         let mut emit_ai: bool = false;
         let mut include_stdlib: bool = false;
-        for let i: int = 2; i < argc; i++ {
+        for let i: i32 = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.eq("--open") { want_open = true; continue; }
             if a.eq("--serve") { serve_port = 3030; continue; }
@@ -3404,7 +3404,7 @@ fn main() -> int {
             if a.eq("--stdlib") { include_stdlib = true; continue; }
             if a.len() > 8 && a.substring(0, 8).eq("--serve=") {
                 let n: string = a.substring(8, a.len());
-                let parsed: int = _parse_port(n);
+                let parsed: i32 = _parse_port(n);
                 if parsed > 0 { serve_port = parsed; }
                 continue;
             }
@@ -3420,7 +3420,7 @@ fn main() -> int {
     if cmd.eq("test") {
         let mut tpath: string = "";
         let mut golden: bool = false;
-        for let i: int = 2; i < argc; i++ {
+        for let i: i32 = 2; i < argc; i++ {
             let a: string = args_at(i);
             if a.eq("--golden") { golden = true; continue; }
             if tpath.eq("") { tpath = a; }
@@ -3433,8 +3433,8 @@ fn main() -> int {
     // subcommand: build + execute, like `cargo run` / `go run`.
     // Pass `--emit` to keep the legacy "print generated C to stdout"
     // behaviour for tooling that piped it.
-    let mut mode: int = MODE_RUN;
-    let mut src_arg_idx: int = 2;
+    let mut mode: i32 = MODE_RUN;
+    let mut src_arg_idx: i32 = 2;
     if cmd.eq("build") { mode = MODE_BUILD; }
     else if cmd.eq("run") { mode = MODE_RUN; }
     else if cmd.eq("emit") { mode = MODE_EMIT; }
@@ -3443,7 +3443,7 @@ fn main() -> int {
     else {
         // No subcommand — first positional arg is the source file.
         src_arg_idx = 1;
-        for let i: int = 0; i < argc; i++ {
+        for let i: i32 = 0; i < argc; i++ {
             if args_at(i).eq("--emit") { mode = MODE_EMIT; src_arg_idx = i + 1; }
         }
     }
@@ -3523,8 +3523,8 @@ fn main() -> int {
     let mut out_path: string = "";
     let mut target: string = "";
     let mut write_in_place: bool = false;
-    let flag_start: int = if src_arg_idx >= argc { 2 } else { src_arg_idx + 1 };
-    for let i: int = flag_start; i < argc; i++ {
+    let flag_start: i32 = if src_arg_idx >= argc { 2 } else { src_arg_idx + 1 };
+    for let i: i32 = flag_start; i < argc; i++ {
         let a: string = args_at(i);
         if a.eq("-o") && (i + 1) < argc {
             out_path = args_at(i + 1);
@@ -3594,13 +3594,13 @@ fn main() -> int {
         check_program(t, stmts);
         run_extra_analyses(t, stmts);
         let src_text: string = read_file(src_path);
-        let mut user_errors: int = 0;
+        let mut user_errors: i32 = 0;
         let json: bool = _wants_json(argc);
         let mut want_all: bool = false;
-        for let k: int = 0; k < argc; k++ {
+        for let k: i32 = 0; k < argc; k++ {
             if args_at(k).eq("--all") { want_all = true; }
         }
-        for let i: int = 0; i < t.diagnostics.len(); i++ {
+        for let i: i32 = 0; i < t.diagnostics.len(); i++ {
             let d: DiagEntry = t.diagnostics.get(i);
             let mut path: string = d.origin;
             if path.eq("") { path = src_path; }
@@ -3616,7 +3616,7 @@ fn main() -> int {
             }
             if d.severity == 1 || promoted { user_errors = user_errors + 1; }
         }
-        let mut check_exit: int = 0;
+        let mut check_exit: i32 = 0;
         if user_errors > 0 {
             if !json {
                 let mut tail: string = "found 1 error";

@@ -25,7 +25,7 @@ fn _req(path: string) -> HttpRequest {
     };
 }
 
-fn test_dotdot_segment_blocked_on_literal_route() -> int {
+fn test_dotdot_segment_blocked_on_literal_route() -> i32 {
     let r: *Router = Router::new();
     r.get("/files", h_ok);
     let req: HttpRequest = _req("/files/../etc");
@@ -34,7 +34,7 @@ fn test_dotdot_segment_blocked_on_literal_route() -> int {
     return 0;
 }
 
-fn test_dotdot_segment_blocked_on_wildcard() -> int {
+fn test_dotdot_segment_blocked_on_wildcard() -> i32 {
     let r: *Router = Router::new();
     r.get("/static/*rest", h_ok);
     let req: HttpRequest = _req("/static/../etc/passwd");
@@ -43,7 +43,7 @@ fn test_dotdot_segment_blocked_on_wildcard() -> int {
     return 0;
 }
 
-fn test_dotdot_at_root_blocked() -> int {
+fn test_dotdot_at_root_blocked() -> i32 {
     let r: *Router = Router::new();
     r.get("/", h_ok);
     let req: HttpRequest = _req("/..");
@@ -52,7 +52,7 @@ fn test_dotdot_at_root_blocked() -> int {
     return 0;
 }
 
-fn test_double_dot_in_segment_name_allowed() -> int {
+fn test_double_dot_in_segment_name_allowed() -> i32 {
     // `foo..bar` is a literal name with two dots — not a `..` segment.
     let r: *Router = Router::new();
     r.get("/foo..bar", h_ok);
@@ -62,7 +62,7 @@ fn test_double_dot_in_segment_name_allowed() -> int {
     return 0;
 }
 
-fn test_single_dot_segment_allowed() -> int {
+fn test_single_dot_segment_allowed() -> i32 {
     // `.` is a no-op segment. We don't normalise it (the router is
     // path-string based, not VFS-based) but we don't block it either.
     let r: *Router = Router::new();

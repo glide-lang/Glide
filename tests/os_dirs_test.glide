@@ -1,35 +1,35 @@
 import stdlib::testing::*;
 import stdlib::os::*;
 
-fn test_os_temp_dir_exists() -> int {
+fn test_os_temp_dir_exists() -> i32 {
     let r: !string = os_temp_dir();
     assert!(r.ok);
     assert!(r.val.len() > 0);
     return 0;
 }
 
-fn test_os_home_dir_exists() -> int {
+fn test_os_home_dir_exists() -> i32 {
     let r: !string = os_home_dir();
     assert!(r.ok);
     assert!(r.val.len() > 0);
     return 0;
 }
 
-fn test_os_config_dir_exists() -> int {
+fn test_os_config_dir_exists() -> i32 {
     let r: !string = os_config_dir();
     assert!(r.ok);
     assert!(r.val.len() > 0);
     return 0;
 }
 
-fn test_os_cache_dir_exists() -> int {
+fn test_os_cache_dir_exists() -> i32 {
     let r: !string = os_cache_dir();
     assert!(r.ok);
     assert!(r.val.len() > 0);
     return 0;
 }
 
-fn test_os_data_dir_exists() -> int {
+fn test_os_data_dir_exists() -> i32 {
     let r: !string = os_data_dir();
     assert!(r.ok);
     assert!(r.val.len() > 0);

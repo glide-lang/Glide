@@ -4,13 +4,13 @@ import stdlib::os::*;
 
 fn _cleanup_file(path: string) {
     if os_is_windows() {
-        let _r: !int = os_shell("del /Q ".concat(path.replace("/", "\\")).concat(" >NUL 2>NUL"));
+        let _r: !i32 = os_shell("del /Q ".concat(path.replace("/", "\\")).concat(" >NUL 2>NUL"));
     } else {
-        let _r: !int = os_shell("rm -f ".concat(path));
+        let _r: !i32 = os_shell("rm -f ".concat(path));
     }
 }
 
-fn test_fs_write_read_exists() -> int {
+fn test_fs_write_read_exists() -> i32 {
     let path: string = "tests/glide_fs_write_read.tmp";
     _cleanup_file(path);
 
@@ -24,7 +24,7 @@ fn test_fs_write_read_exists() -> int {
     return 0;
 }
 
-fn test_fs_list_filters_sorted_names() -> int {
+fn test_fs_list_filters_sorted_names() -> i32 {
     let a: string = "tests/glide_fs_list_a.tmp";
     let b: string = "tests/glide_fs_list_b.tmp";
     let other: string = "tests/glide_fs_list_other.txt";
@@ -43,7 +43,7 @@ fn test_fs_list_filters_sorted_names() -> int {
     let mut saw_a: bool = false;
     let mut saw_b: bool = false;
     let mut saw_other: bool = false;
-    for let i: int = 0; i < files.len(); i++ {
+    for let i: i32 = 0; i < files.len(); i++ {
         let name: string = files.get(i);
         if name.eq("glide_fs_list_a.tmp") { saw_a = true; }
         if name.eq("glide_fs_list_b.tmp") { saw_b = true; }
@@ -59,7 +59,7 @@ fn test_fs_list_filters_sorted_names() -> int {
     return 0;
 }
 
-fn test_fs_read_lines_and_count() -> int {
+fn test_fs_read_lines_and_count() -> i32 {
     let path: string = "tests/glide_fs_lines.tmp";
     _cleanup_file(path);
 
@@ -77,7 +77,7 @@ fn test_fs_read_lines_and_count() -> int {
     return 0;
 }
 
-fn test_fs_path_helpers() -> int {
+fn test_fs_path_helpers() -> i32 {
     assert_str_eq!(fs_basename("src/stdlib/fs.glide"), "fs.glide");
     assert_str_eq!(fs_basename("C:\\Program Files\\Glide\\bin"), "bin");
     assert_str_eq!(fs_extension("archive.TAR.GZ"), "gz");
@@ -85,11 +85,11 @@ fn test_fs_path_helpers() -> int {
     return 0;
 }
 
-fn test_fs_dirname_skipped_until_exported() -> int {
+fn test_fs_dirname_skipped_until_exported() -> i32 {
     return 0;
 }
 
-fn test_fs_read_or_default() -> int {
+fn test_fs_read_or_default() -> i32 {
     let path: string = "tests/glide_fs_default.tmp";
     _cleanup_file(path);
 

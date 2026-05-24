@@ -70,7 +70,7 @@ impl StringSet {
     /// s.insert("a"); s.insert("b");
     /// s.len();   // 2
     /// ```
-    fn len(self: *StringSet) -> int {
+    fn len(self: *StringSet) -> i32 {
         return self.m.len();
     }
 

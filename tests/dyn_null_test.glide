@@ -18,13 +18,13 @@ pub struct Slot {
     pub g:     *dyn Greet,    // null when unset
 }
 
-fn test_let_init_null() -> int {
+fn test_let_init_null() -> i32 {
     let g: *dyn Greet = null;
     assert!(g == null);
     return 0;
 }
 
-fn test_compare_null_when_set() -> int {
+fn test_compare_null_when_set() -> i32 {
     let h: *Hi = malloc(sizeof(Hi)) as *Hi;
     h.name = "alice";
     let g: *dyn Greet = h as *dyn Greet;
@@ -33,7 +33,7 @@ fn test_compare_null_when_set() -> int {
     return 0;
 }
 
-fn test_dispatch_after_null_check() -> int {
+fn test_dispatch_after_null_check() -> i32 {
     let h: *Hi = malloc(sizeof(Hi)) as *Hi;
     h.name = "bob";
     let g: *dyn Greet = h as *dyn Greet;
@@ -45,14 +45,14 @@ fn test_dispatch_after_null_check() -> int {
     return 0;
 }
 
-fn test_struct_field_init_null() -> int {
+fn test_struct_field_init_null() -> i32 {
     let s: Slot = Slot { label: "empty", g: null };
     assert!(s.g == null);
     assert_str_eq!(s.label, "empty");
     return 0;
 }
 
-fn test_struct_field_init_set() -> int {
+fn test_struct_field_init_set() -> i32 {
     let h: *Hi = malloc(sizeof(Hi)) as *Hi;
     h.name = "carol";
     let s: Slot = Slot { label: "filled", g: h as *dyn Greet };
@@ -62,7 +62,7 @@ fn test_struct_field_init_set() -> int {
 }
 
 // Both sides as null (corner case the codegen handles too).
-fn test_two_nulls_compare() -> int {
+fn test_two_nulls_compare() -> i32 {
     let g1: *dyn Greet = null;
     let g2: *dyn Greet = null;
     // The == path uses .vtable on the LHS; both resolve to NULL.

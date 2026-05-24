@@ -166,13 +166,13 @@ c_raw! {
     #endif
 }
 
-extern fn __glide_udp_bind(family: int, v4: i64, v6_hi: i64, v6_lo: i64, port: int) -> i64;
-extern fn __glide_udp_send_to(fd: i64, data: string, n: int,
-                              family: int, v4: i64, v6_hi: i64, v6_lo: i64, port: int) -> i64;
-extern fn __glide_udp_recv_from(fd: i64, buf: *void, max: int,
-                                out_family: *int, out_v4: *i64,
+extern fn __glide_udp_bind(family: i32, v4: i64, v6_hi: i64, v6_lo: i64, port: i32) -> i64;
+extern fn __glide_udp_send_to(fd: i64, data: string, n: i32,
+                              family: i32, v4: i64, v6_hi: i64, v6_lo: i64, port: i32) -> i64;
+extern fn __glide_udp_recv_from(fd: i64, buf: *void, max: i32,
+                                out_family: *i32, out_v4: *i64,
                                 out_v6_hi: *i64, out_v6_lo: *i64,
-                                out_port: *int) -> i64;
+                                out_port: *i32) -> i64;
 extern fn __glide_udp_close(fd: i64);
 // `_bytes_to_string` is declared in net::ip; we use it via that
 // transitive import.
@@ -198,7 +198,7 @@ impl UdpSocket {
     /// if r.ok { defer r.val.close(); /* ...recv loop... */ }
     /// ```
     pub fn bind(addr: *SocketAddr) -> !*UdpSocket {
-        let mut family: int = 4;
+        let mut family: i32 = 4;
         let mut v4: i64 = 0;
         let mut v6_hi: i64 = 0;
         let mut v6_lo: i64 = 0;
@@ -223,7 +223,7 @@ impl UdpSocket {
     /// let r: !*UdpSocket = UdpSocket::bind_port(5353);
     /// if r.ok { defer r.val.close(); }
     /// ```
-    pub fn bind_port(port: int) -> !*UdpSocket {
+    pub fn bind_port(port: i32) -> !*UdpSocket {
         let any: *IpAddr = IpAddr::unspec_v4();
         let addr: *SocketAddr = SocketAddr::new(any, port);
         return UdpSocket::bind(addr);
@@ -237,8 +237,8 @@ impl UdpSocket {
     /// let dst: *SocketAddr = SocketAddr::parse("127.0.0.1:5353").val;
     /// sock.send_to("ping", dst);
     /// ```
-    pub fn send_to(self: *UdpSocket, data: string, dst: *SocketAddr) -> !int {
-        let mut family: int = 4;
+    pub fn send_to(self: *UdpSocket, data: string, dst: *SocketAddr) -> !i32 {
+        let mut family: i32 = 4;
         let mut v4: i64 = 0;
         let mut v6_hi: i64 = 0;
         let mut v6_lo: i64 = 0;
@@ -253,7 +253,7 @@ impl UdpSocket {
         let n: i64 = __glide_udp_send_to(self.fd, data, data.len(),
                                           family, v4, v6_hi, v6_lo, dst.port);
         if n < 0 { return err("udp: send_to failed"); }
-        return ok(n as int);
+        return ok(n as i32);
     }
 
     /// Block until a datagram arrives. `max` caps payload size — bytes
@@ -265,23 +265,23 @@ impl UdpSocket {
     ///     println!("from", r.val.from.to_string(), ":", r.val.data);
     /// }
     /// ```
-    pub fn recv_from(self: *UdpSocket, max: int) -> !*UdpRecv {
+    pub fn recv_from(self: *UdpSocket, max: i32) -> !*UdpRecv {
         let buf: *u8 = malloc(max) as *u8;
-        let mut fam: int = 0;
+        let mut fam: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
         let mut lo: i64 = 0;
-        let mut port: int = 0;
+        let mut port: i32 = 0;
         let n: i64 = __glide_udp_recv_from(self.fd, buf as *void, max,
                                             &fam, &v4, &hi, &lo, &port);
         if n < 0 { free(buf as *void); return err("udp: recv_from failed"); }
         // Copy bytes into a Glide string. recvfrom doesn't NUL-terminate.
-        let data: string = _bytes_to_string(buf, n as int);
+        let data: string = _bytes_to_string(buf, n as i32);
         free(buf as *void);
         let mut ip: *IpAddr;
         if fam == 4 {
-            ip = IpAddr::v4((v4 as int >> 24) & 255, (v4 as int >> 16) & 255,
-                            (v4 as int >>  8) & 255,  v4 as int        & 255);
+            ip = IpAddr::v4((v4 as i32 >> 24) & 255, (v4 as i32 >> 16) & 255,
+                            (v4 as i32 >>  8) & 255,  v4 as i32        & 255);
         } else {
             ip = IpAddr::v6(hi, lo);
         }

@@ -2,7 +2,7 @@
 
 fn main() {
     let arena: *Arena = Arena::new(64);
-    let p: *int = arena.alloc(sizeof(int)) as *int;
+    let p: *i32 = arena.alloc(sizeof(i32)) as *i32;
     *p = 42;
     println!(*p);
     arena.free();

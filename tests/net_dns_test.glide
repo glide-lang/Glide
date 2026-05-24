@@ -2,7 +2,7 @@ import stdlib::testing::*;
 import stdlib::net::dns::*;
 import stdlib::net::ip::*;
 
-fn test_resolve_ip_literal_v4() -> int {
+fn test_resolve_ip_literal_v4() -> i32 {
     // Resolving a v4 literal must succeed without DNS lookup.
     let h: string = "127.0.0.1";
     let r: !*Vector<*IpAddr> = resolve(h);
@@ -11,7 +11,7 @@ fn test_resolve_ip_literal_v4() -> int {
     return 0;
 }
 
-fn test_resolve_localhost() -> int {
+fn test_resolve_localhost() -> i32 {
     let h: string = "localhost";
     let r: !*Vector<*IpAddr> = resolve(h);
     assert!(r.ok);
@@ -19,14 +19,14 @@ fn test_resolve_localhost() -> int {
     // At least one address must be loopback.
     let v: *Vector<*IpAddr> = r.val;
     let mut found_loop: bool = false;
-    for let i: int = 0; i < v.len(); i++ {
+    for let i: i32 = 0; i < v.len(); i++ {
         if v.get(i).is_loopback() { found_loop = true; }
     }
     assert!(found_loop);
     return 0;
 }
 
-fn test_resolve_unknown_returns_err() -> int {
+fn test_resolve_unknown_returns_err() -> i32 {
     let h: string = "definitely-not-a-real-host-xyz123.invalid";
     let r: !*Vector<*IpAddr> = resolve(h);
     assert_not!(r.ok);

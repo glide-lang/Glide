@@ -25,26 +25,26 @@ fn derive_with_local(s: *Stmt) -> *Vector<Stmt> {
 
 @derive(WithLocal)
 pub struct A {
-    pub anything: int,
+    pub anything: i32,
 }
 
 @derive(WithLocal)
 pub struct B {
-    pub anything: int,
+    pub anything: i32,
 }
 
 // ---- tests --------------------------------------------------------
 
-fn test_macro_local_returns_its_own_value() -> int {
+fn test_macro_local_returns_its_own_value() -> i32 {
     // Caller-side `x` doesn't capture the macro's `x` because
     // hygiene mangled the macro's binding to `__macro_<id>__x`.
-    let x: int = 100;
+    let x: i32 = 100;
     assert_eq!(A_value(), 7);
     assert_eq!(x, 100);
     return 0;
 }
 
-fn test_two_derives_dont_collide() -> int {
+fn test_two_derives_dont_collide() -> i32 {
     // Two @derive sites both emit a `let x = ...` body; each got
     // a different call_id when the macro ran, so the two `x`
     // bindings are distinct symbols.

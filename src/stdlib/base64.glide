@@ -1,5 +1,5 @@
-fn _b64_char(idx: int) -> string {
-    let mut c: int = 47;
+fn _b64_char(idx: i32) -> string {
+    let mut c: i32 = 47;
     if idx < 26 {
         c = 65 + idx;
     } else if idx < 52 {
@@ -12,7 +12,7 @@ fn _b64_char(idx: int) -> string {
     return (c as char).to_string();
 }
 
-fn _b64_value(c: int) -> int {
+fn _b64_value(c: i32) -> i32 {
     if c >= 65 && c <= 90 { return c - 65; }
     if c >= 97 && c <= 122 { return c - 97 + 26; }
     if c >= 48 && c <= 57 { return c - 48 + 52; }
@@ -32,12 +32,12 @@ fn _b64_value(c: int) -> int {
 /// ```
 pub fn b64_encode(s: string) -> string {
     let mut out: string = "";
-    let n: int = s.len();
-    let mut i: int = 0;
+    let n: i32 = s.len();
+    let mut i: i32 = 0;
     while i < n {
-        let b0: int = s.at(i).to_int();
-        let mut b1: int = 0;
-        let mut b2: int = 0;
+        let b0: i32 = s.at(i).to_int();
+        let mut b1: i32 = 0;
+        let mut b2: i32 = 0;
         let have1: bool = i + 1 < n;
         let have2: bool = i + 2 < n;
         if have1 { b1 = s.at(i + 1).to_int(); }
@@ -73,12 +73,12 @@ pub fn b64_encode(s: string) -> string {
 /// if !bad.ok { println!(bad.err); } // "invalid base64 character"
 /// ```
 pub fn b64_decode(s: string) -> !string {
-    let n: int = s.len();
-    let mut nonpad: int = n;
+    let n: i32 = s.len();
+    let mut nonpad: i32 = n;
     let mut seen_pad: bool = false;
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < n {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c == 61 {
             if !seen_pad {
                 seen_pad = true;
@@ -96,10 +96,10 @@ pub fn b64_decode(s: string) -> !string {
     let mut out: string = "";
     i = 0;
     while i < nonpad {
-        let v0: int = _b64_value(s.at(i).to_int());
-        let v1: int = _b64_value(s.at(i + 1).to_int());
-        let mut v2: int = 0;
-        let mut v3: int = 0;
+        let v0: i32 = _b64_value(s.at(i).to_int());
+        let v1: i32 = _b64_value(s.at(i + 1).to_int());
+        let mut v2: i32 = 0;
+        let mut v3: i32 = 0;
         let have2: bool = i + 2 < nonpad;
         let have3: bool = i + 3 < nonpad;
         if have2 { v2 = _b64_value(s.at(i + 2).to_int()); }

@@ -1,8 +1,8 @@
 import stdlib::testing::*;
 import stdlib::hex::*;
 
-fn _byte(s: string, i: int) -> int {
-    let mut n: int = s.at(i).to_int();
+fn _byte(s: string, i: i32) -> i32 {
+    let mut n: i32 = s.at(i).to_int();
     if n < 0 { n = n + 256; }
     return n;
 }
@@ -22,7 +22,7 @@ fn _round_trip(s: string) {
     assert_str_eq!(got, s);
 }
 
-fn test_empty_encode_decode() -> int {
+fn test_empty_encode_decode() -> i32 {
     assert_str_eq!(hex_encode(""), "");
     let dec: !string = hex_decode("");
     assert!(dec.ok);
@@ -31,17 +31,17 @@ fn test_empty_encode_decode() -> int {
     return 0;
 }
 
-fn test_ascii_encode() -> int {
+fn test_ascii_encode() -> i32 {
     assert_str_eq!(hex_encode("abc"), "616263");
     return 0;
 }
 
-fn test_binary_encode() -> int {
+fn test_binary_encode() -> i32 {
     assert_str_eq!(hex_encode(_cafebabe()), "cafebabe");
     return 0;
 }
 
-fn test_decode_mixed_case() -> int {
+fn test_decode_mixed_case() -> i32 {
     let dec: !string = hex_decode("CaFe");
     assert!(dec.ok);
     let got: string = dec.val;
@@ -51,21 +51,21 @@ fn test_decode_mixed_case() -> int {
     return 0;
 }
 
-fn test_decode_rejects_odd_length() -> int {
+fn test_decode_rejects_odd_length() -> i32 {
     let dec: !string = hex_decode("abc");
     assert!(!dec.ok);
     assert_str_eq!(dec.err, "odd length");
     return 0;
 }
 
-fn test_decode_rejects_non_hex() -> int {
+fn test_decode_rejects_non_hex() -> i32 {
     let dec: !string = hex_decode("zz");
     assert!(!dec.ok);
     assert_str_eq!(dec.err, "non-hex char");
     return 0;
 }
 
-fn test_round_trips() -> int {
+fn test_round_trips() -> i32 {
     _round_trip("x");
     _round_trip("xy");
     _round_trip("abcde");

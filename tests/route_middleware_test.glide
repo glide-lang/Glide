@@ -40,7 +40,7 @@ fn audited() -> HttpResponse {
     return HttpResponse::ok().text("audited");
 }
 
-fn test_public_route_no_mw() -> int {
+fn test_public_route_no_mw() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/public", "");
@@ -49,7 +49,7 @@ fn test_public_route_no_mw() -> int {
     return 0;
 }
 
-fn test_locked_without_token_returns_401() -> int {
+fn test_locked_without_token_returns_401() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/locked", "");
@@ -58,7 +58,7 @@ fn test_locked_without_token_returns_401() -> int {
     return 0;
 }
 
-fn test_locked_with_token_returns_200() -> int {
+fn test_locked_with_token_returns_200() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/locked", "X-Token: secret\r\n");
@@ -67,7 +67,7 @@ fn test_locked_with_token_returns_200() -> int {
     return 0;
 }
 
-fn test_audited_chain_in_order() -> int {
+fn test_audited_chain_in_order() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/audited", "X-Token: secret\r\n");
@@ -77,7 +77,7 @@ fn test_audited_chain_in_order() -> int {
     return 0;
 }
 
-fn test_audited_blocked_by_first_mw() -> int {
+fn test_audited_blocked_by_first_mw() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/audited", "");

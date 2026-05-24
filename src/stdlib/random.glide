@@ -76,11 +76,11 @@ impl Rng {
     /// ```glide
     /// let n: int = r.next_int();        // 0 .. 2^31-1
     /// ```
-    pub fn next_int(self: *Rng) -> int {
+    pub fn next_int(self: *Rng) -> i32 {
         let v: i64 = self.next_i64();
         let one: i64 = 1;
         let mask: i64 = (one << 31) - 1;
-        return (v & mask) as int;
+        return (v & mask) as i32;
     }
 
     /// Uniform integer in `[lo, hi)`. Returns `lo` when the range is
@@ -91,9 +91,9 @@ impl Rng {
     /// let dice: int = r.range(1, 7);    // d6 → 1..=6
     /// let pct:  int = r.range(0, 100);  // 0..=99
     /// ```
-    pub fn range(self: *Rng, lo: int, hi: int) -> int {
+    pub fn range(self: *Rng, lo: i32, hi: i32) -> i32 {
         if hi <= lo { return lo; }
-        let span: int = hi - lo;
+        let span: i32 = hi - lo;
         return lo + (self.next_int() % span);
     }
 

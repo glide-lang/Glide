@@ -6,7 +6,7 @@ pub struct CorsConfig {
     pub methods:     string,
     pub headers:     string,
     pub credentials: bool,
-    pub max_age:     int,
+    pub max_age:     i32,
 }
 
 c_raw! {
@@ -17,12 +17,12 @@ c_raw! {
     static int __glide_cors_max_age = 0;
 }
 
-extern fn __glide_cors_set(origin: string, methods: string, headers: string, credentials: bool, max_age: int);
+extern fn __glide_cors_set(origin: string, methods: string, headers: string, credentials: bool, max_age: i32);
 extern fn __glide_cors_origin_get() -> string;
 extern fn __glide_cors_methods_get() -> string;
 extern fn __glide_cors_headers_get() -> string;
 extern fn __glide_cors_credentials_get() -> bool;
-extern fn __glide_cors_max_age_get() -> int;
+extern fn __glide_cors_max_age_get() -> i32;
 
 c_raw! {
     void __glide_cors_set(const char* origin, const char* methods, const char* headers, bool credentials, int max_age) {
@@ -63,7 +63,7 @@ fn _cors_headers(resp: HttpResponse) -> HttpResponse {
     if __glide_cors_credentials_get() {
         out = out.set("Access-Control-Allow-Credentials", "true");
     }
-    let age: int = __glide_cors_max_age_get();
+    let age: i32 = __glide_cors_max_age_get();
     if age > 0 {
         out = out.set("Access-Control-Max-Age", age.to_string());
     }

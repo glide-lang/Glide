@@ -62,13 +62,13 @@ impl JsonBind for TodoList {
 
     fn to_json(self: *TodoList) -> *JsonValue {
         let arr: *JsonValue = JsonValue::array();
-        for let i: int = 0; i < self.todos.len(); i++ {
+        for let i: i32 = 0; i < self.todos.len(); i++ {
             let t: Todo = self.todos.get(i);
             arr.arr_push(t.to_json());
         }
         let obj: *JsonValue = JsonValue::object();
         obj.obj_set("todos", arr);
-        obj.obj_set("count", JsonValue::int(self.todos.len()));
+        obj.obj_set("count", JsonValue::i32(self.todos.len()));
         return obj;
     }
 }
@@ -113,7 +113,7 @@ fn list_todos() -> Json<TodoList> {
     let s: *HashMap<Todo> = store();
     let xs: *Vector<Todo> = Vector::new();
     let ks: *Vector<string> = s.keys();
-    for let i: int = 0; i < ks.len(); i++ {
+    for let i: i32 = 0; i < ks.len(); i++ {
         xs.push(s.get(ks.get(i)));
     }
     return Json::wrap(TodoList { todos: xs });
@@ -156,7 +156,7 @@ fn delete_todo(req: *HttpRequest) -> HttpResponse {
 
 // ---- entrypoint --------------------------------------------------------
 
-fn main() -> int {
+fn main() -> i32 {
     let r: *Router = Router::new();
     r.get(   "/todos",     list_todos);
     r.get(   "/todos/:id", get_todo);
@@ -165,7 +165,7 @@ fn main() -> int {
     r.delete("/todos/:id", delete_todo);
 
     println!("listening on :8080");
-    let res: !int = r.listen(8080);
+    let res: !i32 = r.listen(8080);
     if !res.ok { println!("listen failed:", res.err); return 1; }
     return 0;
 }

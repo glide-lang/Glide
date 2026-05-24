@@ -131,11 +131,11 @@ extern fn __glide_atomic_new(initial: i64) -> *void;
 extern fn __glide_atomic_load(h: *void) -> i64;
 extern fn __glide_atomic_store(h: *void, v: i64);
 extern fn __glide_atomic_add(h: *void, delta: i64) -> i64;
-extern fn __glide_atomic_cas(h: *void, expected: i64, desired: i64) -> int;
+extern fn __glide_atomic_cas(h: *void, expected: i64, desired: i64) -> i32;
 extern fn __glide_atomic_destroy(h: *void);
 
 extern fn __glide_wg_new() -> *void;
-extern fn __glide_wg_add(h: *void, n: int);
+extern fn __glide_wg_add(h: *void, n: i32);
 extern fn __glide_wg_wait(h: *void);
 extern fn __glide_wg_destroy(h: *void);
 
@@ -338,7 +338,7 @@ impl WaitGroup {
     /// ```glide
     /// wg.add(3);   // expect 3 done() calls before wait() returns
     /// ```
-    pub fn add(self: *WaitGroup, n: int) { __glide_wg_add(self.handle, n); }
+    pub fn add(self: *WaitGroup, n: i32) { __glide_wg_add(self.handle, n); }
 
     /// Decrement the counter by one. When it hits zero, every blocked
     /// `wait()` call returns.

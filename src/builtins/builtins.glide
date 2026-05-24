@@ -78,7 +78,7 @@ macro format!($($arg:expr),*);
 ///
 /// **Caveat:** mismatched specifiers vs argument types are undefined
 /// behaviour at the C level. Glide doesn't validate the format string.
-extern fn printf(fmt: string, ...) -> int;
+extern fn printf(fmt: string, ...) -> i32;
 
 /// Construct a typed channel. The element type is inferred from the
 /// `let`-annotation; capacity is the number of pending sends the channel
@@ -104,7 +104,7 @@ extern fn printf(fmt: string, ...) -> int;
 /// For sharing large or owning structures across threads, prefer a
 /// pointer element type (`chan<*Vector<int>>`) so the data isn't copied
 /// per send / recv.
-extern fn make_chan(cap: int);
+extern fn make_chan(cap: i32);
 
 // ---- C runtime escape hatches --------------------------------------------
 //
@@ -151,7 +151,7 @@ extern fn free(p: *void);
 ///     println!(args_at(i));
 /// }
 /// ```
-extern fn args_count() -> int;
+extern fn args_count() -> i32;
 
 /// CLI argument at index `i` (mirrors `argv[i]`). Index `0` is the
 /// program path; indices `1..args_count()` are user arguments.
@@ -160,7 +160,7 @@ extern fn args_count() -> int;
 /// let prog: string = args_at(0);    // path to the binary
 /// let first: string = args_at(1);   // first user arg, "" if missing
 /// ```
-extern fn args_at(i: int) -> string;
+extern fn args_at(i: i32) -> string;
 
 // File I/O lives in `stdlib::io` and `stdlib::fs` - import them explicitly
 // to read or write files. The raw C-runtime functions stay private to the
@@ -196,7 +196,7 @@ extern fn yield_now();
 ///     sleep_ms(500);
 /// }
 /// ```
-extern fn sleep_ms(ms: int);
+extern fn sleep_ms(ms: i32);
 
 // TCP sockets live in `stdlib::net` - import the higher-level wrappers
 // from there. The raw C-runtime sockets are intentionally NOT exposed
@@ -462,17 +462,17 @@ c_raw! {
     #endif
 }
 
-pub extern fn __glide_palloc(size: int) -> *void;
+pub extern fn __glide_palloc(size: i32) -> *void;
 pub extern fn __glide_palloc_make() -> *void;
 pub extern fn __glide_palloc_free(handle: *void);
-pub extern fn __glide_palloc_active() -> int;
+pub extern fn __glide_palloc_active() -> i32;
 pub extern fn __glide_palloc_get() -> *void;
 pub extern fn __glide_palloc_set(a: *void);
-pub extern fn __glide_palloc_owns(p: *void) -> int;
+pub extern fn __glide_palloc_owns(p: *void) -> i32;
 pub extern fn __glide_pfree(p: *void);
-pub extern fn __glide_palloc_total_bytes() -> int;
-pub extern fn __glide_palloc_chunks() -> int;
-pub extern fn __glide_proc_rss_mb() -> int;
+pub extern fn __glide_palloc_total_bytes() -> i32;
+pub extern fn __glide_palloc_chunks() -> i32;
+pub extern fn __glide_proc_rss_mb() -> i32;
 pub extern fn __glide_proc_rss_bytes() -> i64;
 
 /// Resident-set size of the current process in megabytes (1 MiB =
@@ -481,7 +481,7 @@ pub extern fn __glide_proc_rss_bytes() -> i64;
 /// ```glide
 /// println!("rss:", mem_rss_mb(), "MB");
 /// ```
-pub fn mem_rss_mb() -> int { return __glide_proc_rss_mb(); }
+pub fn mem_rss_mb() -> i32 { return __glide_proc_rss_mb(); }
 
 /// Resident-set size of the current process in bytes. Returns -1 if
 /// the platform doesn't expose it. Useful for per-task memory math

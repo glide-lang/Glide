@@ -22,8 +22,8 @@
 import stdlib::http::*;
 import stdlib::http::router::*;
 
-extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
-extern fn __glide_gzip_encode(input: string, in_len: int, out_len_ptr: *int) -> *void;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+extern fn __glide_gzip_encode(input: string, in_len: i32, out_len_ptr: *i32) -> *void;
 
 c_raw! {
     #include <zlib.h>
@@ -60,7 +60,7 @@ c_raw! {
     }
 }
 
-const _GZIP_MIN_BYTES: int = 1024;
+const _GZIP_MIN_BYTES: i32 = 1024;
 
 pub fn gzip_mw(req: *HttpRequest, c: *Chain) -> HttpResponse {
     let accept: string = req.header("Accept-Encoding").to_lower();
@@ -72,7 +72,7 @@ pub fn gzip_mw(req: *HttpRequest, c: *Chain) -> HttpResponse {
     let ct: string = (&resp).header("Content-Type").to_lower();
     if _is_already_compressed(ct) { return resp; }
 
-    let mut out_len: int = 0;
+    let mut out_len: i32 = 0;
     let buf: *void = __glide_gzip_encode(resp.body, resp.body.len(), &out_len);
     if buf == null || out_len == 0 { return resp; }
     let encoded: string = __glide_string_from_buf(buf, out_len);

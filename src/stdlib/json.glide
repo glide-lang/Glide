@@ -28,18 +28,18 @@
 
 import stdlib::hashmap::*;
 
-pub const JSON_NULL:   int = 0;
-pub const JSON_BOOL:   int = 1;
-pub const JSON_INT:    int = 2;
-pub const JSON_FLOAT:  int = 3;
-pub const JSON_STRING: int = 4;
-pub const JSON_ARRAY:  int = 5;
-pub const JSON_OBJECT: int = 6;
+pub const JSON_NULL:   i32 = 0;
+pub const JSON_BOOL:   i32 = 1;
+pub const JSON_INT:    i32 = 2;
+pub const JSON_FLOAT:  i32 = 3;
+pub const JSON_STRING: i32 = 4;
+pub const JSON_ARRAY:  i32 = 5;
+pub const JSON_OBJECT: i32 = 6;
 
 pub struct JsonValue {
-    pub kind: int,
+    pub kind: i32,
     pub b: bool,
-    pub i: int,
+    pub i: i32,
     pub f: f64,
     pub s: string,
     pub arr: *Vector<JsonValue>,
@@ -88,7 +88,7 @@ impl JsonValue {
     /// ```glide
     /// JsonValue::int(42).emit();   // "42"
     /// ```
-    pub fn int(n: int) -> *JsonValue {
+    pub fn int(n: i32) -> *JsonValue {
         let v: *JsonValue = calloc(1, sizeof(JsonValue)) as *JsonValue;
         v.kind = JSON_INT;
         v.i = n;
@@ -178,9 +178,9 @@ impl JsonValue {
     /// ```
     pub fn escape(s: string) -> string {
         let mut out: string = "\"";
-        let n: int = s.len();
-        for let i: int = 0; i < n; i++ {
-            let c: int = s.at(i).to_int();
+        let n: i32 = s.len();
+        for let i: i32 = 0; i < n; i++ {
+            let c: i32 = s.at(i).to_int();
             if c == 34       { out = out.concat("\\\""); }
             else if c == 92  { out = out.concat("\\\\"); }
             else if c == 10  { out = out.concat("\\n"); }
@@ -235,7 +235,7 @@ impl JsonValue {
     /// ```
     pub fn get(self: *JsonValue, key: string) -> *JsonValue {
         if self == null || self.kind != JSON_OBJECT { return null; }
-        for let i: int = 0; i < self.obj_keys.len(); i++ {
+        for let i: i32 = 0; i < self.obj_keys.len(); i++ {
             if self.obj_keys.get(i).eq(key) {
                 let val: JsonValue = self.obj_vals.get(i);
                 let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
@@ -254,7 +254,7 @@ impl JsonValue {
     /// a.at(1).as_int();   // 20
     /// a.at(99);           // null
     /// ```
-    pub fn at(self: *JsonValue, idx: int) -> *JsonValue {
+    pub fn at(self: *JsonValue, idx: i32) -> *JsonValue {
         if self == null || self.kind != JSON_ARRAY { return null; }
         if idx < 0 || idx >= self.arr.len() { return null; }
         let val: JsonValue = self.arr.get(idx);
@@ -271,7 +271,7 @@ impl JsonValue {
     /// JsonValue::parse("{\"a\":1,\"b\":2}").len();    // 2
     /// JsonValue::int(7).len();                        // 0
     /// ```
-    pub fn len(self: *JsonValue) -> int {
+    pub fn len(self: *JsonValue) -> i32 {
         if self == null { return 0; }
         if self.kind == JSON_ARRAY  { return self.arr.len(); }
         if self.kind == JSON_OBJECT { return self.obj_keys.len(); }
@@ -297,10 +297,10 @@ impl JsonValue {
     /// JsonValue::float(3.9).as_int();        // 3
     /// JsonValue::string("nope").as_int();    // 0
     /// ```
-    pub fn as_int(self: *JsonValue) -> int {
+    pub fn as_int(self: *JsonValue) -> i32 {
         if self == null { return 0; }
         if self.kind == JSON_INT { return self.i; }
-        if self.kind == JSON_FLOAT { return self.f as int; }
+        if self.kind == JSON_FLOAT { return self.f as i32; }
         return 0;
     }
 
@@ -359,8 +359,8 @@ impl JsonValue {
         if self.kind == JSON_STRING { return JsonValue::escape(self.s); }
         if self.kind == JSON_ARRAY {
             let mut out: string = "[";
-            let n: int = self.arr.len();
-            for let i: int = 0; i < n; i++ {
+            let n: i32 = self.arr.len();
+            for let i: i32 = 0; i < n; i++ {
                 if i > 0 { out = out.concat(","); }
                 let e: JsonValue = self.arr.get(i);
                 out = out.concat((&e).emit());
@@ -369,8 +369,8 @@ impl JsonValue {
         }
         if self.kind == JSON_OBJECT {
             let mut out: string = "{";
-            let n: int = self.obj_keys.len();
-            for let i: int = 0; i < n; i++ {
+            let n: i32 = self.obj_keys.len();
+            for let i: i32 = 0; i < n; i++ {
                 if i > 0 { out = out.concat(","); }
                 out = out.concat(JsonValue::escape(self.obj_keys.get(i)));
                 out = out.concat(":");
@@ -409,7 +409,7 @@ impl JsonValue {
     /// let r: !int = v.get_int("idade");
     /// if r.ok { println!(r.val); }    // 12
     /// ```
-    pub fn get_int(self: *JsonValue, key: string) -> !int {
+    pub fn get_int(self: *JsonValue, key: string) -> !i32 {
         if self.kind != JSON_OBJECT { return err("not an object"); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
@@ -466,7 +466,7 @@ impl JsonValue {
     }
 
     /// Optional int. `none` on missing key, JSON null, or wrong type.
-    pub fn opt_int(self: *JsonValue, key: string) -> ?int {
+    pub fn opt_int(self: *JsonValue, key: string) -> ?i32 {
         if self.kind != JSON_OBJECT { return none(); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind != JSON_INT { return none(); }
@@ -547,18 +547,18 @@ impl JsonValue {
 
 pub struct JsonParser {
     pub src: string,
-    pub pos: int,
-    pub n: int,
+    pub pos: i32,
+    pub n: i32,
 }
 
-fn _jp_peek(p: *JsonParser) -> int {
+fn _jp_peek(p: *JsonParser) -> i32 {
     if p.pos >= p.n { return -1; }
     return p.src.at(p.pos).to_int();
 }
 
 fn _jp_skip_ws(p: *JsonParser) {
     while p.pos < p.n {
-        let c: int = _jp_peek(p);
+        let c: i32 = _jp_peek(p);
         if c == 32 || c == 9 || c == 10 || c == 13 { p.pos = p.pos + 1; }
         else { break; }
     }
@@ -566,7 +566,7 @@ fn _jp_skip_ws(p: *JsonParser) {
 
 fn _jp_value(p: *JsonParser) -> *JsonValue {
     _jp_skip_ws(p);
-    let c: int = _jp_peek(p);
+    let c: i32 = _jp_peek(p);
     if c == 123 { return _jp_object(p); }       // '{'
     if c == 91  { return _jp_array(p); }        // '['
     if c == 34  { return _jp_string_value(p); } // '"'
@@ -592,7 +592,7 @@ fn _jp_object(p: *JsonParser) -> *JsonValue {
         obj.obj_keys.push(k.s);
         obj.obj_vals.push(*v);
         _jp_skip_ws(p);
-        let c: int = _jp_peek(p);
+        let c: i32 = _jp_peek(p);
         if c == 44 { p.pos = p.pos + 1; continue; } // ','
         if c == 125 { p.pos = p.pos + 1; break; }   // '}'
         break;
@@ -610,7 +610,7 @@ fn _jp_array(p: *JsonParser) -> *JsonValue {
         if v == null { return arr; }
         arr.arr.push(*v);
         _jp_skip_ws(p);
-        let c: int = _jp_peek(p);
+        let c: i32 = _jp_peek(p);
         if c == 44 { p.pos = p.pos + 1; continue; }
         if c == 93 { p.pos = p.pos + 1; break; }
         break;
@@ -621,10 +621,10 @@ fn _jp_array(p: *JsonParser) -> *JsonValue {
 fn _jp_string_value(p: *JsonParser) -> *JsonValue {
     if _jp_peek(p) != 34 { return null; }
     p.pos = p.pos + 1;
-    let start: int = p.pos;
+    let start: i32 = p.pos;
     let mut has_escape: bool = false;
     while p.pos < p.n {
-        let c: int = _jp_peek(p);
+        let c: i32 = _jp_peek(p);
         if c == 34 { break; }
         if c == 92 {
             has_escape = true;
@@ -642,14 +642,14 @@ fn _jp_string_value(p: *JsonParser) -> *JsonValue {
 
 fn _jp_unescape(raw: string) -> string {
     let mut out: string = "";
-    let n: int = raw.len();
-    let mut i: int = 0;
+    let n: i32 = raw.len();
+    let mut i: i32 = 0;
     while i < n {
-        let c: int = raw.at(i).to_int();
+        let c: i32 = raw.at(i).to_int();
         if c != 92 { out = out.concat(raw.substring(i, i + 1)); i = i + 1; continue; }
         i = i + 1;
         if i >= n { break; }
-        let e: int = raw.at(i).to_int();
+        let e: i32 = raw.at(i).to_int();
         i = i + 1;
         if e == 110 { out = out.concat("\n"); continue; }
         if e == 116 { out = out.concat("\t"); continue; }
@@ -667,7 +667,7 @@ fn _jp_unescape(raw: string) -> string {
 }
 
 fn _jp_bool(p: *JsonParser) -> *JsonValue {
-    let c: int = _jp_peek(p);
+    let c: i32 = _jp_peek(p);
     if c == 116 { p.pos = p.pos + 4; return JsonValue::bool(true); }
     p.pos = p.pos + 5;
     return JsonValue::bool(false);
@@ -678,9 +678,9 @@ fn _jp_null(p: *JsonParser) -> *JsonValue {
     return JsonValue::null();
 }
 
-fn _jp_pow10(n: int) -> f64 {
+fn _jp_pow10(n: i32) -> f64 {
     let mut r: f64 = 1.0;
-    let mut k: int = n;
+    let mut k: i32 = n;
     if k >= 0 {
         while k > 0 { r = r * 10.0; k = k - 1; }
     } else {
@@ -692,9 +692,9 @@ fn _jp_pow10(n: int) -> f64 {
 fn _jp_number(p: *JsonParser) -> *JsonValue {
     let mut neg: bool = false;
     if _jp_peek(p) == 45 { neg = true; p.pos = p.pos + 1; }
-    let mut int_part: int = 0;
+    let mut int_part: i32 = 0;
     while p.pos < p.n {
-        let c: int = _jp_peek(p);
+        let c: i32 = _jp_peek(p);
         if c < 48 || c > 57 { break; }
         int_part = int_part * 10 + (c - 48);
         p.pos = p.pos + 1;
@@ -704,22 +704,22 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
     if _jp_peek(p) == 101 || _jp_peek(p) == 69 { is_float = true; }
     if !is_float {
         if neg { int_part = -int_part; }
-        return JsonValue::int(int_part);
+        return JsonValue::i32(int_part);
     }
 
-    let mut frac_part: int = 0;
-    let mut frac_digits: int = 0;
+    let mut frac_part: i32 = 0;
+    let mut frac_digits: i32 = 0;
     if _jp_peek(p) == 46 {
         p.pos = p.pos + 1;
         while p.pos < p.n {
-            let c: int = _jp_peek(p);
+            let c: i32 = _jp_peek(p);
             if c < 48 || c > 57 { break; }
             frac_part = frac_part * 10 + (c - 48);
             frac_digits = frac_digits + 1;
             p.pos = p.pos + 1;
         }
     }
-    let mut exp_val: int = 0;
+    let mut exp_val: i32 = 0;
     let mut exp_neg: bool = false;
     if _jp_peek(p) == 101 || _jp_peek(p) == 69 {
         p.pos = p.pos + 1;
@@ -730,7 +730,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
             p.pos = p.pos + 1;
         }
         while p.pos < p.n {
-            let c: int = _jp_peek(p);
+            let c: i32 = _jp_peek(p);
             if c < 48 || c > 57 { break; }
             exp_val = exp_val * 10 + (c - 48);
             p.pos = p.pos + 1;
@@ -741,7 +741,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
     let mut v: f64 = (int_part as f64) + (frac_part as f64) / _jp_pow10(frac_digits);
     v = v * _jp_pow10(exp_val);
     if neg { v = -v; }
-    return JsonValue::float(v);
+    return JsonValue::f64(v);
 }
 
 // ---- JsonBind trait ----------------------------------------------------
@@ -810,7 +810,7 @@ impl<T: JsonBind> JsonBind for Vector<T> {
             return err("expected array");
         }
         let out: *Vector<T> = Vector::new();
-        let mut i: int = 0;
+        let mut i: i32 = 0;
         while i < v.len() {
             let item: T = T::from_json(v.at(i))?;
             out.push(item);
@@ -821,7 +821,7 @@ impl<T: JsonBind> JsonBind for Vector<T> {
 
     fn to_json(self: *Vector<T>) -> *JsonValue {
         let arr: *JsonValue = JsonValue::array();
-        let mut i: int = 0;
+        let mut i: i32 = 0;
         while i < self.len() {
             let item: T = self.get(i);
             arr.arr_push((&item).to_json());

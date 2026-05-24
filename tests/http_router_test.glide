@@ -57,7 +57,7 @@ fn _h_not_found(req: *HttpRequest) -> HttpResponse {
 
 // ---- tests ------------------------------------------------------------
 
-fn test_literal_route() -> int {
+fn test_literal_route() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/", _h_root);
@@ -69,7 +69,7 @@ fn test_literal_route() -> int {
     return 0;
 }
 
-fn test_method_mismatch_falls_to_404() -> int {
+fn test_method_mismatch_falls_to_404() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/", _h_root);
@@ -80,7 +80,7 @@ fn test_method_mismatch_falls_to_404() -> int {
     return 0;
 }
 
-fn test_param_capture() -> int {
+fn test_param_capture() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/users/:id", _h_get_user);
@@ -92,7 +92,7 @@ fn test_param_capture() -> int {
     return 0;
 }
 
-fn test_two_params() -> int {
+fn test_two_params() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/u/:uid/posts/:pid", _h_two_params);
@@ -104,7 +104,7 @@ fn test_two_params() -> int {
     return 0;
 }
 
-fn test_method_dispatch() -> int {
+fn test_method_dispatch() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/users/:id", _h_get_user);
@@ -126,7 +126,7 @@ fn test_method_dispatch() -> int {
     return 0;
 }
 
-fn test_wildcard() -> int {
+fn test_wildcard() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/static/*rest", _h_static);
@@ -145,7 +145,7 @@ fn test_wildcard() -> int {
     return 0;
 }
 
-fn test_any_matches_every_method() -> int {
+fn test_any_matches_every_method() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.any("/health", _h_health);
@@ -164,7 +164,7 @@ fn test_any_matches_every_method() -> int {
     return 0;
 }
 
-fn test_query_string_does_not_break_match() -> int {
+fn test_query_string_does_not_break_match() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/search", _h_search);
@@ -176,7 +176,7 @@ fn test_query_string_does_not_break_match() -> int {
     return 0;
 }
 
-fn test_custom_not_found() -> int {
+fn test_custom_not_found() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     r.get("/", _h_root);
@@ -189,7 +189,7 @@ fn test_custom_not_found() -> int {
     return 0;
 }
 
-fn test_first_match_wins() -> int {
+fn test_first_match_wins() -> i32 {
     let r: *Router = Router::new();
     defer r.free();
     // More specific literal first, less specific later — both would
@@ -208,7 +208,7 @@ fn test_first_match_wins() -> int {
     return 0;
 }
 
-fn test_response_helpers() -> int {
+fn test_response_helpers() -> i32 {
     let t: HttpResponse = HttpResponse::ok().text("hi");
     assert_eq!(t.status, 200);
     assert_str_eq!(t.body, "hi");
@@ -232,7 +232,7 @@ fn test_response_helpers() -> int {
     return 0;
 }
 
-fn test_request_helpers() -> int {
+fn test_request_helpers() -> i32 {
     let q: HttpRequest = _req("GET", "/x?a=1&b=hello%20world");
     assert_str_eq!(q.path_only(), "/x");
     assert_str_eq!(q.query("a"), "1");

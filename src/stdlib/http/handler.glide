@@ -78,7 +78,7 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
     // so we just copy it through.
     let mut has_leaf: bool = false;
     if s.attrs != null {
-        for let ai: int = 0; ai < s.attrs.len(); ai++ {
+        for let ai: i32 = 0; ai < s.attrs.len(); ai++ {
             let a: Attr = s.attrs.get(ai);
             if a.name != null && a.name.eq("leaf") { has_leaf = true; break; }
         }
@@ -93,7 +93,7 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
     let wrapper_body: *Vector<Stmt> = Vector::new();
     let call_args: *Vector<Expr> = Vector::new();
 
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < user_params.len() {
         let p: Param = user_params.get(i);
         let pname: string = p.name;
@@ -360,7 +360,7 @@ fn _json_inner(t: *Type) -> *Type {
 // `if !<name>.ok { return HttpResponse::with_status(<status>).text(<name>.err); }`
 // Static integer status — used by the Json<T> built-in path where
 // the macro picks 400/422 itself.
-fn _bind_err_check_static(var_name: string, status: int) -> *Stmt {
+fn _bind_err_check_static(var_name: string, status: i32) -> *Stmt {
     let cond: *Expr = expr_unary(
         UN_NOT, expr_member(expr_ident(var_name, 0, 0), "ok"), 0, 0);
     let with_status_args: *Vector<Expr> = Vector::new();

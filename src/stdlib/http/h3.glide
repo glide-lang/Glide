@@ -2811,25 +2811,25 @@ c_raw! {
     }
 }
 
-extern fn __glide_h3_listen(port: int, cert_path: string, key_path: string) -> *void;
+extern fn __glide_h3_listen(port: i32, cert_path: string, key_path: string) -> *void;
 extern fn __glide_h3_accept(listener: *void) -> *void;
-extern fn __glide_h3_srv_req_was_0rtt(h: *void) -> int;
+extern fn __glide_h3_srv_req_was_0rtt(h: *void) -> i32;
 extern fn __glide_h3_srv_req_method(h: *void) -> string;
 extern fn __glide_h3_srv_req_path(h: *void) -> string;
 extern fn __glide_h3_srv_req_authority(h: *void) -> string;
 extern fn __glide_h3_srv_req_headers(h: *void) -> string;
 extern fn __glide_h3_srv_req_body_ptr(h: *void) -> string;
-extern fn __glide_h3_srv_req_body_len(h: *void) -> int;
-extern fn __glide_h3_srv_send_response(h: *void, status: int, headers_block: string,
-                                        body: *u8, body_len: int) -> int;
-extern fn __glide_h3_srv_begin_streaming(h: *void, status: int,
-                                          headers_block: string) -> int;
-extern fn __glide_h3_srv_push_chunk(h: *void, data: *u8, len: int) -> int;
-extern fn __glide_h3_srv_end_streaming(h: *void) -> int;
+extern fn __glide_h3_srv_req_body_len(h: *void) -> i32;
+extern fn __glide_h3_srv_send_response(h: *void, status: i32, headers_block: string,
+                                        body: *u8, body_len: i32) -> i32;
+extern fn __glide_h3_srv_begin_streaming(h: *void, status: i32,
+                                          headers_block: string) -> i32;
+extern fn __glide_h3_srv_push_chunk(h: *void, data: *u8, len: i32) -> i32;
+extern fn __glide_h3_srv_end_streaming(h: *void) -> i32;
 extern fn __glide_h3_srv_close(h: *void);
 extern fn __glide_h3_listener_close(lp: *void);
 extern fn __glide_h3_make_self_signed(cert_path: string, key_path: string,
-                                        cn: string, days: int) -> int;
+                                        cn: string, days: i32) -> i32;
 
 /// Generates an ECDSA-P256 self-signed X.509 certificate valid for the
 /// next `days` days and writes it as PEM to `cert_path` and `key_path`.
@@ -2843,8 +2843,8 @@ extern fn __glide_h3_make_self_signed(cert_path: string, key_path: string,
 /// // result: ok(0) on success
 /// ```
 pub fn h3_make_self_signed_cert(cert_path: string, key_path: string,
-                                  cn: string, days: int) -> !int {
-    let rc: int = __glide_h3_make_self_signed(cert_path, key_path, cn, days);
+                                  cn: string, days: i32) -> !i32 {
+    let rc: i32 = __glide_h3_make_self_signed(cert_path, key_path, cn, days);
     if rc != 0 { return err("h3: failed to generate self-signed cert"); }
     return ok(0);
 }
@@ -2874,8 +2874,8 @@ pub fn h3_make_self_signed_cert(cert_path: string, key_path: string,
 /// clients' handshake completion or accept dispatch. Stream-level
 /// concurrency within a connection (HTTP/3 PUSH, streaming response
 /// bodies, 0-RTT) is not supported in v1.
-pub fn http3_listen(port: int, cert_path: string, key_path: string,
-                     handler: fn(*HttpRequest) -> HttpResponse) -> !int {
+pub fn http3_listen(port: i32, cert_path: string, key_path: string,
+                     handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
     let lp: *void = __glide_h3_listen(port, cert_path, key_path);
     if lp == null { return err("http3: listen failed (bind / cert / key)"); }
     println!("http3: listening on :", port);
@@ -2894,7 +2894,7 @@ pub fn http3_listen(port: int, cert_path: string, key_path: string,
 // spawn) — the send_response call blocks on a pthread cond_wait which
 // would pin a Glide coro's underlying OS thread and starve the runtime.
 fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
-    let blen: int = __glide_h3_srv_req_body_len(h);
+    let blen: i32 = __glide_h3_srv_req_body_len(h);
     let body_str: string = __glide_string_from_buf(
         __glide_h3_srv_req_body_ptr(h) as *void, blen);
     let mut hb: string = __glide_h3_srv_req_headers(h);
@@ -2911,7 +2911,7 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
         && !method.eq("GET") && !method.eq("HEAD") {
         let bad: HttpResponse = HttpResponse::with_status(425)
             .body("0-RTT replay risk: retry without early data");
-        let _r: int = __glide_h3_srv_send_response(h, bad.status,
+        let _r: i32 = __glide_h3_srv_send_response(h, bad.status,
                                                      bad.headers_block,
                                                      bad.body as *u8,
                                                      bad.body.len());
@@ -2934,7 +2934,7 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
         // Streaming: begin (sets up nghttp3 with the data_reader), pump
         // chunks until the source signals EOF, then end. Reader thread
         // delivers each chunk over the wire as flow control allows.
-        let _b: int = __glide_h3_srv_begin_streaming(h, resp.status,
+        let _b: i32 = __glide_h3_srv_begin_streaming(h, resp.status,
                                                        resp.headers_block);
         let src: *dyn ChunkSource = resp.stream_src;
         while true {
@@ -2942,12 +2942,12 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
             if !nxt.has { break; }
             let chunk: string = nxt.val;
             if chunk.len() > 0 {
-                let _p: int = __glide_h3_srv_push_chunk(h, chunk as *u8, chunk.len());
+                let _p: i32 = __glide_h3_srv_push_chunk(h, chunk as *u8, chunk.len());
             }
         }
-        let _e: int = __glide_h3_srv_end_streaming(h);
+        let _e: i32 = __glide_h3_srv_end_streaming(h);
     } else {
-        let _r: int = __glide_h3_srv_send_response(h, resp.status,
+        let _r: i32 = __glide_h3_srv_send_response(h, resp.status,
                                                      resp.headers_block,
                                                      resp.body as *u8,
                                                      resp.body.len());
@@ -2955,26 +2955,26 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
     __glide_h3_srv_close(h);
 }
 
-extern fn __glide_h3_client_connect(host: string, port: int, timeout_ms: int,
-                                     verify: int, cache_handle: *void) -> *void;
+extern fn __glide_h3_client_connect(host: string, port: i32, timeout_ms: i32,
+                                     verify: i32, cache_handle: *void) -> *void;
 extern fn __glide_h3_session_cache_new() -> *void;
 extern fn __glide_h3_session_cache_free(handle: *void);
-extern fn __glide_h3_session_cache_attempts(handle: *void) -> int;
-extern fn __glide_h3_session_cache_accepted(handle: *void) -> int;
-extern fn __glide_h3_session_cache_save(handle: *void, path: string) -> int;
-extern fn __glide_h3_session_cache_load(handle: *void, path: string) -> int;
-extern fn __glide_h3_early_data_accepted(conn_handle: *void) -> int;
+extern fn __glide_h3_session_cache_attempts(handle: *void) -> i32;
+extern fn __glide_h3_session_cache_accepted(handle: *void) -> i32;
+extern fn __glide_h3_session_cache_save(handle: *void, path: string) -> i32;
+extern fn __glide_h3_session_cache_load(handle: *void, path: string) -> i32;
+extern fn __glide_h3_early_data_accepted(conn_handle: *void) -> i32;
 extern fn __glide_h3_client_request(handle: *void, method: string, host: string, path: string,
                                      extra_headers_block: string,
-                                     body: *u8, body_len: int, timeout_ms: int) -> int;
-extern fn __glide_h3_resp_status(h: *void) -> int;
-extern fn __glide_h3_resp_body_len(h: *void) -> int;
+                                     body: *u8, body_len: i32, timeout_ms: i32) -> i32;
+extern fn __glide_h3_resp_status(h: *void) -> i32;
+extern fn __glide_h3_resp_body_len(h: *void) -> i32;
 extern fn __glide_h3_resp_body_ptr(h: *void) -> string;
-extern fn __glide_h3_resp_hdr_count(h: *void) -> int;
-extern fn __glide_h3_resp_hdr_name(h: *void, i: int) -> string;
-extern fn __glide_h3_resp_hdr_value(h: *void, i: int) -> string;
+extern fn __glide_h3_resp_hdr_count(h: *void) -> i32;
+extern fn __glide_h3_resp_hdr_name(h: *void, i: i32) -> string;
+extern fn __glide_h3_resp_hdr_value(h: *void, i: i32) -> string;
 extern fn __glide_h3_close(h: *void);
-extern fn __glide_string_from_buf(p: *void, n: int) -> string;
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// Single-shot HTTP/3 GET. Opens a QUIC connection, performs the TLS 1.3
 /// + QUIC handshake (ALPN `h3`), sends one request stream and reads the
@@ -3008,14 +3008,14 @@ pub fn http3_request(method: string, url: string, extra_headers: string,
     if !parsed.ok { return err(parsed.err); }
     let pu: *ParsedH3Url = parsed.val;
 
-    let mut verify: int = 1;
+    let mut verify: i32 = 1;
     if tls_insecure { verify = 0; }
     let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify,
                                                  null);
     if h == null { return err("http3: connect/handshake failed"); }
 
-    let body_len: int = body.len();
-    let ok: int = __glide_h3_client_request(h, method, pu.host, pu.path,
+    let body_len: i32 = body.len();
+    let ok: i32 = __glide_h3_client_request(h, method, pu.host, pu.path,
                                               extra_headers,
                                               body as *u8, body_len, 30000);
     if ok == 0 {
@@ -3025,12 +3025,12 @@ pub fn http3_request(method: string, url: string, extra_headers: string,
 
     let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
     r.status = __glide_h3_resp_status(h);
-    let blen: int = __glide_h3_resp_body_len(h);
+    let blen: i32 = __glide_h3_resp_body_len(h);
     r.body = __glide_string_from_buf(__glide_h3_resp_body_ptr(h) as *void, blen);
 
     let mut hb: string = "";
-    let n: int = __glide_h3_resp_hdr_count(h);
-    for let i: int = 0; i < n; i++ {
+    let n: i32 = __glide_h3_resp_hdr_count(h);
+    for let i: i32 = 0; i < n; i++ {
         let name: string = __glide_h3_resp_hdr_name(h, i);
         let value: string = __glide_h3_resp_hdr_value(h, i);
         if name.eq(":status") { continue; }
@@ -3077,12 +3077,12 @@ impl H3SessionCache {
     /// How many connect calls found a cached session for their target
     /// (host, port) and installed it on the SSL — i.e. how many tried
     /// 0-RTT. Doesn't say whether the server accepted; see `accepted`.
-    pub fn attempts(self: *H3SessionCache) -> int {
+    pub fn attempts(self: *H3SessionCache) -> i32 {
         return __glide_h3_session_cache_attempts(self.handle);
     }
     /// How many connects had their 0-RTT data accepted by the server
     /// (i.e. saved 1 RTT). `attempts - accepted` is the rejection count.
-    pub fn accepted(self: *H3SessionCache) -> int {
+    pub fn accepted(self: *H3SessionCache) -> i32 {
         return __glide_h3_session_cache_accepted(self.handle);
     }
     /// Serialise the cache to a binary file (magic + version + N entries).
@@ -3101,7 +3101,7 @@ impl H3SessionCache {
     /// entries are dropped on load. Wipes whatever the cache held first.
     /// Returns the number of entries loaded (0 on missing file or
     /// corrupt format — safe to call before save has ever run).
-    pub fn load(self: *H3SessionCache, path: string) -> int {
+    pub fn load(self: *H3SessionCache, path: string) -> i32 {
         return __glide_h3_session_cache_load(self.handle, path);
     }
 }
@@ -3116,13 +3116,13 @@ pub fn http3_request_cached(method: string, url: string, extra_headers: string,
     let parsed: !*ParsedH3Url = _h3_parse_url(url);
     if !parsed.ok { return err(parsed.err); }
     let pu: *ParsedH3Url = parsed.val;
-    let mut verify: int = 1;
+    let mut verify: i32 = 1;
     if tls_insecure { verify = 0; }
     let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify,
                                                  cache.handle);
     if h == null { return err("http3: connect/handshake failed"); }
-    let body_len: int = body.len();
-    let ok: int = __glide_h3_client_request(h, method, pu.host, pu.path,
+    let body_len: i32 = body.len();
+    let ok: i32 = __glide_h3_client_request(h, method, pu.host, pu.path,
                                               extra_headers,
                                               body as *u8, body_len, 30000);
     if ok == 0 {
@@ -3131,11 +3131,11 @@ pub fn http3_request_cached(method: string, url: string, extra_headers: string,
     }
     let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
     r.status = __glide_h3_resp_status(h);
-    let blen: int = __glide_h3_resp_body_len(h);
+    let blen: i32 = __glide_h3_resp_body_len(h);
     r.body = __glide_string_from_buf(__glide_h3_resp_body_ptr(h) as *void, blen);
     let mut hb: string = "";
-    let n: int = __glide_h3_resp_hdr_count(h);
-    for let i: int = 0; i < n; i++ {
+    let n: i32 = __glide_h3_resp_hdr_count(h);
+    for let i: i32 = 0; i < n; i++ {
         let name: string = __glide_h3_resp_hdr_name(h, i);
         let value: string = __glide_h3_resp_hdr_value(h, i);
         if name.eq(":status") { continue; }
@@ -3151,31 +3151,31 @@ pub fn http3_request_cached(method: string, url: string, extra_headers: string,
 
 pub struct ParsedH3Url {
     pub host: string,
-    pub port: int,
+    pub port: i32,
     pub path: string,
 }
 
 fn _h3_parse_url(s: string) -> !*ParsedH3Url {
-    let scheme_end: int = s.index_of("://");
+    let scheme_end: i32 = s.index_of("://");
     if scheme_end < 0 { return err("http3: missing scheme"); }
     let scheme: string = s.substring(0, scheme_end);
     if !scheme.eq("https") && !scheme.eq("h3") {
         return err("http3: scheme must be https (got `".concat(scheme).concat("`)"));
     }
     let rest: string = s.substring(scheme_end + 3, s.len());
-    let mut slash: int = rest.index_of("/");
+    let mut slash: i32 = rest.index_of("/");
     if slash < 0 { slash = rest.len(); }
     let authority: string = rest.substring(0, slash);
     let mut path: string = rest.substring(slash, rest.len());
     if path.eq("") { path = "/"; }
 
     let mut host: string = authority;
-    let mut port: int = 443;
-    let colon: int = _last_colon(authority);
+    let mut port: i32 = 443;
+    let colon: i32 = _last_colon(authority);
     if colon >= 0 && (authority.len() == 0 || authority.at(0).to_int() != 91) {
         host = authority.substring(0, colon);
         let p_s: string = authority.substring(colon + 1, authority.len());
-        let pr: !int = p_s.try_parse_int();
+        let pr: !i32 = p_s.try_parse_int();
         if !pr.ok { return err("http3: bad port"); }
         port = pr.val;
     }
@@ -3187,9 +3187,9 @@ fn _h3_parse_url(s: string) -> !*ParsedH3Url {
     return ok(u);
 }
 
-fn _last_colon(s: string) -> int {
-    let mut at: int = -1;
-    for let i: int = 0; i < s.len(); i++ {
+fn _last_colon(s: string) -> i32 {
+    let mut at: i32 = -1;
+    for let i: i32 = 0; i < s.len(); i++ {
         if s.at(i).to_int() == 58 { at = i; }
     }
     return at;

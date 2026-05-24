@@ -1,7 +1,7 @@
 import stdlib::testing::*;
 import stdlib::bytes::*;
 
-fn test_new_is_empty() -> int {
+fn test_new_is_empty() -> i32 {
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
     assert_eq!(b.len(), 0);
@@ -9,23 +9,23 @@ fn test_new_is_empty() -> int {
     return 0;
 }
 
-fn test_push_increments_len() -> int {
+fn test_push_increments_len() -> i32 {
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
     b.push(65 as u8);
     b.push(66 as u8);
     b.push(67 as u8);
     assert_eq!(b.len(), 3);
-    let v0: int = b.at(0) as int;
-    let v1: int = b.at(1) as int;
-    let v2: int = b.at(2) as int;
+    let v0: i32 = b.at(0) as i32;
+    let v1: i32 = b.at(1) as i32;
+    let v2: i32 = b.at(2) as i32;
     assert_eq!(v0, 65);
     assert_eq!(v1, 66);
     assert_eq!(v2, 67);
     return 0;
 }
 
-fn test_push_str_appends_all_bytes() -> int {
+fn test_push_str_appends_all_bytes() -> i32 {
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
     b.push_str("hello");
@@ -34,7 +34,7 @@ fn test_push_str_appends_all_bytes() -> int {
     return 0;
 }
 
-fn test_push_str_concat() -> int {
+fn test_push_str_concat() -> i32 {
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
     b.push_str("hello, ");
@@ -44,11 +44,11 @@ fn test_push_str_concat() -> int {
     return 0;
 }
 
-fn test_clear_resets_len_keeps_cap() -> int {
+fn test_clear_resets_len_keeps_cap() -> i32 {
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
     b.push_str("noise");
-    let cap_before: int = b.cap();
+    let cap_before: i32 = b.cap();
     b.clear();
     assert_eq!(b.len(), 0);
     assert_eq!(b.cap(), cap_before);
@@ -57,11 +57,11 @@ fn test_clear_resets_len_keeps_cap() -> int {
     return 0;
 }
 
-fn test_capacity_grows_amortised() -> int {
+fn test_capacity_grows_amortised() -> i32 {
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
-    let initial_cap: int = b.cap();
-    for let i: int = 0; i < 100; i++ { b.push(48 as u8); }
+    let initial_cap: i32 = b.cap();
+    for let i: i32 = 0; i < 100; i++ { b.push(48 as u8); }
     assert_eq!(b.len(), 100);
     assert!(b.cap() > initial_cap);
     return 0;

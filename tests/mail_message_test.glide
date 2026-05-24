@@ -10,7 +10,7 @@ fn _basic() -> *Mail {
     return m;
 }
 
-fn test_plain_text_only_layout() -> int {
+fn test_plain_text_only_layout() -> i32 {
     let m: *Mail = _basic();
     let w: string = m.to_rfc5322();
     assert!(w.contains("From: alice@example.com"));
@@ -23,7 +23,7 @@ fn test_plain_text_only_layout() -> int {
     return 0;
 }
 
-fn test_html_alternative_layout() -> int {
+fn test_html_alternative_layout() -> i32 {
     let m: *Mail = _basic();
     let h: ?string = some("<p>HTML body</p>");
     m.html = h;
@@ -36,7 +36,7 @@ fn test_html_alternative_layout() -> int {
     return 0;
 }
 
-fn test_attachment_mixed_layout() -> int {
+fn test_attachment_mixed_layout() -> i32 {
     let m: *Mail = _basic();
     let a: *Attachment = malloc(sizeof(Attachment)) as *Attachment;
     a.filename = "doc.txt";
@@ -50,7 +50,7 @@ fn test_attachment_mixed_layout() -> int {
     return 0;
 }
 
-fn test_attachment_and_html_nested_layout() -> int {
+fn test_attachment_and_html_nested_layout() -> i32 {
     let m: *Mail = _basic();
     let h: ?string = some("<i>html</i>");
     m.html = h;
@@ -64,7 +64,7 @@ fn test_attachment_and_html_nested_layout() -> int {
     return 0;
 }
 
-fn test_recipient_lists_join_with_comma() -> int {
+fn test_recipient_lists_join_with_comma() -> i32 {
     let m: *Mail = Mail::new();
     m.from = "a@x";
     m.to.push("b@x"); m.to.push("c@x");
@@ -76,7 +76,7 @@ fn test_recipient_lists_join_with_comma() -> int {
     return 0;
 }
 
-fn test_bcc_not_emitted_in_headers() -> int {
+fn test_bcc_not_emitted_in_headers() -> i32 {
     let m: *Mail = _basic();
     m.bcc.push("eve@x");
     let w: string = m.to_rfc5322();
@@ -85,7 +85,7 @@ fn test_bcc_not_emitted_in_headers() -> int {
     return 0;
 }
 
-fn test_message_id_auto_includes_from_domain() -> int {
+fn test_message_id_auto_includes_from_domain() -> i32 {
     let m: *Mail = _basic();
     let w: string = m.to_rfc5322();
     assert!(w.contains("@example.com>"));
@@ -93,7 +93,7 @@ fn test_message_id_auto_includes_from_domain() -> int {
     return 0;
 }
 
-fn test_parse_round_trip_basic() -> int {
+fn test_parse_round_trip_basic() -> i32 {
     let raw: string = "From: a@x\r\nTo: b@x\r\nSubject: hi\r\n\r\nbody";
     let r: !*Mail = parse_mail(raw);
     assert!(r.ok);
@@ -105,7 +105,7 @@ fn test_parse_round_trip_basic() -> int {
     return 0;
 }
 
-fn test_parse_folded_header() -> int {
+fn test_parse_folded_header() -> i32 {
     let raw: string = "Subject: hello\r\n there\r\nFrom: a@x\r\n\r\nbody";
     let r: !*Mail = parse_mail(raw);
     assert!(r.ok);

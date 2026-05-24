@@ -122,11 +122,11 @@ c_raw! {
     #endif
 }
 
-extern fn __glide_tcp_connect(family: int, v4: i64, v6_hi: i64, v6_lo: i64, port: int) -> i64;
-extern fn __glide_tcp_send(fd: i64, data: string, n: int) -> i64;
-extern fn __glide_tcp_recv(fd: i64, buf: *void, max: int) -> i64;
+extern fn __glide_tcp_connect(family: i32, v4: i64, v6_hi: i64, v6_lo: i64, port: i32) -> i64;
+extern fn __glide_tcp_send(fd: i64, data: string, n: i32) -> i64;
+extern fn __glide_tcp_recv(fd: i64, buf: *void, max: i32) -> i64;
 extern fn __glide_tcp_close_h(fd: i64);
-extern fn __glide_tcp_set_timeout(fd: i64, ms: int);
+extern fn __glide_tcp_set_timeout(fd: i64, ms: i32);
 // `_bytes_to_string` comes from net::ip via the import above.
 
 pub struct TcpStream {
@@ -144,7 +144,7 @@ impl TcpStream {
     /// if r.ok { defer r.val.close(); r.val.write_all("GET / HTTP/1.0\r\n\r\n"); }
     /// ```
     pub fn connect(dst: *SocketAddr) -> !*TcpStream {
-        let mut family: int = 4;
+        let mut family: i32 = 4;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
         let mut lo: i64 = 0;
@@ -173,13 +173,13 @@ impl TcpStream {
     ///     r.val.write_all("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
     /// }
     /// ```
-    pub fn connect_host(host: string, port: int) -> !*TcpStream {
+    pub fn connect_host(host: string, port: i32) -> !*TcpStream {
         let r: !*Vector<*IpAddr> = resolve(host);
         if !r.ok { return err(r.err); }
         let v: *Vector<*IpAddr> = r.val;
         if v.len() == 0 { return err("tcp: no addresses for ".concat(host)); }
         let mut last_err: string = "tcp: connect failed";
-        for let i: int = 0; i < v.len(); i++ {
+        for let i: i32 = 0; i < v.len(); i++ {
             let ip: *IpAddr = v.get(i);
             let dst: *SocketAddr = SocketAddr::new(ip, port);
             let r2: !*TcpStream = TcpStream::connect(dst);
@@ -197,10 +197,10 @@ impl TcpStream {
     /// let r: !int = stream.write("hi");
     /// if r.ok { println!("wrote", r.val, "bytes"); }
     /// ```
-    pub fn write(self: *TcpStream, data: string) -> !int {
+    pub fn write(self: *TcpStream, data: string) -> !i32 {
         let n: i64 = __glide_tcp_send(self.fd, data, data.len());
         if n < 0 { return err("tcp: send failed"); }
-        return ok(n as int);
+        return ok(n as i32);
     }
 
     /// Write every byte of `data`. Loops on partial writes; only
@@ -209,12 +209,12 @@ impl TcpStream {
     /// ```glide
     /// stream.write_all("HTTP/1.0 200 OK\r\n\r\nhi");
     /// ```
-    pub fn write_all(self: *TcpStream, data: string) -> !int {
-        let n: int = data.len();
-        let mut sent: int = 0;
+    pub fn write_all(self: *TcpStream, data: string) -> !i32 {
+        let n: i32 = data.len();
+        let mut sent: i32 = 0;
         while sent < n {
             let chunk: string = data.substring(sent, n);
-            let r: !int = self.write(chunk);
+            let r: !i32 = self.write(chunk);
             if !r.ok { return err(r.err); }
             if r.val == 0 { return err("tcp: write returned 0"); }
             sent = sent + r.val;
@@ -231,11 +231,11 @@ impl TcpStream {
     /// let r: !string = stream.read(4096);
     /// if r.ok && r.val.len() > 0 { print!(r.val); }
     /// ```
-    pub fn read(self: *TcpStream, max: int) -> !string {
+    pub fn read(self: *TcpStream, max: i32) -> !string {
         let buf: *u8 = malloc(max) as *u8;
         let n: i64 = __glide_tcp_recv(self.fd, buf as *void, max);
         if n < 0 { free(buf as *void); return err("tcp: recv failed"); }
-        let s: string = _bytes_to_string(buf, n as int);
+        let s: string = _bytes_to_string(buf, n as i32);
         free(buf as *void);
         return ok(s);
     }
@@ -267,7 +267,7 @@ impl TcpStream {
     /// ```glide
     /// stream.set_timeout_ms(5000);   // 5s for both reads and writes
     /// ```
-    pub fn set_timeout_ms(self: *TcpStream, ms: int) {
+    pub fn set_timeout_ms(self: *TcpStream, ms: i32) {
         __glide_tcp_set_timeout(self.fd, ms);
     }
 

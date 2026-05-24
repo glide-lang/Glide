@@ -1,37 +1,37 @@
 import stdlib::testing::*;
 
-fn _double(x: int) -> int { return x * 2; }
-fn _square(x: int) -> int { return x * x; }
-fn _to_str(x: int) -> string {
+fn _double(x: i32) -> i32 { return x * 2; }
+fn _square(x: i32) -> i32 { return x * x; }
+fn _to_str(x: i32) -> string {
     if x == 1 { return "one"; }
     if x == 2 { return "two"; }
     if x == 3 { return "three"; }
     return "?";
 }
-fn _is_positive(x: int) -> bool { return x > 0; }
-fn _is_even(x: int) -> bool { return x % 2 == 0; }
-fn _lt5(x: int) -> bool { return x < 5; }
-fn _gte3(x: int) -> bool { return x >= 3; }
-fn _add(a: int, b: int) -> int { return a + b; }
+fn _is_positive(x: i32) -> bool { return x > 0; }
+fn _is_even(x: i32) -> bool { return x % 2 == 0; }
+fn _lt5(x: i32) -> bool { return x < 5; }
+fn _gte3(x: i32) -> bool { return x >= 3; }
+fn _add(a: i32, b: i32) -> i32 { return a + b; }
 
-fn _build(start: int, end: int) -> *Vector<int> {
-    let v: *Vector<int> = Vector::new();
-    let mut i: int = start;
+fn _build(start: i32, end: i32) -> *Vector<i32> {
+    let v: *Vector<i32> = Vector::new();
+    let mut i: i32 = start;
     while i < end { v.push(i); i = i + 1; }
     return v;
 }
 
-fn test_vec_map_int_to_int() -> int {
-    let v: *Vector<int> = _build(1, 5);
-    let m: *Vector<int> = v.map(_double);
+fn test_vec_map_int_to_int() -> i32 {
+    let v: *Vector<i32> = _build(1, 5);
+    let m: *Vector<i32> = v.map(_double);
     assert_eq!(m.len(), 4);
     assert_eq!(m.get(0), 2);
     assert_eq!(m.get(3), 8);
     return 0;
 }
 
-fn test_vec_map_int_to_string() -> int {
-    let v: *Vector<int> = _build(1, 4);
+fn test_vec_map_int_to_string() -> i32 {
+    let v: *Vector<i32> = _build(1, 4);
     let names: *Vector<string> = v.map(_to_str);
     assert_eq!(names.len(), 3);
     assert_str_eq!(names.get(0), "one");
@@ -39,170 +39,170 @@ fn test_vec_map_int_to_string() -> int {
     return 0;
 }
 
-fn test_vec_filter() -> int {
-    let v: *Vector<int> = _build(0 - 2, 5);
-    let p: *Vector<int> = v.filter(_is_positive);
+fn test_vec_filter() -> i32 {
+    let v: *Vector<i32> = _build(0 - 2, 5);
+    let p: *Vector<i32> = v.filter(_is_positive);
     assert_eq!(p.len(), 4);
     assert_eq!(p.get(0), 1);
     return 0;
 }
 
-fn test_vec_take() -> int {
-    let v: *Vector<int> = _build(0, 10);
-    let t: *Vector<int> = v.take(3);
+fn test_vec_take() -> i32 {
+    let v: *Vector<i32> = _build(0, 10);
+    let t: *Vector<i32> = v.take(3);
     assert_eq!(t.len(), 3);
     assert_eq!(t.get(2), 2);
     return 0;
 }
 
-fn test_vec_skip() -> int {
-    let v: *Vector<int> = _build(0, 10);
-    let s: *Vector<int> = v.skip(7);
+fn test_vec_skip() -> i32 {
+    let v: *Vector<i32> = _build(0, 10);
+    let s: *Vector<i32> = v.skip(7);
     assert_eq!(s.len(), 3);
     assert_eq!(s.get(0), 7);
     return 0;
 }
 
-fn test_vec_take_while() -> int {
-    let v: *Vector<int> = _build(0, 10);
-    let t: *Vector<int> = v.take_while(_lt5);
+fn test_vec_take_while() -> i32 {
+    let v: *Vector<i32> = _build(0, 10);
+    let t: *Vector<i32> = v.take_while(_lt5);
     assert_eq!(t.len(), 5);
     assert_eq!(t.get(4), 4);
     return 0;
 }
 
-fn test_vec_skip_while() -> int {
-    let v: *Vector<int> = _build(0, 6);
-    let s: *Vector<int> = v.skip_while(_lt5);
+fn test_vec_skip_while() -> i32 {
+    let v: *Vector<i32> = _build(0, 6);
+    let s: *Vector<i32> = v.skip_while(_lt5);
     assert_eq!(s.len(), 1);
     assert_eq!(s.get(0), 5);
     return 0;
 }
 
-fn test_vec_fold() -> int {
-    let v: *Vector<int> = _build(1, 5);
-    let total: int = v.fold(0, _add);
+fn test_vec_fold() -> i32 {
+    let v: *Vector<i32> = _build(1, 5);
+    let total: i32 = v.fold(0, _add);
     assert_eq!(total, 10);
     return 0;
 }
 
-fn test_vec_any_true() -> int {
-    let v: *Vector<int> = _build(1, 6);
+fn test_vec_any_true() -> i32 {
+    let v: *Vector<i32> = _build(1, 6);
     assert!(v.any(_is_even));
     return 0;
 }
 
-fn test_vec_all_false() -> int {
-    let v: *Vector<int> = _build(1, 6);
+fn test_vec_all_false() -> i32 {
+    let v: *Vector<i32> = _build(1, 6);
     assert_not!(v.all(_is_even));
     return 0;
 }
 
-fn test_vec_find_some() -> int {
-    let v: *Vector<int> = _build(1, 10);
-    let r: ?int = v.find(_gte3);
+fn test_vec_find_some() -> i32 {
+    let v: *Vector<i32> = _build(1, 10);
+    let r: ?i32 = v.find(_gte3);
     assert!(r.has);
     assert_eq!(r.val, 3);
     return 0;
 }
 
-fn test_vec_find_none() -> int {
-    let v: *Vector<int> = _build(0 - 5, 0 - 1);
-    let r: ?int = v.find(_is_positive);
+fn test_vec_find_none() -> i32 {
+    let v: *Vector<i32> = _build(0 - 5, 0 - 1);
+    let r: ?i32 = v.find(_is_positive);
     assert_not!(r.has);
     return 0;
 }
 
-fn test_vec_chain_map_filter_fold() -> int {
-    let v: *Vector<int> = _build(1, 6);
-    let total: int = v.map(_square).filter(_is_even).fold(0, _add);
+fn test_vec_chain_map_filter_fold() -> i32 {
+    let v: *Vector<i32> = _build(1, 6);
+    let total: i32 = v.map(_square).filter(_is_even).fold(0, _add);
     assert_eq!(total, 20);
     return 0;
 }
 
-fn test_vec_chain_filter_take() -> int {
-    let v: *Vector<int> = _build(1, 20);
-    let t: *Vector<int> = v.filter(_is_even).take(3);
+fn test_vec_chain_filter_take() -> i32 {
+    let v: *Vector<i32> = _build(1, 20);
+    let t: *Vector<i32> = v.filter(_is_even).take(3);
     assert_eq!(t.len(), 3);
     assert_eq!(t.get(0), 2);
     assert_eq!(t.get(2), 6);
     return 0;
 }
 
-fn test_vec_int_sum() -> int {
-    let v: *Vector<int> = _build(1, 5);
+fn test_vec_int_sum() -> i32 {
+    let v: *Vector<i32> = _build(1, 5);
     assert_eq!(v.sum(), 10);
     return 0;
 }
 
-fn test_vec_int_sum_empty() -> int {
-    let v: *Vector<int> = Vector::new();
+fn test_vec_int_sum_empty() -> i32 {
+    let v: *Vector<i32> = Vector::new();
     assert_eq!(v.sum(), 0);
     return 0;
 }
 
-fn test_vec_int_max_some() -> int {
-    let v: *Vector<int> = Vector::new();
+fn test_vec_int_max_some() -> i32 {
+    let v: *Vector<i32> = Vector::new();
     v.push(3); v.push(7); v.push(1); v.push(5);
-    let r: ?int = v.max();
+    let r: ?i32 = v.max();
     assert!(r.has);
     assert_eq!(r.val, 7);
     return 0;
 }
 
-fn test_vec_int_max_empty() -> int {
-    let v: *Vector<int> = Vector::new();
-    let r: ?int = v.max();
+fn test_vec_int_max_empty() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    let r: ?i32 = v.max();
     assert_not!(r.has);
     return 0;
 }
 
-fn test_vec_int_min_some() -> int {
-    let v: *Vector<int> = Vector::new();
+fn test_vec_int_min_some() -> i32 {
+    let v: *Vector<i32> = Vector::new();
     v.push(3); v.push(7); v.push(1); v.push(5);
-    let r: ?int = v.min();
+    let r: ?i32 = v.min();
     assert!(r.has);
     assert_eq!(r.val, 1);
     return 0;
 }
 
-fn test_vec_int_min_empty() -> int {
-    let v: *Vector<int> = Vector::new();
-    let r: ?int = v.min();
+fn test_vec_int_min_empty() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    let r: ?i32 = v.min();
     assert_not!(r.has);
     return 0;
 }
 
-fn test_vec_chain_into_sum() -> int {
-    let v: *Vector<int> = _build(1, 6);
+fn test_vec_chain_into_sum() -> i32 {
+    let v: *Vector<i32> = _build(1, 6);
     assert_eq!(v.map(_square).filter(_is_even).sum(), 20);
     return 0;
 }
 
-fn test_vec_chain_into_max() -> int {
-    let v: *Vector<int> = _build(1, 10);
-    let r: ?int = v.filter(_is_even).max();
+fn test_vec_chain_into_max() -> i32 {
+    let v: *Vector<i32> = _build(1, 10);
+    let r: ?i32 = v.filter(_is_even).max();
     assert!(r.has);
     assert_eq!(r.val, 8);
     return 0;
 }
 
-fn _half(x: int) -> f64 { return (x as f64) / 2.0; }
+fn _half(x: i32) -> f64 { return (x as f64) / 2.0; }
 
-fn test_vec_f64_sum() -> int {
+fn test_vec_f64_sum() -> i32 {
     let v: *Vector<f64> = Vector::new();
     v.push(1.5); v.push(2.5); v.push(3.0);
     assert_eq!(v.sum(), 7.0);
     return 0;
 }
 
-fn test_vec_f64_sum_empty() -> int {
+fn test_vec_f64_sum_empty() -> i32 {
     let v: *Vector<f64> = Vector::new();
     assert_eq!(v.sum(), 0.0);
     return 0;
 }
 
-fn test_vec_f64_max_some() -> int {
+fn test_vec_f64_max_some() -> i32 {
     let v: *Vector<f64> = Vector::new();
     v.push(1.0); v.push(7.5); v.push(3.0);
     let r: ?f64 = v.max();
@@ -211,7 +211,7 @@ fn test_vec_f64_max_some() -> int {
     return 0;
 }
 
-fn test_vec_f64_min_some() -> int {
+fn test_vec_f64_min_some() -> i32 {
     let v: *Vector<f64> = Vector::new();
     v.push(1.0); v.push(7.5); v.push(0.5);
     let r: ?f64 = v.min();
@@ -220,7 +220,7 @@ fn test_vec_f64_min_some() -> int {
     return 0;
 }
 
-fn test_vec_f64_avg_some() -> int {
+fn test_vec_f64_avg_some() -> i32 {
     let v: *Vector<f64> = Vector::new();
     v.push(2.0); v.push(4.0); v.push(6.0);
     let r: ?f64 = v.avg();
@@ -229,28 +229,28 @@ fn test_vec_f64_avg_some() -> int {
     return 0;
 }
 
-fn test_vec_f64_avg_empty() -> int {
+fn test_vec_f64_avg_empty() -> i32 {
     let v: *Vector<f64> = Vector::new();
     let r: ?f64 = v.avg();
     assert_not!(r.has);
     return 0;
 }
 
-fn test_vec_f64_chain_map_sum() -> int {
-    let v: *Vector<int> = _build(2, 6);
+fn test_vec_f64_chain_map_sum() -> i32 {
+    let v: *Vector<i32> = _build(2, 6);
     let total: f64 = v.map(_half).sum();
     assert_eq!(total, 7.0);
     return 0;
 }
 
-fn _name(x: int) -> string {
+fn _name(x: i32) -> string {
     if x == 1 { return "one"; }
     if x == 2 { return "two"; }
     if x == 3 { return "three"; }
     return "?";
 }
 
-fn test_vec_string_join() -> int {
+fn test_vec_string_join() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push("a"); v.push("b"); v.push("c");
     let sep: string = ",";
@@ -258,14 +258,14 @@ fn test_vec_string_join() -> int {
     return 0;
 }
 
-fn test_vec_string_join_empty() -> int {
+fn test_vec_string_join_empty() -> i32 {
     let v: *Vector<string> = Vector::new();
     let sep: string = ",";
     assert_str_eq!(v.join(sep), "");
     return 0;
 }
 
-fn test_vec_string_join_single() -> int {
+fn test_vec_string_join_single() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push("alone");
     let sep: string = "|";
@@ -273,47 +273,47 @@ fn test_vec_string_join_single() -> int {
     return 0;
 }
 
-fn test_vec_string_concat() -> int {
+fn test_vec_string_concat() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push("foo"); v.push("bar"); v.push("baz");
     assert_str_eq!(v.concat(), "foobarbaz");
     return 0;
 }
 
-fn test_vec_string_concat_empty() -> int {
+fn test_vec_string_concat_empty() -> i32 {
     let v: *Vector<string> = Vector::new();
     assert_str_eq!(v.concat(), "");
     return 0;
 }
 
-fn test_vec_chain_map_join() -> int {
-    let v: *Vector<int> = _build(1, 4);
+fn test_vec_chain_map_join() -> i32 {
+    let v: *Vector<i32> = _build(1, 4);
     let sep: string = ", ";
     assert_str_eq!(v.map(_name).join(sep), "one, two, three");
     return 0;
 }
 
-fn test_string_cmp_lt() -> int {
+fn test_string_cmp_lt() -> i32 {
     let a: string = "apple";
     let b: string = "banana";
     assert_eq!(a.cmp(b), -1);
     return 0;
 }
 
-fn test_string_cmp_gt() -> int {
+fn test_string_cmp_gt() -> i32 {
     let a: string = "banana";
     let b: string = "apple";
     assert_eq!(a.cmp(b), 1);
     return 0;
 }
 
-fn test_string_cmp_eq() -> int {
+fn test_string_cmp_eq() -> i32 {
     let a: string = "apple";
     assert_eq!(a.cmp(a), 0);
     return 0;
 }
 
-fn test_string_cmp_prefix_shorter_is_lt() -> int {
+fn test_string_cmp_prefix_shorter_is_lt() -> i32 {
     let a: string = "app";
     let b: string = "apple";
     assert_eq!(a.cmp(b), -1);
@@ -321,7 +321,7 @@ fn test_string_cmp_prefix_shorter_is_lt() -> int {
     return 0;
 }
 
-fn test_string_cmp_empty() -> int {
+fn test_string_cmp_empty() -> i32 {
     let e: string = "";
     let s: string = "x";
     assert_eq!(e.cmp(e), 0);
@@ -330,7 +330,7 @@ fn test_string_cmp_empty() -> int {
     return 0;
 }
 
-fn test_vec_string_max_some() -> int {
+fn test_vec_string_max_some() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push("cherry"); v.push("apple"); v.push("banana");
     let r: ?string = v.max();
@@ -339,14 +339,14 @@ fn test_vec_string_max_some() -> int {
     return 0;
 }
 
-fn test_vec_string_max_empty() -> int {
+fn test_vec_string_max_empty() -> i32 {
     let v: *Vector<string> = Vector::new();
     let r: ?string = v.max();
     assert_not!(r.has);
     return 0;
 }
 
-fn test_vec_string_min_some() -> int {
+fn test_vec_string_min_some() -> i32 {
     let v: *Vector<string> = Vector::new();
     v.push("cherry"); v.push("apple"); v.push("banana");
     let r: ?string = v.min();
@@ -355,14 +355,14 @@ fn test_vec_string_min_some() -> int {
     return 0;
 }
 
-fn test_vec_string_min_empty() -> int {
+fn test_vec_string_min_empty() -> i32 {
     let v: *Vector<string> = Vector::new();
     let r: ?string = v.min();
     assert_not!(r.has);
     return 0;
 }
 
-fn test_vec_bool_count_true() -> int {
+fn test_vec_bool_count_true() -> i32 {
     let v: *Vector<bool> = Vector::new();
     v.push(true); v.push(false); v.push(true); v.push(true); v.push(false);
     assert_eq!(v.count_true(), 3);
@@ -370,35 +370,35 @@ fn test_vec_bool_count_true() -> int {
     return 0;
 }
 
-fn test_vec_bool_all_true_yes() -> int {
+fn test_vec_bool_all_true_yes() -> i32 {
     let v: *Vector<bool> = Vector::new();
     v.push(true); v.push(true); v.push(true);
     assert!(v.all_true());
     return 0;
 }
 
-fn test_vec_bool_all_true_no() -> int {
+fn test_vec_bool_all_true_no() -> i32 {
     let v: *Vector<bool> = Vector::new();
     v.push(true); v.push(false); v.push(true);
     assert_not!(v.all_true());
     return 0;
 }
 
-fn test_vec_bool_any_true_yes() -> int {
+fn test_vec_bool_any_true_yes() -> i32 {
     let v: *Vector<bool> = Vector::new();
     v.push(false); v.push(true); v.push(false);
     assert!(v.any_true());
     return 0;
 }
 
-fn test_vec_bool_any_true_no() -> int {
+fn test_vec_bool_any_true_no() -> i32 {
     let v: *Vector<bool> = Vector::new();
     v.push(false); v.push(false);
     assert_not!(v.any_true());
     return 0;
 }
 
-fn test_vec_bool_all_true_empty_is_vacuous() -> int {
+fn test_vec_bool_all_true_empty_is_vacuous() -> i32 {
     let v: *Vector<bool> = Vector::new();
     assert!(v.all_true());
     assert_not!(v.any_true());

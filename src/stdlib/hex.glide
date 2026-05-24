@@ -1,16 +1,16 @@
-fn _byte_value(c: char) -> int {
-    let mut n: int = c.to_int();
+fn _byte_value(c: char) -> i32 {
+    let mut n: i32 = c.to_int();
     if n < 0 { n = n + 256; }
     return n;
 }
 
-fn _hex_digit(n: int) -> string {
+fn _hex_digit(n: i32) -> string {
     if n < 10 { return ((48 + n) as char).to_string(); }
     return ((87 + n) as char).to_string();
 }
 
-fn _hex_value(c: char) -> int {
-    let n: int = c.to_int();
+fn _hex_value(c: char) -> i32 {
+    let n: i32 = c.to_int();
     if n >= 48 && n <= 57 { return n - 48; }
     if n >= 97 && n <= 102 { return n - 87; }
     if n >= 65 && n <= 70 { return n - 55; }
@@ -25,10 +25,10 @@ fn _hex_value(c: char) -> int {
 /// ```
 pub fn hex_encode(s: string) -> string {
     let mut out: string = "";
-    let n: int = s.len();
-    let mut i: int = 0;
+    let n: i32 = s.len();
+    let mut i: i32 = 0;
     while i < n {
-        let b: int = _byte_value(s.at(i));
+        let b: i32 = _byte_value(s.at(i));
         out = out.concat(_hex_digit(b / 16));
         out = out.concat(_hex_digit(b % 16));
         i = i + 1;
@@ -48,14 +48,14 @@ pub fn hex_encode(s: string) -> string {
 /// if !bad.ok { println!(bad.err); } // "non-hex char"
 /// ```
 pub fn hex_decode(s: string) -> !string {
-    let n: int = s.len();
+    let n: i32 = s.len();
     if n % 2 != 0 { return err("odd length"); }
 
     let mut out: string = "";
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < n {
-        let hi: int = _hex_value(s.at(i));
-        let lo: int = _hex_value(s.at(i + 1));
+        let hi: i32 = _hex_value(s.at(i));
+        let lo: i32 = _hex_value(s.at(i + 1));
         if hi < 0 || lo < 0 { return err("non-hex char"); }
 
         out = out.concat(((hi * 16 + lo) as char).to_string());

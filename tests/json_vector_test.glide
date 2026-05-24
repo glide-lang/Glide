@@ -5,7 +5,7 @@ import stdlib::json::derive::*;
 @derive(JsonBind)
 pub struct Pet {
     pub name: string,
-    pub age:  int,
+    pub age:  i32,
 }
 
 fn _xs() -> *Vector<Pet> {
@@ -15,7 +15,7 @@ fn _xs() -> *Vector<Pet> {
     return v;
 }
 
-fn test_round_trip() -> int {
+fn test_round_trip() -> i32 {
     let xs: *Vector<Pet> = _xs();
     let s: string = (xs).to_json().emit();
     assert_str_eq!(s, "[{\"name\":\"rex\",\"age\":4},{\"name\":\"tom\",\"age\":7}]");
@@ -29,7 +29,7 @@ fn test_round_trip() -> int {
     return 0;
 }
 
-fn test_empty_array_round_trip() -> int {
+fn test_empty_array_round_trip() -> i32 {
     let v: *Vector<Pet> = Vector::new();
     let s: string = (v).to_json().emit();
     assert_str_eq!(s, "[]");
@@ -40,20 +40,20 @@ fn test_empty_array_round_trip() -> int {
     return 0;
 }
 
-fn test_non_array_input_errors() -> int {
+fn test_non_array_input_errors() -> i32 {
     let r: !Vector<Pet> = Vector::from_json(JsonValue::parse("{\"name\":\"rex\",\"age\":4}"));
     assert_not!(r.ok);
     return 0;
 }
 
-fn test_bad_element_fails_whole_parse() -> int {
+fn test_bad_element_fails_whole_parse() -> i32 {
     let payload: string = "[{\"name\":\"rex\",\"age\":4}, {\"name\":\"tom\"}]";
     let r: !Vector<Pet> = Vector::from_json(JsonValue::parse(payload));
     assert_not!(r.ok);
     return 0;
 }
 
-fn test_null_input_errors() -> int {
+fn test_null_input_errors() -> i32 {
     let r: !Vector<Pet> = Vector::from_json(null);
     assert_not!(r.ok);
     return 0;

@@ -17,7 +17,7 @@ fn _req(headers: string) -> HttpRequest {
     };
 }
 
-fn test_cache_starts_null_and_lazy_inits() -> int {
+fn test_cache_starts_null_and_lazy_inits() -> i32 {
     let r: HttpRequest = _req("Host: localhost\r\nUser-Agent: glide\r\n");
     assert!(r.headers_cache == null);
     let _v: string = r.header("Host");
@@ -25,7 +25,7 @@ fn test_cache_starts_null_and_lazy_inits() -> int {
     return 0;
 }
 
-fn test_lookup_is_case_insensitive() -> int {
+fn test_lookup_is_case_insensitive() -> i32 {
     let r: HttpRequest = _req("X-Foo: bar\r\n");
     assert_str_eq!(r.header("x-foo"), "bar");
     assert_str_eq!(r.header("X-FOO"), "bar");
@@ -33,13 +33,13 @@ fn test_lookup_is_case_insensitive() -> int {
     return 0;
 }
 
-fn test_missing_header_returns_empty() -> int {
+fn test_missing_header_returns_empty() -> i32 {
     let r: HttpRequest = _req("Host: localhost\r\n");
     assert_str_eq!(r.header("X-Missing"), "");
     return 0;
 }
 
-fn test_repeated_header_keeps_first() -> int {
+fn test_repeated_header_keeps_first() -> i32 {
     let r: HttpRequest = _req("X-Dup: a\r\nX-Dup: b\r\n");
     // Cache stores the first hit. Headers that legitimately repeat
     // (Set-Cookie, Vary) need raw-block walking — out of scope for v1.
@@ -47,7 +47,7 @@ fn test_repeated_header_keeps_first() -> int {
     return 0;
 }
 
-fn test_repeated_lookup_is_cached() -> int {
+fn test_repeated_lookup_is_cached() -> i32 {
     let r: HttpRequest = _req("X-Foo: 1\r\n");
     let v1: string = r.header("X-Foo");
     let cached_after_first: *HashMap<string> = r.headers_cache;

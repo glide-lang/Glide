@@ -1,18 +1,18 @@
 import stdlib::bytes::*;
 
-fn _is_unreserved(c: int) -> bool {
+fn _is_unreserved(c: i32) -> bool {
     if c >= 65 && c <= 90 { return true; }
     if c >= 97 && c <= 122 { return true; }
     if c >= 48 && c <= 57 { return true; }
     return c == 45 || c == 95 || c == 46 || c == 126;
 }
 
-fn _url_hex_digit(n: int) -> string {
+fn _url_hex_digit(n: i32) -> string {
     if n < 10 { return ((48 + n) as char).to_string(); }
     return ((55 + n) as char).to_string();
 }
 
-fn _from_hex(c: int) -> int {
+fn _from_hex(c: i32) -> i32 {
     if c >= 48 && c <= 57 { return c - 48; }
     if c >= 65 && c <= 70 { return c - 55; }
     if c >= 97 && c <= 102 { return c - 87; }
@@ -29,11 +29,11 @@ fn _from_hex(c: int) -> int {
 /// url_encode("café");               // "caf%C3%A9"
 /// ```
 pub fn url_encode(s: string) -> string {
-    let n: int = s.len();
+    let n: i32 = s.len();
     let mut out: string = "";
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < n {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if _is_unreserved(c) {
             out = out.concat(s.substring(i, i + 1));
         } else {
@@ -58,17 +58,17 @@ pub fn url_encode(s: string) -> string {
 /// if !bad.ok { println!(bad.err); }  // "url_decode: malformed percent escape"
 /// ```
 pub fn url_decode(s: string) -> !string {
-    let n: int = s.len();
+    let n: i32 = s.len();
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
 
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < n {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c == 37 {
             if i + 2 >= n { return err("url_decode: malformed percent escape"); }
-            let hi: int = _from_hex(s.at(i + 1).to_int());
-            let lo: int = _from_hex(s.at(i + 2).to_int());
+            let hi: i32 = _from_hex(s.at(i + 1).to_int());
+            let lo: i32 = _from_hex(s.at(i + 2).to_int());
             if hi < 0 || lo < 0 { return err("url_decode: malformed percent escape"); }
             b.push((hi * 16 + lo) as u8);
             i = i + 3;

@@ -3,14 +3,14 @@
 // from stdin, and an explicit flush.
 
 extern fn __glide_read_line() -> string;
-extern fn __glide_read_bytes(n: int) -> string;
+extern fn __glide_read_bytes(n: i32) -> string;
 extern fn __glide_write_str(s: string);
-extern fn __glide_write_bytes(s: string, n: int);
+extern fn __glide_write_bytes(s: string, n: i32);
 extern fn __glide_flush_stdout();
 extern fn __glide_log(s: string);
 extern fn __glide_set_binary_io();
-extern fn __glide_redirect_to(path: string) -> int;
-extern fn __glide_restore_stdout(saved: int);
+extern fn __glide_redirect_to(path: string) -> i32;
+extern fn __glide_restore_stdout(saved: i32);
 
 c_raw! {
     #ifdef GLIDE_IO_VIA_CRAW
@@ -98,7 +98,7 @@ pub fn prompt(msg: string) -> string {
     io_write(msg);
     flush();
     let line: string = read_line();
-    let n: int = line.len();
+    let n: i32 = line.len();
     if n > 0 && line.at(n - 1).to_int() == 10 {
         if n > 1 && line.at(n - 2).to_int() == 13 {
             return line.substring(0, n - 2);
@@ -118,7 +118,7 @@ pub fn prompt(msg: string) -> string {
 /// if n.ok { println!("number:", n.val); }
 /// else { println!("not an int:", n.err); }
 /// ```
-pub fn read_int() -> !int {
+pub fn read_int() -> !i32 {
     return read_line().trim().try_parse_int();
 }
 
@@ -143,7 +143,7 @@ pub fn read_yes_no(prompt_msg: string) -> bool {
 /// ```glide
 /// let chunk: string = read_bytes(4096);   // tail of the stdin pipe
 /// ```
-pub fn read_bytes(n: int) -> string { return __glide_read_bytes(n); }
+pub fn read_bytes(n: i32) -> string { return __glide_read_bytes(n); }
 
 /// Write `s` to stdout without buffering a newline. Cheaper than `print!`
 /// when you don't need format inference. Named `io_write` (not `write`) so
@@ -163,7 +163,7 @@ pub fn io_write(s: string) { __glide_write_str(s); }
 /// // Echo a 16-byte header verbatim.
 /// io_write_bytes(buf, 16);
 /// ```
-pub fn io_write_bytes(s: string, n: int) { __glide_write_bytes(s, n); }
+pub fn io_write_bytes(s: string, n: i32) { __glide_write_bytes(s, n); }
 
 /// Force-flush the stdout buffer. Stdout is line-buffered when attached to
 /// a TTY but block-buffered when piped, so explicit `flush()` matters for

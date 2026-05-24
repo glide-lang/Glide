@@ -17,7 +17,7 @@ extern fn now_ns() -> i64;
 
 // ---- 1. constants and primitives ---------------------------------------
 
-const POISON: int = -1;
+const POISON: i32 = -1;
 
 // ---- 2. macros: non-variadic + variadic --------------------------------
 
@@ -32,27 +32,27 @@ macro list_each!($($v:expr),*) {
 // ---- 3. enums with payload + match -------------------------------------
 
 enum Event {
-    Hit(int),
+    Hit(i32),
     Miss(string),
     Tick,
 }
 
 // ---- 4. structs + impl methods -----------------------------------------
 
-struct Point { x: int, y: int }
+struct Point { x: i32, y: i32 }
 
 impl Point {
-    fn dist2(self: *Point, other: *Point) -> int {
-        let dx: int = self.x - other.x;
-        let dy: int = self.y - other.y;
+    fn dist2(self: *Point, other: *Point) -> i32 {
+        let dx: i32 = self.x - other.x;
+        let dy: i32 = self.y - other.y;
         return dx * dx + dy * dy;
     }
 }
 
 // ---- 5. impl on a primitive (namespaced) -------------------------------
 
-impl int in tour {
-    fn squared(self: int) -> int { return self * self; }
+impl i32 in tour {
+    fn squared(self: i32) -> i32 { return self * self; }
 }
 
 // ---- 6. traits + supertrait + default method + dyn dispatch ------------
@@ -68,8 +68,8 @@ trait Render: Named {
     }
 }
 
-struct Box { w: int, h: int, tag: string }
-struct Circle { r: int, tag: string }
+struct Box { w: i32, h: i32, tag: string }
+struct Circle { r: i32, tag: string }
 
 impl Named for Box {
     fn name(self: Self) -> string { return self.tag; }
@@ -95,9 +95,9 @@ fn describe<T: Render>(x: T) {
 
 // ---- 8. errors-as-values + ? -------------------------------------------
 
-struct Cfg { workers: int, jobs: int }
+struct Cfg { workers: i32, jobs: i32 }
 
-fn parse_pair(part: string, want: string) -> !int {
+fn parse_pair(part: string, want: string) -> !i32 {
     bail!(!part.contains("="), "missing `=`");
     let kv: *Vector<string> = part.split("=");
     bail!(kv.len() != 2, "want `key=value`");
@@ -108,8 +108,8 @@ fn parse_pair(part: string, want: string) -> !int {
 fn parse_cfg(src: string) -> !Cfg {
     let parts: *Vector<string> = src.split(";");
     bail!(parts.len() != 2, "need workers=N;jobs=M");
-    let w: int = parse_pair(parts.get(0), "workers")?;
-    let j: int = parse_pair(parts.get(1), "jobs")?;
+    let w: i32 = parse_pair(parts.get(0), "workers")?;
+    let j: i32 = parse_pair(parts.get(1), "jobs")?;
     bail!(w <= 0, "workers must be > 0");
     bail!(j <= 0, "jobs must be > 0");
     return ok(Cfg { workers: w, jobs: j });
@@ -117,37 +117,37 @@ fn parse_cfg(src: string) -> !Cfg {
 
 // ---- 8b. ?T (option) and ?!T (option-or-error) -------------------------
 
-fn lookup_user(id: int) -> ?int {
+fn lookup_user(id: i32) -> ?i32 {
     if id < 0 { return none(); }
     return some(id * 10);
 }
 
 // `?` in fn !U coerces None -> Err{"none-coerced"}.
-fn fetch_strict(id: int) -> !int {
-    let v: int = lookup_user(id)?;
+fn fetch_strict(id: i32) -> !i32 {
+    let v: i32 = lookup_user(id)?;
     return ok(v + 1);
 }
 
 // `?` in fn ?U propagates None.
-fn fetch_loose(id: int) -> ?int {
-    let v: int = lookup_user(id)?;
+fn fetch_loose(id: i32) -> ?i32 {
+    let v: i32 = lookup_user(id)?;
     return some(v + 1);
 }
 
 // `?!T` carries 3 tags: 0=Some, 1=None, 2=Err.
-fn fetch_either(id: int) -> ?!int {
+fn fetch_either(id: i32) -> ?!i32 {
     if id == 0 { return err("zero forbidden"); }
-    let v: int = lookup_user(id)?;
+    let v: i32 = lookup_user(id)?;
     return some(v);
 }
 
 // ---- 8c. Iterator trait with associated type ---------------------------
 
-struct Counter { i: int, max: int }
+struct Counter { i: i32, max: i32 }
 
 impl Iterator for Counter {
-    type Item = int;
-    fn next(self: *Counter) -> ?int {
+    type Item = i32;
+    fn next(self: *Counter) -> ?i32 {
         if self.i >= self.max { return none(); }
         self.i = self.i + 1;
         return some(self.i - 1);
@@ -162,7 +162,7 @@ fn first<I: Iterator>(it: *I) -> ?I::Item {
 
 // ---- 9. closures + first-class fn pointers -----------------------------
 
-fn run_op(f: fn(int) -> int, x: int) -> int { return f(x); }
+fn run_op(f: fn(i32) -> i32, x: i32) -> i32 { return f(x); }
 
 // ---- 10. inline asm + naked fn + cfg gate ------------------------------
 
@@ -194,17 +194,17 @@ fn read_tsc() -> u64 {
 
 // ---- 11. concurrency: chan + spawn + sleep + while-let -----------------
 
-fn streamer(c: chan<int>) {
+fn streamer(c: chan<i32>) {
     // No poison pill — `close()` + `while let` is the natural shape.
     for k in 1..6 { c.send(k * 10); sleep_ms(1); }
     c.close();
 }
 
-fn worker(id: int, jobs: chan<int>, out: chan<Event>) {
+fn worker(id: i32, jobs: chan<i32>, out: chan<Event>) {
     while let n = jobs.recv() {
         if n == POISON { return; }
         sleep_ms(1);
-        let nn: int = n;
+        let nn: i32 = n;
         let key: string = "w${id}-job${nn}";
         if nn.tour::squared() % 17 == 0 {
             out.send(Event::Miss(key));
@@ -214,12 +214,12 @@ fn worker(id: int, jobs: chan<int>, out: chan<Event>) {
     }
 }
 
-struct Tally { hits: int, misses: int, total_us: int }
+struct Tally { hits: i32, misses: i32, total_us: i32 }
 
-fn aggregator(out: chan<Event>, expected: int, sink: chan<Tally>) {
+fn aggregator(out: chan<Event>, expected: i32, sink: chan<Tally>) {
     let t: *Tally = malloc(sizeof(Tally)) as *Tally;
     t.hits = 0; t.misses = 0; t.total_us = 0;
-    let mut seen: int = 0;
+    let mut seen: i32 = 0;
     while seen < expected {
         let _ev: Event = out.recv();
         match _ev {
@@ -235,26 +235,26 @@ fn aggregator(out: chan<Event>, expected: int, sink: chan<Tally>) {
 
 // ---- 11b. select! over multiple chans ---------------------------------
 
-fn tour_emit_after(c: chan<int>, ms: int, v: int) {
+fn tour_emit_after(c: chan<i32>, ms: i32, v: i32) {
     sleep_ms(ms);
     c.send(v);
 }
 
-fn tour_close_after(c: chan<int>, ms: int) {
+fn tour_close_after(c: chan<i32>, ms: i32) {
     sleep_ms(ms);
     c.close();
 }
 
 fn tour_select_demo() {
-    let fast: chan<int>  = make_chan(2);
-    let slow: chan<int>  = make_chan(2);
-    let done: chan<int>  = make_chan(2);
+    let fast: chan<i32>  = make_chan(2);
+    let slow: chan<i32>  = make_chan(2);
+    let done: chan<i32>  = make_chan(2);
     spawn tour_emit_after(fast, 10, 1);
     spawn tour_emit_after(slow, 50, 2);
     spawn tour_close_after(done, 70);
 
-    let mut events: int = 0;
-    let mut keep: int = 1;
+    let mut events: i32 = 0;
+    let mut keep: i32 = 1;
     while keep == 1 {
         select! {
             x = fast.recv() => { println!("[select] fast=", x); events = events + 1; }
@@ -267,10 +267,10 @@ fn tour_select_demo() {
 
 // ---- 12. arena + defer + borrows ---------------------------------------
 
-fn fill_jobs(jobs: &mut Vector<int>, count: int) {
+fn fill_jobs(jobs: &mut Vector<i32>, count: i32) {
     let arena: *Arena = Arena::new(2048);
     defer arena.free();
-    let scratch: *int = arena.alloc(sizeof(int)) as *int;
+    let scratch: *i32 = arena.alloc(sizeof(i32)) as *i32;
     *scratch = 0;
     for i in 0..count {
         jobs.push(i + 1);
@@ -281,7 +281,7 @@ fn fill_jobs(jobs: &mut Vector<int>, count: int) {
 
 // ---- 13. main: ties it all together ------------------------------------
 
-fn main() -> int {
+fn main() -> i32 {
     // --- (a) parse config: error-as-value, `?`, macros, interpolation
     let parsed: !Cfg = parse_cfg("workers=3;jobs=15");
     if !parsed.ok {
@@ -292,27 +292,27 @@ fn main() -> int {
     println!("config: workers=${cfg.workers} jobs=${cfg.jobs}");
 
     // --- (a2) ?T / ?!T plus the `??` fallback
-    let user_a: int = lookup_user(5)  ?? -1;   // 50
-    let user_b: int = lookup_user(-9) ?? -1;   // -1 (None fell back)
+    let user_a: i32 = lookup_user(5)  ?? -1;   // 50
+    let user_b: i32 = lookup_user(-9) ?? -1;   // -1 (None fell back)
     println!("lookup_user(5)=${user_a}  lookup_user(-9)=${user_b}");
-    let _strict: !int = fetch_strict(7);       // ok(71)
-    let _loose:  ?int = fetch_loose(-1);       // none -> propagated
-    let either:  ?!int = fetch_either(0);      // err
+    let _strict: !i32 = fetch_strict(7);       // ok(71)
+    let _loose:  ?i32 = fetch_loose(-1);       // none -> propagated
+    let either:  ?!i32 = fetch_either(0);      // err
     println!("either.tag=${either.tag}");      // 2 (Err)
 
     // --- (a3) Iterator trait + assoc types
     let cnt: Counter = Counter { i: 7, max: 10 };
-    let head: ?int = first(&cnt);              // some(7)
-    let head_val: int = -1; if head.has { head_val = head.val; }
+    let head: ?i32 = first(&cnt);              // some(7)
+    let head_val: i32 = -1; if head.has { head_val = head.val; }
     println!("counter first=${head_val}");
 
     // --- (b) borrows + arena + explicit free
-    let jobs: *Vector<int> = Vector::new();
+    let jobs: *Vector<i32> = Vector::new();
     defer jobs.free();
     fill_jobs(&mut *jobs, cfg.jobs);
 
     // --- (c) channels + spawn coroutines
-    let job_chan: chan<int>   = make_chan(8);
+    let job_chan: chan<i32>   = make_chan(8);
     let out_chan: chan<Event> = make_chan(8);
     let sink:     chan<Tally> = make_chan(1);
 
@@ -327,16 +327,16 @@ fn main() -> int {
     let elapsed_ms: i64 = (now_ns() - t0) / 1000000;
 
     // --- (d) closures + first-class fn passing
-    let inc = fn(n: int) -> int { return n + 1; };
-    let sq  = fn(n: int) -> int { return n * n; };
-    let a: int = run_op(inc, 41);
-    let b: int = run_op(sq, 6);
+    let inc = fn(n: i32) -> i32 { return n + 1; };
+    let sq  = fn(n: i32) -> i32 { return n * n; };
+    let a: i32 = run_op(inc, 41);
+    let b: i32 = run_op(sq, 6);
     println!("inc(41) = ${a}, sq(6) = ${b}");
 
     // --- (e) struct method + impl-on-primitive
     let p: Point = Point { x: 0, y: 0 };
     let q: Point = Point { x: 3, y: 4 };
-    let seven: int = 7;
+    let seven: i32 = 7;
     println!("dist² = ${p.dist2(&q)}, 7² (int impl) = ${seven.tour::squared()}");
 
     // --- (f) traits: static dispatch via `<T: Render>`
@@ -363,21 +363,21 @@ fn main() -> int {
     let scores* = HashMap::new();
     scores.insert("hits",   result.hits);
     scores.insert("misses", result.misses);
-    let lower: int = stdlib::math::min_int(result.hits, result.misses);
-    let h: int = scores.get("hits");
-    let m: int = scores.get("misses");
+    let lower: i32 = stdlib::math::min_int(result.hits, result.misses);
+    let h: i32 = scores.get("hits");
+    let m: i32 = scores.get("misses");
     println!("scoreboard: hits=${h} misses=${m} min=${lower}");
 
     // --- (i) raw asm + naked fn (cfg-gated)
     let t1: u64 = read_tsc();
     let t2: u64 = read_tsc();
-    println!("rdtsc Δ:", (t2 - t1) as int);
-    println!("naked add_raw(40, 2):", add_raw(40, 2) as int);
+    println!("rdtsc Δ:", (t2 - t1) as i32);
+    println!("naked add_raw(40, 2):", add_raw(40, 2) as i32);
 
     // --- (j) chan close + while-let (no poison pill, loop ends on close)
-    let stream: chan<int> = make_chan(4);
+    let stream: chan<i32> = make_chan(4);
     spawn streamer(stream);
-    let mut sum: int = 0;
+    let mut sum: i32 = 0;
     while let v = stream.recv() { sum = sum + v; }
     println!("stream sum (close-detected): ${sum}");
 

@@ -190,7 +190,7 @@ impl AuthScheme for Basic {
     fn parse(v: string) -> !Basic {
         if !v.starts_with("Basic ") { return err("not Basic scheme"); }
         let raw: string = v.substring(6, v.len());
-        let colon: int = _index_of(raw, ":");
+        let colon: i32 = _index_of(raw, ":");
         if colon < 0 { return err("malformed Basic value: no ':'"); }
         return ok(Basic {
             user: raw.substring(0, colon),
@@ -252,9 +252,9 @@ impl FromPath for string {
     fn from_path(s: string) -> !string { return ok(s); }
 }
 
-impl FromPath for int {
-    fn from_path(s: string) -> !int {
-        let r: !int = s.try_parse_int();
+impl FromPath for i32 {
+    fn from_path(s: string) -> !i32 {
+        let r: !i32 = s.try_parse_int();
         if !r.ok { return err("not an int: ".concat(s)); }
         return ok(r.val);
     }
@@ -360,7 +360,7 @@ impl FromRequest for Form {
 impl Form {
     /// First value for `name`. Returns `""` when not present.
     pub fn get(self: *Form, name: string) -> string {
-        for let i: int = 0; i < self.data.len(); i++ {
+        for let i: i32 = 0; i < self.data.len(); i++ {
             if self.data.name_at(i).eq(name) { return self.data.value_at(i); }
         }
         return "";
@@ -368,7 +368,7 @@ impl Form {
 
     /// `true` iff at least one field with `name` is present.
     pub fn has(self: *Form, name: string) -> bool {
-        for let i: int = 0; i < self.data.len(); i++ {
+        for let i: i32 = 0; i < self.data.len(); i++ {
             if self.data.name_at(i).eq(name) { return true; }
         }
         return false;
@@ -404,22 +404,22 @@ impl Cookies {
     /// handler.
     pub fn get(self: *Cookies, name: string) -> string {
         let h: string = self.header;
-        let n: int = h.len();
+        let n: i32 = h.len();
         if n == 0 { return ""; }
-        let mut i: int = 0;
-        let target_len: int = name.len();
+        let mut i: i32 = 0;
+        let target_len: i32 = name.len();
         while i < n {
             while i < n && (h.at(i).to_int() == 32 || h.at(i).to_int() == 9) {
                 i = i + 1;
             }
-            let start: int = i;
+            let start: i32 = i;
             while i < n && h.at(i).to_int() != 61 && h.at(i).to_int() != 59 {
                 i = i + 1;
             }
-            let key_end: int = i;
+            let key_end: i32 = i;
             if i < n && h.at(i).to_int() == 61 {
                 i = i + 1;
-                let v_start: int = i;
+                let v_start: i32 = i;
                 while i < n && h.at(i).to_int() != 59 {
                     i = i + 1;
                 }
@@ -461,10 +461,10 @@ impl HttpResponse {
     /// if !r.ok { return HttpResponse::from_extract_err(r.err); }
     /// ```
     pub fn from_extract_err(err_str: string) -> HttpResponse {
-        let colon: int = _index_of(err_str, ":");
+        let colon: i32 = _index_of(err_str, ":");
         if colon > 0 && colon <= 4 {
             let prefix: string = err_str.substring(0, colon);
-            let p_r: !int = prefix.try_parse_int();
+            let p_r: !i32 = prefix.try_parse_int();
             if p_r.ok {
                 let msg: string = err_str.substring(colon + 1, err_str.len());
                 return HttpResponse::with_status(p_r.val).text(msg);
@@ -474,14 +474,14 @@ impl HttpResponse {
     }
 }
 
-fn _index_of(s: string, needle: string) -> int {
-    let n: int = s.len();
-    let m: int = needle.len();
+fn _index_of(s: string, needle: string) -> i32 {
+    let n: i32 = s.len();
+    let m: i32 = needle.len();
     if m == 0 { return 0; }
     if m > n { return -1; }
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i + m <= n {
-        let mut k: int = 0;
+        let mut k: i32 = 0;
         let mut hit: bool = true;
         while k < m {
             if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }

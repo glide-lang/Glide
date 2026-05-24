@@ -3,7 +3,7 @@ import stdlib::signal::*;
 import stdlib::os::*;
 import stdlib::time::*;
 
-fn test_signal_to_int_known() -> int {
+fn test_signal_to_int_known() -> i32 {
     assert_eq!(Signal::Hup.to_int(), 1);
     assert_eq!(Signal::Int.to_int(), 2);
     assert_eq!(Signal::Quit.to_int(), 3);
@@ -15,13 +15,13 @@ fn test_signal_to_int_known() -> int {
     return 0;
 }
 
-fn test_signal_to_int_other() -> int {
+fn test_signal_to_int_other() -> i32 {
     let s: Signal = Signal::Other(42);
     assert_eq!(s.to_int(), 42);
     return 0;
 }
 
-fn test_signal_from_int_known() -> int {
+fn test_signal_from_int_known() -> i32 {
     let s1: Signal = Signal::from_int(2);
     assert_eq!(s1.to_int(), 2);
     let s2: Signal = Signal::from_int(15);
@@ -29,13 +29,13 @@ fn test_signal_from_int_known() -> int {
     return 0;
 }
 
-fn test_signal_from_int_unknown_becomes_other() -> int {
+fn test_signal_from_int_unknown_becomes_other() -> i32 {
     let s: Signal = Signal::from_int(99);
     assert_eq!(s.to_int(), 99);
     return 0;
 }
 
-fn test_signal_name_known() -> int {
+fn test_signal_name_known() -> i32 {
     assert_str_eq!(Signal::Hup.name(),  "SIGHUP");
     assert_str_eq!(Signal::Int.name(),  "SIGINT");
     assert_str_eq!(Signal::Term.name(), "SIGTERM");
@@ -43,27 +43,27 @@ fn test_signal_name_known() -> int {
     return 0;
 }
 
-fn test_signal_chan_returns_chan() -> int {
+fn test_signal_chan_returns_chan() -> i32 {
     let _c: chan<Signal> = signal_chan(Signal::Usr1);
     let _r: ! = signal_default(Signal::Usr1);
     return 0;
 }
 
-fn test_signal_chan_idempotent() -> int {
+fn test_signal_chan_idempotent() -> i32 {
     let _a: chan<Signal> = signal_chan(Signal::Usr2);
     let _b: chan<Signal> = signal_chan(Signal::Usr2);
     let _r: ! = signal_default(Signal::Usr2);
     return 0;
 }
 
-fn test_signal_default_succeeds() -> int {
+fn test_signal_default_succeeds() -> i32 {
     let _c: chan<Signal> = signal_chan(Signal::Hup);
     let r: ! = signal_default(Signal::Hup);
     assert!(r.ok);
     return 0;
 }
 
-fn test_signal_ignore_succeeds() -> int {
+fn test_signal_ignore_succeeds() -> i32 {
     let r: ! = signal_ignore(Signal::Pipe);
     assert!(r.ok);
     let _r: ! = signal_default(Signal::Pipe);
@@ -71,11 +71,11 @@ fn test_signal_ignore_succeeds() -> int {
 }
 
 // signal_raise direct-push: works on ALL platforms when subscribed.
-fn test_signal_raise_caught_typed() -> int {
+fn test_signal_raise_caught_typed() -> i32 {
     let intr: chan<Signal> = signal_chan(Signal::Usr1);
     let _r: ! = signal_raise(Signal::Usr1);
     let timer: chan<i64> = after(Duration::from_secs(2));
-    let mut received_tag: int = 0 - 1;
+    let mut received_tag: i32 = 0 - 1;
     select! {
         s = intr.recv()  => { received_tag = s.to_int(); }
         _ = timer.recv() => { }
@@ -85,12 +85,12 @@ fn test_signal_raise_caught_typed() -> int {
     return 0;
 }
 
-fn test_signal_raise_other() -> int {
+fn test_signal_raise_other() -> i32 {
     let custom: Signal = Signal::Other(20);
     let intr: chan<Signal> = signal_chan(custom);
     let _r: ! = signal_raise(custom);
     let timer: chan<i64> = after(Duration::from_secs(2));
-    let mut received_signum: int = 0 - 1;
+    let mut received_signum: i32 = 0 - 1;
     select! {
         s = intr.recv()  => { received_signum = s.to_int(); }
         _ = timer.recv() => { }

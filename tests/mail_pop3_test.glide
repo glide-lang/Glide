@@ -2,16 +2,16 @@ import stdlib::testing::*;
 import stdlib::net::*;
 import stdlib::mail::pop3::*;
 
-fn _fake_pop3(port: int) {
+fn _fake_pop3(port: i32) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("+OK fake POP3 ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: int = c.read(buf as *void, 4096);
+        let n: i32 = c.read(buf as *void, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
         let upper: string = s.to_upper();
         if      upper.starts_with("USER")  { c.write_str("+OK user\r\n"); }
@@ -27,13 +27,13 @@ fn _fake_pop3(port: int) {
     c.close(); l.close();
 }
 
-fn test_login_and_stat() -> int {
+fn test_login_and_stat() -> i32 {
     spawn_thread _fake_pop3(42210);
     sleep_ms(300);
     let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42210, false);
     assert!(s.ok);
     let p: *Pop3Session = s.val;
-    let l: !int = p.login("alice", "pwd");
+    let l: !i32 = p.login("alice", "pwd");
     assert!(l.ok);
     let info: !*Pop3MsgInfo = p.stat();
     assert!(info.ok);
@@ -44,7 +44,7 @@ fn test_login_and_stat() -> int {
     return 0;
 }
 
-fn test_list_returns_msg_infos() -> int {
+fn test_list_returns_msg_infos() -> i32 {
     spawn_thread _fake_pop3(42211);
     sleep_ms(300);
     let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42211, false);
@@ -62,7 +62,7 @@ fn test_list_returns_msg_infos() -> int {
     return 0;
 }
 
-fn test_retrieve_returns_message_body() -> int {
+fn test_retrieve_returns_message_body() -> i32 {
     spawn_thread _fake_pop3(42212);
     sleep_ms(300);
     let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42212, false);
@@ -77,16 +77,16 @@ fn test_retrieve_returns_message_body() -> int {
     return 0;
 }
 
-fn test_delete_and_noop() -> int {
+fn test_delete_and_noop() -> i32 {
     spawn_thread _fake_pop3(42213);
     sleep_ms(300);
     let s: !*Pop3Session = Pop3Session::connect("127.0.0.1", 42213, false);
     assert!(s.ok);
     let p: *Pop3Session = s.val;
     p.login("a", "p");
-    let d: !int = p.delete(1);
+    let d: !i32 = p.delete(1);
     assert!(d.ok);
-    let nn: !int = p.noop();
+    let nn: !i32 = p.noop();
     assert!(nn.ok);
     p.quit();
     p.close();

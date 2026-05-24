@@ -22,8 +22,8 @@ extern fn read_file(path: string) -> string;
 
 pub struct ParseDiag {
     pub origin: string,
-    pub line: int,
-    pub col: int,
+    pub line: i32,
+    pub col: i32,
     pub msg: string,
 }
 
@@ -31,15 +31,15 @@ pub struct Parser {
     pub lex: *Lexer,
     pub current: Token,
     pub peek: Token,
-    pub error_count: int,
+    pub error_count: i32,
     pub no_struct_lit: bool,
     pub diags: *Vector<ParseDiag>,
     // Position of the most recently consumed token (advanced past). Used to
     // anchor "expected ';'" errors at the END of the previous token rather
     // than the start of the next stmt — much friendlier IDE underlines.
-    pub prev_line: int,
-    pub prev_col: int,
-    pub prev_len: int,
+    pub prev_line: i32,
+    pub prev_col: i32,
+    pub prev_len: i32,
 }
 
 impl Parser {
@@ -110,8 +110,8 @@ impl Parser {
     // the prior stmt instead of the start of the next one.
     fn err_after_prev(self: *Parser, msg: string) {
         let full: string = msg.concat(" near '").concat(self.current.lexeme).concat("'");
-        let mut line: int = self.prev_line;
-        let mut col: int = self.prev_col + self.prev_len;
+        let mut line: i32 = self.prev_line;
+        let mut col: i32 = self.prev_col + self.prev_len;
         if line == 0 { line = self.current.line; col = self.current.column; }
         let d: ParseDiag = ParseDiag {
             origin: "",
@@ -190,8 +190,8 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     let mut cfg: string = "";
     let attrs_collected: *Vector<Attr> = Vector::new();
     while p.at_op("@") {
-        let at_line: int = p.current.line;
-        let at_col: int = p.current.column;
+        let at_line: i32 = p.current.line;
+        let at_col: i32 = p.current.column;
         p.advance();
         let attr_name: string = p.expect_ident();
         let arg_exprs: *Vector<Expr> = Vector::new();
@@ -272,8 +272,8 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     }
     // `c_raw! { ... }` at top level — emitted at the top of the generated .c.
     if p.current.kind == TOK_RAW_BLOCK {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         let body: string = p.current.lexeme;
         p.advance();
         let s: *Stmt = stmt_craw(body, line, col);
@@ -294,12 +294,12 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
 // or, for builtins / docs-only stubs: `macro name!(matchers);` (no body — the
 // expander leaves the call alone so codegen's native handling can run).
 fn parse_macro_def(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'macro'
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
-    let nlen: int = p.current.lexeme.len();
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
+    let nlen: i32 = p.current.lexeme.len();
     let name: string = p.expect_ident();
     p.expect_op("!");
     p.expect_op("(");
@@ -372,13 +372,13 @@ fn parse_macro_matchers(p: *Parser) -> *Vector<MacroParam> {
 }
 
 fn parse_fn(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'fn'
 
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
-    let nlen: int = p.current.lexeme.len();
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
+    let nlen: i32 = p.current.lexeme.len();
     let name: string = p.expect_ident();
 
     // Optional generic params <T, U: Bound + Bound>
@@ -400,8 +400,8 @@ fn parse_fn(p: *Parser) -> *Stmt {
         // Glide already treats fn-locals as mutable storage, so we accept
         // the keyword for ergonomics and discard it.
         p.eat_kw("mut");
-        let pn_line: int = p.current.line;
-        let pn_col: int = p.current.column;
+        let pn_line: i32 = p.current.line;
+        let pn_col: i32 = p.current.column;
         let pname: string = p.expect_ident();
         p.expect_op(":");
         let pty: *Type = parse_type(p);
@@ -491,12 +491,12 @@ fn skip_type_params(p: *Parser) {
 }
 
 fn parse_struct(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'struct'
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
-    let nlen: int = p.current.lexeme.len();
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
+    let nlen: i32 = p.current.lexeme.len();
     let name: string = p.expect_ident();
     let tps_bounds: *Vector<string> = Vector::new();
     let tps: *Vector<string> = parse_type_params_with_bounds(p, tps_bounds);
@@ -547,12 +547,12 @@ fn parse_struct(p: *Parser) -> *Stmt {
 }
 
 fn parse_enum(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'enum'
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
-    let nlen: int = p.current.lexeme.len();
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
+    let nlen: i32 = p.current.lexeme.len();
     let name: string = p.expect_ident();
     if p.at_op("<") { skip_type_params(p); }
     p.expect_op("{");
@@ -583,13 +583,13 @@ fn parse_enum(p: *Parser) -> *Stmt {
 // supplies the implementations. `Self` is allowed as a stand-in for the
 // implementor and gets substituted when the impl is parsed.
 fn parse_trait(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'trait'
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
     let name: string = p.expect_ident();
-    let nlen: int = name.len();
+    let nlen: i32 = name.len();
     // Optional supertrait list: `trait Bird: Animal, Mover { ... }`.
     let supers: *Vector<string> = Vector::new();
     if p.eat_op(":") {
@@ -643,8 +643,8 @@ fn parse_trait(p: *Parser) -> *Stmt {
 }
 
 fn parse_impl(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'impl'
     let tps_bounds: *Vector<string> = Vector::new();
     let tps: *Vector<string> = parse_type_params_with_bounds(p, tps_bounds);
@@ -679,8 +679,8 @@ fn parse_impl(p: *Parser) -> *Stmt {
         // off `Stmt.attrs`.
         let mem_attrs: *Vector<Attr> = Vector::new();
         while p.at_op("@") {
-            let at_line: int = p.current.line;
-            let at_col: int = p.current.column;
+            let at_line: i32 = p.current.line;
+            let at_col: i32 = p.current.column;
             p.advance();
             let nm: string = p.expect_ident();
             let arg_exprs: *Vector<Expr> = Vector::new();
@@ -759,10 +759,10 @@ fn parse_impl(p: *Parser) -> *Stmt {
 // must `.set()` the rewritten Param/Stmt back in place.
 pub fn substitute_self_in_methods(methods: *Vector<Stmt>, target: *Type) {
     if methods == null || target == null { return; }
-    for let i: int = 0; i < methods.len(); i++ {
+    for let i: i32 = 0; i < methods.len(); i++ {
         let mut m: Stmt = methods.get(i);
         if m.fn_params != null {
-            for let j: int = 0; j < m.fn_params.len(); j++ {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
                 let mut p: Param = m.fn_params.get(j);
                 if p.ty != null { p.ty = substitute_self_in_type(p.ty, target); }
                 m.fn_params.set(j, p);
@@ -790,10 +790,10 @@ fn substitute_self_in_type(t: *Type, target: *Type) -> *Type {
 // if the impl doesn't define it (typer will diagnose).
 pub fn substitute_self_assoc_in_methods(methods: *Vector<Stmt>, assocs: *Vector<Param>) {
     if methods == null || assocs == null { return; }
-    for let i: int = 0; i < methods.len(); i++ {
+    for let i: i32 = 0; i < methods.len(); i++ {
         let mut m: Stmt = methods.get(i);
         if m.fn_params != null {
-            for let j: int = 0; j < m.fn_params.len(); j++ {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
                 let mut p: Param = m.fn_params.get(j);
                 if p.ty != null { p.ty = substitute_self_assoc_in_type(p.ty, assocs); }
                 m.fn_params.set(j, p);
@@ -808,7 +808,7 @@ fn substitute_self_assoc_in_type(t: *Type, assocs: *Vector<Param>) -> *Type {
     if t == null { return null; }
     if t.kind == TY_ASSOC && t.inner != null
         && t.inner.kind == TY_NAMED && t.inner.name.eq("Self") {
-        for let i: int = 0; i < assocs.len(); i++ {
+        for let i: i32 = 0; i < assocs.len(); i++ {
             let a: Param = assocs.get(i);
             if a.name.eq(t.name) { return a.ty; }
         }
@@ -822,8 +822,8 @@ fn substitute_self_assoc_in_type(t: *Type, assocs: *Vector<Param>) -> *Type {
 }
 
 fn parse_import(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'import'
     // Only path-based imports are supported. The path segments map straight
     // to the filesystem (`a::b::c` -> `a/b/c.glide`); there's no
@@ -868,7 +868,7 @@ fn parse_import(p: *Parser) -> *Stmt {
     // filesystem to decide whether the trailing segment names a file (module
     // import) or an item from the parent file. Wildcards / brace-lists
     // already specify items, so they always target the full path as a file.
-    for let i: int = 0; i < segs.len(); i++ {
+    for let i: i32 = 0; i < segs.len(); i++ {
         if i > 0 { path = path.concat("/"); }
         path = path.concat(segs.get(i));
     }
@@ -904,8 +904,8 @@ fn parse_block(p: *Parser) -> *Vector<Stmt> {
 // outputs while providing inputs you write `: : "r"(x)`. Trailing `;` after the
 // closing `}` is required (statement terminator).
 fn parse_asm_block(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'asm'
     p.expect_op("!");
     let mut is_volatile: bool = false;
@@ -925,7 +925,7 @@ fn parse_asm_block(p: *Parser) -> *Stmt {
 
     // Optional sections: `: outs`, `: ins`, `: clobbers`. Each colon
     // unconditionally moves to the next slot, so `: : "r"(x)` skips outputs.
-    let mut slot: int = 0; // 0=outs, 1=ins, 2=clobbers
+    let mut slot: i32 = 0; // 0=outs, 1=ins, 2=clobbers
     while p.eat_op(":") && slot < 3 {
         // Empty section is fine — just advance the slot.
         if p.at_op("}") || p.at_op(":") {
@@ -973,8 +973,8 @@ fn parse_stmt(p: *Parser) -> *Stmt {
     // Only meaningful inside a macro def's body — outside, the expander will
     // surface an error if the rep escapes.
     if p.at_op("$") && p.peek_op("(") {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         p.advance(); // '$'
         p.advance(); // '('
         let inner: *Vector<Stmt> = Vector::new();
@@ -1000,8 +1000,8 @@ fn parse_stmt(p: *Parser) -> *Stmt {
     if p.at_kw("asm") && p.peek_op("!") { return parse_asm_block(p); }
     // `c_raw! { ... }` raw payload — captured by the lexer as TOK_RAW_BLOCK.
     if p.current.kind == TOK_RAW_BLOCK {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         let body: string = p.current.lexeme;
         p.advance();
         return stmt_craw(body, line, col);
@@ -1018,8 +1018,8 @@ fn parse_stmt(p: *Parser) -> *Stmt {
     // covers every dispatch arm below.
     let body_attrs: *Vector<Attr> = Vector::new();
     while p.at_op("@") {
-        let at_line: int = p.current.line;
-        let at_col: int = p.current.column;
+        let at_line: i32 = p.current.line;
+        let at_col: i32 = p.current.column;
         p.advance();
         let nm: string = p.expect_ident();
         let arg_exprs: *Vector<Expr> = Vector::new();
@@ -1046,8 +1046,8 @@ fn parse_stmt(p: *Parser) -> *Stmt {
     if p.at_kw("for") { return _apply_attrs(parse_for(p), body_attrs); }
     if p.at_kw("match") { return _apply_attrs(parse_match(p), body_attrs); }
     if p.at_kw("defer") {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         p.advance();
         let e: *Expr = parse_expr(p, 0);
         p.expect_op(";");
@@ -1059,8 +1059,8 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         return _apply_attrs(s, body_attrs);
     }
     if p.at_kw("defer_err") {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         p.advance();
         let e: *Expr = parse_expr(p, 0);
         p.expect_op(";");
@@ -1072,16 +1072,16 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         return _apply_attrs(s, body_attrs);
     }
     if p.at_kw("spawn") {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         p.advance();
         let e: *Expr = parse_expr(p, 0);
         p.expect_op(";");
         return _apply_attrs(stmt_spawn(e, line, col), body_attrs);
     }
     if p.at_kw("spawn_thread") {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         p.advance();
         let e: *Expr = parse_expr(p, 0);
         p.expect_op(";");
@@ -1090,15 +1090,15 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         return _apply_attrs(s, body_attrs);
     }
     if p.at_kw("break") {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         p.advance();
         p.expect_op(";");
         return _apply_attrs(stmt_break(line, col), body_attrs);
     }
     if p.at_kw("continue") {
-        let line: int = p.current.line;
-        let col: int = p.current.column;
+        let line: i32 = p.current.line;
+        let col: i32 = p.current.column;
         p.advance();
         p.expect_op(";");
         return _apply_attrs(stmt_continue(line, col), body_attrs);
@@ -1127,7 +1127,7 @@ fn _apply_attrs(s: *Stmt, attrs: *Vector<Attr>) -> *Stmt {
 }
 
 fn parse_maybe_assign(p: *Parser, lhs: *Expr) -> *Expr {
-    let mut op: int = 0;
+    let mut op: i32 = 0;
     if p.at_op("=")  { op = OP_ASSIGN; }
     else if p.at_op("+=") { op = OP_PLUS_ASSIGN; }
     else if p.at_op("-=") { op = OP_MINUS_ASSIGN; }
@@ -1141,14 +1141,14 @@ fn parse_maybe_assign(p: *Parser, lhs: *Expr) -> *Expr {
 }
 
 fn parse_let(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'let'
     let mut is_mut: bool = false;
     if p.eat_kw("mut") { is_mut = true; }
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
-    let nlen: int = p.current.lexeme.len();
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
+    let nlen: i32 = p.current.lexeme.len();
     let name: string = p.expect_ident();
     // Postfix `*` on the binding: explicit auto-drop ownership marker.
     let mut is_auto_owned: bool = false;
@@ -1165,12 +1165,12 @@ fn parse_let(p: *Parser) -> *Stmt {
 }
 
 fn parse_const(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'const'
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
-    let nlen: int = p.current.lexeme.len();
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
+    let nlen: i32 = p.current.lexeme.len();
     let name: string = p.expect_ident();
     let mut ty: *Type = null;
     if p.eat_op(":") { ty = parse_type(p); }
@@ -1183,8 +1183,8 @@ fn parse_const(p: *Parser) -> *Stmt {
 }
 
 fn parse_return(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'return'
     let mut value: *Expr = null;
     if !p.at_op(";") { value = parse_expr(p, 0); }
@@ -1193,8 +1193,8 @@ fn parse_return(p: *Parser) -> *Stmt {
 }
 
 fn parse_match(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'match'
     let saved: bool = p.no_struct_lit;
     p.no_struct_lit = true;
@@ -1225,7 +1225,7 @@ fn parse_match(p: *Parser) -> *Stmt {
         let body: *Vector<Stmt> = Vector::new();
         if p.at_op("{") {
             let blk: *Vector<Stmt> = parse_block(p);
-            for let i: int = 0; i < blk.len(); i++ { body.push(blk.get(i)); }
+            for let i: i32 = 0; i < blk.len(); i++ { body.push(blk.get(i)); }
         } else {
             let e: *Expr = parse_expr(p, 0);
             let ass: *Expr = parse_maybe_assign(p, e);
@@ -1244,8 +1244,8 @@ fn parse_match(p: *Parser) -> *Stmt {
 //     trailing `return val;` is the arm's value.
 // The codegen lowers the whole match to a GCC stmt-expression.
 fn parse_match_expr(p: *Parser) -> *Expr {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'match'
     let saved: bool = p.no_struct_lit;
     p.no_struct_lit = true;
@@ -1276,7 +1276,7 @@ fn parse_match_expr(p: *Parser) -> *Expr {
         let body: *Vector<Stmt> = Vector::new();
         if p.at_op("{") {
             let blk: *Vector<Stmt> = parse_block(p);
-            for let i: int = 0; i < blk.len(); i++ { body.push(blk.get(i)); }
+            for let i: i32 = 0; i < blk.len(); i++ { body.push(blk.get(i)); }
         } else {
             let e: *Expr = parse_expr(p, 0);
             body.push(*stmt_return(e, line, col));
@@ -1297,8 +1297,8 @@ fn parse_match_expr(p: *Parser) -> *Expr {
 //   c.send(v) => { ... }          // fires when send completes
 //   default => { ... }            // non-blocking fallback
 fn parse_select_macro(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'select'
     p.expect_op("!");
     p.expect_op("{");
@@ -1338,8 +1338,8 @@ fn select_extract_recv_chan(p: *Parser, e: *Expr) -> *Expr {
 }
 
 fn parse_select_arm(p: *Parser) -> *SelectArm {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
 
     let lhs: *Expr = parse_expr(p, 0);
     if lhs == null { return null; }
@@ -1435,8 +1435,8 @@ fn parse_select_arm(p: *Parser) -> *SelectArm {
 // `val`. The trailing `return val;` MUST be the last stmt; everything
 // before it runs for side effects, and `val` is the block's value.
 fn parse_block_expr(p: *Parser) -> *Expr {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.expect_op("{");
     let stmts: *Vector<Stmt> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
@@ -1471,8 +1471,8 @@ fn parse_block_expr(p: *Parser) -> *Expr {
 // Statement-position `if cond { stmts; }` keeps its existing
 // stmt-level parser (parse_if).
 fn parse_if_expr(p: *Parser) -> *Expr {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'if'
     let saved: bool = p.no_struct_lit;
     p.no_struct_lit = true;
@@ -1499,8 +1499,8 @@ fn parse_if_expr(p: *Parser) -> *Expr {
 }
 
 fn parse_if(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'if'
     let saved: bool = p.no_struct_lit;
     p.no_struct_lit = true;
@@ -1522,17 +1522,17 @@ fn parse_if(p: *Parser) -> *Stmt {
 }
 
 fn parse_while(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'while'
 
     // chan-aware while-let: `while let v [: T] = recv_expr { body }`.
     // Lowered at codegen to a __glide_recv_into_<m>(c, &v) loop. Detects
     // EOF without the zero-value sentinel.
     if p.at_kw("let") {
-        let nline: int = p.peek.line;
-        let ncol: int = p.peek.column;
-        let nlen: int = p.peek.lexeme.len();
+        let nline: i32 = p.peek.line;
+        let ncol: i32 = p.peek.column;
+        let nlen: i32 = p.peek.lexeme.len();
         p.advance(); // 'let'
         let var_name: string = p.expect_ident();
         let mut ty: *Type = null;
@@ -1564,8 +1564,8 @@ fn parse_while(p: *Parser) -> *Stmt {
 }
 
 fn parse_for(p: *Parser) -> *Stmt {
-    let line: int = p.current.line;
-    let col: int = p.current.column;
+    let line: i32 = p.current.line;
+    let col: i32 = p.current.column;
     p.advance(); // 'for'
 
     // for-in form: `for IDENT in EXPR { body }`. Distinguishes from the
@@ -1582,8 +1582,8 @@ fn parse_for(p: *Parser) -> *Stmt {
     if !p.at_op(";") {
         if p.at_kw("let") {
             // parse let WITHOUT the trailing semicolon
-            let l_line: int = p.current.line;
-            let l_col: int = p.current.column;
+            let l_line: i32 = p.current.line;
+            let l_col: i32 = p.current.column;
             p.advance(); // 'let'
             let mut is_mut: bool = false;
             if p.eat_kw("mut") { is_mut = true; }
@@ -1626,10 +1626,10 @@ fn parse_for(p: *Parser) -> *Stmt {
 //     cond        = `hi` (range) OR null (collection)
 //     is_mut      = true means inclusive range (`..=`)
 //     then_body   = body
-fn parse_for_in(p: *Parser, line: int, col: int) -> *Stmt {
-    let nline: int = p.current.line;
-    let ncol: int = p.current.column;
-    let nlen: int = p.current.lexeme.len();
+fn parse_for_in(p: *Parser, line: i32, col: i32) -> *Stmt {
+    let nline: i32 = p.current.line;
+    let ncol: i32 = p.current.column;
+    let nlen: i32 = p.current.lexeme.len();
     let var_name: string = p.expect_ident();
     p.advance(); // 'in'
 
@@ -1666,7 +1666,7 @@ fn parse_for_in(p: *Parser, line: int, col: int) -> *Stmt {
 // True when the current token can start a type. Used to disambiguate the
 // `!` shorthand for Result-without-value (`-> !`) from `!T` (Result-of-T).
 fn at_type_start(p: *Parser) -> bool {
-    let k: int = p.current.kind;
+    let k: i32 = p.current.kind;
     if k == TOK_IDENT { return true; }
     if k == TOK_KEYWORD {
         let lex: string = p.current.lexeme;
@@ -1761,8 +1761,8 @@ fn parse_type(p: *Parser) -> *Type {
         return ty_fnptr(params, ret);
     }
     if p.current.kind == TOK_IDENT || p.current.kind == TOK_KEYWORD {
-        let nl: int = p.current.line;
-        let nc: int = p.current.column;
+        let nl: i32 = p.current.line;
+        let nc: i32 = p.current.column;
         let name: string = p.current.lexeme;
         p.advance();
         // Generic instantiation: Foo<T1, T2>. Handles nested forms like
@@ -1797,7 +1797,7 @@ fn parse_type(p: *Parser) -> *Type {
 
 // ---- expressions (Pratt) -------------------------------------------------
 
-fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
+fn parse_expr(p: *Parser, min_bp: i32) -> *Expr {
     let mut left: *Expr = parse_prefix(p);
     if left == null { return null; }
 
@@ -1826,8 +1826,8 @@ fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
         // member .  (with macro-call form `.name!(args)`)
         if p.at_op(".") {
             p.advance();
-            let fname_line: int = p.current.line;
-            let fname_col: int = p.current.column;
+            let fname_line: i32 = p.current.line;
+            let fname_col: i32 = p.current.column;
             let mut mname: string = p.expect_ident();
             // Qualified method call `expr.NS::method(...)` — disambiguates when
             // multiple `impl T in NS { ... }` blocks register the same method
@@ -1873,13 +1873,13 @@ fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
         }
 
         // binary infix
-        let info: int = peek_binop_bp(p);
-        let lbp: int = info / 100;
-        let op: int = info - lbp * 100;
+        let info: i32 = peek_binop_bp(p);
+        let lbp: i32 = info / 100;
+        let op: i32 = info - lbp * 100;
         if lbp == 0 { break; }
         if lbp < min_bp { break; }
         p.advance();
-        let rbp: int = lbp + 1;
+        let rbp: i32 = lbp + 1;
         let right: *Expr = parse_expr(p, rbp);
         if right == null { break; }
         left = expr_binary(op, left, right);
@@ -1888,7 +1888,7 @@ fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
 }
 
 // Returns lbp*100 + op_code, or 0 if not a binary operator.
-fn peek_binop_bp(p: *Parser) -> int {
+fn peek_binop_bp(p: *Parser) -> i32 {
     if p.current.kind != TOK_OP { return 0; }
     let lex: string = p.current.lexeme;
     if lex.eq("??") { return 100 * 1  + OP_COALESCE; }
@@ -1921,10 +1921,10 @@ fn peek_binop_bp(p: *Parser) -> int {
 // `\${` is the escape: it produces a literal `${` in the output and is NOT
 // treated as the start of an interpolation segment. Use this when the
 // string itself needs to mention `${...}` (error messages, docs, …).
-fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr {
-    let n: int = raw.len();
+fn build_string_or_interp(p: *Parser, raw: string, line: i32, col: i32) -> *Expr {
+    let n: i32 = raw.len();
     let mut has_interp: bool = false;
-    let mut probe: int = 0;
+    let mut probe: i32 = 0;
     while probe + 1 < n {
         if raw.at(probe).to_int() == 36 && raw.at(probe + 1).to_int() == 123 {
             // `\${` is an escape — skip past it.
@@ -1941,7 +1941,7 @@ fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr
 
     let mut fmt: string = "";
     let inner_args: *Vector<Expr> = Vector::new();
-    let mut j: int = 0;
+    let mut j: i32 = 0;
     while j < n {
         let c0: char = raw.at(j);
         // Escaped `\${` — emit a literal `${` and skip all three chars (drop
@@ -1954,8 +1954,8 @@ fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr
             continue;
         }
         if c0.to_int() == 36 && j + 1 < n && raw.at(j + 1).to_int() == 123 {
-            let start_expr: int = j + 2;
-            let mut k: int = start_expr;
+            let start_expr: i32 = j + 2;
+            let mut k: i32 = start_expr;
             while k < n && raw.at(k).to_int() != 125 { k = k + 1; }
             if k >= n {
                 p.err("unterminated \\${...} in string literal");
@@ -1965,7 +1965,7 @@ fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr
             let sub_lex: *Lexer = Lexer::new(expr_src);
             let sub_par: *Parser = Parser::new(sub_lex);
             let e: *Expr = parse_expr(sub_par, 0);
-            for let di: int = 0; di < sub_par.diags.len(); di++ {
+            for let di: i32 = 0; di < sub_par.diags.len(); di++ {
                 let d: ParseDiag = sub_par.diags.get(di);
                 let bumped: ParseDiag = ParseDiag {
                     origin: d.origin,
@@ -1990,7 +1990,7 @@ fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr
 
     let final_args: *Vector<Expr> = Vector::new();
     final_args.push(*expr_string(fmt, line, col));
-    for let i2: int = 0; i2 < inner_args.len(); i2++ {
+    for let i2: i32 = 0; i2 < inner_args.len(); i2++ {
         final_args.push(inner_args.get(i2));
     }
     let m: *Expr = expr_macro("format", final_args, line, col);
@@ -2002,8 +2002,8 @@ fn build_string_or_interp(p: *Parser, raw: string, line: int, col: int) -> *Expr
 
 fn parse_prefix(p: *Parser) -> *Expr {
     let tok: Token = p.current;
-    let line: int = tok.line;
-    let col: int = tok.column;
+    let line: i32 = tok.line;
+    let col: i32 = tok.column;
 
     // Macro placeholder `$ident` — only meaningful inside a macro body. We
     // parse it permissively at any expr position; the expander surfaces an
@@ -2035,14 +2035,14 @@ fn parse_prefix(p: *Parser) -> *Expr {
     if tok.kind == TOK_STRING {
         p.advance();
         // strip quotes
-        let len: int = tok.lexeme.len();
+        let len: i32 = tok.lexeme.len();
         let inner: string = tok.lexeme.substring(1, len - 1);
         return build_string_or_interp(p, inner, line, col);
     }
     if tok.kind == TOK_CHAR {
         p.advance();
         // 'x' or '\x'
-        let len: int = tok.lexeme.len();
+        let len: i32 = tok.lexeme.len();
         let inner: string = tok.lexeme.substring(1, len - 1);
         let c: char = decode_char_inner(inner);
         return expr_char(c, line, col);
@@ -2059,8 +2059,8 @@ fn parse_prefix(p: *Parser) -> *Expr {
             let params: *Vector<Param> = Vector::new();
             while !p.at_op(")") && !p.at_eof() {
                 p.eat_kw("mut");
-                let pn_line: int = p.current.line;
-                let pn_col: int = p.current.column;
+                let pn_line: i32 = p.current.line;
+                let pn_col: i32 = p.current.column;
                 let pname: string = p.expect_ident();
                 p.expect_op(":");
                 let pty: *Type = parse_type(p);
@@ -2082,8 +2082,8 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 p.expect_op("(");
                 let params: *Vector<Param> = Vector::new();
                 while !p.at_op(")") && !p.at_eof() {
-                    let pn_line: int = p.current.line;
-                    let pn_col: int = p.current.column;
+                    let pn_line: i32 = p.current.line;
+                    let pn_col: i32 = p.current.column;
                     let pname: string = p.expect_ident();
                     p.expect_op(":");
                     let pty: *Type = parse_type(p);
@@ -2183,11 +2183,11 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 if arg.kind == EX_STRING {
                     let raw: string = read_file(arg.str_val);
                     let mut esc: string = "";
-                    let n: int = raw.len();
-                    let mut k: int = 0;
+                    let n: i32 = raw.len();
+                    let mut k: i32 = 0;
                     while k < n {
                         let c: char = raw.at(k);
-                        let v: int = c.to_int();
+                        let v: i32 = c.to_int();
                         if v == 34 { esc = esc.concat("\\\""); }
                         else if v == 92 { esc = esc.concat("\\\\"); }
                         else if v == 10 { esc = esc.concat("\\n"); }
@@ -2251,11 +2251,11 @@ fn parse_prefix(p: *Parser) -> *Expr {
 // ---- helpers -------------------------------------------------------------
 
 fn parse_int_lexeme(s: string) -> i64 {
-    let n: int = s.len();
+    let n: i32 = s.len();
     let mut v: i64 = 0;
-    for let i: int = 0; i < n; i++ {
+    for let i: i32 = 0; i < n; i++ {
         let c: char = s.at(i);
-        let ci: int = c.to_int();
+        let ci: i32 = c.to_int();
         if ci == 95 { continue; } // skip _
         v = v * 10 + ((ci - 48) as i64);
     }
@@ -2265,7 +2265,7 @@ fn parse_int_lexeme(s: string) -> i64 {
 fn starts_uppercase(s: string) -> bool {
     if s.len() == 0 { return false; }
     let c: char = s.at(0);
-    let ci: int = c.to_int();
+    let ci: i32 = c.to_int();
     return ci >= 65 && ci <= 90;
 }
 
@@ -2275,7 +2275,7 @@ fn decode_char_inner(s: string) -> char {
     if first.to_int() != 92 { return first; } // not '\'
     if s.len() < 2 { return '\0'; }
     let esc: char = s.at(1);
-    let ei: int = esc.to_int();
+    let ei: i32 = esc.to_int();
     if ei == 110 { return '\n'; }
     if ei == 116 { return '\t'; }
     if ei == 114 { return '\r'; }

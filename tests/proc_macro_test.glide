@@ -15,7 +15,7 @@ import bootstrap::interp::*;
 fn derive_field_count(s: *Stmt) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
     let body: *Vector<Stmt> = Vector::new();
-    let n: int = s.struct_fields.len();
+    let n: i32 = s.struct_fields.len();
     body.push(*stmt_return(expr_int(n, 0, 0), 0, 0));
     let no_params: *Vector<Param> = Vector::new();
     let fn_name: string = s.name.concat("_field_count");
@@ -26,13 +26,13 @@ fn derive_field_count(s: *Stmt) -> *Vector<Stmt> {
 @derive(FieldCount)
 pub struct PetA {
     pub name: string,
-    pub age: int,
+    pub age: i32,
 }
 
 @derive(FieldCount)
 pub struct PetB {
     pub name: string,
-    pub age: int,
+    pub age: i32,
     pub kind: string,
     pub owner: string,
 }
@@ -43,17 +43,17 @@ pub struct EmptyA {
 
 // ---- tests --------------------------------------------------------
 
-fn test_two_field_struct() -> int {
+fn test_two_field_struct() -> i32 {
     assert_eq!(PetA_field_count(), 2);
     return 0;
 }
 
-fn test_four_field_struct() -> int {
+fn test_four_field_struct() -> i32 {
     assert_eq!(PetB_field_count(), 4);
     return 0;
 }
 
-fn test_empty_struct() -> int {
+fn test_empty_struct() -> i32 {
     assert_eq!(EmptyA_field_count(), 0);
     return 0;
 }

@@ -38,7 +38,7 @@ import stdlib::json::*;
 pub struct User {
     pub id:   string,
     pub name: string,
-    pub age:  int,
+    pub age:  i32,
 }
 
 impl JsonBind for User {
@@ -55,7 +55,7 @@ impl JsonBind for User {
         let v: *JsonValue = JsonValue::object();
         v.obj_set("id",   JsonValue::string(self.id));
         v.obj_set("name", JsonValue::string(self.name));
-        v.obj_set("age",  JsonValue::int(self.age));
+        v.obj_set("age",  JsonValue::i32(self.age));
         return v;
     }
 }
@@ -74,7 +74,7 @@ impl JsonBind for UserList {
 
     fn to_json(self: *UserList) -> *JsonValue {
         let arr: *JsonValue = JsonValue::array();
-        for let i: int = 0; i < self.users.len(); i++ {
+        for let i: i32 = 0; i < self.users.len(); i++ {
             let u: User = self.users.get(i);
             arr.arr_push(u.to_json());
         }
@@ -119,7 +119,7 @@ fn list_users() -> Json<UserList> {
     let s: *HashMap<User> = store();
     let xs: *Vector<User> = Vector::new();
     let ks: *Vector<string> = s.keys();
-    for let i: int = 0; i < ks.len(); i++ {
+    for let i: i32 = 0; i < ks.len(); i++ {
         xs.push(s.get(ks.get(i)));
     }
     return Json::wrap(UserList { users: xs });
@@ -153,14 +153,14 @@ fn create_user(body: Json<User>) -> Json<User> {
 
 // ---- entrypoint --------------------------------------------------------
 
-fn main() -> int {
+fn main() -> i32 {
     let r: *Router = Router::new();
     r.get("/users",     list_users);
     r.get("/users/:id", get_user);
     r.post("/users",    create_user);
 
     println!("listening on :8080");
-    let res: !int = r.listen(8080);
+    let res: !i32 = r.listen(8080);
     if !res.ok { println!("listen failed:", res.err); return 1; }
     return 0;
 }

@@ -1,14 +1,14 @@
 import stdlib::testing::*;
 import stdlib::os::*;
 
-fn test_os_cwd_returns_path() -> int {
+fn test_os_cwd_returns_path() -> i32 {
     let r: !string = os_cwd();
     assert!(r.ok);
     assert!(r.val.len() > 0);
     return 0;
 }
 
-fn test_os_chdir_to_temp_dir_and_back() -> int {
+fn test_os_chdir_to_temp_dir_and_back() -> i32 {
     let original: !string = os_cwd();
     assert!(original.ok);
     let temp: !string = os_temp_dir();
@@ -26,14 +26,14 @@ fn test_os_chdir_to_temp_dir_and_back() -> int {
     return 0;
 }
 
-fn test_os_exe_path_is_absolute() -> int {
+fn test_os_exe_path_is_absolute() -> i32 {
     let r: !string = os_exe_path();
     assert!(r.ok);
     assert!(r.val.len() > 5);
     return 0;
 }
 
-fn test_os_exe_dir_is_prefix_of_path() -> int {
+fn test_os_exe_dir_is_prefix_of_path() -> i32 {
     let p: !string = os_exe_path();
     let d: !string = os_exe_dir();
     assert!(p.ok);

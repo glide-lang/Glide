@@ -21,7 +21,7 @@ import stdlib::sync::*;
 
 // One worker: drain the shared `jobs` channel until it closes, square each
 // job, bump the shared processed-count, and report the result back.
-fn worker(id: int, jobs: chan<int>, results: chan<i64>, processed: *Atomic) {
+fn worker(id: i32, jobs: chan<i32>, results: chan<i64>, processed: *Atomic) {
     while let job = jobs.recv() {
         let r: i64 = (job * job) as i64;       // stand-in for real work
         processed.add(1);
@@ -30,20 +30,20 @@ fn worker(id: int, jobs: chan<int>, results: chan<i64>, processed: *Atomic) {
     }
 }
 
-fn main() -> int {
-    let n_workers: int = 4;
-    let n_jobs: int = 10;
-    let jobs: chan<int> = make_chan(16);
+fn main() -> i32 {
+    let n_workers: i32 = 4;
+    let n_jobs: i32 = 10;
+    let jobs: chan<i32> = make_chan(16);
     let results: chan<i64> = make_chan(16);
     let processed: *Atomic = Atomic::new(0);
 
     // Start the pool. Each worker is an independent coroutine.
-    for let i: int = 0; i < n_workers; i = i + 1 {
+    for let i: i32 = 0; i < n_workers; i = i + 1 {
         spawn worker(i, jobs, results, processed);
     }
 
     // Hand out work, then close so the workers drain and exit.
-    for let j: int = 1; j <= n_jobs; j = j + 1 {
+    for let j: i32 = 1; j <= n_jobs; j = j + 1 {
         jobs.send(j);
     }
     jobs.close();
@@ -51,7 +51,7 @@ fn main() -> int {
     // Collect exactly one result per job. recv() parks this coroutine while
     // the workers run, so there's no busy-waiting and no deadlock.
     let mut total: i64 = 0;
-    for let k: int = 0; k < n_jobs; k = k + 1 {
+    for let k: i32 = 0; k < n_jobs; k = k + 1 {
         total = total + results.recv();
     }
 

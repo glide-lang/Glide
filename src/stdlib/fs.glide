@@ -9,17 +9,17 @@ extern fn write_file(path: string, content: string) -> bool;
 extern fn __glide_file_exists(path: string) -> bool;
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 extern fn __glide_fs_mkdir_p(path: string) -> bool;
-extern fn __glide_fs_write_bytes(path: string, data: *void, n: int) -> bool;
-extern fn __glide_fs_write_slice(path: string, data: string, offset: int, n: int) -> bool;
+extern fn __glide_fs_write_bytes(path: string, data: *void, n: i32) -> bool;
+extern fn __glide_fs_write_slice(path: string, data: string, offset: i32, n: i32) -> bool;
 extern fn __glide_fs_is_dir(path: string) -> bool;
-extern fn __glide_fs_read_bytes(path: string, out_len: *int) -> *void;
+extern fn __glide_fs_read_bytes(path: string, out_len: *i32) -> *void;
 extern fn __glide_fs_symlink(target: string, link: string) -> bool;
 extern fn __glide_fs_remove_file(path: string) -> bool;
 extern fn __glide_fs_remove_dir_rec(path: string) -> bool;
 extern fn __glide_fs_copy_file(src: string, dst: string) -> bool;
 extern fn __glide_fs_copy_dir_rec(src: string, dst: string) -> bool;
 extern fn __glide_fs_list_dirs(path: string) -> string;
-extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 c_raw! {
     #ifdef GLIDE_FS_VIA_CRAW
@@ -481,10 +481,10 @@ pub fn fs_read_lines(path: string) -> *Vector<string> {
     let body: string = read_file(path);
     if body.eq("") { return Vector::new(); }
     let lines: *Vector<string> = body.split("\n");
-    let n: int = lines.len();
+    let n: i32 = lines.len();
     if n > 0 && lines.get(n - 1).eq("") {
         let trimmed: *Vector<string> = Vector::new();
-        for let i: int = 0; i < n - 1; i++ { trimmed.push(lines.get(i)); }
+        for let i: i32 = 0; i < n - 1; i++ { trimmed.push(lines.get(i)); }
         return trimmed;
     }
     return lines;
@@ -500,10 +500,10 @@ pub fn fs_read_lines(path: string) -> *Vector<string> {
 /// fs_basename("noslash.txt");                  // "noslash.txt"
 /// ```
 pub fn fs_basename(path: string) -> string {
-    let n: int = path.len();
-    let mut i: int = n;
+    let n: i32 = path.len();
+    let mut i: i32 = n;
     while i > 0 {
-        let c: int = path.at(i - 1).to_int();
+        let c: i32 = path.at(i - 1).to_int();
         if c == 47 || c == 92 { return path.substring(i, n); }
         i = i - 1;
     }
@@ -522,10 +522,10 @@ pub fn fs_basename(path: string) -> string {
 /// ```
 pub fn fs_extension(path: string) -> string {
     let name: string = fs_basename(path);
-    let n: int = name.len();
-    let mut i: int = n;
+    let n: i32 = name.len();
+    let mut i: i32 = n;
     while i > 0 {
-        let c: int = name.at(i - 1).to_int();
+        let c: i32 = name.at(i - 1).to_int();
         if c == 46 {
             // Dotfile — `.bashrc` has no extension.
             if i == 1 { return ""; }
@@ -545,12 +545,12 @@ pub fn fs_extension(path: string) -> string {
 /// let n: int = fs_lines_count("README.md");
 /// println!("readme has", n, "lines");
 /// ```
-pub fn fs_lines_count(path: string) -> int {
+pub fn fs_lines_count(path: string) -> i32 {
     let body: string = read_file(path);
-    let n: int = body.len();
+    let n: i32 = body.len();
     if n == 0 { return 0; }
-    let mut count: int = 0;
-    for let i: int = 0; i < n; i++ {
+    let mut count: i32 = 0;
+    for let i: i32 = 0; i < n; i++ {
         if body.at(i).to_int() == 10 { count = count + 1; }
     }
     if body.at(n - 1).to_int() != 10 { count = count + 1; }
@@ -594,7 +594,7 @@ pub fn fs_is_dir(path: string) -> bool { return __glide_fs_is_dir(path); }
 /// ```glide
 /// fs_write_bytes("out.bin", buf, 1024);
 /// ```
-pub fn fs_write_bytes(path: string, data: *void, n: int) -> bool {
+pub fn fs_write_bytes(path: string, data: *void, n: i32) -> bool {
     return __glide_fs_write_bytes(path, data, n);
 }
 
@@ -606,7 +606,7 @@ pub fn fs_write_bytes(path: string, data: *void, n: int) -> bool {
 /// ```glide
 /// fs_write_slice("out/file.bin", archive_bytes, header_end, file_size);
 /// ```
-pub fn fs_write_slice(path: string, data: string, offset: int, n: int) -> bool {
+pub fn fs_write_slice(path: string, data: string, offset: i32, n: i32) -> bool {
     return __glide_fs_write_slice(path, data, offset, n);
 }
 
@@ -620,7 +620,7 @@ pub fn fs_write_slice(path: string, data: string, offset: int, n: int) -> bool {
 /// let buf: string = fs_read_bytes("archive.tar.gz", &n);
 /// if n > 0 { /* hand off to tar / gzip helpers */ }
 /// ```
-pub fn fs_read_bytes(path: string, out_len: *int) -> string {
+pub fn fs_read_bytes(path: string, out_len: *i32) -> string {
     let raw: *void = __glide_fs_read_bytes(path, out_len);
     if raw == null { return ""; }
     let s: string = __glide_string_from_buf(raw, *out_len);
@@ -700,7 +700,7 @@ pub fn fs_list_rec(dir: string, suffix: string) -> *Vector<string> {
 
 fn _walk_dir_into(out: *Vector<string>, dir: string, suffix: string) {
     let files: *Vector<string> = fs_list(dir, suffix);
-    for let i: int = 0; i < files.len(); i++ {
+    for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         if f.eq("") { continue; }
         out.push(dir.concat("/").concat(f));
@@ -708,7 +708,7 @@ fn _walk_dir_into(out: *Vector<string>, dir: string, suffix: string) {
     let subs_raw: string = __glide_fs_list_dirs(dir);
     if subs_raw.eq("") { return; }
     let subs: *Vector<string> = subs_raw.split("\n");
-    for let i: int = 0; i < subs.len(); i++ {
+    for let i: i32 = 0; i < subs.len(); i++ {
         let sub: string = subs.get(i);
         if sub.eq("") { continue; }
         if sub.eq("glide_modules") { continue; }

@@ -51,7 +51,7 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let static_macros: *HashMap<Stmt> = HashMap::new();
     let type_macros: *Vector<TypeMacro> = Vector::new();
     let cleaned: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_MACRO_DEF {
             static_macros.insert(s.name, s);
@@ -60,7 +60,7 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
         if s.kind == ST_IMPL && s.impl_methods != null {
             let kept: *Vector<Stmt> = Vector::new();
             let owner: string = type_owner_name(s.impl_target);
-            for let j: int = 0; j < s.impl_methods.len(); j++ {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.kind == ST_MACRO_DEF {
                     let tm: TypeMacro = TypeMacro { owner: owner, name: m.name, def: m };
@@ -83,12 +83,12 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // call file's imports to disambiguate.
     let name_mods: *HashMap<string> = HashMap::new();
     let mut has_fn_ast: bool = false;
-    for let i: int = 0; i < cleaned.len(); i++ {
+    for let i: i32 = 0; i < cleaned.len(); i++ {
         let s: Stmt = cleaned.get(i);
         if s.kind != ST_FN || s.attrs == null { continue; }
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
-            let kind: int = _proc_kind_for(a.name);
+            let kind: i32 = _proc_kind_for(a.name);
             if kind < 0 { continue; }
             // Only function-like macros are dispatched by `name!(…)`; an
             // attr/derive sharing the name (e.g. `@proc_attr(trace)` vs the
@@ -126,7 +126,7 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // File -> imported modules, for collision-aware bare resolution. Keyed
     // `<importing-file-origin>\n<imported-module-leaf>` -> true.
     let file_imports: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < cleaned.len(); i++ {
+    for let i: i32 = 0; i < cleaned.len(); i++ {
         let s: Stmt = cleaned.get(i);
         if s.kind != ST_IMPORT || s.origin == null { continue; }
         let leaf: string = _import_leaf(s.import_path);
@@ -149,7 +149,7 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     expand_in_program(cleaned, static_macros, type_macros, proc_registry, fn_ast_interp);
 
     if fn_ast_interp != null && fn_ast_interp.diagnostics.len() > 0 {
-        for let i: int = 0; i < fn_ast_interp.diagnostics.len(); i++ {
+        for let i: i32 = 0; i < fn_ast_interp.diagnostics.len(); i++ {
             println!("proc-macro: ", fn_ast_interp.diagnostics.get(i));
         }
     }
@@ -176,7 +176,7 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
 //     log_err(file!(), line!(), "boom");
 
 pub fn rewrite_location_macros(program: *Vector<Stmt>) {
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let mut s: Stmt = program.get(i);
         let file: string = s.origin;
         _rewrite_loc_stmt(&s, file, "");
@@ -202,7 +202,7 @@ fn _rewrite_loc_stmt(s: *Stmt, file: string, in_fn: string) {
 }
 
 fn _rewrite_loc_block(stmts: *Vector<Stmt>, file: string, in_fn: string) {
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let mut s: Stmt = stmts.get(i);
         _rewrite_loc_stmt(&s, file, in_fn);
         stmts.set(i, s);
@@ -219,7 +219,7 @@ fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
     if e.rhs     != null { _rewrite_loc_expr(e.rhs,     file, in_fn); }
     if e.operand != null { _rewrite_loc_expr(e.operand, file, in_fn); }
     if e.args    != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let mut a: Expr = e.args.get(i);
             _rewrite_loc_expr(&a, file, in_fn);
             e.args.set(i, a);
@@ -267,14 +267,14 @@ fn _replace_with_location_literal(e: *Expr, file: string, in_fn: string) {
 
 // Tag for what shape of input the proc fn takes — picked from the
 // `@proc_<kind>(Name)` attribute on the fn decl.
-pub const PMK_DERIVE:     int = 0;   // input: *Stmt (the @derive'd struct/enum)
-pub const PMK_ATTR:       int = 1;   // input: *Stmt (the annotated decl)
-pub const PMK_FN_AST:     int = 2;   // input: *Vector<Expr> (call-site args)
-pub const PMK_FN_STR:     int = 3;   // input: string (single string-lit arg)
-pub const PMK_FN_EXPR:    int = 4;   // input: *Vector<Expr>; OUTPUT: *Expr (compile-time value)
+pub const PMK_DERIVE:     i32 = 0;   // input: *Stmt (the @derive'd struct/enum)
+pub const PMK_ATTR:       i32 = 1;   // input: *Stmt (the annotated decl)
+pub const PMK_FN_AST:     i32 = 2;   // input: *Vector<Expr> (call-site args)
+pub const PMK_FN_STR:     i32 = 3;   // input: string (single string-lit arg)
+pub const PMK_FN_EXPR:    i32 = 4;   // input: *Vector<Expr>; OUTPUT: *Expr (compile-time value)
 
 pub struct ProcMacroDef {
-    pub kind: int,
+    pub kind: i32,
     pub fn_stmt: Stmt,
 }
 
@@ -286,13 +286,13 @@ pub struct ProcMacroDef {
 fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // Pre-pass: register proc fn defs by name, indexed by kind.
     let registry: *HashMap<ProcMacroDef> = HashMap::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN { continue; }
         if s.attrs == null || s.attrs.len() == 0 { continue; }
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
-            let kind: int = _proc_kind_for(a.name);
+            let kind: i32 = _proc_kind_for(a.name);
             if kind < 0 { continue; }
             // First arg of @proc_<kind>(Name) is the registered name.
             if a.args == null || a.args.len() == 0 { continue; }
@@ -323,16 +323,16 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // Main pass: rebuild the program. For each stmt, dispatch every
     // @derive(Name) / @<name> attribute it carries.
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         out.push(s);
         if s.attrs == null || s.attrs.len() == 0 { continue; }
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             // @derive(A, B, C) — fan out one dispatch per arg.
             if a.name.eq("derive") {
                 if a.args == null { continue; }
-                for let k: int = 0; k < a.args.len(); k++ {
+                for let k: i32 = 0; k < a.args.len(); k++ {
                     let ne: Expr = a.args.get(k);
                     if ne.kind != EX_IDENT { continue; }
                     let dkey: string = _pm_key(PMK_DERIVE, ne.str_val);
@@ -351,7 +351,7 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
         }
     }
     if it.diagnostics.len() > 0 {
-        for let i: int = 0; i < it.diagnostics.len(); i++ {
+        for let i: i32 = 0; i < it.diagnostics.len(); i++ {
             println!("error: proc-macro:", it.diagnostics.get(i));
         }
     }
@@ -374,7 +374,7 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // itself plus bootstrap helpers get stripped from these files via
     // _is_compile_time_only below.
     let main_origins: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN || s.origin == null { continue; }
         if s.name != null && s.name.eq("main") {
@@ -387,11 +387,11 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // business in userland codegen either. Files that also define
     // `fn main` are spared — they're user code, not pure proc-macro libs.
     let pm_origins: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN || s.attrs == null || s.origin == null { continue; }
         if main_origins.contains(s.origin) { continue; }
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             if a.name == null { continue; }
             if a.name.eq("proc_attr") || a.name.eq("proc_derive")
@@ -408,7 +408,7 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // user code in that context.
     if pm_origins.len() == 0 { return program; }
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.origin != null && pm_origins.contains(s.origin) { continue; }
         if _is_compile_time_only(&s) { continue; }
@@ -431,10 +431,10 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
     // only used to back the proc-macro interpreter at compile time.
     if s.origin != null {
         let o: string = s.origin;
-        let n: int = o.len();
-        let mut i: int = 0;
+        let n: i32 = o.len();
+        let mut i: i32 = 0;
         while i + 9 < n {
-            let c0: int = o.at(i).to_int();
+            let c0: i32 = o.at(i).to_int();
             let prev_ok: bool = i == 0 || o.at(i - 1).to_int() == 47 || o.at(i - 1).to_int() == 92;
             if prev_ok && c0 == 98 && o.at(i + 1).to_int() == 111
                && o.at(i + 2).to_int() == 111 && o.at(i + 3).to_int() == 116
@@ -448,7 +448,7 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
     }
     // Or a fn carrying a `@proc_<kind>(Name)` attribute.
     if s.kind == ST_FN && s.attrs != null {
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             if a.name == null { continue; }
             if a.name.eq("proc_attr") || a.name.eq("proc_derive")
@@ -461,7 +461,7 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
     return false;
 }
 
-fn _proc_kind_for(name: string) -> int {
+fn _proc_kind_for(name: string) -> i32 {
     if name.eq("proc_derive") { return PMK_DERIVE; }
     if name.eq("proc_attr") { return PMK_ATTR; }
     if name.eq("proc_macro") { return PMK_FN_AST; }
@@ -474,7 +474,7 @@ fn _proc_kind_for(name: string) -> int {
 // flavours at once — `@proc_attr(trace)` (the function-tracing attribute)
 // and `@proc_macro(trace)` (the `trace!(…)` logging macro) coexist instead
 // of one silently overwriting the other in the by-name map.
-fn _pm_key(kind: int, name: string) -> string {
+fn _pm_key(kind: i32, name: string) -> string {
     if kind == PMK_DERIVE  { return "d:".concat(name); }
     if kind == PMK_ATTR    { return "a:".concat(name); }
     if kind == PMK_FN_AST  { return "f:".concat(name); }
@@ -490,17 +490,17 @@ fn _pm_key(kind: int, name: string) -> string {
 fn _macro_module_of(origin: string) -> string {
     if origin == null || origin.eq("") { return ""; }
     let mut s: string = origin;
-    let n: int = s.len();
+    let n: i32 = s.len();
     if n > 6 {
         let tail: string = s.substring(n - 6, n);
         if tail.eq(".glide") { s = s.substring(0, n - 6); }
     }
-    let len0: int = s.len();
-    let mut cut: int = -1;
-    let mut k: int = 0;
+    let len0: i32 = s.len();
+    let mut cut: i32 = -1;
+    let mut k: i32 = 0;
     while k + 3 < len0 {
         if s.at(k).to_int() == 115 && s.at(k + 1).to_int() == 114 && s.at(k + 2).to_int() == 99 {
-            let after: int = s.at(k + 3).to_int();
+            let after: i32 = s.at(k + 3).to_int();
             let before_ok: bool = k == 0 || s.at(k - 1).to_int() == 47 || s.at(k - 1).to_int() == 92;
             if before_ok && (after == 47 || after == 92) { cut = k + 4; }
         }
@@ -508,10 +508,10 @@ fn _macro_module_of(origin: string) -> string {
     }
     if cut >= 0 { s = s.substring(cut, len0); }
     let mut out: string = "";
-    let mut i: int = 0;
-    let len: int = s.len();
+    let mut i: i32 = 0;
+    let len: i32 = s.len();
     while i < len {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c == 47 || c == 92 { out = out.concat("::"); }
         else { out = out.concat(s.substring(i, i + 1)); }
         i = i + 1;
@@ -522,7 +522,7 @@ fn _macro_module_of(origin: string) -> string {
 // True if a "\n"-joined list already contains `item` as a whole entry.
 fn _joined_has(joined: string, item: string) -> bool {
     let parts: *Vector<string> = joined.split("\n");
-    for let i: int = 0; i < parts.len(); i++ {
+    for let i: i32 = 0; i < parts.len(); i++ {
         if parts.get(i).eq(item) { return true; }
     }
     return false;
@@ -535,12 +535,12 @@ fn _joined_has(joined: string, item: string) -> bool {
 fn _import_leaf(ip: string) -> string {
     if ip == null || ip.eq("") { return ""; }
     let mut s: string = ip;
-    let n: int = s.len();
+    let n: i32 = s.len();
     if n > 6 && s.substring(n - 6, n).eq(".glide") { s = s.substring(0, n - 6); }
-    let m: int = s.len();
-    let mut last: int = 0;
-    for let i: int = 0; i < m; i++ {
-        let c: int = s.at(i).to_int();
+    let m: i32 = s.len();
+    let mut last: i32 = 0;
+    for let i: i32 = 0; i < m; i++ {
+        let c: i32 = s.at(i).to_int();
         if c == 47 || c == 92 { last = i + 1; }
         if c == 58 && i + 1 < m && s.at(i + 1).to_int() == 58 { last = i + 2; }
     }
@@ -550,9 +550,9 @@ fn _import_leaf(ip: string) -> string {
 // Leaf of a `::`-path ("stdlib::log" -> "log").
 fn _module_leaf(mp: string) -> string {
     if mp == null { return ""; }
-    let n: int = mp.len();
-    let mut last: int = -1;
-    for let i: int = 0; i + 1 < n; i++ {
+    let n: i32 = mp.len();
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i + 1 < n; i++ {
         if mp.at(i).to_int() == 58 && mp.at(i + 1).to_int() == 58 { last = i + 2; }
     }
     if last < 0 { return mp; }
@@ -585,7 +585,7 @@ fn _run_derive(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
     args.push(iv_ptr(target as *void, "Stmt"));
     let r: IValue = interp_call(it, fn_stmt, args);
     if r.kind != IV_VECTOR { return; }
-    for let i: int = 0; i < r.vec.len(); i++ {
+    for let i: i32 = 0; i < r.vec.len(); i++ {
         let elem: IValue = r.vec.get(i);
         if elem.kind != IV_PTR { continue; }
         if !elem.ty_tag.eq("Stmt") { continue; }
@@ -618,7 +618,7 @@ fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
     let args: *Vector<IValue> = Vector::new();
     args.push(iv_ptr(target as *void, "Stmt"));
     let r: IValue = interp_call(it, fn_stmt, args);
-    let last: int = out.len() - 1;
+    let last: i32 = out.len() - 1;
     if last < 0 { return; }
     if r.kind == IV_PTR && r.ty_tag.eq("Stmt") {
         let ps: *Stmt = r.p as *Stmt;
@@ -633,7 +633,7 @@ fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
         // Drop the original placeholder, then push every emitted Stmt
         // in order. Empty vector = drop with no replacement.
         let _: Stmt = out.pop();
-        for let i: int = 0; i < r.vec.len(); i++ {
+        for let i: i32 = 0; i < r.vec.len(); i++ {
             let elem: IValue = r.vec.get(i);
             if elem.kind != IV_PTR { continue; }
             if !elem.ty_tag.eq("Stmt") { continue; }
@@ -662,7 +662,7 @@ fn type_owner_name(t: *Type) -> string {
 // `v.name!(args)` and `Type::name!(v, args)`.
 pub fn body_references_self(stmts: *Vector<Stmt>) -> bool {
     if stmts == null { return false; }
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if stmt_references_self(&s) { return true; }
     }
@@ -691,7 +691,7 @@ fn expr_references_self(e: *Expr) -> bool {
     if e.operand != null && expr_references_self(e.operand) { return true; }
     if e.macro_recv != null && expr_references_self(e.macro_recv) { return true; }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             if expr_references_self(&a) { return true; }
         }
@@ -704,7 +704,7 @@ fn expr_references_self(e: *Expr) -> bool {
 fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>,
                       tm: *Vector<TypeMacro>,
                       pr: *HashMap<ProcMacroDef>, it: *Interp) {
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         // Tell bare-macro resolution which file this stmt came from, so a
         // collision is disambiguated against THAT file's imports.
@@ -713,7 +713,7 @@ fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>,
             s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it);
             program.set(i, s);
         } else if s.kind == ST_IMPL && s.impl_methods != null {
-            for let j: int = 0; j < s.impl_methods.len(); j++ {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body != null {
                     m.fn_body = expand_in_block(m.fn_body, sm, tm, pr, it);
@@ -735,14 +735,14 @@ fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>,
                     tm: *Vector<TypeMacro>,
                     pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         // Macro at statement position: `name!(args);` becomes ST_EXPR holding
         // an EX_MACRO. Replace it with the expansion's stmts.
         if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_MACRO {
             let expanded: *Vector<Stmt> = try_expand_call(s.expr_value, sm, tm, pr, it);
             if expanded != null {
-                for let k: int = 0; k < expanded.len(); k++ {
+                for let k: i32 = 0; k < expanded.len(); k++ {
                     let e: Stmt = expanded.get(k);
                     out.push(e);
                 }
@@ -784,7 +784,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
     //   * Static form (body doesn't reference `self`): no receiver, all args
     //     go straight to matchers (`Helper::log!("hi")`).
     if call.macro_owner != null && !call.macro_owner.eq("") {
-        for let i: int = 0; i < tm.len(); i++ {
+        for let i: i32 = 0; i < tm.len(); i++ {
             let entry: TypeMacro = tm.get(i);
             if entry.owner.eq(call.macro_owner) && entry.name.eq(call.str_val) {
                 if entry.def.then_body == null { return null; }
@@ -798,7 +798,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
                 let recv_p: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
                 *recv_p = recv_arg;
                 let rest: *Vector<Expr> = Vector::new();
-                for let k: int = 1; k < call.args.len(); k++ {
+                for let k: i32 = 1; k < call.args.len(); k++ {
                     let a: Expr = call.args.get(k);
                     rest.push(a);
                 }
@@ -831,7 +831,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
     // For static-in-impl macros (no `self` in body) the receiver is silently
     // discarded so `Type::new().some_static!(args)` still works.
     if call.macro_recv != null {
-        for let i: int = 0; i < tm.len(); i++ {
+        for let i: i32 = 0; i < tm.len(); i++ {
             let entry: TypeMacro = tm.get(i);
             if entry.name.eq(call.str_val) {
                 if entry.def.then_body == null { return null; }
@@ -861,9 +861,9 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
         let mods: *Vector<string> = joined.split("\n");
         if mods.len() > 1 {
             let mut chosen: string = "";
-            let mut nchosen: int = 0;
+            let mut nchosen: i32 = 0;
             let cur_mod: string = _macro_module_of(it.macro_cur_origin);
-            for let mi: int = 0; mi < mods.len(); mi++ {
+            for let mi: i32 = 0; mi < mods.len(); mi++ {
                 let m: string = mods.get(mi);
                 let mut imp: bool = m.eq(cur_mod);   // defined in the same file
                 if !imp && it.macro_file_imports != null {
@@ -884,7 +884,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
                 // AND expand to a reference the typer rejects, so the build
                 // fails hard instead of silently dropping the call.
                 let mut listed: string = "";
-                for let mi: int = 0; mi < mods.len(); mi++ {
+                for let mi: i32 = 0; mi < mods.len(); mi++ {
                     if mi > 0 { listed = listed.concat(", "); }
                     listed = listed.concat(mods.get(mi));
                 }
@@ -923,7 +923,7 @@ fn _run_fn_ast(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Vector<Stmt> {
     __glide_palloc_set(null);
     let elem_args: *Vector<IValue> = Vector::new();
     if call.args != null {
-        for let i: int = 0; i < call.args.len(); i++ {
+        for let i: i32 = 0; i < call.args.len(); i++ {
             let ea: Expr = call.args.get(i);
             let pe: *Expr = malloc(sizeof(Expr)) as *Expr;
             *pe = ea;
@@ -936,7 +936,7 @@ fn _run_fn_ast(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Vector<Stmt> {
     __glide_palloc_set(saved_arena);
     let out: *Vector<Stmt> = Vector::new();
     if r.kind != IV_VECTOR { return out; }
-    for let i: int = 0; i < r.vec.len(); i++ {
+    for let i: i32 = 0; i < r.vec.len(); i++ {
         let elem: IValue = r.vec.get(i);
         if elem.kind != IV_PTR { continue; }
         if !elem.ty_tag.eq("Stmt") { continue; }
@@ -961,7 +961,7 @@ fn _run_fn_expr(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Expr {
     __glide_palloc_set(null);
     let elem_args: *Vector<IValue> = Vector::new();
     if call.args != null {
-        for let i: int = 0; i < call.args.len(); i++ {
+        for let i: i32 = 0; i < call.args.len(); i++ {
             let ea: Expr = call.args.get(i);
             let pe: *Expr = malloc(sizeof(Expr)) as *Expr;
             *pe = ea;
@@ -990,7 +990,7 @@ fn rewrite_expr_macros(e: *Expr, pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Ex
     e.operand = rewrite_expr_macros(e.operand, pr, it);
     e.macro_recv = rewrite_expr_macros(e.macro_recv, pr, it);
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             let pa: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
             *pa = a;
@@ -1016,7 +1016,7 @@ fn _run_pass(it: *Interp, fn_stmt: *Stmt, program: *Vector<Stmt>) -> *Vector<Stm
     let saved: *void = __glide_palloc_get();
     __glide_palloc_set(null);
     let elems: *Vector<IValue> = Vector::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let st: Stmt = program.get(i);
         let ps: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
         *ps = st;
@@ -1028,7 +1028,7 @@ fn _run_pass(it: *Interp, fn_stmt: *Stmt, program: *Vector<Stmt>) -> *Vector<Stm
     __glide_palloc_set(saved);
     if r.kind != IV_VECTOR { return program; }
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < r.vec.len(); i++ {
+    for let i: i32 = 0; i < r.vec.len(); i++ {
         let elem: IValue = r.vec.get(i);
         if elem.kind != IV_PTR { continue; }
         if !elem.ty_tag.eq("Stmt") { continue; }
@@ -1064,10 +1064,10 @@ fn _run_pass(it: *Interp, fn_stmt: *Stmt, program: *Vector<Stmt>) -> *Vector<Stm
 // consumer binary (compile-time only).
 fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let passes: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN || s.attrs == null { continue; }
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             if a.name != null && a.name.eq("proc_pass") { passes.push(s); break; }
         }
@@ -1079,7 +1079,7 @@ fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let it: *Interp = Interp::new();
     it.register_fns(program);
     let mut cur: *Vector<Stmt> = program;
-    for let i: int = 0; i < passes.len(); i++ {
+    for let i: i32 = 0; i < passes.len(); i++ {
         let pf: Stmt = passes.get(i);
         it.program = cur;
         it.register_fns(cur);
@@ -1087,7 +1087,7 @@ fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
     }
     __glide_palloc_set(saved);
     if it.diagnostics.len() > 0 {
-        for let i: int = 0; i < it.diagnostics.len(); i++ {
+        for let i: i32 = 0; i < it.diagnostics.len(); i++ {
             println!("proc-pass:", it.diagnostics.get(i));
         }
     }
@@ -1103,7 +1103,7 @@ fn expand_with_def(call: *Expr, def: *Stmt) -> *Vector<Stmt> {
 // calls in the same scope don't collide. Two macro calls can't share the
 // exact same line+col (the parser advances).
 fn recv_name_for(call: *Expr) -> string {
-    let n: int = call.line * 1000 + call.column;
+    let n: i32 = call.line * 1000 + call.column;
     return "__glide_macro_recv_".concat(int_to_str(n));
 }
 
@@ -1115,10 +1115,10 @@ fn expand_with_def_recv(call: *Expr, def: *Stmt, recv: *Expr) -> *Vector<Stmt> {
     }
     let body: *Vector<Stmt> = Vector::new();
     if def.then_body != null {
-        for let i: int = 0; i < def.then_body.len(); i++ {
+        for let i: i32 = 0; i < def.then_body.len(); i++ {
             let s: Stmt = def.then_body.get(i);
             let expanded: *Vector<Stmt> = macro_subst_stmt(&s, bindings, -1, self_name);
-            for let j: int = 0; j < expanded.len(); j++ {
+            for let j: i32 = 0; j < expanded.len(); j++ {
                 let es: Stmt = expanded.get(j);
                 body.push(es);
             }
@@ -1136,7 +1136,7 @@ fn expand_with_def_recv(call: *Expr, def: *Stmt, recv: *Expr) -> *Vector<Stmt> {
         let bind: *Stmt = stmt_let(self_name, no_ty, recv_clone, false, call.line, call.column);
         block_body.push(*bind);
     }
-    for let i: int = 0; i < body.len(); i++ {
+    for let i: i32 = 0; i < body.len(); i++ {
         let bs: Stmt = body.get(i);
         block_body.push(bs);
     }
@@ -1156,10 +1156,10 @@ fn expand_with_def_recv(call: *Expr, def: *Stmt, recv: *Expr) -> *Vector<Stmt> {
 fn bind_args(call: *Expr, def: *Stmt) -> *Vector<MacroBinding> {
     let out: *Vector<MacroBinding> = Vector::new();
     if def.macro_params == null { return out; }
-    let mut idx: int = 0;
-    let mut total: int = 0;
+    let mut idx: i32 = 0;
+    let mut total: i32 = 0;
     if call.args != null { total = call.args.len(); }
-    for let p: int = 0; p < def.macro_params.len(); p++ {
+    for let p: i32 = 0; p < def.macro_params.len(); p++ {
         let mp: MacroParam = def.macro_params.get(p);
         let bound: *Vector<Expr> = Vector::new();
         if mp.is_variadic {
@@ -1184,22 +1184,22 @@ fn bind_args(call: *Expr, def: *Stmt) -> *Vector<MacroBinding> {
 // Substitute one stmt (returns the cloned-with-substitutions stmt, possibly a
 // list when ST_MACRO_REP unrolls). `rep_idx` is the current repetition index
 // for the enclosing `$(...);*` block (or -1 if none).
-fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: int, self_name: string) -> *Vector<Stmt> {
+fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: i32, self_name: string) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
     if s == null { return out; }
     if s.kind == ST_MACRO_REP {
         // Find the variadic binding driving the repetition.
-        let n: int = variadic_len(bindings);
+        let n: i32 = variadic_len(bindings);
         if n < 0 {
             // No variadic in scope — emit zero copies to avoid runaway.
             return out;
         }
-        for let i: int = 0; i < n; i++ {
+        for let i: i32 = 0; i < n; i++ {
             if s.then_body == null { continue; }
-            for let j: int = 0; j < s.then_body.len(); j++ {
+            for let j: i32 = 0; j < s.then_body.len(); j++ {
                 let inner: Stmt = s.then_body.get(j);
                 let expanded: *Vector<Stmt> = macro_subst_stmt(&inner, bindings, i, self_name);
-                for let k: int = 0; k < expanded.len(); k++ {
+                for let k: i32 = 0; k < expanded.len(); k++ {
                     let e: Stmt = expanded.get(k);
                     out.push(e);
                 }
@@ -1231,12 +1231,12 @@ fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: int, sel
     return out;
 }
 
-fn macro_subst_block(stmts: *Vector<Stmt>, bindings: *Vector<MacroBinding>, rep_idx: int, self_name: string) -> *Vector<Stmt> {
+fn macro_subst_block(stmts: *Vector<Stmt>, bindings: *Vector<MacroBinding>, rep_idx: i32, self_name: string) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         let expanded: *Vector<Stmt> = macro_subst_stmt(&s, bindings, rep_idx, self_name);
-        for let j: int = 0; j < expanded.len(); j++ {
+        for let j: i32 = 0; j < expanded.len(); j++ {
             let e: Stmt = expanded.get(j);
             out.push(e);
         }
@@ -1244,7 +1244,7 @@ fn macro_subst_block(stmts: *Vector<Stmt>, bindings: *Vector<MacroBinding>, rep_
     return out;
 }
 
-fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: int, self_name: string) -> *Expr {
+fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: i32, self_name: string) -> *Expr {
     if e == null { return null; }
     if e.kind == EX_MACRO_VAR {
         let chosen: *Expr = lookup_var(e.str_val, bindings, rep_idx);
@@ -1265,7 +1265,7 @@ fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: int, sel
     if cloned.macro_recv != null { cloned.macro_recv = macro_subst_expr(cloned.macro_recv, bindings, rep_idx, self_name); }
     if cloned.args != null {
         let new_args: *Vector<Expr> = Vector::new();
-        for let i: int = 0; i < cloned.args.len(); i++ {
+        for let i: i32 = 0; i < cloned.args.len(); i++ {
             let a: Expr = cloned.args.get(i);
             let na: *Expr = macro_subst_expr(&a, bindings, rep_idx, self_name);
             if na != null { new_args.push(*na); }
@@ -1275,12 +1275,12 @@ fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: int, sel
     return cloned;
 }
 
-fn lookup_var(name: string, bindings: *Vector<MacroBinding>, rep_idx: int) -> *Expr {
-    for let i: int = 0; i < bindings.len(); i++ {
+fn lookup_var(name: string, bindings: *Vector<MacroBinding>, rep_idx: i32) -> *Expr {
+    for let i: i32 = 0; i < bindings.len(); i++ {
         let b: MacroBinding = bindings.get(i);
         if !b.name.eq(name) { continue; }
         if b.args.len() == 0 { return null; }
-        let mut idx: int = 0;
+        let mut idx: i32 = 0;
         if b.is_variadic {
             if rep_idx < 0 || rep_idx >= b.args.len() { return null; }
             idx = rep_idx;
@@ -1293,8 +1293,8 @@ fn lookup_var(name: string, bindings: *Vector<MacroBinding>, rep_idx: int) -> *E
     return null;
 }
 
-fn variadic_len(bindings: *Vector<MacroBinding>) -> int {
-    for let i: int = 0; i < bindings.len(); i++ {
+fn variadic_len(bindings: *Vector<MacroBinding>) -> i32 {
+    for let i: i32 = 0; i < bindings.len(); i++ {
         let b: MacroBinding = bindings.get(i);
         if b.is_variadic { return b.args.len(); }
     }

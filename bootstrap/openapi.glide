@@ -23,13 +23,13 @@ pub struct OAPathParam {
     pub ty: string,               // openapi primitive name or "$ref:..."
 }
 
-pub fn openapi_main(src_path: string) -> int {
+pub fn openapi_main(src_path: string) -> i32 {
     let stmts: *Vector<Stmt> = _openapi_load(src_path);
     if stmts == null { return 1; }
 
     let routes: *Vector<OARoute> = _collect_routes(stmts);
     let used_schemas: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < routes.len(); i++ {
+    for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
         if !r.body_schema.eq("") { used_schemas.insert(r.body_schema, true); }
         if !r.resp_schema.eq("") { used_schemas.insert(r.resp_schema, true); }
@@ -43,24 +43,24 @@ pub fn openapi_main(src_path: string) -> int {
 // `glide routes <file>` - one line per route, METHOD PATH -> handler.
 // Used by the Zed `/glide-routes` slash command and any other consumer
 // that wants a compact text listing without the full OpenAPI surface.
-pub fn routes_main(src_path: string) -> int {
+pub fn routes_main(src_path: string) -> i32 {
     let stmts: *Vector<Stmt> = _openapi_load(src_path);
     if stmts == null { return 1; }
     let routes: *Vector<OARoute> = _collect_routes(stmts);
-    let mut max_method: int = 6;
-    let mut max_path: int = 10;
-    for let i: int = 0; i < routes.len(); i++ {
+    let mut max_method: i32 = 6;
+    let mut max_path: i32 = 10;
+    for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
         if r.method.len() > max_method { max_method = r.method.len(); }
         if r.path.len() > max_path { max_path = r.path.len(); }
     }
-    for let i: int = 0; i < routes.len(); i++ {
+    for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
         let mut line: string = r.method;
-        let mut pad: int = max_method - r.method.len() + 2;
+        let mut pad: i32 = max_method - r.method.len() + 2;
         while pad > 0 { line = line.concat(" "); pad = pad - 1; }
         line = line.concat(r.path);
-        let mut pad2: int = max_path - r.path.len() + 2;
+        let mut pad2: i32 = max_path - r.path.len() + 2;
         while pad2 > 0 { line = line.concat(" "); pad2 = pad2 - 1; }
         line = line.concat("-> ").concat(r.handler_name);
         println!(line);
@@ -104,10 +104,10 @@ fn _is_route_attr(n: string) -> bool {
 
 fn _collect_routes(stmts: *Vector<Stmt>) -> *Vector<OARoute> {
     let out: *Vector<OARoute> = Vector::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.kind != ST_FN || s.attrs == null { continue; }
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             if !_is_route_attr(a.name) { continue; }
             let mut method: string = "";
@@ -145,7 +145,7 @@ fn _collect_routes(stmts: *Vector<Stmt>) -> *Vector<OARoute> {
 // `body: Json<T>` -> "T". Looks at param ty == Json generic.
 fn _body_schema_for(s: *Stmt) -> string {
     if s.fn_params == null { return ""; }
-    for let i: int = 0; i < s.fn_params.len(); i++ {
+    for let i: i32 = 0; i < s.fn_params.len(); i++ {
         let p: Param = s.fn_params.get(i);
         if p.ty == null { continue; }
         if p.ty.kind == TY_GENERIC && p.ty.name.eq("Json")
@@ -174,12 +174,12 @@ fn _resp_schema_for(s: *Stmt) -> string {
 // Path<string> -> string, etc.
 fn _path_params_for(s: *Stmt, path: string) -> *Vector<OAPathParam> {
     let out: *Vector<OAPathParam> = Vector::new();
-    let n: int = path.len();
-    let mut i: int = 0;
+    let n: i32 = path.len();
+    let mut i: i32 = 0;
     while i < n {
-        let c: int = path.at(i).to_int();
+        let c: i32 = path.at(i).to_int();
         if c == 58 || c == 42 {
-            let mut j: int = i + 1;
+            let mut j: i32 = i + 1;
             while j < n && path.at(j).to_int() != 47 { j = j + 1; }
             let seg: string = path.substring(i + 1, j);
             if !seg.eq("") {
@@ -196,7 +196,7 @@ fn _path_params_for(s: *Stmt, path: string) -> *Vector<OAPathParam> {
 
 fn _lookup_path_param_ty(s: *Stmt, name: string) -> string {
     if s.fn_params == null { return "string"; }
-    for let i: int = 0; i < s.fn_params.len(); i++ {
+    for let i: i32 = 0; i < s.fn_params.len(); i++ {
         let p: Param = s.fn_params.get(i);
         if !p.name.eq(name) { continue; }
         if p.ty != null && p.ty.kind == TY_GENERIC && p.ty.name.eq("Path")
@@ -225,7 +225,7 @@ fn _prim_to_openapi(name: string) -> string {
 fn _collect_referenced_structs(stmts: *Vector<Stmt>,
                                 used: *HashMap<bool>) -> *Vector<Stmt> {
     let pub_structs: *HashMap<Stmt> = HashMap::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.kind == ST_STRUCT && s.is_pub {
             pub_structs.insert(s.name, s);
@@ -236,12 +236,12 @@ fn _collect_referenced_structs(stmts: *Vector<Stmt>,
     while grew {
         grew = false;
         let names: *Vector<string> = used.keys();
-        for let i: int = 0; i < names.len(); i++ {
+        for let i: i32 = 0; i < names.len(); i++ {
             let n: string = names.get(i);
             if !pub_structs.contains(n) { continue; }
             let st: Stmt = pub_structs.get(n);
             if st.struct_fields == null { continue; }
-            for let j: int = 0; j < st.struct_fields.len(); j++ {
+            for let j: i32 = 0; j < st.struct_fields.len(); j++ {
                 let f: Field = st.struct_fields.get(j);
                 let ref_name: string = _struct_ref_name(f.ty);
                 if ref_name.eq("") { continue; }
@@ -254,7 +254,7 @@ fn _collect_referenced_structs(stmts: *Vector<Stmt>,
     }
     let out: *Vector<Stmt> = Vector::new();
     let names: *Vector<string> = used.keys();
-    for let i: int = 0; i < names.len(); i++ {
+    for let i: i32 = 0; i < names.len(); i++ {
         let n: string = names.get(i);
         if pub_structs.contains(n) {
             out.push(pub_structs.get(n));
@@ -284,13 +284,13 @@ fn _struct_ref_name_of(t: Type) -> string {
 
 // `/users/:id/posts/*rest` -> `/users/{id}/posts/{rest}` per OpenAPI spec.
 fn _glide_path_to_openapi(path: string) -> string {
-    let n: int = path.len();
+    let n: i32 = path.len();
     let mut out: string = "";
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < n {
-        let c: int = path.at(i).to_int();
+        let c: i32 = path.at(i).to_int();
         if c == 58 || c == 42 {
-            let mut j: int = i + 1;
+            let mut j: i32 = i + 1;
             while j < n && path.at(j).to_int() != 47 { j = j + 1; }
             let seg: string = path.substring(i + 1, j);
             out = out.concat("{").concat(seg).concat("}");
@@ -322,12 +322,12 @@ fn _emit_yaml(src_path: string, routes: *Vector<OARoute>, structs: *Vector<Stmt>
     println!("  version: 1.0.0");
     println!("paths:");
     let printed: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < routes.len(); i++ {
+    for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
         if printed.contains(r.path) { continue; }
         printed.insert(r.path, true);
         println!("  ".concat(r.path).concat(":"));
-        for let j: int = 0; j < routes.len(); j++ {
+        for let j: i32 = 0; j < routes.len(); j++ {
             let r2: OARoute = routes.get(j);
             if !r2.path.eq(r.path) { continue; }
             _emit_operation(&r2);
@@ -336,7 +336,7 @@ fn _emit_yaml(src_path: string, routes: *Vector<OARoute>, structs: *Vector<Stmt>
     if structs.len() > 0 {
         println!("components:");
         println!("  schemas:");
-        for let i: int = 0; i < structs.len(); i++ {
+        for let i: i32 = 0; i < structs.len(); i++ {
             let st: Stmt = structs.get(i);
             _emit_schema(&st);
         }
@@ -344,11 +344,11 @@ fn _emit_yaml(src_path: string, routes: *Vector<OARoute>, structs: *Vector<Stmt>
 }
 
 fn _api_title(src_path: string) -> string {
-    let n: int = src_path.len();
-    let mut start: int = 0;
-    let mut i: int = 0;
+    let n: i32 = src_path.len();
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
     while i < n {
-        let c: int = src_path.at(i).to_int();
+        let c: i32 = src_path.at(i).to_int();
         if c == 47 || c == 92 { start = i + 1; }
         i = i + 1;
     }
@@ -364,7 +364,7 @@ fn _emit_operation(r: *OARoute) {
     println!("      summary: ".concat(r.handler_name));
     if r.path_params != null && r.path_params.len() > 0 {
         println!("      parameters:");
-        for let i: int = 0; i < r.path_params.len(); i++ {
+        for let i: i32 = 0; i < r.path_params.len(); i++ {
             let p: OAPathParam = r.path_params.get(i);
             println!("        - in: path");
             println!("          name: ".concat(p.name));
@@ -400,7 +400,7 @@ fn _emit_schema(st: *Stmt) {
     println!("      type: object");
     if st.struct_fields == null || st.struct_fields.len() == 0 { return; }
     println!("      properties:");
-    for let i: int = 0; i < st.struct_fields.len(); i++ {
+    for let i: i32 = 0; i < st.struct_fields.len(); i++ {
         let f: Field = st.struct_fields.get(i);
         println!("        ".concat(f.name).concat(":"));
         _emit_type_block(f.ty, "          ");

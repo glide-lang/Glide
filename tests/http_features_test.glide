@@ -15,7 +15,7 @@ fn _make_resp() -> *HttpResponse {
     return r;
 }
 
-fn test_response_header_case_insensitive() -> int {
+fn test_response_header_case_insensitive() -> i32 {
     let r: *HttpResponse = _make_resp();
     assert_str_eq!(r.header("Content-Type"), "text/plain");
     assert_str_eq!(r.header("content-type"), "text/plain");
@@ -24,7 +24,7 @@ fn test_response_header_case_insensitive() -> int {
     return 0;
 }
 
-fn test_response_headers_multi() -> int {
+fn test_response_headers_multi() -> i32 {
     let r: *HttpResponse = _make_resp();
     let cookies: *Vector<string> = r.headers("Set-Cookie");
     assert_eq!(cookies.len(), 2);
@@ -35,7 +35,7 @@ fn test_response_headers_multi() -> int {
 
 // ---- form encoding ----
 
-fn test_form_encode_basic() -> int {
+fn test_form_encode_basic() -> i32 {
     let f: *FormData = FormData::new();
     f.set("a", "1");
     f.set("b", "two");
@@ -43,7 +43,7 @@ fn test_form_encode_basic() -> int {
     return 0;
 }
 
-fn test_form_encode_special_chars() -> int {
+fn test_form_encode_special_chars() -> i32 {
     let f: *FormData = FormData::new();
     f.set("k", "x y&z=1");
     let body: string = f.encode();
@@ -54,7 +54,7 @@ fn test_form_encode_special_chars() -> int {
     return 0;
 }
 
-fn test_form_decode_round_trip() -> int {
+fn test_form_decode_round_trip() -> i32 {
     let f: *FormData = FormData::new();
     f.set("user", "alice");
     f.set("note", "hello world");
@@ -69,14 +69,14 @@ fn test_form_decode_round_trip() -> int {
 
 // ---- multipart ----
 
-fn test_multipart_content_type_format() -> int {
+fn test_multipart_content_type_format() -> i32 {
     let mp: *Multipart = Multipart::with_boundary("xxx");
     let ct: string = mp.content_type();
     assert_str_eq!(ct, "multipart/form-data; boundary=xxx");
     return 0;
 }
 
-fn test_multipart_body_layout() -> int {
+fn test_multipart_body_layout() -> i32 {
     let mp: *Multipart = Multipart::with_boundary("XXX");
     mp.add_field("k", "v");
     let body: string = mp.body();
@@ -87,7 +87,7 @@ fn test_multipart_body_layout() -> int {
     return 0;
 }
 
-fn test_multipart_file_part() -> int {
+fn test_multipart_file_part() -> i32 {
     let mp: *Multipart = Multipart::with_boundary("BB");
     mp.add_file("upload", "doc.txt", "text/plain", "hello");
     let body: string = mp.body();
@@ -99,7 +99,7 @@ fn test_multipart_file_part() -> int {
 
 // ---- CookieJar ----
 
-fn test_cookie_jar_ingest_simple() -> int {
+fn test_cookie_jar_ingest_simple() -> i32 {
     let j: *CookieJar = CookieJar::new();
     let lines: *Vector<string> = Vector::new();
     lines.push("token=abc; Path=/");
@@ -109,7 +109,7 @@ fn test_cookie_jar_ingest_simple() -> int {
     return 0;
 }
 
-fn test_cookie_jar_header_value() -> int {
+fn test_cookie_jar_header_value() -> i32 {
     let j: *CookieJar = CookieJar::new();
     let lines: *Vector<string> = Vector::new();
     lines.push("token=abc");
@@ -119,7 +119,7 @@ fn test_cookie_jar_header_value() -> int {
     return 0;
 }
 
-fn test_cookie_jar_secure_skip_on_http() -> int {
+fn test_cookie_jar_secure_skip_on_http() -> i32 {
     let j: *CookieJar = CookieJar::new();
     let lines: *Vector<string> = Vector::new();
     lines.push("session=xyz; Secure");
@@ -131,7 +131,7 @@ fn test_cookie_jar_secure_skip_on_http() -> int {
     return 0;
 }
 
-fn test_cookie_jar_replaces_same_name() -> int {
+fn test_cookie_jar_replaces_same_name() -> i32 {
     let j: *CookieJar = CookieJar::new();
     let lines1: *Vector<string> = Vector::new();
     lines1.push("k=old");
@@ -145,7 +145,7 @@ fn test_cookie_jar_replaces_same_name() -> int {
     return 0;
 }
 
-fn test_cookie_jar_clear() -> int {
+fn test_cookie_jar_clear() -> i32 {
     let j: *CookieJar = CookieJar::new();
     let lines: *Vector<string> = Vector::new();
     lines.push("k=v");

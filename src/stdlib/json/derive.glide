@@ -74,8 +74,8 @@ fn _emit_from_json(s: *Stmt) -> *Stmt {
     // });
     let names: *Vector<string> = Vector::new();
     let vals:  *Vector<Expr>   = Vector::new();
-    let n: int = s.struct_fields.len();
-    let mut i: int = 0;
+    let n: i32 = s.struct_fields.len();
+    let mut i: i32 = 0;
     while i < n {
         let f: Field = s.struct_fields.get(i);
         names.push(f.name);
@@ -128,8 +128,8 @@ fn _emit_to_json(s: *Stmt) -> *Stmt {
         out_name, ty_pointer(ty_named("JsonValue")),
         obj_call, false, 0, 0));
 
-    let n: int = s.struct_fields.len();
-    let mut i: int = 0;
+    let n: i32 = s.struct_fields.len();
+    let mut i: i32 = 0;
     while i < n {
         let f: Field = s.struct_fields.get(i);
         body.push(*_field_write_stmt(out_name, f.name, f.ty));

@@ -1,16 +1,16 @@
 import stdlib::testing::*;
 import stdlib::os::*;
 
-fn test_os_cpu_count_at_least_one() -> int {
-    let r: !int = os_cpu_count();
+fn test_os_cpu_count_at_least_one() -> i32 {
+    let r: !i32 = os_cpu_count();
     assert!(r.ok);
     assert!(r.val >= 1);
     return 0;
 }
 
-fn test_os_cpu_count_physical_at_most_logical() -> int {
-    let logical: !int = os_cpu_count();
-    let phys: !int = os_cpu_count_physical();
+fn test_os_cpu_count_physical_at_most_logical() -> i32 {
+    let logical: !i32 = os_cpu_count();
+    let phys: !i32 = os_cpu_count_physical();
     assert!(logical.ok);
     assert!(phys.ok);
     assert!(phys.val >= 1);
@@ -18,21 +18,21 @@ fn test_os_cpu_count_physical_at_most_logical() -> int {
     return 0;
 }
 
-fn test_os_page_size_is_reasonable() -> int {
-    let r: !int = os_page_size();
+fn test_os_page_size_is_reasonable() -> i32 {
+    let r: !i32 = os_page_size();
     assert!(r.ok);
     assert!(r.val >= 512);
     assert!(r.val <= 65536);
     return 0;
 }
 
-fn test_os_memory_total_positive() -> int {
+fn test_os_memory_total_positive() -> i32 {
     let r: !u64 = os_memory_total();
     assert!(r.ok);
     return 0;
 }
 
-fn test_os_memory_free_at_most_total() -> int {
+fn test_os_memory_free_at_most_total() -> i32 {
     let total: !u64 = os_memory_total();
     let free:  !u64 = os_memory_free();
     if !free.ok { return 0; }
@@ -41,13 +41,13 @@ fn test_os_memory_free_at_most_total() -> int {
     return 0;
 }
 
-fn test_os_uptime_returns_value() -> int {
+fn test_os_uptime_returns_value() -> i32 {
     let r: !u64 = os_uptime_secs();
     assert!(r.ok);
     return 0;
 }
 
-fn test_os_loadavg_on_posix() -> int {
+fn test_os_loadavg_on_posix() -> i32 {
     if !os_is_posix() { return 0; }
     let r: !f64 = os_loadavg_1m();
     assert!(r.ok);

@@ -32,12 +32,12 @@ import parser;
 // recognised positionally — they don't need to be declared anywhere.
 // Any unrecognised shape is a soft error: we keep parsing the rest.
 
-pub const DEP_PATH: int = 0;
-pub const DEP_GIT:  int = 1;
+pub const DEP_PATH: i32 = 0;
+pub const DEP_GIT:  i32 = 1;
 
 pub struct ManifestDep {
     pub name: string,    // alias used in `import <name>::...`
-    pub kind: int,       // DEP_PATH | DEP_GIT
+    pub kind: i32,       // DEP_PATH | DEP_GIT
     pub path: string,    // DEP_PATH: filesystem path; DEP_GIT: URL
     pub rev:  string,    // DEP_GIT: tag or commit hash; empty for DEP_PATH
 }
@@ -103,7 +103,7 @@ pub fn mvs_get_override() -> *HashMap<string> {
 pub fn find_manifest_root(start_dir: string) -> string {
     let mut dir: string = start_dir;
     if dir.eq("") { dir = "."; }
-    for let i: int = 0; i < 64; i++ {
+    for let i: i32 = 0; i < 64; i++ {
         let cand: string = dir.concat("/glide.glide");
         if __glide_file_exists(cand) { return dir; }
         let parent: string = parent_of(dir);
@@ -120,9 +120,9 @@ pub fn find_manifest_root(start_dir: string) -> string {
 fn parent_of(dir: string) -> string {
     if dir.eq("") { return ""; }
     if dir.eq(".") { return ".."; }
-    let mut cut: int = -1;
-    for let i: int = 0; i < dir.len(); i++ {
-        let c: int = dir.at(i).to_int();
+    let mut cut: i32 = -1;
+    for let i: i32 = 0; i < dir.len(); i++ {
+        let c: i32 = dir.at(i).to_int();
         if c == 47 || c == 92 { cut = i; }
     }
     if cut < 0 {
@@ -171,7 +171,7 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     m.lint_allow = lint_allow_vec;
     m.target = "";
 
-    for let i: int = 0; i < parsed.len(); i++ {
+    for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
         if s.kind != ST_LET { continue; }
         let v: *Expr = s.let_value;
@@ -184,8 +184,8 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
 
 fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
     if v.field_names == null || v.args == null { return; }
-    let n: int = v.field_names.len();
-    for let i: int = 0; i < n; i++ {
+    let n: i32 = v.field_names.len();
+    for let i: i32 = 0; i < n; i++ {
         let name: string = v.field_names.get(i);
         let val: Expr = v.args.get(i);
         if name.eq("name")        && val.kind == EX_STRING { m.name = val.str_val; }
@@ -216,7 +216,7 @@ fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
 
 fn _maybe_apply_struct_preset(m: *Manifest, v: *Expr) {
     if v.field_names == null || v.args == null { return; }
-    for let i: int = 0; i < v.field_names.len(); i++ {
+    for let i: i32 = 0; i < v.field_names.len(); i++ {
         let fname: string = v.field_names.get(i);
         let fval: Expr = v.args.get(i);
         if fname.eq("preset") && fval.kind == EX_STRING {
@@ -258,7 +258,7 @@ fn _apply_lint_preset(m: *Manifest, name: string) {
 
 fn _collect_lint_cfg(m: *Manifest, v: *Expr) {
     if v == null || v.field_names == null || v.args == null { return; }
-    for let i: int = 0; i < v.field_names.len(); i++ {
+    for let i: i32 = 0; i < v.field_names.len(); i++ {
         let fname: string = v.field_names.get(i);
         let fval: Expr = v.args.get(i);
         if fname.eq("deny") { _collect_lint_strings(m.lint_deny, &fval); }
@@ -271,7 +271,7 @@ fn _collect_lint_strings(out: *Vector<string>, v: *Expr) {
     if v.kind == EX_CALL {
         let callee: *Expr = v.lhs;
         if callee != null && callee.kind == EX_IDENT && callee.str_val.eq("vec_of") {
-            for let i: int = 0; i < v.args.len(); i++ {
+            for let i: i32 = 0; i < v.args.len(); i++ {
                 let a: Expr = v.args.get(i);
                 if a.kind == EX_STRING { out.push(a.str_val); }
             }
@@ -287,7 +287,7 @@ fn collect_deps(out: *Vector<ManifestDep>, v: *Expr) {
     if v.kind == EX_CALL {
         let callee: *Expr = v.lhs;
         if callee != null && callee.kind == EX_IDENT && callee.str_val.eq("vec_of") {
-            for let i: int = 0; i < v.args.len(); i++ {
+            for let i: i32 = 0; i < v.args.len(); i++ {
                 let arg: Expr = v.args.get(i);
                 let d: ManifestDep = parse_dep_call(&arg);
                 if !d.name.eq("") { out.push(d); }
@@ -381,7 +381,7 @@ pub fn read_lockfile(root_dir: string) -> *Lockfile {
     let lf: *Lockfile = __glide_palloc(sizeof(Lockfile)) as *Lockfile;
     lf.entries = entries_vec;
 
-    for let i: int = 0; i < parsed.len(); i++ {
+    for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
         if s.kind != ST_LET { continue; }
         let v: *Expr = s.let_value;
@@ -394,7 +394,7 @@ pub fn read_lockfile(root_dir: string) -> *Lockfile {
 
 fn _fill_lockfile(lf: *Lockfile, v: *Expr) {
     if v.field_names == null || v.args == null { return; }
-    for let i: int = 0; i < v.field_names.len(); i++ {
+    for let i: i32 = 0; i < v.field_names.len(); i++ {
         let name: string = v.field_names.get(i);
         let val: Expr = v.args.get(i);
         if name.eq("entries") { _collect_lock_entries(lf.entries, &val); }
@@ -405,7 +405,7 @@ fn _collect_lock_entries(out: *Vector<LockEntry>, v: *Expr) {
     if v == null || v.kind != EX_CALL { return; }
     let callee: *Expr = v.lhs;
     if callee == null || callee.kind != EX_IDENT || !callee.str_val.eq("vec_of") { return; }
-    for let i: int = 0; i < v.args.len(); i++ {
+    for let i: i32 = 0; i < v.args.len(); i++ {
         let arg: Expr = v.args.get(i);
         let e: LockEntry = _parse_lock_call(&arg);
         if !e.name.eq("") { out.push(e); }
@@ -448,7 +448,7 @@ pub fn write_lockfile(root_dir: string, lf: *Lockfile) -> bool {
     out = out.concat("let lock: Lockfile = Lockfile {\n");
     out = out.concat("    entries: vec_of(\n");
     if lf != null && lf.entries != null {
-        for let i: int = 0; i < lf.entries.len(); i++ {
+        for let i: i32 = 0; i < lf.entries.len(); i++ {
             let e: LockEntry = lf.entries.get(i);
             out = out.concat("        LockEntry::git(\"");
             out = out.concat(e.name).concat("\", \"");
@@ -481,7 +481,7 @@ pub fn lockfile_from_manifest(m: *Manifest) -> *Lockfile {
 
 fn _collect_lock_recursive(m: *Manifest, out: *Vector<LockEntry>, seen: *HashMap<bool>) {
     let ov: *HashMap<string> = mvs_get_override();
-    for let i: int = 0; i < m.deps.len(); i++ {
+    for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if d.kind != DEP_GIT { continue; }
         // Apply the MVS override before deduping so two parents that
@@ -529,7 +529,7 @@ pub fn read_dep_hash(m: *Manifest, d: ManifestDep) -> string {
 // on whether `glide fetch` has been run for that dep.
 pub fn manifest_resolve_alias(m: *Manifest, alias: string) -> string {
     if m == null { return ""; }
-    for let i: int = 0; i < m.deps.len(); i++ {
+    for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if !d.name.eq(alias) { continue; }
         return dep_cache_dir(m, d);
@@ -575,18 +575,18 @@ pub fn manifest_remove_dep(root_dir: string, name: string) -> bool {
 // before the matching `)`. Returns "" on any structural mismatch so the
 // caller can report a clean error instead of mangling the file.
 fn _insert_dep_in_vec_of(src: string, dep_line: string) -> string {
-    let deps_idx: int = _find_after(src, 0, "deps:");
+    let deps_idx: i32 = _find_after(src, 0, "deps:");
     if deps_idx < 0 { return ""; }
-    let vec_idx: int = _find_after(src, deps_idx, "vec_of(");
+    let vec_idx: i32 = _find_after(src, deps_idx, "vec_of(");
     if vec_idx < 0 { return ""; }
-    let open: int = vec_idx + 7;
-    let close: int = _matching_close(src, open - 1);
+    let open: i32 = vec_idx + 7;
+    let close: i32 = _matching_close(src, open - 1);
     if close < 0 { return ""; }
 
     // Scan back from `close` past trailing whitespace + newline to find
     // the insertion point. We want the new line to land on its own line
     // just before the indented `)`.
-    let mut line_start: int = close;
+    let mut line_start: i32 = close;
     while line_start > open
        && _at(src, line_start - 1) != 10
        && _at(src, line_start - 1) != 13 {
@@ -600,12 +600,12 @@ fn _insert_dep_in_vec_of(src: string, dep_line: string) -> string {
 
 // Find the closing paren that matches the `(` at `open_idx`. -1 on
 // unbalanced input. Skips parens inside `"..."` string literals.
-fn _matching_close(src: string, open_idx: int) -> int {
-    let mut depth: int = 0;
+fn _matching_close(src: string, open_idx: i32) -> i32 {
+    let mut depth: i32 = 0;
     let mut in_str: bool = false;
-    let mut i: int = open_idx;
+    let mut i: i32 = open_idx;
     while i < src.len() {
-        let c: int = _at(src, i);
+        let c: i32 = _at(src, i);
         if in_str {
             if c == 92 && (i + 1) < src.len() { i = i + 2; continue; }
             if c == 34 { in_str = false; }
@@ -622,13 +622,13 @@ fn _matching_close(src: string, open_idx: int) -> int {
     return -1;
 }
 
-fn _find_after(src: string, from: int, needle: string) -> int {
-    let n: int = src.len();
-    let m: int = needle.len();
+fn _find_after(src: string, from: i32, needle: string) -> i32 {
+    let n: i32 = src.len();
+    let m: i32 = needle.len();
     if m == 0 || from < 0 || from + m > n { return -1; }
-    for let i: int = from; i + m <= n; i++ {
+    for let i: i32 = from; i + m <= n; i++ {
         let mut hit: bool = true;
-        for let j: int = 0; j < m; j++ {
+        for let j: i32 = 0; j < m; j++ {
             if _at(src, i + j) != needle.at(j).to_int() { hit = false; break; }
         }
         if hit { return i; }
@@ -636,18 +636,18 @@ fn _find_after(src: string, from: int, needle: string) -> int {
     return -1;
 }
 
-fn _at(s: string, i: int) -> int { return s.at(i).to_int(); }
+fn _at(s: string, i: i32) -> i32 { return s.at(i).to_int(); }
 
 // Drop the line containing the dep entry for `name`. Matches both
 // `Dep::path("name", ...)` and `Dep::git("name", ...)`.
 fn _drop_dep_line(src: string, name: string) -> string {
-    let n: int = src.len();
+    let n: i32 = src.len();
     let needle_path: string = "Dep::path(\"".concat(name).concat("\"");
     let needle_git:  string = "Dep::git(\"".concat(name).concat("\"");
-    let mut line_start: int = 0;
+    let mut line_start: i32 = 0;
     let mut out: string = "";
     let mut dropped: bool = false;
-    for let i: int = 0; i < n; i++ {
+    for let i: i32 = 0; i < n; i++ {
         if _at(src, i) != 10 { continue; }
         let line: string = src.substring(line_start, i);
         if line.contains(needle_path) || line.contains(needle_git) {

@@ -79,7 +79,7 @@ impl CookieJar {
     /// ```
     pub fn ingest(self: *CookieJar, request_host: string,
                   set_cookie_lines: *Vector<string>) {
-        for let i: int = 0; i < set_cookie_lines.len(); i++ {
+        for let i: i32 = 0; i < set_cookie_lines.len(); i++ {
             let line: string = set_cookie_lines.get(i);
             let c: ?*Cookie = _parse_set_cookie(request_host, line);
             if c.has { self._add(c.val); }
@@ -88,7 +88,7 @@ impl CookieJar {
 
     fn _add(self: *CookieJar, c: *Cookie) {
         // Replace any existing cookie with the same (name, domain, path).
-        for let i: int = 0; i < self.cookies.len(); i++ {
+        for let i: i32 = 0; i < self.cookies.len(); i++ {
             let ex: *Cookie = self.cookies.get(i);
             if ex.name.eq(c.name) && ex.domain.eq(c.domain) && ex.path.eq(c.path) {
                 self.cookies.set(i, c);
@@ -109,7 +109,7 @@ impl CookieJar {
     pub fn header_value(self: *CookieJar, host: string, path: string,
                         is_secure: bool) -> string {
         let mut out: string = "";
-        for let i: int = 0; i < self.cookies.len(); i++ {
+        for let i: i32 = 0; i < self.cookies.len(); i++ {
             let c: *Cookie = self.cookies.get(i);
             if !_domain_match(host, c.domain) { continue; }
             if !path.starts_with(c.path) { continue; }
@@ -146,7 +146,7 @@ fn _parse_set_cookie(request_host: string, raw: string) -> ?*Cookie {
     let parts: *Vector<string> = raw.split(";");
     if parts.len() == 0 { return none(); }
     let head: string = parts.get(0).trim();
-    let eq: int = head.index_of("=");
+    let eq: i32 = head.index_of("=");
     if eq <= 0 { return none(); }
     let name: string = head.substring(0, eq).trim();
     let value: string = head.substring(eq + 1, head.len()).trim();
@@ -154,12 +154,12 @@ fn _parse_set_cookie(request_host: string, raw: string) -> ?*Cookie {
     c.domain = request_host;
     c.path = "/";
 
-    for let i: int = 1; i < parts.len(); i++ {
+    for let i: i32 = 1; i < parts.len(); i++ {
         let attr: string = parts.get(i).trim();
         let lower: string = attr.to_lower();
         if lower.eq("secure") { c.secure = true; continue; }
         if lower.eq("httponly") { c.http_only = true; continue; }
-        let aeq: int = attr.index_of("=");
+        let aeq: i32 = attr.index_of("=");
         if aeq <= 0 { continue; }
         let k: string = attr.substring(0, aeq).trim().to_lower();
         let v: string = attr.substring(aeq + 1, attr.len()).trim();
@@ -188,7 +188,7 @@ fn _domain_match(host: string, cookie_domain: string) -> bool {
     if h.eq(d) { return true; }
     if h.len() <= d.len() { return false; }
     if !h.ends_with(d) { return false; }
-    let dot_idx: int = h.len() - d.len() - 1;
+    let dot_idx: i32 = h.len() - d.len() - 1;
     if dot_idx < 0 { return false; }
     return h.at(dot_idx).to_int() == 46;
 }

@@ -33,7 +33,7 @@
 import stdlib::hashmap::*;
 
 pub struct StrFlag { pub default_value: string, pub value: string }
-pub struct IntFlag { pub default_value: int, pub value: int }
+pub struct IntFlag { pub default_value: i32, pub value: i32 }
 pub struct BoolFlag { pub default_value: bool, pub value: bool }
 
 pub struct ArgParser {
@@ -121,7 +121,7 @@ impl ArgParser {
     /// // --count=5    --count 5    -c 5
     /// ```
     pub fn add_int(self: *ArgParser, long: string, short: string,
-                   default_value: int, help: string) {
+                   default_value: i32, help: string) {
         let f: *IntFlag = malloc(sizeof(IntFlag)) as *IntFlag;
         f.default_value = default_value;
         f.value = default_value;
@@ -161,7 +161,7 @@ impl ArgParser {
     /// ```glide
     /// let n: int = p.get_int("count");
     /// ```
-    pub fn get_int(self: *ArgParser, long: string) -> int {
+    pub fn get_int(self: *ArgParser, long: string) -> i32 {
         return self.int_flags.get(long).value;
     }
 
@@ -195,7 +195,7 @@ impl ArgParser {
         return self.help_seen;
     }
 
-    fn _set_value(self: *ArgParser, long: string, val: string) -> !int {
+    fn _set_value(self: *ArgParser, long: string, val: string) -> !i32 {
         if !self.types.contains(long) {
             return err("unknown flag: --".concat(long));
         }
@@ -205,7 +205,7 @@ impl ArgParser {
             return ok(0);
         }
         if ty.eq("int") {
-            let r: !int = val.try_parse_int();
+            let r: !i32 = val.try_parse_int();
             if !r.ok { return err("flag --".concat(long).concat(" expects an integer, got: ").concat(val)); }
             self.int_flags.get(long).value = r.val;
             return ok(0);
@@ -230,9 +230,9 @@ impl ArgParser {
     /// let r: !int = p.parse_argv();
     /// if !r.ok { eprintln(r.err); env_exit(2); }
     /// ```
-    pub fn parse_argv(self: *ArgParser) -> !int {
+    pub fn parse_argv(self: *ArgParser) -> !i32 {
         let mut tokens: *Vector<string> = Vector::new();
-        for let i: int = 1; i < args_count(); i++ {
+        for let i: i32 = 1; i < args_count(); i++ {
             tokens.push(args_at(i));
         }
         return self.parse_tokens(tokens);
@@ -247,9 +247,9 @@ impl ArgParser {
     /// p.parse_tokens(toks);
     /// p.get_string("name");   // "alice"
     /// ```
-    pub fn parse_tokens(self: *ArgParser, tokens: *Vector<string>) -> !int {
-        let n: int = tokens.len();
-        let mut i: int = 0;
+    pub fn parse_tokens(self: *ArgParser, tokens: *Vector<string>) -> !i32 {
+        let n: i32 = tokens.len();
+        let mut i: i32 = 0;
         let mut all_positional: bool = false;
         while i < n {
             let tok: string = tokens.get(i);
@@ -267,11 +267,11 @@ impl ArgParser {
             // Long form: --name or --name=value
             if tok.len() > 2 && tok.at(0).to_int() == 45 && tok.at(1).to_int() == 45 {
                 let body: string = tok.substring(2, tok.len());
-                let eq_pos: int = body.index_of("=");
+                let eq_pos: i32 = body.index_of("=");
                 if eq_pos >= 0 {
                     let name: string = body.substring(0, eq_pos);
                     let val:  string = body.substring(eq_pos + 1, body.len());
-                    let r: !int = self._set_value(name, val);
+                    let r: !i32 = self._set_value(name, val);
                     if !r.ok { return err(r.err); }
                     i = i + 1;
                     continue;
@@ -288,7 +288,7 @@ impl ArgParser {
                 if i + 1 >= n {
                     return err("flag --".concat(body).concat(" requires a value"));
                 }
-                let r: !int = self._set_value(body, tokens.get(i + 1));
+                let r: !i32 = self._set_value(body, tokens.get(i + 1));
                 if !r.ok { return err(r.err); }
                 i = i + 2;
                 continue;
@@ -312,7 +312,7 @@ impl ArgParser {
                 if i + 1 >= n {
                     return err("flag -".concat(s).concat(" requires a value"));
                 }
-                let r: !int = self._set_value(long, tokens.get(i + 1));
+                let r: !i32 = self._set_value(long, tokens.get(i + 1));
                 if !r.ok { return err(r.err); }
                 i = i + 2;
                 continue;
@@ -338,7 +338,7 @@ impl ArgParser {
             out = out.concat("\n").concat(self.desc).concat("\n");
         }
         out = out.concat("\nflags:\n");
-        for let i: int = 0; i < self.order.len(); i++ {
+        for let i: i32 = 0; i < self.order.len(); i++ {
             let name: string = self.order.get(i);
             let short: string = self.short_of.get(name);
             let ty: string = self.types.get(name);
@@ -387,15 +387,15 @@ impl ArgParser {
     pub fn free(self: *ArgParser) {
         // Free per-flag value structs.
         let snames: *Vector<string> = self.str_flags.keys();
-        for let i: int = 0; i < snames.len(); i++ {
+        for let i: i32 = 0; i < snames.len(); i++ {
             free(self.str_flags.get(snames.get(i)) as *void);
         }
         let inames: *Vector<string> = self.int_flags.keys();
-        for let i: int = 0; i < inames.len(); i++ {
+        for let i: i32 = 0; i < inames.len(); i++ {
             free(self.int_flags.get(inames.get(i)) as *void);
         }
         let bnames: *Vector<string> = self.bool_flags.keys();
-        for let i: int = 0; i < bnames.len(); i++ {
+        for let i: i32 = 0; i < bnames.len(); i++ {
             free(self.bool_flags.get(bnames.get(i)) as *void);
         }
         self.str_flags.free();
@@ -409,14 +409,14 @@ impl ArgParser {
     }
 }
 
-fn int_to_str(n: int) -> string {
+fn int_to_str(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut x: int = n;
+    let mut x: i32 = n;
     let mut neg: bool = false;
     if x < 0 { neg = true; x = 0 - x; }
     let mut s: string = "";
     while x > 0 {
-        let d: int = x % 10;
+        let d: i32 = x % 10;
         s = ((d + 48) as char).to_string().concat(s);
         x = x / 10;
     }

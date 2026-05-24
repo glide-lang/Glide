@@ -1,14 +1,14 @@
 // Plain int passed by value -> no arena involvement, safe.
-fn process(n: int) {
+fn process(n: i32) {
     println!(n);
 }
 
 fn outer() {
     let arena: *Arena = Arena::new(64);
     defer arena.free();
-    let p: *int = arena.alloc(sizeof(int)) as *int;
+    let p: *i32 = arena.alloc(sizeof(i32)) as *i32;
     *p = 7;
-    let copy: int = *p;            // copy value out of arena
+    let copy: i32 = *p;            // copy value out of arena
     spawn process(copy);           // ok: capturing the int by value
 }
 

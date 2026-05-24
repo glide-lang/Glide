@@ -9,7 +9,7 @@ fn _echo_handler(req: *HttpRequest) -> HttpResponse {
 }
 
 fn _server_thread() {
-    let r: !int = http_listen(45200, _echo_handler);
+    let r: !i32 = http_listen(45200, _echo_handler);
     if !r.ok { println!("server: ${r.err}"); }
 }
 
@@ -18,7 +18,7 @@ fn _start_server() {
     sleep_ms(200);
 }
 
-fn test_get_returns_200() -> int {
+fn test_get_returns_200() -> i32 {
     _start_server();
     let url: string = "http://127.0.0.1:45200/hello";
     let r: !*HttpResponse = http_get(url);
@@ -27,7 +27,7 @@ fn test_get_returns_200() -> int {
     return 0;
 }
 
-fn test_get_body_includes_path() -> int {
+fn test_get_body_includes_path() -> i32 {
     let url: string = "http://127.0.0.1:45200/foo/bar";
     let r: !*HttpResponse = http_get(url);
     assert!(r.ok);
@@ -35,7 +35,7 @@ fn test_get_body_includes_path() -> int {
     return 0;
 }
 
-fn test_get_response_headers_present() -> int {
+fn test_get_response_headers_present() -> i32 {
     let url: string = "http://127.0.0.1:45200/custom";
     let r: !*HttpResponse = http_get(url);
     assert!(r.ok);
@@ -43,7 +43,7 @@ fn test_get_response_headers_present() -> int {
     return 0;
 }
 
-fn test_post_json_works() -> int {
+fn test_post_json_works() -> i32 {
     let url: string = "http://127.0.0.1:45200/api/post";
     let body: string = "{\"k\":1}";
     let r: !*HttpResponse = http_post_json(url, body);

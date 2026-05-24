@@ -45,7 +45,7 @@ import stdlib::net::*;
 import stdlib::os::*;
 import stdlib::hashmap::*;
 
-extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 // File-private C global so listen_workers can stash the router for the
 // SM dispatcher to recover on each request. Single router per process,
@@ -64,17 +64,17 @@ c_raw! {
 // Same C HTTP parser ABI the http.glide server loop uses. Re-declared
 // here so the router can run its own accept loop without round-tripping
 // through a fn-pointer handler.
-extern fn hp_parse_glide(buf: *void, len: int) -> *void;
+extern fn hp_parse_glide(buf: *void, len: i32) -> *void;
 extern fn hp_glide_method(g: *void) -> string;
 extern fn hp_glide_path(g: *void) -> string;
 extern fn hp_glide_version(g: *void) -> string;
 extern fn hp_glide_headers_block(g: *void) -> string;
 extern fn hp_glide_body(g: *void) -> string;
 extern fn hp_glide_free(g: *void);
-extern fn hp_glide_wants_close(g: *void) -> int;
-extern fn hp_build_response(status: int, status_txt: string,
-                            body: *void, body_len: int,
-                            extra_headers: string, keep_alive: int) -> int;
+extern fn hp_glide_wants_close(g: *void) -> i32;
+extern fn hp_build_response(status: i32, status_txt: string,
+                            body: *void, body_len: i32,
+                            extra_headers: string, keep_alive: i32) -> i32;
 extern fn hp_resp_buf_ptr() -> *void;
 
 // ---- shared state pointer ---------------------------------------------
@@ -98,9 +98,9 @@ c_raw! {
 
 // ---- segment kinds ----------------------------------------------------
 
-pub const RS_LITERAL:  int = 0;
-pub const RS_PARAM:    int = 1;
-pub const RS_WILDCARD: int = 2;
+pub const RS_LITERAL:  i32 = 0;
+pub const RS_PARAM:    i32 = 1;
+pub const RS_WILDCARD: i32 = 2;
 
 /// One piece of a compiled route pattern.
 ///
@@ -109,7 +109,7 @@ pub const RS_WILDCARD: int = 2;
 /// rest of the path, captured under `text`). Wildcard segments can
 /// only appear last; later segments after a `*` are ignored.
 pub struct RouteSegment {
-    pub kind: int,
+    pub kind: i32,
     pub text: string,
 }
 
@@ -149,7 +149,7 @@ pub struct Router {
 /// circuits the chain — the rest of the middleware AND the route
 /// handler are skipped.
 pub struct Chain {
-    pub idx:     int,
+    pub idx:     i32,
     pub mws:     *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
     pub handler: fn(*HttpRequest) -> HttpResponse,
     pub req:     *HttpRequest,
@@ -183,7 +183,7 @@ pub fn chain_next(c: *Chain) -> HttpResponse {
 fn _split_nonempty(s: string) -> *Vector<string> {
     let parts: *Vector<string> = s.split("/");
     let out: *Vector<string> = Vector::new();
-    for let i: int = 0; i < parts.len(); i++ {
+    for let i: i32 = 0; i < parts.len(); i++ {
         let p: string = parts.get(i);
         if p.eq("") { continue; }
         out.push(p);
@@ -194,7 +194,7 @@ fn _split_nonempty(s: string) -> *Vector<string> {
 fn _compile_pattern(pattern: string) -> *Vector<RouteSegment> {
     let segs: *Vector<RouteSegment> = Vector::new();
     let parts: *Vector<string> = _split_nonempty(pattern);
-    for let i: int = 0; i < parts.len(); i++ {
+    for let i: i32 = 0; i < parts.len(); i++ {
         let p: string = parts.get(i);
         if p.starts_with(":") {
             segs.push(RouteSegment { kind: RS_PARAM, text: p.substring(1, p.len()) });
@@ -213,10 +213,10 @@ fn _compile_pattern(pattern: string) -> *Vector<RouteSegment> {
 fn _match_path(route_segs: *Vector<RouteSegment>, path: string,
                out: *HashMap<string>) -> bool {
     let parts: *Vector<string> = _split_nonempty(path);
-    let np: int = parts.len();
-    let ns: int = route_segs.len();
-    let mut i: int = 0;
-    let mut j: int = 0;
+    let np: i32 = parts.len();
+    let ns: i32 = route_segs.len();
+    let mut i: i32 = 0;
+    let mut j: i32 = 0;
     while i < ns && j < np {
         let seg: RouteSegment = route_segs.get(i);
         let part: string = parts.get(j);
@@ -233,7 +233,7 @@ fn _match_path(route_segs: *Vector<RouteSegment>, path: string,
             // matches even an empty tail (segment count == 0) so a
             // route like `/static/*rest` can match `/static`.
             let mut rest: string = "";
-            let mut k: int = j;
+            let mut k: i32 = j;
             while k < np {
                 if k > j { rest = rest.concat("/"); }
                 rest = rest.concat(parts.get(k));
@@ -260,7 +260,7 @@ fn _match_path(route_segs: *Vector<RouteSegment>, path: string,
 // e.g. `/foo..bar/baz` (literal name with two dots).
 fn _has_dotdot(path: string) -> bool {
     let parts: *Vector<string> = path.split("/");
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < parts.len() {
         if parts.get(i).eq("..") { return true; }
         i = i + 1;
@@ -282,16 +282,16 @@ fn _run_chain(parent_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
               local_mws:  *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
               handler:    fn(*HttpRequest) -> HttpResponse,
               req:        *HttpRequest) -> HttpResponse {
-    let plen: int = 0;
+    let plen: i32 = 0;
     if parent_mws != null { plen = parent_mws.len(); }
-    let llen: int = 0;
+    let llen: i32 = 0;
     if local_mws != null { llen = local_mws.len(); }
     if plen + llen == 0 {
         let h: fn(*HttpRequest) -> HttpResponse = handler;
         return h(req);
     }
     let combined: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < plen { combined.push(parent_mws.get(i)); i = i + 1; }
     i = 0;
     while i < llen { combined.push(local_mws.get(i)); i = i + 1; }
@@ -389,7 +389,7 @@ impl Router {
     /// sub-router after the call.
     pub fn scope(self: *Router, prefix: string, sub: *Router) -> *Router {
         let normalised: string = _normalise_prefix(prefix);
-        let mut i: int = 0;
+        let mut i: i32 = 0;
         while i < sub.routes.len() {
             let r: Route = sub.routes.get(i);
             let new_pattern: string = normalised.concat(r.pattern);
@@ -398,7 +398,7 @@ impl Router {
             // route handler. Plus any local_mws the sub-route
             // already carried (chained scopes).
             let mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
-            let mut j: int = 0;
+            let mut j: i32 = 0;
             while j < sub.mw.len() {
                 mws.push(sub.mw.get(j));
                 j = j + 1;
@@ -574,7 +574,7 @@ impl Router {
             return HttpResponse::with_status(400).text("bad path");
         }
         let method: string = req.method.to_upper();
-        for let i: int = 0; i < self.routes.len(); i++ {
+        for let i: i32 = 0; i < self.routes.len(); i++ {
             let route: Route = self.routes.get(i);
             if !route.method.eq(ANY_METHOD) && !route.method.eq(method) { continue; }
             let params: *HashMap<string> = HashMap::new();
@@ -591,7 +591,7 @@ impl Router {
 
     /// Release the route table and the router struct. Pair with `defer`.
     pub fn free(self: *Router) {
-        for let i: int = 0; i < self.routes.len(); i++ {
+        for let i: i32 = 0; i < self.routes.len(); i++ {
             let r: Route = self.routes.get(i);
             r.segments.free();
         }
@@ -609,7 +609,7 @@ impl Router {
     /// r.get("/", index);
     /// r.listen(8080);
     /// ```
-    pub fn listen(self: *Router, port: int) -> !int {
+    pub fn listen(self: *Router, port: i32) -> !i32 {
         let l: *Listener = Listener::bind(port);
         if !l.ok() { return err("bind failed"); }
         println!("http: listening on :", port);
@@ -636,7 +636,7 @@ impl Router {
     /// ```glide
     /// r.listen_workers(8080, 4);
     /// ```
-    pub fn listen_workers(self: *Router, port: int, n: int) -> !int {
+    pub fn listen_workers(self: *Router, port: i32, n: i32) -> !i32 {
         __glide_router_sm_set(self as *void);
         return http_listen_workers(port, n, _router_sm_dispatch);
     }
@@ -645,13 +645,13 @@ impl Router {
     /// need to block (database queries, downstream HTTP calls, chan
     /// synchronisation). Slower than `listen_workers` (~107k vs ~159k
     /// req/s on the reference 4-core box) but unrestricted.
-    pub fn listen_workers_blocking(self: *Router, port: int, n: int) -> !int {
+    pub fn listen_workers_blocking(self: *Router, port: i32, n: i32) -> !i32 {
         if os_has_reuseport_balance() {
             let probe: *Listener = Listener::bind_reuseport(port);
             if !probe.ok() { return err("bind failed"); }
             probe.close();
             println!("http: listening on :", port, " across ", n, " worker(s)");
-            let mut spawned: int = 1;
+            let mut spawned: i32 = 1;
             while spawned < n {
                 spawn_thread _router_accept_loop(port, self);
                 spawned = spawned + 1;
@@ -663,7 +663,7 @@ impl Router {
         let shared: *Listener = Listener::bind(port);
         if !shared.ok() { return err("bind failed"); }
         println!("http: listening on :", port, " across ", n, " worker(s) [shared fd]");
-        let mut spawned: int = 1;
+        let mut spawned: i32 = 1;
         while spawned < n {
             spawn_thread _router_accept_loop_shared(shared, self);
             spawned = spawned + 1;
@@ -687,7 +687,7 @@ fn _router_sm_dispatch(req: *HttpRequest) -> HttpResponse {
 fn _router_handle_conn(c: *Conn, r: *Router) {
     let buf: *u8 = malloc(8192) as *u8;
     while true {
-        let n: int = c.read(buf as *void, 8192);
+        let n: i32 = c.read(buf as *void, 8192);
         if n <= 0 { break; }
 
         // Per-request arena — see http.glide::_handle_conn for the
@@ -728,7 +728,7 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
     free(buf as *void);
 }
 
-fn _router_accept_loop(port: int, r: *Router) {
+fn _router_accept_loop(port: i32, r: *Router) {
     let l: *Listener = Listener::bind_reuseport(port);
     if !l.ok() { return; }
     _router_accept_loop_shared(l, r);

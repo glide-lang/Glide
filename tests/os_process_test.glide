@@ -1,50 +1,50 @@
 import stdlib::testing::*;
 import stdlib::os::*;
 
-fn test_os_pid_is_positive() -> int {
+fn test_os_pid_is_positive() -> i32 {
     assert!(os_pid() > 0);
     return 0;
 }
 
-fn test_os_ppid_returns_value() -> int {
+fn test_os_ppid_returns_value() -> i32 {
     if !os_is_posix() { return 0; }
-    let r: !int = os_ppid();
+    let r: !i32 = os_ppid();
     assert!(r.ok);
     assert!(r.val > 0);
     return 0;
 }
 
-fn test_os_uid_on_posix() -> int {
+fn test_os_uid_on_posix() -> i32 {
     if !os_is_posix() { return 0; }
-    let r: !int = os_uid();
+    let r: !i32 = os_uid();
     assert!(r.ok);
     assert!(r.val >= 0);
     return 0;
 }
 
-fn test_os_gid_on_posix() -> int {
+fn test_os_gid_on_posix() -> i32 {
     if !os_is_posix() { return 0; }
-    let r: !int = os_gid();
+    let r: !i32 = os_gid();
     assert!(r.ok);
     assert!(r.val >= 0);
     return 0;
 }
 
-fn test_os_username_non_empty() -> int {
+fn test_os_username_non_empty() -> i32 {
     let r: !string = os_username();
     assert!(r.ok);
     assert!(r.val.len() > 0);
     return 0;
 }
 
-fn test_os_hostname_non_empty() -> int {
+fn test_os_hostname_non_empty() -> i32 {
     let r: !string = os_hostname();
     assert!(r.ok);
     assert!(r.val.len() > 0);
     return 0;
 }
 
-fn test_os_kernel_version_non_empty() -> int {
+fn test_os_kernel_version_non_empty() -> i32 {
     let r: !string = os_kernel_version();
     assert!(r.ok);
     assert!(r.val.len() > 0);

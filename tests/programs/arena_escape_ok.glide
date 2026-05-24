@@ -1,6 +1,6 @@
 // Arena passed from caller -> return is safe (caller owns lifetime).
-fn make_blob(arena: *Arena) -> *int {
-    let p: *int = arena.alloc(sizeof(int)) as *int;
+fn make_blob(arena: *Arena) -> *i32 {
+    let p: *i32 = arena.alloc(sizeof(i32)) as *i32;
     *p = 42;
     return p;        // ok: arena is a param
 }
@@ -8,6 +8,6 @@ fn make_blob(arena: *Arena) -> *int {
 fn main() {
     let arena: *Arena = Arena::new(64);
     defer arena.free();
-    let x: *int = make_blob(arena);
+    let x: *i32 = make_blob(arena);
     println!(*x);
 }

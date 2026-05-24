@@ -16,19 +16,19 @@
 extern fn now_ns() -> i64;
 
 pub struct Bencher {
-    pub n: int,
+    pub n: i32,
 }
 
 const _BENCH_TARGET_NS:  i64 = 500000000;   //   500 ms — minimum sample window
-const _BENCH_MAX_ITERS:  int = 100000000;   // 100 M — hard ceiling
-const _BENCH_WARMUPS:    int = 3;
+const _BENCH_MAX_ITERS:  i32 = 100000000;   // 100 M — hard ceiling
+const _BENCH_WARMUPS:    i32 = 3;
 
 // Process-wide counters live in C-side static vars so `bench_summary`
 // can read aggregate state without Glide-level mutable globals
 // (which the typer rejects at top level).
 extern fn _bench_bump_total();
-extern fn _bench_get_total() -> int;
-extern fn _bench_get_failed() -> int;
+extern fn _bench_get_total() -> i32;
+extern fn _bench_get_failed() -> i32;
 extern fn __glide_bench_consume(p: *void);
 
 c_raw! {
@@ -80,11 +80,11 @@ pub fn bench_run(name: string, f: fn(*Bencher)) {
     // Warmup: dwarfs out one-time init (lazy module loaders, the
     // first malloc, jit-style hot-path priming on the C side).
     b.n = 1;
-    for let i: int = 0; i < _BENCH_WARMUPS; i++ { f(b); }
+    for let i: i32 = 0; i < _BENCH_WARMUPS; i++ { f(b); }
 
-    let mut n: int = 100;
+    let mut n: i32 = 100;
     let mut elapsed: i64 = 0;
-    let mut last_n: int = n;
+    let mut last_n: i32 = n;
     while true {
         b.n = n;
         let t0: i64 = now_ns();
@@ -96,7 +96,7 @@ pub fn bench_run(name: string, f: fn(*Bencher)) {
         // Scale by the ratio of (target / elapsed), but cap each jump
         // at 10x so a near-instant first pass doesn't immediately blow
         // through the iter ceiling.
-        let next_n: int = _scale_iters(n, elapsed);
+        let next_n: i32 = _scale_iters(n, elapsed);
         if next_n <= n { n = n + 1; }
         else { n = next_n; }
     }
@@ -109,13 +109,13 @@ pub fn bench_run(name: string, f: fn(*Bencher)) {
 
 /// Final summary line — total benches run.
 /// Returns the count of failed benches for an exit-code-friendly main.
-pub fn bench_summary() -> int {
+pub fn bench_summary() -> i32 {
     println!("");
     println!("bench result:", _bench_get_total(), "bench(es)");
     return _bench_get_failed();
 }
 
-fn _scale_iters(cur: int, elapsed: i64) -> int {
+fn _scale_iters(cur: i32, elapsed: i64) -> i32 {
     if elapsed <= 0 { return cur * 10; }
     let target: i64 = _BENCH_TARGET_NS;
     let mut factor: i64 = target / elapsed;
@@ -123,11 +123,11 @@ fn _scale_iters(cur: int, elapsed: i64) -> int {
     if factor > 10 { factor = 10; }
     let mut nxt: i64 = (cur as i64) * factor;
     if nxt > (_BENCH_MAX_ITERS as i64) { nxt = _BENCH_MAX_ITERS as i64; }
-    return nxt as int;
+    return nxt as i32;
 }
 
 // Single bench row: `<name>  <iters>  <ns/op>  (total <ms>)`.
-fn _print_row(name: string, iters: int, ns_per_op: i64, elapsed: i64) {
+fn _print_row(name: string, iters: i32, ns_per_op: i64, elapsed: i64) {
     let ms: i64 = elapsed / 1000000;
     println!(_pad_right(name, 36),
              _pad_left(_with_commas(iters as i64), 14),
@@ -135,19 +135,19 @@ fn _print_row(name: string, iters: int, ns_per_op: i64, elapsed: i64) {
              "(", ms, "ms total)");
 }
 
-fn _pad_right(s: string, width: int) -> string {
+fn _pad_right(s: string, width: i32) -> string {
     if s.len() >= width { return s; }
     let mut out: string = s;
-    let need: int = width - s.len();
-    for let i: int = 0; i < need; i++ { out = out.concat(" "); }
+    let need: i32 = width - s.len();
+    for let i: i32 = 0; i < need; i++ { out = out.concat(" "); }
     return out;
 }
 
-fn _pad_left(s: string, width: int) -> string {
+fn _pad_left(s: string, width: i32) -> string {
     if s.len() >= width { return s; }
     let mut out: string = "";
-    let need: int = width - s.len();
-    for let i: int = 0; i < need; i++ { out = out.concat(" "); }
+    let need: i32 = width - s.len();
+    for let i: i32 = 0; i < need; i++ { out = out.concat(" "); }
     return out.concat(s);
 }
 
@@ -158,9 +158,9 @@ fn _with_commas(n: i64) -> string {
     let mut v: i64 = n;
     if v < 0 { neg = true; v = -v; }
     let raw: string = _i64_to_str(v);
-    let len: int = raw.len();
+    let len: i32 = raw.len();
     let mut out: string = "";
-    for let i: int = 0; i < len; i++ {
+    for let i: i32 = 0; i < len; i++ {
         if i > 0 && ((len - i) % 3) == 0 { out = out.concat(","); }
         out = out.concat(raw.substring(i, i + 1));
     }
@@ -173,7 +173,7 @@ fn _i64_to_str(n: i64) -> string {
     let mut buf: string = "";
     let mut v: i64 = n;
     while v > 0 {
-        let d: int = (v % 10) as int;
+        let d: i32 = (v % 10) as i32;
         let digit: string = _digit_char(d);
         buf = digit.concat(buf);
         v = v / 10;
@@ -181,7 +181,7 @@ fn _i64_to_str(n: i64) -> string {
     return buf;
 }
 
-fn _digit_char(d: int) -> string {
+fn _digit_char(d: i32) -> string {
     if d == 0 { return "0"; }
     if d == 1 { return "1"; }
     if d == 2 { return "2"; }

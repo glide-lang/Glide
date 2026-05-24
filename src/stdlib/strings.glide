@@ -9,7 +9,7 @@
 /// string_join(v, "");     // "abc"
 /// ```
 pub fn string_join(parts: *Vector<string>, sep: string) -> string {
-    let n: int = parts.len();
+    let n: i32 = parts.len();
     if n == 0 {
         return "";
     }
@@ -18,7 +18,7 @@ pub fn string_join(parts: *Vector<string>, sep: string) -> string {
     }
 
     let mut out: string = parts.get(0);
-    let mut i: int = 1;
+    let mut i: i32 = 1;
     while i < n {
         out = out.concat(sep).concat(parts.get(i));
         i = i + 1;

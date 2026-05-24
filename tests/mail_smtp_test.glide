@@ -10,7 +10,7 @@ import stdlib::mail::smtp::*;
 // integration smoke (in /tmp during development) does the byte-level
 // inspection.
 
-fn _fake_smtp(port: int) {
+fn _fake_smtp(port: i32) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("220 fake.example.com SMTP service ready\r\n");
@@ -18,10 +18,10 @@ fn _fake_smtp(port: int) {
     let mut data_mode: bool = false;
     let mut data_acc: string = "";
     while true {
-        let n: int = c.read(buf as *void, 8192);
+        let n: i32 = c.read(buf as *void, 8192);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
 
         if data_mode {
@@ -53,18 +53,18 @@ fn _fake_smtp(port: int) {
     c.close(); l.close();
 }
 
-fn test_send_completes_full_state_machine() -> int {
+fn test_send_completes_full_state_machine() -> i32 {
     spawn_thread _fake_smtp(43525);
     sleep_ms(300);
     let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43525);
     let m: *Mail = Mail::new();
     m.from = "alice@x"; m.to.push("bob@x"); m.subject = "t"; m.body = "hi";
-    let r: !int = c.send(m);
+    let r: !i32 = c.send(m);
     assert!(r.ok);
     return 0;
 }
 
-fn test_multiple_recipients_all_succeed() -> int {
+fn test_multiple_recipients_all_succeed() -> i32 {
     spawn_thread _fake_smtp(43526);
     sleep_ms(300);
     let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43526);
@@ -72,21 +72,21 @@ fn test_multiple_recipients_all_succeed() -> int {
     m.from = "a@x"; m.to.push("to1@x"); m.to.push("to2@x");
     m.cc.push("cc1@x"); m.bcc.push("bcc1@x");
     m.subject = "s"; m.body = "b";
-    let r: !int = c.send(m);
+    let r: !i32 = c.send(m);
     assert!(r.ok);
     return 0;
 }
 
-fn _rejecting_server(port: int) {
+fn _rejecting_server(port: i32) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("220 fake ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: int = c.read(buf as *void, 4096);
+        let n: i32 = c.read(buf as *void, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
         let upper: string = s.to_upper().trim();
         if upper.starts_with("EHLO") {
@@ -104,19 +104,19 @@ fn _rejecting_server(port: int) {
 
 // ---- AUTH LOGIN flow ----
 
-fn _login_only_server(port: int) {
+fn _login_only_server(port: i32) {
     let l: *Listener = Listener::bind(port);
     let c: *Conn = l.accept();
     c.write_str("220 fake ready\r\n");
     let buf: *u8 = malloc(8192) as *u8;
-    let mut step: int = 0;
+    let mut step: i32 = 0;
     let mut data_mode: bool = false;
     let mut data_acc: string = "";
     while true {
-        let n: int = c.read(buf as *void, 8192);
+        let n: i32 = c.read(buf as *void, 8192);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
-        for let i: int = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
+        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
         if data_mode {
             data_acc = data_acc.concat(s);
@@ -142,7 +142,7 @@ fn _login_only_server(port: int) {
     c.close(); l.close();
 }
 
-fn test_auth_login_auto_detected_from_ehlo() -> int {
+fn test_auth_login_auto_detected_from_ehlo() -> i32 {
     spawn_thread _login_only_server(43528);
     sleep_ms(300);
     let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43528);
@@ -151,12 +151,12 @@ fn test_auth_login_auto_detected_from_ehlo() -> int {
     c.username = u; c.password = p;
     let m: *Mail = Mail::new();
     m.from = "a@x"; m.to.push("b@x"); m.subject = "s"; m.body = "y";
-    let r: !int = c.send(m);
+    let r: !i32 = c.send(m);
     assert!(r.ok);
     return 0;
 }
 
-fn test_auth_login_explicit_method() -> int {
+fn test_auth_login_explicit_method() -> i32 {
     spawn_thread _login_only_server(43529);
     sleep_ms(300);
     let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43529);
@@ -166,18 +166,18 @@ fn test_auth_login_explicit_method() -> int {
     c.username = u; c.password = p;
     let m: *Mail = Mail::new();
     m.from = "a@x"; m.to.push("b@x"); m.subject = "s"; m.body = "y";
-    let r: !int = c.send(m);
+    let r: !i32 = c.send(m);
     assert!(r.ok);
     return 0;
 }
 
-fn test_client_surfaces_server_550_error() -> int {
+fn test_client_surfaces_server_550_error() -> i32 {
     spawn_thread _rejecting_server(43527);
     sleep_ms(300);
     let c: *SmtpClient = SmtpClient::new("127.0.0.1", 43527);
     let m: *Mail = Mail::new();
     m.from = "x@x"; m.to.push("y@x"); m.subject = "s"; m.body = "b";
-    let r: !int = c.send(m);
+    let r: !i32 = c.send(m);
     assert_not!(r.ok);
     assert!(r.err.contains("550"));
     return 0;

@@ -4,14 +4,14 @@ import stdlib::http::route::*;
 import stdlib::json::*;
 
 pub struct User {
-    pub id: int,
+    pub id: i32,
     pub name: string,
     pub active: bool,
 }
 
 pub struct UserList {
     pub users: *Vector<User>,
-    pub total: int,
+    pub total: i32,
 }
 
 @get("/health")
@@ -20,7 +20,7 @@ fn health() -> HttpResponse {
 }
 
 @get("/users/:id")
-fn show(id: Path<int>) -> Json<User> {
+fn show(id: Path<i32>) -> Json<User> {
     return Json::wrap(User { id: id.val, name: "alice", active: true });
 }
 

@@ -57,19 +57,19 @@ import ast;
 
 // ---- IValue tagged union ----------------------------------------------
 
-pub const IV_NULL:    int = 0;
-pub const IV_INT:     int = 1;
-pub const IV_BOOL:    int = 2;
-pub const IV_STRING:  int = 3;
-pub const IV_F64:     int = 4;
-pub const IV_CHAR:    int = 5;
-pub const IV_PTR:     int = 6;     // wraps a *Stmt/*Expr/*Type/*Field/*Param/*Attr
-pub const IV_VECTOR:  int = 7;     // *Vector<IValue>
-pub const IV_HASHMAP: int = 8;     // *HashMap<IValue>
+pub const IV_NULL:    i32 = 0;
+pub const IV_INT:     i32 = 1;
+pub const IV_BOOL:    i32 = 2;
+pub const IV_STRING:  i32 = 3;
+pub const IV_F64:     i32 = 4;
+pub const IV_CHAR:    i32 = 5;
+pub const IV_PTR:     i32 = 6;     // wraps a *Stmt/*Expr/*Type/*Field/*Param/*Attr
+pub const IV_VECTOR:  i32 = 7;     // *Vector<IValue>
+pub const IV_HASHMAP: i32 = 8;     // *HashMap<IValue>
 
 pub struct IValue {
-    pub kind: int,
-    pub i: int,
+    pub kind: i32,
+    pub i: i32,
     pub b: bool,
     pub s: string,
     pub f: f64,
@@ -87,7 +87,7 @@ pub fn iv_null() -> IValue {
     };
 }
 
-pub fn iv_int(n: int) -> IValue {
+pub fn iv_int(n: i32) -> IValue {
     let mut v: IValue = iv_null();
     v.kind = IV_INT;
     v.i = n;
@@ -141,11 +141,11 @@ pub fn iv_hashmap(map: *HashMap<IValue>) -> IValue {
 
 // Control-flow flag set by stmts. Loops and call boundaries inspect it
 // to decide whether to keep going / unwind.
-pub const CF_NORMAL:   int = 0;
-pub const CF_RETURN:   int = 1;
-pub const CF_BREAK:    int = 2;
-pub const CF_CONTINUE: int = 3;
-pub const CF_ERROR:    int = 4;
+pub const CF_NORMAL:   i32 = 0;
+pub const CF_RETURN:   i32 = 1;
+pub const CF_BREAK:    i32 = 2;
+pub const CF_CONTINUE: i32 = 3;
+pub const CF_ERROR:    i32 = 4;
 
 pub struct Interp {
     // Stack of scopes. Each scope is name -> IValue. interp_call pushes
@@ -161,7 +161,7 @@ pub struct Interp {
     // Control-flow signal. Set to CF_RETURN by ST_RETURN, CF_BREAK by
     // ST_BREAK, CF_CONTINUE by ST_CONTINUE. interp_call resets it to
     // CF_NORMAL on entry; loops drain it on each iteration.
-    pub control: int,
+    pub control: i32,
 
     // Value carried by ST_RETURN until interp_call picks it up.
     pub return_val: IValue,
@@ -178,8 +178,8 @@ pub struct Interp {
     // reference a caller-side ident. current_call_id is 0 when no
     // macro is executing — saves the suffix-injection branch from
     // firing on AST built outside a macro context.
-    pub next_call_id: int,
-    pub current_call_id: int,
+    pub next_call_id: i32,
+    pub current_call_id: i32,
 
     // Diagnostics tracking — interp_stmt / interp_expr keep
     // current_macro_line/col pointing at the AST node currently
@@ -188,11 +188,11 @@ pub struct Interp {
     // fn's origin file for the same purpose. The expander seeds
     // current_use_* before each invocation so diagnostics also
     // surface the @derive / @<name> use site.
-    pub current_macro_line: int,
-    pub current_macro_col: int,
+    pub current_macro_line: i32,
+    pub current_macro_col: i32,
     pub current_macro_origin: string,
-    pub current_use_line: int,
-    pub current_use_col: int,
+    pub current_use_line: i32,
+    pub current_use_col: i32,
     pub current_use_origin: string,
 
     // Program snapshot exposed to macros via `__program__()`. The
@@ -245,7 +245,7 @@ impl Interp {
     // Macro fn bodies typically reach helpers in the same module via
     // plain ident calls.
     pub fn register_fns(self: *Interp, program: *Vector<Stmt>) {
-        for let i: int = 0; i < program.len(); i++ {
+        for let i: i32 = 0; i < program.len(); i++ {
             let s: Stmt = program.get(i);
             if s.kind == ST_FN && s.name != null && !s.name.eq("") {
                 self.user_fns.insert(s.name, s);
@@ -279,7 +279,7 @@ impl Interp {
 
     // Called by the expander before each interp_call so error
     // messages can blame the @derive / @<name> use site too.
-    pub fn set_use_site(self: *Interp, line: int, col: int, origin: string) {
+    pub fn set_use_site(self: *Interp, line: i32, col: i32, origin: string) {
         self.current_use_line = line;
         self.current_use_col = col;
         self.current_use_origin = origin;
@@ -296,13 +296,13 @@ fn scope_get(it: *Interp, name: string) -> IValue {
         it.err("scope_get: empty scope stack");
         return iv_null();
     }
-    let mut i: int = it.scopes.len() - 1;
+    let mut i: i32 = it.scopes.len() - 1;
     while i >= 0 {
         let sc: *HashMap<IValue> = it.scopes.get(i);
         if sc.contains(name) { return sc.get(name); }
         i = i - 1;
     }
-    let k: int = _well_known_const(name);
+    let k: i32 = _well_known_const(name);
     if k >= 0 { return iv_int(k); }
     it.err("undefined name: ".concat(name));
     return iv_null();
@@ -311,7 +311,7 @@ fn scope_get(it: *Interp, name: string) -> IValue {
 // Well-known top-level consts macros routinely reach for. Keeps
 // scope_get O(1) (linear in the number of well-known names) without
 // having to crawl every `pub const` in the program.
-fn _well_known_const(name: string) -> int {
+fn _well_known_const(name: string) -> i32 {
     if name.eq("ST_LET") { return ST_LET; }
     if name.eq("ST_RETURN") { return ST_RETURN; }
     if name.eq("ST_EXPR") { return ST_EXPR; }
@@ -383,7 +383,7 @@ fn scope_define(it: *Interp, name: string, v: IValue) {
 // when the name isn't found anywhere — mirrors Glide's `let mut`
 // semantics where the binding is fixed at first declaration.
 fn scope_assign(it: *Interp, name: string, v: IValue) {
-    let mut i: int = it.scopes.len() - 1;
+    let mut i: i32 = it.scopes.len() - 1;
     while i >= 0 {
         let sc: *HashMap<IValue> = it.scopes.get(i);
         if sc.contains(name) { sc.insert(name, v); return; }
@@ -398,12 +398,12 @@ fn scope_assign(it: *Interp, name: string, v: IValue) {
 // the fn returned (or iv_null() if it didn't return one explicitly,
 // or an error happened during execution — check it.diagnostics).
 pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue {
-    let saved_control: int = it.control;
+    let saved_control: i32 = it.control;
     let saved_return: IValue = it.return_val;
-    let saved_call_id: int = it.current_call_id;
+    let saved_call_id: i32 = it.current_call_id;
     let saved_macro_origin: string = it.current_macro_origin;
-    let saved_macro_line: int = it.current_macro_line;
-    let saved_macro_col: int = it.current_macro_col;
+    let saved_macro_line: i32 = it.current_macro_line;
+    let saved_macro_col: i32 = it.current_macro_col;
     if fn_stmt != null && fn_stmt.origin != null && !fn_stmt.origin.eq("") {
         it.current_macro_origin = fn_stmt.origin;
     }
@@ -422,7 +422,7 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
 
     let scope: *HashMap<IValue> = HashMap::new();
     if fn_stmt.fn_params != null {
-        for let i: int = 0; i < fn_stmt.fn_params.len(); i++ {
+        for let i: i32 = 0; i < fn_stmt.fn_params.len(); i++ {
             let p: Param = fn_stmt.fn_params.get(i);
             let val: IValue = iv_null();
             if i < args.len() { scope.insert(p.name, args.get(i)); }
@@ -432,7 +432,7 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
     it.scopes.push(scope);
 
     if fn_stmt.fn_body != null {
-        for let i: int = 0; i < fn_stmt.fn_body.len(); i++ {
+        for let i: i32 = 0; i < fn_stmt.fn_body.len(); i++ {
             let stmt: Stmt = fn_stmt.fn_body.get(i);
             interp_stmt(it, &stmt);
             if it.control == CF_RETURN { break; }
@@ -536,7 +536,7 @@ fn interp_block(it: *Interp, body: *Vector<Stmt>) {
     if body == null { return; }
     let block_scope: *HashMap<IValue> = HashMap::new();
     it.scopes.push(block_scope);
-    for let i: int = 0; i < body.len(); i++ {
+    for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         interp_stmt(it, &s);
         if it.control != CF_NORMAL { break; }
@@ -552,7 +552,7 @@ pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
         it.current_macro_line = e.line;
         it.current_macro_col = e.column;
     }
-    if e.kind == EX_INT { return iv_int(e.int_val as int); }
+    if e.kind == EX_INT { return iv_int(e.int_val as i32); }
     if e.kind == EX_BOOL { return iv_bool(e.bool_val); }
     if e.kind == EX_STRING { return iv_string(e.str_val); }
     if e.kind == EX_NULL { return iv_null(); }
@@ -572,7 +572,7 @@ pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
         // recursion); they're left as their stringified form.
         let interp_args: *Vector<IValue> = Vector::new();
         if e.args != null {
-            for let i: int = 0; i < e.args.len(); i++ {
+            for let i: i32 = 0; i < e.args.len(); i++ {
                 let arg_expr: Expr = e.args.get(i);
                 interp_args.push(interp_expr(it, &arg_expr));
             }
@@ -589,7 +589,7 @@ pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
             it.err("`++` / `--` requires int operand in macro body");
             return iv_null();
         }
-        let delta: int = 1;
+        let delta: i32 = 1;
         if e.kind == EX_POSTDEC { delta = -1; }
         scope_assign(it, e.lhs.str_val, iv_int(old.i + delta));
         return old;
@@ -763,7 +763,7 @@ fn interp_call_expr(it: *Interp, e: *Expr) -> IValue {
     // Evaluate args left-to-right.
     let args: *Vector<IValue> = Vector::new();
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             let v: IValue = interp_expr(it, &a);
             if it.control == CF_ERROR { return iv_null(); }
@@ -820,7 +820,7 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
     if name.eq("__program__") {
         let out: *Vector<IValue> = Vector::new();
         if it.program != null {
-            for let i: int = 0; i < it.program.len(); i++ {
+            for let i: i32 = 0; i < it.program.len(); i++ {
                 let st: Stmt = it.program.get(i);
                 let ps: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
                 *ps = st;
@@ -851,7 +851,7 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
     // AST primitive constructors (stdlib::ast.glide). Only the subset
     // macros realistically need is wired up. Add more on demand.
     if name.eq("expr_int") {
-        let n: int = _arg_int(it, args, 0);
+        let n: i32 = _arg_int(it, args, 0);
         return iv_ptr(expr_int(n, 0, 0) as *void, "Expr");
     }
     if name.eq("expr_string") {
@@ -919,13 +919,13 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         return iv_ptr(ty_result(inner) as *void, "Type");
     }
     if name.eq("expr_binary") {
-        let op: int = _arg_int(it, args, 0);
+        let op: i32 = _arg_int(it, args, 0);
         let lhs: *Expr = _arg_ptr(it, args, 1, "Expr") as *Expr;
         let rhs: *Expr = _arg_ptr(it, args, 2, "Expr") as *Expr;
         return iv_ptr(expr_binary(op, lhs, rhs) as *void, "Expr");
     }
     if name.eq("expr_unary") {
-        let op: int = _arg_int(it, args, 0);
+        let op: i32 = _arg_int(it, args, 0);
         let operand: *Expr = _arg_ptr(it, args, 1, "Expr") as *Expr;
         return iv_ptr(expr_unary(op, operand, 0, 0) as *void, "Expr");
     }
@@ -957,7 +957,7 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         return iv_ptr(expr_index(obj, idx) as *void, "Expr");
     }
     if name.eq("expr_assign") {
-        let op: int = _arg_int(it, args, 0);
+        let op: i32 = _arg_int(it, args, 0);
         let lhs: *Expr = _arg_ptr(it, args, 1, "Expr") as *Expr;
         let rhs: *Expr = _arg_ptr(it, args, 2, "Expr") as *Expr;
         return iv_ptr(expr_assign(op, lhs, rhs) as *void, "Expr");
@@ -1074,7 +1074,7 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         // diagnostic only — write the stringified args to the
         // interpreter's diagnostic channel, not to stdout.
         let mut out: string = "";
-        for let i: int = 0; i < args.len(); i++ {
+        for let i: i32 = 0; i < args.len(); i++ {
             if i > 0 { out = out.concat(" "); }
             out = out.concat(_iv_to_display(args.get(i)));
         }
@@ -1111,15 +1111,15 @@ fn string_method(it: *Interp, s: string, name: string, args: *Vector<IValue>) ->
     if name.eq("contains") { return iv_bool(s.contains(_arg_string(it, args, 0))); }
     if name.eq("index_of") { return iv_int(s.index_of(_arg_string(it, args, 0))); }
     if name.eq("substring") {
-        let a: int = _arg_int(it, args, 0);
-        let b: int = _arg_int(it, args, 1);
+        let a: i32 = _arg_int(it, args, 0);
+        let b: i32 = _arg_int(it, args, 1);
         return iv_string(s.substring(a, b));
     }
     if name.eq("to_upper") { return iv_string(s.to_upper()); }
     if name.eq("to_lower") { return iv_string(s.to_lower()); }
     if name.eq("trim") { return iv_string(s.trim()); }
     if name.eq("at") {
-        let i: int = _arg_int(it, args, 0);
+        let i: i32 = _arg_int(it, args, 0);
         return iv_char(s.at(i));
     }
     if name.eq("to_string") { return iv_string(s); }
@@ -1140,12 +1140,12 @@ fn vector_method(it: *Interp, v: *Vector<IValue>, name: string, args: *Vector<IV
         return v.pop();
     }
     if name.eq("get") {
-        let i: int = _arg_int(it, args, 0);
+        let i: i32 = _arg_int(it, args, 0);
         if i < 0 || i >= v.len() { it.err("vector get out of range"); return iv_null(); }
         return v.get(i);
     }
     if name.eq("set") {
-        let i: int = _arg_int(it, args, 0);
+        let i: i32 = _arg_int(it, args, 0);
         if i < 0 || i >= v.len() { it.err("vector set out of range"); return iv_null(); }
         if args.len() < 2 { it.err("set requires 2 args"); return iv_null(); }
         v.set(i, args.get(1));
@@ -1213,7 +1213,7 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
         // Field into a fresh IV_PTR.
         let out: *Vector<IValue> = Vector::new();
         if s.struct_fields != null {
-            for let i: int = 0; i < s.struct_fields.len(); i++ {
+            for let i: i32 = 0; i < s.struct_fields.len(); i++ {
                 let fld: Field = s.struct_fields.get(i);
                 let pf: *Field = malloc(sizeof(Field)) as *Field;
                 *pf = fld;
@@ -1225,7 +1225,7 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
     if f.eq("type_params") {
         let out: *Vector<IValue> = Vector::new();
         if s.type_params != null {
-            for let i: int = 0; i < s.type_params.len(); i++ {
+            for let i: i32 = 0; i < s.type_params.len(); i++ {
                 out.push(iv_string(s.type_params.get(i)));
             }
         }
@@ -1234,7 +1234,7 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
     if f.eq("attrs") {
         let out: *Vector<IValue> = Vector::new();
         if s.attrs != null {
-            for let i: int = 0; i < s.attrs.len(); i++ {
+            for let i: i32 = 0; i < s.attrs.len(); i++ {
                 let a: Attr = s.attrs.get(i);
                 let pa: *Attr = malloc(sizeof(Attr)) as *Attr;
                 *pa = a;
@@ -1250,7 +1250,7 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
     if f.eq("fn_params") {
         let out: *Vector<IValue> = Vector::new();
         if s.fn_params != null {
-            for let i: int = 0; i < s.fn_params.len(); i++ {
+            for let i: i32 = 0; i < s.fn_params.len(); i++ {
                 let p: Param = s.fn_params.get(i);
                 let pp: *Param = malloc(sizeof(Param)) as *Param;
                 *pp = p;
@@ -1262,7 +1262,7 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
     if f.eq("fn_body") {
         let out: *Vector<IValue> = Vector::new();
         if s.fn_body != null {
-            for let i: int = 0; i < s.fn_body.len(); i++ {
+            for let i: i32 = 0; i < s.fn_body.len(); i++ {
                 let bs: Stmt = s.fn_body.get(i);
                 let pp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
                 *pp = bs;
@@ -1278,7 +1278,7 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
 fn expr_field(it: *Interp, e: *Expr, f: string) -> IValue {
     if e == null { return iv_null(); }
     if f.eq("kind") { return iv_int(e.kind); }
-    if f.eq("int_val") { return iv_int(e.int_val as int); }
+    if f.eq("int_val") { return iv_int(e.int_val as i32); }
     if f.eq("str_val") { return iv_string(e.str_val); }
     if f.eq("bool_val") { return iv_bool(e.bool_val); }
     if f.eq("op_code") { return iv_int(e.op_code); }
@@ -1312,7 +1312,7 @@ fn type_field(it: *Interp, t: *Type, f: string) -> IValue {
     if f.eq("args") {
         let out: *Vector<IValue> = Vector::new();
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 let a: Type = t.args.get(i);
                 let pa: *Type = malloc(sizeof(Type)) as *Type;
                 *pa = a;
@@ -1356,7 +1356,7 @@ fn attr_field(it: *Interp, a: *Attr, f: string) -> IValue {
     if f.eq("args") {
         let out: *Vector<IValue> = Vector::new();
         if a.args != null {
-            for let i: int = 0; i < a.args.len(); i++ {
+            for let i: i32 = 0; i < a.args.len(); i++ {
                 let e: Expr = a.args.get(i);
                 let pe: *Expr = malloc(sizeof(Expr)) as *Expr;
                 *pe = e;
@@ -1377,21 +1377,21 @@ fn ptr_method(it: *Interp, recv: IValue, name: string, args: *Vector<IValue>) ->
 
 // ---- arg coercion helpers --------------------------------------------
 
-fn _arg_int(it: *Interp, args: *Vector<IValue>, i: int) -> int {
+fn _arg_int(it: *Interp, args: *Vector<IValue>, i: i32) -> i32 {
     if i >= args.len() { it.err("missing arg"); return 0; }
     let v: IValue = args.get(i);
     if v.kind != IV_INT { it.err("expected int arg"); return 0; }
     return v.i;
 }
 
-fn _arg_string(it: *Interp, args: *Vector<IValue>, i: int) -> string {
+fn _arg_string(it: *Interp, args: *Vector<IValue>, i: i32) -> string {
     if i >= args.len() { it.err("missing arg"); return ""; }
     let v: IValue = args.get(i);
     if v.kind != IV_STRING { it.err("expected string arg"); return ""; }
     return v.s;
 }
 
-fn _arg_bool(it: *Interp, args: *Vector<IValue>, i: int) -> bool {
+fn _arg_bool(it: *Interp, args: *Vector<IValue>, i: i32) -> bool {
     if i >= args.len() { it.err("missing arg"); return false; }
     let v: IValue = args.get(i);
     if v.kind != IV_BOOL { it.err("expected bool arg"); return false; }
@@ -1405,7 +1405,7 @@ fn _arg_bool(it: *Interp, args: *Vector<IValue>, i: int) -> bool {
 fn _vec_to_stmt_vec(it: *Interp, v: IValue) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
     if v.kind != IV_VECTOR { return out; }
-    for let i: int = 0; i < v.vec.len(); i++ {
+    for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Stmt") && elem.p != null {
             let ps: *Stmt = elem.p as *Stmt;
@@ -1418,7 +1418,7 @@ fn _vec_to_stmt_vec(it: *Interp, v: IValue) -> *Vector<Stmt> {
 fn _vec_to_expr_vec(it: *Interp, v: IValue) -> *Vector<Expr> {
     let out: *Vector<Expr> = Vector::new();
     if v.kind != IV_VECTOR { return out; }
-    for let i: int = 0; i < v.vec.len(); i++ {
+    for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Expr") && elem.p != null {
             let pe: *Expr = elem.p as *Expr;
@@ -1431,7 +1431,7 @@ fn _vec_to_expr_vec(it: *Interp, v: IValue) -> *Vector<Expr> {
 fn _vec_to_param_vec(it: *Interp, v: IValue) -> *Vector<Param> {
     let out: *Vector<Param> = Vector::new();
     if v.kind != IV_VECTOR { return out; }
-    for let i: int = 0; i < v.vec.len(); i++ {
+    for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Param") && elem.p != null {
             let p: *Param = elem.p as *Param;
@@ -1444,7 +1444,7 @@ fn _vec_to_param_vec(it: *Interp, v: IValue) -> *Vector<Param> {
 fn _vec_to_field_vec(it: *Interp, v: IValue) -> *Vector<Field> {
     let out: *Vector<Field> = Vector::new();
     if v.kind != IV_VECTOR { return out; }
-    for let i: int = 0; i < v.vec.len(); i++ {
+    for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Field") && elem.p != null {
             let f: *Field = elem.p as *Field;
@@ -1457,14 +1457,14 @@ fn _vec_to_field_vec(it: *Interp, v: IValue) -> *Vector<Field> {
 fn _vec_to_string_vec(it: *Interp, v: IValue) -> *Vector<string> {
     let out: *Vector<string> = Vector::new();
     if v.kind != IV_VECTOR { return out; }
-    for let i: int = 0; i < v.vec.len(); i++ {
+    for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_STRING { out.push(elem.s); }
     }
     return out;
 }
 
-fn _arg_ptr(it: *Interp, args: *Vector<IValue>, i: int, want_tag: string) -> *void {
+fn _arg_ptr(it: *Interp, args: *Vector<IValue>, i: i32, want_tag: string) -> *void {
     if i >= args.len() { it.err("missing arg"); return null; }
     let v: IValue = args.get(i);
     if v.kind == IV_NULL { return null; }

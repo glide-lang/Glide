@@ -8,7 +8,7 @@ import stdlib::json::*;
 
 pub struct StructLegal {
     pub nome:  string,
-    pub idade: ?int,
+    pub idade: ?i32,
     pub extra: *JsonValue,
 }
 
@@ -26,7 +26,7 @@ impl JsonBind for StructLegal {
         let v: *JsonValue = JsonValue::object();
         v.obj_set("nome", JsonValue::string(self.nome));
         if self.idade.has {
-            v.obj_set("idade", JsonValue::int(self.idade.val));
+            v.obj_set("idade", JsonValue::i32(self.idade.val));
         }
         if self.extra != null {
             v.obj_set("extra", self.extra);
@@ -66,7 +66,7 @@ fn _post(body: string) -> HttpResponse {
 
 // ---- tests ------------------------------------------------------------
 
-fn test_json_respond_round_trip() -> int {
+fn test_json_respond_round_trip() -> i32 {
     let r: HttpResponse = _post("{\"nome\":\"alice\"}");
     assert_eq!(r.status, 200);
     assert_str_eq!(r.header("Content-Type"), "application/json");
@@ -74,21 +74,21 @@ fn test_json_respond_round_trip() -> int {
     return 0;
 }
 
-fn test_json_respond_carries_optional() -> int {
+fn test_json_respond_carries_optional() -> i32 {
     let r: HttpResponse = _post("{\"nome\":\"bob\",\"idade\":30}");
     assert_eq!(r.status, 200);
     assert_str_eq!(r.body, "{\"nome\":\"bob\",\"idade\":30}");
     return 0;
 }
 
-fn test_json_respond_passes_dynamic_subtree() -> int {
+fn test_json_respond_passes_dynamic_subtree() -> i32 {
     let r: HttpResponse = _post("{\"nome\":\"c\",\"extra\":[1,2,3]}");
     assert_eq!(r.status, 200);
     assert!(r.body.index_of("\"extra\":[1,2,3]") >= 0);
     return 0;
 }
 
-fn test_into_response_for_httpresponse_is_identity() -> int {
+fn test_into_response_for_httpresponse_is_identity() -> i32 {
     // The trait surface should let bare HttpResponse flow through
     // unchanged so a handler can mix typed and raw replies.
     let r: HttpResponse = HttpResponse::ok().text("plain").into_response();
@@ -97,8 +97,8 @@ fn test_into_response_for_httpresponse_is_identity() -> int {
     return 0;
 }
 
-fn test_json_respond_with_value() -> int {
-    let i: ?int = some(25);
+fn test_json_respond_with_value() -> i32 {
+    let i: ?i32 = some(25);
     let s: StructLegal = StructLegal {
         nome:  "carol",
         idade: i,
@@ -111,13 +111,13 @@ fn test_json_respond_with_value() -> int {
     return 0;
 }
 
-fn test_invalid_body_still_400() -> int {
+fn test_invalid_body_still_400() -> i32 {
     let r: HttpResponse = _post("not json");
     assert_eq!(r.status, 400);
     return 0;
 }
 
-fn test_missing_required_still_422() -> int {
+fn test_missing_required_still_422() -> i32 {
     let r: HttpResponse = _post("{\"idade\":99}");
     assert_eq!(r.status, 422);
     return 0;

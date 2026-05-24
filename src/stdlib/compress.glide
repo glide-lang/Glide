@@ -4,8 +4,8 @@
 // Decoding is needed for the package manager's tarball fetch — github's
 // codeload endpoints only serve gzipped tar archives.
 
-extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
-extern fn __glide_gunzip_decode(input: string, in_len: int, out_len_ptr: *int) -> *void;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+extern fn __glide_gunzip_decode(input: string, in_len: i32, out_len_ptr: *i32) -> *void;
 
 c_raw! {
     #include <zlib.h>
@@ -73,6 +73,6 @@ c_raw! {
 ///     free(buf);
 /// }
 /// ```
-pub fn gzip_decode(input: string, in_len: int, out_len: *int) -> *void {
+pub fn gzip_decode(input: string, in_len: i32, out_len: *i32) -> *void {
     return __glide_gunzip_decode(input, in_len, out_len);
 }

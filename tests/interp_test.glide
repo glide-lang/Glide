@@ -47,7 +47,7 @@ fn _build_fact_fn() -> *Stmt {
 
 // ---- tests ------------------------------------------------------------
 
-fn test_add_two_ints() -> int {
+fn test_add_two_ints() -> i32 {
     let it: *Interp = Interp::new();
     let add_fn: *Stmt = _build_add_fn();
 
@@ -62,7 +62,7 @@ fn test_add_two_ints() -> int {
     return 0;
 }
 
-fn test_recursive_factorial() -> int {
+fn test_recursive_factorial() -> i32 {
     let it: *Interp = Interp::new();
     let fact_fn: *Stmt = _build_fact_fn();
     it.user_fns.insert("fact", *fact_fn);
@@ -76,7 +76,7 @@ fn test_recursive_factorial() -> int {
     return 0;
 }
 
-fn test_string_concat_via_method() -> int {
+fn test_string_concat_via_method() -> i32 {
     // fn greet(name: string) -> string { return "hi, ".concat(name); }
     let body: *Vector<Stmt> = Vector::new();
     let lit: *Expr = expr_string("hi, ", 0, 0);
@@ -98,7 +98,7 @@ fn test_string_concat_via_method() -> int {
     return 0;
 }
 
-fn test_for_loop_sum() -> int {
+fn test_for_loop_sum() -> i32 {
     // fn sum_to(n: int) -> int {
     //     let mut acc = 0;
     //     for let i = 0; i < n; i = i + 1 { acc = acc + i; }
@@ -133,7 +133,7 @@ fn test_for_loop_sum() -> int {
     return 0;
 }
 
-fn test_vector_intrinsic() -> int {
+fn test_vector_intrinsic() -> i32 {
     // fn make() -> int {
     //     let v = Vector::new();
     //     v.push(10); v.push(20); v.push(30);
@@ -167,7 +167,7 @@ fn test_vector_intrinsic() -> int {
     return 0;
 }
 
-fn test_diagnostic_on_undefined_name() -> int {
+fn test_diagnostic_on_undefined_name() -> i32 {
     // fn bad() -> int { return undefined_thing; }
     let body: *Vector<Stmt> = Vector::new();
     body.push(*stmt_return(expr_ident("undefined_thing", 0, 0), 0, 0));

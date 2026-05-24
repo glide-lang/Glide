@@ -1,13 +1,13 @@
 import stdlib::testing::*;
 import stdlib::net::ip::*;
 
-fn test_v4_ctor_and_str() -> int {
+fn test_v4_ctor_and_str() -> i32 {
     let ip: *IpAddr = IpAddr::v4(192, 168, 1, 50);
     assert_str_eq!(ip.to_string(), "192.168.1.50");
     return 0;
 }
 
-fn test_v4_loopback() -> int {
+fn test_v4_loopback() -> i32 {
     let ip: *IpAddr = IpAddr::loopback_v4();
     assert!(ip.is_loopback());
     assert!(ip.is_v4());
@@ -15,7 +15,7 @@ fn test_v4_loopback() -> int {
     return 0;
 }
 
-fn test_v4_private_ranges() -> int {
+fn test_v4_private_ranges() -> i32 {
     let a: *IpAddr = IpAddr::v4(10, 0, 0, 1);
     let b: *IpAddr = IpAddr::v4(172, 20, 5, 5);
     let c: *IpAddr = IpAddr::v4(192, 168, 1, 1);
@@ -27,7 +27,7 @@ fn test_v4_private_ranges() -> int {
     return 0;
 }
 
-fn test_v4_parse() -> int {
+fn test_v4_parse() -> i32 {
     let s: string = "10.20.30.40";
     let r: !*IpAddr = IpAddr::parse(s);
     assert!(r.ok);
@@ -35,14 +35,14 @@ fn test_v4_parse() -> int {
     return 0;
 }
 
-fn test_v4_parse_rejects_bad() -> int {
+fn test_v4_parse_rejects_bad() -> i32 {
     let s: string = "256.0.0.1";
     let r: !*IpAddr = IpAddr::parse(s);
     assert_not!(r.ok);
     return 0;
 }
 
-fn test_v6_loopback() -> int {
+fn test_v6_loopback() -> i32 {
     let ip: *IpAddr = IpAddr::loopback_v6();
     assert!(ip.is_loopback());
     assert!(ip.is_v6());
@@ -50,14 +50,14 @@ fn test_v6_loopback() -> int {
     return 0;
 }
 
-fn test_v6_unspec() -> int {
+fn test_v6_unspec() -> i32 {
     let ip: *IpAddr = IpAddr::unspec_v6();
     assert!(ip.is_unspecified());
     assert_str_eq!(ip.to_string(), "::");
     return 0;
 }
 
-fn test_v6_parse_compressed() -> int {
+fn test_v6_parse_compressed() -> i32 {
     let s: string = "2001:db8::1";
     let r: !*IpAddr = IpAddr::parse(s);
     assert!(r.ok);
@@ -65,14 +65,14 @@ fn test_v6_parse_compressed() -> int {
     return 0;
 }
 
-fn test_v6_parse_full() -> int {
+fn test_v6_parse_full() -> i32 {
     let s: string = "fe80:0:0:0:1:2:3:4";
     let r: !*IpAddr = IpAddr::parse(s);
     assert!(r.ok);
     return 0;
 }
 
-fn test_socketaddr_v4() -> int {
+fn test_socketaddr_v4() -> i32 {
     let s: string = "127.0.0.1:8080";
     let r: !*SocketAddr = SocketAddr::parse(s);
     assert!(r.ok);
@@ -81,7 +81,7 @@ fn test_socketaddr_v4() -> int {
     return 0;
 }
 
-fn test_socketaddr_v6() -> int {
+fn test_socketaddr_v6() -> i32 {
     let s: string = "[::1]:9000";
     let r: !*SocketAddr = SocketAddr::parse(s);
     assert!(r.ok);
@@ -90,7 +90,7 @@ fn test_socketaddr_v6() -> int {
     return 0;
 }
 
-fn test_ipaddr_eq() -> int {
+fn test_ipaddr_eq() -> i32 {
     let a: *IpAddr = IpAddr::v4(1, 2, 3, 4);
     let b: *IpAddr = IpAddr::v4(1, 2, 3, 4);
     let c: *IpAddr = IpAddr::v4(1, 2, 3, 5);

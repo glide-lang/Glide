@@ -18,9 +18,9 @@ import ast;
 
 const FMT_INDENT: string = "    ";
 
-fn fmt_indent(depth: int) -> string {
+fn fmt_indent(depth: i32) -> string {
     let mut s: string = "";
-    for let i: int = 0; i < depth; i++ { s = s.concat(FMT_INDENT); }
+    for let i: i32 = 0; i < depth; i++ { s = s.concat(FMT_INDENT); }
     return s;
 }
 
@@ -37,7 +37,7 @@ pub fn fmt_type(t: *Type) -> string {
     if t.kind == TY_GENERIC {
         let mut out: string = t.name.concat("<");
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let a: Type = t.args.get(i);
                 out = out.concat(fmt_type(&a));
@@ -48,7 +48,7 @@ pub fn fmt_type(t: *Type) -> string {
     if t.kind == TY_FNPTR {
         let mut out: string = "fn(";
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let a: Type = t.args.get(i);
                 out = out.concat(fmt_type(&a));
@@ -64,7 +64,7 @@ pub fn fmt_type(t: *Type) -> string {
 // Render a char literal back to Glide source. Common escapes get their
 // canonical form; printable ASCII is emitted literally where possible;
 // anything else uses `'\\xNN'` two-digit lowercase hex.
-fn fmt_char_lit(n: int) -> string {
+fn fmt_char_lit(n: i32) -> string {
     if n == 39 { return "'\\''"; }
     if n == 92 { return "'\\\\'"; }
     if n == 10 { return "'\\n'"; }
@@ -72,15 +72,15 @@ fn fmt_char_lit(n: int) -> string {
     if n == 13 { return "'\\r'"; }
     if n == 0  { return "'\\0'"; }
     let hex: string = "0123456789abcdef";
-    let mut high: int = (n / 16) % 16; if high < 0 { high = 0; }
-    let mut low: int = n % 16; if low < 0 { low = 0; }
+    let mut high: i32 = (n / 16) % 16; if high < 0 { high = 0; }
+    let mut low: i32 = n % 16; if low < 0 { low = 0; }
     return "'\\x".concat(hex.substring(high, high + 1))
                  .concat(hex.substring(low, low + 1)).concat("'");
 }
 
 // ---- Operators --------------------------------------------------------
 
-fn fmt_binop(op: int) -> string {
+fn fmt_binop(op: i32) -> string {
     if op == OP_ADD { return "+"; } if op == OP_SUB { return "-"; }
     if op == OP_MUL { return "*"; } if op == OP_DIV { return "/"; }
     if op == OP_MOD { return "%"; }
@@ -97,7 +97,7 @@ fn fmt_binop(op: int) -> string {
     return "?";
 }
 
-fn fmt_unop(op: int) -> string {
+fn fmt_unop(op: i32) -> string {
     if op == UN_NEG { return "-"; }
     if op == UN_NOT { return "!"; }
     if op == UN_DEREF { return "*"; }
@@ -135,7 +135,7 @@ pub fn fmt_expr(e: *Expr) -> string {
     if e.kind == EX_CALL {
         let mut out: string = fmt_expr(e.lhs).concat("(");
         if e.args != null {
-            for let i: int = 0; i < e.args.len(); i++ {
+            for let i: i32 = 0; i < e.args.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let a: Expr = e.args.get(i);
                 out = out.concat(fmt_expr(&a));
@@ -174,7 +174,7 @@ pub fn fmt_expr(e: *Expr) -> string {
         }
         out = out.concat(e.str_val).concat("!(");
         if e.args != null {
-            for let i: int = 0; i < e.args.len(); i++ {
+            for let i: i32 = 0; i < e.args.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let a: Expr = e.args.get(i);
                 out = out.concat(fmt_expr(&a));
@@ -192,7 +192,7 @@ pub fn fmt_expr(e: *Expr) -> string {
     if e.kind == EX_FNEXPR {
         let mut out: string = "fn(";
         if e.fn_expr_params != null {
-            for let i: int = 0; i < e.fn_expr_params.len(); i++ {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let p: Param = e.fn_expr_params.get(i);
                 out = out.concat(p.name).concat(": ").concat(fmt_type(p.ty));
@@ -202,7 +202,7 @@ pub fn fmt_expr(e: *Expr) -> string {
         if e.cast_to != null { out = out.concat(" -> ").concat(fmt_type(e.cast_to)); }
         out = out.concat(" { ");
         if e.fn_expr_body != null {
-            for let i: int = 0; i < e.fn_expr_body.len(); i++ {
+            for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
                 if i > 0 { out = out.concat(" "); }
                 let b: Stmt = e.fn_expr_body.get(i);
                 out = out.concat(fmt_stmt_inline(&b));
@@ -217,7 +217,7 @@ fn fmt_struct_lit(e: *Expr, prefix: string) -> string {
     let mut out: string = prefix.concat(e.str_val).concat(" {");
     if e.field_names != null && e.args != null && e.args.len() > 0 {
         out = out.concat(" ");
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             if i > 0 { out = out.concat(", "); }
             out = out.concat(e.field_names.get(i)).concat(": ");
             let v: Expr = e.args.get(i);
@@ -261,10 +261,10 @@ fn render_doc_lines(raw: string, pad: string) -> string {
     if raw == null { return ""; }
     if raw.eq("") { return ""; }
     let mut out: string = "";
-    let n: int = raw.len();
-    let mut i: int = 0;
+    let n: i32 = raw.len();
+    let mut i: i32 = 0;
     while i < n {
-        let mut j: int = i;
+        let mut j: i32 = i;
         while j < n && raw.at(j).to_int() != 10 { j = j + 1; }
         let line: string = raw.substring(i, j);
         out = out.concat(pad).concat("// ").concat(line).concat("\n");
@@ -274,7 +274,7 @@ fn render_doc_lines(raw: string, pad: string) -> string {
     return out;
 }
 
-pub fn fmt_stmt(s: *Stmt, depth: int) -> string {
+pub fn fmt_stmt(s: *Stmt, depth: i32) -> string {
     if s == null { return ""; }
     let pad: string = fmt_indent(depth);
     let mut prefix: string = "";
@@ -284,7 +284,7 @@ pub fn fmt_stmt(s: *Stmt, depth: int) -> string {
     return prefix.concat(fmt_stmt_inner(s, depth));
 }
 
-fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
+fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
 
     if s.kind == ST_LET || s.kind == ST_CONST {
@@ -315,25 +315,25 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
         // resolved file path (e.g. `src/stdlib/hashmap.glide`); we strip the
         // optional `src/` prefix + `.glide` suffix and rewrite `/` -> `::`.
         let mut path: string = s.import_path;
-        let pn: int = path.len();
+        let pn: i32 = path.len();
         if pn >= 4 {
-            let c0: int = path.at(0).to_int();
-            let c1: int = path.at(1).to_int();
-            let c2: int = path.at(2).to_int();
-            let c3: int = path.at(3).to_int();
+            let c0: i32 = path.at(0).to_int();
+            let c1: i32 = path.at(1).to_int();
+            let c2: i32 = path.at(2).to_int();
+            let c3: i32 = path.at(3).to_int();
             if c0 == 115 && c1 == 114 && c2 == 99 && (c3 == 47 || c3 == 92) {
                 path = path.substring(4, pn);
             }
         }
-        let pn2: int = path.len();
+        let pn2: i32 = path.len();
         if pn2 > 6 {
             let tail: string = path.substring(pn2 - 6, pn2);
             if tail.eq(".glide") { path = path.substring(0, pn2 - 6); }
         }
         let mut module: string = "";
-        let mn: int = path.len();
-        for let i: int = 0; i < mn; i++ {
-            let c: int = path.at(i).to_int();
+        let mn: i32 = path.len();
+        for let i: i32 = 0; i < mn; i++ {
+            let c: i32 = path.at(i).to_int();
             if c == 47 || c == 92 {
                 module = module.concat("::");
             } else {
@@ -346,7 +346,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
                 tail_s = "::".concat(s.imported_items.get(0));
             } else {
                 tail_s = "::{";
-                for let i: int = 0; i < s.imported_items.len(); i++ {
+                for let i: i32 = 0; i < s.imported_items.len(); i++ {
                     if i > 0 { tail_s = tail_s.concat(", "); }
                     tail_s = tail_s.concat(s.imported_items.get(i));
                 }
@@ -358,14 +358,14 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
     if s.kind == ST_IF {
         let mut out: string = pad.concat("if ").concat(fmt_expr(s.cond)).concat(" {\n");
         if s.then_body != null {
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 out = out.concat(fmt_stmt(&b, depth + 1));
             }
         }
         if s.else_body != null {
             out = out.concat(pad).concat("} else {\n");
-            for let i: int = 0; i < s.else_body.len(); i++ {
+            for let i: i32 = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
                 out = out.concat(fmt_stmt(&b, depth + 1));
             }
@@ -377,7 +377,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
         if s.let_ty != null { out = out.concat(": ").concat(fmt_type(s.let_ty)); }
         out = out.concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
         if s.then_body != null {
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 out = out.concat(fmt_stmt(&b, depth + 1));
             }
@@ -387,7 +387,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
     if s.kind == ST_WHILE {
         let mut out: string = pad.concat("while ").concat(fmt_expr(s.cond)).concat(" {\n");
         if s.then_body != null {
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 out = out.concat(fmt_stmt(&b, depth + 1));
             }
@@ -405,7 +405,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
         if s.for_step != null { out = out.concat(fmt_expr(s.for_step)); }
         out = out.concat(" {\n");
         if s.then_body != null {
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 out = out.concat(fmt_stmt(&b, depth + 1));
             }
@@ -422,7 +422,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
         }
         out = out.concat(" {\n");
         if s.then_body != null {
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 out = out.concat(fmt_stmt(&b, depth + 1));
             }
@@ -432,7 +432,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
     if s.kind == ST_BLOCK {
         let mut out: string = pad.concat("{\n");
         if s.then_body != null {
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 out = out.concat(fmt_stmt(&b, depth + 1));
             }
@@ -449,14 +449,14 @@ fn fmt_stmt_inner(s: *Stmt, depth: int) -> string {
     return pad.concat("/* fmt: unknown stmt */\n");
 }
 
-fn fmt_asm(s: *Stmt, depth: int) -> string {
+fn fmt_asm(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let inner: string = fmt_indent(depth + 1);
     let mut out: string = pad.concat("asm!");
     if s.is_volatile { out = out.concat(" volatile"); }
     out = out.concat(" {\n");
     if s.asm_strings != null {
-        for let i: int = 0; i < s.asm_strings.len(); i++ {
+        for let i: i32 = 0; i < s.asm_strings.len(); i++ {
             out = out.concat(inner).concat("\"").concat(s.asm_strings.get(i)).concat("\"\n");
         }
     }
@@ -467,7 +467,7 @@ fn fmt_asm(s: *Stmt, depth: int) -> string {
         out = out.concat(inner).concat(":");
         if has_out {
             out = out.concat(" ");
-            for let i: int = 0; i < s.asm_out_constraints.len(); i++ {
+            for let i: i32 = 0; i < s.asm_out_constraints.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let e: Expr = s.asm_out_exprs.get(i);
                 out = out.concat("\"").concat(s.asm_out_constraints.get(i))
@@ -480,7 +480,7 @@ fn fmt_asm(s: *Stmt, depth: int) -> string {
         out = out.concat(inner).concat(":");
         if has_in {
             out = out.concat(" ");
-            for let i: int = 0; i < s.asm_in_constraints.len(); i++ {
+            for let i: i32 = 0; i < s.asm_in_constraints.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let e: Expr = s.asm_in_exprs.get(i);
                 out = out.concat("\"").concat(s.asm_in_constraints.get(i))
@@ -491,7 +491,7 @@ fn fmt_asm(s: *Stmt, depth: int) -> string {
     }
     if has_clb {
         out = out.concat(inner).concat(": ");
-        for let i: int = 0; i < s.asm_clobbers.len(); i++ {
+        for let i: i32 = 0; i < s.asm_clobbers.len(); i++ {
             if i > 0 { out = out.concat(", "); }
             out = out.concat("\"").concat(s.asm_clobbers.get(i)).concat("\"");
         }
@@ -510,14 +510,14 @@ fn fmt_for_init(s: *Stmt) -> string {
 fn fmt_type_params(s: *Stmt) -> string {
     if s.type_params == null || s.type_params.len() == 0 { return ""; }
     let mut out: string = "<";
-    for let i: int = 0; i < s.type_params.len(); i++ {
+    for let i: i32 = 0; i < s.type_params.len(); i++ {
         if i > 0 { out = out.concat(", "); }
         out = out.concat(s.type_params.get(i));
     }
     return out.concat(">");
 }
 
-fn fmt_fn(s: *Stmt, depth: int) -> string {
+fn fmt_fn(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = pad;
     if s.cfg_target != null && !s.cfg_target.eq("") {
@@ -527,7 +527,7 @@ fn fmt_fn(s: *Stmt, depth: int) -> string {
     if s.is_naked { head = head.concat("naked "); }
     head = head.concat("fn ").concat(s.name).concat(fmt_type_params(s)).concat("(");
     if s.fn_params != null {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             if i > 0 { head = head.concat(", "); }
             let p: Param = s.fn_params.get(i);
             head = head.concat(p.name).concat(": ").concat(fmt_type(p.ty));
@@ -537,14 +537,14 @@ fn fmt_fn(s: *Stmt, depth: int) -> string {
     if s.fn_ret_ty != null { head = head.concat(" -> ").concat(fmt_type(s.fn_ret_ty)); }
     if s.fn_body == null { return head.concat(";\n"); }
     let mut out: string = head.concat(" {\n");
-    for let i: int = 0; i < s.fn_body.len(); i++ {
+    for let i: i32 = 0; i < s.fn_body.len(); i++ {
         let b: Stmt = s.fn_body.get(i);
         out = out.concat(fmt_stmt(&b, depth + 1));
     }
     return out.concat(pad).concat("}\n");
 }
 
-fn fmt_struct(s: *Stmt, depth: int) -> string {
+fn fmt_struct(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = pad;
     if s.is_pub { head = head.concat("pub "); }
@@ -554,14 +554,14 @@ fn fmt_struct(s: *Stmt, depth: int) -> string {
     }
     let mut out: string = head.concat(" {\n");
     let inner: string = fmt_indent(depth + 1);
-    for let i: int = 0; i < s.struct_fields.len(); i++ {
+    for let i: i32 = 0; i < s.struct_fields.len(); i++ {
         let f: Field = s.struct_fields.get(i);
         out = out.concat(inner).concat(f.name).concat(": ").concat(fmt_type(f.ty)).concat(",\n");
     }
     return out.concat(pad).concat("}\n");
 }
 
-fn fmt_enum(s: *Stmt, depth: int) -> string {
+fn fmt_enum(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = pad;
     if s.is_pub { head = head.concat("pub "); }
@@ -571,12 +571,12 @@ fn fmt_enum(s: *Stmt, depth: int) -> string {
     }
     let mut out: string = head.concat(" {\n");
     let inner: string = fmt_indent(depth + 1);
-    for let i: int = 0; i < s.enum_variants.len(); i++ {
+    for let i: i32 = 0; i < s.enum_variants.len(); i++ {
         let v: EnumVariant = s.enum_variants.get(i);
         out = out.concat(inner).concat(v.name);
         if v.fields != null && v.fields.len() > 0 {
             out = out.concat("(");
-            for let j: int = 0; j < v.fields.len(); j++ {
+            for let j: i32 = 0; j < v.fields.len(); j++ {
                 if j > 0 { out = out.concat(", "); }
                 let ty: Type = v.fields.get(j);
                 out = out.concat(fmt_type(&ty));
@@ -588,7 +588,7 @@ fn fmt_enum(s: *Stmt, depth: int) -> string {
     return out.concat(pad).concat("}\n");
 }
 
-fn fmt_impl(s: *Stmt, depth: int) -> string {
+fn fmt_impl(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = pad.concat("impl");
     head = head.concat(fmt_type_params(s));
@@ -597,7 +597,7 @@ fn fmt_impl(s: *Stmt, depth: int) -> string {
         return head.concat(" {}\n");
     }
     let mut out: string = head.concat(" {\n");
-    for let i: int = 0; i < s.impl_methods.len(); i++ {
+    for let i: i32 = 0; i < s.impl_methods.len(); i++ {
         if i > 0 { out = out.concat("\n"); }
         let m: Stmt = s.impl_methods.get(i);
         out = out.concat(fmt_fn(&m, depth + 1));
@@ -605,17 +605,17 @@ fn fmt_impl(s: *Stmt, depth: int) -> string {
     return out.concat(pad).concat("}\n");
 }
 
-fn fmt_match(s: *Stmt, depth: int) -> string {
+fn fmt_match(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut out: string = pad.concat("match ").concat(fmt_expr(s.scrutinee)).concat(" {\n");
     let inner: string = fmt_indent(depth + 1);
     if s.arms != null {
-        for let i: int = 0; i < s.arms.len(); i++ {
+        for let i: i32 = 0; i < s.arms.len(); i++ {
             let a: MatchArm = s.arms.get(i);
             out = out.concat(inner).concat(a.variant);
             if a.bindings != null && a.bindings.len() > 0 {
                 out = out.concat("(");
-                for let j: int = 0; j < a.bindings.len(); j++ {
+                for let j: i32 = 0; j < a.bindings.len(); j++ {
                     if j > 0 { out = out.concat(", "); }
                     out = out.concat(a.bindings.get(j));
                 }
@@ -623,7 +623,7 @@ fn fmt_match(s: *Stmt, depth: int) -> string {
             }
             out = out.concat(" => {\n");
             if a.body != null {
-                for let j: int = 0; j < a.body.len(); j++ {
+                for let j: i32 = 0; j < a.body.len(); j++ {
                     let b: Stmt = a.body.get(j);
                     out = out.concat(fmt_stmt(&b, depth + 2));
                 }
@@ -638,8 +638,8 @@ fn fmt_match(s: *Stmt, depth: int) -> string {
 
 pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
     let mut out: string = "";
-    let mut prev_kind: int = -1;
-    for let i: int = 0; i < stmts.len(); i++ {
+    let mut prev_kind: i32 = -1;
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         // Blank line between top-level decls (but not before the first).
         if i > 0 && needs_blank_line(prev_kind, s.kind) {
@@ -651,7 +651,7 @@ pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
     return out;
 }
 
-fn needs_blank_line(prev: int, curr: int) -> bool {
+fn needs_blank_line(prev: i32, curr: i32) -> bool {
     // Group consecutive imports / consts together. Otherwise insert a blank.
     if prev == ST_IMPORT && curr == ST_IMPORT { return false; }
     if prev == ST_CONST && curr == ST_CONST { return false; }

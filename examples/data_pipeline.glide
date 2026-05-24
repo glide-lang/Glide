@@ -9,18 +9,18 @@
 
 import stdlib::json::*;
 
-fn square(x: int) -> int { return x * x; }
-fn is_even(x: int) -> bool { return x % 2 == 0; }
-fn add(acc: int, x: int) -> int { return acc + x; }
+fn square(x: i32) -> i32 { return x * x; }
+fn is_even(x: i32) -> bool { return x % 2 == 0; }
+fn add(acc: i32, x: i32) -> i32 { return acc + x; }
 
-fn main() -> int {
-    let nums: *Vector<int> = Vector::new();
-    for let i: int = 1; i <= 10; i = i + 1 { nums.push(i); }
+fn main() -> i32 {
+    let nums: *Vector<i32> = Vector::new();
+    for let i: i32 = 1; i <= 10; i = i + 1 { nums.push(i); }
 
     // map -> filter -> reduce, as a pipeline.
-    let squares: *Vector<int> = nums.map(square);
-    let even_squares: *Vector<int> = squares.filter(is_even);
-    let total: int = even_squares.fold(0, add);
+    let squares: *Vector<i32> = nums.map(square);
+    let even_squares: *Vector<i32> = squares.filter(is_even);
+    let total: i32 = even_squares.fold(0, add);
 
     println!("inputs:        ", nums.len());
     println!("even squares:  ", even_squares.len());
@@ -29,9 +29,9 @@ fn main() -> int {
 
     // Emit a JSON report of the run.
     let report: *JsonValue = JsonValue::object();
-    report.obj_set("inputs", JsonValue::int(nums.len()));
-    report.obj_set("even_square_count", JsonValue::int(even_squares.len()));
-    report.obj_set("even_square_sum", JsonValue::int(total));
+    report.obj_set("inputs", JsonValue::i32(nums.len()));
+    report.obj_set("even_square_count", JsonValue::i32(even_squares.len()));
+    report.obj_set("even_square_sum", JsonValue::i32(total));
     println!(report.emit());
 
     nums.free();

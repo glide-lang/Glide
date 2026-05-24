@@ -18,7 +18,7 @@
 // on Windows. Lines are best-effort; with `-O2` plus frame-pointer
 // omission you may get less detail than expected.
 
-extern fn __glide_stack_trace_str(skip: int) -> string;
+extern fn __glide_stack_trace_str(skip: i32) -> string;
 
 c_raw! {
     #include <stdio.h>
@@ -132,7 +132,7 @@ pub fn stack_trace() -> *Vector<string> {
 /// Same as `stack_trace` but skips the first `n` frames closest to
 /// the caller. Useful when the caller is itself a thin shim (e.g. a
 /// `log_error!` macro expansion) that should be hidden.
-pub fn stack_trace_skip(n: int) -> *Vector<string> {
+pub fn stack_trace_skip(n: i32) -> *Vector<string> {
     return _split_trace(__glide_stack_trace_str(n));
 }
 

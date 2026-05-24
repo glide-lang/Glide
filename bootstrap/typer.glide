@@ -30,7 +30,7 @@ import parser;     // for ParseDiag (used by merge_parse_diags below)
 // (`error`) with code `parse`.
 pub fn merge_parse_diags(t: *Typer, pdiags: *Vector<ParseDiag>) {
     if t == null || pdiags == null { return; }
-    for let i: int = 0; i < pdiags.len(); i++ {
+    for let i: i32 = 0; i < pdiags.len(); i++ {
         let d: ParseDiag = pdiags.get(i);
         let e: DiagEntry = DiagEntry {
             line: d.line,
@@ -79,7 +79,7 @@ pub fn type_to_string(t: *Type) -> string {
     if t.kind == TY_GENERIC {
         let mut out: string = t.name.concat("<");
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
                 let a: Type = t.args.get(i);
                 out = out.concat(type_to_string(&a));
@@ -95,7 +95,7 @@ pub fn type_to_string(t: *Type) -> string {
     if t.kind == TY_FNPTR {
         let mut s: string = "fn(";
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 if i > 0 { s = s.concat(", "); }
                 let a: Type = t.args.get(i);
                 s = s.concat(type_to_string(&a));
@@ -164,15 +164,15 @@ fn _infer_method_tparams(ret: *Type, method_tparams: *Vector<string>,
                           arg_types: *Vector<*Type>) -> *Type {
     if ret == null || method_tparams == null || method_tparams.len() == 0 { return ret; }
     if params_after_self == null || arg_types == null { return ret; }
-    let plen: int = params_after_self.len();
-    let alen: int = arg_types.len();
-    let n: int = if plen < alen { plen } else { alen };
+    let plen: i32 = params_after_self.len();
+    let alen: i32 = arg_types.len();
+    let n: i32 = if plen < alen { plen } else { alen };
     let names: *Vector<string> = Vector::new();
     let bound: *Vector<Type> = Vector::new();
-    for let ti: int = 0; ti < method_tparams.len(); ti++ {
+    for let ti: i32 = 0; ti < method_tparams.len(); ti++ {
         let tp_name: string = method_tparams.get(ti);
         let mut concrete: *Type = null;
-        for let i: int = 0; i < n; i++ {
+        for let i: i32 = 0; i < n; i++ {
             let p: Param = params_after_self.get(i);
             let at: *Type = arg_types.get(i);
             if p.ty == null || at == null { continue; }
@@ -191,14 +191,14 @@ fn _infer_method_tparams(ret: *Type, method_tparams: *Vector<string>,
 fn _type_references_any(t: *Type, names: *Vector<string>) -> bool {
     if t == null || names == null { return false; }
     if t.kind == TY_NAMED {
-        for let i: int = 0; i < names.len(); i++ {
+        for let i: i32 = 0; i < names.len(); i++ {
             if t.name.eq(names.get(i)) { return true; }
         }
         return false;
     }
     if t.inner != null && _type_references_any(t.inner, names) { return true; }
     if t.args != null {
-        for let i: int = 0; i < t.args.len(); i++ {
+        for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
             if _type_references_any(&a, names) { return true; }
         }
@@ -224,9 +224,9 @@ fn _type_head_name(t: *Type) -> string {
 // Comma-joined membership test. "Json,Result" contains "Json" -> true.
 fn _csv_contains(csv: string, needle: string) -> bool {
     if csv == null || csv.eq("") { return false; }
-    let n: int = csv.len();
-    let mut start: int = 0;
-    let mut i: int = 0;
+    let n: i32 = csv.len();
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
     while i <= n {
         let at_end: bool = i == n;
         let mut sep: bool = at_end;
@@ -248,10 +248,10 @@ fn _csv_contains(csv: string, needle: string) -> bool {
 fn _tpl_replace(tpl: string, key: string, value: string) -> string {
     if tpl == null || tpl.eq("") { return tpl; }
     let pat: string = "%".concat(key).concat("%");
-    let pl: int = pat.len();
-    let tl: int = tpl.len();
+    let pl: i32 = pat.len();
+    let tl: i32 = tpl.len();
     let mut out: string = "";
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < tl {
         if i + pl <= tl && tpl.substring(i, i + pl).eq(pat) {
             out = out.concat(value);
@@ -265,7 +265,7 @@ fn _tpl_replace(tpl: string, key: string, value: string) -> string {
 }
 
 // Param count of a fn / fn-ptr type. -1 for non-fnptr.
-fn _fnptr_arity(t: *Type) -> int {
+fn _fnptr_arity(t: *Type) -> i32 {
     if t == null || t.kind != TY_FNPTR { return -1; }
     if t.args == null { return 0; }
     return t.args.len();
@@ -275,7 +275,7 @@ fn _fnptr_arity(t: *Type) -> int {
 // values: "" (any), "0", "1+".
 fn _param_shape_ok(shape: string, got: *Type) -> bool {
     if shape == null || shape.eq("") { return true; }
-    let n: int = _fnptr_arity(got);
+    let n: i32 = _fnptr_arity(got);
     if n < 0 { return true; }
     if shape.eq("0") { return n == 0; }
     if shape.eq("1+") { return n >= 1; }
@@ -304,7 +304,7 @@ fn _fnptr_hint(t: *Typer, want: *Type, got: *Type, got_name: string) -> string {
     let got_ret_head: string = if got != null && got.kind == TY_FNPTR && got.fnptr_ret != null {
         _type_head_name(got.fnptr_ret)
     } else { "" };
-    for let i: int = 0; i < t.fnptr_hints.len(); i++ {
+    for let i: i32 = 0; i < t.fnptr_hints.len(); i++ {
         let h: FnptrHint = t.fnptr_hints.get(i);
         if !h.ret_type_name.eq(ret_name) { continue; }
         // Got-side gate: optional return-head allow list.
@@ -338,7 +338,7 @@ fn _fnptr_hint(t: *Typer, want: *Type, got: *Type, got_name: string) -> string {
 fn _subst_type_local(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
     if t == null { return null; }
     if t.kind == TY_NAMED && params != null {
-        for let i: int = 0; i < params.len(); i++ {
+        for let i: i32 = 0; i < params.len(); i++ {
             if t.name.eq(params.get(i)) {
                 let a: Type = args.get(i);
                 let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
@@ -365,7 +365,7 @@ fn _subst_type_local(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> 
     if t.kind == TY_GENERIC {
         let new_args: *Vector<Type> = Vector::new();
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 let a: Type = t.args.get(i);
                 let sa: *Type = _subst_type_local(&a, params, args);
                 if sa != null { new_args.push(*sa); }
@@ -435,25 +435,25 @@ pub struct BorrowEvent {
 // Severity levels match LSP's DiagnosticSeverity:
 //   1 = error, 2 = warning, 3 = information, 4 = hint
 pub struct DiagEntry {
-    pub line: int,
-    pub col: int,
-    pub end_line: int,
-    pub end_col: int,
-    pub severity: int,
+    pub line: i32,
+    pub col: i32,
+    pub end_line: i32,
+    pub end_col: i32,
+    pub severity: i32,
     pub code: string,        // stable identifier (e.g. "unused-var", "type-mismatch")
     pub message: string,
     pub origin: string,      // source file path (set from t.current_origin)
-    pub tag: int,            // 0 = none, 1 = Unnecessary (faded), 2 = Deprecated (struck-through)
+    pub tag: i32,            // 0 = none, 1 = Unnecessary (faded), 2 = Deprecated (struck-through)
     // Optional mechanical fix. `fix_replacement` is the text to splice
     // in over the range `(fix_line, fix_col)..(fix_end_line, fix_end_col)`.
     // Zero-width range (start == end) is an insertion. Empty
     // replacement on a non-zero range is a deletion. Empty
     // replacement on a zero-width range means the diagnostic has no
     // mechanical fix and `glide fix` skips it.
-    pub fix_line: int,
-    pub fix_col: int,
-    pub fix_end_line: int,
-    pub fix_end_col: int,
+    pub fix_line: i32,
+    pub fix_col: i32,
+    pub fix_end_line: i32,
+    pub fix_end_col: i32,
     pub fix_replacement: string,
 }
 
@@ -530,7 +530,7 @@ pub struct Typer {
     // Enum exhaustiveness: enum name -> comma-joined variant names. Built in
     // pre_register; consulted by ST_MATCH check to flag uncovered variants.
     pub enums: *HashMap<string>,
-    pub error_count: int,
+    pub error_count: i32,
     pub diagnostics: *Vector<DiagEntry>,
     // Proc-macro authors can attach `@suggest_for_fnptr(RetType, "msg")`
     // to their impl fn so any fn-ptr-arg mismatch whose expected return
@@ -561,7 +561,7 @@ pub struct FnptrHint {
 fn _is_current_type_param(t: *Typer, name: string) -> bool {
     if t.current_type_params == null { return false; }
     if name == null || name.eq("") { return false; }
-    for let i: int = 0; i < t.current_type_params.len(); i++ {
+    for let i: i32 = 0; i < t.current_type_params.len(); i++ {
         if t.current_type_params.get(i).eq(name) { return true; }
     }
     return false;
@@ -570,12 +570,12 @@ fn _is_current_type_param(t: *Typer, name: string) -> bool {
 // Line/col of a member expression's field name, falling back to the
 // expression start when the parser didn't record a field position (a
 // member node synthesized by lowering/codegen has field_line == 0).
-fn _field_pos_line(m: *Expr) -> int {
+fn _field_pos_line(m: *Expr) -> i32 {
     if m == null { return 0; }
     if m.field_line > 0 { return m.field_line; }
     return m.line;
 }
-fn _field_pos_col(m: *Expr) -> int {
+fn _field_pos_col(m: *Expr) -> i32 {
     if m == null { return 0; }
     if m.field_line > 0 { return m.field_col; }
     return m.column;
@@ -585,10 +585,10 @@ fn _field_pos_col(m: *Expr) -> int {
 // length for a bare name (so the underline covers the whole name), else 1
 // (point at the start). Keeps arg diagnostics tight without needing the
 // full source extent of arbitrary expressions.
-fn _arg_span(a: *Expr) -> int {
+fn _arg_span(a: *Expr) -> i32 {
     if a == null { return 1; }
     if a.kind == EX_IDENT && a.str_val != null {
-        let n: int = a.str_val.len();
+        let n: i32 = a.str_val.len();
         if n > 0 { return n; }
     }
     if a.kind == EX_STRING && a.str_val != null {
@@ -601,11 +601,11 @@ fn _arg_span(a: *Expr) -> int {
 // exactly: a `{` immediately followed by `}` is one hole (consuming one arg),
 // scanning advances past both; everything else is a literal char. There is no
 // `{{` escape — codegen emits a lone `{` verbatim.
-fn _count_fmt_placeholders(raw: string) -> int {
+fn _count_fmt_placeholders(raw: string) -> i32 {
     if raw == null { return 0; }
-    let n: int = raw.len();
-    let mut i: int = 0;
-    let mut count: int = 0;
+    let n: i32 = raw.len();
+    let mut i: i32 = 0;
+    let mut count: i32 = 0;
     while i < n {
         if raw.at(i).to_int() == 123 && i + 1 < n && raw.at(i + 1).to_int() == 125 {
             count = count + 1;
@@ -640,14 +640,14 @@ fn _is_known_type_name(t: *Typer, n: string) -> bool {
 // and fn-pointer shapes are skipped — trait names + fn-shape params live
 // outside the struct/primitive registries, so checking them would
 // false-flag. Only runs under enforce_visibility (full registry loaded).
-fn _check_type_known(t: *Typer, ty: *Type, line: int, col: int) {
+fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty == null { return; }
     if !t.enforce_visibility { return; }
     // Prefer the type's own recorded position (set by the parser) so the
     // squiggle lands exactly on the type name; fall back to the caller's
     // position for synthesized types that carry none.
-    let mut pl: int = line;
-    let mut pc: int = col;
+    let mut pl: i32 = line;
+    let mut pc: i32 = col;
     if ty.line > 0 { pl = ty.line; pc = ty.col; }
     if ty.kind == TY_NAMED {
         if !_is_known_type_name(t, ty.name) {
@@ -670,7 +670,7 @@ fn _check_type_known(t: *Typer, ty: *Type, line: int, col: int) {
             t.err_code_range(pl, pc, ty.name.len(), "", "unknown type `".concat(ty.name).concat("`"));
         }
         if ty.args != null {
-            for let i: int = 0; i < ty.args.len(); i++ {
+            for let i: i32 = 0; i < ty.args.len(); i++ {
                 let a: Type = ty.args.get(i);
                 _check_type_known(t, &a, line, col);
             }
@@ -773,7 +773,7 @@ impl Typer {
         __glide_pfree(self as *void);
     }
 
-    fn push_diag_tag(self: *Typer, line: int, col: int, severity: int, code: string, msg: string, tag: int) {
+    fn push_diag_tag(self: *Typer, line: i32, col: i32, severity: i32, code: string, msg: string, tag: i32) {
         // Synth-position diagnostics (proc-macro outputs, builtin
         // surrogates) anchor at line 0 and render at line 1 in the
         // editor — useless to the user, since they can't fix the
@@ -794,21 +794,21 @@ impl Typer {
         self.diagnostics.push(e);
     }
 
-    fn push_diag(self: *Typer, line: int, col: int, severity: int, code: string, msg: string) {
+    fn push_diag(self: *Typer, line: i32, col: i32, severity: i32, code: string, msg: string) {
         self.push_diag_tag(line, col, severity, code, msg, 0);
     }
 
-    fn warn_unused(self: *Typer, line: int, col: int, code: string, msg: string) {
+    fn warn_unused(self: *Typer, line: i32, col: i32, code: string, msg: string) {
         self.push_diag_tag(line, col, 2, code, msg, 1);  // tag 1 = Unnecessary
     }
 
     // Same as warn_unused but with explicit end-column so the editor's
     // fade / strikethrough effect spans the whole identifier instead of a
     // single character. Pass the position of the name and its length.
-    fn warn_unused_range(self: *Typer, line: int, col: int, len: int, code: string, msg: string) {
+    fn warn_unused_range(self: *Typer, line: i32, col: i32, len: i32, code: string, msg: string) {
         let mut origin: string = self.current_origin;
         if origin == null { origin = ""; }
-        let mut e_len: int = len;
+        let mut e_len: i32 = len;
         if e_len < 1 { e_len = 1; }
         let e: DiagEntry = DiagEntry {
             line: line, col: col,
@@ -827,12 +827,12 @@ impl Typer {
     // reads the (fix_line, fix_col)..(fix_end_line, fix_end_col)
     // range and replaces it with `replacement`. Pass a zero-width
     // range to insert; an empty replacement to delete.
-    fn warn_with_fix(self: *Typer, line: int, col: int, end_len: int,
+    fn warn_with_fix(self: *Typer, line: i32, col: i32, end_len: i32,
                      code: string, msg: string,
-                     fl: int, fc: int, fel: int, fec: int, repl: string) {
+                     fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
         let mut origin: string = self.current_origin;
         if origin == null { origin = ""; }
-        let mut e_len: int = end_len;
+        let mut e_len: i32 = end_len;
         if e_len < 1 { e_len = 1; }
         let e: DiagEntry = DiagEntry {
             line: line, col: col,
@@ -847,18 +847,18 @@ impl Typer {
         self.diagnostics.push(e);
     }
 
-    fn err(self: *Typer, line: int, col: int, msg: string) {
+    fn err(self: *Typer, line: i32, col: i32, msg: string) {
         self.push_diag(line, col, 1, "", msg);
         self.error_count = self.error_count + 1;
     }
 
-    fn err_code(self: *Typer, line: int, col: int, code: string, msg: string) {
+    fn err_code(self: *Typer, line: i32, col: i32, code: string, msg: string) {
         self.push_diag(line, col, 1, code, msg);
         self.error_count = self.error_count + 1;
     }
 
-    fn err_code_range(self: *Typer, line: int, col: int, span: int, code: string, msg: string) {
-        let mut e_len: int = span;
+    fn err_code_range(self: *Typer, line: i32, col: i32, span: i32, code: string, msg: string) {
+        let mut e_len: i32 = span;
         if e_len < 1 { e_len = 1; }
         let mut origin: string = self.current_origin;
         if origin == null { origin = ""; }
@@ -876,7 +876,7 @@ impl Typer {
         self.error_count = self.error_count + 1;
     }
 
-    fn warn(self: *Typer, line: int, col: int, code: string, msg: string) {
+    fn warn(self: *Typer, line: i32, col: i32, code: string, msg: string) {
         self.push_diag(line, col, 2, code, msg);
     }
 }
@@ -890,7 +890,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
     t.structs.insert("Arena", true);
 
 
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_CONST {
             // Top-level const: type from annotation if any, otherwise infer
@@ -932,7 +932,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // Record the variant list for exhaustiveness checking.
             let mut vlist: string = "";
             if s.enum_variants != null {
-                for let j: int = 0; j < s.enum_variants.len(); j++ {
+                for let j: i32 = 0; j < s.enum_variants.len(); j++ {
                     let ev: EnumVariant = s.enum_variants.get(j);
                     if j > 0 { vlist = vlist.concat(","); }
                     vlist = vlist.concat(ev.name);
@@ -945,7 +945,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // Borrow rule: reject `&T` / `&mut T` in struct fields. They would
             // require lifetimes to be sound; Glide's design picks `*T` instead.
             if s.struct_fields != null {
-                for let j: int = 0; j < s.struct_fields.len(); j++ {
+                for let j: i32 = 0; j < s.struct_fields.len(); j++ {
                     let f: Field = s.struct_fields.get(j);
                     t.struct_fields_all.insert(s.name.concat("::").concat(f.name), true);
                     if f.ty != null && (f.ty.kind == TY_BORROW || f.ty.kind == TY_BORROW_MUT) {
@@ -983,7 +983,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 } else {
                     tname
                 };
-                for let j: int = 0; j < s.impl_methods.len(); j++ {
+                for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                     let m: Stmt = s.impl_methods.get(j);
                     if m.kind == ST_FN {
                         let fname: string = key_prefix.concat("_").concat(m.name);
@@ -1010,7 +1010,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
     // Build impl_set: `<trait>::<type>` → true for every concrete impl in
     // the program. Generic-bounded calls consult this to decide whether
     // the inferred concrete type satisfies a `T: Trait` clause.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_IMPL { continue; }
         if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
@@ -1023,7 +1023,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
         // Register `type Name = X;` decls under
         // `<Trait>::<TargetTypeName>::<Name>` so T::Item lookups resolve.
         if s.assoc_decls != null {
-            for let j: int = 0; j < s.assoc_decls.len(); j++ {
+            for let j: i32 = 0; j < s.assoc_decls.len(); j++ {
                 let a: Param = s.assoc_decls.get(j);
                 if a.ty == null { continue; }
                 let key: string = s.impl_trait_name.concat("::").concat(tname)
@@ -1041,10 +1041,10 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
     //
     //   @suggest_when_got_returns(Json, Result, Option, HttpResponse)
     //   @suggest_when_got_params("0")     // 0 / 1+ / any
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_FN || s.attrs == null { continue; }
-        for let j: int = 0; j < s.attrs.len(); j++ {
+        for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             if a.name == null || !a.name.eq("suggest_for_fnptr") { continue; }
             if a.args == null || a.args.len() < 2 { continue; }
@@ -1055,11 +1055,11 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // Companion gates (same fn's other attrs).
             let mut got_heads: string = "";
             let mut got_params: string = "";
-            for let k: int = 0; k < s.attrs.len(); k++ {
+            for let k: i32 = 0; k < s.attrs.len(); k++ {
                 let b: Attr = s.attrs.get(k);
                 if b.name == null { continue; }
                 if b.name.eq("suggest_when_got_returns") && b.args != null {
-                    for let m: int = 0; m < b.args.len(); m++ {
+                    for let m: i32 = 0; m < b.args.len(); m++ {
                         let pe: Expr = b.args.get(m);
                         if pe.kind != EX_IDENT { continue; }
                         if !got_heads.eq("") { got_heads = got_heads.concat(","); }
@@ -1086,7 +1086,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
 
 fn type_var_contains(tps: *Vector<string>, name: string) -> bool {
     if tps == null { return false; }
-    for let i: int = 0; i < tps.len(); i++ {
+    for let i: i32 = 0; i < tps.len(); i++ {
         if tps.get(i).eq(name) { return true; }
     }
     return false;
@@ -1126,7 +1126,7 @@ fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
     if want.kind == TY_FNPTR && got.kind == TY_FNPTR {
         if want.args == null || got.args == null { return false; }
         if want.args.len() != got.args.len() { return false; }
-        for let i: int = 0; i < want.args.len(); i++ {
+        for let i: i32 = 0; i < want.args.len(); i++ {
             let wp: Type = want.args.get(i);
             let gp: Type = got.args.get(i);
             if !arg_compat(&wp, &gp, tps) { return false; }
@@ -1147,9 +1147,9 @@ fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
 fn split_bounds(s: string) -> *Vector<string> {
     let out: *Vector<string> = Vector::new();
     if s == null || s.eq("") { return out; }
-    let n: int = s.len();
-    let mut start: int = 0;
-    let mut i: int = 0;
+    let n: i32 = s.len();
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
     while i < n {
         if s.at(i).to_int() == 43 {     // '+'
             if i > start { out.push(s.substring(start, i)); }
@@ -1177,7 +1177,7 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
        && param_ty.name.eq(arg_ty.name)
        && param_ty.args != null && arg_ty.args != null
        && param_ty.args.len() == arg_ty.args.len() {
-        for let i: int = 0; i < param_ty.args.len(); i++ {
+        for let i: i32 = 0; i < param_ty.args.len(); i++ {
             // Heap-copy each arg so the recursive call's match-result —
             // which may be aa itself — doesn't dangle when our stack
             // locals (pa, aa) go out of scope on early return.
@@ -1207,7 +1207,7 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
     if param_ty.kind == TY_FNPTR && arg_ty.kind == TY_FNPTR {
         if param_ty.args != null && arg_ty.args != null
            && param_ty.args.len() == arg_ty.args.len() {
-            for let i: int = 0; i < param_ty.args.len(); i++ {
+            for let i: i32 = 0; i < param_ty.args.len(); i++ {
                 let pa_v: Type = param_ty.args.get(i);
                 let aa_v: Type = arg_ty.args.get(i);
                 let pa_p: *Type = malloc(sizeof(Type)) as *Type;
@@ -1232,24 +1232,24 @@ fn resolve_assoc_in_ret(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ret: *Type)
     if sig == null { return ret; }
     if sig.type_params == null || sig.type_params.len() == 0 { return ret; }
     if sig.params == null || args == null { return ret; }
-    let plen: int = sig.params.len();
-    let alen: int = args.len();
+    let plen: i32 = sig.params.len();
+    let alen: i32 = args.len();
     if plen != alen { return ret; }
-    let mut bn: int = 0;
+    let mut bn: i32 = 0;
     if sig.type_param_bounds != null { bn = sig.type_param_bounds.len(); }
     return rewrite_assoc_in_type(t, sig, args, ret, plen, bn);
 }
 
-fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type, plen: int, bn: int) -> *Type {
+fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type, plen: i32, bn: i32) -> *Type {
     if ty == null { return null; }
     // TY_NAMED that's a type-param: substitute with the concrete inferred from
     // args. Without this, generic fns like `iter_fold<T, U>(...) -> U` return
     // the literal "U" type and the caller sees "expected int, got U".
     if ty.kind == TY_NAMED && sig.type_params != null {
-        for let ti: int = 0; ti < sig.type_params.len(); ti++ {
+        for let ti: i32 = 0; ti < sig.type_params.len(); ti++ {
             let tp_name: string = sig.type_params.get(ti);
             if !tp_name.eq(ty.name) { continue; }
-            for let i: int = 0; i < plen; i++ {
+            for let i: i32 = 0; i < plen; i++ {
                 let p: Param = sig.params.get(i);
                 let a: Expr = args.get(i);
                 let at: *Type = infer_expr(t, &a);
@@ -1262,7 +1262,7 @@ fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type,
     if ty.kind == TY_ASSOC && ty.inner != null && ty.inner.kind == TY_NAMED {
         let owner_name: string = ty.inner.name;
         // Is owner_name one of the type params? If so, find its bound + concrete.
-        for let ti: int = 0; ti < sig.type_params.len(); ti++ {
+        for let ti: i32 = 0; ti < sig.type_params.len(); ti++ {
             let tp_name: string = sig.type_params.get(ti);
             if !tp_name.eq(owner_name) { continue; }
             let mut bounds: string = "";
@@ -1270,7 +1270,7 @@ fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type,
             if bounds.eq("") { continue; }
             // Infer concrete by scanning params for the var.
             let mut concrete: *Type = null;
-            for let i: int = 0; i < plen; i++ {
+            for let i: i32 = 0; i < plen; i++ {
                 let p: Param = sig.params.get(i);
                 let a: Expr = args.get(i);
                 let at: *Type = infer_expr(t, &a);
@@ -1281,7 +1281,7 @@ fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type,
             let cname: string = concrete.name;
             // Look up in assoc_table by the first matching bound.
             let parts: *Vector<string> = split_bounds(bounds);
-            for let bi: int = 0; bi < parts.len(); bi++ {
+            for let bi: i32 = 0; bi < parts.len(); bi++ {
                 let bound: string = parts.get(bi);
                 let key: string = bound.concat("::").concat(cname).concat("::").concat(ty.name);
                 if t.assoc_table.contains(key) {
@@ -1308,17 +1308,17 @@ fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type,
     return ty;
 }
 
-fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: int, col: int) {
+fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: i32, col: i32) {
     if sig == null { return; }
     if sig.type_params == null || sig.type_params.len() == 0 { return; }
     if sig.type_param_bounds == null { return; }
     if sig.params == null || args == null { return; }
-    let plen: int = sig.params.len();
-    let alen: int = args.len();
+    let plen: i32 = sig.params.len();
+    let alen: i32 = args.len();
     if plen != alen { return; }     // arity reported separately
-    let bn: int = sig.type_param_bounds.len();
+    let bn: i32 = sig.type_param_bounds.len();
 
-    for let ti: int = 0; ti < sig.type_params.len(); ti++ {
+    for let ti: i32 = 0; ti < sig.type_params.len(); ti++ {
         let tp_name: string = sig.type_params.get(ti);
         let mut bounds: string = "";
         if ti < bn { bounds = sig.type_param_bounds.get(ti); }
@@ -1327,7 +1327,7 @@ fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: int, 
         // Infer T → concrete by scanning params for the first one that
         // mentions the var (directly or behind one pointer/borrow).
         let mut concrete: *Type = null;
-        for let i: int = 0; i < plen; i++ {
+        for let i: i32 = 0; i < plen; i++ {
             let p: Param = sig.params.get(i);
             let a: Expr = args.get(i);
             let at: *Type = infer_expr(t, &a);
@@ -1339,7 +1339,7 @@ fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: int, 
         let cname: string = concrete.name;
 
         let parts: *Vector<string> = split_bounds(bounds);
-        for let bi: int = 0; bi < parts.len(); bi++ {
+        for let bi: i32 = 0; bi < parts.len(); bi++ {
             let bound: string = parts.get(bi);
             let key: string = bound.concat("::").concat(cname);
             if !t.impl_set.contains(key) {
@@ -1401,13 +1401,13 @@ fn _expr_uses_name(e: *Expr, name: string) -> bool {
     if e.rhs != null && _expr_uses_name(e.rhs, name) { return true; }
     if e.operand != null && _expr_uses_name(e.operand, name) { return true; }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             if _expr_uses_name(&a, name) { return true; }
         }
     }
     if e.fn_expr_body != null {
-        for let i: int = 0; i < e.fn_expr_body.len(); i++ {
+        for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
             let b: Stmt = e.fn_expr_body.get(i);
             if _stmt_uses_name(&b, name) { return true; }
         }
@@ -1423,19 +1423,19 @@ fn _stmt_uses_name(s: *Stmt, name: string) -> bool {
     if s.for_step != null && _expr_uses_name(s.for_step, name) { return true; }
     if s.for_init != null && _stmt_uses_name(s.for_init, name) { return true; }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             if _stmt_uses_name(&b, name) { return true; }
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             if _stmt_uses_name(&b, name) { return true; }
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             if _stmt_uses_name(&b, name) { return true; }
         }
@@ -1443,9 +1443,9 @@ fn _stmt_uses_name(s: *Stmt, name: string) -> bool {
     return false;
 }
 
-fn _body_uses_name_after(body: *Vector<Stmt>, idx: int, name: string) -> bool {
-    let n: int = body.len();
-    let mut i: int = idx + 1;
+fn _body_uses_name_after(body: *Vector<Stmt>, idx: i32, name: string) -> bool {
+    let n: i32 = body.len();
+    let mut i: i32 = idx + 1;
     while i < n {
         let s: Stmt = body.get(i);
         if _stmt_uses_name(&s, name) { return true; }
@@ -1457,12 +1457,12 @@ fn _body_uses_name_after(body: *Vector<Stmt>, idx: int, name: string) -> bool {
 // NLL: after `check_stmt` returns, scan the rest of the block for any
 // reference to each active borrow's binder. Drop events whose binder is
 // never used again - subsequent mutations of `source` then pass.
-fn kill_dead_borrows(t: *Typer, body: *Vector<Stmt>, idx: int) {
-    let mut i: int = t.borrows.len() - 1;
+fn kill_dead_borrows(t: *Typer, body: *Vector<Stmt>, idx: i32) {
+    let mut i: i32 = t.borrows.len() - 1;
     while i >= 0 {
         let ev: BorrowEvent = t.borrows.get(i);
         if !ev.binder.eq("") && !_body_uses_name_after(body, idx, ev.binder) {
-            let last_idx: int = t.borrows.len() - 1;
+            let last_idx: i32 = t.borrows.len() - 1;
             if i != last_idx {
                 let last_ev: BorrowEvent = t.borrows.get(last_idx);
                 t.borrows.set(i, last_ev);
@@ -1473,10 +1473,10 @@ fn kill_dead_borrows(t: *Typer, body: *Vector<Stmt>, idx: int) {
     }
 }
 
-fn count_borrows(t: *Typer, name: string, want_mut: bool) -> int {
-    let n: int = t.borrows.len();
-    let mut c: int = 0;
-    for let i: int = 0; i < n; i++ {
+fn count_borrows(t: *Typer, name: string, want_mut: bool) -> i32 {
+    let n: i32 = t.borrows.len();
+    let mut c: i32 = 0;
+    for let i: i32 = 0; i < n; i++ {
         let ev: BorrowEvent = t.borrows.get(i);
         if ev.source.eq(name) && ev.is_mut == want_mut { c = c + 1; }
     }
@@ -1484,9 +1484,9 @@ fn count_borrows(t: *Typer, name: string, want_mut: bool) -> int {
 }
 
 fn record_borrow(t: *Typer, source: string, is_mut: bool, binder: string,
-                  line: int, col: int) {
-    let n_shared: int = count_borrows(t, source, false);
-    let n_mut: int = count_borrows(t, source, true);
+                  line: i32, col: i32) {
+    let n_shared: i32 = count_borrows(t, source, false);
+    let n_mut: i32 = count_borrows(t, source, true);
     if is_mut {
         if n_mut > 0 || n_shared > 0 {
             t.err_code(line, col, "overlap-borrow",
@@ -1504,9 +1504,9 @@ fn record_borrow(t: *Typer, source: string, is_mut: bool, binder: string,
     t.borrows.push(ev);
 }
 
-fn enter_borrow_scope(t: *Typer) -> int { return t.borrows.len(); }
+fn enter_borrow_scope(t: *Typer) -> i32 { return t.borrows.len(); }
 
-fn exit_borrow_scope(t: *Typer, saved: int) {
+fn exit_borrow_scope(t: *Typer, saved: i32) {
     while t.borrows.len() > saved {
         let _ev: BorrowEvent = t.borrows.pop();
     }
@@ -1518,7 +1518,7 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
     if call == null || call.kind != EX_CALL || call.args == null { return; }
     let names: *Vector<string> = Vector::new();
     let muts: *Vector<bool> = Vector::new();
-    for let i: int = 0; i < call.args.len(); i++ {
+    for let i: i32 = 0; i < call.args.len(); i++ {
         let a: Expr = call.args.get(i);
         if a.kind == EX_UNARY && (a.op_code == UN_ADDR || a.op_code == UN_ADDR_MUT)
             && a.operand != null && a.operand.kind == EX_IDENT {
@@ -1526,9 +1526,9 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
             muts.push(a.op_code == UN_ADDR_MUT);
         }
     }
-    let n: int = names.len();
-    for let i: int = 0; i < n; i++ {
-        for let j: int = i + 1; j < n; j++ {
+    let n: i32 = names.len();
+    for let i: i32 = 0; i < n; i++ {
+        for let j: i32 = i + 1; j < n; j++ {
             if names.get(i).eq(names.get(j)) {
                 let im: bool = muts.get(i);
                 let jm: bool = muts.get(j);
@@ -1546,7 +1546,7 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
 
 pub fn check_program(t: *Typer, program: *Vector<Stmt>) {
     pre_register(t, program);
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         t.current_origin = s.origin;
         check_top(t, &s);
@@ -1559,11 +1559,11 @@ pub fn check_program(t: *Typer, program: *Vector<Stmt>) {
 // the typer's own list, so they print with location + a suppressible `code`
 // and count toward the error total (severity 1 fails the build).
 fn _drain_pass_diags(t: *Typer) {
-    let n: int = __glide_pd_count();
-    for let i: int = 0; i < n; i++ {
-        let line: int = __glide_pd_line(i);
-        let col: int = __glide_pd_col(i);
-        let sev: int = __glide_pd_sev(i);
+    let n: i32 = __glide_pd_count();
+    for let i: i32 = 0; i < n; i++ {
+        let line: i32 = __glide_pd_line(i);
+        let col: i32 = __glide_pd_col(i);
+        let sev: i32 = __glide_pd_sev(i);
         let e: DiagEntry = DiagEntry {
             line: line, col: col,
             end_line: line, end_col: col + 1,
@@ -1611,7 +1611,7 @@ fn is_self_call_expr(e: *Expr, name: string) -> bool {
 // is unconditional and every invocation overflows the stack.
 fn first_unconditional_self_call(body: *Vector<Stmt>, name: string) -> *Expr {
     if body == null { return null; }
-    for let i: int = 0; i < body.len(); i++ {
+    for let i: i32 = 0; i < body.len(); i++ {
         let st: Stmt = body.get(i);
         if st.kind == ST_IF || st.kind == ST_WHILE || st.kind == ST_FOR
            || st.kind == ST_MATCH || st.kind == ST_RETURN
@@ -1657,7 +1657,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     _check_type_known(t, s.fn_ret_ty, s.line, s.column);
 
     if s.fn_params != null {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             if p.ty != null {
                 _check_type_known(t, p.ty, s.line, s.column);
@@ -1667,7 +1667,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     }
 
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             check_stmt(t, &b);
             kill_dead_borrows(t, s.fn_body, i);
@@ -1720,8 +1720,8 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             }
         }
         if s.then_body != null {
-            let saved: int = enter_borrow_scope(t);
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = enter_borrow_scope(t);
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.then_body, i);
@@ -1729,8 +1729,8 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             exit_borrow_scope(t, saved);
         }
         if s.else_body != null {
-            let saved: int = enter_borrow_scope(t);
-            for let i: int = 0; i < s.else_body.len(); i++ {
+            let saved: i32 = enter_borrow_scope(t);
+            for let i: i32 = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.else_body, i);
@@ -1765,8 +1765,8 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         }
         if binder_ty != null { t.scope.insert(s.name, *binder_ty); }
         if s.then_body != null {
-            let saved: int = enter_borrow_scope(t);
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = enter_borrow_scope(t);
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.then_body, i);
@@ -1783,8 +1783,8 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             }
         }
         if s.then_body != null {
-            let saved: int = enter_borrow_scope(t);
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = enter_borrow_scope(t);
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.then_body, i);
@@ -1794,12 +1794,12 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         return;
     }
     if s.kind == ST_FOR {
-        let saved: int = enter_borrow_scope(t);
+        let saved: i32 = enter_borrow_scope(t);
         if s.for_init != null { check_stmt(t, s.for_init); }
         if s.cond != null { let _u0: *Type = infer_expr(t, s.cond); }
         if s.for_step != null { let _u1: *Type = infer_expr(t, s.for_step); }
         if s.then_body != null {
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.then_body, i);
@@ -1810,8 +1810,8 @@ fn check_stmt(t: *Typer, s: *Stmt) {
     }
     if s.kind == ST_BLOCK {
         if s.then_body != null {
-            let saved: int = enter_borrow_scope(t);
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = enter_borrow_scope(t);
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.then_body, i);
@@ -1827,7 +1827,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         let mut has_wildcard: bool = false;
         let covered: *HashMap<bool> = HashMap::new();
         if s.arms != null {
-            for let i: int = 0; i < s.arms.len(); i++ {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
                 let a: MatchArm = s.arms.get(i);
                 if a.variant.eq("_") { has_wildcard = true; }
                 else { covered.insert(a.variant, true); }
@@ -1844,8 +1844,8 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             if !vlist.eq("") {
                 let parts: *Vector<string> = vlist.split(",");
                 let mut missing: string = "";
-                let mut miss_count: int = 0;
-                for let i: int = 0; i < parts.len(); i++ {
+                let mut miss_count: i32 = 0;
+                for let i: i32 = 0; i < parts.len(); i++ {
                     let v: string = parts.get(i);
                     if !covered.contains(v) {
                         if miss_count > 0 { missing = missing.concat(", "); }
@@ -1875,13 +1875,13 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         // still fire; constraint strings and clobbers are GCC syntax and pass
         // through unchanged.
         if s.asm_out_exprs != null {
-            for let i: int = 0; i < s.asm_out_exprs.len(); i++ {
+            for let i: i32 = 0; i < s.asm_out_exprs.len(); i++ {
                 let e: Expr = s.asm_out_exprs.get(i);
                 infer_expr(t, &e);
             }
         }
         if s.asm_in_exprs != null {
-            for let i: int = 0; i < s.asm_in_exprs.len(); i++ {
+            for let i: i32 = 0; i < s.asm_in_exprs.len(); i++ {
                 let e: Expr = s.asm_in_exprs.get(i);
                 infer_expr(t, &e);
             }
@@ -2012,7 +2012,7 @@ fn check_spawn(t: *Typer, s: *Stmt) {
     if call.args == null { return; }
     let kind: string = "spawn";
     if s.is_spawn_thread { kind = "spawn_thread"; }
-    for let i: int = 0; i < call.args.len(); i++ {
+    for let i: i32 = 0; i < call.args.len(); i++ {
         let a: Expr = call.args.get(i);
         let origin: string = _expr_arena_origin(t, &a);
         if origin.eq("") { continue; }
@@ -2082,9 +2082,9 @@ fn check_return(t: *Typer, s: *Stmt) {
         return;
     }
     if !types_compat(t.current_ret, vt) {
-        let mut rl: int = s.line;
-        let mut rc: int = s.column;
-        let mut rspan: int = 6;   // the `return` keyword
+        let mut rl: i32 = s.line;
+        let mut rc: i32 = s.column;
+        let mut rspan: i32 = 6;   // the `return` keyword
         if e != null && e.line > 0 { rl = e.line; rc = e.column; rspan = _arg_span(e); }
         t.err_code_range(rl, rc, rspan, "",
             "return type mismatch: expected ".concat(type_to_string(t.current_ret))
@@ -2160,9 +2160,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e.kind == EX_BLOCK {
         // Run lead-in stmts in a fresh borrow scope; the value's type is
         // the type of the trailing expression.
-        let saved: int = enter_borrow_scope(t);
+        let saved: i32 = enter_borrow_scope(t);
         if e.block_stmts != null {
-            for let i: int = 0; i < e.block_stmts.len(); i++ {
+            for let i: i32 = 0; i < e.block_stmts.len(); i++ {
                 let b: Stmt = e.block_stmts.get(i);
                 check_stmt(t, &b);
             }
@@ -2176,22 +2176,22 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         let scrut_ty: *Type = infer_expr(t, e.lhs);
         let mut result_ty: *Type = null;
         if e.match_arms != null {
-            for let i: int = 0; i < e.match_arms.len(); i++ {
+            for let i: i32 = 0; i < e.match_arms.len(); i++ {
                 let a: MatchArm = e.match_arms.get(i);
-                let saved: int = enter_borrow_scope(t);
+                let saved: i32 = enter_borrow_scope(t);
                 // Bind payload names with `__unknown__` placeholders. Codegen
                 // emits them via `__typeof__` from the enum's payload field
                 // so the runtime type is correct; the typer just needs each
                 // name in scope to silence "unknown name" diags.
                 if a.bindings != null {
                     let placeholder: *Type = ty_named("__unknown__");
-                    for let k: int = 0; k < a.bindings.len(); k++ {
+                    for let k: i32 = 0; k < a.bindings.len(); k++ {
                         t.scope.insert(a.bindings.get(k), *placeholder);
                     }
                 }
                 if a.body != null && a.body.len() > 0 {
-                    let last_idx: int = a.body.len() - 1;
-                    for let k: int = 0; k < last_idx; k++ {
+                    let last_idx: i32 = a.body.len() - 1;
+                    for let k: i32 = 0; k < last_idx; k++ {
                         let b: Stmt = a.body.get(k);
                         check_stmt(t, &b);
                     }
@@ -2256,7 +2256,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
             let params: *Vector<Type> = Vector::new();
             if sig.params != null {
-                for let i: int = 0; i < sig.params.len(); i++ {
+                for let i: i32 = 0; i < sig.params.len(); i++ {
                     let p: Param = sig.params.get(i);
                     if p.ty == null { return ty_named("__fn__"); }
                     params.push(*p.ty);
@@ -2272,7 +2272,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         let lt: *Type = infer_expr(t, e.lhs);
         let rt: *Type = infer_expr(t, e.rhs);
         // comparison ops -> bool
-        let op: int = e.op_code;
+        let op: i32 = e.op_code;
         if op == OP_EQ || op == OP_NE || op == OP_LT || op == OP_LE
             || op == OP_GT || op == OP_GE {
             // `==` / `!=` between two `string`s compares pointers in C, not
@@ -2376,7 +2376,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
             let inner: *Type = chan_inner(recv_ty);
             if inner != null {
-                let mut nargs: int = 0;
+                let mut nargs: i32 = 0;
                 if e.args != null { nargs = e.args.len(); }
                 if mname.eq("send") {
                     if nargs != 1 {
@@ -2435,9 +2435,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     // or extra args are an error — same aggressiveness as a
                     // bare fn call.
                     if msig.params != null {
-                        let m_alen: int = if e.args != null { e.args.len() } else { 0 };
-                        let m_plen: int = msig.params.len();
-                        let mut m_expected: int = 0;
+                        let m_alen: i32 = if e.args != null { e.args.len() } else { 0 };
+                        let m_plen: i32 = msig.params.len();
+                        let mut m_expected: i32 = 0;
                         if m_plen > 0 { m_expected = m_plen - 1; }   // drop self
                         let mut m_bad: bool = m_alen != m_expected;
                         if msig.is_variadic && m_alen >= m_expected { m_bad = false; }
@@ -2456,14 +2456,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     let user_arg_types: *Vector<*Type> = Vector::new();
                     let params_after_self: *Vector<Param> = Vector::new();
                     if e.args != null && msig.params != null {
-                        let alen: int = e.args.len();
-                        let plen: int = msig.params.len();
+                        let alen: i32 = e.args.len();
+                        let plen: i32 = msig.params.len();
                         // params[0] = self, so user args map to params[1..plen]
-                        for let i: int = 0; i < alen; i++ {
+                        for let i: i32 = 0; i < alen; i++ {
                             let a: Expr = e.args.get(i);
                             let at: *Type = infer_expr(t, &a);
                             user_arg_types.push(at);
-                            let pidx: int = i + 1;
+                            let pidx: i32 = i + 1;
                             if pidx >= plen { continue; }
                             let p: Param = msig.params.get(pidx);
                             params_after_self.push(p);
@@ -2490,7 +2490,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             }
                         }
                     } else if e.args != null {
-                        for let i: int = 0; i < e.args.len(); i++ {
+                        for let i: i32 = 0; i < e.args.len(); i++ {
                             let a: Expr = e.args.get(i);
                             let at: *Type = infer_expr(t, &a);
                             user_arg_types.push(at);
@@ -2539,7 +2539,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         if msig.type_params != null && msig.type_params.len() > 0
                            && _type_references_any(substituted, msig.type_params) {
                             let subst_params: *Vector<Param> = Vector::new();
-                            for let i: int = 0; i < params_after_self.len(); i++ {
+                            for let i: i32 = 0; i < params_after_self.len(); i++ {
                                 let p: Param = params_after_self.get(i);
                                 let np: Param = p;
                                 np.ty = _subst_type_local(p.ty, msig.owner_type_params, stripped.args);
@@ -2591,7 +2591,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
 
         // ---- make_chan(cap) ----------------------------------------
         if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val.eq("make_chan") {
-            let mut nargs: int = 0;
+            let mut nargs: i32 = 0;
             if e.args != null { nargs = e.args.len(); }
             if nargs != 1 {
                 t.err(e.line, e.column, "`make_chan` takes exactly 1 argument (capacity)");
@@ -2622,15 +2622,15 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 // declared params to be present and skip type-checking the
                 // tail.
                 if sig.params != null && e.args != null {
-                    let plen: int = sig.params.len();
-                    let alen: int = e.args.len();
+                    let plen: i32 = sig.params.len();
+                    let alen: i32 = e.args.len();
                     let mut bad_arity: bool = plen != alen;
                     if sig.is_variadic && alen >= plen { bad_arity = false; }
                     if bad_arity {
                         t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "",
                             "wrong arg count for `".concat(name).concat("`"));
                     } else {
-                        for let i: int = 0; i < plen; i++ {
+                        for let i: i32 = 0; i < plen; i++ {
                             let p: Param = sig.params.get(i);
                             let a: Expr = e.args.get(i);
                             // Borrow rule: passing an owned local by value to a
@@ -2655,7 +2655,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         // Walk variadic tail args for nested type errors but
                         // don't compare against any param type.
                         if sig.is_variadic {
-                            for let i: int = plen; i < alen; i++ {
+                            for let i: i32 = plen; i < alen; i++ {
                                 let a: Expr = e.args.get(i);
                                 let _u: *Type = infer_expr(t, &a);
                             }
@@ -2697,7 +2697,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let is_known_method: bool = t.fns.contains(pname);
             let is_type_param: bool = _is_current_type_param(t, prefix);
             if !is_type && !is_known_method && !is_type_param && !t.is_module_path_allowed(prefix) {
-                let path_span: int = prefix.len() + 2 + e.lhs.field.len();
+                let path_span: i32 = prefix.len() + 2 + e.lhs.field.len();
                 t.err_code_range(e.lhs.line, e.lhs.column, path_span, "",
                     "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
                 return null;
@@ -2706,13 +2706,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 let sig: FnSig = t.fns.get(pname);
                 // Arity check for `Type::method(args)` — missing/extra args
                 // are an error, same as a bare fn call.
-                let plen: int = if sig.params != null { sig.params.len() } else { 0 };
+                let plen: i32 = if sig.params != null { sig.params.len() } else { 0 };
                 if sig.params != null && e.args != null {
-                    let alen: int = e.args.len();
+                    let alen: i32 = e.args.len();
                     let mut bad_arity: bool = plen != alen;
                     if sig.is_variadic && alen >= plen { bad_arity = false; }
                     if bad_arity {
-                        let path_span: int = prefix.len() + 2 + e.lhs.field.len();
+                        let path_span: i32 = prefix.len() + 2 + e.lhs.field.len();
                         t.err_code_range(e.lhs.line, e.lhs.column, path_span, "",
                             "wrong arg count for `".concat(prefix).concat("::").concat(e.lhs.field)
                             .concat("`: expected ").concat(int_to_str(plen))
@@ -2720,7 +2720,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     }
                 }
                 if e.args != null {
-                    for let i: int = 0; i < e.args.len(); i++ {
+                    for let i: i32 = 0; i < e.args.len(); i++ {
                         let a: Expr = e.args.get(i);
                         let at: *Type = infer_expr(t, &a);
                         // Type-check each arg against its param. Skip params
@@ -2746,7 +2746,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         }
         // Unknown callee or method/macro: just walk args, return null
         if e.args != null {
-            for let i: int = 0; i < e.args.len(); i++ {
+            for let i: i32 = 0; i < e.args.len(); i++ {
                 let a: Expr = e.args.get(i);
                 let _u2: *Type = infer_expr(t, &a);
             }
@@ -2827,8 +2827,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if e.str_val != null && e.str_val.eq("format") && e.args != null && e.args.len() > 0 {
             let first: Expr = e.args.get(0);
             if first.kind == EX_STRING {
-                let holes: int = _count_fmt_placeholders(first.str_val);
-                let supplied: int = e.args.len() - 1;
+                let holes: i32 = _count_fmt_placeholders(first.str_val);
+                let supplied: i32 = e.args.len() - 1;
                 if holes != supplied {
                     t.err_code_range(first.line, first.column, _arg_span(&first), "format-args",
                         "format! has ".concat(int_to_str(holes))
@@ -2842,7 +2842,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         }
         // Walk args for nested errors.
         if e.args != null {
-            for let i: int = 0; i < e.args.len(); i++ {
+            for let i: i32 = 0; i < e.args.len(); i++ {
                 let a: Expr = e.args.get(i);
                 let _u7: *Type = infer_expr(t, &a);
             }

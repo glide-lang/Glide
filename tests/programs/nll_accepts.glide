@@ -3,29 +3,29 @@
 // borrow lands clean.
 
 fn case_immut_then_mut() {
-    let mut n: int = 0;
-    let a: &int = &n;
+    let mut n: i32 = 0;
+    let a: &i32 = &n;
     println!(*a);                // last use of a
-    let b: &mut int = &mut n;    // ok: a dead
+    let b: &mut i32 = &mut n;    // ok: a dead
     *b = 1;
     println!(*b);
 }
 
 fn case_mut_then_immut() {
-    let mut n: int = 0;
-    let a: &mut int = &mut n;
+    let mut n: i32 = 0;
+    let a: &mut i32 = &mut n;
     *a = 5;                      // last use of a
-    let b: &int = &n;            // ok: a dead
+    let b: &i32 = &n;            // ok: a dead
     println!(*b);
 }
 
 fn case_chain() {
-    let mut x: int = 1;
-    let r1: &int = &x;
+    let mut x: i32 = 1;
+    let r1: &i32 = &x;
     println!(*r1);
-    let r2: &int = &x;
+    let r2: &i32 = &x;
     println!(*r2);
-    let r3: &int = &x;
+    let r3: &i32 = &x;
     println!(*r3);
 }
 

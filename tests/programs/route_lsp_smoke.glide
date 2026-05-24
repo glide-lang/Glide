@@ -9,7 +9,7 @@ fn health() -> HttpResponse { return HttpResponse::ok().text("ok"); }
 fn create() -> HttpResponse { return HttpResponse::ok().text("created"); }
 
 @get("/users/:id")
-fn show(id: Path<int>) -> HttpResponse {
+fn show(id: Path<i32>) -> HttpResponse {
     return HttpResponse::ok().text("user");
 }
 

@@ -5,7 +5,7 @@
 import stdlib::testing::*;
 import stdlib::http::*;
 
-fn test_set_replaces_existing_header() -> int {
+fn test_set_replaces_existing_header() -> i32 {
     let r: HttpResponse = HttpResponse::ok()
         .set("Content-Type", "application/json")
         .set("Content-Type", "text/plain");
@@ -15,7 +15,7 @@ fn test_set_replaces_existing_header() -> int {
     return 0;
 }
 
-fn test_set_is_case_insensitive() -> int {
+fn test_set_is_case_insensitive() -> i32 {
     let r: HttpResponse = HttpResponse::ok()
         .set("Content-Type", "a/b")
         .set("content-type", "c/d");
@@ -25,7 +25,7 @@ fn test_set_is_case_insensitive() -> int {
     return 0;
 }
 
-fn test_add_appends_existing_header() -> int {
+fn test_add_appends_existing_header() -> i32 {
     let r: HttpResponse = HttpResponse::ok()
         .add("Set-Cookie", "session=abc")
         .add("Set-Cookie", "csrf=xyz");
@@ -36,7 +36,7 @@ fn test_add_appends_existing_header() -> int {
     return 0;
 }
 
-fn test_cookie_uses_add_semantics() -> int {
+fn test_cookie_uses_add_semantics() -> i32 {
     let r: HttpResponse = HttpResponse::ok()
         .cookie("session", "abc")
         .cookie("csrf", "xyz");
@@ -47,7 +47,7 @@ fn test_cookie_uses_add_semantics() -> int {
     return 0;
 }
 
-fn test_set_after_add_replaces_all_matching() -> int {
+fn test_set_after_add_replaces_all_matching() -> i32 {
     let r: HttpResponse = HttpResponse::ok()
         .add("Vary", "Accept")
         .add("Vary", "Origin")
@@ -58,7 +58,7 @@ fn test_set_after_add_replaces_all_matching() -> int {
     return 0;
 }
 
-fn test_set_preserves_other_headers() -> int {
+fn test_set_preserves_other_headers() -> i32 {
     let r: HttpResponse = HttpResponse::ok()
         .set("X-Foo", "1")
         .set("X-Bar", "2")
@@ -68,7 +68,7 @@ fn test_set_preserves_other_headers() -> int {
     return 0;
 }
 
-fn test_text_chain_replaces_content_type() -> int {
+fn test_text_chain_replaces_content_type() -> i32 {
     // .text() and .json() each call .set("Content-Type", ...).
     // Chaining should leave only the last one.
     let r: HttpResponse = HttpResponse::ok().json("{}").text("hi");

@@ -24,9 +24,9 @@
 pub extern fn _test_begin(name: string);
 pub extern fn _test_pass();
 pub extern fn _test_fail(msg: string);
-pub extern fn _test_summary() -> int;
-pub extern fn _test_count_passed() -> int;
-pub extern fn _test_count_failed() -> int;
+pub extern fn _test_summary() -> i32;
+pub extern fn _test_count_passed() -> i32;
+pub extern fn _test_count_failed() -> i32;
 
 c_raw! {
     #ifndef GLIDE_TESTING_DEFINED
@@ -134,12 +134,12 @@ pub fn test_pass() { _test_pass(); }
 
 /// Print the run summary (`N passed, M failed`) and return the number
 /// of failed tests. The driver uses the return as the process exit code.
-pub fn test_summary() -> int { return _test_summary(); }
+pub fn test_summary() -> i32 { return _test_summary(); }
 
 /// `(passed, failed)` for the current run. Useful for self-tests of
 /// the framework.
-pub fn test_counts() -> *Vector<int> {
-    let v: *Vector<int> = Vector::new();
+pub fn test_counts() -> *Vector<i32> {
+    let v: *Vector<i32> = Vector::new();
     v.push(_test_count_passed());
     v.push(_test_count_failed());
     return v;

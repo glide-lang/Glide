@@ -14,31 +14,31 @@
 //   - subprocess Command builder         → `stdlib::process` (planned)
 //   - signal handling                    → `stdlib::signal`  (planned)
 
-extern fn __glide_is_windows() -> int;
-extern fn __glide_reactor_active() -> int;
-extern fn __glide_has_reuseport_balance() -> int;
+extern fn __glide_is_windows() -> i32;
+extern fn __glide_reactor_active() -> i32;
+extern fn __glide_has_reuseport_balance() -> i32;
 
 extern fn __glide_os_name() -> string;
 extern fn __glide_os_arch() -> string;
 extern fn __glide_path_list_sep() -> string;
-extern fn __glide_pid() -> int;
+extern fn __glide_pid() -> i32;
 
 extern fn __glide_cwd() -> string;
-extern fn __glide_chdir(path: string) -> int;
+extern fn __glide_chdir(path: string) -> i32;
 extern fn __glide_exe_path() -> string;
 extern fn __glide_exe_dir() -> string;
-extern fn __glide_shell(cmd: string) -> int;
+extern fn __glide_shell(cmd: string) -> i32;
 
-extern fn __glide_ppid() -> int;
-extern fn __glide_uid() -> int;
-extern fn __glide_gid() -> int;
+extern fn __glide_ppid() -> i32;
+extern fn __glide_uid() -> i32;
+extern fn __glide_gid() -> i32;
 extern fn __glide_username() -> string;
 extern fn __glide_hostname() -> string;
 extern fn __glide_kernel_version() -> string;
 
-extern fn __glide_cpu_count() -> int;
-extern fn __glide_cpu_count_physical() -> int;
-extern fn __glide_page_size() -> int;
+extern fn __glide_cpu_count() -> i32;
+extern fn __glide_cpu_count_physical() -> i32;
+extern fn __glide_page_size() -> i32;
 extern fn __glide_memory_total() -> u64;
 extern fn __glide_memory_free() -> u64;
 extern fn __glide_uptime_secs() -> u64;
@@ -50,7 +50,7 @@ extern fn __glide_config_dir() -> string;
 extern fn __glide_cache_dir() -> string;
 extern fn __glide_data_dir() -> string;
 
-extern fn __glide_is_tty(fd: int) -> int;
+extern fn __glide_is_tty(fd: i32) -> i32;
 
 c_raw! {
     // ---- Always-on helpers (no ratchet): cheap compile-time facts. ----
@@ -632,7 +632,7 @@ pub fn os_path_list_sep() -> string { return __glide_path_list_sep(); }
 /// ```glide
 /// println!("pid:", os_pid());
 /// ```
-pub fn os_pid() -> int { return __glide_pid(); }
+pub fn os_pid() -> i32 { return __glide_pid(); }
 
 /// Parent process ID. POSIX returns `getppid()`; on Windows, returns
 /// `Err("ppid not available")` because the API doesn't expose it cheaply.
@@ -641,8 +641,8 @@ pub fn os_pid() -> int { return __glide_pid(); }
 /// let r: !int = os_ppid();
 /// if r.ok { println!("parent:", r.val); }
 /// ```
-pub fn os_ppid() -> !int {
-    let p: int = __glide_ppid();
+pub fn os_ppid() -> !i32 {
+    let p: i32 = __glide_ppid();
     if p < 0 { return err("ppid not available"); }
     return ok(p);
 }
@@ -653,8 +653,8 @@ pub fn os_ppid() -> !int {
 /// let u: !int = os_uid();
 /// if u.ok && u.val == 0 { println!("running as root"); }
 /// ```
-pub fn os_uid() -> !int {
-    let u: int = __glide_uid();
+pub fn os_uid() -> !i32 {
+    let u: i32 = __glide_uid();
     if u < 0 { return err("uid not available on this platform"); }
     return ok(u);
 }
@@ -665,8 +665,8 @@ pub fn os_uid() -> !int {
 /// let g: !int = os_gid();
 /// if g.ok { println!("gid:", g.val); }
 /// ```
-pub fn os_gid() -> !int {
-    let g: int = __glide_gid();
+pub fn os_gid() -> !i32 {
+    let g: i32 = __glide_gid();
     if g < 0 { return err("gid not available on this platform"); }
     return ok(g);
 }
@@ -772,8 +772,8 @@ pub fn os_exe_dir() -> !string {
 /// let r: !int = os_cpu_count();
 /// if r.ok { println!(r.val, "threads"); }
 /// ```
-pub fn os_cpu_count() -> !int {
-    let n: int = __glide_cpu_count();
+pub fn os_cpu_count() -> !i32 {
+    let n: i32 = __glide_cpu_count();
     if n <= 0 { return err("cpu count unavailable"); }
     return ok(n);
 }
@@ -785,8 +785,8 @@ pub fn os_cpu_count() -> !int {
 /// let r: !int = os_cpu_count_physical();
 /// if r.ok { println!(r.val, "physical cores"); }
 /// ```
-pub fn os_cpu_count_physical() -> !int {
-    let n: int = __glide_cpu_count_physical();
+pub fn os_cpu_count_physical() -> !i32 {
+    let n: i32 = __glide_cpu_count_physical();
     if n <= 0 { return os_cpu_count(); }
     return ok(n);
 }
@@ -798,8 +798,8 @@ pub fn os_cpu_count_physical() -> !int {
 /// let r: !int = os_page_size();
 /// if r.ok { println!("page:", r.val, "bytes"); }
 /// ```
-pub fn os_page_size() -> !int {
-    let n: int = __glide_page_size();
+pub fn os_page_size() -> !i32 {
+    let n: i32 = __glide_page_size();
     if n <= 0 { return err("page size unavailable"); }
     return ok(n);
 }
@@ -939,7 +939,7 @@ pub fn os_data_dir() -> !string {
 /// if os_is_tty(1) { println!("\x1b[32mok\x1b[0m"); }
 /// else            { println!("ok"); }
 /// ```
-pub fn os_is_tty(fd: int) -> bool { return __glide_is_tty(fd) != 0; }
+pub fn os_is_tty(fd: i32) -> bool { return __glide_is_tty(fd) != 0; }
 
 // ============================================================================
 // G. Subprocess quick — one-liner shell escape
@@ -959,8 +959,8 @@ pub fn os_is_tty(fd: int) -> bool { return __glide_is_tty(fd) != 0; }
 /// let r: !int = os_shell("ls -la");
 /// if r.ok { println!("exited", r.val); }
 /// ```
-pub fn os_shell(cmd: string) -> !int {
-    let rc: int = __glide_shell(cmd);
+pub fn os_shell(cmd: string) -> !i32 {
+    let rc: i32 = __glide_shell(cmd);
     if rc < 0 { return err("shell failed to spawn"); }
     return ok(rc);
 }

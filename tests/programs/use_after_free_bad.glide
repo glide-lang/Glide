@@ -3,6 +3,6 @@
 fn main() {
     let arena: *Arena = Arena::new(64);
     arena.free();
-    let used: int = arena.used();   // ERROR: use-after-free
+    let used: i32 = arena.used();   // ERROR: use-after-free
     println!(used);
 }

@@ -106,7 +106,7 @@ impl Multipart {
     /// ```
     pub fn body(self: *Multipart) -> string {
         let mut out: string = "";
-        for let i: int = 0; i < self.parts.len(); i++ {
+        for let i: i32 = 0; i < self.parts.len(); i++ {
             out = out.concat("--").concat(self.boundary).concat("\r\n");
             out = out.concat(self.parts.get(i)).concat("\r\n");
         }
@@ -163,7 +163,7 @@ impl FromRequest for MultipartForm {
 
         let fields: *HashMap<string> = HashMap::new();
         let files:  *Vector<UploadedFile> = Vector::new();
-        let r: !int = _parse_parts(req.body, boundary, fields, files);
+        let r: !i32 = _parse_parts(req.body, boundary, fields, files);
         if !r.ok { return err(r.err); }
         return ok(MultipartForm { fields: fields, files: files });
     }
@@ -173,10 +173,10 @@ impl FromRequest for MultipartForm {
 // surrounding quotes if present.
 fn _extract_boundary(ct: string) -> string {
     let lower: string = ct.to_lower();
-    let key_at: int = lower.index_of("boundary=");
+    let key_at: i32 = lower.index_of("boundary=");
     if key_at < 0 { return ""; }
     let raw: string = ct.substring(key_at + 9, ct.len());
-    let semi: int = raw.index_of(";");
+    let semi: i32 = raw.index_of(";");
     let mut b: string = raw;
     if semi >= 0 { b = raw.substring(0, semi); }
     b = b.trim();
@@ -191,9 +191,9 @@ fn _extract_boundary(ct: string) -> string {
 // `\r\n--<boundary>` (more parts) or `\r\n--<boundary>--` (terminal).
 fn _parse_parts(body: string, boundary: string,
                 fields: *HashMap<string>,
-                files: *Vector<UploadedFile>) -> !int {
+                files: *Vector<UploadedFile>) -> !i32 {
     let sep: string = "--".concat(boundary);
-    let mut pos: int = body.index_of(sep);
+    let mut pos: i32 = body.index_of(sep);
     if pos < 0 { return err("400:malformed"); }
     pos = pos + sep.len();
     while pos < body.len() {
@@ -205,13 +205,13 @@ fn _parse_parts(body: string, boundary: string,
         if pos + 2 <= body.len() && body.substring(pos, pos + 2).eq("\r\n") {
             pos = pos + 2;
         }
-        let head_end: int = _index_of_from(body, "\r\n\r\n", pos);
+        let head_end: i32 = _index_of_from(body, "\r\n\r\n", pos);
         if head_end < 0 { return err("400:malformed"); }
         let part_headers: string = body.substring(pos, head_end);
-        let body_start: int = head_end + 4;
-        let next_bound: int = _index_of_from(body, sep, body_start);
+        let body_start: i32 = head_end + 4;
+        let next_bound: i32 = _index_of_from(body, sep, body_start);
         if next_bound < 0 { return err("400:malformed"); }
-        let mut body_end: int = next_bound;
+        let mut body_end: i32 = next_bound;
         if body_end >= 2 &&
            body.substring(body_end - 2, body_end).eq("\r\n") {
             body_end = body_end - 2;
@@ -249,11 +249,11 @@ fn _ingest_part(headers: string, body: string,
 fn _header_lookup(block: string, name: string) -> string {
     let want: string = name.to_lower();
     let lines: *Vector<string> = block.split("\r\n");
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < lines.len() {
         let line: string = lines.get(i);
         i = i + 1;
-        let colon: int = line.index_of(":");
+        let colon: i32 = line.index_of(":");
         if colon < 0 { continue; }
         let n: string = line.substring(0, colon).trim().to_lower();
         if n.eq(want) {
@@ -265,26 +265,26 @@ fn _header_lookup(block: string, name: string) -> string {
 
 // `string` doesn't ship a `index_of_from(start)` overload — wrap
 // substring + index_of and shift the result.
-fn _index_of_from(s: string, needle: string, from: int) -> int {
+fn _index_of_from(s: string, needle: string, from: i32) -> i32 {
     if from < 0 || from > s.len() { return -1; }
     let tail: string = s.substring(from, s.len());
-    let r: int = tail.index_of(needle);
+    let r: i32 = tail.index_of(needle);
     if r < 0 { return -1; }
     return r + from;
 }
 
 fn _quoted_param(value: string, key: string) -> string {
     let needle: string = key.concat("=");
-    let at: int = value.index_of(needle);
+    let at: i32 = value.index_of(needle);
     if at < 0 { return ""; }
     let raw: string = value.substring(at + needle.len(), value.len());
     if raw.len() == 0 { return ""; }
     if raw.starts_with("\"") {
-        let close: int = _index_of_from(raw, "\"", 1);
+        let close: i32 = _index_of_from(raw, "\"", 1);
         if close < 0 { return ""; }
         return raw.substring(1, close);
     }
-    let semi: int = raw.index_of(";");
+    let semi: i32 = raw.index_of(";");
     if semi < 0 { return raw.trim(); }
     return raw.substring(0, semi).trim();
 }
@@ -295,8 +295,8 @@ fn _gen_boundary() -> string {
     let r: *Rng = Rng::from_clock();
     let chars: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut s: string = "----glide";
-    for let i: int = 0; i < 24; i++ {
-        let idx: int = r.range(0, 62);
+    for let i: i32 = 0; i < 24; i++ {
+        let idx: i32 = r.range(0, 62);
         s = s.concat(chars.at(idx).to_string());
     }
     free(r as *void);

@@ -8,9 +8,9 @@ import ast;       // for int_to_str
 import manifest;
 import semver;
 
-extern fn __glide_string_from_buf(buf: *void, n: int) -> string;
-extern fn __glide_shell(cmd: string) -> int;
-extern fn __glide_is_windows() -> int;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+extern fn __glide_shell(cmd: string) -> i32;
+extern fn __glide_is_windows() -> i32;
 extern fn __glide_getenv(name: string) -> string;
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 extern fn __glide_file_exists(path: string) -> bool;
@@ -40,7 +40,7 @@ fn _ensure_rec(m: *Manifest, d: ManifestDep, seen: *HashMap<bool>) -> string {
     // two parents pulling the same library share one copy.
     let dep_m: *Manifest = read_manifest(cache);
     if dep_m == null { return cache; }
-    for let i: int = 0; i < dep_m.deps.len(); i++ {
+    for let i: i32 = 0; i < dep_m.deps.len(); i++ {
         let sub: ManifestDep = dep_m.deps.get(i);
         if sub.kind == DEP_PATH { continue; }  // path deps make no sense across cache boundaries
         _ensure_rec(dep_m, sub, seen);
@@ -98,11 +98,11 @@ fn _ensure_single(m: *Manifest, d: ManifestDep) -> string {
 fn _try_tarball(d: ManifestDep, url: string, cache: string) -> string {
     let tmp: string = cache.concat("/.glide_fetch.tar.gz");
     let cmd: string = "curl -fsSL -o \"".concat(tmp).concat("\" \"").concat(url).concat("\"");
-    let rc: int = __glide_shell(cmd);
+    let rc: i32 = __glide_shell(cmd);
     if rc != 0 { return ""; }
 
     spinner_set("inflating ".concat(d.name));
-    let mut read_len: int = 0;
+    let mut read_len: i32 = 0;
     let archive_gz: string = fs_read_bytes(tmp, &read_len);
     if read_len <= 0 { return ""; }
 
@@ -111,14 +111,14 @@ fn _try_tarball(d: ManifestDep, url: string, cache: string) -> string {
     // depend on file ordering, mtime jitter, etc).
     let hash: string = "sha256:".concat(sha256_hex(archive_gz));
 
-    let mut decoded_len: int = 0;
+    let mut decoded_len: i32 = 0;
     let raw: *void = gzip_decode(archive_gz, read_len, &decoded_len);
     if raw == null || decoded_len <= 0 { return ""; }
     let archive: string = __glide_string_from_buf(raw, decoded_len);
     free(raw);
 
     spinner_set("extracting ".concat(d.name));
-    let extracted: int = tar_extract(archive, decoded_len, cache, 1);
+    let extracted: i32 = tar_extract(archive, decoded_len, cache, 1);
     if extracted < 0 { return ""; }
     return hash;
 }
@@ -138,7 +138,7 @@ fn _try_git_clone(d: ManifestDep, cache: string) -> string {
         "git clone --depth=1 --quiet --branch \"".concat(d.rev)
         .concat("\" \"").concat(url)
         .concat("\" \"").concat(cache).concat("\"");
-    let rc1: int = __glide_shell(cmd1);
+    let rc1: i32 = __glide_shell(cmd1);
     if rc1 == 0 {
         return _git_tree_hash(cache);
     }
@@ -147,11 +147,11 @@ fn _try_git_clone(d: ManifestDep, cache: string) -> string {
     let cmd2: string =
         "git clone --quiet \"".concat(url)
         .concat("\" \"").concat(cache).concat("\"");
-    let rc2: int = __glide_shell(cmd2);
+    let rc2: i32 = __glide_shell(cmd2);
     if rc2 != 0 { return ""; }
     let checkout: string =
         "git -C \"".concat(cache).concat("\" checkout --quiet \"").concat(d.rev).concat("\"");
-    let rc3: int = __glide_shell(checkout);
+    let rc3: i32 = __glide_shell(checkout);
     if rc3 != 0 { return ""; }
     return _git_tree_hash(cache);
 }
@@ -181,11 +181,11 @@ fn _git_tree_hash(cache: string) -> string {
         if __glide_file_exists(packed) {
             let body: string = read_file(packed);
             let lines: *Vector<string> = body.split("\n");
-            for let i: int = 0; i < lines.len(); i++ {
+            for let i: i32 = 0; i < lines.len(); i++ {
                 let ln: string = lines.get(i);
                 if ln.eq("") { continue; }
                 if ln.at(0).to_int() == 35 { continue; }   // '#'
-                let sp: int = _index_of(ln, " ");
+                let sp: i32 = _index_of(ln, " ");
                 if sp <= 0 { continue; }
                 let sha: string = ln.substring(0, sp);
                 let name: string = ln.substring(sp + 1, ln.len()).trim();
@@ -197,20 +197,20 @@ fn _git_tree_hash(cache: string) -> string {
 }
 
 fn _is_hex(s: string) -> bool {
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         let ok: bool = (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
         if !ok { return false; }
     }
     return true;
 }
 
-fn _index_of(s: string, needle: string) -> int {
+fn _index_of(s: string, needle: string) -> i32 {
     if needle.len() == 0 || needle.len() > s.len() { return -1; }
-    let m: int = needle.len();
-    for let i: int = 0; i + m <= s.len(); i++ {
+    let m: i32 = needle.len();
+    for let i: i32 = 0; i + m <= s.len(); i++ {
         let mut hit: bool = true;
-        for let j: int = 0; j < m; j++ {
+        for let j: i32 = 0; j < m; j++ {
             if s.at(i + j).to_int() != needle.at(j).to_int() { hit = false; break; }
         }
         if hit { return i; }
@@ -243,7 +243,7 @@ fn _link_in_project(m: *Manifest, d: ManifestDep, target: string) {
 
 pub fn link_all(m: *Manifest) {
     if m == null { return; }
-    for let i: int = 0; i < m.deps.len(); i++ {
+    for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         let dir: string = dep_cache_dir(m, d);
         if !dir.eq("") && fs_is_dir(dir) {
@@ -256,11 +256,11 @@ pub fn link_all(m: *Manifest) {
 // Path deps are already on disk so they're skipped silently. Returns
 // the count of deps that needed a network round-trip (direct only —
 // transitive fetches don't change the surface count).
-pub fn fetch_all(m: *Manifest) -> int {
+pub fn fetch_all(m: *Manifest) -> i32 {
     if m == null { return 0; }
-    let mut fetched: int = 0;
+    let mut fetched: i32 = 0;
     let seen: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < m.deps.len(); i++ {
+    for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if d.kind != DEP_GIT { continue; }
         let before: bool = fs_is_dir(dep_cache_dir(m, d));
@@ -280,7 +280,7 @@ pub fn fetch_all(m: *Manifest) -> int {
 // Side effect: installs a process-wide override map (`mvs_set_override`)
 // so subsequent `dep_cache_dir` calls — including transitive walks and
 // `lockfile_from_manifest` — agree on the same selected rev.
-pub fn mvs_resolve(m: *Manifest) -> int {
+pub fn mvs_resolve(m: *Manifest) -> i32 {
     if m == null { return 0; }
     let urls: *Vector<string> = Vector::new();
     let revs: *Vector<string> = Vector::new();
@@ -288,9 +288,9 @@ pub fn mvs_resolve(m: *Manifest) -> int {
     _collect_url_revs(m, urls, revs, seen_pairs);
 
     let resolved: *HashMap<string> = HashMap::new();
-    let mut errors: int = 0;
+    let mut errors: i32 = 0;
     let unique: *HashMap<bool> = HashMap::new();
-    for let i: int = 0; i < urls.len(); i++ {
+    for let i: i32 = 0; i < urls.len(); i++ {
         let u: string = urls.get(i);
         if unique.contains(u) { continue; }
         unique.insert(u, true);
@@ -305,11 +305,11 @@ pub fn mvs_resolve(m: *Manifest) -> int {
 // Back-compat shim. Earlier callers used `mvs_report` for the same
 // behaviour; the rename to `mvs_resolve` better matches what the pass
 // actually does now (it forces unification, not just a report).
-pub fn mvs_report(m: *Manifest) -> int { return mvs_resolve(m); }
+pub fn mvs_report(m: *Manifest) -> i32 { return mvs_resolve(m); }
 
 fn _collect_url_revs(m: *Manifest, urls: *Vector<string>, revs: *Vector<string>, seen: *HashMap<bool>) {
     if m == null { return; }
-    for let i: int = 0; i < m.deps.len(); i++ {
+    for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         if d.kind != DEP_GIT { continue; }
         let key: string = d.path.concat("@").concat(d.rev);
@@ -331,7 +331,7 @@ fn _collect_url_revs(m: *Manifest, urls: *Vector<string>, revs: *Vector<string>,
 // into the override map regardless of whether there was a conflict.
 fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> string {
     let candidates: *Vector<string> = Vector::new();
-    for let i: int = 0; i < urls.len(); i++ {
+    for let i: i32 = 0; i < urls.len(); i++ {
         if urls.get(i).eq(url) {
             let r: string = revs.get(i);
             if !_contains_str(candidates, r) { candidates.push(r); }
@@ -343,7 +343,7 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> st
     // Sort candidates into semver / opaque buckets.
     let mut semvers: *Vector<SemVer> = Vector::new();
     let mut opaque: *Vector<string> = Vector::new();
-    for let i: int = 0; i < candidates.len(); i++ {
+    for let i: i32 = 0; i < candidates.len(); i++ {
         let s: string = candidates.get(i);
         let v: SemVer = parse_semver(s);
         if v.is_semver { semvers.push(v); }
@@ -358,7 +358,7 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> st
     // Highest semver wins. Check major compatibility against everyone.
     let mut best: SemVer = semvers.get(0);
     let mut conflict: bool = false;
-    for let i: int = 1; i < semvers.len(); i++ {
+    for let i: i32 = 1; i < semvers.len(); i++ {
         let v: SemVer = semvers.get(i);
         if !semver_compatible(best, v) { conflict = true; }
         if semver_cmp(v, best) > 0 {
@@ -379,7 +379,7 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> st
 }
 
 fn _contains_str(v: *Vector<string>, s: string) -> bool {
-    for let i: int = 0; i < v.len(); i++ {
+    for let i: i32 = 0; i < v.len(); i++ {
         if v.get(i).eq(s) { return true; }
     }
     return false;
@@ -387,7 +387,7 @@ fn _contains_str(v: *Vector<string>, s: string) -> bool {
 
 fn _join(v: *Vector<string>, sep: string) -> string {
     let mut out: string = "";
-    for let i: int = 0; i < v.len(); i++ {
+    for let i: i32 = 0; i < v.len(); i++ {
         if i > 0 { out = out.concat(sep); }
         out = out.concat(v.get(i));
     }

@@ -2,9 +2,9 @@
 // a second one, the existing overlap-borrow error stays.
 
 fn still_errors() {
-    let mut n: int = 0;
-    let a: &int = &n;
-    let b: &mut int = &mut n;    // ERROR: a still used below
+    let mut n: i32 = 0;
+    let a: &i32 = &n;
+    let b: &mut i32 = &mut n;    // ERROR: a still used below
     *b = 1;
     println!(*a);
 }

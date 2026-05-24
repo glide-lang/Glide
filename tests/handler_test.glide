@@ -6,7 +6,7 @@ import stdlib::json::*;
 
 pub struct Pet {
     pub name: string,
-    pub age: int,
+    pub age: i32,
 }
 
 impl JsonBind for Pet {
@@ -21,7 +21,7 @@ impl JsonBind for Pet {
     fn to_json(self: *Pet) -> *JsonValue {
         let v: *JsonValue = JsonValue::object();
         v.obj_set("name", JsonValue::string(self.name));
-        v.obj_set("age",  JsonValue::int(self.age));
+        v.obj_set("age",  JsonValue::i32(self.age));
         return v;
     }
 }
@@ -49,7 +49,7 @@ fn _post(body: string) -> HttpRequest {
     };
 }
 
-fn test_handler_echoes_typed_body() -> int {
+fn test_handler_echoes_typed_body() -> i32 {
     let req: HttpRequest = _post("{\"name\":\"rex\",\"age\":4}");
     let r: HttpResponse = echo_pet(&req);
     assert_eq!(r.status, 200);
@@ -58,21 +58,21 @@ fn test_handler_echoes_typed_body() -> int {
     return 0;
 }
 
-fn test_handler_returns_400_on_invalid_body() -> int {
+fn test_handler_returns_400_on_invalid_body() -> i32 {
     let req: HttpRequest = _post("not json at all");
     let r: HttpResponse = echo_pet(&req);
     assert_eq!(r.status, 400);
     return 0;
 }
 
-fn test_handler_returns_422_on_missing_field() -> int {
+fn test_handler_returns_422_on_missing_field() -> i32 {
     let req: HttpRequest = _post("{\"name\":\"rex\"}");
     let r: HttpResponse = echo_pet(&req);
     assert_eq!(r.status, 422);
     return 0;
 }
 
-fn test_handler_passthrough_request() -> int {
+fn test_handler_passthrough_request() -> i32 {
     let req: HttpRequest = _post("");
     let r: HttpResponse = always_ok(&req);
     assert_eq!(r.status, 200);

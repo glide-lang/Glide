@@ -13,17 +13,17 @@
 //     are tracked as separate epics; until they land, non-Linux
 //     servers handle one connection at a time per accept loop.
 
-extern fn listen_tcp(port: int) -> int;
-extern fn listen_tcp_reuseport(port: int) -> int;
-extern fn accept_tcp_async(listener: int) -> int;
-extern fn tcp_read_async(fd: int, buf: *void, max: int) -> int;
-extern fn tcp_write_async(fd: int, buf: *void, n: int) -> int;
-extern fn tcp_writev2_async(fd: int, buf1: *void, n1: int, buf2: *void, n2: int) -> int;
-extern fn tcp_sendfile_from_path(fd: int, path: string) -> int;
-extern fn tcp_close(fd: int);
+extern fn listen_tcp(port: i32) -> i32;
+extern fn listen_tcp_reuseport(port: i32) -> i32;
+extern fn accept_tcp_async(listener: i32) -> i32;
+extern fn tcp_read_async(fd: i32, buf: *void, max: i32) -> i32;
+extern fn tcp_write_async(fd: i32, buf: *void, n: i32) -> i32;
+extern fn tcp_writev2_async(fd: i32, buf1: *void, n1: i32, buf2: *void, n2: i32) -> i32;
+extern fn tcp_sendfile_from_path(fd: i32, path: string) -> i32;
+extern fn tcp_close(fd: i32);
 
-pub struct Listener { pub fd: int }
-pub struct Conn     { pub fd: int }
+pub struct Listener { pub fd: i32 }
+pub struct Conn     { pub fd: i32 }
 
 impl Listener {
     /// Bind + listen on TCP `port` across all interfaces. Returns a
@@ -38,7 +38,7 @@ impl Listener {
     /// }
     /// println!("listening on :8080");
     /// ```
-    pub fn bind(port: int) -> *Listener {
+    pub fn bind(port: i32) -> *Listener {
         let l: *Listener = malloc(sizeof(Listener)) as *Listener;
         l.fd = listen_tcp(port);
         return l;
@@ -58,7 +58,7 @@ impl Listener {
     /// }
     /// println!("listening on :8080");
     /// ```
-    pub fn bind_reuseport(port: int) -> *Listener {
+    pub fn bind_reuseport(port: i32) -> *Listener {
         let l: *Listener = malloc(sizeof(Listener)) as *Listener;
         l.fd = listen_tcp_reuseport(port);
         return l;
@@ -120,7 +120,7 @@ impl Conn {
     /// let n: int = c.read(buf as *void, 1024);
     /// if n <= 0 { c.close(); return; }
     /// ```
-    pub fn read(self: *Conn, buf: *void, max: int) -> int {
+    pub fn read(self: *Conn, buf: *void, max: i32) -> i32 {
         return tcp_read_async(self.fd, buf, max);
     }
 
@@ -136,7 +136,7 @@ impl Conn {
     ///     sent = sent + k;
     /// }
     /// ```
-    pub fn write(self: *Conn, buf: *void, n: int) -> int {
+    pub fn write(self: *Conn, buf: *void, n: i32) -> i32 {
         return tcp_write_async(self.fd, buf, n);
     }
 
@@ -146,7 +146,7 @@ impl Conn {
     /// ```glide
     /// c.write_str("HTTP/1.0 200 OK\r\n\r\n");
     /// ```
-    pub fn write_str(self: *Conn, s: string) -> int {
+    pub fn write_str(self: *Conn, s: string) -> i32 {
         return tcp_write_async(self.fd, s as *void, s.len());
     }
 
@@ -155,7 +155,7 @@ impl Conn {
     /// the kernel having to assemble two TCP segments — saves both the
     /// userspace memcpy that hp_build_response would do and the extra
     /// syscall a sequential pair of writes would cost.
-    pub fn write2(self: *Conn, buf1: *void, n1: int, buf2: *void, n2: int) -> int {
+    pub fn write2(self: *Conn, buf1: *void, n1: i32, buf2: *void, n2: i32) -> i32 {
         return tcp_writev2_async(self.fd, buf1, n1, buf2, n2);
     }
 
@@ -165,7 +165,7 @@ impl Conn {
     /// serving — disk pages go straight from the kernel page cache
     /// into the socket buffer. Returns total bytes sent (file size on
     /// success) or -1 on error.
-    pub fn sendfile(self: *Conn, path: string) -> int {
+    pub fn sendfile(self: *Conn, path: string) -> i32 {
         return tcp_sendfile_from_path(self.fd, path);
     }
 

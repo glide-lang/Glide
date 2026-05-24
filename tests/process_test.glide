@@ -6,7 +6,7 @@ fn _hostname_program() -> string {
     return "hostname";
 }
 
-fn test_run_simple_program() -> int {
+fn test_run_simple_program() -> i32 {
     let c* = Command::new(_hostname_program());
     let r: !ProcessResult = c.run();
     assert!(r.ok);
@@ -14,7 +14,7 @@ fn test_run_simple_program() -> int {
     return 0;
 }
 
-fn test_run_with_capture_out() -> int {
+fn test_run_with_capture_out() -> i32 {
     let c* = Command::new(_hostname_program());
     c.capture_out();
     let r: !ProcessResult = c.run();
@@ -24,7 +24,7 @@ fn test_run_with_capture_out() -> int {
     return 0;
 }
 
-fn test_run_program_not_found() -> int {
+fn test_run_program_not_found() -> i32 {
     let c* = Command::new("definitely-not-a-real-glide-test-program");
     let r: !ProcessResult = c.run();
     if os_is_windows() {
@@ -44,7 +44,7 @@ fn test_run_program_not_found() -> int {
     return 0;
 }
 
-fn test_spawn_and_wait() -> int {
+fn test_spawn_and_wait() -> i32 {
     let c* = Command::new(_hostname_program());
     let s: !Child = c.spawn();
     assert!(s.ok);
@@ -56,18 +56,18 @@ fn test_spawn_and_wait() -> int {
     return 0;
 }
 
-fn test_process_exists_bogus_pid() -> int {
+fn test_process_exists_bogus_pid() -> i32 {
     assert_not!(process_exists(99999999));
     return 0;
 }
 
-fn test_process_exists_self() -> int {
-    let me: int = os_pid();
+fn test_process_exists_self() -> i32 {
+    let me: i32 = os_pid();
     assert!(process_exists(me));
     return 0;
 }
 
-fn test_pipe_stdout_via_spawn() -> int {
+fn test_pipe_stdout_via_spawn() -> i32 {
     let c* = Command::new(_hostname_program());
     c.pipe_stdout();
     let s: !Child = c.spawn();
@@ -81,7 +81,7 @@ fn test_pipe_stdout_via_spawn() -> int {
     return 0;
 }
 
-fn test_capture_with_env_override() -> int {
+fn test_capture_with_env_override() -> i32 {
     if !os_is_windows() { return 0; }
     let c* = Command::new("cmd");
     c.arg("/c").arg("echo %GLIDE_TEST_VAR%");

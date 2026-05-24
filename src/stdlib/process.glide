@@ -25,41 +25,41 @@ import stdlib::os::*;
 
 extern fn __glide_proc_run(
     prog: string,
-    args_packed: string, args_n: int,
-    env_packed: string, env_n: int,
+    args_packed: string, args_n: i32,
+    env_packed: string, env_n: i32,
     cwd: string,
-    stdin_data: string, stdin_len: int,
-    capture_flags: int,
-    exit_out: *int, signaled_out: *int, signal_out: *int,
+    stdin_data: string, stdin_len: i32,
+    capture_flags: i32,
+    exit_out: *i32, signaled_out: *i32, signal_out: *i32,
     stdout_out: *string, stderr_out: *string
-) -> int;
+) -> i32;
 
 extern fn __glide_proc_spawn(
     prog: string,
-    args_packed: string, args_n: int,
-    env_packed: string, env_n: int,
+    args_packed: string, args_n: i32,
+    env_packed: string, env_n: i32,
     cwd: string,
-    env_clear: int
-) -> int;
+    env_clear: i32
+) -> i32;
 
 extern fn __glide_proc_spawn_pipes(
     prog: string,
-    args_packed: string, args_n: int,
-    env_packed: string, env_n: int,
+    args_packed: string, args_n: i32,
+    env_packed: string, env_n: i32,
     cwd: string,
-    env_clear: int,
-    pipe_flags: int,
+    env_clear: i32,
+    pipe_flags: i32,
     out_stdin: *i64, out_stdout: *i64, out_stderr: *i64
-) -> int;
+) -> i32;
 
-extern fn __glide_pipe_write(handle: i64, data: string, len: int) -> int;
-extern fn __glide_pipe_read(handle: i64, max: int, out: *string) -> int;
-extern fn __glide_pipe_read_all(handle: i64, out: *string) -> int;
-extern fn __glide_pipe_close(handle: i64) -> int;
+extern fn __glide_pipe_write(handle: i64, data: string, len: i32) -> i32;
+extern fn __glide_pipe_read(handle: i64, max: i32, out: *string) -> i32;
+extern fn __glide_pipe_read_all(handle: i64, out: *string) -> i32;
+extern fn __glide_pipe_close(handle: i64) -> i32;
 
-extern fn __glide_proc_wait(pid: int, exit_out: *int, signaled_out: *int, signal_out: *int) -> int;
-extern fn __glide_proc_kill(pid: int, sig: int) -> int;
-extern fn __glide_proc_exists(pid: int) -> int;
+extern fn __glide_proc_wait(pid: i32, exit_out: *i32, signaled_out: *i32, signal_out: *i32) -> i32;
+extern fn __glide_proc_kill(pid: i32, sig: i32) -> i32;
+extern fn __glide_proc_exists(pid: i32) -> i32;
 
 c_raw! {
     #ifdef GLIDE_PROCESS_VIA_CRAW
@@ -883,11 +883,11 @@ c_raw! {
 
 /// Result of a finished subprocess run.
 pub struct ProcessResult {
-    pub exit_code: int,        // 0 = success
+    pub exit_code: i32,        // 0 = success
     pub stdout: string,        // empty if not captured
     pub stderr: string,        // empty if not captured
     pub signaled: bool,        // true if child died from a signal (POSIX)
-    pub signal: int,           // signal number; 0 if !signaled
+    pub signal: i32,           // signal number; 0 if !signaled
 }
 
 /// Builder for a subprocess command. Chain methods to configure, then call
@@ -898,7 +898,7 @@ pub struct Command {
     pub env_kv: *Vector<string>,        // entries are "KEY=VAL" strings
     pub cwd_path: string,
     pub stdin_payload: string,
-    pub flags: int,                     // bit 0 = capture stdout, bit 1 = capture stderr,
+    pub flags: i32,                     // bit 0 = capture stdout, bit 1 = capture stderr,
                                         // bit 2 = env_clear (don't inherit parent env),
                                         // bit 3 = pipe stdin, bit 4 = pipe stdout, bit 5 = pipe stderr
 }
@@ -915,7 +915,7 @@ pub struct ChildStderr { pub handle: i64 }
 /// Handle to a spawned (still-running) child process. The pipe handles are
 /// non-null only when the corresponding `Command::pipe_*` builder was called.
 pub struct Child {
-    pub pid: int,
+    pub pid: i32,
     pub stdin:  *ChildStdin,    // null unless pipe_stdin()
     pub stdout: *ChildStdout,   // null unless pipe_stdout()
     pub stderr: *ChildStderr,   // null unless pipe_stderr()
@@ -929,8 +929,8 @@ impl ChildStdin {
     /// child.stdin.write("input line\n");
     /// child.stdin.close();   // signal EOF
     /// ```
-    pub fn write(self: *ChildStdin, s: string) -> !int {
-        let n: int = __glide_pipe_write(self.handle, s, s.len());
+    pub fn write(self: *ChildStdin, s: string) -> !i32 {
+        let n: i32 = __glide_pipe_write(self.handle, s, s.len());
         if n < 0 { return err("write to child stdin failed"); }
         return ok(n);
     }
@@ -953,9 +953,9 @@ impl ChildStdout {
     /// let r: !string = child.stdout.read(4096);
     /// if r.ok && r.val.len() > 0 { print!(r.val); }
     /// ```
-    pub fn read(self: *ChildStdout, n: int) -> !string {
+    pub fn read(self: *ChildStdout, n: i32) -> !string {
         let mut out: string = "";
-        let got: int = __glide_pipe_read(self.handle, n, &mut out);
+        let got: i32 = __glide_pipe_read(self.handle, n, &mut out);
         if got < 0 { return err("read from child stdout failed"); }
         return ok(out);
     }
@@ -967,7 +967,7 @@ impl ChildStdout {
     /// ```
     pub fn read_all(self: *ChildStdout) -> !string {
         let mut out: string = "";
-        let got: int = __glide_pipe_read_all(self.handle, &mut out);
+        let got: i32 = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stdout failed"); }
         return ok(out);
     }
@@ -989,9 +989,9 @@ impl ChildStderr {
     /// let r: !string = child.stderr.read(4096);
     /// if r.ok && r.val.len() > 0 { eprintln(r.val); }
     /// ```
-    pub fn read(self: *ChildStderr, n: int) -> !string {
+    pub fn read(self: *ChildStderr, n: i32) -> !string {
         let mut out: string = "";
-        let got: int = __glide_pipe_read(self.handle, n, &mut out);
+        let got: i32 = __glide_pipe_read(self.handle, n, &mut out);
         if got < 0 { return err("read from child stderr failed"); }
         return ok(out);
     }
@@ -1003,7 +1003,7 @@ impl ChildStderr {
     /// ```
     pub fn read_all(self: *ChildStderr) -> !string {
         let mut out: string = "";
-        let got: int = __glide_pipe_read_all(self.handle, &mut out);
+        let got: i32 = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stderr failed"); }
         return ok(out);
     }
@@ -1055,7 +1055,7 @@ impl Command {
     /// Command::new("tool").args(extras).run();
     /// ```
     pub fn args(self: *Command, vs: *Vector<string>) -> *Command {
-        for let i: int = 0; i < vs.len(); i++ { self.args.push(vs.get(i)); }
+        for let i: i32 = 0; i < vs.len(); i++ { self.args.push(vs.get(i)); }
         return self;
     }
 
@@ -1196,12 +1196,12 @@ impl Command {
     pub fn run(self: *Command) -> !ProcessResult {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
-        let mut exit_code: int = 0;
-        let mut signaled:  int = 0;
-        let mut sig:       int = 0;
+        let mut exit_code: i32 = 0;
+        let mut signaled:  i32 = 0;
+        let mut sig:       i32 = 0;
         let mut out_str:   string = "";
         let mut err_str:   string = "";
-        let rc: int = __glide_proc_run(
+        let rc: i32 = __glide_proc_run(
             self.program,
             args_packed, self.args.len(),
             env_packed,  self.env_kv.len(),
@@ -1239,11 +1239,11 @@ impl Command {
     pub fn spawn(self: *Command) -> !Child {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
-        let env_clear:   int = (self.flags >> 2) & 1;
-        let pipe_flags:  int = (self.flags >> 3) & 7;   // bits 3..5 → 0..2
+        let env_clear:   i32 = (self.flags >> 2) & 1;
+        let pipe_flags:  i32 = (self.flags >> 3) & 7;   // bits 3..5 → 0..2
 
         if pipe_flags == 0 {
-            let pid: int = __glide_proc_spawn(
+            let pid: i32 = __glide_proc_spawn(
                 self.program,
                 args_packed, self.args.len(),
                 env_packed,  self.env_kv.len(),
@@ -1261,7 +1261,7 @@ impl Command {
         let mut h_in:  i64 = 0 - 1;
         let mut h_out: i64 = 0 - 1;
         let mut h_err: i64 = 0 - 1;
-        let pid: int = __glide_proc_spawn_pipes(
+        let pid: i32 = __glide_proc_spawn_pipes(
             self.program,
             args_packed, self.args.len(),
             env_packed,  self.env_kv.len(),
@@ -1323,10 +1323,10 @@ impl Child {
     /// }
     /// ```
     pub fn wait(self: *Child) -> !ProcessResult {
-        let mut exit_code: int = 0;
-        let mut signaled:  int = 0;
-        let mut sig:       int = 0;
-        let rc: int = __glide_proc_wait(self.pid, &mut exit_code, &mut signaled, &mut sig);
+        let mut exit_code: i32 = 0;
+        let mut signaled:  i32 = 0;
+        let mut sig:       i32 = 0;
+        let rc: i32 = __glide_proc_wait(self.pid, &mut exit_code, &mut signaled, &mut sig);
         if rc != 0 { return err("waitpid failed"); }
         let r: ProcessResult = ProcessResult {
             exit_code: exit_code, stdout: "", stderr: "",
@@ -1342,7 +1342,7 @@ impl Child {
     /// child.kill(15);   // SIGTERM (POSIX); ignored arg on Windows
     /// child.wait();
     /// ```
-    pub fn kill(self: *Child, sig: int) -> ! {
+    pub fn kill(self: *Child, sig: i32) -> ! {
         if __glide_proc_kill(self.pid, sig) != 0 { return err("kill failed"); }
     }
 }
@@ -1358,7 +1358,7 @@ impl Child {
 /// let r: ! = process_kill(1234, 15);   // SIGTERM
 /// if !r.ok { eprintln(r.err); }
 /// ```
-pub fn process_kill(pid: int, sig: int) -> ! {
+pub fn process_kill(pid: i32, sig: i32) -> ! {
     if __glide_proc_kill(pid, sig) != 0 { return err("kill failed"); }
 }
 
@@ -1368,7 +1368,7 @@ pub fn process_kill(pid: int, sig: int) -> ! {
 /// ```glide
 /// if process_exists(1234) { println!("still running"); }
 /// ```
-pub fn process_exists(pid: int) -> bool {
+pub fn process_exists(pid: i32) -> bool {
     return __glide_proc_exists(pid) != 0;
 }
 
@@ -1378,7 +1378,7 @@ pub fn process_exists(pid: int) -> bool {
 
 fn _proc_join(v: *Vector<string>) -> string {
     let mut out: string = "";
-    for let i: int = 0; i < v.len(); i++ {
+    for let i: i32 = 0; i < v.len(); i++ {
         if i > 0 { out = out.concat("\n"); }
         out = out.concat(v.get(i));
     }

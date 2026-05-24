@@ -1,16 +1,16 @@
 import stdlib::testing::*;
 import stdlib::hashmap::*;
 
-fn test_new_is_empty() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_new_is_empty() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     assert_eq!(m.len(), 0);
     assert_not!(m.contains("anything"));
     return 0;
 }
 
-fn test_insert_get_contains() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_insert_get_contains() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
 
     m.insert("one", 1);
@@ -29,8 +29,8 @@ fn test_insert_get_contains() -> int {
     return 0;
 }
 
-fn test_overwrite_keeps_len() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_overwrite_keeps_len() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     m.insert("k", 1);
     assert_eq!(m.len(), 1);
@@ -40,8 +40,8 @@ fn test_overwrite_keeps_len() -> int {
     return 0;
 }
 
-fn test_remove() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_remove() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     m.insert("a", 1);
     m.insert("b", 2);
@@ -57,15 +57,15 @@ fn test_remove() -> int {
     return 0;
 }
 
-fn test_grows_past_default_capacity() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_grows_past_default_capacity() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
-    for let i: int = 0; i < 100; i++ {
+    for let i: i32 = 0; i < 100; i++ {
         let key: string = "k${i}";
         m.insert(key, i);
     }
     assert_eq!(m.len(), 100);
-    for let i: int = 0; i < 100; i++ {
+    for let i: i32 = 0; i < 100; i++ {
         let key: string = "k${i}";
         assert!(m.contains(key));
         assert_eq!(m.get(key), i);
@@ -73,7 +73,7 @@ fn test_grows_past_default_capacity() -> int {
     return 0;
 }
 
-fn test_string_value_type() -> int {
+fn test_string_value_type() -> i32 {
     let m: *HashMap<string> = HashMap::new();
     defer m.free();
     m.insert("name", "alice");
@@ -83,10 +83,10 @@ fn test_string_value_type() -> int {
     return 0;
 }
 
-fn _dbl(x: int) -> int { return x * 2; }
+fn _dbl(x: i32) -> i32 { return x * 2; }
 
-fn test_is_empty() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_is_empty() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     assert!(m.is_empty());
     m.insert("x", 1);
@@ -94,29 +94,29 @@ fn test_is_empty() -> int {
     return 0;
 }
 
-fn test_values_snapshot() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_values_snapshot() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     m.insert("a", 10); m.insert("b", 20); m.insert("c", 30);
-    let vs: *Vector<int> = m.values();
+    let vs: *Vector<i32> = m.values();
     assert_eq!(vs.len(), 3);
     assert_eq!(vs.sum(), 60);
     return 0;
 }
 
-fn test_values_empty_map() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_values_empty_map() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
-    let vs: *Vector<int> = m.values();
+    let vs: *Vector<i32> = m.values();
     assert_eq!(vs.len(), 0);
     return 0;
 }
 
-fn test_map_values_doubles() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_map_values_doubles() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     m.insert("one", 1); m.insert("two", 2); m.insert("three", 3);
-    let d: *HashMap<int> = m.map_values(_dbl);
+    let d: *HashMap<i32> = m.map_values(_dbl);
     defer d.free();
     assert_eq!(d.len(), 3);
     assert_eq!(d.get("one"), 2);
@@ -127,37 +127,37 @@ fn test_map_values_doubles() -> int {
     return 0;
 }
 
-fn _add_pair(acc: int, p: *Pair<string, int>) -> int { return acc + p.second; }
+fn _add_pair(acc: i32, p: *Pair<string, i32>) -> i32 { return acc + p.second; }
 
-fn test_entries_count() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_entries_count() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     m.insert("a", 1); m.insert("b", 2); m.insert("c", 3);
-    let es: *Vector<*Pair<string, int>> = m.entries();
+    let es: *Vector<*Pair<string, i32>> = m.entries();
     assert_eq!(es.len(), 3);
     return 0;
 }
 
-fn test_entries_empty_map() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_entries_empty_map() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
-    let es: *Vector<*Pair<string, int>> = m.entries();
+    let es: *Vector<*Pair<string, i32>> = m.entries();
     assert_eq!(es.len(), 0);
     return 0;
 }
 
-fn test_entries_sum_via_fold() -> int {
-    let m: *HashMap<int> = HashMap::new();
+fn test_entries_sum_via_fold() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
     defer m.free();
     m.insert("a", 10); m.insert("b", 20); m.insert("c", 30);
-    let es: *Vector<*Pair<string, int>> = m.entries();
-    let total: int = es.fold(0, _add_pair);
+    let es: *Vector<*Pair<string, i32>> = m.entries();
+    let total: i32 = es.fold(0, _add_pair);
     assert_eq!(total, 60);
     return 0;
 }
 
-fn test_pair_new() -> int {
-    let p: *Pair<int, string> = Pair::new(42, "answer");
+fn test_pair_new() -> i32 {
+    let p: *Pair<i32, string> = Pair::new(42, "answer");
     assert_eq!(p.first, 42);
     assert_str_eq!(p.second, "answer");
     return 0;

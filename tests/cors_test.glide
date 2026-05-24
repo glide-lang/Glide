@@ -30,7 +30,7 @@ fn _cors_chain(req: *HttpRequest) -> *Chain {
     return c;
 }
 
-fn test_preflight_options_returns_204_with_headers() -> int {
+fn test_preflight_options_returns_204_with_headers() -> i32 {
     install_cors(CorsConfig::permissive());
     let req: HttpRequest = _cors_req("OPTIONS");
     let c: *Chain = _cors_chain(&req);
@@ -42,7 +42,7 @@ fn test_preflight_options_returns_204_with_headers() -> int {
     return 0;
 }
 
-fn test_normal_get_gets_cors_headers() -> int {
+fn test_normal_get_gets_cors_headers() -> i32 {
     install_cors(CorsConfig {
         origin: "https://app.example.com",
         methods: "GET, POST",
@@ -61,7 +61,7 @@ fn test_normal_get_gets_cors_headers() -> int {
     return 0;
 }
 
-fn test_credentials_true_adds_header() -> int {
+fn test_credentials_true_adds_header() -> i32 {
     install_cors(CorsConfig {
         origin: "https://app.example.com",
         methods: "GET",

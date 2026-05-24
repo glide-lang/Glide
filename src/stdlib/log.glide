@@ -46,31 +46,31 @@ import stdlib::log_macros::*;
 // Constants
 // ============================================================================
 
-pub const LOG_TRACE: int = 0;
-pub const LOG_DEBUG: int = 1;
-pub const LOG_INFO:  int = 2;
-pub const LOG_WARN:  int = 3;
-pub const LOG_ERROR: int = 4;
-pub const LOG_FATAL: int = 5;
-pub const LOG_OFF:   int = 99;
+pub const LOG_TRACE: i32 = 0;
+pub const LOG_DEBUG: i32 = 1;
+pub const LOG_INFO:  i32 = 2;
+pub const LOG_WARN:  i32 = 3;
+pub const LOG_ERROR: i32 = 4;
+pub const LOG_FATAL: i32 = 5;
+pub const LOG_OFF:   i32 = 99;
 
-pub const LOG_FMT_TEXT:    int = 0;   // human-readable
-pub const LOG_FMT_KV:      int = 1;   // logfmt: key=val key=val
-pub const LOG_FMT_JSON:    int = 2;   // one JSON object per line
+pub const LOG_FMT_TEXT:    i32 = 0;   // human-readable
+pub const LOG_FMT_KV:      i32 = 1;   // logfmt: key=val key=val
+pub const LOG_FMT_JSON:    i32 = 2;   // one JSON object per line
 
-pub const LOG_TS_NONE:     int = 0;
-pub const LOG_TS_ISO:      int = 1;   // 2026-05-23T15:30:45Z
-pub const LOG_TS_UNIX:     int = 2;   // 1716480000
-pub const LOG_TS_UNIX_MS:  int = 3;   // 1716480000123
-pub const LOG_TS_RELATIVE: int = 4;   // 0.001s elapsed since logger start
+pub const LOG_TS_NONE:     i32 = 0;
+pub const LOG_TS_ISO:      i32 = 1;   // 2026-05-23T15:30:45Z
+pub const LOG_TS_UNIX:     i32 = 2;   // 1716480000
+pub const LOG_TS_UNIX_MS:  i32 = 3;   // 1716480000123
+pub const LOG_TS_RELATIVE: i32 = 4;   // 0.001s elapsed since logger start
 
 // Sink kinds.
-pub const SINK_STDOUT:   int = 0;
-pub const SINK_STDERR:   int = 1;
-pub const SINK_FILE:     int = 2;
-pub const SINK_ROTATING: int = 3;
-pub const SINK_SYSLOG:   int = 4;
-pub const SINK_CALLBACK: int = 5;     // user-supplied fn(line) -> void
+pub const SINK_STDOUT:   i32 = 0;
+pub const SINK_STDERR:   i32 = 1;
+pub const SINK_FILE:     i32 = 2;
+pub const SINK_ROTATING: i32 = 3;
+pub const SINK_SYSLOG:   i32 = 4;
+pub const SINK_CALLBACK: i32 = 5;     // user-supplied fn(line) -> void
 
 // ============================================================================
 // LogField + LogEntry
@@ -82,11 +82,11 @@ pub struct LogField {
 }
 
 pub struct LogEntry {
-    pub level: int,
+    pub level: i32,
     pub msg: string,
     pub time_ns: i64,
     pub file: string,
-    pub line: int,
+    pub line: i32,
     pub fields: *Vector<LogField>,
 }
 
@@ -95,25 +95,25 @@ pub struct LogEntry {
 // ============================================================================
 
 pub struct LogSink {
-    pub kind: int,
-    pub level: int,           // per-sink filter (LOG_TRACE by default)
+    pub kind: i32,
+    pub level: i32,           // per-sink filter (LOG_TRACE by default)
     pub color: bool,          // ANSI for text-format
-    pub fd: int,              // raw fd for stdout/stderr/file
+    pub fd: i32,              // raw fd for stdout/stderr/file
     pub path: string,
-    pub max_size: int,        // rotating: bytes per file
-    pub max_files: int,       // rotating: keep N rolled files
-    pub cur_size: int,        // rotating: current size in active file
+    pub max_size: i32,        // rotating: bytes per file
+    pub max_files: i32,       // rotating: keep N rolled files
+    pub cur_size: i32,        // rotating: current size in active file
     pub cb: fn(string), // SINK_CALLBACK
 }
 
-extern fn __glide_log_open_file(path: string, append: int) -> int;
-extern fn __glide_log_write_fd(fd: int, s: string) -> int;
-extern fn __glide_log_close_fd(fd: int);
-extern fn __glide_log_rename(src: string, dst: string) -> int;
+extern fn __glide_log_open_file(path: string, append: i32) -> i32;
+extern fn __glide_log_write_fd(fd: i32, s: string) -> i32;
+extern fn __glide_log_close_fd(fd: i32);
+extern fn __glide_log_rename(src: string, dst: string) -> i32;
 extern fn __glide_log_file_size(path: string) -> i64;
-extern fn __glide_log_isatty(fd: int) -> int;
+extern fn __glide_log_isatty(fd: i32) -> i32;
 extern fn __glide_log_syslog_open(ident: string);
-extern fn __glide_log_syslog(level: int, s: string);
+extern fn __glide_log_syslog(level: i32, s: string);
 
 c_raw! {
     #ifndef GLIDE_LOG_HELPERS_DEFINED
@@ -238,7 +238,7 @@ impl LogSink {
         s.fd = __glide_log_open_file(path, 1);
         return s;
     }
-    pub fn rotating_file(path: string, max_size: int, max_files: int) -> *LogSink {
+    pub fn rotating_file(path: string, max_size: i32, max_files: i32) -> *LogSink {
         let s: *LogSink = calloc(1, sizeof(LogSink)) as *LogSink;
         s.kind = SINK_ROTATING;
         s.level = LOG_TRACE;
@@ -247,7 +247,7 @@ impl LogSink {
         s.max_files = max_files;
         s.fd = __glide_log_open_file(path, 1);
         let cs: i64 = __glide_log_file_size(path);
-        if cs > 0 { s.cur_size = cs as int; } else { s.cur_size = 0; }
+        if cs > 0 { s.cur_size = cs as i32; } else { s.cur_size = 0; }
         return s;
     }
     pub fn syslog(ident: string) -> *LogSink {
@@ -268,12 +268,12 @@ impl LogSink {
     }
 
     /// Set minimum level for this sink (rejects below). Returns self for chaining.
-    pub fn min_level(self: *LogSink, lvl: int) -> *LogSink {
+    pub fn min_level(self: *LogSink, lvl: i32) -> *LogSink {
         self.level = lvl;
         return self;
     }
 
-    fn write_line(self: *LogSink, line: string, level: int) {
+    fn write_line(self: *LogSink, line: string, level: i32) {
         if level < self.level { return; }
         if self.kind == SINK_STDOUT || self.kind == SINK_STDERR || self.kind == SINK_FILE {
             __glide_log_write_fd(self.fd, line);
@@ -306,7 +306,7 @@ impl LogSink {
     fn rotate(self: *LogSink) {
         __glide_log_close_fd(self.fd);
         // Shift .N-1 -> .N, .N-2 -> .N-1, ..., .1 -> .2, base -> .1
-        let mut i: int = self.max_files;
+        let mut i: i32 = self.max_files;
         while i >= 1 {
             let src: string;
             if i == 1 { src = self.path; }
@@ -320,25 +320,25 @@ impl LogSink {
     }
 }
 
-fn _suffix(path: string, n: int) -> string {
+fn _suffix(path: string, n: i32) -> string {
     return path.concat(".").concat(_log_itoa(n));
 }
 
-fn _log_itoa(n: int) -> string {
+fn _log_itoa(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut v: int = n;
+    let mut v: i32 = n;
     let mut neg: bool = false;
     if v < 0 { neg = true; v = 0 - v; }
     let mut s: string = "";
     while v > 0 {
-        let d: int = v - (v / 10) * 10;
+        let d: i32 = v - (v / 10) * 10;
         s = (("0").at(0).to_string()).substring(0, 0).concat(_digit(d)).concat(s);
         v = v / 10;
     }
     if neg { s = "-".concat(s); }
     return s;
 }
-fn _digit(d: int) -> string {
+fn _digit(d: i32) -> string {
     if d == 0 { return "0"; }
     if d == 1 { return "1"; }
     if d == 2 { return "2"; }
@@ -350,7 +350,7 @@ fn _digit(d: int) -> string {
     if d == 8 { return "8"; }
     return "9";
 }
-fn _zpad(s: string, w: int) -> string {
+fn _zpad(s: string, w: i32) -> string {
     let mut out: string = s;
     while out.len() < w { out = "0".concat(out); }
     return out;
@@ -361,9 +361,9 @@ fn _zpad(s: string, w: int) -> string {
 // ============================================================================
 
 pub struct Logger {
-    pub level: int,
-    pub format: int,
-    pub ts_format: int,
+    pub level: i32,
+    pub format: i32,
+    pub ts_format: i32,
     pub time_start_ns: i64,
     pub sinks: *Vector<*LogSink>,
     pub bound_fields: *Vector<LogField>,
@@ -411,7 +411,7 @@ impl Logger {
         child.time_start_ns = self.time_start_ns;
         child.sinks = self.sinks;
         let bf: *Vector<LogField> = Vector::new();
-        for let i: int = 0; i < self.bound_fields.len(); i++ {
+        for let i: i32 = 0; i < self.bound_fields.len(); i++ {
             bf.push(self.bound_fields.get(i));
         }
         let f: LogField = LogField { key: key, value: value };
@@ -420,13 +420,13 @@ impl Logger {
         return child;
     }
 
-    fn enabled(self: *Logger, lvl: int) -> bool {
+    fn enabled(self: *Logger, lvl: i32) -> bool {
         return lvl >= self.level;
     }
 
     /// Emit `msg` (plus any bound + extra fields) at `lvl`. `extras`
     /// is a flat list of key, value, key, value...
-    pub fn logv(self: *Logger, lvl: int, msg: string, extras: *Vector<string>) {
+    pub fn logv(self: *Logger, lvl: i32, msg: string, extras: *Vector<string>) {
         if !self.enabled(lvl) { return; }
         let entry: *LogEntry = malloc(sizeof(LogEntry)) as *LogEntry;
         entry.level = lvl;
@@ -435,11 +435,11 @@ impl Logger {
         entry.file = "";
         entry.line = 0;
         let fs: *Vector<LogField> = Vector::new();
-        for let i: int = 0; i < self.bound_fields.len(); i++ {
+        for let i: i32 = 0; i < self.bound_fields.len(); i++ {
             fs.push(self.bound_fields.get(i));
         }
-        let n: int = extras.len();
-        let mut k: int = 0;
+        let n: i32 = extras.len();
+        let mut k: i32 = 0;
         while k + 1 < n {
             let f: LogField = LogField { key: extras.get(k), value: extras.get(k + 1) };
             fs.push(f);
@@ -450,7 +450,7 @@ impl Logger {
     }
 
     /// Same as logv but with caller-supplied file:line.
-    pub fn logv_at(self: *Logger, lvl: int, msg: string, file: string, line: int,
+    pub fn logv_at(self: *Logger, lvl: i32, msg: string, file: string, line: i32,
                     extras: *Vector<string>) {
         if !self.enabled(lvl) { return; }
         let entry: *LogEntry = malloc(sizeof(LogEntry)) as *LogEntry;
@@ -460,11 +460,11 @@ impl Logger {
         entry.file = file;
         entry.line = line;
         let fs: *Vector<LogField> = Vector::new();
-        for let i: int = 0; i < self.bound_fields.len(); i++ {
+        for let i: i32 = 0; i < self.bound_fields.len(); i++ {
             fs.push(self.bound_fields.get(i));
         }
-        let n: int = extras.len();
-        let mut k: int = 0;
+        let n: i32 = extras.len();
+        let mut k: i32 = 0;
         while k + 1 < n {
             let f: LogField = LogField { key: extras.get(k), value: extras.get(k + 1) };
             fs.push(f);
@@ -476,7 +476,7 @@ impl Logger {
 
     fn emit(self: *Logger, entry: *LogEntry) {
         let line: string = self.render(entry);
-        for let i: int = 0; i < self.sinks.len(); i++ {
+        for let i: i32 = 0; i < self.sinks.len(); i++ {
             self.sinks.get(i).write_line(line, entry.level);
         }
     }
@@ -492,7 +492,7 @@ impl Logger {
                             self.color_for(entry.level));
     }
 
-    fn color_for(self: *Logger, _lvl: int) -> bool {
+    fn color_for(self: *Logger, _lvl: i32) -> bool {
         if self.sinks.len() == 0 { return false; }
         let s: *LogSink = self.sinks.get(0);
         return s.color;
@@ -513,9 +513,9 @@ impl Logger {
 // ============================================================================
 
 pub struct LoggerBuilder {
-    level: int,
-    format: int,
-    ts_format: int,
+    level: i32,
+    format: i32,
+    ts_format: i32,
     sinks: *Vector<*LogSink>,
     do_async: bool,
 }
@@ -531,9 +531,9 @@ impl LoggerBuilder {
         b.do_async = false;
         return b;
     }
-    pub fn level(self: *LoggerBuilder, lvl: int) -> *LoggerBuilder { self.level = lvl; return self; }
-    pub fn format(self: *LoggerBuilder, fmt: int) -> *LoggerBuilder { self.format = fmt; return self; }
-    pub fn timestamps(self: *LoggerBuilder, ts: int) -> *LoggerBuilder { self.ts_format = ts; return self; }
+    pub fn level(self: *LoggerBuilder, lvl: i32) -> *LoggerBuilder { self.level = lvl; return self; }
+    pub fn format(self: *LoggerBuilder, fmt: i32) -> *LoggerBuilder { self.format = fmt; return self; }
+    pub fn timestamps(self: *LoggerBuilder, ts: i32) -> *LoggerBuilder { self.ts_format = ts; return self; }
     pub fn add_sink(self: *LoggerBuilder, s: *LogSink) -> *LoggerBuilder { self.sinks.push(s); return self; }
     pub fn async_writer(self: *LoggerBuilder, on: bool) -> *LoggerBuilder { self.do_async = on; return self; }
 
@@ -559,7 +559,7 @@ impl LoggerBuilder {
 // Renderers
 // ============================================================================
 
-fn _level_name(lvl: int) -> string {
+fn _level_name(lvl: i32) -> string {
     if lvl == LOG_TRACE { return "TRACE"; }
     if lvl == LOG_DEBUG { return "DEBUG"; }
     if lvl == LOG_INFO  { return "INFO";  }
@@ -569,7 +569,7 @@ fn _level_name(lvl: int) -> string {
     return "LOG";
 }
 
-fn _level_color(lvl: int) -> string {
+fn _level_color(lvl: i32) -> string {
     if lvl == LOG_TRACE { return "\x1b[90m"; }   // bright black
     if lvl == LOG_DEBUG { return "\x1b[36m"; }   // cyan
     if lvl == LOG_INFO  { return "\x1b[32m"; }   // green
@@ -584,17 +584,17 @@ fn _ansi_dim() -> string { return "\x1b[2m"; }    // faint — timestamps, field
 fn _ansi_bold() -> string { return "\x1b[1m"; }   // level tag
 
 
-fn _format_timestamp(ts_kind: int, time_ns: i64, start_ns: i64) -> string {
+fn _format_timestamp(ts_kind: i32, time_ns: i64, start_ns: i64) -> string {
     if ts_kind == LOG_TS_NONE { return ""; }
     if ts_kind == LOG_TS_UNIX {
-        return _log_itoa((time_ns / 1000000000) as int);
+        return _log_itoa((time_ns / 1000000000) as i32);
     }
     if ts_kind == LOG_TS_UNIX_MS {
-        return _log_itoa((time_ns / 1000000) as int);
+        return _log_itoa((time_ns / 1000000) as i32);
     }
     if ts_kind == LOG_TS_RELATIVE {
         let dt_ns: i64 = time_ns - start_ns;
-        let ms: int = (dt_ns / 1000000) as int;
+        let ms: i32 = (dt_ns / 1000000) as i32;
         return _log_itoa(ms).concat("ms");
     }
     // ISO 8601 in UTC.
@@ -602,7 +602,7 @@ fn _format_timestamp(ts_kind: int, time_ns: i64, start_ns: i64) -> string {
     return t.format("YYYY-MM-DDTHH:mm:ssZ");
 }
 
-fn _render_text(entry: *LogEntry, ts: int, start: i64, color: bool) -> string {
+fn _render_text(entry: *LogEntry, ts: i32, start: i64, color: bool) -> string {
     let mut out: string = "";
     // Timestamp — dim, never tinted with the level colour.
     let timestamp: string = _format_timestamp(ts, entry.time_ns, start);
@@ -624,7 +624,7 @@ fn _render_text(entry: *LogEntry, ts: int, start: i64, color: bool) -> string {
     if entry.fields.len() > 0 {
         out = out.concat(" ");
         if color { out = out.concat(_ansi_dim()); }
-        for let i: int = 0; i < entry.fields.len(); i++ {
+        for let i: i32 = 0; i < entry.fields.len(); i++ {
             let f: LogField = entry.fields.get(i);
             out = out.concat(f.key).concat("=").concat(f.value);
             if i < entry.fields.len() - 1 { out = out.concat(" "); }
@@ -642,13 +642,13 @@ fn _render_text(entry: *LogEntry, ts: int, start: i64, color: bool) -> string {
     return out;
 }
 
-fn _render_kv(entry: *LogEntry, ts: int, start: i64) -> string {
+fn _render_kv(entry: *LogEntry, ts: i32, start: i64) -> string {
     let mut out: string = "";
     let timestamp: string = _format_timestamp(ts, entry.time_ns, start);
     if !timestamp.eq("") { out = out.concat("time=").concat(timestamp).concat(" "); }
     out = out.concat("level=").concat(_level_name(entry.level)).concat(" ");
     out = out.concat("msg=").concat(_kv_quote(entry.msg));
-    for let i: int = 0; i < entry.fields.len(); i++ {
+    for let i: i32 = 0; i < entry.fields.len(); i++ {
         let f: LogField = entry.fields.get(i);
         out = out.concat(" ").concat(f.key).concat("=").concat(_kv_quote(f.value));
     }
@@ -662,14 +662,14 @@ fn _render_kv(entry: *LogEntry, ts: int, start: i64) -> string {
 
 fn _kv_quote(s: string) -> string {
     let mut need: bool = false;
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if c == 32 || c == 9 || c == 34 || c == 61 || c == 10 || c == 13 { need = true; break; }
     }
     if !need { return s; }
     let mut out: string = "\"";
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if c == 34 { out = out.concat("\\\""); }
         else if c == 92 { out = out.concat("\\\\"); }
         else if c == 10 { out = out.concat("\\n"); }
@@ -680,7 +680,7 @@ fn _kv_quote(s: string) -> string {
     return out;
 }
 
-fn _render_json(entry: *LogEntry, ts: int, start: i64) -> string {
+fn _render_json(entry: *LogEntry, ts: i32, start: i64) -> string {
     let mut out: string = "{";
     let timestamp: string = _format_timestamp(ts, entry.time_ns, start);
     if !timestamp.eq("") {
@@ -692,7 +692,7 @@ fn _render_json(entry: *LogEntry, ts: int, start: i64) -> string {
         out = out.concat(",\"file\":\"").concat(_json_escape(entry.file)).concat("\"");
         out = out.concat(",\"line\":").concat(_log_itoa(entry.line));
     }
-    for let i: int = 0; i < entry.fields.len(); i++ {
+    for let i: i32 = 0; i < entry.fields.len(); i++ {
         let f: LogField = entry.fields.get(i);
         out = out.concat(",\"").concat(_json_escape(f.key)).concat("\":\"").concat(_json_escape(f.value)).concat("\"");
     }
@@ -702,8 +702,8 @@ fn _render_json(entry: *LogEntry, ts: int, start: i64) -> string {
 
 fn _json_escape(s: string) -> string {
     let mut out: string = "";
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if c == 34 { out = out.concat("\\\""); }
         else if c == 92 { out = out.concat("\\\\"); }
         else if c == 10 { out = out.concat("\\n"); }
@@ -732,12 +732,12 @@ c_raw! {
 }
 
 /// Set the global level. Convenience over `Logger::global().level = lvl`.
-pub fn log_set_level(lvl: int) {
+pub fn log_set_level(lvl: i32) {
     Logger::global().level = lvl;
 }
 
 /// Set the global format.
-pub fn log_set_format(fmt: int) {
+pub fn log_set_format(fmt: i32) {
     Logger::global().format = fmt;
 }
 
@@ -747,7 +747,7 @@ pub fn log_set_format(fmt: int) {
 /// import stdlib::log;
 /// log::at(LOG_INFO, "ready");
 /// ```
-pub fn at(lvl: int, msg: string) {
+pub fn at(lvl: i32, msg: string) {
     let e: *Vector<string> = Vector::new();
     Logger::global().logv(lvl, msg, e);
 }
@@ -796,7 +796,7 @@ pub fn trace_since_str(start_ns: i64) -> string {
 //       .kv("workers", "4")
 //       .emit();
 pub struct LogLine {
-    level: int,
+    level: i32,
     msg: string,
     kvs: *Vector<string>,
 }
@@ -809,7 +809,7 @@ impl LogLine {
     pub fn error(msg: string) -> *LogLine { return LogLine::_at(LOG_ERROR, msg); }
     pub fn fatal(msg: string) -> *LogLine { return LogLine::_at(LOG_FATAL, msg); }
 
-    fn _at(lvl: int, msg: string) -> *LogLine {
+    fn _at(lvl: i32, msg: string) -> *LogLine {
         let l: *LogLine = malloc(sizeof(LogLine)) as *LogLine;
         l.level = lvl;
         l.msg = msg;

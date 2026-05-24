@@ -101,13 +101,13 @@ fn _static_traversal_safe(p: string) -> bool {
     // No backslash-escape, no NUL, no absolute path.
     if p.at(0).to_int() == 47 { return false; }    // leading '/'
     // Walk segments separated by '/' and reject any equal to "..".
-    let mut start: int = 0;
-    let n: int = p.len();
-    let mut i: int = 0;
+    let mut start: i32 = 0;
+    let n: i32 = p.len();
+    let mut i: i32 = 0;
     while i <= n {
         let at_sep: bool = i == n || p.at(i).to_int() == 47;
         if at_sep {
-            let seg_len: int = i - start;
+            let seg_len: i32 = i - start;
             if seg_len == 2 {
                 if p.at(start).to_int() == 46 && p.at(start + 1).to_int() == 46 {
                     return false;
@@ -126,7 +126,7 @@ fn _static_traversal_safe(p: string) -> bool {
 // browser cache validation on dev/staging. For prod with fingerprinted
 // assets the Cache-Control immutable header is the right primary lever.
 fn _weak_etag(size: i64) -> string {
-    return "W/\"".concat((size as int).to_string()).concat("\"");
+    return "W/\"".concat((size as i32).to_string()).concat("\"");
 }
 
 fn _static_handler(req: *HttpRequest) -> HttpResponse {

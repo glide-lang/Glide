@@ -126,7 +126,7 @@ impl Mail {
 
         // Extra user-provided headers.
         let names: *Vector<string> = self.headers.keys();
-        for let i: int = 0; i < names.len(); i++ {
+        for let i: i32 = 0; i < names.len(); i++ {
             let n: string = names.get(i);
             h = h.concat(n).concat(": ").concat(self.headers.get(n)).concat("\r\n");
         }
@@ -162,7 +162,7 @@ impl Mail {
             h = h.concat(_html_part(inner, self.html.val));
             h = h.concat("--").concat(inner).concat("--\r\n");
             // attachments
-            for let i: int = 0; i < self.attachments.len(); i++ {
+            for let i: i32 = 0; i < self.attachments.len(); i++ {
                 let a: *Attachment = self.attachments.get(i);
                 h = h.concat(_attachment_part(outer, a));
             }
@@ -174,7 +174,7 @@ impl Mail {
             h = h.concat("Content-Type: multipart/mixed; boundary=\"")
                   .concat(outer).concat("\"\r\n\r\n");
             h = h.concat(_text_part(outer, self.body));
-            for let i: int = 0; i < self.attachments.len(); i++ {
+            for let i: i32 = 0; i < self.attachments.len(); i++ {
                 let a: *Attachment = self.attachments.get(i);
                 h = h.concat(_attachment_part(outer, a));
             }
@@ -207,7 +207,7 @@ impl Mail {
 /// }
 /// ```
 pub fn parse_mail(raw: string) -> !*Mail {
-    let head_end: int = raw.index_of("\r\n\r\n");
+    let head_end: i32 = raw.index_of("\r\n\r\n");
     if head_end < 0 { return err("mail: missing header/body separator"); }
     let head: string = raw.substring(0, head_end);
     let body: string = raw.substring(head_end + 4, raw.len());
@@ -217,7 +217,7 @@ pub fn parse_mail(raw: string) -> !*Mail {
 
     // Headers may have folded values (continuation lines starting with WSP).
     let lines: *Vector<string> = head.split("\r\n");
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < lines.len() {
         let line: string = lines.get(i);
         i = i + 1;
@@ -226,7 +226,7 @@ pub fn parse_mail(raw: string) -> !*Mail {
         while i < lines.len() {
             let nxt: string = lines.get(i);
             if nxt.len() == 0 { break; }
-            let c: int = nxt.at(0).to_int();
+            let c: i32 = nxt.at(0).to_int();
             if c == 32 || c == 9 {
                 full = full.concat(" ").concat(nxt.trim_left());
                 i = i + 1;
@@ -234,7 +234,7 @@ pub fn parse_mail(raw: string) -> !*Mail {
                 break;
             }
         }
-        let colon: int = full.index_of(":");
+        let colon: i32 = full.index_of(":");
         if colon < 0 { continue; }
         let n: string = full.substring(0, colon).trim();
         let v: string = full.substring(colon + 1, full.len()).trim();
@@ -251,13 +251,13 @@ pub fn parse_mail(raw: string) -> !*Mail {
         }
         else if lower.eq("to") {
             let parts: *Vector<string> = v.split(",");
-            for let j: int = 0; j < parts.len(); j++ {
+            for let j: i32 = 0; j < parts.len(); j++ {
                 m.to.push(parts.get(j).trim());
             }
         }
         else if lower.eq("cc") {
             let parts: *Vector<string> = v.split(",");
-            for let j: int = 0; j < parts.len(); j++ {
+            for let j: i32 = 0; j < parts.len(); j++ {
                 m.cc.push(parts.get(j).trim());
             }
         }
@@ -273,7 +273,7 @@ pub fn parse_mail(raw: string) -> !*Mail {
 
 fn _join(v: *Vector<string>, sep: string) -> string {
     let mut s: string = "";
-    for let i: int = 0; i < v.len(); i++ {
+    for let i: i32 = 0; i < v.len(); i++ {
         if i > 0 { s = s.concat(sep); }
         s = s.concat(v.get(i));
     }
@@ -281,8 +281,8 @@ fn _join(v: *Vector<string>, sep: string) -> string {
 }
 
 fn _is_ascii(s: string) -> bool {
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if c < 0 || c > 127 { return false; }
     }
     return true;
@@ -292,9 +292,9 @@ fn _is_ascii(s: string) -> bool {
 /// `=XX` for non-ascii / control chars, `=` itself escaped.
 fn _qp_encode(s: string) -> string {
     let mut out: string = "";
-    let mut col: int = 0;
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int() & 255;
+    let mut col: i32 = 0;
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int() & 255;
         let mut chunk: string = "";
         let needs_esc: bool = c < 32 || c == 61 || c > 126;
         let is_eol: bool = c == 10 || c == 13;
@@ -316,11 +316,11 @@ fn _qp_encode(s: string) -> string {
     return out;
 }
 
-fn _hex_byte(b: int) -> string {
+fn _hex_byte(b: i32) -> string {
     return _hex_nibble((b >> 4) & 15).concat(_hex_nibble(b & 15));
 }
 
-fn _hex_nibble(n: int) -> string {
+fn _hex_nibble(n: i32) -> string {
     if n < 10 { return ((48 + n) as char).to_string(); }
     return ((55 + n) as char).to_string();
 }
@@ -358,9 +358,9 @@ fn _attachment_part(boundary: string, a: *Attachment) -> string {
     s = s.concat("Content-Transfer-Encoding: base64\r\n\r\n");
     let encoded: string = b64_encode(a.data);
     // Wrap base64 at 76 chars per RFC 2045.
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < encoded.len() {
-        let mut end: int = i + 76;
+        let mut end: i32 = i + 76;
         if end > encoded.len() { end = encoded.len(); }
         s = s.concat(encoded.substring(i, end)).concat("\r\n");
         i = end;
@@ -372,8 +372,8 @@ fn _gen_boundary(prefix: string) -> string {
     let r: *Rng = Rng::from_clock();
     let chars: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut s: string = "===_glide_".concat(prefix).concat("_");
-    for let i: int = 0; i < 20; i++ {
-        let idx: int = r.range(0, 62);
+    for let i: i32 = 0; i < 20; i++ {
+        let idx: i32 = r.range(0, 62);
         s = s.concat(chars.at(idx).to_string());
     }
     free(r as *void);
@@ -383,13 +383,13 @@ fn _gen_boundary(prefix: string) -> string {
 fn _gen_message_id(from: string) -> string {
     let r: *Rng = Rng::from_clock();
     let mut id: string = "";
-    for let i: int = 0; i < 24; i++ {
-        let n: int = r.range(0, 16);
+    for let i: i32 = 0; i < 24; i++ {
+        let n: i32 = r.range(0, 16);
         id = id.concat(_hex_nibble(n));
     }
     free(r as *void);
     let mut domain: string = "glide.local";
-    let at: int = from.index_of("@");
+    let at: i32 = from.index_of("@");
     if at >= 0 { domain = from.substring(at + 1, from.len()); }
     return id.concat("@").concat(domain);
 }
@@ -406,19 +406,19 @@ fn _format_rfc5322_date_now() -> string {
     return out;
 }
 
-fn _two_digits(n: int) -> string {
+fn _two_digits(n: i32) -> string {
     if n < 10 { return "0".concat(_int_to_str(n)); }
     return _int_to_str(n);
 }
 
-fn _int_to_str(n: int) -> string {
+fn _int_to_str(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut x: int = n;
+    let mut x: i32 = n;
     let mut neg: bool = false;
     if x < 0 { neg = true; x = 0 - x; }
     let mut s: string = "";
     while x > 0 {
-        let d: int = x % 10;
+        let d: i32 = x % 10;
         s = ((48 + d) as char).to_string().concat(s);
         x = x / 10;
     }

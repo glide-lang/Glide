@@ -3,7 +3,7 @@ import stdlib::http::hpack::*;
 import stdlib::bytes::*;
 
 // RFC 7541 §C.2.1 — Literal Header Field with Indexing
-fn test_literal_with_indexing_round_trip() -> int {
+fn test_literal_with_indexing_round_trip() -> i32 {
     let enc: *HpackEncoder = HpackEncoder::new();
     let buf: *ByteBuffer = ByteBuffer::new();
     enc.encode_header(buf, "custom-key", "custom-header");
@@ -18,27 +18,27 @@ fn test_literal_with_indexing_round_trip() -> int {
     return 0;
 }
 
-fn test_indexed_static_method_get() -> int {
+fn test_indexed_static_method_get() -> i32 {
     let enc: *HpackEncoder = HpackEncoder::new();
     let buf: *ByteBuffer = ByteBuffer::new();
     enc.encode_header(buf, ":method", "GET");
     // Static idx 2 -> single byte 0x82 (1xxx_xxxx high bit + 7-bit value 2)
     assert_eq!(buf.len, 1);
-    assert_eq!(buf.at(0) as int, 130);
+    assert_eq!(buf.at(0) as i32, 130);
     return 0;
 }
 
-fn test_indexed_static_status_200() -> int {
+fn test_indexed_static_status_200() -> i32 {
     let enc: *HpackEncoder = HpackEncoder::new();
     let buf: *ByteBuffer = ByteBuffer::new();
     enc.encode_header(buf, ":status", "200");
     // Static idx 8 -> 0x88
     assert_eq!(buf.len, 1);
-    assert_eq!(buf.at(0) as int, 136);
+    assert_eq!(buf.at(0) as i32, 136);
     return 0;
 }
 
-fn test_round_trip_three_headers() -> int {
+fn test_round_trip_three_headers() -> i32 {
     let enc: *HpackEncoder = HpackEncoder::new();
     let buf: *ByteBuffer = ByteBuffer::new();
     enc.encode_header(buf, ":method", "GET");
@@ -58,13 +58,13 @@ fn test_round_trip_three_headers() -> int {
     return 0;
 }
 
-fn test_dynamic_table_reuse() -> int {
+fn test_dynamic_table_reuse() -> i32 {
     // The encoder records (name, value) into its dyn table on first
     // encode. The second encode of the same pair becomes one byte.
     let enc: *HpackEncoder = HpackEncoder::new();
     let b1: *ByteBuffer = ByteBuffer::new();
     enc.encode_header(b1, "x-custom", "value-1");
-    let first_size: int = b1.len;
+    let first_size: i32 = b1.len;
 
     let b2: *ByteBuffer = ByteBuffer::new();
     enc.encode_header(b2, "x-custom", "value-1");

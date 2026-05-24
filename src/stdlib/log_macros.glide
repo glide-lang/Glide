@@ -49,7 +49,7 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
     // Resolve level. Defaults to debug; arg overrides.
     let mut level_name: string = "debug";
     if s.attrs != null {
-        for let i: int = 0; i < s.attrs.len(); i++ {
+        for let i: i32 = 0; i < s.attrs.len(); i++ {
             let a: Attr = s.attrs.get(i);
             if a.name != null && (a.name.eq("trace") || a.name.eq("logged")) {
                 if a.args != null && a.args.len() > 0 {
@@ -92,7 +92,7 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
 
     // Build args list for forwarding call.
     let call_args: *Vector<Expr> = Vector::new();
-    for let i: int = 0; i < user_params.len(); i++ {
+    for let i: i32 = 0; i < user_params.len(); i++ {
         let p: Param = user_params.get(i);
         call_args.push(*expr_ident_unsafe(p.name, 0, 0));
     }
@@ -131,14 +131,14 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
 // real argument VALUES are interpolated at call time (one `{}` per param).
 fn _build_entry_with_args(name: string, params: *Vector<Param>) -> *Expr {
     let mut spec: string = "> ".concat(name).concat("(");
-    for let i: int = 0; i < params.len(); i++ {
+    for let i: i32 = 0; i < params.len(); i++ {
         if i > 0 { spec = spec.concat(", "); }
         spec = spec.concat("{}");
     }
     spec = spec.concat(")");
     let fmt_args: *Vector<Expr> = Vector::new();
     fmt_args.push(*expr_string(spec, 0, 0));
-    for let i: int = 0; i < params.len(); i++ {
+    for let i: i32 = 0; i < params.len(); i++ {
         let p: Param = params.get(i);
         fmt_args.push(*expr_ident_unsafe(p.name, 0, 0));
     }
@@ -224,7 +224,7 @@ fn _log_macro(args: *Vector<Expr>, level_fn: string) -> *Vector<Stmt> {
     if first.kind == EX_STRING {
         // First arg is a literal format string — printf-style. Pass the
         // whole arg list straight through: `info!("x={}", x)`.
-        for let i: int = 0; i < args.len(); i++ {
+        for let i: i32 = 0; i < args.len(); i++ {
             fmt_args.push(args.get(i));
         }
     } else {
@@ -232,12 +232,12 @@ fn _log_macro(args: *Vector<Expr>, level_fn: string) -> *Vector<Stmt> {
         // `info!(v[0])` / `info!(a, b)` just print the value(s), like a
         // bare `println!(x)` would. The args become format arguments.
         let mut spec: string = "";
-        for let i: int = 0; i < args.len(); i++ {
+        for let i: i32 = 0; i < args.len(); i++ {
             if i > 0 { spec = spec.concat(" "); }
             spec = spec.concat("{}");
         }
         fmt_args.push(*expr_string(spec, 0, 0));
-        for let i: int = 0; i < args.len(); i++ {
+        for let i: i32 = 0; i < args.len(); i++ {
             fmt_args.push(args.get(i));
         }
     }

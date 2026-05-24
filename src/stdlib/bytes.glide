@@ -11,9 +11,9 @@ pub struct ByteBuffer {
     /// `write` syscall along with `len`.
     pub data: *u8,
     /// Number of valid bytes in `data`. Always `<= cap`.
-    pub len: int,
+    pub len: i32,
     /// Allocated capacity. Always `>= len`.
-    pub cap: int,
+    pub cap: i32,
 }
 
 impl ByteBuffer {
@@ -46,14 +46,14 @@ impl ByteBuffer {
     /// b.push_str("abc");
     /// b.len();   // 3
     /// ```
-    pub fn len(self: *ByteBuffer) -> int { return self.len; }
+    pub fn len(self: *ByteBuffer) -> i32 { return self.len; }
 
     /// Allocated capacity. Always `>= len()`.
-    pub fn cap(self: *ByteBuffer) -> int { return self.cap; }
+    pub fn cap(self: *ByteBuffer) -> i32 { return self.cap; }
 
-    fn ensure(self: *ByteBuffer, want: int) {
+    fn ensure(self: *ByteBuffer, want: i32) {
         if want <= self.cap { return; }
-        let mut newcap: int = self.cap;
+        let mut newcap: i32 = self.cap;
         while newcap < want { newcap = newcap * 2; }
         self.data = realloc(self.data as *void, newcap as usize) as *u8;
         self.cap = newcap;
@@ -78,9 +78,9 @@ impl ByteBuffer {
     /// b.push_str("HTTP/1.1 200 OK\r\n");
     /// ```
     pub fn push_str(self: *ByteBuffer, s: string) {
-        let n: int = s.len();
+        let n: i32 = s.len();
         self.ensure(self.len + n);
-        let mut i: int = 0;
+        let mut i: i32 = 0;
         while i < n {
             self.data[self.len + i] = s.at(i).to_int() as u8;
             i = i + 1;
@@ -94,7 +94,7 @@ impl ByteBuffer {
     /// ```glide
     /// let first: u8 = b.at(0);
     /// ```
-    pub fn at(self: *ByteBuffer, i: int) -> u8 { return self.data[i]; }
+    pub fn at(self: *ByteBuffer, i: i32) -> u8 { return self.data[i]; }
 
     /// Reset `len` to `0`. Capacity is preserved so subsequent pushes
     /// don't reallocate.

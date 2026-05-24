@@ -8,7 +8,7 @@ import stdlib::json::derive::*;
 @derive(JsonBind)
 pub struct Item {
     pub id:    string,
-    pub price: int,
+    pub price: i32,
 }
 
 // Output-only: confirms the @handler wrapper monomorphises
@@ -54,7 +54,7 @@ fn _get() -> HttpRequest {
     };
 }
 
-fn test_returns_json_array() -> int {
+fn test_returns_json_array() -> i32 {
     let req: HttpRequest = _get();
     let r: HttpResponse = list_items(&req);
     assert_eq!(r.status, 200);
@@ -63,7 +63,7 @@ fn test_returns_json_array() -> int {
     return 0;
 }
 
-fn test_echo_round_trip() -> int {
+fn test_echo_round_trip() -> i32 {
     let req: HttpRequest = _post("[{\"id\":\"x\",\"price\":1},{\"id\":\"y\",\"price\":2}]");
     let r: HttpResponse = echo_items(&req);
     assert_eq!(r.status, 200);
@@ -71,7 +71,7 @@ fn test_echo_round_trip() -> int {
     return 0;
 }
 
-fn test_echo_empty_array() -> int {
+fn test_echo_empty_array() -> i32 {
     let req: HttpRequest = _post("[]");
     let r: HttpResponse = echo_items(&req);
     assert_eq!(r.status, 200);
@@ -79,7 +79,7 @@ fn test_echo_empty_array() -> int {
     return 0;
 }
 
-fn test_echo_bad_element_is_422() -> int {
+fn test_echo_bad_element_is_422() -> i32 {
     // Second element is missing `price` — Vector<Item>::from_json
     // bubbles the err via `?` and the macro converts to 422.
     let req: HttpRequest = _post("[{\"id\":\"x\",\"price\":1},{\"id\":\"y\"}]");
@@ -88,14 +88,14 @@ fn test_echo_bad_element_is_422() -> int {
     return 0;
 }
 
-fn test_echo_non_array_is_422() -> int {
+fn test_echo_non_array_is_422() -> i32 {
     let req: HttpRequest = _post("{\"id\":\"x\",\"price\":1}");
     let r: HttpResponse = echo_items(&req);
     assert_eq!(r.status, 422);
     return 0;
 }
 
-fn test_echo_invalid_json_is_400() -> int {
+fn test_echo_invalid_json_is_400() -> i32 {
     let req: HttpRequest = _post("not json");
     let r: HttpResponse = echo_items(&req);
     assert_eq!(r.status, 400);

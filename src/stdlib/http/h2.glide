@@ -40,16 +40,16 @@ import stdlib::http_status::*;
 /// ```
 pub struct FrameType {}
 impl FrameType {
-    pub fn data() -> int          { return 0; }
-    pub fn headers() -> int       { return 1; }
-    pub fn priority() -> int      { return 2; }
-    pub fn rst_stream() -> int    { return 3; }
-    pub fn settings() -> int      { return 4; }
-    pub fn push_promise() -> int  { return 5; }
-    pub fn ping() -> int          { return 6; }
-    pub fn goaway() -> int        { return 7; }
-    pub fn window_update() -> int { return 8; }
-    pub fn continuation() -> int  { return 9; }
+    pub fn data() -> i32          { return 0; }
+    pub fn headers() -> i32       { return 1; }
+    pub fn priority() -> i32      { return 2; }
+    pub fn rst_stream() -> i32    { return 3; }
+    pub fn settings() -> i32      { return 4; }
+    pub fn push_promise() -> i32  { return 5; }
+    pub fn ping() -> i32          { return 6; }
+    pub fn goaway() -> i32        { return 7; }
+    pub fn window_update() -> i32 { return 8; }
+    pub fn continuation() -> i32  { return 9; }
 }
 
 /// Frame flag bits (RFC 7540 §6). Combine with `|` for multi-flag frames
@@ -63,18 +63,18 @@ impl FrameType {
 /// ```
 pub struct FrameFlag {}
 impl FrameFlag {
-    pub fn end_stream() -> int    { return 1; }
-    pub fn end_headers() -> int   { return 4; }
-    pub fn padded() -> int        { return 8; }
-    pub fn priority() -> int      { return 32; }
-    pub fn ack() -> int           { return 1; }
+    pub fn end_stream() -> i32    { return 1; }
+    pub fn end_headers() -> i32   { return 4; }
+    pub fn padded() -> i32        { return 8; }
+    pub fn priority() -> i32      { return 32; }
+    pub fn ack() -> i32           { return 1; }
 }
 
 pub struct FrameHeader {
-    pub length:    int,    // 24-bit
-    pub frame_type: int,    // 8-bit
-    pub flags:     int,    // 8-bit
-    pub stream_id: int,    // 31-bit (top bit reserved, R=0)
+    pub length:    i32,    // 24-bit
+    pub frame_type: i32,    // 8-bit
+    pub flags:     i32,    // 8-bit
+    pub stream_id: i32,    // 31-bit (top bit reserved, R=0)
 }
 
 // ===========================================================================
@@ -91,11 +91,11 @@ pub struct FrameHeader {
 /// write_frame(buf, FrameType::ping(), 0, 0, "ABCDEFGH");   // 8-byte ping
 /// tls.write_bytes(buf.data, buf.len);
 /// ```
-pub fn write_frame(buf: *ByteBuffer, frame_type: int, flags: int,
-                   stream_id: int, payload: string) {
-    let n: int = payload.len();
+pub fn write_frame(buf: *ByteBuffer, frame_type: i32, flags: i32,
+                   stream_id: i32, payload: string) {
+    let n: i32 = payload.len();
     _frame_header(buf, n, frame_type, flags, stream_id);
-    for let i: int = 0; i < n; i++ {
+    for let i: i32 = 0; i < n; i++ {
         buf.push(payload.at(i).to_int() as u8);
     }
 }
@@ -112,16 +112,16 @@ pub fn write_frame(buf: *ByteBuffer, frame_type: int, flags: int,
 /// let f: int = FrameFlag::end_headers() | FrameFlag::end_stream();
 /// write_frame_bytes(buf, FrameType::headers(), f, 1, hdrs);
 /// ```
-pub fn write_frame_bytes(buf: *ByteBuffer, frame_type: int, flags: int,
-                          stream_id: int, payload: *ByteBuffer) {
+pub fn write_frame_bytes(buf: *ByteBuffer, frame_type: i32, flags: i32,
+                          stream_id: i32, payload: *ByteBuffer) {
     _frame_header(buf, payload.len, frame_type, flags, stream_id);
-    for let i: int = 0; i < payload.len; i++ {
+    for let i: i32 = 0; i < payload.len; i++ {
         buf.push(payload.at(i));
     }
 }
 
-fn _frame_header(buf: *ByteBuffer, n: int, frame_type: int, flags: int,
-                 stream_id: int) {
+fn _frame_header(buf: *ByteBuffer, n: i32, frame_type: i32, flags: i32,
+                 stream_id: i32) {
     buf.push(((n >> 16) & 255) as u8);
     buf.push(((n >>  8) & 255) as u8);
     buf.push(( n        & 255) as u8);
@@ -144,18 +144,18 @@ fn _frame_header(buf: *ByteBuffer, n: int, frame_type: int, flags: int,
 ///     println!("type", h.frame_type, "len", h.length, "stream", h.stream_id);
 /// }
 /// ```
-pub fn read_frame_header(raw: *ByteBuffer, pos: int) -> !*FrameHeader {
+pub fn read_frame_header(raw: *ByteBuffer, pos: i32) -> !*FrameHeader {
     if pos + 9 > raw.len { return err("h2: frame header truncated"); }
     let h: *FrameHeader = malloc(sizeof(FrameHeader)) as *FrameHeader;
-    h.length = ((raw.at(pos)     as int) << 16)
-             | ((raw.at(pos + 1) as int) << 8)
-             |  (raw.at(pos + 2) as int);
-    h.frame_type = (raw.at(pos + 3) as int) & 255;
-    h.flags = (raw.at(pos + 4) as int) & 255;
-    let s0: int = (raw.at(pos + 5) as int) & 127;
-    let s1: int = (raw.at(pos + 6) as int) & 255;
-    let s2: int = (raw.at(pos + 7) as int) & 255;
-    let s3: int = (raw.at(pos + 8) as int) & 255;
+    h.length = ((raw.at(pos)     as i32) << 16)
+             | ((raw.at(pos + 1) as i32) << 8)
+             |  (raw.at(pos + 2) as i32);
+    h.frame_type = (raw.at(pos + 3) as i32) & 255;
+    h.flags = (raw.at(pos + 4) as i32) & 255;
+    let s0: i32 = (raw.at(pos + 5) as i32) & 127;
+    let s1: i32 = (raw.at(pos + 6) as i32) & 255;
+    let s2: i32 = (raw.at(pos + 7) as i32) & 255;
+    let s3: i32 = (raw.at(pos + 8) as i32) & 255;
     h.stream_id = (s0 << 24) | (s1 << 16) | (s2 << 8) | s3;
     return ok(h);
 }
@@ -202,7 +202,7 @@ pub fn settings_payload_empty() -> string { return ""; }
 /// settings_pair_to(pl, 4, 1048576);    // INITIAL_WINDOW_SIZE = 1 MiB
 /// write_frame_bytes(buf, FrameType::settings(), 0, 0, pl);
 /// ```
-pub fn settings_pair_to(buf: *ByteBuffer, key: int, value: int) {
+pub fn settings_pair_to(buf: *ByteBuffer, key: i32, value: i32) {
     buf.push(((key >> 8)    & 255) as u8);
     buf.push(( key          & 255) as u8);
     buf.push(((value >> 24) & 255) as u8);
@@ -218,7 +218,7 @@ pub fn settings_pair_to(buf: *ByteBuffer, key: int, value: int) {
 /// window_update_to(wu, 65535);   // grow stream window by 64 KiB
 /// write_frame_bytes(buf, FrameType::window_update(), 0, stream_id, wu);
 /// ```
-pub fn window_update_to(buf: *ByteBuffer, increment: int) {
+pub fn window_update_to(buf: *ByteBuffer, increment: i32) {
     buf.push(((increment >> 24) & 127) as u8);
     buf.push(((increment >> 16) & 255) as u8);
     buf.push(((increment >>  8) & 255) as u8);
@@ -233,13 +233,13 @@ pub struct H2Conn {
     tls:     *TlsStream,
     enc:     *HpackEncoder,
     dec:     *HpackDecoder,
-    pub next_stream_id: int,
+    pub next_stream_id: i32,
     /// Binary-safe rx ring: byte buffer + read offset. We can't use a
     /// Glide `string` here because frame headers start with the 24-bit
     /// length field whose top byte is often `0`, and string ops use
     /// strlen which would truncate at the first NUL.
     rx_buf:    *ByteBuffer,
-    rx_offset: int,
+    rx_offset: i32,
 }
 
 impl H2Conn {
@@ -277,7 +277,7 @@ impl H2Conn {
         let preface: string = h2_preface();
         let buf: *ByteBuffer = ByteBuffer::new();
         defer buf.free();
-        for let i: int = 0; i < preface.len(); i++ {
+        for let i: i32 = 0; i < preface.len(); i++ {
             buf.push(preface.at(i).to_int() as u8);
         }
 
@@ -296,7 +296,7 @@ impl H2Conn {
         window_update_to(wu, 983041);   // 1 MiB - 65535
         write_frame_bytes(buf, FrameType::window_update(), 0, 0, wu);
 
-        let w: !int = tls.write_bytes(buf.data, buf.len);
+        let w: !i32 = tls.write_bytes(buf.data, buf.len);
         if !w.ok { return err(w.err); }
         return ok(c);
     }
@@ -318,7 +318,7 @@ impl H2Conn {
                    authority: string, scheme: string,
                    extra_headers: *Vector<*HpackHeader>,
                    body: string) -> !*H2Response {
-        let stream_id: int = self.next_stream_id;
+        let stream_id: i32 = self.next_stream_id;
         self.next_stream_id = self.next_stream_id + 2;
 
         // Encode pseudo-headers + extras into a HEADERS payload.
@@ -328,14 +328,14 @@ impl H2Conn {
         self.enc.encode_header(hp_buf, ":scheme", scheme);
         self.enc.encode_header(hp_buf, ":path", path);
         self.enc.encode_header(hp_buf, ":authority", authority);
-        for let i: int = 0; i < extra_headers.len(); i++ {
+        for let i: i32 = 0; i < extra_headers.len(); i++ {
             let h: *HpackHeader = extra_headers.get(i);
             self.enc.encode_header(hp_buf, h.name, h.value);
         }
 
         // Single HEADERS frame. END_HEADERS always (no CONTINUATION on
         // outbound for v1). END_STREAM only when no body.
-        let mut flags: int = FrameFlag::end_headers();
+        let mut flags: i32 = FrameFlag::end_headers();
         if body.len() == 0 { flags = flags | FrameFlag::end_stream(); }
         let frame_buf: *ByteBuffer = ByteBuffer::new();
         defer frame_buf.free();
@@ -345,13 +345,13 @@ impl H2Conn {
             write_frame(frame_buf, FrameType::data(),
                         FrameFlag::end_stream(), stream_id, body);
         }
-        let w: !int = self.tls.write_bytes(frame_buf.data, frame_buf.len);
+        let w: !i32 = self.tls.write_bytes(frame_buf.data, frame_buf.len);
         if !w.ok { return err(w.err); }
 
         return self._read_response(stream_id);
     }
 
-    fn _read_response(self: *H2Conn, stream_id: int) -> !*H2Response {
+    fn _read_response(self: *H2Conn, stream_id: i32) -> !*H2Response {
         let mut headers_done: bool = false;
         let mut header_block: *ByteBuffer = ByteBuffer::new();
         let mut body: *ByteBuffer = ByteBuffer::new();
@@ -359,21 +359,21 @@ impl H2Conn {
         while !stream_closed {
             // Pull until we have at least one full frame header.
             while self._rx_avail() < 9 {
-                let got: !int = self._fill_rx();
+                let got: !i32 = self._fill_rx();
                 if !got.ok { return err(got.err); }
                 if got.val == 0 { return err("h2: closed mid-response"); }
             }
             let hr: !*FrameHeader = read_frame_header(self.rx_buf, self.rx_offset);
             if !hr.ok { return err(hr.err); }
             let h: *FrameHeader = hr.val;
-            let total: int = 9 + h.length;
+            let total: i32 = 9 + h.length;
             while self._rx_avail() < total {
-                let got: !int = self._fill_rx();
+                let got: !i32 = self._fill_rx();
                 if !got.ok { return err(got.err); }
                 if got.val == 0 { return err("h2: closed mid-frame"); }
             }
-            let payload_start: int = self.rx_offset + 9;
-            let payload_end:   int = self.rx_offset + total;
+            let payload_start: i32 = self.rx_offset + 9;
+            let payload_end:   i32 = self.rx_offset + total;
             // Copy payload into a fresh ByteBuffer so it survives the
             // ring slide. For headers we'll concat onto header_block;
             // for data we'll concat onto body.
@@ -389,7 +389,7 @@ impl H2Conn {
                     let ack: *ByteBuffer = ByteBuffer::new();
                     write_frame(ack, FrameType::settings(),
                                 FrameFlag::ack(), 0, "");
-                    let _: !int = self.tls.write_bytes(ack.data, ack.len);
+                    let _: !i32 = self.tls.write_bytes(ack.data, ack.len);
                     ack.free();
                 }
                 continue;
@@ -400,7 +400,7 @@ impl H2Conn {
                     let pong: *ByteBuffer = ByteBuffer::new();
                     write_frame_bytes(pong, FrameType::ping(),
                                        FrameFlag::ack(), 0, payload);
-                    let _: !int = self.tls.write_bytes(pong.data, pong.len);
+                    let _: !i32 = self.tls.write_bytes(pong.data, pong.len);
                     pong.free();
                 }
                 continue;
@@ -433,7 +433,7 @@ impl H2Conn {
                                        0, h.stream_id, wbuf);
                     write_frame_bytes(frame, FrameType::window_update(),
                                        0, 0, wbuf);
-                    let _: !int = self.tls.write_bytes(frame.data, frame.len);
+                    let _: !i32 = self.tls.write_bytes(frame.data, frame.len);
                     wbuf.free();
                     frame.free();
                 }
@@ -466,10 +466,10 @@ impl H2Conn {
         // them somewhere length-aware.
         resp.body = _bytes_to_string(body.data, body.len);
         let lst: *Vector<*HpackHeader> = parsed.val;
-        for let i: int = 0; i < lst.len(); i++ {
+        for let i: i32 = 0; i < lst.len(); i++ {
             let h: *HpackHeader = lst.get(i);
             if h.name.eq(":status") {
-                let pr: !int = h.value.try_parse_int();
+                let pr: !i32 = h.value.try_parse_int();
                 if pr.ok { resp.status = pr.val; }
             } else {
                 resp.headers.push(h);
@@ -478,18 +478,18 @@ impl H2Conn {
         return ok(resp);
     }
 
-    fn _rx_avail(self: *H2Conn) -> int {
+    fn _rx_avail(self: *H2Conn) -> i32 {
         return self.rx_buf.len - self.rx_offset;
     }
 
     /// Read up to 16 KiB more bytes into the rx ring. Returns the
     /// count appended (0 = peer closed cleanly). Compacts the ring
     /// when offset gets large to avoid unbounded growth.
-    fn _fill_rx(self: *H2Conn) -> !int {
+    fn _fill_rx(self: *H2Conn) -> !i32 {
         // Compact when consumed past 4 KiB.
         if self.rx_offset > 4096 {
             let nb: *ByteBuffer = ByteBuffer::new();
-            for let i: int = self.rx_offset; i < self.rx_buf.len; i++ {
+            for let i: i32 = self.rx_offset; i < self.rx_buf.len; i++ {
                 nb.push(self.rx_buf.at(i));
             }
             self.rx_buf = nb;
@@ -497,18 +497,18 @@ impl H2Conn {
         }
         // Reserve space and read into a scratch buffer.
         let scratch: *u8 = malloc(16384) as *u8;
-        let r: !int = self.tls.read_bytes(scratch, 16384);
+        let r: !i32 = self.tls.read_bytes(scratch, 16384);
         if !r.ok { free(scratch as *void); return err(r.err); }
-        for let i: int = 0; i < r.val; i++ { self.rx_buf.push(scratch[i]); }
+        for let i: i32 = 0; i < r.val; i++ { self.rx_buf.push(scratch[i]); }
         free(scratch as *void);
         return ok(r.val);
     }
 
     /// Copy bytes [`from`, `to`) of the rx ring into a fresh
     /// ByteBuffer. Used so frame payloads survive ring compaction.
-    fn _rx_slice(self: *H2Conn, from: int, to: int) -> *ByteBuffer {
+    fn _rx_slice(self: *H2Conn, from: i32, to: i32) -> *ByteBuffer {
         let out: *ByteBuffer = ByteBuffer::new();
-        for let i: int = from; i < to; i++ { out.push(self.rx_buf.at(i)); }
+        for let i: i32 = from; i < to; i++ { out.push(self.rx_buf.at(i)); }
         return out;
     }
 
@@ -525,24 +525,24 @@ impl H2Conn {
         // String-typed concat truncates at NUL, so build via ByteBuffer.
         let payload: *ByteBuffer = ByteBuffer::new();
         defer payload.free();
-        for let i: int = 0; i < 8; i++ { payload.push(0 as u8); }
+        for let i: i32 = 0; i < 8; i++ { payload.push(0 as u8); }
         let buf: *ByteBuffer = ByteBuffer::new();
         defer buf.free();
         write_frame_bytes(buf, FrameType::goaway(), 0, 0, payload);
-        let _: !int = self.tls.write_bytes(buf.data, buf.len);
+        let _: !i32 = self.tls.write_bytes(buf.data, buf.len);
         self.tls.close();
         free(self as *void);
     }
 }
 
 pub struct H2Response {
-    pub status:  int,
+    pub status:  i32,
     pub headers: *Vector<*HpackHeader>,
     pub body:    string,
 }
 
 fn _bb_append(dst: *ByteBuffer, src: *ByteBuffer) {
-    for let i: int = 0; i < src.len; i++ { dst.push(src.at(i)); }
+    for let i: i32 = 0; i < src.len; i++ { dst.push(src.at(i)); }
 }
 
 // ===========================================================================
@@ -580,7 +580,7 @@ fn _bb_append(dst: *ByteBuffer, src: *ByteBuffer) {
 /// received. Streams stay in `streams` until END_STREAM arrives on the
 /// inbound side; after the handler runs the entry is removed.
 pub struct H2ServerStream {
-    pub id:               int,
+    pub id:               i32,
     pub header_block:     *ByteBuffer,
     pub headers_done:     bool,
     pub body:             *ByteBuffer,
@@ -596,17 +596,17 @@ pub struct H2ServerStream {
 pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
     // ---- 1. Read + validate client preface (24 bytes) ----
     let preface_expected: string = h2_preface();
-    let plen: int = preface_expected.len();
+    let plen: i32 = preface_expected.len();
     let pbuf: *u8 = malloc(plen) as *u8;
-    let mut have: int = 0;
+    let mut have: i32 = 0;
     while have < plen {
-        let rr: !int = s.read_bytes((pbuf as i64 + have as i64) as *u8, plen - have);
+        let rr: !i32 = s.read_bytes((pbuf as i64 + have as i64) as *u8, plen - have);
         if !rr.ok { free(pbuf as *void); s.close(); return; }
         if rr.val <= 0 { free(pbuf as *void); s.close(); return; }
         have = have + rr.val;
     }
     // Compare byte-by-byte (avoid strlen on a non-NUL-terminated buf).
-    for let i: int = 0; i < plen; i++ {
+    for let i: i32 = 0; i < plen; i++ {
         if pbuf[i] != preface_expected.at(i).to_int() as u8 {
             free(pbuf as *void); s.close(); return;
         }
@@ -629,7 +629,7 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
     window_update_to(wu, 983041);   // bump conn window to ~1 MiB
     write_frame_bytes(init_buf, FrameType::window_update(), 0, 0, wu);
 
-    let w: !int = s.write_bytes(init_buf.data, init_buf.len);
+    let w: !i32 = s.write_bytes(init_buf.data, init_buf.len);
     if !w.ok { s.close(); return; }
 
     // ---- 3. Per-conn state ----
@@ -637,7 +637,7 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
     let enc: *HpackEncoder = HpackEncoder::new();
     let streams: *Vector<*H2ServerStream> = Vector::new();
     let rx: *ByteBuffer = ByteBuffer::new();
-    let mut rx_offset: int = 0;
+    let mut rx_offset: i32 = 0;
 
     let mut alive: bool = true;
     while alive {
@@ -650,14 +650,14 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
         let hr: !*FrameHeader = read_frame_header(rx, rx_offset);
         if !hr.ok { alive = false; break; }
         let h: *FrameHeader = hr.val;
-        let total: int = 9 + h.length;
+        let total: i32 = 9 + h.length;
         while rx.len - rx_offset < total {
             if !_h2srv_fill(s, rx) { alive = false; break; }
         }
         if !alive { break; }
 
-        let payload_start: int = rx_offset + 9;
-        let payload_end:   int = rx_offset + total;
+        let payload_start: i32 = rx_offset + 9;
+        let payload_end:   i32 = rx_offset + total;
         let payload: *ByteBuffer = _h2srv_slice(rx, payload_start, payload_end);
         rx_offset = rx_offset + total;
         // Periodic compaction so the rx ring doesn't grow unbounded.
@@ -675,7 +675,7 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
                 let ack: *ByteBuffer = ByteBuffer::new();
                 write_frame(ack, FrameType::settings(),
                              FrameFlag::ack(), 0, "");
-                let _wa: !int = s.write_bytes(ack.data, ack.len);
+                let _wa: !i32 = s.write_bytes(ack.data, ack.len);
                 ack.free();
             }
         } else if h.frame_type == FrameType::ping() {
@@ -683,7 +683,7 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
                 let pong: *ByteBuffer = ByteBuffer::new();
                 write_frame_bytes(pong, FrameType::ping(),
                                    FrameFlag::ack(), 0, payload);
-                let _wp: !int = s.write_bytes(pong.data, pong.len);
+                let _wp: !i32 = s.write_bytes(pong.data, pong.len);
                 pong.free();
             }
         } else if h.frame_type == FrameType::window_update()
@@ -701,12 +701,12 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
             // HEADERS may carry PRIORITY (5 bytes) and PADDED (1 byte
             // pad-len at start, padding at end) flags. Strip both to
             // recover the raw header-block fragment.
-            let mut p_off: int = 0;
-            let mut p_len: int = payload.len;
+            let mut p_off: i32 = 0;
+            let mut p_len: i32 = payload.len;
             if h.frame_type == FrameType::headers()
                && (h.flags & FrameFlag::padded()) != 0 {
                 if p_len > 0 {
-                    let pad_len: int = payload.at(0) as int;
+                    let pad_len: i32 = payload.at(0) as i32;
                     p_off = 1;
                     p_len = p_len - 1 - pad_len;
                 }
@@ -717,7 +717,7 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
                 p_len = p_len - 5;
             }
             if p_len < 0 { p_len = 0; }
-            for let i: int = 0; i < p_len; i++ {
+            for let i: i32 = 0; i < p_len; i++ {
                 st.header_block.push(payload.at(p_off + i));
             }
             if (h.flags & FrameFlag::end_headers()) != 0 { st.headers_done = true; }
@@ -725,15 +725,15 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
             if st.headers_done && st.closed_remote { dispatched_stream = st; }
         } else if h.frame_type == FrameType::data() {
             let st: *H2ServerStream = _h2srv_get_or_create(streams, h.stream_id);
-            let mut p_off: int = 0;
-            let mut p_len: int = payload.len;
+            let mut p_off: i32 = 0;
+            let mut p_len: i32 = payload.len;
             if (h.flags & FrameFlag::padded()) != 0 && p_len > 0 {
-                let pad_len: int = payload.at(0) as int;
+                let pad_len: i32 = payload.at(0) as i32;
                 p_off = 1;
                 p_len = p_len - 1 - pad_len;
             }
             if p_len < 0 { p_len = 0; }
-            for let i: int = 0; i < p_len; i++ {
+            for let i: i32 = 0; i < p_len; i++ {
                 st.body.push(payload.at(p_off + i));
             }
             // Replenish flow-control windows (connection + stream).
@@ -745,7 +745,7 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
                                    0, h.stream_id, wbuf);
                 write_frame_bytes(frame, FrameType::window_update(),
                                    0, 0, wbuf);
-                let _wu: !int = s.write_bytes(frame.data, frame.len);
+                let _wu: !i32 = s.write_bytes(frame.data, frame.len);
                 wbuf.free();
                 frame.free();
             }
@@ -768,32 +768,32 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
 // Pull up to 16 KiB into the rx ring. Returns false on EOF / error.
 fn _h2srv_fill(s: *TlsStream, rx: *ByteBuffer) -> bool {
     let scratch: *u8 = malloc(16384) as *u8;
-    let r: !int = s.read_bytes(scratch, 16384);
+    let r: !i32 = s.read_bytes(scratch, 16384);
     if !r.ok { free(scratch as *void); return false; }
     if r.val <= 0 { free(scratch as *void); return false; }
-    for let i: int = 0; i < r.val; i++ { rx.push(scratch[i]); }
+    for let i: i32 = 0; i < r.val; i++ { rx.push(scratch[i]); }
     free(scratch as *void);
     return true;
 }
 
 // Copy [from, to) of `rx` into a fresh ByteBuffer so the payload
 // survives ring compaction.
-fn _h2srv_slice(rx: *ByteBuffer, from: int, to: int) -> *ByteBuffer {
+fn _h2srv_slice(rx: *ByteBuffer, from: i32, to: i32) -> *ByteBuffer {
     let out: *ByteBuffer = ByteBuffer::new();
-    for let i: int = from; i < to; i++ { out.push(rx.at(i)); }
+    for let i: i32 = from; i < to; i++ { out.push(rx.at(i)); }
     return out;
 }
 
 // In-place drop of consumed prefix [0, used). Naive copy of the tail
 // into a new ByteBuffer; swap on top of the old one. The runtime pays
 // one buffer reset per 8 KiB consumed which is fine on the hot path.
-fn _h2srv_compact(rx: *ByteBuffer, used: int) {
+fn _h2srv_compact(rx: *ByteBuffer, used: i32) {
     if used <= 0 || used >= rx.len {
         rx.len = 0;
         return;
     }
-    let tail_len: int = rx.len - used;
-    for let i: int = 0; i < tail_len; i++ {
+    let tail_len: i32 = rx.len - used;
+    for let i: i32 = 0; i < tail_len; i++ {
         // Note: rx data is the underlying byte storage; we just shift
         // bytes left. ByteBuffer.at(i) reads rx.data[i].
         rx.data[i] = rx.at(used + i);
@@ -802,8 +802,8 @@ fn _h2srv_compact(rx: *ByteBuffer, used: int) {
 }
 
 fn _h2srv_get_or_create(streams: *Vector<*H2ServerStream>,
-                         id: int) -> *H2ServerStream {
-    for let i: int = 0; i < streams.len(); i++ {
+                         id: i32) -> *H2ServerStream {
+    for let i: i32 = 0; i < streams.len(); i++ {
         let st: *H2ServerStream = streams.get(i);
         if st.id == id { return st; }
     }
@@ -819,15 +819,15 @@ fn _h2srv_get_or_create(streams: *Vector<*H2ServerStream>,
     return st;
 }
 
-fn _h2srv_remove_stream(streams: *Vector<*H2ServerStream>, id: int) {
-    for let i: int = 0; i < streams.len(); i++ {
+fn _h2srv_remove_stream(streams: *Vector<*H2ServerStream>, id: i32) {
+    for let i: i32 = 0; i < streams.len(); i++ {
         let st: *H2ServerStream = streams.get(i);
         if st.id == id {
             st.header_block.free();
             st.body.free();
             free(st as *void);
             // Shift remaining entries down (Vector lacks remove_at).
-            for let j: int = i; j + 1 < streams.len(); j++ {
+            for let j: i32 = i; j + 1 < streams.len(); j++ {
                 streams.set(j, streams.get(j + 1));
             }
             streams.len = streams.len - 1;
@@ -854,7 +854,7 @@ fn _h2srv_dispatch(s: *TlsStream, enc: *HpackEncoder, dec: *HpackDecoder,
     let mut path: string = pseudo_path;
     let mut headers_block: string = "";
     let lst: *Vector<*HpackHeader> = parsed.val;
-    for let i: int = 0; i < lst.len(); i++ {
+    for let i: i32 = 0; i < lst.len(); i++ {
         let h: *HpackHeader = lst.get(i);
         if h.name.eq(":method") { method = h.value; continue; }
         if h.name.eq(":path") { path = h.value; continue; }
@@ -896,10 +896,10 @@ fn _h2srv_dispatch(s: *TlsStream, enc: *HpackEncoder, dec: *HpackDecoder,
     let resp_block: string = resp.headers_block;
     if resp_block.len() > 0 {
         let lines: *Vector<string> = resp_block.split("\r\n");
-        for let i: int = 0; i < lines.len(); i++ {
+        for let i: i32 = 0; i < lines.len(); i++ {
             let line: string = lines.get(i);
             if line.len() == 0 { continue; }
-            let colon: int = line.index_of(":");
+            let colon: i32 = line.index_of(":");
             if colon < 0 { continue; }
             let n: string = line.substring(0, colon).trim().to_lower();
             let v: string = line.substring(colon + 1, line.len()).trim();
@@ -913,12 +913,12 @@ fn _h2srv_dispatch(s: *TlsStream, enc: *HpackEncoder, dec: *HpackDecoder,
     enc.encode_header(hbuf, "content-length", _h2srv_itos(resp.body.len()));
 
     let body: string = resp.body;
-    let blen: int = body.len();
+    let blen: i32 = body.len();
     let no_body: bool = blen == 0;
 
     let frame_buf: *ByteBuffer = ByteBuffer::new();
     defer frame_buf.free();
-    let mut hflags: int = FrameFlag::end_headers();
+    let mut hflags: i32 = FrameFlag::end_headers();
     if no_body { hflags = hflags | FrameFlag::end_stream(); }
     write_frame_bytes(frame_buf, FrameType::headers(), hflags, st.id, hbuf);
 
@@ -930,10 +930,10 @@ fn _h2srv_dispatch(s: *TlsStream, enc: *HpackEncoder, dec: *HpackDecoder,
                     FrameFlag::end_stream(), st.id, body);
     }
 
-    let _w: !int = s.write_bytes(frame_buf.data, frame_buf.len);
+    let _w: !i32 = s.write_bytes(frame_buf.data, frame_buf.len);
 }
 
-fn _h2srv_send_500(s: *TlsStream, enc: *HpackEncoder, stream_id: int,
+fn _h2srv_send_500(s: *TlsStream, enc: *HpackEncoder, stream_id: i32,
                     msg: string) {
     let hbuf: *ByteBuffer = ByteBuffer::new();
     defer hbuf.free();
@@ -942,11 +942,11 @@ fn _h2srv_send_500(s: *TlsStream, enc: *HpackEncoder, stream_id: int,
     enc.encode_header(hbuf, "content-length", _h2srv_itos(msg.len()));
     let frame: *ByteBuffer = ByteBuffer::new();
     defer frame.free();
-    let hflags: int = FrameFlag::end_headers();
+    let hflags: i32 = FrameFlag::end_headers();
     write_frame_bytes(frame, FrameType::headers(), hflags, stream_id, hbuf);
     write_frame(frame, FrameType::data(),
                 FrameFlag::end_stream(), stream_id, msg);
-    let _w: !int = s.write_bytes(frame.data, frame.len);
+    let _w: !i32 = s.write_bytes(frame.data, frame.len);
 }
 
 fn _h2srv_is_hop_header(lower_name: string) -> bool {
@@ -958,14 +958,14 @@ fn _h2srv_is_hop_header(lower_name: string) -> bool {
     return false;
 }
 
-fn _h2srv_itos(n: int) -> string {
+fn _h2srv_itos(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut x: int = n;
+    let mut x: i32 = n;
     let mut neg: bool = false;
     if x < 0 { neg = true; x = 0 - x; }
     let mut out: string = "";
     while x > 0 {
-        let d: int = x % 10;
+        let d: i32 = x % 10;
         out = ((48 + d) as char).to_string().concat(out);
         x = x / 10;
     }

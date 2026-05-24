@@ -1,11 +1,11 @@
 // Arena owned by the caller -> safe to pass the derived value into
 // the spawned task (caller controls the lifetime).
-fn process(p: *int) {
+fn process(p: *i32) {
     println!(*p);
 }
 
 fn outer(arena: *Arena) {
-    let p: *int = arena.alloc(sizeof(int)) as *int;
+    let p: *i32 = arena.alloc(sizeof(i32)) as *i32;
     *p = 99;
     spawn process(p);              // ok: arena came from caller
 }

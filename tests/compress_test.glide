@@ -9,7 +9,7 @@ import stdlib::http::compress::*;
 fn _big_body() -> string {
     // > 1024 bytes (the gzip threshold) so the path actually fires.
     let mut s: string = "";
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < 50 {
         s = s.concat("Lorem ipsum dolor sit amet, consectetur adipiscing elit. ");
         i = i + 1;
@@ -63,15 +63,15 @@ fn _h_already_encoded(req: *HttpRequest) -> HttpResponse {
 
 fn _has_gzip_magic(body: string) -> bool {
     if body.len() < 3 { return false; }
-    let b0: int = body.at(0).to_int();
-    let b1: int = body.at(1).to_int();
-    let b2: int = body.at(2).to_int();
+    let b0: i32 = body.at(0).to_int();
+    let b1: i32 = body.at(1).to_int();
+    let b2: i32 = body.at(2).to_int();
     return b0 == 31 && b1 == 139 && b2 == 8;   // 0x1f 0x8b 0x08
 }
 
 // ---- tests ----------------------------------------------------------
 
-fn test_gzip_compresses_large_body() -> int {
+fn test_gzip_compresses_large_body() -> i32 {
     let req: HttpRequest = _req("gzip");
     let c: *Chain = _chain_only(_h_text_big);
     c.req = &req;
@@ -83,7 +83,7 @@ fn test_gzip_compresses_large_body() -> int {
     return 0;
 }
 
-fn test_no_accept_encoding_no_compression() -> int {
+fn test_no_accept_encoding_no_compression() -> i32 {
     let req: HttpRequest = _req("");
     let c: *Chain = _chain_only(_h_text_big);
     c.req = &req;
@@ -92,7 +92,7 @@ fn test_no_accept_encoding_no_compression() -> int {
     return 0;
 }
 
-fn test_small_body_no_compression() -> int {
+fn test_small_body_no_compression() -> i32 {
     let req: HttpRequest = _req("gzip");
     let c: *Chain = _chain_only(_h_text_small);
     c.req = &req;
@@ -102,7 +102,7 @@ fn test_small_body_no_compression() -> int {
     return 0;
 }
 
-fn test_image_content_type_skipped() -> int {
+fn test_image_content_type_skipped() -> i32 {
     let req: HttpRequest = _req("gzip");
     let c: *Chain = _chain_only(_h_image);
     c.req = &req;
@@ -111,7 +111,7 @@ fn test_image_content_type_skipped() -> int {
     return 0;
 }
 
-fn test_already_encoded_skipped() -> int {
+fn test_already_encoded_skipped() -> i32 {
     let req: HttpRequest = _req("gzip");
     let c: *Chain = _chain_only(_h_already_encoded);
     c.req = &req;

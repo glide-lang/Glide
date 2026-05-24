@@ -26,7 +26,7 @@ import stdlib::json::*;
 
 pub struct UpdateUser {
     pub nome:  string,        // required
-    pub idade: ?int,          // optional
+    pub idade: ?i32,          // optional
     pub extra: *JsonValue,    // dynamic (raw subtree)
 }
 
@@ -46,7 +46,7 @@ impl UpdateUser {
         let v: *JsonValue = JsonValue::object();
         v.obj_set("nome", JsonValue::string(self.nome));
         if self.idade.has {
-            v.obj_set("idade", JsonValue::int(self.idade.val));
+            v.obj_set("idade", JsonValue::i32(self.idade.val));
         }
         if self.extra != null {
             v.obj_set("extra", self.extra);
@@ -90,7 +90,7 @@ fn _post(body: string) -> HttpResponse {
 
 // ---- tests ------------------------------------------------------------
 
-fn test_required_only() -> int {
+fn test_required_only() -> i32 {
     let r: HttpResponse = _post("{\"nome\":\"alice\"}");
     assert_eq!(r.status, 200);
     assert_str_eq!(r.header("Content-Type"), "application/json");
@@ -98,14 +98,14 @@ fn test_required_only() -> int {
     return 0;
 }
 
-fn test_required_plus_optional() -> int {
+fn test_required_plus_optional() -> i32 {
     let r: HttpResponse = _post("{\"nome\":\"bob\", \"idade\":30}");
     assert_eq!(r.status, 200);
     assert_str_eq!(r.body, "{\"nome\":\"bob\",\"idade\":30}");
     return 0;
 }
 
-fn test_dynamic_field_passes_through() -> int {
+fn test_dynamic_field_passes_through() -> i32 {
     let payload: string = "{\"nome\":\"c\", \"extra\":{\"any\":[1,2,3]}}";
     let r: HttpResponse = _post(payload);
     assert_eq!(r.status, 200);
@@ -113,14 +113,14 @@ fn test_dynamic_field_passes_through() -> int {
     return 0;
 }
 
-fn test_missing_required_field_errors() -> int {
+fn test_missing_required_field_errors() -> i32 {
     let r: HttpResponse = _post("{\"idade\":30}");
     assert_eq!(r.status, 422);
     assert!(r.body.index_of("nome") >= 0);
     return 0;
 }
 
-fn test_wrong_type_for_required_errors() -> int {
+fn test_wrong_type_for_required_errors() -> i32 {
     // nome should be a string; sending a number triggers the typed read.
     let r: HttpResponse = _post("{\"nome\":42}");
     assert_eq!(r.status, 422);
@@ -128,13 +128,13 @@ fn test_wrong_type_for_required_errors() -> int {
     return 0;
 }
 
-fn test_invalid_json_body_errors() -> int {
+fn test_invalid_json_body_errors() -> i32 {
     let r: HttpResponse = _post("not json at all");
     assert_eq!(r.status, 400);
     return 0;
 }
 
-fn test_optional_wrong_type_drops_to_none() -> int {
+fn test_optional_wrong_type_drops_to_none() -> i32 {
     // idade is optional and the wrong type — it just drops to none()
     // rather than failing the whole bind. This matches Axum's serde
     // default for `Option<T>` fields.
@@ -145,24 +145,24 @@ fn test_optional_wrong_type_drops_to_none() -> int {
     return 0;
 }
 
-fn test_response_json_of() -> int {
+fn test_response_json_of() -> i32 {
     let v: *JsonValue = JsonValue::object();
     v.obj_set("ok", JsonValue::bool(true));
-    v.obj_set("n",  JsonValue::int(42));
+    v.obj_set("n",  JsonValue::i32(42));
     let resp: HttpResponse = HttpResponse::ok().json_of(v);
     assert_str_eq!(resp.header("Content-Type"), "application/json");
     assert_str_eq!(resp.body, "{\"ok\":true,\"n\":42}");
     return 0;
 }
 
-fn test_typed_getters_directly() -> int {
+fn test_typed_getters_directly() -> i32 {
     let v: *JsonValue = JsonValue::parse("{\"a\":\"hi\", \"n\":7, \"x\":3.14, \"f\":true}");
 
     let a: !string = v.get_string("a");
     assert!(a.ok);
     assert_str_eq!(a.val, "hi");
 
-    let n: !int = v.get_int("n");
+    let n: !i32 = v.get_int("n");
     assert!(n.ok);
     assert_eq!(n.val, 7);
 
@@ -174,7 +174,7 @@ fn test_typed_getters_directly() -> int {
     assert!(f.val);
 
     // wrong type
-    let bad: !int = v.get_int("a");
+    let bad: !i32 = v.get_int("a");
     assert_not!(bad.ok);
 
     // missing key

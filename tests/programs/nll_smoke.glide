@@ -2,24 +2,24 @@
 // pre-NLL "borrow held until end of scope" rule.
 
 fn nll_basic() {
-    let mut n: int = 1;
-    let r: &int = &n;
+    let mut n: i32 = 1;
+    let r: &i32 = &n;
     println!(*r);            // last use of r
     n = 2;                   // ok: r dead
 }
 
 fn nll_two_borrows_serial() {
-    let mut n: int = 0;
-    let a: &int = &n;
+    let mut n: i32 = 0;
+    let a: &i32 = &n;
     println!(*a);            // a dies
-    let b: &mut int = &mut n;
+    let b: &mut i32 = &mut n;
     *b = *b + 1;             // ok: a no longer alive
 }
 
 fn nll_borrow_then_consume() {
-    let mut v: int = 10;
-    let r: &int = &v;
-    let copy: int = *r;      // last r use
+    let mut v: i32 = 10;
+    let r: &i32 = &v;
+    let copy: i32 = *r;      // last r use
     v = copy * 2;            // ok
 }
 

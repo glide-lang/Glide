@@ -17,8 +17,8 @@ c_raw! {
 }
 
 extern fn __sc_reset();
-extern fn __sc_parent_get() -> int;
-extern fn __sc_sub_get() -> int;
+extern fn __sc_parent_get() -> i32;
+extern fn __sc_sub_get() -> i32;
 extern fn __sc_parent_inc();
 extern fn __sc_sub_inc();
 
@@ -60,7 +60,7 @@ fn _req(method: string, path: string) -> HttpRequest {
 
 // ---- tests ----------------------------------------------------------
 
-fn test_scope_mounts_routes_under_prefix() -> int {
+fn test_scope_mounts_routes_under_prefix() -> i32 {
     let api: *Router = Router::new();
     api.get("/users", h_users);
 
@@ -74,7 +74,7 @@ fn test_scope_mounts_routes_under_prefix() -> int {
     return 0;
 }
 
-fn test_scope_preserves_param_segments() -> int {
+fn test_scope_preserves_param_segments() -> i32 {
     let api: *Router = Router::new();
     api.get("/users/:id", h_user_by_id);
 
@@ -88,7 +88,7 @@ fn test_scope_preserves_param_segments() -> int {
     return 0;
 }
 
-fn test_scope_unrelated_path_404s() -> int {
+fn test_scope_unrelated_path_404s() -> i32 {
     let api: *Router = Router::new();
     api.get("/users", h_users);
 
@@ -101,7 +101,7 @@ fn test_scope_unrelated_path_404s() -> int {
     return 0;
 }
 
-fn test_scope_runs_parent_then_sub_middleware() -> int {
+fn test_scope_runs_parent_then_sub_middleware() -> i32 {
     __sc_reset();
     let api: *Router = Router::new();
     api.use_mw(mw_sub);
@@ -119,7 +119,7 @@ fn test_scope_runs_parent_then_sub_middleware() -> int {
     return 0;
 }
 
-fn test_scope_sub_mw_does_not_run_for_non_scoped_routes() -> int {
+fn test_scope_sub_mw_does_not_run_for_non_scoped_routes() -> i32 {
     __sc_reset();
     let api: *Router = Router::new();
     api.use_mw(mw_sub);
@@ -139,7 +139,7 @@ fn test_scope_sub_mw_does_not_run_for_non_scoped_routes() -> int {
     return 0;
 }
 
-fn test_scope_normalises_trailing_slash_in_prefix() -> int {
+fn test_scope_normalises_trailing_slash_in_prefix() -> i32 {
     let api: *Router = Router::new();
     api.get("/users", h_users);
 
@@ -152,7 +152,7 @@ fn test_scope_normalises_trailing_slash_in_prefix() -> int {
     return 0;
 }
 
-fn test_scope_returns_self_for_chaining() -> int {
+fn test_scope_returns_self_for_chaining() -> i32 {
     let api: *Router = Router::new();
     let r: *Router = Router::new();
     let same: *Router = r.scope("/api", api);

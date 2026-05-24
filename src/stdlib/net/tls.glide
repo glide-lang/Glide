@@ -685,20 +685,20 @@ c_raw! {
     #endif
 }
 
-extern fn __glide_tls_connect(family: int, v4: i64, v6_hi: i64, v6_lo: i64,
-                               port: int, hostname: string, verify: int,
-                               min_proto: int, alpn_csv: string) -> *void;
-extern fn __glide_tls_attach(fd: i64, hostname: string, verify: int,
-                              min_proto: int, alpn_csv: string) -> *void;
-extern fn __glide_tls_write(h: *void, data: string, n: int) -> i64;
-extern fn __glide_tls_write_raw(h: *void, data: *void, n: int) -> i64;
-extern fn __glide_tls_read(h: *void, buf: *void, max: int) -> i64;
+extern fn __glide_tls_connect(family: i32, v4: i64, v6_hi: i64, v6_lo: i64,
+                               port: i32, hostname: string, verify: i32,
+                               min_proto: i32, alpn_csv: string) -> *void;
+extern fn __glide_tls_attach(fd: i64, hostname: string, verify: i32,
+                              min_proto: i32, alpn_csv: string) -> *void;
+extern fn __glide_tls_write(h: *void, data: string, n: i32) -> i64;
+extern fn __glide_tls_write_raw(h: *void, data: *void, n: i32) -> i64;
+extern fn __glide_tls_read(h: *void, buf: *void, max: i32) -> i64;
 extern fn __glide_tls_close(h: *void);
 extern fn __glide_tls_alpn(h: *void) -> string;
-extern fn __glide_tls_version(h: *void) -> int;
+extern fn __glide_tls_version(h: *void) -> i32;
 extern fn __glide_tls_cipher(h: *void) -> string;
-extern fn __glide_tls_set_timeout(h: *void, ms: int);
-extern fn __glide_tls_listen(port: int, cert_path: string, key_path: string, alpn_csv: string) -> *void;
+extern fn __glide_tls_set_timeout(h: *void, ms: i32);
+extern fn __glide_tls_listen(port: i32, cert_path: string, key_path: string, alpn_csv: string) -> *void;
 extern fn __glide_tls_accept(listener: *void) -> *void;
 extern fn __glide_tls_accept_raw(listener: *void) -> i64;
 extern fn __glide_tls_accept_attach(listener: *void, fd: i64) -> *void;
@@ -714,7 +714,7 @@ pub struct TlsConfig {
 
     /// `0`=TLS1.0, `1`=TLS1.1, `2`=TLS1.2, `3`=TLS1.3 minimum. Default
     /// is 2 (TLS 1.2). Most modern servers support 1.2 and 1.3.
-    pub min_proto: int,
+    pub min_proto: i32,
 
     /// Comma-separated ALPN protocols to advertise (e.g. "h2,http/1.1").
     /// Empty string disables ALPN.
@@ -780,19 +780,19 @@ impl TlsStream {
     ///     if body.ok { println!(body.val.len(), "bytes"); }
     /// }
     /// ```
-    pub fn connect(host: string, port: int, cfg: *TlsConfig) -> !*TlsStream {
+    pub fn connect(host: string, port: i32, cfg: *TlsConfig) -> !*TlsStream {
         let r: !*Vector<*IpAddr> = resolve(host);
         if !r.ok { return err(r.err); }
         let ips: *Vector<*IpAddr> = r.val;
         if ips.len() == 0 { return err("tls: no addresses for ".concat(host)); }
 
         let mut last_err: string = "tls: connect failed";
-        let verify_int: int = 0;
+        let verify_int: i32 = 0;
         if cfg.verify { verify_int = 1; }
 
-        for let i: int = 0; i < ips.len(); i++ {
+        for let i: i32 = 0; i < ips.len(); i++ {
             let ip: *IpAddr = ips.get(i);
-            let mut family: int = 4;
+            let mut family: i32 = 4;
             let mut v4: i64 = 0;
             let mut hi: i64 = 0;
             let mut lo: i64 = 0;
@@ -839,7 +839,7 @@ impl TlsStream {
         // Hand the fd off to TLS. Free only the wrapper struct so the
         // socket isn't closed underneath us.
         free(tcp as *void);
-        let mut verify_int: int = 0;
+        let mut verify_int: i32 = 0;
         if cfg.verify { verify_int = 1; }
         let h: *void = __glide_tls_attach(fd, hostname, verify_int,
                                            cfg.min_proto, cfg.alpn);
@@ -857,10 +857,10 @@ impl TlsStream {
     /// let r: !int = stream.write("hello");
     /// if r.ok { println!("sent", r.val, "bytes"); }
     /// ```
-    pub fn write(self: *TlsStream, data: string) -> !int {
+    pub fn write(self: *TlsStream, data: string) -> !i32 {
         let n: i64 = __glide_tls_write(self.handle, data, data.len());
         if n <= 0 { return err("tls: write failed"); }
-        return ok(n as int);
+        return ok(n as i32);
     }
 
     /// Write every byte of `data`, looping on partial writes.
@@ -868,12 +868,12 @@ impl TlsStream {
     /// ```glide
     /// stream.write_all("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
     /// ```
-    pub fn write_all(self: *TlsStream, data: string) -> !int {
-        let n: int = data.len();
-        let mut sent: int = 0;
+    pub fn write_all(self: *TlsStream, data: string) -> !i32 {
+        let n: i32 = data.len();
+        let mut sent: i32 = 0;
         while sent < n {
             let chunk: string = data.substring(sent, n);
-            let r: !int = self.write(chunk);
+            let r: !i32 = self.write(chunk);
             if !r.ok { return err(r.err); }
             sent = sent + r.val;
         }
@@ -892,10 +892,10 @@ impl TlsStream {
     /// frame.push_str("\x00\x00\x1e\x04\x00\x00\x00\x00\x00");   // h2 SETTINGS
     /// stream.write_bytes(frame.data, frame.len);
     /// ```
-    pub fn write_bytes(self: *TlsStream, buf: *u8, n: int) -> !int {
+    pub fn write_bytes(self: *TlsStream, buf: *u8, n: i32) -> !i32 {
         let raw_n: i64 = __glide_tls_write_raw(self.handle, buf as *void, n);
         if raw_n <= 0 { return err("tls: write_bytes failed"); }
-        return ok(raw_n as int);
+        return ok(raw_n as i32);
     }
 
     /// Binary-safe read: pulls up to `max` bytes into the caller's
@@ -915,10 +915,10 @@ impl TlsStream {
     /// let r: !int = stream.read_bytes(buf, 8192);
     /// if r.ok && r.val > 0 { /* process buf[0..r.val] */ }
     /// ```
-    pub fn read_bytes(self: *TlsStream, buf: *u8, max: int) -> !int {
+    pub fn read_bytes(self: *TlsStream, buf: *u8, max: i32) -> !i32 {
         let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
         if n < 0 { return err("tls: read_bytes failed"); }
-        return ok(n as int);
+        return ok(n as i32);
     }
 
     /// Read up to `max` bytes. ok(0) means peer closed cleanly.
@@ -927,11 +927,11 @@ impl TlsStream {
     /// let r: !string = stream.read(4096);
     /// if r.ok && r.val.len() > 0 { print!(r.val); }
     /// ```
-    pub fn read(self: *TlsStream, max: int) -> !string {
+    pub fn read(self: *TlsStream, max: i32) -> !string {
         let buf: *u8 = malloc(max) as *u8;
         let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
         if n < 0 { free(buf as *void); return err("tls: read failed"); }
-        let s: string = _bytes_to_string(buf, n as int);
+        let s: string = _bytes_to_string(buf, n as i32);
         free(buf as *void);
         return ok(s);
     }
@@ -972,8 +972,8 @@ impl TlsStream {
     /// ```glide
     /// if stream.version() < 3 { eprintln("not TLS 1.3"); }
     /// ```
-    pub fn version(self: *TlsStream) -> int {
-        let v: int = __glide_tls_version(self.handle);
+    pub fn version(self: *TlsStream) -> i32 {
+        let v: i32 = __glide_tls_version(self.handle);
         // 0x0303 = TLS 1.2, 0x0304 = TLS 1.3
         if v == 771 { return 2; }
         if v == 772 { return 3; }
@@ -996,7 +996,7 @@ impl TlsStream {
     /// ```glide
     /// stream.set_timeout_ms(10000);   // 10s for reads and writes
     /// ```
-    pub fn set_timeout_ms(self: *TlsStream, ms: int) {
+    pub fn set_timeout_ms(self: *TlsStream, ms: i32) {
         __glide_tls_set_timeout(self.handle, ms);
     }
 
@@ -1035,7 +1035,7 @@ impl TlsListener {
     ///     if s.ok { spawn handle(s.val); }
     /// }
     /// ```
-    pub fn bind(port: int, cert_path: string, key_path: string) -> !*TlsListener {
+    pub fn bind(port: i32, cert_path: string, key_path: string) -> !*TlsListener {
         let h: *void = __glide_tls_listen(port, cert_path, key_path, "");
         if h == null { return err("tls_listener: bind/cert/key failure"); }
         let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
@@ -1056,7 +1056,7 @@ impl TlsListener {
     ///     if s.ok { spawn handle(s.val); }
     /// }
     /// ```
-    pub fn bind_alpn(port: int, cert_path: string, key_path: string,
+    pub fn bind_alpn(port: i32, cert_path: string, key_path: string,
                      alpn_csv: string) -> !*TlsListener {
         let h: *void = __glide_tls_listen(port, cert_path, key_path, alpn_csv);
         if h == null { return err("tls_listener: bind/cert/key failure"); }
@@ -1141,7 +1141,7 @@ impl TlsListener {
 /// let r: !*TlsStream = tls_attach_server(conn.fd, "cert.pem", "key.pem");
 /// if r.ok { defer r.val.close(); /* communicate over TLS */ }
 /// ```
-pub fn tls_attach_server(conn_fd: int, cert_path: string,
+pub fn tls_attach_server(conn_fd: i32, cert_path: string,
                          key_path: string) -> !*TlsStream {
     let h: *void = __glide_tls_server_attach(conn_fd as i64, cert_path, key_path);
     if h == null { return err("tls: server attach handshake failed"); }

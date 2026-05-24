@@ -17,10 +17,10 @@ c_raw! {
 }
 
 extern fn __test_log_reset();
-extern fn __test_log_calls_get() -> int;
+extern fn __test_log_calls_get() -> i32;
 extern fn __test_log_calls_inc();
-extern fn __test_log_after_get() -> int;
-extern fn __test_log_after_set(x: int);
+extern fn __test_log_after_get() -> i32;
+extern fn __test_log_after_set(x: i32);
 
 // ---- middlewares ----------------------------------------------------
 
@@ -67,7 +67,7 @@ fn _req(method: string, path: string, headers: string) -> HttpRequest {
 
 // ---- tests ----------------------------------------------------------
 
-fn test_single_middleware_runs_before_handler() -> int {
+fn test_single_middleware_runs_before_handler() -> i32 {
     __test_log_reset();
     let r: *Router = Router::new();
     r.use_mw(mw_logger);
@@ -82,7 +82,7 @@ fn test_single_middleware_runs_before_handler() -> int {
     return 0;
 }
 
-fn test_middleware_short_circuits() -> int {
+fn test_middleware_short_circuits() -> i32 {
     __test_log_reset();
     let r: *Router = Router::new();
     r.use_mw(mw_logger);
@@ -99,7 +99,7 @@ fn test_middleware_short_circuits() -> int {
     return 0;
 }
 
-fn test_middleware_passes_through_when_authed() -> int {
+fn test_middleware_passes_through_when_authed() -> i32 {
     __test_log_reset();
     let r: *Router = Router::new();
     r.use_mw(mw_logger);
@@ -112,7 +112,7 @@ fn test_middleware_passes_through_when_authed() -> int {
     return 0;
 }
 
-fn test_middleware_can_modify_response() -> int {
+fn test_middleware_can_modify_response() -> i32 {
     let r: *Router = Router::new();
     r.use_mw(mw_inject_header_into_response);
     r.get("/x", h_ok);
@@ -124,7 +124,7 @@ fn test_middleware_can_modify_response() -> int {
     return 0;
 }
 
-fn test_chain_runs_in_registration_order() -> int {
+fn test_chain_runs_in_registration_order() -> i32 {
     __test_log_reset();
     let r: *Router = Router::new();
     r.use_mw(mw_logger);                          // counts 1, sees 200 after
@@ -140,7 +140,7 @@ fn test_chain_runs_in_registration_order() -> int {
     return 0;
 }
 
-fn test_no_middleware_runs_handler_directly() -> int {
+fn test_no_middleware_runs_handler_directly() -> i32 {
     let r: *Router = Router::new();
     r.get("/x", h_ok);
     let req: HttpRequest = _req("GET", "/x", "");
@@ -150,7 +150,7 @@ fn test_no_middleware_runs_handler_directly() -> int {
     return 0;
 }
 
-fn test_use_mw_returns_self_for_chaining() -> int {
+fn test_use_mw_returns_self_for_chaining() -> i32 {
     let r: *Router = Router::new();
     let same: *Router = r.use_mw(mw_logger);
     assert!(same == r);

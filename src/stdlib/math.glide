@@ -127,14 +127,14 @@ pub const E:  f64 = 2.718281828459045;
 /// ```glide
 /// let a: int = min_int(7, 3);   // 3
 /// ```
-pub fn min_int(a: int, b: int) -> int { if a < b { return a; } return b; }
+pub fn min_int(a: i32, b: i32) -> i32 { if a < b { return a; } return b; }
 
 /// Larger of two ints.
 ///
 /// ```glide
 /// let a: int = max_int(7, 3);   // 7
 /// ```
-pub fn max_int(a: int, b: int) -> int { if a > b { return a; } return b; }
+pub fn max_int(a: i32, b: i32) -> i32 { if a > b { return a; } return b; }
 
 /// Absolute value for ints. Note: `abs_int(INT_MIN)` overflows on
 /// two's-complement platforms; callers handling user input should clamp.
@@ -143,7 +143,7 @@ pub fn max_int(a: int, b: int) -> int { if a > b { return a; } return b; }
 /// abs_int(-5);   // 5
 /// abs_int(0);    // 0
 /// ```
-pub fn abs_int(a: int) -> int { if a < 0 { return -a; } return a; }
+pub fn abs_int(a: i32) -> i32 { if a < 0 { return -a; } return a; }
 
 /// Sign of an int: `-1`, `0`, or `+1`.
 ///
@@ -152,7 +152,7 @@ pub fn abs_int(a: int) -> int { if a < 0 { return -a; } return a; }
 /// sign_int(0);   //  0
 /// sign_int(42);  //  1
 /// ```
-pub fn sign_int(a: int) -> int {
+pub fn sign_int(a: i32) -> i32 {
     if a > 0 { return 1; }
     if a < 0 { return -1; }
     return 0;
@@ -166,7 +166,7 @@ pub fn sign_int(a: int) -> int {
 /// clamp_int(-3, 0, 10);   //  0
 /// clamp_int(5,  0, 10);   //  5
 /// ```
-pub fn clamp_int(x: int, lo: int, hi: int) -> int {
+pub fn clamp_int(x: i32, lo: i32, hi: i32) -> i32 {
     if x < lo { return lo; }
     if x > hi { return hi; }
     return x;
@@ -207,10 +207,10 @@ pub fn clamp_f64(x: f64, lo: f64, hi: f64) -> f64 {
 /// ipow(3, 4);    // 81
 /// ipow(5, 0);    // 1   (any^0)
 /// ```
-pub fn ipow(a: int, b: int) -> int {
-    let mut result: int = 1;
-    let mut base: int = a;
-    let mut exp: int = b;
+pub fn ipow(a: i32, b: i32) -> i32 {
+    let mut result: i32 = 1;
+    let mut base: i32 = a;
+    let mut exp: i32 = b;
     while exp > 0 {
         if exp % 2 == 1 { result = result * base; }
         base = base * base;
@@ -226,11 +226,11 @@ pub fn ipow(a: int, b: int) -> int {
 /// gcd(12, 18);   // 6
 /// gcd(100, 75);  // 25
 /// ```
-pub fn gcd(a: int, b: int) -> int {
-    let mut x: int = abs_int(a);
-    let mut y: int = abs_int(b);
+pub fn gcd(a: i32, b: i32) -> i32 {
+    let mut x: i32 = abs_int(a);
+    let mut y: i32 = abs_int(b);
     while y != 0 {
-        let t: int = y;
+        let t: i32 = y;
         y = x % y;
         x = t;
     }
@@ -245,7 +245,7 @@ pub fn gcd(a: int, b: int) -> int {
 /// lcm(4, 6);    // 12
 /// lcm(15, 20);  // 60
 /// ```
-pub fn lcm(a: int, b: int) -> int {
+pub fn lcm(a: i32, b: i32) -> i32 {
     if a == 0 || b == 0 { return 0; }
     return abs_int(a / gcd(a, b) * b);
 }

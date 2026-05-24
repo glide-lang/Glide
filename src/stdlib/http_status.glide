@@ -9,7 +9,7 @@
 /// status_text(404);  // "Not Found"
 /// status_text(599);  // "Unknown"
 /// ```
-pub fn status_text(code: int) -> string {
+pub fn status_text(code: i32) -> string {
     if code == 100 { return "Continue"; }
     if code == 101 { return "Switching Protocols"; }
     if code == 102 { return "Processing"; }
@@ -87,7 +87,7 @@ pub fn status_text(code: int) -> string {
 /// is_ok(204);   // true
 /// is_ok(404);   // false
 /// ```
-pub fn is_ok(code: int) -> bool {
+pub fn is_ok(code: i32) -> bool {
     return code >= 200 && code < 300;
 }
 
@@ -97,7 +97,7 @@ pub fn is_ok(code: int) -> bool {
 /// is_redirect(301);  // true
 /// is_redirect(200);  // false
 /// ```
-pub fn is_redirect(code: int) -> bool {
+pub fn is_redirect(code: i32) -> bool {
     return code >= 300 && code < 400;
 }
 
@@ -107,7 +107,7 @@ pub fn is_redirect(code: int) -> bool {
 /// is_client_error(404);  // true
 /// is_client_error(503);  // false
 /// ```
-pub fn is_client_error(code: int) -> bool {
+pub fn is_client_error(code: i32) -> bool {
     return code >= 400 && code < 500;
 }
 
@@ -117,6 +117,6 @@ pub fn is_client_error(code: int) -> bool {
 /// is_server_error(503);  // true
 /// is_server_error(404);  // false
 /// ```
-pub fn is_server_error(code: int) -> bool {
+pub fn is_server_error(code: i32) -> bool {
     return code >= 500 && code < 600;
 }

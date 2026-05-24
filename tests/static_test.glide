@@ -53,7 +53,7 @@ fn _static_router() -> *Router {
     return r;
 }
 
-fn test_serves_known_file_with_mime() -> int {
+fn test_serves_known_file_with_mime() -> i32 {
     let r: *Router = _static_router();
     defer r.free();
     let req: HttpRequest = _static_req("/static/app.css");
@@ -68,7 +68,7 @@ fn test_serves_known_file_with_mime() -> int {
     return 0;
 }
 
-fn test_missing_path_returns_404() -> int {
+fn test_missing_path_returns_404() -> i32 {
     let r: *Router = _static_router();
     defer r.free();
     let req: HttpRequest = _static_req("/static/missing.txt");
@@ -77,7 +77,7 @@ fn test_missing_path_returns_404() -> int {
     return 0;
 }
 
-fn test_dotdot_path_rejected() -> int {
+fn test_dotdot_path_rejected() -> i32 {
     let r: *Router = _static_router();
     defer r.free();
     // A `..` path SEGMENT is a traversal attempt. The router rejects it
@@ -90,7 +90,7 @@ fn test_dotdot_path_rejected() -> int {
     return 0;
 }
 
-fn test_dotdot_in_name_is_404() -> int {
+fn test_dotdot_in_name_is_404() -> i32 {
     let r: *Router = _static_router();
     defer r.free();
     // Dots inside a single segment are a legitimate filename, not a

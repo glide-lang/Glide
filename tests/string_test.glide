@@ -6,14 +6,14 @@ fn _near(a: f64, b: f64) -> bool {
     return d < 0.0001;
 }
 
-fn test_is_empty() -> int {
+fn test_is_empty() -> i32 {
     assert!("".is_empty());
     assert_not!("a".is_empty());
     assert_not!(" ".is_empty());
     return 0;
 }
 
-fn test_try_parse_float_basic() -> int {
+fn test_try_parse_float_basic() -> i32 {
     let a: !f64 = "3.14".try_parse_float();
     assert!(a.ok);
     assert!(_near(a.val, 3.14));
@@ -32,21 +32,21 @@ fn test_try_parse_float_basic() -> int {
     return 0;
 }
 
-fn test_try_parse_float_int_form() -> int {
+fn test_try_parse_float_int_form() -> i32 {
     let r: !f64 = "42".try_parse_float();
     assert!(r.ok);
     assert!(_near(r.val, 42.0));
     return 0;
 }
 
-fn test_try_parse_float_leading_dot() -> int {
+fn test_try_parse_float_leading_dot() -> i32 {
     let r: !f64 = ".5".try_parse_float();
     assert!(r.ok);
     assert!(_near(r.val, 0.5));
     return 0;
 }
 
-fn test_try_parse_float_exponent() -> int {
+fn test_try_parse_float_exponent() -> i32 {
     let a: !f64 = "1e3".try_parse_float();
     assert!(a.ok);
     assert!(_near(a.val, 1000.0));
@@ -61,7 +61,7 @@ fn test_try_parse_float_exponent() -> int {
     return 0;
 }
 
-fn test_try_parse_float_rejects_garbage() -> int {
+fn test_try_parse_float_rejects_garbage() -> i32 {
     assert_not!("".try_parse_float().ok);
     assert_not!("abc".try_parse_float().ok);
     assert_not!("-".try_parse_float().ok);
@@ -71,7 +71,7 @@ fn test_try_parse_float_rejects_garbage() -> int {
     return 0;
 }
 
-fn test_try_parse_bool() -> int {
+fn test_try_parse_bool() -> i32 {
     let t: !bool = "true".try_parse_bool();
     assert!(t.ok);
     assert!(t.val);

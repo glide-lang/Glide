@@ -8,7 +8,7 @@ fn check_vector(raw: string, encoded: string) {
     assert_str_eq!(decoded.val, raw);
 }
 
-fn test_rfc_4648_vectors() -> int {
+fn test_rfc_4648_vectors() -> i32 {
     check_vector("", "");
     check_vector("f", "Zg==");
     check_vector("fo", "Zm8=");
@@ -19,7 +19,7 @@ fn test_rfc_4648_vectors() -> int {
     return 0;
 }
 
-fn test_round_trip() -> int {
+fn test_round_trip() -> i32 {
     let original: string = "hello, Glide base64: 0123456789 + /";
     let encoded: string = b64_encode(original);
     let decoded: !string = b64_decode(encoded);
@@ -28,7 +28,7 @@ fn test_round_trip() -> int {
     return 0;
 }
 
-fn test_decode_accepts_missing_padding() -> int {
+fn test_decode_accepts_missing_padding() -> i32 {
     let one: !string = b64_decode("Zg");
     assert!(one.ok);
     assert_str_eq!(one.val, "f");
@@ -39,7 +39,7 @@ fn test_decode_accepts_missing_padding() -> int {
     return 0;
 }
 
-fn test_decode_rejects_invalid_chars() -> int {
+fn test_decode_rejects_invalid_chars() -> i32 {
     let bad: !string = b64_decode("Zm$v");
     assert!(!bad.ok);
     return 0;

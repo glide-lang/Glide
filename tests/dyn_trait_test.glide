@@ -17,8 +17,8 @@ pub trait Producer {
 }
 
 pub struct Counter {
-    pub idx: int,
-    pub max: int,
+    pub idx: i32,
+    pub max: i32,
 }
 
 impl Producer for Counter {
@@ -33,7 +33,7 @@ fn _take_dyn(p: *dyn Producer) -> ?string {
     return p.next();
 }
 
-fn test_dyn_with_option_return_pointer_self() -> int {
+fn test_dyn_with_option_return_pointer_self() -> i32 {
     let c: *Counter = malloc(sizeof(Counter)) as *Counter;
     c.idx = 0; c.max = 3;
     let dp: *dyn Producer = c as *dyn Producer;
@@ -51,40 +51,40 @@ fn test_dyn_with_option_return_pointer_self() -> int {
 // ---- !T return + self: *Self ----------------------------------------
 
 pub trait Loader {
-    fn load(self: *Self, key: string) -> !int;
+    fn load(self: *Self, key: string) -> !i32;
 }
 
 pub struct StaticStore {
     pub k: string,
-    pub v: int,
+    pub v: i32,
 }
 
 impl Loader for StaticStore {
-    fn load(self: *StaticStore, key: string) -> !int {
+    fn load(self: *StaticStore, key: string) -> !i32 {
         if !self.k.eq(key) { return err("missing key"); }
         return ok(self.v);
     }
 }
 
-fn _try_load(l: *dyn Loader, k: string) -> !int {
+fn _try_load(l: *dyn Loader, k: string) -> !i32 {
     return l.load(k);
 }
 
-fn test_dyn_with_result_return() -> int {
+fn test_dyn_with_result_return() -> i32 {
     let s: *StaticStore = malloc(sizeof(StaticStore)) as *StaticStore;
     s.k = "answer";
     s.v = 42;
     let dl: *dyn Loader = s as *dyn Loader;
-    let r1: !int = _try_load(dl, "answer");
+    let r1: !i32 = _try_load(dl, "answer");
     assert!(r1.ok); assert_eq!(r1.val, 42);
-    let r2: !int = _try_load(dl, "nope");
+    let r2: !i32 = _try_load(dl, "nope");
     assert_not!(r2.ok);
     return 0;
 }
 
 // ---- multiple impls of the same trait + dynamic dispatch ------------
 
-pub struct Doubler { pub last: int }
+pub struct Doubler { pub last: i32 }
 
 impl Producer for Doubler {
     fn next(self: *Doubler) -> ?string {
@@ -94,7 +94,7 @@ impl Producer for Doubler {
     }
 }
 
-fn test_dyn_dispatch_picks_impl() -> int {
+fn test_dyn_dispatch_picks_impl() -> i32 {
     let c: *Counter = malloc(sizeof(Counter)) as *Counter;
     c.idx = 0; c.max = 1;
     let d: *Doubler = malloc(sizeof(Doubler)) as *Doubler;

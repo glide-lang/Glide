@@ -21,8 +21,8 @@ import stdlib::net::tcp::*;
 import stdlib::net::tls::*;
 
 pub struct Pop3MsgInfo {
-    pub idx:  int,
-    pub size: int,
+    pub idx:  i32,
+    pub size: i32,
 }
 
 pub struct Pop3Session {
@@ -46,7 +46,7 @@ impl Pop3Session {
     ///     r.val.quit();
     /// }
     /// ```
-    pub fn connect(host: string, port: int, use_tls: bool) -> !*Pop3Session {
+    pub fn connect(host: string, port: i32, use_tls: bool) -> !*Pop3Session {
         let s: *Pop3Session = malloc(sizeof(Pop3Session)) as *Pop3Session;
         s.host = host;
         s.tcp = null as *TcpStream;
@@ -83,7 +83,7 @@ impl Pop3Session {
     /// let r: !int = session.login("me@example.com", "app-password");
     /// if !r.ok { eprintln(r.err); }
     /// ```
-    pub fn login(self: *Pop3Session, user: string, pass: string) -> !int {
+    pub fn login(self: *Pop3Session, user: string, pass: string) -> !i32 {
         let _u: !string = self._cmd("USER ".concat(user));
         if !_u.ok { return err(_u.err); }
         let _p: !string = self._cmd("PASS ".concat(pass));
@@ -102,10 +102,10 @@ impl Pop3Session {
         if !r.ok { return err(r.err); }
         // "+OK n octets"
         let rest: string = r.val.substring(4, r.val.len()).trim();
-        let sp: int = rest.index_of(" ");
+        let sp: i32 = rest.index_of(" ");
         if sp < 0 { return err("pop3: bad STAT reply"); }
-        let cr: !int = rest.substring(0, sp).try_parse_int();
-        let sr: !int = rest.substring(sp + 1, rest.len()).try_parse_int();
+        let cr: !i32 = rest.substring(0, sp).try_parse_int();
+        let sr: !i32 = rest.substring(sp + 1, rest.len()).try_parse_int();
         if !cr.ok || !sr.ok { return err("pop3: STAT non-numeric"); }
         let p: *Pop3MsgInfo = malloc(sizeof(Pop3MsgInfo)) as *Pop3MsgInfo;
         p.idx = cr.val;
@@ -125,7 +125,7 @@ impl Pop3Session {
     /// }
     /// ```
     pub fn list(self: *Pop3Session) -> !*Vector<*Pop3MsgInfo> {
-        let _w: !int = self._write("LIST\r\n");
+        let _w: !i32 = self._write("LIST\r\n");
         let head: !string = self._read_line();
         if !head.ok { return err(head.err); }
         if !head.val.starts_with("+OK") {
@@ -135,13 +135,13 @@ impl Pop3Session {
         if !body.ok { return err(body.err); }
         let out: *Vector<*Pop3MsgInfo> = Vector::new();
         let lines: *Vector<string> = body.val.split("\r\n");
-        for let i: int = 0; i < lines.len(); i++ {
+        for let i: i32 = 0; i < lines.len(); i++ {
             let line: string = lines.get(i);
             if line.len() == 0 { continue; }
-            let sp: int = line.index_of(" ");
+            let sp: i32 = line.index_of(" ");
             if sp < 0 { continue; }
-            let cr: !int = line.substring(0, sp).try_parse_int();
-            let sr: !int = line.substring(sp + 1, line.len()).trim().try_parse_int();
+            let cr: !i32 = line.substring(0, sp).try_parse_int();
+            let sr: !i32 = line.substring(sp + 1, line.len()).trim().try_parse_int();
             if !cr.ok || !sr.ok { continue; }
             let p: *Pop3MsgInfo = malloc(sizeof(Pop3MsgInfo)) as *Pop3MsgInfo;
             p.idx = cr.val;
@@ -160,8 +160,8 @@ impl Pop3Session {
     ///     if m.ok { println!("subject:", m.val.subject); }
     /// }
     /// ```
-    pub fn retrieve(self: *Pop3Session, n: int) -> !string {
-        let _w: !int = self._write("RETR ".concat(_pop3_itos(n)).concat("\r\n"));
+    pub fn retrieve(self: *Pop3Session, n: i32) -> !string {
+        let _w: !i32 = self._write("RETR ".concat(_pop3_itos(n)).concat("\r\n"));
         let head: !string = self._read_line();
         if !head.ok { return err(head.err); }
         if !head.val.starts_with("+OK") {
@@ -176,7 +176,7 @@ impl Pop3Session {
     /// session.delete(1);
     /// session.quit();   // server now removes it
     /// ```
-    pub fn delete(self: *Pop3Session, n: int) -> !int {
+    pub fn delete(self: *Pop3Session, n: i32) -> !i32 {
         let r: !string = self._cmd("DELE ".concat(_pop3_itos(n)));
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -188,7 +188,7 @@ impl Pop3Session {
     /// ```glide
     /// session.noop();
     /// ```
-    pub fn noop(self: *Pop3Session) -> !int {
+    pub fn noop(self: *Pop3Session) -> !i32 {
         let r: !string = self._cmd("NOOP");
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -201,7 +201,7 @@ impl Pop3Session {
     /// session.quit();
     /// session.close();
     /// ```
-    pub fn quit(self: *Pop3Session) -> !int {
+    pub fn quit(self: *Pop3Session) -> !i32 {
         let r: !string = self._cmd("QUIT");
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -220,12 +220,12 @@ impl Pop3Session {
 
     // ---- transport helpers ----
 
-    fn _write(self: *Pop3Session, data: string) -> !int {
+    fn _write(self: *Pop3Session, data: string) -> !i32 {
         if self.is_tls { return self.tls.write_all(data); }
         return self.tcp.write_all(data);
     }
 
-    fn _read(self: *Pop3Session, max: int) -> !string {
+    fn _read(self: *Pop3Session, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
         return self.tcp.read(max);
     }
@@ -237,7 +237,7 @@ impl Pop3Session {
             if r.val.len() == 0 { return err("pop3: connection closed"); }
             self.rx_buf = self.rx_buf.concat(r.val);
         }
-        let nl: int = self.rx_buf.index_of("\r\n");
+        let nl: i32 = self.rx_buf.index_of("\r\n");
         let line: string = self.rx_buf.substring(0, nl);
         self.rx_buf = self.rx_buf.substring(nl + 2, self.rx_buf.len());
         return ok(line);
@@ -262,7 +262,7 @@ impl Pop3Session {
     }
 
     fn _cmd(self: *Pop3Session, cmd: string) -> !string {
-        let _w: !int = self._write(cmd.concat("\r\n"));
+        let _w: !i32 = self._write(cmd.concat("\r\n"));
         let r: !string = self._read_line();
         if !r.ok { return err(r.err); }
         if !r.val.starts_with("+OK") {
@@ -272,14 +272,14 @@ impl Pop3Session {
     }
 }
 
-fn _pop3_itos(n: int) -> string {
+fn _pop3_itos(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut x: int = n;
+    let mut x: i32 = n;
     let mut neg: bool = false;
     if x < 0 { neg = true; x = 0 - x; }
     let mut s: string = "";
     while x > 0 {
-        let d: int = x % 10;
+        let d: i32 = x % 10;
         s = ((48 + d) as char).to_string().concat(s);
         x = x / 10;
     }

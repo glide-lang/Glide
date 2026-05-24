@@ -19,9 +19,9 @@ pub struct Vector<T> {
     /// Heap buffer. `null` while `cap == 0`.
     data: *T,
     /// Number of initialised elements (`<= cap`).
-    len: int,
+    len: i32,
     /// Allocation size in elements. Always a power of two once non-zero.
-    cap: int,
+    cap: i32,
     /// Set when `data` was bump-allocated by the active arena (LSP path)
     /// rather than via libc malloc. Free / re-grow paths skip libc free
     /// when this is true; the arena reclaims everything in bulk.
@@ -59,7 +59,7 @@ impl<T> Vector<T> {
     /// defer v.free();
     /// for let i: int = 0; i < 1024; i++ { v.push(i); }
     /// ```
-    fn with_cap(cap: int) -> *Vector<T> {
+    fn with_cap(cap: i32) -> *Vector<T> {
         let arena: bool = __glide_palloc_active() != 0;
         let v: *Vector<T>;
         if arena {
@@ -93,7 +93,7 @@ impl<T> Vector<T> {
     /// ```
     fn push(self: *Vector<T>, x: T) {
         if self.len == self.cap {
-            let mut new_cap: int = 4;
+            let mut new_cap: i32 = 4;
             if self.cap > 0 { new_cap = self.cap * 2; }
             let new_data: *T;
             if self.is_arena {
@@ -101,7 +101,7 @@ impl<T> Vector<T> {
             } else {
                 new_data = malloc(new_cap * sizeof(T)) as *T;
             }
-            for let i: int = 0; i < self.len; i++ {
+            for let i: i32 = 0; i < self.len; i++ {
                 new_data[i] = self.data[i];
             }
             // Arena-backed buffers can't be free()d individually — the
@@ -135,7 +135,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// let x: int = v.get(0);
     /// ```
-    fn get(self: *Vector<T>, i: int) -> T {
+    fn get(self: *Vector<T>, i: i32) -> T {
         return self.data[i];
     }
 
@@ -145,7 +145,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// v.set(0, 42);
     /// ```
-    fn set(self: *Vector<T>, i: int, x: T) {
+    fn set(self: *Vector<T>, i: i32, x: T) {
         self.data[i] = x;
     }
 
@@ -156,7 +156,7 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 2, 3);
     /// v.len();   // 3
     /// ```
-    fn len(self: *Vector<T>) -> int {
+    fn len(self: *Vector<T>) -> i32 {
         return self.len;
     }
 
@@ -194,7 +194,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// v.swap(0, v.len() - 1);   // bring last to front
     /// ```
-    fn swap(self: *Vector<T>, i: int, j: int) {
+    fn swap(self: *Vector<T>, i: i32, j: i32) {
         let tmp: T = self.data[i];
         self.data[i] = self.data[j];
         self.data[j] = tmp;
@@ -211,7 +211,7 @@ impl<T> Vector<T> {
     /// let removed: int = v.swap_remove(1);   // 20
     /// // v is now [10, 40, 30]
     /// ```
-    fn swap_remove(self: *Vector<T>, i: int) -> T {
+    fn swap_remove(self: *Vector<T>, i: i32) -> T {
         let out: T = self.data[i];
         self.len = self.len - 1;
         if i != self.len {
@@ -230,8 +230,8 @@ impl<T> Vector<T> {
     /// // v is now [3, 2, 1]
     /// ```
     fn reverse(self: *Vector<T>) {
-        let mut lo: int = 0;
-        let mut hi: int = self.len - 1;
+        let mut lo: i32 = 0;
+        let mut hi: i32 = self.len - 1;
         while lo < hi {
             let tmp: T = self.data[lo];
             self.data[lo] = self.data[hi];
@@ -249,7 +249,7 @@ impl<T> Vector<T> {
     /// v.truncate(0);          // same as clear()
     /// v.truncate(v.len());    // no-op
     /// ```
-    fn truncate(self: *Vector<T>, n: int) {
+    fn truncate(self: *Vector<T>, n: i32) {
         if n < 0 { return; }
         if n < self.len { self.len = n; }
     }
@@ -265,7 +265,7 @@ impl<T> Vector<T> {
     /// // a is now [1, 2, 3, 4]; b is unchanged
     /// ```
     fn extend(self: *Vector<T>, other: *Vector<T>) {
-        for let i: int = 0; i < other.len; i++ {
+        for let i: i32 = 0; i < other.len; i++ {
             self.push(other.data[i]);
         }
     }
@@ -347,7 +347,7 @@ impl<T> Vector<T> {
     /// ```
     fn map<U>(self: *Vector<T>, f: fn(T) -> U) -> *Vector<U> {
         let out: *Vector<U> = Vector::new();
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             out.push(f(self.data[i]));
         }
         return out;
@@ -364,7 +364,7 @@ impl<T> Vector<T> {
     /// ```
     fn filter(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
             if p(item) { out.push(item); }
         }
@@ -378,12 +378,12 @@ impl<T> Vector<T> {
     /// let head: *Vector<int> = v.take(3);   // [1, 2, 3]
     /// v.take(99).len();                     // 5  (clamped)
     /// ```
-    fn take(self: *Vector<T>, n: int) -> *Vector<T> {
+    fn take(self: *Vector<T>, n: i32) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
-        let mut limit: int = n;
+        let mut limit: i32 = n;
         if limit > self.len { limit = self.len; }
         if limit < 0 { limit = 0; }
-        for let i: int = 0; i < limit; i++ { out.push(self.data[i]); }
+        for let i: i32 = 0; i < limit; i++ { out.push(self.data[i]); }
         return out;
     }
 
@@ -393,11 +393,11 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 2, 3, 4, 5);
     /// let tail: *Vector<int> = v.skip(2);   // [3, 4, 5]
     /// ```
-    fn skip(self: *Vector<T>, n: int) -> *Vector<T> {
+    fn skip(self: *Vector<T>, n: i32) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
-        let mut start: int = n;
+        let mut start: i32 = n;
         if start < 0 { start = 0; }
-        for let i: int = start; i < self.len; i++ { out.push(self.data[i]); }
+        for let i: i32 = start; i < self.len; i++ { out.push(self.data[i]); }
         return out;
     }
 
@@ -410,7 +410,7 @@ impl<T> Vector<T> {
     /// ```
     fn take_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
             if !p(item) { return out; }
             out.push(item);
@@ -428,7 +428,7 @@ impl<T> Vector<T> {
     fn skip_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         let mut skipping: bool = true;
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
             if skipping {
                 if !p(item) { skipping = false; out.push(item); }
@@ -449,7 +449,7 @@ impl<T> Vector<T> {
     /// ```
     fn fold<U>(self: *Vector<T>, init: U, f: fn(U, T) -> U) -> U {
         let mut acc: U = init;
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             acc = f(acc, self.data[i]);
         }
         return acc;
@@ -463,7 +463,7 @@ impl<T> Vector<T> {
     /// v.any(is_neg);   // true
     /// ```
     fn any(self: *Vector<T>, p: fn(T) -> bool) -> bool {
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             if p(self.data[i]) { return true; }
         }
         return false;
@@ -478,7 +478,7 @@ impl<T> Vector<T> {
     /// v.all(is_pos);   // true
     /// ```
     fn all(self: *Vector<T>, p: fn(T) -> bool) -> bool {
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             if !p(self.data[i]) { return false; }
         }
         return true;
@@ -495,7 +495,7 @@ impl<T> Vector<T> {
     /// }
     /// ```
     fn find(self: *Vector<T>, p: fn(T) -> bool) -> ?T {
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
             if p(item) { return some(item); }
         }
@@ -505,7 +505,7 @@ impl<T> Vector<T> {
 
 pub struct VecIter<T> {
     vec: *Vector<T>,
-    idx: int,
+    idx: i32,
 }
 
 impl<T> VecIter<T> {
@@ -531,7 +531,7 @@ impl<T> VecIter<T> {
 // Specialized reducers for Vector<int>. Glide doesn't have a generic
 // numeric trait yet, so sum / max / min live in concrete impls per
 // element type. Strings, floats, etc. follow the same pattern when added.
-impl Vector<int> {
+impl Vector<i32> {
     /// Sum of all elements. Empty vector returns 0.
     ///
     /// ```glide
@@ -539,9 +539,9 @@ impl Vector<int> {
     /// v.push_all!(1, 2, 3, 4);
     /// v.sum();   // 10
     /// ```
-    pub fn sum(self: *Vector<int>) -> int {
-        let mut acc: int = 0;
-        for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+    pub fn sum(self: *Vector<i32>) -> i32 {
+        let mut acc: i32 = 0;
+        for let i: i32 = 0; i < self.len; i++ { acc = acc + self.data[i]; }
         return acc;
     }
 
@@ -554,10 +554,10 @@ impl Vector<int> {
     ///     none()  => println!("empty"),
     /// }
     /// ```
-    pub fn max(self: *Vector<int>) -> ?int {
+    pub fn max(self: *Vector<i32>) -> ?i32 {
         if self.len == 0 { return none(); }
-        let mut m: int = self.data[0];
-        for let i: int = 1; i < self.len; i++ {
+        let mut m: i32 = self.data[0];
+        for let i: i32 = 1; i < self.len; i++ {
             if self.data[i] > m { m = self.data[i]; }
         }
         return some(m);
@@ -572,10 +572,10 @@ impl Vector<int> {
     ///     none()  => {},
     /// }
     /// ```
-    pub fn min(self: *Vector<int>) -> ?int {
+    pub fn min(self: *Vector<i32>) -> ?i32 {
         if self.len == 0 { return none(); }
-        let mut m: int = self.data[0];
-        for let i: int = 1; i < self.len; i++ {
+        let mut m: i32 = self.data[0];
+        for let i: i32 = 1; i < self.len; i++ {
             if self.data[i] < m { m = self.data[i]; }
         }
         return some(m);
@@ -592,7 +592,7 @@ impl Vector<f64> {
     /// ```
     pub fn sum(self: *Vector<f64>) -> f64 {
         let mut acc: f64 = 0.0;
-        for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+        for let i: i32 = 0; i < self.len; i++ { acc = acc + self.data[i]; }
         return acc;
     }
 
@@ -605,7 +605,7 @@ impl Vector<f64> {
     pub fn max(self: *Vector<f64>) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut m: f64 = self.data[0];
-        for let i: int = 1; i < self.len; i++ {
+        for let i: i32 = 1; i < self.len; i++ {
             if self.data[i] > m { m = self.data[i]; }
         }
         return some(m);
@@ -620,7 +620,7 @@ impl Vector<f64> {
     pub fn min(self: *Vector<f64>) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut m: f64 = self.data[0];
-        for let i: int = 1; i < self.len; i++ {
+        for let i: i32 = 1; i < self.len; i++ {
             if self.data[i] < m { m = self.data[i]; }
         }
         return some(m);
@@ -635,7 +635,7 @@ impl Vector<f64> {
     pub fn avg(self: *Vector<f64>) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut acc: f64 = 0.0;
-        for let i: int = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+        for let i: i32 = 0; i < self.len; i++ { acc = acc + self.data[i]; }
         return some(acc / (self.len as f64));
     }
 }
@@ -653,7 +653,7 @@ impl Vector<string> {
     pub fn join(self: *Vector<string>, sep: string) -> string {
         if self.len == 0 { return ""; }
         let mut out: string = self.data[0];
-        for let i: int = 1; i < self.len; i++ {
+        for let i: i32 = 1; i < self.len; i++ {
             out = out.concat(sep);
             out = out.concat(self.data[i]);
         }
@@ -668,7 +668,7 @@ impl Vector<string> {
     /// ```
     pub fn concat(self: *Vector<string>) -> string {
         let mut out: string = "";
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             out = out.concat(self.data[i]);
         }
         return out;
@@ -683,7 +683,7 @@ impl Vector<string> {
     pub fn max(self: *Vector<string>) -> ?string {
         if self.len == 0 { return none(); }
         let mut m: string = self.data[0];
-        for let i: int = 1; i < self.len; i++ {
+        for let i: i32 = 1; i < self.len; i++ {
             if self.data[i].cmp(m) > 0 { m = self.data[i]; }
         }
         return some(m);
@@ -698,7 +698,7 @@ impl Vector<string> {
     pub fn min(self: *Vector<string>) -> ?string {
         if self.len == 0 { return none(); }
         let mut m: string = self.data[0];
-        for let i: int = 1; i < self.len; i++ {
+        for let i: i32 = 1; i < self.len; i++ {
             if self.data[i].cmp(m) < 0 { m = self.data[i]; }
         }
         return some(m);
@@ -713,9 +713,9 @@ impl Vector<bool> {
     /// v.push_all!(true, false, true, true);
     /// v.count_true();    // 3
     /// ```
-    pub fn count_true(self: *Vector<bool>) -> int {
-        let mut n: int = 0;
-        for let i: int = 0; i < self.len; i++ {
+    pub fn count_true(self: *Vector<bool>) -> i32 {
+        let mut n: i32 = 0;
+        for let i: i32 = 0; i < self.len; i++ {
             if self.data[i] { n = n + 1; }
         }
         return n;
@@ -727,9 +727,9 @@ impl Vector<bool> {
     /// v.push_all!(true, false, true, true);
     /// v.count_false();   // 1
     /// ```
-    pub fn count_false(self: *Vector<bool>) -> int {
-        let mut n: int = 0;
-        for let i: int = 0; i < self.len; i++ {
+    pub fn count_false(self: *Vector<bool>) -> i32 {
+        let mut n: i32 = 0;
+        for let i: i32 = 0; i < self.len; i++ {
             if !self.data[i] { n = n + 1; }
         }
         return n;
@@ -745,7 +745,7 @@ impl Vector<bool> {
     /// v.all_true();   // false
     /// ```
     pub fn all_true(self: *Vector<bool>) -> bool {
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             if !self.data[i] { return false; }
         }
         return true;
@@ -759,7 +759,7 @@ impl Vector<bool> {
     /// v.any_true();   // true
     /// ```
     pub fn any_true(self: *Vector<bool>) -> bool {
-        for let i: int = 0; i < self.len; i++ {
+        for let i: i32 = 0; i < self.len; i++ {
             if self.data[i] { return true; }
         }
         return false;

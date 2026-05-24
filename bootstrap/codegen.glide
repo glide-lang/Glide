@@ -75,9 +75,9 @@ pub fn c_safe_ident(name: string) -> string {
     return name;
 }
 
-fn ns_split_pos(name: string) -> int {
-    let n: int = name.len();
-    let mut i: int = 0;
+fn ns_split_pos(name: string) -> i32 {
+    let n: i32 = name.len();
+    let mut i: i32 = 0;
     while i + 1 < n {
         if name.at(i).to_int() == 58 && name.at(i + 1).to_int() == 58 {
             return i;
@@ -88,15 +88,15 @@ fn ns_split_pos(name: string) -> int {
 }
 
 fn _cg_replace(s: string, find: string, repl: string) -> string {
-    let n: int = s.len();
-    let m: int = find.len();
+    let n: i32 = s.len();
+    let m: i32 = find.len();
     if m == 0 { return s; }
     let mut out: string = "";
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     while i < n {
         let mut matched: bool = (i + m <= n);
         if matched {
-            for let k: int = 0; k < m; k++ {
+            for let k: i32 = 0; k < m; k++ {
                 if s.at(i + k).to_int() != find.at(k).to_int() { matched = false; break; }
             }
         }
@@ -115,10 +115,10 @@ fn _cg_replace(s: string, find: string, repl: string) -> string {
 // the `.send` / `.recv` / `.close` method shim so a `*chan<T>` arg
 // passes the inner chan pointer to the helper instead of a
 // pointer-to-chan-pointer.
-fn _emit_chan_recv(g: *CG, e: *Expr, deref_n: int) {
+fn _emit_chan_recv(g: *CG, e: *Expr, deref_n: i32) {
     if deref_n <= 0 { emit_expr(g, e); return; }
     print!("(");
-    for let i: int = 0; i < deref_n; i++ { print!("*"); }
+    for let i: i32 = 0; i < deref_n; i++ { print!("*"); }
     emit_expr(g, e);
     print!(")");
 }
@@ -174,13 +174,13 @@ fn lift_anons_in_expr(g: *CG, e: *Expr) {
         // Lift the closure body too — it may contain nested closures whose
         // arg-position lifts (below) need to land before this fn is emitted.
         if e.fn_expr_body != null {
-            for let i: int = 0; i < e.fn_expr_body.len(); i++ {
+            for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
                 let bs: Stmt = e.fn_expr_body.get(i);
                 lift_anons_in_stmt(g, &bs);
                 e.fn_expr_body.set(i, bs);
             }
         }
-        let id: int = g.anon_count;
+        let id: i32 = g.anon_count;
         g.anon_count = id + 1;
         let name: string = "__glide_anon_".concat(int_to_str(id));
         let af: AnonFn = AnonFn {
@@ -204,7 +204,7 @@ fn lift_anons_in_expr(g: *CG, e: *Expr) {
         // passed as `f(fn(x){...})` ends up as EX_IDENT in the original tree
         // and isn't lifted again by the expression-emit path (which would
         // bump anon_count past the forward-decl set).
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             lift_anons_in_expr(g, &a);
             e.args.set(i, a);
@@ -224,28 +224,28 @@ fn lift_anons_in_stmt(g: *CG, s: *Stmt) {
     // the expression-emit path lifts the closure a second time with a fresh
     // id, beating the forward-decl pre-pass.
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             lift_anons_in_stmt(g, &b);
             s.then_body.set(i, b);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             lift_anons_in_stmt(g, &b);
             s.else_body.set(i, b);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             lift_anons_in_stmt(g, &b);
             s.fn_body.set(i, b);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             lift_anons_in_stmt(g, &m);
             s.impl_methods.set(i, m);
@@ -301,7 +301,7 @@ fn resolve_concrete_assoc(g: *CG, t: *Type) -> *Type {
     if owner_name.eq("") { return null; }
     // Linear scan: try every trait registered in assoc_table.
     let keys: *Vector<string> = g.assoc_table.keys();
-    for let i: int = 0; i < keys.len(); i++ {
+    for let i: i32 = 0; i < keys.len(); i++ {
         let k: string = keys.get(i);
         // Key shape is `<Trait>::<Owner>::<Name>`. Match suffix.
         let suffix: string = "::".concat(owner_name).concat("::").concat(t.name);
@@ -339,7 +339,7 @@ fn forward_decl_generic_monos(g: *CG, t: *Type) {
     if t.inner != null { forward_decl_generic_monos(g, t.inner); }
     if t.fnptr_ret != null { forward_decl_generic_monos(g, t.fnptr_ret); }
     if t.args != null {
-        for let i: int = 0; i < t.args.len(); i++ {
+        for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
             forward_decl_generic_monos(g, &a);
         }
@@ -362,7 +362,7 @@ fn forward_decl_generic_monos(g: *CG, t: *Type) {
 fn _forward_decl_field_monos(g: *CG, s: *Stmt) {
     if s == null { return; }
     if s.struct_fields == null { return; }
-    for let i: int = 0; i < s.struct_fields.len(); i++ {
+    for let i: i32 = 0; i < s.struct_fields.len(); i++ {
         let f: Field = s.struct_fields.get(i);
         forward_decl_generic_monos(g, f.ty);
         _emit_wrapper_for_type(g, f.ty);
@@ -387,7 +387,7 @@ fn _emit_wrapper_for_type(g: *CG, t: *Type) {
     }
     if t.inner != null { _emit_wrapper_for_type(g, t.inner); }
     if t.args != null {
-        for let i: int = 0; i < t.args.len(); i++ {
+        for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
             _emit_wrapper_for_type(g, &a);
         }
@@ -427,7 +427,7 @@ fn _emit_option_template(g: *CG, inner: *Type) {
     println!("");
     // Make the option pre-pass skip this entry — already done.
     let mut already: bool = false;
-    for let i: int = 0; i < g.option_types.len(); i++ {
+    for let i: i32 = 0; i < g.option_types.len(); i++ {
         let ex: Type = g.option_types.get(i);
         if mangle_type(&ex).eq(m) { already = true; break; }
     }
@@ -452,7 +452,7 @@ fn _emit_result_template(g: *CG, inner: *Type) {
     print!(s2);
     println!("");
     let mut already: bool = false;
-    for let i: int = 0; i < g.result_types.len(); i++ {
+    for let i: i32 = 0; i < g.result_types.len(); i++ {
         let ex: Type = g.result_types.get(i);
         if mangle_type(&ex).eq(m) { already = true; break; }
     }
@@ -471,7 +471,7 @@ fn _emit_optres_template(g: *CG, inner: *Type) {
     print!(s2);
     println!("");
     let mut already: bool = false;
-    for let i: int = 0; i < g.optres_types.len(); i++ {
+    for let i: i32 = 0; i < g.optres_types.len(); i++ {
         let ex: Type = g.optres_types.get(i);
         if mangle_type(&ex).eq(m) { already = true; break; }
     }
@@ -482,7 +482,7 @@ fn collect_result_in_type(g: *CG, t: *Type) {
     if t == null { return; }
     if t.kind == TY_RESULT && t.inner != null {
         let m: string = mangle_type(t.inner);
-        for let i: int = 0; i < g.result_types.len(); i++ {
+        for let i: i32 = 0; i < g.result_types.len(); i++ {
             let ex: Type = g.result_types.get(i);
             if mangle_type(&ex).eq(m) { return; }
         }
@@ -490,7 +490,7 @@ fn collect_result_in_type(g: *CG, t: *Type) {
     }
     if t.kind == TY_OPTION && t.inner != null {
         let m: string = mangle_type(t.inner);
-        for let i: int = 0; i < g.option_types.len(); i++ {
+        for let i: i32 = 0; i < g.option_types.len(); i++ {
             let ex: Type = g.option_types.get(i);
             if mangle_type(&ex).eq(m) { return; }
         }
@@ -498,7 +498,7 @@ fn collect_result_in_type(g: *CG, t: *Type) {
     }
     if t.kind == TY_OPT_RESULT && t.inner != null {
         let m: string = mangle_type(t.inner);
-        for let i: int = 0; i < g.optres_types.len(); i++ {
+        for let i: i32 = 0; i < g.optres_types.len(); i++ {
             let ex: Type = g.optres_types.get(i);
             if mangle_type(&ex).eq(m) { return; }
         }
@@ -507,7 +507,7 @@ fn collect_result_in_type(g: *CG, t: *Type) {
     if t.inner != null { collect_result_in_type(g, t.inner); }
     if t.fnptr_ret != null { collect_result_in_type(g, t.fnptr_ret); }
     if t.args != null {
-        for let i: int = 0; i < t.args.len(); i++ {
+        for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
             collect_result_in_type(g, &a);
         }
@@ -521,7 +521,7 @@ fn collect_result_in_expr(g: *CG, e: *Expr) {
     if e.rhs != null { collect_result_in_expr(g, e.rhs); }
     if e.operand != null { collect_result_in_expr(g, e.operand); }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             collect_result_in_expr(g, &a);
         }
@@ -536,7 +536,7 @@ fn collect_result_in_stmt(g: *CG, s: *Stmt) {
     if s.let_ty != null { collect_result_in_type(g, s.let_ty); }
     if s.fn_ret_ty != null { collect_result_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             collect_result_in_type(g, p.ty);
         }
@@ -547,25 +547,25 @@ fn collect_result_in_stmt(g: *CG, s: *Stmt) {
     if s.for_step != null { collect_result_in_expr(g, s.for_step); }
     if s.for_init != null { collect_result_in_stmt(g, s.for_init); }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             collect_result_in_stmt(g, &b);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             collect_result_in_stmt(g, &b);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             collect_result_in_stmt(g, &b);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let mm: Stmt = s.impl_methods.get(i);
             collect_result_in_stmt(g, &mm);
         }
@@ -575,7 +575,7 @@ fn collect_result_in_stmt(g: *CG, s: *Stmt) {
 fn emit_result_runtime(g: *CG) {
     if g.result_types.len() == 0 { return; }
     let tmpl: string = include_str!("bootstrap/runtime/result.c.tmpl");
-    for let i: int = 0; i < g.result_types.len(); i++ {
+    for let i: i32 = 0; i < g.result_types.len(); i++ {
         let t: Type = g.result_types.get(i);
         let m: string = mangle_type(&t);
         let dedup_key: string = "__rt_result_emit_".concat(m);
@@ -604,7 +604,7 @@ fn emit_result_runtime(g: *CG) {
 fn emit_option_runtime(g: *CG) {
     if g.option_types.len() == 0 { return; }
     let tmpl: string = include_str!("bootstrap/runtime/option.c.tmpl");
-    for let i: int = 0; i < g.option_types.len(); i++ {
+    for let i: i32 = 0; i < g.option_types.len(); i++ {
         let t: Type = g.option_types.get(i);
         let m: string = mangle_type(&t);
         let dedup_key: string = "__rt_option_emit_".concat(m);
@@ -621,7 +621,7 @@ fn emit_option_runtime(g: *CG) {
 fn emit_optres_runtime(g: *CG) {
     if g.optres_types.len() == 0 { return; }
     let tmpl: string = include_str!("bootstrap/runtime/optres.c.tmpl");
-    for let i: int = 0; i < g.optres_types.len(); i++ {
+    for let i: i32 = 0; i < g.optres_types.len(); i++ {
         let t: Type = g.optres_types.get(i);
         let m: string = mangle_type(&t);
         let dedup_key: string = "__rt_optres_emit_".concat(m);
@@ -643,8 +643,8 @@ fn collect_chan_in_type(g: *CG, t: *Type) {
         let inner: Type = t.args.get(0);
         let m: string = mangle_type(&inner);
         // dedup via simple linear search
-        let n: int = g.chan_types.len();
-        for let i: int = 0; i < n; i++ {
+        let n: i32 = g.chan_types.len();
+        for let i: i32 = 0; i < n; i++ {
             let existing: Type = g.chan_types.get(i);
             if mangle_type(&existing).eq(m) { return; }
         }
@@ -653,7 +653,7 @@ fn collect_chan_in_type(g: *CG, t: *Type) {
     if t.inner != null { collect_chan_in_type(g, t.inner); }
     if t.fnptr_ret != null { collect_chan_in_type(g, t.fnptr_ret); }
     if t.args != null {
-        for let i: int = 0; i < t.args.len(); i++ {
+        for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
             collect_chan_in_type(g, &a);
         }
@@ -667,7 +667,7 @@ fn collect_chan_in_expr(g: *CG, e: *Expr) {
     if e.rhs != null { collect_chan_in_expr(g, e.rhs); }
     if e.operand != null { collect_chan_in_expr(g, e.operand); }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             collect_chan_in_expr(g, &a);
         }
@@ -691,7 +691,7 @@ fn collect_dyn_in_type(g: *CG, t: *Type) {
     if t.inner != null { collect_dyn_in_type(g, t.inner); }
     if t.fnptr_ret != null { collect_dyn_in_type(g, t.fnptr_ret); }
     if t.args != null {
-        for let i: int = 0; i < t.args.len(); i++ {
+        for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
             collect_dyn_in_type(g, &a);
         }
@@ -705,7 +705,7 @@ fn collect_dyn_in_expr(g: *CG, e: *Expr) {
     if e.rhs != null { collect_dyn_in_expr(g, e.rhs); }
     if e.operand != null { collect_dyn_in_expr(g, e.operand); }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             collect_dyn_in_expr(g, &a);
         }
@@ -717,7 +717,7 @@ fn collect_dyn_in_stmt(g: *CG, s: *Stmt) {
     if s.let_ty != null { collect_dyn_in_type(g, s.let_ty); }
     if s.fn_ret_ty != null { collect_dyn_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             if p.ty != null { collect_dyn_in_type(g, p.ty); }
         }
@@ -726,25 +726,25 @@ fn collect_dyn_in_stmt(g: *CG, s: *Stmt) {
     if s.expr_value != null { collect_dyn_in_expr(g, s.expr_value); }
     if s.cond != null { collect_dyn_in_expr(g, s.cond); }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             collect_dyn_in_stmt(g, &b);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             collect_dyn_in_stmt(g, &b);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             collect_dyn_in_stmt(g, &b);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             collect_dyn_in_stmt(g, &m);
         }
@@ -760,14 +760,14 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
     if g.dyn_traits == null { return; }
     // Helper: index trait defs by name.
     let traits: *HashMap<Stmt> = HashMap::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
             traits.insert(s.name, s);
         }
     }
     // Iterate over the program and emit per-trait runtime support.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_TRAIT { continue; }
         if s.name == null || s.name.eq("") { continue; }
@@ -777,13 +777,13 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
         // always passed as the first arg (`void*`), then the user params.
         println!("typedef struct __glide_".concat(trait_name).concat("_vt {"));
         if s.impl_methods != null {
-            for let k: int = 0; k < s.impl_methods.len(); k++ {
+            for let k: i32 = 0; k < s.impl_methods.len(); k++ {
                 let m: Stmt = s.impl_methods.get(k);
                 if m.name == null || m.name.eq("") { continue; }
                 let ret_ty: string = type_to_c(m.fn_ret_ty);
                 print!("    ".concat(ret_ty).concat(" (*").concat(m.name).concat(")(void* self"));
                 if m.fn_params != null && m.fn_params.len() > 1 {
-                    for let j: int = 1; j < m.fn_params.len(); j++ {
+                    for let j: i32 = 1; j < m.fn_params.len(); j++ {
                         let p: Param = m.fn_params.get(j);
                         print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(c_safe_ident(p.name)));
                     }
@@ -806,7 +806,7 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
     //     declared `fn m(self: Self)` — Self desugars to `Type` by value, so
     //     the thunk hides the calling-convention mismatch.
     //   - emit the static vtable instance pointing at the thunks.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_IMPL { continue; }
         if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
@@ -818,13 +818,13 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
         if s.impl_methods == null { continue; }
 
         // Forward declarations of the real impl methods.
-        for let k: int = 0; k < s.impl_methods.len(); k++ {
+        for let k: i32 = 0; k < s.impl_methods.len(); k++ {
             let m: Stmt = s.impl_methods.get(k);
             if m.name == null || m.name.eq("") { continue; }
             let ret_ty: string = type_to_c(m.fn_ret_ty);
             print!(ret_ty.concat(" ").concat(type_name).concat("_").concat(m.name).concat("("));
             if m.fn_params != null {
-                for let j: int = 0; j < m.fn_params.len(); j++ {
+                for let j: i32 = 0; j < m.fn_params.len(); j++ {
                     if j > 0 { print!(", "); }
                     let p: Param = m.fn_params.get(j);
                     print!(type_to_c(p.ty));
@@ -843,13 +843,13 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
         //                   -> cast only: `(Type*)self_p`
         // Without this distinction the C compiler errors with
         // "expected Type* but got Type" (or vice versa) at the call.
-        for let k: int = 0; k < s.impl_methods.len(); k++ {
+        for let k: i32 = 0; k < s.impl_methods.len(); k++ {
             let m: Stmt = s.impl_methods.get(k);
             if m.name == null || m.name.eq("") { continue; }
             let ret_ty: string = type_to_c(m.fn_ret_ty);
             print!("static ".concat(ret_ty).concat(" __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("__").concat(m.name).concat("_thunk(void* self_p"));
             if m.fn_params != null && m.fn_params.len() > 1 {
-                for let j: int = 1; j < m.fn_params.len(); j++ {
+                for let j: i32 = 1; j < m.fn_params.len(); j++ {
                     let p: Param = m.fn_params.get(j);
                     print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(c_safe_ident(p.name)));
                 }
@@ -871,7 +871,7 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
                 print!("    return ".concat(type_name).concat("_").concat(m.name).concat("(").concat(self_expr));
             }
             if m.fn_params != null && m.fn_params.len() > 1 {
-                for let j: int = 1; j < m.fn_params.len(); j++ {
+                for let j: i32 = 1; j < m.fn_params.len(); j++ {
                     let p: Param = m.fn_params.get(j);
                     print!(", ".concat(c_safe_ident(p.name)));
                 }
@@ -883,7 +883,7 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
         // Static vtable instance — fields point at the thunks.
         print!("static const __glide_".concat(trait_name).concat("_vt __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("_vt = {"));
         let mut emitted_any: bool = false;
-        for let k: int = 0; k < s.impl_methods.len(); k++ {
+        for let k: i32 = 0; k < s.impl_methods.len(); k++ {
             let m: Stmt = s.impl_methods.get(k);
             if m.name == null || m.name.eq("") { continue; }
             if emitted_any { print!(", "); }
@@ -900,13 +900,13 @@ fn collect_chan_in_stmt(g: *CG, s: *Stmt) {
     if s.let_ty != null { collect_chan_in_type(g, s.let_ty); }
     if s.fn_ret_ty != null { collect_chan_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             collect_chan_in_type(g, p.ty);
         }
     }
     if s.struct_fields != null {
-        for let i: int = 0; i < s.struct_fields.len(); i++ {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
             let f: Field = s.struct_fields.get(i);
             collect_chan_in_type(g, f.ty);
         }
@@ -917,25 +917,25 @@ fn collect_chan_in_stmt(g: *CG, s: *Stmt) {
     if s.for_step != null { collect_chan_in_expr(g, s.for_step); }
     if s.for_init != null { collect_chan_in_stmt(g, s.for_init); }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             collect_chan_in_stmt(g, &b);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             collect_chan_in_stmt(g, &b);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             collect_chan_in_stmt(g, &b);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             collect_chan_in_stmt(g, &m);
         }
@@ -950,7 +950,7 @@ fn emit_chan_runtime(g: *CG) {
     // For chan inners that are themselves generic monos (e.g. `Vector<int>`),
     // emit the struct typedef + body up front so the chan struct's `T buf` /
     // `sizeof(T)` references resolve before the chan body referencing them.
-    for let i: int = 0; i < g.chan_types.len(); i++ {
+    for let i: i32 = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
         if t.kind == TY_GENERIC && g.generic_structs.contains(t.name) {
             let mangled: string = mangle_generic(t.name, t.args);
@@ -963,7 +963,7 @@ fn emit_chan_runtime(g: *CG) {
         // (chan<UserType> body emit moved out of chan_runtime to emit_program)
     }
     // Forward typedefs first so chan<T> bodies that reference each other resolve.
-    for let i: int = 0; i < g.chan_types.len(); i++ {
+    for let i: i32 = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
         let m: string = mangle_type(&t);
         let st: string = "__glide_chan_".concat(m).concat("_t");
@@ -973,7 +973,7 @@ fn emit_chan_runtime(g: *CG) {
     // Body, ops, close — substitute `@M@` (mangle hash) and `@TC@` (element C type)
     // in the chan template per element type.
     let tmpl: string = include_str!("bootstrap/runtime/chan.c.tmpl");
-    for let i: int = 0; i < g.chan_types.len(); i++ {
+    for let i: i32 = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
         let m: string = mangle_type(&t);
         let tc: string = type_to_c(&t);
@@ -1023,46 +1023,46 @@ fn emit_socket_runtime() {
 fn pre_emit_spawn_stubs_in_stmt(g: *CG, s: *Stmt) {
     if s == null { return; }
     if s.kind == ST_SPAWN {
-        let id: int = g.spawn_count;
+        let id: i32 = g.spawn_count;
         g.spawn_count = id + 1;
         emit_spawn_stub(g, s.expr_value, id);
         return;
     }
     if s.for_init != null { pre_emit_spawn_stubs_in_stmt(g, s.for_init); }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             pre_emit_spawn_stubs_in_stmt(g, &b);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             pre_emit_spawn_stubs_in_stmt(g, &b);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             pre_emit_spawn_stubs_in_stmt(g, &b);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             pre_emit_spawn_stubs_in_stmt(g, &m);
         }
     }
 }
 
-fn emit_spawn_stub(g: *CG, call: *Expr, id: int) {
+fn emit_spawn_stub(g: *CG, call: *Expr, id: i32) {
     if call == null || call.kind != EX_CALL || call.lhs == null { return; }
     if call.lhs.kind != EX_IDENT { return; }
     let fn_name: string = call.lhs.str_val;
     if !g.fns.contains(fn_name) { return; }
     let fnstmt: Stmt = g.fns.get(fn_name);
     if fnstmt.fn_params == null { return; }
-    let n: int = fnstmt.fn_params.len();
+    let n: i32 = fnstmt.fn_params.len();
     let ids: string = int_to_str(id);
     // Zero-arg fast path: no args struct, no malloc, no free in stub.
     if n == 0 {
@@ -1076,7 +1076,7 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: int) {
     // Build the variable parts: per-arg field decls and the call argument list.
     let mut fields: string = "";
     let mut call_args: string = "";
-    for let i: int = 0; i < n; i++ {
+    for let i: i32 = 0; i < n; i++ {
         let p: Param = fnstmt.fn_params.get(i);
         let ix: string = int_to_str(i);
         fields = fields.concat("    ").concat(type_to_c(p.ty)).concat(" a").concat(ix).concat(";\n");
@@ -1154,10 +1154,10 @@ pub struct CG {
     pub auto_drop_stack: *Vector<Expr>,     // `let v*` cleanups (block-scoped)
     // Anonymous fn lifts (collected during codegen, emitted at end).
     pub anon_fns: *Vector<AnonFn>,
-    pub anon_count: int,
+    pub anon_count: i32,
     // Concurrency
     pub chan_types: *Vector<Type>,
-    pub spawn_count: int,
+    pub spawn_count: i32,
     pub uses_pthread: bool,
     // Errors-as-values
     pub result_types: *Vector<Type>,
@@ -1208,7 +1208,7 @@ pub struct CG {
     // (file, line) pair actually changes — avoids ballooning the C
     // output with a directive per stmt when many stmts share a line.
     pub current_origin: string,
-    pub last_line_dir: int,
+    pub last_line_dir: i32,
     pub last_origin_dir: string,
 }
 
@@ -1280,7 +1280,7 @@ impl CG {
     // emit when (file, line) changed from the previous directive, and
     // we forward-slash the path so the C preprocessor accepts it on
     // Windows without escape headaches.
-    fn emit_line_dir(self: *CG, line: int, origin: string) {
+    fn emit_line_dir(self: *CG, line: i32, origin: string) {
         if line <= 0 { return; }
         let path: string;
         if origin == null || origin.eq("") { path = self.current_origin; }
@@ -1290,9 +1290,9 @@ impl CG {
         // Normalize backslashes to forward-slashes for C string-literal
         // safety. We don't escape quotes — Glide source paths don't
         // legally contain `"`.
-        let n: int = path.len();
+        let n: i32 = path.len();
         let mut norm: string = "";
-        for let i: int = 0; i < n; i++ {
+        for let i: i32 = 0; i < n; i++ {
             if path.at(i).to_int() == 92 { norm = norm.concat("/"); }
             else { norm = norm.concat(path.substring(i, i + 1)); }
         }
@@ -1312,9 +1312,9 @@ impl CG {
     // returning `err(...)` and from the `?` propagation lowering. Fires
     // BEFORE regular defers so the err handler sees the same outer state
     // as the regular path.
-    fn emit_err_defers_reverse(self: *CG, depth: int) {
-        let n: int = self.err_defer_stack.len();
-        for let i: int = n - 1; i >= 0; i = i - 1 {
+    fn emit_err_defers_reverse(self: *CG, depth: i32) {
+        let n: i32 = self.err_defer_stack.len();
+        for let i: i32 = n - 1; i >= 0; i = i - 1 {
             ind(depth);
             let ex: Expr = self.err_defer_stack.get(i);
             emit_expr(self, &ex);
@@ -1326,16 +1326,16 @@ impl CG {
     // Auto-drops fire first (innermost block first), then explicit defers
     // (so e.g. `defer arena.free()` at fn-top fires after auto-drops that
     // allocated inside it).
-    fn emit_deferred_reverse(self: *CG, depth: int) {
-        let na: int = self.auto_drop_stack.len();
-        for let i: int = na - 1; i >= 0; i = i - 1 {
+    fn emit_deferred_reverse(self: *CG, depth: i32) {
+        let na: i32 = self.auto_drop_stack.len();
+        for let i: i32 = na - 1; i >= 0; i = i - 1 {
             ind(depth);
             let ex: Expr = self.auto_drop_stack.get(i);
             emit_expr(self, &ex);
             println!(";");
         }
-        let nd: int = self.defer_stack.len();
-        for let i: int = nd - 1; i >= 0; i = i - 1 {
+        let nd: i32 = self.defer_stack.len();
+        for let i: i32 = nd - 1; i >= 0; i = i - 1 {
             ind(depth);
             let ex: Expr = self.defer_stack.get(i);
             emit_expr(self, &ex);
@@ -1345,9 +1345,9 @@ impl CG {
 
     // Block-exit cleanup: emit (in reverse) and pop only auto-drop entries
     // pushed since `saved`. Explicit defers stay on their own stack.
-    fn emit_block_drops(self: *CG, saved: int, depth: int) {
-        let n: int = self.auto_drop_stack.len();
-        for let i: int = n - 1; i >= saved; i = i - 1 {
+    fn emit_block_drops(self: *CG, saved: i32, depth: i32) {
+        let n: i32 = self.auto_drop_stack.len();
+        for let i: i32 = n - 1; i >= saved; i = i - 1 {
             ind(depth);
             let ex: Expr = self.auto_drop_stack.get(i);
             emit_expr(self, &ex);
@@ -1440,7 +1440,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             let s: Stmt = g.fns.get(e.str_val);
             let args: *Vector<Type> = Vector::new();
             if s.fn_params != null {
-                for let i: int = 0; i < s.fn_params.len(); i++ {
+                for let i: i32 = 0; i < s.fn_params.len(); i++ {
                     let p: Param = s.fn_params.get(i);
                     if p.ty != null { args.push(*p.ty); }
                 }
@@ -1493,7 +1493,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if stripped.kind == TY_NAMED && g.structs.contains(stripped.name) {
             let sd: Stmt = g.structs.get(stripped.name);
             if sd.struct_fields != null {
-                for let i: int = 0; i < sd.struct_fields.len(); i++ {
+                for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
                     let f: Field = sd.struct_fields.get(i);
                     if f.name.eq(e.field) { return f.ty; }
                 }
@@ -1502,7 +1502,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if stripped.kind == TY_GENERIC && g.generic_structs.contains(stripped.name) {
             let sd: Stmt = g.generic_structs.get(stripped.name);
             if sd.struct_fields != null && sd.type_params != null {
-                for let i: int = 0; i < sd.struct_fields.len(); i++ {
+                for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
                     let f: Field = sd.struct_fields.get(i);
                     if f.name.eq(e.field) {
                         return subst_type(f.ty, sd.type_params, stripped.args);
@@ -1518,7 +1518,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_BINARY {
-        let op: int = e.op_code;
+        let op: i32 = e.op_code;
         if op == OP_EQ || op == OP_NE || op == OP_LT || op == OP_LE
             || op == OP_GT || op == OP_GE || op == OP_AND || op == OP_OR {
             return ty_named("bool");
@@ -1583,7 +1583,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             if stripped != null && stripped.kind == TY_DYN && g.traits.contains(stripped.name) {
                 let td: Stmt = g.traits.get(stripped.name);
                 if td.impl_methods != null {
-                    for let i: int = 0; i < td.impl_methods.len(); i++ {
+                    for let i: i32 = 0; i < td.impl_methods.len(); i++ {
                         let tm: Stmt = td.impl_methods.get(i);
                         if tm.name != null && tm.name.eq(e.lhs.field) {
                             return tm.fn_ret_ty;
@@ -1593,7 +1593,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             }
             if stripped != null && stripped.kind == TY_NAMED {
                 // Qualified call `s.NS::method(...)`: look up `NS_<type>_method` directly.
-                let qpos: int = ns_split_pos(e.lhs.field);
+                let qpos: i32 = ns_split_pos(e.lhs.field);
                 if qpos > 0 {
                     let ns: string = e.lhs.field.substring(0, qpos);
                     let real: string = e.lhs.field.substring(qpos + 2, e.lhs.field.len());
@@ -1613,8 +1613,8 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 // takes the first; codegen does the same and reports ambiguity.
                 if g.method_index.contains(mname) {
                     let entry: string = g.method_index.get(mname);
-                    let semi: int = entry.len();
-                    let mut k: int = 0;
+                    let semi: i32 = entry.len();
+                    let mut k: i32 = 0;
                     while k < semi {
                         if entry.at(k).to_int() == 59 { semi = k; break; }
                         k = k + 1;
@@ -1660,7 +1660,7 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if g.enums.contains(probe) {
             let edef: Stmt = g.enums.get(probe);
             if edef.enum_variants != null {
-                for let i: int = 0; i < edef.enum_variants.len(); i++ {
+                for let i: i32 = 0; i < edef.enum_variants.len(); i++ {
                     let v: EnumVariant = edef.enum_variants.get(i);
                     if v.name.eq(e.field) { return ty_named(probe); }
                 }
@@ -1748,7 +1748,7 @@ fn fnptr_cast_str(t: *Type) -> string {
     if t.args == null || t.args.len() == 0 {
         s = s.concat("void");
     } else {
-        for let i: int = 0; i < t.args.len(); i++ {
+        for let i: i32 = 0; i < t.args.len(); i++ {
             if i > 0 { s = s.concat(", "); }
             let p: Type = t.args.get(i);
             s = s.concat(type_to_c(&p));
@@ -1761,7 +1761,7 @@ fn fnptr_cast_str(t: *Type) -> string {
 pub fn mangle_generic(name: string, args: *Vector<Type>) -> string {
     let mut out: string = name.concat("__");
     if args != null {
-        for let i: int = 0; i < args.len(); i++ {
+        for let i: i32 = 0; i < args.len(); i++ {
             if i > 0 { out = out.concat("_"); }
             let a: Type = args.get(i);
             out = out.concat(mangle_type(&a));
@@ -1806,9 +1806,9 @@ fn _infer_generic_call_ret(g: *CG, call: *Expr, template: *Stmt) -> *Type {
     }
     let bindings: *HashMap<Type> = HashMap::new();
     if call.args != null && template.fn_params != null {
-        let mut n: int = template.fn_params.len();
+        let mut n: i32 = template.fn_params.len();
         if call.args.len() < n { n = call.args.len(); }
-        for let i: int = 0; i < n; i++ {
+        for let i: i32 = 0; i < n; i++ {
             let p: Param = template.fn_params.get(i);
             let a: Expr = call.args.get(i);
             let at: *Type = infer_for_codegen(g, &a);
@@ -1819,7 +1819,7 @@ fn _infer_generic_call_ret(g: *CG, call: *Expr, template: *Stmt) -> *Type {
     }
     let derived: *Vector<Type> = Vector::new();
     let mut all: bool = true;
-    for let i: int = 0; i < template.type_params.len(); i++ {
+    for let i: i32 = 0; i < template.type_params.len(); i++ {
         let tn: string = template.type_params.get(i);
         if !bindings.contains(tn) { all = false; break; }
         derived.push(bindings.get(tn));
@@ -1832,23 +1832,23 @@ fn _infer_generic_call_ret(g: *CG, call: *Expr, template: *Stmt) -> *Type {
 fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt,
                             recv_args: *Vector<Type>) -> *Vector<Type> {
     if template.type_params == null { return recv_args; }
-    let n_total: int = template.type_params.len();
-    let n_recv: int = 0;
+    let n_total: i32 = template.type_params.len();
+    let n_recv: i32 = 0;
     if recv_args != null { n_recv = recv_args.len(); }
     if n_total <= n_recv { return recv_args; }
 
     let bindings: *HashMap<Type> = HashMap::new();
     // Pre-bind struct-level params from the receiver.
-    for let i: int = 0; i < n_recv; i++ {
+    for let i: i32 = 0; i < n_recv; i++ {
         let tn: string = template.type_params.get(i);
         let av: Type = recv_args.get(i);
         bindings.insert(tn, av);
     }
     // Infer extras from call args. fn_params[0] is `self`.
     if call.args != null && template.fn_params != null && template.fn_params.len() > 1 {
-        let nargs: int = template.fn_params.len() - 1;
+        let nargs: i32 = template.fn_params.len() - 1;
         if call.args.len() < nargs { nargs = call.args.len(); }
-        for let i: int = 0; i < nargs; i++ {
+        for let i: i32 = 0; i < nargs; i++ {
             let p: Param = template.fn_params.get(i + 1);
             let a: Expr = call.args.get(i);
             let at: *Type = infer_for_codegen(g, &a);
@@ -1858,8 +1858,8 @@ fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt,
         }
     }
     let combined: *Vector<Type> = Vector::new();
-    for let i: int = 0; i < n_recv; i++ { combined.push(recv_args.get(i)); }
-    for let i: int = n_recv; i < n_total; i++ {
+    for let i: i32 = 0; i < n_recv; i++ { combined.push(recv_args.get(i)); }
+    for let i: i32 = n_recv; i < n_total; i++ {
         let tn: string = template.type_params.get(i);
         if !bindings.contains(tn) { bindings.free(); return null; }
         combined.push(bindings.get(tn));
@@ -1901,9 +1901,9 @@ fn try_mono_call(g: *CG, call: *Expr, ret_hint: *Type) -> bool {
 
     // Infer from arg types.
     if call.args != null && template.fn_params != null {
-        let n: int = template.fn_params.len();
+        let n: i32 = template.fn_params.len();
         if call.args.len() < n { n = call.args.len(); }
-        for let i: int = 0; i < n; i++ {
+        for let i: i32 = 0; i < n; i++ {
             let p: Param = template.fn_params.get(i);
             let a: Expr = call.args.get(i);
             let at: *Type = infer_for_codegen(g, &a);
@@ -1917,7 +1917,7 @@ fn try_mono_call(g: *CG, call: *Expr, ret_hint: *Type) -> bool {
     let derived: *Vector<Type> = Vector::new();
     let mut all: bool = true;
     if template.type_params != null {
-        for let i: int = 0; i < template.type_params.len(); i++ {
+        for let i: i32 = 0; i < template.type_params.len(); i++ {
             let tn: string = template.type_params.get(i);
             if bindings.contains(tn) {
                 derived.push(bindings.get(tn));
@@ -1952,7 +1952,7 @@ fn try_mono_call(g: *CG, call: *Expr, ret_hint: *Type) -> bool {
 // or null when the callee isn't a known regular fn / impl method. Lets the
 // prescan propagate `*Vector<int>` down into `take(Vector::new())` so the
 // generic ctor monomorphizes from the surrounding context.
-fn callee_param_ty(g: *CG, e: *Expr, i: int) -> *Type {
+fn callee_param_ty(g: *CG, e: *Expr, i: i32) -> *Type {
     if e == null || e.lhs == null { return null; }
     let callee: *Expr = e.lhs;
     if callee.kind == EX_IDENT && callee.str_val != null && g.fns.contains(callee.str_val) {
@@ -2016,16 +2016,16 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                 // Static methods (`Json::wrap(v)`) have no `self`; instance
                 // methods (`v.push(x)`) put `self` at fn_params[0]. Detect
                 // by name to know whether call args start at param 0 or 1.
-                let mut self_off: int = 0;
+                let mut self_off: i32 = 0;
                 if mtmpl.fn_params != null && mtmpl.fn_params.len() > 0 {
                     let first_p: Param = mtmpl.fn_params.get(0);
                     if first_p.name != null && first_p.name.eq("self") { self_off = 1; }
                 }
                 if e.args != null && mtmpl.fn_params != null
                    && mtmpl.fn_params.len() > self_off {
-                    let n: int = mtmpl.fn_params.len() - self_off;
+                    let n: i32 = mtmpl.fn_params.len() - self_off;
                     if e.args.len() < n { n = e.args.len(); }
-                    for let i: int = 0; i < n; i++ {
+                    for let i: i32 = 0; i < n; i++ {
                         let p: Param = mtmpl.fn_params.get(i + self_off);
                         let a: Expr = e.args.get(i);
                         let at: *Type = infer_for_codegen(g, &a);
@@ -2041,16 +2041,16 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                 let inner_mname: string = family.concat("_").concat(inner_method);
                 if g.generic_fns.contains(inner_mname) {
                     let inner_tmpl: Stmt = g.generic_fns.get(inner_mname);
-                    let mut inner_off: int = 0;
+                    let mut inner_off: i32 = 0;
                     if inner_tmpl.fn_params != null && inner_tmpl.fn_params.len() > 0 {
                         let p0: Param = inner_tmpl.fn_params.get(0);
                         if p0.name != null && p0.name.eq("self") { inner_off = 1; }
                     }
                     if recv.args != null && inner_tmpl.fn_params != null
                        && inner_tmpl.fn_params.len() > inner_off {
-                        let n2: int = inner_tmpl.fn_params.len() - inner_off;
+                        let n2: i32 = inner_tmpl.fn_params.len() - inner_off;
                         if recv.args.len() < n2 { n2 = recv.args.len(); }
-                        for let i: int = 0; i < n2; i++ {
+                        for let i: i32 = 0; i < n2; i++ {
                             let p: Param = inner_tmpl.fn_params.get(i + inner_off);
                             let a: Expr = recv.args.get(i);
                             let at: *Type = infer_for_codegen(g, &a);
@@ -2062,7 +2062,7 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                 }
                 let derived: *Vector<Type> = Vector::new();
                 let mut all: bool = true;
-                for let i: int = 0; i < struct_def.type_params.len(); i++ {
+                for let i: i32 = 0; i < struct_def.type_params.len(); i++ {
                     let tn: string = struct_def.type_params.get(i);
                     if bindings.contains(tn) { derived.push(bindings.get(tn)); }
                     else { all = false; }
@@ -2139,7 +2139,7 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
     if e.rhs != null { prescan_expr(g, e.rhs, no_hint); }
     if e.operand != null { prescan_expr(g, e.operand, no_hint); }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             // Carry the formal param's declared type as the arg's expected
             // type so inline `Vector::new()` etc. monomorphize correctly.
@@ -2156,7 +2156,7 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                 if g.structs.contains(e.str_val) { sd = g.structs.get(e.str_val); have = true; }
                 else if g.generic_structs.contains(e.str_val) { sd = g.generic_structs.get(e.str_val); have = true; }
                 if have && sd.struct_fields != null {
-                    for let j: int = 0; j < sd.struct_fields.len(); j++ {
+                    for let j: i32 = 0; j < sd.struct_fields.len(); j++ {
                         let f: Field = sd.struct_fields.get(j);
                         if f.name.eq(fname) { arg_hint = f.ty; }
                     }
@@ -2210,13 +2210,13 @@ fn prescan_stmt(g: *CG, s: *Stmt) {
     if s.for_init != null { prescan_stmt(g, s.for_init); }
     if s.for_step != null { prescan_expr(g, s.for_step, no_hint); }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             prescan_stmt(g, &b);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             prescan_stmt(g, &b);
         }
@@ -2224,21 +2224,21 @@ fn prescan_stmt(g: *CG, s: *Stmt) {
     if s.fn_body != null {
         g.scope.clear();
         if s.fn_params != null {
-            for let i: int = 0; i < s.fn_params.len(); i++ {
+            for let i: i32 = 0; i < s.fn_params.len(); i++ {
                 let p: Param = s.fn_params.get(i);
                 g.declare(p.name, p.ty);
             }
         }
         let saved_ret: *Type = g.current_ret_ty;
         g.current_ret_ty = s.fn_ret_ty;
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             prescan_stmt(g, &b);
         }
         g.current_ret_ty = saved_ret;
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             prescan_stmt(g, &m);
         }
@@ -2265,7 +2265,7 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
     collect_result_in_type(g, sret);
     if template.fn_params != null {
         let ps: *Vector<Param> = Vector::new();
-        for let i: int = 0; i < template.fn_params.len(); i++ {
+        for let i: i32 = 0; i < template.fn_params.len(); i++ {
             let p: Param = template.fn_params.get(i);
             let pt: *Type = subst_type(p.ty, template.type_params, args);
             let resolved: *Type = resolve_assoc_recursive(g, pt);
@@ -2282,7 +2282,7 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
     // header guards so re-emission of an existing inner is a no-op for cc.
     collect_result_in_type(g, sret);
     if synth.fn_params != null {
-        for let i: int = 0; i < synth.fn_params.len(); i++ {
+        for let i: i32 = 0; i < synth.fn_params.len(); i++ {
             let p: Param = synth.fn_params.get(i);
             collect_result_in_type(g, p.ty);
         }
@@ -2299,7 +2299,7 @@ fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vecto
     if template.fn_params == null || template.fn_params.len() == 0 {
         print!("void");
     } else {
-        for let j: int = 0; j < template.fn_params.len(); j++ {
+        for let j: i32 = 0; j < template.fn_params.len(); j++ {
             if j > 0 { print!(", "); }
             let pp: Param = template.fn_params.get(j);
             let pt: *Type = subst_type(pp.ty, template.type_params, args);
@@ -2319,7 +2319,7 @@ fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindi
     if pat.kind == TY_NAMED {
         // Type var?
         if params != null {
-            for let i: int = 0; i < params.len(); i++ {
+            for let i: i32 = 0; i < params.len(); i++ {
                 if pat.name.eq(params.get(i)) {
                     if !bindings.contains(pat.name) {
                         bindings.insert(pat.name, *actual);
@@ -2348,7 +2348,7 @@ fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindi
     if pat.kind == TY_GENERIC && actual.kind == TY_GENERIC {
         if pat.name.eq(actual.name) && pat.args != null && actual.args != null
             && pat.args.len() == actual.args.len() {
-            for let i: int = 0; i < pat.args.len(); i++ {
+            for let i: i32 = 0; i < pat.args.len(); i++ {
                 let pa: Type = pat.args.get(i);
                 let aa: Type = actual.args.get(i);
                 unify_for_inference(&pa, &aa, params, bindings);
@@ -2374,7 +2374,7 @@ fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindi
     if pat.kind == TY_FNPTR && actual.kind == TY_FNPTR {
         if pat.args != null && actual.args != null
            && pat.args.len() == actual.args.len() {
-            for let i: int = 0; i < pat.args.len(); i++ {
+            for let i: i32 = 0; i < pat.args.len(); i++ {
                 let pa: Type = pat.args.get(i);
                 let aa: Type = actual.args.get(i);
                 unify_for_inference(&pa, &aa, params, bindings);
@@ -2392,7 +2392,7 @@ fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
     if t == null { return null; }
     if t.kind == TY_NAMED {
         if params != null {
-            for let i: int = 0; i < params.len(); i++ {
+            for let i: i32 = 0; i < params.len(); i++ {
                 if t.name.eq(params.get(i)) {
                     let a: Type = args.get(i);
                     let p: *Type = malloc(sizeof(Type)) as *Type;
@@ -2422,7 +2422,7 @@ fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
     if t.kind == TY_GENERIC {
         let new_args: *Vector<Type> = Vector::new();
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 let a: Type = t.args.get(i);
                 let na: *Type = subst_type(&a, params, args);
                 if na != null { new_args.push(*na); }
@@ -2436,7 +2436,7 @@ fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
     if t.kind == TY_FNPTR {
         let new_args: *Vector<Type> = Vector::new();
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 let a: Type = t.args.get(i);
                 let na: *Type = subst_type(&a, params, args);
                 if na != null { new_args.push(*na); }
@@ -2470,7 +2470,7 @@ fn subst_expr(e: *Expr, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     if e.operand != null { n.operand = subst_expr(e.operand, params, args, gs); }
     if e.args != null {
         let new_args: *Vector<Expr> = Vector::new();
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             let nu: *Expr = subst_expr(&a, params, args, gs);
             if nu != null { new_args.push(*nu); }
@@ -2491,7 +2491,7 @@ fn subst_expr(e: *Expr, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     // type name (e.g. `T::from_json` -> `int::from_json` for T=int)
     // so the existing EX_PATH codegen lowers it to the right symbol.
     if e.kind == EX_PATH && params != null && args != null {
-        for let i: int = 0; i < params.len(); i++ {
+        for let i: i32 = 0; i < params.len(); i++ {
             if params.get(i).eq(e.str_val) && i < args.len() {
                 let a: Type = args.get(i);
                 n.str_val = mangle_type(&a);
@@ -2515,7 +2515,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     if s.fn_ret_ty != null { n.fn_ret_ty = subst_type(s.fn_ret_ty, params, args); }
     if s.then_body != null {
         let nb: *Vector<Stmt> = Vector::new();
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             let nu: *Stmt = subst_stmt(&b, params, args, gs);
             if nu != null { nb.push(*nu); }
@@ -2524,7 +2524,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     }
     if s.else_body != null {
         let nb: *Vector<Stmt> = Vector::new();
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             let nu: *Stmt = subst_stmt(&b, params, args, gs);
             if nu != null { nb.push(*nu); }
@@ -2533,7 +2533,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     }
     if s.fn_body != null {
         let nb: *Vector<Stmt> = Vector::new();
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             let nu: *Stmt = subst_stmt(&b, params, args, gs);
             if nu != null { nb.push(*nu); }
@@ -2543,7 +2543,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     return n;
 }
 
-fn op_to_c(op: int) -> string {
+fn op_to_c(op: i32) -> string {
     if op == OP_ADD { return "+"; }
     if op == OP_SUB { return "-"; }
     if op == OP_MUL { return "*"; }
@@ -2570,7 +2570,7 @@ fn op_to_c(op: int) -> string {
     return "?";
 }
 
-fn unop_to_c(op: int) -> string {
+fn unop_to_c(op: i32) -> string {
     if op == UN_NEG { return "-"; }
     if op == UN_NOT { return "!"; }
     if op == UN_BIT_NOT { return "~"; }
@@ -2582,8 +2582,8 @@ fn unop_to_c(op: int) -> string {
 
 // ---- printing helpers (just print! to stdout) ----------------------------
 
-fn ind(n: int) {
-    for let i: int = 0; i < n; i++ { print!("    "); }
+fn ind(n: i32) {
+    for let i: i32 = 0; i < n; i++ { print!("    "); }
 }
 
 // `@cfg("windows")` / `@cfg("posix")` brackets a top-level decl with a cpp
@@ -2616,8 +2616,8 @@ fn arm_value_type(g: *CG, a: *MatchArm) -> *Type {
 
 fn emit_match_arm_value(g: *CG, a: *MatchArm) {
     if a.body == null { print!("__r = 0;"); return; }
-    let last_idx: int = a.body.len() - 1;
-    for let k: int = 0; k < last_idx; k++ {
+    let last_idx: i32 = a.body.len() - 1;
+    for let k: i32 = 0; k < last_idx; k++ {
         let b: Stmt = a.body.get(k);
         emit_stmt(g, &b, 0);
     }
@@ -2642,7 +2642,7 @@ fn emit_arm_typeof_probe(g: *CG, arms: *Vector<MatchArm>) {
             print!("__typeof__("); print!(payload); print!(") ");
             print!(c_safe_ident(a.bindings.get(0))); print!(" = "); print!(payload); print!("; ");
         } else {
-            for let k: int = 0; k < a.bindings.len(); k++ {
+            for let k: i32 = 0; k < a.bindings.len(); k++ {
                 let payload: string = "__m.data.v_".concat(a.variant);
                 print!("__typeof__("); print!(payload); print!(".f"); print!(k); print!(") ");
                 print!(c_safe_ident(a.bindings.get(k))); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
@@ -2685,7 +2685,7 @@ fn _field_ty_in_struct(g: *CG, struct_name: string, field_name: string) -> *Type
     if g.structs == null || !g.structs.contains(struct_name) { return null; }
     let sd: Stmt = g.structs.get(struct_name);
     if sd.struct_fields == null { return null; }
-    for let i: int = 0; i < sd.struct_fields.len(); i++ {
+    for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
         let f: Field = sd.struct_fields.get(i);
         if f.name.eq(field_name) {
             let p: *Type = malloc(sizeof(Type)) as *Type;
@@ -2730,7 +2730,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         // side effects; trailing comma-expr yields the value.
         print!("({ ");
         if e.block_stmts != null {
-            for let i: int = 0; i < e.block_stmts.len(); i++ {
+            for let i: i32 = 0; i < e.block_stmts.len(); i++ {
                 let b: Stmt = e.block_stmts.get(i);
                 emit_stmt(g, &b, 0);
             }
@@ -2757,7 +2757,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         print!(") __r; ");
         print!("switch (__m.tag) { ");
         if e.match_arms != null {
-            for let i: int = 0; i < e.match_arms.len(); i++ {
+            for let i: i32 = 0; i < e.match_arms.len(); i++ {
                 let a: MatchArm = e.match_arms.get(i);
                 if a.variant.eq("_") { print!("default: "); }
                 else { print!("case "); print!(enum_name); print!("_"); print!(a.variant); print!(": "); }
@@ -2768,7 +2768,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         print!("__typeof__("); print!(payload); print!(") ");
                         print!(c_safe_ident(a.bindings.get(0))); print!(" = "); print!(payload); print!("; ");
                     } else {
-                        for let k: int = 0; k < a.bindings.len(); k++ {
+                        for let k: i32 = 0; k < a.bindings.len(); k++ {
                             let payload: string = "__m.data.v_".concat(a.variant);
                             print!("__typeof__("); print!(payload); print!(".f"); print!(k); print!(") ");
                             print!(c_safe_ident(a.bindings.get(k))); print!(" = "); print!(payload); print!(".f"); print!(k); print!("; ");
@@ -2907,8 +2907,8 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 print!("/* invalid `?` */ 0");
                 return;
             }
-            let inner_kind: int = inner_ty.kind;
-            let ret_kind: int = ret_ty.kind;
+            let inner_kind: i32 = inner_ty.kind;
+            let ret_kind: i32 = ret_ty.kind;
             if inner_kind != TY_RESULT && inner_kind != TY_OPTION && inner_kind != TY_OPT_RESULT {
                 print!("/* invalid `?` */ 0");
                 return;
@@ -2928,12 +2928,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             print!("); ");
             // Build the err/none-propagation block(s) for this combo.
             // Common err-defer prelude for any propagating arm.
-            let nd: int = g.err_defer_stack.len();
+            let nd: i32 = g.err_defer_stack.len();
             // Helper: write defer drains.
             // Inner = !T: check !__r.ok, propagate Err.
             if inner_kind == TY_RESULT {
                 print!("if (!__r.ok) { ");
-                for let i: int = nd - 1; i >= 0; i = i - 1 {
+                for let i: i32 = nd - 1; i >= 0; i = i - 1 {
                     let ex: Expr = g.err_defer_stack.get(i);
                     emit_expr(g, &ex);
                     print!("; ");
@@ -2951,7 +2951,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             // Inner = ?T: check !__r.has, propagate None (or coerce).
             if inner_kind == TY_OPTION {
                 print!("if (!__r.has) { ");
-                for let i: int = nd - 1; i >= 0; i = i - 1 {
+                for let i: i32 = nd - 1; i >= 0; i = i - 1 {
                     let ex: Expr = g.err_defer_stack.get(i);
                     emit_expr(g, &ex);
                     print!("; ");
@@ -2968,7 +2968,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
             // Inner = ?!T: dispatch on tag. 0=Some, 1=None, 2=Err.
             print!("if (__r.tag != 0) { ");
-            for let i: int = nd - 1; i >= 0; i = i - 1 {
+            for let i: i32 = nd - 1; i >= 0; i = i - 1 {
                 let ex: Expr = g.err_defer_stack.get(i);
                 emit_expr(g, &ex);
                 print!("; ");
@@ -3014,7 +3014,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             if g.enums.contains(probe) {
                 let edef: Stmt = g.enums.get(probe);
                 if edef.enum_variants != null {
-                    for let vi: int = 0; vi < edef.enum_variants.len(); vi++ {
+                    for let vi: i32 = 0; vi < edef.enum_variants.len(); vi++ {
                         let v: EnumVariant = edef.enum_variants.get(vi);
                         if v.name.eq(e.lhs.field) { _is_enum_ctor = true; break; }
                     }
@@ -3040,7 +3040,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     print!(", .data.v_");
                     print!(vname);
                     print!(" = {");
-                    for let i: int = 0; i < e.args.len(); i++ {
+                    for let i: i32 = 0; i < e.args.len(); i++ {
                         if i > 0 { print!(", "); }
                         let a: Expr = e.args.get(i);
                         emit_expr(g, &a);
@@ -3063,14 +3063,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                && stripped.args != null && stripped.args.len() > 0 {
                 let inner: Type = stripped.args.get(0);
                 let m: string = mangle_type(&inner);
-                let mut nargs: int = 0;
+                let mut nargs: i32 = 0;
                 if e.args != null { nargs = e.args.len(); }
                 // `chan<T>` lowers to `__glide_chan_T_t*` on the C side
                 // already, so the send/recv/close helpers want one level
                 // of pointer. A Glide-side `*chan<T>` (or `**chan<T>`)
                 // adds extra indirection — emit one deref per pointer
                 // wrapper to drop back to the helper's expected shape.
-                let mut deref_n: int = 0;
+                let mut deref_n: i32 = 0;
                 let mut t: *Type = recv_ty;
                 while t != null && (t.kind == TY_POINTER
                                 || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) {
@@ -3137,7 +3137,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 emit_expr(g, recv);
                 print!(").data");
                 if e.args != null {
-                    for let i: int = 0; i < e.args.len(); i++ {
+                    for let i: i32 = 0; i < e.args.len(); i++ {
                         print!(", ");
                         let a: Expr = e.args.get(i);
                         emit_expr(g, &a);
@@ -3164,7 +3164,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     if spec_needs_addr { print!("&"); }
                     emit_expr(g, recv);
                     if e.args != null {
-                        for let i: int = 0; i < e.args.len(); i++ {
+                        for let i: i32 = 0; i < e.args.len(); i++ {
                             print!(", ");
                             let a: Expr = e.args.get(i);
                             emit_expr(g, &a);
@@ -3220,7 +3220,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     if needs_deref { print!("*"); }
                     emit_expr(g, recv);
                     if e.args != null {
-                        for let i: int = 0; i < e.args.len(); i++ {
+                        for let i: i32 = 0; i < e.args.len(); i++ {
                             print!(", ");
                             let a: Expr = e.args.get(i);
                             emit_expr(g, &a);
@@ -3236,7 +3236,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 let mut fn_name: string = "";
                 // Qualified call `s.NS::method(...)` — encoded as `NS::method` in `field`.
                 // Skip the dispatch search and go straight to `NS_<type>_method`.
-                let qpos: int = ns_split_pos(method);
+                let qpos: i32 = ns_split_pos(method);
                 if qpos > 0 {
                     let ns: string = method.substring(0, qpos);
                     let real: string = method.substring(qpos + 2, method.len());
@@ -3262,12 +3262,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         // are `;`-joined; >1 segment means namespaced collision
                         // and we abort below with a build-time error.
                         let mut found: string = "";
-                        let mut count: int = 0;
+                        let mut count: i32 = 0;
                         if g.method_index.contains(glide_name) {
                             let entry: string = g.method_index.get(glide_name);
-                            let n: int = entry.len();
-                            let mut start: int = 0;
-                            let mut i: int = 0;
+                            let n: i32 = entry.len();
+                            let mut start: i32 = 0;
+                            let mut i: i32 = 0;
                             while i <= n {
                                 if i == n || entry.at(i).to_int() == 59 {
                                     let part: string = entry.substring(start, i);
@@ -3338,7 +3338,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 if needs_addr { print!("&"); }
                 emit_expr(g, recv);
                 if e.args != null {
-                    for let i: int = 0; i < e.args.len(); i++ {
+                    for let i: i32 = 0; i < e.args.len(); i++ {
                         print!(", ");
                         let a: Expr = e.args.get(i);
                         emit_expr(g, &a);
@@ -3360,7 +3360,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         }
         print!("(");
         if e.args != null {
-            for let i: int = 0; i < e.args.len(); i++ {
+            for let i: i32 = 0; i < e.args.len(); i++ {
                 if i > 0 { print!(", "); }
                 let a: Expr = e.args.get(i);
                 emit_expr(g, &a);
@@ -3428,7 +3428,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     if e.kind == EX_FNEXPR {
         // Lift to a uniquely-named top-level fn; expression evaluates to its
         // address (which decays to a fn pointer in C).
-        let id: int = g.anon_count;
+        let id: i32 = g.anon_count;
         g.anon_count = id + 1;
         let name: string = "__glide_anon_".concat(int_to_str(id));
         let af: AnonFn = AnonFn {
@@ -3459,7 +3459,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         if g.enums.contains(ty) {
             let edef: Stmt = g.enums.get(ty);
             if edef.enum_variants != null {
-                for let i: int = 0; i < edef.enum_variants.len(); i++ {
+                for let i: i32 = 0; i < edef.enum_variants.len(); i++ {
                     let v: EnumVariant = edef.enum_variants.get(i);
                     if v.name.eq(e.field)
                        && (v.fields == null || v.fields.len() == 0) {
@@ -3479,7 +3479,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             print!("printf(\"");
             // Build a format string by walking args, joining with spaces.
             if e.args != null {
-                for let i: int = 0; i < e.args.len(); i++ {
+                for let i: i32 = 0; i < e.args.len(); i++ {
                     if i > 0 { print!(" "); }
                     let a: Expr = e.args.get(i);
                     let at: *Type = infer_for_codegen(g, &a);
@@ -3490,7 +3490,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             print!("\"");
             // Then emit args (with bool→string conversion).
             if e.args != null {
-                for let i: int = 0; i < e.args.len(); i++ {
+                for let i: i32 = 0; i < e.args.len(); i++ {
                     print!(", ");
                     let a: Expr = e.args.get(i);
                     let at: *Type = infer_for_codegen(g, &a);
@@ -3527,9 +3527,9 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 if first.kind == EX_STRING {
                     print!("\"");
                     let raw: string = first.str_val;
-                    let mut arg_idx: int = 1;
-                    let n: int = raw.len();
-                    let mut i: int = 0;
+                    let mut arg_idx: i32 = 1;
+                    let n: i32 = raw.len();
+                    let mut i: i32 = 0;
                     while i < n {
                         let c: char = raw.at(i);
                         if c.to_int() == 123 && i + 1 < n && raw.at(i + 1).to_int() == 125 {
@@ -3554,7 +3554,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 } else {
                     emit_expr(g, &first);
                 }
-                for let j: int = 1; j < e.args.len(); j++ {
+                for let j: i32 = 1; j < e.args.len(); j++ {
                     print!(", ");
                     let a: Expr = e.args.get(j);
                     let at: *Type = infer_for_codegen(g, &a);
@@ -3582,7 +3582,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     if e.kind == EX_STRUCT_LIT {
         print!("((", e.str_val, "){");
         if e.field_names != null && e.args != null {
-            for let i: int = 0; i < e.args.len(); i++ {
+            for let i: i32 = 0; i < e.args.len(); i++ {
                 if i > 0 { print!(", "); }
                 let fname: string = e.field_names.get(i);
                 print!(".", c_safe_ident(fname), " = ");
@@ -3612,7 +3612,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
 // own quoted string + "\n\t" so the generated C reads naturally and the
 // assembler sees each line as a separate instruction. Constraints and clobbers
 // pass through verbatim.
-fn emit_asm_stmt(g: *CG, s: *Stmt, depth: int) {
+fn emit_asm_stmt(g: *CG, s: *Stmt, depth: i32) {
     ind(depth);
     print!("__asm__");
     if s.is_volatile { print!(" volatile"); }
@@ -3620,13 +3620,13 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: int) {
     if s.asm_strings == null || s.asm_strings.len() == 0 {
         print!("\"\"");
     } else {
-        for let i: int = 0; i < s.asm_strings.len(); i++ {
+        for let i: i32 = 0; i < s.asm_strings.len(); i++ {
             if i > 0 { println!(""); ind(depth + 1); }
             let line: string = s.asm_strings.get(i);
             print!("\"");
             // escape backslashes and quotes
-            let n: int = line.len();
-            let mut k: int = 0;
+            let n: i32 = line.len();
+            let mut k: i32 = 0;
             while k < n {
                 let c: char = line.at(k);
                 if c.to_int() == 34 { print!("\\\""); }
@@ -3644,7 +3644,7 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: int) {
     if has_out || has_in || has_clb {
         print!(" : ");
         if has_out {
-            for let i: int = 0; i < s.asm_out_constraints.len(); i++ {
+            for let i: i32 = 0; i < s.asm_out_constraints.len(); i++ {
                 if i > 0 { print!(", "); }
                 let cstr: string = "\"".concat(s.asm_out_constraints.get(i)).concat("\"(");
                 print!(cstr);
@@ -3657,7 +3657,7 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: int) {
     if has_in || has_clb {
         print!(" : ");
         if has_in {
-            for let i: int = 0; i < s.asm_in_constraints.len(); i++ {
+            for let i: i32 = 0; i < s.asm_in_constraints.len(); i++ {
                 if i > 0 { print!(", "); }
                 let cstr: string = "\"".concat(s.asm_in_constraints.get(i)).concat("\"(");
                 print!(cstr);
@@ -3669,7 +3669,7 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: int) {
     }
     if has_clb {
         print!(" : ");
-        for let i: int = 0; i < s.asm_clobbers.len(); i++ {
+        for let i: i32 = 0; i < s.asm_clobbers.len(); i++ {
             if i > 0 { print!(", "); }
             let cstr: string = "\"".concat(s.asm_clobbers.get(i)).concat("\"");
             print!(cstr);
@@ -3678,7 +3678,7 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: int) {
     println!(");");
 }
 
-pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
+pub fn emit_stmt(g: *CG, s: *Stmt, depth: i32) {
     if s == null { return; }
     g.emit_line_dir(s.line, s.origin);
     if s.kind == ST_LET || s.kind == ST_CONST {
@@ -3773,7 +3773,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             // a lifted anon fn, use void* (fn-pointer slot).
             let mut handled: bool = false;
             if s.let_value.kind == EX_IDENT {
-                for let k: int = 0; k < g.anon_fns.len(); k++ {
+                for let k: i32 = 0; k < g.anon_fns.len(); k++ {
                     let af: AnonFn = g.anon_fns.get(k);
                     if af.name.eq(s.let_value.str_val) {
                         print!("void* ", cname);
@@ -3956,11 +3956,11 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         return;
     }
     if s.kind == ST_SPAWN {
-        let id: int = g.spawn_count;
+        let id: i32 = g.spawn_count;
         g.spawn_count = id + 1;
         let ids: string = int_to_str(id);
         let call: *Expr = s.expr_value;
-        let mut n_args: int = 0;
+        let mut n_args: i32 = 0;
         if call != null && call.args != null { n_args = call.args.len(); }
 
         // Leaf detection: if the spawned function carries the `@leaf`
@@ -3975,7 +3975,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
            && g.fns.contains(call.lhs.str_val) {
             let target: Stmt = g.fns.get(call.lhs.str_val);
             if target.attrs != null {
-                for let ai: int = 0; ai < target.attrs.len(); ai++ {
+                for let ai: i32 = 0; ai < target.attrs.len(); ai++ {
                     let a: Attr = target.attrs.get(ai);
                     if a.name != null && a.name.eq("leaf") {
                         is_leaf_call = true;
@@ -4006,7 +4006,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         ind(depth); println!("{");
         ind(depth + 1);
         println!(an.concat("* __args = (").concat(an).concat("*)malloc(sizeof(").concat(an).concat("));"));
-        for let i: int = 0; i < call.args.len(); i++ {
+        for let i: i32 = 0; i < call.args.len(); i++ {
             ind(depth + 1);
             print!("__args->a".concat(int_to_str(i)).concat(" = "));
             let a: Expr = call.args.get(i);
@@ -4052,8 +4052,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         emit_expr(g, s.cond);
         println!(") {");
         if s.then_body != null {
-            let saved: int = g.auto_drop_stack.len();
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = g.auto_drop_stack.len();
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 emit_stmt(g, &b, depth + 1);
             }
@@ -4062,8 +4062,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         ind(depth);
         if s.else_body != null {
             println!("} else {");
-            let saved: int = g.auto_drop_stack.len();
-            for let i: int = 0; i < s.else_body.len(); i++ {
+            let saved: i32 = g.auto_drop_stack.len();
+            for let i: i32 = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
                 emit_stmt(g, &b, depth + 1);
             }
@@ -4101,8 +4101,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         println!(", &".concat(var).concat(")) {"));
         g.declare(var, &inner);
         if s.then_body != null {
-            let saved: int = g.auto_drop_stack.len();
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = g.auto_drop_stack.len();
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 emit_stmt(g, &b, depth + 2);
             }
@@ -4124,8 +4124,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         let id_str: string = int_to_str(s.line * 1000 + s.column);
         let end_label: string = "__sel_end_".concat(id_str);
 
-        let mut default_idx: int = -1;
-        for let i: int = 0; i < arms.len(); i++ {
+        let mut default_idx: i32 = -1;
+        for let i: i32 = 0; i < arms.len(); i++ {
             let a: SelectArm = arms.get(i);
             if a.kind == SEL_DEFAULT { default_idx = i; }
         }
@@ -4133,7 +4133,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         ind(depth); println!("{");
 
         // Per-arm temp vars for value-binding recv arms.
-        for let i: int = 0; i < arms.len(); i++ {
+        for let i: i32 = 0; i < arms.len(); i++ {
             let a: SelectArm = arms.get(i);
             if a.kind == SEL_RECV || a.kind == SEL_RECV_SOME {
                 let chan_ty: *Type = infer_for_codegen(g, a.chan_expr);
@@ -4152,7 +4152,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         ind(depth + 1); println!("int __sel_iters_".concat(id_str).concat(" = 0;"));
         ind(depth + 1); println!("while (1) {");
 
-        for let i: int = 0; i < arms.len(); i++ {
+        for let i: i32 = 0; i < arms.len(); i++ {
             let a: SelectArm = arms.get(i);
             if a.kind == SEL_DEFAULT { continue; }
 
@@ -4181,8 +4181,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                 ind(depth + 4); println!(tc.concat(" ").concat(a.bind_name).concat(" = ").concat(tmp).concat(";"));
                 g.declare(a.bind_name, &inner);
                 if a.body != null {
-                    let saved: int = g.auto_drop_stack.len();
-                    for let j: int = 0; j < a.body.len(); j++ {
+                    let saved: i32 = g.auto_drop_stack.len();
+                    for let j: i32 = 0; j < a.body.len(); j++ {
                         let bs: Stmt = a.body.get(j);
                         emit_stmt(g, &bs, depth + 4);
                     }
@@ -4204,8 +4204,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                 println!(")->closed), memory_order_acquire)) {");
                 ind(depth + 3); println!("{");
                 if a.body != null {
-                    let saved: int = g.auto_drop_stack.len();
-                    for let j: int = 0; j < a.body.len(); j++ {
+                    let saved: i32 = g.auto_drop_stack.len();
+                    for let j: i32 = 0; j < a.body.len(); j++ {
                         let bs: Stmt = a.body.get(j);
                         emit_stmt(g, &bs, depth + 3);
                     }
@@ -4238,8 +4238,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
 
                 ind(depth + 3); println!("{");
                 if a.body != null {
-                    let saved: int = g.auto_drop_stack.len();
-                    for let j: int = 0; j < a.body.len(); j++ {
+                    let saved: i32 = g.auto_drop_stack.len();
+                    for let j: i32 = 0; j < a.body.len(); j++ {
                         let bs: Stmt = a.body.get(j);
                         emit_stmt(g, &bs, depth + 3);
                     }
@@ -4255,8 +4255,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
             let a: SelectArm = arms.get(default_idx);
             ind(depth + 2); println!("{");
             if a.body != null {
-                let saved: int = g.auto_drop_stack.len();
-                for let j: int = 0; j < a.body.len(); j++ {
+                let saved: i32 = g.auto_drop_stack.len();
+                for let j: i32 = 0; j < a.body.len(); j++ {
                     let bs: Stmt = a.body.get(j);
                     emit_stmt(g, &bs, depth + 3);
                 }
@@ -4279,8 +4279,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         emit_expr(g, s.cond);
         println!(") {");
         if s.then_body != null {
-            let saved: int = g.auto_drop_stack.len();
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = g.auto_drop_stack.len();
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 emit_stmt(g, &b, depth + 1);
             }
@@ -4317,8 +4317,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         if s.for_step != null { emit_expr(g, s.for_step); }
         println!(") {");
         if s.then_body != null {
-            let saved: int = g.auto_drop_stack.len();
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = g.auto_drop_stack.len();
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 emit_stmt(g, &b, depth + 1);
             }
@@ -4338,7 +4338,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
         println!(";");
         ind(depth + 1); println!("switch (__m.tag) {");
         if s.arms != null {
-            for let i: int = 0; i < s.arms.len(); i++ {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
                 let a: MatchArm = s.arms.get(i);
                 ind(depth + 1);
                 if a.variant.eq("_") { print!("default: "); }
@@ -4360,7 +4360,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                         print!(payload);
                         println!(";");
                     } else {
-                        for let k: int = 0; k < a.bindings.len(); k++ {
+                        for let k: i32 = 0; k < a.bindings.len(); k++ {
                             ind(depth + 2);
                             let payload: string = "__m.data.v_".concat(a.variant);
                             print!("__typeof__(");
@@ -4374,7 +4374,7 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
                     }
                 }
                 if a.body != null {
-                    for let k: int = 0; k < a.body.len(); k++ {
+                    for let k: i32 = 0; k < a.body.len(); k++ {
                         let bb: Stmt = a.body.get(k);
                         emit_stmt(g, &bb, depth + 2);
                     }
@@ -4389,8 +4389,8 @@ pub fn emit_stmt(g: *CG, s: *Stmt, depth: int) {
     if s.kind == ST_BLOCK {
         ind(depth); println!("{");
         if s.then_body != null {
-            let saved: int = g.auto_drop_stack.len();
-            for let i: int = 0; i < s.then_body.len(); i++ {
+            let saved: i32 = g.auto_drop_stack.len();
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 emit_stmt(g, &b, depth + 1);
             }
@@ -4415,7 +4415,7 @@ fn emit_fn_signature(s: *Stmt) {
         if s.is_variadic { print!("..."); }
         else             { print!("void"); }
     } else {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             if i > 0 { print!(", "); }
             let p: Param = s.fn_params.get(i);
             print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
@@ -4444,13 +4444,13 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
             if mtmpl.fn_params != null && e.args != null {
                 let resolved: *Vector<Type> = Vector::new();
                 let mut all: bool = true;
-                for let pi: int = 0; pi < tparams.len(); pi++ {
+                for let pi: i32 = 0; pi < tparams.len(); pi++ {
                     let tp: string = tparams.get(pi);
                     let mut found: *Type = null;
-                    for let j: int = 1; j < mtmpl.fn_params.len(); j++ {
+                    for let j: i32 = 1; j < mtmpl.fn_params.len(); j++ {
                         let mp: Param = mtmpl.fn_params.get(j);
                         if mp.ty != null && mp.ty.kind == TY_NAMED && mp.ty.name.eq(tp) {
-                            let arg_idx: int = j - 1;
+                            let arg_idx: i32 = j - 1;
                             if arg_idx < e.args.len() {
                                 let a: Expr = e.args.get(arg_idx);
                                 let at: *Type = infer_for_codegen(g, &a);
@@ -4479,11 +4479,11 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
         if g.fns.contains(cname) {
             let fn_def: Stmt = g.fns.get(cname);
             if fn_def.fn_params != null {
-                let nparams: int = fn_def.fn_params.len();
-                let nargs: int = e.args.len();
-                let mut limit: int = nargs;
+                let nparams: i32 = fn_def.fn_params.len();
+                let nargs: i32 = e.args.len();
+                let mut limit: i32 = nargs;
                 if nparams < limit { limit = nparams; }
-                for let i: int = 0; i < limit; i++ {
+                for let i: i32 = 0; i < limit; i++ {
                     let a: Expr = e.args.get(i);
                     let p: Param = fn_def.fn_params.get(i);
                     let resolved: *Type = constrain_walk(&a, p.ty, var);
@@ -4512,7 +4512,7 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
         if r != null { return r; }
     }
     if e.args != null {
-        for let i: int = 0; i < e.args.len(); i++ {
+        for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             let r: *Type = try_constrain_from_expr(g, &a, var, gen_name, tparams);
             if r != null { return r; }
@@ -4564,14 +4564,14 @@ fn try_constrain_from_stmt(g: *CG, s: *Stmt, var: string, gen_name: string, tpar
         if r != null { return r; }
     }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             let r: *Type = try_constrain_from_stmt(g, &b, var, gen_name, tparams);
             if r != null { return r; }
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             let r: *Type = try_constrain_from_stmt(g, &b, var, gen_name, tparams);
             if r != null { return r; }
@@ -4597,20 +4597,20 @@ fn populate_scope_from_stmt(g: *CG, s: *Stmt) {
     }
     if s.for_init != null { populate_scope_from_stmt(g, s.for_init); }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             populate_scope_from_stmt(g, &b);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             populate_scope_from_stmt(g, &b);
         }
     }
 }
 
-fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: int) -> *Type {
+fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: i32) -> *Type {
     if s.let_ty != null { return null; }
     if s.let_value == null || s.let_value.kind != EX_CALL { return null; }
     let callee: *Expr = s.let_value.lhs;
@@ -4636,8 +4636,8 @@ fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: int) -> *T
     }
     if inner == null || inner.kind != TY_GENERIC { return null; }
     let gen_base: string = inner.name;
-    let n: int = body.len();
-    for let j: int = start + 1; j < n; j++ {
+    let n: i32 = body.len();
+    for let j: i32 = start + 1; j < n; j++ {
         let s2: Stmt = body.get(j);
         let r: *Type = try_constrain_from_stmt(g, &s2, s.name, gen_base, template.type_params);
         if r != null { return r; }
@@ -4652,12 +4652,12 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
     if body == null { return; }
     // Pre-populate scope with all annotated lets (recursing) so identifier
     // inference works inside nested blocks.
-    for let k: int = 0; k < body.len(); k++ {
+    for let k: i32 = 0; k < body.len(); k++ {
         let sk: Stmt = body.get(k);
         populate_scope_from_stmt(g, &sk);
     }
-    let n: int = body.len();
-    for let i: int = 0; i < n; i++ {
+    let n: i32 = body.len();
+    for let i: i32 = 0; i < n; i++ {
         let s: Stmt = body.get(i);
         if s.kind == ST_LET {
             let resolved: *Type = try_resolve_open_let(g, &s, body, i);
@@ -4674,15 +4674,15 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
 }
 
 fn infer_let_types_in_program(g: *CG, program: *Vector<Stmt>) {
-    let n: int = program.len();
-    for let i: int = 0; i < n; i++ {
+    let n: i32 = program.len();
+    for let i: i32 = 0; i < n; i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
             // Set up a fresh scope with this fn's params so identifier
             // inference works during the pre-pass.
             g.scope.clear();
             if s.fn_params != null {
-                for let k: int = 0; k < s.fn_params.len(); k++ {
+                for let k: i32 = 0; k < s.fn_params.len(); k++ {
                     let p: Param = s.fn_params.get(k);
                     g.declare(p.name, p.ty);
                 }
@@ -4690,12 +4690,12 @@ fn infer_let_types_in_program(g: *CG, program: *Vector<Stmt>) {
             infer_let_types(g, s.fn_body);
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
-            for let j: int = 0; j < s.impl_methods.len(); j++ {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body != null {
                     g.scope.clear();
                     if m.fn_params != null {
-                        for let k: int = 0; k < m.fn_params.len(); k++ {
+                        for let k: i32 = 0; k < m.fn_params.len(); k++ {
                             let p: Param = m.fn_params.get(k);
                             g.declare(p.name, p.ty);
                         }
@@ -4820,13 +4820,13 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.err_defer_stack = new_err_defer;
     g.auto_drop_stack = new_drop;
     if s.fn_params != null {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             g.declare(p.name, p.ty);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             emit_stmt(g, &b, 1);
         }
@@ -4876,7 +4876,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
     if s.import_path != null && !s.import_path.eq("") {
         prefix = s.import_path.concat("_").concat(prefix);
     }
-    for let i: int = 0; i < s.impl_methods.len(); i++ {
+    for let i: i32 = 0; i < s.impl_methods.len(); i++ {
         let m: Stmt = s.impl_methods.get(i);
         // Mangle method name: Type_method.
         let mangled: string = prefix.concat("_").concat(m.name);
@@ -4888,7 +4888,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         if m.fn_params == null || m.fn_params.len() == 0 {
             print!("void");
         } else {
-            for let j: int = 0; j < m.fn_params.len(); j++ {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = m.fn_params.get(j);
                 print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
@@ -4911,13 +4911,13 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.err_defer_stack = ned;
         g.auto_drop_stack = nadr;
         if m.fn_params != null {
-            for let j: int = 0; j < m.fn_params.len(); j++ {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
                 let p: Param = m.fn_params.get(j);
                 g.declare(p.name, p.ty);
             }
         }
         if m.fn_body != null {
-            for let j: int = 0; j < m.fn_body.len(); j++ {
+            for let j: i32 = 0; j < m.fn_body.len(); j++ {
                 let b: Stmt = m.fn_body.get(j);
                 emit_stmt(g, &b, 1);
             }
@@ -4948,14 +4948,14 @@ fn emit_impl_fwd_decls(g: *CG, s: *Stmt) {
     if s.import_path != null && !s.import_path.eq("") {
         prefix = s.import_path.concat("_").concat(prefix);
     }
-    for let i: int = 0; i < s.impl_methods.len(); i++ {
+    for let i: i32 = 0; i < s.impl_methods.len(); i++ {
         let m: Stmt = s.impl_methods.get(i);
         let mangled: string = prefix.concat("_").concat(m.name);
         print!(type_to_c(m.fn_ret_ty), " ", mangled, "(");
         if m.fn_params == null || m.fn_params.len() == 0 {
             print!("void");
         } else {
-            for let j: int = 0; j < m.fn_params.len(); j++ {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = m.fn_params.get(j);
                 print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
@@ -4969,7 +4969,7 @@ fn emit_struct(s: *Stmt) {
     let cname: string = c_safe_ident(s.name);
     println!("typedef struct ", cname, " {");
     if s.struct_fields != null {
-        for let i: int = 0; i < s.struct_fields.len(); i++ {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
             let f: Field = s.struct_fields.get(i);
             print!("    ", type_to_c(f.ty), " ", c_safe_ident(f.name)); println!(";");
         }
@@ -4981,7 +4981,7 @@ fn emit_struct(s: *Stmt) {
 fn emit_enum(s: *Stmt) {
     let mut has_payload: bool = false;
     if s.enum_variants != null {
-        for let i: int = 0; i < s.enum_variants.len(); i++ {
+        for let i: i32 = 0; i < s.enum_variants.len(); i++ {
             let v: EnumVariant = s.enum_variants.get(i);
             if v.fields != null && v.fields.len() > 0 { has_payload = true; }
         }
@@ -4992,7 +4992,7 @@ fn emit_enum(s: *Stmt) {
     if has_payload {
         println!("    union {");
         if s.enum_variants != null {
-            for let i: int = 0; i < s.enum_variants.len(); i++ {
+            for let i: i32 = 0; i < s.enum_variants.len(); i++ {
                 let v: EnumVariant = s.enum_variants.get(i);
                 if v.fields == null || v.fields.len() == 0 { continue; }
                 if v.fields.len() == 1 {
@@ -5004,7 +5004,7 @@ fn emit_enum(s: *Stmt) {
                     println!(";");
                 } else {
                     print!("        struct { ");
-                    for let j: int = 0; j < v.fields.len(); j++ {
+                    for let j: i32 = 0; j < v.fields.len(); j++ {
                         if j > 0 { print!(" "); }
                         let t: Type = v.fields.get(j);
                         print!(type_to_c(&t));
@@ -5022,7 +5022,7 @@ fn emit_enum(s: *Stmt) {
     }
     println!("} ", ename, ";");
     if s.enum_variants != null {
-        for let i: int = 0; i < s.enum_variants.len(); i++ {
+        for let i: i32 = 0; i < s.enum_variants.len(); i++ {
             let v: EnumVariant = s.enum_variants.get(i);
             print!("#define ");
             print!(ename);
@@ -5046,13 +5046,13 @@ fn emit_enum(s: *Stmt) {
 fn register_alias_suffixes(g: *CG, mod_path: string, name: string) {
     if mod_path == null || mod_path.eq("") { return; }
     if name == null || name.eq("") { return; }
-    let n: int = mod_path.len();
-    let mut start: int = 0;
+    let n: i32 = mod_path.len();
+    let mut start: i32 = 0;
     while start < n {
         let suffix: string = mod_path.substring(start, n);
         g.module_aliases.insert(suffix.concat("::").concat(name), name);
-        let mut next: int = -1;
-        let mut i: int = start;
+        let mut next: i32 = -1;
+        let mut i: i32 = start;
         while i + 1 < n {
             if mod_path.at(i).to_int() == 58 && mod_path.at(i + 1).to_int() == 58 {
                 next = i + 2;
@@ -5072,7 +5072,7 @@ fn register_alias_suffixes(g: *CG, mod_path: string, name: string) {
 fn module_path_from_origin(origin: string) -> string {
     if origin == null || origin.eq("") { return ""; }
     let mut s: string = origin;
-    let n: int = s.len();
+    let n: i32 = s.len();
     if n > 6 {
         let tail: string = s.substring(n - 6, n);
         if tail.eq(".glide") { s = s.substring(0, n - 6); }
@@ -5080,22 +5080,22 @@ fn module_path_from_origin(origin: string) -> string {
     // Strip the leading `src/` segment so user-facing module paths don't
     // expose the source-root layout. Files under `src/stdlib/foo.glide`
     // become `stdlib::foo`; files outside `src/` keep their full path.
-    let len0: int = s.len();
+    let len0: i32 = s.len();
     if len0 >= 4 {
-        let first: int = s.at(0).to_int();
-        let second: int = s.at(1).to_int();
-        let third: int = s.at(2).to_int();
-        let fourth: int = s.at(3).to_int();
+        let first: i32 = s.at(0).to_int();
+        let second: i32 = s.at(1).to_int();
+        let third: i32 = s.at(2).to_int();
+        let fourth: i32 = s.at(3).to_int();
         if first == 115 && second == 114 && third == 99
             && (fourth == 47 || fourth == 92) {
             s = s.substring(4, len0);
         }
     }
     let mut out: string = "";
-    let mut i: int = 0;
-    let len: int = s.len();
+    let mut i: i32 = 0;
+    let len: i32 = s.len();
     while i < len {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c == 47 || c == 92 {
             out = out.concat("::");
         } else {
@@ -5130,8 +5130,8 @@ fn resolve_type_prefix(g: *CG, prefix: string) -> string {
         return g.module_aliases.get(prefix);
     }
     // Fallback: trailing segment after the last `::`.
-    let n: int = prefix.len();
-    let mut i: int = n - 1;
+    let n: i32 = prefix.len();
+    let mut i: i32 = n - 1;
     while i > 0 {
         if i + 1 < n && prefix.at(i).to_int() == 58 && prefix.at(i + 1).to_int() == 58 {
             // not how we scan — fix: look for the last `::` running backwards
@@ -5140,8 +5140,8 @@ fn resolve_type_prefix(g: *CG, prefix: string) -> string {
         i = i - 1;
     }
     // Simple forward scan for last `::` (cheap; module paths are short).
-    let mut last: int = -1;
-    let mut j: int = 0;
+    let mut last: i32 = -1;
+    let mut j: i32 = 0;
     while j + 1 < n {
         if prefix.at(j).to_int() == 58 && prefix.at(j + 1).to_int() == 58 {
             last = j;
@@ -5167,7 +5167,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // (e.g. `chan<Vector<int>>` needs the `Vector__int` body before the
     // chan runtime references it). Also register concrete structs/enums so
     // chan<UserType> can emit the body before the chan storage references it.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_STRUCT {
             if s.type_params != null && s.type_params.len() > 0 {
@@ -5185,7 +5185,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
 
     // ---- Concurrency pre-pass: collect chan inner types + emit pthread runtime
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         collect_chan_in_stmt(g, &s);
     }
@@ -5198,7 +5198,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // Still before user code, so they remain visible to the rest of the
     // emit. Order matches source order so users can split raw payloads
     // across files predictably.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_CRAW {
             emit_cfg_open(s.cfg_target);
@@ -5214,7 +5214,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // a forward decl already in scope, those references emit `unknown type`.
     // C99 accepts duplicate `typedef struct X X;` declarations, so the
     // later body-emit passes that re-issue the forward are harmless.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.name == null || s.name.eq("") { continue; }
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
@@ -5230,12 +5230,12 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // chan template stores `T v;` by value so it needs the full definition,
     // not just a forward typedef. Walk the program directly (not g.structs)
     // because the registration pass is later in emit_program.
-    for let i: int = 0; i < g.chan_types.len(); i++ {
+    for let i: i32 = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
         if g.emitted_named.contains(t.name) { continue; }
-        for let j: int = 0; j < program.len(); j++ {
+        for let j: i32 = 0; j < program.len(); j++ {
             let s: Stmt = program.get(j);
             if s.name == null || s.name.eq("") { continue; }
             if !s.name.eq(t.name) { continue; }
@@ -5254,7 +5254,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     emit_chan_runtime(g);
 
     // ---- dyn Trait pre-pass + emission ----
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         collect_dyn_in_stmt(g, &s);
     }
@@ -5264,7 +5264,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // Each struct's field types may reference generic mono structs
     // (Vector<T>, HashMap<V>, etc.); forward-decl those before emitting
     // the struct body so the field types are in scope.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_IMPL { continue; }
         if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
@@ -5272,7 +5272,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
         let tn: string = s.impl_target.name;
         if g.emitted_named.contains(tn) { continue; }
-        for let j: int = 0; j < program.len(); j++ {
+        for let j: i32 = 0; j < program.len(); j++ {
             let ts: Stmt = program.get(j);
             if ts.name == null || ts.name.eq("") { continue; }
             if !ts.name.eq(tn) { continue; }
@@ -5298,7 +5298,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // declarations later.
 
     // ---- Errors-as-values pre-pass: collect Result inner types + emit runtime
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         // Skip generic templates — their bodies reference type params and
         // assoc projections that will be resolved per-instantiation. Mono
@@ -5313,7 +5313,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
     // Same chan-userType story: result_<T> wraps T by value, so user
     // struct/enum bodies must be emitted before the result helpers.
-    for let i: int = 0; i < g.result_types.len(); i++ {
+    for let i: i32 = 0; i < g.result_types.len(); i++ {
         let t: Type = g.result_types.get(i);
         // Forward-declare any generic mono struct names referenced
         // anywhere in the result's wrapped type (T may be `*Vector<X>`
@@ -5323,7 +5323,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
         if g.emitted_named.contains(t.name) { continue; }
-        for let j: int = 0; j < program.len(); j++ {
+        for let j: i32 = 0; j < program.len(); j++ {
             let s: Stmt = program.get(j);
             if s.name == null || s.name.eq("") { continue; }
             if !s.name.eq(t.name) { continue; }
@@ -5342,13 +5342,13 @@ pub fn emit_program(program: *Vector<Stmt>) {
     emit_result_runtime(g);
 
     // Same up-front emission for option_<T> / optres_<T> wrappers.
-    for let i: int = 0; i < g.option_types.len(); i++ {
+    for let i: i32 = 0; i < g.option_types.len(); i++ {
         let t: Type = g.option_types.get(i);
         forward_decl_generic_monos(g, &t);
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
         if g.emitted_named.contains(t.name) { continue; }
-        for let j: int = 0; j < program.len(); j++ {
+        for let j: i32 = 0; j < program.len(); j++ {
             let s: Stmt = program.get(j);
             if s.name == null || s.name.eq("") { continue; }
             if !s.name.eq(t.name) { continue; }
@@ -5366,13 +5366,13 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
     emit_option_runtime(g);
 
-    for let i: int = 0; i < g.optres_types.len(); i++ {
+    for let i: i32 = 0; i < g.optres_types.len(); i++ {
         let t: Type = g.optres_types.get(i);
         forward_decl_generic_monos(g, &t);
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
         if g.emitted_named.contains(t.name) { continue; }
-        for let j: int = 0; j < program.len(); j++ {
+        for let j: i32 = 0; j < program.len(); j++ {
             let s: Stmt = program.get(j);
             if s.name == null || s.name.eq("") { continue; }
             if !s.name.eq(t.name) { continue; }
@@ -5397,7 +5397,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // Populate codegen's assoc_table from every `impl Trait for T { type X = Y; }`.
     // Used by mangle_type / type_to_c to resolve TY_ASSOC owners that became
     // concrete after monomorphization.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind != ST_IMPL { continue; }
         if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
@@ -5407,7 +5407,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         if s.impl_target.kind == TY_NAMED   { tname = s.impl_target.name; }
         if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
         if tname.eq("") { continue; }
-        for let j: int = 0; j < s.assoc_decls.len(); j++ {
+        for let j: i32 = 0; j < s.assoc_decls.len(); j++ {
             let a: Param = s.assoc_decls.get(j);
             if a.ty == null { continue; }
             let key: string = s.impl_trait_name.concat("::").concat(tname)
@@ -5417,7 +5417,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
 
     // Register generic struct + fn + impl-method templates.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         let mod_path: string = module_path_from_origin(s.origin);
         if s.kind == ST_STRUCT {
@@ -5462,7 +5462,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
                 prefix = s.import_path.concat("_").concat(prefix);
                 is_namespaced = true;
             }
-            for let j: int = 0; j < s.impl_methods.len(); j++ {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 let synth: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
                 *synth = m;
@@ -5489,7 +5489,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             if s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
             if s.impl_target.kind == TY_GENERIC { prefix = s.impl_target.name; }
             // Register each method as a generic fn under `Type_method` name.
-            for let j: int = 0; j < s.impl_methods.len(); j++ {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 let mname: string = prefix.concat("_").concat(m.name);
                 // Synthesize a generic fn Stmt with the impl's type_params merged
@@ -5498,11 +5498,11 @@ pub fn emit_program(program: *Vector<Stmt>) {
                 *synth = m;
                 synth.name = mname;
                 let combined: *Vector<string> = Vector::new();
-                for let k: int = 0; k < s.type_params.len(); k++ {
+                for let k: i32 = 0; k < s.type_params.len(); k++ {
                     combined.push(s.type_params.get(k));
                 }
                 if m.type_params != null {
-                    for let k: int = 0; k < m.type_params.len(); k++ {
+                    for let k: i32 = 0; k < m.type_params.len(); k++ {
                         combined.push(m.type_params.get(k));
                     }
                 }
@@ -5520,12 +5520,12 @@ pub fn emit_program(program: *Vector<Stmt>) {
 
     // Walk the program collecting Type::Generic uses, emit specialized structs.
     let monos: *Vector<Type> = Vector::new();
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         collect_generic_uses_in_stmt(&s, monos);
     }
     // Emit forward typedefs first (mono structs + concrete).
-    for let i: int = 0; i < monos.len(); i++ {
+    for let i: i32 = 0; i < monos.len(); i++ {
         let t: Type = monos.get(i);
         let mangled: string = mangle_generic(t.name, t.args);
         if !g.emitted_monos.contains(mangled) {
@@ -5533,7 +5533,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
             println!("typedef struct ", mangled, " ", mangled, ";");
         }
     }
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
             if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
@@ -5543,14 +5543,14 @@ pub fn emit_program(program: *Vector<Stmt>) {
     println!("");
 
     // Emit specialized struct bodies.
-    for let i: int = 0; i < monos.len(); i++ {
+    for let i: i32 = 0; i < monos.len(); i++ {
         let t: Type = monos.get(i);
         emit_struct_mono(g, &t);
     }
 
     // Concrete struct definitions. Skip anything the chan runtime already
     // forward-emitted (chan<UserType> needs the body up front).
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
@@ -5560,7 +5560,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
 
     // Top-level const definitions (#define for ints, static const for others).
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_CONST {
             emit_top_const(g, &s);
@@ -5570,7 +5570,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
 
     // Forward fn declarations (concrete only). Includes impl-block methods
     // so they can call each other regardless of source order.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0) {
             emit_cfg_open(s.cfg_target);
@@ -5585,14 +5585,14 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // Pre-scan: walk every concrete fn / impl method to discover all generic
     // call sites. Emit forward declarations for each mono so their later
     // bodies can be called from anywhere.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0) {
             prescan_stmt(g, &s);
         }
         if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) {
             if s.impl_methods != null {
-                for let j: int = 0; j < s.impl_methods.len(); j++ {
+                for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                     let m: Stmt = s.impl_methods.get(j);
                     prescan_stmt(g, &m);
                 }
@@ -5600,7 +5600,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         }
     }
     // Walk the queued monos transitively (a mono body may call other generics).
-    let mut idx: int = 0;
+    let mut idx: i32 = 0;
     while idx < g.fn_mono_queue.len() {
         let entry: FnMonoEntry = g.fn_mono_queue.get(idx);
         if g.generic_fns.contains(entry.name) {
@@ -5609,14 +5609,14 @@ pub fn emit_program(program: *Vector<Stmt>) {
             // works inside the substituted body.
             g.scope.clear();
             if template.fn_params != null {
-                for let j: int = 0; j < template.fn_params.len(); j++ {
+                for let j: i32 = 0; j < template.fn_params.len(); j++ {
                     let p: Param = template.fn_params.get(j);
                     let pt: *Type = subst_type(p.ty, template.type_params, entry.args);
                     g.declare(p.name, pt);
                 }
             }
             if template.fn_body != null {
-                for let j: int = 0; j < template.fn_body.len(); j++ {
+                for let j: i32 = 0; j < template.fn_body.len(); j++ {
                     let b: Stmt = template.fn_body.get(j);
                     let nb: *Stmt = subst_stmt(&b, template.type_params, entry.args, g.generic_structs);
                     if nb != null { prescan_stmt(g, nb); }
@@ -5628,7 +5628,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // Drain dynamically-discovered struct monos (e.g. via chained ctor
     // inference). Emit typedef + body before any fn forward decl that may
     // reference the struct by name.
-    for let i: int = 0; i < g.struct_mono_queue.len(); i++ {
+    for let i: i32 = 0; i < g.struct_mono_queue.len(); i++ {
         let t: Type = g.struct_mono_queue.get(i);
         let mangled: string = mangle_generic(t.name, t.args);
         if !g.emitted_monos.contains(mangled) {
@@ -5638,7 +5638,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         }
     }
     // Now emit forward declarations for every queued mono.
-    for let i: int = 0; i < g.fn_mono_queue.len(); i++ {
+    for let i: i32 = 0; i < g.fn_mono_queue.len(); i++ {
         let entry: FnMonoEntry = g.fn_mono_queue.get(i);
         if g.generic_fns.contains(entry.name) {
             let template: Stmt = g.generic_fns.get(entry.name);
@@ -5652,17 +5652,17 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // into g.anon_fns and rewrite the expression in place to EX_IDENT
     // referring to the synthetic name. Output forward decls so the user
     // fns can reference them.
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         lift_anons_in_stmt(g, &s);
     }
-    for let i: int = 0; i < g.anon_fns.len(); i++ {
+    for let i: i32 = 0; i < g.anon_fns.len(); i++ {
         let af: AnonFn = g.anon_fns.get(i);
         print!(type_to_c(af.ret_ty), " ", af.name, "(");
         if af.params == null || af.params.len() == 0 {
             print!("void");
         } else {
-            for let j: int = 0; j < af.params.len(); j++ {
+            for let j: i32 = 0; j < af.params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = af.params.get(j);
                 print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
@@ -5676,14 +5676,14 @@ pub fn emit_program(program: *Vector<Stmt>) {
     // resets to 0 after this so the emit-pass walks the AST in the same order
     // and pulls the matching ID.
     g.spawn_count = 0;
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         pre_emit_spawn_stubs_in_stmt(g, &s);
     }
     g.spawn_count = 0;
 
     // Function + impl definitions (skip generic ones, and skip extern/bodyless).
-    for let i: int = 0; i < program.len(); i++ {
+    for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0)
            && s.fn_body != null {
@@ -5709,7 +5709,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         // impl assoc_table.
         let new_params_v: *Vector<Param> = Vector::new();
         if template.fn_params != null {
-            for let i: int = 0; i < template.fn_params.len(); i++ {
+            for let i: i32 = 0; i < template.fn_params.len(); i++ {
                 let p: Param = template.fn_params.get(i);
                 let pt: *Type = subst_type(p.ty, template.type_params, e.args);
                 pt = resolve_assoc_recursive(g, pt);
@@ -5721,7 +5721,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         new_ret = resolve_assoc_recursive(g, new_ret);
         let new_body: *Vector<Stmt> = Vector::new();
         if template.fn_body != null {
-            for let i: int = 0; i < template.fn_body.len(); i++ {
+            for let i: i32 = 0; i < template.fn_body.len(); i++ {
                 let b: Stmt = template.fn_body.get(i);
                 let nb: *Stmt = subst_stmt(&b, template.type_params, e.args, g.generic_structs);
                 if nb != null { new_body.push(*nb); }
@@ -5739,7 +5739,7 @@ pub fn emit_program(program: *Vector<Stmt>) {
         if new_params_v.len() == 0 {
             print!("void");
         } else {
-            for let j: int = 0; j < new_params_v.len(); j++ {
+            for let j: i32 = 0; j < new_params_v.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = new_params_v.get(j);
                 print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
@@ -5753,13 +5753,13 @@ pub fn emit_program(program: *Vector<Stmt>) {
         let nadr_q: *Vector<Expr> = Vector::new();
         g.defer_stack = nd_q;
         g.auto_drop_stack = nadr_q;
-        for let j: int = 0; j < new_params_v.len(); j++ {
+        for let j: i32 = 0; j < new_params_v.len(); j++ {
             let p: Param = new_params_v.get(j);
             g.declare(p.name, p.ty);
         }
         let saved_ret_mono: *Type = g.current_ret_ty;
         g.current_ret_ty = new_ret;
-        for let j: int = 0; j < new_body.len(); j++ {
+        for let j: i32 = 0; j < new_body.len(); j++ {
             let b: Stmt = new_body.get(j);
             emit_stmt(g, &b, 1);
         }
@@ -5773,14 +5773,14 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
 
     // Emit all collected anonymous fn lifts.
-    for let i: int = 0; i < g.anon_fns.len(); i++ {
+    for let i: i32 = 0; i < g.anon_fns.len(); i++ {
         let af: AnonFn = g.anon_fns.get(i);
         // Signature
         print!(type_to_c(af.ret_ty), " ", af.name, "(");
         if af.params == null || af.params.len() == 0 {
             print!("void");
         } else {
-            for let j: int = 0; j < af.params.len(); j++ {
+            for let j: i32 = 0; j < af.params.len(); j++ {
                 if j > 0 { print!(", "); }
                 let p: Param = af.params.get(j);
                 print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
@@ -5795,13 +5795,13 @@ pub fn emit_program(program: *Vector<Stmt>) {
         g.defer_stack = nd;
         g.auto_drop_stack = nadr;
         if af.params != null {
-            for let j: int = 0; j < af.params.len(); j++ {
+            for let j: i32 = 0; j < af.params.len(); j++ {
                 let p: Param = af.params.get(j);
                 g.declare(p.name, p.ty);
             }
         }
         if af.body != null {
-            for let j: int = 0; j < af.body.len(); j++ {
+            for let j: i32 = 0; j < af.body.len(); j++ {
                 let b: Stmt = af.body.get(j);
                 emit_stmt(g, &b, 1);
             }
@@ -5864,7 +5864,7 @@ fn emit_struct_mono(g: *CG, t: *Type) {
     g.emitted_monos.insert(body_key, true);
     println!("struct ", mangled, " {");
     if template.struct_fields != null && template.type_params != null {
-        for let i: int = 0; i < template.struct_fields.len(); i++ {
+        for let i: i32 = 0; i < template.struct_fields.len(); i++ {
             let f: Field = template.struct_fields.get(i);
             let sub: *Type = subst_type(f.ty, template.type_params, t.args);
             print!("    ", type_to_c(sub), " ", f.name); println!(";");
@@ -5878,7 +5878,7 @@ fn collect_generic_uses_in_type(t: *Type, out: *Vector<Type>) {
     if t == null { return; }
     if t.kind == TY_GENERIC {
         if t.args != null {
-            for let i: int = 0; i < t.args.len(); i++ {
+            for let i: i32 = 0; i < t.args.len(); i++ {
                 let a: Type = t.args.get(i);
                 collect_generic_uses_in_type(&a, out);
             }
@@ -5908,37 +5908,37 @@ fn collect_generic_uses_in_stmt(s: *Stmt, out: *Vector<Type>) {
     if s.let_ty != null { collect_generic_uses_in_type(s.let_ty, out); }
     if s.fn_ret_ty != null { collect_generic_uses_in_type(s.fn_ret_ty, out); }
     if s.fn_params != null {
-        for let i: int = 0; i < s.fn_params.len(); i++ {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             collect_generic_uses_in_type(p.ty, out);
         }
     }
     if s.struct_fields != null {
-        for let i: int = 0; i < s.struct_fields.len(); i++ {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
             let f: Field = s.struct_fields.get(i);
             collect_generic_uses_in_type(f.ty, out);
         }
     }
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             collect_generic_uses_in_stmt(&b, out);
         }
     }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             collect_generic_uses_in_stmt(&b, out);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             collect_generic_uses_in_stmt(&b, out);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             collect_generic_uses_in_stmt(&m, out);
         }

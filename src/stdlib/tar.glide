@@ -16,10 +16,10 @@ import stdlib::fs::*;
 // a top-level `<repo>-<sha>/` directory, so callers fetching from
 // codeload pass `strip_components = 1`.
 
-const _BLK: int = 512;
+const _BLK: i32 = 512;
 
-extern fn __glide_buf_byte(s: string, i: int) -> int;
-extern fn __glide_buf_substring(s: string, start: int, end: int) -> string;
+extern fn __glide_buf_byte(s: string, i: i32) -> i32;
+extern fn __glide_buf_substring(s: string, start: i32, end: i32) -> string;
 
 c_raw! {
     // Direct memory access. The default `string.at(i)` works for any
@@ -52,10 +52,10 @@ c_raw! {
 ///                          "/tmp/extract", 1);
 /// if n < 0 { eprintln("bad archive"); }
 /// ```
-pub fn tar_extract(data: string, n: int, out_dir: string, strip_components: int) -> int {
+pub fn tar_extract(data: string, n: i32, out_dir: string, strip_components: i32) -> i32 {
     fs_mkdir_p(out_dir);
-    let mut pos: int = 0;
-    let mut count: int = 0;
+    let mut pos: i32 = 0;
+    let mut count: i32 = 0;
     let mut pending_long: string = "";
 
     while pos + _BLK <= n {
@@ -64,12 +64,12 @@ pub fn tar_extract(data: string, n: int, out_dir: string, strip_components: int)
         let name: string = _entry_name(data, pos, pending_long);
         pending_long = "";
 
-        let size: int = _read_octal(data, pos + 124, 12);
-        let typeflag: int = __glide_buf_byte(data, pos + 156);
+        let size: i32 = _read_octal(data, pos + 124, 12);
+        let typeflag: i32 = __glide_buf_byte(data, pos + 156);
         pos = pos + _BLK;
 
-        let payload: int = pos;
-        let next: int = pos + _round_blk(size);
+        let payload: i32 = pos;
+        let next: i32 = pos + _round_blk(size);
 
         if typeflag == 76 {  // 'L'
             pending_long = _slice_to_string(data, payload, size);
@@ -97,8 +97,8 @@ pub fn tar_extract(data: string, n: int, out_dir: string, strip_components: int)
     return count;
 }
 
-fn _block_all_zero(s: string, pos: int) -> bool {
-    for let i: int = 0; i < _BLK; i++ {
+fn _block_all_zero(s: string, pos: i32) -> bool {
+    for let i: i32 = 0; i < _BLK; i++ {
         if __glide_buf_byte(s, pos + i) != 0 { return false; }
     }
     return true;
@@ -106,7 +106,7 @@ fn _block_all_zero(s: string, pos: int) -> bool {
 
 // Compose the entry name from the prefix + name fields, with the
 // GNU long-name buffer winning when present.
-fn _entry_name(s: string, pos: int, pending_long: string) -> string {
+fn _entry_name(s: string, pos: i32, pending_long: string) -> string {
     if !pending_long.eq("") { return pending_long; }
     let name: string = _slice_cstr(s, pos, 100);
     let prefix: string = _slice_cstr(s, pos + 345, 155);
@@ -118,9 +118,9 @@ fn _entry_name(s: string, pos: int, pending_long: string) -> string {
 // `max` bytes, stopping at the first NUL. Use the buf-aware substring
 // helper since `string.substring` clamps by `strlen` and breaks on
 // binary buffers.
-fn _slice_cstr(s: string, pos: int, max: int) -> string {
-    let mut end: int = pos;
-    let limit: int = pos + max;
+fn _slice_cstr(s: string, pos: i32, max: i32) -> string {
+    let mut end: i32 = pos;
+    let limit: i32 = pos + max;
     while end < limit && __glide_buf_byte(s, end) != 0 { end = end + 1; }
     if end == pos { return ""; }
     return __glide_buf_substring(s, pos, end);
@@ -128,8 +128,8 @@ fn _slice_cstr(s: string, pos: int, max: int) -> string {
 
 // `n` bytes copied as-is (including embedded NULs would survive, but
 // long-name buffers are themselves NUL-terminated so we trim).
-fn _slice_to_string(s: string, pos: int, n: int) -> string {
-    let mut end: int = pos + n;
+fn _slice_to_string(s: string, pos: i32, n: i32) -> string {
+    let mut end: i32 = pos + n;
     if end > pos && __glide_buf_byte(s, end - 1) == 0 { end = end - 1; }
     if end <= pos { return ""; }
     return __glide_buf_substring(s, pos, end);
@@ -138,17 +138,17 @@ fn _slice_to_string(s: string, pos: int, n: int) -> string {
 // Octal field: ASCII digits, optionally space-padded on either side,
 // NUL- or space-terminated. Skips leading whitespace, stops at first
 // non-octal byte.
-fn _read_octal(s: string, pos: int, len: int) -> int {
-    let mut i: int = pos;
-    let end: int = pos + len;
+fn _read_octal(s: string, pos: i32, len: i32) -> i32 {
+    let mut i: i32 = pos;
+    let end: i32 = pos + len;
     while i < end {
-        let b: int = __glide_buf_byte(s, i);
+        let b: i32 = __glide_buf_byte(s, i);
         if b != 32 && b != 0 { break; }
         i = i + 1;
     }
-    let mut acc: int = 0;
+    let mut acc: i32 = 0;
     while i < end {
-        let b: int = __glide_buf_byte(s, i);
+        let b: i32 = __glide_buf_byte(s, i);
         if b < 48 || b > 55 { break; }
         acc = (acc * 8) + (b - 48);
         i = i + 1;
@@ -156,19 +156,19 @@ fn _read_octal(s: string, pos: int, len: int) -> int {
     return acc;
 }
 
-fn _round_blk(n: int) -> int {
+fn _round_blk(n: i32) -> i32 {
     if n <= 0 { return 0; }
     return ((n + _BLK - 1) / _BLK) * _BLK;
 }
 
 // Skip `strip` leading `/`-separated segments. Returns "" if there
 // aren't enough segments — the entry is then ignored.
-fn _strip_components(path: string, strip: int) -> string {
+fn _strip_components(path: string, strip: i32) -> string {
     if strip <= 0 { return path; }
-    let mut idx: int = 0;
-    let mut remaining: int = strip;
+    let mut idx: i32 = 0;
+    let mut remaining: i32 = strip;
     while remaining > 0 && idx < path.len() {
-        let c: int = path.at(idx).to_int();
+        let c: i32 = path.at(idx).to_int();
         if c == 47 || c == 92 { remaining = remaining - 1; }
         idx = idx + 1;
     }
@@ -181,9 +181,9 @@ fn _strip_components(path: string, strip: int) -> string {
 
 // Make every parent directory of `target` exist on disk.
 fn _ensure_parent(target: string) {
-    let mut cut: int = -1;
-    for let i: int = 0; i < target.len(); i++ {
-        let c: int = target.at(i).to_int();
+    let mut cut: i32 = -1;
+    for let i: i32 = 0; i < target.len(); i++ {
+        let c: i32 = target.at(i).to_int();
         if c == 47 || c == 92 { cut = i; }
     }
     if cut <= 0 { return; }

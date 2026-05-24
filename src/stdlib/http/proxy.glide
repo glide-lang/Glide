@@ -14,7 +14,7 @@ pub struct ReverseProxyConfig {
     pub preserve_host: bool,
     pub rewrite_location: bool,
     pub public_base: string,
-    pub timeout_ms: int,
+    pub timeout_ms: i32,
     pub tls_insecure: bool,
 }
 
@@ -152,10 +152,10 @@ pub fn proxy_rewrite_location(loc: string, upstream: string, public_base: string
 fn _proxy_filter_headers(block: string, preserve_host: bool, request_side: bool) -> string {
     let lines: *Vector<string> = block.split("\r\n");
     let mut out: string = "";
-    for let i: int = 0; i < lines.len(); i++ {
+    for let i: i32 = 0; i < lines.len(); i++ {
         let line: string = lines.get(i);
         if line.len() == 0 { continue; }
-        let colon: int = line.index_of(":");
+        let colon: i32 = line.index_of(":");
         if colon < 0 { continue; }
         let name: string = line.substring(0, colon).trim();
         let lower: string = name.to_lower();
@@ -180,7 +180,7 @@ fn _proxy_is_hop_header(lower: string) -> bool {
 }
 
 fn _proxy_trim_right_slash(s: string) -> string {
-    let mut end: int = s.len();
+    let mut end: i32 = s.len();
     while end > 0 && s.at(end - 1).to_int() == 47 {
         end = end - 1;
     }

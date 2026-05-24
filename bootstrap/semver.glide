@@ -15,9 +15,9 @@
 import ast;     // int_to_str
 
 pub struct SemVer {
-    pub major:      int,
-    pub minor:      int,
-    pub patch:      int,
+    pub major:      i32,
+    pub minor:      i32,
+    pub patch:      i32,
     pub prerelease: string,    // "" = release (sorts after `pre`)
     pub raw:        string,    // original input, for display + opaque fallback
     pub is_semver:  bool,
@@ -41,18 +41,18 @@ pub fn parse_semver(s: string) -> SemVer {
     v.is_semver = false;
     if s.eq("") { return v; }
 
-    let mut i: int = 0;
+    let mut i: i32 = 0;
     if s.at(0).to_int() == 118 { i = 1; }   // skip leading 'v'
 
-    let n: int = s.len();
-    let mut major: int = -1;
-    let mut minor: int = -1;
-    let mut patch: int = -1;
+    let n: i32 = s.len();
+    let mut major: i32 = -1;
+    let mut minor: i32 = -1;
+    let mut patch: i32 = -1;
 
-    let mut tmp: int = 0;
+    let mut tmp: i32 = 0;
     let mut have: bool = false;
     while i < n {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c >= 48 && c <= 57 { tmp = tmp * 10 + (c - 48); have = true; i = i + 1; continue; }
         break;
     }
@@ -62,7 +62,7 @@ pub fn parse_semver(s: string) -> SemVer {
     if i >= n || s.at(i).to_int() != 46 { return v; }   // expect '.'
     i = i + 1; tmp = 0; have = false;
     while i < n {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c >= 48 && c <= 57 { tmp = tmp * 10 + (c - 48); have = true; i = i + 1; continue; }
         break;
     }
@@ -72,7 +72,7 @@ pub fn parse_semver(s: string) -> SemVer {
     if i >= n || s.at(i).to_int() != 46 { return v; }
     i = i + 1; tmp = 0; have = false;
     while i < n {
-        let c: int = s.at(i).to_int();
+        let c: i32 = s.at(i).to_int();
         if c >= 48 && c <= 57 { tmp = tmp * 10 + (c - 48); have = true; i = i + 1; continue; }
         break;
     }
@@ -80,11 +80,11 @@ pub fn parse_semver(s: string) -> SemVer {
     patch = tmp;
 
     // Optional prerelease (`-foo`) and build (`+bar`).
-    let mut pre_start: int = -1;
-    let mut pre_end: int = n;
+    let mut pre_start: i32 = -1;
+    let mut pre_end: i32 = n;
     if i < n && s.at(i).to_int() == 45 {
         pre_start = i + 1;
-        let mut k: int = pre_start;
+        let mut k: i32 = pre_start;
         while k < n && s.at(k).to_int() != 43 { k = k + 1; }
         pre_end = k;
         i = k;
@@ -113,7 +113,7 @@ pub fn parse_semver(s: string) -> SemVer {
 /// semver_cmp(parse_semver("1.2.0"), parse_semver("1.2.3"))   //   -1
 /// semver_cmp(parse_semver("1.0.0"), parse_semver("1.0.0-rc"))//    1
 /// ```
-pub fn semver_cmp(a: SemVer, b: SemVer) -> int {
+pub fn semver_cmp(a: SemVer, b: SemVer) -> i32 {
     if !a.is_semver && !b.is_semver { return _strcmp(a.raw, b.raw); }
     if !a.is_semver { return -1; }
     if !b.is_semver { return 1; }
@@ -134,13 +134,13 @@ pub fn semver_compatible(a: SemVer, b: SemVer) -> bool {
     return a.major == b.major;
 }
 
-fn _strcmp(a: string, b: string) -> int {
-    let n: int = a.len();
-    let m: int = b.len();
-    let lim: int = if n < m { n } else { m };
-    for let i: int = 0; i < lim; i++ {
-        let ca: int = a.at(i).to_int();
-        let cb: int = b.at(i).to_int();
+fn _strcmp(a: string, b: string) -> i32 {
+    let n: i32 = a.len();
+    let m: i32 = b.len();
+    let lim: i32 = if n < m { n } else { m };
+    for let i: i32 = 0; i < lim; i++ {
+        let ca: i32 = a.at(i).to_int();
+        let cb: i32 = b.at(i).to_int();
         if ca < cb { return -1; }
         if ca > cb { return 1; }
     }

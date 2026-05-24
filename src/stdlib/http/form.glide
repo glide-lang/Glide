@@ -61,7 +61,7 @@ impl FormData {
     /// f.set("a", "1"); f.set("b", "2");
     /// f.len();   // 2
     /// ```
-    pub fn len(self: *FormData) -> int { return self.names.len(); }
+    pub fn len(self: *FormData) -> i32 { return self.names.len(); }
 
     /// Name at insertion position `i`. Pair with `value_at(i)` to walk
     /// the form.
@@ -71,10 +71,10 @@ impl FormData {
     ///     println!(f.name_at(i), "=", f.value_at(i));
     /// }
     /// ```
-    pub fn name_at(self: *FormData, i: int) -> string { return self.names.get(i); }
+    pub fn name_at(self: *FormData, i: i32) -> string { return self.names.get(i); }
 
     /// Value at insertion position `i`. See `name_at`.
-    pub fn value_at(self: *FormData, i: int) -> string { return self.values.get(i); }
+    pub fn value_at(self: *FormData, i: i32) -> string { return self.values.get(i); }
 
     /// Build the wire string: `k=v&k=v` with each piece percent-encoded.
     ///
@@ -85,7 +85,7 @@ impl FormData {
     /// ```
     pub fn encode(self: *FormData) -> string {
         let mut out: string = "";
-        for let i: int = 0; i < self.names.len(); i++ {
+        for let i: i32 = 0; i < self.names.len(); i++ {
             if i > 0 { out = out.concat("&"); }
             out = out.concat(url_encode(self.names.get(i)));
             out = out.concat("=");
@@ -110,10 +110,10 @@ pub fn form_decode(s: string) -> !*FormData {
     let f: *FormData = FormData::new();
     if s.len() == 0 { return ok(f); }
     let pairs: *Vector<string> = s.split("&");
-    for let i: int = 0; i < pairs.len(); i++ {
+    for let i: i32 = 0; i < pairs.len(); i++ {
         let p: string = pairs.get(i);
         if p.len() == 0 { continue; }
-        let eq: int = p.index_of("=");
+        let eq: i32 = p.index_of("=");
         let mut k: string = p;
         let mut v: string = "";
         if eq >= 0 {

@@ -23,7 +23,7 @@ fn _req(method: string, path: string, headers: string, body: string) -> *HttpReq
     return req;
 }
 
-fn test_proxy_target_url_strips_mount_prefix() -> int {
+fn test_proxy_target_url_strips_mount_prefix() -> i32 {
     let cfg: ReverseProxyConfig = _cfg();
     assert_str_eq!(proxy_target_url(&cfg, "/api/users?active=1"),
                    "http://127.0.0.1:9000/users?active=1");
@@ -32,7 +32,7 @@ fn test_proxy_target_url_strips_mount_prefix() -> int {
     return 0;
 }
 
-fn test_proxy_request_filter_drops_hop_by_hop_headers() -> int {
+fn test_proxy_request_filter_drops_hop_by_hop_headers() -> i32 {
     let block: string = "Host: public.example\r\nConnection: upgrade\r\nUpgrade: websocket\r\nContent-Length: 4\r\nX-Trace: abc\r\n";
     let out: string = proxy_filter_request_headers(block, false);
     assert!(!out.contains("Host:"));
@@ -43,7 +43,7 @@ fn test_proxy_request_filter_drops_hop_by_hop_headers() -> int {
     return 0;
 }
 
-fn test_proxy_request_filter_can_preserve_host() -> int {
+fn test_proxy_request_filter_can_preserve_host() -> i32 {
     let block: string = "Host: public.example\r\nX-Trace: abc\r\n";
     let out: string = proxy_filter_request_headers(block, true);
     assert!(out.contains("Host: public.example"));
@@ -51,7 +51,7 @@ fn test_proxy_request_filter_can_preserve_host() -> int {
     return 0;
 }
 
-fn test_proxy_build_upstream_request_adds_forwarded_headers() -> int {
+fn test_proxy_build_upstream_request_adds_forwarded_headers() -> i32 {
     let cfg: ReverseProxyConfig = _cfg();
     let req: *HttpRequest = _req("POST", "/api/items",
         "Host: public.example\r\nContent-Type: application/json\r\n",
@@ -68,7 +68,7 @@ fn test_proxy_build_upstream_request_adds_forwarded_headers() -> int {
     return 0;
 }
 
-fn test_proxy_response_filter_keeps_end_to_end_headers() -> int {
+fn test_proxy_response_filter_keeps_end_to_end_headers() -> i32 {
     let block: string = "Content-Length: 2\r\nConnection: close\r\nTransfer-Encoding: chunked\r\nSet-Cookie: a=1\r\nX-App: ok\r\n";
     let out: string = proxy_filter_response_headers(block);
     assert!(!out.contains("Content-Length:"));
@@ -79,7 +79,7 @@ fn test_proxy_response_filter_keeps_end_to_end_headers() -> int {
     return 0;
 }
 
-fn test_proxy_rewrite_location_absolute_upstream_url() -> int {
+fn test_proxy_rewrite_location_absolute_upstream_url() -> i32 {
     let loc: string = proxy_rewrite_location(
         "http://127.0.0.1:9000/login",
         "http://127.0.0.1:9000/",

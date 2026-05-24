@@ -19,7 +19,7 @@ pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
     // walk below sees the fully-populated impl blocks.
     expand_trait_defaults(stmts);
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         let l: *Stmt = lower_stmt(&s);
         if l != null { out.push(*l); }
@@ -36,7 +36,7 @@ pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
 pub fn lower_program_user_only(stmts: *Vector<Stmt>, user_path: string) -> *Vector<Stmt> {
     expand_trait_defaults(stmts);
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         let is_user: bool = s.origin == null || s.origin.eq("") || s.origin.eq(user_path);
         if !is_user {
@@ -56,13 +56,13 @@ pub fn lower_program_user_only(stmts: *Vector<Stmt>, user_path: string) -> *Vect
 // the implementor's type, not the placeholder.
 fn expand_trait_defaults(stmts: *Vector<Stmt>) {
     let traits: *HashMap<Stmt> = HashMap::new();
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
             traits.insert(s.name, s);
         }
     }
-    for let i: int = 0; i < stmts.len(); i++ {
+    for let i: i32 = 0; i < stmts.len(); i++ {
         let mut imp: Stmt = stmts.get(i);
         if imp.kind != ST_IMPL { continue; }
         if imp.impl_trait_name == null || imp.impl_trait_name.eq("") { continue; }
@@ -72,7 +72,7 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
         if imp.impl_methods == null { continue; }   // empty impl block has nothing to extend
         // Build name set of methods already in the impl.
         let provided: *HashMap<bool> = HashMap::new();
-        for let k: int = 0; k < imp.impl_methods.len(); k++ {
+        for let k: i32 = 0; k < imp.impl_methods.len(); k++ {
             let m: Stmt = imp.impl_methods.get(k);
             if m.name != null { provided.insert(m.name, true); }
         }
@@ -80,7 +80,7 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
         // impl's existing impl_methods Vector, which the LSP cache may
         // share across multiple parses of the importing file.
         let to_add: *Vector<Stmt> = Vector::new();
-        for let k: int = 0; k < trait_def.impl_methods.len(); k++ {
+        for let k: i32 = 0; k < trait_def.impl_methods.len(); k++ {
             let req: Stmt = trait_def.impl_methods.get(k);
             if req.name == null || req.name.eq("") { continue; }
             if req.fn_body == null { continue; }
@@ -97,7 +97,7 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
             *copy = req;
             if req.fn_params != null {
                 let cloned_params: *Vector<Param> = Vector::new();
-                for let pi: int = 0; pi < req.fn_params.len(); pi++ {
+                for let pi: i32 = 0; pi < req.fn_params.len(); pi++ {
                     cloned_params.push(req.fn_params.get(pi));
                 }
                 copy.fn_params = cloned_params;
@@ -115,10 +115,10 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
         }
         if to_add.len() > 0 {
             let merged: *Vector<Stmt> = Vector::new();
-            for let k: int = 0; k < imp.impl_methods.len(); k++ {
+            for let k: i32 = 0; k < imp.impl_methods.len(); k++ {
                 merged.push(imp.impl_methods.get(k));
             }
-            for let k: int = 0; k < to_add.len(); k++ {
+            for let k: i32 = 0; k < to_add.len(); k++ {
                 merged.push(to_add.get(k));
             }
             imp.impl_methods = merged;
@@ -131,7 +131,7 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
 fn lower_block(body: *Vector<Stmt>) -> *Vector<Stmt> {
     if body == null { return null; }
     let out: *Vector<Stmt> = Vector::new();
-    for let i: int = 0; i < body.len(); i++ {
+    for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         let l: *Stmt = lower_stmt(&s);
         if l != null { out.push(*l); }
@@ -153,7 +153,7 @@ fn lower_stmt(s: *Stmt) -> *Stmt {
         // LSP cache shares impl_methods Vectors across parses, and an
         // in-place .set() corrupts them.
         let new_methods: *Vector<Stmt> = Vector::new();
-        for let j: int = 0; j < s.impl_methods.len(); j++ {
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
             let m: Stmt = s.impl_methods.get(j);
             let lm: *Stmt = lower_stmt(&m);
             if lm != null { new_methods.push(*lm); }
@@ -174,8 +174,8 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     let hi: *Expr = s.cond;
     let inclusive: bool = s.is_mut;
     let body: *Vector<Stmt> = lower_block(s.then_body);
-    let line: int = s.line;
-    let col: int = s.column;
+    let line: i32 = s.line;
+    let col: i32 = s.column;
 
     if hi != null {
         // Range form.
@@ -183,7 +183,7 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
         if init != null {
             init.name_line = s.name_line; init.name_col = s.name_col; init.name_len = s.name_len;
         }
-        let mut cmp_op: int = OP_LT;
+        let mut cmp_op: i32 = OP_LT;
         if inclusive { cmp_op = OP_LE; }
         let cond: *Expr = expr_binary(cmp_op, expr_ident(var_name, line, col), hi);
         let step: *Expr = expr_postinc(expr_ident(var_name, line, col));
@@ -216,7 +216,7 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     let inner_body: *Vector<Stmt> = Vector::new();
     inner_body.push(*bind_var);
     if body != null {
-        for let i: int = 0; i < body.len(); i++ {
+        for let i: i32 = 0; i < body.len(); i++ {
             let bs: Stmt = body.get(i);
             inner_body.push(bs);
         }

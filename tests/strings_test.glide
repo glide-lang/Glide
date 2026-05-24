@@ -1,14 +1,14 @@
 import stdlib::testing::*;
 import stdlib::strings::*;
 
-fn test_join_empty_vec() -> int {
+fn test_join_empty_vec() -> i32 {
     let parts: *Vector<string> = Vector::new();
     defer parts.free();
     assert_str_eq!(string_join(parts, ","), "");
     return 0;
 }
 
-fn test_join_single_elem() -> int {
+fn test_join_single_elem() -> i32 {
     let parts: *Vector<string> = Vector::new();
     defer parts.free();
     parts.push("a");
@@ -16,7 +16,7 @@ fn test_join_single_elem() -> int {
     return 0;
 }
 
-fn test_join_comma_sep() -> int {
+fn test_join_comma_sep() -> i32 {
     let parts: *Vector<string> = Vector::new();
     defer parts.free();
     parts.push("a");
@@ -26,7 +26,7 @@ fn test_join_comma_sep() -> int {
     return 0;
 }
 
-fn test_join_empty_sep() -> int {
+fn test_join_empty_sep() -> i32 {
     let parts: *Vector<string> = Vector::new();
     defer parts.free();
     parts.push("a");
@@ -36,7 +36,7 @@ fn test_join_empty_sep() -> int {
     return 0;
 }
 
-fn test_join_spaced_dash_sep() -> int {
+fn test_join_spaced_dash_sep() -> i32 {
     let parts: *Vector<string> = Vector::new();
     defer parts.free();
     parts.push("a");

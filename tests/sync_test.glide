@@ -1,32 +1,32 @@
 import stdlib::testing::*;
 import stdlib::sync::*;
 
-fn _inc(p: *int) -> int {
+fn _inc(p: *i32) -> i32 {
     *p = *p + 1;
     return *p;
 }
 
-fn _double(p: *int) -> int {
+fn _double(p: *i32) -> i32 {
     *p = *p * 2;
     return *p;
 }
 
 fn _atomic_worker(a: *Atomic, w: *WaitGroup) {
-    for let i: int = 0; i < 1000; i++ {
+    for let i: i32 = 0; i < 1000; i++ {
         a.add(1);
     }
     w.done();
 }
 
-fn _mutex_worker(m: *Mutex<int>, w: *WaitGroup) {
-    for let i: int = 0; i < 100; i++ {
+fn _mutex_worker(m: *Mutex<i32>, w: *WaitGroup) {
+    for let i: i32 = 0; i < 100; i++ {
         m.with(_inc);
     }
     w.done();
 }
 
-fn test_mutex_explicit_lock() -> int {
-    let m: *Mutex<int> = Mutex::new(10);
+fn test_mutex_explicit_lock() -> i32 {
+    let m: *Mutex<i32> = Mutex::new(10);
     defer m.free();
     m.lock();
     m.set(m.get() + 5);
@@ -35,17 +35,17 @@ fn test_mutex_explicit_lock() -> int {
     return 0;
 }
 
-fn test_mutex_with_returns_value() -> int {
-    let m: *Mutex<int> = Mutex::new(5);
+fn test_mutex_with_returns_value() -> i32 {
+    let m: *Mutex<i32> = Mutex::new(5);
     defer m.free();
-    let result: int = m.with(_inc);
+    let result: i32 = m.with(_inc);
     assert_eq!(result, 6);
     assert_eq!(m.get(), 6);
     return 0;
 }
 
-fn test_mutex_with_repeated() -> int {
-    let m: *Mutex<int> = Mutex::new(1);
+fn test_mutex_with_repeated() -> i32 {
+    let m: *Mutex<i32> = Mutex::new(1);
     defer m.free();
     m.with(_double);
     m.with(_double);
@@ -54,14 +54,14 @@ fn test_mutex_with_repeated() -> int {
     return 0;
 }
 
-fn test_atomic_initial_value() -> int {
+fn test_atomic_initial_value() -> i32 {
     let a: *Atomic = Atomic::new(42);
     defer a.free();
     assert_eq!(a.load(), 42);
     return 0;
 }
 
-fn test_atomic_store_load() -> int {
+fn test_atomic_store_load() -> i32 {
     let a: *Atomic = Atomic::new(0);
     defer a.free();
     a.store(99);
@@ -69,7 +69,7 @@ fn test_atomic_store_load() -> int {
     return 0;
 }
 
-fn test_atomic_add_returns_previous() -> int {
+fn test_atomic_add_returns_previous() -> i32 {
     let a: *Atomic = Atomic::new(10);
     defer a.free();
     let prev: i64 = a.add(5);
@@ -78,7 +78,7 @@ fn test_atomic_add_returns_previous() -> int {
     return 0;
 }
 
-fn test_atomic_cas_success() -> int {
+fn test_atomic_cas_success() -> i32 {
     let a: *Atomic = Atomic::new(7);
     defer a.free();
     assert!(a.cas(7, 100));
@@ -86,7 +86,7 @@ fn test_atomic_cas_success() -> int {
     return 0;
 }
 
-fn test_atomic_cas_failure_leaves_value() -> int {
+fn test_atomic_cas_failure_leaves_value() -> i32 {
     let a: *Atomic = Atomic::new(7);
     defer a.free();
     assert_not!(a.cas(99, 100));
@@ -94,7 +94,7 @@ fn test_atomic_cas_failure_leaves_value() -> int {
     return 0;
 }
 
-fn test_wg_zero_returns_immediately() -> int {
+fn test_wg_zero_returns_immediately() -> i32 {
     let w: *WaitGroup = WaitGroup::new();
     defer w.free();
     w.wait();
@@ -102,7 +102,7 @@ fn test_wg_zero_returns_immediately() -> int {
     return 0;
 }
 
-fn test_wg_add_done_balanced() -> int {
+fn test_wg_add_done_balanced() -> i32 {
     let w: *WaitGroup = WaitGroup::new();
     defer w.free();
     w.add(3);
@@ -112,14 +112,14 @@ fn test_wg_add_done_balanced() -> int {
     return 0;
 }
 
-fn test_atomic_concurrent_increment() -> int {
+fn test_atomic_concurrent_increment() -> i32 {
     let a: *Atomic = Atomic::new(0);
     defer a.free();
     let w: *WaitGroup = WaitGroup::new();
     defer w.free();
-    let n: int = 8;
+    let n: i32 = 8;
     w.add(n);
-    for let i: int = 0; i < n; i++ {
+    for let i: i32 = 0; i < n; i++ {
         spawn_thread _atomic_worker(a, w);
     }
     w.wait();
@@ -127,14 +127,14 @@ fn test_atomic_concurrent_increment() -> int {
     return 0;
 }
 
-fn test_mutex_concurrent_increment() -> int {
-    let m: *Mutex<int> = Mutex::new(0);
+fn test_mutex_concurrent_increment() -> i32 {
+    let m: *Mutex<i32> = Mutex::new(0);
     defer m.free();
     let w: *WaitGroup = WaitGroup::new();
     defer w.free();
-    let n: int = 4;
+    let n: i32 = 4;
     w.add(n);
-    for let i: int = 0; i < n; i++ {
+    for let i: i32 = 0; i < n; i++ {
         spawn_thread _mutex_worker(m, w);
     }
     w.wait();

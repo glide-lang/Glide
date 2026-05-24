@@ -13,27 +13,27 @@ import stdlib::hashmap::*;
 
 // ---- Type kinds ----------------------------------------------------------
 
-pub const TY_NAMED: int = 0;       // payload: name (string)
-pub const TY_POINTER: int = 1;     // payload: inner (*Type)
-pub const TY_BORROW: int = 2;      // payload: inner (*Type)
-pub const TY_BORROW_MUT: int = 3;  // payload: inner (*Type)
-pub const TY_SLICE: int = 4;       // payload: inner (*Type)
-pub const TY_GENERIC: int = 5;     // payload: name + type args
-pub const TY_FNPTR: int = 6;       // payload: fnptr_params + fnptr_ret
-pub const TY_RESULT: int = 7;      // payload: inner (*Type) — `!T`
-pub const TY_DYN: int = 8;         // `dyn Trait` — name = trait name. Used behind a pointer (`*dyn Trait`).
-pub const TY_OPTION: int = 9;      // payload: inner (*Type) — `?T`
-pub const TY_OPT_RESULT: int = 10; // payload: inner (*Type) — `?!T` (3 variants: Some/None/Err)
-pub const TY_ASSOC: int = 11;      // `Owner::Name` — owner in inner, assoc name in name
+pub const TY_NAMED: i32 = 0;       // payload: name (string)
+pub const TY_POINTER: i32 = 1;     // payload: inner (*Type)
+pub const TY_BORROW: i32 = 2;      // payload: inner (*Type)
+pub const TY_BORROW_MUT: i32 = 3;  // payload: inner (*Type)
+pub const TY_SLICE: i32 = 4;       // payload: inner (*Type)
+pub const TY_GENERIC: i32 = 5;     // payload: name + type args
+pub const TY_FNPTR: i32 = 6;       // payload: fnptr_params + fnptr_ret
+pub const TY_RESULT: i32 = 7;      // payload: inner (*Type) — `!T`
+pub const TY_DYN: i32 = 8;         // `dyn Trait` — name = trait name. Used behind a pointer (`*dyn Trait`).
+pub const TY_OPTION: i32 = 9;      // payload: inner (*Type) — `?T`
+pub const TY_OPT_RESULT: i32 = 10; // payload: inner (*Type) — `?!T` (3 variants: Some/None/Err)
+pub const TY_ASSOC: i32 = 11;      // `Owner::Name` — owner in inner, assoc name in name
 
 pub struct Type {
-    pub kind: int,
+    pub kind: i32,
     pub name: string,
     pub inner: *Type,
     pub args: *Vector<Type>,  // TY_GENERIC or TY_FNPTR (params)
     pub fnptr_ret: *Type,     // TY_FNPTR ret
-    pub line: int,            // source position of the type name (0 = synthesized)
-    pub col: int,
+    pub line: i32,            // source position of the type name (0 = synthesized)
+    pub col: i32,
 }
 
 pub fn ty_fnptr(params: *Vector<Type>, ret: *Type) -> *Type {
@@ -55,78 +55,78 @@ pub fn ty_generic(name: string, args: *Vector<Type>) -> *Type {
 
 // ---- Expr kinds ----------------------------------------------------------
 
-pub const EX_INT: int = 0;
-pub const EX_FLOAT: int = 1;
-pub const EX_STRING: int = 2;
-pub const EX_BOOL: int = 3;
-pub const EX_NULL: int = 4;
-pub const EX_IDENT: int = 5;
-pub const EX_BINARY: int = 6;       // op (int), lhs, rhs
-pub const EX_UNARY: int = 7;        // op (int), operand
-pub const EX_CALL: int = 8;         // callee, args
-pub const EX_ASSIGN: int = 9;       // op, lhs, rhs
-pub const EX_MEMBER: int = 10;      // obj, field name
-pub const EX_INDEX: int = 11;       // obj, idx
-pub const EX_CAST: int = 12;        // expr, target type
-pub const EX_CHAR: int = 13;        // single char
-pub const EX_MACRO: int = 14;       // name + args (println! etc)
-pub const EX_PATH: int = 15;        // Type::member
-pub const EX_POSTINC: int = 16;     // x++
-pub const EX_POSTDEC: int = 17;     // x--
-pub const EX_STRUCT_LIT: int = 18;  // Foo { fields }
-pub const EX_NEW: int = 19;         // new Foo { fields }
-pub const EX_SIZEOF: int = 20;      // sizeof(T) — cast_to holds the target type
-pub const EX_FNEXPR: int = 21;      // anonymous fn expression (no capture)
-pub const EX_MACRO_VAR: int = 22;   // `$x` placeholder inside a macro body (str_val = "x")
-pub const EX_IF: int = 23;          // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
-pub const EX_BLOCK: int = 24;       // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
-pub const EX_MATCH: int = 25;       // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
+pub const EX_INT: i32 = 0;
+pub const EX_FLOAT: i32 = 1;
+pub const EX_STRING: i32 = 2;
+pub const EX_BOOL: i32 = 3;
+pub const EX_NULL: i32 = 4;
+pub const EX_IDENT: i32 = 5;
+pub const EX_BINARY: i32 = 6;       // op (int), lhs, rhs
+pub const EX_UNARY: i32 = 7;        // op (int), operand
+pub const EX_CALL: i32 = 8;         // callee, args
+pub const EX_ASSIGN: i32 = 9;       // op, lhs, rhs
+pub const EX_MEMBER: i32 = 10;      // obj, field name
+pub const EX_INDEX: i32 = 11;       // obj, idx
+pub const EX_CAST: i32 = 12;        // expr, target type
+pub const EX_CHAR: i32 = 13;        // single char
+pub const EX_MACRO: i32 = 14;       // name + args (println! etc)
+pub const EX_PATH: i32 = 15;        // Type::member
+pub const EX_POSTINC: i32 = 16;     // x++
+pub const EX_POSTDEC: i32 = 17;     // x--
+pub const EX_STRUCT_LIT: i32 = 18;  // Foo { fields }
+pub const EX_NEW: i32 = 19;         // new Foo { fields }
+pub const EX_SIZEOF: i32 = 20;      // sizeof(T) — cast_to holds the target type
+pub const EX_FNEXPR: i32 = 21;      // anonymous fn expression (no capture)
+pub const EX_MACRO_VAR: i32 = 22;   // `$x` placeholder inside a macro body (str_val = "x")
+pub const EX_IF: i32 = 23;          // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
+pub const EX_BLOCK: i32 = 24;       // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
+pub const EX_MATCH: i32 = 25;       // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
 
 // Binary op codes (subset; extend as needed)
-pub const OP_ADD: int = 1;
-pub const OP_SUB: int = 2;
-pub const OP_MUL: int = 3;
-pub const OP_DIV: int = 4;
-pub const OP_MOD: int = 5;
-pub const OP_EQ: int = 6;
-pub const OP_NE: int = 7;
-pub const OP_LT: int = 8;
-pub const OP_LE: int = 9;
-pub const OP_GT: int = 10;
-pub const OP_GE: int = 11;
-pub const OP_AND: int = 12;
-pub const OP_OR: int = 13;
-pub const OP_ASSIGN: int = 14;
-pub const OP_PLUS_ASSIGN: int = 15;
-pub const OP_MINUS_ASSIGN: int = 16;
-pub const OP_STAR_ASSIGN: int = 17;
-pub const OP_SLASH_ASSIGN: int = 18;
-pub const OP_BIT_AND: int = 19;
-pub const OP_BIT_OR: int = 20;
-pub const OP_BIT_XOR: int = 21;
-pub const OP_SHL: int = 22;
-pub const OP_SHR: int = 23;
-pub const OP_COALESCE: int = 24;   // `??` — fallback for ?T / !T / *T-nullable
+pub const OP_ADD: i32 = 1;
+pub const OP_SUB: i32 = 2;
+pub const OP_MUL: i32 = 3;
+pub const OP_DIV: i32 = 4;
+pub const OP_MOD: i32 = 5;
+pub const OP_EQ: i32 = 6;
+pub const OP_NE: i32 = 7;
+pub const OP_LT: i32 = 8;
+pub const OP_LE: i32 = 9;
+pub const OP_GT: i32 = 10;
+pub const OP_GE: i32 = 11;
+pub const OP_AND: i32 = 12;
+pub const OP_OR: i32 = 13;
+pub const OP_ASSIGN: i32 = 14;
+pub const OP_PLUS_ASSIGN: i32 = 15;
+pub const OP_MINUS_ASSIGN: i32 = 16;
+pub const OP_STAR_ASSIGN: i32 = 17;
+pub const OP_SLASH_ASSIGN: i32 = 18;
+pub const OP_BIT_AND: i32 = 19;
+pub const OP_BIT_OR: i32 = 20;
+pub const OP_BIT_XOR: i32 = 21;
+pub const OP_SHL: i32 = 22;
+pub const OP_SHR: i32 = 23;
+pub const OP_COALESCE: i32 = 24;   // `??` — fallback for ?T / !T / *T-nullable
 
 // Unary op codes
-pub const UN_NEG: int = 1;
-pub const UN_NOT: int = 2;
-pub const UN_DEREF: int = 3;
-pub const UN_ADDR: int = 4;
-pub const UN_ADDR_MUT: int = 5;
-pub const UN_BIT_NOT: int = 6;
-pub const UN_TRY: int = 7;        // postfix `?` propagation
+pub const UN_NEG: i32 = 1;
+pub const UN_NOT: i32 = 2;
+pub const UN_DEREF: i32 = 3;
+pub const UN_ADDR: i32 = 4;
+pub const UN_ADDR_MUT: i32 = 5;
+pub const UN_BIT_NOT: i32 = 6;
+pub const UN_TRY: i32 = 7;        // postfix `?` propagation
 
 pub struct Expr {
-    pub kind: int,
-    pub line: int,
-    pub column: int,
+    pub kind: i32,
+    pub line: i32,
+    pub column: i32,
 
     // primitive payloads (used per kind)
     pub int_val: i64,
     pub str_val: string,
     pub bool_val: bool,
-    pub op_code: int,        // for Binary, Unary, Assign
+    pub op_code: i32,        // for Binary, Unary, Assign
 
     // child expressions (used per kind)
     pub lhs: *Expr,          // Binary, Assign, Member, Index, Cast, Call(callee)
@@ -136,8 +136,8 @@ pub struct Expr {
     // call args / member field name
     pub args: *Vector<Expr>, // Call args (we keep them by-value in Vector for simplicity)
     pub field: string,       // Member field, Cast target encoded via type
-    pub field_line: int,     // source position of the member field name (0 = synthesized)
-    pub field_col: int,
+    pub field_line: i32,     // source position of the member field name (0 = synthesized)
+    pub field_col: i32,
     pub cast_to: *Type,
 
     // For EX_STRUCT_LIT: parallel to args, holds field names
@@ -170,49 +170,49 @@ pub struct Expr {
 
 // ---- Stmt kinds ----------------------------------------------------------
 
-pub const ST_LET: int = 0;
-pub const ST_RETURN: int = 1;
-pub const ST_EXPR: int = 2;
-pub const ST_IF: int = 3;
-pub const ST_WHILE: int = 4;
-pub const ST_BLOCK: int = 5;
-pub const ST_FN: int = 6;
-pub const ST_BREAK: int = 7;
-pub const ST_CONTINUE: int = 8;
-pub const ST_STRUCT: int = 9;
-pub const ST_IMPL: int = 10;
-pub const ST_CONST: int = 11;
-pub const ST_FOR: int = 12;
-pub const ST_DEFER: int = 13;
-pub const ST_IMPORT: int = 14;
-pub const ST_ENUM: int = 15;
-pub const ST_MATCH: int = 16;
-pub const ST_SPAWN: int = 17;
-pub const ST_MACRO_DEF: int = 18;   // `macro name!(matchers) { body }` — user-defined macro
-pub const ST_MACRO_REP: int = 19;   // `$( body );*` repetition inside a macro body
-pub const ST_FOR_IN: int = 20;      // `for x in expr [..[=] hi] { body }` — surface form, lowered to ST_FOR before typer/codegen
-pub const ST_WHILE_RECV: int = 21;  // `while let v [: T] = c.recv() { body }` — chan-aware loop with auto close detection
-pub const ST_ASM: int = 22;         // `asm [volatile] { "..." [: outs] [: ins] [: clobbers] }` — GCC inline asm
-pub const ST_CRAW: int = 23;        // `c_raw! { ... }` — raw C/asm payload emitted verbatim. Body lives in `name`.
-pub const ST_TRAIT: int = 24;       // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
-pub const ST_DEFER_ERR: int = 25;   // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
-pub const ST_SELECT: int = 26;      // `select! { arm => stmt; ... }` — race over chan ops. Arms in `select_arms`.
+pub const ST_LET: i32 = 0;
+pub const ST_RETURN: i32 = 1;
+pub const ST_EXPR: i32 = 2;
+pub const ST_IF: i32 = 3;
+pub const ST_WHILE: i32 = 4;
+pub const ST_BLOCK: i32 = 5;
+pub const ST_FN: i32 = 6;
+pub const ST_BREAK: i32 = 7;
+pub const ST_CONTINUE: i32 = 8;
+pub const ST_STRUCT: i32 = 9;
+pub const ST_IMPL: i32 = 10;
+pub const ST_CONST: i32 = 11;
+pub const ST_FOR: i32 = 12;
+pub const ST_DEFER: i32 = 13;
+pub const ST_IMPORT: i32 = 14;
+pub const ST_ENUM: i32 = 15;
+pub const ST_MATCH: i32 = 16;
+pub const ST_SPAWN: i32 = 17;
+pub const ST_MACRO_DEF: i32 = 18;   // `macro name!(matchers) { body }` — user-defined macro
+pub const ST_MACRO_REP: i32 = 19;   // `$( body );*` repetition inside a macro body
+pub const ST_FOR_IN: i32 = 20;      // `for x in expr [..[=] hi] { body }` — surface form, lowered to ST_FOR before typer/codegen
+pub const ST_WHILE_RECV: i32 = 21;  // `while let v [: T] = c.recv() { body }` — chan-aware loop with auto close detection
+pub const ST_ASM: i32 = 22;         // `asm [volatile] { "..." [: outs] [: ins] [: clobbers] }` — GCC inline asm
+pub const ST_CRAW: i32 = 23;        // `c_raw! { ... }` — raw C/asm payload emitted verbatim. Body lives in `name`.
+pub const ST_TRAIT: i32 = 24;       // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
+pub const ST_DEFER_ERR: i32 = 25;   // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
+pub const ST_SELECT: i32 = 26;      // `select! { arm => stmt; ... }` — race over chan ops. Arms in `select_arms`.
 
 // SelectArm.kind values
-pub const SEL_RECV: int = 0;        // `var = c.recv() => stmt`            — bind T value
-pub const SEL_SEND: int = 1;        // `c.send(v) => stmt`                  — fire when send completes
-pub const SEL_DEFAULT: int = 2;     // `default => stmt`                    — non-blocking fallback
-pub const SEL_RECV_SOME: int = 3;   // `Some(v) = c.recv() => stmt`         — bind on value
-pub const SEL_RECV_NONE: int = 4;   // `None = c.recv() => stmt`            — fire on close+empty
+pub const SEL_RECV: i32 = 0;        // `var = c.recv() => stmt`            — bind T value
+pub const SEL_SEND: i32 = 1;        // `c.send(v) => stmt`                  — fire when send completes
+pub const SEL_DEFAULT: i32 = 2;     // `default => stmt`                    — non-blocking fallback
+pub const SEL_RECV_SOME: i32 = 3;   // `Some(v) = c.recv() => stmt`         — bind on value
+pub const SEL_RECV_NONE: i32 = 4;   // `None = c.recv() => stmt`            — fire on close+empty
 
 pub struct SelectArm {
-    pub kind: int,
+    pub kind: i32,
     pub chan_expr: *Expr,        // the chan receiver (for recv/send/some/none)
     pub bind_name: string,       // var name for SEL_RECV / SEL_RECV_SOME
     pub send_value: *Expr,       // value to send for SEL_SEND
     pub body: *Vector<Stmt>,     // arm body stmts
-    pub line: int,
-    pub column: int,
+    pub line: i32,
+    pub column: i32,
 }
 
 pub struct Param {
@@ -222,8 +222,8 @@ pub struct Param {
     // parser; analyses use it to anchor diagnostics at the right
     // token (e.g. unused-param points at `y`, not at the fn name)
     // and `glide fix` reuses it to splice in `_` prefixes.
-    pub name_line: int,
-    pub name_col: int,
+    pub name_line: i32,
+    pub name_col: i32,
 }
 
 pub struct Field {
@@ -258,17 +258,17 @@ pub struct MacroParam {
 pub struct Attr {
     pub name: string,
     pub args: *Vector<Expr>,
-    pub line: int,
-    pub column: int,
+    pub line: i32,
+    pub column: i32,
 }
 
 pub struct Stmt {
-    pub kind: int,
-    pub line: int,
-    pub column: int,
-    pub name_line: int,            // position of the declared name (fn/struct/enum/const/let)
-    pub name_col: int,
-    pub name_len: int,
+    pub kind: i32,
+    pub line: i32,
+    pub column: i32,
+    pub name_line: i32,            // position of the declared name (fn/struct/enum/const/let)
+    pub name_col: i32,
+    pub name_len: i32,
     pub is_pub: bool,
     pub origin: string,            // file path; set by load_into_str on top-level stmts
     pub doc_comment: string,       // contiguous `//` block above the decl (LSP hover)
@@ -453,28 +453,28 @@ pub fn ast_fill_defaults(s: *Stmt) {
     // Recurse into the fn body so nested stmts (e.g. an emitted
     // ST_RETURN with its expr_value) also get their defaults.
     if s.fn_body != null {
-        for let i: int = 0; i < s.fn_body.len(); i++ {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let inner: Stmt = s.fn_body.get(i);
             ast_fill_defaults(&inner);
             s.fn_body.set(i, inner);
         }
     }
     if s.then_body != null {
-        for let i: int = 0; i < s.then_body.len(); i++ {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
             let inner: Stmt = s.then_body.get(i);
             ast_fill_defaults(&inner);
             s.then_body.set(i, inner);
         }
     }
     if s.else_body != null {
-        for let i: int = 0; i < s.else_body.len(); i++ {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
             let inner: Stmt = s.else_body.get(i);
             ast_fill_defaults(&inner);
             s.else_body.set(i, inner);
         }
     }
     if s.impl_methods != null {
-        for let i: int = 0; i < s.impl_methods.len(); i++ {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let inner: Stmt = s.impl_methods.get(i);
             ast_fill_defaults(&inner);
             s.impl_methods.set(i, inner);
@@ -512,14 +512,14 @@ pub fn make_field(name: string, ty: *Type, is_pub: bool) -> *Field {
 // intrinsic; calls from outside a macro context (typer-time test
 // fixtures, the macro fn's own compiled-Glide path) hit this
 // implementation instead.
-pub fn expr_ident_unsafe(name: string, line: int, col: int) -> *Expr {
+pub fn expr_ident_unsafe(name: string, line: i32, col: i32) -> *Expr {
     return expr_ident(name, line, col);
 }
 
 // Hygiene opt-out for let bindings: emit a `let <name> = ...` with
 // the literal name. Same passthrough trick as expr_ident_unsafe.
 pub fn stmt_let_unsafe(name: string, ty: *Type, value: *Expr,
-                       is_mut: bool, line: int, col: int) -> *Stmt {
+                       is_mut: bool, line: i32, col: i32) -> *Stmt {
     return stmt_let(name, ty, value, is_mut, line, col);
 }
 
@@ -583,7 +583,7 @@ pub fn ty_pointer(inner: *Type) -> *Type {
     return t;
 }
 
-pub fn expr_int(n: i64, line: int, col: int) -> *Expr {
+pub fn expr_int(n: i64, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_INT;
     e.line = line;
@@ -592,7 +592,7 @@ pub fn expr_int(n: i64, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_float(lexeme: string, line: int, col: int) -> *Expr {
+pub fn expr_float(lexeme: string, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_FLOAT;
     e.line = line;
@@ -601,7 +601,7 @@ pub fn expr_float(lexeme: string, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_string(s: string, line: int, col: int) -> *Expr {
+pub fn expr_string(s: string, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_STRING;
     e.line = line;
@@ -610,7 +610,7 @@ pub fn expr_string(s: string, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_ident(name: string, line: int, col: int) -> *Expr {
+pub fn expr_ident(name: string, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_IDENT;
     e.line = line;
@@ -619,7 +619,7 @@ pub fn expr_ident(name: string, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_bool(b: bool, line: int, col: int) -> *Expr {
+pub fn expr_bool(b: bool, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_BOOL;
     e.line = line;
@@ -628,7 +628,7 @@ pub fn expr_bool(b: bool, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_binary(op: int, lhs: *Expr, rhs: *Expr) -> *Expr {
+pub fn expr_binary(op: i32, lhs: *Expr, rhs: *Expr) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_BINARY;
     e.line = lhs.line;
@@ -649,7 +649,7 @@ pub fn expr_call(callee: *Expr, args: *Vector<Expr>) -> *Expr {
     return e;
 }
 
-pub fn stmt_let(name: string, ty: *Type, value: *Expr, is_mut: bool, line: int, col: int) -> *Stmt {
+pub fn stmt_let(name: string, ty: *Type, value: *Expr, is_mut: bool, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_LET;
     s.line = line;
@@ -673,7 +673,7 @@ pub fn int_to_str(n: i64) -> string {
     if x < 0 { neg = true; x = -x; }
     let mut s: string = "";
     while x > 0 {
-        let d: int = (x % 10) as int;
+        let d: i32 = (x % 10) as i32;
         let ch: string = digit_str(d);
         s = ch.concat(s);
         x = x / 10;
@@ -682,7 +682,7 @@ pub fn int_to_str(n: i64) -> string {
     return s;
 }
 
-pub fn digit_str(d: int) -> string {
+pub fn digit_str(d: i32) -> string {
     if d == 0 { return "0"; }
     if d == 1 { return "1"; }
     if d == 2 { return "2"; }
@@ -705,7 +705,7 @@ pub fn strip_ptr(t: *Type) -> *Type {
     return t;
 }
 
-pub fn stmt_return(v: *Expr, line: int, col: int) -> *Stmt {
+pub fn stmt_return(v: *Expr, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_RETURN;
     s.line = line;
@@ -725,7 +725,7 @@ pub fn stmt_expr(e: *Expr) -> *Stmt {
     return s;
 }
 
-pub fn stmt_fn(name: string, params: *Vector<Param>, ret_ty: *Type, body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
+pub fn stmt_fn(name: string, params: *Vector<Param>, ret_ty: *Type, body: *Vector<Stmt>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_FN;
     s.line = line;
@@ -737,7 +737,7 @@ pub fn stmt_fn(name: string, params: *Vector<Param>, ret_ty: *Type, body: *Vecto
     return s;
 }
 
-pub fn stmt_struct(name: string, fields: *Vector<Field>, line: int, col: int) -> *Stmt {
+pub fn stmt_struct(name: string, fields: *Vector<Field>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_STRUCT;
     s.line = line;
@@ -747,7 +747,7 @@ pub fn stmt_struct(name: string, fields: *Vector<Field>, line: int, col: int) ->
     return s;
 }
 
-pub fn stmt_impl(target: *Type, methods: *Vector<Stmt>, line: int, col: int) -> *Stmt {
+pub fn stmt_impl(target: *Type, methods: *Vector<Stmt>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_IMPL;
     s.line = line;
@@ -761,13 +761,13 @@ pub fn stmt_impl(target: *Type, methods: *Vector<Stmt>, line: int, col: int) -> 
 // macros — the parser sets `impl_trait_name` on a regular stmt_impl,
 // but macro emitters need a single-call constructor since the
 // interpreter has no field setters.
-pub fn stmt_impl_trait(target: *Type, trait_name: string, methods: *Vector<Stmt>, line: int, col: int) -> *Stmt {
+pub fn stmt_impl_trait(target: *Type, trait_name: string, methods: *Vector<Stmt>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = stmt_impl(target, methods, line, col);
     s.impl_trait_name = trait_name;
     return s;
 }
 
-pub fn stmt_if(cond: *Expr, then_body: *Vector<Stmt>, else_body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
+pub fn stmt_if(cond: *Expr, then_body: *Vector<Stmt>, else_body: *Vector<Stmt>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_IF;
     s.line = line;
@@ -778,7 +778,7 @@ pub fn stmt_if(cond: *Expr, then_body: *Vector<Stmt>, else_body: *Vector<Stmt>, 
     return s;
 }
 
-pub fn stmt_while(cond: *Expr, body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
+pub fn stmt_while(cond: *Expr, body: *Vector<Stmt>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_WHILE;
     s.line = line;
@@ -788,7 +788,7 @@ pub fn stmt_while(cond: *Expr, body: *Vector<Stmt>, line: int, col: int) -> *Stm
     return s;
 }
 
-pub fn stmt_for(init: *Stmt, cond: *Expr, step: *Expr, body: *Vector<Stmt>, line: int, col: int) -> *Stmt {
+pub fn stmt_for(init: *Stmt, cond: *Expr, step: *Expr, body: *Vector<Stmt>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_FOR;
     s.line = line;
@@ -800,7 +800,7 @@ pub fn stmt_for(init: *Stmt, cond: *Expr, step: *Expr, body: *Vector<Stmt>, line
     return s;
 }
 
-pub fn stmt_break(line: int, col: int) -> *Stmt {
+pub fn stmt_break(line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_BREAK;
     s.line = line;
@@ -808,7 +808,7 @@ pub fn stmt_break(line: int, col: int) -> *Stmt {
     return s;
 }
 
-pub fn stmt_continue(line: int, col: int) -> *Stmt {
+pub fn stmt_continue(line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_CONTINUE;
     s.line = line;
@@ -816,7 +816,7 @@ pub fn stmt_continue(line: int, col: int) -> *Stmt {
     return s;
 }
 
-pub fn stmt_const(name: string, ty: *Type, value: *Expr, line: int, col: int) -> *Stmt {
+pub fn stmt_const(name: string, ty: *Type, value: *Expr, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_CONST;
     s.line = line;
@@ -827,7 +827,7 @@ pub fn stmt_const(name: string, ty: *Type, value: *Expr, line: int, col: int) ->
     return s;
 }
 
-pub fn stmt_import(path: string, line: int, col: int) -> *Stmt {
+pub fn stmt_import(path: string, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_IMPORT;
     s.line = line;
@@ -836,7 +836,7 @@ pub fn stmt_import(path: string, line: int, col: int) -> *Stmt {
     return s;
 }
 
-pub fn stmt_enum(name: string, variants: *Vector<EnumVariant>, line: int, col: int) -> *Stmt {
+pub fn stmt_enum(name: string, variants: *Vector<EnumVariant>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_ENUM;
     s.line = line;
@@ -846,7 +846,7 @@ pub fn stmt_enum(name: string, variants: *Vector<EnumVariant>, line: int, col: i
     return s;
 }
 
-pub fn stmt_spawn(call: *Expr, line: int, col: int) -> *Stmt {
+pub fn stmt_spawn(call: *Expr, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_SPAWN;
     s.line = line;
@@ -855,7 +855,7 @@ pub fn stmt_spawn(call: *Expr, line: int, col: int) -> *Stmt {
     return s;
 }
 
-pub fn stmt_match(scrutinee: *Expr, arms: *Vector<MatchArm>, line: int, col: int) -> *Stmt {
+pub fn stmt_match(scrutinee: *Expr, arms: *Vector<MatchArm>, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_MATCH;
     s.line = line;
@@ -865,7 +865,7 @@ pub fn stmt_match(scrutinee: *Expr, arms: *Vector<MatchArm>, line: int, col: int
     return s;
 }
 
-pub fn stmt_craw(body: string, line: int, col: int) -> *Stmt {
+pub fn stmt_craw(body: string, line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_CRAW;
     s.line = line;
@@ -874,7 +874,7 @@ pub fn stmt_craw(body: string, line: int, col: int) -> *Stmt {
     return s;
 }
 
-pub fn stmt_asm(line: int, col: int) -> *Stmt {
+pub fn stmt_asm(line: i32, col: i32) -> *Stmt {
     let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     s.kind = ST_ASM;
     s.line = line;
@@ -894,7 +894,7 @@ pub fn stmt_asm(line: int, col: int) -> *Stmt {
     return s;
 }
 
-pub fn expr_unary(op: int, operand: *Expr, line: int, col: int) -> *Expr {
+pub fn expr_unary(op: i32, operand: *Expr, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_UNARY;
     e.line = line;
@@ -904,7 +904,7 @@ pub fn expr_unary(op: int, operand: *Expr, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_assign(op: int, lhs: *Expr, rhs: *Expr) -> *Expr {
+pub fn expr_assign(op: i32, lhs: *Expr, rhs: *Expr) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_ASSIGN;
     e.line = lhs.line;
@@ -945,7 +945,7 @@ pub fn expr_cast(inner: *Expr, target: *Type) -> *Expr {
     return e;
 }
 
-pub fn expr_path(ty: string, member: string, line: int, col: int) -> *Expr {
+pub fn expr_path(ty: string, member: string, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_PATH;
     e.line = line;
@@ -955,7 +955,7 @@ pub fn expr_path(ty: string, member: string, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_macro(name: string, args: *Vector<Expr>, line: int, col: int) -> *Expr {
+pub fn expr_macro(name: string, args: *Vector<Expr>, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_MACRO;
     e.line = line;
@@ -966,7 +966,7 @@ pub fn expr_macro(name: string, args: *Vector<Expr>, line: int, col: int) -> *Ex
     return e;
 }
 
-pub fn expr_macro_var(name: string, line: int, col: int) -> *Expr {
+pub fn expr_macro_var(name: string, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_MACRO_VAR;
     e.line = line;
@@ -975,7 +975,7 @@ pub fn expr_macro_var(name: string, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_char(c: char, line: int, col: int) -> *Expr {
+pub fn expr_char(c: char, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_CHAR;
     e.line = line;
@@ -984,7 +984,7 @@ pub fn expr_char(c: char, line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_null(line: int, col: int) -> *Expr {
+pub fn expr_null(line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_NULL;
     e.line = line;
@@ -992,7 +992,7 @@ pub fn expr_null(line: int, col: int) -> *Expr {
     return e;
 }
 
-pub fn expr_if(cond: *Expr, then_e: *Expr, else_e: *Expr, line: int, col: int) -> *Expr {
+pub fn expr_if(cond: *Expr, then_e: *Expr, else_e: *Expr, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_IF;
     e.line = line;
@@ -1003,7 +1003,7 @@ pub fn expr_if(cond: *Expr, then_e: *Expr, else_e: *Expr, line: int, col: int) -
     return e;
 }
 
-pub fn expr_match(scrut: *Expr, arms: *Vector<MatchArm>, line: int, col: int) -> *Expr {
+pub fn expr_match(scrut: *Expr, arms: *Vector<MatchArm>, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_MATCH;
     e.line = line;
@@ -1013,7 +1013,7 @@ pub fn expr_match(scrut: *Expr, arms: *Vector<MatchArm>, line: int, col: int) ->
     return e;
 }
 
-pub fn expr_block(stmts: *Vector<Stmt>, value: *Expr, line: int, col: int) -> *Expr {
+pub fn expr_block(stmts: *Vector<Stmt>, value: *Expr, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_BLOCK;
     e.line = line;
@@ -1032,7 +1032,7 @@ pub fn expr_postinc(inner: *Expr) -> *Expr {
     return e;
 }
 
-pub fn expr_fnexpr(params: *Vector<Param>, ret_ty: *Type, body: *Vector<Stmt>, line: int, col: int) -> *Expr {
+pub fn expr_fnexpr(params: *Vector<Param>, ret_ty: *Type, body: *Vector<Stmt>, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_FNEXPR;
     e.line = line;
@@ -1057,7 +1057,7 @@ pub struct StructLitField {
     pub value: *Expr,
 }
 
-pub fn expr_struct_lit(type_name: string, names: *Vector<string>, values: *Vector<Expr>, line: int, col: int) -> *Expr {
+pub fn expr_struct_lit(type_name: string, names: *Vector<string>, values: *Vector<Expr>, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_STRUCT_LIT;
     e.line = line;
@@ -1078,13 +1078,13 @@ pub fn expr_struct_lit(type_name: string, names: *Vector<string>, values: *Vecto
 // build-failing-on-error treatment as a built-in check. Lives in `bootstrap`
 // (compiler-only), so it adds nothing to a compiled user program.
 
-extern fn __glide_pd_push(line: int, col: int, severity: int, code: string, msg: string);
-extern fn __glide_pd_count() -> int;
-extern fn __glide_pd_line(i: int) -> int;
-extern fn __glide_pd_col(i: int) -> int;
-extern fn __glide_pd_sev(i: int) -> int;
-extern fn __glide_pd_code(i: int) -> string;
-extern fn __glide_pd_msg(i: int) -> string;
+extern fn __glide_pd_push(line: i32, col: i32, severity: i32, code: string, msg: string);
+extern fn __glide_pd_count() -> i32;
+extern fn __glide_pd_line(i: i32) -> i32;
+extern fn __glide_pd_col(i: i32) -> i32;
+extern fn __glide_pd_sev(i: i32) -> i32;
+extern fn __glide_pd_code(i: i32) -> string;
+extern fn __glide_pd_msg(i: i32) -> string;
 extern fn __glide_pd_reset();
 
 c_raw! {
@@ -1120,6 +1120,6 @@ c_raw! {
 /// ```glide
 /// pass_diag(s.line, s.column, 1, "no-todo", "TODO left in shipped code");
 /// ```
-pub fn pass_diag(line: int, col: int, severity: int, code: string, msg: string) {
+pub fn pass_diag(line: i32, col: i32, severity: i32, code: string, msg: string) {
     __glide_pd_push(line, col, severity, code, msg);
 }

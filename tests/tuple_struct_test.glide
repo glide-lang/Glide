@@ -6,25 +6,25 @@ import stdlib::testing::*;
 
 struct ApiKey(key: string)
 
-struct Pair(first: int, second: int)
+struct Pair(first: i32, second: i32)
 
 struct Nested(label: string, pair: Pair)
 
 
-fn test_single_field() -> int {
+fn test_single_field() -> i32 {
     let k: ApiKey = ApiKey { key: "secret-123" };
     assert_str_eq!(k.key, "secret-123");
     return 0;
 }
 
-fn test_multi_field() -> int {
+fn test_multi_field() -> i32 {
     let p: Pair = Pair { first: 1, second: 2 };
     assert_eq!(p.first, 1);
     assert_eq!(p.second, 2);
     return 0;
 }
 
-fn test_nested_tuple_struct() -> int {
+fn test_nested_tuple_struct() -> i32 {
     let inner: Pair = Pair { first: 10, second: 20 };
     let n: Nested = Nested { label: "hi", pair: inner };
     assert_str_eq!(n.label, "hi");
@@ -32,7 +32,7 @@ fn test_nested_tuple_struct() -> int {
     return 0;
 }
 
-fn test_fields_implicitly_pub() -> int {
+fn test_fields_implicitly_pub() -> i32 {
     // If the field weren't pub, this would be a compile error
     // (private field accessed from outside the defining module).
     // Tests run in a synth main file so "outside" is a stretch, but

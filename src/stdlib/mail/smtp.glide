@@ -27,7 +27,7 @@ import stdlib::mail::message::*;
 
 pub struct SmtpClient {
     pub host: string,
-    pub port: int,
+    pub port: i32,
     /// Wrap the connection in TLS from the very first byte (port 465
     /// / SMTPS). Mutually exclusive with `use_starttls`.
     pub use_tls: bool,
@@ -36,7 +36,7 @@ pub struct SmtpClient {
     pub use_starttls: bool,
     pub username: ?string,
     pub password: ?string,
-    pub timeout_ms: int,
+    pub timeout_ms: i32,
     /// Skip TLS cert validation. Local dev only.
     pub tls_insecure: bool,
     /// Auth mechanism:
@@ -58,7 +58,7 @@ impl SmtpClient {
     /// c.username = some("me@gmail.com");
     /// c.password = some("app-password");
     /// ```
-    pub fn new(host: string, port: int) -> *SmtpClient {
+    pub fn new(host: string, port: i32) -> *SmtpClient {
         let c: *SmtpClient = malloc(sizeof(SmtpClient)) as *SmtpClient;
         c.host = host;
         c.port = port;
@@ -85,12 +85,12 @@ impl SmtpClient {
     /// let r: !int = c.send(m);
     /// if !r.ok { eprintln(r.err); }
     /// ```
-    pub fn send(self: *SmtpClient, mail: *Mail) -> !int {
+    pub fn send(self: *SmtpClient, mail: *Mail) -> !i32 {
         let sr: !*SmtpSession = self.connect();
         if !sr.ok { return err(sr.err); }
         let s: *SmtpSession = sr.val;
-        let r: !int = s.send_mail(mail);
-        let _: !int = s.quit();
+        let r: !i32 = s.send_mail(mail);
+        let _: !i32 = s.quit();
         s.close();
         return r;
     }
@@ -142,13 +142,13 @@ impl SmtpClient {
         }
 
         // EHLO
-        let er: !int = s._ehlo();
+        let er: !i32 = s._ehlo();
         if !er.ok { s.close(); return err(er.err); }
 
         if self.use_starttls && !s.is_tls {
             // STARTTLS upgrade: ask the server to flip to TLS, attach
             // a TlsStream onto the same fd, then re-EHLO over TLS.
-            let st: !int = s._cmd_check("STARTTLS\r\n", 220);
+            let st: !i32 = s._cmd_check("STARTTLS\r\n", 220);
             if !st.ok { s.close(); return err(st.err); }
 
             let cfg: *TlsConfig = TlsConfig::client();
@@ -163,12 +163,12 @@ impl SmtpClient {
             // RFC 3207 §4.2: after STARTTLS the client MUST re-issue
             // EHLO so the server's capabilities are re-advertised in
             // the protected channel.
-            let er: !int = s._ehlo();
+            let er: !i32 = s._ehlo();
             if !er.ok { s.close(); return err(er.err); }
         }
 
         if self.username.has && self.password.has {
-            let ar: !int = s._auth_dispatch(self.username.val,
+            let ar: !i32 = s._auth_dispatch(self.username.val,
                                               self.password.val,
                                               self.auth_method);
             if !ar.ok { s.close(); return err(ar.err); }
@@ -178,7 +178,7 @@ impl SmtpClient {
 }
 
 pub struct SmtpReply {
-    pub code: int,
+    pub code: i32,
     pub text: string,   // last reply line (server may send multi-line)
 }
 
@@ -201,31 +201,31 @@ impl SmtpSession {
     /// let r: !int = session.send_mail(mail);
     /// if r.ok { println!("delivered"); }
     /// ```
-    pub fn send_mail(self: *SmtpSession, mail: *Mail) -> !int {
+    pub fn send_mail(self: *SmtpSession, mail: *Mail) -> !i32 {
         // MAIL FROM
-        let mr: !int = self._cmd_check("MAIL FROM:<".concat(mail.from).concat(">\r\n"), 250);
+        let mr: !i32 = self._cmd_check("MAIL FROM:<".concat(mail.from).concat(">\r\n"), 250);
         if !mr.ok { return err(mr.err); }
         // RCPT TO — to + cc + bcc
-        for let i: int = 0; i < mail.to.len(); i++ {
-            let r: !int = self._cmd_check("RCPT TO:<".concat(mail.to.get(i)).concat(">\r\n"), 250);
+        for let i: i32 = 0; i < mail.to.len(); i++ {
+            let r: !i32 = self._cmd_check("RCPT TO:<".concat(mail.to.get(i)).concat(">\r\n"), 250);
             if !r.ok { return err(r.err); }
         }
-        for let i: int = 0; i < mail.cc.len(); i++ {
-            let r: !int = self._cmd_check("RCPT TO:<".concat(mail.cc.get(i)).concat(">\r\n"), 250);
+        for let i: i32 = 0; i < mail.cc.len(); i++ {
+            let r: !i32 = self._cmd_check("RCPT TO:<".concat(mail.cc.get(i)).concat(">\r\n"), 250);
             if !r.ok { return err(r.err); }
         }
-        for let i: int = 0; i < mail.bcc.len(); i++ {
-            let r: !int = self._cmd_check("RCPT TO:<".concat(mail.bcc.get(i)).concat(">\r\n"), 250);
+        for let i: i32 = 0; i < mail.bcc.len(); i++ {
+            let r: !i32 = self._cmd_check("RCPT TO:<".concat(mail.bcc.get(i)).concat(">\r\n"), 250);
             if !r.ok { return err(r.err); }
         }
         // DATA
-        let d: !int = self._cmd_check("DATA\r\n", 354);
+        let d: !i32 = self._cmd_check("DATA\r\n", 354);
         if !d.ok { return err(d.err); }
 
         let wire: string = mail.to_rfc5322();
         let dotted: string = _dot_stuff(wire);
-        let _w: !int = self._write(dotted);
-        let _wend: !int = self._write("\r\n.\r\n");
+        let _w: !i32 = self._write(dotted);
+        let _wend: !i32 = self._write("\r\n.\r\n");
         let final: !*SmtpReply = self._read_reply();
         if !final.ok { return err(final.err); }
         if final.val.code < 200 || final.val.code >= 300 {
@@ -241,7 +241,7 @@ impl SmtpSession {
     /// session.quit();
     /// session.close();
     /// ```
-    pub fn quit(self: *SmtpSession) -> !int {
+    pub fn quit(self: *SmtpSession) -> !i32 {
         return self._cmd_check("QUIT\r\n", 221);
     }
 
@@ -257,12 +257,12 @@ impl SmtpSession {
         free(self as *void);
     }
 
-    fn _write(self: *SmtpSession, data: string) -> !int {
+    fn _write(self: *SmtpSession, data: string) -> !i32 {
         if self.is_tls { return self.tls.write_all(data); }
         return self.tcp.write_all(data);
     }
 
-    fn _read(self: *SmtpSession, max: int) -> !string {
+    fn _read(self: *SmtpSession, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
         return self.tcp.read(max);
     }
@@ -271,7 +271,7 @@ impl SmtpSession {
         // Multi-line replies: each line "ddd-text" until "ddd text" (space).
         let mut acc: string = "";
         let mut last_text: string = "";
-        let mut last_code: int = 0;
+        let mut last_code: i32 = 0;
         while true {
             // Read until we have at least one full \r\n line.
             while acc.index_of("\r\n") < 0 {
@@ -280,16 +280,16 @@ impl SmtpSession {
                 if r.val.len() == 0 { return err("smtp: connection closed during reply"); }
                 acc = acc.concat(r.val);
             }
-            let nl: int = acc.index_of("\r\n");
+            let nl: i32 = acc.index_of("\r\n");
             let line: string = acc.substring(0, nl);
             acc = acc.substring(nl + 2, acc.len());
             if line.len() < 4 { return err("smtp: short reply line"); }
             let code_s: string = line.substring(0, 3);
-            let cr: !int = code_s.try_parse_int();
+            let cr: !i32 = code_s.try_parse_int();
             if !cr.ok { return err("smtp: non-numeric reply code"); }
             last_code = cr.val;
             last_text = line.substring(4, line.len());
-            let sep: int = line.at(3).to_int();
+            let sep: i32 = line.at(3).to_int();
             if sep == 32 { break; }       // space → final line
             if sep != 45 { return err("smtp: bad reply continuation"); }  // expect dash
         }
@@ -299,8 +299,8 @@ impl SmtpSession {
         return ok(r);
     }
 
-    fn _cmd_check(self: *SmtpSession, cmd: string, want: int) -> !int {
-        let _: !int = self._write(cmd);
+    fn _cmd_check(self: *SmtpSession, cmd: string, want: i32) -> !i32 {
+        let _: !i32 = self._write(cmd);
         let r: !*SmtpReply = self._read_reply();
         if !r.ok { return err(r.err); }
         if r.val.code != want {
@@ -314,10 +314,10 @@ impl SmtpSession {
     /// Send EHLO and walk every continuation line, recording any
     /// `AUTH ...` extension into `self.auth_mechs` so a later
     /// `_auth_dispatch` can pick the right mechanism.
-    fn _ehlo(self: *SmtpSession) -> !int {
+    fn _ehlo(self: *SmtpSession) -> !i32 {
         self.auth_mechs = "";
-        let _w: !int = self._write("EHLO ".concat(_local_hostname()).concat("\r\n"));
-        let mut last_code: int = 0;
+        let _w: !i32 = self._write("EHLO ".concat(_local_hostname()).concat("\r\n"));
+        let mut last_code: i32 = 0;
         let mut acc: string = "";
         while true {
             while acc.index_of("\r\n") < 0 {
@@ -326,12 +326,12 @@ impl SmtpSession {
                 if r.val.len() == 0 { return err("smtp: connection closed during EHLO"); }
                 acc = acc.concat(r.val);
             }
-            let nl: int = acc.index_of("\r\n");
+            let nl: i32 = acc.index_of("\r\n");
             let line: string = acc.substring(0, nl);
             acc = acc.substring(nl + 2, acc.len());
             if line.len() < 4 { return err("smtp: short EHLO line"); }
             let code_s: string = line.substring(0, 3);
-            let cr: !int = code_s.try_parse_int();
+            let cr: !i32 = code_s.try_parse_int();
             if !cr.ok { return err("smtp: non-numeric EHLO code"); }
             last_code = cr.val;
             if last_code != 250 {
@@ -348,7 +348,7 @@ impl SmtpSession {
                 // RFC 2222 historic empty form.
                 self.auth_mechs = "";
             }
-            let sep: int = line.at(3).to_int();
+            let sep: i32 = line.at(3).to_int();
             if sep == 32 { return ok(0); }    // space → final line
             if sep != 45 { return err("smtp: bad EHLO continuation"); }
         }
@@ -356,7 +356,7 @@ impl SmtpSession {
     }
 
     fn _auth_dispatch(self: *SmtpSession, user: string, pass: string,
-                      pref: string) -> !int {
+                      pref: string) -> !i32 {
         let p: string = pref.to_lower();
         if p.eq("plain") { return self._auth_plain(user, pass); }
         if p.eq("login") { return self._auth_login(user, pass); }
@@ -370,7 +370,7 @@ impl SmtpSession {
         return self._auth_plain(user, pass);
     }
 
-    fn _auth_plain(self: *SmtpSession, user: string, pass: string) -> !int {
+    fn _auth_plain(self: *SmtpSession, user: string, pass: string) -> !i32 {
         // PLAIN: base64(\0 user \0 pass) — RFC 4616
         let nul: string = (0 as char).to_string();
         let raw: string = nul.concat(user).concat(nul).concat(pass);
@@ -382,14 +382,14 @@ impl SmtpSession {
     /// 334 server prompts (typically containing base64 "Username:"
     /// and "Password:"); we ignore the prompt content and just send
     /// our base64-encoded user / pass in turn.
-    fn _auth_login(self: *SmtpSession, user: string, pass: string) -> !int {
-        let r1: !int = self._cmd_check("AUTH LOGIN\r\n", 334);
+    fn _auth_login(self: *SmtpSession, user: string, pass: string) -> !i32 {
+        let r1: !i32 = self._cmd_check("AUTH LOGIN\r\n", 334);
         if !r1.ok { return err(r1.err); }
         let user_b64: string = b64_encode(user);
-        let r2: !int = self._cmd_check(user_b64.concat("\r\n"), 334);
+        let r2: !i32 = self._cmd_check(user_b64.concat("\r\n"), 334);
         if !r2.ok { return err(r2.err); }
         let pass_b64: string = b64_encode(pass);
-        let r3: !int = self._cmd_check(pass_b64.concat("\r\n"), 235);
+        let r3: !i32 = self._cmd_check(pass_b64.concat("\r\n"), 235);
         if !r3.ok { return err(r3.err); }
         return ok(0);
     }
@@ -403,8 +403,8 @@ impl SmtpSession {
 fn _dot_stuff(s: string) -> string {
     let mut out: string = "";
     let mut at_line_start: bool = true;
-    for let i: int = 0; i < s.len(); i++ {
-        let c: int = s.at(i).to_int();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
         if at_line_start && c == 46 { out = out.concat("."); }
         out = out.concat((c as char).to_string());
         if c == 10 { at_line_start = true; }
@@ -419,20 +419,20 @@ fn _local_hostname() -> string { return "glide.local"; }
 /// `_word_in_list("plain login cram-md5", "login")` → true.
 fn _word_in_list(haystack: string, needle: string) -> bool {
     let parts: *Vector<string> = haystack.split(" ");
-    for let i: int = 0; i < parts.len(); i++ {
+    for let i: i32 = 0; i < parts.len(); i++ {
         if parts.get(i).eq(needle) { return true; }
     }
     return false;
 }
 
-fn _smtp_itos(n: int) -> string {
+fn _smtp_itos(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut x: int = n;
+    let mut x: i32 = n;
     let mut neg: bool = false;
     if x < 0 { neg = true; x = 0 - x; }
     let mut s: string = "";
     while x > 0 {
-        let d: int = x % 10;
+        let d: i32 = x % 10;
         s = ((48 + d) as char).to_string().concat(s);
         x = x / 10;
     }

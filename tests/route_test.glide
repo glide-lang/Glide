@@ -31,7 +31,7 @@ fn _mk_req(method: string, path: string, body: string) -> HttpRequest {
     };
 }
 
-fn test_get_health_returns_200() -> int {
+fn test_get_health_returns_200() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/health", "");
@@ -40,7 +40,7 @@ fn test_get_health_returns_200() -> int {
     return 0;
 }
 
-fn test_post_echo_returns_body() -> int {
+fn test_post_echo_returns_body() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("POST", "/echo", "hello");
@@ -50,7 +50,7 @@ fn test_post_echo_returns_body() -> int {
     return 0;
 }
 
-fn test_put_returns_202() -> int {
+fn test_put_returns_202() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("PUT", "/update", "");
@@ -59,7 +59,7 @@ fn test_put_returns_202() -> int {
     return 0;
 }
 
-fn test_delete_returns_204() -> int {
+fn test_delete_returns_204() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("DELETE", "/del", "");
@@ -68,7 +68,7 @@ fn test_delete_returns_204() -> int {
     return 0;
 }
 
-fn test_unknown_route_returns_404() -> int {
+fn test_unknown_route_returns_404() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/nope", "");
@@ -77,7 +77,7 @@ fn test_unknown_route_returns_404() -> int {
     return 0;
 }
 
-fn test_method_mismatch_returns_404() -> int {
+fn test_method_mismatch_returns_404() -> i32 {
     let r: *Router = Router::new();
     routes!(r);
     let req: HttpRequest = _mk_req("GET", "/echo", "");

@@ -28,9 +28,9 @@ pub struct HashMap<V> {
     /// Per-slot occupancy flag. Open-addressing requires this for probing.
     occupied: *bool,
     /// Number of live entries.
-    len: int,
+    len: i32,
     /// Allocation size in slots. Always a power of two once non-zero.
-    cap: int,
+    cap: i32,
     /// Set when the slot buffers were bump-allocated by the active arena
     /// (LSP path) rather than via libc malloc. Resize / free skip libc free
     /// when this is true; the arena reclaims everything in bulk.
@@ -69,7 +69,7 @@ impl<V> HashMap<V> {
     /// m.insert("b", 2);
     /// m.len();   // 2
     /// ```
-    fn len(self: *HashMap<V>) -> int { return self.len; }
+    fn len(self: *HashMap<V>) -> i32 { return self.len; }
 
     /// Allocated slot count (always a power of two once non-zero). Useful
     /// for diagnostics; most callers want `len()` instead.
@@ -80,14 +80,14 @@ impl<V> HashMap<V> {
     /// m.insert("a", 1);
     /// m.cap();              // 8   (initial table size)
     /// ```
-    fn cap(self: *HashMap<V>) -> int { return self.cap; }
+    fn cap(self: *HashMap<V>) -> i32 { return self.cap; }
 
     /// Internal: hash a string with the classic 31x multiply-add. Folds the
     /// negative case into the positive range so callers can `& mask` safely.
-    fn hash_key(self: *HashMap<V>, k: string) -> int {
-        let mut h: int = 0;
-        let n: int = k.len();
-        for let i: int = 0; i < n; i++ {
+    fn hash_key(self: *HashMap<V>, k: string) -> i32 {
+        let mut h: i32 = 0;
+        let n: i32 = k.len();
+        for let i: i32 = 0; i < n; i++ {
             h = h * 31 + k.at(i).to_int();
         }
         if h < 0 { h = -h; }
@@ -96,10 +96,10 @@ impl<V> HashMap<V> {
 
     /// Internal: linear-probe to find either the slot holding `k` or the
     /// first empty slot in the chain. Returns -1 when `cap == 0`.
-    fn slot(self: *HashMap<V>, k: string) -> int {
+    fn slot(self: *HashMap<V>, k: string) -> i32 {
         if self.cap == 0 { return -1; }
-        let mask: int = self.cap - 1;
-        let mut i: int = self.hash_key(k) & mask;
+        let mask: i32 = self.cap - 1;
+        let mut i: i32 = self.hash_key(k) & mask;
         while self.occupied[i] {
             if self.keys[i].eq(k) { return i; }
             i = (i + 1) & mask;
@@ -113,7 +113,7 @@ impl<V> HashMap<V> {
     /// if m.contains("ready") { println!("yep"); }
     /// ```
     fn contains(self: *HashMap<V>, k: string) -> bool {
-        let i: int = self.slot(k);
+        let i: i32 = self.slot(k);
         if i < 0 { return false; }
         return self.occupied[i] && self.keys[i].eq(k);
     }
@@ -127,17 +127,17 @@ impl<V> HashMap<V> {
     /// }
     /// ```
     fn get(self: *HashMap<V>, k: string) -> V {
-        let i: int = self.slot(k);
+        let i: i32 = self.slot(k);
         return self.values[i];
     }
 
     /// Resize to a new power-of-two capacity and rehash every entry.
     /// Called automatically by `insert`; rarely useful directly.
-    fn resize(self: *HashMap<V>, new_cap: int) {
+    fn resize(self: *HashMap<V>, new_cap: i32) {
         let old_keys: *string = self.keys;
         let old_values: *V = self.values;
         let old_occupied: *bool = self.occupied;
-        let old_cap: int = self.cap;
+        let old_cap: i32 = self.cap;
 
         if self.is_arena {
             self.keys = __glide_palloc(new_cap * sizeof(string)) as *string;
@@ -150,11 +150,11 @@ impl<V> HashMap<V> {
         }
         self.cap = new_cap;
         self.len = 0;
-        for let i: int = 0; i < new_cap; i++ {
+        for let i: i32 = 0; i < new_cap; i++ {
             self.occupied[i] = false;
         }
 
-        for let i: int = 0; i < old_cap; i++ {
+        for let i: i32 = 0; i < old_cap; i++ {
             if old_occupied[i] {
                 self.insert(old_keys[i], old_values[i]);
             }
@@ -187,7 +187,7 @@ impl<V> HashMap<V> {
             }
         }
 
-        let i: int = self.slot(k);
+        let i: i32 = self.slot(k);
         if !self.occupied[i] {
             self.occupied[i] = true;
             self.len = self.len + 1;
@@ -206,7 +206,7 @@ impl<V> HashMap<V> {
     /// let again: bool      = m.remove("a");    // false
     /// ```
     fn remove(self: *HashMap<V>, k: string) -> bool {
-        let i: int = self.slot(k);
+        let i: i32 = self.slot(k);
         if i < 0 { return false; }
         if !self.occupied[i] { return false; }
         if !self.keys[i].eq(k) { return false; }
@@ -215,8 +215,8 @@ impl<V> HashMap<V> {
         // we hit an empty slot, to keep probe chains intact.
         self.occupied[i] = false;
         self.len = self.len - 1;
-        let mask: int = self.cap - 1;
-        let mut j: int = (i + 1) & mask;
+        let mask: i32 = self.cap - 1;
+        let mut j: i32 = (i + 1) & mask;
         while self.occupied[j] {
             let rk: string = self.keys[j];
             let rv: V = self.values[j];
@@ -249,7 +249,7 @@ impl<V> HashMap<V> {
     /// ```
     fn keys(self: *HashMap<V>) -> *Vector<string> {
         let out: *Vector<string> = Vector::new();
-        for let i: int = 0; i < self.cap; i++ {
+        for let i: i32 = 0; i < self.cap; i++ {
             if self.occupied[i] { out.push(self.keys[i]); }
         }
         return out;
@@ -266,7 +266,7 @@ impl<V> HashMap<V> {
     /// ```
     fn values(self: *HashMap<V>) -> *Vector<V> {
         let out: *Vector<V> = Vector::new();
-        for let i: int = 0; i < self.cap; i++ {
+        for let i: i32 = 0; i < self.cap; i++ {
             if self.occupied[i] { out.push(self.values[i]); }
         }
         return out;
@@ -283,7 +283,7 @@ impl<V> HashMap<V> {
     /// ```
     fn map_values<U>(self: *HashMap<V>, f: fn(V) -> U) -> *HashMap<U> {
         let out: *HashMap<U> = HashMap::new();
-        for let i: int = 0; i < self.cap; i++ {
+        for let i: i32 = 0; i < self.cap; i++ {
             if self.occupied[i] {
                 out.insert(self.keys[i], f(self.values[i]));
             }
@@ -306,7 +306,7 @@ impl<V> HashMap<V> {
     /// ```
     fn entries(self: *HashMap<V>) -> *Vector<*Pair<string, V>> {
         let out: *Vector<*Pair<string, V>> = Vector::new();
-        for let i: int = 0; i < self.cap; i++ {
+        for let i: i32 = 0; i < self.cap; i++ {
             if self.occupied[i] {
                 out.push(Pair::new(self.keys[i], self.values[i]));
             }
@@ -324,7 +324,7 @@ impl<V> HashMap<V> {
     /// m.is_empty();    // true
     /// ```
     fn clear(self: *HashMap<V>) {
-        for let i: int = 0; i < self.cap; i++ {
+        for let i: i32 = 0; i < self.cap; i++ {
             self.occupied[i] = false;
         }
         self.len = 0;

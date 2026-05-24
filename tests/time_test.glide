@@ -1,7 +1,7 @@
 import stdlib::testing::*;
 import stdlib::time::*;
 
-fn test_duration_constructors() -> int {
+fn test_duration_constructors() -> i32 {
     let n_500: i64 = 500;
     let d_ns: Duration = Duration::from_nanos(n_500);
     assert_eq!(d_ns.as_nanos(), n_500);
@@ -29,7 +29,7 @@ fn test_duration_constructors() -> int {
     return 0;
 }
 
-fn test_duration_arith() -> int {
+fn test_duration_arith() -> i32 {
     let a: Duration = Duration::from_millis(500);
     let b: Duration = Duration::from_millis(1500);
 
@@ -47,7 +47,7 @@ fn test_duration_arith() -> int {
     return 0;
 }
 
-fn test_duration_predicates() -> int {
+fn test_duration_predicates() -> i32 {
     let z: Duration = Duration::zero();
     assert!(z.is_zero());
     assert_not!(z.is_positive());
@@ -62,7 +62,7 @@ fn test_duration_predicates() -> int {
     return 0;
 }
 
-fn test_duration_compare() -> int {
+fn test_duration_compare() -> i32 {
     let a: Duration = Duration::from_millis(100);
     let b: Duration = Duration::from_millis(200);
     let a2: Duration = Duration::from_millis(100);
@@ -74,7 +74,7 @@ fn test_duration_compare() -> int {
     return 0;
 }
 
-fn test_duration_unit_conversions() -> int {
+fn test_duration_unit_conversions() -> i32 {
     let one_min: Duration = Duration::from_minutes(1);
     assert_eq!(one_min.as_secs(), 60);
     assert_eq!(one_min.as_millis(), 60000);
@@ -85,7 +85,7 @@ fn test_duration_unit_conversions() -> int {
     return 0;
 }
 
-fn test_time_now_is_recent() -> int {
+fn test_time_now_is_recent() -> i32 {
     let t: Time = Time::now();
     // Wall-clock should be after Jan 1 2020 in nanos:
     //   1577836800 sec * 1e9 = 1577836800000000000
@@ -96,10 +96,10 @@ fn test_time_now_is_recent() -> int {
     return 0;
 }
 
-fn test_stopwatch_elapsed_non_negative() -> int {
+fn test_stopwatch_elapsed_non_negative() -> i32 {
     let sw: Stopwatch = Stopwatch::start();
-    let mut i: int = 0;
-    let mut acc: int = 0;
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
     while i < 1000 { acc = acc + i; i = i + 1; }
     assert!(acc >= 0);
     let e: Duration = sw.elapsed();

@@ -1,13 +1,13 @@
 // Local arena escapes via return -> caller reads freed memory.
-fn make_blob() -> *int {
+fn make_blob() -> *i32 {
     let arena: *Arena = Arena::new(64);
     defer arena.free();
-    let p: *int = arena.alloc(sizeof(int)) as *int;
+    let p: *i32 = arena.alloc(sizeof(i32)) as *i32;
     *p = 42;
     return p;        // ERROR: derives from local arena
 }
 
 fn main() {
-    let x: *int = make_blob();
+    let x: *i32 = make_blob();
     println!(*x);
 }

@@ -50,7 +50,7 @@ pub struct SseEvent {
     pub event: string,
     pub id:    string,
     pub data:  string,
-    pub retry: int,
+    pub retry: i32,
 }
 
 impl SseEvent {
@@ -91,7 +91,7 @@ pub fn sse_format(e: SseEvent) -> string {
     }
     if e.data.len() > 0 {
         let lines: *Vector<string> = e.data.split("\n");
-        let mut i: int = 0;
+        let mut i: i32 = 0;
         while i < lines.len() {
             out = out.concat("data: ").concat(lines.get(i)).concat("\n");
             i = i + 1;
