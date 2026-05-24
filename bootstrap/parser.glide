@@ -1761,6 +1761,8 @@ fn parse_type(p: *Parser) -> *Type {
         return ty_fnptr(params, ret);
     }
     if p.current.kind == TOK_IDENT || p.current.kind == TOK_KEYWORD {
+        let nl: int = p.current.line;
+        let nc: int = p.current.column;
         let name: string = p.current.lexeme;
         p.advance();
         // Generic instantiation: Foo<T1, T2>. Handles nested forms like
@@ -1774,7 +1776,9 @@ fn parse_type(p: *Parser) -> *Type {
                 if !p.eat_op(",") { break; }
             }
             p.consume_close_angle();
-            return ty_generic(name, args);
+            let gt: *Type = ty_generic(name, args);
+            gt.line = nl; gt.col = nc;
+            return gt;
         }
         // Associated type projection: `Owner::Name` (e.g. `Self::Item`,
         // `T::Item`). Owner is the bare ident parsed above.
@@ -1783,7 +1787,9 @@ fn parse_type(p: *Parser) -> *Type {
             let assoc_name: string = p.expect_ident();
             return ty_assoc(ty_named(name), assoc_name);
         }
-        return ty_named(name);
+        let nt: *Type = ty_named(name);
+        nt.line = nl; nt.col = nc;
+        return nt;
     }
     p.err("expected type");
     return ty_named("__error__");
@@ -1820,6 +1826,8 @@ fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
         // member .  (with macro-call form `.name!(args)`)
         if p.at_op(".") {
             p.advance();
+            let fname_line: int = p.current.line;
+            let fname_col: int = p.current.column;
             let mut mname: string = p.expect_ident();
             // Qualified method call `expr.NS::method(...)` — disambiguates when
             // multiple `impl T in NS { ... }` blocks register the same method
@@ -1847,6 +1855,8 @@ fn parse_expr(p: *Parser, min_bp: int) -> *Expr {
                 continue;
             }
             left = expr_member(left, mname);
+            left.field_line = fname_line;
+            left.field_col = fname_col;
             continue;
         }
         // postfix ++ / --

@@ -460,6 +460,14 @@ pub struct DiagEntry {
 pub struct Typer {
     pub fns: *HashMap<FnSig>,
     pub structs: *HashMap<bool>,        // just registry of names for now
+    // `<TypeName>::<method>` -> true for every method declared in ANY impl
+    // (generic OR specialized) of that type. Lets "no method" detection
+    // tell a real typo from a specialized method (`Vector<int>::sum`) whose
+    // exact monomorphized key the receiver type didn't resolve to.
+    pub method_names: *HashMap<bool>,
+    // `<StructName>::<field>` -> true for every declared field. Drives
+    // "no field" detection for `obj.field` reads on known structs.
+    pub struct_fields_all: *HashMap<bool>,
     pub scope: *HashMap<Type>,          // current scope: name -> Type (heap-alloc'd)
     pub module_scope: *HashMap<Type>,   // top-level consts (visible inside any fn body)
     pub owned_locals: *HashMap<bool>,   // names that must not escape (auto-drop)
@@ -559,11 +567,105 @@ fn _is_current_type_param(t: *Typer, name: string) -> bool {
     return false;
 }
 
+// Line/col of a member expression's field name, falling back to the
+// expression start when the parser didn't record a field position (a
+// member node synthesized by lowering/codegen has field_line == 0).
+fn _field_pos_line(m: *Expr) -> int {
+    if m == null { return 0; }
+    if m.field_line > 0 { return m.field_line; }
+    return m.line;
+}
+fn _field_pos_col(m: *Expr) -> int {
+    if m == null { return 0; }
+    if m.field_line > 0 { return m.field_col; }
+    return m.column;
+}
+
+// A reasonable squiggle width for an argument expression: the identifier
+// length for a bare name (so the underline covers the whole name), else 1
+// (point at the start). Keeps arg diagnostics tight without needing the
+// full source extent of arbitrary expressions.
+fn _arg_span(a: *Expr) -> int {
+    if a == null { return 1; }
+    if a.kind == EX_IDENT && a.str_val != null {
+        let n: int = a.str_val.len();
+        if n > 0 { return n; }
+    }
+    if a.kind == EX_STRING && a.str_val != null {
+        return a.str_val.len() + 2;   // include the surrounding quotes
+    }
+    return 1;
+}
+
+// True when `n` names a real type: a primitive (list mirrors codegen's
+// `type_to_c`), a declared struct/enum (t.structs holds both), a type
+// parameter in scope, or `Self`. Empty = inferred, treated as known.
+fn _is_known_type_name(t: *Typer, n: string) -> bool {
+    if n == null || n.eq("") { return true; }
+    if n.eq("Self") || n.eq("__fn__") || n.eq("__fn_ptr__") { return true; }
+    if n.eq("int") || n.eq("uint") || n.eq("long") || n.eq("ulong")
+       || n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
+       || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
+       || n.eq("usize") || n.eq("isize")
+       || n.eq("float") || n.eq("f32") || n.eq("f64")
+       || n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") {
+        return true;
+    }
+    if t.structs.contains(n) { return true; }
+    if _is_current_type_param(t, n) { return true; }
+    return false;
+}
+
+// Recursively flag any unknown named type inside an annotation. `dyn`
+// and fn-pointer shapes are skipped — trait names + fn-shape params live
+// outside the struct/primitive registries, so checking them would
+// false-flag. Only runs under enforce_visibility (full registry loaded).
+fn _check_type_known(t: *Typer, ty: *Type, line: int, col: int) {
+    if ty == null { return; }
+    if !t.enforce_visibility { return; }
+    // Prefer the type's own recorded position (set by the parser) so the
+    // squiggle lands exactly on the type name; fall back to the caller's
+    // position for synthesized types that carry none.
+    let mut pl: int = line;
+    let mut pc: int = col;
+    if ty.line > 0 { pl = ty.line; pc = ty.col; }
+    if ty.kind == TY_NAMED {
+        if !_is_known_type_name(t, ty.name) {
+            t.err_code_range(pl, pc, ty.name.len(), "", "unknown type `".concat(ty.name).concat("`"));
+        }
+        return;
+    }
+    if ty.kind == TY_POINTER || ty.kind == TY_BORROW
+       || ty.kind == TY_BORROW_MUT || ty.kind == TY_SLICE {
+        _check_type_known(t, ty.inner, line, col);
+        return;
+    }
+    if ty.kind == TY_RESULT || ty.kind == TY_OPTION || ty.kind == TY_OPT_RESULT {
+        _check_type_known(t, ty.inner, line, col);
+        return;
+    }
+    if ty.kind == TY_GENERIC {
+        if !ty.name.eq("chan") && !t.structs.contains(ty.name)
+           && !_is_current_type_param(t, ty.name) {
+            t.err_code_range(pl, pc, ty.name.len(), "", "unknown type `".concat(ty.name).concat("`"));
+        }
+        if ty.args != null {
+            for let i: int = 0; i < ty.args.len(); i++ {
+                let a: Type = ty.args.get(i);
+                _check_type_known(t, &a, line, col);
+            }
+        }
+        return;
+    }
+}
+
 impl Typer {
     pub fn new() -> *Typer {
         let t: *Typer = __glide_palloc(sizeof(Typer)) as *Typer;
         let fns: *HashMap<FnSig> = HashMap::new();
         let structs: *HashMap<bool> = HashMap::new();
+        let method_names: *HashMap<bool> = HashMap::new();
+        let struct_fields_all: *HashMap<bool> = HashMap::new();
         let scope: *HashMap<Type> = HashMap::new();
         let mscope: *HashMap<Type> = HashMap::new();
         let owned: *HashMap<bool> = HashMap::new();
@@ -574,6 +676,8 @@ impl Typer {
         let dg: *Vector<DiagEntry> = Vector::new();
         t.fns = fns;
         t.structs = structs;
+        t.method_names = method_names;
+        t.struct_fields_all = struct_fields_all;
         t.scope = scope;
         t.module_scope = mscope;
         t.owned_locals = owned;
@@ -632,6 +736,8 @@ impl Typer {
     pub fn free(self: *Typer) {
         self.fns.free();
         self.structs.free();
+        self.method_names.free();
+        self.struct_fields_all.free();
         self.scope.free();
         self.module_scope.free();
         self.owned_locals.free();
@@ -821,6 +927,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             if s.struct_fields != null {
                 for let j: int = 0; j < s.struct_fields.len(); j++ {
                     let f: Field = s.struct_fields.get(j);
+                    t.struct_fields_all.insert(s.name.concat("::").concat(f.name), true);
                     if f.ty != null && (f.ty.kind == TY_BORROW || f.ty.kind == TY_BORROW_MUT) {
                         t.err_code(s.line, s.column, "borrow-in-field",
                             "borrow `".concat(type_to_string(f.ty))
@@ -870,6 +977,10 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                             owner_type_params: s.type_params,
                         };
                         t.fns.insert(fname, sig);
+                        // Record under the BASE type name (not the
+                        // specialized key) so "no method" detection knows
+                        // the method exists on some variant of the type.
+                        t.method_names.insert(tname.concat("::").concat(m.name), true);
                     }
                 }
             }
@@ -1495,11 +1606,16 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
     t.current_type_params = s.type_params;
+    // Param + return type annotations must name real types. (Only top-level
+    // `fn`s reach check_fn — impl methods are skipped by check_top — so the
+    // type params in scope are exactly this fn's own `<…>`.)
+    _check_type_known(t, s.fn_ret_ty, s.line, s.column);
 
     if s.fn_params != null {
         for let i: int = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             if p.ty != null {
+                _check_type_known(t, p.ty, s.line, s.column);
                 t.scope.insert(p.name, *p.ty);
             }
         }
@@ -1731,6 +1847,9 @@ fn check_stmt(t: *Typer, s: *Stmt) {
 
 fn check_let_or_const(t: *Typer, s: *Stmt) {
     let mut final_ty: *Type = s.let_ty;
+    // The annotation (if any) must name a real type — catches
+    // `let x: NoSuchType = …`.
+    _check_type_known(t, s.let_ty, s.line, s.column);
 
     // Null safety: borrows can never be null. `let r: &T = null` and friends
     // are rejected. This applies to any borrow-typed binding, regardless of
@@ -1779,7 +1898,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         let val_ty: *Type = infer_expr(t, s.let_value);
         if final_ty != null {
             if !types_compat(final_ty, val_ty) {
-                t.err(s.line, s.column,
+                t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "",
                     "let initializer type mismatch: expected ".concat(type_to_string(final_ty))
                     .concat(", got ").concat(type_to_string(val_ty)));
             }
@@ -1918,7 +2037,11 @@ fn check_return(t: *Typer, s: *Stmt) {
         return;
     }
     if !types_compat(t.current_ret, vt) {
-        t.err(s.line, s.column,
+        let mut rl: int = s.line;
+        let mut rc: int = s.column;
+        let mut rspan: int = 6;   // the `return` keyword
+        if e != null && e.line > 0 { rl = e.line; rc = e.column; rspan = _arg_span(e); }
+        t.err_code_range(rl, rc, rspan, "",
             "return type mismatch: expected ".concat(type_to_string(t.current_ret))
             .concat(", got ").concat(type_to_string(vt)));
     }
@@ -2262,6 +2385,23 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 }
                 if !mkey.eq("") {
                     let msig: FnSig = t.fns.get(mkey);
+                    // Arity: user args (excluding the implicit `self`) must
+                    // match the method's declared params minus self. Missing
+                    // or extra args are an error — same aggressiveness as a
+                    // bare fn call.
+                    if msig.params != null {
+                        let m_alen: int = if e.args != null { e.args.len() } else { 0 };
+                        let m_plen: int = msig.params.len();
+                        let mut m_expected: int = 0;
+                        if m_plen > 0 { m_expected = m_plen - 1; }   // drop self
+                        let mut m_bad: bool = m_alen != m_expected;
+                        if msig.is_variadic && m_alen >= m_expected { m_bad = false; }
+                        if m_bad {
+                            t.err_code_range(_field_pos_line(e.lhs), _field_pos_col(e.lhs), mname.len(), "",
+                                "wrong arg count for `".concat(mname).concat("`: expected ")
+                                .concat(int_to_str(m_expected)).concat(", got ").concat(int_to_str(m_alen)));
+                        }
+                    }
                     // Check each arg against the matching impl param. Skip the
                     // implicit `self` param (params[0]). Without this, passing
                     // a `fn(*HttpRequest) -> Json<X>` to `r.get("/", handler)`
@@ -2297,7 +2437,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             }
                             if !arg_compat(want_p, at, msig.type_params) {
                                 let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
-                                t.err(a.line, a.column,
+                                t.err_code_range(a.line, a.column, _arg_span(&a), "",
                                     "arg ".concat(p.name).concat(" type mismatch: expected ")
                                     .concat(type_to_string(want_p))
                                     .concat(", got ").concat(type_to_string(at))
@@ -2365,6 +2505,16 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     }
                     return substituted2;
                 }
+                // Method not found on a known concrete type → typo or wrong
+                // receiver. chan methods + `free` are handled elsewhere; we
+                // only flag named structs whose impls the typer fully
+                // tracks, so generic/dyn/runtime types stay permissive.
+                if t.structs.contains(stripped.name) && !mname.eq("free")
+                   && !t.method_names.contains(stripped.name.concat("::").concat(mname)) {
+                    t.err_code_range(_field_pos_line(e.lhs), _field_pos_col(e.lhs), mname.len(), "",
+                        "no method `".concat(mname).concat("` on type `")
+                        .concat(stripped.name).concat("`"));
+                }
             }
         }
 
@@ -2391,7 +2541,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let name: string = e.lhs.str_val;
             if t.fns.contains(name) {
                 if !t.is_visible(name) {
-                    t.err(e.lhs.line, e.lhs.column,
+                    t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "",
                         "name `".concat(name).concat("` is not in scope; add an `import` for it"));
                     return null;
                 }
@@ -2406,7 +2556,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     let mut bad_arity: bool = plen != alen;
                     if sig.is_variadic && alen >= plen { bad_arity = false; }
                     if bad_arity {
-                        t.err(e.line, e.column,
+                        t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "",
                             "wrong arg count for `".concat(name).concat("`"));
                     } else {
                         for let i: int = 0; i < plen; i++ {
@@ -2417,14 +2567,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             // auto-drop. Pass via & / &mut instead.
                             if a.kind == EX_IDENT && t.owned_locals.contains(a.str_val)
                                 && p.ty != null && p.ty.kind == TY_POINTER {
-                                t.err(a.line, a.column,
+                                t.err_code_range(a.line, a.column, _arg_span(&a), "",
                                     "cannot move owned value `".concat(a.str_val)
                                     .concat("` into `*T` parameter (auto-drop conflict)"));
                             }
                             let at: *Type = infer_expr(t, &a);
                             if !arg_compat(p.ty, at, sig.type_params) {
                                 let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
-                                t.err(a.line, a.column,
+                                t.err_code_range(a.line, a.column, _arg_span(&a), "",
                                     "arg ".concat(p.name)
                                     .concat(" type mismatch: expected ").concat(type_to_string(p.ty))
                                     .concat(", got ").concat(type_to_string(at))
@@ -2453,7 +2603,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 || name.eq("make_chan") || name.eq("sizeof")
                 || name.eq("printf");
             if !is_builtin && !t.scope.contains(name) && t.enforce_visibility {
-                t.err(e.lhs.line, e.lhs.column,
+                t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "",
                     "unknown function `".concat(name).concat("`; did you forget an `import`?"));
                 return null;
             }
@@ -2476,16 +2626,48 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let is_known_method: bool = t.fns.contains(pname);
             let is_type_param: bool = _is_current_type_param(t, prefix);
             if !is_type && !is_known_method && !is_type_param && !t.is_module_path_allowed(prefix) {
-                t.err(e.lhs.line, e.lhs.column,
+                let path_span: int = prefix.len() + 2 + e.lhs.field.len();
+                t.err_code_range(e.lhs.line, e.lhs.column, path_span, "",
                     "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
                 return null;
             }
             if t.fns.contains(pname) {
                 let sig: FnSig = t.fns.get(pname);
+                // Arity check for `Type::method(args)` — missing/extra args
+                // are an error, same as a bare fn call.
+                let plen: int = if sig.params != null { sig.params.len() } else { 0 };
+                if sig.params != null && e.args != null {
+                    let alen: int = e.args.len();
+                    let mut bad_arity: bool = plen != alen;
+                    if sig.is_variadic && alen >= plen { bad_arity = false; }
+                    if bad_arity {
+                        let path_span: int = prefix.len() + 2 + e.lhs.field.len();
+                        t.err_code_range(e.lhs.line, e.lhs.column, path_span, "",
+                            "wrong arg count for `".concat(prefix).concat("::").concat(e.lhs.field)
+                            .concat("`: expected ").concat(int_to_str(plen))
+                            .concat(", got ").concat(int_to_str(alen)));
+                    }
+                }
                 if e.args != null {
                     for let i: int = 0; i < e.args.len(); i++ {
                         let a: Expr = e.args.get(i);
-                        let _u: *Type = infer_expr(t, &a);
+                        let at: *Type = infer_expr(t, &a);
+                        // Type-check each arg against its param. Skip params
+                        // whose declared type mentions a method- OR owner-
+                        // level type parameter (generic ctors like
+                        // `Vector::new()` / `Vector::from(x: T)` — T can't be
+                        // bound here without monomorphization).
+                        if i < plen {
+                            let p: Param = sig.params.get(i);
+                            if p.ty != null
+                               && !_type_references_any(p.ty, sig.type_params)
+                               && !_type_references_any(p.ty, sig.owner_type_params)
+                               && !arg_compat(p.ty, at, sig.type_params) {
+                                t.err_code_range(a.line, a.column, _arg_span(&a), "",
+                                    "arg ".concat(p.name).concat(" type mismatch: expected ")
+                                    .concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)));
+                            }
+                        }
                     }
                 }
                 return sig.ret_type;
@@ -2509,13 +2691,25 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // the EX_CALL path; this branch fires for plain field reads.
         if recv_ty != null && t.enforce_visibility && e.field != null && !e.field.eq("") {
             let stripped: *Type = strip_ptr(recv_ty);
+            // `struct_origin` only holds structs declared WITH a field list,
+            // so we know their full set of fields — opaque/runtime structs
+            // (Arena, …) aren't in it and stay permissive.
             if stripped != null && stripped.kind == TY_NAMED
                && t.struct_origin.contains(stripped.name) {
+                let key: string = stripped.name.concat("::").concat(e.field);
+                // Unknown field: not a declared field AND not a method
+                // reference (`obj.method` as a value). A real typo.
+                if !t.struct_fields_all.contains(key) && !t.method_names.contains(key) {
+                    t.err_code_range(_field_pos_line(e), _field_pos_col(e), e.field.len(), "",
+                        "no field `".concat(e.field).concat("` on struct `").concat(stripped.name).concat("`"));
+                    return null;
+                }
+                // Cross-file privacy: a declared-but-private field is only
+                // reachable from the struct's own file.
                 let owner: string = t.struct_origin.get(stripped.name);
                 if !owner.eq(t.current_origin) {
-                    let key: string = stripped.name.concat("::").concat(e.field);
                     if !t.field_pub.contains(key) {
-                        t.err(e.line, e.column,
+                        t.err_code_range(_field_pos_line(e), _field_pos_col(e), e.field.len(), "",
                             "field `".concat(e.field).concat("` of struct `").concat(stripped.name).concat("` is private; declare it `pub` to expose"));
                         return null;
                     }

@@ -32,6 +32,8 @@ pub struct Type {
     pub inner: *Type,
     pub args: *Vector<Type>,  // TY_GENERIC or TY_FNPTR (params)
     pub fnptr_ret: *Type,     // TY_FNPTR ret
+    pub line: int,            // source position of the type name (0 = synthesized)
+    pub col: int,
 }
 
 pub fn ty_fnptr(params: *Vector<Type>, ret: *Type) -> *Type {
@@ -134,6 +136,8 @@ pub struct Expr {
     // call args / member field name
     pub args: *Vector<Expr>, // Call args (we keep them by-value in Vector for simplicity)
     pub field: string,       // Member field, Cast target encoded via type
+    pub field_line: int,     // source position of the member field name (0 = synthesized)
+    pub field_col: int,
     pub cast_to: *Type,
 
     // For EX_STRUCT_LIT: parallel to args, holds field names
