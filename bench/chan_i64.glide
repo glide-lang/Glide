@@ -1,9 +1,0 @@
-fn worker(c: chan<i64>) {
-    c.send(1);
-}
-fn main() -> int {
-    let c: chan<i64> = make_chan(8);
-    spawn worker(c);
-    let _v: i64 = c.recv();
-    return 0;
-}

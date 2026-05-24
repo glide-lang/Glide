@@ -57,7 +57,6 @@ src/
 examples/           one program per language feature, plus tour.glide
                     that exercises everything.
 tests/              *_test.glide files driven by `glide test`.
-bench/              concurrency benchmarks vs Go.
 
 tools/
   install_toolchain.{sh,ps1}  download the bundled C toolchain into runtime/zig/
