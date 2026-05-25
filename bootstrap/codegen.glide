@@ -428,6 +428,7 @@ fn _emit_option_template(g: *CG, inner: *Type) {
     let dedup_key: string = "__rt_option_emit_".concat(m);
     if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
+    emit_tuple_typedefs_in_type(g, inner);
     let tc: string = type_to_c(inner);
     let tmpl: string = include_str!("bootstrap/runtime/option.c.tmpl");
     let s1: string = _cg_replace(tmpl, "@M@", m);
@@ -448,6 +449,7 @@ fn _emit_result_template(g: *CG, inner: *Type) {
     let dedup_key: string = "__rt_result_emit_".concat(m);
     if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
+    emit_tuple_typedefs_in_type(g, inner);
     let tc: string = type_to_c(inner);
     let tmpl: string = include_str!("bootstrap/runtime/result.c.tmpl");
     // `!void` uses a different template (no `val` field). Fall back to
@@ -473,6 +475,7 @@ fn _emit_optres_template(g: *CG, inner: *Type) {
     let dedup_key: string = "__rt_optres_emit_".concat(m);
     if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
+    emit_tuple_typedefs_in_type(g, inner);
     let tc: string = type_to_c(inner);
     let tmpl: string = include_str!("bootstrap/runtime/optres.c.tmpl");
     let s1: string = _cg_replace(tmpl, "@M@", m);
@@ -602,6 +605,7 @@ fn emit_result_runtime(g: *CG) {
             println!("#endif");
             continue;
         }
+        emit_tuple_typedefs_in_type(g, &t);
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
         let s2: string = _cg_replace(s1, "@TC@", tc);
@@ -619,6 +623,7 @@ fn emit_option_runtime(g: *CG) {
         let dedup_key: string = "__rt_option_emit_".concat(m);
         if g.module_aliases.contains(dedup_key) { continue; }
         g.module_aliases.insert(dedup_key, "1");
+        emit_tuple_typedefs_in_type(g, &t);
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
         let s2: string = _cg_replace(s1, "@TC@", tc);
@@ -636,10 +641,203 @@ fn emit_optres_runtime(g: *CG) {
         let dedup_key: string = "__rt_optres_emit_".concat(m);
         if g.module_aliases.contains(dedup_key) { continue; }
         g.module_aliases.insert(dedup_key, "1");
+        emit_tuple_typedefs_in_type(g, &t);
         let tc: string = type_to_c(&t);
         let s1: string = _cg_replace(tmpl, "@M@", m);
         let s2: string = _cg_replace(s1, "@TC@", tc);
         print!(s2);
+    }
+    println!("");
+}
+
+// ---- Anonymous tuples: collection + struct emission ---------------------
+
+// Dedup-add a tuple type to g.tuple_types. Nested element tuples are
+// registered first so the emission order has inner tuples before the
+// containers that store them by value.
+fn register_tuple_type(g: *CG, t: *Type) {
+    if t == null || t.kind != TY_TUPLE { return; }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            if a.kind == TY_TUPLE { register_tuple_type(g, &a); }
+        }
+    }
+    let m: string = mangle_type(t);
+    for let i: i32 = 0; i < g.tuple_types.len(); i++ {
+        let ex: Type = g.tuple_types.get(i);
+        if mangle_type(&ex).eq(m) { return; }
+    }
+    g.tuple_types.push(*t);
+}
+
+// Walk a type registering every tuple it (recursively) contains.
+fn collect_tuple_in_type(g: *CG, t: *Type) {
+    if t == null { return; }
+    if t.kind == TY_TUPLE { register_tuple_type(g, t); }
+    if t.inner != null { collect_tuple_in_type(g, t.inner); }
+    if t.fnptr_ret != null { collect_tuple_in_type(g, t.fnptr_ret); }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            collect_tuple_in_type(g, &a);
+        }
+    }
+}
+
+fn collect_tuple_in_expr(g: *CG, e: *Expr) {
+    if e == null { return; }
+    if e.kind == EX_TUPLE {
+        let tt: *Type = infer_for_codegen(g, e);
+        if tt != null && tt.kind == TY_TUPLE { register_tuple_type(g, tt); }
+    }
+    if e.cast_to != null { collect_tuple_in_type(g, e.cast_to); }
+    if e.lhs != null { collect_tuple_in_expr(g, e.lhs); }
+    if e.rhs != null { collect_tuple_in_expr(g, e.rhs); }
+    if e.operand != null { collect_tuple_in_expr(g, e.operand); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            collect_tuple_in_expr(g, &a);
+        }
+    }
+    if e.block_stmts != null {
+        for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+            let b: Stmt = e.block_stmts.get(i);
+            collect_tuple_in_stmt(g, &b);
+        }
+    }
+    if e.match_arms != null {
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let a: MatchArm = e.match_arms.get(i);
+            if a.body != null {
+                for let k: i32 = 0; k < a.body.len(); k++ {
+                    let b: Stmt = a.body.get(k);
+                    collect_tuple_in_stmt(g, &b);
+                }
+            }
+        }
+    }
+}
+
+fn collect_tuple_in_stmt(g: *CG, s: *Stmt) {
+    if s == null { return; }
+    if s.kind == ST_TRAIT { return; }
+    if s.let_ty != null { collect_tuple_in_type(g, s.let_ty); }
+    if s.fn_ret_ty != null { collect_tuple_in_type(g, s.fn_ret_ty); }
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            collect_tuple_in_type(g, p.ty);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            collect_tuple_in_type(g, f.ty);
+        }
+    }
+    if s.let_value != null { collect_tuple_in_expr(g, s.let_value); }
+    if s.expr_value != null { collect_tuple_in_expr(g, s.expr_value); }
+    if s.cond != null { collect_tuple_in_expr(g, s.cond); }
+    if s.for_step != null { collect_tuple_in_expr(g, s.for_step); }
+    if s.for_init != null { collect_tuple_in_stmt(g, s.for_init); }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            collect_tuple_in_stmt(g, &b);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            collect_tuple_in_stmt(g, &b);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            collect_tuple_in_stmt(g, &b);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let mm: Stmt = s.impl_methods.get(i);
+            collect_tuple_in_stmt(g, &mm);
+        }
+    }
+}
+
+// Emit one tuple struct typedef, guarded so repeated requests (the inline
+// path for `!(tuple)` / `?(tuple)` and the general program-wide pass) emit
+// it at most once. Nested tuple element typedefs are emitted first.
+fn emit_one_tuple_typedef(g: *CG, t: *Type) {
+    if t == null || t.kind != TY_TUPLE { return; }
+    let m: string = mangle_tuple(t);
+    let dedup_key: string = "__rt_tuple_emit_".concat(m);
+    if g.module_aliases.contains(dedup_key) { return; }
+    // Element types are stored by value, so each must be fully defined first:
+    //   - nested tuples emit their own typedef,
+    //   - a by-value user struct/enum emits its body now (the forward typedef
+    //     is already in scope; mark it emitted so the later body pass skips it).
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            if a.kind == TY_TUPLE { emit_one_tuple_typedef(g, &a); }
+            if a.kind == TY_NAMED && a.name != null && !g.emitted_named.contains(a.name) {
+                if g.structs.contains(a.name) {
+                    let sd: Stmt = g.structs.get(a.name);
+                    _forward_decl_field_monos(g, &sd);
+                    emit_struct(&sd);
+                    g.emitted_named.insert(a.name, true);
+                } else if g.enums.contains(a.name) {
+                    let ed: Stmt = g.enums.get(a.name);
+                    emit_enum(&ed);
+                    g.emitted_named.insert(a.name, true);
+                }
+            }
+        }
+    }
+    g.module_aliases.insert(dedup_key, "1");
+    let cname: string = "__glide_".concat(m).concat("_t");
+    println!("#ifndef __GLIDE_".concat(m).concat("_GUARD"));
+    println!("#define __GLIDE_".concat(m).concat("_GUARD"));
+    print!("typedef struct ".concat(cname).concat(" { "));
+    let n: i32 = if t.args != null { t.args.len() } else { 0 };
+    if n == 0 {
+        // Unit tuple `()` — give it a dummy field so the struct is non-empty.
+        print!("char __unit; ");
+    } else {
+        for let i: i32 = 0; i < n; i++ {
+            let a: Type = t.args.get(i);
+            print!(type_to_c(&a).concat(" _").concat(int_to_str(i)).concat("; "));
+        }
+    }
+    println!("} ".concat(cname).concat(";"));
+    println!("#endif");
+}
+
+// Recursively emit tuple typedefs nested anywhere inside `t`. Used by the
+// result/option/optres pre-pass so `!(i32, i32)` has its element struct in
+// scope before the wrapper struct that stores it by value.
+fn emit_tuple_typedefs_in_type(g: *CG, t: *Type) {
+    if t == null { return; }
+    if t.kind == TY_TUPLE { emit_one_tuple_typedef(g, t); }
+    if t.inner != null { emit_tuple_typedefs_in_type(g, t.inner); }
+    if t.fnptr_ret != null { emit_tuple_typedefs_in_type(g, t.fnptr_ret); }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            emit_tuple_typedefs_in_type(g, &a);
+        }
+    }
+}
+
+fn emit_tuple_runtime(g: *CG) {
+    if g.tuple_types.len() == 0 { return; }
+    for let i: i32 = 0; i < g.tuple_types.len(); i++ {
+        let t: Type = g.tuple_types.get(i);
+        emit_one_tuple_typedef(g, &t);
     }
     println!("");
 }
@@ -1229,6 +1427,10 @@ pub struct CG {
     pub result_types: *Vector<Type>,
     pub option_types: *Vector<Type>,
     pub optres_types: *Vector<Type>,
+    // Anonymous tuple types `(A, B, ...)`. Each unique element-type combination
+    // gets one C struct typedef (`__glide_tuple<N>_..._t`). Collected program-
+    // wide, emitted inner-first so nested tuples precede their containers.
+    pub tuple_types: *Vector<Type>,
     pub current_ret_ty: *Type,
     // Associated-type lookup for `<Trait>::<Concrete>::<Item>`. Populated
     // up front from every `impl Trait for Type { type Item = X; }`.
@@ -1308,6 +1510,8 @@ impl CG {
         g.option_types = ot;
         let ort: *Vector<Type> = Vector::new();
         g.optres_types = ort;
+        let tt: *Vector<Type> = Vector::new();
+        g.tuple_types = tt;
         let at: *HashMap<Type> = HashMap::new();
         g.assoc_table = at;
         g.current_ret_ty = null;
@@ -1533,6 +1737,17 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         let recv_ty: *Type = infer_for_codegen(g, e.lhs);
         let stripped: *Type = strip_ptr(recv_ty);
         if stripped == null { return null; }
+        // Tuple index `t.0` / `t.1`: numeric field selects the element type.
+        if stripped.kind == TY_TUPLE && tuple_field_is_index(e.field) {
+            let idx: i32 = tuple_index_value(e.field);
+            if stripped.args != null && idx >= 0 && idx < stripped.args.len() {
+                let el: Type = stripped.args.get(idx);
+                let pp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *pp = el;
+                return pp;
+            }
+            return null;
+        }
         // Built-in field access on the synth Result/Option/OptResult structs.
         if stripped.kind == TY_RESULT {
             if e.field.eq("val") { return stripped.inner; }
@@ -1579,6 +1794,19 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_CAST { return e.cast_to; }
+    if e.kind == EX_STRUCT_LIT { return ty_named(e.str_val); }
+    if e.kind == EX_TUPLE {
+        let elems: *Vector<Type> = Vector::new();
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                let a: Expr = e.args.get(i);
+                let et: *Type = infer_for_codegen(g, &a);
+                if et == null { return null; }
+                elems.push(*et);
+            }
+        }
+        return ty_tuple(elems);
+    }
     if e.kind == EX_MACRO {
         if e.str_val.eq("format") { return ty_named("string"); }
         return null;
@@ -1815,7 +2043,25 @@ pub fn type_to_c(t: *Type) -> string {
         // Emit a marker so the C compiler errors visibly instead of silently.
         return "/* unresolved-assoc */ void";
     }
+    if t.kind == TY_TUPLE {
+        return "__glide_".concat(mangle_tuple(t)).concat("_t");
+    }
     return "void";
+}
+
+// Mangled identifier core for a tuple type: `tuple<N>_<m0>_<m1>...`. The
+// arity prefix keeps `((i32,i32),i32)` (tuple2_tuple2_i32_i32_i32) distinct
+// from `(i32,i32,i32)` (tuple3_i32_i32_i32).
+fn mangle_tuple(t: *Type) -> string {
+    let n: i32 = if t.args != null { t.args.len() } else { 0 };
+    let mut out: string = "tuple".concat(int_to_str(n));
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            out = out.concat("_").concat(mangle_type(&a));
+        }
+    }
+    return out;
 }
 
 // Build the C cast prefix for invoking a void* fn-pointer of this signature.
@@ -1858,6 +2104,7 @@ fn mangle_type(t: *Type) -> string {
     if t.kind == TY_OPTION { return "option_".concat(mangle_type(t.inner)); }
     if t.kind == TY_OPT_RESULT { return "optres_".concat(mangle_type(t.inner)); }
     if t.kind == TY_ASSOC { return "assoc_".concat(mangle_type(t.inner)).concat("_").concat(t.name); }
+    if t.kind == TY_TUPLE { return mangle_tuple(t); }
     return "void";
 }
 
@@ -2509,6 +2756,17 @@ fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
     if t.kind == TY_OPTION { return ty_option(subst_type(t.inner, params, args)); }
     if t.kind == TY_RESULT { return ty_result(subst_type(t.inner, params, args)); }
     if t.kind == TY_OPT_RESULT { return ty_optres(subst_type(t.inner, params, args)); }
+    if t.kind == TY_TUPLE {
+        let new_args: *Vector<Type> = Vector::new();
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                let na: *Type = subst_type(&a, params, args);
+                if na != null { new_args.push(*na); }
+            }
+        }
+        return ty_tuple(new_args);
+    }
     if t.kind == TY_FNPTR {
         let new_args: *Vector<Type> = Vector::new();
         if t.args != null {
@@ -3484,6 +3742,9 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     if e.kind == EX_MEMBER {
         // Auto-deref for pointer receivers: `p.x` -> `p->x` for *T,
         // but C also allows `(*p).x`. Emit `->` when receiver is pointer.
+        // Tuple index members (`t.0`) emit the `_0` struct field name.
+        let mut fld: string = c_safe_ident(e.field);
+        if tuple_field_is_index(e.field) { fld = "_".concat(e.field); }
         let recv_ty: *Type = infer_for_codegen(g, e.lhs);
         if recv_ty != null
             && (recv_ty.kind == TY_POINTER
@@ -3491,12 +3752,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 || recv_ty.kind == TY_BORROW_MUT) {
             print!("(");
             emit_expr(g, e.lhs);
-            print!("->", c_safe_ident(e.field), ")");
+            print!("->", fld, ")");
             return;
         }
         print!("(");
         emit_expr(g, e.lhs);
-        print!(".", c_safe_ident(e.field), ")");
+        print!(".", fld, ")");
         return;
     }
     if e.kind == EX_INDEX {
@@ -3728,6 +3989,27 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         print!("/* macro ", e.str_val, " */ 0");
         return;
     }
+    if e.kind == EX_TUPLE {
+        let tt: *Type = infer_for_codegen(g, e);
+        if tt == null || tt.kind != TY_TUPLE {
+            print!("/* tuple infer fail */ 0");
+            return;
+        }
+        // Ensure the typedef exists even if the collection pass missed this
+        // literal (e.g. it appears only in a context with no type annotation).
+        register_tuple_type(g, tt);
+        print!("((".concat(type_to_c(tt)).concat("){"));
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                if i > 0 { print!(", "); }
+                print!("._".concat(int_to_str(i)).concat(" = "));
+                let v: Expr = e.args.get(i);
+                emit_expr(g, &v);
+            }
+        }
+        print!("})");
+        return;
+    }
     if e.kind == EX_STRUCT_LIT {
         print!("((", e.str_val, "){");
         if e.field_names != null && e.args != null {
@@ -3830,6 +4112,36 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: i32) {
 pub fn emit_stmt(g: *CG, s: *Stmt, depth: i32) {
     if s == null { return; }
     g.emit_line_dir(s.line, s.origin);
+    // Tuple destructuring: `let (a, b) = expr;`. Bind the value to a temp,
+    // then declare each name as the corresponding tuple element.
+    if s.kind == ST_LET && s.let_names != null && s.let_names.len() > 0 {
+        let tup_ty: *Type = infer_for_codegen(g, s.let_value);
+        let id: i32 = g.anon_count;
+        g.anon_count = id + 1;
+        let tmp: string = "__glide_dtup_".concat(int_to_str(id));
+        ind(depth);
+        print!("__typeof__(");
+        emit_expr(g, s.let_value);
+        print!(") ", tmp, " = ");
+        emit_expr(g, s.let_value);
+        println!(";");
+        for let i: i32 = 0; i < s.let_names.len(); i++ {
+            let nm: string = c_safe_ident(s.let_names.get(i));
+            let field: string = tmp.concat("._").concat(int_to_str(i));
+            ind(depth);
+            print!("__typeof__(", field, ") ", nm, " = ", field, ";");
+            println!("");
+            // Declare the element type so later infer_for_codegen resolves it.
+            if tup_ty != null && tup_ty.kind == TY_TUPLE && tup_ty.args != null
+               && i < tup_ty.args.len() {
+                let el: Type = tup_ty.args.get(i);
+                let pp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *pp = el;
+                g.declare(s.let_names.get(i), pp);
+            }
+        }
+        return;
+    }
     if s.kind == ST_LET || s.kind == ST_CONST {
         // Auto-drop modes:
         //   struct_lit_auto: `let p: *T = T { ... }` rewrites RHS to malloc+init.
@@ -4814,6 +5126,33 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
                 s.let_ty = resolved;
                 body.set(i, s);
                 g.declare(s.name, resolved);
+            } else if s.let_ty == null && s.let_value != null
+                      && s.let_names == null {
+                // Backfill un-annotated tuple lets (`let p = (a, b);`) so the
+                // program-wide tuple collection discovers the type even when
+                // the elements are non-literal (idents resolved via scope).
+                let vt: *Type = infer_for_codegen(g, s.let_value);
+                if vt != null && vt.kind == TY_TUPLE {
+                    s.let_ty = vt;
+                    body.set(i, s);
+                    g.declare(s.name, vt);
+                }
+            }
+            // Declare destructured names so later tuple-literal inference in
+            // the same body can see them.
+            if s.let_names != null && s.let_names.len() > 0 && s.let_value != null {
+                let dvt: *Type = infer_for_codegen(g, s.let_value);
+                let dstr: *Type = strip_ptr(dvt);
+                if dstr != null && dstr.kind == TY_TUPLE && dstr.args != null {
+                    for let di: i32 = 0; di < s.let_names.len(); di++ {
+                        if di < dstr.args.len() {
+                            let el: Type = dstr.args.get(di);
+                            let pp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                            *pp = el;
+                            g.declare(s.let_names.get(di), pp);
+                        }
+                    }
+                }
             }
         }
         // Recurse into nested bodies for lets buried inside loops / branches.
@@ -5375,6 +5714,21 @@ pub fn emit_program(program: *Vector<Stmt>) {
     }
     println!("");
 
+    // Anonymous tuple structs — early pass. Collect tuple types reachable
+    // from type annotations (struct fields, fn signatures, written `let`
+    // annotations) and emit their typedefs now, before any struct body or
+    // chan/result/option wrapper that stores a tuple by value. Generic
+    // templates are skipped (their element type params aren't concrete yet);
+    // a later pass picks up tuples inferred from literals + backfilled lets.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
+        collect_tuple_in_stmt(g, &s);
+    }
+    emit_tuple_runtime(g);
+
     // Pre-emit user struct/enum bodies that show up as chan<T> inners. The
     // chan template stores `T v;` by value so it needs the full definition,
     // not just a forward typedef. Walk the program directly (not g.structs)
@@ -5708,6 +6062,20 @@ pub fn emit_program(program: *Vector<Stmt>) {
         if s.kind == ST_ENUM { emit_enum(&s); }
     }
 
+    // Anonymous tuple structs. Collected program-wide now that let types are
+    // backfilled and every struct/mono body is in scope (tuple elements may
+    // be user structs stored by value). Tuples wrapped in `!T` / `?T` were
+    // already emitted by the result/option pre-pass; the dedup guard makes
+    // this re-emission a no-op for those.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
+        collect_tuple_in_stmt(g, &s);
+    }
+    emit_tuple_runtime(g);
+
     // Top-level const definitions (#define for ints, static const for others).
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
@@ -5786,6 +6154,36 @@ pub fn emit_program(program: *Vector<Stmt>) {
             emit_struct_mono(g, &t);
         }
     }
+    // Tuple typedefs reachable from monomorphized generic fns. The template's
+    // `(T, ...)` types are skipped by the program-wide tuple passes (T isn't
+    // concrete there); substitute each mono's args and collect the resulting
+    // concrete tuples so the typedef precedes the mono's forward decl + body.
+    for let i: i32 = 0; i < g.fn_mono_queue.len(); i++ {
+        let entry: FnMonoEntry = g.fn_mono_queue.get(i);
+        if !g.generic_fns.contains(entry.name) { continue; }
+        let template: Stmt = g.generic_fns.get(entry.name);
+        let rt: *Type = subst_type(template.fn_ret_ty, template.type_params, entry.args);
+        collect_tuple_in_type(g, rt);
+        g.scope.clear();
+        if template.fn_params != null {
+            for let j: i32 = 0; j < template.fn_params.len(); j++ {
+                let p: Param = template.fn_params.get(j);
+                let pt: *Type = subst_type(p.ty, template.type_params, entry.args);
+                collect_tuple_in_type(g, pt);
+                g.declare(p.name, pt);
+            }
+        }
+        if template.fn_body != null {
+            for let j: i32 = 0; j < template.fn_body.len(); j++ {
+                let b: Stmt = template.fn_body.get(j);
+                let nb: *Stmt = subst_stmt(&b, template.type_params, entry.args, g.generic_structs);
+                if nb != null { collect_tuple_in_stmt(g, nb); }
+            }
+        }
+    }
+    g.scope.clear();
+    emit_tuple_runtime(g);
+
     // Now emit forward declarations for every queued mono.
     for let i: i32 = 0; i < g.fn_mono_queue.len(); i++ {
         let entry: FnMonoEntry = g.fn_mono_queue.get(i);

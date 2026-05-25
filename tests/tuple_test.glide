@@ -1,0 +1,138 @@
+// Anonymous tuples: `(A, B, ...)` types, `(a, b, ...)` literals, `.0` / `.1`
+// positional access, multi-value return, and `let (a, b) = ...` destructuring.
+import stdlib::testing::*;
+
+fn divmod(a: i32, b: i32) -> (i32, i32) {
+    return (a / b, a % b);
+}
+
+fn swap(p: (i32, string)) -> (string, i32) {
+    return (p.1, p.0);
+}
+
+struct Holder {
+    pub pair: (i32, string),
+}
+
+struct Pt { x: i32, y: i32 }
+
+fn make_pt_pair() -> (Pt, i32) {
+    return (Pt { x: 1, y: 2 }, 3);
+}
+
+fn gpair<T>(a: T, b: T) -> (T, T) {
+    return (a, b);
+}
+
+fn checked_div(a: i32, b: i32) -> !(i32, i32) {
+    if b == 0 { return err("div by zero"); }
+    return ok((a / b, a % b));
+}
+
+fn maybe_pair(yes: bool) -> ?(i32, i32) {
+    if yes { return some((1, 2)); }
+    return none();
+}
+
+fn test_literal_and_index() -> i32 {
+    let p: (i32, string) = (42, "answer");
+    assert_eq!(p.0, 42);
+    assert_str_eq!(p.1, "answer");
+    return 0;
+}
+
+fn test_inferred() -> i32 {
+    let q = (1, 2, 3);
+    assert_eq!(q.0 + q.1 + q.2, 6);
+    return 0;
+}
+
+fn test_multi_return() -> i32 {
+    let dm = divmod(17, 5);
+    assert_eq!(dm.0, 3);
+    assert_eq!(dm.1, 2);
+    return 0;
+}
+
+fn test_destructure() -> i32 {
+    let (d, r) = divmod(23, 4);
+    assert_eq!(d, 5);
+    assert_eq!(r, 3);
+    return 0;
+}
+
+fn test_tuple_param() -> i32 {
+    let s = swap((7, "x"));
+    assert_str_eq!(s.0, "x");
+    assert_eq!(s.1, 7);
+    return 0;
+}
+
+fn test_nested() -> i32 {
+    let nested = ((1, 2), 3);
+    assert_eq!(nested.0.0, 1);
+    assert_eq!(nested.0.1, 2);
+    assert_eq!(nested.1, 3);
+    return 0;
+}
+
+fn test_mixed_widths() -> i32 {
+    let t: (i64, bool, char) = (9000000000, true, 'z');
+    assert_eq!(t.0, 9000000000);
+    assert!(t.1);
+    assert_eq!(t.2.to_int(), 122);
+    return 0;
+}
+
+fn test_mutable_rebind() -> i32 {
+    let mut t = (1, 10);
+    t = (2, 20);
+    assert_eq!(t.0, 2);
+    assert_eq!(t.1, 20);
+    return 0;
+}
+
+fn test_struct_field() -> i32 {
+    let h: Holder = Holder { pair: (10, "ten") };
+    assert_eq!(h.pair.0, 10);
+    assert_str_eq!(h.pair.1, "ten");
+    return 0;
+}
+
+fn test_result_tuple() -> i32 {
+    let r = checked_div(20, 6);
+    assert!(r.ok);
+    assert_eq!(r.val.0, 3);
+    assert_eq!(r.val.1, 2);
+    let e = checked_div(1, 0);
+    assert_not!(e.ok);
+    return 0;
+}
+
+fn test_option_tuple() -> i32 {
+    let o = maybe_pair(true);
+    assert!(o.has);
+    assert_eq!(o.val.0, 1);
+    assert_eq!(o.val.1, 2);
+    let n = maybe_pair(false);
+    assert_not!(n.has);
+    return 0;
+}
+
+fn test_by_value_struct_element() -> i32 {
+    let t = make_pt_pair();
+    assert_eq!(t.0.x, 1);
+    assert_eq!(t.0.y, 2);
+    assert_eq!(t.1, 3);
+    return 0;
+}
+
+fn test_generic_tuple() -> i32 {
+    let a = gpair(10, 20);
+    assert_eq!(a.0, 10);
+    assert_eq!(a.1, 20);
+    let b = gpair("x", "y");
+    assert_str_eq!(b.0, "x");
+    assert_str_eq!(b.1, "y");
+    return 0;
+}

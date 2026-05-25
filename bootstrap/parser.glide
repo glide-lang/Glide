@@ -1146,6 +1146,24 @@ fn parse_let(p: *Parser) -> *Stmt {
     p.advance(); // 'let'
     let mut is_mut: bool = false;
     if p.eat_kw("mut") { is_mut = true; }
+    // Tuple destructuring: `let (a, b, c) = expr;`. Binds each name to the
+    // corresponding tuple element. The element types come from the value's
+    // tuple type, so no per-name annotation is accepted in this form.
+    if p.at_op("(") {
+        p.advance();
+        let names: *Vector<string> = Vector::new();
+        while !p.at_op(")") && !p.at_eof() {
+            names.push(p.expect_ident());
+            if !p.eat_op(",") { break; }
+        }
+        p.expect_op(")");
+        let mut dval: *Expr = null;
+        if p.eat_op("=") { dval = parse_expr(p, 0); }
+        p.expect_op(";");
+        let ds: *Stmt = stmt_let("", null, dval, is_mut, line, col);
+        ds.let_names = names;
+        return ds;
+    }
     let nline: i32 = p.current.line;
     let ncol: i32 = p.current.column;
     let nlen: i32 = p.current.lexeme.len();
@@ -1682,6 +1700,7 @@ fn at_type_start(p: *Parser) -> bool {
         if lex.eq("[") { return true; }
         if lex.eq("?") { return true; }
         if lex.eq("!") { return true; }
+        if lex.eq("(") { return true; }   // tuple type `(A, B, ...)`
         return false;
     }
     return false;
@@ -1760,6 +1779,26 @@ fn parse_type(p: *Parser) -> *Type {
         if p.eat_op("->") { ret = parse_type(p); }
         return ty_fnptr(params, ret);
     }
+    // Tuple type `(A, B, ...)`. `()` is the unit tuple; `(T)` with no comma is
+    // just a parenthesized `T`; a trailing comma (`(T,)`) forces a 1-tuple.
+    if p.at_op("(") {
+        p.advance();
+        let elems: *Vector<Type> = Vector::new();
+        let mut saw_comma: bool = false;
+        while !p.at_op(")") && !p.at_eof() {
+            let et: *Type = parse_type(p);
+            if et != null { elems.push(*et); }
+            if p.eat_op(",") { saw_comma = true; } else { break; }
+        }
+        p.expect_op(")");
+        if elems.len() == 1 && !saw_comma {
+            let only: Type = elems.get(0);
+            let p0: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            *p0 = only;
+            return p0;
+        }
+        return ty_tuple(elems);
+    }
     if p.current.kind == TOK_IDENT || p.current.kind == TOK_KEYWORD {
         let nl: i32 = p.current.line;
         let nc: i32 = p.current.column;
@@ -1828,6 +1867,33 @@ fn parse_expr(p: *Parser, min_bp: i32) -> *Expr {
             p.advance();
             let fname_line: i32 = p.current.line;
             let fname_col: i32 = p.current.column;
+            // Tuple index: `t.0`, `t.1`. The field name is the integer lexeme.
+            if p.current.kind == TOK_INT {
+                let idx: string = p.current.lexeme;
+                p.advance();
+                left = expr_member(left, idx);
+                left.field_line = fname_line;
+                left.field_col = fname_col;
+                continue;
+            }
+            // Nested tuple index `t.0.1`: the lexer greedily reads `0.1` as a
+            // single float token, so split it back into two index accesses.
+            if p.current.kind == TOK_FLOAT {
+                let lex: string = p.current.lexeme;
+                p.advance();
+                let mut dot: i32 = 0;
+                let ln: i32 = lex.len();
+                while dot < ln && lex.at(dot).to_int() != 46 { dot = dot + 1; }
+                let a_idx: string = lex.substring(0, dot);
+                let b_idx: string = lex.substring(dot + 1, ln);
+                left = expr_member(left, a_idx);
+                left.field_line = fname_line;
+                left.field_col = fname_col;
+                left = expr_member(left, b_idx);
+                left.field_line = fname_line;
+                left.field_col = fname_col;
+                continue;
+            }
             let mut mname: string = p.expect_ident();
             // Qualified method call `expr.NS::method(...)` — disambiguates when
             // multiple `impl T in NS { ... }` blocks register the same method
@@ -2224,9 +2290,27 @@ fn parse_prefix(p: *Parser) -> *Expr {
     }
     if p.at_op("(") {
         p.advance();
-        let e: *Expr = parse_expr(p, 0);
+        // `()` — unit tuple literal.
+        if p.at_op(")") {
+            p.advance();
+            let empty: *Vector<Expr> = Vector::new();
+            return expr_tuple(empty, line, col);
+        }
+        let first: *Expr = parse_expr(p, 0);
+        // `(e)` — parenthesized expression (no comma). `(e, ...)` — tuple.
+        if !p.at_op(",") {
+            p.expect_op(")");
+            return first;
+        }
+        let elems: *Vector<Expr> = Vector::new();
+        if first != null { elems.push(*first); }
+        while p.eat_op(",") {
+            if p.at_op(")") { break; }   // allow trailing comma
+            let e: *Expr = parse_expr(p, 0);
+            if e != null { elems.push(*e); }
+        }
         p.expect_op(")");
-        return e;
+        return expr_tuple(elems, line, col);
     }
     // unary ops
     if p.at_op("-") { p.advance(); let r: *Expr = parse_expr(p, 13); return expr_unary(UN_NEG, r, line, col); }

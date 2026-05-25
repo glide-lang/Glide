@@ -160,6 +160,14 @@ fn first<I: Iterator>(it: *I) -> ?I::Item {
     return it.next();
 }
 
+// ---- 8d. anonymous tuples ----------------------------------------------
+
+// `(i32, i32)` is a structural type: same element list = same type
+// everywhere. Multi-value return needs no named struct.
+fn divmod(a: i32, b: i32) -> (i32, i32) {
+    return (a / b, a % b);
+}
+
 // ---- 9. closures + first-class fn pointers -----------------------------
 
 fn run_op(f: fn(i32) -> i32, x: i32) -> i32 { return f(x); }
@@ -305,6 +313,11 @@ fn main() -> i32 {
     let head: ?i32 = first(&cnt);              // some(7)
     let head_val: i32 = -1; if head.has { head_val = head.val; }
     println!("counter first=${head_val}");
+
+    // --- (a4) anonymous tuples: multi-return + destructuring + index
+    let (quot, rem) = divmod(17, 5);           // (3, 2)
+    let pair = (quot, rem);
+    println!("17/5 = ${pair.0} rem ${pair.1}");
 
     // --- (b) borrows + arena + explicit free
     let jobs: *Vector<i32> = Vector::new();

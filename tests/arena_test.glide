@@ -1,0 +1,24 @@
+// Arena runtime methods (`alloc` / `used` / `reset`) must be recognised by
+// the method-existence check, not flagged like a typo. Regression guard for
+// the typer registering Arena's C-runtime methods in `method_names`.
+import stdlib::testing::*;
+
+fn test_arena_alloc() -> i32 {
+    let arena: *Arena = Arena::new(1024);
+    let scratch: *i32 = arena.alloc(sizeof(i32)) as *i32;
+    *scratch = 41;
+    *scratch = *scratch + 1;
+    assert_eq!(*scratch, 42);
+    arena.free();
+    return 0;
+}
+
+fn test_arena_used_reset() -> i32 {
+    let arena: *Arena = Arena::new(1024);
+    let _a: *i32 = arena.alloc(sizeof(i32)) as *i32;
+    assert!(arena.used() > 0);
+    arena.reset();
+    assert_eq!(arena.used(), 0);
+    arena.free();
+    return 0;
+}

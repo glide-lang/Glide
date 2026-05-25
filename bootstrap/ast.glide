@@ -25,6 +25,7 @@ pub const TY_DYN: i32 = 8;         // `dyn Trait` — name = trait name. Used be
 pub const TY_OPTION: i32 = 9;      // payload: inner (*Type) — `?T`
 pub const TY_OPT_RESULT: i32 = 10; // payload: inner (*Type) — `?!T` (3 variants: Some/None/Err)
 pub const TY_ASSOC: i32 = 11;      // `Owner::Name` — owner in inner, assoc name in name
+pub const TY_TUPLE: i32 = 12;      // `(A, B, ...)` — anonymous tuple. element types in `args`. zero args = unit `()`.
 
 pub struct Type {
     pub kind: i32,
@@ -81,6 +82,7 @@ pub const EX_MACRO_VAR: i32 = 22;   // `$x` placeholder inside a macro body (str
 pub const EX_IF: i32 = 23;          // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
 pub const EX_BLOCK: i32 = 24;       // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
 pub const EX_MATCH: i32 = 25;       // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
+pub const EX_TUPLE: i32 = 26;       // `(a, b, ...)` tuple literal. element exprs in `args`. zero args = unit `()`.
 
 // Binary op codes (subset; extend as needed)
 pub const OP_ADD: i32 = 1;
@@ -279,6 +281,10 @@ pub struct Stmt {
     pub let_value: *Expr,
     pub is_mut: bool,
     pub is_auto_owned: bool,    // explicit `let v* = ...` marker (auto-drop)
+    // Tuple destructuring: `let (a, b, c) = expr;`. When non-null and
+    // non-empty, this is a destructuring binding — `name` is empty and each
+    // entry binds the corresponding tuple element (`expr.0`, `expr.1`, ...).
+    pub let_names: *Vector<string>,
 
     // Return / Expr stmt / Defer
     pub expr_value: *Expr,
@@ -571,6 +577,15 @@ pub fn ty_pointer(inner: *Type) -> *Type {
     return t;
 }
 
+pub fn ty_tuple(args: *Vector<Type>) -> *Type {
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    t.kind = TY_TUPLE;
+    t.name = "";
+    t.inner = null;
+    t.args = args;
+    return t;
+}
+
 pub fn expr_int(n: i64, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_INT;
@@ -681,6 +696,30 @@ pub fn digit_str(d: i32) -> string {
     if d == 7 { return "7"; }
     if d == 8 { return "8"; }
     return "9";
+}
+
+// True if `s` is a non-empty run of ASCII digits. Used to recognise a
+// tuple-index member (`t.0`, `t.12`) where the field name is numeric.
+pub fn tuple_field_is_index(s: string) -> bool {
+    if s == null { return false; }
+    let n: i32 = s.len();
+    if n == 0 { return false; }
+    for let i: i32 = 0; i < n; i++ {
+        let c: i32 = s.at(i).to_int();
+        if c < 48 || c > 57 { return false; }
+    }
+    return true;
+}
+
+// Parse an all-digit tuple-index string into its i32 value. Assumes the
+// caller already validated with `tuple_field_is_index`.
+pub fn tuple_index_value(s: string) -> i32 {
+    let mut v: i32 = 0;
+    let n: i32 = s.len();
+    for let i: i32 = 0; i < n; i++ {
+        v = v * 10 + (s.at(i).to_int() - 48);
+    }
+    return v;
 }
 
 // Strip pointer / borrow wrappers from a type. Used by the typer +
@@ -1008,6 +1047,15 @@ pub fn expr_block(stmts: *Vector<Stmt>, value: *Expr, line: i32, col: i32) -> *E
     e.column = col;
     e.block_stmts = stmts;
     e.operand = value;
+    return e;
+}
+
+pub fn expr_tuple(args: *Vector<Expr>, line: i32, col: i32) -> *Expr {
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    e.kind = EX_TUPLE;
+    e.line = line;
+    e.column = col;
+    e.args = args;
     return e;
 }
 

@@ -96,6 +96,14 @@
 
 ### Language + modules
 
+- **Anonymous tuples**: `(A, B, ...)` as a first-class structural type —
+  tuple literals `(a, b)`, positional access `t.0` / `t.1` (nested `t.0.1`
+  too), multi-value return (`fn divmod(...) -> (i32, i32)`), tuple params /
+  struct fields, `let (a, b) = expr;` destructuring, and tuples wrapped in
+  `!T` / `?T`. Each unique element combination lowers to one C struct
+  (`__glide_tuple<N>_..._t`), so `(i32, string)` is the same type everywhere
+  it appears. Complements the existing `struct Name(field: T)` tuple-struct
+  sugar (which stays the way to name a value type).
 - **`pub import X::*`** re-exports the imported names, so a barrel
   module can collect symbols from several files under one import.
 - **First-use generic element inference**: `let v = Vector::new()`

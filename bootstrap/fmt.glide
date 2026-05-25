@@ -58,6 +58,21 @@ pub fn fmt_type(t: *Type) -> string {
         if t.fnptr_ret != null { out = out.concat(" -> ").concat(fmt_type(t.fnptr_ret)); }
         return out;
     }
+    if t.kind == TY_OPTION { return "?".concat(fmt_type(t.inner)); }
+    if t.kind == TY_OPT_RESULT { return "?!".concat(fmt_type(t.inner)); }
+    if t.kind == TY_DYN { return "dyn ".concat(t.name); }
+    if t.kind == TY_ASSOC { return fmt_type(t.inner).concat("::").concat(t.name); }
+    if t.kind == TY_TUPLE {
+        let mut out: string = "(";
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                if i > 0 { out = out.concat(", "); }
+                let a: Type = t.args.get(i);
+                out = out.concat(fmt_type(&a));
+            }
+        }
+        return out.concat(")");
+    }
     return "?";
 }
 
@@ -189,6 +204,17 @@ pub fn fmt_expr(e: *Expr) -> string {
     if e.kind == EX_STRUCT_LIT {
         return fmt_struct_lit(e, "");
     }
+    if e.kind == EX_TUPLE {
+        let mut out: string = "(";
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                if i > 0 { out = out.concat(", "); }
+                let a: Expr = e.args.get(i);
+                out = out.concat(fmt_expr(&a));
+            }
+        }
+        return out.concat(")");
+    }
     if e.kind == EX_FNEXPR {
         let mut out: string = "fn(";
         if e.fn_expr_params != null {
@@ -246,6 +272,17 @@ fn fmt_let_const_inline(s: *Stmt) -> string {
     let mut out: string = "";
     if s.kind == ST_CONST { out = "const "; } else { out = "let "; }
     if s.is_mut { out = out.concat("mut "); }
+    // Tuple destructuring: `let (a, b, c) = expr;`.
+    if s.let_names != null && s.let_names.len() > 0 {
+        out = out.concat("(");
+        for let i: i32 = 0; i < s.let_names.len(); i++ {
+            if i > 0 { out = out.concat(", "); }
+            out = out.concat(s.let_names.get(i));
+        }
+        out = out.concat(")");
+        if s.let_value != null { out = out.concat(" = ").concat(fmt_expr(s.let_value)); }
+        return out.concat(";");
+    }
     out = out.concat(s.name);
     if s.is_auto_owned { out = out.concat("*"); }
     if s.let_ty != null { out = out.concat(": ").concat(fmt_type(s.let_ty)); }

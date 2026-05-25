@@ -5578,7 +5578,13 @@ fn check_unused_in_body(t: *Typer, body: *Vector<Stmt>) {
         let s: Stmt = body.get(i);
         if s.kind == ST_LET {
             let name: string = s.name;
+            // Tuple destructuring (`let (a, b) = ...`) has no single binder
+            // name; element positions aren't tracked, so skip the lint.
+            if s.let_names != null && s.let_names.len() > 0 {
+                continue;
+            }
             // Skip names beginning with `_` (intentional discard convention).
+            if name.len() == 0 { continue; }
             if name.len() > 0 && name.at(0).to_int() == 95 { continue; }
             let mut used: bool = false;
             for let j: i32 = i + 1; j < n; j++ {

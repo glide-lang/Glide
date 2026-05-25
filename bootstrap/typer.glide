@@ -66,6 +66,17 @@ pub fn type_eq(a: *Type, b: *Type) -> bool {
         if !a.name.eq(b.name) { return false; }
         return type_eq(a.inner, b.inner);
     }
+    if a.kind == TY_TUPLE {
+        let an: i32 = if a.args != null { a.args.len() } else { 0 };
+        let bn: i32 = if b.args != null { b.args.len() } else { 0 };
+        if an != bn { return false; }
+        for let i: i32 = 0; i < an; i++ {
+            let ae: Type = a.args.get(i);
+            let be: Type = b.args.get(i);
+            if !type_eq(&ae, &be) { return false; }
+        }
+        return true;
+    }
     return type_eq(a.inner, b.inner);
 }
 
@@ -92,6 +103,17 @@ pub fn type_to_string(t: *Type) -> string {
     if t.kind == TY_OPT_RESULT { return "?!".concat(type_to_string(t.inner)); }
     if t.kind == TY_DYN { return "dyn ".concat(t.name); }
     if t.kind == TY_ASSOC { return type_to_string(t.inner).concat("::").concat(t.name); }
+    if t.kind == TY_TUPLE {
+        let mut out: string = "(";
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                if i > 0 { out = out.concat(", "); }
+                let a: Type = t.args.get(i);
+                out = out.concat(type_to_string(&a));
+            }
+        }
+        return out.concat(")");
+    }
     if t.kind == TY_FNPTR {
         let mut s: string = "fn(";
         if t.args != null {
@@ -382,6 +404,17 @@ fn _subst_type_local(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> 
         }
         return ty_generic(t.name, new_args);
     }
+    if t.kind == TY_TUPLE {
+        let new_args: *Vector<Type> = Vector::new();
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                let sa: *Type = _subst_type_local(&a, params, args);
+                if sa != null { new_args.push(*sa); }
+            }
+        }
+        return ty_tuple(new_args);
+    }
     return t;
 }
 
@@ -405,6 +438,19 @@ pub fn types_compat(want: *Type, got: *Type) -> bool {
     if (want.kind == TY_POINTER || want.kind == TY_BORROW || want.kind == TY_BORROW_MUT)
        && (got.kind == TY_POINTER || got.kind == TY_BORROW || got.kind == TY_BORROW_MUT) {
         return types_compat(want.inner, got.inner);
+    }
+    // Tuples: same arity, element-wise compatible (so int-literal widening
+    // through `(1, 2): (i64, i64)` doesn't read as a mismatch).
+    if want.kind == TY_TUPLE && got.kind == TY_TUPLE {
+        let wn: i32 = if want.args != null { want.args.len() } else { 0 };
+        let gn: i32 = if got.args != null { got.args.len() } else { 0 };
+        if wn != gn { return false; }
+        for let i: i32 = 0; i < wn; i++ {
+            let we: Type = want.args.get(i);
+            let ge: Type = got.args.get(i);
+            if !types_compat(&we, &ge) { return false; }
+        }
+        return true;
     }
     return false;
 }
@@ -687,6 +733,15 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
         _check_type_known(t, ty.inner, line, col);
         return;
     }
+    if ty.kind == TY_TUPLE {
+        if ty.args != null {
+            for let i: i32 = 0; i < ty.args.len(); i++ {
+                let a: Type = ty.args.get(i);
+                _check_type_known(t, &a, line, col);
+            }
+        }
+        return;
+    }
     if ty.kind == TY_GENERIC {
         if !ty.name.eq("chan") && !t.structs.contains(ty.name)
            && !_is_current_type_param(t, ty.name) {
@@ -911,6 +966,14 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
     // user code expects to call as `Arena::new(...)`, etc. Hardcoded for
     // now; replace with proper `extern type` declarations later.
     t.structs.insert("Arena", true);
+    // Arena's runtime methods (defined in runtime/stdlib.c, not Glide) so the
+    // method-existence check treats `arena.alloc(...)` / `.used()` / `.reset()`
+    // as known rather than flagging them like a typo. `free` is special-cased
+    // separately; `new` is a static (`Arena::new`).
+    t.method_names.insert("Arena::alloc", true);
+    t.method_names.insert("Arena::used", true);
+    t.method_names.insert("Arena::reset", true);
+    t.method_names.insert("Arena::free", true);
 
 
     for let i: i32 = 0; i < program.len(); i++ {
@@ -1223,6 +1286,22 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
     if param_ty.kind == TY_OPT_RESULT && arg_ty.kind == TY_OPT_RESULT {
         return extract_for_var(param_ty.inner, arg_ty.inner, var_name);
     }
+    // Tuples: pair-wise on elements so `(T, U)` matched against `(int, string)`
+    // binds T=int / U=string.
+    if param_ty.kind == TY_TUPLE && arg_ty.kind == TY_TUPLE
+       && param_ty.args != null && arg_ty.args != null
+       && param_ty.args.len() == arg_ty.args.len() {
+        for let i: i32 = 0; i < param_ty.args.len(); i++ {
+            let pa_v: Type = param_ty.args.get(i);
+            let aa_v: Type = arg_ty.args.get(i);
+            let pa_p: *Type = malloc(sizeof(Type)) as *Type;
+            let aa_p: *Type = malloc(sizeof(Type)) as *Type;
+            *pa_p = pa_v;
+            *aa_p = aa_v;
+            let r: *Type = extract_for_var(pa_p, aa_p, var_name);
+            if r != null { return r; }
+        }
+    }
     // Fn pointers: pair-wise on args + return so `fn(*T) -> U` matched against
     // `fn(*int) -> int` extracts both T and U. Without this, method-level type
     // params that appear only inside an fn-ptr param (e.g. `Mutex.with<U>(f: fn(*T) -> U) -> U`)
@@ -1327,6 +1406,18 @@ fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type,
         *p = *ty;
         p.inner = new_inner;
         return p;
+    }
+    // Recurse into tuple elements so `-> (T, U)` resolves each slot.
+    if ty.kind == TY_TUPLE {
+        let new_args: *Vector<Type> = Vector::new();
+        if ty.args != null {
+            for let i: i32 = 0; i < ty.args.len(); i++ {
+                let a: Type = ty.args.get(i);
+                let na: *Type = rewrite_assoc_in_type(t, sig, args, &a, plen, bn);
+                if na != null { new_args.push(*na); }
+            }
+        }
+        return ty_tuple(new_args);
     }
     return ty;
 }
@@ -1914,6 +2005,32 @@ fn check_stmt(t: *Typer, s: *Stmt) {
 }
 
 fn check_let_or_const(t: *Typer, s: *Stmt) {
+    // Tuple destructuring: `let (a, b, c) = expr;`. Infer the value's tuple
+    // type and bind each name to its element type. Falls back to permissive
+    // `__unknown__` bindings when the element type can't be resolved.
+    if s.let_names != null && s.let_names.len() > 0 {
+        let mut vt: *Type = null;
+        if s.let_value != null { vt = infer_expr(t, s.let_value); }
+        let stripped: *Type = strip_ptr(vt);
+        if stripped != null && stripped.kind != TY_TUPLE {
+            t.err_code(s.line, s.column, "tuple-destructure",
+                "cannot destructure non-tuple value of type `"
+                .concat(type_to_string(vt)).concat("`"));
+        }
+        for let i: i32 = 0; i < s.let_names.len(); i++ {
+            let nm: string = s.let_names.get(i);
+            let mut bind: *Type = ty_named("__unknown__");
+            if stripped != null && stripped.kind == TY_TUPLE && stripped.args != null
+               && i < stripped.args.len() {
+                let el: Type = stripped.args.get(i);
+                let pp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *pp = el;
+                bind = pp;
+            }
+            t.scope.insert(nm, *bind);
+        }
+        return;
+    }
     let mut final_ty: *Type = s.let_ty;
     // The annotation (if any) must name a real type — catches
     // `let x: NoSuchType = …`.
@@ -2786,6 +2903,18 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
 
     if e.kind == EX_MEMBER {
         let recv_ty: *Type = infer_expr(t, e.lhs);
+        // Tuple index `t.0` / `t.1`: numeric field selects the element type.
+        let tup: *Type = strip_ptr(recv_ty);
+        if tup != null && tup.kind == TY_TUPLE && tuple_field_is_index(e.field) {
+            let idx: i32 = tuple_index_value(e.field);
+            if tup.args != null && idx >= 0 && idx < tup.args.len() {
+                let el: Type = tup.args.get(idx);
+                let pp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *pp = el;
+                return pp;
+            }
+            return null;
+        }
         // Cross-file field privacy: if the receiver resolves to a known
         // struct and the field isn't marked `pub`, only that struct's
         // own file can access it. Methods are still resolved later via
@@ -2891,6 +3020,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
 
     if e.kind == EX_STRUCT_LIT {
         return ty_named(e.str_val);
+    }
+
+    if e.kind == EX_TUPLE {
+        let elems: *Vector<Type> = Vector::new();
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                let a: Expr = e.args.get(i);
+                let et: *Type = infer_expr(t, &a);
+                if et != null { elems.push(*et); }
+                else { elems.push(*ty_named("__unknown__")); }
+            }
+        }
+        return ty_tuple(elems);
     }
 
     return null;
