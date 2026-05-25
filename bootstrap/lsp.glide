@@ -4571,6 +4571,102 @@ fn _push_primitive_types(items: *JsonValue, seen: *HashMap<bool>) {
     }
 }
 
+// Innermost unclosed delimiter before the cursor in a manifest source:
+//   0 = top level, 1 = inside `{ }` (the Package body), 2 = inside `( )`
+//   (a vec_of(...) call). Skips string + `//`-comment contents so braces
+//   there don't shift the context.
+fn _manifest_ctx(text: string, line0: i32, col0: i32) -> i32 {
+    let n: i32 = text.len();
+    let mut pos: i32 = 0;
+    let mut line: i32 = 0;
+    while pos < n && line < line0 {
+        if text.at(pos).to_int() == 10 { line = line + 1; }
+        pos = pos + 1;
+    }
+    pos = pos + col0;
+    if pos > n { pos = n; }
+    let mut stack: string = "";
+    let mut i: i32 = 0;
+    while i < pos {
+        let c: i32 = text.at(i).to_int();
+        if c == 34 {                       // string literal — skip to its end
+            i = i + 1;
+            while i < pos {
+                let d: i32 = text.at(i).to_int();
+                if d == 92 { i = i + 2; continue; }
+                if d == 34 { i = i + 1; break; }
+                i = i + 1;
+            }
+            continue;
+        }
+        if c == 47 && i + 1 < n && text.at(i + 1).to_int() == 47 {   // // comment
+            while i < pos && text.at(i).to_int() != 10 { i = i + 1; }
+            continue;
+        }
+        if c == 123 || c == 40 {           // `{` or `(` — push
+            stack = stack.concat(text.substring(i, i + 1));
+        } else if c == 125 || c == 41 {    // `}` or `)` — pop
+            if stack.len() > 0 { stack = stack.substring(0, stack.len() - 1); }
+        }
+        i = i + 1;
+    }
+    if stack.len() == 0 { return 0; }
+    let top: i32 = stack.at(stack.len() - 1).to_int();
+    if top == 123 { return 1; }
+    if top == 40 { return 2; }
+    return 0;
+}
+
+// The fixed `Package { ... }` field set. Required fields first, then the
+// optional metadata. Kind 5 = Field.
+fn _push_manifest_fields(items: *JsonValue) {
+    json_arr_push(items, completion_item("name", 5, "string — package name (required)"));
+    json_arr_push(items, completion_item("version", 5, "string — semver, e.g. \"0.1.0\" (required)"));
+    json_arr_push(items, completion_item("bin", 5, "string — entry point (default src/main.glide)"));
+    json_arr_push(items, completion_item("deps", 5, "vec_of(...) — dependency list"));
+    json_arr_push(items, completion_item("description", 5, "string — short summary (optional)"));
+    json_arr_push(items, completion_item("author", 5, "string — name <email> (optional)"));
+    json_arr_push(items, completion_item("license", 5, "string — SPDX id, e.g. \"MIT\" (optional)"));
+    json_arr_push(items, completion_item("repository", 5, "string — source URL (optional)"));
+    json_arr_push(items, completion_item("target", 5, "string — default cross-compile triple (optional)"));
+}
+
+// Manifest-aware completion for `glide.glide`. The manifest is never compiled,
+// so symbol-based completion has nothing to offer; instead we surface the
+// fixed schema (`Package` + its fields, `vec_of`, `Dep::path` / `Dep::git`)
+// keyed off the cursor's delimiter context. Text-driven so it works even
+// while the buffer is half-typed (no AST required).
+fn handle_manifest_completion(id: *JsonValue, doc: LspDoc, line0: i32, col0: i32) {
+    if _cursor_in_string_or_comment(doc.text, line0, col0) {
+        lsp_send_response(id, json_array());
+        return;
+    }
+    let items: *JsonValue = json_array();
+    // After `Dep::` → the two dependency constructors.
+    let q: string = path_qualifier_before(doc.text, line0, col0);
+    if q.eq("Dep") {
+        json_arr_push(items, completion_item("path", 3, "Dep::path(name, rel_path) — local path dependency"));
+        json_arr_push(items, completion_item("git", 3, "Dep::git(name, url, rev) — git dependency"));
+        lsp_send_response(id, items);
+        return;
+    }
+    let ctx: i32 = _manifest_ctx(doc.text, line0, col0);
+    if ctx == 1 {
+        // Inside `Package { }` — field names, plus `vec_of` for the deps value.
+        _push_manifest_fields(items);
+        json_arr_push(items, completion_item("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+    } else if ctx == 2 {
+        // Inside `vec_of( )` — dependency entries.
+        json_arr_push(items, completion_item("Dep::path", 3, "Dep::path(name, rel_path) — local path dependency"));
+        json_arr_push(items, completion_item("Dep::git", 3, "Dep::git(name, url, rev) — git dependency"));
+    } else {
+        // Top level — the manifest literal + the dep-list helper.
+        json_arr_push(items, completion_item("Package", 22, "package manifest — Package { name, version, ... }"));
+        json_arr_push(items, completion_item("vec_of", 3, "vec_of(...) — dependency list"));
+    }
+    lsp_send_response(id, items);
+}
+
 fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -4581,6 +4677,12 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     let col0: i32 = json_as_int(json_get(pos, "character"));
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
+    // The manifest (`glide.glide`) isn't a program — offer its fixed schema
+    // (Package fields, vec_of, Dep::path/git) instead of generic symbols.
+    if path_is_manifest(uri_to_path(uri)) {
+        handle_manifest_completion(id, doc, line0, col0);
+        return;
+    }
     if doc.stmts == null {
         // The buffer doesn't parse into an AST yet — typically a half-typed
         // `let x: ` whose empty type trips the parser. The symbol-based

@@ -130,6 +130,12 @@
 - **LSP**: enforces visibility (unknown symbols are flagged live, as
   in `glide check`), completes macros and members, jumps to a
   proc-macro definition on goto, and shows inferred-type hints.
+- **Manifest (`glide.glide`) awareness**: the manifest is parsed for
+  its fields but never compiled, so the LSP and `glide check` now skip
+  semantic analysis on it (no more false `unknown type Package`), while
+  still surfacing parse errors. Completion is manifest-aware too —
+  `Package` + its fields at the right spots, `vec_of`, and
+  `Dep::path` / `Dep::git` inside the dependency list.
 
 ### Fixes
 
