@@ -2,6 +2,93 @@
 
 ## 0.2.0 — 2026-05-25
 
+### Types
+
+- **Canonical fixed-width numeric types**: `i8 i16 i32 i64 i128 i256` /
+  `u8 u16 u32 u64 u128 u256` / `usize isize` / `f32 f64`. The legacy C-style
+  spellings `int / uint / long / ulong / float` are **retired as type names** —
+  using one is an error with a hint to the canonical replacement. `i128`/`u128`
+  are native (`__int128`); `i256`/`u256` are a first-class software 4×u64 struct
+  with operators dispatched to runtime helpers, built via `u256::from(n)`.
+  Methods (`.to_string()`, `.abs()`, …) work across every width.
+- **Associated int constants** `i32::MAX` / `u64::MIN` / … for every integer
+  width (i128/i256 included). Unsigned `.to_string()` no longer prints via the
+  signed path (`u64::MAX` was showing `-1`).
+- **Anonymous tuples**: `(A, B, ...)` as a first-class structural type — tuple
+  literals `(a, b)`, positional access `t.0` / `t.1` (nested `t.0.1` too),
+  multi-value return (`fn divmod(...) -> (i32, i32)`), tuple params / struct
+  fields, `let (a, b) = expr;` destructuring, and tuples wrapped in `!T` / `?T`.
+  Each unique element combination lowers to one C struct, so `(i32, string)` is
+  the same type everywhere. Complements the `struct Name(field: T)` tuple-struct
+  sugar (which stays the way to name a value type).
+
+### Compiler
+
+- **Flexible `main` signatures**: `fn main()`, `fn main() -> i32`, and
+  `fn main() -> !T` are all accepted; the C wrapper maps each to an exit code.
+- **Compile-time `format!` check**: a `{}` placeholder / argument count
+  mismatch is reported at compile time instead of reading a missing printf arg.
+- **First-use generic element inference**: `let v = Vector::new()` followed by
+  `v.push(32)` fixes `v` to `Vector<int>`, so a later `v.push("x")` is flagged.
+- **`pub import X::*`** re-exports the imported names, so a barrel module can
+  collect symbols from several files under one import.
+
+### HTTP
+
+- **HTTP/2 server** with stream multiplexing (HPACK + frames + ALPN).
+- **HTTP/3**: client over ngtcp2 + nghttp3 (interop-tested against Cloudflare),
+  a server (multi-connection, streaming response bodies, self-signed cert
+  helper), and **0-RTT** end-to-end (session cache + TLS resumption, early-data
+  plumbing, anti-replay sliding window, disk persistence). H3 needs an
+  OpenSSL 3.5+ toolchain.
+- **Router + decorators**: `@route` / `@get` / `@post` / etc., `@middleware(...)`
+  composed per route, `@listen(port)` / `@listen_workers(port, n)` rewrite
+  `main` with the router setup, and `routes!(r)`. Method-aware router with
+  `:param` / `*wildcard` segments.
+- **OpenAPI 3.0.3** spec emitted from `@route`'d handlers; route discovery
+  surfaced to the LSP (`documentSymbol` + `glide/routeList`, `/glide-routes`).
+- **Extractors**: `Form`, `Query<T>`, `Cookies`, plus the existing typed
+  `Json<T>` / `Path<T>` / headers / bearer extractors.
+- **Server-Sent Events** (production): keep-alive, comments, retry,
+  Last-Event-ID, `SseChannel`.
+- **Static file middleware** (production): ETag, directory-traversal guard,
+  `index.html`, expanded MIME map, zero-copy via `sendfile` / `TransmitFile`.
+- **TLS**: server-side ALPN advertise + select callback; configurable handshake
+  timeout + split-accept API.
+
+### Concurrency + runtime
+
+- **io_uring reactor** (Linux), opt-in via `GLIDE_REACTOR=uring` (+14% over
+  epoll). Joins the kqueue (macOS/BSD) and IOCP (Windows) backends below.
+- **`@leaf` + stackless spawn**: a `@leaf` coroutine runs inline on its worker
+  (~192 B/task). `http_listen_workers` / the router use a state-machine fast
+  path by default (≈95% of Axum); `@leaf` is auto-detected, no longer required
+  on handlers, and a blocking handler aborts cleanly.
+- **Growable coroutine stacks** (default 8 KiB, fault-driven grow) and a tuned
+  channel park path: `park_unpark` went 23 µs → ~270 ns (per-worker run-next
+  slot + spin budget, `GLIDE_CHAN_SPIN`).
+
+### Macros
+
+- **`@proc_pass`** — whole-program compiler passes distributable as libraries;
+  **`pass_diag`** lets a pass emit custom lints (location + code + severity)
+  that get the same rendering and `@allow` suppression as built-ins.
+- **`@proc_macro_expr`** — proc-macros that return an expression (compile-time
+  values).
+- **Import-aware macro resolution**: bare `name!` resolves across dependencies
+  with an ambiguity error; `dep::name!` disambiguates same-named macros by
+  origin module.
+- **`stdlib::meta`** — a stable surface for compile-time macro libraries.
+
+### Package manager
+
+- Import a dependency **by its bare name**; `glide new --lib` scaffolds a
+  library as `src/<name>.glide`.
+- Git deps accept **`file://` and `git://`** remotes.
+- The manifest parses **`author` / `license` / `description` / `repository`**
+  (informational) and they're scaffolded into a new project.
+- `glide check` with no file resolves the project's entry point.
+
 ### Cross-platform
 
 - **kqueue reactor backend** for macOS, FreeBSD, OpenBSD, NetBSD,
@@ -84,32 +171,17 @@
 
 ### Standard library
 
-- **Logging macros**: `info!` / `warn!` / `error!` / `debug!` /
-  `trace!` / `fatal!` format like `println!` and route through the
-  global logger. A single `import stdlib::log::*;` brings both the
-  runtime fns and the macros. A bare value (`info!(x)`) is wrapped in
-  `"{}"` automatically.
-- **`@logged` reports values + timing**: the entry line interpolates
-  the actual argument values, the exit line adds the return value and
-  the elapsed time (`> add(4, 6)` / `< add -> 10 (981.2us)`). `@trace`
-  stays a lightweight enter/exit flow marker. Level via `@logged(info)`.
-
-### Language + modules
-
-- **Anonymous tuples**: `(A, B, ...)` as a first-class structural type —
-  tuple literals `(a, b)`, positional access `t.0` / `t.1` (nested `t.0.1`
-  too), multi-value return (`fn divmod(...) -> (i32, i32)`), tuple params /
-  struct fields, `let (a, b) = expr;` destructuring, and tuples wrapped in
-  `!T` / `?T`. Each unique element combination lowers to one C struct
-  (`__glide_tuple<N>_..._t`), so `(i32, string)` is the same type everywhere
-  it appears. Complements the existing `struct Name(field: T)` tuple-struct
-  sugar (which stays the way to name a value type).
-- **`pub import X::*`** re-exports the imported names, so a barrel
-  module can collect symbols from several files under one import.
-- **First-use generic element inference**: `let v = Vector::new()`
-  followed by `v.push(32)` fixes `v` to `Vector<int>`, so a later
-  `v.push("x")` is flagged. Previously the unbound element type let
-  any push through.
+- **`stdlib::regex`** — a pure-Glide PCRE-like engine (classes, quantifiers,
+  groups, anchors, alternation).
+- **`stdlib::log`** — a structured leveled logger (rotating files, syslog,
+  JSON / key-value output) plus `println!`-style level macros `info!` /
+  `warn!` / `error!` / `debug!` / `trace!` / `fatal!`. One
+  `import stdlib::log::*;` brings the runtime fns and the macros; a bare value
+  (`info!(x)`) is wrapped in `"{}"` automatically.
+- **`@logged` reports values + timing**: the entry line interpolates the actual
+  argument values, the exit line adds the return value and elapsed time
+  (`> add(4, 6)` / `< add -> 10 (981.2us)`). `@trace` stays a lightweight
+  enter/exit flow marker. Level via `@logged(info)`.
 
 ### Diagnostics
 
