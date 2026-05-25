@@ -108,6 +108,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -220,6 +224,10 @@
         },
         {
           "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
           "named": true
         },
         {
@@ -387,6 +395,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -529,6 +541,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -692,6 +708,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -801,6 +821,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -992,6 +1016,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -1169,6 +1197,10 @@
         {
           "type": "slice_type",
           "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
         }
       ]
     }
@@ -1227,6 +1259,10 @@
         },
         {
           "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         }
       ]
@@ -1387,6 +1423,10 @@
           {
             "type": "struct_literal",
             "named": true
+          },
+          {
+            "type": "tuple_expr",
+            "named": true
           }
         ]
       }
@@ -1545,6 +1585,14 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -1621,6 +1669,10 @@
         {
           "type": "slice_type",
           "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
         }
       ]
     }
@@ -1689,6 +1741,10 @@
           },
           {
             "type": "slice_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           }
         ]
@@ -1795,6 +1851,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -1919,6 +1979,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -2031,6 +2095,10 @@
         },
         {
           "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
           "named": true
         },
         {
@@ -2148,6 +2216,10 @@
         {
           "type": "slice_type",
           "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
         }
       ]
     }
@@ -2261,6 +2333,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -2341,6 +2417,10 @@
           },
           {
             "type": "slice_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           }
         ]
@@ -2483,6 +2563,10 @@
           {
             "type": "slice_type",
             "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
           }
         ]
       }
@@ -2581,6 +2665,10 @@
           {
             "type": "slice_type",
             "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
           }
         ]
       }
@@ -2641,6 +2729,10 @@
           {
             "type": "slice_type",
             "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
           }
         ]
       }
@@ -2699,6 +2791,10 @@
         },
         {
           "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         }
       ]
@@ -2823,6 +2919,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -2940,6 +3040,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -3069,6 +3173,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -3080,6 +3188,16 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tuple_pattern",
             "named": true
           }
         ]
@@ -3189,6 +3307,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -3244,6 +3366,10 @@
           },
           {
             "type": "slice_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           }
         ]
@@ -3350,6 +3476,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -3461,6 +3591,10 @@
         },
         {
           "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
           "named": true
         },
         {
@@ -3612,6 +3746,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -3703,6 +3841,10 @@
           },
           {
             "type": "slice_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           }
         ]
@@ -3919,6 +4061,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -4014,6 +4160,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           }
         ]
@@ -4121,6 +4271,10 @@
           {
             "type": "slice_type",
             "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
           }
         ]
       }
@@ -4142,10 +4296,20 @@
       },
       "name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tuple_pattern",
             "named": true
           }
         ]
@@ -4200,6 +4364,10 @@
           },
           {
             "type": "slice_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           }
         ]
@@ -4306,6 +4474,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -4468,6 +4640,10 @@
         },
         {
           "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
           "named": true
         },
         {
@@ -4807,6 +4983,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -4945,6 +5125,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -4968,10 +5152,20 @@
     "fields": {
       "field": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "index": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tuple_index",
             "named": true
           }
         ]
@@ -5076,6 +5270,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           }
         ]
@@ -5187,6 +5385,10 @@
           {
             "type": "struct_literal",
             "named": true
+          },
+          {
+            "type": "tuple_expr",
+            "named": true
           }
         ]
       }
@@ -5296,6 +5498,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -5402,6 +5608,10 @@
         {
           "type": "slice_type",
           "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
         }
       ]
     }
@@ -5460,6 +5670,10 @@
         },
         {
           "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         }
       ]
@@ -5529,6 +5743,10 @@
           },
           {
             "type": "slice_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           }
         ]
@@ -5656,6 +5874,10 @@
         },
         {
           "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
           "named": true
         },
         {
@@ -5831,6 +6053,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -5891,6 +6117,10 @@
         },
         {
           "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         }
       ]
@@ -6009,6 +6239,10 @@
         },
         {
           "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
           "named": true
         }
       ]
@@ -6134,6 +6368,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -6209,6 +6447,10 @@
         },
         {
           "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         }
       ]
@@ -6323,6 +6565,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -6384,6 +6630,10 @@
         {
           "type": "slice_type",
           "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
         }
       ]
     }
@@ -6442,6 +6692,10 @@
         },
         {
           "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         }
       ]
@@ -6676,6 +6930,10 @@
           "named": true
         },
         {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
           "type": "unary_expr",
           "named": true
         }
@@ -6758,6 +7016,10 @@
           "named": true
         },
         {
+          "type": "tuple_type",
+          "named": true
+        },
+        {
           "type": "type_params",
           "named": true
         }
@@ -6828,6 +7090,10 @@
           },
           {
             "type": "slice_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           }
         ]
@@ -6950,6 +7216,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -7099,9 +7369,210 @@
           {
             "type": "slice_type",
             "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
           }
         ]
       }
+    }
+  },
+  {
+    "type": "tuple_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "array_literal",
+          "named": true
+        },
+        {
+          "type": "assignment",
+          "named": true
+        },
+        {
+          "type": "binary_expr",
+          "named": true
+        },
+        {
+          "type": "bool_literal",
+          "named": true
+        },
+        {
+          "type": "call_expr",
+          "named": true
+        },
+        {
+          "type": "cast_expr",
+          "named": true
+        },
+        {
+          "type": "char_literal",
+          "named": true
+        },
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "fn_expr",
+          "named": true
+        },
+        {
+          "type": "identifier_expr",
+          "named": true
+        },
+        {
+          "type": "index_expr",
+          "named": true
+        },
+        {
+          "type": "macro_call",
+          "named": true
+        },
+        {
+          "type": "macro_var_expr",
+          "named": true
+        },
+        {
+          "type": "member_expr",
+          "named": true
+        },
+        {
+          "type": "method_macro_call",
+          "named": true
+        },
+        {
+          "type": "new_expr",
+          "named": true
+        },
+        {
+          "type": "null_literal",
+          "named": true
+        },
+        {
+          "type": "number_literal",
+          "named": true
+        },
+        {
+          "type": "parenthesized",
+          "named": true
+        },
+        {
+          "type": "path_expr",
+          "named": true
+        },
+        {
+          "type": "path_macro_call",
+          "named": true
+        },
+        {
+          "type": "postfix_expr",
+          "named": true
+        },
+        {
+          "type": "sizeof_expr",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        },
+        {
+          "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
+          "type": "unary_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tuple_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tuple_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "borrow_mut_type",
+          "named": true
+        },
+        {
+          "type": "borrow_type",
+          "named": true
+        },
+        {
+          "type": "chan_type",
+          "named": true
+        },
+        {
+          "type": "dyn_type",
+          "named": true
+        },
+        {
+          "type": "fn_ptr_type",
+          "named": true
+        },
+        {
+          "type": "named_type",
+          "named": true
+        },
+        {
+          "type": "option_result_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
+          "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "result_type",
+          "named": true
+        },
+        {
+          "type": "self_type",
+          "named": true
+        },
+        {
+          "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -7169,6 +7640,10 @@
           {
             "type": "slice_type",
             "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
           }
         ]
       }
@@ -7228,6 +7703,10 @@
         },
         {
           "type": "slice_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         }
       ]
@@ -7424,6 +7903,10 @@
             "named": true
           },
           {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
             "type": "unary_expr",
             "named": true
           }
@@ -7537,6 +8020,10 @@
           {
             "type": "slice_type",
             "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
           }
         ]
       },
@@ -7642,6 +8129,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -7768,6 +8259,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
             "named": true
           },
           {
@@ -8155,6 +8650,10 @@
   {
     "type": "true",
     "named": false
+  },
+  {
+    "type": "tuple_index",
+    "named": true
   },
   {
     "type": "type",

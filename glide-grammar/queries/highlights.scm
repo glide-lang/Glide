@@ -133,6 +133,7 @@
 
 ; Members
 (member_expr field: (identifier) @property)
+(member_expr index: (tuple_index) @property)
 
 ; Method calls (override the @property above for call_expr targets)
 (call_expr
@@ -141,6 +142,7 @@
 ; Params and locals
 (param name: (identifier) @variable.parameter)
 (let_stmt name: (identifier) @variable)
+(tuple_pattern (identifier) @variable)
 (const_stmt name: (identifier) @constant)
 
 ; `import stdlib::hashmap::{X, Y};` — selective imports tag the leaves

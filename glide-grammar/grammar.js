@@ -515,11 +515,25 @@ module.exports = grammar({
     let_stmt: $ => seq(
       'let',
       optional('mut'),
-      field('name', $.identifier),
-      optional(field('auto_drop', '*')),
+      choice(
+        seq(
+          field('name', $.identifier),
+          optional(field('auto_drop', '*')),
+        ),
+        field('pattern', $.tuple_pattern),
+      ),
       optional(seq(':', field('type', $._type))),
       optional(seq('=', field('value', $._expression))),
       ';',
+    ),
+
+    // Tuple destructuring binder: `let (a, b, c) = expr;`.
+    tuple_pattern: $ => seq(
+      '(',
+      $.identifier,
+      repeat(seq(',', $.identifier)),
+      optional(','),
+      ')',
     ),
 
     const_stmt: $ => seq(
@@ -559,7 +573,10 @@ module.exports = grammar({
       seq(
         'let',
         optional('mut'),
-        field('name', $.identifier),
+        choice(
+          field('name', $.identifier),
+          field('pattern', $.tuple_pattern),
+        ),
         optional(seq(':', field('type', $._type))),
         optional(seq('=', field('value', $._expression))),
       ),
@@ -592,6 +609,15 @@ module.exports = grammar({
       $.result_type,
       $.option_type,
       $.option_result_type,
+      $.tuple_type,
+    ),
+
+    // Anonymous tuple type `(A, B, ...)`. `()` is the unit tuple; a single
+    // element `(T)` reads as a parenthesized type.
+    tuple_type: $ => seq(
+      '(',
+      optional(seq($._type, repeat(seq(',', $._type)), optional(','))),
+      ')',
     ),
 
     self_type: _ => 'Self',
@@ -732,6 +758,7 @@ module.exports = grammar({
       // namespaced calls (e.g. `seven.tour::squared()`).
       choice(
         field('field', $.identifier),
+        field('index', $.tuple_index),
         seq(
           field('namespace', $.identifier),
           '::',
@@ -740,12 +767,17 @@ module.exports = grammar({
       ),
     )),
 
+    // Tuple positional index: the `0` / `1` in `t.0` / `t.1`. A bare digit run
+    // (nested `t.0.1` splits into two `.` accesses).
+    tuple_index: _ => token(/[0-9]+/),
+
     postfix_expr: $ => prec(PREC.postfix, seq(
       $._postfix_chain,
       field('op', choice('++', '--', '?')),
     )),
 
     _primary: $ => choice(
+      $.tuple_expr,
       $.parenthesized,
       $.array_literal,
       $.macro_call,
@@ -843,6 +875,19 @@ module.exports = grammar({
     ),
 
     parenthesized: $ => seq('(', $._expression, ')'),
+
+    // Tuple literal `(a, b, ...)`. The leading comma after the first element
+    // (or an empty `()`) distinguishes it from a parenthesized expression.
+    tuple_expr: $ => seq(
+      '(',
+      optional(seq(
+        $._expression,
+        ',',
+        optional(seq($._expression, repeat(seq(',', $._expression)))),
+        optional(','),
+      )),
+      ')',
+    ),
 
     // No `prec` here so identifier_expr + block (e.g. `if abc { ... }`)
     // wins via conflict resolution when struct_literal can't parse the body.
