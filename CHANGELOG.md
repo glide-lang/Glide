@@ -137,8 +137,10 @@
   `Package` + its fields at the right spots, `vec_of`, and
   `Dep::path` / `Dep::git` inside the dependency list. Field completion
   is progressive: fields already written drop off the list, and a value
-  slot (`deps: ...`) offers `vec_of` rather than field names. Hover over
-  any manifest symbol (a field, `Package`, `vec_of`, `Dep::path/git`)
+  slot (`deps: ...`) offers `vec_of` rather than field names. A
+  `target:` value slot completes the cross-compile triples
+  (`x86_64-linux-musl`, `aarch64-macos`, `x86_64-windows-gnu`, …). Hover
+  over any manifest symbol (a field, `Package`, `vec_of`, `Dep::path/git`)
   shows what it is and whether it's required.
 
 ### Fixes

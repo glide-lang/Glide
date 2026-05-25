@@ -4741,12 +4741,63 @@ fn _push_manifest_fields(items: *JsonValue, present: *HashMap<bool>) {
     if !present.contains("target") { json_arr_push(items, completion_item("target", 5, "string — default cross-compile triple (optional)")); }
 }
 
+// The field name of the current line (`<ident>:` at its start), or "".
+// Lets completion offer value suggestions keyed to the field being filled.
+fn _manifest_line_field(text: string, line0: i32, col0: i32) -> string {
+    let cur: i32 = _manifest_cursor_offset(text, line0, col0);
+    let n: i32 = text.len();
+    let mut s: i32 = cur;
+    while s > 0 && text.at(s - 1).to_int() != 10 { s = s - 1; }
+    let mut i: i32 = s;
+    while i < cur {
+        let w: i32 = text.at(i).to_int();
+        if w == 32 || w == 9 { i = i + 1; } else { break; }
+    }
+    let start: i32 = i;
+    while i < n {
+        let c: i32 = text.at(i).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+           || (c >= 48 && c <= 57) || c == 95 { i = i + 1; } else { break; }
+    }
+    if i == start { return ""; }
+    let ident: string = text.substring(start, i);
+    let mut j: i32 = i;
+    while j < n {
+        let w: i32 = text.at(j).to_int();
+        if w == 32 || w == 9 { j = j + 1; } else { break; }
+    }
+    if j < n && text.at(j).to_int() == 58 { return ident; }
+    return "";
+}
+
+// Cross-compile triples offered as `target:` values. The musl pair has
+// auto-fetched sysroots (`glide target list`); the rest cross-compile via the
+// bundled zig backend (a program touching openssl/etc. needs a manual sysroot).
+fn _push_target_triples(items: *JsonValue) {
+    json_arr_push(items, completion_item("x86_64-linux-musl", 12, "Linux x86_64 (sysroot auto-fetched)"));
+    json_arr_push(items, completion_item("aarch64-linux-musl", 12, "Linux ARM64 (sysroot auto-fetched)"));
+    json_arr_push(items, completion_item("x86_64-linux-gnu", 12, "Linux x86_64 (glibc)"));
+    json_arr_push(items, completion_item("aarch64-linux-gnu", 12, "Linux ARM64 (glibc)"));
+    json_arr_push(items, completion_item("x86_64-macos", 12, "macOS Intel"));
+    json_arr_push(items, completion_item("aarch64-macos", 12, "macOS Apple Silicon"));
+    json_arr_push(items, completion_item("x86_64-windows-gnu", 12, "Windows x86_64 (MinGW)"));
+}
+
 // Manifest-aware completion for `glide.glide`. The manifest is never compiled,
 // so symbol-based completion has nothing to offer; instead we surface the
 // fixed schema (`Package` + its fields, `vec_of`, `Dep::path` / `Dep::git`)
 // keyed off the cursor's delimiter context. Text-driven so it works even
 // while the buffer is half-typed (no AST required).
 fn handle_manifest_completion(id: *JsonValue, doc: LspDoc, line0: i32, col0: i32) {
+    // `target:` value — offer cross-compile triples, even inside the string
+    // (the value is always a quoted triple, so completion is wanted there).
+    if _manifest_line_field(doc.text, line0, col0).eq("target")
+       && _manifest_in_value_slot(doc.text, line0, col0) {
+        let titems: *JsonValue = json_array();
+        _push_target_triples(titems);
+        lsp_send_response(id, titems);
+        return;
+    }
     if _cursor_in_string_or_comment(doc.text, line0, col0) {
         lsp_send_response(id, json_array());
         return;
@@ -4772,7 +4823,11 @@ fn handle_manifest_completion(id: *JsonValue, doc: LspDoc, line0: i32, col0: i32
         // Otherwise it's a field-name slot — offer only the fields that
         // aren't already written (progressive).
         if _manifest_in_value_slot(doc.text, line0, col0) {
-            json_arr_push(items, completion_item("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+            // Only `deps` takes a non-string value (`vec_of(...)`); the other
+            // fields are string literals, so suggest nothing there.
+            if _manifest_line_field(doc.text, line0, col0).eq("deps") {
+                json_arr_push(items, completion_item("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+            }
         } else {
             let present: *HashMap<bool> = HashMap::new();
             _manifest_collect_fields(doc.text, ob, present);
