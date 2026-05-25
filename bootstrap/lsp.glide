@@ -4571,11 +4571,8 @@ fn _push_primitive_types(items: *JsonValue, seen: *HashMap<bool>) {
     }
 }
 
-// Innermost unclosed delimiter before the cursor in a manifest source:
-//   0 = top level, 1 = inside `{ }` (the Package body), 2 = inside `( )`
-//   (a vec_of(...) call). Skips string + `//`-comment contents so braces
-//   there don't shift the context.
-fn _manifest_ctx(text: string, line0: i32, col0: i32) -> i32 {
+// Byte offset of the cursor (line0/col0) into `text`.
+fn _manifest_cursor_offset(text: string, line0: i32, col0: i32) -> i32 {
     let n: i32 = text.len();
     let mut pos: i32 = 0;
     let mut line: i32 = 0;
@@ -4585,7 +4582,15 @@ fn _manifest_ctx(text: string, line0: i32, col0: i32) -> i32 {
     }
     pos = pos + col0;
     if pos > n { pos = n; }
-    let mut stack: string = "";
+    return pos;
+}
+
+// Offset of the innermost unclosed `{` / `(` strictly before the cursor, or
+// -1 if the cursor is at top level. `text.at(offset)` tells the caller which
+// delimiter it is. Skips string + `//`-comment contents.
+fn _manifest_open_offset(text: string, line0: i32, col0: i32) -> i32 {
+    let pos: i32 = _manifest_cursor_offset(text, line0, col0);
+    let stack: *Vector<i32> = Vector::new();
     let mut i: i32 = 0;
     while i < pos {
         let c: i32 = text.at(i).to_int();
@@ -4599,36 +4604,98 @@ fn _manifest_ctx(text: string, line0: i32, col0: i32) -> i32 {
             }
             continue;
         }
-        if c == 47 && i + 1 < n && text.at(i + 1).to_int() == 47 {   // // comment
+        if c == 47 && i + 1 < pos && text.at(i + 1).to_int() == 47 {   // // comment
             while i < pos && text.at(i).to_int() != 10 { i = i + 1; }
             continue;
         }
-        if c == 123 || c == 40 {           // `{` or `(` — push
-            stack = stack.concat(text.substring(i, i + 1));
-        } else if c == 125 || c == 41 {    // `}` or `)` — pop
-            if stack.len() > 0 { stack = stack.substring(0, stack.len() - 1); }
+        if c == 123 || c == 40 { stack.push(i); }
+        else if c == 125 || c == 41 { if stack.len() > 0 { stack.pop(); } }
+        i = i + 1;
+    }
+    if stack.len() == 0 { return -1; }
+    return stack.get(stack.len() - 1);
+}
+
+// Collect the field names already written at the top level of the `{ }` block
+// that opens at `open_off`, into `present`. Lets completion drop fields the
+// user has already filled in. Idents are matched only when followed by a
+// single `:` (so `Dep::path` inside a nested `vec_of(...)` is excluded both by
+// the `::` check and by sitting at a deeper delimiter level).
+fn _manifest_collect_fields(text: string, open_off: i32, present: *HashMap<bool>) {
+    if open_off < 0 { return; }
+    let n: i32 = text.len();
+    let mut depth: i32 = 0;
+    let mut i: i32 = open_off + 1;
+    while i < n {
+        let c: i32 = text.at(i).to_int();
+        if c == 34 {
+            i = i + 1;
+            while i < n {
+                let d: i32 = text.at(i).to_int();
+                if d == 92 { i = i + 2; continue; }
+                if d == 34 { i = i + 1; break; }
+                i = i + 1;
+            }
+            continue;
+        }
+        if c == 47 && i + 1 < n && text.at(i + 1).to_int() == 47 {
+            while i < n && text.at(i).to_int() != 10 { i = i + 1; }
+            continue;
+        }
+        if c == 123 || c == 40 { depth = depth + 1; i = i + 1; continue; }
+        if c == 125 || c == 41 {
+            if depth == 0 { break; }       // closes the block we started in
+            depth = depth - 1; i = i + 1; continue;
+        }
+        if depth == 0 && ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95) {
+            let start: i32 = i;
+            while i < n {
+                let cc: i32 = text.at(i).to_int();
+                if (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122)
+                   || (cc >= 48 && cc <= 57) || cc == 95 { i = i + 1; } else { break; }
+            }
+            let ident: string = text.substring(start, i);
+            let mut j: i32 = i;
+            while j < n {
+                let w: i32 = text.at(j).to_int();
+                if w == 32 || w == 9 || w == 10 || w == 13 { j = j + 1; } else { break; }
+            }
+            if j < n && text.at(j).to_int() == 58
+               && (j + 1 >= n || text.at(j + 1).to_int() != 58) {
+                present.insert(ident, true);
+            }
+            continue;
         }
         i = i + 1;
     }
-    if stack.len() == 0 { return 0; }
-    let top: i32 = stack.at(stack.len() - 1).to_int();
-    if top == 123 { return 1; }
-    if top == 40 { return 2; }
-    return 0;
 }
 
-// The fixed `Package { ... }` field set. Required fields first, then the
-// optional metadata. Kind 5 = Field.
-fn _push_manifest_fields(items: *JsonValue) {
-    json_arr_push(items, completion_item("name", 5, "string — package name (required)"));
-    json_arr_push(items, completion_item("version", 5, "string — semver, e.g. \"0.1.0\" (required)"));
-    json_arr_push(items, completion_item("bin", 5, "string — entry point (default src/main.glide)"));
-    json_arr_push(items, completion_item("deps", 5, "vec_of(...) — dependency list"));
-    json_arr_push(items, completion_item("description", 5, "string — short summary (optional)"));
-    json_arr_push(items, completion_item("author", 5, "string — name <email> (optional)"));
-    json_arr_push(items, completion_item("license", 5, "string — SPDX id, e.g. \"MIT\" (optional)"));
-    json_arr_push(items, completion_item("repository", 5, "string — source URL (optional)"));
-    json_arr_push(items, completion_item("target", 5, "string — default cross-compile triple (optional)"));
+// True if the current line already has a `:` before the cursor — i.e. the
+// cursor sits in a field's VALUE slot, not at a field-name position.
+fn _manifest_in_value_slot(text: string, line0: i32, col0: i32) -> bool {
+    let cur: i32 = _manifest_cursor_offset(text, line0, col0);
+    let mut s: i32 = cur;
+    while s > 0 && text.at(s - 1).to_int() != 10 { s = s - 1; }
+    let mut i: i32 = s;
+    while i < cur {
+        if text.at(i).to_int() == 58 { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Push every `Package` field not already present, so completion is
+// progressive: filled-in fields drop off the list. Kind 5 = Field.
+fn _push_manifest_fields(items: *JsonValue, present: *HashMap<bool>) {
+    if !present.contains("name") { json_arr_push(items, completion_item("name", 5, "string — package name (required)")); }
+    if !present.contains("version") { json_arr_push(items, completion_item("version", 5, "string — semver, e.g. \"0.1.0\" (required)")); }
+    if !present.contains("bin") { json_arr_push(items, completion_item("bin", 5, "string — entry point (default src/main.glide)")); }
+    if !present.contains("deps") { json_arr_push(items, completion_item("deps", 5, "vec_of(...) — dependency list")); }
+    if !present.contains("description") { json_arr_push(items, completion_item("description", 5, "string — short summary (optional)")); }
+    if !present.contains("author") { json_arr_push(items, completion_item("author", 5, "string — name <email> (optional)")); }
+    if !present.contains("license") { json_arr_push(items, completion_item("license", 5, "string — SPDX id, e.g. \"MIT\" (optional)")); }
+    if !present.contains("repository") { json_arr_push(items, completion_item("repository", 5, "string — source URL (optional)")); }
+    if !present.contains("target") { json_arr_push(items, completion_item("target", 5, "string — default cross-compile triple (optional)")); }
 }
 
 // Manifest-aware completion for `glide.glide`. The manifest is never compiled,
@@ -4650,11 +4717,25 @@ fn handle_manifest_completion(id: *JsonValue, doc: LspDoc, line0: i32, col0: i32
         lsp_send_response(id, items);
         return;
     }
-    let ctx: i32 = _manifest_ctx(doc.text, line0, col0);
+    let ob: i32 = _manifest_open_offset(doc.text, line0, col0);
+    let mut ctx: i32 = 0;
+    if ob >= 0 {
+        let oc: i32 = doc.text.at(ob).to_int();
+        if oc == 123 { ctx = 1; } else if oc == 40 { ctx = 2; }
+    }
     if ctx == 1 {
-        // Inside `Package { }` — field names, plus `vec_of` for the deps value.
-        _push_manifest_fields(items);
-        json_arr_push(items, completion_item("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+        // Inside `Package { }`. A value slot (after `field:`) only takes
+        // `vec_of` for the deps list; everything else is a string literal.
+        // Otherwise it's a field-name slot — offer only the fields that
+        // aren't already written (progressive).
+        if _manifest_in_value_slot(doc.text, line0, col0) {
+            json_arr_push(items, completion_item("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+        } else {
+            let present: *HashMap<bool> = HashMap::new();
+            _manifest_collect_fields(doc.text, ob, present);
+            _push_manifest_fields(items, present);
+            present.free();
+        }
     } else if ctx == 2 {
         // Inside `vec_of( )` — dependency entries.
         json_arr_push(items, completion_item("Dep::path", 3, "Dep::path(name, rel_path) — local path dependency"));

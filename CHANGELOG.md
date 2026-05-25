@@ -135,7 +135,9 @@
   semantic analysis on it (no more false `unknown type Package`), while
   still surfacing parse errors. Completion is manifest-aware too —
   `Package` + its fields at the right spots, `vec_of`, and
-  `Dep::path` / `Dep::git` inside the dependency list.
+  `Dep::path` / `Dep::git` inside the dependency list. Field completion
+  is progressive: fields already written drop off the list, and a value
+  slot (`deps: ...`) offers `vec_of` rather than field names.
 
 ### Fixes
 

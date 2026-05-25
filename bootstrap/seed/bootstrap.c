@@ -8731,8 +8731,11 @@ void   list_chan_methods_for_type (const char*   type_name, JsonValue*   items, 
 void   list_methods_for_type (Vector__Stmt*   stmts, const char*   type_name, JsonValue*   items, HashMap__bool*   seen, bool   want_self);
 bool   _in_type_position (const char*   text, int32_t   p);
 void   _push_primitive_types (JsonValue*   items, HashMap__bool*   seen);
-int32_t   _manifest_ctx (const char*   text, int32_t   line0, int32_t   col0);
-void   _push_manifest_fields (JsonValue*   items);
+int32_t   _manifest_cursor_offset (const char*   text, int32_t   line0, int32_t   col0);
+int32_t   _manifest_open_offset (const char*   text, int32_t   line0, int32_t   col0);
+void   _manifest_collect_fields (const char*   text, int32_t   open_off, HashMap__bool*   present);
+bool   _manifest_in_value_slot (const char*   text, int32_t   line0, int32_t   col0);
+void   _push_manifest_fields (JsonValue*   items, HashMap__bool*   present);
 void   handle_manifest_completion (JsonValue*   id, LspDoc   doc, int32_t   line0, int32_t   col0);
 void   handle_completion (JsonValue*   req, LspState*   state);
 void   _emit_index_items (Vector__ImportableSym*   idx, HashMap__ImportInfo*   imps, int32_t   insert_line, JsonValue*   items, HashMap__bool*   seen);
@@ -9680,6 +9683,8 @@ int main(int __glide_main_argc, char** __glide_main_argv);
 
 
 
+
+
 Vector__string*   Vector_new__string (void);
 void   Vector_push__string (Vector__string*   self, const char*   x);
 int32_t   Vector_len__string (Vector__string*   self);
@@ -9866,6 +9871,11 @@ ImportableSym   Vector_get__ImportableSym (Vector__ImportableSym*   self, int32_
 bool   HashMap_contains__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
 ImportInfo   HashMap_get__ImportInfo (HashMap__ImportInfo*   self, const char*   k);
 void   HashMap_free__ImportInfo (HashMap__ImportInfo*   self);
+Vector__i32*   Vector_new__i32 (void);
+void   Vector_push__i32 (Vector__i32*   self, int32_t   x);
+int32_t   Vector_len__i32 (Vector__i32*   self);
+int32_t   Vector_pop__i32 (Vector__i32*   self);
+int32_t   Vector_get__i32 (Vector__i32*   self, int32_t   i);
 void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x);
 Vector__UseSite*   Vector_new__UseSite (void);
 int32_t   Vector_len__UseSite (Vector__UseSite*   self);
@@ -9873,12 +9883,8 @@ UseSite   Vector_get__UseSite (Vector__UseSite*   self, int32_t   i);
 Vector__ExpectPending*   Vector_new__ExpectPending (void);
 int32_t   Vector_len__ExpectPending (Vector__ExpectPending*   self);
 void   Vector_free__ExpectPending (Vector__ExpectPending*   self);
-Vector__i32*   Vector_new__i32 (void);
 ExpectPending   Vector_get__ExpectPending (Vector__ExpectPending*   self, int32_t   i);
-void   Vector_push__i32 (Vector__i32*   self, int32_t   x);
 void   Vector_set__ExpectPending (Vector__ExpectPending*   self, int32_t   i, ExpectPending   x);
-int32_t   Vector_len__i32 (Vector__i32*   self);
-int32_t   Vector_get__i32 (Vector__i32*   self, int32_t   i);
 void   Vector_push__ExpectPending (Vector__ExpectPending*   self, ExpectPending   x);
 int32_t   HashMap_len__string (HashMap__string*   self);
 bool   HashMap_get__bool (HashMap__bool*   self, const char*   k);
@@ -63293,787 +63299,1013 @@ void   _push_primitive_types (JsonValue*   items, HashMap__bool*   seen) {
 }
 
 
-#line 4578 "bootstrap/lsp.glide"
-int32_t   _manifest_ctx (const char*   text, int32_t   line0, int32_t   col0) {
+#line 4575 "bootstrap/lsp.glide"
+int32_t   _manifest_cursor_offset (const char*   text, int32_t   line0, int32_t   col0) {
 
-#line 4579 "bootstrap/lsp.glide"
+#line 4576 "bootstrap/lsp.glide"
     int32_t   n = __glide_string_len(text);
 
-#line 4580 "bootstrap/lsp.glide"
+#line 4577 "bootstrap/lsp.glide"
     int32_t   pos = 0;
 
-#line 4581 "bootstrap/lsp.glide"
+#line 4578 "bootstrap/lsp.glide"
     int32_t   line = 0;
 
-#line 4582 "bootstrap/lsp.glide"
+#line 4579 "bootstrap/lsp.glide"
     while (((pos  <  n)  &&  (line  <  line0))) {
 
-#line 4583 "bootstrap/lsp.glide"
+#line 4580 "bootstrap/lsp.glide"
         if ((__glide_char_to_int(__glide_string_at(text, pos))  ==  10)) {
             (line  =  (line  +  1));
         }
 
-#line 4584 "bootstrap/lsp.glide"
+#line 4581 "bootstrap/lsp.glide"
         (pos  =  (pos  +  1));
     }
 
-#line 4586 "bootstrap/lsp.glide"
+#line 4583 "bootstrap/lsp.glide"
     (pos  =  (pos  +  col0));
 
-#line 4587 "bootstrap/lsp.glide"
+#line 4584 "bootstrap/lsp.glide"
     if ((pos  >  n)) {
         (pos  =  n);
     }
 
-#line 4588 "bootstrap/lsp.glide"
-    const char*   stack = "";
+#line 4585 "bootstrap/lsp.glide"
+    return pos;
+}
 
-#line 4589 "bootstrap/lsp.glide"
-    int32_t   i = 0;
-
-#line 4590 "bootstrap/lsp.glide"
-    while ((i  <  pos)) {
 
 #line 4591 "bootstrap/lsp.glide"
-        int32_t   c = __glide_char_to_int(__glide_string_at(text, i));
+int32_t   _manifest_open_offset (const char*   text, int32_t   line0, int32_t   col0) {
 
 #line 4592 "bootstrap/lsp.glide"
-        if ((c  ==  34)) {
+    int32_t   pos = ((int32_t(*)(const char*, int32_t, int32_t))_manifest_cursor_offset)(text, line0, col0);
 
 #line 4593 "bootstrap/lsp.glide"
-            (i  =  (i  +  1));
+    Vector__i32*   stack = ((Vector__i32*(*)(void))Vector_new__i32)();
 
 #line 4594 "bootstrap/lsp.glide"
-            while ((i  <  pos)) {
+    int32_t   i = 0;
 
 #line 4595 "bootstrap/lsp.glide"
-                int32_t   d = __glide_char_to_int(__glide_string_at(text, i));
+    while ((i  <  pos)) {
 
 #line 4596 "bootstrap/lsp.glide"
+        int32_t   c = __glide_char_to_int(__glide_string_at(text, i));
+
+#line 4597 "bootstrap/lsp.glide"
+        if ((c  ==  34)) {
+
+#line 4598 "bootstrap/lsp.glide"
+            (i  =  (i  +  1));
+
+#line 4599 "bootstrap/lsp.glide"
+            while ((i  <  pos)) {
+
+#line 4600 "bootstrap/lsp.glide"
+                int32_t   d = __glide_char_to_int(__glide_string_at(text, i));
+
+#line 4601 "bootstrap/lsp.glide"
                 if ((d  ==  92)) {
                     (i  =  (i  +  2));
                     continue;
                 }
 
-#line 4597 "bootstrap/lsp.glide"
+#line 4602 "bootstrap/lsp.glide"
                 if ((d  ==  34)) {
                     (i  =  (i  +  1));
                     break;
                 }
 
-#line 4598 "bootstrap/lsp.glide"
+#line 4603 "bootstrap/lsp.glide"
                 (i  =  (i  +  1));
             }
 
-#line 4600 "bootstrap/lsp.glide"
+#line 4605 "bootstrap/lsp.glide"
             continue;
         }
 
-#line 4602 "bootstrap/lsp.glide"
-        if ((((c  ==  47)  &&  ((i  +  1)  <  n))  &&  (__glide_char_to_int(__glide_string_at(text, (i  +  1)))  ==  47))) {
+#line 4607 "bootstrap/lsp.glide"
+        if ((((c  ==  47)  &&  ((i  +  1)  <  pos))  &&  (__glide_char_to_int(__glide_string_at(text, (i  +  1)))  ==  47))) {
 
-#line 4603 "bootstrap/lsp.glide"
+#line 4608 "bootstrap/lsp.glide"
             while (((i  <  pos)  &&  (__glide_char_to_int(__glide_string_at(text, i))  !=  10))) {
                 (i  =  (i  +  1));
             }
 
-#line 4604 "bootstrap/lsp.glide"
+#line 4609 "bootstrap/lsp.glide"
             continue;
         }
 
-#line 4606 "bootstrap/lsp.glide"
+#line 4611 "bootstrap/lsp.glide"
         if (((c  ==  123)  ||  (c  ==  40))) {
-
-#line 4607 "bootstrap/lsp.glide"
-            (stack  =  __glide_string_concat(stack, __glide_string_substring(text, i, (i  +  1))));
+            Vector_push__i32(stack, i);
         } else {
 
-#line 4608 "bootstrap/lsp.glide"
+#line 4612 "bootstrap/lsp.glide"
             if (((c  ==  125)  ||  (c  ==  41))) {
-
-#line 4609 "bootstrap/lsp.glide"
-                if ((__glide_string_len(stack)  >  0)) {
-                    (stack  =  __glide_string_substring(stack, 0, (__glide_string_len(stack)  -  1)));
+                if ((Vector_len__i32(stack)  >  0)) {
+                    Vector_pop__i32(stack);
                 }
             }
         }
 
-#line 4611 "bootstrap/lsp.glide"
+#line 4613 "bootstrap/lsp.glide"
         (i  =  (i  +  1));
     }
 
-#line 4613 "bootstrap/lsp.glide"
-    if ((__glide_string_len(stack)  ==  0)) {
-        return 0;
-    }
-
-#line 4614 "bootstrap/lsp.glide"
-    int32_t   top = __glide_char_to_int(__glide_string_at(stack, (__glide_string_len(stack)  -  1)));
-
 #line 4615 "bootstrap/lsp.glide"
-    if ((top  ==  123)) {
-        return 1;
+    if ((Vector_len__i32(stack)  ==  0)) {
+        return (-1);
     }
 
 #line 4616 "bootstrap/lsp.glide"
-    if ((top  ==  40)) {
-        return 2;
-    }
-
-#line 4617 "bootstrap/lsp.glide"
-    return 0;
+    return Vector_get__i32(stack, (Vector_len__i32(stack)  -  1));
 }
 
-
-#line 4622 "bootstrap/lsp.glide"
-void   _push_manifest_fields (JsonValue*   items) {
-
-#line 4623 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("name", 5, "string — package name (required)"));
 
 #line 4624 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("version", 5, "string — semver, e.g. \"0.1.0\" (required)"));
+void   _manifest_collect_fields (const char*   text, int32_t   open_off, HashMap__bool*   present) {
 
 #line 4625 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("bin", 5, "string — entry point (default src/main.glide)"));
+    if ((open_off  <  0)) {
+        return;
+    }
 
 #line 4626 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("deps", 5, "vec_of(...) — dependency list"));
+    int32_t   n = __glide_string_len(text);
 
 #line 4627 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("description", 5, "string — short summary (optional)"));
+    int32_t   depth = 0;
 
 #line 4628 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("author", 5, "string — name <email> (optional)"));
+    int32_t   i = (open_off  +  1);
 
 #line 4629 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("license", 5, "string — SPDX id, e.g. \"MIT\" (optional)"));
+    while ((i  <  n)) {
 
 #line 4630 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("repository", 5, "string — source URL (optional)"));
+        int32_t   c = __glide_char_to_int(__glide_string_at(text, i));
 
 #line 4631 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("target", 5, "string — default cross-compile triple (optional)"));
+        if ((c  ==  34)) {
+
+#line 4632 "bootstrap/lsp.glide"
+            (i  =  (i  +  1));
+
+#line 4633 "bootstrap/lsp.glide"
+            while ((i  <  n)) {
+
+#line 4634 "bootstrap/lsp.glide"
+                int32_t   d = __glide_char_to_int(__glide_string_at(text, i));
+
+#line 4635 "bootstrap/lsp.glide"
+                if ((d  ==  92)) {
+                    (i  =  (i  +  2));
+                    continue;
+                }
+
+#line 4636 "bootstrap/lsp.glide"
+                if ((d  ==  34)) {
+                    (i  =  (i  +  1));
+                    break;
+                }
+
+#line 4637 "bootstrap/lsp.glide"
+                (i  =  (i  +  1));
+            }
+
+#line 4639 "bootstrap/lsp.glide"
+            continue;
+        }
+
+#line 4641 "bootstrap/lsp.glide"
+        if ((((c  ==  47)  &&  ((i  +  1)  <  n))  &&  (__glide_char_to_int(__glide_string_at(text, (i  +  1)))  ==  47))) {
+
+#line 4642 "bootstrap/lsp.glide"
+            while (((i  <  n)  &&  (__glide_char_to_int(__glide_string_at(text, i))  !=  10))) {
+                (i  =  (i  +  1));
+            }
+
+#line 4643 "bootstrap/lsp.glide"
+            continue;
+        }
+
+#line 4645 "bootstrap/lsp.glide"
+        if (((c  ==  123)  ||  (c  ==  40))) {
+            (depth  =  (depth  +  1));
+            (i  =  (i  +  1));
+            continue;
+        }
+
+#line 4646 "bootstrap/lsp.glide"
+        if (((c  ==  125)  ||  (c  ==  41))) {
+
+#line 4647 "bootstrap/lsp.glide"
+            if ((depth  ==  0)) {
+                break;
+            }
+
+#line 4648 "bootstrap/lsp.glide"
+            (depth  =  (depth  -  1));
+            (i  =  (i  +  1));
+            continue;
+        }
+
+#line 4650 "bootstrap/lsp.glide"
+        if (((depth  ==  0)  &&  ((((c  >=  65)  &&  (c  <=  90))  ||  ((c  >=  97)  &&  (c  <=  122)))  ||  (c  ==  95)))) {
+
+#line 4651 "bootstrap/lsp.glide"
+            int32_t   start = i;
+
+#line 4652 "bootstrap/lsp.glide"
+            while ((i  <  n)) {
+
+#line 4653 "bootstrap/lsp.glide"
+                int32_t   cc = __glide_char_to_int(__glide_string_at(text, i));
+
+#line 4654 "bootstrap/lsp.glide"
+                if ((((((cc  >=  65)  &&  (cc  <=  90))  ||  ((cc  >=  97)  &&  (cc  <=  122)))  ||  ((cc  >=  48)  &&  (cc  <=  57)))  ||  (cc  ==  95))) {
+
+#line 4655 "bootstrap/lsp.glide"
+                    (i  =  (i  +  1));
+                } else {
+                    break;
+                }
+            }
+
+#line 4657 "bootstrap/lsp.glide"
+            const char*   ident = __glide_string_substring(text, start, i);
+
+#line 4658 "bootstrap/lsp.glide"
+            int32_t   j = i;
+
+#line 4659 "bootstrap/lsp.glide"
+            while ((j  <  n)) {
+
+#line 4660 "bootstrap/lsp.glide"
+                int32_t   w = __glide_char_to_int(__glide_string_at(text, j));
+
+#line 4661 "bootstrap/lsp.glide"
+                if (((((w  ==  32)  ||  (w  ==  9))  ||  (w  ==  10))  ||  (w  ==  13))) {
+                    (j  =  (j  +  1));
+                } else {
+                    break;
+                }
+            }
+
+#line 4663 "bootstrap/lsp.glide"
+            if ((((j  <  n)  &&  (__glide_char_to_int(__glide_string_at(text, j))  ==  58))  &&  (((j  +  1)  >=  n)  ||  (__glide_char_to_int(__glide_string_at(text, (j  +  1)))  !=  58)))) {
+
+#line 4665 "bootstrap/lsp.glide"
+                HashMap_insert__bool(present, ident, true);
+            }
+
+#line 4667 "bootstrap/lsp.glide"
+            continue;
+        }
+
+#line 4669 "bootstrap/lsp.glide"
+        (i  =  (i  +  1));
+    }
 }
 
 
-#line 4639 "bootstrap/lsp.glide"
+#line 4675 "bootstrap/lsp.glide"
+bool   _manifest_in_value_slot (const char*   text, int32_t   line0, int32_t   col0) {
+
+#line 4676 "bootstrap/lsp.glide"
+    int32_t   cur = ((int32_t(*)(const char*, int32_t, int32_t))_manifest_cursor_offset)(text, line0, col0);
+
+#line 4677 "bootstrap/lsp.glide"
+    int32_t   s = cur;
+
+#line 4678 "bootstrap/lsp.glide"
+    while (((s  >  0)  &&  (__glide_char_to_int(__glide_string_at(text, (s  -  1)))  !=  10))) {
+        (s  =  (s  -  1));
+    }
+
+#line 4679 "bootstrap/lsp.glide"
+    int32_t   i = s;
+
+#line 4680 "bootstrap/lsp.glide"
+    while ((i  <  cur)) {
+
+#line 4681 "bootstrap/lsp.glide"
+        if ((__glide_char_to_int(__glide_string_at(text, i))  ==  58)) {
+            return true;
+        }
+
+#line 4682 "bootstrap/lsp.glide"
+        (i  =  (i  +  1));
+    }
+
+#line 4684 "bootstrap/lsp.glide"
+    return false;
+}
+
+
+#line 4689 "bootstrap/lsp.glide"
+void   _push_manifest_fields (JsonValue*   items, HashMap__bool*   present) {
+
+#line 4690 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "name"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("name", 5, "string — package name (required)"));
+    }
+
+#line 4691 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "version"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("version", 5, "string — semver, e.g. \"0.1.0\" (required)"));
+    }
+
+#line 4692 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "bin"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("bin", 5, "string — entry point (default src/main.glide)"));
+    }
+
+#line 4693 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "deps"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("deps", 5, "vec_of(...) — dependency list"));
+    }
+
+#line 4694 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "description"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("description", 5, "string — short summary (optional)"));
+    }
+
+#line 4695 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "author"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("author", 5, "string — name <email> (optional)"));
+    }
+
+#line 4696 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "license"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("license", 5, "string — SPDX id, e.g. \"MIT\" (optional)"));
+    }
+
+#line 4697 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "repository"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("repository", 5, "string — source URL (optional)"));
+    }
+
+#line 4698 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__bool(present, "target"))) {
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("target", 5, "string — default cross-compile triple (optional)"));
+    }
+}
+
+
+#line 4706 "bootstrap/lsp.glide"
 void   handle_manifest_completion (JsonValue*   id, LspDoc   doc, int32_t   line0, int32_t   col0) {
 
-#line 4640 "bootstrap/lsp.glide"
+#line 4707 "bootstrap/lsp.glide"
     if (((bool(*)(const char*, int32_t, int32_t))_cursor_in_string_or_comment)((doc. text ), line0, col0)) {
 
-#line 4641 "bootstrap/lsp.glide"
+#line 4708 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
 
-#line 4642 "bootstrap/lsp.glide"
+#line 4709 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4644 "bootstrap/lsp.glide"
+#line 4711 "bootstrap/lsp.glide"
     JsonValue*   items = ((JsonValue*(*)(void))json_array)();
 
-#line 4646 "bootstrap/lsp.glide"
+#line 4713 "bootstrap/lsp.glide"
     const char*   q = ((const char*(*)(const char*, int32_t, int32_t))path_qualifier_before)((doc. text ), line0, col0);
 
-#line 4647 "bootstrap/lsp.glide"
+#line 4714 "bootstrap/lsp.glide"
     if (__glide_string_eq(q, "Dep")) {
 
-#line 4648 "bootstrap/lsp.glide"
+#line 4715 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("path", 3, "Dep::path(name, rel_path) — local path dependency"));
 
-#line 4649 "bootstrap/lsp.glide"
+#line 4716 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("git", 3, "Dep::git(name, url, rev) — git dependency"));
 
-#line 4650 "bootstrap/lsp.glide"
+#line 4717 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4651 "bootstrap/lsp.glide"
+#line 4718 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4653 "bootstrap/lsp.glide"
-    int32_t   ctx = ((int32_t(*)(const char*, int32_t, int32_t))_manifest_ctx)((doc. text ), line0, col0);
+#line 4720 "bootstrap/lsp.glide"
+    int32_t   ob = ((int32_t(*)(const char*, int32_t, int32_t))_manifest_open_offset)((doc. text ), line0, col0);
 
-#line 4654 "bootstrap/lsp.glide"
+#line 4721 "bootstrap/lsp.glide"
+    int32_t   ctx = 0;
+
+#line 4722 "bootstrap/lsp.glide"
+    if ((ob  >=  0)) {
+
+#line 4723 "bootstrap/lsp.glide"
+        int32_t   oc = __glide_char_to_int(__glide_string_at((doc. text ), ob));
+
+#line 4724 "bootstrap/lsp.glide"
+        if ((oc  ==  123)) {
+            (ctx  =  1);
+        } else {
+            if ((oc  ==  40)) {
+                (ctx  =  2);
+            }
+        }
+    }
+
+#line 4726 "bootstrap/lsp.glide"
     if ((ctx  ==  1)) {
 
-#line 4656 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*))_push_manifest_fields)(items);
+#line 4731 "bootstrap/lsp.glide"
+        if (((bool(*)(const char*, int32_t, int32_t))_manifest_in_value_slot)((doc. text ), line0, col0)) {
 
-#line 4657 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+#line 4732 "bootstrap/lsp.glide"
+            ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+        } else {
+
+#line 4734 "bootstrap/lsp.glide"
+            HashMap__bool*   present = ((HashMap__bool*(*)(void))HashMap_new__bool)();
+
+#line 4735 "bootstrap/lsp.glide"
+            ((void(*)(const char*, int32_t, HashMap__bool*))_manifest_collect_fields)((doc. text ), ob, present);
+
+#line 4736 "bootstrap/lsp.glide"
+            ((void(*)(JsonValue*, HashMap__bool*))_push_manifest_fields)(items, present);
+
+#line 4737 "bootstrap/lsp.glide"
+            HashMap_free__bool(present);
+        }
     } else {
 
-#line 4658 "bootstrap/lsp.glide"
+#line 4739 "bootstrap/lsp.glide"
         if ((ctx  ==  2)) {
 
-#line 4660 "bootstrap/lsp.glide"
+#line 4741 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("Dep::path", 3, "Dep::path(name, rel_path) — local path dependency"));
 
-#line 4661 "bootstrap/lsp.glide"
+#line 4742 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("Dep::git", 3, "Dep::git(name, url, rev) — git dependency"));
         } else {
 
-#line 4664 "bootstrap/lsp.glide"
+#line 4745 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("Package", 22, "package manifest — Package { name, version, ... }"));
 
-#line 4665 "bootstrap/lsp.glide"
+#line 4746 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("vec_of", 3, "vec_of(...) — dependency list"));
         }
     }
 
-#line 4667 "bootstrap/lsp.glide"
+#line 4748 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 }
 
 
-#line 4670 "bootstrap/lsp.glide"
+#line 4751 "bootstrap/lsp.glide"
 void   handle_completion (JsonValue*   req, LspState*   state) {
 
-#line 4671 "bootstrap/lsp.glide"
+#line 4752 "bootstrap/lsp.glide"
     JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
 
-#line 4672 "bootstrap/lsp.glide"
+#line 4753 "bootstrap/lsp.glide"
     JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
 
-#line 4673 "bootstrap/lsp.glide"
+#line 4754 "bootstrap/lsp.glide"
     JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
 
-#line 4674 "bootstrap/lsp.glide"
+#line 4755 "bootstrap/lsp.glide"
     const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
 
-#line 4675 "bootstrap/lsp.glide"
+#line 4756 "bootstrap/lsp.glide"
     JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
 
-#line 4676 "bootstrap/lsp.glide"
+#line 4757 "bootstrap/lsp.glide"
     int32_t   line0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
 
-#line 4677 "bootstrap/lsp.glide"
+#line 4758 "bootstrap/lsp.glide"
     int32_t   col0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
 
-#line 4678 "bootstrap/lsp.glide"
+#line 4759 "bootstrap/lsp.glide"
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
 
-#line 4679 "bootstrap/lsp.glide"
+#line 4760 "bootstrap/lsp.glide"
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
 
-#line 4682 "bootstrap/lsp.glide"
+#line 4763 "bootstrap/lsp.glide"
     if (((bool(*)(const char*))path_is_manifest)(((const char*(*)(const char*))uri_to_path)(uri))) {
 
-#line 4683 "bootstrap/lsp.glide"
+#line 4764 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, LspDoc, int32_t, int32_t))handle_manifest_completion)(id, doc, line0, col0);
 
-#line 4684 "bootstrap/lsp.glide"
+#line 4765 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4686 "bootstrap/lsp.glide"
+#line 4767 "bootstrap/lsp.glide"
     if (((doc. stmts )  ==  NULL)) {
 
-#line 4692 "bootstrap/lsp.glide"
+#line 4773 "bootstrap/lsp.glide"
         JsonValue*   it0 = ((JsonValue*(*)(void))json_array)();
 
-#line 4693 "bootstrap/lsp.glide"
+#line 4774 "bootstrap/lsp.glide"
         int32_t   p0 = ((int32_t(*)(const char*, int32_t, int32_t))cursor_before_partial)((doc. text ), line0, col0);
 
-#line 4694 "bootstrap/lsp.glide"
+#line 4775 "bootstrap/lsp.glide"
         if (((!((bool(*)(const char*, int32_t, int32_t))_cursor_in_string_or_comment)((doc. text ), line0, col0))  &&  ((bool(*)(const char*, int32_t))_in_type_position)((doc. text ), p0))) {
 
-#line 4695 "bootstrap/lsp.glide"
+#line 4776 "bootstrap/lsp.glide"
             HashMap__bool*   seen0 = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 4696 "bootstrap/lsp.glide"
+#line 4777 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, HashMap__bool*))_push_primitive_types)(it0, seen0);
 
-#line 4697 "bootstrap/lsp.glide"
+#line 4778 "bootstrap/lsp.glide"
             HashMap_free__bool(seen0);
         }
 
-#line 4699 "bootstrap/lsp.glide"
+#line 4780 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, it0);
 
-#line 4700 "bootstrap/lsp.glide"
+#line 4781 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4705 "bootstrap/lsp.glide"
+#line 4786 "bootstrap/lsp.glide"
     if (((bool(*)(const char*, int32_t, int32_t))_cursor_in_string_or_comment)((doc. text ), line0, col0)) {
 
-#line 4706 "bootstrap/lsp.glide"
+#line 4787 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
 
-#line 4707 "bootstrap/lsp.glide"
+#line 4788 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4709 "bootstrap/lsp.glide"
+#line 4790 "bootstrap/lsp.glide"
     JsonValue*   items = ((JsonValue*(*)(void))json_array)();
 
-#line 4710 "bootstrap/lsp.glide"
+#line 4791 "bootstrap/lsp.glide"
     HashMap__bool*   seen = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 4717 "bootstrap/lsp.glide"
+#line 4798 "bootstrap/lsp.glide"
     int32_t   _tp_p = ((int32_t(*)(const char*, int32_t, int32_t))cursor_before_partial)((doc. text ), line0, col0);
 
-#line 4718 "bootstrap/lsp.glide"
+#line 4799 "bootstrap/lsp.glide"
     if (((bool(*)(const char*, int32_t))_in_type_position)((doc. text ), _tp_p)) {
 
-#line 4719 "bootstrap/lsp.glide"
+#line 4800 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, HashMap__bool*))_push_primitive_types)(items, seen);
 
-#line 4720 "bootstrap/lsp.glide"
+#line 4801 "bootstrap/lsp.glide"
         Stmt*   tphost = ((Stmt*(*)(Vector__Stmt*, int32_t, const char*))fn_containing)((doc. stmts ), line0, ((const char*(*)(const char*))uri_to_path)(uri));
 
-#line 4721 "bootstrap/lsp.glide"
+#line 4802 "bootstrap/lsp.glide"
         if (((tphost  !=  NULL)  &&  ((tphost-> type_params )  !=  NULL))) {
 
-#line 4722 "bootstrap/lsp.glide"
+#line 4803 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__string((tphost-> type_params ))); i++) {
 
-#line 4723 "bootstrap/lsp.glide"
+#line 4804 "bootstrap/lsp.glide"
                 const char*   tp = Vector_get__string((tphost-> type_params ), i);
 
-#line 4724 "bootstrap/lsp.glide"
+#line 4805 "bootstrap/lsp.glide"
                 if (((tp  ==  NULL)  ||  HashMap_contains__bool(seen, tp))) {
                     continue;
                 }
 
-#line 4725 "bootstrap/lsp.glide"
+#line 4806 "bootstrap/lsp.glide"
                 HashMap_insert__bool(seen, tp, true);
 
-#line 4726 "bootstrap/lsp.glide"
+#line 4807 "bootstrap/lsp.glide"
                 ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)(tp, 25, "type parameter"));
             }
         }
     }
 
-#line 4734 "bootstrap/lsp.glide"
+#line 4815 "bootstrap/lsp.glide"
     int32_t   imp_kind = ((int32_t(*)(const char*, int32_t, int32_t))import_context_kind)((doc. text ), line0, col0);
 
-#line 4735 "bootstrap/lsp.glide"
+#line 4816 "bootstrap/lsp.glide"
     if ((imp_kind  ==  IMPCTX_PATH)) {
 
-#line 4736 "bootstrap/lsp.glide"
+#line 4817 "bootstrap/lsp.glide"
         const char*   prefix = ((const char*(*)(const char*, int32_t, int32_t))import_path_prefix)((doc. text ), line0, col0);
 
-#line 4737 "bootstrap/lsp.glide"
+#line 4818 "bootstrap/lsp.glide"
         ((void(*)(LspState*, const char*, JsonValue*, HashMap__bool*))list_import_path_children)(state, prefix, items, seen);
 
-#line 4738 "bootstrap/lsp.glide"
+#line 4819 "bootstrap/lsp.glide"
         HashMap_free__bool(seen);
 
-#line 4739 "bootstrap/lsp.glide"
+#line 4820 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4740 "bootstrap/lsp.glide"
+#line 4821 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4742 "bootstrap/lsp.glide"
+#line 4823 "bootstrap/lsp.glide"
     if ((imp_kind  ==  IMPCTX_BRACE)) {
 
-#line 4743 "bootstrap/lsp.glide"
+#line 4824 "bootstrap/lsp.glide"
         const char*   mod_in_brace = ((const char*(*)(const char*, int32_t, int32_t))import_brace_module)((doc. text ), line0, col0);
 
-#line 4744 "bootstrap/lsp.glide"
+#line 4825 "bootstrap/lsp.glide"
         if ((!__glide_string_eq(mod_in_brace, ""))) {
 
-#line 4745 "bootstrap/lsp.glide"
+#line 4826 "bootstrap/lsp.glide"
             ((void(*)(LspState*, const char*, JsonValue*, HashMap__bool*))list_module_members)(state, mod_in_brace, items, seen);
 
-#line 4746 "bootstrap/lsp.glide"
+#line 4827 "bootstrap/lsp.glide"
             HashMap_free__bool(seen);
 
-#line 4747 "bootstrap/lsp.glide"
+#line 4828 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4748 "bootstrap/lsp.glide"
+#line 4829 "bootstrap/lsp.glide"
             return;
         }
     }
 
-#line 4755 "bootstrap/lsp.glide"
+#line 4836 "bootstrap/lsp.glide"
     const char*   mod_path = ((const char*(*)(const char*, int32_t, int32_t))module_path_before)((doc. text ), line0, col0);
 
-#line 4756 "bootstrap/lsp.glide"
+#line 4837 "bootstrap/lsp.glide"
     if (((!__glide_string_eq(mod_path, ""))  &&  ((state-> stdlib_index )  !=  NULL))) {
 
-#line 4757 "bootstrap/lsp.glide"
+#line 4838 "bootstrap/lsp.glide"
         ((void(*)(LspState*, const char*, JsonValue*, HashMap__bool*))list_module_members)(state, mod_path, items, seen);
 
-#line 4758 "bootstrap/lsp.glide"
+#line 4839 "bootstrap/lsp.glide"
         HashMap_free__bool(seen);
 
-#line 4759 "bootstrap/lsp.glide"
+#line 4840 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4760 "bootstrap/lsp.glide"
+#line 4841 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4764 "bootstrap/lsp.glide"
+#line 4845 "bootstrap/lsp.glide"
     const char*   qualifier = ((const char*(*)(const char*, int32_t, int32_t))path_qualifier_before)((doc. text ), line0, col0);
 
-#line 4765 "bootstrap/lsp.glide"
+#line 4846 "bootstrap/lsp.glide"
     if ((!__glide_string_eq(qualifier, ""))) {
 
-#line 4767 "bootstrap/lsp.glide"
+#line 4848 "bootstrap/lsp.glide"
         ((void(*)(Vector__Stmt*, const char*, JsonValue*, HashMap__bool*, bool))list_methods_for_type)((doc. stmts ), qualifier, items, seen, false);
 
-#line 4770 "bootstrap/lsp.glide"
+#line 4851 "bootstrap/lsp.glide"
         if (((__glide_string_eq(qualifier, "u256")  ||  __glide_string_eq(qualifier, "i256"))  &&  (!HashMap_contains__bool(seen, "from")))) {
 
-#line 4771 "bootstrap/lsp.glide"
+#line 4852 "bootstrap/lsp.glide"
             HashMap_insert__bool(seen, "from", true);
 
-#line 4772 "bootstrap/lsp.glide"
+#line 4853 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("from", 3, __glide_string_concat(qualifier, "::from(n) — build from an integer")));
         }
 
-#line 4777 "bootstrap/lsp.glide"
+#line 4858 "bootstrap/lsp.glide"
         if (((((bool(*)(const char*))_is_canon_prim)(qualifier)  &&  (!__glide_string_eq(qualifier, "f32")))  &&  (!__glide_string_eq(qualifier, "f64")))) {
 
-#line 4778 "bootstrap/lsp.glide"
+#line 4859 "bootstrap/lsp.glide"
             if ((!HashMap_contains__bool(seen, "MAX"))) {
 
-#line 4779 "bootstrap/lsp.glide"
+#line 4860 "bootstrap/lsp.glide"
                 HashMap_insert__bool(seen, "MAX", true);
 
-#line 4780 "bootstrap/lsp.glide"
+#line 4861 "bootstrap/lsp.glide"
                 ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("MAX", 21, __glide_string_concat("largest value of ", qualifier)));
             }
 
-#line 4783 "bootstrap/lsp.glide"
+#line 4864 "bootstrap/lsp.glide"
             if ((!HashMap_contains__bool(seen, "MIN"))) {
 
-#line 4784 "bootstrap/lsp.glide"
+#line 4865 "bootstrap/lsp.glide"
                 HashMap_insert__bool(seen, "MIN", true);
 
-#line 4785 "bootstrap/lsp.glide"
+#line 4866 "bootstrap/lsp.glide"
                 ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)("MIN", 21, __glide_string_concat("smallest value of ", qualifier)));
             }
         }
 
-#line 4789 "bootstrap/lsp.glide"
+#line 4870 "bootstrap/lsp.glide"
         HashMap_free__bool(seen);
 
-#line 4790 "bootstrap/lsp.glide"
+#line 4871 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4791 "bootstrap/lsp.glide"
+#line 4872 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4801 "bootstrap/lsp.glide"
+#line 4882 "bootstrap/lsp.glide"
     int32_t   _cursor_p = ((int32_t(*)(const char*, int32_t, int32_t))cursor_before_partial)((doc. text ), line0, col0);
 
-#line 4802 "bootstrap/lsp.glide"
+#line 4883 "bootstrap/lsp.glide"
     if (((_cursor_p  >=  1)  &&  (__glide_char_to_int(__glide_string_at((doc. text ), (_cursor_p  -  1)))  ==  46))) {
 
-#line 4803 "bootstrap/lsp.glide"
+#line 4884 "bootstrap/lsp.glide"
         Type*   recv_ty = ((Type*(*)(const char*, int32_t, Vector__Stmt*, int32_t, const char*))_chain_resolve_type)((doc. text ), (_cursor_p  -  1), (doc. stmts ), line0, ((const char*(*)(const char*))uri_to_path)(uri));
 
-#line 4804 "bootstrap/lsp.glide"
+#line 4885 "bootstrap/lsp.glide"
         if ((recv_ty  !=  NULL)) {
 
-#line 4809 "bootstrap/lsp.glide"
+#line 4890 "bootstrap/lsp.glide"
             Vector__Stmt*   mstmts = (doc. stmts );
 
-#line 4810 "bootstrap/lsp.glide"
+#line 4891 "bootstrap/lsp.glide"
             if (((doc. pre_expand_stmts )  !=  NULL)) {
                 (mstmts  =  (doc. pre_expand_stmts ));
             }
 
-#line 4811 "bootstrap/lsp.glide"
+#line 4892 "bootstrap/lsp.glide"
             ((void(*)(Type*, Vector__Stmt*, JsonValue*, HashMap__bool*))_list_members_for_type_node)(recv_ty, mstmts, items, seen);
         }
 
-#line 4813 "bootstrap/lsp.glide"
+#line 4894 "bootstrap/lsp.glide"
         HashMap_free__bool(seen);
 
-#line 4814 "bootstrap/lsp.glide"
+#line 4895 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4815 "bootstrap/lsp.glide"
+#line 4896 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4820 "bootstrap/lsp.glide"
+#line 4901 "bootstrap/lsp.glide"
     if ((((_cursor_p  >=  2)  &&  (__glide_char_to_int(__glide_string_at((doc. text ), (_cursor_p  -  1)))  ==  58))  &&  (__glide_char_to_int(__glide_string_at((doc. text ), (_cursor_p  -  2)))  ==  58))) {
 
-#line 4822 "bootstrap/lsp.glide"
+#line 4903 "bootstrap/lsp.glide"
         HashMap_free__bool(seen);
 
-#line 4823 "bootstrap/lsp.glide"
+#line 4904 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4824 "bootstrap/lsp.glide"
+#line 4905 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4832 "bootstrap/lsp.glide"
+#line 4913 "bootstrap/lsp.glide"
     int32_t   _attr_ctx = ((int32_t(*)(const char*, int32_t))_attribute_context)((doc. text ), _cursor_p);
 
-#line 4833 "bootstrap/lsp.glide"
+#line 4914 "bootstrap/lsp.glide"
     if ((_attr_ctx  !=  0)) {
 
-#line 4834 "bootstrap/lsp.glide"
+#line 4915 "bootstrap/lsp.glide"
         if ((_attr_ctx  ==  1)) {
 
-#line 4836 "bootstrap/lsp.glide"
+#line 4917 "bootstrap/lsp.glide"
             ((void(*)(LspDoc, LspState*, JsonValue*, HashMap__bool*))_push_attr_completions)(doc, state, items, seen);
         } else {
 
-#line 4839 "bootstrap/lsp.glide"
+#line 4920 "bootstrap/lsp.glide"
             ((void(*)(LspDoc, LspState*, JsonValue*, HashMap__bool*))_push_derive_completions)(doc, state, items, seen);
         }
 
-#line 4841 "bootstrap/lsp.glide"
+#line 4922 "bootstrap/lsp.glide"
         HashMap_free__bool(seen);
 
-#line 4842 "bootstrap/lsp.glide"
+#line 4923 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 
-#line 4843 "bootstrap/lsp.glide"
+#line 4924 "bootstrap/lsp.glide"
         return;
     }
 
-#line 4847 "bootstrap/lsp.glide"
+#line 4928 "bootstrap/lsp.glide"
     Stmt*   host = ((Stmt*(*)(Vector__Stmt*, int32_t, const char*))fn_containing)((doc. stmts ), line0, ((const char*(*)(const char*))uri_to_path)(uri));
 
-#line 4848 "bootstrap/lsp.glide"
+#line 4929 "bootstrap/lsp.glide"
     if ((host  !=  NULL)) {
 
-#line 4849 "bootstrap/lsp.glide"
+#line 4930 "bootstrap/lsp.glide"
         if (((host-> fn_params )  !=  NULL)) {
 
-#line 4850 "bootstrap/lsp.glide"
+#line 4931 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__Param((host-> fn_params ))); i++) {
 
-#line 4851 "bootstrap/lsp.glide"
+#line 4932 "bootstrap/lsp.glide"
                 Param   p = Vector_get__Param((host-> fn_params ), i);
 
-#line 4852 "bootstrap/lsp.glide"
+#line 4933 "bootstrap/lsp.glide"
                 if ((!HashMap_contains__bool(seen, (p. name )))) {
 
-#line 4853 "bootstrap/lsp.glide"
+#line 4934 "bootstrap/lsp.glide"
                     HashMap_insert__bool(seen, (p. name ), true);
 
-#line 4854 "bootstrap/lsp.glide"
+#line 4935 "bootstrap/lsp.glide"
                     const char*   sig = __glide_string_concat(__glide_string_concat(__glide_string_concat("param ", (p. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)((p. ty )));
 
-#line 4855 "bootstrap/lsp.glide"
+#line 4936 "bootstrap/lsp.glide"
                     JsonValue*   no_edit_p = NULL;
 
-#line 4856 "bootstrap/lsp.glide"
+#line 4937 "bootstrap/lsp.glide"
                     JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int32_t, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((p. name ), "", 6, sig, "", "", "", false, no_edit_p);
 
-#line 4858 "bootstrap/lsp.glide"
+#line 4939 "bootstrap/lsp.glide"
                     ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
                 }
             }
         }
 
-#line 4863 "bootstrap/lsp.glide"
+#line 4944 "bootstrap/lsp.glide"
         Vector__Param*   cps = ((Vector__Param*(*)(void))Vector_new__Param)();
 
-#line 4864 "bootstrap/lsp.glide"
+#line 4945 "bootstrap/lsp.glide"
         ((void(*)(Vector__Stmt*, int32_t, Vector__Param*))collect_active_closure_params)((host-> fn_body ), line0, cps);
 
-#line 4865 "bootstrap/lsp.glide"
+#line 4946 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Param(cps)); i++) {
 
-#line 4866 "bootstrap/lsp.glide"
+#line 4947 "bootstrap/lsp.glide"
             Param   p = Vector_get__Param(cps, i);
 
-#line 4867 "bootstrap/lsp.glide"
+#line 4948 "bootstrap/lsp.glide"
             if ((((p. name )  ==  NULL)  ||  HashMap_contains__bool(seen, (p. name )))) {
                 continue;
             }
 
-#line 4868 "bootstrap/lsp.glide"
+#line 4949 "bootstrap/lsp.glide"
             HashMap_insert__bool(seen, (p. name ), true);
 
-#line 4869 "bootstrap/lsp.glide"
+#line 4950 "bootstrap/lsp.glide"
             const char*   sig = __glide_string_concat(__glide_string_concat(__glide_string_concat("param ", (p. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)((p. ty )));
 
-#line 4870 "bootstrap/lsp.glide"
+#line 4951 "bootstrap/lsp.glide"
             JsonValue*   no_edit_cp = NULL;
 
-#line 4871 "bootstrap/lsp.glide"
+#line 4952 "bootstrap/lsp.glide"
             JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int32_t, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((p. name ), "", 6, sig, "", "", "", false, no_edit_cp);
 
-#line 4873 "bootstrap/lsp.glide"
+#line 4954 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
         }
 
-#line 4875 "bootstrap/lsp.glide"
+#line 4956 "bootstrap/lsp.glide"
         Vector__Stmt*   locals = ((Vector__Stmt*(*)(void))Vector_new__Stmt)();
 
-#line 4876 "bootstrap/lsp.glide"
+#line 4957 "bootstrap/lsp.glide"
         ((void(*)(Vector__Stmt*, int32_t, Vector__Stmt*))collect_locals)((host-> fn_body ), line0, locals);
 
-#line 4877 "bootstrap/lsp.glide"
+#line 4958 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt(locals)); i++) {
 
-#line 4878 "bootstrap/lsp.glide"
+#line 4959 "bootstrap/lsp.glide"
             Stmt   s = Vector_get__Stmt(locals, i);
 
-#line 4879 "bootstrap/lsp.glide"
+#line 4960 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(seen, (s. name ))) {
                 continue;
             }
 
-#line 4880 "bootstrap/lsp.glide"
+#line 4961 "bootstrap/lsp.glide"
             HashMap_insert__bool(seen, (s. name ), true);
 
-#line 4881 "bootstrap/lsp.glide"
+#line 4962 "bootstrap/lsp.glide"
             const char*   sig = __glide_string_concat("local ", (s. name ));
 
-#line 4882 "bootstrap/lsp.glide"
+#line 4963 "bootstrap/lsp.glide"
             if (((s. let_ty )  !=  NULL)) {
 
-#line 4883 "bootstrap/lsp.glide"
+#line 4964 "bootstrap/lsp.glide"
                 (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("let ", (s. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)((s. let_ty ))));
             } else {
 
-#line 4884 "bootstrap/lsp.glide"
+#line 4965 "bootstrap/lsp.glide"
                 if (((s. let_value )  !=  NULL)) {
 
-#line 4889 "bootstrap/lsp.glide"
+#line 4970 "bootstrap/lsp.glide"
                     Type*   inferred = ((Type*(*)(Stmt*, Vector__Stmt*))_let_node_type)((&s), (doc. stmts ));
 
-#line 4890 "bootstrap/lsp.glide"
+#line 4971 "bootstrap/lsp.glide"
                     if ((inferred  ==  NULL)) {
                         (inferred  =  ((Type*(*)(Vector__Stmt*, Stmt*, Expr*))lsp_infer_expr)((doc. stmts ), host, (s. let_value )));
                     }
 
-#line 4891 "bootstrap/lsp.glide"
+#line 4972 "bootstrap/lsp.glide"
                     if ((inferred  !=  NULL)) {
 
-#line 4892 "bootstrap/lsp.glide"
+#line 4973 "bootstrap/lsp.glide"
                         (sig  =  __glide_string_concat(__glide_string_concat(__glide_string_concat("let ", (s. name )), ": "), ((const char*(*)(Type*))type_to_string_pretty)(inferred)));
                     }
                 }
             }
 
-#line 4895 "bootstrap/lsp.glide"
+#line 4976 "bootstrap/lsp.glide"
             JsonValue*   no_edit_l = NULL;
 
-#line 4896 "bootstrap/lsp.glide"
+#line 4977 "bootstrap/lsp.glide"
             JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int32_t, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)((s. name ), "", 6, sig, "", "", "", false, no_edit_l);
 
-#line 4898 "bootstrap/lsp.glide"
+#line 4979 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
         }
     }
 
-#line 4907 "bootstrap/lsp.glide"
+#line 4988 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, HashMap__bool*))_push_primitive_types)(items, seen);
 
-#line 4914 "bootstrap/lsp.glide"
+#line 4995 "bootstrap/lsp.glide"
     HashMap__ImportInfo*   imps2 = ((HashMap__ImportInfo*(*)(const char*))current_imports)((doc. text ));
 
-#line 4915 "bootstrap/lsp.glide"
+#line 4996 "bootstrap/lsp.glide"
     int32_t   insert_line2 = ((int32_t(*)(const char*))find_import_insertion_pos)((doc. text ));
 
-#line 4916 "bootstrap/lsp.glide"
+#line 4997 "bootstrap/lsp.glide"
     if (((doc. stmts )  !=  NULL)) {
 
-#line 4917 "bootstrap/lsp.glide"
+#line 4998 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
 
-#line 4918 "bootstrap/lsp.glide"
+#line 4999 "bootstrap/lsp.glide"
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
 
-#line 4919 "bootstrap/lsp.glide"
+#line 5000 "bootstrap/lsp.glide"
             if (((((((s. kind )  !=  ST_FN)  &&  ((s. kind )  !=  ST_STRUCT))  &&  ((s. kind )  !=  ST_ENUM))  &&  ((s. kind )  !=  ST_CONST))  &&  ((s. kind )  !=  ST_MACRO_DEF))) {
 
-#line 4920 "bootstrap/lsp.glide"
+#line 5001 "bootstrap/lsp.glide"
                 continue;
             }
 
-#line 4921 "bootstrap/lsp.glide"
+#line 5002 "bootstrap/lsp.glide"
             if (((s. name )  ==  NULL)) {
                 continue;
             }
 
-#line 4925 "bootstrap/lsp.glide"
+#line 5006 "bootstrap/lsp.glide"
             if (((__glide_string_len((s. name ))  >=  2)  &&  (__glide_char_to_int(__glide_string_at((s. name ), 0))  ==  95))) {
                 continue;
             }
 
-#line 4927 "bootstrap/lsp.glide"
+#line 5008 "bootstrap/lsp.glide"
             const char*   label = (s. name );
 
-#line 4928 "bootstrap/lsp.glide"
+#line 5009 "bootstrap/lsp.glide"
             if (((s. kind )  ==  ST_MACRO_DEF)) {
                 (label  =  __glide_string_concat((s. name ), "!"));
             }
 
-#line 4929 "bootstrap/lsp.glide"
+#line 5010 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(seen, label)) {
                 continue;
             }
 
-#line 4930 "bootstrap/lsp.glide"
+#line 5011 "bootstrap/lsp.glide"
             HashMap_insert__bool(seen, label, true);
 
-#line 4931 "bootstrap/lsp.glide"
+#line 5012 "bootstrap/lsp.glide"
             const char*   sig = "";
 
-#line 4932 "bootstrap/lsp.glide"
+#line 5013 "bootstrap/lsp.glide"
             const char*   label_extra = "";
 
-#line 4933 "bootstrap/lsp.glide"
+#line 5014 "bootstrap/lsp.glide"
             const char*   snip = label;
 
-#line 4934 "bootstrap/lsp.glide"
+#line 5015 "bootstrap/lsp.glide"
             bool   has_snip = false;
 
-#line 4935 "bootstrap/lsp.glide"
+#line 5016 "bootstrap/lsp.glide"
             if (((s. kind )  ==  ST_FN)) {
 
-#line 4936 "bootstrap/lsp.glide"
+#line 5017 "bootstrap/lsp.glide"
                 (sig  =  ((const char*(*)(Stmt*))fn_signature)((&s)));
 
-#line 4937 "bootstrap/lsp.glide"
+#line 5018 "bootstrap/lsp.glide"
                 (label_extra  =  ((const char*(*)(Stmt*))fn_label_extra)((&s)));
 
-#line 4938 "bootstrap/lsp.glide"
+#line 5019 "bootstrap/lsp.glide"
                 (snip  =  ((const char*(*)(Stmt*))fn_snippet)((&s)));
 
-#line 4939 "bootstrap/lsp.glide"
+#line 5020 "bootstrap/lsp.glide"
                 (has_snip  =  true);
             } else {
 
-#line 4941 "bootstrap/lsp.glide"
+#line 5022 "bootstrap/lsp.glide"
                 if (((s. kind )  ==  ST_STRUCT)) {
                     (sig  =  __glide_string_concat("struct ", (s. name )));
                 } else {
 
-#line 4942 "bootstrap/lsp.glide"
+#line 5023 "bootstrap/lsp.glide"
                     if (((s. kind )  ==  ST_ENUM)) {
                         (sig  =  __glide_string_concat("enum ", (s. name )));
                     } else {
 
-#line 4943 "bootstrap/lsp.glide"
+#line 5024 "bootstrap/lsp.glide"
                         if (((s. kind )  ==  ST_CONST)) {
 
-#line 4944 "bootstrap/lsp.glide"
+#line 5025 "bootstrap/lsp.glide"
                             (sig  =  __glide_string_concat("const ", (s. name )));
 
-#line 4945 "bootstrap/lsp.glide"
+#line 5026 "bootstrap/lsp.glide"
                             if (((s. let_ty )  !=  NULL)) {
                                 (sig  =  __glide_string_concat(__glide_string_concat(sig, ": "), ((const char*(*)(Type*))type_to_string_pretty)((s. let_ty ))));
                             }
                         } else {
 
-#line 4947 "bootstrap/lsp.glide"
+#line 5028 "bootstrap/lsp.glide"
                             if (((s. kind )  ==  ST_MACRO_DEF)) {
                                 (sig  =  ((const char*(*)(Stmt*))macro_signature)((&s)));
                             }
@@ -64082,842 +64314,842 @@ void   handle_completion (JsonValue*   req, LspState*   state) {
                 }
             }
 
-#line 4948 "bootstrap/lsp.glide"
+#line 5029 "bootstrap/lsp.glide"
             const char*   module = "";
 
-#line 4949 "bootstrap/lsp.glide"
+#line 5030 "bootstrap/lsp.glide"
             if (((s. origin )  !=  NULL)) {
                 (module  =  ((const char*(*)(const char*))pretty_module)((s. origin )));
             }
 
-#line 4950 "bootstrap/lsp.glide"
+#line 5031 "bootstrap/lsp.glide"
             const char*   docc = "";
 
-#line 4951 "bootstrap/lsp.glide"
+#line 5032 "bootstrap/lsp.glide"
             if (((s. doc_comment )  !=  NULL)) {
                 (docc  =  (s. doc_comment ));
             }
 
-#line 4955 "bootstrap/lsp.glide"
+#line 5036 "bootstrap/lsp.glide"
             JsonValue*   decl_edit = NULL;
 
-#line 4956 "bootstrap/lsp.glide"
+#line 5037 "bootstrap/lsp.glide"
             if (((__glide_string_len(module)  >=  8)  &&  __glide_string_eq(__glide_string_substring(module, 0, 8), "stdlib::"))) {
 
-#line 4957 "bootstrap/lsp.glide"
+#line 5038 "bootstrap/lsp.glide"
                 ImportInfo*   existing = NULL;
 
-#line 4958 "bootstrap/lsp.glide"
+#line 5039 "bootstrap/lsp.glide"
                 if (HashMap_contains__ImportInfo(imps2, module)) {
 
-#line 4959 "bootstrap/lsp.glide"
+#line 5040 "bootstrap/lsp.glide"
                     ImportInfo   info_val = HashMap_get__ImportInfo(imps2, module);
 
-#line 4960 "bootstrap/lsp.glide"
+#line 5041 "bootstrap/lsp.glide"
                     (existing  =  (( ImportInfo* )((void*(*)(size_t))malloc)(sizeof( ImportInfo ))));
 
-#line 4961 "bootstrap/lsp.glide"
+#line 5042 "bootstrap/lsp.glide"
                     ((*existing)  =  info_val);
                 }
 
-#line 4963 "bootstrap/lsp.glide"
+#line 5044 "bootstrap/lsp.glide"
                 (decl_edit  =  ((JsonValue*(*)(const char*, const char*, ImportInfo*, int32_t, bool))build_import_edit)(label, module, existing, insert_line2, false));
             }
 
-#line 4965 "bootstrap/lsp.glide"
+#line 5046 "bootstrap/lsp.glide"
             JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int32_t, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)(label, label_extra, ((int32_t(*)(Stmt*))ci_kind_for)((&s)), sig, docc, module, snip, has_snip, decl_edit);
 
-#line 4969 "bootstrap/lsp.glide"
+#line 5050 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
         }
     }
 
-#line 4974 "bootstrap/lsp.glide"
+#line 5055 "bootstrap/lsp.glide"
     Vector__string*   builtins = ((Vector__string*(*)(void))Vector_new__string)();
 
-#line 4975 "bootstrap/lsp.glide"
+#line 5056 "bootstrap/lsp.glide"
     Vector_push__string(builtins, "println!");
     Vector_push__string(builtins, "print!");
     Vector_push__string(builtins, "format!");
 
-#line 4976 "bootstrap/lsp.glide"
+#line 5057 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(builtins)); i++) {
 
-#line 4977 "bootstrap/lsp.glide"
+#line 5058 "bootstrap/lsp.glide"
         const char*   bn = Vector_get__string(builtins, i);
 
-#line 4978 "bootstrap/lsp.glide"
+#line 5059 "bootstrap/lsp.glide"
         if (HashMap_contains__bool(seen, bn)) {
             continue;
         }
 
-#line 4979 "bootstrap/lsp.glide"
+#line 5060 "bootstrap/lsp.glide"
         HashMap_insert__bool(seen, bn, true);
 
-#line 4980 "bootstrap/lsp.glide"
+#line 5061 "bootstrap/lsp.glide"
         const char*   bdetail = "builtin macro";
 
-#line 4981 "bootstrap/lsp.glide"
+#line 5062 "bootstrap/lsp.glide"
         if (__glide_string_eq(bn, "println!")) {
             (bdetail  =  "println!(args...) — print + newline");
         } else {
 
-#line 4982 "bootstrap/lsp.glide"
+#line 5063 "bootstrap/lsp.glide"
             if (__glide_string_eq(bn, "print!")) {
                 (bdetail  =  "print!(args...) — print, no newline");
             } else {
 
-#line 4983 "bootstrap/lsp.glide"
+#line 5064 "bootstrap/lsp.glide"
                 if (__glide_string_eq(bn, "format!")) {
                     (bdetail  =  "format!(\"fmt\", args...) — formatted string");
                 }
             }
         }
 
-#line 4984 "bootstrap/lsp.glide"
+#line 5065 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)(bn, 2, bdetail));
     }
 
-#line 4991 "bootstrap/lsp.glide"
+#line 5072 "bootstrap/lsp.glide"
     if (((doc. macro_defs )  !=  NULL)) {
 
-#line 4992 "bootstrap/lsp.glide"
+#line 5073 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((doc. macro_defs ))); i++) {
 
-#line 4993 "bootstrap/lsp.glide"
+#line 5074 "bootstrap/lsp.glide"
             Stmt   md = Vector_get__Stmt((doc. macro_defs ), i);
 
-#line 4994 "bootstrap/lsp.glide"
+#line 5075 "bootstrap/lsp.glide"
             if (((md. name )  ==  NULL)) {
                 continue;
             }
 
-#line 4995 "bootstrap/lsp.glide"
+#line 5076 "bootstrap/lsp.glide"
             if (((__glide_string_len((md. name ))  >=  1)  &&  (__glide_char_to_int(__glide_string_at((md. name ), 0))  ==  95))) {
                 continue;
             }
 
-#line 4996 "bootstrap/lsp.glide"
+#line 5077 "bootstrap/lsp.glide"
             const char*   mlabel = __glide_string_concat((md. name ), "!");
 
-#line 4997 "bootstrap/lsp.glide"
+#line 5078 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(seen, mlabel)) {
                 continue;
             }
 
-#line 4998 "bootstrap/lsp.glide"
+#line 5079 "bootstrap/lsp.glide"
             HashMap_insert__bool(seen, mlabel, true);
 
-#line 4999 "bootstrap/lsp.glide"
+#line 5080 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)(mlabel, 2, ((const char*(*)(Stmt*))macro_signature)((&md))));
         }
     }
 
-#line 5002 "bootstrap/lsp.glide"
+#line 5083 "bootstrap/lsp.glide"
     if (((doc. proc_macros )  !=  NULL)) {
 
-#line 5003 "bootstrap/lsp.glide"
+#line 5084 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__string((doc. proc_macros ))); i++) {
 
-#line 5004 "bootstrap/lsp.glide"
+#line 5085 "bootstrap/lsp.glide"
             const char*   pn = Vector_get__string((doc. proc_macros ), i);
 
-#line 5005 "bootstrap/lsp.glide"
+#line 5086 "bootstrap/lsp.glide"
             const char*   plabel = __glide_string_concat(pn, "!");
 
-#line 5006 "bootstrap/lsp.glide"
+#line 5087 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(seen, plabel)) {
                 continue;
             }
 
-#line 5007 "bootstrap/lsp.glide"
+#line 5088 "bootstrap/lsp.glide"
             HashMap_insert__bool(seen, plabel, true);
 
-#line 5008 "bootstrap/lsp.glide"
+#line 5089 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)(plabel, 2, "proc-macro"));
         }
     }
 
-#line 5021 "bootstrap/lsp.glide"
+#line 5102 "bootstrap/lsp.glide"
     if ((((state-> stdlib_index )  !=  NULL)  &&  (Vector_len__ImportableSym((state-> stdlib_index ))  >  0))) {
 
-#line 5022 "bootstrap/lsp.glide"
+#line 5103 "bootstrap/lsp.glide"
         HashMap__ImportInfo*   imps = ((HashMap__ImportInfo*(*)(const char*))current_imports)((doc. text ));
 
-#line 5023 "bootstrap/lsp.glide"
+#line 5104 "bootstrap/lsp.glide"
         int32_t   insert_line = ((int32_t(*)(const char*))find_import_insertion_pos)((doc. text ));
 
-#line 5024 "bootstrap/lsp.glide"
+#line 5105 "bootstrap/lsp.glide"
         ((void(*)(Vector__ImportableSym*, HashMap__ImportInfo*, int32_t, JsonValue*, HashMap__bool*))_emit_index_items)((state-> stdlib_index ), imps, insert_line, items, seen);
 
-#line 5025 "bootstrap/lsp.glide"
+#line 5106 "bootstrap/lsp.glide"
         if (((state-> project_index )  !=  NULL)) {
 
-#line 5026 "bootstrap/lsp.glide"
+#line 5107 "bootstrap/lsp.glide"
             ((void(*)(Vector__ImportableSym*, HashMap__ImportInfo*, int32_t, JsonValue*, HashMap__bool*))_emit_index_items)((state-> project_index ), imps, insert_line, items, seen);
         }
 
-#line 5028 "bootstrap/lsp.glide"
+#line 5109 "bootstrap/lsp.glide"
         HashMap_free__ImportInfo(imps);
     }
 
-#line 5033 "bootstrap/lsp.glide"
+#line 5114 "bootstrap/lsp.glide"
     Vector__string*   kws = ((Vector__string*(*)(void))Vector_new__string)();
 
-#line 5034 "bootstrap/lsp.glide"
+#line 5115 "bootstrap/lsp.glide"
     Vector_push__string(kws, "let");
     Vector_push__string(kws, "const");
     Vector_push__string(kws, "mut");
     Vector_push__string(kws, "fn");
 
-#line 5035 "bootstrap/lsp.glide"
+#line 5116 "bootstrap/lsp.glide"
     Vector_push__string(kws, "struct");
     Vector_push__string(kws, "enum");
     Vector_push__string(kws, "impl");
     Vector_push__string(kws, "interface");
 
-#line 5036 "bootstrap/lsp.glide"
+#line 5117 "bootstrap/lsp.glide"
     Vector_push__string(kws, "trait");
     Vector_push__string(kws, "dyn");
     Vector_push__string(kws, "Self");
     Vector_push__string(kws, "in");
 
-#line 5037 "bootstrap/lsp.glide"
+#line 5118 "bootstrap/lsp.glide"
     Vector_push__string(kws, "if");
     Vector_push__string(kws, "else");
     Vector_push__string(kws, "while");
     Vector_push__string(kws, "for");
 
-#line 5038 "bootstrap/lsp.glide"
+#line 5119 "bootstrap/lsp.glide"
     Vector_push__string(kws, "return");
     Vector_push__string(kws, "break");
     Vector_push__string(kws, "continue");
 
-#line 5039 "bootstrap/lsp.glide"
+#line 5120 "bootstrap/lsp.glide"
     Vector_push__string(kws, "match");
     Vector_push__string(kws, "defer");
     Vector_push__string(kws, "defer_err");
 
-#line 5040 "bootstrap/lsp.glide"
+#line 5121 "bootstrap/lsp.glide"
     Vector_push__string(kws, "spawn");
     Vector_push__string(kws, "import");
 
-#line 5041 "bootstrap/lsp.glide"
+#line 5122 "bootstrap/lsp.glide"
     Vector_push__string(kws, "pub");
     Vector_push__string(kws, "extern");
     Vector_push__string(kws, "true");
     Vector_push__string(kws, "false");
     Vector_push__string(kws, "null");
 
-#line 5042 "bootstrap/lsp.glide"
+#line 5123 "bootstrap/lsp.glide"
     Vector_push__string(kws, "as");
     Vector_push__string(kws, "sizeof");
     Vector_push__string(kws, "type");
     Vector_push__string(kws, "move");
     Vector_push__string(kws, "chan");
 
-#line 5043 "bootstrap/lsp.glide"
+#line 5124 "bootstrap/lsp.glide"
     Vector_push__string(kws, "naked");
     Vector_push__string(kws, "asm");
     Vector_push__string(kws, "volatile");
 
-#line 5044 "bootstrap/lsp.glide"
+#line 5125 "bootstrap/lsp.glide"
     Vector_push__string(kws, "c_raw");
     Vector_push__string(kws, "macro");
     Vector_push__string(kws, "select");
 
-#line 5045 "bootstrap/lsp.glide"
+#line 5126 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(kws)); i++) {
 
-#line 5046 "bootstrap/lsp.glide"
+#line 5127 "bootstrap/lsp.glide"
         const char*   k = Vector_get__string(kws, i);
 
-#line 5047 "bootstrap/lsp.glide"
+#line 5128 "bootstrap/lsp.glide"
         if (HashMap_contains__bool(seen, k)) {
             continue;
         }
 
-#line 5048 "bootstrap/lsp.glide"
+#line 5129 "bootstrap/lsp.glide"
         HashMap_insert__bool(seen, k, true);
 
-#line 5049 "bootstrap/lsp.glide"
+#line 5130 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, ((JsonValue*(*)(const char*, int32_t, const char*))completion_item)(k, 14, ""));
     }
 
-#line 5052 "bootstrap/lsp.glide"
+#line 5133 "bootstrap/lsp.glide"
     HashMap_free__bool(seen);
 
-#line 5053 "bootstrap/lsp.glide"
+#line 5134 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, items);
 }
 
 
-#line 5059 "bootstrap/lsp.glide"
+#line 5140 "bootstrap/lsp.glide"
 void   _emit_index_items (Vector__ImportableSym*   idx, HashMap__ImportInfo*   imps, int32_t   insert_line, JsonValue*   items, HashMap__bool*   seen) {
 
-#line 5062 "bootstrap/lsp.glide"
+#line 5143 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__ImportableSym(idx);
 
-#line 5063 "bootstrap/lsp.glide"
+#line 5144 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 5064 "bootstrap/lsp.glide"
+#line 5145 "bootstrap/lsp.glide"
         ImportableSym   sym = Vector_get__ImportableSym(idx, i);
 
-#line 5065 "bootstrap/lsp.glide"
+#line 5146 "bootstrap/lsp.glide"
         if (((sym. name )  ==  NULL)) {
             continue;
         }
 
-#line 5074 "bootstrap/lsp.glide"
+#line 5155 "bootstrap/lsp.glide"
         if ((((sym. kind )  ==  SYMKIND_PROC_ATTR)  ||  ((sym. kind )  ==  SYMKIND_PROC_DERIVE))) {
             continue;
         }
 
-#line 5075 "bootstrap/lsp.glide"
+#line 5156 "bootstrap/lsp.glide"
         const char*   label = (sym. name );
 
-#line 5076 "bootstrap/lsp.glide"
+#line 5157 "bootstrap/lsp.glide"
         const char*   imp_module = (sym. module );
 
-#line 5077 "bootstrap/lsp.glide"
+#line 5158 "bootstrap/lsp.glide"
         if (((sym. kind )  ==  ST_MACRO_DEF)) {
             (label  =  __glide_string_concat((sym. name ), "!"));
         }
 
-#line 5078 "bootstrap/lsp.glide"
+#line 5159 "bootstrap/lsp.glide"
         if (((sym. kind )  ==  SYMKIND_PROC_MACRO)) {
 
-#line 5079 "bootstrap/lsp.glide"
+#line 5160 "bootstrap/lsp.glide"
             (label  =  __glide_string_concat((sym. name ), "!"));
 
-#line 5083 "bootstrap/lsp.glide"
+#line 5164 "bootstrap/lsp.glide"
             int32_t   ml = __glide_string_len(imp_module);
 
-#line 5084 "bootstrap/lsp.glide"
+#line 5165 "bootstrap/lsp.glide"
             if (((ml  >  7)  &&  __glide_string_eq(__glide_string_substring(imp_module, (ml  -  7), ml), "_macros"))) {
 
-#line 5085 "bootstrap/lsp.glide"
+#line 5166 "bootstrap/lsp.glide"
                 (imp_module  =  __glide_string_substring(imp_module, 0, (ml  -  7)));
             }
         }
 
-#line 5088 "bootstrap/lsp.glide"
+#line 5169 "bootstrap/lsp.glide"
         if (HashMap_contains__bool(seen, label)) {
             continue;
         }
 
-#line 5089 "bootstrap/lsp.glide"
+#line 5170 "bootstrap/lsp.glide"
         HashMap_insert__bool(seen, label, true);
 
-#line 5090 "bootstrap/lsp.glide"
+#line 5171 "bootstrap/lsp.glide"
         ImportInfo*   existing = NULL;
 
-#line 5091 "bootstrap/lsp.glide"
+#line 5172 "bootstrap/lsp.glide"
         if (HashMap_contains__ImportInfo(imps, imp_module)) {
 
-#line 5092 "bootstrap/lsp.glide"
+#line 5173 "bootstrap/lsp.glide"
             ImportInfo   info_val = HashMap_get__ImportInfo(imps, imp_module);
 
-#line 5093 "bootstrap/lsp.glide"
+#line 5174 "bootstrap/lsp.glide"
             (existing  =  (( ImportInfo* )((void*(*)(size_t))malloc)(sizeof( ImportInfo ))));
 
-#line 5094 "bootstrap/lsp.glide"
+#line 5175 "bootstrap/lsp.glide"
             ((*existing)  =  info_val);
         }
 
-#line 5096 "bootstrap/lsp.glide"
+#line 5177 "bootstrap/lsp.glide"
         bool   is_module = ((sym. kind )  ==  SYMKIND_MODULE);
 
-#line 5097 "bootstrap/lsp.glide"
+#line 5178 "bootstrap/lsp.glide"
         JsonValue*   edit = ((JsonValue*(*)(const char*, const char*, ImportInfo*, int32_t, bool))build_import_edit)((sym. name ), imp_module, existing, insert_line, is_module);
 
-#line 5099 "bootstrap/lsp.glide"
+#line 5180 "bootstrap/lsp.glide"
         JsonValue*   item = ((JsonValue*(*)(const char*, const char*, int32_t, const char*, const char*, const char*, const char*, bool, JsonValue*))rich_completion_item)(label, (sym. label_extra ), ((int32_t(*)(int32_t))ci_kind_for_stmt_kind)((sym. kind )), (sym. signature ), (sym. doc ), imp_module, (sym. snippet ), (sym. has_snippet ), edit);
 
-#line 5103 "bootstrap/lsp.glide"
+#line 5184 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(items, item);
     }
 }
 
 
-#line 5111 "bootstrap/lsp.glide"
+#line 5192 "bootstrap/lsp.glide"
 void   collect_uses_in_expr (Expr*   e, const char*   name, Vector__UseSite*   out) {
 
-#line 5112 "bootstrap/lsp.glide"
+#line 5193 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 5117 "bootstrap/lsp.glide"
+#line 5198 "bootstrap/lsp.glide"
     bool   has_pos = ((e-> line )  >  0);
 
-#line 5118 "bootstrap/lsp.glide"
+#line 5199 "bootstrap/lsp.glide"
     if (((has_pos  &&  ((e-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((e-> str_val ), name))) {
 
-#line 5119 "bootstrap/lsp.glide"
+#line 5200 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = (e-> line ), . col  = (e-> column )});
 
-#line 5120 "bootstrap/lsp.glide"
+#line 5201 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5122 "bootstrap/lsp.glide"
+#line 5203 "bootstrap/lsp.glide"
     if (((((has_pos  &&  ((e-> kind )  ==  EX_CALL))  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_PATH))  &&  __glide_string_eq(((e-> lhs )-> str_val ), name))) {
 
-#line 5124 "bootstrap/lsp.glide"
+#line 5205 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = (e-> line ), . col  = (e-> column )});
 
-#line 5125 "bootstrap/lsp.glide"
+#line 5206 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5130 "bootstrap/lsp.glide"
+#line 5211 "bootstrap/lsp.glide"
     if ((has_pos  &&  ((e-> kind )  ==  EX_PATH))) {
 
-#line 5131 "bootstrap/lsp.glide"
+#line 5212 "bootstrap/lsp.glide"
         if ((((e-> str_val )  !=  NULL)  &&  __glide_string_eq((e-> str_val ), name))) {
 
-#line 5132 "bootstrap/lsp.glide"
+#line 5213 "bootstrap/lsp.glide"
             UseSite   u = (( UseSite ){. line  = (e-> line ), . col  = (e-> column )});
 
-#line 5133 "bootstrap/lsp.glide"
+#line 5214 "bootstrap/lsp.glide"
             Vector_push__UseSite(out, u);
         }
 
-#line 5135 "bootstrap/lsp.glide"
+#line 5216 "bootstrap/lsp.glide"
         if ((((e-> field )  !=  NULL)  &&  __glide_string_eq((e-> field ), name))) {
 
-#line 5136 "bootstrap/lsp.glide"
+#line 5217 "bootstrap/lsp.glide"
             UseSite   u = (( UseSite ){. line  = (e-> line ), . col  = (e-> column )});
 
-#line 5137 "bootstrap/lsp.glide"
+#line 5218 "bootstrap/lsp.glide"
             Vector_push__UseSite(out, u);
         }
     }
 
-#line 5141 "bootstrap/lsp.glide"
+#line 5222 "bootstrap/lsp.glide"
     if ((((has_pos  &&  ((e-> kind )  ==  EX_MEMBER))  &&  ((e-> field )  !=  NULL))  &&  __glide_string_eq((e-> field ), name))) {
 
-#line 5142 "bootstrap/lsp.glide"
+#line 5223 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = (e-> line ), . col  = (e-> column )});
 
-#line 5143 "bootstrap/lsp.glide"
+#line 5224 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5146 "bootstrap/lsp.glide"
+#line 5227 "bootstrap/lsp.glide"
     if ((((has_pos  &&  ((e-> kind )  ==  EX_STRUCT_LIT))  &&  ((e-> str_val )  !=  NULL))  &&  __glide_string_eq((e-> str_val ), name))) {
 
-#line 5147 "bootstrap/lsp.glide"
+#line 5228 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = (e-> line ), . col  = (e-> column )});
 
-#line 5148 "bootstrap/lsp.glide"
+#line 5229 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5151 "bootstrap/lsp.glide"
+#line 5232 "bootstrap/lsp.glide"
     if (((((e-> kind )  ==  EX_CAST)  ||  ((e-> kind )  ==  EX_SIZEOF))  &&  ((e-> cast_to )  !=  NULL))) {
 
-#line 5152 "bootstrap/lsp.glide"
+#line 5233 "bootstrap/lsp.glide"
         ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((e-> cast_to ), name, out, (e-> line ), (e-> column ));
     }
 
-#line 5155 "bootstrap/lsp.glide"
+#line 5236 "bootstrap/lsp.glide"
     if (((e-> kind )  ==  EX_FNEXPR)) {
 
-#line 5156 "bootstrap/lsp.glide"
+#line 5237 "bootstrap/lsp.glide"
         if (((e-> fn_expr_params )  !=  NULL)) {
 
-#line 5157 "bootstrap/lsp.glide"
+#line 5238 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__Param((e-> fn_expr_params ))); i++) {
 
-#line 5158 "bootstrap/lsp.glide"
+#line 5239 "bootstrap/lsp.glide"
                 Param   p = Vector_get__Param((e-> fn_expr_params ), i);
 
-#line 5159 "bootstrap/lsp.glide"
+#line 5240 "bootstrap/lsp.glide"
                 if ((((p. name )  !=  NULL)  &&  __glide_string_eq((p. name ), name))) {
 
-#line 5160 "bootstrap/lsp.glide"
+#line 5241 "bootstrap/lsp.glide"
                     UseSite   u = (( UseSite ){. line  = (e-> line ), . col  = (e-> column )});
 
-#line 5161 "bootstrap/lsp.glide"
+#line 5242 "bootstrap/lsp.glide"
                     Vector_push__UseSite(out, u);
                 }
 
-#line 5163 "bootstrap/lsp.glide"
+#line 5244 "bootstrap/lsp.glide"
                 ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((p. ty ), name, out, (e-> line ), (e-> column ));
             }
         }
 
-#line 5166 "bootstrap/lsp.glide"
+#line 5247 "bootstrap/lsp.glide"
         ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((e-> cast_to ), name, out, (e-> line ), (e-> column ));
 
-#line 5167 "bootstrap/lsp.glide"
+#line 5248 "bootstrap/lsp.glide"
         if (((e-> fn_expr_body )  !=  NULL)) {
 
-#line 5168 "bootstrap/lsp.glide"
+#line 5249 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__Stmt((e-> fn_expr_body ))); i++) {
 
-#line 5169 "bootstrap/lsp.glide"
+#line 5250 "bootstrap/lsp.glide"
                 Stmt   bs = Vector_get__Stmt((e-> fn_expr_body ), i);
 
-#line 5170 "bootstrap/lsp.glide"
+#line 5251 "bootstrap/lsp.glide"
                 ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&bs), name, out);
             }
         }
     }
 
-#line 5174 "bootstrap/lsp.glide"
+#line 5255 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((e-> lhs ), name, out);
     }
 
-#line 5175 "bootstrap/lsp.glide"
+#line 5256 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((e-> rhs ), name, out);
     }
 
-#line 5176 "bootstrap/lsp.glide"
+#line 5257 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((e-> operand ), name, out);
     }
 
-#line 5177 "bootstrap/lsp.glide"
+#line 5258 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 5178 "bootstrap/lsp.glide"
+#line 5259 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 5179 "bootstrap/lsp.glide"
+#line 5260 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 5180 "bootstrap/lsp.glide"
+#line 5261 "bootstrap/lsp.glide"
             ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((&a), name, out);
         }
     }
 }
 
 
-#line 5193 "bootstrap/lsp.glide"
+#line 5274 "bootstrap/lsp.glide"
 void   _collect_type_uses (Type*   t, const char*   name, Vector__UseSite*   out, int32_t   carrier_line, int32_t   carrier_col) {
 
-#line 5194 "bootstrap/lsp.glide"
+#line 5275 "bootstrap/lsp.glide"
     if ((t  ==  NULL)) {
         return;
     }
 
-#line 5195 "bootstrap/lsp.glide"
+#line 5276 "bootstrap/lsp.glide"
     if ((carrier_line  ==  0)) {
         return;
     }
 
-#line 5196 "bootstrap/lsp.glide"
+#line 5277 "bootstrap/lsp.glide"
     if (((((t-> kind )  ==  TY_NAMED)  &&  ((t-> name )  !=  NULL))  &&  __glide_string_eq((t-> name ), name))) {
 
-#line 5197 "bootstrap/lsp.glide"
+#line 5278 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = carrier_line, . col  = carrier_col});
 
-#line 5198 "bootstrap/lsp.glide"
+#line 5279 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5200 "bootstrap/lsp.glide"
+#line 5281 "bootstrap/lsp.glide"
     if (((((t-> kind )  ==  TY_GENERIC)  &&  ((t-> name )  !=  NULL))  &&  __glide_string_eq((t-> name ), name))) {
 
-#line 5201 "bootstrap/lsp.glide"
+#line 5282 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = carrier_line, . col  = carrier_col});
 
-#line 5202 "bootstrap/lsp.glide"
+#line 5283 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5204 "bootstrap/lsp.glide"
+#line 5285 "bootstrap/lsp.glide"
     if (((t-> inner )  !=  NULL)) {
         ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((t-> inner ), name, out, carrier_line, carrier_col);
     }
 
-#line 5205 "bootstrap/lsp.glide"
+#line 5286 "bootstrap/lsp.glide"
     if (((t-> args )  !=  NULL)) {
 
-#line 5206 "bootstrap/lsp.glide"
+#line 5287 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
 
-#line 5207 "bootstrap/lsp.glide"
+#line 5288 "bootstrap/lsp.glide"
             Type   a = Vector_get__Type((t-> args ), i);
 
-#line 5208 "bootstrap/lsp.glide"
+#line 5289 "bootstrap/lsp.glide"
             ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((&a), name, out, carrier_line, carrier_col);
         }
     }
 
-#line 5211 "bootstrap/lsp.glide"
+#line 5292 "bootstrap/lsp.glide"
     if (((t-> fnptr_ret )  !=  NULL)) {
         ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((t-> fnptr_ret ), name, out, carrier_line, carrier_col);
     }
 }
 
 
-#line 5214 "bootstrap/lsp.glide"
+#line 5295 "bootstrap/lsp.glide"
 void   collect_uses_in_stmt (Stmt*   s, const char*   name, Vector__UseSite*   out) {
 
-#line 5215 "bootstrap/lsp.glide"
+#line 5296 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return;
     }
 
-#line 5219 "bootstrap/lsp.glide"
+#line 5300 "bootstrap/lsp.glide"
     if ((((((((((s-> kind )  ==  ST_FN)  ||  ((s-> kind )  ==  ST_STRUCT))  ||  ((s-> kind )  ==  ST_ENUM))  ||  ((s-> kind )  ==  ST_CONST))  ||  ((s-> kind )  ==  ST_TRAIT))  ||  ((s-> kind )  ==  ST_MACRO_DEF))  &&  ((s-> name )  !=  NULL))  &&  __glide_string_eq((s-> name ), name))) {
 
-#line 5222 "bootstrap/lsp.glide"
+#line 5303 "bootstrap/lsp.glide"
         int32_t   nl = (s-> name_line );
         int32_t   nc = (s-> name_col );
 
-#line 5223 "bootstrap/lsp.glide"
+#line 5304 "bootstrap/lsp.glide"
         if ((nl  ==  0)) {
             (nl  =  (s-> line ));
             (nc  =  (s-> column ));
         }
 
-#line 5224 "bootstrap/lsp.glide"
+#line 5305 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = nl, . col  = nc});
 
-#line 5225 "bootstrap/lsp.glide"
+#line 5306 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5227 "bootstrap/lsp.glide"
+#line 5308 "bootstrap/lsp.glide"
     if (((((s-> kind )  ==  ST_LET)  &&  ((s-> name )  !=  NULL))  &&  __glide_string_eq((s-> name ), name))) {
 
-#line 5228 "bootstrap/lsp.glide"
+#line 5309 "bootstrap/lsp.glide"
         int32_t   nl = (s-> name_line );
         int32_t   nc = (s-> name_col );
 
-#line 5229 "bootstrap/lsp.glide"
+#line 5310 "bootstrap/lsp.glide"
         if ((nl  ==  0)) {
             (nl  =  (s-> line ));
             (nc  =  (s-> column ));
         }
 
-#line 5230 "bootstrap/lsp.glide"
+#line 5311 "bootstrap/lsp.glide"
         UseSite   u = (( UseSite ){. line  = nl, . col  = nc});
 
-#line 5231 "bootstrap/lsp.glide"
+#line 5312 "bootstrap/lsp.glide"
         Vector_push__UseSite(out, u);
     }
 
-#line 5236 "bootstrap/lsp.glide"
+#line 5317 "bootstrap/lsp.glide"
     ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((s-> let_ty ), name, out, (s-> line ), (s-> column ));
 
-#line 5237 "bootstrap/lsp.glide"
+#line 5318 "bootstrap/lsp.glide"
     ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((s-> fn_ret_ty ), name, out, (s-> line ), (s-> column ));
 
-#line 5238 "bootstrap/lsp.glide"
+#line 5319 "bootstrap/lsp.glide"
     ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((s-> impl_target ), name, out, (s-> line ), (s-> column ));
 
-#line 5239 "bootstrap/lsp.glide"
+#line 5320 "bootstrap/lsp.glide"
     if (((s-> fn_params )  !=  NULL)) {
 
-#line 5240 "bootstrap/lsp.glide"
+#line 5321 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
 
-#line 5241 "bootstrap/lsp.glide"
+#line 5322 "bootstrap/lsp.glide"
             Param   p = Vector_get__Param((s-> fn_params ), i);
 
-#line 5242 "bootstrap/lsp.glide"
+#line 5323 "bootstrap/lsp.glide"
             if ((((p. name )  !=  NULL)  &&  __glide_string_eq((p. name ), name))) {
 
-#line 5243 "bootstrap/lsp.glide"
+#line 5324 "bootstrap/lsp.glide"
                 int32_t   nl = (p. name_line );
                 int32_t   nc = (p. name_col );
 
-#line 5244 "bootstrap/lsp.glide"
+#line 5325 "bootstrap/lsp.glide"
                 if ((nl  ==  0)) {
                     (nl  =  (s-> line ));
                     (nc  =  (s-> column ));
                 }
 
-#line 5245 "bootstrap/lsp.glide"
+#line 5326 "bootstrap/lsp.glide"
                 if ((nl  >  0)) {
 
-#line 5246 "bootstrap/lsp.glide"
+#line 5327 "bootstrap/lsp.glide"
                     UseSite   u = (( UseSite ){. line  = nl, . col  = nc});
 
-#line 5247 "bootstrap/lsp.glide"
+#line 5328 "bootstrap/lsp.glide"
                     Vector_push__UseSite(out, u);
                 }
             }
 
-#line 5253 "bootstrap/lsp.glide"
+#line 5334 "bootstrap/lsp.glide"
             int32_t   tl = (p. name_line );
             int32_t   tc = (p. name_col );
 
-#line 5254 "bootstrap/lsp.glide"
+#line 5335 "bootstrap/lsp.glide"
             if ((tl  ==  0)) {
                 (tl  =  (s-> line ));
                 (tc  =  (s-> column ));
             }
 
-#line 5255 "bootstrap/lsp.glide"
+#line 5336 "bootstrap/lsp.glide"
             ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((p. ty ), name, out, tl, tc);
         }
     }
 
-#line 5258 "bootstrap/lsp.glide"
+#line 5339 "bootstrap/lsp.glide"
     if (((s-> struct_fields )  !=  NULL)) {
 
-#line 5259 "bootstrap/lsp.glide"
+#line 5340 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
 
-#line 5260 "bootstrap/lsp.glide"
+#line 5341 "bootstrap/lsp.glide"
             Field   f = Vector_get__Field((s-> struct_fields ), i);
 
-#line 5261 "bootstrap/lsp.glide"
+#line 5342 "bootstrap/lsp.glide"
             if ((((f. name )  !=  NULL)  &&  __glide_string_eq((f. name ), name))) {
 
-#line 5262 "bootstrap/lsp.glide"
+#line 5343 "bootstrap/lsp.glide"
                 UseSite   u = (( UseSite ){. line  = (s-> line ), . col  = (s-> column )});
 
-#line 5263 "bootstrap/lsp.glide"
+#line 5344 "bootstrap/lsp.glide"
                 Vector_push__UseSite(out, u);
             }
 
-#line 5265 "bootstrap/lsp.glide"
+#line 5346 "bootstrap/lsp.glide"
             ((void(*)(Type*, const char*, Vector__UseSite*, int32_t, int32_t))_collect_type_uses)((f. ty ), name, out, (s-> line ), (s-> column ));
         }
     }
 
-#line 5271 "bootstrap/lsp.glide"
+#line 5352 "bootstrap/lsp.glide"
     if (((s-> attrs )  !=  NULL)) {
 
-#line 5272 "bootstrap/lsp.glide"
+#line 5353 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 5273 "bootstrap/lsp.glide"
+#line 5354 "bootstrap/lsp.glide"
             Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 5274 "bootstrap/lsp.glide"
+#line 5355 "bootstrap/lsp.glide"
             if (((a. args )  ==  NULL)) {
                 continue;
             }
 
-#line 5275 "bootstrap/lsp.glide"
+#line 5356 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Expr((a. args ))); j++) {
 
-#line 5276 "bootstrap/lsp.glide"
+#line 5357 "bootstrap/lsp.glide"
                 Expr   ae = Vector_get__Expr((a. args ), j);
 
-#line 5277 "bootstrap/lsp.glide"
+#line 5358 "bootstrap/lsp.glide"
                 ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((&ae), name, out);
             }
         }
     }
 
-#line 5281 "bootstrap/lsp.glide"
+#line 5362 "bootstrap/lsp.glide"
     if (((s-> let_value )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> let_value ), name, out);
     }
 
-#line 5282 "bootstrap/lsp.glide"
+#line 5363 "bootstrap/lsp.glide"
     if (((s-> expr_value )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> expr_value ), name, out);
     }
 
-#line 5283 "bootstrap/lsp.glide"
+#line 5364 "bootstrap/lsp.glide"
     if (((s-> cond )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> cond ), name, out);
     }
 
-#line 5284 "bootstrap/lsp.glide"
+#line 5365 "bootstrap/lsp.glide"
     if (((s-> for_step )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> for_step ), name, out);
     }
 
-#line 5285 "bootstrap/lsp.glide"
+#line 5366 "bootstrap/lsp.glide"
     if (((s-> scrutinee )  !=  NULL)) {
         ((void(*)(Expr*, const char*, Vector__UseSite*))collect_uses_in_expr)((s-> scrutinee ), name, out);
     }
 
-#line 5286 "bootstrap/lsp.glide"
+#line 5367 "bootstrap/lsp.glide"
     if (((s-> for_init )  !=  NULL)) {
         ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((s-> for_init ), name, out);
     }
 
-#line 5287 "bootstrap/lsp.glide"
+#line 5368 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 5288 "bootstrap/lsp.glide"
+#line 5369 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
 
-#line 5289 "bootstrap/lsp.glide"
+#line 5370 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
 
-#line 5290 "bootstrap/lsp.glide"
+#line 5371 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&b), name, out);
         }
     }
 
-#line 5293 "bootstrap/lsp.glide"
+#line 5374 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 5294 "bootstrap/lsp.glide"
+#line 5375 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
 
-#line 5295 "bootstrap/lsp.glide"
+#line 5376 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
 
-#line 5296 "bootstrap/lsp.glide"
+#line 5377 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&b), name, out);
         }
     }
 
-#line 5299 "bootstrap/lsp.glide"
+#line 5380 "bootstrap/lsp.glide"
     if (((s-> fn_body )  !=  NULL)) {
 
-#line 5300 "bootstrap/lsp.glide"
+#line 5381 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
 
-#line 5301 "bootstrap/lsp.glide"
+#line 5382 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> fn_body ), i);
 
-#line 5302 "bootstrap/lsp.glide"
+#line 5383 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&b), name, out);
         }
     }
 
-#line 5305 "bootstrap/lsp.glide"
+#line 5386 "bootstrap/lsp.glide"
     if (((s-> impl_methods )  !=  NULL)) {
 
-#line 5306 "bootstrap/lsp.glide"
+#line 5387 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
 
-#line 5307 "bootstrap/lsp.glide"
+#line 5388 "bootstrap/lsp.glide"
             Stmt   m = Vector_get__Stmt((s-> impl_methods ), i);
 
-#line 5308 "bootstrap/lsp.glide"
+#line 5389 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&m), name, out);
         }
     }
 
-#line 5311 "bootstrap/lsp.glide"
+#line 5392 "bootstrap/lsp.glide"
     if (((s-> arms )  !=  NULL)) {
 
-#line 5312 "bootstrap/lsp.glide"
+#line 5393 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__MatchArm((s-> arms ))); i++) {
 
-#line 5313 "bootstrap/lsp.glide"
+#line 5394 "bootstrap/lsp.glide"
             MatchArm   a = Vector_get__MatchArm((s-> arms ), i);
 
-#line 5314 "bootstrap/lsp.glide"
+#line 5395 "bootstrap/lsp.glide"
             if (((a. body )  !=  NULL)) {
 
-#line 5315 "bootstrap/lsp.glide"
+#line 5396 "bootstrap/lsp.glide"
                 for (int32_t   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
 
-#line 5316 "bootstrap/lsp.glide"
+#line 5397 "bootstrap/lsp.glide"
                     Stmt   b = Vector_get__Stmt((a. body ), j);
 
-#line 5317 "bootstrap/lsp.glide"
+#line 5398 "bootstrap/lsp.glide"
                     ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&b), name, out);
                 }
             }
@@ -64926,499 +65158,499 @@ void   collect_uses_in_stmt (Stmt*   s, const char*   name, Vector__UseSite*   o
 }
 
 
-#line 5324 "bootstrap/lsp.glide"
+#line 5405 "bootstrap/lsp.glide"
 JsonValue*   use_to_range (UseSite*   u, int32_t   name_len) {
 
-#line 5325 "bootstrap/lsp.glide"
+#line 5406 "bootstrap/lsp.glide"
     JsonValue*   r = ((JsonValue*(*)(void))json_object)();
 
-#line 5326 "bootstrap/lsp.glide"
+#line 5407 "bootstrap/lsp.glide"
     int32_t   l = ((u-> line )  -  1);
     if ((l  <  0)) {
         (l  =  0);
     }
 
-#line 5327 "bootstrap/lsp.glide"
+#line 5408 "bootstrap/lsp.glide"
     int32_t   c = ((u-> col )  -  1);
     if ((c  <  0)) {
         (c  =  0);
     }
 
-#line 5328 "bootstrap/lsp.glide"
+#line 5409 "bootstrap/lsp.glide"
     JsonValue*   s = ((JsonValue*(*)(void))json_object)();
 
-#line 5329 "bootstrap/lsp.glide"
+#line 5410 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(s, "line", ((JsonValue*(*)(int32_t))json_int)(l));
 
-#line 5330 "bootstrap/lsp.glide"
+#line 5411 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(s, "character", ((JsonValue*(*)(int32_t))json_int)(c));
 
-#line 5331 "bootstrap/lsp.glide"
+#line 5412 "bootstrap/lsp.glide"
     JsonValue*   e = ((JsonValue*(*)(void))json_object)();
 
-#line 5332 "bootstrap/lsp.glide"
+#line 5413 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(e, "line", ((JsonValue*(*)(int32_t))json_int)(l));
 
-#line 5333 "bootstrap/lsp.glide"
+#line 5414 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(e, "character", ((JsonValue*(*)(int32_t))json_int)((c  +  name_len)));
 
-#line 5334 "bootstrap/lsp.glide"
+#line 5415 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "start", s);
 
-#line 5335 "bootstrap/lsp.glide"
+#line 5416 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "end", e);
 
-#line 5336 "bootstrap/lsp.glide"
+#line 5417 "bootstrap/lsp.glide"
     return r;
 }
 
 
-#line 5339 "bootstrap/lsp.glide"
+#line 5420 "bootstrap/lsp.glide"
 void   handle_references (JsonValue*   req, LspState*   state) {
 
-#line 5340 "bootstrap/lsp.glide"
+#line 5421 "bootstrap/lsp.glide"
     JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
 
-#line 5341 "bootstrap/lsp.glide"
+#line 5422 "bootstrap/lsp.glide"
     JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
 
-#line 5342 "bootstrap/lsp.glide"
+#line 5423 "bootstrap/lsp.glide"
     JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
 
-#line 5343 "bootstrap/lsp.glide"
+#line 5424 "bootstrap/lsp.glide"
     const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
 
-#line 5344 "bootstrap/lsp.glide"
+#line 5425 "bootstrap/lsp.glide"
     JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
 
-#line 5345 "bootstrap/lsp.glide"
+#line 5426 "bootstrap/lsp.glide"
     int32_t   line0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
 
-#line 5346 "bootstrap/lsp.glide"
+#line 5427 "bootstrap/lsp.glide"
     int32_t   col0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
 
-#line 5347 "bootstrap/lsp.glide"
+#line 5428 "bootstrap/lsp.glide"
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
 
-#line 5348 "bootstrap/lsp.glide"
+#line 5429 "bootstrap/lsp.glide"
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
 
-#line 5349 "bootstrap/lsp.glide"
+#line 5430 "bootstrap/lsp.glide"
     const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
 
-#line 5350 "bootstrap/lsp.glide"
+#line 5431 "bootstrap/lsp.glide"
     const char*   word = ((const char*(*)(const char*, int32_t, int32_t))word_at)((doc. text ), line0, col0);
 
-#line 5351 "bootstrap/lsp.glide"
+#line 5432 "bootstrap/lsp.glide"
     if (__glide_string_eq(word, "")) {
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
 
-#line 5352 "bootstrap/lsp.glide"
+#line 5433 "bootstrap/lsp.glide"
     Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
 
-#line 5353 "bootstrap/lsp.glide"
+#line 5434 "bootstrap/lsp.glide"
     if (((doc. stmts )  !=  NULL)) {
 
-#line 5354 "bootstrap/lsp.glide"
+#line 5435 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
 
-#line 5355 "bootstrap/lsp.glide"
+#line 5436 "bootstrap/lsp.glide"
             Stmt   s = Vector_get__Stmt((doc. stmts ), i);
 
-#line 5356 "bootstrap/lsp.glide"
+#line 5437 "bootstrap/lsp.glide"
             if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
                 continue;
             }
 
-#line 5357 "bootstrap/lsp.glide"
+#line 5438 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
         }
     }
 
-#line 5360 "bootstrap/lsp.glide"
+#line 5441 "bootstrap/lsp.glide"
     JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
 
-#line 5361 "bootstrap/lsp.glide"
+#line 5442 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
 
-#line 5362 "bootstrap/lsp.glide"
+#line 5443 "bootstrap/lsp.glide"
         UseSite   u = Vector_get__UseSite(uses, i);
 
-#line 5363 "bootstrap/lsp.glide"
+#line 5444 "bootstrap/lsp.glide"
         if (((u. line )  <=  0)) {
             continue;
         }
 
-#line 5364 "bootstrap/lsp.glide"
+#line 5445 "bootstrap/lsp.glide"
         JsonValue*   loc = ((JsonValue*(*)(void))json_object)();
 
-#line 5365 "bootstrap/lsp.glide"
+#line 5446 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(loc, "uri", ((JsonValue*(*)(const char*))json_string)(uri));
 
-#line 5366 "bootstrap/lsp.glide"
+#line 5447 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(loc, "range", ((JsonValue*(*)(UseSite*, int32_t))use_to_range)((&u), __glide_string_len(word)));
 
-#line 5367 "bootstrap/lsp.glide"
+#line 5448 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, loc);
     }
 
-#line 5369 "bootstrap/lsp.glide"
+#line 5450 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
 }
 
 
-#line 5372 "bootstrap/lsp.glide"
+#line 5453 "bootstrap/lsp.glide"
 void   handle_document_highlight (JsonValue*   req, LspState*   state) {
 
-#line 5373 "bootstrap/lsp.glide"
-    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
-
-#line 5374 "bootstrap/lsp.glide"
-    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
-
-#line 5375 "bootstrap/lsp.glide"
-    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
-
-#line 5376 "bootstrap/lsp.glide"
-    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
-
-#line 5377 "bootstrap/lsp.glide"
-    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
-
-#line 5378 "bootstrap/lsp.glide"
-    int32_t   line0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
-
-#line 5379 "bootstrap/lsp.glide"
-    int32_t   col0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
-
-#line 5380 "bootstrap/lsp.glide"
-    if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
-        return;
-    }
-
-#line 5381 "bootstrap/lsp.glide"
-    LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-
-#line 5382 "bootstrap/lsp.glide"
-    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
-
-#line 5383 "bootstrap/lsp.glide"
-    const char*   word = ((const char*(*)(const char*, int32_t, int32_t))word_at)((doc. text ), line0, col0);
-
-#line 5384 "bootstrap/lsp.glide"
-    if (__glide_string_eq(word, "")) {
-        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
-        return;
-    }
-
-#line 5385 "bootstrap/lsp.glide"
-    Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
-
-#line 5386 "bootstrap/lsp.glide"
-    if (((doc. stmts )  !=  NULL)) {
-
-#line 5387 "bootstrap/lsp.glide"
-        for (int32_t   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
-
-#line 5388 "bootstrap/lsp.glide"
-            Stmt   s = Vector_get__Stmt((doc. stmts ), i);
-
-#line 5389 "bootstrap/lsp.glide"
-            if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
-                continue;
-            }
-
-#line 5390 "bootstrap/lsp.glide"
-            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
-        }
-    }
-
-#line 5393 "bootstrap/lsp.glide"
-    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
-
-#line 5394 "bootstrap/lsp.glide"
-    for (int32_t   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
-
-#line 5395 "bootstrap/lsp.glide"
-        UseSite   u = Vector_get__UseSite(uses, i);
-
-#line 5399 "bootstrap/lsp.glide"
-        if (((u. line )  <=  0)) {
-            continue;
-        }
-
-#line 5400 "bootstrap/lsp.glide"
-        JsonValue*   h = ((JsonValue*(*)(void))json_object)();
-
-#line 5401 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(h, "range", ((JsonValue*(*)(UseSite*, int32_t))use_to_range)((&u), __glide_string_len(word)));
-
-#line 5402 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(h, "kind", ((JsonValue*(*)(int32_t))json_int)(1));
-
-#line 5403 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, h);
-    }
-
-#line 5405 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
-}
-
-
-#line 5408 "bootstrap/lsp.glide"
-void   handle_rename (JsonValue*   req, LspState*   state) {
-
-#line 5409 "bootstrap/lsp.glide"
-    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
-
-#line 5410 "bootstrap/lsp.glide"
-    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
-
-#line 5411 "bootstrap/lsp.glide"
-    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
-
-#line 5412 "bootstrap/lsp.glide"
-    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
-
-#line 5413 "bootstrap/lsp.glide"
-    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
-
-#line 5414 "bootstrap/lsp.glide"
-    int32_t   line0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
-
-#line 5415 "bootstrap/lsp.glide"
-    int32_t   col0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
-
-#line 5416 "bootstrap/lsp.glide"
-    const char*   new_name = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "newName"));
-
-#line 5417 "bootstrap/lsp.glide"
-    if (((!HashMap_contains__LspDoc((state-> docs ), uri))  ||  __glide_string_eq(new_name, ""))) {
-
-#line 5418 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
-        return;
-    }
-
-#line 5420 "bootstrap/lsp.glide"
-    LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
-
-#line 5421 "bootstrap/lsp.glide"
-    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
-
-#line 5422 "bootstrap/lsp.glide"
-    const char*   word = ((const char*(*)(const char*, int32_t, int32_t))word_at)((doc. text ), line0, col0);
-
-#line 5423 "bootstrap/lsp.glide"
-    if (__glide_string_eq(word, "")) {
-        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
-        return;
-    }
-
-#line 5424 "bootstrap/lsp.glide"
-    Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
-
-#line 5425 "bootstrap/lsp.glide"
-    if (((doc. stmts )  !=  NULL)) {
-
-#line 5426 "bootstrap/lsp.glide"
-        for (int32_t   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
-
-#line 5427 "bootstrap/lsp.glide"
-            Stmt   s = Vector_get__Stmt((doc. stmts ), i);
-
-#line 5428 "bootstrap/lsp.glide"
-            if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
-                continue;
-            }
-
-#line 5429 "bootstrap/lsp.glide"
-            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
-        }
-    }
-
-#line 5432 "bootstrap/lsp.glide"
-    JsonValue*   edits = ((JsonValue*(*)(void))json_array)();
-
-#line 5433 "bootstrap/lsp.glide"
-    for (int32_t   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
-
-#line 5434 "bootstrap/lsp.glide"
-        UseSite   u = Vector_get__UseSite(uses, i);
-
-#line 5437 "bootstrap/lsp.glide"
-        if (((u. line )  <=  0)) {
-            continue;
-        }
-
-#line 5438 "bootstrap/lsp.glide"
-        JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
-
-#line 5439 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "range", ((JsonValue*(*)(UseSite*, int32_t))use_to_range)((&u), __glide_string_len(word)));
-
-#line 5440 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "newText", ((JsonValue*(*)(const char*))json_string)(new_name));
-
-#line 5441 "bootstrap/lsp.glide"
-        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(edits, edit);
-    }
-
-#line 5443 "bootstrap/lsp.glide"
-    JsonValue*   changes = ((JsonValue*(*)(void))json_object)();
-
-#line 5444 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(changes, uri, edits);
-
-#line 5445 "bootstrap/lsp.glide"
-    JsonValue*   result = ((JsonValue*(*)(void))json_object)();
-
-#line 5446 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "changes", changes);
-
-#line 5447 "bootstrap/lsp.glide"
-    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, result);
-}
-
-
 #line 5454 "bootstrap/lsp.glide"
-void   handle_prepare_rename (JsonValue*   req, LspState*   state) {
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
 
 #line 5455 "bootstrap/lsp.glide"
-    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
-
-#line 5456 "bootstrap/lsp.glide"
     JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
 
-#line 5457 "bootstrap/lsp.glide"
+#line 5456 "bootstrap/lsp.glide"
     JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
 
-#line 5458 "bootstrap/lsp.glide"
+#line 5457 "bootstrap/lsp.glide"
     const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
 
-#line 5459 "bootstrap/lsp.glide"
+#line 5458 "bootstrap/lsp.glide"
     JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
 
-#line 5460 "bootstrap/lsp.glide"
+#line 5459 "bootstrap/lsp.glide"
     int32_t   line0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
 
-#line 5461 "bootstrap/lsp.glide"
+#line 5460 "bootstrap/lsp.glide"
     int32_t   col0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
 
-#line 5462 "bootstrap/lsp.glide"
+#line 5461 "bootstrap/lsp.glide"
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
-        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
 
-#line 5463 "bootstrap/lsp.glide"
+#line 5462 "bootstrap/lsp.glide"
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
+
+#line 5463 "bootstrap/lsp.glide"
+    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
 
 #line 5464 "bootstrap/lsp.glide"
     const char*   word = ((const char*(*)(const char*, int32_t, int32_t))word_at)((doc. text ), line0, col0);
 
 #line 5465 "bootstrap/lsp.glide"
     if (__glide_string_eq(word, "")) {
-        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
 
 #line 5466 "bootstrap/lsp.glide"
+    Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
+
+#line 5467 "bootstrap/lsp.glide"
+    if (((doc. stmts )  !=  NULL)) {
+
+#line 5468 "bootstrap/lsp.glide"
+        for (int32_t   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
+
+#line 5469 "bootstrap/lsp.glide"
+            Stmt   s = Vector_get__Stmt((doc. stmts ), i);
+
+#line 5470 "bootstrap/lsp.glide"
+            if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
+                continue;
+            }
+
+#line 5471 "bootstrap/lsp.glide"
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
+        }
+    }
+
+#line 5474 "bootstrap/lsp.glide"
+    JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
+
+#line 5475 "bootstrap/lsp.glide"
+    for (int32_t   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
+
+#line 5476 "bootstrap/lsp.glide"
+        UseSite   u = Vector_get__UseSite(uses, i);
+
+#line 5480 "bootstrap/lsp.glide"
+        if (((u. line )  <=  0)) {
+            continue;
+        }
+
+#line 5481 "bootstrap/lsp.glide"
+        JsonValue*   h = ((JsonValue*(*)(void))json_object)();
+
+#line 5482 "bootstrap/lsp.glide"
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(h, "range", ((JsonValue*(*)(UseSite*, int32_t))use_to_range)((&u), __glide_string_len(word)));
+
+#line 5483 "bootstrap/lsp.glide"
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(h, "kind", ((JsonValue*(*)(int32_t))json_int)(1));
+
+#line 5484 "bootstrap/lsp.glide"
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, h);
+    }
+
+#line 5486 "bootstrap/lsp.glide"
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
+}
+
+
+#line 5489 "bootstrap/lsp.glide"
+void   handle_rename (JsonValue*   req, LspState*   state) {
+
+#line 5490 "bootstrap/lsp.glide"
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+
+#line 5491 "bootstrap/lsp.glide"
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+
+#line 5492 "bootstrap/lsp.glide"
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+
+#line 5493 "bootstrap/lsp.glide"
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+
+#line 5494 "bootstrap/lsp.glide"
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+
+#line 5495 "bootstrap/lsp.glide"
+    int32_t   line0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+
+#line 5496 "bootstrap/lsp.glide"
+    int32_t   col0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
+
+#line 5497 "bootstrap/lsp.glide"
+    const char*   new_name = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "newName"));
+
+#line 5498 "bootstrap/lsp.glide"
+    if (((!HashMap_contains__LspDoc((state-> docs ), uri))  ||  __glide_string_eq(new_name, ""))) {
+
+#line 5499 "bootstrap/lsp.glide"
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
+        return;
+    }
+
+#line 5501 "bootstrap/lsp.glide"
+    LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
+
+#line 5502 "bootstrap/lsp.glide"
+    const char*   path = ((const char*(*)(const char*))uri_to_path)(uri);
+
+#line 5503 "bootstrap/lsp.glide"
+    const char*   word = ((const char*(*)(const char*, int32_t, int32_t))word_at)((doc. text ), line0, col0);
+
+#line 5504 "bootstrap/lsp.glide"
+    if (__glide_string_eq(word, "")) {
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
+        return;
+    }
+
+#line 5505 "bootstrap/lsp.glide"
+    Vector__UseSite*   uses = ((Vector__UseSite*(*)(void))Vector_new__UseSite)();
+
+#line 5506 "bootstrap/lsp.glide"
+    if (((doc. stmts )  !=  NULL)) {
+
+#line 5507 "bootstrap/lsp.glide"
+        for (int32_t   i = 0; (i  <  Vector_len__Stmt((doc. stmts ))); i++) {
+
+#line 5508 "bootstrap/lsp.glide"
+            Stmt   s = Vector_get__Stmt((doc. stmts ), i);
+
+#line 5509 "bootstrap/lsp.glide"
+            if (((!__glide_string_eq((s. origin ), ""))  &&  (!__glide_string_eq((s. origin ), path)))) {
+                continue;
+            }
+
+#line 5510 "bootstrap/lsp.glide"
+            ((void(*)(Stmt*, const char*, Vector__UseSite*))collect_uses_in_stmt)((&s), word, uses);
+        }
+    }
+
+#line 5513 "bootstrap/lsp.glide"
+    JsonValue*   edits = ((JsonValue*(*)(void))json_array)();
+
+#line 5514 "bootstrap/lsp.glide"
+    for (int32_t   i = 0; (i  <  Vector_len__UseSite(uses)); i++) {
+
+#line 5515 "bootstrap/lsp.glide"
+        UseSite   u = Vector_get__UseSite(uses, i);
+
+#line 5518 "bootstrap/lsp.glide"
+        if (((u. line )  <=  0)) {
+            continue;
+        }
+
+#line 5519 "bootstrap/lsp.glide"
+        JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
+
+#line 5520 "bootstrap/lsp.glide"
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "range", ((JsonValue*(*)(UseSite*, int32_t))use_to_range)((&u), __glide_string_len(word)));
+
+#line 5521 "bootstrap/lsp.glide"
+        ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "newText", ((JsonValue*(*)(const char*))json_string)(new_name));
+
+#line 5522 "bootstrap/lsp.glide"
+        ((void(*)(JsonValue*, JsonValue*))json_arr_push)(edits, edit);
+    }
+
+#line 5524 "bootstrap/lsp.glide"
+    JsonValue*   changes = ((JsonValue*(*)(void))json_object)();
+
+#line 5525 "bootstrap/lsp.glide"
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(changes, uri, edits);
+
+#line 5526 "bootstrap/lsp.glide"
+    JsonValue*   result = ((JsonValue*(*)(void))json_object)();
+
+#line 5527 "bootstrap/lsp.glide"
+    ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "changes", changes);
+
+#line 5528 "bootstrap/lsp.glide"
+    ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, result);
+}
+
+
+#line 5535 "bootstrap/lsp.glide"
+void   handle_prepare_rename (JsonValue*   req, LspState*   state) {
+
+#line 5536 "bootstrap/lsp.glide"
+    JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
+
+#line 5537 "bootstrap/lsp.glide"
+    JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
+
+#line 5538 "bootstrap/lsp.glide"
+    JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
+
+#line 5539 "bootstrap/lsp.glide"
+    const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
+
+#line 5540 "bootstrap/lsp.glide"
+    JsonValue*   pos = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "position");
+
+#line 5541 "bootstrap/lsp.glide"
+    int32_t   line0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "line"));
+
+#line 5542 "bootstrap/lsp.glide"
+    int32_t   col0 = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(pos, "character"));
+
+#line 5543 "bootstrap/lsp.glide"
+    if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
+        return;
+    }
+
+#line 5544 "bootstrap/lsp.glide"
+    LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
+
+#line 5545 "bootstrap/lsp.glide"
+    const char*   word = ((const char*(*)(const char*, int32_t, int32_t))word_at)((doc. text ), line0, col0);
+
+#line 5546 "bootstrap/lsp.glide"
+    if (__glide_string_eq(word, "")) {
+        ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
+        return;
+    }
+
+#line 5547 "bootstrap/lsp.glide"
     if (((bool(*)(const char*))is_glide_keyword)(word)) {
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
         return;
     }
 
-#line 5469 "bootstrap/lsp.glide"
+#line 5550 "bootstrap/lsp.glide"
     Lexer*   lex = Lexer_new((doc. text ));
 
-#line 5470 "bootstrap/lsp.glide"
+#line 5551 "bootstrap/lsp.glide"
     while (true) {
 
-#line 5471 "bootstrap/lsp.glide"
+#line 5552 "bootstrap/lsp.glide"
         Token   tok = Lexer_next_token(lex);
 
-#line 5472 "bootstrap/lsp.glide"
+#line 5553 "bootstrap/lsp.glide"
         if (((tok. kind )  ==  TOK_EOF)) {
             break;
         }
 
-#line 5473 "bootstrap/lsp.glide"
+#line 5554 "bootstrap/lsp.glide"
         if (((tok. kind )  !=  TOK_IDENT)) {
             continue;
         }
 
-#line 5474 "bootstrap/lsp.glide"
+#line 5555 "bootstrap/lsp.glide"
         int32_t   tline = ((tok. line )  -  1);
 
-#line 5475 "bootstrap/lsp.glide"
+#line 5556 "bootstrap/lsp.glide"
         int32_t   tcol = ((tok. column )  -  1);
 
-#line 5476 "bootstrap/lsp.glide"
+#line 5557 "bootstrap/lsp.glide"
         int32_t   len = __glide_string_len((tok. lexeme ));
 
-#line 5477 "bootstrap/lsp.glide"
+#line 5558 "bootstrap/lsp.glide"
         if ((((tline  ==  line0)  &&  (col0  >=  tcol))  &&  (col0  <=  (tcol  +  len)))) {
 
-#line 5478 "bootstrap/lsp.glide"
+#line 5559 "bootstrap/lsp.glide"
             JsonValue*   range = ((JsonValue*(*)(void))json_object)();
 
-#line 5479 "bootstrap/lsp.glide"
+#line 5560 "bootstrap/lsp.glide"
             JsonValue*   start = ((JsonValue*(*)(void))json_object)();
 
-#line 5480 "bootstrap/lsp.glide"
+#line 5561 "bootstrap/lsp.glide"
             JsonValue*   endp = ((JsonValue*(*)(void))json_object)();
 
-#line 5481 "bootstrap/lsp.glide"
+#line 5562 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "line", ((JsonValue*(*)(int32_t))json_int)(tline));
 
-#line 5482 "bootstrap/lsp.glide"
+#line 5563 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "character", ((JsonValue*(*)(int32_t))json_int)(tcol));
 
-#line 5483 "bootstrap/lsp.glide"
+#line 5564 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "line", ((JsonValue*(*)(int32_t))json_int)(tline));
 
-#line 5484 "bootstrap/lsp.glide"
+#line 5565 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "character", ((JsonValue*(*)(int32_t))json_int)((tcol  +  len)));
 
-#line 5485 "bootstrap/lsp.glide"
+#line 5566 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "start", start);
 
-#line 5486 "bootstrap/lsp.glide"
+#line 5567 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "end", endp);
 
-#line 5487 "bootstrap/lsp.glide"
+#line 5568 "bootstrap/lsp.glide"
             JsonValue*   result = ((JsonValue*(*)(void))json_object)();
 
-#line 5488 "bootstrap/lsp.glide"
+#line 5569 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "range", range);
 
-#line 5489 "bootstrap/lsp.glide"
+#line 5570 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(result, "placeholder", ((JsonValue*(*)(const char*))json_string)(word));
 
-#line 5490 "bootstrap/lsp.glide"
+#line 5571 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, result);
 
-#line 5491 "bootstrap/lsp.glide"
+#line 5572 "bootstrap/lsp.glide"
             return;
         }
     }
 
-#line 5494 "bootstrap/lsp.glide"
+#line 5575 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
 }
 
 
-#line 5498 "bootstrap/lsp.glide"
+#line 5579 "bootstrap/lsp.glide"
 bool   is_glide_keyword (const char*   w) {
 
-#line 5499 "bootstrap/lsp.glide"
+#line 5580 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "fn")) {
         return true;
     }
@@ -65426,7 +65658,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5500 "bootstrap/lsp.glide"
+#line 5581 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "mut")) {
         return true;
     }
@@ -65434,7 +65666,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5501 "bootstrap/lsp.glide"
+#line 5582 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "struct")) {
         return true;
     }
@@ -65442,7 +65674,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5502 "bootstrap/lsp.glide"
+#line 5583 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "trait")) {
         return true;
     }
@@ -65450,7 +65682,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5503 "bootstrap/lsp.glide"
+#line 5584 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "import")) {
         return true;
     }
@@ -65458,7 +65690,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5504 "bootstrap/lsp.glide"
+#line 5585 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "if")) {
         return true;
     }
@@ -65466,7 +65698,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5505 "bootstrap/lsp.glide"
+#line 5586 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "while")) {
         return true;
     }
@@ -65474,7 +65706,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5506 "bootstrap/lsp.glide"
+#line 5587 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "return")) {
         return true;
     }
@@ -65482,7 +65714,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5507 "bootstrap/lsp.glide"
+#line 5588 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "defer")) {
         return true;
     }
@@ -65490,7 +65722,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5508 "bootstrap/lsp.glide"
+#line 5589 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "break")) {
         return true;
     }
@@ -65498,7 +65730,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5509 "bootstrap/lsp.glide"
+#line 5590 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "as")) {
         return true;
     }
@@ -65506,7 +65738,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5510 "bootstrap/lsp.glide"
+#line 5591 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "new")) {
         return true;
     }
@@ -65514,7 +65746,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5511 "bootstrap/lsp.glide"
+#line 5592 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "type")) {
         return true;
     }
@@ -65522,7 +65754,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5512 "bootstrap/lsp.glide"
+#line 5593 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "c_include")) {
         return true;
     }
@@ -65530,7 +65762,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5513 "bootstrap/lsp.glide"
+#line 5594 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "c_raw")) {
         return true;
     }
@@ -65538,7 +65770,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5514 "bootstrap/lsp.glide"
+#line 5595 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "naked")) {
         return true;
     }
@@ -65546,7 +65778,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5515 "bootstrap/lsp.glide"
+#line 5596 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "volatile")) {
         return true;
     }
@@ -65554,7 +65786,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5516 "bootstrap/lsp.glide"
+#line 5597 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "Self")) {
         return true;
     }
@@ -65562,7 +65794,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5517 "bootstrap/lsp.glide"
+#line 5598 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "chan")) {
         return true;
     }
@@ -65570,7 +65802,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5518 "bootstrap/lsp.glide"
+#line 5599 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "false")) {
         return true;
     }
@@ -65578,7 +65810,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5519 "bootstrap/lsp.glide"
+#line 5600 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "defer_err")) {
         return true;
     }
@@ -65586,7 +65818,7 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5520 "bootstrap/lsp.glide"
+#line 5601 "bootstrap/lsp.glide"
     if (__glide_string_eq(w, "trait")) {
         return true;
     }
@@ -65594,472 +65826,472 @@ bool   is_glide_keyword (const char*   w) {
         return true;
     }
 
-#line 5521 "bootstrap/lsp.glide"
+#line 5602 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 5524 "bootstrap/lsp.glide"
+#line 5605 "bootstrap/lsp.glide"
 int32_t   count_lines (const char*   s) {
 
-#line 5525 "bootstrap/lsp.glide"
+#line 5606 "bootstrap/lsp.glide"
     int32_t   n = 0;
 
-#line 5526 "bootstrap/lsp.glide"
+#line 5607 "bootstrap/lsp.glide"
     int32_t   len = __glide_string_len(s);
 
-#line 5527 "bootstrap/lsp.glide"
+#line 5608 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  len); i++) {
 
-#line 5528 "bootstrap/lsp.glide"
+#line 5609 "bootstrap/lsp.glide"
         if ((__glide_char_to_int(__glide_string_at(s, i))  ==  10)) {
             (n  =  (n  +  1));
         }
     }
 
-#line 5530 "bootstrap/lsp.glide"
+#line 5611 "bootstrap/lsp.glide"
     return n;
 }
 
 
-#line 5533 "bootstrap/lsp.glide"
+#line 5614 "bootstrap/lsp.glide"
 void   handle_formatting (JsonValue*   req, LspState*   state) {
 
-#line 5534 "bootstrap/lsp.glide"
+#line 5615 "bootstrap/lsp.glide"
     JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
 
-#line 5535 "bootstrap/lsp.glide"
+#line 5616 "bootstrap/lsp.glide"
     JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
 
-#line 5536 "bootstrap/lsp.glide"
+#line 5617 "bootstrap/lsp.glide"
     JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
 
-#line 5537 "bootstrap/lsp.glide"
+#line 5618 "bootstrap/lsp.glide"
     const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
 
-#line 5538 "bootstrap/lsp.glide"
+#line 5619 "bootstrap/lsp.glide"
     if ((!HashMap_contains__LspDoc((state-> docs ), uri))) {
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_array)());
         return;
     }
 
-#line 5539 "bootstrap/lsp.glide"
+#line 5620 "bootstrap/lsp.glide"
     LspDoc   doc = HashMap_get__LspDoc((state-> docs ), uri);
 
-#line 5541 "bootstrap/lsp.glide"
+#line 5622 "bootstrap/lsp.glide"
     Lexer*   lex = Lexer_new((doc. text ));
 
-#line 5542 "bootstrap/lsp.glide"
+#line 5623 "bootstrap/lsp.glide"
     Parser*   p = Parser_new(lex);
 
-#line 5543 "bootstrap/lsp.glide"
+#line 5624 "bootstrap/lsp.glide"
     Vector__Stmt*   parsed = ((Vector__Stmt*(*)(Parser*))parse_program)(p);
 
-#line 5544 "bootstrap/lsp.glide"
+#line 5625 "bootstrap/lsp.glide"
     const char*   formatted = ((const char*(*)(Vector__Stmt*))fmt_program)(parsed);
 
-#line 5546 "bootstrap/lsp.glide"
+#line 5627 "bootstrap/lsp.glide"
     int32_t   lines = (((int32_t(*)(const char*))count_lines)((doc. text ))  +  2);
 
-#line 5547 "bootstrap/lsp.glide"
+#line 5628 "bootstrap/lsp.glide"
     JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
 
-#line 5548 "bootstrap/lsp.glide"
+#line 5629 "bootstrap/lsp.glide"
     JsonValue*   range = ((JsonValue*(*)(void))json_object)();
 
-#line 5549 "bootstrap/lsp.glide"
+#line 5630 "bootstrap/lsp.glide"
     JsonValue*   start = ((JsonValue*(*)(void))json_object)();
 
-#line 5550 "bootstrap/lsp.glide"
+#line 5631 "bootstrap/lsp.glide"
     JsonValue*   endp = ((JsonValue*(*)(void))json_object)();
 
-#line 5551 "bootstrap/lsp.glide"
+#line 5632 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "line", ((JsonValue*(*)(int32_t))json_int)(0));
 
-#line 5552 "bootstrap/lsp.glide"
+#line 5633 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(start, "character", ((JsonValue*(*)(int32_t))json_int)(0));
 
-#line 5553 "bootstrap/lsp.glide"
+#line 5634 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "line", ((JsonValue*(*)(int32_t))json_int)(lines));
 
-#line 5554 "bootstrap/lsp.glide"
+#line 5635 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(endp, "character", ((JsonValue*(*)(int32_t))json_int)(0));
 
-#line 5555 "bootstrap/lsp.glide"
+#line 5636 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "start", start);
 
-#line 5556 "bootstrap/lsp.glide"
+#line 5637 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(range, "end", endp);
 
-#line 5557 "bootstrap/lsp.glide"
+#line 5638 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "range", range);
 
-#line 5558 "bootstrap/lsp.glide"
+#line 5639 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "newText", ((JsonValue*(*)(const char*))json_string)(formatted));
 
-#line 5559 "bootstrap/lsp.glide"
+#line 5640 "bootstrap/lsp.glide"
     JsonValue*   arr = ((JsonValue*(*)(void))json_array)();
 
-#line 5560 "bootstrap/lsp.glide"
+#line 5641 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, JsonValue*))json_arr_push)(arr, edit);
 
-#line 5561 "bootstrap/lsp.glide"
+#line 5642 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, arr);
 }
 
 
-#line 5570 "bootstrap/lsp.glide"
+#line 5651 "bootstrap/lsp.glide"
 void   handle_code_action (JsonValue*   req, LspState*   state) {
 
-#line 5571 "bootstrap/lsp.glide"
+#line 5652 "bootstrap/lsp.glide"
     JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
 
-#line 5572 "bootstrap/lsp.glide"
+#line 5653 "bootstrap/lsp.glide"
     JsonValue*   params = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "params");
 
-#line 5573 "bootstrap/lsp.glide"
+#line 5654 "bootstrap/lsp.glide"
     JsonValue*   td = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "textDocument");
 
-#line 5574 "bootstrap/lsp.glide"
+#line 5655 "bootstrap/lsp.glide"
     const char*   uri = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(td, "uri"));
 
-#line 5575 "bootstrap/lsp.glide"
+#line 5656 "bootstrap/lsp.glide"
     JsonValue*   ctx = ((JsonValue*(*)(JsonValue*, const char*))json_get)(params, "context");
 
-#line 5576 "bootstrap/lsp.glide"
+#line 5657 "bootstrap/lsp.glide"
     JsonValue*   diags = ((JsonValue*(*)(JsonValue*, const char*))json_get)(ctx, "diagnostics");
 
-#line 5578 "bootstrap/lsp.glide"
+#line 5659 "bootstrap/lsp.glide"
     JsonValue*   out = ((JsonValue*(*)(void))json_array)();
 
-#line 5579 "bootstrap/lsp.glide"
+#line 5660 "bootstrap/lsp.glide"
     int32_t   n = ((int32_t(*)(JsonValue*))_json_arr_len)(diags);
 
-#line 5580 "bootstrap/lsp.glide"
+#line 5661 "bootstrap/lsp.glide"
     ((void(*)(const char*))_lsp_log)(__glide_string_concat(__glide_string_concat("  codeAction: ", ((const char*(*)(int64_t))int_to_str)(n)), " diags"));
 
-#line 5581 "bootstrap/lsp.glide"
+#line 5662 "bootstrap/lsp.glide"
     if ((n  ==  0)) {
 
-#line 5582 "bootstrap/lsp.glide"
+#line 5663 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, out);
 
-#line 5583 "bootstrap/lsp.glide"
+#line 5664 "bootstrap/lsp.glide"
         return;
     }
 
-#line 5585 "bootstrap/lsp.glide"
+#line 5666 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 5586 "bootstrap/lsp.glide"
+#line 5667 "bootstrap/lsp.glide"
         JsonValue*   d = ((JsonValue*(*)(JsonValue*, int32_t))json_at)(diags, i);
 
-#line 5587 "bootstrap/lsp.glide"
+#line 5668 "bootstrap/lsp.glide"
         JsonValue*   data = ((JsonValue*(*)(JsonValue*, const char*))json_get)(d, "data");
 
-#line 5588 "bootstrap/lsp.glide"
+#line 5669 "bootstrap/lsp.glide"
         if ((data  ==  NULL)) {
             continue;
         }
 
-#line 5589 "bootstrap/lsp.glide"
+#line 5670 "bootstrap/lsp.glide"
         JsonValue*   fix = ((JsonValue*(*)(JsonValue*, const char*))json_get)(data, "fix");
 
-#line 5590 "bootstrap/lsp.glide"
+#line 5671 "bootstrap/lsp.glide"
         if ((fix  ==  NULL)) {
             continue;
         }
 
-#line 5591 "bootstrap/lsp.glide"
+#line 5672 "bootstrap/lsp.glide"
         const char*   new_text = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(fix, "newText"));
 
-#line 5592 "bootstrap/lsp.glide"
+#line 5673 "bootstrap/lsp.glide"
         JsonValue*   fr = ((JsonValue*(*)(JsonValue*, const char*))json_get)(fix, "range");
 
-#line 5593 "bootstrap/lsp.glide"
+#line 5674 "bootstrap/lsp.glide"
         if ((fr  ==  NULL)) {
             continue;
         }
 
-#line 5601 "bootstrap/lsp.glide"
+#line 5682 "bootstrap/lsp.glide"
         JsonValue*   fr_start = ((JsonValue*(*)(JsonValue*, const char*))json_get)(fr, "start");
 
-#line 5602 "bootstrap/lsp.glide"
+#line 5683 "bootstrap/lsp.glide"
         JsonValue*   fr_end = ((JsonValue*(*)(JsonValue*, const char*))json_get)(fr, "end");
 
-#line 5603 "bootstrap/lsp.glide"
+#line 5684 "bootstrap/lsp.glide"
         int32_t   sl = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(fr_start, "line"));
 
-#line 5604 "bootstrap/lsp.glide"
+#line 5685 "bootstrap/lsp.glide"
         int32_t   sc = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(fr_start, "character"));
 
-#line 5605 "bootstrap/lsp.glide"
+#line 5686 "bootstrap/lsp.glide"
         int32_t   el = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(fr_end, "line"));
 
-#line 5606 "bootstrap/lsp.glide"
+#line 5687 "bootstrap/lsp.glide"
         int32_t   ec = ((int32_t(*)(JsonValue*))json_as_int)(((JsonValue*(*)(JsonValue*, const char*))json_get)(fr_end, "character"));
 
-#line 5608 "bootstrap/lsp.glide"
+#line 5689 "bootstrap/lsp.glide"
         const char*   code = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(d, "code"));
 
-#line 5610 "bootstrap/lsp.glide"
+#line 5691 "bootstrap/lsp.glide"
         JsonValue*   action = ((JsonValue*(*)(void))json_object)();
 
-#line 5611 "bootstrap/lsp.glide"
+#line 5692 "bootstrap/lsp.glide"
         const char*   title = ((const char*(*)(const char*, const char*))_code_action_title)(code, new_text);
 
-#line 5612 "bootstrap/lsp.glide"
+#line 5693 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(action, "title", ((JsonValue*(*)(const char*))json_string)(title));
 
-#line 5613 "bootstrap/lsp.glide"
+#line 5694 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(action, "kind", ((JsonValue*(*)(const char*))json_string)("quickfix"));
 
-#line 5618 "bootstrap/lsp.glide"
+#line 5699 "bootstrap/lsp.glide"
         JsonValue*   edit = ((JsonValue*(*)(void))json_object)();
 
-#line 5619 "bootstrap/lsp.glide"
+#line 5700 "bootstrap/lsp.glide"
         JsonValue*   changes = ((JsonValue*(*)(void))json_object)();
 
-#line 5620 "bootstrap/lsp.glide"
+#line 5701 "bootstrap/lsp.glide"
         JsonValue*   edits = ((JsonValue*(*)(void))json_array)();
 
-#line 5621 "bootstrap/lsp.glide"
+#line 5702 "bootstrap/lsp.glide"
         JsonValue*   te = ((JsonValue*(*)(void))json_object)();
 
-#line 5622 "bootstrap/lsp.glide"
+#line 5703 "bootstrap/lsp.glide"
         JsonValue*   r = ((JsonValue*(*)(void))json_object)();
 
-#line 5623 "bootstrap/lsp.glide"
+#line 5704 "bootstrap/lsp.glide"
         JsonValue*   s_obj = ((JsonValue*(*)(void))json_object)();
 
-#line 5624 "bootstrap/lsp.glide"
+#line 5705 "bootstrap/lsp.glide"
         JsonValue*   e_obj = ((JsonValue*(*)(void))json_object)();
 
-#line 5625 "bootstrap/lsp.glide"
+#line 5706 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(s_obj, "line", ((JsonValue*(*)(int32_t))json_int)(sl));
 
-#line 5626 "bootstrap/lsp.glide"
+#line 5707 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(s_obj, "character", ((JsonValue*(*)(int32_t))json_int)(sc));
 
-#line 5627 "bootstrap/lsp.glide"
+#line 5708 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(e_obj, "line", ((JsonValue*(*)(int32_t))json_int)(el));
 
-#line 5628 "bootstrap/lsp.glide"
+#line 5709 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(e_obj, "character", ((JsonValue*(*)(int32_t))json_int)(ec));
 
-#line 5629 "bootstrap/lsp.glide"
+#line 5710 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "start", s_obj);
 
-#line 5630 "bootstrap/lsp.glide"
+#line 5711 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(r, "end", e_obj);
 
-#line 5631 "bootstrap/lsp.glide"
+#line 5712 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(te, "range", r);
 
-#line 5632 "bootstrap/lsp.glide"
+#line 5713 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(te, "newText", ((JsonValue*(*)(const char*))json_string)(new_text));
 
-#line 5633 "bootstrap/lsp.glide"
+#line 5714 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(edits, te);
 
-#line 5634 "bootstrap/lsp.glide"
+#line 5715 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(changes, uri, edits);
 
-#line 5635 "bootstrap/lsp.glide"
+#line 5716 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(edit, "changes", changes);
 
-#line 5636 "bootstrap/lsp.glide"
+#line 5717 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, const char*, JsonValue*))json_obj_set)(action, "edit", edit);
 
-#line 5637 "bootstrap/lsp.glide"
+#line 5718 "bootstrap/lsp.glide"
         ((void(*)(JsonValue*, JsonValue*))json_arr_push)(out, action);
 
-#line 5642 "bootstrap/lsp.glide"
+#line 5723 "bootstrap/lsp.glide"
         ((void(*)(void*))free)((( void* )d));
 
-#line 5643 "bootstrap/lsp.glide"
+#line 5724 "bootstrap/lsp.glide"
         ((void(*)(void*))free)((( void* )data));
 
-#line 5644 "bootstrap/lsp.glide"
+#line 5725 "bootstrap/lsp.glide"
         ((void(*)(void*))free)((( void* )fix));
 
-#line 5645 "bootstrap/lsp.glide"
+#line 5726 "bootstrap/lsp.glide"
         ((void(*)(void*))free)((( void* )fr));
 
-#line 5646 "bootstrap/lsp.glide"
+#line 5727 "bootstrap/lsp.glide"
         if ((fr_start  !=  NULL)) {
             ((void(*)(void*))free)((( void* )fr_start));
         }
 
-#line 5647 "bootstrap/lsp.glide"
+#line 5728 "bootstrap/lsp.glide"
         if ((fr_end  !=  NULL)) {
             ((void(*)(void*))free)((( void* )fr_end));
         }
     }
 
-#line 5649 "bootstrap/lsp.glide"
+#line 5730 "bootstrap/lsp.glide"
     ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, out);
 }
 
 
-#line 5654 "bootstrap/lsp.glide"
+#line 5735 "bootstrap/lsp.glide"
 int32_t   _json_arr_len (JsonValue*   v) {
 
-#line 5655 "bootstrap/lsp.glide"
+#line 5736 "bootstrap/lsp.glide"
     if ((v  ==  NULL)) {
         return 0;
     }
 
-#line 5656 "bootstrap/lsp.glide"
+#line 5737 "bootstrap/lsp.glide"
     if (((v-> kind )  !=  JSON_ARRAY)) {
         return 0;
     }
 
-#line 5657 "bootstrap/lsp.glide"
+#line 5738 "bootstrap/lsp.glide"
     if (((v-> arr )  ==  NULL)) {
         return 0;
     }
 
-#line 5658 "bootstrap/lsp.glide"
+#line 5739 "bootstrap/lsp.glide"
     return Vector_len__JsonValue((v-> arr ));
 }
 
 
-#line 5661 "bootstrap/lsp.glide"
+#line 5742 "bootstrap/lsp.glide"
 const char*   _code_action_title (const char*   code, const char*   new_text) {
 
-#line 5662 "bootstrap/lsp.glide"
+#line 5743 "bootstrap/lsp.glide"
     if (__glide_string_eq(code, "unused-var")) {
         return "Prefix with `_`";
     }
 
-#line 5663 "bootstrap/lsp.glide"
+#line 5744 "bootstrap/lsp.glide"
     if (__glide_string_eq(code, "unused-param")) {
         return "Prefix with `_`";
     }
 
-#line 5664 "bootstrap/lsp.glide"
+#line 5745 "bootstrap/lsp.glide"
     if (__glide_string_eq(code, "unused-fn")) {
         return "Prefix with `_`";
     }
 
-#line 5665 "bootstrap/lsp.glide"
+#line 5746 "bootstrap/lsp.glide"
     if (__glide_string_eq(code, "unnecessary-mut")) {
         return "Remove `mut`";
     }
 
-#line 5666 "bootstrap/lsp.glide"
+#line 5747 "bootstrap/lsp.glide"
     if (__glide_string_eq(new_text, "")) {
         return "Apply fix (delete)";
     }
 
-#line 5667 "bootstrap/lsp.glide"
+#line 5748 "bootstrap/lsp.glide"
     return "Apply fix";
 }
 
 
-#line 5675 "bootstrap/lsp.glide"
+#line 5756 "bootstrap/lsp.glide"
 void   analysis_unused_vars (Typer*   t, Vector__Stmt*   program) {
 
-#line 5676 "bootstrap/lsp.glide"
+#line 5757 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 5677 "bootstrap/lsp.glide"
+#line 5758 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 5678 "bootstrap/lsp.glide"
+#line 5759 "bootstrap/lsp.glide"
         if ((((s. kind )  !=  ST_FN)  ||  ((s. fn_body )  ==  NULL))) {
             continue;
         }
 
-#line 5679 "bootstrap/lsp.glide"
+#line 5760 "bootstrap/lsp.glide"
         ((t-> current_origin )  =  (s. origin ));
 
-#line 5680 "bootstrap/lsp.glide"
+#line 5761 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (s. fn_body ));
     }
 }
 
 
-#line 5684 "bootstrap/lsp.glide"
+#line 5765 "bootstrap/lsp.glide"
 void   check_unused_in_body (Typer*   t, Vector__Stmt*   body) {
 
-#line 5685 "bootstrap/lsp.glide"
+#line 5766 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__Stmt(body);
 
-#line 5686 "bootstrap/lsp.glide"
+#line 5767 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 5687 "bootstrap/lsp.glide"
+#line 5768 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 5688 "bootstrap/lsp.glide"
+#line 5769 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_LET)) {
 
-#line 5689 "bootstrap/lsp.glide"
+#line 5770 "bootstrap/lsp.glide"
             const char*   name = (s. name );
 
-#line 5692 "bootstrap/lsp.glide"
+#line 5773 "bootstrap/lsp.glide"
             if ((((s. let_names )  !=  NULL)  &&  (Vector_len__string((s. let_names ))  >  0))) {
 
-#line 5693 "bootstrap/lsp.glide"
+#line 5774 "bootstrap/lsp.glide"
                 continue;
             }
 
-#line 5696 "bootstrap/lsp.glide"
+#line 5777 "bootstrap/lsp.glide"
             if ((__glide_string_len(name)  ==  0)) {
                 continue;
             }
 
-#line 5697 "bootstrap/lsp.glide"
+#line 5778 "bootstrap/lsp.glide"
             if (((__glide_string_len(name)  >  0)  &&  (__glide_char_to_int(__glide_string_at(name, 0))  ==  95))) {
                 continue;
             }
 
-#line 5698 "bootstrap/lsp.glide"
+#line 5779 "bootstrap/lsp.glide"
             bool   used = false;
 
-#line 5699 "bootstrap/lsp.glide"
+#line 5780 "bootstrap/lsp.glide"
             for (int32_t   j = (i  +  1); (j  <  n); j++) {
 
-#line 5700 "bootstrap/lsp.glide"
+#line 5781 "bootstrap/lsp.glide"
                 Stmt   s2 = Vector_get__Stmt(body, j);
 
-#line 5701 "bootstrap/lsp.glide"
+#line 5782 "bootstrap/lsp.glide"
                 if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&s2), name)) {
                     (used  =  true);
                     break;
                 }
             }
 
-#line 5703 "bootstrap/lsp.glide"
+#line 5784 "bootstrap/lsp.glide"
             if ((!used)) {
 
-#line 5704 "bootstrap/lsp.glide"
+#line 5785 "bootstrap/lsp.glide"
                 Typer_warn_unused_range(t, (s. name_line ), (s. name_col ), (s. name_len ), "unused-var", __glide_string_concat(__glide_string_concat("unused local `", name), "` (prefix with `_` to silence)"));
             }
         }
 
-#line 5709 "bootstrap/lsp.glide"
+#line 5790 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (s. then_body ));
         }
 
-#line 5710 "bootstrap/lsp.glide"
+#line 5791 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (s. else_body ));
         }
 
-#line 5711 "bootstrap/lsp.glide"
+#line 5792 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_SELECT)  &&  ((s. select_arms )  !=  NULL))) {
 
-#line 5712 "bootstrap/lsp.glide"
+#line 5793 "bootstrap/lsp.glide"
             for (int32_t   k = 0; (k  <  Vector_len__SelectArm((s. select_arms ))); k++) {
 
-#line 5713 "bootstrap/lsp.glide"
+#line 5794 "bootstrap/lsp.glide"
                 SelectArm   arm = Vector_get__SelectArm((s. select_arms ), k);
 
-#line 5714 "bootstrap/lsp.glide"
+#line 5795 "bootstrap/lsp.glide"
                 if (((arm. body )  !=  NULL)) {
                     ((void(*)(Typer*, Vector__Stmt*))check_unused_in_body)(t, (arm. body ));
                 }
@@ -66069,100 +66301,100 @@ void   check_unused_in_body (Typer*   t, Vector__Stmt*   body) {
 }
 
 
-#line 5720 "bootstrap/lsp.glide"
+#line 5801 "bootstrap/lsp.glide"
 bool   stmt_uses_name (Stmt*   s, const char*   name) {
 
-#line 5721 "bootstrap/lsp.glide"
+#line 5802 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return false;
     }
 
-#line 5722 "bootstrap/lsp.glide"
+#line 5803 "bootstrap/lsp.glide"
     if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> let_value ), name))) {
         return true;
     }
 
-#line 5723 "bootstrap/lsp.glide"
+#line 5804 "bootstrap/lsp.glide"
     if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> expr_value ), name))) {
         return true;
     }
 
-#line 5724 "bootstrap/lsp.glide"
+#line 5805 "bootstrap/lsp.glide"
     if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> cond ), name))) {
         return true;
     }
 
-#line 5725 "bootstrap/lsp.glide"
+#line 5806 "bootstrap/lsp.glide"
     if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((s-> for_step ), name))) {
         return true;
     }
 
-#line 5726 "bootstrap/lsp.glide"
+#line 5807 "bootstrap/lsp.glide"
     if ((((s-> for_init )  !=  NULL)  &&  ((bool(*)(Stmt*, const char*))stmt_uses_name)((s-> for_init ), name))) {
         return true;
     }
 
-#line 5727 "bootstrap/lsp.glide"
+#line 5808 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 5728 "bootstrap/lsp.glide"
+#line 5809 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
 
-#line 5729 "bootstrap/lsp.glide"
+#line 5810 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
 
-#line 5730 "bootstrap/lsp.glide"
+#line 5811 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                 return true;
             }
         }
     }
 
-#line 5733 "bootstrap/lsp.glide"
+#line 5814 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 5734 "bootstrap/lsp.glide"
+#line 5815 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
 
-#line 5735 "bootstrap/lsp.glide"
+#line 5816 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
 
-#line 5736 "bootstrap/lsp.glide"
+#line 5817 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                 return true;
             }
         }
     }
 
-#line 5739 "bootstrap/lsp.glide"
+#line 5820 "bootstrap/lsp.glide"
     if (((s-> kind )  ==  ST_ASM)) {
 
-#line 5740 "bootstrap/lsp.glide"
+#line 5821 "bootstrap/lsp.glide"
         if (((s-> asm_out_exprs )  !=  NULL)) {
 
-#line 5741 "bootstrap/lsp.glide"
+#line 5822 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__Expr((s-> asm_out_exprs ))); i++) {
 
-#line 5742 "bootstrap/lsp.glide"
+#line 5823 "bootstrap/lsp.glide"
                 Expr   e = Vector_get__Expr((s-> asm_out_exprs ), i);
 
-#line 5743 "bootstrap/lsp.glide"
+#line 5824 "bootstrap/lsp.glide"
                 if (((bool(*)(Expr*, const char*))expr_uses_name)((&e), name)) {
                     return true;
                 }
             }
         }
 
-#line 5746 "bootstrap/lsp.glide"
+#line 5827 "bootstrap/lsp.glide"
         if (((s-> asm_in_exprs )  !=  NULL)) {
 
-#line 5747 "bootstrap/lsp.glide"
+#line 5828 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__Expr((s-> asm_in_exprs ))); i++) {
 
-#line 5748 "bootstrap/lsp.glide"
+#line 5829 "bootstrap/lsp.glide"
                 Expr   e = Vector_get__Expr((s-> asm_in_exprs ), i);
 
-#line 5749 "bootstrap/lsp.glide"
+#line 5830 "bootstrap/lsp.glide"
                 if (((bool(*)(Expr*, const char*))expr_uses_name)((&e), name)) {
                     return true;
                 }
@@ -66170,35 +66402,35 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
         }
     }
 
-#line 5753 "bootstrap/lsp.glide"
+#line 5834 "bootstrap/lsp.glide"
     if ((((s-> kind )  ==  ST_SELECT)  &&  ((s-> select_arms )  !=  NULL))) {
 
-#line 5754 "bootstrap/lsp.glide"
+#line 5835 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__SelectArm((s-> select_arms ))); i++) {
 
-#line 5755 "bootstrap/lsp.glide"
+#line 5836 "bootstrap/lsp.glide"
             SelectArm   arm = Vector_get__SelectArm((s-> select_arms ), i);
 
-#line 5756 "bootstrap/lsp.glide"
+#line 5837 "bootstrap/lsp.glide"
             if ((((arm. chan_expr )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((arm. chan_expr ), name))) {
                 return true;
             }
 
-#line 5757 "bootstrap/lsp.glide"
+#line 5838 "bootstrap/lsp.glide"
             if ((((arm. send_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((arm. send_value ), name))) {
                 return true;
             }
 
-#line 5758 "bootstrap/lsp.glide"
+#line 5839 "bootstrap/lsp.glide"
             if (((arm. body )  !=  NULL)) {
 
-#line 5759 "bootstrap/lsp.glide"
+#line 5840 "bootstrap/lsp.glide"
                 for (int32_t   j = 0; (j  <  Vector_len__Stmt((arm. body ))); j++) {
 
-#line 5760 "bootstrap/lsp.glide"
+#line 5841 "bootstrap/lsp.glide"
                     Stmt   b = Vector_get__Stmt((arm. body ), j);
 
-#line 5761 "bootstrap/lsp.glide"
+#line 5842 "bootstrap/lsp.glide"
                     if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                         return true;
                     }
@@ -66207,74 +66439,74 @@ bool   stmt_uses_name (Stmt*   s, const char*   name) {
         }
     }
 
-#line 5766 "bootstrap/lsp.glide"
+#line 5847 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 5769 "bootstrap/lsp.glide"
+#line 5850 "bootstrap/lsp.glide"
 bool   expr_uses_name (Expr*   e, const char*   name) {
 
-#line 5770 "bootstrap/lsp.glide"
+#line 5851 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 5771 "bootstrap/lsp.glide"
+#line 5852 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), name))) {
         return true;
     }
 
-#line 5772 "bootstrap/lsp.glide"
+#line 5853 "bootstrap/lsp.glide"
     if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((e-> lhs ), name))) {
         return true;
     }
 
-#line 5773 "bootstrap/lsp.glide"
+#line 5854 "bootstrap/lsp.glide"
     if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((e-> rhs ), name))) {
         return true;
     }
 
-#line 5774 "bootstrap/lsp.glide"
+#line 5855 "bootstrap/lsp.glide"
     if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_uses_name)((e-> operand ), name))) {
         return true;
     }
 
-#line 5775 "bootstrap/lsp.glide"
+#line 5856 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 5776 "bootstrap/lsp.glide"
+#line 5857 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 5777 "bootstrap/lsp.glide"
+#line 5858 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 5778 "bootstrap/lsp.glide"
+#line 5859 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*, const char*))expr_uses_name)((&a), name)) {
                 return true;
             }
         }
     }
 
-#line 5781 "bootstrap/lsp.glide"
+#line 5862 "bootstrap/lsp.glide"
     if (((e-> match_arms )  !=  NULL)) {
 
-#line 5782 "bootstrap/lsp.glide"
+#line 5863 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__MatchArm((e-> match_arms ))); i++) {
 
-#line 5783 "bootstrap/lsp.glide"
+#line 5864 "bootstrap/lsp.glide"
             MatchArm   a = Vector_get__MatchArm((e-> match_arms ), i);
 
-#line 5784 "bootstrap/lsp.glide"
+#line 5865 "bootstrap/lsp.glide"
             if (((a. body )  !=  NULL)) {
 
-#line 5785 "bootstrap/lsp.glide"
+#line 5866 "bootstrap/lsp.glide"
                 for (int32_t   k = 0; (k  <  Vector_len__Stmt((a. body ))); k++) {
 
-#line 5786 "bootstrap/lsp.glide"
+#line 5867 "bootstrap/lsp.glide"
                     Stmt   b = Vector_get__Stmt((a. body ), k);
 
-#line 5787 "bootstrap/lsp.glide"
+#line 5868 "bootstrap/lsp.glide"
                     if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                         return true;
                     }
@@ -66283,424 +66515,424 @@ bool   expr_uses_name (Expr*   e, const char*   name) {
         }
     }
 
-#line 5792 "bootstrap/lsp.glide"
+#line 5873 "bootstrap/lsp.glide"
     if (((e-> block_stmts )  !=  NULL)) {
 
-#line 5793 "bootstrap/lsp.glide"
+#line 5874 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((e-> block_stmts ))); i++) {
 
-#line 5794 "bootstrap/lsp.glide"
+#line 5875 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((e-> block_stmts ), i);
 
-#line 5795 "bootstrap/lsp.glide"
+#line 5876 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), name)) {
                 return true;
             }
         }
     }
 
-#line 5798 "bootstrap/lsp.glide"
+#line 5879 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 5807 "bootstrap/lsp.glide"
+#line 5888 "bootstrap/lsp.glide"
 bool   _code_in_group (const char*   allow_token, const char*   code) {
 
-#line 5808 "bootstrap/lsp.glide"
+#line 5889 "bootstrap/lsp.glide"
     if (__glide_string_eq(allow_token, code)) {
         return true;
     }
 
-#line 5809 "bootstrap/lsp.glide"
+#line 5890 "bootstrap/lsp.glide"
     if ((__glide_string_eq(allow_token, "all")  ||  __glide_string_eq(allow_token, "*"))) {
         return true;
     }
 
-#line 5810 "bootstrap/lsp.glide"
+#line 5891 "bootstrap/lsp.glide"
     if (__glide_string_eq(allow_token, "alloc")) {
 
-#line 5811 "bootstrap/lsp.glide"
+#line 5892 "bootstrap/lsp.glide"
         if ((__glide_string_eq(code, "unfreed-alloc")  ||  __glide_string_eq(code, "arena-not-freed"))) {
             return true;
         }
     }
 
-#line 5813 "bootstrap/lsp.glide"
+#line 5894 "bootstrap/lsp.glide"
     if (__glide_string_eq(allow_token, "unused")) {
 
-#line 5814 "bootstrap/lsp.glide"
+#line 5895 "bootstrap/lsp.glide"
         if ((((__glide_string_eq(code, "unused-var")  ||  __glide_string_eq(code, "unused-param"))  ||  __glide_string_eq(code, "unused-fn"))  ||  __glide_string_eq(code, "unnecessary-mut"))) {
 
-#line 5815 "bootstrap/lsp.glide"
+#line 5896 "bootstrap/lsp.glide"
             return true;
         }
     }
 
-#line 5817 "bootstrap/lsp.glide"
+#line 5898 "bootstrap/lsp.glide"
     if (__glide_string_eq(allow_token, "experimental")) {
 
-#line 5818 "bootstrap/lsp.glide"
+#line 5899 "bootstrap/lsp.glide"
         if ((__glide_string_eq(code, "unstable-fn")  ||  __glide_string_eq(code, "deprecated-fn"))) {
             return true;
         }
     }
 
-#line 5820 "bootstrap/lsp.glide"
+#line 5901 "bootstrap/lsp.glide"
     if ((__glide_string_eq(allow_token, "lint")  ||  __glide_string_eq(allow_token, "lint:*"))) {
 
-#line 5821 "bootstrap/lsp.glide"
+#line 5902 "bootstrap/lsp.glide"
         if (string_starts_with(code, "lint:")) {
             return true;
         }
     }
 
-#line 5825 "bootstrap/lsp.glide"
+#line 5906 "bootstrap/lsp.glide"
     if ((__glide_string_len(allow_token)  >  1)) {
 
-#line 5826 "bootstrap/lsp.glide"
+#line 5907 "bootstrap/lsp.glide"
         int32_t   last = __glide_char_to_int(__glide_string_at(allow_token, (__glide_string_len(allow_token)  -  1)));
 
-#line 5827 "bootstrap/lsp.glide"
+#line 5908 "bootstrap/lsp.glide"
         if ((last  ==  42)) {
 
-#line 5828 "bootstrap/lsp.glide"
+#line 5909 "bootstrap/lsp.glide"
             const char*   prefix = __glide_string_substring(allow_token, 0, (__glide_string_len(allow_token)  -  1));
 
-#line 5829 "bootstrap/lsp.glide"
+#line 5910 "bootstrap/lsp.glide"
             if (string_starts_with(code, prefix)) {
                 return true;
             }
         }
     }
 
-#line 5832 "bootstrap/lsp.glide"
+#line 5913 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 5845 "bootstrap/lsp.glide"
+#line 5926 "bootstrap/lsp.glide"
 const char*   _lsp_parent_dir (const char*   path) {
 
-#line 5846 "bootstrap/lsp.glide"
+#line 5927 "bootstrap/lsp.glide"
     int32_t   n = __glide_string_len(path);
 
-#line 5847 "bootstrap/lsp.glide"
+#line 5928 "bootstrap/lsp.glide"
     int32_t   last = (-1);
 
-#line 5848 "bootstrap/lsp.glide"
+#line 5929 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 5849 "bootstrap/lsp.glide"
+#line 5930 "bootstrap/lsp.glide"
         int32_t   c = __glide_char_to_int(__glide_string_at(path, i));
 
-#line 5850 "bootstrap/lsp.glide"
+#line 5931 "bootstrap/lsp.glide"
         if (((c  ==  47)  ||  (c  ==  92))) {
             (last  =  i);
         }
     }
 
-#line 5852 "bootstrap/lsp.glide"
+#line 5933 "bootstrap/lsp.glide"
     if ((last  <  0)) {
         return "";
     }
 
-#line 5853 "bootstrap/lsp.glide"
+#line 5934 "bootstrap/lsp.glide"
     return __glide_string_substring(path, 0, last);
 }
 
 
-#line 5867 "bootstrap/lsp.glide"
+#line 5948 "bootstrap/lsp.glide"
 void   _lsp_apply_manifest_lint (const char*   start_dir) {
 
-#line 5868 "bootstrap/lsp.glide"
+#line 5949 "bootstrap/lsp.glide"
     const char*   root = ((const char*(*)(const char*))find_manifest_root)(start_dir);
 
-#line 5869 "bootstrap/lsp.glide"
+#line 5950 "bootstrap/lsp.glide"
     if (__glide_string_eq(root, "")) {
         return;
     }
 
-#line 5870 "bootstrap/lsp.glide"
+#line 5951 "bootstrap/lsp.glide"
     Manifest*   m = ((Manifest*(*)(const char*))read_manifest)(root);
 
-#line 5871 "bootstrap/lsp.glide"
+#line 5952 "bootstrap/lsp.glide"
     if ((m  ==  NULL)) {
         return;
     }
 
-#line 5873 "bootstrap/lsp.glide"
+#line 5954 "bootstrap/lsp.glide"
     void*   prev_arena = ((void*(*)(void))__glide_palloc_get)();
 
-#line 5874 "bootstrap/lsp.glide"
+#line 5955 "bootstrap/lsp.glide"
     ((void(*)(void*))__glide_palloc_set)(NULL);
 
-#line 5876 "bootstrap/lsp.glide"
+#line 5957 "bootstrap/lsp.glide"
     if ((((m-> lint_deny )  !=  NULL)  &&  (Vector_len__string((m-> lint_deny ))  >  0))) {
 
-#line 5877 "bootstrap/lsp.glide"
+#line 5958 "bootstrap/lsp.glide"
         void*   p = ((void*(*)(void))__glide_deny_get)();
 
-#line 5878 "bootstrap/lsp.glide"
+#line 5959 "bootstrap/lsp.glide"
         Vector__string*   merged = ((Vector__string*(*)(void))Vector_new__string)();
 
-#line 5879 "bootstrap/lsp.glide"
+#line 5960 "bootstrap/lsp.glide"
         if ((p  !=  NULL)) {
 
-#line 5880 "bootstrap/lsp.glide"
+#line 5961 "bootstrap/lsp.glide"
             Vector__string*   existing = (( Vector__string* )p);
 
-#line 5881 "bootstrap/lsp.glide"
+#line 5962 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__string(existing)); i++) {
 
-#line 5882 "bootstrap/lsp.glide"
+#line 5963 "bootstrap/lsp.glide"
                 const char*   s = Vector_get__string(existing, i);
 
-#line 5883 "bootstrap/lsp.glide"
+#line 5964 "bootstrap/lsp.glide"
                 Vector_push__string(merged, ((const char*(*)(const char*))_strdup_libc)(s));
             }
         }
 
-#line 5886 "bootstrap/lsp.glide"
+#line 5967 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__string((m-> lint_deny ))); i++) {
 
-#line 5887 "bootstrap/lsp.glide"
+#line 5968 "bootstrap/lsp.glide"
             Vector_push__string(merged, ((const char*(*)(const char*))_strdup_libc)(Vector_get__string((m-> lint_deny ), i)));
         }
 
-#line 5889 "bootstrap/lsp.glide"
+#line 5970 "bootstrap/lsp.glide"
         ((void(*)(void*))__glide_deny_set)((( void* )merged));
     }
 
-#line 5891 "bootstrap/lsp.glide"
+#line 5972 "bootstrap/lsp.glide"
     if ((((m-> lint_allow )  !=  NULL)  &&  (Vector_len__string((m-> lint_allow ))  >  0))) {
 
-#line 5892 "bootstrap/lsp.glide"
+#line 5973 "bootstrap/lsp.glide"
         Vector__string*   copy = ((Vector__string*(*)(void))Vector_new__string)();
 
-#line 5893 "bootstrap/lsp.glide"
+#line 5974 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__string((m-> lint_allow ))); i++) {
 
-#line 5894 "bootstrap/lsp.glide"
+#line 5975 "bootstrap/lsp.glide"
             Vector_push__string(copy, ((const char*(*)(const char*))_strdup_libc)(Vector_get__string((m-> lint_allow ), i)));
         }
 
-#line 5896 "bootstrap/lsp.glide"
+#line 5977 "bootstrap/lsp.glide"
         ((void(*)(void*))__glide_proj_allow_set)((( void* )copy));
     }
 
-#line 5899 "bootstrap/lsp.glide"
+#line 5980 "bootstrap/lsp.glide"
     ((void(*)(void*))__glide_palloc_set)(prev_arena);
 }
 
 
-#line 5905 "bootstrap/lsp.glide"
+#line 5986 "bootstrap/lsp.glide"
 const char*   _strdup_libc (const char*   s) {
 
-#line 5909 "bootstrap/lsp.glide"
+#line 5990 "bootstrap/lsp.glide"
     return __glide_string_substring(s, 0, __glide_string_len(s));
 }
 
 
-#line 5912 "bootstrap/lsp.glide"
+#line 5993 "bootstrap/lsp.glide"
 bool   _project_allow_matches (const char*   code) {
 
-#line 5913 "bootstrap/lsp.glide"
+#line 5994 "bootstrap/lsp.glide"
     void*   p = ((void*(*)(void))__glide_proj_allow_get)();
 
-#line 5914 "bootstrap/lsp.glide"
+#line 5995 "bootstrap/lsp.glide"
     if ((p  ==  NULL)) {
         return false;
     }
 
-#line 5915 "bootstrap/lsp.glide"
+#line 5996 "bootstrap/lsp.glide"
     Vector__string*   v = (( Vector__string* )p);
 
-#line 5916 "bootstrap/lsp.glide"
+#line 5997 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(v)); i++) {
 
-#line 5917 "bootstrap/lsp.glide"
+#line 5998 "bootstrap/lsp.glide"
         if (((bool(*)(const char*, const char*))_code_in_group)(Vector_get__string(v, i), code)) {
             return true;
         }
     }
 
-#line 5919 "bootstrap/lsp.glide"
+#line 6000 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 5925 "bootstrap/lsp.glide"
+#line 6006 "bootstrap/lsp.glide"
 bool   _has_allow (Stmt*   s, const char*   code) {
 
-#line 5926 "bootstrap/lsp.glide"
+#line 6007 "bootstrap/lsp.glide"
     if (((bool(*)(const char*))_project_allow_matches)(code)) {
         return true;
     }
 
-#line 5927 "bootstrap/lsp.glide"
+#line 6008 "bootstrap/lsp.glide"
     if (((s  ==  NULL)  ||  ((s-> attrs )  ==  NULL))) {
         return false;
     }
 
-#line 5928 "bootstrap/lsp.glide"
+#line 6009 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 5929 "bootstrap/lsp.glide"
+#line 6010 "bootstrap/lsp.glide"
         Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 5930 "bootstrap/lsp.glide"
+#line 6011 "bootstrap/lsp.glide"
         if ((!__glide_string_eq((a. name ), "allow"))) {
             continue;
         }
 
-#line 5931 "bootstrap/lsp.glide"
+#line 6012 "bootstrap/lsp.glide"
         if (((a. args )  ==  NULL)) {
             continue;
         }
 
-#line 5932 "bootstrap/lsp.glide"
+#line 6013 "bootstrap/lsp.glide"
         for (int32_t   j = 0; (j  <  Vector_len__Expr((a. args ))); j++) {
 
-#line 5933 "bootstrap/lsp.glide"
+#line 6014 "bootstrap/lsp.glide"
             Expr   v = Vector_get__Expr((a. args ), j);
 
-#line 5934 "bootstrap/lsp.glide"
+#line 6015 "bootstrap/lsp.glide"
             if ((((v. kind )  ==  EX_STRING)  &&  ((bool(*)(const char*, const char*))_code_in_group)((v. str_val ), code))) {
                 return true;
             }
         }
     }
 
-#line 5937 "bootstrap/lsp.glide"
+#line 6018 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 5947 "bootstrap/lsp.glide"
+#line 6028 "bootstrap/lsp.glide"
 void   analysis_arena_not_freed (Typer*   t, Vector__Stmt*   program) {
 
-#line 5948 "bootstrap/lsp.glide"
+#line 6029 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 5949 "bootstrap/lsp.glide"
+#line 6030 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 5950 "bootstrap/lsp.glide"
+#line 6031 "bootstrap/lsp.glide"
         if ((((s. kind )  !=  ST_FN)  ||  ((s. fn_body )  ==  NULL))) {
             continue;
         }
 
-#line 5951 "bootstrap/lsp.glide"
+#line 6032 "bootstrap/lsp.glide"
         if ((((bool(*)(Stmt*, const char*))_has_allow)((&s), "unfreed-alloc")  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&s), "arena-not-freed"))) {
             continue;
         }
 
-#line 5952 "bootstrap/lsp.glide"
+#line 6033 "bootstrap/lsp.glide"
         ((t-> current_origin )  =  (s. origin ));
 
-#line 5953 "bootstrap/lsp.glide"
+#line 6034 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Vector__Stmt*, Vector__Stmt*, bool))check_arena_in_body)(t, (s. fn_body ), (s. fn_body ), false);
     }
 }
 
 
-#line 5963 "bootstrap/lsp.glide"
+#line 6044 "bootstrap/lsp.glide"
 int32_t   _alloc_kind (Expr*   v) {
 
-#line 5964 "bootstrap/lsp.glide"
+#line 6045 "bootstrap/lsp.glide"
     if ((v  ==  NULL)) {
         return 0;
     }
 
-#line 5966 "bootstrap/lsp.glide"
+#line 6047 "bootstrap/lsp.glide"
     if ((((v-> kind )  ==  EX_CAST)  &&  ((v-> lhs )  !=  NULL))) {
         return ((int32_t(*)(Expr*))_alloc_kind)((v-> lhs ));
     }
 
-#line 5967 "bootstrap/lsp.glide"
+#line 6048 "bootstrap/lsp.glide"
     if ((((v-> kind )  !=  EX_CALL)  ||  ((v-> lhs )  ==  NULL))) {
         return 0;
     }
 
-#line 5968 "bootstrap/lsp.glide"
+#line 6049 "bootstrap/lsp.glide"
     Expr*   head = (v-> lhs );
 
-#line 5969 "bootstrap/lsp.glide"
+#line 6050 "bootstrap/lsp.glide"
     if (((((head-> kind )  ==  EX_PATH)  &&  __glide_string_eq((head-> str_val ), "Arena"))  &&  __glide_string_eq((head-> field ), "new"))) {
         return 1;
     }
 
-#line 5970 "bootstrap/lsp.glide"
+#line 6051 "bootstrap/lsp.glide"
     if ((((head-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((head-> str_val ), "malloc"))) {
         return 2;
     }
 
-#line 5971 "bootstrap/lsp.glide"
+#line 6052 "bootstrap/lsp.glide"
     if ((((head-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((head-> str_val ), "__glide_palloc_make"))) {
         return 3;
     }
 
-#line 5972 "bootstrap/lsp.glide"
+#line 6053 "bootstrap/lsp.glide"
     return 0;
 }
 
 
-#line 5975 "bootstrap/lsp.glide"
+#line 6056 "bootstrap/lsp.glide"
 void   check_arena_in_body (Typer*   t, Vector__Stmt*   body, Vector__Stmt*   root, bool   suppress) {
 
-#line 5976 "bootstrap/lsp.glide"
+#line 6057 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__Stmt(body);
 
-#line 5977 "bootstrap/lsp.glide"
+#line 6058 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 5978 "bootstrap/lsp.glide"
+#line 6059 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 5979 "bootstrap/lsp.glide"
+#line 6060 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_LET)  &&  (!(s. is_auto_owned )))) {
 
-#line 5984 "bootstrap/lsp.glide"
+#line 6065 "bootstrap/lsp.glide"
             if (suppress) {
                 continue;
             }
 
-#line 5985 "bootstrap/lsp.glide"
+#line 6066 "bootstrap/lsp.glide"
             if ((((bool(*)(Stmt*, const char*))_has_allow)((&s), "unfreed-alloc")  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&s), "arena-not-freed"))) {
                 continue;
             }
 
-#line 5986 "bootstrap/lsp.glide"
+#line 6067 "bootstrap/lsp.glide"
             int32_t   kind = ((int32_t(*)(Expr*))_alloc_kind)((s. let_value ));
 
-#line 5987 "bootstrap/lsp.glide"
+#line 6068 "bootstrap/lsp.glide"
             if ((kind  !=  0)) {
 
-#line 5990 "bootstrap/lsp.glide"
+#line 6071 "bootstrap/lsp.glide"
                 if (((bool(*)(const char*, int32_t, Vector__Stmt*))alloc_is_freed_in_body)((s. name ), kind, root)) {
                     continue;
                 }
 
-#line 5997 "bootstrap/lsp.glide"
+#line 6078 "bootstrap/lsp.glide"
                 if (((bool(*)(const char*, int32_t, Vector__Stmt*))alloc_escapes_in_body)((s. name ), kind, root)) {
                     continue;
                 }
 
-#line 5998 "bootstrap/lsp.glide"
+#line 6079 "bootstrap/lsp.glide"
                 Typer_warn(t, (s. line ), (s. column ), ((const char*(*)(int32_t))_alloc_code)(kind), ((const char*(*)(int32_t, const char*))_alloc_msg)(kind, (s. name )));
             }
         }
 
-#line 6003 "bootstrap/lsp.glide"
+#line 6084 "bootstrap/lsp.glide"
         bool   sub_suppress = ((suppress  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&s), "unfreed-alloc"))  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&s), "arena-not-freed"));
 
-#line 6006 "bootstrap/lsp.glide"
+#line 6087 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, Vector__Stmt*, bool))check_arena_in_body)(t, (s. then_body ), root, sub_suppress);
         }
 
-#line 6007 "bootstrap/lsp.glide"
+#line 6088 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, Vector__Stmt*, bool))check_arena_in_body)(t, (s. else_body ), root, sub_suppress);
         }
@@ -66708,261 +66940,21 @@ void   check_arena_in_body (Typer*   t, Vector__Stmt*   body, Vector__Stmt*   ro
 }
 
 
-#line 6024 "bootstrap/lsp.glide"
+#line 6105 "bootstrap/lsp.glide"
 bool   alloc_escapes_in_body (const char*   name, int32_t   kind, Vector__Stmt*   body) {
 
-#line 6025 "bootstrap/lsp.glide"
+#line 6106 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__Stmt(body);
 
-#line 6026 "bootstrap/lsp.glide"
+#line 6107 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 6027 "bootstrap/lsp.glide"
+#line 6108 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 6028 "bootstrap/lsp.glide"
+#line 6109 "bootstrap/lsp.glide"
         if (((bool(*)(Stmt*, const char*, int32_t))stmt_lets_name_escape)((&s), name, kind)) {
             return true;
-        }
-    }
-
-#line 6030 "bootstrap/lsp.glide"
-    return false;
-}
-
-
-#line 6033 "bootstrap/lsp.glide"
-bool   stmt_lets_name_escape (Stmt*   s, const char*   name, int32_t   kind) {
-
-#line 6034 "bootstrap/lsp.glide"
-    if ((s  ==  NULL)) {
-        return false;
-    }
-
-#line 6036 "bootstrap/lsp.glide"
-    if (((((s-> kind )  ==  ST_RETURN)  &&  ((s-> expr_value )  !=  NULL))  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((s-> expr_value ), name))) {
-
-#line 6037 "bootstrap/lsp.glide"
-        return true;
-    }
-
-#line 6038 "bootstrap/lsp.glide"
-    if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> let_value ), name, kind))) {
-        return true;
-    }
-
-#line 6039 "bootstrap/lsp.glide"
-    if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> expr_value ), name, kind))) {
-        return true;
-    }
-
-#line 6040 "bootstrap/lsp.glide"
-    if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> cond ), name, kind))) {
-        return true;
-    }
-
-#line 6041 "bootstrap/lsp.glide"
-    if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> for_step ), name, kind))) {
-        return true;
-    }
-
-#line 6042 "bootstrap/lsp.glide"
-    if (((s-> then_body )  !=  NULL)) {
-
-#line 6043 "bootstrap/lsp.glide"
-        for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
-
-#line 6044 "bootstrap/lsp.glide"
-            Stmt   b = Vector_get__Stmt((s-> then_body ), i);
-
-#line 6045 "bootstrap/lsp.glide"
-            if (((bool(*)(Stmt*, const char*, int32_t))stmt_lets_name_escape)((&b), name, kind)) {
-                return true;
-            }
-        }
-    }
-
-#line 6048 "bootstrap/lsp.glide"
-    if (((s-> else_body )  !=  NULL)) {
-
-#line 6049 "bootstrap/lsp.glide"
-        for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
-
-#line 6050 "bootstrap/lsp.glide"
-            Stmt   b = Vector_get__Stmt((s-> else_body ), i);
-
-#line 6051 "bootstrap/lsp.glide"
-            if (((bool(*)(Stmt*, const char*, int32_t))stmt_lets_name_escape)((&b), name, kind)) {
-                return true;
-            }
-        }
-    }
-
-#line 6054 "bootstrap/lsp.glide"
-    return false;
-}
-
-
-#line 6057 "bootstrap/lsp.glide"
-bool   _is_free_call_for (const char*   callee_name, int32_t   kind) {
-
-#line 6058 "bootstrap/lsp.glide"
-    if ((kind  ==  1)) {
-        return __glide_string_eq(callee_name, "free");
-    }
-
-#line 6059 "bootstrap/lsp.glide"
-    if ((kind  ==  2)) {
-        return __glide_string_eq(callee_name, "free");
-    }
-
-#line 6060 "bootstrap/lsp.glide"
-    if ((kind  ==  3)) {
-        return __glide_string_eq(callee_name, "__glide_palloc_free");
-    }
-
-#line 6061 "bootstrap/lsp.glide"
-    return false;
-}
-
-
-#line 6064 "bootstrap/lsp.glide"
-bool   expr_passes_to_non_free (Expr*   e, const char*   name, int32_t   kind) {
-
-#line 6065 "bootstrap/lsp.glide"
-    if ((e  ==  NULL)) {
-        return false;
-    }
-
-#line 6070 "bootstrap/lsp.glide"
-    if (((((e-> kind )  ==  EX_ASSIGN)  &&  ((e-> rhs )  !=  NULL))  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> rhs ), name))) {
-
-#line 6071 "bootstrap/lsp.glide"
-        return true;
-    }
-
-#line 6075 "bootstrap/lsp.glide"
-    if (((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  ((e-> args )  !=  NULL))) {
-
-#line 6076 "bootstrap/lsp.glide"
-        const char*   callee = "";
-
-#line 6077 "bootstrap/lsp.glide"
-        if ((((e-> lhs )-> kind )  ==  EX_IDENT)) {
-            (callee  =  ((e-> lhs )-> str_val ));
-        } else {
-
-#line 6078 "bootstrap/lsp.glide"
-            if ((((e-> lhs )-> kind )  ==  EX_PATH)) {
-                (callee  =  ((e-> lhs )-> field ));
-            } else {
-
-#line 6079 "bootstrap/lsp.glide"
-                if ((((e-> lhs )-> kind )  ==  EX_MEMBER)) {
-                    (callee  =  ((e-> lhs )-> field ));
-                }
-            }
-        }
-
-#line 6080 "bootstrap/lsp.glide"
-        bool   name_in_args = false;
-
-#line 6081 "bootstrap/lsp.glide"
-        for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
-
-#line 6082 "bootstrap/lsp.glide"
-            Expr   a = Vector_get__Expr((e-> args ), i);
-
-#line 6083 "bootstrap/lsp.glide"
-            if (((bool(*)(Expr*, const char*))expr_strips_to_ident)((&a), name)) {
-                (name_in_args  =  true);
-                break;
-            }
-        }
-
-#line 6085 "bootstrap/lsp.glide"
-        if ((name_in_args  &&  (!((bool(*)(const char*, int32_t))_is_free_call_for)(callee, kind)))) {
-            return true;
-        }
-    }
-
-#line 6087 "bootstrap/lsp.glide"
-    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((e-> lhs ), name, kind))) {
-        return true;
-    }
-
-#line 6088 "bootstrap/lsp.glide"
-    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((e-> rhs ), name, kind))) {
-        return true;
-    }
-
-#line 6089 "bootstrap/lsp.glide"
-    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((e-> operand ), name, kind))) {
-        return true;
-    }
-
-#line 6090 "bootstrap/lsp.glide"
-    if (((e-> args )  !=  NULL)) {
-
-#line 6091 "bootstrap/lsp.glide"
-        for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
-
-#line 6092 "bootstrap/lsp.glide"
-            Expr   a = Vector_get__Expr((e-> args ), i);
-
-#line 6093 "bootstrap/lsp.glide"
-            if (((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((&a), name, kind)) {
-                return true;
-            }
-        }
-    }
-
-#line 6096 "bootstrap/lsp.glide"
-    return false;
-}
-
-
-#line 6099 "bootstrap/lsp.glide"
-bool   expr_mentions_ident (Expr*   e, const char*   name) {
-
-#line 6100 "bootstrap/lsp.glide"
-    if ((e  ==  NULL)) {
-        return false;
-    }
-
-#line 6101 "bootstrap/lsp.glide"
-    if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), name))) {
-        return true;
-    }
-
-#line 6102 "bootstrap/lsp.glide"
-    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> lhs ), name))) {
-        return true;
-    }
-
-#line 6103 "bootstrap/lsp.glide"
-    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> rhs ), name))) {
-        return true;
-    }
-
-#line 6104 "bootstrap/lsp.glide"
-    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> operand ), name))) {
-        return true;
-    }
-
-#line 6105 "bootstrap/lsp.glide"
-    if (((e-> args )  !=  NULL)) {
-
-#line 6106 "bootstrap/lsp.glide"
-        for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
-
-#line 6107 "bootstrap/lsp.glide"
-            Expr   a = Vector_get__Expr((e-> args ), i);
-
-#line 6108 "bootstrap/lsp.glide"
-            if (((bool(*)(Expr*, const char*))expr_mentions_ident)((&a), name)) {
-                return true;
-            }
         }
     }
 
@@ -66972,417 +66964,657 @@ bool   expr_mentions_ident (Expr*   e, const char*   name) {
 
 
 #line 6114 "bootstrap/lsp.glide"
-const char*   _alloc_code (int32_t   kind) {
+bool   stmt_lets_name_escape (Stmt*   s, const char*   name, int32_t   kind) {
 
 #line 6115 "bootstrap/lsp.glide"
+    if ((s  ==  NULL)) {
+        return false;
+    }
+
+#line 6117 "bootstrap/lsp.glide"
+    if (((((s-> kind )  ==  ST_RETURN)  &&  ((s-> expr_value )  !=  NULL))  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((s-> expr_value ), name))) {
+
+#line 6118 "bootstrap/lsp.glide"
+        return true;
+    }
+
+#line 6119 "bootstrap/lsp.glide"
+    if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> let_value ), name, kind))) {
+        return true;
+    }
+
+#line 6120 "bootstrap/lsp.glide"
+    if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> expr_value ), name, kind))) {
+        return true;
+    }
+
+#line 6121 "bootstrap/lsp.glide"
+    if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> cond ), name, kind))) {
+        return true;
+    }
+
+#line 6122 "bootstrap/lsp.glide"
+    if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((s-> for_step ), name, kind))) {
+        return true;
+    }
+
+#line 6123 "bootstrap/lsp.glide"
+    if (((s-> then_body )  !=  NULL)) {
+
+#line 6124 "bootstrap/lsp.glide"
+        for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
+
+#line 6125 "bootstrap/lsp.glide"
+            Stmt   b = Vector_get__Stmt((s-> then_body ), i);
+
+#line 6126 "bootstrap/lsp.glide"
+            if (((bool(*)(Stmt*, const char*, int32_t))stmt_lets_name_escape)((&b), name, kind)) {
+                return true;
+            }
+        }
+    }
+
+#line 6129 "bootstrap/lsp.glide"
+    if (((s-> else_body )  !=  NULL)) {
+
+#line 6130 "bootstrap/lsp.glide"
+        for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
+
+#line 6131 "bootstrap/lsp.glide"
+            Stmt   b = Vector_get__Stmt((s-> else_body ), i);
+
+#line 6132 "bootstrap/lsp.glide"
+            if (((bool(*)(Stmt*, const char*, int32_t))stmt_lets_name_escape)((&b), name, kind)) {
+                return true;
+            }
+        }
+    }
+
+#line 6135 "bootstrap/lsp.glide"
+    return false;
+}
+
+
+#line 6138 "bootstrap/lsp.glide"
+bool   _is_free_call_for (const char*   callee_name, int32_t   kind) {
+
+#line 6139 "bootstrap/lsp.glide"
+    if ((kind  ==  1)) {
+        return __glide_string_eq(callee_name, "free");
+    }
+
+#line 6140 "bootstrap/lsp.glide"
+    if ((kind  ==  2)) {
+        return __glide_string_eq(callee_name, "free");
+    }
+
+#line 6141 "bootstrap/lsp.glide"
+    if ((kind  ==  3)) {
+        return __glide_string_eq(callee_name, "__glide_palloc_free");
+    }
+
+#line 6142 "bootstrap/lsp.glide"
+    return false;
+}
+
+
+#line 6145 "bootstrap/lsp.glide"
+bool   expr_passes_to_non_free (Expr*   e, const char*   name, int32_t   kind) {
+
+#line 6146 "bootstrap/lsp.glide"
+    if ((e  ==  NULL)) {
+        return false;
+    }
+
+#line 6151 "bootstrap/lsp.glide"
+    if (((((e-> kind )  ==  EX_ASSIGN)  &&  ((e-> rhs )  !=  NULL))  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> rhs ), name))) {
+
+#line 6152 "bootstrap/lsp.glide"
+        return true;
+    }
+
+#line 6156 "bootstrap/lsp.glide"
+    if (((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  ((e-> args )  !=  NULL))) {
+
+#line 6157 "bootstrap/lsp.glide"
+        const char*   callee = "";
+
+#line 6158 "bootstrap/lsp.glide"
+        if ((((e-> lhs )-> kind )  ==  EX_IDENT)) {
+            (callee  =  ((e-> lhs )-> str_val ));
+        } else {
+
+#line 6159 "bootstrap/lsp.glide"
+            if ((((e-> lhs )-> kind )  ==  EX_PATH)) {
+                (callee  =  ((e-> lhs )-> field ));
+            } else {
+
+#line 6160 "bootstrap/lsp.glide"
+                if ((((e-> lhs )-> kind )  ==  EX_MEMBER)) {
+                    (callee  =  ((e-> lhs )-> field ));
+                }
+            }
+        }
+
+#line 6161 "bootstrap/lsp.glide"
+        bool   name_in_args = false;
+
+#line 6162 "bootstrap/lsp.glide"
+        for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+
+#line 6163 "bootstrap/lsp.glide"
+            Expr   a = Vector_get__Expr((e-> args ), i);
+
+#line 6164 "bootstrap/lsp.glide"
+            if (((bool(*)(Expr*, const char*))expr_strips_to_ident)((&a), name)) {
+                (name_in_args  =  true);
+                break;
+            }
+        }
+
+#line 6166 "bootstrap/lsp.glide"
+        if ((name_in_args  &&  (!((bool(*)(const char*, int32_t))_is_free_call_for)(callee, kind)))) {
+            return true;
+        }
+    }
+
+#line 6168 "bootstrap/lsp.glide"
+    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((e-> lhs ), name, kind))) {
+        return true;
+    }
+
+#line 6169 "bootstrap/lsp.glide"
+    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((e-> rhs ), name, kind))) {
+        return true;
+    }
+
+#line 6170 "bootstrap/lsp.glide"
+    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((e-> operand ), name, kind))) {
+        return true;
+    }
+
+#line 6171 "bootstrap/lsp.glide"
+    if (((e-> args )  !=  NULL)) {
+
+#line 6172 "bootstrap/lsp.glide"
+        for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+
+#line 6173 "bootstrap/lsp.glide"
+            Expr   a = Vector_get__Expr((e-> args ), i);
+
+#line 6174 "bootstrap/lsp.glide"
+            if (((bool(*)(Expr*, const char*, int32_t))expr_passes_to_non_free)((&a), name, kind)) {
+                return true;
+            }
+        }
+    }
+
+#line 6177 "bootstrap/lsp.glide"
+    return false;
+}
+
+
+#line 6180 "bootstrap/lsp.glide"
+bool   expr_mentions_ident (Expr*   e, const char*   name) {
+
+#line 6181 "bootstrap/lsp.glide"
+    if ((e  ==  NULL)) {
+        return false;
+    }
+
+#line 6182 "bootstrap/lsp.glide"
+    if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), name))) {
+        return true;
+    }
+
+#line 6183 "bootstrap/lsp.glide"
+    if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> lhs ), name))) {
+        return true;
+    }
+
+#line 6184 "bootstrap/lsp.glide"
+    if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> rhs ), name))) {
+        return true;
+    }
+
+#line 6185 "bootstrap/lsp.glide"
+    if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_mentions_ident)((e-> operand ), name))) {
+        return true;
+    }
+
+#line 6186 "bootstrap/lsp.glide"
+    if (((e-> args )  !=  NULL)) {
+
+#line 6187 "bootstrap/lsp.glide"
+        for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
+
+#line 6188 "bootstrap/lsp.glide"
+            Expr   a = Vector_get__Expr((e-> args ), i);
+
+#line 6189 "bootstrap/lsp.glide"
+            if (((bool(*)(Expr*, const char*))expr_mentions_ident)((&a), name)) {
+                return true;
+            }
+        }
+    }
+
+#line 6192 "bootstrap/lsp.glide"
+    return false;
+}
+
+
+#line 6195 "bootstrap/lsp.glide"
+const char*   _alloc_code (int32_t   kind) {
+
+#line 6196 "bootstrap/lsp.glide"
     if ((kind  ==  1)) {
         return "arena-not-freed";
     }
 
-#line 6116 "bootstrap/lsp.glide"
+#line 6197 "bootstrap/lsp.glide"
     return "unfreed-alloc";
 }
 
 
-#line 6119 "bootstrap/lsp.glide"
+#line 6200 "bootstrap/lsp.glide"
 const char*   _alloc_msg (int32_t   kind, const char*   name) {
 
-#line 6120 "bootstrap/lsp.glide"
+#line 6201 "bootstrap/lsp.glide"
     if ((kind  ==  1)) {
 
-#line 6121 "bootstrap/lsp.glide"
+#line 6202 "bootstrap/lsp.glide"
         return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("arena `", name), "` is never freed (use `let "), name), "* = Arena::new(...)` or add `defer "), name), ".free()`)");
     }
 
-#line 6125 "bootstrap/lsp.glide"
+#line 6206 "bootstrap/lsp.glide"
     if ((kind  ==  2)) {
 
-#line 6126 "bootstrap/lsp.glide"
+#line 6207 "bootstrap/lsp.glide"
         return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("allocation `", name), "` is never freed (add `defer free("), name), ")` after the malloc, or `@allow(\"unfreed-alloc\")` if the handle escapes the fn)");
     }
 
-#line 6129 "bootstrap/lsp.glide"
+#line 6210 "bootstrap/lsp.glide"
     return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("palloc arena `", name), "` is never freed (add `__glide_palloc_free("), name), ")` or `@allow(\"unfreed-alloc\")` if the handle escapes the fn)");
 }
 
 
-#line 6133 "bootstrap/lsp.glide"
+#line 6214 "bootstrap/lsp.glide"
 bool   alloc_is_freed_in_body (const char*   name, int32_t   kind, Vector__Stmt*   body) {
 
-#line 6134 "bootstrap/lsp.glide"
+#line 6215 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__Stmt(body);
 
-#line 6135 "bootstrap/lsp.glide"
+#line 6216 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 6136 "bootstrap/lsp.glide"
+#line 6217 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 6137 "bootstrap/lsp.glide"
+#line 6218 "bootstrap/lsp.glide"
         if (((bool(*)(Stmt*, const char*, int32_t))stmt_frees_resource)((&s), name, kind)) {
             return true;
         }
     }
 
-#line 6139 "bootstrap/lsp.glide"
+#line 6220 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6142 "bootstrap/lsp.glide"
+#line 6223 "bootstrap/lsp.glide"
 bool   stmt_frees_resource (Stmt*   s, const char*   name, int32_t   kind) {
 
-#line 6143 "bootstrap/lsp.glide"
+#line 6224 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return false;
     }
 
-#line 6144 "bootstrap/lsp.glide"
+#line 6225 "bootstrap/lsp.glide"
     if ((kind  ==  1)) {
 
-#line 6145 "bootstrap/lsp.glide"
+#line 6226 "bootstrap/lsp.glide"
         if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_method)(s, name, "free")) {
             return true;
         }
     }
 
-#line 6147 "bootstrap/lsp.glide"
+#line 6228 "bootstrap/lsp.glide"
     if ((kind  ==  2)) {
 
-#line 6148 "bootstrap/lsp.glide"
+#line 6229 "bootstrap/lsp.glide"
         if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_fn_with)(s, "free", name)) {
             return true;
         }
     }
 
-#line 6150 "bootstrap/lsp.glide"
+#line 6231 "bootstrap/lsp.glide"
     if ((kind  ==  3)) {
 
-#line 6151 "bootstrap/lsp.glide"
+#line 6232 "bootstrap/lsp.glide"
         if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_fn_with)(s, "__glide_palloc_free", name)) {
             return true;
         }
     }
 
-#line 6154 "bootstrap/lsp.glide"
+#line 6235 "bootstrap/lsp.glide"
     if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_returns_ident)((s-> expr_value ), name))) {
         return true;
     }
 
-#line 6155 "bootstrap/lsp.glide"
+#line 6236 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6158 "bootstrap/lsp.glide"
+#line 6239 "bootstrap/lsp.glide"
 bool   stmt_calls_fn_with (Stmt*   s, const char*   fn_name, const char*   arg_name) {
 
-#line 6159 "bootstrap/lsp.glide"
+#line 6240 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return false;
     }
 
-#line 6160 "bootstrap/lsp.glide"
+#line 6241 "bootstrap/lsp.glide"
     if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_fn_with)((s-> expr_value ), fn_name, arg_name))) {
         return true;
     }
 
-#line 6161 "bootstrap/lsp.glide"
+#line 6242 "bootstrap/lsp.glide"
     if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_fn_with)((s-> let_value ), fn_name, arg_name))) {
         return true;
     }
 
-#line 6162 "bootstrap/lsp.glide"
+#line 6243 "bootstrap/lsp.glide"
     if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_fn_with)((s-> cond ), fn_name, arg_name))) {
         return true;
     }
 
-#line 6163 "bootstrap/lsp.glide"
+#line 6244 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 6164 "bootstrap/lsp.glide"
+#line 6245 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
 
-#line 6165 "bootstrap/lsp.glide"
+#line 6246 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
 
-#line 6166 "bootstrap/lsp.glide"
+#line 6247 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_fn_with)((&b), fn_name, arg_name)) {
                 return true;
             }
         }
     }
 
-#line 6169 "bootstrap/lsp.glide"
+#line 6250 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 6170 "bootstrap/lsp.glide"
+#line 6251 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
 
-#line 6171 "bootstrap/lsp.glide"
+#line 6252 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
 
-#line 6172 "bootstrap/lsp.glide"
+#line 6253 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_fn_with)((&b), fn_name, arg_name)) {
                 return true;
             }
         }
     }
 
-#line 6175 "bootstrap/lsp.glide"
+#line 6256 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6178 "bootstrap/lsp.glide"
+#line 6259 "bootstrap/lsp.glide"
 bool   expr_calls_fn_with (Expr*   e, const char*   fn_name, const char*   arg_name) {
 
-#line 6179 "bootstrap/lsp.glide"
+#line 6260 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 6180 "bootstrap/lsp.glide"
+#line 6261 "bootstrap/lsp.glide"
     if (((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq(((e-> lhs )-> str_val ), fn_name))  &&  ((e-> args )  !=  NULL))) {
 
-#line 6182 "bootstrap/lsp.glide"
+#line 6263 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 6183 "bootstrap/lsp.glide"
+#line 6264 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 6184 "bootstrap/lsp.glide"
+#line 6265 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*, const char*))expr_strips_to_ident)((&a), arg_name)) {
                 return true;
             }
         }
     }
 
-#line 6187 "bootstrap/lsp.glide"
+#line 6268 "bootstrap/lsp.glide"
     if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_fn_with)((e-> lhs ), fn_name, arg_name))) {
         return true;
     }
 
-#line 6188 "bootstrap/lsp.glide"
+#line 6269 "bootstrap/lsp.glide"
     if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_fn_with)((e-> rhs ), fn_name, arg_name))) {
         return true;
     }
 
-#line 6189 "bootstrap/lsp.glide"
+#line 6270 "bootstrap/lsp.glide"
     if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_fn_with)((e-> operand ), fn_name, arg_name))) {
         return true;
     }
 
-#line 6190 "bootstrap/lsp.glide"
+#line 6271 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 6191 "bootstrap/lsp.glide"
+#line 6272 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 6192 "bootstrap/lsp.glide"
+#line 6273 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 6193 "bootstrap/lsp.glide"
+#line 6274 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*, const char*, const char*))expr_calls_fn_with)((&a), fn_name, arg_name)) {
                 return true;
             }
         }
     }
 
-#line 6196 "bootstrap/lsp.glide"
+#line 6277 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6201 "bootstrap/lsp.glide"
+#line 6282 "bootstrap/lsp.glide"
 bool   expr_strips_to_ident (Expr*   e, const char*   name) {
 
-#line 6202 "bootstrap/lsp.glide"
+#line 6283 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 6203 "bootstrap/lsp.glide"
+#line 6284 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), name))) {
         return true;
     }
 
-#line 6204 "bootstrap/lsp.glide"
+#line 6285 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_CAST)  &&  ((e-> lhs )  !=  NULL))) {
         return ((bool(*)(Expr*, const char*))expr_strips_to_ident)((e-> lhs ), name);
     }
 
-#line 6205 "bootstrap/lsp.glide"
+#line 6286 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6208 "bootstrap/lsp.glide"
+#line 6289 "bootstrap/lsp.glide"
 bool   expr_returns_ident (Expr*   e, const char*   name) {
 
-#line 6209 "bootstrap/lsp.glide"
+#line 6290 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 6210 "bootstrap/lsp.glide"
+#line 6291 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_IDENT)  &&  __glide_string_eq((e-> str_val ), name))) {
         return true;
     }
 
-#line 6211 "bootstrap/lsp.glide"
+#line 6292 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6214 "bootstrap/lsp.glide"
+#line 6295 "bootstrap/lsp.glide"
 bool   stmt_calls_method (Stmt*   s, const char*   var, const char*   method) {
 
-#line 6215 "bootstrap/lsp.glide"
+#line 6296 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return false;
     }
 
-#line 6216 "bootstrap/lsp.glide"
+#line 6297 "bootstrap/lsp.glide"
     if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> expr_value ), var, method))) {
         return true;
     }
 
-#line 6217 "bootstrap/lsp.glide"
+#line 6298 "bootstrap/lsp.glide"
     if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> let_value ), var, method))) {
         return true;
     }
 
-#line 6218 "bootstrap/lsp.glide"
+#line 6299 "bootstrap/lsp.glide"
     if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> cond ), var, method))) {
         return true;
     }
 
-#line 6219 "bootstrap/lsp.glide"
+#line 6300 "bootstrap/lsp.glide"
     if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((s-> for_step ), var, method))) {
         return true;
     }
 
-#line 6220 "bootstrap/lsp.glide"
+#line 6301 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 6221 "bootstrap/lsp.glide"
+#line 6302 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
 
-#line 6222 "bootstrap/lsp.glide"
+#line 6303 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
 
-#line 6223 "bootstrap/lsp.glide"
+#line 6304 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_method)((&b), var, method)) {
                 return true;
             }
         }
     }
 
-#line 6226 "bootstrap/lsp.glide"
+#line 6307 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 6227 "bootstrap/lsp.glide"
+#line 6308 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
 
-#line 6228 "bootstrap/lsp.glide"
+#line 6309 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
 
-#line 6229 "bootstrap/lsp.glide"
+#line 6310 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*, const char*))stmt_calls_method)((&b), var, method)) {
                 return true;
             }
         }
     }
 
-#line 6232 "bootstrap/lsp.glide"
+#line 6313 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6235 "bootstrap/lsp.glide"
+#line 6316 "bootstrap/lsp.glide"
 bool   expr_calls_method (Expr*   e, const char*   var, const char*   method) {
 
-#line 6236 "bootstrap/lsp.glide"
+#line 6317 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 6237 "bootstrap/lsp.glide"
+#line 6318 "bootstrap/lsp.glide"
     if (((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((((e-> lhs )-> lhs )-> str_val ), var))  &&  __glide_string_eq(((e-> lhs )-> field ), method))) {
 
-#line 6240 "bootstrap/lsp.glide"
+#line 6321 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 6242 "bootstrap/lsp.glide"
+#line 6323 "bootstrap/lsp.glide"
     if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((e-> lhs ), var, method))) {
         return true;
     }
 
-#line 6243 "bootstrap/lsp.glide"
+#line 6324 "bootstrap/lsp.glide"
     if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((e-> rhs ), var, method))) {
         return true;
     }
 
-#line 6244 "bootstrap/lsp.glide"
+#line 6325 "bootstrap/lsp.glide"
     if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*, const char*))expr_calls_method)((e-> operand ), var, method))) {
         return true;
     }
 
-#line 6245 "bootstrap/lsp.glide"
+#line 6326 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 6246 "bootstrap/lsp.glide"
+#line 6327 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 6247 "bootstrap/lsp.glide"
+#line 6328 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 6248 "bootstrap/lsp.glide"
+#line 6329 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*, const char*, const char*))expr_calls_method)((&a), var, method)) {
                 return true;
             }
         }
     }
 
-#line 6251 "bootstrap/lsp.glide"
+#line 6332 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6258 "bootstrap/lsp.glide"
+#line 6339 "bootstrap/lsp.glide"
 void   analysis_addr_of_temporary (Typer*   t, Vector__Stmt*   program) {
 
-#line 6259 "bootstrap/lsp.glide"
+#line 6340 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6260 "bootstrap/lsp.glide"
+#line 6341 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6261 "bootstrap/lsp.glide"
+#line 6342 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 6262 "bootstrap/lsp.glide"
+#line 6343 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6263 "bootstrap/lsp.glide"
+#line 6344 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (s. fn_body ));
         }
 
-#line 6265 "bootstrap/lsp.glide"
+#line 6346 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6266 "bootstrap/lsp.glide"
+#line 6347 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6267 "bootstrap/lsp.glide"
+#line 6348 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6268 "bootstrap/lsp.glide"
+#line 6349 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6269 "bootstrap/lsp.glide"
+#line 6350 "bootstrap/lsp.glide"
                 if (((m. fn_body )  !=  NULL)) {
                     ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (m. fn_body ));
                 }
@@ -67392,35 +67624,35 @@ void   analysis_addr_of_temporary (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 6275 "bootstrap/lsp.glide"
+#line 6356 "bootstrap/lsp.glide"
 void   check_addr_temp_body (Typer*   t, Vector__Stmt*   body) {
 
-#line 6276 "bootstrap/lsp.glide"
+#line 6357 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 6277 "bootstrap/lsp.glide"
+#line 6358 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 6278 "bootstrap/lsp.glide"
+#line 6359 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_RETURN)  &&  ((s. expr_value )  !=  NULL))) {
 
-#line 6279 "bootstrap/lsp.glide"
+#line 6360 "bootstrap/lsp.glide"
             Expr*   e = (s. expr_value );
 
-#line 6280 "bootstrap/lsp.glide"
+#line 6361 "bootstrap/lsp.glide"
             if ((((((e-> kind )  ==  EX_UNARY)  &&  (((e-> op_code )  ==  UN_ADDR)  ||  ((e-> op_code )  ==  UN_ADDR_MUT)))  &&  ((e-> operand )  !=  NULL))  &&  ((((e-> operand )-> kind )  ==  EX_STRUCT_LIT)  ||  (((e-> operand )-> kind )  ==  EX_NEW)))) {
 
-#line 6283 "bootstrap/lsp.glide"
+#line 6364 "bootstrap/lsp.glide"
                 Typer_err_code(t, (s. line ), (s. column ), "addr-of-temporary", "cannot return address of a temporary value (would dangle); use `new T { ... }` to heap-allocate or return by value");
             }
         }
 
-#line 6287 "bootstrap/lsp.glide"
+#line 6368 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (s. then_body ));
         }
 
-#line 6288 "bootstrap/lsp.glide"
+#line 6369 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_addr_temp_body)(t, (s. else_body ));
         }
@@ -67428,38 +67660,38 @@ void   check_addr_temp_body (Typer*   t, Vector__Stmt*   body) {
 }
 
 
-#line 6294 "bootstrap/lsp.glide"
+#line 6375 "bootstrap/lsp.glide"
 void   analysis_dead_code (Typer*   t, Vector__Stmt*   program) {
 
-#line 6295 "bootstrap/lsp.glide"
+#line 6376 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6296 "bootstrap/lsp.glide"
+#line 6377 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6297 "bootstrap/lsp.glide"
+#line 6378 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 6298 "bootstrap/lsp.glide"
+#line 6379 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6299 "bootstrap/lsp.glide"
+#line 6380 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (s. fn_body ));
         }
 
-#line 6301 "bootstrap/lsp.glide"
+#line 6382 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6302 "bootstrap/lsp.glide"
+#line 6383 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6303 "bootstrap/lsp.glide"
+#line 6384 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6304 "bootstrap/lsp.glide"
+#line 6385 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6305 "bootstrap/lsp.glide"
+#line 6386 "bootstrap/lsp.glide"
                 if (((m. fn_body )  !=  NULL)) {
                     ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (m. fn_body ));
                 }
@@ -67469,44 +67701,44 @@ void   analysis_dead_code (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 6311 "bootstrap/lsp.glide"
+#line 6392 "bootstrap/lsp.glide"
 void   check_dead_code_body (Typer*   t, Vector__Stmt*   body) {
 
-#line 6312 "bootstrap/lsp.glide"
+#line 6393 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__Stmt(body);
 
-#line 6313 "bootstrap/lsp.glide"
+#line 6394 "bootstrap/lsp.glide"
     bool   terminated = false;
 
-#line 6314 "bootstrap/lsp.glide"
+#line 6395 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 6315 "bootstrap/lsp.glide"
+#line 6396 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 6316 "bootstrap/lsp.glide"
+#line 6397 "bootstrap/lsp.glide"
         if (terminated) {
 
-#line 6317 "bootstrap/lsp.glide"
+#line 6398 "bootstrap/lsp.glide"
             Typer_warn_unused(t, (s. line ), (s. column ), "dead-code", "unreachable code after return / break / continue");
 
-#line 6319 "bootstrap/lsp.glide"
+#line 6400 "bootstrap/lsp.glide"
             return;
         }
 
-#line 6321 "bootstrap/lsp.glide"
+#line 6402 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_RETURN)  ||  ((s. kind )  ==  ST_BREAK))  ||  ((s. kind )  ==  ST_CONTINUE))) {
 
-#line 6322 "bootstrap/lsp.glide"
+#line 6403 "bootstrap/lsp.glide"
             (terminated  =  true);
         }
 
-#line 6325 "bootstrap/lsp.glide"
+#line 6406 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (s. then_body ));
         }
 
-#line 6326 "bootstrap/lsp.glide"
+#line 6407 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_dead_code_body)(t, (s. else_body ));
         }
@@ -67514,33 +67746,33 @@ void   check_dead_code_body (Typer*   t, Vector__Stmt*   body) {
 }
 
 
-#line 6332 "bootstrap/lsp.glide"
+#line 6413 "bootstrap/lsp.glide"
 void   analysis_unused_fn (Typer*   t, Vector__Stmt*   program) {
 
-#line 6333 "bootstrap/lsp.glide"
+#line 6414 "bootstrap/lsp.glide"
     HashMap__bool*   called = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 6334 "bootstrap/lsp.glide"
+#line 6415 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6335 "bootstrap/lsp.glide"
+#line 6416 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6336 "bootstrap/lsp.glide"
+#line 6417 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
             ((void(*)(Vector__Stmt*, HashMap__bool*))collect_calls_body)((s. fn_body ), called);
         }
 
-#line 6337 "bootstrap/lsp.glide"
+#line 6418 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6338 "bootstrap/lsp.glide"
+#line 6419 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6339 "bootstrap/lsp.glide"
+#line 6420 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6340 "bootstrap/lsp.glide"
+#line 6421 "bootstrap/lsp.glide"
                 if (((m. fn_body )  !=  NULL)) {
                     ((void(*)(Vector__Stmt*, HashMap__bool*))collect_calls_body)((m. fn_body ), called);
                 }
@@ -67548,232 +67780,232 @@ void   analysis_unused_fn (Typer*   t, Vector__Stmt*   program) {
         }
     }
 
-#line 6344 "bootstrap/lsp.glide"
+#line 6425 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6345 "bootstrap/lsp.glide"
+#line 6426 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6346 "bootstrap/lsp.glide"
+#line 6427 "bootstrap/lsp.glide"
         if (((s. kind )  !=  ST_FN)) {
             continue;
         }
 
-#line 6347 "bootstrap/lsp.glide"
+#line 6428 "bootstrap/lsp.glide"
         if (((s. fn_body )  ==  NULL)) {
             continue;
         }
 
-#line 6348 "bootstrap/lsp.glide"
+#line 6429 "bootstrap/lsp.glide"
         if ((s. is_pub )) {
             continue;
         }
 
-#line 6349 "bootstrap/lsp.glide"
+#line 6430 "bootstrap/lsp.glide"
         if (__glide_string_eq((s. name ), "main")) {
             continue;
         }
 
-#line 6350 "bootstrap/lsp.glide"
+#line 6431 "bootstrap/lsp.glide"
         if ((((s. type_params )  !=  NULL)  &&  (Vector_len__string((s. type_params ))  >  0))) {
             continue;
         }
 
-#line 6351 "bootstrap/lsp.glide"
+#line 6432 "bootstrap/lsp.glide"
         if (HashMap_contains__bool(called, (s. name ))) {
             continue;
         }
 
-#line 6352 "bootstrap/lsp.glide"
+#line 6433 "bootstrap/lsp.glide"
         ((t-> current_origin )  =  (s. origin ));
 
-#line 6353 "bootstrap/lsp.glide"
+#line 6434 "bootstrap/lsp.glide"
         Typer_warn_unused_range(t, (s. name_line ), (s. name_col ), (s. name_len ), "unused-fn", __glide_string_concat(__glide_string_concat("function `", (s. name )), "` is never called"));
     }
 
-#line 6356 "bootstrap/lsp.glide"
+#line 6437 "bootstrap/lsp.glide"
     HashMap_free__bool(called);
 }
 
 
-#line 6359 "bootstrap/lsp.glide"
+#line 6440 "bootstrap/lsp.glide"
 void   collect_calls_body (Vector__Stmt*   body, HashMap__bool*   out) {
 
-#line 6360 "bootstrap/lsp.glide"
+#line 6441 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 6361 "bootstrap/lsp.glide"
+#line 6442 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 6362 "bootstrap/lsp.glide"
+#line 6443 "bootstrap/lsp.glide"
         ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((&s), out);
     }
 }
 
 
-#line 6366 "bootstrap/lsp.glide"
+#line 6447 "bootstrap/lsp.glide"
 void   collect_calls_stmt (Stmt*   s, HashMap__bool*   out) {
 
-#line 6367 "bootstrap/lsp.glide"
+#line 6448 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return;
     }
 
-#line 6368 "bootstrap/lsp.glide"
+#line 6449 "bootstrap/lsp.glide"
     if (((s-> let_value )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> let_value ), out);
     }
 
-#line 6369 "bootstrap/lsp.glide"
+#line 6450 "bootstrap/lsp.glide"
     if (((s-> expr_value )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> expr_value ), out);
     }
 
-#line 6370 "bootstrap/lsp.glide"
+#line 6451 "bootstrap/lsp.glide"
     if (((s-> cond )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> cond ), out);
     }
 
-#line 6371 "bootstrap/lsp.glide"
+#line 6452 "bootstrap/lsp.glide"
     if (((s-> for_step )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((s-> for_step ), out);
     }
 
-#line 6372 "bootstrap/lsp.glide"
+#line 6453 "bootstrap/lsp.glide"
     if (((s-> for_init )  !=  NULL)) {
         ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((s-> for_init ), out);
     }
 
-#line 6373 "bootstrap/lsp.glide"
+#line 6454 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 6374 "bootstrap/lsp.glide"
+#line 6455 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
 
-#line 6375 "bootstrap/lsp.glide"
+#line 6456 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
 
-#line 6376 "bootstrap/lsp.glide"
+#line 6457 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((&b), out);
         }
     }
 
-#line 6379 "bootstrap/lsp.glide"
+#line 6460 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 6380 "bootstrap/lsp.glide"
+#line 6461 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
 
-#line 6381 "bootstrap/lsp.glide"
+#line 6462 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
 
-#line 6382 "bootstrap/lsp.glide"
+#line 6463 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__bool*))collect_calls_stmt)((&b), out);
         }
     }
 }
 
 
-#line 6387 "bootstrap/lsp.glide"
+#line 6468 "bootstrap/lsp.glide"
 void   collect_calls_expr (Expr*   e, HashMap__bool*   out) {
 
-#line 6388 "bootstrap/lsp.glide"
+#line 6469 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 6389 "bootstrap/lsp.glide"
+#line 6470 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))) {
 
-#line 6390 "bootstrap/lsp.glide"
+#line 6471 "bootstrap/lsp.glide"
         if ((((e-> lhs )-> kind )  ==  EX_IDENT)) {
             HashMap_insert__bool(out, ((e-> lhs )-> str_val ), true);
         }
 
-#line 6391 "bootstrap/lsp.glide"
+#line 6472 "bootstrap/lsp.glide"
         if ((((e-> lhs )-> kind )  ==  EX_PATH)) {
 
-#line 6392 "bootstrap/lsp.glide"
+#line 6473 "bootstrap/lsp.glide"
             HashMap_insert__bool(out, __glide_string_concat(__glide_string_concat(((e-> lhs )-> str_val ), "_"), ((e-> lhs )-> field )), true);
 
-#line 6393 "bootstrap/lsp.glide"
+#line 6474 "bootstrap/lsp.glide"
             HashMap_insert__bool(out, ((e-> lhs )-> field ), true);
         }
 
-#line 6395 "bootstrap/lsp.glide"
+#line 6476 "bootstrap/lsp.glide"
         if ((((e-> lhs )-> kind )  ==  EX_MEMBER)) {
             HashMap_insert__bool(out, ((e-> lhs )-> field ), true);
         }
     }
 
-#line 6402 "bootstrap/lsp.glide"
+#line 6483 "bootstrap/lsp.glide"
     if (((e-> kind )  ==  EX_IDENT)) {
         HashMap_insert__bool(out, (e-> str_val ), true);
     }
 
-#line 6403 "bootstrap/lsp.glide"
+#line 6484 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((e-> lhs ), out);
     }
 
-#line 6404 "bootstrap/lsp.glide"
+#line 6485 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((e-> rhs ), out);
     }
 
-#line 6405 "bootstrap/lsp.glide"
+#line 6486 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((e-> operand ), out);
     }
 
-#line 6406 "bootstrap/lsp.glide"
+#line 6487 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 6407 "bootstrap/lsp.glide"
+#line 6488 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 6408 "bootstrap/lsp.glide"
+#line 6489 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 6409 "bootstrap/lsp.glide"
+#line 6490 "bootstrap/lsp.glide"
             ((void(*)(Expr*, HashMap__bool*))collect_calls_expr)((&a), out);
         }
     }
 }
 
 
-#line 6415 "bootstrap/lsp.glide"
+#line 6496 "bootstrap/lsp.glide"
 void   analysis_unnecessary_mut (Typer*   t, Vector__Stmt*   program) {
 
-#line 6416 "bootstrap/lsp.glide"
+#line 6497 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6417 "bootstrap/lsp.glide"
+#line 6498 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6418 "bootstrap/lsp.glide"
+#line 6499 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 6419 "bootstrap/lsp.glide"
+#line 6500 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6420 "bootstrap/lsp.glide"
+#line 6501 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (s. fn_body ));
         }
 
-#line 6422 "bootstrap/lsp.glide"
+#line 6503 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6423 "bootstrap/lsp.glide"
+#line 6504 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6424 "bootstrap/lsp.glide"
+#line 6505 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6425 "bootstrap/lsp.glide"
+#line 6506 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6426 "bootstrap/lsp.glide"
+#line 6507 "bootstrap/lsp.glide"
                 if (((m. fn_body )  !=  NULL)) {
                     ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (m. fn_body ));
                 }
@@ -67783,65 +68015,65 @@ void   analysis_unnecessary_mut (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 6432 "bootstrap/lsp.glide"
+#line 6513 "bootstrap/lsp.glide"
 void   check_mut_body (Typer*   t, Vector__Stmt*   body) {
 
-#line 6433 "bootstrap/lsp.glide"
+#line 6514 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__Stmt(body);
 
-#line 6434 "bootstrap/lsp.glide"
+#line 6515 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  n); i++) {
 
-#line 6435 "bootstrap/lsp.glide"
+#line 6516 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 6436 "bootstrap/lsp.glide"
+#line 6517 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_LET)  &&  (s. is_mut ))) {
 
-#line 6437 "bootstrap/lsp.glide"
+#line 6518 "bootstrap/lsp.glide"
             bool   reassigned = false;
 
-#line 6438 "bootstrap/lsp.glide"
+#line 6519 "bootstrap/lsp.glide"
             for (int32_t   j = (i  +  1); (j  <  n); j++) {
 
-#line 6439 "bootstrap/lsp.glide"
+#line 6520 "bootstrap/lsp.glide"
                 Stmt   s2 = Vector_get__Stmt(body, j);
 
-#line 6440 "bootstrap/lsp.glide"
+#line 6521 "bootstrap/lsp.glide"
                 if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&s2), (s. name ))) {
                     (reassigned  =  true);
                     break;
                 }
             }
 
-#line 6442 "bootstrap/lsp.glide"
+#line 6523 "bootstrap/lsp.glide"
             if ((!reassigned)) {
 
-#line 6443 "bootstrap/lsp.glide"
+#line 6524 "bootstrap/lsp.glide"
                 Typer_warn(t, (s. name_line ), (s. name_col ), "unnecessary-mut", __glide_string_concat(__glide_string_concat("`mut` on `", (s. name )), "` is unnecessary; binding is never reassigned"));
             }
         }
 
-#line 6447 "bootstrap/lsp.glide"
+#line 6528 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (s. then_body ));
         }
 
-#line 6448 "bootstrap/lsp.glide"
+#line 6529 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (s. else_body ));
         }
 
-#line 6449 "bootstrap/lsp.glide"
+#line 6530 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_SELECT)  &&  ((s. select_arms )  !=  NULL))) {
 
-#line 6450 "bootstrap/lsp.glide"
+#line 6531 "bootstrap/lsp.glide"
             for (int32_t   k = 0; (k  <  Vector_len__SelectArm((s. select_arms ))); k++) {
 
-#line 6451 "bootstrap/lsp.glide"
+#line 6532 "bootstrap/lsp.glide"
                 SelectArm   arm = Vector_get__SelectArm((s. select_arms ), k);
 
-#line 6452 "bootstrap/lsp.glide"
+#line 6533 "bootstrap/lsp.glide"
                 if (((arm. body )  !=  NULL)) {
                     ((void(*)(Typer*, Vector__Stmt*))check_mut_body)(t, (arm. body ));
                 }
@@ -67851,90 +68083,90 @@ void   check_mut_body (Typer*   t, Vector__Stmt*   body) {
 }
 
 
-#line 6458 "bootstrap/lsp.glide"
+#line 6539 "bootstrap/lsp.glide"
 bool   stmt_reassigns (Stmt*   s, const char*   name) {
 
-#line 6459 "bootstrap/lsp.glide"
+#line 6540 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return false;
     }
 
-#line 6460 "bootstrap/lsp.glide"
+#line 6541 "bootstrap/lsp.glide"
     if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> expr_value ), name))) {
         return true;
     }
 
-#line 6461 "bootstrap/lsp.glide"
+#line 6542 "bootstrap/lsp.glide"
     if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> let_value ), name))) {
         return true;
     }
 
-#line 6462 "bootstrap/lsp.glide"
+#line 6543 "bootstrap/lsp.glide"
     if ((((s-> cond )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> cond ), name))) {
         return true;
     }
 
-#line 6463 "bootstrap/lsp.glide"
+#line 6544 "bootstrap/lsp.glide"
     if ((((s-> for_step )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((s-> for_step ), name))) {
         return true;
     }
 
-#line 6464 "bootstrap/lsp.glide"
+#line 6545 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 6465 "bootstrap/lsp.glide"
+#line 6546 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
 
-#line 6466 "bootstrap/lsp.glide"
+#line 6547 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> then_body ), i);
 
-#line 6467 "bootstrap/lsp.glide"
+#line 6548 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&b), name)) {
                 return true;
             }
         }
     }
 
-#line 6470 "bootstrap/lsp.glide"
+#line 6551 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 6471 "bootstrap/lsp.glide"
+#line 6552 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
 
-#line 6472 "bootstrap/lsp.glide"
+#line 6553 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((s-> else_body ), i);
 
-#line 6473 "bootstrap/lsp.glide"
+#line 6554 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&b), name)) {
                 return true;
             }
         }
     }
 
-#line 6476 "bootstrap/lsp.glide"
+#line 6557 "bootstrap/lsp.glide"
     if ((((s-> kind )  ==  ST_SELECT)  &&  ((s-> select_arms )  !=  NULL))) {
 
-#line 6477 "bootstrap/lsp.glide"
+#line 6558 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__SelectArm((s-> select_arms ))); i++) {
 
-#line 6478 "bootstrap/lsp.glide"
+#line 6559 "bootstrap/lsp.glide"
             SelectArm   arm = Vector_get__SelectArm((s-> select_arms ), i);
 
-#line 6479 "bootstrap/lsp.glide"
+#line 6560 "bootstrap/lsp.glide"
             if ((((arm. send_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((arm. send_value ), name))) {
                 return true;
             }
 
-#line 6480 "bootstrap/lsp.glide"
+#line 6561 "bootstrap/lsp.glide"
             if (((arm. body )  !=  NULL)) {
 
-#line 6481 "bootstrap/lsp.glide"
+#line 6562 "bootstrap/lsp.glide"
                 for (int32_t   j = 0; (j  <  Vector_len__Stmt((arm. body ))); j++) {
 
-#line 6482 "bootstrap/lsp.glide"
+#line 6563 "bootstrap/lsp.glide"
                     Stmt   b = Vector_get__Stmt((arm. body ), j);
 
-#line 6483 "bootstrap/lsp.glide"
+#line 6564 "bootstrap/lsp.glide"
                     if (((bool(*)(Stmt*, const char*))stmt_reassigns)((&b), name)) {
                         return true;
                     }
@@ -67943,246 +68175,246 @@ bool   stmt_reassigns (Stmt*   s, const char*   name) {
         }
     }
 
-#line 6488 "bootstrap/lsp.glide"
+#line 6569 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6491 "bootstrap/lsp.glide"
+#line 6572 "bootstrap/lsp.glide"
 bool   expr_reassigns (Expr*   e, const char*   name) {
 
-#line 6492 "bootstrap/lsp.glide"
+#line 6573 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 6493 "bootstrap/lsp.glide"
+#line 6574 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_ASSIGN)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq(((e-> lhs )-> str_val ), name))) {
 
-#line 6495 "bootstrap/lsp.glide"
+#line 6576 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 6497 "bootstrap/lsp.glide"
+#line 6578 "bootstrap/lsp.glide"
     if (((((((e-> kind )  ==  EX_POSTINC)  ||  ((e-> kind )  ==  EX_POSTDEC))  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq(((e-> lhs )-> str_val ), name))) {
 
-#line 6500 "bootstrap/lsp.glide"
+#line 6581 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 6502 "bootstrap/lsp.glide"
+#line 6583 "bootstrap/lsp.glide"
     if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((e-> lhs ), name))) {
         return true;
     }
 
-#line 6503 "bootstrap/lsp.glide"
+#line 6584 "bootstrap/lsp.glide"
     if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((e-> rhs ), name))) {
         return true;
     }
 
-#line 6504 "bootstrap/lsp.glide"
+#line 6585 "bootstrap/lsp.glide"
     if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))expr_reassigns)((e-> operand ), name))) {
         return true;
     }
 
-#line 6505 "bootstrap/lsp.glide"
+#line 6586 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 6506 "bootstrap/lsp.glide"
+#line 6587 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 6507 "bootstrap/lsp.glide"
+#line 6588 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 6508 "bootstrap/lsp.glide"
+#line 6589 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*, const char*))expr_reassigns)((&a), name)) {
                 return true;
             }
         }
     }
 
-#line 6511 "bootstrap/lsp.glide"
+#line 6592 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6516 "bootstrap/lsp.glide"
+#line 6597 "bootstrap/lsp.glide"
 void   analysis_missing_return (Typer*   t, Vector__Stmt*   program) {
 
-#line 6517 "bootstrap/lsp.glide"
+#line 6598 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6518 "bootstrap/lsp.glide"
+#line 6599 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6519 "bootstrap/lsp.glide"
+#line 6600 "bootstrap/lsp.glide"
         if (((s. kind )  !=  ST_FN)) {
             continue;
         }
 
-#line 6520 "bootstrap/lsp.glide"
+#line 6601 "bootstrap/lsp.glide"
         if (((s. fn_body )  ==  NULL)) {
             continue;
         }
 
-#line 6521 "bootstrap/lsp.glide"
+#line 6602 "bootstrap/lsp.glide"
         if (((s. fn_ret_ty )  ==  NULL)) {
             continue;
         }
 
-#line 6522 "bootstrap/lsp.glide"
+#line 6603 "bootstrap/lsp.glide"
         if ((s. is_naked )) {
             continue;
         }
 
-#line 6526 "bootstrap/lsp.glide"
+#line 6607 "bootstrap/lsp.glide"
         if (((((((s. fn_ret_ty )-> kind )  ==  TY_RESULT)  &&  (((s. fn_ret_ty )-> inner )  !=  NULL))  &&  ((((s. fn_ret_ty )-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq((((s. fn_ret_ty )-> inner )-> name ), "void"))) {
 
-#line 6529 "bootstrap/lsp.glide"
+#line 6610 "bootstrap/lsp.glide"
             continue;
         }
 
-#line 6532 "bootstrap/lsp.glide"
+#line 6613 "bootstrap/lsp.glide"
         if ((!((bool(*)(Vector__Stmt*))body_always_returns)((s. fn_body )))) {
 
-#line 6533 "bootstrap/lsp.glide"
+#line 6614 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6534 "bootstrap/lsp.glide"
+#line 6615 "bootstrap/lsp.glide"
             Typer_warn(t, (s. line ), (s. column ), "missing-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("function `", (s. name )), "` declared `-> "), ((const char*(*)(Type*))type_to_string)((s. fn_ret_ty ))), "` may exit without returning a value"));
         }
     }
 }
 
 
-#line 6542 "bootstrap/lsp.glide"
+#line 6623 "bootstrap/lsp.glide"
 bool   body_always_returns (Vector__Stmt*   body) {
 
-#line 6543 "bootstrap/lsp.glide"
+#line 6624 "bootstrap/lsp.glide"
     int32_t   n = Vector_len__Stmt(body);
 
-#line 6544 "bootstrap/lsp.glide"
+#line 6625 "bootstrap/lsp.glide"
     if ((n  ==  0)) {
         return false;
     }
 
-#line 6545 "bootstrap/lsp.glide"
+#line 6626 "bootstrap/lsp.glide"
     Stmt   last = Vector_get__Stmt(body, (n  -  1));
 
-#line 6546 "bootstrap/lsp.glide"
+#line 6627 "bootstrap/lsp.glide"
     return ((bool(*)(Stmt*))stmt_terminates)((&last));
 }
 
 
-#line 6549 "bootstrap/lsp.glide"
+#line 6630 "bootstrap/lsp.glide"
 bool   stmt_terminates (Stmt*   s) {
 
-#line 6550 "bootstrap/lsp.glide"
+#line 6631 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return false;
     }
 
-#line 6551 "bootstrap/lsp.glide"
+#line 6632 "bootstrap/lsp.glide"
     if (((s-> kind )  ==  ST_RETURN)) {
         return true;
     }
 
-#line 6552 "bootstrap/lsp.glide"
+#line 6633 "bootstrap/lsp.glide"
     if ((((s-> kind )  ==  ST_BREAK)  ||  ((s-> kind )  ==  ST_CONTINUE))) {
         return true;
     }
 
-#line 6553 "bootstrap/lsp.glide"
+#line 6634 "bootstrap/lsp.glide"
     if (((s-> kind )  ==  ST_BLOCK)) {
 
-#line 6554 "bootstrap/lsp.glide"
+#line 6635 "bootstrap/lsp.glide"
         if (((s-> then_body )  !=  NULL)) {
             return ((bool(*)(Vector__Stmt*))body_always_returns)((s-> then_body ));
         }
 
-#line 6555 "bootstrap/lsp.glide"
+#line 6636 "bootstrap/lsp.glide"
         return false;
     }
 
-#line 6557 "bootstrap/lsp.glide"
+#line 6638 "bootstrap/lsp.glide"
     if (((s-> kind )  ==  ST_IF)) {
 
-#line 6558 "bootstrap/lsp.glide"
+#line 6639 "bootstrap/lsp.glide"
         if ((((s-> then_body )  !=  NULL)  &&  ((s-> else_body )  !=  NULL))) {
 
-#line 6559 "bootstrap/lsp.glide"
+#line 6640 "bootstrap/lsp.glide"
             return (((bool(*)(Vector__Stmt*))body_always_returns)((s-> then_body ))  &&  ((bool(*)(Vector__Stmt*))body_always_returns)((s-> else_body )));
         }
 
-#line 6561 "bootstrap/lsp.glide"
+#line 6642 "bootstrap/lsp.glide"
         return false;
     }
 
-#line 6563 "bootstrap/lsp.glide"
+#line 6644 "bootstrap/lsp.glide"
     if (((s-> kind )  ==  ST_MATCH)) {
 
-#line 6564 "bootstrap/lsp.glide"
+#line 6645 "bootstrap/lsp.glide"
         if (((s-> arms )  ==  NULL)) {
             return false;
         }
 
-#line 6565 "bootstrap/lsp.glide"
+#line 6646 "bootstrap/lsp.glide"
         bool   all = true;
 
-#line 6566 "bootstrap/lsp.glide"
+#line 6647 "bootstrap/lsp.glide"
         bool   has_default = false;
 
-#line 6567 "bootstrap/lsp.glide"
+#line 6648 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__MatchArm((s-> arms ))); i++) {
 
-#line 6568 "bootstrap/lsp.glide"
+#line 6649 "bootstrap/lsp.glide"
             MatchArm   a = Vector_get__MatchArm((s-> arms ), i);
 
-#line 6569 "bootstrap/lsp.glide"
+#line 6650 "bootstrap/lsp.glide"
             if (__glide_string_eq((a. variant ), "_")) {
                 (has_default  =  true);
             }
 
-#line 6570 "bootstrap/lsp.glide"
+#line 6651 "bootstrap/lsp.glide"
             if ((((a. body )  ==  NULL)  ||  (!((bool(*)(Vector__Stmt*))body_always_returns)((a. body ))))) {
                 (all  =  false);
                 break;
             }
         }
 
-#line 6572 "bootstrap/lsp.glide"
+#line 6653 "bootstrap/lsp.glide"
         return (all  &&  has_default);
     }
 
-#line 6574 "bootstrap/lsp.glide"
+#line 6655 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 6579 "bootstrap/lsp.glide"
+#line 6660 "bootstrap/lsp.glide"
 void   analysis_unused_params (Typer*   t, Vector__Stmt*   program) {
 
-#line 6580 "bootstrap/lsp.glide"
+#line 6661 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6581 "bootstrap/lsp.glide"
+#line 6662 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6582 "bootstrap/lsp.glide"
+#line 6663 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_FN)) {
             ((void(*)(Typer*, Stmt*))check_unused_params_fn)(t, (&s));
         }
 
-#line 6583 "bootstrap/lsp.glide"
+#line 6664 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6584 "bootstrap/lsp.glide"
+#line 6665 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6585 "bootstrap/lsp.glide"
+#line 6666 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6586 "bootstrap/lsp.glide"
+#line 6667 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Stmt*))check_unused_params_fn)(t, (&m));
             }
         }
@@ -68190,471 +68422,471 @@ void   analysis_unused_params (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 6592 "bootstrap/lsp.glide"
+#line 6673 "bootstrap/lsp.glide"
 void   check_unused_params_fn (Typer*   t, Stmt*   fnstmt) {
 
-#line 6593 "bootstrap/lsp.glide"
+#line 6674 "bootstrap/lsp.glide"
     if ((fnstmt  ==  NULL)) {
         return;
     }
 
-#line 6594 "bootstrap/lsp.glide"
+#line 6675 "bootstrap/lsp.glide"
     if (((fnstmt-> fn_body )  ==  NULL)) {
         return;
     }
 
-#line 6595 "bootstrap/lsp.glide"
+#line 6676 "bootstrap/lsp.glide"
     if (((fnstmt-> fn_params )  ==  NULL)) {
         return;
     }
 
-#line 6596 "bootstrap/lsp.glide"
+#line 6677 "bootstrap/lsp.glide"
     if ((fnstmt-> is_naked )) {
         return;
     }
 
-#line 6600 "bootstrap/lsp.glide"
+#line 6681 "bootstrap/lsp.glide"
     if (((fnstmt-> line )  <=  0)) {
         return;
     }
 
-#line 6601 "bootstrap/lsp.glide"
+#line 6682 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Param((fnstmt-> fn_params ))); i++) {
 
-#line 6602 "bootstrap/lsp.glide"
+#line 6683 "bootstrap/lsp.glide"
         Param   p = Vector_get__Param((fnstmt-> fn_params ), i);
 
-#line 6603 "bootstrap/lsp.glide"
+#line 6684 "bootstrap/lsp.glide"
         if (__glide_string_eq((p. name ), "self")) {
             continue;
         }
 
-#line 6604 "bootstrap/lsp.glide"
+#line 6685 "bootstrap/lsp.glide"
         if (((__glide_string_len((p. name ))  >  0)  &&  (__glide_char_to_int(__glide_string_at((p. name ), 0))  ==  95))) {
             continue;
         }
 
-#line 6605 "bootstrap/lsp.glide"
+#line 6686 "bootstrap/lsp.glide"
         bool   used = false;
 
-#line 6606 "bootstrap/lsp.glide"
+#line 6687 "bootstrap/lsp.glide"
         for (int32_t   j = 0; (j  <  Vector_len__Stmt((fnstmt-> fn_body ))); j++) {
 
-#line 6607 "bootstrap/lsp.glide"
+#line 6688 "bootstrap/lsp.glide"
             Stmt   b = Vector_get__Stmt((fnstmt-> fn_body ), j);
 
-#line 6608 "bootstrap/lsp.glide"
+#line 6689 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))stmt_uses_name)((&b), (p. name ))) {
                 (used  =  true);
                 break;
             }
         }
 
-#line 6610 "bootstrap/lsp.glide"
+#line 6691 "bootstrap/lsp.glide"
         if ((!used)) {
 
-#line 6611 "bootstrap/lsp.glide"
+#line 6692 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (fnstmt-> origin ));
 
-#line 6616 "bootstrap/lsp.glide"
+#line 6697 "bootstrap/lsp.glide"
             int32_t   pl = (p. name_line );
 
-#line 6617 "bootstrap/lsp.glide"
+#line 6698 "bootstrap/lsp.glide"
             int32_t   pc = (p. name_col );
 
-#line 6618 "bootstrap/lsp.glide"
+#line 6699 "bootstrap/lsp.glide"
             if ((pl  ==  0)) {
                 (pl  =  (fnstmt-> name_line ));
                 (pc  =  (fnstmt-> name_col ));
             }
 
-#line 6619 "bootstrap/lsp.glide"
+#line 6700 "bootstrap/lsp.glide"
             Typer_warn_unused_range(t, pl, pc, __glide_string_len((p. name )), "unused-param", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("parameter `", (p. name )), "` of `"), (fnstmt-> name )), "` is never used (prefix with `_` to silence)"));
         }
     }
 }
 
 
-#line 6628 "bootstrap/lsp.glide"
+#line 6709 "bootstrap/lsp.glide"
 int32_t   type_size_bytes (Type*   t, HashMap__Stmt*   structs) {
 
-#line 6629 "bootstrap/lsp.glide"
+#line 6710 "bootstrap/lsp.glide"
     if ((t  ==  NULL)) {
         return 0;
     }
 
-#line 6630 "bootstrap/lsp.glide"
+#line 6711 "bootstrap/lsp.glide"
     if (((((t-> kind )  ==  TY_POINTER)  ||  ((t-> kind )  ==  TY_BORROW))  ||  ((t-> kind )  ==  TY_BORROW_MUT))) {
         return 8;
     }
 
-#line 6631 "bootstrap/lsp.glide"
+#line 6712 "bootstrap/lsp.glide"
     if (((t-> kind )  ==  TY_FNPTR)) {
         return 8;
     }
 
-#line 6632 "bootstrap/lsp.glide"
+#line 6713 "bootstrap/lsp.glide"
     if (((t-> kind )  ==  TY_SLICE)) {
         return 16;
     }
 
-#line 6633 "bootstrap/lsp.glide"
+#line 6714 "bootstrap/lsp.glide"
     if (((t-> kind )  ==  TY_RESULT)) {
 
-#line 6634 "bootstrap/lsp.glide"
+#line 6715 "bootstrap/lsp.glide"
         return (((int32_t(*)(Type*, HashMap__Stmt*))type_size_bytes)((t-> inner ), structs)  +  16);
     }
 
-#line 6636 "bootstrap/lsp.glide"
+#line 6717 "bootstrap/lsp.glide"
     if (((t-> kind )  ==  TY_GENERIC)) {
         return 16;
     }
 
-#line 6637 "bootstrap/lsp.glide"
+#line 6718 "bootstrap/lsp.glide"
     if (((t-> kind )  ==  TY_NAMED)) {
 
-#line 6638 "bootstrap/lsp.glide"
+#line 6719 "bootstrap/lsp.glide"
         const char*   n = (t-> name );
 
-#line 6639 "bootstrap/lsp.glide"
+#line 6720 "bootstrap/lsp.glide"
         if ((((__glide_string_eq(n, "char")  ||  __glide_string_eq(n, "bool"))  ||  __glide_string_eq(n, "i8"))  ||  __glide_string_eq(n, "u8"))) {
             return 1;
         }
 
-#line 6640 "bootstrap/lsp.glide"
+#line 6721 "bootstrap/lsp.glide"
         if ((__glide_string_eq(n, "i16")  ||  __glide_string_eq(n, "u16"))) {
             return 2;
         }
 
-#line 6641 "bootstrap/lsp.glide"
+#line 6722 "bootstrap/lsp.glide"
         if (((((__glide_string_eq(n, "int")  ||  __glide_string_eq(n, "uint"))  ||  __glide_string_eq(n, "i32"))  ||  __glide_string_eq(n, "u32"))  ||  __glide_string_eq(n, "f32"))) {
             return 4;
         }
 
-#line 6642 "bootstrap/lsp.glide"
+#line 6723 "bootstrap/lsp.glide"
         if ((((((((__glide_string_eq(n, "long")  ||  __glide_string_eq(n, "ulong"))  ||  __glide_string_eq(n, "i64"))  ||  __glide_string_eq(n, "u64"))  ||  __glide_string_eq(n, "usize"))  ||  __glide_string_eq(n, "isize"))  ||  __glide_string_eq(n, "float"))  ||  __glide_string_eq(n, "f64"))) {
 
-#line 6643 "bootstrap/lsp.glide"
+#line 6724 "bootstrap/lsp.glide"
             return 8;
         }
 
-#line 6644 "bootstrap/lsp.glide"
+#line 6725 "bootstrap/lsp.glide"
         if ((__glide_string_eq(n, "i128")  ||  __glide_string_eq(n, "u128"))) {
             return 16;
         }
 
-#line 6645 "bootstrap/lsp.glide"
+#line 6726 "bootstrap/lsp.glide"
         if ((__glide_string_eq(n, "i256")  ||  __glide_string_eq(n, "u256"))) {
             return 32;
         }
 
-#line 6646 "bootstrap/lsp.glide"
+#line 6727 "bootstrap/lsp.glide"
         if (__glide_string_eq(n, "string")) {
             return 8;
         }
 
-#line 6647 "bootstrap/lsp.glide"
+#line 6728 "bootstrap/lsp.glide"
         if (__glide_string_eq(n, "void")) {
             return 0;
         }
 
-#line 6648 "bootstrap/lsp.glide"
+#line 6729 "bootstrap/lsp.glide"
         if (HashMap_contains__Stmt(structs, n)) {
 
-#line 6649 "bootstrap/lsp.glide"
+#line 6730 "bootstrap/lsp.glide"
             Stmt   sd = HashMap_get__Stmt(structs, n);
 
-#line 6650 "bootstrap/lsp.glide"
+#line 6731 "bootstrap/lsp.glide"
             int32_t   sz = 0;
 
-#line 6651 "bootstrap/lsp.glide"
+#line 6732 "bootstrap/lsp.glide"
             if (((sd. struct_fields )  !=  NULL)) {
 
-#line 6652 "bootstrap/lsp.glide"
+#line 6733 "bootstrap/lsp.glide"
                 for (int32_t   i = 0; (i  <  Vector_len__Field((sd. struct_fields ))); i++) {
 
-#line 6653 "bootstrap/lsp.glide"
+#line 6734 "bootstrap/lsp.glide"
                     Field   f = Vector_get__Field((sd. struct_fields ), i);
 
-#line 6654 "bootstrap/lsp.glide"
+#line 6735 "bootstrap/lsp.glide"
                     (sz  =  (sz  +  ((int32_t(*)(Type*, HashMap__Stmt*))type_size_bytes)((f. ty ), structs)));
                 }
             }
 
-#line 6657 "bootstrap/lsp.glide"
+#line 6738 "bootstrap/lsp.glide"
             return sz;
         }
     }
 
-#line 6660 "bootstrap/lsp.glide"
+#line 6741 "bootstrap/lsp.glide"
     return 0;
 }
 
 
-#line 6667 "bootstrap/lsp.glide"
+#line 6748 "bootstrap/lsp.glide"
 void   analysis_large_return (Typer*   t, Vector__Stmt*   program) {
 
-#line 6668 "bootstrap/lsp.glide"
+#line 6749 "bootstrap/lsp.glide"
     HashMap__Stmt*   structs = ((HashMap__Stmt*(*)(void))HashMap_new__Stmt)();
 
-#line 6669 "bootstrap/lsp.glide"
+#line 6750 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6670 "bootstrap/lsp.glide"
+#line 6751 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6671 "bootstrap/lsp.glide"
+#line 6752 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_STRUCT)) {
             HashMap_insert__Stmt(structs, (s. name ), s);
         }
     }
 
-#line 6673 "bootstrap/lsp.glide"
+#line 6754 "bootstrap/lsp.glide"
     int32_t   threshold = 64;
 
-#line 6674 "bootstrap/lsp.glide"
+#line 6755 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6675 "bootstrap/lsp.glide"
+#line 6756 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6676 "bootstrap/lsp.glide"
+#line 6757 "bootstrap/lsp.glide"
         if (((s. kind )  !=  ST_FN)) {
             continue;
         }
 
-#line 6677 "bootstrap/lsp.glide"
+#line 6758 "bootstrap/lsp.glide"
         if (((s. fn_body )  ==  NULL)) {
             continue;
         }
 
-#line 6678 "bootstrap/lsp.glide"
+#line 6759 "bootstrap/lsp.glide"
         Type*   ret = (s. fn_ret_ty );
 
-#line 6679 "bootstrap/lsp.glide"
+#line 6760 "bootstrap/lsp.glide"
         if ((ret  ==  NULL)) {
             continue;
         }
 
-#line 6681 "bootstrap/lsp.glide"
+#line 6762 "bootstrap/lsp.glide"
         if ((((((ret-> kind )  ==  TY_POINTER)  ||  ((ret-> kind )  ==  TY_BORROW))  ||  ((ret-> kind )  ==  TY_BORROW_MUT))  ||  ((ret-> kind )  ==  TY_FNPTR))) {
 
-#line 6682 "bootstrap/lsp.glide"
+#line 6763 "bootstrap/lsp.glide"
             continue;
         }
 
-#line 6683 "bootstrap/lsp.glide"
+#line 6764 "bootstrap/lsp.glide"
         int32_t   sz = ((int32_t(*)(Type*, HashMap__Stmt*))type_size_bytes)(ret, structs);
 
-#line 6684 "bootstrap/lsp.glide"
+#line 6765 "bootstrap/lsp.glide"
         if ((sz  >=  threshold)) {
 
-#line 6685 "bootstrap/lsp.glide"
+#line 6766 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 6686 "bootstrap/lsp.glide"
+#line 6767 "bootstrap/lsp.glide"
             Typer_push_diag(t, (s. line ), (s. column ), 3, "large-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("fn `", (s. name )), "` returns "), ((const char*(*)(int64_t))int_to_str)(sz)), " bytes by value ("), ((const char*(*)(Type*))type_to_string)(ret)), "); for hot paths consider an out-param `out: *"), ((const char*(*)(Type*))type_to_string)(ret)), "` or returning `*"), ((const char*(*)(Type*))type_to_string)(ret)), "`"));
         }
     }
 
-#line 6695 "bootstrap/lsp.glide"
+#line 6776 "bootstrap/lsp.glide"
     HashMap_free__Stmt(structs);
 }
 
 
-#line 6708 "bootstrap/lsp.glide"
+#line 6789 "bootstrap/lsp.glide"
 void   analysis_deprecated_calls (Typer*   t, Vector__Stmt*   program) {
 
-#line 6709 "bootstrap/lsp.glide"
+#line 6790 "bootstrap/lsp.glide"
     ((void(*)(Typer*, Vector__Stmt*, const char*, const char*, const char*))_run_attr_call_lint)(t, program, "deprecated", "deprecated-fn", "deprecated");
 }
 
 
-#line 6712 "bootstrap/lsp.glide"
+#line 6793 "bootstrap/lsp.glide"
 void   analysis_unstable_calls (Typer*   t, Vector__Stmt*   program) {
 
-#line 6713 "bootstrap/lsp.glide"
+#line 6794 "bootstrap/lsp.glide"
     ((void(*)(Typer*, Vector__Stmt*, const char*, const char*, const char*))_run_attr_call_lint)(t, program, "unstable", "unstable-fn", "unstable");
 }
 
 
-#line 6731 "bootstrap/lsp.glide"
+#line 6812 "bootstrap/lsp.glide"
 void   analysis_custom_lints (Typer*   t, Vector__Stmt*   program) {
 
-#line 6737 "bootstrap/lsp.glide"
+#line 6818 "bootstrap/lsp.glide"
     Vector__string*   cats = ((Vector__string*(*)(Vector__Stmt*))_collect_lint_categories)(program);
 
-#line 6738 "bootstrap/lsp.glide"
+#line 6819 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(cats)); i++) {
 
-#line 6739 "bootstrap/lsp.glide"
+#line 6820 "bootstrap/lsp.glide"
         const char*   cat = Vector_get__string(cats, i);
 
-#line 6740 "bootstrap/lsp.glide"
+#line 6821 "bootstrap/lsp.glide"
         HashMap__string*   dep = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 6741 "bootstrap/lsp.glide"
+#line 6822 "bootstrap/lsp.glide"
         ((void(*)(Vector__Stmt*, const char*, HashMap__string*))_build_lint_index_for_cat)(program, cat, dep);
 
-#line 6742 "bootstrap/lsp.glide"
+#line 6823 "bootstrap/lsp.glide"
         const char*   code = __glide_string_concat("lint:", cat);
 
-#line 6743 "bootstrap/lsp.glide"
+#line 6824 "bootstrap/lsp.glide"
         const char*   what = __glide_string_concat(__glide_string_concat("flagged by `", code), "`");
 
-#line 6744 "bootstrap/lsp.glide"
+#line 6825 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*, const char*))_run_call_lint_with_index)(t, program, dep, code, what);
 
-#line 6745 "bootstrap/lsp.glide"
+#line 6826 "bootstrap/lsp.glide"
         HashMap_free__string(dep);
     }
 }
 
 
-#line 6751 "bootstrap/lsp.glide"
+#line 6832 "bootstrap/lsp.glide"
 Vector__string*   _collect_lint_categories (Vector__Stmt*   program) {
 
-#line 6752 "bootstrap/lsp.glide"
+#line 6833 "bootstrap/lsp.glide"
     HashMap__bool*   seen = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 6753 "bootstrap/lsp.glide"
+#line 6834 "bootstrap/lsp.glide"
     Vector__string*   out = ((Vector__string*(*)(void))Vector_new__string)();
 
-#line 6754 "bootstrap/lsp.glide"
+#line 6835 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6755 "bootstrap/lsp.glide"
+#line 6836 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6756 "bootstrap/lsp.glide"
+#line 6837 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_FN)) {
             ((void(*)(Stmt*, HashMap__bool*, Vector__string*))_gather_lint_cats)((&s), seen, out);
         }
 
-#line 6757 "bootstrap/lsp.glide"
+#line 6838 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6758 "bootstrap/lsp.glide"
+#line 6839 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6759 "bootstrap/lsp.glide"
+#line 6840 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6760 "bootstrap/lsp.glide"
+#line 6841 "bootstrap/lsp.glide"
                 ((void(*)(Stmt*, HashMap__bool*, Vector__string*))_gather_lint_cats)((&m), seen, out);
             }
         }
     }
 
-#line 6764 "bootstrap/lsp.glide"
+#line 6845 "bootstrap/lsp.glide"
     HashMap_free__bool(seen);
 
-#line 6765 "bootstrap/lsp.glide"
+#line 6846 "bootstrap/lsp.glide"
     return out;
 }
 
 
-#line 6768 "bootstrap/lsp.glide"
+#line 6849 "bootstrap/lsp.glide"
 void   _gather_lint_cats (Stmt*   s, HashMap__bool*   seen, Vector__string*   out) {
 
-#line 6769 "bootstrap/lsp.glide"
+#line 6850 "bootstrap/lsp.glide"
     if (((s  ==  NULL)  ||  ((s-> attrs )  ==  NULL))) {
         return;
     }
 
-#line 6770 "bootstrap/lsp.glide"
+#line 6851 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 6771 "bootstrap/lsp.glide"
+#line 6852 "bootstrap/lsp.glide"
         Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 6772 "bootstrap/lsp.glide"
+#line 6853 "bootstrap/lsp.glide"
         if ((!__glide_string_eq((a. name ), "lint"))) {
             continue;
         }
 
-#line 6773 "bootstrap/lsp.glide"
+#line 6854 "bootstrap/lsp.glide"
         if ((((a. args )  ==  NULL)  ||  (Vector_len__Expr((a. args ))  ==  0))) {
             continue;
         }
 
-#line 6774 "bootstrap/lsp.glide"
+#line 6855 "bootstrap/lsp.glide"
         Expr   cat_expr = Vector_get__Expr((a. args ), 0);
 
-#line 6775 "bootstrap/lsp.glide"
+#line 6856 "bootstrap/lsp.glide"
         if (((cat_expr. kind )  !=  EX_STRING)) {
             continue;
         }
 
-#line 6776 "bootstrap/lsp.glide"
+#line 6857 "bootstrap/lsp.glide"
         if (HashMap_contains__bool(seen, (cat_expr. str_val ))) {
             continue;
         }
 
-#line 6777 "bootstrap/lsp.glide"
+#line 6858 "bootstrap/lsp.glide"
         HashMap_insert__bool(seen, (cat_expr. str_val ), true);
 
-#line 6778 "bootstrap/lsp.glide"
+#line 6859 "bootstrap/lsp.glide"
         Vector_push__string(out, (cat_expr. str_val ));
     }
 }
 
 
-#line 6785 "bootstrap/lsp.glide"
+#line 6866 "bootstrap/lsp.glide"
 void   _build_lint_index_for_cat (Vector__Stmt*   program, const char*   cat, HashMap__string*   dep) {
 
-#line 6786 "bootstrap/lsp.glide"
+#line 6867 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6787 "bootstrap/lsp.glide"
+#line 6868 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6788 "bootstrap/lsp.glide"
+#line 6869 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_FN)) {
 
-#line 6789 "bootstrap/lsp.glide"
+#line 6870 "bootstrap/lsp.glide"
             __glide_option_string_t   r = ((__glide_option_string_t(*)(Stmt*, const char*))_lint_reason_for_cat)((&s), cat);
 
-#line 6790 "bootstrap/lsp.glide"
+#line 6871 "bootstrap/lsp.glide"
             if ((r. has )) {
                 HashMap_insert__string(dep, (s. name ), (r. val ));
             }
         }
 
-#line 6792 "bootstrap/lsp.glide"
+#line 6873 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6793 "bootstrap/lsp.glide"
+#line 6874 "bootstrap/lsp.glide"
             const char*   owner = "";
 
-#line 6794 "bootstrap/lsp.glide"
+#line 6875 "bootstrap/lsp.glide"
             if ((((s. impl_target )  !=  NULL)  &&  (((s. impl_target )-> name )  !=  NULL))) {
                 (owner  =  ((s. impl_target )-> name ));
             }
 
-#line 6795 "bootstrap/lsp.glide"
+#line 6876 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6796 "bootstrap/lsp.glide"
+#line 6877 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6797 "bootstrap/lsp.glide"
+#line 6878 "bootstrap/lsp.glide"
                 __glide_option_string_t   r = ((__glide_option_string_t(*)(Stmt*, const char*))_lint_reason_for_cat)((&m), cat);
 
-#line 6798 "bootstrap/lsp.glide"
+#line 6879 "bootstrap/lsp.glide"
                 if ((!(r. has ))) {
                     continue;
                 }
 
-#line 6799 "bootstrap/lsp.glide"
+#line 6880 "bootstrap/lsp.glide"
                 const char*   rv = (r. val );
 
-#line 6800 "bootstrap/lsp.glide"
+#line 6881 "bootstrap/lsp.glide"
                 if ((!__glide_string_eq(owner, ""))) {
                     HashMap_insert__string(dep, __glide_string_concat(__glide_string_concat(owner, "::"), (m. name )), rv);
                 }
 
-#line 6801 "bootstrap/lsp.glide"
+#line 6882 "bootstrap/lsp.glide"
                 if ((!HashMap_contains__string(dep, (m. name )))) {
                     HashMap_insert__string(dep, (m. name ), rv);
                 }
@@ -68664,354 +68896,354 @@ void   _build_lint_index_for_cat (Vector__Stmt*   program, const char*   cat, Ha
 }
 
 
-#line 6807 "bootstrap/lsp.glide"
+#line 6888 "bootstrap/lsp.glide"
 __glide_option_string_t   _lint_reason_for_cat (Stmt*   s, const char*   cat) {
 
-#line 6808 "bootstrap/lsp.glide"
+#line 6889 "bootstrap/lsp.glide"
     if (((s  ==  NULL)  ||  ((s-> attrs )  ==  NULL))) {
         return __glide_none_string();
     }
 
-#line 6809 "bootstrap/lsp.glide"
+#line 6890 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 6810 "bootstrap/lsp.glide"
+#line 6891 "bootstrap/lsp.glide"
         Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 6811 "bootstrap/lsp.glide"
+#line 6892 "bootstrap/lsp.glide"
         if ((!__glide_string_eq((a. name ), "lint"))) {
             continue;
         }
 
-#line 6812 "bootstrap/lsp.glide"
+#line 6893 "bootstrap/lsp.glide"
         if ((((a. args )  ==  NULL)  ||  (Vector_len__Expr((a. args ))  ==  0))) {
             continue;
         }
 
-#line 6813 "bootstrap/lsp.glide"
+#line 6894 "bootstrap/lsp.glide"
         Expr   cat_expr = Vector_get__Expr((a. args ), 0);
 
-#line 6814 "bootstrap/lsp.glide"
+#line 6895 "bootstrap/lsp.glide"
         if (((cat_expr. kind )  !=  EX_STRING)) {
             continue;
         }
 
-#line 6815 "bootstrap/lsp.glide"
+#line 6896 "bootstrap/lsp.glide"
         if ((!__glide_string_eq((cat_expr. str_val ), cat))) {
             continue;
         }
 
-#line 6816 "bootstrap/lsp.glide"
+#line 6897 "bootstrap/lsp.glide"
         if ((Vector_len__Expr((a. args ))  >  1)) {
 
-#line 6817 "bootstrap/lsp.glide"
+#line 6898 "bootstrap/lsp.glide"
             Expr   r_expr = Vector_get__Expr((a. args ), 1);
 
-#line 6818 "bootstrap/lsp.glide"
+#line 6899 "bootstrap/lsp.glide"
             if (((r_expr. kind )  ==  EX_STRING)) {
                 return __glide_some_string((r_expr. str_val ));
             }
         }
 
-#line 6820 "bootstrap/lsp.glide"
+#line 6901 "bootstrap/lsp.glide"
         return __glide_some_string("");
     }
 
-#line 6822 "bootstrap/lsp.glide"
+#line 6903 "bootstrap/lsp.glide"
     return __glide_none_string();
 }
 
 
-#line 6832 "bootstrap/lsp.glide"
+#line 6913 "bootstrap/lsp.glide"
 void   analysis_expect_fulfillment (Typer*   t, Vector__Stmt*   program) {
 
-#line 6833 "bootstrap/lsp.glide"
+#line 6914 "bootstrap/lsp.glide"
     Vector__ExpectPending*   pending = ((Vector__ExpectPending*(*)(void))Vector_new__ExpectPending)();
 
-#line 6834 "bootstrap/lsp.glide"
+#line 6915 "bootstrap/lsp.glide"
     ((void(*)(Vector__Stmt*, Vector__ExpectPending*))_collect_expectations)(program, pending);
 
-#line 6835 "bootstrap/lsp.glide"
+#line 6916 "bootstrap/lsp.glide"
     if ((Vector_len__ExpectPending(pending)  ==  0)) {
         Vector_free__ExpectPending(pending);
         return;
     }
 
-#line 6842 "bootstrap/lsp.glide"
+#line 6923 "bootstrap/lsp.glide"
     HashMap__string*   index = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 6843 "bootstrap/lsp.glide"
+#line 6924 "bootstrap/lsp.glide"
     Vector__i32*   ranged = ((Vector__i32*(*)(void))Vector_new__i32)();
 
-#line 6844 "bootstrap/lsp.glide"
+#line 6925 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__ExpectPending(pending)); i++) {
 
-#line 6845 "bootstrap/lsp.glide"
+#line 6926 "bootstrap/lsp.glide"
         ExpectPending   pe = Vector_get__ExpectPending(pending, i);
 
-#line 6846 "bootstrap/lsp.glide"
+#line 6927 "bootstrap/lsp.glide"
         if (((pe. pe_line )  ==  (pe. pe_end_line ))) {
 
-#line 6847 "bootstrap/lsp.glide"
+#line 6928 "bootstrap/lsp.glide"
             const char*   key = ((const char*(*)(const char*, int32_t, const char*))_expect_key)((pe. pe_origin ), (pe. pe_line ), (pe. pe_code ));
 
-#line 6848 "bootstrap/lsp.glide"
+#line 6929 "bootstrap/lsp.glide"
             const char*   cur = (HashMap_contains__string(index, key) ? HashMap_get__string(index, key) : "");
 
-#line 6849 "bootstrap/lsp.glide"
+#line 6930 "bootstrap/lsp.glide"
             HashMap_insert__string(index, key, __glide_string_concat(__glide_string_concat(cur, " "), ((const char*(*)(int64_t))int_to_str)(i)));
         } else {
 
-#line 6851 "bootstrap/lsp.glide"
+#line 6932 "bootstrap/lsp.glide"
             Vector_push__i32(ranged, i);
         }
     }
 
-#line 6857 "bootstrap/lsp.glide"
+#line 6938 "bootstrap/lsp.glide"
     HashMap__bool*   consumed = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 6858 "bootstrap/lsp.glide"
+#line 6939 "bootstrap/lsp.glide"
     for (int32_t   j = 0; (j  <  Vector_len__DiagEntry((t-> diagnostics ))); j++) {
 
-#line 6859 "bootstrap/lsp.glide"
+#line 6940 "bootstrap/lsp.glide"
         DiagEntry   d = Vector_get__DiagEntry((t-> diagnostics ), j);
 
-#line 6860 "bootstrap/lsp.glide"
+#line 6941 "bootstrap/lsp.glide"
         if (((d. severity )  !=  2)) {
             continue;
         }
 
-#line 6861 "bootstrap/lsp.glide"
+#line 6942 "bootstrap/lsp.glide"
         bool   matched = false;
 
-#line 6863 "bootstrap/lsp.glide"
+#line 6944 "bootstrap/lsp.glide"
         const char*   key = ((const char*(*)(const char*, int32_t, const char*))_expect_key)((d. origin ), (d. line ), (d. code ));
 
-#line 6864 "bootstrap/lsp.glide"
+#line 6945 "bootstrap/lsp.glide"
         if (HashMap_contains__string(index, key)) {
 
-#line 6865 "bootstrap/lsp.glide"
+#line 6946 "bootstrap/lsp.glide"
             const char*   bucket = HashMap_get__string(index, key);
 
-#line 6866 "bootstrap/lsp.glide"
+#line 6947 "bootstrap/lsp.glide"
             Vector__string*   toks = string_split(string_trim(bucket), " ");
 
-#line 6867 "bootstrap/lsp.glide"
+#line 6948 "bootstrap/lsp.glide"
             for (int32_t   k = 0; (k  <  Vector_len__string(toks)); k++) {
 
-#line 6868 "bootstrap/lsp.glide"
+#line 6949 "bootstrap/lsp.glide"
                 const char*   t_tok = Vector_get__string(toks, k);
 
-#line 6869 "bootstrap/lsp.glide"
+#line 6950 "bootstrap/lsp.glide"
                 if (__glide_string_eq(t_tok, "")) {
                     continue;
                 }
 
-#line 6870 "bootstrap/lsp.glide"
+#line 6951 "bootstrap/lsp.glide"
                 int32_t   idx = ((int32_t(*)(const char*))_expect_str_to_int)(t_tok);
 
-#line 6871 "bootstrap/lsp.glide"
+#line 6952 "bootstrap/lsp.glide"
                 ExpectPending   pe = Vector_get__ExpectPending(pending, idx);
 
-#line 6872 "bootstrap/lsp.glide"
+#line 6953 "bootstrap/lsp.glide"
                 if ((pe. pe_done )) {
                     continue;
                 }
 
-#line 6873 "bootstrap/lsp.glide"
+#line 6954 "bootstrap/lsp.glide"
                 ExpectPending   updated = pe;
 
-#line 6874 "bootstrap/lsp.glide"
+#line 6955 "bootstrap/lsp.glide"
                 ((updated. pe_done )  =  true);
 
-#line 6875 "bootstrap/lsp.glide"
+#line 6956 "bootstrap/lsp.glide"
                 Vector_set__ExpectPending(pending, idx, updated);
 
-#line 6876 "bootstrap/lsp.glide"
+#line 6957 "bootstrap/lsp.glide"
                 (matched  =  true);
 
-#line 6877 "bootstrap/lsp.glide"
+#line 6958 "bootstrap/lsp.glide"
                 break;
             }
         }
 
-#line 6880 "bootstrap/lsp.glide"
+#line 6961 "bootstrap/lsp.glide"
         if ((!matched)) {
 
-#line 6881 "bootstrap/lsp.glide"
+#line 6962 "bootstrap/lsp.glide"
             for (int32_t   k = 0; (k  <  Vector_len__i32(ranged)); k++) {
 
-#line 6882 "bootstrap/lsp.glide"
+#line 6963 "bootstrap/lsp.glide"
                 int32_t   idx = Vector_get__i32(ranged, k);
 
-#line 6883 "bootstrap/lsp.glide"
+#line 6964 "bootstrap/lsp.glide"
                 ExpectPending   pe = Vector_get__ExpectPending(pending, idx);
 
-#line 6884 "bootstrap/lsp.glide"
+#line 6965 "bootstrap/lsp.glide"
                 if ((pe. pe_done )) {
                     continue;
                 }
 
-#line 6885 "bootstrap/lsp.glide"
+#line 6966 "bootstrap/lsp.glide"
                 if ((!__glide_string_eq((pe. pe_origin ), (d. origin )))) {
                     continue;
                 }
 
-#line 6886 "bootstrap/lsp.glide"
+#line 6967 "bootstrap/lsp.glide"
                 if ((!__glide_string_eq((pe. pe_code ), (d. code )))) {
                     continue;
                 }
 
-#line 6887 "bootstrap/lsp.glide"
+#line 6968 "bootstrap/lsp.glide"
                 if ((((d. line )  <  (pe. pe_line ))  ||  ((d. line )  >  (pe. pe_end_line )))) {
                     continue;
                 }
 
-#line 6888 "bootstrap/lsp.glide"
+#line 6969 "bootstrap/lsp.glide"
                 ExpectPending   updated = pe;
 
-#line 6889 "bootstrap/lsp.glide"
+#line 6970 "bootstrap/lsp.glide"
                 ((updated. pe_done )  =  true);
 
-#line 6890 "bootstrap/lsp.glide"
+#line 6971 "bootstrap/lsp.glide"
                 Vector_set__ExpectPending(pending, idx, updated);
 
-#line 6891 "bootstrap/lsp.glide"
+#line 6972 "bootstrap/lsp.glide"
                 (matched  =  true);
 
-#line 6892 "bootstrap/lsp.glide"
+#line 6973 "bootstrap/lsp.glide"
                 break;
             }
         }
 
-#line 6895 "bootstrap/lsp.glide"
+#line 6976 "bootstrap/lsp.glide"
         if (matched) {
             HashMap_insert__bool(consumed, ((const char*(*)(int64_t))int_to_str)(j), true);
         }
     }
 
-#line 6899 "bootstrap/lsp.glide"
+#line 6980 "bootstrap/lsp.glide"
     if ((HashMap_len__bool(consumed)  >  0)) {
 
-#line 6900 "bootstrap/lsp.glide"
+#line 6981 "bootstrap/lsp.glide"
         Vector__DiagEntry*   kept = ((Vector__DiagEntry*(*)(void))Vector_new__DiagEntry)();
 
-#line 6901 "bootstrap/lsp.glide"
+#line 6982 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__DiagEntry((t-> diagnostics ))); i++) {
 
-#line 6902 "bootstrap/lsp.glide"
+#line 6983 "bootstrap/lsp.glide"
             const char*   key = ((const char*(*)(int64_t))int_to_str)(i);
 
-#line 6903 "bootstrap/lsp.glide"
+#line 6984 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(consumed, key)) {
                 continue;
             }
 
-#line 6904 "bootstrap/lsp.glide"
+#line 6985 "bootstrap/lsp.glide"
             Vector_push__DiagEntry(kept, Vector_get__DiagEntry((t-> diagnostics ), i));
         }
 
-#line 6906 "bootstrap/lsp.glide"
+#line 6987 "bootstrap/lsp.glide"
         ((t-> diagnostics )  =  kept);
     }
 
-#line 6911 "bootstrap/lsp.glide"
+#line 6992 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__ExpectPending(pending)); i++) {
 
-#line 6912 "bootstrap/lsp.glide"
+#line 6993 "bootstrap/lsp.glide"
         ExpectPending   pe = Vector_get__ExpectPending(pending, i);
 
-#line 6913 "bootstrap/lsp.glide"
+#line 6994 "bootstrap/lsp.glide"
         if ((pe. pe_done )) {
             continue;
         }
 
-#line 6914 "bootstrap/lsp.glide"
+#line 6995 "bootstrap/lsp.glide"
         ((t-> current_origin )  =  (pe. pe_origin ));
 
-#line 6915 "bootstrap/lsp.glide"
+#line 6996 "bootstrap/lsp.glide"
         Typer_err_code(t, (pe. pe_line ), (pe. pe_col ), "unfulfilled-expectation", __glide_string_concat(__glide_string_concat("@expect(\"", (pe. pe_code )), "\") on this stmt did not match any emitted diagnostic"));
     }
 
-#line 6919 "bootstrap/lsp.glide"
+#line 7000 "bootstrap/lsp.glide"
     HashMap_free__bool(consumed);
 
-#line 6920 "bootstrap/lsp.glide"
+#line 7001 "bootstrap/lsp.glide"
     Vector_free__ExpectPending(pending);
 }
 
 
-#line 6926 "bootstrap/lsp.glide"
+#line 7007 "bootstrap/lsp.glide"
 const char*   _expect_key (const char*   origin, int32_t   line, const char*   code) {
 
-#line 6927 "bootstrap/lsp.glide"
+#line 7008 "bootstrap/lsp.glide"
     return __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(origin, "|"), ((const char*(*)(int64_t))int_to_str)(line)), "|"), code);
 }
 
 
-#line 6933 "bootstrap/lsp.glide"
+#line 7014 "bootstrap/lsp.glide"
 int32_t   _expect_str_to_int (const char*   s) {
 
-#line 6934 "bootstrap/lsp.glide"
+#line 7015 "bootstrap/lsp.glide"
     int32_t   acc = 0;
 
-#line 6935 "bootstrap/lsp.glide"
+#line 7016 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  __glide_string_len(s)); i++) {
 
-#line 6936 "bootstrap/lsp.glide"
+#line 7017 "bootstrap/lsp.glide"
         int32_t   c = __glide_char_to_int(__glide_string_at(s, i));
 
-#line 6937 "bootstrap/lsp.glide"
+#line 7018 "bootstrap/lsp.glide"
         if (((c  <  48)  ||  (c  >  57))) {
             return acc;
         }
 
-#line 6938 "bootstrap/lsp.glide"
+#line 7019 "bootstrap/lsp.glide"
         (acc  =  ((acc  *  10)  +  (c  -  48)));
     }
 
-#line 6940 "bootstrap/lsp.glide"
+#line 7021 "bootstrap/lsp.glide"
     return acc;
 }
 
 
-#line 6952 "bootstrap/lsp.glide"
+#line 7033 "bootstrap/lsp.glide"
 void   _collect_expectations (Vector__Stmt*   program, Vector__ExpectPending*   out) {
 
-#line 6953 "bootstrap/lsp.glide"
+#line 7034 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 6954 "bootstrap/lsp.glide"
+#line 7035 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 6959 "bootstrap/lsp.glide"
+#line 7040 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 6960 "bootstrap/lsp.glide"
+#line 7041 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, Vector__Stmt*, Vector__ExpectPending*))_gather_expects_in_fn)((&s), (s. fn_body ), out);
 
-#line 6961 "bootstrap/lsp.glide"
+#line 7042 "bootstrap/lsp.glide"
             ((void(*)(Vector__Stmt*, const char*, Vector__ExpectPending*))_gather_expects_in_body)((s. fn_body ), (s. origin ), out);
         }
 
-#line 6963 "bootstrap/lsp.glide"
+#line 7044 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 6964 "bootstrap/lsp.glide"
+#line 7045 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 6965 "bootstrap/lsp.glide"
+#line 7046 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 6966 "bootstrap/lsp.glide"
+#line 7047 "bootstrap/lsp.glide"
                 if (((m. fn_body )  ==  NULL)) {
                     continue;
                 }
 
-#line 6967 "bootstrap/lsp.glide"
+#line 7048 "bootstrap/lsp.glide"
                 ((void(*)(Stmt*, Vector__Stmt*, Vector__ExpectPending*))_gather_expects_in_fn)((&m), (m. fn_body ), out);
 
-#line 6968 "bootstrap/lsp.glide"
+#line 7049 "bootstrap/lsp.glide"
                 ((void(*)(Vector__Stmt*, const char*, Vector__ExpectPending*))_gather_expects_in_body)((m. fn_body ), (m. origin ), out);
             }
         }
@@ -69019,115 +69251,115 @@ void   _collect_expectations (Vector__Stmt*   program, Vector__ExpectPending*   
 }
 
 
-#line 6974 "bootstrap/lsp.glide"
+#line 7055 "bootstrap/lsp.glide"
 void   _gather_expects_in_fn (Stmt*   s, Vector__Stmt*   body, Vector__ExpectPending*   out) {
 
-#line 6975 "bootstrap/lsp.glide"
+#line 7056 "bootstrap/lsp.glide"
     if (((s  ==  NULL)  ||  ((s-> attrs )  ==  NULL))) {
         return;
     }
 
-#line 6976 "bootstrap/lsp.glide"
+#line 7057 "bootstrap/lsp.glide"
     int32_t   end_line = ((int32_t(*)(Vector__Stmt*, int32_t))_max_line_in_body)(body, (s-> line ));
 
-#line 6977 "bootstrap/lsp.glide"
+#line 7058 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 6978 "bootstrap/lsp.glide"
+#line 7059 "bootstrap/lsp.glide"
         Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 6979 "bootstrap/lsp.glide"
+#line 7060 "bootstrap/lsp.glide"
         if ((!__glide_string_eq((a. name ), "expect"))) {
             continue;
         }
 
-#line 6980 "bootstrap/lsp.glide"
+#line 7061 "bootstrap/lsp.glide"
         if ((((a. args )  ==  NULL)  ||  (Vector_len__Expr((a. args ))  ==  0))) {
             continue;
         }
 
-#line 6981 "bootstrap/lsp.glide"
+#line 7062 "bootstrap/lsp.glide"
         Expr   v = Vector_get__Expr((a. args ), 0);
 
-#line 6982 "bootstrap/lsp.glide"
+#line 7063 "bootstrap/lsp.glide"
         if (((v. kind )  !=  EX_STRING)) {
             continue;
         }
 
-#line 6983 "bootstrap/lsp.glide"
+#line 7064 "bootstrap/lsp.glide"
         ExpectPending   pe = (( ExpectPending ){. pe_code  = (v. str_val ), . pe_line  = (s-> line ), . pe_end_line  = end_line, . pe_col  = (s-> column ), . pe_origin  = (s-> origin ), . pe_done  = false});
 
-#line 6991 "bootstrap/lsp.glide"
+#line 7072 "bootstrap/lsp.glide"
         Vector_push__ExpectPending(out, pe);
     }
 }
 
 
-#line 6999 "bootstrap/lsp.glide"
+#line 7080 "bootstrap/lsp.glide"
 int32_t   _max_line_in_body (Vector__Stmt*   body, int32_t   fallback) {
 
-#line 7000 "bootstrap/lsp.glide"
+#line 7081 "bootstrap/lsp.glide"
     int32_t   best = fallback;
 
-#line 7001 "bootstrap/lsp.glide"
+#line 7082 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7002 "bootstrap/lsp.glide"
+#line 7083 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7003 "bootstrap/lsp.glide"
+#line 7084 "bootstrap/lsp.glide"
         if (((s. line )  >  best)) {
             (best  =  (s. line ));
         }
 
-#line 7004 "bootstrap/lsp.glide"
+#line 7085 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
 
-#line 7005 "bootstrap/lsp.glide"
+#line 7086 "bootstrap/lsp.glide"
             int32_t   sub = ((int32_t(*)(Vector__Stmt*, int32_t))_max_line_in_body)((s. then_body ), best);
 
-#line 7006 "bootstrap/lsp.glide"
+#line 7087 "bootstrap/lsp.glide"
             if ((sub  >  best)) {
                 (best  =  sub);
             }
         }
 
-#line 7008 "bootstrap/lsp.glide"
+#line 7089 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
 
-#line 7009 "bootstrap/lsp.glide"
+#line 7090 "bootstrap/lsp.glide"
             int32_t   sub = ((int32_t(*)(Vector__Stmt*, int32_t))_max_line_in_body)((s. else_body ), best);
 
-#line 7010 "bootstrap/lsp.glide"
+#line 7091 "bootstrap/lsp.glide"
             if ((sub  >  best)) {
                 (best  =  sub);
             }
         }
     }
 
-#line 7013 "bootstrap/lsp.glide"
+#line 7094 "bootstrap/lsp.glide"
     return best;
 }
 
 
-#line 7016 "bootstrap/lsp.glide"
+#line 7097 "bootstrap/lsp.glide"
 void   _gather_expects_in_body (Vector__Stmt*   body, const char*   origin, Vector__ExpectPending*   out) {
 
-#line 7017 "bootstrap/lsp.glide"
+#line 7098 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7018 "bootstrap/lsp.glide"
+#line 7099 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7019 "bootstrap/lsp.glide"
+#line 7100 "bootstrap/lsp.glide"
         ((void(*)(Stmt*, const char*, Vector__ExpectPending*))_gather_expects_in_stmt)((&s), origin, out);
 
-#line 7020 "bootstrap/lsp.glide"
+#line 7101 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, const char*, Vector__ExpectPending*))_gather_expects_in_body)((s. then_body ), origin, out);
         }
 
-#line 7021 "bootstrap/lsp.glide"
+#line 7102 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, const char*, Vector__ExpectPending*))_gather_expects_in_body)((s. else_body ), origin, out);
         }
@@ -69135,125 +69367,125 @@ void   _gather_expects_in_body (Vector__Stmt*   body, const char*   origin, Vect
 }
 
 
-#line 7025 "bootstrap/lsp.glide"
+#line 7106 "bootstrap/lsp.glide"
 void   _gather_expects_in_stmt (Stmt*   s, const char*   origin, Vector__ExpectPending*   out) {
 
-#line 7026 "bootstrap/lsp.glide"
+#line 7107 "bootstrap/lsp.glide"
     if (((s  ==  NULL)  ||  ((s-> attrs )  ==  NULL))) {
         return;
     }
 
-#line 7027 "bootstrap/lsp.glide"
+#line 7108 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 7028 "bootstrap/lsp.glide"
+#line 7109 "bootstrap/lsp.glide"
         Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 7029 "bootstrap/lsp.glide"
+#line 7110 "bootstrap/lsp.glide"
         if ((!__glide_string_eq((a. name ), "expect"))) {
             continue;
         }
 
-#line 7030 "bootstrap/lsp.glide"
+#line 7111 "bootstrap/lsp.glide"
         if ((((a. args )  ==  NULL)  ||  (Vector_len__Expr((a. args ))  ==  0))) {
             continue;
         }
 
-#line 7031 "bootstrap/lsp.glide"
+#line 7112 "bootstrap/lsp.glide"
         Expr   v = Vector_get__Expr((a. args ), 0);
 
-#line 7032 "bootstrap/lsp.glide"
+#line 7113 "bootstrap/lsp.glide"
         if (((v. kind )  !=  EX_STRING)) {
             continue;
         }
 
-#line 7033 "bootstrap/lsp.glide"
+#line 7114 "bootstrap/lsp.glide"
         ExpectPending   pe = (( ExpectPending ){. pe_code  = (v. str_val ), . pe_line  = (s-> line ), . pe_end_line  = (s-> line ), . pe_col  = (s-> column ), . pe_origin  = origin, . pe_done  = false});
 
-#line 7041 "bootstrap/lsp.glide"
+#line 7122 "bootstrap/lsp.glide"
         Vector_push__ExpectPending(out, pe);
     }
 }
 
 
-#line 7048 "bootstrap/lsp.glide"
+#line 7129 "bootstrap/lsp.glide"
 void   _run_call_lint_with_index (Typer*   t, Vector__Stmt*   program, HashMap__string*   dep, const char*   lint_code, const char*   what) {
 
-#line 7049 "bootstrap/lsp.glide"
+#line 7130 "bootstrap/lsp.glide"
     if ((HashMap_len__string(dep)  ==  0)) {
         return;
     }
 
-#line 7050 "bootstrap/lsp.glide"
+#line 7131 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7051 "bootstrap/lsp.glide"
+#line 7132 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7052 "bootstrap/lsp.glide"
+#line 7133 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 7053 "bootstrap/lsp.glide"
+#line 7134 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))_has_allow)((&s), lint_code)) {
                 continue;
             }
 
-#line 7054 "bootstrap/lsp.glide"
+#line 7135 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 7055 "bootstrap/lsp.glide"
+#line 7136 "bootstrap/lsp.glide"
             HashMap__string*   scope = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7056 "bootstrap/lsp.glide"
+#line 7137 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__string*, const char*))_seed_scope_from_params)((&s), scope, "");
 
-#line 7057 "bootstrap/lsp.glide"
+#line 7138 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_body)(t, (s. fn_body ), dep, lint_code, what, scope);
 
-#line 7058 "bootstrap/lsp.glide"
+#line 7139 "bootstrap/lsp.glide"
             HashMap_free__string(scope);
         }
 
-#line 7060 "bootstrap/lsp.glide"
+#line 7141 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 7061 "bootstrap/lsp.glide"
+#line 7142 "bootstrap/lsp.glide"
             const char*   owner = "";
 
-#line 7062 "bootstrap/lsp.glide"
+#line 7143 "bootstrap/lsp.glide"
             if ((((s. impl_target )  !=  NULL)  &&  (((s. impl_target )-> name )  !=  NULL))) {
                 (owner  =  ((s. impl_target )-> name ));
             }
 
-#line 7063 "bootstrap/lsp.glide"
+#line 7144 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 7064 "bootstrap/lsp.glide"
+#line 7145 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 7065 "bootstrap/lsp.glide"
+#line 7146 "bootstrap/lsp.glide"
                 if (((m. fn_body )  ==  NULL)) {
                     continue;
                 }
 
-#line 7066 "bootstrap/lsp.glide"
+#line 7147 "bootstrap/lsp.glide"
                 if (((bool(*)(Stmt*, const char*))_has_allow)((&m), lint_code)) {
                     continue;
                 }
 
-#line 7067 "bootstrap/lsp.glide"
+#line 7148 "bootstrap/lsp.glide"
                 ((t-> current_origin )  =  (m. origin ));
 
-#line 7068 "bootstrap/lsp.glide"
+#line 7149 "bootstrap/lsp.glide"
                 HashMap__string*   scope = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7069 "bootstrap/lsp.glide"
+#line 7150 "bootstrap/lsp.glide"
                 ((void(*)(Stmt*, HashMap__string*, const char*))_seed_scope_from_params)((&m), scope, owner);
 
-#line 7070 "bootstrap/lsp.glide"
+#line 7151 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_body)(t, (m. fn_body ), dep, lint_code, what, scope);
 
-#line 7071 "bootstrap/lsp.glide"
+#line 7152 "bootstrap/lsp.glide"
                 HashMap_free__string(scope);
             }
         }
@@ -69261,129 +69493,129 @@ void   _run_call_lint_with_index (Typer*   t, Vector__Stmt*   program, HashMap__
 }
 
 
-#line 7077 "bootstrap/lsp.glide"
+#line 7158 "bootstrap/lsp.glide"
 void   _run_attr_call_lint (Typer*   t, Vector__Stmt*   program, const char*   attr_name, const char*   lint_code, const char*   what) {
 
-#line 7078 "bootstrap/lsp.glide"
+#line 7159 "bootstrap/lsp.glide"
     HashMap__string*   dep = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7079 "bootstrap/lsp.glide"
+#line 7160 "bootstrap/lsp.glide"
     ((void(*)(Vector__Stmt*, HashMap__string*, const char*))_collect_attr_fns)(program, dep, attr_name);
 
-#line 7080 "bootstrap/lsp.glide"
+#line 7161 "bootstrap/lsp.glide"
     if ((HashMap_len__string(dep)  ==  0)) {
         HashMap_free__string(dep);
         return;
     }
 
-#line 7082 "bootstrap/lsp.glide"
+#line 7163 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7083 "bootstrap/lsp.glide"
+#line 7164 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7084 "bootstrap/lsp.glide"
+#line 7165 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 7085 "bootstrap/lsp.glide"
+#line 7166 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))_has_allow)((&s), lint_code)) {
                 continue;
             }
 
-#line 7086 "bootstrap/lsp.glide"
+#line 7167 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 7087 "bootstrap/lsp.glide"
+#line 7168 "bootstrap/lsp.glide"
             HashMap__string*   scope = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7091 "bootstrap/lsp.glide"
+#line 7172 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__string*, const char*))_seed_scope_from_params)((&s), scope, "");
 
-#line 7092 "bootstrap/lsp.glide"
+#line 7173 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_body)(t, (s. fn_body ), dep, lint_code, what, scope);
 
-#line 7093 "bootstrap/lsp.glide"
+#line 7174 "bootstrap/lsp.glide"
             HashMap_free__string(scope);
         }
 
-#line 7095 "bootstrap/lsp.glide"
+#line 7176 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 7099 "bootstrap/lsp.glide"
+#line 7180 "bootstrap/lsp.glide"
             const char*   owner = "";
 
-#line 7100 "bootstrap/lsp.glide"
+#line 7181 "bootstrap/lsp.glide"
             if ((((s. impl_target )  !=  NULL)  &&  (((s. impl_target )-> name )  !=  NULL))) {
                 (owner  =  ((s. impl_target )-> name ));
             }
 
-#line 7101 "bootstrap/lsp.glide"
+#line 7182 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 7102 "bootstrap/lsp.glide"
+#line 7183 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 7103 "bootstrap/lsp.glide"
+#line 7184 "bootstrap/lsp.glide"
                 if (((m. fn_body )  ==  NULL)) {
                     continue;
                 }
 
-#line 7104 "bootstrap/lsp.glide"
+#line 7185 "bootstrap/lsp.glide"
                 if (((bool(*)(Stmt*, const char*))_has_allow)((&m), lint_code)) {
                     continue;
                 }
 
-#line 7105 "bootstrap/lsp.glide"
+#line 7186 "bootstrap/lsp.glide"
                 ((t-> current_origin )  =  (m. origin ));
 
-#line 7106 "bootstrap/lsp.glide"
+#line 7187 "bootstrap/lsp.glide"
                 HashMap__string*   scope = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7107 "bootstrap/lsp.glide"
+#line 7188 "bootstrap/lsp.glide"
                 ((void(*)(Stmt*, HashMap__string*, const char*))_seed_scope_from_params)((&m), scope, owner);
 
-#line 7108 "bootstrap/lsp.glide"
+#line 7189 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_body)(t, (m. fn_body ), dep, lint_code, what, scope);
 
-#line 7109 "bootstrap/lsp.glide"
+#line 7190 "bootstrap/lsp.glide"
                 HashMap_free__string(scope);
             }
         }
     }
 
-#line 7113 "bootstrap/lsp.glide"
+#line 7194 "bootstrap/lsp.glide"
     HashMap_free__string(dep);
 }
 
 
-#line 7120 "bootstrap/lsp.glide"
+#line 7201 "bootstrap/lsp.glide"
 void   _seed_scope_from_params (Stmt*   s, HashMap__string*   scope, const char*   self_owner) {
 
-#line 7121 "bootstrap/lsp.glide"
+#line 7202 "bootstrap/lsp.glide"
     if (((s  ==  NULL)  ||  ((s-> fn_params )  ==  NULL))) {
         return;
     }
 
-#line 7122 "bootstrap/lsp.glide"
+#line 7203 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
 
-#line 7123 "bootstrap/lsp.glide"
+#line 7204 "bootstrap/lsp.glide"
         Param   p = Vector_get__Param((s-> fn_params ), i);
 
-#line 7124 "bootstrap/lsp.glide"
+#line 7205 "bootstrap/lsp.glide"
         if ((__glide_string_eq((p. name ), "self")  &&  (!__glide_string_eq(self_owner, "")))) {
 
-#line 7125 "bootstrap/lsp.glide"
+#line 7206 "bootstrap/lsp.glide"
             HashMap_insert__string(scope, "self", self_owner);
 
-#line 7126 "bootstrap/lsp.glide"
+#line 7207 "bootstrap/lsp.glide"
             continue;
         }
 
-#line 7128 "bootstrap/lsp.glide"
+#line 7209 "bootstrap/lsp.glide"
         const char*   n = ((const char*(*)(Type*))_type_root_name)((p. ty ));
 
-#line 7129 "bootstrap/lsp.glide"
+#line 7210 "bootstrap/lsp.glide"
         if ((!__glide_string_eq(n, ""))) {
             HashMap_insert__string(scope, (p. name ), n);
         }
@@ -69391,91 +69623,91 @@ void   _seed_scope_from_params (Stmt*   s, HashMap__string*   scope, const char*
 }
 
 
-#line 7137 "bootstrap/lsp.glide"
+#line 7218 "bootstrap/lsp.glide"
 const char*   _type_root_name (Type*   ty) {
 
-#line 7138 "bootstrap/lsp.glide"
+#line 7219 "bootstrap/lsp.glide"
     if ((ty  ==  NULL)) {
         return "";
     }
 
-#line 7139 "bootstrap/lsp.glide"
+#line 7220 "bootstrap/lsp.glide"
     if (((ty-> kind )  ==  TY_NAMED)) {
         return (ty-> name );
     }
 
-#line 7140 "bootstrap/lsp.glide"
+#line 7221 "bootstrap/lsp.glide"
     if (((((ty-> kind )  ==  TY_POINTER)  ||  ((ty-> kind )  ==  TY_BORROW))  ||  ((ty-> kind )  ==  TY_BORROW_MUT))) {
 
-#line 7141 "bootstrap/lsp.glide"
+#line 7222 "bootstrap/lsp.glide"
         return ((const char*(*)(Type*))_type_root_name)((ty-> inner ));
     }
 
-#line 7143 "bootstrap/lsp.glide"
+#line 7224 "bootstrap/lsp.glide"
     if (((ty-> kind )  ==  TY_GENERIC)) {
         return (ty-> name );
     }
 
-#line 7144 "bootstrap/lsp.glide"
+#line 7225 "bootstrap/lsp.glide"
     return "";
 }
 
 
-#line 7147 "bootstrap/lsp.glide"
+#line 7228 "bootstrap/lsp.glide"
 void   _collect_attr_fns (Vector__Stmt*   program, HashMap__string*   dep, const char*   attr_name) {
 
-#line 7148 "bootstrap/lsp.glide"
+#line 7229 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7149 "bootstrap/lsp.glide"
+#line 7230 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7150 "bootstrap/lsp.glide"
+#line 7231 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_FN)) {
 
-#line 7151 "bootstrap/lsp.glide"
+#line 7232 "bootstrap/lsp.glide"
             __glide_option_string_t   reason = ((__glide_option_string_t(*)(Stmt*, const char*))_attr_reason)((&s), attr_name);
 
-#line 7152 "bootstrap/lsp.glide"
+#line 7233 "bootstrap/lsp.glide"
             if ((reason. has )) {
                 HashMap_insert__string(dep, (s. name ), (reason. val ));
             }
         }
 
-#line 7154 "bootstrap/lsp.glide"
+#line 7235 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 7160 "bootstrap/lsp.glide"
+#line 7241 "bootstrap/lsp.glide"
             const char*   owner = "";
 
-#line 7161 "bootstrap/lsp.glide"
+#line 7242 "bootstrap/lsp.glide"
             if ((((s. impl_target )  !=  NULL)  &&  (((s. impl_target )-> name )  !=  NULL))) {
                 (owner  =  ((s. impl_target )-> name ));
             }
 
-#line 7162 "bootstrap/lsp.glide"
+#line 7243 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 7163 "bootstrap/lsp.glide"
+#line 7244 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 7164 "bootstrap/lsp.glide"
+#line 7245 "bootstrap/lsp.glide"
                 __glide_option_string_t   reason = ((__glide_option_string_t(*)(Stmt*, const char*))_attr_reason)((&m), attr_name);
 
-#line 7165 "bootstrap/lsp.glide"
+#line 7246 "bootstrap/lsp.glide"
                 if ((!(reason. has ))) {
                     continue;
                 }
 
-#line 7166 "bootstrap/lsp.glide"
+#line 7247 "bootstrap/lsp.glide"
                 const char*   rv = (reason. val );
 
-#line 7167 "bootstrap/lsp.glide"
+#line 7248 "bootstrap/lsp.glide"
                 if ((!__glide_string_eq(owner, ""))) {
                     HashMap_insert__string(dep, __glide_string_concat(__glide_string_concat(owner, "::"), (m. name )), rv);
                 }
 
-#line 7171 "bootstrap/lsp.glide"
+#line 7252 "bootstrap/lsp.glide"
                 if ((!HashMap_contains__string(dep, (m. name )))) {
                     HashMap_insert__string(dep, (m. name ), rv);
                 }
@@ -69485,198 +69717,198 @@ void   _collect_attr_fns (Vector__Stmt*   program, HashMap__string*   dep, const
 }
 
 
-#line 7180 "bootstrap/lsp.glide"
+#line 7261 "bootstrap/lsp.glide"
 __glide_option_string_t   _attr_reason (Stmt*   s, const char*   attr_name) {
 
-#line 7181 "bootstrap/lsp.glide"
+#line 7262 "bootstrap/lsp.glide"
     if (((s  ==  NULL)  ||  ((s-> attrs )  ==  NULL))) {
         return __glide_none_string();
     }
 
-#line 7182 "bootstrap/lsp.glide"
+#line 7263 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 7183 "bootstrap/lsp.glide"
+#line 7264 "bootstrap/lsp.glide"
         Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 7184 "bootstrap/lsp.glide"
+#line 7265 "bootstrap/lsp.glide"
         if ((!__glide_string_eq((a. name ), attr_name))) {
             continue;
         }
 
-#line 7185 "bootstrap/lsp.glide"
+#line 7266 "bootstrap/lsp.glide"
         if ((((a. args )  ==  NULL)  ||  (Vector_len__Expr((a. args ))  ==  0))) {
             return __glide_some_string("");
         }
 
-#line 7186 "bootstrap/lsp.glide"
+#line 7267 "bootstrap/lsp.glide"
         Expr   v = Vector_get__Expr((a. args ), 0);
 
-#line 7187 "bootstrap/lsp.glide"
+#line 7268 "bootstrap/lsp.glide"
         if (((v. kind )  ==  EX_STRING)) {
             return __glide_some_string((v. str_val ));
         }
 
-#line 7188 "bootstrap/lsp.glide"
+#line 7269 "bootstrap/lsp.glide"
         return __glide_some_string("");
     }
 
-#line 7190 "bootstrap/lsp.glide"
+#line 7271 "bootstrap/lsp.glide"
     return __glide_none_string();
 }
 
 
-#line 7193 "bootstrap/lsp.glide"
+#line 7274 "bootstrap/lsp.glide"
 void   _scan_calls_in_body (Typer*   t, Vector__Stmt*   body, HashMap__string*   dep, const char*   lint_code, const char*   what, HashMap__string*   scope) {
 
-#line 7194 "bootstrap/lsp.glide"
+#line 7275 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7195 "bootstrap/lsp.glide"
+#line 7276 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7196 "bootstrap/lsp.glide"
+#line 7277 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Stmt*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_stmt)(t, (&s), dep, lint_code, what, scope);
     }
 }
 
 
-#line 7200 "bootstrap/lsp.glide"
+#line 7281 "bootstrap/lsp.glide"
 void   _scan_calls_in_stmt (Typer*   t, Stmt*   s, HashMap__string*   dep, const char*   lint_code, const char*   what, HashMap__string*   scope) {
 
-#line 7201 "bootstrap/lsp.glide"
+#line 7282 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return;
     }
 
-#line 7206 "bootstrap/lsp.glide"
+#line 7287 "bootstrap/lsp.glide"
     if (((bool(*)(Stmt*, const char*))_has_allow)(s, lint_code)) {
         return;
     }
 
-#line 7207 "bootstrap/lsp.glide"
+#line 7288 "bootstrap/lsp.glide"
     if (((s-> let_value )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (s-> let_value ), dep, lint_code, what, scope);
     }
 
-#line 7208 "bootstrap/lsp.glide"
+#line 7289 "bootstrap/lsp.glide"
     if (((s-> expr_value )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (s-> expr_value ), dep, lint_code, what, scope);
     }
 
-#line 7209 "bootstrap/lsp.glide"
+#line 7290 "bootstrap/lsp.glide"
     if (((s-> cond )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (s-> cond ), dep, lint_code, what, scope);
     }
 
-#line 7210 "bootstrap/lsp.glide"
+#line 7291 "bootstrap/lsp.glide"
     if (((s-> for_step )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (s-> for_step ), dep, lint_code, what, scope);
     }
 
-#line 7216 "bootstrap/lsp.glide"
+#line 7297 "bootstrap/lsp.glide"
     if ((((s-> kind )  ==  ST_LET)  &&  ((s-> let_ty )  !=  NULL))) {
 
-#line 7217 "bootstrap/lsp.glide"
+#line 7298 "bootstrap/lsp.glide"
         const char*   n = ((const char*(*)(Type*))_type_root_name)((s-> let_ty ));
 
-#line 7218 "bootstrap/lsp.glide"
+#line 7299 "bootstrap/lsp.glide"
         if ((!__glide_string_eq(n, ""))) {
             HashMap_insert__string(scope, (s-> name ), n);
         }
     }
 
-#line 7220 "bootstrap/lsp.glide"
+#line 7301 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
         ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_body)(t, (s-> then_body ), dep, lint_code, what, scope);
     }
 
-#line 7221 "bootstrap/lsp.glide"
+#line 7302 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
         ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_body)(t, (s-> else_body ), dep, lint_code, what, scope);
     }
 }
 
 
-#line 7224 "bootstrap/lsp.glide"
+#line 7305 "bootstrap/lsp.glide"
 void   _scan_calls_in_expr (Typer*   t, Expr*   e, HashMap__string*   dep, const char*   lint_code, const char*   what, HashMap__string*   scope) {
 
-#line 7225 "bootstrap/lsp.glide"
+#line 7306 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7226 "bootstrap/lsp.glide"
+#line 7307 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))) {
 
-#line 7227 "bootstrap/lsp.glide"
+#line 7308 "bootstrap/lsp.glide"
         Expr*   head = (e-> lhs );
 
-#line 7228 "bootstrap/lsp.glide"
+#line 7309 "bootstrap/lsp.glide"
         const char*   key = "";
 
-#line 7229 "bootstrap/lsp.glide"
+#line 7310 "bootstrap/lsp.glide"
         const char*   display = "";
 
-#line 7230 "bootstrap/lsp.glide"
+#line 7311 "bootstrap/lsp.glide"
         if (((head-> kind )  ==  EX_PATH)) {
 
-#line 7232 "bootstrap/lsp.glide"
+#line 7313 "bootstrap/lsp.glide"
             (key  =  __glide_string_concat(__glide_string_concat((head-> str_val ), "::"), (head-> field )));
 
-#line 7233 "bootstrap/lsp.glide"
+#line 7314 "bootstrap/lsp.glide"
             (display  =  key);
         } else {
 
-#line 7234 "bootstrap/lsp.glide"
+#line 7315 "bootstrap/lsp.glide"
             if (((head-> kind )  ==  EX_IDENT)) {
 
-#line 7235 "bootstrap/lsp.glide"
+#line 7316 "bootstrap/lsp.glide"
                 (key  =  (head-> str_val ));
                 (display  =  (head-> str_val ));
             } else {
 
-#line 7236 "bootstrap/lsp.glide"
+#line 7317 "bootstrap/lsp.glide"
                 if (((head-> kind )  ==  EX_MEMBER)) {
 
-#line 7245 "bootstrap/lsp.glide"
+#line 7326 "bootstrap/lsp.glide"
                     const char*   method = (head-> field );
 
-#line 7246 "bootstrap/lsp.glide"
+#line 7327 "bootstrap/lsp.glide"
                     bool   receiver_known = false;
 
-#line 7247 "bootstrap/lsp.glide"
+#line 7328 "bootstrap/lsp.glide"
                     const char*   qualified = "";
 
-#line 7248 "bootstrap/lsp.glide"
+#line 7329 "bootstrap/lsp.glide"
                     if ((((head-> lhs )  !=  NULL)  &&  (((head-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 7249 "bootstrap/lsp.glide"
+#line 7330 "bootstrap/lsp.glide"
                         const char*   recv = ((head-> lhs )-> str_val );
 
-#line 7250 "bootstrap/lsp.glide"
+#line 7331 "bootstrap/lsp.glide"
                         if (HashMap_contains__string(scope, recv)) {
 
-#line 7251 "bootstrap/lsp.glide"
+#line 7332 "bootstrap/lsp.glide"
                             (receiver_known  =  true);
 
-#line 7252 "bootstrap/lsp.glide"
+#line 7333 "bootstrap/lsp.glide"
                             const char*   ty_name = HashMap_get__string(scope, recv);
 
-#line 7253 "bootstrap/lsp.glide"
+#line 7334 "bootstrap/lsp.glide"
                             (qualified  =  __glide_string_concat(__glide_string_concat(ty_name, "::"), method));
                         }
                     }
 
-#line 7256 "bootstrap/lsp.glide"
+#line 7337 "bootstrap/lsp.glide"
                     if (receiver_known) {
 
-#line 7257 "bootstrap/lsp.glide"
+#line 7338 "bootstrap/lsp.glide"
                         (key  =  qualified);
                         (display  =  qualified);
                     } else {
 
-#line 7259 "bootstrap/lsp.glide"
+#line 7340 "bootstrap/lsp.glide"
                         (key  =  method);
                         (display  =  method);
                     }
@@ -69684,194 +69916,194 @@ void   _scan_calls_in_expr (Typer*   t, Expr*   e, HashMap__string*   dep, const
             }
         }
 
-#line 7262 "bootstrap/lsp.glide"
+#line 7343 "bootstrap/lsp.glide"
         if (((!__glide_string_eq(key, ""))  &&  HashMap_contains__string(dep, key))) {
 
-#line 7263 "bootstrap/lsp.glide"
+#line 7344 "bootstrap/lsp.glide"
             const char*   reason = HashMap_get__string(dep, key);
 
-#line 7264 "bootstrap/lsp.glide"
+#line 7345 "bootstrap/lsp.glide"
             const char*   msg = __glide_string_concat(__glide_string_concat(__glide_string_concat("function `", display), "` is "), what);
 
-#line 7265 "bootstrap/lsp.glide"
+#line 7346 "bootstrap/lsp.glide"
             if ((!__glide_string_eq(reason, ""))) {
                 (msg  =  __glide_string_concat(__glide_string_concat(msg, ": "), reason));
             }
 
-#line 7266 "bootstrap/lsp.glide"
+#line 7347 "bootstrap/lsp.glide"
             Typer_warn(t, (e-> line ), (e-> column ), lint_code, msg);
         }
     }
 
-#line 7269 "bootstrap/lsp.glide"
+#line 7350 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (e-> lhs ), dep, lint_code, what, scope);
     }
 
-#line 7270 "bootstrap/lsp.glide"
+#line 7351 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (e-> rhs ), dep, lint_code, what, scope);
     }
 
-#line 7271 "bootstrap/lsp.glide"
+#line 7352 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (e-> operand ), dep, lint_code, what, scope);
     }
 
-#line 7272 "bootstrap/lsp.glide"
+#line 7353 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 7273 "bootstrap/lsp.glide"
+#line 7354 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 7274 "bootstrap/lsp.glide"
+#line 7355 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 7275 "bootstrap/lsp.glide"
+#line 7356 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__string*, const char*, const char*, HashMap__string*))_scan_calls_in_expr)(t, (&a), dep, lint_code, what, scope);
         }
     }
 }
 
 
-#line 7302 "bootstrap/lsp.glide"
+#line 7383 "bootstrap/lsp.glide"
 void   analysis_null_deref (Typer*   t, Vector__Stmt*   program) {
 
-#line 7308 "bootstrap/lsp.glide"
+#line 7389 "bootstrap/lsp.glide"
     HashMap__string*   deref_params = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7309 "bootstrap/lsp.glide"
+#line 7390 "bootstrap/lsp.glide"
     ((void(*)(Vector__Stmt*, HashMap__string*))_ndp_collect_param_derefs)(program, deref_params);
 
-#line 7311 "bootstrap/lsp.glide"
+#line 7392 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7312 "bootstrap/lsp.glide"
+#line 7393 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7313 "bootstrap/lsp.glide"
+#line 7394 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 7314 "bootstrap/lsp.glide"
+#line 7395 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))_has_allow)((&s), "null-deref")) {
                 continue;
             }
 
-#line 7315 "bootstrap/lsp.glide"
+#line 7396 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 7316 "bootstrap/lsp.glide"
+#line 7397 "bootstrap/lsp.glide"
             HashMap__bool*   nulls = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 7317 "bootstrap/lsp.glide"
+#line 7398 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_scan_null_body)(t, (s. fn_body ), nulls);
 
-#line 7320 "bootstrap/lsp.glide"
+#line 7401 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_ndp_check_calls_in_body)(t, (s. fn_body ), deref_params);
 
-#line 7321 "bootstrap/lsp.glide"
+#line 7402 "bootstrap/lsp.glide"
             HashMap_free__bool(nulls);
         }
 
-#line 7323 "bootstrap/lsp.glide"
+#line 7404 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 7324 "bootstrap/lsp.glide"
+#line 7405 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 7325 "bootstrap/lsp.glide"
+#line 7406 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 7326 "bootstrap/lsp.glide"
+#line 7407 "bootstrap/lsp.glide"
                 if (((m. fn_body )  ==  NULL)) {
                     continue;
                 }
 
-#line 7327 "bootstrap/lsp.glide"
+#line 7408 "bootstrap/lsp.glide"
                 if (((bool(*)(Stmt*, const char*))_has_allow)((&m), "null-deref")) {
                     continue;
                 }
 
-#line 7328 "bootstrap/lsp.glide"
+#line 7409 "bootstrap/lsp.glide"
                 ((t-> current_origin )  =  (m. origin ));
 
-#line 7329 "bootstrap/lsp.glide"
+#line 7410 "bootstrap/lsp.glide"
                 HashMap__bool*   nulls = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 7330 "bootstrap/lsp.glide"
+#line 7411 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_scan_null_body)(t, (m. fn_body ), nulls);
 
-#line 7331 "bootstrap/lsp.glide"
+#line 7412 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_ndp_check_calls_in_body)(t, (m. fn_body ), deref_params);
 
-#line 7332 "bootstrap/lsp.glide"
+#line 7413 "bootstrap/lsp.glide"
                 HashMap_free__bool(nulls);
             }
         }
     }
 
-#line 7336 "bootstrap/lsp.glide"
+#line 7417 "bootstrap/lsp.glide"
     HashMap_free__string(deref_params);
 }
 
 
-#line 7344 "bootstrap/lsp.glide"
+#line 7425 "bootstrap/lsp.glide"
 void   _ndp_collect_param_derefs (Vector__Stmt*   program, HashMap__string*   deref_params) {
 
-#line 7345 "bootstrap/lsp.glide"
+#line 7426 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7346 "bootstrap/lsp.glide"
+#line 7427 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7347 "bootstrap/lsp.glide"
+#line 7428 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  ((s. fn_params )  !=  NULL))) {
 
-#line 7348 "bootstrap/lsp.glide"
+#line 7429 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__string*))_ndp_index_one_fn)((&s), deref_params);
         }
 
-#line 7350 "bootstrap/lsp.glide"
+#line 7431 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))  &&  ((s. impl_target )  !=  NULL))) {
 
-#line 7351 "bootstrap/lsp.glide"
+#line 7432 "bootstrap/lsp.glide"
             const char*   tname = "";
 
-#line 7352 "bootstrap/lsp.glide"
+#line 7433 "bootstrap/lsp.glide"
             if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
                 (tname  =  ((s. impl_target )-> name ));
             } else {
 
-#line 7353 "bootstrap/lsp.glide"
+#line 7434 "bootstrap/lsp.glide"
                 if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
                     (tname  =  ((s. impl_target )-> name ));
                 }
             }
 
-#line 7354 "bootstrap/lsp.glide"
+#line 7435 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 7355 "bootstrap/lsp.glide"
+#line 7436 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 7356 "bootstrap/lsp.glide"
+#line 7437 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((m. fn_params )  ==  NULL))) {
                     continue;
                 }
 
-#line 7357 "bootstrap/lsp.glide"
+#line 7438 "bootstrap/lsp.glide"
                 ((void(*)(Stmt*, HashMap__string*))_ndp_index_one_fn)((&m), deref_params);
 
-#line 7358 "bootstrap/lsp.glide"
+#line 7439 "bootstrap/lsp.glide"
                 if ((!__glide_string_eq(tname, ""))) {
 
-#line 7361 "bootstrap/lsp.glide"
+#line 7442 "bootstrap/lsp.glide"
                     const char*   key = __glide_string_concat(__glide_string_concat(tname, "::"), (m. name ));
 
-#line 7362 "bootstrap/lsp.glide"
+#line 7443 "bootstrap/lsp.glide"
                     if (HashMap_contains__string(deref_params, (m. name ))) {
 
-#line 7363 "bootstrap/lsp.glide"
+#line 7444 "bootstrap/lsp.glide"
                         HashMap_insert__string(deref_params, key, HashMap_get__string(deref_params, (m. name )));
                     }
                 }
@@ -69881,128 +70113,128 @@ void   _ndp_collect_param_derefs (Vector__Stmt*   program, HashMap__string*   de
 }
 
 
-#line 7370 "bootstrap/lsp.glide"
+#line 7451 "bootstrap/lsp.glide"
 void   _ndp_index_one_fn (Stmt*   m, HashMap__string*   deref_params) {
 
-#line 7376 "bootstrap/lsp.glide"
+#line 7457 "bootstrap/lsp.glide"
     HashMap__bool*   unprotected = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 7377 "bootstrap/lsp.glide"
+#line 7458 "bootstrap/lsp.glide"
     HashMap__bool*   seen_guard = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 7378 "bootstrap/lsp.glide"
+#line 7459 "bootstrap/lsp.glide"
     ((void(*)(Vector__Stmt*, HashMap__bool*, HashMap__bool*))_ndp_walk_order)((m-> fn_body ), unprotected, seen_guard);
 
-#line 7379 "bootstrap/lsp.glide"
+#line 7460 "bootstrap/lsp.glide"
     const char*   idxs = "";
 
-#line 7380 "bootstrap/lsp.glide"
+#line 7461 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Param((m-> fn_params ))); i++) {
 
-#line 7381 "bootstrap/lsp.glide"
+#line 7462 "bootstrap/lsp.glide"
         Param   p = Vector_get__Param((m-> fn_params ), i);
 
-#line 7382 "bootstrap/lsp.glide"
+#line 7463 "bootstrap/lsp.glide"
         if ((((p. ty )  ==  NULL)  ||  (((p. ty )-> kind )  !=  TY_POINTER))) {
             continue;
         }
 
-#line 7383 "bootstrap/lsp.glide"
+#line 7464 "bootstrap/lsp.glide"
         if ((!HashMap_contains__bool(unprotected, (p. name )))) {
             continue;
         }
 
-#line 7384 "bootstrap/lsp.glide"
+#line 7465 "bootstrap/lsp.glide"
         if ((!HashMap_get__bool(unprotected, (p. name )))) {
             continue;
         }
 
-#line 7385 "bootstrap/lsp.glide"
+#line 7466 "bootstrap/lsp.glide"
         if (__glide_string_eq(idxs, "")) {
             (idxs  =  __glide_int_to_string(i));
         } else {
 
-#line 7386 "bootstrap/lsp.glide"
+#line 7467 "bootstrap/lsp.glide"
             (idxs  =  __glide_string_concat(__glide_string_concat(idxs, ","), __glide_int_to_string(i)));
         }
     }
 
-#line 7388 "bootstrap/lsp.glide"
+#line 7469 "bootstrap/lsp.glide"
     HashMap_free__bool(unprotected);
     HashMap_free__bool(seen_guard);
 
-#line 7389 "bootstrap/lsp.glide"
+#line 7470 "bootstrap/lsp.glide"
     if ((!__glide_string_eq(idxs, ""))) {
 
-#line 7390 "bootstrap/lsp.glide"
+#line 7471 "bootstrap/lsp.glide"
         HashMap_insert__string(deref_params, (m-> name ), idxs);
     }
 }
 
 
-#line 7396 "bootstrap/lsp.glide"
+#line 7477 "bootstrap/lsp.glide"
 void   _ndp_walk_order (Vector__Stmt*   body, HashMap__bool*   unprotected, HashMap__bool*   seen_guard) {
 
-#line 7397 "bootstrap/lsp.glide"
+#line 7478 "bootstrap/lsp.glide"
     if ((body  ==  NULL)) {
         return;
     }
 
-#line 7398 "bootstrap/lsp.glide"
+#line 7479 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7399 "bootstrap/lsp.glide"
+#line 7480 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7402 "bootstrap/lsp.glide"
+#line 7483 "bootstrap/lsp.glide"
         if (((s. cond )  !=  NULL)) {
 
-#line 7403 "bootstrap/lsp.glide"
+#line 7484 "bootstrap/lsp.glide"
             Vector__string*   gnames = ((Vector__string*(*)(void))Vector_new__string)();
 
-#line 7404 "bootstrap/lsp.glide"
+#line 7485 "bootstrap/lsp.glide"
             ((void(*)(Expr*, Vector__string*))_ndp_collect_guarded_names)((s. cond ), gnames);
 
-#line 7405 "bootstrap/lsp.glide"
+#line 7486 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__string(gnames)); j++) {
 
-#line 7406 "bootstrap/lsp.glide"
+#line 7487 "bootstrap/lsp.glide"
                 const char*   n = Vector_get__string(gnames, j);
 
-#line 7407 "bootstrap/lsp.glide"
+#line 7488 "bootstrap/lsp.glide"
                 if ((!HashMap_contains__bool(unprotected, n))) {
 
-#line 7408 "bootstrap/lsp.glide"
+#line 7489 "bootstrap/lsp.glide"
                     HashMap_insert__bool(unprotected, n, false);
                 }
 
-#line 7410 "bootstrap/lsp.glide"
+#line 7491 "bootstrap/lsp.glide"
                 HashMap_insert__bool(seen_guard, n, true);
             }
 
-#line 7413 "bootstrap/lsp.glide"
+#line 7494 "bootstrap/lsp.glide"
             ((void(*)(Expr*, HashMap__bool*, HashMap__bool*))_ndp_record_derefs_in_expr_ordered)((s. cond ), unprotected, seen_guard);
 
-#line 7414 "bootstrap/lsp.glide"
+#line 7495 "bootstrap/lsp.glide"
             Vector_free__string(gnames);
         }
 
-#line 7416 "bootstrap/lsp.glide"
+#line 7497 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             ((void(*)(Expr*, HashMap__bool*, HashMap__bool*))_ndp_record_derefs_in_expr_ordered)((s. expr_value ), unprotected, seen_guard);
         }
 
-#line 7417 "bootstrap/lsp.glide"
+#line 7498 "bootstrap/lsp.glide"
         if (((s. let_value )  !=  NULL)) {
             ((void(*)(Expr*, HashMap__bool*, HashMap__bool*))_ndp_record_derefs_in_expr_ordered)((s. let_value ), unprotected, seen_guard);
         }
 
-#line 7418 "bootstrap/lsp.glide"
+#line 7499 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, HashMap__bool*, HashMap__bool*))_ndp_walk_order)((s. then_body ), unprotected, seen_guard);
         }
 
-#line 7419 "bootstrap/lsp.glide"
+#line 7500 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, HashMap__bool*, HashMap__bool*))_ndp_walk_order)((s. else_body ), unprotected, seen_guard);
         }
@@ -70010,219 +70242,219 @@ void   _ndp_walk_order (Vector__Stmt*   body, HashMap__bool*   unprotected, Hash
 }
 
 
-#line 7422 "bootstrap/lsp.glide"
+#line 7503 "bootstrap/lsp.glide"
 void   _ndp_collect_guarded_names (Expr*   e, Vector__string*   names) {
 
-#line 7423 "bootstrap/lsp.glide"
+#line 7504 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7424 "bootstrap/lsp.glide"
+#line 7505 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_BINARY)  &&  (((e-> op_code )  ==  OP_EQ)  ||  ((e-> op_code )  ==  OP_NE)))  &&  ((e-> lhs )  !=  NULL))  &&  ((e-> rhs )  !=  NULL))) {
 
-#line 7426 "bootstrap/lsp.glide"
+#line 7507 "bootstrap/lsp.glide"
         if (((((e-> lhs )-> kind )  ==  EX_IDENT)  &&  (((e-> rhs )-> kind )  ==  EX_NULL))) {
             Vector_push__string(names, ((e-> lhs )-> str_val ));
         }
 
-#line 7427 "bootstrap/lsp.glide"
+#line 7508 "bootstrap/lsp.glide"
         if (((((e-> rhs )-> kind )  ==  EX_IDENT)  &&  (((e-> lhs )-> kind )  ==  EX_NULL))) {
             Vector_push__string(names, ((e-> rhs )-> str_val ));
         }
     }
 
-#line 7429 "bootstrap/lsp.glide"
+#line 7510 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Expr*, Vector__string*))_ndp_collect_guarded_names)((e-> lhs ), names);
     }
 
-#line 7430 "bootstrap/lsp.glide"
+#line 7511 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Expr*, Vector__string*))_ndp_collect_guarded_names)((e-> rhs ), names);
     }
 
-#line 7431 "bootstrap/lsp.glide"
+#line 7512 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Expr*, Vector__string*))_ndp_collect_guarded_names)((e-> operand ), names);
     }
 }
 
 
-#line 7433 "bootstrap/lsp.glide"
+#line 7514 "bootstrap/lsp.glide"
 void   _ndp_record_derefs_in_expr_ordered (Expr*   e, HashMap__bool*   unprotected, HashMap__bool*   seen_guard) {
 
-#line 7435 "bootstrap/lsp.glide"
+#line 7516 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7436 "bootstrap/lsp.glide"
+#line 7517 "bootstrap/lsp.glide"
     const char*   target = ((const char*(*)(Expr*))_ndp_deref_target)(e);
 
-#line 7437 "bootstrap/lsp.glide"
+#line 7518 "bootstrap/lsp.glide"
     if (((!__glide_string_eq(target, ""))  &&  (!HashMap_contains__bool(unprotected, target)))) {
 
-#line 7439 "bootstrap/lsp.glide"
+#line 7520 "bootstrap/lsp.glide"
         HashMap_insert__bool(unprotected, target, true);
     }
 
-#line 7441 "bootstrap/lsp.glide"
+#line 7522 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*, HashMap__bool*))_ndp_record_derefs_in_expr_ordered)((e-> lhs ), unprotected, seen_guard);
     }
 
-#line 7442 "bootstrap/lsp.glide"
+#line 7523 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*, HashMap__bool*))_ndp_record_derefs_in_expr_ordered)((e-> rhs ), unprotected, seen_guard);
     }
 
-#line 7443 "bootstrap/lsp.glide"
+#line 7524 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*, HashMap__bool*))_ndp_record_derefs_in_expr_ordered)((e-> operand ), unprotected, seen_guard);
     }
 
-#line 7444 "bootstrap/lsp.glide"
+#line 7525 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 7445 "bootstrap/lsp.glide"
+#line 7526 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 7446 "bootstrap/lsp.glide"
+#line 7527 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 7447 "bootstrap/lsp.glide"
+#line 7528 "bootstrap/lsp.glide"
             ((void(*)(Expr*, HashMap__bool*, HashMap__bool*))_ndp_record_derefs_in_expr_ordered)((&a), unprotected, seen_guard);
         }
     }
 }
 
 
-#line 7451 "bootstrap/lsp.glide"
+#line 7532 "bootstrap/lsp.glide"
 const char*   _ndp_deref_target (Expr*   e) {
 
-#line 7452 "bootstrap/lsp.glide"
+#line 7533 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return "";
     }
 
-#line 7453 "bootstrap/lsp.glide"
+#line 7534 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_UNARY)  &&  ((e-> op_code )  ==  UN_DEREF))  &&  ((e-> operand )  !=  NULL))  &&  (((e-> operand )-> kind )  ==  EX_IDENT))) {
 
-#line 7454 "bootstrap/lsp.glide"
+#line 7535 "bootstrap/lsp.glide"
         return ((e-> operand )-> str_val );
     }
 
-#line 7455 "bootstrap/lsp.glide"
+#line 7536 "bootstrap/lsp.glide"
     if (((((e-> kind )  ==  EX_MEMBER)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
         return ((e-> lhs )-> str_val );
     }
 
-#line 7456 "bootstrap/lsp.glide"
+#line 7537 "bootstrap/lsp.glide"
     if (((((e-> kind )  ==  EX_INDEX)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
         return ((e-> lhs )-> str_val );
     }
 
-#line 7457 "bootstrap/lsp.glide"
+#line 7538 "bootstrap/lsp.glide"
     return "";
 }
 
 
-#line 7459 "bootstrap/lsp.glide"
+#line 7540 "bootstrap/lsp.glide"
 void   _ndp_derefs_in_expr (Expr*   e, HashMap__bool*   derefed) {
 
-#line 7460 "bootstrap/lsp.glide"
+#line 7541 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7462 "bootstrap/lsp.glide"
+#line 7543 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_UNARY)  &&  ((e-> op_code )  ==  UN_DEREF))  &&  ((e-> operand )  !=  NULL))  &&  (((e-> operand )-> kind )  ==  EX_IDENT))) {
 
-#line 7464 "bootstrap/lsp.glide"
+#line 7545 "bootstrap/lsp.glide"
         HashMap_insert__bool(derefed, ((e-> operand )-> str_val ), true);
     }
 
-#line 7467 "bootstrap/lsp.glide"
+#line 7548 "bootstrap/lsp.glide"
     if (((((e-> kind )  ==  EX_MEMBER)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 7468 "bootstrap/lsp.glide"
+#line 7549 "bootstrap/lsp.glide"
         HashMap_insert__bool(derefed, ((e-> lhs )-> str_val ), true);
     }
 
-#line 7471 "bootstrap/lsp.glide"
+#line 7552 "bootstrap/lsp.glide"
     if (((((e-> kind )  ==  EX_INDEX)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 7472 "bootstrap/lsp.glide"
+#line 7553 "bootstrap/lsp.glide"
         HashMap_insert__bool(derefed, ((e-> lhs )-> str_val ), true);
     }
 
-#line 7474 "bootstrap/lsp.glide"
+#line 7555 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ndp_derefs_in_expr)((e-> lhs ), derefed);
     }
 
-#line 7475 "bootstrap/lsp.glide"
+#line 7556 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ndp_derefs_in_expr)((e-> rhs ), derefed);
     }
 
-#line 7476 "bootstrap/lsp.glide"
+#line 7557 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ndp_derefs_in_expr)((e-> operand ), derefed);
     }
 
-#line 7477 "bootstrap/lsp.glide"
+#line 7558 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 7478 "bootstrap/lsp.glide"
+#line 7559 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 7479 "bootstrap/lsp.glide"
+#line 7560 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 7480 "bootstrap/lsp.glide"
+#line 7561 "bootstrap/lsp.glide"
             ((void(*)(Expr*, HashMap__bool*))_ndp_derefs_in_expr)((&a), derefed);
         }
     }
 }
 
 
-#line 7486 "bootstrap/lsp.glide"
+#line 7567 "bootstrap/lsp.glide"
 void   _ndp_check_calls_in_body (Typer*   t, Vector__Stmt*   body, HashMap__string*   deref_params) {
 
-#line 7488 "bootstrap/lsp.glide"
+#line 7569 "bootstrap/lsp.glide"
     if ((body  ==  NULL)) {
         return;
     }
 
-#line 7489 "bootstrap/lsp.glide"
+#line 7570 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7490 "bootstrap/lsp.glide"
+#line 7571 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7491 "bootstrap/lsp.glide"
+#line 7572 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__string*))_ndp_check_calls_in_expr)(t, (s. expr_value ), deref_params);
         }
 
-#line 7492 "bootstrap/lsp.glide"
+#line 7573 "bootstrap/lsp.glide"
         if (((s. let_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__string*))_ndp_check_calls_in_expr)(t, (s. let_value ), deref_params);
         }
 
-#line 7493 "bootstrap/lsp.glide"
+#line 7574 "bootstrap/lsp.glide"
         if (((s. cond )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__string*))_ndp_check_calls_in_expr)(t, (s. cond ), deref_params);
         }
 
-#line 7494 "bootstrap/lsp.glide"
+#line 7575 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_ndp_check_calls_in_body)(t, (s. then_body ), deref_params);
         }
 
-#line 7495 "bootstrap/lsp.glide"
+#line 7576 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_ndp_check_calls_in_body)(t, (s. else_body ), deref_params);
         }
@@ -70230,254 +70462,254 @@ void   _ndp_check_calls_in_body (Typer*   t, Vector__Stmt*   body, HashMap__stri
 }
 
 
-#line 7498 "bootstrap/lsp.glide"
+#line 7579 "bootstrap/lsp.glide"
 void   _ndp_check_calls_in_expr (Typer*   t, Expr*   e, HashMap__string*   deref_params) {
 
-#line 7499 "bootstrap/lsp.glide"
+#line 7580 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7500 "bootstrap/lsp.glide"
+#line 7581 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  ((e-> args )  !=  NULL))) {
 
-#line 7502 "bootstrap/lsp.glide"
+#line 7583 "bootstrap/lsp.glide"
         const char*   fname = ((e-> lhs )-> str_val );
 
-#line 7503 "bootstrap/lsp.glide"
+#line 7584 "bootstrap/lsp.glide"
         if (HashMap_contains__string(deref_params, fname)) {
 
-#line 7504 "bootstrap/lsp.glide"
+#line 7585 "bootstrap/lsp.glide"
             const char*   idxs = HashMap_get__string(deref_params, fname);
 
-#line 7506 "bootstrap/lsp.glide"
+#line 7587 "bootstrap/lsp.glide"
             const char*   buf = "";
 
-#line 7507 "bootstrap/lsp.glide"
+#line 7588 "bootstrap/lsp.glide"
             int32_t   n = __glide_string_len(idxs);
 
-#line 7508 "bootstrap/lsp.glide"
+#line 7589 "bootstrap/lsp.glide"
             for (int32_t   k = 0; (k  <=  n); k++) {
 
-#line 7509 "bootstrap/lsp.glide"
+#line 7590 "bootstrap/lsp.glide"
                 if (((k  ==  n)  ||  (__glide_char_to_int(__glide_string_at(idxs, k))  ==  44))) {
 
-#line 7510 "bootstrap/lsp.glide"
+#line 7591 "bootstrap/lsp.glide"
                     if ((!__glide_string_eq(buf, ""))) {
 
-#line 7511 "bootstrap/lsp.glide"
+#line 7592 "bootstrap/lsp.glide"
                         int32_t   idx = ((int32_t(*)(const char*))_ndp_atoi)(buf);
 
-#line 7512 "bootstrap/lsp.glide"
+#line 7593 "bootstrap/lsp.glide"
                         if (((idx  >=  0)  &&  (idx  <  Vector_len__Expr((e-> args ))))) {
 
-#line 7513 "bootstrap/lsp.glide"
+#line 7594 "bootstrap/lsp.glide"
                             Expr   a = Vector_get__Expr((e-> args ), idx);
 
-#line 7514 "bootstrap/lsp.glide"
+#line 7595 "bootstrap/lsp.glide"
                             if (((a. kind )  ==  EX_NULL)) {
 
-#line 7515 "bootstrap/lsp.glide"
+#line 7596 "bootstrap/lsp.glide"
                                 Typer_warn(t, (a. line ), (a. column ), "null-deref", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("passing `null` to `", fname), "` — param at index "), __glide_int_to_string(idx)), " is dereferenced without a null-check; this call will segfault"));
                             }
                         }
 
-#line 7519 "bootstrap/lsp.glide"
+#line 7600 "bootstrap/lsp.glide"
                         (buf  =  "");
                     }
                 } else {
 
-#line 7521 "bootstrap/lsp.glide"
+#line 7602 "bootstrap/lsp.glide"
                     (buf  =  __glide_string_concat(buf, __glide_string_substring(idxs, k, (k  +  1))));
                 }
             }
         }
     }
 
-#line 7525 "bootstrap/lsp.glide"
+#line 7606 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*))_ndp_check_calls_in_expr)(t, (e-> lhs ), deref_params);
     }
 
-#line 7526 "bootstrap/lsp.glide"
+#line 7607 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*))_ndp_check_calls_in_expr)(t, (e-> rhs ), deref_params);
     }
 
-#line 7527 "bootstrap/lsp.glide"
+#line 7608 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*))_ndp_check_calls_in_expr)(t, (e-> operand ), deref_params);
     }
 
-#line 7528 "bootstrap/lsp.glide"
+#line 7609 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 7529 "bootstrap/lsp.glide"
+#line 7610 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 7530 "bootstrap/lsp.glide"
+#line 7611 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 7531 "bootstrap/lsp.glide"
+#line 7612 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__string*))_ndp_check_calls_in_expr)(t, (&a), deref_params);
         }
     }
 }
 
 
-#line 7535 "bootstrap/lsp.glide"
+#line 7616 "bootstrap/lsp.glide"
 int32_t   _ndp_atoi (const char*   s) {
 
-#line 7536 "bootstrap/lsp.glide"
+#line 7617 "bootstrap/lsp.glide"
     int32_t   n = 0;
 
-#line 7537 "bootstrap/lsp.glide"
+#line 7618 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  __glide_string_len(s)); i++) {
 
-#line 7538 "bootstrap/lsp.glide"
+#line 7619 "bootstrap/lsp.glide"
         int32_t   c = __glide_char_to_int(__glide_string_at(s, i));
 
-#line 7539 "bootstrap/lsp.glide"
+#line 7620 "bootstrap/lsp.glide"
         if (((c  <  48)  ||  (c  >  57))) {
             return (-1);
         }
 
-#line 7540 "bootstrap/lsp.glide"
+#line 7621 "bootstrap/lsp.glide"
         (n  =  ((n  *  10)  +  (c  -  48)));
     }
 
-#line 7542 "bootstrap/lsp.glide"
+#line 7623 "bootstrap/lsp.glide"
     return n;
 }
 
 
-#line 7545 "bootstrap/lsp.glide"
+#line 7626 "bootstrap/lsp.glide"
 void   _scan_null_body (Typer*   t, Vector__Stmt*   body, HashMap__bool*   nulls) {
 
-#line 7546 "bootstrap/lsp.glide"
+#line 7627 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7547 "bootstrap/lsp.glide"
+#line 7628 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7548 "bootstrap/lsp.glide"
+#line 7629 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Stmt*, HashMap__bool*))_scan_null_stmt)(t, (&s), nulls);
     }
 }
 
 
-#line 7552 "bootstrap/lsp.glide"
+#line 7633 "bootstrap/lsp.glide"
 void   _scan_null_stmt (Typer*   t, Stmt*   s, HashMap__bool*   nulls) {
 
-#line 7553 "bootstrap/lsp.glide"
+#line 7634 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return;
     }
 
-#line 7556 "bootstrap/lsp.glide"
+#line 7637 "bootstrap/lsp.glide"
     if (((s-> let_value )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (s-> let_value ), nulls);
     }
 
-#line 7557 "bootstrap/lsp.glide"
+#line 7638 "bootstrap/lsp.glide"
     if (((s-> expr_value )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (s-> expr_value ), nulls);
     }
 
-#line 7558 "bootstrap/lsp.glide"
+#line 7639 "bootstrap/lsp.glide"
     if (((s-> cond )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (s-> cond ), nulls);
     }
 
-#line 7559 "bootstrap/lsp.glide"
+#line 7640 "bootstrap/lsp.glide"
     if (((s-> for_step )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (s-> for_step ), nulls);
     }
 
-#line 7562 "bootstrap/lsp.glide"
+#line 7643 "bootstrap/lsp.glide"
     if (((((s-> kind )  ==  ST_LET)  &&  ((s-> name )  !=  NULL))  &&  (!__glide_string_eq((s-> name ), "")))) {
 
-#line 7563 "bootstrap/lsp.glide"
+#line 7644 "bootstrap/lsp.glide"
         if ((((s-> let_value )  !=  NULL)  &&  (((s-> let_value )-> kind )  ==  EX_NULL))) {
 
-#line 7564 "bootstrap/lsp.glide"
+#line 7645 "bootstrap/lsp.glide"
             HashMap_insert__bool(nulls, (s-> name ), true);
         } else {
 
-#line 7567 "bootstrap/lsp.glide"
+#line 7648 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(nulls, (s-> name ))) {
                 HashMap_insert__bool(nulls, (s-> name ), false);
             }
         }
     }
 
-#line 7570 "bootstrap/lsp.glide"
+#line 7651 "bootstrap/lsp.glide"
     if (((((((s-> expr_value )  !=  NULL)  &&  (((s-> expr_value )-> kind )  ==  EX_ASSIGN))  &&  (((s-> expr_value )-> lhs )  !=  NULL))  &&  ((((s-> expr_value )-> lhs )-> kind )  ==  EX_IDENT))  &&  (((s-> expr_value )-> rhs )  !=  NULL))) {
 
-#line 7573 "bootstrap/lsp.glide"
+#line 7654 "bootstrap/lsp.glide"
         const char*   nm = (((s-> expr_value )-> lhs )-> str_val );
 
-#line 7574 "bootstrap/lsp.glide"
+#line 7655 "bootstrap/lsp.glide"
         if (((((s-> expr_value )-> rhs )-> kind )  ==  EX_NULL)) {
             HashMap_insert__bool(nulls, nm, true);
         } else {
 
-#line 7575 "bootstrap/lsp.glide"
+#line 7656 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(nulls, nm)) {
                 HashMap_insert__bool(nulls, nm, false);
             }
         }
     }
 
-#line 7580 "bootstrap/lsp.glide"
+#line 7661 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 7581 "bootstrap/lsp.glide"
+#line 7662 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_scan_null_body)(t, (s-> then_body ), nulls);
 
-#line 7582 "bootstrap/lsp.glide"
+#line 7663 "bootstrap/lsp.glide"
         ((void(*)(Vector__Stmt*, HashMap__bool*))_invalidate_assigned)((s-> then_body ), nulls);
     }
 
-#line 7584 "bootstrap/lsp.glide"
+#line 7665 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 7585 "bootstrap/lsp.glide"
+#line 7666 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_scan_null_body)(t, (s-> else_body ), nulls);
 
-#line 7586 "bootstrap/lsp.glide"
+#line 7667 "bootstrap/lsp.glide"
         ((void(*)(Vector__Stmt*, HashMap__bool*))_invalidate_assigned)((s-> else_body ), nulls);
     }
 }
 
 
-#line 7593 "bootstrap/lsp.glide"
+#line 7674 "bootstrap/lsp.glide"
 void   _invalidate_assigned (Vector__Stmt*   body, HashMap__bool*   nulls) {
 
-#line 7594 "bootstrap/lsp.glide"
+#line 7675 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7595 "bootstrap/lsp.glide"
+#line 7676 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7596 "bootstrap/lsp.glide"
+#line 7677 "bootstrap/lsp.glide"
         if ((((((s. expr_value )  !=  NULL)  &&  (((s. expr_value )-> kind )  ==  EX_ASSIGN))  &&  (((s. expr_value )-> lhs )  !=  NULL))  &&  ((((s. expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 7598 "bootstrap/lsp.glide"
+#line 7679 "bootstrap/lsp.glide"
             const char*   nm = (((s. expr_value )-> lhs )-> str_val );
 
-#line 7599 "bootstrap/lsp.glide"
+#line 7680 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(nulls, nm)) {
                 HashMap_insert__bool(nulls, nm, false);
             }
         }
 
-#line 7601 "bootstrap/lsp.glide"
+#line 7682 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, HashMap__bool*))_invalidate_assigned)((s. then_body ), nulls);
         }
 
-#line 7602 "bootstrap/lsp.glide"
+#line 7683 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, HashMap__bool*))_invalidate_assigned)((s. else_body ), nulls);
         }
@@ -70485,191 +70717,191 @@ void   _invalidate_assigned (Vector__Stmt*   body, HashMap__bool*   nulls) {
 }
 
 
-#line 7608 "bootstrap/lsp.glide"
+#line 7689 "bootstrap/lsp.glide"
 void   _scan_null_expr (Typer*   t, Expr*   e, HashMap__bool*   nulls) {
 
-#line 7609 "bootstrap/lsp.glide"
+#line 7690 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7611 "bootstrap/lsp.glide"
+#line 7692 "bootstrap/lsp.glide"
     if (((((e-> kind )  ==  EX_UNARY)  &&  ((e-> op_code )  ==  UN_DEREF))  &&  ((e-> operand )  !=  NULL))) {
 
-#line 7612 "bootstrap/lsp.glide"
+#line 7693 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Expr*, HashMap__bool*, int32_t, int32_t))_check_null_target)(t, (e-> operand ), nulls, (e-> line ), (e-> column ));
     }
 
-#line 7615 "bootstrap/lsp.glide"
+#line 7696 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_MEMBER)  &&  ((e-> lhs )  !=  NULL))) {
 
-#line 7616 "bootstrap/lsp.glide"
+#line 7697 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Expr*, HashMap__bool*, int32_t, int32_t))_check_null_target)(t, (e-> lhs ), nulls, (e-> line ), (e-> column ));
     }
 
-#line 7619 "bootstrap/lsp.glide"
+#line 7700 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> lhs )  !=  NULL))) {
 
-#line 7621 "bootstrap/lsp.glide"
+#line 7702 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Expr*, HashMap__bool*, int32_t, int32_t))_check_null_target)(t, ((e-> lhs )-> lhs ), nulls, (e-> line ), (e-> column ));
     }
 
-#line 7624 "bootstrap/lsp.glide"
+#line 7705 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_INDEX)  &&  ((e-> lhs )  !=  NULL))) {
 
-#line 7625 "bootstrap/lsp.glide"
+#line 7706 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Expr*, HashMap__bool*, int32_t, int32_t))_check_null_target)(t, (e-> lhs ), nulls, (e-> line ), (e-> column ));
     }
 
-#line 7627 "bootstrap/lsp.glide"
+#line 7708 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (e-> lhs ), nulls);
     }
 
-#line 7628 "bootstrap/lsp.glide"
+#line 7709 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (e-> rhs ), nulls);
     }
 
-#line 7629 "bootstrap/lsp.glide"
+#line 7710 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (e-> operand ), nulls);
     }
 
-#line 7630 "bootstrap/lsp.glide"
+#line 7711 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 7631 "bootstrap/lsp.glide"
+#line 7712 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 7632 "bootstrap/lsp.glide"
+#line 7713 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 7633 "bootstrap/lsp.glide"
+#line 7714 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__bool*))_scan_null_expr)(t, (&a), nulls);
         }
     }
 }
 
 
-#line 7638 "bootstrap/lsp.glide"
+#line 7719 "bootstrap/lsp.glide"
 void   _check_null_target (Typer*   t, Expr*   target, HashMap__bool*   nulls, int32_t   line, int32_t   col) {
 
-#line 7639 "bootstrap/lsp.glide"
+#line 7720 "bootstrap/lsp.glide"
     if ((target  ==  NULL)) {
         return;
     }
 
-#line 7641 "bootstrap/lsp.glide"
+#line 7722 "bootstrap/lsp.glide"
     if (((target-> kind )  ==  EX_NULL)) {
 
-#line 7642 "bootstrap/lsp.glide"
+#line 7723 "bootstrap/lsp.glide"
         Typer_warn(t, line, col, "null-deref", "dereferencing the `null` literal — this will segfault at runtime");
 
-#line 7644 "bootstrap/lsp.glide"
+#line 7725 "bootstrap/lsp.glide"
         return;
     }
 
-#line 7646 "bootstrap/lsp.glide"
+#line 7727 "bootstrap/lsp.glide"
     if (((((target-> kind )  ==  EX_IDENT)  &&  HashMap_contains__bool(nulls, (target-> str_val )))  &&  HashMap_get__bool(nulls, (target-> str_val )))) {
 
-#line 7647 "bootstrap/lsp.glide"
+#line 7728 "bootstrap/lsp.glide"
         Typer_warn(t, line, col, "null-deref", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", (target-> str_val )), "` is `null` at this point — deref will segfault. Reassign or guard with `if "), (target-> str_val )), " != null { … }`"));
     }
 }
 
 
-#line 7664 "bootstrap/lsp.glide"
+#line 7745 "bootstrap/lsp.glide"
 void   analysis_bad_free (Typer*   t, Vector__Stmt*   program) {
 
-#line 7665 "bootstrap/lsp.glide"
+#line 7746 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7666 "bootstrap/lsp.glide"
+#line 7747 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7667 "bootstrap/lsp.glide"
+#line 7748 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 7668 "bootstrap/lsp.glide"
+#line 7749 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))_has_allow)((&s), "bad-free")) {
                 continue;
             }
 
-#line 7669 "bootstrap/lsp.glide"
+#line 7750 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 7670 "bootstrap/lsp.glide"
+#line 7751 "bootstrap/lsp.glide"
             HashMap__string*   tys = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7671 "bootstrap/lsp.glide"
+#line 7752 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*))_bf_scan_body)(t, (s. fn_body ), tys, "");
 
-#line 7672 "bootstrap/lsp.glide"
+#line 7753 "bootstrap/lsp.glide"
             HashMap_free__string(tys);
         }
 
-#line 7674 "bootstrap/lsp.glide"
+#line 7755 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 7680 "bootstrap/lsp.glide"
+#line 7761 "bootstrap/lsp.glide"
             const char*   impl_target = "";
 
-#line 7681 "bootstrap/lsp.glide"
+#line 7762 "bootstrap/lsp.glide"
             if (((s. impl_target )  !=  NULL)) {
 
-#line 7682 "bootstrap/lsp.glide"
+#line 7763 "bootstrap/lsp.glide"
                 if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
                     (impl_target  =  ((s. impl_target )-> name ));
                 } else {
 
-#line 7683 "bootstrap/lsp.glide"
+#line 7764 "bootstrap/lsp.glide"
                     if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
                         (impl_target  =  ((s. impl_target )-> name ));
                     }
                 }
             }
 
-#line 7685 "bootstrap/lsp.glide"
+#line 7766 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 7686 "bootstrap/lsp.glide"
+#line 7767 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 7687 "bootstrap/lsp.glide"
+#line 7768 "bootstrap/lsp.glide"
                 if (((m. fn_body )  ==  NULL)) {
                     continue;
                 }
 
-#line 7688 "bootstrap/lsp.glide"
+#line 7769 "bootstrap/lsp.glide"
                 if (((bool(*)(Stmt*, const char*))_has_allow)((&m), "bad-free")) {
                     continue;
                 }
 
-#line 7689 "bootstrap/lsp.glide"
+#line 7770 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
 
-#line 7690 "bootstrap/lsp.glide"
+#line 7771 "bootstrap/lsp.glide"
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 7692 "bootstrap/lsp.glide"
+#line 7773 "bootstrap/lsp.glide"
                 const char*   self_destructor_of = "";
 
-#line 7693 "bootstrap/lsp.glide"
+#line 7774 "bootstrap/lsp.glide"
                 if ((__glide_string_eq((m. name ), "free")  &&  (__glide_string_eq(impl_target, "Vector")  ||  __glide_string_eq(impl_target, "HashMap")))) {
 
-#line 7694 "bootstrap/lsp.glide"
+#line 7775 "bootstrap/lsp.glide"
                     (self_destructor_of  =  impl_target);
                 }
 
-#line 7696 "bootstrap/lsp.glide"
+#line 7777 "bootstrap/lsp.glide"
                 HashMap__string*   tys = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7697 "bootstrap/lsp.glide"
+#line 7778 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*))_bf_scan_body)(t, (m. fn_body ), tys, self_destructor_of);
 
-#line 7698 "bootstrap/lsp.glide"
+#line 7779 "bootstrap/lsp.glide"
                 HashMap_free__string(tys);
             }
         }
@@ -70677,106 +70909,106 @@ void   analysis_bad_free (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 7704 "bootstrap/lsp.glide"
+#line 7785 "bootstrap/lsp.glide"
 void   _bf_scan_body (Typer*   t, Vector__Stmt*   body, HashMap__string*   tys, const char*   self_destructor_of) {
 
-#line 7705 "bootstrap/lsp.glide"
+#line 7786 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7706 "bootstrap/lsp.glide"
+#line 7787 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7707 "bootstrap/lsp.glide"
+#line 7788 "bootstrap/lsp.glide"
         ((void(*)(Typer*, Stmt*, HashMap__string*, const char*))_bf_scan_stmt)(t, (&s), tys, self_destructor_of);
     }
 }
 
 
-#line 7711 "bootstrap/lsp.glide"
+#line 7792 "bootstrap/lsp.glide"
 void   _bf_scan_stmt (Typer*   t, Stmt*   s, HashMap__string*   tys, const char*   self_destructor_of) {
 
-#line 7712 "bootstrap/lsp.glide"
+#line 7793 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return;
     }
 
-#line 7713 "bootstrap/lsp.glide"
+#line 7794 "bootstrap/lsp.glide"
     if ((((((s-> kind )  ==  ST_LET)  &&  ((s-> name )  !=  NULL))  &&  (!__glide_string_eq((s-> name ), "")))  &&  ((s-> let_ty )  !=  NULL))) {
 
-#line 7717 "bootstrap/lsp.glide"
+#line 7798 "bootstrap/lsp.glide"
         HashMap_insert__string(tys, (s-> name ), ((const char*(*)(Type*))_bf_ty_tag_for_free)((s-> let_ty )));
     }
 
-#line 7719 "bootstrap/lsp.glide"
+#line 7800 "bootstrap/lsp.glide"
     if (((s-> expr_value )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*))_bf_check_expr)(t, (s-> expr_value ), tys, self_destructor_of);
     }
 
-#line 7720 "bootstrap/lsp.glide"
+#line 7801 "bootstrap/lsp.glide"
     if (((s-> let_value )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*))_bf_check_expr)(t, (s-> let_value ), tys, self_destructor_of);
     }
 
-#line 7721 "bootstrap/lsp.glide"
+#line 7802 "bootstrap/lsp.glide"
     if (((s-> cond )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*))_bf_check_expr)(t, (s-> cond ), tys, self_destructor_of);
     }
 
-#line 7722 "bootstrap/lsp.glide"
+#line 7803 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
         ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*))_bf_scan_body)(t, (s-> then_body ), tys, self_destructor_of);
     }
 
-#line 7723 "bootstrap/lsp.glide"
+#line 7804 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
         ((void(*)(Typer*, Vector__Stmt*, HashMap__string*, const char*))_bf_scan_body)(t, (s-> else_body ), tys, self_destructor_of);
     }
 }
 
 
-#line 7726 "bootstrap/lsp.glide"
+#line 7807 "bootstrap/lsp.glide"
 void   _bf_check_expr (Typer*   t, Expr*   e, HashMap__string*   tys, const char*   self_destructor_of) {
 
-#line 7727 "bootstrap/lsp.glide"
+#line 7808 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7728 "bootstrap/lsp.glide"
+#line 7809 "bootstrap/lsp.glide"
     if ((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq(((e-> lhs )-> str_val ), "free"))  &&  ((e-> args )  !=  NULL))  &&  (Vector_len__Expr((e-> args ))  ==  1))) {
 
-#line 7731 "bootstrap/lsp.glide"
+#line 7812 "bootstrap/lsp.glide"
         Expr   arg = Vector_get__Expr((e-> args ), 0);
 
-#line 7733 "bootstrap/lsp.glide"
+#line 7814 "bootstrap/lsp.glide"
         Expr*   probe = (&arg);
 
-#line 7734 "bootstrap/lsp.glide"
+#line 7815 "bootstrap/lsp.glide"
         while (((probe  !=  NULL)  &&  ((probe-> kind )  ==  EX_CAST))) {
             (probe  =  (probe-> lhs ));
         }
 
-#line 7735 "bootstrap/lsp.glide"
+#line 7816 "bootstrap/lsp.glide"
         if ((((probe  !=  NULL)  &&  ((probe-> kind )  ==  EX_IDENT))  &&  HashMap_contains__string(tys, (probe-> str_val )))) {
 
-#line 7737 "bootstrap/lsp.glide"
+#line 7818 "bootstrap/lsp.glide"
             const char*   tag = HashMap_get__string(tys, (probe-> str_val ));
 
-#line 7738 "bootstrap/lsp.glide"
+#line 7819 "bootstrap/lsp.glide"
             if (__glide_string_eq(tag, "string")) {
 
-#line 7739 "bootstrap/lsp.glide"
+#line 7820 "bootstrap/lsp.glide"
                 Typer_warn(t, (e-> line ), (e-> column ), "bad-free", __glide_string_concat(__glide_string_concat("`free(", (probe-> str_val )), ")` corrupts the heap — strings are arena-managed and freed automatically. Remove this line."));
             } else {
 
-#line 7741 "bootstrap/lsp.glide"
+#line 7822 "bootstrap/lsp.glide"
                 if ((__glide_string_eq(tag, "Vector")  ||  __glide_string_eq(tag, "HashMap"))) {
 
-#line 7751 "bootstrap/lsp.glide"
+#line 7832 "bootstrap/lsp.glide"
                     if ((__glide_string_eq((probe-> str_val ), "self")  &&  __glide_string_eq(tag, self_destructor_of))) {
                     } else {
 
-#line 7754 "bootstrap/lsp.glide"
+#line 7835 "bootstrap/lsp.glide"
                         Typer_warn(t, (e-> line ), (e-> column ), "bad-free", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`free(", (probe-> str_val )), ")` leaks `"), (probe-> str_val )), "`'s internal buffers — call `"), (probe-> str_val )), ".free()` so the destructor releases keys/values/data first."));
                     }
                 }
@@ -70784,191 +71016,191 @@ void   _bf_check_expr (Typer*   t, Expr*   e, HashMap__string*   tys, const char
         }
     }
 
-#line 7760 "bootstrap/lsp.glide"
+#line 7841 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*))_bf_check_expr)(t, (e-> lhs ), tys, self_destructor_of);
     }
 
-#line 7761 "bootstrap/lsp.glide"
+#line 7842 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*))_bf_check_expr)(t, (e-> rhs ), tys, self_destructor_of);
     }
 
-#line 7762 "bootstrap/lsp.glide"
+#line 7843 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*, const char*))_bf_check_expr)(t, (e-> operand ), tys, self_destructor_of);
     }
 
-#line 7763 "bootstrap/lsp.glide"
+#line 7844 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 7764 "bootstrap/lsp.glide"
+#line 7845 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 7765 "bootstrap/lsp.glide"
+#line 7846 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 7766 "bootstrap/lsp.glide"
+#line 7847 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__string*, const char*))_bf_check_expr)(t, (&a), tys, self_destructor_of);
         }
     }
 }
 
 
-#line 7775 "bootstrap/lsp.glide"
+#line 7856 "bootstrap/lsp.glide"
 const char*   _bf_ty_tag_for_free (Type*   ty) {
 
-#line 7776 "bootstrap/lsp.glide"
+#line 7857 "bootstrap/lsp.glide"
     if ((ty  ==  NULL)) {
         return "";
     }
 
-#line 7778 "bootstrap/lsp.glide"
+#line 7859 "bootstrap/lsp.glide"
     if ((((ty-> kind )  ==  TY_NAMED)  &&  __glide_string_eq((ty-> name ), "string"))) {
         return "string";
     }
 
-#line 7780 "bootstrap/lsp.glide"
+#line 7861 "bootstrap/lsp.glide"
     if ((((((ty-> kind )  ==  TY_POINTER)  &&  ((ty-> inner )  !=  NULL))  &&  (((ty-> inner )-> kind )  ==  TY_NAMED))  &&  __glide_string_eq(((ty-> inner )-> name ), "string"))) {
 
-#line 7782 "bootstrap/lsp.glide"
+#line 7863 "bootstrap/lsp.glide"
         return "";
     }
 
-#line 7785 "bootstrap/lsp.glide"
+#line 7866 "bootstrap/lsp.glide"
     if ((((ty-> kind )  ==  TY_POINTER)  &&  ((ty-> inner )  !=  NULL))) {
 
-#line 7786 "bootstrap/lsp.glide"
+#line 7867 "bootstrap/lsp.glide"
         const char*   inner_name = "";
 
-#line 7787 "bootstrap/lsp.glide"
+#line 7868 "bootstrap/lsp.glide"
         if ((((ty-> inner )-> kind )  ==  TY_NAMED)) {
             (inner_name  =  ((ty-> inner )-> name ));
         } else {
 
-#line 7788 "bootstrap/lsp.glide"
+#line 7869 "bootstrap/lsp.glide"
             if ((((ty-> inner )-> kind )  ==  TY_GENERIC)) {
                 (inner_name  =  ((ty-> inner )-> name ));
             }
         }
 
-#line 7789 "bootstrap/lsp.glide"
+#line 7870 "bootstrap/lsp.glide"
         if ((__glide_string_eq(inner_name, "Vector")  ||  __glide_string_eq(inner_name, "HashMap"))) {
             return inner_name;
         }
 
-#line 7792 "bootstrap/lsp.glide"
+#line 7873 "bootstrap/lsp.glide"
         return inner_name;
     }
 
-#line 7794 "bootstrap/lsp.glide"
+#line 7875 "bootstrap/lsp.glide"
     if (((ty-> kind )  ==  TY_GENERIC)) {
         return (ty-> name );
     }
 
-#line 7795 "bootstrap/lsp.glide"
+#line 7876 "bootstrap/lsp.glide"
     return "";
 }
 
 
-#line 7800 "bootstrap/lsp.glide"
+#line 7881 "bootstrap/lsp.glide"
 const char*   _bf_ty_tag (Type*   ty) {
 
-#line 7801 "bootstrap/lsp.glide"
+#line 7882 "bootstrap/lsp.glide"
     if ((ty  ==  NULL)) {
         return "";
     }
 
-#line 7802 "bootstrap/lsp.glide"
+#line 7883 "bootstrap/lsp.glide"
     if (((ty-> kind )  ==  TY_NAMED)) {
         return (ty-> name );
     }
 
-#line 7803 "bootstrap/lsp.glide"
+#line 7884 "bootstrap/lsp.glide"
     if ((((ty-> kind )  ==  TY_POINTER)  &&  ((ty-> inner )  !=  NULL))) {
 
-#line 7805 "bootstrap/lsp.glide"
+#line 7886 "bootstrap/lsp.glide"
         if ((((ty-> inner )-> kind )  ==  TY_NAMED)) {
             return ((ty-> inner )-> name );
         }
 
-#line 7806 "bootstrap/lsp.glide"
+#line 7887 "bootstrap/lsp.glide"
         if ((((ty-> inner )-> kind )  ==  TY_GENERIC)) {
             return ((ty-> inner )-> name );
         }
     }
 
-#line 7808 "bootstrap/lsp.glide"
+#line 7889 "bootstrap/lsp.glide"
     if (((ty-> kind )  ==  TY_GENERIC)) {
         return (ty-> name );
     }
 
-#line 7809 "bootstrap/lsp.glide"
+#line 7890 "bootstrap/lsp.glide"
     return "";
 }
 
 
-#line 7829 "bootstrap/lsp.glide"
+#line 7910 "bootstrap/lsp.glide"
 void   analysis_string_eq_op (Typer*   t, Vector__Stmt*   program) {
 
-#line 7830 "bootstrap/lsp.glide"
+#line 7911 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7831 "bootstrap/lsp.glide"
+#line 7912 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7832 "bootstrap/lsp.glide"
+#line 7913 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
 
-#line 7833 "bootstrap/lsp.glide"
+#line 7914 "bootstrap/lsp.glide"
             if (((bool(*)(Stmt*, const char*))_has_allow)((&s), "string-eq-op")) {
                 continue;
             }
 
-#line 7834 "bootstrap/lsp.glide"
+#line 7915 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 7835 "bootstrap/lsp.glide"
+#line 7916 "bootstrap/lsp.glide"
             HashMap__string*   tys = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7836 "bootstrap/lsp.glide"
+#line 7917 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_seq_scan_body)(t, (s. fn_body ), tys);
 
-#line 7837 "bootstrap/lsp.glide"
+#line 7918 "bootstrap/lsp.glide"
             HashMap_free__string(tys);
         }
 
-#line 7839 "bootstrap/lsp.glide"
+#line 7920 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 7840 "bootstrap/lsp.glide"
+#line 7921 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 7841 "bootstrap/lsp.glide"
+#line 7922 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 7842 "bootstrap/lsp.glide"
+#line 7923 "bootstrap/lsp.glide"
                 if (((m. fn_body )  ==  NULL)) {
                     continue;
                 }
 
-#line 7843 "bootstrap/lsp.glide"
+#line 7924 "bootstrap/lsp.glide"
                 if (((bool(*)(Stmt*, const char*))_has_allow)((&m), "string-eq-op")) {
                     continue;
                 }
 
-#line 7844 "bootstrap/lsp.glide"
+#line 7925 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 7845 "bootstrap/lsp.glide"
+#line 7926 "bootstrap/lsp.glide"
                 HashMap__string*   tys = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 7846 "bootstrap/lsp.glide"
+#line 7927 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_seq_scan_body)(t, (m. fn_body ), tys);
 
-#line 7847 "bootstrap/lsp.glide"
+#line 7928 "bootstrap/lsp.glide"
                 HashMap_free__string(tys);
             }
         }
@@ -70976,43 +71208,43 @@ void   analysis_string_eq_op (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 7852 "bootstrap/lsp.glide"
+#line 7933 "bootstrap/lsp.glide"
 void   _seq_scan_body (Typer*   t, Vector__Stmt*   body, HashMap__string*   tys) {
 
-#line 7853 "bootstrap/lsp.glide"
+#line 7934 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 7854 "bootstrap/lsp.glide"
+#line 7935 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 7855 "bootstrap/lsp.glide"
+#line 7936 "bootstrap/lsp.glide"
         if ((((((s. kind )  ==  ST_LET)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))  &&  ((s. let_ty )  !=  NULL))) {
 
-#line 7856 "bootstrap/lsp.glide"
+#line 7937 "bootstrap/lsp.glide"
             HashMap_insert__string(tys, (s. name ), ((const char*(*)(Type*))_bf_ty_tag)((s. let_ty )));
         }
 
-#line 7858 "bootstrap/lsp.glide"
+#line 7939 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__string*))_seq_check_expr)(t, (s. expr_value ), tys);
         }
 
-#line 7859 "bootstrap/lsp.glide"
+#line 7940 "bootstrap/lsp.glide"
         if (((s. let_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__string*))_seq_check_expr)(t, (s. let_value ), tys);
         }
 
-#line 7860 "bootstrap/lsp.glide"
+#line 7941 "bootstrap/lsp.glide"
         if (((s. cond )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__string*))_seq_check_expr)(t, (s. cond ), tys);
         }
 
-#line 7861 "bootstrap/lsp.glide"
+#line 7942 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_seq_scan_body)(t, (s. then_body ), tys);
         }
 
-#line 7862 "bootstrap/lsp.glide"
+#line 7943 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__string*))_seq_scan_body)(t, (s. else_body ), tys);
         }
@@ -71020,366 +71252,366 @@ void   _seq_scan_body (Typer*   t, Vector__Stmt*   body, HashMap__string*   tys)
 }
 
 
-#line 7865 "bootstrap/lsp.glide"
+#line 7946 "bootstrap/lsp.glide"
 void   _seq_check_expr (Typer*   t, Expr*   e, HashMap__string*   tys) {
 
-#line 7866 "bootstrap/lsp.glide"
+#line 7947 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 7867 "bootstrap/lsp.glide"
+#line 7948 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_BINARY)  &&  (((e-> op_code )  ==  OP_EQ)  ||  ((e-> op_code )  ==  OP_NE)))  &&  ((e-> lhs )  !=  NULL))  &&  ((e-> rhs )  !=  NULL))) {
 
-#line 7871 "bootstrap/lsp.glide"
+#line 7952 "bootstrap/lsp.glide"
         if (((((e-> lhs )-> kind )  ==  EX_NULL)  ||  (((e-> rhs )-> kind )  ==  EX_NULL))) {
         } else {
 
-#line 7873 "bootstrap/lsp.glide"
+#line 7954 "bootstrap/lsp.glide"
             bool   lhs_str = ((bool(*)(Expr*, HashMap__string*))_seq_is_string_expr)((e-> lhs ), tys);
 
-#line 7874 "bootstrap/lsp.glide"
+#line 7955 "bootstrap/lsp.glide"
             bool   rhs_str = ((bool(*)(Expr*, HashMap__string*))_seq_is_string_expr)((e-> rhs ), tys);
 
-#line 7875 "bootstrap/lsp.glide"
+#line 7956 "bootstrap/lsp.glide"
             if ((lhs_str  ||  rhs_str)) {
 
-#line 7876 "bootstrap/lsp.glide"
+#line 7957 "bootstrap/lsp.glide"
                 const char*   op_name = "==";
 
-#line 7877 "bootstrap/lsp.glide"
+#line 7958 "bootstrap/lsp.glide"
                 if (((e-> op_code )  ==  OP_NE)) {
                     (op_name  =  "!=");
                 }
 
-#line 7878 "bootstrap/lsp.glide"
+#line 7959 "bootstrap/lsp.glide"
                 const char*   suggest = ".eq(…)";
 
-#line 7879 "bootstrap/lsp.glide"
+#line 7960 "bootstrap/lsp.glide"
                 if (((e-> op_code )  ==  OP_NE)) {
                     (suggest  =  "!… .eq(…)");
                 }
 
-#line 7880 "bootstrap/lsp.glide"
+#line 7961 "bootstrap/lsp.glide"
                 Typer_warn(t, (e-> line ), (e-> column ), "string-eq-op", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", op_name), "` on strings compares pointers, not bytes — use `"), suggest), "` for the actual comparison"));
             }
         }
     }
 
-#line 7885 "bootstrap/lsp.glide"
+#line 7966 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*))_seq_check_expr)(t, (e-> lhs ), tys);
     }
 
-#line 7886 "bootstrap/lsp.glide"
+#line 7967 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*))_seq_check_expr)(t, (e-> rhs ), tys);
     }
 
-#line 7887 "bootstrap/lsp.glide"
+#line 7968 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__string*))_seq_check_expr)(t, (e-> operand ), tys);
     }
 
-#line 7888 "bootstrap/lsp.glide"
+#line 7969 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 7889 "bootstrap/lsp.glide"
+#line 7970 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 7890 "bootstrap/lsp.glide"
+#line 7971 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 7891 "bootstrap/lsp.glide"
+#line 7972 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__string*))_seq_check_expr)(t, (&a), tys);
         }
     }
 }
 
 
-#line 7895 "bootstrap/lsp.glide"
+#line 7976 "bootstrap/lsp.glide"
 bool   _seq_is_string_expr (Expr*   e, HashMap__string*   tys) {
 
-#line 7896 "bootstrap/lsp.glide"
+#line 7977 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 7897 "bootstrap/lsp.glide"
+#line 7978 "bootstrap/lsp.glide"
     if (((e-> kind )  ==  EX_STRING)) {
         return true;
     }
 
-#line 7898 "bootstrap/lsp.glide"
+#line 7979 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_IDENT)  &&  HashMap_contains__string(tys, (e-> str_val )))) {
 
-#line 7899 "bootstrap/lsp.glide"
+#line 7980 "bootstrap/lsp.glide"
         return __glide_string_eq(HashMap_get__string(tys, (e-> str_val )), "string");
     }
 
-#line 7901 "bootstrap/lsp.glide"
+#line 7982 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 7909 "bootstrap/lsp.glide"
+#line 7990 "bootstrap/lsp.glide"
 void   analysis_unused_import (Typer*   t, Vector__Stmt*   program) {
 
-#line 7912 "bootstrap/lsp.glide"
+#line 7993 "bootstrap/lsp.glide"
     HashMap__bool*   used = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 7913 "bootstrap/lsp.glide"
+#line 7994 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7914 "bootstrap/lsp.glide"
+#line 7995 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7915 "bootstrap/lsp.glide"
+#line 7996 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_IMPORT)) {
             continue;
         }
 
-#line 7916 "bootstrap/lsp.glide"
+#line 7997 "bootstrap/lsp.glide"
         ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((&s), used);
     }
 
-#line 7918 "bootstrap/lsp.glide"
+#line 7999 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 7919 "bootstrap/lsp.glide"
+#line 8000 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 7920 "bootstrap/lsp.glide"
+#line 8001 "bootstrap/lsp.glide"
         if (((s. kind )  !=  ST_IMPORT)) {
             continue;
         }
 
-#line 7921 "bootstrap/lsp.glide"
+#line 8002 "bootstrap/lsp.glide"
         if (((bool(*)(Stmt*, const char*))_has_allow)((&s), "unused-import")) {
             continue;
         }
 
-#line 7922 "bootstrap/lsp.glide"
+#line 8003 "bootstrap/lsp.glide"
         if ((s. import_wildcard )) {
             continue;
         }
 
-#line 7923 "bootstrap/lsp.glide"
+#line 8004 "bootstrap/lsp.glide"
         if ((((s. imported_items )  ==  NULL)  ||  (Vector_len__string((s. imported_items ))  ==  0))) {
             continue;
         }
 
-#line 7924 "bootstrap/lsp.glide"
+#line 8005 "bootstrap/lsp.glide"
         ((t-> current_origin )  =  (s. origin ));
 
-#line 7925 "bootstrap/lsp.glide"
+#line 8006 "bootstrap/lsp.glide"
         bool   any_used = false;
 
-#line 7926 "bootstrap/lsp.glide"
+#line 8007 "bootstrap/lsp.glide"
         for (int32_t   j = 0; (j  <  Vector_len__string((s. imported_items ))); j++) {
 
-#line 7927 "bootstrap/lsp.glide"
+#line 8008 "bootstrap/lsp.glide"
             const char*   n = Vector_get__string((s. imported_items ), j);
 
-#line 7928 "bootstrap/lsp.glide"
+#line 8009 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(used, n)) {
                 (any_used  =  true);
                 break;
             }
         }
 
-#line 7930 "bootstrap/lsp.glide"
+#line 8011 "bootstrap/lsp.glide"
         if ((!any_used)) {
 
-#line 7931 "bootstrap/lsp.glide"
+#line 8012 "bootstrap/lsp.glide"
             const char*   first = Vector_get__string((s. imported_items ), 0);
 
-#line 7932 "bootstrap/lsp.glide"
+#line 8013 "bootstrap/lsp.glide"
             Typer_warn(t, (s. line ), (s. column ), "unused-import", __glide_string_concat(__glide_string_concat("import of `", first), "` is never referenced in this file — remove it"));
         }
     }
 
-#line 7936 "bootstrap/lsp.glide"
+#line 8017 "bootstrap/lsp.glide"
     HashMap_free__bool(used);
 }
 
 
-#line 7938 "bootstrap/lsp.glide"
+#line 8019 "bootstrap/lsp.glide"
 void   _ui_collect_stmt (Stmt*   s, HashMap__bool*   used) {
 
-#line 7939 "bootstrap/lsp.glide"
+#line 8020 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return;
     }
 
-#line 7940 "bootstrap/lsp.glide"
+#line 8021 "bootstrap/lsp.glide"
     if (((s-> let_value )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((s-> let_value ), used);
     }
 
-#line 7941 "bootstrap/lsp.glide"
+#line 8022 "bootstrap/lsp.glide"
     if (((s-> expr_value )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((s-> expr_value ), used);
     }
 
-#line 7942 "bootstrap/lsp.glide"
+#line 8023 "bootstrap/lsp.glide"
     if (((s-> cond )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((s-> cond ), used);
     }
 
-#line 7943 "bootstrap/lsp.glide"
+#line 8024 "bootstrap/lsp.glide"
     if (((s-> for_step )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((s-> for_step ), used);
     }
 
-#line 7944 "bootstrap/lsp.glide"
+#line 8025 "bootstrap/lsp.glide"
     if (((s-> for_init )  !=  NULL)) {
         ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((s-> for_init ), used);
     }
 
-#line 7945 "bootstrap/lsp.glide"
+#line 8026 "bootstrap/lsp.glide"
     if (((s-> scrutinee )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((s-> scrutinee ), used);
     }
 
-#line 7949 "bootstrap/lsp.glide"
+#line 8030 "bootstrap/lsp.glide"
     if (((s-> attrs )  !=  NULL)) {
 
-#line 7950 "bootstrap/lsp.glide"
+#line 8031 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Attr((s-> attrs ))); i++) {
 
-#line 7951 "bootstrap/lsp.glide"
+#line 8032 "bootstrap/lsp.glide"
             Attr   a = Vector_get__Attr((s-> attrs ), i);
 
-#line 7952 "bootstrap/lsp.glide"
+#line 8033 "bootstrap/lsp.glide"
             if (((a. args )  ==  NULL)) {
                 continue;
             }
 
-#line 7953 "bootstrap/lsp.glide"
+#line 8034 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Expr((a. args ))); j++) {
 
-#line 7954 "bootstrap/lsp.glide"
+#line 8035 "bootstrap/lsp.glide"
                 Expr   ae = Vector_get__Expr((a. args ), j);
 
-#line 7955 "bootstrap/lsp.glide"
+#line 8036 "bootstrap/lsp.glide"
                 ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((&ae), used);
             }
         }
     }
 
-#line 7962 "bootstrap/lsp.glide"
+#line 8043 "bootstrap/lsp.glide"
     ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((s-> let_ty ), used);
 
-#line 7963 "bootstrap/lsp.glide"
+#line 8044 "bootstrap/lsp.glide"
     ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((s-> fn_ret_ty ), used);
 
-#line 7964 "bootstrap/lsp.glide"
+#line 8045 "bootstrap/lsp.glide"
     ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((s-> impl_target ), used);
 
-#line 7965 "bootstrap/lsp.glide"
+#line 8046 "bootstrap/lsp.glide"
     if (((s-> fn_params )  !=  NULL)) {
 
-#line 7966 "bootstrap/lsp.glide"
+#line 8047 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Param((s-> fn_params ))); i++) {
 
-#line 7967 "bootstrap/lsp.glide"
+#line 8048 "bootstrap/lsp.glide"
             Param   p = Vector_get__Param((s-> fn_params ), i);
 
-#line 7968 "bootstrap/lsp.glide"
+#line 8049 "bootstrap/lsp.glide"
             ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((p. ty ), used);
         }
     }
 
-#line 7971 "bootstrap/lsp.glide"
+#line 8052 "bootstrap/lsp.glide"
     if (((s-> struct_fields )  !=  NULL)) {
 
-#line 7972 "bootstrap/lsp.glide"
+#line 8053 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Field((s-> struct_fields ))); i++) {
 
-#line 7973 "bootstrap/lsp.glide"
+#line 8054 "bootstrap/lsp.glide"
             Field   f = Vector_get__Field((s-> struct_fields ), i);
 
-#line 7974 "bootstrap/lsp.glide"
+#line 8055 "bootstrap/lsp.glide"
             ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((f. ty ), used);
         }
     }
 
-#line 7977 "bootstrap/lsp.glide"
+#line 8058 "bootstrap/lsp.glide"
     if (((s-> then_body )  !=  NULL)) {
 
-#line 7978 "bootstrap/lsp.glide"
+#line 8059 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> then_body ))); i++) {
 
-#line 7979 "bootstrap/lsp.glide"
+#line 8060 "bootstrap/lsp.glide"
             Stmt   c = Vector_get__Stmt((s-> then_body ), i);
 
-#line 7980 "bootstrap/lsp.glide"
+#line 8061 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((&c), used);
         }
     }
 
-#line 7983 "bootstrap/lsp.glide"
+#line 8064 "bootstrap/lsp.glide"
     if (((s-> else_body )  !=  NULL)) {
 
-#line 7984 "bootstrap/lsp.glide"
+#line 8065 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> else_body ))); i++) {
 
-#line 7985 "bootstrap/lsp.glide"
+#line 8066 "bootstrap/lsp.glide"
             Stmt   c = Vector_get__Stmt((s-> else_body ), i);
 
-#line 7986 "bootstrap/lsp.glide"
+#line 8067 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((&c), used);
         }
     }
 
-#line 7989 "bootstrap/lsp.glide"
+#line 8070 "bootstrap/lsp.glide"
     if (((s-> fn_body )  !=  NULL)) {
 
-#line 7990 "bootstrap/lsp.glide"
+#line 8071 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> fn_body ))); i++) {
 
-#line 7991 "bootstrap/lsp.glide"
+#line 8072 "bootstrap/lsp.glide"
             Stmt   c = Vector_get__Stmt((s-> fn_body ), i);
 
-#line 7992 "bootstrap/lsp.glide"
+#line 8073 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((&c), used);
         }
     }
 
-#line 7995 "bootstrap/lsp.glide"
+#line 8076 "bootstrap/lsp.glide"
     if (((s-> impl_methods )  !=  NULL)) {
 
-#line 7996 "bootstrap/lsp.glide"
+#line 8077 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Stmt((s-> impl_methods ))); i++) {
 
-#line 7997 "bootstrap/lsp.glide"
+#line 8078 "bootstrap/lsp.glide"
             Stmt   c = Vector_get__Stmt((s-> impl_methods ), i);
 
-#line 7998 "bootstrap/lsp.glide"
+#line 8079 "bootstrap/lsp.glide"
             ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((&c), used);
         }
     }
 
-#line 8001 "bootstrap/lsp.glide"
+#line 8082 "bootstrap/lsp.glide"
     if (((s-> arms )  !=  NULL)) {
 
-#line 8002 "bootstrap/lsp.glide"
+#line 8083 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__MatchArm((s-> arms ))); i++) {
 
-#line 8003 "bootstrap/lsp.glide"
+#line 8084 "bootstrap/lsp.glide"
             MatchArm   a = Vector_get__MatchArm((s-> arms ), i);
 
-#line 8004 "bootstrap/lsp.glide"
+#line 8085 "bootstrap/lsp.glide"
             if (((a. body )  !=  NULL)) {
 
-#line 8005 "bootstrap/lsp.glide"
+#line 8086 "bootstrap/lsp.glide"
                 for (int32_t   j = 0; (j  <  Vector_len__Stmt((a. body ))); j++) {
 
-#line 8006 "bootstrap/lsp.glide"
+#line 8087 "bootstrap/lsp.glide"
                     Stmt   c = Vector_get__Stmt((a. body ), j);
 
-#line 8007 "bootstrap/lsp.glide"
+#line 8088 "bootstrap/lsp.glide"
                     ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((&c), used);
                 }
             }
@@ -71388,204 +71620,204 @@ void   _ui_collect_stmt (Stmt*   s, HashMap__bool*   used) {
 }
 
 
-#line 8013 "bootstrap/lsp.glide"
+#line 8094 "bootstrap/lsp.glide"
 void   _ui_collect_expr (Expr*   e, HashMap__bool*   used) {
 
-#line 8014 "bootstrap/lsp.glide"
+#line 8095 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 8015 "bootstrap/lsp.glide"
+#line 8096 "bootstrap/lsp.glide"
     if (((e-> kind )  ==  EX_IDENT)) {
         HashMap_insert__bool(used, (e-> str_val ), true);
     }
 
-#line 8016 "bootstrap/lsp.glide"
+#line 8097 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_MEMBER)  &&  ((e-> field )  !=  NULL))) {
         HashMap_insert__bool(used, (e-> field ), true);
     }
 
-#line 8017 "bootstrap/lsp.glide"
+#line 8098 "bootstrap/lsp.glide"
     if (((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8018 "bootstrap/lsp.glide"
+#line 8099 "bootstrap/lsp.glide"
         HashMap_insert__bool(used, ((e-> lhs )-> str_val ), true);
     }
 
-#line 8023 "bootstrap/lsp.glide"
+#line 8104 "bootstrap/lsp.glide"
     if (((e-> kind )  ==  EX_PATH)) {
 
-#line 8024 "bootstrap/lsp.glide"
+#line 8105 "bootstrap/lsp.glide"
         if (((e-> str_val )  !=  NULL)) {
             HashMap_insert__bool(used, (e-> str_val ), true);
         }
 
-#line 8025 "bootstrap/lsp.glide"
+#line 8106 "bootstrap/lsp.glide"
         if (((e-> field )  !=  NULL)) {
             HashMap_insert__bool(used, (e-> field ), true);
         }
     }
 
-#line 8029 "bootstrap/lsp.glide"
+#line 8110 "bootstrap/lsp.glide"
     if (((e-> kind )  ==  EX_FNEXPR)) {
 
-#line 8030 "bootstrap/lsp.glide"
+#line 8111 "bootstrap/lsp.glide"
         if (((e-> fn_expr_params )  !=  NULL)) {
 
-#line 8031 "bootstrap/lsp.glide"
+#line 8112 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__Param((e-> fn_expr_params ))); i++) {
 
-#line 8032 "bootstrap/lsp.glide"
+#line 8113 "bootstrap/lsp.glide"
                 Param   p = Vector_get__Param((e-> fn_expr_params ), i);
 
-#line 8033 "bootstrap/lsp.glide"
+#line 8114 "bootstrap/lsp.glide"
                 ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((p. ty ), used);
             }
         }
 
-#line 8036 "bootstrap/lsp.glide"
+#line 8117 "bootstrap/lsp.glide"
         ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((e-> cast_to ), used);
 
-#line 8037 "bootstrap/lsp.glide"
+#line 8118 "bootstrap/lsp.glide"
         if (((e-> fn_expr_body )  !=  NULL)) {
 
-#line 8038 "bootstrap/lsp.glide"
+#line 8119 "bootstrap/lsp.glide"
             for (int32_t   i = 0; (i  <  Vector_len__Stmt((e-> fn_expr_body ))); i++) {
 
-#line 8039 "bootstrap/lsp.glide"
+#line 8120 "bootstrap/lsp.glide"
                 Stmt   bs = Vector_get__Stmt((e-> fn_expr_body ), i);
 
-#line 8040 "bootstrap/lsp.glide"
+#line 8121 "bootstrap/lsp.glide"
                 ((void(*)(Stmt*, HashMap__bool*))_ui_collect_stmt)((&bs), used);
             }
         }
     }
 
-#line 8045 "bootstrap/lsp.glide"
+#line 8126 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_CAST)  ||  ((e-> kind )  ==  EX_SIZEOF))) {
         ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((e-> cast_to ), used);
     }
 
-#line 8047 "bootstrap/lsp.glide"
+#line 8128 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_STRUCT_LIT)  &&  ((e-> str_val )  !=  NULL))) {
         HashMap_insert__bool(used, (e-> str_val ), true);
     }
 
-#line 8048 "bootstrap/lsp.glide"
+#line 8129 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((e-> lhs ), used);
     }
 
-#line 8049 "bootstrap/lsp.glide"
+#line 8130 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((e-> rhs ), used);
     }
 
-#line 8050 "bootstrap/lsp.glide"
+#line 8131 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((e-> operand ), used);
     }
 
-#line 8051 "bootstrap/lsp.glide"
+#line 8132 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 8052 "bootstrap/lsp.glide"
+#line 8133 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 8053 "bootstrap/lsp.glide"
+#line 8134 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 8054 "bootstrap/lsp.glide"
+#line 8135 "bootstrap/lsp.glide"
             ((void(*)(Expr*, HashMap__bool*))_ui_collect_expr)((&a), used);
         }
     }
 }
 
 
-#line 8060 "bootstrap/lsp.glide"
+#line 8141 "bootstrap/lsp.glide"
 void   _ui_collect_type (Type*   t, HashMap__bool*   used) {
 
-#line 8061 "bootstrap/lsp.glide"
+#line 8142 "bootstrap/lsp.glide"
     if ((t  ==  NULL)) {
         return;
     }
 
-#line 8062 "bootstrap/lsp.glide"
+#line 8143 "bootstrap/lsp.glide"
     if ((((t-> kind )  ==  TY_NAMED)  &&  ((t-> name )  !=  NULL))) {
         HashMap_insert__bool(used, (t-> name ), true);
     }
 
-#line 8063 "bootstrap/lsp.glide"
+#line 8144 "bootstrap/lsp.glide"
     if ((((t-> kind )  ==  TY_GENERIC)  &&  ((t-> name )  !=  NULL))) {
         HashMap_insert__bool(used, (t-> name ), true);
     }
 
-#line 8064 "bootstrap/lsp.glide"
+#line 8145 "bootstrap/lsp.glide"
     if (((t-> inner )  !=  NULL)) {
         ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((t-> inner ), used);
     }
 
-#line 8065 "bootstrap/lsp.glide"
+#line 8146 "bootstrap/lsp.glide"
     if (((t-> args )  !=  NULL)) {
 
-#line 8066 "bootstrap/lsp.glide"
+#line 8147 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Type((t-> args ))); i++) {
 
-#line 8067 "bootstrap/lsp.glide"
+#line 8148 "bootstrap/lsp.glide"
             Type   a = Vector_get__Type((t-> args ), i);
 
-#line 8068 "bootstrap/lsp.glide"
+#line 8149 "bootstrap/lsp.glide"
             ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((&a), used);
         }
     }
 
-#line 8072 "bootstrap/lsp.glide"
+#line 8153 "bootstrap/lsp.glide"
     if (((t-> fnptr_ret )  !=  NULL)) {
         ((void(*)(Type*, HashMap__bool*))_ui_collect_type)((t-> fnptr_ret ), used);
     }
 }
 
 
-#line 8081 "bootstrap/lsp.glide"
+#line 8162 "bootstrap/lsp.glide"
 void   analysis_arena_set_unbalanced (Typer*   t, Vector__Stmt*   program) {
 
-#line 8082 "bootstrap/lsp.glide"
+#line 8163 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8083 "bootstrap/lsp.glide"
+#line 8164 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8084 "bootstrap/lsp.glide"
+#line 8165 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "arena-set")))) {
 
-#line 8085 "bootstrap/lsp.glide"
+#line 8166 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8086 "bootstrap/lsp.glide"
+#line 8167 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, int32_t, int32_t))_asu_check_fn)(t, (s. fn_body ), (s. line ), (s. column ));
         }
 
-#line 8088 "bootstrap/lsp.glide"
+#line 8169 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8089 "bootstrap/lsp.glide"
+#line 8170 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8090 "bootstrap/lsp.glide"
+#line 8171 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8091 "bootstrap/lsp.glide"
+#line 8172 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "arena-set"))) {
                     continue;
                 }
 
-#line 8092 "bootstrap/lsp.glide"
+#line 8173 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8093 "bootstrap/lsp.glide"
+#line 8174 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, int32_t, int32_t))_asu_check_fn)(t, (m. fn_body ), (m. line ), (m. column ));
             }
         }
@@ -71593,79 +71825,79 @@ void   analysis_arena_set_unbalanced (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 8098 "bootstrap/lsp.glide"
+#line 8179 "bootstrap/lsp.glide"
 void   _asu_check_fn (Typer*   t, Vector__Stmt*   body, int32_t   fn_line, int32_t   fn_col) {
 
-#line 8099 "bootstrap/lsp.glide"
+#line 8180 "bootstrap/lsp.glide"
     int32_t   sets = 0;
 
-#line 8100 "bootstrap/lsp.glide"
+#line 8181 "bootstrap/lsp.glide"
     int32_t   defer_sets = 0;
 
-#line 8101 "bootstrap/lsp.glide"
+#line 8182 "bootstrap/lsp.glide"
     int32_t   first_set_line = 0;
 
-#line 8102 "bootstrap/lsp.glide"
+#line 8183 "bootstrap/lsp.glide"
     int32_t   first_set_col = 0;
 
-#line 8103 "bootstrap/lsp.glide"
+#line 8184 "bootstrap/lsp.glide"
     ((void(*)(Vector__Stmt*, int32_t*, int32_t*, int32_t*, int32_t*, bool))_asu_walk)(body, (&sets), (&defer_sets), (&first_set_line), (&first_set_col), false);
 
-#line 8106 "bootstrap/lsp.glide"
+#line 8187 "bootstrap/lsp.glide"
     if (((sets  >  0)  &&  ((defer_sets  +  sets)  <  (sets  *  2)))) {
 
-#line 8107 "bootstrap/lsp.glide"
+#line 8188 "bootstrap/lsp.glide"
         Typer_warn(t, first_set_line, first_set_col, "arena-set", "`__glide_palloc_set(arena)` has no matching restore — add `defer __glide_palloc_set(prev);` immediately after the set");
     }
 }
 
 
-#line 8111 "bootstrap/lsp.glide"
+#line 8192 "bootstrap/lsp.glide"
 void   _asu_walk (Vector__Stmt*   body, int32_t*   sets, int32_t*   defer_sets, int32_t*   fline, int32_t*   fcol, bool   in_defer) {
 
-#line 8113 "bootstrap/lsp.glide"
+#line 8194 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8114 "bootstrap/lsp.glide"
+#line 8195 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8115 "bootstrap/lsp.glide"
+#line 8196 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_DEFER)  &&  ((s. expr_value )  !=  NULL))) {
 
-#line 8119 "bootstrap/lsp.glide"
+#line 8200 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*))_asu_is_palloc_set_any)((s. expr_value ))) {
                 ((*defer_sets)  =  ((*defer_sets)  +  1));
             }
         } else {
 
-#line 8120 "bootstrap/lsp.glide"
+#line 8201 "bootstrap/lsp.glide"
             if ((((s. expr_value )  !=  NULL)  &&  ((bool(*)(Expr*))_asu_is_palloc_set_active)((s. expr_value )))) {
 
-#line 8123 "bootstrap/lsp.glide"
+#line 8204 "bootstrap/lsp.glide"
                 ((*sets)  =  ((*sets)  +  1));
 
-#line 8124 "bootstrap/lsp.glide"
+#line 8205 "bootstrap/lsp.glide"
                 if (((*fline)  ==  0)) {
                     ((*fline)  =  (s. line ));
                     ((*fcol)  =  (s. column ));
                 }
             } else {
 
-#line 8125 "bootstrap/lsp.glide"
+#line 8206 "bootstrap/lsp.glide"
                 if ((((s. expr_value )  !=  NULL)  &&  ((bool(*)(Expr*))_asu_is_palloc_set_any)((s. expr_value )))) {
 
-#line 8127 "bootstrap/lsp.glide"
+#line 8208 "bootstrap/lsp.glide"
                     ((*defer_sets)  =  ((*defer_sets)  +  1));
                 }
             }
         }
 
-#line 8129 "bootstrap/lsp.glide"
+#line 8210 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, int32_t*, int32_t*, int32_t*, int32_t*, bool))_asu_walk)((s. then_body ), sets, defer_sets, fline, fcol, in_defer);
         }
 
-#line 8130 "bootstrap/lsp.glide"
+#line 8211 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, int32_t*, int32_t*, int32_t*, int32_t*, bool))_asu_walk)((s. else_body ), sets, defer_sets, fline, fcol, in_defer);
         }
@@ -71673,132 +71905,132 @@ void   _asu_walk (Vector__Stmt*   body, int32_t*   sets, int32_t*   defer_sets, 
 }
 
 
-#line 8133 "bootstrap/lsp.glide"
+#line 8214 "bootstrap/lsp.glide"
 bool   _asu_is_palloc_set_any (Expr*   e) {
 
-#line 8134 "bootstrap/lsp.glide"
+#line 8215 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 8135 "bootstrap/lsp.glide"
+#line 8216 "bootstrap/lsp.glide"
     if (((((e-> kind )  !=  EX_CALL)  ||  ((e-> lhs )  ==  NULL))  ||  (((e-> lhs )-> kind )  !=  EX_IDENT))) {
         return false;
     }
 
-#line 8136 "bootstrap/lsp.glide"
+#line 8217 "bootstrap/lsp.glide"
     return __glide_string_eq(((e-> lhs )-> str_val ), "__glide_palloc_set");
 }
 
 
-#line 8138 "bootstrap/lsp.glide"
+#line 8219 "bootstrap/lsp.glide"
 bool   _asu_is_palloc_set_active (Expr*   e) {
 
-#line 8139 "bootstrap/lsp.glide"
+#line 8220 "bootstrap/lsp.glide"
     if ((!((bool(*)(Expr*))_asu_is_palloc_set_any)(e))) {
         return false;
     }
 
-#line 8140 "bootstrap/lsp.glide"
+#line 8221 "bootstrap/lsp.glide"
     if ((((e-> args )  ==  NULL)  ||  (Vector_len__Expr((e-> args ))  !=  1))) {
         return false;
     }
 
-#line 8141 "bootstrap/lsp.glide"
+#line 8222 "bootstrap/lsp.glide"
     Expr   arg = Vector_get__Expr((e-> args ), 0);
 
-#line 8147 "bootstrap/lsp.glide"
+#line 8228 "bootstrap/lsp.glide"
     return ((bool(*)(Expr*))_asu_arg_creates_arena)((&arg));
 }
 
 
-#line 8149 "bootstrap/lsp.glide"
+#line 8230 "bootstrap/lsp.glide"
 bool   _asu_arg_creates_arena (Expr*   e) {
 
-#line 8150 "bootstrap/lsp.glide"
+#line 8231 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 8151 "bootstrap/lsp.glide"
+#line 8232 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq(((e-> lhs )-> str_val ), "__glide_palloc_make"))) {
 
-#line 8152 "bootstrap/lsp.glide"
+#line 8233 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 8153 "bootstrap/lsp.glide"
+#line 8234 "bootstrap/lsp.glide"
     if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*))_asu_arg_creates_arena)((e-> lhs )))) {
         return true;
     }
 
-#line 8154 "bootstrap/lsp.glide"
+#line 8235 "bootstrap/lsp.glide"
     if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*))_asu_arg_creates_arena)((e-> operand )))) {
         return true;
     }
 
-#line 8155 "bootstrap/lsp.glide"
+#line 8236 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 8164 "bootstrap/lsp.glide"
+#line 8245 "bootstrap/lsp.glide"
 void   analysis_coro_blocking (Typer*   t, Vector__Stmt*   program) {
 
-#line 8165 "bootstrap/lsp.glide"
+#line 8246 "bootstrap/lsp.glide"
     HashMap__bool*   blocking = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8166 "bootstrap/lsp.glide"
+#line 8247 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "fs_read", true);
 
-#line 8167 "bootstrap/lsp.glide"
+#line 8248 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "fs_read_bytes", true);
 
-#line 8168 "bootstrap/lsp.glide"
+#line 8249 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "fs_write", true);
 
-#line 8169 "bootstrap/lsp.glide"
+#line 8250 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "fs_write_bytes", true);
 
-#line 8170 "bootstrap/lsp.glide"
+#line 8251 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "fs_append", true);
 
-#line 8171 "bootstrap/lsp.glide"
+#line 8252 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "fs_copy", true);
 
-#line 8172 "bootstrap/lsp.glide"
+#line 8253 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "__glide_sleep_ms_blocking", true);
 
-#line 8173 "bootstrap/lsp.glide"
+#line 8254 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "process_run", true);
 
-#line 8174 "bootstrap/lsp.glide"
+#line 8255 "bootstrap/lsp.glide"
     HashMap_insert__bool(blocking, "http_get_sync", true);
 
-#line 8176 "bootstrap/lsp.glide"
+#line 8257 "bootstrap/lsp.glide"
     HashMap__Vector__Stmt_ptr*   bodies = ((HashMap__Vector__Stmt_ptr*(*)(void))HashMap_new__Vector__Stmt_ptr)();
 
-#line 8177 "bootstrap/lsp.glide"
+#line 8258 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8178 "bootstrap/lsp.glide"
+#line 8259 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8179 "bootstrap/lsp.glide"
+#line 8260 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))) {
             HashMap_insert__Vector__Stmt_ptr(bodies, (s. name ), (s. fn_body ));
         }
 
-#line 8180 "bootstrap/lsp.glide"
+#line 8261 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8181 "bootstrap/lsp.glide"
+#line 8262 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8182 "bootstrap/lsp.glide"
+#line 8263 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8183 "bootstrap/lsp.glide"
+#line 8264 "bootstrap/lsp.glide"
                 if (((m. fn_body )  !=  NULL)) {
                     HashMap_insert__Vector__Stmt_ptr(bodies, (m. name ), (m. fn_body ));
                 }
@@ -71806,95 +72038,95 @@ void   analysis_coro_blocking (Typer*   t, Vector__Stmt*   program) {
         }
     }
 
-#line 8187 "bootstrap/lsp.glide"
+#line 8268 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8188 "bootstrap/lsp.glide"
+#line 8269 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8189 "bootstrap/lsp.glide"
+#line 8270 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "coro-blocking")))) {
 
-#line 8190 "bootstrap/lsp.glide"
+#line 8271 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8191 "bootstrap/lsp.glide"
+#line 8272 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__Vector__Stmt_ptr*))_cb_scan_for_spawn)(t, (s. fn_body ), blocking, bodies);
         }
 
-#line 8193 "bootstrap/lsp.glide"
+#line 8274 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8194 "bootstrap/lsp.glide"
+#line 8275 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8195 "bootstrap/lsp.glide"
+#line 8276 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8196 "bootstrap/lsp.glide"
+#line 8277 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "coro-blocking"))) {
                     continue;
                 }
 
-#line 8197 "bootstrap/lsp.glide"
+#line 8278 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8198 "bootstrap/lsp.glide"
+#line 8279 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__Vector__Stmt_ptr*))_cb_scan_for_spawn)(t, (m. fn_body ), blocking, bodies);
             }
         }
     }
 
-#line 8202 "bootstrap/lsp.glide"
+#line 8283 "bootstrap/lsp.glide"
     HashMap_free__Vector__Stmt_ptr(bodies);
 
-#line 8203 "bootstrap/lsp.glide"
+#line 8284 "bootstrap/lsp.glide"
     HashMap_free__bool(blocking);
 }
 
 
-#line 8205 "bootstrap/lsp.glide"
+#line 8286 "bootstrap/lsp.glide"
 void   _cb_scan_for_spawn (Typer*   t, Vector__Stmt*   body, HashMap__bool*   blocking, HashMap__Vector__Stmt_ptr*   bodies) {
 
-#line 8207 "bootstrap/lsp.glide"
+#line 8288 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8208 "bootstrap/lsp.glide"
+#line 8289 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8209 "bootstrap/lsp.glide"
+#line 8290 "bootstrap/lsp.glide"
         if ((((((((s. kind )  ==  ST_SPAWN)  &&  (!(s. is_spawn_thread )))  &&  ((s. expr_value )  !=  NULL))  &&  (((s. expr_value )-> kind )  ==  EX_CALL))  &&  (((s. expr_value )-> lhs )  !=  NULL))  &&  ((((s. expr_value )-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8212 "bootstrap/lsp.glide"
+#line 8293 "bootstrap/lsp.glide"
             const char*   tgt = (((s. expr_value )-> lhs )-> str_val );
 
-#line 8214 "bootstrap/lsp.glide"
+#line 8295 "bootstrap/lsp.glide"
             if (HashMap_contains__bool(blocking, tgt)) {
 
-#line 8215 "bootstrap/lsp.glide"
+#line 8296 "bootstrap/lsp.glide"
                 Typer_warn(t, ((s. expr_value )-> line ), ((s. expr_value )-> column ), "coro-blocking", __glide_string_concat(__glide_string_concat("`", tgt), "` blocks the worker thread — use `spawn_thread` instead of `spawn`"));
             } else {
 
-#line 8217 "bootstrap/lsp.glide"
+#line 8298 "bootstrap/lsp.glide"
                 if (HashMap_contains__Vector__Stmt_ptr(bodies, tgt)) {
 
-#line 8218 "bootstrap/lsp.glide"
+#line 8299 "bootstrap/lsp.glide"
                     Vector__Stmt*   target_body = HashMap_get__Vector__Stmt_ptr(bodies, tgt);
 
-#line 8219 "bootstrap/lsp.glide"
+#line 8300 "bootstrap/lsp.glide"
                     ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, const char*, int32_t))_cb_walk_for_blocking)(t, target_body, blocking, tgt, (s. line ));
                 }
             }
         }
 
-#line 8222 "bootstrap/lsp.glide"
+#line 8303 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__Vector__Stmt_ptr*))_cb_scan_for_spawn)(t, (s. then_body ), blocking, bodies);
         }
 
-#line 8223 "bootstrap/lsp.glide"
+#line 8304 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__Vector__Stmt_ptr*))_cb_scan_for_spawn)(t, (s. else_body ), blocking, bodies);
         }
@@ -71902,31 +72134,31 @@ void   _cb_scan_for_spawn (Typer*   t, Vector__Stmt*   body, HashMap__bool*   bl
 }
 
 
-#line 8226 "bootstrap/lsp.glide"
+#line 8307 "bootstrap/lsp.glide"
 void   _cb_walk_for_blocking (Typer*   t, Vector__Stmt*   body, HashMap__bool*   blocking, const char*   spawn_target, int32_t   spawn_line) {
 
-#line 8228 "bootstrap/lsp.glide"
+#line 8309 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8229 "bootstrap/lsp.glide"
+#line 8310 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8230 "bootstrap/lsp.glide"
+#line 8311 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_cb_check_blocking_call)(t, (s. expr_value ), blocking, spawn_target);
         }
 
-#line 8231 "bootstrap/lsp.glide"
+#line 8312 "bootstrap/lsp.glide"
         if (((s. let_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_cb_check_blocking_call)(t, (s. let_value ), blocking, spawn_target);
         }
 
-#line 8232 "bootstrap/lsp.glide"
+#line 8313 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, const char*, int32_t))_cb_walk_for_blocking)(t, (s. then_body ), blocking, spawn_target, spawn_line);
         }
 
-#line 8233 "bootstrap/lsp.glide"
+#line 8314 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, const char*, int32_t))_cb_walk_for_blocking)(t, (s. else_body ), blocking, spawn_target, spawn_line);
         }
@@ -71934,206 +72166,206 @@ void   _cb_walk_for_blocking (Typer*   t, Vector__Stmt*   body, HashMap__bool*  
 }
 
 
-#line 8236 "bootstrap/lsp.glide"
+#line 8317 "bootstrap/lsp.glide"
 void   _cb_check_blocking_call (Typer*   t, Expr*   e, HashMap__bool*   blocking, const char*   spawned) {
 
-#line 8237 "bootstrap/lsp.glide"
+#line 8318 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 8238 "bootstrap/lsp.glide"
+#line 8319 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  HashMap_contains__bool(blocking, ((e-> lhs )-> str_val )))) {
 
-#line 8240 "bootstrap/lsp.glide"
+#line 8321 "bootstrap/lsp.glide"
         Typer_warn(t, (e-> line ), (e-> column ), "coro-blocking", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", ((e-> lhs )-> str_val )), "` blocks the worker thread — reached from `spawn "), spawned), "()`. Use `spawn_thread` instead, or call the async variant"));
     }
 
-#line 8243 "bootstrap/lsp.glide"
+#line 8324 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_cb_check_blocking_call)(t, (e-> lhs ), blocking, spawned);
     }
 
-#line 8244 "bootstrap/lsp.glide"
+#line 8325 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_cb_check_blocking_call)(t, (e-> rhs ), blocking, spawned);
     }
 
-#line 8245 "bootstrap/lsp.glide"
+#line 8326 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_cb_check_blocking_call)(t, (e-> operand ), blocking, spawned);
     }
 
-#line 8246 "bootstrap/lsp.glide"
+#line 8327 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 8247 "bootstrap/lsp.glide"
+#line 8328 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 8248 "bootstrap/lsp.glide"
+#line 8329 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 8249 "bootstrap/lsp.glide"
+#line 8330 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_cb_check_blocking_call)(t, (&a), blocking, spawned);
         }
     }
 }
 
 
-#line 8263 "bootstrap/lsp.glide"
+#line 8344 "bootstrap/lsp.glide"
 void   analysis_unhandled_result (Typer*   t, Vector__Stmt*   program) {
 
-#line 8264 "bootstrap/lsp.glide"
+#line 8345 "bootstrap/lsp.glide"
     HashMap__i32*   ret_kinds = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8265 "bootstrap/lsp.glide"
+#line 8346 "bootstrap/lsp.glide"
     HashMap__i32*   method_rets = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8266 "bootstrap/lsp.glide"
+#line 8347 "bootstrap/lsp.glide"
     ((void(*)(Vector__Stmt*, HashMap__i32*, HashMap__i32*))_ur_collect_sigs)(program, ret_kinds, method_rets);
 
-#line 8267 "bootstrap/lsp.glide"
+#line 8348 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8268 "bootstrap/lsp.glide"
+#line 8349 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8269 "bootstrap/lsp.glide"
+#line 8350 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "unhandled-result")))) {
 
-#line 8270 "bootstrap/lsp.glide"
+#line 8351 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8271 "bootstrap/lsp.glide"
+#line 8352 "bootstrap/lsp.glide"
             HashMap__string*   tys = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 8272 "bootstrap/lsp.glide"
+#line 8353 "bootstrap/lsp.glide"
             ((void(*)(Vector__Param*, HashMap__string*))_ur_seed_params)((s. fn_params ), tys);
 
-#line 8273 "bootstrap/lsp.glide"
+#line 8354 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__string*))_ur_walk)(t, (s. fn_body ), ret_kinds, method_rets, tys);
 
-#line 8274 "bootstrap/lsp.glide"
+#line 8355 "bootstrap/lsp.glide"
             HashMap_free__string(tys);
         }
 
-#line 8276 "bootstrap/lsp.glide"
+#line 8357 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8277 "bootstrap/lsp.glide"
+#line 8358 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8278 "bootstrap/lsp.glide"
+#line 8359 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8279 "bootstrap/lsp.glide"
+#line 8360 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "unhandled-result"))) {
                     continue;
                 }
 
-#line 8280 "bootstrap/lsp.glide"
+#line 8361 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8281 "bootstrap/lsp.glide"
+#line 8362 "bootstrap/lsp.glide"
                 HashMap__string*   tys = ((HashMap__string*(*)(void))HashMap_new__string)();
 
-#line 8282 "bootstrap/lsp.glide"
+#line 8363 "bootstrap/lsp.glide"
                 ((void(*)(Vector__Param*, HashMap__string*))_ur_seed_params)((m. fn_params ), tys);
 
-#line 8283 "bootstrap/lsp.glide"
+#line 8364 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__string*))_ur_walk)(t, (m. fn_body ), ret_kinds, method_rets, tys);
 
-#line 8284 "bootstrap/lsp.glide"
+#line 8365 "bootstrap/lsp.glide"
                 HashMap_free__string(tys);
             }
         }
     }
 
-#line 8288 "bootstrap/lsp.glide"
+#line 8369 "bootstrap/lsp.glide"
     HashMap_free__i32(ret_kinds);
 
-#line 8289 "bootstrap/lsp.glide"
+#line 8370 "bootstrap/lsp.glide"
     HashMap_free__i32(method_rets);
 }
 
 
-#line 8291 "bootstrap/lsp.glide"
+#line 8372 "bootstrap/lsp.glide"
 void   _ur_seed_params (Vector__Param*   params, HashMap__string*   tys) {
 
-#line 8292 "bootstrap/lsp.glide"
+#line 8373 "bootstrap/lsp.glide"
     if ((params  ==  NULL)) {
         return;
     }
 
-#line 8293 "bootstrap/lsp.glide"
+#line 8374 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Param(params)); i++) {
 
-#line 8294 "bootstrap/lsp.glide"
+#line 8375 "bootstrap/lsp.glide"
         Param   p = Vector_get__Param(params, i);
 
-#line 8295 "bootstrap/lsp.glide"
+#line 8376 "bootstrap/lsp.glide"
         if ((((p. ty )  !=  NULL)  &&  (!__glide_string_eq((p. name ), "")))) {
 
-#line 8296 "bootstrap/lsp.glide"
+#line 8377 "bootstrap/lsp.glide"
             HashMap_insert__string(tys, (p. name ), ((const char*(*)(Type*))_bf_ty_tag)((p. ty )));
         }
     }
 }
 
 
-#line 8300 "bootstrap/lsp.glide"
+#line 8381 "bootstrap/lsp.glide"
 void   _ur_collect_sigs (Vector__Stmt*   program, HashMap__i32*   ret_kinds, HashMap__i32*   method_rets) {
 
-#line 8302 "bootstrap/lsp.glide"
+#line 8383 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8303 "bootstrap/lsp.glide"
+#line 8384 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8304 "bootstrap/lsp.glide"
+#line 8385 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_FN)  &&  ((s. fn_ret_ty )  !=  NULL))) {
 
-#line 8305 "bootstrap/lsp.glide"
+#line 8386 "bootstrap/lsp.glide"
             HashMap_insert__i32(ret_kinds, (s. name ), ((s. fn_ret_ty )-> kind ));
         }
 
-#line 8307 "bootstrap/lsp.glide"
+#line 8388 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))  &&  ((s. impl_target )  !=  NULL))) {
 
-#line 8308 "bootstrap/lsp.glide"
+#line 8389 "bootstrap/lsp.glide"
             const char*   tname = "";
 
-#line 8309 "bootstrap/lsp.glide"
+#line 8390 "bootstrap/lsp.glide"
             if ((((s. impl_target )-> kind )  ==  TY_NAMED)) {
                 (tname  =  ((s. impl_target )-> name ));
             } else {
 
-#line 8310 "bootstrap/lsp.glide"
+#line 8391 "bootstrap/lsp.glide"
                 if ((((s. impl_target )-> kind )  ==  TY_GENERIC)) {
                     (tname  =  ((s. impl_target )-> name ));
                 }
             }
 
-#line 8311 "bootstrap/lsp.glide"
+#line 8392 "bootstrap/lsp.glide"
             if (__glide_string_eq(tname, "")) {
                 continue;
             }
 
-#line 8312 "bootstrap/lsp.glide"
+#line 8393 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8313 "bootstrap/lsp.glide"
+#line 8394 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8314 "bootstrap/lsp.glide"
+#line 8395 "bootstrap/lsp.glide"
                 if (((m. fn_ret_ty )  !=  NULL)) {
 
-#line 8315 "bootstrap/lsp.glide"
+#line 8396 "bootstrap/lsp.glide"
                     const char*   key = __glide_string_concat(__glide_string_concat(tname, "::"), (m. name ));
 
-#line 8316 "bootstrap/lsp.glide"
+#line 8397 "bootstrap/lsp.glide"
                     HashMap_insert__i32(method_rets, key, ((m. fn_ret_ty )-> kind ));
                 }
             }
@@ -72142,40 +72374,40 @@ void   _ur_collect_sigs (Vector__Stmt*   program, HashMap__i32*   ret_kinds, Has
 }
 
 
-#line 8322 "bootstrap/lsp.glide"
+#line 8403 "bootstrap/lsp.glide"
 void   _ur_walk (Typer*   t, Vector__Stmt*   body, HashMap__i32*   ret_kinds, HashMap__i32*   method_rets, HashMap__string*   tys) {
 
-#line 8324 "bootstrap/lsp.glide"
+#line 8405 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8325 "bootstrap/lsp.glide"
+#line 8406 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8326 "bootstrap/lsp.glide"
+#line 8407 "bootstrap/lsp.glide"
         if ((((((s. kind )  ==  ST_LET)  &&  ((s. name )  !=  NULL))  &&  (!__glide_string_eq((s. name ), "")))  &&  ((s. let_ty )  !=  NULL))) {
 
-#line 8327 "bootstrap/lsp.glide"
+#line 8408 "bootstrap/lsp.glide"
             HashMap_insert__string(tys, (s. name ), ((const char*(*)(Type*))_bf_ty_tag)((s. let_ty )));
         }
 
-#line 8329 "bootstrap/lsp.glide"
+#line 8410 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_EXPR)  &&  ((s. expr_value )  !=  NULL))) {
 
-#line 8330 "bootstrap/lsp.glide"
+#line 8411 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__i32*, HashMap__i32*, HashMap__string*))_ur_check_call)(t, (s. expr_value ), ret_kinds, method_rets, tys);
         }
 
-#line 8332 "bootstrap/lsp.glide"
+#line 8413 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__string*))_ur_walk)(t, (s. then_body ), ret_kinds, method_rets, tys);
         }
 
-#line 8333 "bootstrap/lsp.glide"
+#line 8414 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__string*))_ur_walk)(t, (s. else_body ), ret_kinds, method_rets, tys);
         }
 
-#line 8334 "bootstrap/lsp.glide"
+#line 8415 "bootstrap/lsp.glide"
         if (((s. fn_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__string*))_ur_walk)(t, (s. fn_body ), ret_kinds, method_rets, tys);
         }
@@ -72183,159 +72415,159 @@ void   _ur_walk (Typer*   t, Vector__Stmt*   body, HashMap__i32*   ret_kinds, Ha
 }
 
 
-#line 8337 "bootstrap/lsp.glide"
+#line 8418 "bootstrap/lsp.glide"
 void   _ur_check_call (Typer*   t, Expr*   e, HashMap__i32*   ret_kinds, HashMap__i32*   method_rets, HashMap__string*   tys) {
 
-#line 8339 "bootstrap/lsp.glide"
+#line 8420 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 8341 "bootstrap/lsp.glide"
+#line 8422 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_UNARY)  &&  ((e-> op_code )  ==  UN_TRY))) {
         return;
     }
 
-#line 8342 "bootstrap/lsp.glide"
+#line 8423 "bootstrap/lsp.glide"
     if ((((e-> kind )  !=  EX_CALL)  ||  ((e-> lhs )  ==  NULL))) {
         return;
     }
 
-#line 8344 "bootstrap/lsp.glide"
+#line 8425 "bootstrap/lsp.glide"
     const char*   fn_label = "";
 
-#line 8345 "bootstrap/lsp.glide"
+#line 8426 "bootstrap/lsp.glide"
     int32_t   k = (-1);
 
-#line 8347 "bootstrap/lsp.glide"
+#line 8428 "bootstrap/lsp.glide"
     if ((((e-> lhs )-> kind )  ==  EX_IDENT)) {
 
-#line 8349 "bootstrap/lsp.glide"
+#line 8430 "bootstrap/lsp.glide"
         const char*   n = ((e-> lhs )-> str_val );
 
-#line 8350 "bootstrap/lsp.glide"
+#line 8431 "bootstrap/lsp.glide"
         if ((!HashMap_contains__i32(ret_kinds, n))) {
             return;
         }
 
-#line 8351 "bootstrap/lsp.glide"
+#line 8432 "bootstrap/lsp.glide"
         (fn_label  =  n);
 
-#line 8352 "bootstrap/lsp.glide"
+#line 8433 "bootstrap/lsp.glide"
         (k  =  HashMap_get__i32(ret_kinds, n));
     } else {
 
-#line 8353 "bootstrap/lsp.glide"
+#line 8434 "bootstrap/lsp.glide"
         if (((((((e-> lhs )-> kind )  ==  EX_MEMBER)  &&  (((e-> lhs )-> field )  !=  NULL))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8358 "bootstrap/lsp.glide"
+#line 8439 "bootstrap/lsp.glide"
             const char*   recv = (((e-> lhs )-> lhs )-> str_val );
 
-#line 8359 "bootstrap/lsp.glide"
+#line 8440 "bootstrap/lsp.glide"
             if ((!HashMap_contains__string(tys, recv))) {
                 return;
             }
 
-#line 8360 "bootstrap/lsp.glide"
+#line 8441 "bootstrap/lsp.glide"
             const char*   tname = HashMap_get__string(tys, recv);
 
-#line 8361 "bootstrap/lsp.glide"
+#line 8442 "bootstrap/lsp.glide"
             if (__glide_string_eq(tname, "")) {
                 return;
             }
 
-#line 8362 "bootstrap/lsp.glide"
+#line 8443 "bootstrap/lsp.glide"
             const char*   key = __glide_string_concat(__glide_string_concat(tname, "::"), ((e-> lhs )-> field ));
 
-#line 8363 "bootstrap/lsp.glide"
+#line 8444 "bootstrap/lsp.glide"
             if ((!HashMap_contains__i32(method_rets, key))) {
                 return;
             }
 
-#line 8364 "bootstrap/lsp.glide"
+#line 8445 "bootstrap/lsp.glide"
             (fn_label  =  __glide_string_concat(__glide_string_concat(recv, "."), ((e-> lhs )-> field )));
 
-#line 8365 "bootstrap/lsp.glide"
+#line 8446 "bootstrap/lsp.glide"
             (k  =  HashMap_get__i32(method_rets, key));
         } else {
 
-#line 8367 "bootstrap/lsp.glide"
+#line 8448 "bootstrap/lsp.glide"
             return;
         }
     }
 
-#line 8370 "bootstrap/lsp.glide"
+#line 8451 "bootstrap/lsp.glide"
     if (((k  ==  TY_RESULT)  ||  (k  ==  TY_OPT_RESULT))) {
 
-#line 8371 "bootstrap/lsp.glide"
+#line 8452 "bootstrap/lsp.glide"
         Typer_warn(t, (e-> line ), (e-> column ), "unhandled-result", __glide_string_concat(__glide_string_concat("`", fn_label), "` returns a `!T` whose error is being discarded — propagate with `?` or bind with `let r = …`"));
     }
 }
 
 
-#line 8383 "bootstrap/lsp.glide"
+#line 8464 "bootstrap/lsp.glide"
 void   analysis_ignored_option (Typer*   t, Vector__Stmt*   program) {
 
-#line 8384 "bootstrap/lsp.glide"
+#line 8465 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8385 "bootstrap/lsp.glide"
+#line 8466 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8386 "bootstrap/lsp.glide"
+#line 8467 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "ignored-option")))) {
 
-#line 8387 "bootstrap/lsp.glide"
+#line 8468 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8388 "bootstrap/lsp.glide"
+#line 8469 "bootstrap/lsp.glide"
             HashMap__bool*   opts = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8389 "bootstrap/lsp.glide"
+#line 8470 "bootstrap/lsp.glide"
             HashMap__bool*   checked = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8390 "bootstrap/lsp.glide"
+#line 8471 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__bool*))_io_scan)(t, (s. fn_body ), opts, checked);
 
-#line 8391 "bootstrap/lsp.glide"
+#line 8472 "bootstrap/lsp.glide"
             HashMap_free__bool(opts);
 
-#line 8392 "bootstrap/lsp.glide"
+#line 8473 "bootstrap/lsp.glide"
             HashMap_free__bool(checked);
         }
 
-#line 8394 "bootstrap/lsp.glide"
+#line 8475 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8395 "bootstrap/lsp.glide"
+#line 8476 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8396 "bootstrap/lsp.glide"
+#line 8477 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8397 "bootstrap/lsp.glide"
+#line 8478 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "ignored-option"))) {
                     continue;
                 }
 
-#line 8398 "bootstrap/lsp.glide"
+#line 8479 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8399 "bootstrap/lsp.glide"
+#line 8480 "bootstrap/lsp.glide"
                 HashMap__bool*   opts = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8400 "bootstrap/lsp.glide"
+#line 8481 "bootstrap/lsp.glide"
                 HashMap__bool*   checked = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8401 "bootstrap/lsp.glide"
+#line 8482 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__bool*))_io_scan)(t, (m. fn_body ), opts, checked);
 
-#line 8402 "bootstrap/lsp.glide"
+#line 8483 "bootstrap/lsp.glide"
                 HashMap_free__bool(opts);
 
-#line 8403 "bootstrap/lsp.glide"
+#line 8484 "bootstrap/lsp.glide"
                 HashMap_free__bool(checked);
             }
         }
@@ -72343,310 +72575,310 @@ void   analysis_ignored_option (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 8408 "bootstrap/lsp.glide"
+#line 8489 "bootstrap/lsp.glide"
 void   _io_scan (Typer*   t, Vector__Stmt*   body, HashMap__bool*   opts, HashMap__bool*   checked) {
 
-#line 8409 "bootstrap/lsp.glide"
+#line 8490 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8410 "bootstrap/lsp.glide"
+#line 8491 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8411 "bootstrap/lsp.glide"
+#line 8492 "bootstrap/lsp.glide"
         if ((((((s. kind )  ==  ST_LET)  &&  ((s. name )  !=  NULL))  &&  ((s. let_ty )  !=  NULL))  &&  (((s. let_ty )-> kind )  ==  TY_OPTION))) {
 
-#line 8413 "bootstrap/lsp.glide"
+#line 8494 "bootstrap/lsp.glide"
             HashMap_insert__bool(opts, (s. name ), true);
         }
 
-#line 8415 "bootstrap/lsp.glide"
+#line 8496 "bootstrap/lsp.glide"
         const char*   gated = "";
 
-#line 8416 "bootstrap/lsp.glide"
+#line 8497 "bootstrap/lsp.glide"
         bool   negated = false;
 
-#line 8417 "bootstrap/lsp.glide"
+#line 8498 "bootstrap/lsp.glide"
         if (((s. cond )  !=  NULL)) {
 
-#line 8423 "bootstrap/lsp.glide"
+#line 8504 "bootstrap/lsp.glide"
             (gated  =  ((const char*(*)(Expr*))_io_extract_check_unsigned)((s. cond )));
 
-#line 8424 "bootstrap/lsp.glide"
+#line 8505 "bootstrap/lsp.glide"
             if ((!__glide_string_eq(gated, ""))) {
 
-#line 8425 "bootstrap/lsp.glide"
+#line 8506 "bootstrap/lsp.glide"
                 (negated  =  (((bool(*)(Expr*))_io_is_negated_check)((s. cond ))  ||  ((bool(*)(Expr*))_io_is_none_check)((s. cond ))));
             }
         }
 
-#line 8429 "bootstrap/lsp.glide"
+#line 8510 "bootstrap/lsp.glide"
         if ((((!__glide_string_eq(gated, ""))  &&  (!negated))  &&  ((s. then_body )  !=  NULL))) {
 
-#line 8430 "bootstrap/lsp.glide"
+#line 8511 "bootstrap/lsp.glide"
             bool   was_checked = HashMap_contains__bool(checked, gated);
 
-#line 8431 "bootstrap/lsp.glide"
+#line 8512 "bootstrap/lsp.glide"
             HashMap_insert__bool(checked, gated, true);
 
-#line 8432 "bootstrap/lsp.glide"
+#line 8513 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__bool*))_io_scan)(t, (s. then_body ), opts, checked);
 
-#line 8433 "bootstrap/lsp.glide"
+#line 8514 "bootstrap/lsp.glide"
             if ((!was_checked)) {
                 HashMap_insert__bool(checked, gated, false);
             }
         } else {
 
-#line 8434 "bootstrap/lsp.glide"
+#line 8515 "bootstrap/lsp.glide"
             if (((s. then_body )  !=  NULL)) {
 
-#line 8435 "bootstrap/lsp.glide"
+#line 8516 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__bool*))_io_scan)(t, (s. then_body ), opts, checked);
             }
         }
 
-#line 8437 "bootstrap/lsp.glide"
+#line 8518 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*, HashMap__bool*))_io_scan)(t, (s. else_body ), opts, checked);
         }
 
-#line 8438 "bootstrap/lsp.glide"
+#line 8519 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__bool*, HashMap__bool*))_io_check_expr)(t, (s. expr_value ), opts, checked);
         }
 
-#line 8439 "bootstrap/lsp.glide"
+#line 8520 "bootstrap/lsp.glide"
         if (((s. let_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__bool*, HashMap__bool*))_io_check_expr)(t, (s. let_value ), opts, checked);
         }
 
-#line 8442 "bootstrap/lsp.glide"
+#line 8523 "bootstrap/lsp.glide"
         if (((((!__glide_string_eq(gated, ""))  &&  negated)  &&  ((s. then_body )  !=  NULL))  &&  ((bool(*)(Vector__Stmt*))_io_body_is_early_exit)((s. then_body )))) {
 
-#line 8444 "bootstrap/lsp.glide"
+#line 8525 "bootstrap/lsp.glide"
             HashMap_insert__bool(checked, gated, true);
         }
     }
 }
 
 
-#line 8448 "bootstrap/lsp.glide"
+#line 8529 "bootstrap/lsp.glide"
 const char*   _io_extract_check_unsigned (Expr*   e) {
 
-#line 8450 "bootstrap/lsp.glide"
+#line 8531 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return "";
     }
 
-#line 8451 "bootstrap/lsp.glide"
+#line 8532 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_UNARY)  &&  ((e-> operand )  !=  NULL))) {
         return ((const char*(*)(Expr*))_io_extract_check_unsigned)((e-> operand ));
     }
 
-#line 8452 "bootstrap/lsp.glide"
+#line 8533 "bootstrap/lsp.glide"
     return ((const char*(*)(Expr*))_io_extract_check)(e);
 }
 
 
-#line 8454 "bootstrap/lsp.glide"
+#line 8535 "bootstrap/lsp.glide"
 bool   _io_is_negated_check (Expr*   e) {
 
-#line 8455 "bootstrap/lsp.glide"
+#line 8536 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 8456 "bootstrap/lsp.glide"
+#line 8537 "bootstrap/lsp.glide"
     if (((e-> kind )  ==  EX_UNARY)) {
         return true;
     }
 
-#line 8457 "bootstrap/lsp.glide"
+#line 8538 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 8459 "bootstrap/lsp.glide"
+#line 8540 "bootstrap/lsp.glide"
 bool   _io_is_none_check (Expr*   e) {
 
-#line 8460 "bootstrap/lsp.glide"
+#line 8541 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 8461 "bootstrap/lsp.glide"
+#line 8542 "bootstrap/lsp.glide"
     if (((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> field )  !=  NULL))  &&  __glide_string_eq(((e-> lhs )-> field ), "is_none"))) {
 
-#line 8462 "bootstrap/lsp.glide"
+#line 8543 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 8463 "bootstrap/lsp.glide"
+#line 8544 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 8465 "bootstrap/lsp.glide"
+#line 8546 "bootstrap/lsp.glide"
 bool   _io_body_is_early_exit (Vector__Stmt*   body) {
 
-#line 8466 "bootstrap/lsp.glide"
+#line 8547 "bootstrap/lsp.glide"
     if (((body  ==  NULL)  ||  (Vector_len__Stmt(body)  ==  0))) {
         return false;
     }
 
-#line 8467 "bootstrap/lsp.glide"
+#line 8548 "bootstrap/lsp.glide"
     Stmt   last = Vector_get__Stmt(body, (Vector_len__Stmt(body)  -  1));
 
-#line 8468 "bootstrap/lsp.glide"
+#line 8549 "bootstrap/lsp.glide"
     if (((((last. kind )  ==  ST_RETURN)  ||  ((last. kind )  ==  ST_BREAK))  ||  ((last. kind )  ==  ST_CONTINUE))) {
 
-#line 8469 "bootstrap/lsp.glide"
+#line 8550 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 8470 "bootstrap/lsp.glide"
+#line 8551 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 8472 "bootstrap/lsp.glide"
+#line 8553 "bootstrap/lsp.glide"
 const char*   _io_extract_check (Expr*   e) {
 
-#line 8473 "bootstrap/lsp.glide"
+#line 8554 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return "";
     }
 
-#line 8475 "bootstrap/lsp.glide"
+#line 8556 "bootstrap/lsp.glide"
     if (((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> field )  !=  NULL))  &&  __glide_string_eq(((e-> lhs )-> field ), "is_some"))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8478 "bootstrap/lsp.glide"
+#line 8559 "bootstrap/lsp.glide"
         return (((e-> lhs )-> lhs )-> str_val );
     }
 
-#line 8482 "bootstrap/lsp.glide"
+#line 8563 "bootstrap/lsp.glide"
     if (((((((e-> kind )  ==  EX_MEMBER)  &&  ((e-> field )  !=  NULL))  &&  __glide_string_eq((e-> field ), "has"))  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8484 "bootstrap/lsp.glide"
+#line 8565 "bootstrap/lsp.glide"
         return ((e-> lhs )-> str_val );
     }
 
-#line 8487 "bootstrap/lsp.glide"
+#line 8568 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_UNARY)  &&  ((e-> operand )  !=  NULL))) {
 
-#line 8488 "bootstrap/lsp.glide"
+#line 8569 "bootstrap/lsp.glide"
         return ((const char*(*)(Expr*))_io_extract_check)((e-> operand ));
     }
 
-#line 8490 "bootstrap/lsp.glide"
+#line 8571 "bootstrap/lsp.glide"
     return "";
 }
 
 
-#line 8492 "bootstrap/lsp.glide"
+#line 8573 "bootstrap/lsp.glide"
 void   _io_check_expr (Typer*   t, Expr*   e, HashMap__bool*   opts, HashMap__bool*   checked) {
 
-#line 8493 "bootstrap/lsp.glide"
+#line 8574 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 8494 "bootstrap/lsp.glide"
+#line 8575 "bootstrap/lsp.glide"
     if ((((((((e-> kind )  ==  EX_MEMBER)  &&  ((e-> field )  !=  NULL))  &&  __glide_string_eq((e-> field ), "val"))  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  HashMap_contains__bool(opts, ((e-> lhs )-> str_val )))) {
 
-#line 8497 "bootstrap/lsp.glide"
+#line 8578 "bootstrap/lsp.glide"
         const char*   nm = ((e-> lhs )-> str_val );
 
-#line 8498 "bootstrap/lsp.glide"
+#line 8579 "bootstrap/lsp.glide"
         if ((!(HashMap_contains__bool(checked, nm)  &&  HashMap_get__bool(checked, nm)))) {
 
-#line 8499 "bootstrap/lsp.glide"
+#line 8580 "bootstrap/lsp.glide"
             Typer_warn(t, (e-> line ), (e-> column ), "ignored-option", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", nm), ".val` reads the payload without checking `"), nm), ".is_some()` — guard with `if "), nm), ".is_some() { … }` or unwrap via `let v = "), nm), "?;`"));
         }
     }
 
-#line 8503 "bootstrap/lsp.glide"
+#line 8584 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, HashMap__bool*))_io_check_expr)(t, (e-> lhs ), opts, checked);
     }
 
-#line 8504 "bootstrap/lsp.glide"
+#line 8585 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, HashMap__bool*))_io_check_expr)(t, (e-> rhs ), opts, checked);
     }
 
-#line 8505 "bootstrap/lsp.glide"
+#line 8586 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, HashMap__bool*))_io_check_expr)(t, (e-> operand ), opts, checked);
     }
 
-#line 8506 "bootstrap/lsp.glide"
+#line 8587 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 8507 "bootstrap/lsp.glide"
+#line 8588 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 8508 "bootstrap/lsp.glide"
+#line 8589 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 8509 "bootstrap/lsp.glide"
+#line 8590 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__bool*, HashMap__bool*))_io_check_expr)(t, (&a), opts, checked);
         }
     }
 }
 
 
-#line 8519 "bootstrap/lsp.glide"
+#line 8600 "bootstrap/lsp.glide"
 void   analysis_use_after_free (Typer*   t, Vector__Stmt*   program) {
 
-#line 8520 "bootstrap/lsp.glide"
+#line 8601 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8521 "bootstrap/lsp.glide"
+#line 8602 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8522 "bootstrap/lsp.glide"
+#line 8603 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "use-after-free")))) {
 
-#line 8523 "bootstrap/lsp.glide"
+#line 8604 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8524 "bootstrap/lsp.glide"
+#line 8605 "bootstrap/lsp.glide"
             HashMap__bool*   freed = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8525 "bootstrap/lsp.glide"
+#line 8606 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_uaf_scan)(t, (s. fn_body ), freed);
 
-#line 8526 "bootstrap/lsp.glide"
+#line 8607 "bootstrap/lsp.glide"
             HashMap_free__bool(freed);
         }
 
-#line 8528 "bootstrap/lsp.glide"
+#line 8609 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8529 "bootstrap/lsp.glide"
+#line 8610 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8530 "bootstrap/lsp.glide"
+#line 8611 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8531 "bootstrap/lsp.glide"
+#line 8612 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "use-after-free"))) {
                     continue;
                 }
 
-#line 8532 "bootstrap/lsp.glide"
+#line 8613 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8533 "bootstrap/lsp.glide"
+#line 8614 "bootstrap/lsp.glide"
                 HashMap__bool*   freed = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8534 "bootstrap/lsp.glide"
+#line 8615 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_uaf_scan)(t, (m. fn_body ), freed);
 
-#line 8535 "bootstrap/lsp.glide"
+#line 8616 "bootstrap/lsp.glide"
                 HashMap_free__bool(freed);
             }
         }
@@ -72654,74 +72886,74 @@ void   analysis_use_after_free (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 8540 "bootstrap/lsp.glide"
+#line 8621 "bootstrap/lsp.glide"
 void   _uaf_scan (Typer*   t, Vector__Stmt*   body, HashMap__bool*   freed) {
 
-#line 8541 "bootstrap/lsp.glide"
+#line 8622 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8542 "bootstrap/lsp.glide"
+#line 8623 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8544 "bootstrap/lsp.glide"
+#line 8625 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_DEFER)) {
             continue;
         }
 
-#line 8551 "bootstrap/lsp.glide"
+#line 8632 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_RETURN)) {
             HashMap_clear__bool(freed);
             continue;
         }
 
-#line 8553 "bootstrap/lsp.glide"
+#line 8634 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_LET)  &&  ((s. name )  !=  NULL))  &&  HashMap_contains__bool(freed, (s. name )))) {
 
-#line 8554 "bootstrap/lsp.glide"
+#line 8635 "bootstrap/lsp.glide"
             HashMap_insert__bool(freed, (s. name ), false);
         }
 
-#line 8556 "bootstrap/lsp.glide"
+#line 8637 "bootstrap/lsp.glide"
         if (((((((s. expr_value )  !=  NULL)  &&  (((s. expr_value )-> kind )  ==  EX_ASSIGN))  &&  (((s. expr_value )-> lhs )  !=  NULL))  &&  ((((s. expr_value )-> lhs )-> kind )  ==  EX_IDENT))  &&  HashMap_contains__bool(freed, (((s. expr_value )-> lhs )-> str_val )))) {
 
-#line 8559 "bootstrap/lsp.glide"
+#line 8640 "bootstrap/lsp.glide"
             HashMap_insert__bool(freed, (((s. expr_value )-> lhs )-> str_val ), false);
         }
 
-#line 8564 "bootstrap/lsp.glide"
+#line 8645 "bootstrap/lsp.glide"
         const char*   free_target = "";
 
-#line 8565 "bootstrap/lsp.glide"
+#line 8646 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             (free_target  =  ((const char*(*)(Expr*))_uaf_free_target)((s. expr_value )));
         }
 
-#line 8566 "bootstrap/lsp.glide"
+#line 8647 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_uaf_check_expr)(t, (s. expr_value ), freed, free_target);
         }
 
-#line 8567 "bootstrap/lsp.glide"
+#line 8648 "bootstrap/lsp.glide"
         if (((s. let_value )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_uaf_check_expr)(t, (s. let_value ), freed, "");
         }
 
-#line 8568 "bootstrap/lsp.glide"
+#line 8649 "bootstrap/lsp.glide"
         if (((s. cond )  !=  NULL)) {
             ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_uaf_check_expr)(t, (s. cond ), freed, "");
         }
 
-#line 8569 "bootstrap/lsp.glide"
+#line 8650 "bootstrap/lsp.glide"
         if ((!__glide_string_eq(free_target, ""))) {
             HashMap_insert__bool(freed, free_target, true);
         }
 
-#line 8570 "bootstrap/lsp.glide"
+#line 8651 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_uaf_scan)(t, (s. then_body ), freed);
         }
 
-#line 8571 "bootstrap/lsp.glide"
+#line 8652 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Typer*, Vector__Stmt*, HashMap__bool*))_uaf_scan)(t, (s. else_body ), freed);
         }
@@ -72729,122 +72961,122 @@ void   _uaf_scan (Typer*   t, Vector__Stmt*   body, HashMap__bool*   freed) {
 }
 
 
-#line 8574 "bootstrap/lsp.glide"
+#line 8655 "bootstrap/lsp.glide"
 const char*   _uaf_free_target (Expr*   e) {
 
-#line 8575 "bootstrap/lsp.glide"
+#line 8656 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return "";
     }
 
-#line 8576 "bootstrap/lsp.glide"
+#line 8657 "bootstrap/lsp.glide"
     if (((((e-> kind )  !=  EX_CALL)  ||  ((e-> lhs )  ==  NULL))  ||  (((e-> lhs )-> kind )  !=  EX_MEMBER))) {
         return "";
     }
 
-#line 8577 "bootstrap/lsp.glide"
+#line 8658 "bootstrap/lsp.glide"
     if (((((e-> lhs )-> field )  ==  NULL)  ||  (!__glide_string_eq(((e-> lhs )-> field ), "free")))) {
         return "";
     }
 
-#line 8578 "bootstrap/lsp.glide"
+#line 8659 "bootstrap/lsp.glide"
     if (((((e-> lhs )-> lhs )  ==  NULL)  ||  ((((e-> lhs )-> lhs )-> kind )  !=  EX_IDENT))) {
         return "";
     }
 
-#line 8579 "bootstrap/lsp.glide"
+#line 8660 "bootstrap/lsp.glide"
     return (((e-> lhs )-> lhs )-> str_val );
 }
 
 
-#line 8581 "bootstrap/lsp.glide"
+#line 8662 "bootstrap/lsp.glide"
 void   _uaf_check_expr (Typer*   t, Expr*   e, HashMap__bool*   freed, const char*   skip) {
 
-#line 8582 "bootstrap/lsp.glide"
+#line 8663 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 8583 "bootstrap/lsp.glide"
+#line 8664 "bootstrap/lsp.glide"
     if ((((((e-> kind )  ==  EX_IDENT)  &&  HashMap_contains__bool(freed, (e-> str_val )))  &&  HashMap_get__bool(freed, (e-> str_val )))  &&  (!__glide_string_eq((e-> str_val ), skip)))) {
 
-#line 8585 "bootstrap/lsp.glide"
+#line 8666 "bootstrap/lsp.glide"
         Typer_warn(t, (e-> line ), (e-> column ), "use-after-free", __glide_string_concat(__glide_string_concat("`", (e-> str_val )), "` was freed earlier in this scope — accessing it is a dangling-pointer read"));
 
-#line 8587 "bootstrap/lsp.glide"
+#line 8668 "bootstrap/lsp.glide"
         return;
     }
 
-#line 8589 "bootstrap/lsp.glide"
+#line 8670 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_uaf_check_expr)(t, (e-> lhs ), freed, skip);
     }
 
-#line 8590 "bootstrap/lsp.glide"
+#line 8671 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_uaf_check_expr)(t, (e-> rhs ), freed, skip);
     }
 
-#line 8591 "bootstrap/lsp.glide"
+#line 8672 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_uaf_check_expr)(t, (e-> operand ), freed, skip);
     }
 
-#line 8592 "bootstrap/lsp.glide"
+#line 8673 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 8593 "bootstrap/lsp.glide"
+#line 8674 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 8594 "bootstrap/lsp.glide"
+#line 8675 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 8595 "bootstrap/lsp.glide"
+#line 8676 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Expr*, HashMap__bool*, const char*))_uaf_check_expr)(t, (&a), freed, skip);
         }
     }
 }
 
 
-#line 8605 "bootstrap/lsp.glide"
+#line 8686 "bootstrap/lsp.glide"
 void   analysis_mutex_unbalanced (Typer*   t, Vector__Stmt*   program) {
 
-#line 8606 "bootstrap/lsp.glide"
+#line 8687 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8607 "bootstrap/lsp.glide"
+#line 8688 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8608 "bootstrap/lsp.glide"
+#line 8689 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "mutex-unbalanced")))) {
 
-#line 8609 "bootstrap/lsp.glide"
+#line 8690 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8610 "bootstrap/lsp.glide"
+#line 8691 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*))_mu_check_fn)(t, (s. fn_body ));
         }
 
-#line 8612 "bootstrap/lsp.glide"
+#line 8693 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8613 "bootstrap/lsp.glide"
+#line 8694 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8614 "bootstrap/lsp.glide"
+#line 8695 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8615 "bootstrap/lsp.glide"
+#line 8696 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "mutex-unbalanced"))) {
                     continue;
                 }
 
-#line 8616 "bootstrap/lsp.glide"
+#line 8697 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8617 "bootstrap/lsp.glide"
+#line 8698 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*))_mu_check_fn)(t, (m. fn_body ));
             }
         }
@@ -72852,170 +73084,170 @@ void   analysis_mutex_unbalanced (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 8622 "bootstrap/lsp.glide"
+#line 8703 "bootstrap/lsp.glide"
 void   _mu_check_fn (Typer*   t, Vector__Stmt*   body) {
 
-#line 8628 "bootstrap/lsp.glide"
+#line 8709 "bootstrap/lsp.glide"
     HashMap__i32*   held = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8629 "bootstrap/lsp.glide"
+#line 8710 "bootstrap/lsp.glide"
     HashMap__i32*   held_col = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8630 "bootstrap/lsp.glide"
+#line 8711 "bootstrap/lsp.glide"
     HashMap__bool*   warned = ((HashMap__bool*(*)(void))HashMap_new__bool)();
 
-#line 8631 "bootstrap/lsp.glide"
+#line 8712 "bootstrap/lsp.glide"
     ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__bool*))_mu_walk_path)(t, body, held, held_col, warned);
 
-#line 8633 "bootstrap/lsp.glide"
+#line 8714 "bootstrap/lsp.glide"
     Vector__string*   names = HashMap_keys__i32(held);
 
-#line 8634 "bootstrap/lsp.glide"
+#line 8715 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(names)); i++) {
 
-#line 8635 "bootstrap/lsp.glide"
+#line 8716 "bootstrap/lsp.glide"
         const char*   nm = Vector_get__string(names, i);
 
-#line 8636 "bootstrap/lsp.glide"
+#line 8717 "bootstrap/lsp.glide"
         if (HashMap_contains__bool(warned, nm)) {
             continue;
         }
 
-#line 8637 "bootstrap/lsp.glide"
+#line 8718 "bootstrap/lsp.glide"
         Typer_warn(t, HashMap_get__i32(held, nm), HashMap_get__i32(held_col, nm), "mutex-unbalanced", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", nm), ".lock()` falls off the end of the fn without `.unlock()` — release it on every exit (a `defer "), nm), ".unlock();` right after the lock covers all returns)"));
 
-#line 8639 "bootstrap/lsp.glide"
+#line 8720 "bootstrap/lsp.glide"
         HashMap_insert__bool(warned, nm, true);
     }
 
-#line 8641 "bootstrap/lsp.glide"
+#line 8722 "bootstrap/lsp.glide"
     HashMap_free__i32(held);
     HashMap_free__i32(held_col);
     HashMap_free__bool(warned);
 }
 
 
-#line 8643 "bootstrap/lsp.glide"
+#line 8724 "bootstrap/lsp.glide"
 void   _mu_walk_path (Typer*   t, Vector__Stmt*   body, HashMap__i32*   held, HashMap__i32*   held_col, HashMap__bool*   warned) {
 
-#line 8646 "bootstrap/lsp.glide"
+#line 8727 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8647 "bootstrap/lsp.glide"
+#line 8728 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8648 "bootstrap/lsp.glide"
+#line 8729 "bootstrap/lsp.glide"
         if ((((s. expr_value )  !=  NULL)  &&  ((bool(*)(Expr*))_ler_expr_has_try)((s. expr_value )))) {
 
-#line 8649 "bootstrap/lsp.glide"
+#line 8730 "bootstrap/lsp.glide"
             ((void(*)(Typer*, HashMap__i32*, HashMap__i32*, HashMap__bool*, int32_t, const char*))_mu_flag_held)(t, held, held_col, warned, (s. line ), "?-propagation");
         }
 
-#line 8651 "bootstrap/lsp.glide"
+#line 8732 "bootstrap/lsp.glide"
         if ((((s. let_value )  !=  NULL)  &&  ((bool(*)(Expr*))_ler_expr_has_try)((s. let_value )))) {
 
-#line 8652 "bootstrap/lsp.glide"
+#line 8733 "bootstrap/lsp.glide"
             ((void(*)(Typer*, HashMap__i32*, HashMap__i32*, HashMap__bool*, int32_t, const char*))_mu_flag_held)(t, held, held_col, warned, (s. line ), "?-propagation");
         }
 
-#line 8654 "bootstrap/lsp.glide"
+#line 8735 "bootstrap/lsp.glide"
         if (((s. expr_value )  !=  NULL)) {
             ((void(*)(Expr*, HashMap__i32*, HashMap__i32*))_mu_update_state)((s. expr_value ), held, held_col);
         }
 
-#line 8655 "bootstrap/lsp.glide"
+#line 8736 "bootstrap/lsp.glide"
         if (((s. let_value )  !=  NULL)) {
             ((void(*)(Expr*, HashMap__i32*, HashMap__i32*))_mu_update_state)((s. let_value ), held, held_col);
         }
 
-#line 8656 "bootstrap/lsp.glide"
+#line 8737 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_RETURN)  ||  ((s. kind )  ==  ST_BREAK))  ||  ((s. kind )  ==  ST_CONTINUE))) {
 
-#line 8657 "bootstrap/lsp.glide"
+#line 8738 "bootstrap/lsp.glide"
             const char*   exit_label = "return";
 
-#line 8658 "bootstrap/lsp.glide"
+#line 8739 "bootstrap/lsp.glide"
             if (((s. kind )  ==  ST_BREAK)) {
                 (exit_label  =  "break");
             }
 
-#line 8659 "bootstrap/lsp.glide"
+#line 8740 "bootstrap/lsp.glide"
             if (((s. kind )  ==  ST_CONTINUE)) {
                 (exit_label  =  "continue");
             }
 
-#line 8660 "bootstrap/lsp.glide"
+#line 8741 "bootstrap/lsp.glide"
             ((void(*)(Typer*, HashMap__i32*, HashMap__i32*, HashMap__bool*, int32_t, const char*))_mu_flag_held)(t, held, held_col, warned, (s. line ), exit_label);
 
-#line 8661 "bootstrap/lsp.glide"
+#line 8742 "bootstrap/lsp.glide"
             return;
         }
 
-#line 8663 "bootstrap/lsp.glide"
+#line 8744 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_DEFER)  &&  ((s. expr_value )  !=  NULL))) {
 
-#line 8664 "bootstrap/lsp.glide"
+#line 8745 "bootstrap/lsp.glide"
             const char*   nm = ((const char*(*)(Expr*))_mu_unlock_target)((s. expr_value ));
 
-#line 8665 "bootstrap/lsp.glide"
+#line 8746 "bootstrap/lsp.glide"
             if (((!__glide_string_eq(nm, ""))  &&  HashMap_contains__i32(held, nm))) {
                 HashMap_remove__i32(held, nm);
                 HashMap_remove__i32(held_col, nm);
             }
         }
 
-#line 8673 "bootstrap/lsp.glide"
+#line 8754 "bootstrap/lsp.glide"
         if ((((s. then_body )  !=  NULL)  ||  ((s. else_body )  !=  NULL))) {
 
-#line 8674 "bootstrap/lsp.glide"
+#line 8755 "bootstrap/lsp.glide"
             HashMap__i32*   snap = ((HashMap__i32*(*)(HashMap__i32*))_mu_clone_int)(held);
 
-#line 8675 "bootstrap/lsp.glide"
+#line 8756 "bootstrap/lsp.glide"
             HashMap__i32*   snap_col = ((HashMap__i32*(*)(HashMap__i32*))_mu_clone_int)(held_col);
 
-#line 8676 "bootstrap/lsp.glide"
+#line 8757 "bootstrap/lsp.glide"
             HashMap__i32*   then_held = ((HashMap__i32*(*)(HashMap__i32*))_mu_clone_int)(held);
 
-#line 8677 "bootstrap/lsp.glide"
+#line 8758 "bootstrap/lsp.glide"
             HashMap__i32*   then_col = ((HashMap__i32*(*)(HashMap__i32*))_mu_clone_int)(held_col);
 
-#line 8678 "bootstrap/lsp.glide"
+#line 8759 "bootstrap/lsp.glide"
             if (((s. then_body )  !=  NULL)) {
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__bool*))_mu_walk_path)(t, (s. then_body ), then_held, then_col, warned);
             }
 
-#line 8679 "bootstrap/lsp.glide"
+#line 8760 "bootstrap/lsp.glide"
             HashMap__i32*   else_held = ((HashMap__i32*(*)(HashMap__i32*))_mu_clone_int)(snap);
 
-#line 8680 "bootstrap/lsp.glide"
+#line 8761 "bootstrap/lsp.glide"
             HashMap__i32*   else_col = ((HashMap__i32*(*)(HashMap__i32*))_mu_clone_int)(snap_col);
 
-#line 8681 "bootstrap/lsp.glide"
+#line 8762 "bootstrap/lsp.glide"
             if (((s. else_body )  !=  NULL)) {
                 ((void(*)(Typer*, Vector__Stmt*, HashMap__i32*, HashMap__i32*, HashMap__bool*))_mu_walk_path)(t, (s. else_body ), else_held, else_col, warned);
             }
 
-#line 8683 "bootstrap/lsp.glide"
+#line 8764 "bootstrap/lsp.glide"
             HashMap_clear__i32(held);
 
-#line 8684 "bootstrap/lsp.glide"
+#line 8765 "bootstrap/lsp.glide"
             HashMap_clear__i32(held_col);
 
-#line 8685 "bootstrap/lsp.glide"
+#line 8766 "bootstrap/lsp.glide"
             ((void(*)(HashMap__i32*, HashMap__i32*, HashMap__i32*, HashMap__i32*))_mu_merge_into)(then_held, then_col, held, held_col);
 
-#line 8686 "bootstrap/lsp.glide"
+#line 8767 "bootstrap/lsp.glide"
             ((void(*)(HashMap__i32*, HashMap__i32*, HashMap__i32*, HashMap__i32*))_mu_merge_into)(else_held, else_col, held, held_col);
 
-#line 8687 "bootstrap/lsp.glide"
+#line 8768 "bootstrap/lsp.glide"
             HashMap_free__i32(then_held);
             HashMap_free__i32(then_col);
 
-#line 8688 "bootstrap/lsp.glide"
+#line 8769 "bootstrap/lsp.glide"
             HashMap_free__i32(else_held);
             HashMap_free__i32(else_col);
 
-#line 8689 "bootstrap/lsp.glide"
+#line 8770 "bootstrap/lsp.glide"
             HashMap_free__i32(snap);
             HashMap_free__i32(snap_col);
         }
@@ -73023,49 +73255,49 @@ void   _mu_walk_path (Typer*   t, Vector__Stmt*   body, HashMap__i32*   held, Ha
 }
 
 
-#line 8693 "bootstrap/lsp.glide"
+#line 8774 "bootstrap/lsp.glide"
 HashMap__i32*   _mu_clone_int (HashMap__i32*   src) {
 
-#line 8694 "bootstrap/lsp.glide"
+#line 8775 "bootstrap/lsp.glide"
     HashMap__i32*   out = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8695 "bootstrap/lsp.glide"
+#line 8776 "bootstrap/lsp.glide"
     Vector__string*   ks = HashMap_keys__i32(src);
 
-#line 8696 "bootstrap/lsp.glide"
+#line 8777 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(ks)); i++) {
 
-#line 8697 "bootstrap/lsp.glide"
+#line 8778 "bootstrap/lsp.glide"
         const char*   k = Vector_get__string(ks, i);
 
-#line 8698 "bootstrap/lsp.glide"
+#line 8779 "bootstrap/lsp.glide"
         HashMap_insert__i32(out, k, HashMap_get__i32(src, k));
     }
 
-#line 8700 "bootstrap/lsp.glide"
+#line 8781 "bootstrap/lsp.glide"
     return out;
 }
 
 
-#line 8702 "bootstrap/lsp.glide"
+#line 8783 "bootstrap/lsp.glide"
 void   _mu_merge_into (HashMap__i32*   src, HashMap__i32*   src_col, HashMap__i32*   dst, HashMap__i32*   dst_col) {
 
-#line 8704 "bootstrap/lsp.glide"
+#line 8785 "bootstrap/lsp.glide"
     Vector__string*   ks = HashMap_keys__i32(src);
 
-#line 8705 "bootstrap/lsp.glide"
+#line 8786 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(ks)); i++) {
 
-#line 8706 "bootstrap/lsp.glide"
+#line 8787 "bootstrap/lsp.glide"
         const char*   k = Vector_get__string(ks, i);
 
-#line 8707 "bootstrap/lsp.glide"
+#line 8788 "bootstrap/lsp.glide"
         if ((!HashMap_contains__i32(dst, k))) {
 
-#line 8708 "bootstrap/lsp.glide"
+#line 8789 "bootstrap/lsp.glide"
             HashMap_insert__i32(dst, k, HashMap_get__i32(src, k));
 
-#line 8709 "bootstrap/lsp.glide"
+#line 8790 "bootstrap/lsp.glide"
             if (HashMap_contains__i32(src_col, k)) {
                 HashMap_insert__i32(dst_col, k, HashMap_get__i32(src_col, k));
             }
@@ -73074,157 +73306,157 @@ void   _mu_merge_into (HashMap__i32*   src, HashMap__i32*   src_col, HashMap__i3
 }
 
 
-#line 8713 "bootstrap/lsp.glide"
+#line 8794 "bootstrap/lsp.glide"
 void   _mu_flag_held (Typer*   t, HashMap__i32*   held, HashMap__i32*   held_col, HashMap__bool*   warned, int32_t   exit_line, const char*   exit_kind) {
 
-#line 8715 "bootstrap/lsp.glide"
+#line 8796 "bootstrap/lsp.glide"
     Vector__string*   names = HashMap_keys__i32(held);
 
-#line 8716 "bootstrap/lsp.glide"
+#line 8797 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(names)); i++) {
 
-#line 8717 "bootstrap/lsp.glide"
+#line 8798 "bootstrap/lsp.glide"
         const char*   nm = Vector_get__string(names, i);
 
-#line 8718 "bootstrap/lsp.glide"
+#line 8799 "bootstrap/lsp.glide"
         if (HashMap_contains__bool(warned, nm)) {
             continue;
         }
 
-#line 8719 "bootstrap/lsp.glide"
+#line 8800 "bootstrap/lsp.glide"
         Typer_warn(t, HashMap_get__i32(held, nm), HashMap_get__i32(held_col, nm), "mutex-unbalanced", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`", nm), ".lock()` is still held at the "), exit_kind), " — wrap it with `defer "), nm), ".unlock();` so every exit path releases the lock"));
 
-#line 8721 "bootstrap/lsp.glide"
+#line 8802 "bootstrap/lsp.glide"
         HashMap_insert__bool(warned, nm, true);
     }
 }
 
 
-#line 8724 "bootstrap/lsp.glide"
+#line 8805 "bootstrap/lsp.glide"
 void   _mu_update_state (Expr*   e, HashMap__i32*   held, HashMap__i32*   held_col) {
 
-#line 8725 "bootstrap/lsp.glide"
+#line 8806 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return;
     }
 
-#line 8726 "bootstrap/lsp.glide"
+#line 8807 "bootstrap/lsp.glide"
     if ((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> field )  !=  NULL))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8728 "bootstrap/lsp.glide"
+#line 8809 "bootstrap/lsp.glide"
         const char*   recv = (((e-> lhs )-> lhs )-> str_val );
 
-#line 8729 "bootstrap/lsp.glide"
+#line 8810 "bootstrap/lsp.glide"
         if ((__glide_string_eq(((e-> lhs )-> field ), "lock")  &&  (!HashMap_contains__i32(held, recv)))) {
 
-#line 8730 "bootstrap/lsp.glide"
+#line 8811 "bootstrap/lsp.glide"
             HashMap_insert__i32(held, recv, (e-> line ));
 
-#line 8731 "bootstrap/lsp.glide"
+#line 8812 "bootstrap/lsp.glide"
             HashMap_insert__i32(held_col, recv, (e-> column ));
         }
 
-#line 8733 "bootstrap/lsp.glide"
+#line 8814 "bootstrap/lsp.glide"
         if ((__glide_string_eq(((e-> lhs )-> field ), "unlock")  &&  HashMap_contains__i32(held, recv))) {
 
-#line 8734 "bootstrap/lsp.glide"
+#line 8815 "bootstrap/lsp.glide"
             HashMap_remove__i32(held, recv);
 
-#line 8735 "bootstrap/lsp.glide"
+#line 8816 "bootstrap/lsp.glide"
             HashMap_remove__i32(held_col, recv);
         }
     }
 
-#line 8738 "bootstrap/lsp.glide"
+#line 8819 "bootstrap/lsp.glide"
     if (((e-> lhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__i32*, HashMap__i32*))_mu_update_state)((e-> lhs ), held, held_col);
     }
 
-#line 8739 "bootstrap/lsp.glide"
+#line 8820 "bootstrap/lsp.glide"
     if (((e-> rhs )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__i32*, HashMap__i32*))_mu_update_state)((e-> rhs ), held, held_col);
     }
 
-#line 8740 "bootstrap/lsp.glide"
+#line 8821 "bootstrap/lsp.glide"
     if (((e-> operand )  !=  NULL)) {
         ((void(*)(Expr*, HashMap__i32*, HashMap__i32*))_mu_update_state)((e-> operand ), held, held_col);
     }
 
-#line 8741 "bootstrap/lsp.glide"
+#line 8822 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 8742 "bootstrap/lsp.glide"
+#line 8823 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 8743 "bootstrap/lsp.glide"
+#line 8824 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 8744 "bootstrap/lsp.glide"
+#line 8825 "bootstrap/lsp.glide"
             ((void(*)(Expr*, HashMap__i32*, HashMap__i32*))_mu_update_state)((&a), held, held_col);
         }
     }
 }
 
 
-#line 8748 "bootstrap/lsp.glide"
+#line 8829 "bootstrap/lsp.glide"
 const char*   _mu_unlock_target (Expr*   e) {
 
-#line 8749 "bootstrap/lsp.glide"
+#line 8830 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return "";
     }
 
-#line 8750 "bootstrap/lsp.glide"
+#line 8831 "bootstrap/lsp.glide"
     if (((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> field )  !=  NULL))  &&  __glide_string_eq(((e-> lhs )-> field ), "unlock"))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8753 "bootstrap/lsp.glide"
+#line 8834 "bootstrap/lsp.glide"
         return (((e-> lhs )-> lhs )-> str_val );
     }
 
-#line 8755 "bootstrap/lsp.glide"
+#line 8836 "bootstrap/lsp.glide"
     return "";
 }
 
 
-#line 8764 "bootstrap/lsp.glide"
+#line 8845 "bootstrap/lsp.glide"
 void   analysis_chan_leak (Typer*   t, Vector__Stmt*   program) {
 
-#line 8765 "bootstrap/lsp.glide"
+#line 8846 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8766 "bootstrap/lsp.glide"
+#line 8847 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8767 "bootstrap/lsp.glide"
+#line 8848 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "chan-leak")))) {
 
-#line 8768 "bootstrap/lsp.glide"
+#line 8849 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8769 "bootstrap/lsp.glide"
+#line 8850 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*))_cl_check_fn)(t, (s. fn_body ));
         }
 
-#line 8771 "bootstrap/lsp.glide"
+#line 8852 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8772 "bootstrap/lsp.glide"
+#line 8853 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8773 "bootstrap/lsp.glide"
+#line 8854 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8774 "bootstrap/lsp.glide"
+#line 8855 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "chan-leak"))) {
                     continue;
                 }
 
-#line 8775 "bootstrap/lsp.glide"
+#line 8856 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8776 "bootstrap/lsp.glide"
+#line 8857 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*))_cl_check_fn)(t, (m. fn_body ));
             }
         }
@@ -73232,72 +73464,72 @@ void   analysis_chan_leak (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 8781 "bootstrap/lsp.glide"
+#line 8862 "bootstrap/lsp.glide"
 void   _cl_check_fn (Typer*   t, Vector__Stmt*   body) {
 
-#line 8786 "bootstrap/lsp.glide"
+#line 8867 "bootstrap/lsp.glide"
     HashMap__i32*   chans = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8787 "bootstrap/lsp.glide"
+#line 8868 "bootstrap/lsp.glide"
     HashMap__i32*   chans_col = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8788 "bootstrap/lsp.glide"
+#line 8869 "bootstrap/lsp.glide"
     ((void(*)(Vector__Stmt*, HashMap__i32*, HashMap__i32*))_cl_collect_chans)(body, chans, chans_col);
 
-#line 8789 "bootstrap/lsp.glide"
+#line 8870 "bootstrap/lsp.glide"
     Vector__string*   names = HashMap_keys__i32(chans);
 
-#line 8790 "bootstrap/lsp.glide"
+#line 8871 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(names)); i++) {
 
-#line 8791 "bootstrap/lsp.glide"
+#line 8872 "bootstrap/lsp.glide"
         const char*   nm = Vector_get__string(names, i);
 
-#line 8792 "bootstrap/lsp.glide"
+#line 8873 "bootstrap/lsp.glide"
         bool   warned = false;
 
-#line 8793 "bootstrap/lsp.glide"
+#line 8874 "bootstrap/lsp.glide"
         int32_t   r = ((int32_t(*)(Typer*, Vector__Stmt*, const char*, bool, int32_t, int32_t, bool*))_cl_walk)(t, body, nm, false, HashMap_get__i32(chans, nm), HashMap_get__i32(chans_col, nm), (&warned));
 
-#line 8796 "bootstrap/lsp.glide"
+#line 8877 "bootstrap/lsp.glide"
         if (((r  ==  0)  &&  (!warned))) {
 
-#line 8797 "bootstrap/lsp.glide"
+#line 8878 "bootstrap/lsp.glide"
             Typer_warn(t, HashMap_get__i32(chans, nm), HashMap_get__i32(chans_col, nm), "chan-leak", __glide_string_concat(__glide_string_concat("channel `", nm), "` reaches the end of the fn without `close()` on the fall-through path — every exit must close before receivers can stop waiting"));
         }
     }
 
-#line 8801 "bootstrap/lsp.glide"
+#line 8882 "bootstrap/lsp.glide"
     HashMap_free__i32(chans);
     HashMap_free__i32(chans_col);
 }
 
 
-#line 8803 "bootstrap/lsp.glide"
+#line 8884 "bootstrap/lsp.glide"
 void   _cl_collect_chans (Vector__Stmt*   body, HashMap__i32*   chans, HashMap__i32*   chans_col) {
 
-#line 8804 "bootstrap/lsp.glide"
+#line 8885 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8805 "bootstrap/lsp.glide"
+#line 8886 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8806 "bootstrap/lsp.glide"
+#line 8887 "bootstrap/lsp.glide"
         if (((((((s. kind )  ==  ST_LET)  &&  ((s. name )  !=  NULL))  &&  ((s. let_ty )  !=  NULL))  &&  (((s. let_ty )-> kind )  ==  TY_GENERIC))  &&  __glide_string_eq(((s. let_ty )-> name ), "chan"))) {
 
-#line 8808 "bootstrap/lsp.glide"
+#line 8889 "bootstrap/lsp.glide"
             HashMap_insert__i32(chans, (s. name ), (s. line ));
 
-#line 8809 "bootstrap/lsp.glide"
+#line 8890 "bootstrap/lsp.glide"
             HashMap_insert__i32(chans_col, (s. name ), (s. column ));
         }
 
-#line 8811 "bootstrap/lsp.glide"
+#line 8892 "bootstrap/lsp.glide"
         if (((s. then_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, HashMap__i32*, HashMap__i32*))_cl_collect_chans)((s. then_body ), chans, chans_col);
         }
 
-#line 8812 "bootstrap/lsp.glide"
+#line 8893 "bootstrap/lsp.glide"
         if (((s. else_body )  !=  NULL)) {
             ((void(*)(Vector__Stmt*, HashMap__i32*, HashMap__i32*))_cl_collect_chans)((s. else_body ), chans, chans_col);
         }
@@ -73305,101 +73537,101 @@ void   _cl_collect_chans (Vector__Stmt*   body, HashMap__i32*   chans, HashMap__
 }
 
 
-#line 8821 "bootstrap/lsp.glide"
+#line 8902 "bootstrap/lsp.glide"
 int32_t   _cl_walk (Typer*   t, Vector__Stmt*   body, const char*   nm, bool   closed_in, int32_t   chan_line, int32_t   chan_col, bool*   warned) {
 
-#line 8823 "bootstrap/lsp.glide"
+#line 8904 "bootstrap/lsp.glide"
     bool   closed = closed_in;
 
-#line 8824 "bootstrap/lsp.glide"
+#line 8905 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8825 "bootstrap/lsp.glide"
+#line 8906 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8826 "bootstrap/lsp.glide"
+#line 8907 "bootstrap/lsp.glide"
         if ((((s. expr_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))_cl_expr_closes)((s. expr_value ), nm))) {
             (closed  =  true);
         }
 
-#line 8827 "bootstrap/lsp.glide"
+#line 8908 "bootstrap/lsp.glide"
         if ((((s. let_value )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))_cl_expr_closes)((s. let_value ), nm))) {
             (closed  =  true);
         }
 
-#line 8828 "bootstrap/lsp.glide"
+#line 8909 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_RETURN)  ||  ((s. kind )  ==  ST_BREAK))  ||  ((s. kind )  ==  ST_CONTINUE))) {
 
-#line 8829 "bootstrap/lsp.glide"
+#line 8910 "bootstrap/lsp.glide"
             if (((!closed)  &&  (!(*warned)))) {
 
-#line 8830 "bootstrap/lsp.glide"
+#line 8911 "bootstrap/lsp.glide"
                 const char*   exit_label = "return";
 
-#line 8831 "bootstrap/lsp.glide"
+#line 8912 "bootstrap/lsp.glide"
                 if (((s. kind )  ==  ST_BREAK)) {
                     (exit_label  =  "break");
                 }
 
-#line 8832 "bootstrap/lsp.glide"
+#line 8913 "bootstrap/lsp.glide"
                 if (((s. kind )  ==  ST_CONTINUE)) {
                     (exit_label  =  "continue");
                 }
 
-#line 8833 "bootstrap/lsp.glide"
+#line 8914 "bootstrap/lsp.glide"
                 Typer_warn(t, chan_line, chan_col, "chan-leak", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("channel `", nm), "` is still open at this "), exit_label), " — `close()` it before exiting so receivers can stop"));
 
-#line 8835 "bootstrap/lsp.glide"
+#line 8916 "bootstrap/lsp.glide"
                 ((*warned)  =  true);
             }
 
-#line 8837 "bootstrap/lsp.glide"
+#line 8918 "bootstrap/lsp.glide"
             return 2;
         }
 
-#line 8839 "bootstrap/lsp.glide"
+#line 8920 "bootstrap/lsp.glide"
         if (((s. kind )  ==  ST_IF)) {
 
-#line 8840 "bootstrap/lsp.glide"
+#line 8921 "bootstrap/lsp.glide"
             int32_t   fall_state = 0;
 
-#line 8841 "bootstrap/lsp.glide"
+#line 8922 "bootstrap/lsp.glide"
             if (closed) {
                 (fall_state  =  1);
             }
 
-#line 8842 "bootstrap/lsp.glide"
+#line 8923 "bootstrap/lsp.glide"
             int32_t   then_r = fall_state;
 
-#line 8843 "bootstrap/lsp.glide"
+#line 8924 "bootstrap/lsp.glide"
             if (((s. then_body )  !=  NULL)) {
 
-#line 8844 "bootstrap/lsp.glide"
+#line 8925 "bootstrap/lsp.glide"
                 (then_r  =  ((int32_t(*)(Typer*, Vector__Stmt*, const char*, bool, int32_t, int32_t, bool*))_cl_walk)(t, (s. then_body ), nm, closed, chan_line, chan_col, warned));
             }
 
-#line 8846 "bootstrap/lsp.glide"
+#line 8927 "bootstrap/lsp.glide"
             int32_t   else_r = fall_state;
 
-#line 8847 "bootstrap/lsp.glide"
+#line 8928 "bootstrap/lsp.glide"
             if (((s. else_body )  !=  NULL)) {
 
-#line 8848 "bootstrap/lsp.glide"
+#line 8929 "bootstrap/lsp.glide"
                 (else_r  =  ((int32_t(*)(Typer*, Vector__Stmt*, const char*, bool, int32_t, int32_t, bool*))_cl_walk)(t, (s. else_body ), nm, closed, chan_line, chan_col, warned));
             }
 
-#line 8853 "bootstrap/lsp.glide"
+#line 8934 "bootstrap/lsp.glide"
             if (((then_r  ==  2)  &&  (else_r  ==  2))) {
                 return 2;
             }
 
-#line 8854 "bootstrap/lsp.glide"
+#line 8935 "bootstrap/lsp.glide"
             bool   new_closed = true;
 
-#line 8855 "bootstrap/lsp.glide"
+#line 8936 "bootstrap/lsp.glide"
             bool   any_fall = false;
 
-#line 8856 "bootstrap/lsp.glide"
+#line 8937 "bootstrap/lsp.glide"
             if ((then_r  !=  2)) {
                 (any_fall  =  true);
                 if ((then_r  ==  0)) {
@@ -73407,7 +73639,7 @@ int32_t   _cl_walk (Typer*   t, Vector__Stmt*   body, const char*   nm, bool   c
                 }
             }
 
-#line 8857 "bootstrap/lsp.glide"
+#line 8938 "bootstrap/lsp.glide"
             if ((else_r  !=  2)) {
                 (any_fall  =  true);
                 if ((else_r  ==  0)) {
@@ -73415,116 +73647,116 @@ int32_t   _cl_walk (Typer*   t, Vector__Stmt*   body, const char*   nm, bool   c
                 }
             }
 
-#line 8858 "bootstrap/lsp.glide"
+#line 8939 "bootstrap/lsp.glide"
             if ((!any_fall)) {
                 return 2;
             }
 
-#line 8859 "bootstrap/lsp.glide"
+#line 8940 "bootstrap/lsp.glide"
             (closed  =  new_closed);
         }
     }
 
-#line 8862 "bootstrap/lsp.glide"
+#line 8943 "bootstrap/lsp.glide"
     if (closed) {
         return 1;
     }
 
-#line 8863 "bootstrap/lsp.glide"
+#line 8944 "bootstrap/lsp.glide"
     return 0;
 }
 
 
-#line 8865 "bootstrap/lsp.glide"
+#line 8946 "bootstrap/lsp.glide"
 bool   _cl_expr_closes (Expr*   e, const char*   nm) {
 
-#line 8866 "bootstrap/lsp.glide"
+#line 8947 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 8867 "bootstrap/lsp.glide"
+#line 8948 "bootstrap/lsp.glide"
     if ((((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((e-> lhs )-> field )  !=  NULL))  &&  __glide_string_eq(((e-> lhs )-> field ), "close"))  &&  (((e-> lhs )-> lhs )  !=  NULL))  &&  ((((e-> lhs )-> lhs )-> kind )  ==  EX_IDENT))  &&  __glide_string_eq((((e-> lhs )-> lhs )-> str_val ), nm))) {
 
-#line 8870 "bootstrap/lsp.glide"
+#line 8951 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 8871 "bootstrap/lsp.glide"
+#line 8952 "bootstrap/lsp.glide"
     if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))_cl_expr_closes)((e-> lhs ), nm))) {
         return true;
     }
 
-#line 8872 "bootstrap/lsp.glide"
+#line 8953 "bootstrap/lsp.glide"
     if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))_cl_expr_closes)((e-> rhs ), nm))) {
         return true;
     }
 
-#line 8873 "bootstrap/lsp.glide"
+#line 8954 "bootstrap/lsp.glide"
     if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*, const char*))_cl_expr_closes)((e-> operand ), nm))) {
         return true;
     }
 
-#line 8874 "bootstrap/lsp.glide"
+#line 8955 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 8875 "bootstrap/lsp.glide"
+#line 8956 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 8876 "bootstrap/lsp.glide"
+#line 8957 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 8877 "bootstrap/lsp.glide"
+#line 8958 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*, const char*))_cl_expr_closes)((&a), nm)) {
                 return true;
             }
         }
     }
 
-#line 8880 "bootstrap/lsp.glide"
+#line 8961 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 8887 "bootstrap/lsp.glide"
+#line 8968 "bootstrap/lsp.glide"
 void   analysis_leak_on_early_return (Typer*   t, Vector__Stmt*   program) {
 
-#line 8888 "bootstrap/lsp.glide"
+#line 8969 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(program)); i++) {
 
-#line 8889 "bootstrap/lsp.glide"
+#line 8970 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(program, i);
 
-#line 8890 "bootstrap/lsp.glide"
+#line 8971 "bootstrap/lsp.glide"
         if (((((s. kind )  ==  ST_FN)  &&  ((s. fn_body )  !=  NULL))  &&  (!((bool(*)(Stmt*, const char*))_has_allow)((&s), "leak-on-early-return")))) {
 
-#line 8891 "bootstrap/lsp.glide"
+#line 8972 "bootstrap/lsp.glide"
             ((t-> current_origin )  =  (s. origin ));
 
-#line 8892 "bootstrap/lsp.glide"
+#line 8973 "bootstrap/lsp.glide"
             ((void(*)(Typer*, Vector__Stmt*))_ler_check_fn)(t, (s. fn_body ));
         }
 
-#line 8894 "bootstrap/lsp.glide"
+#line 8975 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_IMPL)  &&  ((s. impl_methods )  !=  NULL))) {
 
-#line 8895 "bootstrap/lsp.glide"
+#line 8976 "bootstrap/lsp.glide"
             for (int32_t   j = 0; (j  <  Vector_len__Stmt((s. impl_methods ))); j++) {
 
-#line 8896 "bootstrap/lsp.glide"
+#line 8977 "bootstrap/lsp.glide"
                 Stmt   m = Vector_get__Stmt((s. impl_methods ), j);
 
-#line 8897 "bootstrap/lsp.glide"
+#line 8978 "bootstrap/lsp.glide"
                 if ((((m. fn_body )  ==  NULL)  ||  ((bool(*)(Stmt*, const char*))_has_allow)((&m), "leak-on-early-return"))) {
                     continue;
                 }
 
-#line 8898 "bootstrap/lsp.glide"
+#line 8979 "bootstrap/lsp.glide"
                 if ((((s. origin )  !=  NULL)  &&  (!__glide_string_eq((s. origin ), "")))) {
                     ((t-> current_origin )  =  (s. origin ));
                 }
 
-#line 8899 "bootstrap/lsp.glide"
+#line 8980 "bootstrap/lsp.glide"
                 ((void(*)(Typer*, Vector__Stmt*))_ler_check_fn)(t, (m. fn_body ));
             }
         }
@@ -73532,496 +73764,496 @@ void   analysis_leak_on_early_return (Typer*   t, Vector__Stmt*   program) {
 }
 
 
-#line 8904 "bootstrap/lsp.glide"
+#line 8985 "bootstrap/lsp.glide"
 void   _ler_check_fn (Typer*   t, Vector__Stmt*   body) {
 
-#line 8906 "bootstrap/lsp.glide"
+#line 8987 "bootstrap/lsp.glide"
     HashMap__i32*   defer_idx = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8907 "bootstrap/lsp.glide"
+#line 8988 "bootstrap/lsp.glide"
     HashMap__i32*   alloc_idx = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8908 "bootstrap/lsp.glide"
+#line 8989 "bootstrap/lsp.glide"
     HashMap__i32*   alloc_line = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8909 "bootstrap/lsp.glide"
+#line 8990 "bootstrap/lsp.glide"
     HashMap__i32*   alloc_col = ((HashMap__i32*(*)(void))HashMap_new__i32)();
 
-#line 8910 "bootstrap/lsp.glide"
+#line 8991 "bootstrap/lsp.glide"
     Vector__i32*   returning = ((Vector__i32*(*)(void))Vector_new__i32)();
 
-#line 8911 "bootstrap/lsp.glide"
+#line 8992 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__Stmt(body)); i++) {
 
-#line 8912 "bootstrap/lsp.glide"
+#line 8993 "bootstrap/lsp.glide"
         Stmt   s = Vector_get__Stmt(body, i);
 
-#line 8913 "bootstrap/lsp.glide"
+#line 8994 "bootstrap/lsp.glide"
         if ((((((s. kind )  ==  ST_LET)  &&  ((s. name )  !=  NULL))  &&  ((s. let_value )  !=  NULL))  &&  ((bool(*)(Expr*))_ler_is_allocating_call)((s. let_value )))) {
 
-#line 8915 "bootstrap/lsp.glide"
+#line 8996 "bootstrap/lsp.glide"
             HashMap_insert__i32(alloc_idx, (s. name ), i);
         }
 
-#line 8917 "bootstrap/lsp.glide"
+#line 8998 "bootstrap/lsp.glide"
         if ((((s. kind )  ==  ST_DEFER)  &&  ((s. expr_value )  !=  NULL))) {
 
-#line 8922 "bootstrap/lsp.glide"
+#line 9003 "bootstrap/lsp.glide"
             const char*   nm = ((const char*(*)(Expr*))_ler_defer_target)((s. expr_value ));
 
-#line 8923 "bootstrap/lsp.glide"
+#line 9004 "bootstrap/lsp.glide"
             if ((!__glide_string_eq(nm, ""))) {
 
-#line 8924 "bootstrap/lsp.glide"
+#line 9005 "bootstrap/lsp.glide"
                 HashMap_insert__i32(defer_idx, nm, i);
 
-#line 8925 "bootstrap/lsp.glide"
+#line 9006 "bootstrap/lsp.glide"
                 HashMap_insert__i32(alloc_line, nm, (s. line ));
 
-#line 8926 "bootstrap/lsp.glide"
+#line 9007 "bootstrap/lsp.glide"
                 HashMap_insert__i32(alloc_col, nm, (s. column ));
             }
         }
 
-#line 8929 "bootstrap/lsp.glide"
+#line 9010 "bootstrap/lsp.glide"
         if (((bool(*)(Stmt*))_ler_has_early_exit)((&s))) {
             Vector_push__i32(returning, i);
         }
     }
 
-#line 8931 "bootstrap/lsp.glide"
+#line 9012 "bootstrap/lsp.glide"
     Vector__string*   names = HashMap_keys__i32(defer_idx);
 
-#line 8932 "bootstrap/lsp.glide"
+#line 9013 "bootstrap/lsp.glide"
     for (int32_t   i = 0; (i  <  Vector_len__string(names)); i++) {
 
-#line 8933 "bootstrap/lsp.glide"
+#line 9014 "bootstrap/lsp.glide"
         const char*   nm = Vector_get__string(names, i);
 
-#line 8934 "bootstrap/lsp.glide"
+#line 9015 "bootstrap/lsp.glide"
         if ((!HashMap_contains__i32(alloc_idx, nm))) {
             continue;
         }
 
-#line 8935 "bootstrap/lsp.glide"
+#line 9016 "bootstrap/lsp.glide"
         int32_t   a = HashMap_get__i32(alloc_idx, nm);
 
-#line 8936 "bootstrap/lsp.glide"
+#line 9017 "bootstrap/lsp.glide"
         int32_t   d = HashMap_get__i32(defer_idx, nm);
 
-#line 8937 "bootstrap/lsp.glide"
+#line 9018 "bootstrap/lsp.glide"
         if ((d  <=  (a  +  1))) {
             continue;
         }
 
-#line 8938 "bootstrap/lsp.glide"
+#line 9019 "bootstrap/lsp.glide"
         for (int32_t   k = 0; (k  <  Vector_len__i32(returning)); k++) {
 
-#line 8939 "bootstrap/lsp.glide"
+#line 9020 "bootstrap/lsp.glide"
             int32_t   r = Vector_get__i32(returning, k);
 
-#line 8940 "bootstrap/lsp.glide"
+#line 9021 "bootstrap/lsp.glide"
             if (((r  >  a)  &&  (r  <  d))) {
 
-#line 8941 "bootstrap/lsp.glide"
+#line 9022 "bootstrap/lsp.glide"
                 Typer_warn(t, HashMap_get__i32(alloc_line, nm), HashMap_get__i32(alloc_col, nm), "leak-on-early-return", __glide_string_concat(__glide_string_concat(__glide_string_concat(__glide_string_concat("`defer ", nm), ".free()` is registered after an early exit on line — move it right after `let "), nm), " = …;` so the cleanup also fires on the error path"));
 
-#line 8943 "bootstrap/lsp.glide"
+#line 9024 "bootstrap/lsp.glide"
                 break;
             }
         }
     }
 
-#line 8947 "bootstrap/lsp.glide"
+#line 9028 "bootstrap/lsp.glide"
     HashMap_free__i32(defer_idx);
     HashMap_free__i32(alloc_idx);
 
-#line 8948 "bootstrap/lsp.glide"
+#line 9029 "bootstrap/lsp.glide"
     HashMap_free__i32(alloc_line);
     HashMap_free__i32(alloc_col);
 }
 
 
-#line 8950 "bootstrap/lsp.glide"
+#line 9031 "bootstrap/lsp.glide"
 const char*   _ler_defer_target (Expr*   e) {
 
-#line 8951 "bootstrap/lsp.glide"
+#line 9032 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return "";
     }
 
-#line 8953 "bootstrap/lsp.glide"
+#line 9034 "bootstrap/lsp.glide"
     const char*   mc = ((const char*(*)(Expr*))_uaf_free_target)(e);
 
-#line 8954 "bootstrap/lsp.glide"
+#line 9035 "bootstrap/lsp.glide"
     if ((!__glide_string_eq(mc, ""))) {
         return mc;
     }
 
-#line 8956 "bootstrap/lsp.glide"
+#line 9037 "bootstrap/lsp.glide"
     if ((((((((e-> kind )  ==  EX_CALL)  &&  ((e-> lhs )  !=  NULL))  &&  (((e-> lhs )-> kind )  ==  EX_IDENT))  &&  (__glide_string_eq(((e-> lhs )-> str_val ), "free")  ||  __glide_string_eq(((e-> lhs )-> str_val ), "__glide_palloc_free")))  &&  ((e-> args )  !=  NULL))  &&  (Vector_len__Expr((e-> args ))  ==  1))) {
 
-#line 8959 "bootstrap/lsp.glide"
+#line 9040 "bootstrap/lsp.glide"
         Expr   arg = Vector_get__Expr((e-> args ), 0);
 
-#line 8960 "bootstrap/lsp.glide"
+#line 9041 "bootstrap/lsp.glide"
         Expr*   probe = (&arg);
 
-#line 8961 "bootstrap/lsp.glide"
+#line 9042 "bootstrap/lsp.glide"
         while (((probe  !=  NULL)  &&  ((probe-> kind )  ==  EX_CAST))) {
             (probe  =  (probe-> lhs ));
         }
 
-#line 8962 "bootstrap/lsp.glide"
+#line 9043 "bootstrap/lsp.glide"
         if (((probe  !=  NULL)  &&  ((probe-> kind )  ==  EX_IDENT))) {
             return (probe-> str_val );
         }
     }
 
-#line 8964 "bootstrap/lsp.glide"
+#line 9045 "bootstrap/lsp.glide"
     return "";
 }
 
 
-#line 8966 "bootstrap/lsp.glide"
+#line 9047 "bootstrap/lsp.glide"
 bool   _ler_is_allocating_call (Expr*   e) {
 
-#line 8967 "bootstrap/lsp.glide"
+#line 9048 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 8969 "bootstrap/lsp.glide"
+#line 9050 "bootstrap/lsp.glide"
     Expr*   p = e;
 
-#line 8970 "bootstrap/lsp.glide"
+#line 9051 "bootstrap/lsp.glide"
     while (((p  !=  NULL)  &&  ((p-> kind )  ==  EX_CAST))) {
         (p  =  (p-> lhs ));
     }
 
-#line 8971 "bootstrap/lsp.glide"
+#line 9052 "bootstrap/lsp.glide"
     if ((p  ==  NULL)) {
         return false;
     }
 
-#line 8972 "bootstrap/lsp.glide"
+#line 9053 "bootstrap/lsp.glide"
     if (((((p-> kind )  ==  EX_CALL)  &&  ((p-> lhs )  !=  NULL))  &&  (((p-> lhs )-> kind )  ==  EX_IDENT))) {
 
-#line 8973 "bootstrap/lsp.glide"
+#line 9054 "bootstrap/lsp.glide"
         const char*   n = ((p-> lhs )-> str_val );
 
-#line 8974 "bootstrap/lsp.glide"
+#line 9055 "bootstrap/lsp.glide"
         if ((__glide_string_eq(n, "malloc")  ||  __glide_string_eq(n, "__glide_palloc_make"))) {
             return true;
         }
     }
 
-#line 8976 "bootstrap/lsp.glide"
+#line 9057 "bootstrap/lsp.glide"
     if (((((((p-> kind )  ==  EX_CALL)  &&  ((p-> lhs )  !=  NULL))  &&  (((p-> lhs )-> kind )  ==  EX_MEMBER))  &&  (((p-> lhs )-> field )  !=  NULL))  &&  __glide_string_eq(((p-> lhs )-> field ), "new"))) {
 
-#line 8977 "bootstrap/lsp.glide"
+#line 9058 "bootstrap/lsp.glide"
         return true;
     }
 
-#line 8978 "bootstrap/lsp.glide"
+#line 9059 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 8980 "bootstrap/lsp.glide"
+#line 9061 "bootstrap/lsp.glide"
 bool   _ler_has_early_exit (Stmt*   s) {
 
-#line 8981 "bootstrap/lsp.glide"
+#line 9062 "bootstrap/lsp.glide"
     if ((s  ==  NULL)) {
         return false;
     }
 
-#line 8982 "bootstrap/lsp.glide"
+#line 9063 "bootstrap/lsp.glide"
     if (((s-> kind )  ==  ST_RETURN)) {
         return true;
     }
 
-#line 8983 "bootstrap/lsp.glide"
+#line 9064 "bootstrap/lsp.glide"
     if ((((s-> expr_value )  !=  NULL)  &&  ((bool(*)(Expr*))_ler_expr_has_try)((s-> expr_value )))) {
         return true;
     }
 
-#line 8984 "bootstrap/lsp.glide"
+#line 9065 "bootstrap/lsp.glide"
     if ((((s-> let_value )  !=  NULL)  &&  ((bool(*)(Expr*))_ler_expr_has_try)((s-> let_value )))) {
         return true;
     }
 
-#line 8985 "bootstrap/lsp.glide"
+#line 9066 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 8987 "bootstrap/lsp.glide"
+#line 9068 "bootstrap/lsp.glide"
 bool   _ler_expr_has_try (Expr*   e) {
 
-#line 8988 "bootstrap/lsp.glide"
+#line 9069 "bootstrap/lsp.glide"
     if ((e  ==  NULL)) {
         return false;
     }
 
-#line 8989 "bootstrap/lsp.glide"
+#line 9070 "bootstrap/lsp.glide"
     if ((((e-> kind )  ==  EX_UNARY)  &&  ((e-> op_code )  ==  UN_TRY))) {
         return true;
     }
 
-#line 8990 "bootstrap/lsp.glide"
+#line 9071 "bootstrap/lsp.glide"
     if ((((e-> lhs )  !=  NULL)  &&  ((bool(*)(Expr*))_ler_expr_has_try)((e-> lhs )))) {
         return true;
     }
 
-#line 8991 "bootstrap/lsp.glide"
+#line 9072 "bootstrap/lsp.glide"
     if ((((e-> rhs )  !=  NULL)  &&  ((bool(*)(Expr*))_ler_expr_has_try)((e-> rhs )))) {
         return true;
     }
 
-#line 8992 "bootstrap/lsp.glide"
+#line 9073 "bootstrap/lsp.glide"
     if ((((e-> operand )  !=  NULL)  &&  ((bool(*)(Expr*))_ler_expr_has_try)((e-> operand )))) {
         return true;
     }
 
-#line 8993 "bootstrap/lsp.glide"
+#line 9074 "bootstrap/lsp.glide"
     if (((e-> args )  !=  NULL)) {
 
-#line 8994 "bootstrap/lsp.glide"
+#line 9075 "bootstrap/lsp.glide"
         for (int32_t   i = 0; (i  <  Vector_len__Expr((e-> args ))); i++) {
 
-#line 8995 "bootstrap/lsp.glide"
+#line 9076 "bootstrap/lsp.glide"
             Expr   a = Vector_get__Expr((e-> args ), i);
 
-#line 8996 "bootstrap/lsp.glide"
+#line 9077 "bootstrap/lsp.glide"
             if (((bool(*)(Expr*))_ler_expr_has_try)((&a))) {
                 return true;
             }
         }
     }
 
-#line 8999 "bootstrap/lsp.glide"
+#line 9080 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 9008 "bootstrap/lsp.glide"
+#line 9089 "bootstrap/lsp.glide"
 bool   lsp_dispatch (JsonValue*   req, LspState*   state) {
 
-#line 9009 "bootstrap/lsp.glide"
+#line 9090 "bootstrap/lsp.glide"
     const char*   method = ((const char*(*)(JsonValue*))json_as_string)(((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "method"));
 
-#line 9010 "bootstrap/lsp.glide"
+#line 9091 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "initialize")) {
         ((void(*)(JsonValue*))handle_initialize)(req);
         return false;
     }
 
-#line 9011 "bootstrap/lsp.glide"
+#line 9092 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "initialized")) {
         return false;
     }
 
-#line 9012 "bootstrap/lsp.glide"
+#line 9093 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "shutdown")) {
         ((void(*)(JsonValue*, LspState*))handle_shutdown)(req, state);
         return false;
     }
 
-#line 9013 "bootstrap/lsp.glide"
+#line 9094 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "exit")) {
         return true;
     }
 
-#line 9014 "bootstrap/lsp.glide"
+#line 9095 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/didOpen")) {
         ((void(*)(JsonValue*, LspState*))handle_did_open)(req, state);
         return false;
     }
 
-#line 9015 "bootstrap/lsp.glide"
+#line 9096 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/didChange")) {
         ((void(*)(JsonValue*, LspState*))handle_did_change)(req, state);
         return false;
     }
 
-#line 9016 "bootstrap/lsp.glide"
+#line 9097 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/didClose")) {
         ((void(*)(JsonValue*, LspState*))handle_did_close)(req, state);
         return false;
     }
 
-#line 9017 "bootstrap/lsp.glide"
+#line 9098 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/hover")) {
         ((void(*)(JsonValue*, LspState*))handle_hover)(req, state);
         return false;
     }
 
-#line 9018 "bootstrap/lsp.glide"
+#line 9099 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/documentSymbol")) {
         ((void(*)(JsonValue*, LspState*))handle_document_symbol)(req, state);
         return false;
     }
 
-#line 9019 "bootstrap/lsp.glide"
+#line 9100 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/definition")) {
         ((void(*)(JsonValue*, LspState*))handle_definition)(req, state);
         return false;
     }
 
-#line 9020 "bootstrap/lsp.glide"
+#line 9101 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/completion")) {
         ((void(*)(JsonValue*, LspState*))handle_completion)(req, state);
         return false;
     }
 
-#line 9021 "bootstrap/lsp.glide"
+#line 9102 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/references")) {
         ((void(*)(JsonValue*, LspState*))handle_references)(req, state);
         return false;
     }
 
-#line 9022 "bootstrap/lsp.glide"
+#line 9103 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/documentHighlight")) {
         ((void(*)(JsonValue*, LspState*))handle_document_highlight)(req, state);
         return false;
     }
 
-#line 9023 "bootstrap/lsp.glide"
+#line 9104 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/prepareRename")) {
         ((void(*)(JsonValue*, LspState*))handle_prepare_rename)(req, state);
         return false;
     }
 
-#line 9024 "bootstrap/lsp.glide"
+#line 9105 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/rename")) {
         ((void(*)(JsonValue*, LspState*))handle_rename)(req, state);
         return false;
     }
 
-#line 9025 "bootstrap/lsp.glide"
+#line 9106 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/formatting")) {
         ((void(*)(JsonValue*, LspState*))handle_formatting)(req, state);
         return false;
     }
 
-#line 9026 "bootstrap/lsp.glide"
+#line 9107 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "textDocument/codeAction")) {
         ((void(*)(JsonValue*, LspState*))handle_code_action)(req, state);
         return false;
     }
 
-#line 9027 "bootstrap/lsp.glide"
+#line 9108 "bootstrap/lsp.glide"
     if (__glide_string_eq(method, "glide/routeList")) {
         ((void(*)(JsonValue*, LspState*))handle_route_list)(req, state);
         return false;
     }
 
-#line 9029 "bootstrap/lsp.glide"
+#line 9110 "bootstrap/lsp.glide"
     JsonValue*   id = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
 
-#line 9030 "bootstrap/lsp.glide"
+#line 9111 "bootstrap/lsp.glide"
     if ((id  !=  NULL)) {
         ((void(*)(JsonValue*, JsonValue*))lsp_send_response)(id, ((JsonValue*(*)(void))json_null)());
     }
 
-#line 9031 "bootstrap/lsp.glide"
+#line 9112 "bootstrap/lsp.glide"
     return false;
 }
 
 
-#line 9034 "bootstrap/lsp.glide"
+#line 9115 "bootstrap/lsp.glide"
 int32_t   lsp_main (void) {
 
-#line 9035 "bootstrap/lsp.glide"
+#line 9116 "bootstrap/lsp.glide"
     ((void(*)(void))__glide_set_binary_io)();
 
-#line 9039 "bootstrap/lsp.glide"
+#line 9120 "bootstrap/lsp.glide"
     const char*   log_path = ((const char*(*)(void))_lsp_log_path)();
 
-#line 9040 "bootstrap/lsp.glide"
+#line 9121 "bootstrap/lsp.glide"
     ((void(*)(const char*))__glide_lsp_log_open)(log_path);
 
-#line 9041 "bootstrap/lsp.glide"
+#line 9122 "bootstrap/lsp.glide"
     ((void(*)(const char*))_lsp_log)("--- lsp boot ---");
 
-#line 9042 "bootstrap/lsp.glide"
+#line 9123 "bootstrap/lsp.glide"
     LspState*   state = ((LspState*(*)(void))lsp_state_new)();
 
-#line 9043 "bootstrap/lsp.glide"
+#line 9124 "bootstrap/lsp.glide"
     while (true) {
 
-#line 9044 "bootstrap/lsp.glide"
+#line 9125 "bootstrap/lsp.glide"
         const char*   raw = ((const char*(*)(void))lsp_read_message)();
 
-#line 9045 "bootstrap/lsp.glide"
+#line 9126 "bootstrap/lsp.glide"
         if (__glide_string_eq(raw, "")) {
 
-#line 9046 "bootstrap/lsp.glide"
+#line 9127 "bootstrap/lsp.glide"
             ((void(*)(const char*))_lsp_log)("read_message: EOF — exiting");
 
-#line 9047 "bootstrap/lsp.glide"
+#line 9128 "bootstrap/lsp.glide"
             break;
         }
 
-#line 9049 "bootstrap/lsp.glide"
+#line 9130 "bootstrap/lsp.glide"
         JsonValue*   req = ((JsonValue*(*)(const char*))json_parse)(raw);
 
-#line 9050 "bootstrap/lsp.glide"
+#line 9131 "bootstrap/lsp.glide"
         bool   should_exit = false;
 
-#line 9051 "bootstrap/lsp.glide"
+#line 9132 "bootstrap/lsp.glide"
         if ((req  !=  NULL)) {
 
-#line 9052 "bootstrap/lsp.glide"
+#line 9133 "bootstrap/lsp.glide"
             JsonValue*   method_v = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "method");
 
-#line 9053 "bootstrap/lsp.glide"
+#line 9134 "bootstrap/lsp.glide"
             JsonValue*   mid = ((JsonValue*(*)(JsonValue*, const char*))json_get)(req, "id");
 
-#line 9054 "bootstrap/lsp.glide"
+#line 9135 "bootstrap/lsp.glide"
             const char*   method_s = ((const char*(*)(JsonValue*))json_as_string)(method_v);
 
-#line 9055 "bootstrap/lsp.glide"
+#line 9136 "bootstrap/lsp.glide"
             ((void(*)(const char*))_lsp_log)(__glide_string_concat(__glide_string_concat(__glide_string_concat("> ", method_s), " id="), ((const char*(*)(int64_t))int_to_str)(((int32_t(*)(JsonValue*))json_as_int)(mid))));
 
-#line 9065 "bootstrap/lsp.glide"
+#line 9146 "bootstrap/lsp.glide"
             void*   req_arena_initial = ((void*(*)(void))__glide_palloc_make)();
 
-#line 9066 "bootstrap/lsp.glide"
+#line 9147 "bootstrap/lsp.glide"
             ((void(*)(void*))__glide_palloc_set)(req_arena_initial);
 
-#line 9067 "bootstrap/lsp.glide"
+#line 9148 "bootstrap/lsp.glide"
             (should_exit  =  ((bool(*)(JsonValue*, LspState*))lsp_dispatch)(req, state));
 
-#line 9068 "bootstrap/lsp.glide"
+#line 9149 "bootstrap/lsp.glide"
             ((void(*)(const char*))_lsp_log)(__glide_string_concat("< done ", method_s));
 
-#line 9073 "bootstrap/lsp.glide"
+#line 9154 "bootstrap/lsp.glide"
             void*   req_arena_head = ((void*(*)(void))__glide_palloc_get)();
 
-#line 9074 "bootstrap/lsp.glide"
+#line 9155 "bootstrap/lsp.glide"
             ((void(*)(void*))__glide_palloc_set)(NULL);
 
-#line 9075 "bootstrap/lsp.glide"
+#line 9156 "bootstrap/lsp.glide"
             ((void(*)(void*))__glide_palloc_free)(req_arena_head);
 
-#line 9081 "bootstrap/lsp.glide"
+#line 9162 "bootstrap/lsp.glide"
             ((void(*)(JsonValue*))json_free)(req);
         }
 
-#line 9083 "bootstrap/lsp.glide"
+#line 9164 "bootstrap/lsp.glide"
  if (raw  !=  NULL) free((char*)(raw )); 
-#line 9084 "bootstrap/lsp.glide"
+#line 9165 "bootstrap/lsp.glide"
         if (should_exit) {
             break;
         }
     }
 
-#line 9086 "bootstrap/lsp.glide"
+#line 9167 "bootstrap/lsp.glide"
     ((void(*)(const char*))_lsp_log)("--- lsp shutdown ---");
 
-#line 9087 "bootstrap/lsp.glide"
+#line 9168 "bootstrap/lsp.glide"
     return 0;
 }
 
@@ -87127,60 +87359,12 @@ void   Vector_push__ExpectPending (Vector__ExpectPending*   self, ExpectPending 
     ((self-> len )  =  ((self-> len )  +  1));
 }
 
-int32_t   Vector_get__i32 (Vector__i32*   self, int32_t   i) {
-    return (self-> data )[i];
-}
-
-int32_t   Vector_len__i32 (Vector__i32*   self) {
-    return (self-> len );
-}
-
 void   Vector_set__ExpectPending (Vector__ExpectPending*   self, int32_t   i, ExpectPending   x) {
     ((self-> data )[i]  =  x);
 }
 
-void   Vector_push__i32 (Vector__i32*   self, int32_t   x) {
-    if (((self-> len )  ==  (self-> cap ))) {
-        int32_t   new_cap = 4;
-        if (((self-> cap )  >  0)) {
-            (new_cap  =  ((self-> cap )  *  2));
-        }
-        int32_t*   new_data;
-        if ((self-> is_arena )) {
-            (new_data  =  (( int32_t* )((void*(*)(int32_t))__glide_palloc)((new_cap  *  sizeof( int32_t )))));
-        } else {
-            (new_data  =  (( int32_t* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( int32_t )))));
-        }
-        for (int32_t   i = 0; (i  <  (self-> len )); i++) {
-            (new_data[i]  =  (self-> data )[i]);
-        }
-        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
-            ((void(*)(void*))free)((( void* )(self-> data )));
-        }
-        ((self-> data )  =  new_data);
-        ((self-> cap )  =  new_cap);
-    }
-    ((self-> data )[(self-> len )]  =  x);
-    ((self-> len )  =  ((self-> len )  +  1));
-}
-
 ExpectPending   Vector_get__ExpectPending (Vector__ExpectPending*   self, int32_t   i) {
     return (self-> data )[i];
-}
-
-Vector__i32*   Vector_new__i32 (void) {
-    bool   arena = (((int32_t(*)(void))__glide_palloc_active)()  !=  0);
-    Vector__i32*   v;
-    if (arena) {
-        (v  =  (( Vector__i32* )((void*(*)(int32_t))__glide_palloc)(sizeof( Vector__i32 ))));
-    } else {
-        (v  =  (( Vector__i32* )((void*(*)(size_t))malloc)(sizeof( Vector__i32 ))));
-    }
-    ((v-> data )  =  NULL);
-    ((v-> len )  =  0);
-    ((v-> cap )  =  0);
-    ((v-> is_arena )  =  arena);
-    return v;
 }
 
 void   Vector_free__ExpectPending (Vector__ExpectPending*   self) {
@@ -87258,6 +87442,59 @@ void   Vector_push__UseSite (Vector__UseSite*   self, UseSite   x) {
     }
     ((self-> data )[(self-> len )]  =  x);
     ((self-> len )  =  ((self-> len )  +  1));
+}
+
+int32_t   Vector_get__i32 (Vector__i32*   self, int32_t   i) {
+    return (self-> data )[i];
+}
+
+int32_t   Vector_pop__i32 (Vector__i32*   self) {
+    ((self-> len )  =  ((self-> len )  -  1));
+    return (self-> data )[(self-> len )];
+}
+
+int32_t   Vector_len__i32 (Vector__i32*   self) {
+    return (self-> len );
+}
+
+void   Vector_push__i32 (Vector__i32*   self, int32_t   x) {
+    if (((self-> len )  ==  (self-> cap ))) {
+        int32_t   new_cap = 4;
+        if (((self-> cap )  >  0)) {
+            (new_cap  =  ((self-> cap )  *  2));
+        }
+        int32_t*   new_data;
+        if ((self-> is_arena )) {
+            (new_data  =  (( int32_t* )((void*(*)(int32_t))__glide_palloc)((new_cap  *  sizeof( int32_t )))));
+        } else {
+            (new_data  =  (( int32_t* )((void*(*)(size_t))malloc)((new_cap  *  sizeof( int32_t )))));
+        }
+        for (int32_t   i = 0; (i  <  (self-> len )); i++) {
+            (new_data[i]  =  (self-> data )[i]);
+        }
+        if (((!(self-> is_arena ))  &&  ((self-> cap )  >  0))) {
+            ((void(*)(void*))free)((( void* )(self-> data )));
+        }
+        ((self-> data )  =  new_data);
+        ((self-> cap )  =  new_cap);
+    }
+    ((self-> data )[(self-> len )]  =  x);
+    ((self-> len )  =  ((self-> len )  +  1));
+}
+
+Vector__i32*   Vector_new__i32 (void) {
+    bool   arena = (((int32_t(*)(void))__glide_palloc_active)()  !=  0);
+    Vector__i32*   v;
+    if (arena) {
+        (v  =  (( Vector__i32* )((void*(*)(int32_t))__glide_palloc)(sizeof( Vector__i32 ))));
+    } else {
+        (v  =  (( Vector__i32* )((void*(*)(size_t))malloc)(sizeof( Vector__i32 ))));
+    }
+    ((v-> data )  =  NULL);
+    ((v-> len )  =  0);
+    ((v-> cap )  =  0);
+    ((v-> is_arena )  =  arena);
+    return v;
 }
 
 void   HashMap_free__ImportInfo (HashMap__ImportInfo*   self) {
