@@ -2028,6 +2028,34 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
     return block;
 }
 
+// Hover card for a manifest (`glide.glide`) schema symbol — the `Package`
+// fields, the literal itself, `vec_of`, and the `Dep` constructors. Returns
+// markdown content, or "" when `word` isn't part of the manifest schema (the
+// caller then falls back to generic hover so keywords like `let` still work).
+fn _manifest_hover_doc(word: string) -> string {
+    let mut sig: string = "";
+    let mut desc: string = "";
+    if word.eq("name") { sig = "name: string"; desc = "Package name. **Required.**"; }
+    else if word.eq("version") { sig = "version: string"; desc = "Semver version, e.g. `\"0.1.0\"`. **Required.**"; }
+    else if word.eq("bin") { sig = "bin: string"; desc = "Entry-point source file. Defaults to `src/main.glide`."; }
+    else if word.eq("deps") { sig = "deps: vec_of(...)"; desc = "Dependency list. Each entry is a `Dep::path(...)` or `Dep::git(...)`."; }
+    else if word.eq("description") { sig = "description: string"; desc = "Short summary. Optional, informational."; }
+    else if word.eq("author") { sig = "author: string"; desc = "Author, e.g. `\"Ada <ada@example.com>\"`. Optional."; }
+    else if word.eq("license") { sig = "license: string"; desc = "SPDX identifier, e.g. `\"MIT\"`. Optional."; }
+    else if word.eq("repository") { sig = "repository: string"; desc = "Source URL. Optional."; }
+    else if word.eq("target") { sig = "target: string"; desc = "Default cross-compile triple, e.g. `\"x86_64-linux-musl\"`. Optional."; }
+    else if word.eq("Package") {
+        sig = "Package { ... }";
+        desc = "Project manifest. The CLI reads its literal fields; it is never compiled. Required fields `name` / `version`; common `bin` / `deps`; optional `description` / `author` / `license` / `repository` / `target`.";
+    }
+    else if word.eq("vec_of") { sig = "vec_of(...)"; desc = "Builds the `deps` list. Each argument is a `Dep::path` or `Dep::git`."; }
+    else if word.eq("Dep") { sig = "Dep::path | Dep::git"; desc = "Dependency constructors: `Dep::path(name, rel_path)` (local) or `Dep::git(name, url, rev)`."; }
+    else if word.eq("path") { sig = "Dep::path(name, rel_path)"; desc = "Depend on a package at a local filesystem path."; }
+    else if word.eq("git") { sig = "Dep::git(name, url, rev)"; desc = "Depend on a package from a git repository at a tag or commit."; }
+    if sig.eq("") { return ""; }
+    return "```glide\n".concat(sig).concat("\n```\n\n---\n\n").concat(desc);
+}
+
 fn handle_hover(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -2042,6 +2070,21 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
 
     let word: string = word_at(doc.text, line0, col0);
     if word.eq("") { lsp_send_response(id, json_null()); return; }
+
+    // Manifest (`glide.glide`) schema hover. On a hit we respond directly;
+    // otherwise fall through so keywords (`let`) still get their generic card.
+    if path_is_manifest(uri_to_path(uri)) {
+        let mdoc: string = _manifest_hover_doc(word);
+        if !mdoc.eq("") {
+            let mres: *JsonValue = json_object();
+            let mc: *JsonValue = json_object();
+            json_obj_set(mc, "kind", json_string("markdown"));
+            json_obj_set(mc, "value", json_string(mdoc));
+            json_obj_set(mres, "contents", mc);
+            lsp_send_response(id, mres);
+            return;
+        }
+    }
 
     let mut decl: *Stmt = null;
     let mut content: string = "";
