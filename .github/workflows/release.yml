@@ -1,0 +1,97 @@
+name: release
+
+# Build the release artifacts on native runners (so macOS / aarch64 get a
+# real toolchain instead of a cross-build from one host) and attach them to
+# the GitHub release for the tag.
+#
+# Fires on a pushed `v*` tag, or manually via the Actions tab / `gh workflow
+# run release.yml -f tag=v0.2.0` to (re)build for an existing release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build for and upload to (e.g. v0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    name: linux-x86_64,   sysroot: true }
+          - { os: ubuntu-24.04-arm, name: linux-aarch64,  sysroot: false }
+          - { os: macos-13,         name: macos-x86_64,   sysroot: false }
+          - { os: macos-latest,     name: macos-aarch64,  sysroot: false }
+          - { os: windows-latest,   name: windows-x86_64, sysroot: false }
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2 (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc zip unzip
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch Zig toolchain
+        run: bash tools/install_toolchain.sh
+
+      - name: Build seed + compiler
+        run: |
+          set -e
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            gcc bootstrap/seed/bootstrap.c -o glide_seed.exe -O2 -lpthread -lm
+            ./glide_seed.exe build bootstrap/main.glide -o glide.exe
+          else
+            cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm
+            ./glide_seed build bootstrap/main.glide -o glide
+          fi
+
+      - name: Package release artifact
+        run: VERSION="${{ steps.ver.outputs.version }}" bash tools/build_release.sh
+
+      - name: Build sysroot (linux x86_64 only)
+        if: matrix.sysroot
+        run: VERSION="${{ steps.ver.outputs.version }}" bash tools/build_sysroot.sh
+
+      - name: Verify the binary is non-empty
+        run: |
+          set -e
+          d="dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}"
+          bin="$d/glide"; [ "${{ runner.os }}" = "Windows" ] && bin="$d/glide.exe"
+          test -s "$bin" || { echo "::error::built binary is missing/empty: $bin"; exit 1; }
+          ls -la "$bin"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: |
+            dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}.tar.gz
+            dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}.zip
+            dist/glide-sysroot-x86_64-linux-musl-${{ steps.ver.outputs.version }}.tar.gz
+          fail_on_unmatched_files: false
