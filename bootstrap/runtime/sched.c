@@ -464,12 +464,21 @@ static void __glide_stack_grow_sig(int sig, siginfo_t* si, void* ctx_ptr) {
     uc->uc_mcontext.gregs[REG_RSP] = (greg_t)sp;
     uc->uc_mcontext.gregs[REG_RBP] = (greg_t)fp;
     return;
-# elif defined(__APPLE__)
+# elif defined(__APPLE__) && defined(__x86_64__)
     uintptr_t sp = (uintptr_t)uc->uc_mcontext->__ss.__rsp;
     uintptr_t fp = (uintptr_t)uc->uc_mcontext->__ss.__rbp;
     if (!__glide_stack_grow_in_place(t, &sp, &fp)) goto fail;
     uc->uc_mcontext->__ss.__rsp = sp;
     uc->uc_mcontext->__ss.__rbp = fp;
+    return;
+# elif defined(__APPLE__) && defined(__aarch64__)
+    /* Apple Silicon: __darwin_arm_thread_state64 names the stack/frame
+       pointers __sp / __fp (no __rsp/__rbp). */
+    uintptr_t sp = (uintptr_t)uc->uc_mcontext->__ss.__sp;
+    uintptr_t fp = (uintptr_t)uc->uc_mcontext->__ss.__fp;
+    if (!__glide_stack_grow_in_place(t, &sp, &fp)) goto fail;
+    uc->uc_mcontext->__ss.__sp = sp;
+    uc->uc_mcontext->__ss.__fp = fp;
     return;
 # else
     goto fail;
