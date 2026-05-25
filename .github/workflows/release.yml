@@ -44,7 +44,7 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: mingw-w64-x86_64-gcc zip unzip
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib zip unzip
 
       - name: Resolve version
         id: ver
@@ -63,11 +63,14 @@ jobs:
       - name: Build seed + compiler
         run: |
           set -e
+          # The compiler links zlib (compress / fetch decompression). The final
+          # `glide build` auto-links what it needs; the manual seed cc must spell
+          # out -lz (and -lpthread -lm).
           if [ "${{ runner.os }}" = "Windows" ]; then
-            gcc bootstrap/seed/bootstrap.c -o glide_seed.exe -O2 -lpthread -lm
+            gcc bootstrap/seed/bootstrap.c -o glide_seed.exe -O2 -lpthread -lm -lz
             ./glide_seed.exe build bootstrap/main.glide -o glide.exe
           else
-            cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm
+            cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
             ./glide_seed build bootstrap/main.glide -o glide
           fi
 

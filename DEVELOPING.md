@@ -8,7 +8,7 @@ The compiler is written in Glide. To break the chicken-and-egg, `bootstrap/seed/
 
 ```bash
 # 1. Build the seed binary (any cc — gcc, clang, MinGW, ...)
-cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm
+cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
 
 # 2. Fetch the bundled C toolchain (used as the codegen backend)
 bash tools/install_toolchain.sh
