@@ -100,6 +100,22 @@ pub fn mvs_get_override() -> *HashMap<string> {
 // Walk up from `start_dir` looking for a `glide.glide`. Returns "" when none
 // is found before the filesystem root. Stops climbing once the path is empty
 // or equal to its own parent (root reached).
+// True if `path` names a project manifest (`glide.glide`). The manifest is
+// parsed for its literal fields but never compiled — `Package` / `Dep` /
+// `vec_of` are recognised positionally, not declared — so the typer must skip
+// semantic checks on it (both `glide check` and the LSP). Matches on the
+// basename so any `.../glide.glide` qualifies.
+pub fn path_is_manifest(path: string) -> bool {
+    if path == null { return false; }
+    let n: i32 = path.len();
+    if n < 11 { return false; }
+    let suffix: string = path.substring(n - 11, n);
+    if !suffix.eq("glide.glide") { return false; }
+    if n == 11 { return true; }
+    let c: i32 = path.at(n - 12).to_int();
+    return c == 47 || c == 92;   // '/' or '\'
+}
+
 pub fn find_manifest_root(start_dir: string) -> string {
     let mut dir: string = start_dir;
     if dir.eq("") { dir = "."; }

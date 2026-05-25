@@ -885,16 +885,23 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
 
     let t: *Typer = Typer::new();
     merge_parse_diags(t, pdiags);
-    // Match the build / `glide check` pipeline: register the import-derived
-    // visibility table and enforce it, so the editor flags unknown
-    // functions / missing imports / out-of-scope names — not just the
-    // null-safety + arity checks that run unconditionally. The doc's
-    // builtins + transitive imports are already loaded into `stmts` above,
-    // so every legit cross-file symbol is registered and won't false-flag.
-    build_visibility(t, stmts);
-    t.enforce_visibility = true;
-    check_program(t, stmts);
-    run_extra_analyses(t, stmts);
+    // The manifest (`glide.glide`) is config, not a program: the CLI only
+    // parses it for literal fields and never type-checks it. Its `Package` /
+    // `Dep` / `vec_of` identifiers are intentionally undeclared, so run only
+    // the parse pass here — semantic checks would flag them as unknown.
+    let is_manifest: bool = path_is_manifest(path);
+    if !is_manifest {
+        // Match the build / `glide check` pipeline: register the import-derived
+        // visibility table and enforce it, so the editor flags unknown
+        // functions / missing imports / out-of-scope names — not just the
+        // null-safety + arity checks that run unconditionally. The doc's
+        // builtins + transitive imports are already loaded into `stmts` above,
+        // so every legit cross-file symbol is registered and won't false-flag.
+        build_visibility(t, stmts);
+        t.enforce_visibility = true;
+        check_program(t, stmts);
+        run_extra_analyses(t, stmts);
+    }
 
     // Save the parsed stmts on the doc. The arena stays alive (in the
     // global g_palloc_active) until the next reanalysis, so this doc's
