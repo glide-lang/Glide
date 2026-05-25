@@ -22,7 +22,7 @@
 
 set -e
 
-VERSION="${VERSION:-0.1.1}"
+VERSION="${VERSION:-0.2.0}"
 ZIG_VERSION="${ZIG_VERSION:-0.14.1}"
 TARGET=""
 # Path to a directory of static libs to bundle into the release tarball

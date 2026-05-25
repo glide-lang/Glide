@@ -7826,7 +7826,7 @@ static const const char*   FMT_INDENT = "    ";
 #define  MODE_CHECK  3
 #define  MODE_FMT  4
 #define  MODE_TEST  5
-static const const char*   GLIDE_VERSION = "0.1.1";
+static const const char*   GLIDE_VERSION = "0.2.0";
 
 int32_t   printf (const char*   fmt, ...);
 void   make_chan (int32_t   cap);

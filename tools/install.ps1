@@ -11,7 +11,7 @@
 # user PATH (no admin needed).
 
 param(
-    [string]$Version = "0.1.1",
+    [string]$Version = "0.2.0",
     [string]$Archive = "",
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\Glide",
     [string]$DownloadUrlBase = ""

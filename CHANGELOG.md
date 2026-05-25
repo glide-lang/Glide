@@ -1,6 +1,6 @@
 # Changelog
 
-## unreleased
+## 0.2.0 — 2026-05-25
 
 ### Cross-platform
 

@@ -18,7 +18,7 @@
 
 set -e
 
-VERSION="${VERSION:-0.1.1}"
+VERSION="${VERSION:-0.2.0}"
 TARGET="x86_64-linux-musl"
 ALPINE_VER="${ALPINE_VER:-v3.20}"
 
