@@ -8389,7 +8389,7 @@ fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>, root: *Vector<Stmt>, supp
                 // only fires for true "let, never reference again,
                 // never free" cases.
                 if alloc_escapes_in_body(s.name, kind, root) { continue; }
-                t.warn(s.line, s.column, _alloc_code(kind), _alloc_msg(kind, s.name));
+                t.warn_range(s.name_line, s.name_col, s.name.len(), _alloc_code(kind), _alloc_msg(kind, s.name));
             }
         }
         // Block-level `@allow("...")` on if/while/for/block/etc. — add
@@ -8834,7 +8834,7 @@ fn check_mut_body(t: *Typer, body: *Vector<Stmt>) {
                 if stmt_reassigns(&s2, s.name) { reassigned = true; break; }
             }
             if !reassigned {
-                t.warn(s.name_line, s.name_col, "unnecessary-mut",
+                t.warn_range(s.name_line, s.name_col, s.name.len(), "unnecessary-mut",
                     "`mut` on `".concat(s.name).concat("` is unnecessary; binding is never reassigned"));
             }
         }
@@ -8925,7 +8925,7 @@ pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
         // Bool ret is okay-ish but still must return; same logic.
         if !body_always_returns(s.fn_body) {
             t.current_origin = s.origin;
-            t.warn(s.line, s.column, "missing-return",
+            t.warn_range(s.name_line, s.name_col, s.name.len(), "missing-return",
                 "function `".concat(s.name)
                 .concat("` declared `-> ").concat(type_to_string(s.fn_ret_ty))
                 .concat("` may exit without returning a value"));
@@ -9678,7 +9678,7 @@ fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: st
             let reason: string = dep.get(key);
             let mut msg: string = "function `".concat(display).concat("` is ").concat(what);
             if !reason.eq("") { msg = msg.concat(": ").concat(reason); }
-            t.warn(e.line, e.column, lint_code, msg);
+            t.warn_range(e.line, e.column, _expr_span(e), lint_code, msg);
         }
     }
     if e.lhs != null { _scan_calls_in_expr(t, e.lhs, dep, lint_code, what, scope); }
@@ -9927,7 +9927,7 @@ fn _ndp_check_calls_in_expr(t: *Typer, e: *Expr, deref_params: *HashMap<string>)
                         if idx >= 0 && idx < e.args.len() {
                             let a: Expr = e.args.get(idx);
                             if a.kind == EX_NULL {
-                                t.warn(a.line, a.column, "null-deref",
+                                t.warn_range(a.line, a.column, _expr_span(&a), "null-deref",
                                     "passing `null` to `".concat(fname).concat("` — param at index ").concat(idx.to_string()).concat(" is dereferenced without a null-check; this call will segfault"));
                             }
                         }
@@ -10054,12 +10054,12 @@ fn _check_null_target(t: *Typer, target: *Expr, nulls: *HashMap<bool>, line: i32
     if target == null { return; }
     // Direct `*null` / `null.foo()` — definite bug.
     if target.kind == EX_NULL {
-        t.warn(line, col, "null-deref",
+        t.warn_range(line, col, 4, "null-deref",
             "dereferencing the `null` literal — this will segfault at runtime");
         return;
     }
     if target.kind == EX_IDENT && nulls.contains(target.str_val) && nulls.get(target.str_val) {
-        t.warn(line, col, "null-deref",
+        t.warn_range(line, col, target.str_val.len(), "null-deref",
             "`".concat(target.str_val).concat("` is `null` at this point — deref will segfault. Reassign or guard with `if ").concat(target.str_val).concat(" != null { … }`"));
     }
 }
@@ -10151,7 +10151,7 @@ fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>, self_destructor_of
            && tys.contains(probe.str_val) {
             let tag: string = tys.get(probe.str_val);
             if tag.eq("string") {
-                t.warn(e.line, e.column, "bad-free",
+                t.warn_range(e.line, e.column, _expr_span(e), "bad-free",
                     "`free(".concat(probe.str_val).concat(")` corrupts the heap — strings are arena-managed and freed automatically. Remove this line."));
             } else if tag.eq("Vector") || tag.eq("HashMap") {
                 // Vector / HashMap own internal buffers (keys/values/
@@ -10166,7 +10166,7 @@ fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>, self_destructor_of
                 if probe.str_val.eq("self") && tag.eq(self_destructor_of) {
                     // legitimate destructor finalizer
                 } else {
-                    t.warn(e.line, e.column, "bad-free",
+                    t.warn_range(e.line, e.column, _expr_span(e), "bad-free",
                         "`free(".concat(probe.str_val).concat(")` leaks `").concat(probe.str_val).concat("`'s internal buffers — call `").concat(probe.str_val).concat(".free()` so the destructor releases keys/values/data first."));
                 }
             }
@@ -10292,7 +10292,7 @@ fn _seq_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
             if e.op_code == OP_NE { op_name = "!="; }
             let suggest: string = ".eq(…)";
             if e.op_code == OP_NE { suggest = "!… .eq(…)"; }
-            t.warn(e.line, e.column, "string-eq-op",
+            t.warn_range(e.line, e.column, _expr_span(e.lhs), "string-eq-op",
                 "`".concat(op_name).concat("` on strings compares pointers, not bytes — use `").concat(suggest).concat("` for the actual comparison"));
         }
         }
@@ -10344,7 +10344,7 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>) {
         }
         if !any_used {
             let first: string = s.imported_items.get(0);
-            t.warn(s.line, s.column, "unused-import",
+            t.warn_range(s.line, s.column, 6, "unused-import",
                 "import of `".concat(first).concat("` is never referenced in this file — remove it"));
         }
     }
@@ -10519,7 +10519,7 @@ fn _asu_check_fn(t: *Typer, body: *Vector<Stmt>, fn_line: i32, fn_col: i32) {
     // Each non-defer set must be balanced by either another set (the
     // restore) or a defer set (the restore-via-defer).
     if sets > 0 && (defer_sets + sets) < (sets * 2) {
-        t.warn(first_set_line, first_set_col, "arena-set",
+        t.warn_range(first_set_line, first_set_col, 18, "arena-set",
             "`__glide_palloc_set(arena)` has no matching restore — add `defer __glide_palloc_set(prev);` immediately after the set");
     }
 }
@@ -10627,7 +10627,7 @@ fn _cb_scan_for_spawn(t: *Typer, body: *Vector<Stmt>, blocking: *HashMap<bool>,
             let tgt: string = s.expr_value.lhs.str_val;
             // Direct: spawn fs_read(...) — blocking name spawned.
             if blocking.contains(tgt) {
-                t.warn(s.expr_value.line, s.expr_value.column, "coro-blocking",
+                t.warn_range(s.expr_value.line, s.expr_value.column, _expr_span(s.expr_value), "coro-blocking",
                     "`".concat(tgt).concat("` blocks the worker thread — use `spawn_thread` instead of `spawn`"));
             } else if bodies.contains(tgt) {
                 let target_body: *Vector<Stmt> = bodies.get(tgt);
@@ -10652,7 +10652,7 @@ fn _cb_check_blocking_call(t: *Typer, e: *Expr, blocking: *HashMap<bool>, spawne
     if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
        && blocking.contains(e.lhs.str_val) {
-        t.warn(e.line, e.column, "coro-blocking",
+        t.warn_range(e.line, e.column, _expr_span(e), "coro-blocking",
             "`".concat(e.lhs.str_val).concat("` blocks the worker thread — reached from `spawn ").concat(spawned).concat("()`. Use `spawn_thread` instead, or call the async variant"));
     }
     if e.lhs != null { _cb_check_blocking_call(t, e.lhs, blocking, spawned); }
@@ -10783,7 +10783,7 @@ fn _ur_check_call(t: *Typer, e: *Expr, ret_kinds: *HashMap<i32>,
     }
 
     if k == TY_RESULT || k == TY_OPT_RESULT {
-        t.warn(e.line, e.column, "unhandled-result",
+        t.warn_range(e.line, e.column, _expr_span(e), "unhandled-result",
             "`".concat(fn_label).concat("` returns a `!T` whose error is being discarded — propagate with `?` or bind with `let r = …`"));
     }
 }
@@ -11251,7 +11251,7 @@ fn _uaf_check_expr(t: *Typer, e: *Expr, freed: *HashMap<bool>, skip: string) {
     if e == null { return; }
     if e.kind == EX_IDENT && freed.contains(e.str_val) && freed.get(e.str_val)
        && !e.str_val.eq(skip) {
-        t.warn(e.line, e.column, "use-after-free",
+        t.warn_range(e.line, e.column, _expr_span(e), "use-after-free",
             "`".concat(e.str_val).concat("` was freed earlier in this scope — accessing it is a dangling-pointer read"));
         return;
     }
@@ -11303,7 +11303,7 @@ fn _mu_check_fn(t: *Typer, body: *Vector<Stmt>) {
     for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
         if warned.contains(nm) { continue; }
-        t.warn(held.get(nm), held_col.get(nm), "mutex-unbalanced",
+        t.warn_range(held.get(nm), held_col.get(nm), nm.len(), "mutex-unbalanced",
             "`".concat(nm).concat(".lock()` falls off the end of the fn without `.unlock()` — release it on every exit (a `defer ").concat(nm).concat(".unlock();` right after the lock covers all returns)"));
         warned.insert(nm, true);
     }
@@ -11385,7 +11385,7 @@ fn _mu_flag_held(t: *Typer, held: *HashMap<i32>, held_col: *HashMap<i32>,
     for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
         if warned.contains(nm) { continue; }
-        t.warn(held.get(nm), held_col.get(nm), "mutex-unbalanced",
+        t.warn_range(held.get(nm), held_col.get(nm), nm.len(), "mutex-unbalanced",
             "`".concat(nm).concat(".lock()` is still held at the ").concat(exit_kind).concat(" — wrap it with `defer ").concat(nm).concat(".unlock();` so every exit path releases the lock"));
         warned.insert(nm, true);
     }
@@ -11463,7 +11463,7 @@ fn _cl_check_fn(t: *Typer, body: *Vector<Stmt>) {
         // r encodes: 0 = falls through with closed=false (top-level
         // leak), 1 = closed at end, 2 = always exits before fall-through
         if r == 0 && !warned {
-            t.warn(chans.get(nm), chans_col.get(nm), "chan-leak",
+            t.warn_range(chans.get(nm), chans_col.get(nm), nm.len(), "chan-leak",
                 "channel `".concat(nm).concat("` reaches the end of the fn without `close()` on the fall-through path — every exit must close before receivers can stop waiting"));
         }
     }
@@ -11499,7 +11499,7 @@ fn _cl_walk(t: *Typer, body: *Vector<Stmt>, nm: string, closed_in: bool,
                 let exit_label: string = "return";
                 if s.kind == ST_BREAK { exit_label = "break"; }
                 if s.kind == ST_CONTINUE { exit_label = "continue"; }
-                t.warn(chan_line, chan_col, "chan-leak",
+                t.warn_range(chan_line, chan_col, nm.len(), "chan-leak",
                     "channel `".concat(nm).concat("` is still open at this ").concat(exit_label).concat(" — `close()` it before exiting so receivers can stop"));
                 *warned = true;
             }
@@ -11607,7 +11607,7 @@ fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
         for let k: i32 = 0; k < returning.len(); k++ {
             let r: i32 = returning.get(k);
             if r > a && r < d {
-                t.warn(alloc_line.get(nm), alloc_col.get(nm), "leak-on-early-return",
+                t.warn_range(alloc_line.get(nm), alloc_col.get(nm), nm.len(), "leak-on-early-return",
                     "`defer ".concat(nm).concat(".free()` is registered after an early exit on line — move it right after `let ").concat(nm).concat(" = …;` so the cleanup also fires on the error path"));
                 break;
             }

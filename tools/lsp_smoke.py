@@ -1286,6 +1286,33 @@ def _type_hierarchy_test():
 
 _type_hierarchy_test()
 
+# ---- warning squiggle width ----
+
+def _warn_width_test():
+    print("\n[warning squiggle width]")
+    body = ('fn f() -> i32 {\n'
+            '    let mut counter: i32 = 5;\n'
+            '    return counter;\n'
+            '}')
+    path, uri = write_tmp("warn_width.glide", body)
+    msgs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}},
+        {"jsonrpc": "2.0", "method": "exit", "params": None},
+    ]
+    rs = run_session(msgs)
+    diags = []
+    for r in rs:
+        if r.get("method") == "textDocument/publishDiagnostics":
+            diags = r["params"]["diagnostics"]; break
+    um = next((d for d in diags if d.get("code") == "unnecessary-mut"), None)
+    w = (um["range"]["end"]["character"] - um["range"]["start"]["character"]) if um else 0
+    check("unnecessary-mut underlines the whole name (width=len('counter')=7)",
+          w == 7, f"got width {w}")
+
+_warn_width_test()
+
 # ---- code action (quick fix) ----
 
 def _code_action_test():

@@ -2046,7 +2046,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
                 let nm: string = _call_display_name(s.expr_value);
                 let mut tail: string = "its error is discarded";
                 if et.kind == TY_OPTION { tail = "the empty (`none`) case is discarded"; }
-                t.warn(s.expr_value.line, s.expr_value.column, "unused-result",
+                t.warn_range(s.expr_value.line, s.expr_value.column, nm.len(), "unused-result",
                     "result of ".concat(nm).concat(" (`").concat(type_to_string(et))
                     .concat("`) is ignored: ").concat(tail)
                     .concat(". Propagate it with `?`, supply a default with `??`, or check `.ok` / `.has`."));
@@ -2702,7 +2702,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                    && rt.kind == TY_NAMED && rt.name.eq("string") {
                     let mut msg: string = "comparing strings with `==` checks pointer identity";
                     if op == OP_NE { msg = "comparing strings with `!=` checks pointer identity"; }
-                    t.warn(e.line, e.column, "string-pointer-eq",
+                    let mut _seq_sp: i32 = 1;
+                    if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null {
+                        _seq_sp = e.lhs.str_val.len();
+                    }
+                    t.warn_range(e.line, e.column, _seq_sp, "string-pointer-eq",
                         msg.concat("; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
                 }
             }
