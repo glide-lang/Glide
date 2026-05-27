@@ -174,6 +174,37 @@ fn is_bool_type(t: *Type) -> bool {
     return t.kind == TY_NAMED && t.name.eq("bool");
 }
 
+// `for x in <init>` lowers to `let __glide_iter_N = <init>;` plus an index
+// loop that calls `.len()` / `.get()` on it. Iterating a scalar (the classic
+// `for i in v.len()` mistake) used to slip past the typer and only blow up at
+// link time with an undefined `__glide_int_len`. True when `<init>` is a
+// scalar — by inferred type, or, when inference fails (imported `.len()`),
+// by recognising a length/count call or a numeric literal syntactically.
+fn _foreach_scalar_misuse(val_ty: *Type, init: *Expr) -> bool {
+    if is_int_type(val_ty) || is_float_type(val_ty) || is_bool_type(val_ty) { return true; }
+    if init == null { return false; }
+    if init.kind == EX_INT || init.kind == EX_FLOAT { return true; }
+    if is_unknown_type(val_ty) && init.kind == EX_CALL && init.lhs != null
+       && init.lhs.kind == EX_MEMBER && init.lhs.field != null {
+        let m: string = init.lhs.field;
+        if m.eq("len") || m.eq("count") || m.eq("size") { return true; }
+    }
+    return false;
+}
+
+// Underline width for an iterable expression so the squiggle covers the whole
+// thing instead of just its first byte. Handles `recv.method()` via the parsed
+// member field column; falls back to `_arg_span` for idents / literals.
+fn _iter_expr_span(e: *Expr) -> i32 {
+    if e == null { return 1; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.field != null && e.lhs.field_col > 0 {
+        let w: i32 = (e.lhs.field_col - e.column) + e.lhs.field.len() + 2;
+        if w > 0 { return w; }
+    }
+    return _arg_span(e);
+}
+
 fn is_unknown_type(t: *Type) -> bool {
     if t == null { return true; }
     return t.kind == TY_NAMED && t.name.eq("__unknown__");
@@ -1041,6 +1072,27 @@ impl Typer {
 
     fn warn(self: *Typer, line: i32, col: i32, code: string, msg: string) {
         self.push_diag(line, col, 2, code, msg);
+    }
+
+    // Warning (severity 2) underlining a `span`-wide range instead of a
+    // single char, so the squiggle covers the whole offending expression
+    // (e.g. `r.val`) rather than just its first character.
+    fn warn_range(self: *Typer, line: i32, col: i32, span: i32, code: string, msg: string) {
+        let mut e_len: i32 = span;
+        if e_len < 1 { e_len = 1; }
+        let mut origin: string = self.current_origin;
+        if origin == null { origin = ""; }
+        let e: DiagEntry = DiagEntry {
+            line: line, col: col,
+            end_line: line, end_col: col + e_len,
+            severity: 2, code: code, message: msg,
+            origin: origin,
+            tag: 0,
+            fix_line: 0, fix_col: 0,
+            fix_end_line: 0, fix_end_col: 0,
+            fix_replacement: "",
+        };
+        self.diagnostics.push(e);
     }
 }
 
@@ -1915,6 +1967,31 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.current_type_params = saved_tps;
 }
 
+// When a bare value is given where `?T` / `!T` is expected and the value
+// matches the inner type, the fix is to wrap it in `some(...)` / `ok(...)`.
+// Returns the diagnostic code that tells the LSP which constructor to apply
+// (it builds the actual edit from source); "" when no wrap applies.
+fn _wrap_ctor_code(expected: *Type, got: *Type) -> string {
+    if expected == null || got == null { return ""; }
+    if expected.inner == null { return ""; }
+    if expected.kind == TY_OPTION && types_compat(expected.inner, got) { return "wrap-some"; }
+    if expected.kind == TY_RESULT && types_compat(expected.inner, got) { return "wrap-ok"; }
+    return "";
+}
+
+// Readable name of a call's callee for diagnostics: `foo`, `Type::method`,
+// or `.method` for a receiver method. Falls back to "the call".
+fn _call_display_name(e: *Expr) -> string {
+    if e == null || e.lhs == null { return "the call"; }
+    let c: *Expr = e.lhs;
+    if c.kind == EX_IDENT && c.str_val != null { return "`".concat(c.str_val).concat("`"); }
+    if c.kind == EX_PATH && c.str_val != null && c.field != null {
+        return "`".concat(c.str_val).concat("::").concat(c.field).concat("`");
+    }
+    if c.kind == EX_MEMBER && c.field != null { return "`.".concat(c.field).concat("`"); }
+    return "the call";
+}
+
 fn check_stmt(t: *Typer, s: *Stmt) {
     if s.kind == ST_LET || s.kind == ST_CONST {
         check_let_or_const(t, s);
@@ -1925,7 +2002,24 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         return;
     }
     if s.kind == ST_EXPR {
-        if s.expr_value != null { infer_expr(t, s.expr_value); }
+        if s.expr_value != null {
+            let et: *Type = infer_expr(t, s.expr_value);
+            // Must-use: a `!T` / `?T` / `?!T` produced by a call and used as a
+            // bare statement throws away BOTH the value and the error/none
+            // case. Errors-as-values makes that almost always a bug. Warn (not
+            // error) so it's advisory. `?` / `??` / a `.ok` check all consume
+            // the result, so those forms infer to `T` and never reach here.
+            if s.expr_value.kind == EX_CALL && et != null
+               && (et.kind == TY_RESULT || et.kind == TY_OPTION || et.kind == TY_OPT_RESULT) {
+                let nm: string = _call_display_name(s.expr_value);
+                let mut tail: string = "its error is discarded";
+                if et.kind == TY_OPTION { tail = "the empty (`none`) case is discarded"; }
+                t.warn(s.expr_value.line, s.expr_value.column, "unused-result",
+                    "result of ".concat(nm).concat(" (`").concat(type_to_string(et))
+                    .concat("`) is ignored: ").concat(tail)
+                    .concat(". Propagate it with `?`, supply a default with `??`, or check `.ok` / `.has`."));
+            }
+        }
         return;
     }
     if s.kind == ST_SPAWN {
@@ -2187,11 +2281,35 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
 
     if s.let_value != null {
         let val_ty: *Type = infer_expr(t, s.let_value);
+        // Synthesized `for x in <scalar>` binding (lowered for-in): the
+        // iterable is a number, not a range/collection. Report it here with a
+        // quick fix that wraps it in `0..` — far better than the link-time
+        // `undefined __glide_int_len` the lowered `.len()/.get()` would cause.
+        if s.name != null && s.name.starts_with("__glide_iter_")
+           && _foreach_scalar_misuse(val_ty, s.let_value) {
+            let mut what: string = "`".concat(type_to_string(val_ty)).concat("`");
+            if is_unknown_type(val_ty) { what = "a length / count value"; }
+            t.err_code_range_fix(s.let_value.line, s.let_value.column,
+                _iter_expr_span(s.let_value), "for-in-not-iterable",
+                "cannot iterate over ".concat(what)
+                .concat(": `for-in` walks a range or a collection, not a single value. ")
+                .concat("To count, wrap it in a range like `0..n` (end-exclusive) or `0..=n` (inclusive). ")
+                .concat("To visit each element, iterate the `Vector` itself."),
+                s.let_value.line, s.let_value.column, s.let_value.line, s.let_value.column, "0..");
+        }
         if final_ty != null {
             if !types_compat(final_ty, val_ty) {
-                t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "",
-                    "let initializer type mismatch: expected ".concat(type_to_string(final_ty))
-                    .concat(", got ").concat(type_to_string(val_ty)));
+                let wc: string = _wrap_ctor_code(final_ty, val_ty);
+                let base: string = "let initializer type mismatch: expected ".concat(type_to_string(final_ty))
+                    .concat(", got ").concat(type_to_string(val_ty));
+                if wc.eq("") {
+                    t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "", base);
+                } else {
+                    let mut ctor: string = "ok";
+                    if wc.eq("wrap-some") { ctor = "some"; }
+                    t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), wc,
+                        base.concat(". Wrap the value in `").concat(ctor).concat("(...)`."));
+                }
             }
         } else {
             final_ty = val_ty;
@@ -2332,9 +2450,18 @@ fn check_return(t: *Typer, s: *Stmt) {
         let mut rc: i32 = s.column;
         let mut rspan: i32 = 6;   // the `return` keyword
         if e != null && e.line > 0 { rl = e.line; rc = e.column; rspan = _arg_span(e); }
-        t.err_code_range(rl, rc, rspan, "",
-            "return type mismatch: expected ".concat(type_to_string(t.current_ret))
-            .concat(", got ").concat(type_to_string(vt)));
+        let base: string = "return type mismatch: expected ".concat(type_to_string(t.current_ret))
+            .concat(", got ").concat(type_to_string(vt));
+        let mut wc: string = "";
+        if e != null && e.line > 0 { wc = _wrap_ctor_code(t.current_ret, vt); }
+        if wc.eq("") {
+            t.err_code_range(rl, rc, rspan, "", base);
+        } else {
+            let mut ctor: string = "ok";
+            if wc.eq("wrap-some") { ctor = "some"; }
+            t.err_code_range(rl, rc, rspan, wc,
+                base.concat(". Wrap the value in `").concat(ctor).concat("(...)`."));
+        }
     }
 }
 
