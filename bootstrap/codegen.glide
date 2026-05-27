@@ -4115,7 +4115,19 @@ fn emit_asm_stmt(g: *CG, s: *Stmt, depth: i32) {
     println!(");");
 }
 
+// Statement-level `@cfg("windows"|"posix")` gate. Wraps the statement's
+// emission in the same #ifdef/#endif the decl-level form uses, so a single
+// stmt (or `{ ... }` block) can be target-specific inside one function.
 pub fn emit_stmt(g: *CG, s: *Stmt, depth: i32) {
+    if s == null { return; }
+    let cfg: string = s.cfg_target;
+    let gated: bool = cfg != null && (cfg.eq("windows") || cfg.eq("posix"));
+    if gated { emit_cfg_open(cfg); }
+    emit_stmt_inner(g, s, depth);
+    if gated { emit_cfg_close(cfg); }
+}
+
+fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
     if s == null { return; }
     g.emit_line_dir(s.line, s.origin);
     // Tuple destructuring: `let (a, b) = expr;`. Bind the value to a temp,
@@ -6112,6 +6124,21 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
     }
     println!("");
 
+    // Top-level `let` globals (freestanding only). Real C globals with storage
+    // so a kernel can declare boot-protocol markers / MMIO / BSS state in Glide
+    // instead of a c_raw! block. Honors `@used` (survive -O2 / --gc) and
+    // `@section("name")`. Emitted after struct bodies so struct-typed globals
+    // resolve, and before fn bodies so they reference these globals.
+    if g.freestanding {
+        for let i: i32 = 0; i < program.len(); i++ {
+            let s: Stmt = program.get(i);
+            if s.kind == ST_LET {
+                emit_top_global(g, &s);
+            }
+        }
+        println!("");
+    }
+
     // Forward fn declarations (concrete only). Includes impl-block methods
     // so they can call each other regardless of source order.
     for let i: i32 = 0; i < program.len(); i++ {
@@ -6421,6 +6448,68 @@ fn emit_top_const(g: *CG, s: *Stmt) {
         print!(")");
     } else {
         emit_expr(g, s.let_value);
+    }
+    println!(";");
+}
+
+// Constant initializer for a top-level global. Struct literals become C
+// brace-initializers `{ .f = v, ... }`; a compound literal `((T){...})` is not
+// a constant expression and is rejected in static-init position. Scalars and
+// pointers fall through to the normal expression emitter.
+fn emit_global_init(g: *CG, e: *Expr) {
+    if e == null { print!("0"); return; }
+    if e.kind == EX_STRUCT_LIT {
+        print!("{");
+        if e.field_names != null && e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                if i > 0 { print!(", "); }
+                // concat, not comma-args: print!(a, b) space-joins.
+                print!(".".concat(c_safe_ident(e.field_names.get(i))).concat(" = "));
+                let v: Expr = e.args.get(i);
+                emit_global_init(g, &v);
+            }
+        }
+        print!("}");
+        return;
+    }
+    emit_expr(g, e);
+}
+
+// A top-level `let` emitted as a C global with storage. `@used` keeps it past
+// -O2 / --gc-sections; `@section("name")` places it (e.g. Limine request
+// markers the bootloader scans for).
+fn emit_top_global(g: *CG, s: *Stmt) {
+    let mut is_used: bool = false;
+    let mut section: string = "";
+    if s.attrs != null {
+        for let i: i32 = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.name.eq("used") { is_used = true; }
+            if a.name.eq("section") && a.args != null && a.args.len() > 0 {
+                let av: Expr = a.args.get(0);
+                if av.kind == EX_STRING { section = av.str_val; }
+            }
+        }
+    }
+    // Build the whole declaration head as one string: print!(a, b) inserts a
+    // space between args, which would corrupt the section name literal.
+    let mut head: string = "";
+    if s.let_ty != null { head = type_to_c(s.let_ty); }
+    else { head = "int64_t"; }
+    head = head.concat(" ").concat(c_safe_ident(s.name));
+    if is_used || !section.eq("") {
+        head = head.concat(" __attribute__((");
+        if is_used { head = head.concat("used"); }
+        if !section.eq("") {
+            if is_used { head = head.concat(", "); }
+            head = head.concat("section(\"").concat(section).concat("\")");
+        }
+        head = head.concat("))");
+    }
+    print!(head);
+    if s.let_value != null {
+        print!(" = ");
+        emit_global_init(g, s.let_value);
     }
     println!(";");
 }
