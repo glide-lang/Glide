@@ -1,0 +1,30 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "glide-local",
+  "description": "Local Claude Code marketplace exposing the Glide language server to the built-in LSP tool.",
+  "owner": {
+    "name": "Glide"
+  },
+  "plugins": [
+    {
+      "name": "glide-lsp",
+      "description": "Glide language server (`glide lsp`) for code intelligence: hover, goto, completion, references, diagnostics.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Glide"
+      },
+      "source": "./plugins/glide-lsp",
+      "category": "development",
+      "strict": false,
+      "lspServers": {
+        "glide": {
+          "command": "C:/Users/bye45/.glide/bin/glide.exe",
+          "args": ["lsp"],
+          "extensionToLanguage": {
+            ".glide": "glide"
+          }
+        }
+      }
+    }
+  ]
+}
