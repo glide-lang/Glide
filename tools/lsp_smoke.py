@@ -316,6 +316,29 @@ case_feature("goto method on fn-return-typed local",
      "params":{"position":{"line":5,"character":13}}},  # `mag` in `q.mag()`
     lambda r: check("q.mag (q = mk()) jumps to the impl method (line 2)", _goto_line(r) == 2, f"got {_goto_line(r)}"))
 
+case_feature("goToImplementation on a trait method lists all impls",
+    'trait T { fn m(self: *Self) -> i32; }\n'
+    'struct A { x: i32 }\n'
+    'struct B { x: i32 }\n'
+    'impl T for A { fn m(self: *A) -> i32 { return self.x; } }\n'
+    'impl T for B { fn m(self: *B) -> i32 { return self.x; } }\n'
+    'fn main() -> i32 { return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/implementation",
+     "params":{"position":{"line":0,"character":13}}},  # `m` in the trait
+    lambda r: check("both impl methods are found",
+        isinstance((r or {}).get("result"), list) and len(r["result"]) == 2,
+        f"got {(r or {}).get('result')}"))
+
+case_feature("typeDefinition jumps to the type's declaration",
+    'struct Pt { x: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let p = Pt { x: 1 };\n'
+    '    return p.x;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/typeDefinition",
+     "params":{"position":{"line":3,"character":11}}},  # `p` in `p.x`
+    lambda r: check("`p` (a Pt) jumps to `struct Pt` (line 0)", _goto_line(r) == 0, f"got {_goto_line(r)}"))
+
 case_feature("goto on chained method receiver",
     'struct Bag { items: i32 }\n'
     'impl Bag { fn tag(self: *Bag) -> i32 { return self.items; } }\n'

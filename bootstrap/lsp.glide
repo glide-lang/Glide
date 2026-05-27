@@ -311,6 +311,8 @@ fn handle_initialize(req: *JsonValue) {
     json_obj_set(caps, "hoverProvider", json_bool(true));
     json_obj_set(caps, "documentSymbolProvider", json_bool(true));
     json_obj_set(caps, "definitionProvider", json_bool(true));
+    json_obj_set(caps, "implementationProvider", json_bool(true));
+    json_obj_set(caps, "typeDefinitionProvider", json_bool(true));
     json_obj_set(caps, "referencesProvider", json_bool(true));
     json_obj_set(caps, "documentHighlightProvider", json_bool(true));
     let rename_caps: *JsonValue = json_object();
@@ -3824,6 +3826,137 @@ fn _module_file_for(state: *LspState, name: string) -> string {
     let r1: string = _module_file_in(state.stdlib_index, name);
     if !r1.eq("") { return r1; }
     return _module_file_in(state.project_index, name);
+}
+
+// Append a Location for `s` (its name range) to `out`, deduped by
+// origin+line+col. `fallback` supplies the origin when the stmt's own is empty
+// (impl methods inherit the impl block's origin).
+fn _push_impl_loc(out: *JsonValue, seen: *HashMap<bool>, s: *Stmt, fallback: string) {
+    let mut origin: string = s.origin;
+    if origin == null || origin.eq("") { origin = fallback; }
+    if origin == null || origin.eq("") { return; }
+    if !__glide_file_exists(origin) { return; }
+    let mut nl: i32 = s.name_line; if nl == 0 { nl = s.line; }
+    let mut nc: i32 = s.name_col;  if s.name_line == 0 { nc = s.column; }
+    let key: string = origin.concat(":").concat(int_to_str(nl)).concat(":").concat(int_to_str(nc));
+    if seen.contains(key) { return; }
+    seen.insert(key, true);
+    let loc: *JsonValue = json_object();
+    json_obj_set(loc, "uri", json_string(path_to_uri(origin)));
+    json_obj_set(loc, "range", range_for_decl_name(s));
+    json_arr_push(out, loc);
+}
+
+// textDocument/implementation: from a trait method -> the overriding methods
+// in each `impl Trait for T`; from a trait name -> the impl blocks; from a
+// struct/enum -> the impls on it.
+fn handle_implementation(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let out: *JsonValue = json_array();
+    if !state.docs.contains(uri) { lsp_send_response(id, out); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    let word: string = word_at(doc.text, line0, col0);
+    if word.eq("") { lsp_send_response(id, out); return; }
+    if doc.stmts == null { lsp_send_response(id, out); return; }
+
+    // Classify `word`: which traits declare it as a method, is it a trait
+    // name, is it a struct/enum name.
+    let method_traits: *HashMap<bool> = HashMap::new();
+    let mut word_is_trait: bool = false;
+    let mut word_is_type: bool = false;
+    for let i: i32 = 0; i < doc.stmts.len(); i++ {
+        let s: Stmt = doc.stmts.get(i);
+        if s.kind == ST_TRAIT && s.name != null {
+            if s.name.eq(word) { word_is_trait = true; }
+            if s.impl_methods != null {
+                for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                    let m: Stmt = s.impl_methods.get(j);
+                    if m.name != null && m.name.eq(word) { method_traits.insert(s.name, true); }
+                }
+            }
+        }
+        if (s.kind == ST_STRUCT || s.kind == ST_ENUM) && s.name != null && s.name.eq(word) {
+            word_is_type = true;
+        }
+    }
+
+    let seen: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < doc.stmts.len(); i++ {
+        let s: Stmt = doc.stmts.get(i);
+        if s.kind != ST_IMPL { continue; }
+        let mut tgt: string = "";
+        if s.impl_target != null && s.impl_target.name != null { tgt = s.impl_target.name; }
+        let mut tr: string = "";
+        if s.impl_trait_name != null { tr = s.impl_trait_name; }
+        // trait method -> the overriding method in impls of that trait.
+        if !tr.eq("") && method_traits.contains(tr) && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.name != null && m.name.eq(word) {
+                    let mp: *Stmt = malloc(sizeof(Stmt)) as *Stmt; *mp = m;
+                    _push_impl_loc(out, seen, mp, s.origin);
+                }
+            }
+        }
+        // trait name -> the impl block; struct/enum -> impls on it.
+        if (word_is_trait && tr.eq(word)) || (word_is_type && tgt.eq(word)) {
+            let sp: *Stmt = malloc(sizeof(Stmt)) as *Stmt; *sp = s;
+            _push_impl_loc(out, seen, sp, s.origin);
+        }
+    }
+    method_traits.free();
+    seen.free();
+    lsp_send_response(id, out);
+}
+
+// textDocument/typeDefinition: resolve the type of the symbol/expression at
+// the cursor, then jump to that type's declaration (struct / enum / trait).
+fn handle_type_definition(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    if doc.stmts == null { lsp_send_response(id, json_null()); return; }
+    // End of the identifier under the cursor, so `_chain_resolve_type` sees
+    // the whole expression (`d`, `d.field`, `f()`), then strip to the named type.
+    let off: i32 = _line_col_offset(doc.text, line0, col0);
+    if off < 0 { lsp_send_response(id, json_null()); return; }
+    let n: i32 = doc.text.len();
+    let mut we: i32 = off;
+    while we < n {
+        let c: i32 = doc.text.at(we).to_int();
+        let is_id: bool = (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+                       || (c >= 48 && c <= 57) || c == 95;
+        if !is_id { break; }
+        we = we + 1;
+    }
+    let ty: *Type = _chain_resolve_type(doc.text, we, doc.stmts, line0, uri_to_path(uri));
+    let x: *Type = _strip_ptr_borrow(ty);
+    if x == null || (x.kind != TY_NAMED && x.kind != TY_GENERIC) {
+        lsp_send_response(id, json_null()); return;
+    }
+    let decl: *Stmt = find_top_decl(doc.stmts, x.name);
+    if decl == null { lsp_send_response(id, json_null()); return; }
+    let mut target_uri: string = uri;
+    if decl.origin != null && !decl.origin.eq("") {
+        if !__glide_file_exists(decl.origin) { lsp_send_response(id, json_null()); return; }
+        target_uri = path_to_uri(decl.origin);
+    }
+    let loc: *JsonValue = json_object();
+    json_obj_set(loc, "uri", json_string(target_uri));
+    json_obj_set(loc, "range", range_for_decl_name(decl));
+    lsp_send_response(id, loc);
 }
 
 fn handle_definition(req: *JsonValue, state: *LspState) {
@@ -11175,6 +11308,8 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     if method.eq("textDocument/hover") { handle_hover(req, state); return false; }
     if method.eq("textDocument/documentSymbol") { handle_document_symbol(req, state); return false; }
     if method.eq("textDocument/definition") { handle_definition(req, state); return false; }
+    if method.eq("textDocument/implementation") { handle_implementation(req, state); return false; }
+    if method.eq("textDocument/typeDefinition") { handle_type_definition(req, state); return false; }
     if method.eq("textDocument/completion") { handle_completion(req, state); return false; }
     if method.eq("textDocument/signatureHelp") { handle_signature_help(req, state); return false; }
     if method.eq("textDocument/semanticTokens/full") { handle_semantic_tokens(req, state); return false; }
