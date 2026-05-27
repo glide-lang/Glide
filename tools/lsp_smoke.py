@@ -16,19 +16,21 @@ def frame(msg: dict) -> bytes:
     return f"Content-Length: {len(body)}\r\n\r\n".encode() + body
 
 def parse_responses(buf: bytes):
+    # Operate on bytes: Content-Length is a BYTE count, so slicing a decoded
+    # str by it desyncs the moment any message carries multi-byte UTF-8 (an
+    # em-dash in a doc comment, say), silently dropping every later response.
     out = []
-    text = buf.decode("utf-8", "replace")
-    pattern = re.compile(r"Content-Length: (\d+)\r\n\r\n")
+    pattern = re.compile(rb"Content-Length: (\d+)\r\n\r\n")
     i = 0
-    while i < len(text):
-        m = pattern.search(text, i)
+    while i < len(buf):
+        m = pattern.search(buf, i)
         if not m: break
         n = int(m.group(1))
         start = m.end()
-        body = text[start:start+n]
+        body = buf[start:start+n]
         try:
-            out.append(json.loads(body))
-        except json.JSONDecodeError:
+            out.append(json.loads(body.decode("utf-8")))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             pass
         i = start + n
     return out
@@ -102,6 +104,86 @@ case_diagnostics("unused var",
 case_diagnostics("unused fn",
     'fn helper() -> i32 { return 1; }\nfn main() -> i32 { return 0; }',
     expect_codes_present=["unused-fn"])
+
+case_diagnostics("for-in over a scalar (bare int var)",
+    'fn main() -> i32 {\n    let n: i32 = 5;\n    for i in n { println!(i); }\n    return 0;\n}',
+    expect_codes_present=["for-in-not-iterable"])
+
+case_diagnostics("for-in over a .len() result",
+    'fn main() -> i32 {\n    let v: *Vector<i32> = Vector::new();\n'
+    '    for i in v.len() { println!(i); }\n    return 0;\n}',
+    expect_codes_present=["for-in-not-iterable"])
+
+case_diagnostics("for-in over a Vector is fine",
+    'fn main() -> i32 {\n    let v: *Vector<i32> = Vector::new();\n'
+    '    for x in v { println!(x); }\n    return 0;\n}',
+    expect_codes_absent=["for-in-not-iterable"])
+
+case_diagnostics("for-in over a range is fine",
+    'fn main() -> i32 {\n    for i in 0..10 { println!(i); }\n    return 0;\n}',
+    expect_codes_absent=["for-in-not-iterable"])
+
+case_diagnostics("ignored result is flagged (must-use)",
+    'fn mk() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { mk(); return 0; }',
+    expect_codes_present=["unused-result"])
+
+case_diagnostics("handled result is not flagged",
+    'fn mk() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { let r = mk(); if r.ok { return r.val; } return 0; }',
+    expect_codes_absent=["unused-result"])
+
+case_diagnostics("void call is not flagged as unused-result",
+    'fn do_it() { return; }\n'
+    'fn main() -> i32 { do_it(); return 0; }',
+    expect_codes_absent=["unused-result"])
+
+case_diagnostics("reading .val without checking .ok is flagged",
+    'fn mk() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { let r: !i32 = mk(); return r.val; }',
+    expect_codes_present=["unchecked-result"])
+
+case_diagnostics(".val guarded by if r.ok is not flagged",
+    'fn mk() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { let r: !i32 = mk(); if r.ok { return r.val; } return 0; }',
+    expect_codes_absent=["unchecked-result"])
+
+case_diagnostics(".val after early-exit guard is not flagged",
+    'fn mk() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { let r: !i32 = mk(); if !r.ok { return 0; } return r.val; }',
+    expect_codes_absent=["unchecked-result"])
+
+case_diagnostics("inferred result local .val unguarded is flagged",
+    'fn mk() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { let r = mk(); return r.val; }',
+    expect_codes_present=["unchecked-result"])
+
+case_diagnostics("inferred option local .val unguarded is flagged",
+    'fn find() -> ?i32 { return some(1); }\n'
+    'fn main() -> i32 { let m = find(); return m.val; }',
+    expect_codes_present=["ignored-option"])
+
+def _diag_span_test():
+    # The squiggle should underline the whole `r.val`, not just its first char.
+    print("\n[diagnostics] unchecked-result underlines the whole r.val")
+    body = ('fn mk() -> !i32 { return ok(1); }\n'
+            'fn main() -> i32 { let r = mk(); return r.val; }')
+    pa, uri = write_tmp("diag_span.glide", body)
+    rs = run_session([
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ])
+    rng = None
+    for r in rs:
+        if r.get("method") == "textDocument/publishDiagnostics":
+            for d in r["params"]["diagnostics"]:
+                if d.get("code") == "unchecked-result":
+                    rng = d["range"]
+    w = (rng["end"]["character"] - rng["start"]["character"]) if rng else 0
+    check("range spans the full `r.val` (5 cols), not 1", w == 5, f"got width {w}")
+_diag_span_test()
 
 case_diagnostics("unnecessary mut",
     'fn main() -> i32 { let mut x: i32 = 5; return x; }',
@@ -233,6 +315,134 @@ case_feature("goto method on fn-return-typed local",
     {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
      "params":{"position":{"line":5,"character":13}}},  # `mag` in `q.mag()`
     lambda r: check("q.mag (q = mk()) jumps to the impl method (line 2)", _goto_line(r) == 2, f"got {_goto_line(r)}"))
+
+case_feature("goto on chained method receiver",
+    'struct Bag { items: i32 }\n'
+    'impl Bag { fn tag(self: *Bag) -> i32 { return self.items; } }\n'
+    'fn mk() -> *Vector<*Bag> { return Vector::new(); }\n'
+    'fn main() -> i32 {\n'
+    '    let v = mk();\n'
+    '    return v.get(0).tag();\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+     "params":{"position":{"line":5,"character":21}}},  # `tag` in `v.get(0).tag()`
+    lambda r: check("`v.get(0).tag` resolves the element type and jumps to the impl (line 1)",
+        _goto_line(r) == 1, f"got {_goto_line(r)}"))
+
+case_feature("goto on a method call inside a range bound",
+    'struct Cnt { n: i32 }\n'
+    'impl Cnt { fn size(self: *Cnt) -> i32 { return self.n; } }\n'
+    'fn main() -> i32 {\n'
+    '    let c = Cnt { n: 3 };\n'
+    '    for i in 0..c.size() { let x = i; }\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+     "params":{"position":{"line":4,"character":19}}},  # `size` in `0..c.size()`
+    lambda r: check("`0..c.size()` doesn't let the `..` swallow the receiver (jumps to line 1)",
+        _goto_line(r) == 1, f"got {_goto_line(r)}"))
+
+def _multidoc_goto_test():
+    # Opening a second document must NOT invalidate the first doc's AST.
+    # Regression for the single-shared-arena bug where any analysis nulled
+    # every open doc's stmts — so goto worked exactly once, then the editor
+    # opened the target file and goto in the user's file went dead.
+    print("\n[feature] goto survives a second document being opened")
+    a_body = ('struct Pt { x: i32 }\n'
+              'impl Pt { fn tag(self: *Pt) -> i32 { return self.x; } }\n'
+              'fn main() -> i32 {\n'
+              '    let p = Pt { x: 1 };\n'
+              '    return p.tag();\n'
+              '}')
+    b_body = 'fn other() -> i32 { return 7; }'
+    pa, ua = write_tmp("multidoc_A.glide", a_body)
+    pb, ub = write_tmp("multidoc_B.glide", b_body)
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":ua,"languageId":"glide","version":1,"text":a_body}}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":ub,"languageId":"glide","version":1,"text":b_body}}},
+        {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+         "params":{"textDocument":{"uri":ua},"position":{"line":4,"character":14}}},  # `tag` in `p.tag()`
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    target = next((r for r in rs if r.get("id") == 2), None)
+    check("goto in doc A still resolves after doc B is opened", _goto_line(target) == 1,
+          f"got {_goto_line(target)}")
+_multidoc_goto_test()
+
+def _wrap_fix_test():
+    # A bare value where `?T` / `!T` is expected gets a "wrap in some()/ok()"
+    # quick fix, with the edit computed from the source text (so strings and
+    # nested values are wrapped exactly).
+    print("\n[feature] wrap-in-constructor quick fix")
+    body = ('fn main() -> i32 {\n'
+            '    let x: ?i32 = 5;\n'
+            '    let r: !string = "hi";\n'
+            '    return 0;\n'
+            '}')
+    pa, uri = write_tmp("wrap_fix.glide", body)
+    def first_edit(diag):
+        msgs = [
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+            {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+                "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+            {"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction","params":{
+                "textDocument":{"uri":uri},"range":diag["range"],
+                "context":{"diagnostics":[diag]}}},
+            {"jsonrpc":"2.0","method":"exit","params":None},
+        ]
+        rs = run_session(msgs)
+        target = next((r for r in rs if r.get("id") == 2), None)
+        for a in ((target or {}).get("result") or []):
+            for _, edits in a.get("edit", {}).get("changes", {}).items():
+                for e in edits:
+                    return e.get("newText", "")
+        return ""
+    d_some = {"range":{"start":{"line":1,"character":18},"end":{"line":1,"character":19}},
+              "severity":1,"code":"wrap-some","message":"mismatch"}
+    d_ok = {"range":{"start":{"line":2,"character":21},"end":{"line":2,"character":25}},
+            "severity":1,"code":"wrap-ok","message":"mismatch"}
+    check("`?i32 = 5` offers `some(5)`", first_edit(d_some) == "some(5)", f"got {first_edit(d_some)!r}")
+    check("`!string = \"hi\"` offers `ok(\"hi\")`", first_edit(d_ok) == 'ok("hi")', f"got {first_edit(d_ok)!r}")
+_wrap_fix_test()
+
+def _propagate_fix_test():
+    # A dropped result inside a result-returning fn gets a "Propagate with `?`"
+    # fix; in a non-result fn the fix is withheld (`?` would be invalid there).
+    print("\n[feature] propagate-with-? quick fix")
+    def action(body, retty):
+        full = 'fn mk() -> !i32 { return ok(1); }\n' + body
+        pa, uri = write_tmp("propagate_fix_" + retty + ".glide", full)
+        diag = {"range":{"start":{"line":2,"character":4},"end":{"line":2,"character":8}},
+                "severity":2,"code":"unused-result","message":"ignored"}
+        rs = run_session([
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+            {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+                "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":full}}},
+            {"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction","params":{
+                "textDocument":{"uri":uri},"range":diag["range"],"context":{"diagnostics":[diag]}}},
+            {"jsonrpc":"2.0","method":"exit","params":None},
+        ])
+        target = next((r for r in rs if r.get("id") == 2), None)
+        return (target or {}).get("result") or []
+    res_fn = action('fn run() -> !i32 {\n    mk();\n    return ok(0);\n}', "result")
+    nt = ""
+    for a in res_fn:
+        for _, edits in a.get("edit", {}).get("changes", {}).items():
+            for e in edits: nt = e.get("newText", "")
+    check("result-returning fn offers `?` propagation", nt == "?", f"got {nt!r}")
+    plain_fn = action('fn run() -> i32 {\n    mk();\n    return 0;\n}', "plain")
+    check("non-result fn withholds the `?` fix", len(plain_fn) == 0, f"got {len(plain_fn)} actions")
+_propagate_fix_test()
+
+case_diagnostics("raw value into optional flags a wrap fix",
+    'fn main() -> i32 {\n    let x: ?i32 = 5;\n    return 0;\n}',
+    expect_codes_present=["wrap-some"])
+
+case_diagnostics("raw value into result flags a wrap fix",
+    'fn mk() -> !i32 { return 5; }\nfn main() -> i32 { return 0; }',
+    expect_codes_present=["wrap-ok"])
 
 case_feature("completion suggests locals + top-level",
     'fn add(a: i32, b: i32) -> i32 { return a + b; }\n'
@@ -657,6 +867,15 @@ def comp_labels(r):
     if isinstance(res, dict): res = res.get("items", [])
     return [it.get("label") for it in (res or [])]
 
+def comp_doc(r, label):
+    res = (r or {}).get("result")
+    if isinstance(res, dict): res = res.get("items", [])
+    for it in (res or []):
+        if it.get("label") == label:
+            d = it.get("documentation")
+            return (d.get("value") if isinstance(d, dict) else d) or ""
+    return ""
+
 case_feature("struct-literal completion offers fields",
     'struct Point { x: i32, y: i32 }\n'
     'fn main() -> i32 {\n'
@@ -708,6 +927,134 @@ case_feature("member completion on inferred struct let",
         check("`p.` offers field x", "x" in comp_labels(r), f"got {comp_labels(r)[:10]}"),
         check("`p.` offers field y", "y" in comp_labels(r), f"got {comp_labels(r)[:10]}"),
     ))
+
+case_feature("import leaf module lists its symbols",
+    'import stdlib::net::dns::\n'
+    'fn main() -> i32 { return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":0,"character":25}}},  # after `stdlib::net::dns::`
+    lambda r: check("offers `resolve` after `stdlib::net::dns::`",
+        "resolve" in comp_labels(r), f"got {comp_labels(r)[:12]}"))
+
+case_feature("member completion on module-qualified call (no import)",
+    'fn main() -> i32 {\n'
+    '    let dns = stdlib::net::dns::resolve("x");\n'
+    '    dns.\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":8}}},  # after `dns.`
+    lambda r: check("`stdlib::net::dns::resolve(...)` result completes ok/val/err",
+        "val" in comp_labels(r) and "ok" in comp_labels(r), f"got {comp_labels(r)[:12]}"))
+
+case_feature("chained completion past a Vector element method",
+    'fn main() -> i32 {\n'
+    '    let dns = stdlib::net::dns::resolve("x");\n'
+    '    let z = dns.val.get(0).\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":27}}},  # after `dns.val.get(0).`
+    lambda r: check("`vec.get(i).` resolves to the element and completes its methods",
+        "to_string" in comp_labels(r) and "is_v4" in comp_labels(r), f"got {comp_labels(r)[:12]}"))
+
+case_feature("combinator chain keeps completing (filter then get then element)",
+    'fn ok_pred(x: i32) -> bool { return x > 0; }\n'
+    'fn main() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n'
+    '    let z = v.filter(ok_pred).get(0).\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":3,"character":37}}},  # after `v.filter(ok_pred).get(0).`
+    lambda r: check("`filter(...).get(0).` resolves through to the i32 element",
+        "to_string" in comp_labels(r) and "abs" in comp_labels(r), f"got {comp_labels(r)[:12]}"))
+
+case_feature("combinator filter preserves the Vector for further chaining",
+    'fn ok_pred(x: i32) -> bool { return x > 0; }\n'
+    'fn main() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n'
+    '    let z = v.filter(ok_pred).\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":3,"character":30}}},  # after `v.filter(ok_pred).`
+    lambda r: check("`filter(...).` still offers Vector methods (len/get/map)",
+        "len" in comp_labels(r) and "get" in comp_labels(r), f"got {comp_labels(r)[:12]}"))
+
+case_feature("member completion on result `.val` (chained)",
+    'import stdlib::net::dns::*;\n'
+    'fn main() -> i32 {\n'
+    '    let dns = resolve("x");\n'
+    '    dns.val.\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":3,"character":12}}},  # after `dns.val.`
+    lambda r: check("`result.val.` offers Vector methods (len/get)",
+        "len" in comp_labels(r) and "get" in comp_labels(r), f"got {comp_labels(r)[:12]}"))
+
+case_feature("result virtual fields ok val err carry documentation",
+    'fn main() -> i32 {\n'
+    '    let r: !i32 = "42".try_parse_int();\n'
+    '    r.\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":6}}},  # after `r.`
+    lambda r: (
+        check("`ok` documents success/`.val`", "succeeded" in comp_doc(r, "ok"), f"got {comp_doc(r,'ok')[:40]!r}"),
+        check("`val` documents the payload + `?`", "success value" in comp_doc(r, "val"), f"got {comp_doc(r,'val')[:40]!r}"),
+        check("`err` documents the failure message", "failure message" in comp_doc(r, "err"), f"got {comp_doc(r,'err')[:40]!r}"),
+    ))
+
+case_feature("option virtual fields has val carry documentation",
+    'fn main() -> i32 {\n'
+    '    let m: ?i32 = some(7);\n'
+    '    m.\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":6}}},  # after `m.`
+    lambda r: (
+        check("`has` documents some/none", "some" in comp_doc(r, "has"), f"got {comp_doc(r,'has')[:40]!r}"),
+        check("`val` documents the contained value", "contained value" in comp_doc(r, "val"), f"got {comp_doc(r,'val')[:40]!r}"),
+    ))
+
+case_feature("Option and Result constructors offered with docs",
+    'fn main() -> i32 {\n'
+    '    o\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":1,"character":5}}},  # bare-ident position
+    lambda r: (
+        check("offers `ok` with docs", "ok" in comp_labels(r) and "Result" in comp_doc(r, "ok"),
+              f"got {comp_doc(r,'ok')[:30]!r}"),
+        check("offers `some` / `none` / `err`",
+              all(c in comp_labels(r) for c in ("some","none","err")),
+              f"got {[l for l in comp_labels(r) if l in ('some','none','ok','err')]}"),
+    ))
+
+case_feature("hover on the ok() constructor",
+    'fn mk() -> !i32 { return ok(1); }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":0,"character":26}}},  # on `ok` in `ok(1)`
+    expect_hover("ok() constructor hover documents the Result", "Result"))
+
+case_feature("member completion on for-in binder element",
+    'import stdlib::net::dns::*;\n'
+    'fn main() -> i32 {\n'
+    '    let dns = resolve("x");\n'
+    '    for ip in dns.val {\n'
+    '        ip.\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":4,"character":11}}},  # after `ip.`
+    lambda r: check("for-in binder `ip.` offers IpAddr methods (to_string/is_v4)",
+        "to_string" in comp_labels(r) and "is_v4" in comp_labels(r), f"got {comp_labels(r)[:12]}"))
 
 # ---- struct-literal field diagnostics ----
 
