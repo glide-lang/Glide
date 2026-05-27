@@ -3,29 +3,19 @@
 //
 //   glide build kmain.glide       # freestanding ELF (see glide.glide)
 //
-// Everything below is Glide. The only non-Glide piece is the Limine request
-// block: magic-number data an external bootloader scans for, so it lives in a
-// c_raw! escape hatch. Top-level Glide globals + @section land next (P0.5),
-// which will let even these be written in Glide.
+// Everything here is Glide, including the Limine base-revision marker: a
+// top-level global placed in the `.limine_requests` section the bootloader
+// scans. The three magic u64s declare which Limine protocol revision the
+// kernel speaks.
 
-c_raw! {
-    #include <stdint.h>
-    // Limine base revision: the protocol revision this kernel speaks.
-    __attribute__((used, section(".limine_requests")))
-    static volatile uint64_t glide_limine_base_revision[3] = {
-        0xf9562b2d5c95a6c8ULL, 0x6a7b384944536bdcULL, 3ULL
-    };
-    // Start / end markers bracketing the requests for the bootloader's scan.
-    __attribute__((used, section(".limine_requests_start")))
-    static volatile uint64_t glide_limine_requests_start[4] = {
-        0xf6b8f4b39de7d1aeULL, 0xfab91a6940fcb9cfULL,
-        0x785c6ed015d3e316ULL, 0x181e920a7852b9d9ULL
-    };
-    __attribute__((used, section(".limine_requests_end")))
-    static volatile uint64_t glide_limine_requests_end[2] = {
-        0xadc0e0531bb10d03ULL, 0x9572709f31764c62ULL
-    };
-}
+struct LimineBaseRevision { id0: u64, id1: u64, rev: u64 }
+
+@used @section(".limine_requests")
+let glide_base_revision: LimineBaseRevision = LimineBaseRevision {
+    id0: 0xf9562b2d5c95a6c8,
+    id1: 0x6a7b384944536bdc,
+    rev: 3,
+};
 
 // ---- x86 port I/O ----------------------------------------------------------
 
