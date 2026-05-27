@@ -364,6 +364,8 @@ fn handle_initialize(req: *JsonValue) {
     // Workspace symbol search (Ctrl+T): fuzzy over the stdlib + project +
     // dep index built at startup / first open.
     json_obj_set(caps, "workspaceSymbolProvider", json_bool(true));
+    // Call hierarchy: prepare + incoming/outgoing calls.
+    json_obj_set(caps, "callHierarchyProvider", json_bool(true));
     json_obj_set(result, "capabilities", caps);
     let info: *JsonValue = json_object();
     json_obj_set(info, "name", json_string("glide-lsp"));
@@ -1162,11 +1164,19 @@ fn _is_int_type_name(n: string) -> bool {
 }
 
 // True when a literal of expr-kind `vk` clearly cannot fit field type `fty`.
-// Only fires for PRIMITIVE-typed fields so generic / struct / pointer /
-// Option field types (where a literal might legitimately coerce, or the
-// type is a type-param) are never false-flagged.
+// Fires for PRIMITIVE-typed fields (wrong literal kind) and for Option /
+// Result-shaped fields (a bare literal must be wrapped in some()/ok()/etc).
+// Generic / struct / pointer fields are never false-flagged.
 fn _lit_field_mismatch(vk: i32, fty: *Type) -> bool {
-    if fty == null || fty.kind != TY_NAMED { return false; }
+    if fty == null { return false; }
+    let is_lit: bool = vk == EX_INT || vk == EX_STRING || vk == EX_BOOL
+        || vk == EX_FLOAT || vk == EX_CHAR;
+    // `?T` / `!T` / `?!T` field: a raw literal silently mis-stores into the
+    // wrapper, so it must go through a ctor. Any literal is a mismatch.
+    if fty.kind == TY_OPTION || fty.kind == TY_RESULT || fty.kind == TY_OPT_RESULT {
+        return is_lit;
+    }
+    if fty.kind != TY_NAMED { return false; }
     let tn: string = fty.name;
     let is_str: bool = tn.eq("string");
     let is_bool: bool = tn.eq("bool");
@@ -1189,6 +1199,30 @@ fn _lit_kind_name(vk: i32) -> string {
     if vk == EX_FLOAT  { return "a float literal"; }
     if vk == EX_INT    { return "an integer literal"; }
     return "a literal";
+}
+
+// Literal kind without a leading article, for "never a bare <kind>" phrasing.
+fn _lit_kind_bare(vk: i32) -> string {
+    if vk == EX_STRING { return "string literal"; }
+    if vk == EX_BOOL   { return "bool literal"; }
+    if vk == EX_CHAR   { return "char literal"; }
+    if vk == EX_FLOAT  { return "float literal"; }
+    if vk == EX_INT    { return "integer literal"; }
+    return "literal";
+}
+
+// Reconstruct a literal expression's source text, for quoting the exact
+// value back to the user in a fix suggestion (e.g. `some(32)`).
+fn _lit_text(e: *Expr) -> string {
+    if e == null { return "value"; }
+    if e.kind == EX_INT { return int_to_str(e.int_val); }
+    if e.kind == EX_STRING { return "\"".concat(e.str_val).concat("\""); }
+    if e.kind == EX_BOOL { if e.bool_val { return "true"; } return "false"; }
+    if e.kind == EX_FLOAT {
+        if e.float_val != null && !e.float_val.eq("") { return e.float_val; }
+        return "0.0";
+    }
+    return "value";
 }
 
 // Best-effort source width of an expression's leading token, so a diagnostic
@@ -1261,10 +1295,40 @@ fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
                     t.err_code_range(val.line, val.column, _lit_span(&val), "unknown-struct-field",
                         "struct `".concat(e.str_val).concat("` has no field `").concat(fname).concat("`"));
                 } else if _lit_field_mismatch(val.kind, fty) {
-                    t.err_code_range(val.line, val.column, _lit_span(&val), "struct-field-type",
-                        "field `".concat(fname).concat("` of `").concat(e.str_val)
-                            .concat("` expects `").concat(type_to_string(fty))
-                            .concat("`, got ").concat(_lit_kind_name(val.kind)));
+                    let fty_str: string = type_to_string(fty);
+                    let vspan: i32 = _lit_span(&val);
+                    let vend: i32 = val.column + vspan;
+                    if fty.kind == TY_OPTION || fty.kind == TY_OPT_RESULT {
+                        let lit: string = _lit_text(&val);
+                        let repl: string = "some(".concat(lit).concat(")");
+                        let msg: string = "field `".concat(fname).concat("` of `").concat(e.str_val)
+                            .concat("` is optional (`").concat(fty_str)
+                            .concat("`), so it holds either `some(value)` or `none()`, never a bare ")
+                            .concat(_lit_kind_bare(val.kind))
+                            .concat(". Wrap the value: `").concat(fname).concat(": ").concat(repl)
+                            .concat("` to store it, `").concat(fname)
+                            .concat(": none()` for absent, or omit `").concat(fname)
+                            .concat("` entirely (it defaults to none).");
+                        t.err_code_range_fix(val.line, val.column, vspan, "struct-field-type", msg,
+                            val.line, val.column, val.line, vend, repl);
+                    } else if fty.kind == TY_RESULT {
+                        let lit: string = _lit_text(&val);
+                        let repl: string = "ok(".concat(lit).concat(")");
+                        let msg: string = "field `".concat(fname).concat("` of `").concat(e.str_val)
+                            .concat("` is a result (`").concat(fty_str)
+                            .concat("`), so it holds either `ok(value)` or `err(message)`, never a bare ")
+                            .concat(_lit_kind_bare(val.kind))
+                            .concat(". Wrap the value: `").concat(fname).concat(": ").concat(repl)
+                            .concat("` on success, or `").concat(fname).concat(": err(\"...\")` on error.");
+                        t.err_code_range_fix(val.line, val.column, vspan, "struct-field-type", msg,
+                            val.line, val.column, val.line, vend, repl);
+                    } else {
+                        let msg: string = "field `".concat(fname).concat("` of `").concat(e.str_val)
+                            .concat("` expects `").concat(fty_str)
+                            .concat("`, but got ").concat(_lit_kind_name(val.kind))
+                            .concat(". Use a ").concat(fty_str).concat(" value here.");
+                        t.err_code_range(val.line, val.column, vspan, "struct-field-type", msg);
+                    }
                 }
             }
             // Required fields: every field must be supplied EXCEPT `?T` /
@@ -2302,6 +2366,9 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
         else if e.kind == EX_STRING { header = header.concat(": string"); inferred = true; }
         else if e.kind == EX_BOOL   { header = header.concat(": bool"); inferred = true; }
         else if e.kind == EX_CHAR   { header = header.concat(": char"); inferred = true; }
+        else if e.kind == EX_STRUCT_LIT && e.str_val != null && !e.str_val.eq("") {
+            header = header.concat(": ").concat(e.str_val); inferred = true;
+        }
     }
     let mut block: string = "```glide\n".concat(header).concat("\n```");
     if inferred {
@@ -2716,6 +2783,7 @@ fn _infer_let_type_str(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
     if e.kind == EX_STRING { return "string"; }
     if e.kind == EX_BOOL   { return "bool"; }
     if e.kind == EX_CHAR   { return "char"; }
+    if e.kind == EX_STRUCT_LIT && e.str_val != null && !e.str_val.eq("") { return e.str_val; }
     if e.kind == EX_CALL && e.lhs != null {
         if e.lhs.kind == EX_PATH {
             let gen_name: string = e.lhs.str_val;
@@ -2987,6 +3055,206 @@ fn handle_workspace_symbol(req: *JsonValue, state: *LspState) {
     lsp_send_response(id, arr);
 }
 
+// ---- call hierarchy ----------------------------------------------------
+
+// One call site found in a fn body: the callee name + where it appears.
+struct ChCall {
+    name: string,
+    line: i32,
+    col: i32,
+    span: i32,
+}
+
+// Build an LSP range from a 1-indexed (line, col) + width.
+fn _range_lc(line: i32, col: i32, span: i32) -> *JsonValue {
+    let r: *JsonValue = json_object();
+    let mut s: i32 = span; if s < 1 { s = 1; }
+    json_obj_set(r, "start", position_to_json(line, col));
+    json_obj_set(r, "end", position_to_json(line, col + s));
+    return r;
+}
+
+// Collect every call site in an expression tree.
+fn _collect_calls_expr(e: *Expr, out: *Vector<ChCall>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null {
+        let callee: *Expr = e.lhs;
+        let mut nm: string = "";
+        let mut cl: i32 = callee.line;
+        let mut cc: i32 = callee.column;
+        if callee.kind == EX_IDENT { nm = callee.str_val; }
+        else if callee.kind == EX_MEMBER {
+            nm = callee.field;
+            if callee.field_line > 0 { cl = callee.field_line; cc = callee.field_col; }
+        }
+        else if callee.kind == EX_PATH { nm = callee.field; }
+        if nm != null && !nm.eq("") {
+            out.push(ChCall { name: nm, line: cl, col: cc, span: nm.len() });
+        }
+    }
+    if e.lhs != null { _collect_calls_expr(e.lhs, out); }
+    if e.rhs != null { _collect_calls_expr(e.rhs, out); }
+    if e.operand != null { _collect_calls_expr(e.operand, out); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _collect_calls_expr(&a, out);
+        }
+    }
+}
+
+fn _collect_calls_body(body: *Vector<Stmt>, out: *Vector<ChCall>) {
+    if body == null { return; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.let_value != null { _collect_calls_expr(s.let_value, out); }
+        if s.expr_value != null { _collect_calls_expr(s.expr_value, out); }
+        if s.cond != null { _collect_calls_expr(s.cond, out); }
+        if s.for_step != null { _collect_calls_expr(s.for_step, out); }
+        if s.for_init != null && s.for_init.let_value != null { _collect_calls_expr(s.for_init.let_value, out); }
+        if s.then_body != null { _collect_calls_body(s.then_body, out); }
+        if s.else_body != null { _collect_calls_body(s.else_body, out); }
+    }
+}
+
+// Resolve a callee name to its declaring fn Stmt (free fn or impl method).
+fn _resolve_fn(stmts: *Vector<Stmt>, name: string) -> *Stmt {
+    let td: *Stmt = find_top_decl(stmts, name);
+    if td != null && td.kind == ST_FN { return td; }
+    let hit: ImplMethodHit = find_method_anywhere(stmts, name);
+    if hit.method != null { return hit.method; }
+    return null;
+}
+
+// Build a CallHierarchyItem for a fn. `ctx_uri` (the doc the request came
+// from, with the full import graph) rides along in `data` so the incoming /
+// outgoing handlers know which doc's stmts to scan.
+fn _ch_item_for_fn(fs: *Stmt, ctx_uri: string) -> *JsonValue {
+    let item: *JsonValue = json_object();
+    json_obj_set(item, "name", json_string(fs.name));
+    json_obj_set(item, "kind", json_int(12));   // SymbolKind.Function
+    let mut org: string = fs.origin;
+    if org == null || org.eq("") { org = uri_to_path(ctx_uri); }
+    json_obj_set(item, "uri", json_string(path_to_uri(org)));
+    json_obj_set(item, "range", range_for_decl_name(fs));
+    json_obj_set(item, "selectionRange", range_for_decl_name(fs));
+    let data: *JsonValue = json_object();
+    json_obj_set(data, "name", json_string(fs.name));
+    json_obj_set(data, "ctx", json_string(ctx_uri));
+    json_obj_set(item, "data", data);
+    return item;
+}
+
+// If `caller` calls `target`, emit an incomingCall entry into `arr`.
+fn _emit_incoming(caller: *Stmt, target: string, ctx_uri: string, arr: *JsonValue) {
+    if caller.fn_body == null { return; }
+    let calls: *Vector<ChCall> = Vector::new();
+    _collect_calls_body(caller.fn_body, calls);
+    let ranges: *JsonValue = json_array();
+    let mut any: bool = false;
+    for let i: i32 = 0; i < calls.len(); i++ {
+        let c: ChCall = calls.get(i);
+        if c.name.eq(target) {
+            json_arr_push(ranges, _range_lc(c.line, c.col, c.span));
+            any = true;
+        }
+    }
+    if !any { return; }
+    let entry: *JsonValue = json_object();
+    json_obj_set(entry, "from", _ch_item_for_fn(caller, ctx_uri));
+    json_obj_set(entry, "fromRanges", ranges);
+    json_arr_push(arr, entry);
+}
+
+fn handle_prepare_call_hierarchy(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    if doc.stmts == null { lsp_send_response(id, json_array()); return; }
+    // Symbol under the cursor → a fn; else the enclosing fn.
+    let mut fs: *Stmt = null;
+    let word: string = word_at(doc.text, line0, col0);
+    if !word.eq("") { fs = _resolve_fn(doc.stmts, word); }
+    if fs == null { fs = fn_containing(doc.stmts, line0, uri_to_path(uri)); }
+    if fs == null { lsp_send_response(id, json_array()); return; }
+    let arr: *JsonValue = json_array();
+    json_arr_push(arr, _ch_item_for_fn(fs, uri));
+    lsp_send_response(id, arr);
+}
+
+fn handle_incoming_calls(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let item: *JsonValue = json_get(params, "item");
+    let data: *JsonValue = json_get(item, "data");
+    let target: string = json_as_string(json_get(data, "name"));
+    let ctx: string = json_as_string(json_get(data, "ctx"));
+    let arr: *JsonValue = json_array();
+    if target.eq("") || !state.docs.contains(ctx) { lsp_send_response(id, arr); return; }
+    let doc: LspDoc = state.docs.get(ctx);
+    if doc.stmts == null { lsp_send_response(id, arr); return; }
+    for let i: i32 = 0; i < doc.stmts.len(); i++ {
+        let s: Stmt = doc.stmts.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            let sp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *sp = s;
+            _emit_incoming(sp, target, ctx, arr);
+        } else if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN && m.fn_body != null {
+                    let mp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                    *mp = m;
+                    _emit_incoming(mp, target, ctx, arr);
+                }
+            }
+        }
+    }
+    lsp_send_response(id, arr);
+}
+
+fn handle_outgoing_calls(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let item: *JsonValue = json_get(params, "item");
+    let data: *JsonValue = json_get(item, "data");
+    let target: string = json_as_string(json_get(data, "name"));
+    let ctx: string = json_as_string(json_get(data, "ctx"));
+    let arr: *JsonValue = json_array();
+    if target.eq("") || !state.docs.contains(ctx) { lsp_send_response(id, arr); return; }
+    let doc: LspDoc = state.docs.get(ctx);
+    if doc.stmts == null { lsp_send_response(id, arr); return; }
+    let fs: *Stmt = _resolve_fn(doc.stmts, target);
+    if fs == null || fs.fn_body == null { lsp_send_response(id, arr); return; }
+    let calls: *Vector<ChCall> = Vector::new();
+    _collect_calls_body(fs.fn_body, calls);
+    let seen: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < calls.len(); i++ {
+        let c: ChCall = calls.get(i);
+        if seen.contains(c.name) { continue; }
+        seen.insert(c.name, true);
+        let callee: *Stmt = _resolve_fn(doc.stmts, c.name);
+        if callee == null { continue; }   // builtin / extern / unresolved: skip
+        let ranges: *JsonValue = json_array();
+        for let k: i32 = 0; k < calls.len(); k++ {
+            let c2: ChCall = calls.get(k);
+            if c2.name.eq(c.name) { json_arr_push(ranges, _range_lc(c2.line, c2.col, c2.span)); }
+        }
+        let entry: *JsonValue = json_object();
+        json_obj_set(entry, "to", _ch_item_for_fn(callee, ctx));
+        json_obj_set(entry, "fromRanges", ranges);
+        json_arr_push(arr, entry);
+    }
+    seen.free();
+    lsp_send_response(id, arr);
+}
+
 fn handle_hover(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -3142,7 +3410,7 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
     if content.eq("") {
         let fhit: FieldHit = find_field_anywhere(doc.stmts, word);
         if !fhit.name.eq("") {
-            let mut sig: string = fhit.owner.concat(".").concat(fhit.name);
+            let mut sig: string = fhit.name;
             if fhit.ty != null {
                 sig = sig.concat(": ").concat(type_to_string_pretty(fhit.ty));
             }
@@ -3454,6 +3722,24 @@ fn handle_route_list(req: *JsonValue, state: *LspState) {
     lsp_send_response(id, result);
 }
 
+// The source file of an indexed module by its short (last-segment) name,
+// e.g. `ip` -> `.../stdlib/net/ip.glide`. "" when not a known module.
+fn _module_file_in(idx: *Vector<ImportableSym>, name: string) -> string {
+    if idx == null { return ""; }
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind == SYMKIND_MODULE && sym.name != null && sym.name.eq(name) {
+            if sym.def_path != null && !sym.def_path.eq("") { return sym.def_path; }
+        }
+    }
+    return "";
+}
+fn _module_file_for(state: *LspState, name: string) -> string {
+    let r1: string = _module_file_in(state.stdlib_index, name);
+    if !r1.eq("") { return r1; }
+    return _module_file_in(state.project_index, name);
+}
+
 fn handle_definition(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -3562,6 +3848,23 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     // 7) Last resort: any top-level decl with the right name (fn, struct,
     //    enum, const, trait, macro).
     if decl == null { decl = find_top_decl(doc.stmts, word); }
+
+    // 8) Module qualifier: cursor on `ip` in `ip::SocketAddr` — jump to the
+    //    module's source file (start). Only when nothing else matched.
+    if decl == null {
+        let mfile: string = _module_file_for(state, word);
+        if !mfile.eq("") && __glide_file_exists(mfile) {
+            let mloc: *JsonValue = json_object();
+            json_obj_set(mloc, "uri", json_string(path_to_uri(mfile)));
+            let mr: *JsonValue = json_object();
+            json_obj_set(mr, "start", position_to_json(1, 1));
+            json_obj_set(mr, "end", position_to_json(1, 1));
+            json_obj_set(mloc, "range", mr);
+            lsp_send_response(id, mloc);
+            return;
+        }
+    }
+
     if decl == null { lsp_send_response(id, json_null()); return; }
 
     // Build the URI from the decl's origin so jumps to stdlib (Vector,
@@ -4180,12 +4483,26 @@ fn _list_index_children(idx: *Vector<ImportableSym>, prefix: string,
         // otherwise `stdlib::` would list `stdlib::http::client` too.
         let rest: string = sym.module.substring(prefix.len(), sym.module.len());
         if rest.eq("") { continue; }
-        if rest.contains("::") { continue; }
-        if seen.contains(rest) { continue; }
-        seen.insert(rest, true);
-        let no_edit: *JsonValue = null;
-        json_arr_push(items, rich_completion_item(
-            rest, "", 9, sym.signature, sym.doc, "", rest, false, no_edit));
+        // Take the FIRST remaining segment. A leaf module yields its own
+        // name (`http`); a deeper path (`net::tcp`) yields the package
+        // `net`, so package directories with no top-level module file
+        // (like `net/` after net.glide was folded in) still surface.
+        let cc: i32 = rest.index_of("::");
+        if cc >= 0 {
+            let pkg: string = rest.substring(0, cc);
+            if pkg.eq("") { continue; }
+            if seen.contains(pkg) { continue; }
+            seen.insert(pkg, true);
+            let no_edit_p: *JsonValue = null;
+            json_arr_push(items, rich_completion_item(
+                pkg, "", 9, "package ".concat(pkg), "", "", pkg, false, no_edit_p));
+        } else {
+            if seen.contains(rest) { continue; }
+            seen.insert(rest, true);
+            let no_edit: *JsonValue = null;
+            json_arr_push(items, rich_completion_item(
+                rest, "", 9, sym.signature, sym.doc, "", rest, false, no_edit));
+        }
     }
 }
 
@@ -4444,15 +4761,22 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
         if sym.kind != SYMKIND_MODULE { continue; }
         if !sym.module.starts_with(prefix) { continue; }
         let rest: string = sym.module.substring(prefix.len(), sym.module.len());
-        if rest.eq("") || rest.contains("::") { continue; }
-        if mods.contains(rest) { continue; }
-        mods.insert(rest, true);
-        if seen.contains(rest) { continue; }
-        seen.insert(rest, true);
+        if rest.eq("") { continue; }
+        // First remaining segment: a leaf module gives its own name, a
+        // deeper path (`net::tcp`) gives the package `net` — so dir-only
+        // packages (net, mail) show alongside file modules (http).
+        let cc: i32 = rest.index_of("::");
+        let mut seg: string = rest;
+        if cc >= 0 { seg = rest.substring(0, cc); }
+        if seg.eq("") { continue; }
+        if mods.contains(seg) { continue; }
+        mods.insert(seg, true);
+        if seen.contains(seg) { continue; }
+        seen.insert(seg, true);
         let no_edit: *JsonValue = null;
         json_arr_push(items, rich_completion_item(
-            rest, "", 9, "module ".concat(rest),
-            "submodule of `".concat(path).concat("`"), "", rest, false, no_edit));
+            seg, "", 9, "module ".concat(seg),
+            "submodule of `".concat(path).concat("`"), "", seg, false, no_edit));
     }
     mods.free();
 
@@ -4467,9 +4791,15 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
         let sym: ImportableSym = idx.get(i);
         if sym.kind == SYMKIND_MODULE { continue; }
         let m: string = sym.module;
-        let cut: i32 = find_substr(m, "::");
+        // Leaf = the LAST `::` segment, so a nested module like
+        // `stdlib::net::ip` matches the short qualifier `ip` (not `net::ip`).
+        let mut last_cc: i32 = -1;
+        let mlen: i32 = m.len();
+        for let k: i32 = 0; k + 1 < mlen; k++ {
+            if m.at(k).to_int() == 58 && m.at(k + 1).to_int() == 58 { last_cc = k; }
+        }
         let mut leaf: string = m;
-        if cut >= 0 { leaf = m.substring(cut + 2, m.len()); }
+        if last_cc >= 0 { leaf = m.substring(last_cc + 2, mlen); }
         let own: bool = m.eq(path) || leaf.eq(path);
         let pm_reexport: bool = sym.kind == SYMKIND_PROC_MACRO
                                 && (m.eq(pm_mod) || leaf.eq(pm_mod));
@@ -4724,6 +5054,12 @@ fn _let_simple_type(s: *Stmt) -> string {
        && s.let_value.lhs.kind == EX_PATH {
         return s.let_value.lhs.str_val;
     }
+    // `let p = Point { ... };` — the inferred type is the struct name, so
+    // `p.method` / `p.field` goto resolves without an annotation.
+    if s.let_value != null && s.let_value.kind == EX_STRUCT_LIT
+       && s.let_value.str_val != null && !s.let_value.str_val.eq("") {
+        return s.let_value.str_val;
+    }
     return "";
 }
 
@@ -4827,7 +5163,11 @@ fn lookup_local_type(stmts: *Vector<Stmt>, line0: i32, var: string, path: string
             if pp.name.eq(var) { return _type_simple_name(pp.ty); }
         }
     }
-    return "";
+    // Richer fallback: the *Type resolver also handles `let q = mk();`
+    // (q's type = mk's return type), `let v = Generic::new()`, etc. Reduce
+    // it to a simple type name so `q.field` / `q.method` goto resolves.
+    let node: *Type = _local_type_node(stmts, line0, var, path);
+    return _type_simple_name(node);
 }
 
 // ---- AST-typed chain resolution -----------------------------------------
@@ -5266,6 +5606,11 @@ fn _let_node_type(s: *Stmt, root: *Vector<Stmt>) -> *Type {
         if lv == EX_FLOAT  { return ty_named("f64"); }
         if lv == EX_BOOL   { return ty_named("bool"); }
         if lv == EX_CHAR   { return ty_named("char"); }
+        // `let p = Point { ... };` — infer the struct type so `p.` completes
+        // its fields without an annotation.
+        if lv == EX_STRUCT_LIT && s.let_value.str_val != null && !s.let_value.str_val.eq("") {
+            return ty_named(s.let_value.str_val);
+        }
     }
     return null;
 }
@@ -6856,6 +7201,36 @@ fn handle_code_action(req: *JsonValue, state: *LspState) {
         json_obj_set(changes, uri, edits);
         json_obj_set(edit, "changes", changes);
         json_obj_set(action, "edit", edit);
+        // Single, unambiguous fix → mark preferred so Ctrl+. can auto-apply.
+        json_obj_set(action, "isPreferred", json_bool(true));
+        // Link the action back to the diagnostic it resolves. VS Code uses
+        // this to surface the fix on the problem's lightbulb; without it the
+        // action often never appears. Rebuilt fresh (can't alias the request
+        // tree — lsp_send_response json_frees the whole reply).
+        let d_range: *JsonValue = json_get(d, "range");
+        if d_range != null {
+            let d_s: *JsonValue = json_get(d_range, "start");
+            let d_e: *JsonValue = json_get(d_range, "end");
+            let dlist: *JsonValue = json_array();
+            let dfix: *JsonValue = json_object();
+            let drng: *JsonValue = json_object();
+            let dso: *JsonValue = json_object();
+            let deo: *JsonValue = json_object();
+            json_obj_set(dso, "line", json_int(json_as_int(json_get(d_s, "line"))));
+            json_obj_set(dso, "character", json_int(json_as_int(json_get(d_s, "character"))));
+            json_obj_set(deo, "line", json_int(json_as_int(json_get(d_e, "line"))));
+            json_obj_set(deo, "character", json_int(json_as_int(json_get(d_e, "character"))));
+            json_obj_set(drng, "start", dso);
+            json_obj_set(drng, "end", deo);
+            json_obj_set(dfix, "range", drng);
+            json_obj_set(dfix, "message", json_string(json_as_string(json_get(d, "message"))));
+            if !code.eq("") { json_obj_set(dfix, "code", json_string(code)); }
+            json_arr_push(dlist, dfix);
+            json_obj_set(action, "diagnostics", dlist);
+            if d_s != null { free(d_s as *void); }
+            if d_e != null { free(d_e as *void); }
+            free(d_range as *void);
+        }
         json_arr_push(out, action);
 
         // Free the wrappers we allocated via json_get / json_at for
@@ -6885,6 +7260,7 @@ fn _code_action_title(code: string, new_text: string) -> string {
     if code.eq("unused-param"){ return "Prefix with `_`"; }
     if code.eq("unused-fn")   { return "Prefix with `_`"; }
     if code.eq("unnecessary-mut") { return "Remove `mut`"; }
+    if code.eq("struct-field-type") { return "Wrap in `".concat(new_text).concat("`"); }
     if new_text.eq("") { return "Apply fix (delete)"; }
     return "Apply fix";
 }
@@ -10265,6 +10641,9 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     if method.eq("textDocument/semanticTokens/full") { handle_semantic_tokens(req, state); return false; }
     if method.eq("textDocument/inlayHint") { handle_inlay_hint(req, state); return false; }
     if method.eq("workspace/symbol") { handle_workspace_symbol(req, state); return false; }
+    if method.eq("textDocument/prepareCallHierarchy") { handle_prepare_call_hierarchy(req, state); return false; }
+    if method.eq("callHierarchy/incomingCalls") { handle_incoming_calls(req, state); return false; }
+    if method.eq("callHierarchy/outgoingCalls") { handle_outgoing_calls(req, state); return false; }
     if method.eq("textDocument/references") { handle_references(req, state); return false; }
     if method.eq("textDocument/documentHighlight") { handle_document_highlight(req, state); return false; }
     if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); return false; }

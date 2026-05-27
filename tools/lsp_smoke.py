@@ -191,6 +191,49 @@ case_feature("goto definition",
             and r["result"].get("range",{}).get("start",{}).get("line") == 0,
         f"got: {(r or {}).get('result')}"))
 
+def _goto_line(r):
+    res = (r or {}).get("result")
+    if not res: return None
+    if isinstance(res, list): res = res[0] if res else {}
+    return res.get("range", {}).get("start", {}).get("line")
+
+case_feature("goto field on inferred struct let",
+    'struct Pt { x: i32, y: i32 }\n'
+    'impl Pt { fn mag(self: *Pt) -> i32 { return self.x; } }\n'
+    'fn main() -> i32 {\n'
+    '    let p = Pt { x: 1, y: 2 };\n'
+    '    let a = p.x;\n'
+    '    let b = p.mag();\n'
+    '    return a + b;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+     "params":{"position":{"line":4,"character":14}}},  # `x` in `p.x`
+    lambda r: check("p.x jumps to the struct decl (line 0)", _goto_line(r) == 0, f"got {_goto_line(r)}"))
+
+case_feature("goto method on inferred struct let",
+    'struct Pt { x: i32, y: i32 }\n'
+    'impl Pt { fn mag(self: *Pt) -> i32 { return self.x; } }\n'
+    'fn main() -> i32 {\n'
+    '    let p = Pt { x: 1, y: 2 };\n'
+    '    let b = p.mag();\n'
+    '    return b;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+     "params":{"position":{"line":4,"character":15}}},  # `mag` in `p.mag()`
+    lambda r: check("p.mag jumps to the impl method (line 1)", _goto_line(r) == 1, f"got {_goto_line(r)}"))
+
+case_feature("goto method on fn-return-typed local",
+    'struct Pt { x: i32 }\n'
+    'fn mk() -> *Pt { return new Pt { x: 1 }; }\n'
+    'impl Pt { fn mag(self: *Pt) -> i32 { return self.x; } }\n'
+    'fn main() -> i32 {\n'
+    '    let q = mk();\n'
+    '    return q.mag();\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+     "params":{"position":{"line":5,"character":13}}},  # `mag` in `q.mag()`
+    lambda r: check("q.mag (q = mk()) jumps to the impl method (line 2)", _goto_line(r) == 2, f"got {_goto_line(r)}"))
+
 case_feature("completion suggests locals + top-level",
     'fn add(a: i32, b: i32) -> i32 { return a + b; }\n'
     'fn main() -> i32 {\n'
@@ -387,6 +430,13 @@ case_feature("inlayHint infers fn return type",
     {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
     lambda r: check("`q = mk()` hint -> ': i32'",
         inlay_map(r).get((2,9)) == ": i32", f"got {inlay_map(r).get((2,9))}"))
+
+case_feature("inlayHint infers struct-literal type",
+    'struct Alelo { alelo: string }\n'
+    'fn main() -> i32 { let a = Alelo { alelo: "x" }; return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: check("`a = Alelo{}` hint -> ': Alelo'",
+        inlay_map(r).get((1,24)) == ": Alelo", f"got {inlay_map(r).get((1,24))}"))
 
 case_feature("inlayHint resolves Vector generic param",
     'fn main() -> i32 {\n'
@@ -645,6 +695,20 @@ case_feature("struct-literal value slot is not field completion",
     lambda r: check("field names not offered as values",
         "y" not in comp_labels(r) and "x" not in comp_labels(r), f"got {comp_labels(r)[:10]}"))
 
+case_feature("member completion on inferred struct let",
+    'struct Pt { x: i32, y: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let p = Pt { x: 1, y: 2 };\n'
+    '    p.\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":3,"character":6}}},  # after `p.` (no annotation)
+    lambda r: (
+        check("`p.` offers field x", "x" in comp_labels(r), f"got {comp_labels(r)[:10]}"),
+        check("`p.` offers field y", "y" in comp_labels(r), f"got {comp_labels(r)[:10]}"),
+    ))
+
 # ---- struct-literal field diagnostics ----
 
 case_diagnostics("struct literal flags wrong field type",
@@ -662,6 +726,16 @@ case_diagnostics("struct literal flags unknown field",
     'fn main() -> i32 { let c: Cfg = Cfg { nme: "x" }; return 0; }',
     expect_codes_present=["unknown-struct-field"])
 
+case_diagnostics("struct literal flags raw value in optional field",
+    'struct Cfg { name: string, port: ?i32 }\n'
+    'fn main() -> i32 { let c = Cfg { name: "x", port: 32 }; return 0; }',
+    expect_codes_present=["struct-field-type"])
+
+case_diagnostics("struct literal accepts some() in optional field",
+    'struct Cfg { name: string, port: ?i32 }\n'
+    'fn main() -> i32 { let c = Cfg { name: "x", port: some(32) }; return c.port ?? 0; }',
+    expect_codes_absent=["struct-field-type"])
+
 case_diagnostics("struct literal requires non-optional fields",
     'struct Alelo { alelo: string, pinto: i32 }\n'
     'fn main() -> i32 { let a = Alelo { alelo: "" }; return 0; }',
@@ -676,6 +750,125 @@ case_diagnostics("complete struct literal is clean",
     'struct Alelo { alelo: string, pinto: i32 }\n'
     'fn main() -> i32 { let a = Alelo { alelo: "x", pinto: 1 }; return 0; }',
     expect_codes_absent=["missing-struct-field", "struct-field-type", "unknown-struct-field"])
+
+# ---- call hierarchy ----
+
+def _call_hierarchy_test():
+    print("\n[call hierarchy]")
+    body = ('fn helper() -> i32 { return 1; }\n'
+            'fn other() -> i32 { return 2; }\n'
+            'fn main() -> i32 {\n'
+            '    let a = helper();\n'
+            '    let b = helper();\n'
+            '    let c = other();\n'
+            '    return a + b + c;\n'
+            '}')
+    path, uri = write_tmp("call_hierarchy.glide", body)
+    def item(nm):
+        z = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}
+        return {"name": nm, "kind": 12, "uri": uri, "range": z, "selectionRange": z,
+                "data": {"name": nm, "ctx": uri}}
+    msgs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "textDocument/prepareCallHierarchy",
+         "params": {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 5}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "callHierarchy/incomingCalls",
+         "params": {"item": item("helper")}},
+        {"jsonrpc": "2.0", "id": 4, "method": "callHierarchy/outgoingCalls",
+         "params": {"item": item("main")}},
+        {"jsonrpc": "2.0", "method": "exit", "params": None},
+    ]
+    rs = run_session(msgs)
+    def by_id(i): return next((r for r in rs if r.get("id") == i), None)
+    pres = (by_id(2) or {}).get("result") or []
+    check("prepare returns the `helper` item",
+          len(pres) == 1 and pres[0].get("name") == "helper", f"got {pres}")
+    ires = (by_id(3) or {}).get("result") or []
+    froms = {x.get("from", {}).get("name"): len(x.get("fromRanges", [])) for x in ires}
+    check("incoming: `main` calls `helper` twice", froms.get("main") == 2, f"got {froms}")
+    ores = (by_id(4) or {}).get("result") or []
+    tos = {x.get("to", {}).get("name"): len(x.get("fromRanges", [])) for x in ores}
+    check("outgoing: `main` -> `helper` (x2)", tos.get("helper") == 2, f"got {tos}")
+    check("outgoing: `main` -> `other` (x1)", tos.get("other") == 1, f"got {tos}")
+
+_call_hierarchy_test()
+
+# ---- code action (quick fix) ----
+
+def _code_action_test():
+    print("\n[code action]")
+    body = ('struct Cfg { name: string, port: ?i32 }\n'
+            'fn main() -> i32 { let c = Cfg { name: "x", port: 32 }; return 0; }')
+    path, uri = write_tmp("code_action.glide", body)
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    opened = {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+        "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}}
+    bye = {"jsonrpc": "2.0", "method": "exit", "params": None}
+    # 1) collect the published diagnostic (with its data.fix)
+    rs = run_session([init, opened, bye])
+    diag = None
+    for r in rs:
+        if r.get("method") == "textDocument/publishDiagnostics":
+            for d in r["params"]["diagnostics"]:
+                if d.get("code") == "struct-field-type":
+                    diag = d
+    check("struct-field-type carries a data.fix",
+          diag is not None and (diag.get("data") or {}).get("fix") is not None, f"got {diag}")
+    if diag is None:
+        return
+    # 2) request code actions for that diagnostic
+    ca = {"jsonrpc": "2.0", "id": 5, "method": "textDocument/codeAction",
+          "params": {"textDocument": {"uri": uri}, "range": diag["range"],
+                     "context": {"diagnostics": [diag]}}}
+    rs2 = run_session([init, opened, ca, bye])
+    act = next((r for r in rs2 if r.get("id") == 5), None)
+    actions = (act or {}).get("result") or []
+    titles = [a.get("title") for a in actions]
+    check("offers a `Wrap in some(32)` quick fix",
+          any("some(32)" in (t or "") for t in titles), f"got {titles}")
+    check("action is linked to its diagnostic",
+          bool(actions) and bool(actions[0].get("diagnostics")), f"got {actions[:1]}")
+    edits = [te.get("newText") for a in actions
+             for grp in (a.get("edit", {}).get("changes", {}) or {}).values() for te in grp]
+    check("fix replaces the value with `some(32)`", "some(32)" in edits, f"got {edits}")
+
+_code_action_test()
+
+# ---- import path completion (packages + submodules) ----
+
+case_completion_has("import lists the net package (dir, no top-level file)",
+    'import stdlib::\nfn main() -> i32 { return 0; }',
+    {"line":0,"character":15},
+    ["net", "http", "hashmap"])
+
+case_completion_has("import lists net submodules",
+    'import stdlib::net::\nfn main() -> i32 { return 0; }',
+    {"line":0,"character":20},
+    ["listener", "tcp", "tls", "ip"])
+
+case_completion_has("code stdlib path lists dir-only packages too",
+    'fn main() -> i32 {\n'
+    '    stdlib::\n'
+    '    return 0;\n'
+    '}',
+    {"line":1,"character":12},   # after `stdlib::`
+    ["net", "mail", "http"])
+
+case_completion_has("module qualifier completes its members in code",
+    'import stdlib::net::ip;\n'
+    'fn main() -> i32 {\n'
+    '    ip::\n'
+    '    return 0;\n'
+    '}',
+    {"line":2,"character":8},   # after `ip::`
+    ["SocketAddr", "IpAddr"])
+
+case_diagnostics("module-qualified generic type annotation parses",
+    'import stdlib::hashmap;\n'
+    'fn main() -> i32 { let m: *hashmap::HashMap<i32> = hashmap::HashMap::new(); return 0; }',
+    expect_codes_absent=["parse"])
 
 # ---- summary ----
 print()
