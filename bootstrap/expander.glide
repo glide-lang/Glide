@@ -328,6 +328,27 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
             return;
         }
     }
+    // `cfg!("windows")` → the `__glide_cfg_windows` flag (a compile-time bool
+    // the C preprocessor decides). Unknown condition → false + a diagnostic.
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("cfg")
+       && e.macro_recv == null && e.args != null && e.args.len() == 1 {
+        let a: Expr = e.args.get(0);
+        if a.kind == EX_STRING {
+            if _cfg_cond_known(a.str_val) {
+                e.str_val = "__glide_cfg_".concat(a.str_val);
+                e.kind = EX_IDENT;
+                e.args = null;
+            } else {
+                pass_diag(e.line, e.column, 1, "unknown-cfg",
+                    "unknown cfg condition `".concat(a.str_val)
+                    .concat("`; valid: windows, posix, linux, macos"));
+                e.kind = EX_BOOL;
+                e.bool_val = false;
+                e.args = null;
+            }
+            return;
+        }
+    }
     if e.lhs     != null { _rewrite_pkg_expr(e.lhs,     m); }
     if e.rhs     != null { _rewrite_pkg_expr(e.rhs,     m); }
     if e.operand != null { _rewrite_pkg_expr(e.operand, m); }
@@ -339,6 +360,10 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
         }
     }
     if e.fn_expr_body != null { _rewrite_pkg_block(e.fn_expr_body, m); }
+}
+
+fn _cfg_cond_known(c: string) -> bool {
+    return c.eq("windows") || c.eq("posix") || c.eq("linux") || c.eq("macos");
 }
 
 fn _pkg_field_known(field: string) -> bool {

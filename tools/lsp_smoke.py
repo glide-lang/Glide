@@ -1392,6 +1392,14 @@ case_diagnostics("pkg! unknown field is flagged",
     'fn main() -> i32 { return pkg!("verison").len(); }',
     expect_codes_present=["unknown-pkg-field"])
 
+case_diagnostics("cfg! resolves to a bool condition (no errors)",
+    'fn main() -> i32 { if cfg!("windows") { return 1; } if cfg!("posix") { return 2; } return 0; }',
+    expect_codes_absent=["unknown-cfg"])
+
+case_diagnostics("cfg! unknown condition is flagged",
+    'fn main() -> i32 { if cfg!("windoze") { return 1; } return 0; }',
+    expect_codes_present=["unknown-cfg"])
+
 _pkg_body = 'fn main() -> i32 { let v: string = pkg!(""); return 0; }'
 _pkg_col = _pkg_body.index('pkg!("') + len('pkg!("')
 case_feature("pkg arg completes the manifest field names",

@@ -5735,6 +5735,28 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
         emit_stdlib_runtime();
     }
 
+    // Compile-time target conditions for `cfg!("…")`. Decided by the target's
+    // own C preprocessor, so they are correct under cross-compilation (unlike
+    // a host-time check). Each resolves to 1 / 0; the typer types `cfg!` as
+    // bool and emits the matching `__glide_cfg_<cond>` identifier.
+    println!("#ifdef _WIN32");
+    println!("#define __glide_cfg_windows 1");
+    println!("#else");
+    println!("#define __glide_cfg_windows 0");
+    println!("#endif");
+    println!("#define __glide_cfg_posix (!__glide_cfg_windows)");
+    println!("#ifdef __linux__");
+    println!("#define __glide_cfg_linux 1");
+    println!("#else");
+    println!("#define __glide_cfg_linux 0");
+    println!("#endif");
+    println!("#ifdef __APPLE__");
+    println!("#define __glide_cfg_macos 1");
+    println!("#else");
+    println!("#define __glide_cfg_macos 0");
+    println!("#endif");
+    println!("");
+
     let g: *CG = CG::new();
     g.freestanding = freestanding;
 

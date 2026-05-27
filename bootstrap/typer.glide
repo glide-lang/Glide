@@ -2666,6 +2666,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_IDENT {
+        // `cfg!("...")` was lowered by the expander to a `__glide_cfg_<cond>`
+        // flag — a compile-time bool whose value the C preprocessor decides.
+        if e.str_val != null && e.str_val.starts_with("__glide_cfg_") {
+            return ty_named("bool");
+        }
         // Use-after-free: a `<name>.free()` earlier in the fn flagged
         // this binding; reading it now would touch reclaimed memory.
         // Type lookup continues so downstream diagnostics still resolve.
