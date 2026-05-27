@@ -398,6 +398,40 @@ case_feature("inlayHint resolves Vector generic param",
     lambda r: check("`v = Vector::new()` hint mentions Vector",
         (inlay_map(r).get((1,9)) or "").find("Vector") >= 0, f"got {inlay_map(r).get((1,9))}"))
 
+# ---- inlayHint: ownership lifecycle ----
+
+def inlay_labels_on_line(r, line):
+    return [h.get("label") for h in (r or {}).get("result", []) or []
+            if h.get("position", {}).get("line") == line]
+
+case_feature("inlayHint lifecycle freed via defer",
+    'fn main() -> i32 {\n'
+    '    let arena = Arena::new(1024);\n'
+    '    defer arena.free();\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: check("alloc line shows 'freed @ L3'",
+        "freed @ L3" in inlay_labels_on_line(r, 1), f"got {inlay_labels_on_line(r, 1)}"))
+
+case_feature("inlayHint lifecycle leak",
+    'fn main() -> i32 {\n'
+    '    let arena = Arena::new(1024);\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: check("unfreed alloc shows 'never freed'",
+        "never freed" in inlay_labels_on_line(r, 1), f"got {inlay_labels_on_line(r, 1)}"))
+
+case_feature("inlayHint lifecycle moves out on return",
+    'fn mk() -> *Arena {\n'
+    '    let arena = Arena::new(1024);\n'
+    '    return arena;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: check("returned alloc shows 'moves out'",
+        "moves out" in inlay_labels_on_line(r, 1), f"got {inlay_labels_on_line(r, 1)}"))
+
 # ---- workspace/symbol ----
 
 def ws_names(r):
@@ -421,6 +455,49 @@ case_feature("workspace-symbol is case-insensitive substring",
     {"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"hashm"}},
     lambda r: check("lowercase 'hashm' still matches HashMap",
         "HashMap" in ws_names(r), f"got {ws_names(r)[:12]}"))
+
+# ---- diagnostic relatedInformation ("why") ----
+
+def case_related(label, body, expect_code, expect_related_substr):
+    print(f"\n[related] {label}")
+    path, uri = write_tmp(label.replace(" ", "_") + ".glide", body)
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    diags = []
+    for r in rs:
+        if r.get("method") == "textDocument/publishDiagnostics":
+            diags = r["params"]["diagnostics"]; break
+    target = next((d for d in diags if d.get("code") == expect_code), None)
+    check(f"emits `{expect_code}`", target is not None,
+          f"codes: {[d.get('code') for d in diags]}")
+    rel = (target or {}).get("relatedInformation", []) or []
+    check("has relatedInformation", len(rel) > 0, f"got {(target or {}).get('relatedInformation')}")
+    joined = " | ".join(ri.get("message","") for ri in rel)
+    check(f"related mentions {expect_related_substr!r}",
+          expect_related_substr in joined, f"got: {joined}")
+    if rel:
+        loc = rel[0].get("location", {})
+        check("related has a uri + range",
+              loc.get("uri","").endswith(".glide") and "range" in loc, f"got: {loc}")
+
+case_related("missing trait method points at the trait",
+    'trait Greeter { fn greet(self: *Self) -> i32; }\n'
+    'struct Bot { x: i32 }\n'
+    'impl Greeter for Bot { }\n'
+    'fn main() -> i32 { return 0; }',
+    "missing-trait-method", "greet")
+
+case_related("trait method arity mismatch points at the trait",
+    'trait Greeter { fn greet(self: *Self, n: i32) -> i32; }\n'
+    'struct Bot { x: i32 }\n'
+    'impl Greeter for Bot { fn greet(self: *Bot) -> i32 { return 0; } }\n'
+    'fn main() -> i32 { return 0; }',
+    "trait-method-mismatch", "greet")
 
 # ---- canonical numeric types (retired legacy spellings + 256-bit) ----
 
@@ -498,6 +575,107 @@ case_completion_has("identifier position offers primitives",
     'fn main() -> i32 {\n    let n = 1;\n    i3\n    return 0;\n}',
     {"line":2,"character":6},
     ["i32"])
+
+# ---- struct hover (fields) + outline (field children) ----
+
+def _hover_val(r):
+    return (((r or {}).get("result") or {}).get("contents", {}) or {}).get("value", "")
+
+case_feature("hover on struct lists its fields",
+    'struct Point { x: i32, y: i32 }\n'
+    'fn main() -> i32 { return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":0,"character":8}}},  # on `Point`
+    lambda r: (
+        check("hover shows `x: i32`", "x: i32" in _hover_val(r), f"got: {_hover_val(r)!r}"),
+        check("hover shows `y: i32`", "y: i32" in _hover_val(r), f"got: {_hover_val(r)!r}"),
+    ))
+
+case_feature("documentSymbol nests struct fields as children",
+    'struct Point { x: i32, y: i32 }\n'
+    'fn main() -> i32 { return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{}},
+    lambda r: check("Point has children x, y",
+        any(s.get("name")=="Point" and [c.get("name") for c in s.get("children",[])]==["x","y"]
+            for s in (r.get("result") or [])),
+        f"got: {[(s.get('name'), [c.get('name') for c in s.get('children',[])]) for s in (r.get('result') or [])]}"))
+
+# ---- struct-literal field completion ----
+
+def comp_labels(r):
+    res = (r or {}).get("result")
+    if isinstance(res, dict): res = res.get("items", [])
+    return [it.get("label") for it in (res or [])]
+
+case_feature("struct-literal completion offers fields",
+    'struct Point { x: i32, y: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let p = Point {  };\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":20}}},  # inside `Point { | }`
+    lambda r: (
+        check("offers field `x`", "x" in comp_labels(r), f"got {comp_labels(r)[:10]}"),
+        check("offers field `y`", "y" in comp_labels(r), f"got {comp_labels(r)[:10]}"),
+        check("no longer leaks primitive `i32`", "i32" not in comp_labels(r), f"got {comp_labels(r)[:10]}"),
+    ))
+
+case_feature("struct-literal completion excludes filled fields",
+    'struct Point { x: i32, y: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let p = Point { x: 1,  };\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":26}}},  # after `x: 1, |`
+    lambda r: (
+        check("still offers `y`", "y" in comp_labels(r), f"got {comp_labels(r)[:10]}"),
+        check("drops already-set `x`", "x" not in comp_labels(r), f"got {comp_labels(r)[:10]}"),
+    ))
+
+case_feature("struct-literal value slot is not field completion",
+    'struct Point { x: i32, y: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let p = Point { x:  };\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":23}}},  # after `x: |` (value position)
+    lambda r: check("field names not offered as values",
+        "y" not in comp_labels(r) and "x" not in comp_labels(r), f"got {comp_labels(r)[:10]}"))
+
+# ---- struct-literal field diagnostics ----
+
+case_diagnostics("struct literal flags wrong field type",
+    'struct Cfg { name: string, port: i32 }\n'
+    'fn main() -> i32 { let c: Cfg = Cfg { name: 42, port: 8080 }; return c.port; }',
+    expect_codes_present=["struct-field-type"])
+
+case_diagnostics("struct literal accepts correct field types",
+    'struct Cfg { name: string, port: i32 }\n'
+    'fn main() -> i32 { let c: Cfg = Cfg { name: "x", port: 8080 }; return c.port; }',
+    expect_codes_absent=["struct-field-type", "unknown-struct-field"])
+
+case_diagnostics("struct literal flags unknown field",
+    'struct Cfg { name: string }\n'
+    'fn main() -> i32 { let c: Cfg = Cfg { nme: "x" }; return 0; }',
+    expect_codes_present=["unknown-struct-field"])
+
+case_diagnostics("struct literal requires non-optional fields",
+    'struct Alelo { alelo: string, pinto: i32 }\n'
+    'fn main() -> i32 { let a = Alelo { alelo: "" }; return 0; }',
+    expect_codes_present=["missing-struct-field"])
+
+case_diagnostics("struct literal allows omitting optional fields",
+    'struct Cfg { host: string, port: ?i32 }\n'
+    'fn main() -> i32 { let c = Cfg { host: "x" }; return 0; }',
+    expect_codes_absent=["missing-struct-field"])
+
+case_diagnostics("complete struct literal is clean",
+    'struct Alelo { alelo: string, pinto: i32 }\n'
+    'fn main() -> i32 { let a = Alelo { alelo: "x", pinto: 1 }; return 0; }',
+    expect_codes_absent=["missing-struct-field", "struct-field-type", "unknown-struct-field"])
 
 # ---- summary ----
 print()

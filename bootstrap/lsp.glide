@@ -454,6 +454,37 @@ fn diag_to_json(d: *DiagEntry) -> *JsonValue {
     return dj;
 }
 
+// Attach LSP relatedInformation to a diagnostic JSON node from the typer's
+// side-table of "why" locations (t.related, keyed by diagnostic index).
+// Surfaces the cause — e.g. the trait method declaration a failing impl is
+// measured against — as clickable secondary locations.
+fn _attach_related(dj: *JsonValue, t: *Typer, idx: i32) {
+    if t.related == null || t.related.len() == 0 { return; }
+    let de: DiagEntry = t.diagnostics.get(idx);
+    let ri: *JsonValue = json_array();
+    let mut any: bool = false;
+    for let k: i32 = 0; k < t.related.len(); k++ {
+        let r: DiagRelated = t.related.get(k);
+        if r.diag_index != idx { continue; }
+        let mut origin: string = r.origin;
+        if origin == null || origin.eq("") { origin = de.origin; }
+        let uri: string = path_to_uri(origin);
+        if uri.eq("") { continue; }
+        let entry: *JsonValue = json_object();
+        let loc: *JsonValue = json_object();
+        json_obj_set(loc, "uri", json_string(uri));
+        let range: *JsonValue = json_object();
+        json_obj_set(range, "start", position_to_json(r.line, r.col));
+        json_obj_set(range, "end", position_to_json(r.end_line, r.end_col));
+        json_obj_set(loc, "range", range);
+        json_obj_set(entry, "location", loc);
+        json_obj_set(entry, "message", json_string(r.message));
+        json_arr_push(ri, entry);
+        any = true;
+    }
+    if any { json_obj_set(dj, "relatedInformation", ri); }
+}
+
 // Convert `file:///C:/path` (Windows) or `file:///path` (POSIX) into a plain
 // filesystem path the rest of the loader can use. URL-decoding is intentionally
 // not done — Glide identifiers and most paths are ASCII.
@@ -976,7 +1007,9 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     for let i: i32 = 0; i < t.diagnostics.len(); i++ {
         let de: DiagEntry = t.diagnostics.get(i);
         if de.origin.eq(path) || de.origin.eq("") {
-            json_arr_push(arr, diag_to_json(&de));
+            let dj: *JsonValue = diag_to_json(&de);
+            _attach_related(dj, t, i);
+            json_arr_push(arr, dj);
         }
     }
 
@@ -1094,6 +1127,7 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_missing_return(t, stmts);
     analysis_large_return(t, stmts);
     analysis_trait_conformance(t, stmts);
+    analysis_struct_lit_fields(t, stmts);
     analysis_deprecated_calls(t, stmts);
     analysis_unstable_calls(t, stmts);
     analysis_custom_lints(t, stmts);
@@ -1118,6 +1152,187 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
 // and verify the impl declares each one. Catches typos and forgotten
 // methods at compile time, so the user gets a friendly Glide-level
 // diagnostic instead of an opaque `undefined symbol` from the linker.
+// ---- struct-literal field validation -----------------------------------
+
+fn _is_int_type_name(n: string) -> bool {
+    if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") || n.eq("i128") || n.eq("i256") { return true; }
+    if n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64") || n.eq("u128") || n.eq("u256") { return true; }
+    if n.eq("usize") || n.eq("isize") { return true; }
+    return false;
+}
+
+// True when a literal of expr-kind `vk` clearly cannot fit field type `fty`.
+// Only fires for PRIMITIVE-typed fields so generic / struct / pointer /
+// Option field types (where a literal might legitimately coerce, or the
+// type is a type-param) are never false-flagged.
+fn _lit_field_mismatch(vk: i32, fty: *Type) -> bool {
+    if fty == null || fty.kind != TY_NAMED { return false; }
+    let tn: string = fty.name;
+    let is_str: bool = tn.eq("string");
+    let is_bool: bool = tn.eq("bool");
+    let is_char: bool = tn.eq("char");
+    let is_float: bool = tn.eq("f32") || tn.eq("f64");
+    let is_int: bool = _is_int_type_name(tn);
+    if !(is_str || is_bool || is_char || is_float || is_int) { return false; }
+    if vk == EX_STRING { return !is_str; }
+    if vk == EX_BOOL   { return !is_bool; }
+    if vk == EX_CHAR   { return !is_char; }
+    if vk == EX_FLOAT  { return !is_float; }
+    if vk == EX_INT    { return !(is_int || is_float); }
+    return false;
+}
+
+fn _lit_kind_name(vk: i32) -> string {
+    if vk == EX_STRING { return "a string literal"; }
+    if vk == EX_BOOL   { return "a bool literal"; }
+    if vk == EX_CHAR   { return "a char literal"; }
+    if vk == EX_FLOAT  { return "a float literal"; }
+    if vk == EX_INT    { return "an integer literal"; }
+    return "a literal";
+}
+
+// Best-effort source width of an expression's leading token, so a diagnostic
+// anchored at the expr spans a meaningful word instead of one character.
+fn _expr_span(e: *Expr) -> i32 {
+    if e == null { return 1; }
+    if e.kind == EX_INT || e.kind == EX_STRING || e.kind == EX_BOOL
+        || e.kind == EX_FLOAT || e.kind == EX_CHAR { return _lit_span(e); }
+    if e.kind == EX_IDENT {
+        if e.str_val != null && e.str_val.len() > 0 { return e.str_val.len(); }
+        return 1;
+    }
+    if e.kind == EX_STRUCT_LIT {
+        if e.str_val != null && e.str_val.len() > 0 { return e.str_val.len(); }
+        return 1;
+    }
+    if e.kind == EX_MEMBER {
+        let mut w: i32 = 0;
+        if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null { w = e.lhs.str_val.len() + 1; }
+        if e.field != null { w = w + e.field.len(); }
+        if w < 1 { w = 1; }
+        return w;
+    }
+    if e.kind == EX_PATH {
+        let mut w: i32 = 0;
+        if e.str_val != null { w = e.str_val.len(); }
+        if e.field != null { w = w + 2 + e.field.len(); }
+        if w < 1 { w = 1; }
+        return w;
+    }
+    if e.kind == EX_CALL { return _expr_span(e.lhs); }
+    if e.kind == EX_UNARY {
+        if e.operand != null { return 1 + _expr_span(e.operand); }
+        return 1;
+    }
+    return 1;
+}
+
+// Source width of a literal expression, so the diagnostic squiggle spans the
+// whole token (e.g. `42`, `"hi"`) rather than a single character.
+fn _lit_span(e: *Expr) -> i32 {
+    if e == null { return 1; }
+    if e.kind == EX_INT { return int_to_str(e.int_val).len(); }
+    if e.kind == EX_STRING { return e.str_val.len() + 2; }      // include the quotes
+    if e.kind == EX_BOOL { if e.bool_val { return 4; } return 5; }
+    if e.kind == EX_FLOAT { if e.float_val != null { return e.float_val.len(); } return 3; }
+    if e.kind == EX_CHAR { return 3; }
+    return 1;
+}
+
+// Walk an expression; for every `Struct { field: value }` literal, flag
+// unknown field names and literal values whose type can't match the field.
+fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
+    if e == null { return; }
+    if e.kind == EX_STRUCT_LIT && e.str_val != null && e.field_names != null && e.args != null {
+        let sd: *Stmt = find_top_decl(stmts, e.str_val);
+        if sd != null && sd.kind == ST_STRUCT && sd.struct_fields != null {
+            let nf: i32 = e.field_names.len();
+            for let i: i32 = 0; i < nf; i++ {
+                if i >= e.args.len() { break; }
+                let fname: string = e.field_names.get(i);
+                let val: Expr = e.args.get(i);
+                let mut fty: *Type = null;
+                let mut found: bool = false;
+                for let j: i32 = 0; j < sd.struct_fields.len(); j++ {
+                    let fd: Field = sd.struct_fields.get(j);
+                    if fd.name != null && fd.name.eq(fname) { fty = fd.ty; found = true; break; }
+                }
+                if !found {
+                    t.err_code_range(val.line, val.column, _lit_span(&val), "unknown-struct-field",
+                        "struct `".concat(e.str_val).concat("` has no field `").concat(fname).concat("`"));
+                } else if _lit_field_mismatch(val.kind, fty) {
+                    t.err_code_range(val.line, val.column, _lit_span(&val), "struct-field-type",
+                        "field `".concat(fname).concat("` of `").concat(e.str_val)
+                            .concat("` expects `").concat(type_to_string(fty))
+                            .concat("`, got ").concat(_lit_kind_name(val.kind)));
+                }
+            }
+            // Required fields: every field must be supplied EXCEPT `?T` /
+            // `?!T` (Option-shaped), which default to `none()` when omitted.
+            let present: *HashMap<bool> = HashMap::new();
+            for let i: i32 = 0; i < nf; i++ { present.insert(e.field_names.get(i), true); }
+            for let j: i32 = 0; j < sd.struct_fields.len(); j++ {
+                let fd: Field = sd.struct_fields.get(j);
+                if fd.name == null || fd.name.eq("") { continue; }
+                if present.contains(fd.name) { continue; }
+                if fd.ty != null && (fd.ty.kind == TY_OPTION || fd.ty.kind == TY_OPT_RESULT) { continue; }
+                t.err_code_range(e.line, e.column, e.str_val.len(), "missing-struct-field",
+                    "struct `".concat(e.str_val).concat("` literal is missing field `")
+                        .concat(fd.name).concat("`"));
+            }
+            present.free();
+        }
+    }
+    if e.lhs != null { _struct_lit_check_expr(t, stmts, e.lhs); }
+    if e.rhs != null { _struct_lit_check_expr(t, stmts, e.rhs); }
+    if e.operand != null { _struct_lit_check_expr(t, stmts, e.operand); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _struct_lit_check_expr(t, stmts, &a);
+        }
+    }
+}
+
+fn _struct_lit_check_body(t: *Typer, stmts: *Vector<Stmt>, body: *Vector<Stmt>) {
+    if body == null { return; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.let_value != null { _struct_lit_check_expr(t, stmts, s.let_value); }
+        if s.expr_value != null { _struct_lit_check_expr(t, stmts, s.expr_value); }
+        if s.cond != null { _struct_lit_check_expr(t, stmts, s.cond); }
+        if s.for_step != null { _struct_lit_check_expr(t, stmts, s.for_step); }
+        if s.for_init != null && s.for_init.let_value != null {
+            _struct_lit_check_expr(t, stmts, s.for_init.let_value);
+        }
+        if s.then_body != null { _struct_lit_check_body(t, stmts, s.then_body); }
+        if s.else_body != null { _struct_lit_check_body(t, stmts, s.else_body); }
+    }
+}
+
+// Validate struct-literal fields across every fn / impl method body. Catches
+// the typo the typer misses (it tracks field NAMES but discards field TYPES),
+// e.g. `Cfg { name: 42 }` where `name: string`.
+fn analysis_struct_lit_fields(t: *Typer, stmts: *Vector<Stmt>) {
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            t.current_origin = s.origin;
+            _struct_lit_check_body(t, stmts, s.fn_body);
+        } else if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN && m.fn_body != null {
+                    let mut org: string = m.origin;
+                    if org == null || org.eq("") { org = s.origin; }
+                    t.current_origin = org;
+                    _struct_lit_check_body(t, stmts, m.fn_body);
+                }
+            }
+        }
+    }
+}
+
 fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
     // First pass: index trait definitions by name.
     let traits: *HashMap<Stmt> = HashMap::new();
@@ -1145,7 +1360,7 @@ fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
 
         if !traits.contains(s.impl_trait_name) {
             t.current_origin = s.origin;
-            t.err_code(s.line, s.column, "unknown-trait",
+            t.err_code_range(s.line, s.column, 4, "unknown-trait",
                 "trait `".concat(s.impl_trait_name).concat("` is not declared"));
             continue;
         }
@@ -1161,11 +1376,17 @@ fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
                 let key: string = sup.concat("::").concat(s.impl_target.name);
                 if !impl_set.contains(key) {
                     t.current_origin = s.origin;
-                    t.err_code(s.line, s.column, "missing-supertrait",
+                    t.err_code_range(s.line, s.column, 4, "missing-supertrait",
                         "trait `".concat(s.impl_trait_name)
                             .concat("` requires `").concat(sup)
                             .concat("` but `").concat(s.impl_target.name)
                             .concat("` doesn't implement it"));
+                    if traits.contains(sup) {
+                        let sup_def: Stmt = traits.get(sup);
+                        t.relate_last(sup_def.origin, sup_def.line, sup_def.column,
+                            sup_def.line, sup_def.column + 1,
+                            "supertrait `".concat(sup).concat("` declared here"));
+                    }
                 }
             }
         }
@@ -1191,10 +1412,13 @@ fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
             if req.name == null || req.name.eq("") { continue; }
             if !provided.contains(req.name) {
                 t.current_origin = s.origin;
-                t.err_code(s.line, s.column, "missing-trait-method",
+                t.err_code_range(s.line, s.column, 4, "missing-trait-method",
                     "impl of trait `".concat(s.impl_trait_name)
                         .concat("` for `").concat(target_name)
                         .concat("` is missing method `").concat(req.name).concat("`"));
+                t.relate_last(trait_def.origin, req.line, req.column,
+                    req.line, req.column + 1,
+                    "trait method `".concat(req.name).concat("` declared here"));
                 continue;
             }
             // Signature matching: compare arity, each param's declared type,
@@ -1202,21 +1426,25 @@ fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
             // here; trait_def methods still have literal Self, so substitute
             // before comparing.
             let got: Stmt = provided.get(req.name);
-            check_method_signature(t, s, req, got, target_name);
+            check_method_signature(t, s, req, got, target_name, trait_def.origin);
         }
     }
 }
 
-fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, target_name: string) {
+fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, target_name: string,
+                          trait_origin: string) {
     let req_arity: i32 = if_param_count(req);
     let got_arity: i32 = if_param_count(got);
     if req_arity != got_arity {
         t.current_origin = impl_stmt.origin;
-        t.err_code(got.line, got.column, "trait-method-mismatch",
+        t.err_code_range(got.name_line, got.name_col, got.name_len, "trait-method-mismatch",
             "method `".concat(req.name).concat("` has wrong arity for trait `")
                 .concat(impl_stmt.impl_trait_name).concat("`: expected ")
                 .concat(int_to_str(req_arity)).concat(" params, got ")
                 .concat(int_to_str(got_arity)));
+        t.relate_last(trait_origin, req.line, req.column, req.line, req.column + 1,
+            "trait requires `".concat(req.name).concat("` with ")
+                .concat(int_to_str(req_arity)).concat(" params"));
         return;
     }
     if req.fn_params != null && got.fn_params != null {
@@ -1227,10 +1455,12 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, targ
             rty = subst_assoc(rty, impl_stmt.assoc_decls);
             if !types_compat(rty, gp.ty) {
                 t.current_origin = impl_stmt.origin;
-                t.err_code(got.line, got.column, "trait-method-mismatch",
+                t.err_code_range(got.name_line, got.name_col, got.name_len, "trait-method-mismatch",
                     "method `".concat(req.name).concat("` param `").concat(rp.name)
                         .concat("`: expected `").concat(type_to_string(rty))
                         .concat("`, got `").concat(type_to_string(gp.ty)).concat("`"));
+                t.relate_last(trait_origin, req.line, req.column, req.line, req.column + 1,
+                    "trait signature for `".concat(req.name).concat("` declared here"));
                 return;
             }
         }
@@ -1239,10 +1469,12 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, targ
     rret = subst_assoc(rret, impl_stmt.assoc_decls);
     if !types_compat(rret, got.fn_ret_ty) {
         t.current_origin = impl_stmt.origin;
-        t.err_code(got.line, got.column, "trait-method-mismatch",
+        t.err_code_range(got.name_line, got.name_col, got.name_len, "trait-method-mismatch",
             "method `".concat(req.name).concat("` return: expected `")
                 .concat(type_to_string(rret)).concat("`, got `")
                 .concat(type_to_string(got.fn_ret_ty)).concat("`"));
+        t.relate_last(trait_origin, req.line, req.column, req.line, req.column + 1,
+            "trait signature for `".concat(req.name).concat("` declared here"));
     }
 }
 
@@ -2541,7 +2773,92 @@ fn _emit_let_hint(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt,
 
 // Recurse a fn body collecting inferred `let` hints. Descends if/else/while/
 // for bodies (all stored in then_body/else_body) and a for-loop's own init.
+// Column at the end of source line `line0` (0-indexed), minus a trailing
+// CR. Anchors lifecycle hints at end-of-line.
+fn _eol_col(lines: *Vector<string>, line0: i32) -> i32 {
+    if lines == null || line0 < 0 || line0 >= lines.len() { return 0; }
+    let ln: string = lines.get(line0);
+    let mut n: i32 = ln.len();
+    if n > 0 && ln.at(n - 1).to_int() == 13 { n = n - 1; }
+    return n;
+}
+
+// Does this single statement's own expressions (not child blocks) call
+// `var.method()` / `fn_name(arg_name)`? Used by the free-line search to pin
+// the exact freeing statement.
+fn _stmt_direct_calls_method(s: *Stmt, var: string, method: string) -> bool {
+    if s == null { return false; }
+    if s.expr_value != null && expr_calls_method(s.expr_value, var, method) { return true; }
+    if s.let_value  != null && expr_calls_method(s.let_value,  var, method) { return true; }
+    if s.cond       != null && expr_calls_method(s.cond,       var, method) { return true; }
+    if s.for_step   != null && expr_calls_method(s.for_step,   var, method) { return true; }
+    return false;
+}
+fn _stmt_direct_calls_fn(s: *Stmt, fn_name: string, arg_name: string) -> bool {
+    if s == null { return false; }
+    if s.expr_value != null && expr_calls_fn_with(s.expr_value, fn_name, arg_name) { return true; }
+    if s.let_value  != null && expr_calls_fn_with(s.let_value,  fn_name, arg_name) { return true; }
+    if s.cond       != null && expr_calls_fn_with(s.cond,       fn_name, arg_name) { return true; }
+    if s.for_step   != null && expr_calls_fn_with(s.for_step,   fn_name, arg_name) { return true; }
+    return false;
+}
+
+// 1-indexed line of the statement that frees `name` (alloc `kind`), or -1.
+// Recurses children first for the most precise line; counts only an actual
+// cleanup call — not a return / ownership move (escape covers those).
+fn _free_line_in_body(name: string, kind: i32, body: *Vector<Stmt>) -> i32 {
+    if body == null { return -1; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.then_body != null {
+            let r: i32 = _free_line_in_body(name, kind, s.then_body);
+            if r > 0 { return r; }
+        }
+        if s.else_body != null {
+            let r: i32 = _free_line_in_body(name, kind, s.else_body);
+            if r > 0 { return r; }
+        }
+        let mut frees: bool = false;
+        if kind == 1 && _stmt_direct_calls_method(&s, name, "free") { frees = true; }
+        if kind == 2 && _stmt_direct_calls_fn(&s, "free", name) { frees = true; }
+        if kind == 3 && _stmt_direct_calls_fn(&s, "__glide_palloc_free", name) { frees = true; }
+        if frees { return s.line; }
+    }
+    return -1;
+}
+
+// Ownership-lifecycle inlay at end of an owned alloc's line: where it gets
+// freed (`freed @ L12`), that it's handed off (`moves out`), or that it
+// leaks (`never freed`). Mirrors analysis_arena_not_freed's precedence.
+fn _emit_lifecycle_hint(root: *Vector<Stmt>, s: *Stmt, lines: *Vector<string>,
+                        line_start: i32, line_end: i32, hints: *JsonValue) {
+    if s.name == null || s.name.eq("") { return; }
+    let kind: i32 = _alloc_kind(s.let_value);
+    if kind == 0 { return; }
+    let line0: i32 = s.name_line - 1;
+    if line0 < line_start || line0 > line_end { return; }
+    let mut label: string = "";
+    let free_line: i32 = _free_line_in_body(s.name, kind, root);
+    if free_line > 0 {
+        label = "freed @ L".concat(int_to_str(free_line));
+    } else if alloc_escapes_in_body(s.name, kind, root) {
+        label = "moves out";
+    } else {
+        label = "never freed";
+    }
+    let h: *JsonValue = json_object();
+    let posj: *JsonValue = json_object();
+    json_obj_set(posj, "line", json_int(line0));
+    json_obj_set(posj, "character", json_int(_eol_col(lines, line0)));
+    json_obj_set(h, "position", posj);
+    json_obj_set(h, "label", json_string(label));
+    json_obj_set(h, "paddingLeft", json_bool(true));
+    json_obj_set(h, "paddingRight", json_bool(false));
+    json_arr_push(hints, h);
+}
+
 fn _collect_inlay_lets(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>,
+                       root: *Vector<Stmt>, lines: *Vector<string>,
                        line_start: i32, line_end: i32, hints: *JsonValue) {
     if body == null { return; }
     for let i: i32 = 0; i < body.len(); i++ {
@@ -2550,17 +2867,21 @@ fn _collect_inlay_lets(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>,
             let sp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *sp = s;
             _emit_let_hint(stmts, host, sp, line_start, line_end, hints);
+            _emit_lifecycle_hint(root, sp, lines, line_start, line_end, hints);
         }
         if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET {
             _emit_let_hint(stmts, host, s.for_init, line_start, line_end, hints);
+            _emit_lifecycle_hint(root, s.for_init, lines, line_start, line_end, hints);
         }
-        if s.then_body != null { _collect_inlay_lets(stmts, host, s.then_body, line_start, line_end, hints); }
-        if s.else_body != null { _collect_inlay_lets(stmts, host, s.else_body, line_start, line_end, hints); }
+        if s.then_body != null { _collect_inlay_lets(stmts, host, s.then_body, root, lines, line_start, line_end, hints); }
+        if s.else_body != null { _collect_inlay_lets(stmts, host, s.else_body, root, lines, line_start, line_end, hints); }
     }
 }
 
-// textDocument/inlayHint — type hints (`: T`) on annotation-free `let`s
-// within the client's requested range.
+// textDocument/inlayHint — for `let`s in the requested range: an inferred
+// `: T` type hint (annotation-free bindings) plus, for owned allocations
+// (Arena::new / malloc / palloc), an end-of-line ownership-lifecycle hint
+// (`freed @ Ln` / `moves out` / `never freed`).
 fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -2582,19 +2903,22 @@ fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
     let doc: LspDoc = state.docs.get(uri);
     if doc.stmts == null { lsp_send_response(id, hints); return; }
 
+    // Source lines, for anchoring the end-of-line lifecycle hints.
+    let lines: *Vector<string> = doc.text.split("\n");
+
     for let i: i32 = 0; i < doc.stmts.len(); i++ {
         let s: Stmt = doc.stmts.get(i);
         if s.kind == ST_FN && s.fn_body != null {
             let host: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *host = s;
-            _collect_inlay_lets(doc.stmts, host, s.fn_body, line_start, line_end, hints);
+            _collect_inlay_lets(doc.stmts, host, s.fn_body, s.fn_body, lines, line_start, line_end, hints);
         } else if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.kind == ST_FN && m.fn_body != null {
                     let mh: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
                     *mh = m;
-                    _collect_inlay_lets(doc.stmts, mh, m.fn_body, line_start, line_end, hints);
+                    _collect_inlay_lets(doc.stmts, mh, m.fn_body, m.fn_body, lines, line_start, line_end, hints);
                 }
             }
         }
@@ -2740,7 +3064,18 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
     if decl != null && content.eq("") {
         if decl.kind == ST_FN { content = "```glide\n".concat(fn_signature(decl)).concat("\n```"); }
         else if decl.kind == ST_STRUCT {
-            content = "```glide\nstruct ".concat(decl.name).concat("\n```");
+            let mut sbody: string = "```glide\nstruct ".concat(decl.name);
+            if decl.struct_fields != null && decl.struct_fields.len() > 0 {
+                sbody = sbody.concat(" {\n");
+                for let fi: i32 = 0; fi < decl.struct_fields.len(); fi++ {
+                    let f: Field = decl.struct_fields.get(fi);
+                    sbody = sbody.concat("    ");
+                    if f.is_pub { sbody = sbody.concat("pub "); }
+                    sbody = sbody.concat(f.name).concat(": ").concat(type_to_string_pretty(f.ty)).concat(",\n");
+                }
+                sbody = sbody.concat("}");
+            }
+            content = sbody.concat("\n```");
         }
         else if decl.kind == ST_ENUM {
             content = "```glide\nenum ".concat(decl.name).concat("\n```");
@@ -2991,6 +3326,23 @@ fn handle_document_symbol(req: *JsonValue, state: *LspState) {
             json_obj_set(sym, "kind", json_int(symbol_kind_for(&s)));
             json_obj_set(sym, "range", range_for_decl_name(&s));
             json_obj_set(sym, "selectionRange", range_for_decl_name(&s));
+            // Struct fields as nested children so the outline shows the
+            // shape. Field nodes have no source position of their own, so
+            // they fall back to the struct's name range for navigation.
+            if s.kind == ST_STRUCT && s.struct_fields != null {
+                let kids: *JsonValue = json_array();
+                for let j: i32 = 0; j < s.struct_fields.len(); j++ {
+                    let f: Field = s.struct_fields.get(j);
+                    let kid: *JsonValue = json_object();
+                    json_obj_set(kid, "name", json_string(f.name));
+                    json_obj_set(kid, "detail", json_string(type_to_string_pretty(f.ty)));
+                    json_obj_set(kid, "kind", json_int(8));   // SymbolKind.Field
+                    json_obj_set(kid, "range", range_for_decl_name(&s));
+                    json_obj_set(kid, "selectionRange", range_for_decl_name(&s));
+                    json_arr_push(kids, kid);
+                }
+                json_obj_set(sym, "children", kids);
+            }
             json_arr_push(arr, sym);
         }
     }
@@ -5453,6 +5805,72 @@ fn handle_manifest_completion(id: *JsonValue, doc: LspDoc, line0: i32, col0: i32
     lsp_send_response(id, items);
 }
 
+// If the cursor sits at a field-NAME slot inside a `StructName { ... }`
+// literal, return the struct's name and fill `present` with the field names
+// already written (so the caller can offer only the remaining ones).
+// Returns "" when not in such a position: value slot (`x: |`), inside a
+// call/index, a `;` statement boundary, or a `{` not preceded by an ident
+// (a block body — `fn f() {`, `if c {`, `=> {`). Lexer-driven, so braces in
+// strings/comments don't fool it.
+fn _struct_lit_ctx(text: string, line0: i32, col0: i32, present: *HashMap<bool>) -> string {
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF { break; }
+        let tline: i32 = tok.line - 1;
+        let tcol: i32 = tok.column - 1;
+        if tline > line0 { break; }
+        if tline == line0 && tcol >= col0 { break; }
+        toks.push(tok);
+    }
+    let n: i32 = toks.len();
+    if n == 0 { return ""; }
+    let mut depth: i32 = 0;
+    let mut value_pos: bool = false;
+    let mut boundary: bool = false;
+    let mut open_idx: i32 = -1;
+    for let i: i32 = n - 1; i >= 0; i = i - 1 {
+        let t: Token = toks.get(i);
+        if t.kind != TOK_OP { continue; }
+        if t.lexeme.eq(")") || t.lexeme.eq("]") || t.lexeme.eq("}") { depth = depth + 1; continue; }
+        if t.lexeme.eq("(") || t.lexeme.eq("[") {
+            if depth > 0 { depth = depth - 1; continue; }
+            return "";   // immediate enclosure is a call / index, not a literal
+        }
+        if t.lexeme.eq("{") {
+            if depth > 0 { depth = depth - 1; continue; }
+            open_idx = i;
+            break;
+        }
+        if depth == 0 {
+            if t.lexeme.eq(";") { return ""; }
+            if t.lexeme.eq(",") { boundary = true; }
+            if t.lexeme.eq(":") { if !boundary { value_pos = true; } }
+        }
+    }
+    if open_idx < 1 { return ""; }
+    if value_pos { return ""; }   // after `field:` — a value goes here, not a name
+    let name_tok: Token = toks.get(open_idx - 1);
+    if name_tok.kind != TOK_IDENT { return ""; }   // block body, not a struct literal
+    // Harvest already-written field names: an IDENT immediately followed by
+    // `:` at the literal's own brace depth is a bound field.
+    let mut d2: i32 = 0;
+    for let k: i32 = open_idx + 1; k < n; k = k + 1 {
+        let tk: Token = toks.get(k);
+        if tk.kind == TOK_OP {
+            if tk.lexeme.eq("{") || tk.lexeme.eq("(") || tk.lexeme.eq("[") { d2 = d2 + 1; continue; }
+            if tk.lexeme.eq("}") || tk.lexeme.eq(")") || tk.lexeme.eq("]") { d2 = d2 - 1; continue; }
+        }
+        if d2 != 0 { continue; }
+        if tk.kind == TOK_IDENT && k + 1 < n {
+            let nx: Token = toks.get(k + 1);
+            if nx.kind == TOK_OP && nx.lexeme.eq(":") { present.insert(tk.lexeme, true); }
+        }
+    }
+    return name_tok.lexeme;
+}
+
 fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -5494,6 +5912,24 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     }
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
+
+    // Struct-literal field completion: cursor at a field-name slot inside
+    // `StructName { ... }`. Offer the struct's not-yet-written fields. Gated
+    // on the name resolving to a real struct so a block body (`if c { ` etc.)
+    // never gets hijacked — there we fall through to ordinary completion.
+    let slit_present: *HashMap<bool> = HashMap::new();
+    let slit_name: string = _struct_lit_ctx(doc.text, line0, col0, slit_present);
+    if !slit_name.eq("") {
+        let slit_sd: *Stmt = find_top_decl(doc.stmts, slit_name);
+        if slit_sd != null && slit_sd.kind == ST_STRUCT {
+            let pk: *Vector<string> = slit_present.keys();
+            for let i: i32 = 0; i < pk.len(); i++ { seen.insert(pk.get(i), true); }
+            list_fields_for_type(doc.stmts, slit_name, items, seen);
+            seen.free();
+            lsp_send_response(id, items);
+            return;
+        }
+    }
 
     // Type-annotation position (`: T`, `-> T`, `<T>`): seed the list with the
     // primitive type names + the enclosing fn/impl type params up front, so
@@ -7066,7 +7502,7 @@ fn check_addr_temp_body(t: *Typer, body: *Vector<Stmt>) {
             if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT)
                && e.operand != null
                && (e.operand.kind == EX_STRUCT_LIT || e.operand.kind == EX_NEW) {
-                t.err_code(s.line, s.column, "addr-of-temporary",
+                t.err_code_range(e.line, e.column, _expr_span(e), "addr-of-temporary",
                     "cannot return address of a temporary value (would dangle); use `new T { ... }` to heap-allocate or return by value");
             }
         }
@@ -7681,8 +8117,29 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
         if matched { consumed.insert(int_to_str(j), true); }
     }
 
-    // Phase 2: rebuild diagnostics list without consumed entries.
+    // Phase 2: rebuild diagnostics list without consumed entries. The
+    // compaction shifts indices, so remap relatedInformation (keyed by
+    // diagnostic index) in lockstep and drop entries whose diagnostic was
+    // consumed.
     if consumed.len() > 0 {
+        if t.related != null && t.related.len() > 0 {
+            let remap: *Vector<i32> = Vector::new();
+            let mut newidx: i32 = 0;
+            for let i: i32 = 0; i < t.diagnostics.len(); i++ {
+                if consumed.contains(int_to_str(i)) { remap.push(-1); }
+                else { remap.push(newidx); newidx = newidx + 1; }
+            }
+            let kept_rel: *Vector<DiagRelated> = Vector::new();
+            for let r_i: i32 = 0; r_i < t.related.len(); r_i++ {
+                let mut r: DiagRelated = t.related.get(r_i);
+                if r.diag_index < 0 || r.diag_index >= remap.len() { continue; }
+                let ni: i32 = remap.get(r.diag_index);
+                if ni < 0 { continue; }
+                r.diag_index = ni;
+                kept_rel.push(r);
+            }
+            t.related = kept_rel;
+        }
         let kept: *Vector<DiagEntry> = Vector::new();
         for let i: i32 = 0; i < t.diagnostics.len(); i++ {
             let key: string = int_to_str(i);

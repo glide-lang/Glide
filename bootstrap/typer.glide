@@ -512,6 +512,20 @@ pub struct DiagEntry {
     pub fix_replacement: string,
 }
 
+// A secondary "this is why" location attached to a diagnostic, surfaced as
+// LSP relatedInformation. Kept in a side-vector keyed by the diagnostic's
+// index (rather than embedded in DiagEntry) so the many DiagEntry literals
+// don't all need new fields.
+pub struct DiagRelated {
+    pub diag_index: i32,     // index into Typer.diagnostics this explains
+    pub origin: string,      // source file of the related location
+    pub line: i32,
+    pub col: i32,
+    pub end_line: i32,
+    pub end_col: i32,
+    pub message: string,     // e.g. "trait method `foo` declared here"
+}
+
 pub struct Typer {
     pub fns: *HashMap<FnSig>,
     pub structs: *HashMap<bool>,        // just registry of names for now
@@ -591,6 +605,8 @@ pub struct Typer {
     pub enums: *HashMap<string>,
     pub error_count: i32,
     pub diagnostics: *Vector<DiagEntry>,
+    // Related "why" locations, keyed by diagnostic index. See DiagRelated.
+    pub related: *Vector<DiagRelated>,
     // Proc-macro authors can attach `@suggest_for_fnptr(RetType, "msg")`
     // to their impl fn so any fn-ptr-arg mismatch whose expected return
     // type matches `RetType` gets the hint appended. Lets `@handler` say
@@ -789,6 +805,8 @@ impl Typer {
         t.consumed_locals = consumed;
         t.borrows = bw;
         t.diagnostics = dg;
+        let rel: *Vector<DiagRelated> = Vector::new();
+        t.related = rel;
         t.current_ret = null;
         t.current_type_params = null;
         t.current_origin = "";
@@ -879,6 +897,22 @@ impl Typer {
 
     fn push_diag(self: *Typer, line: i32, col: i32, severity: i32, code: string, msg: string) {
         self.push_diag_tag(line, col, severity, code, msg, 0);
+    }
+
+    // Attach a "this is why" location to the most recently pushed diagnostic.
+    // No-op when no diagnostic has been emitted yet. Surfaced by the LSP as
+    // relatedInformation; the CLI ignores it.
+    fn relate_last(self: *Typer, origin: string, line: i32, col: i32,
+                   end_line: i32, end_col: i32, message: string) {
+        if self.diagnostics.len() == 0 { return; }
+        let mut o: string = origin;
+        if o == null { o = ""; }
+        let r: DiagRelated = DiagRelated {
+            diag_index: self.diagnostics.len() - 1,
+            origin: o, line: line, col: col,
+            end_line: end_line, end_col: end_col, message: message,
+        };
+        self.related.push(r);
     }
 
     fn warn_unused(self: *Typer, line: i32, col: i32, code: string, msg: string) {
