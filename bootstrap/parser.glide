@@ -2337,6 +2337,32 @@ fn parse_prefix(p: *Parser) -> *Expr {
 fn parse_int_lexeme(s: string) -> i64 {
     let n: i32 = s.len();
     let mut v: i64 = 0;
+    // Hex (0x/0X) and binary (0b/0B) literals. The lexer captures the whole
+    // lexeme verbatim; decode its value here so codegen emits the right
+    // decimal number.
+    if n >= 2 && s.at(0).to_int() == 48 {
+        let p: i32 = s.at(1).to_int();
+        if p == 120 || p == 88 {          // 0x / 0X
+            for let i: i32 = 2; i < n; i++ {
+                let ci: i32 = s.at(i).to_int();
+                if ci == 95 { continue; }
+                let mut d: i32 = 0;
+                if ci >= 48 && ci <= 57 { d = ci - 48; }
+                else if ci >= 97 && ci <= 102 { d = (ci - 97) + 10; }
+                else if ci >= 65 && ci <= 70 { d = (ci - 65) + 10; }
+                v = v * 16 + (d as i64);
+            }
+            return v;
+        }
+        if p == 98 || p == 66 {           // 0b / 0B
+            for let i: i32 = 2; i < n; i++ {
+                let ci: i32 = s.at(i).to_int();
+                if ci == 95 { continue; }
+                v = v * 2 + ((ci - 48) as i64);
+            }
+            return v;
+        }
+    }
     for let i: i32 = 0; i < n; i++ {
         let c: char = s.at(i);
         let ci: i32 = c.to_int();

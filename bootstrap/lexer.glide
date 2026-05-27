@@ -218,6 +218,28 @@ impl Lexer {
         // number
         if c.is_digit() {
             let mut is_float: bool = false;
+            // Hex (0x/0X) or binary (0b/0B) integer literal. Captured verbatim
+            // and emitted straight into C, which already understands both —
+            // codegen needs no special handling. Essential for low-level code
+            // (port addresses, bit masks, page-table entries).
+            if c.to_int() == 48 {
+                let nx: i32 = self.peek_at(1).to_int();
+                if nx == 120 || nx == 88 || nx == 98 || nx == 66 {
+                    self.advance(); // '0'
+                    self.advance(); // 'x' / 'X' / 'b' / 'B'
+                    while self.pos < self.src_len {
+                        let hc: char = self.peek();
+                        let hv: i32 = hc.to_int();
+                        let is_hex: bool = hc.is_digit()
+                            || (hv >= 97 && hv <= 102)
+                            || (hv >= 65 && hv <= 70)
+                            || hv == 95;
+                        if is_hex { self.advance(); } else { break; }
+                    }
+                    let hlex: string = self.src.substring(start_pos, self.pos);
+                    return Token { kind: TOK_INT, lexeme: hlex, line: start_line, column: start_col, doc: doc };
+                }
+            }
             while self.pos < self.src_len {
                 let cc: char = self.peek();
                 if cc.is_digit() || cc.to_int() == 95 {
