@@ -8912,6 +8912,13 @@ fn expr_reassigns(e: *Expr, name: string) -> bool {
        && e.lhs.str_val.eq(name) {
         return true;
     }
+    // `&name` / `&mut name`: address-of yields a mutable `*T` that a callee
+    // can write through, so the `mut` is justified — not a redundant one.
+    if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT)
+       && e.operand != null && e.operand.kind == EX_IDENT
+       && e.operand.str_val.eq(name) {
+        return true;
+    }
     if e.lhs != null && expr_reassigns(e.lhs, name) { return true; }
     if e.rhs != null && expr_reassigns(e.rhs, name) { return true; }
     if e.operand != null && expr_reassigns(e.operand, name) { return true; }

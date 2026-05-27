@@ -192,6 +192,11 @@ case_diagnostics("null-flow: positive `if a.ok && b.ok` guards both in then-body
     '    return 0; }',
     expect_codes_absent=["unchecked-result"])
 
+case_diagnostics("unnecessary-mut: `&mut x` passed to a fn justifies the mut",
+    'fn bump(p: *i32) { *p = *p + 1; }\n'
+    'fn main() -> i32 { let mut x: i32 = 5; bump(&mut x); return x; }',
+    expect_codes_absent=["unnecessary-mut"])
+
 case_diagnostics("use-after-free: free in a returning branch is not flagged",
     'fn cond() -> bool { return true; }\n'
     'fn f() -> i32 {\n'
