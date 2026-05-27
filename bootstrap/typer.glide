@@ -504,6 +504,11 @@ pub struct FnSig {
     // inference substitute `T` in the return type using the receiver's
     // concrete args (`*Vector<int>.get()` -> int, not T).
     pub owner_type_params: *Vector<string>,
+    // Declaration site of the fn, so an unsatisfied-bound error can point
+    // "`T: Trait` bound declared here" via relatedInformation.
+    pub decl_origin: string,
+    pub decl_line: i32,
+    pub decl_col: i32,
 }
 
 // ---- typer state ---------------------------------------------------------
@@ -516,6 +521,10 @@ pub struct BorrowEvent {
     // stmts after each step; an event whose binder no longer appears is
     // dropped so subsequent mutation of `source` is allowed.
     pub binder: string,
+    // Where the borrow was taken, so an overlap-borrow error can point
+    // "`x` was first borrowed here" via relatedInformation.
+    pub line: i32,
+    pub col: i32,
 }
 
 // Severity levels match LSP's DiagnosticSeverity:
@@ -1165,6 +1174,9 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 type_params: s.type_params,
                 type_param_bounds: s.type_param_bounds,
                 owner_type_params: no_owner,
+                decl_origin: s.origin,
+                decl_line: s.name_line,
+                decl_col: s.name_col,
             };
             t.fns.insert(s.name, sig);
         }
@@ -1239,6 +1251,9 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                             type_params: m.type_params,
                             type_param_bounds: m.type_param_bounds,
                             owner_type_params: s.type_params,
+                            decl_origin: s.origin,
+                            decl_line: m.name_line,
+                            decl_col: m.name_col,
                         };
                         t.fns.insert(fname, sig);
                         // Record under the BASE type name (not the
@@ -1618,6 +1633,14 @@ fn check_generic_bounds(t: *Typer, sig: *FnSig, args: *Vector<Expr>, line: i32, 
                 t.err_code(line, col, "unsatisfied-bound",
                     "type `".concat(cname).concat("` does not implement `").concat(bound)
                     .concat("` (required by `").concat(tp_name).concat("` of `").concat(sig.name).concat("`)"));
+                if sig.decl_origin != null && !sig.decl_origin.eq("") && sig.decl_line > 0 {
+                    let mut nlen: i32 = 1;
+                    if sig.name != null { nlen = sig.name.len(); }
+                    t.relate_last(sig.decl_origin, sig.decl_line, sig.decl_col,
+                        sig.decl_line, sig.decl_col + nlen,
+                        "`".concat(tp_name).concat(": ").concat(bound)
+                        .concat("` bound is declared here"));
+                }
             }
         }
     }
@@ -1755,6 +1778,19 @@ fn count_borrows(t: *Typer, name: string, want_mut: bool) -> i32 {
     return c;
 }
 
+// Point the "why" at the borrow already in flight. `mut_only` restricts to
+// the prior mutable borrow (the conflict for a new shared borrow); otherwise
+// any prior borrow of `source` (the conflict for a new mutable borrow).
+fn _relate_first_borrow(t: *Typer, source: string, mut_only: bool) {
+    for let i: i32 = 0; i < t.borrows.len(); i++ {
+        let ev: BorrowEvent = t.borrows.get(i);
+        if !ev.source.eq(source) { continue; }
+        if mut_only && !ev.is_mut { continue; }
+        t.relate_last(t.current_origin, ev.line, ev.col, ev.line, ev.col + source.len(),
+            "`".concat(source).concat("` was first borrowed here"));
+        return;
+    }
+}
 fn record_borrow(t: *Typer, source: string, is_mut: bool, binder: string,
                   line: i32, col: i32) {
     let n_shared: i32 = count_borrows(t, source, false);
@@ -1764,15 +1800,18 @@ fn record_borrow(t: *Typer, source: string, is_mut: bool, binder: string,
             t.err_code(line, col, "overlap-borrow",
                 "cannot borrow `".concat(source)
                 .concat("` as mutable: already borrowed (across statements)"));
+            _relate_first_borrow(t, source, false);
         }
     } else {
         if n_mut > 0 {
             t.err_code(line, col, "overlap-borrow",
                 "cannot borrow `".concat(source)
                 .concat("` as immutable: already mutably borrowed"));
+            _relate_first_borrow(t, source, true);
         }
     }
-    let ev: BorrowEvent = BorrowEvent { source: source, is_mut: is_mut, binder: binder };
+    let ev: BorrowEvent = BorrowEvent { source: source, is_mut: is_mut, binder: binder,
+                                        line: line, col: col };
     t.borrows.push(ev);
 }
 

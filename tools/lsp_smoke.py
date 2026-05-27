@@ -1313,6 +1313,47 @@ def _warn_width_test():
 
 _warn_width_test()
 
+# ---- relatedInformation: bounds + borrows ----
+
+def _diags_for(label, body):
+    path, uri = write_tmp(label + ".glide", body)
+    msgs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}},
+        {"jsonrpc": "2.0", "method": "exit", "params": None},
+    ]
+    for r in run_session(msgs):
+        if r.get("method") == "textDocument/publishDiagnostics":
+            return r["params"]["diagnostics"]
+    return []
+
+def _related_info_test():
+    print("\n[relatedInformation: bounds + borrows]")
+    bound = ('trait Render { fn draw(self: *Self) -> i32; }\n'
+             'fn show<T: Render>(x: T) -> i32 { return 0; }\n'
+             'struct Foo { x: i32 }\n'
+             'fn main() -> i32 { let f: Foo = Foo { x: 1 }; return show(f); }')
+    db = next((d for d in _diags_for("rel_bound", bound) if d.get("code") == "unsatisfied-bound"), None)
+    rib = (db or {}).get("relatedInformation") or []
+    check("unsatisfied-bound points at the bound declaration",
+          len(rib) == 1 and "bound is declared here" in rib[0].get("message", ""), f"got {rib}")
+
+    borrow = ('fn use2(p: *i32, q: *i32) -> i32 { return *p + *q; }\n'
+              'fn main() -> i32 {\n'
+              '    let mut x: i32 = 5;\n'
+              '    let a: *i32 = &mut x;\n'
+              '    let b: *i32 = &mut x;\n'
+              '    return use2(a, b);\n'
+              '}')
+    dr = next((d for d in _diags_for("rel_borrow", borrow) if d.get("code") == "overlap-borrow"), None)
+    rir = (dr or {}).get("relatedInformation") or []
+    ok_line = len(rir) == 1 and rir[0]["location"]["range"]["start"]["line"] == 3
+    check("overlap-borrow points at the first borrow (line 4)",
+          ok_line and "first borrowed here" in rir[0].get("message", ""), f"got {rir}")
+
+_related_info_test()
+
 # ---- code action (quick fix) ----
 
 def _code_action_test():
