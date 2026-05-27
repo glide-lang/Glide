@@ -1,0 +1,775 @@
+// Module loading + cross-file visibility, extracted from main.glide so
+// sibling modules (openapi, lsp) import this API honestly instead of
+// relying on the flat-merge build. loader -> manifest is one-directional;
+// manifest depends on nothing here.
+import stdlib::hashmap::*;
+import stdlib::fs::*;
+import ast;
+import lexer;
+import parser;
+import lower;
+import typer;
+import manifest;
+
+extern fn __glide_list_dir(path: string, suffix: string) -> string;
+extern fn __glide_exe_dir() -> string;
+
+// Load a file by path (skipping if already loaded) and append its stmts,
+// recursively loading any `import "foo.glide"` it has. Parser diagnostics
+// (missing `;`, expected ident, etc) are appended to `pdiags` with their
+// origin tagged so the caller can surface them with proper file context.
+pub fn load_into(stmts: *Vector<Stmt>, path: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>) {
+    if loaded.contains(path) { return; }
+    loaded.insert(path, true);
+    let src: string = read_file(path);
+    if src.eq("") { return; }
+    load_into_str(stmts, src, path, loaded, pdiags);
+}
+
+pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>) {
+    let lex: *Lexer = Lexer::new(src);
+    let p: *Parser = Parser::new(lex);
+    let parsed: *Vector<Stmt> = parse_program(p);
+    if pdiags != null && p.diags != null {
+        for let k: i32 = 0; k < p.diags.len(); k++ {
+            let d: ParseDiag = p.diags.get(k);
+            d.origin = origin;
+            pdiags.push(d);
+        }
+    }
+    // Pre-pass: scan the parsed source for fully-qualified path refs
+    // (`a::b::c::Item(...)`). Each one names a module; if the corresponding
+    // file exists and isn't loaded yet we pull it in implicitly so that
+    // unimported full-path calls still resolve. Per-file expr walk keeps
+    // this O(N) over Stmts.
+    let auto_loads: *Vector<string> = Vector::new();
+    let auto_seen: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        collect_path_files_in_stmt(&s, auto_loads, auto_seen);
+    }
+    let dir: string = parent_dir(origin);
+    for let i: i32 = 0; i < auto_loads.len(); i++ {
+        let cand: string = auto_loads.get(i);
+        let resolved: string = resolve_import(dir, cand);
+        if __glide_file_exists(resolved) {
+            load_into(stmts, resolved, loaded, pdiags);
+        }
+    }
+
+    for let i: i32 = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        if s.kind == ST_IMPORT {
+            // Decide whether the trailing path segment names a file (module
+            // import) or an item from the parent file. `imported_items` /
+            // `import_wildcard` already pin the file to the full path, so
+            // no probe is needed for those forms. Bare path `import a::b;`
+            // first probes `a/b.glide` - if that exists we treat it as a
+            // module import (gives the user a `b::Foo` namespace handle);
+            // otherwise we drop the trailing segment and import `a.glide`
+            // with `b` as the imported item.
+            let unq: string = strip_quotes(s.import_path);
+            let mut resolved: string = resolve_import(dir, unq);
+            let mut multi_seg: bool = false;
+            for let k: i32 = 0; k < unq.len() - 1; k++ {
+                let cc: i32 = unq.at(k).to_int();
+                if cc == 47 || cc == 92 { multi_seg = true; break; }
+            }
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && !__glide_file_exists(resolved) {
+                let parent_path: string = drop_last_path_segment(unq);
+                if !parent_path.eq("") {
+                    let resolved_parent: string = resolve_import(dir, parent_path);
+                    if __glide_file_exists(resolved_parent) {
+                        let last: string = last_path_segment(unq);
+                        let items: *Vector<string> = Vector::new();
+                        items.push(last);
+                        s.imported_items = items;
+                        resolved = resolved_parent;
+                    }
+                }
+            }
+            // Pure module import: bare path resolved directly to a file
+            // and no items / wildcard requested.
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && __glide_file_exists(resolved) {
+                s.import_is_module = true;
+                s.import_short = last_path_segment(unq);
+            }
+            load_into(stmts, resolved, loaded, pdiags);
+            s.import_path = resolved;
+            s.origin = origin;
+            stmts.push(s);
+        } else {
+            s.origin = origin;
+            stmts.push(s);
+        }
+    }
+}
+
+// LSP variant: parse `src` (the editor's live buffer for `origin`) and
+// merge it into `stmts`, reusing `cache` for transitive imports so that
+// stdlib + builtins aren't relexed/reparsed on every keystroke. The
+// caller's own file is never cached (its content changes per change).
+pub fn load_into_str_with_cache(stmts: *Vector<Stmt>, src: string, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    let lex: *Lexer = Lexer::new(src);
+    let p: *Parser = Parser::new(lex);
+    let parsed: *Vector<Stmt> = parse_program(p);
+    if pdiags != null && p.diags != null {
+        for let k: i32 = 0; k < p.diags.len(); k++ {
+            let d: ParseDiag = p.diags.get(k);
+            d.origin = origin;
+            pdiags.push(d);
+        }
+    }
+    p.free();
+    lex.free();
+
+    cached_resolve_and_push(stmts, parsed, origin, loaded, pdiags, cache);
+
+    parsed.free();
+}
+
+// LSP variant: read `path` from disk and merge into `stmts`. On cache
+// hit reuse the prior parse_program output; on miss parse once and add
+// to the cache. The cache becomes the owner — never free a cached vec.
+//
+// Cache populates run with the per-keystroke arena temporarily disabled
+// so cached Vectors / AST nodes go to libc heap and survive across
+// arena resets. Without this, the next keystroke's arena.reset would
+// dangle every cached pointer.
+pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    if loaded.contains(path) { return; }
+    loaded.insert(path, true);
+
+    let mut parsed: *Vector<Stmt> = null;
+    let mut from_cache: bool = false;
+    if cache != null && cache.contains(path) {
+        parsed = cache.get(path);
+        from_cache = true;
+    } else {
+        let src: string = read_file(path);
+        if src.eq("") { return; }
+        let saved_arena: *void = __glide_palloc_get();
+        __glide_palloc_set(null);
+        let lex: *Lexer = Lexer::new(src);
+        let p: *Parser = Parser::new(lex);
+        let parsed_raw: *Vector<Stmt> = parse_program(p);
+        // The cache key has to outlive the active arena — `path` came in
+        // from a caller-allocated concat() that's bump-allocated and will
+        // dangle on the next keystroke. Snapshot it with arena disabled
+        // so the heap-side concat lands in libc malloc.
+        let heap_key: string = path.concat("");
+        if pdiags != null && p.diags != null {
+            for let k: i32 = 0; k < p.diags.len(); k++ {
+                let d: ParseDiag = p.diags.get(k);
+                d.origin = heap_key;
+                pdiags.push(d);
+            }
+        }
+        p.free();
+        lex.free();
+        for let i: i32 = 0; i < parsed_raw.len(); i++ {
+            let s: Stmt = parsed_raw.get(i);
+            s.origin = heap_key;
+            parsed_raw.set(i, s);
+        }
+        // Lower at populate so the cached stmts come back in
+        // typer-ready shape (FOR_IN expanded etc.). The user-pass
+        // lower then skips them and only walks the user buffer's
+        // stmts, which is the dominant per-keystroke saving.
+        parsed = lower_program(parsed_raw);
+        __glide_palloc_set(saved_arena);
+        if cache != null {
+            cache.insert(heap_key, parsed);
+            from_cache = true;
+        }
+    }
+
+    cached_resolve_and_push(stmts, parsed, path, loaded, pdiags, cache);
+
+    if !from_cache { parsed.free(); }
+}
+
+// Shared body of the cached load entry points: walk `parsed`, auto-load
+// referenced path files, resolve imports recursively, push each Stmt
+// (origin/import_path mutated on a local copy so the cached vec stays
+// invariant) into the outer `stmts`.
+pub fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    let auto_loads: *Vector<string> = Vector::new();
+    let auto_seen: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        collect_path_files_in_stmt(&s, auto_loads, auto_seen);
+    }
+    let dir: string = parent_dir(origin);
+    for let i: i32 = 0; i < auto_loads.len(); i++ {
+        let cand: string = auto_loads.get(i);
+        let resolved: string = resolve_import(dir, cand);
+        if __glide_file_exists(resolved) {
+            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+        }
+    }
+    auto_loads.free();
+    auto_seen.free();
+
+    for let i: i32 = 0; i < parsed.len(); i++ {
+        let s: Stmt = parsed.get(i);
+        if s.kind == ST_IMPORT {
+            let unq: string = strip_quotes(s.import_path);
+            let mut resolved: string = resolve_import(dir, unq);
+            let mut multi_seg: bool = false;
+            for let k: i32 = 0; k < unq.len() - 1; k++ {
+                let cc: i32 = unq.at(k).to_int();
+                if cc == 47 || cc == 92 { multi_seg = true; break; }
+            }
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && !__glide_file_exists(resolved) {
+                let parent_path: string = drop_last_path_segment(unq);
+                if !parent_path.eq("") {
+                    let resolved_parent: string = resolve_import(dir, parent_path);
+                    if __glide_file_exists(resolved_parent) {
+                        let last: string = last_path_segment(unq);
+                        let items: *Vector<string> = Vector::new();
+                        items.push(last);
+                        s.imported_items = items;
+                        resolved = resolved_parent;
+                    }
+                }
+            }
+            if multi_seg && s.imported_items == null && !s.import_wildcard
+               && __glide_file_exists(resolved) {
+                s.import_is_module = true;
+                s.import_short = last_path_segment(unq);
+            }
+            load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
+            s.import_path = resolved;
+            s.origin = origin;
+            stmts.push(s);
+        } else {
+            s.origin = origin;
+            stmts.push(s);
+        }
+    }
+}
+
+// Variant of load_builtins_dir for the cached LSP path.
+pub fn load_builtins_dir_with_cache(stmts: *Vector<Stmt>, dir: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    let listing: string = __glide_list_dir(dir, ".glide");
+    if listing.eq("") { return; }
+    let builtins: string = dir.concat("/builtins.glide");
+    // Existence check via stat instead of read_file — read_file would
+    // pull the entire file body into a heap string each keystroke just
+    // to peek at "is it non-empty".
+    if __glide_file_exists(builtins) {
+        load_into_with_cache(stmts, builtins, loaded, pdiags, cache);
+    }
+    let names: *Vector<string> = listing.split("\n");
+    for let i: i32 = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if nm.eq("") { continue; }
+        if nm.eq("builtins.glide") { continue; }
+        load_into_with_cache(stmts, dir.concat("/").concat(nm), loaded, pdiags, cache);
+    }
+    names.free();
+}
+
+// Walk an Expr collecting candidate file paths referenced by EX_PATH
+// prefixes. Each prefix `a::b::c` becomes the candidate `a/b/c.glide`.
+// Type-prefix paths like `Vector::new` are also collected; loader will
+// skip those (the file probe fails).
+pub fn collect_path_files_in_expr(e: *Expr, out: *Vector<string>, seen: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_PATH {
+        let prefix: string = e.str_val;
+        if prefix != null && !prefix.eq("") && !seen.contains(prefix) {
+            // Only auto-load multi-segment paths. Single-segment prefixes
+            // (Vector, HashMap, MyStruct) are type-method calls handled by
+            // the existing dispatch; auto-loading them would either fail
+            // (no `Vector.glide`) or hit case-insensitive FS bugs.
+            let mut multi: bool = false;
+            for let k: i32 = 0; k + 1 < prefix.len(); k++ {
+                if prefix.at(k).to_int() == 58 && prefix.at(k + 1).to_int() == 58 {
+                    multi = true;
+                    break;
+                }
+            }
+            seen.insert(prefix, true);
+            if multi {
+                let mut path: string = "";
+                let n: i32 = prefix.len();
+                let mut i: i32 = 0;
+                while i < n {
+                    if i + 1 < n && prefix.at(i).to_int() == 58 && prefix.at(i + 1).to_int() == 58 {
+                        path = path.concat("/");
+                        i = i + 2;
+                    } else {
+                        path = path.concat(prefix.substring(i, i + 1));
+                        i = i + 1;
+                    }
+                }
+                path = path.concat(".glide");
+                out.push(path);
+            }
+        }
+    }
+    if e.lhs != null { collect_path_files_in_expr(e.lhs, out, seen); }
+    if e.rhs != null { collect_path_files_in_expr(e.rhs, out, seen); }
+    if e.operand != null { collect_path_files_in_expr(e.operand, out, seen); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            collect_path_files_in_expr(&a, out, seen);
+        }
+    }
+}
+
+pub fn collect_path_files_in_stmt(s: *Stmt, out: *Vector<string>, seen: *HashMap<bool>) {
+    if s == null { return; }
+    if s.let_value != null { collect_path_files_in_expr(s.let_value, out, seen); }
+    if s.expr_value != null { collect_path_files_in_expr(s.expr_value, out, seen); }
+    if s.cond != null { collect_path_files_in_expr(s.cond, out, seen); }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            collect_path_files_in_stmt(&b, out, seen);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            collect_path_files_in_stmt(&b, out, seen);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            collect_path_files_in_stmt(&b, out, seen);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let m: Stmt = s.impl_methods.get(i);
+            collect_path_files_in_stmt(&m, out, seen);
+        }
+    }
+}
+
+// Drop the trailing `/<name>.glide` from an import path. Returns "" if
+// there is no `/` separator (single-segment paths have no parent).
+pub fn drop_last_path_segment(path: string) -> string {
+    let n: i32 = path.len();
+    if n < 7 { return ""; }
+    let stem: string = path.substring(0, n - 6);
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i < stem.len(); i++ {
+        let c: i32 = stem.at(i).to_int();
+        if c == 47 || c == 92 { last = i; }
+    }
+    if last < 0 { return ""; }
+    return stem.substring(0, last).concat(".glide");
+}
+
+// Trailing identifier of an import path: `stdlib/math.glide` -> `math`.
+pub fn last_path_segment(path: string) -> string {
+    let n: i32 = path.len();
+    if n < 7 { return ""; }
+    let stem: string = path.substring(0, n - 6);
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i < stem.len(); i++ {
+        let c: i32 = stem.at(i).to_int();
+        if c == 47 || c == 92 { last = i; }
+    }
+    if last < 0 { return stem; }
+    return stem.substring(last + 1, stem.len());
+}
+
+pub fn strip_quotes(s: string) -> string {
+    let n: i32 = s.len();
+    if n < 2 { return s; }
+    if s.at(0).to_int() != 34 { return s; }
+    return s.substring(1, n - 1);
+}
+
+pub fn parent_dir(path: string) -> string {
+    let n: i32 = path.len();
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i < n; i++ {
+        let c: i32 = path.at(i).to_int();
+        if c == 47 || c == 92 { last = i; }
+    }
+    if last < 0 { return ""; }
+    return path.substring(0, last);
+}
+
+// Search path for imports. Tries (in order):
+//   1. relative to the importing file's directory
+//   2. relative to the current working directory
+//   3. cwd + `src/`              (so `import stdlib::foo;` finds `src/stdlib/foo.glide`)
+//   4. exe-dir                   (installed layout)
+//   5. exe-dir + `src/`          (installed layout)
+// First file that exists wins. Falls back to the file-relative path so the
+// downstream "could not read" error points at something sensible. The `src/`
+// prefix is implicit so user code never has to type it - `src/` is the
+// language's source root, not part of its public namespace.
+pub fn resolve_import(base: string, ipath: string) -> string {
+    // Manifest alias: if `base` lives under a `glide.glide`-rooted project,
+    // try to rewrite the leading segment of `ipath` against the manifest's
+    // declared deps. A hit short-circuits the rest of the fallback chain.
+    let manifest_hit: string = resolve_via_manifest(base, ipath);
+    if !manifest_hit.eq("") { return manifest_hit; }
+
+    let mut from_file: string = ipath;
+    if !base.eq("") { from_file = base.concat("/").concat(ipath); }
+    if __glide_file_exists(from_file) { return from_file; }
+    if __glide_file_exists(ipath) { return ipath; }
+    let cwd_src: string = "src/".concat(ipath);
+    if __glide_file_exists(cwd_src) { return cwd_src; }
+    let exe_dir: string = __glide_exe_dir();
+    if !exe_dir.eq("") {
+        let from_exe: string = exe_dir.concat("/").concat(ipath);
+        if __glide_file_exists(from_exe) { return from_exe; }
+        let exe_src: string = exe_dir.concat("/src/").concat(ipath);
+        if __glide_file_exists(exe_src) { return exe_src; }
+    }
+    return from_file;
+}
+
+// Try to resolve `ipath` (e.g. "auth/session.glide") against the nearest
+// `glide.glide` manifest above `base`. Returns "" when there's no manifest,
+// no matching alias, or the rewritten target doesn't exist on disk.
+//
+// Path layout tried for a hit: `<dep_dir>/<rest>`, then `<dep_dir>/src/<rest>`.
+pub fn resolve_via_manifest(base: string, ipath: string) -> string {
+    let mut start: string = base;
+    if start.eq("") { start = "."; }
+    let root: string = find_manifest_root(start);
+    if root.eq("") { return ""; }
+    let m: *Manifest = read_manifest(root);
+    if m == null || m.deps.len() == 0 { return ""; }
+
+    // First path segment (before '/' or '\') is the alias candidate.
+    let mut cut: i32 = ipath.len();
+    for let i: i32 = 0; i < ipath.len(); i++ {
+        let c: i32 = ipath.at(i).to_int();
+        if c == 47 || c == 92 { cut = i; break; }
+    }
+
+    // Bare `import <alias>;` (no sub-path): resolve to the dep's library
+    // entry. Prefer `src/<alias>.glide` (so the module name matches the
+    // package and `<alias>::fn` resolves), then the older `src/lib.glide`,
+    // then a top-level `<alias>.glide`.
+    if cut >= ipath.len() {
+        let mut alias0: string = ipath;
+        if alias0.ends_with(".glide") { alias0 = alias0.substring(0, alias0.len() - 6); }
+        let dep0: string = manifest_resolve_alias(m, alias0);
+        if dep0.eq("") { return ""; }
+        let e1: string = dep0.concat("/src/").concat(alias0).concat(".glide");
+        if __glide_file_exists(e1) { return e1; }
+        let e2: string = dep0.concat("/src/lib.glide");
+        if __glide_file_exists(e2) { return e2; }
+        let e3: string = dep0.concat("/").concat(alias0).concat(".glide");
+        if __glide_file_exists(e3) { return e3; }
+        return "";
+    }
+    if cut <= 0 { return ""; }
+    let alias: string = ipath.substring(0, cut);
+    let dep_dir: string = manifest_resolve_alias(m, alias);
+    if dep_dir.eq("") { return ""; }
+
+    let rest: string = ipath.substring(cut + 1, ipath.len());
+    let direct: string = dep_dir.concat("/").concat(rest);
+    if __glide_file_exists(direct) { return direct; }
+    let under_src: string = dep_dir.concat("/src/").concat(rest);
+    if __glide_file_exists(under_src) { return under_src; }
+    return "";
+}
+
+pub fn _bring_exports(t: *Typer, stmts: *Vector<Stmt>, target: string, into_f: string, seen: *HashMap<bool>) {
+    if target == null || target.eq("") { return; }
+    if seen.contains(target) { return; }
+    seen.insert(target, true);
+    for let k: i32 = 0; k < stmts.len(); k++ {
+        let ts: Stmt = stmts.get(k);
+        if ts.origin == null || !ts.origin.eq(target) { continue; }
+        // Own pub decls.
+        if ts.name != null && !ts.name.eq("") && ts.is_pub {
+            if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
+               || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF
+               || ts.kind == ST_TRAIT {
+                t.visibility.insert(into_f.concat("::").concat(ts.name), true);
+            }
+        }
+        // Re-exported modules: `pub import X::*;` / `pub import X::item;`.
+        if ts.kind == ST_IMPORT && ts.is_pub && ts.import_path != null {
+            if ts.imported_items != null && ts.imported_items.len() > 0 {
+                for let m: i32 = 0; m < ts.imported_items.len(); m++ {
+                    t.visibility.insert(into_f.concat("::").concat(ts.imported_items.get(m)), true);
+                }
+            } else {
+                _bring_exports(t, stmts, ts.import_path, into_f, seen);
+            }
+        }
+    }
+}
+
+pub fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
+    // Module-level setup: record every loaded file's full module path (so
+    // fully qualified `a::b::c::Item` calls always work, no import needed),
+    // and capture every `import a::b::c;` (pure module form) into
+    // `module_imports[<origin>::<short>]` for partial-path enforcement.
+    let seen_files: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.origin == null || s.origin.eq("") { continue; }
+        if !seen_files.contains(s.origin) {
+            seen_files.insert(s.origin, true);
+            let mp: string = module_path_from_path(s.origin);
+            if !mp.eq("") { t.module_full_paths.insert(mp, true); }
+        }
+        if s.kind == ST_IMPORT && s.import_is_module
+           && s.import_short != null && !s.import_short.eq("") {
+            t.module_imports.insert(s.origin.concat("::").concat(s.import_short), true);
+        }
+    }
+
+    // Step 1: for every Stmt with a known origin, collect the set of names
+    // it defines. Stored as `<origin>::<name>` keys. Also harvest struct
+    // field privacy info for cross-file `obj.field` enforcement.
+    let defines_at: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.origin == null || s.origin.eq("") { continue; }
+        if s.name == null || s.name.eq("") { continue; }
+        if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+           || s.kind == ST_CONST || s.kind == ST_MACRO_DEF {
+            defines_at.insert(s.origin.concat("::").concat(s.name), true);
+        }
+        if s.kind == ST_STRUCT && s.struct_fields != null {
+            t.struct_origin.insert(s.name, s.origin);
+            for let k: i32 = 0; k < s.struct_fields.len(); k++ {
+                let f: Field = s.struct_fields.get(k);
+                if f.is_pub {
+                    t.field_pub.insert(s.name.concat("::").concat(f.name), true);
+                }
+            }
+        }
+    }
+
+    // Step 2: gather the distinct origin files seen + flag which ones live
+    // under `src/builtins/` (these are the always-visible prelude).
+    let origins: *Vector<string> = Vector::new();
+    let seen: *HashMap<bool> = HashMap::new();
+    let builtin_files: *Vector<string> = Vector::new();
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.origin == null || s.origin.eq("") { continue; }
+        if !seen.contains(s.origin) {
+            seen.insert(s.origin, true);
+            origins.push(s.origin);
+            if path_is_builtin(s.origin) { builtin_files.push(s.origin); }
+        }
+    }
+
+    // Step 3: for every origin file `F`, accumulate visible names.
+    for let i: i32 = 0; i < origins.len(); i++ {
+        let f: string = origins.get(i);
+        // Own decls.
+        for let j: i32 = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.origin == null || !s.origin.eq(f) { continue; }
+            if s.name == null || s.name.eq("") { continue; }
+            if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF || s.kind == ST_TRAIT
+               || s.kind == ST_LET {
+                t.visibility.insert(f.concat("::").concat(s.name), true);
+            }
+        }
+        // Prelude (src/builtins/* contents).
+        for let j: i32 = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.origin == null { continue; }
+            if !path_is_builtin(s.origin) { continue; }
+            if s.name == null || s.name.eq("") { continue; }
+            if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF || s.kind == ST_TRAIT {
+                t.visibility.insert(f.concat("::").concat(s.name), true);
+            }
+        }
+        // Extern / forward-declared fns (bodyless `ST_FN`) are foreign C
+        // symbols resolved at link time, not module-scoped Glide decls. A
+        // call to any declared extern is always allowed regardless of which
+        // file declared it — the linker, not the import graph, resolves it.
+        for let j: i32 = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.kind == ST_FN && s.fn_body == null
+               && s.name != null && !s.name.eq("") {
+                t.visibility.insert(f.concat("::").concat(s.name), true);
+            }
+        }
+        // Explicit imports from this file. Only `pub` items from the
+        // target are exposed - cross-file privacy is enforced here.
+        for let j: i32 = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.kind != ST_IMPORT { continue; }
+            if s.origin == null || !s.origin.eq(f) { continue; }
+            let target: string = s.import_path;
+            if target == null { continue; }
+            if s.imported_items != null && s.imported_items.len() > 0 {
+                // Selective: each named item must be pub in the target.
+                for let k: i32 = 0; k < s.imported_items.len(); k++ {
+                    let nm: string = s.imported_items.get(k);
+                    let mut found_pub: bool = false;
+                    let mut found_any: bool = false;
+                    for let m: i32 = 0; m < stmts.len(); m++ {
+                        let ts: Stmt = stmts.get(m);
+                        if ts.origin == null || !ts.origin.eq(target) { continue; }
+                        if ts.name == null || !ts.name.eq(nm) { continue; }
+                        if ts.kind == ST_FN || ts.kind == ST_STRUCT || ts.kind == ST_ENUM
+                           || ts.kind == ST_CONST || ts.kind == ST_MACRO_DEF
+                           || ts.kind == ST_TRAIT {
+                            found_any = true;
+                            if ts.is_pub { found_pub = true; break; }
+                        }
+                    }
+                    // Proc-macro registrations: `@proc_attr(handler)` on a
+                    // private impl fn makes `handler` callable as `@handler`
+                    // file-wide. Users want to spell the import as
+                    // `import stdlib::http::handler::handler;` — treat the
+                    // attr arg as the exported name.
+                    if !found_any {
+                        for let m: i32 = 0; m < stmts.len(); m++ {
+                            let ts: Stmt = stmts.get(m);
+                            if ts.origin == null || !ts.origin.eq(target) { continue; }
+                            if ts.kind != ST_FN || ts.attrs == null { continue; }
+                            for let aa: i32 = 0; aa < ts.attrs.len(); aa++ {
+                                let at: Attr = ts.attrs.get(aa);
+                                if at.name == null { continue; }
+                                if !at.name.eq("proc_attr") && !at.name.eq("proc_derive")
+                                   && !at.name.eq("proc_macro") && !at.name.eq("proc_macro_str") {
+                                    continue;
+                                }
+                                if at.args == null || at.args.len() == 0 { continue; }
+                                let ne: Expr = at.args.get(0);
+                                if ne.kind != EX_IDENT { continue; }
+                                if ne.str_val.eq(nm) { found_any = true; found_pub = true; break; }
+                            }
+                            if found_pub { break; }
+                        }
+                    }
+                    if found_pub {
+                        t.visibility.insert(f.concat("::").concat(nm), true);
+                    } else if found_any {
+                        t.push_diag(s.line, s.column, 1, "private-import",
+                            "`".concat(nm).concat("` exists in `").concat(target).concat("` but is not `pub`"));
+                    } else {
+                        t.push_diag(s.line, s.column, 1, "missing-import",
+                            "`".concat(nm).concat("` is not declared in `").concat(target).concat("`"));
+                    }
+                }
+            } else if !seen_files.contains(target) {
+                // The import resolved to no loaded file → the module doesn't
+                // exist (typo, wrong path, missing dep). `seen_files` holds
+                // every origin actually parsed, so a miss is conclusive.
+                t.push_diag(s.line, s.column, 1, "unresolved-import",
+                    "cannot find module `".concat(module_path_from_path(target))
+                    .concat("` to import"));
+            } else {
+                // Wildcard / sibling: every PUB name from the target file,
+                // plus anything the target re-exports via `pub import`.
+                let seen_reexport: *HashMap<bool> = HashMap::new();
+                _bring_exports(t, stmts, target, f, seen_reexport);
+            }
+        }
+    }
+}
+
+// Convert an origin file path to a `::`-separated module path, mirroring
+// codegen's `module_path_from_origin`. Strips a leading `src/` and the
+// `.glide` suffix; rewrites `/` and `\` to `::`.
+pub fn module_path_from_path(path: string) -> string {
+    if path == null || path.eq("") { return ""; }
+    let mut s: string = path;
+    let n: i32 = s.len();
+    if n > 6 {
+        let tail: string = s.substring(n - 6, n);
+        if tail.eq(".glide") { s = s.substring(0, n - 6); }
+    }
+    // Strip everything up to and including the LAST `src/` (or `src\`)
+    // segment. A leading-only strip breaks on the installed layout, where
+    // the path is absolute (`C:\…\.glide\bin\src\stdlib\log.glide`) and
+    // `src` sits mid-path — then the module would come out as
+    // `C:::…::bin::src::stdlib::log` instead of `stdlib::log`, and the
+    // typer's `module_full_paths` lookup for a fully-qualified call like
+    // `stdlib::log::info(...)` (emitted by the log macros) would miss,
+    // making it early-out before type-checking the call's arguments.
+    let len0: i32 = s.len();
+    let mut cut: i32 = -1;
+    let mut k: i32 = 0;
+    while k + 3 < len0 {
+        if s.at(k).to_int() == 115 && s.at(k + 1).to_int() == 114
+           && s.at(k + 2).to_int() == 99 {
+            let after: i32 = s.at(k + 3).to_int();
+            let before_ok: bool = k == 0 || s.at(k - 1).to_int() == 47 || s.at(k - 1).to_int() == 92;
+            if before_ok && (after == 47 || after == 92) {
+                cut = k + 4;
+            }
+        }
+        k = k + 1;
+    }
+    if cut >= 0 { s = s.substring(cut, len0); }
+    let mut out: string = "";
+    let mut i: i32 = 0;
+    let len: i32 = s.len();
+    while i < len {
+        let c: i32 = s.at(i).to_int();
+        if c == 47 || c == 92 { out = out.concat("::"); }
+        else { out = out.concat(s.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    return out;
+}
+
+// True if `path` lives under a `src/builtins/` directory (handles both
+// forward and backslashes for the Windows install layout).
+pub fn path_is_builtin(path: string) -> bool {
+    if path == null { return false; }
+    let needle: string = "src/builtins/";
+    let n: i32 = path.len();
+    let m: i32 = needle.len();
+    if m > n { return false; }
+    for let i: i32 = 0; i + m <= n; i++ {
+        let mut matched: bool = true;
+        for let j: i32 = 0; j < m; j++ {
+            let c: i32 = path.at(i + j).to_int();
+            let d: i32 = needle.at(j).to_int();
+            // accept '\\' as equivalent to '/' so installer paths match.
+            if c == 92 { c = 47; }
+            if d == 92 { d = 47; }
+            if c != d { matched = false; break; }
+        }
+        if matched { return true; }
+    }
+    return false;
+}
+
+// Auto-load every `*.glide` under the builtins dir in a deterministic
+// order. `builtins.glide` runs first because it declares the extern stubs
+// everything else references (malloc, printf, ...); the remaining files
+// load in the alphabetical order returned by `__glide_list_dir`.
+pub fn load_builtins_dir(stmts: *Vector<Stmt>, dir: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>) {
+    let listing: string = __glide_list_dir(dir, ".glide");
+    if listing.eq("") { return; }
+    let builtins: string = dir.concat("/builtins.glide");
+    if !read_file(builtins).eq("") {
+        load_into(stmts, builtins, loaded, pdiags);
+    }
+    let names: *Vector<string> = listing.split("\n");
+    for let i: i32 = 0; i < names.len(); i++ {
+        let nm: string = names.get(i);
+        if nm.eq("") { continue; }
+        if nm.eq("builtins.glide") { continue; }
+        load_into(stmts, dir.concat("/").concat(nm), loaded, pdiags);
+    }
+}
+

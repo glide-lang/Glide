@@ -8,6 +8,7 @@ import ast::*;
 import parser::*;
 import stdlib::hashmap::*;
 import stdlib::fs::*;
+import loader::*;
 
 pub struct OARoute {
     pub method: string,

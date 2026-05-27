@@ -108,25 +108,10 @@ extern fn __glide_set_binary_io();
 extern fn __glide_exe_dir() -> string;
 extern fn __glide_cwd() -> string;
 
-// Forward declarations for symbols defined in main.glide. The driver
-// is the canonical owner; declaring them here lets the LSP file
-// type-check standalone without forming a circular import (main.glide
-// itself imports lsp).
-extern fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string,
-                        loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>);
-extern fn load_builtins_dir(stmts: *Vector<Stmt>, dir: string,
-                            loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>);
-// Cached LSP variants. Skip lex+parse on paths already in `cache`,
-// populate it on miss. Backed by main.glide.
-extern fn load_into_str_with_cache(stmts: *Vector<Stmt>, src: string, origin: string,
-                                   loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>,
-                                   cache: *HashMap<*Vector<Stmt>>);
-extern fn load_into_with_cache(stmts: *Vector<Stmt>, path: string,
-                               loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>,
-                               cache: *HashMap<*Vector<Stmt>>);
-extern fn load_builtins_dir_with_cache(stmts: *Vector<Stmt>, dir: string,
-                                       loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>,
-                                       cache: *HashMap<*Vector<Stmt>>);
+// The module loader + visibility builder live in loader.glide (extracted
+// from the driver). Importing it gives the LSP the same load_into_str /
+// load_*_with_cache / build_visibility the build uses, no forward-decls.
+import loader::*;
 
 // ---- Document store ----------------------------------------------------
 
@@ -832,7 +817,6 @@ fn fn_snippet(s: *Stmt) -> string {
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 extern fn __glide_fs_list_dirs(path: string) -> string;
 extern fn __glide_file_exists(path: string) -> bool;
-extern fn parent_dir(path: string) -> string;
 fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
     let raw: string = __glide_list_dir(dir, suffix);
     if raw.eq("") { return Vector::new(); }
