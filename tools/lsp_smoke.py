@@ -654,6 +654,27 @@ case_feature("inlayHint infers literal let types",
         check("annotated `x` gets no hint", all(k[0] != 4 for k in inlay_map(r)), f"got {inlay_map(r)}"),
     ))
 
+case_feature("inlayHint shows parameter names at call sites",
+    'fn add(a: i32, b: i32) -> i32 { return a + b; }\n'
+    'struct Pt { x: i32 }\n'
+    'impl Pt { fn moved(self: *Pt, dx: i32, dy: i32) -> i32 { return self.x + dx + dy; } }\n'
+    'fn main() -> i32 {\n'
+    '    let s = add(10, 20);\n'
+    '    let p = Pt { x: 1 };\n'
+    '    let m = p.moved(3, 4);\n'
+    '    return s + m;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: (
+        check("free-fn call shows `a:` / `b:`",
+              "a:" in inlay_map(r).values() and "b:" in inlay_map(r).values(),
+              f"got {list(inlay_map(r).values())}"),
+        check("method call shows `dx:` / `dy:` and skips `self`",
+              "dx:" in inlay_map(r).values() and "dy:" in inlay_map(r).values()
+              and "self:" not in inlay_map(r).values(),
+              f"got {list(inlay_map(r).values())}"),
+    ))
+
 case_feature("inlayHint infers fn return type",
     'fn mk() -> i32 { return 9; }\n'
     'fn main() -> i32 {\n'

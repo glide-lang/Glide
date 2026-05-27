@@ -2990,6 +2990,120 @@ fn _collect_inlay_lets(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>,
 // `: T` type hint (annotation-free bindings) plus, for owned allocations
 // (Arena::new / malloc / palloc), an end-of-line ownership-lifecycle hint
 // (`freed @ Ln` / `moves out` / `never freed`).
+// Top-level fn stmt by name (copied, so callers get a stable pointer).
+fn _find_fn_stmt(root: *Vector<Stmt>, name: string) -> *Stmt {
+    if root == null { return null; }
+    for let i: i32 = 0; i < root.len(); i++ {
+        let s: Stmt = root.get(i);
+        if s.kind == ST_FN && s.name != null && s.name.eq(name) {
+            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt; *p = s; return p;
+        }
+    }
+    return null;
+}
+
+// Emit `name:` parameter-name inlay hints before each positional argument of
+// `call`. Resolves the callee's params for a free fn (`foo`), a `Type::method`,
+// or a method call `x.m` (receiver type then impl lookup). Skips a leading
+// `self`, variadic fns, `_`-params, and args that already name the param.
+fn _emit_call_param_hints(root: *Vector<Stmt>, call: *Expr, path: string,
+                          ls: i32, le: i32, hints: *JsonValue) {
+    if call.lhs == null || call.args == null { return; }
+    let callee: *Expr = call.lhs;
+    let mut fnstmt: *Stmt = null;
+    if callee.kind == EX_IDENT {
+        fnstmt = _find_fn_stmt(root, callee.str_val);
+    } else if callee.kind == EX_PATH && callee.field != null {
+        fnstmt = find_method_in_impl(root, _last_path_seg(callee.str_val), callee.field);
+    } else if callee.kind == EX_MEMBER && callee.field != null {
+        let rty: *Type = _expr_type_node(callee.lhs, root, call.line - 1, path, 0);
+        let x: *Type = _strip_ptr_borrow(rty);
+        if x != null && (x.kind == TY_NAMED || x.kind == TY_GENERIC) {
+            fnstmt = find_method_in_impl(root, x.name, callee.field);
+        }
+    }
+    if fnstmt == null || fnstmt.fn_params == null { return; }
+    if fnstmt.is_variadic { return; }
+    let params: *Vector<Param> = fnstmt.fn_params;
+    let mut off: i32 = 0;
+    if params.len() > 0 {
+        let p0: Param = params.get(0);
+        if p0.name != null && p0.name.eq("self") { off = 1; }
+    }
+    for let ai: i32 = 0; ai < call.args.len(); ai++ {
+        let pi: i32 = ai + off;
+        if pi >= params.len() { break; }
+        let p: Param = params.get(pi);
+        if p.name == null || p.name.eq("") { continue; }
+        if p.name.at(0).to_int() == 95 { continue; }   // `_`-prefixed
+        let arg: Expr = call.args.get(ai);
+        if arg.kind == EX_IDENT && arg.str_val != null && arg.str_val.eq(p.name) { continue; }
+        let line0: i32 = arg.line - 1;
+        if line0 < ls || line0 > le { continue; }
+        let col0: i32 = arg.column - 1;
+        if col0 < 0 { continue; }
+        let h: *JsonValue = json_object();
+        let posj: *JsonValue = json_object();
+        json_obj_set(posj, "line", json_int(line0));
+        json_obj_set(posj, "character", json_int(col0));
+        json_obj_set(h, "position", posj);
+        json_obj_set(h, "label", json_string(p.name.concat(":")));
+        json_obj_set(h, "kind", json_int(2));            // InlayHintKind.Parameter
+        json_obj_set(h, "paddingLeft", json_bool(false));
+        json_obj_set(h, "paddingRight", json_bool(true));
+        json_arr_push(hints, h);
+    }
+}
+
+fn _inlay_params_expr(root: *Vector<Stmt>, e: *Expr, path: string,
+                      ls: i32, le: i32, hints: *JsonValue) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null {
+        _emit_call_param_hints(root, e, path, ls, le, hints);
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                let a: Expr = e.args.get(i);
+                _inlay_params_expr(root, &a, path, ls, le, hints);
+            }
+        }
+        _inlay_params_expr(root, e.lhs, path, ls, le, hints);
+        return;
+    }
+    if e.lhs != null { _inlay_params_expr(root, e.lhs, path, ls, le, hints); }
+    if e.rhs != null { _inlay_params_expr(root, e.rhs, path, ls, le, hints); }
+    if e.operand != null { _inlay_params_expr(root, e.operand, path, ls, le, hints); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _inlay_params_expr(root, &a, path, ls, le, hints);
+        }
+    }
+}
+
+fn _collect_param_inlays(root: *Vector<Stmt>, body: *Vector<Stmt>, path: string,
+                         ls: i32, le: i32, hints: *JsonValue) {
+    if body == null { return; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.let_value != null { _inlay_params_expr(root, s.let_value, path, ls, le, hints); }
+        if s.expr_value != null { _inlay_params_expr(root, s.expr_value, path, ls, le, hints); }
+        if s.cond != null { _inlay_params_expr(root, s.cond, path, ls, le, hints); }
+        if s.for_step != null { _inlay_params_expr(root, s.for_step, path, ls, le, hints); }
+        if s.scrutinee != null { _inlay_params_expr(root, s.scrutinee, path, ls, le, hints); }
+        if s.for_init != null && s.for_init.let_value != null {
+            _inlay_params_expr(root, s.for_init.let_value, path, ls, le, hints);
+        }
+        if s.then_body != null { _collect_param_inlays(root, s.then_body, path, ls, le, hints); }
+        if s.else_body != null { _collect_param_inlays(root, s.else_body, path, ls, le, hints); }
+        if s.arms != null {
+            for let j: i32 = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                if arm.body != null { _collect_param_inlays(root, arm.body, path, ls, le, hints); }
+            }
+        }
+    }
+}
+
 fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -3013,13 +3127,19 @@ fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
 
     // Source lines, for anchoring the end-of-line lifecycle hints.
     let lines: *Vector<string> = doc.text.split("\n");
+    // Param-name hints are only meaningful for the file being edited — the
+    // auto-injected builtins/stdlib stmts share doc.stmts but their internal
+    // calls would emit hints at their own (out-of-document) line numbers.
+    let dpath: string = uri_to_path(uri);
 
     for let i: i32 = 0; i < doc.stmts.len(); i++ {
         let s: Stmt = doc.stmts.get(i);
+        let own: bool = s.origin == null || s.origin.eq("") || s.origin.eq(dpath);
         if s.kind == ST_FN && s.fn_body != null {
             let host: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *host = s;
             _collect_inlay_lets(doc.stmts, host, s.fn_body, s.fn_body, lines, line_start, line_end, hints);
+            if own { _collect_param_inlays(doc.stmts, s.fn_body, dpath, line_start, line_end, hints); }
         } else if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
@@ -3027,6 +3147,7 @@ fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
                     let mh: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
                     *mh = m;
                     _collect_inlay_lets(doc.stmts, mh, m.fn_body, m.fn_body, lines, line_start, line_end, hints);
+                    if own { _collect_param_inlays(doc.stmts, m.fn_body, dpath, line_start, line_end, hints); }
                 }
             }
         }
