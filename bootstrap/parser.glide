@@ -1017,6 +1017,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
     // whichever Stmt parse_stmt returns; the helper `_apply_attrs`
     // covers every dispatch arm below.
     let body_attrs: *Vector<Attr> = Vector::new();
+    let mut cfg: string = "";
     while p.at_op("@") {
         let at_line: i32 = p.current.line;
         let at_col: i32 = p.current.column;
@@ -1031,20 +1032,37 @@ fn parse_stmt(p: *Parser) -> *Stmt {
             }
             p.expect_op(")");
         }
-        body_attrs.push(Attr {
-            name: nm,
-            args: arg_exprs,
-            line: at_line,
-            column: at_col,
-        });
+        if nm.eq("cfg") {
+            // Statement-level `@cfg`: gates a single stmt (or `{ ... }` block)
+            // behind the same #ifdef the top-level decl form uses, so
+            // codegen's emit_cfg_open/close apply per-statement.
+            if arg_exprs.len() == 1 {
+                let a0: Expr = arg_exprs.get(0);
+                if a0.kind == EX_STRING { cfg = a0.str_val; }
+                else { p.err("@cfg expects a string literal: \"windows\" or \"posix\""); }
+            } else {
+                p.err("@cfg expects exactly one argument");
+            }
+            if !cfg.eq("windows") && !cfg.eq("posix") {
+                p.err("unknown cfg target — expected `windows` or `posix`");
+            }
+        } else {
+            body_attrs.push(Attr {
+                name: nm,
+                args: arg_exprs,
+                line: at_line,
+                column: at_col,
+            });
+        }
     }
-    if p.at_kw("let") { return _apply_attrs(parse_let(p), body_attrs); }
-    if p.at_kw("const") { return _apply_attrs(parse_const(p), body_attrs); }
-    if p.at_kw("return") { return _apply_attrs(parse_return(p), body_attrs); }
-    if p.at_kw("if") { return _apply_attrs(parse_if(p), body_attrs); }
-    if p.at_kw("while") { return _apply_attrs(parse_while(p), body_attrs); }
-    if p.at_kw("for") { return _apply_attrs(parse_for(p), body_attrs); }
-    if p.at_kw("match") { return _apply_attrs(parse_match(p), body_attrs); }
+    if p.at_kw("asm") && p.peek_op("!") { return _apply_attrs(parse_asm_block(p), body_attrs, cfg); }
+    if p.at_kw("let") { return _apply_attrs(parse_let(p), body_attrs, cfg); }
+    if p.at_kw("const") { return _apply_attrs(parse_const(p), body_attrs, cfg); }
+    if p.at_kw("return") { return _apply_attrs(parse_return(p), body_attrs, cfg); }
+    if p.at_kw("if") { return _apply_attrs(parse_if(p), body_attrs, cfg); }
+    if p.at_kw("while") { return _apply_attrs(parse_while(p), body_attrs, cfg); }
+    if p.at_kw("for") { return _apply_attrs(parse_for(p), body_attrs, cfg); }
+    if p.at_kw("match") { return _apply_attrs(parse_match(p), body_attrs, cfg); }
     if p.at_kw("defer") {
         let line: i32 = p.current.line;
         let col: i32 = p.current.column;
@@ -1056,7 +1074,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         s.line = line;
         s.column = col;
         s.expr_value = e;
-        return _apply_attrs(s, body_attrs);
+        return _apply_attrs(s, body_attrs, cfg);
     }
     if p.at_kw("defer_err") {
         let line: i32 = p.current.line;
@@ -1069,7 +1087,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         s.line = line;
         s.column = col;
         s.expr_value = e;
-        return _apply_attrs(s, body_attrs);
+        return _apply_attrs(s, body_attrs, cfg);
     }
     if p.at_kw("spawn") {
         let line: i32 = p.current.line;
@@ -1077,7 +1095,7 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         p.advance();
         let e: *Expr = parse_expr(p, 0);
         p.expect_op(";");
-        return _apply_attrs(stmt_spawn(e, line, col), body_attrs);
+        return _apply_attrs(stmt_spawn(e, line, col), body_attrs, cfg);
     }
     if p.at_kw("spawn_thread") {
         let line: i32 = p.current.line;
@@ -1087,42 +1105,46 @@ fn parse_stmt(p: *Parser) -> *Stmt {
         p.expect_op(";");
         let s: *Stmt = stmt_spawn(e, line, col);
         if s != null { s.is_spawn_thread = true; }
-        return _apply_attrs(s, body_attrs);
+        return _apply_attrs(s, body_attrs, cfg);
     }
     if p.at_kw("break") {
         let line: i32 = p.current.line;
         let col: i32 = p.current.column;
         p.advance();
         p.expect_op(";");
-        return _apply_attrs(stmt_break(line, col), body_attrs);
+        return _apply_attrs(stmt_break(line, col), body_attrs, cfg);
     }
     if p.at_kw("continue") {
         let line: i32 = p.current.line;
         let col: i32 = p.current.column;
         p.advance();
         p.expect_op(";");
-        return _apply_attrs(stmt_continue(line, col), body_attrs);
+        return _apply_attrs(stmt_continue(line, col), body_attrs, cfg);
     }
     if p.at_op("{") {
         let body: *Vector<Stmt> = parse_block(p);
         let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
         s.kind = ST_BLOCK;
         s.then_body = body;
-        return _apply_attrs(s, body_attrs);
+        return _apply_attrs(s, body_attrs, cfg);
     }
     // expression statement (with possible assign)
     let e: *Expr = parse_expr(p, 0);
     if e == null { return null; }
     let assigned: *Expr = parse_maybe_assign(p, e);
     p.expect_op(";");
-    return _apply_attrs(stmt_expr(assigned), body_attrs);
+    return _apply_attrs(stmt_expr(assigned), body_attrs, cfg);
 }
 
-// Attach a collected attribute list to the statement parse_stmt is
-// about to return. Empty list is a no-op (no allocation either, since
-// `body_attrs` is reused as the slot when non-empty).
-fn _apply_attrs(s: *Stmt, attrs: *Vector<Attr>) -> *Stmt {
-    if s != null && attrs != null && attrs.len() > 0 { s.attrs = attrs; }
+// Attach a collected attribute list (and optional `@cfg` target) to the
+// statement parse_stmt is about to return. Empty list is a no-op (no
+// allocation either, since `body_attrs` is reused as the slot when
+// non-empty); empty cfg leaves cfg_target untouched.
+fn _apply_attrs(s: *Stmt, attrs: *Vector<Attr>, cfg: string) -> *Stmt {
+    if s != null {
+        if attrs != null && attrs.len() > 0 { s.attrs = attrs; }
+        if cfg != null && !cfg.eq("") { s.cfg_target = cfg; }
+    }
     return s;
 }
 

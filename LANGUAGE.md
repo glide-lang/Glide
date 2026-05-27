@@ -354,6 +354,19 @@ naked fn add_raw(a: int, b: int) -> int {
 @cfg("posix")  fn now_ms() -> i64 { ... }
 @cfg("windows") fn now_ms() -> i64 { ... }
 
+// `@cfg` also gates a single statement or `{ ... }` block inside a fn,
+// so a function can keep one body and branch only the target-specific
+// parts (each guarded stmt emits its own #ifdef / #ifndef _WIN32).
+fn print_msg(msg: string) {
+    @cfg("windows") asm! volatile {
+        "subq $40, %%rsp" "movq %0, %%rcx" "call puts" "addq $40, %%rsp"
+        : : "r"(msg) : "rcx", "rax", "memory"
+    }
+    @cfg("posix") asm! volatile {
+        "movq %0, %%rdi" "call puts" : : "r"(msg) : "rdi", "rax", "memory"
+    }
+}
+
 // Drop arbitrary C verbatim into the output. Useful for runtime
 // helpers, intrinsics, or to call platform APIs that aren't in
 // stdlib yet. Values from outer scope are interpolated.
