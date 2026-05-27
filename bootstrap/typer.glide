@@ -3098,7 +3098,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let is_builtin: bool = name.eq("ok") || name.eq("err")
                 || name.eq("some") || name.eq("none")
                 || name.eq("make_chan") || name.eq("sizeof")
-                || name.eq("printf");
+                || name.eq("printf")
+                // Compiler intrinsics (`__name__`): `__program__()` exposes
+                // the program snapshot to proc-macros, `__typeof__` is the
+                // codegen type probe. Provided by the interpreter/codegen,
+                // never user-declared.
+                || name.eq("__program__") || name.eq("__typeof__");
             if !is_builtin && !t.scope.contains(name) && t.enforce_visibility {
                 t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "",
                     "unknown function `".concat(name).concat("`; did you forget an `import`?"));
