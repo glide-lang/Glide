@@ -163,6 +163,23 @@ case_diagnostics("inferred option local .val unguarded is flagged",
     'fn main() -> i32 { let m = find(); return m.val; }',
     expect_codes_present=["ignored-option"])
 
+case_diagnostics("use-after-free: free in a returning branch is not flagged",
+    'fn cond() -> bool { return true; }\n'
+    'fn f() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n'
+    '    if cond() { v.free(); return 0; }\n'
+    '    return v.len();\n'
+    '}',
+    expect_codes_absent=["use-after-free"])
+
+case_diagnostics("use-after-free: unconditional free then use is flagged",
+    'fn f() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n'
+    '    v.free();\n'
+    '    return v.len();\n'
+    '}',
+    expect_codes_present=["use-after-free"])
+
 def _diag_span_test():
     # The squiggle should underline the whole `r.val`, not just its first char.
     print("\n[diagnostics] unchecked-result underlines the whole r.val")

@@ -1992,6 +1992,38 @@ fn _call_display_name(e: *Expr) -> string {
     return "the call";
 }
 
+// True when `body`'s last statement exits the control-flow path
+// (return / break / continue), so frees inside it don't reach siblings after.
+fn _body_exits(body: *Vector<Stmt>) -> bool {
+    if body == null || body.len() == 0 { return false; }
+    let last: Stmt = body.get(body.len() - 1);
+    return last.kind == ST_RETURN || last.kind == ST_BREAK || last.kind == ST_CONTINUE;
+}
+// Snapshot the currently-freed locals so a branch's frees can be rolled back.
+fn _consumed_snapshot(t: *Typer) -> *HashMap<bool> {
+    let snap: *HashMap<bool> = HashMap::new();
+    let ks: *Vector<string> = t.consumed_locals.keys();
+    for let i: i32 = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        if t.consumed_locals.get(k) { snap.insert(k, true); }
+    }
+    ks.free();
+    return snap;
+}
+// Undo any free that happened since `snap` (a free inside an exiting branch
+// must not mark the variable freed for code that runs only when the branch
+// wasn't taken). Keeps frees that were already in effect before the branch.
+fn _consumed_restore(t: *Typer, snap: *HashMap<bool>) {
+    let ks: *Vector<string> = t.consumed_locals.keys();
+    for let i: i32 = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        if t.consumed_locals.get(k) && !snap.contains(k) {
+            t.consumed_locals.insert(k, false);
+        }
+    }
+    ks.free();
+}
+
 fn check_stmt(t: *Typer, s: *Stmt) {
     if s.kind == ST_LET || s.kind == ST_CONST {
         check_let_or_const(t, s);
@@ -2035,21 +2067,29 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         }
         if s.then_body != null {
             let saved: i32 = enter_borrow_scope(t);
+            let csnap: *HashMap<bool> = _consumed_snapshot(t);
             for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.then_body, i);
             }
             exit_borrow_scope(t, saved);
+            // A `free()` inside a branch that returns/breaks/continues never
+            // reaches the code after the `if`, so don't carry it out.
+            if _body_exits(s.then_body) { _consumed_restore(t, csnap); }
+            csnap.free();
         }
         if s.else_body != null {
             let saved: i32 = enter_borrow_scope(t);
+            let csnap2: *HashMap<bool> = _consumed_snapshot(t);
             for let i: i32 = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.else_body, i);
             }
             exit_borrow_scope(t, saved);
+            if _body_exits(s.else_body) { _consumed_restore(t, csnap2); }
+            csnap2.free();
         }
         return;
     }
@@ -2584,7 +2624,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // Use-after-free: a `<name>.free()` earlier in the fn flagged
         // this binding; reading it now would touch reclaimed memory.
         // Type lookup continues so downstream diagnostics still resolve.
-        if t.consumed_locals.contains(e.str_val) {
+        if t.consumed_locals.contains(e.str_val) && t.consumed_locals.get(e.str_val) {
             t.err_code(e.line, e.column, "use-after-free",
                 "value `".concat(e.str_val)
                 .concat("` was freed earlier in this function; subsequent reads touch reclaimed memory"));
