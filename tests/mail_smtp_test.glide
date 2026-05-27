@@ -1,5 +1,5 @@
 import stdlib::testing::*;
-import stdlib::net::*;
+import stdlib::net::listener::*;
 import stdlib::mail::message::*;
 import stdlib::mail::smtp::*;
 

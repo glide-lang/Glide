@@ -23,7 +23,7 @@
 //   - Pure-Glide parser; the C parser at bootstrap/runtime/http_parse.c
 //     is reserved for the upcoming throughput pass.
 
-import stdlib::net::*;
+import stdlib::net::listener::*;
 import stdlib::http_status::*;
 import stdlib::os::*;
 import stdlib::hashmap::*;

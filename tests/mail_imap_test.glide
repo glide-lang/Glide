@@ -1,5 +1,5 @@
 import stdlib::testing::*;
-import stdlib::net::*;
+import stdlib::net::listener::*;
 import stdlib::mail::imap::*;
 
 fn _fake_imap(port: i32) {

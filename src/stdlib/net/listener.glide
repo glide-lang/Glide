@@ -1,6 +1,9 @@
-// TCP networking. Wraps the raw socket file descriptors from the C
-// runtime in `Listener` / `Conn` structs so users get owning handles
-// and method-style dispatch.
+// Server-side TCP: `Listener` (bind/accept) + `Conn` (accepted socket).
+// The client-side counterpart `TcpStream` lives in `stdlib::net::tcp`.
+// Import as `import stdlib::net::listener::*;`.
+//
+// Wraps the raw socket file descriptors from the C runtime in `Listener`
+// / `Conn` structs so users get owning handles and method-style dispatch.
 //
 // `accept` / `read` / `write` go through the async reactor:
 //   * Linux: the fd is registered with epoll and the calling coro is

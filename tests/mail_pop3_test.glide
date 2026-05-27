@@ -1,5 +1,5 @@
 import stdlib::testing::*;
-import stdlib::net::*;
+import stdlib::net::listener::*;
 import stdlib::mail::pop3::*;
 
 fn _fake_pop3(port: i32) {

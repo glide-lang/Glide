@@ -41,7 +41,7 @@
 
 import stdlib::http::*;
 import stdlib::http_status::*;
-import stdlib::net::*;
+import stdlib::net::listener::*;
 import stdlib::os::*;
 import stdlib::hashmap::*;
 
