@@ -2385,6 +2385,12 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     //   `let p: *T = local_arena.method(...)`      -> arena_origin[p] = "local_arena"
     //   `let p: *T = q` where q is in arena_origin -> propagate
     if s.kind == ST_LET && s.name != null && !s.name.eq("") {
+        // A fresh `let name = ...` rebinds the name to a live value, so any
+        // earlier free of an old binding with the same name no longer
+        // applies. Clearing here (after the RHS was already checked) stops a
+        // later read of the new binding being flagged use-after-free — the
+        // common `let x = make(); x.free();` repeated in sibling blocks.
+        if t.consumed_locals.contains(s.name) { t.consumed_locals.insert(s.name, false); }
         if _is_arena_type(s.let_ty) {
             let mut treat_as_local: bool = true;
             if s.let_value != null && s.let_value.kind == EX_IDENT

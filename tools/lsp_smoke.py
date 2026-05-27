@@ -180,6 +180,17 @@ case_diagnostics("use-after-free: unconditional free then use is flagged",
     '}',
     expect_codes_present=["use-after-free"])
 
+case_diagnostics("use-after-free: re-let with same name after free is not flagged",
+    'fn f() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n'
+    '    v.free();\n'
+    '    let v: *Vector<i32> = Vector::new();\n'
+    '    let n: i32 = v.len();\n'
+    '    v.free();\n'
+    '    return n;\n'
+    '}',
+    expect_codes_absent=["use-after-free"])
+
 def _diag_span_test():
     # The squiggle should underline the whole `r.val`, not just its first char.
     print("\n[diagnostics] unchecked-result underlines the whole r.val")
