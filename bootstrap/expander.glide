@@ -1,6 +1,7 @@
 import stdlib::hashmap::*;
 import ast;
 import interp;
+import manifest;
 
 // Macro expander. Runs after the parser (so the body and call args are
 // already AST), before typer/codegen.
@@ -47,6 +48,10 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // from the user's source position, not whatever scope a later
     // expansion lands in.
     rewrite_location_macros(program);
+    // Pre-pass: rewrite `pkg!("version")` / `pkg!("author")` / … into string
+    // literals from the project's glide.glide, so a CLI can print its own
+    // package metadata with zero runtime cost (Rust's env!("CARGO_PKG_*")).
+    rewrite_pkg_macros(program);
 
     let static_macros: *HashMap<Stmt> = HashMap::new();
     let type_macros: *Vector<TypeMacro> = Vector::new();
@@ -261,6 +266,85 @@ fn _replace_with_location_literal(e: *Expr, file: string, in_fn: string) {
         e.str_val = in_fn;
         return;
     }
+}
+
+// ---- package-metadata macros ------------------------------------------
+// `pkg!("version")` / `pkg!("name")` / `pkg!("author")` / `pkg!("license")` /
+// `pkg!("description")` / `pkg!("repository")` -> the field from the nearest
+// glide.glide, as a compile-time string literal (empty when absent). Read
+// once per expansion. Field values are already in escaped source form (the
+// manifest's own string literals), so they emit verbatim like any literal.
+pub fn rewrite_pkg_macros(program: *Vector<Stmt>) {
+    // `m` stays null when there's no project manifest; every `pkg!(...)` then
+    // resolves to "" (rather than leaking through as an unresolved macro that
+    // codegen would emit as garbage).
+    let root: string = find_manifest_root(".");
+    let mut m: *Manifest = null;
+    if !root.eq("") { m = read_manifest(root); }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let mut s: Stmt = program.get(i);
+        _rewrite_pkg_stmt(&s, m);
+        program.set(i, s);
+    }
+}
+
+fn _rewrite_pkg_stmt(s: *Stmt, m: *Manifest) {
+    if s == null { return; }
+    if s.kind == ST_IMPL && s.impl_methods != null {
+        _rewrite_pkg_block(s.impl_methods, m);
+        return;
+    }
+    if s.let_value  != null { _rewrite_pkg_expr(s.let_value,  m); }
+    if s.expr_value != null { _rewrite_pkg_expr(s.expr_value, m); }
+    if s.cond       != null { _rewrite_pkg_expr(s.cond,       m); }
+    if s.fn_body    != null { _rewrite_pkg_block(s.fn_body,   m); }
+    if s.then_body  != null { _rewrite_pkg_block(s.then_body, m); }
+    if s.else_body  != null { _rewrite_pkg_block(s.else_body, m); }
+    if s.for_init   != null { _rewrite_pkg_stmt(s.for_init,   m); }
+}
+
+fn _rewrite_pkg_block(stmts: *Vector<Stmt>, m: *Manifest) {
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let mut s: Stmt = stmts.get(i);
+        _rewrite_pkg_stmt(&s, m);
+        stmts.set(i, s);
+    }
+}
+
+fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
+    if e == null { return; }
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("pkg")
+       && e.macro_recv == null && e.args != null && e.args.len() == 1 {
+        let a: Expr = e.args.get(0);
+        if a.kind == EX_STRING {
+            e.kind = EX_STRING;
+            e.str_val = _pkg_field(m, a.str_val);
+            e.args = null;
+            return;
+        }
+    }
+    if e.lhs     != null { _rewrite_pkg_expr(e.lhs,     m); }
+    if e.rhs     != null { _rewrite_pkg_expr(e.rhs,     m); }
+    if e.operand != null { _rewrite_pkg_expr(e.operand, m); }
+    if e.args    != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let mut a: Expr = e.args.get(i);
+            _rewrite_pkg_expr(&a, m);
+            e.args.set(i, a);
+        }
+    }
+    if e.fn_expr_body != null { _rewrite_pkg_block(e.fn_expr_body, m); }
+}
+
+fn _pkg_field(m: *Manifest, field: string) -> string {
+    if m == null { return ""; }
+    if field.eq("name")        { return m.name; }
+    if field.eq("version")     { return m.version; }
+    if field.eq("author")      { return m.author; }
+    if field.eq("license")     { return m.license; }
+    if field.eq("description") { return m.description; }
+    if field.eq("repository")  { return m.repository; }
+    return "";
 }
 
 // ---- procedural macros -----------------------------------------------

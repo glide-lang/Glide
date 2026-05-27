@@ -1354,6 +1354,35 @@ def _related_info_test():
 
 _related_info_test()
 
+# ---- pkg! manifest macro ----
+
+def _pkg_macro_test():
+    print("\n[pkg! manifest macro]")
+    # pkg!(...) resolves to a string literal at expand time, so a `: string`
+    # annotation type-checks and `.len()` is valid — no errors. (The smoke
+    # runs from the repo, which has a glide.glide, so it resolves to that.)
+    body = ('fn main() -> i32 {\n'
+            '    let v: string = pkg!("version");\n'
+            '    let n: string = pkg!("name");\n'
+            '    return v.len() + n.len();\n'
+            '}')
+    path, uri = write_tmp("pkg_macro.glide", body)
+    msgs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}},
+        {"jsonrpc": "2.0", "method": "exit", "params": None},
+    ]
+    diags = []
+    for r in run_session(msgs):
+        if r.get("method") == "textDocument/publishDiagnostics":
+            diags = r["params"]["diagnostics"]; break
+    errs = [d for d in diags if d.get("severity") == 1]
+    check("pkg!(...) resolves to a string (no errors)",
+          len(errs) == 0, f"got {[(d.get('code'), d.get('message','')[:40]) for d in errs]}")
+
+_pkg_macro_test()
+
 # ---- code action (quick fix) ----
 
 def _code_action_test():
