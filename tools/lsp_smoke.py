@@ -1400,6 +1400,14 @@ case_diagnostics("cfg! unknown condition is flagged",
     'fn main() -> i32 { if cfg!("windoze") { return 1; } return 0; }',
     expect_codes_present=["unknown-cfg"])
 
+case_diagnostics("cfg arch conditions x86_64 aarch64 are valid",
+    'fn main() -> i32 { if cfg!("x86_64") { return 1; } if cfg!("aarch64") { return 2; } return 0; }',
+    expect_codes_absent=["unknown-cfg"])
+
+case_diagnostics("env! resolves to a string (no errors)",
+    'fn main() -> i32 { let v: string = env!("PATH"); return v.len(); }',
+    expect_codes_absent=["unknown-cfg","unknown-pkg-field"])
+
 _pkg_body = 'fn main() -> i32 { let v: string = pkg!(""); return 0; }'
 _pkg_col = _pkg_body.index('pkg!("') + len('pkg!("')
 case_feature("pkg arg completes the manifest field names",

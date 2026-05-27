@@ -5755,6 +5755,16 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
     println!("#else");
     println!("#define __glide_cfg_macos 0");
     println!("#endif");
+    println!("#if defined(__x86_64__) || defined(_M_X64)");
+    println!("#define __glide_cfg_x86_64 1");
+    println!("#else");
+    println!("#define __glide_cfg_x86_64 0");
+    println!("#endif");
+    println!("#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)");
+    println!("#define __glide_cfg_aarch64 1");
+    println!("#else");
+    println!("#define __glide_cfg_aarch64 0");
+    println!("#endif");
     println!("");
 
     let g: *CG = CG::new();

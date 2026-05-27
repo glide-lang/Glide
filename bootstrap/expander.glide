@@ -349,6 +349,19 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
             return;
         }
     }
+    // `env!("VAR")` → the build-time value of the environment variable as a
+    // string literal (empty when unset). Raw getenv output, so escape it for
+    // verbatim emission (a path may carry `\`, etc.).
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("env")
+       && e.macro_recv == null && e.args != null && e.args.len() == 1 {
+        let a: Expr = e.args.get(0);
+        if a.kind == EX_STRING {
+            e.str_val = _esc_str(__glide_getenv(a.str_val));
+            e.kind = EX_STRING;
+            e.args = null;
+            return;
+        }
+    }
     if e.lhs     != null { _rewrite_pkg_expr(e.lhs,     m); }
     if e.rhs     != null { _rewrite_pkg_expr(e.rhs,     m); }
     if e.operand != null { _rewrite_pkg_expr(e.operand, m); }
@@ -362,8 +375,26 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
     if e.fn_expr_body != null { _rewrite_pkg_block(e.fn_expr_body, m); }
 }
 
+extern fn __glide_getenv(name: string) -> string;
+// Escape a raw string into Glide-source form so codegen's verbatim string
+// emission produces a valid C literal (mirrors include_str!).
+fn _esc_str(raw: string) -> string {
+    let mut esc: string = "";
+    let n: i32 = raw.len();
+    for let k: i32 = 0; k < n; k++ {
+        let v: i32 = raw.at(k).to_int();
+        if v == 34 { esc = esc.concat("\\\""); }
+        else if v == 92 { esc = esc.concat("\\\\"); }
+        else if v == 10 { esc = esc.concat("\\n"); }
+        else if v == 13 { esc = esc.concat("\\r"); }
+        else if v == 9  { esc = esc.concat("\\t"); }
+        else { esc = esc.concat(raw.substring(k, k + 1)); }
+    }
+    return esc;
+}
 fn _cfg_cond_known(c: string) -> bool {
-    return c.eq("windows") || c.eq("posix") || c.eq("linux") || c.eq("macos");
+    return c.eq("windows") || c.eq("posix") || c.eq("linux") || c.eq("macos")
+        || c.eq("x86_64") || c.eq("aarch64");
 }
 
 fn _pkg_field_known(field: string) -> bool {
