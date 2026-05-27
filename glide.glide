@@ -2,9 +2,13 @@
 // to know which file to build (the bootstrap driver) and what to name
 // the produced binary.
 let manifest: Package = Package {
-    name:    "glide",
-    version: "0.1.1",
-    bin:     "bootstrap/main.glide",
+    name:        "glide",
+    version:     "0.2.0",
+    description: "The Glide programming language compiler and toolchain",
+    author:      "Glide Contributors",
+    license:     "MIT",
+    repository:  "https://github.com/glide-lang/Glide",
+    bin:         "bootstrap/main.glide",
     deps: vec_of(
     ),
 };
