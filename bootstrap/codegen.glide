@@ -1823,6 +1823,21 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             || op == OP_GT || op == OP_GE || op == OP_AND || op == OP_OR {
             return ty_named("bool");
         }
+        if op == OP_COALESCE {
+            // `a ?? b` unwraps a ?T / !T / ?!T to its inner T (matching the
+            // emitted `__o.has ? __o.val : b`), so the result type — and thus
+            // the printf format for an inline `println!(.., x ?? n)` arg — is
+            // T, not the wrapper. A nullable `*T` stays a pointer. Fall back
+            // to the RHS type when the LHS can't be resolved.
+            let lt: *Type = infer_for_codegen(g, e.lhs);
+            if lt != null
+                && (lt.kind == TY_OPTION || lt.kind == TY_RESULT || lt.kind == TY_OPT_RESULT)
+                && lt.inner != null {
+                return lt.inner;
+            }
+            if lt != null { return lt; }
+            return infer_for_codegen(g, e.rhs);
+        }
         return infer_for_codegen(g, e.lhs);
     }
     if e.kind == EX_INDEX {
@@ -3036,6 +3051,31 @@ fn _field_ty_in_struct(g: *CG, struct_name: string, field_name: string) -> *Type
     return null;
 }
 
+// Rewrite a bare `some`/`none`/`ok`/`err` call in `e` to its monomorphized
+// `__glide_<ctor>_<mangle>` name, given the expected `want` type. Mirrors the
+// let-init / return rewriting so these ctors also resolve in struct-literal
+// field and field-assignment position (where no `let: ?T` annotation exists
+// to carry the type). No-op when `e` isn't such a call or `want` isn't an
+// Option / Result / opt-Result type.
+fn _rewrite_opt_ctor(e: *Expr, want: *Type) {
+    if e == null || want == null { return; }
+    if e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_IDENT { return; }
+    if want.kind == TY_RESULT {
+        let m: string = mangle_type(want.inner);
+        if e.lhs.str_val.eq("ok")  { e.lhs.str_val = "__glide_ok_".concat(m); }
+        if e.lhs.str_val.eq("err") { e.lhs.str_val = "__glide_err_".concat(m); }
+    } else if want.kind == TY_OPTION {
+        let m: string = mangle_type(want.inner);
+        if e.lhs.str_val.eq("some") { e.lhs.str_val = "__glide_some_".concat(m); }
+        if e.lhs.str_val.eq("none") { e.lhs.str_val = "__glide_none_".concat(m); }
+    } else if want.kind == TY_OPT_RESULT {
+        let m: string = mangle_type(want.inner);
+        if e.lhs.str_val.eq("some") { e.lhs.str_val = "__glide_optres_some_".concat(m); }
+        if e.lhs.str_val.eq("none") { e.lhs.str_val = "__glide_optres_none_".concat(m); }
+        if e.lhs.str_val.eq("err")  { e.lhs.str_val = "__glide_optres_err_".concat(m); }
+    }
+}
+
 // ---- expressions ---------------------------------------------------------
 
 pub fn emit_expr(g: *CG, e: *Expr) {
@@ -4024,15 +4064,19 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 let fname: string = e.field_names.get(i);
                 print!(".", c_safe_ident(fname), " = ");
                 let v: Expr = e.args.get(i);
+                let fty: *Type = _field_ty_in_struct(g, e.str_val, fname);
                 // `null` against a `*dyn Trait` field needs the
                 // fat-pointer zero-init, not literal NULL.
                 if v.kind == EX_NULL {
-                    let fty: *Type = _field_ty_in_struct(g, e.str_val, fname);
                     if _is_dyn_ptr(fty) {
                         _emit_null_for(fty);
                         continue;
                     }
                 }
+                // Propagate the field's declared type so some()/none()/
+                // ok()/err() in field position monomorphize the same way
+                // they do for `let x: ?T = ...`.
+                _rewrite_opt_ctor(&v, fty);
                 emit_expr(g, &v);
             }
         }
@@ -4512,6 +4556,9 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
            && s.expr_value.rhs != null && s.expr_value.rhs.kind == EX_CALL {
             let field_ty: *Type = infer_for_codegen(g, s.expr_value.lhs);
             if field_ty != null {
+                // some()/none()/ok()/err() RHS: monomorphize against the
+                // field's declared `?T` / `!T` type, same as let-init.
+                _rewrite_opt_ctor(s.expr_value.rhs, field_ty);
                 let _ok: bool = try_mono_call(g, s.expr_value.rhs, field_ty);
             }
         }
