@@ -1846,6 +1846,23 @@ fn parse_type(p: *Parser) -> *Type {
         if p.at_op("::") {
             p.advance();
             let assoc_name: string = p.expect_ident();
+            // `module::Type<G, ...>` — a module-qualified generic type.
+            // The module is just a namespace qualifier, so strip it and
+            // build the generic type on the bare name (matching how the
+            // typer resolves `module::Type::method` expressions).
+            if p.at_op("<") {
+                p.advance();
+                let gargs: *Vector<Type> = Vector::new();
+                while !p.at_close_angle() && !p.at_eof() {
+                    let ginner: *Type = parse_type(p);
+                    if ginner != null { gargs.push(*ginner); }
+                    if !p.eat_op(",") { break; }
+                }
+                p.consume_close_angle();
+                let qgt: *Type = ty_generic(assoc_name, gargs);
+                qgt.line = nl; qgt.col = nc;
+                return qgt;
+            }
             return ty_assoc(ty_named(name), assoc_name);
         }
         let nt: *Type = ty_named(name);
