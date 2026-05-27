@@ -28,13 +28,22 @@ static const char* __glide_string_concat(const char* a, const char* b) {
     return out;
 }
 static const char* __glide_string_substring(const char* s, int start, int end) {
-    int n = (int)strlen(s);
+    /* O(end-start), not O(strlen(s)): copy from `start` up to `end`, stopping
+       at the NUL terminator (so an `end` past the string yields the rest, same
+       as clamping to strlen). Avoids a full strlen per call — the lexer calls
+       this once per token, so a strlen here made tokenization O(n^2). Callers
+       always pass start within [0, len]. */
     if (start < 0) start = 0;
-    if (end > n) end = n;
-    if (start > end) start = end;
-    int len = end - start;
-    char* out = (char*)__glide_palloc(len + 1);
-    memcpy(out, s + start, (size_t)len); out[len] = 0;
+    if (end < start) end = start;
+    int cap = end - start;
+    char* out = (char*)__glide_palloc(cap + 1);
+    int j = 0;
+    for (int i = 0; i < cap; i++) {
+        char c = s[start + i];
+        if (c == 0) break;
+        out[j++] = c;
+    }
+    out[j] = 0;
     return out;
 }
 /* Take a raw byte buffer + length and produce a NUL-terminated Glide
