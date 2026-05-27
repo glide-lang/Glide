@@ -1,0 +1,10 @@
+// Freestanding kernel project. `kind: "kernel"` flips the compiler into
+// freestanding mode (no hosted prelude / runtime / `main` wrapper) and the
+// build links a bare-metal x86_64 ELF with zig against `linker`.
+let pkg = Package {
+    name: "glide-kernel",
+    version: "0.0.1",
+    bin: "kmain.glide",
+    kind: "kernel",
+    linker: "linker.ld",
+};
