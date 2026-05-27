@@ -854,6 +854,30 @@ impl Typer {
         return self.module_imports.contains(key);
     }
 
+    // True when `name` is a module the current file imported (the short
+    // alias from `import a::b::name;`) or a full module path. Independent of
+    // `enforce_visibility`, unlike is_module_path_allowed.
+    fn _is_imported_module(self: *Typer, name: string) -> bool {
+        if name == null || name.eq("") { return false; }
+        if self.module_full_paths.contains(name) { return true; }
+        if self.current_origin == null || self.current_origin.eq("") { return false; }
+        return self.module_imports.contains(self.current_origin.concat("::").concat(name));
+    }
+
+    // Strip a leading imported-module segment from a qualified prefix, so
+    // `ip::SocketAddr` (module `ip` + type) resolves as the bare `SocketAddr`
+    // via the normal type/method registry. Leaves non-module prefixes (a
+    // bare `Type`, a type param) untouched.
+    fn _strip_mod_prefix(self: *Typer, prefix: string) -> string {
+        if prefix == null { return prefix; }
+        let cc: i32 = prefix.index_of("::");
+        if cc < 0 { return prefix; }
+        let head: string = prefix.substring(0, cc);
+        if !self._is_imported_module(head) { return prefix; }
+        let rest: string = prefix.substring(cc + 2, prefix.len());
+        return self._strip_mod_prefix(rest);
+    }
+
     pub fn free(self: *Typer) {
         self.fns.free();
         self.structs.free();
@@ -988,6 +1012,28 @@ impl Typer {
             fix_line: 0, fix_col: 0,
             fix_end_line: 0, fix_end_col: 0,
             fix_replacement: "",
+        };
+        self.diagnostics.push(e);
+        self.error_count = self.error_count + 1;
+    }
+
+    // Error (severity 1) carrying a mechanical fix the LSP turns into a
+    // quick fix: splice `repl` over the range (fl,fc)..(fel,fec) (1-indexed).
+    fn err_code_range_fix(self: *Typer, line: i32, col: i32, span: i32, code: string, msg: string,
+                          fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
+        let mut e_len: i32 = span;
+        if e_len < 1 { e_len = 1; }
+        let mut origin: string = self.current_origin;
+        if origin == null { origin = ""; }
+        let e: DiagEntry = DiagEntry {
+            line: line, col: col,
+            end_line: line, end_col: col + e_len,
+            severity: 1, code: code, message: msg,
+            origin: origin,
+            tag: 0,
+            fix_line: fl, fix_col: fc,
+            fix_end_line: fel, fix_end_col: fec,
+            fix_replacement: repl,
         };
         self.diagnostics.push(e);
         self.error_count = self.error_count + 1;
@@ -2892,7 +2938,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // shape-mismatches even when full generic monomorphization isn't
         // run in the typer.
         if e.lhs != null && e.lhs.kind == EX_PATH {
-            let prefix: string = e.lhs.str_val;
+            let prefix: string = t._strip_mod_prefix(e.lhs.str_val);
             let pname: string = prefix.concat("_").concat(e.lhs.field);
             // Allow if any of: prefix is a known type (struct/enum), the
             // mangled `<Type>_<method>` is registered (covers C-runtime
@@ -3025,7 +3071,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if (e.field.eq("MAX") || e.field.eq("MIN")) && _is_int_prim_name(e.str_val) {
             return ty_named(e.str_val);
         }
-        let prefix: string = e.str_val;
+        let prefix: string = t._strip_mod_prefix(e.str_val);
         let pname: string = prefix.concat("_").concat(e.field);
         let is_type: bool = t.structs.contains(prefix);
         let is_known_method: bool = t.fns.contains(pname);
