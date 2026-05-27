@@ -83,6 +83,18 @@ c_raw! {
 
 fn _lsp_log(msg: string) { __glide_lsp_log(msg); }
 
+extern fn __glide_perf_now_ns() -> i64;
+// Phase timer for analyze_document. Logs "PERF <label> <ms>ms" to the LSP
+// log when GLIDE_LSP_PERF is set; returns the new clock reading so the
+// caller threads it into the next mark. No-op (just returns prev) otherwise.
+fn _perf_mark(perf: bool, prev: i64, label: string) -> i64 {
+    if !perf { return prev; }
+    let now: i64 = __glide_perf_now_ns();
+    let ms: i32 = ((now - prev) / 1000000) as i32;
+    _lsp_log("PERF ".concat(label).concat(" ").concat(ms.to_string()).concat("ms"));
+    return now;
+}
+
 // `~/.glide/lsp.log` on POSIX, `%USERPROFILE%\.glide\lsp.log` on Windows.
 // Falls back to TMP if the home dir lookup fails.
 fn _lsp_log_path() -> string {
@@ -904,6 +916,8 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
         __glide_palloc_set(prev);
         _lsp_log("    manifest lint applied");
     }
+    let _perf: bool = !__glide_getenv("GLIDE_LSP_PERF").eq("");
+    let mut _pt: i64 = __glide_perf_now_ns();
     let stmts: *Vector<Stmt> = Vector::new();
     let loaded: *HashMap<bool> = HashMap::new();
 
@@ -922,6 +936,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // Transitive imports go through state.parse_cache so stdlib + builtins
     // aren't relexed/reparsed on every keystroke.
     load_into_str_with_cache(stmts, text, path, loaded, pdiags, state.parse_cache);
+    _pt = _perf_mark(_perf, _pt, "load");
 
     // Harvest macro definitions (free `macro foo!()`, `impl T { macro x!() }`,
     // proc-macro fns) BEFORE expand_macros runs — it consumes the defs into
@@ -972,10 +987,14 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
         // null-safety + arity checks that run unconditionally. The doc's
         // builtins + transitive imports are already loaded into `stmts` above,
         // so every legit cross-file symbol is registered and won't false-flag.
+        _pt = _perf_mark(_perf, _pt, "expand+lower");
         build_visibility(t, stmts);
+        _pt = _perf_mark(_perf, _pt, "build_visibility");
         t.enforce_visibility = true;
         check_program(t, stmts);
+        _pt = _perf_mark(_perf, _pt, "check_program");
         run_extra_analyses(t, stmts);
+        _pt = _perf_mark(_perf, _pt, "run_extra_analyses");
     }
 
     // Save the parsed stmts on the doc. The arena stays alive (in the
