@@ -317,6 +317,11 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
        && e.macro_recv == null && e.args != null && e.args.len() == 1 {
         let a: Expr = e.args.get(0);
         if a.kind == EX_STRING {
+            if !_pkg_field_known(a.str_val) {
+                pass_diag(e.line, e.column, 1, "unknown-pkg-field",
+                    "unknown pkg field `".concat(a.str_val)
+                    .concat("`; valid: name, version, author, license, description, repository"));
+            }
             e.kind = EX_STRING;
             e.str_val = _pkg_field(m, a.str_val);
             e.args = null;
@@ -334,6 +339,11 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
         }
     }
     if e.fn_expr_body != null { _rewrite_pkg_block(e.fn_expr_body, m); }
+}
+
+fn _pkg_field_known(field: string) -> bool {
+    return field.eq("name") || field.eq("version") || field.eq("author")
+        || field.eq("license") || field.eq("description") || field.eq("repository");
 }
 
 fn _pkg_field(m: *Manifest, field: string) -> string {

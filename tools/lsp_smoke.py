@@ -1388,6 +1388,21 @@ def _pkg_macro_test():
 
 _pkg_macro_test()
 
+case_diagnostics("pkg! unknown field is flagged",
+    'fn main() -> i32 { return pkg!("verison").len(); }',
+    expect_codes_present=["unknown-pkg-field"])
+
+_pkg_body = 'fn main() -> i32 { let v: string = pkg!(""); return 0; }'
+_pkg_col = _pkg_body.index('pkg!("') + len('pkg!("')
+case_feature("pkg arg completes the manifest field names",
+    _pkg_body,
+    {"jsonrpc": "2.0", "id": 2, "method": "textDocument/completion",
+     "params": {"position": {"line": 0, "character": _pkg_col}}},
+    lambda r: check("offers name/version/author/license/description/repository",
+                    {"name", "version", "author", "license", "description", "repository"}
+                        .issubset(set(comp_labels(r))),
+                    f"got {comp_labels(r)}"))
+
 # ---- code action (quick fix) ----
 
 def _code_action_test():

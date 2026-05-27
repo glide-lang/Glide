@@ -6917,6 +6917,61 @@ fn _struct_lit_ctx(text: string, line0: i32, col0: i32, present: *HashMap<bool>)
     return name_tok.lexeme;
 }
 
+// True when the cursor sits inside the string arg of `pkg!("…")`, so
+// completion can offer the manifest field names. Text scan (the partial
+// `pkg!("ver` has an unterminated string the lexer can't tokenize).
+fn _in_pkg_arg(text: string, line0: i32, col0: i32) -> bool {
+    let ci: i32 = _line_col_offset(text, line0, col0);
+    if ci <= 0 { return false; }
+    let mut q: i32 = ci - 1;
+    while q >= 0 && text.at(q).to_int() != 34 { q = q - 1; }   // 34 = "
+    if q < 0 { return false; }
+    let mut k: i32 = q - 1;
+    while k >= 0 {
+        let c: i32 = text.at(k).to_int();
+        if c == 32 || c == 9 || c == 10 || c == 13 { k = k - 1; } else { break; }
+    }
+    if k < 0 || text.at(k).to_int() != 40 { return false; }    // 40 = (
+    k = k - 1;
+    while k >= 0 {
+        let c: i32 = text.at(k).to_int();
+        if c == 32 || c == 9 || c == 10 || c == 13 { k = k - 1; } else { break; }
+    }
+    if k < 3 { return false; }
+    return text.substring(k - 3, k + 1).eq("pkg!");
+}
+
+fn _pkg_field_val(m: *Manifest, field: string) -> string {
+    if m == null { return ""; }
+    if field.eq("name")        { return m.name; }
+    if field.eq("version")     { return m.version; }
+    if field.eq("author")      { return m.author; }
+    if field.eq("license")     { return m.license; }
+    if field.eq("description") { return m.description; }
+    if field.eq("repository")  { return m.repository; }
+    return "";
+}
+
+fn _push_pkg_field(items: *JsonValue, field: string, m: *Manifest) {
+    let mut detail: string = "glide.glide field";
+    let v: string = _pkg_field_val(m, field);
+    if !v.eq("") { detail = field.concat(" = \"").concat(v).concat("\""); }
+    json_arr_push(items, completion_item(field, 5, detail));   // 5 = Field
+}
+
+// Offer the six manifest fields, each with its resolved value as the detail.
+fn _push_pkg_fields(items: *JsonValue, doc_path: string) {
+    let root: string = find_manifest_root(_lsp_parent_dir(doc_path));
+    let mut m: *Manifest = null;
+    if !root.eq("") { m = read_manifest(root); }
+    _push_pkg_field(items, "name", m);
+    _push_pkg_field(items, "version", m);
+    _push_pkg_field(items, "author", m);
+    _push_pkg_field(items, "license", m);
+    _push_pkg_field(items, "description", m);
+    _push_pkg_field(items, "repository", m);
+}
+
 fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -6947,6 +7002,14 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             seen0.free();
         }
         lsp_send_response(id, it0);
+        return;
+    }
+    // `pkg!("|")` — offer the manifest field names (with their resolved
+    // values as detail). Must run before the in-string bail-out below.
+    if _in_pkg_arg(doc.text, line0, col0) {
+        let pit: *JsonValue = json_array();
+        _push_pkg_fields(pit, uri_to_path(uri));
+        lsp_send_response(id, pit);
         return;
     }
     // Editors trigger completion on `.` / `:` even inside string and char
