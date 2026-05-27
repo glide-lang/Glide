@@ -784,8 +784,10 @@ fn _pump_chunks_tls(s: *TlsStream, src: *dyn ChunkSource) {
 // Pick the right wire-emit path based on whether the response carries
 // a stream source. Buffered responses go through the C builder
 // (single static buffer, single write); streamed responses emit
-// header bytes manually then pump chunks.
-fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
+// header bytes manually then pump chunks. `pub` because the sibling
+// `http::router` module drives its own accept loop and reuses it; the
+// `_` prefix still marks it package-internal (not for end users).
+pub fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
     if resp.stream_src != null {
         let head: string = _format_chunked_head(resp, keep);
         c.write(head as *void, head.len());
