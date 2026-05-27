@@ -525,6 +525,10 @@ pub struct Typer {
     pub struct_fields_all: *HashMap<bool>,
     pub scope: *HashMap<Type>,          // current scope: name -> Type (heap-alloc'd)
     pub module_scope: *HashMap<Type>,   // top-level consts (visible inside any fn body)
+    // Freestanding / kernel build: also register top-level `let` globals in
+    // module_scope so fn bodies can read/write them (a kernel needs mutable
+    // global state). Set from the build before check_program runs.
+    pub freestanding: bool,
     pub owned_locals: *HashMap<bool>,   // names that must not escape (auto-drop)
     // Local `*Arena` bindings declared in the current fn body. Anything
     // allocated from one of these can't escape via return - the caller
@@ -778,6 +782,7 @@ impl Typer {
         t.struct_fields_all = struct_fields_all;
         t.scope = scope;
         t.module_scope = mscope;
+        t.freestanding = false;
         t.owned_locals = owned;
         t.arena_locals = ar_locals;
         t.arena_origin = ar_origin;
@@ -996,6 +1001,27 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 else if s.let_value.kind == EX_CHAR { ty = ty_named("char"); }
             }
             if ty != null { t.module_scope.insert(s.name, *ty); }
+        }
+        if s.kind == ST_LET && t.freestanding {
+            // Top-level `let` in a freestanding/kernel build is a mutable
+            // global, visible inside any fn body (same as a const). Type from
+            // the annotation, else inferred from the literal value.
+            let mut lty: *Type = s.let_ty;
+            if lty == null && s.let_value != null {
+                if s.let_value.kind == EX_INT {
+                    if s.let_value.int_val > 2147483647 || s.let_value.int_val < -2147483648 {
+                        lty = ty_named("i64");
+                    } else {
+                        lty = ty_named("i32");
+                    }
+                }
+                else if s.let_value.kind == EX_FLOAT { lty = ty_named("f64"); }
+                else if s.let_value.kind == EX_STRING { lty = ty_named("string"); }
+                else if s.let_value.kind == EX_BOOL { lty = ty_named("bool"); }
+                else if s.let_value.kind == EX_CHAR { lty = ty_named("char"); }
+                else if s.let_value.kind == EX_STRUCT_LIT { lty = ty_named(s.let_value.str_val); }
+            }
+            if lty != null { t.module_scope.insert(s.name, *lty); }
         }
         if s.kind == ST_FN {
             let no_owner: *Vector<string> = null;

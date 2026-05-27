@@ -2016,7 +2016,8 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
             if s.origin == null || !s.origin.eq(f) { continue; }
             if s.name == null || s.name.eq("") { continue; }
             if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
-               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF || s.kind == ST_TRAIT {
+               || s.kind == ST_CONST || s.kind == ST_MACRO_DEF || s.kind == ST_TRAIT
+               || s.kind == ST_LET {
                 t.visibility.insert(f.concat("::").concat(s.name), true);
             }
         }
@@ -2582,6 +2583,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     //    errors (e.g. infinite-recursion, type mismatches).
     if !quiet { spinner_set("typechecking"); }
     let t: *Typer = Typer::new();
+    t.freestanding = freestanding;
     merge_parse_diags(t, pdiags);
     build_visibility(t, stmts);
     t.enforce_visibility = true;
