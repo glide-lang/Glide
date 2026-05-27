@@ -246,6 +246,182 @@ case_feature("formatting normalizes whitespace",
             and "fn add(a: i32, b: i32) -> i32" in r["result"][0].get("newText",""),
         f"got: {(r or {}).get('result')}"))
 
+# ---- signatureHelp ----
+
+case_feature("signatureHelp free fn tracks active param",
+    'fn add(a: i32, b: i32) -> i32 { return a + b; }\n'
+    'fn main() -> i32 { let z = add(1, ); return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp",
+     "params":{"position":{"line":1,"character":33}}},  # after `add(1, `
+    lambda r: (
+        check("sig label is add(a: i32, b: i32) -> i32",
+            r and r.get("result") and
+            r["result"]["signatures"][0]["label"] == "fn add(a: i32, b: i32) -> i32",
+            f"got: {(r or {}).get('result')}"),
+        check("active parameter is 1",
+            r and r.get("result") and r["result"].get("activeParameter") == 1,
+            f"got: {(r or {}).get('result')}"),
+    ))
+
+case_feature("signatureHelp on method hides self receiver",
+    'struct Counter { n: i32 }\n'
+    'impl Counter { fn bump_by(self: *Counter, delta: i32) -> i32 { return self.n + delta; } }\n'
+    'fn main() -> i32 {\n'
+    '    let c = Counter { n: 0 };\n'
+    '    return c.bump_by(5);\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp",
+     "params":{"position":{"line":4,"character":21}}},  # inside c.bump_by(
+    lambda r: check("method sig drops self -> bump_by(delta: i32) -> i32",
+        r and r.get("result") and
+        r["result"]["signatures"][0]["label"] == "fn bump_by(delta: i32) -> i32",
+        f"got: {(r or {}).get('result')}"))
+
+case_feature("signatureHelp resolves Type-static via qualifier",
+    'struct Vec2 { x: i32, y: i32 }\n'
+    'impl Vec2 { fn make(x: i32, y: i32) -> Vec2 { return Vec2 { x: x, y: y }; } }\n'
+    'fn main() -> i32 {\n'
+    '    let v = Vec2::make(1, 2);\n'
+    '    return v.x;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp",
+     "params":{"position":{"line":3,"character":25}}},  # after `Vec2::make(1, `
+    lambda r: (
+        check("static sig label is make(x: i32, y: i32) -> Vec2",
+            r and r.get("result") and
+            r["result"]["signatures"][0]["label"] == "fn make(x: i32, y: i32) -> Vec2",
+            f"got: {(r or {}).get('result')}"),
+        check("static active parameter is 1",
+            r and r.get("result") and r["result"].get("activeParameter") == 1,
+            f"got: {(r or {}).get('result')}"),
+    ))
+
+case_feature("signatureHelp suppressed outside a call",
+    'fn add(a: i32, b: i32) -> i32 { return a + b; }\n'
+    'fn main() -> i32 { let z = add(1, 2); return z; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp",
+     "params":{"position":{"line":1,"character":45}}},  # on `z` after the call closed
+    lambda r: check("no signature past the closing paren",
+        r and r.get("result") is None, f"got: {(r or {}).get('result')}"))
+
+# ---- semanticTokens ----
+# legend: 0 keyword 1 function 2 method 3 type 4 parameter
+#         5 variable 6 property 7 macro 8 namespace
+
+def decode_semtokens(data):
+    """Undo the LSP delta encoding -> {(line, col): tokenType}."""
+    toks, line, col = {}, 0, 0
+    for k in range(0, len(data) - 4, 5):
+        dl, dc, _len, ttype, _mods = data[k:k+5]
+        if dl == 0: col += dc
+        else: line += dl; col = dc
+        toks[(line, col)] = ttype
+    return toks
+
+def semtok_map(r):
+    if not (r and r.get("result") and "data" in r["result"]):
+        return {}
+    return decode_semtokens(r["result"]["data"])
+
+case_feature("semanticTokens fn type parameter keyword",
+    'fn add(a: i32, b: i32) -> i32 { return a + b; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{}},
+    lambda r: (
+        check("`add` -> function(1)", semtok_map(r).get((0,3)) == 1, f"got {semtok_map(r).get((0,3))}"),
+        check("`i32` -> type(3)",     semtok_map(r).get((0,10)) == 3, f"got {semtok_map(r).get((0,10))}"),
+        check("`a` -> parameter(4)",  semtok_map(r).get((0,7)) == 4, f"got {semtok_map(r).get((0,7))}"),
+        check("`fn` -> keyword(0)",   semtok_map(r).get((0,0)) == 0, f"got {semtok_map(r).get((0,0))}"),
+    ))
+
+case_feature("semanticTokens type method property variable",
+    'struct Point { x: i32, y: i32 }\n'
+    'impl Point { fn mag(self: *Point) -> i32 { return self.x; } }\n'
+    'fn main() -> i32 { let p = Point { x: 1, y: 2 }; return p.mag(); }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{}},
+    lambda r: (
+        check("`Point` ctor -> type(3)",   semtok_map(r).get((2,27)) == 3, f"got {semtok_map(r).get((2,27))}"),
+        check("`p.mag()` -> method(2)",    semtok_map(r).get((2,58)) == 2, f"got {semtok_map(r).get((2,58))}"),
+        check("`self.x` -> property(6)",   semtok_map(r).get((1,55)) == 6, f"got {semtok_map(r).get((1,55))}"),
+        check("receiver `p` -> variable(5)", semtok_map(r).get((2,56)) == 5, f"got {semtok_map(r).get((2,56))}"),
+    ))
+
+case_feature("semanticTokens module path namespace",
+    'import stdlib::time;\n'
+    'fn main() -> i32 { return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{}},
+    lambda r: check("`stdlib` before :: -> namespace(8)",
+        semtok_map(r).get((0,7)) == 8, f"got {semtok_map(r).get((0,7))}"))
+
+# ---- inlayHint ----
+
+def inlay_map(r):
+    """InlayHint[] -> {(line, char): label}."""
+    res = (r or {}).get("result") or []
+    return {(h.get("position",{}).get("line"), h.get("position",{}).get("character")): h.get("label")
+            for h in res}
+
+_FULL_RANGE = {"range":{"start":{"line":0,"character":0},"end":{"line":1000,"character":0}}}
+
+case_feature("inlayHint infers literal let types",
+    'fn main() -> i32 {\n'
+    '    let n = 42;\n'
+    '    let s = "hi";\n'
+    '    let b = true;\n'
+    '    let x: i32 = 5;\n'
+    '    return n;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: (
+        check("`n` hint -> ': i32'",    inlay_map(r).get((1,9)) == ": i32",    f"got {inlay_map(r).get((1,9))}"),
+        check("`s` hint -> ': string'", inlay_map(r).get((2,9)) == ": string", f"got {inlay_map(r).get((2,9))}"),
+        check("`b` hint -> ': bool'",   inlay_map(r).get((3,9)) == ": bool",   f"got {inlay_map(r).get((3,9))}"),
+        check("annotated `x` gets no hint", all(k[0] != 4 for k in inlay_map(r)), f"got {inlay_map(r)}"),
+    ))
+
+case_feature("inlayHint infers fn return type",
+    'fn mk() -> i32 { return 9; }\n'
+    'fn main() -> i32 {\n'
+    '    let q = mk();\n'
+    '    return q;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: check("`q = mk()` hint -> ': i32'",
+        inlay_map(r).get((2,9)) == ": i32", f"got {inlay_map(r).get((2,9))}"))
+
+case_feature("inlayHint resolves Vector generic param",
+    'fn main() -> i32 {\n'
+    '    let v = Vector::new();\n'
+    '    v.push(7);\n'
+    '    return v.len();\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: check("`v = Vector::new()` hint mentions Vector",
+        (inlay_map(r).get((1,9)) or "").find("Vector") >= 0, f"got {inlay_map(r).get((1,9))}"))
+
+# ---- workspace/symbol ----
+
+def ws_names(r):
+    return [it.get("name") for it in (r or {}).get("result", []) or []]
+
+case_feature("workspace-symbol finds stdlib HashMap",
+    'fn main() -> i32 { return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"HashMap"}},
+    lambda r: (
+        check("HashMap is in results", "HashMap" in ws_names(r), f"got {ws_names(r)[:12]}"),
+        check("HashMap has a .glide location", any(
+            it.get("name")=="HashMap" and it.get("location",{}).get("uri","").endswith(".glide")
+            for it in (r or {}).get("result",[])), f"got {(r or {}).get('result',[])[:2]}"),
+        check("HashMap kind is Struct(23)", any(
+            it.get("name")=="HashMap" and it.get("kind")==23
+            for it in (r or {}).get("result",[]))),
+    ))
+
+case_feature("workspace-symbol is case-insensitive substring",
+    'fn main() -> i32 { return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"hashm"}},
+    lambda r: check("lowercase 'hashm' still matches HashMap",
+        "HashMap" in ws_names(r), f"got {ws_names(r)[:12]}"))
+
 # ---- canonical numeric types (retired legacy spellings + 256-bit) ----
 
 def case_diag_message(label, body, expect_substr):

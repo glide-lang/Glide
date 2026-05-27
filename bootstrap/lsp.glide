@@ -18,6 +18,9 @@
 //   textDocument/documentSymbol      — outline tree.
 //   textDocument/completion          — keywords, builtins, locals, fields,
 //                                       chan ops on `c.`, type::method.
+//   textDocument/signatureHelp       — param hints inside a call: free fns,
+//                                       `recv.method` (self hidden), and
+//                                       `Type::static`. Tracks active arg.
 //
 // Edits:
 //   textDocument/rename              — workspace edit across collected uses.
@@ -170,6 +173,9 @@ pub struct ImportableSym {
     pub doc: string,          // doc-comment, rendered in `documentation`
     pub snippet: string,      // gopls-style snippet for `insertText`
     pub has_snippet: bool,    // true → insertTextFormat=2; false → plain
+    pub def_path: string,     // file the symbol is declared in (workspace/symbol location)
+    pub def_line: i32,        // 1-indexed name position; 0 if unknown
+    pub def_col: i32,
 }
 
 pub struct LspState {
@@ -320,6 +326,44 @@ fn handle_initialize(req: *JsonValue) {
     json_arr_push(trig, json_string(":"));
     json_obj_set(comp, "triggerCharacters", trig);
     json_obj_set(caps, "completionProvider", comp);
+    // Signature help: param hints while typing a call. `(` opens the
+    // hint, `,` advances the active parameter; `)` retriggers so a
+    // closing paren on a nested call snaps back to the outer signature.
+    let sh: *JsonValue = json_object();
+    let sh_trig: *JsonValue = json_array();
+    json_arr_push(sh_trig, json_string("("));
+    json_arr_push(sh_trig, json_string(","));
+    json_obj_set(sh, "triggerCharacters", sh_trig);
+    let sh_retrig: *JsonValue = json_array();
+    json_arr_push(sh_retrig, json_string(","));
+    json_arr_push(sh_retrig, json_string(")"));
+    json_obj_set(sh, "retriggerCharacters", sh_retrig);
+    json_obj_set(caps, "signatureHelpProvider", sh);
+    // Semantic tokens: precise highlighting the TextMate grammar can't do
+    // (which identifier is a type vs fn vs method vs param vs property).
+    // The legend order MUST match the SEMTOK_* indices in the handler.
+    let stp: *JsonValue = json_object();
+    let legend: *JsonValue = json_object();
+    let tt: *JsonValue = json_array();
+    json_arr_push(tt, json_string("keyword"));    // 0
+    json_arr_push(tt, json_string("function"));   // 1
+    json_arr_push(tt, json_string("method"));     // 2
+    json_arr_push(tt, json_string("type"));       // 3
+    json_arr_push(tt, json_string("parameter"));  // 4
+    json_arr_push(tt, json_string("variable"));   // 5
+    json_arr_push(tt, json_string("property"));   // 6
+    json_arr_push(tt, json_string("macro"));      // 7
+    json_arr_push(tt, json_string("namespace"));  // 8
+    json_obj_set(legend, "tokenTypes", tt);
+    json_obj_set(legend, "tokenModifiers", json_array());
+    json_obj_set(stp, "legend", legend);
+    json_obj_set(stp, "full", json_bool(true));
+    json_obj_set(caps, "semanticTokensProvider", stp);
+    // Inlay hints: inferred `: T` after a `let` binding with no annotation.
+    json_obj_set(caps, "inlayHintProvider", json_bool(true));
+    // Workspace symbol search (Ctrl+T): fuzzy over the stdlib + project +
+    // dep index built at startup / first open.
+    json_obj_set(caps, "workspaceSymbolProvider", json_bool(true));
     json_obj_set(result, "capabilities", caps);
     let info: *JsonValue = json_object();
     json_obj_set(info, "name", json_string("glide-lsp"));
@@ -674,6 +718,9 @@ fn _index_one_module(state: *LspState, path: string, mod_name: string, module: s
             doc: s.doc_comment,
             snippet: snip,
             has_snippet: has_snip,
+            def_path: path,
+            def_line: s.name_line,
+            def_col: s.name_col,
         };
         state.stdlib_index.push(sym);
         if count < 12 {
@@ -699,6 +746,9 @@ fn _index_one_module(state: *LspState, path: string, mod_name: string, module: s
         doc: mdoc,
         snippet: mod_name.concat("::"),
         has_snippet: true,
+        def_path: path,
+        def_line: 1,
+        def_col: 1,
     };
     state.stdlib_index.push(mod_sym);
 }
@@ -2054,6 +2104,563 @@ fn _manifest_hover_doc(word: string) -> string {
     else if word.eq("git") { sig = "Dep::git(name, url, rev)"; desc = "Depend on a package from a git repository at a tag or commit."; }
     if sig.eq("") { return ""; }
     return "```glide\n".concat(sig).concat("\n```\n\n---\n\n").concat(desc);
+}
+
+// ---- signatureHelp -----------------------------------------------------
+
+// Outcome of scanning backwards from the cursor to find the call we're
+// sitting inside. `name` is the callee identifier; `type_qual` is set for
+// `Type::method(` calls; `is_method` is true for `recv.method(` calls;
+// `active_param` is the 0-indexed argument the cursor is on (comma count
+// at the call's paren depth).
+struct SigCallCtx {
+    found: bool,
+    name: string,
+    type_qual: string,
+    is_method: bool,
+    active_param: i32,
+}
+
+// Lex the whole document, keep the tokens that start before the cursor,
+// then walk them backwards tracking bracket depth: the first unmatched
+// `(` is the call we're inside, the token before it is the callee, and
+// the commas seen at depth 0 give the active parameter. Bails (found =
+// false) when the enclosing bracket is `[`/`{` (indexing / block, not a
+// call) or when a `;` at depth 0 proves we're at statement level.
+fn _find_call_context(text: string, line0: i32, col0: i32) -> SigCallCtx {
+    let none: SigCallCtx = SigCallCtx { found: false, name: "", type_qual: "", is_method: false, active_param: 0 };
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF { break; }
+        let tline: i32 = tok.line - 1;
+        let tcol: i32 = tok.column - 1;
+        if tline > line0 { break; }
+        if tline == line0 && tcol >= col0 { break; }
+        toks.push(tok);
+    }
+    let n: i32 = toks.len();
+    if n == 0 { return none; }
+    let mut depth: i32 = 0;
+    let mut commas: i32 = 0;
+    let mut open_idx: i32 = -1;
+    for let i: i32 = n - 1; i >= 0; i = i - 1 {
+        let t: Token = toks.get(i);
+        if t.kind != TOK_OP { continue; }
+        if t.lexeme.eq(")") || t.lexeme.eq("]") || t.lexeme.eq("}") { depth = depth + 1; continue; }
+        if t.lexeme.eq("(") {
+            if depth > 0 { depth = depth - 1; continue; }
+            open_idx = i;
+            break;
+        }
+        if t.lexeme.eq("[") || t.lexeme.eq("{") {
+            if depth > 0 { depth = depth - 1; continue; }
+            return none;
+        }
+        if t.lexeme.eq(",") { if depth == 0 { commas = commas + 1; } continue; }
+        if t.lexeme.eq(";") { if depth == 0 { return none; } continue; }
+    }
+    if open_idx < 1 { return none; }
+    let name_tok: Token = toks.get(open_idx - 1);
+    if name_tok.kind != TOK_IDENT && name_tok.kind != TOK_KEYWORD { return none; }
+    let mut ctx: SigCallCtx = SigCallCtx {
+        found: true, name: name_tok.lexeme, type_qual: "",
+        is_method: false, active_param: commas,
+    };
+    if open_idx - 2 >= 0 {
+        let prev: Token = toks.get(open_idx - 2);
+        if prev.kind == TOK_OP && prev.lexeme.eq("::") {
+            if open_idx - 3 >= 0 {
+                let q: Token = toks.get(open_idx - 3);
+                if q.kind == TOK_IDENT || q.kind == TOK_KEYWORD { ctx.type_qual = q.lexeme; }
+            }
+        } else if prev.kind == TOK_OP && prev.lexeme.eq(".") {
+            ctx.is_method = true;
+        }
+    }
+    return ctx;
+}
+
+// Number of params the caller actually supplies — drops a leading `self`
+// when the call came in through `recv.method(`, since the receiver is
+// implicit there.
+fn _fn_user_param_count(s: *Stmt, drop_self: bool) -> i32 {
+    if s.fn_params == null { return 0; }
+    let mut c: i32 = 0;
+    for let i: i32 = 0; i < s.fn_params.len(); i++ {
+        let p: Param = s.fn_params.get(i);
+        if drop_self && i == 0 && p.name.eq("self") { continue; }
+        c = c + 1;
+    }
+    return c;
+}
+
+// Build one SignatureInformation. Each parameter's `label` is an
+// [start, end) offset pair into the signature label (ASCII, so byte
+// offsets == UTF-16 units) so the client highlights the exact span even
+// when two params render identically.
+fn _sig_json_for_fn(s: *Stmt, drop_self: bool) -> *JsonValue {
+    let mut label: string = "fn ".concat(s.name).concat("(");
+    let params_arr: *JsonValue = json_array();
+    let mut first: bool = true;
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            if drop_self && i == 0 && p.name.eq("self") { continue; }
+            if !first { label = label.concat(", "); }
+            first = false;
+            let start: i32 = label.len();
+            label = label.concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+            let endp: i32 = label.len();
+            let pj: *JsonValue = json_object();
+            let rng: *JsonValue = json_array();
+            json_arr_push(rng, json_int(start));
+            json_arr_push(rng, json_int(endp));
+            json_obj_set(pj, "label", rng);
+            json_arr_push(params_arr, pj);
+        }
+    }
+    label = label.concat(")");
+    if s.fn_ret_ty != null { label = label.concat(" -> ").concat(type_to_string_pretty(s.fn_ret_ty)); }
+    let sig: *JsonValue = json_object();
+    json_obj_set(sig, "label", json_string(label));
+    json_obj_set(sig, "parameters", params_arr);
+    if s.doc_comment != null && !s.doc_comment.eq("") {
+        let docj: *JsonValue = json_object();
+        json_obj_set(docj, "kind", json_string("markdown"));
+        json_obj_set(docj, "value", json_string(s.doc_comment));
+        json_obj_set(sig, "documentation", docj);
+    }
+    return sig;
+}
+
+fn handle_signature_help(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+
+    if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    if doc.stmts == null { lsp_send_response(id, json_null()); return; }
+
+    let cc: SigCallCtx = _find_call_context(doc.text, line0, col0);
+    if !cc.found { lsp_send_response(id, json_null()); return; }
+
+    // Resolve the callee. A `Type::` qualifier pins the impl precisely; a
+    // `recv.` receiver means a method (self is implicit, so drop it);
+    // otherwise try a free fn, then fall back to any matching method
+    // (covers `Type::new(` ctors whose qualifier we may have missed).
+    let mut target: *Stmt = null;
+    let mut drop_self: bool = false;
+    if !cc.type_qual.eq("") {
+        target = find_method_in_impl(doc.stmts, cc.type_qual, cc.name);
+    }
+    if target == null && cc.is_method {
+        let hit: ImplMethodHit = find_method_anywhere(doc.stmts, cc.name);
+        target = hit.method;
+        drop_self = true;
+    }
+    if target == null {
+        let td2: *Stmt = find_top_decl(doc.stmts, cc.name);
+        if td2 != null && td2.kind == ST_FN { target = td2; }
+    }
+    if target == null {
+        let hit2: ImplMethodHit = find_method_anywhere(doc.stmts, cc.name);
+        target = hit2.method;
+    }
+    if target == null || target.kind != ST_FN { lsp_send_response(id, json_null()); return; }
+
+    let sig: *JsonValue = _sig_json_for_fn(target, drop_self);
+    let nparams: i32 = _fn_user_param_count(target, drop_self);
+    let mut active: i32 = cc.active_param;
+    if nparams > 0 && active > nparams - 1 { active = nparams - 1; }
+    if active < 0 { active = 0; }
+
+    let result: *JsonValue = json_object();
+    let sigs: *JsonValue = json_array();
+    json_arr_push(sigs, sig);
+    json_obj_set(result, "signatures", sigs);
+    json_obj_set(result, "activeSignature", json_int(0));
+    json_obj_set(result, "activeParameter", json_int(active));
+    lsp_send_response(id, result);
+}
+
+// ---- semanticTokens ----------------------------------------------------
+
+// Legend indices — MUST match the tokenTypes order in handle_initialize.
+const SEMTOK_KEYWORD: i32 = 0;
+const SEMTOK_FUNCTION: i32 = 1;
+const SEMTOK_METHOD: i32 = 2;
+const SEMTOK_TYPE: i32 = 3;
+const SEMTOK_PARAMETER: i32 = 4;
+const SEMTOK_VARIABLE: i32 = 5;
+const SEMTOK_PROPERTY: i32 = 6;
+const SEMTOK_MACRO: i32 = 7;
+const SEMTOK_NAMESPACE: i32 = 8;
+
+// Canonical primitive type spellings (lowercase, so the PascalCase
+// heuristic misses them). Keeps `i32` / `string` / `bool` colored as types.
+fn _is_primitive_type(name: string) -> bool {
+    if name.eq("i8") || name.eq("i16") || name.eq("i32") || name.eq("i64")
+       || name.eq("i128") || name.eq("i256") { return true; }
+    if name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64")
+       || name.eq("u128") || name.eq("u256") { return true; }
+    if name.eq("f32") || name.eq("f64") { return true; }
+    if name.eq("bool") || name.eq("string") || name.eq("void") || name.eq("char") { return true; }
+    return false;
+}
+
+fn _first_is_upper(s: string) -> bool {
+    if s.len() == 0 { return false; }
+    let c: i32 = s.at(0).to_int();
+    return c >= 65 && c <= 90;
+}
+
+fn _param_set_has(host: *Stmt, name: string) -> bool {
+    if host == null || host.fn_params == null { return false; }
+    for let i: i32 = 0; i < host.fn_params.len(); i++ {
+        let p: Param = host.fn_params.get(i);
+        if p.name.eq(name) { return true; }
+    }
+    return false;
+}
+
+// Classify one identifier token from its neighbours + the doc's declared
+// type names + the enclosing fn's params. Returns a SEMTOK_* index.
+fn _semtok_classify(toks: *Vector<Token>, i: i32, n: i32,
+                    type_names: *HashMap<bool>, host: *Stmt) -> i32 {
+    let t: Token = toks.get(i);
+    let mut next_lparen: bool = false;
+    let mut next_bang: bool = false;
+    let mut next_cc: bool = false;
+    if i + 1 < n {
+        let nx: Token = toks.get(i + 1);
+        if nx.kind == TOK_OP {
+            if nx.lexeme.eq("(") { next_lparen = true; }
+            if nx.lexeme.eq("!") { next_bang = true; }
+            if nx.lexeme.eq("::") { next_cc = true; }
+        }
+    }
+    let mut prev_dot: bool = false;
+    let mut prev_cc: bool = false;
+    let mut prev_at: bool = false;
+    if i - 1 >= 0 {
+        let pv: Token = toks.get(i - 1);
+        if pv.kind == TOK_OP {
+            if pv.lexeme.eq(".") { prev_dot = true; }
+            if pv.lexeme.eq("::") { prev_cc = true; }
+            if pv.lexeme.eq("@") { prev_at = true; }
+        }
+    }
+    let looks_type: bool = _is_primitive_type(t.lexeme)
+        || type_names.contains(t.lexeme) || _first_is_upper(t.lexeme);
+
+    if next_bang { return SEMTOK_MACRO; }          // name!(...)
+    if prev_at { return SEMTOK_MACRO; }            // @derive / @get attribute
+    if next_lparen {                               // call
+        if prev_dot { return SEMTOK_METHOD; }
+        return SEMTOK_FUNCTION;
+    }
+    if next_cc {                                   // qualifier segment
+        if looks_type { return SEMTOK_TYPE; }      // Vector::, i32::
+        return SEMTOK_NAMESPACE;                    // stdlib::, http::
+    }
+    if prev_dot { return SEMTOK_PROPERTY; }        // x.field
+    if prev_cc { return SEMTOK_PROPERTY; }         // i32::MAX associated value
+    if looks_type { return SEMTOK_TYPE; }
+    if _param_set_has(host, t.lexeme) { return SEMTOK_PARAMETER; }
+    return SEMTOK_VARIABLE;
+}
+
+// textDocument/semanticTokens/full — lex the whole buffer, classify each
+// token, and emit the LSP's delta-encoded [dLine, dStart, len, type, mods]
+// quintuples. Degrades gracefully (no type/param info) when analysis hasn't
+// populated doc.stmts yet; strings / numbers / comments are left to the
+// TextMate grammar.
+fn handle_semantic_tokens(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+
+    // Build the token array first; only wrap it in the result object at the
+    // very end. json_obj_set / json_arr_push CONSUME (free) the wrapper they
+    // are handed, so setting `data` into `result` up front would leave this
+    // `data` pointer dangling for the push loop below.
+    let data: *JsonValue = json_array();
+    if !state.docs.contains(uri) { _semtok_reply(id, data); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    let path: string = uri_to_path(uri);
+
+    // User-declared type names — confirm a reference is a type even when
+    // the name isn't PascalCase. (Primitives handled separately.)
+    let type_names: *HashMap<bool> = HashMap::new();
+    if doc.stmts != null {
+        for let i: i32 = 0; i < doc.stmts.len(); i++ {
+            let s: Stmt = doc.stmts.get(i);
+            if s.kind == ST_STRUCT || s.kind == ST_ENUM || s.kind == ST_TRAIT {
+                if !s.name.eq("") { type_names.insert(s.name, true); }
+            }
+        }
+    }
+
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(doc.text);
+    while true {
+        let tk: Token = lex.next_token();
+        if tk.kind == TOK_EOF { break; }
+        toks.push(tk);
+    }
+    let n: i32 = toks.len();
+
+    let mut prev_line: i32 = 0;
+    let mut prev_col: i32 = 0;
+    let mut cached_line: i32 = -1;
+    let mut host: *Stmt = null;
+
+    for let i: i32 = 0; i < n; i++ {
+        let t: Token = toks.get(i);
+        let mut sem: i32 = -1;
+        if t.kind == TOK_KEYWORD {
+            sem = SEMTOK_KEYWORD;
+        } else if t.kind == TOK_IDENT {
+            // Refresh the enclosing fn once per line so param detection is
+            // cheap; only the plain-ident path actually reads `host`.
+            let tline0: i32 = t.line - 1;
+            if tline0 != cached_line {
+                cached_line = tline0;
+                host = fn_containing(doc.stmts, tline0, path);
+            }
+            sem = _semtok_classify(toks, i, n, type_names, host);
+        }
+        if sem < 0 { continue; }
+
+        let length: i32 = t.lexeme.len();
+        if length <= 0 { continue; }
+        let line0: i32 = t.line - 1;
+        let col0: i32 = t.column - 1;
+        let d_line: i32 = line0 - prev_line;
+        let mut d_col: i32 = col0;
+        if d_line == 0 { d_col = col0 - prev_col; }
+        json_arr_push(data, json_int(d_line));
+        json_arr_push(data, json_int(d_col));
+        json_arr_push(data, json_int(length));
+        json_arr_push(data, json_int(sem));
+        json_arr_push(data, json_int(0));
+        prev_line = line0;
+        prev_col = col0;
+    }
+
+    _semtok_reply(id, data);
+}
+
+// Wrap the delta-encoded token array in `{ "data": [...] }` and respond.
+// Single exit point so the consuming json_obj_set runs exactly once, after
+// the array is fully built.
+fn _semtok_reply(id: *JsonValue, data: *JsonValue) {
+    let result: *JsonValue = json_object();
+    json_obj_set(result, "data", data);
+    lsp_send_response(id, result);
+}
+
+// ---- inlayHint ---------------------------------------------------------
+
+// Infer the bare type string for a `let` with no annotation, mirroring the
+// confidence level of hover: literals, `Generic::new()` with the type param
+// resolved from later usage, and the declared return type of a called free
+// fn / `Type::static`. Returns "" when nothing can be inferred with
+// confidence (better no hint than a `?`).
+fn _infer_let_type_str(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
+    if s.let_ty != null { return ""; }       // explicit annotation — no hint
+    if s.let_value == null { return ""; }
+    let e: *Expr = s.let_value;
+    if e.kind == EX_INT    { return "i32"; }
+    if e.kind == EX_FLOAT  { return "f64"; }
+    if e.kind == EX_STRING { return "string"; }
+    if e.kind == EX_BOOL   { return "bool"; }
+    if e.kind == EX_CHAR   { return "char"; }
+    if e.kind == EX_CALL && e.lhs != null {
+        if e.lhs.kind == EX_PATH {
+            let gen_name: string = e.lhs.str_val;
+            let imp: *Stmt = find_generic_impl(stmts, gen_name);
+            if imp != null {
+                if host != null && host.fn_body != null {
+                    let r: *Type = walk_constraint_in_body(stmts, host, host.fn_body, s.name,
+                                                           imp.impl_methods, imp.type_params);
+                    if r != null {
+                        return "*".concat(gen_name).concat("<").concat(type_to_string_pretty(r)).concat(">");
+                    }
+                }
+                return "";   // generic ctor whose T we couldn't pin down
+            }
+            // Non-generic static method (`Time::now()`, …): use its return type.
+            let sm: *Stmt = find_method_in_impl(stmts, gen_name, e.lhs.field);
+            if sm != null && sm.kind == ST_FN && sm.fn_ret_ty != null {
+                return type_to_string_pretty(sm.fn_ret_ty);
+            }
+            return "";
+        }
+        if e.lhs.kind == EX_IDENT {
+            let callee: *Stmt = find_top_decl(stmts, e.lhs.str_val);
+            if callee != null && callee.kind == ST_FN && callee.fn_ret_ty != null {
+                return type_to_string_pretty(callee.fn_ret_ty);
+            }
+            return "";
+        }
+    }
+    return "";
+}
+
+// Emit one type-hint InlayHint for an inferred `let`, anchored right after
+// the variable name, if it falls inside the requested line range.
+fn _emit_let_hint(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt,
+                  line_start: i32, line_end: i32, hints: *JsonValue) {
+    if s.name == null || s.name.eq("") { return; }   // tuple destructuring: skip
+    if s.let_ty != null { return; }
+    let line0: i32 = s.name_line - 1;
+    if line0 < line_start || line0 > line_end { return; }
+    let tstr: string = _infer_let_type_str(stmts, host, s);
+    if tstr.eq("") { return; }
+    let col0: i32 = (s.name_col - 1) + s.name.len();
+    let h: *JsonValue = json_object();
+    let posj: *JsonValue = json_object();
+    json_obj_set(posj, "line", json_int(line0));
+    json_obj_set(posj, "character", json_int(col0));
+    json_obj_set(h, "position", posj);
+    json_obj_set(h, "label", json_string(": ".concat(tstr)));
+    json_obj_set(h, "kind", json_int(1));            // InlayHintKind.Type
+    json_obj_set(h, "paddingLeft", json_bool(false));
+    json_obj_set(h, "paddingRight", json_bool(false));
+    json_arr_push(hints, h);
+}
+
+// Recurse a fn body collecting inferred `let` hints. Descends if/else/while/
+// for bodies (all stored in then_body/else_body) and a for-loop's own init.
+fn _collect_inlay_lets(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>,
+                       line_start: i32, line_end: i32, hints: *JsonValue) {
+    if body == null { return; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_LET {
+            let sp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *sp = s;
+            _emit_let_hint(stmts, host, sp, line_start, line_end, hints);
+        }
+        if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET {
+            _emit_let_hint(stmts, host, s.for_init, line_start, line_end, hints);
+        }
+        if s.then_body != null { _collect_inlay_lets(stmts, host, s.then_body, line_start, line_end, hints); }
+        if s.else_body != null { _collect_inlay_lets(stmts, host, s.else_body, line_start, line_end, hints); }
+    }
+}
+
+// textDocument/inlayHint — type hints (`: T`) on annotation-free `let`s
+// within the client's requested range.
+fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+
+    let mut line_start: i32 = 0;
+    let mut line_end: i32 = 1000000000;
+    let rng: *JsonValue = json_get(params, "range");
+    if rng != null {
+        let st: *JsonValue = json_get(rng, "start");
+        let en: *JsonValue = json_get(rng, "end");
+        if st != null { line_start = json_as_int(json_get(st, "line")); }
+        if en != null { line_end = json_as_int(json_get(en, "line")); }
+    }
+
+    let hints: *JsonValue = json_array();
+    if !state.docs.contains(uri) { lsp_send_response(id, hints); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    if doc.stmts == null { lsp_send_response(id, hints); return; }
+
+    for let i: i32 = 0; i < doc.stmts.len(); i++ {
+        let s: Stmt = doc.stmts.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            let host: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *host = s;
+            _collect_inlay_lets(doc.stmts, host, s.fn_body, line_start, line_end, hints);
+        } else if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN && m.fn_body != null {
+                    let mh: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                    *mh = m;
+                    _collect_inlay_lets(doc.stmts, mh, m.fn_body, line_start, line_end, hints);
+                }
+            }
+        }
+    }
+
+    lsp_send_response(id, hints);
+}
+
+// ---- workspace/symbol --------------------------------------------------
+
+// Map an ImportableSym.kind (ST_* or SYMKIND_*) to an LSP SymbolKind.
+fn _isym_kind_to_lsp(kind: i32) -> i32 {
+    if kind == ST_FN { return 12; }        // Function
+    if kind == ST_STRUCT { return 23; }    // Struct
+    if kind == ST_ENUM { return 10; }      // Enum
+    if kind == ST_CONST { return 14; }     // Constant
+    if kind == ST_TRAIT { return 11; }     // Interface
+    if kind == ST_MACRO_DEF { return 12; } // Function
+    if kind == SYMKIND_MODULE { return 2; } // Module
+    return 12;                              // proc-* etc: Function
+}
+
+// Append index entries whose name contains `qlow` (case-insensitive) as LSP
+// SymbolInformation. `want_all` short-circuits the filter for an empty query.
+// Returns the running emitted count so the caller can enforce `limit`.
+fn _ws_collect(idx: *Vector<ImportableSym>, qlow: string, want_all: bool,
+               arr: *JsonValue, count: i32, limit: i32) -> i32 {
+    let mut emitted: i32 = count;
+    if idx == null { return emitted; }
+    for let i: i32 = 0; i < idx.len(); i++ {
+        if emitted >= limit { break; }
+        let sym: ImportableSym = idx.get(i);
+        if sym.def_path == null || sym.def_path.eq("") { continue; }
+        if !want_all {
+            if !sym.name.to_lower().contains(qlow) { continue; }
+        }
+        let item: *JsonValue = json_object();
+        json_obj_set(item, "name", json_string(sym.name));
+        json_obj_set(item, "kind", json_int(_isym_kind_to_lsp(sym.kind)));
+        json_obj_set(item, "containerName", json_string(sym.module));
+        let loc: *JsonValue = json_object();
+        json_obj_set(loc, "uri", json_string(path_to_uri(sym.def_path)));
+        let range: *JsonValue = json_object();
+        json_obj_set(range, "start", position_to_json(sym.def_line, sym.def_col));
+        json_obj_set(range, "end", position_to_json(sym.def_line, sym.def_col + sym.name.len()));
+        json_obj_set(loc, "range", range);
+        json_obj_set(item, "location", loc);
+        json_arr_push(arr, item);
+        emitted = emitted + 1;
+    }
+    return emitted;
+}
+
+// workspace/symbol — fuzzy (case-insensitive substring) search over the
+// stdlib + project + dep index. Everything lands in stdlib_index (project
+// modules are indexed into it too), so one pass covers the whole project.
+fn handle_workspace_symbol(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let query: string = json_as_string(json_get(params, "query"));
+    let qlow: string = query.to_lower();
+    let want_all: bool = query.eq("");
+    let arr: *JsonValue = json_array();
+    let mut n: i32 = 0;
+    n = _ws_collect(state.stdlib_index, qlow, want_all, arr, n, 400);
+    lsp_send_response(id, arr);
 }
 
 fn handle_hover(req: *JsonValue, state: *LspState) {
@@ -9197,6 +9804,10 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     if method.eq("textDocument/documentSymbol") { handle_document_symbol(req, state); return false; }
     if method.eq("textDocument/definition") { handle_definition(req, state); return false; }
     if method.eq("textDocument/completion") { handle_completion(req, state); return false; }
+    if method.eq("textDocument/signatureHelp") { handle_signature_help(req, state); return false; }
+    if method.eq("textDocument/semanticTokens/full") { handle_semantic_tokens(req, state); return false; }
+    if method.eq("textDocument/inlayHint") { handle_inlay_hint(req, state); return false; }
+    if method.eq("workspace/symbol") { handle_workspace_symbol(req, state); return false; }
     if method.eq("textDocument/references") { handle_references(req, state); return false; }
     if method.eq("textDocument/documentHighlight") { handle_document_highlight(req, state); return false; }
     if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); return false; }
