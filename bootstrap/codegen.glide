@@ -2495,13 +2495,17 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
             if e.kind == EX_STRUCT_LIT && e.str_val != null && e.field_names != null
                 && i < e.field_names.len() {
                 let fname: string = e.field_names.get(i);
-                let mut sd: Stmt = Stmt { kind: 0 };
-                let mut have: bool = false;
-                if g.structs.contains(e.str_val) { sd = g.structs.get(e.str_val); have = true; }
-                else if g.generic_structs.contains(e.str_val) { sd = g.generic_structs.get(e.str_val); have = true; }
-                if have && sd.struct_fields != null {
-                    for let j: i32 = 0; j < sd.struct_fields.len(); j++ {
-                        let f: Field = sd.struct_fields.get(j);
+                let mut sf: *Vector<Field> = null;
+                if g.structs.contains(e.str_val) {
+                    let sd: Stmt = g.structs.get(e.str_val);
+                    sf = sd.struct_fields;
+                } else if g.generic_structs.contains(e.str_val) {
+                    let sd: Stmt = g.generic_structs.get(e.str_val);
+                    sf = sd.struct_fields;
+                }
+                if sf != null {
+                    for let j: i32 = 0; j < sf.len(); j++ {
+                        let f: Field = sf.get(j);
                         if f.name.eq(fname) { arg_hint = f.ty; }
                     }
                 }
