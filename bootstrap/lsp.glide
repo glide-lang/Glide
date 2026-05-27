@@ -358,6 +358,8 @@ fn handle_initialize(req: *JsonValue) {
     json_obj_set(caps, "workspaceSymbolProvider", json_bool(true));
     // Call hierarchy: prepare + incoming/outgoing calls.
     json_obj_set(caps, "callHierarchyProvider", json_bool(true));
+    // Type hierarchy: prepare + supertypes/subtypes (trait <-> impl).
+    json_obj_set(caps, "typeHierarchyProvider", json_bool(true));
     json_obj_set(result, "capabilities", caps);
     let info: *JsonValue = json_object();
     json_obj_set(info, "name", json_string("glide-lsp"));
@@ -3395,6 +3397,141 @@ fn handle_outgoing_calls(req: *JsonValue, state: *LspState) {
         json_obj_set(entry, "to", _ch_item_for_fn(callee, ctx));
         json_obj_set(entry, "fromRanges", ranges);
         json_arr_push(arr, entry);
+    }
+    seen.free();
+    lsp_send_response(id, arr);
+}
+
+// ---- Type hierarchy ----------------------------------------------------
+// Resolve a name to a navigable type decl (struct / trait / enum).
+fn _resolve_type_decl(stmts: *Vector<Stmt>, name: string) -> *Stmt {
+    let td: *Stmt = find_top_decl(stmts, name);
+    if td != null && (td.kind == ST_STRUCT || td.kind == ST_TRAIT || td.kind == ST_ENUM) {
+        return td;
+    }
+    return null;
+}
+
+fn _th_kind(ts: *Stmt) -> i32 {
+    if ts.kind == ST_TRAIT { return 11; }   // SymbolKind.Interface
+    if ts.kind == ST_ENUM  { return 10; }   // SymbolKind.Enum
+    return 23;                               // SymbolKind.Struct
+}
+
+// Build a TypeHierarchyItem. `ctx_uri` (the requesting doc, whose import
+// graph is fully loaded) rides in `data` so super/sub handlers know which
+// doc's stmts to scan. Mirrors `_ch_item_for_fn`.
+fn _th_item_for_type(ts: *Stmt, ctx_uri: string) -> *JsonValue {
+    let item: *JsonValue = json_object();
+    json_obj_set(item, "name", json_string(ts.name));
+    json_obj_set(item, "kind", json_int(_th_kind(ts)));
+    let mut org: string = ts.origin;
+    if org == null || org.eq("") { org = uri_to_path(ctx_uri); }
+    json_obj_set(item, "uri", json_string(path_to_uri(org)));
+    json_obj_set(item, "range", range_for_decl_name(ts));
+    json_obj_set(item, "selectionRange", range_for_decl_name(ts));
+    let data: *JsonValue = json_object();
+    json_obj_set(data, "name", json_string(ts.name));
+    json_obj_set(data, "ctx", json_string(ctx_uri));
+    json_obj_set(item, "data", data);
+    return item;
+}
+
+// Resolve `name` to a type decl and push its item (deduped by name).
+// Skips names that don't resolve (builtins / out-of-graph types).
+fn _th_push_type(stmts: *Vector<Stmt>, name: string, ctx: string, arr: *JsonValue, seen: *HashMap<bool>) {
+    if name == null || name.eq("") { return; }
+    if seen.contains(name) { return; }
+    let ts: *Stmt = _resolve_type_decl(stmts, name);
+    if ts == null { return; }
+    seen.insert(name, true);
+    json_arr_push(arr, _th_item_for_type(ts, ctx));
+}
+
+fn handle_prepare_type_hierarchy(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    if doc.stmts == null { lsp_send_response(id, json_array()); return; }
+    let word: string = word_at(doc.text, line0, col0);
+    if word.eq("") { lsp_send_response(id, json_array()); return; }
+    let ts: *Stmt = _resolve_type_decl(doc.stmts, word);
+    if ts == null { lsp_send_response(id, json_array()); return; }
+    let arr: *JsonValue = json_array();
+    json_arr_push(arr, _th_item_for_type(ts, uri));
+    lsp_send_response(id, arr);
+}
+
+// Supertypes: a trait's supertraits; a struct/enum's implemented traits.
+fn handle_supertypes(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let item: *JsonValue = json_get(params, "item");
+    let data: *JsonValue = json_get(item, "data");
+    let target: string = json_as_string(json_get(data, "name"));
+    let ctx: string = json_as_string(json_get(data, "ctx"));
+    let arr: *JsonValue = json_array();
+    if target.eq("") || !state.docs.contains(ctx) { lsp_send_response(id, arr); return; }
+    let doc: LspDoc = state.docs.get(ctx);
+    if doc.stmts == null { lsp_send_response(id, arr); return; }
+    let decl: *Stmt = _resolve_type_decl(doc.stmts, target);
+    if decl == null { lsp_send_response(id, arr); return; }
+    let seen: *HashMap<bool> = HashMap::new();
+    if decl.kind == ST_TRAIT {
+        if decl.trait_supers != null {
+            for let i: i32 = 0; i < decl.trait_supers.len(); i++ {
+                _th_push_type(doc.stmts, decl.trait_supers.get(i), ctx, arr, seen);
+            }
+        }
+    } else {
+        for let i: i32 = 0; i < doc.stmts.len(); i++ {
+            let s: Stmt = doc.stmts.get(i);
+            if s.kind != ST_IMPL { continue; }
+            if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+            if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
+            if !s.impl_target.name.eq(target) { continue; }
+            _th_push_type(doc.stmts, s.impl_trait_name, ctx, arr, seen);
+        }
+    }
+    seen.free();
+    lsp_send_response(id, arr);
+}
+
+// Subtypes: a trait's implementors + sub-traits. Structs/enums have no
+// subtype in Glide (no inheritance), so the result is empty for them.
+fn handle_subtypes(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let item: *JsonValue = json_get(params, "item");
+    let data: *JsonValue = json_get(item, "data");
+    let target: string = json_as_string(json_get(data, "name"));
+    let ctx: string = json_as_string(json_get(data, "ctx"));
+    let arr: *JsonValue = json_array();
+    if target.eq("") || !state.docs.contains(ctx) { lsp_send_response(id, arr); return; }
+    let doc: LspDoc = state.docs.get(ctx);
+    if doc.stmts == null { lsp_send_response(id, arr); return; }
+    let decl: *Stmt = _resolve_type_decl(doc.stmts, target);
+    if decl == null || decl.kind != ST_TRAIT { lsp_send_response(id, arr); return; }
+    let seen: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < doc.stmts.len(); i++ {
+        let s: Stmt = doc.stmts.get(i);
+        if s.kind == ST_IMPL && s.impl_trait_name != null && s.impl_trait_name.eq(target)
+           && s.impl_target != null && s.impl_target.kind == TY_NAMED {
+            _th_push_type(doc.stmts, s.impl_target.name, ctx, arr, seen);
+        }
+        if s.kind == ST_TRAIT && s.trait_supers != null {
+            for let j: i32 = 0; j < s.trait_supers.len(); j++ {
+                if s.trait_supers.get(j).eq(target) {
+                    _th_push_type(doc.stmts, s.name, ctx, arr, seen);
+                }
+            }
+        }
     }
     seen.free();
     lsp_send_response(id, arr);
@@ -11423,6 +11560,9 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     if method.eq("textDocument/prepareCallHierarchy") { handle_prepare_call_hierarchy(req, state); return false; }
     if method.eq("callHierarchy/incomingCalls") { handle_incoming_calls(req, state); return false; }
     if method.eq("callHierarchy/outgoingCalls") { handle_outgoing_calls(req, state); return false; }
+    if method.eq("textDocument/prepareTypeHierarchy") { handle_prepare_type_hierarchy(req, state); return false; }
+    if method.eq("typeHierarchy/supertypes") { handle_supertypes(req, state); return false; }
+    if method.eq("typeHierarchy/subtypes") { handle_subtypes(req, state); return false; }
     if method.eq("textDocument/references") { handle_references(req, state); return false; }
     if method.eq("textDocument/documentHighlight") { handle_document_highlight(req, state); return false; }
     if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); return false; }

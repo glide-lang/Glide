@@ -1214,6 +1214,49 @@ def _call_hierarchy_test():
 
 _call_hierarchy_test()
 
+# ---- type hierarchy ----
+
+def _type_hierarchy_test():
+    print("\n[type hierarchy]")
+    body = ('trait Animal { fn speak(self: *Self) -> i32; }\n'
+            'trait Pet: Animal { fn name(self: *Self) -> i32; }\n'
+            'struct Dog { age: i32 }\n'
+            'impl Pet for Dog {\n'
+            '    fn speak(self: *Dog) -> i32 { return 1; }\n'
+            '    fn name(self: *Dog) -> i32 { return 2; }\n'
+            '}')
+    path, uri = write_tmp("type_hierarchy.glide", body)
+    def item(nm):
+        z = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}
+        return {"name": nm, "kind": 11, "uri": uri, "range": z, "selectionRange": z,
+                "data": {"name": nm, "ctx": uri}}
+    msgs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "textDocument/prepareTypeHierarchy",
+         "params": {"textDocument": {"uri": uri}, "position": {"line": 1, "character": 7}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "typeHierarchy/supertypes", "params": {"item": item("Pet")}},
+        {"jsonrpc": "2.0", "id": 4, "method": "typeHierarchy/subtypes", "params": {"item": item("Pet")}},
+        {"jsonrpc": "2.0", "id": 5, "method": "typeHierarchy/supertypes", "params": {"item": item("Dog")}},
+        {"jsonrpc": "2.0", "id": 6, "method": "typeHierarchy/subtypes", "params": {"item": item("Dog")}},
+        {"jsonrpc": "2.0", "id": 7, "method": "typeHierarchy/subtypes", "params": {"item": item("Animal")}},
+        {"jsonrpc": "2.0", "method": "exit", "params": None},
+    ]
+    rs = run_session(msgs)
+    def by_id(i): return next((r for r in rs if r.get("id") == i), None)
+    def names(i): return sorted(x.get("name") for x in ((by_id(i) or {}).get("result") or []))
+    pres = (by_id(2) or {}).get("result") or []
+    check("prepare on `Pet` returns the trait item",
+          len(pres) == 1 and pres[0].get("name") == "Pet" and pres[0].get("kind") == 11, f"got {pres}")
+    check("supertypes(Pet) -> Animal (supertrait)", names(3) == ["Animal"], f"got {names(3)}")
+    check("subtypes(Pet) -> Dog (implementor)", names(4) == ["Dog"], f"got {names(4)}")
+    check("supertypes(Dog) -> Pet (implemented trait)", names(5) == ["Pet"], f"got {names(5)}")
+    check("subtypes(Dog) -> [] (no struct subtyping)", names(6) == [], f"got {names(6)}")
+    check("subtypes(Animal) -> Pet (sub-trait)", names(7) == ["Pet"], f"got {names(7)}")
+
+_type_hierarchy_test()
+
 # ---- code action (quick fix) ----
 
 def _code_action_test():
