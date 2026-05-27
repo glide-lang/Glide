@@ -2032,6 +2032,17 @@ fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                 t.visibility.insert(f.concat("::").concat(s.name), true);
             }
         }
+        // Extern / forward-declared fns (bodyless `ST_FN`) are foreign C
+        // symbols resolved at link time, not module-scoped Glide decls. A
+        // call to any declared extern is always allowed regardless of which
+        // file declared it — the linker, not the import graph, resolves it.
+        for let j: i32 = 0; j < stmts.len(); j++ {
+            let s: Stmt = stmts.get(j);
+            if s.kind == ST_FN && s.fn_body == null
+               && s.name != null && !s.name.eq("") {
+                t.visibility.insert(f.concat("::").concat(s.name), true);
+            }
+        }
         // Explicit imports from this file. Only `pub` items from the
         // target are exposed - cross-file privacy is enforced here.
         for let j: i32 = 0; j < stmts.len(); j++ {
