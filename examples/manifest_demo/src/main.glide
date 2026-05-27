@@ -1,6 +1,0 @@
-import demo_lib::greeter;
-
-fn main() -> i32 {
-    greeter::hello("manifest_demo");
-    return 0;
-}

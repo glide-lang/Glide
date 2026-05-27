@@ -1,8 +1,0 @@
-# build artifacts
-*.elf
-*.iso
-*.o
-*.__glide.c
-build/
-iso_root/
-limine/
