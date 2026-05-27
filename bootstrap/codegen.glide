@@ -1478,6 +1478,11 @@ pub struct CG {
     pub current_origin: string,
     pub last_line_dir: i32,
     pub last_origin_dir: string,
+    // Freestanding / kernel mode: no hosted prelude, no baked runtime
+    // (stdlib/scheduler/socket), no `main` wrapper. Set from emit_program's
+    // arg. The user code provides its own entry (`kmain`) and, if it uses
+    // strings/Vector, its own libc-shaped primitives (malloc/memcpy/...).
+    pub freestanding: bool,
 }
 
 impl CG {
@@ -1542,6 +1547,7 @@ impl CG {
         g.current_origin = "";
         g.last_line_dir = 0;
         g.last_origin_dir = "";
+        g.freestanding = false;
         return g;
     }
 
@@ -5271,7 +5277,10 @@ fn _emit_main_wrapper(s: *Stmt) {
 }
 
 fn emit_fn(g: *CG, s: *Stmt) {
-    let is_main: bool = s.name.eq("main");
+    // In freestanding mode there is no hosted `main` wrapper (it calls
+    // __glide_sched_init / fprintf). The entry is an ordinary fn (`kmain`)
+    // the linker script points at, so never take the wrapper path.
+    let is_main: bool = s.name.eq("main") && !g.freestanding;
     // Track this fn's source origin so emit_stmt's `#line` directives
     // resolve against the right Glide file. The signature line itself
     // is emitted first (no directive yet) so a stack frame pointing
@@ -5643,12 +5652,28 @@ fn resolve_type_prefix(g: *CG, prefix: string) -> string {
 }
 
 pub fn emit_program(program: *Vector<Stmt>) {
-    print!(include_str!("bootstrap/runtime/prelude.c"));
-    println!("");
+    emit_program_mode(program, false);
+}
 
-    emit_stdlib_runtime();
+// Freestanding / kernel build: emit only the compiler-provided freestanding
+// headers (these survive `-nostdlib` because they belong to the C compiler,
+// not libc), skip the hosted runtime bake (stdlib/scheduler/socket), and skip
+// the `main` wrapper. The user program supplies its own entry + primitives.
+pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
+    if freestanding {
+        println!("#include <stdint.h>");
+        println!("#include <stddef.h>");
+        println!("#include <stdbool.h>");
+        println!("#include <stdarg.h>");
+        println!("");
+    } else {
+        print!(include_str!("bootstrap/runtime/prelude.c"));
+        println!("");
+        emit_stdlib_runtime();
+    }
 
     let g: *CG = CG::new();
+    g.freestanding = freestanding;
 
     // Register generic struct templates up front so that runtime emitters
     // (chan, result) can synthesize struct monos for their inner types
@@ -5677,8 +5702,10 @@ pub fn emit_program(program: *Vector<Stmt>) {
         let s: Stmt = program.get(i);
         collect_chan_in_stmt(g, &s);
     }
-    emit_scheduler_runtime();
-    emit_socket_runtime();
+    if !freestanding {
+        emit_scheduler_runtime();
+        emit_socket_runtime();
+    }
 
     // Top-level `c_raw! { ... }` blocks: emit verbatim AFTER the runtime
     // so they can `#ifdef` against macros set by socket.c / reactor.c (e.g.

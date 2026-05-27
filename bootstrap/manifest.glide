@@ -66,6 +66,13 @@ pub struct Manifest {
     // Empty = build for the host. Ignored by `glide run` (you can't run a
     // foreign binary on the host).
     pub target: string,
+    // Freestanding / kernel build. Set by `kind: "kernel"` or
+    // `freestanding: true`. Drops the hosted prelude + runtime + `main`
+    // wrapper and links with `-ffreestanding -nostdlib` against `link_script`.
+    pub freestanding: bool,
+    // Linker script for a freestanding build (e.g. "linker.ld", relative to
+    // the manifest root). Required when `freestanding` is set.
+    pub link_script: string,
 }
 
 extern fn __glide_file_exists(path: string) -> bool;
@@ -186,6 +193,8 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     m.lint_deny = lint_deny_vec;
     m.lint_allow = lint_allow_vec;
     m.target = "";
+    m.freestanding = false;
+    m.link_script = "";
 
     for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
@@ -212,6 +221,9 @@ fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
         if name.eq("repository")  && val.kind == EX_STRING { m.repository = val.str_val; }
         if name.eq("bin")         && val.kind == EX_STRING { m.bin = val.str_val; }
         if name.eq("target")      && val.kind == EX_STRING { m.target = val.str_val; }
+        if name.eq("kind")        && val.kind == EX_STRING { if val.str_val.eq("kernel") { m.freestanding = true; } }
+        if name.eq("freestanding") && val.kind == EX_BOOL  { m.freestanding = val.bool_val; }
+        if name.eq("linker")      && val.kind == EX_STRING { m.link_script = val.str_val; }
         if name.eq("deps") { collect_deps(m.deps, &val); }
         if name.eq("lint") {
             // Two surface forms:

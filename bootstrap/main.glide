@@ -2215,7 +2215,18 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
             builtins_dir = exe_dir.concat("/src/builtins");
         }
     }
-    load_builtins_dir(stmts, builtins_dir, loaded, pdiags);
+    // Freestanding / kernel projects don't get the hosted builtins prelude
+    // (its arena uses mmap, its helpers call libc). The kernel supplies its
+    // own primitives. Detected from the project's glide.glide.
+    let mut _fs_skip_builtins: bool = false;
+    let _bi_root: string = find_manifest_root(parent_dir(path));
+    if !_bi_root.eq("") {
+        let _bi_m: *Manifest = read_manifest(_bi_root);
+        if _bi_m != null { _fs_skip_builtins = _bi_m.freestanding; }
+    }
+    if !_fs_skip_builtins {
+        load_builtins_dir(stmts, builtins_dir, loaded, pdiags);
+    }
     load_into_str(stmts, src, path, loaded, pdiags);
     let expanded: *Vector<Stmt> = expand_macros(stmts);
     let lowered: *Vector<Stmt> = lower_program(expanded);
@@ -2541,6 +2552,22 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     auto_fetch_for(src_path);
     apply_lint_for(parent_dir(src_path));
 
+    // Freestanding / kernel build is declared in glide.glide (`kind: "kernel"`
+    // or `freestanding: true` + `linker: "<file>"`). Resolve it here so codegen
+    // drops the hosted runtime and the cc step links freestanding.
+    let mut freestanding: bool = false;
+    let mut link_script: string = "";
+    let _mroot: string = find_manifest_root(parent_dir(src_path));
+    if !_mroot.eq("") {
+        let _m: *Manifest = read_manifest(_mroot);
+        if _m != null {
+            freestanding = _m.freestanding;
+            if !_m.link_script.eq("") {
+                link_script = _mroot.concat("/").concat(_m.link_script);
+            }
+        }
+    }
+
     if !quiet { spinner_start("parsing ".concat(src_path)); }
 
     // 1. Parse
@@ -2601,8 +2628,15 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // the proc-fns intact (import check reads `@proc_<kind>(Name)`),
     // which is why we strip here, not in `expand_macros`.
     let codegen_stmts: *Vector<Stmt> = strip_compile_time_only(stmts);
-    emit_program(codegen_stmts);
+    emit_program_mode(codegen_stmts, freestanding);
     __glide_restore_stdout(saved);
+
+    // Freestanding / kernel build: a self-contained path that links the
+    // emitted C with zig as a bare-metal x86_64 ELF against the linker
+    // script. Skips the hosted lib-scan / -lpthread / run-after-build below.
+    if freestanding {
+        return _build_freestanding(tmp_c, out_path, link_script, quiet);
+    }
 
     // 3b. Decide which heavy libs to link by scanning the generated C for
     //     the headers each stdlib module pulls in through its c_raw blocks.
@@ -2837,6 +2871,68 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         }
         return __glide_shell(run_cmd);
     }
+    return 0;
+}
+
+// Freestanding / kernel link path. Compiles the emitted C as a bare-metal
+// x86_64 ELF with zig (clang under the hood): no libc, no startup, no PIE,
+// red-zone off for interrupt safety, higher-half code model. The user's
+// linker script (`linker:` in glide.glide) owns the layout + entry point.
+fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, quiet: bool) -> i32 {
+    let zig: string = _find_zig();
+    if zig.eq("") {
+        if !quiet { spinner_finish(false, ""); }
+        println!(col_red().concat("error").concat(col_reset()).concat(": freestanding build requires zig (bundled under runtime/zig/ or on PATH)."));
+        return 1;
+    }
+    if link_script.eq("") {
+        if !quiet { spinner_finish(false, ""); }
+        println!(col_red().concat("error").concat(col_reset()).concat(": freestanding build needs a linker script — set `linker: \"linker.ld\"` in glide.glide."));
+        return 1;
+    }
+    if !fs_exists(link_script) {
+        if !quiet { spinner_finish(false, ""); }
+        println!(col_red().concat("error").concat(col_reset()).concat(": linker script not found: ").concat(link_script));
+        return 1;
+    }
+    if !quiet { spinner_set("linking freestanding ELF -> ".concat(out_path)); }
+    let mut cmd: string = "\"".concat(zig).concat("\" cc");
+    if tmp_c.contains(" ") { cmd = cmd.concat(" \"").concat(tmp_c).concat("\""); }
+    else { cmd = cmd.concat(" ").concat(tmp_c); }
+    if out_path.contains(" ") { cmd = cmd.concat(" -o \"").concat(out_path).concat("\""); }
+    else { cmd = cmd.concat(" -o ").concat(out_path); }
+    cmd = cmd.concat(" -target x86_64-freestanding-none");
+    cmd = cmd.concat(" -ffreestanding -nostdlib -static -no-pie -fno-pie -fno-pic");
+    cmd = cmd.concat(" -fno-stack-protector -mno-red-zone -mcmodel=kernel");
+    // NB: SSE stays enabled. zig's compiler_rt fails to build with -mno-sse
+    // (half-float ABI needs xmm), and Limine hands the kernel off in long mode
+    // with SSE usable. A kernel that wants SSE strictly off would avoid zig's
+    // compiler_rt instead. Red-zone is still disabled (interrupt safety).
+    cmd = cmd.concat(" -O2 -g -w");
+    if link_script.contains(" ") {
+        cmd = cmd.concat(" -Wl,-T,\"").concat(link_script).concat("\"");
+    } else {
+        cmd = cmd.concat(" -Wl,-T,").concat(link_script);
+    }
+    // Force the entry symbol on the command line: zig's driver otherwise
+    // defaults lld to `_start` and ignores the script's ENTRY(), which leaves
+    // e_entry = 0 and lets --gc drop all code. The kernel entry is `kmain`.
+    cmd = cmd.concat(" -Wl,-e,kmain");
+    cmd = cmd.concat(" -Wl,--build-id=none");
+    // zig is invoked through a quoted path; on Windows cmd.exe needs the
+    // whole command re-wrapped (mirrors the hosted cc path's workaround).
+    if __glide_is_windows() != 0 {
+        cmd = "\"".concat(cmd).concat("\"");
+    }
+    let rc: i32 = __glide_shell(cmd);
+    if rc != 0 {
+        if !quiet { spinner_finish(false, ""); }
+        println!("freestanding link failed (zig cc exit", rc, ")");
+        println!("preserved C source at:", tmp_c);
+        return rc;
+    }
+    fs_remove_file(tmp_c);
+    if !quiet { spinner_finish(true, "built ".concat(out_path)); }
     return 0;
 }
 
