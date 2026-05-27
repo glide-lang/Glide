@@ -163,6 +163,35 @@ case_diagnostics("inferred option local .val unguarded is flagged",
     'fn main() -> i32 { let m = find(); return m.val; }',
     expect_codes_present=["ignored-option"])
 
+# ---- null-flow narrowing ----
+case_diagnostics("null-flow: .val read inside an if-condition is flagged",
+    'fn find() -> ?i32 { return some(1); }\n'
+    'fn main() -> i32 { let m = find(); if m.val > 0 { return 1; } return 0; }',
+    expect_codes_present=["ignored-option"])
+
+case_diagnostics("null-flow: `if m.has && m.val` && guard is not flagged",
+    'fn find() -> ?i32 { return some(1); }\n'
+    'fn main() -> i32 { let m = find(); if m.has && m.val > 0 { return 1; } return 0; }',
+    expect_codes_absent=["ignored-option"])
+
+case_diagnostics("null-flow: reassign `m = some(v)` then .val is not flagged",
+    'fn main() -> i32 { let mut m: ?i32 = none(); m = some(5); return m.val; }',
+    expect_codes_absent=["ignored-option"])
+
+case_diagnostics("null-flow: || early-exit guards both results",
+    'fn p() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { let a = p(); let b = p();\n'
+    '    if !a.ok || !b.ok { return 0; }\n'
+    '    return a.val + b.val; }',
+    expect_codes_absent=["unchecked-result"])
+
+case_diagnostics("null-flow: positive `if a.ok && b.ok` guards both in then-body",
+    'fn p() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 { let a = p(); let b = p();\n'
+    '    if a.ok && b.ok { return a.val + b.val; }\n'
+    '    return 0; }',
+    expect_codes_absent=["unchecked-result"])
+
 case_diagnostics("use-after-free: free in a returning branch is not flagged",
     'fn cond() -> bool { return true; }\n'
     'fn f() -> i32 {\n'

@@ -10833,38 +10833,51 @@ fn _io_scan(t: *Typer, body: *Vector<Stmt>, opts: *HashMap<bool>, checked: *Hash
             }
             if lty != null && (lty.kind == TY_OPTION || lty.kind == TY_OPT_RESULT) {
                 opts.insert(s.name, true);
+                // `let x = some(v)` is born present; `let x = find()` is not.
+                checked.insert(s.name, _io_rhs_is_present(s.let_value));
             }
         }
-        let mut gated: string = "";
-        let mut negated: bool = false;
+        // Reassignment narrows: `x = some(v)` makes x present, `x = none()`
+        // (or any non-present rhs) marks it unchecked again.
+        if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+           && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT
+           && opts.contains(s.expr_value.lhs.str_val) {
+            checked.insert(s.expr_value.lhs.str_val, _io_rhs_is_present(s.expr_value.rhs));
+        }
         if s.cond != null {
-            // Recognise `if x.is_some() { … }` (then_body is the safe
-            // branch) AND the inverse guard `if !x.has { early-exit }`
-            // / `if x.is_none() { early-exit }` (rest of the OUTER
-            // body becomes safe). The inverse form is what tight
-            // loops use: `if !r.has { break; }` then read `r.val`.
-            gated = _io_extract_check_unsigned(s.cond);
-            if !gated.eq("") {
-                negated = _io_is_negated_check(s.cond)
-                          || _io_is_none_check(s.cond);
-            }
+            // A `.val` read in the condition itself is unguarded unless a
+            // `&&`-left guard protects it.
+            _io_check_cond(t, s.cond, opts, checked);
         }
-        if !gated.eq("") && !negated && s.then_body != null {
-            let was_checked: bool = checked.contains(gated);
-            checked.insert(gated, true);
+        // Positive guard: names a `&&`-chain of presence checks proves are
+        // safe inside the then-body (`if x.is_some() && x.val > 0 { … }`).
+        if s.then_body != null {
+            let gnames: *Vector<string> = Vector::new();
+            if s.cond != null { _io_collect_and_checks(s.cond, gnames); }
+            let saved: *Vector<bool> = Vector::new();
+            for let k: i32 = 0; k < gnames.len(); k++ {
+                let nm: string = gnames.get(k);
+                saved.push(checked.contains(nm) && checked.get(nm));
+                checked.insert(nm, true);
+            }
             _io_scan(t, s.then_body, opts, checked, root, path);
-            if !was_checked { checked.insert(gated, false); }
-        } else if s.then_body != null {
-            _io_scan(t, s.then_body, opts, checked, root, path);
+            for let k: i32 = 0; k < gnames.len(); k++ {
+                checked.insert(gnames.get(k), saved.get(k));
+            }
+            saved.free();
+            gnames.free();
         }
         if s.else_body != null { _io_scan(t, s.else_body, opts, checked, root, path); }
         if s.expr_value != null { _io_check_expr(t, s.expr_value, opts, checked); }
         if s.let_value != null { _io_check_expr(t, s.let_value, opts, checked); }
-        // After a guard like `if !r.has { break/return/continue }`,
-        // every subsequent sibling stmt is safe to read r.val.
-        if !gated.eq("") && negated && s.then_body != null
-           && _io_body_is_early_exit(s.then_body) {
-            checked.insert(gated, true);
+        // After an early-exit guard (`if !r.has { break/return/continue }`,
+        // or a `||` chain of them), every subsequent sibling stmt is safe to
+        // read the guarded option(s)' `.val`.
+        if s.then_body != null && _io_body_is_early_exit(s.then_body) {
+            let nms: *Vector<string> = Vector::new();
+            _io_collect_orexit_checks(s.cond, nms);
+            for let k: i32 = 0; k < nms.len(); k++ { checked.insert(nms.get(k), true); }
+            nms.free();
         }
     }
 }
@@ -10911,6 +10924,72 @@ fn _io_extract_check(e: *Expr) -> string {
         return _io_extract_check(e.operand);
     }
     return "";
+}
+// True when `e` is a definitely-present ctor — `some(...)` / `ok(...)`.
+// A local initialised or reassigned to one of these is safe to `.val`.
+fn _io_rhs_is_present(e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.lhs.str_val != null
+       && (e.lhs.str_val.eq("some") || e.lhs.str_val.eq("ok")) { return true; }
+    return false;
+}
+// Names made present by an early-exit guard. For `if !a.has || !b.has
+// { return }` control only falls through when EVERY disjunct is false, so
+// each negated-check receiver (`!x.has` / `!x.is_some()` / `x.is_none()`)
+// is guaranteed present afterwards. Also covers the single-check form.
+fn _io_collect_orexit_checks(e: *Expr, out: *Vector<string>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && e.op_code == OP_OR {
+        _io_collect_orexit_checks(e.lhs, out);
+        _io_collect_orexit_checks(e.rhs, out);
+        return;
+    }
+    if e.kind == EX_UNARY && e.operand != null {
+        let nm: string = _io_extract_check(e.operand);
+        if !nm.eq("") { out.push(nm); }
+        return;
+    }
+    if _io_is_none_check(e) && e.lhs != null && e.lhs.lhs != null
+       && e.lhs.lhs.kind == EX_IDENT {
+        out.push(e.lhs.lhs.str_val);
+    }
+}
+// Names a positive guard proves present in the then-body. `if a.has &&
+// b.is_some() { … }` makes both a and b safe inside. Each `&&`-operand
+// that is a positive check (`x.has` / `x.is_some()`, not negated/is_none)
+// contributes its receiver.
+fn _io_collect_and_checks(e: *Expr, out: *Vector<string>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && e.op_code == OP_AND {
+        _io_collect_and_checks(e.lhs, out);
+        _io_collect_and_checks(e.rhs, out);
+        return;
+    }
+    if _io_is_negated_check(e) || _io_is_none_check(e) { return; }
+    let nm: string = _io_extract_check(e);
+    if !nm.eq("") { out.push(nm); }
+}
+// Check a condition for unguarded `.val`, honouring `&&` short-circuit:
+// in `x.has && x.val`, the left guard protects the right operand, so the
+// `.val` there is safe — but a bare `if x.val` still flags.
+fn _io_check_cond(t: *Typer, e: *Expr, opts: *HashMap<bool>, checked: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && e.op_code == OP_AND && e.lhs != null && e.rhs != null {
+        _io_check_cond(t, e.lhs, opts, checked);
+        let g: string = _io_extract_check_unsigned(e.lhs);
+        let neg: bool = _io_is_negated_check(e.lhs) || _io_is_none_check(e.lhs);
+        if !g.eq("") && !neg {
+            let was: bool = checked.contains(g) && checked.get(g);
+            checked.insert(g, true);
+            _io_check_cond(t, e.rhs, opts, checked);
+            checked.insert(g, was);
+        } else {
+            _io_check_cond(t, e.rhs, opts, checked);
+        }
+        return;
+    }
+    _io_check_expr(t, e, opts, checked);
 }
 fn _io_check_expr(t: *Typer, e: *Expr, opts: *HashMap<bool>, checked: *HashMap<bool>) {
     if e == null { return; }
@@ -10983,28 +11062,39 @@ fn _ur_scan(t: *Typer, body: *Vector<Stmt>, res: *HashMap<bool>, checked: *HashM
             }
             if lty != null && (lty.kind == TY_RESULT || lty.kind == TY_OPT_RESULT) {
                 res.insert(s.name, true);
+                checked.insert(s.name, _io_rhs_is_present(s.let_value));
             }
         }
-        let mut gated: string = "";
-        let mut negated: bool = false;
-        if s.cond != null {
-            gated = _ur_extract_check(s.cond);
-            if !gated.eq("") { negated = _io_is_negated_check(s.cond); }
+        if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+           && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT
+           && res.contains(s.expr_value.lhs.str_val) {
+            checked.insert(s.expr_value.lhs.str_val, _io_rhs_is_present(s.expr_value.rhs));
         }
-        if !gated.eq("") && !negated && s.then_body != null {
-            let was_checked: bool = checked.contains(gated);
-            checked.insert(gated, true);
+        if s.cond != null { _ur_check_cond(t, s.cond, res, checked); }
+        if s.then_body != null {
+            let gnames: *Vector<string> = Vector::new();
+            if s.cond != null { _ur_collect_and_checks(s.cond, gnames); }
+            let saved: *Vector<bool> = Vector::new();
+            for let k: i32 = 0; k < gnames.len(); k++ {
+                let nm: string = gnames.get(k);
+                saved.push(checked.contains(nm) && checked.get(nm));
+                checked.insert(nm, true);
+            }
             _ur_scan(t, s.then_body, res, checked, root, path);
-            if !was_checked { checked.insert(gated, false); }
-        } else if s.then_body != null {
-            _ur_scan(t, s.then_body, res, checked, root, path);
+            for let k: i32 = 0; k < gnames.len(); k++ {
+                checked.insert(gnames.get(k), saved.get(k));
+            }
+            saved.free();
+            gnames.free();
         }
         if s.else_body != null { _ur_scan(t, s.else_body, res, checked, root, path); }
         if s.expr_value != null { _ur_check_expr(t, s.expr_value, res, checked); }
         if s.let_value != null { _ur_check_expr(t, s.let_value, res, checked); }
-        if !gated.eq("") && negated && s.then_body != null
-           && _io_body_is_early_exit(s.then_body) {
-            checked.insert(gated, true);
+        if s.then_body != null && _io_body_is_early_exit(s.then_body) {
+            let nms: *Vector<string> = Vector::new();
+            _ur_collect_orexit_checks(s.cond, nms);
+            for let k: i32 = 0; k < nms.len(); k++ { checked.insert(nms.get(k), true); }
+            nms.free();
         }
     }
 }
@@ -11017,6 +11107,52 @@ fn _ur_extract_check(e: *Expr) -> string {
         return e.lhs.str_val;
     }
     return "";
+}
+// Result counterpart of `_io_collect_orexit_checks`: receivers of `!x.ok`
+// disjuncts in an early-exit guard are ok afterwards.
+fn _ur_collect_orexit_checks(e: *Expr, out: *Vector<string>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && e.op_code == OP_OR {
+        _ur_collect_orexit_checks(e.lhs, out);
+        _ur_collect_orexit_checks(e.rhs, out);
+        return;
+    }
+    if e.kind == EX_UNARY && e.operand != null {
+        let nm: string = _ur_extract_check(e.operand);
+        if !nm.eq("") { out.push(nm); }
+    }
+}
+// Result counterpart of `_io_collect_and_checks`: positive `x.ok` checks in
+// an `&&`-chain prove their receivers ok inside the then-body.
+fn _ur_collect_and_checks(e: *Expr, out: *Vector<string>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && e.op_code == OP_AND {
+        _ur_collect_and_checks(e.lhs, out);
+        _ur_collect_and_checks(e.rhs, out);
+        return;
+    }
+    if _io_is_negated_check(e) { return; }
+    let nm: string = _ur_extract_check(e);
+    if !nm.eq("") { out.push(nm); }
+}
+// Result counterpart of `_io_check_cond`: `r.ok && r.val` is guarded.
+fn _ur_check_cond(t: *Typer, e: *Expr, res: *HashMap<bool>, checked: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_BINARY && e.op_code == OP_AND && e.lhs != null && e.rhs != null {
+        _ur_check_cond(t, e.lhs, res, checked);
+        let g: string = _ur_extract_check(e.lhs);
+        let neg: bool = _io_is_negated_check(e.lhs);
+        if !g.eq("") && !neg {
+            let was: bool = checked.contains(g) && checked.get(g);
+            checked.insert(g, true);
+            _ur_check_cond(t, e.rhs, res, checked);
+            checked.insert(g, was);
+        } else {
+            _ur_check_cond(t, e.rhs, res, checked);
+        }
+        return;
+    }
+    _ur_check_expr(t, e, res, checked);
 }
 fn _ur_check_expr(t: *Typer, e: *Expr, res: *HashMap<bool>, checked: *HashMap<bool>) {
     if e == null { return; }
