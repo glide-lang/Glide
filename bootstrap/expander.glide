@@ -220,6 +220,12 @@ fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
         _replace_with_location_literal(e, file, in_fn);
         return;
     }
+    // panic! / todo! / unimplemented! / unreachable! / assert! lower to a
+    // runtime call carrying this file + line (the location pass has both).
+    if e.kind == EX_MACRO && e.macro_recv == null && _is_panic_family(e.str_val) {
+        _lower_panic_family(e, file);
+        return;
+    }
     if e.lhs     != null { _rewrite_loc_expr(e.lhs,     file, in_fn); }
     if e.rhs     != null { _rewrite_loc_expr(e.rhs,     file, in_fn); }
     if e.operand != null { _rewrite_loc_expr(e.operand, file, in_fn); }
@@ -411,6 +417,39 @@ fn _pkg_field(m: *Manifest, field: string) -> string {
     if field.eq("description") { return m.description; }
     if field.eq("repository")  { return m.repository; }
     return "";
+}
+
+fn _is_panic_family(n: string) -> bool {
+    if n == null { return false; }
+    return n.eq("panic") || n.eq("todo") || n.eq("unimplemented")
+        || n.eq("unreachable");
+}
+
+// Lower a panic-family macro into a `__glide_panic` / `__glide_assert` call
+// carrying its source location. `assert!(cond[, msg])` keeps the condition as
+// the first arg; the others take a fixed message (or the user's for panic!).
+fn _lower_panic_family(e: *Expr, file: string) {
+    let name: string = e.str_val;
+    let ln: i32 = e.line;
+    let col: i32 = e.column;
+    let args: *Vector<Expr> = Vector::new();
+    let callee: string = "__glide_panic";
+    if name.eq("panic") {
+        if e.args != null && e.args.len() >= 1 { args.push(e.args.get(0)); }
+        else { args.push(*expr_string("explicit panic", ln, col)); }
+    } else if name.eq("todo") {
+        args.push(*expr_string("not yet implemented", ln, col));
+    } else if name.eq("unimplemented") {
+        args.push(*expr_string("not implemented", ln, col));
+    } else if name.eq("unreachable") {
+        args.push(*expr_string("entered unreachable code", ln, col));
+    } else {
+        return;
+    }
+    args.push(*expr_string(_esc_str(file), ln, col));        // source file
+    args.push(*expr_int(ln as i64, ln, col));                // source line
+    let call: *Expr = expr_call(expr_ident(callee, ln, col), args);
+    *e = *call;
 }
 
 // ---- procedural macros -----------------------------------------------

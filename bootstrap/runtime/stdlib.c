@@ -46,6 +46,15 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
     out[j] = 0;
     return out;
 }
+/* Backs the panic! / todo! / unimplemented! / unreachable! macros: print the
+   message + source location, then abort (the trap handler prints a stack
+   trace). assert! routes through __glide_assert. */
+static void __glide_panic(const char* msg, const char* file, int line) {
+    fprintf(stderr, "\n\x1b[1;31mpanic\x1b[0m: %s\n  \x1b[1;36mat\x1b[0m %s:%d\n",
+            msg ? msg : "", file ? file : "?", line);
+    fflush(stderr);
+    abort();
+}
 /* Take a raw byte buffer + length and produce a NUL-terminated Glide
    string in one allocation. Used by the HTTP server to skip the
    per-byte concat that would otherwise allocate `n` strings to

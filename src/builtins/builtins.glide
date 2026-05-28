@@ -462,6 +462,10 @@ c_raw! {
     #endif
 }
 
+// Backs panic! / todo! / unimplemented! / unreachable!. The expander lowers
+// those macros to this call with the source location.
+pub extern fn __glide_panic(msg: string, file: string, line: i32);
+
 pub extern fn __glide_palloc(size: i32) -> *void;
 pub extern fn __glide_palloc_make() -> *void;
 pub extern fn __glide_palloc_free(handle: *void);
