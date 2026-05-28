@@ -1391,6 +1391,8 @@ _pkg_macro_test()
 def _panic_macro_test():
     print("\n[panic-family macros]")
     body = ('fn f(n: i32) -> i32 {\n'
+            '    assert!(n > 0);\n'
+            '    assert!(n < 100, "too big");\n'
             '    if n == 0 { panic!("zero"); }\n'
             '    if n == 1 { todo!(); }\n'
             '    if n == 2 { unreachable!(); }\n'
@@ -1398,7 +1400,7 @@ def _panic_macro_test():
             '    return n;\n'
             '}')
     errs = [d for d in _diags_for("panic_family", body) if d.get("severity") == 1]
-    check("panic!/todo!/unreachable!/unimplemented! resolve (no errors)",
+    check("panic!/todo!/unreachable!/unimplemented!/assert! resolve (no errors)",
           len(errs) == 0, f"got {[(d.get('code'), d.get('message','')[:40]) for d in errs]}")
 
 _panic_macro_test()

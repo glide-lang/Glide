@@ -197,6 +197,14 @@ fn _rewrite_loc_stmt(s: *Stmt, file: string, in_fn: string) {
         _rewrite_loc_block(s.impl_methods, file, in_fn);
         return;
     }
+    // `assert!(cond[, msg]);` is a statement: rewrite it in place to
+    // `if cond { } else { __glide_panic(msg, file, line); }`.
+    if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_MACRO
+       && s.expr_value.macro_recv == null && s.expr_value.str_val != null
+       && s.expr_value.str_val.eq("assert") {
+        _lower_assert_stmt(s, file);
+        return;
+    }
     if s.let_value  != null { _rewrite_loc_expr(s.let_value,  file, fn_name); }
     if s.expr_value != null { _rewrite_loc_expr(s.expr_value, file, fn_name); }
     if s.cond       != null { _rewrite_loc_expr(s.cond,       file, fn_name); }
@@ -450,6 +458,29 @@ fn _lower_panic_family(e: *Expr, file: string) {
     args.push(*expr_int(ln as i64, ln, col));                // source line
     let call: *Expr = expr_call(expr_ident(callee, ln, col), args);
     *e = *call;
+}
+
+// `assert!(cond[, msg]);` → `if cond { } else { __glide_panic(msg, file, line); }`.
+// Statement-level (control flow), so it dodges the bool-param C-signature
+// dance a runtime __glide_assert(bool,...) would need.
+fn _lower_assert_stmt(s: *Stmt, file: string) {
+    let e: *Expr = s.expr_value;
+    if e.args == null || e.args.len() == 0 { return; }   // malformed; leave as-is
+    let ln: i32 = e.line;
+    let col: i32 = e.column;
+    let cond: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    *cond = e.args.get(0);
+    let pargs: *Vector<Expr> = Vector::new();
+    if e.args.len() >= 2 { pargs.push(e.args.get(1)); }
+    else { pargs.push(*expr_string("assertion failed", ln, col)); }
+    pargs.push(*expr_string(_esc_str(file), ln, col));
+    pargs.push(*expr_int(ln as i64, ln, col));
+    let panic_call: *Expr = expr_call(expr_ident("__glide_panic", ln, col), pargs);
+    let else_body: *Vector<Stmt> = Vector::new();
+    else_body.push(*stmt_expr(panic_call));
+    let then_body: *Vector<Stmt> = Vector::new();
+    let iff: *Stmt = stmt_if(cond, then_body, else_body, ln, col);
+    *s = *iff;
 }
 
 // ---- procedural macros -----------------------------------------------
