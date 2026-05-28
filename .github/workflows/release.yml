@@ -26,10 +26,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # macos-13 (Intel) was dropped — GitHub has deprecated that runner
+        # image and jobs sit in the queue indefinitely. Apple Silicon macs are
+        # covered by macos-aarch64; Intel-mac users can use that under Rosetta
+        # or build from source.
         include:
           - { os: ubuntu-latest,    name: linux-x86_64,   sysroot: true }
           - { os: ubuntu-24.04-arm, name: linux-aarch64,  sysroot: false }
-          - { os: macos-13,         name: macos-x86_64,   sysroot: false }
           - { os: macos-latest,     name: macos-aarch64,  sysroot: false }
           - { os: windows-latest,   name: windows-x86_64, sysroot: false }
     defaults:
