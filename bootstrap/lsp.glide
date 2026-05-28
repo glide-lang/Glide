@@ -181,6 +181,12 @@ pub struct LspState {
     /// the user opened a doc in a different project and the index
     /// needs to be rebuilt.
     pub project_root: string,
+    /// Fingerprint of the project's dep set last time we indexed: hash
+    /// of the manifest content plus a sorted list of every `.glide`
+    /// path under `glide_modules/`. When this changes (manifest edit,
+    /// `glide fetch` completion, dep file added/removed) we rebuild the
+    /// project index instead of reusing the cached one.
+    pub project_dep_fp: string,
     // Path -> parse_program output. Populated lazily on first parse of
     // each transitive import (builtins + stdlib + user-imported files);
     // hits skip the lex/parse work on every keystroke. The user's
@@ -210,6 +216,7 @@ pub fn lsp_state_new() -> *LspState {
     let pidx: *Vector<ImportableSym> = Vector::new();
     s.project_index = pidx;
     s.project_root = "";
+    s.project_dep_fp = "";
     let pc: *HashMap<*Vector<Stmt>> = HashMap::new();
     s.parse_cache = pc;
     s.last_arena = null;
@@ -542,7 +549,7 @@ fn drop_glide_ext(name: string) -> string {
 fn populate_stdlib_index(state: *LspState) {
     let dir: string = find_stdlib_dir();
     if dir.eq("") { return; }
-    _index_stdlib_subtree(state, dir, "stdlib");
+    _index_stdlib_subtree(state, dir, "stdlib", state.stdlib_index, "");
 }
 
 // Walk `dir` recursively. Each `.glide` file becomes an importable
@@ -550,7 +557,20 @@ fn populate_stdlib_index(state: *LspState) {
 // subdirectory recurses with the prefix extended. So `src/stdlib/http`
 // becomes `stdlib::http`, `src/stdlib/http/client.glide` becomes
 // `stdlib::http::client`, and so on.
-fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string) {
+//
+// `target` is the index vector to push into — `state.stdlib_index` for
+// the one-time stdlib walk, `state.project_index` for project src +
+// declared deps. Keeping the two indices separate means a project
+// switch can clear+rebuild the project bag without poisoning stdlib.
+//
+// `pkg_leaf` is the bare package name when this call is the package
+// root (e.g. "glicord" when called for `glide_modules/glicord/src/`);
+// `""` for stdlib and recursive sub-dirs. A `.glide` file whose
+// basename matches `pkg_leaf` is the package's entry file — its
+// module path collapses to just `module_prefix`, so the auto-import
+// line reads `import glicord;` instead of `import glicord::glicord;`.
+fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string,
+                         target: *Vector<ImportableSym>, pkg_leaf: string) {
     let files: *Vector<string> = fs_list_dir(dir, ".glide");
     if files != null {
         for let i: i32 = 0; i < files.len(); i++ {
@@ -558,8 +578,14 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string) {
             if fname.eq("") { continue; }
             let path: string = dir.concat("/").concat(fname);
             let mod_name: string = drop_glide_ext(fname);
-            let module: string = module_prefix.concat("::").concat(mod_name);
-            _index_one_module(state, path, mod_name, module);
+            let mut module: string = module_prefix.concat("::").concat(mod_name);
+            // Package entry-file collapse: at the pkg root, the file named
+            // after the package IS the lib entry — surface its symbols
+            // under the bare package alias rather than `pkg::pkg`.
+            if !pkg_leaf.eq("") && mod_name.eq(pkg_leaf) {
+                module = module_prefix;
+            }
+            _index_one_module(state, path, mod_name, module, target);
         }
     }
     let subs_raw: string = __glide_fs_list_dirs(dir);
@@ -570,7 +596,8 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string) {
         if sub.eq("") { continue; }
         let child_dir: string = dir.concat("/").concat(sub);
         let child_pref: string = module_prefix.concat("::").concat(sub);
-        _index_stdlib_subtree(state, child_dir, child_pref);
+        // Sub-dirs aren't the package root, so no entry-file collapse.
+        _index_stdlib_subtree(state, child_dir, child_pref, target, "");
     }
 }
 
@@ -590,18 +617,39 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     let dir: string = parent_dir(path);
     let root: string = find_manifest_root(dir);
     if root.eq("") { return; }
-    if state.project_root.eq(root) { return; }
+
+    // Re-trigger the rebuild whenever the dep set could have changed:
+    // a different project root, a manifest edit, a new `glide_modules/`
+    // entry from `glide fetch`, or a file added/removed within an
+    // existing dep. The fingerprint hashes the manifest source plus the
+    // sorted list of every `.glide` path reachable under
+    // `glide_modules/`. Cheap (no file-content reads) and catches the
+    // common cases without forcing the user to restart the LSP.
+    let fp: string = _project_dep_fingerprint(root);
+    if state.project_root.eq(root) && state.project_dep_fp.eq(fp) { return; }
+    _lsp_log("project index: rebuilding for ".concat(root));
 
     let prev_arena: *void = __glide_palloc_get();
     __glide_palloc_set(null);
 
     state.project_root = root.concat("");   // libc-heap copy
+    state.project_dep_fp = fp.concat("");
+    // Replace the dedicated project_index. Anything pushed previously
+    // (project src + deps from the prior rebuild) belongs to a stale
+    // dep set, so swap in a fresh vector here. The old one is
+    // intentionally leaked: ImportableSym strings (`name`, `signature`,
+    // `doc`, ...) are aliased into the cached AST pointed to by
+    // `state.parse_cache`, and we'd need a recursive walker that knows
+    // which strings are libc-owned vs cache-owned to free safely.
     let fresh: *Vector<ImportableSym> = Vector::new();
     state.project_index = fresh;
+
     let src_dir: string = root.concat("/src");
-    if __glide_file_exists(src_dir) {
+    if __glide_fs_is_dir(src_dir) {
         let proj_name: string = _project_namespace(root);
-        _index_stdlib_subtree(state, src_dir, proj_name);
+        // Project src isn't a "package" in the dep sense — no entry-file
+        // collapse, callers spell the import using the file name.
+        _index_stdlib_subtree(state, src_dir, proj_name, fresh, "");
     }
     // Each declared dep — path deps point at a sibling dir, git deps at
     // the cache slot. Indexing covers both because dep_cache_dir picks
@@ -611,17 +659,65 @@ fn _refresh_project_index(state: *LspState, uri: string) {
         for let i: i32 = 0; i < m.deps.len(); i++ {
             let d: ManifestDep = m.deps.get(i);
             let dep_root: string = dep_cache_dir(m, d);
-            if dep_root.eq("") || !__glide_file_exists(dep_root) { continue; }
+            if dep_root.eq("") || !__glide_fs_is_dir(dep_root) {
+                _lsp_log("  dep ".concat(d.name).concat(" - cache miss at ").concat(dep_root));
+                continue;
+            }
             let dep_src: string = dep_root.concat("/src");
-            if __glide_file_exists(dep_src) {
-                _index_stdlib_subtree(state, dep_src, d.name);
+            if __glide_fs_is_dir(dep_src) {
+                _lsp_log("  dep ".concat(d.name).concat(" - indexing ").concat(dep_src));
+                _index_stdlib_subtree(state, dep_src, d.name, fresh, d.name);
             } else {
-                _index_stdlib_subtree(state, dep_root, d.name);
+                _lsp_log("  dep ".concat(d.name).concat(" - no src/, indexing ").concat(dep_root));
+                _index_stdlib_subtree(state, dep_root, d.name, fresh, d.name);
             }
         }
     }
+    _lsp_log("project index: ".concat(int_to_str(fresh.len() as i64))
+             .concat(" importable symbols"));
 
     __glide_palloc_set(prev_arena);
+}
+
+// Compact summary of the inputs that would change the project index.
+// Built from the manifest source (catches dep adds/removes/rev changes)
+// plus every `.glide` path under `glide_modules/` (catches `glide fetch`
+// completion + dep file shuffles). Doesn't read dep file contents — a
+// rev advance with no file changes won't trigger a rebuild and still
+// requires a manual LSP restart, which is the rare case.
+fn _project_dep_fingerprint(root: string) -> string {
+    let mut out: string = "";
+    let manifest_path: string = root.concat("/glide.glide");
+    if __glide_file_exists(manifest_path) {
+        out = out.concat(read_file(manifest_path));
+    }
+    out = out.concat("\0gm:");
+    let gm: string = root.concat("/glide_modules");
+    if !__glide_fs_is_dir(gm) { return out; }
+    _fp_walk_glide_files(gm, &out);
+    return out;
+}
+
+// Recursively append every `.glide` path under `dir` to `*out`. Used
+// only for the dep fingerprint; allocations land on libc heap (the
+// caller already disabled the request arena before invoking us).
+fn _fp_walk_glide_files(dir: string, out: *string) {
+    let files: *Vector<string> = fs_list_dir(dir, ".glide");
+    if files != null {
+        for let i: i32 = 0; i < files.len(); i++ {
+            let fname: string = files.get(i);
+            if fname.eq("") { continue; }
+            *out = (*out).concat(dir).concat("/").concat(fname).concat("\n");
+        }
+    }
+    let subs_raw: string = __glide_fs_list_dirs(dir);
+    if subs_raw.eq("") { return; }
+    let subs: *Vector<string> = subs_raw.split("\n");
+    for let i: i32 = 0; i < subs.len(); i++ {
+        let sub: string = subs.get(i);
+        if sub.eq("") { continue; }
+        _fp_walk_glide_files(dir.concat("/").concat(sub), out);
+    }
 }
 
 // Read the `name` field from `<root>/glide.glide` so the project's
@@ -640,9 +736,10 @@ fn _project_namespace(root: string) -> string {
     return root.substring(cut + 1, root.len());
 }
 
-// Parse one source file and append every pub item to the index, plus
+// Parse one source file and append every pub item to `target`, plus
 // a SYMKIND_MODULE entry for the module itself.
-fn _index_one_module(state: *LspState, path: string, mod_name: string, module: string) {
+fn _index_one_module(_state: *LspState, path: string, mod_name: string, module: string,
+                     target: *Vector<ImportableSym>) {
     let src: string = read_file(path);
     if src.eq("") { return; }
     let lex: *Lexer = Lexer::new(src);
@@ -749,7 +846,7 @@ fn _index_one_module(state: *LspState, path: string, mod_name: string, module: s
             def_line: s.name_line,
             def_col: s.name_col,
         };
-        state.stdlib_index.push(sym);
+        target.push(sym);
         if count < 12 {
             if !summary.eq("") { summary = summary.concat(", "); }
             summary = summary.concat("`").concat(s.name).concat("`");
@@ -777,7 +874,7 @@ fn _index_one_module(state: *LspState, path: string, mod_name: string, module: s
         def_line: 1,
         def_col: 1,
     };
-    state.stdlib_index.push(mod_sym);
+    target.push(mod_sym);
 }
 
 // Compact label suffix for fn items, gopls-style: `(a: int, b: int) -> int`.
@@ -819,6 +916,10 @@ fn fn_snippet(s: *Stmt) -> string {
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 extern fn __glide_fs_list_dirs(path: string) -> string;
 extern fn __glide_file_exists(path: string) -> bool;
+// `__glide_file_exists` opens the path with `fopen("rb")`, which fails on
+// directories — using it to probe a dir always returns false. Use this
+// for directory checks (project src/, glide_modules/, dep cache slots).
+extern fn __glide_fs_is_dir(path: string) -> bool;
 fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
     let raw: string = __glide_list_dir(dir, suffix);
     if raw.eq("") { return Vector::new(); }
