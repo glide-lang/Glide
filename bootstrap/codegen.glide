@@ -1815,6 +1815,10 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     }
     if e.kind == EX_MACRO {
         if e.str_val.eq("format") { return ty_named("string"); }
+        if e.str_val.eq("dbg") && e.args != null && e.args.len() >= 1 {
+            let da: Expr = e.args.get(0);
+            return infer_for_codegen(g, &da);
+        }
         return null;
     }
     if e.kind == EX_BINARY {
@@ -3961,6 +3965,45 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 }
             }
             print!(")");
+            return;
+        }
+        if e.str_val.eq("dbg") {
+            // dbg!(x) -> ({ T __dbg = (x); fprintf(stderr,"[dbg file:line] = FMT\n", conv); __dbg; })
+            // — prints to stderr and yields the value, type-aware via format_spec_for.
+            if e.args == null || e.args.len() < 1 { print!("0"); return; }
+            let a: Expr = e.args.get(0);
+            let at: *Type = infer_for_codegen(g, &a);
+            let mut loc: string = e.macro_owner;
+            if loc == null { loc = ""; }
+            print!("({ ");
+            print!(type_to_c(at));
+            print!(" __dbg = (");
+            emit_expr(g, &a);
+            print!("); fprintf(stderr, \"[dbg ");
+            print!(loc);
+            print!("] = ");
+            print!(format_spec_for(at));
+            print!("\\n\", ");
+            if at != null && at.kind == TY_NAMED && at.name.eq("bool") {
+                print!("__glide_bool_to_string(__dbg)");
+            } else if at != null && at.kind == TY_NAMED
+                      && (at.name.eq("i64") || at.name.eq("isize") || at.name.eq("long")) {
+                print!("(long long)(__dbg)");
+            } else if at != null && at.kind == TY_NAMED
+                      && (at.name.eq("u64") || at.name.eq("usize") || at.name.eq("ulong")) {
+                print!("(unsigned long long)(__dbg)");
+            } else if at != null && at.kind == TY_NAMED && at.name.eq("i128") {
+                print!("__glide_i128_to_string(__dbg)");
+            } else if at != null && at.kind == TY_NAMED && at.name.eq("u128") {
+                print!("__glide_u128_to_string(__dbg)");
+            } else if at != null && at.kind == TY_NAMED && at.name.eq("u256") {
+                print!("__glide_u256_to_string(__dbg)");
+            } else if at != null && at.kind == TY_NAMED && at.name.eq("i256") {
+                print!("__glide_i256_to_string(__dbg)");
+            } else {
+                print!("__dbg");
+            }
+            print!("); __dbg; })");
             return;
         }
         if e.str_val.eq("format") {

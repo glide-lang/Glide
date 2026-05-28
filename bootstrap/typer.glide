@@ -3343,6 +3343,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
         }
         if e.str_val != null && e.str_val.eq("format") { return ty_named("string"); }
+        // `dbg!(x)` evaluates to `x`, so it carries x's type.
+        if e.str_val != null && e.str_val.eq("dbg") && e.args != null && e.args.len() >= 1 {
+            let da: Expr = e.args.get(0);
+            return infer_expr(t, &da);
+        }
         return null;
     }
 

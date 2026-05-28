@@ -234,6 +234,12 @@ fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
         _lower_panic_family(e, file);
         return;
     }
+    // dbg!(x): stash the escaped `file:line` in macro_owner for codegen to
+    // print; the value + type stay in args[0]. Fall through to walk the arg.
+    if e.kind == EX_MACRO && e.macro_recv == null && e.str_val != null
+       && e.str_val.eq("dbg") && (e.macro_owner == null || e.macro_owner.eq("")) {
+        e.macro_owner = _esc_str(file).concat(":").concat(e.line.to_string());
+    }
     if e.lhs     != null { _rewrite_loc_expr(e.lhs,     file, in_fn); }
     if e.rhs     != null { _rewrite_loc_expr(e.rhs,     file, in_fn); }
     if e.operand != null { _rewrite_loc_expr(e.operand, file, in_fn); }

@@ -1405,6 +1405,17 @@ def _panic_macro_test():
 
 _panic_macro_test()
 
+def _dbg_macro_test():
+    print("\n[dbg! macro]")
+    # dbg!(40) must type as i32 and dbg!("x") as string, so the annotations
+    # match and the file is error-free — proves dbg! carries the arg's type.
+    body = 'fn main() -> i32 { let n: i32 = dbg!(40); let s: string = dbg!("x"); return n + s.len(); }'
+    errs = [d for d in _diags_for("dbg_macro", body) if d.get("severity") == 1]
+    check("dbg!(x) carries x's type (no errors)",
+          len(errs) == 0, f"got {[(d.get('code'), d.get('message','')[:40]) for d in errs]}")
+
+_dbg_macro_test()
+
 case_diagnostics("pkg! unknown field is flagged",
     'fn main() -> i32 { return pkg!("verison").len(); }',
     expect_codes_present=["unknown-pkg-field"])
