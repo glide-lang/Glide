@@ -3,9 +3,9 @@
 // the produced binary.
 let manifest: Package = Package {
     name:        "glide",
-    version:     "0.2.0",
+    version:     "0.3.0",
     description: "The Glide programming language compiler and toolchain",
-    author:      "Glide Contributors",
+    author:      "Murillo Deolino",
     license:     "MIT",
     repository:  "https://github.com/glide-lang/Glide",
     bin:         "bootstrap/main.glide",

@@ -1,5 +1,119 @@
 # Changelog
 
+## 0.3.0 — 2026-05-27
+
+The intelligent-LSP, build-introspection, and dev-ergonomics release. The
+language server goes from basic to rust-analyzer-class, editing large files
+gets ~15× faster, and a family of compile-time macros (`pkg!`, `cfg!`, `env!`,
+`panic!`, `assert!`, `dbg!`, …) lands. No source-breaking changes from 0.2.0.
+
+### Language server
+
+A full intelligence pass over `glide lsp` — all of it pure analysis, no AI:
+
+- **Signature help** — parameter hints with the active parameter highlighted,
+  for free functions, `recv.method` (self hidden), and `Type::static` calls.
+- **Semantic tokens** — full-document semantic highlighting (keyword /
+  function / method / type / parameter / variable / property / macro /
+  namespace) classified from the lexer + the type/parameter tables.
+- **Inlay hints** — inferred `let` **types** (`: T`), **parameter names** at
+  call sites, and **ownership lifecycle** (`freed @ Ln` / `moves out` /
+  `never freed`) on owned allocations.
+- **Workspace symbols** — fuzzy project-wide symbol search with navigable
+  locations.
+- **Call hierarchy** — prepare + incoming/outgoing calls.
+- **Type hierarchy** — supertypes / subtypes: a trait's supertraits and its
+  implementors + sub-traits, a struct's implemented traits.
+- **Go to implementation** and **go to type definition**.
+- **Chain-aware completion** — `r.val.method()` and similar member/method
+  chains resolve, plus struct-literal field completion and package/module
+  completion.
+- **Null-flow for `?T` / `!T`** — flags reading `.val` / `.ok` without a guard,
+  and understands `if x.has { … }`, `if !x.has { return }` early exits,
+  `&&`-chained guards, `||`-chained early exits, and narrowing on
+  `x = some(v)` / `let x = ok(v)`.
+- **"Why" related information** — diagnostics link to their cause: a trait
+  method's declaration, the `T: Trait` bound on a generic fn (`unsatisfied-bound`),
+  and the first borrow (`overlap-borrow`, "`x` was first borrowed here").
+- **Error-handling DX** — quick fixes (wrap a bare value in `some(…)` / `ok(…)`),
+  a must-use check on ignored results, and constructor/virtual-field docs.
+- **`pkg!` editor support** — completion of the manifest field names inside
+  `pkg!("…")` (each with its resolved value), and a diagnostic on an unknown
+  field.
+- **Whole-token diagnostics** — warnings underline the offending token, not a
+  single character (matching errors).
+- Per-document arenas, so hover / goto / completion survive across multiple
+  open files.
+
+### Compile-time macros
+
+- **`pkg!("field")`** — inlines a field from the project's `glide.glide`
+  (`name` / `version` / `author` / `license` / `description` / `repository`)
+  as a string literal. Print your CLI's own version with zero runtime cost:
+  `println!(pkg!("name"), " v", pkg!("version"))`.
+- **`cfg!("…")`** — a compile-time boolean for `windows` / `posix` / `linux` /
+  `macos` / `x86_64` / `aarch64`, decided by the target's C preprocessor — so
+  `if cfg!("windows") { … }` is correct under cross-compilation. The
+  expression companion to the `@cfg` attribute.
+- **`env!("VAR")`** — the build-time value of an environment variable as a
+  string literal (empty when unset). Embed a git SHA or build date with
+  `GIT_SHA=$(git rev-parse HEAD) glide build`.
+- **`panic!("msg")` / `todo!()` / `unimplemented!()` / `unreachable!()`** —
+  print the message + `file:line` and abort (the trap handler then dumps a
+  stack trace).
+- **`assert!(cond[, msg])`** — panics with the message and location when the
+  condition is false.
+- **`dbg!(x)`** — prints `[dbg file:line] = <value>` to stderr (type-aware) and
+  returns the value, so it drops into an expression: `let y = dbg!(compute())`.
+
+### Compiler & language
+
+- **Freestanding / kernel build mode** — `kind: "kernel"` (or
+  `freestanding: true` + `linker:`) in `glide.glide` drops the hosted prelude,
+  runtime, and `main` wrapper and links `-ffreestanding -nostdlib`; top-level
+  `let` is emitted as a C global (with `@section` / `@used` honored).
+- **Hex and binary integer literals** — `0xFF`, `0b1010` (with `_` digit
+  separators).
+- **Statement-level `@cfg`** — gate a single statement or `{ … }` block, not
+  just a declaration.
+- **Module-qualified generic type annotations** — `let v: mod::Type<T> = …`.
+- **Top-level `let` globals** resolve inside function bodies.
+
+### Performance
+
+- **String `substring` is O(end−start), not O(strlen)** — it no longer scans
+  the whole source on every call. The lexer calls it once per token, so this
+  was making tokenization O(n²): editing an 11.8k-line file in the LSP dropped
+  from ~2.6 s to ~0.18 s per change (~15×), and the type-checker's own passes
+  sped up several-fold.
+
+### Fixes
+
+- Option/Result constructors (`some` / `ok` / …) now monomorphize correctly in
+  struct-literal field position and field assignment.
+- Module-qualified `Type::method(...)` resolves, with a quick-fix-capable
+  diagnostic when it doesn't.
+- Use-after-free detection is flow-sensitive: a value freed inside a branch
+  that returns/breaks isn't flagged on the fall-through path, and a `let` that
+  rebinds the name clears the freed state — killing false positives.
+- `unnecessary-mut` no longer fires when the binding's address (`&x` / `&mut x`)
+  is taken and passed to a function that can write through it.
+- Extern / forward-declared functions are treated as link-time symbols (always
+  visible), and the `__program__` / `__typeof__` compiler intrinsics are
+  recognized — clearing false "not in scope" diagnostics when a compiler file
+  is opened on its own.
+- Apple-Silicon stack-growth registers and portable feature macros in the
+  runtime.
+
+### Internal
+
+- The module loader + visibility builder were extracted into
+  `bootstrap/loader.glide`, so sibling modules import the API honestly instead
+  of relying on the flat-merge build.
+- `net.glide` folded into the `net/` package.
+- A Claude Code plugin exposes the Glide LSP to the editor's built-in tooling.
+- Native multi-platform release builds in CI (Linux / macOS / Windows).
+
 ## 0.2.0 — 2026-05-25
 
 ### Types
