@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.1 — 2026-05-28
+
+A focused LSP fix release. External-package autocomplete in user projects
+(`glide_modules/<dep>/...`) was effectively unreachable since the package
+manager landed; this release makes it work.
+
+### Fixed
+
+- **External-dep completion**: `_refresh_project_index` was probing the
+  dep cache directory with `__glide_file_exists`, which is implemented as
+  `fopen("rb")` and always fails on a directory. Every declared dep
+  silently skipped indexing, so completion offered nothing from
+  `glide_modules/<dep>/src/`. Now uses `__glide_fs_is_dir` for directory
+  probes.
+
+### Language server
+
+- `project_index` is now a real second index, separate from
+  `stdlib_index` — project source and external deps no longer leak into
+  the stdlib bag across project switches.
+- Re-index trigger is content-driven: a fingerprint of the manifest plus
+  the `glide_modules/` listing is recorded per build. Edit `glide.glide`
+  or complete a `glide fetch` and the index rebuilds on the next request
+  instead of waiting for an editor restart.
+- Entry-file collapse: at a dep's `src/` root, the file matching the
+  package name surfaces under the bare alias — `import glicord;` for the
+  lib entry instead of `import glicord::glicord;`.
+- Per-step trace lines under `~/.glide/lsp.log` (`project index:
+  rebuilding for ...`, `dep X - indexing ...` / `cache miss at ...`).
+
 ## 0.3.0 — 2026-05-27
 
 The intelligent-LSP, build-introspection, and dev-ergonomics release. The
