@@ -12,6 +12,7 @@ fn _cors_req(method: string) -> HttpRequest {
         body:          "",
         params:        null,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
 }

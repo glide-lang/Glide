@@ -22,6 +22,7 @@ fn _get(headers: string, params: *HashMap<string>) -> HttpRequest {
         body:          "",
         params:        params,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
 }
@@ -141,6 +142,7 @@ fn test_multi_extractor_handler_ok() -> i32 {
         body:          "",
         params:        p,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
     let r: HttpResponse = multi(&req);

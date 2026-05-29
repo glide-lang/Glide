@@ -30,6 +30,7 @@ fn _req(accept_enc: string) -> HttpRequest {
         body:          "",
         params:        null,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
 }

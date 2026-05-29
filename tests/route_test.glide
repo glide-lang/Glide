@@ -27,6 +27,7 @@ fn _mk_req(method: string, path: string, body: string) -> HttpRequest {
     return HttpRequest {
         method: method, path: path, version: "HTTP/1.1",
         headers_block: "", body: body,
+        tls:           false,
         params: null, queries: null, tls: false, headers_cache: null,
     };
 }

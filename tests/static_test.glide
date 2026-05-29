@@ -40,6 +40,7 @@ fn _static_req(path: string) -> HttpRequest {
         body:          "",
         params:        null,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
 }
@@ -49,7 +50,7 @@ fn _static_router() -> *Router {
     __glide_static_test_mkdir(root);
     fs_write(root.concat("/app.css"), "body{color:red;}");
     let r: *Router = Router::new();
-    serve_dir(r, StaticOpts { root: root, url_prefix: "/static" });
+    serve_dir(r, StaticOpts { root: root, url_prefix: "/static", cache_control: "" });
     return r;
 }
 

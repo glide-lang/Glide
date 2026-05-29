@@ -11,6 +11,7 @@ fn _req_with_headers(h: string) -> HttpRequest {
         body:          "",
         params:        null,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
 }
@@ -110,6 +111,7 @@ fn _req_with_param(name: string, v: string) -> HttpRequest {
         body:          "",
         params:        p,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
 }

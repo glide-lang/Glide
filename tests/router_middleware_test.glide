@@ -61,6 +61,7 @@ fn _req(method: string, path: string, headers: string) -> HttpRequest {
         body:          "",
         params:        nope,
         queries:       nope,
+        tls:           false,
         headers_cache: null,
     };
 }

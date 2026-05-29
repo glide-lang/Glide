@@ -13,6 +13,7 @@ fn _req(headers: string) -> HttpRequest {
         body:          "",
         params:        null,
         queries:       null,
+        tls:           false,
         headers_cache: null,
     };
 }

@@ -35,25 +35,25 @@ fn _src(parts: *Vector<string>) -> *StaticChunks {
 // ---- sse_format ------------------------------------------------------
 
 fn test_sse_format_data_only() -> i32 {
-    let e: SseEvent = SseEvent { event: "", data: "hi", id: "" };
+    let e: SseEvent = SseEvent { event: "", data: "hi", id: "", retry: 0 };
     assert_str_eq!(sse_format(e), "data: hi\n\n");
     return 0;
 }
 
 fn test_sse_format_with_event() -> i32 {
-    let e: SseEvent = SseEvent { event: "tick", data: "1", id: "" };
+    let e: SseEvent = SseEvent { event: "tick", data: "1", id: "", retry: 0 };
     assert_str_eq!(sse_format(e), "event: tick\ndata: 1\n\n");
     return 0;
 }
 
 fn test_sse_format_with_id() -> i32 {
-    let e: SseEvent = SseEvent { event: "tick", data: "x", id: "42" };
+    let e: SseEvent = SseEvent { event: "tick", data: "x", id: "42", retry: 0 };
     assert_str_eq!(sse_format(e), "event: tick\nid: 42\ndata: x\n\n");
     return 0;
 }
 
 fn test_sse_format_multiline_data() -> i32 {
-    let e: SseEvent = SseEvent { event: "", data: "line1\nline2", id: "" };
+    let e: SseEvent = SseEvent { event: "", data: "line1\nline2", id: "", retry: 0 };
     assert_str_eq!(sse_format(e), "data: line1\ndata: line2\n\n");
     return 0;
 }
@@ -92,7 +92,7 @@ fn test_default_response_has_null_stream_src() -> i32 {
 
 fn test_sse_response_stamps_content_type() -> i32 {
     let v: *Vector<string> = Vector::new();
-    v.push(sse_format(SseEvent { event: "", data: "x", id: "" }));
+    v.push(sse_format(SseEvent { event: "", data: "x", id: "", retry: 0 }));
     let src: *StaticChunks = _src(v);
     let dyn_src: *dyn ChunkSource = src as *dyn ChunkSource;
     let r: HttpResponse = sse_response(dyn_src);
