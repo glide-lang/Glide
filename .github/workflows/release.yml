@@ -70,7 +70,8 @@ jobs:
         run: |
           set -e
           brew update >/dev/null
-          brew install openssl@3 zlib nghttp3 ngtcp2 || true
+          brew install openssl@3 zlib
+          brew install nghttp3 ngtcp2 || true
 
       - name: Resolve version
         id: ver

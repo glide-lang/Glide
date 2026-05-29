@@ -162,12 +162,18 @@ build_macos() {
         exit 1
     fi
 
-    local brew_prefix
-    brew_prefix="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
-    local openssl_dir="${brew_prefix}/opt/openssl@3"
-    local zlib_dir="${brew_prefix}/opt/zlib"
-    if [ ! -d "$openssl_dir" ]; then
-        echo "macos: openssl@3 not installed via brew" >&2
+    local openssl_dir
+    local zlib_dir
+    openssl_dir="$(brew --prefix openssl@3 2>/dev/null || true)"
+    zlib_dir="$(brew --prefix zlib 2>/dev/null || true)"
+
+    if [ -z "$openssl_dir" ] || [ ! -d "$openssl_dir/include/openssl" ] || [ ! -f "$openssl_dir/lib/libssl.a" ]; then
+        echo "macos: openssl@3 not installed via brew or static libs missing" >&2
+        echo "   brew install openssl@3 zlib" >&2
+        exit 1
+    fi
+    if [ -z "$zlib_dir" ] || [ ! -f "$zlib_dir/include/zlib.h" ] || [ ! -f "$zlib_dir/include/zconf.h" ] || [ ! -f "$zlib_dir/lib/libz.a" ]; then
+        echo "macos: zlib not installed via brew or static libs missing" >&2
         echo "   brew install openssl@3 zlib" >&2
         exit 1
     fi
