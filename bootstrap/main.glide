@@ -138,6 +138,13 @@ extern fn __glide_list_dir(path: string, suffix: string) -> string;
 extern fn __glide_getenv(name: string) -> string;
 extern fn __glide_is_windows() -> i32;
 extern fn __glide_file_exists(path: string) -> bool;
+// Wrap a raw byte buffer + length as a Glide string. Used by the
+// embedded-blob extractors (sysroot / zig / src self-extract) to hand
+// gzip_decode / tar_extract the decoded bytes. Declared here as well as
+// in fetch.glide / stdlib::compress so the bootstrap seed's stricter
+// extern-visibility check resolves it without leaning on a transitive
+// import.
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 // File I/O for the compiler driver itself. `stdlib::fs` wraps these for
 // user-visible API; the bootstrap binary needs them raw.
 extern fn read_file(path: string) -> string;
