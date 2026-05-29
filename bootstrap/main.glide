@@ -1955,6 +1955,35 @@ fn _host_lib_bundle_dir() -> string {
     return "";
 }
 
+// Compute the canonical zig-style triple for the current host, e.g.
+// `x86_64-windows-gnu`, `aarch64-linux-musl`, `aarch64-macos-none`.
+// Returns "" only on truly unrecognised arch/OS combinations.
+//
+// Used by host-build sysroot probing: when the user runs a bare `glide
+// build` (no --target=) and a sysroot for the host triple is already
+// installed under ~/.glide/targets/, the build is wired through it
+// instead of trying to resolve openssl/ngtcp2/… against system libs.
+// That's what makes a fresh `glide install` plug-and-play — no MSYS2 /
+// `apt install libssl-dev` / brew openssl required.
+fn _host_triple() -> string {
+    let arch: string = __glide_os_arch();
+    let os: string = __glide_os_name();
+    if arch.eq("") || os.eq("") || os.eq("unknown") || arch.eq("unknown") { return ""; }
+    // Pick the libc/runtime tag matching the sysroots Glide actually
+    // ships. Linux → musl (fully static portable binary), Windows →
+    // gnu (mingw-w64), macOS → none (Apple uses the system runtime
+    // directly, no libc tag).
+    let mut abi: string = "";
+    if os.eq("linux")   { abi = "musl"; }
+    else if os.eq("windows") { abi = "gnu"; }
+    else if os.eq("macos")   { abi = "none"; }
+    else { return ""; }
+    return arch.concat("-").concat(os).concat("-").concat(abi);
+}
+
+extern fn __glide_os_arch() -> string;
+extern fn __glide_os_name() -> string;
+
 // Returns true when a usable sysroot is cached for `triple` — checked
 // by probing for the openssl ssl.h header which every TLS-aware
 // cross build needs.
@@ -1990,6 +2019,8 @@ fn _known_targets() -> *Vector<string> {
     let v: *Vector<string> = Vector::new();
     v.push("x86_64-linux-musl");
     v.push("aarch64-linux-musl");
+    v.push("x86_64-windows-gnu");
+    v.push("aarch64-macos-none");
     return v;
 }
 
@@ -2048,6 +2079,8 @@ fn _print_target_help() {
 fn _target_desc(triple: string) -> string {
     if triple.eq("x86_64-linux-musl")  { return "Linux on Intel/AMD 64-bit  (fully static musl)"; }
     if triple.eq("aarch64-linux-musl") { return "Linux on ARM64 — Graviton, Ampere, Raspberry Pi, cloud ARM  (static musl)"; }
+    if triple.eq("x86_64-windows-gnu") { return "Windows on Intel/AMD 64-bit  (static mingw-w64)"; }
+    if triple.eq("aarch64-macos-none") { return "macOS on Apple Silicon — M1, M2, M3, M4"; }
     return "";
 }
 
@@ -2264,17 +2297,46 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     let needs_ssl:     bool = emitted_c.contains(inc.concat("openssl/")) || needs_h3;
     let needs_any_lib: bool = needs_zlib || needs_ssl || needs_h3;
 
-    let cross: bool = !target.eq("");
+    // Plug-and-play host build: when the user passes no `--target=` but
+    // the host's sysroot is already installed (or auto-fetchable), route
+    // the build through the cross-compile pipeline with the host triple.
+    // That gives bare `glide build` the same fully-static, self-contained
+    // artefact a cross build produces — no system gcc / `apt install
+    // libssl-dev` / MSYS2 dependency. The trigger is `needs_any_lib`,
+    // so a lib-free program still goes through the cheap native-cc path.
+    //
+    // Stored as `eff_target` because Glide's codegen emits param + same-
+    // named local as two declarations in one C scope, which gcc rejects.
+    let mut eff_target: string = target;
+    if eff_target.eq("") && needs_any_lib {
+        let host_triple: string = _host_triple();
+        if !host_triple.eq("") && _is_known_target(host_triple) {
+            // Auto-install the host sysroot on first use, same as the
+            // explicit-target branch below. Soft-fail to the host-cc
+            // path if the download flops (offline, etc.) so old setups
+            // still build.
+            if !_has_target_sysroot(host_triple) {
+                let rc: i32 = _target_add(host_triple);
+                if rc == 0 {
+                    eff_target = host_triple;
+                }
+            } else {
+                eff_target = host_triple;
+            }
+        }
+    }
+
+    let cross: bool = !eff_target.eq("");
 
     // Plug-and-play cross compile: fetch a missing sysroot on demand, but
     // ONLY when the program actually links heavy libs. A lib-free program
     // cross-compiles with just zig + musl and needs no sysroot at all.
     // One-time download, no manual `glide target add`.
-    if cross && needs_any_lib && _is_known_target(target) && !_has_target_sysroot(target) {
-        if _target_add(target) != 0 {
+    if cross && needs_any_lib && _is_known_target(eff_target) && !_has_target_sysroot(eff_target) {
+        if _target_add(eff_target) != 0 {
             if !quiet { spinner_finish(false, ""); }
-            println!("could not auto-fetch the", target, "sysroot.");
-            println!("check your connection, or pre-warm it with: glide target add", target);
+            println!("could not auto-fetch the", eff_target, "sysroot.");
+            println!("check your connection, or pre-warm it with: glide target add", eff_target);
             return 1;
         }
     }
@@ -2349,9 +2411,9 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             want_uring = true;
         }
     } else if cross {
-        let target_os: string = _target_os(target);
-        if target_os.eq("linux") && _has_target_sysroot(target) {
-            let sysroot: string = _target_dir(target);
+        let target_os: string = _target_os(eff_target);
+        if target_os.eq("linux") && _has_target_sysroot(eff_target) {
+            let sysroot: string = _target_dir(eff_target);
             if fs_exists(sysroot.concat("/include/liburing.h")) {
                 want_uring = true;
             }
@@ -2359,14 +2421,14 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     }
     if want_uring { cmd = cmd.concat(" -luring"); }
     if cross {
-        cmd = cmd.concat(" --target=").concat(target);
+        cmd = cmd.concat(" --target=").concat(eff_target);
     }
     // Pick platform-specific flags from the target when cross-compiling,
     // otherwise from the host. zig's `--target=` toggles its libc /
     // linker; the rest is winsock/dbghelp vs rdynamic.
     let mut win_target: bool = __glide_is_windows() != 0;
     if cross {
-        let os: string = _target_os(target);
+        let os: string = _target_os(eff_target);
         if !os.eq("") { win_target = os.eq("windows"); }
     }
     if win_target {
@@ -2415,8 +2477,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             if needs_ssl  { cmd = cmd.concat(" -lssl -lcrypto"); }
             if needs_zlib { cmd = cmd.concat(" -lz"); }
         }
-    } else if needs_any_lib && _has_target_sysroot(target) {
-        let sysroot: string = _target_dir(target);
+    } else if needs_any_lib && _has_target_sysroot(eff_target) {
+        let sysroot: string = _target_dir(eff_target);
         cmd = cmd.concat(" -I\"").concat(sysroot).concat("/include\"");
         cmd = cmd.concat(" -L\"").concat(sysroot).concat("/lib\"");
         // Static-link from the sysroot; include ngtcp2 + nghttp3 only when
@@ -2428,7 +2490,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         if needs_h3 && has_h3libs { cmd = cmd.concat(" -lngtcp2_crypto_ossl -lngtcp2 -lnghttp3"); }
         if needs_ssl  { cmd = cmd.concat(" -lssl -lcrypto"); }
         if needs_zlib { cmd = cmd.concat(" -lz"); }
-    } else if cross && _target_os(target).eq("linux") {
+    } else if cross && _target_os(eff_target).eq("linux") {
         // Lib-free Linux cross build: still static-link libc so the binary
         // is self-contained (runs on any Linux, incl. scratch/distroless).
         cmd = cmd.concat(" -static");
@@ -2452,11 +2514,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // If we hit a cross build without a sysroot, the user almost
         // always wanted TLS. Surface the fix proactively — no need
         // for them to grep the docs.
-        if cross && !_has_target_sysroot(target) && _is_known_target(target) {
+        if cross && !_has_target_sysroot(eff_target) && _is_known_target(eff_target) {
             println!("");
             println!("hint: this target has no sysroot cached. If your code uses");
             println!("      stdlib::http or stdlib::net, install one with:");
-            println!("        glide target add", target);
+            println!("        glide target add", eff_target);
         }
         return rc;
     }
