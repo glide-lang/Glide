@@ -4,6 +4,11 @@ name: release
 # real toolchain instead of a cross-build from one host) and attach them to
 # the GitHub release for the tag.
 #
+# Each runner also produces the sysroot tarball for its own target — the
+# sysroot is just (headers + static .a libs) for that triple, so it's
+# arch-OS specific but host-independent. End users pull whatever combo
+# matches their target via `glide target add <triple>`.
+#
 # Fires on a pushed `v*` tag, or manually via the Actions tab / `gh workflow
 # run release.yml -f tag=v0.2.0` to (re)build for an existing release.
 
@@ -31,10 +36,10 @@ jobs:
         # covered by macos-aarch64; Intel-mac users can use that under Rosetta
         # or build from source.
         include:
-          - { os: ubuntu-latest,    name: linux-x86_64,   sysroot: true }
-          - { os: ubuntu-24.04-arm, name: linux-aarch64,  sysroot: false }
-          - { os: macos-latest,     name: macos-aarch64,  sysroot: false }
-          - { os: windows-latest,   name: windows-x86_64, sysroot: false }
+          - { os: ubuntu-latest,    name: linux-x86_64,   sysroot_triple: x86_64-linux-musl }
+          - { os: ubuntu-24.04-arm, name: linux-aarch64,  sysroot_triple: aarch64-linux-musl }
+          - { os: macos-latest,     name: macos-aarch64,  sysroot_triple: aarch64-macos-none }
+          - { os: windows-latest,   name: windows-x86_64, sysroot_triple: x86_64-windows-gnu }
     defaults:
       run:
         shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
@@ -45,9 +50,29 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib zip unzip
+          # mingw-w64-ucrt-x86_64-openssl + ngtcp2 + nghttp3 give us the
+          # static .a files build_sysroot.sh copies into the Windows
+          # sysroot tarball. Without them the Windows sysroot would
+          # ship without TLS / HTTP/3.
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-ngtcp2
+            mingw-w64-ucrt-x86_64-nghttp3
+            zip unzip
+
+      - name: Setup macOS toolchain (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -e
+          # brew openssl@3 + zlib give us the static .a + headers
+          # build_sysroot.sh stages into the macOS sysroot. nghttp3 +
+          # ngtcp2 from brew round out the HTTP/3 stack.
+          brew update >/dev/null
+          brew install openssl@3 zlib nghttp3 ngtcp2 || true
 
       - name: Resolve version
         id: ver
@@ -81,9 +106,10 @@ jobs:
       - name: Package release artifact
         run: VERSION="${{ steps.ver.outputs.version }}" bash tools/build_release.sh
 
-      - name: Build sysroot (linux x86_64 only)
-        if: matrix.sysroot
-        run: VERSION="${{ steps.ver.outputs.version }}" bash tools/build_sysroot.sh
+      - name: Build sysroot for ${{ matrix.sysroot_triple }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}" \
+            bash tools/build_sysroot.sh --target=${{ matrix.sysroot_triple }}
 
       - name: Verify the binary is non-empty
         run: |
@@ -100,5 +126,5 @@ jobs:
           files: |
             dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}.tar.gz
             dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}.zip
-            dist/glide-sysroot-x86_64-linux-musl-${{ steps.ver.outputs.version }}.tar.gz
+            dist/glide-sysroot-${{ matrix.sysroot_triple }}-${{ steps.ver.outputs.version }}.tar.gz
           fail_on_unmatched_files: false
