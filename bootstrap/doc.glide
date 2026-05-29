@@ -3,6 +3,7 @@ import ast;
 import lexer;
 import parser;
 import fmt;       // for fmt_type signatures
+import manifest;  // for dep discovery (read_manifest, dep_cache_dir, ManifestDep)
 
 // `glide doc`: walk every `*.glide` under the project root, parse it,
 // pull out top-level `pub` items + their `///` doc comments, and emit
@@ -27,6 +28,17 @@ pub struct DocModule {
     pub slug:     string,           // safe HTML filename (no slashes)
     pub items:    *Vector<DocItem>,
     pub blurb:    string,           // first non-empty doc line, for the index
+    // Logical bucket for grouping on the index page:
+    //   "project" — files under the user's manifest root
+    //   "stdlib"  — files from src/stdlib/ (only when --stdlib is set)
+    //   "<dep>"   — files from a declared manifest dep
+    pub package:  string,
+    // Package-level metadata, only populated for the first module of a
+    // dep. Lets the index page show a one-line summary + repo URL per
+    // package without scanning every dep's manifest on render.
+    pub pkg_repo: string,
+    pub pkg_desc: string,
+    pub pkg_ver:  string,
 }
 
 extern fn __glide_file_exists(path: string) -> bool;
@@ -46,13 +58,63 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
     let mut total_items: i32 = 0;
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
-        // Skip the project's own manifest and any tests sitting in `tests/`.
+        // Skip the project's own manifest, the lockfile, and any deps
+        // mirrored under `glide_modules/` (those get a dedicated walk
+        // below so each one is tagged with its package name).
         if _ends_with(f, "/glide.glide") || _ends_with(f, "/glide.lock") { continue; }
+        if _contains_segment(f, "glide_modules") { continue; }
         let m: *DocModule = _scan_file(f, root_dir);
         if m == null { continue; }
         if m.items.len() == 0 { continue; }
+        m.package = "project";
         modules.push(*m);
         total_items = total_items + m.items.len();
+    }
+
+    // Project deps from the manifest: each declared dep gets its own
+    // group on the index page so a project's docs include the API
+    // surface of everything it imports. Path deps are visited even when
+    // they live outside the project root; git deps need a prior `glide
+    // fetch` (we skip unfetched ones with a warning).
+    let mf: *Manifest = read_manifest(root_dir);
+    if mf != null {
+        for let i: i32 = 0; i < mf.deps.len(); i++ {
+            let d: ManifestDep = mf.deps.get(i);
+            let dep_root: string = dep_cache_dir(mf, d);
+            if dep_root.eq("") || !__glide_file_exists(dep_root.concat("/glide.glide")) {
+                if !dep_root.eq("") {
+                    println!("doc: skipping `".concat(d.name)
+                        .concat("` (not fetched - run `glide fetch`)"));
+                }
+                continue;
+            }
+            let dep_files: *Vector<string> = fs_list_rec(dep_root, ".glide");
+            let mut first: bool = true;
+            for let j: i32 = 0; j < dep_files.len(); j++ {
+                let f: string = dep_files.get(j);
+                if _ends_with(f, "/glide.glide") || _ends_with(f, "/glide.lock") { continue; }
+                if _contains_segment(f, "glide_modules") { continue; }
+                if _contains_segment(f, "tests") { continue; }
+                let dm: *DocModule = _scan_file(f, dep_root);
+                if dm == null { continue; }
+                if dm.items.len() == 0 { continue; }
+                dm.package = d.name;
+                if first {
+                    // Surface package-level metadata on the first
+                    // module of the group — the index renders it as
+                    // a per-package header.
+                    let sub_m: *Manifest = read_manifest(dep_root);
+                    if sub_m != null {
+                        dm.pkg_desc = sub_m.description;
+                        dm.pkg_repo = sub_m.repository;
+                        dm.pkg_ver  = sub_m.version;
+                    }
+                    first = false;
+                }
+                modules.push(*dm);
+                total_items = total_items + dm.items.len();
+            }
+        }
     }
 
     // `--stdlib`: walk the compiler-bundled standard library too. Each
@@ -70,6 +132,7 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
                 let m: *DocModule = _scan_file(f, std_root);
                 if m == null { continue; }
                 if m.items.len() == 0 { continue; }
+                m.package = "stdlib";
                 modules.push(*m);
                 total_items = total_items + m.items.len();
             }
@@ -308,6 +371,12 @@ fn _write_llms_txt(path: string, modules: *Vector<DocModule>) {
         let m: DocModule = modules.get(i);
         out = out.concat("## ").concat(m.display).concat("\n");
         out = out.concat("source: ").concat(m.origin).concat("\n");
+        if !m.package.eq("") && !m.package.eq("project") {
+            out = out.concat("package: ").concat(m.package).concat("\n");
+        }
+        if !m.pkg_repo.eq("") {
+            out = out.concat("repository: ").concat(m.pkg_repo).concat("\n");
+        }
         if !m.blurb.eq("") {
             out = out.concat("\n").concat(m.blurb).concat("\n");
         }
@@ -355,6 +424,10 @@ fn _scan_file(path: string, root: string) -> *DocModule {
     m.slug = _slug(m.display);
     m.items = items_vec;
     m.blurb = "";
+    m.package = "project";
+    m.pkg_repo = "";
+    m.pkg_desc = "";
+    m.pkg_ver  = "";
 
     for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
@@ -492,6 +565,33 @@ fn _slug(display: string) -> string {
 fn _ends_with(s: string, suffix: string) -> bool {
     if suffix.len() > s.len() { return false; }
     return s.substring(s.len() - suffix.len(), s.len()).eq(suffix);
+}
+
+// True when `seg` appears between path separators in `path` (or at one
+// of its ends). Lets the doc walker filter out vendored dep mirrors
+// (`<root>/glide_modules/...`) and `tests/` trees without false hits
+// on names that happen to contain the same substring.
+fn _contains_segment(path: string, seg: string) -> bool {
+    if path == null || seg == null || seg.eq("") { return false; }
+    let n: i32 = path.len();
+    let m: i32 = seg.len();
+    if m > n { return false; }
+    for let i: i32 = 0; i + m <= n; i++ {
+        let mut hit: bool = true;
+        for let j: i32 = 0; j < m; j++ {
+            let a: i32 = path.at(i + j).to_int();
+            let b: i32 = seg.at(j).to_int();
+            if a != b { hit = false; break; }
+        }
+        if !hit { continue; }
+        let before: i32 = if i == 0 { 47 } else { path.at(i - 1).to_int() };
+        let after_idx: i32 = i + m;
+        let after: i32 = if after_idx >= n { 47 } else { path.at(after_idx).to_int() };
+        let lb: bool = before == 47 || before == 92;
+        let la: bool = after == 47 || after == 92;
+        if lb && la { return true; }
+    }
+    return false;
 }
 
 // HTML escape: `<` `>` `&` `"`.
@@ -751,6 +851,13 @@ fn _doc_css() -> string {
         ".back:hover{color:var(--accent)}\n").concat(
         ".origin{color:var(--muted);font-size:14px;margin-bottom:6px}\n").concat(
         ".origin code{background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff;font-size:12.5px}\n").concat(
+        ".pkg-group{margin:34px 0 0}\n").concat(
+        ".pkg-head{display:flex;flex-direction:column;gap:4px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border-soft)}\n").concat(
+        ".pkg-head h2{font-size:18px;letter-spacing:-0.01em;display:inline}\n").concat(
+        ".pkg-head .pkg-ver{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-left:8px}\n").concat(
+        ".pkg-head .pkg-desc{color:var(--text-dim);font-size:14px;margin:0}\n").concat(
+        ".pkg-head .pkg-repo{margin:0}\n").concat(
+        ".pkg-head .pkg-repo a{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--accent)}\n").concat(
         ".modules{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:14px}\n").concat(
         ".module-card{background:linear-gradient(180deg,rgba(30,42,94,0.30),rgba(15,21,48,0.55));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:18px 20px;transition:border-color 160ms ease,transform 160ms ease}\n").concat(
         ".module-card:hover{border-color:rgba(107,138,253,0.45);transform:translateY(-1px)}\n").concat(
@@ -818,23 +925,82 @@ fn _write_index(out_dir: string, modules: *Vector<DocModule>) {
         .concat(int_to_str(total_items)).concat(" public items. ")
         .concat("Auto-generated from <code>///</code> doc comments — each card opens its own page.</p>\n")
         .concat("</section>\n");
-    html = html.concat("<section class=\"modules\">\n");
+
+    // Walk packages in a stable order: project first, declared deps in
+    // the order they appear in the manifest (preserved by `modules`'
+    // insertion order), stdlib last.
+    let groups: *Vector<string> = Vector::new();
+    let seen: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < modules.len(); i++ {
-        let m: DocModule = modules.get(i);
-        html = html.concat("  <article class=\"module-card\">\n");
-        html = html.concat("    <h3><a href=\"").concat(m.slug).concat(".html\">").concat(_esc(m.display)).concat("</a></h3>\n");
-        if !m.blurb.eq("") {
-            html = html.concat("    <p class=\"blurb\">").concat(_esc(m.blurb)).concat("</p>\n");
-        }
-        html = html.concat("    <p class=\"counts\">")
-            .concat(int_to_str(m.items.len())).concat(" item");
-        if m.items.len() != 1 { html = html.concat("s"); }
-        html = html.concat("</p>\n");
-        html = html.concat("  </article>\n");
+        let pkg: string = modules.get(i).package;
+        if pkg.eq("") || seen.contains(pkg) { continue; }
+        seen.insert(pkg, true);
+        groups.push(pkg);
     }
-    html = html.concat("</section>\n");
+
+    for let g: i32 = 0; g < groups.len(); g++ {
+        let pkg: string = groups.get(g);
+        // Pick the first module of this group so the group-level metadata
+        // (repo/desc/version, captured during the scan) renders once.
+        let mut head_idx: i32 = -1;
+        for let i: i32 = 0; i < modules.len(); i++ {
+            if modules.get(i).package.eq(pkg) { head_idx = i; break; }
+        }
+        if head_idx < 0 { continue; }
+        let head: DocModule = modules.get(head_idx);
+
+        html = html.concat("<section class=\"pkg-group\">\n");
+        html = html.concat("  <header class=\"pkg-head\">\n");
+        html = html.concat("    <h2>").concat(_esc(_pkg_title(pkg))).concat("</h2>\n");
+        if !head.pkg_ver.eq("") {
+            html = html.concat("    <span class=\"pkg-ver\">v").concat(_esc(head.pkg_ver)).concat("</span>\n");
+        }
+        if !head.pkg_desc.eq("") {
+            html = html.concat("    <p class=\"pkg-desc\">").concat(_esc(head.pkg_desc)).concat("</p>\n");
+        }
+        if !head.pkg_repo.eq("") {
+            let href: string = _repo_href(head.pkg_repo);
+            html = html.concat("    <p class=\"pkg-repo\"><a href=\"")
+                .concat(_esc(href)).concat("\">").concat(_esc(head.pkg_repo)).concat("</a></p>\n");
+        }
+        html = html.concat("  </header>\n");
+        html = html.concat("  <div class=\"modules\">\n");
+        for let i: i32 = 0; i < modules.len(); i++ {
+            let m: DocModule = modules.get(i);
+            if !m.package.eq(pkg) { continue; }
+            html = html.concat("    <article class=\"module-card\">\n");
+            html = html.concat("      <h3><a href=\"").concat(m.slug).concat(".html\">").concat(_esc(m.display)).concat("</a></h3>\n");
+            if !m.blurb.eq("") {
+                html = html.concat("      <p class=\"blurb\">").concat(_esc(m.blurb)).concat("</p>\n");
+            }
+            html = html.concat("      <p class=\"counts\">")
+                .concat(int_to_str(m.items.len())).concat(" item");
+            if m.items.len() != 1 { html = html.concat("s"); }
+            html = html.concat("</p>\n");
+            html = html.concat("    </article>\n");
+        }
+        html = html.concat("  </div>\n");
+        html = html.concat("</section>\n");
+    }
     html = html.concat(_html_tail());
     write_file(out_dir.concat("/index.html"), html);
+}
+
+// Human-readable title for a package group on the index page.
+fn _pkg_title(pkg: string) -> string {
+    if pkg.eq("project") { return "Project"; }
+    if pkg.eq("stdlib")  { return "Standard library"; }
+    return "Dep: ".concat(pkg);
+}
+
+// Build a clickable URL from a manifest `repository:` value. The
+// manifest convention is bare `github.com/u/r`, but absolute http(s)
+// URLs are passed through unchanged so users who write the full URL
+// still get a working link.
+fn _repo_href(repo: string) -> string {
+    if repo == null || repo.eq("") { return ""; }
+    if repo.starts_with("http://") || repo.starts_with("https://") { return repo; }
+    return "https://".concat(repo);
 }
 
 fn _write_module_page(out_dir: string, m: *DocModule) {
