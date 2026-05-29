@@ -2461,6 +2461,17 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // executable (failure path keeps it for debugging).
     fs_remove_file(tmp_c);
 
+    // Windows runtime-DLL bundling: when we linked against MSYS2/mingw
+    // shared libraries (ngtcp2, nghttp3, openssl, …) the produced .exe
+    // depends on DLLs that only live in the cc's own bin dir. Without
+    // them the binary errors out with exit code 127 the moment Windows
+    // tries to load it — silently, before any printf runs. Copy each
+    // dependency DLL next to the .exe so it works regardless of the
+    // caller's PATH (same approach as Cargo / Go on Windows).
+    if __glide_is_windows() != 0 && !cross {
+        _bundle_runtime_dlls_win(out_path, cc);
+    }
+
     if !quiet { spinner_finish(true, "built ".concat(out_path)); }
 
     if then_run {
@@ -2473,6 +2484,104 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         return __glide_shell(run_cmd);
     }
     return 0;
+}
+
+// Copy runtime DLLs the binary links against (libssl, libcrypto,
+// libngtcp2, libnghttp3, libz, plus the mingw C runtime stubs) from the
+// cc binary's directory into the same directory as `out_path`. Windows
+// searches the .exe's own dir for DLLs before falling back to PATH, so
+// this makes the binary self-contained. No-op when the cc dir can't be
+// resolved or the DLLs simply aren't there (static link, or a non-mingw
+// toolchain).
+fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
+    let cc_dir: string = _resolve_cc_dir_win(cc);
+    if cc_dir.eq("") { return; }
+    let dst_dir: string = parent_dir(out_path);
+    let final_dst: string = if dst_dir.eq("") { "." } else { dst_dir };
+
+    // Hard-coded prefixes match every shared lib the stdlib transitively
+    // links: openssl 3 (ssl + crypto), ngtcp2 + nghttp3 + the OSSL crypto
+    // bridge, the optional XZ/zstd/zlib that compress.glide pulls in via
+    // libcrypto. Stable across mingw + msys2 ucrt64; the version-suffix
+    // bumps don't matter because the prefix match covers them.
+    let prefixes: *Vector<string> = Vector::new();
+    prefixes.push("libssl-");
+    prefixes.push("libcrypto-");
+    prefixes.push("libngtcp2-");
+    prefixes.push("libngtcp2_crypto_ossl-");
+    prefixes.push("libnghttp3-");
+    prefixes.push("libnghttp2-");
+    prefixes.push("zlib1");
+    prefixes.push("libz-");
+    prefixes.push("libwinpthread-");
+
+    let entries: *Vector<string> = fs_list(cc_dir, ".dll");
+    if entries == null { return; }
+    for let i: i32 = 0; i < entries.len(); i++ {
+        let name: string = entries.get(i);
+        if name.eq("") { continue; }
+        let mut matched: bool = false;
+        for let j: i32 = 0; j < prefixes.len(); j++ {
+            let p: string = prefixes.get(j);
+            if name.len() >= p.len() && name.substring(0, p.len()).eq(p) {
+                matched = true; break;
+            }
+        }
+        if !matched { continue; }
+        let src: string = cc_dir.concat("/").concat(name);
+        let dst: string = final_dst.concat("/").concat(name);
+        // Skip if the target already has an up-to-date copy. We don't
+        // checksum — same-name in the binary's dir means a previous
+        // build already placed it. Cheap enough to overwrite blindly
+        // (a few MB), but skipping keeps repeated builds fast.
+        if __glide_file_exists(dst) { continue; }
+        fs_copy_file(src, dst);
+    }
+}
+
+// Resolve a cc command (e.g. "cc", "gcc", an absolute path, or
+// `"path/to/zig" cc`) to the directory holding the cc binary. Uses
+// `where` on Windows to look up bare names; absolute paths are split
+// at the last separator. Returns "" when we can't tell — caller treats
+// that as "skip bundling, the user is on their own".
+fn _resolve_cc_dir_win(cc: string) -> string {
+    if cc.eq("") { return ""; }
+    // `pick_cc_for_target` returns `"<zigpath>" cc` for cross builds;
+    // host builds without zig fall through to plain "gcc" / "cc".
+    // The zig case never bundles MSYS DLLs (zig's own libc has no
+    // openssl), so we just bail.
+    if cc.contains("zig") { return ""; }
+
+    let raw: string = cc.trim();
+    // Absolute / quoted path: take the dirname directly.
+    if raw.len() > 1 && (raw.at(0).to_int() == 34 || raw.contains(":/")
+                          || raw.contains(":\\")) {
+        let mut p: string = raw;
+        if p.at(0).to_int() == 34 {
+            // Strip leading `"` and everything from the closing `"`
+            // onward (handles `"C:/path/to/cc.exe" -flag`).
+            let mut end: i32 = 1;
+            while end < p.len() && p.at(end).to_int() != 34 { end = end + 1; }
+            p = p.substring(1, end);
+        }
+        return parent_dir(p);
+    }
+
+    // Bare name like `gcc` / `cc`. Use `where` to resolve.
+    let tmp: string = _search_tmp_path();
+    let cmd: string = "where ".concat(raw).concat(" > \"").concat(tmp).concat("\" 2>nul");
+    let rc: i32 = __glide_shell(cmd);
+    if rc != 0 { fs_remove_file(tmp); return ""; }
+    let body: string = read_file(tmp);
+    fs_remove_file(tmp);
+    if body.eq("") { return ""; }
+    // First non-empty line is the highest-priority hit.
+    let lines: *Vector<string> = body.split("\n");
+    for let i: i32 = 0; i < lines.len(); i++ {
+        let line: string = lines.get(i).trim();
+        if !line.eq("") { return parent_dir(line); }
+    }
+    return "";
 }
 
 // Freestanding / kernel link path. Compiles the emitted C as a bare-metal
