@@ -598,6 +598,48 @@ pub fn manifest_remove_dep(root_dir: string, name: string) -> bool {
     return write_file(path, edited);
 }
 
+// Locate the (line, col) — both 0-indexed — at which a new dep line
+// should be inserted in the manifest source. Returns `line = -1` when
+// the manifest has no recognisable `deps: vec_of(...)` shape. Mirrors
+// the byte position `_insert_dep_in_vec_of` would emit at, but exposed
+// for callers (the LSP) that need a TextEdit position instead of a
+// rewritten source string.
+pub struct InsertPos {
+    pub line: i32,
+    pub col:  i32,
+    pub ok:   bool,
+}
+
+pub fn manifest_dep_insert_position(root_dir: string) -> InsertPos {
+    let pos: InsertPos;
+    pos.line = -1; pos.col = 0; pos.ok = false;
+    let path: string = root_dir.concat("/glide.glide");
+    let src: string = read_file(path);
+    if src.eq("") { return pos; }
+    let deps_idx: i32 = _find_after(src, 0, "deps:");
+    if deps_idx < 0 { return pos; }
+    let vec_idx: i32 = _find_after(src, deps_idx, "vec_of(");
+    if vec_idx < 0 { return pos; }
+    let open: i32 = vec_idx + 7;
+    let close: i32 = _matching_close(src, open - 1);
+    if close < 0 { return pos; }
+    let mut line_start: i32 = close;
+    while line_start > open
+       && _at(src, line_start - 1) != 10
+       && _at(src, line_start - 1) != 13 {
+        line_start = line_start - 1;
+    }
+    // Byte offset → (line, col).
+    let mut line: i32 = 0;
+    let mut col: i32 = 0;
+    for let i: i32 = 0; i < line_start; i++ {
+        if _at(src, i) == 10 { line = line + 1; col = 0; }
+        else { col = col + 1; }
+    }
+    pos.line = line; pos.col = col; pos.ok = true;
+    return pos;
+}
+
 // Walk forward from the first `vec_of(` after a `deps:` token, matching
 // parentheses, and insert `dep_line` (plus a trailing newline) right
 // before the matching `)`. Returns "" on any structural mismatch so the

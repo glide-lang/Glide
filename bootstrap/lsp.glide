@@ -43,6 +43,7 @@ import typer;        // for types_compat / merge_parse_diags
 import json;
 import fmt;
 import manifest;     // for project-aware completion (Manifest, dep_cache_dir, …)
+import fetch;        // for fetch_all when the user clicks "Fetch missing dep"
 
 // LSP diagnostic log. Opens (truncate) on lsp_main entry and redirects
 // stderr there so SIGSEGV traps from the runtime land in the same
@@ -367,6 +368,15 @@ fn handle_initialize(req: *JsonValue) {
     json_obj_set(caps, "callHierarchyProvider", json_bool(true));
     // Type hierarchy: prepare + supertypes/subtypes (trait <-> impl).
     json_obj_set(caps, "typeHierarchyProvider", json_bool(true));
+    // executeCommand: server-side commands dispatched from code actions.
+    // `glide.fetch` is the only one today — runs `fetch_all` for a
+    // declared-but-uncached dep when the user clicks the "Fetch missing
+    // dep" lightbulb.
+    let exe_cmd: *JsonValue = json_object();
+    let cmds: *JsonValue = json_array();
+    json_arr_push(cmds, json_string("glide.fetch"));
+    json_obj_set(exe_cmd, "commands", cmds);
+    json_obj_set(caps, "executeCommandProvider", exe_cmd);
     json_obj_set(result, "capabilities", caps);
     let info: *JsonValue = json_object();
     json_obj_set(info, "name", json_string("glide-lsp"));
@@ -8038,6 +8048,270 @@ fn _value_extent(text: string, start: i32) -> i32 {
     return i;
 }
 
+// Build the manifest-targeted CodeActions for an `unresolved-import`
+// diagnostic. Two flavours:
+//   * "Add `<alias>` to glide.glide as git dep (github.com/<a>/<a>@main)"
+//   * "Add `<alias>` to glide.glide as local path"
+// Plus, when the alias IS already declared but its cache dir is empty,
+// a third action: "Fetch missing dep `<alias>`" which the editor
+// dispatches via workspace/executeCommand.
+//
+// All actions edit the manifest file's URI rather than the active doc.
+// The diagnostic is attached so editors surface them on the import
+// statement's red squiggle.
+fn _emit_unresolved_import_actions(out: *JsonValue, d: *JsonValue, uri: string, _state: *LspState) {
+    // Pull the alias out of the diagnostic message: the typer emits
+    // `cannot find module \`X::Y::Z\` to import`. The first segment is
+    // the alias the user would declare in their manifest.
+    let msg: string = json_as_string(json_get(d, "message"));
+    let alias: string = _alias_from_unresolved_message(msg);
+    if alias.eq("") { return; }
+    // The same diagnostic also fires for typos inside stdlib paths
+    // (`import stdlib::tpyo;`). For those the `stdlib::` prefix is the
+    // alias — but there's no dep to add. Skip the suggestion when the
+    // alias hits a reserved root we know isn't user-installable.
+    if alias.eq("stdlib") || alias.eq("src") { return; }
+
+    let path: string = uri_to_path(uri);
+    let dir: string = parent_dir(path);
+    let root: string = find_manifest_root(dir);
+    if root.eq("") { return; }
+
+    let m: *Manifest = read_manifest(root);
+    let mut declared: bool = false;
+    let mut cached: bool = false;
+    if m != null {
+        for let i: i32 = 0; i < m.deps.len(); i++ {
+            let dep: ManifestDep = m.deps.get(i);
+            if !dep.name.eq(alias) { continue; }
+            declared = true;
+            let cdir: string = dep_cache_dir(m, dep);
+            if !cdir.eq("") && __glide_fs_is_dir(cdir) { cached = true; }
+            break;
+        }
+    }
+
+    // When the dep is already declared but unfetched, the right answer
+    // is "Fetch", not "Add" — surface a command-shaped action that the
+    // editor invokes via workspace/executeCommand.
+    if declared && !cached {
+        let act: *JsonValue = _build_fetch_command_action(alias, root, d);
+        if act != null { json_arr_push(out, act); }
+        return;
+    }
+    // Already declared and cached, but still unresolved → the import
+    // path is wrong (typo in sub-module name). Nothing useful we can
+    // suggest from the manifest side, so bail.
+    if declared { return; }
+
+    // Insertion position for new dep lines in the manifest source.
+    let pos: InsertPos = manifest_dep_insert_position(root);
+    if !pos.ok { return; }
+    let manifest_uri: string = path_to_uri(root.concat("/glide.glide"));
+
+    // Git action: github.com/<alias>/<alias>@main is the most common
+    // shape for a freshly published Glide package and aligns with the
+    // `glide add <alias>` shorthand.
+    let git_line: string = "        Dep::git(\"".concat(alias)
+        .concat("\", \"github.com/").concat(alias).concat("/").concat(alias)
+        .concat("\", \"main\"),\n");
+    let git_title: string = "Add `".concat(alias)
+        .concat("` to glide.glide (git: github.com/").concat(alias).concat("/").concat(alias).concat("@main)");
+    let git_act: *JsonValue = _build_manifest_edit_action(git_title, manifest_uri, pos.line, pos.col, git_line, d);
+    if git_act != null {
+        // Preferred so a single Ctrl+. accepts it; the path variant
+        // sits behind it as a second choice.
+        json_obj_set(git_act, "isPreferred", json_bool(true));
+        json_arr_push(out, git_act);
+    }
+
+    // Path action: defaults to `../<alias>` because monorepo siblings
+    // are the typical local-dev shape. User edits the path string
+    // afterward if their layout differs.
+    let path_line: string = "        Dep::path(\"".concat(alias)
+        .concat("\", \"../").concat(alias).concat("\"),\n");
+    let path_title: string = "Add `".concat(alias).concat("` to glide.glide (local path: ../").concat(alias).concat(")");
+    let path_act: *JsonValue = _build_manifest_edit_action(path_title, manifest_uri, pos.line, pos.col, path_line, d);
+    if path_act != null { json_arr_push(out, path_act); }
+}
+
+// Read `X` from a typer diagnostic of the form
+// "cannot find module `X::Y::Z` to import". Empty string when the
+// message doesn't match (we don't want to invent a code action from
+// noise).
+fn _alias_from_unresolved_message(msg: string) -> string {
+    if msg == null || msg.eq("") { return ""; }
+    let mut open: i32 = -1;
+    for let i: i32 = 0; i < msg.len(); i++ {
+        if msg.at(i).to_int() == 96 { open = i; break; }   // backtick
+    }
+    if open < 0 { return ""; }
+    let mut close: i32 = -1;
+    for let i: i32 = open + 1; i < msg.len(); i++ {
+        if msg.at(i).to_int() == 96 { close = i; break; }
+    }
+    if close < 0 { return ""; }
+    let body: string = msg.substring(open + 1, close);
+    // First `::`-separated segment.
+    for let i: i32 = 0; i + 1 < body.len(); i++ {
+        if body.at(i).to_int() == 58 && body.at(i + 1).to_int() == 58 {
+            return body.substring(0, i);
+        }
+    }
+    return body;
+}
+
+// Build a CodeAction whose `edit.changes` mutates the manifest file
+// (different URI than the active doc) at `(line, col)` with `new_text`.
+// `d` is the originating diagnostic so the editor surfaces the action
+// on the import-statement squiggle.
+fn _build_manifest_edit_action(title: string, manifest_uri: string,
+                                line: i32, col: i32, new_text: string,
+                                d: *JsonValue) -> *JsonValue {
+    let act: *JsonValue = json_object();
+    json_obj_set(act, "title", json_string(title));
+    json_obj_set(act, "kind", json_string("quickfix"));
+
+    let edit: *JsonValue = json_object();
+    let changes: *JsonValue = json_object();
+    let edits: *JsonValue = json_array();
+    let te: *JsonValue = json_object();
+    let r: *JsonValue = json_object();
+    let s_obj: *JsonValue = json_object();
+    let e_obj: *JsonValue = json_object();
+    json_obj_set(s_obj, "line", json_int(line));
+    json_obj_set(s_obj, "character", json_int(col));
+    json_obj_set(e_obj, "line", json_int(line));
+    json_obj_set(e_obj, "character", json_int(col));
+    json_obj_set(r, "start", s_obj);
+    json_obj_set(r, "end", e_obj);
+    json_obj_set(te, "range", r);
+    json_obj_set(te, "newText", json_string(new_text));
+    json_arr_push(edits, te);
+    json_obj_set(changes, manifest_uri, edits);
+    json_obj_set(edit, "changes", changes);
+    json_obj_set(act, "edit", edit);
+    _attach_diagnostic_ref(act, d);
+    return act;
+}
+
+// "Fetch missing dep" action — wraps an executeCommand invocation that
+// the LSP server handles by running fetch on demand. The command
+// arguments are [manifestRoot, alias] so the handler doesn't have to
+// re-derive them.
+fn _build_fetch_command_action(alias: string, manifest_root: string, d: *JsonValue) -> *JsonValue {
+    let act: *JsonValue = json_object();
+    json_obj_set(act, "title", json_string("Fetch missing dep `".concat(alias).concat("`")));
+    json_obj_set(act, "kind", json_string("quickfix"));
+    let cmd: *JsonValue = json_object();
+    json_obj_set(cmd, "title", json_string("Fetch missing dep"));
+    json_obj_set(cmd, "command", json_string("glide.fetch"));
+    let args: *JsonValue = json_array();
+    json_arr_push(args, json_string(manifest_root));
+    json_arr_push(args, json_string(alias));
+    json_obj_set(cmd, "arguments", args);
+    json_obj_set(act, "command", cmd);
+    json_obj_set(act, "isPreferred", json_bool(true));
+    _attach_diagnostic_ref(act, d);
+    return act;
+}
+
+// Copy the originating diagnostic's range/message/code onto the action
+// so editors render the lightbulb on the right squiggle. Allocated
+// fresh — must not alias the request's JsonValues (they get freed by
+// the outer reply path).
+fn _attach_diagnostic_ref(act: *JsonValue, d: *JsonValue) {
+    let d_range: *JsonValue = json_get(d, "range");
+    if d_range == null { return; }
+    let d_s: *JsonValue = json_get(d_range, "start");
+    let d_e: *JsonValue = json_get(d_range, "end");
+    let dlist: *JsonValue = json_array();
+    let dfix: *JsonValue = json_object();
+    let drng: *JsonValue = json_object();
+    let dso: *JsonValue = json_object();
+    let deo: *JsonValue = json_object();
+    json_obj_set(dso, "line", json_int(json_as_int(json_get(d_s, "line"))));
+    json_obj_set(dso, "character", json_int(json_as_int(json_get(d_s, "character"))));
+    json_obj_set(deo, "line", json_int(json_as_int(json_get(d_e, "line"))));
+    json_obj_set(deo, "character", json_int(json_as_int(json_get(d_e, "character"))));
+    json_obj_set(drng, "start", dso);
+    json_obj_set(drng, "end", deo);
+    json_obj_set(dfix, "range", drng);
+    json_obj_set(dfix, "message", json_string(json_as_string(json_get(d, "message"))));
+    let dcode: string = json_as_string(json_get(d, "code"));
+    if !dcode.eq("") { json_obj_set(dfix, "code", json_string(dcode)); }
+    json_arr_push(dlist, dfix);
+    json_obj_set(act, "diagnostics", dlist);
+    if d_s != null { free(d_s as *void); }
+    if d_e != null { free(d_e as *void); }
+    free(d_range as *void);
+}
+
+// workspace/executeCommand — handle server-side commands referenced
+// from code actions. Today: `glide.fetch <manifestRoot> <alias>` runs
+// the same `fetch_all` pipeline the CLI uses, then bumps the project
+// fingerprint so the next keystroke rebuilds the dep index. The
+// returned response is `null`; progress is conveyed via window/showMessage.
+fn handle_execute_command(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let cmd_name: string = json_as_string(json_get(params, "command"));
+    let args: *JsonValue = json_get(params, "arguments");
+
+    if !cmd_name.eq("glide.fetch") {
+        lsp_send_response(id, json_null());
+        return;
+    }
+
+    // arguments[0] = manifest root; arguments[1] = alias (informational
+    // for the status message — fetch_all walks every declared dep, not
+    // just the named one, so the user sees one fetch even if multiple
+    // deps are missing).
+    let root: string = if _json_arr_len(args) > 0 { json_as_string(json_at(args, 0)) } else { "" };
+    let alias: string = if _json_arr_len(args) > 1 { json_as_string(json_at(args, 1)) } else { "" };
+    if root.eq("") {
+        _lsp_show_message(2, "glide.fetch: missing manifest root");
+        lsp_send_response(id, json_null());
+        return;
+    }
+
+    let m: *Manifest = read_manifest(root);
+    if m == null {
+        _lsp_show_message(1, "glide.fetch: could not parse glide.glide");
+        lsp_send_response(id, json_null());
+        return;
+    }
+
+    _lsp_show_message(3, "fetching deps…");
+    let fetched: i32 = fetch_all(m);
+    link_all(m);
+    let lf: *Lockfile = lockfile_from_manifest(m);
+    write_lockfile(root, lf);
+
+    // Force a rebuild of the project index next time a file in this
+    // project is touched.
+    state.project_dep_fp = "";
+
+    let mut msg: string = "";
+    if fetched > 0 {
+        msg = "fetched ".concat(int_to_str(fetched as i64)).concat(" dep(s)");
+    } else if !alias.eq("") {
+        msg = "`".concat(alias).concat("` not fetched - check the URL / rev in glide.glide");
+    } else {
+        msg = "no deps to fetch";
+    }
+    _lsp_show_message(3, msg);
+    lsp_send_response(id, json_null());
+}
+
+// LSP window/showMessage notification. `kind`: 1=error, 2=warning, 3=info.
+fn _lsp_show_message(kind: i32, text: string) {
+    let params: *JsonValue = json_object();
+    json_obj_set(params, "type", json_int(kind));
+    json_obj_set(params, "message", json_string(text));
+    lsp_send_notification("window/showMessage", params);
+}
+
 fn handle_code_action(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -8109,6 +8383,13 @@ fn handle_code_action(req: *JsonValue, state: *LspState) {
                     have_fix = true;
                 }
             }
+        } else if code.eq("unresolved-import") {
+            // Dep-related actions live in a different file (glide.glide),
+            // not the active document. Build the WorkspaceEdit(s)
+            // ourselves and push them straight onto `out`.
+            _emit_unresolved_import_actions(out, d, uri, state);
+            free(d as *void);
+            continue;
         } else {
             data = json_get(d, "data");
             if data != null {
@@ -11876,6 +12157,7 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     if method.eq("textDocument/rename") { handle_rename(req, state); return false; }
     if method.eq("textDocument/formatting") { handle_formatting(req, state); return false; }
     if method.eq("textDocument/codeAction") { handle_code_action(req, state); return false; }
+    if method.eq("workspace/executeCommand") { handle_execute_command(req, state); return false; }
     if method.eq("glide/routeList") { handle_route_list(req, state); return false; }
     // Any unhandled request gets an empty-result reply so clients don't hang.
     let id: *JsonValue = json_get(req, "id");
