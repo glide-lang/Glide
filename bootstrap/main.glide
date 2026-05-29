@@ -428,10 +428,14 @@ fn print_usage() {
     println!("  glide fmt <file> [--write] (pretty-print to stdout, or rewrite in place)");
     println!("  glide new <name> [--lib] [--ai] [--no-vcs]");
     println!("  glide add <name> <git-url> <rev>");
+    println!("  glide add <user/repo>[@<rev>]   (shorthand; defaults host=github.com, rev=main)");
     println!("  glide add --local <name> <path>");
     println!("  glide remove <name>        (drop a dep from glide.glide)");
     println!("  glide fetch [path]         (download git deps from glide.glide)");
     println!("  glide update               (refresh every git dep + rewrite lock)");
+    println!("  glide tree                 (show the dep graph)");
+    println!("  glide info <name>          (manifest+cache metadata for a dep)");
+    println!("  glide search <query>       (search github for glide packages)");
     println!("  glide clean                (drop glide_modules/ + glide.lock)");
     println!("  glide install <path>");
     println!("  glide install <git-url> <rev>");
@@ -679,9 +683,15 @@ fn _basename(path: string) -> string {
     return path.substring(start, end);
 }
 
-// `glide add` dispatcher. Two shapes:
-//   glide add --local <name> <path>
-//   glide add <name> <git-url> <rev>
+// `glide add` dispatcher. Three shapes:
+//   glide add --local <name> <path>           path dep
+//   glide add <name> <git-url> <rev>          explicit git form
+//   glide add <user/repo>[@<rev>]             shorthand: alias = repo,
+//                                              url = github.com/<user>/<repo>,
+//                                              rev = <rev> or "main"
+// The shorthand also accepts a full host: `glide add github.com/u/r@v1.0`
+// or `glide add gitlab.com/u/r@main`, in which case the host is preserved
+// verbatim.
 fn run_add(argc: i32) -> i32 {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("add: no glide.glide found"); return 1; }
@@ -711,14 +721,33 @@ fn run_add(argc: i32) -> i32 {
         return 0;
     }
 
-    if positional.len() < 3 {
+    // Shorthand: single positional that looks like `user/repo[@rev]` or
+    // `host/user/repo[@rev]`. Expanded into the canonical three-arg form
+    // so the manifest line is identical to what `glide add a b c` would
+    // produce.
+    let mut dep_name: string = "";
+    let mut dep_url:  string = "";
+    let mut dep_rev:  string = "";
+    if positional.len() == 1 {
+        let raw: string = positional.get(0);
+        let parsed: bool = _expand_add_shorthand(raw, &dep_name, &dep_url, &dep_rev);
+        if !parsed {
+            println!("usage: glide add <name> <git-url> <rev>");
+            println!("       glide add <user/repo>[@<rev>]");
+            println!("       glide add --local <name> <path>");
+            return 1;
+        }
+    } else if positional.len() >= 3 {
+        dep_name = positional.get(0);
+        dep_url  = positional.get(1);
+        dep_rev  = positional.get(2);
+    } else {
         println!("usage: glide add <name> <git-url> <rev>");
+        println!("       glide add <user/repo>[@<rev>]");
         println!("       glide add --local <name> <path>");
         return 1;
     }
-    let dep_name: string = positional.get(0);
-    let dep_url:  string = positional.get(1);
-    let dep_rev:  string = positional.get(2);
+
     let line: string = "        Dep::git(\"".concat(dep_name)
         .concat("\", \"").concat(dep_url)
         .concat("\", \"").concat(dep_rev).concat("\"),");
@@ -737,6 +766,68 @@ fn run_add(argc: i32) -> i32 {
         write_lockfile(root, lf);
     }
     return 0;
+}
+
+// Parse a shorthand string like `user/repo`, `user/repo@v1.2.3`,
+// `github.com/user/repo`, or `gitlab.com/user/repo@main`. Sets *name to
+// the repo segment, *url to the URL with host preserved (default
+// github.com when only `user/repo` was given), and *rev to the
+// post-`@` segment or "main" when absent. Returns false when the shape
+// doesn't have at least two `/`-separated path parts.
+fn _expand_add_shorthand(raw: string, name: *string, url: *string, rev: *string) -> bool {
+    if raw == null || raw.eq("") { return false; }
+
+    // Split on '@' to peel the rev. Only the LAST '@' counts — git URLs
+    // never contain one in the host/path part.
+    let mut at_idx: i32 = -1;
+    for let i: i32 = 0; i < raw.len(); i++ {
+        if raw.at(i).to_int() == 64 { at_idx = i; }
+    }
+    let mut body: string = raw;
+    let mut rev_part: string = "main";
+    if at_idx >= 0 {
+        body = raw.substring(0, at_idx);
+        let tail: string = raw.substring(at_idx + 1, raw.len()).trim();
+        if !tail.eq("") { rev_part = tail; }
+    }
+
+    // Strip a leading scheme so `https://github.com/u/r@v1` works.
+    if body.starts_with("https://") { body = body.substring(8, body.len()); }
+    else if body.starts_with("http://") { body = body.substring(7, body.len()); }
+    else if body.starts_with("git@") { body = body.substring(4, body.len()); }
+
+    // Split on '/' once we know there's no scheme.
+    let parts: *Vector<string> = body.split("/");
+    let n: i32 = parts.len();
+    if n < 2 { return false; }
+
+    let mut host: string = "github.com";
+    let mut owner: string = "";
+    let mut repo:  string = "";
+    if n == 2 {
+        owner = parts.get(0);
+        repo  = parts.get(1);
+    } else {
+        // 3+ segments: first is the host, last is the repo, anything in
+        // between is the owner path (groups/subgroups for gitlab etc).
+        host = parts.get(0);
+        let mut owner_buf: string = parts.get(1);
+        for let i: i32 = 2; i + 1 < n; i++ {
+            owner_buf = owner_buf.concat("/").concat(parts.get(i));
+        }
+        owner = owner_buf;
+        repo  = parts.get(n - 1);
+    }
+    if owner.eq("") || repo.eq("") { return false; }
+    // Trim a trailing `.git` so the dep alias is clean.
+    if repo.len() > 4 && repo.substring(repo.len() - 4, repo.len()).eq(".git") {
+        repo = repo.substring(0, repo.len() - 4);
+    }
+
+    *name = repo;
+    *url  = host.concat("/").concat(owner).concat("/").concat(repo);
+    *rev  = rev_part;
+    return true;
 }
 
 fn run_remove(name: string) -> i32 {
@@ -780,6 +871,258 @@ fn run_update() -> i32 {
     let lf: *Lockfile = lockfile_from_manifest(m);
     write_lockfile(root, lf);
     return 0;
+}
+
+// `glide tree` — walk the manifest's deps transitively and print the
+// graph as an indented tree. The MVS override map is populated first so
+// shown revs match what would actually be linked. Unfetched git deps
+// are tagged "[not fetched]" so the user knows what `glide fetch` would
+// pull down.
+fn run_tree() -> i32 {
+    let root: string = find_manifest_root(".");
+    if root.eq("") { println!("tree: no glide.glide found"); return 1; }
+    let m: *Manifest = read_manifest(root);
+    if m == null { println!("tree: could not parse glide.glide"); return 1; }
+    mvs_resolve(m);
+
+    println!(m.name.concat(" v").concat(m.version));
+    if m.deps.len() == 0 {
+        println!("(no deps declared)");
+        return 0;
+    }
+    let seen: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        let last: bool = i + 1 == m.deps.len();
+        _print_dep_tree(m, d, "", last, seen);
+    }
+    return 0;
+}
+
+fn _print_dep_tree(m: *Manifest, d: ManifestDep, prefix: string, is_last: bool, seen: *HashMap<bool>) {
+    let branch: string = if is_last { "\xe2\x94\x94\xe2\x94\x80 " } else { "\xe2\x94\x9c\xe2\x94\x80 " };
+    let label: string = _dep_label(m, d);
+    println!(prefix.concat(branch).concat(label));
+
+    if d.kind != DEP_GIT { return; }
+    let key: string = d.path.concat("@").concat(d.rev);
+    if seen.contains(key) { return; }
+    seen.insert(key, true);
+
+    let cache: string = dep_cache_dir(m, d);
+    if cache.eq("") || !fs_is_dir(cache) { return; }
+    let sub_m: *Manifest = read_manifest(cache);
+    if sub_m == null || sub_m.deps.len() == 0 { return; }
+
+    let child_prefix: string = prefix.concat(if is_last { "   " } else { "\xe2\x94\x82  " });
+    for let i: i32 = 0; i < sub_m.deps.len(); i++ {
+        let sd: ManifestDep = sub_m.deps.get(i);
+        let last: bool = i + 1 == sub_m.deps.len();
+        _print_dep_tree(sub_m, sd, child_prefix, last, seen);
+    }
+}
+
+fn _dep_label(m: *Manifest, d: ManifestDep) -> string {
+    if d.kind == DEP_PATH {
+        return d.name.concat(" (path: ").concat(d.path).concat(")");
+    }
+    // Git: include the effective rev (post-MVS) and a [not fetched] tag
+    // when the cache slot is missing on disk.
+    let mut eff_rev: string = d.rev;
+    let ov: *HashMap<string> = mvs_get_override();
+    if ov != null && ov.contains(d.path) { eff_rev = ov.get(d.path); }
+    let mut tag: string = "";
+    let cache: string = dep_cache_dir(m, d);
+    if cache.eq("") || !fs_is_dir(cache) { tag = " [not fetched]"; }
+    return d.name.concat(" (").concat(d.path).concat("@").concat(eff_rev).concat(")").concat(tag);
+}
+
+// `glide info <name>` — print metadata for a dep declared in the
+// current project's manifest. Useful when the user wants to know where
+// it lives on disk, what rev is cached, or whether a fetch is still
+// pending.
+fn run_info(name: string) -> i32 {
+    let root: string = find_manifest_root(".");
+    if root.eq("") { println!("info: no glide.glide found"); return 1; }
+    let m: *Manifest = read_manifest(root);
+    if m == null { println!("info: could not parse glide.glide"); return 1; }
+
+    let mut found: bool = false;
+    for let i: i32 = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        if !d.name.eq(name) { continue; }
+        found = true;
+        println!("name:     ", d.name);
+        if d.kind == DEP_PATH {
+            println!("kind:      path");
+            println!("path:     ", d.path);
+            let dir: string = dep_cache_dir(m, d);
+            println!("resolves: ", dir);
+            println!("on disk:  ", if fs_is_dir(dir) { "yes" } else { "no" });
+        } else {
+            println!("kind:      git");
+            println!("url:      ", d.path);
+            println!("rev:      ", d.rev);
+            let dir: string = dep_cache_dir(m, d);
+            println!("cache:    ", dir);
+            let cached: bool = fs_is_dir(dir);
+            println!("fetched:  ", if cached { "yes" } else { "no" });
+            if cached {
+                let hash: string = read_dep_hash(m, d);
+                if !hash.eq("") { println!("hash:     ", hash); }
+                let sub_m: *Manifest = read_manifest(dir);
+                if sub_m != null {
+                    if !sub_m.description.eq("") { println!("desc:     ", sub_m.description); }
+                    if !sub_m.repository.eq("")  { println!("repo:     ", sub_m.repository); }
+                    if !sub_m.license.eq("")     { println!("license:  ", sub_m.license); }
+                    println!("transitive deps:", int_to_str(sub_m.deps.len() as i64));
+                }
+            } else {
+                println!("(run `glide fetch` to download it)");
+            }
+        }
+        break;
+    }
+    if !found {
+        println!("info: no dep named", name);
+        if m.deps.len() > 0 {
+            println!("declared deps:");
+            for let i: i32 = 0; i < m.deps.len(); i++ {
+                println!("  ", m.deps.get(i).name);
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+
+// `glide search <q>` — hit the GitHub search API for repositories whose
+// description / name matches `<q>` and that look like Glide packages
+// (language=Glide isn't tracked by GitHub yet, so we filter on a
+// `glide.glide` file in the root via a code-search fall-back). Prints
+// the top hits with a copy-pasteable `glide add` shorthand.
+fn run_search(query: string) -> i32 {
+    if query.eq("") { println!("usage: glide search <query>"); return 1; }
+    // GitHub's repo search supports `q=<terms>+filename:glide.glide` via
+    // the code-search endpoint; the repo endpoint doesn't filter on
+    // file presence, so we query the code endpoint and de-dupe by repo
+    // full_name. This lands a "real Glide project" filter even though
+    // GitHub doesn't know about the language tag yet.
+    let url: string = "https://api.github.com/search/code?per_page=20&q="
+        .concat(_url_escape(query))
+        .concat("+filename:glide.glide");
+    let tmp: string = _search_tmp_path();
+    // Use Accept header to pin the API version; `-fsS` so a 4xx /
+    // network error returns a non-zero exit instead of writing the
+    // HTML error page into tmp.
+    let cmd: string =
+        "curl -fsS -H \"Accept: application/vnd.github+json\" -o \"".concat(tmp)
+        .concat("\" \"").concat(url).concat("\"");
+    let rc: i32 = __glide_shell(cmd);
+    if rc != 0 {
+        println!("search: network call failed (rc=".concat(int_to_str(rc as i64)).concat(")"));
+        println!("(GitHub's API rate-limits unauthenticated requests; retry in a minute or set GITHUB_TOKEN)");
+        return 1;
+    }
+    let body: string = read_file(tmp);
+    fs_remove_file(tmp);
+    if body.eq("") { println!("search: empty response"); return 1; }
+
+    // De-dupe hits by `repository.full_name` and pull out description +
+    // star count via a second per-repo GET-light pass. We avoid that
+    // pass here to stay within rate limits — the repo full_name + the
+    // shorthand is enough for `glide add`.
+    let seen_repos: *HashMap<bool> = HashMap::new();
+    let mut shown: i32 = 0;
+    let mut idx: i32 = 0;
+    while idx < body.len() && shown < 5 {
+        let full: string = _extract_str_field(body, "full_name", idx);
+        if full.eq("") { break; }
+        idx = _advance_after(body, "full_name", idx);
+        if seen_repos.contains(full) { continue; }
+        seen_repos.insert(full, true);
+        println!(full);
+        println!("  glide add", full);
+        shown = shown + 1;
+    }
+    if shown == 0 { println!("search: no hits for", query); return 1; }
+    return 0;
+}
+
+fn _url_escape(s: string) -> string {
+    let mut out: string = "";
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
+        let alnum: bool = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+        if alnum || c == 45 || c == 46 || c == 95 {
+            out = out.concat(s.substring(i, i + 1));
+        } else if c == 32 {
+            out = out.concat("+");
+        } else {
+            // Hex-encode the byte. Tiny bespoke table since stdlib::url
+            // isn't on the bootstrap import path yet.
+            let hex: string = "0123456789ABCDEF";
+            let hi: i32 = (c >> 4) & 15;
+            let lo: i32 = c & 15;
+            out = out.concat("%").concat(hex.substring(hi, hi + 1)).concat(hex.substring(lo, lo + 1));
+        }
+    }
+    return out;
+}
+
+fn _search_tmp_path() -> string {
+    let tmp: string = __glide_getenv("TMP");
+    if !tmp.eq("") { return tmp.concat("/glide_search.json"); }
+    let tmp2: string = __glide_getenv("TMPDIR");
+    if !tmp2.eq("") { return tmp2.concat("/glide_search.json"); }
+    return "./.glide_search.json";
+}
+
+// Tiny JSON scan: find `"<key>": "<value>"` after `from`. Doesn't
+// handle escape sequences in the value beyond `\"` (GitHub's
+// full_name doesn't contain unicode escapes), which is enough for the
+// search use case.
+fn _extract_str_field(body: string, key: string, from: i32) -> string {
+    let needle: string = "\"".concat(key).concat("\"");
+    let mut i: i32 = from;
+    while i + needle.len() <= body.len() {
+        let mut hit: bool = true;
+        for let j: i32 = 0; j < needle.len(); j++ {
+            if body.at(i + j).to_int() != needle.at(j).to_int() { hit = false; break; }
+        }
+        if hit {
+            // Skip whitespace + ':' + whitespace + '"' to land at the
+            // first char of the value.
+            let mut k: i32 = i + needle.len();
+            while k < body.len() && (body.at(k).to_int() == 32 || body.at(k).to_int() == 58) { k = k + 1; }
+            if k >= body.len() || body.at(k).to_int() != 34 { return ""; }
+            k = k + 1;
+            let mut end: i32 = k;
+            while end < body.len() {
+                let c: i32 = body.at(end).to_int();
+                if c == 92 { end = end + 2; continue; }
+                if c == 34 { break; }
+                end = end + 1;
+            }
+            return body.substring(k, end);
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+fn _advance_after(body: string, key: string, from: i32) -> i32 {
+    let needle: string = "\"".concat(key).concat("\"");
+    let mut i: i32 = from;
+    while i + needle.len() <= body.len() {
+        let mut hit: bool = true;
+        for let j: i32 = 0; j < needle.len(); j++ {
+            if body.at(i + j).to_int() != needle.at(j).to_int() { hit = false; break; }
+        }
+        if hit { return i + needle.len(); }
+        i = i + 1;
+    }
+    return body.len();
 }
 
 // `glide install <target> [rev]`:
@@ -2651,6 +2994,28 @@ fn main() -> i32 {
     // `update` — wipe glide.lock + each git dep's cache dir, then refetch.
     if cmd.eq("update") {
         return run_update();
+    }
+
+    // `tree` — print the manifest's dep graph (direct + transitive).
+    if cmd.eq("tree") {
+        return run_tree();
+    }
+
+    // `info <name>` — metadata for a declared dep.
+    if cmd.eq("info") {
+        if argc < 3 { println!("usage: glide info <name>"); return 1; }
+        return run_info(args_at(2));
+    }
+
+    // `search <query>` — GitHub code-search for repos with a glide.glide
+    // at root. Prints a shortlist of `glide add` lines.
+    if cmd.eq("search") {
+        if argc < 3 { println!("usage: glide search <query>"); return 1; }
+        let mut q: string = args_at(2);
+        for let i: i32 = 3; i < argc; i++ {
+            q = q.concat(" ").concat(args_at(i));
+        }
+        return run_search(q);
     }
 
     // `clean` — drop the per-project glide_modules/ + glide.lock. Global
