@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.3.2 — 2026-05-29
+
+The plug-and-play release. A fresh `glide` install now cross-compiles for
+any supported target with zero external dependencies — no system gcc, no
+`apt install libssl-dev`, no MSYS2, no manual sysroot setup. Plus a pass
+over package import/export ergonomics. No source-breaking changes from 0.3.1.
+
+### Cross-compile & packaging
+
+- **Plug-and-play host builds**: a bare `glide build` (no `--target=`) for
+  a program that links openssl / zlib / ngtcp2 / nghttp3 now auto-promotes
+  to a cross-build against the host's own triple, producing a fully static,
+  self-contained binary. On Windows that's a single 6 MB `.exe` instead of
+  the binary plus ~16 MB of companion DLLs.
+- **Four official targets**: `x86_64-linux-musl`, `aarch64-linux-musl`,
+  `x86_64-windows-gnu`, `aarch64-macos-none` — all listed in
+  `glide target list` and auto-fetchable.
+- **Bundle binaries**: the release now also ships `glide-bundle-<os>-<ver>`
+  archives with the Zig toolchain, every sysroot, and the Glide stdlib
+  baked into the binary. First run self-extracts everything into `~/.glide`
+  and builds for any target completely offline.
+- Each release also publishes per-triple sysroot tarballs for
+  `glide target add <triple>`.
+
+### Package DX
+
+- `glide add <user/repo>[@<rev>]` shorthand — expands to a full
+  `Dep::git(...)` line. Accepts bare `user/repo`, a full host
+  (`gitlab.com/g/sub/r`), and an optional `@rev` (defaults to `main`).
+- `glide tree` — prints the dep graph with MVS-resolved revs and a
+  `[not fetched]` tag on missing cache slots.
+- `glide info <name>` — manifest + cache metadata for a declared dep.
+- `glide search <query>` — GitHub code-search for repos with a
+  `glide.glide`, printing copy-pasteable `glide add` lines.
+
+### Language server
+
+- Code actions on `unresolved-import`: when the alias isn't declared,
+  offers to insert a `Dep::git` / `Dep::path` line into `glide.glide`
+  (cross-file WorkspaceEdit); when it's declared but uncached, offers a
+  "Fetch missing dep" command wired through `workspace/executeCommand`.
+
+### Documentation
+
+- `glide doc` groups the index by package — Project, each declared
+  dependency (with version + description + repository link), and the
+  standard library — instead of one flat module list.
+
+### Fixed
+
+- **TLS verify on Windows**: `SSL_CTX_set_default_verify_paths` is a no-op
+  on MSYS2 / mingw (its compiled-in `OPENSSLDIR` ships empty), so every
+  HTTPS verify returned `tls: connect failed`. Now bridges the Windows
+  ROOT + CA system stores into OpenSSL's `X509_STORE` via Crypt32 — the
+  same approach Rust and Go take.
+- Windows host builds copy the runtime DLLs they link against next to the
+  produced `.exe`, so a non-bundle build runs from any shell.
+
 ## 0.3.1 — 2026-05-28
 
 A focused LSP fix release. External-package autocomplete in user projects
