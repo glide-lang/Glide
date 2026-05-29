@@ -39,6 +39,7 @@ c_raw! {
     #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
+    #include <wincrypt.h>
     typedef SOCKET __glide_tls_sock;
     #define __GLIDE_TLS_INVALID INVALID_SOCKET
     #else
@@ -51,6 +52,42 @@ c_raw! {
     #include <stdint.h>
     #include <string.h>
     #include <stdlib.h>
+
+    // Pull CA certs from the Windows ROOT + CA system stores into the
+    // OpenSSL X509_STORE. SSL_CTX_set_default_verify_paths alone is a
+    // no-op on MSYS2 / mingw because OpenSSL's compiled-in OPENSSLDIR
+    // (`/ucrt64/etc/ssl/`) ships empty — there's no `cert.pem` for it
+    // to load. Without this fallback every HTTPS verify on Windows
+    // returns "tls: connect failed", and the user is left configuring
+    // SSL_CERT_FILE by hand. Crypt32 is the path Rust (rustls-native-
+    // certs) and Go (crypto/x509 on Windows) take; OpenSSL itself
+    // doesn't because it stays portable. Bridging the two is one
+    // d2i_X509 per cert.
+    static void __glide_tls_load_win_certs(SSL_CTX* ctx) {
+        (void)ctx;
+        #ifdef _WIN32
+        if (ctx == NULL) return;
+        X509_STORE* store = SSL_CTX_get_cert_store(ctx);
+        if (store == NULL) return;
+        const wchar_t* names[2] = { L"ROOT", L"CA" };
+        for (int i = 0; i < 2; i++) {
+            HCERTSTORE sys = CertOpenSystemStoreW((HCRYPTPROV_LEGACY)0, names[i]);
+            if (sys == NULL) continue;
+            PCCERT_CONTEXT cc = NULL;
+            while ((cc = CertEnumCertificatesInStore(sys, cc)) != NULL) {
+                const unsigned char* p = cc->pbCertEncoded;
+                X509* x = d2i_X509(NULL, &p, (long)cc->cbCertEncoded);
+                if (x != NULL) {
+                    // Returns 0 when the cert is already present; that's
+                    // fine — silently ignore the duplicate.
+                    X509_STORE_add_cert(store, x);
+                    X509_free(x);
+                }
+            }
+            CertCloseStore(sys, 0);
+        }
+        #endif
+    }
 
     // One-shot OpenSSL init. WSAStartup must run BEFORE any networking
     // call on Windows, so it happens first. OPENSSL_init_ssl is
@@ -139,6 +176,7 @@ c_raw! {
         SSL_CTX* ctx = SSL_CTX_new(m);
         if (ctx == NULL) return NULL;
         SSL_CTX_set_default_verify_paths(ctx);
+        __glide_tls_load_win_certs(ctx);
         if (!verify) SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
         if (min_proto >= 2) SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
         if (alpn_csv != NULL && alpn_csv[0] != 0) {
@@ -198,6 +236,7 @@ c_raw! {
         // or whatever OPENSSLDIR was compiled with. On Windows the
         // mingw-w64-ucrt-x86_64-openssl pkg ships a bundle.
         SSL_CTX_set_default_verify_paths(ctx);
+        __glide_tls_load_win_certs(ctx);
         if (verify) {
             // SSL_VERIFY_PEER is the only mode that combines correctly
             // with X509_VERIFY_PARAM_set1_host below. Without it some

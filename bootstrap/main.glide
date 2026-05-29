@@ -2371,6 +2371,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     }
     if win_target {
         cmd = cmd.concat(" -lws2_32 -lmswsock -ldbghelp -lpsapi");
+        // Crypt32 backs the Windows cert store bridge used by stdlib::
+        // net::tls when SSL is in play — OpenSSL on MSYS2/mingw has an
+        // empty default verify path, so every HTTPS verify falls back
+        // to enumerating ROOT/CA via CertOpenSystemStoreW.
+        if needs_ssl { cmd = cmd.concat(" -lcrypt32"); }
     } else if !cross {
         // -rdynamic only on host POSIX builds — cross builds use static
         // linking where dynamic symbol export isn't applicable.
