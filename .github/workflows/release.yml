@@ -4,13 +4,20 @@ name: release
 # real toolchain instead of a cross-build from one host) and attach them to
 # the GitHub release for the tag.
 #
-# Each runner also produces the sysroot tarball for its own target — the
-# sysroot is just (headers + static .a libs) for that triple, so it's
-# arch-OS specific but host-independent. End users pull whatever combo
-# matches their target via `glide target add <triple>`.
+# Two phases:
+#   1. `sysroots` — each runner builds the sysroot for its native triple
+#      (the only way to get a working static OpenSSL / ngtcp2 / nghttp3
+#      bundle for Windows + macOS without painful cross-compile tricks).
+#      Each sysroot is uploaded both as a release asset (so users can
+#      `glide target add <triple>`) AND as a workflow artifact so the
+#      bundle job below can pull all four in.
+#   2. `release` — each runner builds the small glide binary + the
+#      fully-self-contained bundle binary. The bundle has every sysroot
+#      + the Zig toolchain + the Glide stdlib baked in, so `glide build`
+#      for any target works offline from a fresh install.
 #
 # Fires on a pushed `v*` tag, or manually via the Actions tab / `gh workflow
-# run release.yml -f tag=v0.2.0` to (re)build for an existing release.
+# run release.yml -f tag=v0.3.2` to (re)build for an existing release.
 
 on:
   push:
@@ -18,28 +25,27 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to build for and upload to (e.g. v0.2.0)'
+        description: 'Release tag to build for and upload to (e.g. v0.3.2)'
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: ${{ matrix.name }}
+  # ---------------------------------------------------------------------
+  # Phase 1: every runner builds the sysroot for its own triple.
+  # ---------------------------------------------------------------------
+  sysroots:
+    name: sysroot-${{ matrix.triple }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 (Intel) was dropped — GitHub has deprecated that runner
-        # image and jobs sit in the queue indefinitely. Apple Silicon macs are
-        # covered by macos-aarch64; Intel-mac users can use that under Rosetta
-        # or build from source.
         include:
-          - { os: ubuntu-latest,    name: linux-x86_64,   sysroot_triple: x86_64-linux-musl }
-          - { os: ubuntu-24.04-arm, name: linux-aarch64,  sysroot_triple: aarch64-linux-musl }
-          - { os: macos-latest,     name: macos-aarch64,  sysroot_triple: aarch64-macos-none }
-          - { os: windows-latest,   name: windows-x86_64, sysroot_triple: x86_64-windows-gnu }
+          - { os: ubuntu-latest,    triple: x86_64-linux-musl }
+          - { os: ubuntu-24.04-arm, triple: aarch64-linux-musl }
+          - { os: macos-latest,     triple: aarch64-macos-none }
+          - { os: windows-latest,   triple: x86_64-windows-gnu }
     defaults:
       run:
         shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
@@ -52,27 +58,74 @@ jobs:
         with:
           msystem: UCRT64
           update: true
-          # mingw-w64-ucrt-x86_64-openssl + ngtcp2 + nghttp3 give us the
-          # static .a files build_sysroot.sh copies into the Windows
-          # sysroot tarball. Without them the Windows sysroot would
-          # ship without TLS / HTTP/3.
           install: >-
-            mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-ngtcp2
             mingw-w64-ucrt-x86_64-nghttp3
-            zip unzip
+            tar gzip
 
       - name: Setup macOS toolchain (macOS)
         if: matrix.os == 'macos-latest'
         run: |
           set -e
-          # brew openssl@3 + zlib give us the static .a + headers
-          # build_sysroot.sh stages into the macOS sysroot. nghttp3 +
-          # ngtcp2 from brew round out the HTTP/3 stack.
           brew update >/dev/null
           brew install openssl@3 zlib nghttp3 ngtcp2 || true
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build sysroot
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}" \
+            bash tools/build_sysroot.sh --target=${{ matrix.triple }}
+
+      - name: Upload sysroot as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysroot-${{ matrix.triple }}
+          path: dist/glide-sysroot-${{ matrix.triple }}-${{ steps.ver.outputs.version }}.tar.gz
+          retention-days: 1
+
+  # ---------------------------------------------------------------------
+  # Phase 2: each runner produces both the small glide binary AND the
+  # bundle binary (with every sysroot, src/, and Zig baked in).
+  # ---------------------------------------------------------------------
+  release:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    needs: sysroots
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    name: linux-x86_64,   triple: x86_64-linux-musl }
+          - { os: ubuntu-24.04-arm, name: linux-aarch64,  triple: aarch64-linux-musl }
+          - { os: macos-latest,     name: macos-aarch64,  triple: aarch64-macos-none }
+          - { os: windows-latest,   name: windows-x86_64, triple: x86_64-windows-gnu }
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2 (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-zlib
+            zip unzip tar gzip xxd
 
       - name: Resolve version
         id: ver
@@ -91,9 +144,6 @@ jobs:
       - name: Build seed + compiler
         run: |
           set -e
-          # The compiler links zlib (compress / fetch decompression). The final
-          # `glide build` auto-links what it needs; the manual seed cc must spell
-          # out -lz (and -lpthread -lm).
           if [ "${{ runner.os }}" = "Windows" ]; then
             gcc bootstrap/seed/bootstrap.c -o glide_seed.exe -O2 -lpthread -lm -lz \
                 -lws2_32 -lmswsock -ldbghelp -lpsapi
@@ -103,15 +153,81 @@ jobs:
             ./glide_seed build bootstrap/main.glide -o glide
           fi
 
-      - name: Package release artifact
+      - name: Package small release artifact
         run: VERSION="${{ steps.ver.outputs.version }}" bash tools/build_release.sh
 
-      - name: Build sysroot for ${{ matrix.sysroot_triple }}
-        run: |
-          VERSION="${{ steps.ver.outputs.version }}" \
-            bash tools/build_sysroot.sh --target=${{ matrix.sysroot_triple }}
+      - name: Download all sysroot artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/sysroots
+          pattern: sysroot-*
+          merge-multiple: true
 
-      - name: Verify the binary is non-empty
+      - name: Stage sysroots into dist/
+        run: |
+          set -e
+          mkdir -p dist
+          mv dist/sysroots/*.tar.gz dist/
+          rmdir dist/sysroots
+          ls -lh dist/glide-sysroot-*.tar.gz
+
+      - name: Build src.tar.gz for embedding
+        run: |
+          tar -czf dist/src-${{ steps.ver.outputs.version }}.tar.gz src
+          ls -lh dist/src-${{ steps.ver.outputs.version }}.tar.gz
+
+      - name: Build zig.tar.gz for embedding
+        run: |
+          set -e
+          # Tarball the bundled Zig we just fetched. Embedded as-is into
+          # the bundle binary so the first build on a fresh install
+          # self-extracts the toolchain.
+          tar -czf dist/zig-${{ steps.ver.outputs.version }}.tar.gz -C runtime zig
+          ls -lh dist/zig-${{ steps.ver.outputs.version }}.tar.gz
+
+      - name: Generate embedded blobs
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          bash tools/gen_embedded_blobs.sh \
+            --zig=dist/zig-${VER}.tar.gz \
+            --src=dist/src-${VER}.tar.gz \
+            --sysroot=dist/glide-sysroot-x86_64-linux-musl-${VER}.tar.gz \
+            --sysroot=dist/glide-sysroot-aarch64-linux-musl-${VER}.tar.gz \
+            --sysroot=dist/glide-sysroot-x86_64-windows-gnu-${VER}.tar.gz \
+            --sysroot=dist/glide-sysroot-aarch64-macos-none-${VER}.tar.gz \
+            --out=bootstrap/embed.glide
+
+      - name: Build bundle binary
+        run: |
+          set -e
+          mkdir -p dist/bundle
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./glide.exe build bootstrap/main.glide -o dist/bundle/glide.exe
+          else
+            ./glide build bootstrap/main.glide -o dist/bundle/glide
+          fi
+          ls -lh dist/bundle/
+
+      - name: Package bundle release artifact
+        run: |
+          set -e
+          VER="${{ steps.ver.outputs.version }}"
+          NAME="${{ matrix.name }}"
+          dir="glide-bundle-${NAME}-${VER}"
+          mkdir -p "dist/${dir}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp dist/bundle/glide.exe "dist/${dir}/"
+          else
+            cp dist/bundle/glide "dist/${dir}/"
+          fi
+          cp LICENSE README.md "dist/${dir}/" 2>/dev/null || true
+          ( cd dist && tar -czf "${dir}.tar.gz" "${dir}" )
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ( cd dist && zip -r "${dir}.zip" "${dir}" )
+          fi
+          ls -lh dist/${dir}.*
+
+      - name: Verify the small binary is non-empty
         run: |
           set -e
           d="dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}"
@@ -126,5 +242,7 @@ jobs:
           files: |
             dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}.tar.gz
             dist/glide-${{ matrix.name }}-${{ steps.ver.outputs.version }}.zip
-            dist/glide-sysroot-${{ matrix.sysroot_triple }}-${{ steps.ver.outputs.version }}.tar.gz
+            dist/glide-sysroot-${{ matrix.triple }}-${{ steps.ver.outputs.version }}.tar.gz
+            dist/glide-bundle-${{ matrix.name }}-${{ steps.ver.outputs.version }}.tar.gz
+            dist/glide-bundle-${{ matrix.name }}-${{ steps.ver.outputs.version }}.zip
           fail_on_unmatched_files: false
