@@ -34,8 +34,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if ! command -v xxd >/dev/null 2>&1; then
-    echo "gen_embedded_blobs: xxd is required (install vim-common / xxd)." >&2
+if ! command -v od >/dev/null 2>&1; then
+    echo "gen_embedded_blobs: od is required (coreutils)." >&2
     exit 1
 fi
 
@@ -52,13 +52,27 @@ triple_from_tarball() {
 }
 
 # Convert input file to a `static const unsigned char NAME[] = { ... };`
-# declaration. xxd -i emits exactly that shape; we just rename the
-# auto-generated symbol to NAME.
+# + `static const unsigned int NAME_len = N;` pair. Uses od + awk
+# instead of `xxd -i` so it runs on every platform's default toolset
+# (xxd isn't a standalone MSYS2/pacman package). `od -An -v -tx1`
+# streams space-separated hex bytes; awk packs them into C with line
+# wrapping, and `wc -c` gives the exact length.
 emit_array() {
     local symbol="$1" path="$2"
-    xxd -i -n "$symbol" "$path" \
-        | sed -e 's/^unsigned char/static const unsigned char/' \
-              -e 's/^unsigned int/static const unsigned int/'
+    local n
+    n=$(wc -c < "$path" | tr -d ' ')
+    echo "static const unsigned char ${symbol}[] = {"
+    od -An -v -tx1 "$path" | awk '
+        {
+            for (i = 1; i <= NF; i++) {
+                printf "0x%s,", $i
+                if (++c % 20 == 0) printf "\n"
+            }
+        }
+        END { if (c % 20 != 0) printf "\n" }
+    '
+    echo "};"
+    echo "static const unsigned int ${symbol}_len = ${n};"
 }
 
 mkdir -p "$(dirname "$OUT")"

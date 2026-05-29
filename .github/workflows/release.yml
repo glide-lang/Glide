@@ -126,7 +126,7 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-zlib
-            zip unzip tar gzip xxd
+            zip unzip tar gzip
 
       - name: Resolve version
         id: ver
@@ -197,6 +197,33 @@ jobs:
             --sysroot=dist/glide-sysroot-x86_64-windows-gnu-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-aarch64-macos-none-${VER}.tar.gz \
             --out=bootstrap/embed.glide
+
+      - name: Install host sysroot for the bundle build
+        run: |
+          set -e
+          # Building the bundle binary compiles main.glide, which links
+          # openssl / zlib / ngtcp2 / nghttp3. The plug-and-play host-build
+          # path needs the host triple's sysroot installed in
+          # <home>/.glide/targets/ — otherwise it tries to fetch it from the
+          # release page, which 404s because THIS workflow is what
+          # publishes it. Stage it from the artifact we already have so the
+          # bundle binary links statically against the right libs.
+          #
+          # The native glide binary resolves home via USERPROFILE on
+          # Windows and HOME elsewhere — match that exactly so it finds the
+          # sysroot we lay down (MSYS2 $HOME can differ from USERPROFILE).
+          VER="${{ steps.ver.outputs.version }}"
+          TRIPLE="${{ matrix.triple }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            HOMEDIR="$(cygpath -u "$USERPROFILE")"
+          else
+            HOMEDIR="$HOME"
+          fi
+          DEST="${HOMEDIR}/.glide/targets/${TRIPLE}"
+          mkdir -p "$DEST"
+          tar -xzf "dist/glide-sysroot-${TRIPLE}-${VER}.tar.gz" -C "$DEST"
+          echo "installed sysroot for ${TRIPLE} at ${DEST}:"
+          ls -lh "$DEST/lib" || true
 
       - name: Build bundle binary
         run: |
