@@ -36,3 +36,8 @@ a.glide
 *.exe
 *.prev
 !~/.cargo/bin/glide.exe
+
+# HTTP/3 loopback test scratch — h3_make_self_signed_cert writes here.
+h3_test_cert.pem
+h3_test_key.pem
+h3_cache_test.bin
