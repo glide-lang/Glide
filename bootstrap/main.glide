@@ -1818,11 +1818,34 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
     // and the extern stubs every program inherently needs (malloc, printf,
     // sleep_ms, ...). Anything under `src/stdlib/` (HashMap, io, fs, time,
     // env, random, math, bytes) still requires an explicit `import`.
+    // Resolve the builtins dir across the three layouts, in order:
+    //   1. `src/builtins`              — repo checkout / cwd
+    //   2. `<exe>/src/builtins`        — installed-next-to-binary
+    //   3. `<home>/.glide/src/builtins`— bundle self-extract target
+    // The last one is what makes a bundle binary work from any cwd: the
+    // embedded `src/` tree lands under ~/.glide/src on first run, and
+    // without this probe the Vector / string-method prelude wouldn't load
+    // and every `v.push(...)` / `v.get(...)` would degrade to a field
+    // access on an incomplete type.
     let mut builtins_dir: string = "src/builtins";
-    if read_file("src/builtins/builtins.glide").eq("") {
+    if !__glide_file_exists("src/builtins/builtins.glide") {
         let exe_dir: string = __glide_exe_dir();
+        let mut found: bool = false;
         if !exe_dir.eq("") {
-            builtins_dir = exe_dir.concat("/src/builtins");
+            let exe_bi: string = exe_dir.concat("/src/builtins");
+            if __glide_file_exists(exe_bi.concat("/builtins.glide")) {
+                builtins_dir = exe_bi;
+                found = true;
+            }
+        }
+        if !found {
+            let home: !string = os_home_dir();
+            if home.ok {
+                let home_bi: string = home.val.concat("/.glide/src/builtins");
+                if __glide_file_exists(home_bi.concat("/builtins.glide")) {
+                    builtins_dir = home_bi;
+                }
+            }
         }
     }
     // Freestanding / kernel projects don't get the hosted builtins prelude
