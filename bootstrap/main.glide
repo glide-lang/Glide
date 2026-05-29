@@ -35,6 +35,9 @@ import openapi;
 import manifest;
 import fetch;
 import doc;
+import embed;
+import stdlib::compress::*;
+import stdlib::tar::*;
 import loader::*;
 
 fn print_indent(n: i32) {
@@ -1876,30 +1879,170 @@ fn pick_cc_for_target() -> !string {
     return ok("\"".concat(zig).concat("\" cc"));
 }
 
-// Bundled zig (next to the binary or in the source tree). Cross-compile
-// also accepts a system `zig` on PATH via `_find_zig` — but host builds
-// don't, because system zigs typically lack the openssl/zlib sysroot.
+// Bundled zig (next to the binary, in `~/.glide/runtime/`, or in the
+// source tree). Cross-compile also accepts a system `zig` on PATH via
+// `_find_zig` — but host builds don't, because system zigs typically
+// lack the openssl/zlib sysroot.
+//
+// Probes for both `zig.exe` and `zig` on Windows because zig's release
+// tarballs ship the binary without the `.exe` suffix on some
+// distributions — cmd.exe still launches it via the PATHEXT lookup.
 fn _find_bundled_zig() -> string {
     let win: bool = __glide_is_windows() != 0;
+
     let exe_dir: string = __glide_exe_dir();
-    if !exe_dir.eq("") {
-        let mut p: string = exe_dir.concat("/runtime/zig/zig");
-        if win { p = p.concat(".exe"); }
-        if __glide_file_exists(p) { return p; }
+    let roots: *Vector<string> = Vector::new();
+    if !exe_dir.eq("") { roots.push(exe_dir.concat("/runtime/zig")); }
+    let home: !string = os_home_dir();
+    if home.ok { roots.push(home.val.concat("/.glide/runtime/zig")); }
+    roots.push("./runtime/zig");
+
+    for let i: i32 = 0; i < roots.len(); i++ {
+        let root: string = roots.get(i);
+        // On Windows, only return a path the shell can actually launch
+        // via cmd.exe / system(). A bare `zig` with no extension exists
+        // in some Zig releases but cmd.exe refuses to run it; in that
+        // case we fall back to the next probe (or system PATH) where a
+        // `.exe`-suffixed binary is more likely.
+        if win {
+            let p_exe: string = root.concat("/zig.exe");
+            if __glide_file_exists(p_exe) { return p_exe; }
+        } else {
+            let p: string = root.concat("/zig");
+            if __glide_file_exists(p) { return p; }
+        }
     }
-    let mut local: string = "runtime/zig/zig";
-    if win { local = local.concat(".exe"); }
-    if __glide_file_exists(local) { return local; }
     return "";
 }
 
-// Any usable zig — bundled first, then `zig` on PATH. Used by
-// cross-compile, which doesn't link the heavy host-only libs and so
-// doesn't need a configured sysroot.
+// Any usable zig — bundled first, then embedded (one-time self-extract
+// from a bundle binary), then `zig` on PATH. Used by cross-compile,
+// which doesn't link the heavy host-only libs and so doesn't need a
+// configured sysroot.
 fn _find_zig() -> string {
     let bundled: string = _find_bundled_zig();
     if !bundled.eq("") { return bundled; }
+    if has_embedded_zig() {
+        let extracted: string = _extract_embedded_zig();
+        if !extracted.eq("") { return extracted; }
+    }
     if _have_on_path("zig") { return "zig"; }
+    return "";
+}
+
+// Extract the embedded `src/` tree (Glide stdlib + builtins) into
+// `~/.glide/src/` on first run. The marker file `.glide_src_version`
+// records which compiler version laid it out, so a fresh install
+// always reads the matching stdlib. No-op on non-bundle builds and on
+// repeat runs.
+fn _maybe_install_embedded_src() {
+    if !has_embedded_src() { return; }
+    let home: !string = os_home_dir();
+    if !home.ok { return; }
+    let dest_root: string = home.val.concat("/.glide");
+    let dest_src: string = dest_root.concat("/src");
+    let marker: string = dest_src.concat("/.glide_src_version");
+
+    // Marker already matches → nothing to do.
+    if __glide_file_exists(marker) {
+        let v: string = read_file(marker).trim();
+        if v.eq(GLIDE_VERSION) { return; }
+    }
+
+    let bytes_ptr: *void = embedded_src();
+    let bytes_len: i32 = embedded_src_len();
+    if bytes_ptr == null || bytes_len <= 0 { return; }
+
+    let archive_gz: string = __glide_string_from_buf(bytes_ptr, bytes_len);
+    let mut decoded_len: i32 = 0;
+    let raw: *void = gzip_decode(archive_gz, bytes_len, &decoded_len);
+    if raw == null || decoded_len <= 0 { return; }
+    let archive: string = __glide_string_from_buf(raw, decoded_len);
+
+    fs_mkdir_p(dest_root);
+    fs_remove_dir_rec(dest_src);
+    if !fs_mkdir_p(dest_src) { free(raw); return; }
+    // strip-1 collapses the leading `src/` directory in the tarball so
+    // the contents land directly under `~/.glide/src/`.
+    let extracted: i32 = tar_extract(archive, decoded_len, dest_src, 1);
+    free(raw);
+    if extracted < 0 {
+        fs_remove_dir_rec(dest_src);
+        return;
+    }
+    // Drop the marker so next run short-circuits.
+    write_file(marker, GLIDE_VERSION);
+}
+
+// Extract the embedded Zig tarball into `~/.glide/runtime/zig/` the
+// first time a build needs it. Idempotent — subsequent calls hit the
+// already-laid-out tree via `_find_bundled_zig`. Returns the path to
+// the zig binary on success, "" on failure.
+fn _extract_embedded_zig() -> string {
+    let win: bool = __glide_is_windows() != 0;
+    let bytes_ptr: *void = embedded_zig();
+    let bytes_len: i32 = embedded_zig_len();
+    if bytes_ptr == null || bytes_len <= 0 { return ""; }
+
+    let home: !string = os_home_dir();
+    if !home.ok { return ""; }
+    let runtime_dir: string = home.val.concat("/.glide/runtime");
+    let zig_dir: string = runtime_dir.concat("/zig");
+
+    let zig_exe: string = zig_dir.concat("/zig.exe");
+    let zig_bare: string = zig_dir.concat("/zig");
+    if win && __glide_file_exists(zig_exe) { return zig_exe; }
+    if __glide_file_exists(zig_bare) { return zig_bare; }
+
+    spinner_start("unpacking bundled Zig toolchain");
+    if !fs_mkdir_p(runtime_dir) {
+        spinner_finish(false, "");
+        return "";
+    }
+    fs_remove_dir_rec(zig_dir);
+    if !fs_mkdir_p(zig_dir) {
+        spinner_finish(false, "");
+        return "";
+    }
+
+    let archive_gz: string = __glide_string_from_buf(bytes_ptr, bytes_len);
+    let mut decoded_len: i32 = 0;
+    let raw: *void = gzip_decode(archive_gz, bytes_len, &decoded_len);
+    if raw == null || decoded_len <= 0 {
+        spinner_finish(false, "");
+        return "";
+    }
+    let archive: string = __glide_string_from_buf(raw, decoded_len);
+    // The Zig release tarball nests its files under a versioned dir
+    // (`zig-<os>-<arch>-<ver>/`); strip-1 flattens that so we land
+    // straight into `zig_dir`.
+    let extracted: i32 = tar_extract(archive, decoded_len, zig_dir, 1);
+    free(raw);
+    if extracted < 0 {
+        spinner_finish(false, "");
+        fs_remove_dir_rec(zig_dir);
+        return "";
+    }
+    // Windows demands the `.exe`; bare `zig` on Windows usually means
+    // the bundle accidentally carried a Linux build and the shell
+    // can't launch it. Treat that case as a failure so the user falls
+    // back to the system PATH instead of silently producing a broken
+    // command.
+    if win {
+        if __glide_file_exists(zig_exe) {
+            spinner_finish(true, "Zig toolchain installed");
+            return zig_exe;
+        }
+        spinner_finish(false, "");
+        fs_remove_dir_rec(zig_dir);
+        return "";
+    }
+    if __glide_file_exists(zig_bare) {
+        spinner_finish(true, "Zig toolchain installed");
+        return zig_bare;
+    }
+    spinner_finish(false, "");
+    fs_remove_dir_rec(zig_dir);
     return "";
 }
 
@@ -2105,6 +2248,43 @@ fn _target_list() -> i32 {
     return 0;
 }
 
+// Extract an embedded sysroot tarball into `~/.glide/targets/<triple>/`.
+// Returns 0 on success, non-zero on any decode / write failure so the
+// caller can fall back to the network path.
+//
+// The embedded blob is a tar.gz held in .rodata — never freed. We wrap
+// it in a Glide string for the existing gzip_decode / tar_extract
+// APIs, then free only the decoder's own output buffer.
+fn _install_sysroot_from_embed(triple: string) -> i32 {
+    let bytes_ptr: *void = embedded_sysroot(triple);
+    let bytes_len: i32 = embedded_sysroot_len(triple);
+    if bytes_ptr == null || bytes_len <= 0 { return 1; }
+
+    let archive_gz: string = __glide_string_from_buf(bytes_ptr, bytes_len);
+    let mut decoded_len: i32 = 0;
+    let raw: *void = gzip_decode(archive_gz, bytes_len, &decoded_len);
+    if raw == null || decoded_len <= 0 { return 1; }
+    let archive: string = __glide_string_from_buf(raw, decoded_len);
+
+    let dest: string = _target_dir(triple);
+    fs_remove_dir_rec(dest);
+    if !fs_mkdir_p(dest) {
+        free(raw);
+        return 1;
+    }
+    let extracted: i32 = tar_extract(archive, decoded_len, dest, 0);
+    free(raw);
+    if extracted < 0 {
+        fs_remove_dir_rec(dest);
+        return 1;
+    }
+    if !_has_target_sysroot(triple) {
+        fs_remove_dir_rec(dest);
+        return 1;
+    }
+    return 0;
+}
+
 fn _target_add(triple: string) -> i32 {
     if !_is_known_target(triple) {
         println!("target:", triple, "is not a known target.");
@@ -2120,6 +2300,21 @@ fn _target_add(triple: string) -> i32 {
         println!("target: could not create cache root:", root);
         return 1;
     }
+
+    // Bundle build: a sysroot baked into the binary skips the network
+    // entirely. Decode in-memory and lay the files out exactly the
+    // way the curl + tar path would.
+    if has_embedded_sysroot(triple) {
+        spinner_start("installing ".concat(triple).concat(" (embedded)"));
+        let rc_embed: i32 = _install_sysroot_from_embed(triple);
+        if rc_embed == 0 {
+            spinner_finish(true, "installed ".concat(triple).concat(" -> ").concat(_target_dir(triple)));
+            return 0;
+        }
+        spinner_finish(false, "");
+        println!("target: embedded sysroot for", triple, "failed to extract; falling back to network.");
+    }
+
     let archive_name: string = "glide-sysroot-".concat(triple).concat("-").concat(GLIDE_VERSION).concat(".tar.gz");
     let url: string = "https://github.com/glide-lang/Glide/releases/download/v"
         .concat(GLIDE_VERSION).concat("/").concat(archive_name);
@@ -3068,6 +3263,12 @@ fn run_golden(dir: string) -> i32 {
 
 fn main() -> i32 {
     let argc: i32 = args_count();
+    // Bundle binaries ship the entire `src/` tree (Glide stdlib +
+    // builtins) baked in. Extract it to `~/.glide/src/` on first run
+    // so resolve_import can find `stdlib::foo` from any cwd, with no
+    // installer script. Idempotent — the second run sees the marker
+    // file and skips the extract.
+    _maybe_install_embedded_src();
     if argc < 2 {
         print_usage();
         return 1;

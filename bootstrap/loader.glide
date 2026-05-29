@@ -13,6 +13,7 @@ import manifest;
 
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 extern fn __glide_exe_dir() -> string;
+extern fn __glide_getenv(name: string) -> string;
 
 // Load a file by path (skipping if already loaded) and append its stmts,
 // recursively loading any `import "foo.glide"` it has. Parser diagnostics
@@ -408,6 +409,7 @@ pub fn parent_dir(path: string) -> string {
 //   3. cwd + `src/`              (so `import stdlib::foo;` finds `src/stdlib/foo.glide`)
 //   4. exe-dir                   (installed layout)
 //   5. exe-dir + `src/`          (installed layout)
+//   6. ~/.glide/src/             (bundle binary self-extracts stdlib here)
 // First file that exists wins. Falls back to the file-relative path so the
 // downstream "could not read" error points at something sensible. The `src/`
 // prefix is implicit so user code never has to type it - `src/` is the
@@ -431,6 +433,15 @@ pub fn resolve_import(base: string, ipath: string) -> string {
         if __glide_file_exists(from_exe) { return from_exe; }
         let exe_src: string = exe_dir.concat("/src/").concat(ipath);
         if __glide_file_exists(exe_src) { return exe_src; }
+    }
+    // User-home fallback — bundle binaries self-extract their embedded
+    // `src/` tree here on first invocation. Lets a single .exe dropped
+    // anywhere find its stdlib without an install script.
+    let home: string = __glide_getenv("HOME");
+    let home2: string = if home.eq("") { __glide_getenv("USERPROFILE") } else { home };
+    if !home2.eq("") {
+        let user_src: string = home2.concat("/.glide/src/").concat(ipath);
+        if __glide_file_exists(user_src) { return user_src; }
     }
     return from_file;
 }
