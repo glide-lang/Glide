@@ -1,0 +1,242 @@
+// stdlib::net::sys — the first-class socket foundation.
+//
+// Pure Glide: this module declares the runtime's gnet_* syscall surface
+// (defined once in bootstrap/runtime/netcore.c, behind the single
+// winsock/posix split) and wraps it in a typed `Socket` + a binary-safe
+// `Stream` trait. Higher modules (tcp/udp/tls/raw/...) build on this instead
+// of each hand-writing their own socket()/bind()/connect() c_raw block.
+//
+// See docs/net-upgrade-plan.md §2.
+
+import stdlib::net::ip::*;
+
+// ---- runtime syscall surface (defined in netcore.c) ---------------------
+// Address ABI: family (4=IPv4, 6=IPv6), v4 host-order u32 in i64, v6 hi/lo
+// big-endian halves, host-order port. Out-params decode the same shape.
+extern fn gnet_socket(family: i32, ty: i32, proto: i32) -> i64;
+extern fn gnet_bind(fd: i64, family: i32, v4: i64, hi: i64, lo: i64, port: i32) -> i64;
+extern fn gnet_connect(fd: i64, family: i32, v4: i64, hi: i64, lo: i64, port: i32) -> i64;
+extern fn gnet_listen(fd: i64, backlog: i32) -> i64;
+extern fn gnet_accept(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
+extern fn gnet_send(fd: i64, buf: *void, n: i32) -> i64;
+extern fn gnet_recv(fd: i64, buf: *void, max: i32) -> i64;
+extern fn gnet_sendto(fd: i64, buf: *void, n: i32, family: i32, v4: i64, hi: i64, lo: i64, port: i32) -> i64;
+extern fn gnet_recvfrom(fd: i64, buf: *void, max: i32, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
+extern fn gnet_getsockname(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
+extern fn gnet_getpeername(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
+extern fn gnet_setsockopt_int(fd: i64, level: i32, opt: i32, val: i32) -> i64;
+extern fn gnet_setsockopt_buf(fd: i64, level: i32, opt: i32, buf: *void, len: i32) -> i64;
+extern fn gnet_shutdown(fd: i64, how: i32) -> i64;
+extern fn gnet_close(fd: i64);
+extern fn gnet_const(which: i32) -> i32;
+extern fn gnet_last_error() -> string;
+
+// ---- Glide socket-type + family tags ------------------------------------
+pub const SOCK_STREAM: i32 = 1;
+pub const SOCK_DGRAM:  i32 = 2;
+pub const SOCK_RAW:    i32 = 3;
+pub const AF_V4: i32 = 4;
+pub const AF_V6: i32 = 6;
+
+// gnet_const tag indices (kept in lockstep with netcore.c's switch).
+pub const OPT_SOL_SOCKET:  i32 = 0;
+pub const OPT_SO_REUSEADDR: i32 = 1;
+pub const OPT_IPPROTO_TCP: i32 = 2;
+pub const OPT_TCP_NODELAY: i32 = 3;
+pub const OPT_SO_BROADCAST: i32 = 4;
+pub const OPT_SO_REUSEPORT: i32 = 5;
+pub const OPT_SO_RCVBUF:   i32 = 6;
+pub const OPT_SO_SNDBUF:   i32 = 7;
+pub const OPT_IPPROTO_IP:  i32 = 8;
+pub const OPT_IP_TTL:      i32 = 9;
+
+// shutdown(how) values are uniform across platforms.
+pub const SHUT_RD: i32 = 0;
+pub const SHUT_WR: i32 = 1;
+pub const SHUT_RDWR: i32 = 2;
+
+// ---- Socket: one owning fd newtype --------------------------------------
+pub struct Socket {
+    pub fd: i64,
+}
+
+fn _af_tag(ip: *IpAddr) -> i32 {
+    if ip.is_v6() { return AF_V6; }
+    return AF_V4;
+}
+
+impl Socket {
+    /// Open a socket. `family` is AF_V4/AF_V6, `ty` is SOCK_STREAM/DGRAM/RAW,
+    /// `proto` is 0 for the default (or e.g. IPPROTO_ICMP for raw).
+    pub fn open(family: i32, ty: i32, proto: i32) -> !*Socket {
+        let fd: i64 = gnet_socket(family, ty, proto);
+        if fd < 0 { return err("socket: ".concat(gnet_last_error())); }
+        let s: *Socket = malloc(sizeof(Socket)) as *Socket;
+        s.fd = fd;
+        return ok(s);
+    }
+
+    /// Bind to a local address. The whole address rides the flat ABI — the
+    /// family tag selects which fields netcore reads, so passing all of them
+    /// is safe regardless of v4/v6.
+    pub fn bind(self: *Socket, sa: *SocketAddr) -> !i32 {
+        let fam: i32 = _af_tag(sa.ip);
+        if gnet_bind(self.fd, fam, sa.ip.v4 as i64, sa.ip.v6_hi, sa.ip.v6_lo, sa.port) < 0 {
+            return err("bind: ".concat(gnet_last_error()));
+        }
+        return ok(0);
+    }
+
+    /// Connect to a remote address (blocking for now; the reactor-async
+    /// path lands in the next foundation sub-step).
+    pub fn connect(self: *Socket, sa: *SocketAddr) -> !i32 {
+        let fam: i32 = _af_tag(sa.ip);
+        if gnet_connect(self.fd, fam, sa.ip.v4 as i64, sa.ip.v6_hi, sa.ip.v6_lo, sa.port) < 0 {
+            return err("connect: ".concat(gnet_last_error()));
+        }
+        return ok(0);
+    }
+
+    pub fn listen(self: *Socket, backlog: i32) -> !i32 {
+        if gnet_listen(self.fd, backlog) < 0 { return err("listen: ".concat(gnet_last_error())); }
+        return ok(0);
+    }
+
+    /// Accept one connection, returning a fresh owning Socket for the peer.
+    pub fn accept(self: *Socket) -> !*Socket {
+        let mut f: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut p: i32 = 0;
+        let cfd: i64 = gnet_accept(self.fd, &f, &v4, &hi, &lo, &p);
+        if cfd < 0 { return err("accept: ".concat(gnet_last_error())); }
+        let c: *Socket = malloc(sizeof(Socket)) as *Socket;
+        c.fd = cfd;
+        return ok(c);
+    }
+
+    /// The locally-bound address (resolves an ephemeral `:0` port).
+    pub fn local_addr(self: *Socket) -> !*SocketAddr {
+        let mut f: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut p: i32 = 0;
+        if gnet_getsockname(self.fd, &f, &v4, &hi, &lo, &p) < 0 {
+            return err("getsockname: ".concat(gnet_last_error()));
+        }
+        return ok(_make_addr(f, v4, hi, lo, p));
+    }
+
+    /// The connected peer's address.
+    pub fn peer_addr(self: *Socket) -> !*SocketAddr {
+        let mut f: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut p: i32 = 0;
+        if gnet_getpeername(self.fd, &f, &v4, &hi, &lo, &p) < 0 {
+            return err("getpeername: ".concat(gnet_last_error()));
+        }
+        return ok(_make_addr(f, v4, hi, lo, p));
+    }
+
+    /// Set an int-valued socket option. `level`/`opt` come from `gnet_const`.
+    pub fn set_opt_int(self: *Socket, level: i32, opt: i32, val: i32) -> !i32 {
+        if gnet_setsockopt_int(self.fd, level, opt, val) < 0 {
+            return err("setsockopt: ".concat(gnet_last_error()));
+        }
+        return ok(0);
+    }
+
+    /// SO_REUSEADDR — the common "let me rebind this port immediately".
+    pub fn set_reuse_addr(self: *Socket, on: bool) -> !i32 {
+        let v: i32 = if on { 1 } else { 0 };
+        return self.set_opt_int(gnet_const(OPT_SOL_SOCKET), gnet_const(OPT_SO_REUSEADDR), v);
+    }
+
+    pub fn shutdown(self: *Socket, how: i32) -> !i32 {
+        if gnet_shutdown(self.fd, how) < 0 { return err("shutdown: ".concat(gnet_last_error())); }
+        return ok(0);
+    }
+
+    /// Send raw bytes (blocking). Returns bytes sent.
+    pub fn send(self: *Socket, buf: *void, n: i32) -> !i32 {
+        let r: i64 = gnet_send(self.fd, buf, n);
+        if r < 0 { return err("send: ".concat(gnet_last_error())); }
+        return ok(r as i32);
+    }
+
+    /// Receive raw bytes into a caller-owned buffer (blocking). Returns bytes
+    /// read (0 at EOF).
+    pub fn recv(self: *Socket, buf: *void, max: i32) -> !i32 {
+        let r: i64 = gnet_recv(self.fd, buf, max);
+        if r < 0 { return err("recv: ".concat(gnet_last_error())); }
+        return ok(r as i32);
+    }
+
+    // `close` is provided by the `Stream` impl below — a Socket is a Stream,
+    // and a second inherent `close` would collide on the emitted symbol.
+}
+
+// Build a SocketAddr from the unpacked flat ABI.
+fn _make_addr(family: i32, v4: i64, hi: i64, lo: i64, port: i32) -> *SocketAddr {
+    let ip: *IpAddr = malloc(sizeof(IpAddr)) as *IpAddr;
+    if family == AF_V6 {
+        ip.kind = 6; ip.v4 = 0; ip.v6_hi = hi; ip.v6_lo = lo;
+    } else {
+        ip.kind = 4; ip.v4 = v4 as i32; ip.v6_hi = 0; ip.v6_lo = 0;
+    }
+    return SocketAddr::new(ip, port);
+}
+
+// ---- Stream: the binary-safe transport trait ----------------------------
+// Concrete impl target (codegen requires TY_NAMED); self: *Self. Conveniences
+// are FREE FUNCTIONS over *dyn Stream, never default trait methods.
+pub trait Stream {
+    fn read_bytes(self: *Self, buf: *u8, max: i32) -> !i32;
+    fn write_bytes(self: *Self, buf: *u8, n: i32) -> !i32;
+    fn close(self: *Self);
+}
+
+impl Stream for Socket {
+    fn read_bytes(self: *Socket, buf: *u8, max: i32) -> !i32 {
+        let n: i64 = gnet_recv(self.fd, buf as *void, max);
+        if n < 0 { return err(gnet_last_error()); }
+        return ok(n as i32);
+    }
+    fn write_bytes(self: *Socket, buf: *u8, n: i32) -> !i32 {
+        let w: i64 = gnet_send(self.fd, buf as *void, n);
+        if w < 0 { return err(gnet_last_error()); }
+        return ok(w as i32);
+    }
+    fn close(self: *Socket) {
+        if self.fd >= 0 { gnet_close(self.fd); }
+        free(self as *void);
+    }
+}
+
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+
+/// Read up to `max` bytes from any Stream and return them as a string.
+pub fn stream_read(s: *dyn Stream, max: i32) -> !string {
+    let buf: *u8 = malloc(max) as *u8;
+    let n: i32 = s.read_bytes(buf, max)?;
+    let out: string = __glide_string_from_buf(buf as *void, n);
+    free(buf as *void);
+    return ok(out);
+}
+
+/// Write a whole string to any Stream. Single write for now; the partial-
+/// write loop arrives with the reactor-async path.
+pub fn stream_write_all(s: *dyn Stream, data: string) -> !i32 {
+    let n: i32 = data.len();
+    let buf: *u8 = malloc(n) as *u8;
+    for let i: i32 = 0; i < n; i++ {
+        buf[i] = data.at(i).to_int() as u8;
+    }
+    let w: i32 = s.write_bytes(buf, n)?;
+    free(buf as *void);
+    return ok(w);
+}

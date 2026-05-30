@@ -1,0 +1,156 @@
+// P0 keystone validation for the net upgrade (docs/net-upgrade-plan.md §2.5).
+//
+// Proves the EXACT `Stream` trait shape that net/sys.glide will use before
+// any C is written: 3 abstract methods with `self: *Self`, a `*u8` buffer
+// argument, `!i32` returns, and a VOID `close`; concrete `impl Stream for
+// <NamedType>` (never a pointer target — codegen.glide:1021 skips non-
+// TY_NAMED impls); free-function conveniences over `*dyn Stream` instead of
+// default trait methods; and dynamic dispatch picking the right impl.
+//
+// If this compiles + passes, the foundation's keystone is sound and we can
+// build netcore.c on it.
+
+import stdlib::testing::*;
+
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+
+pub trait Stream {
+    fn read_bytes(self: *Self, buf: *u8, max: i32) -> !i32;
+    fn write_bytes(self: *Self, buf: *u8, n: i32) -> !i32;
+    fn close(self: *Self);
+}
+
+// ---- Mock A: a canned in-memory byte source -------------------------
+
+pub struct MemSource {
+    pub payload: string,
+    pub pos: i32,
+    pub written: i32,
+    pub closed: i32,
+}
+
+impl Stream for MemSource {
+    fn read_bytes(self: *MemSource, buf: *u8, max: i32) -> !i32 {
+        let avail: i32 = self.payload.len() - self.pos;
+        if avail <= 0 { return ok(0); }
+        let n: i32 = if avail < max { avail } else { max };
+        for let i: i32 = 0; i < n; i++ {
+            buf[i] = self.payload.at(self.pos + i).to_int() as u8;
+        }
+        self.pos = self.pos + n;
+        return ok(n);
+    }
+    fn write_bytes(self: *MemSource, buf: *u8, n: i32) -> !i32 {
+        self.written = self.written + n;
+        return ok(n);
+    }
+    fn close(self: *MemSource) { self.closed = 1; }
+}
+
+// ---- Mock B: a different impl, to prove dispatch actually picks -----
+
+pub struct UpperSource {
+    pub payload: string,
+    pub pos: i32,
+}
+
+impl Stream for UpperSource {
+    fn read_bytes(self: *UpperSource, buf: *u8, max: i32) -> !i32 {
+        let avail: i32 = self.payload.len() - self.pos;
+        if avail <= 0 { return ok(0); }
+        let n: i32 = if avail < max { avail } else { max };
+        for let i: i32 = 0; i < n; i++ {
+            let c: i32 = self.payload.at(self.pos + i).to_int();
+            if c >= 97 && c <= 122 { buf[i] = (c - 32) as u8; }   // a-z -> A-Z
+            else { buf[i] = c as u8; }
+        }
+        self.pos = self.pos + n;
+        return ok(n);
+    }
+    fn write_bytes(self: *UpperSource, buf: *u8, n: i32) -> !i32 { return ok(n); }
+    fn close(self: *UpperSource) { }
+}
+
+// ---- The free-fn conveniences over *dyn Stream (the proven shape) ---
+
+fn stream_read(s: *dyn Stream, max: i32) -> !string {
+    let buf: *u8 = malloc(max) as *u8;
+    let n: i32 = s.read_bytes(buf, max)?;                 // vtable dispatch
+    let out: string = __glide_string_from_buf(buf as *void, n);
+    free(buf as *void);
+    return ok(out);
+}
+
+fn stream_write_all(s: *dyn Stream, data: string) -> !i32 {
+    let buf: *u8 = malloc(data.len()) as *u8;
+    for let i: i32 = 0; i < data.len(); i++ {
+        buf[i] = data.at(i).to_int() as u8;
+    }
+    let n: i32 = s.write_bytes(buf, data.len())?;
+    free(buf as *void);
+    return ok(n);
+}
+
+// ---- Tests ----------------------------------------------------------
+
+fn test_stream_read_through_vtable() -> i32 {
+    let m: *MemSource = malloc(sizeof(MemSource)) as *MemSource;
+    m.payload = "hello"; m.pos = 0; m.written = 0; m.closed = 0;
+    let s: *dyn Stream = m as *dyn Stream;
+    let r: !string = stream_read(s, 16);
+    assert!(r.ok);
+    assert_str_eq!(r.val, "hello");
+    return 0;
+}
+
+fn test_stream_dispatch_picks_impl() -> i32 {
+    let m: *MemSource = malloc(sizeof(MemSource)) as *MemSource;
+    m.payload = "abc"; m.pos = 0; m.written = 0; m.closed = 0;
+    let u: *UpperSource = malloc(sizeof(UpperSource)) as *UpperSource;
+    u.payload = "abc"; u.pos = 0;
+
+    let sm: *dyn Stream = m as *dyn Stream;
+    let su: *dyn Stream = u as *dyn Stream;
+
+    let rm: !string = stream_read(sm, 16);
+    assert!(rm.ok); assert_str_eq!(rm.val, "abc");
+
+    let ru: !string = stream_read(su, 16);
+    assert!(ru.ok); assert_str_eq!(ru.val, "ABC");
+    return 0;
+}
+
+fn test_stream_partial_reads_advance() -> i32 {
+    let m: *MemSource = malloc(sizeof(MemSource)) as *MemSource;
+    m.payload = "abcdef"; m.pos = 0; m.written = 0; m.closed = 0;
+    let s: *dyn Stream = m as *dyn Stream;
+    let r1: !string = stream_read(s, 2);
+    assert!(r1.ok); assert_str_eq!(r1.val, "ab");
+    let r2: !string = stream_read(s, 2);
+    assert!(r2.ok); assert_str_eq!(r2.val, "cd");
+    let r3: !string = stream_read(s, 10);
+    assert!(r3.ok); assert_str_eq!(r3.val, "ef");
+    let r4: !string = stream_read(s, 10);
+    assert!(r4.ok); assert_eq!(r4.val.len(), 0);
+    return 0;
+}
+
+fn test_stream_write_through_vtable() -> i32 {
+    let m: *MemSource = malloc(sizeof(MemSource)) as *MemSource;
+    m.payload = ""; m.pos = 0; m.written = 0; m.closed = 0;
+    let s: *dyn Stream = m as *dyn Stream;
+    let r: !i32 = stream_write_all(s, "abcd");
+    assert!(r.ok); assert_eq!(r.val, 4);
+    assert_eq!(m.written, 4);
+    return 0;
+}
+
+fn test_stream_void_close_dispatches() -> i32 {
+    // The risky one: a VOID-returning method called through *dyn.
+    let m: *MemSource = malloc(sizeof(MemSource)) as *MemSource;
+    m.payload = "x"; m.pos = 0; m.written = 0; m.closed = 0;
+    let s: *dyn Stream = m as *dyn Stream;
+    s.close();
+    assert_eq!(m.closed, 1);
+    return 0;
+}

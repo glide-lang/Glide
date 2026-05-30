@@ -1217,6 +1217,12 @@ fn emit_socket_runtime() {
     println!("");
     print!(include_str!("bootstrap/runtime/socket.c"));
     println!("");
+    // netcore.c: the shared BSD-socket syscall surface (gnet_*) that
+    // stdlib::net::sys binds. Emitted right after socket.c (same TU) so it
+    // reuses socket.c's __glide_sock_t + __glide_wsa_ensure() + includes, and
+    // before reactor.c so the reactor-async wrappers can build on both.
+    print!(include_str!("bootstrap/runtime/netcore.c"));
+    println!("");
     print!(include_str!("bootstrap/runtime/reactor.c"));
     println!("");
     print!(include_str!("bootstrap/runtime/http_parse.c"));

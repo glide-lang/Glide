@@ -1,0 +1,95 @@
+// P0 foundation validation: prove the gnet_* runtime + sys.glide chain end
+// to end with REAL sockets — UDP bind + getsockname, and a TCP loopback
+// driven entirely through the typed Socket and the *dyn Stream vtable.
+// If this passes, tcp/udp can be migrated onto the foundation as pure Glide.
+
+import stdlib::testing::*;
+import stdlib::net::sys::*;
+import stdlib::net::ip::*;
+
+fn test_udp_bind_assigns_ephemeral_port() -> i32 {
+    let sr: !*Socket = Socket::open(AF_V4, SOCK_DGRAM, 0);
+    assert!(sr.ok);
+    let sock: *Socket = sr.val;
+    let addr: *SocketAddr = SocketAddr::new(IpAddr::loopback_v4(), 0);
+    let b: !i32 = sock.bind(addr);
+    assert!(b.ok);
+    let la: !*SocketAddr = sock.local_addr();
+    assert!(la.ok);
+    assert!(la.val.port > 0);   // the kernel picked a real ephemeral port
+    sock.close();
+    return 0;
+}
+
+fn test_tcp_loopback_through_stream() -> i32 {
+    // ---- server: open, reuse, bind :0, listen ----
+    let srv_r: !*Socket = Socket::open(AF_V4, SOCK_STREAM, 0);
+    assert!(srv_r.ok);
+    let srv: *Socket = srv_r.val;
+    let _ru: !i32 = srv.set_reuse_addr(true);
+    let saddr: *SocketAddr = SocketAddr::new(IpAddr::loopback_v4(), 0);
+    assert!(srv.bind(saddr).ok);
+    assert!(srv.listen(1).ok);
+    let la: !*SocketAddr = srv.local_addr();
+    assert!(la.ok);
+    let port: i32 = la.val.port;
+    assert!(port > 0);
+
+    // ---- client connects (kernel completes the handshake into the
+    //      backlog, so a single-threaded connect-then-accept works) ----
+    let cli_r: !*Socket = Socket::open(AF_V4, SOCK_STREAM, 0);
+    assert!(cli_r.ok);
+    let cli: *Socket = cli_r.val;
+    let caddr: *SocketAddr = SocketAddr::new(IpAddr::loopback_v4(), port);
+    assert!(cli.connect(caddr).ok);
+
+    // ---- server accepts the queued conn ----
+    let conn_r: !*Socket = srv.accept();
+    assert!(conn_r.ok);
+    let conn: *Socket = conn_r.val;
+
+    // ---- write from client, read on server — both via *dyn Stream ----
+    let cs: *dyn Stream = cli as *dyn Stream;
+    let w: !i32 = stream_write_all(cs, "ping");
+    assert!(w.ok); assert_eq!(w.val, 4);
+
+    let ss: *dyn Stream = conn as *dyn Stream;
+    let got: !string = stream_read(ss, 16);
+    assert!(got.ok);
+    assert_str_eq!(got.val, "ping");
+
+    // ---- and the reverse direction ----
+    let w2: !i32 = stream_write_all(ss, "pong!");
+    assert!(w2.ok); assert_eq!(w2.val, 5);
+    let got2: !string = stream_read(cs, 16);
+    assert!(got2.ok);
+    assert_str_eq!(got2.val, "pong!");
+
+    conn.close();
+    cli.close();
+    srv.close();
+    return 0;
+}
+
+fn test_peer_addr_matches_server_port() -> i32 {
+    let srv_r: !*Socket = Socket::open(AF_V4, SOCK_STREAM, 0);
+    assert!(srv_r.ok);
+    let srv: *Socket = srv_r.val;
+    let _ru: !i32 = srv.set_reuse_addr(true);
+    assert!(srv.bind(SocketAddr::new(IpAddr::loopback_v4(), 0)).ok);
+    assert!(srv.listen(1).ok);
+    let port: i32 = srv.local_addr().val.port;
+
+    let cli_r: !*Socket = Socket::open(AF_V4, SOCK_STREAM, 0);
+    let cli: *Socket = cli_r.val;
+    assert!(cli.connect(SocketAddr::new(IpAddr::loopback_v4(), port)).ok);
+
+    let pa: !*SocketAddr = cli.peer_addr();
+    assert!(pa.ok);
+    assert_eq!(pa.val.port, port);
+
+    srv.accept().val.close();
+    cli.close();
+    srv.close();
+    return 0;
+}
