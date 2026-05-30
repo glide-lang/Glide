@@ -64,9 +64,10 @@ tools/
   build_release.sh            package glide+stdlib+toolchain into a tarball/zip
   gen_icons.py                rasterize the logo SVG to PNGs
 
-zed-extension/      Zed editor support (LSP wiring + tree-sitter)
-vscode-extension/   VSCode extension (LSP wiring + tmLanguage)
-glide-grammar/      tree-sitter grammar (used by Zed)
+glide-grammar/      tree-sitter grammar (used by the Zed extension)
+                    Editor extensions are separate repos:
+                    github.com/glide-lang/zed-glide (Zed)
+                    github.com/glide-lang/vscode-glide (VS Code / Open VSX)
 
 assets/             logos and icons
 ```

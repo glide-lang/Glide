@@ -149,8 +149,10 @@ Bundled with the compiler:
   fns, structs, enums, traits, macros, proc-macros, import segments,
   fields), references, rename, formatting, project-aware indexing
   across stdlib + dependencies.
-- Tree-sitter grammar in `glide-grammar/`; Zed extension in
-  `zed-extension/`; VS Code extension in `vscode-extension/`.
+- Tree-sitter grammar in `glide-grammar/`. Editor extensions live in
+  their own repos: [glide-lang/zed-glide](https://github.com/glide-lang/zed-glide)
+  (Zed) and [glide-lang/vscode-glide](https://github.com/glide-lang/vscode-glide)
+  (VS Code / Open VSX).
 
 ### Lints
 

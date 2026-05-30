@@ -1,8 +1,5 @@
 /build
 /target
-/zed-extension/target
-/zed-extension/extension.wasm
-/zed-extension/grammars
 /glide-grammar/node_modules
 /glide-grammar/package-lock.json
 /.claude
@@ -25,10 +22,6 @@ __glide_golden*
 .DS_Store
 Thumbs.db
 
-# VSCode extension build outputs
-/vscode-extension/node_modules
-/vscode-extension/out
-/vscode-extension/*.vsix
 *.pdb
 a.glide
 
