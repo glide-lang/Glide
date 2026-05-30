@@ -1,10 +1,10 @@
 id            = "glide"
 name          = "Glide"
 description   = "Glide language support"
-version       = "0.0.3"
+version       = "0.3.2"
 schema_version = 1
-authors       = ["Murilinho145SG"]
-repository    = "https://github.com/Murilinho145SG/Glide"
+authors       = ["Murillo Deolino <Murilinho145SG>"]
+repository    = "https://github.com/glide-lang/Glide"
 # Icon for the extension itself in Zed's UI. Per-file icons require a
 # separate icon-theme extension at the moment; languages/glide/icon.svg is
 # kept around for the day Zed exposes per-language icons.
@@ -16,7 +16,7 @@ languages = ["Glide"]
 
 [grammars.glide]
 repository = "https://github.com/glide-lang/Glide"
-commit     = "453891aea07960ec5fb055e3726178f32abe85f8"
+commit     = "5354269b9d44f697d683c4ed0516300aac45236e"
 path       = "glide-grammar"
 
 [slash_commands.glide-routes]
