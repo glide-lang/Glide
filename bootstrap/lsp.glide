@@ -505,7 +505,18 @@ fn uri_to_path(uri: string) -> string {
     let n: i32 = uri.len();
     if n < 7 { return uri; }
     if !uri.substring(0, 7).eq("file://") { return uri; }
-    let rest: string = uri.substring(7, n);
+    // Percent-decode the path. Editors (Zed, VSCode) send the standard
+    // URL-encoded form `file:///c%3A/Users/...` — %3A for ':', %20 for a
+    // space, %5C for '\'. Without decoding, the Windows drive-letter check
+    // below never matches, so the manifest-root lookup that builds the
+    // project index silently fails — and project-symbol completion plus
+    // goto-def into project files stop working in the editor (but not in a
+    // headless test that happens to pass an unencoded ':').
+    let mut rest: string = uri.substring(7, n);
+    rest = rest.replace("%3A", ":").replace("%3a", ":");
+    rest = rest.replace("%20", " ");
+    rest = rest.replace("%5C", "\\").replace("%5c", "\\");
+    rest = rest.replace("%2F", "/").replace("%2f", "/");
     let rn: i32 = rest.len();
     // Windows: file:///C:/... -> "/C:/..." -> drop leading '/'
     if rn > 2 && rest.at(0).to_int() == 47 && rest.at(2).to_int() == 58 {
