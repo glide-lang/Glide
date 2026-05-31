@@ -19,6 +19,7 @@
 
 import stdlib::net::tcp::*;
 import stdlib::net::tls::*;
+import stdlib::net::sys::*;   // Stream trait + stream_read/stream_write_all
 import stdlib::net::ip::*;
 import stdlib::crypto::*;
 import stdlib::base64::*;
@@ -61,10 +62,9 @@ pub struct WsMessage {
 }
 
 pub struct WebSocket {
-    // Transport: exactly one is non-null.
-    tcp: *TcpStream,
-    tls: *TlsStream,
-    is_tls: bool,
+    // Transport: one *dyn Stream over either a TcpStream (ws://) or a
+    // TlsStream (wss://) — both impl Stream, so no tcp-vs-tls branch.
+    stream: *dyn Stream,
     rng: *Rng,
 }
 
@@ -88,9 +88,6 @@ impl WebSocket {
         let pu: *WsParsedUrl = p.val;
 
         let ws: *WebSocket = malloc(sizeof(WebSocket)) as *WebSocket;
-        ws.tcp = null as *TcpStream;
-        ws.tls = null as *TlsStream;
-        ws.is_tls = pu.is_wss;
         ws.rng = Rng::from_clock();
 
         if pu.is_wss {
@@ -98,11 +95,11 @@ impl WebSocket {
             let r: !*TlsStream = TlsStream::connect(pu.host, pu.port, cfg);
             cfg.free();
             if !r.ok { free(ws as *void); return err(r.err); }
-            ws.tls = r.val;
+            ws.stream = r.val as *dyn Stream;
         } else {
             let r: !*TcpStream = TcpStream::connect_host(pu.host, pu.port);
             if !r.ok { free(ws as *void); return err(r.err); }
-            ws.tcp = r.val;
+            ws.stream = r.val as *dyn Stream;
         }
 
         // Build a 16-byte random key, base64-encode for Sec-WebSocket-Key.
@@ -151,13 +148,11 @@ impl WebSocket {
     }
 
     fn _write_all(self: *WebSocket, data: string) -> !i32 {
-        if self.is_tls { return self.tls.write_all(data); }
-        return self.tcp.write_all(data);
+        return stream_write_all(self.stream, data);
     }
 
     fn _read(self: *WebSocket, max: i32) -> !string {
-        if self.is_tls { return self.tls.read(max); }
-        return self.tcp.read(max);
+        return stream_read(self.stream, max);
     }
 
     fn _read_exact(self: *WebSocket, n: i32) -> !string {
@@ -185,8 +180,7 @@ impl WebSocket {
     }
 
     fn _close_transport(self: *WebSocket) {
-        if self.is_tls && self.tls != null { self.tls.close(); }
-        if !self.is_tls && self.tcp != null { self.tcp.close(); }
+        if self.stream != null { self.stream.close(); }
     }
 
     /// Send a UTF-8 text frame. Always masked (client → server is
