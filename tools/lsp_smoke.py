@@ -6,9 +6,9 @@ JSON-RPC messages, and checks diagnostics + position-based features
 (hover, definition, references, rename, completion, documentSymbol,
 documentHighlight, formatting).
 """
-import json, os, re, subprocess, sys, tempfile
+import json, os, re, shutil, subprocess, sys, tempfile
 
-GLIDE = os.path.abspath("./glide.exe") if os.name == "nt" else "./glide"
+GLIDE = os.environ.get("GLIDE") or (os.path.abspath("./glide.exe") if os.name == "nt" else "./glide")
 ROOT  = os.path.abspath(".").replace(os.sep, "/")
 
 def frame(msg: dict) -> bytes:
@@ -41,7 +41,10 @@ def run_session(messages):
     return parse_responses(r.stdout)
 
 def write_tmp(name: str, body: str) -> str:
-    path = os.path.join(tempfile.gettempdir(), name).replace(os.sep, "/")
+    # Labels become filenames, so strip anything that isn't filename-safe
+    # (a `/` in a label would otherwise be read as a directory separator).
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    path = os.path.join(tempfile.gettempdir(), safe).replace(os.sep, "/")
     with open(path, "w", encoding="utf-8") as f:
         f.write(body)
     return path, "file:///" + path
@@ -911,6 +914,125 @@ def case_completion_has(label, body, pos, expect_labels):
         check(f"type-position completion offers `{lbl}`", lbl in labels,
               f"got {sorted(l for l in labels if l)[:14]}")
 
+def case_completion_absent(label, body, pos, absent_labels):
+    """Single-file completion that must NOT offer the given labels."""
+    print(f"\n[feature] {label}")
+    path, uri = write_tmp(label.replace(" ", "_") + ".glide", body)
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+        {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+         "params":{"textDocument":{"uri":uri},"position":pos}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    target = next((r for r in rs if r.get("id") == 2), None)
+    res = (target or {}).get("result", []) or []
+    items = res.get("items", []) if isinstance(res, dict) else res
+    labels = set(it.get("label") for it in items)
+    for lbl in absent_labels:
+        check(f"completion does NOT offer `{lbl}`", lbl not in labels, "leaked")
+
+def _proj_uri(d, rel=""):
+    p = (d + "/" + rel) if rel else d
+    p = p.rstrip("/").replace(os.sep, "/")
+    if len(p) >= 2 and p[1] == ":":     # percent-encode the drive colon like editors do
+        p = p[0].lower() + "%3A" + p[2:]
+    return "file:///" + p
+
+PROJ_MANIFEST = ('let manifest: Package = Package { name:"t", version:"0.1.0", '
+                 'bin:"src/main.glide", deps: vec_of() };\n')
+
+def case_completion_project(label, files, open_rel, pos,
+                            present=None, absent=None, import_edit=None):
+    """Completion inside a real multi-file project (rootUri + glide.glide), so
+    cross-file behaviour (auto-import, the project index, visibility) is
+    exercised. `files` maps repo-relative paths to contents; `import_edit` is
+    (label, expected_newText) to assert the additionalTextEdits."""
+    print(f"\n[project] {label}")
+    d = tempfile.mkdtemp().replace(os.sep, "/")
+    for rel, content in files.items():
+        fp = os.path.join(d, *rel.split("/"))
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+    open_uri = _proj_uri(d, open_rel)
+    text = files[open_rel]
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":_proj_uri(d)}},
+        {"jsonrpc":"2.0","method":"initialized","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":open_uri,"languageId":"glide","version":1,"text":text}}},
+        {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+         "params":{"textDocument":{"uri":open_uri},"position":pos}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    target = next((r for r in rs if r.get("id") == 2), None)
+    res = (target or {}).get("result", []) or []
+    items = res.get("items", []) if isinstance(res, dict) else res
+    by_label = {it.get("label"): it for it in items}
+    labels = set(by_label)
+    for lbl in (present or []):
+        check(f"offers `{lbl}`", lbl in labels,
+              f"got {sorted(l for l in labels if l)[:14]}")
+    for lbl in (absent or []):
+        check(f"does NOT offer `{lbl}`", lbl not in labels, "leaked")
+    if import_edit is not None:
+        lbl, expect_text = import_edit
+        edits = (by_label.get(lbl) or {}).get("additionalTextEdits") or []
+        texts = [e.get("newText") for e in edits]
+        check(f"`{lbl}` import edit yields {expect_text!r}",
+              expect_text in texts, f"got {texts}")
+    shutil.rmtree(d, ignore_errors=True)
+
+def case_hover_has(label, body, pos, expect_substr):
+    """Single-file hover whose markdown must contain `expect_substr` (ci)."""
+    print(f"\n[hover] {label}")
+    path, uri = write_tmp(label.replace(" ", "_") + ".glide", body)
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+        {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+         "params":{"textDocument":{"uri":uri},"position":pos}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    target = next((r for r in rs if r.get("id") == 2), None)
+    result = (target or {}).get("result") or {}
+    contents = result.get("contents") if isinstance(result, dict) else None
+    text = contents.get("value", "") if isinstance(contents, dict) else (contents or "")
+    if isinstance(text, list):
+        text = " ".join(str(x) for x in text)
+    check(f"hover mentions {expect_substr!r}",
+          expect_substr.lower() in str(text).lower(), f"got {str(text)[:90]!r}")
+
+def case_definition_line(label, body, pos, expect_line):
+    """Single-file goto-definition that must resolve to `expect_line` (0-based);
+    pass expect_line=None to assert NO definition (e.g. an intrinsic)."""
+    print(f"\n[definition] {label}")
+    path, uri = write_tmp(label.replace(" ", "_") + ".glide", body)
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+        {"jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+         "params":{"textDocument":{"uri":uri},"position":pos}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    target = next((r for r in rs if r.get("id") == 2), None)
+    result = (target or {}).get("result")
+    if isinstance(result, list):
+        result = result[0] if result else None
+    if expect_line is None:
+        check("no definition (intrinsic)", not result, f"got {result}")
+        return
+    line = (result or {}).get("range", {}).get("start", {}).get("line") if result else None
+    check(f"definition jumps to line {expect_line}", line == expect_line, f"got {line}")
+
 # Cursor sits right after `let x: ` so completion is in type position.
 case_completion_has("type position offers wide primitives",
     'fn main() -> i32 {\n    let x: \n    return 0;\n}',
@@ -1521,6 +1643,204 @@ case_diagnostics("module-qualified generic type annotation parses",
     'import stdlib::hashmap;\n'
     'fn main() -> i32 { let m: *hashmap::HashMap<i32> = hashmap::HashMap::new(); return 0; }',
     expect_codes_absent=["parse"])
+
+# ============================================================================
+# Regression guards for the 2026-05-31 LSP / macro / qualified-type session.
+# (helpers above: case_completion_absent / case_completion_project /
+#  case_hover_has / case_definition_line)
+# ============================================================================
+
+# --- attribute-name completion surfaces @suggest / @leaf / @used / @section ---
+case_completion_has("attribute completion offers suggest/leaf/used/section",
+    '@\npub fn f() -> i32 { return 0; }',
+    {"line":0,"character":1},
+    ["suggest","leaf","used","section","cfg","derive"])
+
+# --- builtin compiler macros complete (pkg!, cfg!, env!, panic!, dbg!, …) ---
+case_completion_has("builtin macros complete (pkg!/cfg!/dbg!/panic!)",
+    'fn main() {\n    let x = pkg\n}',
+    {"line":1,"character":15},
+    ["pkg!","cfg!","env!","panic!","dbg!","todo!","assert!"])
+
+# --- builtin macro hover documents the macro ---
+case_hover_has("pkg! hover documents the manifest macro",
+    'fn main() {\n    let x = pkg!("name");\n}',
+    {"line":1,"character":13},
+    "manifest")
+
+# --- user `macro name!` hover + goto resolve at the call site ---
+case_hover_has("user macro hover shows its signature",
+    'macro twice!($x:expr) { $x; $x }\nfn main() {\n    twice!(println!("a"));\n}',
+    {"line":2,"character":5},
+    "twice")
+case_definition_line("user macro goto jumps to its def",
+    'macro twice!($x:expr) { $x; $x }\nfn main() {\n    twice!(println!("a"));\n}',
+    {"line":2,"character":5},
+    0)
+# Builtin compiler macros are intrinsic — hover documents them, goto has no
+# source location to resolve to (and must not crash / mis-resolve).
+case_definition_line("builtin macro goto resolves to no location",
+    'fn main() {\n    let x = pkg!("name");\n}',
+    {"line":1,"character":13},
+    None)
+
+# --- cross-file auto-import MERGES a sibling pub fn into an existing select ---
+_UTIL = ('pub fn shown() -> i32 { return 1; }\n'
+         'pub fn extra() -> i32 { return 2; }\n'
+         'fn hidden() -> i32 { return 3; }\n')
+case_completion_project("auto-import merges a sibling pub fn into {shown}",
+    {"glide.glide": PROJ_MANIFEST, "src/util.glide": _UTIL,
+     "src/main.glide": 'import util::{shown};\nfn main() {\n    let a = ext\n}\n'},
+    "src/main.glide", {"line":2,"character":15},
+    present=["extra"], import_edit=("extra", ", extra"))
+# --- non-pub sibling decl must NOT leak into bare-ident completion ---
+case_completion_project("non-pub sibling decl stays hidden (import present)",
+    {"glide.glide": PROJ_MANIFEST, "src/util.glide": _UTIL,
+     "src/main.glide": 'import util::{shown};\nfn main() {\n    let b = hid\n}\n'},
+    "src/main.glide", {"line":2,"character":15},
+    absent=["hidden"])
+
+
+# ---- workflow-authored comprehensive cases (regression-suite-buildout) ----
+# completion: attrs, builtin macros, @suggest/type-aware args, module-member
+# no-leak, auto-import fresh/merge/non-pub; hover/goto: builtin+user+stdlib
+# macros, Type::method right impl.
+
+ATTR_BODY = "@\nfn main() {}\n"
+case_completion_has("attr_bare", ATTR_BODY, {"line":0,"character":1},
+    ["cfg","derive","expect","allow","deprecated","lint","proc_attr","proc_derive","proc_macro","proc_macro_str","suggest","leaf","used","section"])
+
+MAC_BODY = "fn main() {\n    let x = ;\n}\n"
+case_completion_has("macros_builtin", MAC_BODY, {"line":1,"character":12},
+    ["pkg!","cfg!","env!","panic!","todo!","unimplemented!","unreachable!","dbg!","assert!","file!","line!","column!","function!"])
+
+SUG_BODY = ('struct Engine { rpm: i32 }\n'
+            'enum Color { Red, Green, Blue }\n'
+            'impl Engine {\n'
+            '    @suggest(mode, "fast", "slow")\n'
+            '    pub fn run(self, mode: string) -> i32 { return 0; }\n'
+            '    pub fn paint(self, c: Color) -> i32 { return 0; }\n'
+            '}\n'
+            'fn main() {\n'
+            '    let e: Engine = Engine { rpm: 0 };\n'
+            '    e.run("");\n'
+            '    e.paint();\n'
+            '}\n')
+case_completion_has("suggest_method_quotes", SUG_BODY, {"line":9,"character":11}, ["fast","slow"])
+case_completion_has("suggest_enum_param", SUG_BODY, {"line":10,"character":12}, ["Color::Red","Color::Green","Color::Blue"])
+
+files_mm = {
+  "glide.glide": PROJ_MANIFEST,
+  "src/foo.glide": "pub fn alpha() -> i32 { return 1; }\n",
+  "src/x/foo.glide": "pub fn beta() -> i32 { return 2; }\n",
+  "src/main.glide": "import foo;\nfn main() {\n    foo::\n}\n",
+}
+case_completion_project("modmember_sameleaf", files_mm, "src/main.glide",
+    {"line":2,"character":9}, present=["alpha"], absent=["beta"])
+
+AL_SRC = ('pub fn custom() -> i32 { return 1; }\n'
+          'pub fn other() -> i32 { return 2; }\n'
+          'fn secret_helper() -> i32 { return 3; }\n')
+files_a = {
+  "glide.glide": PROJ_MANIFEST,
+  "src/al.glide": AL_SRC,
+  "src/main.glide": "fn main() {\n    custom\n}\n",
+}
+case_completion_project("autoimport_fresh", files_a, "src/main.glide",
+    {"line":1,"character":10}, present=["custom"],
+    import_edit=("custom", "import al::{custom};\n"))
+files_b = {
+  "glide.glide": PROJ_MANIFEST,
+  "src/al.glide": AL_SRC,
+  "src/main.glide": "import al::{other};\nfn main() {\n    custom\n}\n",
+}
+case_completion_project("autoimport_merge", files_b, "src/main.glide",
+    {"line":2,"character":10}, present=["custom"],
+    import_edit=("custom", ", custom"))
+files_c = {
+  "glide.glide": PROJ_MANIFEST,
+  "src/al.glide": AL_SRC,
+  "src/main.glide": "fn main() {\n    secret_helper\n}\n",
+}
+case_completion_project("autoimport_nonpub_hidden", files_c, "src/main.glide",
+    {"line":1,"character":17}, absent=["secret_helper"])
+
+case_hover_has("hover_pkg",
+  'fn main() {\n  let n = pkg!("name");\n}\n',
+  {"line":1,"character":11},
+  "manifest")
+case_hover_has("hover_cfg",
+  'fn main() {\n  let n = cfg!("os");\n}\n',
+  {"line":1,"character":11},
+  "Compile-time configuration predicate")
+case_hover_has("hover_env",
+  'fn main() {\n  let n = env!("PATH");\n}\n',
+  {"line":1,"character":11},
+  "environment variable")
+case_hover_has("hover_panic",
+  'fn main() {\n  panic!("boom");\n}\n',
+  {"line":1,"character":4},
+  "Abort the program")
+case_hover_has("hover_todo",
+  'fn main() {\n  todo!();\n}\n',
+  {"line":1,"character":3},
+  "not yet implemented")
+case_hover_has("hover_unimplemented",
+  'fn main() {\n  unimplemented!();\n}\n',
+  {"line":1,"character":4},
+  "intentionally not implemented")
+case_hover_has("hover_unreachable",
+  'fn main() {\n  unreachable!();\n}\n',
+  {"line":1,"character":4},
+  "never be taken")
+case_hover_has("hover_dbg",
+  'fn main() {\n  let x = dbg!(1);\n}\n',
+  {"line":1,"character":11},
+  "drops into an expression")
+case_hover_has("hover_assert_builtin",
+  'fn main() {\n  assert!(true);\n}\n',
+  {"line":1,"character":4},
+  "Panic with the source location")
+case_hover_has("hover_file",
+  'fn main() {\n  let f = file!();\n}\n',
+  {"line":1,"character":11},
+  "current source file path")
+case_hover_has("hover_line",
+  'fn main() {\n  let l = line!();\n}\n',
+  {"line":1,"character":11},
+  "current source line number")
+case_hover_has("hover_column",
+  'fn main() {\n  let c = column!();\n}\n',
+  {"line":1,"character":11},
+  "current source column")
+case_hover_has("hover_function",
+  'fn main() {\n  let fn1 = function!();\n}\n',
+  {"line":1,"character":13},
+  "enclosing function")
+case_hover_has("hover_user_macro",
+  'macro twice!($x:expr) {\n  $x + $x\n}\nfn main() {\n  let y = twice!(3);\n}\n',
+  {"line":4,"character":11},
+  "macro twice!")
+case_definition_line("goto_user_macro",
+  'macro twice!($x:expr) {\n  $x + $x\n}\nfn main() {\n  let y = twice!(3);\n}\n',
+  {"line":4,"character":11},
+  0)
+case_hover_has("hover_stdlib_assert",
+  'import stdlib::testing::*;\nfn main() {\n  assert!(true);\n}\n',
+  {"line":2,"character":4},
+  "Panic")
+case_definition_line("goto_builtin_none",
+  'fn main() {\n  panic!("x");\n}\n',
+  {"line":1,"character":4},
+  None)
+case_hover_has("hover_foo_make",
+  'struct Foo { pub a: i32 }\nimpl Foo { fn make(self) -> i32 { return 1; } }\nstruct Bar { pub b: i32 }\nimpl Bar { fn make(self) -> i32 { return 2; } }\nfn main() {\n  let f: Foo = Foo { a: 0 };\n  let x = Foo::make(f);\n}\n',
+  {"line":6,"character":15},
+  "impl Foo")
+case_hover_has("hover_bar_make",
+  'struct Foo { pub a: i32 }\nimpl Foo { fn make(self) -> i32 { return 1; } }\nstruct Bar { pub b: i32 }\nimpl Bar { fn make(self) -> i32 { return 2; } }\nfn main() {\n  let b: Bar = Bar { b: 0 };\n  let x = Bar::make(b);\n}\n',
+  {"line":6,"character":15},
+  "impl Bar")
 
 # ---- summary ----
 print()
