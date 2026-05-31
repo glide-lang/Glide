@@ -37,6 +37,10 @@ extern fn gnet_last_error() -> string;
 extern fn gnet_read_async(fd: i64, buf: *void, max: i32) -> i64;
 extern fn gnet_write_async(fd: i64, buf: *void, n: i32) -> i64;
 extern fn gnet_accept_async(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
+// IPv4 multicast membership — the network-order ip_mreq packing is owned by
+// netcore.c (host-order v4 in, htonl'd there).
+extern fn gnet_join_group_v4(fd: i64, group_v4: i64, iface_v4: i64) -> i64;
+extern fn gnet_leave_group_v4(fd: i64, group_v4: i64, iface_v4: i64) -> i64;
 
 // ---- Glide socket-type + family tags ------------------------------------
 pub const SOCK_STREAM: i32 = 1;
@@ -56,6 +60,8 @@ pub const OPT_SO_RCVBUF:   i32 = 6;
 pub const OPT_SO_SNDBUF:   i32 = 7;
 pub const OPT_IPPROTO_IP:  i32 = 8;
 pub const OPT_IP_TTL:      i32 = 9;
+pub const OPT_IP_MULTICAST_TTL:  i32 = 10;
+pub const OPT_IP_MULTICAST_LOOP: i32 = 11;
 
 // shutdown(how) values are uniform across platforms.
 pub const SHUT_RD: i32 = 0;

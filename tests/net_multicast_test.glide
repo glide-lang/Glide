@@ -1,0 +1,31 @@
+// multicast.glide over the foundation: join/leave a group + tune send
+// options on a bound UDP socket. Asserts the membership setsockopts apply
+// (delivery routing is interface-dependent, so not asserted here).
+
+import stdlib::testing::*;
+import stdlib::net::udp::*;
+import stdlib::net::multicast::*;
+import stdlib::net::ip::*;
+
+fn test_join_leave_group() -> i32 {
+    let r: !*UdpSocket = UdpSocket::bind_port(0);
+    assert!(r.ok);
+    let s: *UdpSocket = r.val;
+    let group: *IpAddr = IpAddr::v4(239, 1, 2, 3);
+    let any: *IpAddr = IpAddr::unspec_v4();
+    assert!(mc_join_v4(s.fd, group, any).ok);
+    assert!(mc_leave_v4(s.fd, group, any).ok);
+    s.close();
+    return 0;
+}
+
+fn test_send_options() -> i32 {
+    let r: !*UdpSocket = UdpSocket::bind_port(0);
+    assert!(r.ok);
+    let s: *UdpSocket = r.val;
+    assert!(mc_set_ttl(s.fd, 4).ok);
+    assert!(mc_set_loop(s.fd, true).ok);
+    assert!(mc_set_loop(s.fd, false).ok);
+    s.close();
+    return 0;
+}

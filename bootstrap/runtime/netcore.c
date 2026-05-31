@@ -234,8 +234,32 @@ int gnet_const(int which) {
         case 7:  return SO_SNDBUF;
         case 8:  return IPPROTO_IP;
         case 9:  return IP_TTL;
+        case 10: return IP_MULTICAST_TTL;
+        case 11: return IP_MULTICAST_LOOP;
         default: return -1;
     }
+}
+
+/* IPv4 multicast group membership. The network-byte-order ip_mreq packing
+   (which the design flags as bug-prone if hand-rolled in Glide) lives here:
+   htonl the host-order group + interface addresses once, in C where the
+   struct and byte-swap intrinsics are in scope. iface_v4 == 0 means
+   INADDR_ANY (the default interface). */
+static int64_t __gnet_mreq(int64_t fd, int64_t group_v4, int64_t iface_v4, int add) {
+    struct ip_mreq mreq;
+    memset(&mreq, 0, sizeof(mreq));
+    mreq.imr_multiaddr.s_addr = htonl((uint32_t)group_v4);
+    mreq.imr_interface.s_addr = htonl((uint32_t)iface_v4);
+    int opt = add ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP;
+    if (setsockopt((__glide_sock_t)fd, IPPROTO_IP, opt,
+                   (const char*)&mreq, sizeof(mreq)) != 0) return -1;
+    return 0;
+}
+int64_t gnet_join_group_v4(int64_t fd, int64_t group_v4, int64_t iface_v4) {
+    return __gnet_mreq(fd, group_v4, iface_v4, 1);
+}
+int64_t gnet_leave_group_v4(int64_t fd, int64_t group_v4, int64_t iface_v4) {
+    return __gnet_mreq(fd, group_v4, iface_v4, 0);
 }
 
 /* Live errno/WSAGetLastError snapshot as "<code>:<message>" so callers can

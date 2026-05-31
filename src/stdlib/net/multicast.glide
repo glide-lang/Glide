@@ -1,0 +1,54 @@
+// IPv4 multicast — join/leave a group and tune multicast send behaviour on
+// a UDP socket, over the net::sys foundation. The network-byte-order
+// ip_mreq packing is owned by netcore.c (a C helper htonl's the host-order
+// addresses), so there's no hand-rolled big-endian packing here.
+//
+// ```glide
+// import stdlib::net::udp::*;
+// import stdlib::net::multicast::*;
+// import stdlib::net::ip::*;
+//
+// let s: *UdpSocket = UdpSocket::bind_port(5353).val;
+// let group: *IpAddr = IpAddr::v4(239, 1, 2, 3);
+// mc_join_v4(s.fd, group, IpAddr::unspec_v4());   // join on the default iface
+// let r: !*UdpRecv = s.recv_from(1500);
+// ```
+
+import stdlib::net::ip::*;
+import stdlib::net::sys::*;
+
+/// Join an IPv4 multicast `group` on the local interface `iface`
+/// (`IpAddr::unspec_v4()` for the default interface). The socket must be
+/// bound first.
+pub fn mc_join_v4(fd: i64, group: *IpAddr, iface: *IpAddr) -> !i32 {
+    if gnet_join_group_v4(fd, group.v4 as i64, iface.v4 as i64) < 0 {
+        return err("multicast: join: ".concat(gnet_last_error()));
+    }
+    return ok(0);
+}
+
+/// Leave a previously-joined IPv4 multicast group.
+pub fn mc_leave_v4(fd: i64, group: *IpAddr, iface: *IpAddr) -> !i32 {
+    if gnet_leave_group_v4(fd, group.v4 as i64, iface.v4 as i64) < 0 {
+        return err("multicast: leave: ".concat(gnet_last_error()));
+    }
+    return ok(0);
+}
+
+/// Hop limit for outgoing multicast datagrams (default 1 = local subnet).
+pub fn mc_set_ttl(fd: i64, ttl: i32) -> !i32 {
+    if gnet_setsockopt_int(fd, gnet_const(OPT_IPPROTO_IP), gnet_const(OPT_IP_MULTICAST_TTL), ttl) < 0 {
+        return err("multicast: set_ttl: ".concat(gnet_last_error()));
+    }
+    return ok(0);
+}
+
+/// Whether multicast sent from this socket loops back to local members
+/// (default on). Turn off when you don't want to receive your own sends.
+pub fn mc_set_loop(fd: i64, on: bool) -> !i32 {
+    let v: i32 = if on { 1 } else { 0 };
+    if gnet_setsockopt_int(fd, gnet_const(OPT_IPPROTO_IP), gnet_const(OPT_IP_MULTICAST_LOOP), v) < 0 {
+        return err("multicast: set_loop: ".concat(gnet_last_error()));
+    }
+    return ok(0);
+}
