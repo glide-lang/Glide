@@ -7308,6 +7308,105 @@ fn _push_suggest_for_arg(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValu
     return any;
 }
 
+fn _arg_strip(ty: *Type) -> *Type {
+    let mut t: *Type = ty;
+    while t != null && (t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) {
+        t = t.inner;
+    }
+    return t;
+}
+
+fn _arg_pname(i: i32) -> string {
+    let letters: string = "abcdefghijklmnopqrstuvwxyz";
+    if i >= 0 && i < 26 { return letters.substring(i, i + 1); }
+    return "p".concat(i.to_string());
+}
+
+// A high-priority argument-completion item: sortText floats it above the
+// generic bag, insertText carries the snippet/plain text.
+fn _arg_item(label: string, kind: i32, detail: string, insert: string, snippet: bool) -> *JsonValue {
+    let it: *JsonValue = json_object();
+    json_obj_set(it, "label", json_string(label));
+    json_obj_set(it, "kind", json_int(kind));
+    if !detail.eq("") { json_obj_set(it, "detail", json_string(detail)); }
+    json_obj_set(it, "insertText", json_string(insert));
+    if snippet { json_obj_set(it, "insertTextFormat", json_int(2)); }
+    else { json_obj_set(it, "insertTextFormat", json_int(1)); }
+    json_obj_set(it, "sortText", json_string("0_".concat(label)));
+    json_obj_set(it, "filterText", json_string(label));
+    return it;
+}
+
+// `fn(a: T, b: U) -> R { $0 }` snippet from a TY_FNPTR param type.
+fn _fnptr_snippet(ty: *Type) -> string {
+    let mut s: string = "fn(";
+    if ty.args != null {
+        for let i: i32 = 0; i < ty.args.len(); i++ {
+            if i > 0 { s = s.concat(", "); }
+            let pt: Type = ty.args.get(i);
+            let ptp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            *ptp = pt;
+            s = s.concat(_arg_pname(i)).concat(": ").concat(type_to_string_pretty(ptp));
+        }
+    }
+    s = s.concat(")");
+    let r: *Type = ty.fnptr_ret;
+    if r != null && !(r.kind == TY_NAMED && r.name != null && r.name.eq("void")) {
+        s = s.concat(" -> ").concat(type_to_string_pretty(r));
+    }
+    return s.concat(" { $0 }");
+}
+
+// Type-aware argument completion: for the call's active parameter, float the
+// values its declared type wants -- enum variants, a struct literal / its
+// constructors, ok/err/some/none, or a callback closure snippet.
+fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue, seen: *HashMap<bool>) {
+    let callee: *Stmt = _callee_decl(stmts, ctx);
+    if callee == null || callee.kind != ST_FN || callee.fn_params == null { return; }
+    if ctx.active_param < 0 || ctx.active_param >= callee.fn_params.len() { return; }
+    let pm: Param = callee.fn_params.get(ctx.active_param);
+    let ty: *Type = pm.ty;
+    if ty == null { return; }
+    if ty.kind == TY_FNPTR {
+        json_arr_push(items, _arg_item("fn(…)", 15, type_to_string_pretty(ty), _fnptr_snippet(ty), true));
+        return;
+    }
+    if ty.kind == TY_OPTION {
+        json_arr_push(items, _arg_item("some(…)", 12, "?T value", "some($0)", true));
+        json_arr_push(items, _arg_item("none()", 12, "?T empty", "none()", false));
+        return;
+    }
+    if ty.kind == TY_RESULT || ty.kind == TY_OPT_RESULT {
+        json_arr_push(items, _arg_item("ok(…)", 12, "!T ok", "ok($0)", true));
+        json_arr_push(items, _arg_item("err(…)", 12, "error", "err($0)", true));
+        if ty.kind == TY_OPT_RESULT { json_arr_push(items, _arg_item("none()", 12, "empty", "none()", false)); }
+        return;
+    }
+    let inner: *Type = _arg_strip(ty);
+    if inner == null || inner.kind != TY_NAMED || inner.name == null { return; }
+    let tn: string = inner.name;
+    let d: *Stmt = find_top_decl(stmts, tn);
+    if d == null { return; }
+    if d.kind == ST_ENUM && d.enum_variants != null {
+        for let i: i32 = 0; i < d.enum_variants.len(); i++ {
+            let ev: EnumVariant = d.enum_variants.get(i);
+            if ev.name == null { continue; }
+            let full: string = tn.concat("::").concat(ev.name);
+            if seen.contains(full) { continue; }
+            seen.insert(full, true);
+            json_arr_push(items, _arg_item(full, 20, "variant of ".concat(tn), full, false));
+        }
+    } else if d.kind == ST_STRUCT {
+        let lit: string = tn.concat(" {…}");
+        if !seen.contains(lit) {
+            seen.insert(lit, true);
+            json_arr_push(items, _arg_item(lit, 22, "construct ".concat(tn), tn.concat(" { $0 }"), true));
+        }
+        // Public constructors / static methods (`Type::new`, …).
+        list_methods_for_type(stmts, tn, items, seen, false);
+    }
+}
+
 fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -7367,6 +7466,15 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     }
     let items: *JsonValue = json_array();
     let seen: *HashMap<bool> = HashMap::new();
+
+    // Type-aware argument completion: at a call's argument, float the values
+    // the active parameter's declared type wants (enum variants, struct ctor,
+    // ok/err/some/none, callback snippet) to the top, then fall through to the
+    // generic completion below so locals etc. still appear.
+    let actx: SigCallCtx = _find_call_context(doc.text, line0, col0);
+    if actx.found {
+        _push_arg_type_items(doc.stmts, actx, items, seen);
+    }
 
     // Struct-literal field completion: cursor at a field-name slot inside
     // `StructName { ... }`. Offer the struct's not-yet-written fields. Gated
