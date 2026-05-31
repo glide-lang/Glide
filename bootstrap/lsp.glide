@@ -4718,6 +4718,18 @@ fn _builtin_attr_doc(name: string) -> string {
     if name.eq("proc_macro_str") {
         return "Register the annotated fn as a function-style proc-macro that takes its body as a raw string. `@proc_macro_str(name)` for templating / lit-style use.";
     }
+    if name.eq("suggest") {
+        return "Editor hint: attach concrete suggested values to a parameter. `@suggest(mode, \"fast\", \"slow\")` makes the LSP offer those literals (or an enum's variants) when completing that argument at call sites.";
+    }
+    if name.eq("leaf") {
+        return "Mark a fn as a stackless `@leaf` coroutine: it runs inline on the worker instead of getting its own coro stack. Cuts per-task memory; body must not suspend across a real stack frame.";
+    }
+    if name.eq("used") {
+        return "Freestanding/kernel: emit the decl with `__attribute__((used))` so the linker keeps it even with no references (e.g. ISR tables, Limine requests).";
+    }
+    if name.eq("section") {
+        return "Freestanding/kernel: place the decl in a named linker section. `@section(\".init\")` maps to `__attribute__((section(\".init\")))`.";
+    }
     return "";
 }
 
@@ -6016,6 +6028,8 @@ fn _push_attr_completions(doc: LspDoc, state: *LspState, items: *JsonValue, seen
     builtins.push("allow"); builtins.push("deprecated"); builtins.push("lint");
     builtins.push("proc_attr"); builtins.push("proc_derive");
     builtins.push("proc_macro"); builtins.push("proc_macro_str");
+    builtins.push("suggest"); builtins.push("leaf");
+    builtins.push("used"); builtins.push("section");
     for let i: i32 = 0; i < builtins.len(); i++ {
         let nm: string = builtins.get(i);
         if seen.contains(nm) { continue; }
