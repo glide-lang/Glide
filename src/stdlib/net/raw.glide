@@ -1,0 +1,106 @@
+// Raw sockets — SOCK_RAW over the net::sys foundation. Lets you read and
+// write IP-layer payloads directly: ICMP (ping/traceroute, see icmp.glide),
+// custom IP protocols, and packet inspection.
+//
+// REQUIRES PRIVILEGE: raw sockets need root / CAP_NET_RAW on Linux+macOS,
+// Administrator on Windows. open_* returns err(...) (never panics) when the
+// process isn't allowed — typically "1:Operation not permitted" (EPERM) or
+// the Windows equivalent.
+//
+// ```glide
+// import stdlib::net::raw::*;
+// let r: !*RawSocket = RawSocket::open_icmp();
+// if !r.ok { println!("need root:", r.err); return 1; }
+// ```
+
+import stdlib::net::ip::*;
+import stdlib::net::sys::*;
+
+/// IANA protocol numbers (stable across platforms).
+pub const IPPROTO_ICMP: i32 = 1;
+
+pub struct RawSocket {
+    pub fd: i64,
+}
+
+/// One received raw packet: the bytes (including the IP header on a
+/// SOCK_RAW receive) + the sender address.
+pub struct RawRecv {
+    pub data: string,
+    pub n: i32,
+    pub from: *SocketAddr,
+}
+
+impl RawSocket {
+    /// Open a raw IPv4 socket for `proto` (e.g. IPPROTO_ICMP). On a
+    /// SOCK_RAW receive the kernel hands back the full IP datagram,
+    /// IP header included.
+    pub fn open_ip(proto: i32) -> !*RawSocket {
+        let s: !*Socket = Socket::open(AF_V4, SOCK_RAW, proto);
+        if !s.ok { return err("raw: ".concat(s.err)); }
+        let r: *RawSocket = malloc(sizeof(RawSocket)) as *RawSocket;
+        r.fd = s.val.fd;
+        free(s.val as *void);
+        return ok(r);
+    }
+
+    /// Open a raw ICMP socket (the common case — ping / traceroute).
+    pub fn open_icmp() -> !*RawSocket {
+        return RawSocket::open_ip(IPPROTO_ICMP);
+    }
+
+    /// Send `n` bytes of `buf` to `dst` (the IP layer adds the header).
+    pub fn send_to(self: *RawSocket, buf: *void, n: i32, dst: *SocketAddr) -> !i32 {
+        let fam: i32 = if dst.ip.is_v6() { AF_V6 } else { AF_V4 };
+        let sent: i64 = gnet_sendto(self.fd, buf, n, fam,
+                                    dst.ip.v4 as i64, dst.ip.v6_hi, dst.ip.v6_lo, dst.port);
+        if sent < 0 { return err("raw: send_to: ".concat(gnet_last_error())); }
+        return ok(sent as i32);
+    }
+
+    /// Receive one packet into a caller-owned buffer. Returns the byte
+    /// count + sender. Blocking; set a timeout with `set_timeout_ms`.
+    pub fn recv_from(self: *RawSocket, buf: *void, max: i32) -> !*RawRecv {
+        let mut fam: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut port: i32 = 0;
+        let n: i64 = gnet_recvfrom(self.fd, buf, max, &fam, &v4, &hi, &lo, &port);
+        if n < 0 { return err("raw: recv_from: ".concat(gnet_last_error())); }
+        let ip: *IpAddr = if fam == AF_V6 { IpAddr::v6(hi, lo) }
+                          else { _raw_v4(v4) };
+        let r: *RawRecv = malloc(sizeof(RawRecv)) as *RawRecv;
+        r.n = n as i32;
+        r.data = "";
+        r.from = SocketAddr::new(ip, port);
+        return ok(r);
+    }
+
+    /// Outgoing TTL (hop limit) — used by traceroute to probe each hop.
+    pub fn set_ttl(self: *RawSocket, ttl: i32) -> !i32 {
+        if gnet_setsockopt_int(self.fd, gnet_const(OPT_IPPROTO_IP), gnet_const(OPT_IP_TTL), ttl) < 0 {
+            return err("raw: set_ttl: ".concat(gnet_last_error()));
+        }
+        return ok(0);
+    }
+
+    /// Receive timeout in ms (`0` disables). Needed so ping/traceroute
+    /// don't block forever on a dropped reply.
+    pub fn set_timeout_ms(self: *RawSocket, ms: i32) -> !i32 {
+        if gnet_set_timeout(self.fd, ms) < 0 {
+            return err("raw: set_timeout: ".concat(gnet_last_error()));
+        }
+        return ok(0);
+    }
+
+    pub fn close(self: *RawSocket) {
+        gnet_close(self.fd);
+        free(self as *void);
+    }
+}
+
+fn _raw_v4(v4: i64) -> *IpAddr {
+    let w: i32 = v4 as i32;
+    return IpAddr::v4((w >> 24) & 255, (w >> 16) & 255, (w >> 8) & 255, w & 255);
+}

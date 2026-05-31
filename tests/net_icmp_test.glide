@@ -1,0 +1,63 @@
+// ICMP echo logic — the pure-Glide checksum + header builder are validated
+// deterministically (no socket / privilege needed). The actual ping opens a
+// raw socket, which needs root/admin, so it's only checked for "returns a
+// result, never crashes".
+
+import stdlib::testing::*;
+import stdlib::net::icmp::*;
+import stdlib::net::raw::*;
+
+fn test_checksum_known_vector() -> i32 {
+    // echo request, id=1, seq=1, checksum field zero, no payload:
+    //   08 00 00 00 00 01 00 01
+    // words: 0x0800 + 0x0000 + 0x0001 + 0x0001 = 0x0802 -> ~ = 0xF7FD
+    let buf: *u8 = malloc(8) as *u8;
+    buf[0] = 8 as u8;  buf[1] = 0 as u8;
+    buf[2] = 0 as u8;  buf[3] = 0 as u8;
+    buf[4] = 0 as u8;  buf[5] = 1 as u8;
+    buf[6] = 0 as u8;  buf[7] = 1 as u8;
+    let ck: i32 = icmp_checksum(buf, 8);
+    assert_eq!(ck, 63485);   // 0xF7FD
+    free(buf as *void);
+    return 0;
+}
+
+fn test_build_echo_header() -> i32 {
+    let buf: *u8 = malloc(64) as *u8;
+    let n: i32 = icmp_build_echo(buf, 4321, 7, 32);
+    assert_eq!(n, 40);                       // 8 header + 32 payload
+    assert_eq!(buf[0] as i32, 8);            // echo request
+    assert_eq!(buf[1] as i32, 0);            // code
+    // id 4321 = 0x10E1
+    assert_eq!(buf[4] as i32, 16);           // 0x10
+    assert_eq!(buf[5] as i32, 225);          // 0xE1
+    // seq 7
+    assert_eq!(buf[6] as i32, 0);
+    assert_eq!(buf[7] as i32, 7);
+    free(buf as *void);
+    return 0;
+}
+
+fn test_build_echo_checksum_is_valid() -> i32 {
+    // The defining property: a packet with its checksum filled in checksums
+    // back to 0.
+    let buf: *u8 = malloc(64) as *u8;
+    let n: i32 = icmp_build_echo(buf, 1234, 99, 16);
+    let verify: i32 = icmp_checksum(buf, n);
+    assert_eq!(verify, 0);
+    free(buf as *void);
+    return 0;
+}
+
+fn test_ping_returns_a_result() -> i32 {
+    // Opening a raw socket needs privilege; on an unprivileged box this
+    // returns err cleanly (no panic). Either outcome is acceptable here —
+    // we only assert it doesn't crash and surfaces a real result.
+    let r: !i64 = ping("127.0.0.1", 500);
+    if r.ok {
+        assert!(r.val >= 0);
+    } else {
+        assert!(r.err.len() > 0);   // a clean error message, not a crash
+    }
+    return 0;
+}
