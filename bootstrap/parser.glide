@@ -1248,10 +1248,12 @@ fn parse_match(p: *Parser) -> *Stmt {
         if p.current.kind == TOK_IDENT {
             let first: string = p.current.lexeme;
             p.advance();
-            if p.eat_op("::") {
+            variant = first;
+            // Consume module / type qualifier segments; the LAST `::` segment
+            // is the variant. So `foo::Color::Red` and `Color::Red` and bare
+            // `Red` all dispatch on `Red` (match keys on the variant name).
+            while p.eat_op("::") {
                 variant = p.expect_ident();
-            } else {
-                variant = first;
             }
             if p.eat_op("(") {
                 while !p.at_op(")") && !p.at_eof() {
@@ -1299,10 +1301,12 @@ fn parse_match_expr(p: *Parser) -> *Expr {
         if p.current.kind == TOK_IDENT {
             let first: string = p.current.lexeme;
             p.advance();
-            if p.eat_op("::") {
+            variant = first;
+            // Consume module / type qualifier segments; the LAST `::` segment
+            // is the variant. So `foo::Color::Red` and `Color::Red` and bare
+            // `Red` all dispatch on `Red` (match keys on the variant name).
+            while p.eat_op("::") {
                 variant = p.expect_ident();
-            } else {
-                variant = first;
             }
             if p.eat_op("(") {
                 while !p.at_op(")") && !p.at_eof() {
