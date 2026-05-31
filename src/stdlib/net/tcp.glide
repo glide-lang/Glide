@@ -132,8 +132,25 @@ impl TcpStream {
         let _r: i64 = gnet_set_timeout(self.fd, ms);
     }
 
-    /// Close the socket and free the struct. Pair with `defer`.
-    pub fn close(self: *TcpStream) {
+    // `close` is the Stream trait method (impl below).
+}
+
+/// TcpStream is a Stream, so ws / http can hold one `*dyn Stream` and drop
+/// the TCP-vs-TLS branch. read_bytes/write_bytes go through the reactor
+/// wrappers (blocking on this client fd; parking when used on a
+/// non-blocking fd inside a coroutine).
+impl Stream for TcpStream {
+    fn read_bytes(self: *TcpStream, buf: *u8, max: i32) -> !i32 {
+        let n: i64 = gnet_read_async(self.fd, buf as *void, max);
+        if n < 0 { return err("tcp: read_bytes: ".concat(gnet_last_error())); }
+        return ok(n as i32);
+    }
+    fn write_bytes(self: *TcpStream, buf: *u8, n: i32) -> !i32 {
+        let w: i64 = gnet_write_async(self.fd, buf as *void, n);
+        if w < 0 { return err("tcp: write_bytes: ".concat(gnet_last_error())); }
+        return ok(w as i32);
+    }
+    fn close(self: *TcpStream) {
         gnet_close(self.fd);
         free(self as *void);
     }

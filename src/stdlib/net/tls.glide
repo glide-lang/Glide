@@ -29,6 +29,7 @@
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
 import stdlib::net::tcp::*;
+import stdlib::net::sys::*;   // Stream trait — TlsStream is a Stream
 
 c_raw! {
     #ifndef GLIDE_NET_TLS_HELPERS_DEFINED
@@ -919,46 +920,9 @@ impl TlsStream {
         return ok(n);
     }
 
-    /// Write `n` raw bytes from `buf`. Use this for binary protocols
-    /// where the wire content can have embedded NULs (HTTP/2, etc.) —
-    /// `write_all` reads its argument via strlen and truncates there.
-    /// SSL_write handles partial writes internally for sub-record
-    /// payloads, so a single call covers the buffer.
-    ///
-    /// ```glide
-    /// let frame: *ByteBuffer = ByteBuffer::new();
-    /// defer frame.free();
-    /// frame.push_str("\x00\x00\x1e\x04\x00\x00\x00\x00\x00");   // h2 SETTINGS
-    /// stream.write_bytes(frame.data, frame.len);
-    /// ```
-    pub fn write_bytes(self: *TlsStream, buf: *u8, n: i32) -> !i32 {
-        let raw_n: i64 = __glide_tls_write_raw(self.handle, buf as *void, n);
-        if raw_n <= 0 { return err("tls: write_bytes failed"); }
-        return ok(raw_n as i32);
-    }
-
-    /// Binary-safe read: pulls up to `max` bytes into the caller's
-    /// buffer and returns the actual byte count. The string-typed
-    /// `read()` truncates at the first NUL because Glide string is a
-    /// cstring; for HTTP/2 / TLS records / any binary protocol with
-    /// length-prefix bytes, use this entry instead.
-    ///
-    /// Returns:
-    ///   ok(n>0) — bytes received
-    ///   ok(0)   — peer closed cleanly (TLS close_notify)
-    ///   err(_)  — error
-    ///
-    /// ```glide
-    /// let buf: *u8 = malloc(8192) as *u8;
-    /// defer free(buf as *void);
-    /// let r: !i32 = stream.read_bytes(buf, 8192);
-    /// if r.ok && r.val > 0 { /* process buf[0..r.val] */ }
-    /// ```
-    pub fn read_bytes(self: *TlsStream, buf: *u8, max: i32) -> !i32 {
-        let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
-        if n < 0 { return err("tls: read_bytes failed"); }
-        return ok(n as i32);
-    }
+    // read_bytes / write_bytes are the `Stream` trait methods (impl below),
+    // not inherent — a type can't emit the same method symbol twice. They
+    // stay callable as `stream.read_bytes(...)` / `.write_bytes(...)`.
 
     /// Read up to `max` bytes. ok(0) means peer closed cleanly.
     ///
@@ -1039,13 +1003,26 @@ impl TlsStream {
         __glide_tls_set_timeout(self.handle, ms);
     }
 
-    /// Close the TLS session and underlying socket. Pair with `defer`.
-    ///
-    /// ```glide
-    /// let r: !*TlsStream = TlsStream::connect("example.com", 443, cfg);
-    /// if r.ok { defer r.val.close(); /* ... */ }
-    /// ```
-    pub fn close(self: *TlsStream) {
+    // `close` is the Stream trait method (impl below).
+}
+
+/// TlsStream is a Stream — lets ws / http / h2 dispatch every transport
+/// through one `*dyn Stream` instead of an `is_tls` branch. The fd-surrender
+/// seam (`attach`) is unchanged; these just delegate to the SSL_* layer.
+/// read_bytes/write_bytes are binary-safe (unlike the string `read`/`write`,
+/// which truncate at NUL) — h2 / TLS records rely on that.
+impl Stream for TlsStream {
+    fn read_bytes(self: *TlsStream, buf: *u8, max: i32) -> !i32 {
+        let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
+        if n < 0 { return err("tls: read_bytes failed"); }
+        return ok(n as i32);
+    }
+    fn write_bytes(self: *TlsStream, buf: *u8, n: i32) -> !i32 {
+        let raw_n: i64 = __glide_tls_write_raw(self.handle, buf as *void, n);
+        if raw_n <= 0 { return err("tls: write_bytes failed"); }
+        return ok(raw_n as i32);
+    }
+    fn close(self: *TlsStream) {
         __glide_tls_close(self.handle);
         free(self as *void);
     }
