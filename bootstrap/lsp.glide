@@ -7751,12 +7751,28 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     // not yet listed.
     let imps2: *HashMap<ImportInfo> = current_imports(doc.text);
     let insert_line2: i32 = find_import_insertion_pos(doc.text);
+    // The on-disk path of the open buffer. Top-level decls parsed from the
+    // user's own text carry this as their `origin`; anything else in
+    // doc.stmts came from a transitively-loaded import and is subject to the
+    // pub-visibility gate below.
+    let _compl_doc_path: string = uri_to_path(uri);
     if doc.stmts != null {
         for let i: i32 = 0; i < doc.stmts.len(); i++ {
             let s: Stmt = doc.stmts.get(i);
             if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
                && s.kind != ST_CONST && s.kind != ST_MACRO_DEF { continue; }
             if s.name == null { continue; }
+            // Visibility gate for transitively-loaded imports: doc.stmts holds
+            // EVERY decl pulled in by the file's `import`s (origin = the
+            // imported file's path), not just the user's own. A non-`pub` decl
+            // from another file is private and the compiler rejects calling it
+            // ("name not in scope"), so it must NOT be offered as a bare-ident
+            // completion. Same-file decls (origin == this doc's path, or
+            // null/empty) stay visible regardless of `pub` — local privates
+            // need no import. Mirrors the project-index gate in
+            // `_index_one_module` (`if !s.is_pub ... continue`).
+            if !s.is_pub && s.origin != null && !s.origin.eq("")
+               && !s.origin.eq(_compl_doc_path) { continue; }
             // Hide compiler-internal symbols (`__glide_*`, `__rt_*`, leading
             // `_` privates). Users never call these directly; surfacing them
             // bloats the completion list with C-runtime plumbing.
