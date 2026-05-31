@@ -340,7 +340,7 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
             if !_pkg_field_known(a.str_val) {
                 pass_diag(e.line, e.column, 1, "unknown-pkg-field",
                     "unknown pkg field `".concat(a.str_val)
-                    .concat("`; valid: name, version, author, license, description, repository"));
+                    .concat("`; valid: name, version, author, license, description, repository, bin, target"));
             }
             e.kind = EX_STRING;
             e.str_val = _pkg_field(m, a.str_val);
@@ -419,7 +419,8 @@ fn _cfg_cond_known(c: string) -> bool {
 
 fn _pkg_field_known(field: string) -> bool {
     return field.eq("name") || field.eq("version") || field.eq("author")
-        || field.eq("license") || field.eq("description") || field.eq("repository");
+        || field.eq("license") || field.eq("description") || field.eq("repository")
+        || field.eq("bin") || field.eq("target");
 }
 
 fn _pkg_field(m: *Manifest, field: string) -> string {
@@ -430,6 +431,8 @@ fn _pkg_field(m: *Manifest, field: string) -> string {
     if field.eq("license")     { return m.license; }
     if field.eq("description") { return m.description; }
     if field.eq("repository")  { return m.repository; }
+    if field.eq("bin")         { return m.bin; }
+    if field.eq("target")      { return m.target; }
     return "";
 }
 

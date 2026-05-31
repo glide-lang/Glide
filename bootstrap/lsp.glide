@@ -324,6 +324,7 @@ fn handle_initialize(req: *JsonValue) {
     let trig: *JsonValue = json_array();
     json_arr_push(trig, json_string("."));
     json_arr_push(trig, json_string(":"));
+    json_arr_push(trig, json_string("\""));   // `pkg!("` -> manifest-field completion
     json_obj_set(comp, "triggerCharacters", trig);
     json_obj_set(caps, "completionProvider", comp);
     // Signature help: param hints while typing a call. `(` opens the
@@ -7257,6 +7258,8 @@ fn _push_pkg_fields(items: *JsonValue, doc_path: string) {
     _push_pkg_field(items, "license", m);
     _push_pkg_field(items, "description", m);
     _push_pkg_field(items, "repository", m);
+    _push_pkg_field(items, "bin", m);
+    _push_pkg_field(items, "target", m);
 }
 
 fn handle_completion(req: *JsonValue, state: *LspState) {
