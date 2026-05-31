@@ -921,6 +921,101 @@ impl Typer {
         return self._strip_mod_prefix(rest);
     }
 
+    // Canonicalize a module-qualified type annotation to its bare global type,
+    // in place. Glide types are not namespaced: `foo::Bar` (parsed as a
+    // TY_ASSOC projection `Bar of foo`) names the SAME global struct as bare
+    // `Bar`, but the parser keeps the module prefix, so type_eq and codegen
+    // would treat them as distinct (and codegen lowers the stray TY_ASSOC to
+    // `void`). Collapse `module::Bar` -> bare `Bar` while LEAVING a genuine
+    // associated-type projection (`Self::Item`, `T::Item`, head not a module)
+    // untouched. Recurses through pointer/borrow/option/result wrappers and
+    // generic/tuple/fnptr element lists so `Vector<foo::Bar>`, `?foo::Bar`,
+    // `(foo::A, foo::B)`, `fn(foo::A) -> foo::B` are all normalized.
+    fn _canon_type(self: *Typer, ty: *Type) {
+        if ty == null { return; }
+        if ty.kind == TY_ASSOC {
+            if ty.inner != null && ty.inner.kind == TY_NAMED
+               && self._is_imported_module(ty.inner.name) {
+                ty.kind = TY_NAMED;
+                ty.inner = null;
+                return;
+            }
+            self._canon_type(ty.inner);
+            return;
+        }
+        if ty.kind == TY_NAMED {
+            if ty.name != null && ty.name.index_of("::") >= 0 {
+                ty.name = self._strip_mod_prefix(ty.name);
+            }
+            return;
+        }
+        if ty.inner != null { self._canon_type(ty.inner); }
+        if ty.fnptr_ret != null { self._canon_type(ty.fnptr_ret); }
+        if ty.args != null {
+            for let i: i32 = 0; i < ty.args.len(); i++ {
+                let a: Type = ty.args.get(i);
+                self._canon_type(&a);
+                ty.args.set(i, a);
+            }
+        }
+    }
+
+    // Canonicalize every type annotation on a fn signature (params + return).
+    fn _canon_fn_sig(self: *Typer, s: *Stmt) {
+        if s.fn_params != null {
+            for let i: i32 = 0; i < s.fn_params.len(); i++ {
+                let p: Param = s.fn_params.get(i);
+                if p.ty != null { self._canon_type(p.ty); }
+            }
+        }
+        if s.fn_ret_ty != null { self._canon_type(s.fn_ret_ty); }
+    }
+
+    // Walk top-level decls and canonicalize qualified type annotations in the
+    // AST before registration / checking / codegen all read them. Must run
+    // with `current_origin` set per-stmt so `_is_imported_module` can resolve
+    // origin-scoped imports.
+    fn _canon_decls(self: *Typer, program: *Vector<Stmt>) {
+        for let i: i32 = 0; i < program.len(); i++ {
+            let s: Stmt = program.get(i);
+            let saved: string = self.current_origin;
+            self.current_origin = s.origin;
+            if s.kind == ST_FN { self._canon_fn_sig(&s); }
+            else if s.kind == ST_STRUCT {
+                if s.struct_fields != null {
+                    for let j: i32 = 0; j < s.struct_fields.len(); j++ {
+                        let f: Field = s.struct_fields.get(j);
+                        if f.ty != null { self._canon_type(f.ty); }
+                    }
+                }
+            }
+            else if s.kind == ST_ENUM {
+                if s.enum_variants != null {
+                    for let j: i32 = 0; j < s.enum_variants.len(); j++ {
+                        let ev: EnumVariant = s.enum_variants.get(j);
+                        if ev.fields != null {
+                            for let k: i32 = 0; k < ev.fields.len(); k++ {
+                                let a: Type = ev.fields.get(k);
+                                self._canon_type(&a);
+                                ev.fields.set(k, a);
+                            }
+                        }
+                    }
+                }
+            }
+            else if s.kind == ST_IMPL {
+                if s.impl_target != null { self._canon_type(s.impl_target); }
+                if s.impl_methods != null {
+                    for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                        let m: Stmt = s.impl_methods.get(j);
+                        self._canon_fn_sig(&m);
+                    }
+                }
+            }
+            self.current_origin = saved;
+        }
+    }
+
     pub fn free(self: *Typer) {
         self.fns.free();
         self.structs.free();
@@ -1859,6 +1954,7 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
 // ---- main check ----------------------------------------------------------
 
 pub fn check_program(t: *Typer, program: *Vector<Stmt>) {
+    t._canon_decls(program);
     pre_register(t, program);
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
@@ -2317,6 +2413,9 @@ fn check_stmt(t: *Typer, s: *Stmt) {
 }
 
 fn check_let_or_const(t: *Typer, s: *Stmt) {
+    // Canonicalize a qualified declared type (`let b: foo::Bar = ...`) before
+    // it is compared against the initializer or recorded in scope.
+    if s.let_ty != null { t._canon_type(s.let_ty); }
     // Tuple destructuring: `let (a, b, c) = expr;`. Infer the value's tuple
     // type and bind each name to its element type. Falls back to permissive
     // `__unknown__` bindings when the element type can't be resolved.
@@ -3324,6 +3423,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
 
     if e.kind == EX_CAST {
         let _u6: *Type = infer_expr(t, e.lhs);
+        if e.cast_to != null { t._canon_type(e.cast_to); }
         return e.cast_to;
     }
 

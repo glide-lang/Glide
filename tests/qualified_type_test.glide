@@ -1,0 +1,67 @@
+// Module-qualified type names (`http::HttpResponse`, `time::Duration`) name
+// the SAME global type as the bare form — Glide types are not namespaced; the
+// `http::` is a path qualifier. Guards the typer canonicalization (typer.glide
+// `_canon_type` / `_canon_decls`) that strips an imported-module prefix from a
+// type annotation so it survives type-checking AND codegen. Pre-fix, a
+// qualified annotation parsed as a TY_ASSOC projection and was either rejected
+// ("return type mismatch: expected http::HttpResponse, got HttpResponse") or
+// silently miscompiled to a `void` field/param/payload.
+
+import stdlib::testing::*;
+import stdlib::http;
+import stdlib::time;
+
+// qualified RETURN type + qualified `Type::method` chain in the body
+fn build(code: i32) -> http::HttpResponse {
+    return http::HttpResponse::with_status(code).body("hi");
+}
+
+// qualified POINTER param + field access through it
+fn read_status(r: *http::HttpResponse) -> i32 {
+    return r.status;
+}
+
+// qualified VALUE param
+fn read_body(r: http::HttpResponse) -> string {
+    return r.body;
+}
+
+// qualified type inside Option / Result wrappers (Duration: a plain value type)
+fn maybe(secs: i64) -> ?time::Duration {
+    if secs == 0 { return none(); }
+    return some(time::Duration::from_secs(secs));
+}
+
+fn tryit(secs: i64) -> !time::Duration {
+    return ok(time::Duration::from_secs(secs));
+}
+
+fn test_qualified_return_and_params() -> i32 {
+    let r: http::HttpResponse = build(201);   // qualified `let` annotation
+    assert_eq!(read_status(&r), 201);
+    assert_str_eq!(read_body(r), "hi");
+    return 0;
+}
+
+fn test_qualified_option_and_result() -> i32 {
+    let m: ?time::Duration = maybe(7);
+    assert!(m.has);
+    assert_eq!(m.val.as_secs(), 7);
+
+    let n: ?time::Duration = maybe(0);
+    assert_not!(n.has);
+
+    let t: !time::Duration = tryit(9);
+    assert!(t.ok);
+    assert_eq!(t.val.as_secs(), 9);
+    return 0;
+}
+
+fn test_qualified_in_container() -> i32 {
+    let mut v = Vector::new();
+    v.push(http::HttpResponse::with_status(200));
+    v.push(http::HttpResponse::with_status(204));
+    assert_eq!(v.get(0).status, 200);
+    assert_eq!(v.get(1).status, 204);
+    return 0;
+}
