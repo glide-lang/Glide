@@ -88,7 +88,10 @@ int __glide_reactor_active(void) {
 #if defined(GLIDE_REACTOR_USE_EPOLL) || defined(GLIDE_REACTOR_USE_KQUEUE)
     return 1;
 #elif defined(GLIDE_REACTOR_USE_IOCP)
-    return 1;
+    /* IOCP overlapped path isn't stable yet (parked reads never complete),
+       so report "no reactor" — http_listen then runs inline serially with
+       the blocking sync I/O selected by __GLIDE_IOCP_SYNC_FALLBACK. */
+    return 0;
 #else
     return 0;
 #endif
@@ -718,12 +721,15 @@ extern int  tcp_read(int fd, void* buf, int max);
 extern int  tcp_write(int fd, void* buf, int n);
 extern int  tcp_writev2(int fd, void* buf1, int n1, void* buf2, int n2);
 
-/* Debug toggle: set to 1 to bypass IOCP and fall back to sync I/O for
-   each op. Used to isolate IOCP-specific hangs - flip to 1 when an
-   IOCP-specific race is suspected to confirm whether the bug is in the
-   async path. Set to 0 in shipped builds so http_listen actually parks
-   coros on completion instead of pinning workers on blocking recv. */
-#define __GLIDE_IOCP_SYNC_FALLBACK 0
+/* IOCP async (WSARecv/WSASend + parked coro) is not yet stable: a parked
+   read never completes, so an http_listen server accepts the connection but
+   never sends a response. Until the overlapped path is fixed, fall back to
+   blocking sync recv/send for every op and pair this with
+   __glide_reactor_active() returning 0 on Windows, so http_listen runs the
+   accept loop inline serially instead of spawning workers that would block on
+   the sync recv. Flip back to 0 (and reactor_active to 1) once the IOCP path
+   is verified end-to-end. */
+#define __GLIDE_IOCP_SYNC_FALLBACK 1
 #define __GLIDE_IOCP_TRACE 0
 static void __glide_iocp_trace(const char* tag, int fd, int n) {
 #if __GLIDE_IOCP_TRACE
