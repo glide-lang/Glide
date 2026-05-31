@@ -5558,6 +5558,20 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
     // re-exported by the base module and `log::info!(...)` is a valid
     // qualified macro call, so `log::inf` should offer `info!`.
     let pm_mod: string = path.concat("_macros");
+    // When some module's FULL path equals `path` (e.g. the user typed
+    // `foo::` and a top-level `foo` module exists), that's an unambiguous
+    // hit, so only its members belong here. The short-leaf fallback below
+    // (`leaf.eq(path)`) must then be suppressed, or an unrelated module
+    // whose last segment happens to be `foo` (e.g. `x::foo`) would leak
+    // its symbols into `foo::` completion, and those don't resolve as
+    // `foo::sym`. The leaf form is still allowed when no exact module
+    // matches, so stdlib short qualifiers (`ip::` -> `stdlib::net::ip`)
+    // keep working.
+    let mut exact_exists: bool = false;
+    for let e: i32 = 0; e < n; e++ {
+        let es: ImportableSym = idx.get(e);
+        if es.module.eq(path) { exact_exists = true; break; }
+    }
     for let i: i32 = 0; i < n; i++ {
         let sym: ImportableSym = idx.get(i);
         if sym.kind == SYMKIND_MODULE { continue; }
@@ -5571,7 +5585,8 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
         }
         let mut leaf: string = m;
         if last_cc >= 0 { leaf = m.substring(last_cc + 2, mlen); }
-        let own: bool = m.eq(path) || leaf.eq(path);
+        let mut own: bool = m.eq(path);
+        if !exact_exists && leaf.eq(path) { own = true; }
         let pm_reexport: bool = sym.kind == SYMKIND_PROC_MACRO
                                 && (m.eq(pm_mod) || leaf.eq(pm_mod));
         if !own && !pm_reexport { continue; }
