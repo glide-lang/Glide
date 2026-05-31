@@ -3970,14 +3970,64 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
     }
 
     // Impl method: hover on a method name in either the decl site or a call
-    // (`v.push(x)` or `Type::push(...)`). First match across all impl blocks.
+    // (`v.push(x)` or `Type::push(...)`). Pin the owning type FIRST — exactly
+    // like goto-def does — so a `Type::method` qualifier or a `recv.method`
+    // receiver selects the right impl when several types share a method name
+    // (e.g. user `Point::new` vs stdlib `Pair::new`). Only fall back to the
+    // first-match-anywhere scan when neither the qualifier, the receiver, nor
+    // the enclosing `impl` block at a decl site can name the owner.
     if content.eq("") {
+        let mut hm: *Stmt = null;
+        let mut howner: string = "";
+        // (a) `Type::method(` — explicit qualifier before the cursor.
+        let hq: string = path_qualifier_before(doc.text, line0, col0);
+        if !hq.eq("") {
+            let cand: *Stmt = find_method_in_impl(doc.stmts, hq, word);
+            if cand != null { hm = cand; howner = hq; }
+        }
+        // (b) `recv.method(` — resolve the receiver local's type.
+        if hm == null {
+            let hmv: string = member_qualifier_before(doc.text, line0, col0);
+            if !hmv.eq("") {
+                let hvt: string = lookup_local_type(doc.stmts, line0, hmv, uri_to_path(uri));
+                if !hvt.eq("") {
+                    let cand2: *Stmt = find_method_in_impl(doc.stmts, hvt, word);
+                    if cand2 != null { hm = cand2; howner = hvt; }
+                }
+            }
+        }
+        // (c) Decl site: the cursor sits on a method name inside an `impl X`
+        //     block in this file. Prefer that block's owner over any earlier
+        //     impl that happens to declare a method with the same name.
+        if hm == null && doc.stmts != null {
+            let hpath: string = uri_to_path(uri);
+            for let ii: i32 = 0; ii < doc.stmts.len(); ii++ {
+                let si: Stmt = doc.stmts.get(ii);
+                if si.kind != ST_IMPL || si.impl_methods == null { continue; }
+                if si.impl_target == null { continue; }
+                let mut tn: string = "";
+                if si.impl_target.kind == TY_NAMED { tn = si.impl_target.name; }
+                if si.impl_target.kind == TY_GENERIC { tn = si.impl_target.name; }
+                if tn.eq("") { continue; }
+                for let jj: i32 = 0; jj < si.impl_methods.len(); jj++ {
+                    let mm: Stmt = si.impl_methods.get(jj);
+                    if mm.kind != ST_FN || !mm.name.eq(word) { continue; }
+                    if (mm.line - 1) != line0 { continue; }
+                    if mm.origin != null && !mm.origin.eq("")
+                       && !hpath.eq("") && !mm.origin.eq(hpath) { continue; }
+                    let cand3: *Stmt = find_method_in_impl(doc.stmts, tn, word);
+                    if cand3 != null { hm = cand3; howner = tn; }
+                }
+                if hm != null { break; }
+            }
+        }
         let mhit: ImplMethodHit = find_method_anywhere(doc.stmts, word);
-        if mhit.method != null {
-            let m: *Stmt = mhit.method;
+        if hm == null && mhit.method != null { hm = mhit.method; howner = mhit.owner; }
+        if hm != null {
+            let m: *Stmt = hm;
             let mut sig: string = fn_signature(m);
-            if !mhit.owner.eq("") {
-                sig = "impl ".concat(mhit.owner).concat("\n").concat(sig);
+            if !howner.eq("") {
+                sig = "impl ".concat(howner).concat("\n").concat(sig);
             }
             content = "```glide\n".concat(sig).concat("\n```");
             if m.doc_comment != null && !m.doc_comment.eq("") {
