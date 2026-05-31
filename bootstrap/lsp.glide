@@ -7967,9 +7967,15 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         }
     }
 
-    // 2b. Builtin macros.
+    // 2b. Builtin compiler macros — recognized by the expander/codegen, so
+    // they're always in scope with no import. Surfaced as `name!`.
     let builtins: *Vector<string> = Vector::new();
     builtins.push("println!"); builtins.push("print!"); builtins.push("format!");
+    builtins.push("pkg!"); builtins.push("cfg!"); builtins.push("env!");
+    builtins.push("panic!"); builtins.push("todo!"); builtins.push("unimplemented!");
+    builtins.push("unreachable!"); builtins.push("dbg!"); builtins.push("assert!");
+    builtins.push("file!"); builtins.push("line!"); builtins.push("column!");
+    builtins.push("function!");
     for let i: i32 = 0; i < builtins.len(); i++ {
         let bn: string = builtins.get(i);
         if seen.contains(bn) { continue; }
@@ -7978,6 +7984,19 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         if bn.eq("println!") { bdetail = "println!(args...) — print + newline"; }
         else if bn.eq("print!") { bdetail = "print!(args...) — print, no newline"; }
         else if bn.eq("format!") { bdetail = "format!(\"fmt\", args...) — formatted string"; }
+        else if bn.eq("pkg!") { bdetail = "pkg!(\"field\") — read a glide.glide manifest field (name/version/bin/target/…)"; }
+        else if bn.eq("cfg!") { bdetail = "cfg!(\"key\") — compile-time config / target predicate"; }
+        else if bn.eq("env!") { bdetail = "env!(\"VAR\") — value of an environment variable at compile time"; }
+        else if bn.eq("panic!") { bdetail = "panic!(\"msg\") — abort with a message"; }
+        else if bn.eq("todo!") { bdetail = "todo!() — placeholder that panics \"not yet implemented\""; }
+        else if bn.eq("unimplemented!") { bdetail = "unimplemented!() — panics: not implemented"; }
+        else if bn.eq("unreachable!") { bdetail = "unreachable!() — marks an impossible branch"; }
+        else if bn.eq("dbg!") { bdetail = "dbg!(expr) — print expr + its value, return the value"; }
+        else if bn.eq("assert!") { bdetail = "assert!(cond) — panic if cond is false"; }
+        else if bn.eq("file!") { bdetail = "file!() — current source file path"; }
+        else if bn.eq("line!") { bdetail = "line!() — current source line number"; }
+        else if bn.eq("column!") { bdetail = "column!() — current source column"; }
+        else if bn.eq("function!") { bdetail = "function!() — enclosing function name"; }
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
 
