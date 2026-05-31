@@ -279,40 +279,42 @@ pub fn load_builtins_dir_with_cache(stmts: *Vector<Stmt>, dir: string, loaded: *
 // prefixes. Each prefix `a::b::c` becomes the candidate `a/b/c.glide`.
 // Type-prefix paths like `Vector::new` are also collected; loader will
 // skip those (the file probe fails).
+// A multi-segment prefix `a::b::c` becomes the candidate file `a/b/c.glide`.
+// Single-segment prefixes (Vector, HashMap, MyStruct) are type-method calls,
+// not modules, so they are skipped (the file probe would fail anyway).
+fn _auto_load_prefix(prefix: string, out: *Vector<string>, seen: *HashMap<bool>) {
+    if prefix == null || prefix.eq("") || seen.contains(prefix) { return; }
+    let mut multi: bool = false;
+    for let k: i32 = 0; k + 1 < prefix.len(); k++ {
+        if prefix.at(k).to_int() == 58 && prefix.at(k + 1).to_int() == 58 { multi = true; break; }
+    }
+    seen.insert(prefix, true);
+    if !multi { return; }
+    let mut path: string = "";
+    let n: i32 = prefix.len();
+    let mut i: i32 = 0;
+    while i < n {
+        if i + 1 < n && prefix.at(i).to_int() == 58 && prefix.at(i + 1).to_int() == 58 {
+            path = path.concat("/");
+            i = i + 2;
+        } else {
+            path = path.concat(prefix.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    path = path.concat(".glide");
+    out.push(path);
+}
+
 pub fn collect_path_files_in_expr(e: *Expr, out: *Vector<string>, seen: *HashMap<bool>) {
     if e == null { return; }
-    if e.kind == EX_PATH {
-        let prefix: string = e.str_val;
-        if prefix != null && !prefix.eq("") && !seen.contains(prefix) {
-            // Only auto-load multi-segment paths. Single-segment prefixes
-            // (Vector, HashMap, MyStruct) are type-method calls handled by
-            // the existing dispatch; auto-loading them would either fail
-            // (no `Vector.glide`) or hit case-insensitive FS bugs.
-            let mut multi: bool = false;
-            for let k: i32 = 0; k + 1 < prefix.len(); k++ {
-                if prefix.at(k).to_int() == 58 && prefix.at(k + 1).to_int() == 58 {
-                    multi = true;
-                    break;
-                }
-            }
-            seen.insert(prefix, true);
-            if multi {
-                let mut path: string = "";
-                let n: i32 = prefix.len();
-                let mut i: i32 = 0;
-                while i < n {
-                    if i + 1 < n && prefix.at(i).to_int() == 58 && prefix.at(i + 1).to_int() == 58 {
-                        path = path.concat("/");
-                        i = i + 2;
-                    } else {
-                        path = path.concat(prefix.substring(i, i + 1));
-                        i = i + 1;
-                    }
-                }
-                path = path.concat(".glide");
-                out.push(path);
-            }
-        }
+    if e.kind == EX_PATH { _auto_load_prefix(e.str_val, out, seen); }
+    // A module-qualified struct literal (`sop::al::Alelo { … }`) keeps its
+    // qualifier in `e.field`; auto-load that module too, else the struct type
+    // is undeclared in the generated C (a qualified CALL already does this
+    // via its EX_PATH).
+    if e.kind == EX_STRUCT_LIT && e.field != null && !e.field.eq("") {
+        _auto_load_prefix(e.field, out, seen);
     }
     if e.lhs != null { collect_path_files_in_expr(e.lhs, out, seen); }
     if e.rhs != null { collect_path_files_in_expr(e.rhs, out, seen); }
@@ -562,6 +564,8 @@ pub fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                 let f: Field = s.struct_fields.get(k);
                 if f.is_pub {
                     t.field_pub.insert(s.name.concat("::").concat(f.name), true);
+                } else {
+                    t.struct_has_private.insert(s.name, true);
                 }
             }
         }

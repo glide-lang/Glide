@@ -2265,6 +2265,29 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 me.macro_owner = prefix;
                 return me;
             }
+            // Module-qualified struct literal `mod::Struct { field: v, ... }`.
+            // The trailing segment is the struct name; the qualifier resolves
+            // like any imported reference. Mirrors the bare struct-literal path
+            // below so `al2::Alelo2 { ... }` parses (needs `al2` imported).
+            if p.at_op("{") && starts_uppercase(last) && !p.no_struct_lit {
+                p.advance();
+                let qnames: *Vector<string> = Vector::new();
+                let qvalues: *Vector<Expr> = Vector::new();
+                while !p.at_op("}") && !p.at_eof() {
+                    let qf: string = p.expect_ident();
+                    p.expect_op(":");
+                    let qv: *Expr = parse_expr(p, 0);
+                    if qv != null { qnames.push(qf); qvalues.push(*qv); }
+                    if !p.eat_op(",") { break; }
+                }
+                p.expect_op("}");
+                let sl: *Expr = expr_struct_lit(last, qnames, qvalues, line, col);
+                // Keep the module qualifier so the loader auto-loads it (the
+                // C struct type is only emitted when its module is compiled);
+                // codegen still uses the bare `last` as the type name.
+                sl.field = prefix;
+                return sl;
+            }
             return expr_path(prefix, last, line, col);
         }
         // `name!(...)` macro call?

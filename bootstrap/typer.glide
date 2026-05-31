@@ -624,6 +624,7 @@ pub struct Typer {
     // Field-level pub map: key `<struct>::<field>` -> true if the field
     // was declared with `pub`. Missing entry = private.
     pub field_pub: *HashMap<bool>,
+    pub struct_has_private: *HashMap<bool>,   // struct name -> has >=1 non-pub field
     // Where each struct was declared, so we know whether a `obj.field`
     // access is happening inside the struct's own file (always allowed)
     // or from another file (then `field_pub` enforces).
@@ -858,6 +859,8 @@ impl Typer {
         t.module_full_paths = mfp;
         let fp: *HashMap<bool> = HashMap::new();
         t.field_pub = fp;
+        let shp: *HashMap<bool> = HashMap::new();
+        t.struct_has_private = shp;
         let so: *HashMap<string> = HashMap::new();
         t.struct_origin = so;
         t.enforce_visibility = false;
@@ -3301,9 +3304,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 let owner: string = t.struct_origin.get(stripped.name);
                 if !owner.eq(t.current_origin) {
                     if !t.field_pub.contains(key) {
-                        t.err_code_range(_field_pos_line(e), _field_pos_col(e), e.field.len(), "",
-                            "field `".concat(e.field).concat("` of struct `").concat(stripped.name).concat("` is private; declare it `pub` to expose"));
-                        return null;
+                        // Cross-file access to a private field is discouraged
+                        // but not fatal: warn (don't block the build). Inside
+                        // the struct's own file this branch never fires.
+                        t.warn_range(_field_pos_line(e), _field_pos_col(e), e.field.len(), "private-field",
+                            "field `".concat(e.field).concat("` of struct `").concat(stripped.name).concat("` is private to its own file; declare it `pub` to expose it"));
                     }
                 }
             }
@@ -3386,6 +3391,35 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
 
     if e.kind == EX_STRUCT_LIT {
+        // The struct type must be in scope. A sibling file's struct used
+        // WITHOUT an import type-checks fine here but fails at codegen
+        // ('unknown type name'); flag it using the same registry the
+        // type-annotation check uses, so the LSP and `glide check` match the
+        // compiler. A qualified `mod::Struct{}` is exempt: its module was
+        // auto-loaded by the path pre-pass, so the name is already registered.
+        if t.enforce_visibility && e.str_val != null && !_is_known_type_name(t, e.str_val) {
+            t.err_code_range(e.line, e.column, e.str_val.len(), "",
+                "unknown struct `".concat(e.str_val).concat("` — did you forget an `import`?"));
+            return ty_named(e.str_val);
+        }
+        // Construction-site field visibility: setting a field of a struct
+        // declared in ANOTHER file requires that field to be `pub` — exactly
+        // like reading it. Without this a `pub struct` with private fields
+        // could be built cross-file even though those fields can't be read,
+        // so a fully-private struct would be constructible but unusable.
+        // Construction visibility (Rust-style, strict): a struct with ANY
+        // private field cannot be built with a literal outside its own file —
+        // the private fields aren't settable there, so the type owns its
+        // construction through a public function (`T::new(...)`).
+        if t.enforce_visibility && e.str_val != null
+           && t.struct_origin.contains(e.str_val)
+           && t.struct_has_private.contains(e.str_val) {
+            let owner: string = t.struct_origin.get(e.str_val);
+            if !owner.eq(t.current_origin) {
+                t.err_code_range(e.line, e.column, e.str_val.len(), "private-construction",
+                    "struct `".concat(e.str_val).concat("` has private fields and can't be built with a literal here; construct it through a public function (e.g. `").concat(e.str_val).concat("::new(...)`) in its own file"));
+            }
+        }
         return ty_named(e.str_val);
     }
 

@@ -599,7 +599,11 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string,
             if fname.eq("") { continue; }
             let path: string = dir.concat("/").concat(fname);
             let mod_name: string = drop_glide_ext(fname);
-            let mut module: string = module_prefix.concat("::").concat(mod_name);
+            // An empty prefix (project src) means the canonical import path
+            // is the bare file name (`al`), not `<project>::al` — which does
+            // NOT resolve. Deps/stdlib always pass a non-empty prefix.
+            let mut module: string = mod_name;
+            if !module_prefix.eq("") { module = module_prefix.concat("::").concat(mod_name); }
             // Package entry-file collapse: at the pkg root, the file named
             // after the package IS the lib entry — surface its symbols
             // under the bare package alias rather than `pkg::pkg`.
@@ -616,7 +620,26 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string,
         let sub: string = subs.get(i);
         if sub.eq("") { continue; }
         let child_dir: string = dir.concat("/").concat(sub);
-        let child_pref: string = module_prefix.concat("::").concat(sub);
+        let mut child_pref: string = sub;
+        if !module_prefix.eq("") { child_pref = module_prefix.concat("::").concat(sub); }
+        // Index the FOLDER itself as a module, so typing the folder name
+        // (`sop`) autocompletes it for path navigation (`sop::al::...`) — not
+        // just the files inside it. The file entries are added by the
+        // recursive call below.
+        let folder_sym: ImportableSym = ImportableSym {
+            name: sub,
+            kind: SYMKIND_MODULE,
+            module: child_pref,
+            signature: "module ".concat(child_pref),
+            label_extra: "",
+            doc: "Glide module folder `".concat(child_pref).concat("`."),
+            snippet: sub.concat("::"),
+            has_snippet: true,
+            def_path: child_dir,
+            def_line: 1,
+            def_col: 1,
+        };
+        target.push(folder_sym);
         // Sub-dirs aren't the package root, so no entry-file collapse.
         _index_stdlib_subtree(state, child_dir, child_pref, target, "");
     }
@@ -667,10 +690,11 @@ fn _refresh_project_index(state: *LspState, uri: string) {
 
     let src_dir: string = root.concat("/src");
     if __glide_fs_is_dir(src_dir) {
-        let proj_name: string = _project_namespace(root);
         // Project src isn't a "package" in the dep sense — no entry-file
-        // collapse, callers spell the import using the file name.
-        _index_stdlib_subtree(state, src_dir, proj_name, fresh, "");
+        // collapse, and the canonical import path is the bare file name
+        // (`import al`), NOT `<project>::al` (which doesn't resolve). Index
+        // with an empty prefix so the auto-import edit it generates is valid.
+        _index_stdlib_subtree(state, src_dir, "", fresh, "");
     }
     // Each declared dep — path deps point at a sibling dir, git deps at
     // the cache slot. Indexing covers both because dep_cache_dir picks
@@ -712,6 +736,13 @@ fn _project_dep_fingerprint(root: string) -> string {
     if __glide_file_exists(manifest_path) {
         out = out.concat(read_file(manifest_path));
     }
+    // Track project src too: adding or removing a file or folder under src/
+    // (e.g. a new `src/te/al.glide`) must rebuild the project index so its
+    // symbols become importable without an LSP restart. Path list only, no
+    // content read — cheap, and file add/remove is the case that matters here.
+    out = out.concat("\0src:");
+    let srcd: string = root.concat("/src");
+    if __glide_fs_is_dir(srcd) { _fp_walk_glide_files(srcd, &out); }
     out = out.concat("\0gm:");
     let gm: string = root.concat("/glide_modules");
     if !__glide_fs_is_dir(gm) { return out; }
@@ -1543,6 +1574,10 @@ fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
                 if fd.name == null || fd.name.eq("") { continue; }
                 if present.contains(fd.name) { continue; }
                 if fd.ty != null && (fd.ty.kind == TY_OPTION || fd.ty.kind == TY_OPT_RESULT) { continue; }
+                // A private field can't be set from another file, so omitting
+                // it there is correct — the struct's own file initializes it.
+                // It is only "missing" (required) inside its own file.
+                if !fd.is_pub && sd.origin != null && !sd.origin.eq(t.current_origin) { continue; }
                 t.err_code_range(e.line, e.column, e.str_val.len(), "missing-struct-field",
                     "struct `".concat(e.str_val).concat("` literal is missing field `")
                         .concat(fd.name).concat("`"));
@@ -4545,6 +4580,14 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
         }
     }
 
+    // 9) Cross-module fallback: a qualified or not-yet-imported symbol
+    //    (`sop::al::AleloSop`) isn't in the open doc's AST. Look it up in the
+    //    project index, which records every importable symbol's def site.
+    if decl == null {
+        let dloc: *JsonValue = _index_symbol_location(state, word);
+        if dloc != null { lsp_send_response(id, dloc); return; }
+    }
+
     if decl == null { lsp_send_response(id, json_null()); return; }
 
     // Build the URI from the decl's origin so jumps to stdlib (Vector,
@@ -5306,6 +5349,15 @@ fn rich_completion_item(label: string, label_extra: string, kind: i32,
         filter = filter.concat(" ").concat(module);
         let mlower: string = ascii_to_lower(module);
         if !mlower.eq(module) { filter = filter.concat(" ").concat(mlower); }
+        // Each path SEGMENT as a standalone token, so typing a single
+        // folder/module name (`te`) matches a `te::al` symbol — not only the
+        // full path (`te::al`) or the symbol name. Editors that prefix-match
+        // per token then surface the symbol when you type the folder name.
+        let segs: *Vector<string> = mlower.split("::");
+        for let si: i32 = 0; si < segs.len(); si++ {
+            let sg: string = segs.get(si);
+            if !sg.eq("") { filter = filter.concat(" ").concat(sg); }
+        }
     }
     json_obj_set(it, "filterText", json_string(filter));
 
@@ -6654,7 +6706,7 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
         return;
     }
     if x.kind == TY_NAMED || x.kind == TY_GENERIC {
-        list_fields_for_type(stmts, x.name, items, seen);
+        list_fields_for_type(stmts, x.name, items, seen, false);
         list_methods_for_type(stmts, x.name, items, seen, true);
         _list_primitive_methods(x.name, items, seen);
         list_chan_methods_for_type(x.name, items, seen);
@@ -6662,7 +6714,66 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
     }
 }
 
-fn list_fields_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonValue, seen: *HashMap<bool>) {
+// Find a struct by name in the project index and parse the file it is
+// declared in, returning that file's top-level statements (the struct is
+// among them). Used for struct-literal field completion when the type is
+// referenced qualified (`sop::al::AleloSop { … }`) or before its `import`
+// lands, so it isn't in the open doc's AST. Null when no such struct exists.
+fn _index_struct_stmts(state: *LspState, name: string) -> *Vector<Stmt> {
+    if state.project_index == null { return null; }
+    let idx: *Vector<ImportableSym> = state.project_index;
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.name == null || !sym.name.eq(name) { continue; }
+        if sym.kind != ST_STRUCT { continue; }
+        if sym.def_path == null || sym.def_path.eq("") { continue; }
+        let src: string = read_file(sym.def_path);
+        if src.eq("") { continue; }
+        let lex: *Lexer = Lexer::new(src);
+        let par: *Parser = Parser::new(lex);
+        let stmts: *Vector<Stmt> = parse_program(par);
+        if stmts != null { return stmts; }
+    }
+    return null;
+}
+
+// Build a goto-definition Location for `name` from the project index
+// (def_path + def_line + def_col), for qualified / not-yet-imported
+// references whose decl isn't in the open doc's AST. Null when not indexed
+// or the file is gone. Mirrors the workspace/symbol location shape.
+fn _index_symbol_location(state: *LspState, name: string) -> *JsonValue {
+    if state.project_index == null { return null; }
+    let idx: *Vector<ImportableSym> = state.project_index;
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.name == null || !sym.name.eq(name) { continue; }
+        if sym.kind == SYMKIND_MODULE { continue; }   // modules handled earlier
+        if sym.def_path == null || sym.def_path.eq("") { continue; }
+        if !__glide_file_exists(sym.def_path) { continue; }
+        let loc: *JsonValue = json_object();
+        json_obj_set(loc, "uri", json_string(path_to_uri(sym.def_path)));
+        let range: *JsonValue = json_object();
+        json_obj_set(range, "start", position_to_json(sym.def_line, sym.def_col));
+        json_obj_set(range, "end", position_to_json(sym.def_line, sym.def_col + name.len()));
+        json_obj_set(loc, "range", range);
+        return loc;
+    }
+    return null;
+}
+
+// True when the struct declares at least one non-`pub` field. Such a struct
+// can't be built with a literal from another file (strict construction
+// visibility) — callers offer no field completion there.
+fn _struct_has_private_field(sd: *Stmt) -> bool {
+    if sd == null || sd.struct_fields == null { return false; }
+    for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
+        let f: Field = sd.struct_fields.get(i);
+        if !f.is_pub { return true; }
+    }
+    return false;
+}
+
+fn list_fields_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonValue, seen: *HashMap<bool>, pub_only: bool) {
     if stmts == null { return; }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
@@ -6670,6 +6781,9 @@ fn list_fields_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonVal
         if s.struct_fields == null { continue; }
         for let j: i32 = 0; j < s.struct_fields.len(); j++ {
             let f: Field = s.struct_fields.get(j);
+            // Cross-file, only `pub` (and `!`) fields can be set, so offer
+            // just those; same-file offers every field.
+            if pub_only && !f.is_pub { continue; }
             if seen.contains(f.name) { continue; }
             seen.insert(f.name, true);
             json_arr_push(items, completion_item(f.name, 5, type_to_string_pretty(f.ty)));  // 5 = Field
@@ -7202,11 +7316,40 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     let slit_present: *HashMap<bool> = HashMap::new();
     let slit_name: string = _struct_lit_ctx(doc.text, line0, col0, slit_present);
     if !slit_name.eq("") {
-        let slit_sd: *Stmt = find_top_decl(doc.stmts, slit_name);
+        let mut slit_sd: *Stmt = find_top_decl(doc.stmts, slit_name);
+        let mut fstmts: *Vector<Stmt> = doc.stmts;
+        let mut fpub_only: bool = false;
         if slit_sd != null && slit_sd.kind == ST_STRUCT {
+            // In the open doc: pub-filter only when the struct lives in
+            // another file (cross-file you can't set private fields).
+            fpub_only = slit_sd.origin != null && !slit_sd.origin.eq(uri_to_path(uri));
+        } else {
+            // Qualified or not-yet-imported struct (`sop::al::AleloSop { … }`)
+            // isn't in the open doc's AST — resolve it from the project index
+            // and parse its file. Always cross-file → pub-only. This also
+            // stops the generic "random" completion bag from leaking into a
+            // struct literal whose type isn't locally visible.
+            let istmts: *Vector<Stmt> = _index_struct_stmts(state, slit_name);
+            if istmts != null {
+                let isd: *Stmt = find_top_decl(istmts, slit_name);
+                if isd != null && isd.kind == ST_STRUCT {
+                    slit_sd = isd; fstmts = istmts; fpub_only = true;
+                }
+            }
+        }
+        if slit_sd != null && slit_sd.kind == ST_STRUCT {
+            // Strict construction visibility: a struct with any private field
+            // can't be built with a literal cross-file (the typer errors on
+            // it), so offer no fields — the literal is a dead end here; the
+            // user must call a public constructor instead.
+            if fpub_only && _struct_has_private_field(slit_sd) {
+                seen.free();
+                lsp_send_response(id, items);
+                return;
+            }
             let pk: *Vector<string> = slit_present.keys();
             for let i: i32 = 0; i < pk.len(); i++ { seen.insert(pk.get(i), true); }
-            list_fields_for_type(doc.stmts, slit_name, items, seen);
+            list_fields_for_type(fstmts, slit_name, items, seen, fpub_only);
             seen.free();
             lsp_send_response(id, items);
             return;
@@ -7525,10 +7668,12 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     if state.stdlib_index != null && state.stdlib_index.len() > 0 {
         let imps: *HashMap<ImportInfo> = current_imports(doc.text);
         let insert_line: i32 = find_import_insertion_pos(doc.text);
-        _emit_index_items(state.stdlib_index, imps, insert_line, items, seen);
+        let seen_mod: *HashMap<bool> = HashMap::new();
+        _emit_index_items(state.stdlib_index, imps, insert_line, items, seen, seen_mod);
         if state.project_index != null {
-            _emit_index_items(state.project_index, imps, insert_line, items, seen);
+            _emit_index_items(state.project_index, imps, insert_line, items, seen, seen_mod);
         }
+        seen_mod.free();
         imps.free();
     }
 
@@ -7580,7 +7725,7 @@ fn _ctor_completion(items: *JsonValue, seen: *HashMap<bool>, name: string,
 // project indexes.
 fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
                      insert_line: i32, items: *JsonValue,
-                     seen: *HashMap<bool>) {
+                     seen: *HashMap<bool>, seen_mod: *HashMap<bool>) {
     let n: i32 = idx.len();
     for let i: i32 = 0; i < n; i++ {
         let sym: ImportableSym = idx.get(i);
@@ -7607,8 +7752,16 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
                 imp_module = imp_module.substring(0, ml - 7);
             }
         }
+        // A name already in scope (a local, a current-file decl, a macro)
+        // hides the import suggestion — skip via `seen`. But two DIFFERENT
+        // modules exporting the SAME name (e.g. `Alelo` in `al` AND in
+        // `te::al`) must BOTH be offered so the user can choose which to
+        // import. So dedup index items among themselves by name+module, and
+        // do NOT fold the label into `seen` (that would hide the sibling).
         if seen.contains(label) { continue; }
-        seen.insert(label, true);
+        let mkey: string = label.concat("\n").concat(imp_module);
+        if seen_mod.contains(mkey) { continue; }
+        seen_mod.insert(mkey, true);
         let mut existing: *ImportInfo = null;
         if imps.contains(imp_module) {
             let info_val: ImportInfo = imps.get(imp_module);
@@ -7616,8 +7769,17 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
             *existing = info_val;
         }
         let is_module: bool = (sym.kind == SYMKIND_MODULE);
-        let edit: *JsonValue = build_import_edit(
-            sym.name, imp_module, existing, insert_line, is_module);
+        // A FOLDER module (`sop`, whose def_path is a directory) can't be
+        // `import`ed — there is no `sop.glide`, and navigating through it
+        // (`sop::al::…`) resolves WITHOUT an import. So a folder inserts just
+        // its `sop::` snippet with no auto-import edit; file-backed modules
+        // and symbols still get one.
+        let is_folder: bool = is_module
+            && (sym.def_path == null || !sym.def_path.ends_with(".glide"));
+        let mut edit: *JsonValue = null;
+        if !is_folder {
+            edit = build_import_edit(sym.name, imp_module, existing, insert_line, is_module);
+        }
         let item: *JsonValue = rich_completion_item(
             label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
             sym.signature, sym.doc, imp_module,
