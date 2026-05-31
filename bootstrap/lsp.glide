@@ -2174,6 +2174,45 @@ fn builtin_macro_doc(name: string) -> string {
     if name.eq("format") {
         return "```glide\nmacro format!(\"fmt\", args...)\n```\n\n---\n\nReturn a formatted string. `{}` placeholders take the corresponding arg.";
     }
+    if name.eq("pkg") {
+        return "```glide\nmacro pkg!(\"field\")\n```\n\n---\n\nRead a field of the project's `glide.glide` manifest at compile time: `name`, `version`, `bin`, `target`, `author`, `license`, `description`, `repository`.";
+    }
+    if name.eq("cfg") {
+        return "```glide\nmacro cfg!(\"key\")\n```\n\n---\n\nCompile-time configuration predicate (target os / arch, build flags). Folds to a constant during expansion.";
+    }
+    if name.eq("env") {
+        return "```glide\nmacro env!(\"VAR\")\n```\n\n---\n\nThe value of an environment variable, read at compile time and baked into the binary.";
+    }
+    if name.eq("panic") {
+        return "```glide\nmacro panic!(\"msg\")\n```\n\n---\n\nAbort the program with a message and the source location.";
+    }
+    if name.eq("todo") {
+        return "```glide\nmacro todo!()\n```\n\n---\n\nPlaceholder for unfinished code. Panics `not yet implemented` if reached.";
+    }
+    if name.eq("unimplemented") {
+        return "```glide\nmacro unimplemented!()\n```\n\n---\n\nMarks a path that is intentionally not implemented. Panics if reached.";
+    }
+    if name.eq("unreachable") {
+        return "```glide\nmacro unreachable!()\n```\n\n---\n\nAsserts a branch can never be taken. Panics if it is, signalling a logic bug.";
+    }
+    if name.eq("dbg") {
+        return "```glide\nmacro dbg!(expr)\n```\n\n---\n\nPrint `expr` and its value (with file:line) to stderr and return the value, so it drops into an expression unchanged.";
+    }
+    if name.eq("assert") {
+        return "```glide\nmacro assert!(cond)\n```\n\n---\n\nPanic with the source location when `cond` is false.";
+    }
+    if name.eq("file") {
+        return "```glide\nmacro file!()\n```\n\n---\n\nThe current source file path, as a `string` literal resolved at compile time.";
+    }
+    if name.eq("line") {
+        return "```glide\nmacro line!()\n```\n\n---\n\nThe current source line number, as an `i32` resolved at compile time.";
+    }
+    if name.eq("column") {
+        return "```glide\nmacro column!()\n```\n\n---\n\nThe current source column, as an `i32` resolved at compile time.";
+    }
+    if name.eq("function") {
+        return "```glide\nmacro function!()\n```\n\n---\n\nThe enclosing function's name, as a `string` literal resolved at compile time.";
+    }
     return "";
 }
 
@@ -4070,10 +4109,25 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
         }
     }
 
-    // Builtin macros (`println`, `print`, `format`).
+    // Builtin macros (`println`, `print`, `format`, `pkg`, `cfg`, …).
     if content.eq("") {
         let bd: string = builtin_macro_doc(word);
         if !bd.eq("") { content = bd; }
+    }
+
+    // User / stdlib `macro name!` definitions. Harvested before expansion, so
+    // even though the call site is already expanded in `doc.stmts`, the def is
+    // still reachable by name for its signature + doc.
+    if content.eq("") && doc.macro_defs != null {
+        for let mi: i32 = 0; mi < doc.macro_defs.len(); mi++ {
+            let md: Stmt = doc.macro_defs.get(mi);
+            if md.name == null || !md.name.eq(word) { continue; }
+            content = "```glide\n".concat(macro_signature(&md)).concat("\n```");
+            if md.doc_comment != null && !md.doc_comment.eq("") {
+                content = content.concat("\n\n---\n\n").concat(md.doc_comment);
+            }
+            break;
+        }
     }
 
     // Reserved-word docs (`fn`, `let`, `for`, etc).
@@ -4553,6 +4607,11 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
     //    fn further down.
     if decl == null && _ident_followed_by_bang(doc.text, line0, col0, word.len()) {
         decl = find_macro_def(doc.stmts, word);
+        // `macro` defs are harvested out of doc.stmts before expansion, so the
+        // live def survives only in doc.macro_defs / impl_macro_defs — search
+        // those too or goto on any real macro call would miss.
+        if decl == null { decl = find_macro_def(doc.macro_defs, word); }
+        if decl == null { decl = find_macro_def(doc.impl_macro_defs, word); }
         if decl == null { decl = find_proc_macro_fn(doc.stmts, word); }
     }
 
