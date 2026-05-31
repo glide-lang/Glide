@@ -5548,6 +5548,33 @@ fn pretty_module(origin: string) -> string {
     return out;
 }
 
+// `<manifest-root>/src/` for the open doc, slash-normalized, or "" when the
+// file isn't inside a Glide project. Computed once per completion request so
+// the per-decl module derivation below is a cheap prefix strip (no fs walk).
+fn _proj_src_prefix(doc_path: string) -> string {
+    if doc_path == null || doc_path.eq("") { return ""; }
+    let root: string = find_manifest_root(parent_dir(doc_path));
+    if root.eq("") { return ""; }
+    return root.replace("\\", "/").concat("/src/");
+}
+
+// Canonical import module for a project file under `src/`, e.g.
+// `…/src/al.glide` -> `al`, `…/src/x/foo.glide` -> `x::foo`. Returns "" when
+// `origin` isn't under this project's src (stdlib / deps / unknown). Mirrors
+// the naming `_index_stdlib_subtree` gives project modules so the module key
+// matches what `import …;` lines and the project index use.
+fn _module_under_src(origin: string, src_prefix: string) -> string {
+    if origin == null || origin.eq("") || src_prefix.eq("") { return ""; }
+    let norm: string = origin.replace("\\", "/");
+    let pl: i32 = src_prefix.len();
+    if norm.len() <= pl { return ""; }
+    if !norm.substring(0, pl).eq(src_prefix) { return ""; }
+    let mut rel: string = norm.substring(pl, norm.len());
+    let rn: i32 = rel.len();
+    if rn > 6 && rel.substring(rn - 6, rn).eq(".glide") { rel = rel.substring(0, rn - 6); }
+    return rel.replace("/", "::");
+}
+
 // Path split that accepts both `/` and `\`. Empty segments (leading
 // slash, doubled separator) are dropped.
 fn _split_path(p: string) -> *Vector<string> {
@@ -7852,6 +7879,11 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     // doc.stmts came from a transitively-loaded import and is subject to the
     // pub-visibility gate below.
     let _compl_doc_path: string = uri_to_path(uri);
+    // Project src/ prefix, so a pub decl pulled in from a *sibling* project
+    // file (loaded because some name from its module was imported) can still
+    // carry a proper auto-import edit instead of appearing as an in-scope
+    // bare ident the compiler then rejects.
+    let _compl_proj_src: string = _proj_src_prefix(_compl_doc_path);
     if doc.stmts != null {
         for let i: i32 = 0; i < doc.stmts.len(); i++ {
             let s: Stmt = doc.stmts.get(i);
@@ -7897,20 +7929,35 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             else if s.kind == ST_MACRO_DEF { sig = macro_signature(&s); }
             let mut module: string = "";
             if s.origin != null { module = pretty_module(s.origin); }
+            // The module to drive an auto-import off. stdlib/builtins decls
+            // get it from pretty_module; project siblings (pretty_module ""s
+            // them) get it from their path under src/. Same-file / builtin
+            // decls leave it "" so no edit is emitted.
+            let mut edit_mod: string = "";
+            if module.len() >= 8 && module.substring(0, 8).eq("stdlib::") {
+                edit_mod = module;
+            } else if s.origin != null && !s.origin.eq("")
+                      && !s.origin.eq(_compl_doc_path) {
+                edit_mod = _module_under_src(s.origin, _compl_proj_src);
+                if module.eq("") { module = edit_mod; }
+            }
             let mut docc: string = "";
             if s.doc_comment != null { docc = s.doc_comment; }
-            // For stdlib items reached via an existing import, ask
-            // build_import_edit whether a selective merge is needed.
-            // Builtins / own-doc decls always pass null.
+            // When the decl lives in another module, ask build_import_edit
+            // whether an import line must be added or an existing selective
+            // list extended (`import al::{Alelo}` -> `{Alelo, custom}`).
+            // A loaded-but-not-imported pub sibling (e.g. you imported only
+            // `Alelo` from `al`, now want `custom`) lands here, not in the
+            // edit-less bag. Same-file / builtin decls pass edit_mod "".
             let mut decl_edit: *JsonValue = null;
-            if module.len() >= 8 && module.substring(0, 8).eq("stdlib::") {
+            if !edit_mod.eq("") {
                 let mut existing: *ImportInfo = null;
-                if imps2.contains(module) {
-                    let info_val: ImportInfo = imps2.get(module);
+                if imps2.contains(edit_mod) {
+                    let info_val: ImportInfo = imps2.get(edit_mod);
                     existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
                     *existing = info_val;
                 }
-                decl_edit = build_import_edit(label, module, existing, insert_line2, false);
+                decl_edit = build_import_edit(label, edit_mod, existing, insert_line2, false);
             }
             let item: *JsonValue = rich_completion_item(
                 label, label_extra, ci_kind_for(&s),
