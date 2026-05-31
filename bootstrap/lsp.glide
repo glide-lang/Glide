@@ -1193,19 +1193,86 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     run_analysis_and_publish(uri, text, state);
 }
 
+// Overlay the open doc's CURRENT (in-memory, possibly unsaved) text into the
+// shared parse cache, keyed by its on-disk path. Other open docs that import
+// this file then see the live edits — without it they'd load the stale disk
+// copy and their cross-file diagnostics would freeze until a save+restart.
+// Mirrors load_into_with_cache's miss path (arena disabled so the cached AST
+// is libc-heap and survives the per-keystroke arena reset).
+fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
+    if state.parse_cache == null || path.eq("") || text.eq("") { return; }
+    let saved_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+    let heap_key: string = path.concat("");
+    let heap_src: string = text.concat("");
+    let lex: *Lexer = Lexer::new(heap_src);
+    let p: *Parser = Parser::new(lex);
+    let parsed_raw: *Vector<Stmt> = parse_program(p);
+    p.free(); lex.free();
+    for let i: i32 = 0; i < parsed_raw.len(); i++ {
+        let s: Stmt = parsed_raw.get(i);
+        s.origin = heap_key;
+        parsed_raw.set(i, s);
+    }
+    let lowered: *Vector<Stmt> = lower_program(parsed_raw);
+    __glide_palloc_set(saved_arena);
+    state.parse_cache.insert(heap_key, lowered);
+}
+
+// Re-publish diagnostics for the changed doc AND every other open doc, so a
+// dependent file's cross-file diagnostics refresh when a file it imports is
+// edited (e.g. making a field private in `al.glide` updates `main.glide`).
+fn _reanalyze_open_docs(state: *LspState, changed_uri: string, changed_text: string) {
+    run_analysis_and_publish(changed_uri, changed_text, state);
+    if state.docs == null { return; }
+    let uris: *Vector<string> = state.docs.keys();
+    for let i: i32 = 0; i < uris.len(); i++ {
+        let u: string = uris.get(i);
+        if u.eq(changed_uri) { continue; }
+        if path_is_manifest(uri_to_path(u)) { continue; }
+        let d: LspDoc = state.docs.get(u);
+        run_analysis_and_publish(u, d.text, state);
+    }
+}
+
 fn handle_did_change(req: *JsonValue, state: *LspState) {
     let params: *JsonValue = json_get(req, "params");
     let td: *JsonValue = json_get(params, "textDocument");
     let uri: string = json_as_string(json_get(td, "uri"));
     let version: i32 = json_as_int(json_get(td, "version"));
-    // Full-sync mode: contentChanges[0].text is the full new content.
+    // Apply each content change to derive the new full text. We advertise
+    // Full sync, so a conformant client sends one change with the whole
+    // document and no `range`. But some clients/setups send INCREMENTAL
+    // changes (a `range` + the replacement slice); handle those too, by
+    // splicing into the current text. Without this an incremental edit would
+    // be mistaken for the full document and freeze live diagnostics until an
+    // LSP restart.
     let changes: *JsonValue = json_get(params, "contentChanges");
-    let first: *JsonValue = json_at(changes, 0);
-    let text: string = json_as_string(json_get(first, "text"));
-    if text.eq("") {
-        // didChange w/ empty diff in incremental mode would land here; ignore.
-        return;
+    let nchanges: i32 = _json_arr_len(changes);
+    if nchanges == 0 { return; }
+    let mut text: string = "";
+    let mut have_base: bool = false;
+    if state.docs.contains(uri) { text = state.docs.get(uri).text; have_base = true; }
+    let mut applied: bool = false;
+    for let ci: i32 = 0; ci < nchanges; ci++ {
+        let ch: *JsonValue = json_at(changes, ci);
+        let ctext: string = json_as_string(json_get(ch, "text"));
+        let rng: *JsonValue = json_get(ch, "range");
+        if rng == null || json_is_null(rng) {
+            text = ctext;                 // whole-document replacement
+            applied = true;
+        } else if have_base {
+            let s: *JsonValue = json_get(rng, "start");
+            let e: *JsonValue = json_get(rng, "end");
+            let so: i32 = _line_col_offset(text, json_as_int(json_get(s, "line")), json_as_int(json_get(s, "character")));
+            let eo: i32 = _line_col_offset(text, json_as_int(json_get(e, "line")), json_as_int(json_get(e, "character")));
+            if so >= 0 && eo >= so && eo <= text.len() {
+                text = text.substring(0, so).concat(ctext).concat(text.substring(eo, text.len()));
+                applied = true;
+            }
+        }
     }
+    if !applied { return; }
     let prev_stmts: *Vector<Stmt> = null;
     let prev_text: string = "";
     let mut prev_arena2: *void = null;
@@ -1225,7 +1292,10 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
     };
     state.docs.insert(uri, doc);
     if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
-    run_analysis_and_publish(uri, text, state);
+    // Overlay the live text into the dep cache so other open files see this
+    // edit, then re-publish diagnostics for every open doc (cross-file).
+    _lsp_cache_doc(state, uri_to_path(uri), text);
+    _reanalyze_open_docs(state, uri, text);
 }
 
 fn handle_did_close(req: *JsonValue, state: *LspState) {
