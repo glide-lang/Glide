@@ -26,6 +26,7 @@ extern fn gnet_getsockname(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, o
 extern fn gnet_getpeername(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
 extern fn gnet_setsockopt_int(fd: i64, level: i32, opt: i32, val: i32) -> i64;
 extern fn gnet_setsockopt_buf(fd: i64, level: i32, opt: i32, buf: *void, len: i32) -> i64;
+extern fn gnet_set_timeout(fd: i64, ms: i32) -> i64;
 extern fn gnet_shutdown(fd: i64, how: i32) -> i64;
 extern fn gnet_close(fd: i64);
 extern fn gnet_const(which: i32) -> i32;

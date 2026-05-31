@@ -1,0 +1,55 @@
+// sockopt.glide over the foundation: set a range of options on a real
+// socket and confirm each applies (or reports unsupported cleanly).
+
+import stdlib::testing::*;
+import stdlib::net::sys::*;
+import stdlib::net::sockopt::*;
+import stdlib::net::ip::*;
+
+fn _udp() -> *Socket {
+    let s: !*Socket = Socket::open(AF_V4, SOCK_DGRAM, 0);
+    return s.val;
+}
+fn _tcp() -> *Socket {
+    let s: !*Socket = Socket::open(AF_V4, SOCK_STREAM, 0);
+    return s.val;
+}
+
+fn test_reuse_addr() -> i32 {
+    let s: *Socket = _tcp();
+    assert!(sock_set_reuse_addr(s.fd, true).ok);
+    assert!(sock_set_reuse_addr(s.fd, false).ok);
+    s.close();
+    return 0;
+}
+
+fn test_nodelay() -> i32 {
+    let s: *Socket = _tcp();
+    assert!(sock_set_nodelay(s.fd, true).ok);
+    s.close();
+    return 0;
+}
+
+fn test_broadcast_and_ttl() -> i32 {
+    let s: *Socket = _udp();
+    assert!(sock_set_broadcast(s.fd, true).ok);
+    assert!(sock_set_ttl(s.fd, 32).ok);
+    s.close();
+    return 0;
+}
+
+fn test_bufsizes() -> i32 {
+    let s: *Socket = _udp();
+    assert!(sock_set_recv_buf(s.fd, 65536).ok);
+    assert!(sock_set_send_buf(s.fd, 65536).ok);
+    s.close();
+    return 0;
+}
+
+fn test_timeout() -> i32 {
+    let s: *Socket = _tcp();
+    assert!(sock_set_timeout_ms(s.fd, 1000).ok);
+    assert!(sock_set_timeout_ms(s.fd, 0).ok);   // disable
+    s.close();
+    return 0;
+}

@@ -21,6 +21,9 @@
 #include <stdint.h>
 #include <string.h>   /* memset, strerror */
 #include <stdio.h>    /* snprintf */
+#ifndef _WIN32
+#include <sys/time.h> /* struct timeval (gnet_set_timeout) */
+#endif
 
 #define GNET_AF_V4 4
 #define GNET_AF_V6 6
@@ -178,6 +181,24 @@ int64_t gnet_setsockopt_int(int64_t fd, int level, int opt, int val) {
 
 int64_t gnet_setsockopt_buf(int64_t fd, int level, int opt, void* buf, int len) {
     if (setsockopt((__glide_sock_t)fd, level, opt, (const char*)buf, (socklen_t)len) != 0) return -1;
+    return 0;
+}
+
+/* Send + receive timeout. The timeval-vs-DWORD platform split that was
+   copied into 5 stdlib modules lives here once. `ms` of 0 disables. */
+int64_t gnet_set_timeout(int64_t fd, int ms) {
+    __glide_sock_t s = (__glide_sock_t)fd;
+#ifdef _WIN32
+    DWORD v = (DWORD)ms;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&v, sizeof(v));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&v, sizeof(v));
+#else
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
     return 0;
 }
 

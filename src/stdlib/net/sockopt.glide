@@ -1,0 +1,76 @@
+// Socket options — a uniform surface over the foundation's
+// gnet_setsockopt_int / gnet_set_timeout primitives. Replaces the
+// SO_RCVTIMEO/SO_SNDTIMEO blocks and the scattered SO_REUSEADDR /
+// TCP_NODELAY toggles that were copied across the net modules; every
+// option here is "pick a constant via gnet_const, set an int", with the
+// per-OS numbers resolved once in netcore.c.
+//
+// Works on any foundation fd (Socket, TcpStream, UdpSocket — they all
+// expose `.fd`).
+//
+// ```glide
+// import stdlib::net::sockopt::*;
+// sock_set_reuse_addr(s.fd, true);
+// sock_set_nodelay(s.fd, true);
+// sock_set_recv_timeout_ms(s.fd, 5000);
+// ```
+
+import stdlib::net::sys::*;
+
+fn _set(fd: i64, level_tag: i32, opt_tag: i32, val: i32) -> !i32 {
+    let level: i32 = gnet_const(level_tag);
+    let opt: i32 = gnet_const(opt_tag);
+    if opt < 0 { return err("sockopt: unsupported on this platform"); }
+    if gnet_setsockopt_int(fd, level, opt, val) < 0 {
+        return err("sockopt: ".concat(gnet_last_error()));
+    }
+    return ok(0);
+}
+
+fn _bool(on: bool) -> i32 { if on { return 1; } return 0; }
+
+/// SO_REUSEADDR — rebind a recently-closed local port immediately.
+pub fn sock_set_reuse_addr(fd: i64, on: bool) -> !i32 {
+    return _set(fd, OPT_SOL_SOCKET, OPT_SO_REUSEADDR, _bool(on));
+}
+
+/// SO_REUSEPORT — load-balance accepts across workers (Linux). Returns an
+/// error on platforms that lack it.
+pub fn sock_set_reuse_port(fd: i64, on: bool) -> !i32 {
+    return _set(fd, OPT_SOL_SOCKET, OPT_SO_REUSEPORT, _bool(on));
+}
+
+/// TCP_NODELAY — disable Nagle so small writes flush immediately.
+pub fn sock_set_nodelay(fd: i64, on: bool) -> !i32 {
+    return _set(fd, OPT_IPPROTO_TCP, OPT_TCP_NODELAY, _bool(on));
+}
+
+/// SO_BROADCAST — allow sending to a broadcast address (UDP).
+pub fn sock_set_broadcast(fd: i64, on: bool) -> !i32 {
+    return _set(fd, OPT_SOL_SOCKET, OPT_SO_BROADCAST, _bool(on));
+}
+
+/// IP_TTL — outgoing unicast hop limit.
+pub fn sock_set_ttl(fd: i64, ttl: i32) -> !i32 {
+    return _set(fd, OPT_IPPROTO_IP, OPT_IP_TTL, ttl);
+}
+
+/// SO_RCVBUF — receive buffer size hint (bytes).
+pub fn sock_set_recv_buf(fd: i64, bytes: i32) -> !i32 {
+    return _set(fd, OPT_SOL_SOCKET, OPT_SO_RCVBUF, bytes);
+}
+
+/// SO_SNDBUF — send buffer size hint (bytes).
+pub fn sock_set_send_buf(fd: i64, bytes: i32) -> !i32 {
+    return _set(fd, OPT_SOL_SOCKET, OPT_SO_SNDBUF, bytes);
+}
+
+/// Read + write timeout in milliseconds (`0` disables). Backed by
+/// SO_RCVTIMEO / SO_SNDTIMEO — the timeval/DWORD platform split lives once
+/// in netcore. Only bites on a blocking fd.
+pub fn sock_set_timeout_ms(fd: i64, ms: i32) -> !i32 {
+    if gnet_set_timeout(fd, ms) < 0 {
+        return err("sockopt: set_timeout: ".concat(gnet_last_error()));
+    }
+    return ok(0);
+}

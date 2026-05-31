@@ -1,6 +1,12 @@
 // Outbound TCP. Connects a stream socket to a remote address.
-// Complements the existing `Listener` / `Conn` (server side) and the
-// runtime's async accept/read/write reactor with a client-side primitive.
+// Complements the server-side `Listener` / `Conn` and the runtime's async
+// reactor with a client-side primitive.
+//
+// Pure Glide on the net::sys socket foundation — the old c_raw
+// connect()/send()/recv()/setsockopt() block is gone. Reads go through the
+// reactor (parking inside a coroutine when the fd is non-blocking; this
+// client keeps the fd blocking so SO_RCVTIMEO still applies, so they block
+// — async client reads with deadlines are a later phase).
 //
 // ```glide
 // import stdlib::net::tcp::*;
@@ -16,127 +22,26 @@
 
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
-
-c_raw! {
-    #ifndef GLIDE_NET_TCP_HELPERS_DEFINED
-    #define GLIDE_NET_TCP_HELPERS_DEFINED
-    #ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    typedef SOCKET __glide_tcp_h;
-    #define __GLIDE_TCP_INVALID INVALID_SOCKET
-    #else
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <unistd.h>
-    typedef int __glide_tcp_h;
-    #define __GLIDE_TCP_INVALID (-1)
-    #endif
-    #include <string.h>
-    #include <stdint.h>
-
-    static int __glide_tcpc_init_done = 0;
-    static void __glide_tcpc_init(void) {
-        if (__glide_tcpc_init_done) return;
-        #ifdef _WIN32
-        WSADATA w;
-        WSAStartup(MAKEWORD(2,2), &w);
-        #endif
-        __glide_tcpc_init_done = 1;
-    }
-
-    static int64_t __glide_tcp_connect(int family, int64_t v4,
-                                        int64_t v6_hi, int64_t v6_lo, int port) {
-        __glide_tcpc_init();
-        __glide_tcp_h s;
-        if (family == 6) {
-            s = socket(AF_INET6, SOCK_STREAM, 0);
-            if (s == __GLIDE_TCP_INVALID) return -1;
-            struct sockaddr_in6 a;
-            memset(&a, 0, sizeof(a));
-            a.sin6_family = AF_INET6;
-            a.sin6_port = htons((uint16_t)port);
-            unsigned char* p = (unsigned char*)&a.sin6_addr;
-            for (int i = 0; i < 8; i++) p[i]   = (unsigned char)((v6_hi >> (56 - i*8)) & 0xff);
-            for (int i = 0; i < 8; i++) p[8+i] = (unsigned char)((v6_lo >> (56 - i*8)) & 0xff);
-            if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
-                #ifdef _WIN32
-                closesocket(s);
-                #else
-                close(s);
-                #endif
-                return -1;
-            }
-        } else {
-            s = socket(AF_INET, SOCK_STREAM, 0);
-            if (s == __GLIDE_TCP_INVALID) return -1;
-            struct sockaddr_in a;
-            memset(&a, 0, sizeof(a));
-            a.sin_family = AF_INET;
-            a.sin_port = htons((uint16_t)port);
-            a.sin_addr.s_addr = htonl((uint32_t)v4);
-            if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
-                #ifdef _WIN32
-                closesocket(s);
-                #else
-                close(s);
-                #endif
-                return -1;
-            }
-        }
-        return (int64_t)s;
-    }
-
-    static int64_t __glide_tcp_send(int64_t fd, const char* data, int n) {
-        return (int64_t)send((__glide_tcp_h)fd, data, n, 0);
-    }
-
-    static int64_t __glide_tcp_recv(int64_t fd, void* buf, int max) {
-        return (int64_t)recv((__glide_tcp_h)fd, (char*)buf, max, 0);
-    }
-
-    static void __glide_tcp_close_h(int64_t fd) {
-        #ifdef _WIN32
-        closesocket((__glide_tcp_h)fd);
-        #else
-        close((__glide_tcp_h)fd);
-        #endif
-    }
-
-    // Apply send + receive timeouts on the socket. `ms` of 0 disables.
-    // POSIX uses struct timeval; Windows takes a DWORD of milliseconds.
-    static void __glide_tcp_set_timeout(int64_t fd, int ms) {
-        __glide_tcp_h s = (__glide_tcp_h)fd;
-        #ifdef _WIN32
-        DWORD v = (DWORD)ms;
-        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&v, sizeof(v));
-        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&v, sizeof(v));
-        #else
-        struct timeval tv;
-        tv.tv_sec = ms / 1000;
-        tv.tv_usec = (ms % 1000) * 1000;
-        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-        #endif
-    }
-    #endif
-}
-
-extern fn __glide_tcp_connect(family: i32, v4: i64, v6_hi: i64, v6_lo: i64, port: i32) -> i64;
-extern fn __glide_tcp_send(fd: i64, data: string, n: i32) -> i64;
-extern fn __glide_tcp_recv(fd: i64, buf: *void, max: i32) -> i64;
-extern fn __glide_tcp_close_h(fd: i64);
-extern fn __glide_tcp_set_timeout(fd: i64, ms: i32);
-// `_bytes_to_string` comes from net::ip via the import above.
+import stdlib::net::sys::*;
 
 pub struct TcpStream {
     pub fd: i64,
 }
 
+// Copy a string's bytes into a fresh *u8 buffer (caller frees). Used to
+// hand the foundation's *void-buffer send primitives a payload.
+fn _str_buf(data: string) -> *u8 {
+    let n: i32 = data.len();
+    let buf: *u8 = malloc(n) as *u8;
+    for let i: i32 = 0; i < n; i++ {
+        buf[i] = data.at(i).to_int() as u8;
+    }
+    return buf;
+}
+
 impl TcpStream {
-    /// Connect to `dst`. Synchronous on the calling coro — the worker
-    /// keeps running other coros while the kernel waits on the
-    /// handshake.
+    /// Connect to `dst`. Blocking connect; the worker keeps running other
+    /// coros while the kernel completes the handshake.
     ///
     /// ```glide
     /// let dst: *SocketAddr = SocketAddr::parse("127.0.0.1:80").val;
@@ -144,35 +49,20 @@ impl TcpStream {
     /// if r.ok { defer r.val.close(); r.val.write_all("GET / HTTP/1.0\r\n\r\n"); }
     /// ```
     pub fn connect(dst: *SocketAddr) -> !*TcpStream {
-        let mut family: i32 = 4;
-        let mut v4: i64 = 0;
-        let mut hi: i64 = 0;
-        let mut lo: i64 = 0;
-        if dst.ip.is_v4() {
-            family = 4;
-            v4 = dst.ip.v4 as i64;
-        } else {
-            family = 6;
-            hi = dst.ip.v6_hi;
-            lo = dst.ip.v6_lo;
+        let fam: i32 = if dst.ip.is_v6() { AF_V6 } else { AF_V4 };
+        let fd: i64 = gnet_socket(fam, SOCK_STREAM, 0);
+        if fd < 0 { return err("tcp: socket: ".concat(gnet_last_error())); }
+        if gnet_connect(fd, fam, dst.ip.v4 as i64, dst.ip.v6_hi, dst.ip.v6_lo, dst.port) < 0 {
+            gnet_close(fd);
+            return err("tcp: connect: ".concat(gnet_last_error()));
         }
-        let fd: i64 = __glide_tcp_connect(family, v4, hi, lo, dst.port);
-        if fd < 0 { return err("tcp: connect failed"); }
         let s: *TcpStream = malloc(sizeof(TcpStream)) as *TcpStream;
         s.fd = fd;
         return ok(s);
     }
 
-    /// Resolve `host` via DNS, then connect to the first reachable
-    /// address on `port`. Tries every address in order.
-    ///
-    /// ```glide
-    /// let r: !*TcpStream = TcpStream::connect_host("example.com", 80);
-    /// if r.ok {
-    ///     defer r.val.close();
-    ///     r.val.write_all("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
-    /// }
-    /// ```
+    /// Resolve `host` via DNS, then connect to the first reachable address
+    /// on `port`. Tries every address in order.
     pub fn connect_host(host: string, port: i32) -> !*TcpStream {
         let r: !*Vector<*IpAddr> = resolve(host);
         if !r.ok { return err(r.err); }
@@ -190,65 +80,41 @@ impl TcpStream {
     }
 
     /// Write `data` once. May write fewer bytes than requested under
-    /// pressure — use `write_all` for a loop that retries until every
-    /// byte is sent.
-    ///
-    /// ```glide
-    /// let r: !i32 = stream.write("hi");
-    /// if r.ok { println!("wrote", r.val, "bytes"); }
-    /// ```
+    /// pressure — use `write_all` to retry until every byte is sent.
     pub fn write(self: *TcpStream, data: string) -> !i32 {
-        let n: i64 = __glide_tcp_send(self.fd, data, data.len());
-        if n < 0 { return err("tcp: send failed"); }
+        let buf: *u8 = _str_buf(data);
+        let n: i64 = gnet_send(self.fd, buf as *void, data.len());
+        free(buf as *void);
+        if n < 0 { return err("tcp: send: ".concat(gnet_last_error())); }
         return ok(n as i32);
     }
 
-    /// Write every byte of `data`. Loops on partial writes; only
-    /// returns err if the OS reports an unrecoverable error.
+    /// Write every byte of `data` (reactor write-all loop in the runtime).
     ///
     /// ```glide
     /// stream.write_all("HTTP/1.0 200 OK\r\n\r\nhi");
     /// ```
     pub fn write_all(self: *TcpStream, data: string) -> !i32 {
         let n: i32 = data.len();
-        let mut sent: i32 = 0;
-        while sent < n {
-            let chunk: string = data.substring(sent, n);
-            let r: !i32 = self.write(chunk);
-            if !r.ok { return err(r.err); }
-            if r.val == 0 { return err("tcp: write returned 0"); }
-            sent = sent + r.val;
-        }
-        return ok(n);
+        let buf: *u8 = _str_buf(data);
+        let w: i64 = gnet_write_async(self.fd, buf as *void, n);
+        free(buf as *void);
+        if w < 0 { return err("tcp: write_all: ".concat(gnet_last_error())); }
+        return ok(w as i32);
     }
 
-    /// Read up to `max` bytes. Returns:
-    ///   ok(n>0) — bytes read
-    ///   ok(0)   — peer closed cleanly
-    ///   err(_)  — error
-    ///
-    /// ```glide
-    /// let r: !string = stream.read(4096);
-    /// if r.ok && r.val.len() > 0 { print!(r.val); }
-    /// ```
+    /// Read up to `max` bytes. ok(n>0) bytes; ok(0) peer closed; err on error.
     pub fn read(self: *TcpStream, max: i32) -> !string {
         let buf: *u8 = malloc(max) as *u8;
-        let n: i64 = __glide_tcp_recv(self.fd, buf as *void, max);
-        if n < 0 { free(buf as *void); return err("tcp: recv failed"); }
+        let n: i64 = gnet_read_async(self.fd, buf as *void, max);
+        if n < 0 { free(buf as *void); return err("tcp: recv: ".concat(gnet_last_error())); }
         let s: string = _bytes_to_string(buf, n as i32);
         free(buf as *void);
         return ok(s);
     }
 
-    /// Read until the connection closes. Useful for HTTP/1.0-style
-    /// "read everything" responses or for simple line protocols
-    /// terminated by EOF.
-    ///
-    /// ```glide
-    /// stream.write_all("GET /robots.txt HTTP/1.0\r\nHost: example.com\r\n\r\n");
-    /// let r: !string = stream.read_to_end();
-    /// if r.ok { println!(r.val.len(), "bytes"); }
-    /// ```
+    /// Read until the connection closes (EOF). Useful for HTTP/1.0-style
+    /// "read everything" responses.
     pub fn read_to_end(self: *TcpStream) -> !string {
         let mut out: string = "";
         while true {
@@ -260,26 +126,15 @@ impl TcpStream {
         return ok(out);
     }
 
-    /// Apply a read + write timeout in milliseconds. `0` disables.
-    /// Backed by SO_RCVTIMEO / SO_SNDTIMEO — the kernel reports a
-    /// short read once the timer fires.
-    ///
-    /// ```glide
-    /// stream.set_timeout_ms(5000);   // 5s for both reads and writes
-    /// ```
+    /// Apply a read + write timeout in milliseconds (`0` disables), via
+    /// SO_RCVTIMEO / SO_SNDTIMEO. Keep the fd blocking for this to bite.
     pub fn set_timeout_ms(self: *TcpStream, ms: i32) {
-        __glide_tcp_set_timeout(self.fd, ms);
+        let _r: i64 = gnet_set_timeout(self.fd, ms);
     }
 
-    /// Close the socket and free the struct. After `close()`, the
-    /// pointer is dangling — pair with `defer`.
-    ///
-    /// ```glide
-    /// let r: !*TcpStream = TcpStream::connect_host("example.com", 80);
-    /// if r.ok { defer r.val.close(); /* ... */ }
-    /// ```
+    /// Close the socket and free the struct. Pair with `defer`.
     pub fn close(self: *TcpStream) {
-        __glide_tcp_close_h(self.fd);
+        gnet_close(self.fd);
         free(self as *void);
     }
 }
