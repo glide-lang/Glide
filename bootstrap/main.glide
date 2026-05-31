@@ -2649,6 +2649,13 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
        prologue/epilogue ops). Worth it for the deep-recursion
        safety net the grow handler provides. */
     cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -D_GNU_SOURCE -Wno-error=implicit-function-declaration -lpthread -lm");
+    // HTTP/3: ngtcp2 / nghttp3 headers default to __declspec(dllimport) on
+    // Windows, so linking their STATIC archives makes lld-link hunt for
+    // __imp_* symbols a `.a` never exports ("undefined symbol: __declspec(
+    // dllimport) ngtcp2_crypto_ossl_init"). The *_STATICLIB macros turn the
+    // decoration off. Harmless on other targets — the EXTERN collapses to
+    // plain, which is the correct form for static linking everywhere.
+    if needs_h3 { cmd = cmd.concat(" -DNGTCP2_STATICLIB -DNGHTTP3_STATICLIB"); }
     /* On Linux, link liburing when present so the io_uring reactor
        backend in reactor.c is reachable. The header probe is via
        __has_include so the build still works on hosts without
