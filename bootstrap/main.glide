@@ -2368,12 +2368,36 @@ fn _target_add(triple: string) -> i32 {
         fs_remove_file(tmp_archive);
         return 1;
     }
-    let tar_cmd: string = "tar -xzf \"".concat(tmp_archive).concat("\" -C \"").concat(dest).concat("\"");
-    let rc_tar: i32 = __glide_shell(tar_cmd);
+    // Extract in-process (gzip_decode + tar_extract), NOT via the system
+    // `tar`: GNU tar on Windows/MSYS reads an absolute path like `C:\...` as a
+    // remote `host:path` ("tar (child): Cannot connect to C: resolve failed"),
+    // pipes nothing to gzip ("unexpected end of file"), and aborts — so the
+    // sysroot never installs and every build re-fetches and re-spews the
+    // error. The in-process path is what the embedded-sysroot install already
+    // uses and works on every host.
+    let mut read_len: i32 = 0;
+    let archive_gz: string = fs_read_bytes(tmp_archive, &read_len);
     fs_remove_file(tmp_archive);
-    if rc_tar != 0 {
+    if read_len <= 0 {
         spinner_finish(false, "");
-        println!("target: extraction failed (tar exit", rc_tar, ")");
+        println!("target: downloaded archive was empty");
+        fs_remove_dir_rec(dest);
+        return 1;
+    }
+    let mut decoded_len: i32 = 0;
+    let raw: *void = gzip_decode(archive_gz, read_len, &decoded_len);
+    if raw == null || decoded_len <= 0 {
+        spinner_finish(false, "");
+        println!("target: could not inflate sysroot archive");
+        fs_remove_dir_rec(dest);
+        return 1;
+    }
+    let archive: string = __glide_string_from_buf(raw, decoded_len);
+    let extracted: i32 = tar_extract(archive, decoded_len, dest, 0);
+    free(raw);
+    if extracted < 0 {
+        spinner_finish(false, "");
+        println!("target: extraction failed");
         fs_remove_dir_rec(dest);
         return 1;
     }
