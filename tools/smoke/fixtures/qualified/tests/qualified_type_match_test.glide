@@ -1,0 +1,36 @@
+// Module-qualified ENUM variant patterns in `match` arms. `foo::Color::Red`
+// must resolve to the SAME enum variant as a bare `Color::Red` so the match
+// arm both type-checks and lowers correctly. Guards qualified-path handling in
+// match-arm pattern resolution and qualified enum constructors.
+
+import stdlib::testing::*;
+import foo;
+
+// qualified enum as RETURN type + qualified variant constructors
+fn pick(green: i32) -> foo::Color {
+    if green == 1 { return foo::Color::Green; }
+    return foo::Color::Red;
+}
+
+// qualified enum match-arm patterns (block arms with explicit return)
+fn rank(c: foo::Color) -> i32 {
+    match c {
+        foo::Color::Red => { return 1; }
+        foo::Color::Green => { return 2; }
+    }
+}
+
+fn test_qualified_match_arms() -> i32 {
+    assert_eq!(rank(foo::Color::Red), 1);
+    assert_eq!(rank(foo::Color::Green), 2);
+    return 0;
+}
+
+fn test_qualified_enum_return_then_match() -> i32 {
+    let r: foo::Color = pick(0);
+    assert_eq!(rank(r), 1);
+
+    let g: foo::Color = pick(1);
+    assert_eq!(rank(g), 2);
+    return 0;
+}

@@ -1,0 +1,18 @@
+pub struct Bar {
+    pub n: i32,
+}
+
+impl Bar {
+    pub fn mk(n: i32) -> Bar {
+        return Bar { n: n };
+    }
+
+    pub fn get(r: *Bar) -> i32 {
+        return r.n;
+    }
+}
+
+pub enum Color {
+    Red,
+    Green,
+}

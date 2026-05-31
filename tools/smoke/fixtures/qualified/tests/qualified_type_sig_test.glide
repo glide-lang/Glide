@@ -1,0 +1,105 @@
+// Module-qualified type names in function signatures, struct fields, containers,
+// and deep submodule paths. `foo::Bar` names the SAME global type as the bare
+// `Bar` â€” `foo::` is a path qualifier, not a namespace. Guards the typer
+// canonicalization that strips an imported-module prefix from a type annotation
+// so it survives type-checking AND codegen across every annotation position.
+
+import stdlib::testing::*;
+import foo;
+import a::b;
+
+// qualified RETURN type
+fn make_bar(n: i32) -> foo::Bar {
+    return foo::Bar::mk(n);
+}
+
+// qualified VALUE param
+fn read_val(b: foo::Bar) -> i32 {
+    return b.n;
+}
+
+// qualified POINTER param + field access through it
+fn read_ptr(b: *foo::Bar) -> i32 {
+    return b.n;
+}
+
+// qualified BORROW param
+fn read_ref(b: &foo::Bar) -> i32 {
+    return b.n;
+}
+
+// qualified MUTABLE-BORROW param (mutate through it)
+fn bump(b: &mut foo::Bar) {
+    b.n = b.n + 1;
+}
+
+// TWO qualified params
+fn add_bars(x: foo::Bar, y: foo::Bar) -> i32 {
+    return x.n + y.n;
+}
+
+// qualified struct FIELD type
+struct Holder {
+    inner: foo::Bar,
+}
+
+impl Holder {
+    fn wrap(b: foo::Bar) -> Holder {
+        return Holder { inner: b };
+    }
+}
+
+// deep submodule (src/a/b.glide) qualified by its final path segment `b::`
+fn make_thing(k: i32) -> b::Thing {
+    return b::Thing::mk(k);
+}
+
+fn test_qualified_return_and_value_param() -> i32 {
+    let bar: foo::Bar = make_bar(5);
+    assert_eq!(bar.n, 5);
+    assert_eq!(read_val(bar), 5);
+    return 0;
+}
+
+fn test_qualified_ptr_ref_params() -> i32 {
+    let bar: foo::Bar = make_bar(11);
+    assert_eq!(read_ptr(&bar), 11);
+    assert_eq!(read_ref(&bar), 11);
+    return 0;
+}
+
+fn test_qualified_mut_ref_param() -> i32 {
+    let mut bar: foo::Bar = make_bar(40);
+    bump(&mut bar);
+    bump(&mut bar);
+    assert_eq!(bar.n, 42);
+    return 0;
+}
+
+fn test_qualified_two_params() -> i32 {
+    let x: foo::Bar = make_bar(3);
+    let y: foo::Bar = make_bar(4);
+    assert_eq!(add_bars(x, y), 7);
+    return 0;
+}
+
+fn test_qualified_struct_field() -> i32 {
+    let h: Holder = Holder::wrap(foo::Bar::mk(9));
+    assert_eq!(h.inner.n, 9);
+    return 0;
+}
+
+fn test_qualified_in_vector() -> i32 {
+    let mut v = Vector::new();
+    v.push(foo::Bar::mk(5));
+    v.push(foo::Bar::mk(6));
+    assert_eq!(v.get(0).n, 5);
+    assert_eq!(v.get(1).n, 6);
+    return 0;
+}
+
+fn test_deep_submodule_qualified() -> i32 {
+    let t: b::Thing = make_thing(99);
+    assert_eq!(t.k, 99);
+    return 0;
+}

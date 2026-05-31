@@ -1,0 +1,9 @@
+pub struct Thing {
+    pub k: i32,
+}
+
+impl Thing {
+    pub fn mk(k: i32) -> Thing {
+        return Thing { k: k };
+    }
+}
