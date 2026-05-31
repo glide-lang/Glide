@@ -8634,6 +8634,15 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
             if stmt_uses_name(&b, name) { return true; }
         }
     }
+    // Closure (`fn(...) {...}` / `move fn(...) {...}`) bodies capture
+    // enclosing locals/params; a name used only inside the closure is
+    // still used. Without this descent it is mis-reported unused.
+    if e.fn_expr_body != null {
+        for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+            let b: Stmt = e.fn_expr_body.get(i);
+            if stmt_uses_name(&b, name) { return true; }
+        }
+    }
     return false;
 }
 
@@ -8874,6 +8883,11 @@ fn stmt_lets_name_escape(s: *Stmt, name: string, kind: i32) -> bool {
     // `return name;` (and `return ok(name)`, etc.)
     if s.kind == ST_RETURN && s.expr_value != null
        && expr_mentions_ident(s.expr_value, name) { return true; }
+    // Aliasing the alloc through a new binding hands ownership to the
+    // alias (`let q = name;`, `let d = name as *dyn T;`). The original
+    // handle is no longer the sole owner, so don't demand a free of it.
+    if s.kind == ST_LET && s.let_value != null
+       && expr_strips_to_ident(s.let_value, name) { return true; }
     if s.let_value != null && expr_passes_to_non_free(s.let_value, name, kind) { return true; }
     if s.expr_value != null && expr_passes_to_non_free(s.expr_value, name, kind) { return true; }
     if s.cond != null && expr_passes_to_non_free(s.cond, name, kind) { return true; }
@@ -10172,8 +10186,13 @@ pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
     // WITHOUT a preceding null-check. Those params are "non-null
     // required" — passing null literal to them at a call site is
     // an immediate crash.
+    // Which params each fn null-GUARDS (validators like is_valid). Computed
+    // first so the deref pass can treat `f(p)` as a guard of p when f guards
+    // it — the "validate through a helper" pattern.
+    let guards_params: *HashMap<string> = HashMap::new();  // fn name -> ","-joined guarded idxs
+    _ndp_collect_param_guards(program, guards_params);
     let deref_params: *HashMap<string> = HashMap::new();   // fn name -> ","-joined indices
-    _ndp_collect_param_derefs(program, deref_params);
+    _ndp_collect_param_derefs(program, deref_params, guards_params);
 
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
@@ -10201,6 +10220,7 @@ pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
         }
     }
     deref_params.free();
+    guards_params.free();
 }
 
 // Compute which param indices are dereferenced unconditionally inside
@@ -10208,11 +10228,11 @@ pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
 // or `if p != null` guard ANYWHERE protecting the access. The result
 // is conservative: if the body looks tricky, we don't include the
 // index.
-fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<string>) {
+fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<string>, guards_params: *HashMap<string>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null && s.fn_params != null {
-            _ndp_index_one_fn(&s, deref_params);
+            _ndp_index_one_fn(&s, deref_params, guards_params);
         }
         if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
             let tname: string = "";
@@ -10221,7 +10241,7 @@ fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<stri
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body == null || m.fn_params == null { continue; }
-                _ndp_index_one_fn(&m, deref_params);
+                _ndp_index_one_fn(&m, deref_params, guards_params);
                 if !tname.eq("") {
                     // Also index under `<Type>::<method>` so callers
                     // doing `x.method(null)` can resolve.
@@ -10234,7 +10254,7 @@ fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<stri
         }
     }
 }
-fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>) {
+fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>, guards_params: *HashMap<string>) {
     // Walk the body in source order. For each param, find the FIRST
     // event that mentions it: a guard (`if p == null` cond) or a
     // deref. A guard-first means the body handles null; a deref-first
@@ -10242,7 +10262,7 @@ fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>) {
     // latter set requires non-null args.
     let unprotected: *HashMap<bool> = HashMap::new();   // param -> first-seen-was-deref
     let seen_guard: *HashMap<bool> = HashMap::new();
-    _ndp_walk_order(m.fn_body, unprotected, seen_guard);
+    _ndp_walk_order(m.fn_body, unprotected, seen_guard, guards_params);
     let mut idxs: string = "";
     for let i: i32 = 0; i < m.fn_params.len(); i++ {
         let p: Param = m.fn_params.get(i);
@@ -10260,7 +10280,7 @@ fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>) {
 // Walks body in source order. For each name, the first event wins:
 // guard sets `unprotected[name] = false` (and never overwritten),
 // deref sets `unprotected[name] = true` if no entry exists yet.
-fn _ndp_walk_order(body: *Vector<Stmt>, unprotected: *HashMap<bool>, seen_guard: *HashMap<bool>) {
+fn _ndp_walk_order(body: *Vector<Stmt>, unprotected: *HashMap<bool>, seen_guard: *HashMap<bool>, guards_params: *HashMap<string>) {
     if body == null { return; }
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
@@ -10276,14 +10296,115 @@ fn _ndp_walk_order(body: *Vector<Stmt>, unprotected: *HashMap<bool>, seen_guard:
                 }
                 seen_guard.insert(n, true);
             }
+            // A param validated through a helper call (`is_valid(p)`) counts
+            // as guarded — register before recording the cond's own derefs.
+            _ndp_register_validated_args(s.cond, guards_params, unprotected);
             // Also check derefs in the cond expression itself.
             _ndp_record_derefs_in_expr_ordered(s.cond, unprotected, seen_guard);
             gnames.free();
         }
-        if s.expr_value != null { _ndp_record_derefs_in_expr_ordered(s.expr_value, unprotected, seen_guard); }
-        if s.let_value != null { _ndp_record_derefs_in_expr_ordered(s.let_value, unprotected, seen_guard); }
-        if s.then_body != null { _ndp_walk_order(s.then_body, unprotected, seen_guard); }
-        if s.else_body != null { _ndp_walk_order(s.else_body, unprotected, seen_guard); }
+        if s.expr_value != null {
+            _ndp_register_validated_args(s.expr_value, guards_params, unprotected);
+            _ndp_record_derefs_in_expr_ordered(s.expr_value, unprotected, seen_guard);
+        }
+        if s.let_value != null {
+            _ndp_register_validated_args(s.let_value, guards_params, unprotected);
+            _ndp_record_derefs_in_expr_ordered(s.let_value, unprotected, seen_guard);
+        }
+        if s.then_body != null { _ndp_walk_order(s.then_body, unprotected, seen_guard, guards_params); }
+        if s.else_body != null { _ndp_walk_order(s.else_body, unprotected, seen_guard, guards_params); }
+    }
+}
+// For each call `f(args)` in `e`, if the callee `f` null-guards a param
+// (per guards_params) and the matching argument is a bare identifier,
+// register that identifier as guard-first. Models the "validate through a
+// helper" pattern: passing p to a validator that null-checks it guards p.
+// Only bare-ident args count — `f(p.val)` / `f(*p)` are real derefs handled
+// elsewhere. First-event-wins is preserved (skip if already recorded).
+fn _ndp_register_validated_args(e: *Expr, guards_params: *HashMap<string>, unprotected: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.args != null {
+        let fname: string = e.lhs.str_val;
+        if guards_params.contains(fname) {
+            let idxs: string = guards_params.get(fname);
+            let n: i32 = idxs.len();
+            let mut buf: string = "";
+            for let k: i32 = 0; k <= n; k++ {
+                if k == n || idxs.at(k).to_int() == 44 {
+                    if !buf.eq("") {
+                        let idx: i32 = _ndp_atoi(buf);
+                        if idx >= 0 && idx < e.args.len() {
+                            let a: Expr = e.args.get(idx);
+                            if a.kind == EX_IDENT && !unprotected.contains(a.str_val) {
+                                unprotected.insert(a.str_val, false);   // validated -> guard-first
+                            }
+                        }
+                        buf = "";
+                    }
+                } else { buf = buf.concat(idxs.substring(k, k + 1)); }
+            }
+        }
+    }
+    if e.lhs != null { _ndp_register_validated_args(e.lhs, guards_params, unprotected); }
+    if e.rhs != null { _ndp_register_validated_args(e.rhs, guards_params, unprotected); }
+    if e.operand != null { _ndp_register_validated_args(e.operand, guards_params, unprotected); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _ndp_register_validated_args(&a, guards_params, unprotected);
+        }
+    }
+}
+// Compute, per fn, which pointer-param indices the fn null-GUARDS (the param
+// appears in an `== null` / `!= null` test anywhere in the body). A call to
+// such a fn validates that argument for the caller.
+fn _ndp_collect_param_guards(program: *Vector<Stmt>, guards_params: *HashMap<string>) {
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null && s.fn_params != null {
+            _ndp_index_guards_one_fn(&s, guards_params);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
+            let tname: string = "";
+            if s.impl_target.kind == TY_NAMED { tname = s.impl_target.name; }
+            else if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body == null || m.fn_params == null { continue; }
+                _ndp_index_guards_one_fn(&m, guards_params);
+                if !tname.eq("") && guards_params.contains(m.name) {
+                    guards_params.insert(tname.concat("::").concat(m.name), guards_params.get(m.name));
+                }
+            }
+        }
+    }
+}
+fn _ndp_index_guards_one_fn(m: *Stmt, guards_params: *HashMap<string>) {
+    let guarded: *Vector<string> = Vector::new();
+    _ndp_collect_all_guards(m.fn_body, guarded);
+    let mut idxs: string = "";
+    for let i: i32 = 0; i < m.fn_params.len(); i++ {
+        let p: Param = m.fn_params.get(i);
+        if p.ty == null || p.ty.kind != TY_POINTER { continue; }
+        let mut is_guarded: bool = false;
+        for let g: i32 = 0; g < guarded.len(); g++ {
+            if guarded.get(g).eq(p.name) { is_guarded = true; break; }
+        }
+        if !is_guarded { continue; }
+        if idxs.eq("") { idxs = i.to_string(); }
+        else { idxs = idxs.concat(",").concat(i.to_string()); }
+    }
+    guarded.free();
+    if !idxs.eq("") { guards_params.insert(m.name, idxs); }
+}
+// Collect every name that is null-tested in any cond throughout the body.
+fn _ndp_collect_all_guards(body: *Vector<Stmt>, names: *Vector<string>) {
+    if body == null { return; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.cond != null { _ndp_collect_guarded_names(s.cond, names); }
+        if s.then_body != null { _ndp_collect_all_guards(s.then_body, names); }
+        if s.else_body != null { _ndp_collect_all_guards(s.else_body, names); }
     }
 }
 fn _ndp_collect_guarded_names(e: *Expr, names: *Vector<string>) {
@@ -10648,15 +10769,28 @@ fn _bf_ty_tag_for_free(ty: *Type) -> string {
        && ty.inner.kind == TY_NAMED && ty.inner.name.eq("string") {
         return "";
     }
-    // Pointer to Vector / HashMap (whether TY_NAMED or TY_GENERIC).
+    // Pointer to the stdlib Vector / HashMap. These collections are ALWAYS
+    // used as instantiated generics (`*Vector<T>` / `*HashMap<V>`), so the
+    // inner is TY_GENERIC. A user POD named `Vector` / `HashMap` declared as
+    // a plain `*Vector` is TY_NAMED — it owns no internal buffers, so
+    // `free(v as *void)` is correct and must not be flagged.
     if ty.kind == TY_POINTER && ty.inner != null {
-        let mut inner_name: string = "";
-        if ty.inner.kind == TY_NAMED { inner_name = ty.inner.name; }
-        else if ty.inner.kind == TY_GENERIC { inner_name = ty.inner.name; }
-        if inner_name.eq("Vector") || inner_name.eq("HashMap") { return inner_name; }
-        // Other pointer types — return the inner name as a fallback
-        // so callers can still match (e.g. for tracking impl targets).
-        return inner_name;
+        if ty.inner.kind == TY_GENERIC
+           && (ty.inner.name.eq("Vector") || ty.inner.name.eq("HashMap")) {
+            return ty.inner.name;
+        }
+        // Other pointer types — return the inner head name as a fallback
+        // so callers can still match (e.g. for tracking impl targets). A
+        // bare `*Vector`/`*HashMap` (TY_NAMED) is a USER POD, not the stdlib
+        // collection, so it must NOT return the collection name — otherwise
+        // the bad-free collection branch (which matches on the name) would
+        // still fire on `free(v as *void)` for correct POD code.
+        if ty.inner.kind == TY_NAMED {
+            if ty.inner.name.eq("Vector") || ty.inner.name.eq("HashMap") { return ""; }
+            return ty.inner.name;
+        }
+        if ty.inner.kind == TY_GENERIC { return ty.inner.name; }
+        return "";
     }
     if ty.kind == TY_GENERIC { return ty.name; }
     return "";
@@ -11688,8 +11822,41 @@ fn _uaf_scan(t: *Typer, body: *Vector<Stmt>, freed: *HashMap<bool>) {
         if s.let_value != null { _uaf_check_expr(t, s.let_value, freed, ""); }
         if s.cond != null { _uaf_check_expr(t, s.cond, freed, ""); }
         if !free_target.eq("") { freed.insert(free_target, true); }
-        if s.then_body != null { _uaf_scan(t, s.then_body, freed); }
-        if s.else_body != null { _uaf_scan(t, s.else_body, freed); }
+        // if/else branches are mutually exclusive paths: a free on the
+        // `then` path must NOT poison reads on the `else` path. Scan each
+        // branch with its own copy of `freed`, then merge the union of
+        // names still freed in EITHER branch back in — so a name freed on
+        // any path (without realloc) is still flagged after the if, which
+        // keeps real dangling-read detection intact.
+        if s.then_body != null || s.else_body != null {
+            let then_freed: *HashMap<bool> = _uaf_clone_bool(freed);
+            let else_freed: *HashMap<bool> = _uaf_clone_bool(freed);
+            if s.then_body != null { _uaf_scan(t, s.then_body, then_freed); }
+            if s.else_body != null { _uaf_scan(t, s.else_body, else_freed); }
+            _uaf_merge_freed(then_freed, freed);
+            _uaf_merge_freed(else_freed, freed);
+            then_freed.free();
+            else_freed.free();
+        }
+    }
+}
+fn _uaf_clone_bool(src: *HashMap<bool>) -> *HashMap<bool> {
+    let out: *HashMap<bool> = HashMap::new();
+    let ks: *Vector<string> = src.keys();
+    for let i: i32 = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        out.insert(k, src.get(k));
+    }
+    return out;
+}
+fn _uaf_merge_freed(src: *HashMap<bool>, dst: *HashMap<bool>) {
+    let ks: *Vector<string> = src.keys();
+    for let i: i32 = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        // Union of TRUE-freed names: if either branch left it freed,
+        // it stays freed after the if. A branch that reallocated it
+        // (freed=false) does not clear a free recorded by the sibling.
+        if src.get(k) { dst.insert(k, true); }
     }
 }
 fn _uaf_free_target(e: *Expr) -> string {
@@ -11808,6 +11975,30 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>,
             then_held.free(); then_col.free();
             else_held.free(); else_col.free();
             snap.free(); snap_col.free();
+        }
+        // match arm bodies live in s.arms[].body, not then/else_body. Walk
+        // each arm with its own clone of the held set and merge the union,
+        // so an unlock() inside an arm is seen (no false "never released"),
+        // while an arm that forgets to unlock still leaves the name held.
+        if s.kind == ST_MATCH && s.arms != null {
+            let m_snap: *HashMap<i32> = _mu_clone_int(held);
+            let m_snap_col: *HashMap<i32> = _mu_clone_int(held_col);
+            let m_acc: *HashMap<i32> = HashMap::new();
+            let m_acc_col: *HashMap<i32> = HashMap::new();
+            for let j: i32 = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                if arm.body == null { continue; }
+                let a_held: *HashMap<i32> = _mu_clone_int(m_snap);
+                let a_col: *HashMap<i32> = _mu_clone_int(m_snap_col);
+                _mu_walk_path(t, arm.body, a_held, a_col, warned);
+                _mu_merge_into(a_held, a_col, m_acc, m_acc_col);
+                a_held.free(); a_col.free();
+            }
+            held.clear();
+            held_col.clear();
+            _mu_merge_into(m_acc, m_acc_col, held, held_col);
+            m_acc.free(); m_acc_col.free();
+            m_snap.free(); m_snap_col.free();
         }
     }
 }
@@ -12059,6 +12250,11 @@ fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
         for let k: i32 = 0; k < returning.len(); k++ {
             let r: i32 = returning.get(k);
             if r > a && r < d {
+                // If `nm` is freed inline (not via defer) on a top-level
+                // statement before the early exit, that exit path already
+                // releases it — no leak. Covers free-then-rebind and
+                // explicit free-before-`?` patterns.
+                if _ler_freed_inline_before(body, nm, a, r) { continue; }
                 t.warn_range(alloc_line.get(nm), alloc_col.get(nm), nm.len(), "leak-on-early-return",
                     "`defer ".concat(nm).concat(".free()` is registered after an early exit on line — move it right after `let ").concat(nm).concat(" = …;` so the cleanup also fires on the error path"));
                 break;
@@ -12067,6 +12263,18 @@ fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
     }
     defer_idx.free(); alloc_idx.free();
     alloc_line.free(); alloc_col.free();
+}
+// True when `nm` is released by an inline free (a plain expression
+// statement, NOT a `defer`) at some top-level index strictly between the
+// alloc at `a` and the early exit at `r`. Such a free already covers the
+// early-exit path, so the deferred free is not a leak there.
+fn _ler_freed_inline_before(body: *Vector<Stmt>, nm: string, a: i32, r: i32) -> bool {
+    for let k: i32 = a + 1; k < r; k++ {
+        let s: Stmt = body.get(k);
+        if s.kind == ST_DEFER { continue; }
+        if s.expr_value != null && _ler_defer_target(s.expr_value).eq(nm) { return true; }
+    }
+    return false;
 }
 fn _ler_defer_target(e: *Expr) -> string {
     if e == null { return ""; }

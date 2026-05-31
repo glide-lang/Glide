@@ -678,10 +678,13 @@ pub fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                             "`".concat(nm).concat("` is not declared in `").concat(target).concat("`"));
                     }
                 }
-            } else if !seen_files.contains(target) {
-                // The import resolved to no loaded file → the module doesn't
-                // exist (typo, wrong path, missing dep). `seen_files` holds
-                // every origin actually parsed, so a miss is conclusive.
+            } else if !seen_files.contains(target) && !__glide_file_exists(target) {
+                // The import resolved to no file on disk → the module doesn't
+                // exist (typo, wrong path, missing dep). A `seen_files` miss
+                // alone is NOT conclusive: an empty or comment-only file
+                // resolves to a real path yet contributes zero statements, so
+                // no origin lands in `seen_files`. Gate on the resolved path
+                // actually existing before flagging it unresolved.
                 t.push_diag(s.line, s.column, 1, "unresolved-import",
                     "cannot find module `".concat(module_path_from_path(target))
                     .concat("` to import"));

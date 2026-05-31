@@ -2062,6 +2062,25 @@ fn _consumed_restore(t: *Typer, snap: *HashMap<bool>) {
     }
     ks.free();
 }
+// Collect into `out` every local that became freed in this branch — i.e.
+// consumed now but NOT in `base` (the pre-branch snapshot).
+fn _consumed_collect_new(t: *Typer, base: *HashMap<bool>, out: *HashMap<bool>) {
+    let ks: *Vector<string> = t.consumed_locals.keys();
+    for let i: i32 = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        if t.consumed_locals.get(k) && !base.contains(k) { out.insert(k, true); }
+    }
+    ks.free();
+}
+// Re-apply a captured set of frees onto the live consumed-set.
+fn _consumed_apply(t: *Typer, keep: *HashMap<bool>) {
+    let ks: *Vector<string> = keep.keys();
+    for let i: i32 = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        if keep.get(k) { t.consumed_locals.insert(k, true); }
+    }
+    ks.free();
+}
 
 fn check_stmt(t: *Typer, s: *Stmt) {
     if s.kind == ST_LET || s.kind == ST_CONST {
@@ -2104,32 +2123,43 @@ fn check_stmt(t: *Typer, s: *Stmt) {
                 t.err(s.line, s.column, "if condition must be bool");
             }
         }
+        // `then` and `else` are mutually exclusive paths: a free inside one
+        // must NOT mark the local freed while the OTHER branch is checked.
+        // Snapshot before each branch, roll that branch's frees back, and
+        // after both branches re-apply only the frees from branches that fall
+        // through (a branch that returns/breaks/continues never reaches the
+        // code after the `if`, so its frees don't persist there either).
+        let s0: *HashMap<bool> = _consumed_snapshot(t);
+        let then_keep: *HashMap<bool> = HashMap::new();
+        let else_keep: *HashMap<bool> = HashMap::new();
         if s.then_body != null {
             let saved: i32 = enter_borrow_scope(t);
-            let csnap: *HashMap<bool> = _consumed_snapshot(t);
             for let i: i32 = 0; i < s.then_body.len(); i++ {
                 let b: Stmt = s.then_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.then_body, i);
             }
             exit_borrow_scope(t, saved);
-            // A `free()` inside a branch that returns/breaks/continues never
-            // reaches the code after the `if`, so don't carry it out.
-            if _body_exits(s.then_body) { _consumed_restore(t, csnap); }
-            csnap.free();
+            if !_body_exits(s.then_body) { _consumed_collect_new(t, s0, then_keep); }
+            _consumed_restore(t, s0);   // roll then's frees back before else
         }
         if s.else_body != null {
             let saved: i32 = enter_borrow_scope(t);
-            let csnap2: *HashMap<bool> = _consumed_snapshot(t);
             for let i: i32 = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
                 check_stmt(t, &b);
                 kill_dead_borrows(t, s.else_body, i);
             }
             exit_borrow_scope(t, saved);
-            if _body_exits(s.else_body) { _consumed_restore(t, csnap2); }
-            csnap2.free();
+            if !_body_exits(s.else_body) { _consumed_collect_new(t, s0, else_keep); }
+            _consumed_restore(t, s0);   // roll else's frees back; union re-applied below
         }
+        // Post-`if` state = pre-`if` frees plus the frees from each branch
+        // that falls through. A read after the `if` of a value freed on any
+        // reachable path is still flagged (real use-after-free preserved).
+        _consumed_apply(t, then_keep);
+        _consumed_apply(t, else_keep);
+        s0.free(); then_keep.free(); else_keep.free();
         return;
     }
     if s.kind == ST_WHILE_RECV {
