@@ -30,6 +30,12 @@ extern fn gnet_shutdown(fd: i64, how: i32) -> i64;
 extern fn gnet_close(fd: i64);
 extern fn gnet_const(which: i32) -> i32;
 extern fn gnet_last_error() -> string;
+// Reactor-integrated I/O (defined at the end of reactor.c). These park the
+// coroutine on a non-blocking fd and block gracefully otherwise, so all
+// Socket read/write routes through them.
+extern fn gnet_read_async(fd: i64, buf: *void, max: i32) -> i64;
+extern fn gnet_write_async(fd: i64, buf: *void, n: i32) -> i64;
+extern fn gnet_accept_async(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
 
 // ---- Glide socket-type + family tags ------------------------------------
 pub const SOCK_STREAM: i32 = 1;
@@ -103,13 +109,16 @@ impl Socket {
     }
 
     /// Accept one connection, returning a fresh owning Socket for the peer.
+    /// Goes through the reactor: parks the listener inside a coroutine,
+    /// blocks via the fallback otherwise. The accepted Socket is left
+    /// non-blocking + TCP_NODELAY, so its reads/writes run async in a coro.
     pub fn accept(self: *Socket) -> !*Socket {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
         let mut lo: i64 = 0;
         let mut p: i32 = 0;
-        let cfd: i64 = gnet_accept(self.fd, &f, &v4, &hi, &lo, &p);
+        let cfd: i64 = gnet_accept_async(self.fd, &f, &v4, &hi, &lo, &p);
         if cfd < 0 { return err("accept: ".concat(gnet_last_error())); }
         let c: *Socket = malloc(sizeof(Socket)) as *Socket;
         c.fd = cfd;
@@ -161,17 +170,18 @@ impl Socket {
         return ok(0);
     }
 
-    /// Send raw bytes (blocking). Returns bytes sent.
+    /// Send all `n` bytes (reactor-integrated: parks in a coro on a non-
+    /// blocking fd, blocks otherwise). Returns bytes sent.
     pub fn send(self: *Socket, buf: *void, n: i32) -> !i32 {
-        let r: i64 = gnet_send(self.fd, buf, n);
+        let r: i64 = gnet_write_async(self.fd, buf, n);
         if r < 0 { return err("send: ".concat(gnet_last_error())); }
         return ok(r as i32);
     }
 
-    /// Receive raw bytes into a caller-owned buffer (blocking). Returns bytes
-    /// read (0 at EOF).
+    /// Receive up to `max` bytes into a caller-owned buffer (reactor-
+    /// integrated). Returns bytes read (0 at EOF).
     pub fn recv(self: *Socket, buf: *void, max: i32) -> !i32 {
-        let r: i64 = gnet_recv(self.fd, buf, max);
+        let r: i64 = gnet_read_async(self.fd, buf, max);
         if r < 0 { return err("recv: ".concat(gnet_last_error())); }
         return ok(r as i32);
     }
@@ -201,13 +211,15 @@ pub trait Stream {
 }
 
 impl Stream for Socket {
+    // Reactor-integrated: parks the coroutine when the fd is non-blocking
+    // (server conns), blocks gracefully otherwise. write_bytes writes all n.
     fn read_bytes(self: *Socket, buf: *u8, max: i32) -> !i32 {
-        let n: i64 = gnet_recv(self.fd, buf as *void, max);
+        let n: i64 = gnet_read_async(self.fd, buf as *void, max);
         if n < 0 { return err(gnet_last_error()); }
         return ok(n as i32);
     }
     fn write_bytes(self: *Socket, buf: *u8, n: i32) -> !i32 {
-        let w: i64 = gnet_send(self.fd, buf as *void, n);
+        let w: i64 = gnet_write_async(self.fd, buf as *void, n);
         if w < 0 { return err(gnet_last_error()); }
         return ok(w as i32);
     }

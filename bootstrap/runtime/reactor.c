@@ -859,4 +859,90 @@ void __glide_io_close(int fd) { (void)fd; }
 
 #endif  /* backend dispatch */
 
+/* ---- foundation async wrappers (i64 fd) -------------------------------
+   stdlib::net::sys binds these. They sit on the reactor's already-proven,
+   fd-generic park primitives (no NEW concurrency: a plain read/write parks
+   on a single wake source — the deadline double-wake the design flags is a
+   later, separate concern). Correct on BOTH blocking and non-blocking fds:
+     - blocking fd          : recv/send blocks, never EAGAIN, never parks.
+     - non-block fd, in coro : EAGAIN -> park -> wake -> retry  (async).
+     - non-block fd, no coro : EAGAIN -> temporarily block once (fallback,
+                               mirrors accept_tcp_async).
+   So routing every Socket read/write through these degrades gracefully:
+   server conns (made non-blocking by accept_tcp_async) run async inside
+   handler coroutines; everything else just blocks. On IOCP / the no-reactor
+   fallback they are plain blocking recv/send (real IOCP overlap is deferred,
+   per docs/net-upgrade-plan.md §4.3). */
+
+int64_t gnet_read_async(int64_t fd64, void* buf, int max) {
+#if defined(GLIDE_REACTOR_USE_EPOLL) || defined(GLIDE_REACTOR_USE_KQUEUE)
+    int fd = (int)fd64;
+    while (1) {
+        int n = (int)recv(fd, (char*)buf, (size_t)max, 0);
+        if (n >= 0) return (int64_t)n;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!__glide_io_park_read(fd)) {
+                int flags = fcntl(fd, F_GETFL, 0);
+                fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+                int n2 = (int)recv(fd, (char*)buf, (size_t)max, 0);
+                fcntl(fd, F_SETFL, flags);
+                return (int64_t)n2;
+            }
+            continue;
+        }
+        return -1;
+    }
+#else
+    return (int64_t)recv((__glide_sock_t)fd64, (char*)buf, max, 0);
+#endif
+}
+
+int64_t gnet_write_async(int64_t fd64, void* buf, int n) {
+#if defined(GLIDE_REACTOR_USE_EPOLL) || defined(GLIDE_REACTOR_USE_KQUEUE)
+    int fd = (int)fd64;
+    int sent = 0;
+    while (sent < n) {
+        int w = (int)send(fd, (const char*)buf + sent, (size_t)(n - sent), 0);
+        if (w > 0) { sent += w; continue; }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            if (!__glide_io_park_write(fd)) {
+                int flags = fcntl(fd, F_GETFL, 0);
+                fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+                int w2 = (int)send(fd, (const char*)buf + sent, (size_t)(n - sent), 0);
+                fcntl(fd, F_SETFL, flags);
+                if (w2 > 0) { sent += w2; continue; }
+                return sent > 0 ? (int64_t)sent : -1;
+            }
+            continue;
+        }
+        return sent > 0 ? (int64_t)sent : -1;
+    }
+    return (int64_t)sent;
+#else
+    int sent = 0;
+    while (sent < n) {
+        int w = (int)send((__glide_sock_t)fd64, (const char*)buf + sent, (n - sent), 0);
+        if (w <= 0) return sent > 0 ? (int64_t)sent : -1;
+        sent += w;
+    }
+    return (int64_t)sent;
+#endif
+}
+
+/* Accept a connection through the reactor (parks the listener in a coro,
+   blocks via fallback otherwise — accept_tcp_async owns that logic and also
+   sets the accepted fd non-blocking + TCP_NODELAY). Fills the peer address
+   via the netcore unpacker. */
+int64_t gnet_accept_async(int64_t fd64, int* of, int64_t* ov4, int64_t* ohi,
+                          int64_t* olo, int* op) {
+    int c = accept_tcp_async((int)fd64);
+    if (c < 0) return -1;
+    struct sockaddr_storage ss; socklen_t len = sizeof(ss);
+    memset(&ss, 0, sizeof(ss));
+    if (getpeername((__glide_sock_t)c, (struct sockaddr*)&ss, &len) == 0) {
+        __gnet_unpack(&ss, of, ov4, ohi, olo, op);
+    }
+    return (int64_t)c;
+}
+
 #endif  /* GLIDE_REACTOR_DEFINED */
