@@ -2767,9 +2767,19 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     if !quiet { spinner_finish(true, "built ".concat(out_path)); }
 
     if then_run {
-        let mut prefix: string = "./";
-        if __glide_is_windows() != 0 { prefix = ".\\"; }
-        let mut run_cmd: string = "\"".concat(prefix).concat(out_path).concat("\"");
+        // A bare output name (a.exe / a.out) must be qualified with ./ or
+        // .\ to be runnable from CWD. A path that already carries a
+        // directory component — an absolute temp path, or build/<name> —
+        // runs as-is. Prepending ./ to an absolute path like
+        // C:\…\glide_run_tmp.exe yields `.\C:\…`, which the OS rejects with
+        // "the filename, directory name, or volume label syntax is
+        // incorrect" — the exact failure of `glide run` on a loose file.
+        let mut run_target: string = out_path;
+        if !out_path.contains("/") && !out_path.contains("\\") {
+            if __glide_is_windows() != 0 { run_target = ".\\".concat(out_path); }
+            else { run_target = "./".concat(out_path); }
+        }
+        let mut run_cmd: string = "\"".concat(run_target).concat("\"");
         if __glide_is_windows() != 0 {
             run_cmd = "\"".concat(run_cmd).concat("\"");
         }
