@@ -7318,9 +7318,24 @@ fn _push_pkg_fields(items: *JsonValue, doc_path: string) {
 // Resolve the callee declaration of a call context. Free fn or `Type::static`
 // only -- a `recv.method(` call needs the receiver's type (handled later).
 fn _callee_decl(stmts: *Vector<Stmt>, ctx: SigCallCtx) -> *Stmt {
-    if ctx.is_method { return null; }
+    if ctx.is_method {
+        let hit: ImplMethodHit = find_method_anywhere(stmts, ctx.name);
+        return hit.method;
+    }
     if !ctx.type_qual.eq("") { return find_method_in_impl(stmts, ctx.type_qual, ctx.name); }
     return find_top_decl(stmts, ctx.name);
+}
+
+// Effective parameter index for the call's active argument. A `recv.method(`
+// call passes the receiver implicitly, so its fn_params still carry a leading
+// `self` that the user never types — shift the user-visible index past it.
+fn _callee_param_idx(callee: *Stmt, ctx: SigCallCtx) -> i32 {
+    let mut base: i32 = 0;
+    if ctx.is_method && callee.fn_params != null && callee.fn_params.len() > 0 {
+        let p0: Param = callee.fn_params.get(0);
+        if p0.name != null && p0.name.eq("self") { base = 1; }
+    }
+    return ctx.active_param + base;
 }
 
 // Push the values from a `@suggest(param, "a", "b" | EnumName)` attribute on
@@ -7331,8 +7346,9 @@ fn _push_suggest_for_arg(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValu
     let callee: *Stmt = _callee_decl(stmts, ctx);
     if callee == null || callee.kind != ST_FN { return false; }
     if callee.attrs == null || callee.fn_params == null { return false; }
-    if ctx.active_param < 0 || ctx.active_param >= callee.fn_params.len() { return false; }
-    let pm: Param = callee.fn_params.get(ctx.active_param);
+    let pidx: i32 = _callee_param_idx(callee, ctx);
+    if pidx < 0 || pidx >= callee.fn_params.len() { return false; }
+    let pm: Param = callee.fn_params.get(pidx);
     let mut any: bool = false;
     for let i: i32 = 0; i < callee.attrs.len(); i++ {
         let a: Attr = callee.attrs.get(i);
@@ -7416,8 +7432,9 @@ fn _fnptr_snippet(ty: *Type) -> string {
 fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue, seen: *HashMap<bool>) {
     let callee: *Stmt = _callee_decl(stmts, ctx);
     if callee == null || callee.kind != ST_FN || callee.fn_params == null { return; }
-    if ctx.active_param < 0 || ctx.active_param >= callee.fn_params.len() { return; }
-    let pm: Param = callee.fn_params.get(ctx.active_param);
+    let pidx: i32 = _callee_param_idx(callee, ctx);
+    if pidx < 0 || pidx >= callee.fn_params.len() { return; }
+    let pm: Param = callee.fn_params.get(pidx);
     let ty: *Type = pm.ty;
     if ty == null { return; }
     if ty.kind == TY_FNPTR {
