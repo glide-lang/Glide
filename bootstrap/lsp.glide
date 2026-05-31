@@ -7262,6 +7262,52 @@ fn _push_pkg_fields(items: *JsonValue, doc_path: string) {
     _push_pkg_field(items, "target", m);
 }
 
+// Resolve the callee declaration of a call context. Free fn or `Type::static`
+// only -- a `recv.method(` call needs the receiver's type (handled later).
+fn _callee_decl(stmts: *Vector<Stmt>, ctx: SigCallCtx) -> *Stmt {
+    if ctx.is_method { return null; }
+    if !ctx.type_qual.eq("") { return find_method_in_impl(stmts, ctx.type_qual, ctx.name); }
+    return find_top_decl(stmts, ctx.name);
+}
+
+// Push the values from a `@suggest(param, "a", "b" | EnumName)` attribute on
+// the callee, for the call's active argument. A referenced enum contributes
+// its variant names. Returns true when the active param is annotated (so the
+// caller stops instead of falling through to generic completion).
+fn _push_suggest_for_arg(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue) -> bool {
+    let callee: *Stmt = _callee_decl(stmts, ctx);
+    if callee == null || callee.kind != ST_FN { return false; }
+    if callee.attrs == null || callee.fn_params == null { return false; }
+    if ctx.active_param < 0 || ctx.active_param >= callee.fn_params.len() { return false; }
+    let pm: Param = callee.fn_params.get(ctx.active_param);
+    let mut any: bool = false;
+    for let i: i32 = 0; i < callee.attrs.len(); i++ {
+        let a: Attr = callee.attrs.get(i);
+        if a.name == null || !a.name.eq("suggest") { continue; }
+        if a.args == null || a.args.len() < 2 { continue; }
+        let p0: Expr = a.args.get(0);
+        if p0.kind != EX_IDENT || p0.str_val == null || !p0.str_val.eq(pm.name) { continue; }
+        for let j: i32 = 1; j < a.args.len(); j++ {
+            let v: Expr = a.args.get(j);
+            if v.kind == EX_STRING && v.str_val != null {
+                json_arr_push(items, completion_item(v.str_val, 12, "suggested value"));
+                any = true;
+            } else if v.kind == EX_IDENT && v.str_val != null {
+                let ed: *Stmt = find_top_decl(stmts, v.str_val);
+                if ed != null && ed.kind == ST_ENUM && ed.enum_variants != null {
+                    for let k: i32 = 0; k < ed.enum_variants.len(); k++ {
+                        let ev: EnumVariant = ed.enum_variants.get(k);
+                        if ev.name == null { continue; }
+                        json_arr_push(items, completion_item(ev.name, 12, "from enum ".concat(v.str_val)));
+                        any = true;
+                    }
+                }
+            }
+        }
+    }
+    return any;
+}
+
 fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -7306,6 +7352,16 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     // literals (Zed/VSCode don't know about Glide's lexer). Bail out before
     // we list anything — typing `"x.y"` should never offer field names.
     if _cursor_in_string_or_comment(doc.text, line0, col0) {
+        // Exception: inside a string that is a call argument whose param is
+        // `@suggest(param, "a", "b" | EnumName)`-annotated, offer those values.
+        let sctx: SigCallCtx = _find_call_context(doc.text, line0, col0);
+        if sctx.found {
+            let sit: *JsonValue = json_array();
+            if _push_suggest_for_arg(doc.stmts, sctx, sit) {
+                lsp_send_response(id, sit);
+                return;
+            }
+        }
         lsp_send_response(id, json_array());
         return;
     }
