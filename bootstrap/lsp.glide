@@ -1380,6 +1380,10 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_unused_vars(t, stmts);
     analysis_unused_params(t, stmts);
     analysis_unused_fn(t, stmts);
+    analysis_unused_struct_enum(t, stmts);
+    analysis_unused_const(t, stmts);
+    analysis_unused_variant(t, stmts);
+    analysis_redundant_import(t, stmts);
     analysis_unnecessary_mut(t, stmts);
     analysis_arena_not_freed(t, stmts);
     analysis_addr_of_temporary(t, stmts);
@@ -11742,6 +11746,213 @@ fn _ui_collect_type(t: *Type, used: *HashMap<bool>) {
     }
     // For TY_FNPTR `args` carries the param types and `fnptr_ret` the ret.
     if t.fnptr_ret != null { _ui_collect_type(t.fnptr_ret, used); }
+}
+
+// ---------- unused struct / enum -----------------------------------------
+// A non-pub, non-generic struct or enum that is never referenced as a type,
+// constructed, named in a path, or given an `impl` block is dead. Reuses the
+// generous `_ui_collect_stmt` reference scan (the one analysis_unused_import
+// uses): it marks every TY_NAMED in an annotation, every struct-literal name,
+// every path head and every bare ident, so any plausible use suppresses the
+// warning. A type with ANY impl block is treated as used (a strong intent
+// signal that avoids flagging types referenced only through their methods).
+pub fn analysis_unused_struct_enum(t: *Typer, program: *Vector<Stmt>) {
+    let used: *HashMap<bool> = HashMap::new();
+    let has_impl: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_IMPORT { continue; }
+        if s.kind == ST_IMPL && s.impl_target != null && s.impl_target.name != null {
+            has_impl.insert(s.impl_target.name, true);
+        }
+        _ui_collect_stmt(&s, used);
+    }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_STRUCT && s.kind != ST_ENUM { continue; }
+        if s.is_pub { continue; }
+        if s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.name == null || s.name.len() == 0 { continue; }
+        if _has_allow(&s, "unused-struct") { continue; }
+        if _has_allow(&s, "unused-enum") { continue; }
+        if has_impl.contains(s.name) { continue; }
+        if used.contains(s.name) { continue; }
+        t.current_origin = s.origin;
+        let mut nlen: i32 = s.name_len;
+        if nlen == 0 { nlen = s.name.len(); }
+        if s.kind == ST_STRUCT {
+            t.warn_unused_range(s.name_line, s.name_col, nlen, "unused-struct",
+                "struct `".concat(s.name).concat("` is never used"));
+        } else {
+            t.warn_unused_range(s.name_line, s.name_col, nlen, "unused-enum",
+                "enum `".concat(s.name).concat("` is never used"));
+        }
+    }
+    used.free();
+    has_impl.free();
+}
+
+// ---------- unused const -------------------------------------------------
+// A non-pub top-level `const NAME = ..` whose NAME is never referenced
+// anywhere in the file (idents, paths, annotations, other const values).
+pub fn analysis_unused_const(t: *Typer, program: *Vector<Stmt>) {
+    let used: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        _ui_collect_stmt(&s, used);
+    }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_CONST { continue; }
+        if s.is_pub { continue; }
+        if s.name == null || s.name.len() == 0 { continue; }
+        if _has_allow(&s, "unused-const") { continue; }
+        if used.contains(s.name) { continue; }
+        t.current_origin = s.origin;
+        let mut nlen: i32 = s.name_len;
+        if nlen == 0 { nlen = s.name.len(); }
+        t.warn_unused_range(s.name_line, s.name_col, nlen, "unused-const",
+            "const `".concat(s.name).concat("` is never referenced"));
+    }
+    used.free();
+}
+
+// ---------- redundant import ---------------------------------------------
+// Two import lines in the SAME file that resolve to the identical module
+// file path: the second brings nothing the first didn't. Keyed on
+// (origin, import_path) so two different files importing the same module
+// never cross-trigger; only an in-file duplicate fires. Exact path equality
+// also folds bare-vs-wildcard of the same module (both lower to the same
+// `.glide` path). A selective item vs a wildcard of its parent carry
+// different paths and are deliberately NOT matched (would risk false hits).
+pub fn analysis_redundant_import(t: *Typer, program: *Vector<Stmt>) {
+    let seen: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPORT { continue; }
+        if s.import_path == null || s.import_path.eq("") { continue; }
+        if _has_allow(&s, "redundant-import") { continue; }
+        let mut org: string = s.origin;
+        if org == null { org = ""; }
+        let key: string = org.concat(" ").concat(s.import_path);
+        if seen.contains(key) {
+            t.current_origin = s.origin;
+            t.warn_range(s.line, s.column, 6, "redundant-import",
+                "duplicate import: this module is already imported above; remove this line");
+        } else {
+            seen.insert(key, true);
+        }
+    }
+    seen.free();
+}
+
+// ---------- unused enum variant ------------------------------------------
+// Within a non-pub enum that IS used somewhere, an individual variant never
+// constructed (`E::V`) and never named in a match arm is dead. Keyed on the
+// bare variant name (the parser strips `Mod::Type::` qualifiers, so a match
+// arm and an `E::V` path both reduce to the bare variant). Skips pub/generic
+// enums and any enum the type-ref scan never saw (a wholly-dead enum is
+// owned by analysis_unused_struct_enum, no double report).
+fn _uv_collect_expr(e: *Expr, out: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_PATH { out.insert(e.field, true); }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH { out.insert(e.lhs.field, true); }
+    if e.lhs != null { _uv_collect_expr(e.lhs, out); }
+    if e.rhs != null { _uv_collect_expr(e.rhs, out); }
+    if e.operand != null { _uv_collect_expr(e.operand, out); }
+    if e.match_arms != null {
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let arm: MatchArm = e.match_arms.get(i);
+            out.insert(arm.variant, true);
+        }
+    }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _uv_collect_expr(&a, out);
+        }
+    }
+}
+
+fn _uv_collect_stmt(s: *Stmt, out: *HashMap<bool>) {
+    if s == null { return; }
+    if s.let_value != null { _uv_collect_expr(s.let_value, out); }
+    if s.expr_value != null { _uv_collect_expr(s.expr_value, out); }
+    if s.cond != null { _uv_collect_expr(s.cond, out); }
+    if s.for_step != null { _uv_collect_expr(s.for_step, out); }
+    if s.for_init != null { _uv_collect_stmt(s.for_init, out); }
+    if s.arms != null {
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let arm: MatchArm = s.arms.get(i);
+            out.insert(arm.variant, true);
+            if arm.body != null {
+                for let j: i32 = 0; j < arm.body.len(); j++ {
+                    let b: Stmt = arm.body.get(j);
+                    _uv_collect_stmt(&b, out);
+                }
+            }
+        }
+    }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            _uv_collect_stmt(&b, out);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            _uv_collect_stmt(&b, out);
+        }
+    }
+}
+
+pub fn analysis_unused_variant(t: *Typer, program: *Vector<Stmt>) {
+    let refs: *HashMap<bool> = HashMap::new();
+    let used: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPORT { _ui_collect_stmt(&s, refs); }
+        if s.fn_body != null {
+            for let j: i32 = 0; j < s.fn_body.len(); j++ {
+                let b: Stmt = s.fn_body.get(j);
+                _uv_collect_stmt(&b, used);
+            }
+        }
+        if s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body != null {
+                    for let k: i32 = 0; k < m.fn_body.len(); k++ {
+                        let b: Stmt = m.fn_body.get(k);
+                        _uv_collect_stmt(&b, used);
+                    }
+                }
+            }
+        }
+    }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_ENUM { continue; }
+        if s.is_pub { continue; }
+        if s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.name == null { continue; }
+        if _has_allow(&s, "unused-variant") { continue; }
+        if !refs.contains(s.name) { continue; }
+        if s.enum_variants == null { continue; }
+        let mut nlen: i32 = s.name_len;
+        if nlen == 0 { nlen = s.name.len(); }
+        for let j: i32 = 0; j < s.enum_variants.len(); j++ {
+            let v: EnumVariant = s.enum_variants.get(j);
+            if used.contains(v.name) { continue; }
+            t.current_origin = s.origin;
+            t.warn_unused_range(s.name_line, s.name_col, nlen, "unused-variant",
+                "enum variant `".concat(s.name).concat("::").concat(v.name)
+                    .concat("` is never constructed or matched"));
+        }
+    }
+    refs.free();
+    used.free();
 }
 
 // ---------- arena-set-without-restore ------------------------------------

@@ -300,7 +300,6 @@ const MODE_BUILD: i32 = 1;
 const MODE_RUN: i32 = 2;
 const MODE_CHECK: i32 = 3;
 const MODE_FMT: i32 = 4;
-const MODE_TEST: i32 = 5;
 
 // Bumped manually on release. `glide --version` reads it; same value
 // lives in glide.glide at the repo root (kept in sync by hand for now).
