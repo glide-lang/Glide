@@ -987,6 +987,42 @@ def case_completion_project(label, files, open_rel, pos,
               expect_text in texts, f"got {texts}")
     shutil.rmtree(d, ignore_errors=True)
 
+def case_diagnostics_project(label, files, open_rel, present=None, absent=None):
+    """Open `open_rel` inside a real multi-file project (rootUri + glide.glide)
+    and assert the diagnostic codes published for it. Proves the declaration-
+    level `unused-*` lints are cross-file-safe: a `pub` symbol defined here but
+    used only from another file must NOT be flagged (the analysed file can't see
+    its importers), while genuinely dead non-pub decls still fire."""
+    print(f"\n[diag-project] {label}")
+    d = tempfile.mkdtemp().replace(os.sep, "/")
+    for rel, content in files.items():
+        fp = os.path.join(d, *rel.split("/"))
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+    open_uri = _proj_uri(d, open_rel)
+    text = files[open_rel]
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":_proj_uri(d)}},
+        {"jsonrpc":"2.0","method":"initialized","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":open_uri,"languageId":"glide","version":1,"text":text}}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    codes = set()
+    for r in rs:
+        if r.get("method") == "textDocument/publishDiagnostics" \
+           and r["params"].get("uri") == open_uri:
+            for dg in r["params"]["diagnostics"]:
+                if dg.get("code"):
+                    codes.add(dg["code"])
+    for c in (present or []):
+        check(f"emits `{c}`", c in codes, f"got {sorted(codes)}")
+    for c in (absent or []):
+        check(f"does NOT emit `{c}`", c not in codes, f"got {sorted(codes)}")
+    shutil.rmtree(d, ignore_errors=True)
+
 def case_hover_has(label, body, pos, expect_substr):
     """Single-file hover whose markdown must contain `expect_substr` (ci)."""
     print(f"\n[hover] {label}")
@@ -1929,6 +1965,30 @@ case_diagnostics('all variants constructed or matched -> silent',
 case_diagnostics('pub enum variants are API -> silent even if unmatched',
     'pub enum Pub { A, B, C }\nfn main() { let _: Pub = Pub::A; }',
     expect_codes_absent=['unused-variant'])
+
+# ---- cross-file lint safety (the `pub` skip is the only cross-file guard) ----
+_UTIL_PUB = ('pub struct Widget { pub n: i32 }\n'
+             'pub const LIMIT: i32 = 10;\n'
+             'pub fn mk() -> Widget { return Widget { n: LIMIT }; }\n'
+             'pub enum Color { Red, Green }\n')
+_MAIN_USES = ('import util::{Widget, mk};\n'
+              'fn main() { let w: Widget = mk(); println!(w.n); }\n')
+# Open util.glide: its pub Widget/LIMIT/mk/Color are used ONLY from main.glide,
+# which util can't see — they must NOT be flagged as unused.
+case_diagnostics_project("pub symbols used cross-file are not flagged unused",
+    {"glide.glide": PROJ_MANIFEST, "src/util.glide": _UTIL_PUB, "src/main.glide": _MAIN_USES},
+    "src/util.glide",
+    absent=["unused-struct", "unused-enum", "unused-const", "unused-fn"])
+# A genuinely dead non-pub decl in the same file still fires; the pub ones stay
+# silent. (A non-pub decl can't be used cross-file, so single-file reasoning is
+# sound.)
+case_diagnostics_project("dead non-pub still flagged while cross-file pub stays silent",
+    {"glide.glide": PROJ_MANIFEST,
+     "src/util.glide": _UTIL_PUB + "fn dead_one() -> i32 { return 0; }\nstruct PrivDead { x: i32 }\n",
+     "src/main.glide": _MAIN_USES},
+    "src/util.glide",
+    present=["unused-fn", "unused-struct"],
+    absent=["unused-enum", "unused-const"])
 
 # ---- summary ----
 print()
