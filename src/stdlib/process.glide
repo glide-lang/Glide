@@ -78,6 +78,22 @@ c_raw! {
     #include <errno.h>
     #endif
 
+    // execvpe() is a glibc extension; macOS / *BSD don't have it. Emulate it by
+    // swapping `environ` then PATH-searching via execvp. Called in the child
+    // after fork, so mutating environ never touches the parent.
+    #ifndef _WIN32
+    #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) \
+        || defined(__OpenBSD__) || defined(__DragonFly__)
+    extern char** environ;
+    static int __glide_execvpe(const char* file, char* const argv[], char* const envp[]) {
+        environ = (char**)envp;
+        return execvp(file, argv);
+    }
+    #else
+    #define __glide_execvpe execvpe
+    #endif
+    #endif
+
     // Split a newline-separated buffer into a NULL-terminated argv-style array.
     // Caller frees the returned array (each entry points into a single allocated
     // copy of the input, so freeing the first entry frees all string data, then
@@ -491,7 +507,7 @@ c_raw! {
             if (cap_err)   { dup2(err_pipe[1], 2); close(err_pipe[0]); close(err_pipe[1]); }
             if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
             if (merged_envp) {
-                execvpe(prog, argv, merged_envp);
+                __glide_execvpe(prog, argv, merged_envp);
             } else {
                 execvp(prog, argv);
             }
@@ -620,7 +636,7 @@ c_raw! {
         }
         if (pid == 0) {
             if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
-            if (merged_envp) execvpe(prog, argv, merged_envp);
+            if (merged_envp) __glide_execvpe(prog, argv, merged_envp);
             else             execvp(prog, argv);
             _exit(127);
         }
@@ -784,7 +800,7 @@ c_raw! {
             if (p_out) { dup2(out_pipe[1], 1); close(out_pipe[0]); close(out_pipe[1]); }
             if (p_err) { dup2(err_pipe[1], 2); close(err_pipe[0]); close(err_pipe[1]); }
             if (cwd && *cwd) { if (chdir(cwd) != 0) _exit(127); }
-            if (merged_envp) execvpe(prog, argv, merged_envp);
+            if (merged_envp) __glide_execvpe(prog, argv, merged_envp);
             else             execvp(prog, argv);
             _exit(127);
         }

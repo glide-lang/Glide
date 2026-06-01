@@ -18,13 +18,11 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # Windows is the project's primary platform and is enforced. Linux + macOS
-    # build + run too, but are non-blocking for now: the runtime works there
-    # (the http-server / build smokes pass on Linux), yet `glide test`'s runner
-    # still crashes at startup on the GitHub ubuntu/macos images specifically
-    # (not reproducible under WSL, where a musl glide runs the suite 82/83).
-    # Flip these to required once that environment-specific crash is fixed.
-    continue-on-error: ${{ matrix.os != 'windows-latest' }}
+    # Linux + Windows are enforced (both green). macOS is non-blocking for now:
+    # it still has aarch64-specific issues (a coroutine SIGBUS in the http
+    # server, a few link failures) that need a macOS box to debug. Flip it to
+    # required once those are fixed.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:

@@ -497,11 +497,12 @@ static int __glide_stack_grow_enabled = 0;
 static void __glide_stack_grow_init(void) {
     if (__glide_stack_grow_inited) return;
     __glide_stack_grow_inited = 1;
-#if defined(__linux__) && !defined(__GLIBC__)
-    /* musl: the growable-stack handler can't resume on the relocated stack —
-       sigreturn ignores the RSP we write into the signal context, so a
-       guard-page fault crashes instead of growing. Don't install it; musl
-       coros run on a large fixed stack (set in the GLIDE_CORO_STACK block). */
+#if (defined(__linux__) && !defined(__GLIBC__)) || defined(__APPLE__)
+    /* musl + macOS: the growable-stack handler can't resume on the relocated
+       stack — sigreturn/the Mach handler ignores the RSP we write into the
+       signal context, so a guard-page fault crashes (SIGSEGV on musl, SIGBUS
+       on arm64 macOS) instead of growing. Don't install it; these targets run
+       coros on a large fixed stack (set in the GLIDE_CORO_STACK block). */
     return;
 #endif
     /* On by default after A3 narrowed the pointer fixup to the
@@ -1109,12 +1110,13 @@ void __glide_sched_init(void) {
         int n = atoi(env_stk);
         if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */
     }
-#if defined(__linux__) && !defined(__GLIBC__)
+#if (defined(__linux__) && !defined(__GLIBC__)) || defined(__APPLE__)
     else {
-        /* musl has no working stack-grow handler (see __glide_stack_grow_init),
-           so the 8 KiB growable default would overflow on the first real call.
-           Give coros a comfortable fixed stack — still lazily committed by
-           mmap, so idle coros stay cheap. An explicit GLIDE_CORO_STACK wins. */
+        /* musl + macOS have no working stack-grow handler (see
+           __glide_stack_grow_init), so the 8 KiB growable default would
+           overflow on the first real call. Give coros a comfortable fixed
+           stack — still lazily committed by mmap, so idle coros stay cheap.
+           An explicit GLIDE_CORO_STACK wins. */
         __glide_stack_size = 2 * 1024 * 1024;
     }
 #endif
