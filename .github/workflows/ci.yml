@@ -18,11 +18,6 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # Linux + Windows are enforced (both green). macOS is non-blocking for now:
-    # it still has aarch64-specific issues (a coroutine SIGBUS in the http
-    # server, a few link failures) that need a macOS box to debug. Flip it to
-    # required once those are fixed.
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:
