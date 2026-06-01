@@ -1,0 +1,48 @@
+name: ci
+
+# Build the compiler from the seed and run the full regression suite
+# (tools/test_all.sh: unit tests + LSP smoke + end-to-end smokes) on every
+# push to main and every PR. Release artifacts are handled separately by
+# release.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch/PR cancels the older in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build + test (linux-x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zlib1g-dev curl python3 python-is-python3
+
+      - name: Fetch Zig toolchain
+        run: bash tools/install_toolchain.sh
+
+      - name: Build seed + compiler
+        run: |
+          set -e
+          cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
+          ./glide_seed build bootstrap/main.glide -o glide
+          ./glide version
+
+      - name: Install host sysroot
+        # Self-contained static links for the http / http3 / crypto tests:
+        # a lib-linking `glide build` auto-promotes to the host triple
+        # (x86_64-linux-musl) and links the sysroot's bundled openssl / zlib /
+        # ngtcp2 / nghttp3, so no system -dev packages are needed.
+        run: ./glide target add x86_64-linux-musl
+
+      - name: Run regression suite (tools/test_all.sh)
+        run: GLIDE="$PWD/glide" bash tools/test_all.sh

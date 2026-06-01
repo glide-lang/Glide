@@ -10,6 +10,8 @@ set -u
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 GLIDE="${GLIDE:-$HOME/.glide/bin/glide.exe}"
 export GLIDE
+PY="$(command -v python3 || command -v python || true)"
+[ -n "$PY" ] || { echo "python not found on PATH" >&2; exit 1; }
 
 fails=0
 run() {
@@ -19,7 +21,7 @@ run() {
 }
 
 run "unit tests (glide test tests)"  "$GLIDE" test tests
-run "LSP smoke (lsp_smoke.py)"        python tools/lsp_smoke.py
+run "LSP smoke (lsp_smoke.py)"        "$PY" tools/lsp_smoke.py
 for s in tools/smoke/*.sh; do
     run "smoke: $(basename "$s")" bash "$s"
 done
