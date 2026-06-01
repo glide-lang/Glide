@@ -508,7 +508,20 @@ int tcp_read_async(int fd, void* buf, int max) {
         int n = (int)read(fd, buf, (size_t)max);
         if (n >= 0) return n;
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            if (!__glide_io_park_read(fd)) return -1;
+            if (!__glide_io_park_read(fd)) {
+                /* Not on a coro worker (e.g. a raw spawn_thread pthread): there
+                   is no reactor to park on, so block this OS thread on a
+                   blocking read, exactly like accept_tcp_async's fallback.
+                   Without this the call returns -1 on the first EAGAIN, which
+                   breaks any socket loop run on a plain thread (e.g. the mail
+                   tests' fake servers). */
+                __glide_flush_main_buf();
+                int flags = fcntl(fd, F_GETFL, 0);
+                fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+                int n2 = (int)read(fd, buf, (size_t)max);
+                fcntl(fd, F_SETFL, flags);
+                return n2;
+            }
             continue;
         }
         return -1;
@@ -533,7 +546,17 @@ int tcp_write_async(int fd, void* buf, int n) {
         int w = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));
         if (w > 0) { sent += w; continue; }
         if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-            if (!__glide_io_park_write(fd)) return sent > 0 ? sent : -1;
+            if (!__glide_io_park_write(fd)) {
+                /* Raw thread, no reactor to park on — block on a blocking
+                   write for this chunk (mirrors tcp_read_async / accept). */
+                __glide_flush_main_buf();
+                int flags = fcntl(fd, F_GETFL, 0);
+                fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+                int w2 = (int)write(fd, (const char*)buf + sent, (size_t)(n - sent));
+                fcntl(fd, F_SETFL, flags);
+                if (w2 > 0) { sent += w2; continue; }
+                return sent > 0 ? sent : -1;
+            }
             continue;
         }
         return sent > 0 ? sent : -1;
