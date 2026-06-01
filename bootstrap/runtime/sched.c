@@ -497,6 +497,13 @@ static int __glide_stack_grow_enabled = 0;
 static void __glide_stack_grow_init(void) {
     if (__glide_stack_grow_inited) return;
     __glide_stack_grow_inited = 1;
+#if defined(__linux__) && !defined(__GLIBC__)
+    /* musl: the growable-stack handler can't resume on the relocated stack —
+       sigreturn ignores the RSP we write into the signal context, so a
+       guard-page fault crashes instead of growing. Don't install it; musl
+       coros run on a large fixed stack (set in the GLIDE_CORO_STACK block). */
+    return;
+#endif
     /* On by default after A3 narrowed the pointer fixup to the
        saved-RBP chain only (zero false-positives). Opt OUT with
        GLIDE_STACK_GROW=0 if a regression is suspected; the OS
@@ -1102,6 +1109,15 @@ void __glide_sched_init(void) {
         int n = atoi(env_stk);
         if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */
     }
+#if defined(__linux__) && !defined(__GLIBC__)
+    else {
+        /* musl has no working stack-grow handler (see __glide_stack_grow_init),
+           so the 8 KiB growable default would overflow on the first real call.
+           Give coros a comfortable fixed stack — still lazily committed by
+           mmap, so idle coros stay cheap. An explicit GLIDE_CORO_STACK wins. */
+        __glide_stack_size = 2 * 1024 * 1024;
+    }
+#endif
     const char* env_pin = getenv("GLIDE_PIN_WORKERS");
     if (env_pin && env_pin[0] != 0 && env_pin[0] != '0') {
         atomic_store_explicit(&__glide_pin_workers_enabled, 1, memory_order_relaxed);
