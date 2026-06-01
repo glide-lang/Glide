@@ -20,14 +20,17 @@ jobs:
           file ./glide
           ./glide version
       - run: ./glide target add x86_64-linux-musl
-      - name: strace a single test
+      - name: strace the directory test path (the crashing one)
         run: |
-          ulimit -c unlimited || true
-          echo "=== plain run (confirm crash) ==="
-          "$PWD/glide" test tests/arena_test.glide; echo "rc=$?" || true
-          echo "=== strace tail ==="
-          strace -f -tt "$PWD/glide" test tests/arena_test.glide > strace_out.txt 2> strace.log || true
-          echo "--- last 60 strace lines ---"
-          tail -60 strace.log
-          echo "--- SIGSEGV context ---"
-          grep -n -B3 "SIGSEGV\|SIGABRT\|si_signo" strace.log | tail -40 || true
+          set +e
+          echo "=== single file (works) ==="
+          "$PWD/glide" test tests/arena_test.glide >/dev/null 2>&1; echo "single rc=$?"
+          echo "=== directory (crashes in CI) ==="
+          "$PWD/glide" test tests >/dev/null 2>&1; echo "dir rc=$?"
+          echo "=== strace the directory path ==="
+          strace -f -tt "$PWD/glide" test tests >/dev/null 2> strace.log
+          echo "strace rc=$?"
+          echo "--- killing signal + context ---"
+          grep -n "killed by\|si_code=SEGV\|si_code=SI_\|si_addr" strace.log | head -20
+          echo "--- last 50 lines ---"
+          tail -50 strace.log | cut -c1-200
