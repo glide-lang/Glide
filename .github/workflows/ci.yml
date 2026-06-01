@@ -1,28 +1,50 @@
 name: ci
 
 # Build the compiler from the seed and run the full regression suite
-# (tools/test_all.sh: unit tests + LSP smoke + end-to-end smokes) on every
-# push to main and every PR. Release artifacts are handled separately by
-# release.yml.
+# (tools/test_all.sh: unit tests + LSP smoke + e2e smokes) on every push to
+# main and every PR, across Linux / Windows / macOS. Release artifacts are
+# handled separately by release.yml.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-# A newer push to the same branch/PR cancels the older in-flight run.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: build + test (linux-x86_64)
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  name: linux-x86_64,   triple: x86_64-linux-musl }
+          - { os: windows-latest, name: windows-x86_64,  triple: x86_64-windows-gnu }
+          - { os: macos-latest,   name: macos-aarch64,   triple: aarch64-macos-none }
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build deps
+      - name: Setup MSYS2 (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-python
+            curl zip unzip tar gzip
+
+      - name: Install build deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential zlib1g-dev curl python3 python-is-python3
@@ -33,16 +55,34 @@ jobs:
       - name: Build seed + compiler
         run: |
           set -e
-          cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
-          ./glide_seed build bootstrap/main.glide -o glide
-          ./glide version
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            gcc bootstrap/seed/bootstrap.c -o glide_seed.exe -O2 -lpthread -lm -lz \
+                -lws2_32 -lmswsock -ldbghelp -lpsapi
+            ./glide_seed.exe build bootstrap/main.glide -o glide.exe
+            ./glide.exe version
+          else
+            cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
+            ./glide_seed build bootstrap/main.glide -o glide
+            ./glide version
+          fi
 
       - name: Install host sysroot
-        # Self-contained static links for the http / http3 / crypto tests:
-        # a lib-linking `glide build` auto-promotes to the host triple
-        # (x86_64-linux-musl) and links the sysroot's bundled openssl / zlib /
-        # ngtcp2 / nghttp3, so no system -dev packages are needed.
-        run: ./glide target add x86_64-linux-musl
+        # A lib-linking `glide build` auto-promotes to the host triple and links
+        # the sysroot's bundled openssl / zlib (and ngtcp2 / nghttp3 where the
+        # platform ships them), so no system -dev packages are needed.
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then ./glide.exe target add ${{ matrix.triple }}; \
+          else ./glide target add ${{ matrix.triple }}; fi
+
+      - name: Skip HTTP/3 test where ngtcp2 is unavailable
+        # The Linux (musl) / macOS sysroots don't ship a static
+        # ngtcp2_crypto_ossl (Alpine only has the gnutls variant), so the
+        # HTTP/3 test can't link there. Run it only on Windows for now.
+        if: matrix.os != 'windows-latest'
+        run: |
+          [ -f tests/http_h3_test.glide ] && mv tests/http_h3_test.glide tests/http_h3_test.glide.skip || true
 
       - name: Run regression suite (tools/test_all.sh)
-        run: GLIDE="$PWD/glide" bash tools/test_all.sh
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then GLIDE="$PWD/glide.exe" bash tools/test_all.sh; \
+          else GLIDE="$PWD/glide" bash tools/test_all.sh; fi
