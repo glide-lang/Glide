@@ -8,7 +8,7 @@
 # trivial server, run it on a high port, and assert the response body.
 set -u
 
-GLIDE="C:/Users/bye45/.glide/bin/glide.exe"
+GLIDE="${GLIDE:-$HOME/.glide/bin/glide.exe}"
 PORT=38731
 EXPECT="smoke-http-server-ok"
 

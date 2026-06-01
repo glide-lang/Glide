@@ -10,7 +10,7 @@
 # "built") is expected â€” we assert only that the known-bad markers are absent.
 set -u
 
-GLIDE="C:/Users/bye45/.glide/bin/glide.exe"
+GLIDE="${GLIDE:-$HOME/.glide/bin/glide.exe}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

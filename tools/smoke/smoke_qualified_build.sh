@@ -10,7 +10,7 @@
 # i.e. the qualified return type wasn't silently miscompiled to `void`.
 set -u
 
-GLIDE="C:/Users/bye45/.glide/bin/glide.exe"
+GLIDE="${GLIDE:-$HOME/.glide/bin/glide.exe}"
 EXPECT="qualified-handler-ok"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
