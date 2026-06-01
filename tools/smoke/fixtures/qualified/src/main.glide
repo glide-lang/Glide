@@ -1,0 +1,27 @@
+// Exercised by tools/smoke/smoke_qualified_modules.sh: module-qualified types
+// across sibling (foo) + submodule (a::b -> leaf b) modules, in every position
+// the typer canonicalization touches. Builds + runs to a known sum (26) so the
+// smoke needs no test framework — sidestepping stdlib resolution from build/.
+import foo;
+import a::b;
+
+struct Box { inner: foo::Bar }
+
+fn make(n: i32) -> foo::Bar { return foo::Bar::mk(n); }   // qualified return
+fn bar_n(r: *foo::Bar) -> i32 { return r.n; }              // qualified *ptr param
+
+fn classify(c: foo::Color) -> i32 {                       // qualified match-arm pattern
+    match c {
+        foo::Color::Red => { return 1; }
+        foo::Color::Green => { return 2; }
+    }
+}
+
+fn main() {
+    let b: foo::Bar = make(7);                  // qualified let annotation -> 7
+    let bx: Box = Box { inner: foo::Bar::mk(5) };  // qualified struct field -> 5
+    let mut v = Vector::new();                   // qualified container element
+    v.push(foo::Bar::mk(3));                     // -> 3
+    let t: b::Thing = b::Thing::mk(9);           // submodule-qualified type -> 9
+    println!("qualified-sum:", bar_n(&b) + bx.inner.n + v.get(0).n + classify(foo::Color::Green) + t.k);
+}
