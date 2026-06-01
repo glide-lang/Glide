@@ -1,0 +1,33 @@
+name: _diag
+
+# Throwaway: strace `glide test` on the ubuntu runner to find where run_test
+# segfaults at startup (not reproducible under WSL). Delete after diagnosis.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev strace file
+      - run: bash tools/install_toolchain.sh
+      - run: |
+          set -e
+          cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
+          ./glide_seed build bootstrap/main.glide -o glide
+          file ./glide
+          ./glide version
+      - run: ./glide target add x86_64-linux-musl
+      - name: strace a single test
+        run: |
+          ulimit -c unlimited || true
+          echo "=== plain run (confirm crash) ==="
+          "$PWD/glide" test tests/arena_test.glide; echo "rc=$?" || true
+          echo "=== strace tail ==="
+          strace -f -tt "$PWD/glide" test tests/arena_test.glide > strace_out.txt 2> strace.log || true
+          echo "--- last 60 strace lines ---"
+          tail -60 strace.log
+          echo "--- SIGSEGV context ---"
+          grep -n -B3 "SIGSEGV\|SIGABRT\|si_signo" strace.log | tail -40 || true
