@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.3.3 — 2026-06-01
+
+A correctness + tooling release. Module-qualified type names work everywhere,
+the linter gains a full set of dead-code checks, the editor experience is
+sharper, and the runtime now builds and runs cleanly on Linux and macOS as well
+as Windows. No source-breaking changes from 0.3.2.
+
+### Language & types
+
+- **Module-qualified type names** (`http::HttpResponse`, `foo::Bar`,
+  `b::Thing`) now resolve to their bare global type in every position — return
+  types, value / pointer / borrow params, struct fields, `Vector<…>` elements,
+  `?T` / `!T` wrappers, casts, and `match` arms (`match c { foo::Color::Red => … }`).
+  Previously a qualified annotation was treated as a distinct, unresolvable type
+  ("return type mismatch: expected http::HttpResponse, got HttpResponse"). A
+  non-existent qualified type (`mod::Nope`) is now rejected instead of silently
+  accepted.
+
+### Linter
+
+- New dead-code analyses, all covered by `@allow("unused")`: `unused-struct`,
+  `unused-enum`, `unused-const`, `unused-variant`, and `redundant-import` (the
+  same module imported twice in one file). They join the existing
+  `unused-var` / `unused-param` / `unused-fn` / `unused-import` family and skip
+  `pub`, generic, and impl'd declarations to stay false-positive-free.
+
+### Editor / LSP
+
+- Completion now offers the builtin macros (`pkg!`, `cfg!`, `env!`, `panic!`,
+  `dbg!`, `assert!`, `todo!`, `unreachable!`, `file!`, `line!`, …) and the
+  `@suggest` / `@leaf` / `@used` / `@section` attributes, each with hover docs.
+- Hover and go-to-definition work on user and stdlib macros; hover on a method
+  resolves the right `impl` when several types share a method name.
+- Auto-import merges a new symbol into an existing selective import
+  (`import al::{Alelo}` becomes `{Alelo, custom}`) instead of doing nothing;
+  non-pub siblings stay out of completion; `foo::` no longer leaks a same-named
+  submodule's members.
+- `@suggest(param, "a", "b")` and type-aware argument completion fire on
+  `recv.method(` calls too.
+
+### Cross-platform & runtime
+
+- **Linux and macOS** now build and run the full test suite, joining Windows.
+  The coroutine stack works under musl and on arm64 macOS (the growable-stack
+  handler can't resume there, so coros run on a fixed stack); socket read/write
+  block correctly when run off a coroutine worker (raw threads); `glide test` on
+  a directory no longer crashes; and `stdlib::process` no longer references the
+  glibc-only `execvpe`.
+- **HTTP server responds on Windows**: `http_listen` accepted connections but
+  never replied; it now serves requests.
+- A lib-linking `glide build` no longer prints spurious `tar` / `gzip` errors
+  (the sysroot is now extracted in-process), and HTTP/3 links statically.
+
+### Tooling
+
+- One-command regression suite: `bash tools/test_all.sh` runs the unit tests,
+  the LSP smoke, and end-to-end build/run smokes. CI runs it on Linux, Windows,
+  and macOS for every push and PR.
+
 ## 0.3.2 — 2026-05-29
 
 The plug-and-play release. A fresh `glide` install now cross-compiles for
