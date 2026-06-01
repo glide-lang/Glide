@@ -3023,8 +3023,14 @@ fn run_bench(path: string) -> i32 {
     if search_path.eq("") { search_path = "."; }
 
     let files: *Vector<string> = Vector::new();
-    let direct: string = read_file(search_path);
-    if !direct.eq("") {
+    // A directory is the common case (`glide test tests`). Detect it FIRST:
+    // read_file() on a directory returns "" on some filesystems but NULL on
+    // others (ext4 on the CI runner), and calling .eq() on a null string
+    // segfaults — which is exactly why `glide test <dir>` crashed on Linux CI
+    // while a single file worked. fs_is_dir is the reliable signal.
+    let is_dir: bool = fs_is_dir(search_path);
+    let direct: string = if is_dir { "" } else { read_file(search_path) };
+    if !is_dir && direct != null && !direct.eq("") {
         files.push(search_path);
     } else {
         let raw: string = __glide_list_dir(search_path, "_bench.glide");
@@ -3130,8 +3136,14 @@ fn run_test(path: string) -> i32 {
 
     // Decide whether `search_path` is a single file or a directory of tests.
     let files: *Vector<string> = Vector::new();
-    let direct: string = read_file(search_path);
-    if !direct.eq("") {
+    // A directory is the common case (`glide test tests`). Detect it FIRST:
+    // read_file() on a directory returns "" on some filesystems but NULL on
+    // others (ext4 on the CI runner), and calling .eq() on a null string
+    // segfaults — which is exactly why `glide test <dir>` crashed on Linux CI
+    // while a single file worked. fs_is_dir is the reliable signal.
+    let is_dir: bool = fs_is_dir(search_path);
+    let direct: string = if is_dir { "" } else { read_file(search_path) };
+    if !is_dir && direct != null && !direct.eq("") {
         files.push(search_path);
     } else {
         let raw: string = __glide_list_dir(search_path, "_test.glide");
