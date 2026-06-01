@@ -1842,6 +1842,94 @@ case_hover_has("hover_bar_make",
   {"line":6,"character":15},
   "impl Bar")
 
+
+# ---- workflow-authored 'unused / dead / redundant' lint cases ----
+# unused-struct / unused-enum / unused-const / unused-variant / redundant-import.
+
+case_diagnostics('unused struct is flagged',
+    'struct Unused {\n    x: i32,\n    y: i32,\n}\n\nfn main() {\n    let n: i32 = 1;\n    let _ = n;\n}\n',
+    expect_codes_present=['unused-struct'])
+
+case_diagnostics('used struct (literal + annotation) is not flagged',
+    'struct Point {\n    x: i32,\n    y: i32,\n}\n\nfn make() -> Point {\n    return Point { x: 1, y: 2 };\n}\n\nfn main() {\n    let p: Point = make();\n    let _ = p.x;\n}\n',
+    expect_codes_absent=['unused-struct'])
+
+case_diagnostics('pub struct is never flagged even if unused locally',
+    'pub struct Config {\n    name: i32,\n}\n\nfn main() {\n    let n: i32 = 0;\n    let _ = n;\n}\n',
+    expect_codes_absent=['unused-struct'])
+
+case_diagnostics('struct with an impl block is treated as used',
+    'struct Counter {\n    n: i32,\n}\n\nimpl Counter {\n    fn get(self: *Counter) -> i32 { return self.n; }\n}\n\nfn main() {\n    let n: i32 = 0;\n    let _ = n;\n}\n',
+    expect_codes_absent=['unused-struct'])
+
+case_diagnostics('struct used only via pointer annotation is not flagged',
+    'struct Node {\n    v: i32,\n}\n\nfn touch(p: *Node) -> i32 {\n    return p.v;\n}\n\nfn main() {\n    let n: i32 = 0;\n    let _ = n;\n}\n',
+    expect_codes_absent=['unused-struct'])
+
+case_diagnostics('unused enum is flagged',
+    'enum Lonely {\n    A,\n    B,\n}\n\nfn main() {\n    let n: i32 = 1;\n    let _ = n;\n}\n',
+    expect_codes_present=['unused-enum'])
+
+case_diagnostics('enum used via variant construction is not flagged',
+    'enum Color {\n    Red,\n    Green,\n}\n\nfn main() {\n    let c: Color = Color::Red;\n    let _ = c;\n}\n',
+    expect_codes_absent=['unused-enum'])
+
+case_diagnostics('pub enum is never flagged even if unused locally',
+    'pub enum Status {\n    On,\n    Off,\n}\n\nfn main() {\n    let n: i32 = 0;\n    let _ = n;\n}\n',
+    expect_codes_absent=['unused-enum'])
+
+case_diagnostics('enum with an impl block is treated as used',
+    'enum Dir {\n    Up,\n    Down,\n}\n\nimpl Dir {\n    fn flip(self: *Dir) -> i32 { return 0; }\n}\n\nfn main() {\n    let n: i32 = 0;\n    let _ = n;\n}\n',
+    expect_codes_absent=['unused-enum'])
+
+case_diagnostics('enum used only as a return-type annotation is not flagged',
+    'enum Mode {\n    Fast,\n    Slow,\n}\n\nfn pick() -> Mode {\n    return Mode::Fast;\n}\n\nfn main() {\n    let m: Mode = pick();\n    let _ = m;\n}\n',
+    expect_codes_absent=['unused-enum'])
+
+case_diagnostics('unused-const fires on a dead private const',
+    'const UNUSED_CONST: i32 = 42;\nconst USED_CONST: i32 = 7;\n\nfn main() {\n    let _x: i32 = USED_CONST + 1;\n    return;\n}\n',
+    expect_codes_present=['unused-const'])
+
+case_diagnostics('pub const stays silent (public API)',
+    'pub const EXPORTED: i32 = 99;\n\nfn main() {\n    return;\n}\n',
+    expect_codes_absent=['unused-const'])
+
+case_diagnostics('const referenced only by another const is used (no warning)',
+    'const BASE: i32 = 10;\nconst DERIVED: i32 = BASE + 5;\n\nfn use_it() -> i32 {\n    return DERIVED;\n}\n\nfn main() {\n    let _z: i32 = use_it();\n    return;\n}\n',
+    expect_codes_absent=['unused-const'])
+
+case_diagnostics('@allow("unused-const") silences the warning',
+    '@allow("unused-const")\nconst KEPT_FOR_LATER: i32 = 5;\n\nfn main() {\n    return;\n}\n',
+    expect_codes_absent=['unused-const'])
+
+case_diagnostics('redundant exact duplicate import',
+    'import stdlib::math;\nimport stdlib::math;\n\nfn main() -> i32 {\n    let x: i64 = math::abs_i64(-5);\n    println!(x);\n    return 0;\n}',
+    expect_codes_present=['redundant-import'], expect_codes_absent=['unused-import'])
+
+case_diagnostics('bare plus wildcard of same module is redundant',
+    'import stdlib::math;\nimport stdlib::math::*;\n\nfn main() -> i32 {\n    let x: i64 = math::abs_i64(-5);\n    println!(x);\n    return 0;\n}',
+    expect_codes_present=['redundant-import'])
+
+case_diagnostics('single import is not redundant (negative)',
+    'import stdlib::math;\n\nfn main() -> i32 {\n    let x: i64 = math::abs_i64(-5);\n    println!(x);\n    return 0;\n}',
+    expect_codes_absent=['redundant-import'])
+
+case_diagnostics('two distinct modules are not redundant (negative)',
+    'import stdlib::math;\nimport stdlib::strings;\n\nfn main() -> i32 {\n    let x: i64 = math::abs_i64(-5);\n    println!(x);\n    return 0;\n}',
+    expect_codes_absent=['redundant-import'])
+
+case_diagnostics('variant never constructed nor matched warns (enum otherwise used)',
+    'enum State { Idle, Running, Crashed }\nfn step(s: State) -> i32 { match s { State::Idle => { return 0; } State::Running => { return 1; } _ => { return 9; } } }\nfn main() { let s: State = State::Idle; let _ = step(s); }',
+    expect_codes_present=['unused-variant'], expect_codes_absent=['unused-enum'])
+
+case_diagnostics('all variants constructed or matched -> silent',
+    'enum State { Idle, Running }\nfn step(s: State) -> i32 { match s { State::Idle => { return 0; } State::Running => { return 1; } } }\nfn main() { let a: State = State::Idle; let b: State = State::Running; let _ = step(a); let _ = step(b); }',
+    expect_codes_absent=['unused-variant'])
+
+case_diagnostics('pub enum variants are API -> silent even if unmatched',
+    'pub enum Pub { A, B, C }\nfn main() { let _: Pub = Pub::A; }',
+    expect_codes_absent=['unused-variant'])
+
 # ---- summary ----
 print()
 passed = sum(1 for _, ok in results if ok)
