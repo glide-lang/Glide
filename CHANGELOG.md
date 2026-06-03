@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.3.4 — 2026-06-02
+
+A macro release: macros can now produce values, and there's a `vec_of!` builtin
+for one-liner vectors. No source-breaking changes from 0.3.3.
+
+### Macros
+
+- **Macros that return a value.** When a `macro` body ends with `return <expr>;`,
+  a call in expression position expands to a block-expression that yields that
+  value — the same `{ ...; return v }` rule as a literal block. The same macro
+  still splices statements at statement position. Works in every call shape
+  (bare `name!`, receiver `recv.name!`, and `Type::name!`) and in any expression
+  slot — let-init, argument, operand, `return`.
+
+  ```glide
+  macro ints!($($x:expr),*) {
+      let v: *Vector<i32> = Vector::new();
+      $( v.push($x); )*
+      return v;
+  }
+  let v = ints!(1, 2, 3);            // a real *Vector<i32>
+  let n = doubled!(5) + doubled!(10);
+  ```
+
+- **Hygiene.** Locals introduced by a macro body are now renamed per expansion,
+  so `let tmp = $x` can no longer capture a caller variable named `tmp`. Macro
+  expansion is also re-walked, so a macro call nested in another macro's
+  arguments (`assert_eq!(_take(doubled!(50)), 101)`) expands correctly. A macro
+  defined in terms of itself stops at a recursion limit with a diagnostic
+  instead of hanging the compiler.
+
+- **`vec_of!` builtin.** `vec_of!(a, b, c)` builds a `*Vector<T>` (T inferred
+  from the first element) and is available everywhere without an import. Empty
+  or mixed-type calls are rejected with a clear error.
+
+  ```glide
+  let v: *Vector<i32> = vec_of!(10, 20, 30);
+  let names = vec_of!("alice", "bob");   // *Vector<string>
+  ```
+
+### Codegen
+
+- Fixed a bug where an unannotated `let v = { ...; return local; }` block-
+  expression inferred `v` as `int` (and then failed on `v.method()`); the
+  block's local declarations are now considered when inferring its value type.
+
 ## 0.3.3 — 2026-06-01
 
 A correctness + tooling release. Module-qualified type names work everywhere,
