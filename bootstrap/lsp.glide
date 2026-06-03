@@ -2205,6 +2205,9 @@ fn builtin_macro_doc(name: string) -> string {
     if name.eq("assert") {
         return "```glide\nmacro assert!(cond)\n```\n\n---\n\nPanic with the source location when `cond` is false.";
     }
+    if name.eq("vec_of") {
+        return "```glide\nmacro vec_of!(a, b, c)\n```\n\n---\n\nBuild and return a `*Vector<T>` (element type `T` inferred from the first argument). A compiler builtin — available everywhere with no import. All elements must share one type.";
+    }
     if name.eq("file") {
         return "```glide\nmacro file!()\n```\n\n---\n\nThe current source file path, as a `string` literal resolved at compile time.";
     }
@@ -8038,7 +8041,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     builtins.push("panic!"); builtins.push("todo!"); builtins.push("unimplemented!");
     builtins.push("unreachable!"); builtins.push("dbg!"); builtins.push("assert!");
     builtins.push("file!"); builtins.push("line!"); builtins.push("column!");
-    builtins.push("function!");
+    builtins.push("function!"); builtins.push("vec_of!");
     for let i: i32 = 0; i < builtins.len(); i++ {
         let bn: string = builtins.get(i);
         if seen.contains(bn) { continue; }
@@ -8060,6 +8063,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
         else if bn.eq("line!") { bdetail = "line!() — current source line number"; }
         else if bn.eq("column!") { bdetail = "column!() — current source column"; }
         else if bn.eq("function!") { bdetail = "function!() — enclosing function name"; }
+        else if bn.eq("vec_of!") { bdetail = "vec_of!(a, b, c) — build a *Vector<T> (T from the first element)"; }
         json_arr_push(items, completion_item(bn, 2, bdetail));
     }
 
