@@ -317,8 +317,49 @@ Matchers: `$x:expr`, variadic `$($x:expr),*` with `,` or `;`
 separators. Expansion runs between parse and typer; the typer sees
 already-expanded AST.
 
-`println!`, `print!`, `format!`, `panic!`, `printf` are codegen
-builtins — they don't go through the macro_rules expander.
+### macros that return a value
+
+When a macro body ends with `return <expr>;`, a call in **expression
+position** expands to a block-expression that yields that value (the
+same `{ ...; return v }` rule as a literal block). So the same macro
+splices statements at statement position and produces a value when used
+as one:
+
+```glide
+macro doubled!($x:expr) {
+    let d: i32 = $x * 2;
+    return d;
+}
+
+macro ints!($($x:expr),*) {
+    let v: *Vector<i32> = Vector::new();
+    $( v.push($x); )*
+    return v;
+}
+
+let a = doubled!(21);                  // 42
+let b = doubled!(5) + doubled!(10);    // 30 — inside an expression
+let v = ints!(1, 2, 3);                // a real *Vector<i32>
+```
+
+Works in every call shape — bare `name!`, receiver `recv.name!`, and
+`Type::name!` — and in any expression slot (let-init, argument, operand,
+`return`). Macro-introduced locals are **hygienic**: they are renamed per
+expansion, so `let tmp = $x` can't capture a caller variable named `tmp`.
+A macro defined in terms of itself stops at a recursion limit with a
+diagnostic rather than hanging.
+
+### builtin macros
+
+`println!`, `print!`, `format!`, `panic!`, `printf`, `dbg!`, and
+`vec_of!` are codegen builtins — they don't go through the macro_rules
+expander. `vec_of!(a, b, c)` builds a `*Vector<T>` (T = the element type)
+and is available everywhere without an import:
+
+```glide
+let v: *Vector<i32> = vec_of!(10, 20, 30);
+let names = vec_of!("alice", "bob");   // *Vector<string>
+```
 
 ## string interpolation
 

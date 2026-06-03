@@ -2270,7 +2270,7 @@ fn keyword_doc(name: string) -> string {
         return "```glide\ntype Alias = ExistingType;\n```\n\n---\n\nDefine a type alias. Resolved transparently — the alias and the original are interchangeable.\n\n```glide\ntype Bytes = []u8;\n```";
     }
     if name.eq("macro") {
-        return "```glide\nmacro name!(matchers) { body }\n```\n\n---\n\nDeclare a `macro_rules`-style macro. Matchers use `$x:expr` and the variadic form `$($x:expr),*`. Inside an `impl`, body referring to `self` makes it instance-style.\n\n```glide\nmacro vec_of!($($x:expr),*) {\n    let v: *Vector<i32> = Vector::new();\n    $( v.push($x); )*\n}\n```";
+        return "```glide\nmacro name!(matchers) { body }\n```\n\n---\n\nDeclare a `macro_rules`-style macro. Matchers use `$x:expr` and the variadic form `$($x:expr),*`. Inside an `impl`, body referring to `self` makes it instance-style.\n\n```glide\nmacro push_all!($v:expr, $($x:expr),*) {\n    $( $v.push($x); )*\n}\n```";
     }
 
     // Control flow.

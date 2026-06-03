@@ -1692,6 +1692,21 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         return infer_for_codegen(g, e.operand);
     }
     if e.kind == EX_BLOCK {
+        // Declare the block's local `let`s before inferring the yielded value,
+        // so an operand that names one (`{ let v = ...; return v; }`) resolves.
+        // Mirrors what the typer's EX_BLOCK does and what emit re-declares.
+        if e.block_stmts != null {
+            for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+                let b: Stmt = e.block_stmts.get(i);
+                if b.kind == ST_LET || b.kind == ST_CONST {
+                    if b.let_ty != null { g.declare(b.name, b.let_ty); }
+                    else if b.let_value != null {
+                        let bvt: *Type = infer_for_codegen(g, b.let_value);
+                        if bvt != null { g.declare(b.name, bvt); }
+                    }
+                }
+            }
+        }
         if e.operand != null { return infer_for_codegen(g, e.operand); }
         return null;
     }
@@ -1824,6 +1839,15 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.str_val.eq("dbg") && e.args != null && e.args.len() >= 1 {
             let da: Expr = e.args.get(0);
             return infer_for_codegen(g, &da);
+        }
+        // `vec_of!(a, ...)` yields `*Vector<T>` (T = first element's type).
+        // Inferred from the still-unrewritten macro node so an unannotated
+        // `let v = vec_of!(1, 2)` can declare `v` before prescan lowers it.
+        if e.str_val.eq("vec_of") && e.args != null && e.args.len() > 0 {
+            let first: Expr = e.args.get(0);
+            let elem: *Type = infer_for_codegen(g, &first);
+            if elem == null { return null; }
+            return ty_vector_of(elem);
         }
         return null;
     }
@@ -2342,8 +2366,56 @@ fn callee_param_ty(g: *CG, e: *Expr, i: i32) -> *Type {
     return null;
 }
 
+// Lower a `vec_of!(a, b, c)` macro node in place into a block-expression that
+// allocates a `*Vector<T>`, pushes each element, and yields it:
+//
+//   ({ Vector__T* __vec_of_L_C = Vector_new__T();
+//      Vector_push__T(__vec_of_L_C, a); ...; (Vector__T*)__vec_of_L_C; })
+//
+// We synthesise the equivalent AST — a `let v: *Vector<T> = Vector::new()`, one
+// `v.push(x)` per element, and a cast operand yielding `v` — rather than
+// emitting C directly, so the existing monomorphization machinery sees ordinary
+// generic calls and queues the right `Vector_new` / `Vector_push` / struct
+// monos. The cast operand makes the block's type inferable even outside the
+// prescan scope where the temp is declared. Idempotent: a node that has already
+// been lowered (no longer EX_MACRO) or has no args is left untouched.
+fn _vec_of_rewrite(g: *CG, e: *Expr) {
+    if e == null || e.kind != EX_MACRO { return; }
+    if e.str_val == null || !e.str_val.eq("vec_of") { return; }
+    if e.args == null || e.args.len() == 0 { return; }
+    let first: Expr = e.args.get(0);
+    let elem: *Type = infer_for_codegen(g, &first);
+    if elem == null { return; }
+    let vec_ty: *Type = ty_vector_of(elem);
+    let tmp: string = "__vec_of_".concat(int_to_str(e.line))
+        .concat("_").concat(int_to_str(e.column));
+    let stmts: *Vector<Stmt> = Vector::new();
+    let ctor: *Expr = expr_call(expr_path("Vector", "new", e.line, e.column), Vector::new());
+    stmts.push(*stmt_let(tmp, vec_ty, ctor, false, e.line, e.column));
+    for let i: i32 = 0; i < e.args.len(); i++ {
+        let a: Expr = e.args.get(i);
+        let pa: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+        *pa = a;
+        let recv: *Expr = expr_ident(tmp, e.line, e.column);
+        let push_args: *Vector<Expr> = Vector::new();
+        push_args.push(*pa);
+        let pcall: *Expr = expr_call(expr_member(recv, "push"), push_args);
+        stmts.push(*stmt_expr(pcall));
+    }
+    let yield_cast: *Expr = expr_cast(expr_ident(tmp, e.line, e.column), vec_ty);
+    e.kind = EX_BLOCK;
+    e.block_stmts = stmts;
+    e.operand = yield_cast;
+    e.args = null;
+}
+
 fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
     if e == null { return; }
+    // Lower `vec_of!(...)` to its block form before anything else so the
+    // synthesised `Vector::new()` / `push` calls below get monomorphized.
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("vec_of") {
+        _vec_of_rewrite(g, e);
+    }
 
     // Bidirectional inference for `inline_generic_ctor().method(args)`:
     // derive T from the chained method's args back to the receiver, so
@@ -2521,6 +2593,15 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                 }
             }
             prescan_expr(g, &a, arg_hint);
+        }
+    }
+    // Block-expression statements (e.g. the lowered body of `vec_of!`, or a
+    // user `{ ...; value }` expression): walk them so generic calls inside —
+    // `Vector::new()` / `v.push(x)` — queue their monos.
+    if e.block_stmts != null {
+        for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+            let b: Stmt = e.block_stmts.get(i);
+            prescan_stmt(g, &b);
         }
     }
 }
@@ -4084,6 +4165,13 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
             print!(")");
             return;
+        }
+        if e.str_val.eq("vec_of") {
+            // Normally the prescan already lowered this to a block; if a
+            // position the prescan didn't reach left it intact, lower and emit
+            // it here too so the shape is still correct.
+            _vec_of_rewrite(g, e);
+            if e.kind == EX_BLOCK { emit_expr(g, e); return; }
         }
         print!("/* macro ", e.str_val, " */ 0");
         return;

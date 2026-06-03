@@ -3470,6 +3470,31 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 }
             }
         }
+        // `vec_of!(a, b, c)` builds a `*Vector<T>` where T is the element type
+        // (taken from the first argument). All elements must share that type —
+        // codegen lowers each into a `push`, monomorphized over T. Owns its own
+        // arg walk (so each arg is inferred exactly once) and checks homogeneity.
+        if e.str_val != null && e.str_val.eq("vec_of") {
+            if e.args == null || e.args.len() == 0 {
+                t.err_code_range(e.line, e.column, 6, "vec-of-empty",
+                    "vec_of! needs at least one element to infer the vector's type; use `Vector::new()` for an empty vector");
+                return null;
+            }
+            let first: Expr = e.args.get(0);
+            let elem: *Type = infer_expr(t, &first);
+            for let i: i32 = 1; i < e.args.len(); i++ {
+                let a: Expr = e.args.get(i);
+                let at: *Type = infer_expr(t, &a);
+                if elem != null && at != null && !type_eq(at, elem) {
+                    t.err_code_range(a.line, a.column, _arg_span(&a), "vec-of-mixed",
+                        "vec_of! elements must all be the same type: expected `"
+                        .concat(type_to_string(elem)).concat("`, found `")
+                        .concat(type_to_string(at)).concat("`"));
+                }
+            }
+            if elem == null { return null; }
+            return ty_vector_of(elem);
+        }
         // Walk args for nested errors.
         if e.args != null {
             for let i: i32 = 0; i < e.args.len(); i++ {

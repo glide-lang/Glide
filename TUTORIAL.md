@@ -277,6 +277,26 @@ let v: *Vector<int> = Vector::new();
 v.push_all!(10, 20, 30);
 ```
 
+A macro whose body ends in `return <expr>;` produces a **value** when
+called in expression position — so it works in a `let`, as an argument,
+or in a larger expression. Macro locals are hygienic (renamed per
+expansion, so they never clash with caller variables).
+
+```glide
+macro ints!($($x:expr),*) {
+    let v: *Vector<i32> = Vector::new();
+    $( v.push($x); )*
+    return v;
+}
+let nums = ints!(1, 2, 3);     // a real *Vector<i32>
+```
+
+The `vec_of!` builtin does exactly this for vectors, no import needed:
+
+```glide
+let v: *Vector<i32> = vec_of!(10, 20, 30);
+```
+
 ## next steps
 
 - `examples/tour.glide` walks through every feature in one file —

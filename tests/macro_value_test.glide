@@ -1,0 +1,96 @@
+// Developer-defined declarative macros that RETURN a value. When a `macro`
+// body ends with `return <expr>;`, a call in expression position expands to a
+// block-expression that yields it — so the macro is usable in let-init, as a
+// call argument, inside larger expressions, and as a return value.
+import stdlib::testing::*;
+
+macro doubled!($x:expr) {
+    let __d: i32 = $x * 2;
+    return __d;
+}
+
+macro ints!($($x:expr),*) {
+    let __v: *Vector<i32> = Vector::new();
+    $( __v.push($x); )*
+    return __v;
+}
+
+fn test_value_macro_let() -> i32 {
+    let a = doubled!(21);
+    assert_eq!(a, 42);
+    return 0;
+}
+
+fn test_value_macro_in_expr() -> i32 {
+    let b = doubled!(5) + doubled!(10);
+    assert_eq!(b, 30);
+    return 0;
+}
+
+fn _take(n: i32) -> i32 { return n + 1; }
+
+fn test_value_macro_as_argument() -> i32 {
+    assert_eq!(_take(doubled!(50)), 101);
+    return 0;
+}
+
+fn test_value_macro_nested() -> i32 {
+    // a macro fed the result of another macro
+    let c = doubled!(doubled!(3));
+    assert_eq!(c, 12);
+    return 0;
+}
+
+fn test_value_macro_variadic_vector() -> i32 {
+    let v = ints!(10, 20, 30, 40);
+    assert_eq!(v.len(), 4);
+    assert_eq!(v.get(0), 10);
+    assert_eq!(v.get(3), 40);
+    v.free();
+    return 0;
+}
+
+fn _make() -> i32 {
+    // value macro as the function's return expression
+    return doubled!(8);
+}
+
+fn test_value_macro_as_return() -> i32 {
+    assert_eq!(_make(), 16);
+    return 0;
+}
+
+// Hygiene: a macro local must not clobber a caller variable of the same name
+// passed in as an argument.
+macro inc!($x:expr) {
+    let tmp: i32 = $x + 1;
+    return tmp;
+}
+
+fn test_value_macro_hygiene() -> i32 {
+    let tmp: i32 = 5;
+    let y = inc!(tmp);          // inc's `tmp` must read the caller's 5, not itself
+    assert_eq!(tmp, 5);
+    assert_eq!(y, 6);
+    return 0;
+}
+
+// Receiver / type-attached value macros.
+struct Counter { n: i32 }
+impl Counter {
+    macro plus!($d:expr) {
+        let __r: i32 = self.n + $d;
+        return __r;
+    }
+}
+
+fn test_value_macro_receiver_form() -> i32 {
+    let c: *Counter = malloc(sizeof(Counter)) as *Counter;
+    c.n = 10;
+    let a = c.plus!(5);              // recv.macro!(...) in expr position
+    let b = Counter::plus!(c, 100);  // Type::macro!(recv, ...) in expr position
+    assert_eq!(a, 15);
+    assert_eq!(b, 110);
+    free(c as *void);
+    return 0;
+}

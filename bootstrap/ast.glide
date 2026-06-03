@@ -577,6 +577,15 @@ pub fn ty_pointer(inner: *Type) -> *Type {
     return t;
 }
 
+// `*Vector<elem>` — the type the builtin `vec_of!` yields. Shared by the
+// typer (result type of a `vec_of!` call) and codegen (the annotation on the
+// synthesised block that builds the vector).
+pub fn ty_vector_of(elem: *Type) -> *Type {
+    let args: *Vector<Type> = Vector::new();
+    args.push(*elem);
+    return ty_pointer(ty_generic("Vector", args));
+}
+
 pub fn ty_tuple(args: *Vector<Type>) -> *Type {
     let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_TUPLE;
