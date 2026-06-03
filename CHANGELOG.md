@@ -40,6 +40,11 @@ for one-liner vectors. No source-breaking changes from 0.3.3.
   let names = vec_of!("alice", "bob");   // *Vector<string>
   ```
 
+### Editor / LSP
+
+- Completion and hover now include the `vec_of!` builtin alongside the other
+  builtin macros (`println!`, `format!`, `dbg!`, …).
+
 ### Codegen
 
 - Fixed a bug where an unannotated `let v = { ...; return local; }` block-
