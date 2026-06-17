@@ -37,6 +37,10 @@ extern fn gnet_last_error() -> string;
 extern fn gnet_read_async(fd: i64, buf: *void, max: i32) -> i64;
 extern fn gnet_write_async(fd: i64, buf: *void, n: i32) -> i64;
 extern fn gnet_accept_async(fd: i64, of: *i32, ov4: *i64, ohi: *i64, olo: *i64, op: *i32) -> i64;
+// Gather-write header+body in one syscall, and zero-copy file->socket.
+// Reactor-integrated wrappers over the legacy tcp_* perf primitives.
+extern fn gnet_writev2_async(fd: i64, buf1: *void, n1: i32, buf2: *void, n2: i32) -> i64;
+extern fn gnet_sendfile_from_path(fd: i64, path: string) -> i64;
 // IPv4 multicast membership — the network-order ip_mreq packing is owned by
 // netcore.c (host-order v4 in, htonl'd there).
 extern fn gnet_join_group_v4(fd: i64, group_v4: i64, iface_v4: i64) -> i64;

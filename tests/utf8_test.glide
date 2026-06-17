@@ -1,0 +1,66 @@
+import stdlib::testing::*;
+import stdlib::bytes::*;
+import stdlib::utf8::*;
+
+fn test_from_string_and_from_utf8_roundtrip() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::from_string("héllo");
+    assert_eq!(b.len(), 6);   // é is 2 bytes
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_str_eq!(r.val, "héllo");
+    b.free();
+    return 0;
+}
+
+fn test_from_utf8_rejects_bad_bytes() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::new();
+    b.push(255 as u8);   // not a valid lead byte
+    b.push(40 as u8);
+    let r: !string = String::from_utf8(b);
+    assert!(!r.ok);
+    assert!(!String::is_valid_utf8(b));
+    b.free();
+    return 0;
+}
+
+fn test_from_utf8_lossy_replaces() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::new();
+    b.push(65 as u8);    // 'A'
+    b.push(255 as u8);   // invalid -> U+FFFD
+    b.push(66 as u8);    // 'B'
+    let s: string = String::from_utf8_lossy(b);
+    // 'A' + 3-byte U+FFFD + 'B' = 5 bytes, 3 codepoints
+    assert_eq!(s.char_count(), 3);
+    b.free();
+    return 0;
+}
+
+fn test_char_count() -> i32 {
+    assert_eq!("abc".char_count(), 3);
+    assert_eq!("héllo".char_count(), 5);
+    assert_eq!("".char_count(), 0);
+    return 0;
+}
+
+fn test_chars_decodes_codepoints() -> i32 {
+    let s: string = "hi😀";
+    assert_eq!(s.char_count(), 3);
+    let cps: *Vector<i32> = s.chars();
+    assert_eq!(cps.len(), 3);
+    assert_eq!(cps.get(0), 104);
+    assert_eq!(cps.get(1), 105);
+    assert_eq!(cps.get(2), 128512);
+    return 0;
+}
+
+fn test_push_codepoint_roundtrip() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::new();
+    b.push_codepoint(104);      // 'h'
+    b.push_codepoint(128512);   // 😀
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_eq!(r.val.char_count(), 2);
+    assert_eq!(r.val.len(), 5);   // 1 + 4 bytes
+    b.free();
+    return 0;
+}

@@ -27,14 +27,22 @@
 
 import stdlib::net::ip::*;
 import stdlib::net::sys::*;
+import stdlib::bytes::*;
 
 pub struct UdpSocket {
     pub fd: i64,
 }
 
-/// One received datagram: payload + sender address.
+/// One received datagram: payload (as a string) + sender address.
 pub struct UdpRecv {
     pub data: string,
+    pub from: *SocketAddr,
+}
+
+/// One received datagram with a binary-safe payload (no UTF-8 assumption).
+/// `data` is an owning `ByteBuffer` — free it when done.
+pub struct UdpDatagram {
+    pub data: *ByteBuffer,
     pub from: *SocketAddr,
 }
 
@@ -113,6 +121,44 @@ impl UdpSocket {
         r.data = data;
         r.from = addr;
         return ok(r);
+    }
+
+    /// Like `send_to`, but sends the raw bytes of `b` — binary-safe, no
+    /// per-byte string copy.
+    pub fn send_buf(self: *UdpSocket, b: *ByteBuffer, dst: *SocketAddr) -> !i32 {
+        let fam: i32 = if dst.ip.is_v6() { AF_V6 } else { AF_V4 };
+        let sent: i64 = gnet_sendto(self.fd, b.data as *void, b.len,
+                                    fam, dst.ip.v4 as i64, dst.ip.v6_hi, dst.ip.v6_lo, dst.port);
+        if sent < 0 { return err("udp: send_buf: ".concat(gnet_last_error())); }
+        return ok(sent as i32);
+    }
+
+    /// Like `recv_from`, but delivers the payload as an owning `ByteBuffer`
+    /// (binary-safe). The caller frees `dg.data`.
+    ///
+    /// ```glide
+    /// let dg: *UdpDatagram = sock.recv_from_buf(1500)?;
+    /// defer dg.data.free();
+    /// ```
+    pub fn recv_from_buf(self: *UdpSocket, max: i32) -> !*UdpDatagram {
+        let b: *ByteBuffer = ByteBuffer::with_capacity(max);
+        let mut fam: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut port: i32 = 0;
+        let n: i64 = gnet_recvfrom(self.fd, b.data as *void, max,
+                                   &fam, &v4, &hi, &lo, &port);
+        if n < 0 { b.free(); return err("udp: recv_from: ".concat(gnet_last_error())); }
+        b.len = n as i32;
+        let mut ip: *IpAddr;
+        if fam == AF_V4 { ip = _v4_octets(v4); }
+        else { ip = IpAddr::v6(hi, lo); }
+        let addr: *SocketAddr = SocketAddr::new(ip, port);
+        let dg: *UdpDatagram = malloc(sizeof(UdpDatagram)) as *UdpDatagram;
+        dg.data = b;
+        dg.from = addr;
+        return ok(dg);
     }
 
     /// Close the socket and free the struct. Pair with `defer`.

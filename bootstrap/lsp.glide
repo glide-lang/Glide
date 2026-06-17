@@ -2310,7 +2310,7 @@ fn keyword_doc(name: string) -> string {
         return "```glide\ndefer expr;\n```\n\n---\n\nRun `expr` at function exit (LIFO with other defers, before any `return`). Used for cleanup.\n\n```glide\nlet v: *Vector<i32> = Vector::new();\ndefer v.free();\n```";
     }
     if name.eq("defer_err") {
-        return "```glide\ndefer_err expr;\n```\n\n---\n\nLike `defer`, but only fires when the function returns an `Err` / `!T` failure value. Lets you tear down half-built state without running the same code on the happy path.\n\n```glide\nlet conn: *Conn = open();\ndefer_err conn.close();          // only closes on error\nlet r: !i32 = conn.do_thing()?;\n// success → conn lives on\n```";
+        return "```glide\ndefer_err expr;\n```\n\n---\n\nLike `defer`, but only fires when the function returns an `Err` / `!T` failure value. Lets you tear down half-built state without running the same code on the happy path.\n\n```glide\nlet conn: *Db = open();\ndefer_err conn.close();          // only closes on error\nlet r: !i32 = conn.do_thing()?;\n// success → conn lives on\n```";
     }
     if name.eq("spawn") {
         return "```glide\nspawn fn_call(args);\n```\n\n---\n\nRun the call on a new pthread. Detached — no join handle.\n\n```glide\nspawn worker(c);\n```";
@@ -6606,6 +6606,20 @@ fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, dept
             return _method_ret_subst(root, recv, e.lhs.field);
         }
     }
+    if e.kind == EX_UNARY {
+        // `expr?` yields the unwrapped T, so `let x = f()?` (no annotation)
+        // resolves `x` to T for member completion — not the !T/?T/?!T struct.
+        // `*p` unwraps a pointer the same way.
+        let ut: *Type = _expr_type_node(e.operand, root, line0, path, depth + 1);
+        if e.op_code == UN_TRY && ut != null
+           && (ut.kind == TY_RESULT || ut.kind == TY_OPTION || ut.kind == TY_OPT_RESULT) {
+            return ut.inner;
+        }
+        if e.op_code == UN_DEREF && ut != null && ut.kind == TY_POINTER {
+            return ut.inner;
+        }
+        return ut;
+    }
     if e.kind == EX_STRING { return ty_named("string"); }
     if e.kind == EX_INT    { return ty_named("i32"); }
     if e.kind == EX_FLOAT  { return ty_named("f64"); }
@@ -10070,10 +10084,10 @@ pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
         // Bool ret is okay-ish but still must return; same logic.
         if !body_always_returns(s.fn_body) {
             t.current_origin = s.origin;
-            t.warn_range(s.name_line, s.name_col, s.name.len(), "missing-return",
+            t.err_code_range(s.name_line, s.name_col, s.name.len(), "missing-return",
                 "function `".concat(s.name)
                 .concat("` declared `-> ").concat(type_to_string(s.fn_ret_ty))
-                .concat("` may exit without returning a value"));
+                .concat("` must return a value on every path, but can reach the end without returning"));
         }
     }
 }
@@ -10100,15 +10114,57 @@ fn stmt_terminates(s: *Stmt) -> bool {
         return false;
     }
     if s.kind == ST_MATCH {
-        if s.arms == null { return false; }
-        let mut all: bool = true;
-        let mut has_default: bool = false;
+        if s.arms == null || s.arms.len() == 0 { return false; }
+        // Every arm terminates -> the match terminates. We don't require a `_`
+        // arm: a non-exhaustive enum match (missing variants, no `_`) is already
+        // a hard `match-not-exhaustive` error, so an exhaustive match without
+        // `_` still counts as terminating here.
         for let i: i32 = 0; i < s.arms.len(); i++ {
             let a: MatchArm = s.arms.get(i);
-            if a.variant.eq("_") { has_default = true; }
-            if a.body == null || !body_always_returns(a.body) { all = false; break; }
+            if a.body == null || !body_always_returns(a.body) { return false; }
         }
-        return all && has_default;
+        return true;
+    }
+    // `while true { ... }` with no break that exits THIS loop never falls
+    // through — the function diverges, so the tail is unreachable.
+    if s.kind == ST_WHILE {
+        if s.cond != null && s.cond.kind == EX_BOOL && s.cond.bool_val
+           && !_has_loop_break(s.then_body) {
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// True if `body` contains a `break` that exits the immediately-enclosing loop.
+// Breaks inside nested while/for loops bind to THOSE loops, so they don't
+// count — that's why we stop descending at a nested loop.
+fn _has_loop_break(body: *Vector<Stmt>) -> bool {
+    if body == null { return false; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if _stmt_has_loop_break(&s) { return true; }
+    }
+    return false;
+}
+
+fn _stmt_has_loop_break(s: *Stmt) -> bool {
+    if s == null { return false; }
+    if s.kind == ST_BREAK { return true; }
+    if s.kind == ST_WHILE || s.kind == ST_FOR || s.kind == ST_WHILE_RECV { return false; }
+    if s.kind == ST_IF {
+        return _has_loop_break(s.then_body) || _has_loop_break(s.else_body);
+    }
+    if s.kind == ST_BLOCK { return _has_loop_break(s.then_body); }
+    if s.kind == ST_MATCH {
+        if s.arms != null {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
+                let a: MatchArm = s.arms.get(i);
+                if _has_loop_break(a.body) { return true; }
+            }
+        }
+        return false;
     }
     return false;
 }

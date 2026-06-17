@@ -2513,7 +2513,19 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
                 let wc: string = _wrap_ctor_code(final_ty, val_ty);
                 let base: string = "let initializer type mismatch: expected ".concat(type_to_string(final_ty))
                     .concat(", got ").concat(type_to_string(val_ty));
-                if wc.eq("") {
+                // Pointer-vs-value: a by-value annotation (`let v: Vector<i32>`)
+                // against a heap ctor that returns `*Vector<T>`. The raw message
+                // reads like a deep error (and shows an unresolved `T`); point at
+                // the pointer annotation or dropping it (it's inferred) instead.
+                let ptr_hint: bool = final_ty.kind != TY_POINTER && val_ty.kind == TY_POINTER
+                    && val_ty.inner != null && final_ty.name != null && val_ty.inner.name != null
+                    && !final_ty.name.eq("") && final_ty.name.eq(val_ty.inner.name);
+                if ptr_hint {
+                    let want: string = "*".concat(type_to_string(final_ty));
+                    t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "",
+                        base.concat(". `").concat(final_ty.name).concat("::new()` returns a pointer — annotate `")
+                            .concat(want).concat("`, or drop the annotation (it's inferred)."));
+                } else if wc.eq("") {
                     t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "", base);
                 } else {
                     let mut ctor: string = "ok";

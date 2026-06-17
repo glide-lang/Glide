@@ -1,5 +1,5 @@
 // Outbound TCP. Connects a stream socket to a remote address.
-// Complements the server-side `Listener` / `Conn` and the runtime's async
+// Complements the server-side `TcpListener` and the runtime's async
 // reactor with a client-side primitive.
 //
 // Pure Glide on the net::sys socket foundation — the old c_raw
@@ -23,6 +23,7 @@
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
 import stdlib::net::sys::*;
+import stdlib::bytes::*;
 
 pub struct TcpStream {
     pub fd: i64,
@@ -40,6 +41,16 @@ fn _str_buf(data: string) -> *u8 {
 }
 
 impl TcpStream {
+    /// Wrap an already-open raw fd in a `TcpStream`. Used by
+    /// `TcpListener::accept` so a server-side connection IS a `TcpStream` —
+    /// it reads and writes exactly like a client one. The fd must already be
+    /// connected (accept does this) and non-blocking for reactor parking.
+    pub fn from_fd(fd: i64) -> *TcpStream {
+        let s: *TcpStream = malloc(sizeof(TcpStream)) as *TcpStream;
+        s.fd = fd;
+        return s;
+    }
+
     /// Connect to `dst`. Blocking connect; the worker keeps running other
     /// coros while the kernel completes the handshake.
     ///
@@ -103,9 +114,29 @@ impl TcpStream {
         return ok(w as i32);
     }
 
-    /// Read up to `max` bytes. ok(n>0) bytes; ok(0) peer closed; err on error.
-    pub fn read(self: *TcpStream, max: i32) -> !string {
-        let buf: *u8 = malloc(max) as *u8;
+    /// Read up to `max` bytes into a fresh `ByteBuffer` — binary-safe, no
+    /// manual `malloc` or `*void` casts. `ok(buf)` with `buf.len() == 0`
+    /// means the peer closed cleanly; `err` on a transport error. The
+    /// caller owns the buffer (`defer buf.free()` or hand it on).
+    ///
+    /// ```glide
+    /// let buf: *ByteBuffer = conn.read(4096)?;
+    /// defer buf.free();
+    /// let text: string = String::from_utf8(buf)?;
+    /// ```
+    pub fn read(self: *TcpStream, max: i32) -> !*ByteBuffer {
+        let b: *ByteBuffer = ByteBuffer::with_capacity(max);
+        let n: i64 = gnet_read_async(self.fd, b.data as *void, max);
+        if n < 0 { b.free(); return err("tcp: recv: ".concat(gnet_last_error())); }
+        b.len = n as i32;
+        return ok(b);
+    }
+
+    /// Like `read`, but returns the bytes as a heap-copied, NUL-terminated
+    /// `string`. Convenient for text protocols; the bytes are NOT UTF-8
+    /// validated — use `read` + `String::from_utf8` when you need that.
+    pub fn read_str(self: *TcpStream, max: i32) -> !string {
+        let buf: *u8 = malloc(max as usize) as *u8;
         let n: i64 = gnet_read_async(self.fd, buf as *void, max);
         if n < 0 { free(buf as *void); return err("tcp: recv: ".concat(gnet_last_error())); }
         let s: string = _bytes_to_string(buf, n as i32);
@@ -118,12 +149,45 @@ impl TcpStream {
     pub fn read_to_end(self: *TcpStream) -> !string {
         let mut out: string = "";
         while true {
-            let r: !string = self.read(4096);
+            let r: !string = self.read_str(4096);
             if !r.ok { return err(r.err); }
             if r.val.len() == 0 { return ok(out); }
             out = out.concat(r.val);
         }
         return ok(out);
+    }
+
+    /// Raw single-buffer write by pointer (server fast path — avoids a
+    /// string/ByteBuffer wrapper when the caller already holds a C buffer).
+    /// Returns bytes written. Prefer `write_all` / `write_buf` in user code.
+    pub fn write_ptr(self: *TcpStream, buf: *void, n: i32) -> !i32 {
+        let w: i64 = gnet_write_async(self.fd, buf, n);
+        if w < 0 { return err("tcp: write: ".concat(gnet_last_error())); }
+        return ok(w as i32);
+    }
+
+    /// Write every byte of `b` in one call.
+    pub fn write_buf(self: *TcpStream, b: *ByteBuffer) -> !i32 {
+        let w: i64 = gnet_write_async(self.fd, b.data as *void, b.len);
+        if w < 0 { return err("tcp: write_buf: ".concat(gnet_last_error())); }
+        return ok(w as i32);
+    }
+
+    /// Gather-write two buffers (e.g. a response header + body) in a single
+    /// syscall, so they ship in one TCP segment without an intermediate
+    /// memcpy. Returns total bytes sent.
+    pub fn write2(self: *TcpStream, buf1: *void, n1: i32, buf2: *void, n2: i32) -> !i32 {
+        let w: i64 = gnet_writev2_async(self.fd, buf1, n1, buf2, n2);
+        if w < 0 { return err("tcp: writev2: ".concat(gnet_last_error())); }
+        return ok(w as i32);
+    }
+
+    /// Zero-copy file -> socket (Linux `sendfile`, Windows `TransmitFile`,
+    /// read+write loop elsewhere). Returns total bytes sent.
+    pub fn sendfile(self: *TcpStream, path: string) -> !i32 {
+        let n: i64 = gnet_sendfile_from_path(self.fd, path);
+        if n < 0 { return err("tcp: sendfile: ".concat(gnet_last_error())); }
+        return ok(n as i32);
     }
 
     /// Apply a read + write timeout in milliseconds (`0` disables), via

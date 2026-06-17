@@ -1,5 +1,5 @@
-// Minimal HTTP/1.1 server. Builds on the async `stdlib::net` Listener +
-// Conn so a single Glide process can hold tens of thousands of
+// Minimal HTTP/1.1 server. Builds on the async `stdlib::net` TcpListener +
+// TcpStream so a single Glide process can hold tens of thousands of
 // connections — every read/write parks the coroutine instead of
 // pinning a worker thread.
 //
@@ -746,21 +746,21 @@ fn _format_chunked_head(r: *HttpResponse, keep_alive: bool) -> string {
 // `<hex-length>\r\n<data>\r\n`, terminated by `0\r\n\r\n`. Empty
 // strings are emitted as zero-length frames (spec-legal, mostly
 // useless); none() ends the stream.
-fn _pump_chunks(c: *Conn, src: *dyn ChunkSource) {
+fn _pump_chunks(c: *TcpStream, src: *dyn ChunkSource) {
     let crlf: string = "\r\n";
     while true {
         let r: ?string = src.next_chunk();
         if !r.has { break; }
         let chunk: string = r.val;
         let prefix: string = _hex_len(chunk.len()).concat(crlf);
-        c.write(prefix as *void, prefix.len());
+        let _wp: !i32 = c.write_ptr(prefix as *void, prefix.len());
         if chunk.len() > 0 {
-            c.write(chunk as *void, chunk.len());
+            let _wc: !i32 = c.write_ptr(chunk as *void, chunk.len());
         }
-        c.write(crlf as *void, 2);
+        let _wr: !i32 = c.write_ptr(crlf as *void, 2);
     }
     let term: string = "0\r\n\r\n";
-    c.write(term as *void, 5);
+    let _wt: !i32 = c.write_ptr(term as *void, 5);
 }
 
 // TLS sibling of `_pump_chunks`. Identical framing — `<hex-len>\r\n<data>\r\n`
@@ -787,10 +787,10 @@ fn _pump_chunks_tls(s: *TlsStream, src: *dyn ChunkSource) {
 // header bytes manually then pump chunks. `pub` because the sibling
 // `http::router` module drives its own accept loop and reuses it; the
 // `_` prefix still marks it package-internal (not for end users).
-pub fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
+pub fn _write_response(c: *TcpStream, resp: *HttpResponse, keep: bool) {
     if resp.stream_src != null {
         let head: string = _format_chunked_head(resp, keep);
-        c.write(head as *void, head.len());
+        let _wh: !i32 = c.write_ptr(head as *void, head.len());
         _pump_chunks(c, resp.stream_src);
         return;
     }
@@ -807,8 +807,8 @@ pub fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
                                                        status_text(resp.status),
                                                        fsize,
                                                        resp.headers_block, keep_i);
-            c.write(hp_resp_buf_ptr(), hlen);
-            let _s: i32 = c.sendfile(resp.file_path);
+            let _wh: !i32 = c.write_ptr(hp_resp_buf_ptr(), hlen);
+            let _s: !i32 = c.sendfile(resp.file_path);
             return;
         }
         // stat failed: fall through to empty body 200 (caller could
@@ -827,13 +827,13 @@ pub fn _write_response(c: *Conn, resp: *HttpResponse, keep: bool) {
                                                    status_text(resp.status),
                                                    body_len,
                                                    resp.headers_block, keep_i);
-        c.write2(hp_resp_buf_ptr(), hlen, resp.body as *void, body_len);
+        let _w2: !i32 = c.write2(hp_resp_buf_ptr(), hlen, resp.body as *void, body_len);
         return;
     }
     let wlen: i32 = hp_build_response(resp.status, status_text(resp.status),
                                       resp.body as *void, body_len,
                                       resp.headers_block, keep_i);
-    c.write(hp_resp_buf_ptr(), wlen);
+    let _ww: !i32 = c.write_ptr(hp_resp_buf_ptr(), wlen);
 }
 
 /// Render a response as wire bytes. Used by the server loop; exposed
@@ -864,10 +864,12 @@ fn _wants_close(req: *HttpRequest) -> bool {
 
 // ---- server loop ------------------------------------------------------
 
-fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
+fn _handle_conn(c: *TcpStream, handler: fn(*HttpRequest) -> HttpResponse) {
     let buf: *u8 = malloc(8192) as *u8;
     while true {
-        let n: i32 = c.read(buf as *void, 8192);
+        let rr: !i32 = c.read_bytes(buf, 8192);
+        if !rr.ok { break; }
+        let n: i32 = rr.val;
         if n <= 0 { break; }
 
         // Per-request arena: every .concat / .substring / header lookup
@@ -942,8 +944,9 @@ fn _handle_conn(c: *Conn, handler: fn(*HttpRequest) -> HttpResponse) {
 /// }
 /// ```
 pub fn http_listen(port: i32, handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
-    let l: *Listener = Listener::bind(port);
-    if !l.ok() { return err("bind failed"); }
+    let lr: !*TcpListener = TcpListener::bind(port);
+    if !lr.ok { return err(lr.err); }
+    let l: *TcpListener = lr.val;
     println!("http: listening on :", port);
     // Only spawn-per-conn when the reactor is wired (epoll on Linux,
     // kqueue on macOS/BSD). Without it, read/write block the calling
@@ -952,8 +955,9 @@ pub fn http_listen(port: i32, handler: fn(*HttpRequest) -> HttpResponse) -> !i32
     // the only correct fallback there.
     let has_reactor: bool = os_has_async_io();
     while true {
-        let c: *Conn = l.accept();
-        if !c.ok() { c.close(); continue; }
+        let cr: !*TcpStream = l.accept();
+        if !cr.ok { continue; }
+        let c: *TcpStream = cr.val;
         if has_reactor {
             spawn _handle_conn(c, handler);
         } else {
@@ -968,17 +972,18 @@ pub fn http_listen(port: i32, handler: fn(*HttpRequest) -> HttpResponse) -> !i32
 // load-balances accepts. On platforms without REUSEPORT load-balance
 // the caller passes a shared listener (l != null).
 fn _accept_loop(port: i32, handler: fn(*HttpRequest) -> HttpResponse) {
-    let l: *Listener = Listener::bind_reuseport(port);
-    if !l.ok() { return; }
-    _accept_loop_shared(l, handler);
+    let lr: !*TcpListener = TcpListener::bind_reuseport(port);
+    if !lr.ok { return; }
+    _accept_loop_shared(lr.val, handler);
 }
 
-fn _accept_loop_shared(l: *Listener,
+fn _accept_loop_shared(l: *TcpListener,
                        handler: fn(*HttpRequest) -> HttpResponse) {
     let has_reactor: bool = os_has_async_io();
     while true {
-        let c: *Conn = l.accept();
-        if !c.ok() { c.close(); continue; }
+        let cr: !*TcpStream = l.accept();
+        if !cr.ok { continue; }
+        let c: *TcpStream = cr.val;
         if has_reactor {
             spawn _handle_conn(c, handler);
         } else {
@@ -1160,9 +1165,9 @@ pub fn http_listen_workers(port: i32, n: i32,
 pub fn http_listen_workers_blocking(port: i32, n: i32,
                                     handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
     if os_has_reuseport_balance() {
-        let probe: *Listener = Listener::bind_reuseport(port);
-        if !probe.ok() { return err("bind failed"); }
-        probe.close();
+        let pr: !*TcpListener = TcpListener::bind_reuseport(port);
+        if !pr.ok { return err(pr.err); }
+        pr.val.close();
         println!("http: listening on :", port, " across ", n, " worker(s) [coro]");
         let mut spawned: i32 = 1;
         while spawned < n {
@@ -1172,8 +1177,9 @@ pub fn http_listen_workers_blocking(port: i32, n: i32,
         _accept_loop(port, handler);
         return ok(0);
     }
-    let shared: *Listener = Listener::bind(port);
-    if !shared.ok() { return err("bind failed"); }
+    let sr: !*TcpListener = TcpListener::bind(port);
+    if !sr.ok { return err(sr.err); }
+    let shared: *TcpListener = sr.val;
     println!("http: listening on :", port, " across ", n, " worker(s) [coro, shared fd]");
     let mut spawned: i32 = 1;
     while spawned < n {

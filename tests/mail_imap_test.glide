@@ -1,14 +1,22 @@
 import stdlib::testing::*;
 import stdlib::net::listener::*;
+import stdlib::net::tcp::*;
 import stdlib::mail::imap::*;
 
+fn _send(c: *TcpStream, s: string) { let _r: !i32 = c.write_all(s); }
+fn _recv(c: *TcpStream, buf: *u8, max: i32) -> i32 {
+    let r: !i32 = c.read_bytes(buf, max);
+    if !r.ok { return -1; }
+    return r.val;
+}
+
 fn _fake_imap(port: i32) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("* OK fake IMAP ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "* OK fake IMAP ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: i32 = c.read(buf as *void, 4096);
+        let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
@@ -18,22 +26,22 @@ fn _fake_imap(port: i32) {
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
         if upper.contains("LOGIN") {
-            c.write_str(tag.concat(" OK login complete\r\n"));
+            _send(c, tag.concat(" OK login complete\r\n"));
         } else if upper.contains("SELECT") {
-            c.write_str("* 3 EXISTS\r\n* 0 RECENT\r\n");
-            c.write_str(tag.concat(" OK SELECT complete\r\n"));
+            _send(c, "* 3 EXISTS\r\n* 0 RECENT\r\n");
+            _send(c, tag.concat(" OK SELECT complete\r\n"));
         } else if upper.contains("FETCH") {
             let body: string = "From: a@x\r\nSubject: hi\r\n\r\nbody";
-            c.write_str("* 1 FETCH (BODY[] {28}\r\n");
-            c.write_str(body);
-            c.write_str("\r\n");
-            c.write_str(tag.concat(" OK FETCH complete\r\n"));
+            _send(c, "* 1 FETCH (BODY[] {28}\r\n");
+            _send(c, body);
+            _send(c, "\r\n");
+            _send(c, tag.concat(" OK FETCH complete\r\n"));
         } else if upper.contains("STORE") {
-            c.write_str("* 1 FETCH (FLAGS (\\Seen))\r\n");
-            c.write_str(tag.concat(" OK STORE complete\r\n"));
+            _send(c, "* 1 FETCH (FLAGS (\\Seen))\r\n");
+            _send(c, tag.concat(" OK STORE complete\r\n"));
         } else if upper.contains("LOGOUT") {
-            c.write_str("* BYE\r\n");
-            c.write_str(tag.concat(" OK LOGOUT complete\r\n"));
+            _send(c, "* BYE\r\n");
+            _send(c, tag.concat(" OK LOGOUT complete\r\n"));
             break;
         }
     }
@@ -75,12 +83,12 @@ fn test_fetch_captures_literal() -> i32 {
 // ---- SEARCH ----
 
 fn _search_server(port: i32, search_reply: string) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("* OK ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "* OK ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: i32 = c.read(buf as *void, 4096);
+        let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
@@ -89,18 +97,18 @@ fn _search_server(port: i32, search_reply: string) {
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
-        if upper.contains("LOGIN") { c.write_str(tag.concat(" OK\r\n")); }
+        if upper.contains("LOGIN") { _send(c, tag.concat(" OK\r\n")); }
         else if upper.contains("SELECT") {
-            c.write_str("* 5 EXISTS\r\n");
-            c.write_str(tag.concat(" OK\r\n"));
+            _send(c, "* 5 EXISTS\r\n");
+            _send(c, tag.concat(" OK\r\n"));
         }
         else if upper.contains("SEARCH") {
-            c.write_str(search_reply);
-            c.write_str(tag.concat(" OK\r\n"));
+            _send(c, search_reply);
+            _send(c, tag.concat(" OK\r\n"));
         }
         else if upper.contains("LOGOUT") {
-            c.write_str("* BYE\r\n");
-            c.write_str(tag.concat(" OK\r\n"));
+            _send(c, "* BYE\r\n");
+            _send(c, tag.concat(" OK\r\n"));
             break;
         }
     }
@@ -155,15 +163,15 @@ fn test_search_from_helper_quotes_addr() -> i32 {
 // ---- APPEND ----
 
 fn _append_server(port: i32) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("* OK ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "* OK ready\r\n");
     let buf: *u8 = malloc(8192) as *u8;
     let mut append_size: i32 = 0;
     let mut append_tag: string = "";
     let mut append_acc: string = "";
     while true {
-        let n: i32 = c.read(buf as *void, 8192);
+        let n: i32 = _recv(c, buf, 8192);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
@@ -172,7 +180,7 @@ fn _append_server(port: i32) {
         if append_size > 0 {
             append_acc = append_acc.concat(s);
             if append_acc.len() >= append_size + 2 {
-                c.write_str(append_tag.concat(" OK APPEND completed\r\n"));
+                _send(c, append_tag.concat(" OK APPEND completed\r\n"));
                 append_size = 0; append_acc = "";
             }
             continue;
@@ -181,7 +189,7 @@ fn _append_server(port: i32) {
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
-        if upper.contains("LOGIN") { c.write_str(tag.concat(" OK\r\n")); }
+        if upper.contains("LOGIN") { _send(c, tag.concat(" OK\r\n")); }
         else if upper.contains("APPEND") {
             let open: i32 = s.index_of("{");
             let close: i32 = s.index_of("}");
@@ -190,10 +198,10 @@ fn _append_server(port: i32) {
                 let nr: !i32 = nstr.try_parse_int();
                 if nr.ok { append_size = nr.val; append_tag = tag; }
             }
-            c.write_str("+ ready\r\n");
+            _send(c, "+ ready\r\n");
         } else if upper.contains("LOGOUT") {
-            c.write_str("* BYE\r\n");
-            c.write_str(tag.concat(" OK\r\n"));
+            _send(c, "* BYE\r\n");
+            _send(c, tag.concat(" OK\r\n"));
             break;
         }
     }
@@ -230,20 +238,20 @@ fn test_append_without_flags() -> i32 {
 // ---- IDLE ----
 
 fn _idle_server(port: i32) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("* OK ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "* OK ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     let mut idle_tag: string = "";
     while true {
-        let n: i32 = c.read(buf as *void, 4096);
+        let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
         if !idle_tag.eq("") {
             if s.to_upper().starts_with("DONE") {
-                c.write_str(idle_tag.concat(" OK IDLE done\r\n"));
+                _send(c, idle_tag.concat(" OK IDLE done\r\n"));
                 idle_tag = "";
             }
             continue;
@@ -252,22 +260,22 @@ fn _idle_server(port: i32) {
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
         let upper: string = s.to_upper();
-        if upper.contains("LOGIN")  { c.write_str(tag.concat(" OK\r\n")); }
+        if upper.contains("LOGIN")  { _send(c, tag.concat(" OK\r\n")); }
         else if upper.contains("SELECT") {
-            c.write_str("* 5 EXISTS\r\n");
-            c.write_str(tag.concat(" OK\r\n"));
+            _send(c, "* 5 EXISTS\r\n");
+            _send(c, tag.concat(" OK\r\n"));
         }
         else if upper.contains("IDLE") {
-            c.write_str("+ idling\r\n");
+            _send(c, "+ idling\r\n");
             idle_tag = tag;
             sleep_ms(50);
-            c.write_str("* 6 EXISTS\r\n");
+            _send(c, "* 6 EXISTS\r\n");
             sleep_ms(20);
-            c.write_str("* 7 EXISTS\r\n");
+            _send(c, "* 7 EXISTS\r\n");
         }
         else if upper.contains("LOGOUT") {
-            c.write_str("* BYE\r\n");
-            c.write_str(tag.concat(" OK\r\n"));
+            _send(c, "* BYE\r\n");
+            _send(c, tag.concat(" OK\r\n"));
             break;
         }
     }

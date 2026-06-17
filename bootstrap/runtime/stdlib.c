@@ -351,6 +351,14 @@ __attribute__((constructor)) static void __glide_enable_vt(void) {
     SetConsoleCP(65001);
 }
 #endif
+// Match Go: os.Stdout / os.Stderr are unbuffered. Without this, printf from a
+// spawned coroutine (worker thread) sits in the stdio block buffer and is never
+// drained when main loops forever, so the output silently disappears. _IONBF
+// (not _IOLBF) because the Windows CRT treats line-buffering as full-buffering.
+__attribute__((constructor)) static void __glide_unbuffer_stdio(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+}
 #ifdef _WIN32
 #include <dbghelp.h>
 #include <psapi.h>

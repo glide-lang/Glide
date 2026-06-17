@@ -33,7 +33,14 @@ pub fn fmt_type(t: *Type) -> string {
     if t.kind == TY_BORROW { return "&".concat(fmt_type(t.inner)); }
     if t.kind == TY_BORROW_MUT { return "&mut ".concat(fmt_type(t.inner)); }
     if t.kind == TY_SLICE { return "[]".concat(fmt_type(t.inner)); }
-    if t.kind == TY_RESULT { return "!".concat(fmt_type(t.inner)); }
+    if t.kind == TY_RESULT {
+        // A value-less result is written `!`, not `!void` — keep it bare and
+        // normalize an explicit `!void` back to `!`.
+        if t.inner == null || (t.inner.kind == TY_NAMED && t.inner.name.eq("void")) {
+            return "!";
+        }
+        return "!".concat(fmt_type(t.inner));
+    }
     if t.kind == TY_GENERIC {
         let mut out: string = t.name.concat("<");
         if t.args != null {

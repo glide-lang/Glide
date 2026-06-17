@@ -774,7 +774,14 @@ int accept_tcp_async(int listener) {
     /* AcceptEx wired in Sprint W2. For W1.2 we block on accept(),
        which pins the calling thread (typically the http_listen accept
        loop running on its own spawn_thread pthread) but doesn't affect
-       per-conn read/write throughput. */
+       per-conn read/write throughput.
+
+       Flush main's buffered spawns before we block: a bare `while true {
+       accept(); spawn handle(c); }` loop never reaches the 32-spawn batch
+       threshold, so without this the per-conn coro would sit unprocessed
+       in the main buffer until a 32nd connection arrived. Mirrors the
+       POSIX accept_tcp_async fallback above. */
+    __glide_flush_main_buf();
     return accept_tcp(listener);
 }
 
@@ -869,6 +876,10 @@ extern int  tcp_write(int fd, void* buf, int n);
 extern int  tcp_writev2(int fd, void* buf1, int n1, void* buf2, int n2);
 
 int accept_tcp_async(int listener) {
+    /* Flush main's buffered spawns before blocking, so a `while true {
+       accept(); spawn handle(c); }` loop dispatches each per-conn coro
+       immediately instead of stalling until the 32-spawn batch fills. */
+    __glide_flush_main_buf();
     return accept_tcp(listener);
 }
 
@@ -956,6 +967,14 @@ int64_t gnet_write_async(int64_t fd64, void* buf, int n) {
     }
     return (int64_t)sent;
 #endif
+}
+
+/* Gather-write two buffers (header + body) in one syscall, reactor-
+   integrated. Thin i64-fd wrapper over tcp_writev2_async, which owns the
+   per-backend parking discipline (epoll writev / IOCP WSASend gather /
+   sync fallback). Returns total bytes sent or -1. */
+int64_t gnet_writev2_async(int64_t fd64, void* buf1, int n1, void* buf2, int n2) {
+    return (int64_t)tcp_writev2_async((int)fd64, buf1, n1, buf2, n2);
 }
 
 /* Accept a connection through the reactor (parks the listener in a coro,

@@ -1,28 +1,33 @@
 import stdlib::testing::*;
 import stdlib::net::listener::*;
+import stdlib::net::tcp::*;
 import stdlib::mail::pop3::*;
 
+fn _send(c: *TcpStream, s: string) { let _r: !i32 = c.write_all(s); }
+
 fn _fake_pop3(port: i32) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("+OK fake POP3 ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "+OK fake POP3 ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: i32 = c.read(buf as *void, 4096);
+        let rr: !i32 = c.read_bytes(buf, 4096);
+        if !rr.ok { break; }
+        let n: i32 = rr.val;
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
         let upper: string = s.to_upper();
-        if      upper.starts_with("USER")  { c.write_str("+OK user\r\n"); }
-        else if upper.starts_with("PASS")  { c.write_str("+OK logged in\r\n"); }
-        else if upper.starts_with("STAT")  { c.write_str("+OK 2 1024\r\n"); }
-        else if upper.starts_with("LIST")  { c.write_str("+OK 2 messages\r\n1 512\r\n2 512\r\n.\r\n"); }
-        else if upper.starts_with("RETR")  { c.write_str("+OK 12 octets\r\nhello world\r\n.\r\n"); }
-        else if upper.starts_with("DELE")  { c.write_str("+OK deleted\r\n"); }
-        else if upper.starts_with("NOOP")  { c.write_str("+OK\r\n"); }
-        else if upper.starts_with("QUIT")  { c.write_str("+OK bye\r\n"); break; }
-        else                                { c.write_str("-ERR unknown\r\n"); }
+        if      upper.starts_with("USER")  { _send(c, "+OK user\r\n"); }
+        else if upper.starts_with("PASS")  { _send(c, "+OK logged in\r\n"); }
+        else if upper.starts_with("STAT")  { _send(c, "+OK 2 1024\r\n"); }
+        else if upper.starts_with("LIST")  { _send(c, "+OK 2 messages\r\n1 512\r\n2 512\r\n.\r\n"); }
+        else if upper.starts_with("RETR")  { _send(c, "+OK 12 octets\r\nhello world\r\n.\r\n"); }
+        else if upper.starts_with("DELE")  { _send(c, "+OK deleted\r\n"); }
+        else if upper.starts_with("NOOP")  { _send(c, "+OK\r\n"); }
+        else if upper.starts_with("QUIT")  { _send(c, "+OK bye\r\n"); break; }
+        else                                { _send(c, "-ERR unknown\r\n"); }
     }
     c.close(); l.close();
 }

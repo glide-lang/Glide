@@ -1,0 +1,35 @@
+import stdlib::testing::*;
+
+// `let x = expr?` without a type annotation must declare `x` as the
+// UNWRAPPED type (T), not the result struct. Before the fix, codegen's
+// infer_for_codegen left `?` at the result type, so `x + 1` / `x.method()`
+// failed to compile. These tests only build + run if inference unwraps.
+
+fn _wrap_i32(v: i32) -> !i32 { return ok(v); }
+fn _wrap_str() -> !string { return ok("hi"); }
+fn _opt() -> ?i32 { return some(7); }
+
+fn _use_result() -> !i32 {
+    let x = _wrap_i32(41)?;        // inferred i32
+    let s = _wrap_str()?;          // inferred string -> method call below
+    return ok(x + 1 + s.len());
+}
+
+fn _use_option() -> ?i32 {
+    let y = _opt()?;               // inferred i32
+    return some(y * 2);
+}
+
+fn test_try_infers_unwrapped_result() -> i32 {
+    let r: !i32 = _use_result();
+    assert!(r.ok);
+    assert_eq!(r.val, 44);         // 41 + 1 + len("hi")=2
+    return 0;
+}
+
+fn test_try_infers_unwrapped_option() -> i32 {
+    let r: ?i32 = _use_option();
+    assert!(r.has);
+    assert_eq!(r.val, 14);
+    return 0;
+}

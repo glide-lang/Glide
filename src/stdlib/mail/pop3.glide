@@ -227,7 +227,7 @@ impl Pop3Session {
 
     fn _read(self: *Pop3Session, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
-        return self.tcp.read(max);
+        return self.tcp.read_str(max);
     }
 
     fn _read_line(self: *Pop3Session) -> !string {

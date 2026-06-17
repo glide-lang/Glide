@@ -1,187 +1,115 @@
-// Server-side TCP: `Listener` (bind/accept) + `Conn` (accepted socket).
-// The client-side counterpart `TcpStream` lives in `stdlib::net::tcp`.
-// Import as `import stdlib::net::listener::*;`.
+// Server-side TCP on the unified `gnet_*` foundation: `TcpListener`
+// (bind/accept) producing the SAME `TcpStream` the client side uses. A
+// connection therefore reads and writes identically whether you dialed out
+// (`TcpStream::connect`) or accepted it in (`TcpListener::accept`).
 //
-// Wraps the raw socket file descriptors from the C runtime in `Listener`
-// / `Conn` structs so users get owning handles and method-style dispatch.
+// Import as `import stdlib::net::listener::*;` (or pull just the names you
+// need: `import stdlib::net::listener::{TcpListener};`).
 //
-// `accept` / `read` / `write` go through the async reactor:
-//   * Linux: the fd is registered with epoll and the calling coro is
-//     parked until the kernel reports readiness; the worker is freed
-//     to run other tasks in the meantime.
-//   * Windows / macOS / BSD: blocking sync I/O. The Glide-side surface
-//     is identical on every platform, so user code is portable; what
-//     differs is whether the call yields the worker (Linux) or pins
-//     it (everywhere else). The async backends for IOCP and kqueue
-//     are tracked as separate epics; until they land, non-Linux
-//     servers handle one connection at a time per accept loop.
+// `accept` / read / write go through the async reactor:
+//   * Linux: the fd is registered with epoll and the calling coro parks
+//     until the kernel reports readiness; the worker runs other tasks
+//     meanwhile.
+//   * Windows / macOS / BSD: graceful blocking I/O. The Glide surface is
+//     identical on every platform, so user code is portable.
+//
+// ```glide
+// import stdlib::net::listener::*;
+//
+// fn main() -> !i32 {
+//     let l: *TcpListener = TcpListener::bind(8080)?;
+//     defer l.close();
+//     while true {
+//         let conn: *TcpStream = l.accept()?;
+//         spawn handle(conn);
+//     }
+//     return ok(0);
+// }
+// ```
 
-extern fn listen_tcp(port: i32) -> i32;
-extern fn listen_tcp_reuseport(port: i32) -> i32;
-extern fn accept_tcp_async(listener: i32) -> i32;
-extern fn tcp_read_async(fd: i32, buf: *void, max: i32) -> i32;
-extern fn tcp_write_async(fd: i32, buf: *void, n: i32) -> i32;
-extern fn tcp_writev2_async(fd: i32, buf1: *void, n1: i32, buf2: *void, n2: i32) -> i32;
-extern fn tcp_sendfile_from_path(fd: i32, path: string) -> i32;
-extern fn tcp_close(fd: i32);
+import stdlib::net::sys::*;
+import stdlib::net::tcp::*;
 
-pub struct Listener { pub fd: i32 }
-pub struct Conn     { pub fd: i32 }
+pub struct TcpListener {
+    pub fd: i64,
+}
 
-impl Listener {
-    /// Bind + listen on TCP `port` across all interfaces. Returns a
-    /// `Listener` with `fd < 0` on failure (port already bound, missing
-    /// privileges, …) — check `ok()` before using.
+impl TcpListener {
+    /// Bind + listen on TCP `port` across all interfaces (IPv4). Returns
+    /// `err` (with the OS message) when the port is taken, privileges are
+    /// missing, etc. — handle it with `?` or an explicit check.
     ///
     /// ```glide
-    /// let l: *Listener = Listener::bind(8080);
-    /// if !l.ok() {
-    ///     println!("bind failed");
-    ///     return 1;
-    /// }
-    /// println!("listening on :8080");
+    /// let l: *TcpListener = TcpListener::bind(8080)?;
+    /// defer l.close();
     /// ```
-    pub fn bind(port: i32) -> *Listener {
-        let l: *Listener = malloc(sizeof(Listener)) as *Listener;
-        l.fd = listen_tcp(port);
-        return l;
+    pub fn bind(port: i32) -> !*TcpListener {
+        return _listen(port, false);
     }
 
-    /// Bind + listen on TCP `port` across all interfaces with
-    /// `SO_REUSEPORT` when the platform supports it. This lets multiple
-    /// processes share one accepting port, with the kernel
-    /// load-balancing accepts between them. On Windows this falls back
-    /// to ordinary bind behaviour (`SO_REUSEADDR` only).
+    /// Like `bind`, but sets `SO_REUSEPORT` so several workers can bind the
+    /// same port and the kernel load-balances accepts between them (Linux).
+    /// Platforms without balancing fall back to a single shared listener.
     ///
     /// ```glide
-    /// let l: *Listener = Listener::bind_reuseport(8080);
-    /// if !l.ok() {
-    ///     println!("bind failed");
-    ///     return 1;
-    /// }
-    /// println!("listening on :8080");
+    /// let l: *TcpListener = TcpListener::bind_reuseport(8080)?;
     /// ```
-    pub fn bind_reuseport(port: i32) -> *Listener {
-        let l: *Listener = malloc(sizeof(Listener)) as *Listener;
-        l.fd = listen_tcp_reuseport(port);
-        return l;
+    pub fn bind_reuseport(port: i32) -> !*TcpListener {
+        return _listen(port, true);
     }
 
-    /// `true` when the listener is bound and ready to accept.
-    ///
-    /// ```glide
-    /// let l: *Listener = Listener::bind(8080);
-    /// if !l.ok() { eprintln("bind failed"); env_exit(1); }
-    /// ```
-    pub fn ok(self: *Listener) -> bool { return self.fd >= 0; }
-
-    /// Block until a client connects. Returns a `Conn` with `fd < 0` on
-    /// error — always check `ok()` first.
+    /// Block until a client connects, returning a ready `TcpStream` (left
+    /// non-blocking + `TCP_NODELAY` by the reactor). `err` on accept error.
     ///
     /// ```glide
     /// while true {
-    ///     let c: *Conn = l.accept();
-    ///     if !c.ok() { c.close(); continue; }
-    ///     spawn handle(c);
+    ///     let conn: *TcpStream = l.accept()?;
+    ///     spawn handle(conn);
     /// }
     /// ```
-    pub fn accept(self: *Listener) -> *Conn {
-        let c: *Conn = malloc(sizeof(Conn)) as *Conn;
-        c.fd = accept_tcp_async(self.fd);
-        return c;
+    pub fn accept(self: *TcpListener) -> !*TcpStream {
+        let mut f: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut p: i32 = 0;
+        let cfd: i64 = gnet_accept_async(self.fd, &f, &v4, &hi, &lo, &p);
+        if cfd < 0 { return err("tcp: accept: ".concat(gnet_last_error())); }
+        return ok(TcpStream::from_fd(cfd));
     }
 
     /// Close the listening socket and free the struct. Pair with `defer`.
-    ///
-    /// ```glide
-    /// let l: *Listener = Listener::bind(8080);
-    /// defer l.close();
-    /// // ...accept loop...
-    /// ```
-    pub fn close(self: *Listener) {
-        if self.fd >= 0 { tcp_close(self.fd); }
+    pub fn close(self: *TcpListener) {
+        gnet_close(self.fd);
         free(self as *void);
     }
 }
 
-impl Conn {
-    /// `true` when the connection handshake completed.
-    ///
-    /// ```glide
-    /// let c: *Conn = l.accept();
-    /// if !c.ok() { c.close(); continue; }
-    /// ```
-    pub fn ok(self: *Conn) -> bool { return self.fd >= 0; }
-
-    /// Read up to `max` bytes into `buf`. Returns:
-    ///   * `n > 0`: bytes actually read
-    ///   * `0`:     peer closed the connection cleanly
-    ///   * `-1`:    error (connection reset, bad fd, …)
-    ///
-    /// ```glide
-    /// let buf: *u8 = malloc(1024) as *u8;
-    /// let n: i32 = c.read(buf as *void, 1024);
-    /// if n <= 0 { c.close(); return; }
-    /// ```
-    pub fn read(self: *Conn, buf: *void, max: i32) -> i32 {
-        return tcp_read_async(self.fd, buf, max);
+// Shared bind+listen path. `reuseport` adds SO_REUSEPORT when the platform
+// exposes it (gnet_const returns -1 where it doesn't). 0 as the v4 address
+// is INADDR_ANY in the flat ABI (htonl(0) in netcore).
+fn _listen(port: i32, reuseport: bool) -> !*TcpListener {
+    let fd: i64 = gnet_socket(AF_V4, SOCK_STREAM, 0);
+    if fd < 0 { return err("tcp: socket: ".concat(gnet_last_error())); }
+    let _ra: i64 = gnet_setsockopt_int(fd, gnet_const(OPT_SOL_SOCKET),
+                                       gnet_const(OPT_SO_REUSEADDR), 1);
+    if reuseport {
+        let rp: i32 = gnet_const(OPT_SO_REUSEPORT);
+        if rp >= 0 {
+            let _rp: i64 = gnet_setsockopt_int(fd, gnet_const(OPT_SOL_SOCKET), rp, 1);
+        }
     }
-
-    /// Write `n` bytes from `buf`. May write fewer — loop on the
-    /// returned count when sending payloads larger than the kernel send
-    /// buffer.
-    ///
-    /// ```glide
-    /// let mut sent: i32 = 0;
-    /// while sent < n {
-    ///     let k: i32 = c.write(buf as *void, n - sent);
-    ///     if k <= 0 { break; }
-    ///     sent = sent + k;
-    /// }
-    /// ```
-    pub fn write(self: *Conn, buf: *void, n: i32) -> i32 {
-        return tcp_write_async(self.fd, buf, n);
+    if gnet_bind(fd, AF_V4, 0, 0, 0, port) < 0 {
+        let e: string = gnet_last_error();
+        gnet_close(fd);
+        return err("tcp: bind: ".concat(e));
     }
-
-    /// Convenience: write a whole string (no trailing NUL is sent).
-    /// Returns the byte count actually written.
-    ///
-    /// ```glide
-    /// c.write_str("HTTP/1.0 200 OK\r\n\r\n");
-    /// ```
-    pub fn write_str(self: *Conn, s: string) -> i32 {
-        return tcp_write_async(self.fd, s as *void, s.len());
+    if gnet_listen(fd, 128) < 0 {
+        let e: string = gnet_last_error();
+        gnet_close(fd);
+        return err("tcp: listen: ".concat(e));
     }
-
-    /// Gather-write two buffers in one writev / WSASend syscall. The
-    /// HTTP server uses this to ship a response's header + body without
-    /// the kernel having to assemble two TCP segments — saves both the
-    /// userspace memcpy that hp_build_response would do and the extra
-    /// syscall a sequential pair of writes would cost.
-    pub fn write2(self: *Conn, buf1: *void, n1: i32, buf2: *void, n2: i32) -> i32 {
-        return tcp_writev2_async(self.fd, buf1, n1, buf2, n2);
-    }
-
-    /// Zero-copy file → socket transfer. Linux: sendfile(); Windows:
-    /// TransmitFile(); macOS / BSD: read+write loop (sendfile API
-    /// varies). Skips the userspace round-trip for static file
-    /// serving — disk pages go straight from the kernel page cache
-    /// into the socket buffer. Returns total bytes sent (file size on
-    /// success) or -1 on error.
-    pub fn sendfile(self: *Conn, path: string) -> i32 {
-        return tcp_sendfile_from_path(self.fd, path);
-    }
-
-    /// Close the connection and free the struct. After `close()`, the
-    /// pointer is dangling; do not touch it again.
-    ///
-    /// ```glide
-    /// let c: *Conn = l.accept();
-    /// defer c.close();
-    /// c.write_str("hello\n");
-    /// ```
-    pub fn close(self: *Conn) {
-        if self.fd >= 0 { tcp_close(self.fd); }
-        free(self as *void);
-    }
+    let l: *TcpListener = malloc(sizeof(TcpListener)) as *TcpListener;
+    l.fd = fd;
+    return ok(l);
 }

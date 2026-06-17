@@ -1100,6 +1100,24 @@ case_completion_has("identifier position offers primitives",
     {"line":2,"character":6},
     ["i32"])
 
+# Member completion through `?` with let-inference: `let x = Foo::make()?`
+# must resolve `x` to `*Foo` (unwrapping the `!*Foo`), so `x.` offers Foo's
+# methods. Regression for the `?` inference gap that left completion silent.
+case_completion_has("? inference offers receiver methods",
+    'struct Foo {}\n'
+    'impl Foo {\n'
+    '    fn make() -> !*Foo { return ok(null as *Foo); }\n'
+    '    fn greet(self: *Foo) -> i32 { return 1; }\n'
+    '    fn wave(self: *Foo) -> i32 { return 2; }\n'
+    '}\n'
+    'fn run() -> ! {\n'
+    '    let x = Foo::make()?;\n'
+    '    x.\n'
+    '    return ok(0);\n'
+    '}',
+    {"line":8,"character":6},
+    ["greet","wave"])
+
 # ---- struct hover (fields) + outline (field children) ----
 
 def _hover_val(r):

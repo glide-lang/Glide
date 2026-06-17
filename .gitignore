@@ -12,6 +12,9 @@
 /glide.exe
 /dist
 *.__glide.c
+# Linked runtime DLLs copied next to the binary on Windows (openssl, ngtcp2,
+# nghttp3, zlib, winpthread). Build artifacts, never source.
+*.dll
 __glide_run_tmp*
 # Test/bench/doc runner scratch — regenerated per invocation, never
 # meant to live in source control.

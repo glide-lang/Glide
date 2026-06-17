@@ -262,6 +262,15 @@ int64_t gnet_leave_group_v4(int64_t fd, int64_t group_v4, int64_t iface_v4) {
     return __gnet_mreq(fd, group_v4, iface_v4, 0);
 }
 
+/* Zero-copy file -> socket, i64-fd wrapper over socket.c's sync sendfile
+   (TransmitFile on Windows / sendfile on Linux / read-write on BSD). The
+   legacy async server also calls this synchronously, so there is no reactor
+   parking to integrate. Returns total bytes sent (file size) or -1. */
+extern int tcp_sendfile_from_path(int sock_fd, const char* path);
+int64_t gnet_sendfile_from_path(int64_t fd, const char* path) {
+    return (int64_t)tcp_sendfile_from_path((int)fd, path);
+}
+
 /* Live errno/WSAGetLastError snapshot as "<code>:<message>" so callers can
    machine-distinguish (e.g. EPERM) per the @handler status convention. Glide
    MUST call this immediately after a failed gnet_*, before any other syscall —

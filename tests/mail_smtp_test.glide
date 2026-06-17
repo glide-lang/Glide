@@ -1,7 +1,15 @@
 import stdlib::testing::*;
 import stdlib::net::listener::*;
+import stdlib::net::tcp::*;
 import stdlib::mail::message::*;
 import stdlib::mail::smtp::*;
+
+fn _send(c: *TcpStream, s: string) { let _r: !i32 = c.write_all(s); }
+fn _recv(c: *TcpStream, buf: *u8, max: i32) -> i32 {
+    let r: !i32 = c.read_bytes(buf, max);
+    if !r.ok { return -1; }
+    return r.val;
+}
 
 // Fake SMTP server: drives the conversation and returns success codes
 // for the standard sequence. Validates the client side runs through
@@ -11,14 +19,14 @@ import stdlib::mail::smtp::*;
 // inspection.
 
 fn _fake_smtp(port: i32) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("220 fake.example.com SMTP service ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "220 fake.example.com SMTP service ready\r\n");
     let buf: *u8 = malloc(8192) as *u8;
     let mut data_mode: bool = false;
     let mut data_acc: string = "";
     while true {
-        let n: i32 = c.read(buf as *void, 8192);
+        let n: i32 = _recv(c, buf, 8192);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
@@ -27,7 +35,7 @@ fn _fake_smtp(port: i32) {
         if data_mode {
             data_acc = data_acc.concat(s);
             if data_acc.contains("\r\n.\r\n") {
-                c.write_str("250 OK queued\r\n");
+                _send(c, "250 OK queued\r\n");
                 data_mode = false;
                 data_acc = "";
             }
@@ -35,19 +43,19 @@ fn _fake_smtp(port: i32) {
         }
         let upper: string = s.to_upper().trim();
         if upper.starts_with("EHLO") {
-            c.write_str("250-fake greets you\r\n250 SIZE 10485760\r\n");
+            _send(c, "250-fake greets you\r\n250 SIZE 10485760\r\n");
         } else if upper.starts_with("MAIL FROM") {
-            c.write_str("250 OK\r\n");
+            _send(c, "250 OK\r\n");
         } else if upper.starts_with("RCPT TO") {
-            c.write_str("250 OK\r\n");
+            _send(c, "250 OK\r\n");
         } else if upper.starts_with("DATA") {
-            c.write_str("354 send the data\r\n");
+            _send(c, "354 send the data\r\n");
             data_mode = true;
         } else if upper.starts_with("QUIT") {
-            c.write_str("221 bye\r\n");
+            _send(c, "221 bye\r\n");
             break;
         } else {
-            c.write_str("500 unknown\r\n");
+            _send(c, "500 unknown\r\n");
         }
     }
     c.close(); l.close();
@@ -78,25 +86,25 @@ fn test_multiple_recipients_all_succeed() -> i32 {
 }
 
 fn _rejecting_server(port: i32) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("220 fake ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "220 fake ready\r\n");
     let buf: *u8 = malloc(4096) as *u8;
     while true {
-        let n: i32 = c.read(buf as *void, 4096);
+        let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
         (s as *u8)[n] = 0 as u8;
         let upper: string = s.to_upper().trim();
         if upper.starts_with("EHLO") {
-            c.write_str("250 ok\r\n");
+            _send(c, "250 ok\r\n");
         } else if upper.starts_with("MAIL FROM") {
-            c.write_str("550 sender refused\r\n");
+            _send(c, "550 sender refused\r\n");
         } else if upper.starts_with("QUIT") {
-            c.write_str("221 bye\r\n"); break;
+            _send(c, "221 bye\r\n"); break;
         } else {
-            c.write_str("500 unknown\r\n");
+            _send(c, "500 unknown\r\n");
         }
     }
     c.close(); l.close();
@@ -105,15 +113,15 @@ fn _rejecting_server(port: i32) {
 // ---- AUTH LOGIN flow ----
 
 fn _login_only_server(port: i32) {
-    let l: *Listener = Listener::bind(port);
-    let c: *Conn = l.accept();
-    c.write_str("220 fake ready\r\n");
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    _send(c, "220 fake ready\r\n");
     let buf: *u8 = malloc(8192) as *u8;
     let mut step: i32 = 0;
     let mut data_mode: bool = false;
     let mut data_acc: string = "";
     while true {
-        let n: i32 = c.read(buf as *void, 8192);
+        let n: i32 = _recv(c, buf, 8192);
         if n <= 0 { break; }
         let s: string = malloc(n + 1) as string;
         for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
@@ -121,23 +129,23 @@ fn _login_only_server(port: i32) {
         if data_mode {
             data_acc = data_acc.concat(s);
             if data_acc.contains("\r\n.\r\n") {
-                c.write_str("250 OK queued\r\n");
+                _send(c, "250 OK queued\r\n");
                 data_mode = false; data_acc = "";
             }
             continue;
         }
-        if step == 1 { c.write_str("334 UGFzc3dvcmQ6\r\n"); step = 2; continue; }
-        if step == 2 { c.write_str("235 auth ok\r\n"); step = 0; continue; }
+        if step == 1 { _send(c, "334 UGFzc3dvcmQ6\r\n"); step = 2; continue; }
+        if step == 2 { _send(c, "235 auth ok\r\n"); step = 0; continue; }
         let upper: string = s.to_upper().trim();
         if upper.starts_with("EHLO") {
-            c.write_str("250-fake\r\n250 AUTH LOGIN\r\n");
+            _send(c, "250-fake\r\n250 AUTH LOGIN\r\n");
         } else if upper.starts_with("AUTH LOGIN") {
-            c.write_str("334 VXNlcm5hbWU6\r\n"); step = 1;
-        } else if upper.starts_with("MAIL FROM") { c.write_str("250 OK\r\n"); }
-        else if upper.starts_with("RCPT TO")    { c.write_str("250 OK\r\n"); }
-        else if upper.starts_with("DATA")        { c.write_str("354 ok\r\n"); data_mode = true; }
-        else if upper.starts_with("QUIT")        { c.write_str("221 bye\r\n"); break; }
-        else                                      { c.write_str("500\r\n"); }
+            _send(c, "334 VXNlcm5hbWU6\r\n"); step = 1;
+        } else if upper.starts_with("MAIL FROM") { _send(c, "250 OK\r\n"); }
+        else if upper.starts_with("RCPT TO")    { _send(c, "250 OK\r\n"); }
+        else if upper.starts_with("DATA")        { _send(c, "354 ok\r\n"); data_mode = true; }
+        else if upper.starts_with("QUIT")        { _send(c, "221 bye\r\n"); break; }
+        else                                      { _send(c, "500\r\n"); }
     }
     c.close(); l.close();
 }

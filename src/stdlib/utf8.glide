@@ -1,0 +1,125 @@
+// UTF-8 ergonomics: validate raw bytes and turn them into a `string`.
+//
+// This is the byte -> string bridge that the builtin `string` type can't
+// host: `string` lives in src/builtins and must not depend on the stdlib
+// `ByteBuffer`. The string -> byte direction is `ByteBuffer::from_string`
+// (stdlib::bytes); codepoint decoding is `string.chars()` / `char_count()`
+// (builtin, no ByteBuffer needed); encoding a codepoint into bytes is
+// `ByteBuffer::push_codepoint`.
+//
+// ```glide
+// import stdlib::utf8::*;
+// import stdlib::bytes::*;
+//
+// let b: *ByteBuffer = ByteBuffer::from_string("héllo");
+// let s: string = String::from_utf8(b)?;     // validated
+// ```
+
+import stdlib::bytes::*;
+
+// Heap-copies `n` bytes from `buf` into a fresh NUL-terminated string. The
+// runtime symbol is baked into the seed; declared locally to avoid pulling
+// stdlib::net::ip in just for its `_bytes_to_string` wrapper.
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+
+/// Namespace for UTF-8 string constructors. Glide's primitive string type
+/// is `string`; `String` groups the byte-oriented builders that need the
+/// stdlib `ByteBuffer`.
+pub struct String {}
+
+impl String {
+    /// Validate `b` as well-formed UTF-8 and copy it into an owning
+    /// `string`. Returns `err` if the bytes are not valid UTF-8.
+    ///
+    /// ```glide
+    /// let b: *ByteBuffer = ByteBuffer::from_string("héllo");
+    /// let s: string = String::from_utf8(b)?;   // "héllo"
+    /// ```
+    pub fn from_utf8(b: *ByteBuffer) -> !string {
+        if _utf8_first_bad(b.data, b.len) >= 0 {
+            return err("invalid utf-8");
+        }
+        return ok(__glide_string_from_buf(b.data as *void, b.len));
+    }
+
+    /// Copy `b` into a `string`, replacing each malformed byte sequence
+    /// with U+FFFD (the replacement character). Never fails.
+    ///
+    /// ```glide
+    /// let s: string = String::from_utf8_lossy(buf);
+    /// ```
+    pub fn from_utf8_lossy(b: *ByteBuffer) -> string {
+        let out: *ByteBuffer = ByteBuffer::new();
+        let data: *u8 = b.data;
+        let len: i32 = b.len;
+        let mut i: i32 = 0;
+        while i < len {
+            let adv: i32 = _utf8_seq_len(data, len, i);
+            if adv > 0 {
+                let mut k: i32 = 0;
+                while k < adv {
+                    out.push(data[i + k]);
+                    k = k + 1;
+                }
+                i = i + adv;
+            } else {
+                out.push(239 as u8);
+                out.push(191 as u8);
+                out.push(189 as u8);
+                i = i + 1;
+            }
+        }
+        let s: string = __glide_string_from_buf(out.data as *void, out.len);
+        out.free();
+        return s;
+    }
+
+    /// `true` when every byte of `b` is part of a well-formed UTF-8
+    /// sequence.
+    pub fn is_valid_utf8(b: *ByteBuffer) -> bool {
+        return _utf8_first_bad(b.data, b.len) < 0;
+    }
+}
+
+// A UTF-8 continuation byte is 0x80..0xBF.
+fn _is_cont(b: i32) -> bool {
+    return b >= 128 && b <= 191;
+}
+
+// Length (1–4) of the valid UTF-8 sequence starting at `i`, or 0 if the
+// bytes at `i` do not begin a well-formed sequence. Rejects overlong
+// 2-byte leads (0xC0/0xC1) and out-of-range 4-byte leads (> 0xF4).
+fn _utf8_seq_len(data: *u8, len: i32, i: i32) -> i32 {
+    let b0: i32 = data[i] as i32;
+    if b0 < 128 { return 1; }
+    if b0 >= 194 && b0 <= 223 {
+        if i + 1 < len && _is_cont(data[i + 1] as i32) { return 2; }
+        return 0;
+    }
+    if b0 >= 224 && b0 <= 239 {
+        if i + 2 < len && _is_cont(data[i + 1] as i32) && _is_cont(data[i + 2] as i32) {
+            return 3;
+        }
+        return 0;
+    }
+    if b0 >= 240 && b0 <= 244 {
+        if i + 3 < len && _is_cont(data[i + 1] as i32) && _is_cont(data[i + 2] as i32)
+            && _is_cont(data[i + 3] as i32) {
+            return 4;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+// Index of the first byte that is not part of well-formed UTF-8, or -1 if
+// the whole buffer validates.
+fn _utf8_first_bad(data: *u8, len: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < len {
+        let adv: i32 = _utf8_seq_len(data, len, i);
+        if adv <= 0 { return i; }
+        i = i + adv;
+    }
+    return -1;
+}

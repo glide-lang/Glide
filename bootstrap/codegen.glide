@@ -956,13 +956,59 @@ fn collect_dyn_in_stmt(g: *CG, s: *Stmt) {
             collect_dyn_in_stmt(g, &m);
         }
     }
+    // Struct fields + enum payloads can be the ONLY place a `*dyn Trait`
+    // appears (e.g. a `stream_src: *dyn ChunkSource` field with no method
+    // ever taking the trait as a param). Without walking these, the trait's
+    // fat-pointer typedef is never emitted and a `?Struct`/`!Struct` mono
+    // that lays the field out by value fails with `unknown type
+    // __glide_dyn_<Trait>`.
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            if f.ty != null { collect_dyn_in_type(g, f.ty); }
+        }
+    }
+    if s.enum_variants != null {
+        for let i: i32 = 0; i < s.enum_variants.len(); i++ {
+            let v: EnumVariant = s.enum_variants.get(i);
+            if v.fields != null {
+                for let j: i32 = 0; j < v.fields.len(); j++ {
+                    let vt: Type = v.fields.get(j);
+                    collect_dyn_in_type(g, &vt);
+                }
+            }
+        }
+    }
+}
+
+// Emit ONLY the fat-pointer typedef (`__glide_dyn_<Trait>` = `{ data,
+// vtable }`) for every dyn trait, with a forward-declared vtable struct.
+// Runs EARLY — before user struct/enum bodies that embed a `*dyn Trait`
+// field by value get emitted (the result/option pre-pass forces that for
+// `?Struct`/`!Struct`). The full vtable struct body + thunks come later in
+// emit_dyn_runtime, which must wait for option/result method-sig types.
+fn emit_dyn_fat_pointers(g: *CG, program: *Vector<Stmt>) {
+    if g.dyn_traits == null { return; }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_TRAIT { continue; }
+        if s.name == null || s.name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.name) { continue; }
+        let trait_name: string = s.name;
+        println!("struct __glide_".concat(trait_name).concat("_vt;"));
+        println!("typedef struct __glide_dyn_".concat(trait_name).concat(" {"));
+        println!("    void* data;");
+        println!("    const struct __glide_".concat(trait_name).concat("_vt* vtable;"));
+        println!("} __glide_dyn_".concat(trait_name).concat(";"));
+        println!("");
+    }
 }
 
 // Emit the C runtime support for every `dyn Trait` in use:
 //   * Vtable struct (`__glide_<Trait>_vt`) listing every method as a fn ptr.
-//   * Fat-pointer struct (`__glide_dyn_<Trait>`) = `{ data, vtable }`.
 //   * Static vtable instance (`__glide_<Type>_as_<Trait>_vt`) per
 //     `impl Trait for Type` block in the program.
+// The fat-pointer typedef itself is emitted earlier by emit_dyn_fat_pointers.
 fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
     if g.dyn_traits == null { return; }
     // Helper: index trait defs by name.
@@ -999,11 +1045,8 @@ fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
             }
         }
         println!("} __glide_".concat(trait_name).concat("_vt;"));
-        // Fat pointer.
-        println!("typedef struct __glide_dyn_".concat(trait_name).concat(" {"));
-        println!("    void* data;");
-        println!("    const __glide_".concat(trait_name).concat("_vt* vtable;"));
-        println!("} __glide_dyn_".concat(trait_name).concat(";"));
+        // The fat-pointer typedef (__glide_dyn_<Trait>) was already emitted
+        // up front by emit_dyn_fat_pointers; only its vtable body lands here.
         println!("");
     }
     // For every `impl Trait for Type` whose Trait is dyn-used:
@@ -1757,6 +1800,14 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         }
         if e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT {
             return ty_pointer(inner);
+        }
+        // Postfix `?` unwraps !T / ?T / ?!T to T — the value the stmt-expr
+        // yields. Mirrors the typer's infer_expr so an un-annotated
+        // `let x = expr?` declares `x` as T, not the result struct.
+        if e.op_code == UN_TRY && inner != null
+           && (inner.kind == TY_RESULT || inner.kind == TY_OPTION
+               || inner.kind == TY_OPT_RESULT) {
+            return inner.inner;
         }
         return inner;
     }
@@ -5851,6 +5902,223 @@ fn resolve_type_prefix(g: *CG, prefix: string) -> string {
     return prefix.substring(last + 2, n);
 }
 
+// ===================== shadowing -> unique C names =======================
+// `let b = e1; let b = b.val;` is valid Glide — the second `b` shadows the
+// first. C forbids two declarations of one name in a block, so before emission
+// we alpha-rename a binding that shadows an earlier one in the SAME scope (and
+// its later references in that scope) to a unique name. A `ren` map carries
+// name -> current C name down through nested scopes; each scope records its own
+// changes and restores them on exit, so C's real lexical scoping is preserved.
+// Runs once over every fn / method / closure body before any C is emitted.
+
+fn _uniq_next(ctr: *Vector<i32>) -> i32 {
+    let v: i32 = ctr.get(0);
+    ctr.set(0, v + 1);
+    return v;
+}
+
+fn _uniq_undo(ren: *HashMap<string>, undo: *Vector<string>) {
+    let mut i: i32 = undo.len() - 2;
+    while i >= 0 {
+        ren.insert(undo.get(i), undo.get(i + 1));
+        i = i - 2;
+    }
+}
+
+fn _uniq_expr(e: *Expr, ren: *HashMap<string>, ctr: *Vector<i32>) {
+    if e == null { return; }
+    if e.kind == EX_IDENT {
+        if e.str_val != null && ren.contains(e.str_val) {
+            e.str_val = ren.get(e.str_val);
+        }
+        return;
+    }
+    if e.kind == EX_FNEXPR {
+        let seed: *Vector<string> = Vector::new();
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null { seed.push(p.name); }
+            }
+        }
+        if e.fn_expr_body != null { _uniq_scope(e.fn_expr_body, ren, ctr, seed); }
+        return;
+    }
+    if e.kind == EX_BLOCK {
+        if e.block_stmts != null {
+            let seen: *HashMap<bool> = HashMap::new();
+            let undo: *Vector<string> = Vector::new();
+            for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+                let bs: Stmt = e.block_stmts.get(i);
+                _uniq_stmt(&bs, ren, seen, undo, ctr);
+                e.block_stmts.set(i, bs);
+            }
+            _uniq_expr(e.operand, ren, ctr);
+            _uniq_undo(ren, undo);
+        } else {
+            _uniq_expr(e.operand, ren, ctr);
+        }
+        return;
+    }
+    if e.kind == EX_MATCH {
+        _uniq_expr(e.lhs, ren, ctr);
+        if e.match_arms != null {
+            for let i: i32 = 0; i < e.match_arms.len(); i++ {
+                let arm: MatchArm = e.match_arms.get(i);
+                _uniq_arm(&arm, ren, ctr);
+                e.match_arms.set(i, arm);
+            }
+        }
+        return;
+    }
+    _uniq_expr(e.lhs, ren, ctr);
+    _uniq_expr(e.rhs, ren, ctr);
+    _uniq_expr(e.operand, ren, ctr);
+    if e.macro_recv != null { _uniq_expr(e.macro_recv, ren, ctr); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _uniq_expr(&a, ren, ctr);
+            e.args.set(i, a);
+        }
+    }
+}
+
+fn _uniq_arm(arm: *MatchArm, ren: *HashMap<string>, ctr: *Vector<i32>) {
+    let seed: *Vector<string> = Vector::new();
+    if arm.bindings != null {
+        for let i: i32 = 0; i < arm.bindings.len(); i++ { seed.push(arm.bindings.get(i)); }
+    }
+    if arm.body != null { _uniq_scope(arm.body, ren, ctr, seed); }
+}
+
+// Mutates `*s` in place. The caller persists it: the scope loop writes the
+// (by-value) copy back into its vector; a `*Stmt` field (for-init) is mutated
+// through the pointer directly. Either way the rename lands.
+fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>,
+              undo: *Vector<string>, ctr: *Vector<i32>) {
+    if s == null { return; }
+    if s.kind == ST_LET {
+        // The value is evaluated in the CURRENT scope, so `let b = b.val`
+        // reads the OLD `b` — substitute the value BEFORE rebinding the name.
+        _uniq_expr(s.let_value, ren, ctr);
+        if s.name != null && !s.name.eq("") {
+            // Work in ORIGINAL names — codegen applies c_safe_ident uniformly to
+            // both the declaration and every reference, and registers the type
+            // under the original name. Mapping to the c_safe_ident form here
+            // would desync that type lookup (e.g. a var named `short`).
+            let orig: string = s.name;
+            let mut cname: string = orig;
+            if seen.contains(orig) {
+                cname = orig.concat("__sh").concat(_uniq_next(ctr).to_string());
+            }
+            seen.insert(orig, true);
+            undo.push(orig);
+            if ren.contains(orig) { undo.push(ren.get(orig)); } else { undo.push(orig); }
+            ren.insert(orig, cname);
+            if !cname.eq(orig) { s.name = cname; }
+        }
+        return;
+    }
+    if s.kind == ST_RETURN { _uniq_expr(s.expr_value, ren, ctr); return; }
+    if s.kind == ST_EXPR { _uniq_expr(s.expr_value, ren, ctr); return; }
+    if s.kind == ST_DEFER || s.kind == ST_DEFER_ERR { _uniq_expr(s.expr_value, ren, ctr); return; }
+    if s.kind == ST_IF {
+        _uniq_expr(s.cond, ren, ctr);
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
+        if s.else_body != null { _uniq_scope(s.else_body, ren, ctr, null); }
+        return;
+    }
+    if s.kind == ST_WHILE {
+        _uniq_expr(s.cond, ren, ctr);
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
+        return;
+    }
+    if s.kind == ST_WHILE_RECV {
+        _uniq_expr(s.let_value, ren, ctr);
+        let seed: *Vector<string> = Vector::new();
+        if s.name != null && !s.name.eq("") { seed.push(s.name); }
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, seed); }
+        return;
+    }
+    if s.kind == ST_FOR {
+        // for-init's var is scoped to the whole loop: init + cond + step + body
+        // share one scope.
+        let seen2: *HashMap<bool> = HashMap::new();
+        let undo2: *Vector<string> = Vector::new();
+        if s.for_init != null { _uniq_stmt(s.for_init, ren, seen2, undo2, ctr); }
+        _uniq_expr(s.cond, ren, ctr);
+        _uniq_expr(s.for_step, ren, ctr);
+        if s.then_body != null {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
+                let bs: Stmt = s.then_body.get(i);
+                _uniq_stmt(&bs, ren, seen2, undo2, ctr);
+                s.then_body.set(i, bs);
+            }
+        }
+        _uniq_undo(ren, undo2);
+        return;
+    }
+    if s.kind == ST_BLOCK {
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
+        return;
+    }
+    if s.kind == ST_MATCH {
+        _uniq_expr(s.scrutinee, ren, ctr);
+        if s.arms != null {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
+                let arm: MatchArm = s.arms.get(i);
+                _uniq_arm(&arm, ren, ctr);
+                s.arms.set(i, arm);
+            }
+        }
+        return;
+    }
+}
+
+fn _uniq_scope(body: *Vector<Stmt>, ren: *HashMap<string>, ctr: *Vector<i32>,
+               seed: *Vector<string>) {
+    let seen: *HashMap<bool> = HashMap::new();
+    let undo: *Vector<string> = Vector::new();
+    if seed != null {
+        for let i: i32 = 0; i < seed.len(); i++ { seen.insert(seed.get(i), true); }
+    }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _uniq_stmt(&s, ren, seen, undo, ctr);
+        body.set(i, s);
+    }
+    _uniq_undo(ren, undo);
+}
+
+fn _uniq_fn(fnstmt: *Stmt) {
+    if fnstmt.fn_body == null { return; }
+    let seed: *Vector<string> = Vector::new();
+    if fnstmt.fn_params != null {
+        for let i: i32 = 0; i < fnstmt.fn_params.len(); i++ {
+            let p: Param = fnstmt.fn_params.get(i);
+            if p.name != null { seed.push(p.name); }
+        }
+    }
+    let ren: *HashMap<string> = HashMap::new();
+    let ctr: *Vector<i32> = Vector::new();
+    ctr.push(0);
+    _uniq_scope(fnstmt.fn_body, ren, ctr, seed);
+}
+
+fn _uniq_program(program: *Vector<Stmt>) {
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN { _uniq_fn(&s); }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN { _uniq_fn(&m); }
+            }
+        }
+    }
+}
+
 pub fn emit_program(program: *Vector<Stmt>) {
     emit_program_mode(program, false);
 }
@@ -5860,6 +6128,9 @@ pub fn emit_program(program: *Vector<Stmt>) {
 // not libc), skip the hosted runtime bake (stdlib/scheduler/socket), and skip
 // the `main` wrapper. The user program supplies its own entry + primitives.
 pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
+    // Alpha-rename shadowing locals to unique C names before anything is
+    // emitted, so `let b = …; let b = b.val;` compiles.
+    _uniq_program(program);
     if freestanding {
         println!("#include <stdint.h>");
         println!("#include <stddef.h>");
@@ -6020,6 +6291,11 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
         let s: Stmt = program.get(i);
         collect_dyn_in_stmt(g, &s);
     }
+    // Emit the fat-pointer typedefs up front so any struct/enum body that
+    // embeds a `*dyn Trait` field by value (incl. those force-emitted early
+    // by the `?Struct`/`!Struct` result-option pre-pass below) sees the
+    // type. The vtable bodies + thunks still come later via emit_dyn_runtime.
+    emit_dyn_fat_pointers(g, program);
     // Pre-emit struct bodies for every Type that appears as an `impl Trait
     // for Type` target where Trait is dyn-used. The thunks emitted by
     // emit_dyn_runtime do `*(Type*)self_p`, which needs the full definition.

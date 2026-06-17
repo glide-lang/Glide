@@ -1,0 +1,41 @@
+import stdlib::testing::*;
+import stdlib::net::listener::*;
+import stdlib::net::tcp::*;
+import stdlib::bytes::*;
+
+// Echo server on the new unified API: TcpListener::bind -> accept -> a
+// TcpStream that reads into a ByteBuffer and writes it straight back.
+fn _echo_once(port: i32) {
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    let buf: *ByteBuffer = c.read(1024).val;
+    let _w: !i32 = c.write_buf(buf);
+    buf.free();
+    c.close();
+    l.close();
+}
+
+fn test_tcp_listener_roundtrip() -> i32 {
+    spawn_thread _echo_once(42390);
+    sleep_ms(300);
+    let r: !*TcpStream = TcpStream::connect_host("127.0.0.1", 42390);
+    assert!(r.ok);
+    let s: *TcpStream = r.val;
+    let _w: !i32 = s.write_all("hello world");
+    let got: *ByteBuffer = s.read(1024).val;
+    assert_eq!(got.len(), 11);
+    assert_str_eq!(got.as_string(), "hello world");
+    got.free();
+    s.close();
+    return 0;
+}
+
+// Failure surfaces as an `err` value you handle with `?` / `.ok`, not a
+// struct you probe with a method — the whole point of the !T migration.
+// (Connecting to a port with no listener is a reliable cross-platform
+// failure; a duplicate bind is not, since Windows SO_REUSEADDR allows it.)
+fn test_connect_error_is_a_value() -> i32 {
+    let r: !*TcpStream = TcpStream::connect_host("127.0.0.1", 42399);
+    assert!(!r.ok);
+    return 0;
+}

@@ -33,6 +33,18 @@ impl ByteBuffer {
         return b;
     }
 
+    /// Empty buffer pre-sized to hold at least `n` bytes without a regrow.
+    /// Useful before a single bulk fill (e.g. reading `n` bytes off a
+    /// socket straight into `data`, then setting `len`).
+    pub fn with_capacity(n: i32) -> *ByteBuffer {
+        let cap: i32 = if n > 0 { n } else { 1 };
+        let b: *ByteBuffer = malloc(sizeof(ByteBuffer)) as *ByteBuffer;
+        b.data = malloc(cap as usize) as *u8;
+        b.len = 0;
+        b.cap = cap;
+        return b;
+    }
+
     /// Release the data buffer and the struct itself. After `free` the
     /// pointer is dangling; do not touch it again.
     pub fn free(self: *ByteBuffer) {
@@ -120,5 +132,64 @@ impl ByteBuffer {
         self.ensure(self.len + 1);
         self.data[self.len] = 0 as u8;
         return self.data as string;
+    }
+
+    /// Build a fresh buffer holding the bytes of `s` (no trailing NUL).
+    /// The inverse of `as_string` for the common "string in, bytes out"
+    /// direction. Pair with `defer .free()`.
+    ///
+    /// ```glide
+    /// let b: *ByteBuffer = ByteBuffer::from_string("hello");
+    /// defer b.free();
+    /// b.len();   // 5
+    /// ```
+    pub fn from_string(s: string) -> *ByteBuffer {
+        let b: *ByteBuffer = ByteBuffer::new();
+        b.push_str(s);
+        return b;
+    }
+
+    /// Append `n` raw bytes read from `src`. Use when bridging a C-side
+    /// buffer (e.g. a socket read) into a managed buffer.
+    pub fn push_bytes(self: *ByteBuffer, src: *u8, n: i32) {
+        if n <= 0 { return; }
+        self.ensure(self.len + n);
+        let mut i: i32 = 0;
+        while i < n {
+            self.data[self.len + i] = src[i];
+            i = i + 1;
+        }
+        self.len = self.len + n;
+    }
+
+    /// Append every byte of `other` onto this buffer.
+    pub fn push_buf(self: *ByteBuffer, other: *ByteBuffer) {
+        self.push_bytes(other.data, other.len);
+    }
+
+    /// Append the UTF-8 encoding (1–4 bytes) of Unicode codepoint `cp`.
+    /// Negative codepoints are ignored.
+    ///
+    /// ```glide
+    /// let b: *ByteBuffer = ByteBuffer::new();
+    /// b.push_codepoint(128512);   // 😀  -> F0 9F 98 80
+    /// ```
+    pub fn push_codepoint(self: *ByteBuffer, cp: i32) {
+        if cp < 0 { return; }
+        if cp < 128 {
+            self.push(cp as u8);
+        } else if cp < 2048 {
+            self.push((192 | (cp >> 6)) as u8);
+            self.push((128 | (cp & 63)) as u8);
+        } else if cp < 65536 {
+            self.push((224 | (cp >> 12)) as u8);
+            self.push((128 | ((cp >> 6) & 63)) as u8);
+            self.push((128 | (cp & 63)) as u8);
+        } else {
+            self.push((240 | (cp >> 18)) as u8);
+            self.push((128 | ((cp >> 12) & 63)) as u8);
+            self.push((128 | ((cp >> 6) & 63)) as u8);
+            self.push((128 | (cp & 63)) as u8);
+        }
     }
 }

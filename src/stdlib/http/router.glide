@@ -610,13 +610,15 @@ impl Router {
     /// r.listen(8080);
     /// ```
     pub fn listen(self: *Router, port: i32) -> !i32 {
-        let l: *Listener = Listener::bind(port);
-        if !l.ok() { return err("bind failed"); }
+        let lr: !*TcpListener = TcpListener::bind(port);
+        if !lr.ok { return err(lr.err); }
+        let l: *TcpListener = lr.val;
         println!("http: listening on :", port);
         let has_reactor: bool = os_has_async_io();
         while true {
-            let c: *Conn = l.accept();
-            if !c.ok() { c.close(); continue; }
+            let cr: !*TcpStream = l.accept();
+            if !cr.ok { continue; }
+            let c: *TcpStream = cr.val;
             if has_reactor {
                 spawn _router_handle_conn(c, self);
             } else {
@@ -647,9 +649,9 @@ impl Router {
     /// req/s on the reference 4-core box) but unrestricted.
     pub fn listen_workers_blocking(self: *Router, port: i32, n: i32) -> !i32 {
         if os_has_reuseport_balance() {
-            let probe: *Listener = Listener::bind_reuseport(port);
-            if !probe.ok() { return err("bind failed"); }
-            probe.close();
+            let pr: !*TcpListener = TcpListener::bind_reuseport(port);
+            if !pr.ok { return err(pr.err); }
+            pr.val.close();
             println!("http: listening on :", port, " across ", n, " worker(s)");
             let mut spawned: i32 = 1;
             while spawned < n {
@@ -660,8 +662,9 @@ impl Router {
             return ok(0);
         }
 
-        let shared: *Listener = Listener::bind(port);
-        if !shared.ok() { return err("bind failed"); }
+        let sr: !*TcpListener = TcpListener::bind(port);
+        if !sr.ok { return err(sr.err); }
+        let shared: *TcpListener = sr.val;
         println!("http: listening on :", port, " across ", n, " worker(s) [shared fd]");
         let mut spawned: i32 = 1;
         while spawned < n {
@@ -684,10 +687,12 @@ fn _router_sm_dispatch(req: *HttpRequest) -> HttpResponse {
 
 // ---- server loop (mirror of http.glide _handle_conn but with router) --
 
-fn _router_handle_conn(c: *Conn, r: *Router) {
+fn _router_handle_conn(c: *TcpStream, r: *Router) {
     let buf: *u8 = malloc(8192) as *u8;
     while true {
-        let n: i32 = c.read(buf as *void, 8192);
+        let rr: !i32 = c.read_bytes(buf, 8192);
+        if !rr.ok { break; }
+        let n: i32 = rr.val;
         if n <= 0 { break; }
 
         // Per-request arena — see http.glide::_handle_conn for the
@@ -729,16 +734,17 @@ fn _router_handle_conn(c: *Conn, r: *Router) {
 }
 
 fn _router_accept_loop(port: i32, r: *Router) {
-    let l: *Listener = Listener::bind_reuseport(port);
-    if !l.ok() { return; }
-    _router_accept_loop_shared(l, r);
+    let lr: !*TcpListener = TcpListener::bind_reuseport(port);
+    if !lr.ok { return; }
+    _router_accept_loop_shared(lr.val, r);
 }
 
-fn _router_accept_loop_shared(l: *Listener, r: *Router) {
+fn _router_accept_loop_shared(l: *TcpListener, r: *Router) {
     let has_reactor: bool = os_has_async_io();
     while true {
-        let c: *Conn = l.accept();
-        if !c.ok() { c.close(); continue; }
+        let cr: !*TcpStream = l.accept();
+        if !cr.ok { continue; }
+        let c: *TcpStream = cr.val;
         if has_reactor {
             spawn _router_handle_conn(c, r);
         } else {

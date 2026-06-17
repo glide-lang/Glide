@@ -1,0 +1,62 @@
+// A `?Struct` / `!Struct` over a struct that carries a `*dyn Trait` field by
+// value used to miscompile. Two codegen gaps combined: (1) the dyn-collection
+// pass never visited struct fields, so when `*dyn Trait` appeared ONLY as a
+// field the `__glide_dyn_<Trait>` fat-pointer typedef was never emitted; and
+// (2) the option/result pre-pass force-emits the wrapped struct body before
+// emit_dyn_runtime ran, so even when collected the field referenced an
+// undeclared type. Guards collect_dyn_in_stmt (struct fields + enum payloads)
+// + the emit_dyn_fat_pointers split that emits the typedef up front.
+
+import stdlib::testing::*;
+
+trait ChunkSource {
+    fn next_chunk(self: *Self) -> ?string;
+}
+
+struct FileSrc { remaining: i32 }
+
+impl ChunkSource for FileSrc {
+    fn next_chunk(self: *Self) -> ?string {
+        if self.remaining <= 0 { return none(); }
+        self.remaining = self.remaining - 1;
+        return some("chunk");
+    }
+}
+
+// The struct whose ONLY dyn use is this by-value field.
+struct Resp { stream_src: *dyn ChunkSource }
+
+fn make_opt(src: *dyn ChunkSource) -> ?Resp {
+    let r: *Resp = malloc(sizeof(Resp)) as *Resp;
+    r.stream_src = src;
+    return some(*r);
+}
+
+fn make_res(src: *dyn ChunkSource) -> !Resp {
+    let r: *Resp = malloc(sizeof(Resp)) as *Resp;
+    r.stream_src = src;
+    return ok(*r);
+}
+
+fn test_option_over_dyn_field() -> i32 {
+    let f: *FileSrc = malloc(sizeof(FileSrc)) as *FileSrc;
+    f.remaining = 1;
+    let d = f as *dyn ChunkSource;
+    let o = make_opt(d);
+    assert!(o.has);
+    return 0;
+}
+
+fn test_result_over_dyn_field_and_dispatch() -> i32 {
+    let f: *FileSrc = malloc(sizeof(FileSrc)) as *FileSrc;
+    f.remaining = 2;
+    let d = f as *dyn ChunkSource;
+    let r = make_res(d);
+    assert!(r.ok);
+    if r.ok {
+        // dyn dispatch through the recovered field still works after the split
+        let c = r.val.stream_src.next_chunk();
+        assert!(c.has);
+    }
+    return 0;
+}

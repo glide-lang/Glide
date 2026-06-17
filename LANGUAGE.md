@@ -221,12 +221,14 @@ fn parse(s: string) -> !int {
 }
 
 fn pipeline(s: string) -> !int {
-    let n: int = parse(s)?;     // propagate err if any
+    let n = parse(s)?;          // n is `int`; the annotation is optional
     return ok(n + 1);
 }
 ```
 
 `?` only works inside a function whose return type is `!U` for some `U`. Result conversion happens at the propagation site: an `!T` with err `e` becomes `!U` with err `e`.
+
+A `?`-bound `let` infers the *unwrapped* type: `let n = parse(s)?` declares `n` as `int`, not `!int`, so `n + 1` and `n.method()` work without an explicit annotation.
 
 `unwrap(r)` returns the inner value or a zero-initialized fallback if `r` is err. Use it at boundaries where you've already checked the error.
 
