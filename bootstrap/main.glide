@@ -303,7 +303,7 @@ const MODE_FMT: i32 = 4;
 
 // Bumped manually on release. `glide --version` reads it; same value
 // lives in glide.glide at the repo root (kept in sync by hand for now).
-const GLIDE_VERSION: string = "0.3.4";
+const GLIDE_VERSION: string = "0.4.0";
 
 // Active `--lint-as-error=<code>` list, parsed from argv before any
 // build / check runs. Lives in a c_raw global so the diagnostic

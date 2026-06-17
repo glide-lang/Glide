@@ -1,5 +1,110 @@
 # Changelog
 
+## 0.4.0 — 2026-06-17
+
+Networking + string/byte ergonomics. **Breaking:** the server-side `Listener` /
+`Conn` types are removed in favour of `TcpListener` + `TcpStream` (see below). The server-side TCP API is folded onto the
+same `gnet_*` foundation the client already used, so one `TcpStream` type now
+serves both directions, and converting between bytes and `string` (with UTF-8)
+is first-class.
+
+### Networking (breaking)
+
+- **`Listener` / `Conn` removed; use `TcpListener` + `TcpStream`.** The old
+  server types exposed a raw `fd`, an `ok()` method you had to remember to call,
+  and `read(buf: *void, max)` that forced a `malloc(...) as *u8` / `buf as *void`
+  dance. They are gone. `TcpListener::bind(port)` and `accept()` now return
+  `!T`, and `accept()` yields a `*TcpStream` — the *same* type `TcpStream::connect`
+  returns. A connection reads and writes identically whether you dialed out or
+  accepted it in.
+
+  ```glide
+  fn main() -> !i32 {
+      let listener: *TcpListener = TcpListener::bind(8080)?;
+      defer listener.close();
+      while true {
+          let conn: *TcpStream = listener.accept()?;
+          spawn handle(conn);
+      }
+      return ok(0);
+  }
+
+  fn handle(conn: *TcpStream) -> !i32 {
+      defer conn.close();
+      let data: *ByteBuffer = conn.read(1024)?;   // no malloc, no casts
+      defer data.free();
+      let text: string = String::from_utf8(data)?;
+      return ok(0);
+  }
+  ```
+
+- **`TcpStream::read` returns `!*ByteBuffer`** (binary-safe). `read_str` keeps the
+  text convenience; new `write_buf`, `write2` (gather-write), `sendfile`
+  (zero-copy), and `write_ptr` round out the server fast path. The reuseport,
+  gather-write, and sendfile primitives the HTTP server relies on are now exposed
+  through `gnet_*` (new C externs `gnet_writev2_async` / `gnet_sendfile_from_path`),
+  so the unified foundation keeps the old throughput.
+
+- **UDP** gains binary-safe `send_buf` / `recv_from_buf` (returning a
+  `*UdpDatagram` whose payload is a `*ByteBuffer`) alongside the existing string
+  forms.
+
+### Language
+
+- **`?` now unwraps under `let` type inference.** `let x = f()?` (no annotation)
+  declares `x` as the unwrapped `T`, not the `!T`/`?T` result struct. Previously
+  codegen's inference left `?` at the result type — so `x + 1` or `x.method()`
+  failed to compile and an explicit `let x: T = f()?` was required. The typer
+  already unwrapped; codegen's `infer_for_codegen` now matches it.
+
+- **Missing return is now an error, not a warning.** A function declared with a
+  return type that can reach the end of its body without returning a value
+  (`fn main() -> i32 { }`) now fails compilation (`missing-return`) instead of
+  warning. The flow analysis got more precise so it doesn't false-fire on
+  diverging code: a `while true { … }` with no loop-level `break`, and an
+  exhaustive `match` *without* a `_` arm (a non-exhaustive one is already its own
+  error), both count as "always returns". `-> !` functions still return `ok`
+  implicitly and are exempt.
+
+### Strings, bytes, UTF-8
+
+- **`String::from_utf8(buf) -> !string`** (validated), **`from_utf8_lossy`**
+  (U+FFFD on bad bytes), and **`is_valid_utf8`** in the new `stdlib::utf8`.
+- **`ByteBuffer`** gains `from_string`, `with_capacity`, `push_bytes`,
+  `push_buf`, and `push_codepoint` (UTF-8 encode a codepoint).
+- **`string`** gains `as_bytes`, `char_count` (codepoints, not bytes), and
+  `chars()` returning a `*Vector<i32>` of codepoints so `for cp in s.chars()`
+  works.
+
+### Editor / LSP & formatter
+
+- **Member completion resolves through `?`.** `let x = Foo::make()?;` then `x.`
+  now offers `Foo`'s methods. The LSP's AST type resolver didn't handle the `?`
+  (or `*`) unary, so a `?`-bound local resolved to nothing and completion went
+  silent — the most-reported gap in the new ergonomic style.
+- **`fmt` keeps `-> !` bare.** Formatting no longer rewrites a value-less result
+  return type `-> !` into `-> !void`; an explicit `-> !void` is normalized back
+  to `-> !`.
+
+### Fixes
+
+- **`println!` / `print!` from a spawned coroutine now appears.** stdout (and
+  stderr) are unbuffered at startup, matching Go's `os.Stdout` — previously a
+  server looping forever buffered all output and a `spawn`ed handler's prints
+  never reached the terminal. On Windows the blocking-`accept` loop also flushes
+  pending main-thread spawns, so the per-connection coroutine actually runs
+  instead of sitting in the batch buffer until 32 connections arrived.
+- **`?T` / `!T` over a struct with a `*dyn Trait` field no longer miscompiles.**
+  A `?HttpResponse`-style wrapper around a struct whose only `*dyn` use was a
+  by-value field failed with `unknown type __glide_dyn_<Trait>`: the dyn
+  collection pass skipped struct fields, and the fat-pointer typedef was emitted
+  after the wrapped struct body. The typedef is now emitted up front and struct
+  fields + enum payloads are scanned for dyn traits.
+- **Clearer error for `let v: Vector<T> = Vector::new()`.** The by-value
+  annotation mismatches the `*Vector<T>` a heap constructor returns; the
+  diagnostic now points at `*Vector<T>` or dropping the annotation instead of
+  showing a raw, unresolved-`T` mismatch.
+
 ## 0.3.4 — 2026-06-02
 
 A macro release: macros can now produce values, and there's a `vec_of!` builtin
