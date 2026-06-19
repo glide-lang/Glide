@@ -52,17 +52,32 @@ jobs:
       - name: Fetch Zig toolchain
         run: bash tools/install_toolchain.sh
 
-      - name: Build seed + compiler
+      - name: Bootstrap compiler from a published release
+        # Glide is self-hosting, so there is no checked-in C seed: download a
+        # previously published release binary and use it to build the current
+        # sources. The release archive bundles its own runtime/zig, but we run
+        # from the repo root so it uses the toolchain fetched above. Bump
+        # BOOT_TAG only when an older release can no longer compile `main`.
         run: |
           set -e
+          BOOT_TAG=v0.4.0
+          ver="${BOOT_TAG#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
+          mkdir -p .boot
           if [ "${{ runner.os }}" = "Windows" ]; then
-            gcc bootstrap/seed/bootstrap.c -o glide_seed.exe -O2 -lpthread -lm -lz \
-                -lws2_32 -lmswsock -ldbghelp -lpsapi
-            ./glide_seed.exe build bootstrap/main.glide -o glide.exe
+            asset="glide-${{ matrix.name }}-${ver}.zip"
+            curl -fL -o ".boot/${asset}" "${base}/${asset}"
+            unzip -q ".boot/${asset}" -d .boot
+            cp "$(find .boot -name glide.exe | head -1)" glide_boot.exe
+            ./glide_boot.exe build bootstrap/main.glide -o glide.exe
             ./glide.exe version
           else
-            cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
-            ./glide_seed build bootstrap/main.glide -o glide
+            asset="glide-${{ matrix.name }}-${ver}.tar.gz"
+            curl -fL -o ".boot/${asset}" "${base}/${asset}"
+            tar -xzf ".boot/${asset}" -C .boot
+            cp "$(find .boot -name glide -type f | head -1)" glide_boot
+            chmod +x glide_boot
+            ./glide_boot build bootstrap/main.glide -o glide
             ./glide version
           fi
 

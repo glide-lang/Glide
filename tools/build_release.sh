@@ -85,9 +85,11 @@ STAGE="dist/${NAME}"
 if [ "$HOST_OS" = "windows" ]; then HOST_GLIDE="glide.exe"; else HOST_GLIDE="glide"; fi
 
 if [ ! -x "$HOST_GLIDE" ]; then
-    echo "no host $HOST_GLIDE found in repo root. Build it first:" >&2
-    echo "  cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm" >&2
-    echo "  ./glide_seed build bootstrap/main.glide -o $HOST_GLIDE" >&2
+    echo "no host $HOST_GLIDE found in repo root. Build it first by bootstrapping" >&2
+    echo "from a published release (Glide is self-hosting — there is no C seed):" >&2
+    echo "  # download a release binary for your platform from" >&2
+    echo "  #   https://github.com/<owner>/javascomp/releases" >&2
+    echo "  <downloaded-glide> build bootstrap/main.glide -o $HOST_GLIDE" >&2
     exit 1
 fi
 if [ ! -d runtime/zig ]; then

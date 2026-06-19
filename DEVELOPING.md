@@ -4,24 +4,32 @@ This document is for people working on the compiler itself. If you just want to 
 
 ## the bootstrap loop
 
-The compiler is written in Glide. To break the chicken-and-egg, `bootstrap/seed/bootstrap.c` is an auto-emitted C version that any C compiler can build.
+The compiler is written in Glide. There is no checked-in C seed — to break the
+chicken-and-egg you bootstrap from a **previously published release binary**
+(grab one for your platform from the GitHub Releases page) and use it to build
+the current sources. Any reasonably recent release can compile `main`.
 
 ```bash
-# 1. Build the seed binary (any cc — gcc, clang, MinGW, ...)
-cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lz
+# 1. Download a release binary for your platform and put it on PATH (or use it
+#    by path). e.g. for v0.4.0:
+#      https://github.com/<owner>/javascomp/releases/tag/v0.4.0
+#    The archive bundles its own runtime/zig, so it builds offline.
 
-# 2. Fetch the bundled C toolchain (used as the codegen backend)
+# 2. (if not using the release's bundled toolchain) fetch the C backend toolchain
 bash tools/install_toolchain.sh
 
-# 3. Use the seed to build the real compiler
-./glide_seed build bootstrap/main.glide -o glide
+# 3. Use the downloaded compiler to build the real compiler from source
+glide build bootstrap/main.glide -o glide      # `glide` = the downloaded binary
 
 # 4. (optional) verify self-host
 ./glide build bootstrap/main.glide -o glide_gen2
 ./glide_gen2 build bootstrap/main.glide -o glide_gen3   # should match
 ```
 
-Once `glide` works, you don't need `glide_seed` again unless you change a runtime helper that the seed itself uses (rare).
+Once `glide` works you can rebuild it with itself; the downloaded binary is only
+needed for the very first build on a fresh checkout. CI/release do the same
+(see `.github/workflows/*.yml`, the "Bootstrap compiler from a published
+release" step).
 
 ## project structure
 
@@ -39,7 +47,6 @@ bootstrap/
   lsp.glide         JSON-RPC server (uses everything above)
   json.glide        minimal JSON parser + emitter for the LSP
 
-  seed/bootstrap.c  auto-emitted C version of the compiler
   runtime/          C runtime fragments emitted into every output:
                     sched.c (M:N scheduler), reactor.c (async I/O),
                     chan.c.tmpl (typed chan template), socket.c,
@@ -82,19 +89,13 @@ mv glide_new glide          # replace the running compiler
 ./glide check some_test.glide
 ```
 
-If the change touches `emit_stdlib_runtime` in `codegen.glide` AND your change requires the new helpers to be present in the seed-built binary, you also need to patch `bootstrap/seed/bootstrap.c` manually (add both the C function bodies and their corresponding `printf` lines that re-emit them on the next compile). This is the only chicken-and-egg case; other changes propagate naturally.
-
-After a meaningful change, regenerate the seed so new contributors don't carry your patches:
-
-```bash
-./glide emit bootstrap/main.glide > bootstrap/seed/bootstrap.c
-```
-
-Verify the new seed compiles cleanly:
-
-```bash
-cc bootstrap/seed/bootstrap.c -o /tmp/seed_check -O2 -lpthread -lm
-```
+There is no seed to maintain: the bootstrap binary is just a published release,
+and a release's runtime/codegen lags the working tree by one generation, so most
+changes — including ones that touch `emit_stdlib_runtime` in `codegen.glide` —
+propagate naturally through the two-build chain (release → `glide` → `glide`).
+The only thing to watch is **using a brand-new language feature inside the
+compiler sources before any release understands it**; in that case land the
+feature in a release first, then bump `BOOT_TAG` in the workflows.
 
 ## testing
 
