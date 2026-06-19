@@ -1,0 +1,58 @@
+// SDS strings: `.len()` is O(1) from a header stored before the data. These
+// guard that the header length matches strlen for every way a string is made —
+// literals (incl. escapes / hex / UTF-8), concat, substring, format, FFI.
+import stdlib::os::*;
+
+fn test_literal_len() -> i32 {
+    assert_eq!("".len(), 0);
+    assert_eq!("hello".len(), 5);
+    assert_eq!("a".len(), 1);
+    // simple escapes are one byte each
+    assert_eq!("a\nb\tc".len(), 5);          // a \n b \t c
+    assert_eq!("\"".len(), 1);               // one quote
+    assert_eq!("\\".len(), 1);               // one backslash
+    // hex escape is one byte; ANSI reset = ESC + "[0m" = 4 bytes
+    assert_eq!("\x1b[0m".len(), 4);
+    // data right after the header's octal prefix that starts with a digit
+    assert_eq!("123".len(), 3);
+    return 0;
+}
+
+fn test_utf8_byte_len() -> i32 {
+    // multi-byte codepoints count as their UTF-8 byte length (== strlen)
+    assert_eq!("áé".len(), 4);               // 2 bytes each
+    assert_eq!("héllo".len(), 6);            // h + é(2) + l + l + o
+    return 0;
+}
+
+fn test_built_len() -> i32 {
+    assert_eq!("foo".concat("bar").len(), 6);
+    assert_eq!("foo".concat("").len(), 3);
+    assert_eq!("".concat("").len(), 0);
+    assert_eq!("hello world".substring(0, 5).len(), 5);
+    assert_eq!("hello world".substring(6, 11).len(), 5);
+    assert_eq!("ab".repeat(4).len(), 8);
+    assert_eq!(42.to_string().len(), 2);
+    assert_eq!((0 - 123).to_string().len(), 4);   // "-123"
+    return 0;
+}
+
+fn test_eq_and_at() -> i32 {
+    assert!("abc".eq("abc"));
+    assert!(!"abc".eq("abd"));
+    assert!(!"abc".eq("ab"));            // length differs -> not equal
+    assert!("foo".concat("bar").eq("foobar"));
+    assert_eq!("abc".at(0).to_int(), 97);
+    assert_eq!("abc".at(2).to_int(), 99);
+    return 0;
+}
+
+fn test_ffi_string_len() -> i32 {
+    // os_name() returns a string from a C extern; the adopt-wrap must have
+    // given it a header, so .len() and .concat round-trip correctly.
+    let name: string = os_name();
+    let n: i32 = name.len();
+    assert!(n > 0);
+    assert_eq!(name.concat("!").len(), n + 1);
+    return 0;
+}

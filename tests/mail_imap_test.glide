@@ -2,6 +2,7 @@ import stdlib::testing::*;
 import stdlib::net::listener::*;
 import stdlib::net::tcp::*;
 import stdlib::mail::imap::*;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 fn _send(c: *TcpStream, s: string) { let _r: !i32 = c.write_all(s); }
 fn _recv(c: *TcpStream, buf: *u8, max: i32) -> i32 {
@@ -18,9 +19,7 @@ fn _fake_imap(port: i32) {
     while true {
         let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
         let sp: i32 = s.index_of(" ");
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
@@ -90,9 +89,7 @@ fn _search_server(port: i32, search_reply: string) {
     while true {
         let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
         let sp: i32 = s.index_of(" ");
         if sp < 0 { continue; }
         let tag: string = s.substring(0, sp);
@@ -173,9 +170,7 @@ fn _append_server(port: i32) {
     while true {
         let n: i32 = _recv(c, buf, 8192);
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
 
         if append_size > 0 {
             append_acc = append_acc.concat(s);
@@ -246,9 +241,7 @@ fn _idle_server(port: i32) {
     while true {
         let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
         if !idle_tag.eq("") {
             if s.to_upper().starts_with("DONE") {
                 _send(c, idle_tag.concat(" OK IDLE done\r\n"));

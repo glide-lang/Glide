@@ -2,6 +2,7 @@ import stdlib::testing::*;
 import stdlib::net::listener::*;
 import stdlib::net::tcp::*;
 import stdlib::mail::pop3::*;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 fn _send(c: *TcpStream, s: string) { let _r: !i32 = c.write_all(s); }
 
@@ -15,9 +16,7 @@ fn _fake_pop3(port: i32) {
         if !rr.ok { break; }
         let n: i32 = rr.val;
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
         let upper: string = s.to_upper();
         if      upper.starts_with("USER")  { _send(c, "+OK user\r\n"); }
         else if upper.starts_with("PASS")  { _send(c, "+OK logged in\r\n"); }

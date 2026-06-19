@@ -18,25 +18,64 @@
 // (no arena active) __glide_palloc falls back to calloc, so build /
 // run / fmt paths see no behaviour change.
 extern void* __glide_palloc(int size);
-static int __glide_string_len(const char* s) { return (int)strlen(s); }
-static bool __glide_string_eq(const char* a, const char* b) { return strcmp(a, b) == 0; }
+/* ---- SDS strings ---------------------------------------------------------
+   A 4-byte little-endian length header sits immediately BEFORE the data; the
+   `string` value points at the NUL-terminated data, so the C FFI is unaffected
+   (C sees a normal char*). `__glide_str_alloc(len)` allocates header+data+NUL,
+   stamps the length, and returns the data pointer. Reading the length is O(1)
+   once `__glide_string_len` switches to the header (phase 2); until then it
+   stays strlen-based and the header is written-but-unused. Strings are never
+   individually freed (arena-managed), so the header is reclaimed with the
+   data — no free-path change. */
+static void __glide_str_hdr_set(char* base, int len) {
+    base[0] = (char)(len & 0xff);
+    base[1] = (char)((len >> 8) & 0xff);
+    base[2] = (char)((len >> 16) & 0xff);
+    base[3] = (char)((len >> 24) & 0xff);
+}
+static char* __glide_str_alloc(int len) {
+    if (len < 0) len = 0;
+    char* base = (char*)__glide_palloc(4 + len + 1);
+    __glide_str_hdr_set(base, len);
+    base[4 + len] = 0;
+    return base + 4;
+}
+/* Header length read (unaligned-safe). Used by phase-2 __glide_string_len. */
+static int __glide_str_hdr_len(const char* s) {
+    int l; memcpy(&l, s - 4, 4); return l;
+}
+/* Phase 2: O(1) length from the header (every string is headered — literals via
+   codegen, allocations via __glide_str_alloc, FFI returns via __glide_string_adopt). */
+static int __glide_string_len(const char* s) { return __glide_str_hdr_len(s); }
+static bool __glide_string_eq(const char* a, const char* b) {
+    int la = __glide_str_hdr_len(a), lb = __glide_str_hdr_len(b);
+    if (la != lb) return false;
+    return memcmp(a, b, (size_t)la) == 0;
+}
 static char __glide_string_at(const char* s, int i) { return s[i]; }
+/* Wrap a raw (headerless) C string — e.g. an FFI return — into a headered copy. */
+static const char* __glide_string_adopt(const char* c) {
+    if (c == 0) return 0;
+    size_t n = strlen(c);
+    char* out = __glide_str_alloc((int)n);
+    memcpy(out, c, n);
+    return out;
+}
 static const char* __glide_string_concat(const char* a, const char* b) {
-    size_t la = strlen(a), lb = strlen(b);
-    char* out = (char*)__glide_palloc((int)(la + lb + 1));
-    memcpy(out, a, la); memcpy(out + la, b, lb); out[la + lb] = 0;
+    int la = __glide_str_hdr_len(a), lb = __glide_str_hdr_len(b);   /* O(1), no strlen */
+    char* out = __glide_str_alloc(la + lb);
+    memcpy(out, a, la); memcpy(out + la, b, (size_t)lb);
     return out;
 }
 static const char* __glide_string_substring(const char* s, int start, int end) {
     /* O(end-start), not O(strlen(s)): copy from `start` up to `end`, stopping
-       at the NUL terminator (so an `end` past the string yields the rest, same
-       as clamping to strlen). Avoids a full strlen per call — the lexer calls
-       this once per token, so a strlen here made tokenization O(n^2). Callers
-       always pass start within [0, len]. */
+       at the NUL terminator. The actual copied length `j` may be < cap, so we
+       stamp the header with `j`. Callers always pass start within [0, len]. */
     if (start < 0) start = 0;
     if (end < start) end = start;
     int cap = end - start;
-    char* out = (char*)__glide_palloc(cap + 1);
+    char* base = (char*)__glide_palloc(4 + cap + 1);
+    char* out = base + 4;
     int j = 0;
     for (int i = 0; i < cap; i++) {
         char c = s[start + i];
@@ -44,6 +83,7 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
         out[j++] = c;
     }
     out[j] = 0;
+    __glide_str_hdr_set(base, j);
     return out;
 }
 /* Backs the panic! / todo! / unimplemented! / unreachable! macros: print the
@@ -61,14 +101,10 @@ static void __glide_panic(const char* msg, const char* file, int line) {
    convert one read buffer. */
 const char* __glide_string_from_buf(void* buf, int n) {
     if (n < 0) n = 0;
-    // Arena-aware: when an arena is active the result is reclaimed at
-    // arena drop; otherwise __glide_palloc falls back to calloc and the
-    // pointer is safely freed by __glide_pfree at scope exit. Using raw
-    // malloc here detaches the string from the lifecycle Glide expects
-    // and leaks N+1 bytes per call.
-    char* out = (char*)__glide_palloc(n + 1);
+    // Arena-aware (see __glide_str_alloc): the header+data live in the active
+    // arena and are reclaimed in bulk, or via __glide_pfree at scope exit.
+    char* out = __glide_str_alloc(n);
     if (n > 0) memcpy(out, buf, (size_t)n);
-    out[n] = 0;
     return out;
 }
 static int __glide_char_to_int(char c) { return (int)(unsigned char)c; }
@@ -78,19 +114,23 @@ static bool __glide_char_is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c 
    builder (concat etc.). The byte is re-allocated each call — fine for the
    one-shot helper case; tight loops should buffer differently. */
 static const char* __glide_char_to_string(char c) {
-    char* out = (char*)__glide_palloc(2);
-    out[0] = c; out[1] = 0;
+    char* out = __glide_str_alloc(1);
+    out[0] = c;
     return out;
 }
 /* 64-bit so every int width (i8..i64, isize) shares one routine; narrower
    types promote losslessly and the result is assigned back to the caller's
    own type. */
 static long long __glide_int_abs(long long n) { return n < 0 ? -n : n; }
+/* `.to_int()` on a numeric — narrows the receiver to i32. Inlines to a bare
+   cast at -O2, so it costs nothing. (char.to_int() has its own helper.) */
+static int __glide_int_to_int(long long n) { return (int)n; }
+static int __glide_uint_to_int(unsigned long long n) { return (int)n; }
 static const char* __glide_int_to_string(long long n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%lld", n);
-    char* out = (char*)__glide_palloc(len + 1);
-    memcpy(out, buf, (size_t)len + 1);
+    char* out = __glide_str_alloc(len);
+    memcpy(out, buf, (size_t)len);
     return out;
 }
 /* 128-bit helpers. printf has no length modifier for __int128, so to_string
@@ -101,9 +141,8 @@ static const char* __glide_u128_to_string(unsigned __int128 n) {
     int t = 0;
     if (n == 0) { tmp[t++] = '0'; }
     while (n > 0) { tmp[t++] = (char)('0' + (int)(n % 10)); n /= 10; }
-    char* out = (char*)__glide_palloc(t + 1);
+    char* out = __glide_str_alloc(t);
     for (int i = 0; i < t; i++) out[i] = tmp[t - 1 - i];
-    out[t] = '\0';
     return out;
 }
 static const char* __glide_i128_to_string(__int128 n) {
@@ -111,9 +150,9 @@ static const char* __glide_i128_to_string(__int128 n) {
         unsigned __int128 m = (unsigned __int128)(-(n + 1)) + 1;
         const char* s = __glide_u128_to_string(m);
         size_t len = strlen(s);
-        char* out = (char*)__glide_palloc(len + 2);
+        char* out = __glide_str_alloc((int)(len + 1));
         out[0] = '-';
-        memcpy(out + 1, s, len + 1);
+        memcpy(out + 1, s, len);
         return out;
     }
     return __glide_u128_to_string((unsigned __int128)n);
@@ -230,16 +269,16 @@ static __glide_u256 __glide_u256_mod(__glide_u256 a, __glide_u256 b) {
     __glide_u256 q, r; __glide_u256_divmod(a, b, &q, &r); return r;
 }
 static const char* __glide_u256_to_string(__glide_u256 a) {
-    if (__glide_u256_is_zero(a)) { char* z = (char*)__glide_palloc(2); z[0] = '0'; z[1] = 0; return z; }
+    if (__glide_u256_is_zero(a)) { char* z = __glide_str_alloc(1); z[0] = '0'; return z; }
     char tmp[80]; int t = 0;
     __glide_u256 ten = __glide_u256_from_u64(10);
     while (!__glide_u256_is_zero(a)) {
         __glide_u256 q, r; __glide_u256_divmod(a, ten, &q, &r);
         tmp[t++] = (char)('0' + (int)r.d[0]); a = q;
     }
-    char* out = (char*)__glide_palloc(t + 1);
+    char* out = __glide_str_alloc(t);
     for (int i = 0; i < t; i++) out[i] = tmp[t - 1 - i];
-    out[t] = 0; return out;
+    return out;
 }
 static __glide_u256 __glide_u256_abs(__glide_u256 a) { return a; }  /* unsigned: identity */
 /* ---- i256: signed view over the same bits ---- */
@@ -261,8 +300,8 @@ static const char* __glide_i256_to_string(__glide_u256 a) {
         __glide_u256 m = __glide_i256_neg(a);
         const char* s = __glide_u256_to_string(m);
         size_t len = strlen(s);
-        char* out = (char*)__glide_palloc(len + 2);
-        out[0] = '-'; memcpy(out + 1, s, len + 1); return out;
+        char* out = __glide_str_alloc((int)(len + 1));
+        out[0] = '-'; memcpy(out + 1, s, len); return out;
     }
     return __glide_u256_to_string(a);
 }
@@ -302,12 +341,18 @@ static __glide_u256 __glide_i256_min(void) { __glide_u256 r; r.d[0]=0; r.d[1]=0;
 static const char* __glide_uint_to_string(unsigned long long n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%llu", n);
-    char* out = (char*)__glide_palloc(len + 1);
-    memcpy(out, buf, (size_t)len + 1);
+    char* out = __glide_str_alloc(len);
+    memcpy(out, buf, (size_t)len);
     return out;
 }
 static unsigned long long __glide_uint_abs(unsigned long long n) { return n; }
-static const char* __glide_bool_to_string(bool b) { return b ? "true" : "false"; }
+/* Headered statics so the length header is valid after phase 2. The struct lays
+   the int length at offset 0 and the chars at offset 4, so `d - 4` reads it. */
+static const char* __glide_bool_to_string(bool b) {
+    static const struct { int h; char d[5]; } bt = {4, "true"};
+    static const struct { int h; char d[6]; } bf = {5, "false"};
+    return b ? bt.d : bf.d;
+}
 #include <stdarg.h>
 static const char* __glide_format(const char* fmt, ...) {
     va_list ap1, ap2;
@@ -315,7 +360,7 @@ static const char* __glide_format(const char* fmt, ...) {
     va_copy(ap2, ap1);
     int n = vsnprintf(NULL, 0, fmt, ap1);
     va_end(ap1);
-    char* out = (char*)__glide_palloc(n + 1);
+    char* out = __glide_str_alloc(n);
     vsnprintf(out, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     return out;

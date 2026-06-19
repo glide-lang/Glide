@@ -3,6 +3,7 @@ import stdlib::net::listener::*;
 import stdlib::net::tcp::*;
 import stdlib::mail::message::*;
 import stdlib::mail::smtp::*;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 fn _send(c: *TcpStream, s: string) { let _r: !i32 = c.write_all(s); }
 fn _recv(c: *TcpStream, buf: *u8, max: i32) -> i32 {
@@ -28,9 +29,7 @@ fn _fake_smtp(port: i32) {
     while true {
         let n: i32 = _recv(c, buf, 8192);
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
 
         if data_mode {
             data_acc = data_acc.concat(s);
@@ -93,9 +92,7 @@ fn _rejecting_server(port: i32) {
     while true {
         let n: i32 = _recv(c, buf, 4096);
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
         let upper: string = s.to_upper().trim();
         if upper.starts_with("EHLO") {
             _send(c, "250 ok\r\n");
@@ -123,9 +120,7 @@ fn _login_only_server(port: i32) {
     while true {
         let n: i32 = _recv(c, buf, 8192);
         if n <= 0 { break; }
-        let s: string = malloc(n + 1) as string;
-        for let i: i32 = 0; i < n; i++ { (s as *u8)[i] = (buf as *u8)[i]; }
-        (s as *u8)[n] = 0 as u8;
+        let s: string = __glide_string_from_buf(buf as *void, n);
         if data_mode {
             data_acc = data_acc.concat(s);
             if data_acc.contains("\r\n.\r\n") {

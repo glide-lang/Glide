@@ -1,0 +1,31 @@
+// Regression: `.to_int()` on a numeric receiver used to emit a call to a
+// non-existent `__glide_int_to_int` / `__glide_uint_to_int` runtime helper,
+// which failed at link time. (char.to_int() always had its own helper.)
+
+fn test_uint_to_int() -> i32 {
+    let a: u8 = 200 as u8;
+    assert_eq!(a.to_int(), 200);
+    let b: u16 = 5000 as u16;
+    assert_eq!(b.to_int(), 5000);
+    let c: u32 = 70000 as u32;
+    assert_eq!(c.to_int(), 70000);
+    return 0;
+}
+
+fn test_int_to_int() -> i32 {
+    let a: i64 = 123456 as i64;
+    assert_eq!(a.to_int(), 123456);
+    let b: i8 = (0 - 42) as i8;
+    assert_eq!(b.to_int(), 0 - 42);
+    return 0;
+}
+
+fn test_to_int_in_index() -> i32 {
+    // the exact shape that surfaced the bug: reading a *u8 cell and comparing
+    let buf: *u8 = malloc(4 as usize) as *u8;
+    buf[0] = 1 as u8; buf[1] = 0 as u8;
+    assert_eq!(buf[0].to_int(), 1);
+    assert_eq!(buf[1].to_int(), 0);
+    free(buf as *void);
+    return 0;
+}

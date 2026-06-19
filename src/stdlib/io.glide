@@ -53,11 +53,16 @@ c_raw! {
         return buf;
     }
     static const char* __glide_read_bytes(int n) {
-        if (n <= 0) return "";
-        char* buf = (char*)malloc((size_t)n + 1);
-        size_t got = fread(buf, 1, (size_t)n, stdin);
-        buf[got] = 0;
-        return buf;
+        /* Return a managed (headered) SDS string directly so the caller frees it
+           at its allocation base (ptr-4). It is excluded from the codegen
+           adopt-wrap (which would otherwise copy it — leaking this buffer and
+           strlen-truncating binary data at the first NUL). */
+        if (n <= 0) return __glide_str_alloc(0);
+        char* out = (char*)__glide_str_alloc(n);
+        size_t got = fread(out, 1, (size_t)n, stdin);
+        out[got] = 0;
+        if ((int)got != n) __glide_str_hdr_set(out - 4, (int)got);
+        return out;
     }
     static void __glide_write_str(const char* s) { fputs(s, stdout); }
     static void __glide_write_bytes(const char* s, int n) {
