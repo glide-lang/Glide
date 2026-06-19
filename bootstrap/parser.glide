@@ -25,6 +25,16 @@ pub struct ParseDiag {
     pub line: i32,
     pub col: i32,
     pub msg: string,
+    // Diagnostic code (empty -> defaults to "parse" in merge_parse_diags) and
+    // the underline width (0 -> 1). Optional mechanical fix: splice
+    // `fix_replacement` over (fix_line,fix_col)..(fix_end_line,fix_end_col).
+    pub code: string,
+    pub span: i32,
+    pub fix_line: i32,
+    pub fix_col: i32,
+    pub fix_end_line: i32,
+    pub fix_end_col: i32,
+    pub fix_replacement: string,
 }
 
 pub struct Parser {
@@ -93,16 +103,32 @@ impl Parser {
         return false;
     }
 
-    fn err(self: *Parser, msg: string) {
-        let full: string = msg.concat(" near '").concat(self.current.lexeme).concat("'");
+    // Lowest-level diagnostic push: full control over code, span, and an
+    // optional mechanical fix (zero-width range + replacement = insertion).
+    fn push_pdiag(self: *Parser, line: i32, col: i32, span: i32, code: string, msg: string,
+                  fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
         let d: ParseDiag = ParseDiag {
-            origin: "",
-            line: self.current.line,
-            col: self.current.column,
-            msg: full,
+            origin: "", line: line, col: col, msg: msg,
+            code: code, span: span,
+            fix_line: fl, fix_col: fc, fix_end_line: fel, fix_end_col: fec,
+            fix_replacement: repl,
         };
         self.diags.push(d);
         self.error_count = self.error_count + 1;
+    }
+
+    fn err(self: *Parser, msg: string) {
+        self.err_code("parse", msg);
+    }
+
+    // Like `err` but with an explicit diagnostic code. The underline spans the
+    // offending token so editors highlight the whole token, not one char.
+    fn err_code(self: *Parser, code: string, msg: string) {
+        let full: string = msg.concat(" near '").concat(self.current.lexeme).concat("'");
+        let mut span: i32 = self.current.lexeme.len();
+        if span < 1 { span = 1; }
+        self.push_pdiag(self.current.line, self.current.column, span, code, full,
+                        0, 0, 0, 0, "");
     }
 
     // Same as `err` but anchors at the end of the most-recently-consumed
@@ -113,22 +139,22 @@ impl Parser {
         let mut line: i32 = self.prev_line;
         let mut col: i32 = self.prev_col + self.prev_len;
         if line == 0 { line = self.current.line; col = self.current.column; }
-        let d: ParseDiag = ParseDiag {
-            origin: "",
-            line: line,
-            col: col,
-            msg: full,
-        };
-        self.diags.push(d);
-        self.error_count = self.error_count + 1;
+        self.push_pdiag(line, col, 1, "parse", full, 0, 0, 0, 0, "");
     }
 
     fn expect_op(self: *Parser, lexeme: string) -> bool {
         if self.at_op(lexeme) { self.advance(); return true; }
         if lexeme.eq(";") {
-            self.err_after_prev("expected '".concat(lexeme).concat("'"));
+            // Insert the missing `;` at the end of the previous token. Carries a
+            // quick fix so `glide fix` / the editor can splice it in one click.
+            let mut line: i32 = self.prev_line;
+            let mut col: i32 = self.prev_col + self.prev_len;
+            if line == 0 { line = self.current.line; col = self.current.column; }
+            let full: string = "expected ';'".concat(" near '").concat(self.current.lexeme).concat("'");
+            self.push_pdiag(line, col, 1, "expected-semicolon", full,
+                            line, col, line, col, ";");
         } else {
-            self.err("expected '".concat(lexeme).concat("'"));
+            self.err_code("expected-token", "expected '".concat(lexeme).concat("'"));
         }
         return false;
     }
@@ -759,6 +785,13 @@ fn parse_impl(p: *Parser) -> *Stmt {
 // must `.set()` the rewritten Param/Stmt back in place.
 pub fn substitute_self_in_methods(methods: *Vector<Stmt>, target: *Type) {
     if methods == null || target == null { return; }
+    // The implementor's bare name, used to rewrite `Self` in value position
+    // (struct literals `Self { }`, path qualifiers `Self::new()`). For a
+    // generic target (`impl<T> Box<T>`) this is the base name `Box`, which is
+    // what a hand-written literal / mono lookup expects.
+    let mut tname: string = "";
+    if target.kind == TY_NAMED { tname = target.name; }
+    else if target.kind == TY_GENERIC { tname = target.name; }
     for let i: i32 = 0; i < methods.len(); i++ {
         let mut m: Stmt = methods.get(i);
         if m.fn_params != null {
@@ -769,8 +802,106 @@ pub fn substitute_self_in_methods(methods: *Vector<Stmt>, target: *Type) {
             }
         }
         if m.fn_ret_ty != null { m.fn_ret_ty = substitute_self_in_type(m.fn_ret_ty, target); }
+        // Rewrite `Self` inside the method body too — `Self { }` literals,
+        // `Self::method()` calls, `as Self` casts, and `let x: Self` types.
+        // CLONES the body (returns a fresh tree); the trait-default expansion
+        // in lower.glide shares method-body pointers across every impl of the
+        // same trait, so an in-place mutation would pollute siblings.
+        if m.fn_body != null && !tname.eq("") {
+            m.fn_body = _subst_self_clone_stmts(m.fn_body, target, tname);
+        }
         methods.set(i, m);
     }
+}
+
+// ---- `Self` substitution in method bodies --------------------------------
+// These clone the AST while replacing `Self`: in types via
+// `substitute_self_in_type`, and in value position (struct-literal / path
+// names) via the implementor's bare `name`. Cloning (rather than mutating)
+// keeps shared trait-default bodies intact across impls.
+
+fn _subst_self_clone_expr(e: *Expr, target: *Type, name: string) -> *Expr {
+    if e == null { return null; }
+    let c: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    *c = *e;
+    if c.kind == EX_STRUCT_LIT && c.str_val != null && c.str_val.eq("Self") { c.str_val = name; }
+    if c.kind == EX_PATH && c.str_val != null && c.str_val.eq("Self") { c.str_val = name; }
+    if c.macro_owner != null && c.macro_owner.eq("Self") { c.macro_owner = name; }
+    if c.cast_to != null { c.cast_to = substitute_self_in_type(c.cast_to, target); }
+    c.lhs = _subst_self_clone_expr(e.lhs, target, name);
+    c.rhs = _subst_self_clone_expr(e.rhs, target, name);
+    c.operand = _subst_self_clone_expr(e.operand, target, name);
+    c.macro_recv = _subst_self_clone_expr(e.macro_recv, target, name);
+    if e.args != null {
+        let na: *Vector<Expr> = Vector::new();
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let sa: *Expr = _subst_self_clone_expr(&a, target, name);
+            na.push(*sa);
+        }
+        c.args = na;
+    }
+    if e.block_stmts != null { c.block_stmts = _subst_self_clone_stmts(e.block_stmts, target, name); }
+    if e.fn_expr_body != null { c.fn_expr_body = _subst_self_clone_stmts(e.fn_expr_body, target, name); }
+    if e.match_arms != null {
+        let nm: *Vector<MatchArm> = Vector::new();
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let mut arm: MatchArm = e.match_arms.get(i);
+            if arm.body != null { arm.body = _subst_self_clone_stmts(arm.body, target, name); }
+            nm.push(arm);
+        }
+        c.match_arms = nm;
+    }
+    return c;
+}
+
+fn _subst_self_clone_stmts(body: *Vector<Stmt>, target: *Type, name: string) -> *Vector<Stmt> {
+    if body == null { return null; }
+    let out: *Vector<Stmt> = Vector::new();
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        let cs: *Stmt = _subst_self_clone_stmt(&s, target, name);
+        out.push(*cs);
+    }
+    return out;
+}
+
+fn _subst_self_clone_stmt(s: *Stmt, target: *Type, name: string) -> *Stmt {
+    if s == null { return null; }
+    let c: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+    *c = *s;
+    if c.let_ty != null { c.let_ty = substitute_self_in_type(c.let_ty, target); }
+    c.let_value = _subst_self_clone_expr(s.let_value, target, name);
+    c.expr_value = _subst_self_clone_expr(s.expr_value, target, name);
+    c.cond = _subst_self_clone_expr(s.cond, target, name);
+    c.for_step = _subst_self_clone_expr(s.for_step, target, name);
+    c.scrutinee = _subst_self_clone_expr(s.scrutinee, target, name);
+    if s.for_init != null { c.for_init = _subst_self_clone_stmt(s.for_init, target, name); }
+    if s.then_body != null { c.then_body = _subst_self_clone_stmts(s.then_body, target, name); }
+    if s.else_body != null { c.else_body = _subst_self_clone_stmts(s.else_body, target, name); }
+    if s.arms != null {
+        let na: *Vector<MatchArm> = Vector::new();
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let mut arm: MatchArm = s.arms.get(i);
+            if arm.body != null { arm.body = _subst_self_clone_stmts(arm.body, target, name); }
+            na.push(arm);
+        }
+        c.arms = na;
+    }
+    // Nested fn / closure declared in the body: substitute its signature and
+    // body too.
+    if c.fn_ret_ty != null { c.fn_ret_ty = substitute_self_in_type(c.fn_ret_ty, target); }
+    if s.fn_params != null {
+        let np: *Vector<Param> = Vector::new();
+        for let j: i32 = 0; j < s.fn_params.len(); j++ {
+            let mut p: Param = s.fn_params.get(j);
+            if p.ty != null { p.ty = substitute_self_in_type(p.ty, target); }
+            np.push(p);
+        }
+        c.fn_params = np;
+    }
+    if s.fn_body != null { c.fn_body = _subst_self_clone_stmts(s.fn_body, target, name); }
+    return c;
 }
 
 fn substitute_self_in_type(t: *Type, target: *Type) -> *Type {
@@ -1155,6 +1286,12 @@ fn parse_maybe_assign(p: *Parser, lhs: *Expr) -> *Expr {
     else if p.at_op("-=") { op = OP_MINUS_ASSIGN; }
     else if p.at_op("*=") { op = OP_STAR_ASSIGN; }
     else if p.at_op("/=") { op = OP_SLASH_ASSIGN; }
+    else if p.at_op("%=") { op = OP_PERCENT_ASSIGN; }
+    else if p.at_op("&=") { op = OP_BITAND_ASSIGN; }
+    else if p.at_op("|=") { op = OP_BITOR_ASSIGN; }
+    else if p.at_op("^=") { op = OP_BITXOR_ASSIGN; }
+    else if p.at_op("<<=") { op = OP_SHL_ASSIGN; }
+    else if p.at_op(">>=") { op = OP_SHR_ASSIGN; }
     if op == 0 { return lhs; }
     p.advance();
     let rhs_raw: *Expr = parse_expr(p, 0);
@@ -1497,14 +1634,8 @@ fn parse_block_expr(p: *Parser) -> *Expr {
         }
     }
     if value == null {
-        let d: ParseDiag = ParseDiag {
-            origin: "",
-            line: line,
-            col: col,
-            msg: "block expression must end with `return <expr>;`",
-        };
-        p.diags.push(d);
-        p.error_count = p.error_count + 1;
+        p.push_pdiag(line, col, 1, "parse",
+            "block expression must end with `return <expr>;`", 0, 0, 0, 0, "");
         value = expr_int(0, line, col);
     }
     return expr_block(stmts, value, line, col);
@@ -1542,10 +1673,56 @@ fn parse_if_expr(p: *Parser) -> *Expr {
     return expr_if(cond, then_e, else_e, line, col);
 }
 
+// `if let <ctor>(<bind>?) = <expr> { then } [else { else }]`, where `ctor` is
+// one of some / none / ok / err. Produces a surface ST_IF_LET node so `glide
+// fmt` round-trips it; lower.glide desugars it to a scoped temp + `.has`/`.ok`
+// test before the typer/codegen (mirrors ST_FOR_IN / ST_WHILE_RECV).
+fn parse_if_let(p: *Parser, line: i32, col: i32) -> *Stmt {
+    p.advance(); // 'let'
+    let ctor: string = p.expect_ident();
+    let binds: *Vector<string> = Vector::new();
+    if p.eat_op("(") {
+        if !p.at_op(")") { binds.push(p.expect_ident()); }
+        p.expect_op(")");
+    }
+    if !ctor.eq("some") && !ctor.eq("none") && !ctor.eq("ok") && !ctor.eq("err") {
+        p.err("`if let` pattern must be some / none / ok / err");
+    }
+    p.expect_op("=");
+    let saved: bool = p.no_struct_lit;
+    p.no_struct_lit = true;
+    let scrut: *Expr = parse_expr(p, 0);
+    p.no_struct_lit = saved;
+    let then_body: *Vector<Stmt> = parse_block(p);
+    let mut else_body: *Vector<Stmt> = null;
+    if p.eat_kw("else") {
+        if p.at_kw("if") {
+            let inner: *Stmt = parse_if(p);
+            let one: *Vector<Stmt> = Vector::new();
+            if inner != null { one.push(*inner); }
+            else_body = one;
+        } else {
+            else_body = parse_block(p);
+        }
+    }
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+    ast_fill_defaults(s);
+    s.kind = ST_IF_LET;
+    s.line = line;
+    s.column = col;
+    s.name = ctor;
+    s.let_names = binds;
+    s.let_value = scrut;
+    s.then_body = then_body;
+    s.else_body = else_body;
+    return s;
+}
+
 fn parse_if(p: *Parser) -> *Stmt {
     let line: i32 = p.current.line;
     let col: i32 = p.current.column;
     p.advance(); // 'if'
+    if p.at_kw("let") { return parse_if_let(p, line, col); }
     let saved: bool = p.no_struct_lit;
     p.no_struct_lit = true;
     let cond: *Expr = parse_expr(p, 0);
@@ -2076,14 +2253,10 @@ fn build_string_or_interp(p: *Parser, raw: string, line: i32, col: i32) -> *Expr
             let e: *Expr = parse_expr(sub_par, 0);
             for let di: i32 = 0; di < sub_par.diags.len(); di++ {
                 let d: ParseDiag = sub_par.diags.get(di);
-                let bumped: ParseDiag = ParseDiag {
-                    origin: d.origin,
-                    line: line,
-                    col: col,
-                    msg: "in interpolation: ".concat(d.msg),
-                };
-                p.diags.push(bumped);
-                p.error_count = p.error_count + 1;
+                // Re-anchor onto the host string position; drop any inner fix
+                // (its offsets are relative to the sub-expression source).
+                p.push_pdiag(line, col, 1, d.code,
+                    "in interpolation: ".concat(d.msg), 0, 0, 0, 0, "");
             }
             if e == null {
                 return expr_string(raw, line, col);

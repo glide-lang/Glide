@@ -300,6 +300,9 @@ impl Lexer {
         if ci == 62 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: ">=", line: start_line, column: start_col, doc: doc }; }
         if ci == 38 && self.peek_at(1).to_int() == 38 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "&&", line: start_line, column: start_col, doc: doc }; }
         if ci == 124 && self.peek_at(1).to_int() == 124 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "||", line: start_line, column: start_col, doc: doc }; }
+        // 3-char shift-assign must precede the 2-char shift below.
+        if ci == 60 && self.peek_at(1).to_int() == 60 && self.peek_at(2).to_int() == 61 { self.advance(); self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "<<=", line: start_line, column: start_col, doc: doc }; }
+        if ci == 62 && self.peek_at(1).to_int() == 62 && self.peek_at(2).to_int() == 61 { self.advance(); self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: ">>=", line: start_line, column: start_col, doc: doc }; }
         if ci == 60 && self.peek_at(1).to_int() == 60 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "<<", line: start_line, column: start_col, doc: doc }; }
         if ci == 62 && self.peek_at(1).to_int() == 62 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: ">>", line: start_line, column: start_col, doc: doc }; }
         if ci == 43 && self.peek_at(1).to_int() == 43 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "++", line: start_line, column: start_col, doc: doc }; }
@@ -311,6 +314,10 @@ impl Lexer {
         if ci == 45 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "-=", line: start_line, column: start_col, doc: doc }; }
         if ci == 42 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "*=", line: start_line, column: start_col, doc: doc }; }
         if ci == 47 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "/=", line: start_line, column: start_col, doc: doc }; }
+        if ci == 37 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "%=", line: start_line, column: start_col, doc: doc }; }
+        if ci == 38 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "&=", line: start_line, column: start_col, doc: doc }; }
+        if ci == 124 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "|=", line: start_line, column: start_col, doc: doc }; }
+        if ci == 94 && self.peek_at(1).to_int() == 61 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "^=", line: start_line, column: start_col, doc: doc }; }
         // Null-coalesce / Some-fallback: `??` (works for ?T, !T, *T-nullable).
         if ci == 63 && self.peek_at(1).to_int() == 63 { self.advance(); self.advance(); return Token { kind: TOK_OP, lexeme: "??", line: start_line, column: start_col, doc: doc }; }
         // C-style variadic: `...` (used as the last "param" in extern fn).

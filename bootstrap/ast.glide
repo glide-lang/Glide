@@ -109,6 +109,14 @@ pub const OP_BIT_XOR: i32 = 21;
 pub const OP_SHL: i32 = 22;
 pub const OP_SHR: i32 = 23;
 pub const OP_COALESCE: i32 = 24;   // `??` — fallback for ?T / !T / *T-nullable
+// Compound assignment for the bitwise / modulo ops (append-only so the codes
+// above keep their values). `+= -= *= /=` are OP_PLUS/MINUS/STAR/SLASH_ASSIGN.
+pub const OP_PERCENT_ASSIGN: i32 = 25;  // %=
+pub const OP_BITAND_ASSIGN: i32 = 26;   // &=
+pub const OP_BITOR_ASSIGN: i32 = 27;    // |=
+pub const OP_BITXOR_ASSIGN: i32 = 28;   // ^=
+pub const OP_SHL_ASSIGN: i32 = 29;      // <<=
+pub const OP_SHR_ASSIGN: i32 = 30;      // >>=
 
 // Unary op codes
 pub const UN_NEG: i32 = 1;
@@ -199,6 +207,7 @@ pub const ST_CRAW: i32 = 23;        // `c_raw! { ... }` — raw C/asm payload em
 pub const ST_TRAIT: i32 = 24;       // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
 pub const ST_DEFER_ERR: i32 = 25;   // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
 pub const ST_SELECT: i32 = 26;      // `select! { arm => stmt; ... }` — race over chan ops. Arms in `select_arms`.
+pub const ST_IF_LET: i32 = 27;      // `if let some/none/ok/err(bind) = expr { } else { }` — surface form, lowered to ST_BLOCK before typer/codegen. `name` = ctor, `let_names[0]` = bind (if any), `let_value` = scrutinee, then_body / else_body = branches.
 
 // SelectArm.kind values
 pub const SEL_RECV: i32 = 0;        // `var = c.recv() => stmt`            — bind T value

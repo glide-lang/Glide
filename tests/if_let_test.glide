@@ -1,0 +1,57 @@
+// `if let` over option / result: binds the payload in the then-branch,
+// supports an else, and nests. Desugars to a scoped temp + `.has`/`.ok` test.
+import stdlib::testing::*;
+
+fn opt(k: i32) -> ?i32 {
+    if k > 0 { return some(k); }
+    return none();
+}
+
+fn res(b: bool) -> !i32 {
+    if b { return ok(7); }
+    return err("nope");
+}
+
+fn test_if_let_some() -> i32 {
+    let mut got: i32 = -1;
+    if let some(x) = opt(5) { got = x; }
+    assert_eq!(got, 5);
+    return 0;
+}
+
+fn test_if_let_some_else() -> i32 {
+    let mut got: i32 = 0;
+    if let some(x) = opt(-1) { got = x; } else { got = 99; }
+    assert_eq!(got, 99);
+    return 0;
+}
+
+fn test_if_let_none() -> i32 {
+    let mut hit: bool = false;
+    if let none() = opt(-3) { hit = true; }
+    assert!(hit);
+    return 0;
+}
+
+fn test_if_let_ok() -> i32 {
+    let mut got: i32 = 0;
+    if let ok(v) = res(true) { got = v; }
+    assert_eq!(got, 7);
+    return 0;
+}
+
+fn test_if_let_err() -> i32 {
+    let mut msg: string = "";
+    if let err(e) = res(false) { msg = e; }
+    assert_str_eq!(msg, "nope");
+    return 0;
+}
+
+fn test_if_let_nested() -> i32 {
+    let mut sum: i32 = 0;
+    if let some(a) = opt(10) {
+        if let some(b) = opt(20) { sum = a + b; }
+    }
+    assert_eq!(sum, 30);
+    return 0;
+}

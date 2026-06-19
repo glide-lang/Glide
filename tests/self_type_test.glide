@@ -1,0 +1,57 @@
+// `Self` inside an impl block resolves to the implementing type, Rust-style.
+// Exercises every surface the parser substitutes: `-> Self` return types,
+// `Self { }` struct literals, `Self::method()` calls, `self: *Self` params,
+// `let x: Self` locals, and `Self` inside a generic impl.
+import stdlib::testing::*;
+
+pub struct Client {
+    token: string,
+}
+
+impl Client {
+    pub fn new(token: string) -> Self {
+        return Self {
+            token: token
+        };
+    }
+    // `Self::new` qualified call + `-> Self` return.
+    pub fn anon() -> Self {
+        return Self::new("anon");
+    }
+    // `self: *Self` param + `let copy: Self` local type.
+    pub fn token_of(self: *Self) -> string {
+        return self.token;
+    }
+}
+
+struct Box<T> {
+    v: T,
+}
+
+impl<T> Box<T> {
+    // `Self { }` and `-> Self` inside a generic impl resolve to `Box<T>`.
+    pub fn wrap(v: T) -> Self {
+        return Self { v: v };
+    }
+    pub fn unwrap(self: *Self) -> T {
+        return self.v;
+    }
+}
+
+fn test_self_struct_literal_and_return() -> i32 {
+    let c: Client = Client::new("abc");
+    assert_str_eq!(c.token_of(), "abc");
+    return 0;
+}
+
+fn test_self_qualified_call() -> i32 {
+    let c: Client = Client::anon();
+    assert_str_eq!(c.token_of(), "anon");
+    return 0;
+}
+
+fn test_self_in_generic_impl() -> i32 {
+    let b: Box<i32> = Box::wrap(7);
+    assert_eq!(b.unwrap(), 7);
+    return 0;
+}

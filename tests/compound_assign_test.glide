@@ -1,0 +1,54 @@
+// Compound-assignment operators for the bitwise / modulo ops. `+= -= *= /=`
+// already existed; this covers the additions: %= &= |= ^= <<= >>=.
+import stdlib::testing::*;
+
+fn test_percent_assign() -> i32 {
+    let mut x: i32 = 17;
+    x %= 5;
+    assert_eq!(x, 2);
+    return 0;
+}
+
+fn test_bitand_assign() -> i32 {
+    let mut x: i32 = 0b1100;
+    x &= 0b1010;
+    assert_eq!(x, 0b1000);
+    return 0;
+}
+
+fn test_bitor_assign() -> i32 {
+    let mut x: i32 = 0b1100;
+    x |= 0b0011;
+    assert_eq!(x, 0b1111);
+    return 0;
+}
+
+fn test_bitxor_assign() -> i32 {
+    let mut x: i32 = 0b1100;
+    x ^= 0b1010;
+    assert_eq!(x, 0b0110);
+    return 0;
+}
+
+fn test_shl_assign() -> i32 {
+    let mut x: i32 = 1;
+    x <<= 4;
+    assert_eq!(x, 16);
+    return 0;
+}
+
+fn test_shr_assign() -> i32 {
+    let mut x: i32 = 64;
+    x >>= 2;
+    assert_eq!(x, 16);
+    return 0;
+}
+
+fn test_chained_compound() -> i32 {
+    let mut x: i32 = 3;
+    x <<= 2;       // 12
+    x |= 1;        // 13
+    x %= 4;        // 1
+    assert_eq!(x, 1);
+    return 0;
+}

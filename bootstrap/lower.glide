@@ -142,6 +142,7 @@ fn lower_block(body: *Vector<Stmt>) -> *Vector<Stmt> {
 fn lower_stmt(s: *Stmt) -> *Stmt {
     if s == null { return null; }
     if s.kind == ST_FOR_IN { return lower_for_in(s); }
+    if s.kind == ST_IF_LET { return lower_if_let(s); }
 
     // Recurse into children.
     if s.then_body != null { s.then_body = lower_block(s.then_body); }
@@ -161,6 +162,60 @@ fn lower_stmt(s: *Stmt) -> *Stmt {
         s.impl_methods = new_methods;
     }
     return s;
+}
+
+// Desugar `if let ctor(bind) = E { THEN } else { ELSE }` into a scoped block:
+//   { let __t = E; if __t.has/.ok { let bind = __t.val/.err; THEN } else { ELSE } }
+// some/ok test `.has`/`.ok` and bind `.val`; err tests `!.ok` and binds `.err`;
+// none tests `!.has` with no binding. Reuses the option/result field machinery.
+fn lower_if_let(s: *Stmt) -> *Stmt {
+    let ctor: string = s.name;
+    let line: i32 = s.line;
+    let col: i32 = s.column;
+    let mut bind: string = "";
+    if s.let_names != null && s.let_names.len() > 0 { bind = s.let_names.get(0); }
+    let then_body: *Vector<Stmt> = lower_block(s.then_body);
+    let mut else_body: *Vector<Stmt> = null;
+    if s.else_body != null { else_body = lower_block(s.else_body); }
+
+    // Temp bound to the scrutinee; unique per source position.
+    let tmp: string = "__iflet_".concat(int_to_str(line * 1000 + col));
+    let let_tmp: *Stmt = stmt_let(tmp, null, s.let_value, false, line, col);
+
+    // Condition: some/ok -> `tmp.has`/`tmp.ok`; none/err -> negated.
+    let mut flag: string = "has";
+    if ctor.eq("ok") || ctor.eq("err") { flag = "ok"; }
+    let cond_base: *Expr = expr_member(expr_ident(tmp, line, col), flag);
+    let mut cond: *Expr = cond_base;
+    if ctor.eq("none") || ctor.eq("err") {
+        cond = expr_unary(UN_NOT, cond_base, line, col);
+    }
+
+    // Inner then-body: pull the payload into the user binding first.
+    let inner_then: *Vector<Stmt> = Vector::new();
+    if !bind.eq("") {
+        let mut valfield: string = "val";
+        if ctor.eq("err") { valfield = "err"; }
+        let val_expr: *Expr = expr_member(expr_ident(tmp, line, col), valfield);
+        let bind_stmt: *Stmt = stmt_let(bind, null, val_expr, false, line, col);
+        inner_then.push(*bind_stmt);
+    }
+    if then_body != null {
+        for let i: i32 = 0; i < then_body.len(); i++ { inner_then.push(then_body.get(i)); }
+    }
+
+    let if_stmt: *Stmt = stmt_if(cond, inner_then, else_body, line, col);
+
+    let blk: *Vector<Stmt> = Vector::new();
+    blk.push(*let_tmp);
+    blk.push(*if_stmt);
+    let bs: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+    ast_fill_defaults(bs);
+    bs.kind = ST_BLOCK;
+    bs.line = line;
+    bs.column = col;
+    bs.then_body = blk;
+    return bs;
 }
 
 // Build the desugared shape:

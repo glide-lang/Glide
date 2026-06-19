@@ -32,21 +32,25 @@ pub fn merge_parse_diags(t: *Typer, pdiags: *Vector<ParseDiag>) {
     if t == null || pdiags == null { return; }
     for let i: i32 = 0; i < pdiags.len(); i++ {
         let d: ParseDiag = pdiags.get(i);
+        let mut code: string = d.code;
+        if code.eq("") { code = "parse"; }
+        let mut span: i32 = d.span;
+        if span < 1 { span = 1; }
         let e: DiagEntry = DiagEntry {
             line: d.line,
             col: d.col,
             end_line: d.line,
-            end_col: d.col + 1,
+            end_col: d.col + span,
             severity: 1,
-            code: "parse",
+            code: code,
             message: d.msg,
             origin: d.origin,
             tag: 0,
-            fix_line: 0,
-            fix_col: 0,
-            fix_end_line: 0,
-            fix_end_col: 0,
-            fix_replacement: "",
+            fix_line: d.fix_line,
+            fix_col: d.fix_col,
+            fix_end_line: d.fix_end_line,
+            fix_end_col: d.fix_end_col,
+            fix_replacement: d.fix_replacement,
         };
         t.diagnostics.push(e);
     }
@@ -752,18 +756,164 @@ fn _is_known_type_name(t: *Typer, n: string) -> bool {
     return false;
 }
 
+// Byte-level Levenshtein edit distance. Used to suggest the closest known
+// name on an "unknown X" error. Names are short, so the O(la*lb) cost is
+// negligible.
+fn _edit_distance(a: string, b: string) -> i32 {
+    let la: i32 = a.len();
+    let lb: i32 = b.len();
+    if la == 0 { return lb; }
+    if lb == 0 { return la; }
+    let prev: *Vector<i32> = Vector::with_cap(lb + 1);
+    defer prev.free();
+    let cur: *Vector<i32> = Vector::with_cap(lb + 1);
+    defer cur.free();
+    for let j: i32 = 0; j <= lb; j++ { prev.push(j); cur.push(0); }
+    for let i: i32 = 1; i <= la; i++ {
+        cur.set(0, i);
+        let ca: i32 = a.at(i - 1).to_int();
+        for let j: i32 = 1; j <= lb; j++ {
+            let cb: i32 = b.at(j - 1).to_int();
+            let mut cost: i32 = 1;
+            if ca == cb { cost = 0; }
+            let del: i32 = prev.get(j) + 1;
+            let ins: i32 = cur.get(j - 1) + 1;
+            let sub: i32 = prev.get(j - 1) + cost;
+            let mut m: i32 = del;
+            if ins < m { m = ins; }
+            if sub < m { m = sub; }
+            cur.set(j, m);
+        }
+        for let j: i32 = 0; j <= lb; j++ { prev.set(j, cur.get(j)); }
+    }
+    return prev.get(lb);
+}
+
+// The closest candidate to `target`, or "" when nothing is close enough. The
+// threshold scales with length so short names need an almost-exact hit (avoids
+// noisy suggestions). Caller owns `cands` (this does not free it).
+fn _closest_name(target: string, cands: *Vector<string>) -> string {
+    if target == null || target.eq("") || cands == null { return ""; }
+    let mut best: string = "";
+    let mut bestd: i32 = 99;
+    for let i: i32 = 0; i < cands.len(); i++ {
+        let c: string = cands.get(i);
+        if c == null || c.eq("") || c.eq(target) { continue; }
+        let d: i32 = _edit_distance(target, c);
+        if d < bestd { bestd = d; best = c; }
+    }
+    let mut lim: i32 = target.len() / 2;
+    if lim < 1 { lim = 1; }
+    if lim > 2 { lim = 2; }
+    if best.eq("") || bestd > lim { return ""; }
+    return best;
+}
+
+// `; did you mean `X`?` for the closest candidate, or "" when none is close.
+fn _did_you_mean(target: string, cands: *Vector<string>) -> string {
+    let c: string = _closest_name(target, cands);
+    if c.eq("") { return ""; }
+    return "; did you mean `".concat(c).concat("`?");
+}
+
+// The replacement a `glide fix` / quick-fix should splice in for an unknown
+// type `n`: a retired C-style spelling maps to its canonical form, otherwise
+// the closest known type name (or "" when nothing is close).
+fn _type_fix_target(t: *Typer, n: string) -> string {
+    if n.eq("int")   { return "i32"; }
+    if n.eq("uint")  { return "u32"; }
+    if n.eq("long")  { return "i64"; }
+    if n.eq("ulong") { return "u64"; }
+    if n.eq("float") { return "f64"; }
+    let c: *Vector<string> = _type_candidates(t);
+    defer c.free();
+    return _closest_name(n, c);
+}
+
+// Candidate type names: the primitives plus every registered struct/enum name.
+fn _type_candidates(t: *Typer) -> *Vector<string> {
+    let v: *Vector<string> = Vector::new();
+    v.push("i8"); v.push("i16"); v.push("i32"); v.push("i64");
+    v.push("u8"); v.push("u16"); v.push("u32"); v.push("u64");
+    v.push("i128"); v.push("u128"); v.push("usize"); v.push("isize");
+    v.push("f32"); v.push("f64"); v.push("bool"); v.push("char");
+    v.push("string"); v.push("void");
+    if t.structs != null {
+        let ks: *Vector<string> = t.structs.keys();
+        for let i: i32 = 0; i < ks.len(); i++ { v.push(ks.get(i)); }
+        ks.free();
+    }
+    return v;
+}
+
+// Candidate value names in scope: locals/params, module consts, and fns.
+fn _name_candidates(t: *Typer) -> *Vector<string> {
+    let v: *Vector<string> = Vector::new();
+    if t.scope != null {
+        let a: *Vector<string> = t.scope.keys();
+        for let i: i32 = 0; i < a.len(); i++ { v.push(a.get(i)); }
+        a.free();
+    }
+    if t.module_scope != null {
+        let b: *Vector<string> = t.module_scope.keys();
+        for let i: i32 = 0; i < b.len(); i++ { v.push(b.get(i)); }
+        b.free();
+    }
+    if t.fns != null {
+        let c: *Vector<string> = t.fns.keys();
+        for let i: i32 = 0; i < c.len(); i++ { v.push(c.get(i)); }
+        c.free();
+    }
+    return v;
+}
+
+// Candidate field names of struct `sname` (from the `Struct::field` registry).
+fn _field_candidates(t: *Typer, sname: string) -> *Vector<string> {
+    let v: *Vector<string> = Vector::new();
+    if t.struct_fields_all == null { return v; }
+    let pfx: string = sname.concat("::");
+    let pl: i32 = pfx.len();
+    let ks: *Vector<string> = t.struct_fields_all.keys();
+    for let i: i32 = 0; i < ks.len(); i++ {
+        let k: string = ks.get(i);
+        if k.len() > pl && k.substring(0, pl).eq(pfx) {
+            v.push(k.substring(pl, k.len()));
+        }
+    }
+    ks.free();
+    return v;
+}
+
 // `unknown type `X`` message, with a `; use `iN`` hint when `X` is a retired
-// C-style numeric spelling, so the migration path is obvious at the use site.
-fn _unknown_type_msg(n: string) -> string {
-    let mut msg: string = "unknown type `".concat(n).concat("`");
+// C-style numeric spelling, or a `; did you mean `Y`?` suggestion otherwise.
+fn _unknown_type_msg(t: *Typer, n: string) -> string {
+    let msg: string = "unknown type `".concat(n).concat("`");
     let mut hint: string = "";
     if n.eq("int")   { hint = "i32"; }
     if n.eq("uint")  { hint = "u32"; }
     if n.eq("long")  { hint = "i64"; }
     if n.eq("ulong") { hint = "u64"; }
     if n.eq("float") { hint = "f64"; }
-    if !hint.eq("") { msg = msg.concat("; use `").concat(hint).concat("`"); }
-    return msg;
+    if !hint.eq("") { return msg.concat("; use `").concat(hint).concat("`"); }
+    let cands: *Vector<string> = _type_candidates(t);
+    defer cands.free();
+    return msg.concat(_did_you_mean(n, cands));
+}
+
+// Emit an "unknown type" error spanning `n` at (line, col), attaching a quick
+// fix that replaces the name when there's a confident suggestion (retired
+// C-style spelling or a close known type). The editor surfaces it as a
+// one-click "Change to `X`" action, and `glide fix` applies it.
+fn _emit_unknown_type(t: *Typer, n: string, line: i32, col: i32) {
+    let msg: string = _unknown_type_msg(t, n);
+    let repl: string = _type_fix_target(t, n);
+    let span: i32 = n.len();
+    if repl.eq("") {
+        t.err_code_range(line, col, span, "unknown-type", msg);
+    } else {
+        t.err_code_range_fix(line, col, span, "unknown-type", msg,
+            line, col, line, col + span, repl);
+    }
 }
 
 // Recursively flag any unknown named type inside an annotation. `dyn`
@@ -781,7 +931,7 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.line > 0 { pl = ty.line; pc = ty.col; }
     if ty.kind == TY_NAMED {
         if !_is_known_type_name(t, ty.name) {
-            t.err_code_range(pl, pc, ty.name.len(), "", _unknown_type_msg(ty.name));
+            _emit_unknown_type(t, ty.name, pl, pc);
         }
         return;
     }
@@ -806,7 +956,7 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.kind == TY_GENERIC {
         if !ty.name.eq("chan") && !t.structs.contains(ty.name)
            && !_is_current_type_param(t, ty.name) {
-            t.err_code_range(pl, pc, ty.name.len(), "", "unknown type `".concat(ty.name).concat("`"));
+            _emit_unknown_type(t, ty.name, pl, pc);
         }
         if ty.args != null {
             for let i: i32 = 0; i < ty.args.len(); i++ {
@@ -2871,7 +3021,18 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
             return ty_fnptr(params, sig.ret_type);
         }
-        t.err(e.line, e.column, "unknown name `".concat(e.str_val).concat("`"));
+        let nc: *Vector<string> = _name_candidates(t);
+        let sug: string = _closest_name(e.str_val, nc);
+        nc.free();
+        let span: i32 = e.str_val.len();
+        let msg: string = "unknown name `".concat(e.str_val).concat("`");
+        if sug.eq("") {
+            t.err_code_range(e.line, e.column, span, "unknown-name", msg);
+        } else {
+            t.err_code_range_fix(e.line, e.column, span, "unknown-name",
+                msg.concat("; did you mean `").concat(sug).concat("`?"),
+                e.line, e.column, e.line, e.column + span, sug);
+        }
         return null;
     }
 
@@ -3297,8 +3458,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 // never user-declared.
                 || name.eq("__program__") || name.eq("__typeof__");
             if !is_builtin && !t.scope.contains(name) && t.enforce_visibility {
-                t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "",
-                    "unknown function `".concat(name).concat("`; did you forget an `import`?"));
+                let fc: *Vector<string> = _name_candidates(t);
+                let sug: string = _closest_name(name, fc);
+                fc.free();
+                let span: i32 = name.len();
+                let mut fm: string = "unknown function `".concat(name).concat("`");
+                if sug.eq("") {
+                    fm = fm.concat("; did you forget an `import`?");
+                    t.err_code_range(e.lhs.line, e.lhs.column, span, "unknown-function", fm);
+                } else {
+                    fm = fm.concat("; did you mean `").concat(sug).concat("`?");
+                    t.err_code_range_fix(e.lhs.line, e.lhs.column, span, "unknown-function", fm,
+                        e.lhs.line, e.lhs.column, e.lhs.line, e.lhs.column + span, sug);
+                }
                 return null;
             }
         }
@@ -3406,8 +3578,21 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 // Unknown field: not a declared field AND not a method
                 // reference (`obj.method` as a value). A real typo.
                 if !t.struct_fields_all.contains(key) && !t.method_names.contains(key) {
-                    t.err_code_range(_field_pos_line(e), _field_pos_col(e), e.field.len(), "",
-                        "no field `".concat(e.field).concat("` on struct `").concat(stripped.name).concat("`"));
+                    let dc: *Vector<string> = _field_candidates(t, stripped.name);
+                    let sug: string = _closest_name(e.field, dc);
+                    dc.free();
+                    let span: i32 = e.field.len();
+                    let fl: i32 = _field_pos_line(e);
+                    let fcol: i32 = _field_pos_col(e);
+                    let dm: string = "no field `".concat(e.field).concat("` on struct `")
+                        .concat(stripped.name).concat("`");
+                    if sug.eq("") {
+                        t.err_code_range(fl, fcol, span, "no-field", dm);
+                    } else {
+                        t.err_code_range_fix(fl, fcol, span, "no-field",
+                            dm.concat("; did you mean `").concat(sug).concat("`?"),
+                            fl, fcol, fl, fcol + span, sug);
+                    }
                     return null;
                 }
                 // Cross-file privacy: a declared-but-private field is only
@@ -3415,10 +3600,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 let owner: string = t.struct_origin.get(stripped.name);
                 if !owner.eq(t.current_origin) {
                     if !t.field_pub.contains(key) {
-                        // Cross-file access to a private field is discouraged
-                        // but not fatal: warn (don't block the build). Inside
+                        // Cross-file access to a private field is a hard error:
+                        // the field is encapsulated to its declaring file, so
+                        // reading it elsewhere blocks the build (mirrors the
+                        // strict `private-construction` rule on literals). Inside
                         // the struct's own file this branch never fires.
-                        t.warn_range(_field_pos_line(e), _field_pos_col(e), e.field.len(), "private-field",
+                        t.err_code_range(_field_pos_line(e), _field_pos_col(e), e.field.len(), "private-field",
                             "field `".concat(e.field).concat("` of struct `").concat(stripped.name).concat("` is private to its own file; declare it `pub` to expose it"));
                     }
                 }

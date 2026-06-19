@@ -201,6 +201,16 @@ fn help_for_code(code: string) -> string {
     if code.eq("unused-var")         { return "prefix with `_` if intentional, or remove the variable"; }
     if code.eq("unused-param")       { return "prefix with `_` if intentional"; }
     if code.eq("unnecessary-mut")    { return "drop `mut` if the binding is never reassigned"; }
+    if code.eq("unknown-type")       { return "check the spelling, or `import` the module that declares it"; }
+    if code.eq("unknown-name")       { return "check the spelling, or declare/import the name before use"; }
+    if code.eq("unknown-function")   { return "check the spelling, or `import` the module that declares it"; }
+    if code.eq("no-field")           { return "check the field name; `pub` fields of structs in other files are the only ones visible cross-file"; }
+    if code.eq("private-field")      { return "the field is private to its declaring file; mark it `pub` to read it elsewhere"; }
+    if code.eq("private-construction") { return "the struct has private fields; build it through a public constructor (e.g. `T::new(...)`) in its own file"; }
+    if code.eq("expected-semicolon") { return "statements end with `;` — insert one at the end of the previous line"; }
+    if code.eq("expected-token")     { return "the parser expected a specific token here; check for an unbalanced `{`/`(`/`[` above"; }
+    if code.eq("for-in-not-iterable") { return "`for-in` walks a range (`0..n`) or a collection, not a single number"; }
+    if code.eq("unused-result")      { return "handle the result: check `.ok`, propagate with `?`, or default with `??`"; }
     return "";
 }
 
