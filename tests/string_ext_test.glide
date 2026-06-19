@@ -1,0 +1,22 @@
+// String.reverse — codepoint-aware (UTF-8 multi-byte chars stay intact).
+import stdlib::testing::*;
+
+fn test_reverse_ascii() -> i32 {
+    assert_str_eq!("abc".reverse(), "cba");
+    assert_str_eq!("".reverse(), "");
+    assert_str_eq!("x".reverse(), "x");
+    return 0;
+}
+
+fn test_reverse_palindrome() -> i32 {
+    assert_str_eq!("racecar".reverse(), "racecar");
+    return 0;
+}
+
+fn test_reverse_multibyte() -> i32 {
+    // "áé" reversed is "éá" — each 2-byte sequence kept whole, order flipped.
+    assert_str_eq!("áé".reverse(), "éá");
+    // Reversing twice is the identity.
+    assert_str_eq!("héllo".reverse().reverse(), "héllo");
+    return 0;
+}

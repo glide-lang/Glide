@@ -1,0 +1,23 @@
+// HashMap convenience: get_or + insert_if_absent.
+import stdlib::hashmap::*;
+import stdlib::testing::*;
+
+fn test_get_or() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("count", 7);
+    assert_eq!(m.get_or("count", 0), 7);
+    assert_eq!(m.get_or("missing", -1), -1);
+    return 0;
+}
+
+fn test_insert_if_absent() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    let a: bool = m.insert_if_absent("k", 1);
+    assert!(a);
+    let b: bool = m.insert_if_absent("k", 9);
+    assert_not!(b);
+    assert_eq!(m.get("k"), 1);   // unchanged
+    return 0;
+}

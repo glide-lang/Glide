@@ -131,6 +131,30 @@ impl<V> HashMap<V> {
         return self.values[i];
     }
 
+    /// Read the value bound to `k`, or `default` when `k` is absent. Avoids
+    /// the `contains` + `get` two-step.
+    ///
+    /// ```glide
+    /// let n: i32 = m.get_or("count", 0);
+    /// ```
+    fn get_or(self: *HashMap<V>, k: string, default: V) -> V {
+        if self.contains(k) { return self.get(k); }
+        return default;
+    }
+
+    /// Bind `k` to `v` only when `k` is absent. Returns `true` if it was
+    /// inserted, `false` if `k` already had a value (left unchanged).
+    ///
+    /// ```glide
+    /// m.insert_if_absent("count", 1);   // true
+    /// m.insert_if_absent("count", 9);   // false; stays 1
+    /// ```
+    fn insert_if_absent(self: *HashMap<V>, k: string, v: V) -> bool {
+        if self.contains(k) { return false; }
+        self.insert(k, v);
+        return true;
+    }
+
     /// Resize to a new power-of-two capacity and rehash every entry.
     /// Called automatically by `insert`; rarely useful directly.
     fn resize(self: *HashMap<V>, new_cap: i32) {

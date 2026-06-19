@@ -1,0 +1,90 @@
+// New Vector ergonomics: remove/insert/sort_by/enumerate (generic) and
+// contains/index_of/sort (specialized per element type).
+import stdlib::testing::*;
+
+fn test_remove_stable() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(10, 20, 30, 40);
+    let r: i32 = v.remove(1);
+    assert_eq!(r, 20);
+    assert_eq!(v.len(), 3);
+    assert_eq!(v.get(0), 10);
+    assert_eq!(v.get(1), 30);
+    assert_eq!(v.get(2), 40);
+    return 0;
+}
+
+fn test_insert() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(1, 2, 4);
+    v.insert(2, 3);
+    assert_eq!(v.len(), 4);
+    assert_eq!(v.get(2), 3);
+    assert_eq!(v.get(3), 4);
+    v.insert(0, 0);
+    assert_eq!(v.get(0), 0);
+    v.insert(v.len(), 9);   // append at end
+    assert_eq!(v.get(v.len() - 1), 9);
+    return 0;
+}
+
+fn _desc(a: i32, b: i32) -> i32 { return b - a; }
+
+fn test_sort_by() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(3, 1, 2, 5, 4);
+    v.sort_by(_desc);
+    assert_eq!(v.get(0), 5);
+    assert_eq!(v.get(4), 1);
+    return 0;
+}
+
+fn test_sort_i32() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(3, 1, 2, 5, 4);
+    v.sort();
+    assert_eq!(v.get(0), 1);
+    assert_eq!(v.get(4), 5);
+    return 0;
+}
+
+fn test_contains_index_of_i32() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(10, 20, 30);
+    assert!(v.contains(20));
+    assert_not!(v.contains(99));
+    assert_eq!(v.index_of(30), 2);
+    assert_eq!(v.index_of(99), -1);
+    return 0;
+}
+
+fn test_string_contains_sort() -> i32 {
+    let v: *Vector<string> = Vector::new();
+    defer v.free();
+    v.push_all!("cherry", "apple", "banana");
+    assert!(v.contains("apple"));
+    assert_eq!(v.index_of("banana"), 2);
+    v.sort();
+    assert_str_eq!(v.get(0), "apple");
+    assert_str_eq!(v.get(2), "cherry");
+    return 0;
+}
+
+fn test_enumerate() -> i32 {
+    let v: *Vector<string> = Vector::new();
+    defer v.free();
+    v.push_all!("a", "b", "c");
+    let e: *Vector<*Pair<i32, string>> = v.enumerate();
+    defer e.free();
+    assert_eq!(e.len(), 3);
+    assert_eq!(e.get(0).first, 0);
+    assert_str_eq!(e.get(0).second, "a");
+    assert_eq!(e.get(2).first, 2);
+    assert_str_eq!(e.get(2).second, "c");
+    return 0;
+}

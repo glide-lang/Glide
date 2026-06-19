@@ -1,0 +1,45 @@
+// New string ergonomics: pad_left/pad_right, strip_prefix/strip_suffix,
+// lines, count.
+
+fn test_pad() -> i32 {
+    assert_str_eq!("42".pad_left(5, '0'), "00042");
+    assert_str_eq!("hello".pad_left(3, ' '), "hello");   // already wider
+    assert_str_eq!("7".pad_right(4, '.'), "7...");
+    assert_str_eq!("ab".pad_left(2, 'x'), "ab");          // exact width
+    assert_str_eq!("".pad_right(3, '-'), "---");
+    return 0;
+}
+
+fn test_strip() -> i32 {
+    assert_str_eq!("src/main.glide".strip_prefix("src/"), "main.glide");
+    assert_str_eq!("main.glide".strip_prefix("src/"), "main.glide");   // absent
+    assert_str_eq!("main.glide".strip_suffix(".glide"), "main");
+    assert_str_eq!("main.rs".strip_suffix(".glide"), "main.rs");        // absent
+    assert_str_eq!("abc".strip_prefix(""), "abc");
+    return 0;
+}
+
+fn test_lines() -> i32 {
+    let a: *Vector<string> = "x\r\ny\nz".lines();
+    defer a.free();
+    assert_eq!(a.len(), 3);
+    assert_str_eq!(a.get(0), "x");
+    assert_str_eq!(a.get(1), "y");
+    assert_str_eq!(a.get(2), "z");
+    let t: *Vector<string> = "a\nb\n".lines();   // trailing newline: no empty final
+    defer t.free();
+    assert_eq!(t.len(), 2);
+    let nl: *Vector<string> = "\n".lines();       // single newline -> one empty line
+    defer nl.free();
+    assert_eq!(nl.len(), 1);
+    assert_str_eq!(nl.get(0), "");
+    return 0;
+}
+
+fn test_count() -> i32 {
+    assert_eq!("a.b.c".count("."), 2);
+    assert_eq!("aaaa".count("aa"), 2);     // non-overlapping
+    assert_eq!("abc".count("z"), 0);
+    assert_eq!("abc".count(""), 0);
+    return 0;
+}

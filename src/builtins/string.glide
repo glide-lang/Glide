@@ -6,6 +6,24 @@ fn _ws(c: i32) -> bool {
     return c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 11;
 }
 
+// Copy `n` bytes into one fresh NUL-terminated arena string. Lets the string
+// methods build their result in a single allocation instead of the O(n^2)
+// `out = out.concat(...)` fold (each concat re-strlens + re-copies the whole
+// accumulator). The methods below size a `*u8` buffer to the exact (or
+// two-pass-counted) output length, fill it byte-by-byte, materialize once, and
+// free the scratch buffer.
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+
+// True when `find` (length `m`) occurs in `s` starting at byte `i`.
+fn _match_at(s: string, find: string, i: i32, m: i32) -> bool {
+    let mut k: i32 = 0;
+    while k < m {
+        if s.at(i + k).to_int() != find.at(k).to_int() { return false; }
+        k = k + 1;
+    }
+    return true;
+}
+
 impl string {
     /// `true` when the string has zero bytes.
     ///
@@ -176,25 +194,33 @@ impl string {
         let n: i32 = self.len();
         let m: i32 = find.len();
         if m == 0 { return self; }
-        let mut out: string = "";
+        // Pass 1: count non-overlapping matches to size the output exactly.
+        let mut matches: i32 = 0;
         let mut i: i32 = 0;
         while i < n {
-            let mut matched: bool = (i + m <= n);
-            if matched {
+            if i + m <= n && _match_at(self, find, i, m) { matches = matches + 1; i = i + m; }
+            else { i = i + 1; }
+        }
+        if matches == 0 { return self; }
+        let rlen: i32 = repl.len();
+        let total: i32 = n + matches * (rlen - m);
+        let cap: i32 = if total > 0 { total } else { 1 };
+        let buf: *u8 = malloc(cap as usize) as *u8;
+        // Pass 2: fill the buffer in one sweep.
+        let mut w: i32 = 0;
+        i = 0;
+        while i < n {
+            if i + m <= n && _match_at(self, find, i, m) {
                 let mut k: i32 = 0;
-                while k < m {
-                    if self.at(i + k).to_int() != find.at(k).to_int() { matched = false; break; }
-                    k = k + 1;
-                }
-            }
-            if matched {
-                out = out.concat(repl);
+                while k < rlen { buf[w] = repl.at(k).to_int() as u8; w = w + 1; k = k + 1; }
                 i = i + m;
             } else {
-                out = out.concat(self.substring(i, i + 1));
+                buf[w] = self.at(i).to_int() as u8; w = w + 1;
                 i = i + 1;
             }
         }
+        let out: string = __glide_string_from_buf(buf as *void, w);
+        free(buf as *void);
         return out;
     }
 
@@ -245,17 +271,17 @@ impl string {
     /// ```
     pub fn to_upper(self: string) -> string {
         let n: i32 = self.len();
-        let mut out: string = "";
+        if n == 0 { return self; }
+        let buf: *u8 = malloc(n as usize) as *u8;
         let mut i: i32 = 0;
         while i < n {
             let c: i32 = self.at(i).to_int();
-            if c >= 97 && c <= 122 {
-                out = out.concat(((c - 32) as char).to_string());
-            } else {
-                out = out.concat(self.substring(i, i + 1));
-            }
+            if c >= 97 && c <= 122 { buf[i] = (c - 32) as u8; }
+            else { buf[i] = c as u8; }
             i = i + 1;
         }
+        let out: string = __glide_string_from_buf(buf as *void, n);
+        free(buf as *void);
         return out;
     }
 
@@ -267,17 +293,17 @@ impl string {
     /// ```
     pub fn to_lower(self: string) -> string {
         let n: i32 = self.len();
-        let mut out: string = "";
+        if n == 0 { return self; }
+        let buf: *u8 = malloc(n as usize) as *u8;
         let mut i: i32 = 0;
         while i < n {
             let c: i32 = self.at(i).to_int();
-            if c >= 65 && c <= 90 {
-                out = out.concat(((c + 32) as char).to_string());
-            } else {
-                out = out.concat(self.substring(i, i + 1));
-            }
+            if c >= 65 && c <= 90 { buf[i] = (c + 32) as u8; }
+            else { buf[i] = c as u8; }
             i = i + 1;
         }
+        let out: string = __glide_string_from_buf(buf as *void, n);
+        free(buf as *void);
         return out;
     }
 
@@ -290,12 +316,19 @@ impl string {
     /// ```
     pub fn repeat(self: string, n: i32) -> string {
         if n <= 0 { return ""; }
-        let mut out: string = "";
-        let mut i: i32 = 0;
-        while i < n {
-            out = out.concat(self);
-            i = i + 1;
+        let slen: i32 = self.len();
+        if slen == 0 { return ""; }
+        let total: i32 = slen * n;
+        let buf: *u8 = malloc(total as usize) as *u8;
+        let mut w: i32 = 0;
+        let mut r: i32 = 0;
+        while r < n {
+            let mut i: i32 = 0;
+            while i < slen { buf[w] = self.at(i).to_int() as u8; w = w + 1; i = i + 1; }
+            r = r + 1;
         }
+        let out: string = __glide_string_from_buf(buf as *void, total);
+        free(buf as *void);
         return out;
     }
 
@@ -535,5 +568,159 @@ impl string {
             }
         }
         return out;
+    }
+
+    /// Reverse the string by Unicode codepoint (not by byte), so multi-byte
+    /// UTF-8 sequences stay intact. Walks the string once recording each
+    /// character's byte span, then re-emits the spans back-to-front.
+    ///
+    /// ```glide
+    /// "abc".reverse();    // "cba"
+    /// "áé".reverse();     // "éá"  (bytes within each char preserved)
+    /// ```
+    pub fn reverse(self: string) -> string {
+        let n: i32 = self.len();
+        let starts: *Vector<i32> = Vector::new();
+        defer starts.free();
+        let mut i: i32 = 0;
+        while i < n {
+            starts.push(i);
+            let mut b: i32 = self.at(i).to_int();
+            if b < 0 { b = b + 256; }
+            let mut adv: i32 = 1;
+            if b >= 240 { adv = 4; }
+            else if b >= 224 { adv = 3; }
+            else if b >= 192 { adv = 2; }
+            i = i + adv;
+        }
+        if n == 0 { return self; }
+        // Re-emit the per-character byte spans back-to-front into one buffer
+        // (total bytes unchanged), so it's O(n) instead of an O(n^2) concat fold.
+        let buf: *u8 = malloc(n as usize) as *u8;
+        let mut w: i32 = 0;
+        let mut k: i32 = starts.len() - 1;
+        while k >= 0 {
+            let s: i32 = starts.get(k);
+            let mut e: i32 = n;
+            if k + 1 < starts.len() { e = starts.get(k + 1); }
+            let mut p: i32 = s;
+            while p < e { buf[w] = self.at(p).to_int() as u8; w = w + 1; p = p + 1; }
+            k = k - 1;
+        }
+        let out: string = __glide_string_from_buf(buf as *void, n);
+        free(buf as *void);
+        return out;
+    }
+
+    /// Left-pad with `ch` until the byte length reaches `width`. Returns
+    /// `self` unchanged when it is already at least `width` bytes. ASCII-
+    /// oriented: `ch` contributes one byte.
+    ///
+    /// ```glide
+    /// "42".pad_left(5, '0');     // "00042"
+    /// "hello".pad_left(3, ' ');  // "hello" (already wider)
+    /// ```
+    pub fn pad_left(self: string, width: i32, ch: char) -> string {
+        let n: i32 = self.len();
+        if n >= width { return self; }
+        let buf: *u8 = malloc(width as usize) as *u8;
+        let cb: u8 = ch.to_int() as u8;
+        let pad: i32 = width - n;
+        let mut i: i32 = 0;
+        while i < pad { buf[i] = cb; i = i + 1; }
+        let mut j: i32 = 0;
+        while j < n { buf[pad + j] = self.at(j).to_int() as u8; j = j + 1; }
+        let out: string = __glide_string_from_buf(buf as *void, width);
+        free(buf as *void);
+        return out;
+    }
+
+    /// Right-pad with `ch` until the byte length reaches `width`.
+    ///
+    /// ```glide
+    /// "7".pad_right(4, '.');   // "7..."
+    /// ```
+    pub fn pad_right(self: string, width: i32, ch: char) -> string {
+        let n: i32 = self.len();
+        if n >= width { return self; }
+        let buf: *u8 = malloc(width as usize) as *u8;
+        let cb: u8 = ch.to_int() as u8;
+        let mut j: i32 = 0;
+        while j < n { buf[j] = self.at(j).to_int() as u8; j = j + 1; }
+        let mut i: i32 = n;
+        while i < width { buf[i] = cb; i = i + 1; }
+        let out: string = __glide_string_from_buf(buf as *void, width);
+        free(buf as *void);
+        return out;
+    }
+
+    /// Remove `pre` from the start if present; otherwise return `self`.
+    ///
+    /// ```glide
+    /// "src/main.glide".strip_prefix("src/");   // "main.glide"
+    /// "main.glide".strip_prefix("src/");        // "main.glide"
+    /// ```
+    pub fn strip_prefix(self: string, pre: string) -> string {
+        if self.starts_with(pre) { return self.substring(pre.len(), self.len()); }
+        return self;
+    }
+
+    /// Remove `suf` from the end if present; otherwise return `self`.
+    ///
+    /// ```glide
+    /// "main.glide".strip_suffix(".glide");   // "main"
+    /// ```
+    pub fn strip_suffix(self: string, suf: string) -> string {
+        if self.ends_with(suf) { return self.substring(0, self.len() - suf.len()); }
+        return self;
+    }
+
+    /// Split into lines on `\n`, dropping a trailing `\r` (so CRLF and LF both
+    /// yield clean lines). A trailing newline does not produce an empty final
+    /// line; an empty string yields no lines.
+    ///
+    /// ```glide
+    /// for ln in "a\r\nb\n".lines() { println!(ln); }   // "a", "b"
+    /// ```
+    pub fn lines(self: string) -> *Vector<string> {
+        let out: *Vector<string> = Vector::new();
+        let n: i32 = self.len();
+        let mut start: i32 = 0;
+        let mut i: i32 = 0;
+        while i < n {
+            if self.at(i).to_int() == 10 {
+                let mut e: i32 = i;
+                if e > start && self.at(e - 1).to_int() == 13 { e = e - 1; }
+                out.push(self.substring(start, e));
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+        if start < n {
+            let mut e: i32 = n;
+            if e > start && self.at(e - 1).to_int() == 13 { e = e - 1; }
+            out.push(self.substring(start, e));
+        }
+        return out;
+    }
+
+    /// Count non-overlapping occurrences of `sub`. Returns 0 for an empty
+    /// `sub`.
+    ///
+    /// ```glide
+    /// "a.b.c".count(".");    // 2
+    /// "aaaa".count("aa");    // 2 (non-overlapping)
+    /// ```
+    pub fn count(self: string, sub: string) -> i32 {
+        let m: i32 = sub.len();
+        if m == 0 { return 0; }
+        let n: i32 = self.len();
+        let mut c: i32 = 0;
+        let mut i: i32 = 0;
+        while i + m <= n {
+            if _match_at(self, sub, i, m) { c = c + 1; i = i + m; }
+            else { i = i + 1; }
+        }
+        return c;
     }
 }
