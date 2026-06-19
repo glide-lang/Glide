@@ -895,6 +895,23 @@ case_diag_message("retired `float` type errors with hint",
     'fn f(x: float) -> i32 { return 0; }',
     "use `f64`")
 
+# --- "did you mean" suggestions on unknown type / field / name / fn ---
+case_diag_message("unknown type suggests closest primitive",
+    'fn main() -> i32 { let x: strin = ""; return 0; }',
+    "did you mean `string`?")
+case_diag_message("unknown type suggests closest struct",
+    'struct Client { x: i32 }\nfn main() -> i32 { let c: Cleint = Client { x: 1 }; return 0; }',
+    "did you mean `Client`?")
+case_diag_message("no field suggests closest field",
+    'struct C { token: string }\nfn use_it(c: *C) -> string { return c.tokn; }',
+    "did you mean `token`?")
+case_diag_message("unknown name suggests closest binding",
+    'fn main() -> i32 { let count: i32 = 5; let y: i32 = cont; return 0; }',
+    "did you mean `count`?")
+case_diag_message("unknown function suggests closest fn",
+    'fn greeting() -> i32 { return 1; }\nfn main() -> i32 { let x: i32 = greting(); return 0; }',
+    "did you mean `greeting`?")
+
 def case_completion_has(label, body, pos, expect_labels):
     print(f"\n[feature] {label}")
     path, uri = write_tmp(label.replace(" ", "_") + ".glide", body)
@@ -1117,6 +1134,17 @@ case_completion_has("? inference offers receiver methods",
     '}',
     {"line":8,"character":6},
     ["greet","wave"])
+
+# Vector member completion surfaces the new ergonomic methods (generic +
+# specialized impls on Vector<i32>).
+case_completion_has("Vector member completion offers new ergonomic methods",
+    'fn run() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n'
+    '    v.\n'
+    '    return 0;\n'
+    '}',
+    {"line":2,"character":6},
+    ["sort","sort_by","contains","index_of","remove","insert","enumerate"])
 
 # ---- struct hover (fields) + outline (field children) ----
 
@@ -1664,6 +1692,85 @@ def _code_action_test():
 
 _code_action_test()
 
+def _suggestion_fix_test():
+    """A `did you mean` diagnostic carries a quick fix that replaces the typo
+    with the suggestion (unknown type here; same path for name/fn/field)."""
+    print("\n[code action] did-you-mean suggestion fix")
+    body = 'fn main() -> i32 {\n    let x: Strng = "hi";\n    let _ = x;\n    return 0;\n}\n'
+    path, uri = write_tmp("suggest_fix.glide", body)
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    opened = {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+        "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}}
+    bye = {"jsonrpc": "2.0", "method": "exit", "params": None}
+    rs = run_session([init, opened, bye])
+    diag = None
+    for r in rs:
+        if r.get("method") == "textDocument/publishDiagnostics":
+            for d in r["params"]["diagnostics"]:
+                if d.get("code") == "unknown-type":
+                    diag = d
+    check("unknown-type carries a data.fix",
+          diag is not None and (diag.get("data") or {}).get("fix") is not None, f"got {diag}")
+    if diag is None:
+        return
+    ca = {"jsonrpc": "2.0", "id": 5, "method": "textDocument/codeAction",
+          "params": {"textDocument": {"uri": uri}, "range": diag["range"],
+                     "context": {"diagnostics": [diag]}}}
+    rs2 = run_session([init, opened, ca, bye])
+    act = next((r for r in rs2 if r.get("id") == 5), None)
+    actions = (act or {}).get("result") or []
+    titles = [a.get("title") for a in actions]
+    check("offers a `Change to `string`` quick fix",
+          any("Change to `string`" in (t or "") for t in titles), f"got {titles}")
+    edits = [te.get("newText") for a in actions
+             for grp in (a.get("edit", {}).get("changes", {}) or {}).values() for te in grp]
+    check("fix replaces `Strng` with `string`", "string" in edits, f"got {edits}")
+
+_suggestion_fix_test()
+
+def _insert_fix_test(label, body, code, want_title, want_newtext):
+    """A diagnostic carrying an insert/delete fix surfaces as a code action."""
+    print(f"\n[code action] {label}")
+    path, uri = write_tmp(label.replace(" ", "_") + ".glide", body)
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    opened = {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+        "textDocument": {"uri": uri, "languageId": "glide", "version": 1, "text": body}}}
+    bye = {"jsonrpc": "2.0", "method": "exit", "params": None}
+    rs = run_session([init, opened, bye])
+    diag = None
+    for r in rs:
+        if r.get("method") == "textDocument/publishDiagnostics":
+            for d in r["params"]["diagnostics"]:
+                if d.get("code") == code:
+                    diag = d
+    check(f"`{code}` carries a data.fix",
+          diag is not None and (diag.get("data") or {}).get("fix") is not None, f"got {diag}")
+    if diag is None:
+        return
+    ca = {"jsonrpc": "2.0", "id": 5, "method": "textDocument/codeAction",
+          "params": {"textDocument": {"uri": uri}, "range": diag["range"],
+                     "context": {"diagnostics": [diag]}}}
+    rs2 = run_session([init, opened, ca, bye])
+    act = next((r for r in rs2 if r.get("id") == 5), None)
+    actions = (act or {}).get("result") or []
+    titles = [a.get("title") for a in actions]
+    check(f"offers `{want_title}`", any(want_title in (t or "") for t in titles), f"got {titles}")
+    edits = [te.get("newText") for a in actions
+             for grp in (a.get("edit", {}).get("changes", {}) or {}).values() for te in grp]
+    check(f"fix newText is {want_newtext!r}", want_newtext in edits, f"got {edits}")
+
+# Missing `;` -> `expected-semicolon` code + an "Insert `;`" quick fix.
+case_diagnostics("missing semicolon yields expected-semicolon code",
+    'fn main() -> i32 {\n    let x: i32 = 5\n    return x;\n}\n',
+    expect_codes_present=["expected-semicolon"])
+_insert_fix_test("semicolon insert fix",
+    'fn main() -> i32 {\n    let x: i32 = 5\n    return x;\n}\n',
+    "expected-semicolon", "Insert `;`", ";")
+# Unnecessary `mut` -> a "Remove `mut`" quick fix that deletes `mut `.
+_insert_fix_test("unnecessary-mut remove fix",
+    'fn main() -> i32 {\n    let mut y: i32 = 3;\n    return y;\n}\n',
+    "unnecessary-mut", "Remove `mut`", "")
+
 # ---- import path completion (packages + submodules) ----
 
 case_completion_has("import lists the net package (dir, no top-level file)",
@@ -1753,6 +1860,27 @@ case_completion_project("non-pub sibling decl stays hidden (import present)",
      "src/main.glide": 'import util::{shown};\nfn main() {\n    let b = hid\n}\n'},
     "src/main.glide", {"line":2,"character":15},
     absent=["hidden"])
+
+# --- cross-file member completion respects field privacy ---
+# `client.` from another file must offer the `pub` field + the method, but NOT
+# the private field (reading it cross-file is a hard error).
+_PRIV = ('pub struct Client {\n    pub name: string,\n    secret: string,\n}\n\n'
+         'impl Client {\n    pub fn reveal(self: *Client) -> string { return self.secret; }\n}\n')
+case_completion_project("cross-file member completion hides private field",
+    {"glide.glide": PROJ_MANIFEST, "src/core.glide": _PRIV,
+     "src/main.glide": 'import core;\nfn use_it(c: *core::Client) -> string {\n    c.\n}\n'},
+    "src/main.glide", {"line":2,"character":6},
+    present=["name", "reveal"], absent=["secret"])
+# Same-file access still offers the private field (in-file completion).
+case_completion_has("same-file member completion offers private field",
+    'struct Client {\n    pub name: string,\n    secret: string,\n}\n'
+    'fn use_it(c: *Client) -> string {\n    return c.\n}\n',
+    {"line":5,"character":13}, ["name", "secret"])
+# Reading a private field cross-file is now a hard error, not a warning.
+case_diagnostics_project("cross-file private field access is an error",
+    {"glide.glide": PROJ_MANIFEST, "src/core.glide": _PRIV,
+     "src/main.glide": 'import core;\nfn use_it(c: *core::Client) -> string {\n    return c.secret;\n}\n'},
+    "src/main.glide", present=["private-field"])
 
 
 # ---- workflow-authored comprehensive cases (regression-suite-buildout) ----
@@ -1895,6 +2023,35 @@ case_hover_has("hover_bar_make",
   'struct Foo { pub a: i32 }\nimpl Foo { fn make(self) -> i32 { return 1; } }\nstruct Bar { pub b: i32 }\nimpl Bar { fn make(self) -> i32 { return 2; } }\nfn main() {\n  let b: Bar = Bar { b: 0 };\n  let x = Bar::make(b);\n}\n',
   {"line":6,"character":15},
   "impl Bar")
+
+# ---- `Self` inside an impl resolves to the concrete implementor ----
+# Completion inside `Self { … }` offers the implementor's fields; hover and
+# goto-def on `Self` (both `-> Self` and `Self { }`) resolve to the struct.
+SELF_BODY = ('pub struct Client {\n'
+             '    token: string,\n'
+             '}\n'
+             '\n'
+             'impl Client {\n'
+             '    pub fn new(token: string) -> Self {\n'
+             '        return Self {\n'
+             '            token: token\n'
+             '        };\n'
+             '    }\n'
+             '}\n')
+case_completion_has("Self literal offers implementor fields", SELF_BODY,
+  {"line":7,"character":12}, ["token"])
+case_hover_has("hover Self (return type) resolves to implementor", SELF_BODY,
+  {"line":5,"character":33}, "Client")
+case_hover_has("hover Self (literal) resolves to implementor", SELF_BODY,
+  {"line":6,"character":16}, "Client")
+case_definition_line("goto Self (return type) jumps to struct", SELF_BODY,
+  {"line":5,"character":33}, 0)
+case_definition_line("goto Self (literal) jumps to struct", SELF_BODY,
+  {"line":6,"character":16}, 0)
+# `Self` outside any impl keeps the generic keyword card (no false resolution).
+case_hover_has("hover Self outside impl keeps keyword doc",
+  'fn f() -> Self {\n    return 0;\n}\n',
+  {"line":0,"character":11}, "implementing type")
 
 
 # ---- workflow-authored 'unused / dead / redundant' lint cases ----

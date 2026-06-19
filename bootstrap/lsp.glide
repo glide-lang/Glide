@@ -1240,7 +1240,7 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
         proc_attrs: no_str_v, proc_derives: no_str_v, proc_macros: no_str_v,
     };
     state.docs.insert(uri, doc);
-    if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
+    if !prev_text.eq("") { c_raw! { free(((char*)(prev_text )) - 4); } }   /* SDS: free the header base, not the data ptr */
     // Refresh project_index when the user opens a doc from a different
     // Glide project. Walks up from the file's directory looking for a
     // `glide.glide` manifest; populates symbols from the project's own
@@ -1347,7 +1347,7 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
         proc_attrs: no_str_v2, proc_derives: no_str_v2, proc_macros: no_str_v2,
     };
     state.docs.insert(uri, doc);
-    if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
+    if !prev_text.eq("") { c_raw! { free(((char*)(prev_text )) - 4); } }   /* SDS: free the header base, not the data ptr */
     // Overlay the live text into the dep cache so other open files see this
     // edit, then re-publish diagnostics for every open doc (cross-file).
     _lsp_cache_doc(state, uri_to_path(uri), text);
@@ -1367,7 +1367,7 @@ fn handle_did_close(req: *JsonValue, state: *LspState) {
     }
     state.docs.remove(uri);
     if prev_arena3 != null { __glide_palloc_free(prev_arena3); }
-    if !prev_text.eq("") { c_raw! { free((char*)(prev_text )); } }
+    if !prev_text.eq("") { c_raw! { free(((char*)(prev_text )) - 4); } }   /* SDS: free the header base, not the data ptr */
     // Clear diagnostics for this URI.
     let p: *JsonValue = json_object();
     json_obj_set(p, "uri", json_string(uri));
@@ -2673,17 +2673,27 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
     } else if s.let_value != null {
         let e: *Expr = s.let_value;
         if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH {
-            // `Generic::new()` form. Try to resolve the type-param by walking
-            // subsequent uses of `s.name` in the host fn's body.
+            // `Type::new()` form. For a GENERIC type, show the type argument
+            // (resolved from a later use of `s.name`, or `?` when it can't be
+            // pinned down). For a NON-generic type there are no type arguments,
+            // so render `*Type` without a spurious `<?>`.
             let gen_name: string = e.lhs.str_val;
-            let mut t_str: string = "?";
             let imp: *Stmt = find_generic_impl(stmts, gen_name);
-            if imp != null && host != null && host.fn_body != null {
-                let r: *Type = walk_constraint_in_body(stmts, host, host.fn_body, s.name,
-                                                       imp.impl_methods, imp.type_params);
-                if r != null { t_str = type_to_string_pretty(r); }
+            // `find_generic_impl` matches any impl by name, so check that the
+            // type actually HAS type parameters before rendering `<...>`.
+            let is_generic: bool = imp != null && imp.type_params != null
+                                   && imp.type_params.len() > 0;
+            if is_generic {
+                let mut t_str: string = "?";
+                if host != null && host.fn_body != null {
+                    let r: *Type = walk_constraint_in_body(stmts, host, host.fn_body, s.name,
+                                                           imp.impl_methods, imp.type_params);
+                    if r != null { t_str = type_to_string_pretty(r); }
+                }
+                header = header.concat(": *").concat(gen_name).concat("<").concat(t_str).concat(">");
+            } else {
+                header = header.concat(": *").concat(gen_name);
             }
-            header = header.concat(": *").concat(gen_name).concat("<").concat(t_str).concat(">");
             inferred = true;
         } else if e.kind == EX_INT    { header = header.concat(": i32"); inferred = true; }
         else if e.kind == EX_FLOAT  { header = header.concat(": f64"); inferred = true; }
@@ -3051,6 +3061,15 @@ fn handle_semantic_tokens(req: *JsonValue, state: *LspState) {
         let mut sem: i32 = -1;
         if t.kind == TOK_KEYWORD {
             sem = SEMTOK_KEYWORD;
+            // `new` is a contextual keyword: the `new T { }` heap-alloc form is
+            // a real keyword, but it's overwhelmingly the constructor method
+            // name (`Vector::new()`, `fn new`, `Self::new`). Color it as a
+            // function/method when it sits in name position so it doesn't read
+            // as a control-flow keyword.
+            if t.lexeme.eq("new") {
+                let nm: i32 = _semtok_classify(toks, i, n, type_names, host);
+                if nm == SEMTOK_FUNCTION || nm == SEMTOK_METHOD { sem = nm; }
+            }
         } else if t.kind == TOK_IDENT {
             // Refresh the enclosing fn once per line so param detection is
             // cheap; only the plain-ident path actually reads `host`.
@@ -3916,6 +3935,35 @@ fn handle_hover(req: *JsonValue, state: *LspState) {
     let mut decl: *Stmt = null;
     let mut content: string = "";
 
+    // `Self` inside an impl/trait method: resolve to the concrete implementor
+    // and show its struct card with a note, instead of the generic keyword
+    // blurb. Falls through to `keyword_doc` outside any impl.
+    if word.eq("Self") {
+        let self_ty: string = enclosing_impl_target_name(doc.stmts, line0, uri_to_path(uri));
+        if !self_ty.eq("") {
+            let sd: *Stmt = find_top_decl(doc.stmts, self_ty);
+            let mut card: string = "";
+            if sd != null && sd.kind == ST_STRUCT {
+                card = "```glide\nstruct ".concat(sd.name);
+                if sd.struct_fields != null && sd.struct_fields.len() > 0 {
+                    card = card.concat(" {\n");
+                    for let fi: i32 = 0; fi < sd.struct_fields.len(); fi++ {
+                        let f: Field = sd.struct_fields.get(fi);
+                        card = card.concat("    ");
+                        if f.is_pub { card = card.concat("pub "); }
+                        card = card.concat(f.name).concat(": ").concat(type_to_string_pretty(f.ty)).concat(",\n");
+                    }
+                    card = card.concat("}");
+                }
+                card = card.concat("\n```");
+            } else {
+                card = "```glide\ntype Self = ".concat(self_ty).concat("\n```");
+            }
+            content = card.concat("\n\n---\n\n`Self` refers to `").concat(self_ty)
+                          .concat("`, the type this `impl` is for.");
+        }
+    }
+
     // Proc-macro name inside `@derive(Name)` / `@Name(...)` / `@Name`:
     // resolve via the registry of fns wearing `@proc_<kind>(Name)`. Has
     // to run before `find_top_decl(word)` because the registered name
@@ -4701,6 +4749,13 @@ fn handle_definition(req: *JsonValue, state: *LspState) {
         }
     }
 
+    // 6b) `Self` inside an impl/trait method jumps to the implementor type's
+    //     declaration.
+    if decl == null && word.eq("Self") {
+        let self_ty: string = enclosing_impl_target_name(doc.stmts, line0, uri_to_path(uri));
+        if !self_ty.eq("") { decl = find_top_decl(doc.stmts, self_ty); }
+    }
+
     // 7) Last resort: any top-level decl with the right name (fn, struct,
     //    enum, const, trait, macro).
     if decl == null { decl = find_top_decl(doc.stmts, word); }
@@ -4939,6 +4994,37 @@ fn fn_containing(stmts: *Vector<Stmt>, line0: i32, path: string) -> *Stmt {
             let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *p = s;
             best = p;
+        }
+    }
+    return best;
+}
+
+// Resolve the type name of the `impl` block whose method signature or body
+// contains `line0`, so `Self` can be expanded to its concrete implementor for
+// hover / goto-def / struct-literal completion. Mirrors `fn_containing`: pick
+// the method with the greatest start line that still precedes the cursor, and
+// return its owning impl's target name. Returns "" when the cursor isn't inside
+// any impl method.
+fn enclosing_impl_target_name(stmts: *Vector<Stmt>, line0: i32, path: string) -> string {
+    if stmts == null { return ""; }
+    let mut best: string = "";
+    let mut best_line: i32 = -1;
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPL || s.impl_methods == null || s.impl_target == null { continue; }
+        let mut tn: string = "";
+        if s.impl_target.kind == TY_NAMED { tn = s.impl_target.name; }
+        if s.impl_target.kind == TY_GENERIC { tn = s.impl_target.name; }
+        if tn.eq("") { continue; }
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind != ST_FN { continue; }
+            if !path.eq("") && m.origin != null && !m.origin.eq("") && !m.origin.eq(path) { continue; }
+            let start: i32 = m.line - 1;
+            if start <= line0 && start > best_line {
+                best_line = start;
+                best = tn;
+            }
         }
     }
     return best;
@@ -6891,7 +6977,7 @@ fn _doc_val_option(inner: string) -> string {
     return "the contained value (`".concat(inner).concat("`).\n\nValid only when `.has` is `true`. Guard with `if x.has { ... }`, or unwrap with `?`.\n\n```glide\nlet n: i32 = maybe_index()?;   // the value, or returns none\n```");
 }
 
-fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValue, seen: *HashMap<bool>) {
+fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValue, seen: *HashMap<bool>, current_path: string) {
     if ty == null { return; }
     let x: *Type = _strip_ptr_borrow(ty);
     if x == null { return; }
@@ -6917,7 +7003,17 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
         return;
     }
     if x.kind == TY_NAMED || x.kind == TY_GENERIC {
-        list_fields_for_type(stmts, x.name, items, seen, false);
+        // Cross-file, only `pub` fields are reachable (reading a private field
+        // from another file is a hard error), so don't offer the private ones.
+        // Same-file (the struct's own origin) offers every field. Methods carry
+        // no enforced privacy here (stdlib methods aren't `pub`), so they're
+        // listed unfiltered.
+        let mut fpub_only: bool = false;
+        let sd: *Stmt = find_top_decl(stmts, x.name);
+        if sd != null && sd.kind == ST_STRUCT {
+            fpub_only = sd.origin != null && !sd.origin.eq(current_path);
+        }
+        list_fields_for_type(stmts, x.name, items, seen, fpub_only);
         list_methods_for_type(stmts, x.name, items, seen, true);
         _list_primitive_methods(x.name, items, seen);
         list_chan_methods_for_type(x.name, items, seen);
@@ -7708,7 +7804,13 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     // on the name resolving to a real struct so a block body (`if c { ` etc.)
     // never gets hijacked — there we fall through to ordinary completion.
     let slit_present: *HashMap<bool> = HashMap::new();
-    let slit_name: string = _struct_lit_ctx(doc.text, line0, col0, slit_present);
+    let mut slit_name: string = _struct_lit_ctx(doc.text, line0, col0, slit_present);
+    // `Self { … }` inside an impl method names the implementor type. Expand it
+    // so field completion resolves against the concrete struct.
+    if slit_name.eq("Self") {
+        let self_ty: string = enclosing_impl_target_name(doc.stmts, line0, uri_to_path(uri));
+        if !self_ty.eq("") { slit_name = self_ty; }
+    }
     if !slit_name.eq("") {
         let mut slit_sd: *Stmt = find_top_decl(doc.stmts, slit_name);
         let mut fstmts: *Vector<Stmt> = doc.stmts;
@@ -7849,7 +7951,7 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
             // still carries them, so `v.push_a` can offer `push_all!`.
             let mut mstmts: *Vector<Stmt> = doc.stmts;
             if doc.pre_expand_stmts != null { mstmts = doc.pre_expand_stmts; }
-            _list_members_for_type_node(recv_ty, mstmts, items, seen);
+            _list_members_for_type_node(recv_ty, mstmts, items, seen, uri_to_path(uri));
         }
         seen.free();
         lsp_send_response(id, items);
@@ -9195,6 +9297,11 @@ fn _code_action_title(code: string, new_text: string) -> string {
     if code.eq("wrap-ok")   { return "Wrap in `ok(...)`"; }
     if code.eq("unused-result") { return "Propagate with `?`"; }
     if code.eq("for-in-not-iterable") { return "Wrap in a range `0..`"; }
+    if code.eq("unknown-type") || code.eq("unknown-name")
+       || code.eq("unknown-function") || code.eq("no-field") {
+        return "Change to `".concat(new_text).concat("`");
+    }
+    if code.eq("expected-semicolon") { return "Insert `;`"; }
     if new_text.eq("") { return "Apply fix (delete)"; }
     return "Apply fix";
 }
@@ -9986,8 +10093,11 @@ fn check_mut_body(t: *Typer, body: *Vector<Stmt>) {
                 if stmt_reassigns(&s2, s.name) { reassigned = true; break; }
             }
             if !reassigned {
-                t.warn_range(s.name_line, s.name_col, s.name.len(), "unnecessary-mut",
-                    "`mut` on `".concat(s.name).concat("` is unnecessary; binding is never reassigned"));
+                // Quick fix: delete the `mut ` keyword (the 4 chars immediately
+                // before the binding name in `let mut name`).
+                t.warn_with_fix(s.name_line, s.name_col, s.name.len(), "unnecessary-mut",
+                    "`mut` on `".concat(s.name).concat("` is unnecessary; binding is never reassigned"),
+                    s.name_line, s.name_col - 4, s.name_line, s.name_col, "");
             }
         }
         if s.then_body != null { check_mut_body(t, s.then_body); }
@@ -13364,7 +13474,7 @@ pub fn lsp_main() -> i32 {
             // them now and free them when they overwrite the slot.
             json_free(req);
         }
-        c_raw! { if (raw  !=  NULL) free((char*)(raw )); }
+        c_raw! { if (raw  !=  NULL) free(((char*)(raw )) - 4); }   /* SDS header base */
         if should_exit { break; }
     }
     _lsp_log("--- lsp shutdown ---");
