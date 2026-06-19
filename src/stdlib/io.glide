@@ -16,6 +16,10 @@ c_raw! {
     #ifdef GLIDE_IO_VIA_CRAW
     #ifndef GLIDE_IO_HELPERS_DEFINED
     #define GLIDE_IO_HELPERS_DEFINED
+    /* Present in every runtime generation; declared here so read_bytes can build
+       the managed string through it without naming the SDS allocator directly
+       (an older bootstrap compiler's embedded runtime predates that helper). */
+    extern const char* __glide_string_from_buf(void* buf, int n);
     #ifdef _WIN32
     #include <fcntl.h>
     #define __glide_dup _dup
@@ -53,15 +57,17 @@ c_raw! {
         return buf;
     }
     static const char* __glide_read_bytes(int n) {
-        /* Return a managed (headered) SDS string directly so the caller frees it
-           at its allocation base (ptr-4). It is excluded from the codegen
-           adopt-wrap (which would otherwise copy it — leaking this buffer and
-           strlen-truncating binary data at the first NUL). */
-        if (n <= 0) return __glide_str_alloc(0);
-        char* out = (char*)__glide_str_alloc(n);
-        size_t got = fread(out, 1, (size_t)n, stdin);
-        out[got] = 0;
-        if ((int)got != n) __glide_str_hdr_set(out - 4, (int)got);
+        /* Read into a scratch buffer, then hand the exact byte count to
+           __glide_string_from_buf, which materializes a managed string (headered
+           in current runtimes). Going through from_buf instead of the SDS
+           allocator keeps this compilable by an older bootstrap compiler. It is
+           excluded from the codegen adopt-wrap (from_buf is already managed). */
+        if (n <= 0) return __glide_string_from_buf((void*)"", 0);
+        char* tmp = (char*)malloc((size_t)n);
+        if (tmp == 0) return __glide_string_from_buf((void*)"", 0);
+        size_t got = fread(tmp, 1, (size_t)n, stdin);
+        const char* out = __glide_string_from_buf((void*)tmp, (int)got);
+        free(tmp);
         return out;
     }
     static void __glide_write_str(const char* s) { fputs(s, stdout); }
