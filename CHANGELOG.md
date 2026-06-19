@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.1 — 2026-06-19
+
+Strings carry a length header (O(1) `.len()`), string building is O(n), several
+language ergonomics land, the C seed is gone, and the editor tooling caught up.
+
+### Strings (SDS)
+
+- `string` now stores a 4-byte length header immediately before the data; the
+  value still points at the NUL-terminated bytes, so C FFI is unchanged. `.len()`
+  is O(1) and `concat`/`eq` no longer call `strlen`. Multi-byte UTF-8 length is
+  the byte length, same as before.
+
+### Performance
+
+- `ByteBuffer` gained `to_string()` / `push_int`, and the pervasive
+  `out = out.concat(x)` folds in the formatter, JSON serialiser and string/env
+  helpers were rewritten as single-allocation builders — O(n) instead of O(n²).
+
+### Language
+
+- Compound assignment operators: `%= &= |= ^= <<= >>=` (joining `+= -= *= /=`).
+- `if let some/ok/err/none(x) = e { ... }` binding form.
+- `Self` is usable inside `impl` bodies (struct literals, `Self::`, casts).
+- Cross-file reads of a private struct field are now a hard error.
+- Generic structs used only as a field/element type of another generic struct
+  now monomorphize (e.g. `Holder<T>` with a `*Cell<T>` field, including
+  `Cell<T>` storing `value: T` by value).
+
+### Diagnostics
+
+- "Did you mean" suggestions on unknown types/names/functions/fields, offered as
+  one-click fixes, plus a help catalogue keyed by diagnostic code.
+
+### Stdlib
+
+- Vector `remove`/`insert`/`sort_by`/`enumerate` plus specialized
+  `contains`/`index_of`/`sort`; HashMap `get_or`/`insert_if_absent`; String
+  `reverse`/`pad`/`strip`/`lines`/`count`.
+
+### Bootstrap
+
+- Removed the checked-in `bootstrap/seed/bootstrap.c`. Glide is self-hosting, so
+  CI/release/`DEVELOPING.md` now bootstrap by downloading a published release
+  binary and building the current sources with it.
+
+### Tooling / LSP
+
+- The contextual `new` keyword (the constructor method name in `Vector::new()` /
+  `fn new` / `Self::new`) is now colored as a function, not a control keyword, in
+  semantic tokens and the tree-sitter grammar.
+- The VS Code extension resolves the `glide` binary from `~/.glide/bin` when it
+  isn't on PATH (GUI apps don't inherit the shell PATH on Windows), and reports
+  an error instead of failing silently. Both editor extensions bumped to 0.4.1.
+
 ## 0.4.0 — 2026-06-17
 
 Networking + string/byte ergonomics. **Breaking:** the server-side `Listener` /
