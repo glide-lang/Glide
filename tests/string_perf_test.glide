@@ -1,0 +1,57 @@
+// Correctness guard for the string methods rewritten to a single-allocation
+// builder (no behavior change vs the old O(n^2) concat folds): string.replace
+// / to_upper / to_lower / repeat / reverse, and Vector<string>.join / concat.
+import stdlib::strings::*;
+
+fn test_replace() -> i32 {
+    assert_str_eq!("aXbXc".replace("X", "--"), "a--b--c");   // grow
+    assert_str_eq!("hello".replace("l", "L"), "heLLo");       // same length
+    assert_str_eq!("aaa".replace("aa", "b"), "ba");           // non-overlapping
+    assert_str_eq!("abc".replace("z", "Q"), "abc");           // no match
+    assert_str_eq!("xx".replace("x", ""), "");                // delete (shrink)
+    assert_str_eq!("".replace("a", "b"), "");
+    assert_str_eq!("a/b/c".replace("/", "\\"), "a\\b\\c");
+    return 0;
+}
+
+fn test_case() -> i32 {
+    assert_str_eq!("Hello, World!".to_upper(), "HELLO, WORLD!");
+    assert_str_eq!("Hello, World!".to_lower(), "hello, world!");
+    assert_str_eq!("".to_upper(), "");
+    assert_str_eq!("123-abc-XYZ".to_upper(), "123-ABC-XYZ");
+    assert_str_eq!("123-abc-XYZ".to_lower(), "123-abc-xyz");
+    return 0;
+}
+
+fn test_repeat() -> i32 {
+    assert_str_eq!("ab".repeat(3), "ababab");
+    assert_str_eq!("-".repeat(5), "-----");
+    assert_str_eq!("x".repeat(0), "");
+    assert_str_eq!("y".repeat(-2), "");
+    assert_str_eq!("".repeat(4), "");
+    return 0;
+}
+
+fn test_reverse() -> i32 {
+    assert_str_eq!("abc".reverse(), "cba");
+    assert_str_eq!("racecar".reverse(), "racecar");
+    assert_str_eq!("áé".reverse(), "éá");          // multi-byte codepoints preserved
+    assert_str_eq!("héllo".reverse().reverse(), "héllo");
+    assert_str_eq!("".reverse(), "");
+    return 0;
+}
+
+fn test_vec_join_concat() -> i32 {
+    let v: *Vector<string> = Vector::new();
+    defer v.free();
+    v.push_all!("a", "b", "c");
+    assert_str_eq!(v.join(", "), "a, b, c");
+    assert_str_eq!(v.join(""), "abc");
+    assert_str_eq!(v.concat(), "abc");
+    assert_str_eq!(string_join(v, "+"), "a+b+c");
+    let e: *Vector<string> = Vector::new();
+    defer e.free();
+    assert_str_eq!(e.join(","), "");
+    assert_str_eq!(e.concat(), "");
+    return 0;
+}

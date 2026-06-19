@@ -9,19 +9,6 @@
 /// string_join(v, "");     // "abc"
 /// ```
 pub fn string_join(parts: *Vector<string>, sep: string) -> string {
-    let n: i32 = parts.len();
-    if n == 0 {
-        return "";
-    }
-    if n == 1 {
-        return parts.get(0);
-    }
-
-    let mut out: string = parts.get(0);
-    let mut i: i32 = 1;
-    while i < n {
-        out = out.concat(sep).concat(parts.get(i));
-        i = i + 1;
-    }
-    return out;
+    // Delegate to the O(n) `Vector<string>::join` (single-allocation builder).
+    return parts.join(sep);
 }

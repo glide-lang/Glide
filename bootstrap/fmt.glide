@@ -15,6 +15,7 @@
 // is the next iteration.
 
 import ast;
+import stdlib::bytes::*;     // ByteBuffer — O(n) string building (vs concat folds)
 
 const FMT_INDENT: string = "    ";
 
@@ -116,6 +117,9 @@ fn fmt_binop(op: i32) -> string {
     if op == OP_ASSIGN { return "="; }
     if op == OP_PLUS_ASSIGN { return "+="; } if op == OP_MINUS_ASSIGN { return "-="; }
     if op == OP_STAR_ASSIGN { return "*="; } if op == OP_SLASH_ASSIGN { return "/="; }
+    if op == OP_PERCENT_ASSIGN { return "%="; } if op == OP_BITAND_ASSIGN { return "&="; }
+    if op == OP_BITOR_ASSIGN { return "|="; } if op == OP_BITXOR_ASSIGN { return "^="; }
+    if op == OP_SHL_ASSIGN { return "<<="; } if op == OP_SHR_ASSIGN { return ">>="; }
     return "?";
 }
 
@@ -416,6 +420,27 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         }
         return out.concat(pad).concat("}\n");
     }
+    if s.kind == ST_IF_LET {
+        let mut pat: string = s.name.concat("(");
+        if s.let_names != null && s.let_names.len() > 0 { pat = pat.concat(s.let_names.get(0)); }
+        pat = pat.concat(")");
+        let mut out: string = pad.concat("if let ").concat(pat)
+            .concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
+        if s.then_body != null {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
+                let b: Stmt = s.then_body.get(i);
+                out = out.concat(fmt_stmt(&b, depth + 1));
+            }
+        }
+        if s.else_body != null {
+            out = out.concat(pad).concat("} else {\n");
+            for let i: i32 = 0; i < s.else_body.len(); i++ {
+                let b: Stmt = s.else_body.get(i);
+                out = out.concat(fmt_stmt(&b, depth + 1));
+            }
+        }
+        return out.concat(pad).concat("}\n");
+    }
     if s.kind == ST_WHILE_RECV {
         let mut out: string = pad.concat("while let ").concat(s.name);
         if s.let_ty != null { out = out.concat(": ").concat(fmt_type(s.let_ty)); }
@@ -681,18 +706,21 @@ fn fmt_match(s: *Stmt, depth: i32) -> string {
 // ---- Top level --------------------------------------------------------
 
 pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
-    let mut out: string = "";
+    // Build the whole file in one buffer (O(n)); the old `out = out.concat(...)`
+    // fold re-copied the entire growing file on every statement (O(file^2)).
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
     let mut prev_kind: i32 = -1;
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         // Blank line between top-level decls (but not before the first).
         if i > 0 && needs_blank_line(prev_kind, s.kind) {
-            out = out.concat("\n");
+            b.push_str("\n");
         }
-        out = out.concat(fmt_stmt(&s, 0));
+        b.push_str(fmt_stmt(&s, 0));
         prev_kind = s.kind;
     }
-    return out;
+    return b.to_string();
 }
 
 fn needs_blank_line(prev: i32, curr: i32) -> bool {

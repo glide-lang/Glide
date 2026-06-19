@@ -1,0 +1,34 @@
+// ByteBuffer as the safe O(n) string builder: to_string() returns an
+// independent copy (unlike as_string() which aliases data), and push_int.
+import stdlib::bytes::*;
+
+fn test_to_string_is_independent_copy() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    b.push_str("hello");
+    let s: string = b.to_string();
+    b.push_str(", world");        // mutate the buffer AFTER materializing
+    assert_str_eq!(s, "hello");   // the copy is unaffected
+    assert_str_eq!(b.to_string(), "hello, world");
+    return 0;
+}
+
+fn test_push_int() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    b.push_str("n="); b.push_int(42);
+    b.push_str(" m="); b.push_int(-7);
+    assert_str_eq!(b.to_string(), "n=42 m=-7");
+    return 0;
+}
+
+fn test_build_large() -> i32 {
+    // Build a sizable string via repeated append (the O(n) path).
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    let mut i: i32 = 0;
+    while i < 1000 { b.push_str("ab"); i = i + 1; }
+    let s: string = b.to_string();
+    assert_eq!(s.len(), 2000);
+    return 0;
+}

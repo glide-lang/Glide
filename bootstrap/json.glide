@@ -1,10 +1,12 @@
 import stdlib::hashmap::*;
 import ast;        // for `int_to_str`
+import stdlib::bytes::*;   // ByteBuffer — O(n) serialization (vs concat folds)
 
 // String runtime helpers consumed by the parser/builder. Declared here so
 // `glide check bootstrap/json.glide` resolves them without needing the
 // full driver to be in scope.
 extern fn __glide_string_substring(s: string, start: i32, end: i32) -> string;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 // Minimal JSON — used by the LSP transport (lsp.glide) and by `glide ast`.
 //
@@ -286,7 +288,7 @@ fn jp_string_value(p: *JsonParser) -> *JsonValue {
     // and would leak the size of the source substring per request
     // (165 KB+ for any LSP didChange on a non-trivial file).
     let unescaped: string = jp_unescape(raw);
-    c_raw! { free((char*)(raw )); }
+    c_raw! { free(((char*)(raw )) - 4); }   /* SDS: free the 4-byte header base */
     return json_string(unescaped);
 }
 
@@ -327,10 +329,10 @@ fn jp_unescape(raw: string) -> string {
             o = o + 1;
         }
     }
-    c_raw! { ((char*)(buf ))[(o )] = 0; }
-    let result: string = "";
-    c_raw! { (result ) = (const char*)(buf ); }
-    return result;
+    // Materialize as a managed (headered) string of exactly `o` bytes. Casting
+    // the raw `buf` straight to a string would leave it without the SDS length
+    // header, so `.len()`/concat/eq would read garbage and corrupt the heap.
+    return __glide_string_from_buf(buf, o);
 }
 
 fn jp_bool(p: *JsonParser) -> *JsonValue {
@@ -375,49 +377,70 @@ pub fn json_parse(src: string) -> *JsonValue {
 
 // ---- emitter ------------------------------------------------------------
 
-pub fn json_escape(s: string) -> string {
-    let mut out: string = "\"";
+// Append the JSON-escaped, quoted form of `s` into `b`. The byte-at-a-time
+// concat fold this replaces was O(n^2) and allocated a string per byte — a big
+// JSON blob produced GBs of throwaway strings per LSP response.
+fn json_escape_into(b: *ByteBuffer, s: string) {
+    b.push(34 as u8);                       // opening "
     let n: i32 = s.len();
     for let i: i32 = 0; i < n; i++ {
         let c: i32 = s.at(i).to_int();
-        if c == 34       { out = out.concat("\\\""); }
-        else if c == 92  { out = out.concat("\\\\"); }
-        else if c == 10  { out = out.concat("\\n"); }
-        else if c == 13  { out = out.concat("\\r"); }
-        else if c == 9   { out = out.concat("\\t"); }
-        else if c < 32   { out = out.concat("?"); }
-        else             { out = out.concat(__glide_string_substring(s, i, i + 1)); }
+        if c == 34       { b.push_str("\\\""); }
+        else if c == 92  { b.push_str("\\\\"); }
+        else if c == 10  { b.push_str("\\n"); }
+        else if c == 13  { b.push_str("\\r"); }
+        else if c == 9   { b.push_str("\\t"); }
+        else if c < 32   { b.push(63 as u8); }   // '?'
+        else             { b.push(c as u8); }
     }
-    return out.concat("\"");
+    b.push(34 as u8);                       // closing "
+}
+
+pub fn json_escape(s: string) -> string {
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    json_escape_into(b, s);
+    return b.to_string();
+}
+
+// Serialize the whole value tree into one buffer (O(n)); the old per-node
+// `out = out.concat(...)` folds were O(children^2) at every array/object.
+fn json_emit_into(b: *ByteBuffer, v: *JsonValue) {
+    if v == null { b.push_str("null"); return; }
+    if v.kind == JSON_NULL { b.push_str("null"); return; }
+    if v.kind == JSON_BOOL { if v.b { b.push_str("true"); } else { b.push_str("false"); } return; }
+    if v.kind == JSON_INT { b.push_str(int_to_str(v.i)); return; }
+    if v.kind == JSON_STRING { json_escape_into(b, v.s); return; }
+    if v.kind == JSON_ARRAY {
+        b.push(91 as u8);                   // [
+        let n: i32 = v.arr.len();
+        for let i: i32 = 0; i < n; i++ {
+            if i > 0 { b.push(44 as u8); }  // ,
+            let e: JsonValue = v.arr.get(i);
+            json_emit_into(b, &e);
+        }
+        b.push(93 as u8);                   // ]
+        return;
+    }
+    if v.kind == JSON_OBJECT {
+        b.push(123 as u8);                  // {
+        let n: i32 = v.obj_keys.len();
+        for let i: i32 = 0; i < n; i++ {
+            if i > 0 { b.push(44 as u8); }  // ,
+            json_escape_into(b, v.obj_keys.get(i));
+            b.push(58 as u8);               // :
+            let val: JsonValue = v.obj_vals.get(i);
+            json_emit_into(b, &val);
+        }
+        b.push(125 as u8);                  // }
+        return;
+    }
+    b.push_str("null");
 }
 
 pub fn json_emit(v: *JsonValue) -> string {
-    if v == null { return "null"; }
-    if v.kind == JSON_NULL { return "null"; }
-    if v.kind == JSON_BOOL { if v.b { return "true"; } return "false"; }
-    if v.kind == JSON_INT { return int_to_str(v.i); }
-    if v.kind == JSON_STRING { return json_escape(v.s); }
-    if v.kind == JSON_ARRAY {
-        let mut out: string = "[";
-        let n: i32 = v.arr.len();
-        for let i: i32 = 0; i < n; i++ {
-            if i > 0 { out = out.concat(","); }
-            let e: JsonValue = v.arr.get(i);
-            out = out.concat(json_emit(&e));
-        }
-        return out.concat("]");
-    }
-    if v.kind == JSON_OBJECT {
-        let mut out: string = "{";
-        let n: i32 = v.obj_keys.len();
-        for let i: i32 = 0; i < n; i++ {
-            if i > 0 { out = out.concat(","); }
-            out = out.concat(json_escape(v.obj_keys.get(i)));
-            out = out.concat(":");
-            let val: JsonValue = v.obj_vals.get(i);
-            out = out.concat(json_emit(&val));
-        }
-        return out.concat("}");
-    }
-    return "null";
+    let b: *ByteBuffer = ByteBuffer::new();
+    defer b.free();
+    json_emit_into(b, v);
+    return b.to_string();
 }

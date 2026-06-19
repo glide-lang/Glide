@@ -4,6 +4,10 @@
 // trigger.
 
 extern fn realloc(p: *void, n: usize) -> *void;
+// Copy `n` bytes into one fresh, NUL-terminated, arena-managed string. Lets
+// `to_string` hand back a string that is independent of (and outlives) the
+// buffer's own storage.
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 pub struct ByteBuffer {
     /// Raw byte storage. Public for binary protocols (HTTP/2, TLS,
@@ -116,10 +120,11 @@ impl ByteBuffer {
     /// ```
     pub fn clear(self: *ByteBuffer) { self.len = 0; }
 
-    /// Borrow the buffer as a NUL-terminated string. Mutates `self` to
-    /// install the trailing NUL — pushing more bytes after this overwrites
-    /// the terminator silently. The returned string aliases `self.data`,
-    /// so it stays valid until the next `push` / `clear` / `free`.
+    /// Materialize the buffer as a string (a fresh, independent copy). Alias
+    /// for `to_string`. (Historically this aliased `self.data`, but a raw
+    /// buffer pointer isn't a valid managed string — it has no length header —
+    /// so string operations like `.len()` / `.eq` would misbehave. It now
+    /// always copies, like `to_string`.)
     ///
     /// ```glide
     /// let b: *ByteBuffer = ByteBuffer::new();
@@ -129,9 +134,32 @@ impl ByteBuffer {
     /// println!(b.as_string());   // "hello, world"
     /// ```
     pub fn as_string(self: *ByteBuffer) -> string {
-        self.ensure(self.len + 1);
-        self.data[self.len] = 0 as u8;
-        return self.data as string;
+        return __glide_string_from_buf(self.data as *void, self.len);
+    }
+
+    /// Materialize the buffer into a fresh, independent string (one copy).
+    /// Unlike `as_string` (which aliases `data`), the result is safe to keep
+    /// after the buffer is mutated or freed — so this is the right way to
+    /// finish building a string. O(n) once, instead of the O(n^2) you'd get
+    /// from an `out = out.concat(...)` fold.
+    ///
+    /// ```glide
+    /// let b: *ByteBuffer = ByteBuffer::new();
+    /// defer b.free();
+    /// for word in words { b.push_str(word); b.push(32 as u8); }
+    /// let line: string = b.to_string();   // independent copy
+    /// ```
+    pub fn to_string(self: *ByteBuffer) -> string {
+        return __glide_string_from_buf(self.data as *void, self.len);
+    }
+
+    /// Append the decimal text of an integer (any width promotes to `i64`).
+    ///
+    /// ```glide
+    /// b.push_str("count="); b.push_int(42);   // "count=42"
+    /// ```
+    pub fn push_int(self: *ByteBuffer, n: i64) {
+        self.push_str(n.to_string());
     }
 
     /// Build a fresh buffer holding the bytes of `s` (no trailing NUL).
