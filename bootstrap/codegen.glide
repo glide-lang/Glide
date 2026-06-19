@@ -6812,8 +6812,11 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
         if !g.emitted_monos.contains(mangled) {
             g.emitted_monos.insert(mangled, true);
             println!("typedef struct ", mangled, " ", mangled, ";");
-            emit_struct_mono(g, &t);
         }
+        // Always emit the body (self-dedups via the __body marker). Nested
+        // monos forward-declared by emit_struct_mono set `mangled` early but
+        // defer their body here, after the concrete struct bodies.
+        emit_struct_mono(g, &t);
     }
     // Tuple typedefs reachable from monomorphized generic fns. The template's
     // `(T, ...)` types are skipped by the program-wide tuple passes (T isn't
@@ -7132,6 +7135,36 @@ fn emit_struct_mono(g: *CG, t: *Type) {
     let body_key: string = mangled.concat("__body");
     if g.emitted_monos.contains(body_key) { return; }
     g.emitted_monos.insert(body_key, true);
+    // A substituted field may reference another generic-struct mono — e.g.
+    // HashMap<V>'s `*_HmSlot<V>` field becomes `*_HmSlot<Stmt>`. That nested
+    // mono is never reached by the program-wide collection (it skips generic
+    // templates). Forward-declare its typedef now so this struct's body can
+    // name the pointer, and queue its body for the drain — which runs after
+    // the concrete struct bodies, so a by-value `value: V` field sees the
+    // full definition of V.
+    if template.struct_fields != null && template.type_params != null {
+        for let fi: i32 = 0; fi < template.struct_fields.len(); fi++ {
+            let ff: Field = template.struct_fields.get(fi);
+            let fsub: *Type = subst_type(ff.ty, template.type_params, t.args);
+            let uses: *Vector<Type> = Vector::new();
+            collect_generic_uses_in_type(fsub, uses);
+            for let ui: i32 = 0; ui < uses.len(); ui++ {
+                let u: Type = uses.get(ui);
+                if g.generic_structs.contains(u.name) {
+                    let um: string = mangle_generic(u.name, u.args);
+                    if !g.emitted_monos.contains(um) {
+                        g.emitted_monos.insert(um, true);
+                        println!("typedef struct ", um, " ", um, ";");
+                    }
+                    if !g.emitted_monos.contains(um.concat("__queued")) {
+                        g.emitted_monos.insert(um.concat("__queued"), true);
+                        g.struct_mono_queue.push(u);
+                    }
+                }
+            }
+            uses.free();
+        }
+    }
     println!("struct ", mangled, " {");
     if template.struct_fields != null && template.type_params != null {
         for let i: i32 = 0; i < template.struct_fields.len(); i++ {

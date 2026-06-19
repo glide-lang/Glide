@@ -1,0 +1,35 @@
+// A generic struct used only as a field/element type of another generic
+// struct (here `Box<T>` inside `Holder<T>`, by pointer; and `Cell<T>` storing
+// `value: T` by value) is now monomorphized: the compiler forward-declares the
+// nested mono's typedef and emits its body in the drain pass, after the
+// concrete type it embeds. Previously this errored with `unknown type` /
+// `incomplete type`.
+
+struct Cell<T> { tag: string, value: T }
+struct Holder<T> { cells: *Cell<T> }
+struct Point { x: i32, y: i32 }
+
+fn test_by_value_struct() -> i32 {
+    let h: *Holder<Point> = malloc(sizeof(Holder<Point>)) as *Holder<Point>;
+    h.cells = malloc(4 * sizeof(Cell<Point>)) as *Cell<Point>;
+    h.cells[0].tag = "a";
+    h.cells[0].value.x = 7;
+    h.cells[0].value.y = 9;
+    assert_eq!(h.cells[0].tag.eq("a"), true);
+    assert_eq!(h.cells[0].value.x, 7);
+    assert_eq!(h.cells[0].value.y, 9);
+    free(h.cells as *void);
+    free(h as *void);
+    return 0;
+}
+
+fn test_by_value_scalar() -> i32 {
+    let h: *Holder<i32> = malloc(sizeof(Holder<i32>)) as *Holder<i32>;
+    h.cells = malloc(4 * sizeof(Cell<i32>)) as *Cell<i32>;
+    h.cells[0].tag = "n";
+    h.cells[0].value = 42;
+    assert_eq!(h.cells[0].value, 42);
+    free(h.cells as *void);
+    free(h as *void);
+    return 0;
+}
