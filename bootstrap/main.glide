@@ -442,6 +442,8 @@ fn print_usage() {
     println!("       --release  strip + optimize the final binary");
     println!("       --tiny     minimal hosted build: drop the M:N runtime when unused (implies --release)");
     println!("       --no-std   freestanding/kernel build: no libc, no runtime, no main wrapper");
+    println!("       --cflag=X / --ldflag=X  forward X to the C compiler / linker (repeatable)");
+    println!("       --opt=N / --lto / --static / --march=X  common cc-flag shortcuts");
     println!("  glide run <file>");
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
@@ -1206,7 +1208,7 @@ fn run_install(argc: i32) -> i32 {
 
     // Build straight to the install path. Saves a copy step and keeps
     // the spinner's progress output coherent.
-    let rc: i32 = run_build(bin_src, final_path, "", false, false, false, false);
+    let rc: i32 = run_build(bin_src, final_path, "", false, false, false, false, "", "");
     if rc != 0 { return rc; }
 
     // Compiler-style installs ship a `src/` tree alongside the binary
@@ -2434,14 +2436,33 @@ fn _target_remove(triple: string) -> i32 {
     return 0;
 }
 
-fn run_build(src_path: string, out_path: string, target: string, then_run: bool, release: bool, tiny: bool, no_std: bool) -> i32 {
-    return run_build_q(src_path, out_path, target, then_run, false, release, tiny, no_std);
+// Join two flag fragments with a single space, dropping empties so the cc
+// command never gets a stray/leading/double space. Used to accumulate user
+// cflags/ldflags from the CLI, $GLIDE_*FLAGS, and the manifest.
+fn _append_flag(acc: string, f: string) -> string {
+    if f.eq("") { return acc; }
+    if acc.eq("") { return f; }
+    return acc.concat(" ").concat(f);
+}
+
+// Space-join a *Vector<string> of flags (null/empty tolerant) via _append_flag.
+fn _join_flags(v: *Vector<string>) -> string {
+    if v == null { return ""; }
+    let mut out: string = "";
+    for let i: i32 = 0; i < v.len(); i++ {
+        out = _append_flag(out, v.get(i));
+    }
+    return out;
+}
+
+fn run_build(src_path: string, out_path: string, target: string, then_run: bool, release: bool, tiny: bool, no_std: bool, cli_cflags: string, cli_ldflags: string) -> i32 {
+    return run_build_q(src_path, out_path, target, then_run, false, release, tiny, no_std, cli_cflags, cli_ldflags);
 }
 
 // Same as `run_build` but with a `quiet` knob — the test / golden
 // runners drive lots of builds in a row and the spinner-per-build
 // would flood the log in non-TTY mode (no in-place redraw).
-fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool, release: bool, tiny: bool, no_std: bool) -> i32 {
+fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool, release: bool, tiny: bool, no_std: bool, cli_cflags: string, cli_ldflags: string) -> i32 {
     // 0. Auto-fetch missing git deps from the project's glide.glide
     //    before we start parsing anything. No-op when there's no manifest.
     auto_fetch_for(src_path);
@@ -2454,6 +2475,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // also declare it (`kind: "kernel"` / `freestanding: true`).
     let mut freestanding: bool = no_std;
     let mut link_script: string = "";
+    let mut manifest_cflags: string = "";
+    let mut manifest_ldflags: string = "";
     let _mroot: string = find_manifest_root(parent_dir(src_path));
     if !_mroot.eq("") {
         let _m: *Manifest = read_manifest(_mroot);
@@ -2462,8 +2485,19 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             if !_m.link_script.eq("") {
                 link_script = _mroot.concat("/").concat(_m.link_script);
             }
+            manifest_cflags = _join_flags(_m.cflags);
+            manifest_ldflags = _join_flags(_m.ldflags);
         }
     }
+    // User C compiler / linker flags, lowest-to-highest precedence:
+    // manifest, then $GLIDE_*FLAGS, then the CLI (CLI wins, last on the line).
+    // Computed here (before the freestanding branch) so both build paths see it.
+    let mut user_cflags: string = manifest_cflags;
+    user_cflags = _append_flag(user_cflags, __glide_getenv("GLIDE_CFLAGS"));
+    user_cflags = _append_flag(user_cflags, cli_cflags);
+    let mut user_ldflags: string = manifest_ldflags;
+    user_ldflags = _append_flag(user_ldflags, __glide_getenv("GLIDE_LDFLAGS"));
+    user_ldflags = _append_flag(user_ldflags, cli_ldflags);
     // `--tiny` is a hosted minimal build; it always strips + GC-collects (like
     // --release) so the dropped scheduler/reactor actually leave the binary.
     let eff_release: bool = release || tiny;
@@ -2536,7 +2570,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // emitted C with zig as a bare-metal x86_64 ELF against the linker
     // script. Skips the hosted lib-scan / -lpthread / run-after-build below.
     if freestanding {
-        return _build_freestanding(tmp_c, out_path, link_script, quiet);
+        return _build_freestanding(tmp_c, out_path, link_script, quiet, user_cflags, user_ldflags);
     }
 
     // 3b. Decide which heavy libs to link by scanning the generated C for
@@ -2678,6 +2712,9 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     } else {
         cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -D_GNU_SOURCE -Wno-error=implicit-function-declaration -lpthread -lm");
     }
+    // User cflags go right after the defaults so e.g. a `-O3` / `--opt=3`
+    // overrides the default `-O2` (cc/clang is last-flag-wins).
+    if !user_cflags.eq("") { cmd = cmd.concat(" ").concat(user_cflags); }
     // HTTP/3: ngtcp2 / nghttp3 headers default to __declspec(dllimport) on
     // Windows, so linking their STATIC archives makes lld-link hunt for
     // __imp_* symbols a `.a` never exports ("undefined symbol: __declspec(
@@ -2805,6 +2842,10 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // is self-contained (runs on any Linux, incl. scratch/distroless).
         cmd = cmd.concat(" -static");
     }
+
+    // User ldflags go at the very end, after every auto-detected -L/-l (correct
+    // one-pass static link order), and BEFORE the Windows quote-wrap below.
+    if !user_ldflags.eq("") { cmd = cmd.concat(" ").concat(user_ldflags); }
 
     // On Windows, system() runs the command via `cmd.exe /c <cmd>`. When the
     // command itself starts with a quoted path containing backslashes / spaces,
@@ -2975,7 +3016,7 @@ fn _resolve_cc_dir_win(cc: string) -> string {
 // x86_64 ELF with zig (clang under the hood): no libc, no startup, no PIE,
 // red-zone off for interrupt safety, higher-half code model. The user's
 // linker script (`linker:` in glide.glide) owns the layout + entry point.
-fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, quiet: bool) -> i32 {
+fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, quiet: bool, user_cflags: string, user_ldflags: string) -> i32 {
     let zig: string = _find_zig();
     if zig.eq("") {
         if !quiet { spinner_finish(false, ""); }
@@ -3006,6 +3047,8 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     // with SSE usable. A kernel that wants SSE strictly off would avoid zig's
     // compiler_rt instead. Red-zone is still disabled (interrupt safety).
     cmd = cmd.concat(" -O2 -g -w");
+    // User cflags after the defaults (so `-O3`/`-march=` override -O2).
+    if !user_cflags.eq("") { cmd = cmd.concat(" ").concat(user_cflags); }
     if link_script.contains(" ") {
         cmd = cmd.concat(" -Wl,-T,\"").concat(link_script).concat("\"");
     } else {
@@ -3016,6 +3059,8 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     // e_entry = 0 and lets --gc drop all code. The kernel entry is `kmain`.
     cmd = cmd.concat(" -Wl,-e,kmain");
     cmd = cmd.concat(" -Wl,--build-id=none");
+    // User ldflags last (override / extend the link), before the Windows wrap.
+    if !user_ldflags.eq("") { cmd = cmd.concat(" ").concat(user_ldflags); }
     // zig is invoked through a quoted path; on Windows cmd.exe needs the
     // whole command re-wrapped (mirrors the hosted cc path's workaround).
     if __glide_is_windows() != 0 {
@@ -3136,7 +3181,7 @@ fn run_bench(path: string) -> i32 {
 
         println!(col_blue().concat("benching").concat(col_reset()), f,
                  "(", bench_fns.len(), "bench(es) )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false);
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "");
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3250,7 +3295,7 @@ fn run_test(path: string) -> i32 {
 
         println!(col_blue().concat("running").concat(col_reset()), f,
                  "(", test_fns.len(), "tests )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false);
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "");
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3276,7 +3321,7 @@ fn _golden_build_and_run(src: string, out_txt: string) -> i32 {
     let scratch: string = _scratch_dir();
     let mut exe: string = scratch.concat("/__glide_golden.exe");
     if __glide_is_windows() == 0 { exe = scratch.concat("/__glide_golden"); }
-    let rc_build: i32 = run_build_q(src, exe, "", false, true, false, false, false);
+    let rc_build: i32 = run_build_q(src, exe, "", false, true, false, false, false, "", "");
     if rc_build != 0 { return -1; }
     let cmd: string = "\"".concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
     let mut wrapped: string = cmd;
@@ -3759,6 +3804,16 @@ fn main() -> i32 {
     let mut release: bool = false;
     let mut tiny: bool = false;
     let mut no_std: bool = false;
+    // User C compiler / linker flag passthrough. Raw `--cflag=`/`--ldflag=`
+    // accumulate; the shortcuts expand into cflags below. CLI is the
+    // last-applied (winning) layer over $GLIDE_*FLAGS and the manifest.
+    let mut cli_cflags: string = "";
+    let mut cli_ldflags: string = "";
+    let mut raw_cli_cflags: string = "";
+    let mut opt_level: string = "";
+    let mut want_lto: bool = false;
+    let mut want_static: bool = false;
+    let mut march_val: string = "";
     let flag_start: i32 = if src_arg_idx >= argc { 2 } else { src_arg_idx + 1 };
     for let i: i32 = flag_start; i < argc; i++ {
         let a: string = args_at(i);
@@ -3769,13 +3824,29 @@ fn main() -> i32 {
         if a.eq("--release") { release = true; }
         if a.eq("--tiny") { tiny = true; }
         if a.eq("--no-std") || a.eq("--freestanding") { no_std = true; }
+        if a.eq("--lto") { want_lto = true; }
+        if a.eq("--static") { want_static = true; }
         if a.len() > 9 {
             let prefix: string = a.substring(0, 9);
-            if prefix.eq("--target=") {
-                target = a.substring(9, a.len());
-            }
+            if prefix.eq("--target=") { target = a.substring(9, a.len()); }
+            if prefix.eq("--ldflag=") { cli_ldflags = _append_flag(cli_ldflags, a.substring(9, a.len())); }
+        }
+        if a.len() > 8 {
+            let p8: string = a.substring(0, 8);
+            if p8.eq("--cflag=") { raw_cli_cflags = _append_flag(raw_cli_cflags, a.substring(8, a.len())); }
+            if p8.eq("--march=") { march_val = a.substring(8, a.len()); }
+        }
+        if a.len() > 6 {
+            if a.substring(0, 6).eq("--opt=") { opt_level = a.substring(6, a.len()); }
         }
     }
+    // Expand the first-class shortcuts into cflags, then the raw --cflag values
+    // LAST so an explicit `--cflag=-O3` wins over `--opt=2` (cc is last-wins).
+    if !opt_level.eq("")  { cli_cflags = _append_flag(cli_cflags, "-O".concat(opt_level)); }
+    if want_lto           { cli_cflags = _append_flag(cli_cflags, "-flto"); }
+    if want_static        { cli_cflags = _append_flag(cli_cflags, "-static"); }
+    if !march_val.eq("")  { cli_cflags = _append_flag(cli_cflags, "-march=".concat(march_val)); }
+    cli_cflags = _append_flag(cli_cflags, raw_cli_cflags);
 
     // No `--target=` on the command line: fall back to the manifest's
     // default `target`. Build-only — `glide run` always targets the host
@@ -3789,13 +3860,13 @@ fn main() -> i32 {
         if out_path.eq("") {
             out_path = _default_out_path(project_root, project_name, false, target);
         }
-        return run_build(src_path, out_path, target, false, release, tiny, no_std);
+        return run_build(src_path, out_path, target, false, release, tiny, no_std, cli_cflags, cli_ldflags);
     }
     if mode == MODE_RUN {
         if out_path.eq("") {
             out_path = _default_out_path(project_root, project_name, true, target);
         }
-        return run_build(src_path, out_path, target, true, release, tiny, no_std);
+        return run_build(src_path, out_path, target, true, release, tiny, no_std, cli_cflags, cli_ldflags);
     }
 
     if mode == MODE_FMT {
