@@ -587,6 +587,29 @@ case_feature("formatting normalizes whitespace",
             and "fn add(a: i32, b: i32) -> i32" in r["result"][0].get("newText",""),
         f"got: {(r or {}).get('result')}"))
 
+# formatting must preserve source-only spellings: the `!field` export sigil
+# and `Self` (parse-time Self-substitution is skipped in fmt mode).
+case_feature("formatting preserves !field marker and Self",
+    'pub struct Client {\n'
+    '    !token: string,\n'
+    '}\n'
+    'impl Client {\n'
+    '    pub fn new(token: string) -> Self {\n'
+    '        return Self { token: token };\n'
+    '    }\n'
+    '}\n',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: (
+        check("keeps `!token` export marker (not flipped to private)",
+            r and r.get("result") and "!token: string" in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}"),
+        check("keeps `-> Self` and `Self {` (not lowered to `Client`)",
+            r and r.get("result")
+                and "-> Self" in r["result"][0].get("newText","")
+                and "Self {" in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}")))
+
 # ---- signatureHelp ----
 
 case_feature("signatureHelp free fn tracks active param",

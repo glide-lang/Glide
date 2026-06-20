@@ -3754,6 +3754,7 @@ fn main() -> i32 {
         if src.eq("") { println!("could not read or empty file:", src_path); return 1; }
         let lex: *Lexer = Lexer::new(src);
         let p: *Parser = Parser::new(lex);
+        p.fmt_mode = true;
         let parsed: *Vector<Stmt> = parse_program(p);
         let formatted: string = fmt_program(parsed);
         if write_in_place {

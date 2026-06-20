@@ -43,6 +43,9 @@ pub struct Parser {
     pub peek: Token,
     pub error_count: i32,
     pub no_struct_lit: bool,
+    // When set, skip parse-time `Self`-substitution in impl bodies so `fmt`
+    // can reproduce `Self` as written instead of the concrete target type.
+    pub fmt_mode: bool,
     pub diags: *Vector<ParseDiag>,
     // Position of the most recently consumed token (advanced past). Used to
     // anchor "expected ';'" errors at the END of the previous token rather
@@ -60,6 +63,7 @@ impl Parser {
         p.peek = lex.next_token();
         p.error_count = 0;
         p.no_struct_lit = false;
+        p.fmt_mode = false;
         let dv: *Vector<ParseDiag> = Vector::new();
         p.diags = dv;
         return p;
@@ -554,12 +558,13 @@ fn parse_struct(p: *Parser) -> *Stmt {
         // Bare `field: T,` stays private (default) in the brace form.
         // In the tuple form every field is implicitly pub.
         let mut fpub: bool = is_tuple;
+        let mut fbang: bool = false;
         if p.eat_kw("pub") { fpub = true; }
-        else if p.eat_op("!") { fpub = true; }
+        else if p.eat_op("!") { fpub = true; fbang = true; }
         let fname: string = p.expect_ident();
         p.expect_op(":");
         let fty: *Type = parse_type(p);
-        let f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub };
+        let f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang };
         fields.push(f);
         if !p.eat_op(",") { break; }
     }
@@ -764,7 +769,11 @@ fn parse_impl(p: *Parser) -> *Stmt {
         s.type_param_bounds = tps_bounds;
         s.assoc_decls = assocs;
         if !ns.eq("") { s.import_path = ns; }
-        if !trait_name.eq("") {
+        // `fmt` wants the source verbatim, so it skips this lowering and keeps
+        // `Self` as written. Every other caller substitutes eagerly.
+        if p.fmt_mode {
+            if !trait_name.eq("") { s.impl_trait_name = trait_name; }
+        } else if !trait_name.eq("") {
             s.impl_trait_name = trait_name;
             // Inside `impl Trait for T { ... }`, `Self` in method signatures
             // refers to T. Substitute now so later passes don't have to know
