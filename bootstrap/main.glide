@@ -438,7 +438,10 @@ fn _project_allow_drop(code: string) -> bool {
 fn print_usage() {
     println!("Glide compiler");
     println!("usage:");
-    println!("  glide build <file> [-o <out>] [--target=<triple>]  (sysroot auto-fetched; see `glide target list`)");
+    println!("  glide build <file> [-o <out>] [--target=<triple>] [--release] [--tiny] [--no-std]");
+    println!("       --release  strip + optimize the final binary");
+    println!("       --tiny     minimal hosted build: drop the M:N runtime when unused (implies --release)");
+    println!("       --no-std   freestanding/kernel build: no libc, no runtime, no main wrapper");
     println!("  glide run <file>");
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
@@ -1203,7 +1206,7 @@ fn run_install(argc: i32) -> i32 {
 
     // Build straight to the install path. Saves a copy step and keeps
     // the spinner's progress output coherent.
-    let rc: i32 = run_build(bin_src, final_path, "", false);
+    let rc: i32 = run_build(bin_src, final_path, "", false, false, false, false);
     if rc != 0 { return rc; }
 
     // Compiler-style installs ship a `src/` tree alongside the binary
@@ -1604,7 +1607,7 @@ fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
     apply_lint_for(parent_dir(src_path));
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !parse_program_into(stmts, src_path, pdiags) {
+    if !parse_program_into(stmts, src_path, pdiags, false) {
         r.parse_failed = true;
         return r;
     }
@@ -1676,7 +1679,7 @@ fn _fix_one_file(src_path: string) -> i32 {
     apply_lint_for(parent_dir(src_path));
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !parse_program_into(stmts, src_path, pdiags) { return 0; }
+    if !parse_program_into(stmts, src_path, pdiags, false) { return 0; }
     let t: *Typer = Typer::new();
     merge_parse_diags(t, pdiags);
     build_visibility(t, stmts);
@@ -1816,7 +1819,7 @@ fn run_clean() -> i32 {
 // several files and expose them under one import.
 
 
-fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseDiag>) -> bool {
+fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseDiag>, force_no_std: bool) -> bool {
     let src: string = read_file(path);
     if src.eq("") {
         println!("could not read or empty file:", path);
@@ -1866,6 +1869,7 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
         let _bi_m: *Manifest = read_manifest(_bi_root);
         if _bi_m != null { _fs_skip_builtins = _bi_m.freestanding; }
     }
+    if force_no_std { _fs_skip_builtins = true; }
     if !_fs_skip_builtins {
         load_builtins_dir(stmts, builtins_dir, loaded, pdiags);
     }
@@ -2430,14 +2434,14 @@ fn _target_remove(triple: string) -> i32 {
     return 0;
 }
 
-fn run_build(src_path: string, out_path: string, target: string, then_run: bool) -> i32 {
-    return run_build_q(src_path, out_path, target, then_run, false);
+fn run_build(src_path: string, out_path: string, target: string, then_run: bool, release: bool, tiny: bool, no_std: bool) -> i32 {
+    return run_build_q(src_path, out_path, target, then_run, false, release, tiny, no_std);
 }
 
 // Same as `run_build` but with a `quiet` knob — the test / golden
 // runners drive lots of builds in a row and the spinner-per-build
 // would flood the log in non-TTY mode (no in-place redraw).
-fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool) -> i32 {
+fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool, release: bool, tiny: bool, no_std: bool) -> i32 {
     // 0. Auto-fetch missing git deps from the project's glide.glide
     //    before we start parsing anything. No-op when there's no manifest.
     auto_fetch_for(src_path);
@@ -2446,25 +2450,30 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // Freestanding / kernel build is declared in glide.glide (`kind: "kernel"`
     // or `freestanding: true` + `linker: "<file>"`). Resolve it here so codegen
     // drops the hosted runtime and the cc step links freestanding.
-    let mut freestanding: bool = false;
+    // `--no-std` forces freestanding from the command line; the manifest can
+    // also declare it (`kind: "kernel"` / `freestanding: true`).
+    let mut freestanding: bool = no_std;
     let mut link_script: string = "";
     let _mroot: string = find_manifest_root(parent_dir(src_path));
     if !_mroot.eq("") {
         let _m: *Manifest = read_manifest(_mroot);
         if _m != null {
-            freestanding = _m.freestanding;
+            if _m.freestanding { freestanding = true; }
             if !_m.link_script.eq("") {
                 link_script = _mroot.concat("/").concat(_m.link_script);
             }
         }
     }
+    // `--tiny` is a hosted minimal build; it always strips + GC-collects (like
+    // --release) so the dropped scheduler/reactor actually leave the binary.
+    let eff_release: bool = release || tiny;
 
     if !quiet { spinner_start("parsing ".concat(src_path)); }
 
     // 1. Parse
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !parse_program_into(stmts, src_path, pdiags) {
+    if !parse_program_into(stmts, src_path, pdiags, no_std) {
         if !quiet { spinner_finish(false, "parse failed"); }
         return 1;
     }
@@ -2520,7 +2529,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // the proc-fns intact (import check reads `@proc_<kind>(Name)`),
     // which is why we strip here, not in `expand_macros`.
     let codegen_stmts: *Vector<Stmt> = strip_compile_time_only(stmts);
-    emit_program_mode(codegen_stmts, freestanding);
+    emit_program_mode(codegen_stmts, freestanding, tiny);
     __glide_restore_stdout(saved);
 
     // Freestanding / kernel build: a self-contained path that links the
@@ -2657,7 +2666,18 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
        Cost: ~1-2% in hot loops (one reserved register, two extra
        prologue/epilogue ops). Worth it for the deep-recursion
        safety net the grow handler provides. */
-    cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -D_GNU_SOURCE -Wno-error=implicit-function-declaration -lpthread -lm");
+    if eff_release {
+        // Release: drop `-g` and strip the symbol table (`-s`) — together the
+        // bulk of a default binary's size is debug/symbol info, not code.
+        // `-ffunction-sections -fdata-sections` lets the linker drop
+        // unreferenced code (lld does this by default; GNU ld with
+        // --gc-sections). Frame pointers stay: the stack-grow fault handler
+        // walks the saved-RBP chain, so `-fno-omit-frame-pointer` is kept even
+        // here. Trade-off: panic backtraces lose function names / source lines.
+        cmd = cmd.concat(" -O2 -w -fno-omit-frame-pointer -ffunction-sections -fdata-sections -D_GNU_SOURCE -Wno-error=implicit-function-declaration -s -lpthread -lm");
+    } else {
+        cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -D_GNU_SOURCE -Wno-error=implicit-function-declaration -lpthread -lm");
+    }
     // HTTP/3: ngtcp2 / nghttp3 headers default to __declspec(dllimport) on
     // Windows, so linking their STATIC archives makes lld-link hunt for
     // __imp_* symbols a `.a` never exports ("undefined symbol: __declspec(
@@ -2703,10 +2723,35 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // empty default verify path, so every HTTPS verify falls back
         // to enumerating ROOT/CA via CertOpenSystemStoreW.
         if needs_ssl { cmd = cmd.concat(" -lcrypt32"); }
-    } else if !cross {
+    } else if !cross && !eff_release {
         // -rdynamic only on host POSIX builds — cross builds use static
-        // linking where dynamic symbol export isn't applicable.
+        // linking where dynamic symbol export isn't applicable. Skipped in
+        // release: it pins a full .dynsym that survives `-s` and keeps the
+        // linker from garbage-collecting otherwise-dead symbols.
         cmd = cmd.concat(" -rdynamic");
+    }
+    if eff_release {
+        // Garbage-collect unreferenced functions/data from the final binary.
+        // The compile step emitted per-symbol sections (-ffunction-sections
+        // -fdata-sections); here the linker drops what `main` can't reach.
+        // GNU ld / lld accept --gc-sections (both `cc`=gcc and `cc`=zig);
+        // Apple ld wants -dead_strip. `zig cc` rejects MSVC-style /OPT:* and
+        // --exclude-all-symbols, so they're not an option on the zig path.
+        // (On windows-gnu the MinGW auto-export of every global pins them as
+        // GC roots, so this mostly trims runtime dead code there, not user
+        // symbols — still a net win on top of -s.)
+        let mac_target: bool = cross
+            && (_target_os(eff_target).eq("macos") || _target_os(eff_target).eq("darwin"));
+        if mac_target {
+            cmd = cmd.concat(" -Wl,-dead_strip");
+        } else if win_target || cross {
+            cmd = cmd.concat(" -Wl,--gc-sections");
+        }
+        // else: a lib-free host POSIX build — can't tell linux (ld accepts
+        // --gc-sections) from macOS (ld rejects it, wants -dead_strip) from
+        // here, so skip the GC flag rather than risk a broken link. Symbols
+        // are still stripped via -s. Any cross / lib-linking build resolves
+        // its OS through the branches above and gets the right flag.
     }
     // Resolve openssl / crypto / zlib — but only what the program actually
     // references (see the header scan above). A program that uses none of
@@ -3091,7 +3136,7 @@ fn run_bench(path: string) -> i32 {
 
         println!(col_blue().concat("benching").concat(col_reset()), f,
                  "(", bench_fns.len(), "bench(es) )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true);
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3205,7 +3250,7 @@ fn run_test(path: string) -> i32 {
 
         println!(col_blue().concat("running").concat(col_reset()), f,
                  "(", test_fns.len(), "tests )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true);
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3231,7 +3276,7 @@ fn _golden_build_and_run(src: string, out_txt: string) -> i32 {
     let scratch: string = _scratch_dir();
     let mut exe: string = scratch.concat("/__glide_golden.exe");
     if __glide_is_windows() == 0 { exe = scratch.concat("/__glide_golden"); }
-    let rc_build: i32 = run_build_q(src, exe, "", false, true);
+    let rc_build: i32 = run_build_q(src, exe, "", false, true, false, false, false);
     if rc_build != 0 { return -1; }
     let cmd: string = "\"".concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
     let mut wrapped: string = cmd;
@@ -3711,6 +3756,9 @@ fn main() -> i32 {
     let mut out_path: string = "";
     let mut target: string = "";
     let mut write_in_place: bool = false;
+    let mut release: bool = false;
+    let mut tiny: bool = false;
+    let mut no_std: bool = false;
     let flag_start: i32 = if src_arg_idx >= argc { 2 } else { src_arg_idx + 1 };
     for let i: i32 = flag_start; i < argc; i++ {
         let a: string = args_at(i);
@@ -3718,6 +3766,9 @@ fn main() -> i32 {
             out_path = args_at(i + 1);
         }
         if a.eq("--write") { write_in_place = true; }
+        if a.eq("--release") { release = true; }
+        if a.eq("--tiny") { tiny = true; }
+        if a.eq("--no-std") || a.eq("--freestanding") { no_std = true; }
         if a.len() > 9 {
             let prefix: string = a.substring(0, 9);
             if prefix.eq("--target=") {
@@ -3738,13 +3789,13 @@ fn main() -> i32 {
         if out_path.eq("") {
             out_path = _default_out_path(project_root, project_name, false, target);
         }
-        return run_build(src_path, out_path, target, false);
+        return run_build(src_path, out_path, target, false, release, tiny, no_std);
     }
     if mode == MODE_RUN {
         if out_path.eq("") {
             out_path = _default_out_path(project_root, project_name, true, target);
         }
-        return run_build(src_path, out_path, target, true);
+        return run_build(src_path, out_path, target, true, release, tiny, no_std);
     }
 
     if mode == MODE_FMT {
@@ -3772,7 +3823,7 @@ fn main() -> i32 {
     // emit / check / fallback
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !parse_program_into(stmts, src_path, pdiags) { return 1; }
+    if !parse_program_into(stmts, src_path, pdiags, false) { return 1; }
 
     if mode == MODE_CHECK {
         apply_lint_for(parent_dir(src_path));
