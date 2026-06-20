@@ -1532,6 +1532,13 @@ pub struct CG {
     // arg. The user code provides its own entry (`kmain`) and, if it uses
     // strings/Vector, its own libc-shaped primitives (malloc/memcpy/...).
     pub freestanding: bool,
+    // Tiny / minimal-hosted mode: keep libc + stdlib (println, strings) but,
+    // when the program never touches concurrency, the `main` wrapper skips
+    // `__glide_sched_init` so the M:N scheduler + reactor are unreferenced and
+    // the linker's --gc-sections drops them. `needs_concurrency` is set by the
+    // spawn/chan pre-pass; when true the scheduler is kept even under --tiny.
+    pub tiny: bool,
+    pub needs_concurrency: bool,
     // SDS: recursion guard so the extern-string-return adopt-wrap doesn't
     // re-wrap the same call when it re-emits it.
     pub _sds_adopt_skip: bool,
@@ -1601,6 +1608,8 @@ impl CG {
         g.last_line_dir = 0;
         g.last_origin_dir = "";
         g.freestanding = false;
+        g.tiny = false;
+        g.needs_concurrency = false;
         return g;
     }
 
@@ -5595,28 +5604,32 @@ fn _main_takes_argv(s: *Stmt) -> bool {
 // Emit the C `main(argc, argv)` wrapper that adapts the user's renamed
 // main (whatever its signature) into a process exit code. Handles
 // scheduler init/shutdown around the call.
-fn _emit_main_wrapper(s: *Stmt) {
+fn _emit_main_wrapper(g: *CG, s: *Stmt) {
     let ret_ty: *Type = s.fn_ret_ty;
     let takes_argv: bool = _main_takes_argv(s);
     let call_args: string = "";
     if takes_argv { call_args = "argc, argv"; }
+    // --tiny without any spawn/chan: skip the scheduler boot so the M:N
+    // runtime + reactor stay unreferenced and --gc-sections drops them.
+    // A tiny program that does use concurrency keeps the scheduler.
+    let skip_sched: bool = g.tiny && !g.needs_concurrency;
     println!("int main(int argc, char** argv) {");
-    println!("    __glide_is_main_tls = 1;");
+    if !skip_sched { println!("    __glide_is_main_tls = 1;"); }
     println!("    __glide_args_init(argc, argv);");
-    println!("    __glide_sched_init();");
+    if !skip_sched { println!("    __glide_sched_init();"); }
     if _main_ret_is_void(ret_ty) {
         println!("    __glide_user_main(".concat(call_args).concat(");"));
-        println!("    __glide_sched_shutdown();");
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
         println!("    return 0;");
     } else if ret_ty.kind == TY_NAMED && ret_ty.name.eq("int") {
         println!("    int __glide_rc = __glide_user_main(".concat(call_args).concat(");"));
-        println!("    __glide_sched_shutdown();");
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
         println!("    return __glide_rc;");
     } else if ret_ty.kind == TY_RESULT && ret_ty.inner != null {
         let m: string = mangle_type(ret_ty.inner);
         let rt: string = "__glide_result_".concat(m).concat("_t");
         println!("    ".concat(rt).concat(" __glide_rc = __glide_user_main(").concat(call_args).concat(");"));
-        println!("    __glide_sched_shutdown();");
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
         println!("    if (!__glide_rc.ok) {");
         println!("        fprintf(stderr, \"%s\\n\", __glide_rc.err ? __glide_rc.err : \"error\");");
         println!("        return 1;");
@@ -5632,7 +5645,7 @@ fn _emit_main_wrapper(s: *Stmt) {
         }
     } else {
         println!("    (void)__glide_user_main(".concat(call_args).concat(");"));
-        println!("    __glide_sched_shutdown();");
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
         println!("    return 0;");
     }
     println!("}");
@@ -5714,7 +5727,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     // long-running servers stay in main's loop and never reach this point).
     if is_main {
         println!("");
-        _emit_main_wrapper(s);
+        _emit_main_wrapper(g, s);
     }
 }
 
@@ -6231,14 +6244,14 @@ fn _uniq_program(program: *Vector<Stmt>) {
 }
 
 pub fn emit_program(program: *Vector<Stmt>) {
-    emit_program_mode(program, false);
+    emit_program_mode(program, false, false);
 }
 
 // Freestanding / kernel build: emit only the compiler-provided freestanding
 // headers (these survive `-nostdlib` because they belong to the C compiler,
 // not libc), skip the hosted runtime bake (stdlib/scheduler/socket), and skip
 // the `main` wrapper. The user program supplies its own entry + primitives.
-pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
+pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool) {
     // Alpha-rename shadowing locals to unique C names before anything is
     // emitted, so `let b = …; let b = b.val;` compiles.
     _uniq_program(program);
@@ -6288,6 +6301,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
 
     let g: *CG = CG::new();
     g.freestanding = freestanding;
+    g.tiny = tiny;
 
     // Register generic struct templates up front so that runtime emitters
     // (chan, result) can synthesize struct monos for their inner types
@@ -6891,6 +6905,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool) {
         let s: Stmt = program.get(i);
         pre_emit_spawn_stubs_in_stmt(g, &s);
     }
+    // Whether the program touches the M:N scheduler at all — any `spawn` site
+    // or any `chan<T>`. Captured before the count is reset for stub IDs below.
+    // `--tiny` keeps the scheduler only when this is true.
+    if g.spawn_count > 0 || g.chan_types.len() > 0 { g.needs_concurrency = true; }
     g.spawn_count = 0;
 
     // Function + impl definitions (skip generic ones, and skip extern/bodyless).
