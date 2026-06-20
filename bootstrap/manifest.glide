@@ -73,6 +73,12 @@ pub struct Manifest {
     // Linker script for a freestanding build (e.g. "linker.ld", relative to
     // the manifest root). Required when `freestanding` is set.
     pub link_script: string,
+    // Extra flags forwarded verbatim to the C compiler / linker, e.g.
+    // `cflags: vec_of("-O3", "-march=native")`, `ldflags: vec_of("-lfoo")`.
+    // cflags land after the default compile flags (so `-O3` overrides the
+    // default `-O2`); ldflags land at the very end (after auto-detected libs).
+    pub cflags:  *Vector<string>,
+    pub ldflags: *Vector<string>,
 }
 
 extern fn __glide_file_exists(path: string) -> bool;
@@ -180,6 +186,8 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     let deps_vec: *Vector<ManifestDep> = Vector::new();
     let lint_deny_vec: *Vector<string> = Vector::new();
     let lint_allow_vec: *Vector<string> = Vector::new();
+    let cflags_vec: *Vector<string> = Vector::new();
+    let ldflags_vec: *Vector<string> = Vector::new();
     let m: *Manifest = __glide_palloc(sizeof(Manifest)) as *Manifest;
     m.name = "";
     m.version = "";
@@ -195,6 +203,8 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     m.target = "";
     m.freestanding = false;
     m.link_script = "";
+    m.cflags = cflags_vec;
+    m.ldflags = ldflags_vec;
 
     for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
@@ -225,6 +235,8 @@ fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
         if name.eq("freestanding") && val.kind == EX_BOOL  { m.freestanding = val.bool_val; }
         if name.eq("linker")      && val.kind == EX_STRING { m.link_script = val.str_val; }
         if name.eq("deps") { collect_deps(m.deps, &val); }
+        if name.eq("cflags")  { _collect_string_list(m.cflags,  &val); }
+        if name.eq("ldflags") { _collect_string_list(m.ldflags, &val); }
         if name.eq("lint") {
             // Two surface forms:
             //   lint: "strict"                            — preset shortcut
@@ -289,12 +301,12 @@ fn _collect_lint_cfg(m: *Manifest, v: *Expr) {
     for let i: i32 = 0; i < v.field_names.len(); i++ {
         let fname: string = v.field_names.get(i);
         let fval: Expr = v.args.get(i);
-        if fname.eq("deny") { _collect_lint_strings(m.lint_deny, &fval); }
-        else if fname.eq("allow") { _collect_lint_strings(m.lint_allow, &fval); }
+        if fname.eq("deny") { _collect_string_list(m.lint_deny, &fval); }
+        else if fname.eq("allow") { _collect_string_list(m.lint_allow, &fval); }
     }
 }
 
-fn _collect_lint_strings(out: *Vector<string>, v: *Expr) {
+fn _collect_string_list(out: *Vector<string>, v: *Expr) {
     if v == null { return; }
     if v.kind == EX_CALL {
         let callee: *Expr = v.lhs;
