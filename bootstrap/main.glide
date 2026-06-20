@@ -444,7 +444,7 @@ fn print_usage() {
     println!("       --no-std   freestanding/kernel build: no libc, no runtime, no main wrapper");
     println!("       --cflag=X / --ldflag=X  forward X to the C compiler / linker (repeatable)");
     println!("       --opt=N / --lto / --static / --march=X  common cc-flag shortcuts");
-    println!("  glide run <file>");
+    println!("  glide run <file> [build flags] [-- <args>]   (args after -- go to the program)");
     println!("  glide emit <file>          (print generated C to stdout)");
     println!("  glide check <file>         (parse + type-check, no codegen)");
     println!("  glide lint [file]          (run all lints; project bin by default)");
@@ -1208,7 +1208,7 @@ fn run_install(argc: i32) -> i32 {
 
     // Build straight to the install path. Saves a copy step and keeps
     // the spinner's progress output coherent.
-    let rc: i32 = run_build(bin_src, final_path, "", false, false, false, false, "", "");
+    let rc: i32 = run_build(bin_src, final_path, "", false, false, false, false, "", "", "");
     if rc != 0 { return rc; }
 
     // Compiler-style installs ship a `src/` tree alongside the binary
@@ -2455,14 +2455,14 @@ fn _join_flags(v: *Vector<string>) -> string {
     return out;
 }
 
-fn run_build(src_path: string, out_path: string, target: string, then_run: bool, release: bool, tiny: bool, no_std: bool, cli_cflags: string, cli_ldflags: string) -> i32 {
-    return run_build_q(src_path, out_path, target, then_run, false, release, tiny, no_std, cli_cflags, cli_ldflags);
+fn run_build(src_path: string, out_path: string, target: string, then_run: bool, release: bool, tiny: bool, no_std: bool, cli_cflags: string, cli_ldflags: string, prog_args: string) -> i32 {
+    return run_build_q(src_path, out_path, target, then_run, false, release, tiny, no_std, cli_cflags, cli_ldflags, prog_args);
 }
 
 // Same as `run_build` but with a `quiet` knob — the test / golden
 // runners drive lots of builds in a row and the spinner-per-build
 // would flood the log in non-TTY mode (no in-place redraw).
-fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool, release: bool, tiny: bool, no_std: bool, cli_cflags: string, cli_ldflags: string) -> i32 {
+fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool, release: bool, tiny: bool, no_std: bool, cli_cflags: string, cli_ldflags: string, prog_args: string) -> i32 {
     // 0. Auto-fetch missing git deps from the project's glide.glide
     //    before we start parsing anything. No-op when there's no manifest.
     auto_fetch_for(src_path);
@@ -2906,6 +2906,9 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             else { run_target = "./".concat(out_path); }
         }
         let mut run_cmd: string = "\"".concat(run_target).concat("\"");
+        // Forward `glide run … -- <args>` to the program, before the Windows
+        // outer-quote wrap so the args stay inside the wrapped command.
+        if !prog_args.eq("") { run_cmd = run_cmd.concat(" ").concat(prog_args); }
         if __glide_is_windows() != 0 {
             run_cmd = "\"".concat(run_cmd).concat("\"");
         }
@@ -3181,7 +3184,7 @@ fn run_bench(path: string) -> i32 {
 
         println!(col_blue().concat("benching").concat(col_reset()), f,
                  "(", bench_fns.len(), "bench(es) )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "");
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "", "");
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3295,7 +3298,7 @@ fn run_test(path: string) -> i32 {
 
         println!(col_blue().concat("running").concat(col_reset()), f,
                  "(", test_fns.len(), "tests )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "");
+        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "", "");
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3321,7 +3324,7 @@ fn _golden_build_and_run(src: string, out_txt: string) -> i32 {
     let scratch: string = _scratch_dir();
     let mut exe: string = scratch.concat("/__glide_golden.exe");
     if __glide_is_windows() == 0 { exe = scratch.concat("/__glide_golden"); }
-    let rc_build: i32 = run_build_q(src, exe, "", false, true, false, false, false, "", "");
+    let rc_build: i32 = run_build_q(src, exe, "", false, true, false, false, false, "", "", "");
     if rc_build != 0 { return -1; }
     let cmd: string = "\"".concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
     let mut wrapped: string = cmd;
@@ -3725,10 +3728,27 @@ fn main() -> i32 {
             if args_at(i).eq("--emit") { mode = MODE_EMIT; src_arg_idx = i + 1; }
         }
     }
+    // Program-argument passthrough: everything after the first bare `--` is
+    // forwarded verbatim to the launched program (`glide run app -- a b c`).
+    // Those tokens are NOT parsed as build flags or the source path, so build
+    // parsing scans only up to `arg_limit`.
+    let mut arg_limit: i32 = argc;
+    let mut prog_args: string = "";
+    for let i: i32 = 0; i < argc; i++ {
+        if args_at(i).eq("--") {
+            arg_limit = i;
+            for let j: i32 = i + 1; j < argc; j++ {
+                let mut pa: string = args_at(j);
+                if pa.contains(" ") { pa = "\"".concat(pa).concat("\""); }
+                prog_args = _append_flag(prog_args, pa);
+            }
+            break;
+        }
+    }
     // Skip leading flags so `glide build --target=... -o foo` still
     // resolves the source from the manifest. A flag is anything that
     // starts with `-`; `-o <out>` swallows its value too.
-    while src_arg_idx < argc {
+    while src_arg_idx < arg_limit {
         let a: string = args_at(src_arg_idx);
         if a.len() == 0 || a.at(0).to_int() != 45 { break; }
         if a.eq("-o") { src_arg_idx = src_arg_idx + 2; continue; }
@@ -3742,7 +3762,7 @@ fn main() -> i32 {
     let mut project_root: string = "";
     let mut project_name: string = "";
     let mut manifest_target: string = "";
-    if src_arg_idx >= argc {
+    if src_arg_idx >= arg_limit {
         if mode == MODE_BUILD || mode == MODE_RUN || mode == MODE_CHECK {
             let root: string = find_manifest_root(".");
             if root.eq("") {
@@ -3814,8 +3834,8 @@ fn main() -> i32 {
     let mut want_lto: bool = false;
     let mut want_static: bool = false;
     let mut march_val: string = "";
-    let flag_start: i32 = if src_arg_idx >= argc { 2 } else { src_arg_idx + 1 };
-    for let i: i32 = flag_start; i < argc; i++ {
+    let flag_start: i32 = if src_arg_idx >= arg_limit { 2 } else { src_arg_idx + 1 };
+    for let i: i32 = flag_start; i < arg_limit; i++ {
         let a: string = args_at(i);
         if a.eq("-o") && (i + 1) < argc {
             out_path = args_at(i + 1);
@@ -3860,13 +3880,13 @@ fn main() -> i32 {
         if out_path.eq("") {
             out_path = _default_out_path(project_root, project_name, false, target);
         }
-        return run_build(src_path, out_path, target, false, release, tiny, no_std, cli_cflags, cli_ldflags);
+        return run_build(src_path, out_path, target, false, release, tiny, no_std, cli_cflags, cli_ldflags, "");
     }
     if mode == MODE_RUN {
         if out_path.eq("") {
             out_path = _default_out_path(project_root, project_name, true, target);
         }
-        return run_build(src_path, out_path, target, true, release, tiny, no_std, cli_cflags, cli_ldflags);
+        return run_build(src_path, out_path, target, true, release, tiny, no_std, cli_cflags, cli_ldflags, prog_args);
     }
 
     if mode == MODE_FMT {
