@@ -8773,9 +8773,11 @@ fn handle_formatting(req: *JsonValue, state: *LspState) {
     let uri: string = json_as_string(json_get(td, "uri"));
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
-    // Re-parse from text in case stmts is stale.
+    // Re-parse from text in case stmts is stale. fmt_mode keeps `Self` and
+    // other source-only spellings verbatim instead of lowering them.
     let lex: *Lexer = Lexer::new(doc.text);
     let p: *Parser = Parser::new(lex);
+    p.fmt_mode = true;
     let parsed: *Vector<Stmt> = parse_program(p);
     let formatted: string = fmt_program(parsed);
     // Return a single TextEdit replacing the whole document.

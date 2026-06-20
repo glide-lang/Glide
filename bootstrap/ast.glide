@@ -242,6 +242,8 @@ pub struct Field {
     pub ty: *Type,
     pub doc: string,        // contiguous `//` block above the field decl
     pub is_pub: bool,       // `pub field: T,` is exported across files
+    pub bang_pub: bool,     // exported via the `!field: T,` short sigil; kept
+                            // so `fmt` reproduces the author's chosen spelling
 }
 
 pub struct EnumVariant {

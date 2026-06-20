@@ -512,6 +512,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     if s.kind == ST_STRUCT { return fmt_struct(s, depth); }
     if s.kind == ST_ENUM { return fmt_enum(s, depth); }
     if s.kind == ST_IMPL { return fmt_impl(s, depth); }
+    if s.kind == ST_TRAIT { return fmt_trait(s, depth); }
     if s.kind == ST_MATCH { return fmt_match(s, depth); }
     if s.kind == ST_ASM { return fmt_asm(s, depth); }
 
@@ -625,7 +626,13 @@ fn fmt_struct(s: *Stmt, depth: i32) -> string {
     let inner: string = fmt_indent(depth + 1);
     for let i: i32 = 0; i < s.struct_fields.len(); i++ {
         let f: Field = s.struct_fields.get(i);
-        out = out.concat(inner).concat(f.name).concat(": ").concat(fmt_type(f.ty)).concat(",\n");
+        out = out.concat(inner);
+        // Reproduce the export marker exactly as written: `!field` keeps its
+        // short sigil, `pub field` keeps the long form. Dropping it silently
+        // flipped an exported field back to private.
+        if f.bang_pub { out = out.concat("!"); }
+        else if f.is_pub { out = out.concat("pub "); }
+        out = out.concat(f.name).concat(": ").concat(fmt_type(f.ty)).concat(",\n");
     }
     return out.concat(pad).concat("}\n");
 }
@@ -661,15 +668,71 @@ fn fmt_impl(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = pad.concat("impl");
     head = head.concat(fmt_type_params(s));
-    head = head.concat(" ").concat(fmt_type(s.impl_target));
-    if s.impl_methods == null || s.impl_methods.len() == 0 {
+    head = head.concat(" ");
+    // `impl Trait for Type` — keep the trait clause; dropping it silently
+    // turned a trait impl into an unrelated inherent `impl Type`.
+    if s.impl_trait_name != null && !s.impl_trait_name.eq("") {
+        head = head.concat(s.impl_trait_name).concat(" for ");
+    }
+    head = head.concat(fmt_type(s.impl_target));
+    let has_assoc: bool = s.assoc_decls != null && s.assoc_decls.len() > 0;
+    let has_methods: bool = s.impl_methods != null && s.impl_methods.len() > 0;
+    if !has_assoc && !has_methods {
         return head.concat(" {}\n");
     }
     let mut out: string = head.concat(" {\n");
-    for let i: i32 = 0; i < s.impl_methods.len(); i++ {
-        if i > 0 { out = out.concat("\n"); }
-        let m: Stmt = s.impl_methods.get(i);
-        out = out.concat(fmt_fn(&m, depth + 1));
+    let inner: string = fmt_indent(depth + 1);
+    if has_assoc {
+        for let i: i32 = 0; i < s.assoc_decls.len(); i++ {
+            let a: Param = s.assoc_decls.get(i);
+            out = out.concat(inner).concat("type ").concat(a.name);
+            if a.ty != null { out = out.concat(" = ").concat(fmt_type(a.ty)); }
+            out = out.concat(";\n");
+        }
+    }
+    if has_methods {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            if i > 0 || has_assoc { out = out.concat("\n"); }
+            let m: Stmt = s.impl_methods.get(i);
+            out = out.concat(fmt_fn(&m, depth + 1));
+        }
+    }
+    return out.concat(pad).concat("}\n");
+}
+
+// `trait Name: Supers { type Assoc; fn sig; fn default() {...} }`. Assoc-type
+// declarations print before methods (the parser stores them separately, so
+// original interleaving isn't recoverable — this canonical order round-trips).
+fn fmt_trait(s: *Stmt, depth: i32) -> string {
+    let pad: string = fmt_indent(depth);
+    let mut head: string = pad;
+    if s.is_pub { head = head.concat("pub "); }
+    head = head.concat("trait ").concat(s.name).concat(fmt_type_params(s));
+    if s.trait_supers != null && s.trait_supers.len() > 0 {
+        head = head.concat(": ");
+        for let i: i32 = 0; i < s.trait_supers.len(); i++ {
+            if i > 0 { head = head.concat(", "); }
+            head = head.concat(s.trait_supers.get(i));
+        }
+    }
+    let has_assoc: bool = s.assoc_decls != null && s.assoc_decls.len() > 0;
+    let has_methods: bool = s.impl_methods != null && s.impl_methods.len() > 0;
+    if !has_assoc && !has_methods {
+        return head.concat(" {}\n");
+    }
+    let mut out: string = head.concat(" {\n");
+    let inner: string = fmt_indent(depth + 1);
+    if has_assoc {
+        for let i: i32 = 0; i < s.assoc_decls.len(); i++ {
+            let a: Param = s.assoc_decls.get(i);
+            out = out.concat(inner).concat("type ").concat(a.name).concat(";\n");
+        }
+    }
+    if has_methods {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let m: Stmt = s.impl_methods.get(i);
+            out = out.concat(fmt_fn(&m, depth + 1));
+        }
     }
     return out.concat(pad).concat("}\n");
 }
