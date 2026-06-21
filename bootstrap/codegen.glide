@@ -2543,6 +2543,19 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             // instead of as a pointer).
             let _lvt: *Type = g.lookup(nm);
             if _lvt != null && _lvt.kind == TY_FNPTR { return _lvt.fnptr_ret; }
+            // Builtin Option/Result ctors. `some(x)`/`ok(x)` carry their inner
+            // type from the argument, so a method on the bare literal (e.g.
+            // `some(3).unwrap_or(0)`) can resolve the receiver as ?T/!T instead
+            // of emitting a member access on a non-struct. (none()/err() leave
+            // the inner unknown, so they aren't inferred here.)
+            if nm.eq("some") && e.args != null && e.args.len() > 0 {
+                let a0: Expr = e.args.get(0);
+                return ty_option(infer_for_codegen(g, &a0));
+            }
+            if nm.eq("ok") && e.args != null && e.args.len() > 0 {
+                let a0: Expr = e.args.get(0);
+                return ty_result(infer_for_codegen(g, &a0));
+            }
             // Stdlib runtime fns.
             if nm.eq("args_count") { return ty_named("i32"); }
             if nm.eq("args_at") { return ty_named("string"); }
@@ -4462,6 +4475,22 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     }
     if e.kind == EX_CALL {
         g._sds_adopt_skip = false;   // re-enable adopt-wrap for nested arg calls
+        // Bare `some(x)` / `ok(x)` ctor with no surrounding type hint (the let/
+        // fn-ret paths rewrite the callee to `__glide_some_<m>` before emit, so
+        // those never reach here). Lower it from the argument's inferred type so
+        // a method on the literal — `some(3).unwrap_or(0)` — gets a real option/
+        // result value instead of an undefined `some(...)` C call.
+        if e.lhs != null && e.lhs.kind == EX_IDENT && e.args != null && e.args.len() == 1
+           && (e.lhs.str_val.eq("some") || e.lhs.str_val.eq("ok")) {
+            let _ca0: Expr = e.args.get(0);
+            let _cat: *Type = infer_for_codegen(g, &_ca0);
+            if _cat != null {
+                print!("__glide_".concat(e.lhs.str_val).concat("_").concat(mangle_type(_cat)).concat("("));
+                emit_expr(g, &_ca0);
+                print!(")");
+                return;
+            }
+        }
         // 256-bit constructors: `u256::from(n)` / `i256::from(n)` build the
         // software struct from an int (printf/`=` can't, since it's a struct).
         if e.lhs != null && e.lhs.kind == EX_PATH && e.lhs.field.eq("from")
