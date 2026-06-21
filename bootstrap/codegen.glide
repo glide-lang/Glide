@@ -3320,6 +3320,22 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                         let f: Field = sf.get(j);
                         if f.name.eq(fname) { arg_hint = f.ty; }
                     }
+                } else if e.cast_to != null && e.cast_to.kind == TY_GENERIC
+                          && g.generic_structs.contains(e.cast_to.name) {
+                    // Mono struct-lit (`Stack__i32 { items: Vector::new() }`)
+                    // inside a generic impl method: the mangled name isn't in
+                    // g.structs, but subst_expr left the concrete generic type
+                    // on cast_to. Substitute the template's field types with
+                    // its args so the field hint is e.g. `*Vector<i32>`.
+                    let tmpl: Stmt = g.generic_structs.get(e.cast_to.name);
+                    if tmpl.struct_fields != null && tmpl.type_params != null {
+                        for let j: i32 = 0; j < tmpl.struct_fields.len(); j++ {
+                            let f: Field = tmpl.struct_fields.get(j);
+                            if f.name.eq(fname) {
+                                arg_hint = subst_type(f.ty, tmpl.type_params, e.cast_to.args);
+                            }
+                        }
+                    }
                 }
             }
             prescan_expr(g, &a, arg_hint);
@@ -3663,6 +3679,13 @@ fn subst_expr(e: *Expr, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
         let template: Stmt = gs.get(e.str_val);
         if template.type_params != null && args != null
            && template.type_params.len() == args.len() {
+            // Carry the concrete generic type (template + args) on cast_to —
+            // unused for struct-lit emission — so the prescan can recover the
+            // substituted field types for a mono name like `Stack__i32` that
+            // isn't in g.structs/g.generic_structs, and still hand an inline
+            // `Vector::new()` field the `*Vector<i32>` hint it needs to
+            // monomorphize.
+            n.cast_to = ty_generic(e.str_val, args);
             n.str_val = mangle_generic(e.str_val, args);
         }
     }
@@ -5268,8 +5291,24 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 if i > 0 { print!(", "); }
                 let fname: string = e.field_names.get(i);
                 print!(".", c_safe_ident(fname), " = ");
-                let v: Expr = e.args.get(i);
-                let fty: *Type = _field_ty_in_struct(g, e.str_val, fname);
+                let mut v: Expr = e.args.get(i);
+                let mut fty: *Type = _field_ty_in_struct(g, e.str_val, fname);
+                // Mono struct-lit (`Stack__i32 { items: Vector::new() }`): the
+                // mangled name isn't in g.structs, but subst_expr left the
+                // concrete generic type on cast_to — substitute the template
+                // field type so an inline generic ctor gets its hint.
+                if fty == null && e.cast_to != null && e.cast_to.kind == TY_GENERIC
+                   && g.generic_structs.contains(e.cast_to.name) {
+                    let tmpl: Stmt = g.generic_structs.get(e.cast_to.name);
+                    if tmpl.struct_fields != null && tmpl.type_params != null {
+                        for let j: i32 = 0; j < tmpl.struct_fields.len(); j++ {
+                            let tf: Field = tmpl.struct_fields.get(j);
+                            if tf.name.eq(fname) {
+                                fty = subst_type(tf.ty, tmpl.type_params, e.cast_to.args);
+                            }
+                        }
+                    }
+                }
                 // `null` against a `*dyn Trait` field needs the
                 // fat-pointer zero-init, not literal NULL.
                 if v.kind == EX_NULL {
@@ -5282,6 +5321,11 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 // ok()/err() in field position monomorphize the same way
                 // they do for `let x: ?T = ...`.
                 _rewrite_opt_ctor(&v, fty);
+                // Monomorphize a generic ctor field value (`Vector::new()`)
+                // against the field type — the mono fn body that holds this
+                // struct-lit is emitted without a prescan pass, so the call
+                // wouldn't otherwise pick up its `*Vector<T>` hint.
+                let _fmono: bool = try_mono_call(g, &v, fty);
                 emit_expr(g, &v);
             }
         }
