@@ -30,6 +30,11 @@
 
 import bootstrap::ast::*;
 import bootstrap::interp::*;
+// The expansion emits `impl JsonBind for <Struct>`, whose trait + JsonValue
+// helpers live in stdlib::json. Pull it in here so importing the derive is
+// enough to use `@derive(JsonBind)`; without it the generated impl raised a
+// spurious `unknown-trait` because the trait was never loaded.
+import stdlib::json::*;
 
 /// Auto-generates `impl JsonBind for <Struct> { from_json, to_json }`
 /// from the struct's fields. Primitive fields (`int`, `f64`, `bool`,
