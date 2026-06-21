@@ -106,6 +106,26 @@ extern fn printf(fmt: string, ...) -> i32;
 /// per send / recv.
 extern fn make_chan(cap: i32);
 
+// ---- Display -------------------------------------------------------------
+
+/// Custom human-readable rendering for `println!` / `print!` / `format!` /
+/// `dbg!`. Implement it to control how a value prints:
+///
+/// ```glide
+/// impl Display for Point {
+///     fn to_string(self: *Point) -> string {
+///         return format!("({}, {})", self.x, self.y);
+///     }
+/// }
+/// println!(p);   // -> (3, 4)
+/// ```
+///
+/// Structs without a `Display` impl fall back to an automatic
+/// `Name { field: value, ... }` rendering, so printing always works.
+pub trait Display {
+    fn to_string(self: *Self) -> string;
+}
+
 // ---- C runtime escape hatches --------------------------------------------
 //
 // The Glide compiler relies on libc for memory and IO. These declarations

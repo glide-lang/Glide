@@ -1,0 +1,44 @@
+import stdlib::testing::*;
+
+struct Point { x: i32, y: i32 }
+impl Display for Point {
+    fn to_string(self: *Point) -> string { return format!("({}, {})", self.x, self.y); }
+}
+
+enum Color { Red, Green, Blue }
+
+struct Rec { name: string, n: i32, ok: bool, p: Point }
+
+fn test_display_impl() -> i32 {
+    assert!(format!("{}", Point { x: 3, y: 4 }).eq("(3, 4)"));
+    return 0;
+}
+
+fn test_auto_render_with_quotes_and_nesting() -> i32 {
+    let r: Rec = Rec { name: "hi", n: 5, ok: true, p: Point { x: 1, y: 2 } };
+    assert!(format!("{}", r).eq("Rec { name: \"hi\", n: 5, ok: true, p: (1, 2) }"));
+    return 0;
+}
+
+fn test_vector() -> i32 {
+    let v: *Vector<i32> = Vector::new(); v.push(1); v.push(2); v.push(3);
+    assert!(format!("{}", v).eq("[1, 2, 3]"));
+    let s: *Vector<string> = Vector::new(); s.push("a"); s.push("b");
+    assert!(format!("{}", s).eq("[\"a\", \"b\"]"));
+    return 0;
+}
+
+fn test_option_result() -> i32 {
+    let some_v: ?i32 = some(7);
+    let none_v: ?i32 = none();
+    let ok_v: !i32 = ok(42);
+    assert!(format!("{}", some_v).eq("some(7)"));
+    assert!(format!("{}", none_v).eq("none"));
+    assert!(format!("{}", ok_v).eq("ok(42)"));
+    return 0;
+}
+
+fn test_enum() -> i32 {
+    assert!(format!("{}", Color::Green).eq("Green"));
+    return 0;
+}
