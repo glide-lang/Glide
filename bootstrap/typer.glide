@@ -3757,6 +3757,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if (e.field.eq("MAX") || e.field.eq("MIN")) && _is_int_prim_name(e.str_val) {
             return ty_named(e.str_val);
         }
+        // A payload-less enum variant `Enum::Variant` is a value of type Enum.
+        // Typing it (rather than returning null) lets `match Color::Red { ... }`
+        // and an unannotated `let c = Color::Red` resolve the scrutinee as the
+        // enum, so the variant/exhaustiveness checks fire without an explicit
+        // type annotation. (Payload-carrying variants are EX_CALL, handled below.)
+        let _epre: string = t._strip_mod_prefix(e.str_val);
+        if t.enums.contains(_epre) { return ty_named(_epre); }
         let prefix: string = t._strip_mod_prefix(e.str_val);
         let pname: string = prefix.concat("_").concat(e.field);
         let is_type: bool = t.structs.contains(prefix);
