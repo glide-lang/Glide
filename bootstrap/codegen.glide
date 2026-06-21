@@ -8068,6 +8068,16 @@ fn emit_struct_mono(g: *CG, t: *Type) {
                 }
             }
             uses.free();
+            // A by-value nested generic-struct field (`inner: Inner<T>`, not
+            // `*Inner<T>`) needs the nested mono's COMPLETE definition before
+            // this struct's body — a forward typedef only satisfies a pointer
+            // field. Emit the nested body now; the body_key dedup at the top of
+            // emit_struct_mono stops recursion/duplication. Pointer fields stay
+            // on the forward-decl + queue path above.
+            if fsub != null && fsub.kind == TY_GENERIC
+               && g.generic_structs.contains(fsub.name) {
+                emit_struct_mono(g, fsub);
+            }
         }
     }
     println!("struct ", mangled, " {");
