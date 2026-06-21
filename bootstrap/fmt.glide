@@ -587,9 +587,35 @@ fn fmt_type_params(s: *Stmt) -> string {
     return out.concat(">");
 }
 
+// Emit the generic `@<name>(args)` attribute list attached to a declaration —
+// `@derive(JsonBind)`, `@handler`, `@proc_derive(Name)`, `@logged`, etc. Each
+// attribute prints on its own line above the decl. `@cfg` is a built-in stored
+// separately (cfg_target) and emitted by the decl formatter itself. Without
+// this the formatter silently dropped every derive / proc attribute, so e.g.
+// `@derive(JsonBind)` vanished and the struct stopped deriving on the next run.
+fn fmt_attrs(s: *Stmt, pad: string) -> string {
+    if s.attrs == null || s.attrs.len() == 0 { return ""; }
+    let mut out: string = "";
+    for let i: i32 = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        out = out.concat(pad).concat("@").concat(a.name);
+        if a.args != null && a.args.len() > 0 {
+            out = out.concat("(");
+            for let j: i32 = 0; j < a.args.len(); j++ {
+                if j > 0 { out = out.concat(", "); }
+                let arg: Expr = a.args.get(j);
+                out = out.concat(fmt_expr(&arg));
+            }
+            out = out.concat(")");
+        }
+        out = out.concat("\n");
+    }
+    return out;
+}
+
 fn fmt_fn(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
-    let mut head: string = pad;
+    let mut head: string = fmt_attrs(s, pad).concat(pad);
     if s.cfg_target != null && !s.cfg_target.eq("") {
         head = head.concat("@cfg(\"").concat(s.cfg_target).concat("\")\n").concat(pad);
     }
@@ -616,7 +642,7 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
 
 fn fmt_struct(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
-    let mut head: string = pad;
+    let mut head: string = fmt_attrs(s, pad).concat(pad);
     if s.is_pub { head = head.concat("pub "); }
     head = head.concat("struct ").concat(s.name).concat(fmt_type_params(s));
     if s.struct_fields == null || s.struct_fields.len() == 0 {
@@ -639,7 +665,7 @@ fn fmt_struct(s: *Stmt, depth: i32) -> string {
 
 fn fmt_enum(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
-    let mut head: string = pad;
+    let mut head: string = fmt_attrs(s, pad).concat(pad);
     if s.is_pub { head = head.concat("pub "); }
     head = head.concat("enum ").concat(s.name);
     if s.enum_variants == null || s.enum_variants.len() == 0 {
@@ -666,7 +692,7 @@ fn fmt_enum(s: *Stmt, depth: i32) -> string {
 
 fn fmt_impl(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
-    let mut head: string = pad.concat("impl");
+    let mut head: string = fmt_attrs(s, pad).concat(pad).concat("impl");
     head = head.concat(fmt_type_params(s));
     head = head.concat(" ");
     // `impl Trait for Type` — keep the trait clause; dropping it silently
@@ -705,7 +731,7 @@ fn fmt_impl(s: *Stmt, depth: i32) -> string {
 // original interleaving isn't recoverable — this canonical order round-trips).
 fn fmt_trait(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
-    let mut head: string = pad;
+    let mut head: string = fmt_attrs(s, pad).concat(pad);
     if s.is_pub { head = head.concat("pub "); }
     head = head.concat("trait ").concat(s.name).concat(fmt_type_params(s));
     if s.trait_supers != null && s.trait_supers.len() > 0 {
