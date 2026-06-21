@@ -6237,7 +6237,10 @@ fn _emit_main_wrapper(g: *CG, s: *Stmt) {
         println!("    __glide_user_main(".concat(call_args).concat(");"));
         if !skip_sched { println!("    __glide_sched_shutdown();"); }
         println!("    return 0;");
-    } else if ret_ty.kind == TY_NAMED && ret_ty.name.eq("int") {
+    } else if ret_ty.kind == TY_NAMED && (ret_ty.name.eq("int") || _is_int_family(ret_ty.name)) {
+        // `fn main() -> i32` (the canonical form) and the legacy `int` alias
+        // both carry a process exit code. Propagate it — previously only the
+        // retired `int` name matched, so every `-> i32` main silently exited 0.
         println!("    int __glide_rc = __glide_user_main(".concat(call_args).concat(");"));
         if !skip_sched { println!("    __glide_sched_shutdown();"); }
         println!("    return __glide_rc;");
@@ -6251,7 +6254,7 @@ fn _emit_main_wrapper(g: *CG, s: *Stmt) {
         println!("        return 1;");
         println!("    }");
         let inner: *Type = ret_ty.inner;
-        if inner != null && inner.kind == TY_NAMED && inner.name.eq("int") {
+        if inner != null && inner.kind == TY_NAMED && (inner.name.eq("int") || _is_int_family(inner.name)) {
             println!("    return __glide_rc.val;");
         } else if inner != null && inner.kind == TY_NAMED && inner.name.eq("string") {
             println!("    if (__glide_rc.val) { fputs(__glide_rc.val, stdout); fputc('\\n', stdout); }");
