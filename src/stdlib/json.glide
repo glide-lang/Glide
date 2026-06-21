@@ -47,6 +47,12 @@ pub struct JsonValue {
     pub obj_vals: *Vector<JsonValue>,
 }
 
+// Printing a JsonValue (e.g. `println!(v.to_json())`) emits the serialized
+// JSON text rather than a pointer or the internal field dump.
+impl Display for JsonValue {
+    fn to_string(self: *JsonValue) -> string { return self.emit(); }
+}
+
 fn _missing_key_err(key: string) -> string {
     return "missing key \"".concat(key).concat("\"");
 }

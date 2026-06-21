@@ -151,10 +151,35 @@ fn format_spec_for(t: *Type) -> string {
 // Strings are quoted, nested structs recurse. The whole thing lowers inline so
 // no extra top-level emission / forward decls are needed.
 
-// True for a plain (non-generic) struct we can render or whose to_string we call.
-fn cg_is_display_struct(g: *CG, t: *Type) -> bool {
-    if t == null || t.kind != TY_NAMED { return false; }
-    return g.structs.contains(t.name);
+// The concrete struct name behind `t` — a value struct `S` or a pointer `*S`
+// — when it's a plain (non-generic) struct we can render. "" otherwise. Generic
+// instances (`*Vector<T>`, `*HashMap`) are TY_GENERIC, not TY_NAMED, so they're
+// excluded and keep printing as pointers.
+fn _display_struct_name(g: *CG, t: *Type) -> string {
+    if t == null { return ""; }
+    let mut nm: string = "";
+    if t.kind == TY_NAMED { nm = t.name; }
+    else if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_NAMED { nm = t.inner.name; }
+    if nm.eq("") { return ""; }
+    // Software-int "structs" have their own print path (__glide_*_to_string).
+    if nm.eq("i128") || nm.eq("u128") || nm.eq("i256") || nm.eq("u256") { return ""; }
+    if g.structs.contains(nm) { return nm; }
+    return "";
+}
+
+// True for any value the Display path can render: struct / *struct, option,
+// result, Vector / *Vector, or enum. Primitives keep the printf fast path.
+fn cg_is_display(g: *CG, t: *Type) -> bool {
+    if t == null { return false; }
+    if !_display_struct_name(g, t).eq("") { return true; }
+    if t.kind == TY_OPTION || t.kind == TY_RESULT || t.kind == TY_OPT_RESULT { return true; }
+    if t.kind == TY_GENERIC && t.name.eq("Vector") { return true; }
+    if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_GENERIC
+       && t.inner.name.eq("Vector") { return true; }
+    if t.kind == TY_NAMED && g.enums.contains(t.name) { return true; }
+    if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_NAMED
+       && g.enums.contains(t.inner.name) { return true; }
+    return false;
 }
 
 // Does `<sname>_to_string` take its receiver by pointer? (vs by value)
@@ -167,11 +192,34 @@ fn cg_to_string_byref(g: *CG, sname: string) -> bool {
     return p.ty != null && p.ty.kind == TY_POINTER;
 }
 
-// Render one field C-expression `cexpr` of type `fty` to a `const char*`.
-// (emit_struct_render_c is defined below; top-level fns are visible regardless
-// of order.)
+// Render an enum C-expression `cexpr` (accessed via `acc` = "." or "->") of
+// enum `ename` to its variant name. Payload values are not shown (v1).
+fn emit_enum_render_c(g: *CG, cexpr: string, ename: string, acc: string, depth: i32) {
+    let ed: Stmt = g.enums.get(ename);
+    let dv: string = format!("{}", depth);
+    let tv: string = "__get".concat(dv);
+    let rv: string = "__ger".concat(dv);
+    print!("({ int ", tv, " = (", cexpr, ")", acc, "tag; const char* ", rv, "; switch (", tv, ") { ");
+    if ed.enum_variants != null {
+        for let i: i32 = 0; i < ed.enum_variants.len(); i++ {
+            let v: EnumVariant = ed.enum_variants.get(i);
+            // Build as one string: the variant name goes inside a C literal, so
+            // multi-arg print! (which space-joins) would inject stray spaces.
+            print!("case ".concat(ename).concat("_").concat(v.name).concat(": ")
+                .concat(rv).concat(" = \"").concat(v.name).concat("\"; break; "));
+        }
+    }
+    print!("default: ", rv, " = \"?\"; } ", rv, "; })");
+}
+
+// Render any value C-expression `cexpr` of type `fty` to a `const char*`:
+// primitives, structs (value or *ptr), enums, option/result, and Vector.
+// Strings are quoted (it's a nested value); top-level strings stay on the
+// printf fast path and never reach here.
 fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
-    if fty != null && fty.kind == TY_NAMED {
+    if fty == null || depth >= 8 { print!("\"...\""); return; }
+    let k: i32 = fty.kind;
+    if k == TY_NAMED {
         let n: string = fty.name;
         if n.eq("string") { print!("__glide_format(\"\\\"%s\\\"\", ", cexpr, ")"); return; }
         if n.eq("bool") { print!("__glide_bool_to_string(", cexpr, ")"); return; }
@@ -183,15 +231,65 @@ fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
            || n.eq("uint") || n.eq("u8") || n.eq("u16") || n.eq("u32") {
             print!("__glide_uint_to_string((unsigned long long)(", cexpr, "))"); return;
         }
+        if n.eq("i128") { print!("__glide_i128_to_string(", cexpr, ")"); return; }
+        if n.eq("u128") { print!("__glide_u128_to_string(", cexpr, ")"); return; }
+        if n.eq("i256") { print!("__glide_i256_to_string(", cexpr, ")"); return; }
+        if n.eq("u256") { print!("__glide_u256_to_string(", cexpr, ")"); return; }
         if n.eq("float") || n.eq("f32") || n.eq("f64") {
             print!("__glide_format(\"%g\", (double)(", cexpr, "))"); return;
         }
         if n.eq("char") { print!("__glide_format(\"%c\", ", cexpr, ")"); return; }
-        if g.structs.contains(n) && depth < 8 {
-            emit_struct_render_c(g, cexpr, n, depth + 1); return;
-        }
+        if g.enums.contains(n) { emit_enum_render_c(g, cexpr, n, ".", depth); return; }
+        if g.structs.contains(n) { emit_struct_render_c(g, cexpr, n, depth + 1); return; }
+        print!("\"...\""); return;
     }
-    // Pointer / Vector / option / enum / generic / too-deep: placeholder.
+    if k == TY_POINTER && fty.inner != null {
+        let it: *Type = fty.inner;
+        if it.kind == TY_NAMED && g.structs.contains(it.name)
+           && !it.name.eq("i128") && !it.name.eq("u128") && !it.name.eq("i256") && !it.name.eq("u256") {
+            print!("((", cexpr, ") ? ");
+            emit_struct_render_c(g, "(*(".concat(cexpr).concat("))"), it.name, depth + 1);
+            print!(" : \"null\")"); return;
+        }
+        if it.kind == TY_NAMED && g.enums.contains(it.name) {
+            emit_enum_render_c(g, cexpr, it.name, "->", depth); return;
+        }
+        // *Vector handled by the Vector block below.
+    }
+    if k == TY_OPTION {
+        print!("((", cexpr, ").has ? __glide_format(\"some(%s)\", ");
+        emit_field_render_c(g, "(".concat(cexpr).concat(").val"), fty.inner, depth + 1);
+        print!(") : \"none\")"); return;
+    }
+    if k == TY_RESULT {
+        print!("((", cexpr, ").ok ? __glide_format(\"ok(%s)\", ");
+        emit_field_render_c(g, "(".concat(cexpr).concat(").val"), fty.inner, depth + 1);
+        print!(") : __glide_format(\"err(%s)\", (", cexpr, ").err))"); return;
+    }
+    if k == TY_OPT_RESULT {
+        print!("((", cexpr, ").tag == 0 ? \"none\" : ((", cexpr, ").tag == 1 ? __glide_format(\"ok(%s)\", ");
+        emit_field_render_c(g, "(".concat(cexpr).concat(").val"), fty.inner, depth + 1);
+        print!(") : __glide_format(\"err(%s)\", (", cexpr, ").err)))"); return;
+    }
+    // Vector (value or pointer): [e0, e1, ...]
+    let mut vty: *Type = null;
+    let mut acc: string = ".";
+    if k == TY_GENERIC && fty.name.eq("Vector") { vty = fty; }
+    if k == TY_POINTER && fty.inner != null && fty.inner.kind == TY_GENERIC
+       && fty.inner.name.eq("Vector") { vty = fty.inner; acc = "->"; }
+    if vty != null && vty.args != null && vty.args.len() > 0 {
+        let elemT: Type = vty.args.get(0);
+        let dv: string = format!("{}", depth);
+        let vn: string = "__gv".concat(dv);
+        let iv: string = "__gi".concat(dv);
+        let sv: string = "__gs".concat(dv);
+        print!("({ ", type_to_c(fty), " ", vn, " = (", cexpr, "); const char* ", sv,
+               " = \"[\"; for (int ", iv, " = 0; ", iv, " < ", vn, acc, "len; ", iv,
+               "++) { if (", iv, ") ", sv, " = __glide_format(\"%s, \", ", sv, "); ",
+               sv, " = __glide_format(\"%s%s\", ", sv, ", ");
+        emit_field_render_c(g, vn.concat(acc).concat("data[").concat(iv).concat("]"), &elemT, depth + 1);
+        print!("); } __glide_format(\"%s]\", ", sv, "); })"); return;
+    }
     print!("\"...\"");
 }
 
@@ -227,21 +325,15 @@ fn emit_struct_render_c(g: *CG, cexpr: string, sname: string, depth: i32) {
     print!(")");
 }
 
-// Emit a struct-typed println!/format!/dbg! argument `a` as a `const char*`.
+// Emit a displayable println!/print!/format!/dbg! argument `a` as a
+// `const char*`. One temp so a complex arg is evaluated exactly once; the
+// universal renderer handles struct / *struct / option / result / Vector /
+// enum (incl. a user `Display` impl's to_string).
 fn emit_display_arg(g: *CG, a: *Expr, at: *Type) {
-    let sname: string = at.name;
-    if g.fns.contains(sname.concat("_to_string")) {
-        print!(sname.concat("_to_string"), "(");
-        if cg_to_string_byref(g, sname) { print!("&("); emit_expr(g, a); print!(")"); }
-        else { emit_expr(g, a); }
-        print!(")");
-        return;
-    }
-    // Auto-render: one temp so a complex arg is evaluated exactly once.
     print!("({ ", type_to_c(at), " __gd = (");
     emit_expr(g, a);
     print!("); ");
-    emit_struct_render_c(g, "__gd", sname, 0);
+    emit_field_render_c(g, "__gd", at, 0);
     print!("; })");
 }
 
@@ -4294,7 +4386,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     if i > 0 { print!(" "); }
                     let a: Expr = e.args.get(i);
                     let at: *Type = infer_for_codegen(g, &a);
-                    if cg_is_display_struct(g, at) { print!("%s"); }
+                    if cg_is_display(g, at) { print!("%s"); }
                     else { print!(format_spec_for(at)); }
                 }
             }
@@ -4306,7 +4398,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     print!(", ");
                     let a: Expr = e.args.get(i);
                     let at: *Type = infer_for_codegen(g, &a);
-                    if cg_is_display_struct(g, at) {
+                    if cg_is_display(g, at) {
                         emit_display_arg(g, &a, at);
                     } else if at != null && at.kind == TY_NAMED && at.name.eq("bool") {
                         print!("__glide_bool_to_string(");
@@ -4364,11 +4456,11 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             print!("); fprintf(stderr, \"[dbg ");
             print!(loc);
             print!("] = ");
-            if cg_is_display_struct(g, at) { print!("%s"); }
+            if cg_is_display(g, at) { print!("%s"); }
             else { print!(format_spec_for(at)); }
             print!("\\n\", ");
-            if cg_is_display_struct(g, at) {
-                emit_struct_render_c(g, "__dbg", at.name, 0);
+            if cg_is_display(g, at) {
+                emit_field_render_c(g, "__dbg", at, 0);
             } else if at != null && at.kind == TY_NAMED && at.name.eq("bool") {
                 print!("__glide_bool_to_string(__dbg)");
             } else if at != null && at.kind == TY_NAMED
@@ -4408,7 +4500,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                             if e.args != null && arg_idx < e.args.len() {
                                 let a: Expr = e.args.get(arg_idx);
                                 let at: *Type = infer_for_codegen(g, &a);
-                                if cg_is_display_struct(g, at) { print!("%s"); }
+                                if cg_is_display(g, at) { print!("%s"); }
                                 else { print!(format_spec_for(at)); }
                             } else {
                                 print!("%s");
@@ -4431,7 +4523,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     print!(", ");
                     let a: Expr = e.args.get(j);
                     let at: *Type = infer_for_codegen(g, &a);
-                    if cg_is_display_struct(g, at) {
+                    if cg_is_display(g, at) {
                         emit_display_arg(g, &a, at);
                     } else if at != null && at.kind == TY_NAMED
                        && (at.name.eq("i64") || at.name.eq("isize") || at.name.eq("long")) {
