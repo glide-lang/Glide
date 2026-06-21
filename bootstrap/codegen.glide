@@ -661,6 +661,20 @@ fn emit_struct_render_c(g: *CG, cexpr: string, sname: string, depth: i32) {
 // `const char*`. One temp so a complex arg is evaluated exactly once; the
 // universal renderer handles struct / *struct / option / result / Vector /
 // enum (incl. a user `Display` impl's to_string).
+// The C type to truncate a narrow-int (<32-bit) value to before printf reads
+// it. C integer promotion widens int8_t/int16_t arithmetic operands to `int`,
+// so an inline `println!(p + q)` on i8 prints the un-narrowed result, diverging
+// from the value the same expression has when stored in an i8 variable. "" for
+// anything that doesn't need a truncating cast.
+fn _narrow_int_ctype(t: *Type) -> string {
+    if t == null || t.kind != TY_NAMED { return ""; }
+    if t.name.eq("i8")  { return "int8_t"; }
+    if t.name.eq("i16") { return "int16_t"; }
+    if t.name.eq("u8")  { return "uint8_t"; }
+    if t.name.eq("u16") { return "uint16_t"; }
+    return "";
+}
+
 fn emit_display_arg(g: *CG, a: *Expr, at: *Type) {
     print!("({ ", type_to_c(at), " __gd = (");
     emit_expr(g, a);
@@ -5036,6 +5050,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         print!("__glide_bool_to_string(");
                         emit_expr(g, &a);
                         print!(")");
+                    } else if !_narrow_int_ctype(at).eq("") {
+                        // Truncate inline narrow-int arithmetic to its declared
+                        // width so it matches the stored-variable value.
+                        print!("(".concat(_narrow_int_ctype(at)).concat(")("));
+                        emit_expr(g, &a);
+                        print!(")");
                     } else if at != null && at.kind == TY_NAMED
                               && (at.name.eq("i64") || at.name.eq("isize") || at.name.eq("long")) {
                         // Cast to (long long) so `%lld` works regardless of whether
@@ -5095,6 +5115,8 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 emit_field_render_c(g, "__dbg", at, 0);
             } else if at != null && at.kind == TY_NAMED && at.name.eq("bool") {
                 print!("__glide_bool_to_string(__dbg)");
+            } else if !_narrow_int_ctype(at).eq("") {
+                print!("(".concat(_narrow_int_ctype(at)).concat(")(__dbg)"));
             } else if at != null && at.kind == TY_NAMED
                       && (at.name.eq("i64") || at.name.eq("isize") || at.name.eq("long")) {
                 print!("(long long)(__dbg)");
@@ -5170,6 +5192,10 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     let at: *Type = infer_for_codegen(g, &a);
                     if cg_is_display(g, at) {
                         emit_display_arg(g, &a, at);
+                    } else if !_narrow_int_ctype(at).eq("") {
+                        print!("(".concat(_narrow_int_ctype(at)).concat(")("));
+                        emit_expr(g, &a);
+                        print!(")");
                     } else if at != null && at.kind == TY_NAMED
                        && (at.name.eq("i64") || at.name.eq("isize") || at.name.eq("long")) {
                         print!("(long long)(");
