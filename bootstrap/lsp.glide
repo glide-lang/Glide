@@ -6976,38 +6976,77 @@ fn _orm(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, doc:
 // Surface the intrinsic methods of an Option (`?T`) or Result (`!T`) so the
 // editor offers `unwrap` / `map` / `unwrap_or` / `ok_or` / … and not just the
 // raw `.ok`/`.err`/`.val` fields. `inner` is the pretty inner type (T).
+// A snippet tab-stop `${body}`. Built by concat so the literal `${` never
+// appears in a single Glide string — otherwise Glide's own `${...}` string
+// interpolation would consume it (turning the snippet `unwrap_or(${1})` into
+// the broken `unwrap_or(1)`).
+fn _tab(body: string) -> string {
+    return "$".concat("{").concat(body).concat("}");
+}
+
 fn _list_opt_res_methods(items: *JsonValue, seen: *HashMap<bool>, is_opt: bool, is_res: bool, inner: string) {
     let t: string = inner;
-    // Shared by Option and Result.
+    // `?U` for Option, `!U` for Result — the wrapper that map/and_then return.
+    let mut w: string = "!U";
+    if is_opt { w = "?U"; }
+    // A noun for the empty/failure branch, used in the prose.
+    let mut bad: string = "the result failed";
+    if is_opt { bad = "the option is empty"; }
+
+    // --- shared by Option and Result -------------------------------------
     _orm(items, seen, "unwrap", "() -> ".concat(t),
-        "Returns the contained value, or panics if absent/failed. Prefer `?` to propagate instead of panicking.", "unwrap()");
+        "Returns the contained `".concat(t).concat("`, or **panics** when ").concat(bad)
+        .concat(".\n\nReach for `?` to propagate instead of crashing, or `unwrap_or` / `expect` for a graceful path.\n\n```glide\nlet n = \"42\".try_parse_int().unwrap();   // 42\n```"),
+        "unwrap()");
     _orm(items, seen, "unwrap_or", "(default: ".concat(t).concat(") -> ").concat(t),
-        "Returns the contained value, or `default` when absent/failed.", "unwrap_or(${1:default})");
+        "Returns the contained `".concat(t).concat("`, or `default` when ").concat(bad)
+        .concat("; never panics.\n\n```glide\nlet port = read_env(\"PORT\").unwrap_or(8080);\n```"),
+        "unwrap_or(".concat(_tab("1:default")).concat(")"));
     _orm(items, seen, "unwrap_or_else", "(f: fn() -> ".concat(t).concat(") -> ").concat(t),
-        "Returns the contained value, or the result of calling `f` when absent/failed.", "unwrap_or_else(${1})");
+        "Returns the contained `".concat(t).concat("`, or computes a fallback with `f` (called only on the ").concat(if is_opt { "empty" } else { "error" })
+        .concat(" path, so an expensive default stays lazy).\n\n```glide\nlet cfg = load_cfg().unwrap_or_else(fn() -> Config { return Config::default(); });\n```"),
+        "unwrap_or_else(".concat(_tab("1")).concat(")"));
     _orm(items, seen, "expect", "(msg: string) -> ".concat(t),
-        "Returns the contained value, or panics with `msg` if absent/failed.", "expect(${1:msg})");
-    _orm(items, seen, "map", "(f: fn(".concat(t).concat(") -> U) -> ").concat(if is_opt { "?U" } else { "!U" }),
-        "Applies `f` to the contained value, leaving an absent/failed value unchanged.", "map(${1})");
-    _orm(items, seen, "and_then", "(f: fn(".concat(t).concat(") -> ").concat(if is_opt { "?U" } else { "!U" }).concat(") -> ").concat(if is_opt { "?U" } else { "!U" }),
-        "Chains another Option/Result-returning call on the contained value (flatMap).", "and_then(${1})");
+        "Returns the contained `".concat(t).concat("`, or panics with **your** message `msg`. Use it to document an invariant.\n\n```glide\nlet db = connect().expect(\"database must be reachable at startup\");\n```"),
+        "expect(".concat(_tab("1:msg")).concat(")"));
+    _orm(items, seen, "map", "(f: fn(".concat(t).concat(") -> U) -> ").concat(w),
+        "Transforms the contained value with `f`, leaving ".concat(bad).concat(" untouched. Returns a new `").concat(w)
+        .concat("`.\n\n```glide\nlet doubled = \"21\".try_parse_int().map(fn(n: i32) -> i32 { return n * 2; });   // ok(42)\n```"),
+        "map(".concat(_tab("1")).concat(")"));
+    _orm(items, seen, "and_then", "(f: fn(".concat(t).concat(") -> ").concat(w).concat(") -> ").concat(w),
+        "Chains another `".concat(w).concat("`-returning step on the contained value (flatMap). `f` can itself fail, and that failure short-circuits.\n\n```glide\nlet user = parse_id(s).and_then(fn(id: i32) -> !User { return db_find(id); });\n```"),
+        "and_then(".concat(_tab("1")).concat(")"));
+
     if is_opt {
-        _orm(items, seen, "is_some", "() -> bool", "True when a value is present.", "is_some()");
-        _orm(items, seen, "is_none", "() -> bool", "True when empty.", "is_none()");
+        _orm(items, seen, "is_some", "() -> bool",
+            "`true` when a value is present.\n\n```glide\nif found.is_some() { use_it(found.unwrap()); }\n```",
+            "is_some()");
+        _orm(items, seen, "is_none", "() -> bool",
+            "`true` when the option is empty.\n\n```glide\nif cache.is_none() { rebuild(); }\n```",
+            "is_none()");
         _orm(items, seen, "ok_or", "(err: string) -> !".concat(t),
-            "Converts `?T` to `!T`, using `err` as the failure message when empty.", "ok_or(${1:err})");
+            "Converts `?".concat(t).concat("` into `!").concat(t).concat("`, attaching `err` as the failure message when empty. Pairs well with `?`.\n\n```glide\nlet v = lookup(key).ok_or(\"key not found\")?;\n```"),
+            "ok_or(".concat(_tab("1:err")).concat(")"));
         _orm(items, seen, "filter", "(pred: fn(".concat(t).concat(") -> bool) -> ?").concat(t),
-            "Keeps the value only if `pred` returns true, else yields `none()`.", "filter(${1})");
+            "Keeps the value only if `pred` returns `true`, otherwise yields `none()`.\n\n```glide\nlet even = some(n).filter(fn(x: i32) -> bool { return x % 2 == 0; });\n```",
+            "filter(".concat(_tab("1")).concat(")"));
     }
     if is_res {
-        _orm(items, seen, "is_ok", "() -> bool", "True when the result succeeded.", "is_ok()");
-        _orm(items, seen, "is_err", "() -> bool", "True when the result failed.", "is_err()");
-        _orm(items, seen, "unwrap_err", "() -> string", "Returns the error message, or panics if the result is ok.", "unwrap_err()");
+        _orm(items, seen, "is_ok", "() -> bool",
+            "`true` when the result succeeded (the value is then in `.val`).\n\n```glide\nif r.is_ok() { println!(r.unwrap()); }\n```",
+            "is_ok()");
+        _orm(items, seen, "is_err", "() -> bool",
+            "`true` when the result failed (the reason is then in `.err`).\n\n```glide\nif r.is_err() { eprintln(r.unwrap_err()); }\n```",
+            "is_err()");
+        _orm(items, seen, "unwrap_err", "() -> string",
+            "Returns the error message, or **panics** if the result is actually ok.\n\n```glide\nlet why = open(path).unwrap_err();\n```",
+            "unwrap_err()");
         // NOTE: the `.ok()` method (Result -> Option) is intentionally omitted
-        // from completion — its name collides with the far more common `.ok`
+        // from completion: its name collides with the far more common `.ok`
         // boolean field, which must win the list. The method still compiles.
         _orm(items, seen, "map_err", "(f: fn(string) -> string) -> !".concat(t),
-            "Transforms the error message, leaving an ok value unchanged.", "map_err(${1})");
+            "Rewrites the error message, leaving an ok value unchanged. Good for adding context.\n\n```glide\nlet r = open(path).map_err(fn(e: string) -> string { return \"open failed: \".concat(e); });\n```",
+            "map_err(".concat(_tab("1")).concat(")"));
     }
 }
 fn _doc_ok() -> string {
