@@ -2959,6 +2959,40 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return result_ty;
     }
 
+    if e.kind == EX_FNEXPR {
+        // Check the closure body in a FRESH scope holding only its own params
+        // (mirrors check_fn), with the closure's own return type. Globals,
+        // consts (module_scope) and top-level fns resolve outside t.scope, so
+        // they stay visible — but enclosing LOCALS do not. A closure that
+        // references an enclosing local is a capture, which isn't supported
+        // (codegen lifts the body to a top-level fn, leaving the captured name
+        // undeclared in C); it now surfaces as a clean `unknown name` error at
+        // check time instead of a confusing cc failure. This also catches
+        // genuinely undefined names and bad statements inside the closure,
+        // which the typer previously skipped entirely.
+        let saved_fscope: *HashMap<Type> = t.scope;
+        let saved_fret: *Type = t.current_ret;
+        let fresh_scope: *HashMap<Type> = HashMap::new();
+        t.scope = fresh_scope;
+        t.current_ret = e.cast_to;
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.ty != null { t.scope.insert(p.name, *p.ty); }
+            }
+        }
+        if e.fn_expr_body != null {
+            for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+                let b: Stmt = e.fn_expr_body.get(i);
+                check_stmt(t, &b);
+            }
+        }
+        t.scope.free();
+        t.scope = saved_fscope;
+        t.current_ret = saved_fret;
+        return ty_named("__unknown__");
+    }
+
     if e.kind == EX_IDENT {
         // `cfg!("...")` was lowered by the expander to a `__glide_cfg_<cond>`
         // flag — a compile-time bool whose value the C preprocessor decides.
