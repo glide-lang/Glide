@@ -1168,50 +1168,73 @@ fn collect_result_in_stmt(g: *CG, s: *Stmt) {
     }
 }
 
+// Emit ONE `!T` Result struct (with dedup). A Result whose inner is itself an
+// Option/Result is embedded BY VALUE, so the inner's struct must be fully
+// defined first — emit it before this one. This fixes nested `?(?T)` (whose
+// conjugate `!?T` embeds `?T`) failing cc with "unknown type __glide_option_*".
+fn _emit_one_result(g: *CG, t: *Type) {
+    if t == null { return; }
+    let m: string = mangle_type(t);
+    let dedup_key: string = "__rt_result_emit_".concat(m);
+    if g.module_aliases.contains(dedup_key) { return; }
+    g.module_aliases.insert(dedup_key, "1");
+    // Special case `!void` — a Result with no value. `void val;` is invalid C,
+    // so emit a struct without the val field, an ok ctor with no args, an err
+    // ctor that takes only the message, and no unwrap (nothing to extract).
+    if t.kind == TY_NAMED && t.name.eq("void") {
+        println!("#ifndef __GLIDE_RESULT_void_GUARD");
+        println!("#define __GLIDE_RESULT_void_GUARD");
+        println!("typedef struct __glide_result_void_t { int ok; const char* err; } __glide_result_void_t;");
+        println!("static __glide_result_void_t __glide_ok_void(void) { __glide_result_void_t r; r.ok = 1; r.err = (const char*)0; return r; }");
+        println!("static __glide_result_void_t __glide_err_void(const char* msg) { __glide_result_void_t r; r.ok = 0; r.err = msg; return r; }");
+        println!("#endif");
+        return;
+    }
+    // g.result_types holds the VAL type; this struct embeds `type_to_c(t)` by
+    // value. If t is itself an Option/Result, its struct (`__glide_option_*` /
+    // `__glide_result_*`) must be fully defined first.
+    if t.kind == TY_OPTION { _emit_one_option(g, t.inner); }
+    else if t.kind == TY_RESULT { _emit_one_result(g, t.inner); }
+    emit_tuple_typedefs_in_type(g, t);
+    let tc: string = type_to_c(t);
+    let tmpl: string = include_str!("bootstrap/runtime/result.c.tmpl");
+    let s1: string = _cg_replace(tmpl, "@M@", m);
+    let s2: string = _cg_replace(s1, "@TC@", tc);
+    print!(s2);
+}
+
 fn emit_result_runtime(g: *CG) {
     if g.result_types.len() == 0 { return; }
-    let tmpl: string = include_str!("bootstrap/runtime/result.c.tmpl");
     for let i: i32 = 0; i < g.result_types.len(); i++ {
         let t: Type = g.result_types.get(i);
-        let m: string = mangle_type(&t);
-        let dedup_key: string = "__rt_result_emit_".concat(m);
-        if g.module_aliases.contains(dedup_key) { continue; }
-        g.module_aliases.insert(dedup_key, "1");
-        // Special case `!void` — a Result with no value. `void val;` is invalid C,
-        // so emit a struct without the val field, an ok ctor with no args, an err
-        // ctor that takes only the message, and no unwrap (nothing to extract).
-        if t.kind == TY_NAMED && t.name.eq("void") {
-            println!("#ifndef __GLIDE_RESULT_void_GUARD");
-            println!("#define __GLIDE_RESULT_void_GUARD");
-            println!("typedef struct __glide_result_void_t { int ok; const char* err; } __glide_result_void_t;");
-            println!("static __glide_result_void_t __glide_ok_void(void) { __glide_result_void_t r; r.ok = 1; r.err = (const char*)0; return r; }");
-            println!("static __glide_result_void_t __glide_err_void(const char* msg) { __glide_result_void_t r; r.ok = 0; r.err = msg; return r; }");
-            println!("#endif");
-            continue;
-        }
-        emit_tuple_typedefs_in_type(g, &t);
-        let tc: string = type_to_c(&t);
-        let s1: string = _cg_replace(tmpl, "@M@", m);
-        let s2: string = _cg_replace(s1, "@TC@", tc);
-        print!(s2);
+        _emit_one_result(g, &t);
     }
     println!("");
 }
 
+// Emit ONE `?T` Option struct (with dedup), inner Option/Result by-value
+// dependency first (mirrors _emit_one_result).
+fn _emit_one_option(g: *CG, t: *Type) {
+    if t == null { return; }
+    let m: string = mangle_type(t);
+    let dedup_key: string = "__rt_option_emit_".concat(m);
+    if g.module_aliases.contains(dedup_key) { return; }
+    g.module_aliases.insert(dedup_key, "1");
+    if t.kind == TY_OPTION { _emit_one_option(g, t.inner); }
+    else if t.kind == TY_RESULT { _emit_one_result(g, t.inner); }
+    emit_tuple_typedefs_in_type(g, t);
+    let tc: string = type_to_c(t);
+    let tmpl: string = include_str!("bootstrap/runtime/option.c.tmpl");
+    let s1: string = _cg_replace(tmpl, "@M@", m);
+    let s2: string = _cg_replace(s1, "@TC@", tc);
+    print!(s2);
+}
+
 fn emit_option_runtime(g: *CG) {
     if g.option_types.len() == 0 { return; }
-    let tmpl: string = include_str!("bootstrap/runtime/option.c.tmpl");
     for let i: i32 = 0; i < g.option_types.len(); i++ {
         let t: Type = g.option_types.get(i);
-        let m: string = mangle_type(&t);
-        let dedup_key: string = "__rt_option_emit_".concat(m);
-        if g.module_aliases.contains(dedup_key) { continue; }
-        g.module_aliases.insert(dedup_key, "1");
-        emit_tuple_typedefs_in_type(g, &t);
-        let tc: string = type_to_c(&t);
-        let s1: string = _cg_replace(tmpl, "@M@", m);
-        let s2: string = _cg_replace(s1, "@TC@", tc);
-        print!(s2);
+        _emit_one_option(g, &t);
     }
     println!("");
 }
