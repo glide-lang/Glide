@@ -264,6 +264,23 @@ fn _closure_ret_ty(g: *CG, cl: *Expr) -> *Type {
     return null;
 }
 
+// Build a TY_FNPTR from a parameter list + return type (for closure/anon-fn
+// type inference, mirroring the named-fn branch of infer_for_codegen).
+fn _build_fnptr_ty(params: *Vector<Param>, ret: *Type) -> *Type {
+    let args: *Vector<Type> = Vector::new();
+    if params != null {
+        for let i: i32 = 0; i < params.len(); i++ {
+            let p: Param = params.get(i);
+            if p.ty != null { args.push(*p.ty); }
+        }
+    }
+    let fp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    fp.kind = TY_FNPTR;
+    fp.args = args;
+    fp.fnptr_ret = ret;
+    return fp;
+}
+
 // Emit `<closure>(<c_arg>)` with the fn-ptr cast convention (c_arg is raw C; ""
 // for a zero-arg call). A direct anon/named fn needs no cast; a fn-ptr value
 // (void* slot) is cast to its real signature first.
@@ -2326,6 +2343,10 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         }
         return null;
     }
+    // Inline closure literal: `fn(x: T) -> U { ... }` has its type from the
+    // params + return (`.cast_to`). Without this an untyped `let f = fn...`
+    // bound to `void*` and its call emitted without a fn-ptr cast (cc error).
+    if e.kind == EX_FNEXPR { return _build_fnptr_ty(e.fn_expr_params, e.cast_to); }
     if e.kind == EX_IDENT {
         let local: *Type = g.lookup(e.str_val);
         if local != null { return local; }
@@ -2356,6 +2377,14 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             fp.args = args;
             fp.fnptr_ret = s.fn_ret_ty;
             return fp;
+        }
+        // A lifted closure (`__glide_anon_N`) used as a value — build its
+        // TY_FNPTR from the registered AnonFn so `let f = fn...; f(x)` and
+        // `o.map(f)` resolve the signature (otherwise f is void* and the call
+        // has no cast).
+        for let i: i32 = 0; i < g.anon_fns.len(); i++ {
+            let af: AnonFn = g.anon_fns.get(i);
+            if af.name.eq(e.str_val) { return _build_fnptr_ty(af.params, af.ret_ty); }
         }
         return null;
     }
@@ -2509,6 +2538,11 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         // Direct fn ident
         if e.lhs != null && e.lhs.kind == EX_IDENT {
             let nm: string = e.lhs.str_val;
+            // A local fn-pointer / closure variable: the call yields its
+            // return type (so `println!(f(x))` formats the result correctly
+            // instead of as a pointer).
+            let _lvt: *Type = g.lookup(nm);
+            if _lvt != null && _lvt.kind == TY_FNPTR { return _lvt.fnptr_ret; }
             // Stdlib runtime fns.
             if nm.eq("args_count") { return ty_named("i32"); }
             if nm.eq("args_at") { return ty_named("string"); }
@@ -4627,9 +4661,26 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 let mname: string = base.concat("_").concat(method);
                 if g.generic_fns.contains(mname) {
                     let template: Stmt = g.generic_fns.get(mname);
-                    let full_args: *Vector<Type> = resolve_method_call_args(
+                    let mut full_args: *Vector<Type> = resolve_method_call_args(
                         g, e, &template, stripped.args);
                     if full_args == null { full_args = stripped.args; }
+                    // Defensive: a method with extra type params (e.g.
+                    // `Vector.map<U>`) whose U couldn't be inferred would queue
+                    // a mono with fewer args than type_params, and subst_type's
+                    // args.get() would read out of bounds and segfault the
+                    // compiler. Pad a CLONE (never mutate the shared
+                    // stripped.args) so it fails cc cleanly instead of crashing.
+                    if template.type_params != null
+                       && full_args.len() < template.type_params.len() {
+                        let padded: *Vector<Type> = Vector::new();
+                        for let pi: i32 = 0; pi < full_args.len(); pi++ {
+                            padded.push(full_args.get(pi));
+                        }
+                        while padded.len() < template.type_params.len() {
+                            padded.push(*ty_named("void"));
+                        }
+                        full_args = padded;
+                    }
                     let mangled: string = mangle_generic(mname, full_args);
                     if !g.emitted_monos.contains(mangled) {
                         g.emitted_monos.insert(mangled, true);
@@ -5398,9 +5449,13 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                 for let k: i32 = 0; k < g.anon_fns.len(); k++ {
                     let af: AnonFn = g.anon_fns.get(k);
                     if af.name.eq(s.let_value.str_val) {
+                        // The C slot is a void*, but declare the binding's Glide
+                        // type as the closure's fn-ptr signature so a later call
+                        // `f(x)` emits the fn-ptr cast (a plain void* slot can't
+                        // be called). Previously declared void* -> cc rejected
+                        // `f(x)` as "not a function or function pointer".
                         print!("void* ", cname);
-                        let void_ptr: *Type = ty_pointer(ty_named("void"));
-                        g.declare(s.name, void_ptr);
+                        g.declare(s.name, _build_fnptr_ty(af.params, af.ret_ty));
                         handled = true;
                         break;
                     }
