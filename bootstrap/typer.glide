@@ -3186,6 +3186,36 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     return ty_named("void");
                 }
             }
+            // Option (`?T`) / Result (`!T`) intrinsic methods. Resolve the
+            // return type so chaining + `let x: bool = o.is_some()` type-check.
+            let _ors: *Type = strip_ptr(recv_ty);
+            if _ors != null && (_ors.kind == TY_OPTION || _ors.kind == TY_RESULT) {
+                let iso: bool = _ors.kind == TY_OPTION;
+                if (iso && (mname.eq("is_some") || mname.eq("is_none")))
+                   || (!iso && (mname.eq("is_ok") || mname.eq("is_err"))) { return ty_named("bool"); }
+                if mname.eq("unwrap") || mname.eq("expect") || mname.eq("unwrap_or")
+                   || mname.eq("unwrap_or_else") {
+                    if _ors.inner != null { return _ors.inner; }
+                    return ty_named("void");
+                }
+                if !iso && mname.eq("unwrap_err") { return ty_named("string"); }
+                if iso && mname.eq("ok_or") { return ty_result(_ors.inner); }
+                if !iso && mname.eq("ok") { return ty_option(_ors.inner); }
+                if (iso && mname.eq("filter")) || (!iso && mname.eq("map_err")) { return _ors; }
+                if mname.eq("map") && e.args != null && e.args.len() == 1 {
+                    let _cl: Expr = e.args.get(0);
+                    if _cl.kind == EX_FNEXPR && _cl.cast_to != null {
+                        if iso { return ty_option(_cl.cast_to); }
+                        return ty_result(_cl.cast_to);
+                    }
+                    return null;
+                }
+                if mname.eq("and_then") && e.args != null && e.args.len() == 1 {
+                    let _cl: Expr = e.args.get(0);
+                    if _cl.kind == EX_FNEXPR && _cl.cast_to != null { return _cl.cast_to; }
+                    return null;
+                }
+            }
             // Impl method lookup: `recv.method(args)` -> `<Type>_method` in
             // the fn registry. Without this the call's return type leaks as
             // null and the surrounding check (e.g. `return r.listen()`) lets

@@ -123,6 +123,177 @@ fn _emit_chan_recv(g: *CG, e: *Expr, deref_n: i32) {
     print!(")");
 }
 
+// Return type of a closure argument: an inline `fn(...) -> U {}` carries U in
+// `.cast_to`; a lifted anon (EX_IDENT) is in g.anon_fns; a named fn in g.fns.
+fn _closure_ret_ty(g: *CG, cl: *Expr) -> *Type {
+    if cl == null { return null; }
+    if cl.kind == EX_FNEXPR { return cl.cast_to; }
+    if cl.kind == EX_IDENT {
+        for let i: i32 = 0; i < g.anon_fns.len(); i++ {
+            let af: AnonFn = g.anon_fns.get(i);
+            if af.name.eq(cl.str_val) { return af.ret_ty; }
+        }
+        if g.fns.contains(cl.str_val) { return g.fns.get(cl.str_val).fn_ret_ty; }
+    }
+    return null;
+}
+
+// Emit `<closure>(<c_arg>)` with the fn-ptr cast convention (c_arg is raw C; ""
+// for a zero-arg call). A direct anon/named fn needs no cast; a fn-ptr value
+// (void* slot) is cast to its real signature first.
+fn _emit_closure_call(g: *CG, cl: *Expr, c_arg: string) {
+    let cty: *Type = infer_for_codegen(g, cl);
+    if cty != null && cty.kind == TY_FNPTR {
+        print!("((", fnptr_cast_str(cty), ")");
+        emit_expr(g, cl);
+        print!(")");
+    } else {
+        emit_expr(g, cl);
+    }
+    print!("(", c_arg, ")");
+}
+
+// Intrinsic methods on Option (`?T`) / Result (`!T`). Emits an inline
+// statement-expr and returns true when `e` is such a method call; false lets
+// the caller fall through to normal dispatch. Mirrors the chan method block.
+fn _emit_opt_res_method(g: *CG, e: *Expr) -> bool {
+    if e.lhs == null || e.lhs.kind != EX_MEMBER || e.lhs.lhs == null { return false; }
+    let mname: string = e.lhs.field;
+    let recv_e: *Expr = e.lhs.lhs;
+    let recv_ty: *Type = infer_for_codegen(g, recv_e);
+    let stripped: *Type = strip_ptr(recv_ty);
+    if stripped == null { return false; }
+    let is_opt: bool = stripped.kind == TY_OPTION;
+    let is_res: bool = stripped.kind == TY_RESULT;
+    if !is_opt && !is_res { return false; }
+    let cty: string = type_to_c(stripped);
+    let mut flag: string = "ok";
+    if is_opt { flag = "has"; }
+    let mut m_inner: string = "";
+    if stripped.inner != null { m_inner = mangle_type(stripped.inner); }
+    let mut derefs: string = "";
+    let mut t: *Type = recv_ty;
+    while t != null && (t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) {
+        derefs = derefs.concat("*"); t = t.inner;
+    }
+    let line: string = int_to_str(e.line);
+    let mut nargs: i32 = 0;
+    if e.args != null { nargs = e.args.len(); }
+
+    // open: `({ <cty> __v = <derefs>(<recv>); `
+    if (is_opt && mname.eq("is_some")) || (is_res && mname.eq("is_ok")) {
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e); print!("); (__v.", flag, "); })");
+        return true;
+    }
+    if (is_opt && mname.eq("is_none")) || (is_res && mname.eq("is_err")) {
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e); print!("); (!__v.", flag, "); })");
+        return true;
+    }
+    if mname.eq("unwrap") && nargs == 0 {
+        let mut kind: string = "err";
+        if is_opt { kind = "none"; }
+        // Build the message literal in one piece — multi-arg print! joins with
+        // spaces, which would land inside the C string literal.
+        let pmsg: string = "\"called `unwrap()` on a ".concat(kind).concat(" value\"");
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); if (!__v.", flag, ") __glide_panic(", pmsg, ", \"\", ", line, "); __v.val; })");
+        return true;
+    }
+    if mname.eq("expect") && nargs == 1 {
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); if (!__v.", flag, ") __glide_panic((");
+        let msg: Expr = e.args.get(0); emit_expr(g, &msg);
+        print!("), \"\", ", line, "); __v.val; })");
+        return true;
+    }
+    if mname.eq("unwrap_or") && nargs == 1 {
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); __v.", flag, " ? __v.val : (");
+        let d: Expr = e.args.get(0); emit_expr(g, &d);
+        print!("); })");
+        return true;
+    }
+    if is_res && mname.eq("unwrap_err") && nargs == 0 {
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); if (__v.ok) __glide_panic(\"called `unwrap_err()` on an ok value\", \"\", ", line, "); __v.err; })");
+        return true;
+    }
+    if mname.eq("unwrap_or_else") && nargs == 1 {
+        let f0: Expr = e.args.get(0);
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); __v.", flag, " ? __v.val : ");
+        _emit_closure_call(g, &f0, "");
+        print!("; })");
+        return true;
+    }
+    if is_opt && mname.eq("ok_or") && nargs == 1 {
+        let ea: Expr = e.args.get(0);
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); __v.has ? ".concat("__glide_ok_").concat(m_inner).concat("(__v.val) : ")
+            .concat("__glide_err_").concat(m_inner).concat("("));
+        emit_expr(g, &ea);
+        print!("); })");
+        return true;
+    }
+    if is_res && mname.eq("ok") && nargs == 0 {
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); __v.ok ? ".concat("__glide_some_").concat(m_inner).concat("(__v.val) : ")
+            .concat("__glide_none_").concat(m_inner).concat("(); })"));
+        return true;
+    }
+    if is_opt && mname.eq("filter") && nargs == 1 {
+        let p0: Expr = e.args.get(0);
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); (__v.has && ");
+        _emit_closure_call(g, &p0, "__v.val");
+        print!(") ? __v : ".concat("__glide_none_").concat(m_inner).concat("(); })"));
+        return true;
+    }
+    if is_res && mname.eq("map_err") && nargs == 1 {
+        let f0: Expr = e.args.get(0);
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        print!("); __v.ok ? __v : ".concat("__glide_err_").concat(m_inner).concat("("));
+        _emit_closure_call(g, &f0, "__v.err");
+        print!("); })");
+        return true;
+    }
+    if mname.eq("map") && nargs == 1 {
+        let cl: Expr = e.args.get(0);
+        let u: *Type = _closure_ret_ty(g, &cl);
+        let mut mu: string = m_inner;
+        if u != null { mu = mangle_type(u); }
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        if is_opt {
+            print!("); __v.has ? ".concat("__glide_some_").concat(mu).concat("("));
+            _emit_closure_call(g, &cl, "__v.val");
+            print!(") : ".concat("__glide_none_").concat(mu).concat("(); })"));
+        } else {
+            print!("); __v.ok ? ".concat("__glide_ok_").concat(mu).concat("("));
+            _emit_closure_call(g, &cl, "__v.val");
+            print!(") : ".concat("__glide_err_").concat(mu).concat("(__v.err); })"));
+        }
+        return true;
+    }
+    if mname.eq("and_then") && nargs == 1 {
+        let cl: Expr = e.args.get(0);
+        let clret: *Type = _closure_ret_ty(g, &cl);
+        let mut mu: string = m_inner;
+        if clret != null && clret.inner != null { mu = mangle_type(clret.inner); }
+        print!("({ ", cty, " __v = ", derefs, "("); emit_expr(g, recv_e);
+        if is_opt {
+            print!("); __v.has ? ");
+            _emit_closure_call(g, &cl, "__v.val");
+            print!(" : ".concat("__glide_none_").concat(mu).concat("(); })"));
+        } else {
+            print!("); __v.ok ? ");
+            _emit_closure_call(g, &cl, "__v.val");
+            print!(" : ".concat("__glide_err_").concat(mu).concat("(__v.err); })"));
+        }
+        return true;
+    }
+    return false;
+}
+
 fn format_spec_for(t: *Type) -> string {
     if t == null { return "%p"; }
     if t.kind != TY_NAMED { return "%p"; }
@@ -684,6 +855,30 @@ fn _emit_optres_template(g: *CG, inner: *Type) {
     if !already { g.optres_types.push(*inner); }
 }
 
+// Register an option/result wrapper for `inner` (deduped, skips `void`),
+// without recursing — used to register the conjugate so `.ok()` / `.ok_or()`
+// always find their sibling ctors.
+fn _register_option_wrapper(g: *CG, inner: *Type) {
+    if inner == null { return; }
+    if inner.kind == TY_NAMED && inner.name.eq("void") { return; }
+    let m: string = mangle_type(inner);
+    for let i: i32 = 0; i < g.option_types.len(); i++ {
+        let ex: Type = g.option_types.get(i);
+        if mangle_type(&ex).eq(m) { return; }
+    }
+    g.option_types.push(*inner);
+}
+fn _register_result_wrapper(g: *CG, inner: *Type) {
+    if inner == null { return; }
+    if inner.kind == TY_NAMED && inner.name.eq("void") { return; }
+    let m: string = mangle_type(inner);
+    for let i: i32 = 0; i < g.result_types.len(); i++ {
+        let ex: Type = g.result_types.get(i);
+        if mangle_type(&ex).eq(m) { return; }
+    }
+    g.result_types.push(*inner);
+}
+
 fn collect_result_in_type(g: *CG, t: *Type) {
     if t == null { return; }
     if t.kind == TY_RESULT && t.inner != null {
@@ -693,6 +888,7 @@ fn collect_result_in_type(g: *CG, t: *Type) {
             if mangle_type(&ex).eq(m) { return; }
         }
         g.result_types.push(*t.inner);
+        _register_option_wrapper(g, t.inner);
     }
     if t.kind == TY_OPTION && t.inner != null {
         let m: string = mangle_type(t.inner);
@@ -701,6 +897,7 @@ fn collect_result_in_type(g: *CG, t: *Type) {
             if mangle_type(&ex).eq(m) { return; }
         }
         g.option_types.push(*t.inner);
+        _register_result_wrapper(g, t.inner);
     }
     if t.kind == TY_OPT_RESULT && t.inner != null {
         let m: string = mangle_type(t.inner);
@@ -723,6 +920,24 @@ fn collect_result_in_type(g: *CG, t: *Type) {
 fn collect_result_in_expr(g: *CG, e: *Expr) {
     if e == null { return; }
     if e.cast_to != null { collect_result_in_type(g, e.cast_to); }
+    // Option/Result `map`/`and_then`: register the closure-return wrapper so its
+    // some/none/ok/err ctors are emitted in the header region (the call site
+    // can't emit a typedef mid-expression). Over-registers for Vector.map etc.,
+    // which only costs an unused struct.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.args != null && e.args.len() == 1 {
+        let _mn: string = e.lhs.field;
+        if _mn.eq("map") {
+            let _cl: Expr = e.args.get(0);
+            let _u: *Type = _closure_ret_ty(g, &_cl);
+            if _u != null { _register_option_wrapper(g, _u); _register_result_wrapper(g, _u); }
+        }
+        if _mn.eq("and_then") {
+            let _cl: Expr = e.args.get(0);
+            let _cr: *Type = _closure_ret_ty(g, &_cl);
+            if _cr != null { collect_result_in_type(g, _cr); }
+        }
+    }
     if e.lhs != null { collect_result_in_expr(g, e.lhs); }
     if e.rhs != null { collect_result_in_expr(g, e.rhs); }
     if e.operand != null { collect_result_in_expr(g, e.operand); }
@@ -2220,6 +2435,39 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 }
                 if e.lhs.field.eq("send") || e.lhs.field.eq("close") {
                     return ty_named("void");
+                }
+            }
+            // Option / Result intrinsic methods — return type for chaining.
+            if stripped != null && (stripped.kind == TY_OPTION || stripped.kind == TY_RESULT) {
+                let mm: string = e.lhs.field;
+                let iso: bool = stripped.kind == TY_OPTION;
+                if (iso && (mm.eq("is_some") || mm.eq("is_none")))
+                   || (!iso && (mm.eq("is_ok") || mm.eq("is_err"))) { return ty_named("bool"); }
+                if mm.eq("unwrap") || mm.eq("expect") || mm.eq("unwrap_or")
+                   || mm.eq("unwrap_or_else") {
+                    if stripped.inner != null {
+                        let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                        *p = *stripped.inner; return p;
+                    }
+                    return ty_named("void");
+                }
+                if !iso && mm.eq("unwrap_err") { return ty_named("string"); }
+                if iso && mm.eq("ok_or") { return ty_result(stripped.inner); }
+                if !iso && mm.eq("ok") { return ty_option(stripped.inner); }
+                if (iso && mm.eq("filter")) || (!iso && mm.eq("map_err")) {
+                    let p: *Type = __glide_palloc(sizeof(Type)) as *Type; *p = *stripped; return p;
+                }
+                if mm.eq("map") && e.args != null && e.args.len() == 1 {
+                    let cl: Expr = e.args.get(0);
+                    let u: *Type = _closure_ret_ty(g, &cl);
+                    if u != null { if iso { return ty_option(u); } return ty_result(u); }
+                    return null;
+                }
+                if mm.eq("and_then") && e.args != null && e.args.len() == 1 {
+                    let cl: Expr = e.args.get(0);
+                    let cr: *Type = _closure_ret_ty(g, &cl);
+                    if cr != null { let p: *Type = __glide_palloc(sizeof(Type)) as *Type; *p = *cr; return p; }
+                    return null;
                 }
             }
             if stripped != null && stripped.kind == TY_NAMED {
@@ -3991,6 +4239,9 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 }
             }
         }
+
+        // ---- Option / Result intrinsic methods ----
+        if _emit_opt_res_method(g, e) { return; }
 
         // ---- chan builtins: make_chan / send / recv / close ----
         if e.lhs != null && e.lhs.kind == EX_IDENT && e.args != null {
@@ -7251,12 +7502,17 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                 g.declare(p.name, p.ty);
             }
         }
+        // Set the return-type context so `return some(x)` / `ok(x)` inside the
+        // closure body lower against the closure's declared return type.
+        let saved_ret_anon: *Type = g.current_ret_ty;
+        g.current_ret_ty = af.ret_ty;
         if af.body != null {
             for let j: i32 = 0; j < af.body.len(); j++ {
                 let b: Stmt = af.body.get(j);
                 emit_stmt(g, &b, 1);
             }
         }
+        g.current_ret_ty = saved_ret_anon;
         g.emit_deferred_reverse(1);
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
