@@ -67,12 +67,138 @@ pub fn is_c_reserved(s: string) -> bool {
     if s.eq("stdin") { return true; }
     if s.eq("stdout") { return true; }
     if s.eq("stderr") { return true; }
+    // Standard C library MACROS (stdlib/stdio/limits/signal/fcntl/errno). A
+    // user const/var/field with one of these names is otherwise emitted into
+    // C verbatim and redefines or clashes with the macro the runtime headers
+    // already provide — e.g. `const NULL = 42` emits `#define NULL 42`, which
+    // breaks every later use of NULL. Mangling is applied uniformly at the
+    // definition and every reference through c_safe_ident, so the `_g_` rename
+    // stays consistent. These names are never extern/FFI targets (they are
+    // macros, not symbols), so the uniform rename is safe. Gated on an
+    // uppercase initial (plus the lone lowercase `errno`) to keep the common
+    // lowercase-identifier path cheap.
+    if s.eq("errno") { return true; }
+    let mut c0: i32 = 0;
+    if s.len() > 0 { c0 = s.at(0).to_int(); }
+    if c0 >= 65 && c0 <= 90 {
+        if s.eq("NULL") || s.eq("EOF") || s.eq("EXIT_SUCCESS") || s.eq("EXIT_FAILURE") { return true; }
+        if s.eq("BUFSIZ") || s.eq("RAND_MAX") || s.eq("CHAR_BIT") || s.eq("MB_CUR_MAX") { return true; }
+        if s.eq("INT_MAX") || s.eq("INT_MIN") || s.eq("UINT_MAX") { return true; }
+        if s.eq("LONG_MAX") || s.eq("LONG_MIN") || s.eq("ULONG_MAX") { return true; }
+        if s.eq("LLONG_MAX") || s.eq("LLONG_MIN") || s.eq("ULLONG_MAX") { return true; }
+        if s.eq("CHAR_MAX") || s.eq("CHAR_MIN") || s.eq("SCHAR_MAX") || s.eq("SCHAR_MIN") { return true; }
+        if s.eq("UCHAR_MAX") || s.eq("SHRT_MAX") || s.eq("SHRT_MIN") || s.eq("USHRT_MAX") { return true; }
+        if s.eq("SIZE_MAX") || s.eq("SSIZE_MAX") || s.eq("PATH_MAX") || s.eq("NAME_MAX") { return true; }
+        if s.eq("SEEK_SET") || s.eq("SEEK_CUR") || s.eq("SEEK_END") { return true; }
+        if s.eq("FILENAME_MAX") || s.eq("FOPEN_MAX") || s.eq("TMP_MAX") { return true; }
+        if s.eq("SIGINT") || s.eq("SIGTERM") || s.eq("SIGKILL") || s.eq("SIGSEGV") { return true; }
+        if s.eq("SIGABRT") || s.eq("SIGFPE") || s.eq("SIGILL") || s.eq("SIGHUP") { return true; }
+        if s.eq("SIGQUIT") || s.eq("SIGALRM") || s.eq("SIGCHLD") || s.eq("SIGPIPE") { return true; }
+        if s.eq("SIGUSR1") || s.eq("SIGUSR2") || s.eq("SIGSTOP") || s.eq("SIGCONT") { return true; }
+        if s.eq("O_RDONLY") || s.eq("O_WRONLY") || s.eq("O_RDWR") || s.eq("O_CREAT") { return true; }
+        if s.eq("O_APPEND") || s.eq("O_TRUNC") || s.eq("O_EXCL") || s.eq("O_NONBLOCK") { return true; }
+        if s.eq("EAGAIN") || s.eq("EINTR") || s.eq("EINVAL") || s.eq("ENOENT") { return true; }
+        if s.eq("EACCES") || s.eq("EEXIST") || s.eq("ENOMEM") || s.eq("EIO") { return true; }
+        if s.eq("EPIPE") || s.eq("EBADF") || s.eq("EBUSY") || s.eq("ERANGE") { return true; }
+    }
     return false;
 }
 
 pub fn c_safe_ident(name: string) -> string {
     if is_c_reserved(name) { return "_g_".concat(name); }
     return name;
+}
+
+// Standard C library / POSIX symbol names. A user-defined FREE FUNCTION
+// emitted verbatim under one of these collides with the prototype the
+// runtime's headers already pull in (stdlib.h / stdio.h / string.h / time.h /
+// math.h / ctype.h / unistd.h ...), producing a `conflicting types for 'X'`
+// cc error even though the Glide program is perfectly valid (the original
+// report was `fn div`). User functions are only ever called from generated
+// C, so renaming them is safe; extern/FFI bindings keep their real name and
+// are excluded by the body check in `userfn_c_name`. Over-inclusion is
+// harmless: a user `fn log` simply emits as the mangled name and still works.
+pub fn is_libc_symbol(s: string) -> bool {
+    // stdlib.h
+    if s.eq("abort") || s.eq("abs") || s.eq("atexit") || s.eq("atof") { return true; }
+    if s.eq("atoi") || s.eq("atol") || s.eq("atoll") || s.eq("bsearch") { return true; }
+    if s.eq("calloc") || s.eq("div") || s.eq("exit") || s.eq("free") { return true; }
+    if s.eq("getenv") || s.eq("labs") || s.eq("ldiv") || s.eq("llabs") { return true; }
+    if s.eq("lldiv") || s.eq("malloc") || s.eq("mblen") || s.eq("qsort") { return true; }
+    if s.eq("rand") || s.eq("realloc") || s.eq("srand") || s.eq("strtod") { return true; }
+    if s.eq("strtof") || s.eq("strtol") || s.eq("strtoll") || s.eq("strtoul") { return true; }
+    if s.eq("strtoull") || s.eq("system") || s.eq("setenv") || s.eq("unsetenv") { return true; }
+    if s.eq("putenv") || s.eq("realpath") || s.eq("random") || s.eq("srandom") { return true; }
+    if s.eq("aligned_alloc") || s.eq("mkstemp") { return true; }
+    // stdio.h
+    if s.eq("clearerr") || s.eq("fclose") || s.eq("feof") || s.eq("ferror") { return true; }
+    if s.eq("fflush") || s.eq("fgetc") || s.eq("fgets") || s.eq("fopen") { return true; }
+    if s.eq("fprintf") || s.eq("fputc") || s.eq("fputs") || s.eq("fread") { return true; }
+    if s.eq("freopen") || s.eq("fscanf") || s.eq("fseek") || s.eq("ftell") { return true; }
+    if s.eq("fwrite") || s.eq("getc") || s.eq("getchar") || s.eq("gets") { return true; }
+    if s.eq("perror") || s.eq("printf") || s.eq("putc") || s.eq("putchar") { return true; }
+    if s.eq("puts") || s.eq("remove") || s.eq("rename") || s.eq("rewind") { return true; }
+    if s.eq("scanf") || s.eq("setbuf") || s.eq("setvbuf") || s.eq("snprintf") { return true; }
+    if s.eq("sprintf") || s.eq("sscanf") || s.eq("tmpfile") || s.eq("tmpnam") { return true; }
+    if s.eq("ungetc") || s.eq("fileno") || s.eq("fdopen") || s.eq("popen") { return true; }
+    if s.eq("pclose") || s.eq("getline") { return true; }
+    // string.h
+    if s.eq("memchr") || s.eq("memcmp") || s.eq("memcpy") || s.eq("memmove") { return true; }
+    if s.eq("memset") || s.eq("strcat") || s.eq("strchr") || s.eq("strcmp") { return true; }
+    if s.eq("strcoll") || s.eq("strcpy") || s.eq("strcspn") || s.eq("strerror") { return true; }
+    if s.eq("strlen") || s.eq("strncat") || s.eq("strncmp") || s.eq("strncpy") { return true; }
+    if s.eq("strpbrk") || s.eq("strrchr") || s.eq("strspn") || s.eq("strstr") { return true; }
+    if s.eq("strtok") || s.eq("strxfrm") || s.eq("strdup") || s.eq("strndup") { return true; }
+    if s.eq("strcasecmp") || s.eq("strncasecmp") || s.eq("strsep") { return true; }
+    // math.h
+    if s.eq("acos") || s.eq("asin") || s.eq("atan") || s.eq("atan2") { return true; }
+    if s.eq("ceil") || s.eq("cos") || s.eq("cosh") || s.eq("exp") { return true; }
+    if s.eq("fabs") || s.eq("floor") || s.eq("fmod") || s.eq("frexp") { return true; }
+    if s.eq("ldexp") || s.eq("log") || s.eq("log10") || s.eq("modf") { return true; }
+    if s.eq("pow") || s.eq("sin") || s.eq("sinh") || s.eq("sqrt") { return true; }
+    if s.eq("tan") || s.eq("tanh") || s.eq("round") || s.eq("lround") { return true; }
+    if s.eq("trunc") || s.eq("cbrt") || s.eq("hypot") || s.eq("log2") { return true; }
+    if s.eq("exp2") || s.eq("fmin") || s.eq("fmax") || s.eq("fma") { return true; }
+    // time.h
+    if s.eq("clock") || s.eq("difftime") || s.eq("mktime") || s.eq("time") { return true; }
+    if s.eq("asctime") || s.eq("ctime") || s.eq("gmtime") || s.eq("localtime") { return true; }
+    if s.eq("strftime") || s.eq("nanosleep") || s.eq("gettimeofday") { return true; }
+    // ctype.h
+    if s.eq("isalnum") || s.eq("isalpha") || s.eq("iscntrl") || s.eq("isdigit") { return true; }
+    if s.eq("isgraph") || s.eq("islower") || s.eq("isprint") || s.eq("ispunct") { return true; }
+    if s.eq("isspace") || s.eq("isupper") || s.eq("isxdigit") || s.eq("tolower") { return true; }
+    if s.eq("toupper") || s.eq("isblank") { return true; }
+    // unistd.h / POSIX
+    if s.eq("read") || s.eq("write") || s.eq("open") || s.eq("close") { return true; }
+    if s.eq("lseek") || s.eq("unlink") || s.eq("link") || s.eq("symlink") { return true; }
+    if s.eq("access") || s.eq("chdir") || s.eq("getcwd") || s.eq("dup") { return true; }
+    if s.eq("dup2") || s.eq("pipe") || s.eq("fork") || s.eq("execve") { return true; }
+    if s.eq("execv") || s.eq("execvp") || s.eq("execl") || s.eq("getpid") { return true; }
+    if s.eq("getppid") || s.eq("getuid") || s.eq("getgid") || s.eq("sleep") { return true; }
+    if s.eq("usleep") || s.eq("alarm") || s.eq("pause") || s.eq("isatty") { return true; }
+    if s.eq("sync") || s.eq("fsync") || s.eq("truncate") || s.eq("ftruncate") { return true; }
+    if s.eq("rmdir") || s.eq("fcntl") || s.eq("ioctl") || s.eq("kill") { return true; }
+    if s.eq("wait") || s.eq("waitpid") || s.eq("select") || s.eq("poll") { return true; }
+    if s.eq("socket") || s.eq("connect") || s.eq("bind") || s.eq("listen") { return true; }
+    if s.eq("accept") || s.eq("send") || s.eq("recv") || s.eq("sendto") { return true; }
+    if s.eq("recvfrom") || s.eq("shutdown") || s.eq("setsockopt") || s.eq("getsockopt") { return true; }
+    if s.eq("gethostname") || s.eq("mmap") || s.eq("munmap") || s.eq("mprotect") { return true; }
+    if s.eq("sigaction") || s.eq("signal") || s.eq("raise") || s.eq("sigprocmask") { return true; }
+    if s.eq("setjmp") || s.eq("longjmp") || s.eq("opendir") || s.eq("readdir") { return true; }
+    if s.eq("closedir") || s.eq("stat") || s.eq("fstat") || s.eq("lstat") { return true; }
+    if s.eq("mkdir") || s.eq("chmod") || s.eq("chown") || s.eq("umask") { return true; }
+    if s.eq("index") || s.eq("rindex") || s.eq("sbrk") || s.eq("brk") { return true; }
+    return false;
+}
+
+// C name for a reference to a user-defined free function. A body-bearing
+// (non-extern) free fn whose name collides with a libc symbol is renamed
+// into the reserved `__glide_` namespace so it can't clash; everything else
+// (extern bindings, methods, plain idents) is left to `c_safe_ident`. The
+// `__glide_uf_` prefix lives in the compiler's reserved space, so it can't
+// itself collide with a user identifier.
+pub fn userfn_mangle(name: string) -> string {
+    return "__glide_uf_".concat(name);
 }
 
 fn ns_split_pos(name: string) -> i32 {
@@ -3816,7 +3942,19 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     }
     if e.kind == EX_BOOL { if e.bool_val { print!("true"); } else { print!("false"); } return; }
     if e.kind == EX_NULL { print!("NULL"); return; }
-    if e.kind == EX_IDENT { print!(c_safe_ident(e.str_val)); return; }
+    if e.kind == EX_IDENT {
+        let nm: string = e.str_val;
+        // A body-bearing user fn renamed away from a libc collision at its
+        // definition (emit_fn_signature) must use the same name at every
+        // value/call reference. A local binding of the same name shadows the
+        // fn, so an in-scope ident is emitted plainly.
+        if is_libc_symbol(nm) && !g.scope.contains(nm) && g.fns.contains(nm) {
+            let f: Stmt = g.fns.get(nm);
+            if f.fn_body != null { print!(userfn_mangle(nm)); return; }
+        }
+        print!(c_safe_ident(nm));
+        return;
+    }
     if e.kind == EX_IF {
         // Lower expression-position if to a C ternary. Both branches
         // are guaranteed to be single expressions by the parser, so
@@ -5721,7 +5859,12 @@ fn emit_fn_signature(s: *Stmt) {
         return;
     }
     if s.is_naked { print!("__attribute__((naked)) "); }
-    print!(type_to_c(s.fn_ret_ty), " ", c_safe_ident(s.name), "(");
+    // Rename a body-bearing user fn whose name collides with a libc symbol
+    // (e.g. `fn div`) out of C's way. Extern/bodyless decls keep their real
+    // name so FFI still binds. References are renamed to match (see EX_IDENT).
+    let mut _fn_cnm: string = c_safe_ident(s.name);
+    if s.fn_body != null && is_libc_symbol(s.name) { _fn_cnm = userfn_mangle(s.name); }
+    print!(type_to_c(s.fn_ret_ty), " ", _fn_cnm, "(");
     if s.fn_params == null || s.fn_params.len() == 0 {
         if s.is_variadic { print!("..."); }
         else             { print!("void"); }
