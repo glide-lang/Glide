@@ -49,6 +49,13 @@ static inline void __glide_spin_unlock(__glide_spin_t* l) {
    Override via GLIDE_CORO_STACK (bytes). Real growable stacks (Go-style)
    need pointer-map metadata + copy/relocate — TBD. */
 #define __GLIDE_STACK_GUARD 4096
+/* Windows lazy commit-in-place tuning. The stack is reserved in full but
+   committed on demand: INIT_COMMIT is committed at the top so a coro can
+   start, and each fault into the reserved region commits a COMMIT_WINDOW
+   around the faulting address (so __chkstk's descending probe doesn't
+   re-fault every page). Pages never touched cost no physical RAM. */
+#define __GLIDE_STACK_INIT_COMMIT   (64 * 1024)
+#define __GLIDE_STACK_COMMIT_WINDOW (64 * 1024)
 /* Phase A baby step (2026-05-23): defaulted at 8 KiB instead of the
    previous 64 KiB. Suite stays 71/72 at 8 KiB. The empirical floor
    on Glide's current stdlib is around 5 KiB - at 4.5 KiB the suite
@@ -252,7 +259,8 @@ static void* __glide_timer_main(void* unused);
 int __glide_park(pthread_mutex_t* lock, __glide_task** list);
 void __glide_free_task(__glide_task* t);
 static void __glide_reset_ctx(__glide_task* t);
-static void __glide_flush_main_buf(void);
+void __glide_flush_main_buf(void);   /* external linkage: stdlib::sync calls it before blocking */
+static size_t __glide_host_page_size(void);
 extern atomic_long __glide_perf_stack_grows;
 
 /* The current coroutine on this OS thread, for the stack-grow handler
@@ -270,9 +278,14 @@ static _Thread_local __glide_task* __glide_cur_task = NULL;
 
 /* The actual grow: allocate 2x current size, copy the live portion,
    conservatively relocate stack-internal pointers, hand back the new
-   SP/FP. Called from the platform-specific fault handler below.
+   SP/FP. Called from the POSIX fault handler below.
    Returns 1 on success (caller resumes execution on new stack) or 0
-   on failure (caller lets the OS terminate the process). */
+   on failure (caller lets the OS terminate the process).
+
+   POSIX ONLY. Windows uses lazy commit-in-place (see the VEH below):
+   relocating a live stack breaks system C code (__chkstk, DLLs) that
+   keeps raw stack pointers in registers we can't see to fix up. */
+#if !defined(_WIN32)
 static int __glide_stack_grow_in_place(__glide_task* t,
                                         uintptr_t* sp_inout,
                                         uintptr_t* fp_inout) {
@@ -395,13 +408,17 @@ static int __glide_stack_grow_in_place(__glide_task* t,
     atomic_fetch_add_explicit(&__glide_perf_stack_grows, 1, memory_order_relaxed);
     return 1;
 }
+#endif /* !_WIN32 */
 
 #ifdef _WIN32
-/* VEH that catches access violations on a coro's guard page and grows
-   the stack. Returns CONTINUE_EXECUTION so the faulting instruction
-   re-runs against the larger stack. Non-coro faults or faults outside
-   any coro's guard region fall through to CONTINUE_SEARCH and become
-   normal access violations. */
+/* VEH that grows a coro stack by COMMITTING reserved pages in place — the
+   stack is never moved, so raw stack pointers held in registers by __chkstk
+   or system DLLs stay valid (this is exactly what the old relocation grow
+   got wrong). The stack is reserved in full (__glide_alloc_stack) with only
+   a top window committed; deeper frames fault into the reserved region and
+   we commit a window around the fault. A fault in the bottom guard page is a
+   genuine overflow and falls through to CONTINUE_SEARCH so the OS crashes.
+   Non-coro faults or faults outside this coro's stack also fall through. */
 static LONG CALLBACK __glide_stack_grow_veh(EXCEPTION_POINTERS* info) {
     EXCEPTION_RECORD* rec = info->ExceptionRecord;
     if (rec->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) {
@@ -410,29 +427,35 @@ static LONG CALLBACK __glide_stack_grow_veh(EXCEPTION_POINTERS* info) {
     __glide_task* t = __glide_cur_task;
     if (t == NULL) return EXCEPTION_CONTINUE_SEARCH;
 
-    /* Accept any fault whose address is "near" this coro's stack:
-       the guard page itself OR up to one page BELOW the guard. A
-       function with a big prologue (sub rsp, N where N > guard_size)
-       lands its first probe below the guard - still ours, still
-       want to grow rather than die. Anything beyond one page of
-       overshoot is a wild pointer, not a stack overrun, and we
-       drop to CONTINUE_SEARCH so the OS can produce a proper
-       crash dump. */
-    void* fault = (void*)rec->ExceptionInformation[1];
+    char* fault    = (char*)rec->ExceptionInformation[1];
     char* stack_lo = (char*)t->stack;
+    char* guard_hi = stack_lo + __GLIDE_STACK_GUARD;
     char* stack_hi = stack_lo + t->stack_total;
-    char* near_lo = stack_lo - 4096;
-    if ((char*)fault < near_lo || (char*)fault >= stack_hi) {
+
+    /* Not inside this coro's reserved region — someone else's problem. */
+    if (fault < stack_lo || fault >= stack_hi) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    /* Hit the guard page = real stack overflow. Let the OS produce the crash. */
+    if (fault < guard_hi) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    uintptr_t sp = info->ContextRecord->Rsp;
-    uintptr_t fp = info->ContextRecord->Rbp;
-    if (!__glide_stack_grow_in_place(t, &sp, &fp)) {
+    /* Reserved-but-uncommitted page in the usable region: commit a window
+       covering the fault, with COMMIT_WINDOW of slack below it so __chkstk's
+       descending probe doesn't re-fault every page. MEM_COMMIT on an already
+       committed page is a no-op, so no per-task high-water bookkeeping is
+       needed. The faulting instruction re-runs against the same (unmoved)
+       stack. */
+    size_t page = __glide_host_page_size();
+    char* fault_page = (char*)((uintptr_t)fault & ~(uintptr_t)(page - 1));
+    char* commit_lo = fault_page - __GLIDE_STACK_COMMIT_WINDOW;
+    if (commit_lo < guard_hi) commit_lo = guard_hi;
+    size_t commit_len = (size_t)((fault_page + page) - commit_lo);
+    if (VirtualAlloc(commit_lo, commit_len, MEM_COMMIT, PAGE_READWRITE) == NULL) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    info->ContextRecord->Rsp = sp;
-    info->ContextRecord->Rbp = fp;
+    atomic_fetch_add_explicit(&__glide_perf_stack_grows, 1, memory_order_relaxed);
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 #endif
@@ -867,10 +890,25 @@ static void* __glide_alloc_stack(size_t* out_total) {
     __glide_spin_unlock(&__glide_stack_pool_spin);
     void* base;
 #ifdef _WIN32
-    base = VirtualAlloc(NULL, total, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    /* Reserve the whole region but commit lazily: the guard page (NOACCESS)
+       at the bottom for overflow detection, plus an initial window at the top
+       so the coro can start. Deeper frames fault into the reserved middle and
+       __glide_stack_grow_veh commits them in place. Untouched pages cost no
+       physical RAM — the same lazy profile mmap gives us on POSIX. */
+    base = VirtualAlloc(NULL, total, MEM_RESERVE, PAGE_READWRITE);
     if (!base) return NULL;
-    DWORD old;
-    VirtualProtect(base, __GLIDE_STACK_GUARD, PAGE_NOACCESS, &old);
+    if (VirtualAlloc(base, __GLIDE_STACK_GUARD, MEM_COMMIT, PAGE_NOACCESS) == NULL) {
+        VirtualFree(base, 0, MEM_RELEASE);
+        return NULL;
+    }
+    size_t win_usable = total - __GLIDE_STACK_GUARD;
+    size_t win_init = __GLIDE_STACK_INIT_COMMIT;
+    if (win_init > win_usable) win_init = win_usable;
+    if (VirtualAlloc((char*)base + total - win_init, win_init,
+                     MEM_COMMIT, PAGE_READWRITE) == NULL) {
+        VirtualFree(base, 0, MEM_RELEASE);
+        return NULL;
+    }
 #else
     base = mmap(NULL, total, PROT_READ|PROT_WRITE,
                 MAP_ANON|MAP_PRIVATE, -1, 0);
@@ -1110,13 +1148,16 @@ void __glide_sched_init(void) {
         int n = atoi(env_stk);
         if (n >= 1024) __glide_stack_size = n;  /* min 1 KB to avoid SIGSEGV on entry */
     }
-#if (defined(__linux__) && !defined(__GLIBC__)) || defined(__APPLE__)
+#if (defined(__linux__) && !defined(__GLIBC__)) || defined(__APPLE__) || defined(_WIN32)
     else {
         /* musl + macOS have no working stack-grow handler (see
-           __glide_stack_grow_init), so the 8 KiB growable default would
-           overflow on the first real call. Give coros a comfortable fixed
-           stack — still lazily committed by mmap, so idle coros stay cheap.
-           An explicit GLIDE_CORO_STACK wins. */
+           __glide_stack_grow_init); Windows uses lazy commit-in-place (the
+           VEH commits reserved pages on fault, never relocates). All three
+           would overflow / die on a deep C call (getaddrinfo, OpenSSL) with
+           the 8 KiB growable default, so give coros a comfortable large stack
+           that is reserved up front but costs only the pages actually touched
+           (mmap-lazy on POSIX, MEM_RESERVE + commit-on-fault on Windows). An
+           explicit GLIDE_CORO_STACK wins. */
         __glide_stack_size = 2 * 1024 * 1024;
     }
 #endif
@@ -1180,9 +1221,15 @@ void __glide_sched_init(void) {
 void __glide_sched_shutdown(void) {
     if (!__glide_q_inited) return;
     __glide_flush_main_buf();
-    while (__glide_pending_sum() > 0) {
-        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000;
-        nanosleep(&ts, NULL);
+    /* Go-style exit: the program ends when main returns. If background coros
+       are STILL running at that point we do NOT wait for them — a never-ending
+       one (a ticker, poller, accept loop) must never pin the process. Abandon
+       them and let the C runtime's exit() reap the worker threads. To finish
+       background work before returning from main, join it explicitly with a
+       WaitGroup or a channel. When all coros have already completed
+       (pending == 0) we still do the clean join+free below. */
+    if (__glide_pending_sum() > 0) {
+        return;
     }
     atomic_store(&__glide_shutdown, 1);
     for (int i = 0; i < __glide_n_workers; i++) {
@@ -1360,7 +1407,7 @@ static _Thread_local int __glide_main_buf_count = 0;
    at 0, which steers __glide_spawn to push direct instead of
    buffering for an end-of-batch flush that may never come. */
 _Thread_local int __glide_is_main_tls = 0;
-static void __glide_flush_main_buf(void) {
+void __glide_flush_main_buf(void) {
     if (!__glide_main_buf_head) return;
     /* Match the per-thread sticky worker chosen by __glide_pick_worker
        above, so the chain lands on the same queue the tasks' home_worker

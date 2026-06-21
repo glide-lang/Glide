@@ -2009,6 +2009,25 @@ fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                     }
                 }
             }
+            // chan<T>.recv() -> T (send/close -> void). The channel runtime
+            // methods aren't in the fn registry, so without this the return
+            // type infers null and an inline `println!(.., c.recv())` /
+            // `format!("{}", c.recv())` falls through to `%p` and prints the
+            // value as a pointer instead of its real type.
+            if stripped != null && stripped.kind == TY_GENERIC && stripped.name.eq("chan") {
+                if e.lhs.field.eq("recv") {
+                    if stripped.args != null && stripped.args.len() > 0 {
+                        let el: Type = stripped.args.get(0);
+                        let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                        *p = el;
+                        return p;
+                    }
+                    return null;
+                }
+                if e.lhs.field.eq("send") || e.lhs.field.eq("close") {
+                    return ty_named("void");
+                }
+            }
             if stripped != null && stripped.kind == TY_NAMED {
                 // Qualified call `s.NS::method(...)`: look up `NS_<type>_method` directly.
                 let qpos: i32 = ns_split_pos(e.lhs.field);

@@ -37,6 +37,14 @@ c_raw! {
     #include <stdatomic.h>
     #include <stdlib.h>
 
+    /* Scheduler hook: coros spawned from a thread sit in that thread's local
+       spawn buffer until something flushes it (sleep/channel ops/shutdown).
+       A blocking sync primitive must flush first, else a coro spawned right
+       before the call is never handed to a worker and we deadlock waiting on
+       work that can't run. The runtime's own pending-count wait loops already
+       do this; WaitGroup/Mutex have their own wait, so they must too. */
+    extern void __glide_flush_main_buf(void);
+
     // ---- Mutex ----
 
     static void* __glide_mutex_new(void) {
@@ -45,6 +53,7 @@ c_raw! {
         return (void*)m;
     }
     static void __glide_mutex_lock(void* h) {
+        __glide_flush_main_buf();
         pthread_mutex_lock((pthread_mutex_t*)h);
     }
     static void __glide_mutex_unlock(void* h) {
@@ -109,6 +118,9 @@ c_raw! {
     }
     static void __glide_wg_wait(void* h) {
         __glide_wg* w = (__glide_wg*)h;
+        /* Hand any coros buffered on this thread to the workers before we
+           block — otherwise wait() can deadlock on done()s that never run. */
+        __glide_flush_main_buf();
         pthread_mutex_lock(&w->mu);
         while (w->counter > 0) pthread_cond_wait(&w->cv, &w->mu);
         pthread_mutex_unlock(&w->mu);
