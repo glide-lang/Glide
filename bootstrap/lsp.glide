@@ -7945,13 +7945,17 @@ fn handle_completion(req: *JsonValue, state: *LspState) {
     if _cursor_p >= 1 && doc.text.at(_cursor_p - 1).to_int() == 46 {
         let recv_ty: *Type = _chain_resolve_type(doc.text, _cursor_p - 1, doc.stmts, line0, uri_to_path(uri));
         if recv_ty != null {
-            // List members off the PRE-expansion snapshot: expand_macros
-            // consumes type-attached `macro` defs out of doc.stmts, so the
-            // post-expansion set has the fns but not the macros. pre_expand
-            // still carries them, so `v.push_a` can offer `push_all!`.
-            let mut mstmts: *Vector<Stmt> = doc.stmts;
-            if doc.pre_expand_stmts != null { mstmts = doc.pre_expand_stmts; }
-            _list_members_for_type_node(recv_ty, mstmts, items, seen, uri_to_path(uri));
+            // List members off BOTH stmt sets. The post-expansion set
+            // (doc.stmts) carries regular impl methods AND the ones generated
+            // by `@derive(...)` (e.g. `to_json` from `@derive(JsonBind)`),
+            // which don't exist before expansion. The pre-expansion snapshot
+            // still carries type-attached `macro` defs that expand_macros
+            // consumed out of doc.stmts (so `v.push_a` can offer `push_all!`).
+            // `seen` dedupes the overlap.
+            _list_members_for_type_node(recv_ty, doc.stmts, items, seen, uri_to_path(uri));
+            if doc.pre_expand_stmts != null {
+                _list_members_for_type_node(recv_ty, doc.pre_expand_stmts, items, seen, uri_to_path(uri));
+            }
         }
         seen.free();
         lsp_send_response(id, items);
