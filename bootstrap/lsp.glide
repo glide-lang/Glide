@@ -6961,6 +6961,55 @@ fn _vfield(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, d
     let no_edit: *JsonValue = null;
     json_arr_push(items, rich_completion_item(name, "", 5, sig, doc, "", "", false, no_edit));
 }
+
+// One intrinsic Option/Result method as a completion item (kind 2 = Method).
+// `snippet` is the insert text with `${n}` tab stops so the call + cursor
+// position is filled in. These are codegen intrinsics (_emit_opt_res_method),
+// not real fns, so the LSP wouldn't otherwise know about them.
+fn _orm(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, doc: string, snippet: string) {
+    if seen.contains(name) { return; }
+    seen.insert(name, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(name, sig, 2, sig, doc, "", snippet, true, no_edit));
+}
+
+// Surface the intrinsic methods of an Option (`?T`) or Result (`!T`) so the
+// editor offers `unwrap` / `map` / `unwrap_or` / `ok_or` / … and not just the
+// raw `.ok`/`.err`/`.val` fields. `inner` is the pretty inner type (T).
+fn _list_opt_res_methods(items: *JsonValue, seen: *HashMap<bool>, is_opt: bool, is_res: bool, inner: string) {
+    let t: string = inner;
+    // Shared by Option and Result.
+    _orm(items, seen, "unwrap", "() -> ".concat(t),
+        "Returns the contained value, or panics if absent/failed. Prefer `?` to propagate instead of panicking.", "unwrap()");
+    _orm(items, seen, "unwrap_or", "(default: ".concat(t).concat(") -> ").concat(t),
+        "Returns the contained value, or `default` when absent/failed.", "unwrap_or(${1:default})");
+    _orm(items, seen, "unwrap_or_else", "(f: fn() -> ".concat(t).concat(") -> ").concat(t),
+        "Returns the contained value, or the result of calling `f` when absent/failed.", "unwrap_or_else(${1})");
+    _orm(items, seen, "expect", "(msg: string) -> ".concat(t),
+        "Returns the contained value, or panics with `msg` if absent/failed.", "expect(${1:msg})");
+    _orm(items, seen, "map", "(f: fn(".concat(t).concat(") -> U) -> ").concat(if is_opt { "?U" } else { "!U" }),
+        "Applies `f` to the contained value, leaving an absent/failed value unchanged.", "map(${1})");
+    _orm(items, seen, "and_then", "(f: fn(".concat(t).concat(") -> ").concat(if is_opt { "?U" } else { "!U" }).concat(") -> ").concat(if is_opt { "?U" } else { "!U" }),
+        "Chains another Option/Result-returning call on the contained value (flatMap).", "and_then(${1})");
+    if is_opt {
+        _orm(items, seen, "is_some", "() -> bool", "True when a value is present.", "is_some()");
+        _orm(items, seen, "is_none", "() -> bool", "True when empty.", "is_none()");
+        _orm(items, seen, "ok_or", "(err: string) -> !".concat(t),
+            "Converts `?T` to `!T`, using `err` as the failure message when empty.", "ok_or(${1:err})");
+        _orm(items, seen, "filter", "(pred: fn(".concat(t).concat(") -> bool) -> ?").concat(t),
+            "Keeps the value only if `pred` returns true, else yields `none()`.", "filter(${1})");
+    }
+    if is_res {
+        _orm(items, seen, "is_ok", "() -> bool", "True when the result succeeded.", "is_ok()");
+        _orm(items, seen, "is_err", "() -> bool", "True when the result failed.", "is_err()");
+        _orm(items, seen, "unwrap_err", "() -> string", "Returns the error message, or panics if the result is ok.", "unwrap_err()");
+        // NOTE: the `.ok()` method (Result -> Option) is intentionally omitted
+        // from completion — its name collides with the far more common `.ok`
+        // boolean field, which must win the list. The method still compiles.
+        _orm(items, seen, "map_err", "(f: fn(string) -> string) -> !".concat(t),
+            "Transforms the error message, leaving an ok value unchanged.", "map_err(${1})");
+    }
+}
 fn _doc_ok() -> string {
     return "`bool` -> `true` when the operation succeeded.\n\nThe value is then in `.val`; on failure the reason is in `.err`. Check `ok` (or use `?` / `??`) before reading `.val`.\n\n```glide\nlet r: !i32 = \"42\".try_parse_int();\nif r.ok {\n    println!(r.val);   // 42\n} else {\n    println!(r.err);   // error message\n}\n```";
 }
@@ -6983,6 +7032,7 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
     if x == null { return; }
     if x.kind == TY_RESULT {
         let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, false, true, inner_pretty);
         _vfield(items, seen, "ok",  "bool", _doc_ok());
         _vfield(items, seen, "val", inner_pretty, _doc_val_result(inner_pretty));
         _vfield(items, seen, "err", "string", _doc_err());
@@ -6990,12 +7040,14 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
     }
     if x.kind == TY_OPTION {
         let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, true, false, inner_pretty);
         _vfield(items, seen, "has", "bool", _doc_has());
         _vfield(items, seen, "val", inner_pretty, _doc_val_option(inner_pretty));
         return;
     }
     if x.kind == TY_OPT_RESULT {
         let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, true, true, inner_pretty);
         _vfield(items, seen, "has", "bool", _doc_has());
         _vfield(items, seen, "ok",  "bool", _doc_ok());
         _vfield(items, seen, "val", inner_pretty, _doc_val_result(inner_pretty));
