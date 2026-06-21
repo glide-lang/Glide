@@ -476,6 +476,7 @@ fn cg_is_display(g: *CG, t: *Type) -> bool {
     if t.kind == TY_NAMED && g.enums.contains(t.name) { return true; }
     if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_NAMED
        && g.enums.contains(t.inner.name) { return true; }
+    if t.kind == TY_TUPLE { return true; }
     return false;
 }
 
@@ -567,6 +568,23 @@ fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
         print!("((", cexpr, ").tag == 0 ? \"none\" : ((", cexpr, ").tag == 1 ? __glide_format(\"ok(%s)\", ");
         emit_field_render_c(g, "(".concat(cexpr).concat(").val"), fty.inner, depth + 1);
         print!(") : __glide_format(\"err(%s)\", (", cexpr, ").err)))"); return;
+    }
+    if k == TY_TUPLE {
+        // Render `(e0, e1, ...)`. Tuple element types live in `fty.args`; the
+        // emitted C struct names them `_0`, `_1`, …
+        let tn: i32 = if fty.args != null { fty.args.len() } else { 0 };
+        print!("__glide_format(\"(");
+        for let i: i32 = 0; i < tn; i++ {
+            if i > 0 { print!(", "); }
+            print!("%s");
+        }
+        print!(")\"");
+        for let i: i32 = 0; i < tn; i++ {
+            print!(", ");
+            let et: Type = fty.args.get(i);
+            emit_field_render_c(g, "(".concat(cexpr).concat(")._").concat(int_to_str(i)), &et, depth + 1);
+        }
+        print!(")"); return;
     }
     // Vector (value or pointer): [e0, e1, ...]
     let mut vty: *Type = null;

@@ -3058,6 +3058,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     t.warn_range(e.line, e.column, _seq_sp, "string-pointer-eq",
                         msg.concat("; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
                 }
+                // Tuples lower to C structs; `struct == struct` is not valid C,
+                // and structural tuple equality isn't implemented. Reject it at
+                // the typer with a clear message instead of leaking a cc error.
+                if (lt != null && lt.kind == TY_TUPLE) || (rt != null && rt.kind == TY_TUPLE) {
+                    t.err_code(e.line, e.column, "tuple-eq",
+                        "tuples can't be compared with `==`/`!=` yet; compare the elements (e.g. `a.0 == b.0 && a.1 == b.1`)");
+                }
             }
             return ty_named("bool");
         }
