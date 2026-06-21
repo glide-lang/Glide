@@ -9408,6 +9408,23 @@ fn stmt_uses_name(s: *Stmt, name: string) -> bool {
             }
         }
     }
+    // A `match` statement reads its scrutinee and may use `name` inside an arm
+    // body. Without this the scrutinee of `match x { ... }` wasn't counted as a
+    // use, so `x` was wrongly flagged `unused-var`.
+    if s.kind == ST_MATCH {
+        if s.scrutinee != null && expr_uses_name(s.scrutinee, name) { return true; }
+        if s.arms != null {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
+                let a: MatchArm = s.arms.get(i);
+                if a.body != null {
+                    for let j: i32 = 0; j < a.body.len(); j++ {
+                        let b: Stmt = a.body.get(j);
+                        if stmt_uses_name(&b, name) { return true; }
+                    }
+                }
+            }
+        }
+    }
     return false;
 }
 
