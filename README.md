@@ -6,346 +6,133 @@
   <b>A small systems language with safe memory, real concurrency, and inline assembly.</b>
 </p>
 
-Glide compiles to native machine code through a portable C backend.
-The language is small — every feature listed below is in the box, not
-behind a flag or an experimental release. The compiler is self-hosted
-in Glide itself, ships with the standard library and a bundled C
-toolchain, and exposes a built-in package manager plus an LSP server.
-
-## features
-
-### Memory model
-
-- **Scope-bound borrows** (`&T`, `&mut T`) catch dangling references,
-  aliased mutation, and use-after-free at compile time. No lifetime
-  annotations.
-- **Auto-drop allocation**: `let p: *T = T { ... };` allocates on the
-  heap and frees at scope exit. Use `defer expr;` for arbitrary
-  cleanups and `defer_err expr;` for cleanups that run only on the
-  error return path.
-- **Arenas**: `Arena::new(cap)` plus `arena.create(T)` for groups of
-  objects with the same lifetime; freed in one shot when the arena
-  drops.
-- **Manual escape hatch** (`malloc`/`free`) for the rare case where
-  the higher-level shapes don't fit.
-
-### Errors as values
-
-`!T` is a result; `?T` is an option; `?!T` is the combined form. The
-postfix `?` operator propagates failures; `??` is the coalesce
-operator.
-
-```glide
-fn parse(n: int) -> !int {
-    if n < 0 { return err("negative"); }
-    return ok(n * 2);
-}
-
-fn pipeline(n: int) -> !int {
-    let v: int = parse(n)?;
-    return ok(v + 1);
-}
-```
-
-### Concurrency
-
-M:N coroutines via `spawn`. Typed channels via `chan<T>` with
-`make_chan(cap)`, `c.send(x)`, `c.recv()`, `c.close()`. The `select!`
-macro multiplexes over channel operations with optional `default` and
-close-aware arms. OS threads are available through `spawn_thread`
-when you need them.
-
-```glide
-fn worker(c: chan<int>) {
-    c.send(42);
-}
-
-fn main() -> int {
-    let c: chan<int> = make_chan(1);
-    spawn worker(c);
-    return c.recv();
-}
-```
-
-### Generics + traits
-
-Generics are monomorphised. Bounds use `T: Trait + Trait`. `trait`
-declares a contract and supports default method bodies and
-supertraits. `*dyn Trait` performs runtime dispatch through a vtable
-for heterogeneous collections.
-
-```glide
-trait Render { fn render(self: *Self) -> string; }
-
-impl Render for Box    { fn render(self: *Box)    -> string { return "Box"; } }
-impl Render for Circle { fn render(self: *Circle) -> string { return "Circle"; } }
-
-fn show(r: *dyn Render) { println!(r.render()); }
-```
-
-### Metaprogramming
-
-- **`macro_rules!`-style macros** with matchers (`$x:expr`,
-  `$x:ident`, `$x:ty`) and the variadic form `$($x:expr),*`.
-- **Procedural macros** run in the compiler at expansion time via an
-  embedded interpreter. Four flavours: `@derive(Name)`,
-  `@<attr>(...)`, `@<name>!(args)`, and `@<name>_str!("body")`. Same
-  AST nodes the compiler uses internally — no separate plugin
-  toolchain.
-- **Compile-time location macros**: `file!()`, `line!()`, `column!()`,
-  `function!()` expand to literal values at the call site.
-
-### Low-level controls
-
-Inline assembly accepts GCC-style operand constraints. `naked fn`
-emits a function with no prologue or epilogue so you can lay down
-your own calling convention. `c_raw! { ... }` injects literal C and
-`@cfg("posix" | "windows")` gates declarations per platform.
-
-```glide
-fn read_tsc() -> u64 {
-    let lo: u32 = 0;
-    let hi: u32 = 0;
-    asm volatile { "rdtsc" : "=a"(lo), "=d"(hi) }
-    return ((hi as u64) << 32) | (lo as u64);
-}
-```
-
-### Standard library
-
-Bundled with the compiler:
-
-| Area | Modules |
-| --- | --- |
-| Collections | `vector`, `hashmap`, `iter`, `bytes` |
-| Strings + numbers | `string` methods, `math`, `base64`, `hex` |
-| I/O + system | `io`, `fs`, `os`, `env`, `process`, `signal` |
-| Time + concurrency | `time`, `sync` (Mutex / Atomic / WaitGroup) |
-| Crypto | `crypto` (SHA-256, HMAC, SHA-1), `compress` (gzip) |
-| Networking | `net` (TCP / UDP / DNS / IP), `net::tls`, `net::ws` |
-| HTTP | server (`http_listen`, `https_listen`), client, routing, middleware, cookies, JWT, multipart, SSE, static files, proxy, HTTP/2 |
-| Mail | SMTP / POP3 / IMAP clients + RFC 5322 / MIME |
-| CLI | `argparse`, `spinner`, `backtrace`, `bench`, `testing` |
-| Archives | `tar` (USTAR) |
-| Serialisation | `json`, typed JSON binding, `@derive(JsonBind)` |
-
-### Tooling
-
-- Package manager: `glide new`, `glide add`, `glide fetch`,
-  `glide update`, `glide install`, `glide clean`. Path deps + git
-  deps (GitHub tarball fast-path, git-clone fallback for the rest).
-  Minimum-version selection across the dep graph; SHA-256-locked
-  cache.
-- Built-in documentation generator: `glide doc` emits static HTML;
-  `glide doc --serve` runs a local preview server; `glide doc --ai`
-  also drops an `AGENTS.md` rules file plus a flat `llms.txt`
-  summary intended for AI ingestion.
-- Test runner: `glide test` discovers `*_test.glide` files and runs
-  every `fn test_*` inside them; `glide test --golden` does stdout
-  diffing.
-- Benchmark runner: `glide bench` auto-tunes iteration counts and
-  reports ns/op.
-- LSP server: hover, completion, goto-definition (locals, params,
-  fns, structs, enums, traits, macros, proc-macros, import segments,
-  fields), references, rename, formatting, project-aware indexing
-  across stdlib + dependencies.
-- Tree-sitter grammar in `glide-grammar/`. Editor extensions live in
-  their own repos: [glide-lang/zed-glide](https://github.com/glide-lang/zed-glide)
-  (Zed) and [glide-lang/vscode-glide](https://github.com/glide-lang/vscode-glide)
-  (VS Code / Open VSX).
-
-### Lints
-
-`glide lint <file>` (and the LSP) run a suite of bug-prevention checks
-beyond plain type-checking. Each fires with a code that `@allow(...)`
-on the enclosing fn or impl method can silence locally; `glide lint
---lint-as-error` promotes them to errors for CI.
-
-| Code | Catches |
-| --- | --- |
-| `null-deref` | Dereferencing a name provably bound to `null` (let, branch flow, or via a callee whose param is dereferenced without guard). |
-| `bad-free` | `free()` on a Glide `string`, `*Vector<T>`, or `*HashMap<V>` — all are arena-managed or have a `.free()` destructor. |
-| `string-eq-op` | `==` / `!=` between two strings — compares pointers, not bytes. Use `.eq()`. |
-| `unused-import` | `import X::{a, b};` where neither name is referenced in the file. |
-| `arena-set` | `__glide_palloc_set(make())` without a paired restore in the same scope. |
-| `coro-blocking` | `spawn fn()` reaches a known-blocking helper (sync fs/process/http). Use `spawn_thread` or the async variant. |
-| `unhandled-result` | Bare-stmt call to a fn returning `!T` whose error is discarded. Method calls are resolved by receiver type so overloads (`Conn.write -> int` vs `TcpStream.write -> !int`) are distinguished. |
-| `ignored-option` | `.val` access on a `?T` without a preceding `is_some()` / `.has` guard. |
-| `use-after-free` | Reading a name after `.free()` was called on it in the same scope. |
-| `mutex-unbalanced` | `.lock()` still held at any exit (return, `?` propagation, break/continue, fall-off-end) without a matching `.unlock()` or `defer x.unlock();`. |
-| `chan-leak` | Channel declared but missing `close()` on at least one exit path. Receivers in `while let v = c.recv()` would hang there. |
-| `leak-on-early-return` | `defer x.free()` placed after a `?` propagation that can fire before the defer registers. |
-
-Plus the existing `unused-var`, `unused-param`, `unused-fn`,
-`unnecessary-mut`, `arena-not-freed`, `addr-of-temporary`,
-`dead-code`, `missing-return`, `large-return`, `trait-conformance`,
-`deprecated-fn`, `unstable-fn` from the original lint pass, and the
-user-defined `@lint("category", "reason")` mechanism for per-project
-warnings.
-
-## platforms
-
-| Platform | Compiler / CLI | HTTP server I/O |
-| --- | --- | --- |
-| Linux x86_64 | ✅ tested in CI + production | ✅ epoll reactor, M:N coros |
-| Windows x86_64 | ✅ tested locally | ✅ IOCP reactor, M:N coros |
-| macOS x86_64 | ⚠️ code in tree, not hardware-verified | ⚠️ kqueue reactor |
-| macOS arm64 (M1/M2/M3) | ⚠️ ctx switch + 16 KB page size in tree, not verified | ⚠️ kqueue reactor |
-| FreeBSD / OpenBSD / NetBSD / DragonFly | ⚠️ code in tree, not verified | ⚠️ kqueue reactor |
-| Linux arm64 (Graviton / Pi 4-5) | ⚠️ aarch64 ctx switch in tree; sysroot tarball pending | ⚠️ epoll reactor (inherits Linux path) |
-| Windows arm64 | ⚠️ ctx switch in tree, not verified | ⚠️ IOCP (inherits Windows path) |
-
-The Linux x86_64 row is what `glide-lang.org` runs in production. The
-Windows x86_64 row was validated in May 2026 once the IOCP reactor
-landed — `http_listen` now spawns one coro per connection on Windows
-instead of falling back to a serial accept loop. The remaining ⚠️
-rows mean the source tree carries the platform-specific code paths
-(ctx switch, reactor backend, syscall wrappers) but they haven't been
-exercised on real hardware yet; bug reports from those platforms are
-the fastest way to flip them to ✅.
+Glide compiles to native machine code through a portable C backend. Memory is
+safe without a garbage collector or lifetime annotations, concurrency is real
+(M:N coroutines + typed channels), and the compiler is self-hosted in Glide.
+It ships with the standard library, a bundled C toolchain, a package manager
+and an LSP server — everything in the box, nothing behind a flag.
 
 ## install
 
-Per-user install — no admin rights needed.
+Per-user, no admin rights.
 
-**Linux / macOS:**
+**Linux / macOS**
 
 ```bash
 curl -fsSL https://github.com/glide-lang/Glide/releases/latest/download/install.sh | bash
 ```
 
-**Windows (PowerShell):**
+**Windows (PowerShell)**
 
 ```powershell
 iwr https://github.com/glide-lang/Glide/releases/latest/download/install.ps1 -UseB | iex
 ```
 
-Open a new shell once the installer finishes; `glide --version`
-should print the installed version.
+Open a new shell, then `glide --version`. You also need a system C compiler on
+PATH for the final link step — `gcc` (Linux), Xcode CLT (macOS), or MSYS2/UCRT
+`cc` (Windows).
 
-### Requirements
-
-Glide hands off the final link step to a system C compiler so host
-programs can resolve `libssl` / `libcrypto` / `libz` for the stdlib's
-HTTP / TLS / compression layers.
-
-- **Linux** — `gcc` (every distro). `apt install build-essential`,
-  `dnf install gcc`, or the equivalent for your package manager.
-- **macOS** — Xcode Command Line Tools (`xcode-select --install`).
-- **Windows** — MSYS2 with the UCRT64 runtime is the smoothest path:
-  `winget install MSYS2.MSYS2`, then in MSYS2 shell:
-  `pacman -S mingw-w64-ucrt-x86_64-{gcc,openssl,zlib}`. Add
-  `C:\msys64\ucrt64\bin` to your PATH so `cc.exe` is reachable.
-  MSVC, MinGW-w64 (standalone), and clang also work as long as
-  `cc` resolves on PATH.
-
-The bundled Zig toolchain (shipped in `<install>/runtime/zig/`) is
-used for `--target=<triple>` cross-compilation, not for host builds.
-
-## quick start
+## hello
 
 ```bash
-glide new my_app          # scaffold a project
+glide new my_app
 cd my_app
-glide run                 # build + run from the manifest
+glide run
 ```
 
-For libraries:
+```glide
+fn parse(n: i32) -> !i32 {
+    if n < 0 { return err("negative"); }
+    return ok(n * 2);
+}
 
-```bash
-glide new my_lib --lib    # no `bin`, src/lib.glide with a sample pub fn
+fn worker(c: chan<i32>) {
+    c.send(parse(20).unwrap_or(0));
+}
+
+fn main() -> i32 {
+    let c: chan<i32> = make_chan(1);
+    spawn worker(c);
+    println!("got", c.recv());          // got 40
+    return 0;
+}
 ```
 
-Project layout:
+## what's in the box
 
-```
-my_app/
-├── glide.glide       # manifest: name, version, bin, deps
-├── src/
-│   └── main.glide
-├── build/            # compiler output (auto-managed, gitignored)
-├── glide_modules/    # fetched / linked dependencies
-└── glide.lock        # resolved revs + content hashes
-```
+- **Memory** — scope-bound borrows (`&T` / `&mut T`) catch dangling refs,
+  aliased mutation and use-after-free at compile time. `let p: *T = T { ... }`
+  heap-allocates and frees at scope exit; `defer` / `defer_err` for cleanups;
+  arenas for group lifetimes. No GC, no lifetime annotations.
+- **Errors as values** — `!T` result, `?T` option, `?!T` combined. Postfix `?`
+  propagates, `??` coalesces, and `.unwrap` / `.map` / `.and_then` / `.ok_or`
+  read like methods.
+- **Concurrency** — `spawn` for M:N coroutines, typed `chan<T>`, the `select!`
+  macro, `spawn_thread` for OS threads.
+- **Generics + traits** — monomorphised generics with `T: Trait` bounds,
+  default methods, supertraits, and `*dyn Trait` runtime dispatch.
+- **Metaprogramming** — `macro_rules!`-style macros plus procedural macros
+  (`@derive`, attributes, function-like) that run inside the compiler.
+- **Low-level** — inline `asm`, `naked fn`, `c_raw! { ... }` for literal C, and
+  `@cfg("posix" | "windows")` platform gating.
+- **Standard library** — collections, strings/math, `io`/`fs`/`os`/`env`/
+  `process`, `time`, `sync`, `crypto`, `compress`, a full `net` stack
+  (TCP/UDP/DNS/TLS/WebSocket and an HTTP/1+2 server & client), mail (SMTP/POP3/
+  IMAP), `json` + `@derive(JsonBind)`, `argparse`, `testing`, and more.
+- **Tooling** — package manager, LSP, formatter, test + bench runners, a doc
+  generator, and a suite of bug-prevention lints (`null-deref`, `bad-free`,
+  `unhandled-result`, `use-after-free`, `mutex-unbalanced`, …). Tree-sitter
+  grammar + [Zed](https://github.com/glide-lang/zed-glide) and
+  [VS Code](https://github.com/glide-lang/vscode-glide) extensions.
 
 ## commands
 
 ```
-glide new <name> [--lib] [--ai] [--no-vcs]
-glide run                                     # build + run from manifest
+glide new <name> [--lib]      scaffold a project
+glide run                     build + run from the manifest
 glide build [<file>] [-o <out>] [--target=<triple>]
-glide check <file>                            # type-check only
+glide check <file>            type-check only
 glide fmt <file> [--write]
-glide test [path]
-glide test --golden <dir>
+glide test [path]             run *_test.glide
 glide bench [path]
-glide lint <file> [--lint-as-error] [--json]
-glide doc [--open] [--serve[=<port>]] [--ai]
-glide add <name> <git-url> <rev>
-glide add --local <name> <path>
-glide remove <name>
-glide fetch
-glide update
-glide clean
-glide install <path>
-glide install <git-url> <rev>
-glide target <list|add|remove|dir> [<triple>]   # cross-compile sysroots
-glide lsp                                       # LSP server on stdio
-glide --version
+glide lint <file> [--lint-as-error]
+glide doc [--serve[=<port>]]
+glide add <user/repo>[@rev]   add a dependency
+glide fetch | update | remove <name> | clean
+glide target <list|add|remove> [<triple>]   cross-compile sysroots
+glide lsp                     language server on stdio
 ```
 
-### Cross-compile
+## cross-compile
 
-The bundled Zig toolchain handles the codegen and link for any target
-in `--target=<triple>` (`x86_64-linux-musl`, `x86_64-linux-gnu`,
-`aarch64-macos-none`, `x86_64-windows-gnu`, etc).
+The bundled Zig toolchain builds any `--target=<triple>`
+(`x86_64-linux-musl`, `aarch64-macos-none`, `x86_64-windows-gnu`, …) from any
+host — no Docker, no WSL. Targets that use `stdlib::http` / `stdlib::net` want
+a sysroot first (`glide target add <triple>`) so the openssl/zlib libs are
+bundled and the binary stays self-contained; everything else links without one.
 
-For targets where your program touches `stdlib::http` or
-`stdlib::net`, install a sysroot first — it bundles the openssl /
-zlib headers + static libs that Zig doesn't carry, so the resulting
-binary stays self-contained:
+## platforms
 
-```bash
-glide target add x86_64-linux-musl     # ~13MB download, one-time
-glide build --target=x86_64-linux-musl # produces a static ELF
-```
-
-The same project builds on Linux / macOS / Windows from a Windows
-host — no Docker, no WSL.
-
-Targets that don't use TLS / compression don't need a sysroot —
-the cross-compile flow falls back to a TLS-less link, which is
-fine for command-line tools and CPU-bound code.
+Linux x86_64 and Windows x86_64 are tested in CI / production (epoll and IOCP
+reactors). macOS (x86_64 + arm64), the BSDs, and arm64 Linux/Windows carry
+their platform code in tree but aren't hardware-verified yet — bug reports from
+those are the fastest way to flip them green.
 
 ## build from source
 
-The compiler is written in Glide and ships a C seed that compiles to
-a bootstrap binary; from there Glide builds itself.
+The compiler is self-hosted, so you build it with an existing Glide binary
+(the same way CI bootstraps from a published release — there is no C seed):
 
 ```bash
 git clone https://github.com/glide-lang/Glide.git
 cd Glide
-
-# Windows hosts need -lws2_32 for the socket builtins.
-cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm           # POSIX
-cc bootstrap/seed/bootstrap.c -o glide_seed -O2 -lpthread -lm -lws2_32  # Windows
-
-bash tools/install_toolchain.sh                          # fetch the bundled C toolchain
-./glide_seed build bootstrap/main.glide -o glide         # self-host
-./glide install .                                        # drop the binary into ~/.glide/bin
+glide build bootstrap/main.glide -o glide   # self-host with an installed glide
+./glide install .                           # drop it into ~/.glide/bin
 ```
 
-A release archive (host binary + bundled toolchain + stdlib) can be
-built with `bash tools/build_release.sh`.
-
-## tour
-
+`bash tools/test_all.sh` runs the unit suite, LSP smoke tests and e2e smokes.
 A single program exercising every language feature lives in
-`examples/tour.glide`:
-
-```bash
-glide run examples/tour.glide
-```
+`examples/tour.glide` (`glide run examples/tour.glide`).
 
 ## license
 
