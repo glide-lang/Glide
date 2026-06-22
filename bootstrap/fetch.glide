@@ -231,11 +231,12 @@ fn _normalise_git_url(url: string) -> string {
     return "https://".concat(url);
 }
 
-// Create `<project>/glide_modules/<alias>` pointing at the cache dir
-// so the user can browse deps locally.
+// Create `<project>/build/deps/<alias>` pointing at the cache dir so the
+// user can browse deps locally. It lives under build/ (gitignored and dropped
+// by `glide clean`) rather than a separate top-level glide_modules/.
 fn _link_in_project(m: *Manifest, d: ManifestDep, target: string) {
     if m == null || m.root_dir.eq("") || target.eq("") { return; }
-    let modules: string = m.root_dir.concat("/glide_modules");
+    let modules: string = m.root_dir.concat("/build/deps");
     fs_mkdir_p(modules);
     let link: string = modules.concat("/").concat(d.name);
     fs_symlink(target, link);
