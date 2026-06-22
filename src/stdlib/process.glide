@@ -23,6 +23,12 @@
 
 import stdlib::os::*;
 
+// Wrap a raw, headerless C string (e.g. one written back through a `*string`
+// out-param, which escapes codegen's automatic extern-return adopt) into a
+// proper length-prefixed Glide string so `.len()` / `.trim()` / `.concat`
+// don't read a bogus SDS header.
+extern fn __glide_string_adopt(s: string) -> string;
+
 extern fn __glide_proc_run(
     prog: string,
     args_packed: string, args_n: i32,
@@ -1228,10 +1234,13 @@ impl Command {
             &mut out_str, &mut err_str
         );
         if rc != 0 { return err("failed to spawn process"); }
+        // The captured streams come back through `*string` out-params as raw
+        // malloc'd C strings (no SDS length header), so adopt them — otherwise
+        // `r.stdout.trim()` / `.len()` read a garbage header and crash.
         let r: ProcessResult = ProcessResult {
             exit_code: exit_code,
-            stdout: out_str,
-            stderr: err_str,
+            stdout: __glide_string_adopt(out_str),
+            stderr: __glide_string_adopt(err_str),
             signaled: signaled != 0,
             signal: sig,
         };
