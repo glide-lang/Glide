@@ -148,7 +148,7 @@ jobs:
         # BOOT_TAG only when an older release can no longer compile `main`.
         run: |
           set -e
-          BOOT_TAG=v0.4.0
+          BOOT_TAG=v0.4.1
           ver="${BOOT_TAG#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
           mkdir -p .boot
