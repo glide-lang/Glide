@@ -2331,6 +2331,70 @@ fn _consumed_apply(t: *Typer, keep: *HashMap<bool>) {
     ks.free();
 }
 
+// Validate match arm variant names against the scrutinee and, for enums,
+// check exhaustiveness. Shared by the statement and expression match forms so
+// both reject a typo'd variant (which otherwise leaked `case Enum_Bogus` to
+// cc) and a non-exhaustive enum match (which otherwise fell through to an
+// uninitialized C switch result).
+fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, line: i32, col: i32) {
+    if arms == null { return; }
+    let is_enum: bool = scrut_ty != null && scrut_ty.kind == TY_NAMED && t.enums.contains(scrut_ty.name);
+    let is_opt: bool = scrut_ty != null && scrut_ty.kind == TY_OPTION;
+    let is_res: bool = scrut_ty != null && scrut_ty.kind == TY_RESULT;
+    let mut parts: *Vector<string> = null;
+    if is_enum {
+        let vlist: string = t.enums.get(scrut_ty.name);
+        if !vlist.eq("") { parts = vlist.split(","); }
+    }
+    let mut has_wildcard: bool = false;
+    let covered: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < arms.len(); i++ {
+        let a: MatchArm = arms.get(i);
+        if a.variant.eq("_") { has_wildcard = true; continue; }
+        covered.insert(a.variant, true);
+        if is_enum && parts != null {
+            let mut found: bool = false;
+            for let j: i32 = 0; j < parts.len(); j++ {
+                if parts.get(j).eq(a.variant) { found = true; break; }
+            }
+            if !found {
+                t.err_code(line, col, "unknown-variant",
+                    "`".concat(a.variant).concat("` is not a variant of `").concat(scrut_ty.name).concat("`"));
+            }
+        } else if is_opt {
+            if !a.variant.eq("some") && !a.variant.eq("none") {
+                t.err_code(line, col, "unknown-variant",
+                    "`".concat(a.variant).concat("` is not a variant of an Option; use `some` / `none`"));
+            }
+        } else if is_res {
+            if !a.variant.eq("ok") && !a.variant.eq("err") {
+                t.err_code(line, col, "unknown-variant",
+                    "`".concat(a.variant).concat("` is not a variant of a Result; use `ok` / `err`"));
+            }
+        }
+    }
+    if !has_wildcard && is_enum && parts != null {
+        let mut missing: string = "";
+        let mut miss_count: i32 = 0;
+        for let i: i32 = 0; i < parts.len(); i++ {
+            let v: string = parts.get(i);
+            if !covered.contains(v) {
+                if miss_count > 0 { missing = missing.concat(", "); }
+                missing = missing.concat("`").concat(v).concat("`");
+                miss_count = miss_count + 1;
+            }
+        }
+        if miss_count > 0 {
+            t.push_diag(line, col, 1, "match-not-exhaustive",
+                "match on `".concat(scrut_ty.name)
+                .concat("` is not exhaustive: missing ").concat(missing)
+                .concat(". Add an arm for each, or `_ =>` to handle the rest."));
+        }
+    }
+    if parts != null { parts.free(); }
+    covered.free();
+}
+
 fn check_stmt(t: *Typer, s: *Stmt) {
     if s.kind == ST_LET || s.kind == ST_CONST {
         check_let_or_const(t, s);
@@ -2496,46 +2560,32 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         let mut scrut_ty: *Type = null;
         if s.scrutinee != null { scrut_ty = infer_expr(t, s.scrutinee); }
 
-        let mut has_wildcard: bool = false;
-        let covered: *HashMap<bool> = HashMap::new();
+        // Check each arm body in a borrow scope, binding payload names with
+        // `__unknown__` placeholders (codegen emits them via `__typeof__`, so
+        // only their presence matters here). Previously arm bodies were not
+        // recursed into, so undefined names / bad statements inside them
+        // slipped past the typer and surfaced as raw cc errors.
         if s.arms != null {
             for let i: i32 = 0; i < s.arms.len(); i++ {
                 let a: MatchArm = s.arms.get(i);
-                if a.variant.eq("_") { has_wildcard = true; }
-                else { covered.insert(a.variant, true); }
-                // Arm bodies are not recursed into here. Variant-payload
-                // bindings (`Hit(us)` -> `us`) need a per-variant payload
-                // type table that doesn't exist yet; codegen still emits
-                // them via `__typeof__`, so the runtime is unaffected.
+                let saved: i32 = enter_borrow_scope(t);
+                if a.bindings != null {
+                    let placeholder: *Type = ty_named("__unknown__");
+                    for let k: i32 = 0; k < a.bindings.len(); k++ {
+                        t.scope.insert(a.bindings.get(k), *placeholder);
+                    }
+                }
+                if a.body != null {
+                    for let k: i32 = 0; k < a.body.len(); k++ {
+                        let b: Stmt = a.body.get(k);
+                        check_stmt(t, &b);
+                    }
+                }
+                exit_borrow_scope(t, saved);
             }
         }
 
-        if !has_wildcard && scrut_ty != null && scrut_ty.kind == TY_NAMED
-           && t.enums.contains(scrut_ty.name) {
-            let vlist: string = t.enums.get(scrut_ty.name);
-            if !vlist.eq("") {
-                let parts: *Vector<string> = vlist.split(",");
-                let mut missing: string = "";
-                let mut miss_count: i32 = 0;
-                for let i: i32 = 0; i < parts.len(); i++ {
-                    let v: string = parts.get(i);
-                    if !covered.contains(v) {
-                        if miss_count > 0 { missing = missing.concat(", "); }
-                        missing = missing.concat("`").concat(v).concat("`");
-                        miss_count = miss_count + 1;
-                    }
-                }
-                if miss_count > 0 {
-                    t.push_diag(s.line, s.column, 1, "match-not-exhaustive",
-                        "match on `".concat(scrut_ty.name)
-                        .concat("` is not exhaustive: missing ")
-                        .concat(missing)
-                        .concat(". Add an arm for each, or `_ =>` to handle the rest."));
-                }
-                parts.free();
-            }
-        }
-        covered.free();
+        _check_match_coverage(t, scrut_ty, s.arms, s.line, s.column);
         return;
     }
     if s.kind == ST_BREAK { return; }
@@ -2955,8 +3005,47 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 exit_borrow_scope(t, saved);
             }
         }
+        // Expression-position match was missing the variant + exhaustiveness
+        // checks the statement form had, so a non-exhaustive enum match
+        // silently produced an uninitialized C switch result. e.line/e.column
+        // anchor the diagnostic at the `match`.
+        _check_match_coverage(t, scrut_ty, e.match_arms, e.line, e.column);
         if scrut_ty == null { return result_ty; }
         return result_ty;
+    }
+
+    if e.kind == EX_FNEXPR {
+        // Check the closure body in a FRESH scope holding only its own params
+        // (mirrors check_fn), with the closure's own return type. Globals,
+        // consts (module_scope) and top-level fns resolve outside t.scope, so
+        // they stay visible — but enclosing LOCALS do not. A closure that
+        // references an enclosing local is a capture, which isn't supported
+        // (codegen lifts the body to a top-level fn, leaving the captured name
+        // undeclared in C); it now surfaces as a clean `unknown name` error at
+        // check time instead of a confusing cc failure. This also catches
+        // genuinely undefined names and bad statements inside the closure,
+        // which the typer previously skipped entirely.
+        let saved_fscope: *HashMap<Type> = t.scope;
+        let saved_fret: *Type = t.current_ret;
+        let fresh_scope: *HashMap<Type> = HashMap::new();
+        t.scope = fresh_scope;
+        t.current_ret = e.cast_to;
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.ty != null { t.scope.insert(p.name, *p.ty); }
+            }
+        }
+        if e.fn_expr_body != null {
+            for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+                let b: Stmt = e.fn_expr_body.get(i);
+                check_stmt(t, &b);
+            }
+        }
+        t.scope.free();
+        t.scope = saved_fscope;
+        t.current_ret = saved_fret;
+        return ty_named("__unknown__");
     }
 
     if e.kind == EX_IDENT {
@@ -3057,6 +3146,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     }
                     t.warn_range(e.line, e.column, _seq_sp, "string-pointer-eq",
                         msg.concat("; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
+                }
+                // Tuples lower to C structs; `struct == struct` is not valid C,
+                // and structural tuple equality isn't implemented. Reject it at
+                // the typer with a clear message instead of leaking a cc error.
+                if (lt != null && lt.kind == TY_TUPLE) || (rt != null && rt.kind == TY_TUPLE) {
+                    t.err_code(e.line, e.column, "tuple-eq",
+                        "tuples can't be compared with `==`/`!=` yet; compare the elements (e.g. `a.0 == b.0 && a.1 == b.1`)");
                 }
             }
             return ty_named("bool");
@@ -3184,6 +3280,36 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         t.err(e.line, e.column, "`chan.close` takes no arguments");
                     }
                     return ty_named("void");
+                }
+            }
+            // Option (`?T`) / Result (`!T`) intrinsic methods. Resolve the
+            // return type so chaining + `let x: bool = o.is_some()` type-check.
+            let _ors: *Type = strip_ptr(recv_ty);
+            if _ors != null && (_ors.kind == TY_OPTION || _ors.kind == TY_RESULT) {
+                let iso: bool = _ors.kind == TY_OPTION;
+                if (iso && (mname.eq("is_some") || mname.eq("is_none")))
+                   || (!iso && (mname.eq("is_ok") || mname.eq("is_err"))) { return ty_named("bool"); }
+                if mname.eq("unwrap") || mname.eq("expect") || mname.eq("unwrap_or")
+                   || mname.eq("unwrap_or_else") {
+                    if _ors.inner != null { return _ors.inner; }
+                    return ty_named("void");
+                }
+                if !iso && mname.eq("unwrap_err") { return ty_named("string"); }
+                if iso && mname.eq("ok_or") { return ty_result(_ors.inner); }
+                if !iso && mname.eq("ok") { return ty_option(_ors.inner); }
+                if (iso && mname.eq("filter")) || (!iso && mname.eq("map_err")) { return _ors; }
+                if mname.eq("map") && e.args != null && e.args.len() == 1 {
+                    let _cl: Expr = e.args.get(0);
+                    if _cl.kind == EX_FNEXPR && _cl.cast_to != null {
+                        if iso { return ty_option(_cl.cast_to); }
+                        return ty_result(_cl.cast_to);
+                    }
+                    return null;
+                }
+                if mname.eq("and_then") && e.args != null && e.args.len() == 1 {
+                    let _cl: Expr = e.args.get(0);
+                    if _cl.kind == EX_FNEXPR && _cl.cast_to != null { return _cl.cast_to; }
+                    return null;
                 }
             }
             // Impl method lookup: `recv.method(args)` -> `<Type>_method` in
@@ -3631,6 +3757,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if (e.field.eq("MAX") || e.field.eq("MIN")) && _is_int_prim_name(e.str_val) {
             return ty_named(e.str_val);
         }
+        // A payload-less enum variant `Enum::Variant` is a value of type Enum.
+        // Typing it (rather than returning null) lets `match Color::Red { ... }`
+        // and an unannotated `let c = Color::Red` resolve the scrutinee as the
+        // enum, so the variant/exhaustiveness checks fire without an explicit
+        // type annotation. (Payload-carrying variants are EX_CALL, handled below.)
+        let _epre: string = t._strip_mod_prefix(e.str_val);
+        if t.enums.contains(_epre) { return ty_named(_epre); }
         let prefix: string = t._strip_mod_prefix(e.str_val);
         let pname: string = prefix.concat("_").concat(e.field);
         let is_type: bool = t.structs.contains(prefix);

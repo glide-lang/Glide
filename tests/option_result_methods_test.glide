@@ -1,0 +1,50 @@
+import stdlib::testing::*;
+
+fn test_option_basics() -> i32 {
+    let o: ?i32 = some(5);
+    let n: ?i32 = none();
+    assert!(o.is_some());
+    assert!(n.is_none());
+    assert_eq!(o.unwrap(), 5);
+    assert_eq!(o.unwrap_or(9), 5);
+    assert_eq!(n.unwrap_or(0), 0);
+    assert_eq!(n.unwrap_or_else(fn() -> i32 { return 99; }), 99);
+    return 0;
+}
+
+fn test_result_basics() -> i32 {
+    let r: !i32 = ok(7);
+    let e: !i32 = err("boom");
+    assert!(r.is_ok());
+    assert!(e.is_err());
+    assert_eq!(r.unwrap(), 7);
+    assert_eq!(e.unwrap_or(42), 42);
+    assert!(e.unwrap_err().eq("boom"));
+    return 0;
+}
+
+fn test_map_filter_and_then() -> i32 {
+    let o: ?i32 = some(5);
+    assert!(format!("{}", o.map(fn(x: i32) -> i32 { return x * 2; })).eq("some(10)"));
+    assert!(format!("{}", o.map(fn(x: i32) -> string { return "n"; })).eq("some(\"n\")"));
+    assert!(format!("{}", o.filter(fn(x: i32) -> bool { return x > 3; })).eq("some(5)"));
+    assert!(format!("{}", o.filter(fn(x: i32) -> bool { return x > 9; })).eq("none"));
+    assert!(format!("{}", o.and_then(fn(x: i32) -> ?i32 { return some(x + 1); })).eq("some(6)"));
+    let r: !i32 = ok(5);
+    assert!(format!("{}", r.map(fn(x: i32) -> i32 { return x + 1; })).eq("ok(6)"));
+    let e: !i32 = err("bad");
+    assert!(format!("{}", e.map_err(fn(s: string) -> string { return "wrap:".concat(s); })).eq("err(wrap:bad)"));
+    return 0;
+}
+
+fn test_conversions() -> i32 {
+    let o: ?i32 = some(5);
+    let n: ?i32 = none();
+    assert!(format!("{}", o.ok_or("x")).eq("ok(5)"));
+    assert!(format!("{}", n.ok_or("empty")).eq("err(empty)"));
+    let r: !i32 = ok(7);
+    assert!(format!("{}", r.ok()).eq("some(7)"));
+    // chaining
+    assert_eq!(o.map(fn(x: i32) -> i32 { return x + 100; }).unwrap_or(0), 105);
+    return 0;
+}

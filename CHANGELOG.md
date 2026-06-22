@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.4.2 — 2026-06-21
+
+A correctness release. A wide bug hunt turned up a class of defects where
+`glide check` accepted a valid program but the C compile failed or the result
+ran wrong; this release closes ~22 of them at the root, with the unit suite
+green after each fix and the self-host fixpoint intact. Option/Result also gain
+proper editor completion.
+
+### Identifiers vs C symbols
+
+- A user function whose name matched a libc symbol no longer breaks the build:
+  `fn div` collided with `<stdlib.h>`'s `div` (a cc error) and `fn abs` was
+  silently shadowed by the gcc builtin (wrong result, no diagnostic). Such
+  body-bearing functions are now renamed into the reserved `__glide_uf_`
+  namespace; extern/FFI bindings keep their real name.
+- Top-level consts named after a libc macro (`NULL`, `EOF`, `EXIT_FAILURE`, …)
+  no longer emit a clashing `#define`.
+
+### `match`
+
+- `match` on an `?T` / `!T` value compiles (it emitted a placeholder C type
+  before). Arm bodies are now type-checked, a typo'd or unknown variant is
+  reported, and expression-position `match` gets the same exhaustiveness check
+  the statement form already had. A payload-less variant (`Color::Red`) is
+  typed as its enum, so those checks fire without an annotation. A `match`
+  scrutinee counts as a use (no false `unused-var`).
+
+### Closures
+
+- A closure stored in a local and then called compiles, and passing a closure
+  to a generic method (`Vector.map`) no longer crashes the compiler. Closure
+  bodies are type-checked, and capturing an enclosing local is reported as a
+  clean `unknown name` instead of failing later in C.
+
+### Option / Result, tuples, strings, ints, generics
+
+- `some(3).unwrap_or(0)` and friends work on a bare ctor literal.
+- A whole tuple renders as `(a, b)` in `println!`; tuple `==` is rejected at
+  type-check instead of emitting invalid C.
+- A literal `%` in `print!`/`format!` is escaped; an embedded NUL in a string
+  literal keeps the real `.len()`; inline narrow-int (i8/u8/…) arithmetic in
+  print macros is truncated to its declared width.
+- Generic structs with a by-value nested generic field, `Vector::new()` in a
+  struct-literal field inside a generic impl method, and nested `?(?T)` all
+  emit valid C now.
+
+### Tooling
+
+- `fn main() -> i32` propagates its exit code (only the retired `int` alias did
+  before), so a failed compile is again visible to CI and `$?`.
+- Editor completion on a `?T` / `!T` value now offers the intrinsic methods
+  (`unwrap`, `unwrap_or`, `is_ok`, `map`, `and_then`, `ok_or`, `filter`, …) with
+  signatures, worked examples and call snippets, alongside the `.ok`/`.err`/
+  `.val` fields.
+
 ## 0.4.1 — 2026-06-19
 
 Strings carry a length header (O(1) `.len()`), string building is O(n), several

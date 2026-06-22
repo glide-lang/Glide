@@ -6961,6 +6961,94 @@ fn _vfield(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, d
     let no_edit: *JsonValue = null;
     json_arr_push(items, rich_completion_item(name, "", 5, sig, doc, "", "", false, no_edit));
 }
+
+// One intrinsic Option/Result method as a completion item (kind 2 = Method).
+// `snippet` is the insert text with `${n}` tab stops so the call + cursor
+// position is filled in. These are codegen intrinsics (_emit_opt_res_method),
+// not real fns, so the LSP wouldn't otherwise know about them.
+fn _orm(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, doc: string, snippet: string) {
+    if seen.contains(name) { return; }
+    seen.insert(name, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(name, sig, 2, sig, doc, "", snippet, true, no_edit));
+}
+
+// Surface the intrinsic methods of an Option (`?T`) or Result (`!T`) so the
+// editor offers `unwrap` / `map` / `unwrap_or` / `ok_or` / … and not just the
+// raw `.ok`/`.err`/`.val` fields. `inner` is the pretty inner type (T).
+// A snippet tab-stop `${body}`. Built by concat so the literal `${` never
+// appears in a single Glide string — otherwise Glide's own `${...}` string
+// interpolation would consume it (turning the snippet `unwrap_or(${1})` into
+// the broken `unwrap_or(1)`).
+fn _tab(body: string) -> string {
+    return "$".concat("{").concat(body).concat("}");
+}
+
+fn _list_opt_res_methods(items: *JsonValue, seen: *HashMap<bool>, is_opt: bool, is_res: bool, inner: string) {
+    let t: string = inner;
+    // `?U` for Option, `!U` for Result — the wrapper that map/and_then return.
+    let mut w: string = "!U";
+    if is_opt { w = "?U"; }
+    // A noun for the empty/failure branch, used in the prose.
+    let mut bad: string = "the result failed";
+    if is_opt { bad = "the option is empty"; }
+
+    // --- shared by Option and Result -------------------------------------
+    _orm(items, seen, "unwrap", "() -> ".concat(t),
+        "Returns the contained `".concat(t).concat("`, or **panics** when ").concat(bad)
+        .concat(".\n\nReach for `?` to propagate instead of crashing, or `unwrap_or` / `expect` for a graceful path.\n\n```glide\nlet n = \"42\".try_parse_int().unwrap();   // 42\n```"),
+        "unwrap()");
+    _orm(items, seen, "unwrap_or", "(default: ".concat(t).concat(") -> ").concat(t),
+        "Returns the contained `".concat(t).concat("`, or `default` when ").concat(bad)
+        .concat("; never panics.\n\n```glide\nlet port = read_env(\"PORT\").unwrap_or(8080);\n```"),
+        "unwrap_or(".concat(_tab("1:default")).concat(")"));
+    _orm(items, seen, "unwrap_or_else", "(f: fn() -> ".concat(t).concat(") -> ").concat(t),
+        "Returns the contained `".concat(t).concat("`, or computes a fallback with `f` (called only on the ").concat(if is_opt { "empty" } else { "error" })
+        .concat(" path, so an expensive default stays lazy).\n\n```glide\nlet cfg = load_cfg().unwrap_or_else(fn() -> Config { return Config::default(); });\n```"),
+        "unwrap_or_else(".concat(_tab("1")).concat(")"));
+    _orm(items, seen, "expect", "(msg: string) -> ".concat(t),
+        "Returns the contained `".concat(t).concat("`, or panics with **your** message `msg`. Use it to document an invariant.\n\n```glide\nlet db = connect().expect(\"database must be reachable at startup\");\n```"),
+        "expect(".concat(_tab("1:msg")).concat(")"));
+    _orm(items, seen, "map", "(f: fn(".concat(t).concat(") -> U) -> ").concat(w),
+        "Transforms the contained value with `f`, leaving ".concat(bad).concat(" untouched. Returns a new `").concat(w)
+        .concat("`.\n\n```glide\nlet doubled = \"21\".try_parse_int().map(fn(n: i32) -> i32 { return n * 2; });   // ok(42)\n```"),
+        "map(".concat(_tab("1")).concat(")"));
+    _orm(items, seen, "and_then", "(f: fn(".concat(t).concat(") -> ").concat(w).concat(") -> ").concat(w),
+        "Chains another `".concat(w).concat("`-returning step on the contained value (flatMap). `f` can itself fail, and that failure short-circuits.\n\n```glide\nlet user = parse_id(s).and_then(fn(id: i32) -> !User { return db_find(id); });\n```"),
+        "and_then(".concat(_tab("1")).concat(")"));
+
+    if is_opt {
+        _orm(items, seen, "is_some", "() -> bool",
+            "`true` when a value is present.\n\n```glide\nif found.is_some() { use_it(found.unwrap()); }\n```",
+            "is_some()");
+        _orm(items, seen, "is_none", "() -> bool",
+            "`true` when the option is empty.\n\n```glide\nif cache.is_none() { rebuild(); }\n```",
+            "is_none()");
+        _orm(items, seen, "ok_or", "(err: string) -> !".concat(t),
+            "Converts `?".concat(t).concat("` into `!").concat(t).concat("`, attaching `err` as the failure message when empty. Pairs well with `?`.\n\n```glide\nlet v = lookup(key).ok_or(\"key not found\")?;\n```"),
+            "ok_or(".concat(_tab("1:err")).concat(")"));
+        _orm(items, seen, "filter", "(pred: fn(".concat(t).concat(") -> bool) -> ?").concat(t),
+            "Keeps the value only if `pred` returns `true`, otherwise yields `none()`.\n\n```glide\nlet even = some(n).filter(fn(x: i32) -> bool { return x % 2 == 0; });\n```",
+            "filter(".concat(_tab("1")).concat(")"));
+    }
+    if is_res {
+        _orm(items, seen, "is_ok", "() -> bool",
+            "`true` when the result succeeded (the value is then in `.val`).\n\n```glide\nif r.is_ok() { println!(r.unwrap()); }\n```",
+            "is_ok()");
+        _orm(items, seen, "is_err", "() -> bool",
+            "`true` when the result failed (the reason is then in `.err`).\n\n```glide\nif r.is_err() { eprintln(r.unwrap_err()); }\n```",
+            "is_err()");
+        _orm(items, seen, "unwrap_err", "() -> string",
+            "Returns the error message, or **panics** if the result is actually ok.\n\n```glide\nlet why = open(path).unwrap_err();\n```",
+            "unwrap_err()");
+        // NOTE: the `.ok()` method (Result -> Option) is intentionally omitted
+        // from completion: its name collides with the far more common `.ok`
+        // boolean field, which must win the list. The method still compiles.
+        _orm(items, seen, "map_err", "(f: fn(string) -> string) -> !".concat(t),
+            "Rewrites the error message, leaving an ok value unchanged. Good for adding context.\n\n```glide\nlet r = open(path).map_err(fn(e: string) -> string { return \"open failed: \".concat(e); });\n```",
+            "map_err(".concat(_tab("1")).concat(")"));
+    }
+}
 fn _doc_ok() -> string {
     return "`bool` -> `true` when the operation succeeded.\n\nThe value is then in `.val`; on failure the reason is in `.err`. Check `ok` (or use `?` / `??`) before reading `.val`.\n\n```glide\nlet r: !i32 = \"42\".try_parse_int();\nif r.ok {\n    println!(r.val);   // 42\n} else {\n    println!(r.err);   // error message\n}\n```";
 }
@@ -6983,6 +7071,7 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
     if x == null { return; }
     if x.kind == TY_RESULT {
         let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, false, true, inner_pretty);
         _vfield(items, seen, "ok",  "bool", _doc_ok());
         _vfield(items, seen, "val", inner_pretty, _doc_val_result(inner_pretty));
         _vfield(items, seen, "err", "string", _doc_err());
@@ -6990,12 +7079,14 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
     }
     if x.kind == TY_OPTION {
         let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, true, false, inner_pretty);
         _vfield(items, seen, "has", "bool", _doc_has());
         _vfield(items, seen, "val", inner_pretty, _doc_val_option(inner_pretty));
         return;
     }
     if x.kind == TY_OPT_RESULT {
         let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, true, true, inner_pretty);
         _vfield(items, seen, "has", "bool", _doc_has());
         _vfield(items, seen, "ok",  "bool", _doc_ok());
         _vfield(items, seen, "val", inner_pretty, _doc_val_result(inner_pretty));
@@ -9404,6 +9495,23 @@ fn stmt_uses_name(s: *Stmt, name: string) -> bool {
                 for let j: i32 = 0; j < arm.body.len(); j++ {
                     let b: Stmt = arm.body.get(j);
                     if stmt_uses_name(&b, name) { return true; }
+                }
+            }
+        }
+    }
+    // A `match` statement reads its scrutinee and may use `name` inside an arm
+    // body. Without this the scrutinee of `match x { ... }` wasn't counted as a
+    // use, so `x` was wrongly flagged `unused-var`.
+    if s.kind == ST_MATCH {
+        if s.scrutinee != null && expr_uses_name(s.scrutinee, name) { return true; }
+        if s.arms != null {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
+                let a: MatchArm = s.arms.get(i);
+                if a.body != null {
+                    for let j: i32 = 0; j < a.body.len(); j++ {
+                        let b: Stmt = a.body.get(j);
+                        if stmt_uses_name(&b, name) { return true; }
+                    }
                 }
             }
         }
