@@ -460,7 +460,7 @@ fn print_usage() {
     println!("  glide tree                 (show the dep graph)");
     println!("  glide info <name>          (manifest+cache metadata for a dep)");
     println!("  glide search <query>       (search github for glide packages)");
-    println!("  glide clean                (drop glide_modules/ + glide.lock)");
+    println!("  glide clean                (drop build/ + glide.lock)");
     println!("  glide install <path>");
     println!("  glide install <git-url> <rev>");
     println!("  glide target <list|add|remove|dir>  (cross-compile sysroots)");
@@ -662,7 +662,6 @@ fn _starter_gitignore() -> string {
     return "# Glide build output\n"
         .concat("/build\n")
         .concat("/target\n")
-        .concat("/glide_modules\n")
         .concat("\n")
         .concat("# Compiler intermediates + temp executables\n")
         .concat("*.__glide.c\n")
@@ -861,9 +860,8 @@ fn run_remove(name: string) -> i32 {
         println!("remove: no dep named", name);
         return 1;
     }
-    // Drop the glide_modules link too so a stale junction doesn't
-    // shadow a future re-add.
-    let link: string = root.concat("/glide_modules/").concat(name);
+    // Drop the dep link too so a stale junction doesn't shadow a future re-add.
+    let link: string = root.concat("/build/deps/").concat(name);
     if fs_is_dir(link) { fs_remove_dir_rec(link); }
     println!("removed:", name);
     return 0;
@@ -1797,10 +1795,9 @@ fn _ends_with_str(s: string, suffix: string) -> bool {
 fn run_clean() -> i32 {
     let root: string = find_manifest_root(".");
     if root.eq("") { println!("clean: no glide.glide found"); return 1; }
-    fs_remove_dir_rec(root.concat("/glide_modules"));
     fs_remove_dir_rec(root.concat("/build"));
     fs_remove_file(root.concat("/glide.lock"));
-    println!("clean: removed glide_modules/, build/ and glide.lock");
+    println!("clean: removed build/ and glide.lock");
     return 0;
 }
 

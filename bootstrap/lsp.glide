@@ -205,6 +205,11 @@ pub struct LspState {
     // every keystroke (the lists also live on libc heap, so
     // re-applying would leak the previous instance).
     pub lint_applied_root: string,
+    // Manifest roots we've already tried to auto-fetch this session. A
+    // declared-but-uncached dep triggers `fetch_all` at most once per
+    // project (not on every file open), so the editor doesn't re-hit the
+    // network on every keystroke.
+    pub fetch_attempted: *HashMap<bool>,
 }
 
 pub fn lsp_state_new() -> *LspState {
@@ -222,6 +227,8 @@ pub fn lsp_state_new() -> *LspState {
     s.parse_cache = pc;
     s.last_arena = null;
     s.lint_applied_root = "";
+    let fa: *HashMap<bool> = HashMap::new();
+    s.fetch_attempted = fa;
     populate_stdlib_index(s);
     return s;
 }
@@ -656,6 +663,38 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string,
 // heap. Otherwise the request-scoped arena gets freed at end of
 // dispatch and `state.project_index` dangles until the next access
 // crashes the LSP.
+// Fetch declared-but-uncached deps for `root`, once per project per session.
+// Reuses the same pipeline as the `glide.fetch` command (fetch_all + link_all
+// + lockfile) and forces a project re-index. Blocking (network), but the guard
+// keeps it to a single one-shot per project. Path deps never need a fetch; we
+// still (re)create their `build/deps/` links so they're browsable + indexable.
+fn _lsp_autofetch_deps(state: *LspState, root: string) {
+    if root.eq("") { return; }
+    if state.fetch_attempted.contains(root) { return; }
+    let m: *Manifest = read_manifest(root);
+    if m == null || m.deps.len() == 0 { return; }
+    state.fetch_attempted.insert(root, true);   // mark before fetching: no re-entry
+    let mut need: bool = false;
+    for let i: i32 = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        if d.kind != DEP_GIT { continue; }
+        let cdir: string = dep_cache_dir(m, d);
+        if cdir.eq("") || !__glide_fs_is_dir(cdir) { need = true; break; }
+    }
+    if !need { link_all(m); return; }
+    _lsp_show_message(3, "glide: fetching missing deps…");
+    let fetched: i32 = fetch_all(m);
+    link_all(m);
+    let lf: *Lockfile = lockfile_from_manifest(m);
+    write_lockfile(root, lf);
+    state.project_dep_fp = "";   // force the index rebuild below to run
+    if fetched > 0 {
+        _lsp_show_message(3, "glide: fetched ".concat(int_to_str(fetched as i64)).concat(" dep(s)"));
+    } else {
+        _lsp_show_message(2, "glide: could not fetch some deps — check glide.glide");
+    }
+}
+
 fn _refresh_project_index(state: *LspState, uri: string) {
     let path: string = uri_to_path(uri);
     if path.eq("") { return; }
@@ -663,12 +702,18 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     let root: string = find_manifest_root(dir);
     if root.eq("") { return; }
 
+    // Auto-fetch any declared-but-uncached dep before indexing, so imports
+    // resolve without the user running `glide fetch` first. Guarded to run
+    // once per project per session; creates the `build/deps/` links the
+    // fingerprint below then picks up.
+    _lsp_autofetch_deps(state, root);
+
     // Re-trigger the rebuild whenever the dep set could have changed:
-    // a different project root, a manifest edit, a new `glide_modules/`
+    // a different project root, a manifest edit, a new `build/deps/`
     // entry from `glide fetch`, or a file added/removed within an
     // existing dep. The fingerprint hashes the manifest source plus the
     // sorted list of every `.glide` path reachable under
-    // `glide_modules/`. Cheap (no file-content reads) and catches the
+    // `build/deps/`. Cheap (no file-content reads) and catches the
     // common cases without forcing the user to restart the LSP.
     let fp: string = _project_dep_fingerprint(root);
     if state.project_root.eq(root) && state.project_dep_fp.eq(fp) { return; }
@@ -745,7 +790,7 @@ fn _project_dep_fingerprint(root: string) -> string {
     let srcd: string = root.concat("/src");
     if __glide_fs_is_dir(srcd) { _fp_walk_glide_files_content(srcd, &out); }
     out = out.concat("\0gm:");
-    let gm: string = root.concat("/glide_modules");
+    let gm: string = root.concat("/build/deps");
     if !__glide_fs_is_dir(gm) { return out; }
     _fp_walk_glide_files(gm, &out);
     return out;
