@@ -1,0 +1,2113 @@
+// Extracted from bootstrap/codegen.glide for readability. See that file for the
+// orchestration; shared helpers it owns stay there (pub).
+
+import stdlib::hashmap::*;
+import bootstrap::syntax::ast;
+import bootstrap::syntax::lexer;
+import bootstrap::syntax::parser;
+import bootstrap::sema::typer;
+import bootstrap::cli::fmt;
+import bootstrap::codegen::emit;
+import bootstrap::codegen::runtime;
+
+fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vector<Type>) {
+    let mut new_ret: *Type = subst_type(template.fn_ret_ty, template.type_params, args);
+    new_ret = resolve_assoc_recursive(g, new_ret);
+    print!(type_to_c(new_ret), " ", mangled, "(");
+    if template.fn_params == null || template.fn_params.len() == 0 {
+        print!("void");
+    } else {
+        for let j: i32 = 0; j < template.fn_params.len(); j++ {
+            if j > 0 { print!(", "); }
+            let pp: Param = template.fn_params.get(j);
+            let pt: *Type = subst_type(pp.ty, template.type_params, args);
+            let resolved_pt: *Type = resolve_assoc_recursive(g, pt);
+            print!(type_to_c(resolved_pt), " ", c_safe_ident(pp.name));
+        }
+    }
+    println!(");");
+}
+
+// Substitute type params in an expression. Walks structurally and also
+// rewrites EX_STRUCT_LIT for known generic structs (so `Box{}` inside a mono
+// body becomes `Box__int{}`).
+fn subst_expr(e: *Expr, params: *Vector<string>, args: *Vector<Type>, gs: *HashMap<Stmt>) -> *Expr {
+    if e == null { return null; }
+    let n: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+    *n = *e;
+    if e.cast_to != null { n.cast_to = subst_type(e.cast_to, params, args); }
+    if e.lhs != null { n.lhs = subst_expr(e.lhs, params, args, gs); }
+    if e.rhs != null { n.rhs = subst_expr(e.rhs, params, args, gs); }
+    if e.operand != null { n.operand = subst_expr(e.operand, params, args, gs); }
+    if e.args != null {
+        let new_args: *Vector<Expr> = Vector::new();
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let nu: *Expr = subst_expr(&a, params, args, gs);
+            if nu != null { new_args.push(*nu); }
+        }
+        n.args = new_args;
+    }
+    // Rewrite struct lit type_name when matches a known generic struct AND
+    // the substitution provides as many args as the struct expects.
+    if e.kind == EX_STRUCT_LIT && gs != null && gs.contains(e.str_val) {
+        let template: Stmt = gs.get(e.str_val);
+        if template.type_params != null && args != null
+           && template.type_params.len() == args.len() {
+            // Carry the concrete generic type (template + args) on cast_to —
+            // unused for struct-lit emission — so the prescan can recover the
+            // substituted field types for a mono name like `Stack__i32` that
+            // isn't in g.structs/g.generic_structs, and still hand an inline
+            // `Vector::new()` field the `*Vector<i32>` hint it needs to
+            // monomorphize.
+            n.cast_to = ty_generic(e.str_val, args);
+            n.str_val = mangle_generic(e.str_val, args);
+        }
+    }
+    // Rewrite `T::method` when T is one of this fn's type parameters.
+    // At mono time T is concrete; emit the path with the substituted
+    // type name (e.g. `T::from_json` -> `int::from_json` for T=int)
+    // so the existing EX_PATH codegen lowers it to the right symbol.
+    if e.kind == EX_PATH && params != null && args != null {
+        for let i: i32 = 0; i < params.len(); i++ {
+            if params.get(i).eq(e.str_val) && i < args.len() {
+                let a: Type = args.get(i);
+                n.str_val = mangle_type(&a);
+                break;
+            }
+        }
+    }
+    return n;
+}
+
+fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashMap<Stmt>) -> *Stmt {
+    if s == null { return null; }
+    let n: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+    *n = *s;
+    if s.let_ty != null { n.let_ty = subst_type(s.let_ty, params, args); }
+    if s.let_value != null { n.let_value = subst_expr(s.let_value, params, args, gs); }
+    if s.expr_value != null { n.expr_value = subst_expr(s.expr_value, params, args, gs); }
+    if s.cond != null { n.cond = subst_expr(s.cond, params, args, gs); }
+    if s.for_init != null { n.for_init = subst_stmt(s.for_init, params, args, gs); }
+    if s.for_step != null { n.for_step = subst_expr(s.for_step, params, args, gs); }
+    if s.fn_ret_ty != null { n.fn_ret_ty = subst_type(s.fn_ret_ty, params, args); }
+    if s.then_body != null {
+        let nb: *Vector<Stmt> = Vector::new();
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            let nu: *Stmt = subst_stmt(&b, params, args, gs);
+            if nu != null { nb.push(*nu); }
+        }
+        n.then_body = nb;
+    }
+    if s.else_body != null {
+        let nb: *Vector<Stmt> = Vector::new();
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            let nu: *Stmt = subst_stmt(&b, params, args, gs);
+            if nu != null { nb.push(*nu); }
+        }
+        n.else_body = nb;
+    }
+    if s.fn_body != null {
+        let nb: *Vector<Stmt> = Vector::new();
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            let nu: *Stmt = subst_stmt(&b, params, args, gs);
+            if nu != null { nb.push(*nu); }
+        }
+        n.fn_body = nb;
+    }
+    return n;
+}
+
+fn emit_fn_signature(s: *Stmt) {
+    if s.name.eq("main") {
+        print!("int main(int __glide_main_argc, char** __glide_main_argv)");
+        return;
+    }
+    if s.is_naked { print!("__attribute__((naked)) "); }
+    // Rename a body-bearing user fn whose name collides with a libc symbol
+    // (e.g. `fn div`) out of C's way. Extern/bodyless decls keep their real
+    // name so FFI still binds. References are renamed to match (see EX_IDENT).
+    let mut _fn_cnm: string = c_safe_ident(s.name);
+    if s.fn_body != null && is_libc_symbol(s.name) { _fn_cnm = userfn_mangle(s.name); }
+    print!(type_to_c(s.fn_ret_ty), " ", _fn_cnm, "(");
+    if s.fn_params == null || s.fn_params.len() == 0 {
+        if s.is_variadic { print!("..."); }
+        else             { print!("void"); }
+    } else {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            if i > 0 { print!(", "); }
+            let p: Param = s.fn_params.get(i);
+            print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+        }
+        if s.is_variadic { print!(", ..."); }
+    }
+    print!(")");
+}
+
+// Walk an expr looking for `var.method(args)`. If found, try to resolve
+// the impl-generic type params from the args. Returns the inferred
+// concrete generic type (e.g. *Vector<int>) on success.
+fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tparams: *Vector<string>) -> *Type {
+    if e == null { return null; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT
+       && e.lhs.lhs.str_val.eq(var) {
+        let method: string = e.lhs.field;
+        let mname: string = gen_name.concat("_").concat(method);
+        if g.generic_fns.contains(mname) {
+            let mtmpl: Stmt = g.generic_fns.get(mname);
+            // For each tparam, find a method param (skipping self at index 0)
+            // whose ty == Named(tparam). The corresponding user arg has the
+            // concrete type. User args are e.args; method params after self
+            // align 1:1 with them.
+            if mtmpl.fn_params != null && e.args != null {
+                let resolved: *Vector<Type> = Vector::new();
+                let mut all: bool = true;
+                for let pi: i32 = 0; pi < tparams.len(); pi++ {
+                    let tp: string = tparams.get(pi);
+                    let mut found: *Type = null;
+                    for let j: i32 = 1; j < mtmpl.fn_params.len(); j++ {
+                        let mp: Param = mtmpl.fn_params.get(j);
+                        if mp.ty != null && mp.ty.kind == TY_NAMED && mp.ty.name.eq(tp) {
+                            let arg_idx: i32 = j - 1;
+                            if arg_idx < e.args.len() {
+                                let a: Expr = e.args.get(arg_idx);
+                                let at: *Type = infer_for_codegen(g, &a);
+                                if at != null { found = at; break; }
+                            }
+                        }
+                    }
+                    if found == null { all = false; break; }
+                    resolved.push(*found);
+                }
+                if all && resolved.len() > 0 {
+                    return ty_pointer(ty_generic(gen_name, resolved));
+                }
+            }
+        }
+    }
+    // Concrete free-fn call where `var` (possibly wrapped in &/&mut/*)
+    // appears as an arg. Walk both the arg expr and the matching param
+    // type in parallel, stripping wrappers on each side, until we hit
+    // EX_IDENT(var) — the type at that point IS var's type. Resolves
+    // bug #1: `let v* = Vector::new(); fill_jobs(&mut *v, n);` where
+    // fill_jobs has a concrete `&mut Vector<int>` first param.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.args != null {
+        let cname: string = e.lhs.str_val;
+        if g.fns.contains(cname) {
+            let fn_def: Stmt = g.fns.get(cname);
+            if fn_def.fn_params != null {
+                let nparams: i32 = fn_def.fn_params.len();
+                let nargs: i32 = e.args.len();
+                let mut limit: i32 = nargs;
+                if nparams < limit { limit = nparams; }
+                for let i: i32 = 0; i < limit; i++ {
+                    let a: Expr = e.args.get(i);
+                    let p: Param = fn_def.fn_params.get(i);
+                    let resolved: *Type = constrain_walk(&a, p.ty, var);
+                    if resolved != null
+                       && resolved.kind == TY_POINTER
+                       && resolved.inner != null
+                       && resolved.inner.kind == TY_GENERIC
+                       && resolved.inner.name.eq(gen_name) {
+                        return resolved;
+                    }
+                }
+            }
+        }
+    }
+    // Recurse into children.
+    if e.lhs != null {
+        let r: *Type = try_constrain_from_expr(g, e.lhs, var, gen_name, tparams);
+        if r != null { return r; }
+    }
+    if e.rhs != null {
+        let r: *Type = try_constrain_from_expr(g, e.rhs, var, gen_name, tparams);
+        if r != null { return r; }
+    }
+    if e.operand != null {
+        let r: *Type = try_constrain_from_expr(g, e.operand, var, gen_name, tparams);
+        if r != null { return r; }
+    }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let r: *Type = try_constrain_from_expr(g, &a, var, gen_name, tparams);
+            if r != null { return r; }
+        }
+    }
+    return null;
+}
+
+// Walk an arg-expr alongside its param-type, stripping unary wrappers in
+// parallel. When we hit EX_IDENT matching `var`, return the type at that
+// depth — that's `var`'s type. UN_DEREF/UN_ADDR/UN_ADDR_MUT each strip
+// their corresponding type wrapper (or wrap, in the case of `*var` whose
+// type is `ty_pointer(current)`). Returns null if shape diverges.
+fn constrain_walk(arg: *Expr, ty: *Type, var: string) -> *Type {
+    if arg == null || ty == null { return null; }
+    if arg.kind == EX_IDENT && arg.str_val.eq(var) { return ty; }
+    if arg.kind == EX_UNARY && arg.operand != null {
+        if arg.op_code == UN_DEREF {
+            return constrain_walk(arg.operand, ty_pointer(ty), var);
+        }
+        if arg.op_code == UN_ADDR {
+            if ty.kind != TY_BORROW || ty.inner == null { return null; }
+            return constrain_walk(arg.operand, ty.inner, var);
+        }
+        if arg.op_code == UN_ADDR_MUT {
+            if ty.kind != TY_BORROW_MUT || ty.inner == null { return null; }
+            return constrain_walk(arg.operand, ty.inner, var);
+        }
+    }
+    return null;
+}
+
+fn try_constrain_from_stmt(g: *CG, s: *Stmt, var: string, gen_name: string, tparams: *Vector<string>) -> *Type {
+    if s == null { return null; }
+    if s.let_value != null {
+        let r: *Type = try_constrain_from_expr(g, s.let_value, var, gen_name, tparams);
+        if r != null { return r; }
+    }
+    if s.expr_value != null {
+        let r: *Type = try_constrain_from_expr(g, s.expr_value, var, gen_name, tparams);
+        if r != null { return r; }
+    }
+    if s.cond != null {
+        let r: *Type = try_constrain_from_expr(g, s.cond, var, gen_name, tparams);
+        if r != null { return r; }
+    }
+    if s.for_step != null {
+        let r: *Type = try_constrain_from_expr(g, s.for_step, var, gen_name, tparams);
+        if r != null { return r; }
+    }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            let r: *Type = try_constrain_from_stmt(g, &b, var, gen_name, tparams);
+            if r != null { return r; }
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            let r: *Type = try_constrain_from_stmt(g, &b, var, gen_name, tparams);
+            if r != null { return r; }
+        }
+    }
+    return null;
+}
+
+// Walk a stmt populating g.scope from any ST_LET it contains (recursively).
+// Used so the type-inference pre-pass can resolve identifier references in
+// nested blocks (e.g. `for let i: int = 0; ...; i++ { v.push(i * 10); }`).
+fn populate_scope_from_stmt(g: *CG, s: *Stmt) {
+    if s == null { return; }
+    if s.kind == ST_LET || s.kind == ST_CONST {
+        let mut ty: *Type = s.let_ty;
+        // No annotation? Infer from the initializer so plain `let i = 0`
+        // (typical in for-loops) registers `i: int` in the codegen scope —
+        // otherwise printf-style macros default to `%p` and emit hex.
+        if ty == null && s.let_value != null {
+            ty = infer_for_codegen(g, s.let_value);
+        }
+        if ty != null { g.declare(s.name, ty); }
+    }
+    if s.for_init != null { populate_scope_from_stmt(g, s.for_init); }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            populate_scope_from_stmt(g, &b);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            populate_scope_from_stmt(g, &b);
+        }
+    }
+}
+
+fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: i32) -> *Type {
+    if s.let_ty != null { return null; }
+    if s.let_value == null || s.let_value.kind != EX_CALL { return null; }
+    let callee: *Expr = s.let_value.lhs;
+    if callee == null { return null; }
+    let mut gname: string = "";
+    if callee.kind == EX_IDENT { gname = callee.str_val; }
+    if callee.kind == EX_PATH {
+        let qual: string = callee.str_val.concat("::").concat(callee.field);
+        if g.module_aliases.contains(qual) {
+            gname = g.module_aliases.get(qual);
+        } else {
+            gname = resolve_type_prefix(g, callee.str_val).concat("_").concat(callee.field);
+        }
+    }
+    if gname.len() == 0 { return null; }
+    if !g.generic_fns.contains(gname) { return null; }
+    let template: Stmt = g.generic_fns.get(gname);
+    if template.type_params == null || template.type_params.len() == 0 { return null; }
+    if template.fn_ret_ty == null { return null; }
+    let mut inner: *Type = template.fn_ret_ty;
+    while inner != null && inner.kind == TY_POINTER {
+        inner = inner.inner;
+    }
+    if inner == null || inner.kind != TY_GENERIC { return null; }
+    let gen_base: string = inner.name;
+    let n: i32 = body.len();
+    for let j: i32 = start + 1; j < n; j++ {
+        let s2: Stmt = body.get(j);
+        let r: *Type = try_constrain_from_stmt(g, &s2, s.name, gen_base, template.type_params);
+        if r != null { return r; }
+    }
+    return null;
+}
+
+// Pre-pass: for each `let v = Generic::new()` (no annot) anywhere in the fn,
+// resolve T from the first subsequent use of v in the same body and backfill
+// s.let_ty. Recurses into nested if/for/while bodies.
+fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
+    if body == null { return; }
+    // Pre-populate scope with all annotated lets (recursing) so identifier
+    // inference works inside nested blocks.
+    for let k: i32 = 0; k < body.len(); k++ {
+        let sk: Stmt = body.get(k);
+        populate_scope_from_stmt(g, &sk);
+    }
+    let n: i32 = body.len();
+    for let i: i32 = 0; i < n; i++ {
+        let s: Stmt = body.get(i);
+        if s.kind == ST_LET {
+            let resolved: *Type = try_resolve_open_let(g, &s, body, i);
+            if resolved != null {
+                s.let_ty = resolved;
+                body.set(i, s);
+                g.declare(s.name, resolved);
+            } else if s.let_ty == null && s.let_value != null
+                      && s.let_names == null {
+                // Backfill un-annotated tuple lets (`let p = (a, b);`) so the
+                // program-wide tuple collection discovers the type even when
+                // the elements are non-literal (idents resolved via scope).
+                let vt: *Type = infer_for_codegen(g, s.let_value);
+                if vt != null && vt.kind == TY_TUPLE {
+                    s.let_ty = vt;
+                    body.set(i, s);
+                    g.declare(s.name, vt);
+                }
+            }
+            // Declare destructured names so later tuple-literal inference in
+            // the same body can see them.
+            if s.let_names != null && s.let_names.len() > 0 && s.let_value != null {
+                let dvt: *Type = infer_for_codegen(g, s.let_value);
+                let dstr: *Type = strip_ptr(dvt);
+                if dstr != null && dstr.kind == TY_TUPLE && dstr.args != null {
+                    for let di: i32 = 0; di < s.let_names.len(); di++ {
+                        if di < dstr.args.len() {
+                            let el: Type = dstr.args.get(di);
+                            let pp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                            *pp = el;
+                            g.declare(s.let_names.get(di), pp);
+                        }
+                    }
+                }
+            }
+        }
+        // Recurse into nested bodies for lets buried inside loops / branches.
+        if s.then_body != null { infer_let_types(g, s.then_body); }
+        if s.else_body != null { infer_let_types(g, s.else_body); }
+    }
+}
+
+fn infer_let_types_in_program(g: *CG, program: *Vector<Stmt>) {
+    let n: i32 = program.len();
+    for let i: i32 = 0; i < n; i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            // Set up a fresh scope with this fn's params so identifier
+            // inference works during the pre-pass.
+            g.scope.clear();
+            if s.fn_params != null {
+                for let k: i32 = 0; k < s.fn_params.len(); k++ {
+                    let p: Param = s.fn_params.get(k);
+                    g.declare(p.name, p.ty);
+                }
+            }
+            infer_let_types(g, s.fn_body);
+        }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.fn_body != null {
+                    g.scope.clear();
+                    if m.fn_params != null {
+                        for let k: i32 = 0; k < m.fn_params.len(); k++ {
+                            let p: Param = m.fn_params.get(k);
+                            g.declare(p.name, p.ty);
+                        }
+                    }
+                    infer_let_types(g, m.fn_body);
+                }
+            }
+        }
+    }
+    // Restore empty scope for the regular emit pipeline.
+    g.scope.clear();
+}
+
+// True iff `t` is the literal `void` named type, or a missing return type.
+fn _main_ret_is_void(t: *Type) -> bool {
+    if t == null { return true; }
+    if t.kind == TY_NAMED && t.name.eq("void") { return true; }
+    return false;
+}
+
+// C return type for the renamed __glide_user_main. Mirrors the user's
+// declared return — the C `main` wrapper below converts whatever shape
+// they picked into an exit code.
+fn _main_user_c_ret(t: *Type) -> string {
+    if _main_ret_is_void(t) { return "void"; }
+    if t.kind == TY_NAMED && t.name.eq("int") { return "int"; }
+    if t.kind == TY_RESULT && t.inner != null {
+        let m: string = mangle_type(t.inner);
+        return "__glide_result_".concat(m).concat("_t");
+    }
+    return type_to_c(t);
+}
+
+// User picked `fn main(argc: int, argv: **char) -> ...` — backward compat.
+fn _main_takes_argv(s: *Stmt) -> bool {
+    if s.fn_params == null { return false; }
+    if s.fn_params.len() != 2 { return false; }
+    return true;
+}
+
+// Emit the C `main(argc, argv)` wrapper that adapts the user's renamed
+// main (whatever its signature) into a process exit code. Handles
+// scheduler init/shutdown around the call.
+fn _emit_main_wrapper(g: *CG, s: *Stmt) {
+    let ret_ty: *Type = s.fn_ret_ty;
+    let takes_argv: bool = _main_takes_argv(s);
+    let call_args: string = "";
+    if takes_argv { call_args = "argc, argv"; }
+    // --tiny without any spawn/chan: skip the scheduler boot so the M:N
+    // runtime + reactor stay unreferenced and --gc-sections drops them.
+    // A tiny program that does use concurrency keeps the scheduler.
+    let skip_sched: bool = g.tiny && !g.needs_concurrency;
+    println!("int main(int argc, char** argv) {");
+    if !skip_sched { println!("    __glide_is_main_tls = 1;"); }
+    println!("    __glide_args_init(argc, argv);");
+    if !skip_sched { println!("    __glide_sched_init();"); }
+    if _main_ret_is_void(ret_ty) {
+        println!("    __glide_user_main(".concat(call_args).concat(");"));
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
+        println!("    return 0;");
+    } else if ret_ty.kind == TY_NAMED && (ret_ty.name.eq("int") || _is_int_family(ret_ty.name)) {
+        // `fn main() -> i32` (the canonical form) and the legacy `int` alias
+        // both carry a process exit code. Propagate it — previously only the
+        // retired `int` name matched, so every `-> i32` main silently exited 0.
+        println!("    int __glide_rc = __glide_user_main(".concat(call_args).concat(");"));
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
+        println!("    return __glide_rc;");
+    } else if ret_ty.kind == TY_RESULT && ret_ty.inner != null {
+        let m: string = mangle_type(ret_ty.inner);
+        let rt: string = "__glide_result_".concat(m).concat("_t");
+        println!("    ".concat(rt).concat(" __glide_rc = __glide_user_main(").concat(call_args).concat(");"));
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
+        println!("    if (!__glide_rc.ok) {");
+        println!("        fprintf(stderr, \"%s\\n\", __glide_rc.err ? __glide_rc.err : \"error\");");
+        println!("        return 1;");
+        println!("    }");
+        let inner: *Type = ret_ty.inner;
+        if inner != null && inner.kind == TY_NAMED && (inner.name.eq("int") || _is_int_family(inner.name)) {
+            println!("    return __glide_rc.val;");
+        } else if inner != null && inner.kind == TY_NAMED && inner.name.eq("string") {
+            println!("    if (__glide_rc.val) { fputs(__glide_rc.val, stdout); fputc('\\n', stdout); }");
+            println!("    return 0;");
+        } else {
+            println!("    return 0;");
+        }
+    } else {
+        println!("    (void)__glide_user_main(".concat(call_args).concat(");"));
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
+        println!("    return 0;");
+    }
+    println!("}");
+}
+
+fn emit_fn(g: *CG, s: *Stmt) {
+    // In freestanding mode there is no hosted `main` wrapper (it calls
+    // __glide_sched_init / fprintf). The entry is an ordinary fn (`kmain`)
+    // the linker script points at, so never take the wrapper path.
+    let is_main: bool = s.name.eq("main") && !g.freestanding;
+    // Track this fn's source origin so emit_stmt's `#line` directives
+    // resolve against the right Glide file. The signature line itself
+    // is emitted first (no directive yet) so a stack frame pointing
+    // at the fn-entry shows the fn's declared line, not its caller.
+    let saved_origin: string = g.current_origin;
+    if s.origin != null && !s.origin.eq("") { g.current_origin = s.origin; }
+    g.emit_line_dir(s.line, g.current_origin);
+    if is_main {
+        // User's main is renamed to __glide_user_main so the C wrapper
+        // below owns the real `main` symbol. Signature mirrors the user's
+        // declared return + params (`fn main()`, `fn main() -> !`, etc.);
+        // the wrapper adapts it into a process exit code.
+        let main_ret_c: string = _main_user_c_ret(s.fn_ret_ty);
+        let main_params: string = "void";
+        if _main_takes_argv(s) {
+            main_params = "int __glide_main_argc, char** __glide_main_argv";
+        }
+        println!(main_ret_c.concat(" __glide_user_main(").concat(main_params).concat(") {"));
+    } else {
+        emit_fn_signature(s);
+        println!(" {");
+    }
+    g.scope.clear();
+    let saved_ret: *Type = g.current_ret_ty;
+    g.current_ret_ty = s.fn_ret_ty;
+    // Reset defer + auto-drop stacks for this fn.
+    let saved_defer: *Vector<Expr> = g.defer_stack;
+    let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
+    let saved_drop: *Vector<Expr> = g.auto_drop_stack;
+    let new_defer: *Vector<Expr> = Vector::new();
+    let new_err_defer: *Vector<Expr> = Vector::new();
+    let new_drop: *Vector<Expr> = Vector::new();
+    g.defer_stack = new_defer;
+    g.err_defer_stack = new_err_defer;
+    g.auto_drop_stack = new_drop;
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            g.declare(p.name, p.ty);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            emit_stmt(g, &b, 1);
+        }
+    }
+    // Flush any deferred exprs that didn't hit a return (e.g. fall-through fn end).
+    g.emit_deferred_reverse(1);
+    // Implicit `return __glide_ok_void();` at end of `fn -> !` so users can
+    // write fns where success = falling off the end. Unreachable when every
+    // path already returned, but harmless (no -Wreturn-type from gcc).
+    if s.fn_ret_ty != null && s.fn_ret_ty.kind == TY_RESULT
+       && s.fn_ret_ty.inner != null && s.fn_ret_ty.inner.kind == TY_NAMED
+       && s.fn_ret_ty.inner.name.eq("void") {
+        ind(1); println!("return __glide_ok_void();");
+    }
+    g.defer_stack = saved_defer;
+    g.err_defer_stack = saved_err_defer;
+    g.auto_drop_stack = saved_drop;
+    g.current_ret_ty = saved_ret;
+    g.current_origin = saved_origin;
+    println!("}");
+
+    // Real C `main` wrapper: runs scheduler init/shutdown around the user's
+    // body and adapts whatever shape the user's main has into a process
+    // exit code. Drains pending coroutines before exiting so `spawn worker();
+    // main returns` waits for `worker` to finish (predictable for tests;
+    // long-running servers stay in main's loop and never reach this point).
+    if is_main {
+        println!("");
+        _emit_main_wrapper(g, s);
+    }
+}
+
+fn emit_impl(g: *CG, s: *Stmt) {
+    if s.impl_methods == null { return; }
+    let saved_origin: string = g.current_origin;
+    if s.origin != null && !s.origin.eq("") { g.current_origin = s.origin; }
+    let mut prefix: string = "X";
+    if s.impl_target != null && s.impl_target.kind == TY_NAMED {
+        prefix = s.impl_target.name;
+    }
+    if s.impl_target != null && s.impl_target.kind == TY_GENERIC {
+        prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
+    }
+    // `impl T in NS { ... }` mangles to `NS_T_method` so two libs can each add
+    // a `red()` method to `string` without colliding at link time. Bare
+    // `impl T { ... }` keeps the unprefixed `T_method` name for back-compat.
+    if s.import_path != null && !s.import_path.eq("") {
+        prefix = s.import_path.concat("_").concat(prefix);
+    }
+    for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+        let m: Stmt = s.impl_methods.get(i);
+        // Mangle method name: Type_method.
+        let mangled: string = prefix.concat("_").concat(m.name);
+        g.emit_line_dir(m.line, g.current_origin);
+        // Emit a fn with mangled name.
+        let mut saved_name: string = m.name;
+        // We can't mutate the Stmt easily here; emit signature inline then body.
+        print!(type_to_c(m.fn_ret_ty), " ", mangled, "(");
+        if m.fn_params == null || m.fn_params.len() == 0 {
+            print!("void");
+        } else {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
+                if j > 0 { print!(", "); }
+                let p: Param = m.fn_params.get(j);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+            }
+        }
+        println!(") {");
+        g.scope.clear();
+        // Track the method's return type so `err(...)` / `ok(...)` lower to
+        // the right `__glide_err_T` / `__glide_ok_T` helpers (same as
+        // emit_fn does for top-level fns).
+        let saved_ret: *Type = g.current_ret_ty;
+        g.current_ret_ty = m.fn_ret_ty;
+        let saved_defer: *Vector<Expr> = g.defer_stack;
+        let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
+        let saved_drop: *Vector<Expr> = g.auto_drop_stack;
+        let nd: *Vector<Expr> = Vector::new();
+        let ned: *Vector<Expr> = Vector::new();
+        let nadr: *Vector<Expr> = Vector::new();
+        g.defer_stack = nd;
+        g.err_defer_stack = ned;
+        g.auto_drop_stack = nadr;
+        if m.fn_params != null {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
+                let p: Param = m.fn_params.get(j);
+                g.declare(p.name, p.ty);
+            }
+        }
+        if m.fn_body != null {
+            for let j: i32 = 0; j < m.fn_body.len(); j++ {
+                let b: Stmt = m.fn_body.get(j);
+                emit_stmt(g, &b, 1);
+            }
+        }
+        g.emit_deferred_reverse(1);
+        g.defer_stack = saved_defer;
+        g.err_defer_stack = saved_err_defer;
+        g.auto_drop_stack = saved_drop;
+        g.current_ret_ty = saved_ret;
+        println!("}");
+        println!("");
+    }
+    g.current_origin = saved_origin;
+}
+
+// Emit forward declarations for an `impl T { ... }` block's methods. Same
+// mangling rule as emit_impl. Lets methods reference each other (and free
+// fns reference impl methods) regardless of source order.
+fn emit_impl_fwd_decls(g: *CG, s: *Stmt) {
+    if s.impl_methods == null { return; }
+    let mut prefix: string = "X";
+    if s.impl_target != null && s.impl_target.kind == TY_NAMED {
+        prefix = s.impl_target.name;
+    }
+    if s.impl_target != null && s.impl_target.kind == TY_GENERIC {
+        prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
+    }
+    if s.import_path != null && !s.import_path.eq("") {
+        prefix = s.import_path.concat("_").concat(prefix);
+    }
+    for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+        let m: Stmt = s.impl_methods.get(i);
+        let mangled: string = prefix.concat("_").concat(m.name);
+        print!(type_to_c(m.fn_ret_ty), " ", mangled, "(");
+        if m.fn_params == null || m.fn_params.len() == 0 {
+            print!("void");
+        } else {
+            for let j: i32 = 0; j < m.fn_params.len(); j++ {
+                if j > 0 { print!(", "); }
+                let p: Param = m.fn_params.get(j);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+            }
+        }
+        println!(");");
+    }
+}
+
+pub fn emit_struct(s: *Stmt) {
+    let cname: string = c_safe_ident(s.name);
+    println!("typedef struct ", cname, " {");
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            print!("    ", type_to_c(f.ty), " ", c_safe_ident(f.name)); println!(";");
+        }
+    }
+    println!("} ", cname, ";");
+    println!("");
+}
+
+pub fn emit_enum(s: *Stmt) {
+    let mut has_payload: bool = false;
+    if s.enum_variants != null {
+        for let i: i32 = 0; i < s.enum_variants.len(); i++ {
+            let v: EnumVariant = s.enum_variants.get(i);
+            if v.fields != null && v.fields.len() > 0 { has_payload = true; }
+        }
+    }
+    let ename: string = c_safe_ident(s.name);
+    println!("typedef struct ", ename, " {");
+    println!("    int tag;");
+    if has_payload {
+        println!("    union {");
+        if s.enum_variants != null {
+            for let i: i32 = 0; i < s.enum_variants.len(); i++ {
+                let v: EnumVariant = s.enum_variants.get(i);
+                if v.fields == null || v.fields.len() == 0 { continue; }
+                if v.fields.len() == 1 {
+                    let t: Type = v.fields.get(0);
+                    print!("        ");
+                    print!(type_to_c(&t));
+                    print!(" v_");
+                    print!(v.name);
+                    println!(";");
+                } else {
+                    print!("        struct { ");
+                    for let j: i32 = 0; j < v.fields.len(); j++ {
+                        if j > 0 { print!(" "); }
+                        let t: Type = v.fields.get(j);
+                        print!(type_to_c(&t));
+                        print!(" f");
+                        print!(j);
+                        print!(";");
+                    }
+                    print!(" } v_");
+                    print!(v.name);
+                    println!(";");
+                }
+            }
+        }
+        println!("    } data;");
+    }
+    println!("} ", ename, ";");
+    if s.enum_variants != null {
+        for let i: i32 = 0; i < s.enum_variants.len(); i++ {
+            let v: EnumVariant = s.enum_variants.get(i);
+            print!("#define ");
+            print!(ename);
+            print!("_");
+            print!(v.name);
+            print!(" ");
+            print!(i);
+            println!("");
+        }
+    }
+    println!("");
+}
+
+// Register `<suffix>::<name>` -> `<name>` for every suffix of `mod_path`.
+// For mod_path `stdlib::math` and name `min_int` this populates:
+//   `stdlib::math::min_int` -> `min_int`   (full path)
+//   `math::min_int`         -> `min_int`   (last-segment shorthand)
+// so users can write either the full or partial qualified form. Single-
+// segment paths only register the full form. Last write wins on collisions
+// (Phase 2 territory).
+fn register_alias_suffixes(g: *CG, mod_path: string, name: string) {
+    if mod_path == null || mod_path.eq("") { return; }
+    if name == null || name.eq("") { return; }
+    let n: i32 = mod_path.len();
+    let mut start: i32 = 0;
+    while start < n {
+        let suffix: string = mod_path.substring(start, n);
+        g.module_aliases.insert(suffix.concat("::").concat(name), name);
+        let mut next: i32 = -1;
+        let mut i: i32 = start;
+        while i + 1 < n {
+            if mod_path.at(i).to_int() == 58 && mod_path.at(i + 1).to_int() == 58 {
+                next = i + 2;
+                break;
+            }
+            i = i + 1;
+        }
+        if next < 0 { break; }
+        start = next;
+    }
+}
+
+// Convert a source file path to a `::`-separated module path. Strips the
+// `.glide` suffix and rewrites `/` and `\` to `::`. Used so user code can
+// reach a pub item by `module::path::Item` instead of (or in addition to)
+// the bare short name.
+fn module_path_from_origin(origin: string) -> string {
+    if origin == null || origin.eq("") { return ""; }
+    let mut s: string = origin;
+    let n: i32 = s.len();
+    if n > 6 {
+        let tail: string = s.substring(n - 6, n);
+        if tail.eq(".glide") { s = s.substring(0, n - 6); }
+    }
+    // Strip the leading `src/` segment so user-facing module paths don't
+    // expose the source-root layout. Files under `src/stdlib/foo.glide`
+    // become `stdlib::foo`; files outside `src/` keep their full path.
+    let len0: i32 = s.len();
+    if len0 >= 4 {
+        let first: i32 = s.at(0).to_int();
+        let second: i32 = s.at(1).to_int();
+        let third: i32 = s.at(2).to_int();
+        let fourth: i32 = s.at(3).to_int();
+        if first == 115 && second == 114 && third == 99
+            && (fourth == 47 || fourth == 92) {
+            s = s.substring(4, len0);
+        }
+    }
+    let mut out: string = "";
+    let mut i: i32 = 0;
+    let len: i32 = s.len();
+    while i < len {
+        let c: i32 = s.at(i).to_int();
+        if c == 47 || c == 92 {
+            out = out.concat("::");
+        } else {
+            out = out.concat(s.substring(i, i + 1));
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn _uniq_next(ctr: *Vector<i32>) -> i32 {
+    let v: i32 = ctr.get(0);
+    ctr.set(0, v + 1);
+    return v;
+}
+
+fn _uniq_undo(ren: *HashMap<string>, undo: *Vector<string>) {
+    let mut i: i32 = undo.len() - 2;
+    while i >= 0 {
+        ren.insert(undo.get(i), undo.get(i + 1));
+        i = i - 2;
+    }
+}
+
+fn _uniq_expr(e: *Expr, ren: *HashMap<string>, ctr: *Vector<i32>) {
+    if e == null { return; }
+    if e.kind == EX_IDENT {
+        if e.str_val != null && ren.contains(e.str_val) {
+            e.str_val = ren.get(e.str_val);
+        }
+        return;
+    }
+    if e.kind == EX_FNEXPR {
+        let seed: *Vector<string> = Vector::new();
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null { seed.push(p.name); }
+            }
+        }
+        if e.fn_expr_body != null { _uniq_scope(e.fn_expr_body, ren, ctr, seed); }
+        return;
+    }
+    if e.kind == EX_BLOCK {
+        if e.block_stmts != null {
+            let seen: *HashMap<bool> = HashMap::new();
+            let undo: *Vector<string> = Vector::new();
+            for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+                let bs: Stmt = e.block_stmts.get(i);
+                _uniq_stmt(&bs, ren, seen, undo, ctr);
+                e.block_stmts.set(i, bs);
+            }
+            _uniq_expr(e.operand, ren, ctr);
+            _uniq_undo(ren, undo);
+        } else {
+            _uniq_expr(e.operand, ren, ctr);
+        }
+        return;
+    }
+    if e.kind == EX_MATCH {
+        _uniq_expr(e.lhs, ren, ctr);
+        if e.match_arms != null {
+            for let i: i32 = 0; i < e.match_arms.len(); i++ {
+                let arm: MatchArm = e.match_arms.get(i);
+                _uniq_arm(&arm, ren, ctr);
+                e.match_arms.set(i, arm);
+            }
+        }
+        return;
+    }
+    _uniq_expr(e.lhs, ren, ctr);
+    _uniq_expr(e.rhs, ren, ctr);
+    _uniq_expr(e.operand, ren, ctr);
+    if e.macro_recv != null { _uniq_expr(e.macro_recv, ren, ctr); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _uniq_expr(&a, ren, ctr);
+            e.args.set(i, a);
+        }
+    }
+}
+
+fn _uniq_arm(arm: *MatchArm, ren: *HashMap<string>, ctr: *Vector<i32>) {
+    let seed: *Vector<string> = Vector::new();
+    if arm.bindings != null {
+        for let i: i32 = 0; i < arm.bindings.len(); i++ { seed.push(arm.bindings.get(i)); }
+    }
+    if arm.body != null { _uniq_scope(arm.body, ren, ctr, seed); }
+}
+
+// Mutates `*s` in place. The caller persists it: the scope loop writes the
+// (by-value) copy back into its vector; a `*Stmt` field (for-init) is mutated
+// through the pointer directly. Either way the rename lands.
+fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>,
+              undo: *Vector<string>, ctr: *Vector<i32>) {
+    if s == null { return; }
+    if s.kind == ST_LET {
+        // The value is evaluated in the CURRENT scope, so `let b = b.val`
+        // reads the OLD `b` — substitute the value BEFORE rebinding the name.
+        _uniq_expr(s.let_value, ren, ctr);
+        if s.name != null && !s.name.eq("") {
+            // Work in ORIGINAL names — codegen applies c_safe_ident uniformly to
+            // both the declaration and every reference, and registers the type
+            // under the original name. Mapping to the c_safe_ident form here
+            // would desync that type lookup (e.g. a var named `short`).
+            let orig: string = s.name;
+            let mut cname: string = orig;
+            if seen.contains(orig) {
+                cname = orig.concat("__sh").concat(_uniq_next(ctr).to_string());
+            }
+            seen.insert(orig, true);
+            undo.push(orig);
+            if ren.contains(orig) { undo.push(ren.get(orig)); } else { undo.push(orig); }
+            ren.insert(orig, cname);
+            if !cname.eq(orig) { s.name = cname; }
+        }
+        return;
+    }
+    if s.kind == ST_RETURN { _uniq_expr(s.expr_value, ren, ctr); return; }
+    if s.kind == ST_EXPR { _uniq_expr(s.expr_value, ren, ctr); return; }
+    if s.kind == ST_DEFER || s.kind == ST_DEFER_ERR { _uniq_expr(s.expr_value, ren, ctr); return; }
+    if s.kind == ST_IF {
+        _uniq_expr(s.cond, ren, ctr);
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
+        if s.else_body != null { _uniq_scope(s.else_body, ren, ctr, null); }
+        return;
+    }
+    if s.kind == ST_WHILE {
+        _uniq_expr(s.cond, ren, ctr);
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
+        return;
+    }
+    if s.kind == ST_WHILE_RECV {
+        _uniq_expr(s.let_value, ren, ctr);
+        let seed: *Vector<string> = Vector::new();
+        if s.name != null && !s.name.eq("") { seed.push(s.name); }
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, seed); }
+        return;
+    }
+    if s.kind == ST_FOR {
+        // for-init's var is scoped to the whole loop: init + cond + step + body
+        // share one scope.
+        let seen2: *HashMap<bool> = HashMap::new();
+        let undo2: *Vector<string> = Vector::new();
+        if s.for_init != null { _uniq_stmt(s.for_init, ren, seen2, undo2, ctr); }
+        _uniq_expr(s.cond, ren, ctr);
+        _uniq_expr(s.for_step, ren, ctr);
+        if s.then_body != null {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
+                let bs: Stmt = s.then_body.get(i);
+                _uniq_stmt(&bs, ren, seen2, undo2, ctr);
+                s.then_body.set(i, bs);
+            }
+        }
+        _uniq_undo(ren, undo2);
+        return;
+    }
+    if s.kind == ST_BLOCK {
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
+        return;
+    }
+    if s.kind == ST_MATCH {
+        _uniq_expr(s.scrutinee, ren, ctr);
+        if s.arms != null {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
+                let arm: MatchArm = s.arms.get(i);
+                _uniq_arm(&arm, ren, ctr);
+                s.arms.set(i, arm);
+            }
+        }
+        return;
+    }
+}
+
+fn _uniq_scope(body: *Vector<Stmt>, ren: *HashMap<string>, ctr: *Vector<i32>,
+               seed: *Vector<string>) {
+    let seen: *HashMap<bool> = HashMap::new();
+    let undo: *Vector<string> = Vector::new();
+    if seed != null {
+        for let i: i32 = 0; i < seed.len(); i++ { seen.insert(seed.get(i), true); }
+    }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _uniq_stmt(&s, ren, seen, undo, ctr);
+        body.set(i, s);
+    }
+    _uniq_undo(ren, undo);
+}
+
+fn _uniq_fn(fnstmt: *Stmt) {
+    if fnstmt.fn_body == null { return; }
+    let seed: *Vector<string> = Vector::new();
+    if fnstmt.fn_params != null {
+        for let i: i32 = 0; i < fnstmt.fn_params.len(); i++ {
+            let p: Param = fnstmt.fn_params.get(i);
+            if p.name != null { seed.push(p.name); }
+        }
+    }
+    let ren: *HashMap<string> = HashMap::new();
+    let ctr: *Vector<i32> = Vector::new();
+    ctr.push(0);
+    _uniq_scope(fnstmt.fn_body, ren, ctr, seed);
+}
+
+fn _uniq_program(program: *Vector<Stmt>) {
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN { _uniq_fn(&s); }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN { _uniq_fn(&m); }
+            }
+        }
+    }
+}
+
+pub fn emit_program(program: *Vector<Stmt>) {
+    emit_program_mode(program, false, false);
+}
+
+// Freestanding / kernel build: emit only the compiler-provided freestanding
+// headers (these survive `-nostdlib` because they belong to the C compiler,
+// not libc), skip the hosted runtime bake (stdlib/scheduler/socket), and skip
+// the `main` wrapper. The user program supplies its own entry + primitives.
+pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool) {
+    // Alpha-rename shadowing locals to unique C names before anything is
+    // emitted, so `let b = …; let b = b.val;` compiles.
+    _uniq_program(program);
+    if freestanding {
+        println!("#include <stdint.h>");
+        println!("#include <stddef.h>");
+        println!("#include <stdbool.h>");
+        println!("#include <stdarg.h>");
+        println!("");
+    } else {
+        print!(include_str!("bootstrap/runtime/prelude.c"));
+        println!("");
+        emit_stdlib_runtime();
+    }
+
+    // Compile-time target conditions for `cfg!("…")`. Decided by the target's
+    // own C preprocessor, so they are correct under cross-compilation (unlike
+    // a host-time check). Each resolves to 1 / 0; the typer types `cfg!` as
+    // bool and emits the matching `__glide_cfg_<cond>` identifier.
+    println!("#ifdef _WIN32");
+    println!("#define __glide_cfg_windows 1");
+    println!("#else");
+    println!("#define __glide_cfg_windows 0");
+    println!("#endif");
+    println!("#define __glide_cfg_posix (!__glide_cfg_windows)");
+    println!("#ifdef __linux__");
+    println!("#define __glide_cfg_linux 1");
+    println!("#else");
+    println!("#define __glide_cfg_linux 0");
+    println!("#endif");
+    println!("#ifdef __APPLE__");
+    println!("#define __glide_cfg_macos 1");
+    println!("#else");
+    println!("#define __glide_cfg_macos 0");
+    println!("#endif");
+    println!("#if defined(__x86_64__) || defined(_M_X64)");
+    println!("#define __glide_cfg_x86_64 1");
+    println!("#else");
+    println!("#define __glide_cfg_x86_64 0");
+    println!("#endif");
+    println!("#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)");
+    println!("#define __glide_cfg_aarch64 1");
+    println!("#else");
+    println!("#define __glide_cfg_aarch64 0");
+    println!("#endif");
+    println!("");
+
+    let g: *CG = CG::new();
+    g.freestanding = freestanding;
+    g.tiny = tiny;
+
+    // Register generic struct templates up front so that runtime emitters
+    // (chan, result) can synthesize struct monos for their inner types
+    // (e.g. `chan<Vector<int>>` needs the `Vector__int` body before the
+    // chan runtime references it). Also register concrete structs/enums so
+    // chan<UserType> can emit the body before the chan storage references it.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_STRUCT {
+            if s.type_params != null && s.type_params.len() > 0 {
+                g.generic_structs.insert(s.name, s);
+            } else {
+                g.structs.insert(s.name, s);
+            }
+        }
+        if s.kind == ST_ENUM {
+            g.enums.insert(s.name, s);
+        }
+        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
+            g.traits.insert(s.name, s);
+        }
+    }
+
+    // ---- Concurrency pre-pass: collect chan inner types + emit pthread runtime
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        collect_chan_in_stmt(g, &s);
+    }
+    if !freestanding {
+        emit_scheduler_runtime();
+        emit_socket_runtime();
+    }
+
+    // Top-level `c_raw! { ... }` blocks: emit verbatim AFTER the runtime
+    // so they can `#ifdef` against macros set by socket.c / reactor.c (e.g.
+    // bootstrap fallbacks gated on __GLIDE_RUNTIME_HAS_REACTOR_ACTIVE).
+    // Still before user code, so they remain visible to the rest of the
+    // emit. Order matches source order so users can split raw payloads
+    // across files predictably.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_CRAW {
+            emit_cfg_open(s.cfg_target);
+            print!(s.name);
+            println!("");
+            emit_cfg_close(s.cfg_target);
+        }
+    }
+
+    // Forward typedef every concrete user struct/enum up front. Subsequent
+    // pre-emit passes (chan-inner bodies, result-inner bodies, etc.) emit
+    // FULL bodies that may reference *OtherStruct as field types — without
+    // a forward decl already in scope, those references emit `unknown type`.
+    // C99 accepts duplicate `typedef struct X X;` declarations, so the
+    // later body-emit passes that re-issue the forward are harmless.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.name == null || s.name.eq("") { continue; }
+        if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+            println!("typedef struct ", c_safe_ident(s.name), " ", c_safe_ident(s.name), ";");
+        }
+        if s.kind == ST_ENUM {
+            println!("typedef struct ", c_safe_ident(s.name), " ", c_safe_ident(s.name), ";");
+        }
+    }
+    println!("");
+
+    // Anonymous tuple structs — early pass. Collect tuple types reachable
+    // from type annotations (struct fields, fn signatures, written `let`
+    // annotations) and emit their typedefs now, before any struct body or
+    // chan/result/option wrapper that stores a tuple by value. Generic
+    // templates are skipped (their element type params aren't concrete yet);
+    // a later pass picks up tuples inferred from literals + backfilled lets.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
+        collect_tuple_in_stmt(g, &s);
+    }
+    emit_tuple_runtime(g);
+
+    // Pre-emit user struct/enum bodies that show up as chan<T> inners. The
+    // chan template stores `T v;` by value so it needs the full definition,
+    // not just a forward typedef. Walk the program directly (not g.structs)
+    // because the registration pass is later in emit_program.
+    for let i: i32 = 0; i < g.chan_types.len(); i++ {
+        let t: Type = g.chan_types.get(i);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: i32 = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
+
+    emit_chan_runtime(g);
+
+    // ---- dyn Trait pre-pass + emission ----
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        collect_dyn_in_stmt(g, &s);
+    }
+    // Emit the fat-pointer typedefs up front so any struct/enum body that
+    // embeds a `*dyn Trait` field by value (incl. those force-emitted early
+    // by the `?Struct`/`!Struct` result-option pre-pass below) sees the
+    // type. The vtable bodies + thunks still come later via emit_dyn_runtime.
+    emit_dyn_fat_pointers(g, program);
+    // Pre-emit struct bodies for every Type that appears as an `impl Trait
+    // for Type` target where Trait is dyn-used. The thunks emitted by
+    // emit_dyn_runtime do `*(Type*)self_p`, which needs the full definition.
+    // Each struct's field types may reference generic mono structs
+    // (Vector<T>, HashMap<V>, etc.); forward-decl those before emitting
+    // the struct body so the field types are in scope.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.impl_trait_name) { continue; }
+        if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
+        let tn: string = s.impl_target.name;
+        if g.emitted_named.contains(tn) { continue; }
+        for let j: i32 = 0; j < program.len(); j++ {
+            let ts: Stmt = program.get(j);
+            if ts.name == null || ts.name.eq("") { continue; }
+            if !ts.name.eq(tn) { continue; }
+            if ts.kind == ST_STRUCT && (ts.type_params == null || ts.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &ts);
+                println!("typedef struct ".concat(ts.name).concat(" ").concat(ts.name).concat(";"));
+                emit_struct(&ts);
+                g.emitted_named.insert(tn, true);
+            } else if ts.kind == ST_ENUM {
+                println!("typedef struct ".concat(ts.name).concat(" ").concat(ts.name).concat(";"));
+                emit_enum(&ts);
+                g.emitted_named.insert(tn, true);
+            }
+        }
+    }
+    // emit_dyn_runtime is deferred until AFTER emit_result_runtime /
+    // emit_option_runtime / emit_optres_runtime — the vtable struct's
+    // method-pointer types (and the per-method thunk forward decls)
+    // reference `__glide_option_<T>_t` / `__glide_result_<T>_t`, so
+    // those typedefs must already be in scope. Emitting dyn runtime
+    // here would make the C compiler treat the option/result type
+    // names as implicit-int and silently mismatch the real
+    // declarations later.
+
+    // ---- Errors-as-values pre-pass: collect Result inner types + emit runtime
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        // Skip generic templates — their bodies reference type params and
+        // assoc projections that will be resolved per-instantiation. Mono
+        // entries are added to the queue and collected when emitted.
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
+        // Trait body sigs reference `Self::Item` placeholders; never collect.
+        // Concrete impls of the trait collect their own substituted types.
+        if s.kind == ST_TRAIT { continue; }
+        collect_result_in_stmt(g, &s);
+    }
+    // Same chan-userType story: result_<T> wraps T by value, so user
+    // struct/enum bodies must be emitted before the result helpers.
+    for let i: i32 = 0; i < g.result_types.len(); i++ {
+        let t: Type = g.result_types.get(i);
+        // Forward-declare any generic mono struct names referenced
+        // anywhere in the result's wrapped type (T may be `*Vector<X>`
+        // where TY_POINTER -> TY_GENERIC). Without this, the result
+        // struct typedef references a yet-undeclared mangled tag.
+        forward_decl_generic_monos(g, &t);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: i32 = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &s);
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
+    emit_result_runtime(g);
+
+    // Same up-front emission for option_<T> / optres_<T> wrappers.
+    for let i: i32 = 0; i < g.option_types.len(); i++ {
+        let t: Type = g.option_types.get(i);
+        forward_decl_generic_monos(g, &t);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: i32 = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &s);
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
+    emit_option_runtime(g);
+
+    for let i: i32 = 0; i < g.optres_types.len(); i++ {
+        let t: Type = g.optres_types.get(i);
+        forward_decl_generic_monos(g, &t);
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
+        if g.emitted_named.contains(t.name) { continue; }
+        for let j: i32 = 0; j < program.len(); j++ {
+            let s: Stmt = program.get(j);
+            if s.name == null || s.name.eq("") { continue; }
+            if !s.name.eq(t.name) { continue; }
+            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+                _forward_decl_field_monos(g, &s);
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_struct(&s);
+                g.emitted_named.insert(t.name, true);
+            } else if s.kind == ST_ENUM {
+                println!("typedef struct ", s.name, " ", s.name, ";");
+                emit_enum(&s);
+                g.emitted_named.insert(t.name, true);
+            }
+        }
+    }
+    emit_optres_runtime(g);
+
+    // Now that every option/result/optres typedef is in scope, the
+    // dyn-trait vtable struct + thunks can reference them safely.
+    emit_dyn_runtime(g, program);
+
+    // Populate codegen's assoc_table from every `impl Trait for T { type X = Y; }`.
+    // Used by mangle_type / type_to_c to resolve TY_ASSOC owners that became
+    // concrete after monomorphization.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if s.assoc_decls == null { continue; }
+        if s.impl_target == null { continue; }
+        let mut tname: string = "";
+        if s.impl_target.kind == TY_NAMED   { tname = s.impl_target.name; }
+        if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+        if tname.eq("") { continue; }
+        for let j: i32 = 0; j < s.assoc_decls.len(); j++ {
+            let a: Param = s.assoc_decls.get(j);
+            if a.ty == null { continue; }
+            let key: string = s.impl_trait_name.concat("::").concat(tname)
+                .concat("::").concat(a.name);
+            g.assoc_table.insert(key, *a.ty);
+        }
+    }
+
+    // Register generic struct + fn + impl-method templates.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        let mod_path: string = module_path_from_origin(s.origin);
+        if s.kind == ST_STRUCT {
+            if s.type_params != null && s.type_params.len() > 0 {
+                g.generic_structs.insert(s.name, s);
+            } else {
+                g.structs.insert(s.name, s);
+            }
+            register_alias_suffixes(g, mod_path, s.name);
+        }
+        if s.kind == ST_FN {
+            if s.type_params != null && s.type_params.len() > 0 {
+                g.generic_fns.insert(s.name, s);
+            } else {
+                g.fns.insert(s.name, s);
+            }
+            register_alias_suffixes(g, mod_path, s.name);
+        }
+        if s.kind == ST_ENUM {
+            g.enums.insert(s.name, s);
+            register_alias_suffixes(g, mod_path, s.name);
+        }
+        if s.kind == ST_CONST && s.let_ty != null {
+            g.consts.insert(s.name, *s.let_ty);
+        }
+        if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0)
+           && s.impl_target != null && s.impl_methods != null {
+            let mut prefix: string = "X";
+            if s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
+            // `impl Vector<int> { ... }` — concrete specialization on a
+            // generic type. Mangled prefix is `Vector__int` so it doesn't
+            // collide with the generic `impl<T> Vector<T>` family.
+            if s.impl_target.kind == TY_GENERIC {
+                prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
+            }
+            // `impl T in NS` registers as `NS_T_method` so two libs can both
+            // add e.g. `red()` to string without colliding. Bare `impl T` keeps
+            // the unprefixed `T_method` name for back-compat.
+            let mut is_namespaced: bool = false;
+            let mut bare_prefix: string = prefix;
+            if s.import_path != null && !s.import_path.eq("") {
+                prefix = s.import_path.concat("_").concat(prefix);
+                is_namespaced = true;
+            }
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                let synth: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+                *synth = m;
+                synth.name = prefix.concat("_").concat(m.name);
+                g.fns.insert(synth.name, *synth);
+                // Mark as a real method so `obj.method()` dispatch finds it
+                // - free fns named `<Type>_<method>` won't be sugared.
+                g.method_fns.insert(synth.name, true);
+                if is_namespaced {
+                    let key: string = bare_prefix.concat("_").concat(m.name);
+                    if g.method_index.contains(key) {
+                        let prev: string = g.method_index.get(key);
+                        g.method_index.insert(key, prev.concat(";").concat(synth.name));
+                    } else {
+                        g.method_index.insert(key, synth.name);
+                    }
+                }
+            }
+        }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0
+           && s.impl_target != null && s.impl_methods != null {
+            // Build mangled prefix from target's name.
+            let mut prefix: string = "X";
+            if s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
+            if s.impl_target.kind == TY_GENERIC { prefix = s.impl_target.name; }
+            // Register each method as a generic fn under `Type_method` name.
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                let mname: string = prefix.concat("_").concat(m.name);
+                // Synthesize a generic fn Stmt with the impl's type_params merged
+                // into the method's type_params.
+                let synth: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
+                *synth = m;
+                synth.name = mname;
+                let combined: *Vector<string> = Vector::new();
+                for let k: i32 = 0; k < s.type_params.len(); k++ {
+                    combined.push(s.type_params.get(k));
+                }
+                if m.type_params != null {
+                    for let k: i32 = 0; k < m.type_params.len(); k++ {
+                        combined.push(m.type_params.get(k));
+                    }
+                }
+                synth.type_params = combined;
+                g.generic_fns.insert(mname, *synth);
+                g.method_fns.insert(mname, true);
+            }
+        }
+    }
+
+    // Pre-pass: backfill `let v = Generic::new()` (no annot) by inferring T
+    // from the first subsequent use of v. Must run AFTER generic fn registry
+    // is populated and BEFORE the generic-uses collection below.
+    infer_let_types_in_program(g, program);
+
+    // Walk the program collecting Type::Generic uses, emit specialized structs.
+    let monos: *Vector<Type> = Vector::new();
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        collect_generic_uses_in_stmt(&s, monos);
+    }
+    // Emit forward typedefs first (mono structs + concrete).
+    for let i: i32 = 0; i < monos.len(); i++ {
+        let t: Type = monos.get(i);
+        let mangled: string = mangle_generic(t.name, t.args);
+        if !g.emitted_monos.contains(mangled) {
+            g.emitted_monos.insert(mangled, true);
+            println!("typedef struct ", mangled, " ", mangled, ";");
+        }
+    }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+            if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
+            println!("typedef struct ", s.name, " ", s.name, ";");
+        }
+    }
+    println!("");
+
+    // Emit specialized struct bodies.
+    for let i: i32 = 0; i < monos.len(); i++ {
+        let t: Type = monos.get(i);
+        emit_struct_mono(g, &t);
+    }
+
+    // Concrete struct definitions. Skip anything the chan runtime already
+    // forward-emitted (chan<UserType> needs the body up front).
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
+        if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+            emit_struct(&s);
+        }
+        if s.kind == ST_ENUM { emit_enum(&s); }
+    }
+
+    // Anonymous tuple structs. Collected program-wide now that let types are
+    // backfilled and every struct/mono body is in scope (tuple elements may
+    // be user structs stored by value). Tuples wrapped in `!T` / `?T` were
+    // already emitted by the result/option pre-pass; the dedup guard makes
+    // this re-emission a no-op for those.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
+        collect_tuple_in_stmt(g, &s);
+    }
+    emit_tuple_runtime(g);
+
+    // Top-level const definitions (#define for ints, static const for others).
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_CONST {
+            emit_top_const(g, &s);
+        }
+    }
+    println!("");
+
+    // Top-level `let` globals (freestanding only). Real C globals with storage
+    // so a kernel can declare boot-protocol markers / MMIO / BSS state in Glide
+    // instead of a c_raw! block. Honors `@used` (survive -O2 / --gc) and
+    // `@section("name")`. Emitted after struct bodies so struct-typed globals
+    // resolve, and before fn bodies so they reference these globals.
+    if g.freestanding {
+        for let i: i32 = 0; i < program.len(); i++ {
+            let s: Stmt = program.get(i);
+            if s.kind == ST_LET {
+                emit_top_global(g, &s);
+            }
+        }
+        println!("");
+    }
+
+    // Forward fn declarations (concrete only). Includes impl-block methods
+    // so they can call each other regardless of source order.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0) {
+            emit_cfg_open(s.cfg_target);
+            emit_fn_signature(&s); println!(";");
+            emit_cfg_close(s.cfg_target);
+        }
+        if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) {
+            emit_impl_fwd_decls(g, &s);
+        }
+    }
+
+    // Pre-scan: walk every concrete fn / impl method to discover all generic
+    // call sites. Emit forward declarations for each mono so their later
+    // bodies can be called from anywhere.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0) {
+            prescan_stmt(g, &s);
+        }
+        if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) {
+            if s.impl_methods != null {
+                for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                    let m: Stmt = s.impl_methods.get(j);
+                    prescan_stmt(g, &m);
+                }
+            }
+        }
+    }
+    // Walk the queued monos transitively (a mono body may call other generics).
+    let mut idx: i32 = 0;
+    while idx < g.fn_mono_queue.len() {
+        let entry: FnMonoEntry = g.fn_mono_queue.get(idx);
+        if g.generic_fns.contains(entry.name) {
+            let template: Stmt = g.generic_fns.get(entry.name);
+            // Set up scope with substituted param types so receiver-type lookup
+            // works inside the substituted body.
+            g.scope.clear();
+            if template.fn_params != null {
+                for let j: i32 = 0; j < template.fn_params.len(); j++ {
+                    let p: Param = template.fn_params.get(j);
+                    let pt: *Type = subst_type(p.ty, template.type_params, entry.args);
+                    g.declare(p.name, pt);
+                }
+            }
+            if template.fn_body != null {
+                for let j: i32 = 0; j < template.fn_body.len(); j++ {
+                    let b: Stmt = template.fn_body.get(j);
+                    let nb: *Stmt = subst_stmt(&b, template.type_params, entry.args, g.generic_structs);
+                    if nb != null { prescan_stmt(g, nb); }
+                }
+            }
+        }
+        idx = idx + 1;
+    }
+    // Drain dynamically-discovered struct monos (e.g. via chained ctor
+    // inference). Emit typedef + body before any fn forward decl that may
+    // reference the struct by name.
+    for let i: i32 = 0; i < g.struct_mono_queue.len(); i++ {
+        let t: Type = g.struct_mono_queue.get(i);
+        let mangled: string = mangle_generic(t.name, t.args);
+        if !g.emitted_monos.contains(mangled) {
+            g.emitted_monos.insert(mangled, true);
+            println!("typedef struct ", mangled, " ", mangled, ";");
+        }
+        // Always emit the body (self-dedups via the __body marker). Nested
+        // monos forward-declared by emit_struct_mono set `mangled` early but
+        // defer their body here, after the concrete struct bodies.
+        emit_struct_mono(g, &t);
+    }
+    // Tuple typedefs reachable from monomorphized generic fns. The template's
+    // `(T, ...)` types are skipped by the program-wide tuple passes (T isn't
+    // concrete there); substitute each mono's args and collect the resulting
+    // concrete tuples so the typedef precedes the mono's forward decl + body.
+    for let i: i32 = 0; i < g.fn_mono_queue.len(); i++ {
+        let entry: FnMonoEntry = g.fn_mono_queue.get(i);
+        if !g.generic_fns.contains(entry.name) { continue; }
+        let template: Stmt = g.generic_fns.get(entry.name);
+        let rt: *Type = subst_type(template.fn_ret_ty, template.type_params, entry.args);
+        collect_tuple_in_type(g, rt);
+        g.scope.clear();
+        if template.fn_params != null {
+            for let j: i32 = 0; j < template.fn_params.len(); j++ {
+                let p: Param = template.fn_params.get(j);
+                let pt: *Type = subst_type(p.ty, template.type_params, entry.args);
+                collect_tuple_in_type(g, pt);
+                g.declare(p.name, pt);
+            }
+        }
+        if template.fn_body != null {
+            for let j: i32 = 0; j < template.fn_body.len(); j++ {
+                let b: Stmt = template.fn_body.get(j);
+                let nb: *Stmt = subst_stmt(&b, template.type_params, entry.args, g.generic_structs);
+                if nb != null { collect_tuple_in_stmt(g, nb); }
+            }
+        }
+    }
+    g.scope.clear();
+    emit_tuple_runtime(g);
+
+    // Now emit forward declarations for every queued mono.
+    for let i: i32 = 0; i < g.fn_mono_queue.len(); i++ {
+        let entry: FnMonoEntry = g.fn_mono_queue.get(i);
+        if g.generic_fns.contains(entry.name) {
+            let template: Stmt = g.generic_fns.get(entry.name);
+            let mangled: string = mangle_generic(entry.name, entry.args);
+            emit_mono_forward_decl(g, mangled, &template, entry.args);
+        }
+    }
+    println!("");
+
+    // Pre-pass: walk all fn bodies to discover EX_FNEXPR uses. Lift each
+    // into g.anon_fns and rewrite the expression in place to EX_IDENT
+    // referring to the synthetic name. Output forward decls so the user
+    // fns can reference them.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        lift_anons_in_stmt(g, &s);
+    }
+    for let i: i32 = 0; i < g.anon_fns.len(); i++ {
+        let af: AnonFn = g.anon_fns.get(i);
+        print!(type_to_c(af.ret_ty), " ", af.name, "(");
+        if af.params == null || af.params.len() == 0 {
+            print!("void");
+        } else {
+            for let j: i32 = 0; j < af.params.len(); j++ {
+                if j > 0 { print!(", "); }
+                let p: Param = af.params.get(j);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+            }
+        }
+        println!(");");
+    }
+    println!("");
+
+    // Pre-emit spawn stubs (one per spawn site). The counter `g.spawn_count`
+    // resets to 0 after this so the emit-pass walks the AST in the same order
+    // and pulls the matching ID.
+    g.spawn_count = 0;
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        pre_emit_spawn_stubs_in_stmt(g, &s);
+    }
+    // Whether the program touches the M:N scheduler at all — any `spawn` site
+    // or any `chan<T>`. Captured before the count is reset for stub IDs below.
+    // `--tiny` keeps the scheduler only when this is true.
+    if g.spawn_count > 0 || g.chan_types.len() > 0 { g.needs_concurrency = true; }
+    g.spawn_count = 0;
+
+    // Function + impl definitions (skip generic ones, and skip extern/bodyless).
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0)
+           && s.fn_body != null {
+            emit_cfg_open(s.cfg_target);
+            emit_fn(g, &s); println!("");
+            emit_cfg_close(s.cfg_target);
+        }
+        if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) {
+            emit_cfg_open(s.cfg_target);
+            emit_impl(g, &s);
+            emit_cfg_close(s.cfg_target);
+        }
+    }
+
+    // Drain generic fn mono queue. New monos may queue more; loop until empty.
+    while g.fn_mono_queue.len() > 0 {
+        let e: FnMonoEntry = g.fn_mono_queue.pop();
+        if !g.generic_fns.contains(e.name) { continue; }
+        let template: Stmt = g.generic_fns.get(e.name);
+        let mangled: string = mangle_generic(e.name, e.args);
+        // Substitute type params throughout the body / params / ret. After
+        // subst_type makes owners concrete, resolve any TY_ASSOC via the
+        // impl assoc_table.
+        let new_params_v: *Vector<Param> = Vector::new();
+        if template.fn_params != null {
+            for let i: i32 = 0; i < template.fn_params.len(); i++ {
+                let p: Param = template.fn_params.get(i);
+                let pt: *Type = subst_type(p.ty, template.type_params, e.args);
+                pt = resolve_assoc_recursive(g, pt);
+                let np: Param = Param { name: p.name, ty: pt, name_line: p.name_line, name_col: p.name_col };
+                new_params_v.push(np);
+            }
+        }
+        let mut new_ret: *Type = subst_type(template.fn_ret_ty, template.type_params, e.args);
+        new_ret = resolve_assoc_recursive(g, new_ret);
+        let new_body: *Vector<Stmt> = Vector::new();
+        if template.fn_body != null {
+            for let i: i32 = 0; i < template.fn_body.len(); i++ {
+                let b: Stmt = template.fn_body.get(i);
+                let nb: *Stmt = subst_stmt(&b, template.type_params, e.args, g.generic_structs);
+                if nb != null { new_body.push(*nb); }
+            }
+        }
+        // Source mapping for the mono: inherits the template's origin
+        // + signature line so crash traces point at the generic fn.
+        let saved_origin: string = g.current_origin;
+        if template.origin != null && !template.origin.eq("") {
+            g.current_origin = template.origin;
+        }
+        g.emit_line_dir(template.line, g.current_origin);
+        // Emit the specialized fn.
+        print!(type_to_c(new_ret), " ", mangled, "(");
+        if new_params_v.len() == 0 {
+            print!("void");
+        } else {
+            for let j: i32 = 0; j < new_params_v.len(); j++ {
+                if j > 0 { print!(", "); }
+                let p: Param = new_params_v.get(j);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+            }
+        }
+        println!(") {");
+        g.scope.clear();
+        let saved_d: *Vector<Expr> = g.defer_stack;
+        let saved_dr: *Vector<Expr> = g.auto_drop_stack;
+        let nd_q: *Vector<Expr> = Vector::new();
+        let nadr_q: *Vector<Expr> = Vector::new();
+        g.defer_stack = nd_q;
+        g.auto_drop_stack = nadr_q;
+        for let j: i32 = 0; j < new_params_v.len(); j++ {
+            let p: Param = new_params_v.get(j);
+            g.declare(p.name, p.ty);
+        }
+        let saved_ret_mono: *Type = g.current_ret_ty;
+        g.current_ret_ty = new_ret;
+        for let j: i32 = 0; j < new_body.len(); j++ {
+            let b: Stmt = new_body.get(j);
+            emit_stmt(g, &b, 1);
+        }
+        g.emit_deferred_reverse(1);
+        g.current_ret_ty = saved_ret_mono;
+        g.defer_stack = saved_d;
+        g.auto_drop_stack = saved_dr;
+        g.current_origin = saved_origin;
+        println!("}");
+        println!("");
+    }
+
+    // Emit all collected anonymous fn lifts.
+    for let i: i32 = 0; i < g.anon_fns.len(); i++ {
+        let af: AnonFn = g.anon_fns.get(i);
+        // Signature
+        print!(type_to_c(af.ret_ty), " ", af.name, "(");
+        if af.params == null || af.params.len() == 0 {
+            print!("void");
+        } else {
+            for let j: i32 = 0; j < af.params.len(); j++ {
+                if j > 0 { print!(", "); }
+                let p: Param = af.params.get(j);
+                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+            }
+        }
+        println!(") {");
+        g.scope.clear();
+        let saved_d: *Vector<Expr> = g.defer_stack;
+        let saved_dr: *Vector<Expr> = g.auto_drop_stack;
+        let nd: *Vector<Expr> = Vector::new();
+        let nadr: *Vector<Expr> = Vector::new();
+        g.defer_stack = nd;
+        g.auto_drop_stack = nadr;
+        if af.params != null {
+            for let j: i32 = 0; j < af.params.len(); j++ {
+                let p: Param = af.params.get(j);
+                g.declare(p.name, p.ty);
+            }
+        }
+        // Set the return-type context so `return some(x)` / `ok(x)` inside the
+        // closure body lower against the closure's declared return type.
+        let saved_ret_anon: *Type = g.current_ret_ty;
+        g.current_ret_ty = af.ret_ty;
+        if af.body != null {
+            for let j: i32 = 0; j < af.body.len(); j++ {
+                let b: Stmt = af.body.get(j);
+                emit_stmt(g, &b, 1);
+            }
+        }
+        g.current_ret_ty = saved_ret_anon;
+        g.emit_deferred_reverse(1);
+        g.defer_stack = saved_d;
+        g.auto_drop_stack = saved_dr;
+        println!("}");
+        println!("");
+    }
+
+    g.free();
+}
+
+fn emit_top_const(g: *CG, s: *Stmt) {
+    // `int` / `uint` / `i32` use `#define` so they can appear in `case`
+    // labels and stay compatible with the existing tag-define machinery.
+    // `i64` (and anything else) needs a typed `static const` so the
+    // value carries its width through expressions - otherwise C macro
+    // expansion treats `1000000000` as plain `int` and arithmetic like
+    // `(SECS_PER_HOUR * NANOS_PER_SEC)` overflows int32 silently.
+    if s.let_value == null { return; }
+    let cname: string = c_safe_ident(s.name);
+    if s.let_ty != null && s.let_ty.kind == TY_NAMED
+       && (s.let_ty.name.eq("int") || s.let_ty.name.eq("uint")
+           || s.let_ty.name.eq("i32")) {
+        print!("#define ", cname, " ");
+        emit_expr(g, s.let_value);
+        println!("");
+        return;
+    }
+    print!("static const ");
+    if s.let_ty != null {
+        print!(type_to_c(s.let_ty), " ", cname);
+    } else {
+        print!("int ", cname);
+    }
+    print!(" = ");
+    if s.let_ty != null && s.let_ty.kind == TY_NAMED && s.let_ty.name.eq("i64") {
+        // Cast the initializer so wider arithmetic stays 64-bit.
+        print!("(int64_t)(");
+        emit_expr(g, s.let_value);
+        print!(")");
+    } else {
+        emit_expr(g, s.let_value);
+    }
+    println!(";");
+}
+
+// Constant initializer for a top-level global. Struct literals become C
+// brace-initializers `{ .f = v, ... }`; a compound literal `((T){...})` is not
+// a constant expression and is rejected in static-init position. Scalars and
+// pointers fall through to the normal expression emitter.
+fn emit_global_init(g: *CG, e: *Expr) {
+    if e == null { print!("0"); return; }
+    if e.kind == EX_STRUCT_LIT {
+        print!("{");
+        if e.field_names != null && e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                if i > 0 { print!(", "); }
+                // concat, not comma-args: print!(a, b) space-joins.
+                print!(".".concat(c_safe_ident(e.field_names.get(i))).concat(" = "));
+                let v: Expr = e.args.get(i);
+                emit_global_init(g, &v);
+            }
+        }
+        print!("}");
+        return;
+    }
+    emit_expr(g, e);
+}
+
+// A top-level `let` emitted as a C global with storage. `@used` keeps it past
+// -O2 / --gc-sections; `@section("name")` places it (e.g. Limine request
+// markers the bootloader scans for).
+fn emit_top_global(g: *CG, s: *Stmt) {
+    let mut is_used: bool = false;
+    let mut section: string = "";
+    if s.attrs != null {
+        for let i: i32 = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.name.eq("used") { is_used = true; }
+            if a.name.eq("section") && a.args != null && a.args.len() > 0 {
+                let av: Expr = a.args.get(0);
+                if av.kind == EX_STRING { section = av.str_val; }
+            }
+        }
+    }
+    // Build the whole declaration head as one string: print!(a, b) inserts a
+    // space between args, which would corrupt the section name literal.
+    let mut head: string = "";
+    if s.let_ty != null { head = type_to_c(s.let_ty); }
+    else { head = "int64_t"; }
+    head = head.concat(" ").concat(c_safe_ident(s.name));
+    if is_used || !section.eq("") {
+        head = head.concat(" __attribute__((");
+        if is_used { head = head.concat("used"); }
+        if !section.eq("") {
+            if is_used { head = head.concat(", "); }
+            head = head.concat("section(\"").concat(section).concat("\")");
+        }
+        head = head.concat("))");
+    }
+    print!(head);
+    if s.let_value != null {
+        print!(" = ");
+        emit_global_init(g, s.let_value);
+    }
+    println!(";");
+}
+
+pub fn emit_struct_mono(g: *CG, t: *Type) {
+    if t == null || t.kind != TY_GENERIC { return; }
+    if !g.generic_structs.contains(t.name) { return; }
+    let template: Stmt = g.generic_structs.get(t.name);
+    let mangled: string = mangle_generic(t.name, t.args);
+    // Dedup: the same mono can appear many times in the collected uses; the
+    // earlier typedef pass already inserted into emitted_monos, but here we
+    // need our own marker for "body emitted".
+    let body_key: string = mangled.concat("__body");
+    if g.emitted_monos.contains(body_key) { return; }
+    g.emitted_monos.insert(body_key, true);
+    // A substituted field may reference another generic-struct mono — e.g.
+    // HashMap<V>'s `*_HmSlot<V>` field becomes `*_HmSlot<Stmt>`. That nested
+    // mono is never reached by the program-wide collection (it skips generic
+    // templates). Forward-declare its typedef now so this struct's body can
+    // name the pointer, and queue its body for the drain — which runs after
+    // the concrete struct bodies, so a by-value `value: V` field sees the
+    // full definition of V.
+    if template.struct_fields != null && template.type_params != null {
+        for let fi: i32 = 0; fi < template.struct_fields.len(); fi++ {
+            let ff: Field = template.struct_fields.get(fi);
+            let fsub: *Type = subst_type(ff.ty, template.type_params, t.args);
+            let uses: *Vector<Type> = Vector::new();
+            collect_generic_uses_in_type(fsub, uses);
+            for let ui: i32 = 0; ui < uses.len(); ui++ {
+                let u: Type = uses.get(ui);
+                if g.generic_structs.contains(u.name) {
+                    let um: string = mangle_generic(u.name, u.args);
+                    if !g.emitted_monos.contains(um) {
+                        g.emitted_monos.insert(um, true);
+                        println!("typedef struct ", um, " ", um, ";");
+                    }
+                    if !g.emitted_monos.contains(um.concat("__queued")) {
+                        g.emitted_monos.insert(um.concat("__queued"), true);
+                        g.struct_mono_queue.push(u);
+                    }
+                }
+            }
+            uses.free();
+            // A by-value nested generic-struct field (`inner: Inner<T>`, not
+            // `*Inner<T>`) needs the nested mono's COMPLETE definition before
+            // this struct's body — a forward typedef only satisfies a pointer
+            // field. Emit the nested body now; the body_key dedup at the top of
+            // emit_struct_mono stops recursion/duplication. Pointer fields stay
+            // on the forward-decl + queue path above.
+            if fsub != null && fsub.kind == TY_GENERIC
+               && g.generic_structs.contains(fsub.name) {
+                emit_struct_mono(g, fsub);
+            }
+        }
+    }
+    println!("struct ", mangled, " {");
+    if template.struct_fields != null && template.type_params != null {
+        for let i: i32 = 0; i < template.struct_fields.len(); i++ {
+            let f: Field = template.struct_fields.get(i);
+            let sub: *Type = subst_type(f.ty, template.type_params, t.args);
+            print!("    ", type_to_c(sub), " ", f.name); println!(";");
+        }
+    }
+    println!("};");
+    println!("");
+}
+
+fn collect_generic_uses_in_type(t: *Type, out: *Vector<Type>) {
+    if t == null { return; }
+    if t.kind == TY_GENERIC {
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                collect_generic_uses_in_type(&a, out);
+            }
+        }
+        out.push(*t);
+    }
+    if t.kind == TY_POINTER || t.kind == TY_BORROW
+       || t.kind == TY_BORROW_MUT || t.kind == TY_SLICE {
+        collect_generic_uses_in_type(t.inner, out);
+    }
+}
+
+fn collect_generic_uses_in_stmt(s: *Stmt, out: *Vector<Type>) {
+    if s == null { return; }
+    // Skip generic fn signatures and bodies entirely — type vars (T, etc.) are
+    // not concrete uses, and the substituted versions will be collected later.
+    let is_generic: bool = s.type_params != null && s.type_params.len() > 0;
+    if is_generic { return; }
+    // Trait sigs are templates referencing Self / Self::Item; impls of the
+    // trait walk normally and contribute their substituted uses there.
+    if s.kind == ST_TRAIT { return; }
+    // Skip impl method walks for generic impls (`impl<T> X for Foo<T>`) — the
+    // method bodies reference T placeholders. Their substituted versions land
+    // when each mono of Foo<Concrete> is processed. Concrete impls (no
+    // type_params) walk normally below.
+
+    if s.let_ty != null { collect_generic_uses_in_type(s.let_ty, out); }
+    if s.fn_ret_ty != null { collect_generic_uses_in_type(s.fn_ret_ty, out); }
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            collect_generic_uses_in_type(p.ty, out);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            collect_generic_uses_in_type(f.ty, out);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            collect_generic_uses_in_stmt(&b, out);
+        }
+    }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            collect_generic_uses_in_stmt(&b, out);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            collect_generic_uses_in_stmt(&b, out);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let m: Stmt = s.impl_methods.get(i);
+            collect_generic_uses_in_stmt(&m, out);
+        }
+    }
+}
+

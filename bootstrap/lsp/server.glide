@@ -1,0 +1,2879 @@
+// LSP server — Language Server Protocol over JSON-RPC on stdio.
+//
+// Started by `glide lsp`. The transport reads `Content-Length`-framed
+// messages, decodes them via json.glide, and dispatches by method name.
+//
+// Lifecycle:
+//   initialize / initialized / shutdown / exit
+//   textDocument/didOpen, didChange, didClose
+//
+// Lookups:
+//   textDocument/hover               — keyword + builtin docs, doc-comment
+//                                       extraction for user fns/structs.
+//   textDocument/definition          — jump to fn / struct / impl method.
+//                                       Resolves Vector::new, c.send, chained
+//                                       inline ctors, qualified paths.
+//   textDocument/references          — every read/write of the symbol.
+//   textDocument/documentHighlight   — same as references, kind-tagged.
+//   textDocument/documentSymbol      — outline tree.
+//   textDocument/completion          — keywords, builtins, locals, fields,
+//                                       chan ops on `c.`, type::method.
+//   textDocument/signatureHelp       — param hints inside a call: free fns,
+//                                       `recv.method` (self hidden), and
+//                                       `Type::static`. Tracks active arg.
+//
+// Edits:
+//   textDocument/rename              — workspace edit across collected uses.
+//   textDocument/prepareRename       — validates the cursor target.
+//   textDocument/formatting          — round-trip through fmt.glide.
+//
+// Diagnostics:
+//   publishDiagnostics               — typer errors + warnings: null safety,
+//                                       unused-var, arena-not-freed, missing
+//                                       trait method, unsatisfied bound,
+//                                       type mismatch, trait-method-mismatch.
+
+import stdlib::hashmap::*;
+import bootstrap::syntax::ast;
+import bootstrap::syntax::lexer;
+import bootstrap::syntax::parser;
+import bootstrap::syntax::expander;     // for body_references_self / expand_macros
+import bootstrap::syntax::lower;        // for lower_program
+import bootstrap::sema::typer;        // for types_compat / merge_parse_diags
+import bootstrap::util::json;
+import bootstrap::cli::fmt;
+import bootstrap::pkg::manifest;     // for project-aware completion (Manifest, dep_cache_dir, …)
+import bootstrap::pkg::fetch;        // for fetch_all when the user clicks "Fetch missing dep"
+
+// LSP diagnostic log. Opens (truncate) on lsp_main entry and redirects
+// stderr there so SIGSEGV traps from the runtime land in the same
+// stream — gives the user one file (`~/.glide/lsp.log`) to share when
+// the editor's server-output panel is empty after a crash.
+extern fn __glide_lsp_log_open(path: string);
+extern fn __glide_lsp_log(msg: string);
+
+c_raw! {
+    #include <stdio.h>
+    #include <time.h>
+    static FILE* __glide_lsp_log_fp = NULL;
+    void __glide_lsp_log_open(const char* path) {
+        if (path == NULL || !*path) return;
+        __glide_lsp_log_fp = fopen(path, "w");
+        if (!__glide_lsp_log_fp) return;
+        setvbuf(__glide_lsp_log_fp, NULL, _IONBF, 0);   /* unbuffered: crash-time data survives */
+        /* Redirect stderr into the log so SIGSEGV handlers (and any
+           rogue fprintf(stderr, ...)) end up in the same place. */
+        int fd = fileno(__glide_lsp_log_fp);
+        if (fd >= 0) {
+            fflush(stderr);
+            dup2(fd, fileno(stderr));
+        }
+    }
+    void __glide_lsp_log(const char* msg) {
+        if (__glide_lsp_log_fp == NULL || msg == NULL) return;
+        time_t t = time(NULL);
+        struct tm* lt = localtime(&t);
+        if (lt) {
+            fprintf(__glide_lsp_log_fp, "[%02d:%02d:%02d] %s\n",
+                lt->tm_hour, lt->tm_min, lt->tm_sec, msg);
+        } else {
+            fprintf(__glide_lsp_log_fp, "%s\n", msg);
+        }
+    }
+}
+
+fn _lsp_log(msg: string) { __glide_lsp_log(msg); }
+
+// `~/.glide/lsp.log` on POSIX, `%USERPROFILE%\.glide\lsp.log` on Windows.
+// Falls back to TMP if the home dir lookup fails.
+fn _lsp_log_path() -> string {
+    let up: string = __glide_getenv("USERPROFILE");
+    if !up.eq("") { return up.concat("/.glide/lsp.log"); }
+    let h: string = __glide_getenv("HOME");
+    if !h.eq("") { return h.concat("/.glide/lsp.log"); }
+    let tmp: string = __glide_getenv("TMP");
+    if !tmp.eq("") { return tmp.concat("/glide-lsp.log"); }
+    return "glide-lsp.log";
+}
+
+extern fn __glide_getenv(name: string) -> string;
+
+// FFI to runtime helpers (defined in codegen runtime emit / stdlib::os c_raw).
+extern fn read_file(path: string) -> string;
+extern fn __glide_read_line() -> string;
+extern fn __glide_read_bytes(n: i32) -> string;
+pub extern fn __glide_write_str(s: string);
+pub extern fn __glide_flush_stdout();
+extern fn __glide_log(s: string);
+extern fn __glide_set_binary_io();
+extern fn __glide_exe_dir() -> string;
+extern fn __glide_cwd() -> string;
+
+// The module loader + visibility builder live in loader.glide (extracted
+// from the driver). Importing it gives the LSP the same load_into_str /
+// load_*_with_cache / build_visibility the build uses, no forward-decls.
+import bootstrap::pkg::loader::*;
+import bootstrap::lsp::analysis;  // custom analysis/lint passes (extracted)
+import bootstrap::lsp::completion;  // extracted
+import bootstrap::lsp::features;  // extracted
+
+// ---- Document store ----------------------------------------------------
+
+pub struct LspDoc {
+    pub uri: string,
+    pub text: string,
+    pub version: i32,
+    pub stmts: *Vector<Stmt>,
+    // The palloc arena holding this doc's `stmts` (+ pre_expand / macro
+    // copies). Per-document so analyzing one doc doesn't free another's AST
+    // — opening a goto target (a stdlib file) must not null the user file's
+    // stmts. Freed + replaced when THIS doc is re-analyzed, or on didClose.
+    pub arena: *void,
+    // Pre-`expand_macros` snapshot. Lets documentSymbol / glide/routeList
+    // / any future per-attribute query read the user's source-level fns
+    // with their original @get/@post/@route attrs intact, before
+    // expansion replaces them with `_user_*` + `_route_register_*`
+    // companions.
+    pub pre_expand_stmts: *Vector<Stmt>,
+    // Macro-def shapes harvested BEFORE `expand_macros` consumes them.
+    // Used by completion (free macros surface as `name!`, proc-attrs as
+    // `@name`, proc-derives inside `@derive(...)`). The post-expansion
+    // `stmts` has none of these, so without the pre-pass copy the
+    // completion list misses every macro the user can actually call.
+    pub macro_defs: *Vector<Stmt>,
+    pub impl_macro_defs: *Vector<Stmt>,
+    pub proc_attrs: *Vector<string>,
+    pub proc_derives: *Vector<string>,
+    pub proc_macros: *Vector<string>,
+}
+
+// Marker kind for the synthetic "module" entries produced per stdlib
+// file. Out-of-band of the AST's ST_* kind range so it can't collide.
+pub const SYMKIND_MODULE: i32 = -1;
+pub const SYMKIND_PROC_ATTR: i32 = -2;     // fn carrying `@proc_attr(Name)`
+pub const SYMKIND_PROC_DERIVE: i32 = -3;   // fn carrying `@proc_derive(Name)`
+pub const SYMKIND_PROC_MACRO: i32 = -4;    // fn carrying `@proc_macro(Name)` / `@proc_macro_str(Name)`
+
+// One importable symbol from src/stdlib/. Built once at server startup
+// and reused by completion to surface auto-import suggestions. Mirrors
+// the data gopls keeps per-symbol so the LSP can fill out the full
+// CompletionItem (signature + labelDetails + documentation + snippet).
+pub struct ImportableSym {
+    pub name: string,         // `HashMap`, `Time`, `min_int`, …
+    pub kind: i32,            // ST_FN / ST_STRUCT / ST_ENUM / ST_CONST / ST_TRAIT
+    pub module: string,       // `stdlib::hashmap`, `stdlib::time`, …
+    pub signature: string,    // full one-line signature, used in `detail`
+    pub label_extra: string,  // shown next to the label (param list for fns)
+    pub doc: string,          // doc-comment, rendered in `documentation`
+    pub snippet: string,      // gopls-style snippet for `insertText`
+    pub has_snippet: bool,    // true → insertTextFormat=2; false → plain
+    pub def_path: string,     // file the symbol is declared in (workspace/symbol location)
+    pub def_line: i32,        // 1-indexed name position; 0 if unknown
+    pub def_col: i32,
+}
+
+pub struct LspState {
+    pub docs: *HashMap<LspDoc>,
+    pub shutdown_requested: bool,
+    pub stdlib_index: *Vector<ImportableSym>,
+    /// Project-local importable symbols: the user's own modules under
+    /// the project's `src/` tree plus every dep (path or git) declared
+    /// in `glide.glide`. Built once when the first doc opens from a
+    /// project that has a manifest; cached after.
+    pub project_index: *Vector<ImportableSym>,
+    /// Manifest root we built `project_index` for. Used to detect when
+    /// the user opened a doc in a different project and the index
+    /// needs to be rebuilt.
+    pub project_root: string,
+    /// Fingerprint of the project's dep set last time we indexed: hash
+    /// of the manifest content plus a sorted list of every `.glide`
+    /// path under `glide_modules/`. When this changes (manifest edit,
+    /// `glide fetch` completion, dep file added/removed) we rebuild the
+    /// project index instead of reusing the cached one.
+    pub project_dep_fp: string,
+    // Path -> parse_program output. Populated lazily on first parse of
+    // each transitive import (builtins + stdlib + user-imported files);
+    // hits skip the lex/parse work on every keystroke. The user's
+    // currently-edited buffer is never cached — its content changes
+    // between calls, so it always parses fresh.
+    pub parse_cache: *HashMap<*Vector<Stmt>>,
+    // Per-path arena backing each `parse_cache` overlay entry. Rotated in
+    // `_lsp_cache_doc`: re-caching a path frees its prior generation's arena
+    // (the whole prior parsed+lowered AST) instead of leaking it on every
+    // keystroke. Keyed by the same on-disk path as `parse_cache`.
+    pub parse_cache_arenas: *HashMap<*void>,
+    // Latest parse arena. Held here (rather than via __glide_palloc_get
+    // at the start of each run) because we deactivate the arena
+    // between requests so hover / completion scratch goes to libc heap;
+    // palloc_get would then return null and we'd never free the
+    // arena's many MB of pipeline allocations.
+    pub last_arena: *void,
+    // Last manifest root we applied lint config from. Cached so we
+    // don't reparse the manifest + reset the global deny/allow on
+    // every keystroke (the lists also live on libc heap, so
+    // re-applying would leak the previous instance).
+    pub lint_applied_root: string,
+    // Manifest roots we've already tried to auto-fetch this session. A
+    // declared-but-uncached dep triggers `fetch_all` at most once per
+    // project (not on every file open), so the editor doesn't re-hit the
+    // network on every keystroke.
+    pub fetch_attempted: *HashMap<bool>,
+}
+
+pub fn lsp_state_new() -> *LspState {
+    let s: *LspState = malloc(sizeof(LspState)) as *LspState;
+    let m: *HashMap<LspDoc> = HashMap::new();
+    s.docs = m;
+    s.shutdown_requested = false;
+    let idx: *Vector<ImportableSym> = Vector::new();
+    s.stdlib_index = idx;
+    let pidx: *Vector<ImportableSym> = Vector::new();
+    s.project_index = pidx;
+    s.project_root = "";
+    s.project_dep_fp = "";
+    let pc: *HashMap<*Vector<Stmt>> = HashMap::new();
+    s.parse_cache = pc;
+    let pca: *HashMap<*void> = HashMap::new();
+    s.parse_cache_arenas = pca;
+    s.last_arena = null;
+    s.lint_applied_root = "";
+    let fa: *HashMap<bool> = HashMap::new();
+    s.fetch_attempted = fa;
+    populate_stdlib_index(s);
+    return s;
+}
+
+// ---- Wire protocol -----------------------------------------------------
+
+// Read a single LSP message: parse `Content-Length: N` header, blank line,
+// then read N bytes of payload. Returns "" on EOF.
+fn lsp_read_message() -> string {
+    let mut content_length: i32 = 0;
+    while true {
+        let line: string = __glide_read_line();
+        if line.eq("") { return ""; }
+        let n: i32 = line.len();
+        // Strip trailing \r\n / \n
+        let mut end: i32 = n;
+        while end > 0 {
+            let c: i32 = line.at(end - 1).to_int();
+            if c == 10 || c == 13 { end = end - 1; }
+            else { break; }
+        }
+        if end == 0 { break; }   // blank line ends header
+        // Look for "Content-Length: N"
+        let trimmed: string = line.substring(0, end);
+        if trimmed.len() > 16 {
+            let prefix: string = trimmed.substring(0, 16);
+            if prefix.eq("Content-Length: ") {
+                content_length = parse_int_str(trimmed.substring(16, trimmed.len()));
+            }
+        }
+    }
+    if content_length <= 0 { return ""; }
+    return __glide_read_bytes(content_length);
+}
+
+fn parse_int_str(s: string) -> i32 {
+    let mut n: i32 = 0;
+    let len: i32 = s.len();
+    for let i: i32 = 0; i < len; i++ {
+        let c: i32 = s.at(i).to_int();
+        if c < 48 || c > 57 { break; }
+        n = n * 10 + (c - 48);
+    }
+    return n;
+}
+
+fn lsp_send(payload: string) {
+    let header: string = "Content-Length: ".concat(int_to_str(payload.len())).concat("\r\n\r\n");
+    __glide_write_str(header);
+    __glide_write_str(payload);
+    __glide_flush_stdout();
+}
+
+fn lsp_send_response(id: *JsonValue, result: *JsonValue) {
+    let resp: *JsonValue = json_object();
+    json_obj_set(resp, "jsonrpc", json_string("2.0"));
+    if id != null { json_obj_set(resp, "id", id); }
+    json_obj_set(resp, "result", result);
+    lsp_send(json_emit(resp));
+    json_free(resp);
+}
+
+fn lsp_send_notification(method: string, params: *JsonValue) {
+    let n: *JsonValue = json_object();
+    json_obj_set(n, "jsonrpc", json_string("2.0"));
+    json_obj_set(n, "method", json_string(method));
+    json_obj_set(n, "params", params);
+    lsp_send(json_emit(n));
+    json_free(n);
+}
+
+// ---- Method handlers ---------------------------------------------------
+
+fn handle_initialize(req: *JsonValue) {
+    let id: *JsonValue = json_get(req, "id");
+    let result: *JsonValue = json_object();
+    let caps: *JsonValue = json_object();
+    // textDocumentSync: 1 = Full sync. We re-parse on every change.
+    json_obj_set(caps, "textDocumentSync", json_int(1));
+    json_obj_set(caps, "hoverProvider", json_bool(true));
+    json_obj_set(caps, "documentSymbolProvider", json_bool(true));
+    json_obj_set(caps, "definitionProvider", json_bool(true));
+    json_obj_set(caps, "implementationProvider", json_bool(true));
+    json_obj_set(caps, "typeDefinitionProvider", json_bool(true));
+    json_obj_set(caps, "referencesProvider", json_bool(true));
+    json_obj_set(caps, "documentHighlightProvider", json_bool(true));
+    let rename_caps: *JsonValue = json_object();
+    json_obj_set(rename_caps, "prepareProvider", json_bool(true));
+    json_obj_set(caps, "renameProvider", rename_caps);
+    json_obj_set(caps, "documentFormattingProvider", json_bool(true));
+    // Quick-fix code actions. Server reads `context.diagnostics` for
+    // entries carrying a `data.fix` from us and returns CodeAction[]
+    // with WorkspaceEdit.
+    let cap_ca: *JsonValue = json_object();
+    let kinds: *JsonValue = json_array();
+    json_arr_push(kinds, json_string("quickfix"));
+    json_obj_set(cap_ca, "codeActionKinds", kinds);
+    json_obj_set(caps, "codeActionProvider", cap_ca);
+    let comp: *JsonValue = json_object();
+    let trig: *JsonValue = json_array();
+    json_arr_push(trig, json_string("."));
+    json_arr_push(trig, json_string(":"));
+    json_arr_push(trig, json_string("\""));   // `pkg!("` -> manifest-field completion
+    json_obj_set(comp, "triggerCharacters", trig);
+    json_obj_set(caps, "completionProvider", comp);
+    // Signature help: param hints while typing a call. `(` opens the
+    // hint, `,` advances the active parameter; `)` retriggers so a
+    // closing paren on a nested call snaps back to the outer signature.
+    let sh: *JsonValue = json_object();
+    let sh_trig: *JsonValue = json_array();
+    json_arr_push(sh_trig, json_string("("));
+    json_arr_push(sh_trig, json_string(","));
+    json_obj_set(sh, "triggerCharacters", sh_trig);
+    let sh_retrig: *JsonValue = json_array();
+    json_arr_push(sh_retrig, json_string(","));
+    json_arr_push(sh_retrig, json_string(")"));
+    json_obj_set(sh, "retriggerCharacters", sh_retrig);
+    json_obj_set(caps, "signatureHelpProvider", sh);
+    // Semantic tokens: precise highlighting the TextMate grammar can't do
+    // (which identifier is a type vs fn vs method vs param vs property).
+    // The legend order MUST match the SEMTOK_* indices in the handler.
+    let stp: *JsonValue = json_object();
+    let legend: *JsonValue = json_object();
+    let tt: *JsonValue = json_array();
+    json_arr_push(tt, json_string("keyword"));    // 0
+    json_arr_push(tt, json_string("function"));   // 1
+    json_arr_push(tt, json_string("method"));     // 2
+    json_arr_push(tt, json_string("type"));       // 3
+    json_arr_push(tt, json_string("parameter"));  // 4
+    json_arr_push(tt, json_string("variable"));   // 5
+    json_arr_push(tt, json_string("property"));   // 6
+    json_arr_push(tt, json_string("macro"));      // 7
+    json_arr_push(tt, json_string("namespace"));  // 8
+    json_obj_set(legend, "tokenTypes", tt);
+    json_obj_set(legend, "tokenModifiers", json_array());
+    json_obj_set(stp, "legend", legend);
+    json_obj_set(stp, "full", json_bool(true));
+    json_obj_set(caps, "semanticTokensProvider", stp);
+    // Inlay hints: inferred `: T` after a `let` binding with no annotation.
+    json_obj_set(caps, "inlayHintProvider", json_bool(true));
+    // Workspace symbol search (Ctrl+T): fuzzy over the stdlib + project +
+    // dep index built at startup / first open.
+    json_obj_set(caps, "workspaceSymbolProvider", json_bool(true));
+    // Call hierarchy: prepare + incoming/outgoing calls.
+    json_obj_set(caps, "callHierarchyProvider", json_bool(true));
+    // Type hierarchy: prepare + supertypes/subtypes (trait <-> impl).
+    json_obj_set(caps, "typeHierarchyProvider", json_bool(true));
+    // executeCommand: server-side commands dispatched from code actions.
+    // `glide.fetch` is the only one today — runs `fetch_all` for a
+    // declared-but-uncached dep when the user clicks the "Fetch missing
+    // dep" lightbulb.
+    let exe_cmd: *JsonValue = json_object();
+    let cmds: *JsonValue = json_array();
+    json_arr_push(cmds, json_string("glide.fetch"));
+    json_obj_set(exe_cmd, "commands", cmds);
+    json_obj_set(caps, "executeCommandProvider", exe_cmd);
+    json_obj_set(result, "capabilities", caps);
+    let info: *JsonValue = json_object();
+    json_obj_set(info, "name", json_string("glide-lsp"));
+    json_obj_set(info, "version", json_string("0.1.1"));
+    json_obj_set(result, "serverInfo", info);
+    lsp_send_response(id, result);
+}
+
+fn handle_shutdown(req: *JsonValue, state: *LspState) {
+    state.shutdown_requested = true;
+    let id: *JsonValue = json_get(req, "id");
+    lsp_send_response(id, json_null());
+}
+
+// Convert one DiagEntry into the LSP Diagnostic JSON shape.
+fn diag_to_json(d: *DiagEntry) -> *JsonValue {
+    let dj: *JsonValue = json_object();
+    let range: *JsonValue = json_object();
+    let start: *JsonValue = json_object();
+    let endp: *JsonValue = json_object();
+    // LSP positions are 0-indexed; the typer reports 1-indexed lines/cols.
+    let mut line0: i32 = d.line - 1;  if line0 < 0 { line0 = 0; }
+    let mut col0:  i32 = d.col  - 1;  if col0  < 0 { col0 = 0; }
+    let mut endl: i32 = d.end_line - 1; if endl < 0 { endl = 0; }
+    let mut endc: i32 = d.end_col  - 1; if endc < 0 { endc = 0; }
+    json_obj_set(start, "line", json_int(line0));
+    json_obj_set(start, "character", json_int(col0));
+    json_obj_set(endp,  "line", json_int(endl));
+    json_obj_set(endp,  "character", json_int(endc));
+    json_obj_set(range, "start", start);
+    json_obj_set(range, "end", endp);
+    json_obj_set(dj, "range", range);
+    json_obj_set(dj, "severity", json_int(d.severity));
+    if !d.code.eq("") { json_obj_set(dj, "code", json_string(d.code)); }
+    json_obj_set(dj, "source", json_string("glide"));
+    json_obj_set(dj, "message", json_string(d.message));
+    if d.tag != 0 {
+        // LSP DiagnosticTag: 1 = Unnecessary (rendered faded by editors),
+        //                    2 = Deprecated (struck-through).
+        let tags: *JsonValue = json_array();
+        json_arr_push(tags, json_int(d.tag));
+        json_obj_set(dj, "tags", tags);
+    }
+    // When the analysis attached a mechanical fix, stash it in the
+    // `data` field. Editors hand `context.diagnostics` back on
+    // `textDocument/codeAction`, so the code-action handler reads
+    // these fields without re-running the analysis.
+    //
+    // Two paths:
+    //   - explicit fix via `warn_with_fix` (fix_line > 0)
+    //   - implicit fix derived from the code: `unused-{var,param}`
+    //     get an "insert `_` at the diag range start" fix. Mirrors
+    //     what `glide fix` does so the editor's quick-fix and the
+    //     CLI fixer agree.
+    let mut has_fix: bool = false;
+    let mut fr_sl: i32 = 0; let mut fr_sc: i32 = 0;
+    let mut fr_el: i32 = 0; let mut fr_ec: i32 = 0;
+    let mut new_text: string = "";
+    if !d.fix_replacement.eq("") || d.fix_line > 0 {
+        has_fix = true;
+        fr_sl = d.fix_line - 1;  if fr_sl < 0 { fr_sl = 0; }
+        fr_sc = d.fix_col - 1;   if fr_sc < 0 { fr_sc = 0; }
+        fr_el = d.fix_end_line - 1; if fr_el < 0 { fr_el = 0; }
+        fr_ec = d.fix_end_col - 1; if fr_ec < 0 { fr_ec = 0; }
+        new_text = d.fix_replacement;
+    } else if d.code.eq("unused-var") || d.code.eq("unused-param") {
+        has_fix = true;
+        fr_sl = line0; fr_sc = col0; fr_el = line0; fr_ec = col0;
+        new_text = "_";
+    }
+    if has_fix {
+        let data: *JsonValue = json_object();
+        let fix: *JsonValue = json_object();
+        let fr: *JsonValue = json_object();
+        let fs: *JsonValue = json_object();
+        let fe: *JsonValue = json_object();
+        json_obj_set(fs, "line", json_int(fr_sl));
+        json_obj_set(fs, "character", json_int(fr_sc));
+        json_obj_set(fe, "line", json_int(fr_el));
+        json_obj_set(fe, "character", json_int(fr_ec));
+        json_obj_set(fr, "start", fs);
+        json_obj_set(fr, "end", fe);
+        json_obj_set(fix, "range", fr);
+        json_obj_set(fix, "newText", json_string(new_text));
+        json_obj_set(data, "fix", fix);
+        json_obj_set(dj, "data", data);
+    }
+    return dj;
+}
+
+// Attach LSP relatedInformation to a diagnostic JSON node from the typer's
+// side-table of "why" locations (t.related, keyed by diagnostic index).
+// Surfaces the cause — e.g. the trait method declaration a failing impl is
+// measured against — as clickable secondary locations.
+fn _attach_related(dj: *JsonValue, t: *Typer, idx: i32) {
+    if t.related == null || t.related.len() == 0 { return; }
+    let de: DiagEntry = t.diagnostics.get(idx);
+    let ri: *JsonValue = json_array();
+    let mut any: bool = false;
+    for let k: i32 = 0; k < t.related.len(); k++ {
+        let r: DiagRelated = t.related.get(k);
+        if r.diag_index != idx { continue; }
+        let mut origin: string = r.origin;
+        if origin == null || origin.eq("") { origin = de.origin; }
+        let uri: string = path_to_uri(origin);
+        if uri.eq("") { continue; }
+        let entry: *JsonValue = json_object();
+        let loc: *JsonValue = json_object();
+        json_obj_set(loc, "uri", json_string(uri));
+        let range: *JsonValue = json_object();
+        json_obj_set(range, "start", position_to_json(r.line, r.col));
+        json_obj_set(range, "end", position_to_json(r.end_line, r.end_col));
+        json_obj_set(loc, "range", range);
+        json_obj_set(entry, "location", loc);
+        json_obj_set(entry, "message", json_string(r.message));
+        json_arr_push(ri, entry);
+        any = true;
+    }
+    if any { json_obj_set(dj, "relatedInformation", ri); }
+}
+
+// Convert `file:///C:/path` (Windows) or `file:///path` (POSIX) into a plain
+// filesystem path the rest of the loader can use. URL-decoding is intentionally
+// not done — Glide identifiers and most paths are ASCII.
+fn uri_to_path(uri: string) -> string {
+    let n: i32 = uri.len();
+    if n < 7 { return uri; }
+    if !uri.substring(0, 7).eq("file://") { return uri; }
+    // Percent-decode the path. Editors (Zed, VSCode) send the standard
+    // URL-encoded form `file:///c%3A/Users/...` — %3A for ':', %20 for a
+    // space, %5C for '\'. Without decoding, the Windows drive-letter check
+    // below never matches, so the manifest-root lookup that builds the
+    // project index silently fails — and project-symbol completion plus
+    // goto-def into project files stop working in the editor (but not in a
+    // headless test that happens to pass an unencoded ':').
+    let mut rest: string = uri.substring(7, n);
+    rest = rest.replace("%3A", ":").replace("%3a", ":");
+    rest = rest.replace("%20", " ");
+    rest = rest.replace("%5C", "\\").replace("%5c", "\\");
+    rest = rest.replace("%2F", "/").replace("%2f", "/");
+    let rn: i32 = rest.len();
+    // Windows: file:///C:/... -> "/C:/..." -> drop leading '/'
+    if rn > 2 && rest.at(0).to_int() == 47 && rest.at(2).to_int() == 58 {
+        return rest.substring(1, rn);
+    }
+    return rest;
+}
+
+// Locate `src/builtins/`. Prefer the exe-relative install layout so the
+// origin paths the LSP stamps on Stmt nodes are absolute (used for goto-def
+// URIs). Falls back to a cwd-relative path for in-repo development.
+fn find_builtins_dir() -> string {
+    let exe_dir: string = __glide_exe_dir();
+    if !exe_dir.eq("") {
+        let probe: string = exe_dir.concat("/src/builtins/builtins.glide");
+        if !read_file(probe).eq("") { return exe_dir.concat("/src/builtins"); }
+    }
+    if !read_file("src/builtins/builtins.glide").eq("") { return "src/builtins"; }
+    return "";
+}
+
+// Locate `src/stdlib/`. Same fallback chain as find_builtins_dir — prefer
+// the install layout next to the binary, fall back to in-repo dev.
+fn find_stdlib_dir() -> string {
+    let exe_dir: string = __glide_exe_dir();
+    if !exe_dir.eq("") {
+        let probe: string = exe_dir.concat("/src/stdlib/hashmap.glide");
+        if !read_file(probe).eq("") { return exe_dir.concat("/src/stdlib"); }
+    }
+    if !read_file("src/stdlib/hashmap.glide").eq("") { return "src/stdlib"; }
+    return "";
+}
+
+// Strip a trailing ".glide" so "math.glide" -> "math".
+fn drop_glide_ext(name: string) -> string {
+    let n: i32 = name.len();
+    if n > 6 && name.substring(n - 6, n).eq(".glide") {
+        return name.substring(0, n - 6);
+    }
+    return name;
+}
+
+// Walk every src/stdlib/*.glide and collect all `pub` top-level decls into
+// state.stdlib_index. Called once at startup; the LSP doesn't reparse on
+// every completion request.
+//
+// Each module also gets a single ImportableSym entry of its own (kind =
+// SYMKIND_MODULE) so the completion UI can suggest the module by short
+// name — typing `hash` lists both the `HashMap` struct AND the
+// `hashmap` module, just like gopls lists packages alongside symbols.
+fn populate_stdlib_index(state: *LspState) {
+    let dir: string = find_stdlib_dir();
+    if dir.eq("") { return; }
+    _index_stdlib_subtree(state, dir, "stdlib", state.stdlib_index, "");
+}
+
+// Walk `dir` recursively. Each `.glide` file becomes an importable
+// module under `module_prefix::<filename-without-extension>`; each
+// subdirectory recurses with the prefix extended. So `src/stdlib/http`
+// becomes `stdlib::http`, `src/stdlib/http/client.glide` becomes
+// `stdlib::http::client`, and so on.
+//
+// `target` is the index vector to push into — `state.stdlib_index` for
+// the one-time stdlib walk, `state.project_index` for project src +
+// declared deps. Keeping the two indices separate means a project
+// switch can clear+rebuild the project bag without poisoning stdlib.
+//
+// `pkg_leaf` is the bare package name when this call is the package
+// root (e.g. "glicord" when called for `glide_modules/glicord/src/`);
+// `""` for stdlib and recursive sub-dirs. A `.glide` file whose
+// basename matches `pkg_leaf` is the package's entry file — its
+// module path collapses to just `module_prefix`, so the auto-import
+// line reads `import glicord;` instead of `import glicord::glicord;`.
+fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string,
+                         target: *Vector<ImportableSym>, pkg_leaf: string) {
+    let files: *Vector<string> = fs_list_dir(dir, ".glide");
+    if files != null {
+        for let i: i32 = 0; i < files.len(); i++ {
+            let fname: string = files.get(i);
+            if fname.eq("") { continue; }
+            let path: string = dir.concat("/").concat(fname);
+            let mod_name: string = drop_glide_ext(fname);
+            // An empty prefix (project src) means the canonical import path
+            // is the bare file name (`al`), not `<project>::al` — which does
+            // NOT resolve. Deps/stdlib always pass a non-empty prefix.
+            let mut module: string = mod_name;
+            if !module_prefix.eq("") { module = module_prefix.concat("::").concat(mod_name); }
+            // Package entry-file collapse: at the pkg root, the file named
+            // after the package IS the lib entry — surface its symbols
+            // under the bare package alias rather than `pkg::pkg`.
+            if !pkg_leaf.eq("") && mod_name.eq(pkg_leaf) {
+                module = module_prefix;
+            }
+            _index_one_module(state, path, mod_name, module, target);
+        }
+    }
+    let subs_raw: string = __glide_fs_list_dirs(dir);
+    if subs_raw.eq("") { return; }
+    let subs: *Vector<string> = subs_raw.split("\n");
+    for let i: i32 = 0; i < subs.len(); i++ {
+        let sub: string = subs.get(i);
+        if sub.eq("") { continue; }
+        let child_dir: string = dir.concat("/").concat(sub);
+        let mut child_pref: string = sub;
+        if !module_prefix.eq("") { child_pref = module_prefix.concat("::").concat(sub); }
+        // Index the FOLDER itself as a module, so typing the folder name
+        // (`sop`) autocompletes it for path navigation (`sop::al::...`) — not
+        // just the files inside it. The file entries are added by the
+        // recursive call below.
+        let folder_sym: ImportableSym = ImportableSym {
+            name: sub,
+            kind: SYMKIND_MODULE,
+            module: child_pref,
+            signature: "module ".concat(child_pref),
+            label_extra: "",
+            doc: "Glide module folder `".concat(child_pref).concat("`."),
+            snippet: sub.concat("::"),
+            has_snippet: true,
+            def_path: child_dir,
+            def_line: 1,
+            def_col: 1,
+        };
+        target.push(folder_sym);
+        // Sub-dirs aren't the package root, so no entry-file collapse.
+        _index_stdlib_subtree(state, child_dir, child_pref, target, "");
+    }
+}
+
+// Rebuild `state.project_index` if the doc at `uri` belongs to a Glide
+// project we haven't indexed yet. No-op when there's no `glide.glide`
+// above the file, or when we already indexed this project.
+//
+// Critical: the index OUTLIVES the request that triggered its build,
+// so we switch the active arena to null before the build and all
+// allocations (Vector, strings, ImportableSym entries) land on libc
+// heap. Otherwise the request-scoped arena gets freed at end of
+// dispatch and `state.project_index` dangles until the next access
+// crashes the LSP.
+// Fetch declared-but-uncached deps for `root`, once per project per session.
+// Reuses the same pipeline as the `glide.fetch` command (fetch_all + link_all
+// + lockfile) and forces a project re-index. Blocking (network), but the guard
+// keeps it to a single one-shot per project. Path deps never need a fetch; we
+// still (re)create their `build/deps/` links so they're browsable + indexable.
+fn _lsp_autofetch_deps(state: *LspState, root: string) {
+    if root.eq("") { return; }
+    if state.fetch_attempted.contains(root) { return; }
+    let m: *Manifest = read_manifest(root);
+    if m == null || m.deps.len() == 0 { return; }
+    state.fetch_attempted.insert(root, true);   // mark before fetching: no re-entry
+    let mut need: bool = false;
+    for let i: i32 = 0; i < m.deps.len(); i++ {
+        let d: ManifestDep = m.deps.get(i);
+        if d.kind != DEP_GIT { continue; }
+        let cdir: string = dep_cache_dir(m, d);
+        if cdir.eq("") || !__glide_fs_is_dir(cdir) { need = true; break; }
+    }
+    if !need { link_all(m); return; }
+    _lsp_show_message(3, "glide: fetching missing deps…");
+    let fetched: i32 = fetch_all(m);
+    link_all(m);
+    let lf: *Lockfile = lockfile_from_manifest(m);
+    write_lockfile(root, lf);
+    state.project_dep_fp = "";   // force the index rebuild below to run
+    if fetched > 0 {
+        _lsp_show_message(3, "glide: fetched ".concat(int_to_str(fetched as i64)).concat(" dep(s)"));
+    } else {
+        _lsp_show_message(2, "glide: could not fetch some deps — check glide.glide");
+    }
+}
+
+fn _refresh_project_index(state: *LspState, uri: string) {
+    let path: string = uri_to_path(uri);
+    if path.eq("") { return; }
+    let dir: string = parent_dir(path);
+    let root: string = find_manifest_root(dir);
+    if root.eq("") { return; }
+
+    // Auto-fetch any declared-but-uncached dep before indexing, so imports
+    // resolve without the user running `glide fetch` first. Guarded to run
+    // once per project per session; creates the `build/deps/` links the
+    // fingerprint below then picks up.
+    _lsp_autofetch_deps(state, root);
+
+    // Re-trigger the rebuild whenever the dep set could have changed:
+    // a different project root, a manifest edit, a new `build/deps/`
+    // entry from `glide fetch`, or a file added/removed within an
+    // existing dep. The fingerprint hashes the manifest source plus the
+    // sorted list of every `.glide` path reachable under
+    // `build/deps/`. Cheap (no file-content reads) and catches the
+    // common cases without forcing the user to restart the LSP.
+    let fp: string = _project_dep_fingerprint(root);
+    if state.project_root.eq(root) && state.project_dep_fp.eq(fp) { return; }
+    _lsp_log("project index: rebuilding for ".concat(root));
+
+    let prev_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+
+    state.project_root = root.concat("");   // libc-heap copy
+    state.project_dep_fp = fp.concat("");
+    // Replace the dedicated project_index. Anything pushed previously
+    // (project src + deps from the prior rebuild) belongs to a stale
+    // dep set, so swap in a fresh vector here. The old one is
+    // intentionally leaked: ImportableSym strings (`name`, `signature`,
+    // `doc`, ...) are aliased into the cached AST pointed to by
+    // `state.parse_cache`, and we'd need a recursive walker that knows
+    // which strings are libc-owned vs cache-owned to free safely.
+    let fresh: *Vector<ImportableSym> = Vector::new();
+    state.project_index = fresh;
+
+    let src_dir: string = root.concat("/src");
+    if __glide_fs_is_dir(src_dir) {
+        // Project src isn't a "package" in the dep sense — no entry-file
+        // collapse, and the canonical import path is the bare file name
+        // (`import al`), NOT `<project>::al` (which doesn't resolve). Index
+        // with an empty prefix so the auto-import edit it generates is valid.
+        _index_stdlib_subtree(state, src_dir, "", fresh, "");
+    }
+    // Each declared dep — path deps point at a sibling dir, git deps at
+    // the cache slot. Indexing covers both because dep_cache_dir picks
+    // the right one already.
+    let m: *Manifest = read_manifest(root);
+    if m != null {
+        for let i: i32 = 0; i < m.deps.len(); i++ {
+            let d: ManifestDep = m.deps.get(i);
+            let dep_root: string = dep_cache_dir(m, d);
+            if dep_root.eq("") || !__glide_fs_is_dir(dep_root) {
+                _lsp_log("  dep ".concat(d.name).concat(" - cache miss at ").concat(dep_root));
+                continue;
+            }
+            let dep_src: string = dep_root.concat("/src");
+            if __glide_fs_is_dir(dep_src) {
+                _lsp_log("  dep ".concat(d.name).concat(" - indexing ").concat(dep_src));
+                _index_stdlib_subtree(state, dep_src, d.name, fresh, d.name);
+            } else {
+                _lsp_log("  dep ".concat(d.name).concat(" - no src/, indexing ").concat(dep_root));
+                _index_stdlib_subtree(state, dep_root, d.name, fresh, d.name);
+            }
+        }
+    }
+    _lsp_log("project index: ".concat(int_to_str(fresh.len() as i64))
+             .concat(" importable symbols"));
+
+    __glide_palloc_set(prev_arena);
+}
+
+// Compact summary of the inputs that would change the project index.
+// Built from the manifest source (catches dep adds/removes/rev changes)
+// plus every `.glide` path under `glide_modules/` (catches `glide fetch`
+// completion + dep file shuffles). Doesn't read dep file contents — a
+// rev advance with no file changes won't trigger a rebuild and still
+// requires a manual LSP restart, which is the rare case.
+fn _project_dep_fingerprint(root: string) -> string {
+    let mut out: string = "";
+    let manifest_path: string = root.concat("/glide.glide");
+    if __glide_file_exists(manifest_path) {
+        out = out.concat(read_file(manifest_path));
+    }
+    // Track project src too: adding or removing a file or folder under src/
+    // (e.g. a new `src/te/al.glide`) must rebuild the project index so its
+    // symbols become importable without an LSP restart. Path list only, no
+    // content read — cheap, and file add/remove is the case that matters here.
+    out = out.concat("\0src:");
+    let srcd: string = root.concat("/src");
+    if __glide_fs_is_dir(srcd) { _fp_walk_glide_files_content(srcd, &out); }
+    out = out.concat("\0gm:");
+    let gm: string = root.concat("/build/deps");
+    if !__glide_fs_is_dir(gm) { return out; }
+    _fp_walk_glide_files(gm, &out);
+    return out;
+}
+
+// Recursively append every `.glide` path under `dir` to `*out`. Used
+// only for the dep fingerprint; allocations land on libc heap (the
+// caller already disabled the request arena before invoking us).
+fn _fp_walk_glide_files(dir: string, out: *string) {
+    let files: *Vector<string> = fs_list_dir(dir, ".glide");
+    if files != null {
+        for let i: i32 = 0; i < files.len(); i++ {
+            let fname: string = files.get(i);
+            if fname.eq("") { continue; }
+            *out = (*out).concat(dir).concat("/").concat(fname).concat("\n");
+        }
+    }
+    let subs_raw: string = __glide_fs_list_dirs(dir);
+    if subs_raw.eq("") { return; }
+    let subs: *Vector<string> = subs_raw.split("\n");
+    for let i: i32 = 0; i < subs.len(); i++ {
+        let sub: string = subs.get(i);
+        if sub.eq("") { continue; }
+        _fp_walk_glide_files(dir.concat("/").concat(sub), out);
+    }
+}
+
+// Like _fp_walk_glide_files, but also folds each file's CONTENT into the
+// fingerprint. Used for the project src/ tree only, so a content edit (a
+// new/renamed pub symbol) forces a project-index rebuild. The tree is small
+// and local, so the extra reads are cheap; deps stay path-only.
+fn _fp_walk_glide_files_content(dir: string, out: *string) {
+    let files: *Vector<string> = fs_list_dir(dir, ".glide");
+    if files != null {
+        for let i: i32 = 0; i < files.len(); i++ {
+            let fname: string = files.get(i);
+            if fname.eq("") { continue; }
+            let fp: string = dir.concat("/").concat(fname);
+            *out = (*out).concat(fp).concat("\n").concat(read_file(fp)).concat("\0");
+        }
+    }
+    let subs_raw: string = __glide_fs_list_dirs(dir);
+    if subs_raw.eq("") { return; }
+    let subs: *Vector<string> = subs_raw.split("\n");
+    for let i: i32 = 0; i < subs.len(); i++ {
+        let sub: string = subs.get(i);
+        if sub.eq("") { continue; }
+        _fp_walk_glide_files_content(dir.concat("/").concat(sub), out);
+    }
+}
+
+// Read the `name` field from `<root>/glide.glide` so the project's
+// own modules live under the user-chosen namespace (e.g. `my_app`).
+// Falls back to the directory's basename for malformed manifests.
+fn _project_namespace(root: string) -> string {
+    let m: *Manifest = read_manifest(root);
+    if m != null && !m.name.eq("") { return m.name; }
+    // basename(root) fallback.
+    let mut cut: i32 = -1;
+    for let i: i32 = 0; i < root.len(); i++ {
+        let c: i32 = root.at(i).to_int();
+        if c == 47 || c == 92 { cut = i; }
+    }
+    if cut < 0 || cut + 1 >= root.len() { return "project"; }
+    return root.substring(cut + 1, root.len());
+}
+
+// Parse one source file and append every pub item to `target`, plus
+// a SYMKIND_MODULE entry for the module itself.
+fn _index_one_module(_state: *LspState, path: string, mod_name: string, module: string,
+                     target: *Vector<ImportableSym>) {
+    let src: string = read_file(path);
+    if src.eq("") { return; }
+    let lex: *Lexer = Lexer::new(src);
+    let par: *Parser = Parser::new(lex);
+    let stmts: *Vector<Stmt> = parse_program(par);
+    if stmts == null { return; }
+    // Track exported symbol names so the module entry can list them
+    // in its hover-doc summary.
+    let mut summary: string = "";
+    let mut count: i32 = 0;
+    for let j: i32 = 0; j < stmts.len(); j++ {
+        let s: Stmt = stmts.get(j);
+        // Proc-macro fns register globally via their `@proc_<kind>(Name)`
+        // attribute; they don't need to be `pub` (stdlib convention keeps
+        // the impl helper private). Other stmts still require pub for
+        // cross-file visibility.
+        let mut is_proc_fn: bool = false;
+        if s.kind == ST_FN && s.attrs != null {
+            for let kk: i32 = 0; kk < s.attrs.len(); kk++ {
+                let aa: Attr = s.attrs.get(kk);
+                if aa.name == null { continue; }
+                if aa.name.eq("proc_attr") || aa.name.eq("proc_derive")
+                   || aa.name.eq("proc_macro") || aa.name.eq("proc_macro_str") {
+                    is_proc_fn = true;
+                    break;
+                }
+            }
+        }
+        if !s.is_pub && !is_proc_fn { continue; }
+        if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
+           && s.kind != ST_CONST && s.kind != ST_TRAIT && s.kind != ST_MACRO_DEF { continue; }
+        let mut sig: string = "";
+        let mut label_extra: string = "";
+        let mut snip: string = s.name;
+        let mut has_snip: bool = false;
+        // Default: kind matches the AST kind. Overridden below for fns
+        // wearing a `@proc_<kind>(Name)` attribute so they show up under
+        // `@<name>` / `@derive(Name)` completion instead of the bare-ident
+        // list.
+        let mut sym_kind: i32 = s.kind;
+        let mut sym_name: string = s.name;
+        if s.kind == ST_FN {
+            sig = fn_signature(&s);
+            label_extra = fn_label_extra(&s);
+            snip = fn_snippet(&s);
+            has_snip = true;
+            // Proc-macro registration: `@proc_<kind>(Name)`. The user-
+            // facing name is the attr arg, not the impl fn name.
+            if s.attrs != null {
+                for let k: i32 = 0; k < s.attrs.len(); k++ {
+                    let a: Attr = s.attrs.get(k);
+                    if a.name == null { continue; }
+                    if a.args == null || a.args.len() == 0 { continue; }
+                    let ne: Expr = a.args.get(0);
+                    if ne.kind != EX_IDENT { continue; }
+                    if a.name.eq("proc_attr") {
+                        sym_kind = SYMKIND_PROC_ATTR;
+                        sym_name = ne.str_val;
+                        sig = "proc-attr ".concat(ne.str_val);
+                        label_extra = "";
+                        snip = ne.str_val;
+                        has_snip = false;
+                        break;
+                    }
+                    if a.name.eq("proc_derive") {
+                        sym_kind = SYMKIND_PROC_DERIVE;
+                        sym_name = ne.str_val;
+                        sig = "proc-derive ".concat(ne.str_val);
+                        label_extra = "";
+                        snip = ne.str_val;
+                        has_snip = false;
+                        break;
+                    }
+                    if a.name.eq("proc_macro") || a.name.eq("proc_macro_str") {
+                        sym_kind = SYMKIND_PROC_MACRO;
+                        sym_name = ne.str_val;
+                        sig = "proc-macro ".concat(ne.str_val);
+                        label_extra = "";
+                        snip = ne.str_val.concat("!");
+                        has_snip = false;
+                        break;
+                    }
+                }
+            }
+        }
+        else if s.kind == ST_STRUCT { sig = "struct ".concat(s.name); }
+        else if s.kind == ST_ENUM { sig = "enum ".concat(s.name); }
+        else if s.kind == ST_TRAIT { sig = "trait ".concat(s.name); }
+        else if s.kind == ST_CONST { sig = "const ".concat(s.name); }
+        else if s.kind == ST_MACRO_DEF {
+            sig = macro_signature(&s);
+            sym_name = s.name;   // user calls it as `name!`
+        }
+        let sym: ImportableSym = ImportableSym {
+            name: sym_name,
+            kind: sym_kind,
+            module: module,
+            signature: sig,
+            label_extra: label_extra,
+            doc: s.doc_comment,
+            snippet: snip,
+            has_snippet: has_snip,
+            def_path: path,
+            def_line: s.name_line,
+            def_col: s.name_col,
+        };
+        target.push(sym);
+        if count < 12 {
+            if !summary.eq("") { summary = summary.concat(", "); }
+            summary = summary.concat("`").concat(s.name).concat("`");
+        } else if count == 12 {
+            summary = summary.concat(", …");
+        }
+        count = count + 1;
+    }
+    // Module entry — the header reads "Glide stdlib module" and the
+    // exported names follow on the next line.
+    let mut mdoc: string = "Glide stdlib module.";
+    if !summary.eq("") {
+        mdoc = mdoc.concat("\n\nExports: ").concat(summary).concat(".");
+    }
+    let mod_sym: ImportableSym = ImportableSym {
+        name: mod_name,
+        kind: SYMKIND_MODULE,
+        module: module,
+        signature: "module ".concat(mod_name),
+        label_extra: "",
+        doc: mdoc,
+        snippet: mod_name.concat("::"),
+        has_snippet: true,
+        def_path: path,
+        def_line: 1,
+        def_col: 1,
+    };
+    target.push(mod_sym);
+}
+
+// Compact label suffix for fn items, gopls-style: `(a: int, b: int) -> int`.
+// Goes in `labelDetails.detail`, shown next to the function name.
+fn fn_label_extra(s: *Stmt) -> string {
+    let mut out: string = "(";
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            if i > 0 { out = out.concat(", "); }
+            let p: Param = s.fn_params.get(i);
+            out = out.concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+        }
+    }
+    out = out.concat(")");
+    if s.fn_ret_ty != null {
+        out = out.concat(" -> ").concat(type_to_string_pretty(s.fn_ret_ty));
+    }
+    return out;
+}
+
+// gopls-style snippet for a fn call: `name(${1:p1}, ${2:p2})`. Each tab
+// stop is the parameter name, so the user can Tab through and overwrite.
+fn fn_snippet(s: *Stmt) -> string {
+    let mut out: string = s.name.concat("(");
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            if i > 0 { out = out.concat(", "); }
+            let p: Param = s.fn_params.get(i);
+            out = out.concat("$").concat("{").concat(int_to_str((i + 1) as i64))
+                     .concat(":").concat(p.name).concat("}");
+        }
+    }
+    out = out.concat(")");
+    return out;
+}
+
+// Helper: directory listing with a suffix filter. Mirrors fs_list from
+// stdlib::fs but stays inside the LSP module to avoid the import dep.
+extern fn __glide_list_dir(path: string, suffix: string) -> string;
+extern fn __glide_fs_list_dirs(path: string) -> string;
+extern fn __glide_file_exists(path: string) -> bool;
+// `__glide_file_exists` opens the path with `fopen("rb")`, which fails on
+// directories — using it to probe a dir always returns false. Use this
+// for directory checks (project src/, glide_modules/, dep cache slots).
+extern fn __glide_fs_is_dir(path: string) -> bool;
+fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
+    let raw: string = __glide_list_dir(dir, suffix);
+    if raw.eq("") { return Vector::new(); }
+    return raw.split("\n");
+}
+
+// Walk a Vector<Stmt> and free its parse-owned descendant containers
+// (fn_body / then_body / else_body / impl_methods) recursively, then
+// free the Vector itself. lower_block builds a fresh Vector for each
+// of these on every reparse, so they always belong to the per-keystroke
+// parse cycle regardless of the host Stmt's origin.
+//
+// Deliberately stops short of Expr / Type / for_init / Param fields:
+// when the host Stmt came from a cached import those pointers refer
+// into the cache's own AST graph, and lower_program never replaces
+// them. Touching them would corrupt the cache. The user-buffer's own
+// Expr / Type leaks are paid for once per keystroke and dwarfed by
+// the Vector-of-Stmt accumulation this walker plugs.
+fn stmt_vec_lower_free(v: *Vector<Stmt>) {
+    if v == null { return; }
+    for let i: i32 = 0; i < v.len(); i++ {
+        let s: Stmt = v.get(i);
+        stmt_lower_free_children(&s);
+    }
+    v.free();
+}
+
+fn stmt_lower_free_children(s: *Stmt) {
+    if s == null { return; }
+    if s.fn_body != null { stmt_vec_lower_free(s.fn_body); }
+    if s.then_body != null { stmt_vec_lower_free(s.then_body); }
+    if s.else_body != null { stmt_vec_lower_free(s.else_body); }
+    if s.impl_methods != null { stmt_vec_lower_free(s.impl_methods); }
+}
+
+fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
+    _lsp_log("  analyze enter: ".concat(uri));
+    // Save the request-scoped arena (set by lsp_main for the duration
+    // of this dispatch); we restore it at the end so any post-pipeline
+    // handler scratch keeps flowing into the request arena and gets
+    // reclaimed when the request returns.
+    let prev_active: *void = __glide_palloc_get();
+    // Per-document arena lifecycle: free only THIS doc's previous arena,
+    // then make a fresh one. Each open doc owns its own arena, so
+    // re-analyzing (or first-analyzing) one document leaves every other
+    // open doc's `stmts` fully intact. This is what lets goto/hover keep
+    // working in the user's file after the editor opens a goto target
+    // (a stdlib file) as a second document — previously the single shared
+    // arena was freed on every analysis, nulling every doc's AST.
+    let mut old_arena: *void = null;
+    if state.docs.contains(uri) {
+        old_arena = state.docs.get(uri).arena;
+    }
+    if old_arena != null {
+        // Null this doc's stmts before the free (it's rebuilt below); other
+        // docs are untouched because their AST lives in their own arenas.
+        let d0: LspDoc = state.docs.get(uri);
+        d0.stmts = null;
+        d0.arena = null;
+        state.docs.insert(uri, d0);
+        __glide_palloc_free(old_arena);
+    }
+    let cur_arena: *void = __glide_palloc_make();
+    state.last_arena = cur_arena;
+    __glide_palloc_set(cur_arena);
+
+    let path: string = uri_to_path(uri);
+    // Pick up the project's lint config (`lint.deny` / `lint.allow` /
+    // preset) so the editor surfaces the same warnings + promotions
+    // the CLI does. Cached by manifest root: applied once per project,
+    // then short-circuited on subsequent calls. Restart the LSP after
+    // editing the manifest for changes to take effect — avoids
+    // leaking a fresh copy of the deny/allow lists per keystroke.
+    let mroot: string = find_manifest_root(_lsp_parent_dir(path));
+    if !mroot.eq("") && !mroot.eq(state.lint_applied_root) {
+        _lsp_log("    manifest lint apply: ".concat(mroot));
+        _lsp_apply_manifest_lint(mroot);
+        // Save the root on libc heap so the next-doc-arena reset
+        // doesn't invalidate the cache key.
+        let prev: *void = __glide_palloc_get();
+        __glide_palloc_set(null);
+        state.lint_applied_root = _strdup_libc(mroot);
+        __glide_palloc_set(prev);
+        _lsp_log("    manifest lint applied");
+    }
+    let stmts: *Vector<Stmt> = Vector::new();
+    let loaded: *HashMap<bool> = HashMap::new();
+
+    // Auto-inject src/builtins/ so hover/goto/completion see the same set
+    // of primitives `glide build` does. src/stdlib/ modules have to be
+    // pulled in via the user file's own `import` statements.
+    let bdir: string = find_builtins_dir();
+    let pdiags: *Vector<ParseDiag> = Vector::new();
+    if !bdir.eq("") {
+        load_builtins_dir_with_cache(stmts, bdir, loaded, pdiags, state.parse_cache);
+    }
+
+    // Parse the user's text and follow its `import "..."` directives so that
+    // cross-file symbols (Stmt, Expr, Lexer, etc. when editing the bootstrap
+    // codebase) resolve. Imports are resolved relative to the user file's dir.
+    // Transitive imports go through state.parse_cache so stdlib + builtins
+    // aren't relexed/reparsed on every keystroke.
+    load_into_str_with_cache(stmts, text, path, loaded, pdiags, state.parse_cache);
+
+    // Harvest macro definitions (free `macro foo!()`, `impl T { macro x!() }`,
+    // proc-macro fns) BEFORE expand_macros runs — it consumes the defs into
+    // a private registry and drops them from the output. Completion needs
+    // the names to surface `name!`, `@attr`, `@derive(Name)`.
+    let macro_defs: *Vector<Stmt> = Vector::new();
+    let impl_macro_defs: *Vector<Stmt> = Vector::new();
+    let proc_attrs: *Vector<string> = Vector::new();
+    let proc_derives: *Vector<string> = Vector::new();
+    let proc_macros: *Vector<string> = Vector::new();
+    _harvest_macro_defs(stmts, macro_defs, impl_macro_defs, proc_attrs, proc_derives, proc_macros);
+
+    // Snapshot the source-level stmts so documentSymbol / routeList can
+    // read attrs that expand_macros will consume. Stmts are pushed by
+    // value but their inner Vec pointers (attrs / fn_body / ...) still
+    // alias the originals — that's fine: expand_macros builds a new
+    // result Vector rather than mutating these structs in place.
+    let pre_expand_stmts: *Vector<Stmt> = Vector::new();
+    for let i: i32 = 0; i < stmts.len(); i++ { pre_expand_stmts.push(stmts.get(i)); }
+
+    // Expand macros and lower surface-syntax sugar (for-in -> for) so the
+    // typer sees the same shapes the build pipeline does. Without this,
+    // anything inside a `for x in expr { ... }` body never gets type-checked
+    // by the LSP.
+    let expanded: *Vector<Stmt> = expand_macros(stmts);
+    // user-only: cached imports came back from cache already lowered
+    // at populate time, so we pass them through and only run the heavy
+    // lower_block walk on the user buffer's stmts. Cuts the dominant
+    // per-keystroke arena cost (was ~800 MB for bootstrap edits).
+    let lowered: *Vector<Stmt> = lower_program_user_only(expanded, path);
+    stmts.clear();
+    for let i: i32 = 0; i < lowered.len(); i++ {
+        let s: Stmt = lowered.get(i);
+        stmts.push(s);
+    }
+
+    let t: *Typer = Typer::new();
+    // Editor-only: only the user's buffer needs its bodies type-checked +
+    // linted; imported files' diagnostics are filtered out before publish.
+    // Gating to this origin keeps cross-file resolution (registration is still
+    // whole-program) while not retaining ~40k imported bodies' analysis in the
+    // per-doc arena. CLI never sets this, so build/check stay full-program.
+    t.user_origin = path;
+    merge_parse_diags(t, pdiags);
+    // The manifest (`glide.glide`) is config, not a program: the CLI only
+    // parses it for literal fields and never type-checks it. Its `Package` /
+    // `Dep` / `vec_of` identifiers are intentionally undeclared, so run only
+    // the parse pass here — semantic checks would flag them as unknown.
+    let is_manifest: bool = path_is_manifest(path);
+    if !is_manifest {
+        // Match the build / `glide check` pipeline: register the import-derived
+        // visibility table and enforce it, so the editor flags unknown
+        // functions / missing imports / out-of-scope names — not just the
+        // null-safety + arity checks that run unconditionally. The doc's
+        // builtins + transitive imports are already loaded into `stmts` above,
+        // so every legit cross-file symbol is registered and won't false-flag.
+        build_visibility(t, stmts);
+        t.enforce_visibility = true;
+        check_program(t, stmts);
+        run_extra_analyses(t, stmts);
+    }
+
+    // Save the parsed stmts on the doc. The arena stays alive (in the
+    // global g_palloc_active) until the next reanalysis, so this doc's
+    // stmts remain valid for hover / completion / goto on the same
+    // doc. Other docs' stmts are now dangling.
+    if state.docs.contains(uri) {
+        let d: LspDoc = state.docs.get(uri);
+        d.stmts = stmts;
+        d.pre_expand_stmts = pre_expand_stmts;
+        d.macro_defs = macro_defs;
+        d.impl_macro_defs = impl_macro_defs;
+        d.proc_attrs = proc_attrs;
+        d.proc_derives = proc_derives;
+        d.proc_macros = proc_macros;
+        state.docs.insert(uri, d);
+    }
+
+    // Only publish diagnostics whose origin matches the user's file path.
+    // Errors from imported files (stdlib, ast.glide, etc.) are dropped here
+    // — they'd appear at the wrong line/file in the editor.
+    let arr: *JsonValue = json_array();
+    for let i: i32 = 0; i < t.diagnostics.len(); i++ {
+        let de: DiagEntry = t.diagnostics.get(i);
+        if de.origin.eq(path) || de.origin.eq("") {
+            let dj: *JsonValue = diag_to_json(&de);
+            _attach_related(dj, t, i);
+            json_arr_push(arr, dj);
+        }
+    }
+
+    let params: *JsonValue = json_object();
+    json_obj_set(params, "uri", json_string(uri));
+    json_obj_set(params, "diagnostics", arr);
+    lsp_send_notification("textDocument/publishDiagnostics", params);
+
+    t.free();
+    expanded.free();
+    lowered.free();
+    pdiags.free();
+    loaded.free();
+
+    // The arena head may have advanced as analysis + diag building chained
+    // new chunks; capture the final head and record it as THIS doc's arena
+    // so a later re-analysis / didClose frees the whole chain.
+    let final_arena: *void = __glide_palloc_get();
+    state.last_arena = final_arena;
+    if state.docs.contains(uri) {
+        let da: LspDoc = state.docs.get(uri);
+        da.arena = final_arena;
+        state.docs.insert(uri, da);
+    }
+    // Restore the request arena so any handler-side scratch after this
+    // reanalysis (e.g. publishDiagnostics tree) lands there and gets
+    // reclaimed at end of dispatch.
+    __glide_palloc_set(prev_active);
+}
+
+fn handle_did_open(req: *JsonValue, state: *LspState) {
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let text: string = json_as_string(json_get(td, "text"));
+    let version: i32 = json_as_int(json_get(td, "version"));
+    // The leaf strings come straight out of the request tree
+    // (jp_string_value's substring or jp_unescape's heap buffer).
+    // json_free at end of lsp_main only frees tree wrappers, not leaf
+    // strings, so retaining the pointer on doc keeps it alive.
+    let prev_text: string = "";
+    let mut prev_arena: *void = null;
+    if state.docs.contains(uri) {
+        let prev: LspDoc = state.docs.get(uri);
+        prev_text = prev.text;
+        prev_arena = prev.arena;
+    }
+    let no_macro_v: *Vector<Stmt> = null;
+    let no_str_v: *Vector<string> = null;
+    // Carry the previous arena forward so run_analysis frees exactly this
+    // doc's old AST (and nobody else's) before building the new one.
+    let doc: LspDoc = LspDoc {
+        uri: uri, text: text, version: version, stmts: null, arena: prev_arena,
+        pre_expand_stmts: no_macro_v,
+        macro_defs: no_macro_v, impl_macro_defs: no_macro_v,
+        proc_attrs: no_str_v, proc_derives: no_str_v, proc_macros: no_str_v,
+    };
+    state.docs.insert(uri, doc);
+    if !prev_text.eq("") { c_raw! { free(((char*)(prev_text )) - 4); } }   /* SDS: free the header base, not the data ptr */
+    // Refresh project_index when the user opens a doc from a different
+    // Glide project. Walks up from the file's directory looking for a
+    // `glide.glide` manifest; populates symbols from the project's own
+    // src/ tree plus every declared dep (path + git cache dir).
+    _refresh_project_index(state, uri);
+    run_analysis_and_publish(uri, text, state);
+}
+
+// Overlay the open doc's CURRENT (in-memory, possibly unsaved) text into the
+// shared parse cache, keyed by its on-disk path. Other open docs that import
+// this file then see the live edits — without it they'd load the stale disk
+// copy and their cross-file diagnostics would freeze until a save+restart.
+// Mirrors load_into_with_cache's miss path (arena disabled so the cached AST
+// is libc-heap and survives the per-keystroke arena reset).
+fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
+    if state.parse_cache == null || path.eq("") || text.eq("") { return; }
+    let saved_arena: *void = __glide_palloc_get();
+    // The map KEY stays on the libc heap: it must outlive both the per-keystroke
+    // analysis arena and this path's own overlay-arena rotations.
+    __glide_palloc_set(null);
+    let heap_key: string = path.concat("");
+    __glide_palloc_set(saved_arena);
+    // Rotate this path's overlay arena. Freeing the PRIOR generation here is
+    // safe: it is only read by cross-file analysis, and the caller re-runs that
+    // analysis (rebuilding every doc's arena) immediately after this call, so
+    // nothing live still dereferences the old AST. Without this rotation every
+    // keystroke leaked a full parsed+lowered AST — GBs over a long session.
+    if state.parse_cache_arenas != null && state.parse_cache_arenas.contains(heap_key) {
+        let old: *void = state.parse_cache_arenas.get(heap_key);
+        if old != null { __glide_palloc_free(old); }
+    }
+    // Source text + AST go into the rotatable arena (the AST references the
+    // source's bytes, so they must share a lifetime and be freed together).
+    __glide_palloc_set(__glide_palloc_make());
+    let heap_src: string = text.concat("");
+    let lex: *Lexer = Lexer::new(heap_src);
+    let p: *Parser = Parser::new(lex);
+    let parsed_raw: *Vector<Stmt> = parse_program(p);
+    p.free(); lex.free();
+    for let i: i32 = 0; i < parsed_raw.len(); i++ {
+        let s: Stmt = parsed_raw.get(i);
+        s.origin = heap_key;
+        parsed_raw.set(i, s);
+    }
+    let lowered: *Vector<Stmt> = lower_program(parsed_raw);
+    // Read the arena back AFTER parse/lower: it may have grown new chunks, and
+    // the current head (not the original make() result) is the handle that
+    // frees the WHOLE chain. Storing the original would leak every grown chunk.
+    let final_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(saved_arena);
+    state.parse_cache.insert(heap_key, lowered);
+    if state.parse_cache_arenas != null { state.parse_cache_arenas.insert(heap_key, final_arena); }
+}
+
+// Re-publish diagnostics for the changed doc AND every other open doc, so a
+// dependent file's cross-file diagnostics refresh when a file it imports is
+// edited (e.g. making a field private in `al.glide` updates `main.glide`).
+fn _reanalyze_open_docs(state: *LspState, changed_uri: string, changed_text: string) {
+    run_analysis_and_publish(changed_uri, changed_text, state);
+    if state.docs == null { return; }
+    let uris: *Vector<string> = state.docs.keys();
+    for let i: i32 = 0; i < uris.len(); i++ {
+        let u: string = uris.get(i);
+        if u.eq(changed_uri) { continue; }
+        if path_is_manifest(uri_to_path(u)) { continue; }
+        let d: LspDoc = state.docs.get(u);
+        run_analysis_and_publish(u, d.text, state);
+    }
+}
+
+fn handle_did_change(req: *JsonValue, state: *LspState) {
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let version: i32 = json_as_int(json_get(td, "version"));
+    // Apply each content change to derive the new full text. We advertise
+    // Full sync, so a conformant client sends one change with the whole
+    // document and no `range`. But some clients/setups send INCREMENTAL
+    // changes (a `range` + the replacement slice); handle those too, by
+    // splicing into the current text. Without this an incremental edit would
+    // be mistaken for the full document and freeze live diagnostics until an
+    // LSP restart.
+    let changes: *JsonValue = json_get(params, "contentChanges");
+    let nchanges: i32 = _json_arr_len(changes);
+    if nchanges == 0 { return; }
+    let mut text: string = "";
+    let mut have_base: bool = false;
+    if state.docs.contains(uri) { text = state.docs.get(uri).text; have_base = true; }
+    let mut applied: bool = false;
+    for let ci: i32 = 0; ci < nchanges; ci++ {
+        let ch: *JsonValue = json_at(changes, ci);
+        let ctext: string = json_as_string(json_get(ch, "text"));
+        let rng: *JsonValue = json_get(ch, "range");
+        if rng == null || json_is_null(rng) {
+            text = ctext;                 // whole-document replacement
+            applied = true;
+        } else if have_base {
+            let s: *JsonValue = json_get(rng, "start");
+            let e: *JsonValue = json_get(rng, "end");
+            let so: i32 = _line_col_offset(text, json_as_int(json_get(s, "line")), json_as_int(json_get(s, "character")));
+            let eo: i32 = _line_col_offset(text, json_as_int(json_get(e, "line")), json_as_int(json_get(e, "character")));
+            if so >= 0 && eo >= so && eo <= text.len() {
+                text = text.substring(0, so).concat(ctext).concat(text.substring(eo, text.len()));
+                applied = true;
+            }
+        }
+    }
+    if !applied { return; }
+    let prev_stmts: *Vector<Stmt> = null;
+    let prev_text: string = "";
+    let mut prev_arena2: *void = null;
+    if state.docs.contains(uri) {
+        let prev: LspDoc = state.docs.get(uri);
+        prev_stmts = prev.stmts;
+        prev_text = prev.text;
+        prev_arena2 = prev.arena;
+    }
+    let no_macro_v2: *Vector<Stmt> = null;
+    let no_str_v2: *Vector<string> = null;
+    let doc: LspDoc = LspDoc {
+        uri: uri, text: text, version: version, stmts: prev_stmts, arena: prev_arena2,
+        pre_expand_stmts: no_macro_v2,
+        macro_defs: no_macro_v2, impl_macro_defs: no_macro_v2,
+        proc_attrs: no_str_v2, proc_derives: no_str_v2, proc_macros: no_str_v2,
+    };
+    state.docs.insert(uri, doc);
+    if !prev_text.eq("") { c_raw! { free(((char*)(prev_text )) - 4); } }   /* SDS: free the header base, not the data ptr */
+    // Overlay the live text into the dep cache so other open files see this
+    // edit, then re-publish diagnostics for every open doc (cross-file).
+    _lsp_cache_doc(state, uri_to_path(uri), text);
+    _reanalyze_open_docs(state, uri, text);
+}
+
+fn handle_did_close(req: *JsonValue, state: *LspState) {
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let prev_text: string = "";
+    let mut prev_arena3: *void = null;
+    if state.docs.contains(uri) {
+        let prev: LspDoc = state.docs.get(uri);
+        prev_text = prev.text;
+        prev_arena3 = prev.arena;
+    }
+    state.docs.remove(uri);
+    if prev_arena3 != null { __glide_palloc_free(prev_arena3); }
+    if !prev_text.eq("") { c_raw! { free(((char*)(prev_text )) - 4); } }   /* SDS: free the header base, not the data ptr */
+    // Clear diagnostics for this URI.
+    let p: *JsonValue = json_object();
+    json_obj_set(p, "uri", json_string(uri));
+    json_obj_set(p, "diagnostics", json_array());
+    lsp_send_notification("textDocument/publishDiagnostics", p);
+}
+
+// Bundle of all extra-pass analyses. Both LSP and `glide check` call this.
+pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
+    analysis_unused_vars(t, stmts);
+    analysis_unused_params(t, stmts);
+    analysis_unused_fn(t, stmts);
+    analysis_unused_struct_enum(t, stmts);
+    analysis_unused_const(t, stmts);
+    analysis_unused_variant(t, stmts);
+    analysis_redundant_import(t, stmts);
+    analysis_unnecessary_mut(t, stmts);
+    analysis_arena_not_freed(t, stmts);
+    analysis_addr_of_temporary(t, stmts);
+    analysis_dead_code(t, stmts);
+    analysis_missing_return(t, stmts);
+    analysis_large_return(t, stmts);
+    analysis_trait_conformance(t, stmts);
+    analysis_struct_lit_fields(t, stmts);
+    analysis_deprecated_calls(t, stmts);
+    analysis_unstable_calls(t, stmts);
+    analysis_custom_lints(t, stmts);
+    analysis_null_deref(t, stmts);
+    analysis_bad_free(t, stmts);
+    analysis_string_eq_op(t, stmts);
+    analysis_unused_import(t, stmts);
+    analysis_arena_set_unbalanced(t, stmts);
+    analysis_coro_blocking(t, stmts);
+    analysis_unhandled_result(t, stmts);
+    analysis_ignored_option(t, stmts);
+    analysis_unchecked_result(t, stmts);
+    analysis_use_after_free(t, stmts);
+    analysis_mutex_unbalanced(t, stmts);
+    analysis_chan_leak(t, stmts);
+    analysis_leak_on_early_return(t, stmts);
+    // Must run last — consumes diagnostics emitted by every other pass
+    // to decide whether each @expect was fulfilled.
+    analysis_expect_fulfillment(t, stmts);
+}
+
+// For each `impl Trait for Type { ... }` walk the trait's method names
+// and verify the impl declares each one. Catches typos and forgotten
+// methods at compile time, so the user gets a friendly Glide-level
+// diagnostic instead of an opaque `undefined symbol` from the linker.
+// ---- struct-literal field validation -----------------------------------
+
+
+
+
+
+
+// Best-effort source width of an expression's leading token, so a diagnostic
+// anchored at the expr spans a meaningful word instead of one character.
+pub fn _expr_span(e: *Expr) -> i32 {
+    if e == null { return 1; }
+    if e.kind == EX_INT || e.kind == EX_STRING || e.kind == EX_BOOL
+        || e.kind == EX_FLOAT || e.kind == EX_CHAR { return _lit_span(e); }
+    if e.kind == EX_IDENT {
+        if e.str_val != null && e.str_val.len() > 0 { return e.str_val.len(); }
+        return 1;
+    }
+    if e.kind == EX_STRUCT_LIT {
+        if e.str_val != null && e.str_val.len() > 0 { return e.str_val.len(); }
+        return 1;
+    }
+    if e.kind == EX_MEMBER {
+        let mut w: i32 = 0;
+        if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null { w = e.lhs.str_val.len() + 1; }
+        if e.field != null { w = w + e.field.len(); }
+        if w < 1 { w = 1; }
+        return w;
+    }
+    if e.kind == EX_PATH {
+        let mut w: i32 = 0;
+        if e.str_val != null { w = e.str_val.len(); }
+        if e.field != null { w = w + 2 + e.field.len(); }
+        if w < 1 { w = 1; }
+        return w;
+    }
+    if e.kind == EX_CALL { return _expr_span(e.lhs); }
+    if e.kind == EX_UNARY {
+        if e.operand != null { return 1 + _expr_span(e.operand); }
+        return 1;
+    }
+    return 1;
+}
+
+// Source width of a literal expression, so the diagnostic squiggle spans the
+// whole token (e.g. `42`, `"hi"`) rather than a single character.
+pub fn _lit_span(e: *Expr) -> i32 {
+    if e == null { return 1; }
+    if e.kind == EX_INT { return int_to_str(e.int_val).len(); }
+    if e.kind == EX_STRING { return e.str_val.len() + 2; }      // include the quotes
+    if e.kind == EX_BOOL { if e.bool_val { return 4; } return 5; }
+    if e.kind == EX_FLOAT { if e.float_val != null { return e.float_val.len(); } return 3; }
+    if e.kind == EX_CHAR { return 3; }
+    return 1;
+}
+
+
+
+
+
+
+
+
+
+// ---- Position-based features: hover / symbols / goto ------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Scan every `impl Type { ... }` block for a method whose name matches; return
+// the first hit. Used by hover when the user points at an impl-method name and
+// we don't have a receiver type to disambiguate.
+pub struct ImplMethodHit {
+    pub method: *Stmt,
+    pub owner: string,
+}
+
+
+// Result of `find_field_anywhere`: the parent struct's name + the field def.
+pub struct FieldHit {
+    pub owner: string,
+    pub name: string,
+    pub ty: *Type,
+    pub doc: string,
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---- signatureHelp -----------------------------------------------------
+
+// Outcome of scanning backwards from the cursor to find the call we're
+// sitting inside. `name` is the callee identifier; `type_qual` is set for
+// `Type::method(` calls; `is_method` is true for `recv.method(` calls;
+// `active_param` is the 0-indexed argument the cursor is on (comma count
+// at the call's paren depth).
+struct SigCallCtx {
+    found: bool,
+    name: string,
+    type_qual: string,
+    is_method: bool,
+    active_param: i32,
+}
+
+
+
+
+
+// ---- semanticTokens ----------------------------------------------------
+
+// Legend indices — MUST match the tokenTypes order in handle_initialize.
+const SEMTOK_KEYWORD: i32 = 0;
+const SEMTOK_FUNCTION: i32 = 1;
+const SEMTOK_METHOD: i32 = 2;
+const SEMTOK_TYPE: i32 = 3;
+const SEMTOK_PARAMETER: i32 = 4;
+const SEMTOK_VARIABLE: i32 = 5;
+const SEMTOK_PROPERTY: i32 = 6;
+const SEMTOK_MACRO: i32 = 7;
+const SEMTOK_NAMESPACE: i32 = 8;
+
+
+
+
+
+
+
+// ---- inlayHint ---------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---- workspace/symbol --------------------------------------------------
+
+
+
+
+// ---- call hierarchy ----------------------------------------------------
+
+// One call site found in a fn body: the callee name + where it appears.
+struct ChCall {
+    name: string,
+    line: i32,
+    col: i32,
+    span: i32,
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Import statement form, mirrored from the parser so the LSP can decide
+// whether an auto-import edit would be redundant (wildcard / bare /
+// already-listed in a selective import).
+pub const IMP_BARE: i32 = 0;       // `import stdlib::hashmap;`
+pub const IMP_WILDCARD: i32 = 1;   // `import stdlib::hashmap::*;`
+pub const IMP_SELECTIVE: i32 = 2;  // `import stdlib::hashmap::{X, Y};`
+
+pub struct ImportInfo {
+    pub module: string,         // canonical "stdlib::hashmap"
+    pub line: i32,              // 0-indexed line of the import statement
+    pub kind: i32,              // IMP_BARE / IMP_WILDCARD / IMP_SELECTIVE
+    pub items: *HashMap<bool>,  // names listed in `{...}` (selective only)
+    pub close_pos: i32,         // 0-indexed col of `}` (selective only, else -1)
+}
+
+
+
+
+
+
+
+// Import-context detector results. The cursor either sits in the
+// path part of an `import …;` line, in the `{X, Y}` selective list
+// of one, or somewhere unrelated.
+pub const IMPCTX_NONE: i32 = 0;
+pub const IMPCTX_PATH: i32 = 1;
+pub const IMPCTX_BRACE: i32 = 2;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---- AST-typed chain resolution -----------------------------------------
+//
+// Below: a text-walking resolver that returns the receiver's *Type
+// (not just a name) for arbitrary chains like `r.listen(8080).`,
+// `Type::new().method().`, `v[0].`, `req.headers.`. Plus a member-listing
+// helper that handles `!T`, `?T`, `?!T`, named structs and chan types.
+// Lets the completion handler suppress the 500+-item "every visible
+// symbol" fallback any time the cursor sits after a `.` we can't resolve.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Walks the program collecting every usage of `name` as an identifier.
+// Returns a list of (line, col) pairs, 1-indexed.
+struct UseSite { line: i32, col: i32 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---- Custom analysis passes --------------------------------------------
+
+
+
+pub fn stmt_uses_name(s: *Stmt, name: string) -> bool {
+    if s == null { return false; }
+    if s.let_value != null && expr_uses_name(s.let_value, name) { return true; }
+    if s.expr_value != null && expr_uses_name(s.expr_value, name) { return true; }
+    if s.cond != null && expr_uses_name(s.cond, name) { return true; }
+    if s.for_step != null && expr_uses_name(s.for_step, name) { return true; }
+    if s.for_init != null && stmt_uses_name(s.for_init, name) { return true; }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            if stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            if stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    if s.kind == ST_ASM {
+        if s.asm_out_exprs != null {
+            for let i: i32 = 0; i < s.asm_out_exprs.len(); i++ {
+                let e: Expr = s.asm_out_exprs.get(i);
+                if expr_uses_name(&e, name) { return true; }
+            }
+        }
+        if s.asm_in_exprs != null {
+            for let i: i32 = 0; i < s.asm_in_exprs.len(); i++ {
+                let e: Expr = s.asm_in_exprs.get(i);
+                if expr_uses_name(&e, name) { return true; }
+            }
+        }
+    }
+    if s.kind == ST_SELECT && s.select_arms != null {
+        for let i: i32 = 0; i < s.select_arms.len(); i++ {
+            let arm: SelectArm = s.select_arms.get(i);
+            if arm.chan_expr != null && expr_uses_name(arm.chan_expr, name) { return true; }
+            if arm.send_value != null && expr_uses_name(arm.send_value, name) { return true; }
+            if arm.body != null {
+                for let j: i32 = 0; j < arm.body.len(); j++ {
+                    let b: Stmt = arm.body.get(j);
+                    if stmt_uses_name(&b, name) { return true; }
+                }
+            }
+        }
+    }
+    // A `match` statement reads its scrutinee and may use `name` inside an arm
+    // body. Without this the scrutinee of `match x { ... }` wasn't counted as a
+    // use, so `x` was wrongly flagged `unused-var`.
+    if s.kind == ST_MATCH {
+        if s.scrutinee != null && expr_uses_name(s.scrutinee, name) { return true; }
+        if s.arms != null {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
+                let a: MatchArm = s.arms.get(i);
+                if a.body != null {
+                    for let j: i32 = 0; j < a.body.len(); j++ {
+                        let b: Stmt = a.body.get(j);
+                        if stmt_uses_name(&b, name) { return true; }
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+fn expr_uses_name(e: *Expr, name: string) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq(name) { return true; }
+    if e.lhs != null && expr_uses_name(e.lhs, name) { return true; }
+    if e.rhs != null && expr_uses_name(e.rhs, name) { return true; }
+    if e.operand != null && expr_uses_name(e.operand, name) { return true; }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if expr_uses_name(&a, name) { return true; }
+        }
+    }
+    if e.match_arms != null {
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let a: MatchArm = e.match_arms.get(i);
+            if a.body != null {
+                for let k: i32 = 0; k < a.body.len(); k++ {
+                    let b: Stmt = a.body.get(k);
+                    if stmt_uses_name(&b, name) { return true; }
+                }
+            }
+        }
+    }
+    if e.block_stmts != null {
+        for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+            let b: Stmt = e.block_stmts.get(i);
+            if stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    // Closure (`fn(...) {...}` / `move fn(...) {...}`) bodies capture
+    // enclosing locals/params; a name used only inside the closure is
+    // still used. Without this descent it is mis-reported unused.
+    if e.fn_expr_body != null {
+        for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+            let b: Stmt = e.fn_expr_body.get(i);
+            if stmt_uses_name(&b, name) { return true; }
+        }
+    }
+    return false;
+}
+
+// Lint-code grouping: `@allow("alloc")` is shorthand for both
+// `unfreed-alloc` and `arena-not-freed`; `@allow("unused")` covers
+// every `unused-*`; `@allow("experimental")` covers the
+// stability codes; `@allow("lint")` (or `@allow("lint:*")`) silences
+// every user-defined `lint:<category>` warning. Anything starting
+// with `lint:` matches the corresponding custom-lint code verbatim.
+fn _code_in_group(allow_token: string, code: string) -> bool {
+    if allow_token.eq(code) { return true; }
+    if allow_token.eq("all") || allow_token.eq("*") { return true; }
+    if allow_token.eq("alloc") {
+        if code.eq("unfreed-alloc") || code.eq("arena-not-freed") { return true; }
+    }
+    if allow_token.eq("unused") {
+        if code.eq("unused-var") || code.eq("unused-param")
+           || code.eq("unused-fn") || code.eq("unnecessary-mut") { return true; }
+    }
+    if allow_token.eq("experimental") {
+        if code.eq("unstable-fn") || code.eq("deprecated-fn") { return true; }
+    }
+    if allow_token.eq("lint") || allow_token.eq("lint:*") {
+        if code.starts_with("lint:") { return true; }
+    }
+    // Glob-style prefix: `@allow("lint:io_*")` matches every custom
+    // category that begins with `io_`. Plain trailing `*` only.
+    if allow_token.len() > 1 {
+        let last: i32 = allow_token.at(allow_token.len() - 1).to_int();
+        if last == 42 {
+            let prefix: string = allow_token.substring(0, allow_token.len() - 1);
+            if code.starts_with(prefix) { return true; }
+        }
+    }
+    return false;
+}
+
+// Project-wide allow list (`lint.allow` from the manifest). Same
+// c_raw global as main.glide; we just need the getter here.
+extern fn __glide_proj_allow_get() -> *void;
+extern fn __glide_proj_allow_set(p: *void);
+extern fn __glide_deny_set(p: *void);
+extern fn __glide_deny_get() -> *void;
+
+// Compact `parent_dir(path)` — `main.glide`'s is not `pub`, so we
+// keep a local copy here. Same behaviour: strip trailing `/seg` or
+// `\seg`, return "" when there's no separator.
+fn _lsp_parent_dir(path: string) -> string {
+    let n: i32 = path.len();
+    let mut last: i32 = -1;
+    for let i: i32 = 0; i < n; i++ {
+        let c: i32 = path.at(i).to_int();
+        if c == 47 || c == 92 { last = i; }
+    }
+    if last < 0 { return ""; }
+    return path.substring(0, last);
+}
+
+// Wire the project's `lint.deny` / `lint.allow` from the nearest
+// `glide.glide` into the process-wide globals. Idempotent.
+//
+// Critical: the Vector / string entries we stash in the deny / allow
+// globals OUTLIVE the doc arena. If we let them allocate in the
+// active arena (set just before this fn runs), the very next
+// reanalysis frees the doc arena and the global pointers turn into
+// dangling references, crashing on the next read. Switch the active
+// arena to null (libc heap) around the construction so the data
+// survives across reanalyses. Per-invocation strings inside the
+// manifest parse still land in the doc arena and are freed cleanly.
+fn _lsp_apply_manifest_lint(start_dir: string) {
+    let root: string = find_manifest_root(start_dir);
+    if root.eq("") { return; }
+    let m: *Manifest = read_manifest(root);
+    if m == null { return; }
+
+    let prev_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+
+    if m.lint_deny != null && m.lint_deny.len() > 0 {
+        let p: *void = __glide_deny_get();
+        let merged: *Vector<string> = Vector::new();
+        if p != null {
+            let existing: *Vector<string> = p as *Vector<string>;
+            for let i: i32 = 0; i < existing.len(); i++ {
+                let s: string = existing.get(i);
+                merged.push(_strdup_libc(s));
+            }
+        }
+        for let i: i32 = 0; i < m.lint_deny.len(); i++ {
+            merged.push(_strdup_libc(m.lint_deny.get(i)));
+        }
+        __glide_deny_set(merged as *void);
+    }
+    if m.lint_allow != null && m.lint_allow.len() > 0 {
+        let copy: *Vector<string> = Vector::new();
+        for let i: i32 = 0; i < m.lint_allow.len(); i++ {
+            copy.push(_strdup_libc(m.lint_allow.get(i)));
+        }
+        __glide_proj_allow_set(copy as *void);
+    }
+
+    __glide_palloc_set(prev_arena);
+}
+
+// Copy `s` onto whatever arena is currently active. Used by
+// _lsp_apply_manifest_lint with active=null so the resulting string
+// lands on libc heap and outlives every doc-arena reset.
+fn _strdup_libc(s: string) -> string {
+    // `.substring(0, len)` allocates a fresh buffer rather than
+    // sharing the source pointer, which is what we want — `.concat("")`
+    // may short-circuit when the rhs is empty.
+    return s.substring(0, s.len());
+}
+
+fn _project_allow_matches(code: string) -> bool {
+    let p: *void = __glide_proj_allow_get();
+    if p == null { return false; }
+    let v: *Vector<string> = p as *Vector<string>;
+    for let i: i32 = 0; i < v.len(); i++ {
+        if _code_in_group(v.get(i), code) { return true; }
+    }
+    return false;
+}
+
+// Returns true when either the enclosing item carries
+// `@allow("<code>")`, or the project's `lint.allow = [...]` covers it.
+// Matched either verbatim or via the group / prefix logic above.
+pub fn _has_allow(s: *Stmt, code: string) -> bool {
+    if _project_allow_matches(code) { return true; }
+    if s == null || s.attrs == null { return false; }
+    for let i: i32 = 0; i < s.attrs.len(); i++ {
+        let a: Attr = s.attrs.get(i);
+        if !a.name.eq("allow") { continue; }
+        if a.args == null { continue; }
+        for let j: i32 = 0; j < a.args.len(); j++ {
+            let v: Expr = a.args.get(j);
+            if v.kind == EX_STRING && _code_in_group(v.str_val, code) { return true; }
+        }
+    }
+    return false;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+pub fn body_always_returns(body: *Vector<Stmt>) -> bool {
+    let n: i32 = body.len();
+    if n == 0 { return false; }
+    let last: Stmt = body.get(n - 1);
+    return stmt_terminates(&last);
+}
+
+fn stmt_terminates(s: *Stmt) -> bool {
+    if s == null { return false; }
+    if s.kind == ST_RETURN { return true; }
+    if s.kind == ST_BREAK || s.kind == ST_CONTINUE { return true; }
+    if s.kind == ST_BLOCK {
+        if s.then_body != null { return body_always_returns(s.then_body); }
+        return false;
+    }
+    if s.kind == ST_IF {
+        if s.then_body != null && s.else_body != null {
+            return body_always_returns(s.then_body) && body_always_returns(s.else_body);
+        }
+        return false;
+    }
+    if s.kind == ST_MATCH {
+        if s.arms == null || s.arms.len() == 0 { return false; }
+        // Every arm terminates -> the match terminates. We don't require a `_`
+        // arm: a non-exhaustive enum match (missing variants, no `_`) is already
+        // a hard `match-not-exhaustive` error, so an exhaustive match without
+        // `_` still counts as terminating here.
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let a: MatchArm = s.arms.get(i);
+            if a.body == null || !body_always_returns(a.body) { return false; }
+        }
+        return true;
+    }
+    // `while true { ... }` with no break that exits THIS loop never falls
+    // through — the function diverges, so the tail is unreachable.
+    if s.kind == ST_WHILE {
+        if s.cond != null && s.cond.kind == EX_BOOL && s.cond.bool_val
+           && !_has_loop_break(s.then_body) {
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// True if `body` contains a `break` that exits the immediately-enclosing loop.
+// Breaks inside nested while/for loops bind to THOSE loops, so they don't
+// count — that's why we stop descending at a nested loop.
+fn _has_loop_break(body: *Vector<Stmt>) -> bool {
+    if body == null { return false; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if _stmt_has_loop_break(&s) { return true; }
+    }
+    return false;
+}
+
+fn _stmt_has_loop_break(s: *Stmt) -> bool {
+    if s == null { return false; }
+    if s.kind == ST_BREAK { return true; }
+    if s.kind == ST_WHILE || s.kind == ST_FOR || s.kind == ST_WHILE_RECV { return false; }
+    if s.kind == ST_IF {
+        return _has_loop_break(s.then_body) || _has_loop_break(s.else_body);
+    }
+    if s.kind == ST_BLOCK { return _has_loop_break(s.then_body); }
+    if s.kind == ST_MATCH {
+        if s.arms != null {
+            for let i: i32 = 0; i < s.arms.len(); i++ {
+                let a: MatchArm = s.arms.get(i);
+                if _has_loop_break(a.body) { return true; }
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+struct ExpectPending {
+    pe_code: string,
+    pe_line: i32,        // start of the matching range (inclusive)
+    pe_end_line: i32,    // end of the matching range (inclusive); == pe_line for stmt-local
+    pe_col: i32,
+    pe_origin: string,
+    pe_done: bool,
+}
+
+
+
+
+
+
+
+
+
+// Strip pointers / borrows down to the underlying TY_NAMED and return
+// its `name`. Returns "" when the type isn't a plain named ref —
+// generics, function pointers, etc. fall through and the receiver
+// lookup uses the bare-name fallback at the call site.
+pub fn _type_root_name(ty: *Type) -> string {
+    if ty == null { return ""; }
+    if ty.kind == TY_NAMED { return ty.name; }
+    if ty.kind == TY_POINTER || ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT {
+        return _type_root_name(ty.inner);
+    }
+    if ty.kind == TY_GENERIC { return ty.name; }   // e.g. `Vector<int>` → "Vector"
+    return "";
+}
+
+
+
+pub fn _scan_calls_in_body(t: *Typer, body: *Vector<Stmt>, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _scan_calls_in_stmt(t, &s, dep, lint_code, what, scope);
+    }
+}
+
+fn _scan_calls_in_stmt(t: *Typer, s: *Stmt, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
+    if s == null { return; }
+    // Stmt / block-level opt-out — `@allow("deprecated-fn")` on the
+    // let, defer, block, if, while, etc. mutes the warning for every
+    // call inside this stmt's subtree. Bubbling stops here so a
+    // narrower scope below won't accidentally re-enable.
+    if _has_allow(s, lint_code) { return; }
+    if s.let_value != null { _scan_calls_in_expr(t, s.let_value, dep, lint_code, what, scope); }
+    if s.expr_value != null { _scan_calls_in_expr(t, s.expr_value, dep, lint_code, what, scope); }
+    if s.cond != null { _scan_calls_in_expr(t, s.cond, dep, lint_code, what, scope); }
+    if s.for_step != null { _scan_calls_in_expr(t, s.for_step, dep, lint_code, what, scope); }
+    // Record `let name: Type = ...` into the receiver-resolution
+    // scope so `name.method()` farther down resolves to
+    // `Type::method` instead of falling back to the bare name. Only
+    // annotated lets contribute — untyped bindings stay invisible to
+    // the heuristic.
+    if s.kind == ST_LET && s.let_ty != null {
+        let n: string = _type_root_name(s.let_ty);
+        if !n.eq("") { scope.insert(s.name, n); }
+    }
+    if s.then_body != null { _scan_calls_in_body(t, s.then_body, dep, lint_code, what, scope); }
+    if s.else_body != null { _scan_calls_in_body(t, s.else_body, dep, lint_code, what, scope); }
+}
+
+fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null {
+        let head: *Expr = e.lhs;
+        let mut key: string = "";
+        let mut display: string = "";
+        if head.kind == EX_PATH {
+            // `Type::method` — qualified key, strict (no bare fallback).
+            key = head.str_val.concat("::").concat(head.field);
+            display = key;
+        } else if head.kind == EX_IDENT {
+            key = head.str_val; display = head.str_val;
+        } else if head.kind == EX_MEMBER {
+            // `obj.method()` — try to resolve `obj` to its declared
+            // type via the local scope. When the receiver type IS
+            // known, only the qualified `Type::method` key is
+            // consulted (no bare-name fallback) so an annotated
+            // method in one impl doesn't bleed into unrelated impls
+            // that share the method name. When the receiver type
+            // can't be resolved (chained expressions, untyped let,
+            // etc.) we still fall back to the bare method name.
+            let method: string = head.field;
+            let mut receiver_known: bool = false;
+            let mut qualified: string = "";
+            if head.lhs != null && head.lhs.kind == EX_IDENT {
+                let recv: string = head.lhs.str_val;
+                if scope.contains(recv) {
+                    receiver_known = true;
+                    let ty_name: string = scope.get(recv);
+                    qualified = ty_name.concat("::").concat(method);
+                }
+            }
+            if receiver_known {
+                key = qualified; display = qualified;
+            } else {
+                key = method; display = method;
+            }
+        }
+        if !key.eq("") && dep.contains(key) {
+            let reason: string = dep.get(key);
+            let mut msg: string = "function `".concat(display).concat("` is ").concat(what);
+            if !reason.eq("") { msg = msg.concat(": ").concat(reason); }
+            t.warn_range(e.line, e.column, _expr_span(e), lint_code, msg);
+        }
+    }
+    if e.lhs != null { _scan_calls_in_expr(t, e.lhs, dep, lint_code, what, scope); }
+    if e.rhs != null { _scan_calls_in_expr(t, e.rhs, dep, lint_code, what, scope); }
+    if e.operand != null { _scan_calls_in_expr(t, e.operand, dep, lint_code, what, scope); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _scan_calls_in_expr(t, &a, dep, lint_code, what, scope);
+        }
+    }
+}
+
+
+fn _ndp_derefs_in_expr(e: *Expr, derefed: *HashMap<bool>) {
+    if e == null { return; }
+    // `*p`
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null
+       && e.operand.kind == EX_IDENT {
+        derefed.insert(e.operand.str_val, true);
+    }
+    // `p.field` and `p.method(...)` — both implicitly deref p.
+    if e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT {
+        derefed.insert(e.lhs.str_val, true);
+    }
+    // `p[i]` — also deref.
+    if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT {
+        derefed.insert(e.lhs.str_val, true);
+    }
+    if e.lhs != null { _ndp_derefs_in_expr(e.lhs, derefed); }
+    if e.rhs != null { _ndp_derefs_in_expr(e.rhs, derefed); }
+    if e.operand != null { _ndp_derefs_in_expr(e.operand, derefed); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _ndp_derefs_in_expr(&a, derefed);
+        }
+    }
+}
+
+pub fn _scan_null_body(t: *Typer, body: *Vector<Stmt>, nulls: *HashMap<bool>) {
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _scan_null_stmt(t, &s, nulls);
+    }
+}
+
+fn _scan_null_stmt(t: *Typer, s: *Stmt, nulls: *HashMap<bool>) {
+    if s == null { return; }
+    // Walk RHS exprs first so derefs inside them get checked before
+    // the let-binding decides anything.
+    if s.let_value != null { _scan_null_expr(t, s.let_value, nulls); }
+    if s.expr_value != null { _scan_null_expr(t, s.expr_value, nulls); }
+    if s.cond != null { _scan_null_expr(t, s.cond, nulls); }
+    if s.for_step != null { _scan_null_expr(t, s.for_step, nulls); }
+
+    // Track the binding.
+    if s.kind == ST_LET && s.name != null && !s.name.eq("") {
+        if s.let_value != null && s.let_value.kind == EX_NULL {
+            nulls.insert(s.name, true);
+        } else {
+            // Defined to something concrete — definitely not null.
+            if nulls.contains(s.name) { nulls.insert(s.name, false); }
+        }
+    }
+    if s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+       && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT
+       && s.expr_value.rhs != null {
+        let nm: string = s.expr_value.lhs.str_val;
+        if s.expr_value.rhs.kind == EX_NULL { nulls.insert(nm, true); }
+        else if nulls.contains(nm) { nulls.insert(nm, false); }
+    }
+    // Conditional + loop bodies invalidate our knowledge — we don't
+    // track per-branch state. Anything we know about a name before
+    // entering an if/while/for might be wrong on the other side.
+    if s.then_body != null {
+        _scan_null_body(t, s.then_body, nulls);
+        _invalidate_assigned(s.then_body, nulls);
+    }
+    if s.else_body != null {
+        _scan_null_body(t, s.else_body, nulls);
+        _invalidate_assigned(s.else_body, nulls);
+    }
+}
+
+// After running a conditional/loop body, mark every name that body
+// might have assigned as "unknown" so subsequent stmts don't trust
+// the pre-branch null bit. Simple over-approximation.
+fn _invalidate_assigned(body: *Vector<Stmt>, nulls: *HashMap<bool>) {
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+           && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT {
+            let nm: string = s.expr_value.lhs.str_val;
+            if nulls.contains(nm) { nulls.insert(nm, false); }
+        }
+        if s.then_body != null { _invalidate_assigned(s.then_body, nulls); }
+        if s.else_body != null { _invalidate_assigned(s.else_body, nulls); }
+    }
+}
+
+// Walk an expr, emitting `null-deref` at every deref / member /
+// method call against an identifier that's currently known-null.
+fn _scan_null_expr(t: *Typer, e: *Expr, nulls: *HashMap<bool>) {
+    if e == null { return; }
+    // *p — direct deref
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null {
+        _check_null_target(t, e.operand, nulls, e.line, e.column);
+    }
+    // p.field — member access does an implicit deref
+    if e.kind == EX_MEMBER && e.lhs != null {
+        _check_null_target(t, e.lhs, nulls, e.line, e.column);
+    }
+    // p.method(...) — same shape as member
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+       && e.lhs.lhs != null {
+        _check_null_target(t, e.lhs.lhs, nulls, e.line, e.column);
+    }
+    // p[i] — index deref
+    if e.kind == EX_INDEX && e.lhs != null {
+        _check_null_target(t, e.lhs, nulls, e.line, e.column);
+    }
+    if e.lhs != null { _scan_null_expr(t, e.lhs, nulls); }
+    if e.rhs != null { _scan_null_expr(t, e.rhs, nulls); }
+    if e.operand != null { _scan_null_expr(t, e.operand, nulls); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _scan_null_expr(t, &a, nulls);
+        }
+    }
+}
+
+fn _check_null_target(t: *Typer, target: *Expr, nulls: *HashMap<bool>, line: i32, col: i32) {
+    if target == null { return; }
+    // Direct `*null` / `null.foo()` — definite bug.
+    if target.kind == EX_NULL {
+        t.warn_range(line, col, 4, "null-deref",
+            "dereferencing the `null` literal — this will segfault at runtime");
+        return;
+    }
+    if target.kind == EX_IDENT && nulls.contains(target.str_val) && nulls.get(target.str_val) {
+        t.warn_range(line, col, target.str_val.len(), "null-deref",
+            "`".concat(target.str_val).concat("` is `null` at this point — deref will segfault. Reassign or guard with `if ").concat(target.str_val).concat(" != null { … }`"));
+    }
+}
+
+
+pub fn _bf_scan_body(t: *Typer, body: *Vector<Stmt>, tys: *HashMap<string>, self_destructor_of: string) {
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        _bf_scan_stmt(t, &s, tys, self_destructor_of);
+    }
+}
+
+fn _bf_scan_stmt(t: *Typer, s: *Stmt, tys: *HashMap<string>, self_destructor_of: string) {
+    if s == null { return; }
+    if s.kind == ST_LET && s.name != null && !s.name.eq("") && s.let_ty != null {
+        // Use bad-free-specific tag to distinguish managed value types
+        // (`string` = arena string, must not free) from raw pointer
+        // buffers (`*string` = char-array allocation, free is fine).
+        tys.insert(s.name, _bf_ty_tag_for_free(s.let_ty));
+    }
+    if s.expr_value != null { _bf_check_expr(t, s.expr_value, tys, self_destructor_of); }
+    if s.let_value != null { _bf_check_expr(t, s.let_value, tys, self_destructor_of); }
+    if s.cond != null { _bf_check_expr(t, s.cond, tys, self_destructor_of); }
+    if s.then_body != null { _bf_scan_body(t, s.then_body, tys, self_destructor_of); }
+    if s.else_body != null { _bf_scan_body(t, s.else_body, tys, self_destructor_of); }
+}
+
+fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>, self_destructor_of: string) {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+       && e.lhs.str_val.eq("free")
+       && e.args != null && e.args.len() == 1 {
+        let arg: Expr = e.args.get(0);
+        // Peel `as *void` / `as *u8` / any cast.
+        let mut probe: *Expr = &arg;
+        while probe != null && probe.kind == EX_CAST { probe = probe.lhs; }
+        if probe != null && probe.kind == EX_IDENT
+           && tys.contains(probe.str_val) {
+            let tag: string = tys.get(probe.str_val);
+            if tag.eq("string") {
+                t.warn_range(e.line, e.column, _expr_span(e), "bad-free",
+                    "`free(".concat(probe.str_val).concat(")` corrupts the heap — strings are arena-managed and freed automatically. Remove this line."));
+            } else if tag.eq("Vector") || tag.eq("HashMap") {
+                // Vector / HashMap own internal buffers (keys/values/
+                // data array). libc free on the outer struct leaks
+                // those buffers; .free() releases everything.
+                //
+                // Exemption: inside `impl Vector { fn free(self) { … } }`
+                // (or HashMap), `free(self as *void)` is the LAST step
+                // of the destructor releasing the outer struct. Only
+                // skip when the freed name is literally `self` AND
+                // the enclosing fn is that exact destructor.
+                if probe.str_val.eq("self") && tag.eq(self_destructor_of) {
+                    // legitimate destructor finalizer
+                } else {
+                    t.warn_range(e.line, e.column, _expr_span(e), "bad-free",
+                        "`free(".concat(probe.str_val).concat(")` leaks `").concat(probe.str_val).concat("`'s internal buffers — call `").concat(probe.str_val).concat(".free()` so the destructor releases keys/values/data first."));
+                }
+            }
+        }
+    }
+    if e.lhs != null { _bf_check_expr(t, e.lhs, tys, self_destructor_of); }
+    if e.rhs != null { _bf_check_expr(t, e.rhs, tys, self_destructor_of); }
+    if e.operand != null { _bf_check_expr(t, e.operand, tys, self_destructor_of); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _bf_check_expr(t, &a, tys, self_destructor_of);
+        }
+    }
+}
+
+// Tag specialized for bad-free's rules. Distinguishes managed value
+// types (Glide `string`) from raw buffers (`*string` = char-array).
+// `*Vector<T>` / `*HashMap<V>` still resolve to their collection
+// name since those are always passed as pointers.
+fn _bf_ty_tag_for_free(ty: *Type) -> string {
+    if ty == null { return ""; }
+    // `string` value — arena-managed, must not be freed.
+    if ty.kind == TY_NAMED && ty.name.eq("string") { return "string"; }
+    // `*string` is a raw char-array — `free()` is fine, skip.
+    if ty.kind == TY_POINTER && ty.inner != null
+       && ty.inner.kind == TY_NAMED && ty.inner.name.eq("string") {
+        return "";
+    }
+    // Pointer to the stdlib Vector / HashMap. These collections are ALWAYS
+    // used as instantiated generics (`*Vector<T>` / `*HashMap<V>`), so the
+    // inner is TY_GENERIC. A user POD named `Vector` / `HashMap` declared as
+    // a plain `*Vector` is TY_NAMED — it owns no internal buffers, so
+    // `free(v as *void)` is correct and must not be flagged.
+    if ty.kind == TY_POINTER && ty.inner != null {
+        if ty.inner.kind == TY_GENERIC
+           && (ty.inner.name.eq("Vector") || ty.inner.name.eq("HashMap")) {
+            return ty.inner.name;
+        }
+        // Other pointer types — return the inner head name as a fallback
+        // so callers can still match (e.g. for tracking impl targets). A
+        // bare `*Vector`/`*HashMap` (TY_NAMED) is a USER POD, not the stdlib
+        // collection, so it must NOT return the collection name — otherwise
+        // the bad-free collection branch (which matches on the name) would
+        // still fire on `free(v as *void)` for correct POD code.
+        if ty.inner.kind == TY_NAMED {
+            if ty.inner.name.eq("Vector") || ty.inner.name.eq("HashMap") { return ""; }
+            return ty.inner.name;
+        }
+        if ty.inner.kind == TY_GENERIC { return ty.inner.name; }
+        return "";
+    }
+    if ty.kind == TY_GENERIC { return ty.name; }
+    return "";
+}
+
+
+// ============================================================================
+// === Batch of bug-prevention lints                                        ===
+// ============================================================================
+// Ten lints sharing a common helper layer: type-tag tracking via let
+// bindings, scope-aware walking of fn bodies, and a thin set of pure
+// heuristics. Each one is intentionally narrow — we'd rather miss a
+// case than flag legitimate code, so suppressions stay rare.
+
+// Walk every fn / impl method, invoking `cb` with each one paired with
+// the inferred origin file. `cb` is responsible for the body analysis.
+// Centralizes the boilerplate every per-fn lint repeats.
+
+
+pub fn _ui_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
+    if s == null { return; }
+    if s.let_value != null { _ui_collect_expr(s.let_value, used); }
+    if s.expr_value != null { _ui_collect_expr(s.expr_value, used); }
+    if s.cond != null { _ui_collect_expr(s.cond, used); }
+    if s.for_step != null { _ui_collect_expr(s.for_step, used); }
+    if s.for_init != null { _ui_collect_stmt(s.for_init, used); }
+    if s.scrutinee != null { _ui_collect_expr(s.scrutinee, used); }
+    // Attribute args: `@derive(JsonBind)`, `@expect("code")`, `@allow("x")`,
+    // procedural macro use sites. Each arg expression's idents count as
+    // uses of the corresponding import.
+    if s.attrs != null {
+        for let i: i32 = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.args == null { continue; }
+            for let j: i32 = 0; j < a.args.len(); j++ {
+                let ae: Expr = a.args.get(j);
+                _ui_collect_expr(&ae, used);
+            }
+        }
+    }
+    // Types appearing in annotations / signatures / fields count as uses.
+    // Without this, `fn(req: *HttpRequest)` and `let r: *Router = ...` look
+    // like the imports `HttpRequest` / `Router` are dead code.
+    _ui_collect_type(s.let_ty, used);
+    _ui_collect_type(s.fn_ret_ty, used);
+    _ui_collect_type(s.impl_target, used);
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            _ui_collect_type(p.ty, used);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            _ui_collect_type(f.ty, used);
+        }
+    }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let c: Stmt = s.then_body.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let c: Stmt = s.else_body.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let c: Stmt = s.fn_body.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let c: Stmt = s.impl_methods.get(i);
+            _ui_collect_stmt(&c, used);
+        }
+    }
+    if s.arms != null {
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let a: MatchArm = s.arms.get(i);
+            if a.body != null {
+                for let j: i32 = 0; j < a.body.len(); j++ {
+                    let c: Stmt = a.body.get(j);
+                    _ui_collect_stmt(&c, used);
+                }
+            }
+        }
+    }
+}
+fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
+    if e == null { return; }
+    if e.kind == EX_IDENT { used.insert(e.str_val, true); }
+    if e.kind == EX_MEMBER && e.field != null { used.insert(e.field, true); }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT {
+        used.insert(e.lhs.str_val, true);
+    }
+    // `Type::method(...)` — both the type and the method count as a use of
+    // the imported `Type` / `method` name. Without this `Router::new()`
+    // looks like Router was imported and abandoned.
+    if e.kind == EX_PATH {
+        if e.str_val != null { used.insert(e.str_val, true); }
+        if e.field != null { used.insert(e.field, true); }
+    }
+    // Anonymous fns can hold params + return-type annotations that name
+    // imported types. Walk those before descending into the body.
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                _ui_collect_type(p.ty, used);
+            }
+        }
+        _ui_collect_type(e.cast_to, used);
+        if e.fn_expr_body != null {
+            for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+                let bs: Stmt = e.fn_expr_body.get(i);
+                _ui_collect_stmt(&bs, used);
+            }
+        }
+    }
+    // Cast targets (`expr as *Foo`) and sizeof(Type) usages.
+    if e.kind == EX_CAST || e.kind == EX_SIZEOF { _ui_collect_type(e.cast_to, used); }
+    // Struct literal names the type explicitly.
+    if e.kind == EX_STRUCT_LIT && e.str_val != null { used.insert(e.str_val, true); }
+    if e.lhs != null { _ui_collect_expr(e.lhs, used); }
+    if e.rhs != null { _ui_collect_expr(e.rhs, used); }
+    if e.operand != null { _ui_collect_expr(e.operand, used); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _ui_collect_expr(&a, used);
+        }
+    }
+}
+// Walk a type tree, marking every named carrier as a use. Catches
+// `*HttpRequest`, `Vector<Router>`, `?HttpResponse`, etc.
+fn _ui_collect_type(t: *Type, used: *HashMap<bool>) {
+    if t == null { return; }
+    if t.kind == TY_NAMED && t.name != null { used.insert(t.name, true); }
+    if t.kind == TY_GENERIC && t.name != null { used.insert(t.name, true); }
+    if t.inner != null { _ui_collect_type(t.inner, used); }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            _ui_collect_type(&a, used);
+        }
+    }
+    // For TY_FNPTR `args` carries the param types and `fnptr_ret` the ret.
+    if t.fnptr_ret != null { _ui_collect_type(t.fnptr_ret, used); }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---- Main loop ---------------------------------------------------------
+
+// Dispatch one decoded LSP request to the right handler. Returns true
+// when the loop should stop (graceful exit). Pulled out of lsp_main so
+// the loop can free `raw` and `req` after each iteration without
+// repeating cleanup before every `continue`.
+fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
+    let method: string = json_as_string(json_get(req, "method"));
+    if method.eq("initialize") { handle_initialize(req); return false; }
+    if method.eq("initialized") { return false; }
+    if method.eq("shutdown") { handle_shutdown(req, state); return false; }
+    if method.eq("exit") { return true; }
+    if method.eq("textDocument/didOpen") { handle_did_open(req, state); return false; }
+    if method.eq("textDocument/didChange") { handle_did_change(req, state); return false; }
+    if method.eq("textDocument/didClose") { handle_did_close(req, state); return false; }
+    if method.eq("textDocument/hover") { handle_hover(req, state); return false; }
+    if method.eq("textDocument/documentSymbol") { handle_document_symbol(req, state); return false; }
+    if method.eq("textDocument/definition") { handle_definition(req, state); return false; }
+    if method.eq("textDocument/implementation") { handle_implementation(req, state); return false; }
+    if method.eq("textDocument/typeDefinition") { handle_type_definition(req, state); return false; }
+    if method.eq("textDocument/completion") { handle_completion(req, state); return false; }
+    if method.eq("textDocument/signatureHelp") { handle_signature_help(req, state); return false; }
+    if method.eq("textDocument/semanticTokens/full") { handle_semantic_tokens(req, state); return false; }
+    if method.eq("textDocument/inlayHint") { handle_inlay_hint(req, state); return false; }
+    if method.eq("workspace/symbol") { handle_workspace_symbol(req, state); return false; }
+    if method.eq("textDocument/prepareCallHierarchy") { handle_prepare_call_hierarchy(req, state); return false; }
+    if method.eq("callHierarchy/incomingCalls") { handle_incoming_calls(req, state); return false; }
+    if method.eq("callHierarchy/outgoingCalls") { handle_outgoing_calls(req, state); return false; }
+    if method.eq("textDocument/prepareTypeHierarchy") { handle_prepare_type_hierarchy(req, state); return false; }
+    if method.eq("typeHierarchy/supertypes") { handle_supertypes(req, state); return false; }
+    if method.eq("typeHierarchy/subtypes") { handle_subtypes(req, state); return false; }
+    if method.eq("textDocument/references") { handle_references(req, state); return false; }
+    if method.eq("textDocument/documentHighlight") { handle_document_highlight(req, state); return false; }
+    if method.eq("textDocument/prepareRename") { handle_prepare_rename(req, state); return false; }
+    if method.eq("textDocument/rename") { handle_rename(req, state); return false; }
+    if method.eq("textDocument/formatting") { handle_formatting(req, state); return false; }
+    if method.eq("textDocument/codeAction") { handle_code_action(req, state); return false; }
+    if method.eq("workspace/executeCommand") { handle_execute_command(req, state); return false; }
+    if method.eq("glide/routeList") { handle_route_list(req, state); return false; }
+    // Any unhandled request gets an empty-result reply so clients don't hang.
+    let id: *JsonValue = json_get(req, "id");
+    if id != null { lsp_send_response(id, json_null()); }
+    return false;
+}
+
+pub fn lsp_main() -> i32 {
+    __glide_set_binary_io();
+    // Open ~/.glide/lsp.log (truncate per session) and redirect
+    // stderr there so the SIGSEGV trap handler's stack trace
+    // lands in the same file editors can't easily surface.
+    let log_path: string = _lsp_log_path();
+    __glide_lsp_log_open(log_path);
+    _lsp_log("--- lsp boot ---");
+    let state: *LspState = lsp_state_new();
+    while true {
+        let raw: string = lsp_read_message();
+        if raw.eq("") {
+            _lsp_log("read_message: EOF — exiting");
+            break;
+        }
+        let req: *JsonValue = json_parse(raw);
+        let mut should_exit: bool = false;
+        if req != null {
+            let method_v: *JsonValue = json_get(req, "method");
+            let mid: *JsonValue = json_get(req, "id");
+            let method_s: string = json_as_string(method_v);
+            _lsp_log("> ".concat(method_s).concat(" id=").concat(int_to_str(json_as_int(mid))));
+            // Per-request arena. Every Vector / HashMap / __glide_palloc
+            // call inside the handler — completion's `seen` map, hover's
+            // `uses` Vector, all the concat'd item labels and signatures,
+            // all the JsonValue leaf strings the handler builds for the
+            // response — bumps into this arena and is reclaimed in bulk
+            // when the request finishes. Without this every Zed
+            // keystroke that fires a completion or documentHighlight
+            // leaks the full per-call working set (multi-MB on big
+            // files; multi-GB after a few minutes of typing).
+            let req_arena_initial: *void = __glide_palloc_make();
+            __glide_palloc_set(req_arena_initial);
+            should_exit = lsp_dispatch(req, state);
+            _lsp_log("< done ".concat(method_s));
+            // Read the final head — when dispatch grows the arena past
+            // the initial chunk, palloc_chunk prepends new ones so the
+            // free has to start from the latest head, not the make()
+            // return that's now buried at the tail.
+            let req_arena_head: *void = __glide_palloc_get();
+            __glide_palloc_set(null);
+            __glide_palloc_free(req_arena_head);
+            // Reclaim the JSON tree wrappers. Leaf strings (uri / text /
+            // method) live independently on the heap (json_parse ran
+            // before the request arena was set), so handlers that hand
+            // them to long-lived state (state.docs[uri].text etc) own
+            // them now and free them when they overwrite the slot.
+            json_free(req);
+        }
+        c_raw! { if (raw  !=  NULL) free(((char*)(raw )) - 4); }   /* SDS header base */
+        if should_exit { break; }
+    }
+    _lsp_log("--- lsp shutdown ---");
+    return 0;
+}
+

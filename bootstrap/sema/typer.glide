@@ -15,8 +15,8 @@
 // (`&` / `&mut`) are enforced here without lifetime annotations.
 
 import stdlib::hashmap::*;
-import ast;
-import parser;     // for ParseDiag (used by merge_parse_diags below)
+import bootstrap::syntax::ast;
+import bootstrap::syntax::parser;     // for ParseDiag (used by merge_parse_diags below)
 
 // ---- type helpers --------------------------------------------------------
 

@@ -4,12 +4,12 @@
 // manifest depends on nothing here.
 import stdlib::hashmap::*;
 import stdlib::fs::*;
-import ast;
-import lexer;
-import parser;
-import lower;
-import typer;
-import manifest;
+import bootstrap::syntax::ast;
+import bootstrap::syntax::lexer;
+import bootstrap::syntax::parser;
+import bootstrap::syntax::lower;
+import bootstrap::sema::typer;
+import bootstrap::pkg::manifest;
 
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 extern fn __glide_exe_dir() -> string;

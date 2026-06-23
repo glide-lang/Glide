@@ -1,5 +1,5 @@
 import stdlib::hashmap::*;
-import ast;        // for `int_to_str`
+import bootstrap::syntax::ast;        // for `int_to_str`
 import stdlib::bytes::*;   // ByteBuffer — O(n) serialization (vs concat folds)
 
 // String runtime helpers consumed by the parser/builder. Declared here so

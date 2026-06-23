@@ -4,11 +4,11 @@
 // request/response schemas, and emits `pub struct` shapes under
 // components/schemas. Stays pre-expansion so route attrs survive.
 
-import ast::*;
-import parser::*;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::parser::*;
 import stdlib::hashmap::*;
 import stdlib::fs::*;
-import loader::*;
+import bootstrap::pkg::loader::*;
 
 pub struct OARoute {
     pub method: string,

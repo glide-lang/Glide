@@ -14,7 +14,7 @@
 // them. `glide fmt --write` is opt-in for that reason. Comment preservation
 // is the next iteration.
 
-import ast;
+import bootstrap::syntax::ast;
 import stdlib::bytes::*;     // ByteBuffer — O(n) string building (vs concat folds)
 
 const FMT_INDENT: string = "    ";

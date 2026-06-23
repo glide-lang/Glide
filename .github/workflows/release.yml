@@ -209,7 +209,7 @@ jobs:
             --sysroot=dist/glide-sysroot-aarch64-linux-musl-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-x86_64-windows-gnu-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-aarch64-macos-none-${VER}.tar.gz \
-            --out=bootstrap/embed.glide
+            --out=bootstrap/cli/embed.glide
 
       - name: Install host sysroot for the bundle build
         run: |

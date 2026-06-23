@@ -4,9 +4,9 @@ import stdlib::compress::*;
 import stdlib::tar::*;
 import stdlib::spinner::*;
 import stdlib::crypto::*;
-import ast;       // for int_to_str
-import manifest;
-import semver;
+import bootstrap::syntax::ast;       // for int_to_str
+import bootstrap::pkg::manifest;
+import bootstrap::pkg::semver;
 
 extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 extern fn __glide_shell(cmd: string) -> i32;

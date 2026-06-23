@@ -1,5 +1,5 @@
-import ast;
-import parser;
+import bootstrap::syntax::ast;
+import bootstrap::syntax::parser;
 
 // Lowering pass — desugars surface syntax into core AST shapes the typer
 // and codegen already understand. Runs between expander and typer.

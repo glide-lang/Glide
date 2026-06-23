@@ -53,7 +53,7 @@
 // Returns an IValue. Diagnostics accumulate in `it.diagnostics`.
 
 import stdlib::hashmap::*;
-import ast;
+import bootstrap::syntax::ast;
 
 // ---- IValue tagged union ----------------------------------------------
 

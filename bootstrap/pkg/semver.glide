@@ -12,7 +12,7 @@
 // distinct opaque revs for the same URL fall back to "first wins"
 // with a warning.
 
-import ast;     // int_to_str
+import bootstrap::syntax::ast;     // int_to_str
 
 pub struct SemVer {
     pub major:      i32,

@@ -1,0 +1,4001 @@
+// Extracted from bootstrap/lsp.glide for readability. See that file for the
+// orchestration; shared helpers it owns stay there (pub).
+
+import stdlib::hashmap::*;
+import bootstrap::syntax::ast;
+import bootstrap::syntax::lexer;
+import bootstrap::syntax::parser;
+import bootstrap::sema::typer;
+import bootstrap::cli::fmt;
+import bootstrap::util::json;
+import bootstrap::pkg::manifest;
+import bootstrap::lsp::server;
+import bootstrap::lsp::features;  // extracted
+
+// LSP CompletionItemKind:
+//   3 = Function, 6 = Variable, 5 = Field, 8 = Class (struct), 13 = Enum,
+//   14 = Keyword, 21 = Constant, 25 = TypeParameter
+fn ci_kind_for(s: *Stmt) -> i32 {
+    if s.kind == ST_FN { return 3; }
+    if s.kind == ST_STRUCT { return 8; }
+    if s.kind == ST_ENUM { return 13; }
+    if s.kind == ST_CONST { return 21; }
+    if s.kind == ST_MACRO_DEF { return 2; }   // 2 = Method (closest LSP kind for macros)
+    return 6;
+}
+
+fn completion_item(label: string, kind: i32, detail: string) -> *JsonValue {
+    let it: *JsonValue = json_object();
+    json_obj_set(it, "label", json_string(label));
+    json_obj_set(it, "kind", json_int(kind));
+    if !detail.eq("") { json_obj_set(it, "detail", json_string(detail)); }
+    return it;
+}
+
+// Walk the doc text once and parse every `import …;` line into an
+// ImportInfo. Driven off the source text rather than the AST so we can
+// emit precise text edits (insert before `}`) when adding to a
+// selective import that already exists.
+fn analyze_imports(text: string) -> *Vector<ImportInfo> {
+    let out: *Vector<ImportInfo> = Vector::new();
+    if text == null { return out; }
+    let n: i32 = text.len();
+    let mut line: i32 = 0;
+    let mut line_start: i32 = 0;
+    let mut i: i32 = 0;
+    while i <= n {
+        let at_eol: bool = (i == n) || (text.at(i).to_int() == 10);
+        if at_eol {
+            let raw: string = text.substring(line_start, i);
+            let trimmed: string = raw.trim();
+            if trimmed.len() > 7 && trimmed.substring(0, 7).eq("import ") {
+                let info: ImportInfo = parse_import_line(raw, line);
+                if !info.module.eq("") { out.push(info); }
+            }
+            line = line + 1;
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// Find first occurrence of byte `c` in `s` starting from `from`. Returns
+// -1 when missing.
+fn find_byte(s: string, c: i32, from: i32) -> i32 {
+    let n: i32 = s.len();
+    let mut i: i32 = from;
+    while i < n {
+        if s.at(i).to_int() == c { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn parse_import_line(raw: string, line: i32) -> ImportInfo {
+    let none_items: *HashMap<bool> = HashMap::new();
+    let miss: ImportInfo = ImportInfo {
+        module: "", line: line, kind: IMP_BARE,
+        items: none_items, close_pos: -1,
+    };
+    let trimmed: string = raw.trim();
+    if trimmed.len() < 8 { return miss; }
+    let mut body: string = trimmed.substring(7, trimmed.len()).trim();
+    let bn0: i32 = body.len();
+    if bn0 > 0 && body.at(bn0 - 1).to_int() == 59 {
+        body = body.substring(0, bn0 - 1).trim();
+    }
+    if body.eq("") { return miss; }
+
+    // Selective: `module::{X, Y, …}`
+    let brace_open_in_body: i32 = find_substr(body, "::{");
+    if brace_open_in_body >= 0 {
+        let module: string = body.substring(0, brace_open_in_body);
+        let inner_start: i32 = brace_open_in_body + 3;
+        let brace_close: i32 = find_byte(body, 125, inner_start);
+        let items: *HashMap<bool> = HashMap::new();
+        if brace_close > 0 {
+            let inner: string = body.substring(inner_start, brace_close);
+            let parts: *Vector<string> = inner.split(",");
+            for let i: i32 = 0; i < parts.len(); i++ {
+                let nm: string = parts.get(i).trim();
+                if !nm.eq("") { items.insert(nm, true); }
+            }
+        }
+        // Find `}` column in the original (un-trimmed) raw line so the
+        // text edit can splice `, NewName` directly before it.
+        let close_in_raw: i32 = find_byte(raw, 125, 0);
+        return ImportInfo {
+            module: module, line: line, kind: IMP_SELECTIVE,
+            items: items, close_pos: close_in_raw,
+        };
+    }
+
+    // Wildcard: `module::*`
+    let bn: i32 = body.len();
+    if bn >= 3 && body.substring(bn - 3, bn).eq("::*") {
+        return ImportInfo {
+            module: body.substring(0, bn - 3),
+            line: line, kind: IMP_WILDCARD,
+            items: none_items, close_pos: -1,
+        };
+    }
+
+    // Bare module: `module` (single or multi-segment, no items).
+    return ImportInfo {
+        module: body, line: line, kind: IMP_BARE,
+        items: none_items, close_pos: -1,
+    };
+}
+
+// Build a `*HashMap<ImportInfo>` keyed by canonical module path so the
+// completion code can look up "is stdlib::hashmap already imported?" in
+// O(1). Stores both the original and the pretty form for compatibility.
+fn current_imports(text: string) -> *HashMap<ImportInfo> {
+    let h: *HashMap<ImportInfo> = HashMap::new();
+    let infos: *Vector<ImportInfo> = analyze_imports(text);
+    for let i: i32 = 0; i < infos.len(); i++ {
+        let info: ImportInfo = infos.get(i);
+        h.insert(info.module, info);
+    }
+    return h;
+}
+
+// Build an `additionalTextEdits` JSON entry for the auto-import action,
+// or return null when no edit is needed.
+//
+// Strategy:
+//   * existing wildcard / bare / matching selective entry → no edit
+//   * existing selective without the name → splice `, name` before `}`
+//   * no existing import → insert `import module::{name};\n` at the
+//     fallback line. For Module items (is_module = true), insert the
+//     bare form `import module;` instead so `module::Foo` paths work.
+fn build_import_edit(name: string, module: string,
+                     existing: *ImportInfo, fallback_line: i32,
+                     is_module: bool) -> *JsonValue {
+    if existing != null {
+        if existing.kind == IMP_WILDCARD { return null; }
+        if existing.kind == IMP_BARE { return null; }
+        if existing.kind == IMP_SELECTIVE {
+            if existing.items.contains(name) { return null; }
+            let edit: *JsonValue = json_object();
+            let range: *JsonValue = json_object();
+            let start: *JsonValue = json_object();
+            let endp: *JsonValue = json_object();
+            json_obj_set(start, "line", json_int(existing.line));
+            json_obj_set(start, "character", json_int(existing.close_pos));
+            json_obj_set(endp,  "line", json_int(existing.line));
+            json_obj_set(endp,  "character", json_int(existing.close_pos));
+            json_obj_set(range, "start", start);
+            json_obj_set(range, "end", endp);
+            json_obj_set(edit, "range", range);
+            json_obj_set(edit, "newText", json_string(", ".concat(name)));
+            return edit;
+        }
+    }
+    // No existing import — fresh insertion.
+    let edit: *JsonValue = json_object();
+    let range: *JsonValue = json_object();
+    let start: *JsonValue = json_object();
+    let endp: *JsonValue = json_object();
+    json_obj_set(start, "line", json_int(fallback_line));
+    json_obj_set(start, "character", json_int(0));
+    json_obj_set(endp,  "line", json_int(fallback_line));
+    json_obj_set(endp,  "character", json_int(0));
+    json_obj_set(range, "start", start);
+    json_obj_set(range, "end", endp);
+    json_obj_set(edit, "range", range);
+    let mut new_text: string = "";
+    if is_module {
+        new_text = "import ".concat(module).concat(";\n");
+    } else {
+        new_text = "import ".concat(module).concat("::{").concat(name).concat("};\n");
+    }
+    json_obj_set(edit, "newText", json_string(new_text));
+    return edit;
+}
+
+// Pull the substring of `text` from the start of `line0` up to `col0`.
+fn line_prefix_to_cursor(text: string, line0: i32, col0: i32) -> string {
+    let n: i32 = text.len();
+    let mut line: i32 = 0;
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n && line < line0 {
+        if text.at(i).to_int() == 10 { line = line + 1; start = i + 1; }
+        i = i + 1;
+    }
+    let mut end: i32 = start + col0;
+    if end > n { end = n; }
+    return text.substring(start, end);
+}
+
+// Classify the cursor position with respect to the surrounding `import`
+// statement. Returns IMPCTX_NONE when not in an import.
+fn import_context_kind(text: string, line0: i32, col0: i32) -> i32 {
+    let prefix: string = line_prefix_to_cursor(text, line0, col0);
+    let trimmed: string = prefix.trim();
+    let tlen: i32 = trimmed.len();
+    if tlen < 7 { return IMPCTX_NONE; }
+    if !trimmed.substring(0, 7).eq("import ") { return IMPCTX_NONE; }
+    // Ignore lines that already terminated.
+    if find_byte(prefix, 59, 0) >= 0 { return IMPCTX_NONE; }
+    // Inside `{...}` if there's an unclosed `{` after `import `.
+    let brace_pos: i32 = find_byte(trimmed, 123, 7);
+    if brace_pos >= 0 {
+        let close_after: i32 = find_byte(trimmed, 125, brace_pos);
+        if close_after < 0 { return IMPCTX_BRACE; }
+    }
+    return IMPCTX_PATH;
+}
+
+// Path the user has typed after `import ` up to the cursor, with any
+// trailing partial identifier dropped. So `import stdlib::ha|shmap`
+// returns "stdlib::"; `import stdlib::|` returns "stdlib::"; `import |`
+// returns "".
+fn import_path_prefix(text: string, line0: i32, col0: i32) -> string {
+    let prefix: string = line_prefix_to_cursor(text, line0, col0);
+    let trimmed: string = prefix.trim();
+    if trimmed.len() < 7 { return ""; }
+    let body: string = trimmed.substring(7, trimmed.len());
+    // Drop any trailing partial identifier.
+    let n: i32 = body.len();
+    let mut end: i32 = n;
+    while end > 0 {
+        let c: i32 = body.at(end - 1).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+           || (c >= 48 && c <= 57) || c == 95 {
+            end = end - 1;
+        } else { break; }
+    }
+    return body.substring(0, end);
+}
+
+// Module path being filled inside `{ ... }` of a selective import.
+// `import stdlib::hashmap::{Has|}` → "stdlib::hashmap".
+fn import_brace_module(text: string, line0: i32, col0: i32) -> string {
+    let prefix: string = line_prefix_to_cursor(text, line0, col0);
+    let trimmed: string = prefix.trim();
+    if trimmed.len() < 7 { return ""; }
+    let body: string = trimmed.substring(7, trimmed.len());
+    let bopen: i32 = find_byte(body, 123, 0);
+    if bopen <= 1 { return ""; }
+    // Body before `::{`
+    if bopen >= 2 && body.at(bopen - 1).to_int() == 58
+                  && body.at(bopen - 2).to_int() == 58 {
+        return body.substring(0, bopen - 2);
+    }
+    return "";
+}
+
+// Push completion items for the children of an import path prefix.
+//   ""               → top-level namespaces (stdlib)
+//   "stdlib::"       → 9 stdlib submodules
+//   "stdlib::math::" → uncommon, falls through (modules don't nest yet)
+fn list_import_path_children(state: *LspState, prefix: string,
+                             items: *JsonValue, seen: *HashMap<bool>) {
+    if prefix.eq("") {
+        // Top-level namespaces. `stdlib` always, plus project deps
+        // registered through the manifest at didOpen time.
+        if !seen.contains("stdlib") {
+            seen.insert("stdlib", true);
+            let no_edit_n: *JsonValue = null;
+            json_arr_push(items, rich_completion_item(
+                "stdlib", "", 9, "namespace stdlib",
+                "Glide standard library root.", "", "stdlib::", false,
+                no_edit_n));
+        }
+        if state.project_index != null {
+            _list_project_top_namespaces(state, items, seen);
+        }
+        return;
+    }
+    if state.stdlib_index != null {
+        _list_index_children(state.stdlib_index, prefix, items, seen);
+    }
+    if state.project_index != null {
+        _list_index_children(state.project_index, prefix, items, seen);
+    }
+    // When the prefix names a leaf module (e.g. `stdlib::net::dns`), also
+    // offer that module's own `pub` symbols so `import stdlib::net::dns::`
+    // completes `resolve` / `resolve_v4` / … alongside `*`. The import prefix
+    // keeps its trailing `::` (that's what `_list_index_children` matches on);
+    // `list_module_members` wants the bare module path, so strip it. `seen`
+    // dedups the child modules already emitted above — only members are new.
+    let pl: i32 = prefix.len();
+    let mut modp: string = prefix;
+    if pl >= 2 && prefix.at(pl - 1).to_int() == 58 && prefix.at(pl - 2).to_int() == 58 {
+        modp = prefix.substring(0, pl - 2);
+    }
+    if !modp.eq("") {
+        list_module_members(state, modp, items, seen);
+    }
+}
+
+// Walk an index, filter modules whose `module` field starts with
+// `prefix`, and emit the next segment. So `prefix = "stdlib::"`
+// yields each top-level stdlib module; `prefix = "stdlib::http::"`
+// yields `client`, `cookies`, `form`, etc.
+fn _list_index_children(idx: *Vector<ImportableSym>, prefix: string,
+                        items: *JsonValue, seen: *HashMap<bool>) {
+    let n: i32 = idx.len();
+    for let i: i32 = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != SYMKIND_MODULE { continue; }
+        if !sym.module.starts_with(prefix) { continue; }
+        // The remainder after `prefix` should be exactly one segment
+        // (no further `::`). That gives the IMMEDIATE child only —
+        // otherwise `stdlib::` would list `stdlib::http::client` too.
+        let rest: string = sym.module.substring(prefix.len(), sym.module.len());
+        if rest.eq("") { continue; }
+        // Take the FIRST remaining segment. A leaf module yields its own
+        // name (`http`); a deeper path (`net::tcp`) yields the package
+        // `net`, so package directories with no top-level module file
+        // (like `net/` after net.glide was folded in) still surface.
+        let cc: i32 = rest.index_of("::");
+        if cc >= 0 {
+            let pkg: string = rest.substring(0, cc);
+            if pkg.eq("") { continue; }
+            if seen.contains(pkg) { continue; }
+            seen.insert(pkg, true);
+            let no_edit_p: *JsonValue = null;
+            json_arr_push(items, rich_completion_item(
+                pkg, "", 9, "package ".concat(pkg), "", "", pkg, false, no_edit_p));
+        } else {
+            if seen.contains(rest) { continue; }
+            seen.insert(rest, true);
+            let no_edit: *JsonValue = null;
+            json_arr_push(items, rich_completion_item(
+                rest, "", 9, sym.signature, sym.doc, "", rest, false, no_edit));
+        }
+    }
+}
+
+// Project-side namespaces (dep aliases from `glide.glide` + the
+// project's own top-level modules). Each becomes a first-segment
+// suggestion at `import `.
+fn _list_project_top_namespaces(state: *LspState, items: *JsonValue, seen: *HashMap<bool>) {
+    let idx: *Vector<ImportableSym> = state.project_index;
+    let n: i32 = idx.len();
+    for let i: i32 = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != SYMKIND_MODULE { continue; }
+        // Top-level alias is whatever comes before the first `::`.
+        let mod: string = sym.module;
+        let mut first: string = mod;
+        let p: i32 = mod.index_of("::");
+        if p > 0 { first = mod.substring(0, p); }
+        if seen.contains(first) { continue; }
+        seen.insert(first, true);
+        let no_edit: *JsonValue = null;
+        json_arr_push(items, rich_completion_item(
+            first, "", 9, "namespace ".concat(first),
+            "Project / dep namespace.", "", first.concat("::"), false, no_edit));
+    }
+}
+
+// Find the line + col where a new `import` statement should be inserted.
+// Strategy: place it after the last existing `import` line at the top of
+// the file, or at the very start if the file has none. Returns 0-indexed
+// line + character (LSP coordinates).
+fn find_import_insertion_pos(text: string) -> i32 {
+    let n: i32 = text.len();
+    let mut line: i32 = 0;
+    let mut last_import_line: i32 = -1;
+    let mut line_start: i32 = 0;
+    let mut i: i32 = 0;
+    while i <= n {
+        let at_eol: bool = (i == n) || (text.at(i).to_int() == 10);
+        if at_eol {
+            let cur: string = text.substring(line_start, i);
+            let trimmed: string = cur.trim();
+            if trimmed.len() >= 7 && trimmed.substring(0, 7).eq("import ") {
+                last_import_line = line;
+            }
+            line = line + 1;
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    if last_import_line < 0 { return 0; }
+    return last_import_line + 1;
+}
+
+// Build a rich completion item, gopls-style. Includes:
+//   - labelDetails { detail, description }   compact signature + module
+//   - detail                                  full signature line
+//   - documentation (markdown)                signature fence + doc-comment
+//   - insertText + insertTextFormat=2          snippet with tab stops (fns)
+//   - additionalTextEdits                     auto-import edit (caller-built)
+//
+// The caller is responsible for constructing the import edit (or passing
+// null when none is needed); see build_import_edit() upstream.
+fn rich_completion_item(label: string, label_extra: string, kind: i32,
+                        signature: string, doc: string, module: string,
+                        snippet: string, has_snippet: bool,
+                        import_edit: *JsonValue) -> *JsonValue {
+    let it: *JsonValue = json_object();
+    json_obj_set(it, "label", json_string(label));
+    json_obj_set(it, "kind", json_int(kind));
+
+    // labelDetails: shows `(a: int, b: int) -> int   stdlib::math` next to
+    // the label, gopls-compatible with LSP 3.17 clients.
+    if !label_extra.eq("") || !module.eq("") {
+        let ld: *JsonValue = json_object();
+        if !label_extra.eq("") { json_obj_set(ld, "detail", json_string(label_extra)); }
+        if !module.eq("") { json_obj_set(ld, "description", json_string(module)); }
+        json_obj_set(it, "labelDetails", ld);
+    }
+
+    // detail: `[<module>]  <signature>`. Module *leads* the line so
+    // long signatures truncate on the right without hiding the source
+    // package — Zed and similar editors can't paint slices of a
+    // string in different colors, so we wrap the module in brackets
+    // as the universal "this is a metadata tag" cue. LSP 3.17 clients
+    // ALSO get the module via labelDetails.description above for the
+    // rust-analyzer / gopls right-aligned layout.
+    let mut det: string = "";
+    if !module.eq("") { det = "[".concat(module).concat("]"); }
+    if !signature.eq("") {
+        if det.eq("") { det = signature; }
+        else { det = det.concat("  ").concat(signature); }
+    }
+    if !det.eq("") { json_obj_set(it, "detail", json_string(det)); }
+
+    // filterText: makes the item discoverable from a wider range of
+    // queries. Several editors (Zed, VS Code at lower setting) use a
+    // prefix or fuzzy match against filterText, so we order it
+    // lower-first to give `hashmap` the best chance of matching
+    // `HashMap`. The user can also find the symbol via the original
+    // label or the module path:
+    //   `hashmap`, `hash`, `HashMap`, `stdlib::hashmap`
+    // gopls and rust-analyzer use the same trick.
+    let lower: string = ascii_to_lower(label);
+    let mut filter: string = lower;
+    if !lower.eq(label) { filter = filter.concat(" ").concat(label); }
+    if !module.eq("") {
+        filter = filter.concat(" ").concat(module);
+        let mlower: string = ascii_to_lower(module);
+        if !mlower.eq(module) { filter = filter.concat(" ").concat(mlower); }
+        // Each path SEGMENT as a standalone token, so typing a single
+        // folder/module name (`te`) matches a `te::al` symbol — not only the
+        // full path (`te::al`) or the symbol name. Editors that prefix-match
+        // per token then surface the symbol when you type the folder name.
+        let segs: *Vector<string> = mlower.split("::");
+        for let si: i32 = 0; si < segs.len(); si++ {
+            let sg: string = segs.get(si);
+            if !sg.eq("") { filter = filter.concat(" ").concat(sg); }
+        }
+    }
+    json_obj_set(it, "filterText", json_string(filter));
+
+    // documentation: markdown — fenced signature + horizontal rule + doc.
+    let mut md: string = "";
+    if !signature.eq("") {
+        md = "```glide\n".concat(signature).concat("\n```");
+    }
+    if !doc.eq("") {
+        if !md.eq("") { md = md.concat("\n\n---\n\n"); }
+        md = md.concat(doc);
+    }
+    if !module.eq("") {
+        if !md.eq("") { md = md.concat("\n\n"); }
+        md = md.concat("From ").concat("`").concat(module).concat("`");
+    }
+    if !md.eq("") {
+        let docobj: *JsonValue = json_object();
+        json_obj_set(docobj, "kind", json_string("markdown"));
+        json_obj_set(docobj, "value", json_string(md));
+        json_obj_set(it, "documentation", docobj);
+    }
+
+    // Snippet body: only when the symbol is a callable and the editor
+    // supports snippets. Falls back to plain insert.
+    if has_snippet && !snippet.eq("") {
+        json_obj_set(it, "insertText", json_string(snippet));
+        json_obj_set(it, "insertTextFormat", json_int(2));   // 2 = Snippet
+    } else {
+        json_obj_set(it, "insertText", json_string(label));
+        json_obj_set(it, "insertTextFormat", json_int(1));   // 1 = PlainText
+    }
+
+    // Auto-import edit (caller-supplied; null = no edit).
+    if import_edit != null {
+        let edits: *JsonValue = json_array();
+        json_arr_push(edits, import_edit);
+        json_obj_set(it, "additionalTextEdits", edits);
+    }
+
+    return it;
+}
+
+// ASCII-lowercase a string. Bytes 0x41..0x5A get +0x20; everything else
+// passes through.
+fn ascii_to_lower(s: string) -> string {
+    let n: i32 = s.len();
+    let mut out: string = "";
+    for let i: i32 = 0; i < n; i++ {
+        let c: i32 = s.at(i).to_int();
+        if c >= 65 && c <= 90 {
+            out = out.concat(((c + 32) as char).to_string());
+        } else {
+            out = out.concat(s.substring(i, i + 1));
+        }
+    }
+    return out;
+}
+
+// Map an origin path back to a short module label, gopls-style:
+//   .../src/stdlib/math.glide   -> "stdlib::math"
+//   .../src/builtins/vector.glide -> "builtins::vector"
+//   anything else (the user's own file) -> ""
+// Convert an absolute source path into a Glide module path so the
+// editor can show "stdlib::http" / "stdlib::http::router" /
+// "builtins::vector" next to each completion item.
+//
+// Strategy:
+//   1. Normalise separators so the rest of the logic works on either
+//      `/` or `\` paths (Windows file:// URIs come with backslashes).
+//   2. Split into segments.
+//   3. Find the first "stdlib" or "builtins" segment from the right.
+//      Everything after it (joined by `::`, with `.glide` stripped
+//      from the last segment) is the module path.
+//   4. Fall back to "" for paths that aren't under either tree —
+//      the user's own files don't get a synthetic label (callers can
+//      decide whether to label them by project name separately).
+fn pretty_module(origin: string) -> string {
+    if origin == null || origin.eq("") { return ""; }
+    let parts: *Vector<string> = _split_path(origin);
+    if parts.len() < 2 { return ""; }
+    // Walk back to the last "stdlib" or "builtins" segment.
+    let mut anchor: i32 = -1;
+    let mut prefix: string = "";
+    for let i: i32 = parts.len() - 1; i >= 0; i-- {
+        let seg: string = parts.get(i);
+        if seg.eq("stdlib") { anchor = i; prefix = "stdlib"; break; }
+        if seg.eq("builtins") { anchor = i; prefix = "builtins"; break; }
+    }
+    if anchor < 0 { return ""; }
+    let mut out: string = prefix;
+    for let i: i32 = anchor + 1; i < parts.len(); i++ {
+        let mut seg: string = parts.get(i);
+        if i == parts.len() - 1 { seg = drop_glide_ext(seg); }
+        // Collapse `builtins::builtins` / `stdlib::stdlib` to the
+        // single root — the file at the root of the namespace
+        // shouldn't read like it lives in its own sub-module.
+        if i == parts.len() - 1 && seg.eq(prefix) { continue; }
+        out = out.concat("::").concat(seg);
+    }
+    return out;
+}
+
+// `<manifest-root>/src/` for the open doc, slash-normalized, or "" when the
+// file isn't inside a Glide project. Computed once per completion request so
+// the per-decl module derivation below is a cheap prefix strip (no fs walk).
+fn _proj_src_prefix(doc_path: string) -> string {
+    if doc_path == null || doc_path.eq("") { return ""; }
+    let root: string = find_manifest_root(parent_dir(doc_path));
+    if root.eq("") { return ""; }
+    return root.replace("\\", "/").concat("/src/");
+}
+
+// Canonical import module for a project file under `src/`, e.g.
+// `…/src/al.glide` -> `al`, `…/src/x/foo.glide` -> `x::foo`. Returns "" when
+// `origin` isn't under this project's src (stdlib / deps / unknown). Mirrors
+// the naming `_index_stdlib_subtree` gives project modules so the module key
+// matches what `import …;` lines and the project index use.
+fn _module_under_src(origin: string, src_prefix: string) -> string {
+    if origin == null || origin.eq("") || src_prefix.eq("") { return ""; }
+    let norm: string = origin.replace("\\", "/");
+    let pl: i32 = src_prefix.len();
+    if norm.len() <= pl { return ""; }
+    if !norm.substring(0, pl).eq(src_prefix) { return ""; }
+    let mut rel: string = norm.substring(pl, norm.len());
+    let rn: i32 = rel.len();
+    if rn > 6 && rel.substring(rn - 6, rn).eq(".glide") { rel = rel.substring(0, rn - 6); }
+    return rel.replace("/", "::");
+}
+
+// Path split that accepts both `/` and `\`. Empty segments (leading
+// slash, doubled separator) are dropped.
+fn _split_path(p: string) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    if p == null { return out; }
+    let n: i32 = p.len();
+    let mut start: i32 = 0;
+    for let i: i32 = 0; i < n; i++ {
+        let c: i32 = p.at(i).to_int();
+        if c == 47 || c == 92 {
+            if i > start { out.push(p.substring(start, i)); }
+            start = i + 1;
+        }
+    }
+    if start < n { out.push(p.substring(start, n)); }
+    return out;
+}
+
+// Push completion items for every `pub` symbol whose module path matches
+// `path`. Accepts both fully-qualified ("stdlib::math") and short
+// ("math") forms. The single-segment "stdlib" path is special-cased to
+// list the available submodules instead of symbols.
+fn list_module_members(state: *LspState, path: string,
+                       items: *JsonValue, seen: *HashMap<bool>) {
+    if state.stdlib_index != null {
+        _list_module_members_from(state.stdlib_index, path, items, seen);
+    }
+    if state.project_index != null {
+        _list_module_members_from(state.project_index, path, items, seen);
+    }
+}
+
+fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string,
+                             items: *JsonValue, seen: *HashMap<bool>) {
+    let n: i32 = idx.len();
+
+    // Pass 1: list immediate child modules. `path = "stdlib"` yields
+    // every top-level stdlib module; `path = "stdlib::http"` yields
+    // client/cookies/h2/etc. Same shape works for project namespaces.
+    let prefix: string = path.concat("::");
+    let mods: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != SYMKIND_MODULE { continue; }
+        if !sym.module.starts_with(prefix) { continue; }
+        let rest: string = sym.module.substring(prefix.len(), sym.module.len());
+        if rest.eq("") { continue; }
+        // First remaining segment: a leaf module gives its own name, a
+        // deeper path (`net::tcp`) gives the package `net` — so dir-only
+        // packages (net, mail) show alongside file modules (http).
+        let cc: i32 = rest.index_of("::");
+        let mut seg: string = rest;
+        if cc >= 0 { seg = rest.substring(0, cc); }
+        if seg.eq("") { continue; }
+        if mods.contains(seg) { continue; }
+        mods.insert(seg, true);
+        if seen.contains(seg) { continue; }
+        seen.insert(seg, true);
+        let no_edit: *JsonValue = null;
+        json_arr_push(items, rich_completion_item(
+            seg, "", 9, "module ".concat(seg),
+            "submodule of `".concat(path).concat("`"), "", seg, false, no_edit));
+    }
+    mods.free();
+
+    // Pass 2: members of the module whose path equals `path`. Accept
+    // the short leaf too so the user can type either form. Also fold in
+    // the function-like proc-macros from the module's `_macros` sibling
+    // (e.g. `stdlib::log_macros` for `stdlib::log`) as `name!` — they're
+    // re-exported by the base module and `log::info!(...)` is a valid
+    // qualified macro call, so `log::inf` should offer `info!`.
+    let pm_mod: string = path.concat("_macros");
+    // When some module's FULL path equals `path` (e.g. the user typed
+    // `foo::` and a top-level `foo` module exists), that's an unambiguous
+    // hit, so only its members belong here. The short-leaf fallback below
+    // (`leaf.eq(path)`) must then be suppressed, or an unrelated module
+    // whose last segment happens to be `foo` (e.g. `x::foo`) would leak
+    // its symbols into `foo::` completion, and those don't resolve as
+    // `foo::sym`. The leaf form is still allowed when no exact module
+    // matches, so stdlib short qualifiers (`ip::` -> `stdlib::net::ip`)
+    // keep working.
+    let mut exact_exists: bool = false;
+    for let e: i32 = 0; e < n; e++ {
+        let es: ImportableSym = idx.get(e);
+        if es.module.eq(path) { exact_exists = true; break; }
+    }
+    for let i: i32 = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind == SYMKIND_MODULE { continue; }
+        let m: string = sym.module;
+        // Leaf = the LAST `::` segment, so a nested module like
+        // `stdlib::net::ip` matches the short qualifier `ip` (not `net::ip`).
+        let mut last_cc: i32 = -1;
+        let mlen: i32 = m.len();
+        for let k: i32 = 0; k + 1 < mlen; k++ {
+            if m.at(k).to_int() == 58 && m.at(k + 1).to_int() == 58 { last_cc = k; }
+        }
+        let mut leaf: string = m;
+        if last_cc >= 0 { leaf = m.substring(last_cc + 2, mlen); }
+        let mut own: bool = m.eq(path);
+        if !exact_exists && leaf.eq(path) { own = true; }
+        let pm_reexport: bool = sym.kind == SYMKIND_PROC_MACRO
+                                && (m.eq(pm_mod) || leaf.eq(pm_mod));
+        if !own && !pm_reexport { continue; }
+        // proc-attrs / proc-derives aren't callable as `mod::name`.
+        if sym.kind == SYMKIND_PROC_ATTR || sym.kind == SYMKIND_PROC_DERIVE { continue; }
+        let mut label: string = sym.name;
+        if sym.kind == SYMKIND_PROC_MACRO || sym.kind == ST_MACRO_DEF {
+            label = sym.name.concat("!");
+        }
+        if seen.contains(label) { continue; }
+        seen.insert(label, true);
+        let no_edit2: *JsonValue = null;
+        let item: *JsonValue = rich_completion_item(
+            label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
+            sym.signature, sym.doc, sym.module,
+            sym.snippet, sym.has_snippet, no_edit2);
+        json_arr_push(items, item);
+    }
+}
+
+// Find the first occurrence of `needle` in `haystack`. Returns -1 if
+// missing. Works on bytes; fine for ASCII module names.
+fn find_substr(haystack: string, needle: string) -> i32 {
+    let hn: i32 = haystack.len();
+    let nn: i32 = needle.len();
+    if nn == 0 { return 0; }
+    if nn > hn { return -1; }
+    let limit: i32 = hn - nn;
+    let mut i: i32 = 0;
+    while i <= limit {
+        let mut k: i32 = 0;
+        while k < nn && haystack.at(i + k).to_int() == needle.at(k).to_int() {
+            k = k + 1;
+        }
+        if k == nn { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// LSP CompletionItemKind for a Stmt kind. Mirrors ci_kind_for, kept here
+// so populate_stdlib_index doesn't need the rest of the file in scope.
+fn ci_kind_for_stmt_kind(k: i32) -> i32 {
+    if k == SYMKIND_MODULE { return 9; }  // Module
+    if k == ST_FN { return 3; }           // Function
+    if k == ST_STRUCT { return 22; }      // Struct
+    if k == ST_ENUM { return 13; }        // Enum
+    if k == ST_CONST { return 21; }       // Constant
+    if k == ST_TRAIT { return 8; }        // Interface
+    return 1;                              // Text fallback
+}
+
+// If the cursor sits right after `mod::` or `a::b::…::` (where every
+// segment starts with a lower-case letter), return the joined path. Used
+// by completion to list the symbols inside a stdlib module the user is
+// drilling into. Returns "" when no module-style path precedes the cursor.
+//
+// Examples accepted:
+//   `hashmap::|`            -> "hashmap"
+//   `stdlib::hashmap::|`    -> "stdlib::hashmap"
+//   `stdlib::|`             -> "stdlib"      (caller may list submodules)
+// Examples rejected:
+//   `HashMap::|`            -> "" (type qualifier; path_qualifier_before)
+//   `stdlib::Hashmap::|`    -> "" (mixed-case; ambiguous, skipped)
+fn module_path_before(text: string, line0: i32, col0: i32) -> string {
+    let p: i32 = cursor_before_partial(text, line0, col0);
+    if p < 2 { return ""; }
+    if text.at(p - 1).to_int() != 58 || text.at(p - 2).to_int() != 58 { return ""; }
+    let mut end: i32 = p - 2;
+    let segments: *Vector<string> = Vector::new();
+    while true {
+        let mut start: i32 = end;
+        while start > 0 {
+            let c: i32 = text.at(start - 1).to_int();
+            if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+               || (c >= 48 && c <= 57) || c == 95 {
+                start = start - 1;
+            } else { break; }
+        }
+        if start >= end { break; }
+        let seg: string = text.substring(start, end);
+        // Modules are lower-case; bail as soon as a segment isn't.
+        let f: i32 = seg.at(0).to_int();
+        if f < 97 || f > 122 { return ""; }
+        segments.push(seg);
+        if start >= 2 && text.at(start - 1).to_int() == 58
+                      && text.at(start - 2).to_int() == 58 {
+            end = start - 2;
+            continue;
+        }
+        break;
+    }
+    let n: i32 = segments.len();
+    if n == 0 { return ""; }
+    // A lone lowercase primitive (`u256::`, `i32::`) is a TYPE qualifier, not
+    // a module path — hand it to path_qualifier_before instead.
+    if n == 1 && _is_canon_prim(segments.get(0)) { return ""; }
+    let mut out: string = segments.get(n - 1);
+    for let i: i32 = n - 2; i >= 0; i = i - 1 {
+        out = out.concat("::").concat(segments.get(i));
+    }
+    return out;
+}
+
+// Detect attribute-style completion contexts.
+//   0 = not in an attribute
+//   1 = right after `@` (bare attr name, e.g. `@h|`, `@derive`)
+//   2 = inside `@derive(...)` arg list
+fn _attribute_context(text: string, end_pos: i32) -> i32 {
+    // Walk back over any partial ident already typed after `@` / `(` / `,`.
+    let mut i: i32 = end_pos - 1;
+    while i >= 0 {
+        let c: i32 = text.at(i).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+           || (c >= 48 && c <= 57) || c == 95 { i = i - 1; } else { break; }
+    }
+    if i < 0 { return 0; }
+    let here: i32 = text.at(i).to_int();
+    if here == 64 { return 1; }  // `@`
+    // Inside `@derive(<...>)` — walk further left looking for an unmatched
+    // `(` preceded by `derive` preceded by `@`.
+    if here == 40 || here == 44 || here == 32 {
+        let mut j: i32 = i;
+        while j > 0 {
+            let c2: i32 = text.at(j).to_int();
+            if c2 == 10 { return 0; }
+            if c2 == 40 {
+                let name_end: i32 = j;
+                let mut k: i32 = name_end - 1;
+                while k >= 0 {
+                    let cc: i32 = text.at(k).to_int();
+                    if (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122)
+                       || (cc >= 48 && cc <= 57) || cc == 95 { k = k - 1; }
+                    else { break; }
+                }
+                if k < 0 { return 0; }
+                let attr_name: string = text.substring(k + 1, name_end);
+                if k >= 0 && text.at(k).to_int() == 64 && attr_name.eq("derive") {
+                    return 2;
+                }
+                return 0;
+            }
+            j = j - 1;
+        }
+    }
+    return 0;
+}
+
+fn _push_attr_completions(doc: LspDoc, state: *LspState, items: *JsonValue, seen: *HashMap<bool>) {
+    // Built-in attributes recognised by the compiler.
+    let builtins: *Vector<string> = Vector::new();
+    builtins.push("cfg"); builtins.push("derive"); builtins.push("expect");
+    builtins.push("allow"); builtins.push("deprecated"); builtins.push("lint");
+    builtins.push("proc_attr"); builtins.push("proc_derive");
+    builtins.push("proc_macro"); builtins.push("proc_macro_str");
+    builtins.push("suggest"); builtins.push("leaf");
+    builtins.push("used"); builtins.push("section");
+    for let i: i32 = 0; i < builtins.len(); i++ {
+        let nm: string = builtins.get(i);
+        if seen.contains(nm) { continue; }
+        seen.insert(nm, true);
+        json_arr_push(items, completion_item(nm, 2, "attribute"));
+    }
+    // Locally registered proc-attrs (already imported).
+    if doc.proc_attrs != null {
+        for let i: i32 = 0; i < doc.proc_attrs.len(); i++ {
+            let nm: string = doc.proc_attrs.get(i);
+            if seen.contains(nm) { continue; }
+            seen.insert(nm, true);
+            json_arr_push(items, completion_item(nm, 2, "proc-attr"));
+        }
+    }
+    // Non-imported proc-attrs from stdlib / project index — surface with
+    // an auto-import edit so the user can pick `@handler` without first
+    // typing `import stdlib::http::handler;`.
+    _push_proc_index_items(state.stdlib_index, doc, SYMKIND_PROC_ATTR, "proc-attr", 2, items, seen);
+    _push_proc_index_items(state.project_index, doc, SYMKIND_PROC_ATTR, "proc-attr", 2, items, seen);
+}
+
+fn _push_derive_completions(doc: LspDoc, state: *LspState, items: *JsonValue, seen: *HashMap<bool>) {
+    if doc.proc_derives != null {
+        for let i: i32 = 0; i < doc.proc_derives.len(); i++ {
+            let nm: string = doc.proc_derives.get(i);
+            if seen.contains(nm) { continue; }
+            seen.insert(nm, true);
+            json_arr_push(items, completion_item(nm, 7, "derive"));  // 7 = Class
+        }
+    }
+    _push_proc_index_items(state.stdlib_index, doc, SYMKIND_PROC_DERIVE, "derive", 7, items, seen);
+    _push_proc_index_items(state.project_index, doc, SYMKIND_PROC_DERIVE, "derive", 7, items, seen);
+}
+
+// Walk an importable-symbol index for entries of `want_kind` and push a
+// completion item with the auto-import edit, so the user can pick a
+// proc-derive / proc-attr without having to know which stdlib submodule
+// it lives in.
+fn _push_proc_index_items(idx: *Vector<ImportableSym>, doc: LspDoc,
+                           want_kind: i32, detail: string, ci_kind: i32,
+                           items: *JsonValue, seen: *HashMap<bool>) {
+    if idx == null { return; }
+    let imps: *HashMap<ImportInfo> = current_imports(doc.text);
+    let insert_line: i32 = find_import_insertion_pos(doc.text);
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != want_kind { continue; }
+        if sym.name == null || seen.contains(sym.name) { continue; }
+        seen.insert(sym.name, true);
+        let mut existing: *ImportInfo = null;
+        if imps.contains(sym.module) {
+            let info_val: ImportInfo = imps.get(sym.module);
+            existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+            *existing = info_val;
+        }
+        let edit: *JsonValue = build_import_edit(
+            sym.name, sym.module, existing, insert_line, false);
+        let item: *JsonValue = rich_completion_item(
+            sym.name, "", ci_kind,
+            detail.concat(" ").concat(sym.name), sym.doc, sym.module,
+            sym.name, false, edit);
+        json_arr_push(items, item);
+    }
+    imps.free();
+}
+
+// Walk every loaded stmt (user file + builtins + transitively-imported
+// stdlib modules) collecting macro definitions and proc-macro
+// registrations. Run before `expand_macros` consumes them so the
+// completion handler still has the names.
+pub fn _harvest_macro_defs(
+    stmts: *Vector<Stmt>,
+    out_macros: *Vector<Stmt>,
+    out_impl_macros: *Vector<Stmt>,
+    out_attrs: *Vector<string>,
+    out_derives: *Vector<string>,
+    out_fns: *Vector<string>,
+) {
+    if stmts == null { return; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_MACRO_DEF && s.name != null { out_macros.push(s); continue; }
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_MACRO_DEF && m.name != null { out_impl_macros.push(m); }
+            }
+        }
+        if s.kind == ST_FN && s.attrs != null {
+            for let j: i32 = 0; j < s.attrs.len(); j++ {
+                let a: Attr = s.attrs.get(j);
+                if a.name == null { continue; }
+                if a.args == null || a.args.len() == 0 { continue; }
+                let ne: Expr = a.args.get(0);
+                if ne.kind != EX_IDENT { continue; }
+                if a.name.eq("proc_attr")        { out_attrs.push(ne.str_val); }
+                else if a.name.eq("proc_derive") { out_derives.push(ne.str_val); }
+                else if a.name.eq("proc_macro")     { out_fns.push(ne.str_val); }
+                else if a.name.eq("proc_macro_str") { out_fns.push(ne.str_val); }
+            }
+        }
+    }
+}
+
+// True if the cursor at (`line0`, `col0`) sits inside a string literal,
+// char literal, or `//` line comment. Walks from start-of-file tracking
+// state so multi-line strings (rare but legal — the lexer keeps reading
+// until the closing `"`) are handled correctly. Block-comment style
+// `/* ... */` isn't lexed by Glide so it's left out.
+fn _cursor_in_string_or_comment(text: string, line0: i32, col0: i32) -> bool {
+    let n: i32 = text.len();
+    let mut pos: i32 = 0;
+    let mut line: i32 = 0;
+    while pos < n && line < line0 {
+        if text.at(pos).to_int() == 10 { line = line + 1; }
+        pos = pos + 1;
+    }
+    let mut target: i32 = pos + col0;
+    if target > n { target = n; }
+    let mut in_str: bool = false;
+    let mut in_chr: bool = false;
+    let mut in_lc: bool = false;
+    let mut i: i32 = 0;
+    while i < target {
+        let c: i32 = text.at(i).to_int();
+        // Line comment: lasts until newline. Reset at newline.
+        if in_lc {
+            if c == 10 { in_lc = false; }
+            i = i + 1;
+            continue;
+        }
+        if in_str {
+            if c == 92 && i + 1 < target { i = i + 2; continue; }  // \X
+            if c == 34 { in_str = false; }
+            i = i + 1;
+            continue;
+        }
+        if in_chr {
+            if c == 92 && i + 1 < target { i = i + 2; continue; }
+            if c == 39 { in_chr = false; }
+            i = i + 1;
+            continue;
+        }
+        if c == 34 { in_str = true; i = i + 1; continue; }
+        if c == 39 { in_chr = true; i = i + 1; continue; }
+        if c == 47 && i + 1 < target && text.at(i + 1).to_int() == 47 {
+            in_lc = true;
+            i = i + 2;
+            continue;
+        }
+        i = i + 1;
+    }
+    return in_str || in_chr || in_lc;
+}
+
+fn _match_paren_back(text: string, close_pos: i32) -> i32 {
+    if close_pos < 0 { return -1; }
+    if text.at(close_pos).to_int() != 41 { return -1; }
+    let mut depth: i32 = 1;
+    let mut i: i32 = close_pos - 1;
+    while i >= 0 {
+        let c: i32 = text.at(i).to_int();
+        if c == 41 { depth = depth + 1; }
+        else if c == 40 { depth = depth - 1; if depth == 0 { return i; } }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn _match_brack_back(text: string, close_pos: i32) -> i32 {
+    if close_pos < 0 { return -1; }
+    if text.at(close_pos).to_int() != 93 { return -1; }
+    let mut depth: i32 = 1;
+    let mut i: i32 = close_pos - 1;
+    while i >= 0 {
+        let c: i32 = text.at(i).to_int();
+        if c == 93 { depth = depth + 1; }
+        else if c == 91 { depth = depth - 1; if depth == 0 { return i; } }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn _ident_start_back(text: string, end_i: i32) -> i32 {
+    let mut i: i32 = end_i;
+    while i >= 0 {
+        let c: i32 = text.at(i).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 {
+            i = i - 1;
+        } else { break; }
+    }
+    return i + 1;
+}
+
+// Strip pointer/borrow wrappers and return the resulting node. null on null.
+pub fn _strip_ptr_borrow(t: *Type) -> *Type {
+    let mut x: *Type = t;
+    while x != null && (x.kind == TY_POINTER || x.kind == TY_BORROW || x.kind == TY_BORROW_MUT) {
+        x = x.inner;
+    }
+    return x;
+}
+
+// Find an impl method named `method_name` on `type_name`, return its
+// declared return type. null if not found.
+fn _impl_method_ret(stmts: *Vector<Stmt>, type_name: string, method_name: string) -> *Type {
+    if stmts == null { return null; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_target == null || s.impl_target.name == null
+           || !s.impl_target.name.eq(type_name) { continue; }
+        if s.impl_methods == null { continue; }
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind != ST_FN || m.name == null || !m.name.eq(method_name) { continue; }
+            return m.fn_ret_ty;
+        }
+    }
+    return null;
+}
+
+// Resolve a method call on a receiver type to its return type.
+fn _method_ret_type(stmts: *Vector<Stmt>, recv: *Type, method_name: string) -> *Type {
+    let x: *Type = _strip_ptr_borrow(recv);
+    if x == null { return null; }
+    if x.kind != TY_NAMED && x.kind != TY_GENERIC { return null; }
+    return _impl_method_ret(stmts, x.name, method_name);
+}
+
+// Look up a struct field type by struct + field name.
+fn _struct_field_type(stmts: *Vector<Stmt>, recv: *Type, field_name: string) -> *Type {
+    let x: *Type = _strip_ptr_borrow(recv);
+    if x == null { return null; }
+    // Virtual fields of `!T` / `?T` / `?!T`: `.val` reaches the payload (so a
+    // chain like `r.val.<method>` resolves the inner type), `.ok` / `.has`
+    // are bool, `.err` is the error string. Without this, member completion
+    // after `result.val.` resolved to nothing.
+    if x.kind == TY_RESULT || x.kind == TY_OPTION || x.kind == TY_OPT_RESULT {
+        if field_name.eq("val") { return x.inner; }
+        if field_name.eq("ok") || field_name.eq("has") { return ty_named("bool"); }
+        if field_name.eq("err") { return ty_named("string"); }
+        return null;
+    }
+    if x.kind != TY_NAMED && x.kind != TY_GENERIC { return null; }
+    if stmts == null { return null; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_STRUCT || !s.name.eq(x.name) { continue; }
+        if s.struct_fields == null { continue; }
+        for let j: i32 = 0; j < s.struct_fields.len(); j++ {
+            let f: Field = s.struct_fields.get(j);
+            if f.name.eq(field_name) { return f.ty; }
+        }
+    }
+    return null;
+}
+
+// Look up a top-level fn's return type by name.
+fn _fn_ret_type(stmts: *Vector<Stmt>, fn_name: string) -> *Type {
+    if stmts == null { return null; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_FN && s.name != null && s.name.eq(fn_name) {
+            return s.fn_ret_ty;
+        }
+    }
+    return null;
+}
+
+// Look up a local (let / param / closure-param / for-init / etc.) by name
+// at the cursor line and return its AST type — strips nothing so callers
+// can see `*HttpRequest`, `!int`, `?string` etc. as-is.
+pub fn _local_type_node(stmts: *Vector<Stmt>, line0: i32, var: string, path: string) -> *Type {
+    return _local_type_node_d(stmts, line0, var, path, 0);
+}
+
+// Depth-tracked variant. `depth` bounds the let -> value -> ident -> let
+// recursion so a cyclic source (`let a = b.f(); let b = a.g();`, possible
+// mid-edit) can't spin the resolver into a stack overflow.
+fn _local_type_node_d(stmts: *Vector<Stmt>, line0: i32, var: string, path: string, depth: i32) -> *Type {
+    if depth > 32 { return null; }
+    let host: *Stmt = fn_containing(stmts, line0, path);
+    if host == null { return null; }
+    if host.fn_params != null {
+        for let i: i32 = 0; i < host.fn_params.len(); i++ {
+            let p: Param = host.fn_params.get(i);
+            if p.name.eq(var) { return p.ty; }
+        }
+    }
+    return _scope_var_node(host.fn_body, line0, var, stmts, path, depth);
+}
+
+fn _scope_var_node(body: *Vector<Stmt>, line0: i32, var: string, root: *Vector<Stmt>, path: string, depth: i32) -> *Type {
+    if body == null { return null; }
+    let mut found: *Type = null;
+    let mut container_idx: i32 = -1;
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if s.line - 1 > line0 { break; }
+        if s.kind == ST_LET && s.name != null && s.name.eq(var) && s.line - 1 < line0 {
+            let n: *Type = _let_node_type(&s, root, line0, path, depth);
+            if n != null { found = n; }
+        }
+        if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET
+           && s.for_init.name != null && s.for_init.name.eq(var)
+           && s.for_init.line - 1 <= line0 {
+            let n: *Type = _let_node_type(s.for_init, root, line0, path, depth);
+            if n != null { found = n; }
+        }
+        container_idx = i;
+    }
+    if container_idx >= 0 {
+        let s: Stmt = body.get(container_idx);
+        let r1: *Type = _scope_var_node(s.then_body, line0, var, root, path, depth);
+        if r1 != null { return r1; }
+        let r2: *Type = _scope_var_node(s.else_body, line0, var, root, path, depth);
+        if r2 != null { return r2; }
+        if s.kind == ST_MATCH && s.arms != null {
+            for let j: i32 = 0; j < s.arms.len(); j++ {
+                let arm: MatchArm = s.arms.get(j);
+                let ra: *Type = _scope_var_node(arm.body, line0, var, root, path, depth);
+                if ra != null { return ra; }
+            }
+        }
+        let re1: *Type = _expr_var_node(s.let_value, line0, var, root, path, depth);
+        if re1 != null { return re1; }
+        let re2: *Type = _expr_var_node(s.expr_value, line0, var, root, path, depth);
+        if re2 != null { return re2; }
+        let re3: *Type = _expr_var_node(s.cond, line0, var, root, path, depth);
+        if re3 != null { return re3; }
+        let re4: *Type = _expr_var_node(s.for_step, line0, var, root, path, depth);
+        if re4 != null { return re4; }
+    }
+    return found;
+}
+
+fn _expr_var_node(e: *Expr, line0: i32, var: string, root: *Vector<Stmt>, path: string, depth: i32) -> *Type {
+    if e == null { return null; }
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null && p.name.eq(var) { return p.ty; }
+            }
+        }
+        if e.fn_expr_body != null && e.line - 1 <= line0 {
+            let rb: *Type = _scope_var_node(e.fn_expr_body, line0, var, root, path, depth);
+            if rb != null { return rb; }
+        }
+    }
+    let r1: *Type = _expr_var_node(e.lhs, line0, var, root, path, depth);
+    if r1 != null { return r1; }
+    let r2: *Type = _expr_var_node(e.rhs, line0, var, root, path, depth);
+    if r2 != null { return r2; }
+    let r3: *Type = _expr_var_node(e.operand, line0, var, root, path, depth);
+    if r3 != null { return r3; }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let ra: *Type = _expr_var_node(&a, line0, var, root, path, depth);
+            if ra != null { return ra; }
+        }
+    }
+    return null;
+}
+
+// Type of a let's binding: explicit annotation first, otherwise resolve the
+// initializer expression through `_expr_type_node` (handles `Type::ctor()`,
+// plain calls, member chains, method calls with Vector element substitution,
+// and literals). `line0` / `path` locate the enclosing scope for any locals
+// the value references; `depth` bounds cyclic resolution.
+pub fn _let_node_type(s: *Stmt, root: *Vector<Stmt>, line0: i32, path: string, depth: i32) -> *Type {
+    if s == null { return null; }
+    if s.let_ty != null { return s.let_ty; }
+    return _expr_type_node(s.let_value, root, line0, path, depth);
+}
+
+// Trailing segment of a `::`-joined path: `stdlib::net::dns` -> `dns`,
+// `Vector` -> `Vector`. Used to recover the bare type / fn name from a
+// module-qualified EX_PATH.
+pub fn _last_path_seg(s: string) -> string {
+    if s == null { return ""; }
+    let n: i32 = s.len();
+    let mut last: i32 = -1;
+    for let k: i32 = 0; k + 1 < n; k++ {
+        if s.at(k).to_int() == 58 && s.at(k + 1).to_int() == 58 { last = k; }
+    }
+    if last < 0 { return s; }
+    return s.substring(last + 2, n);
+}
+
+// Resolve an expression's type via the AST — the parsed-tree counterpart to
+// the text-based `_chain_resolve_type`, used when we have the value Expr (a
+// let initializer) rather than source text. Lets `let v = a.b.c()` and the
+// lowered for-in binder `let x = __glide_iter.get(i)` resolve their type so
+// member completion works on them.
+pub fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, depth: i32) -> *Type {
+    if e == null || depth > 32 { return null; }
+    if e.kind == EX_IDENT {
+        return _local_type_node_d(root, line0, e.str_val, path, depth + 1);
+    }
+    if e.kind == EX_MEMBER {
+        let recv: *Type = _expr_type_node(e.lhs, root, line0, path, depth + 1);
+        return _struct_field_type(root, recv, e.field);
+    }
+    if e.kind == EX_CALL && e.lhs != null {
+        if e.lhs.kind == EX_PATH {
+            // The parser stores the joined prefix in `str_val` and the trailing
+            // segment in `field`. Two shapes land here:
+            //   * `Type::method(...)`   -> impl method on the (maybe module-
+            //     qualified) type; try the path verbatim, then the bare type.
+            //   * `mod::free_fn(...)`   -> a module-qualified free function,
+            //     e.g. `stdlib::net::dns::resolve(...)`; the call target is the
+            //     trailing `field`, resolved like any top-level fn.
+            let r1: *Type = _impl_method_ret(root, e.lhs.str_val, e.lhs.field);
+            if r1 != null { return r1; }
+            let bare: string = _last_path_seg(e.lhs.str_val);
+            if !bare.eq(e.lhs.str_val) {
+                let r2: *Type = _impl_method_ret(root, bare, e.lhs.field);
+                if r2 != null { return r2; }
+            }
+            return _fn_ret_type(root, e.lhs.field);
+        }
+        if e.lhs.kind == EX_IDENT {
+            return _fn_ret_type(root, e.lhs.str_val);
+        }
+        if e.lhs.kind == EX_MEMBER {
+            let recv: *Type = _expr_type_node(e.lhs.lhs, root, line0, path, depth + 1);
+            return _method_ret_subst(root, recv, e.lhs.field);
+        }
+    }
+    if e.kind == EX_UNARY {
+        // `expr?` yields the unwrapped T, so `let x = f()?` (no annotation)
+        // resolves `x` to T for member completion — not the !T/?T/?!T struct.
+        // `*p` unwraps a pointer the same way.
+        let ut: *Type = _expr_type_node(e.operand, root, line0, path, depth + 1);
+        if e.op_code == UN_TRY && ut != null
+           && (ut.kind == TY_RESULT || ut.kind == TY_OPTION || ut.kind == TY_OPT_RESULT) {
+            return ut.inner;
+        }
+        if e.op_code == UN_DEREF && ut != null && ut.kind == TY_POINTER {
+            return ut.inner;
+        }
+        return ut;
+    }
+    if e.kind == EX_STRING { return ty_named("string"); }
+    if e.kind == EX_INT    { return ty_named("i32"); }
+    if e.kind == EX_FLOAT  { return ty_named("f64"); }
+    if e.kind == EX_BOOL   { return ty_named("bool"); }
+    if e.kind == EX_CHAR   { return ty_named("char"); }
+    if e.kind == EX_STRUCT_LIT && e.str_val != null && !e.str_val.eq("") {
+        return ty_named(e.str_val);
+    }
+    return null;
+}
+
+// Method return type with `Vector<E>` element substitution: `.get(i)`,
+// `.first()`, `.last()`, `.pop()`, `.swap_remove(i)` yield the element type E
+// (what `vec[i]` resolves to), not the generic `T` the impl declares. Drives
+// member completion on a for-in binder. Anything else uses the declared ret.
+// Substitute a type-parameter name with a concrete type throughout `ty`.
+// Used to turn an impl method's generic return (`T`, `*Vector<T>`, `?T`) into
+// the concrete receiver element so chains like `v.filter(p).get(0)` resolve.
+fn _subst_param(ty: *Type, pname: string, elem: *Type) -> *Type {
+    if ty == null { return null; }
+    if ty.kind == TY_NAMED {
+        if ty.name != null && ty.name.eq(pname) { return elem; }
+        return ty;
+    }
+    if ty.kind == TY_POINTER { return ty_pointer(_subst_param(ty.inner, pname, elem)); }
+    if ty.kind == TY_OPTION  { return ty_option(_subst_param(ty.inner, pname, elem)); }
+    if ty.kind == TY_RESULT  { return ty_result(_subst_param(ty.inner, pname, elem)); }
+    if ty.kind == TY_OPT_RESULT { return ty_optres(_subst_param(ty.inner, pname, elem)); }
+    if ty.kind == TY_BORROW {
+        let b: *Type = malloc(sizeof(Type)) as *Type;
+        b.kind = TY_BORROW; b.inner = _subst_param(ty.inner, pname, elem); return b;
+    }
+    if ty.kind == TY_BORROW_MUT {
+        let b: *Type = malloc(sizeof(Type)) as *Type;
+        b.kind = TY_BORROW_MUT; b.inner = _subst_param(ty.inner, pname, elem); return b;
+    }
+    if ty.kind == TY_GENERIC {
+        let na: *Vector<Type> = Vector::new();
+        if ty.args != null {
+            for let i: i32 = 0; i < ty.args.len(); i++ {
+                let a: Type = ty.args.get(i);
+                let sub: *Type = _subst_param(&a, pname, elem);
+                if sub != null { na.push(*sub); }
+            }
+        }
+        return ty_generic(ty.name, na);
+    }
+    return ty;
+}
+
+// A method's return type with the receiving impl's type parameter resolved to
+// `elem`. The generic `impl<T> Vector<T>` declares `get -> T`, `filter ->
+// *Vector<T>`, `max -> ?T`, etc.; substituting `T` with the concrete element
+// keeps completion + goto flowing through combinator chains. Specialized impls
+// (`impl Vector<i32>`) have no type params, so their concrete return is used
+// as-is.
+fn _impl_method_ret_subst(root: *Vector<Stmt>, type_name: string, method: string, elem: *Type) -> *Type {
+    if root == null { return null; }
+    for let i: i32 = 0; i < root.len(); i++ {
+        let s: Stmt = root.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_target == null || s.impl_target.name == null
+           || !s.impl_target.name.eq(type_name) { continue; }
+        if s.impl_methods == null { continue; }
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind != ST_FN || m.name == null || !m.name.eq(method) { continue; }
+            if m.fn_ret_ty == null { return null; }
+            if s.type_params != null && s.type_params.len() >= 1 && elem != null {
+                return _subst_param(m.fn_ret_ty, s.type_params.get(0), elem);
+            }
+            return m.fn_ret_ty;
+        }
+    }
+    return null;
+}
+
+fn _method_ret_subst(root: *Vector<Stmt>, recv: *Type, method: string) -> *Type {
+    let x: *Type = _strip_ptr_borrow(recv);
+    if x != null && x.kind == TY_GENERIC && x.args != null && x.args.len() >= 1 {
+        let a: Type = x.args.get(0);
+        let elem: *Type = malloc(sizeof(Type)) as *Type;
+        *elem = a;
+        let r: *Type = _impl_method_ret_subst(root, x.name, method, elem);
+        if r != null { return r; }
+        // Fallback: well-known element-returning methods, in case the decl
+        // lookup missed (specialized-only impl, builtins not loaded, …).
+        if method.eq("get") || method.eq("first") || method.eq("last")
+           || method.eq("pop") || method.eq("swap_remove") {
+            return elem;
+        }
+    }
+    return _method_ret_type(root, recv, method);
+}
+
+// Resolve the type of the expression text ending at `end_pos` (exclusive)
+// in `text`. Recursive walker: handles ident, `x.field`, `x.method(args)`,
+// `Type::method(args)`, chained variants, and `v[i]` indexing. Returns
+// null when we can't resolve. Robust to expressions that don't end with
+// a parseable token (lets us answer completion at `expr.|`).
+// True if `s` is one or more ASCII digits and nothing else (a bare integer
+// literal token). Drives member completion on a literal receiver (`43.`).
+fn _all_digits(s: string) -> bool {
+    if s == null || s.len() == 0 { return false; }
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
+        if c < 48 || c > 57 { return false; }
+    }
+    return true;
+}
+
+pub fn _chain_resolve_type(text: string, end_pos: i32, stmts: *Vector<Stmt>, line0: i32, path: string) -> *Type {
+    if end_pos <= 0 || stmts == null { return null; }
+    let last_i: i32 = end_pos - 1;
+    let c: i32 = text.at(last_i).to_int();
+
+    // Call: `…(args)`
+    if c == 41 {
+        let open_i: i32 = _match_paren_back(text, last_i);
+        if open_i < 0 { return null; }
+        let m_start: i32 = _ident_start_back(text, open_i - 1);
+        let m_end: i32 = open_i;
+        if m_start >= m_end { return null; }
+        let method_name: string = text.substring(m_start, m_end);
+        let pre_i: i32 = m_start - 1;
+        if pre_i < 0 {
+            return _fn_ret_type(stmts, method_name);
+        }
+        let pc: i32 = text.at(pre_i).to_int();
+        if pc == 46 {
+            let recv: *Type = _chain_resolve_type(text, pre_i, stmts, line0, path);
+            // `_subst` so a chain past `vec.get(i)` / `.first()` / … resolves
+            // to the element type E (not the generic `T` the impl declares),
+            // which is what lets `dns.val.get(i).<member>` keep completing.
+            return _method_ret_subst(stmts, recv, method_name);
+        }
+        if pre_i >= 1 && pc == 58 && text.at(pre_i - 1).to_int() == 58 {
+            let t_end: i32 = pre_i - 1;
+            let t_start: i32 = _ident_start_back(text, t_end - 1);
+            if t_start >= t_end { return null; }
+            let type_name: string = text.substring(t_start, t_end);
+            return _impl_method_ret(stmts, type_name, method_name);
+        }
+        return _fn_ret_type(stmts, method_name);
+    }
+
+    // Literal receiver: `"".` → string, `'x'.` → char. A quote/apostrophe
+    // immediately before the `.` is the close of a literal, so member
+    // completion works directly on literals (`"".len()`).
+    if c == 34 { return ty_named("string"); }
+    if c == 39 { return ty_named("char"); }
+
+    // Indexing: `…[idx]` — for Vector<T>[i] return T.
+    if c == 93 {
+        let open_i: i32 = _match_brack_back(text, last_i);
+        if open_i < 0 { return null; }
+        let recv: *Type = _chain_resolve_type(text, open_i, stmts, line0, path);
+        let x: *Type = _strip_ptr_borrow(recv);
+        if x != null && x.kind == TY_GENERIC && x.args != null && x.args.len() > 0 {
+            let a: Type = x.args.get(0);
+            let p: *Type = malloc(sizeof(Type)) as *Type;
+            *p = a;
+            return p;
+        }
+        return null;
+    }
+
+    // Ident or member field
+    if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 {
+        let i_start: i32 = _ident_start_back(text, last_i);
+        let ident: string = text.substring(i_start, end_pos);
+        // Bare integer literal receiver: `43.` → i32, so member completion
+        // offers the int methods directly on a literal.
+        if _all_digits(ident) { return ty_named("i32"); }
+        let pre_i: i32 = i_start - 1;
+        if pre_i < 0 {
+            return _local_type_node(stmts, line0, ident, path);
+        }
+        let pc: i32 = text.at(pre_i).to_int();
+        if pc == 46 {
+            // `..` is the range operator, not field access — in `0..dns.val`
+            // the `dns` is a bare local, not a member of `0`. Without this the
+            // walker treats the second `.` of `..` as a member access and the
+            // whole chain (e.g. goto `len` in `for i in 0..dns.val.len()`)
+            // resolves to nothing.
+            if pre_i >= 1 && text.at(pre_i - 1).to_int() == 46 {
+                return _local_type_node(stmts, line0, ident, path);
+            }
+            let recv: *Type = _chain_resolve_type(text, pre_i, stmts, line0, path);
+            return _struct_field_type(stmts, recv, ident);
+        }
+        return _local_type_node(stmts, line0, ident, path);
+    }
+
+    return null;
+}
+
+// Push members of the receiver type into `items`. Handles `!T` (ok/val/err),
+// `?T` (has/val), `?!T` (has/ok/val/err), and named/generic types via the
+// existing list_fields/list_methods/list_chan helpers.
+// Push one primitive-type method completion with a doc + example. `ret` is
+// the return type shown in the signature.
+fn _prim_method(items: *JsonValue, seen: *HashMap<bool>, name: string, ret: string, doc: string) {
+    if seen.contains(name) { return; }
+    seen.insert(name, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(
+        name, "", 2, name.concat("(self) -> ").concat(ret), doc, "", "", false, no_edit));
+}
+
+// Methods on the primitive types. These are lowered by codegen, not written
+// in Glide source, so member completion (`c.` / `n.` / `b.`) would otherwise
+// show nothing for them — surface them here with a summary + a fenced
+// `glide` example, the same shape the documented stdlib uses.
+fn _list_primitive_methods(type_name: string, items: *JsonValue, seen: *HashMap<bool>) {
+    if type_name.eq("char") {
+        _prim_method(items, seen, "to_int", "int",
+            "The character's numeric code point.\n\n```glide\nlet c: char = 'A';\nc.to_int();   // 65\n```");
+        _prim_method(items, seen, "to_string", "string",
+            "A one-character `string` holding this char.\n\n```glide\n'x'.to_string();   // \"x\"\n```");
+        _prim_method(items, seen, "is_digit", "bool",
+            "True for `'0'` through `'9'`.\n\n```glide\n'7'.is_digit();   // true\n'a'.is_digit();   // false\n```");
+        _prim_method(items, seen, "is_alpha", "bool",
+            "True for an ASCII letter (`a`-`z` / `A`-`Z`).\n\n```glide\n'a'.is_alpha();   // true\n```");
+        return;
+    }
+    if type_name.eq("int") || type_name.eq("i8") || type_name.eq("i16")
+       || type_name.eq("i32") || type_name.eq("i64")
+       || type_name.eq("u8") || type_name.eq("u16") || type_name.eq("u32")
+       || type_name.eq("u64") || type_name.eq("i128") || type_name.eq("u128")
+       || type_name.eq("i256") || type_name.eq("u256")
+       || type_name.eq("usize") || type_name.eq("isize") {
+        _prim_method(items, seen, "abs", type_name,
+            "Absolute value.\n\n```glide\nlet n: i32 = -5;\nn.abs();   // 5\n```");
+        _prim_method(items, seen, "to_string", "string",
+            "Decimal text for this integer.\n\n```glide\nlet n: i32 = 42;\nn.to_string();   // \"42\"\n```");
+        return;
+    }
+    if type_name.eq("bool") {
+        _prim_method(items, seen, "to_string", "string",
+            "`\"true\"` or `\"false\"`.\n\n```glide\nlet ok: bool = true;\nok.to_string();   // \"true\"\n```");
+        return;
+    }
+}
+
+// Docs for the synthesized `!T` / `?T` / `?!T` virtual fields. These are
+// emitted by codegen, not declared anywhere, so member completion / hover
+// would otherwise show them bare. `_vfield` pushes one (deduped via `seen`)
+// with its type as the detail and markdown documentation.
+fn _vfield(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, doc: string) {
+    if seen.contains(name) { return; }
+    seen.insert(name, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(name, "", 5, sig, doc, "", "", false, no_edit));
+}
+
+// One intrinsic Option/Result method as a completion item (kind 2 = Method).
+// `snippet` is the insert text with `${n}` tab stops so the call + cursor
+// position is filled in. These are codegen intrinsics (_emit_opt_res_method),
+// not real fns, so the LSP wouldn't otherwise know about them.
+fn _orm(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, doc: string, snippet: string) {
+    if seen.contains(name) { return; }
+    seen.insert(name, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(name, sig, 2, sig, doc, "", snippet, true, no_edit));
+}
+
+// Surface the intrinsic methods of an Option (`?T`) or Result (`!T`) so the
+// editor offers `unwrap` / `map` / `unwrap_or` / `ok_or` / … and not just the
+// raw `.ok`/`.err`/`.val` fields. `inner` is the pretty inner type (T).
+// A snippet tab-stop `${body}`. Built by concat so the literal `${` never
+// appears in a single Glide string — otherwise Glide's own `${...}` string
+// interpolation would consume it (turning the snippet `unwrap_or(${1})` into
+// the broken `unwrap_or(1)`).
+fn _tab(body: string) -> string {
+    return "$".concat("{").concat(body).concat("}");
+}
+
+fn _list_opt_res_methods(items: *JsonValue, seen: *HashMap<bool>, is_opt: bool, is_res: bool, inner: string) {
+    let t: string = inner;
+    // `?U` for Option, `!U` for Result — the wrapper that map/and_then return.
+    let mut w: string = "!U";
+    if is_opt { w = "?U"; }
+    // A noun for the empty/failure branch, used in the prose.
+    let mut bad: string = "the result failed";
+    if is_opt { bad = "the option is empty"; }
+
+    // --- shared by Option and Result -------------------------------------
+    _orm(items, seen, "unwrap", "() -> ".concat(t),
+        "Returns the contained `".concat(t).concat("`, or **panics** when ").concat(bad)
+        .concat(".\n\nReach for `?` to propagate instead of crashing, or `unwrap_or` / `expect` for a graceful path.\n\n```glide\nlet n = \"42\".try_parse_int().unwrap();   // 42\n```"),
+        "unwrap()");
+    _orm(items, seen, "unwrap_or", "(default: ".concat(t).concat(") -> ").concat(t),
+        "Returns the contained `".concat(t).concat("`, or `default` when ").concat(bad)
+        .concat("; never panics.\n\n```glide\nlet port = read_env(\"PORT\").unwrap_or(8080);\n```"),
+        "unwrap_or(".concat(_tab("1:default")).concat(")"));
+    _orm(items, seen, "unwrap_or_else", "(f: fn() -> ".concat(t).concat(") -> ").concat(t),
+        "Returns the contained `".concat(t).concat("`, or computes a fallback with `f` (called only on the ").concat(if is_opt { "empty" } else { "error" })
+        .concat(" path, so an expensive default stays lazy).\n\n```glide\nlet cfg = load_cfg().unwrap_or_else(fn() -> Config { return Config::default(); });\n```"),
+        "unwrap_or_else(".concat(_tab("1")).concat(")"));
+    _orm(items, seen, "expect", "(msg: string) -> ".concat(t),
+        "Returns the contained `".concat(t).concat("`, or panics with **your** message `msg`. Use it to document an invariant.\n\n```glide\nlet db = connect().expect(\"database must be reachable at startup\");\n```"),
+        "expect(".concat(_tab("1:msg")).concat(")"));
+    _orm(items, seen, "map", "(f: fn(".concat(t).concat(") -> U) -> ").concat(w),
+        "Transforms the contained value with `f`, leaving ".concat(bad).concat(" untouched. Returns a new `").concat(w)
+        .concat("`.\n\n```glide\nlet doubled = \"21\".try_parse_int().map(fn(n: i32) -> i32 { return n * 2; });   // ok(42)\n```"),
+        "map(".concat(_tab("1")).concat(")"));
+    _orm(items, seen, "and_then", "(f: fn(".concat(t).concat(") -> ").concat(w).concat(") -> ").concat(w),
+        "Chains another `".concat(w).concat("`-returning step on the contained value (flatMap). `f` can itself fail, and that failure short-circuits.\n\n```glide\nlet user = parse_id(s).and_then(fn(id: i32) -> !User { return db_find(id); });\n```"),
+        "and_then(".concat(_tab("1")).concat(")"));
+
+    if is_opt {
+        _orm(items, seen, "is_some", "() -> bool",
+            "`true` when a value is present.\n\n```glide\nif found.is_some() { use_it(found.unwrap()); }\n```",
+            "is_some()");
+        _orm(items, seen, "is_none", "() -> bool",
+            "`true` when the option is empty.\n\n```glide\nif cache.is_none() { rebuild(); }\n```",
+            "is_none()");
+        _orm(items, seen, "ok_or", "(err: string) -> !".concat(t),
+            "Converts `?".concat(t).concat("` into `!").concat(t).concat("`, attaching `err` as the failure message when empty. Pairs well with `?`.\n\n```glide\nlet v = lookup(key).ok_or(\"key not found\")?;\n```"),
+            "ok_or(".concat(_tab("1:err")).concat(")"));
+        _orm(items, seen, "filter", "(pred: fn(".concat(t).concat(") -> bool) -> ?").concat(t),
+            "Keeps the value only if `pred` returns `true`, otherwise yields `none()`.\n\n```glide\nlet even = some(n).filter(fn(x: i32) -> bool { return x % 2 == 0; });\n```",
+            "filter(".concat(_tab("1")).concat(")"));
+    }
+    if is_res {
+        _orm(items, seen, "is_ok", "() -> bool",
+            "`true` when the result succeeded (the value is then in `.val`).\n\n```glide\nif r.is_ok() { println!(r.unwrap()); }\n```",
+            "is_ok()");
+        _orm(items, seen, "is_err", "() -> bool",
+            "`true` when the result failed (the reason is then in `.err`).\n\n```glide\nif r.is_err() { eprintln(r.unwrap_err()); }\n```",
+            "is_err()");
+        _orm(items, seen, "unwrap_err", "() -> string",
+            "Returns the error message, or **panics** if the result is actually ok.\n\n```glide\nlet why = open(path).unwrap_err();\n```",
+            "unwrap_err()");
+        // NOTE: the `.ok()` method (Result -> Option) is intentionally omitted
+        // from completion: its name collides with the far more common `.ok`
+        // boolean field, which must win the list. The method still compiles.
+        _orm(items, seen, "map_err", "(f: fn(string) -> string) -> !".concat(t),
+            "Rewrites the error message, leaving an ok value unchanged. Good for adding context.\n\n```glide\nlet r = open(path).map_err(fn(e: string) -> string { return \"open failed: \".concat(e); });\n```",
+            "map_err(".concat(_tab("1")).concat(")"));
+    }
+}
+
+pub fn _doc_ok() -> string {
+    return "`bool` -> `true` when the operation succeeded.\n\nThe value is then in `.val`; on failure the reason is in `.err`. Check `ok` (or use `?` / `??`) before reading `.val`.\n\n```glide\nlet r: !i32 = \"42\".try_parse_int();\nif r.ok {\n    println!(r.val);   // 42\n} else {\n    println!(r.err);   // error message\n}\n```";
+}
+
+pub fn _doc_err() -> string {
+    return "`string` -> the failure message.\n\nNon-empty only when `.ok` is `false`. Holds the reason the operation failed.\n\n```glide\nlet r: !i32 = \"oops\".try_parse_int();\nif !r.ok {\n    eprintln(r.err);   // \"non-digit byte\"\n}\n```";
+}
+
+pub fn _doc_val_result(inner: string) -> string {
+    return "the success value (`".concat(inner).concat("`).\n\nValid only when `.ok` is `true`. Reading it on a failed result yields a zeroed value, so guard with `if r.ok` or unwrap with `?` (which returns the error to the caller):\n\n```glide\nlet v: i32 = \"42\".try_parse_int()?;   // 42, or propagates the error\n```");
+}
+
+pub fn _doc_has() -> string {
+    return "`bool` -> `true` when the option holds a value (`some`), `false` when empty (`none`).\n\n```glide\nlet m: ?i32 = some(7);\nif m.has {\n    println!(m.val);   // 7\n}\n```";
+}
+
+pub fn _doc_val_option(inner: string) -> string {
+    return "the contained value (`".concat(inner).concat("`).\n\nValid only when `.has` is `true`. Guard with `if x.has { ... }`, or unwrap with `?`.\n\n```glide\nlet n: i32 = maybe_index()?;   // the value, or returns none\n```");
+}
+
+fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValue, seen: *HashMap<bool>, current_path: string) {
+    if ty == null { return; }
+    let x: *Type = _strip_ptr_borrow(ty);
+    if x == null { return; }
+    if x.kind == TY_RESULT {
+        let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, false, true, inner_pretty);
+        _vfield(items, seen, "ok",  "bool", _doc_ok());
+        _vfield(items, seen, "val", inner_pretty, _doc_val_result(inner_pretty));
+        _vfield(items, seen, "err", "string", _doc_err());
+        return;
+    }
+    if x.kind == TY_OPTION {
+        let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, true, false, inner_pretty);
+        _vfield(items, seen, "has", "bool", _doc_has());
+        _vfield(items, seen, "val", inner_pretty, _doc_val_option(inner_pretty));
+        return;
+    }
+    if x.kind == TY_OPT_RESULT {
+        let inner_pretty: string = type_to_string_pretty(x.inner);
+        _list_opt_res_methods(items, seen, true, true, inner_pretty);
+        _vfield(items, seen, "has", "bool", _doc_has());
+        _vfield(items, seen, "ok",  "bool", _doc_ok());
+        _vfield(items, seen, "val", inner_pretty, _doc_val_result(inner_pretty));
+        _vfield(items, seen, "err", "string", _doc_err());
+        return;
+    }
+    if x.kind == TY_NAMED || x.kind == TY_GENERIC {
+        // Cross-file, only `pub` fields are reachable (reading a private field
+        // from another file is a hard error), so don't offer the private ones.
+        // Same-file (the struct's own origin) offers every field. Methods carry
+        // no enforced privacy here (stdlib methods aren't `pub`), so they're
+        // listed unfiltered.
+        let mut fpub_only: bool = false;
+        let sd: *Stmt = find_top_decl(stmts, x.name);
+        if sd != null && sd.kind == ST_STRUCT {
+            fpub_only = sd.origin != null && !sd.origin.eq(current_path);
+        }
+        list_fields_for_type(stmts, x.name, items, seen, fpub_only);
+        list_methods_for_type(stmts, x.name, items, seen, true);
+        _list_primitive_methods(x.name, items, seen);
+        list_chan_methods_for_type(x.name, items, seen);
+        return;
+    }
+}
+
+// Find a struct by name in the project index and parse the file it is
+// declared in, returning that file's top-level statements (the struct is
+// among them). Used for struct-literal field completion when the type is
+// referenced qualified (`sop::al::AleloSop { … }`) or before its `import`
+// lands, so it isn't in the open doc's AST. Null when no such struct exists.
+fn _index_struct_stmts(state: *LspState, name: string) -> *Vector<Stmt> {
+    if state.project_index == null { return null; }
+    let idx: *Vector<ImportableSym> = state.project_index;
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.name == null || !sym.name.eq(name) { continue; }
+        if sym.kind != ST_STRUCT { continue; }
+        if sym.def_path == null || sym.def_path.eq("") { continue; }
+        let src: string = read_file(sym.def_path);
+        if src.eq("") { continue; }
+        let lex: *Lexer = Lexer::new(src);
+        let par: *Parser = Parser::new(lex);
+        let stmts: *Vector<Stmt> = parse_program(par);
+        if stmts != null { return stmts; }
+    }
+    return null;
+}
+
+// Build a goto-definition Location for `name` from the project index
+// (def_path + def_line + def_col), for qualified / not-yet-imported
+// references whose decl isn't in the open doc's AST. Null when not indexed
+// or the file is gone. Mirrors the workspace/symbol location shape.
+pub fn _index_symbol_location(state: *LspState, name: string) -> *JsonValue {
+    if state.project_index == null { return null; }
+    let idx: *Vector<ImportableSym> = state.project_index;
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.name == null || !sym.name.eq(name) { continue; }
+        if sym.kind == SYMKIND_MODULE { continue; }   // modules handled earlier
+        if sym.def_path == null || sym.def_path.eq("") { continue; }
+        if !__glide_file_exists(sym.def_path) { continue; }
+        let loc: *JsonValue = json_object();
+        json_obj_set(loc, "uri", json_string(path_to_uri(sym.def_path)));
+        let range: *JsonValue = json_object();
+        json_obj_set(range, "start", position_to_json(sym.def_line, sym.def_col));
+        json_obj_set(range, "end", position_to_json(sym.def_line, sym.def_col + name.len()));
+        json_obj_set(loc, "range", range);
+        return loc;
+    }
+    return null;
+}
+
+// True when the struct declares at least one non-`pub` field. Such a struct
+// can't be built with a literal from another file (strict construction
+// visibility) — callers offer no field completion there.
+fn _struct_has_private_field(sd: *Stmt) -> bool {
+    if sd == null || sd.struct_fields == null { return false; }
+    for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
+        let f: Field = sd.struct_fields.get(i);
+        if !f.is_pub { return true; }
+    }
+    return false;
+}
+
+fn list_fields_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonValue, seen: *HashMap<bool>, pub_only: bool) {
+    if stmts == null { return; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_STRUCT || !s.name.eq(type_name) { continue; }
+        if s.struct_fields == null { continue; }
+        for let j: i32 = 0; j < s.struct_fields.len(); j++ {
+            let f: Field = s.struct_fields.get(j);
+            // Cross-file, only `pub` (and `!`) fields can be set, so offer
+            // just those; same-file offers every field.
+            if pub_only && !f.is_pub { continue; }
+            if seen.contains(f.name) { continue; }
+            seen.insert(f.name, true);
+            json_arr_push(items, completion_item(f.name, 5, type_to_string_pretty(f.ty)));  // 5 = Field
+        }
+    }
+}
+
+// Surface the chan API (`send` / `recv` / `close`) on member completion when
+// the receiver is a `chan<T>`. Channels have no impl block to scan so the
+// methods are hardcoded here, matching the typer's special-case lowering.
+fn list_chan_methods_for_type(type_name: string, items: *JsonValue, seen: *HashMap<bool>) {
+    if !type_name.eq("chan") { return; }
+    if !seen.contains("send") {
+        seen.insert("send", true);
+        json_arr_push(items, completion_item("send", 2, "fn send(self: chan<T>, x: T)"));
+    }
+    if !seen.contains("recv") {
+        seen.insert("recv", true);
+        json_arr_push(items, completion_item("recv", 2, "fn recv(self: chan<T>) -> T"));
+    }
+    if !seen.contains("close") {
+        seen.insert("close", true);
+        json_arr_push(items, completion_item("close", 2, "fn close(self: chan<T>)"));
+    }
+}
+
+// `want_self`: true → list instance methods (first param is `self`).
+//              false → list static methods (no `self`).
+fn list_methods_for_type(stmts: *Vector<Stmt>, type_name: string,
+                          items: *JsonValue, seen: *HashMap<bool>,
+                          want_self: bool) {
+    if stmts == null { return; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_target == null { continue; }
+        let mut tname: string = "";
+        if s.impl_target.kind == TY_NAMED { tname = s.impl_target.name; }
+        if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+        if !tname.eq(type_name) { continue; }
+        if s.impl_methods == null { continue; }
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind == ST_FN {
+                let mut has_self: bool = false;
+                if m.fn_params != null && m.fn_params.len() > 0 {
+                    let p0: Param = m.fn_params.get(0);
+                    if p0.name.eq("self") { has_self = true; }
+                }
+                if want_self && !has_self { continue; }
+                if !want_self && has_self { continue; }
+                if seen.contains(m.name) { continue; }
+                seen.insert(m.name, true);
+                // Carry the `///` doc comment so method completion shows the
+                // summary + example on hover, not just the signature.
+                let mut mdoc: string = "";
+                if m.doc_comment != null { mdoc = m.doc_comment; }
+                let no_edit_m: *JsonValue = null;
+                json_arr_push(items, rich_completion_item(
+                    m.name, "", 2, fn_signature(&m), mdoc, "", "", false, no_edit_m));
+            } else if m.kind == ST_MACRO_DEF {
+                // Mirror the fn filter: instance macros (body uses `self`)
+                // belong to `v.` completion; static-in-impl macros (no self)
+                // belong to `Type::` completion. Calling the wrong shape
+                // works but produces awkward sites, so we hide them.
+                let uses_self: bool = body_references_self(m.then_body);
+                if want_self && !uses_self { continue; }
+                if !want_self && uses_self { continue; }
+                let label: string = m.name.concat("!");
+                if seen.contains(label) { continue; }
+                seen.insert(label, true);
+                json_arr_push(items, completion_item(label, 2, macro_signature(&m)));
+            }
+        }
+    }
+}
+
+// True when the cursor (partial-word start at `p`) sits in a type-annotation
+// position: right after `:` (but not `::`), after `->`, or after `<` (generic
+// arg). Used to offer primitive type names there. Generous on purpose — a
+// false positive (e.g. a struct-literal `field:`) only adds a few type names
+// to the list, which the prefix filter hides.
+fn _in_type_position(text: string, p: i32) -> bool {
+    let mut i: i32 = p - 1;
+    while i >= 0 {
+        let c: i32 = text.at(i).to_int();
+        if c == 32 || c == 9 { i = i - 1; continue; }   // skip spaces/tabs
+        break;
+    }
+    if i < 0 { return false; }
+    let c: i32 = text.at(i).to_int();
+    if c == 58 {                                          // ':'
+        if i >= 1 && text.at(i - 1).to_int() == 58 { return false; }   // '::' — module path
+        return true;
+    }
+    if c == 62 && i >= 1 && text.at(i - 1).to_int() == 45 { return true; }   // '->' return type
+    if c == 60 { return true; }                           // '<' generic arg
+    return false;
+}
+
+// Offer the primitive type names (mirrors the typer's `_is_known_type_name`
+// list) as completions. Kind 22 = Struct, so they render as types.
+fn _push_primitive_types(items: *JsonValue, seen: *HashMap<bool>) {
+    // Canonical fixed-width family only — the legacy `int`/`uint`/`long`/
+    // `ulong`/`float` spellings are retired (they now error with a hint), so
+    // new code standardises on `iN` / `uN` / `fN`.
+    let prims: *Vector<string> = Vector::new();
+    prims.push("i8");   prims.push("i16");  prims.push("i32");  prims.push("i64");
+    prims.push("u8");   prims.push("u16");  prims.push("u32");  prims.push("u64");
+    prims.push("i128"); prims.push("u128");
+    prims.push("i256"); prims.push("u256");
+    prims.push("usize"); prims.push("isize");
+    prims.push("f32");  prims.push("f64");
+    prims.push("bool"); prims.push("char"); prims.push("string"); prims.push("void");
+    for let i: i32 = 0; i < prims.len(); i++ {
+        let p: string = prims.get(i);
+        if seen.contains(p) { continue; }
+        seen.insert(p, true);
+        json_arr_push(items, completion_item(p, 22, "primitive type"));
+    }
+}
+
+// Byte offset of the cursor (line0/col0) into `text`.
+fn _manifest_cursor_offset(text: string, line0: i32, col0: i32) -> i32 {
+    let n: i32 = text.len();
+    let mut pos: i32 = 0;
+    let mut line: i32 = 0;
+    while pos < n && line < line0 {
+        if text.at(pos).to_int() == 10 { line = line + 1; }
+        pos = pos + 1;
+    }
+    pos = pos + col0;
+    if pos > n { pos = n; }
+    return pos;
+}
+
+// Offset of the innermost unclosed `{` / `(` strictly before the cursor, or
+// -1 if the cursor is at top level. `text.at(offset)` tells the caller which
+// delimiter it is. Skips string + `//`-comment contents.
+fn _manifest_open_offset(text: string, line0: i32, col0: i32) -> i32 {
+    let pos: i32 = _manifest_cursor_offset(text, line0, col0);
+    let stack: *Vector<i32> = Vector::new();
+    let mut i: i32 = 0;
+    while i < pos {
+        let c: i32 = text.at(i).to_int();
+        if c == 34 {                       // string literal — skip to its end
+            i = i + 1;
+            while i < pos {
+                let d: i32 = text.at(i).to_int();
+                if d == 92 { i = i + 2; continue; }
+                if d == 34 { i = i + 1; break; }
+                i = i + 1;
+            }
+            continue;
+        }
+        if c == 47 && i + 1 < pos && text.at(i + 1).to_int() == 47 {   // // comment
+            while i < pos && text.at(i).to_int() != 10 { i = i + 1; }
+            continue;
+        }
+        if c == 123 || c == 40 { stack.push(i); }
+        else if c == 125 || c == 41 { if stack.len() > 0 { stack.pop(); } }
+        i = i + 1;
+    }
+    if stack.len() == 0 { return -1; }
+    return stack.get(stack.len() - 1);
+}
+
+// Collect the field names already written at the top level of the `{ }` block
+// that opens at `open_off`, into `present`. Lets completion drop fields the
+// user has already filled in. Idents are matched only when followed by a
+// single `:` (so `Dep::path` inside a nested `vec_of(...)` is excluded both by
+// the `::` check and by sitting at a deeper delimiter level).
+fn _manifest_collect_fields(text: string, open_off: i32, present: *HashMap<bool>) {
+    if open_off < 0 { return; }
+    let n: i32 = text.len();
+    let mut depth: i32 = 0;
+    let mut i: i32 = open_off + 1;
+    while i < n {
+        let c: i32 = text.at(i).to_int();
+        if c == 34 {
+            i = i + 1;
+            while i < n {
+                let d: i32 = text.at(i).to_int();
+                if d == 92 { i = i + 2; continue; }
+                if d == 34 { i = i + 1; break; }
+                i = i + 1;
+            }
+            continue;
+        }
+        if c == 47 && i + 1 < n && text.at(i + 1).to_int() == 47 {
+            while i < n && text.at(i).to_int() != 10 { i = i + 1; }
+            continue;
+        }
+        if c == 123 || c == 40 { depth = depth + 1; i = i + 1; continue; }
+        if c == 125 || c == 41 {
+            if depth == 0 { break; }       // closes the block we started in
+            depth = depth - 1; i = i + 1; continue;
+        }
+        if depth == 0 && ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95) {
+            let start: i32 = i;
+            while i < n {
+                let cc: i32 = text.at(i).to_int();
+                if (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122)
+                   || (cc >= 48 && cc <= 57) || cc == 95 { i = i + 1; } else { break; }
+            }
+            let ident: string = text.substring(start, i);
+            let mut j: i32 = i;
+            while j < n {
+                let w: i32 = text.at(j).to_int();
+                if w == 32 || w == 9 || w == 10 || w == 13 { j = j + 1; } else { break; }
+            }
+            if j < n && text.at(j).to_int() == 58
+               && (j + 1 >= n || text.at(j + 1).to_int() != 58) {
+                present.insert(ident, true);
+            }
+            continue;
+        }
+        i = i + 1;
+    }
+}
+
+// True if the current line already has a `:` before the cursor — i.e. the
+// cursor sits in a field's VALUE slot, not at a field-name position.
+fn _manifest_in_value_slot(text: string, line0: i32, col0: i32) -> bool {
+    let cur: i32 = _manifest_cursor_offset(text, line0, col0);
+    let mut s: i32 = cur;
+    while s > 0 && text.at(s - 1).to_int() != 10 { s = s - 1; }
+    let mut i: i32 = s;
+    while i < cur {
+        if text.at(i).to_int() == 58 { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Push every `Package` field not already present, so completion is
+// progressive: filled-in fields drop off the list. Kind 5 = Field.
+fn _push_manifest_fields(items: *JsonValue, present: *HashMap<bool>) {
+    if !present.contains("name") { json_arr_push(items, completion_item("name", 5, "string — package name (required)")); }
+    if !present.contains("version") { json_arr_push(items, completion_item("version", 5, "string — semver, e.g. \"0.1.0\" (required)")); }
+    if !present.contains("bin") { json_arr_push(items, completion_item("bin", 5, "string — entry point (default src/main.glide)")); }
+    if !present.contains("deps") { json_arr_push(items, completion_item("deps", 5, "vec_of(...) — dependency list")); }
+    if !present.contains("description") { json_arr_push(items, completion_item("description", 5, "string — short summary (optional)")); }
+    if !present.contains("author") { json_arr_push(items, completion_item("author", 5, "string — name <email> (optional)")); }
+    if !present.contains("license") { json_arr_push(items, completion_item("license", 5, "string — SPDX id, e.g. \"MIT\" (optional)")); }
+    if !present.contains("repository") { json_arr_push(items, completion_item("repository", 5, "string — source URL (optional)")); }
+    if !present.contains("target") { json_arr_push(items, completion_item("target", 5, "string — default cross-compile triple (optional)")); }
+}
+
+// The field name of the current line (`<ident>:` at its start), or "".
+// Lets completion offer value suggestions keyed to the field being filled.
+fn _manifest_line_field(text: string, line0: i32, col0: i32) -> string {
+    let cur: i32 = _manifest_cursor_offset(text, line0, col0);
+    let n: i32 = text.len();
+    let mut s: i32 = cur;
+    while s > 0 && text.at(s - 1).to_int() != 10 { s = s - 1; }
+    let mut i: i32 = s;
+    while i < cur {
+        let w: i32 = text.at(i).to_int();
+        if w == 32 || w == 9 { i = i + 1; } else { break; }
+    }
+    let start: i32 = i;
+    while i < n {
+        let c: i32 = text.at(i).to_int();
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+           || (c >= 48 && c <= 57) || c == 95 { i = i + 1; } else { break; }
+    }
+    if i == start { return ""; }
+    let ident: string = text.substring(start, i);
+    let mut j: i32 = i;
+    while j < n {
+        let w: i32 = text.at(j).to_int();
+        if w == 32 || w == 9 { j = j + 1; } else { break; }
+    }
+    if j < n && text.at(j).to_int() == 58 { return ident; }
+    return "";
+}
+
+// Cross-compile triples offered as `target:` values. The musl pair has
+// auto-fetched sysroots (`glide target list`); the rest cross-compile via the
+// bundled zig backend (a program touching openssl/etc. needs a manual sysroot).
+fn _push_target_triples(items: *JsonValue) {
+    json_arr_push(items, completion_item("x86_64-linux-musl", 12, "Linux x86_64 (sysroot auto-fetched)"));
+    json_arr_push(items, completion_item("aarch64-linux-musl", 12, "Linux ARM64 (sysroot auto-fetched)"));
+    json_arr_push(items, completion_item("x86_64-linux-gnu", 12, "Linux x86_64 (glibc)"));
+    json_arr_push(items, completion_item("aarch64-linux-gnu", 12, "Linux ARM64 (glibc)"));
+    json_arr_push(items, completion_item("x86_64-macos", 12, "macOS Intel"));
+    json_arr_push(items, completion_item("aarch64-macos", 12, "macOS Apple Silicon"));
+    json_arr_push(items, completion_item("x86_64-windows-gnu", 12, "Windows x86_64 (MinGW)"));
+}
+
+// Manifest-aware completion for `glide.glide`. The manifest is never compiled,
+// so symbol-based completion has nothing to offer; instead we surface the
+// fixed schema (`Package` + its fields, `vec_of`, `Dep::path` / `Dep::git`)
+// keyed off the cursor's delimiter context. Text-driven so it works even
+// while the buffer is half-typed (no AST required).
+fn handle_manifest_completion(id: *JsonValue, doc: LspDoc, line0: i32, col0: i32) {
+    // `target:` value — offer cross-compile triples, even inside the string
+    // (the value is always a quoted triple, so completion is wanted there).
+    if _manifest_line_field(doc.text, line0, col0).eq("target")
+       && _manifest_in_value_slot(doc.text, line0, col0) {
+        let titems: *JsonValue = json_array();
+        _push_target_triples(titems);
+        lsp_send_response(id, titems);
+        return;
+    }
+    if _cursor_in_string_or_comment(doc.text, line0, col0) {
+        lsp_send_response(id, json_array());
+        return;
+    }
+    let items: *JsonValue = json_array();
+    // After `Dep::` → the two dependency constructors.
+    let q: string = path_qualifier_before(doc.text, line0, col0);
+    if q.eq("Dep") {
+        json_arr_push(items, completion_item("path", 3, "Dep::path(name, rel_path) — local path dependency"));
+        json_arr_push(items, completion_item("git", 3, "Dep::git(name, url, rev) — git dependency"));
+        lsp_send_response(id, items);
+        return;
+    }
+    let ob: i32 = _manifest_open_offset(doc.text, line0, col0);
+    let mut ctx: i32 = 0;
+    if ob >= 0 {
+        let oc: i32 = doc.text.at(ob).to_int();
+        if oc == 123 { ctx = 1; } else if oc == 40 { ctx = 2; }
+    }
+    if ctx == 1 {
+        // Inside `Package { }`. A value slot (after `field:`) only takes
+        // `vec_of` for the deps list; everything else is a string literal.
+        // Otherwise it's a field-name slot — offer only the fields that
+        // aren't already written (progressive).
+        if _manifest_in_value_slot(doc.text, line0, col0) {
+            // Only `deps` takes a non-string value (`vec_of(...)`); the other
+            // fields are string literals, so suggest nothing there.
+            if _manifest_line_field(doc.text, line0, col0).eq("deps") {
+                json_arr_push(items, completion_item("vec_of", 3, "vec_of(Dep::..., ...) — dependency list"));
+            }
+        } else {
+            let present: *HashMap<bool> = HashMap::new();
+            _manifest_collect_fields(doc.text, ob, present);
+            _push_manifest_fields(items, present);
+            present.free();
+        }
+    } else if ctx == 2 {
+        // Inside `vec_of( )` — dependency entries.
+        json_arr_push(items, completion_item("Dep::path", 3, "Dep::path(name, rel_path) — local path dependency"));
+        json_arr_push(items, completion_item("Dep::git", 3, "Dep::git(name, url, rev) — git dependency"));
+    } else {
+        // Top level — the manifest literal + the dep-list helper.
+        json_arr_push(items, completion_item("Package", 22, "package manifest — Package { name, version, ... }"));
+        json_arr_push(items, completion_item("vec_of", 3, "vec_of(...) — dependency list"));
+    }
+    lsp_send_response(id, items);
+}
+
+// If the cursor sits at a field-NAME slot inside a `StructName { ... }`
+// literal, return the struct's name and fill `present` with the field names
+// already written (so the caller can offer only the remaining ones).
+// Returns "" when not in such a position: value slot (`x: |`), inside a
+// call/index, a `;` statement boundary, or a `{` not preceded by an ident
+// (a block body — `fn f() {`, `if c {`, `=> {`). Lexer-driven, so braces in
+// strings/comments don't fool it.
+fn _struct_lit_ctx(text: string, line0: i32, col0: i32, present: *HashMap<bool>) -> string {
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF { break; }
+        let tline: i32 = tok.line - 1;
+        let tcol: i32 = tok.column - 1;
+        if tline > line0 { break; }
+        if tline == line0 && tcol >= col0 { break; }
+        toks.push(tok);
+    }
+    let n: i32 = toks.len();
+    if n == 0 { return ""; }
+    let mut depth: i32 = 0;
+    let mut value_pos: bool = false;
+    let mut boundary: bool = false;
+    let mut open_idx: i32 = -1;
+    for let i: i32 = n - 1; i >= 0; i = i - 1 {
+        let t: Token = toks.get(i);
+        if t.kind != TOK_OP { continue; }
+        if t.lexeme.eq(")") || t.lexeme.eq("]") || t.lexeme.eq("}") { depth = depth + 1; continue; }
+        if t.lexeme.eq("(") || t.lexeme.eq("[") {
+            if depth > 0 { depth = depth - 1; continue; }
+            return "";   // immediate enclosure is a call / index, not a literal
+        }
+        if t.lexeme.eq("{") {
+            if depth > 0 { depth = depth - 1; continue; }
+            open_idx = i;
+            break;
+        }
+        if depth == 0 {
+            if t.lexeme.eq(";") { return ""; }
+            if t.lexeme.eq(",") { boundary = true; }
+            if t.lexeme.eq(":") { if !boundary { value_pos = true; } }
+        }
+    }
+    if open_idx < 1 { return ""; }
+    if value_pos { return ""; }   // after `field:` — a value goes here, not a name
+    let name_tok: Token = toks.get(open_idx - 1);
+    if name_tok.kind != TOK_IDENT { return ""; }   // block body, not a struct literal
+    // Harvest already-written field names: an IDENT immediately followed by
+    // `:` at the literal's own brace depth is a bound field.
+    let mut d2: i32 = 0;
+    for let k: i32 = open_idx + 1; k < n; k = k + 1 {
+        let tk: Token = toks.get(k);
+        if tk.kind == TOK_OP {
+            if tk.lexeme.eq("{") || tk.lexeme.eq("(") || tk.lexeme.eq("[") { d2 = d2 + 1; continue; }
+            if tk.lexeme.eq("}") || tk.lexeme.eq(")") || tk.lexeme.eq("]") { d2 = d2 - 1; continue; }
+        }
+        if d2 != 0 { continue; }
+        if tk.kind == TOK_IDENT && k + 1 < n {
+            let nx: Token = toks.get(k + 1);
+            if nx.kind == TOK_OP && nx.lexeme.eq(":") { present.insert(tk.lexeme, true); }
+        }
+    }
+    return name_tok.lexeme;
+}
+
+// True when the cursor sits inside the string arg of `pkg!("…")`, so
+// completion can offer the manifest field names. Text scan (the partial
+// `pkg!("ver` has an unterminated string the lexer can't tokenize).
+fn _in_pkg_arg(text: string, line0: i32, col0: i32) -> bool {
+    let ci: i32 = _line_col_offset(text, line0, col0);
+    if ci <= 0 { return false; }
+    let mut q: i32 = ci - 1;
+    while q >= 0 && text.at(q).to_int() != 34 { q = q - 1; }   // 34 = "
+    if q < 0 { return false; }
+    let mut k: i32 = q - 1;
+    while k >= 0 {
+        let c: i32 = text.at(k).to_int();
+        if c == 32 || c == 9 || c == 10 || c == 13 { k = k - 1; } else { break; }
+    }
+    if k < 0 || text.at(k).to_int() != 40 { return false; }    // 40 = (
+    k = k - 1;
+    while k >= 0 {
+        let c: i32 = text.at(k).to_int();
+        if c == 32 || c == 9 || c == 10 || c == 13 { k = k - 1; } else { break; }
+    }
+    if k < 3 { return false; }
+    return text.substring(k - 3, k + 1).eq("pkg!");
+}
+
+fn _pkg_field_val(m: *Manifest, field: string) -> string {
+    if m == null { return ""; }
+    if field.eq("name")        { return m.name; }
+    if field.eq("version")     { return m.version; }
+    if field.eq("author")      { return m.author; }
+    if field.eq("license")     { return m.license; }
+    if field.eq("description") { return m.description; }
+    if field.eq("repository")  { return m.repository; }
+    return "";
+}
+
+fn _push_pkg_field(items: *JsonValue, field: string, m: *Manifest) {
+    let mut detail: string = "glide.glide field";
+    let v: string = _pkg_field_val(m, field);
+    if !v.eq("") { detail = field.concat(" = \"").concat(v).concat("\""); }
+    json_arr_push(items, completion_item(field, 5, detail));   // 5 = Field
+}
+
+// Offer the six manifest fields, each with its resolved value as the detail.
+fn _push_pkg_fields(items: *JsonValue, doc_path: string) {
+    let root: string = find_manifest_root(_lsp_parent_dir(doc_path));
+    let mut m: *Manifest = null;
+    if !root.eq("") { m = read_manifest(root); }
+    _push_pkg_field(items, "name", m);
+    _push_pkg_field(items, "version", m);
+    _push_pkg_field(items, "author", m);
+    _push_pkg_field(items, "license", m);
+    _push_pkg_field(items, "description", m);
+    _push_pkg_field(items, "repository", m);
+    _push_pkg_field(items, "bin", m);
+    _push_pkg_field(items, "target", m);
+}
+
+// Resolve the callee declaration of a call context. Free fn or `Type::static`
+// only -- a `recv.method(` call needs the receiver's type (handled later).
+fn _callee_decl(stmts: *Vector<Stmt>, ctx: SigCallCtx) -> *Stmt {
+    if ctx.is_method {
+        let hit: ImplMethodHit = find_method_anywhere(stmts, ctx.name);
+        return hit.method;
+    }
+    if !ctx.type_qual.eq("") { return find_method_in_impl(stmts, ctx.type_qual, ctx.name); }
+    return find_top_decl(stmts, ctx.name);
+}
+
+// Effective parameter index for the call's active argument. A `recv.method(`
+// call passes the receiver implicitly, so its fn_params still carry a leading
+// `self` that the user never types — shift the user-visible index past it.
+fn _callee_param_idx(callee: *Stmt, ctx: SigCallCtx) -> i32 {
+    let mut base: i32 = 0;
+    if ctx.is_method && callee.fn_params != null && callee.fn_params.len() > 0 {
+        let p0: Param = callee.fn_params.get(0);
+        if p0.name != null && p0.name.eq("self") { base = 1; }
+    }
+    return ctx.active_param + base;
+}
+
+// Push the values from a `@suggest(param, "a", "b" | EnumName)` attribute on
+// the callee, for the call's active argument. A referenced enum contributes
+// its variant names. Returns true when the active param is annotated (so the
+// caller stops instead of falling through to generic completion).
+fn _push_suggest_for_arg(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue) -> bool {
+    let callee: *Stmt = _callee_decl(stmts, ctx);
+    if callee == null || callee.kind != ST_FN { return false; }
+    if callee.attrs == null || callee.fn_params == null { return false; }
+    let pidx: i32 = _callee_param_idx(callee, ctx);
+    if pidx < 0 || pidx >= callee.fn_params.len() { return false; }
+    let pm: Param = callee.fn_params.get(pidx);
+    let mut any: bool = false;
+    for let i: i32 = 0; i < callee.attrs.len(); i++ {
+        let a: Attr = callee.attrs.get(i);
+        if a.name == null || !a.name.eq("suggest") { continue; }
+        if a.args == null || a.args.len() < 2 { continue; }
+        let p0: Expr = a.args.get(0);
+        if p0.kind != EX_IDENT || p0.str_val == null || !p0.str_val.eq(pm.name) { continue; }
+        for let j: i32 = 1; j < a.args.len(); j++ {
+            let v: Expr = a.args.get(j);
+            if v.kind == EX_STRING && v.str_val != null {
+                json_arr_push(items, completion_item(v.str_val, 12, "suggested value"));
+                any = true;
+            } else if v.kind == EX_IDENT && v.str_val != null {
+                let ed: *Stmt = find_top_decl(stmts, v.str_val);
+                if ed != null && ed.kind == ST_ENUM && ed.enum_variants != null {
+                    for let k: i32 = 0; k < ed.enum_variants.len(); k++ {
+                        let ev: EnumVariant = ed.enum_variants.get(k);
+                        if ev.name == null { continue; }
+                        json_arr_push(items, completion_item(ev.name, 12, "from enum ".concat(v.str_val)));
+                        any = true;
+                    }
+                }
+            }
+        }
+    }
+    return any;
+}
+
+fn _arg_strip(ty: *Type) -> *Type {
+    let mut t: *Type = ty;
+    while t != null && (t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) {
+        t = t.inner;
+    }
+    return t;
+}
+
+fn _arg_pname(i: i32) -> string {
+    let letters: string = "abcdefghijklmnopqrstuvwxyz";
+    if i >= 0 && i < 26 { return letters.substring(i, i + 1); }
+    return "p".concat(i.to_string());
+}
+
+// A high-priority argument-completion item: sortText floats it above the
+// generic bag, insertText carries the snippet/plain text.
+fn _arg_item(label: string, kind: i32, detail: string, insert: string, snippet: bool) -> *JsonValue {
+    let it: *JsonValue = json_object();
+    json_obj_set(it, "label", json_string(label));
+    json_obj_set(it, "kind", json_int(kind));
+    if !detail.eq("") { json_obj_set(it, "detail", json_string(detail)); }
+    json_obj_set(it, "insertText", json_string(insert));
+    if snippet { json_obj_set(it, "insertTextFormat", json_int(2)); }
+    else { json_obj_set(it, "insertTextFormat", json_int(1)); }
+    json_obj_set(it, "sortText", json_string("0_".concat(label)));
+    json_obj_set(it, "filterText", json_string(label));
+    return it;
+}
+
+// `fn(a: T, b: U) -> R { $0 }` snippet from a TY_FNPTR param type.
+fn _fnptr_snippet(ty: *Type) -> string {
+    let mut s: string = "fn(";
+    if ty.args != null {
+        for let i: i32 = 0; i < ty.args.len(); i++ {
+            if i > 0 { s = s.concat(", "); }
+            let pt: Type = ty.args.get(i);
+            let ptp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            *ptp = pt;
+            s = s.concat(_arg_pname(i)).concat(": ").concat(type_to_string_pretty(ptp));
+        }
+    }
+    s = s.concat(")");
+    let r: *Type = ty.fnptr_ret;
+    if r != null && !(r.kind == TY_NAMED && r.name != null && r.name.eq("void")) {
+        s = s.concat(" -> ").concat(type_to_string_pretty(r));
+    }
+    return s.concat(" { $0 }");
+}
+
+// Type-aware argument completion: for the call's active parameter, float the
+// values its declared type wants -- enum variants, a struct literal / its
+// constructors, ok/err/some/none, or a callback closure snippet.
+fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue, seen: *HashMap<bool>) {
+    let callee: *Stmt = _callee_decl(stmts, ctx);
+    if callee == null || callee.kind != ST_FN || callee.fn_params == null { return; }
+    let pidx: i32 = _callee_param_idx(callee, ctx);
+    if pidx < 0 || pidx >= callee.fn_params.len() { return; }
+    let pm: Param = callee.fn_params.get(pidx);
+    let ty: *Type = pm.ty;
+    if ty == null { return; }
+    if ty.kind == TY_FNPTR {
+        json_arr_push(items, _arg_item("fn(…)", 15, type_to_string_pretty(ty), _fnptr_snippet(ty), true));
+        return;
+    }
+    if ty.kind == TY_OPTION {
+        json_arr_push(items, _arg_item("some(…)", 12, "?T value", "some($0)", true));
+        json_arr_push(items, _arg_item("none()", 12, "?T empty", "none()", false));
+        return;
+    }
+    if ty.kind == TY_RESULT || ty.kind == TY_OPT_RESULT {
+        json_arr_push(items, _arg_item("ok(…)", 12, "!T ok", "ok($0)", true));
+        json_arr_push(items, _arg_item("err(…)", 12, "error", "err($0)", true));
+        if ty.kind == TY_OPT_RESULT { json_arr_push(items, _arg_item("none()", 12, "empty", "none()", false)); }
+        return;
+    }
+    let inner: *Type = _arg_strip(ty);
+    if inner == null || inner.kind != TY_NAMED || inner.name == null { return; }
+    let tn: string = inner.name;
+    let d: *Stmt = find_top_decl(stmts, tn);
+    if d == null { return; }
+    if d.kind == ST_ENUM && d.enum_variants != null {
+        for let i: i32 = 0; i < d.enum_variants.len(); i++ {
+            let ev: EnumVariant = d.enum_variants.get(i);
+            if ev.name == null { continue; }
+            let full: string = tn.concat("::").concat(ev.name);
+            if seen.contains(full) { continue; }
+            seen.insert(full, true);
+            json_arr_push(items, _arg_item(full, 20, "variant of ".concat(tn), full, false));
+        }
+    } else if d.kind == ST_STRUCT {
+        let lit: string = tn.concat(" {…}");
+        if !seen.contains(lit) {
+            seen.insert(lit, true);
+            json_arr_push(items, _arg_item(lit, 22, "construct ".concat(tn), tn.concat(" { $0 }"), true));
+        }
+        // Public constructors / static methods (`Type::new`, …).
+        list_methods_for_type(stmts, tn, items, seen, false);
+    }
+}
+
+pub fn handle_completion(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    // The manifest (`glide.glide`) isn't a program — offer its fixed schema
+    // (Package fields, vec_of, Dep::path/git) instead of generic symbols.
+    if path_is_manifest(uri_to_path(uri)) {
+        handle_manifest_completion(id, doc, line0, col0);
+        return;
+    }
+    if doc.stmts == null {
+        // The buffer doesn't parse into an AST yet — typically a half-typed
+        // `let x: ` whose empty type trips the parser. The symbol-based
+        // completion can't run, but if the cursor is in a type slot we can
+        // still offer the primitive type names off the raw text, so type
+        // completion works mid-edit instead of going silent.
+        let it0: *JsonValue = json_array();
+        let p0: i32 = cursor_before_partial(doc.text, line0, col0);
+        if !_cursor_in_string_or_comment(doc.text, line0, col0) && _in_type_position(doc.text, p0) {
+            let seen0: *HashMap<bool> = HashMap::new();
+            _push_primitive_types(it0, seen0);
+            seen0.free();
+        }
+        lsp_send_response(id, it0);
+        return;
+    }
+    // `pkg!("|")` — offer the manifest field names (with their resolved
+    // values as detail). Must run before the in-string bail-out below.
+    if _in_pkg_arg(doc.text, line0, col0) {
+        let pit: *JsonValue = json_array();
+        _push_pkg_fields(pit, uri_to_path(uri));
+        lsp_send_response(id, pit);
+        return;
+    }
+    // Editors trigger completion on `.` / `:` even inside string and char
+    // literals (Zed/VSCode don't know about Glide's lexer). Bail out before
+    // we list anything — typing `"x.y"` should never offer field names.
+    if _cursor_in_string_or_comment(doc.text, line0, col0) {
+        // Exception: inside a string that is a call argument whose param is
+        // `@suggest(param, "a", "b" | EnumName)`-annotated, offer those values.
+        let sctx: SigCallCtx = _find_call_context(doc.text, line0, col0);
+        if sctx.found {
+            let sit: *JsonValue = json_array();
+            if _push_suggest_for_arg(doc.stmts, sctx, sit) {
+                lsp_send_response(id, sit);
+                return;
+            }
+        }
+        lsp_send_response(id, json_array());
+        return;
+    }
+    let items: *JsonValue = json_array();
+    let seen: *HashMap<bool> = HashMap::new();
+
+    // Type-aware argument completion: at a call's argument, float the values
+    // the active parameter's declared type wants (enum variants, struct ctor,
+    // ok/err/some/none, callback snippet) to the top, then fall through to the
+    // generic completion below so locals etc. still appear.
+    let actx: SigCallCtx = _find_call_context(doc.text, line0, col0);
+    if actx.found {
+        _push_arg_type_items(doc.stmts, actx, items, seen);
+    }
+
+    // Struct-literal field completion: cursor at a field-name slot inside
+    // `StructName { ... }`. Offer the struct's not-yet-written fields. Gated
+    // on the name resolving to a real struct so a block body (`if c { ` etc.)
+    // never gets hijacked — there we fall through to ordinary completion.
+    let slit_present: *HashMap<bool> = HashMap::new();
+    let mut slit_name: string = _struct_lit_ctx(doc.text, line0, col0, slit_present);
+    // `Self { … }` inside an impl method names the implementor type. Expand it
+    // so field completion resolves against the concrete struct.
+    if slit_name.eq("Self") {
+        let self_ty: string = enclosing_impl_target_name(doc.stmts, line0, uri_to_path(uri));
+        if !self_ty.eq("") { slit_name = self_ty; }
+    }
+    if !slit_name.eq("") {
+        let mut slit_sd: *Stmt = find_top_decl(doc.stmts, slit_name);
+        let mut fstmts: *Vector<Stmt> = doc.stmts;
+        let mut fpub_only: bool = false;
+        if slit_sd != null && slit_sd.kind == ST_STRUCT {
+            // In the open doc: pub-filter only when the struct lives in
+            // another file (cross-file you can't set private fields).
+            fpub_only = slit_sd.origin != null && !slit_sd.origin.eq(uri_to_path(uri));
+        } else {
+            // Qualified or not-yet-imported struct (`sop::al::AleloSop { … }`)
+            // isn't in the open doc's AST — resolve it from the project index
+            // and parse its file. Always cross-file → pub-only. This also
+            // stops the generic "random" completion bag from leaking into a
+            // struct literal whose type isn't locally visible.
+            let istmts: *Vector<Stmt> = _index_struct_stmts(state, slit_name);
+            if istmts != null {
+                let isd: *Stmt = find_top_decl(istmts, slit_name);
+                if isd != null && isd.kind == ST_STRUCT {
+                    slit_sd = isd; fstmts = istmts; fpub_only = true;
+                }
+            }
+        }
+        if slit_sd != null && slit_sd.kind == ST_STRUCT {
+            // Strict construction visibility: a struct with any private field
+            // can't be built with a literal cross-file (the typer errors on
+            // it), so offer no fields — the literal is a dead end here; the
+            // user must call a public constructor instead.
+            if fpub_only && _struct_has_private_field(slit_sd) {
+                seen.free();
+                lsp_send_response(id, items);
+                return;
+            }
+            let pk: *Vector<string> = slit_present.keys();
+            for let i: i32 = 0; i < pk.len(); i++ { seen.insert(pk.get(i), true); }
+            list_fields_for_type(fstmts, slit_name, items, seen, fpub_only);
+            seen.free();
+            lsp_send_response(id, items);
+            return;
+        }
+    }
+
+    // Type-annotation position (`: T`, `-> T`, `<T>`): seed the list with the
+    // primitive type names + the enclosing fn/impl type params up front, so
+    // they survive whichever branch handles (or early-returns) this request.
+    // `_in_type_position` excludes `.` and `::`, so this never fires in member
+    // or module-path context.
+    let _tp_p: i32 = cursor_before_partial(doc.text, line0, col0);
+    if _in_type_position(doc.text, _tp_p) {
+        _push_primitive_types(items, seen);
+        let tphost: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
+        if tphost != null && tphost.type_params != null {
+            for let i: i32 = 0; i < tphost.type_params.len(); i++ {
+                let tp: string = tphost.type_params.get(i);
+                if tp == null || seen.contains(tp) { continue; }
+                seen.insert(tp, true);
+                json_arr_push(items, completion_item(tp, 25, "type parameter"));
+            }
+        }
+    }
+
+    // Import-path completion: cursor sits inside `import …;`. The
+    // helper returns the module path the user has typed so far
+    // ("", "stdlib", "stdlib::hashmap"); we list the matching child.
+    let imp_kind: i32 = import_context_kind(doc.text, line0, col0);
+    if imp_kind == IMPCTX_PATH {
+        let prefix: string = import_path_prefix(doc.text, line0, col0);
+        list_import_path_children(state, prefix, items, seen);
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+    if imp_kind == IMPCTX_BRACE {
+        let mod_in_brace: string = import_brace_module(doc.text, line0, col0);
+        if !mod_in_brace.eq("") {
+            list_module_members(state, mod_in_brace, items, seen);
+            seen.free();
+            lsp_send_response(id, items);
+            return;
+        }
+    }
+
+    // Module-path completion: cursor right after `module::` or
+    // `stdlib::module::`. Lists every `pub` symbol from that module.
+    // Single-segment `stdlib::` lists the submodules instead.
+    let mod_path: string = module_path_before(doc.text, line0, col0);
+    if !mod_path.eq("") && state.stdlib_index != null {
+        list_module_members(state, mod_path, items, seen);
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+
+    // Path completion: cursor is right after `Type::` (or `Type::partial`).
+    let qualifier: string = path_qualifier_before(doc.text, line0, col0);
+    if !qualifier.eq("") {
+        // After `Type::` only static methods (no `self`) make sense.
+        list_methods_for_type(doc.stmts, qualifier, items, seen, false);
+        // 256-bit ints construct via `u256::from(n)` / `i256::from(n)`, which
+        // are compiler builtins (no impl block), so surface them here.
+        if (qualifier.eq("u256") || qualifier.eq("i256")) && !seen.contains("from") {
+            seen.insert("from", true);
+            json_arr_push(items, completion_item("from",
+                3, qualifier.concat("::from(n) — build from an integer")));
+        }
+        // Every integer primitive exposes the `MAX` / `MIN` associated
+        // constants (e.g. `i32::MAX`). Floats are excluded.
+        if _is_canon_prim(qualifier) && !qualifier.eq("f32") && !qualifier.eq("f64") {
+            if !seen.contains("MAX") {
+                seen.insert("MAX", true);
+                json_arr_push(items, completion_item("MAX", 21,
+                    "largest value of ".concat(qualifier)));
+            }
+            if !seen.contains("MIN") {
+                seen.insert("MIN", true);
+                json_arr_push(items, completion_item("MIN", 21,
+                    "smallest value of ".concat(qualifier)));
+            }
+        }
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+
+    // Member completion: cursor sits right after a `.`. Unified resolver
+    // handles `var.`, `var.method(args).`, `Type::new().`, `expr.field.`,
+    // `v[i].`, and arbitrary chains. The text-walker returns the receiver's
+    // AST type so we can surface `!T`/`?T` virtual fields (ok/val/err,
+    // has/val) the same way as struct fields. Always early-returns once
+    // we know the cursor is in member position — never falls through to
+    // bare-ident completion, which would dump every visible symbol.
+    let _cursor_p: i32 = cursor_before_partial(doc.text, line0, col0);
+    if _cursor_p >= 1 && doc.text.at(_cursor_p - 1).to_int() == 46 {
+        let recv_ty: *Type = _chain_resolve_type(doc.text, _cursor_p - 1, doc.stmts, line0, uri_to_path(uri));
+        if recv_ty != null {
+            // List members off BOTH stmt sets. The post-expansion set
+            // (doc.stmts) carries regular impl methods AND the ones generated
+            // by `@derive(...)` (e.g. `to_json` from `@derive(JsonBind)`),
+            // which don't exist before expansion. The pre-expansion snapshot
+            // still carries type-attached `macro` defs that expand_macros
+            // consumed out of doc.stmts (so `v.push_a` can offer `push_all!`).
+            // `seen` dedupes the overlap.
+            _list_members_for_type_node(recv_ty, doc.stmts, items, seen, uri_to_path(uri));
+            if doc.pre_expand_stmts != null {
+                _list_members_for_type_node(recv_ty, doc.pre_expand_stmts, items, seen, uri_to_path(uri));
+            }
+        }
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+    // Stray `::` with no resolvable type before it: empty list, never the
+    // dump-every-global fallback. `path_qualifier_before` already handles
+    // the happy path; this is the safety net.
+    if _cursor_p >= 2 && doc.text.at(_cursor_p - 1).to_int() == 58
+       && doc.text.at(_cursor_p - 2).to_int() == 58 {
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+
+    // Attribute context. Cursor sits inside `@<partial>` (declaration-side
+    // proc-attr) or inside `@derive(<partial>)` (derive list). Surface
+    // proc-attrs / proc-derives + the handful of built-in attribute names
+    // the compiler recognises (`cfg`, `expect`, `allow`, `deprecated`,
+    // `lint`, `proc_attr`, `proc_derive`, `proc_macro`, `proc_macro_str`).
+    let _attr_ctx: i32 = _attribute_context(doc.text, _cursor_p);
+    if _attr_ctx != 0 {
+        if _attr_ctx == 1 {
+            // After `@` — bare attribute name.
+            _push_attr_completions(doc, state, items, seen);
+        } else {
+            // Inside `@derive(...)` — derive list.
+            _push_derive_completions(doc, state, items, seen);
+        }
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+
+    // 1. Locals in scope (params + lets above the cursor in the containing fn).
+    let host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
+    if host != null {
+        if host.fn_params != null {
+            for let i: i32 = 0; i < host.fn_params.len(); i++ {
+                let p: Param = host.fn_params.get(i);
+                if !seen.contains(p.name) {
+                    seen.insert(p.name, true);
+                    let sig: string = "param ".concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+                    let no_edit_p: *JsonValue = null;
+                    let item: *JsonValue = rich_completion_item(
+                        p.name, "", 6, sig, "", "", "", false, no_edit_p);
+                    json_arr_push(items, item);
+                }
+            }
+        }
+        // Closure params from any enclosing closure whose body covers the cursor.
+        let cps: *Vector<Param> = Vector::new();
+        collect_active_closure_params(host.fn_body, line0, cps);
+        for let i: i32 = 0; i < cps.len(); i++ {
+            let p: Param = cps.get(i);
+            if p.name == null || seen.contains(p.name) { continue; }
+            seen.insert(p.name, true);
+            let sig: string = "param ".concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+            let no_edit_cp: *JsonValue = null;
+            let item: *JsonValue = rich_completion_item(
+                p.name, "", 6, sig, "", "", "", false, no_edit_cp);
+            json_arr_push(items, item);
+        }
+        let locals: *Vector<Stmt> = Vector::new();
+        collect_locals(host.fn_body, line0, locals);
+        for let i: i32 = 0; i < locals.len(); i++ {
+            let s: Stmt = locals.get(i);
+            if seen.contains(s.name) { continue; }
+            seen.insert(s.name, true);
+            let mut sig: string = "local ".concat(s.name);
+            if s.let_ty != null {
+                sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(s.let_ty));
+            } else if s.let_value != null {
+                // No annotation — infer the type for the hint, same as
+                // member completion: `Type::ctor()` / plain fn-call returns
+                // (_let_node_type), falling back to literals/idents
+                // (lsp_infer_expr). So `let v = ret()` shows `*Vector<int>`.
+                let mut inferred: *Type = _let_node_type(&s, doc.stmts, line0, uri_to_path(uri), 0);
+                if inferred == null { inferred = lsp_infer_expr(doc.stmts, host, s.let_value); }
+                if inferred != null {
+                    sig = "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(inferred));
+                }
+            }
+            let no_edit_l: *JsonValue = null;
+            let item: *JsonValue = rich_completion_item(
+                s.name, "", 6, sig, "", "", "", false, no_edit_l);
+            json_arr_push(items, item);
+        }
+    }
+
+    // Primitive type names (i32, u256, …) are valid in both type and
+    // expression position (annotations, `u256::from(n)`, casts), and the
+    // type-position branch above only seeds them when the cursor is clearly
+    // in a type slot. Offer them here too so a bare prefix completes (`i3`
+    // → `i32`); the editor filters by what's typed. Idempotent via `seen`.
+    _push_primitive_types(items, seen);
+
+    // 2. Top-level decls (incl. static macros). Decls from stdlib that
+    // were transitively loaded by an existing import still get a
+    // build_import_edit pass so that selective imports are merged
+    // (`{PI}` → `{PI, min_int}`) when the user picks a name that's
+    // not yet listed.
+    let imps2: *HashMap<ImportInfo> = current_imports(doc.text);
+    let insert_line2: i32 = find_import_insertion_pos(doc.text);
+    // The on-disk path of the open buffer. Top-level decls parsed from the
+    // user's own text carry this as their `origin`; anything else in
+    // doc.stmts came from a transitively-loaded import and is subject to the
+    // pub-visibility gate below.
+    let _compl_doc_path: string = uri_to_path(uri);
+    // Project src/ prefix, so a pub decl pulled in from a *sibling* project
+    // file (loaded because some name from its module was imported) can still
+    // carry a proper auto-import edit instead of appearing as an in-scope
+    // bare ident the compiler then rejects.
+    let _compl_proj_src: string = _proj_src_prefix(_compl_doc_path);
+    if doc.stmts != null {
+        for let i: i32 = 0; i < doc.stmts.len(); i++ {
+            let s: Stmt = doc.stmts.get(i);
+            if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM
+               && s.kind != ST_CONST && s.kind != ST_MACRO_DEF { continue; }
+            if s.name == null { continue; }
+            // Visibility gate for transitively-loaded imports: doc.stmts holds
+            // EVERY decl pulled in by the file's `import`s (origin = the
+            // imported file's path), not just the user's own. A non-`pub` decl
+            // from another file is private and the compiler rejects calling it
+            // ("name not in scope"), so it must NOT be offered as a bare-ident
+            // completion. Same-file decls (origin == this doc's path, or
+            // null/empty) stay visible regardless of `pub` — local privates
+            // need no import. Mirrors the project-index gate in
+            // `_index_one_module` (`if !s.is_pub ... continue`).
+            if !s.is_pub && s.origin != null && !s.origin.eq("")
+               && !s.origin.eq(_compl_doc_path) { continue; }
+            // Hide compiler-internal symbols (`__glide_*`, `__rt_*`, leading
+            // `_` privates). Users never call these directly; surfacing them
+            // bloats the completion list with C-runtime plumbing.
+            if s.name.len() >= 2 && s.name.at(0).to_int() == 95 { continue; }
+            // Static macros are inserted as `name!` to get the bang for free.
+            let mut label: string = s.name;
+            if s.kind == ST_MACRO_DEF { label = s.name.concat("!"); }
+            if seen.contains(label) { continue; }
+            seen.insert(label, true);
+            let mut sig: string = "";
+            let mut label_extra: string = "";
+            let mut snip: string = label;
+            let mut has_snip: bool = false;
+            if s.kind == ST_FN {
+                sig = fn_signature(&s);
+                label_extra = fn_label_extra(&s);
+                snip = fn_snippet(&s);
+                has_snip = true;
+            }
+            else if s.kind == ST_STRUCT { sig = "struct ".concat(s.name); }
+            else if s.kind == ST_ENUM { sig = "enum ".concat(s.name); }
+            else if s.kind == ST_CONST {
+                sig = "const ".concat(s.name);
+                if s.let_ty != null { sig = sig.concat(": ").concat(type_to_string_pretty(s.let_ty)); }
+            }
+            else if s.kind == ST_MACRO_DEF { sig = macro_signature(&s); }
+            let mut module: string = "";
+            if s.origin != null { module = pretty_module(s.origin); }
+            // The module to drive an auto-import off. stdlib/builtins decls
+            // get it from pretty_module; project siblings (pretty_module ""s
+            // them) get it from their path under src/. Same-file / builtin
+            // decls leave it "" so no edit is emitted.
+            let mut edit_mod: string = "";
+            if module.len() >= 8 && module.substring(0, 8).eq("stdlib::") {
+                edit_mod = module;
+            } else if s.origin != null && !s.origin.eq("")
+                      && !s.origin.eq(_compl_doc_path) {
+                edit_mod = _module_under_src(s.origin, _compl_proj_src);
+                if module.eq("") { module = edit_mod; }
+            }
+            let mut docc: string = "";
+            if s.doc_comment != null { docc = s.doc_comment; }
+            // When the decl lives in another module, ask build_import_edit
+            // whether an import line must be added or an existing selective
+            // list extended (`import al::{Alelo}` -> `{Alelo, custom}`).
+            // A loaded-but-not-imported pub sibling (e.g. you imported only
+            // `Alelo` from `al`, now want `custom`) lands here, not in the
+            // edit-less bag. Same-file / builtin decls pass edit_mod "".
+            let mut decl_edit: *JsonValue = null;
+            if !edit_mod.eq("") {
+                let mut existing: *ImportInfo = null;
+                if imps2.contains(edit_mod) {
+                    let info_val: ImportInfo = imps2.get(edit_mod);
+                    existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+                    *existing = info_val;
+                }
+                decl_edit = build_import_edit(label, edit_mod, existing, insert_line2, false);
+            }
+            let item: *JsonValue = rich_completion_item(
+                label, label_extra, ci_kind_for(&s),
+                sig, docc, module, snip, has_snip,
+                decl_edit);
+            json_arr_push(items, item);
+        }
+    }
+
+    // 2b. Builtin compiler macros — recognized by the expander/codegen, so
+    // they're always in scope with no import. Surfaced as `name!`.
+    let builtins: *Vector<string> = Vector::new();
+    builtins.push("println!"); builtins.push("print!"); builtins.push("format!");
+    builtins.push("pkg!"); builtins.push("cfg!"); builtins.push("env!");
+    builtins.push("panic!"); builtins.push("todo!"); builtins.push("unimplemented!");
+    builtins.push("unreachable!"); builtins.push("dbg!"); builtins.push("assert!");
+    builtins.push("file!"); builtins.push("line!"); builtins.push("column!");
+    builtins.push("function!"); builtins.push("vec_of!");
+    for let i: i32 = 0; i < builtins.len(); i++ {
+        let bn: string = builtins.get(i);
+        if seen.contains(bn) { continue; }
+        seen.insert(bn, true);
+        let mut bdetail: string = "builtin macro";
+        if bn.eq("println!") { bdetail = "println!(args...) — print + newline"; }
+        else if bn.eq("print!") { bdetail = "print!(args...) — print, no newline"; }
+        else if bn.eq("format!") { bdetail = "format!(\"fmt\", args...) — formatted string"; }
+        else if bn.eq("pkg!") { bdetail = "pkg!(\"field\") — read a glide.glide manifest field (name/version/bin/target/…)"; }
+        else if bn.eq("cfg!") { bdetail = "cfg!(\"key\") — compile-time config / target predicate"; }
+        else if bn.eq("env!") { bdetail = "env!(\"VAR\") — value of an environment variable at compile time"; }
+        else if bn.eq("panic!") { bdetail = "panic!(\"msg\") — abort with a message"; }
+        else if bn.eq("todo!") { bdetail = "todo!() — placeholder that panics \"not yet implemented\""; }
+        else if bn.eq("unimplemented!") { bdetail = "unimplemented!() — panics: not implemented"; }
+        else if bn.eq("unreachable!") { bdetail = "unreachable!() — marks an impossible branch"; }
+        else if bn.eq("dbg!") { bdetail = "dbg!(expr) — print expr + its value, return the value"; }
+        else if bn.eq("assert!") { bdetail = "assert!(cond) — panic if cond is false"; }
+        else if bn.eq("file!") { bdetail = "file!() — current source file path"; }
+        else if bn.eq("line!") { bdetail = "line!() — current source line number"; }
+        else if bn.eq("column!") { bdetail = "column!() — current source column"; }
+        else if bn.eq("function!") { bdetail = "function!() — enclosing function name"; }
+        else if bn.eq("vec_of!") { bdetail = "vec_of!(a, b, c) — build a *Vector<T> (T from the first element)"; }
+        json_arr_push(items, completion_item(bn, 2, bdetail));
+    }
+
+    // 2c. User + stdlib macros harvested before expand_macros consumed
+    // them. Surface as `name!`. Doc.macro_defs covers free macros
+    // (`assert!`, `bail!`, etc); proc_macros covers `@proc_macro(foo)`
+    // fns invoked as `foo!(...)`.
+    if doc.macro_defs != null {
+        for let i: i32 = 0; i < doc.macro_defs.len(); i++ {
+            let md: Stmt = doc.macro_defs.get(i);
+            if md.name == null { continue; }
+            if md.name.len() >= 1 && md.name.at(0).to_int() == 95 { continue; }
+            let mlabel: string = md.name.concat("!");
+            if seen.contains(mlabel) { continue; }
+            seen.insert(mlabel, true);
+            json_arr_push(items, completion_item(mlabel, 2, macro_signature(&md)));
+        }
+    }
+    if doc.proc_macros != null {
+        for let i: i32 = 0; i < doc.proc_macros.len(); i++ {
+            let pn: string = doc.proc_macros.get(i);
+            let plabel: string = pn.concat("!");
+            if seen.contains(plabel) { continue; }
+            seen.insert(plabel, true);
+            json_arr_push(items, completion_item(plabel, 2, "proc-macro"));
+        }
+    }
+
+    // 3. Auto-import suggestions: surface every `pub` symbol from
+    // src/stdlib/ that the user hasn't imported yet. Each item carries
+    // labelDetails + documentation (markdown) + a snippet (for fns) +
+    // a precise additionalTextEdit:
+    //   - existing wildcard / bare / matching selective → no edit
+    //   - existing selective without the name → splice `, name` before `}`
+    //   - no existing import → insert
+    //       `import stdlib::X::{name};\n` (selective)
+    //       or `import stdlib::X;\n` for Module entries
+    if state.stdlib_index != null && state.stdlib_index.len() > 0 {
+        let imps: *HashMap<ImportInfo> = current_imports(doc.text);
+        let insert_line: i32 = find_import_insertion_pos(doc.text);
+        let seen_mod: *HashMap<bool> = HashMap::new();
+        _emit_index_items(state.stdlib_index, imps, insert_line, items, seen, seen_mod);
+        if state.project_index != null {
+            _emit_index_items(state.project_index, imps, insert_line, items, seen, seen_mod);
+        }
+        seen_mod.free();
+        imps.free();
+    }
+
+    // 4. Glide keywords.
+    // (helper for the bare-ident loop above lives below `handle_completion`)
+    let kws: *Vector<string> = Vector::new();
+    kws.push("let"); kws.push("const"); kws.push("mut"); kws.push("fn");
+    kws.push("struct"); kws.push("enum"); kws.push("impl"); kws.push("interface");
+    kws.push("trait"); kws.push("dyn"); kws.push("Self"); kws.push("in");
+    kws.push("if"); kws.push("else"); kws.push("while"); kws.push("for");
+    kws.push("return"); kws.push("break"); kws.push("continue");
+    kws.push("match"); kws.push("defer"); kws.push("defer_err");
+    kws.push("spawn"); kws.push("import");
+    kws.push("pub"); kws.push("extern"); kws.push("true"); kws.push("false"); kws.push("null");
+    kws.push("as"); kws.push("sizeof"); kws.push("type"); kws.push("move"); kws.push("chan");
+    kws.push("naked"); kws.push("asm"); kws.push("volatile");
+    kws.push("c_raw"); kws.push("macro"); kws.push("select");
+    for let i: i32 = 0; i < kws.len(); i++ {
+        let k: string = kws.get(i);
+        if seen.contains(k) { continue; }
+        seen.insert(k, true);
+        json_arr_push(items, completion_item(k, 14, ""));
+    }
+
+    // 5. Option / Result constructors, with a snippet + the same docs hover
+    //    shows. `none` closes its own parens; the others drop the cursor
+    //    inside for the value.
+    _ctor_completion(items, seen, "ok",   "ok(value) -> !T",    "ok($0)");
+    _ctor_completion(items, seen, "err",  "err(message) -> !T", "err($0)");
+    _ctor_completion(items, seen, "some", "some(value) -> ?T",  "some($0)");
+    _ctor_completion(items, seen, "none", "none() -> ?T",       "none()");
+
+    seen.free();
+    lsp_send_response(id, items);
+}
+
+// One Option/Result constructor completion: kind=Function, snippet insert,
+// docs pulled from `keyword_doc` so completion and hover never drift.
+fn _ctor_completion(items: *JsonValue, seen: *HashMap<bool>, name: string,
+                    sig: string, snip: string) {
+    if seen.contains(name) { return; }
+    seen.insert(name, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(name, "", 3, sig, keyword_doc(name), "", snip, true, no_edit));
+}
+
+// Push completion items for every symbol in `idx` that isn't already
+// in `seen`. Reused for the bare-ident path across both stdlib and
+// project indexes.
+fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>,
+                     insert_line: i32, items: *JsonValue,
+                     seen: *HashMap<bool>, seen_mod: *HashMap<bool>) {
+    let n: i32 = idx.len();
+    for let i: i32 = 0; i < n; i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.name == null { continue; }
+        // Proc-attrs / proc-derives surface only under `@<...>` /
+        // `@derive(...)` contexts, not in the bare-ident suggestion bag.
+        // Free macros appear here as `name!` (so `assert` typed at top
+        // level offers `assert!` with auto-import).
+        // Proc-attrs / proc-derives surface only under `@<...>` /
+        // `@derive(...)` contexts, not in the bare-ident bag. Function-like
+        // proc-macros (`info!`, `routes!`) DO belong here — surfaced as
+        // `name!` so typing `info` offers `info!` with an auto-import.
+        if sym.kind == SYMKIND_PROC_ATTR || sym.kind == SYMKIND_PROC_DERIVE { continue; }
+        let mut label: string = sym.name;
+        let mut imp_module: string = sym.module;
+        if sym.kind == ST_MACRO_DEF { label = sym.name.concat("!"); }
+        if sym.kind == SYMKIND_PROC_MACRO {
+            label = sym.name.concat("!");
+            // The defining file is conventionally `X_macros`, re-exported by
+            // the base module `X` (which also carries the fns the macro
+            // expands to). Steer the auto-import at `X`, not the macro lib.
+            let ml: i32 = imp_module.len();
+            if ml > 7 && imp_module.substring(ml - 7, ml).eq("_macros") {
+                imp_module = imp_module.substring(0, ml - 7);
+            }
+        }
+        // A name already in scope (a local, a current-file decl, a macro)
+        // hides the import suggestion — skip via `seen`. But two DIFFERENT
+        // modules exporting the SAME name (e.g. `Alelo` in `al` AND in
+        // `te::al`) must BOTH be offered so the user can choose which to
+        // import. So dedup index items among themselves by name+module, and
+        // do NOT fold the label into `seen` (that would hide the sibling).
+        if seen.contains(label) { continue; }
+        let mkey: string = label.concat("\n").concat(imp_module);
+        if seen_mod.contains(mkey) { continue; }
+        seen_mod.insert(mkey, true);
+        let mut existing: *ImportInfo = null;
+        if imps.contains(imp_module) {
+            let info_val: ImportInfo = imps.get(imp_module);
+            existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+            *existing = info_val;
+        }
+        let is_module: bool = (sym.kind == SYMKIND_MODULE);
+        // A FOLDER module (`sop`, whose def_path is a directory) can't be
+        // `import`ed — there is no `sop.glide`, and navigating through it
+        // (`sop::al::…`) resolves WITHOUT an import. So a folder inserts just
+        // its `sop::` snippet with no auto-import edit; file-backed modules
+        // and symbols still get one.
+        let is_folder: bool = is_module
+            && (sym.def_path == null || !sym.def_path.ends_with(".glide"));
+        let mut edit: *JsonValue = null;
+        if !is_folder {
+            edit = build_import_edit(sym.name, imp_module, existing, insert_line, is_module);
+        }
+        let item: *JsonValue = rich_completion_item(
+            label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind),
+            sym.signature, sym.doc, imp_module,
+            sym.snippet, sym.has_snippet, edit);
+        json_arr_push(items, item);
+    }
+}
+
+fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
+    if e == null { return; }
+    // Synthesised exprs (line == 0) don't map to a position in the user's
+    // file — surfacing them as highlights anchored at (0, 0) makes the
+    // editor light up column 0 of line 1 on every hover. Recurse into
+    // children but never emit a hit ourselves.
+    let has_pos: bool = e.line > 0;
+    if has_pos && e.kind == EX_IDENT && e.str_val.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
+    if has_pos && e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH
+       && e.lhs.str_val.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
+    // `Type::method` outside an EX_CALL (function-pointer slot, enum
+    // variant ctor, ...). Without this `Router::new` typed standalone
+    // doesn't highlight.
+    if has_pos && e.kind == EX_PATH {
+        if e.str_val != null && e.str_val.eq(name) {
+            let u: UseSite = UseSite { line: e.line, col: e.column };
+            out.push(u);
+        }
+        if e.field != null && e.field.eq(name) {
+            let u: UseSite = UseSite { line: e.line, col: e.column };
+            out.push(u);
+        }
+    }
+    // `recv.field` / `recv.method(...)` — member name itself.
+    if has_pos && e.kind == EX_MEMBER && e.field != null && e.field.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
+    // `Foo { a: ..., b: ... }` — struct literal type + field names.
+    if has_pos && e.kind == EX_STRUCT_LIT && e.str_val != null && e.str_val.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
+    // `expr as *Foo` / `sizeof(Foo)` — type names in cast / sizeof slots.
+    if (e.kind == EX_CAST || e.kind == EX_SIZEOF) && e.cast_to != null {
+        _collect_type_uses(e.cast_to, name, out, e.line, e.column);
+    }
+    // Closure params + their annotations + body.
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                if p.name != null && p.name.eq(name) {
+                    let u: UseSite = UseSite { line: e.line, col: e.column };
+                    out.push(u);
+                }
+                _collect_type_uses(p.ty, name, out, e.line, e.column);
+            }
+        }
+        _collect_type_uses(e.cast_to, name, out, e.line, e.column);
+        if e.fn_expr_body != null {
+            for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+                let bs: Stmt = e.fn_expr_body.get(i);
+                collect_uses_in_stmt(&bs, name, out);
+            }
+        }
+    }
+    if e.lhs != null { collect_uses_in_expr(e.lhs, name, out); }
+    if e.rhs != null { collect_uses_in_expr(e.rhs, name, out); }
+    if e.operand != null { collect_uses_in_expr(e.operand, name, out); }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            collect_uses_in_expr(&a, name, out);
+        }
+    }
+}
+
+// Walk a type tree, recording an occurrence of `name` at the carrier
+// position (`carrier_line`/`carrier_col`) for every TY_NAMED /
+// TY_GENERIC whose name matches. We don't have per-segment positions
+// inside type nodes, so highlights anchor at the enclosing
+// declaration's position — close enough to be useful and never
+// wrong-file. Skip when the carrier has no position (line == 0):
+// those come from synthesised stmts (proc-macro outputs, etc.) and
+// would dump bogus (0,0) highlights all over the file.
+fn _collect_type_uses(t: *Type, name: string, out: *Vector<UseSite>, carrier_line: i32, carrier_col: i32) {
+    if t == null { return; }
+    if carrier_line == 0 { return; }
+    if t.kind == TY_NAMED && t.name != null && t.name.eq(name) {
+        let u: UseSite = UseSite { line: carrier_line, col: carrier_col };
+        out.push(u);
+    }
+    if t.kind == TY_GENERIC && t.name != null && t.name.eq(name) {
+        let u: UseSite = UseSite { line: carrier_line, col: carrier_col };
+        out.push(u);
+    }
+    if t.inner != null { _collect_type_uses(t.inner, name, out, carrier_line, carrier_col); }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            _collect_type_uses(&a, name, out, carrier_line, carrier_col);
+        }
+    }
+    if t.fnptr_ret != null { _collect_type_uses(t.fnptr_ret, name, out, carrier_line, carrier_col); }
+}
+
+fn collect_uses_in_stmt(s: *Stmt, name: string, out: *Vector<UseSite>) {
+    if s == null { return; }
+    // Declaration site of fn / struct / enum / const / let / trait / macro
+    // — anchor at the name position so highlight / find-refs land on the
+    // identifier itself, not the leading `let` / `fn` / `struct` keyword.
+    if (s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM
+        || s.kind == ST_CONST || s.kind == ST_TRAIT || s.kind == ST_MACRO_DEF)
+       && s.name != null && s.name.eq(name) {
+        let mut nl: i32 = s.name_line; let mut nc: i32 = s.name_col;
+        if nl == 0 { nl = s.line; nc = s.column; }
+        let u: UseSite = UseSite { line: nl, col: nc };
+        out.push(u);
+    }
+    if s.kind == ST_LET && s.name != null && s.name.eq(name) {
+        let mut nl: i32 = s.name_line; let mut nc: i32 = s.name_col;
+        if nl == 0 { nl = s.line; nc = s.column; }
+        let u: UseSite = UseSite { line: nl, col: nc };
+        out.push(u);
+    }
+    // Type annotations: `let r: *Router`, `fn(req: *HttpRequest) -> Json<Res>`,
+    // `struct Foo { f: T }`, `impl Foo`. Anchor at the stmt's own line/col
+    // since fields/params/types don't carry their own positions.
+    _collect_type_uses(s.let_ty, name, out, s.line, s.column);
+    _collect_type_uses(s.fn_ret_ty, name, out, s.line, s.column);
+    _collect_type_uses(s.impl_target, name, out, s.line, s.column);
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            if p.name != null && p.name.eq(name) {
+                let mut nl: i32 = p.name_line; let mut nc: i32 = p.name_col;
+                if nl == 0 { nl = s.line; nc = s.column; }
+                if nl > 0 {
+                    let u: UseSite = UseSite { line: nl, col: nc };
+                    out.push(u);
+                }
+            }
+            // Prefer the param's own position (closer to where the type
+            // is written) over the fn-stmt's. Falls back to the stmt if
+            // the param has no position info.
+            let mut tl: i32 = p.name_line; let mut tc: i32 = p.name_col;
+            if tl == 0 { tl = s.line; tc = s.column; }
+            _collect_type_uses(p.ty, name, out, tl, tc);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            if f.name != null && f.name.eq(name) {
+                let u: UseSite = UseSite { line: s.line, col: s.column };
+                out.push(u);
+            }
+            _collect_type_uses(f.ty, name, out, s.line, s.column);
+        }
+    }
+    // `@derive(Name)`, `@expect("code")`, `@Name`, etc — pick up the
+    // attribute args. Without this `@derive(JsonBind)` doesn't highlight
+    // JsonBind.
+    if s.attrs != null {
+        for let i: i32 = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.args == null { continue; }
+            for let j: i32 = 0; j < a.args.len(); j++ {
+                let ae: Expr = a.args.get(j);
+                collect_uses_in_expr(&ae, name, out);
+            }
+        }
+    }
+    if s.let_value != null { collect_uses_in_expr(s.let_value, name, out); }
+    if s.expr_value != null { collect_uses_in_expr(s.expr_value, name, out); }
+    if s.cond != null { collect_uses_in_expr(s.cond, name, out); }
+    if s.for_step != null { collect_uses_in_expr(s.for_step, name, out); }
+    if s.scrutinee != null { collect_uses_in_expr(s.scrutinee, name, out); }
+    if s.for_init != null { collect_uses_in_stmt(s.for_init, name, out); }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            collect_uses_in_stmt(&b, name, out);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            collect_uses_in_stmt(&b, name, out);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            collect_uses_in_stmt(&b, name, out);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let m: Stmt = s.impl_methods.get(i);
+            collect_uses_in_stmt(&m, name, out);
+        }
+    }
+    if s.arms != null {
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let a: MatchArm = s.arms.get(i);
+            if a.body != null {
+                for let j: i32 = 0; j < a.body.len(); j++ {
+                    let b: Stmt = a.body.get(j);
+                    collect_uses_in_stmt(&b, name, out);
+                }
+            }
+        }
+    }
+}
+
+fn use_to_range(u: *UseSite, name_len: i32) -> *JsonValue {
+    let r: *JsonValue = json_object();
+    let mut l: i32 = u.line - 1; if l < 0 { l = 0; }
+    let mut c: i32 = u.col - 1; if c < 0 { c = 0; }
+    let s: *JsonValue = json_object();
+    json_obj_set(s, "line", json_int(l));
+    json_obj_set(s, "character", json_int(c));
+    let e: *JsonValue = json_object();
+    json_obj_set(e, "line", json_int(l));
+    json_obj_set(e, "character", json_int(c + name_len));
+    json_obj_set(r, "start", s);
+    json_obj_set(r, "end", e);
+    return r;
+}
+
+pub fn handle_references(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    let path: string = uri_to_path(uri);
+    let word: string = word_at(doc.text, line0, col0);
+    if word.eq("") { lsp_send_response(id, json_array()); return; }
+    let uses: *Vector<UseSite> = Vector::new();
+    if doc.stmts != null {
+        for let i: i32 = 0; i < doc.stmts.len(); i++ {
+            let s: Stmt = doc.stmts.get(i);
+            if !s.origin.eq("") && !s.origin.eq(path) { continue; }
+            collect_uses_in_stmt(&s, word, uses);
+        }
+    }
+    let arr: *JsonValue = json_array();
+    for let i: i32 = 0; i < uses.len(); i++ {
+        let u: UseSite = uses.get(i);
+        if u.line <= 0 { continue; }
+        let loc: *JsonValue = json_object();
+        json_obj_set(loc, "uri", json_string(uri));
+        json_obj_set(loc, "range", use_to_range(&u, word.len()));
+        json_arr_push(arr, loc);
+    }
+    lsp_send_response(id, arr);
+}
+
+pub fn handle_document_highlight(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    let path: string = uri_to_path(uri);
+    let word: string = word_at(doc.text, line0, col0);
+    if word.eq("") { lsp_send_response(id, json_array()); return; }
+    let uses: *Vector<UseSite> = Vector::new();
+    if doc.stmts != null {
+        for let i: i32 = 0; i < doc.stmts.len(); i++ {
+            let s: Stmt = doc.stmts.get(i);
+            if !s.origin.eq("") && !s.origin.eq(path) { continue; }
+            collect_uses_in_stmt(&s, word, uses);
+        }
+    }
+    let arr: *JsonValue = json_array();
+    for let i: i32 = 0; i < uses.len(); i++ {
+        let u: UseSite = uses.get(i);
+        // Drop synthesised hits (line == 0). They come from proc-macro
+        // outputs or other compiler-injected stmts and would highlight
+        // column 0 of line 1 with no real text underneath.
+        if u.line <= 0 { continue; }
+        let h: *JsonValue = json_object();
+        json_obj_set(h, "range", use_to_range(&u, word.len()));
+        json_obj_set(h, "kind", json_int(1));     // 1 = Text (read), 2 = Read, 3 = Write
+        json_arr_push(arr, h);
+    }
+    lsp_send_response(id, arr);
+}
+
+pub fn handle_rename(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let new_name: string = json_as_string(json_get(params, "newName"));
+    if !state.docs.contains(uri) || new_name.eq("") {
+        lsp_send_response(id, json_null()); return;
+    }
+    let doc: LspDoc = state.docs.get(uri);
+    let path: string = uri_to_path(uri);
+    let word: string = word_at(doc.text, line0, col0);
+    if word.eq("") { lsp_send_response(id, json_null()); return; }
+    let uses: *Vector<UseSite> = Vector::new();
+    if doc.stmts != null {
+        for let i: i32 = 0; i < doc.stmts.len(); i++ {
+            let s: Stmt = doc.stmts.get(i);
+            if !s.origin.eq("") && !s.origin.eq(path) { continue; }
+            collect_uses_in_stmt(&s, word, uses);
+        }
+    }
+    let edits: *JsonValue = json_array();
+    for let i: i32 = 0; i < uses.len(); i++ {
+        let u: UseSite = uses.get(i);
+        // Skip synthesised hits — renaming would otherwise insert at
+        // (0,0), which the editor applies as an actual file edit.
+        if u.line <= 0 { continue; }
+        let edit: *JsonValue = json_object();
+        json_obj_set(edit, "range", use_to_range(&u, word.len()));
+        json_obj_set(edit, "newText", json_string(new_name));
+        json_arr_push(edits, edit);
+    }
+    let changes: *JsonValue = json_object();
+    json_obj_set(changes, uri, edits);
+    let result: *JsonValue = json_object();
+    json_obj_set(result, "changes", changes);
+    lsp_send_response(id, result);
+}
+
+// `prepareRename` — validates that the cursor sits on something renameable.
+// Returns `{ range, placeholder }` so the editor knows what range to
+// highlight while the user types the new name. Refuses keywords, literals,
+// and empty selections.
+pub fn handle_prepare_rename(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let pos: *JsonValue = json_get(params, "position");
+    let line0: i32 = json_as_int(json_get(pos, "line"));
+    let col0: i32 = json_as_int(json_get(pos, "character"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    let word: string = word_at(doc.text, line0, col0);
+    if word.eq("") { lsp_send_response(id, json_null()); return; }
+    if is_glide_keyword(word) { lsp_send_response(id, json_null()); return; }
+
+    // Build the exact range covering the word at the cursor.
+    let lex: *Lexer = Lexer::new(doc.text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF { break; }
+        if tok.kind != TOK_IDENT { continue; }
+        let tline: i32 = tok.line - 1;
+        let tcol: i32 = tok.column - 1;
+        let len: i32 = tok.lexeme.len();
+        if tline == line0 && col0 >= tcol && col0 <= tcol + len {
+            let range: *JsonValue = json_object();
+            let start: *JsonValue = json_object();
+            let endp: *JsonValue = json_object();
+            json_obj_set(start, "line", json_int(tline));
+            json_obj_set(start, "character", json_int(tcol));
+            json_obj_set(endp,  "line", json_int(tline));
+            json_obj_set(endp,  "character", json_int(tcol + len));
+            json_obj_set(range, "start", start);
+            json_obj_set(range, "end", endp);
+            let result: *JsonValue = json_object();
+            json_obj_set(result, "range", range);
+            json_obj_set(result, "placeholder", json_string(word));
+            lsp_send_response(id, result);
+            return;
+        }
+    }
+    lsp_send_response(id, json_null());
+}
+
+// Reject rename of language keywords. Mirrors the lexer's reserved set.
+fn is_glide_keyword(w: string) -> bool {
+    if w.eq("fn") { return true; } if w.eq("let") { return true; }
+    if w.eq("mut") { return true; } if w.eq("const") { return true; }
+    if w.eq("struct") { return true; } if w.eq("enum") { return true; }
+    if w.eq("trait") { return true; } if w.eq("impl") { return true; }
+    if w.eq("import") { return true; } if w.eq("pub") { return true; }
+    if w.eq("if") { return true; } if w.eq("else") { return true; }
+    if w.eq("while") { return true; } if w.eq("for") { return true; }
+    if w.eq("return") { return true; } if w.eq("spawn") { return true; }
+    if w.eq("defer") { return true; } if w.eq("match") { return true; }
+    if w.eq("break") { return true; } if w.eq("continue") { return true; }
+    if w.eq("as") { return true; } if w.eq("sizeof") { return true; }
+    if w.eq("new") { return true; } if w.eq("move") { return true; }
+    if w.eq("type") { return true; } if w.eq("extern") { return true; }
+    if w.eq("c_include") { return true; } if w.eq("c_link") { return true; }
+    if w.eq("c_raw") { return true; } if w.eq("macro") { return true; }
+    if w.eq("naked") { return true; } if w.eq("asm") { return true; }
+    if w.eq("volatile") { return true; } if w.eq("dyn") { return true; }
+    if w.eq("Self") { return true; } if w.eq("in") { return true; }
+    if w.eq("chan") { return true; } if w.eq("true") { return true; }
+    if w.eq("false") { return true; } if w.eq("null") { return true; }
+    if w.eq("defer_err") { return true; } if w.eq("select") { return true; }
+    if w.eq("trait") { return true; } if w.eq("interface") { return true; }
+    return false;
+}
+
+fn count_lines(s: string) -> i32 {
+    let mut n: i32 = 0;
+    let len: i32 = s.len();
+    for let i: i32 = 0; i < len; i++ {
+        if s.at(i).to_int() == 10 { n = n + 1; }
+    }
+    return n;
+}
+
+pub fn handle_formatting(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
+    let doc: LspDoc = state.docs.get(uri);
+    // Re-parse from text in case stmts is stale. fmt_mode keeps `Self` and
+    // other source-only spellings verbatim instead of lowering them.
+    let lex: *Lexer = Lexer::new(doc.text);
+    let p: *Parser = Parser::new(lex);
+    p.fmt_mode = true;
+    let parsed: *Vector<Stmt> = parse_program(p);
+    let formatted: string = fmt_program(parsed);
+    // Return a single TextEdit replacing the whole document.
+    let lines: i32 = count_lines(doc.text) + 2;
+    let edit: *JsonValue = json_object();
+    let range: *JsonValue = json_object();
+    let start: *JsonValue = json_object();
+    let endp: *JsonValue = json_object();
+    json_obj_set(start, "line", json_int(0));
+    json_obj_set(start, "character", json_int(0));
+    json_obj_set(endp, "line", json_int(lines));
+    json_obj_set(endp, "character", json_int(0));
+    json_obj_set(range, "start", start);
+    json_obj_set(range, "end", endp);
+    json_obj_set(edit, "range", range);
+    json_obj_set(edit, "newText", json_string(formatted));
+    let arr: *JsonValue = json_array();
+    json_arr_push(arr, edit);
+    lsp_send_response(id, arr);
+}
+
+// `textDocument/codeAction` — read `context.diagnostics` from the
+// request, look at each entry's `data.fix` field (set by us in
+// `diag_to_json`), and synthesize a CodeAction with a WorkspaceEdit
+// that applies the replacement. No re-analysis needed: the editor
+// hands back the diagnostic objects we published, including the
+// `data` blob.
+// End offset (exclusive) of the value expression starting at `start`. Scans
+// to the first top-level `;` / `,` / newline, or the close of an enclosing
+// bracket, honoring string / char literals and nested () [] {} so the
+// wrap-in-constructor fix grabs exactly the value's source text. Trailing
+// whitespace is trimmed.
+fn _value_extent(text: string, start: i32) -> i32 {
+    let n: i32 = text.len();
+    let mut i: i32 = start;
+    let mut depth: i32 = 0;
+    let mut in_str: bool = false;
+    let mut in_chr: bool = false;
+    while i < n {
+        let c: i32 = text.at(i).to_int();
+        if in_str {
+            if c == 92 { i = i + 2; continue; }
+            if c == 34 { in_str = false; }
+            i = i + 1; continue;
+        }
+        if in_chr {
+            if c == 92 { i = i + 2; continue; }
+            if c == 39 { in_chr = false; }
+            i = i + 1; continue;
+        }
+        if c == 34 { in_str = true; i = i + 1; continue; }
+        if c == 39 { in_chr = true; i = i + 1; continue; }
+        if c == 40 || c == 91 || c == 123 { depth = depth + 1; i = i + 1; continue; }
+        if c == 41 || c == 93 || c == 125 {
+            if depth == 0 { break; }
+            depth = depth - 1; i = i + 1; continue;
+        }
+        if depth == 0 && (c == 59 || c == 44 || c == 10 || c == 13) { break; }
+        i = i + 1;
+    }
+    while i > start {
+        let pc: i32 = text.at(i - 1).to_int();
+        if pc == 32 || pc == 9 { i = i - 1; } else { break; }
+    }
+    return i;
+}
+
+// Build the manifest-targeted CodeActions for an `unresolved-import`
+// diagnostic. Two flavours:
+//   * "Add `<alias>` to glide.glide as git dep (github.com/<a>/<a>@main)"
+//   * "Add `<alias>` to glide.glide as local path"
+// Plus, when the alias IS already declared but its cache dir is empty,
+// a third action: "Fetch missing dep `<alias>`" which the editor
+// dispatches via workspace/executeCommand.
+//
+// All actions edit the manifest file's URI rather than the active doc.
+// The diagnostic is attached so editors surface them on the import
+// statement's red squiggle.
+fn _emit_unresolved_import_actions(out: *JsonValue, d: *JsonValue, uri: string, _state: *LspState) {
+    // Pull the alias out of the diagnostic message: the typer emits
+    // `cannot find module \`X::Y::Z\` to import`. The first segment is
+    // the alias the user would declare in their manifest.
+    let msg: string = json_as_string(json_get(d, "message"));
+    let alias: string = _alias_from_unresolved_message(msg);
+    if alias.eq("") { return; }
+    // The same diagnostic also fires for typos inside stdlib paths
+    // (`import stdlib::tpyo;`). For those the `stdlib::` prefix is the
+    // alias — but there's no dep to add. Skip the suggestion when the
+    // alias hits a reserved root we know isn't user-installable.
+    if alias.eq("stdlib") || alias.eq("src") { return; }
+
+    let path: string = uri_to_path(uri);
+    let dir: string = parent_dir(path);
+    let root: string = find_manifest_root(dir);
+    if root.eq("") { return; }
+
+    let m: *Manifest = read_manifest(root);
+    let mut declared: bool = false;
+    let mut cached: bool = false;
+    if m != null {
+        for let i: i32 = 0; i < m.deps.len(); i++ {
+            let dep: ManifestDep = m.deps.get(i);
+            if !dep.name.eq(alias) { continue; }
+            declared = true;
+            let cdir: string = dep_cache_dir(m, dep);
+            if !cdir.eq("") && __glide_fs_is_dir(cdir) { cached = true; }
+            break;
+        }
+    }
+
+    // When the dep is already declared but unfetched, the right answer
+    // is "Fetch", not "Add" — surface a command-shaped action that the
+    // editor invokes via workspace/executeCommand.
+    if declared && !cached {
+        let act: *JsonValue = _build_fetch_command_action(alias, root, d);
+        if act != null { json_arr_push(out, act); }
+        return;
+    }
+    // Already declared and cached, but still unresolved → the import
+    // path is wrong (typo in sub-module name). Nothing useful we can
+    // suggest from the manifest side, so bail.
+    if declared { return; }
+
+    // Insertion position for new dep lines in the manifest source.
+    let pos: InsertPos = manifest_dep_insert_position(root);
+    if !pos.ok { return; }
+    let manifest_uri: string = path_to_uri(root.concat("/glide.glide"));
+
+    // Git action: github.com/<alias>/<alias>@main is the most common
+    // shape for a freshly published Glide package and aligns with the
+    // `glide add <alias>` shorthand.
+    let git_line: string = "        Dep::git(\"".concat(alias)
+        .concat("\", \"github.com/").concat(alias).concat("/").concat(alias)
+        .concat("\", \"main\"),\n");
+    let git_title: string = "Add `".concat(alias)
+        .concat("` to glide.glide (git: github.com/").concat(alias).concat("/").concat(alias).concat("@main)");
+    let git_act: *JsonValue = _build_manifest_edit_action(git_title, manifest_uri, pos.line, pos.col, git_line, d);
+    if git_act != null {
+        // Preferred so a single Ctrl+. accepts it; the path variant
+        // sits behind it as a second choice.
+        json_obj_set(git_act, "isPreferred", json_bool(true));
+        json_arr_push(out, git_act);
+    }
+
+    // Path action: defaults to `../<alias>` because monorepo siblings
+    // are the typical local-dev shape. User edits the path string
+    // afterward if their layout differs.
+    let path_line: string = "        Dep::path(\"".concat(alias)
+        .concat("\", \"../").concat(alias).concat("\"),\n");
+    let path_title: string = "Add `".concat(alias).concat("` to glide.glide (local path: ../").concat(alias).concat(")");
+    let path_act: *JsonValue = _build_manifest_edit_action(path_title, manifest_uri, pos.line, pos.col, path_line, d);
+    if path_act != null { json_arr_push(out, path_act); }
+}
+
+// Read `X` from a typer diagnostic of the form
+// "cannot find module `X::Y::Z` to import". Empty string when the
+// message doesn't match (we don't want to invent a code action from
+// noise).
+fn _alias_from_unresolved_message(msg: string) -> string {
+    if msg == null || msg.eq("") { return ""; }
+    let mut open: i32 = -1;
+    for let i: i32 = 0; i < msg.len(); i++ {
+        if msg.at(i).to_int() == 96 { open = i; break; }   // backtick
+    }
+    if open < 0 { return ""; }
+    let mut close: i32 = -1;
+    for let i: i32 = open + 1; i < msg.len(); i++ {
+        if msg.at(i).to_int() == 96 { close = i; break; }
+    }
+    if close < 0 { return ""; }
+    let body: string = msg.substring(open + 1, close);
+    // First `::`-separated segment.
+    for let i: i32 = 0; i + 1 < body.len(); i++ {
+        if body.at(i).to_int() == 58 && body.at(i + 1).to_int() == 58 {
+            return body.substring(0, i);
+        }
+    }
+    return body;
+}
+
+// Build a CodeAction whose `edit.changes` mutates the manifest file
+// (different URI than the active doc) at `(line, col)` with `new_text`.
+// `d` is the originating diagnostic so the editor surfaces the action
+// on the import-statement squiggle.
+fn _build_manifest_edit_action(title: string, manifest_uri: string,
+                                line: i32, col: i32, new_text: string,
+                                d: *JsonValue) -> *JsonValue {
+    let act: *JsonValue = json_object();
+    json_obj_set(act, "title", json_string(title));
+    json_obj_set(act, "kind", json_string("quickfix"));
+
+    let edit: *JsonValue = json_object();
+    let changes: *JsonValue = json_object();
+    let edits: *JsonValue = json_array();
+    let te: *JsonValue = json_object();
+    let r: *JsonValue = json_object();
+    let s_obj: *JsonValue = json_object();
+    let e_obj: *JsonValue = json_object();
+    json_obj_set(s_obj, "line", json_int(line));
+    json_obj_set(s_obj, "character", json_int(col));
+    json_obj_set(e_obj, "line", json_int(line));
+    json_obj_set(e_obj, "character", json_int(col));
+    json_obj_set(r, "start", s_obj);
+    json_obj_set(r, "end", e_obj);
+    json_obj_set(te, "range", r);
+    json_obj_set(te, "newText", json_string(new_text));
+    json_arr_push(edits, te);
+    json_obj_set(changes, manifest_uri, edits);
+    json_obj_set(edit, "changes", changes);
+    json_obj_set(act, "edit", edit);
+    _attach_diagnostic_ref(act, d);
+    return act;
+}
+
+// "Fetch missing dep" action — wraps an executeCommand invocation that
+// the LSP server handles by running fetch on demand. The command
+// arguments are [manifestRoot, alias] so the handler doesn't have to
+// re-derive them.
+fn _build_fetch_command_action(alias: string, manifest_root: string, d: *JsonValue) -> *JsonValue {
+    let act: *JsonValue = json_object();
+    json_obj_set(act, "title", json_string("Fetch missing dep `".concat(alias).concat("`")));
+    json_obj_set(act, "kind", json_string("quickfix"));
+    let cmd: *JsonValue = json_object();
+    json_obj_set(cmd, "title", json_string("Fetch missing dep"));
+    json_obj_set(cmd, "command", json_string("glide.fetch"));
+    let args: *JsonValue = json_array();
+    json_arr_push(args, json_string(manifest_root));
+    json_arr_push(args, json_string(alias));
+    json_obj_set(cmd, "arguments", args);
+    json_obj_set(act, "command", cmd);
+    json_obj_set(act, "isPreferred", json_bool(true));
+    _attach_diagnostic_ref(act, d);
+    return act;
+}
+
+// Copy the originating diagnostic's range/message/code onto the action
+// so editors render the lightbulb on the right squiggle. Allocated
+// fresh — must not alias the request's JsonValues (they get freed by
+// the outer reply path).
+fn _attach_diagnostic_ref(act: *JsonValue, d: *JsonValue) {
+    let d_range: *JsonValue = json_get(d, "range");
+    if d_range == null { return; }
+    let d_s: *JsonValue = json_get(d_range, "start");
+    let d_e: *JsonValue = json_get(d_range, "end");
+    let dlist: *JsonValue = json_array();
+    let dfix: *JsonValue = json_object();
+    let drng: *JsonValue = json_object();
+    let dso: *JsonValue = json_object();
+    let deo: *JsonValue = json_object();
+    json_obj_set(dso, "line", json_int(json_as_int(json_get(d_s, "line"))));
+    json_obj_set(dso, "character", json_int(json_as_int(json_get(d_s, "character"))));
+    json_obj_set(deo, "line", json_int(json_as_int(json_get(d_e, "line"))));
+    json_obj_set(deo, "character", json_int(json_as_int(json_get(d_e, "character"))));
+    json_obj_set(drng, "start", dso);
+    json_obj_set(drng, "end", deo);
+    json_obj_set(dfix, "range", drng);
+    json_obj_set(dfix, "message", json_string(json_as_string(json_get(d, "message"))));
+    let dcode: string = json_as_string(json_get(d, "code"));
+    if !dcode.eq("") { json_obj_set(dfix, "code", json_string(dcode)); }
+    json_arr_push(dlist, dfix);
+    json_obj_set(act, "diagnostics", dlist);
+    if d_s != null { free(d_s as *void); }
+    if d_e != null { free(d_e as *void); }
+    free(d_range as *void);
+}
+
+// workspace/executeCommand — handle server-side commands referenced
+// from code actions. Today: `glide.fetch <manifestRoot> <alias>` runs
+// the same `fetch_all` pipeline the CLI uses, then bumps the project
+// fingerprint so the next keystroke rebuilds the dep index. The
+// returned response is `null`; progress is conveyed via window/showMessage.
+pub fn handle_execute_command(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let cmd_name: string = json_as_string(json_get(params, "command"));
+    let args: *JsonValue = json_get(params, "arguments");
+
+    if !cmd_name.eq("glide.fetch") {
+        lsp_send_response(id, json_null());
+        return;
+    }
+
+    // arguments[0] = manifest root; arguments[1] = alias (informational
+    // for the status message — fetch_all walks every declared dep, not
+    // just the named one, so the user sees one fetch even if multiple
+    // deps are missing).
+    let root: string = if _json_arr_len(args) > 0 { json_as_string(json_at(args, 0)) } else { "" };
+    let alias: string = if _json_arr_len(args) > 1 { json_as_string(json_at(args, 1)) } else { "" };
+    if root.eq("") {
+        _lsp_show_message(2, "glide.fetch: missing manifest root");
+        lsp_send_response(id, json_null());
+        return;
+    }
+
+    let m: *Manifest = read_manifest(root);
+    if m == null {
+        _lsp_show_message(1, "glide.fetch: could not parse glide.glide");
+        lsp_send_response(id, json_null());
+        return;
+    }
+
+    _lsp_show_message(3, "fetching deps…");
+    let fetched: i32 = fetch_all(m);
+    link_all(m);
+    let lf: *Lockfile = lockfile_from_manifest(m);
+    write_lockfile(root, lf);
+
+    // Force a rebuild of the project index next time a file in this
+    // project is touched.
+    state.project_dep_fp = "";
+
+    let mut msg: string = "";
+    if fetched > 0 {
+        msg = "fetched ".concat(int_to_str(fetched as i64)).concat(" dep(s)");
+    } else if !alias.eq("") {
+        msg = "`".concat(alias).concat("` not fetched - check the URL / rev in glide.glide");
+    } else {
+        msg = "no deps to fetch";
+    }
+    _lsp_show_message(3, msg);
+    lsp_send_response(id, json_null());
+}
+
+// LSP window/showMessage notification. `kind`: 1=error, 2=warning, 3=info.
+pub fn _lsp_show_message(kind: i32, text: string) {
+    let params: *JsonValue = json_object();
+    json_obj_set(params, "type", json_int(kind));
+    json_obj_set(params, "message", json_string(text));
+    lsp_send_notification("window/showMessage", params);
+}
+
+pub fn handle_code_action(req: *JsonValue, state: *LspState) {
+    let id: *JsonValue = json_get(req, "id");
+    let params: *JsonValue = json_get(req, "params");
+    let td: *JsonValue = json_get(params, "textDocument");
+    let uri: string = json_as_string(json_get(td, "uri"));
+    let ctx: *JsonValue = json_get(params, "context");
+    let diags: *JsonValue = json_get(ctx, "diagnostics");
+
+    let out: *JsonValue = json_array();
+    let n: i32 = _json_arr_len(diags);
+    _lsp_log("  codeAction: ".concat(int_to_str(n)).concat(" diags"));
+    if n == 0 {
+        lsp_send_response(id, out);
+        return;
+    }
+    for let i: i32 = 0; i < n; i++ {
+        let d: *JsonValue = json_at(diags, i);
+        let code: string = json_as_string(json_get(d, "code"));
+
+        // Edit positions + replacement text. Two sources:
+        //   * wrap-some / wrap-ok: the typer flagged the value but left the
+        //     edit to us, since only the LSP has the source. Read the value's
+        //     exact text from `doc.text` and wrap it in the constructor.
+        //   * everything else: the typer-supplied `data.fix` { range, newText }.
+        let mut sl: i32 = 0;
+        let mut sc: i32 = 0;
+        let mut el: i32 = 0;
+        let mut ec: i32 = 0;
+        let mut new_text: string = "";
+        let mut have_fix: bool = false;
+        let mut data: *JsonValue = null;
+        let mut fix: *JsonValue = null;
+        let mut fr: *JsonValue = null;
+        let mut fr_start: *JsonValue = null;
+        let mut fr_end: *JsonValue = null;
+        if (code.eq("wrap-some") || code.eq("wrap-ok") || code.eq("unused-result"))
+           && state.docs.contains(uri) {
+            let wdoc: LspDoc = state.docs.get(uri);
+            let wfr: *JsonValue = json_get(d, "range");
+            let wfs: *JsonValue = json_get(wfr, "start");
+            let vsl: i32 = json_as_int(json_get(wfs, "line"));
+            let vsc: i32 = json_as_int(json_get(wfs, "character"));
+            let voff: i32 = _line_col_offset(wdoc.text, vsl, vsc);
+            if voff >= 0 {
+                let veo: i32 = _value_extent(wdoc.text, voff);
+                let mut vel: i32 = vsl;
+                let mut vec: i32 = vsc;
+                for let k: i32 = voff; k < veo; k++ {
+                    if wdoc.text.at(k).to_int() == 10 { vel = vel + 1; vec = 0; }
+                    else { vec = vec + 1; }
+                }
+                if code.eq("unused-result") {
+                    // Append `?` to propagate — only valid when the enclosing
+                    // fn itself returns a result/option, so check that first.
+                    let host: *Stmt = fn_containing(wdoc.stmts, vsl, uri_to_path(uri));
+                    if host != null && host.fn_ret_ty != null
+                       && (host.fn_ret_ty.kind == TY_RESULT || host.fn_ret_ty.kind == TY_OPTION
+                           || host.fn_ret_ty.kind == TY_OPT_RESULT) {
+                        sl = vel; sc = vec; el = vel; ec = vec;   // insertion at call end
+                        new_text = "?";
+                        have_fix = true;
+                    }
+                } else {
+                    let vtext: string = wdoc.text.substring(voff, veo);
+                    let mut ctor: string = "ok";
+                    if code.eq("wrap-some") { ctor = "some"; }
+                    new_text = ctor.concat("(").concat(vtext).concat(")");
+                    sl = vsl; sc = vsc; el = vel; ec = vec;       // replace the value
+                    have_fix = true;
+                }
+            }
+        } else if code.eq("unresolved-import") {
+            // Dep-related actions live in a different file (glide.glide),
+            // not the active document. Build the WorkspaceEdit(s)
+            // ourselves and push them straight onto `out`.
+            _emit_unresolved_import_actions(out, d, uri, state);
+            free(d as *void);
+            continue;
+        } else {
+            data = json_get(d, "data");
+            if data != null {
+                fix = json_get(data, "fix");
+                if fix != null {
+                    fr = json_get(fix, "range");
+                    if fr != null {
+                        new_text = json_as_string(json_get(fix, "newText"));
+                        fr_start = json_get(fr, "start");
+                        fr_end   = json_get(fr, "end");
+                        sl = json_as_int(json_get(fr_start, "line"));
+                        sc = json_as_int(json_get(fr_start, "character"));
+                        el = json_as_int(json_get(fr_end,   "line"));
+                        ec = json_as_int(json_get(fr_end,   "character"));
+                        have_fix = true;
+                    }
+                }
+            }
+        }
+        if !have_fix { continue; }
+
+        let action: *JsonValue = json_object();
+        let title: string = _code_action_title(code, new_text);
+        json_obj_set(action, "title", json_string(title));
+        json_obj_set(action, "kind", json_string("quickfix"));
+
+        // Build the WorkspaceEdit { changes: { uri: [TextEdit] } }
+        // with a freshly-allocated range so we don't alias the
+        // request's JsonValues.
+        let edit: *JsonValue = json_object();
+        let changes: *JsonValue = json_object();
+        let edits: *JsonValue = json_array();
+        let te: *JsonValue = json_object();
+        let r: *JsonValue = json_object();
+        let s_obj: *JsonValue = json_object();
+        let e_obj: *JsonValue = json_object();
+        json_obj_set(s_obj, "line", json_int(sl));
+        json_obj_set(s_obj, "character", json_int(sc));
+        json_obj_set(e_obj, "line", json_int(el));
+        json_obj_set(e_obj, "character", json_int(ec));
+        json_obj_set(r, "start", s_obj);
+        json_obj_set(r, "end", e_obj);
+        json_obj_set(te, "range", r);
+        json_obj_set(te, "newText", json_string(new_text));
+        json_arr_push(edits, te);
+        json_obj_set(changes, uri, edits);
+        json_obj_set(edit, "changes", changes);
+        json_obj_set(action, "edit", edit);
+        // Single, unambiguous fix → mark preferred so Ctrl+. can auto-apply.
+        json_obj_set(action, "isPreferred", json_bool(true));
+        // Link the action back to the diagnostic it resolves. VS Code uses
+        // this to surface the fix on the problem's lightbulb; without it the
+        // action often never appears. Rebuilt fresh (can't alias the request
+        // tree — lsp_send_response json_frees the whole reply).
+        let d_range: *JsonValue = json_get(d, "range");
+        if d_range != null {
+            let d_s: *JsonValue = json_get(d_range, "start");
+            let d_e: *JsonValue = json_get(d_range, "end");
+            let dlist: *JsonValue = json_array();
+            let dfix: *JsonValue = json_object();
+            let drng: *JsonValue = json_object();
+            let dso: *JsonValue = json_object();
+            let deo: *JsonValue = json_object();
+            json_obj_set(dso, "line", json_int(json_as_int(json_get(d_s, "line"))));
+            json_obj_set(dso, "character", json_int(json_as_int(json_get(d_s, "character"))));
+            json_obj_set(deo, "line", json_int(json_as_int(json_get(d_e, "line"))));
+            json_obj_set(deo, "character", json_int(json_as_int(json_get(d_e, "character"))));
+            json_obj_set(drng, "start", dso);
+            json_obj_set(drng, "end", deo);
+            json_obj_set(dfix, "range", drng);
+            json_obj_set(dfix, "message", json_string(json_as_string(json_get(d, "message"))));
+            if !code.eq("") { json_obj_set(dfix, "code", json_string(code)); }
+            json_arr_push(dlist, dfix);
+            json_obj_set(action, "diagnostics", dlist);
+            if d_s != null { free(d_s as *void); }
+            if d_e != null { free(d_e as *void); }
+            free(d_range as *void);
+        }
+        json_arr_push(out, action);
+
+        // Free the wrappers we allocated via json_get / json_at for
+        // the incoming data; their inner Vectors are owned by the
+        // request and stay alive until lsp_main's outer free.
+        free(d as *void);
+        if data != null { free(data as *void); }
+        if fix != null { free(fix as *void); }
+        if fr != null { free(fr as *void); }
+        if fr_start != null { free(fr_start as *void); }
+        if fr_end != null { free(fr_end as *void); }
+    }
+    lsp_send_response(id, out);
+}
+
+// json_array doesn't expose a length helper; reach into the field
+// directly. Returns 0 when the value isn't an array (or is null).
+pub fn _json_arr_len(v: *JsonValue) -> i32 {
+    if v == null { return 0; }
+    if v.kind != JSON_ARRAY { return 0; }
+    if v.arr == null { return 0; }
+    return v.arr.len();
+}
+
+fn _code_action_title(code: string, new_text: string) -> string {
+    if code.eq("unused-var")  { return "Prefix with `_`"; }
+    if code.eq("unused-param"){ return "Prefix with `_`"; }
+    if code.eq("unused-fn")   { return "Prefix with `_`"; }
+    if code.eq("unnecessary-mut") { return "Remove `mut`"; }
+    if code.eq("struct-field-type") { return "Wrap in `".concat(new_text).concat("`"); }
+    if code.eq("wrap-some") { return "Wrap in `some(...)`"; }
+    if code.eq("wrap-ok")   { return "Wrap in `ok(...)`"; }
+    if code.eq("unused-result") { return "Propagate with `?`"; }
+    if code.eq("for-in-not-iterable") { return "Wrap in a range `0..`"; }
+    if code.eq("unknown-type") || code.eq("unknown-name")
+       || code.eq("unknown-function") || code.eq("no-field") {
+        return "Change to `".concat(new_text).concat("`");
+    }
+    if code.eq("expected-semicolon") { return "Insert `;`"; }
+    if new_text.eq("") { return "Apply fix (delete)"; }
+    return "Apply fix";
+}
+
