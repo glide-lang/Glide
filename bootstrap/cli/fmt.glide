@@ -14,31 +14,43 @@
 // carried through on the token stream (lexer `lead`/`trail`) and re-emitted in
 // place. A comment-bearing operator chain or match-as-expression is broken
 // across lines so the comment keeps its spot.
-
 import bootstrap::syntax::ast;
-import stdlib::bytes::*;     // ByteBuffer — O(n) string building (vs concat folds)
+import stdlib::bytes::*; // ByteBuffer — O(n) string building (vs concat folds)
 
 const FMT_INDENT: string = "    ";
 
 fn fmt_indent(depth: i32) -> string {
     let mut s: string = "";
-    for let i: i32 = 0; i < depth; i++ { s = s.concat(FMT_INDENT); }
+    for let i: i32 = 0; i < depth; i++ {
+        s = s.concat(FMT_INDENT);
+    }
     return s;
 }
 
 // ---- Types ------------------------------------------------------------
-
 pub fn fmt_type(t: *Type) -> string {
-    if t == null { return ""; }
-    if t.kind == TY_NAMED { return t.name; }
-    if t.kind == TY_POINTER { return "*".concat(fmt_type(t.inner)); }
-    if t.kind == TY_BORROW { return "&".concat(fmt_type(t.inner)); }
-    if t.kind == TY_BORROW_MUT { return "&mut ".concat(fmt_type(t.inner)); }
-    if t.kind == TY_SLICE { return "[]".concat(fmt_type(t.inner)); }
+    if t == null {
+        return "";
+    }
+    if t.kind == TY_NAMED {
+        return t.name;
+    }
+    if t.kind == TY_POINTER {
+        return "*".concat(fmt_type(t.inner));
+    }
+    if t.kind == TY_BORROW {
+        return "&".concat(fmt_type(t.inner));
+    }
+    if t.kind == TY_BORROW_MUT {
+        return "&mut ".concat(fmt_type(t.inner));
+    }
+    if t.kind == TY_SLICE {
+        return "[]".concat(fmt_type(t.inner));
+    }
     if t.kind == TY_RESULT {
         // A value-less result is written `!`, not `!void` — keep it bare and
         // normalize an explicit `!void` back to `!`.
-        if t.inner == null || (t.inner.kind == TY_NAMED && t.inner.name.eq("void")) {
+        if t.inner == null || t.inner.kind == TY_NAMED && t.inner.name.eq("void") {
             return "!";
         }
         return "!".concat(fmt_type(t.inner));
@@ -47,7 +59,9 @@ pub fn fmt_type(t: *Type) -> string {
         let mut out: string = t.name.concat("<");
         if t.args != null {
             for let i: i32 = 0; i < t.args.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let a: Type = t.args.get(i);
                 out = out.concat(fmt_type(&a));
             }
@@ -58,24 +72,38 @@ pub fn fmt_type(t: *Type) -> string {
         let mut out: string = "fn(";
         if t.args != null {
             for let i: i32 = 0; i < t.args.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let a: Type = t.args.get(i);
                 out = out.concat(fmt_type(&a));
             }
         }
         out = out.concat(")");
-        if t.fnptr_ret != null { out = out.concat(" -> ").concat(fmt_type(t.fnptr_ret)); }
+        if t.fnptr_ret != null {
+            out = out.concat(" -> ").concat(fmt_type(t.fnptr_ret));
+        }
         return out;
     }
-    if t.kind == TY_OPTION { return "?".concat(fmt_type(t.inner)); }
-    if t.kind == TY_OPT_RESULT { return "?!".concat(fmt_type(t.inner)); }
-    if t.kind == TY_DYN { return "dyn ".concat(t.name); }
-    if t.kind == TY_ASSOC { return fmt_type(t.inner).concat("::").concat(t.name); }
+    if t.kind == TY_OPTION {
+        return "?".concat(fmt_type(t.inner));
+    }
+    if t.kind == TY_OPT_RESULT {
+        return "?!".concat(fmt_type(t.inner));
+    }
+    if t.kind == TY_DYN {
+        return "dyn ".concat(t.name);
+    }
+    if t.kind == TY_ASSOC {
+        return fmt_type(t.inner).concat("::").concat(t.name);
+    }
     if t.kind == TY_TUPLE {
         let mut out: string = "(";
         if t.args != null {
             for let i: i32 = 0; i < t.args.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let a: Type = t.args.get(i);
                 out = out.concat(fmt_type(&a));
             }
@@ -89,12 +117,24 @@ pub fn fmt_type(t: *Type) -> string {
 // canonical form; printable ASCII is emitted literally where possible;
 // anything else uses `'\\xNN'` two-digit lowercase hex.
 fn fmt_char_lit(n: i32) -> string {
-    if n == 39 { return "'\\''"; }
-    if n == 92 { return "'\\\\'"; }
-    if n == 10 { return "'\\n'"; }
-    if n == 9  { return "'\\t'"; }
-    if n == 13 { return "'\\r'"; }
-    if n == 0  { return "'\\0'"; }
+    if n == 39 {
+        return "'\\''";
+    }
+    if n == 92 {
+        return "'\\\\'";
+    }
+    if n == 10 {
+        return "'\\n'";
+    }
+    if n == 9 {
+        return "'\\t'";
+    }
+    if n == 13 {
+        return "'\\r'";
+    }
+    if n == 0 {
+        return "'\\0'";
+    }
     // Printable ASCII: emit the character itself (the lexer has no `'\xNN'`
     // char escape, so a hex form here would not round-trip).
     if n >= 32 && n <= 126 {
@@ -102,41 +142,128 @@ fn fmt_char_lit(n: i32) -> string {
         return "'".concat(printable.substring(n - 32, n - 31)).concat("'");
     }
     let hex: string = "0123456789abcdef";
-    let mut high: i32 = (n / 16) % 16; if high < 0 { high = 0; }
-    let mut low: i32 = n % 16; if low < 0 { low = 0; }
-    return "'\\x".concat(hex.substring(high, high + 1))
-                 .concat(hex.substring(low, low + 1)).concat("'");
+    let mut high: i32 = n / 16 % 16;
+    if high < 0 {
+        high = 0;
+    }
+    let mut low: i32 = n % 16;
+    if low < 0 {
+        low = 0;
+    }
+    return "'\\x".concat(hex.substring(high, high + 1)).concat(hex.substring(low, low + 1)).concat("'");
 }
 
 // ---- Operators --------------------------------------------------------
-
 fn fmt_binop(op: i32) -> string {
-    if op == OP_ADD { return "+"; } if op == OP_SUB { return "-"; }
-    if op == OP_MUL { return "*"; } if op == OP_DIV { return "/"; }
-    if op == OP_MOD { return "%"; }
-    if op == OP_EQ { return "=="; } if op == OP_NE { return "!="; }
-    if op == OP_LT { return "<"; } if op == OP_LE { return "<="; }
-    if op == OP_GT { return ">"; } if op == OP_GE { return ">="; }
-    if op == OP_AND { return "&&"; } if op == OP_OR { return "||"; }
-    if op == OP_BIT_AND { return "&"; } if op == OP_BIT_OR { return "|"; }
-    if op == OP_BIT_XOR { return "^"; }
-    if op == OP_SHL { return "<<"; } if op == OP_SHR { return ">>"; }
-    if op == OP_ASSIGN { return "="; }
-    if op == OP_PLUS_ASSIGN { return "+="; } if op == OP_MINUS_ASSIGN { return "-="; }
-    if op == OP_STAR_ASSIGN { return "*="; } if op == OP_SLASH_ASSIGN { return "/="; }
-    if op == OP_PERCENT_ASSIGN { return "%="; } if op == OP_BITAND_ASSIGN { return "&="; }
-    if op == OP_BITOR_ASSIGN { return "|="; } if op == OP_BITXOR_ASSIGN { return "^="; }
-    if op == OP_SHL_ASSIGN { return "<<="; } if op == OP_SHR_ASSIGN { return ">>="; }
+    if op == OP_ADD {
+        return "+";
+    }
+    if op == OP_SUB {
+        return "-";
+    }
+    if op == OP_MUL {
+        return "*";
+    }
+    if op == OP_DIV {
+        return "/";
+    }
+    if op == OP_MOD {
+        return "%";
+    }
+    if op == OP_EQ {
+        return "==";
+    }
+    if op == OP_NE {
+        return "!=";
+    }
+    if op == OP_LT {
+        return "<";
+    }
+    if op == OP_LE {
+        return "<=";
+    }
+    if op == OP_GT {
+        return ">";
+    }
+    if op == OP_GE {
+        return ">=";
+    }
+    if op == OP_AND {
+        return "&&";
+    }
+    if op == OP_OR {
+        return "||";
+    }
+    if op == OP_BIT_AND {
+        return "&";
+    }
+    if op == OP_BIT_OR {
+        return "|";
+    }
+    if op == OP_BIT_XOR {
+        return "^";
+    }
+    if op == OP_SHL {
+        return "<<";
+    }
+    if op == OP_SHR {
+        return ">>";
+    }
+    if op == OP_ASSIGN {
+        return "=";
+    }
+    if op == OP_PLUS_ASSIGN {
+        return "+=";
+    }
+    if op == OP_MINUS_ASSIGN {
+        return "-=";
+    }
+    if op == OP_STAR_ASSIGN {
+        return "*=";
+    }
+    if op == OP_SLASH_ASSIGN {
+        return "/=";
+    }
+    if op == OP_PERCENT_ASSIGN {
+        return "%=";
+    }
+    if op == OP_BITAND_ASSIGN {
+        return "&=";
+    }
+    if op == OP_BITOR_ASSIGN {
+        return "|=";
+    }
+    if op == OP_BITXOR_ASSIGN {
+        return "^=";
+    }
+    if op == OP_SHL_ASSIGN {
+        return "<<=";
+    }
+    if op == OP_SHR_ASSIGN {
+        return ">>=";
+    }
     return "?";
 }
 
 fn fmt_unop(op: i32) -> string {
-    if op == UN_NEG { return "-"; }
-    if op == UN_NOT { return "!"; }
-    if op == UN_DEREF { return "*"; }
-    if op == UN_ADDR { return "&"; }
-    if op == UN_ADDR_MUT { return "&mut "; }
-    if op == UN_BIT_NOT { return "~"; }
+    if op == UN_NEG {
+        return "-";
+    }
+    if op == UN_NOT {
+        return "!";
+    }
+    if op == UN_DEREF {
+        return "*";
+    }
+    if op == UN_ADDR {
+        return "&";
+    }
+    if op == UN_ADDR_MUT {
+        return "&mut ";
+    }
+    if op == UN_BIT_NOT {
+        return "~";
+    }
     return "";
 }
 
@@ -146,45 +273,85 @@ fn fmt_unop(op: i32) -> string {
 // (peek_binop_bp). Lets the printer add parens only where precedence or
 // associativity actually require them, instead of wrapping every binary.
 fn fmt_binop_bp(op: i32) -> i32 {
-    if op == OP_COALESCE { return 1; }
-    if op == OP_OR { return 2; }
-    if op == OP_AND { return 3; }
-    if op == OP_BIT_OR { return 4; }
-    if op == OP_BIT_XOR { return 5; }
-    if op == OP_BIT_AND { return 6; }
-    if op == OP_EQ || op == OP_NE { return 7; }
-    if op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE { return 8; }
-    if op == OP_SHL || op == OP_SHR { return 9; }
-    if op == OP_ADD || op == OP_SUB { return 10; }
-    if op == OP_MUL || op == OP_DIV || op == OP_MOD { return 11; }
+    if op == OP_COALESCE {
+        return 1;
+    }
+    if op == OP_OR {
+        return 2;
+    }
+    if op == OP_AND {
+        return 3;
+    }
+    if op == OP_BIT_OR {
+        return 4;
+    }
+    if op == OP_BIT_XOR {
+        return 5;
+    }
+    if op == OP_BIT_AND {
+        return 6;
+    }
+    if op == OP_EQ || op == OP_NE {
+        return 7;
+    }
+    if op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE {
+        return 8;
+    }
+    if op == OP_SHL || op == OP_SHR {
+        return 9;
+    }
+    if op == OP_ADD || op == OP_SUB {
+        return 10;
+    }
+    if op == OP_MUL || op == OP_DIV || op == OP_MOD {
+        return 11;
+    }
     return 0;
 }
 
 // Precedence levels above the binary ops (1..11): cast `as`, prefix unary,
 // then postfix (member/index/call/++/--). A subexpression is wrapped in
 // parens only when its binding power is below the surrounding context.
-pub fn fmt_expr(e: *Expr) -> string { return fmt_expr_prec(e, 0); }
+pub fn fmt_expr(e: *Expr) -> string {
+    return fmt_expr_prec(e, 0);
+}
 
 fn stmt_has_comment(s: *Stmt) -> bool {
-    if s == null { return false; }
-    if s.kind == ST_COMMENT { return true; }
-    if s.leading_comments != null && !s.leading_comments.eq("") { return true; }
-    if s.trailing_comment != null && !s.trailing_comment.eq("") { return true; }
+    if s == null {
+        return false;
+    }
+    if s.kind == ST_COMMENT {
+        return true;
+    }
+    if s.leading_comments != null && !s.leading_comments.eq("") {
+        return true;
+    }
+    if s.trailing_comment != null && !s.trailing_comment.eq("") {
+        return true;
+    }
     return false;
 }
 
 // True if a match-as-expression carries any comment (on an arm or inside an
 // arm body) that the single-line form would drop.
 fn match_has_comment(e: *Expr) -> bool {
-    if e.match_arms == null { return false; }
+    if e.match_arms == null {
+        return false;
+    }
     for let i: i32 = 0; i < e.match_arms.len(); i++ {
         let a: MatchArm = e.match_arms.get(i);
-        if a.lead != null && !a.lead.eq("") { return true; }
-        if a.trail != null && !a.trail.eq("") { return true; }
+        if a.lead != null && !a.lead.eq("") {
+            return true;
+        }
+        if a.trail != null && !a.trail.eq("") {
+            return true;
+        }
         if a.body != null {
             for let j: i32 = 0; j < a.body.len(); j++ {
                 let b: Stmt = a.body.get(j);
-                if stmt_has_comment(&b) { return true; }
+                if stmt_has_comment(&b) {
+                    return true;
+                }
             }
         }
     }
@@ -193,10 +360,18 @@ fn match_has_comment(e: *Expr) -> bool {
 
 // True if a comment lives anywhere in an operator chain (`a || b // c\n || d`).
 fn binary_has_comment(e: *Expr) -> bool {
-    if e == null || e.kind != EX_BINARY { return false; }
-    if e.lead != null && !e.lead.eq("") { return true; }
-    if binary_has_comment(e.lhs) { return true; }
-    if binary_has_comment(e.rhs) { return true; }
+    if e == null || e.kind != EX_BINARY {
+        return false;
+    }
+    if e.lead != null && !e.lead.eq("") {
+        return true;
+    }
+    if binary_has_comment(e.lhs) {
+        return true;
+    }
+    if binary_has_comment(e.rhs) {
+        return true;
+    }
     return false;
 }
 
@@ -212,7 +387,9 @@ fn fmt_binary_ml(e: *Expr, depth: i32) -> string {
         out = fmt_expr_prec(e.lhs, bp);
     }
     out = out.concat("\n");
-    if e.lead != null && !e.lead.eq("") { out = out.concat(render_lead_lines(e.lead, ind)); }
+    if e.lead != null && !e.lead.eq("") {
+        out = out.concat(render_lead_lines(e.lead, ind));
+    }
     out = out.concat(ind).concat(fmt_binop(e.op_code)).concat(" ");
     if e.rhs != null && e.rhs.kind == EX_BINARY && binary_has_comment(e.rhs) {
         out = out.concat("(").concat(fmt_binary_ml(e.rhs, depth + 1)).concat(")");
@@ -232,12 +409,16 @@ fn fmt_match_expr_ml(e: *Expr, depth: i32) -> string {
     if e.match_arms != null {
         for let i: i32 = 0; i < e.match_arms.len(); i++ {
             let a: MatchArm = e.match_arms.get(i);
-            if a.lead != null && !a.lead.eq("") { out = out.concat(render_lead_lines(a.lead, inner)); }
+            if a.lead != null && !a.lead.eq("") {
+                out = out.concat(render_lead_lines(a.lead, inner));
+            }
             out = out.concat(inner).concat(a.variant);
             if a.bindings != null && a.bindings.len() > 0 {
                 out = out.concat("(");
                 for let j: i32 = 0; j < a.bindings.len(); j++ {
-                    if j > 0 { out = out.concat(", "); }
+                    if j > 0 {
+                        out = out.concat(", ");
+                    }
                     out = out.concat(a.bindings.get(j));
                 }
                 out = out.concat(")");
@@ -250,7 +431,9 @@ fn fmt_match_expr_ml(e: *Expr, depth: i32) -> string {
                 }
             }
             out = out.concat(inner).concat("}");
-            if a.trail != null && !a.trail.eq("") { out = out.concat(" // ").concat(a.trail); }
+            if a.trail != null && !a.trail.eq("") {
+                out = out.concat(" // ").concat(a.trail);
+            }
             out = out.concat("\n");
         }
     }
@@ -261,44 +444,74 @@ fn fmt_match_expr_ml(e: *Expr, depth: i32) -> string {
 // everything except a comment-bearing match-expression or operator chain, which
 // it breaks across lines (depth < 0 forces inline).
 fn fmt_value(e: *Expr, depth: i32) -> string {
-    if e == null { return ""; }
-    if depth >= 0 && e.kind == EX_MATCH && match_has_comment(e) { return fmt_match_expr_ml(e, depth); }
-    if depth >= 0 && e.kind == EX_BINARY && binary_has_comment(e) { return fmt_binary_ml(e, depth); }
+    if e == null {
+        return "";
+    }
+    if depth >= 0 && e.kind == EX_MATCH && match_has_comment(e) {
+        return fmt_match_expr_ml(e, depth);
+    }
+    if depth >= 0 && e.kind == EX_BINARY && binary_has_comment(e) {
+        return fmt_binary_ml(e, depth);
+    }
     return fmt_expr(e);
 }
+
 fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
-    if e == null { return ""; }
-    if e.kind == EX_INT { return int_to_str(e.int_val); }
-    if e.kind == EX_FLOAT { return int_to_str(e.int_val); }
-    if e.kind == EX_STRING { return "\"".concat(e.str_val).concat("\""); }
-    if e.kind == EX_BOOL { if e.bool_val { return "true"; } return "false"; }
-    if e.kind == EX_NULL { return "null"; }
-    if e.kind == EX_IDENT { return e.str_val; }
+    if e == null {
+        return "";
+    }
+    if e.kind == EX_INT {
+        return int_to_str(e.int_val);
+    }
+    if e.kind == EX_FLOAT {
+        return int_to_str(e.int_val);
+    }
+    if e.kind == EX_STRING {
+        return "\"".concat(e.str_val).concat("\"");
+    }
+    if e.kind == EX_BOOL {
+        if e.bool_val {
+            return "true";
+        }
+        return "false";
+    }
+    if e.kind == EX_NULL {
+        return "null";
+    }
+    if e.kind == EX_IDENT {
+        return e.str_val;
+    }
     if e.kind == EX_CHAR {
         return fmt_char_lit(e.int_val);
     }
     if e.kind == EX_BINARY {
         let bp: i32 = fmt_binop_bp(e.op_code);
-        let s: string = fmt_expr_prec(e.lhs, bp).concat(" ").concat(fmt_binop(e.op_code))
-            .concat(" ").concat(fmt_expr_prec(e.rhs, bp + 1));
-        if bp < min_bp { return "(".concat(s).concat(")"); }
+        let s: string = fmt_expr_prec(e.lhs, bp).concat(" ").concat(fmt_binop(e.op_code)).concat(" ").concat(fmt_expr_prec(e.rhs, bp + 1));
+        if bp < min_bp {
+            return "(".concat(s).concat(")");
+        }
         return s;
     }
     if e.kind == EX_UNARY {
-        if e.op_code == UN_TRY { return fmt_expr_prec(e.operand, 25).concat("?"); }
+        if e.op_code == UN_TRY {
+            return fmt_expr_prec(e.operand, 25).concat("?");
+        }
         let s: string = fmt_unop(e.op_code).concat(fmt_expr_prec(e.operand, 20));
-        if 20 < min_bp { return "(".concat(s).concat(")"); }
+        if 20 < min_bp {
+            return "(".concat(s).concat(")");
+        }
         return s;
     }
     if e.kind == EX_ASSIGN {
-        return fmt_expr(e.lhs).concat(" ").concat(fmt_binop(e.op_code))
-            .concat(" ").concat(fmt_expr(e.rhs));
+        return fmt_expr(e.lhs).concat(" ").concat(fmt_binop(e.op_code)).concat(" ").concat(fmt_expr(e.rhs));
     }
     if e.kind == EX_CALL {
         let mut out: string = fmt_expr_prec(e.lhs, 25).concat("(");
         if e.args != null {
             for let i: i32 = 0; i < e.args.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let a: Expr = e.args.get(i);
                 out = out.concat(fmt_expr(&a));
             }
@@ -315,14 +528,20 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
         // `as` binds tighter than the binary ops but looser than prefix
         // unary; wrap only when the surrounding context binds tighter.
         let s: string = fmt_expr_prec(e.lhs, 15).concat(" as ").concat(fmt_type(e.cast_to));
-        if 15 < min_bp { return "(".concat(s).concat(")"); }
+        if 15 < min_bp {
+            return "(".concat(s).concat(")");
+        }
         return s;
     }
     if e.kind == EX_PATH {
         return e.str_val.concat("::").concat(e.field);
     }
-    if e.kind == EX_POSTINC { return fmt_expr_prec(e.lhs, 25).concat("++"); }
-    if e.kind == EX_POSTDEC { return fmt_expr_prec(e.lhs, 25).concat("--"); }
+    if e.kind == EX_POSTINC {
+        return fmt_expr_prec(e.lhs, 25).concat("++");
+    }
+    if e.kind == EX_POSTDEC {
+        return fmt_expr_prec(e.lhs, 25).concat("--");
+    }
     if e.kind == EX_MACRO {
         // String-interpolation literal — round-trip back to `"…${…}…"`.
         if e.str_val.eq("format") && e.field != null && !e.field.eq("") {
@@ -331,20 +550,26 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
         let mut out: string = "";
         if e.macro_recv != null {
             out = fmt_expr(e.macro_recv).concat(".");
-        } else if e.macro_owner != null && !e.macro_owner.eq("") {
-            out = e.macro_owner.concat("::");
+        } else {
+            if e.macro_owner != null && !e.macro_owner.eq("") {
+                out = e.macro_owner.concat("::");
+            }
         }
         out = out.concat(e.str_val).concat("!(");
         if e.args != null {
             for let i: i32 = 0; i < e.args.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let a: Expr = e.args.get(i);
                 out = out.concat(fmt_expr(&a));
             }
         }
         return out.concat(")");
     }
-    if e.kind == EX_SIZEOF { return "sizeof(".concat(fmt_type(e.cast_to)).concat(")"); }
+    if e.kind == EX_SIZEOF {
+        return "sizeof(".concat(fmt_type(e.cast_to)).concat(")");
+    }
     if e.kind == EX_NEW {
         return fmt_struct_lit(e, "new ");
     }
@@ -355,7 +580,9 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
         let mut out: string = "(";
         if e.args != null {
             for let i: i32 = 0; i < e.args.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let a: Expr = e.args.get(i);
                 out = out.concat(fmt_expr(&a));
             }
@@ -366,17 +593,23 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
         let mut out: string = "fn(";
         if e.fn_expr_params != null {
             for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let p: Param = e.fn_expr_params.get(i);
                 out = out.concat(p.name).concat(": ").concat(fmt_type(p.ty));
             }
         }
         out = out.concat(")");
-        if e.cast_to != null { out = out.concat(" -> ").concat(fmt_type(e.cast_to)); }
+        if e.cast_to != null {
+            out = out.concat(" -> ").concat(fmt_type(e.cast_to));
+        }
         out = out.concat(" { ");
         if e.fn_expr_body != null {
             for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
-                if i > 0 { out = out.concat(" "); }
+                if i > 0 {
+                    out = out.concat(" ");
+                }
                 let b: Stmt = e.fn_expr_body.get(i);
                 out = out.concat(fmt_stmt_inline(&b));
             }
@@ -385,7 +618,9 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
     }
     if e.kind == EX_IF {
         let mut out: string = "if ".concat(fmt_expr(e.lhs)).concat(" { ").concat(fmt_expr(e.rhs)).concat(" }");
-        if e.operand != null { out = out.concat(" else { ").concat(fmt_expr(e.operand)).concat(" }"); }
+        if e.operand != null {
+            out = out.concat(" else { ").concat(fmt_expr(e.operand)).concat(" }");
+        }
         return out;
     }
     if e.kind == EX_BLOCK {
@@ -396,7 +631,9 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
                 out = out.concat(fmt_stmt_inline(&b)).concat(" ");
             }
         }
-        if e.operand != null { out = out.concat(fmt_expr(e.operand)).concat(" "); }
+        if e.operand != null {
+            out = out.concat(fmt_expr(e.operand)).concat(" ");
+        }
         return out.concat("}");
     }
     if e.kind == EX_MATCH {
@@ -408,7 +645,9 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
                 if a.bindings != null && a.bindings.len() > 0 {
                     out = out.concat("(");
                     for let j: i32 = 0; j < a.bindings.len(); j++ {
-                        if j > 0 { out = out.concat(", "); }
+                        if j > 0 {
+                            out = out.concat(", ");
+                        }
                         out = out.concat(a.bindings.get(j));
                     }
                     out = out.concat(")");
@@ -425,7 +664,9 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
         }
         return out.concat("}");
     }
-    if e.kind == EX_MACRO_VAR { return "$".concat(e.str_val); }
+    if e.kind == EX_MACRO_VAR {
+        return "$".concat(e.str_val);
+    }
     return "/* fmt: unknown expr */";
 }
 
@@ -434,7 +675,9 @@ fn fmt_struct_lit(e: *Expr, prefix: string) -> string {
     if e.field_names != null && e.args != null && e.args.len() > 0 {
         out = out.concat(" ");
         for let i: i32 = 0; i < e.args.len(); i++ {
-            if i > 0 { out = out.concat(", "); }
+            if i > 0 {
+                out = out.concat(", ");
+            }
             out = out.concat(e.field_names.get(i)).concat(": ");
             let v: Expr = e.args.get(i);
             out = out.concat(fmt_expr(&v));
@@ -446,12 +689,18 @@ fn fmt_struct_lit(e: *Expr, prefix: string) -> string {
 
 // Inline form of a stmt for single-line bodies (e.g. closure bodies).
 fn fmt_stmt_inline(s: *Stmt) -> string {
-    if s == null { return ""; }
+    if s == null {
+        return "";
+    }
     if s.kind == ST_RETURN {
-        if s.expr_value != null { return "return ".concat(fmt_expr(s.expr_value)).concat(";"); }
+        if s.expr_value != null {
+            return "return ".concat(fmt_expr(s.expr_value)).concat(";");
+        }
         return "return;";
     }
-    if s.kind == ST_EXPR { return fmt_expr(s.expr_value).concat(";"); }
+    if s.kind == ST_EXPR {
+        return fmt_expr(s.expr_value).concat(";");
+    }
     if s.kind == ST_LET || s.kind == ST_CONST {
         return fmt_let_const_inline(s, -1);
     }
@@ -461,26 +710,42 @@ fn fmt_stmt_inline(s: *Stmt) -> string {
 fn fmt_let_const_inline(s: *Stmt, depth: i32) -> string {
     let mut out: string = "";
     if s.kind == ST_CONST {
-        if s.is_pub { out = "pub const "; } else { out = "const "; }
+        if s.is_pub {
+            out = "pub const ";
+        } else {
+            out = "const ";
+        }
     } else {
         out = "let ";
     }
-    if s.is_mut { out = out.concat("mut "); }
+    if s.is_mut {
+        out = out.concat("mut ");
+    }
     // Tuple destructuring: `let (a, b, c) = expr;`.
     if s.let_names != null && s.let_names.len() > 0 {
         out = out.concat("(");
         for let i: i32 = 0; i < s.let_names.len(); i++ {
-            if i > 0 { out = out.concat(", "); }
+            if i > 0 {
+                out = out.concat(", ");
+            }
             out = out.concat(s.let_names.get(i));
         }
         out = out.concat(")");
-        if s.let_value != null { out = out.concat(" = ").concat(fmt_value(s.let_value, depth)); }
+        if s.let_value != null {
+            out = out.concat(" = ").concat(fmt_value(s.let_value, depth));
+        }
         return out.concat(";");
     }
     out = out.concat(s.name);
-    if s.is_auto_owned { out = out.concat("*"); }
-    if s.let_ty != null { out = out.concat(": ").concat(fmt_type(s.let_ty)); }
-    if s.let_value != null { out = out.concat(" = ").concat(fmt_value(s.let_value, depth)); }
+    if s.is_auto_owned {
+        out = out.concat("*");
+    }
+    if s.let_ty != null {
+        out = out.concat(": ").concat(fmt_type(s.let_ty));
+    }
+    if s.let_value != null {
+        out = out.concat(" = ").concat(fmt_value(s.let_value, depth));
+    }
     return out.concat(";");
 }
 
@@ -489,17 +754,25 @@ fn fmt_let_const_inline(s: *Stmt, depth: i32) -> string {
 // Render a captured doc-comment block (newline-separated lines from the
 // lexer) back to canonical `//` comment lines at the current indent.
 fn render_doc_lines(raw: string, pad: string) -> string {
-    if raw == null { return ""; }
-    if raw.eq("") { return ""; }
+    if raw == null {
+        return "";
+    }
+    if raw.eq("") {
+        return "";
+    }
     let mut out: string = "";
     let n: i32 = raw.len();
     let mut i: i32 = 0;
     while i < n {
         let mut j: i32 = i;
-        while j < n && raw.at(j).to_int() != 10 { j = j + 1; }
+        while j < n && raw.at(j).to_int() != 10 {
+            j = j + 1;
+        }
         let line: string = raw.substring(i, j);
         out = out.concat(pad).concat("// ").concat(line).concat("\n");
-        if j >= n { break; }
+        if j >= n {
+            break;
+        }
         i = j + 1;
     }
     return out;
@@ -508,7 +781,9 @@ fn render_doc_lines(raw: string, pad: string) -> string {
 // Format each statement in a block at the given depth and concatenate.
 fn fmt_body(body: *Vector<Stmt>, depth: i32) -> string {
     let mut out: string = "";
-    if body == null { return out; }
+    if body == null {
+        return out;
+    }
     for let i: i32 = 0; i < body.len(); i++ {
         let b: Stmt = body.get(i);
         out = out.concat(fmt_stmt(&b, depth));
@@ -520,31 +795,47 @@ fn fmt_body(body: *Vector<Stmt>, depth: i32) -> string {
 // reproduce blank lines and empty `//` lines (sentinel `\x01`) verbatim so
 // section breaks survive a round-trip.
 fn render_lead_lines(raw: string, pad: string) -> string {
-    if raw == null || raw.eq("") { return ""; }
+    if raw == null || raw.eq("") {
+        return "";
+    }
     let mut out: string = "";
     let n: i32 = raw.len();
     let mut i: i32 = 0;
     while i < n {
         let mut j: i32 = i;
-        while j < n && raw.at(j).to_int() != 10 { j = j + 1; }
+        while j < n && raw.at(j).to_int() != 10 {
+            j = j + 1;
+        }
         let line: string = raw.substring(i, j);
-        if line.eq("") { out = out.concat("\n"); }
-        else if line.eq("\x01") { out = out.concat(pad).concat("//\n"); }
-        else { out = out.concat(pad).concat("// ").concat(line).concat("\n"); }
-        if j >= n { break; }
+        if line.eq("") {
+            out = out.concat("\n");
+        } else {
+            if line.eq("\x01") {
+                out = out.concat(pad).concat("//\n");
+            } else {
+                out = out.concat(pad).concat("// ").concat(line).concat("\n");
+            }
+        }
+        if j >= n {
+            break;
+        }
         i = j + 1;
     }
     return out;
 }
 
 pub fn fmt_stmt(s: *Stmt, depth: i32) -> string {
-    if s == null { return ""; }
+    if s == null {
+        return "";
+    }
     let pad: string = fmt_indent(depth);
     let mut prefix: string = "";
     if s.leading_comments != null && !s.leading_comments.eq("") {
         prefix = render_lead_lines(s.leading_comments, pad);
-    } else if s.doc_comment != null && !s.doc_comment.eq("") {
-        prefix = render_doc_lines(s.doc_comment, pad);
+    } else {
+        if s.doc_comment != null && !s.doc_comment.eq("") {
+            prefix = render_doc_lines(s.doc_comment, pad);
+        }
     }
     let mut body: string = fmt_stmt_inner(s, depth);
     // A same-line trailing comment goes back on the decl's last line.
@@ -561,11 +852,11 @@ pub fn fmt_stmt(s: *Stmt, depth: i32) -> string {
 
 fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
-
     // fmt-only placeholder for end-of-block comments: the comment text rides
     // in `leading_comments` (rendered by fmt_stmt); there is no body.
-    if s.kind == ST_COMMENT { return ""; }
-
+    if s.kind == ST_COMMENT {
+        return "";
+    }
     // `c_raw! { ... }`: the body is raw C, captured verbatim by the lexer.
     // Re-emit it untouched — reformatting inline C would corrupt it.
     if s.kind == ST_CRAW {
@@ -583,8 +874,12 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     if s.kind == ST_EXPR {
         return pad.concat(fmt_value(s.expr_value, depth)).concat(";\n");
     }
-    if s.kind == ST_BREAK { return pad.concat("break;\n"); }
-    if s.kind == ST_CONTINUE { return pad.concat("continue;\n"); }
+    if s.kind == ST_BREAK {
+        return pad.concat("break;\n");
+    }
+    if s.kind == ST_CONTINUE {
+        return pad.concat("continue;\n");
+    }
     if s.kind == ST_DEFER {
         return pad.concat("defer ").concat(fmt_expr(s.expr_value)).concat(";\n");
     }
@@ -612,7 +907,9 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         let pn2: i32 = path.len();
         if pn2 > 6 {
             let tail: string = path.substring(pn2 - 6, pn2);
-            if tail.eq(".glide") { path = path.substring(0, pn2 - 6); }
+            if tail.eq(".glide") {
+                path = path.substring(0, pn2 - 6);
+            }
         }
         let mut module: string = "";
         let mn: i32 = path.len();
@@ -631,16 +928,22 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
             } else {
                 tail_s = "::{";
                 for let i: i32 = 0; i < s.imported_items.len(); i++ {
-                    if i > 0 { tail_s = tail_s.concat(", "); }
+                    if i > 0 {
+                        tail_s = tail_s.concat(", ");
+                    }
                     tail_s = tail_s.concat(s.imported_items.get(i));
                 }
                 tail_s = tail_s.concat("}");
             }
-        } else if s.import_wildcard {
-            tail_s = "::*";
+        } else {
+            if s.import_wildcard {
+                tail_s = "::*";
+            }
         }
         let mut kw: string = "import ";
-        if s.is_pub { kw = "pub import "; }
+        if s.is_pub {
+            kw = "pub import ";
+        }
         return pad.concat(kw).concat(module).concat(tail_s).concat(";\n");
     }
     if s.kind == ST_IF {
@@ -657,10 +960,11 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     }
     if s.kind == ST_IF_LET {
         let mut pat: string = s.name.concat("(");
-        if s.let_names != null && s.let_names.len() > 0 { pat = pat.concat(s.let_names.get(0)); }
+        if s.let_names != null && s.let_names.len() > 0 {
+            pat = pat.concat(s.let_names.get(0));
+        }
         pat = pat.concat(")");
-        let mut out: string = pad.concat("if let ").concat(pat)
-            .concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
+        let mut out: string = pad.concat("if let ").concat(pat).concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         if s.else_body != null {
             out = out.concat(pad).concat("} else {\n");
@@ -673,7 +977,9 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     }
     if s.kind == ST_WHILE_RECV {
         let mut out: string = pad.concat("while let ").concat(s.name);
-        if s.let_ty != null { out = out.concat(": ").concat(fmt_type(s.let_ty)); }
+        if s.let_ty != null {
+            out = out.concat(": ").concat(fmt_type(s.let_ty));
+        }
         out = out.concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
@@ -689,19 +995,27 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
             out = out.concat(fmt_for_init(s.for_init));
         }
         out = out.concat("; ");
-        if s.cond != null { out = out.concat(fmt_expr(s.cond)); }
+        if s.cond != null {
+            out = out.concat(fmt_expr(s.cond));
+        }
         out = out.concat("; ");
-        if s.for_step != null { out = out.concat(fmt_expr(s.for_step)); }
+        if s.for_step != null {
+            out = out.concat(fmt_expr(s.for_step));
+        }
         out = out.concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
     if s.kind == ST_FOR_IN {
         let mut out: string = pad.concat("for ").concat(s.name).concat(" in ");
-        if s.let_value != null { out = out.concat(fmt_expr(s.let_value)); }
+        if s.let_value != null {
+            out = out.concat(fmt_expr(s.let_value));
+        }
         if s.cond != null {
             let mut sep: string = "..";
-            if s.is_mut { sep = "..="; }
+            if s.is_mut {
+                sep = "..=";
+            }
             out = out.concat(sep).concat(fmt_expr(s.cond));
         }
         out = out.concat(" {\n");
@@ -713,14 +1027,27 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
-    if s.kind == ST_FN { return fmt_fn(s, depth); }
-    if s.kind == ST_STRUCT { return fmt_struct(s, depth); }
-    if s.kind == ST_ENUM { return fmt_enum(s, depth); }
-    if s.kind == ST_IMPL { return fmt_impl(s, depth); }
-    if s.kind == ST_TRAIT { return fmt_trait(s, depth); }
-    if s.kind == ST_MATCH { return fmt_match(s, depth); }
-    if s.kind == ST_ASM { return fmt_asm(s, depth); }
-
+    if s.kind == ST_FN {
+        return fmt_fn(s, depth);
+    }
+    if s.kind == ST_STRUCT {
+        return fmt_struct(s, depth);
+    }
+    if s.kind == ST_ENUM {
+        return fmt_enum(s, depth);
+    }
+    if s.kind == ST_IMPL {
+        return fmt_impl(s, depth);
+    }
+    if s.kind == ST_TRAIT {
+        return fmt_trait(s, depth);
+    }
+    if s.kind == ST_MATCH {
+        return fmt_match(s, depth);
+    }
+    if s.kind == ST_ASM {
+        return fmt_asm(s, depth);
+    }
     return pad.concat("/* fmt: unknown stmt */\n");
 }
 
@@ -728,7 +1055,9 @@ fn fmt_asm(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let inner: string = fmt_indent(depth + 1);
     let mut out: string = pad.concat("asm!");
-    if s.is_volatile { out = out.concat(" volatile"); }
+    if s.is_volatile {
+        out = out.concat(" volatile");
+    }
     out = out.concat(" {\n");
     if s.asm_strings != null {
         for let i: i32 = 0; i < s.asm_strings.len(); i++ {
@@ -736,17 +1065,18 @@ fn fmt_asm(s: *Stmt, depth: i32) -> string {
         }
     }
     let has_out: bool = s.asm_out_constraints != null && s.asm_out_constraints.len() > 0;
-    let has_in:  bool = s.asm_in_constraints  != null && s.asm_in_constraints.len()  > 0;
-    let has_clb: bool = s.asm_clobbers        != null && s.asm_clobbers.len()        > 0;
+    let has_in: bool = s.asm_in_constraints != null && s.asm_in_constraints.len() > 0;
+    let has_clb: bool = s.asm_clobbers != null && s.asm_clobbers.len() > 0;
     if has_out || has_in || has_clb {
         out = out.concat(inner).concat(":");
         if has_out {
             out = out.concat(" ");
             for let i: i32 = 0; i < s.asm_out_constraints.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let e: Expr = s.asm_out_exprs.get(i);
-                out = out.concat("\"").concat(s.asm_out_constraints.get(i))
-                    .concat("\"(").concat(fmt_expr(&e)).concat(")");
+                out = out.concat("\"").concat(s.asm_out_constraints.get(i)).concat("\"(").concat(fmt_expr(&e)).concat(")");
             }
         }
         out = out.concat("\n");
@@ -756,10 +1086,11 @@ fn fmt_asm(s: *Stmt, depth: i32) -> string {
         if has_in {
             out = out.concat(" ");
             for let i: i32 = 0; i < s.asm_in_constraints.len(); i++ {
-                if i > 0 { out = out.concat(", "); }
+                if i > 0 {
+                    out = out.concat(", ");
+                }
                 let e: Expr = s.asm_in_exprs.get(i);
-                out = out.concat("\"").concat(s.asm_in_constraints.get(i))
-                    .concat("\"(").concat(fmt_expr(&e)).concat(")");
+                out = out.concat("\"").concat(s.asm_in_constraints.get(i)).concat("\"(").concat(fmt_expr(&e)).concat(")");
             }
         }
         out = out.concat("\n");
@@ -767,7 +1098,9 @@ fn fmt_asm(s: *Stmt, depth: i32) -> string {
     if has_clb {
         out = out.concat(inner).concat(": ");
         for let i: i32 = 0; i < s.asm_clobbers.len(); i++ {
-            if i > 0 { out = out.concat(", "); }
+            if i > 0 {
+                out = out.concat(", ");
+            }
             out = out.concat("\"").concat(s.asm_clobbers.get(i)).concat("\"");
         }
         out = out.concat("\n");
@@ -776,17 +1109,27 @@ fn fmt_asm(s: *Stmt, depth: i32) -> string {
 }
 
 fn fmt_for_init(s: *Stmt) -> string {
-    if s == null { return ""; }
-    if s.kind == ST_LET { return fmt_let_const_inline(s, -1).substring(0, fmt_let_const_inline(s, -1).len() - 1); }
-    if s.kind == ST_EXPR { return fmt_expr(s.expr_value); }
+    if s == null {
+        return "";
+    }
+    if s.kind == ST_LET {
+        return fmt_let_const_inline(s, -1).substring(0, fmt_let_const_inline(s, -1).len() - 1);
+    }
+    if s.kind == ST_EXPR {
+        return fmt_expr(s.expr_value);
+    }
     return "";
 }
 
 fn fmt_type_params(s: *Stmt) -> string {
-    if s.type_params == null || s.type_params.len() == 0 { return ""; }
+    if s.type_params == null || s.type_params.len() == 0 {
+        return "";
+    }
     let mut out: string = "<";
     for let i: i32 = 0; i < s.type_params.len(); i++ {
-        if i > 0 { out = out.concat(", "); }
+        if i > 0 {
+            out = out.concat(", ");
+        }
         out = out.concat(s.type_params.get(i));
     }
     return out.concat(">");
@@ -799,7 +1142,9 @@ fn fmt_type_params(s: *Stmt) -> string {
 // this the formatter silently dropped every derive / proc attribute, so e.g.
 // `@derive(JsonBind)` vanished and the struct stopped deriving on the next run.
 fn fmt_attrs(s: *Stmt, pad: string) -> string {
-    if s.attrs == null || s.attrs.len() == 0 { return ""; }
+    if s.attrs == null || s.attrs.len() == 0 {
+        return "";
+    }
     let mut out: string = "";
     for let i: i32 = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
@@ -807,7 +1152,9 @@ fn fmt_attrs(s: *Stmt, pad: string) -> string {
         if a.args != null && a.args.len() > 0 {
             out = out.concat("(");
             for let j: i32 = 0; j < a.args.len(); j++ {
-                if j > 0 { out = out.concat(", "); }
+                if j > 0 {
+                    out = out.concat(", ");
+                }
                 let arg: Expr = a.args.get(j);
                 out = out.concat(fmt_expr(&arg));
             }
@@ -824,24 +1171,39 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
     if s.cfg_target != null && !s.cfg_target.eq("") {
         head = head.concat("@cfg(\"").concat(s.cfg_target).concat("\")\n").concat(pad);
     }
-    if s.is_pub { head = head.concat("pub "); }
-    if s.is_extern { head = head.concat("extern "); }
-    if s.is_naked { head = head.concat("naked "); }
+    if s.is_pub {
+        head = head.concat("pub ");
+    }
+    if s.is_extern {
+        head = head.concat("extern ");
+    }
+    if s.is_naked {
+        head = head.concat("naked ");
+    }
     head = head.concat("fn ").concat(s.name).concat(fmt_type_params(s)).concat("(");
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
-            if i > 0 { head = head.concat(", "); }
+            if i > 0 {
+                head = head.concat(", ");
+            }
             let p: Param = s.fn_params.get(i);
             head = head.concat(p.name).concat(": ").concat(fmt_type(p.ty));
         }
     }
     if s.is_variadic {
-        if s.fn_params != null && s.fn_params.len() > 0 { head = head.concat(", ..."); }
-        else { head = head.concat("..."); }
+        if s.fn_params != null && s.fn_params.len() > 0 {
+            head = head.concat(", ...");
+        } else {
+            head = head.concat("...");
+        }
     }
     head = head.concat(")");
-    if s.fn_ret_ty != null { head = head.concat(" -> ").concat(fmt_type(s.fn_ret_ty)); }
-    if s.fn_body == null { return head.concat(";\n"); }
+    if s.fn_ret_ty != null {
+        head = head.concat(" -> ").concat(fmt_type(s.fn_ret_ty));
+    }
+    if s.fn_body == null {
+        return head.concat(";\n");
+    }
     let mut out: string = head.concat(" {\n");
     for let i: i32 = 0; i < s.fn_body.len(); i++ {
         let b: Stmt = s.fn_body.get(i);
@@ -853,7 +1215,9 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
 fn fmt_struct(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = fmt_attrs(s, pad).concat(pad);
-    if s.is_pub { head = head.concat("pub "); }
+    if s.is_pub {
+        head = head.concat("pub ");
+    }
     head = head.concat("struct ").concat(s.name).concat(fmt_type_params(s));
     if s.struct_fields == null || s.struct_fields.len() == 0 {
         return head.concat(" {}\n");
@@ -862,15 +1226,24 @@ fn fmt_struct(s: *Stmt, depth: i32) -> string {
     let inner: string = fmt_indent(depth + 1);
     for let i: i32 = 0; i < s.struct_fields.len(); i++ {
         let f: Field = s.struct_fields.get(i);
-        if f.doc != null && !f.doc.eq("") { out = out.concat(render_doc_lines(f.doc, inner)); }
+        if f.doc != null && !f.doc.eq("") {
+            out = out.concat(render_doc_lines(f.doc, inner));
+        }
         out = out.concat(inner);
         // Reproduce the export marker exactly as written: `!field` keeps its
         // short sigil, `pub field` keeps the long form. Dropping it silently
         // flipped an exported field back to private.
-        if f.bang_pub { out = out.concat("!"); }
-        else if f.is_pub { out = out.concat("pub "); }
+        if f.bang_pub {
+            out = out.concat("!");
+        } else {
+            if f.is_pub {
+                out = out.concat("pub ");
+            }
+        }
         out = out.concat(f.name).concat(": ").concat(fmt_type(f.ty)).concat(",");
-        if f.trail != null && !f.trail.eq("") { out = out.concat(" // ").concat(f.trail); }
+        if f.trail != null && !f.trail.eq("") {
+            out = out.concat(" // ").concat(f.trail);
+        }
         out = out.concat("\n");
     }
     return out.concat(pad).concat("}\n");
@@ -879,7 +1252,9 @@ fn fmt_struct(s: *Stmt, depth: i32) -> string {
 fn fmt_enum(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = fmt_attrs(s, pad).concat(pad);
-    if s.is_pub { head = head.concat("pub "); }
+    if s.is_pub {
+        head = head.concat("pub ");
+    }
     head = head.concat("enum ").concat(s.name);
     if s.enum_variants == null || s.enum_variants.len() == 0 {
         return head.concat(" {}\n");
@@ -888,19 +1263,25 @@ fn fmt_enum(s: *Stmt, depth: i32) -> string {
     let inner: string = fmt_indent(depth + 1);
     for let i: i32 = 0; i < s.enum_variants.len(); i++ {
         let v: EnumVariant = s.enum_variants.get(i);
-        if v.doc != null && !v.doc.eq("") { out = out.concat(render_doc_lines(v.doc, inner)); }
+        if v.doc != null && !v.doc.eq("") {
+            out = out.concat(render_doc_lines(v.doc, inner));
+        }
         out = out.concat(inner).concat(v.name);
         if v.fields != null && v.fields.len() > 0 {
             out = out.concat("(");
             for let j: i32 = 0; j < v.fields.len(); j++ {
-                if j > 0 { out = out.concat(", "); }
+                if j > 0 {
+                    out = out.concat(", ");
+                }
                 let ty: Type = v.fields.get(j);
                 out = out.concat(fmt_type(&ty));
             }
             out = out.concat(")");
         }
         out = out.concat(",");
-        if v.trail != null && !v.trail.eq("") { out = out.concat(" // ").concat(v.trail); }
+        if v.trail != null && !v.trail.eq("") {
+            out = out.concat(" // ").concat(v.trail);
+        }
         out = out.concat("\n");
     }
     return out.concat(pad).concat("}\n");
@@ -928,17 +1309,26 @@ fn fmt_impl(s: *Stmt, depth: i32) -> string {
         for let i: i32 = 0; i < s.assoc_decls.len(); i++ {
             let a: Param = s.assoc_decls.get(i);
             out = out.concat(inner).concat("type ").concat(a.name);
-            if a.ty != null { out = out.concat(" = ").concat(fmt_type(a.ty)); }
+            if a.ty != null {
+                out = out.concat(" = ").concat(fmt_type(a.ty));
+            }
             out = out.concat(";\n");
         }
     }
     if has_methods {
         for let i: i32 = 0; i < s.impl_methods.len(); i++ {
-            if i > 0 || has_assoc { out = out.concat("\n"); }
+            if i > 0 || has_assoc {
+                out = out.concat("\n");
+            }
             let m: Stmt = s.impl_methods.get(i);
             let mpad: string = fmt_indent(depth + 1);
-            if m.leading_comments != null && !m.leading_comments.eq("") { out = out.concat(render_lead_lines(m.leading_comments, mpad)); }
-            else if m.doc_comment != null && !m.doc_comment.eq("") { out = out.concat(render_doc_lines(m.doc_comment, mpad)); }
+            if m.leading_comments != null && !m.leading_comments.eq("") {
+                out = out.concat(render_lead_lines(m.leading_comments, mpad));
+            } else {
+                if m.doc_comment != null && !m.doc_comment.eq("") {
+                    out = out.concat(render_doc_lines(m.doc_comment, mpad));
+                }
+            }
             out = out.concat(fmt_fn(&m, depth + 1));
         }
     }
@@ -951,12 +1341,16 @@ fn fmt_impl(s: *Stmt, depth: i32) -> string {
 fn fmt_trait(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
     let mut head: string = fmt_attrs(s, pad).concat(pad);
-    if s.is_pub { head = head.concat("pub "); }
+    if s.is_pub {
+        head = head.concat("pub ");
+    }
     head = head.concat("trait ").concat(s.name).concat(fmt_type_params(s));
     if s.trait_supers != null && s.trait_supers.len() > 0 {
         head = head.concat(": ");
         for let i: i32 = 0; i < s.trait_supers.len(); i++ {
-            if i > 0 { head = head.concat(", "); }
+            if i > 0 {
+                head = head.concat(", ");
+            }
             head = head.concat(s.trait_supers.get(i));
         }
     }
@@ -977,8 +1371,13 @@ fn fmt_trait(s: *Stmt, depth: i32) -> string {
         for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
             let mpad: string = fmt_indent(depth + 1);
-            if m.leading_comments != null && !m.leading_comments.eq("") { out = out.concat(render_lead_lines(m.leading_comments, mpad)); }
-            else if m.doc_comment != null && !m.doc_comment.eq("") { out = out.concat(render_doc_lines(m.doc_comment, mpad)); }
+            if m.leading_comments != null && !m.leading_comments.eq("") {
+                out = out.concat(render_lead_lines(m.leading_comments, mpad));
+            } else {
+                if m.doc_comment != null && !m.doc_comment.eq("") {
+                    out = out.concat(render_doc_lines(m.doc_comment, mpad));
+                }
+            }
             out = out.concat(fmt_fn(&m, depth + 1));
         }
     }
@@ -992,12 +1391,16 @@ fn fmt_match(s: *Stmt, depth: i32) -> string {
     if s.arms != null {
         for let i: i32 = 0; i < s.arms.len(); i++ {
             let a: MatchArm = s.arms.get(i);
-            if a.lead != null && !a.lead.eq("") { out = out.concat(render_lead_lines(a.lead, inner)); }
+            if a.lead != null && !a.lead.eq("") {
+                out = out.concat(render_lead_lines(a.lead, inner));
+            }
             out = out.concat(inner).concat(a.variant);
             if a.bindings != null && a.bindings.len() > 0 {
                 out = out.concat("(");
                 for let j: i32 = 0; j < a.bindings.len(); j++ {
-                    if j > 0 { out = out.concat(", "); }
+                    if j > 0 {
+                        out = out.concat(", ");
+                    }
                     out = out.concat(a.bindings.get(j));
                 }
                 out = out.concat(")");
@@ -1010,7 +1413,9 @@ fn fmt_match(s: *Stmt, depth: i32) -> string {
                 }
             }
             out = out.concat(inner).concat("}");
-            if a.trail != null && !a.trail.eq("") { out = out.concat(" // ").concat(a.trail); }
+            if a.trail != null && !a.trail.eq("") {
+                out = out.concat(" // ").concat(a.trail);
+            }
             out = out.concat("\n");
         }
     }
@@ -1018,7 +1423,6 @@ fn fmt_match(s: *Stmt, depth: i32) -> string {
 }
 
 // ---- Top level --------------------------------------------------------
-
 pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
     // Build the whole file in one buffer (O(n)); the old `out = out.concat(...)`
     // fold re-copied the entire growing file on every statement (O(file^2)).
@@ -1039,7 +1443,11 @@ pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
 
 fn needs_blank_line(prev: i32, curr: i32) -> bool {
     // Group consecutive imports / consts together. Otherwise insert a blank.
-    if prev == ST_IMPORT && curr == ST_IMPORT { return false; }
-    if prev == ST_CONST && curr == ST_CONST { return false; }
+    if prev == ST_IMPORT && curr == ST_IMPORT {
+        return false;
+    }
+    if prev == ST_CONST && curr == ST_CONST {
+        return false;
+    }
     return true;
 }

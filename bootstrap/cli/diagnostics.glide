@@ -1,6 +1,5 @@
 // Extracted from bootstrap/main.glide for readability. See that file for the
 // orchestration; shared helpers it owns stay there (pub).
-
 import stdlib::hashmap::*;
 import stdlib::io::*;
 import stdlib::os::*;
@@ -17,7 +16,7 @@ pub struct CcDiag {
     pub file: string,
     pub line: i32,
     pub col: i32,
-    pub severity: i32,   // 1 = error, 2 = warning
+    pub severity: i32, // 1 = error, 2 = warning
     pub message: string,
 }
 
@@ -29,68 +28,157 @@ pub struct CrawSpan {
     pub end: i32,
 }
 
-fn use_color() -> bool { return __glide_getenv("NO_COLOR").eq(""); }
-pub fn col_red() -> string    { if use_color() { return "\x1b[1;31m"; } return ""; }
-fn col_yellow() -> string { if use_color() { return "\x1b[1;33m"; } return ""; }
-pub fn col_blue() -> string   { if use_color() { return "\x1b[1;36m"; } return ""; }
-fn col_bold() -> string   { if use_color() { return "\x1b[1m"; } return ""; }
-pub fn col_reset() -> string  { if use_color() { return "\x1b[0m"; } return ""; }
+fn use_color() -> bool {
+    return __glide_getenv("NO_COLOR").eq("");
+}
+
+pub fn col_red() -> string {
+    if use_color() {
+        return "\x1b[1;31m";
+    }
+    return "";
+}
+
+fn col_yellow() -> string {
+    if use_color() {
+        return "\x1b[1;33m";
+    }
+    return "";
+}
+
+pub fn col_blue() -> string {
+    if use_color() {
+        return "\x1b[1;36m";
+    }
+    return "";
+}
+
+fn col_bold() -> string {
+    if use_color() {
+        return "\x1b[1m";
+    }
+    return "";
+}
+
+pub fn col_reset() -> string {
+    if use_color() {
+        return "\x1b[0m";
+    }
+    return "";
+}
 
 fn nth_line(src: string, n: i32) -> string {
-    if n < 1 { return ""; }
+    if n < 1 {
+        return "";
+    }
     let total: i32 = src.len();
     let mut line: i32 = 1;
     let mut start: i32 = 0;
     let mut i: i32 = 0;
     while i < total {
         if src.at(i).to_int() == 10 {
-            if line == n { return src.substring(start, i); }
+            if line == n {
+                return src.substring(start, i);
+            }
             line = line + 1;
             start = i + 1;
         }
         i = i + 1;
     }
-    if line == n && start <= total { return src.substring(start, total); }
+    if line == n && start <= total {
+        return src.substring(start, total);
+    }
     return "";
 }
 
 fn int_width(n: i32) -> i32 {
     let mut x: i32 = n;
-    if x < 0 { x = -x; }
+    if x < 0 {
+        x = -x;
+    }
     let mut w: i32 = 1;
-    while x >= 10 { x = x / 10; w = w + 1; }
+    while x >= 10 {
+        x = x / 10;
+        w = w + 1;
+    }
     return w;
 }
 
 fn repeat_char(ch: string, n: i32) -> string {
     let mut s: string = "";
-    for let i: i32 = 0; i < n; i++ { s = s.concat(ch); }
+    for let i: i32 = 0; i < n; i++ {
+        s = s.concat(ch);
+    }
     return s;
 }
 
 fn help_for_code(code: string) -> string {
-    if code.eq("infinite-recursion") { return "add a base case before the recursive call (e.g. `if n == 0 { return; }`)"; }
-    if code.eq("arena-not-freed")    { return "free the arena with `arena_free(a)` or use `defer arena_free(a);`"; }
-    if code.eq("addr-of-temporary")  { return "store the value in a `let` first, then take its address"; }
-    if code.eq("large-return")       { return "return a pointer (`*T`) instead of a large struct"; }
-    if code.eq("overlap-borrow")     { return "use distinct sources or split into separate statements"; }
-    if code.eq("unused-fn")          { return "prefix with `_` if intentional, or remove the function"; }
-    if code.eq("unused-var")         { return "prefix with `_` if intentional, or remove the variable"; }
-    if code.eq("unused-param")       { return "prefix with `_` if intentional"; }
-    if code.eq("unnecessary-mut")    { return "drop `mut` if the binding is never reassigned"; }
-    if code.eq("unknown-type")       { return "check the spelling, or `import` the module that declares it"; }
-    if code.eq("unknown-name")       { return "check the spelling, or declare/import the name before use"; }
-    if code.eq("unknown-function")   { return "check the spelling, or `import` the module that declares it"; }
-    if code.eq("no-field")           { return "check the field name; `pub` fields of structs in other files are the only ones visible cross-file"; }
-    if code.eq("private-field")      { return "the field is private to its declaring file; mark it `pub` to read it elsewhere"; }
-    if code.eq("private-construction") { return "the struct has private fields; build it through a public constructor (e.g. `T::new(...)`) in its own file"; }
-    if code.eq("expected-semicolon") { return "statements end with `;` — insert one at the end of the previous line"; }
-    if code.eq("expected-token")     { return "the parser expected a specific token here; check for an unbalanced `{`/`(`/`[` above"; }
-    if code.eq("for-in-not-iterable") { return "`for-in` walks a range (`0..n`) or a collection, not a single number"; }
-    if code.eq("unused-result")      { return "handle the result: check `.ok`, propagate with `?`, or default with `??`"; }
-    if code.eq("ice")                { return "type-checked Glide should always produce valid C — this is a compiler bug; please report it with the preserved `.__glide.c` and `.log`"; }
-    if code.eq("c-raw-error")        { return "the error is inside a `c_raw! { ... }` block — fix the inline C (Glide emits it verbatim and does not type-check it)"; }
-    if code.eq("cc-error")           { return "the C compiler rejected the generated code; inspect the preserved `.__glide.c` and the cc log"; }
+    if code.eq("infinite-recursion") {
+        return "add a base case before the recursive call (e.g. `if n == 0 { return; }`)";
+    }
+    if code.eq("arena-not-freed") {
+        return "free the arena with `arena_free(a)` or use `defer arena_free(a);`";
+    }
+    if code.eq("addr-of-temporary") {
+        return "store the value in a `let` first, then take its address";
+    }
+    if code.eq("large-return") {
+        return "return a pointer (`*T`) instead of a large struct";
+    }
+    if code.eq("overlap-borrow") {
+        return "use distinct sources or split into separate statements";
+    }
+    if code.eq("unused-fn") {
+        return "prefix with `_` if intentional, or remove the function";
+    }
+    if code.eq("unused-var") {
+        return "prefix with `_` if intentional, or remove the variable";
+    }
+    if code.eq("unused-param") {
+        return "prefix with `_` if intentional";
+    }
+    if code.eq("unnecessary-mut") {
+        return "drop `mut` if the binding is never reassigned";
+    }
+    if code.eq("unknown-type") {
+        return "check the spelling, or `import` the module that declares it";
+    }
+    if code.eq("unknown-name") {
+        return "check the spelling, or declare/import the name before use";
+    }
+    if code.eq("unknown-function") {
+        return "check the spelling, or `import` the module that declares it";
+    }
+    if code.eq("no-field") {
+        return "check the field name; `pub` fields of structs in other files are the only ones visible cross-file";
+    }
+    if code.eq("private-field") {
+        return "the field is private to its declaring file; mark it `pub` to read it elsewhere";
+    }
+    if code.eq("private-construction") {
+        return "the struct has private fields; build it through a public constructor (e.g. `T::new(...)`) in its own file";
+    }
+    if code.eq("expected-semicolon") {
+        return "statements end with `;` — insert one at the end of the previous line";
+    }
+    if code.eq("expected-token") {
+        return "the parser expected a specific token here; check for an unbalanced `{`/`(`/`[` above";
+    }
+    if code.eq("for-in-not-iterable") {
+        return "`for-in` walks a range (`0..n`) or a collection, not a single number";
+    }
+    if code.eq("unused-result") {
+        return "handle the result: check `.ok`, propagate with `?`, or default with `??`";
+    }
+    if code.eq("ice") {
+        return "type-checked Glide should always produce valid C — this is a compiler bug; please report it with the preserved `.__glide.c` and `.log`";
+    }
+    if code.eq("c-raw-error") {
+        return "the error is inside a `c_raw! { ... }` block — fix the inline C (Glide emits it verbatim and does not type-check it)";
+    }
+    if code.eq("cc-error") {
+        return "the C compiler rejected the generated code; inspect the preserved `.__glide.c` and the cc log";
+    }
     return "";
 }
 
@@ -102,48 +190,101 @@ fn help_for_code(code: string) -> string {
 // be overridden with GLIDE_UNICODE=1 / GLIDE_ASCII=1.
 fn use_unicode() -> bool {
     let asc: string = __glide_getenv("GLIDE_ASCII");
-    if !asc.eq("") && !asc.eq("0") { return false; }
+    if !asc.eq("") && !asc.eq("0") {
+        return false;
+    }
     let uni: string = __glide_getenv("GLIDE_UNICODE");
-    if !uni.eq("") && !uni.eq("0") { return true; }
-    if __glide_is_windows() != 0 { return false; }
+    if !uni.eq("") && !uni.eq("0") {
+        return true;
+    }
+    if __glide_is_windows() != 0 {
+        return false;
+    }
     return true;
 }
 
-fn glyph_err() -> string  { if use_unicode() { return "\xe2\x9c\x97"; } return "x"; } // ✗
-fn glyph_warn() -> string { if use_unicode() { return "\xe2\x9a\xa0"; } return "!"; } // ⚠
-fn glyph_info() -> string { if use_unicode() { return "\xe2\x84\xb9"; } return "i"; } // ℹ
-fn glyph_help() -> string { if use_unicode() { return "\xe2\x86\xaa"; } return ">"; } // ↪
-fn glyph_pipe() -> string { if use_unicode() { return "\xe2\x94\x8a"; } return "|"; } // ┊
-fn glyph_under() -> string{ if use_unicode() { return "\xe2\x94\x81"; } return "-"; } // ━
+fn glyph_err() -> string {
+    if use_unicode() {
+        return "\xe2\x9c\x97";
+    }
+    return "x";
+} // ✗
+
+fn glyph_warn() -> string {
+    if use_unicode() {
+        return "\xe2\x9a\xa0";
+    }
+    return "!";
+} // ⚠
+
+fn glyph_info() -> string {
+    if use_unicode() {
+        return "\xe2\x84\xb9";
+    }
+    return "i";
+} // ℹ
+
+fn glyph_help() -> string {
+    if use_unicode() {
+        return "\xe2\x86\xaa";
+    }
+    return ">";
+} // ↪
+
+fn glyph_pipe() -> string {
+    if use_unicode() {
+        return "\xe2\x94\x8a";
+    }
+    return "|";
+} // ┊
+
+fn glyph_under() -> string {
+    if use_unicode() {
+        return "\xe2\x94\x81";
+    }
+    return "-";
+} // ━
 
 pub fn print_pretty_diag(d: DiagEntry, src: string, src_path: string) {
     let mut sym: string = glyph_err();
     let mut color: string = col_red();
-    if d.severity == 2 { sym = glyph_warn(); color = col_yellow(); }
-    if d.severity == 3 { sym = glyph_info(); color = col_blue();   }
-    if d.severity == 4 { sym = glyph_help(); color = col_blue();   }
-
+    if d.severity == 2 {
+        sym = glyph_warn();
+        color = col_yellow();
+    }
+    if d.severity == 3 {
+        sym = glyph_info();
+        color = col_blue();
+    }
+    if d.severity == 4 {
+        sym = glyph_help();
+        color = col_blue();
+    }
     let reset: string = col_reset();
     let bold: string = col_bold();
     let dim_blue: string = col_blue();
-
     // Title:  ⨯ <code>     (then message on the next line, indented)
     let mut title: string = color.concat(sym).concat(" ").concat(reset).concat(bold);
-    if !d.code.eq("") { title = title.concat(d.code); }
-    else if d.severity == 1 { title = title.concat("error"); }
-    else if d.severity == 2 { title = title.concat("warning"); }
-    else { title = title.concat("info"); }
+    if !d.code.eq("") {
+        title = title.concat(d.code);
+    } else {
+        if d.severity == 1 {
+            title = title.concat("error");
+        } else {
+            if d.severity == 2 {
+                title = title.concat("warning");
+            } else {
+                title = title.concat("info");
+            }
+        }
+    }
     title = title.concat(reset);
     println!(title);
     println!("  ".concat(d.message));
     println!("");
-
     // Location: "  in <path>:<line>:<col>"
-    let loc: string = "  ".concat(dim_blue).concat("in ").concat(reset)
-                          .concat(src_path).concat(":").concat(int_to_str(d.line))
-                          .concat(":").concat(int_to_str(d.col));
+    let loc: string = "  ".concat(dim_blue).concat("in ").concat(reset).concat(src_path).concat(":").concat(int_to_str(d.line)).concat(":").concat(int_to_str(d.col));
     println!(loc);
-
     // Source snippet:
     //   N ┊  <line>
     //     ┊  ━━━━━
@@ -152,29 +293,33 @@ pub fn print_pretty_diag(d: DiagEntry, src: string, src_path: string) {
     let pad: string = repeat_char(" ", gw);
     let bar: string = glyph_pipe();
     println!(dim_blue.concat(int_to_str(d.line)).concat(" ").concat(bar).concat(" ").concat(reset).concat(line_text));
-
     let mut col0: i32 = d.col;
-    if col0 < 1 { col0 = 1; }
+    if col0 < 1 {
+        col0 = 1;
+    }
     let mut span: i32 = d.end_col - d.col;
-    if span < 1 { span = 1; }
+    if span < 1 {
+        span = 1;
+    }
     // Mirror the leading whitespace verbatim (tabs stay tabs) so the
     // underline lands under the offending span at any terminal tab width.
     let mut indent: string = "";
     let mut k: i32 = 0;
     let mut limit: i32 = col0 - 1;
-    if limit > line_text.len() { limit = line_text.len(); }
+    if limit > line_text.len() {
+        limit = line_text.len();
+    }
     while k < limit {
         let ch: i32 = line_text.at(k).to_int();
-        if ch == 9 { indent = indent.concat("\t"); }
-        else { indent = indent.concat(" "); }
+        if ch == 9 {
+            indent = indent.concat("\t");
+        } else {
+            indent = indent.concat(" ");
+        }
         k = k + 1;
     }
-    let underline: string = pad.concat(" ").concat(dim_blue).concat(bar).concat(" ").concat(reset)
-                               .concat(indent).concat(color)
-                               .concat(repeat_char(glyph_under(), span))
-                               .concat(reset);
+    let underline: string = pad.concat(" ").concat(dim_blue).concat(bar).concat(" ").concat(reset).concat(indent).concat(color).concat(repeat_char(glyph_under(), span)).concat(reset);
     println!(underline);
-
     // Help line, if any:  ↪ help text  (or > help text on ASCII terminals)
     let help: string = help_for_code(d.code);
     if !help.eq("") {
@@ -190,25 +335,38 @@ pub fn print_pretty_diag(d: DiagEntry, src: string, src_path: string) {
 fn _fwd_slashes(p: string) -> string {
     let mut out: string = "";
     for let i: i32 = 0; i < p.len(); i++ {
-        if p.at(i).to_int() == 92 { out = out.concat("/"); }
-        else { out = out.concat(p.substring(i, i + 1)); }
+        if p.at(i).to_int() == 92 {
+            out = out.concat("/");
+        } else {
+            out = out.concat(p.substring(i, i + 1));
+        }
     }
     return out;
 }
 
 fn _cc_all_digits(s: string) -> bool {
-    if s.len() == 0 { return false; }
+    if s.len() == 0 {
+        return false;
+    }
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
-        if c < 48 || c > 57 { return false; }
+        if c < 48 || c > 57 {
+            return false;
+        }
     }
     return true;
 }
 
 fn _cc_severity_of(ln: string) -> i32 {
-    if ln.contains(": error:")   { return 1; }
-    if ln.contains(": warning:") { return 2; }
-    if ln.contains(": note:")    { return 3; }
+    if ln.contains(": error:") {
+        return 1;
+    }
+    if ln.contains(": warning:") {
+        return 2;
+    }
+    if ln.contains(": note:") {
+        return 3;
+    }
     return 0;
 }
 
@@ -222,18 +380,30 @@ fn parse_cc_log(log: string) -> *Vector<CcDiag> {
     let seen: *Vector<string> = Vector::new();
     let lines: *Vector<string> = log.split("\n");
     for let li: i32 = 0; li < lines.len(); li++ {
-        let ln: string = lines.get(li).trim();      // trims trailing \r too
-        if ln.eq("") { continue; }
-        if ln.starts_with("In file included from") { continue; }
+        let ln: string = lines.get(li).trim(); // trims trailing \r too
+        if ln.eq("") {
+            continue;
+        }
+        if ln.starts_with("In file included from") {
+            continue;
+        }
         let c0: i32 = ln.at(0).to_int();
-        if c0 == 94 || c0 == 126 { continue; }       // '^' or '~' underline line
+        if c0 == 94 || c0 == 126 {
+            continue;
+        } // '^' or '~' underline line
         let sev: i32 = _cc_severity_of(ln);
-        if sev == 0 || sev == 3 { continue; }         // skip non-diagnostics + notes
+        if sev == 0 || sev == 3 {
+            continue;
+        } // skip non-diagnostics + notes
         let mut kw: string = ": warning:";
-        if sev == 1 { kw = ": error:"; }
+        if sev == 1 {
+            kw = ": error:";
+        }
         let kpos: i32 = ln.index_of(kw);
-        if kpos < 0 { continue; }
-        let head: string = ln.substring(0, kpos);     // path:line[:col]
+        if kpos < 0 {
+            continue;
+        }
+        let head: string = ln.substring(0, kpos); // path:line[:col]
         let msg: string = ln.substring(kpos + kw.len(), ln.len()).trim();
         let fld: *Vector<string> = head.split(":");
         // Walk from the end collecting up to two trailing all-digit fields
@@ -245,19 +415,29 @@ fn parse_cc_log(log: string) -> *Vector<CcDiag> {
             nums.push(fld.get(last).trim().parse_int());
             last = last - 1;
         }
-        if nums.len() == 0 { continue; }
+        if nums.len() == 0 {
+            continue;
+        }
         let mut file: string = "";
         for let j: i32 = 0; j <= last; j++ {
-            if j > 0 { file = file.concat(":"); }
+            if j > 0 {
+                file = file.concat(":");
+            }
             file = file.concat(fld.get(j));
         }
         file = file.trim();
         let mut lno: i32 = 0;
         let mut cno: i32 = 0;
-        if nums.len() == 2 { cno = nums.get(0); lno = nums.get(1); }
-        else { lno = nums.get(0); }
+        if nums.len() == 2 {
+            cno = nums.get(0);
+            lno = nums.get(1);
+        } else {
+            lno = nums.get(0);
+        }
         let key: string = file.concat("|").concat(int_to_str(lno)).concat("|").concat(msg);
-        if seen.contains(key) { continue; }
+        if seen.contains(key) {
+            continue;
+        }
         seen.push(key);
         out.push(CcDiag { file: file, line: lno, col: cno, severity: sev, message: msg });
     }
@@ -268,27 +448,37 @@ fn parse_cc_log(log: string) -> *Vector<CcDiag> {
 fn _cc_parse_line_no(l: string) -> i32 {
     let n: i32 = l.len();
     let mut i: i32 = 6;
-    while i < n && l.at(i).to_int() == 32 { i = i + 1; }
+    while i < n && l.at(i).to_int() == 32 {
+        i = i + 1;
+    }
     let mut v: i32 = 0;
     let mut got: bool = false;
     while i < n {
         let c: i32 = l.at(i).to_int();
-        if c < 48 || c > 57 { break; }
+        if c < 48 || c > 57 {
+            break;
+        }
         v = v * 10 + (c - 48);
         got = true;
         i = i + 1;
     }
-    if !got { return 0; }
+    if !got {
+        return 0;
+    }
     return v;
 }
 
 // Parse the (forward-slashed) path from a `#line N "path"` directive.
 fn _cc_parse_line_path(l: string) -> string {
     let q1: i32 = l.index_of("\"");
-    if q1 < 0 { return ""; }
+    if q1 < 0 {
+        return "";
+    }
     let rest: string = l.substring(q1 + 1, l.len());
     let q2: i32 = rest.index_of("\"");
-    if q2 < 0 { return _fwd_slashes(rest); }
+    if q2 < 0 {
+        return _fwd_slashes(rest);
+    }
     return _fwd_slashes(rest.substring(0, q2));
 }
 
@@ -300,7 +490,9 @@ fn _cc_parse_line_path(l: string) -> string {
 // matched C line plus a little following context, stopping at the next `#line`.
 // Skips silently when nothing maps (e.g. an error in the C preamble).
 fn cc_print_c_snippet(csrc: string, glide_file: string, glide_line: i32) {
-    if glide_line <= 0 { return; }
+    if glide_line <= 0 {
+        return;
+    }
     let target: string = _fwd_slashes(glide_file);
     let lines: *Vector<string> = csrc.split("\n");
     let mut cur_file: string = "";
@@ -315,12 +507,18 @@ fn cc_print_c_snippet(csrc: string, glide_file: string, glide_line: i32) {
         }
         let mut fmatch: bool = false;
         if !cur_file.eq("") {
-            if cur_file.eq(target) || target.ends_with(cur_file) || cur_file.ends_with(target) { fmatch = true; }
+            if cur_file.eq(target) || target.ends_with(cur_file) || cur_file.ends_with(target) {
+                fmatch = true;
+            }
         }
-        if hit < 0 && fmatch && cur_gline == glide_line { hit = i; }
+        if hit < 0 && fmatch && cur_gline == glide_line {
+            hit = i;
+        }
         cur_gline = cur_gline + 1;
     }
-    if hit < 0 { return; }
+    if hit < 0 {
+        return;
+    }
     let dim: string = col_blue();
     let reset: string = col_reset();
     println!("  ".concat(dim).concat("generated C:").concat(reset));
@@ -328,7 +526,9 @@ fn cc_print_c_snippet(csrc: string, glide_file: string, glide_line: i32) {
     let mut j: i32 = hit;
     while j < lines.len() && shown < 6 {
         let l: string = lines.get(j);
-        if j > hit && l.starts_with("#line ") { break; }
+        if j > hit && l.starts_with("#line ") {
+            break;
+        }
         if !l.trim().eq("") {
             println!("    ".concat(dim).concat("| ").concat(reset).concat(l));
             shown = shown + 1;
@@ -339,10 +539,14 @@ fn cc_print_c_snippet(csrc: string, glide_file: string, glide_line: i32) {
 }
 
 fn _count_newlines(s: string) -> i32 {
-    if s == null { return 0; }
+    if s == null {
+        return 0;
+    }
     let mut n: i32 = 0;
     for let i: i32 = 0; i < s.len(); i++ {
-        if s.at(i).to_int() == 10 { n = n + 1; }
+        if s.at(i).to_int() == 10 {
+            n = n + 1;
+        }
     }
     return n;
 }
@@ -351,19 +555,31 @@ fn _count_newlines(s: string) -> i32 {
 // `c_raw!` block's source span. `file` threads the enclosing top-level stmt's
 // origin down to nested c_raw blocks (whose own `origin` may be unset).
 fn _collect_craw_into(stmts: *Vector<Stmt>, file: string, out: *Vector<CrawSpan>) {
-    if stmts == null { return; }
+    if stmts == null {
+        return;
+    }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         let mut f: string = file;
-        if s.origin != null && !s.origin.eq("") { f = s.origin; }
+        if s.origin != null && !s.origin.eq("") {
+            f = s.origin;
+        }
         if s.kind == ST_CRAW {
             let nl: i32 = _count_newlines(s.name);
             out.push(CrawSpan { file: f, start: s.line, end: s.line + nl + 1 });
         }
-        if s.then_body != null   { _collect_craw_into(s.then_body, f, out); }
-        if s.else_body != null   { _collect_craw_into(s.else_body, f, out); }
-        if s.fn_body != null     { _collect_craw_into(s.fn_body, f, out); }
-        if s.impl_methods != null { _collect_craw_into(s.impl_methods, f, out); }
+        if s.then_body != null {
+            _collect_craw_into(s.then_body, f, out);
+        }
+        if s.else_body != null {
+            _collect_craw_into(s.else_body, f, out);
+        }
+        if s.fn_body != null {
+            _collect_craw_into(s.fn_body, f, out);
+        }
+        if s.impl_methods != null {
+            _collect_craw_into(s.impl_methods, f, out);
+        }
     }
 }
 
@@ -382,33 +598,34 @@ fn craw_contains(spans: *Vector<CrawSpan>, file: string, line: i32) -> bool {
             // Exact match, or one path is a suffix of the other (handles the
             // relative-vs-absolute path difference between cc's report and the
             // origin the loader recorded).
-            if sf.eq(f) || f.ends_with(sf) || sf.ends_with(f) { return true; }
+            if sf.eq(f) || f.ends_with(sf) || sf.ends_with(f) {
+                return true;
+            }
         }
     }
     return false;
 }
 
 // Render one parsed cc error as a Glide diagnostic + the generated-C slice.
-fn cc_render_one(cd: CcDiag, csrc: string, src_path: string,
-                 src_text: string, craw: *Vector<CrawSpan>) {
+fn cc_render_one(cd: CcDiag, csrc: string, src_path: string, src_text: string, craw: *Vector<CrawSpan>) {
     let in_craw: bool = craw_contains(craw, cd.file, cd.line);
     let mut code: string = "ice";
-    if in_craw { code = "c-raw-error"; }
+    if in_craw {
+        code = "c-raw-error";
+    }
     let mut cc0: i32 = cd.col;
-    if cc0 < 1 { cc0 = 1; }
-    let d: DiagEntry = DiagEntry {
-        line: cd.line, col: cc0,
-        end_line: cd.line, end_col: cc0 + 1,
-        severity: 1, code: code, message: cd.message,
-        origin: cd.file, tag: 0,
-        fix_line: 0, fix_col: 0, fix_end_line: 0, fix_end_col: 0,
-        fix_replacement: "",
-    };
+    if cc0 < 1 {
+        cc0 = 1;
+    }
+    let d: DiagEntry = DiagEntry { line: cd.line, col: cc0, end_line: cd.line, end_col: cc0 + 1, severity: 1, code: code, message: cd.message, origin: cd.file, tag: 0, fix_line: 0, fix_col: 0, fix_end_line: 0, fix_end_col: 0, fix_replacement: "" };
     if cd.file.ends_with(".glide") {
         // Anchored at a .glide line (the common case, via #line). Render the
         // Glide source with a caret, then the generated C that came from it.
-        if cd.file.eq(src_path) { print_pretty_diag(d, src_text, cd.file); }
-        else { print_pretty_diag(d, read_file(cd.file), cd.file); }
+        if cd.file.eq(src_path) {
+            print_pretty_diag(d, src_text, cd.file);
+        } else {
+            print_pretty_diag(d, read_file(cd.file), cd.file);
+        }
         cc_print_c_snippet(csrc, cd.file, cd.line);
     } else {
         // Anchored at the generated .c itself (no #line was in effect, e.g. the
@@ -420,17 +637,22 @@ fn cc_render_one(cd: CcDiag, csrc: string, src_path: string,
 // Render every error in a captured cc log. Returns the count rendered; 0 means
 // nothing parseable (linker error, unknown format) so the caller falls back to
 // dumping the raw log.
-pub fn cc_render_log(cc_log: string, tmp_c: string, src_path: string,
-                 src_text: string, craw: *Vector<CrawSpan>) -> i32 {
+pub fn cc_render_log(cc_log: string, tmp_c: string, src_path: string, src_text: string, craw: *Vector<CrawSpan>) -> i32 {
     let log: string = read_file(cc_log);
-    if log.eq("") { return 0; }
+    if log.eq("") {
+        return 0;
+    }
     let diags: *Vector<CcDiag> = parse_cc_log(log);
-    if diags.len() == 0 { return 0; }
+    if diags.len() == 0 {
+        return 0;
+    }
     let csrc: string = read_file(tmp_c);
     let mut shown: i32 = 0;
     for let i: i32 = 0; i < diags.len(); i++ {
         let cd: CcDiag = diags.get(i);
-        if cd.severity != 1 { continue; }
+        if cd.severity != 1 {
+            continue;
+        }
         cc_render_one(cd, csrc, src_path, src_text, craw);
         shown = shown + 1;
     }
@@ -457,21 +679,33 @@ pub fn run_precc_checks(pre: *Typer, tc: *Typer, stmts: *Vector<Stmt>) {
 }
 
 fn _precc_walk(pre: *Typer, tc: *Typer, defs: *Vector<string>, stmts: *Vector<Stmt>, file: string) {
-    if stmts == null { return; }
+    if stmts == null {
+        return;
+    }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         let mut f: string = file;
-        if s.origin != null && !s.origin.eq("") { f = s.origin; }
+        if s.origin != null && !s.origin.eq("") {
+            f = s.origin;
+        }
         if s.kind == ST_CRAW {
             pre.current_origin = f;
             check_craw_unbalanced_braces(pre, &s);
             check_craw_undefined_refs(pre, tc, defs, &s);
             // Add more c_raw checks here (each pushes a DiagEntry via pre.push_diag).
         }
-        if s.then_body != null   { _precc_walk(pre, tc, defs, s.then_body, f); }
-        if s.else_body != null   { _precc_walk(pre, tc, defs, s.else_body, f); }
-        if s.fn_body != null     { _precc_walk(pre, tc, defs, s.fn_body, f); }
-        if s.impl_methods != null { _precc_walk(pre, tc, defs, s.impl_methods, f); }
+        if s.then_body != null {
+            _precc_walk(pre, tc, defs, s.then_body, f);
+        }
+        if s.else_body != null {
+            _precc_walk(pre, tc, defs, s.else_body, f);
+        }
+        if s.fn_body != null {
+            _precc_walk(pre, tc, defs, s.fn_body, f);
+        }
+        if s.impl_methods != null {
+            _precc_walk(pre, tc, defs, s.impl_methods, f);
+        }
     }
 }
 
@@ -483,25 +717,34 @@ fn _precc_walk(pre: *Typer, tc: *Typer, defs: *Vector<string>, stmts: *Vector<St
 fn _craw_skip_noncode(body: string, i: i32) -> i32 {
     let n: i32 = body.len();
     let c: i32 = body.at(i).to_int();
-    if c == 47 && i + 1 < n && body.at(i + 1).to_int() == 47 {        // //
+    if c == 47 && i + 1 < n && body.at(i + 1).to_int() == 47 {
         let mut j: i32 = i + 2;
-        while j < n && body.at(j).to_int() != 10 { j = j + 1; }
+        while j < n && body.at(j).to_int() != 10 {
+            j = j + 1;
+        }
         return j;
     }
-    if c == 47 && i + 1 < n && body.at(i + 1).to_int() == 42 {        // /* */
+    if c == 47 && i + 1 < n && body.at(i + 1).to_int() == 42 {
         let mut j: i32 = i + 2;
         while j < n {
-            if body.at(j).to_int() == 42 && j + 1 < n && body.at(j + 1).to_int() == 47 { return j + 2; }
+            if body.at(j).to_int() == 42 && j + 1 < n && body.at(j + 1).to_int() == 47 {
+                return j + 2;
+            }
             j = j + 1;
         }
         return n;
     }
-    if c == 34 || c == 39 {                                          // "..." or '...'
+    if c == 34 || c == 39 {
         let mut j: i32 = i + 1;
         while j < n {
             let d: i32 = body.at(j).to_int();
-            if d == 92 { j = j + 2; continue; }                      // escape
-            if d == c { return j + 1; }
+            if d == 92 {
+                j = j + 2;
+                continue;
+            } // escape
+            if d == c {
+                return j + 1;
+            }
             j = j + 1;
         }
         return n;
@@ -513,7 +756,9 @@ fn _craw_skip_noncode(body: string, i: i32) -> i32 {
 // produces a cascade of confusing cc errors far below the block; here it
 // becomes one clear Glide error anchored at the block.
 fn check_craw_unbalanced_braces(t: *Typer, s: *Stmt) {
-    if s.name == null { return; }
+    if s.name == null {
+        return;
+    }
     let body: string = s.name;
     let n: i32 = body.len();
     let mut brace: i32 = 0;
@@ -522,29 +767,47 @@ fn check_craw_unbalanced_braces(t: *Typer, s: *Stmt) {
     let mut i: i32 = 0;
     while i < n {
         let sk: i32 = _craw_skip_noncode(body, i);
-        if sk >= 0 { i = sk; continue; }
+        if sk >= 0 {
+            i = sk;
+            continue;
+        }
         let c: i32 = body.at(i).to_int();
-        if c == 123 { brace = brace + 1; }
-        else if c == 125 { brace = brace - 1; }
-        else if c == 40 { paren = paren + 1; }
-        else if c == 41 { paren = paren - 1; }
-        else if c == 91 { brack = brack + 1; }
-        else if c == 93 { brack = brack - 1; }
+        if c == 123 {
+            brace = brace + 1;
+        } else {
+            if c == 125 {
+                brace = brace - 1;
+            } else {
+                if c == 40 {
+                    paren = paren + 1;
+                } else {
+                    if c == 41 {
+                        paren = paren - 1;
+                    } else {
+                        if c == 91 {
+                            brack = brack + 1;
+                        } else {
+                            if c == 93 {
+                                brack = brack - 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if brace < 0 || paren < 0 || brack < 0 {
-            t.push_diag(s.line, s.column, 1, "c-raw-error",
-                "unbalanced closing delimiter in `c_raw!` block (a `}`, `)` or `]` with no matching opener)");
+            t.push_diag(s.line, s.column, 1, "c-raw-error", "unbalanced closing delimiter in `c_raw!` block (a `}`, `)` or `]` with no matching opener)");
             return;
         }
         i = i + 1;
     }
     if brace != 0 || paren != 0 || brack != 0 {
-        t.push_diag(s.line, s.column, 1, "c-raw-error",
-            "unbalanced `{` / `(` / `[` in `c_raw!` block — a delimiter is left open");
+        t.push_diag(s.line, s.column, 1, "c-raw-error", "unbalanced `{` / `(` / `[` in `c_raw!` block — a delimiter is left open");
     }
 }
 
 fn _is_c_ident(c: i32) -> bool {
-    return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+    return c >= 48 && c <= 57 || c >= 65 && c <= 90 || c >= 97 && c <= 122 || c == 95;
 }
 
 fn _starts_glide(id: string) -> bool {
@@ -559,38 +822,58 @@ fn _starts_glide(id: string) -> bool {
 // `return`), which only makes the undefined-ref check MORE conservative — it
 // can miss a bug, but never falsely abort a valid build.
 fn _craw_collect_defs_walk(stmts: *Vector<Stmt>, defs: *Vector<string>) {
-    if stmts == null { return; }
+    if stmts == null {
+        return;
+    }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.kind == ST_CRAW && s.name != null {
             _scan_craw_defs(s.name, defs);
         }
-        if s.then_body != null   { _craw_collect_defs_walk(s.then_body, defs); }
-        if s.else_body != null   { _craw_collect_defs_walk(s.else_body, defs); }
-        if s.fn_body != null     { _craw_collect_defs_walk(s.fn_body, defs); }
-        if s.impl_methods != null { _craw_collect_defs_walk(s.impl_methods, defs); }
+        if s.then_body != null {
+            _craw_collect_defs_walk(s.then_body, defs);
+        }
+        if s.else_body != null {
+            _craw_collect_defs_walk(s.else_body, defs);
+        }
+        if s.fn_body != null {
+            _craw_collect_defs_walk(s.fn_body, defs);
+        }
+        if s.impl_methods != null {
+            _craw_collect_defs_walk(s.impl_methods, defs);
+        }
     }
 }
 
 fn _scan_craw_defs(body: string, defs: *Vector<string>) {
     let n: i32 = body.len();
     let mut i: i32 = 0;
-    let mut prev: i32 = 32;   // last non-space code char before the current token
+    let mut prev: i32 = 32; // last non-space code char before the current token
     while i < n {
         let sk: i32 = _craw_skip_noncode(body, i);
-        if sk >= 0 { prev = 0; i = sk; continue; }
+        if sk >= 0 {
+            prev = 0;
+            i = sk;
+            continue;
+        }
         let c: i32 = body.at(i).to_int();
-        if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+        if c == 95 || c >= 65 && c <= 90 || c >= 97 && c <= 122 {
             let st: i32 = i;
-            while i < n && _is_c_ident(body.at(i).to_int()) { i = i + 1; }
+            while i < n && _is_c_ident(body.at(i).to_int()) {
+                i = i + 1;
+            }
             let id: string = body.substring(st, i);
             if _starts_glide(id) && (prev == 42 || _is_c_ident(prev)) {
-                if !defs.contains(id) { defs.push(id); }
+                if !defs.contains(id) {
+                    defs.push(id);
+                }
             }
             prev = body.at(i - 1).to_int();
             continue;
         }
-        if c != 32 && c != 9 && c != 10 && c != 13 { prev = c; }
+        if c != 32 && c != 9 && c != 10 && c != 13 {
+            prev = c;
+        }
         i = i + 1;
     }
 }
@@ -601,7 +884,9 @@ fn _scan_craw_defs(body: string, defs: *Vector<string>) {
 // error carries no file:line, so the cc-log renderer can't anchor it) — almost
 // always a typo or a renamed/removed compiler intrinsic.
 fn check_craw_undefined_refs(pre: *Typer, tc: *Typer, defs: *Vector<string>, s: *Stmt) {
-    if s.name == null { return; }
+    if s.name == null {
+        return;
+    }
     let body: string = s.name;
     let n: i32 = body.len();
     let mut i: i32 = 0;
@@ -609,17 +894,25 @@ fn check_craw_undefined_refs(pre: *Typer, tc: *Typer, defs: *Vector<string>, s: 
     let reported: *Vector<string> = Vector::new();
     while i < n {
         let sk: i32 = _craw_skip_noncode(body, i);
-        if sk >= 0 { prev = 0; i = sk; continue; }
+        if sk >= 0 {
+            prev = 0;
+            i = sk;
+            continue;
+        }
         let c: i32 = body.at(i).to_int();
-        if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+        if c == 95 || c >= 65 && c <= 90 || c >= 97 && c <= 122 {
             let st: i32 = i;
-            while i < n && _is_c_ident(body.at(i).to_int()) { i = i + 1; }
+            while i < n && _is_c_ident(body.at(i).to_int()) {
+                i = i + 1;
+            }
             let id: string = body.substring(st, i);
             // First non-space char after the identifier.
             let mut j: i32 = i;
             while j < n {
                 let cj: i32 = body.at(j).to_int();
-                if cj != 32 && cj != 9 && cj != 10 && cj != 13 { break; }
+                if cj != 32 && cj != 9 && cj != 10 && cj != 13 {
+                    break;
+                }
                 j = j + 1;
             }
             let nxt: i32 = if j < n { body.at(j).to_int() } else { 0 };
@@ -629,14 +922,15 @@ fn check_craw_undefined_refs(pre: *Typer, tc: *Typer, defs: *Vector<string>, s: 
             if _starts_glide(id) && nxt == 40 && !is_def_ctx {
                 if !tc.fns.contains(id) && !defs.contains(id) && !reported.contains(id) {
                     reported.push(id);
-                    pre.push_diag(s.line, s.column, 1, "c-raw-error",
-                        "`c_raw!` calls `".concat(id).concat("()`, which is not a declared `extern fn` nor defined in any `c_raw!` block — likely a typo or a renamed/removed compiler intrinsic"));
+                    pre.push_diag(s.line, s.column, 1, "c-raw-error", "`c_raw!` calls `".concat(id).concat("()`, which is not a declared `extern fn` nor defined in any `c_raw!` block — likely a typo or a renamed/removed compiler intrinsic"));
                 }
             }
             prev = body.at(i - 1).to_int();
             continue;
         }
-        if c != 32 && c != 9 && c != 10 && c != 13 { prev = c; }
+        if c != 32 && c != 9 && c != 10 && c != 13 {
+            prev = c;
+        }
         i = i + 1;
     }
 }
@@ -652,14 +946,32 @@ fn _c_param_count(body: string, open: i32) -> i32 {
     let mut i: i32 = open;
     while i < n {
         let c: i32 = body.at(i).to_int();
-        if c == 40 { depth = depth + 1; if depth == 1 { i = i + 1; continue; } }
-        else if c == 41 { depth = depth - 1; if depth == 0 { break; } }
-        if depth == 1 && c == 44 { commas = commas + 1; }
-        if depth >= 1 { inner = inner.concat(body.substring(i, i + 1)); }
+        if c == 40 {
+            depth = depth + 1;
+            if depth == 1 {
+                i = i + 1;
+                continue;
+            }
+        } else {
+            if c == 41 {
+                depth = depth - 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+        }
+        if depth == 1 && c == 44 {
+            commas = commas + 1;
+        }
+        if depth >= 1 {
+            inner = inner.concat(body.substring(i, i + 1));
+        }
         i = i + 1;
     }
     let t: string = inner.trim();
-    if t.eq("") || t.eq("void") { return 0; }
+    if t.eq("") || t.eq("void") {
+        return 0;
+    }
     return commas + 1;
 }
 
@@ -668,18 +980,42 @@ fn _c_param_count(body: string, open: i32) -> i32 {
 // definition site: `name(` whose preceding non-space char is `*` or an
 // identifier char (so a plain call `name(...)` is ignored).
 fn _craw_def_arity(stmts: *Vector<Stmt>, name: string) -> i32 {
-    if stmts == null { return -1; }
+    if stmts == null {
+        return -1;
+    }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.kind == ST_CRAW && s.name != null {
             let a: i32 = _scan_def_arity(s.name, name);
-            if a >= 0 { return a; }
+            if a >= 0 {
+                return a;
+            }
         }
         let mut a: i32 = -1;
-        if s.then_body != null   { a = _craw_def_arity(s.then_body, name); if a >= 0 { return a; } }
-        if s.else_body != null   { a = _craw_def_arity(s.else_body, name); if a >= 0 { return a; } }
-        if s.fn_body != null     { a = _craw_def_arity(s.fn_body, name); if a >= 0 { return a; } }
-        if s.impl_methods != null { a = _craw_def_arity(s.impl_methods, name); if a >= 0 { return a; } }
+        if s.then_body != null {
+            a = _craw_def_arity(s.then_body, name);
+            if a >= 0 {
+                return a;
+            }
+        }
+        if s.else_body != null {
+            a = _craw_def_arity(s.else_body, name);
+            if a >= 0 {
+                return a;
+            }
+        }
+        if s.fn_body != null {
+            a = _craw_def_arity(s.fn_body, name);
+            if a >= 0 {
+                return a;
+            }
+        }
+        if s.impl_methods != null {
+            a = _craw_def_arity(s.impl_methods, name);
+            if a >= 0 {
+                return a;
+            }
+        }
     }
     return -1;
 }
@@ -690,16 +1026,24 @@ fn _scan_def_arity(body: string, name: string) -> i32 {
     let mut prev: i32 = 32;
     while i < n {
         let sk: i32 = _craw_skip_noncode(body, i);
-        if sk >= 0 { prev = 0; i = sk; continue; }
+        if sk >= 0 {
+            prev = 0;
+            i = sk;
+            continue;
+        }
         let c: i32 = body.at(i).to_int();
-        if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+        if c == 95 || c >= 65 && c <= 90 || c >= 97 && c <= 122 {
             let st: i32 = i;
-            while i < n && _is_c_ident(body.at(i).to_int()) { i = i + 1; }
+            while i < n && _is_c_ident(body.at(i).to_int()) {
+                i = i + 1;
+            }
             let id: string = body.substring(st, i);
             let mut j: i32 = i;
             while j < n {
                 let cj: i32 = body.at(j).to_int();
-                if cj != 32 && cj != 9 && cj != 10 && cj != 13 { break; }
+                if cj != 32 && cj != 9 && cj != 10 && cj != 13 {
+                    break;
+                }
                 j = j + 1;
             }
             let is_def_ctx: bool = prev == 42 || _is_c_ident(prev);
@@ -709,7 +1053,9 @@ fn _scan_def_arity(body: string, name: string) -> i32 {
             prev = body.at(i - 1).to_int();
             continue;
         }
-        if c != 32 && c != 9 && c != 10 && c != 13 { prev = c; }
+        if c != 32 && c != 9 && c != 10 && c != 13 {
+            prev = c;
+        }
         i = i + 1;
     }
     return -1;
@@ -719,25 +1065,33 @@ fn _scan_def_arity(body: string, name: string) -> i32 {
 // C definition of NAME in a c_raw block. The mismatch otherwise surfaces as a
 // cc `conflicting types` / `too many arguments` error far from either site.
 fn check_extern_arity_drift(pre: *Typer, stmts: *Vector<Stmt>) {
-    if stmts == null { return; }
+    if stmts == null {
+        return;
+    }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         // `extern fn` = an ST_FN with no body. Skip C-variadic decls (the C
         // side legitimately takes more args than declared).
-        if s.kind != ST_FN { continue; }
-        if s.fn_body != null { continue; }
-        if s.is_variadic { continue; }
-        if s.fn_params == null { continue; }
+        if s.kind != ST_FN {
+            continue;
+        }
+        if s.fn_body != null {
+            continue;
+        }
+        if s.is_variadic {
+            continue;
+        }
+        if s.fn_params == null {
+            continue;
+        }
         let cn: i32 = _craw_def_arity(stmts, s.name);
-        if cn < 0 { continue; }
+        if cn < 0 {
+            continue;
+        }
         let gn: i32 = s.fn_params.len();
         if cn != gn {
             pre.current_origin = s.origin;
-            pre.push_diag(s.name_line, s.name_col, 1, "c-raw-error",
-                "`extern fn ".concat(s.name).concat("` declares ").concat(int_to_str(gn))
-                    .concat(" parameter(s) but its `c_raw!` C definition takes ").concat(int_to_str(cn))
-                    .concat(" — the signatures must match"));
+            pre.push_diag(s.name_line, s.name_col, 1, "c-raw-error", "`extern fn ".concat(s.name).concat("` declares ").concat(int_to_str(gn)).concat(" parameter(s) but its `c_raw!` C definition takes ").concat(int_to_str(cn)).concat(" — the signatures must match"));
         }
     }
 }
-

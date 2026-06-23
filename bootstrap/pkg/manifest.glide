@@ -31,34 +31,33 @@ import bootstrap::syntax::parser;
 // Identifiers `Package` / `Dep::path` / `Dep::git` / `vec_of` are
 // recognised positionally — they don't need to be declared anywhere.
 // Any unrecognised shape is a soft error: we keep parsing the rest.
-
 pub const DEP_PATH: i32 = 0;
-pub const DEP_GIT:  i32 = 1;
+pub const DEP_GIT: i32 = 1;
 
 pub struct ManifestDep {
-    pub name: string,    // alias used in `import <name>::...`
-    pub kind: i32,       // DEP_PATH | DEP_GIT
-    pub path: string,    // DEP_PATH: filesystem path; DEP_GIT: URL
-    pub rev:  string,    // DEP_GIT: tag or commit hash; empty for DEP_PATH
+    pub name: string, // alias used in `import <name>::...`
+    pub kind: i32, // DEP_PATH | DEP_GIT
+    pub path: string, // DEP_PATH: filesystem path; DEP_GIT: URL
+    pub rev: string, // DEP_GIT: tag or commit hash; empty for DEP_PATH
 }
 
 pub struct Manifest {
-    pub name:     string,
-    pub version:  string,
+    pub name: string,
+    pub version: string,
     // Optional package metadata. Informational today (recorded so the
     // manifest can carry it for tooling / a future `glide publish`); not
     // consumed by the build itself.
-    pub author:      string,   // "Name <email>" or free text
-    pub license:     string,   // SPDX id (e.g. "MIT") or free text
-    pub description: string,   // one-line summary
-    pub repository:  string,   // source URL
-    pub bin:      string,
-    pub deps:     *Vector<ManifestDep>,
-    pub root_dir: string,   // absolute or repo-relative dir holding glide.glide
+    pub author: string, // "Name <email>" or free text
+    pub license: string, // SPDX id (e.g. "MIT") or free text
+    pub description: string, // one-line summary
+    pub repository: string, // source URL
+    pub bin: string,
+    pub deps: *Vector<ManifestDep>,
+    pub root_dir: string, // absolute or repo-relative dir holding glide.glide
     // Optional lint config. `lint.deny` populates `--lint-as-error`
     // for every build / lint / check inside the project; `lint.allow`
     // becomes the project-wide silencing list. Empty when absent.
-    pub lint_deny:  *Vector<string>,
+    pub lint_deny: *Vector<string>,
     pub lint_allow: *Vector<string>,
     // Default cross-compile target as a Zig triple (e.g.
     // "x86_64-linux-musl"). `glide build` with no `--target=` flag uses
@@ -77,13 +76,16 @@ pub struct Manifest {
     // `cflags: vec_of("-O3", "-march=native")`, `ldflags: vec_of("-lfoo")`.
     // cflags land after the default compile flags (so `-O3` overrides the
     // default `-O2`); ldflags land at the very end (after auto-detected libs).
-    pub cflags:  *Vector<string>,
+    pub cflags: *Vector<string>,
     pub ldflags: *Vector<string>,
 }
 
 extern fn __glide_file_exists(path: string) -> bool;
+
 extern fn __glide_getenv(name: string) -> string;
+
 extern fn read_file(path: string) -> string;
+
 extern fn write_file(path: string, content: string) -> bool;
 
 // Process-wide MVS override map. `mvs_resolve` (in fetch.glide) sets
@@ -92,6 +94,7 @@ extern fn write_file(path: string, content: string) -> bool;
 // — lands on the same cache slot. Pointer-shaped because Glide can't
 // stash a *HashMap<string> in a c_raw static directly.
 extern fn __glide_mvs_set_override(p: *void);
+
 extern fn __glide_mvs_get_override() -> *void;
 
 c_raw! {
@@ -106,7 +109,9 @@ pub fn mvs_set_override(m: *HashMap<string>) {
 
 pub fn mvs_get_override() -> *HashMap<string> {
     let p: *void = __glide_mvs_get_override();
-    if p == null { return null; }
+    if p == null {
+        return null;
+    }
     return p as *HashMap<string>;
 }
 
@@ -119,24 +124,38 @@ pub fn mvs_get_override() -> *HashMap<string> {
 // semantic checks on it (both `glide check` and the LSP). Matches on the
 // basename so any `.../glide.glide` qualifies.
 pub fn path_is_manifest(path: string) -> bool {
-    if path == null { return false; }
+    if path == null {
+        return false;
+    }
     let n: i32 = path.len();
-    if n < 11 { return false; }
+    if n < 11 {
+        return false;
+    }
     let suffix: string = path.substring(n - 11, n);
-    if !suffix.eq("glide.glide") { return false; }
-    if n == 11 { return true; }
+    if !suffix.eq("glide.glide") {
+        return false;
+    }
+    if n == 11 {
+        return true;
+    }
     let c: i32 = path.at(n - 12).to_int();
-    return c == 47 || c == 92;   // '/' or '\'
+    return c == 47 || c == 92; // '/' or '\'
 }
 
 pub fn find_manifest_root(start_dir: string) -> string {
     let mut dir: string = start_dir;
-    if dir.eq("") { dir = "."; }
+    if dir.eq("") {
+        dir = ".";
+    }
     for let i: i32 = 0; i < 64; i++ {
         let cand: string = dir.concat("/glide.glide");
-        if __glide_file_exists(cand) { return dir; }
+        if __glide_file_exists(cand) {
+            return dir;
+        }
         let parent: string = parent_of(dir);
-        if parent.eq(dir) || parent.eq("") { return ""; }
+        if parent.eq(dir) || parent.eq("") {
+            return "";
+        }
         dir = parent;
     }
     return "";
@@ -147,12 +166,18 @@ pub fn find_manifest_root(start_dir: string) -> string {
 // from a `parent_dir(...)` result like "src" (CWD-relative single
 // segment) without prematurely bailing.
 fn parent_of(dir: string) -> string {
-    if dir.eq("") { return ""; }
-    if dir.eq(".") { return ".."; }
+    if dir.eq("") {
+        return "";
+    }
+    if dir.eq(".") {
+        return "..";
+    }
     let mut cut: i32 = -1;
     for let i: i32 = 0; i < dir.len(); i++ {
         let c: i32 = dir.at(i).to_int();
-        if c == 47 || c == 92 { cut = i; }
+        if c == 47 || c == 92 {
+            cut = i;
+        }
     }
     if cut < 0 {
         // No separator left: treat single-segment paths as CWD-relative
@@ -174,12 +199,12 @@ fn parent_of(dir: string) -> string {
 pub fn read_manifest(root_dir: string) -> *Manifest {
     let path: string = root_dir.concat("/glide.glide");
     let src: string = read_file(path);
-    if src.eq("") { return null; }
-
+    if src.eq("") {
+        return null;
+    }
     let lex: *Lexer = Lexer::new(src);
     let p: *Parser = Parser::new(lex);
     let parsed: *Vector<Stmt> = parse_program(p);
-
     // Local-bind the new vector first — `m.deps = Vector::new()` in
     // struct-field position still trips codegen's forward-decl for some
     // generic monomorphisations (see project_compiler_bugs.md).
@@ -205,57 +230,99 @@ pub fn read_manifest(root_dir: string) -> *Manifest {
     m.link_script = "";
     m.cflags = cflags_vec;
     m.ldflags = ldflags_vec;
-
     for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
-        if s.kind != ST_LET { continue; }
+        if s.kind != ST_LET {
+            continue;
+        }
         let v: *Expr = s.let_value;
-        if v == null || v.kind != EX_STRUCT_LIT { continue; }
-        if !v.str_val.eq("Package") { continue; }
+        if v == null || v.kind != EX_STRUCT_LIT {
+            continue;
+        }
+        if !v.str_val.eq("Package") {
+            continue;
+        }
         fill_from_struct_lit(m, v);
     }
     return m;
 }
 
 fn fill_from_struct_lit(m: *Manifest, v: *Expr) {
-    if v.field_names == null || v.args == null { return; }
+    if v.field_names == null || v.args == null {
+        return;
+    }
     let n: i32 = v.field_names.len();
     for let i: i32 = 0; i < n; i++ {
         let name: string = v.field_names.get(i);
         let val: Expr = v.args.get(i);
-        if name.eq("name")        && val.kind == EX_STRING { m.name = val.str_val; }
-        if name.eq("version")     && val.kind == EX_STRING { m.version = val.str_val; }
-        if name.eq("author")      && val.kind == EX_STRING { m.author = val.str_val; }
-        if name.eq("license")     && val.kind == EX_STRING { m.license = val.str_val; }
-        if name.eq("description") && val.kind == EX_STRING { m.description = val.str_val; }
-        if name.eq("repository")  && val.kind == EX_STRING { m.repository = val.str_val; }
-        if name.eq("bin")         && val.kind == EX_STRING { m.bin = val.str_val; }
-        if name.eq("target")      && val.kind == EX_STRING { m.target = val.str_val; }
-        if name.eq("kind")        && val.kind == EX_STRING { if val.str_val.eq("kernel") { m.freestanding = true; } }
-        if name.eq("freestanding") && val.kind == EX_BOOL  { m.freestanding = val.bool_val; }
-        if name.eq("linker")      && val.kind == EX_STRING { m.link_script = val.str_val; }
-        if name.eq("deps") { collect_deps(m.deps, &val); }
-        if name.eq("cflags")  { _collect_string_list(m.cflags,  &val); }
-        if name.eq("ldflags") { _collect_string_list(m.ldflags, &val); }
+        if name.eq("name") && val.kind == EX_STRING {
+            m.name = val.str_val;
+        }
+        if name.eq("version") && val.kind == EX_STRING {
+            m.version = val.str_val;
+        }
+        if name.eq("author") && val.kind == EX_STRING {
+            m.author = val.str_val;
+        }
+        if name.eq("license") && val.kind == EX_STRING {
+            m.license = val.str_val;
+        }
+        if name.eq("description") && val.kind == EX_STRING {
+            m.description = val.str_val;
+        }
+        if name.eq("repository") && val.kind == EX_STRING {
+            m.repository = val.str_val;
+        }
+        if name.eq("bin") && val.kind == EX_STRING {
+            m.bin = val.str_val;
+        }
+        if name.eq("target") && val.kind == EX_STRING {
+            m.target = val.str_val;
+        }
+        if name.eq("kind") && val.kind == EX_STRING {
+            if val.str_val.eq("kernel") {
+                m.freestanding = true;
+            }
+        }
+        if name.eq("freestanding") && val.kind == EX_BOOL {
+            m.freestanding = val.bool_val;
+        }
+        if name.eq("linker") && val.kind == EX_STRING {
+            m.link_script = val.str_val;
+        }
+        if name.eq("deps") {
+            collect_deps(m.deps, &val);
+        }
+        if name.eq("cflags") {
+            _collect_string_list(m.cflags, &val);
+        }
+        if name.eq("ldflags") {
+            _collect_string_list(m.ldflags, &val);
+        }
         if name.eq("lint") {
             // Two surface forms:
             //   lint: "strict"                            — preset shortcut
             //   lint: Lint { deny: …, allow: … }          — explicit
             // Future presets land in `_apply_lint_preset`.
-            if val.kind == EX_STRING { _apply_lint_preset(m, val.str_val); }
-            else if val.kind == EX_STRUCT_LIT {
-                _collect_lint_cfg(m, &val);
-                // Inside the struct, `preset: "strict"` is also
-                // accepted so users can combine a preset with extra
-                // bespoke entries.
-                _maybe_apply_struct_preset(m, &val);
+            if val.kind == EX_STRING {
+                _apply_lint_preset(m, val.str_val);
+            } else {
+                if val.kind == EX_STRUCT_LIT {
+                    _collect_lint_cfg(m, &val);
+                    // Inside the struct, `preset: "strict"` is also
+                    // accepted so users can combine a preset with extra
+                    // bespoke entries.
+                    _maybe_apply_struct_preset(m, &val);
+                }
             }
         }
     }
 }
 
 fn _maybe_apply_struct_preset(m: *Manifest, v: *Expr) {
-    if v.field_names == null || v.args == null { return; }
+    if v.field_names == null || v.args == null {
+        return;
+    }
     for let i: i32 = 0; i < v.field_names.len(); i++ {
         let fname: string = v.field_names.get(i);
         let fval: Expr = v.args.get(i);
@@ -297,23 +364,34 @@ fn _apply_lint_preset(m: *Manifest, name: string) {
 }
 
 fn _collect_lint_cfg(m: *Manifest, v: *Expr) {
-    if v == null || v.field_names == null || v.args == null { return; }
+    if v == null || v.field_names == null || v.args == null {
+        return;
+    }
     for let i: i32 = 0; i < v.field_names.len(); i++ {
         let fname: string = v.field_names.get(i);
         let fval: Expr = v.args.get(i);
-        if fname.eq("deny") { _collect_string_list(m.lint_deny, &fval); }
-        else if fname.eq("allow") { _collect_string_list(m.lint_allow, &fval); }
+        if fname.eq("deny") {
+            _collect_string_list(m.lint_deny, &fval);
+        } else {
+            if fname.eq("allow") {
+                _collect_string_list(m.lint_allow, &fval);
+            }
+        }
     }
 }
 
 fn _collect_string_list(out: *Vector<string>, v: *Expr) {
-    if v == null { return; }
+    if v == null {
+        return;
+    }
     if v.kind == EX_CALL {
         let callee: *Expr = v.lhs;
         if callee != null && callee.kind == EX_IDENT && callee.str_val.eq("vec_of") {
             for let i: i32 = 0; i < v.args.len(); i++ {
                 let a: Expr = v.args.get(i);
-                if a.kind == EX_STRING { out.push(a.str_val); }
+                if a.kind == EX_STRING {
+                    out.push(a.str_val);
+                }
             }
         }
     }
@@ -323,14 +401,18 @@ fn _collect_string_list(out: *Vector<string>, v: *Expr) {
 // literal `[Dep::path(...), Dep::git(...)]`. Anything else is silently
 // ignored — the user sees an empty deps list and can fix it.
 fn collect_deps(out: *Vector<ManifestDep>, v: *Expr) {
-    if v == null { return; }
+    if v == null {
+        return;
+    }
     if v.kind == EX_CALL {
         let callee: *Expr = v.lhs;
         if callee != null && callee.kind == EX_IDENT && callee.str_val.eq("vec_of") {
             for let i: i32 = 0; i < v.args.len(); i++ {
                 let arg: Expr = v.args.get(i);
                 let d: ManifestDep = parse_dep_call(&arg);
-                if !d.name.eq("") { out.push(d); }
+                if !d.name.eq("") {
+                    out.push(d);
+                }
             }
         }
         return;
@@ -344,16 +426,22 @@ fn parse_dep_call(v: *Expr) -> ManifestDep {
     d.name = "";
     d.kind = DEP_PATH;
     d.path = "";
-    d.rev  = "";
-    if v == null || v.kind != EX_CALL { return d; }
+    d.rev = "";
+    if v == null || v.kind != EX_CALL {
+        return d;
+    }
     let callee: *Expr = v.lhs;
-    if callee == null || callee.kind != EX_PATH { return d; }
-    if !callee.str_val.eq("Dep") { return d; }
-
+    if callee == null || callee.kind != EX_PATH {
+        return d;
+    }
+    if !callee.str_val.eq("Dep") {
+        return d;
+    }
     let method: string = callee.field;
     let args: *Vector<Expr> = v.args;
-    if args == null { return d; }
-
+    if args == null {
+        return d;
+    }
     if method.eq("path") && args.len() >= 2 {
         let a0: Expr = args.get(0);
         let a1: Expr = args.get(1);
@@ -372,7 +460,7 @@ fn parse_dep_call(v: *Expr) -> ManifestDep {
             d.name = a0.str_val;
             d.kind = DEP_GIT;
             d.path = a1.str_val;
-            d.rev  = a2.str_val;
+            d.rev = a2.str_val;
         }
         return d;
     }
@@ -396,12 +484,11 @@ fn parse_dep_call(v: *Expr) -> ManifestDep {
 // The 4-arg form carries a SHA-256 of the downloaded archive (or the
 // git tree, for clone-based fetches); the 3-arg form is accepted on
 // read for back-compat with phase-2 lockfiles.
-
 pub struct LockEntry {
     pub name: string,
-    pub url:  string,
-    pub rev:  string,
-    pub hash: string,   // sha256:<hex>  ("" when unknown)
+    pub url: string,
+    pub rev: string,
+    pub hash: string, // sha256:<hex>  ("" when unknown)
 }
 
 pub struct Lockfile {
@@ -411,70 +498,97 @@ pub struct Lockfile {
 pub fn read_lockfile(root_dir: string) -> *Lockfile {
     let path: string = root_dir.concat("/glide.lock");
     let src: string = read_file(path);
-    if src.eq("") { return null; }
-
+    if src.eq("") {
+        return null;
+    }
     let lex: *Lexer = Lexer::new(src);
     let p: *Parser = Parser::new(lex);
     let parsed: *Vector<Stmt> = parse_program(p);
-
     let entries_vec: *Vector<LockEntry> = Vector::new();
     let lf: *Lockfile = __glide_palloc(sizeof(Lockfile)) as *Lockfile;
     lf.entries = entries_vec;
-
     for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
-        if s.kind != ST_LET { continue; }
+        if s.kind != ST_LET {
+            continue;
+        }
         let v: *Expr = s.let_value;
-        if v == null || v.kind != EX_STRUCT_LIT { continue; }
-        if !v.str_val.eq("Lockfile") { continue; }
+        if v == null || v.kind != EX_STRUCT_LIT {
+            continue;
+        }
+        if !v.str_val.eq("Lockfile") {
+            continue;
+        }
         _fill_lockfile(lf, v);
     }
     return lf;
 }
 
 fn _fill_lockfile(lf: *Lockfile, v: *Expr) {
-    if v.field_names == null || v.args == null { return; }
+    if v.field_names == null || v.args == null {
+        return;
+    }
     for let i: i32 = 0; i < v.field_names.len(); i++ {
         let name: string = v.field_names.get(i);
         let val: Expr = v.args.get(i);
-        if name.eq("entries") { _collect_lock_entries(lf.entries, &val); }
+        if name.eq("entries") {
+            _collect_lock_entries(lf.entries, &val);
+        }
     }
 }
 
 fn _collect_lock_entries(out: *Vector<LockEntry>, v: *Expr) {
-    if v == null || v.kind != EX_CALL { return; }
+    if v == null || v.kind != EX_CALL {
+        return;
+    }
     let callee: *Expr = v.lhs;
-    if callee == null || callee.kind != EX_IDENT || !callee.str_val.eq("vec_of") { return; }
+    if callee == null || callee.kind != EX_IDENT || !callee.str_val.eq("vec_of") {
+        return;
+    }
     for let i: i32 = 0; i < v.args.len(); i++ {
         let arg: Expr = v.args.get(i);
         let e: LockEntry = _parse_lock_call(&arg);
-        if !e.name.eq("") { out.push(e); }
+        if !e.name.eq("") {
+            out.push(e);
+        }
     }
 }
 
 fn _parse_lock_call(v: *Expr) -> LockEntry {
     let e: LockEntry;
     e.name = "";
-    e.url  = "";
-    e.rev  = "";
+    e.url = "";
+    e.rev = "";
     e.hash = "";
-    if v == null || v.kind != EX_CALL { return e; }
+    if v == null || v.kind != EX_CALL {
+        return e;
+    }
     let callee: *Expr = v.lhs;
-    if callee == null || callee.kind != EX_PATH { return e; }
-    if !callee.str_val.eq("LockEntry") || !callee.field.eq("git") { return e; }
+    if callee == null || callee.kind != EX_PATH {
+        return e;
+    }
+    if !callee.str_val.eq("LockEntry") || !callee.field.eq("git") {
+        return e;
+    }
     let args: *Vector<Expr> = v.args;
-    if args == null || args.len() < 3 { return e; }
+    if args == null || args.len() < 3 {
+        return e;
+    }
     let a0: Expr = args.get(0);
     let a1: Expr = args.get(1);
     let a2: Expr = args.get(2);
-    if a0.kind != EX_STRING || a1.kind != EX_STRING || a2.kind != EX_STRING { return e; }
+    if a0.kind != EX_STRING || a1.kind != EX_STRING || a2.kind != EX_STRING {
+        return e;
+    }
     e.name = a0.str_val;
-    e.url  = a1.str_val;
-    e.rev  = a2.str_val;
+    e.url = a1.str_val;
+    e.rev = a2.str_val;
     // 4-arg form (new): optional content hash.
     if args.len() >= 4 {
         let a3: Expr = args.get(3);
-        if a3.kind == EX_STRING { e.hash = a3.str_val; }
+        if a3.kind == EX_STRING {
+            e.hash = a3.str_val;
+        }
     }
     return e;
 }
@@ -513,7 +627,9 @@ pub fn lockfile_from_manifest(m: *Manifest) -> *Lockfile {
     let entries_vec: *Vector<LockEntry> = Vector::new();
     let lf: *Lockfile = __glide_palloc(sizeof(Lockfile)) as *Lockfile;
     lf.entries = entries_vec;
-    if m == null { return lf; }
+    if m == null {
+        return lf;
+    }
     let seen: *HashMap<bool> = HashMap::new();
     _collect_lock_recursive(m, lf.entries, seen);
     return lf;
@@ -523,29 +639,37 @@ fn _collect_lock_recursive(m: *Manifest, out: *Vector<LockEntry>, seen: *HashMap
     let ov: *HashMap<string> = mvs_get_override();
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
-        if d.kind != DEP_GIT { continue; }
+        if d.kind != DEP_GIT {
+            continue;
+        }
         // Apply the MVS override before deduping so two parents that
         // declared different revs of the same URL collapse to one
         // entry with the resolved rev.
         let mut eff_rev: string = d.rev;
-        if ov != null && ov.contains(d.path) { eff_rev = ov.get(d.path); }
+        if ov != null && ov.contains(d.path) {
+            eff_rev = ov.get(d.path);
+        }
         let key: string = d.path.concat("@").concat(eff_rev);
-        if seen.contains(key) { continue; }
+        if seen.contains(key) {
+            continue;
+        }
         seen.insert(key, true);
-
         let e: LockEntry;
         e.name = d.name;
-        e.url  = d.path;
-        e.rev  = eff_rev;
+        e.url = d.path;
+        e.rev = eff_rev;
         e.hash = read_dep_hash(m, d);
         out.push(e);
-
         // Recurse into the dep's own manifest if it's already fetched
         // and declared its own deps.
         let cache: string = dep_cache_dir(m, d);
-        if cache.eq("") { continue; }
+        if cache.eq("") {
+            continue;
+        }
         let sub_m: *Manifest = read_manifest(cache);
-        if sub_m == null { continue; }
+        if sub_m == null {
+            continue;
+        }
         _collect_lock_recursive(sub_m, out, seen);
     }
 }
@@ -556,9 +680,13 @@ fn _collect_lock_recursive(m: *Manifest, out: *Vector<LockEntry>, seen: *HashMap
 // inserts, …).
 pub fn read_dep_hash(m: *Manifest, d: ManifestDep) -> string {
     let dir: string = dep_cache_dir(m, d);
-    if dir.eq("") { return ""; }
+    if dir.eq("") {
+        return "";
+    }
     let path: string = dir.concat("/.glide_hash");
-    if !__glide_file_exists(path) { return ""; }
+    if !__glide_file_exists(path) {
+        return "";
+    }
     let s: string = read_file(path);
     return s.trim();
 }
@@ -568,10 +696,14 @@ pub fn read_dep_hash(m: *Manifest, d: ManifestDep) -> string {
 // the content-addressed cache dir; it may or may not exist yet, depending
 // on whether `glide fetch` has been run for that dep.
 pub fn manifest_resolve_alias(m: *Manifest, alias: string) -> string {
-    if m == null { return ""; }
+    if m == null {
+        return "";
+    }
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
-        if !d.name.eq(alias) { continue; }
+        if !d.name.eq(alias) {
+            continue;
+        }
         return dep_cache_dir(m, d);
     }
     return "";
@@ -591,22 +723,29 @@ pub fn manifest_resolve_alias(m: *Manifest, alias: string) -> string {
 //
 // `manifest_add_dep_line` inserts before the closing `)` of `vec_of(`,
 // matching parentheses to be safe with nested calls.
-
 pub fn manifest_add_dep_line(root_dir: string, dep_line: string) -> bool {
     let path: string = root_dir.concat("/glide.glide");
     let src: string = read_file(path);
-    if src.eq("") { return false; }
+    if src.eq("") {
+        return false;
+    }
     let edited: string = _insert_dep_in_vec_of(src, dep_line);
-    if edited.eq("") { return false; }
+    if edited.eq("") {
+        return false;
+    }
     return write_file(path, edited);
 }
 
 pub fn manifest_remove_dep(root_dir: string, name: string) -> bool {
     let path: string = root_dir.concat("/glide.glide");
     let src: string = read_file(path);
-    if src.eq("") { return false; }
+    if src.eq("") {
+        return false;
+    }
     let edited: string = _drop_dep_line(src, name);
-    if edited.eq("") { return false; }
+    if edited.eq("") {
+        return false;
+    }
     return write_file(path, edited);
 }
 
@@ -618,37 +757,51 @@ pub fn manifest_remove_dep(root_dir: string, name: string) -> bool {
 // rewritten source string.
 pub struct InsertPos {
     pub line: i32,
-    pub col:  i32,
-    pub ok:   bool,
+    pub col: i32,
+    pub ok: bool,
 }
 
 pub fn manifest_dep_insert_position(root_dir: string) -> InsertPos {
     let pos: InsertPos;
-    pos.line = -1; pos.col = 0; pos.ok = false;
+    pos.line = -1;
+    pos.col = 0;
+    pos.ok = false;
     let path: string = root_dir.concat("/glide.glide");
     let src: string = read_file(path);
-    if src.eq("") { return pos; }
+    if src.eq("") {
+        return pos;
+    }
     let deps_idx: i32 = _find_after(src, 0, "deps:");
-    if deps_idx < 0 { return pos; }
+    if deps_idx < 0 {
+        return pos;
+    }
     let vec_idx: i32 = _find_after(src, deps_idx, "vec_of(");
-    if vec_idx < 0 { return pos; }
+    if vec_idx < 0 {
+        return pos;
+    }
     let open: i32 = vec_idx + 7;
     let close: i32 = _matching_close(src, open - 1);
-    if close < 0 { return pos; }
+    if close < 0 {
+        return pos;
+    }
     let mut line_start: i32 = close;
-    while line_start > open
-       && _at(src, line_start - 1) != 10
-       && _at(src, line_start - 1) != 13 {
+    while line_start > open && _at(src, line_start - 1) != 10 && _at(src, line_start - 1) != 13 {
         line_start = line_start - 1;
     }
     // Byte offset → (line, col).
     let mut line: i32 = 0;
     let mut col: i32 = 0;
     for let i: i32 = 0; i < line_start; i++ {
-        if _at(src, i) == 10 { line = line + 1; col = 0; }
-        else { col = col + 1; }
+        if _at(src, i) == 10 {
+            line = line + 1;
+            col = 0;
+        } else {
+            col = col + 1;
+        }
     }
-    pos.line = line; pos.col = col; pos.ok = true;
+    pos.line = line;
+    pos.col = col;
+    pos.ok = true;
     return pos;
 }
 
@@ -658,23 +811,25 @@ pub fn manifest_dep_insert_position(root_dir: string) -> InsertPos {
 // caller can report a clean error instead of mangling the file.
 fn _insert_dep_in_vec_of(src: string, dep_line: string) -> string {
     let deps_idx: i32 = _find_after(src, 0, "deps:");
-    if deps_idx < 0 { return ""; }
+    if deps_idx < 0 {
+        return "";
+    }
     let vec_idx: i32 = _find_after(src, deps_idx, "vec_of(");
-    if vec_idx < 0 { return ""; }
+    if vec_idx < 0 {
+        return "";
+    }
     let open: i32 = vec_idx + 7;
     let close: i32 = _matching_close(src, open - 1);
-    if close < 0 { return ""; }
-
+    if close < 0 {
+        return "";
+    }
     // Scan back from `close` past trailing whitespace + newline to find
     // the insertion point. We want the new line to land on its own line
     // just before the indented `)`.
     let mut line_start: i32 = close;
-    while line_start > open
-       && _at(src, line_start - 1) != 10
-       && _at(src, line_start - 1) != 13 {
+    while line_start > open && _at(src, line_start - 1) != 10 && _at(src, line_start - 1) != 13 {
         line_start = line_start - 1;
     }
-
     let head: string = src.substring(0, line_start);
     let tail: string = src.substring(line_start, src.len());
     return head.concat(dep_line).concat("\n").concat(tail);
@@ -689,15 +844,28 @@ fn _matching_close(src: string, open_idx: i32) -> i32 {
     while i < src.len() {
         let c: i32 = _at(src, i);
         if in_str {
-            if c == 92 && (i + 1) < src.len() { i = i + 2; continue; }
-            if c == 34 { in_str = false; }
-        } else if c == 34 {
-            in_str = true;
-        } else if c == 40 {
-            depth = depth + 1;
-        } else if c == 41 {
-            depth = depth - 1;
-            if depth == 0 { return i; }
+            if c == 92 && i + 1 < src.len() {
+                i = i + 2;
+                continue;
+            }
+            if c == 34 {
+                in_str = false;
+            }
+        } else {
+            if c == 34 {
+                in_str = true;
+            } else {
+                if c == 40 {
+                    depth = depth + 1;
+                } else {
+                    if c == 41 {
+                        depth = depth - 1;
+                        if depth == 0 {
+                            return i;
+                        }
+                    }
+                }
+            }
         }
         i = i + 1;
     }
@@ -707,30 +875,41 @@ fn _matching_close(src: string, open_idx: i32) -> i32 {
 fn _find_after(src: string, from: i32, needle: string) -> i32 {
     let n: i32 = src.len();
     let m: i32 = needle.len();
-    if m == 0 || from < 0 || from + m > n { return -1; }
+    if m == 0 || from < 0 || from + m > n {
+        return -1;
+    }
     for let i: i32 = from; i + m <= n; i++ {
         let mut hit: bool = true;
         for let j: i32 = 0; j < m; j++ {
-            if _at(src, i + j) != needle.at(j).to_int() { hit = false; break; }
+            if _at(src, i + j) != needle.at(j).to_int() {
+                hit = false;
+                break;
+            }
         }
-        if hit { return i; }
+        if hit {
+            return i;
+        }
     }
     return -1;
 }
 
-fn _at(s: string, i: i32) -> i32 { return s.at(i).to_int(); }
+fn _at(s: string, i: i32) -> i32 {
+    return s.at(i).to_int();
+}
 
 // Drop the line containing the dep entry for `name`. Matches both
 // `Dep::path("name", ...)` and `Dep::git("name", ...)`.
 fn _drop_dep_line(src: string, name: string) -> string {
     let n: i32 = src.len();
     let needle_path: string = "Dep::path(\"".concat(name).concat("\"");
-    let needle_git:  string = "Dep::git(\"".concat(name).concat("\"");
+    let needle_git: string = "Dep::git(\"".concat(name).concat("\"");
     let mut line_start: i32 = 0;
     let mut out: string = "";
     let mut dropped: bool = false;
     for let i: i32 = 0; i < n; i++ {
-        if _at(src, i) != 10 { continue; }
+        if _at(src, i) != 10 {
+            continue;
+        }
         let line: string = src.substring(line_start, i);
         if line.contains(needle_path) || line.contains(needle_git) {
             dropped = true;
@@ -747,7 +926,9 @@ fn _drop_dep_line(src: string, name: string) -> string {
             out = out.concat(tail);
         }
     }
-    if !dropped { return ""; }
+    if !dropped {
+        return "";
+    }
     return out;
 }
 
@@ -758,7 +939,9 @@ pub fn cache_root() -> string {
     let home: !string = os_home_dir();
     if !home.ok {
         let tmp: string = __glide_getenv("TMP");
-        if !tmp.eq("") { return tmp.concat("/.glide/cache"); }
+        if !tmp.eq("") {
+            return tmp.concat("/.glide/cache");
+        }
         return "./.glide_cache";
     }
     return home.val.concat("/.glide/cache");
@@ -774,13 +957,17 @@ pub fn cache_root() -> string {
 // v1.0 for github.com/x/logger" actually unify on disk.
 pub fn dep_cache_dir(m: *Manifest, d: ManifestDep) -> string {
     if d.kind == DEP_PATH {
-        if d.path.len() > 0 && d.path.at(0).to_int() == 47 { return d.path; }
+        if d.path.len() > 0 && d.path.at(0).to_int() == 47 {
+            return d.path;
+        }
         return m.root_dir.concat("/").concat(d.path);
     }
     if d.kind == DEP_GIT {
         let mut rev: string = d.rev;
         let ov: *HashMap<string> = mvs_get_override();
-        if ov != null && ov.contains(d.path) { rev = ov.get(d.path); }
+        if ov != null && ov.contains(d.path) {
+            rev = ov.get(d.path);
+        }
         let key: string = d.path.concat("@").concat(rev);
         return cache_root().concat("/").concat(sha256_hex(key));
     }

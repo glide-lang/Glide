@@ -3,7 +3,6 @@
 // for method+path, peels Json<T> body params + return types for
 // request/response schemas, and emits `pub struct` shapes under
 // components/schemas. Stays pre-expansion so route attrs survive.
-
 import bootstrap::syntax::ast::*;
 import bootstrap::syntax::parser::*;
 import stdlib::hashmap::*;
@@ -14,29 +13,33 @@ pub struct OARoute {
     pub method: string,
     pub path: string,
     pub handler_name: string,
-    pub body_schema: string,      // "" if no Json<T> body param
-    pub resp_schema: string,      // "" if not Json<T> return
+    pub body_schema: string, // "" if no Json<T> body param
+    pub resp_schema: string, // "" if not Json<T> return
     pub path_params: *Vector<OAPathParam>,
 }
 
 pub struct OAPathParam {
     pub name: string,
-    pub ty: string,               // openapi primitive name or "$ref:..."
+    pub ty: string, // openapi primitive name or "$ref:..."
 }
 
 pub fn openapi_main(src_path: string) -> i32 {
     let stmts: *Vector<Stmt> = _openapi_load(src_path);
-    if stmts == null { return 1; }
-
+    if stmts == null {
+        return 1;
+    }
     let routes: *Vector<OARoute> = _collect_routes(stmts);
     let used_schemas: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
-        if !r.body_schema.eq("") { used_schemas.insert(r.body_schema, true); }
-        if !r.resp_schema.eq("") { used_schemas.insert(r.resp_schema, true); }
+        if !r.body_schema.eq("") {
+            used_schemas.insert(r.body_schema, true);
+        }
+        if !r.resp_schema.eq("") {
+            used_schemas.insert(r.resp_schema, true);
+        }
     }
     let structs: *Vector<Stmt> = _collect_referenced_structs(stmts, used_schemas);
-
     _emit_yaml(src_path, routes, structs);
     return 0;
 }
@@ -46,23 +49,35 @@ pub fn openapi_main(src_path: string) -> i32 {
 // that wants a compact text listing without the full OpenAPI surface.
 pub fn routes_main(src_path: string) -> i32 {
     let stmts: *Vector<Stmt> = _openapi_load(src_path);
-    if stmts == null { return 1; }
+    if stmts == null {
+        return 1;
+    }
     let routes: *Vector<OARoute> = _collect_routes(stmts);
     let mut max_method: i32 = 6;
     let mut max_path: i32 = 10;
     for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
-        if r.method.len() > max_method { max_method = r.method.len(); }
-        if r.path.len() > max_path { max_path = r.path.len(); }
+        if r.method.len() > max_method {
+            max_method = r.method.len();
+        }
+        if r.path.len() > max_path {
+            max_path = r.path.len();
+        }
     }
     for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
         let mut line: string = r.method;
         let mut pad: i32 = max_method - r.method.len() + 2;
-        while pad > 0 { line = line.concat(" "); pad = pad - 1; }
+        while pad > 0 {
+            line = line.concat(" ");
+            pad = pad - 1;
+        }
         line = line.concat(r.path);
         let mut pad2: i32 = max_path - r.path.len() + 2;
-        while pad2 > 0 { line = line.concat(" "); pad2 = pad2 - 1; }
+        while pad2 > 0 {
+            line = line.concat(" ");
+            pad2 = pad2 - 1;
+        }
         line = line.concat("-> ").concat(r.handler_name);
         println!(line);
     }
@@ -91,15 +106,33 @@ fn _openapi_load(path: string) -> *Vector<Stmt> {
 }
 
 fn _is_route_attr(n: string) -> bool {
-    if n.eq("route") { return true; }
-    if n.eq("get") { return true; }
-    if n.eq("post") { return true; }
-    if n.eq("put") { return true; }
-    if n.eq("delete") { return true; }
-    if n.eq("patch") { return true; }
-    if n.eq("head") { return true; }
-    if n.eq("options") { return true; }
-    if n.eq("any") { return true; }
+    if n.eq("route") {
+        return true;
+    }
+    if n.eq("get") {
+        return true;
+    }
+    if n.eq("post") {
+        return true;
+    }
+    if n.eq("put") {
+        return true;
+    }
+    if n.eq("delete") {
+        return true;
+    }
+    if n.eq("patch") {
+        return true;
+    }
+    if n.eq("head") {
+        return true;
+    }
+    if n.eq("options") {
+        return true;
+    }
+    if n.eq("any") {
+        return true;
+    }
     return false;
 }
 
@@ -107,36 +140,45 @@ fn _collect_routes(stmts: *Vector<Stmt>) -> *Vector<OARoute> {
     let out: *Vector<OARoute> = Vector::new();
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
-        if s.kind != ST_FN || s.attrs == null { continue; }
+        if s.kind != ST_FN || s.attrs == null {
+            continue;
+        }
         for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
-            if !_is_route_attr(a.name) { continue; }
+            if !_is_route_attr(a.name) {
+                continue;
+            }
             let mut method: string = "";
             let mut path: string = "";
             if a.name.eq("route") {
-                if a.args == null || a.args.len() < 2 { continue; }
+                if a.args == null || a.args.len() < 2 {
+                    continue;
+                }
                 let m_arg: Expr = a.args.get(0);
                 let p_arg: Expr = a.args.get(1);
-                if m_arg.kind == EX_IDENT { method = m_arg.str_val; }
-                if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+                if m_arg.kind == EX_IDENT {
+                    method = m_arg.str_val;
+                }
+                if p_arg.kind == EX_STRING {
+                    path = p_arg.str_val;
+                }
             } else {
                 method = a.name;
-                if a.args == null || a.args.len() < 1 { continue; }
+                if a.args == null || a.args.len() < 1 {
+                    continue;
+                }
                 let p_arg: Expr = a.args.get(0);
-                if p_arg.kind == EX_STRING { path = p_arg.str_val; }
+                if p_arg.kind == EX_STRING {
+                    path = p_arg.str_val;
+                }
             }
-            if method.eq("") || path.eq("") { continue; }
+            if method.eq("") || path.eq("") {
+                continue;
+            }
             let body_schema: string = _body_schema_for(&s);
             let resp_schema: string = _resp_schema_for(&s);
             let path_params: *Vector<OAPathParam> = _path_params_for(&s, path);
-            out.push(OARoute {
-                method: method.to_upper(),
-                path: _glide_path_to_openapi(path),
-                handler_name: s.name,
-                body_schema: body_schema,
-                resp_schema: resp_schema,
-                path_params: path_params,
-            });
+            out.push(OARoute { method: method.to_upper(), path: _glide_path_to_openapi(path), handler_name: s.name, body_schema: body_schema, resp_schema: resp_schema, path_params: path_params });
             break;
         }
     }
@@ -145,12 +187,15 @@ fn _collect_routes(stmts: *Vector<Stmt>) -> *Vector<OARoute> {
 
 // `body: Json<T>` -> "T". Looks at param ty == Json generic.
 fn _body_schema_for(s: *Stmt) -> string {
-    if s.fn_params == null { return ""; }
+    if s.fn_params == null {
+        return "";
+    }
     for let i: i32 = 0; i < s.fn_params.len(); i++ {
         let p: Param = s.fn_params.get(i);
-        if p.ty == null { continue; }
-        if p.ty.kind == TY_GENERIC && p.ty.name.eq("Json")
-           && p.ty.args != null && p.ty.args.len() > 0 {
+        if p.ty == null {
+            continue;
+        }
+        if p.ty.kind == TY_GENERIC && p.ty.name.eq("Json") && p.ty.args != null && p.ty.args.len() > 0 {
             let inner: Type = p.ty.args.get(0);
             return inner.name;
         }
@@ -160,10 +205,11 @@ fn _body_schema_for(s: *Stmt) -> string {
 
 // `-> Json<T>` -> "T".
 fn _resp_schema_for(s: *Stmt) -> string {
-    if s.fn_ret_ty == null { return ""; }
+    if s.fn_ret_ty == null {
+        return "";
+    }
     let r: *Type = s.fn_ret_ty;
-    if r.kind == TY_GENERIC && r.name.eq("Json")
-       && r.args != null && r.args.len() > 0 {
+    if r.kind == TY_GENERIC && r.name.eq("Json") && r.args != null && r.args.len() > 0 {
         let inner: Type = r.args.get(0);
         return inner.name;
     }
@@ -181,7 +227,9 @@ fn _path_params_for(s: *Stmt, path: string) -> *Vector<OAPathParam> {
         let c: i32 = path.at(i).to_int();
         if c == 58 || c == 42 {
             let mut j: i32 = i + 1;
-            while j < n && path.at(j).to_int() != 47 { j = j + 1; }
+            while j < n && path.at(j).to_int() != 47 {
+                j = j + 1;
+            }
             let seg: string = path.substring(i + 1, j);
             if !seg.eq("") {
                 let ty: string = _lookup_path_param_ty(s, seg);
@@ -196,12 +244,15 @@ fn _path_params_for(s: *Stmt, path: string) -> *Vector<OAPathParam> {
 }
 
 fn _lookup_path_param_ty(s: *Stmt, name: string) -> string {
-    if s.fn_params == null { return "string"; }
+    if s.fn_params == null {
+        return "string";
+    }
     for let i: i32 = 0; i < s.fn_params.len(); i++ {
         let p: Param = s.fn_params.get(i);
-        if !p.name.eq(name) { continue; }
-        if p.ty != null && p.ty.kind == TY_GENERIC && p.ty.name.eq("Path")
-           && p.ty.args != null && p.ty.args.len() > 0 {
+        if !p.name.eq(name) {
+            continue;
+        }
+        if p.ty != null && p.ty.kind == TY_GENERIC && p.ty.name.eq("Path") && p.ty.args != null && p.ty.args.len() > 0 {
             let inner: Type = p.ty.args.get(0);
             return _prim_to_openapi(inner.name);
         }
@@ -211,20 +262,25 @@ fn _lookup_path_param_ty(s: *Stmt, name: string) -> string {
 
 // Glide primitive name -> OpenAPI primitive type.
 fn _prim_to_openapi(name: string) -> string {
-    if name.eq("int") || name.eq("i8") || name.eq("i16") || name.eq("i32")
-       || name.eq("i64") || name.eq("u8") || name.eq("u16") || name.eq("u32")
-       || name.eq("u64") { return "integer"; }
-    if name.eq("float") || name.eq("f32") || name.eq("f64") { return "number"; }
-    if name.eq("bool") { return "boolean"; }
-    if name.eq("string") { return "string"; }
+    if name.eq("int") || name.eq("i8") || name.eq("i16") || name.eq("i32") || name.eq("i64") || name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64") {
+        return "integer";
+    }
+    if name.eq("float") || name.eq("f32") || name.eq("f64") {
+        return "number";
+    }
+    if name.eq("bool") {
+        return "boolean";
+    }
+    if name.eq("string") {
+        return "string";
+    }
     return "string";
 }
 
 // Collect every pub struct whose name appears in `used_schemas`, plus
 // any struct transitively referenced from those fields. Closes the
 // set so the emitted components/schemas resolves every $ref.
-fn _collect_referenced_structs(stmts: *Vector<Stmt>,
-                                used: *HashMap<bool>) -> *Vector<Stmt> {
+fn _collect_referenced_structs(stmts: *Vector<Stmt>, used: *HashMap<bool>) -> *Vector<Stmt> {
     let pub_structs: *HashMap<Stmt> = HashMap::new();
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
@@ -239,15 +295,25 @@ fn _collect_referenced_structs(stmts: *Vector<Stmt>,
         let names: *Vector<string> = used.keys();
         for let i: i32 = 0; i < names.len(); i++ {
             let n: string = names.get(i);
-            if !pub_structs.contains(n) { continue; }
+            if !pub_structs.contains(n) {
+                continue;
+            }
             let st: Stmt = pub_structs.get(n);
-            if st.struct_fields == null { continue; }
+            if st.struct_fields == null {
+                continue;
+            }
             for let j: i32 = 0; j < st.struct_fields.len(); j++ {
                 let f: Field = st.struct_fields.get(j);
                 let ref_name: string = _struct_ref_name(f.ty);
-                if ref_name.eq("") { continue; }
-                if used.contains(ref_name) { continue; }
-                if !pub_structs.contains(ref_name) { continue; }
+                if ref_name.eq("") {
+                    continue;
+                }
+                if used.contains(ref_name) {
+                    continue;
+                }
+                if !pub_structs.contains(ref_name) {
+                    continue;
+                }
                 used.insert(ref_name, true);
                 grew = true;
             }
@@ -267,13 +333,19 @@ fn _collect_referenced_structs(stmts: *Vector<Stmt>,
 // Returns the struct name referenced by `t` for $ref emission. Pointers
 // peel one level, Vector<T> peels into T. Primitives + unknown return "".
 fn _struct_ref_name(t: *Type) -> string {
-    if t == null { return ""; }
-    if t.kind == TY_POINTER { return _struct_ref_name(t.inner); }
+    if t == null {
+        return "";
+    }
+    if t.kind == TY_POINTER {
+        return _struct_ref_name(t.inner);
+    }
     if t.kind == TY_GENERIC && t.name.eq("Vector") && t.args != null && t.args.len() > 0 {
         let inner: Type = t.args.get(0);
         return _struct_ref_name_of(inner);
     }
-    if t.kind == TY_NAMED && !_is_primitive(t.name) { return t.name; }
+    if t.kind == TY_NAMED && !_is_primitive(t.name) {
+        return t.name;
+    }
     return "";
 }
 
@@ -292,7 +364,9 @@ fn _glide_path_to_openapi(path: string) -> string {
         let c: i32 = path.at(i).to_int();
         if c == 58 || c == 42 {
             let mut j: i32 = i + 1;
-            while j < n && path.at(j).to_int() != 47 { j = j + 1; }
+            while j < n && path.at(j).to_int() != 47 {
+                j = j + 1;
+            }
             let seg: string = path.substring(i + 1, j);
             out = out.concat("{").concat(seg).concat("}");
             i = j;
@@ -305,14 +379,24 @@ fn _glide_path_to_openapi(path: string) -> string {
 }
 
 fn _is_primitive(name: string) -> bool {
-    if name.eq("int") || name.eq("i8") || name.eq("i16") || name.eq("i32")
-       || name.eq("i64") || name.eq("u8") || name.eq("u16") || name.eq("u32")
-       || name.eq("u64") { return true; }
-    if name.eq("float") || name.eq("f32") || name.eq("f64") { return true; }
-    if name.eq("bool") { return true; }
-    if name.eq("string") { return true; }
-    if name.eq("char") { return true; }
-    if name.eq("void") { return true; }
+    if name.eq("int") || name.eq("i8") || name.eq("i16") || name.eq("i32") || name.eq("i64") || name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64") {
+        return true;
+    }
+    if name.eq("float") || name.eq("f32") || name.eq("f64") {
+        return true;
+    }
+    if name.eq("bool") {
+        return true;
+    }
+    if name.eq("string") {
+        return true;
+    }
+    if name.eq("char") {
+        return true;
+    }
+    if name.eq("void") {
+        return true;
+    }
     return false;
 }
 
@@ -325,12 +409,16 @@ fn _emit_yaml(src_path: string, routes: *Vector<OARoute>, structs: *Vector<Stmt>
     let printed: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < routes.len(); i++ {
         let r: OARoute = routes.get(i);
-        if printed.contains(r.path) { continue; }
+        if printed.contains(r.path) {
+            continue;
+        }
         printed.insert(r.path, true);
         println!("  ".concat(r.path).concat(":"));
         for let j: i32 = 0; j < routes.len(); j++ {
             let r2: OARoute = routes.get(j);
-            if !r2.path.eq(r.path) { continue; }
+            if !r2.path.eq(r.path) {
+                continue;
+            }
             _emit_operation(&r2);
         }
     }
@@ -350,7 +438,9 @@ fn _api_title(src_path: string) -> string {
     let mut i: i32 = 0;
     while i < n {
         let c: i32 = src_path.at(i).to_int();
-        if c == 47 || c == 92 { start = i + 1; }
+        if c == 47 || c == 92 {
+            start = i + 1;
+        }
         i = i + 1;
     }
     let base: string = src_path.substring(start, n);
@@ -399,7 +489,9 @@ fn _emit_operation(r: *OARoute) {
 fn _emit_schema(st: *Stmt) {
     println!("    ".concat(st.name).concat(":"));
     println!("      type: object");
-    if st.struct_fields == null || st.struct_fields.len() == 0 { return; }
+    if st.struct_fields == null || st.struct_fields.len() == 0 {
+        return;
+    }
     println!("      properties:");
     for let i: i32 = 0; i < st.struct_fields.len(); i++ {
         let f: Field = st.struct_fields.get(i);
@@ -409,8 +501,14 @@ fn _emit_schema(st: *Stmt) {
 }
 
 fn _emit_type_block(t: *Type, indent: string) {
-    if t == null { println!(indent.concat("type: string")); return; }
-    if t.kind == TY_POINTER { _emit_type_block(t.inner, indent); return; }
+    if t == null {
+        println!(indent.concat("type: string"));
+        return;
+    }
+    if t.kind == TY_POINTER {
+        _emit_type_block(t.inner, indent);
+        return;
+    }
     if t.kind == TY_GENERIC && t.name.eq("Vector") && t.args != null && t.args.len() > 0 {
         let inner: Type = t.args.get(0);
         println!(indent.concat("type: array"));

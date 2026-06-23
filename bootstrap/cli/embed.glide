@@ -13,7 +13,6 @@
 // All extraction logic (gzip_decode + tar_extract) lives in main.glide
 // next to _target_add / _find_zig / _maybe_install_embedded_src —
 // this file just exposes the bytes.
-
 c_raw! {
     #include <stddef.h>
     #include <string.h>
@@ -34,40 +33,63 @@ c_raw! {
 }
 
 extern fn __glide_embed_zig() -> *void;
+
 extern fn __glide_embed_zig_len() -> i32;
+
 extern fn __glide_embed_sysroot(triple: string) -> *void;
+
 extern fn __glide_embed_sysroot_len(triple: string) -> i32;
+
 extern fn __glide_embed_src() -> *void;
+
 extern fn __glide_embed_src_len() -> i32;
 
-/// Pointer to the embedded Zig toolchain tarball, or null on
-/// non-bundle builds.
-pub fn embedded_zig() -> *void { return __glide_embed_zig(); }
+// Pointer to the embedded Zig toolchain tarball, or null on
+// non-bundle builds.
+pub fn embedded_zig() -> *void {
+    return __glide_embed_zig();
+}
 
-/// Size in bytes of the embedded Zig tarball, or 0 on non-bundle builds.
-pub fn embedded_zig_len() -> i32 { return __glide_embed_zig_len(); }
+// Size in bytes of the embedded Zig tarball, or 0 on non-bundle builds.
+pub fn embedded_zig_len() -> i32 {
+    return __glide_embed_zig_len();
+}
 
-/// Pointer to the embedded sysroot tarball for `triple`, or null when
-/// it isn't bundled in this build.
-pub fn embedded_sysroot(triple: string) -> *void { return __glide_embed_sysroot(triple); }
+// Pointer to the embedded sysroot tarball for `triple`, or null when
+// it isn't bundled in this build.
+pub fn embedded_sysroot(triple: string) -> *void {
+    return __glide_embed_sysroot(triple);
+}
 
-/// Size in bytes of the embedded sysroot for `triple`, or 0 when
-/// it isn't bundled.
-pub fn embedded_sysroot_len(triple: string) -> i32 { return __glide_embed_sysroot_len(triple); }
+// Size in bytes of the embedded sysroot for `triple`, or 0 when
+// it isn't bundled.
+pub fn embedded_sysroot_len(triple: string) -> i32 {
+    return __glide_embed_sysroot_len(triple);
+}
 
-/// Pointer to the embedded `src/` tree tarball (Glide stdlib +
-/// builtins), or null on non-bundle builds.
-pub fn embedded_src() -> *void { return __glide_embed_src(); }
+// Pointer to the embedded `src/` tree tarball (Glide stdlib +
+// builtins), or null on non-bundle builds.
+pub fn embedded_src() -> *void {
+    return __glide_embed_src();
+}
 
-/// Size in bytes of the embedded `src/` tarball, or 0 on non-bundle builds.
-pub fn embedded_src_len() -> i32 { return __glide_embed_src_len(); }
+// Size in bytes of the embedded `src/` tarball, or 0 on non-bundle builds.
+pub fn embedded_src_len() -> i32 {
+    return __glide_embed_src_len();
+}
 
-/// True when this glide binary was built in bundle mode with a Zig
-/// toolchain baked in.
-pub fn has_embedded_zig() -> bool { return __glide_embed_zig_len() > 0; }
+// True when this glide binary was built in bundle mode with a Zig
+// toolchain baked in.
+pub fn has_embedded_zig() -> bool {
+    return __glide_embed_zig_len() > 0;
+}
 
-/// True when this glide binary ships an embedded sysroot for `triple`.
-pub fn has_embedded_sysroot(triple: string) -> bool { return __glide_embed_sysroot_len(triple) > 0; }
+// True when this glide binary ships an embedded sysroot for `triple`.
+pub fn has_embedded_sysroot(triple: string) -> bool {
+    return __glide_embed_sysroot_len(triple) > 0;
+}
 
-/// True when this glide binary ships an embedded `src/` tree.
-pub fn has_embedded_src() -> bool { return __glide_embed_src_len() > 0; }
+// True when this glide binary ships an embedded `src/` tree.
+pub fn has_embedded_src() -> bool {
+    return __glide_embed_src_len() > 0;
+}

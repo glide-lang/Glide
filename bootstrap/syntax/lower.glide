@@ -13,7 +13,6 @@ import bootstrap::syntax::parser;
 // The formatter (fmt.glide) reads the program *before* lowering, so it
 // re-emits the sugared form. That means new sugar should land in the
 // parser/lower pair without touching fmt.
-
 pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
     // Trait expansion has to run first so the for-in / default-method
     // walk below sees the fully-populated impl blocks.
@@ -22,7 +21,9 @@ pub fn lower_program(stmts: *Vector<Stmt>) -> *Vector<Stmt> {
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         let l: *Stmt = lower_stmt(&s);
-        if l != null { out.push(*l); }
+        if l != null {
+            out.push(*l);
+        }
     }
     return out;
 }
@@ -45,7 +46,9 @@ pub fn lower_program_user_only(stmts: *Vector<Stmt>, user_path: string) -> *Vect
             continue;
         }
         let l: *Stmt = lower_stmt(&s);
-        if l != null { out.push(*l); }
+        if l != null {
+            out.push(*l);
+        }
     }
     return out;
 }
@@ -64,17 +67,29 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
     }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let mut imp: Stmt = stmts.get(i);
-        if imp.kind != ST_IMPL { continue; }
-        if imp.impl_trait_name == null || imp.impl_trait_name.eq("") { continue; }
-        if !traits.contains(imp.impl_trait_name) { continue; }
+        if imp.kind != ST_IMPL {
+            continue;
+        }
+        if imp.impl_trait_name == null || imp.impl_trait_name.eq("") {
+            continue;
+        }
+        if !traits.contains(imp.impl_trait_name) {
+            continue;
+        }
         let trait_def: Stmt = traits.get(imp.impl_trait_name);
-        if trait_def.impl_methods == null { continue; }
-        if imp.impl_methods == null { continue; }   // empty impl block has nothing to extend
+        if trait_def.impl_methods == null {
+            continue;
+        }
+        if imp.impl_methods == null {
+            continue;
+        } // empty impl block has nothing to extend
         // Build name set of methods already in the impl.
         let provided: *HashMap<bool> = HashMap::new();
         for let k: i32 = 0; k < imp.impl_methods.len(); k++ {
             let m: Stmt = imp.impl_methods.get(k);
-            if m.name != null { provided.insert(m.name, true); }
+            if m.name != null {
+                provided.insert(m.name, true);
+            }
         }
         // Collect defaults we actually need to add — without mutating the
         // impl's existing impl_methods Vector, which the LSP cache may
@@ -82,9 +97,15 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
         let to_add: *Vector<Stmt> = Vector::new();
         for let k: i32 = 0; k < trait_def.impl_methods.len(); k++ {
             let req: Stmt = trait_def.impl_methods.get(k);
-            if req.name == null || req.name.eq("") { continue; }
-            if req.fn_body == null { continue; }
-            if provided.contains(req.name) { continue; }
+            if req.name == null || req.name.eq("") {
+                continue;
+            }
+            if req.fn_body == null {
+                continue;
+            }
+            if provided.contains(req.name) {
+                continue;
+            }
             // Clone the method shape; substitute Self in the copy's signature.
             // CRITICAL: the shallow `*copy = req` shares `fn_params` (a *Vector
             // pointer) between copy and req. substitute_self_in_methods mutates
@@ -129,26 +150,43 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
 }
 
 fn lower_block(body: *Vector<Stmt>) -> *Vector<Stmt> {
-    if body == null { return null; }
+    if body == null {
+        return null;
+    }
     let out: *Vector<Stmt> = Vector::new();
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         let l: *Stmt = lower_stmt(&s);
-        if l != null { out.push(*l); }
+        if l != null {
+            out.push(*l);
+        }
     }
     return out;
 }
 
 fn lower_stmt(s: *Stmt) -> *Stmt {
-    if s == null { return null; }
-    if s.kind == ST_FOR_IN { return lower_for_in(s); }
-    if s.kind == ST_IF_LET { return lower_if_let(s); }
-
+    if s == null {
+        return null;
+    }
+    if s.kind == ST_FOR_IN {
+        return lower_for_in(s);
+    }
+    if s.kind == ST_IF_LET {
+        return lower_if_let(s);
+    }
     // Recurse into children.
-    if s.then_body != null { s.then_body = lower_block(s.then_body); }
-    if s.else_body != null { s.else_body = lower_block(s.else_body); }
-    if s.fn_body != null   { s.fn_body   = lower_block(s.fn_body); }
-    if s.for_init != null  { s.for_init  = lower_stmt(s.for_init); }
+    if s.then_body != null {
+        s.then_body = lower_block(s.then_body);
+    }
+    if s.else_body != null {
+        s.else_body = lower_block(s.else_body);
+    }
+    if s.fn_body != null {
+        s.fn_body = lower_block(s.fn_body);
+    }
+    if s.for_init != null {
+        s.for_init = lower_stmt(s.for_init);
+    }
     if s.impl_methods != null {
         // Build a fresh Vector instead of mutating the existing one — the
         // LSP cache shares impl_methods Vectors across parses, and an
@@ -157,7 +195,9 @@ fn lower_stmt(s: *Stmt) -> *Stmt {
         for let j: i32 = 0; j < s.impl_methods.len(); j++ {
             let m: Stmt = s.impl_methods.get(j);
             let lm: *Stmt = lower_stmt(&m);
-            if lm != null { new_methods.push(*lm); }
+            if lm != null {
+                new_methods.push(*lm);
+            }
         }
         s.impl_methods = new_methods;
     }
@@ -173,39 +213,44 @@ fn lower_if_let(s: *Stmt) -> *Stmt {
     let line: i32 = s.line;
     let col: i32 = s.column;
     let mut bind: string = "";
-    if s.let_names != null && s.let_names.len() > 0 { bind = s.let_names.get(0); }
+    if s.let_names != null && s.let_names.len() > 0 {
+        bind = s.let_names.get(0);
+    }
     let then_body: *Vector<Stmt> = lower_block(s.then_body);
     let mut else_body: *Vector<Stmt> = null;
-    if s.else_body != null { else_body = lower_block(s.else_body); }
-
+    if s.else_body != null {
+        else_body = lower_block(s.else_body);
+    }
     // Temp bound to the scrutinee; unique per source position.
     let tmp: string = "__iflet_".concat(int_to_str(line * 1000 + col));
     let let_tmp: *Stmt = stmt_let(tmp, null, s.let_value, false, line, col);
-
     // Condition: some/ok -> `tmp.has`/`tmp.ok`; none/err -> negated.
     let mut flag: string = "has";
-    if ctor.eq("ok") || ctor.eq("err") { flag = "ok"; }
+    if ctor.eq("ok") || ctor.eq("err") {
+        flag = "ok";
+    }
     let cond_base: *Expr = expr_member(expr_ident(tmp, line, col), flag);
     let mut cond: *Expr = cond_base;
     if ctor.eq("none") || ctor.eq("err") {
         cond = expr_unary(UN_NOT, cond_base, line, col);
     }
-
     // Inner then-body: pull the payload into the user binding first.
     let inner_then: *Vector<Stmt> = Vector::new();
     if !bind.eq("") {
         let mut valfield: string = "val";
-        if ctor.eq("err") { valfield = "err"; }
+        if ctor.eq("err") {
+            valfield = "err";
+        }
         let val_expr: *Expr = expr_member(expr_ident(tmp, line, col), valfield);
         let bind_stmt: *Stmt = stmt_let(bind, null, val_expr, false, line, col);
         inner_then.push(*bind_stmt);
     }
     if then_body != null {
-        for let i: i32 = 0; i < then_body.len(); i++ { inner_then.push(then_body.get(i)); }
+        for let i: i32 = 0; i < then_body.len(); i++ {
+            inner_then.push(then_body.get(i));
+        }
     }
-
     let if_stmt: *Stmt = stmt_if(cond, inner_then, else_body, line, col);
-
     let blk: *Vector<Stmt> = Vector::new();
     blk.push(*let_tmp);
     blk.push(*if_stmt);
@@ -231,43 +276,43 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     let body: *Vector<Stmt> = lower_block(s.then_body);
     let line: i32 = s.line;
     let col: i32 = s.column;
-
     if hi != null {
         // Range form.
         let init: *Stmt = stmt_let(var_name, ty_named("i32"), lo_or_iter, true, line, col);
         if init != null {
-            init.name_line = s.name_line; init.name_col = s.name_col; init.name_len = s.name_len;
+            init.name_line = s.name_line;
+            init.name_col = s.name_col;
+            init.name_len = s.name_len;
         }
         let mut cmp_op: i32 = OP_LT;
-        if inclusive { cmp_op = OP_LE; }
+        if inclusive {
+            cmp_op = OP_LE;
+        }
         let cond: *Expr = expr_binary(cmp_op, expr_ident(var_name, line, col), hi);
         let step: *Expr = expr_postinc(expr_ident(var_name, line, col));
         return stmt_for(init, cond, step, body, line, col);
     }
-
     // Collection form.
     let id: string = int_to_str(line * 1000 + col);
     let it_name: string = "__glide_iter_".concat(id);
     let idx_name: string = "__glide_idx_".concat(id);
-
     let block_body: *Vector<Stmt> = Vector::new();
     let no_ty: *Type = null;
     let bind_iter: *Stmt = stmt_let(it_name, no_ty, lo_or_iter, false, line, col);
     block_body.push(*bind_iter);
-
     let init: *Stmt = stmt_let(idx_name, ty_named("i32"), expr_int(0, line, col), true, line, col);
     let len_call: *Expr = expr_call(expr_member(expr_ident(it_name, line, col), "len"), Vector::new());
     let cond: *Expr = expr_binary(OP_LT, expr_ident(idx_name, line, col), len_call);
     let step: *Expr = expr_postinc(expr_ident(idx_name, line, col));
-
     let get_args: *Vector<Expr> = Vector::new();
     get_args.push(*expr_ident(idx_name, line, col));
     let get_call: *Expr = expr_call(expr_member(expr_ident(it_name, line, col), "get"), get_args);
     let bind_var: *Stmt = stmt_let(var_name, no_ty, get_call, false, line, col);
     if bind_var != null {
-        bind_var.name_line = s.name_line; bind_var.name_col = s.name_col; bind_var.name_len = s.name_len;
+        bind_var.name_line = s.name_line;
+        bind_var.name_col = s.name_col;
+        bind_var.name_len = s.name_len;
     }
-
     let inner_body: *Vector<Stmt> = Vector::new();
     inner_body.push(*bind_var);
     if body != null {
@@ -278,7 +323,6 @@ fn lower_for_in(s: *Stmt) -> *Stmt {
     }
     let inner_for: *Stmt = stmt_for(init, cond, step, inner_body, line, col);
     block_body.push(*inner_for);
-
     let block: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
     block.kind = ST_BLOCK;
     block.line = line;

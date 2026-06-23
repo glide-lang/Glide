@@ -2,8 +2,8 @@ import stdlib::fs::*;
 import bootstrap::syntax::ast;
 import bootstrap::syntax::lexer;
 import bootstrap::syntax::parser;
-import bootstrap::cli::fmt;       // for fmt_type signatures
-import bootstrap::pkg::manifest;  // for dep discovery (read_manifest, dep_cache_dir, ManifestDep)
+import bootstrap::cli::fmt; // for fmt_type signatures
+import bootstrap::pkg::manifest; // for dep discovery (read_manifest, dep_cache_dir, ManifestDep)
 
 // `glide doc`: walk every `*.glide` under the project root, parse it,
 // pull out top-level `pub` items + their `///` doc comments, and emit
@@ -13,36 +13,37 @@ import bootstrap::pkg::manifest;  // for dep discovery (read_manifest, dep_cache
 // We don't try to be rustdoc — no cross-linking, no search. Goal is
 // "browseable reference for the API surface you exposed", and the
 // expectation is that the user reads `///` content directly in source.
-
 pub struct DocItem {
-    pub kind: i32,         // 1=fn, 2=struct, 3=enum, 4=const, 5=trait, 6=impl, 7=macro
+    pub kind: i32, // 1=fn, 2=struct, 3=enum, 4=const, 5=trait, 6=impl, 7=macro
     pub name: string,
     pub signature: string, // single-line rendered head
-    pub doc: string,       // raw `///` block, with leading `///` stripped
+    pub doc: string, // raw `///` block, with leading `///` stripped
     pub line: i32,
 }
 
 pub struct DocModule {
-    pub origin:   string,           // source file path
-    pub display:  string,           // pretty module path for headings/links
-    pub slug:     string,           // safe HTML filename (no slashes)
-    pub items:    *Vector<DocItem>,
-    pub blurb:    string,           // first non-empty doc line, for the index
+    pub origin: string, // source file path
+    pub display: string, // pretty module path for headings/links
+    pub slug: string, // safe HTML filename (no slashes)
+    pub items: *Vector<DocItem>,
+    pub blurb: string, // first non-empty doc line, for the index
     // Logical bucket for grouping on the index page:
     //   "project" — files under the user's manifest root
     //   "stdlib"  — files from src/stdlib/ (only when --stdlib is set)
     //   "<dep>"   — files from a declared manifest dep
-    pub package:  string,
+    pub package: string,
     // Package-level metadata, only populated for the first module of a
     // dep. Lets the index page show a one-line summary + repo URL per
     // package without scanning every dep's manifest on render.
     pub pkg_repo: string,
     pub pkg_desc: string,
-    pub pkg_ver:  string,
+    pub pkg_ver: string,
 }
 
 extern fn __glide_file_exists(path: string) -> bool;
+
 extern fn read_file(path: string) -> string;
+
 extern fn write_file(path: string, content: string) -> bool;
 
 pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: bool, include_stdlib: bool) -> i32 {
@@ -51,26 +52,31 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
         println!("doc: could not create", out_dir);
         return 1;
     }
-
     let files: *Vector<string> = fs_list_rec(root_dir, ".glide");
     let modules: *Vector<DocModule> = _vec_modules();
-
     let mut total_items: i32 = 0;
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         // Skip the project's own manifest, the lockfile, and any deps
         // mirrored under `glide_modules/` (those get a dedicated walk
         // below so each one is tagged with its package name).
-        if _ends_with(f, "/glide.glide") || _ends_with(f, "/glide.lock") { continue; }
-        if _contains_segment(f, "glide_modules") { continue; }
+        if _ends_with(f, "/glide.glide") || _ends_with(f, "/glide.lock") {
+            continue;
+        }
+        if _contains_segment(f, "glide_modules") {
+            continue;
+        }
         let m: *DocModule = _scan_file(f, root_dir);
-        if m == null { continue; }
-        if m.items.len() == 0 { continue; }
+        if m == null {
+            continue;
+        }
+        if m.items.len() == 0 {
+            continue;
+        }
         m.package = "project";
         modules.push(*m);
         total_items = total_items + m.items.len();
     }
-
     // Project deps from the manifest: each declared dep gets its own
     // group on the index page so a project's docs include the API
     // surface of everything it imports. Path deps are visited even when
@@ -83,8 +89,7 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
             let dep_root: string = dep_cache_dir(mf, d);
             if dep_root.eq("") || !__glide_file_exists(dep_root.concat("/glide.glide")) {
                 if !dep_root.eq("") {
-                    println!("doc: skipping `".concat(d.name)
-                        .concat("` (not fetched - run `glide fetch`)"));
+                    println!("doc: skipping `".concat(d.name).concat("` (not fetched - run `glide fetch`)"));
                 }
                 continue;
             }
@@ -92,12 +97,22 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
             let mut first: bool = true;
             for let j: i32 = 0; j < dep_files.len(); j++ {
                 let f: string = dep_files.get(j);
-                if _ends_with(f, "/glide.glide") || _ends_with(f, "/glide.lock") { continue; }
-                if _contains_segment(f, "glide_modules") { continue; }
-                if _contains_segment(f, "tests") { continue; }
+                if _ends_with(f, "/glide.glide") || _ends_with(f, "/glide.lock") {
+                    continue;
+                }
+                if _contains_segment(f, "glide_modules") {
+                    continue;
+                }
+                if _contains_segment(f, "tests") {
+                    continue;
+                }
                 let dm: *DocModule = _scan_file(f, dep_root);
-                if dm == null { continue; }
-                if dm.items.len() == 0 { continue; }
+                if dm == null {
+                    continue;
+                }
+                if dm.items.len() == 0 {
+                    continue;
+                }
                 dm.package = d.name;
                 if first {
                     // Surface package-level metadata on the first
@@ -107,7 +122,7 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
                     if sub_m != null {
                         dm.pkg_desc = sub_m.description;
                         dm.pkg_repo = sub_m.repository;
-                        dm.pkg_ver  = sub_m.version;
+                        dm.pkg_ver = sub_m.version;
                     }
                     first = false;
                 }
@@ -116,7 +131,6 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
             }
         }
     }
-
     // `--stdlib`: walk the compiler-bundled standard library too. Each
     // file is scanned with the stdlib's `src/` as its display root, so
     // modules surface as `stdlib::hashmap`, `stdlib::http::client`,
@@ -130,15 +144,18 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
             for let i: i32 = 0; i < std_files.len(); i++ {
                 let f: string = std_files.get(i);
                 let m: *DocModule = _scan_file(f, std_root);
-                if m == null { continue; }
-                if m.items.len() == 0 { continue; }
+                if m == null {
+                    continue;
+                }
+                if m.items.len() == 0 {
+                    continue;
+                }
                 m.package = "stdlib";
                 modules.push(*m);
                 total_items = total_items + m.items.len();
             }
         }
     }
-
     if modules.len() == 0 {
         // No docs to render — but `--ai` should still drop AGENTS.md
         // so the user can wire up agent rules on day one, before any
@@ -155,7 +172,6 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
         println!("doc: no `pub` items with docs found under", root_dir);
         return if emit_ai { 0 } else { 1 };
     }
-
     let css: string = _doc_css();
     write_file(out_dir.concat("/style.css"), css);
     _write_index(out_dir, modules);
@@ -163,10 +179,8 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
         let m: DocModule = modules.get(i);
         _write_module_page(out_dir, &m);
     }
-
     let index_path: string = out_dir.concat("/index.html");
     println!("doc: wrote", modules.len(), "modules /", total_items, "items ->", index_path);
-
     if emit_ai {
         let llms_path: string = out_dir.concat("/llms.txt");
         _write_llms_txt(llms_path, modules);
@@ -179,12 +193,15 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
             println!("doc: wrote agent-rules file ->", agents_path);
         }
     }
-
     if serve_port > 0 {
-        if open_after { _open_in_browser("http://127.0.0.1:".concat(int_to_str(serve_port)).concat("/")); }
+        if open_after {
+            _open_in_browser("http://127.0.0.1:".concat(int_to_str(serve_port)).concat("/"));
+        }
         return doc_serve(out_dir, serve_port);
     }
-    if open_after { _open_in_browser(index_path); }
+    if open_after {
+        _open_in_browser(index_path);
+    }
     return 0;
 }
 
@@ -195,163 +212,12 @@ pub fn run_doc(root_dir: string, open_after: bool, serve_port: i32, emit_ai: boo
 // language overview + a forced redirect to `build/doc/llms.txt` for
 // the actual API surface + the project conventions every Glide
 // user should know.
-pub fn write_agents_md(path: string) { _write_agents_md(path); }
+pub fn write_agents_md(path: string) {
+    _write_agents_md(path);
+}
 
 fn _write_agents_md(path: string) {
-    let body: string =
-        "# Glide — agent context\n"
-        .concat("\n")
-        .concat("**Read this file every time you touch Glide code in this repo.**\n")
-        .concat("\n")
-        .concat("## 1. Required reading\n")
-        .concat("\n")
-        .concat("Before generating, editing, or reviewing any `.glide` file:\n")
-        .concat("\n")
-        .concat("1. Open `build/doc/llms.txt`. Every `pub` item in the project\n")
-        .concat("   and its dependencies lives there in plain text. If the file is\n")
-        .concat("   missing, regenerate with `glide doc --ai`.\n")
-        .concat("2. Scan the module(s) you'll be modifying for existing\n")
-        .concat("   conventions, then match them.\n")
-        .concat("\n")
-        .concat("This is not optional. The Glide stdlib has idioms that differ\n")
-        .concat("from Rust, Go, and C — guessing leads to non-compiling output.\n")
-        .concat("\n")
-        .concat("## 2. Language quick-reference\n")
-        .concat("\n")
-        .concat("- **Errors as values**: `!T` (Result), `?T` (Option), `?!T`\n")
-        .concat("  (Option-Result). No exceptions. Propagate with `?` postfix.\n")
-        .concat("- **Memory**: arena-allocated by default. `let v* = T { … };`\n")
-        .concat("  is auto-dropped at block exit. Raw allocation via `malloc`\n")
-        .concat("  + `defer free(p)` is supported but rare.\n")
-        .concat("- **Concurrency**: M:N coroutines via `spawn fn_call(args);`.\n")
-        .concat("  Channels typed as `chan<T>`; `make_chan(cap)`, `c.send(x)`,\n")
-        .concat("  `c.recv()`, `c.close()`. OS threads via `spawn_thread`.\n")
-        .concat("- **Methods**: `impl T { fn method(self: *T, …) }`. Macros\n")
-        .concat("  attached to types follow the same shape.\n")
-        .concat("- **Traits + dyn**: `trait T { fn m(self: *Self) }` with\n")
-        .concat("  optional default bodies. `*dyn T` for vtable dispatch.\n")
-        .concat("- **Generics**: `fn f<T>(v: T)`. Bounds via `T: Trait + Trait`.\n")
-        .concat("  Monomorphised; the compiler emits one C fn per concrete T.\n")
-        .concat("- **Macros**: builtins `println!` / `format!` / `assert!`;\n")
-        .concat("  string interpolation `\"x={x}\"`; `select!` over channels.\n")
-        .concat("  Procedural macros by attribute (`@derive(JsonBind)`,\n")
-        .concat("  `@handler`, `@logged`, `@trace`) and function-like\n")
-        .concat("  `info!` / `warn!` / `error!` / … from `stdlib::log`.\n")
-        .concat("- **Doc comments**: `///` triple-slash above the decl. Put\n")
-        .concat("  examples in fenced ```glide blocks; show sample output as a\n")
-        .concat("  trailing `// result` line — keep this style.\n")
-        .concat("\n")
-        .concat("## 3. Project commands\n")
-        .concat("\n")
-        .concat("```\n")
-        .concat("glide new <name> [--lib] [--ai]   scaffold a project\n")
-        .concat("glide run                        build + run from the manifest\n")
-        .concat("glide build [--target=<triple>]  build only (sysroot auto-fetched for cross)\n")
-        .concat("glide check <file>               parse + type-check, no codegen\n")
-        .concat("glide test [path]                run *_test.glide files\n")
-        .concat("glide bench [path]               run *_bench.glide microbenchmarks\n")
-        .concat("glide lint [file]                run all lints (project bin by default)\n")
-        .concat("glide fix [file]                 apply mechanical fixes\n")
-        .concat("glide fmt <file> [--write]       pretty-print, or rewrite in place\n")
-        .concat("glide doc --ai                   regenerate llms.txt for THIS file\n")
-        .concat("glide add <name> <url> <rev>     add a git dep\n")
-        .concat("glide add --local <name> <path>  add a path dep\n")
-        .concat("glide remove <name>              drop a dep from glide.glide\n")
-        .concat("glide fetch                      pull declared deps\n")
-        .concat("glide update                     refresh git deps + rewrite lock\n")
-        .concat("glide install <path|git-url>     install a glide binary/tool\n")
-        .concat("glide target <list|add|remove>   manage cross-compile sysroots\n")
-        .concat("glide clean                      wipe build/ + glide_modules/ + glide.lock\n")
-        .concat("glide lsp                        language server on stdio\n")
-        .concat("```\n")
-        .concat("\n")
-        .concat("## 4. House rules\n")
-        .concat("\n")
-        .concat("- Don't write `try` / `catch`; use `!T` + `?` propagation.\n")
-        .concat("- Don't malloc without a paired `defer free(…)` unless the\n")
-        .concat("  value is owned by an arena.\n")
-        .concat("- Don't use `*chan<T>` parameters when `chan<T>` suffices —\n")
-        .concat("  the value already IS a pointer at the C layer.\n")
-        .concat("- Don't import `stdlib::http` from a bootstrap context\n")
-        .concat("  (`JsonValue` collides with `bootstrap/json.glide`).\n")
-        .concat("- Prefer the method form (`v.push(x)`) over the free fn\n")
-        .concat("  form (`push(v, x)`) — matches `stdlib::*` conventions.\n")
-        .concat("\n")
-        .concat("## 5. Lints (compiler-enforced patterns)\n")
-        .concat("\n")
-        .concat("`glide lint <file>` and the LSP run these checks. Each fires\n")
-        .concat("a lint code that `@allow(\"<code>\")` on the enclosing fn or\n")
-        .concat("impl method silences. Don't suppress without a justification\n")
-        .concat("in a comment — the lint usually points at a real bug.\n")
-        .concat("\n")
-        .concat("- `null-deref` — using `*p` / `p.field` / `p[i]` where `p` is\n")
-        .concat("  provably null (let-bound, or callee param dereferenced\n")
-        .concat("  without an `if p == null` guard).\n")
-        .concat("- `bad-free` — never `free()` on a Glide `string`, `*Vector`,\n")
-        .concat("  or `*HashMap`. Strings are arena-managed; collections have\n")
-        .concat("  `.free()` destructors that release internal buffers first.\n")
-        .concat("- `string-eq-op` — `==` / `!=` on strings is pointer compare,\n")
-        .concat("  not byte compare. Always use `s.eq(other)`.\n")
-        .concat("- `unhandled-result` — calling a `!T`-returning fn and\n")
-        .concat("  discarding the value silently swallows the error. Use\n")
-        .concat("  `f(...)?`, `let _ = f(...)`, or `let bound = f(...)`.\n")
-        .concat("- `ignored-option` — `.val` on a `?T` without a preceding\n")
-        .concat("  `is_some()` / `.has` guard reads UB on the none branch.\n")
-        .concat("- `use-after-free` — accessing `x` after `x.free()` in the\n")
-        .concat("  same scope is a dangling-pointer read.\n")
-        .concat("- `arena-set` — `__glide_palloc_set(arena)` without a paired\n")
-        .concat("  `defer __glide_palloc_set(prev);` leaks the arena bracket.\n")
-        .concat("- `coro-blocking` — calling sync I/O (`fs_read`, `process_run`,\n")
-        .concat("  etc.) inside a `spawn fn();` stalls the M:N worker. Switch\n")
-        .concat("  to `spawn_thread` or the async variant.\n")
-        .concat("- `mutex-unbalanced` — every `.lock()` needs `.unlock()` on\n")
-        .concat("  every exit (return / `?` / break / continue / fall-through).\n")
-        .concat("  The idiom is `m.lock(); defer m.unlock();` right after.\n")
-        .concat("- `chan-leak` — channels missing `close()` on any path will\n")
-        .concat("  leave receivers parked forever on `recv()`.\n")
-        .concat("- `leak-on-early-return` — register `defer x.free();`\n")
-        .concat("  IMMEDIATELY after the allocation, never after a `?`.\n")
-        .concat("\n")
-        .concat("Patterns to follow as default form:\n")
-        .concat("\n")
-        .concat("```glide\n")
-        .concat("// open a coro-arena bracket\n")
-        .concat("let prev: *void = __glide_palloc_get();\n")
-        .concat("__glide_palloc_set(__glide_palloc_make());\n")
-        .concat("defer __glide_palloc_set(prev);\n")
-        .concat("defer __glide_palloc_free(__glide_palloc_get());\n")
-        .concat("\n")
-        .concat("// allocation + cleanup\n")
-        .concat("let v: *Vector<i32> = Vector::new();\n")
-        .concat("defer v.free();\n")
-        .concat("\n")
-        .concat("// mutex\n")
-        .concat("m.lock();\n")
-        .concat("defer m.unlock();\n")
-        .concat("\n")
-        .concat("// fallible call\n")
-        .concat("let x: i32 = parse(s)?;\n")
-        .concat("\n")
-        .concat("// option unwrap with check\n")
-        .concat("let r: ?i32 = lookup(k);\n")
-        .concat("if !r.has { return err(\"missing\"); }\n")
-        .concat("let v: i32 = r.val;\n")
-        .concat("```\n")
-        .concat("\n")
-        .concat("## 6. Tool-specific notes\n")
-        .concat("\n")
-        .concat("- **Claude Code / Codex**: this file loads automatically.\n")
-        .concat("- **Cursor**: also reads `AGENTS.md`; for older versions,\n")
-        .concat("  copy this file to `.cursorrules`.\n")
-        .concat("- **Continue / Aider / others**: point your config at this\n")
-        .concat("  file or copy its contents into the tool's rules file.\n")
-        .concat("\n")
-        .concat("---\n")
-        .concat("\n")
-        .concat("_This file is auto-generated by `glide doc --ai` only when it\n")
-        .concat("doesn't already exist. Subsequent runs leave your customisations\n")
-        .concat("alone; the `build/doc/llms.txt` reference is regenerated every\n")
-        .concat("time._\n");
+    let body: string = "# Glide — agent context\n".concat("\n").concat("**Read this file every time you touch Glide code in this repo.**\n").concat("\n").concat("## 1. Required reading\n").concat("\n").concat("Before generating, editing, or reviewing any `.glide` file:\n").concat("\n").concat("1. Open `build/doc/llms.txt`. Every `pub` item in the project\n").concat("   and its dependencies lives there in plain text. If the file is\n").concat("   missing, regenerate with `glide doc --ai`.\n").concat("2. Scan the module(s) you'll be modifying for existing\n").concat("   conventions, then match them.\n").concat("\n").concat("This is not optional. The Glide stdlib has idioms that differ\n").concat("from Rust, Go, and C — guessing leads to non-compiling output.\n").concat("\n").concat("## 2. Language quick-reference\n").concat("\n").concat("- **Errors as values**: `!T` (Result), `?T` (Option), `?!T`\n").concat("  (Option-Result). No exceptions. Propagate with `?` postfix.\n").concat("- **Memory**: arena-allocated by default. `let v* = T { … };`\n").concat("  is auto-dropped at block exit. Raw allocation via `malloc`\n").concat("  + `defer free(p)` is supported but rare.\n").concat("- **Concurrency**: M:N coroutines via `spawn fn_call(args);`.\n").concat("  Channels typed as `chan<T>`; `make_chan(cap)`, `c.send(x)`,\n").concat("  `c.recv()`, `c.close()`. OS threads via `spawn_thread`.\n").concat("- **Methods**: `impl T { fn method(self: *T, …) }`. Macros\n").concat("  attached to types follow the same shape.\n").concat("- **Traits + dyn**: `trait T { fn m(self: *Self) }` with\n").concat("  optional default bodies. `*dyn T` for vtable dispatch.\n").concat("- **Generics**: `fn f<T>(v: T)`. Bounds via `T: Trait + Trait`.\n").concat("  Monomorphised; the compiler emits one C fn per concrete T.\n").concat("- **Macros**: builtins `println!` / `format!` / `assert!`;\n").concat("  string interpolation `\"x={x}\"`; `select!` over channels.\n").concat("  Procedural macros by attribute (`@derive(JsonBind)`,\n").concat("  `@handler`, `@logged`, `@trace`) and function-like\n").concat("  `info!` / `warn!` / `error!` / … from `stdlib::log`.\n").concat("- **Doc comments**: `///` triple-slash above the decl. Put\n").concat("  examples in fenced ```glide blocks; show sample output as a\n").concat("  trailing `// result` line — keep this style.\n").concat("\n").concat("## 3. Project commands\n").concat("\n").concat("```\n").concat("glide new <name> [--lib] [--ai]   scaffold a project\n").concat("glide run                        build + run from the manifest\n").concat("glide build [--target=<triple>]  build only (sysroot auto-fetched for cross)\n").concat("glide check <file>               parse + type-check, no codegen\n").concat("glide test [path]                run *_test.glide files\n").concat("glide bench [path]               run *_bench.glide microbenchmarks\n").concat("glide lint [file]                run all lints (project bin by default)\n").concat("glide fix [file]                 apply mechanical fixes\n").concat("glide fmt <file> [--write]       pretty-print, or rewrite in place\n").concat("glide doc --ai                   regenerate llms.txt for THIS file\n").concat("glide add <name> <url> <rev>     add a git dep\n").concat("glide add --local <name> <path>  add a path dep\n").concat("glide remove <name>              drop a dep from glide.glide\n").concat("glide fetch                      pull declared deps\n").concat("glide update                     refresh git deps + rewrite lock\n").concat("glide install <path|git-url>     install a glide binary/tool\n").concat("glide target <list|add|remove>   manage cross-compile sysroots\n").concat("glide clean                      wipe build/ + glide_modules/ + glide.lock\n").concat("glide lsp                        language server on stdio\n").concat("```\n").concat("\n").concat("## 4. House rules\n").concat("\n").concat("- Don't write `try` / `catch`; use `!T` + `?` propagation.\n").concat("- Don't malloc without a paired `defer free(…)` unless the\n").concat("  value is owned by an arena.\n").concat("- Don't use `*chan<T>` parameters when `chan<T>` suffices —\n").concat("  the value already IS a pointer at the C layer.\n").concat("- Don't import `stdlib::http` from a bootstrap context\n").concat("  (`JsonValue` collides with `bootstrap/json.glide`).\n").concat("- Prefer the method form (`v.push(x)`) over the free fn\n").concat("  form (`push(v, x)`) — matches `stdlib::*` conventions.\n").concat("\n").concat("## 5. Lints (compiler-enforced patterns)\n").concat("\n").concat("`glide lint <file>` and the LSP run these checks. Each fires\n").concat("a lint code that `@allow(\"<code>\")` on the enclosing fn or\n").concat("impl method silences. Don't suppress without a justification\n").concat("in a comment — the lint usually points at a real bug.\n").concat("\n").concat("- `null-deref` — using `*p` / `p.field` / `p[i]` where `p` is\n").concat("  provably null (let-bound, or callee param dereferenced\n").concat("  without an `if p == null` guard).\n").concat("- `bad-free` — never `free()` on a Glide `string`, `*Vector`,\n").concat("  or `*HashMap`. Strings are arena-managed; collections have\n").concat("  `.free()` destructors that release internal buffers first.\n").concat("- `string-eq-op` — `==` / `!=` on strings is pointer compare,\n").concat("  not byte compare. Always use `s.eq(other)`.\n").concat("- `unhandled-result` — calling a `!T`-returning fn and\n").concat("  discarding the value silently swallows the error. Use\n").concat("  `f(...)?`, `let _ = f(...)`, or `let bound = f(...)`.\n").concat("- `ignored-option` — `.val` on a `?T` without a preceding\n").concat("  `is_some()` / `.has` guard reads UB on the none branch.\n").concat("- `use-after-free` — accessing `x` after `x.free()` in the\n").concat("  same scope is a dangling-pointer read.\n").concat("- `arena-set` — `__glide_palloc_set(arena)` without a paired\n").concat("  `defer __glide_palloc_set(prev);` leaks the arena bracket.\n").concat("- `coro-blocking` — calling sync I/O (`fs_read`, `process_run`,\n").concat("  etc.) inside a `spawn fn();` stalls the M:N worker. Switch\n").concat("  to `spawn_thread` or the async variant.\n").concat("- `mutex-unbalanced` — every `.lock()` needs `.unlock()` on\n").concat("  every exit (return / `?` / break / continue / fall-through).\n").concat("  The idiom is `m.lock(); defer m.unlock();` right after.\n").concat("- `chan-leak` — channels missing `close()` on any path will\n").concat("  leave receivers parked forever on `recv()`.\n").concat("- `leak-on-early-return` — register `defer x.free();`\n").concat("  IMMEDIATELY after the allocation, never after a `?`.\n").concat("\n").concat("Patterns to follow as default form:\n").concat("\n").concat("```glide\n").concat("// open a coro-arena bracket\n").concat("let prev: *void = __glide_palloc_get();\n").concat("__glide_palloc_set(__glide_palloc_make());\n").concat("defer __glide_palloc_set(prev);\n").concat("defer __glide_palloc_free(__glide_palloc_get());\n").concat("\n").concat("// allocation + cleanup\n").concat("let v: *Vector<i32> = Vector::new();\n").concat("defer v.free();\n").concat("\n").concat("// mutex\n").concat("m.lock();\n").concat("defer m.unlock();\n").concat("\n").concat("// fallible call\n").concat("let x: i32 = parse(s)?;\n").concat("\n").concat("// option unwrap with check\n").concat("let r: ?i32 = lookup(k);\n").concat("if !r.has { return err(\"missing\"); }\n").concat("let v: i32 = r.val;\n").concat("```\n").concat("\n").concat("## 6. Tool-specific notes\n").concat("\n").concat("- **Claude Code / Codex**: this file loads automatically.\n").concat("- **Cursor**: also reads `AGENTS.md`; for older versions,\n").concat("  copy this file to `.cursorrules`.\n").concat("- **Continue / Aider / others**: point your config at this\n").concat("  file or copy its contents into the tool's rules file.\n").concat("\n").concat("---\n").concat("\n").concat("_This file is auto-generated by `glide doc --ai` only when it\n").concat("doesn't already exist. Subsequent runs leave your customisations\n").concat("alone; the `build/doc/llms.txt` reference is regenerated every\n").concat("time._\n");
     write_file(path, body);
 }
 
@@ -361,12 +227,7 @@ fn _write_agents_md(path: string) {
 // by its raw docstring. No HTML, no escaping — assistants pasted
 // these into a chat get the full surface area in tokens cheaply.
 fn _write_llms_txt(path: string, modules: *Vector<DocModule>) {
-    let mut out: string =
-        "# Glide API reference (LLM ingest)\n\n"
-        .concat("Auto-generated from `///` doc comments by `glide doc --ai`.\n")
-        .concat("Each module section lists its `pub` items in source order with\n")
-        .concat("the signature on one line and the raw docstring (markdown)\n")
-        .concat("immediately after.\n\n");
+    let mut out: string = "# Glide API reference (LLM ingest)\n\n".concat("Auto-generated from `///` doc comments by `glide doc --ai`.\n").concat("Each module section lists its `pub` items in source order with\n").concat("the signature on one line and the raw docstring (markdown)\n").concat("immediately after.\n\n");
     for let i: i32 = 0; i < modules.len(); i++ {
         let m: DocModule = modules.get(i);
         out = out.concat("## ").concat(m.display).concat("\n");
@@ -383,8 +244,7 @@ fn _write_llms_txt(path: string, modules: *Vector<DocModule>) {
         out = out.concat("\n");
         for let j: i32 = 0; j < m.items.len(); j++ {
             let it: DocItem = m.items.get(j);
-            out = out.concat("### ").concat(_kind_label(it.kind)).concat(" ")
-                     .concat(it.signature).concat("\n");
+            out = out.concat("### ").concat(_kind_label(it.kind)).concat(" ").concat(it.signature).concat("\n");
             if !it.doc.eq("") {
                 out = out.concat(it.doc).concat("\n");
             }
@@ -402,9 +262,13 @@ fn _find_stdlib_src_root() -> string {
     let exe_dir: string = __glide_exe_dir();
     if !exe_dir.eq("") {
         let probe: string = exe_dir.concat("/src/stdlib/hashmap.glide");
-        if __glide_file_exists(probe) { return exe_dir.concat("/src"); }
+        if __glide_file_exists(probe) {
+            return exe_dir.concat("/src");
+        }
     }
-    if __glide_file_exists("src/stdlib/hashmap.glide") { return "src"; }
+    if __glide_file_exists("src/stdlib/hashmap.glide") {
+        return "src";
+    }
     return "";
 }
 
@@ -412,11 +276,12 @@ extern fn __glide_exe_dir() -> string;
 
 fn _scan_file(path: string, root: string) -> *DocModule {
     let src: string = read_file(path);
-    if src.eq("") { return null; }
+    if src.eq("") {
+        return null;
+    }
     let lex: *Lexer = Lexer::new(src);
     let p: *Parser = Parser::new(lex);
     let parsed: *Vector<Stmt> = parse_program(p);
-
     let items_vec: *Vector<DocItem> = Vector::new();
     let m: *DocModule = __glide_palloc(sizeof(DocModule)) as *DocModule;
     m.origin = path;
@@ -427,13 +292,16 @@ fn _scan_file(path: string, root: string) -> *DocModule {
     m.package = "project";
     m.pkg_repo = "";
     m.pkg_desc = "";
-    m.pkg_ver  = "";
-
+    m.pkg_ver = "";
     for let i: i32 = 0; i < parsed.len(); i++ {
         let s: Stmt = parsed.get(i);
-        if !s.is_pub { continue; }
+        if !s.is_pub {
+            continue;
+        }
         let kind: i32 = _stmt_kind_to_doc(s.kind);
-        if kind == 0 { continue; }
+        if kind == 0 {
+            continue;
+        }
         let doc: string = _strip_triple_slash(s.doc_comment);
         let sig: string = _signature(&s);
         let it: DocItem;
@@ -454,26 +322,50 @@ fn _scan_file(path: string, root: string) -> *DocModule {
 // (ST_IMPL=6) are visited at the file level but their methods are
 // not surfaced — the methods live inside the type's own page.
 fn _stmt_kind_to_doc(k: i32) -> i32 {
-    if k == ST_FN { return 1; }
-    if k == ST_STRUCT { return 2; }
-    if k == ST_ENUM { return 3; }
-    if k == ST_CONST { return 4; }
-    if k == ST_TRAIT { return 5; }
-    if k == ST_MACRO_DEF { return 7; }
+    if k == ST_FN {
+        return 1;
+    }
+    if k == ST_STRUCT {
+        return 2;
+    }
+    if k == ST_ENUM {
+        return 3;
+    }
+    if k == ST_CONST {
+        return 4;
+    }
+    if k == ST_TRAIT {
+        return 5;
+    }
+    if k == ST_MACRO_DEF {
+        return 7;
+    }
     return 0;
 }
 
 fn _signature(s: *Stmt) -> string {
-    if s.kind == ST_FN { return _fn_signature(s); }
-    if s.kind == ST_STRUCT { return "struct ".concat(s.name); }
-    if s.kind == ST_ENUM { return "enum ".concat(s.name); }
+    if s.kind == ST_FN {
+        return _fn_signature(s);
+    }
+    if s.kind == ST_STRUCT {
+        return "struct ".concat(s.name);
+    }
+    if s.kind == ST_ENUM {
+        return "enum ".concat(s.name);
+    }
     if s.kind == ST_CONST {
         let mut head: string = "const ".concat(s.name);
-        if s.let_ty != null { head = head.concat(": ").concat(fmt_type(s.let_ty)); }
+        if s.let_ty != null {
+            head = head.concat(": ").concat(fmt_type(s.let_ty));
+        }
         return head;
     }
-    if s.kind == ST_TRAIT { return "trait ".concat(s.name); }
-    if s.kind == ST_MACRO_DEF { return "macro ".concat(s.name).concat("!"); }
+    if s.kind == ST_TRAIT {
+        return "trait ".concat(s.name);
+    }
+    if s.kind == ST_MACRO_DEF {
+        return "macro ".concat(s.name).concat("!");
+    }
     return s.name;
 }
 
@@ -481,48 +373,67 @@ fn _fn_signature(s: *Stmt) -> string {
     let mut out: string = "fn ".concat(s.name).concat("(");
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
-            if i > 0 { out = out.concat(", "); }
+            if i > 0 {
+                out = out.concat(", ");
+            }
             let p: Param = s.fn_params.get(i);
             out = out.concat(p.name).concat(": ").concat(fmt_type(p.ty));
         }
     }
     out = out.concat(")");
-    if s.fn_ret_ty != null { out = out.concat(" -> ").concat(fmt_type(s.fn_ret_ty)); }
+    if s.fn_ret_ty != null {
+        out = out.concat(" -> ").concat(fmt_type(s.fn_ret_ty));
+    }
     return out;
 }
 
 // Strip the `/// ` (or `///`) prefix from every line of `raw`.
 fn _strip_triple_slash(raw: string) -> string {
-    if raw == null || raw.eq("") { return ""; }
+    if raw == null || raw.eq("") {
+        return "";
+    }
     let lines: *Vector<string> = raw.split("\n");
     let mut out: string = "";
     for let i: i32 = 0; i < lines.len(); i++ {
         let mut ln: string = lines.get(i);
         let mut k: i32 = 0;
-        while k < ln.len() && ln.at(k).to_int() == 32 { k = k + 1; }
-        if k + 3 <= ln.len() && ln.at(k).to_int() == 47
-            && ln.at(k + 1).to_int() == 47 && ln.at(k + 2).to_int() == 47 {
+        while k < ln.len() && ln.at(k).to_int() == 32 {
+            k = k + 1;
+        }
+        if k + 3 <= ln.len() && ln.at(k).to_int() == 47 && ln.at(k + 1).to_int() == 47 && ln.at(k + 2).to_int() == 47 {
             let after: i32 = k + 3;
             let mut start: i32 = after;
-            if start < ln.len() && ln.at(start).to_int() == 32 { start = start + 1; }
+            if start < ln.len() && ln.at(start).to_int() == 32 {
+                start = start + 1;
+            }
             ln = ln.substring(start, ln.len());
-        } else if k + 2 <= ln.len() && ln.at(k).to_int() == 47 && ln.at(k + 1).to_int() == 47 {
-            // Legacy `//` comments — keep as plain text.
-            ln = ln.substring(k + 2, ln.len());
-            if ln.len() > 0 && ln.at(0).to_int() == 32 { ln = ln.substring(1, ln.len()); }
+        } else {
+            if k + 2 <= ln.len() && ln.at(k).to_int() == 47 && ln.at(k + 1).to_int() == 47 {
+                // Legacy `//` comments — keep as plain text.
+                ln = ln.substring(k + 2, ln.len());
+                if ln.len() > 0 && ln.at(0).to_int() == 32 {
+                    ln = ln.substring(1, ln.len());
+                }
+            }
         }
-        if i > 0 { out = out.concat("\n"); }
+        if i > 0 {
+            out = out.concat("\n");
+        }
         out = out.concat(ln);
     }
     return out;
 }
 
 fn _first_line(doc: string) -> string {
-    if doc.eq("") { return ""; }
+    if doc.eq("") {
+        return "";
+    }
     let lines: *Vector<string> = doc.split("\n");
     for let i: i32 = 0; i < lines.len(); i++ {
         let ln: string = lines.get(i).trim();
-        if !ln.eq("") { return ln; }
+        if !ln.eq("") {
+            return ln;
+        }
     }
     return "";
 }
@@ -531,16 +442,23 @@ fn _first_line(doc: string) -> string {
 fn _module_display(path: string, root: string) -> string {
     let mut rel: string = path;
     let r: string = root.concat("/");
-    if rel.starts_with(r) { rel = rel.substring(r.len(), rel.len()); }
-    if rel.starts_with("src/") { rel = rel.substring(4, rel.len()); }
+    if rel.starts_with(r) {
+        rel = rel.substring(r.len(), rel.len());
+    }
+    if rel.starts_with("src/") {
+        rel = rel.substring(4, rel.len());
+    }
     if rel.len() > 6 && rel.substring(rel.len() - 6, rel.len()).eq(".glide") {
         rel = rel.substring(0, rel.len() - 6);
     }
     let mut out: string = "";
     for let i: i32 = 0; i < rel.len(); i++ {
         let c: i32 = rel.at(i).to_int();
-        if c == 47 || c == 92 { out = out.concat("::"); }
-        else { out = out.concat(rel.substring(i, i + 1)); }
+        if c == 47 || c == 92 {
+            out = out.concat("::");
+        } else {
+            out = out.concat(rel.substring(i, i + 1));
+        }
     }
     return out;
 }
@@ -563,7 +481,9 @@ fn _slug(display: string) -> string {
 }
 
 fn _ends_with(s: string, suffix: string) -> bool {
-    if suffix.len() > s.len() { return false; }
+    if suffix.len() > s.len() {
+        return false;
+    }
     return s.substring(s.len() - suffix.len(), s.len()).eq(suffix);
 }
 
@@ -572,24 +492,35 @@ fn _ends_with(s: string, suffix: string) -> bool {
 // (`<root>/glide_modules/...`) and `tests/` trees without false hits
 // on names that happen to contain the same substring.
 fn _contains_segment(path: string, seg: string) -> bool {
-    if path == null || seg == null || seg.eq("") { return false; }
+    if path == null || seg == null || seg.eq("") {
+        return false;
+    }
     let n: i32 = path.len();
     let m: i32 = seg.len();
-    if m > n { return false; }
+    if m > n {
+        return false;
+    }
     for let i: i32 = 0; i + m <= n; i++ {
         let mut hit: bool = true;
         for let j: i32 = 0; j < m; j++ {
             let a: i32 = path.at(i + j).to_int();
             let b: i32 = seg.at(j).to_int();
-            if a != b { hit = false; break; }
+            if a != b {
+                hit = false;
+                break;
+            }
         }
-        if !hit { continue; }
+        if !hit {
+            continue;
+        }
         let before: i32 = if i == 0 { 47 } else { path.at(i - 1).to_int() };
         let after_idx: i32 = i + m;
         let after: i32 = if after_idx >= n { 47 } else { path.at(after_idx).to_int() };
         let lb: bool = before == 47 || before == 92;
         let la: bool = after == 47 || after == 92;
-        if lb && la { return true; }
+        if lb && la {
+            return true;
+        }
     }
     return false;
 }
@@ -599,11 +530,23 @@ fn _esc(s: string) -> string {
     let mut out: string = "";
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
-        if c == 60 { out = out.concat("&lt;"); }
-        else if c == 62 { out = out.concat("&gt;"); }
-        else if c == 38 { out = out.concat("&amp;"); }
-        else if c == 34 { out = out.concat("&quot;"); }
-        else { out = out.concat(s.substring(i, i + 1)); }
+        if c == 60 {
+            out = out.concat("&lt;");
+        } else {
+            if c == 62 {
+                out = out.concat("&gt;");
+            } else {
+                if c == 38 {
+                    out = out.concat("&amp;");
+                } else {
+                    if c == 34 {
+                        out = out.concat("&quot;");
+                    } else {
+                        out = out.concat(s.substring(i, i + 1));
+                    }
+                }
+            }
+        }
     }
     return out;
 }
@@ -614,7 +557,9 @@ fn _esc(s: string) -> string {
 //   - inline `code`
 //   - leading `#` / `##` headings
 fn _render_markdown(md: string) -> string {
-    if md.eq("") { return ""; }
+    if md.eq("") {
+        return "";
+    }
     let lines: *Vector<string> = md.split("\n");
     let mut out: string = "";
     let mut in_code: bool = false;
@@ -631,13 +576,18 @@ fn _render_markdown(md: string) -> string {
                 code_buf = "";
                 code_lang = "";
             } else {
-                if !code_buf.eq("") { code_buf = code_buf.concat("\n"); }
+                if !code_buf.eq("") {
+                    code_buf = code_buf.concat("\n");
+                }
                 code_buf = code_buf.concat(raw);
             }
             continue;
         }
         if trimmed.starts_with("```") {
-            if !para.eq("") { out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n"); para = ""; }
+            if !para.eq("") {
+                out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n");
+                para = "";
+            }
             code_lang = trimmed.substring(3, trimmed.len()).trim();
             in_code = true;
             continue;
@@ -650,16 +600,24 @@ fn _render_markdown(md: string) -> string {
             continue;
         }
         if trimmed.starts_with("# ") {
-            if !para.eq("") { out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n"); para = ""; }
+            if !para.eq("") {
+                out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n");
+                para = "";
+            }
             out = out.concat("<h3>").concat(_inline_md(trimmed.substring(2, trimmed.len()))).concat("</h3>\n");
             continue;
         }
         if trimmed.starts_with("## ") {
-            if !para.eq("") { out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n"); para = ""; }
+            if !para.eq("") {
+                out = out.concat("<p>").concat(_inline_md(para)).concat("</p>\n");
+                para = "";
+            }
             out = out.concat("<h4>").concat(_inline_md(trimmed.substring(3, trimmed.len()))).concat("</h4>\n");
             continue;
         }
-        if !para.eq("") { para = para.concat(" "); }
+        if !para.eq("") {
+            para = para.concat(" ");
+        }
         para = para.concat(trimmed);
     }
     if !para.eq("") {
@@ -677,20 +635,16 @@ fn _render_markdown(md: string) -> string {
 // verbatim — keeping shell snippets readable without false highlights.
 fn _render_code_frame(lang: string, code: string) -> string {
     let mut title: string = "glide";
-    if !lang.eq("") { title = lang; }
+    if !lang.eq("") {
+        title = lang;
+    }
     let mut body: string = "";
     if lang.eq("") || lang.eq("glide") {
         body = _highlight_glide(code);
     } else {
         body = _esc(code);
     }
-    return "<div class=\"code-frame\">\n"
-        .concat("  <div class=\"code-frame-bar\">\n")
-        .concat("    <span class=\"dot\"></span><span class=\"dot\"></span><span class=\"dot\"></span>\n")
-        .concat("    <span class=\"code-frame-title\">").concat(_esc(title)).concat("</span>\n")
-        .concat("  </div>\n")
-        .concat("  <pre class=\"code\"><code>").concat(body).concat("</code></pre>\n")
-        .concat("</div>\n");
+    return "<div class=\"code-frame\">\n".concat("  <div class=\"code-frame-bar\">\n").concat("    <span class=\"dot\"></span><span class=\"dot\"></span><span class=\"dot\"></span>\n").concat("    <span class=\"code-frame-title\">").concat(_esc(title)).concat("</span>\n").concat("  </div>\n").concat("  <pre class=\"code\"><code>").concat(body).concat("</code></pre>\n").concat("</div>\n");
 }
 
 // Single-pass, byte-level highlighter. Walks the source emitting either
@@ -711,7 +665,9 @@ fn _highlight_glide(src: string) -> string {
         // Line comment: `//` ... EOL
         if c == 47 && i + 1 < n && src.at(i + 1).to_int() == 47 {
             let mut j: i32 = i;
-            while j < n && src.at(j).to_int() != 10 { j = j + 1; }
+            while j < n && src.at(j).to_int() != 10 {
+                j = j + 1;
+            }
             out = out.concat("<span class=\"cmt\">").concat(_esc(src.substring(i, j))).concat("</span>");
             i = j;
             continue;
@@ -721,8 +677,14 @@ fn _highlight_glide(src: string) -> string {
             let mut j: i32 = i + 1;
             while j < n {
                 let cj: i32 = src.at(j).to_int();
-                if cj == 92 && j + 1 < n { j = j + 2; continue; }
-                if cj == 34 { j = j + 1; break; }
+                if cj == 92 && j + 1 < n {
+                    j = j + 2;
+                    continue;
+                }
+                if cj == 34 {
+                    j = j + 1;
+                    break;
+                }
                 j = j + 1;
             }
             out = out.concat("<span class=\"str\">").concat(_esc(src.substring(i, j))).concat("</span>");
@@ -734,22 +696,28 @@ fn _highlight_glide(src: string) -> string {
             let mut j: i32 = i;
             while j < n {
                 let cj: i32 = src.at(j).to_int();
-                if (cj >= 48 && cj <= 57) || cj == 46 || cj == 95 { j = j + 1; }
-                else { break; }
+                if cj >= 48 && cj <= 57 || cj == 46 || cj == 95 {
+                    j = j + 1;
+                } else {
+                    break;
+                }
             }
             out = out.concat("<span class=\"num\">").concat(src.substring(i, j)).concat("</span>");
             i = j;
             continue;
         }
         // Identifier (letter / underscore start)
-        let is_id_start: bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+        let is_id_start: bool = c >= 65 && c <= 90 || c >= 97 && c <= 122 || c == 95;
         if is_id_start {
             let mut j: i32 = i;
             while j < n {
                 let cj: i32 = src.at(j).to_int();
-                let cont: bool = (cj >= 65 && cj <= 90) || (cj >= 97 && cj <= 122)
-                              || (cj >= 48 && cj <= 57) || cj == 95;
-                if cont { j = j + 1; } else { break; }
+                let cont: bool = cj >= 65 && cj <= 90 || cj >= 97 && cj <= 122 || cj >= 48 && cj <= 57 || cj == 95;
+                if cont {
+                    j = j + 1;
+                } else {
+                    break;
+                }
             }
             let word: string = src.substring(i, j);
             let cls: string = _classify_ident(word, src, j, n);
@@ -769,34 +737,30 @@ fn _highlight_glide(src: string) -> string {
 }
 
 fn _classify_ident(word: string, src: string, j: i32, n: i32) -> string {
-    if _is_kw_word(word) { return "kw"; }
-    if _is_ty_word(word) { return "ty"; }
+    if _is_kw_word(word) {
+        return "kw";
+    }
+    if _is_ty_word(word) {
+        return "ty";
+    }
     // ident followed by `(` -> function call
-    if j < n && src.at(j).to_int() == 40 { return "fn"; }
+    if j < n && src.at(j).to_int() == 40 {
+        return "fn";
+    }
     // Capitalised identifier — likely a struct / trait / enum.
     let c0: i32 = word.at(0).to_int();
-    if c0 >= 65 && c0 <= 90 { return "ty"; }
+    if c0 >= 65 && c0 <= 90 {
+        return "ty";
+    }
     return "";
 }
 
 fn _is_kw_word(w: string) -> bool {
-    return w.eq("fn") || w.eq("let") || w.eq("mut") || w.eq("if") || w.eq("else")
-        || w.eq("while") || w.eq("for") || w.eq("in") || w.eq("return")
-        || w.eq("spawn") || w.eq("spawn_thread") || w.eq("defer") || w.eq("defer_err")
-        || w.eq("import") || w.eq("pub") || w.eq("extern") || w.eq("struct")
-        || w.eq("enum") || w.eq("trait") || w.eq("impl") || w.eq("match")
-        || w.eq("break") || w.eq("continue") || w.eq("where") || w.eq("const")
-        || w.eq("true") || w.eq("false") || w.eq("null") || w.eq("as")
-        || w.eq("sizeof") || w.eq("self") || w.eq("Self") || w.eq("use")
-        || w.eq("dyn") || w.eq("select") || w.eq("ok") || w.eq("err")
-        || w.eq("some") || w.eq("none");
+    return w.eq("fn") || w.eq("let") || w.eq("mut") || w.eq("if") || w.eq("else") || w.eq("while") || w.eq("for") || w.eq("in") || w.eq("return") || w.eq("spawn") || w.eq("spawn_thread") || w.eq("defer") || w.eq("defer_err") || w.eq("import") || w.eq("pub") || w.eq("extern") || w.eq("struct") || w.eq("enum") || w.eq("trait") || w.eq("impl") || w.eq("match") || w.eq("break") || w.eq("continue") || w.eq("where") || w.eq("const") || w.eq("true") || w.eq("false") || w.eq("null") || w.eq("as") || w.eq("sizeof") || w.eq("self") || w.eq("Self") || w.eq("use") || w.eq("dyn") || w.eq("select") || w.eq("ok") || w.eq("err") || w.eq("some") || w.eq("none");
 }
 
 fn _is_ty_word(w: string) -> bool {
-    return w.eq("int") || w.eq("bool") || w.eq("string") || w.eq("void")
-        || w.eq("float") || w.eq("double") || w.eq("byte") || w.eq("char")
-        || w.eq("i32") || w.eq("i64") || w.eq("u32") || w.eq("u64")
-        || w.eq("chan");
+    return w.eq("int") || w.eq("bool") || w.eq("string") || w.eq("void") || w.eq("float") || w.eq("double") || w.eq("byte") || w.eq("char") || w.eq("i32") || w.eq("i64") || w.eq("u32") || w.eq("u64") || w.eq("chan");
 }
 
 // Inline markdown: just backtick → <code>. Escape everything else.
@@ -820,94 +784,37 @@ fn _inline_md(s: string) -> string {
         }
         buf = buf.concat(s.substring(i, i + 1));
     }
-    if in_code { out = out.concat("`").concat(_esc(buf)); }
-    else { out = out.concat(_esc(buf)); }
+    if in_code {
+        out = out.concat("`").concat(_esc(buf));
+    } else {
+        out = out.concat(_esc(buf));
+    }
     return out;
 }
 
 fn _doc_css() -> string {
-    return ":root{--bg:#0b1020;--bg-2:#0f1530;--panel:#121a36;--border:#1e2a5e;--border-soft:#1a2247;--text:#e7ecff;--text-dim:#a4adcf;--muted:#6b769d;--accent:#6b8afd;--accent-2:#3b5bdb;--kw:#c084fc;--fn:#8ab4ff;--ty:#5eead4;--str:#f5b76b;--num:#f08fb8;--cmt:#5b6794;--radius:10px;--radius-lg:14px;--container:1080px}\n".concat(
-        "*{box-sizing:border-box}\n").concat(
-        "html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}\n").concat(
-        "body{background:radial-gradient(900px 480px at 80% -10%,rgba(59,91,219,0.18),transparent 60%),radial-gradient(700px 400px at -10% 20%,rgba(107,138,253,0.10),transparent 55%),var(--bg);min-height:100vh}\n").concat(
-        "a{color:var(--accent);text-decoration:none;transition:color 120ms ease}\n").concat(
-        "a:hover{color:#9bb0ff}\n").concat(
-        "code,pre{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:13.5px}\n").concat(
-        "h1,h2,h3,h4,h5{margin:0;letter-spacing:-0.02em;color:#f4f6ff;font-weight:600}\n").concat(
-        "p{margin:0 0 1em 0}p:last-child{margin-bottom:0}\n").concat(
-        ".nav{display:flex;align-items:center;justify-content:space-between;max-width:var(--container);margin:0 auto;padding:22px 28px}\n").concat(
-        ".brand{display:inline-flex;align-items:baseline;gap:8px;font-weight:600;font-size:18px;color:var(--text);letter-spacing:-0.02em}\n").concat(
-        ".brand:hover{color:var(--text)}\n").concat(
-        ".brand-sub{color:var(--muted);font-weight:400;font-size:14.5px;font-family:'JetBrains Mono',monospace}\n").concat(
-        ".nav-links{display:flex;align-items:center;gap:24px}\n").concat(
-        ".nav-links a{color:var(--text-dim);font-size:14.5px;font-weight:500}\n").concat(
-        ".nav-links a:hover{color:var(--text)}\n").concat(
-        "main{max-width:var(--container);margin:0 auto;padding:0 28px 80px}\n").concat(
-        ".hero{padding:40px 0 28px}\n").concat(
-        ".hero h1{font-size:clamp(28px,3.6vw,40px);line-height:1.1;letter-spacing:-0.03em;margin-bottom:12px}\n").concat(
-        ".hero .lede{color:var(--text-dim);font-size:16.5px;max-width:680px}\n").concat(
-        ".eyebrow{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--accent);padding:5px 10px;border:1px solid rgba(107,138,253,0.30);border-radius:999px;background:rgba(107,138,253,0.06);margin-bottom:18px}\n").concat(
-        ".back{display:inline-block;margin-bottom:14px;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--text-dim)}\n").concat(
-        ".back:hover{color:var(--accent)}\n").concat(
-        ".origin{color:var(--muted);font-size:14px;margin-bottom:6px}\n").concat(
-        ".origin code{background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff;font-size:12.5px}\n").concat(
-        ".pkg-group{margin:34px 0 0}\n").concat(
-        ".pkg-head{display:flex;flex-direction:column;gap:4px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border-soft)}\n").concat(
-        ".pkg-head h2{font-size:18px;letter-spacing:-0.01em;display:inline}\n").concat(
-        ".pkg-head .pkg-ver{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-left:8px}\n").concat(
-        ".pkg-head .pkg-desc{color:var(--text-dim);font-size:14px;margin:0}\n").concat(
-        ".pkg-head .pkg-repo{margin:0}\n").concat(
-        ".pkg-head .pkg-repo a{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--accent)}\n").concat(
-        ".modules{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:14px}\n").concat(
-        ".module-card{background:linear-gradient(180deg,rgba(30,42,94,0.30),rgba(15,21,48,0.55));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:18px 20px;transition:border-color 160ms ease,transform 160ms ease}\n").concat(
-        ".module-card:hover{border-color:rgba(107,138,253,0.45);transform:translateY(-1px)}\n").concat(
-        ".module-card h3{font-size:15.5px;margin-bottom:6px;font-family:'JetBrains Mono',monospace;font-weight:600}\n").concat(
-        ".module-card h3 a{color:var(--text)}\n").concat(
-        ".module-card h3 a:hover{color:var(--accent)}\n").concat(
-        ".module-card .blurb{color:var(--text-dim);font-size:14px;margin-bottom:10px}\n").concat(
-        ".module-card .counts{color:var(--muted);font-size:12.5px;font-family:'JetBrains Mono',monospace;margin:0}\n").concat(
-        ".toc{background:linear-gradient(180deg,rgba(30,42,94,0.22),rgba(15,21,48,0.40));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:16px 20px;margin:18px 0 30px}\n").concat(
-        ".toc h4{font-size:11.5px;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:12px;font-weight:600}\n").concat(
-        ".toc ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,1fr);gap:6px 18px}\n").concat(
-        ".toc li{font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;align-items:baseline;gap:8px}\n").concat(
-        ".toc li a{color:var(--text-dim)}\n").concat(
-        ".toc li a:hover{color:var(--accent)}\n").concat(
-        ".toc li .toc-kind{display:inline-block;min-width:46px;color:var(--muted);font-size:11px;text-transform:lowercase}\n").concat(
-        ".items{display:flex;flex-direction:column;gap:22px}\n").concat(
-        ".item{background:linear-gradient(180deg,rgba(30,42,94,0.22),rgba(15,21,48,0.40));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:22px 24px;scroll-margin-top:24px}\n").concat(
-        ".item-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}\n").concat(
-        ".kind{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:6px;background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.22);color:var(--accent);text-transform:lowercase;letter-spacing:0.02em}\n").concat(
-        ".kind-struct{color:#5eead4;background:rgba(94,234,212,0.10);border-color:rgba(94,234,212,0.24)}\n").concat(
-        ".kind-trait{color:#c084fc;background:rgba(192,132,252,0.10);border-color:rgba(192,132,252,0.24)}\n").concat(
-        ".kind-enum{color:#f08fb8;background:rgba(240,143,184,0.10);border-color:rgba(240,143,184,0.24)}\n").concat(
-        ".kind-macro{color:#f5b76b;background:rgba(245,183,107,0.10);border-color:rgba(245,183,107,0.24)}\n").concat(
-        ".kind-const{color:#ffd166;background:rgba(255,209,102,0.10);border-color:rgba(255,209,102,0.24)}\n").concat(
-        ".sig{font-family:'JetBrains Mono',monospace;font-size:14px;color:#d8dfff;word-break:break-word}\n").concat(
-        ".doc{color:var(--text-dim);font-size:15px;line-height:1.65}\n").concat(
-        ".doc p{margin:0 0 10px 0}.doc p:last-child{margin-bottom:0}\n").concat(
-        ".doc h3,.doc h4{color:#f4f6ff;margin-top:16px;margin-bottom:8px;font-size:15px}\n").concat(
-        ".doc code{font-size:12.5px;background:rgba(107,138,253,0.12);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff}\n").concat(
-        ".code-frame{background:linear-gradient(180deg,#0f1633 0%,#0c1228 100%);border:1px solid var(--border-soft);border-radius:var(--radius);overflow:hidden;margin:10px 0 14px;box-shadow:0 1px 0 rgba(255,255,255,0.04) inset}\n").concat(
-        ".code-frame-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border-soft)}\n").concat(
-        ".dot{width:9px;height:9px;border-radius:50%;background:#2a335a}\n").concat(
-        ".code-frame-title{margin-left:8px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)}\n").concat(
-        "pre.code{margin:0;padding:18px 20px;overflow-x:auto;background:transparent;color:#d8dfff;line-height:1.65;font-size:13px}\n").concat(
-        "pre.code code{background:transparent;padding:0;border:0;color:inherit;font-size:13px}\n").concat(
-        ".kw{color:var(--kw)}.fn{color:var(--fn)}.ty{color:var(--ty)}.str{color:var(--str)}.num{color:var(--num)}.cmt{color:var(--cmt);font-style:italic}\n").concat(
-        ".footer{border-top:1px solid var(--border-soft);background:rgba(8,12,30,0.4);margin-top:60px}\n").concat(
-        ".footer-row{max-width:var(--container);margin:0 auto;padding:24px 28px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:13px;flex-wrap:wrap;gap:12px}\n").concat(
-        ".footer-row a{color:var(--muted)}.footer-row a:hover{color:var(--accent)}\n").concat(
-        ".footer-row code{background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff;font-size:12px}\n").concat(
-        "@media (max-width:720px){.modules{grid-template-columns:1fr}.toc ul{grid-template-columns:1fr}main{padding:0 20px 60px}.nav-links{gap:14px}}\n");
+    return ":root{--bg:#0b1020;--bg-2:#0f1530;--panel:#121a36;--border:#1e2a5e;--border-soft:#1a2247;--text:#e7ecff;--text-dim:#a4adcf;--muted:#6b769d;--accent:#6b8afd;--accent-2:#3b5bdb;--kw:#c084fc;--fn:#8ab4ff;--ty:#5eead4;--str:#f5b76b;--num:#f08fb8;--cmt:#5b6794;--radius:10px;--radius-lg:14px;--container:1080px}\n".concat("*{box-sizing:border-box}\n").concat("html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}\n").concat("body{background:radial-gradient(900px 480px at 80% -10%,rgba(59,91,219,0.18),transparent 60%),radial-gradient(700px 400px at -10% 20%,rgba(107,138,253,0.10),transparent 55%),var(--bg);min-height:100vh}\n").concat("a{color:var(--accent);text-decoration:none;transition:color 120ms ease}\n").concat("a:hover{color:#9bb0ff}\n").concat("code,pre{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:13.5px}\n").concat("h1,h2,h3,h4,h5{margin:0;letter-spacing:-0.02em;color:#f4f6ff;font-weight:600}\n").concat("p{margin:0 0 1em 0}p:last-child{margin-bottom:0}\n").concat(".nav{display:flex;align-items:center;justify-content:space-between;max-width:var(--container);margin:0 auto;padding:22px 28px}\n").concat(".brand{display:inline-flex;align-items:baseline;gap:8px;font-weight:600;font-size:18px;color:var(--text);letter-spacing:-0.02em}\n").concat(".brand:hover{color:var(--text)}\n").concat(".brand-sub{color:var(--muted);font-weight:400;font-size:14.5px;font-family:'JetBrains Mono',monospace}\n").concat(".nav-links{display:flex;align-items:center;gap:24px}\n").concat(".nav-links a{color:var(--text-dim);font-size:14.5px;font-weight:500}\n").concat(".nav-links a:hover{color:var(--text)}\n").concat("main{max-width:var(--container);margin:0 auto;padding:0 28px 80px}\n").concat(".hero{padding:40px 0 28px}\n").concat(".hero h1{font-size:clamp(28px,3.6vw,40px);line-height:1.1;letter-spacing:-0.03em;margin-bottom:12px}\n").concat(".hero .lede{color:var(--text-dim);font-size:16.5px;max-width:680px}\n").concat(".eyebrow{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--accent);padding:5px 10px;border:1px solid rgba(107,138,253,0.30);border-radius:999px;background:rgba(107,138,253,0.06);margin-bottom:18px}\n").concat(".back{display:inline-block;margin-bottom:14px;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--text-dim)}\n").concat(".back:hover{color:var(--accent)}\n").concat(".origin{color:var(--muted);font-size:14px;margin-bottom:6px}\n").concat(".origin code{background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff;font-size:12.5px}\n").concat(".pkg-group{margin:34px 0 0}\n").concat(".pkg-head{display:flex;flex-direction:column;gap:4px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border-soft)}\n").concat(".pkg-head h2{font-size:18px;letter-spacing:-0.01em;display:inline}\n").concat(".pkg-head .pkg-ver{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-left:8px}\n").concat(".pkg-head .pkg-desc{color:var(--text-dim);font-size:14px;margin:0}\n").concat(".pkg-head .pkg-repo{margin:0}\n").concat(".pkg-head .pkg-repo a{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--accent)}\n").concat(".modules{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:14px}\n").concat(".module-card{background:linear-gradient(180deg,rgba(30,42,94,0.30),rgba(15,21,48,0.55));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:18px 20px;transition:border-color 160ms ease,transform 160ms ease}\n").concat(".module-card:hover{border-color:rgba(107,138,253,0.45);transform:translateY(-1px)}\n").concat(".module-card h3{font-size:15.5px;margin-bottom:6px;font-family:'JetBrains Mono',monospace;font-weight:600}\n").concat(".module-card h3 a{color:var(--text)}\n").concat(".module-card h3 a:hover{color:var(--accent)}\n").concat(".module-card .blurb{color:var(--text-dim);font-size:14px;margin-bottom:10px}\n").concat(".module-card .counts{color:var(--muted);font-size:12.5px;font-family:'JetBrains Mono',monospace;margin:0}\n").concat(".toc{background:linear-gradient(180deg,rgba(30,42,94,0.22),rgba(15,21,48,0.40));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:16px 20px;margin:18px 0 30px}\n").concat(".toc h4{font-size:11.5px;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:12px;font-weight:600}\n").concat(".toc ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,1fr);gap:6px 18px}\n").concat(".toc li{font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;align-items:baseline;gap:8px}\n").concat(".toc li a{color:var(--text-dim)}\n").concat(".toc li a:hover{color:var(--accent)}\n").concat(".toc li .toc-kind{display:inline-block;min-width:46px;color:var(--muted);font-size:11px;text-transform:lowercase}\n").concat(".items{display:flex;flex-direction:column;gap:22px}\n").concat(".item{background:linear-gradient(180deg,rgba(30,42,94,0.22),rgba(15,21,48,0.40));border:1px solid var(--border-soft);border-radius:var(--radius-lg);padding:22px 24px;scroll-margin-top:24px}\n").concat(".item-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}\n").concat(".kind{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:6px;background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.22);color:var(--accent);text-transform:lowercase;letter-spacing:0.02em}\n").concat(".kind-struct{color:#5eead4;background:rgba(94,234,212,0.10);border-color:rgba(94,234,212,0.24)}\n").concat(".kind-trait{color:#c084fc;background:rgba(192,132,252,0.10);border-color:rgba(192,132,252,0.24)}\n").concat(".kind-enum{color:#f08fb8;background:rgba(240,143,184,0.10);border-color:rgba(240,143,184,0.24)}\n").concat(".kind-macro{color:#f5b76b;background:rgba(245,183,107,0.10);border-color:rgba(245,183,107,0.24)}\n").concat(".kind-const{color:#ffd166;background:rgba(255,209,102,0.10);border-color:rgba(255,209,102,0.24)}\n").concat(".sig{font-family:'JetBrains Mono',monospace;font-size:14px;color:#d8dfff;word-break:break-word}\n").concat(".doc{color:var(--text-dim);font-size:15px;line-height:1.65}\n").concat(".doc p{margin:0 0 10px 0}.doc p:last-child{margin-bottom:0}\n").concat(".doc h3,.doc h4{color:#f4f6ff;margin-top:16px;margin-bottom:8px;font-size:15px}\n").concat(".doc code{font-size:12.5px;background:rgba(107,138,253,0.12);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff}\n").concat(".code-frame{background:linear-gradient(180deg,#0f1633 0%,#0c1228 100%);border:1px solid var(--border-soft);border-radius:var(--radius);overflow:hidden;margin:10px 0 14px;box-shadow:0 1px 0 rgba(255,255,255,0.04) inset}\n").concat(".code-frame-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border-soft)}\n").concat(".dot{width:9px;height:9px;border-radius:50%;background:#2a335a}\n").concat(".code-frame-title{margin-left:8px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)}\n").concat("pre.code{margin:0;padding:18px 20px;overflow-x:auto;background:transparent;color:#d8dfff;line-height:1.65;font-size:13px}\n").concat("pre.code code{background:transparent;padding:0;border:0;color:inherit;font-size:13px}\n").concat(".kw{color:var(--kw)}.fn{color:var(--fn)}.ty{color:var(--ty)}.str{color:var(--str)}.num{color:var(--num)}.cmt{color:var(--cmt);font-style:italic}\n").concat(".footer{border-top:1px solid var(--border-soft);background:rgba(8,12,30,0.4);margin-top:60px}\n").concat(".footer-row{max-width:var(--container);margin:0 auto;padding:24px 28px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:13px;flex-wrap:wrap;gap:12px}\n").concat(".footer-row a{color:var(--muted)}.footer-row a:hover{color:var(--accent)}\n").concat(".footer-row code{background:rgba(107,138,253,0.10);border:1px solid rgba(107,138,253,0.18);padding:1px 6px;border-radius:5px;color:#c4d0ff;font-size:12px}\n").concat("@media (max-width:720px){.modules{grid-template-columns:1fr}.toc ul{grid-template-columns:1fr}main{padding:0 20px 60px}.nav-links{gap:14px}}\n");
 }
 
 fn _kind_label(kind: i32) -> string {
-    if kind == 1 { return "fn"; }
-    if kind == 2 { return "struct"; }
-    if kind == 3 { return "enum"; }
-    if kind == 4 { return "const"; }
-    if kind == 5 { return "trait"; }
-    if kind == 7 { return "macro"; }
+    if kind == 1 {
+        return "fn";
+    }
+    if kind == 2 {
+        return "struct";
+    }
+    if kind == 3 {
+        return "enum";
+    }
+    if kind == 4 {
+        return "const";
+    }
+    if kind == 5 {
+        return "trait";
+    }
+    if kind == 7 {
+        return "macro";
+    }
     return "?";
 }
 
@@ -917,15 +824,7 @@ fn _write_index(out_dir: string, modules: *Vector<DocModule>) {
         total_items = total_items + modules.get(i).items.len();
     }
     let mut html: string = _html_head("API reference", ".");
-    html = html.concat("<section class=\"hero\">\n")
-        .concat("  <div class=\"eyebrow\">api reference</div>\n")
-        .concat("  <h1>Glide modules</h1>\n")
-        .concat("  <p class=\"lede\">")
-        .concat(int_to_str(modules.len())).concat(" modules, ")
-        .concat(int_to_str(total_items)).concat(" public items. ")
-        .concat("Auto-generated from <code>///</code> doc comments — each card opens its own page.</p>\n")
-        .concat("</section>\n");
-
+    html = html.concat("<section class=\"hero\">\n").concat("  <div class=\"eyebrow\">api reference</div>\n").concat("  <h1>Glide modules</h1>\n").concat("  <p class=\"lede\">").concat(int_to_str(modules.len())).concat(" modules, ").concat(int_to_str(total_items)).concat(" public items. ").concat("Auto-generated from <code>///</code> doc comments — each card opens its own page.</p>\n").concat("</section>\n");
     // Walk packages in a stable order: project first, declared deps in
     // the order they appear in the manifest (preserved by `modules`'
     // insertion order), stdlib last.
@@ -933,22 +832,27 @@ fn _write_index(out_dir: string, modules: *Vector<DocModule>) {
     let seen: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < modules.len(); i++ {
         let pkg: string = modules.get(i).package;
-        if pkg.eq("") || seen.contains(pkg) { continue; }
+        if pkg.eq("") || seen.contains(pkg) {
+            continue;
+        }
         seen.insert(pkg, true);
         groups.push(pkg);
     }
-
     for let g: i32 = 0; g < groups.len(); g++ {
         let pkg: string = groups.get(g);
         // Pick the first module of this group so the group-level metadata
         // (repo/desc/version, captured during the scan) renders once.
         let mut head_idx: i32 = -1;
         for let i: i32 = 0; i < modules.len(); i++ {
-            if modules.get(i).package.eq(pkg) { head_idx = i; break; }
+            if modules.get(i).package.eq(pkg) {
+                head_idx = i;
+                break;
+            }
         }
-        if head_idx < 0 { continue; }
+        if head_idx < 0 {
+            continue;
+        }
         let head: DocModule = modules.get(head_idx);
-
         html = html.concat("<section class=\"pkg-group\">\n");
         html = html.concat("  <header class=\"pkg-head\">\n");
         html = html.concat("    <h2>").concat(_esc(_pkg_title(pkg))).concat("</h2>\n");
@@ -960,22 +864,24 @@ fn _write_index(out_dir: string, modules: *Vector<DocModule>) {
         }
         if !head.pkg_repo.eq("") {
             let href: string = _repo_href(head.pkg_repo);
-            html = html.concat("    <p class=\"pkg-repo\"><a href=\"")
-                .concat(_esc(href)).concat("\">").concat(_esc(head.pkg_repo)).concat("</a></p>\n");
+            html = html.concat("    <p class=\"pkg-repo\"><a href=\"").concat(_esc(href)).concat("\">").concat(_esc(head.pkg_repo)).concat("</a></p>\n");
         }
         html = html.concat("  </header>\n");
         html = html.concat("  <div class=\"modules\">\n");
         for let i: i32 = 0; i < modules.len(); i++ {
             let m: DocModule = modules.get(i);
-            if !m.package.eq(pkg) { continue; }
+            if !m.package.eq(pkg) {
+                continue;
+            }
             html = html.concat("    <article class=\"module-card\">\n");
             html = html.concat("      <h3><a href=\"").concat(m.slug).concat(".html\">").concat(_esc(m.display)).concat("</a></h3>\n");
             if !m.blurb.eq("") {
                 html = html.concat("      <p class=\"blurb\">").concat(_esc(m.blurb)).concat("</p>\n");
             }
-            html = html.concat("      <p class=\"counts\">")
-                .concat(int_to_str(m.items.len())).concat(" item");
-            if m.items.len() != 1 { html = html.concat("s"); }
+            html = html.concat("      <p class=\"counts\">").concat(int_to_str(m.items.len())).concat(" item");
+            if m.items.len() != 1 {
+                html = html.concat("s");
+            }
             html = html.concat("</p>\n");
             html = html.concat("    </article>\n");
         }
@@ -988,8 +894,12 @@ fn _write_index(out_dir: string, modules: *Vector<DocModule>) {
 
 // Human-readable title for a package group on the index page.
 fn _pkg_title(pkg: string) -> string {
-    if pkg.eq("project") { return "Project"; }
-    if pkg.eq("stdlib")  { return "Standard library"; }
+    if pkg.eq("project") {
+        return "Project";
+    }
+    if pkg.eq("stdlib") {
+        return "Standard library";
+    }
     return "Dep: ".concat(pkg);
 }
 
@@ -998,36 +908,30 @@ fn _pkg_title(pkg: string) -> string {
 // URLs are passed through unchanged so users who write the full URL
 // still get a working link.
 fn _repo_href(repo: string) -> string {
-    if repo == null || repo.eq("") { return ""; }
-    if repo.starts_with("http://") || repo.starts_with("https://") { return repo; }
+    if repo == null || repo.eq("") {
+        return "";
+    }
+    if repo.starts_with("http://") || repo.starts_with("https://") {
+        return repo;
+    }
     return "https://".concat(repo);
 }
 
 fn _write_module_page(out_dir: string, m: *DocModule) {
     let mut html: string = _html_head(m.display, ".");
-    html = html.concat("<section class=\"hero\">\n")
-        .concat("  <a class=\"back\" href=\"index.html\">← all modules</a>\n")
-        .concat("  <div class=\"eyebrow\">module</div>\n")
-        .concat("  <h1>").concat(_esc(m.display)).concat("</h1>\n")
-        .concat("  <p class=\"origin\">defined in <code>").concat(_esc(m.origin)).concat("</code></p>\n");
+    html = html.concat("<section class=\"hero\">\n").concat("  <a class=\"back\" href=\"index.html\">← all modules</a>\n").concat("  <div class=\"eyebrow\">module</div>\n").concat("  <h1>").concat(_esc(m.display)).concat("</h1>\n").concat("  <p class=\"origin\">defined in <code>").concat(_esc(m.origin)).concat("</code></p>\n");
     if !m.blurb.eq("") {
         html = html.concat("  <p class=\"lede\">").concat(_esc(m.blurb)).concat("</p>\n");
     }
     html = html.concat("</section>\n");
-
     if m.items.len() > 1 {
-        html = html.concat("<nav class=\"toc\">\n")
-            .concat("  <h4>Items in this module</h4>\n")
-            .concat("  <ul>\n");
+        html = html.concat("<nav class=\"toc\">\n").concat("  <h4>Items in this module</h4>\n").concat("  <ul>\n");
         for let i: i32 = 0; i < m.items.len(); i++ {
             let it: DocItem = m.items.get(i);
-            html = html.concat("    <li><span class=\"toc-kind\">")
-                .concat(_kind_label(it.kind)).concat("</span><a href=\"#")
-                .concat(_esc(it.name)).concat("\">").concat(_esc(it.name)).concat("</a></li>\n");
+            html = html.concat("    <li><span class=\"toc-kind\">").concat(_kind_label(it.kind)).concat("</span><a href=\"#").concat(_esc(it.name)).concat("\">").concat(_esc(it.name)).concat("</a></li>\n");
         }
         html = html.concat("  </ul>\n</nav>\n");
     }
-
     html = html.concat("<section class=\"items\">\n");
     for let i: i32 = 0; i < m.items.len(); i++ {
         let it: DocItem = m.items.get(i);
@@ -1048,35 +952,11 @@ fn _write_module_page(out_dir: string, m: *DocModule) {
 }
 
 fn _html_head(title: string, css_prefix: string) -> string {
-    return "<!doctype html>\n<html lang=\"en\"><head>\n"
-        .concat("<meta charset=\"utf-8\">\n")
-        .concat("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n")
-        .concat("<meta name=\"theme-color\" content=\"#0b1020\">\n")
-        .concat("<title>").concat(_esc(title)).concat(" — glide doc</title>\n")
-        .concat("<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n")
-        .concat("<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n")
-        .concat("<link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap\" rel=\"stylesheet\">\n")
-        .concat("<link rel=\"stylesheet\" href=\"").concat(css_prefix).concat("/style.css\">\n")
-        .concat("</head><body>\n")
-        .concat("<header class=\"nav\">\n")
-        .concat("  <a class=\"brand\" href=\"index.html\"><span>glide</span><span class=\"brand-sub\">/ docs</span></a>\n")
-        .concat("  <nav class=\"nav-links\">\n")
-        .concat("    <a href=\"index.html\">Modules</a>\n")
-        .concat("    <a href=\"https://github.com/Murilinho145SG/Glide\" rel=\"noopener\">GitHub</a>\n")
-        .concat("  </nav>\n")
-        .concat("</header>\n")
-        .concat("<main>\n");
+    return "<!doctype html>\n<html lang=\"en\"><head>\n".concat("<meta charset=\"utf-8\">\n").concat("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n").concat("<meta name=\"theme-color\" content=\"#0b1020\">\n").concat("<title>").concat(_esc(title)).concat(" — glide doc</title>\n").concat("<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n").concat("<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n").concat("<link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap\" rel=\"stylesheet\">\n").concat("<link rel=\"stylesheet\" href=\"").concat(css_prefix).concat("/style.css\">\n").concat("</head><body>\n").concat("<header class=\"nav\">\n").concat("  <a class=\"brand\" href=\"index.html\"><span>glide</span><span class=\"brand-sub\">/ docs</span></a>\n").concat("  <nav class=\"nav-links\">\n").concat("    <a href=\"index.html\">Modules</a>\n").concat("    <a href=\"https://github.com/Murilinho145SG/Glide\" rel=\"noopener\">GitHub</a>\n").concat("  </nav>\n").concat("</header>\n").concat("<main>\n");
 }
 
 fn _html_tail() -> string {
-    return "</main>\n"
-        .concat("<footer class=\"footer\">\n")
-        .concat("  <div class=\"footer-row\">\n")
-        .concat("    <span>generated by <code>glide doc</code></span>\n")
-        .concat("    <a href=\"https://github.com/Murilinho145SG/Glide\" rel=\"noopener\">github.com/Murilinho145SG/Glide</a>\n")
-        .concat("  </div>\n")
-        .concat("</footer>\n")
-        .concat("</body></html>\n");
+    return "</main>\n".concat("<footer class=\"footer\">\n").concat("  <div class=\"footer-row\">\n").concat("    <span>generated by <code>glide doc</code></span>\n").concat("    <a href=\"https://github.com/Murilinho145SG/Glide\" rel=\"noopener\">github.com/Murilinho145SG/Glide</a>\n").concat("  </div>\n").concat("</footer>\n").concat("</body></html>\n");
 }
 
 // Glide's typer doesn't know how to mono `Vector::new()` for *DocModule
@@ -1088,6 +968,7 @@ fn _vec_modules() -> *Vector<DocModule> {
 }
 
 extern fn __glide_shell(cmd: string) -> i32;
+
 extern fn __glide_is_windows() -> i32;
 
 fn _open_in_browser(path: string) {
@@ -1107,7 +988,6 @@ fn _open_in_browser(path: string) {
 // stdlib::http (json typedef collision) and the project doesn't have
 // a server-side primitive in stdlib::net. ~140 lines of C is cheaper
 // than untangling that.
-
 extern fn __glide_doc_serve(dir: string, port: i32) -> i32;
 
 c_raw! {

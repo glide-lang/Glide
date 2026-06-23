@@ -12,28 +12,27 @@ import stdlib::hashmap::*;
 // `UN_*` for operator codes.
 
 // ---- Type kinds ----------------------------------------------------------
-
-pub const TY_NAMED: i32 = 0;       // payload: name (string)
-pub const TY_POINTER: i32 = 1;     // payload: inner (*Type)
-pub const TY_BORROW: i32 = 2;      // payload: inner (*Type)
-pub const TY_BORROW_MUT: i32 = 3;  // payload: inner (*Type)
-pub const TY_SLICE: i32 = 4;       // payload: inner (*Type)
-pub const TY_GENERIC: i32 = 5;     // payload: name + type args
-pub const TY_FNPTR: i32 = 6;       // payload: fnptr_params + fnptr_ret
-pub const TY_RESULT: i32 = 7;      // payload: inner (*Type) — `!T`
-pub const TY_DYN: i32 = 8;         // `dyn Trait` — name = trait name. Used behind a pointer (`*dyn Trait`).
-pub const TY_OPTION: i32 = 9;      // payload: inner (*Type) — `?T`
+pub const TY_NAMED: i32 = 0; // payload: name (string)
+pub const TY_POINTER: i32 = 1; // payload: inner (*Type)
+pub const TY_BORROW: i32 = 2; // payload: inner (*Type)
+pub const TY_BORROW_MUT: i32 = 3; // payload: inner (*Type)
+pub const TY_SLICE: i32 = 4; // payload: inner (*Type)
+pub const TY_GENERIC: i32 = 5; // payload: name + type args
+pub const TY_FNPTR: i32 = 6; // payload: fnptr_params + fnptr_ret
+pub const TY_RESULT: i32 = 7; // payload: inner (*Type) — `!T`
+pub const TY_DYN: i32 = 8; // `dyn Trait` — name = trait name. Used behind a pointer (`*dyn Trait`).
+pub const TY_OPTION: i32 = 9; // payload: inner (*Type) — `?T`
 pub const TY_OPT_RESULT: i32 = 10; // payload: inner (*Type) — `?!T` (3 variants: Some/None/Err)
-pub const TY_ASSOC: i32 = 11;      // `Owner::Name` — owner in inner, assoc name in name
-pub const TY_TUPLE: i32 = 12;      // `(A, B, ...)` — anonymous tuple. element types in `args`. zero args = unit `()`.
+pub const TY_ASSOC: i32 = 11; // `Owner::Name` — owner in inner, assoc name in name
+pub const TY_TUPLE: i32 = 12; // `(A, B, ...)` — anonymous tuple. element types in `args`. zero args = unit `()`.
 
 pub struct Type {
     pub kind: i32,
     pub name: string,
     pub inner: *Type,
-    pub args: *Vector<Type>,  // TY_GENERIC or TY_FNPTR (params)
-    pub fnptr_ret: *Type,     // TY_FNPTR ret
-    pub line: i32,            // source position of the type name (0 = synthesized)
+    pub args: *Vector<Type>, // TY_GENERIC or TY_FNPTR (params)
+    pub fnptr_ret: *Type, // TY_FNPTR ret
+    pub line: i32, // source position of the type name (0 = synthesized)
     pub col: i32,
 }
 
@@ -55,35 +54,33 @@ pub fn ty_generic(name: string, args: *Vector<Type>) -> *Type {
 }
 
 // ---- Expr kinds ----------------------------------------------------------
-
 pub const EX_INT: i32 = 0;
 pub const EX_FLOAT: i32 = 1;
 pub const EX_STRING: i32 = 2;
 pub const EX_BOOL: i32 = 3;
 pub const EX_NULL: i32 = 4;
 pub const EX_IDENT: i32 = 5;
-pub const EX_BINARY: i32 = 6;       // op (int), lhs, rhs
-pub const EX_UNARY: i32 = 7;        // op (int), operand
-pub const EX_CALL: i32 = 8;         // callee, args
-pub const EX_ASSIGN: i32 = 9;       // op, lhs, rhs
-pub const EX_MEMBER: i32 = 10;      // obj, field name
-pub const EX_INDEX: i32 = 11;       // obj, idx
-pub const EX_CAST: i32 = 12;        // expr, target type
-pub const EX_CHAR: i32 = 13;        // single char
-pub const EX_MACRO: i32 = 14;       // name + args (println! etc)
-pub const EX_PATH: i32 = 15;        // Type::member
-pub const EX_POSTINC: i32 = 16;     // x++
-pub const EX_POSTDEC: i32 = 17;     // x--
-pub const EX_STRUCT_LIT: i32 = 18;  // Foo { fields }
-pub const EX_NEW: i32 = 19;         // new Foo { fields }
-pub const EX_SIZEOF: i32 = 20;      // sizeof(T) — cast_to holds the target type
-pub const EX_FNEXPR: i32 = 21;      // anonymous fn expression (no capture)
-pub const EX_MACRO_VAR: i32 = 22;   // `$x` placeholder inside a macro body (str_val = "x")
-pub const EX_IF: i32 = 23;          // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
-pub const EX_BLOCK: i32 = 24;       // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
-pub const EX_MATCH: i32 = 25;       // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
-pub const EX_TUPLE: i32 = 26;       // `(a, b, ...)` tuple literal. element exprs in `args`. zero args = unit `()`.
-
+pub const EX_BINARY: i32 = 6; // op (int), lhs, rhs
+pub const EX_UNARY: i32 = 7; // op (int), operand
+pub const EX_CALL: i32 = 8; // callee, args
+pub const EX_ASSIGN: i32 = 9; // op, lhs, rhs
+pub const EX_MEMBER: i32 = 10; // obj, field name
+pub const EX_INDEX: i32 = 11; // obj, idx
+pub const EX_CAST: i32 = 12; // expr, target type
+pub const EX_CHAR: i32 = 13; // single char
+pub const EX_MACRO: i32 = 14; // name + args (println! etc)
+pub const EX_PATH: i32 = 15; // Type::member
+pub const EX_POSTINC: i32 = 16; // x++
+pub const EX_POSTDEC: i32 = 17; // x--
+pub const EX_STRUCT_LIT: i32 = 18; // Foo { fields }
+pub const EX_NEW: i32 = 19; // new Foo { fields }
+pub const EX_SIZEOF: i32 = 20; // sizeof(T) — cast_to holds the target type
+pub const EX_FNEXPR: i32 = 21; // anonymous fn expression (no capture)
+pub const EX_MACRO_VAR: i32 = 22; // `$x` placeholder inside a macro body (str_val = "x")
+pub const EX_IF: i32 = 23; // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
+pub const EX_BLOCK: i32 = 24; // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
+pub const EX_MATCH: i32 = 25; // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
+pub const EX_TUPLE: i32 = 26; // `(a, b, ...)` tuple literal. element exprs in `args`. zero args = unit `()`.
 // Binary op codes (subset; extend as needed)
 pub const OP_ADD: i32 = 1;
 pub const OP_SUB: i32 = 2;
@@ -108,16 +105,15 @@ pub const OP_BIT_OR: i32 = 20;
 pub const OP_BIT_XOR: i32 = 21;
 pub const OP_SHL: i32 = 22;
 pub const OP_SHR: i32 = 23;
-pub const OP_COALESCE: i32 = 24;   // `??` — fallback for ?T / !T / *T-nullable
+pub const OP_COALESCE: i32 = 24; // `??` — fallback for ?T / !T / *T-nullable
 // Compound assignment for the bitwise / modulo ops (append-only so the codes
 // above keep their values). `+= -= *= /=` are OP_PLUS/MINUS/STAR/SLASH_ASSIGN.
-pub const OP_PERCENT_ASSIGN: i32 = 25;  // %=
-pub const OP_BITAND_ASSIGN: i32 = 26;   // &=
-pub const OP_BITOR_ASSIGN: i32 = 27;    // |=
-pub const OP_BITXOR_ASSIGN: i32 = 28;   // ^=
-pub const OP_SHL_ASSIGN: i32 = 29;      // <<=
-pub const OP_SHR_ASSIGN: i32 = 30;      // >>=
-
+pub const OP_PERCENT_ASSIGN: i32 = 25; // %=
+pub const OP_BITAND_ASSIGN: i32 = 26; // &=
+pub const OP_BITOR_ASSIGN: i32 = 27; // |=
+pub const OP_BITXOR_ASSIGN: i32 = 28; // ^=
+pub const OP_SHL_ASSIGN: i32 = 29; // <<=
+pub const OP_SHR_ASSIGN: i32 = 30; // >>=
 // Unary op codes
 pub const UN_NEG: i32 = 1;
 pub const UN_NOT: i32 = 2;
@@ -125,49 +121,41 @@ pub const UN_DEREF: i32 = 3;
 pub const UN_ADDR: i32 = 4;
 pub const UN_ADDR_MUT: i32 = 5;
 pub const UN_BIT_NOT: i32 = 6;
-pub const UN_TRY: i32 = 7;        // postfix `?` propagation
+pub const UN_TRY: i32 = 7; // postfix `?` propagation
 
 pub struct Expr {
     pub kind: i32,
     pub line: i32,
     pub column: i32,
-
     // primitive payloads (used per kind)
     pub int_val: i64,
     pub str_val: string,
     pub bool_val: bool,
-    pub op_code: i32,        // for Binary, Unary, Assign
-
+    pub op_code: i32, // for Binary, Unary, Assign
     // child expressions (used per kind)
-    pub lhs: *Expr,          // Binary, Assign, Member, Index, Cast, Call(callee)
-    pub rhs: *Expr,          // Binary, Assign, Index
-    pub operand: *Expr,      // Unary
-
+    pub lhs: *Expr, // Binary, Assign, Member, Index, Cast, Call(callee)
+    pub rhs: *Expr, // Binary, Assign, Index
+    pub operand: *Expr, // Unary
     // call args / member field name
     pub args: *Vector<Expr>, // Call args (we keep them by-value in Vector for simplicity)
-    pub field: string,       // Member field, Cast target encoded via type
-    pub field_line: i32,     // source position of the member field name (0 = synthesized)
+    pub field: string, // Member field, Cast target encoded via type
+    pub field_line: i32, // source position of the member field name (0 = synthesized)
     pub field_col: i32,
     pub cast_to: *Type,
-
     // For EX_STRUCT_LIT: parallel to args, holds field names
     pub field_names: *Vector<string>,
-
     // For EX_FNEXPR: anonymous fn payload
     pub fn_expr_params: *Vector<Param>,
     pub fn_expr_body: *Vector<Stmt>,
-
     // EX_MACRO: receiver-style invocation (`recv.name!(args)`) and qualified
     // path (`Type::name!(args)`). Both are null for the plain `name!(args)`
     // form. Plain str_val still holds the macro name regardless.
     pub macro_recv: *Expr,
     pub macro_owner: string,
-
     // EX_FLOAT: source lexeme (e.g. "3.14"). Stored as a string so we don't
     // need a Glide-side double payload — the lexeme is already a valid C
     // float literal.
     pub float_val: string,
-
     // EX_BLOCK: stmts that run before the value is yielded. The yielded
     // value lives in `operand`. The trailing `return val;` is stripped
     // by the parser and its expr_value moved into `operand`.
@@ -182,7 +170,6 @@ pub struct Expr {
 }
 
 // ---- Stmt kinds ----------------------------------------------------------
-
 pub const ST_LET: i32 = 0;
 pub const ST_RETURN: i32 = 1;
 pub const ST_EXPR: i32 = 2;
@@ -201,31 +188,30 @@ pub const ST_IMPORT: i32 = 14;
 pub const ST_ENUM: i32 = 15;
 pub const ST_MATCH: i32 = 16;
 pub const ST_SPAWN: i32 = 17;
-pub const ST_MACRO_DEF: i32 = 18;   // `macro name!(matchers) { body }` — user-defined macro
-pub const ST_MACRO_REP: i32 = 19;   // `$( body );*` repetition inside a macro body
-pub const ST_FOR_IN: i32 = 20;      // `for x in expr [..[=] hi] { body }` — surface form, lowered to ST_FOR before typer/codegen
-pub const ST_WHILE_RECV: i32 = 21;  // `while let v [: T] = c.recv() { body }` — chan-aware loop with auto close detection
-pub const ST_ASM: i32 = 22;         // `asm [volatile] { "..." [: outs] [: ins] [: clobbers] }` — GCC inline asm
-pub const ST_CRAW: i32 = 23;        // `c_raw! { ... }` — raw C/asm payload emitted verbatim. Body lives in `name`.
-pub const ST_TRAIT: i32 = 24;       // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
-pub const ST_DEFER_ERR: i32 = 25;   // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
-pub const ST_SELECT: i32 = 26;      // `select! { arm => stmt; ... }` — race over chan ops. Arms in `select_arms`.
-pub const ST_IF_LET: i32 = 27;      // `if let some/none/ok/err(bind) = expr { } else { }` — surface form, lowered to ST_BLOCK before typer/codegen. `name` = ctor, `let_names[0]` = bind (if any), `let_value` = scrutinee, then_body / else_body = branches.
-pub const ST_COMMENT: i32 = 28;     // fmt-only placeholder: carries trailing comments at the end of a block in `leading_comments`. Created only when p.fmt_mode is set, so typer/codegen never see it.
-
+pub const ST_MACRO_DEF: i32 = 18; // `macro name!(matchers) { body }` — user-defined macro
+pub const ST_MACRO_REP: i32 = 19; // `$( body );*` repetition inside a macro body
+pub const ST_FOR_IN: i32 = 20; // `for x in expr [..[=] hi] { body }` — surface form, lowered to ST_FOR before typer/codegen
+pub const ST_WHILE_RECV: i32 = 21; // `while let v [: T] = c.recv() { body }` — chan-aware loop with auto close detection
+pub const ST_ASM: i32 = 22; // `asm [volatile] { "..." [: outs] [: ins] [: clobbers] }` — GCC inline asm
+pub const ST_CRAW: i32 = 23; // `c_raw! { ... }` — raw C/asm payload emitted verbatim. Body lives in `name`.
+pub const ST_TRAIT: i32 = 24; // `trait Name { fn sig; ... }` — interface contract. `name` = trait name, `impl_methods` = method signatures (bodyless ST_FN stmts).
+pub const ST_DEFER_ERR: i32 = 25; // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
+pub const ST_SELECT: i32 = 26; // `select! { arm => stmt; ... }` — race over chan ops. Arms in `select_arms`.
+pub const ST_IF_LET: i32 = 27; // `if let some/none/ok/err(bind) = expr { } else { }` — surface form, lowered to ST_BLOCK before typer/codegen. `name` = ctor, `let_names[0]` = bind (if any), `let_value` = scrutinee, then_body / else_body = branches.
+pub const ST_COMMENT: i32 = 28; // fmt-only placeholder: carries trailing comments at the end of a block in `leading_comments`. Created only when p.fmt_mode is set, so typer/codegen never see it.
 // SelectArm.kind values
-pub const SEL_RECV: i32 = 0;        // `var = c.recv() => stmt`            — bind T value
-pub const SEL_SEND: i32 = 1;        // `c.send(v) => stmt`                  — fire when send completes
-pub const SEL_DEFAULT: i32 = 2;     // `default => stmt`                    — non-blocking fallback
-pub const SEL_RECV_SOME: i32 = 3;   // `Some(v) = c.recv() => stmt`         — bind on value
-pub const SEL_RECV_NONE: i32 = 4;   // `None = c.recv() => stmt`            — fire on close+empty
+pub const SEL_RECV: i32 = 0; // `var = c.recv() => stmt`            — bind T value
+pub const SEL_SEND: i32 = 1; // `c.send(v) => stmt`                  — fire when send completes
+pub const SEL_DEFAULT: i32 = 2; // `default => stmt`                    — non-blocking fallback
+pub const SEL_RECV_SOME: i32 = 3; // `Some(v) = c.recv() => stmt`         — bind on value
+pub const SEL_RECV_NONE: i32 = 4; // `None = c.recv() => stmt`            — fire on close+empty
 
 pub struct SelectArm {
     pub kind: i32,
-    pub chan_expr: *Expr,        // the chan receiver (for recv/send/some/none)
-    pub bind_name: string,       // var name for SEL_RECV / SEL_RECV_SOME
-    pub send_value: *Expr,       // value to send for SEL_SEND
-    pub body: *Vector<Stmt>,     // arm body stmts
+    pub chan_expr: *Expr, // the chan receiver (for recv/send/some/none)
+    pub bind_name: string, // var name for SEL_RECV / SEL_RECV_SOME
+    pub send_value: *Expr, // value to send for SEL_SEND
+    pub body: *Vector<Stmt>, // arm body stmts
     pub line: i32,
     pub column: i32,
 }
@@ -244,33 +230,33 @@ pub struct Param {
 pub struct Field {
     pub name: string,
     pub ty: *Type,
-    pub doc: string,        // contiguous `//` block above the field decl
-    pub is_pub: bool,       // `pub field: T,` is exported across files
-    pub bang_pub: bool,     // exported via the `!field: T,` short sigil; kept
-                            // so `fmt` reproduces the author's chosen spelling
-    pub trail: string,      // same-line comment after the field decl (fmt)
+    pub doc: string, // contiguous `//` block above the field decl
+    pub is_pub: bool, // `pub field: T,` is exported across files
+    pub bang_pub: bool, // exported via the `!field: T,` short sigil; kept
+    // so `fmt` reproduces the author's chosen spelling
+    pub trail: string, // same-line comment after the field decl (fmt)
 }
 
 pub struct EnumVariant {
     pub name: string,
     pub fields: *Vector<Type>,
-    pub doc: string,        // contiguous `//` block above the variant (fmt)
-    pub trail: string,      // same-line comment after the variant (fmt)
+    pub doc: string, // contiguous `//` block above the variant (fmt)
+    pub trail: string, // same-line comment after the variant (fmt)
 }
 
 pub struct MatchArm {
-    pub variant: string,           // variant name; "_" = wildcard
+    pub variant: string, // variant name; "_" = wildcard
     pub bindings: *Vector<string>, // names to bind for payload
     pub body: *Vector<Stmt>,
-    pub lead: string,              // comments above the arm (fmt)
-    pub trail: string,             // same-line comment after the arm (fmt)
+    pub lead: string, // comments above the arm (fmt)
+    pub trail: string, // same-line comment after the arm (fmt)
 }
 
 pub struct MacroParam {
-    pub name: string,           // matcher binder (`$x` -> "x")
-    pub is_variadic: bool,      // `$($x:expr),*` form
-    pub separator: string,      // separator for variadic ("," or ";"); empty otherwise
-    pub kind: string,           // matcher kind: "expr" (default), "ty", "ident"
+    pub name: string, // matcher binder (`$x` -> "x")
+    pub is_variadic: bool, // `$($x:expr),*` form
+    pub separator: string, // separator for variadic ("," or ";"); empty otherwise
+    pub kind: string, // matcher kind: "expr" (default), "ty", "ident"
 }
 
 // `@name(args)` attribute attached to a top-level decl. `args` are
@@ -288,42 +274,37 @@ pub struct Stmt {
     pub kind: i32,
     pub line: i32,
     pub column: i32,
-    pub name_line: i32,            // position of the declared name (fn/struct/enum/const/let)
+    pub name_line: i32, // position of the declared name (fn/struct/enum/const/let)
     pub name_col: i32,
     pub name_len: i32,
     pub is_pub: bool,
-    pub is_extern: bool,           // `extern fn ...;` — kept so fmt round-trips the keyword
-    pub origin: string,            // file path; set by load_into_str on top-level stmts
-    pub doc_comment: string,       // contiguous `//` block above the decl (LSP hover)
-    pub leading_comments: string,  // all comments above the decl, blanks kept (fmt)
-    pub trailing_comment: string,  // same-line comment after the decl (fmt)
-
+    pub is_extern: bool, // `extern fn ...;` — kept so fmt round-trips the keyword
+    pub origin: string, // file path; set by load_into_str on top-level stmts
+    pub doc_comment: string, // contiguous `//` block above the decl (LSP hover)
+    pub leading_comments: string, // all comments above the decl, blanks kept (fmt)
+    pub trailing_comment: string, // same-line comment after the decl (fmt)
     // Let / Const
     pub name: string,
     pub let_ty: *Type,
     pub let_value: *Expr,
     pub is_mut: bool,
-    pub is_auto_owned: bool,    // explicit `let v* = ...` marker (auto-drop)
+    pub is_auto_owned: bool, // explicit `let v* = ...` marker (auto-drop)
     // Tuple destructuring: `let (a, b, c) = expr;`. When non-null and
     // non-empty, this is a destructuring binding — `name` is empty and each
     // entry binds the corresponding tuple element (`expr.0`, `expr.1`, ...).
     pub let_names: *Vector<string>,
-
     // Return / Expr stmt / Defer
     pub expr_value: *Expr,
-
     // If / While / For
     pub cond: *Expr,
     pub then_body: *Vector<Stmt>,
     pub else_body: *Vector<Stmt>,
     pub for_init: *Stmt,
     pub for_step: *Expr,
-
     // Fn
     pub fn_params: *Vector<Param>,
     pub fn_ret_ty: *Type,
     pub fn_body: *Vector<Stmt>,
-
     // Struct / Impl
     pub struct_fields: *Vector<Field>,
     pub impl_target: *Type,
@@ -336,7 +317,6 @@ pub struct Stmt {
     // Conformance checker walks these recursively when validating
     // `impl B for T` so `T` must also implement A1 and A2.
     pub trait_supers: *Vector<string>,
-
     // Generics: type params for fn/struct/impl
     pub type_params: *Vector<string>,
     // Per-type-param trait bounds. Indexed in lockstep with `type_params`.
@@ -345,7 +325,6 @@ pub struct Stmt {
     // *Vector<*Vector<string>>) to avoid Vector-of-Vector<T> in Glide's
     // monomorphizer.
     pub type_param_bounds: *Vector<string>,
-
     // Import
     pub import_path: string,
     // Selective items pulled in by `import a::b::c::Item;` /
@@ -361,46 +340,37 @@ pub struct Stmt {
     // call `import_short::Item(...)` after this import.
     pub import_is_module: bool,
     pub import_short: string,
-
     // Enum
     pub enum_variants: *Vector<EnumVariant>,
-
     // Match
     pub scrutinee: *Expr,
     pub arms: *Vector<MatchArm>,
-
     // Macro def (ST_MACRO_DEF) — name lives in `name`, body in `then_body`,
     // matchers in macro_params. For ST_MACRO_REP, body lives in `then_body`
     // and macro_rep_sep holds the separator literal.
     pub macro_params: *Vector<MacroParam>,
     pub macro_rep_sep: string,
-
     // Fn (ST_FN) flag: trailing `...` after the regular params (C-style
     // variadic). Typer skips the arg-count / arg-type check past `len(params)`
     // so callers can pass any extra args (used for `extern fn printf(...)`).
     pub is_variadic: bool,
-
     // ST_SPAWN flag: `spawn` (default) submits a coroutine to the M:N
     // scheduler; `spawn_thread` keeps the explicit pthread escape hatch.
     pub is_spawn_thread: bool,
-
     // ST_FN: skip prologue/epilogue, emit __attribute__((naked)). Body must
     // contain only `asm` blocks. Args are accessed via the platform calling
     // convention directly.
     pub is_naked: bool,
-
     // ST_FN/ST_STRUCT/ST_IMPL/ST_CONST: optional `@cfg("...")` attribute.
     // "" = no guard; "windows" wraps decl in `#ifdef _WIN32`; "posix" wraps
     // it in `#ifndef _WIN32`. Used to write per-platform asm/naked fns.
     pub cfg_target: string,
-
     // Generic attribute list — any `@<name>(...)` not handled as a built-in
     // (currently `@cfg`) lands here in source order. Procedural macro
     // declarations (`@proc_derive(Name)`, `@proc_attr(Name)`,
     // `@proc_macro(Name)`, `@proc_macro_str(Name)`) and use sites
     // (`@derive(Name)`, `@<name>`) are read from this list by the expander.
     pub attrs: *Vector<Attr>,
-
     // ST_ASM payload. `asm_strings` are the instruction lines (each becomes
     // its own quoted line in the emitted __asm__). The three operand vectors
     // are parallel arrays (constraint + expr per operand), GCC-style. For
@@ -412,12 +382,10 @@ pub struct Stmt {
     pub asm_in_exprs: *Vector<Expr>,
     pub asm_clobbers: *Vector<string>,
     pub is_volatile: bool,
-
     // ST_TRAIT / ST_IMPL: associated type declarations.
     // Trait: each Param has name = the assoc name and ty = null (placeholder).
     // Impl:  each Param has name = the assoc name and ty = the concrete type.
     pub assoc_decls: *Vector<Param>,
-
     // ST_SELECT: arms of `select! { ... }`. See SelectArm.
     pub select_arms: *Vector<SelectArm>,
 }
@@ -431,15 +399,33 @@ pub struct Stmt {
 // null strings, which crash downstream walks. Procedural macros call
 // this on every Stmt they emit before splicing it into the program.
 pub fn ast_fill_defaults(s: *Stmt) {
-    if s == null { return; }
-    if s.origin == null { s.origin = ""; }
-    if s.doc_comment == null { s.doc_comment = ""; }
-    if s.name == null { s.name = ""; }
-    if s.cfg_target == null { s.cfg_target = ""; }
-    if s.impl_trait_name == null { s.impl_trait_name = ""; }
-    if s.import_path == null { s.import_path = ""; }
-    if s.import_short == null { s.import_short = ""; }
-    if s.macro_rep_sep == null { s.macro_rep_sep = ""; }
+    if s == null {
+        return;
+    }
+    if s.origin == null {
+        s.origin = "";
+    }
+    if s.doc_comment == null {
+        s.doc_comment = "";
+    }
+    if s.name == null {
+        s.name = "";
+    }
+    if s.cfg_target == null {
+        s.cfg_target = "";
+    }
+    if s.impl_trait_name == null {
+        s.impl_trait_name = "";
+    }
+    if s.import_path == null {
+        s.import_path = "";
+    }
+    if s.import_short == null {
+        s.import_short = "";
+    }
+    if s.macro_rep_sep == null {
+        s.macro_rep_sep = "";
+    }
     if s.attrs == null {
         let v: *Vector<Attr> = Vector::new();
         s.attrs = v;
@@ -548,8 +534,7 @@ pub fn expr_ident_unsafe(name: string, line: i32, col: i32) -> *Expr {
 
 // Hygiene opt-out for let bindings: emit a `let <name> = ...` with
 // the literal name. Same passthrough trick as expr_ident_unsafe.
-pub fn stmt_let_unsafe(name: string, ty: *Type, value: *Expr,
-                       is_mut: bool, line: i32, col: i32) -> *Stmt {
+pub fn stmt_let_unsafe(name: string, ty: *Type, value: *Expr, is_mut: bool, line: i32, col: i32) -> *Stmt {
     return stmt_let(name, ty, value, is_mut, line, col);
 }
 
@@ -702,12 +687,16 @@ pub fn stmt_let(name: string, ty: *Type, value: *Expr, is_mut: bool, line: i32, 
 // Live in ast so any module that depends on the AST (parser, expander,
 // typer, codegen) can format integer literals into source-strings without
 // pulling in codegen.glide.
-
 pub fn int_to_str(n: i64) -> string {
-    if n == 0 { return "0"; }
+    if n == 0 {
+        return "0";
+    }
     let mut x: i64 = n;
     let mut neg: bool = false;
-    if x < 0 { neg = true; x = -x; }
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
     let mut s: string = "";
     while x > 0 {
         let d: i32 = (x % 10) as i32;
@@ -715,32 +704,58 @@ pub fn int_to_str(n: i64) -> string {
         s = ch.concat(s);
         x = x / 10;
     }
-    if neg { s = "-".concat(s); }
+    if neg {
+        s = "-".concat(s);
+    }
     return s;
 }
 
 pub fn digit_str(d: i32) -> string {
-    if d == 0 { return "0"; }
-    if d == 1 { return "1"; }
-    if d == 2 { return "2"; }
-    if d == 3 { return "3"; }
-    if d == 4 { return "4"; }
-    if d == 5 { return "5"; }
-    if d == 6 { return "6"; }
-    if d == 7 { return "7"; }
-    if d == 8 { return "8"; }
+    if d == 0 {
+        return "0";
+    }
+    if d == 1 {
+        return "1";
+    }
+    if d == 2 {
+        return "2";
+    }
+    if d == 3 {
+        return "3";
+    }
+    if d == 4 {
+        return "4";
+    }
+    if d == 5 {
+        return "5";
+    }
+    if d == 6 {
+        return "6";
+    }
+    if d == 7 {
+        return "7";
+    }
+    if d == 8 {
+        return "8";
+    }
     return "9";
 }
 
 // True if `s` is a non-empty run of ASCII digits. Used to recognise a
 // tuple-index member (`t.0`, `t.12`) where the field name is numeric.
 pub fn tuple_field_is_index(s: string) -> bool {
-    if s == null { return false; }
+    if s == null {
+        return false;
+    }
     let n: i32 = s.len();
-    if n == 0 { return false; }
+    if n == 0 {
+        return false;
+    }
     for let i: i32 = 0; i < n; i++ {
         let c: i32 = s.at(i).to_int();
-        if c < 48 || c > 57 { return false; }
+        if c < 48 || c > 57 {
+            return false;
+        }
     }
     return true;
 }
@@ -759,7 +774,9 @@ pub fn tuple_index_value(s: string) -> i32 {
 // Strip pointer / borrow wrappers from a type. Used by the typer +
 // codegen + LSP whenever they need the bare element type.
 pub fn strip_ptr(t: *Type) -> *Type {
-    if t == null { return null; }
+    if t == null {
+        return null;
+    }
     if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT {
         return strip_ptr(t.inner);
     }
@@ -951,10 +968,10 @@ pub fn stmt_asm(line: i32, col: i32) -> *Stmt {
     s.column = col;
     let strs: *Vector<string> = Vector::new();
     let outc: *Vector<string> = Vector::new();
-    let oute: *Vector<Expr>   = Vector::new();
-    let inc:  *Vector<string> = Vector::new();
-    let ine:  *Vector<Expr>   = Vector::new();
-    let clb:  *Vector<string> = Vector::new();
+    let oute: *Vector<Expr> = Vector::new();
+    let inc: *Vector<string> = Vector::new();
+    let ine: *Vector<Expr> = Vector::new();
+    let clb: *Vector<string> = Vector::new();
     s.asm_strings = strs;
     s.asm_out_constraints = outc;
     s.asm_out_exprs = oute;
@@ -1156,14 +1173,20 @@ pub fn expr_struct_lit(type_name: string, names: *Vector<string>, values: *Vecto
 // pass-emitted lint gets the same location rendering + `code` suppression +
 // build-failing-on-error treatment as a built-in check. Lives in `bootstrap`
 // (compiler-only), so it adds nothing to a compiled user program.
-
 extern fn __glide_pd_push(line: i32, col: i32, severity: i32, code: string, msg: string);
+
 extern fn __glide_pd_count() -> i32;
+
 extern fn __glide_pd_line(i: i32) -> i32;
+
 extern fn __glide_pd_col(i: i32) -> i32;
+
 extern fn __glide_pd_sev(i: i32) -> i32;
+
 extern fn __glide_pd_code(i: i32) -> string;
+
 extern fn __glide_pd_msg(i: i32) -> string;
+
 extern fn __glide_pd_reset();
 
 c_raw! {
@@ -1189,16 +1212,16 @@ c_raw! {
     static void __glide_pd_reset(void) { gl_pd_n = 0; }
 }
 
-/// Emit a diagnostic from a compiler pass or macro — a custom lint.
-///
-/// `severity` 1 = error (fails the build), 2 = warning. `code` is a short
-/// kebab-case id the user can silence with `@allow("<code>")`. `line`/`col`
-/// point at the offending source (pass the `.line` / `.column` of the AST
-/// node you flagged).
-///
-/// ```glide
-/// pass_diag(s.line, s.column, 1, "no-todo", "TODO left in shipped code");
-/// ```
+// Emit a diagnostic from a compiler pass or macro — a custom lint.
+//
+// `severity` 1 = error (fails the build), 2 = warning. `code` is a short
+// kebab-case id the user can silence with `@allow("<code>")`. `line`/`col`
+// point at the offending source (pass the `.line` / `.column` of the AST
+// node you flagged).
+//
+// ```glide
+// pass_diag(s.line, s.column, 1, "no-todo", "TODO left in shipped code");
+// ```
 pub fn pass_diag(line: i32, col: i32, severity: i32, code: string, msg: string) {
     __glide_pd_push(line, col, severity, code, msg);
 }
