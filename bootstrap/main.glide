@@ -3768,6 +3768,51 @@ fn scan_bench_fns(src: string) -> *Vector<string> {
 // `glide bench [path]` — for every `*_bench.glide` under `path` (or
 // the single file passed), synth a main() that runs each `bench_*`
 // through `bench_run`, build, execute.
+// Build + run a synthesised test/bench program in a SEPARATE process.
+//
+// The compiler heap-allocates the AST and intermediate strings and only
+// reclaims them at process exit (the architecture assumes one compile per
+// process). `glide test` / `glide bench` compile MANY files in one long-lived
+// driver process, so an in-process build leaks ~1-2 GB per file and the run
+// OOMs after a handful of files. Spawning the build in a child process returns
+// that memory to the OS after each file, keeping the driver flat. Build chatter
+// is suppressed to a log and shown only on failure (so cc/typer errors still
+// surface). Falls back to an in-process build if we can't resolve our own path.
+fn _isolated_build_run(tmp_path: string, out_path: string, fast: bool) -> i32 {
+    let exe: string = __glide_exe_path();
+    if exe.eq("") {
+        return run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "", "");
+    }
+    let q: string = "\"";
+    let log: string = out_path.concat(".build.log");
+    let mut bc: string = q.concat(exe).concat(q).concat(" build ").concat(q).concat(tmp_path).concat(q)
+        .concat(" -o ").concat(q).concat(out_path).concat(q);
+    // Test binaries are built, run once, and discarded — they don't need -O2/-g.
+    // `--cflag` passthrough is last-wins, so these override the default -O2 -g
+    // and cut ~1s+ of cc time per file. NOT used for benches (they must be
+    // optimized or their numbers are meaningless).
+    if fast { bc = bc.concat(" --cflag=-O0 --cflag=-g0 --cflag=-pipe"); }
+    bc = bc.concat(" > ").concat(q).concat(log).concat(q).concat(" 2>&1");
+    if __glide_is_windows() != 0 { bc = q.concat(bc).concat(q); }
+    let brc: i32 = __glide_shell(bc);
+    if brc != 0 {
+        let blog: string = read_file(log);
+        if !blog.eq("") { println!(blog); }
+        fs_remove_file(log);
+        return brc;
+    }
+    fs_remove_file(log);
+    // Run the freshly built test/bench binary in its own process.
+    let mut run_target: string = out_path;
+    if !out_path.contains("/") && !out_path.contains("\\") {
+        if __glide_is_windows() != 0 { run_target = ".\\".concat(out_path); }
+        else { run_target = "./".concat(out_path); }
+    }
+    let mut rc_cmd: string = q.concat(run_target).concat(q);
+    if __glide_is_windows() != 0 { rc_cmd = q.concat(rc_cmd).concat(q); }
+    return __glide_shell(rc_cmd);
+}
+
 fn run_bench(path: string) -> i32 {
     let mut search_path: string = path;
     if search_path.eq("") { search_path = "."; }
@@ -3831,7 +3876,7 @@ fn run_bench(path: string) -> i32 {
 
         println!(col_blue().concat("benching").concat(col_reset()), f,
                  "(", bench_fns.len(), "bench(es) )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "", "");
+        let rc: i32 = _isolated_build_run(tmp_path, out_path, false);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
@@ -3945,7 +3990,7 @@ fn run_test(path: string) -> i32 {
 
         println!(col_blue().concat("running").concat(col_reset()), f,
                  "(", test_fns.len(), "tests )");
-        let rc: i32 = run_build_q(tmp_path, out_path, "", true, true, false, false, false, "", "", "");
+        let rc: i32 = _isolated_build_run(tmp_path, out_path, true);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
