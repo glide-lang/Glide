@@ -194,6 +194,11 @@ pub struct LspState {
     // currently-edited buffer is never cached — its content changes
     // between calls, so it always parses fresh.
     pub parse_cache: *HashMap<*Vector<Stmt>>,
+    // Per-path arena backing each `parse_cache` overlay entry. Rotated in
+    // `_lsp_cache_doc`: re-caching a path frees its prior generation's arena
+    // (the whole prior parsed+lowered AST) instead of leaking it on every
+    // keystroke. Keyed by the same on-disk path as `parse_cache`.
+    pub parse_cache_arenas: *HashMap<*void>,
     // Latest parse arena. Held here (rather than via __glide_palloc_get
     // at the start of each run) because we deactivate the arena
     // between requests so hover / completion scratch goes to libc heap;
@@ -225,6 +230,8 @@ pub fn lsp_state_new() -> *LspState {
     s.project_dep_fp = "";
     let pc: *HashMap<*Vector<Stmt>> = HashMap::new();
     s.parse_cache = pc;
+    let pca: *HashMap<*void> = HashMap::new();
+    s.parse_cache_arenas = pca;
     s.last_arena = null;
     s.lint_applied_root = "";
     let fa: *HashMap<bool> = HashMap::new();
@@ -1303,8 +1310,23 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
 fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
     if state.parse_cache == null || path.eq("") || text.eq("") { return; }
     let saved_arena: *void = __glide_palloc_get();
+    // The map KEY stays on the libc heap: it must outlive both the per-keystroke
+    // analysis arena and this path's own overlay-arena rotations.
     __glide_palloc_set(null);
     let heap_key: string = path.concat("");
+    __glide_palloc_set(saved_arena);
+    // Rotate this path's overlay arena. Freeing the PRIOR generation here is
+    // safe: it is only read by cross-file analysis, and the caller re-runs that
+    // analysis (rebuilding every doc's arena) immediately after this call, so
+    // nothing live still dereferences the old AST. Without this rotation every
+    // keystroke leaked a full parsed+lowered AST — GBs over a long session.
+    if state.parse_cache_arenas != null && state.parse_cache_arenas.contains(heap_key) {
+        let old: *void = state.parse_cache_arenas.get(heap_key);
+        if old != null { __glide_palloc_free(old); }
+    }
+    // Source text + AST go into the rotatable arena (the AST references the
+    // source's bytes, so they must share a lifetime and be freed together).
+    __glide_palloc_set(__glide_palloc_make());
     let heap_src: string = text.concat("");
     let lex: *Lexer = Lexer::new(heap_src);
     let p: *Parser = Parser::new(lex);
@@ -1316,8 +1338,13 @@ fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
         parsed_raw.set(i, s);
     }
     let lowered: *Vector<Stmt> = lower_program(parsed_raw);
+    // Read the arena back AFTER parse/lower: it may have grown new chunks, and
+    // the current head (not the original make() result) is the handle that
+    // frees the WHOLE chain. Storing the original would leak every grown chunk.
+    let final_arena: *void = __glide_palloc_get();
     __glide_palloc_set(saved_arena);
     state.parse_cache.insert(heap_key, lowered);
+    if state.parse_cache_arenas != null { state.parse_cache_arenas.insert(heap_key, final_arena); }
 }
 
 // Re-publish diagnostics for the changed doc AND every other open doc, so a
