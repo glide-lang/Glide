@@ -141,7 +141,30 @@ fn fmt_unop(op: i32) -> string {
 
 // ---- Expressions ------------------------------------------------------
 
-pub fn fmt_expr(e: *Expr) -> string {
+// Binding power of a binary op, mirroring the parser's Pratt table
+// (peek_binop_bp). Lets the printer add parens only where precedence or
+// associativity actually require them, instead of wrapping every binary.
+fn fmt_binop_bp(op: i32) -> i32 {
+    if op == OP_COALESCE { return 1; }
+    if op == OP_OR { return 2; }
+    if op == OP_AND { return 3; }
+    if op == OP_BIT_OR { return 4; }
+    if op == OP_BIT_XOR { return 5; }
+    if op == OP_BIT_AND { return 6; }
+    if op == OP_EQ || op == OP_NE { return 7; }
+    if op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE { return 8; }
+    if op == OP_SHL || op == OP_SHR { return 9; }
+    if op == OP_ADD || op == OP_SUB { return 10; }
+    if op == OP_MUL || op == OP_DIV || op == OP_MOD { return 11; }
+    return 0;
+}
+
+// Precedence levels above the binary ops (1..11): cast `as`, prefix unary,
+// then postfix (member/index/call/++/--). A subexpression is wrapped in
+// parens only when its binding power is below the surrounding context.
+pub fn fmt_expr(e: *Expr) -> string { return fmt_expr_prec(e, 0); }
+
+fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
     if e == null { return ""; }
     if e.kind == EX_INT { return int_to_str(e.int_val); }
     if e.kind == EX_FLOAT { return int_to_str(e.int_val); }
@@ -153,19 +176,24 @@ pub fn fmt_expr(e: *Expr) -> string {
         return fmt_char_lit(e.int_val);
     }
     if e.kind == EX_BINARY {
-        return "(".concat(fmt_expr(e.lhs)).concat(" ").concat(fmt_binop(e.op_code))
-            .concat(" ").concat(fmt_expr(e.rhs)).concat(")");
+        let bp: i32 = fmt_binop_bp(e.op_code);
+        let s: string = fmt_expr_prec(e.lhs, bp).concat(" ").concat(fmt_binop(e.op_code))
+            .concat(" ").concat(fmt_expr_prec(e.rhs, bp + 1));
+        if bp < min_bp { return "(".concat(s).concat(")"); }
+        return s;
     }
     if e.kind == EX_UNARY {
-        if e.op_code == UN_TRY { return fmt_expr(e.operand).concat("?"); }
-        return "(".concat(fmt_unop(e.op_code)).concat(fmt_expr(e.operand)).concat(")");
+        if e.op_code == UN_TRY { return fmt_expr_prec(e.operand, 25).concat("?"); }
+        let s: string = fmt_unop(e.op_code).concat(fmt_expr_prec(e.operand, 20));
+        if 20 < min_bp { return "(".concat(s).concat(")"); }
+        return s;
     }
     if e.kind == EX_ASSIGN {
         return fmt_expr(e.lhs).concat(" ").concat(fmt_binop(e.op_code))
             .concat(" ").concat(fmt_expr(e.rhs));
     }
     if e.kind == EX_CALL {
-        let mut out: string = fmt_expr(e.lhs).concat("(");
+        let mut out: string = fmt_expr_prec(e.lhs, 25).concat("(");
         if e.args != null {
             for let i: i32 = 0; i < e.args.len(); i++ {
                 if i > 0 { out = out.concat(", "); }
@@ -176,23 +204,23 @@ pub fn fmt_expr(e: *Expr) -> string {
         return out.concat(")");
     }
     if e.kind == EX_MEMBER {
-        return fmt_expr(e.lhs).concat(".").concat(e.field);
+        return fmt_expr_prec(e.lhs, 25).concat(".").concat(e.field);
     }
     if e.kind == EX_INDEX {
-        return fmt_expr(e.lhs).concat("[").concat(fmt_expr(e.rhs)).concat("]");
+        return fmt_expr_prec(e.lhs, 25).concat("[").concat(fmt_expr(e.rhs)).concat("]");
     }
     if e.kind == EX_CAST {
-        // Always parenthesize: `as` binds tighter than most binops in the
-        // parser but reads ambiguously to humans, and any wrapping binary
-        // expression already adds its own outer parens, so the round-trip
-        // shape `((x as T) << n)` matches the source.
-        return "(".concat(fmt_expr(e.lhs)).concat(" as ").concat(fmt_type(e.cast_to)).concat(")");
+        // `as` binds tighter than the binary ops but looser than prefix
+        // unary; wrap only when the surrounding context binds tighter.
+        let s: string = fmt_expr_prec(e.lhs, 15).concat(" as ").concat(fmt_type(e.cast_to));
+        if 15 < min_bp { return "(".concat(s).concat(")"); }
+        return s;
     }
     if e.kind == EX_PATH {
         return e.str_val.concat("::").concat(e.field);
     }
-    if e.kind == EX_POSTINC { return fmt_expr(e.lhs).concat("++"); }
-    if e.kind == EX_POSTDEC { return fmt_expr(e.lhs).concat("--"); }
+    if e.kind == EX_POSTINC { return fmt_expr_prec(e.lhs, 25).concat("++"); }
+    if e.kind == EX_POSTDEC { return fmt_expr_prec(e.lhs, 25).concat("--"); }
     if e.kind == EX_MACRO {
         // String-interpolation literal — round-trip back to `"…${…}…"`.
         if e.str_val.eq("format") && e.field != null && !e.field.eq("") {
