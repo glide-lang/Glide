@@ -208,6 +208,7 @@ pub const ST_TRAIT: i32 = 24;       // `trait Name { fn sig; ... }` — interfac
 pub const ST_DEFER_ERR: i32 = 25;   // `defer_err expr;` — runs only on err-return paths (`return err(...)` and `?` propagation). Body in `expr_value`.
 pub const ST_SELECT: i32 = 26;      // `select! { arm => stmt; ... }` — race over chan ops. Arms in `select_arms`.
 pub const ST_IF_LET: i32 = 27;      // `if let some/none/ok/err(bind) = expr { } else { }` — surface form, lowered to ST_BLOCK before typer/codegen. `name` = ctor, `let_names[0]` = bind (if any), `let_value` = scrutinee, then_body / else_body = branches.
+pub const ST_COMMENT: i32 = 28;     // fmt-only placeholder: carries trailing comments at the end of a block in `leading_comments`. Created only when p.fmt_mode is set, so typer/codegen never see it.
 
 // SelectArm.kind values
 pub const SEL_RECV: i32 = 0;        // `var = c.recv() => stmt`            — bind T value
@@ -250,12 +251,16 @@ pub struct Field {
 pub struct EnumVariant {
     pub name: string,
     pub fields: *Vector<Type>,
+    pub doc: string,        // contiguous `//` block above the variant (fmt)
+    pub trail: string,      // same-line comment after the variant (fmt)
 }
 
 pub struct MatchArm {
     pub variant: string,           // variant name; "_" = wildcard
     pub bindings: *Vector<string>, // names to bind for payload
     pub body: *Vector<Stmt>,
+    pub lead: string,              // comments above the arm (fmt)
+    pub trail: string,             // same-line comment after the arm (fmt)
 }
 
 pub struct MacroParam {
@@ -857,6 +862,15 @@ pub fn stmt_break(line: i32, col: i32) -> *Stmt {
     s.kind = ST_BREAK;
     s.line = line;
     s.column = col;
+    return s;
+}
+
+// fmt-only: a placeholder statement that carries a block's end comments in
+// `leading_comments`. Only ever created when p.fmt_mode is set.
+pub fn stmt_comment(lead: string) -> *Stmt {
+    let s: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+    s.kind = ST_COMMENT;
+    s.leading_comments = lead;
     return s;
 }
 

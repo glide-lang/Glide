@@ -213,6 +213,10 @@ pub fn parse_program(p: *Parser) -> *Vector<Stmt> {
         s.trailing_comment = p.current.trail;
         stmts.push(*s);
     }
+    // Trailing comments at end of file (the EOF token's lead).
+    if p.fmt_mode && p.current.lead != null && !p.current.lead.eq("") {
+        stmts.push(*stmt_comment(p.current.lead));
+    }
     return stmts;
 }
 
@@ -596,6 +600,7 @@ fn parse_enum(p: *Parser) -> *Stmt {
     p.expect_op("{");
     let variants: *Vector<EnumVariant> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
+        let vdoc: string = p.current.doc;
         let vname: string = p.expect_ident();
         let fields: *Vector<Type> = Vector::new();
         if p.eat_op("(") {
@@ -606,9 +611,11 @@ fn parse_enum(p: *Parser) -> *Stmt {
             }
             p.expect_op(")");
         }
-        let v: EnumVariant = EnumVariant { name: vname, fields: fields };
+        let mut v: EnumVariant = EnumVariant { name: vname, fields: fields, doc: vdoc, trail: "" };
+        let had_comma: bool = p.eat_op(",");
+        if p.current.trail != null && !p.current.trail.eq("") { v.trail = p.current.trail; }
         variants.push(v);
-        if !p.eat_op(",") { break; }
+        if !had_comma { break; }
     }
     p.expect_op("}");
     let s: *Stmt = stmt_enum(name, variants, line, col);
@@ -1043,6 +1050,11 @@ fn parse_block(p: *Parser) -> *Vector<Stmt> {
             stmts.push(*s);
         }
     }
+    // Comments after the last stmt (the `}` token's lead) would otherwise be
+    // dropped; keep them as a fmt-only placeholder stmt.
+    if p.fmt_mode && p.current.lead != null && !p.current.lead.eq("") {
+        stmts.push(*stmt_comment(p.current.lead));
+    }
     p.expect_op("}");
     return stmts;
 }
@@ -1399,6 +1411,7 @@ fn parse_match(p: *Parser) -> *Stmt {
     p.expect_op("{");
     let arms: *Vector<MatchArm> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
+        let arm_lead: string = p.current.lead;
         let mut variant: string = "_";
         let bindings: *Vector<string> = Vector::new();
         if p.current.kind == TOK_IDENT {
@@ -1429,8 +1442,10 @@ fn parse_match(p: *Parser) -> *Stmt {
             let ass: *Expr = parse_maybe_assign(p, e);
             body.push(*stmt_expr(ass));
         }
-        arms.push(MatchArm { variant: variant, bindings: bindings, body: body });
+        let mut arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "" };
         p.eat_op(",");
+        if p.current.trail != null && !p.current.trail.eq("") { arm.trail = p.current.trail; }
+        arms.push(arm);
     }
     p.expect_op("}");
     return stmt_match(scrut, arms, line, col);
@@ -1452,6 +1467,7 @@ fn parse_match_expr(p: *Parser) -> *Expr {
     p.expect_op("{");
     let arms: *Vector<MatchArm> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
+        let arm_lead: string = p.current.lead;
         let mut variant: string = "_";
         let bindings: *Vector<string> = Vector::new();
         if p.current.kind == TOK_IDENT {
@@ -1481,8 +1497,10 @@ fn parse_match_expr(p: *Parser) -> *Expr {
             let e: *Expr = parse_expr(p, 0);
             body.push(*stmt_return(e, line, col));
         }
-        arms.push(MatchArm { variant: variant, bindings: bindings, body: body });
+        let mut arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "" };
         p.eat_op(",");
+        if p.current.trail != null && !p.current.trail.eq("") { arm.trail = p.current.trail; }
+        arms.push(arm);
     }
     p.expect_op("}");
     return expr_match(scrut, arms, line, col);
