@@ -11,6 +11,9 @@ import bootstrap::util::json;
 import bootstrap::pkg::manifest;
 import bootstrap::lsp::server;
 import bootstrap::lsp::features;  // extracted
+import bootstrap::pkg::fetch;
+import bootstrap::pkg::loader;
+import bootstrap::syntax::expander;
 
 // LSP CompletionItemKind:
 //   3 = Function, 6 = Variable, 5 = Field, 8 = Class (struct), 13 = Enum,
@@ -3264,13 +3267,7 @@ fn use_to_range(u: *UseSite, name_len: i32) -> *JsonValue {
 }
 
 pub fn handle_references(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
     let path: string = uri_to_path(uri);
@@ -3297,13 +3294,7 @@ pub fn handle_references(req: *JsonValue, state: *LspState) {
 }
 
 pub fn handle_document_highlight(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
     let path: string = uri_to_path(uri);
@@ -3379,13 +3370,7 @@ pub fn handle_rename(req: *JsonValue, state: *LspState) {
 // highlight while the user types the new name. Refuses keywords, literals,
 // and empty selections.
 pub fn handle_prepare_rename(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
     if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
     let doc: LspDoc = state.docs.get(uri);
     let word: string = word_at(doc.text, line0, col0);

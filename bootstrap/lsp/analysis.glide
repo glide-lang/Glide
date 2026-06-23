@@ -10,6 +10,7 @@ import bootstrap::sema::typer;
 import bootstrap::cli::fmt;
 import bootstrap::lsp::server;
 import bootstrap::lsp::features;  // extracted
+import bootstrap::lsp::completion;
 
 fn _is_int_type_name(n: string) -> bool {
     if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") || n.eq("i128") || n.eq("i256") { return true; }

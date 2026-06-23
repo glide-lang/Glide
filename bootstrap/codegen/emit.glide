@@ -203,7 +203,7 @@ pub fn userfn_mangle(name: string) -> string {
     return "__glide_uf_".concat(name);
 }
 
-fn ns_split_pos(name: string) -> i32 {
+pub fn ns_split_pos(name: string) -> i32 {
     let n: i32 = name.len();
     let mut i: i32 = 0;
     while i + 1 < n {
@@ -230,7 +230,7 @@ fn _emit_chan_recv(g: *CG, e: *Expr, deref_n: i32) {
 
 // Return type of a closure argument: an inline `fn(...) -> U {}` carries U in
 // `.cast_to`; a lifted anon (EX_IDENT) is in g.anon_fns; a named fn in g.fns.
-fn _closure_ret_ty(g: *CG, cl: *Expr) -> *Type {
+pub fn _closure_ret_ty(g: *CG, cl: *Expr) -> *Type {
     if cl == null { return null; }
     if cl.kind == EX_FNEXPR { return cl.cast_to; }
     if cl.kind == EX_IDENT {
@@ -245,7 +245,7 @@ fn _closure_ret_ty(g: *CG, cl: *Expr) -> *Type {
 
 // Build a TY_FNPTR from a parameter list + return type (for closure/anon-fn
 // type inference, mirroring the named-fn branch of infer_for_codegen).
-fn _build_fnptr_ty(params: *Vector<Param>, ret: *Type) -> *Type {
+pub fn _build_fnptr_ty(params: *Vector<Param>, ret: *Type) -> *Type {
     let args: *Vector<Type> = Vector::new();
     if params != null {
         for let i: i32 = 0; i < params.len(); i++ {
@@ -886,7 +886,7 @@ pub fn type_to_c(t: *Type) -> string {
 // Mangled identifier core for a tuple type: `tuple<N>_<m0>_<m1>...`. The
 // arity prefix keeps `((i32,i32),i32)` (tuple2_tuple2_i32_i32_i32) distinct
 // from `(i32,i32,i32)` (tuple3_i32_i32_i32).
-fn mangle_tuple(t: *Type) -> string {
+pub fn mangle_tuple(t: *Type) -> string {
     let n: i32 = if t.args != null { t.args.len() } else { 0 };
     let mut out: string = "tuple".concat(int_to_str(n));
     if t.args != null {
@@ -926,7 +926,7 @@ pub fn mangle_generic(name: string, args: *Vector<Type>) -> string {
     return out;
 }
 
-fn mangle_type(t: *Type) -> string {
+pub fn mangle_type(t: *Type) -> string {
     if t == null { return "void"; }
     if t.kind == TY_NAMED { return t.name; }
     if t.kind == TY_POINTER { return mangle_type(t.inner).concat("_ptr"); }
@@ -943,7 +943,7 @@ fn mangle_type(t: *Type) -> string {
 }
 
 
-fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt,
+pub fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt,
                             recv_args: *Vector<Type>) -> *Vector<Type> {
     if template.type_params == null { return recv_args; }
     let n_total: i32 = template.type_params.len();
@@ -1358,7 +1358,7 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
     }
 }
 
-fn prescan_stmt(g: *CG, s: *Stmt) {
+pub fn prescan_stmt(g: *CG, s: *Stmt) {
     if s == null { return; }
     // `return X` carries the enclosing fn's return type as a hint so inline
     // generic ctors like `return Vector::new()` monomorphize correctly.
@@ -1487,7 +1487,7 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
 // Unify a generic pattern type against a concrete type. Adds bindings for
 // matching type vars listed in `params`. Returns false on mismatch (currently
 // permissive: doesn't fail, just collects what it can).
-fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindings: *HashMap<Type>) {
+pub fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindings: *HashMap<Type>) {
     if pat == null { return; }
     if actual == null { return; }
     if pat.kind == TY_NAMED {
@@ -1562,7 +1562,7 @@ fn unify_for_inference(pat: *Type, actual: *Type, params: *Vector<string>, bindi
 
 // Recursive type substitution: walk t, replacing Type::Named(n) with the
 // matching arg from `params -> args` mapping.
-fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
+pub fn subst_type(t: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
     if t == null { return null; }
     if t.kind == TY_NAMED {
         if params != null {
@@ -1689,25 +1689,25 @@ fn unop_to_c(op: i32) -> string {
 
 // ---- printing helpers (just print! to stdout) ----------------------------
 
-fn ind(n: i32) {
+pub fn ind(n: i32) {
     for let i: i32 = 0; i < n; i++ { print!("    "); }
 }
 
 // `@cfg("windows")` / `@cfg("posix")` brackets a top-level decl with a cpp
 // guard so per-platform fns (typically naked asm context switches) compile
 // only on the right OS. No-op when cfg is empty.
-fn emit_cfg_open(cfg: string) {
+pub fn emit_cfg_open(cfg: string) {
     if cfg.eq("windows") { println!("#ifdef _WIN32"); }
     else if cfg.eq("posix") { println!("#ifndef _WIN32"); }
 }
-fn emit_cfg_close(cfg: string) {
+pub fn emit_cfg_close(cfg: string) {
     if cfg.eq("windows") || cfg.eq("posix") { println!("#endif"); }
 }
 
 // Yield-expression of a match arm body: either a single ST_EXPR (the
 // arm wrote `=> expr`) or a block whose trailing `return val;` is the
 // value (the arm wrote `=> { stmts; return val; }`).
-fn arm_value_expr(a: *MatchArm) -> *Expr {
+pub fn arm_value_expr(a: *MatchArm) -> *Expr {
     if a.body == null || a.body.len() == 0 { return null; }
     let last: Stmt = a.body.get(a.body.len() - 1);
     if last.kind == ST_RETURN { return last.expr_value; }
@@ -4101,7 +4101,7 @@ fn resolve_path_alias(g: *CG, prefix: string, name: string) -> string {
 // Resolve the type-prefix of a multi-segment path (e.g. for
 // `stdlib::vector::Vector::new`, `prefix` is `stdlib::vector::Vector` and we
 // want `Vector` back). Used by EX_PATH normalisation in expression handlers.
-fn resolve_type_prefix(g: *CG, prefix: string) -> string {
+pub fn resolve_type_prefix(g: *CG, prefix: string) -> string {
     if prefix == null || prefix.eq("")  { return prefix; }
     if g.module_aliases.contains(prefix) {
         return g.module_aliases.get(prefix);

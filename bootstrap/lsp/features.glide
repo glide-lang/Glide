@@ -10,6 +10,7 @@ import bootstrap::cli::fmt;
 import bootstrap::util::json;
 import bootstrap::pkg::manifest;
 import bootstrap::lsp::server;
+import bootstrap::lsp::completion;
 
 pub fn type_to_string_pretty(t: *Type) -> string {
     if t == null { return ""; }
@@ -997,13 +998,7 @@ fn _sig_json_for_fn(s: *Stmt, drop_self: bool) -> *JsonValue {
 }
 
 pub fn handle_signature_help(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
 
     if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
     let doc: LspDoc = state.docs.get(uri);
@@ -1733,13 +1728,7 @@ fn _emit_incoming(caller: *Stmt, target: string, ctx_uri: string, arr: *JsonValu
 }
 
 pub fn handle_prepare_call_hierarchy(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
     if doc.stmts == null { lsp_send_response(id, json_array()); return; }
@@ -1868,13 +1857,7 @@ fn _th_push_type(stmts: *Vector<Stmt>, name: string, ctx: string, arr: *JsonValu
 }
 
 pub fn handle_prepare_type_hierarchy(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
     if !state.docs.contains(uri) { lsp_send_response(id, json_array()); return; }
     let doc: LspDoc = state.docs.get(uri);
     if doc.stmts == null { lsp_send_response(id, json_array()); return; }
@@ -2607,13 +2590,7 @@ fn _push_impl_loc(out: *JsonValue, seen: *HashMap<bool>, s: *Stmt, fallback: str
 // in each `impl Trait for T`; from a trait name -> the impl blocks; from a
 // struct/enum -> the impls on it.
 pub fn handle_implementation(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
     let out: *JsonValue = json_array();
     if !state.docs.contains(uri) { lsp_send_response(id, out); return; }
     let doc: LspDoc = state.docs.get(uri);
@@ -2674,13 +2651,7 @@ pub fn handle_implementation(req: *JsonValue, state: *LspState) {
 // textDocument/typeDefinition: resolve the type of the symbol/expression at
 // the cursor, then jump to that type's declaration (struct / enum / trait).
 pub fn handle_type_definition(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
     if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
     let doc: LspDoc = state.docs.get(uri);
     if doc.stmts == null { lsp_send_response(id, json_null()); return; }
@@ -2716,13 +2687,7 @@ pub fn handle_type_definition(req: *JsonValue, state: *LspState) {
 }
 
 pub fn handle_definition(req: *JsonValue, state: *LspState) {
-    let id: *JsonValue = json_get(req, "id");
-    let params: *JsonValue = json_get(req, "params");
-    let td: *JsonValue = json_get(params, "textDocument");
-    let uri: string = json_as_string(json_get(td, "uri"));
-    let pos: *JsonValue = json_get(params, "position");
-    let line0: i32 = json_as_int(json_get(pos, "line"));
-    let col0: i32 = json_as_int(json_get(pos, "character"));
+    let (id, uri, line0, col0) = read_pos_params(req);
 
     if !state.docs.contains(uri) { lsp_send_response(id, json_null()); return; }
     let doc: LspDoc = state.docs.get(uri);

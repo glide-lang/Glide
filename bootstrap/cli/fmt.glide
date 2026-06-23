@@ -322,6 +322,17 @@ fn render_doc_lines(raw: string, pad: string) -> string {
     return out;
 }
 
+// Format each statement in a block at the given depth and concatenate.
+fn fmt_body(body: *Vector<Stmt>, depth: i32) -> string {
+    let mut out: string = "";
+    if body == null { return out; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let b: Stmt = body.get(i);
+        out = out.concat(fmt_stmt(&b, depth));
+    }
+    return out;
+}
+
 pub fn fmt_stmt(s: *Stmt, depth: i32) -> string {
     if s == null { return ""; }
     let pad: string = fmt_indent(depth);
@@ -405,12 +416,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     }
     if s.kind == ST_IF {
         let mut out: string = pad.concat("if ").concat(fmt_expr(s.cond)).concat(" {\n");
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                out = out.concat(fmt_stmt(&b, depth + 1));
-            }
-        }
+        out = out.concat(fmt_body(s.then_body, depth + 1));
         if s.else_body != null {
             out = out.concat(pad).concat("} else {\n");
             for let i: i32 = 0; i < s.else_body.len(); i++ {
@@ -426,12 +432,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         pat = pat.concat(")");
         let mut out: string = pad.concat("if let ").concat(pat)
             .concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                out = out.concat(fmt_stmt(&b, depth + 1));
-            }
-        }
+        out = out.concat(fmt_body(s.then_body, depth + 1));
         if s.else_body != null {
             out = out.concat(pad).concat("} else {\n");
             for let i: i32 = 0; i < s.else_body.len(); i++ {
@@ -445,22 +446,12 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         let mut out: string = pad.concat("while let ").concat(s.name);
         if s.let_ty != null { out = out.concat(": ").concat(fmt_type(s.let_ty)); }
         out = out.concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                out = out.concat(fmt_stmt(&b, depth + 1));
-            }
-        }
+        out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
     if s.kind == ST_WHILE {
         let mut out: string = pad.concat("while ").concat(fmt_expr(s.cond)).concat(" {\n");
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                out = out.concat(fmt_stmt(&b, depth + 1));
-            }
-        }
+        out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
     if s.kind == ST_FOR {
@@ -473,12 +464,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         out = out.concat("; ");
         if s.for_step != null { out = out.concat(fmt_expr(s.for_step)); }
         out = out.concat(" {\n");
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                out = out.concat(fmt_stmt(&b, depth + 1));
-            }
-        }
+        out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
     if s.kind == ST_FOR_IN {
@@ -490,22 +476,12 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
             out = out.concat(sep).concat(fmt_expr(s.cond));
         }
         out = out.concat(" {\n");
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                out = out.concat(fmt_stmt(&b, depth + 1));
-            }
-        }
+        out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
     if s.kind == ST_BLOCK {
         let mut out: string = pad.concat("{\n");
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                out = out.concat(fmt_stmt(&b, depth + 1));
-            }
-        }
+        out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
     if s.kind == ST_FN { return fmt_fn(s, depth); }

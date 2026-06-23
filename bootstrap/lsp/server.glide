@@ -82,7 +82,7 @@ c_raw! {
     }
 }
 
-fn _lsp_log(msg: string) { __glide_lsp_log(msg); }
+pub fn _lsp_log(msg: string) { __glide_lsp_log(msg); }
 
 // `~/.glide/lsp.log` on POSIX, `%USERPROFILE%\.glide\lsp.log` on Windows.
 // Falls back to TMP if the home dir lookup fails.
@@ -292,7 +292,7 @@ fn lsp_send(payload: string) {
     __glide_flush_stdout();
 }
 
-fn lsp_send_response(id: *JsonValue, result: *JsonValue) {
+pub fn lsp_send_response(id: *JsonValue, result: *JsonValue) {
     let resp: *JsonValue = json_object();
     json_obj_set(resp, "jsonrpc", json_string("2.0"));
     if id != null { json_obj_set(resp, "id", id); }
@@ -301,13 +301,22 @@ fn lsp_send_response(id: *JsonValue, result: *JsonValue) {
     json_free(resp);
 }
 
-fn lsp_send_notification(method: string, params: *JsonValue) {
+pub fn lsp_send_notification(method: string, params: *JsonValue) {
     let n: *JsonValue = json_object();
     json_obj_set(n, "jsonrpc", json_string("2.0"));
     json_obj_set(n, "method", json_string(method));
     json_obj_set(n, "params", params);
     lsp_send(json_emit(n));
     json_free(n);
+}
+
+// Pull the request id and the `textDocument`/`position` fields every
+// position-based handler needs. Returns (id, uri, line, col).
+pub fn read_pos_params(req: *JsonValue) -> (*JsonValue, string, i32, i32) {
+    let params: *JsonValue = json_get(req, "params");
+    let pos: *JsonValue = json_get(params, "position");
+    let uri: string = json_as_string(json_get(json_get(params, "textDocument"), "uri"));
+    return (json_get(req, "id"), uri, json_as_int(json_get(pos, "line")), json_as_int(json_get(pos, "character")));
 }
 
 // ---- Method handlers ---------------------------------------------------
@@ -519,7 +528,7 @@ fn _attach_related(dj: *JsonValue, t: *Typer, idx: i32) {
 // Convert `file:///C:/path` (Windows) or `file:///path` (POSIX) into a plain
 // filesystem path the rest of the loader can use. URL-decoding is intentionally
 // not done — Glide identifiers and most paths are ASCII.
-fn uri_to_path(uri: string) -> string {
+pub fn uri_to_path(uri: string) -> string {
     let n: i32 = uri.len();
     if n < 7 { return uri; }
     if !uri.substring(0, 7).eq("file://") { return uri; }
@@ -569,7 +578,7 @@ fn find_stdlib_dir() -> string {
 }
 
 // Strip a trailing ".glide" so "math.glide" -> "math".
-fn drop_glide_ext(name: string) -> string {
+pub fn drop_glide_ext(name: string) -> string {
     let n: i32 = name.len();
     if n > 6 && name.substring(n - 6, n).eq(".glide") {
         return name.substring(0, n - 6);
@@ -1011,7 +1020,7 @@ fn _index_one_module(_state: *LspState, path: string, mod_name: string, module: 
 
 // Compact label suffix for fn items, gopls-style: `(a: int, b: int) -> int`.
 // Goes in `labelDetails.detail`, shown next to the function name.
-fn fn_label_extra(s: *Stmt) -> string {
+pub fn fn_label_extra(s: *Stmt) -> string {
     let mut out: string = "(";
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
@@ -1029,7 +1038,7 @@ fn fn_label_extra(s: *Stmt) -> string {
 
 // gopls-style snippet for a fn call: `name(${1:p1}, ${2:p2})`. Each tab
 // stop is the parameter name, so the user can Tab through and overwrite.
-fn fn_snippet(s: *Stmt) -> string {
+pub fn fn_snippet(s: *Stmt) -> string {
     let mut out: string = s.name.concat("(");
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
@@ -1613,11 +1622,11 @@ pub struct FieldHit {
 // `active_param` is the 0-indexed argument the cursor is on (comma count
 // at the call's paren depth).
 struct SigCallCtx {
-    found: bool,
-    name: string,
-    type_qual: string,
-    is_method: bool,
-    active_param: i32,
+    pub found: bool,
+    pub name: string,
+    pub type_qual: string,
+    pub is_method: bool,
+    pub active_param: i32,
 }
 
 
@@ -1627,15 +1636,15 @@ struct SigCallCtx {
 // ---- semanticTokens ----------------------------------------------------
 
 // Legend indices — MUST match the tokenTypes order in handle_initialize.
-const SEMTOK_KEYWORD: i32 = 0;
-const SEMTOK_FUNCTION: i32 = 1;
-const SEMTOK_METHOD: i32 = 2;
-const SEMTOK_TYPE: i32 = 3;
-const SEMTOK_PARAMETER: i32 = 4;
-const SEMTOK_VARIABLE: i32 = 5;
-const SEMTOK_PROPERTY: i32 = 6;
-const SEMTOK_MACRO: i32 = 7;
-const SEMTOK_NAMESPACE: i32 = 8;
+pub const SEMTOK_KEYWORD: i32 = 0;
+pub const SEMTOK_FUNCTION: i32 = 1;
+pub const SEMTOK_METHOD: i32 = 2;
+pub const SEMTOK_TYPE: i32 = 3;
+pub const SEMTOK_PARAMETER: i32 = 4;
+pub const SEMTOK_VARIABLE: i32 = 5;
+pub const SEMTOK_PROPERTY: i32 = 6;
+pub const SEMTOK_MACRO: i32 = 7;
+pub const SEMTOK_NAMESPACE: i32 = 8;
 
 
 
@@ -1666,10 +1675,10 @@ const SEMTOK_NAMESPACE: i32 = 8;
 
 // One call site found in a fn body: the callee name + where it appears.
 struct ChCall {
-    name: string,
-    line: i32,
-    col: i32,
-    span: i32,
+    pub name: string,
+    pub line: i32,
+    pub col: i32,
+    pub span: i32,
 }
 
 
@@ -1852,7 +1861,7 @@ pub const IMPCTX_BRACE: i32 = 2;
 
 // Walks the program collecting every usage of `name` as an identifier.
 // Returns a list of (line, col) pairs, 1-indexed.
-struct UseSite { line: i32, col: i32 }
+struct UseSite { pub line: i32, pub col: i32 }
 
 
 
@@ -2031,7 +2040,7 @@ extern fn __glide_deny_get() -> *void;
 // Compact `parent_dir(path)` — `main.glide`'s is not `pub`, so we
 // keep a local copy here. Same behaviour: strip trailing `/seg` or
 // `\seg`, return "" when there's no separator.
-fn _lsp_parent_dir(path: string) -> string {
+pub fn _lsp_parent_dir(path: string) -> string {
     let n: i32 = path.len();
     let mut last: i32 = -1;
     for let i: i32 = 0; i < n; i++ {
@@ -2249,12 +2258,12 @@ fn _stmt_has_loop_break(s: *Stmt) -> bool {
 
 
 struct ExpectPending {
-    pe_code: string,
-    pe_line: i32,        // start of the matching range (inclusive)
-    pe_end_line: i32,    // end of the matching range (inclusive); == pe_line for stmt-local
-    pe_col: i32,
-    pe_origin: string,
-    pe_done: bool,
+    pub pe_code: string,
+    pub pe_line: i32,        // start of the matching range (inclusive)
+    pub pe_end_line: i32,    // end of the matching range (inclusive); == pe_line for stmt-local
+    pub pe_col: i32,
+    pub pe_origin: string,
+    pub pe_done: bool,
 }
 
 

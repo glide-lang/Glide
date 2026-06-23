@@ -173,28 +173,7 @@ extern fn write_file(path: string, content: string) -> bool;
 // message. A C error in type-checked Glide is either inside a user `c_raw!`
 // block (the user's inline C) or, otherwise, an internal compiler bug (ICE).
 
-struct CcDiag {
-    file: string,
-    line: i32,
-    col: i32,
-    severity: i32,   // 1 = error, 2 = warning
-    message: string,
-}
 
-
-
-
-
-
-
-
-// A `c_raw! { ... }` region in the source, used to classify a cc error as the
-// user's inline C vs an internal compiler bug.
-struct CrawSpan {
-    file: string,
-    start: i32,
-    end: i32,
-}
 
 
 

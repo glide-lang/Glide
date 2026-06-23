@@ -9,6 +9,26 @@ import bootstrap::syntax::lexer;
 import bootstrap::sema::typer;
 import bootstrap::cli::fmt;
 
+extern fn __glide_getenv(name: string) -> string;
+
+// A single C-compiler diagnostic, parsed back from the cc log and re-anchored
+// onto the Glide source line that produced it.
+pub struct CcDiag {
+    pub file: string,
+    pub line: i32,
+    pub col: i32,
+    pub severity: i32,   // 1 = error, 2 = warning
+    pub message: string,
+}
+
+// A `c_raw! { ... }` region in the source, used to classify a cc error as the
+// user's inline C vs an internal compiler bug.
+pub struct CrawSpan {
+    pub file: string,
+    pub start: i32,
+    pub end: i32,
+}
+
 fn use_color() -> bool { return __glide_getenv("NO_COLOR").eq(""); }
 pub fn col_red() -> string    { if use_color() { return "\x1b[1;31m"; } return ""; }
 fn col_yellow() -> string { if use_color() { return "\x1b[1;33m"; } return ""; }
