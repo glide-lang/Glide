@@ -1189,6 +1189,12 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     }
 
     let t: *Typer = Typer::new();
+    // Editor-only: only the user's buffer needs its bodies type-checked +
+    // linted; imported files' diagnostics are filtered out before publish.
+    // Gating to this origin keeps cross-file resolution (registration is still
+    // whole-program) while not retaining ~40k imported bodies' analysis in the
+    // per-doc arena. CLI never sets this, so build/check stay full-program.
+    t.user_origin = path;
     merge_parse_diags(t, pdiags);
     // The manifest (`glide.glide`) is config, not a program: the CLI only
     // parses it for literal fields and never type-checks it. Its `Package` /

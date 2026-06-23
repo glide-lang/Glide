@@ -610,6 +610,12 @@ pub struct Typer {
     // body when T is one of these. Null/empty outside any generic fn.
     pub current_type_params: *Vector<string>,
     pub current_origin: string,    // file the typer is currently checking
+    // LSP-only: when set to the edited file's path, check_program skips the
+    // BODY typecheck of functions from OTHER (imported) files — their
+    // diagnostics are discarded at publish anyway, and registration
+    // (_canon_decls / pre_register / build_visibility) is still whole-program,
+    // so cross-file resolution is unchanged. Empty ("") = full checking (CLI).
+    pub user_origin: string,
     // Per-file visibility: `<origin>::<name>` -> bool. A name is visible
     // from file `F` only if it appears in `F`'s visibility set. Selective
     // imports (`import a::b::c::Item;`) populate this; src/builtins/ pub
@@ -1001,6 +1007,7 @@ impl Typer {
         t.current_ret = null;
         t.current_type_params = null;
         t.current_origin = "";
+        t.user_origin = "";
         let vis: *HashMap<bool> = HashMap::new();
         t.visibility = vis;
         let mi: *HashMap<bool> = HashMap::new();
@@ -2103,11 +2110,24 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
 
 // ---- main check ----------------------------------------------------------
 
+// True when `s` belongs to an imported file (not the LSP's edited buffer) and
+// should have its body skipped. Synthesized/builtin stmts (null/empty origin)
+// and the CLI default (user_origin "") are never skipped.
+fn _skip_imported(t: *Typer, s: *Stmt) -> bool {
+    if t.user_origin == null || t.user_origin.eq("") { return false; }
+    if s.origin == null || s.origin.eq("") { return false; }
+    return !s.origin.eq(t.user_origin);
+}
+
 pub fn check_program(t: *Typer, program: *Vector<Stmt>) {
     t._canon_decls(program);
     pre_register(t, program);
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        // LSP: registration above is whole-program, but the body typecheck of
+        // imported fns is wasted work (its diagnostics are filtered out before
+        // publish) that would otherwise fill the retained per-doc arena.
+        if _skip_imported(t, &s) { continue; }
         t.current_origin = s.origin;
         check_top(t, &s);
     }
