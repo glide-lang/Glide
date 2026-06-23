@@ -20,6 +20,7 @@ import stdlib::os::*;
 import stdlib::env::*;
 import stdlib::io::*;
 import stdlib::spinner::*;
+import stdlib::process::*;
 import lexer;
 import ast;
 import parser;
@@ -3778,6 +3779,61 @@ fn scan_bench_fns(src: string) -> *Vector<string> {
 // that memory to the OS after each file, keeping the driver flat. Build chatter
 // is suppressed to a log and shown only on failure (so cc/typer errors still
 // surface). Falls back to an in-process build if we can't resolve our own path.
+// Number of parallel test-build jobs: GLIDE_TEST_JOBS if set, else cores-1.
+fn _test_jobs() -> i32 {
+    let env: string = __glide_getenv("GLIDE_TEST_JOBS");
+    if !env.eq("") {
+        let n: i32 = env.parse_int();
+        if n >= 1 { return n; }
+    }
+    let cc: !i32 = os_cpu_count();
+    if !cc.ok { return 1; }
+    if cc.val <= 1 { return 1; }
+    // Cap the default: past ~8 concurrent builds the shared scratch dir + the
+    // C toolchain contend (more "file in use" retries) for little gain, since
+    // the sequential run phase is the floor. Override with GLIDE_TEST_JOBS.
+    let mut j: i32 = cc.val - 1;
+    if j > 8 { j = 8; }
+    return j;
+}
+
+// The `glide build` command line (with a per-file redirect to `log`) for a
+// synthesised test/bench. Returned WITHOUT an outer quote wrap: the async
+// spawn path runs it through cmd.exe's `/S /C` smart-quoting (POSIX sh -c),
+// unlike the synchronous system() path which needs the manual wrap.
+fn _test_build_cmd(exe: string, tmp: string, out: string, log: string, fast: bool) -> string {
+    let q: string = "\"";
+    let mut bc: string = q.concat(exe).concat(q).concat(" build ").concat(q).concat(tmp).concat(q)
+        .concat(" -o ").concat(q).concat(out).concat(q);
+    if fast { bc = bc.concat(" --cflag=-O0 --cflag=-g0 --cflag=-pipe"); }
+    bc = bc.concat(" > ").concat(q).concat(log).concat(q).concat(" 2>&1");
+    return bc;
+}
+
+// Spawn a shell that runs `bc` (so its `>` redirect is honoured), async.
+fn _spawn_shell(bc: string) -> !Child {
+    let mut shell: string = "sh";
+    let mut flag: string = "-c";
+    if __glide_is_windows() != 0 { shell = "cmd"; flag = "/c"; }
+    let c: *Command = Command::new(shell);
+    c.arg(flag).arg(bc);
+    return c.spawn();
+}
+
+// Run a freshly built test/bench binary in its own process; return its exit
+// code (the test summary = number of failures).
+fn _run_built(out: string) -> i32 {
+    let q: string = "\"";
+    let mut run_target: string = out;
+    if !out.contains("/") && !out.contains("\\") {
+        if __glide_is_windows() != 0 { run_target = ".\\".concat(out); }
+        else { run_target = "./".concat(out); }
+    }
+    let mut rc_cmd: string = q.concat(run_target).concat(q);
+    if __glide_is_windows() != 0 { rc_cmd = q.concat(rc_cmd).concat(q); }
+    return __glide_shell(rc_cmd);
+}
+
 fn _isolated_build_run(tmp_path: string, out_path: string, fast: bool) -> i32 {
     let exe: string = __glide_exe_path();
     if exe.eq("") {
@@ -3954,58 +4010,164 @@ fn run_test(path: string) -> i32 {
         }
     }
 
+    let scratch: string = _scratch_dir();
+    let exe: string = __glide_exe_path();
+    let jobs: i32 = _test_jobs();
+    // Parallel builds need our own path to re-invoke as a child + at least 2
+    // jobs; otherwise fall back to the serial path (also the single-file case).
+    if exe.eq("") || jobs <= 1 { return _run_test_serial(files, scratch); }
+    return _run_test_parallel(files, scratch, exe, jobs);
+}
+
+// Synthesise the per-file test program: the testing module + a main() that
+// runs each test_* in declaration order and returns the failure count.
+fn _synth_test(src: string, test_fns: *Vector<string>) -> string {
+    let mut synth: string = "import stdlib::testing::*;\n".concat(src);
+    synth = synth.concat("\n\nfn main() -> i32 {\n");
+    for let j: i32 = 0; j < test_fns.len(); j++ {
+        let name: string = test_fns.get(j);
+        synth = synth.concat("    test_begin(\"").concat(name).concat("\");\n");
+        synth = synth.concat("    if ").concat(name).concat("() == 0 { test_pass(); }\n");
+    }
+    synth = synth.concat("    return test_summary();\n}\n");
+    return synth;
+}
+
+fn _test_summary_print(total: i32, failed: i32) -> i32 {
+    println!("");
+    if failed > 0 {
+        println!(col_red().concat("test result:").concat(col_reset()),
+                 failed, "of", total, "files had failures");
+        return 1;
+    }
+    println!(col_blue().concat("test result:").concat(col_reset()),
+             "all", total, "files passed");
+    return 0;
+}
+
+// One shared scratch path; builds + runs each file in turn. Used for the
+// single-file case and when parallelism is disabled (GLIDE_TEST_JOBS=1).
+fn _run_test_serial(files: *Vector<string>, scratch: string) -> i32 {
     let mut total_files: i32 = 0;
     let mut failed_files: i32 = 0;
-    let scratch: string = _scratch_dir();
     let tmp_path: string = scratch.concat("/__glide_test_run.glide");
     let mut out_path: string = scratch.concat("/__glide_test_run.exe");
     if __glide_is_windows() == 0 { out_path = scratch.concat("/__glide_test_run"); }
-
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         let src: string = read_file(f);
         if src.eq("") { continue; }
-
         let test_fns: *Vector<string> = scan_test_fns(src);
         if test_fns.len() == 0 {
             println!("(no test_* functions in", f, "—  skipping)");
             continue;
         }
-
-        // Synthesise: prepend testing import (idempotent — loader dedups),
-        // append a main() that calls each test_* in declaration order.
-        let mut synth: string = "import stdlib::testing::*;\n".concat(src);
-        synth = synth.concat("\n\nfn main() -> i32 {\n");
-        for let j: i32 = 0; j < test_fns.len(); j++ {
-            let name: string = test_fns.get(j);
-            synth = synth.concat("    test_begin(\"").concat(name).concat("\");\n");
-            synth = synth.concat("    if ").concat(name).concat("() == 0 { test_pass(); }\n");
-        }
-        synth = synth.concat("    return test_summary();\n}\n");
-
+        let synth: string = _synth_test(src, test_fns);
         if !write_file(tmp_path, synth) {
             println!("could not write temp test file");
             return 1;
         }
-
         println!(col_blue().concat("running").concat(col_reset()), f,
                  "(", test_fns.len(), "tests )");
         let rc: i32 = _isolated_build_run(tmp_path, out_path, true);
         total_files = total_files + 1;
         if rc != 0 { failed_files = failed_files + 1; }
     }
-
-    // Best-effort cleanup; ignore errors.
     write_file(tmp_path, "");
-    println!("");
-    if failed_files > 0 {
-        println!(col_red().concat("test result:").concat(col_reset()),
-                 failed_files, "of", total_files, "files had failures");
-        return 1;
+    return _test_summary_print(total_files, failed_files);
+}
+
+// Build every file concurrently (a bounded window of `jobs` child `glide
+// build` processes, each with its OWN scratch path so they don't clobber),
+// then run the binaries SEQUENTIALLY in file order — sequential runs keep
+// output readable and avoid port/file races between tests.
+fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs: i32) -> i32 {
+    let kept: *Vector<string> = Vector::new();
+    let counts: *Vector<i32> = Vector::new();
+    let tmps: *Vector<string> = Vector::new();
+    let outs: *Vector<string> = Vector::new();
+    let logs: *Vector<string> = Vector::new();
+    for let i: i32 = 0; i < files.len(); i++ {
+        let f: string = files.get(i);
+        let src: string = read_file(f);
+        if src.eq("") { continue; }
+        let test_fns: *Vector<string> = scan_test_fns(src);
+        if test_fns.len() == 0 {
+            println!("(no test_* functions in", f, "—  skipping)");
+            continue;
+        }
+        let synth: string = _synth_test(src, test_fns);
+        let idx: i32 = kept.len();
+        let stem: string = scratch.concat("/__glide_test_run_").concat(int_to_str(idx));
+        let tmp: string = stem.concat(".glide");
+        let mut out: string = stem.concat(".exe");
+        if __glide_is_windows() == 0 { out = stem; }
+        if !write_file(tmp, synth) {
+            println!("could not write temp test file");
+            return 1;
+        }
+        kept.push(f); counts.push(test_fns.len());
+        tmps.push(tmp); outs.push(out); logs.push(out.concat(".build.log"));
     }
-    println!(col_blue().concat("test result:").concat(col_reset()),
-             "all", total_files, "files passed");
-    return 0;
+    let n: i32 = kept.len();
+    let brc: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < n; i++ { brc.push(-999); }
+
+    // Spawn builds, keeping at most `jobs` in flight; reap the oldest (FIFO)
+    // when the window is full. The FIRST build runs ALONE (window of 1) as a
+    // warm-up: it populates the shared scratch dir with the bundled runtime
+    // DLLs, so every later build sees them already present and skips the copy
+    // — without that, N builds race to write the same DLLs ("file in use").
+    let win_child: *Vector<Child> = Vector::new();
+    let win_idx: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < n; i++ {
+        let bc: string = _test_build_cmd(exe, tmps.get(i), outs.get(i), logs.get(i), true);
+        let ch: !Child = _spawn_shell(bc);
+        if !ch.ok { brc.set(i, -1); continue; }
+        win_child.push(ch.val);
+        win_idx.push(i);
+        let mut cap: i32 = jobs;
+        if i == 0 { cap = 1; }
+        if win_child.len() >= cap {
+            let c0: Child = win_child.get(0);
+            let idx0: i32 = win_idx.get(0);
+            win_child.remove(0); win_idx.remove(0);
+            let r: !ProcessResult = c0.wait();
+            if r.ok { brc.set(idx0, r.val.exit_code); } else { brc.set(idx0, -1); }
+        }
+    }
+    while win_child.len() > 0 {
+        let c0: Child = win_child.get(0);
+        let idx0: i32 = win_idx.get(0);
+        win_child.remove(0); win_idx.remove(0);
+        let r: !ProcessResult = c0.wait();
+        if r.ok { brc.set(idx0, r.val.exit_code); } else { brc.set(idx0, -1); }
+    }
+
+    // Run sequentially in file order; show the build log only on a build error.
+    let mut total: i32 = 0;
+    let mut failed: i32 = 0;
+    for let i: i32 = 0; i < n; i++ {
+        println!(col_blue().concat("running").concat(col_reset()), kept.get(i),
+                 "(", counts.get(i), "tests )");
+        total = total + 1;
+        let b: i32 = brc.get(i);
+        if b != 0 {
+            // The parallel build failed — usually a transient "file in use" on
+            // the shared scratch dir under concurrency. Retry serially (this
+            // also runs it); a genuine build error surfaces there.
+            let rc: i32 = _isolated_build_run(tmps.get(i), outs.get(i), true);
+            if rc != 0 { failed = failed + 1; }
+        } else {
+            let rrc: i32 = _run_built(outs.get(i));
+            if rrc != 0 { failed = failed + 1; }
+        }
+        fs_remove_file(tmps.get(i));
+        fs_remove_file(logs.get(i));
+        fs_remove_file(outs.get(i));
+        fs_remove_file(outs.get(i).concat(".__glide.c"));
+    }
+    return _test_summary_print(total, failed);
 }
 
 // Build `name` (a `*.glide` path) into a fresh executable, run it with
