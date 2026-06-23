@@ -266,7 +266,7 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     if p.eat_kw("extern") {
         if p.at_kw("fn") {
             let s: *Stmt = parse_fn(p);
-            if s != null { s.is_pub = is_pub; s.fn_body = null; s.cfg_target = cfg; s.attrs = attrs_collected; }
+            if s != null { s.is_pub = is_pub; s.is_extern = true; s.fn_body = null; s.cfg_target = cfg; s.attrs = attrs_collected; }
             return s;
         }
         // `extern type Foo;` etc — for now, skip the line.

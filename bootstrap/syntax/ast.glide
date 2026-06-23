@@ -283,6 +283,7 @@ pub struct Stmt {
     pub name_col: i32,
     pub name_len: i32,
     pub is_pub: bool,
+    pub is_extern: bool,           // `extern fn ...;` — kept so fmt round-trips the keyword
     pub origin: string,            // file path; set by load_into_str on top-level stmts
     pub doc_comment: string,       // contiguous `//` block above the decl (LSP hover)
 

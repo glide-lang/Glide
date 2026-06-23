@@ -118,7 +118,10 @@ impl Lexer {
                     let line_start: i32 = self.pos;
                     while self.pos < self.src_len {
                         let cc: char = self.peek();
-                        if cc.to_int() == 10 { break; }
+                        // Stop at CR too: on CRLF sources the trailing `\r`
+                        // would otherwise ride along in the captured comment and
+                        // accumulate on every fmt round-trip.
+                        if cc.to_int() == 10 || cc.to_int() == 13 { break; }
                         self.advance();
                     }
                     let line_text: string = self.src.substring(line_start, self.pos);

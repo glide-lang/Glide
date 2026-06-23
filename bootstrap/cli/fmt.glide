@@ -94,6 +94,12 @@ fn fmt_char_lit(n: i32) -> string {
     if n == 9  { return "'\\t'"; }
     if n == 13 { return "'\\r'"; }
     if n == 0  { return "'\\0'"; }
+    // Printable ASCII: emit the character itself (the lexer has no `'\xNN'`
+    // char escape, so a hex form here would not round-trip).
+    if n >= 32 && n <= 126 {
+        let printable: string = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+        return "'".concat(printable.substring(n - 32, n - 31)).concat("'");
+    }
     let hex: string = "0123456789abcdef";
     let mut high: i32 = (n / 16) % 16; if high < 0 { high = 0; }
     let mut low: i32 = n % 16; if low < 0 { low = 0; }
@@ -247,6 +253,49 @@ pub fn fmt_expr(e: *Expr) -> string {
         }
         return out.concat(" }");
     }
+    if e.kind == EX_IF {
+        let mut out: string = "if ".concat(fmt_expr(e.lhs)).concat(" { ").concat(fmt_expr(e.rhs)).concat(" }");
+        if e.operand != null { out = out.concat(" else { ").concat(fmt_expr(e.operand)).concat(" }"); }
+        return out;
+    }
+    if e.kind == EX_BLOCK {
+        let mut out: string = "{ ";
+        if e.block_stmts != null {
+            for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+                let b: Stmt = e.block_stmts.get(i);
+                out = out.concat(fmt_stmt_inline(&b)).concat(" ");
+            }
+        }
+        if e.operand != null { out = out.concat(fmt_expr(e.operand)).concat(" "); }
+        return out.concat("}");
+    }
+    if e.kind == EX_MATCH {
+        let mut out: string = "match ".concat(fmt_expr(e.lhs)).concat(" { ");
+        if e.match_arms != null {
+            for let i: i32 = 0; i < e.match_arms.len(); i++ {
+                let a: MatchArm = e.match_arms.get(i);
+                out = out.concat(a.variant);
+                if a.bindings != null && a.bindings.len() > 0 {
+                    out = out.concat("(");
+                    for let j: i32 = 0; j < a.bindings.len(); j++ {
+                        if j > 0 { out = out.concat(", "); }
+                        out = out.concat(a.bindings.get(j));
+                    }
+                    out = out.concat(")");
+                }
+                out = out.concat(" => { ");
+                if a.body != null {
+                    for let j: i32 = 0; j < a.body.len(); j++ {
+                        let b: Stmt = a.body.get(j);
+                        out = out.concat(fmt_stmt_inline(&b)).concat(" ");
+                    }
+                }
+                out = out.concat("} ");
+            }
+        }
+        return out.concat("}");
+    }
+    if e.kind == EX_MACRO_VAR { return "$".concat(e.str_val); }
     return "/* fmt: unknown expr */";
 }
 
@@ -281,7 +330,11 @@ fn fmt_stmt_inline(s: *Stmt) -> string {
 
 fn fmt_let_const_inline(s: *Stmt) -> string {
     let mut out: string = "";
-    if s.kind == ST_CONST { out = "const "; } else { out = "let "; }
+    if s.kind == ST_CONST {
+        if s.is_pub { out = "pub const "; } else { out = "const "; }
+    } else {
+        out = "let ";
+    }
     if s.is_mut { out = out.concat("mut "); }
     // Tuple destructuring: `let (a, b, c) = expr;`.
     if s.let_names != null && s.let_names.len() > 0 {
@@ -346,6 +399,11 @@ pub fn fmt_stmt(s: *Stmt, depth: i32) -> string {
 fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     let pad: string = fmt_indent(depth);
 
+    // `c_raw! { ... }`: the body is raw C, captured verbatim by the lexer.
+    // Re-emit it untouched — reformatting inline C would corrupt it.
+    if s.kind == ST_CRAW {
+        return pad.concat("c_raw! {").concat(s.name).concat("}\n");
+    }
     if s.kind == ST_LET || s.kind == ST_CONST {
         return pad.concat(fmt_let_const_inline(s)).concat("\n");
     }
@@ -411,8 +469,12 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
                 }
                 tail_s = tail_s.concat("}");
             }
+        } else if s.import_wildcard {
+            tail_s = "::*";
         }
-        return pad.concat("import ").concat(module).concat(tail_s).concat(";\n");
+        let mut kw: string = "import ";
+        if s.is_pub { kw = "pub import "; }
+        return pad.concat(kw).concat(module).concat(tail_s).concat(";\n");
     }
     if s.kind == ST_IF {
         let mut out: string = pad.concat("if ").concat(fmt_expr(s.cond)).concat(" {\n");
@@ -596,6 +658,7 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
         head = head.concat("@cfg(\"").concat(s.cfg_target).concat("\")\n").concat(pad);
     }
     if s.is_pub { head = head.concat("pub "); }
+    if s.is_extern { head = head.concat("extern "); }
     if s.is_naked { head = head.concat("naked "); }
     head = head.concat("fn ").concat(s.name).concat(fmt_type_params(s)).concat("(");
     if s.fn_params != null {
@@ -604,6 +667,10 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
             let p: Param = s.fn_params.get(i);
             head = head.concat(p.name).concat(": ").concat(fmt_type(p.ty));
         }
+    }
+    if s.is_variadic {
+        if s.fn_params != null && s.fn_params.len() > 0 { head = head.concat(", ..."); }
+        else { head = head.concat("..."); }
     }
     head = head.concat(")");
     if s.fn_ret_ty != null { head = head.concat(" -> ").concat(fmt_type(s.fn_ret_ty)); }
