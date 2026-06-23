@@ -244,6 +244,7 @@ pub struct Field {
     pub is_pub: bool,       // `pub field: T,` is exported across files
     pub bang_pub: bool,     // exported via the `!field: T,` short sigil; kept
                             // so `fmt` reproduces the author's chosen spelling
+    pub trail: string,      // same-line comment after the field decl (fmt)
 }
 
 pub struct EnumVariant {
@@ -286,6 +287,8 @@ pub struct Stmt {
     pub is_extern: bool,           // `extern fn ...;` — kept so fmt round-trips the keyword
     pub origin: string,            // file path; set by load_into_str on top-level stmts
     pub doc_comment: string,       // contiguous `//` block above the decl (LSP hover)
+    pub leading_comments: string,  // all comments above the decl, blanks kept (fmt)
+    pub trailing_comment: string,  // same-line comment after the decl (fmt)
 
     // Let / Const
     pub name: string,
@@ -521,6 +524,7 @@ pub fn make_field(name: string, ty: *Type, is_pub: bool) -> *Field {
     f.name = name;
     f.ty = ty;
     f.is_pub = is_pub;
+    f.trail = "";
     return f;
 }
 

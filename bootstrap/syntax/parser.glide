@@ -203,9 +203,14 @@ pub fn parse_program(p: *Parser) -> *Vector<Stmt> {
         // `lex.pending_doc` belongs to `peek`, not `current`, by the time
         // the parser looks at it).
         let doc: string = p.current.doc;
+        let lead: string = p.current.lead;
         let s: *Stmt = parse_top_stmt(p);
         if s == null { p.advance(); continue; }
         s.doc_comment = doc;
+        s.leading_comments = lead;
+        // After the decl, `current` is the next token; a comment on the same
+        // line as the decl's end rode along as that token's `trail`.
+        s.trailing_comment = p.current.trail;
         stmts.push(*s);
     }
     return stmts;
@@ -564,9 +569,11 @@ fn parse_struct(p: *Parser) -> *Stmt {
         let fname: string = p.expect_ident();
         p.expect_op(":");
         let fty: *Type = parse_type(p);
-        let f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang };
+        let mut f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang, trail: "" };
+        let had_comma: bool = p.eat_op(",");
+        if p.current.trail != null && !p.current.trail.eq("") { f.trail = p.current.trail; }
         fields.push(f);
-        if !p.eat_op(",") { break; }
+        if !had_comma { break; }
     }
     p.expect_op(close);
     let s: *Stmt = stmt_struct(name, fields, line, col);
@@ -1027,9 +1034,12 @@ fn parse_block(p: *Parser) -> *Vector<Stmt> {
         // Pick up any `//` comment chain that lives above this stmt so the
         // formatter can re-emit it. Same pattern as parse_program.
         let doc: string = p.current.doc;
+        let lead: string = p.current.lead;
         let s: *Stmt = parse_stmt(p);
         if s != null {
             if doc != null && !doc.eq("") { s.doc_comment = doc; }
+            if lead != null && !lead.eq("") { s.leading_comments = lead; }
+            if p.current.trail != null && !p.current.trail.eq("") { s.trailing_comment = p.current.trail; }
             stmts.push(*s);
         }
     }
@@ -1630,8 +1640,15 @@ fn parse_block_expr(p: *Parser) -> *Expr {
     p.expect_op("{");
     let stmts: *Vector<Stmt> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
+        let doc: string = p.current.doc;
+        let lead: string = p.current.lead;
         let s: *Stmt = parse_stmt(p);
-        if s != null { stmts.push(*s); }
+        if s != null {
+            if doc != null && !doc.eq("") { s.doc_comment = doc; }
+            if lead != null && !lead.eq("") { s.leading_comments = lead; }
+            if p.current.trail != null && !p.current.trail.eq("") { s.trailing_comment = p.current.trail; }
+            stmts.push(*s);
+        }
     }
     p.expect_op("}");
     let mut value: *Expr = null;

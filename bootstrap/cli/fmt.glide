@@ -414,14 +414,47 @@ fn fmt_body(body: *Vector<Stmt>, depth: i32) -> string {
     return out;
 }
 
+// Render a captured leading-comment block: one `// line` per line, but
+// reproduce blank lines and empty `//` lines (sentinel `\x01`) verbatim so
+// section breaks survive a round-trip.
+fn render_lead_lines(raw: string, pad: string) -> string {
+    if raw == null || raw.eq("") { return ""; }
+    let mut out: string = "";
+    let n: i32 = raw.len();
+    let mut i: i32 = 0;
+    while i < n {
+        let mut j: i32 = i;
+        while j < n && raw.at(j).to_int() != 10 { j = j + 1; }
+        let line: string = raw.substring(i, j);
+        if line.eq("") { out = out.concat("\n"); }
+        else if line.eq("\x01") { out = out.concat(pad).concat("//\n"); }
+        else { out = out.concat(pad).concat("// ").concat(line).concat("\n"); }
+        if j >= n { break; }
+        i = j + 1;
+    }
+    return out;
+}
+
 pub fn fmt_stmt(s: *Stmt, depth: i32) -> string {
     if s == null { return ""; }
     let pad: string = fmt_indent(depth);
     let mut prefix: string = "";
-    if s.doc_comment != null && !s.doc_comment.eq("") {
+    if s.leading_comments != null && !s.leading_comments.eq("") {
+        prefix = render_lead_lines(s.leading_comments, pad);
+    } else if s.doc_comment != null && !s.doc_comment.eq("") {
         prefix = render_doc_lines(s.doc_comment, pad);
     }
-    return prefix.concat(fmt_stmt_inner(s, depth));
+    let mut body: string = fmt_stmt_inner(s, depth);
+    // A same-line trailing comment goes back on the decl's last line.
+    if s.trailing_comment != null && !s.trailing_comment.eq("") {
+        let bl: i32 = body.len();
+        if bl > 0 && body.at(bl - 1).to_int() == 10 {
+            body = body.substring(0, bl - 1).concat(" // ").concat(s.trailing_comment).concat("\n");
+        } else {
+            body = body.concat(" // ").concat(s.trailing_comment);
+        }
+    }
+    return prefix.concat(body);
 }
 
 fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
@@ -723,13 +756,16 @@ fn fmt_struct(s: *Stmt, depth: i32) -> string {
     let inner: string = fmt_indent(depth + 1);
     for let i: i32 = 0; i < s.struct_fields.len(); i++ {
         let f: Field = s.struct_fields.get(i);
+        if f.doc != null && !f.doc.eq("") { out = out.concat(render_doc_lines(f.doc, inner)); }
         out = out.concat(inner);
         // Reproduce the export marker exactly as written: `!field` keeps its
         // short sigil, `pub field` keeps the long form. Dropping it silently
         // flipped an exported field back to private.
         if f.bang_pub { out = out.concat("!"); }
         else if f.is_pub { out = out.concat("pub "); }
-        out = out.concat(f.name).concat(": ").concat(fmt_type(f.ty)).concat(",\n");
+        out = out.concat(f.name).concat(": ").concat(fmt_type(f.ty)).concat(",");
+        if f.trail != null && !f.trail.eq("") { out = out.concat(" // ").concat(f.trail); }
+        out = out.concat("\n");
     }
     return out.concat(pad).concat("}\n");
 }
@@ -791,6 +827,9 @@ fn fmt_impl(s: *Stmt, depth: i32) -> string {
         for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             if i > 0 || has_assoc { out = out.concat("\n"); }
             let m: Stmt = s.impl_methods.get(i);
+            let mpad: string = fmt_indent(depth + 1);
+            if m.leading_comments != null && !m.leading_comments.eq("") { out = out.concat(render_lead_lines(m.leading_comments, mpad)); }
+            else if m.doc_comment != null && !m.doc_comment.eq("") { out = out.concat(render_doc_lines(m.doc_comment, mpad)); }
             out = out.concat(fmt_fn(&m, depth + 1));
         }
     }
@@ -828,6 +867,9 @@ fn fmt_trait(s: *Stmt, depth: i32) -> string {
     if has_methods {
         for let i: i32 = 0; i < s.impl_methods.len(); i++ {
             let m: Stmt = s.impl_methods.get(i);
+            let mpad: string = fmt_indent(depth + 1);
+            if m.leading_comments != null && !m.leading_comments.eq("") { out = out.concat(render_lead_lines(m.leading_comments, mpad)); }
+            else if m.doc_comment != null && !m.doc_comment.eq("") { out = out.concat(render_doc_lines(m.doc_comment, mpad)); }
             out = out.concat(fmt_fn(&m, depth + 1));
         }
     }
