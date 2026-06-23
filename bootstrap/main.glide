@@ -211,6 +211,9 @@ fn help_for_code(code: string) -> string {
     if code.eq("expected-token")     { return "the parser expected a specific token here; check for an unbalanced `{`/`(`/`[` above"; }
     if code.eq("for-in-not-iterable") { return "`for-in` walks a range (`0..n`) or a collection, not a single number"; }
     if code.eq("unused-result")      { return "handle the result: check `.ok`, propagate with `?`, or default with `??`"; }
+    if code.eq("ice")                { return "type-checked Glide should always produce valid C — this is a compiler bug; please report it with the preserved `.__glide.c` and `.log`"; }
+    if code.eq("c-raw-error")        { return "the error is inside a `c_raw! { ... }` block — fix the inline C (Glide emits it verbatim and does not type-check it)"; }
+    if code.eq("cc-error")           { return "the C compiler rejected the generated code; inspect the preserved `.__glide.c` and the cc log"; }
     return "";
 }
 
@@ -303,6 +306,590 @@ fn print_pretty_diag(d: DiagEntry, src: string, src_path: string) {
         println!(h);
     }
     println!("");
+}
+
+// ---- C-compiler error rendering -----------------------------------------
+//
+// The generated C is compiled by an external cc (gcc / clang / `zig cc`). Its
+// output normally streams raw to the terminal — a wall of C diagnostics that
+// reference the throwaway `.__glide.c`. But codegen emits `#line N "file.glide"`
+// directives, so cc already anchors each error at the originating .glide line.
+// We capture cc's output (via shell redirection appended to the build command),
+// parse each diagnostic, and re-render it as a Glide diagnostic: the offending
+// .glide line with a caret, the matching slice of generated C, and cc's own
+// message. A C error in type-checked Glide is either inside a user `c_raw!`
+// block (the user's inline C) or, otherwise, an internal compiler bug (ICE).
+
+struct CcDiag {
+    file: string,
+    line: i32,
+    col: i32,
+    severity: i32,   // 1 = error, 2 = warning
+    message: string,
+}
+
+// Normalize backslashes to forward slashes so a Windows path compares equal to
+// the forward-slashed form codegen writes into `#line` directives.
+fn _fwd_slashes(p: string) -> string {
+    let mut out: string = "";
+    for let i: i32 = 0; i < p.len(); i++ {
+        if p.at(i).to_int() == 92 { out = out.concat("/"); }
+        else { out = out.concat(p.substring(i, i + 1)); }
+    }
+    return out;
+}
+
+fn _cc_all_digits(s: string) -> bool {
+    if s.len() == 0 { return false; }
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
+        if c < 48 || c > 57 { return false; }
+    }
+    return true;
+}
+
+fn _cc_severity_of(ln: string) -> i32 {
+    if ln.contains(": error:")   { return 1; }
+    if ln.contains(": warning:") { return 2; }
+    if ln.contains(": note:")    { return 3; }
+    return 0;
+}
+
+// Parse a captured cc log into structured diagnostics. Handles the
+// clang/new-gcc `path:line:col: error|warning|note: msg` shape and the older
+// gcc `path:line: error: msg`. Skips `In file included from` headers and the
+// `^~~~` caret/underline lines, folds `note:` lines away, and dedups identical
+// (file, line, message) so a cascade collapses to its distinct errors.
+fn parse_cc_log(log: string) -> *Vector<CcDiag> {
+    let out: *Vector<CcDiag> = Vector::new();
+    let seen: *Vector<string> = Vector::new();
+    let lines: *Vector<string> = log.split("\n");
+    for let li: i32 = 0; li < lines.len(); li++ {
+        let ln: string = lines.get(li).trim();      // trims trailing \r too
+        if ln.eq("") { continue; }
+        if ln.starts_with("In file included from") { continue; }
+        let c0: i32 = ln.at(0).to_int();
+        if c0 == 94 || c0 == 126 { continue; }       // '^' or '~' underline line
+        let sev: i32 = _cc_severity_of(ln);
+        if sev == 0 || sev == 3 { continue; }         // skip non-diagnostics + notes
+        let mut kw: string = ": warning:";
+        if sev == 1 { kw = ": error:"; }
+        let kpos: i32 = ln.index_of(kw);
+        if kpos < 0 { continue; }
+        let head: string = ln.substring(0, kpos);     // path:line[:col]
+        let msg: string = ln.substring(kpos + kw.len(), ln.len()).trim();
+        let fld: *Vector<string> = head.split(":");
+        // Walk from the end collecting up to two trailing all-digit fields
+        // (col then line). The remaining prefix rejoins as the path — this
+        // keeps the `C:` drive colon on Windows attached to the path.
+        let nums: *Vector<i32> = Vector::new();
+        let mut last: i32 = fld.len() - 1;
+        while last >= 0 && nums.len() < 2 && _cc_all_digits(fld.get(last).trim()) {
+            nums.push(fld.get(last).trim().parse_int());
+            last = last - 1;
+        }
+        if nums.len() == 0 { continue; }
+        let mut file: string = "";
+        for let j: i32 = 0; j <= last; j++ {
+            if j > 0 { file = file.concat(":"); }
+            file = file.concat(fld.get(j));
+        }
+        file = file.trim();
+        let mut lno: i32 = 0;
+        let mut cno: i32 = 0;
+        if nums.len() == 2 { cno = nums.get(0); lno = nums.get(1); }
+        else { lno = nums.get(0); }
+        let key: string = file.concat("|").concat(int_to_str(lno)).concat("|").concat(msg);
+        if seen.contains(key) { continue; }
+        seen.push(key);
+        out.push(CcDiag { file: file, line: lno, col: cno, severity: sev, message: msg });
+    }
+    return out;
+}
+
+// Parse the line number from a `#line N "path"` directive (N starts at idx 6).
+fn _cc_parse_line_no(l: string) -> i32 {
+    let n: i32 = l.len();
+    let mut i: i32 = 6;
+    while i < n && l.at(i).to_int() == 32 { i = i + 1; }
+    let mut v: i32 = 0;
+    let mut got: bool = false;
+    while i < n {
+        let c: i32 = l.at(i).to_int();
+        if c < 48 || c > 57 { break; }
+        v = v * 10 + (c - 48);
+        got = true;
+        i = i + 1;
+    }
+    if !got { return 0; }
+    return v;
+}
+
+// Parse the (forward-slashed) path from a `#line N "path"` directive.
+fn _cc_parse_line_path(l: string) -> string {
+    let q1: i32 = l.index_of("\"");
+    if q1 < 0 { return ""; }
+    let rest: string = l.substring(q1 + 1, l.len());
+    let q2: i32 = rest.index_of("\"");
+    if q2 < 0 { return _fwd_slashes(rest); }
+    return _fwd_slashes(rest.substring(0, q2));
+}
+
+// Print the slice of generated C that maps to `glide_line`. Codegen dedups
+// `#line` directives — a whole `c_raw!` body sits under one directive — so the
+// erroring glide line usually has no directive of its own. We resolve it by a
+// running offset: a `#line N "f"` sets the NEXT physical C line to glide line N
+// of file f, and each following non-directive line increments it. Prints the
+// matched C line plus a little following context, stopping at the next `#line`.
+// Skips silently when nothing maps (e.g. an error in the C preamble).
+fn cc_print_c_snippet(csrc: string, glide_file: string, glide_line: i32) {
+    if glide_line <= 0 { return; }
+    let target: string = _fwd_slashes(glide_file);
+    let lines: *Vector<string> = csrc.split("\n");
+    let mut cur_file: string = "";
+    let mut cur_gline: i32 = 0;
+    let mut hit: i32 = -1;
+    for let i: i32 = 0; i < lines.len(); i++ {
+        let l: string = lines.get(i);
+        if l.starts_with("#line ") {
+            cur_gline = _cc_parse_line_no(l);
+            cur_file = _cc_parse_line_path(l);
+            continue;
+        }
+        let mut fmatch: bool = false;
+        if !cur_file.eq("") {
+            if cur_file.eq(target) || target.ends_with(cur_file) || cur_file.ends_with(target) { fmatch = true; }
+        }
+        if hit < 0 && fmatch && cur_gline == glide_line { hit = i; }
+        cur_gline = cur_gline + 1;
+    }
+    if hit < 0 { return; }
+    let dim: string = col_blue();
+    let reset: string = col_reset();
+    println!("  ".concat(dim).concat("generated C:").concat(reset));
+    let mut shown: i32 = 0;
+    let mut j: i32 = hit;
+    while j < lines.len() && shown < 6 {
+        let l: string = lines.get(j);
+        if j > hit && l.starts_with("#line ") { break; }
+        if !l.trim().eq("") {
+            println!("    ".concat(dim).concat("| ").concat(reset).concat(l));
+            shown = shown + 1;
+        }
+        j = j + 1;
+    }
+    println!("");
+}
+
+// A `c_raw! { ... }` region in the source, used to classify a cc error as the
+// user's inline C vs an internal compiler bug.
+struct CrawSpan {
+    file: string,
+    start: i32,
+    end: i32,
+}
+
+fn _count_newlines(s: string) -> i32 {
+    if s == null { return 0; }
+    let mut n: i32 = 0;
+    for let i: i32 = 0; i < s.len(); i++ {
+        if s.at(i).to_int() == 10 { n = n + 1; }
+    }
+    return n;
+}
+
+// Walk the program (recursing into fn / if / impl bodies) collecting every
+// `c_raw!` block's source span. `file` threads the enclosing top-level stmt's
+// origin down to nested c_raw blocks (whose own `origin` may be unset).
+fn _collect_craw_into(stmts: *Vector<Stmt>, file: string, out: *Vector<CrawSpan>) {
+    if stmts == null { return; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        let mut f: string = file;
+        if s.origin != null && !s.origin.eq("") { f = s.origin; }
+        if s.kind == ST_CRAW {
+            let nl: i32 = _count_newlines(s.name);
+            out.push(CrawSpan { file: f, start: s.line, end: s.line + nl + 1 });
+        }
+        if s.then_body != null   { _collect_craw_into(s.then_body, f, out); }
+        if s.else_body != null   { _collect_craw_into(s.else_body, f, out); }
+        if s.fn_body != null     { _collect_craw_into(s.fn_body, f, out); }
+        if s.impl_methods != null { _collect_craw_into(s.impl_methods, f, out); }
+    }
+}
+
+fn collect_craw_spans(stmts: *Vector<Stmt>) -> *Vector<CrawSpan> {
+    let v: *Vector<CrawSpan> = Vector::new();
+    _collect_craw_into(stmts, "", v);
+    return v;
+}
+
+fn craw_contains(spans: *Vector<CrawSpan>, file: string, line: i32) -> bool {
+    let f: string = _fwd_slashes(file);
+    for let i: i32 = 0; i < spans.len(); i++ {
+        let sp: CrawSpan = spans.get(i);
+        if line >= sp.start && line <= sp.end {
+            let sf: string = _fwd_slashes(sp.file);
+            // Exact match, or one path is a suffix of the other (handles the
+            // relative-vs-absolute path difference between cc's report and the
+            // origin the loader recorded).
+            if sf.eq(f) || f.ends_with(sf) || sf.ends_with(f) { return true; }
+        }
+    }
+    return false;
+}
+
+// Render one parsed cc error as a Glide diagnostic + the generated-C slice.
+fn cc_render_one(cd: CcDiag, csrc: string, src_path: string,
+                 src_text: string, craw: *Vector<CrawSpan>) {
+    let in_craw: bool = craw_contains(craw, cd.file, cd.line);
+    let mut code: string = "ice";
+    if in_craw { code = "c-raw-error"; }
+    let mut cc0: i32 = cd.col;
+    if cc0 < 1 { cc0 = 1; }
+    let d: DiagEntry = DiagEntry {
+        line: cd.line, col: cc0,
+        end_line: cd.line, end_col: cc0 + 1,
+        severity: 1, code: code, message: cd.message,
+        origin: cd.file, tag: 0,
+        fix_line: 0, fix_col: 0, fix_end_line: 0, fix_end_col: 0,
+        fix_replacement: "",
+    };
+    if cd.file.ends_with(".glide") {
+        // Anchored at a .glide line (the common case, via #line). Render the
+        // Glide source with a caret, then the generated C that came from it.
+        if cd.file.eq(src_path) { print_pretty_diag(d, src_text, cd.file); }
+        else { print_pretty_diag(d, read_file(cd.file), cd.file); }
+        cc_print_c_snippet(csrc, cd.file, cd.line);
+    } else {
+        // Anchored at the generated .c itself (no #line was in effect, e.g. the
+        // preamble) — render that C line directly; there is no glide line to map.
+        print_pretty_diag(d, csrc, cd.file);
+    }
+}
+
+// Render every error in a captured cc log. Returns the count rendered; 0 means
+// nothing parseable (linker error, unknown format) so the caller falls back to
+// dumping the raw log.
+fn cc_render_log(cc_log: string, tmp_c: string, src_path: string,
+                 src_text: string, craw: *Vector<CrawSpan>) -> i32 {
+    let log: string = read_file(cc_log);
+    if log.eq("") { return 0; }
+    let diags: *Vector<CcDiag> = parse_cc_log(log);
+    if diags.len() == 0 { return 0; }
+    let csrc: string = read_file(tmp_c);
+    let mut shown: i32 = 0;
+    for let i: i32 = 0; i < diags.len(); i++ {
+        let cd: CcDiag = diags.get(i);
+        if cd.severity != 1 { continue; }
+        cc_render_one(cd, csrc, src_path, src_text, craw);
+        shown = shown + 1;
+    }
+    return shown;
+}
+
+// ---- pre-codegen validation ---------------------------------------------
+//
+// Type-checked Glide should always produce valid C. The cases that slip
+// through to cc anyway are almost all inside `c_raw! { ... }` blocks, which the
+// typer never inspects (codegen emits the body verbatim). This pass catches the
+// high-frequency ones and reports them as Glide diagnostics BEFORE codegen, so
+// the user never sees a confusing cascade of cc errors. It is the single
+// extension point: add a check to `run_precc_checks`.
+// `pre` collects the diagnostics; `tc` is the populated typer consulted for the
+// set of declared functions / `extern fn`s (`tc.fns`).
+fn run_precc_checks(pre: *Typer, tc: *Typer, stmts: *Vector<Stmt>) {
+    // Build the set of __glide_* C symbols defined anywhere in a c_raw block,
+    // ONCE, so the undefined-ref check can tell a typo from a real intrinsic.
+    let defs: *Vector<string> = Vector::new();
+    _craw_collect_defs_walk(stmts, defs);
+    _precc_walk(pre, tc, defs, stmts, "");
+    check_extern_arity_drift(pre, stmts);
+}
+
+fn _precc_walk(pre: *Typer, tc: *Typer, defs: *Vector<string>, stmts: *Vector<Stmt>, file: string) {
+    if stmts == null { return; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        let mut f: string = file;
+        if s.origin != null && !s.origin.eq("") { f = s.origin; }
+        if s.kind == ST_CRAW {
+            pre.current_origin = f;
+            check_craw_unbalanced_braces(pre, &s);
+            check_craw_undefined_refs(pre, tc, defs, &s);
+            // Add more c_raw checks here (each pushes a DiagEntry via pre.push_diag).
+        }
+        if s.then_body != null   { _precc_walk(pre, tc, defs, s.then_body, f); }
+        if s.else_body != null   { _precc_walk(pre, tc, defs, s.else_body, f); }
+        if s.fn_body != null     { _precc_walk(pre, tc, defs, s.fn_body, f); }
+        if s.impl_methods != null { _precc_walk(pre, tc, defs, s.impl_methods, f); }
+    }
+}
+
+// If `body[i]` starts a C string literal, char literal, or `//` / `/* */`
+// comment, return the index just past it; otherwise return -1. Lets the c_raw
+// scanners skip non-code regions in a SINGLE pass over the original text — no
+// stripped copy (the old `concat`-per-char strip was O(n^2) memory and, run
+// over every stdlib c_raw block, ballooned a compile by ~1 GB).
+fn _craw_skip_noncode(body: string, i: i32) -> i32 {
+    let n: i32 = body.len();
+    let c: i32 = body.at(i).to_int();
+    if c == 47 && i + 1 < n && body.at(i + 1).to_int() == 47 {        // //
+        let mut j: i32 = i + 2;
+        while j < n && body.at(j).to_int() != 10 { j = j + 1; }
+        return j;
+    }
+    if c == 47 && i + 1 < n && body.at(i + 1).to_int() == 42 {        // /* */
+        let mut j: i32 = i + 2;
+        while j < n {
+            if body.at(j).to_int() == 42 && j + 1 < n && body.at(j + 1).to_int() == 47 { return j + 2; }
+            j = j + 1;
+        }
+        return n;
+    }
+    if c == 34 || c == 39 {                                          // "..." or '...'
+        let mut j: i32 = i + 1;
+        while j < n {
+            let d: i32 = body.at(j).to_int();
+            if d == 92 { j = j + 2; continue; }                      // escape
+            if d == c { return j + 1; }
+            j = j + 1;
+        }
+        return n;
+    }
+    return -1;
+}
+
+// Flag a `c_raw!` block whose `{}` / `()` / `[]` are unbalanced. Today this
+// produces a cascade of confusing cc errors far below the block; here it
+// becomes one clear Glide error anchored at the block.
+fn check_craw_unbalanced_braces(t: *Typer, s: *Stmt) {
+    if s.name == null { return; }
+    let body: string = s.name;
+    let n: i32 = body.len();
+    let mut brace: i32 = 0;
+    let mut paren: i32 = 0;
+    let mut brack: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n {
+        let sk: i32 = _craw_skip_noncode(body, i);
+        if sk >= 0 { i = sk; continue; }
+        let c: i32 = body.at(i).to_int();
+        if c == 123 { brace = brace + 1; }
+        else if c == 125 { brace = brace - 1; }
+        else if c == 40 { paren = paren + 1; }
+        else if c == 41 { paren = paren - 1; }
+        else if c == 91 { brack = brack + 1; }
+        else if c == 93 { brack = brack - 1; }
+        if brace < 0 || paren < 0 || brack < 0 {
+            t.push_diag(s.line, s.column, 1, "c-raw-error",
+                "unbalanced closing delimiter in `c_raw!` block (a `}`, `)` or `]` with no matching opener)");
+            return;
+        }
+        i = i + 1;
+    }
+    if brace != 0 || paren != 0 || brack != 0 {
+        t.push_diag(s.line, s.column, 1, "c-raw-error",
+            "unbalanced `{` / `(` / `[` in `c_raw!` block — a delimiter is left open");
+    }
+}
+
+fn _is_c_ident(c: i32) -> bool {
+    return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+}
+
+fn _starts_glide(id: string) -> bool {
+    return id.len() > 8 && id.substring(0, 8).eq("__glide_");
+}
+
+// Collect every `__glide_*` symbol that appears in a DEFINITION context across
+// all c_raw blocks. "Definition context" = the token immediately before the
+// name (skipping spaces) is `*` (pointer return type) or an identifier char
+// (a return-type keyword, `static`, the `e` of `#define`, etc.). The rule is
+// intentionally generous: it also captures a few call sites (e.g. after
+// `return`), which only makes the undefined-ref check MORE conservative — it
+// can miss a bug, but never falsely abort a valid build.
+fn _craw_collect_defs_walk(stmts: *Vector<Stmt>, defs: *Vector<string>) {
+    if stmts == null { return; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_CRAW && s.name != null {
+            _scan_craw_defs(s.name, defs);
+        }
+        if s.then_body != null   { _craw_collect_defs_walk(s.then_body, defs); }
+        if s.else_body != null   { _craw_collect_defs_walk(s.else_body, defs); }
+        if s.fn_body != null     { _craw_collect_defs_walk(s.fn_body, defs); }
+        if s.impl_methods != null { _craw_collect_defs_walk(s.impl_methods, defs); }
+    }
+}
+
+fn _scan_craw_defs(body: string, defs: *Vector<string>) {
+    let n: i32 = body.len();
+    let mut i: i32 = 0;
+    let mut prev: i32 = 32;   // last non-space code char before the current token
+    while i < n {
+        let sk: i32 = _craw_skip_noncode(body, i);
+        if sk >= 0 { prev = 0; i = sk; continue; }
+        let c: i32 = body.at(i).to_int();
+        if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+            let st: i32 = i;
+            while i < n && _is_c_ident(body.at(i).to_int()) { i = i + 1; }
+            let id: string = body.substring(st, i);
+            if _starts_glide(id) && (prev == 42 || _is_c_ident(prev)) {
+                if !defs.contains(id) { defs.push(id); }
+            }
+            prev = body.at(i - 1).to_int();
+            continue;
+        }
+        if c != 32 && c != 9 && c != 10 && c != 13 { prev = c; }
+        i = i + 1;
+    }
+}
+
+// Flag a `c_raw!` block that CALLS a `__glide_*` symbol that is neither a
+// declared `extern fn`/Glide function nor defined in any c_raw block. Such a
+// call links with an opaque `undefined reference to '__glide_...'` (a linker
+// error carries no file:line, so the cc-log renderer can't anchor it) — almost
+// always a typo or a renamed/removed compiler intrinsic.
+fn check_craw_undefined_refs(pre: *Typer, tc: *Typer, defs: *Vector<string>, s: *Stmt) {
+    if s.name == null { return; }
+    let body: string = s.name;
+    let n: i32 = body.len();
+    let mut i: i32 = 0;
+    let mut prev: i32 = 32;
+    let reported: *Vector<string> = Vector::new();
+    while i < n {
+        let sk: i32 = _craw_skip_noncode(body, i);
+        if sk >= 0 { prev = 0; i = sk; continue; }
+        let c: i32 = body.at(i).to_int();
+        if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+            let st: i32 = i;
+            while i < n && _is_c_ident(body.at(i).to_int()) { i = i + 1; }
+            let id: string = body.substring(st, i);
+            // First non-space char after the identifier.
+            let mut j: i32 = i;
+            while j < n {
+                let cj: i32 = body.at(j).to_int();
+                if cj != 32 && cj != 9 && cj != 10 && cj != 13 { break; }
+                j = j + 1;
+            }
+            let nxt: i32 = if j < n { body.at(j).to_int() } else { 0 };
+            // A call (followed by `(`) in NON-definition context (prev is not a
+            // type/`*`), to an unknown __glide_* symbol.
+            let is_def_ctx: bool = prev == 42 || _is_c_ident(prev);
+            if _starts_glide(id) && nxt == 40 && !is_def_ctx {
+                if !tc.fns.contains(id) && !defs.contains(id) && !reported.contains(id) {
+                    reported.push(id);
+                    pre.push_diag(s.line, s.column, 1, "c-raw-error",
+                        "`c_raw!` calls `".concat(id).concat("()`, which is not a declared `extern fn` nor defined in any `c_raw!` block — likely a typo or a renamed/removed compiler intrinsic"));
+                }
+            }
+            prev = body.at(i - 1).to_int();
+            continue;
+        }
+        if c != 32 && c != 9 && c != 10 && c != 13 { prev = c; }
+        i = i + 1;
+    }
+}
+
+// Count the top-level parameters in a C parameter list whose opening `(` is at
+// `open`. `(void)` and `()` count as 0. Nested parens (function-pointer params)
+// don't inflate the count — only depth-1 commas do.
+fn _c_param_count(body: string, open: i32) -> i32 {
+    let n: i32 = body.len();
+    let mut depth: i32 = 0;
+    let mut commas: i32 = 0;
+    let mut inner: string = "";
+    let mut i: i32 = open;
+    while i < n {
+        let c: i32 = body.at(i).to_int();
+        if c == 40 { depth = depth + 1; if depth == 1 { i = i + 1; continue; } }
+        else if c == 41 { depth = depth - 1; if depth == 0 { break; } }
+        if depth == 1 && c == 44 { commas = commas + 1; }
+        if depth >= 1 { inner = inner.concat(body.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    let t: string = inner.trim();
+    if t.eq("") || t.eq("void") { return 0; }
+    return commas + 1;
+}
+
+// Find the parameter count of a c_raw `static`-style definition of `name`
+// across all c_raw bodies. Returns -1 when no definition is found. A match is a
+// definition site: `name(` whose preceding non-space char is `*` or an
+// identifier char (so a plain call `name(...)` is ignored).
+fn _craw_def_arity(stmts: *Vector<Stmt>, name: string) -> i32 {
+    if stmts == null { return -1; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_CRAW && s.name != null {
+            let a: i32 = _scan_def_arity(s.name, name);
+            if a >= 0 { return a; }
+        }
+        let mut a: i32 = -1;
+        if s.then_body != null   { a = _craw_def_arity(s.then_body, name); if a >= 0 { return a; } }
+        if s.else_body != null   { a = _craw_def_arity(s.else_body, name); if a >= 0 { return a; } }
+        if s.fn_body != null     { a = _craw_def_arity(s.fn_body, name); if a >= 0 { return a; } }
+        if s.impl_methods != null { a = _craw_def_arity(s.impl_methods, name); if a >= 0 { return a; } }
+    }
+    return -1;
+}
+
+fn _scan_def_arity(body: string, name: string) -> i32 {
+    let n: i32 = body.len();
+    let mut i: i32 = 0;
+    let mut prev: i32 = 32;
+    while i < n {
+        let sk: i32 = _craw_skip_noncode(body, i);
+        if sk >= 0 { prev = 0; i = sk; continue; }
+        let c: i32 = body.at(i).to_int();
+        if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+            let st: i32 = i;
+            while i < n && _is_c_ident(body.at(i).to_int()) { i = i + 1; }
+            let id: string = body.substring(st, i);
+            let mut j: i32 = i;
+            while j < n {
+                let cj: i32 = body.at(j).to_int();
+                if cj != 32 && cj != 9 && cj != 10 && cj != 13 { break; }
+                j = j + 1;
+            }
+            let is_def_ctx: bool = prev == 42 || _is_c_ident(prev);
+            if id.eq(name) && j < n && body.at(j).to_int() == 40 && is_def_ctx {
+                return _c_param_count(body, j);
+            }
+            prev = body.at(i - 1).to_int();
+            continue;
+        }
+        if c != 32 && c != 9 && c != 10 && c != 13 { prev = c; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Flag an `extern fn NAME(...)` whose declared arity disagrees with a `static`
+// C definition of NAME in a c_raw block. The mismatch otherwise surfaces as a
+// cc `conflicting types` / `too many arguments` error far from either site.
+fn check_extern_arity_drift(pre: *Typer, stmts: *Vector<Stmt>) {
+    if stmts == null { return; }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        // `extern fn` = an ST_FN with no body. Skip C-variadic decls (the C
+        // side legitimately takes more args than declared).
+        if s.kind != ST_FN { continue; }
+        if s.fn_body != null { continue; }
+        if s.is_variadic { continue; }
+        if s.fn_params == null { continue; }
+        let cn: i32 = _craw_def_arity(stmts, s.name);
+        if cn < 0 { continue; }
+        let gn: i32 = s.fn_params.len();
+        if cn != gn {
+            pre.current_origin = s.origin;
+            pre.push_diag(s.name_line, s.name_col, 1, "c-raw-error",
+                "`extern fn ".concat(s.name).concat("` declares ").concat(int_to_str(gn))
+                    .concat(" parameter(s) but its `c_raw!` C definition takes ").concat(int_to_str(cn))
+                    .concat(" — the signatures must match"));
+        }
+    }
 }
 
 const MODE_EMIT: i32 = 0;
@@ -2544,6 +3131,31 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         return 1;
     }
 
+    // 2b. Pre-codegen validation: catch the common "C error that should have
+    //     been a Glide error" cases (e.g. a malformed `c_raw!` block) and report
+    //     them as Glide diagnostics before invoking cc, so the user never sees a
+    //     confusing cascade of C errors. Extensible via `run_precc_checks`.
+    let pre: *Typer = Typer::new();
+    run_precc_checks(pre, t, stmts);
+    let mut pre_errors: i32 = 0;
+    for let i: i32 = 0; i < pre.diagnostics.len(); i++ {
+        let pd: DiagEntry = pre.diagnostics.get(i);
+        let mut ppath: string = pd.origin;
+        if ppath.eq("") { ppath = src_path; }
+        // Only surface diagnostics for the user's file; imported stdlib c_raw
+        // blocks are trusted (they already compile) and stay suppressed.
+        if !ppath.eq(src_path) { continue; }
+        print_pretty_diag(pd, src_text, ppath);
+        if pd.severity == 1 { pre_errors = pre_errors + 1; }
+    }
+    if pre_errors > 0 {
+        let mut ptail: string = "could not compile due to 1 previous error";
+        if pre_errors > 1 { ptail = "could not compile due to ".concat(int_to_str(pre_errors)).concat(" previous errors"); }
+        if !quiet { spinner_finish(false, ""); }
+        println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(ptail));
+        return 1;
+    }
+
     // 3. Emit C to a temp file by saving stdout, redirecting, then restoring.
     if !quiet { spinner_set("emitting C"); }
     let tmp_c: string = out_path.concat(".__glide.c");
@@ -2567,7 +3179,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // emitted C with zig as a bare-metal x86_64 ELF against the linker
     // script. Skips the hosted lib-scan / -lpthread / run-after-build below.
     if freestanding {
-        return _build_freestanding(tmp_c, out_path, link_script, quiet, user_cflags, user_ldflags);
+        return _build_freestanding(tmp_c, out_path, link_script, quiet, user_cflags, user_ldflags, stmts, src_path, src_text);
     }
 
     // 3b. Decide which heavy libs to link by scanning the generated C for
@@ -2844,6 +3456,14 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // one-pass static link order), and BEFORE the Windows quote-wrap below.
     if !user_ldflags.eq("") { cmd = cmd.concat(" ").concat(user_ldflags); }
 
+    // Capture cc's stdout+stderr to a log so we can re-render its diagnostics
+    // as Glide errors. `> "log" 2>&1` parses the same in POSIX sh and cmd.exe;
+    // the order matters (stdout to the file, then stderr onto stdout). This is
+    // appended BEFORE the Windows outer-quote-wrap so the redirection stays
+    // inside the wrapped `cmd.exe /c "<...>"` payload.
+    let cc_log: string = tmp_c.concat(".log");
+    cmd = cmd.concat(" > \"").concat(cc_log).concat("\" 2>&1");
+
     // On Windows, system() runs the command via `cmd.exe /c <cmd>`. When the
     // command itself starts with a quoted path containing backslashes / spaces,
     // cmd.exe's parser strips outer quotes inconsistently. Wrap the whole
@@ -2857,8 +3477,21 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     let rc: i32 = __glide_shell(cmd);
     if rc != 0 {
         if !quiet { spinner_finish(false, ""); }
-        println!("compilation failed (cc exit", rc, ")");
+        // Re-render cc's diagnostics anchored at the Glide source (+ the
+        // generated C). If nothing parseable came back (e.g. a linker error),
+        // fall back to dumping the raw log so no information is lost.
+        let craw: *Vector<CrawSpan> = collect_craw_spans(stmts);
+        let shown: i32 = cc_render_log(cc_log, tmp_c, src_path, src_text, craw);
+        if shown == 0 {
+            println!("compilation failed (cc exit", rc, ")");
+            let raw: string = read_file(cc_log);
+            if !raw.eq("") { println!(raw); }
+        } else {
+            println!(col_red().concat("error").concat(col_reset())
+                .concat(": generated C failed to compile (cc exit ").concat(int_to_str(rc)).concat(")"));
+        }
         println!("preserved C source at:", tmp_c);
+        println!("preserved cc log at:", cc_log);
         // If we hit a cross build without a sysroot, the user almost
         // always wanted TLS. Surface the fix proactively — no need
         // for them to grep the docs.
@@ -2871,10 +3504,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         return rc;
     }
 
-    // Build succeeded — the intermediate .__glide.c next to the
-    // binary served its purpose. Wipe it so target/ only carries the
-    // executable (failure path keeps it for debugging).
+    // Build succeeded — the intermediate .__glide.c + cc log next to the
+    // binary served their purpose. Wipe them so target/ only carries the
+    // executable (failure path keeps them for debugging).
     fs_remove_file(tmp_c);
+    fs_remove_file(cc_log);
 
     // Windows runtime-DLL bundling: when we linked against MSYS2/mingw
     // shared libraries (ngtcp2, nghttp3, openssl, …) the produced .exe
@@ -3016,7 +3650,7 @@ fn _resolve_cc_dir_win(cc: string) -> string {
 // x86_64 ELF with zig (clang under the hood): no libc, no startup, no PIE,
 // red-zone off for interrupt safety, higher-half code model. The user's
 // linker script (`linker:` in glide.glide) owns the layout + entry point.
-fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, quiet: bool, user_cflags: string, user_ldflags: string) -> i32 {
+fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, quiet: bool, user_cflags: string, user_ldflags: string, stmts: *Vector<Stmt>, src_path: string, src_text: string) -> i32 {
     let zig: string = _find_zig();
     if zig.eq("") {
         if !quiet { spinner_finish(false, ""); }
@@ -3061,6 +3695,11 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     cmd = cmd.concat(" -Wl,--build-id=none");
     // User ldflags last (override / extend the link), before the Windows wrap.
     if !user_ldflags.eq("") { cmd = cmd.concat(" ").concat(user_ldflags); }
+    // Capture zig cc's output so freestanding link errors get the same
+    // Glide-anchored rendering as the hosted path (see the hosted site for
+    // the redirect-before-wrap rationale).
+    let cc_log: string = tmp_c.concat(".log");
+    cmd = cmd.concat(" > \"").concat(cc_log).concat("\" 2>&1");
     // zig is invoked through a quoted path; on Windows cmd.exe needs the
     // whole command re-wrapped (mirrors the hosted cc path's workaround).
     if __glide_is_windows() != 0 {
@@ -3069,11 +3708,22 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     let rc: i32 = __glide_shell(cmd);
     if rc != 0 {
         if !quiet { spinner_finish(false, ""); }
-        println!("freestanding link failed (zig cc exit", rc, ")");
+        let craw: *Vector<CrawSpan> = collect_craw_spans(stmts);
+        let shown: i32 = cc_render_log(cc_log, tmp_c, src_path, src_text, craw);
+        if shown == 0 {
+            println!("freestanding link failed (zig cc exit", rc, ")");
+            let raw: string = read_file(cc_log);
+            if !raw.eq("") { println!(raw); }
+        } else {
+            println!(col_red().concat("error").concat(col_reset())
+                .concat(": generated C failed to compile (zig cc exit ").concat(int_to_str(rc)).concat(")"));
+        }
         println!("preserved C source at:", tmp_c);
+        println!("preserved cc log at:", cc_log);
         return rc;
     }
     fs_remove_file(tmp_c);
+    fs_remove_file(cc_log);
     if !quiet { spinner_finish(true, "built ".concat(out_path)); }
     return 0;
 }
