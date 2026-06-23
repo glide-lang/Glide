@@ -2208,11 +2208,16 @@ fn parse_expr(p: *Parser, min_bp: i32) -> *Expr {
         let op: i32 = info - lbp * 100;
         if lbp == 0 { break; }
         if lbp < min_bp { break; }
+        // A comment sitting just before the operator (e.g. on its own line in a
+        // wrapped `||` chain) rides on the operator token's lead; keep it so fmt
+        // can re-emit the chain multi-line.
+        let op_lead: string = p.current.lead;
         p.advance();
         let rbp: i32 = lbp + 1;
         let right: *Expr = parse_expr(p, rbp);
         if right == null { break; }
         left = expr_binary(op, left, right);
+        if op_lead != null && !op_lead.eq("") { left.lead = op_lead; }
     }
     return left;
 }

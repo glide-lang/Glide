@@ -12,8 +12,8 @@
 //
 // Comments: leading blocks, trailing comments and end-of-block comments are
 // carried through on the token stream (lexer `lead`/`trail`) and re-emitted in
-// place. Still dropped: comments inside a multi-line expression and inside the
-// single-line match-as-expression form.
+// place. A comment-bearing operator chain or match-as-expression is broken
+// across lines so the comment keeps its spot.
 
 import bootstrap::syntax::ast;
 import stdlib::bytes::*;     // ByteBuffer — O(n) string building (vs concat folds)
@@ -165,6 +165,107 @@ fn fmt_binop_bp(op: i32) -> i32 {
 // parens only when its binding power is below the surrounding context.
 pub fn fmt_expr(e: *Expr) -> string { return fmt_expr_prec(e, 0); }
 
+fn stmt_has_comment(s: *Stmt) -> bool {
+    if s == null { return false; }
+    if s.kind == ST_COMMENT { return true; }
+    if s.leading_comments != null && !s.leading_comments.eq("") { return true; }
+    if s.trailing_comment != null && !s.trailing_comment.eq("") { return true; }
+    return false;
+}
+
+// True if a match-as-expression carries any comment (on an arm or inside an
+// arm body) that the single-line form would drop.
+fn match_has_comment(e: *Expr) -> bool {
+    if e.match_arms == null { return false; }
+    for let i: i32 = 0; i < e.match_arms.len(); i++ {
+        let a: MatchArm = e.match_arms.get(i);
+        if a.lead != null && !a.lead.eq("") { return true; }
+        if a.trail != null && !a.trail.eq("") { return true; }
+        if a.body != null {
+            for let j: i32 = 0; j < a.body.len(); j++ {
+                let b: Stmt = a.body.get(j);
+                if stmt_has_comment(&b) { return true; }
+            }
+        }
+    }
+    return false;
+}
+
+// True if a comment lives anywhere in an operator chain (`a || b // c\n || d`).
+fn binary_has_comment(e: *Expr) -> bool {
+    if e == null || e.kind != EX_BINARY { return false; }
+    if e.lead != null && !e.lead.eq("") { return true; }
+    if binary_has_comment(e.lhs) { return true; }
+    if binary_has_comment(e.rhs) { return true; }
+    return false;
+}
+
+// Render an operator chain one operand per line so an embedded comment keeps
+// its place. Only called when binary_has_comment is true.
+fn fmt_binary_ml(e: *Expr, depth: i32) -> string {
+    let ind: string = fmt_indent(depth + 1);
+    let bp: i32 = fmt_binop_bp(e.op_code);
+    let mut out: string = "";
+    if e.lhs != null && e.lhs.kind == EX_BINARY && binary_has_comment(e.lhs) {
+        out = fmt_binary_ml(e.lhs, depth);
+    } else {
+        out = fmt_expr_prec(e.lhs, bp);
+    }
+    out = out.concat("\n");
+    if e.lead != null && !e.lead.eq("") { out = out.concat(render_lead_lines(e.lead, ind)); }
+    out = out.concat(ind).concat(fmt_binop(e.op_code)).concat(" ");
+    if e.rhs != null && e.rhs.kind == EX_BINARY && binary_has_comment(e.rhs) {
+        out = out.concat("(").concat(fmt_binary_ml(e.rhs, depth + 1)).concat(")");
+    } else {
+        out = out.concat(fmt_expr_prec(e.rhs, bp + 1));
+    }
+    return out;
+}
+
+// Multi-line `match` in expression position (mirrors fmt_match). Returns with
+// no leading pad on the first line and no trailing newline, so the caller can
+// splice it after `= ` / `return ` and append `;`.
+fn fmt_match_expr_ml(e: *Expr, depth: i32) -> string {
+    let inner: string = fmt_indent(depth + 1);
+    let pad: string = fmt_indent(depth);
+    let mut out: string = "match ".concat(fmt_expr(e.lhs)).concat(" {\n");
+    if e.match_arms != null {
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let a: MatchArm = e.match_arms.get(i);
+            if a.lead != null && !a.lead.eq("") { out = out.concat(render_lead_lines(a.lead, inner)); }
+            out = out.concat(inner).concat(a.variant);
+            if a.bindings != null && a.bindings.len() > 0 {
+                out = out.concat("(");
+                for let j: i32 = 0; j < a.bindings.len(); j++ {
+                    if j > 0 { out = out.concat(", "); }
+                    out = out.concat(a.bindings.get(j));
+                }
+                out = out.concat(")");
+            }
+            out = out.concat(" => {\n");
+            if a.body != null {
+                for let j: i32 = 0; j < a.body.len(); j++ {
+                    let b: Stmt = a.body.get(j);
+                    out = out.concat(fmt_stmt(&b, depth + 2));
+                }
+            }
+            out = out.concat(inner).concat("}");
+            if a.trail != null && !a.trail.eq("") { out = out.concat(" // ").concat(a.trail); }
+            out = out.concat("\n");
+        }
+    }
+    return out.concat(pad).concat("}");
+}
+
+// Render a statement's value/condition. Falls back to the inline `fmt_expr` for
+// everything except a comment-bearing match-expression or operator chain, which
+// it breaks across lines (depth < 0 forces inline).
+fn fmt_value(e: *Expr, depth: i32) -> string {
+    if e == null { return ""; }
+    if depth >= 0 && e.kind == EX_MATCH && match_has_comment(e) { return fmt_match_expr_ml(e, depth); }
+    if depth >= 0 && e.kind == EX_BINARY && binary_has_comment(e) { return fmt_binary_ml(e, depth); }
+    return fmt_expr(e);
+}
 fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
     if e == null { return ""; }
     if e.kind == EX_INT { return int_to_str(e.int_val); }
@@ -352,12 +453,12 @@ fn fmt_stmt_inline(s: *Stmt) -> string {
     }
     if s.kind == ST_EXPR { return fmt_expr(s.expr_value).concat(";"); }
     if s.kind == ST_LET || s.kind == ST_CONST {
-        return fmt_let_const_inline(s);
+        return fmt_let_const_inline(s, -1);
     }
     return fmt_stmt(s, 0);
 }
 
-fn fmt_let_const_inline(s: *Stmt) -> string {
+fn fmt_let_const_inline(s: *Stmt, depth: i32) -> string {
     let mut out: string = "";
     if s.kind == ST_CONST {
         if s.is_pub { out = "pub const "; } else { out = "const "; }
@@ -373,13 +474,13 @@ fn fmt_let_const_inline(s: *Stmt) -> string {
             out = out.concat(s.let_names.get(i));
         }
         out = out.concat(")");
-        if s.let_value != null { out = out.concat(" = ").concat(fmt_expr(s.let_value)); }
+        if s.let_value != null { out = out.concat(" = ").concat(fmt_value(s.let_value, depth)); }
         return out.concat(";");
     }
     out = out.concat(s.name);
     if s.is_auto_owned { out = out.concat("*"); }
     if s.let_ty != null { out = out.concat(": ").concat(fmt_type(s.let_ty)); }
-    if s.let_value != null { out = out.concat(" = ").concat(fmt_expr(s.let_value)); }
+    if s.let_value != null { out = out.concat(" = ").concat(fmt_value(s.let_value, depth)); }
     return out.concat(";");
 }
 
@@ -471,16 +572,16 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         return pad.concat("c_raw! {").concat(s.name).concat("}\n");
     }
     if s.kind == ST_LET || s.kind == ST_CONST {
-        return pad.concat(fmt_let_const_inline(s)).concat("\n");
+        return pad.concat(fmt_let_const_inline(s, depth)).concat("\n");
     }
     if s.kind == ST_RETURN {
         if s.expr_value != null {
-            return pad.concat("return ").concat(fmt_expr(s.expr_value)).concat(";\n");
+            return pad.concat("return ").concat(fmt_value(s.expr_value, depth)).concat(";\n");
         }
         return pad.concat("return;\n");
     }
     if s.kind == ST_EXPR {
-        return pad.concat(fmt_expr(s.expr_value)).concat(";\n");
+        return pad.concat(fmt_value(s.expr_value, depth)).concat(";\n");
     }
     if s.kind == ST_BREAK { return pad.concat("break;\n"); }
     if s.kind == ST_CONTINUE { return pad.concat("continue;\n"); }
@@ -543,7 +644,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         return pad.concat(kw).concat(module).concat(tail_s).concat(";\n");
     }
     if s.kind == ST_IF {
-        let mut out: string = pad.concat("if ").concat(fmt_expr(s.cond)).concat(" {\n");
+        let mut out: string = pad.concat("if ").concat(fmt_value(s.cond, depth)).concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         if s.else_body != null {
             out = out.concat(pad).concat("} else {\n");
@@ -578,7 +679,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         return out.concat(pad).concat("}\n");
     }
     if s.kind == ST_WHILE {
-        let mut out: string = pad.concat("while ").concat(fmt_expr(s.cond)).concat(" {\n");
+        let mut out: string = pad.concat("while ").concat(fmt_value(s.cond, depth)).concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         return out.concat(pad).concat("}\n");
     }
@@ -676,7 +777,7 @@ fn fmt_asm(s: *Stmt, depth: i32) -> string {
 
 fn fmt_for_init(s: *Stmt) -> string {
     if s == null { return ""; }
-    if s.kind == ST_LET { return fmt_let_const_inline(s).substring(0, fmt_let_const_inline(s).len() - 1); }
+    if s.kind == ST_LET { return fmt_let_const_inline(s, -1).substring(0, fmt_let_const_inline(s, -1).len() - 1); }
     if s.kind == ST_EXPR { return fmt_expr(s.expr_value); }
     return "";
 }

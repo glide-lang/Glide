@@ -176,6 +176,9 @@ pub struct Expr {
     // is multi-stmt the LAST stmt must be `return val;` whose expr_value
     // is the arm's value. Single-expr arm bodies are stored as one ST_EXPR.
     pub match_arms: *Vector<MatchArm>,
+    // EX_BINARY (fmt): a comment that appeared just before this operator, so a
+    // comment inside a multi-line operator chain survives reformatting.
+    pub lead: string,
 }
 
 // ---- Stmt kinds ----------------------------------------------------------
@@ -669,6 +672,7 @@ pub fn expr_binary(op: i32, lhs: *Expr, rhs: *Expr) -> *Expr {
     e.op_code = op;
     e.lhs = lhs;
     e.rhs = rhs;
+    e.lead = "";
     return e;
 }
 
