@@ -189,11 +189,10 @@ c_raw! {
     static char* __glide_build_cmdline_win(const char* prog, char** argv, int args_n) {
         size_t cap = 1024, len = 0;
         char* cmd = (char*)malloc(cap);
-        #define BLDAPP(s) do { \
-            size_t L_ = strlen(s); \
-            while (len + L_ + 4 >= cap) { cap *= 2; cmd = (char*)realloc(cmd, cap); } \
-            memcpy(cmd + len, (s), L_); len += L_; \
-        } while (0)
+        // Single physical line on purpose: an older bootstrap compiler reads
+        // source in text mode and injects a stray CR into c_raw bodies, which
+        // would break a multi-line `\`-continuation macro on its way through cc.
+        #define BLDAPP(s) do { size_t L_ = strlen(s); while (len + L_ + 4 >= cap) { cap *= 2; cmd = (char*)realloc(cmd, cap); } memcpy(cmd + len, (s), L_); len += L_; } while (0)
 
         int cmd_special = 0;
         if (__glide_is_cmd_exe_win(prog) && args_n >= 1 && argv[0]) {
