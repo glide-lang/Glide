@@ -218,6 +218,7 @@ fn _cg_replace(s: string, find: string, repl: string) -> string {
     let m: i32 = find.len();
     if m == 0 { return s; }
     let mut out: string = "";
+    let mut prev: i32 = 0;   // start of the not-yet-flushed verbatim span
     let mut i: i32 = 0;
     while i < n {
         let mut matched: bool = (i + m <= n);
@@ -227,13 +228,17 @@ fn _cg_replace(s: string, find: string, repl: string) -> string {
             }
         }
         if matched {
+            // Flush the verbatim run before this match as ONE concat instead of
+            // one per character (the old form was O(n^2) — a copy per byte).
+            if i > prev { out = out.concat(s.substring(prev, i)); }
             out = out.concat(repl);
             i = i + m;
+            prev = i;
         } else {
-            out = out.concat(s.substring(i, i + 1));
             i = i + 1;
         }
     }
+    if prev < n { out = out.concat(s.substring(prev, n)); }
     return out;
 }
 
