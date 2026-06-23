@@ -30,21 +30,39 @@ c_raw! {
         _setmode(_fileno(stdin), _O_BINARY);
         _setmode(_fileno(stdout), _O_BINARY);
     }
+    static void __glide_set_binary_io_fd(int fd) { _setmode(fd, _O_BINARY); }
     #else
     #define __glide_dup dup
     #define __glide_dup2 dup2
     #define __glide_close close
     #define __glide_fileno fileno
     static void __glide_set_binary_io(void) {}
+    static void __glide_set_binary_io_fd(int fd) { (void)fd; }
     #endif
     static int __glide_redirect_to(const char* path) {
         fflush(stdout);
         int saved = __glide_dup(1);
         if (saved < 0) return -1;
-        FILE* f = fopen(path, "w");
+        /* Binary mode: this redirect is used solely to write the generated
+           .c file. On Windows a text-mode stream translates every '\n' to
+           "\r\n"; baked-runtime / c_raw literals that already carry "\r\n"
+           then become "\r\r\n", whose lone CRs break the C preprocessor's
+           backslash-newline continuations (e.g. multi-line `#define` macros
+           in stdlib::process). Writing raw keeps line endings intact. */
+        FILE* f = fopen(path, "wb");
         if (!f) { __glide_close(saved); return -1; }
         __glide_dup2(__glide_fileno(f), 1);
+        /* dup2 alone doesn't make fd 1 binary on Windows — the mode is a
+           property of the fd's CRT slot. Force fd 1 to binary so printf's
+           '\n' is written verbatim (no-op on POSIX). */
+        __glide_set_binary_io_fd(1);
         fclose(f);
+        /* Block-buffer the redirected stream: codegen emits via thousands of
+           print! calls, each otherwise a write() syscall (the global runtime
+           sets _IONBF for coroutine-safe user output). A 1 MiB full buffer
+           collapses that to a handful of writes. Drained by the fflush in
+           __glide_restore_stdout before stdout is restored. */
+        setvbuf(stdout, NULL, _IOFBF, 1 << 20);
         return saved;
     }
     static void __glide_restore_stdout(int saved) {
