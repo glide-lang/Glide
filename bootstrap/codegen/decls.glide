@@ -1077,6 +1077,27 @@ pub fn emit_program(program: *Vector<Stmt>) {
     emit_program_mode(program, false, false);
 }
 
+// Emit the forward typedef + full body for the named struct/enum `name` once.
+// `field_monos` forward-declares the struct's field monos first (needed for the
+// Option/Result wrappers, not for chan inners).
+fn emit_named_type_def(g: *CG, program: *Vector<Stmt>, name: string, field_monos: bool) {
+    if g.emitted_named.contains(name) { return; }
+    for let j: i32 = 0; j < program.len(); j++ {
+        let s: Stmt = program.get(j);
+        if s.name == null || !s.name.eq(name) { continue; }
+        if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
+            if field_monos { _forward_decl_field_monos(g, &s); }
+            println!("typedef struct ", s.name, " ", s.name, ";");
+            emit_struct(&s);
+            g.emitted_named.insert(name, true);
+        } else if s.kind == ST_ENUM {
+            println!("typedef struct ", s.name, " ", s.name, ";");
+            emit_enum(&s);
+            g.emitted_named.insert(name, true);
+        }
+    }
+}
+
 // Freestanding / kernel build: emit only the compiler-provided freestanding
 // headers (these survive `-nostdlib` because they belong to the C compiler,
 // not libc), skip the hosted runtime bake (stdlib/scheduler/socket), and skip
@@ -1222,21 +1243,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let t: Type = g.chan_types.get(i);
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
-        if g.emitted_named.contains(t.name) { continue; }
-        for let j: i32 = 0; j < program.len(); j++ {
-            let s: Stmt = program.get(j);
-            if s.name == null || s.name.eq("") { continue; }
-            if !s.name.eq(t.name) { continue; }
-            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_struct(&s);
-                g.emitted_named.insert(t.name, true);
-            } else if s.kind == ST_ENUM {
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_enum(&s);
-                g.emitted_named.insert(t.name, true);
-            }
-        }
+        emit_named_type_def(g, program, t.name, false);
     }
 
     emit_chan_runtime(g);
@@ -1315,22 +1322,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         forward_decl_generic_monos(g, &t);
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
-        if g.emitted_named.contains(t.name) { continue; }
-        for let j: i32 = 0; j < program.len(); j++ {
-            let s: Stmt = program.get(j);
-            if s.name == null || s.name.eq("") { continue; }
-            if !s.name.eq(t.name) { continue; }
-            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
-                _forward_decl_field_monos(g, &s);
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_struct(&s);
-                g.emitted_named.insert(t.name, true);
-            } else if s.kind == ST_ENUM {
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_enum(&s);
-                g.emitted_named.insert(t.name, true);
-            }
-        }
+        emit_named_type_def(g, program, t.name, true);
     }
     emit_result_runtime(g);
 
@@ -1340,22 +1332,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         forward_decl_generic_monos(g, &t);
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
-        if g.emitted_named.contains(t.name) { continue; }
-        for let j: i32 = 0; j < program.len(); j++ {
-            let s: Stmt = program.get(j);
-            if s.name == null || s.name.eq("") { continue; }
-            if !s.name.eq(t.name) { continue; }
-            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
-                _forward_decl_field_monos(g, &s);
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_struct(&s);
-                g.emitted_named.insert(t.name, true);
-            } else if s.kind == ST_ENUM {
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_enum(&s);
-                g.emitted_named.insert(t.name, true);
-            }
-        }
+        emit_named_type_def(g, program, t.name, true);
     }
     emit_option_runtime(g);
 
@@ -1364,22 +1341,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         forward_decl_generic_monos(g, &t);
         if t.kind != TY_NAMED { continue; }
         if t.name == null || t.name.eq("") { continue; }
-        if g.emitted_named.contains(t.name) { continue; }
-        for let j: i32 = 0; j < program.len(); j++ {
-            let s: Stmt = program.get(j);
-            if s.name == null || s.name.eq("") { continue; }
-            if !s.name.eq(t.name) { continue; }
-            if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
-                _forward_decl_field_monos(g, &s);
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_struct(&s);
-                g.emitted_named.insert(t.name, true);
-            } else if s.kind == ST_ENUM {
-                println!("typedef struct ", s.name, " ", s.name, ";");
-                emit_enum(&s);
-                g.emitted_named.insert(t.name, true);
-            }
-        }
+        emit_named_type_def(g, program, t.name, true);
     }
     emit_optres_runtime(g);
 

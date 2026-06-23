@@ -2415,6 +2415,22 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
     covered.free();
 }
 
+// Type-check each statement in a block, expiring borrows that die after it.
+fn check_body(t: *Typer, body: *Vector<Stmt>) {
+    for let i: i32 = 0; i < body.len(); i++ {
+        let b: Stmt = body.get(i);
+        check_stmt(t, &b);
+        kill_dead_borrows(t, body, i);
+    }
+}
+
+// Check a block in its own borrow scope (the common while / block case).
+fn check_scoped_body(t: *Typer, body: *Vector<Stmt>) {
+    let saved: i32 = enter_borrow_scope(t);
+    check_body(t, body);
+    exit_borrow_scope(t, saved);
+}
+
 fn check_stmt(t: *Typer, s: *Stmt) {
     if s.kind == ST_LET || s.kind == ST_CONST {
         check_let_or_const(t, s);
@@ -2466,24 +2482,12 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         let then_keep: *HashMap<bool> = HashMap::new();
         let else_keep: *HashMap<bool> = HashMap::new();
         if s.then_body != null {
-            let saved: i32 = enter_borrow_scope(t);
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                check_stmt(t, &b);
-                kill_dead_borrows(t, s.then_body, i);
-            }
-            exit_borrow_scope(t, saved);
+            check_scoped_body(t, s.then_body);
             if !_body_exits(s.then_body) { _consumed_collect_new(t, s0, then_keep); }
             _consumed_restore(t, s0);   // roll then's frees back before else
         }
         if s.else_body != null {
-            let saved: i32 = enter_borrow_scope(t);
-            for let i: i32 = 0; i < s.else_body.len(); i++ {
-                let b: Stmt = s.else_body.get(i);
-                check_stmt(t, &b);
-                kill_dead_borrows(t, s.else_body, i);
-            }
-            exit_borrow_scope(t, saved);
+            check_scoped_body(t, s.else_body);
             if !_body_exits(s.else_body) { _consumed_collect_new(t, s0, else_keep); }
             _consumed_restore(t, s0);   // roll else's frees back; union re-applied below
         }
@@ -2520,15 +2524,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
                 "while-let RHS must be a `chan<T>.recv()` call");
         }
         if binder_ty != null { t.scope.insert(s.name, *binder_ty); }
-        if s.then_body != null {
-            let saved: i32 = enter_borrow_scope(t);
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                check_stmt(t, &b);
-                kill_dead_borrows(t, s.then_body, i);
-            }
-            exit_borrow_scope(t, saved);
-        }
+        if s.then_body != null { check_scoped_body(t, s.then_body); }
         return;
     }
     if s.kind == ST_WHILE {
@@ -2538,15 +2534,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
                 t.err(s.line, s.column, "while condition must be bool");
             }
         }
-        if s.then_body != null {
-            let saved: i32 = enter_borrow_scope(t);
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                check_stmt(t, &b);
-                kill_dead_borrows(t, s.then_body, i);
-            }
-            exit_borrow_scope(t, saved);
-        }
+        if s.then_body != null { check_scoped_body(t, s.then_body); }
         return;
     }
     if s.kind == ST_FOR {
@@ -2554,26 +2542,12 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         if s.for_init != null { check_stmt(t, s.for_init); }
         if s.cond != null { let _u0: *Type = infer_expr(t, s.cond); }
         if s.for_step != null { let _u1: *Type = infer_expr(t, s.for_step); }
-        if s.then_body != null {
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                check_stmt(t, &b);
-                kill_dead_borrows(t, s.then_body, i);
-            }
-        }
+        if s.then_body != null { check_body(t, s.then_body); }
         exit_borrow_scope(t, saved);
         return;
     }
     if s.kind == ST_BLOCK {
-        if s.then_body != null {
-            let saved: i32 = enter_borrow_scope(t);
-            for let i: i32 = 0; i < s.then_body.len(); i++ {
-                let b: Stmt = s.then_body.get(i);
-                check_stmt(t, &b);
-                kill_dead_borrows(t, s.then_body, i);
-            }
-            exit_borrow_scope(t, saved);
-        }
+        if s.then_body != null { check_scoped_body(t, s.then_body); }
         return;
     }
     if s.kind == ST_MATCH {
