@@ -10,9 +10,10 @@
 //   * one statement per line, blank line between top-level decls
 //   * struct fields & enum variants one per line with trailing comma
 //
-// Limitation (v1): comments are dropped because the lexer doesn't surface
-// them. `glide fmt --write` is opt-in for that reason. Comment preservation
-// is the next iteration.
+// Comments: leading blocks, trailing comments and end-of-block comments are
+// carried through on the token stream (lexer `lead`/`trail`) and re-emitted in
+// place. Still dropped: comments inside a multi-line expression and inside the
+// single-line match-as-expression form.
 
 import bootstrap::syntax::ast;
 import stdlib::bytes::*;     // ByteBuffer — O(n) string building (vs concat folds)
