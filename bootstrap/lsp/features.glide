@@ -650,6 +650,78 @@ pub fn find_method_anywhere(stmts: *Vector<Stmt>, method_name: string) -> ImplMe
     return miss;
 }
 
+// The trait name of the `impl Trait for Owner` that declares `method`, or "" if
+// the method comes from a plain `impl Owner { ... }`. Lets hover render the full
+// `impl Trait for Owner` header.
+fn _impl_trait_for_method(stmts: *Vector<Stmt>, owner: string, method: string) -> string {
+    if stmts == null {
+        return "";
+    }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPL || s.impl_methods == null {
+            continue;
+        }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") {
+            continue;
+        }
+        if s.impl_target == null || s.impl_target.kind != TY_NAMED || !s.impl_target.name.eq(owner) {
+            continue;
+        }
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind == ST_FN && m.name != null && m.name.eq(method) {
+                return s.impl_trait_name;
+            }
+        }
+    }
+    return "";
+}
+
+// A method that only exists in a synthesized (proc-derive, line 0) impl has no
+// real source location. Find the trait declaration of the same method so goto
+// can jump to the real thing (e.g. `JsonBind::to_json` in stdlib::json).
+fn _trait_method_for_synth(stmts: *Vector<Stmt>, method: string) -> *Stmt {
+    if stmts == null {
+        return null;
+    }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPL || s.line > 0 || s.impl_methods == null {
+            continue;
+        }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") {
+            continue;
+        }
+        let mut has: bool = false;
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind == ST_FN && m.name != null && m.name.eq(method) {
+                has = true;
+            }
+        }
+        if !has {
+            continue;
+        }
+        let td: *Stmt = find_top_decl(stmts, s.impl_trait_name);
+        if td == null || td.impl_methods == null {
+            continue;
+        }
+        for let j: i32 = 0; j < td.impl_methods.len(); j++ {
+            let tm: Stmt = td.impl_methods.get(j);
+            if tm.kind == ST_FN && tm.name != null && tm.name.eq(method) && tm.name_line > 0 {
+                let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *p = tm;
+                if (p.origin == null || p.origin.eq("")) && td.origin != null {
+                    p.origin = td.origin;
+                }
+                return p;
+            }
+        }
+    }
+    return null;
+}
+
 fn find_field_anywhere(stmts: *Vector<Stmt>, field_name: string) -> FieldHit {
     let miss: FieldHit = FieldHit { owner: "", name: "", ty: null, doc: "" };
     if stmts == null {
@@ -2931,7 +3003,12 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             let m: *Stmt = hm;
             let mut sig: string = fn_signature(m);
             if !howner.eq("") {
-                sig = "impl ".concat(howner).concat("\n").concat(sig);
+                let htr: string = _impl_trait_for_method(doc.stmts, howner, word);
+                if !htr.eq("") {
+                    sig = "impl ".concat(htr).concat(" for ").concat(howner).concat("\n").concat(sig);
+                } else {
+                    sig = "impl ".concat(howner).concat("\n").concat(sig);
+                }
             }
             content = "```glide\n".concat(sig).concat("\n```");
             if m.doc_comment != null && !m.doc_comment.eq("") {
@@ -3744,6 +3821,15 @@ pub fn handle_definition(req: *JsonValue, state: *LspState) {
     if decl == null {
         lsp_send_response(id, json_null());
         return;
+    }
+    // A method resolved into a synthesized (proc-derive) impl has no real source
+    // location (emitted at line 0), so a jump would land nowhere. Redirect to
+    // the trait's declaration of the same method, which is real source.
+    if decl.kind == ST_FN && decl.name_line <= 0 {
+        let synth: *Stmt = _trait_method_for_synth(doc.stmts, word);
+        if synth != null {
+            decl = synth;
+        }
     }
     // Build the URI from the decl's origin so jumps to stdlib (Vector,
     // HashMap, ...) actually open the right file. Verify the origin
