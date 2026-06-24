@@ -1,3 +1,11 @@
 # Shell scripts must stay LF so they run under bash regardless of the
 # checkout's core.autocrlf (a CRLF shebang breaks `bash script.sh`).
 *.sh text eol=lf
+
+# Glide isn't in GitHub Linguist yet, so .glide files show up unhighlighted on
+# github.com. The syntax is Rust-shaped (fn / let mut / struct / impl / trait /
+# match / generics / ::), so render them as Rust for now — it reads far better
+# than plain text. Side effect: the language bar counts .glide as Rust; append
+# `linguist-detectable=false` below to keep the highlighting but drop it from
+# the stats.
+*.glide linguist-language=Rust
