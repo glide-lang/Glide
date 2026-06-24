@@ -1147,6 +1147,14 @@ fn check_unused_params_fn(t: *Typer, fnstmt: *Stmt) {
     if fnstmt.fn_body == null {
         return;
     }
+    // An empty body means either a genuine stub or, for the LSP, an imported
+    // file parsed header-only (bodies brace-skipped). Either way every param
+    // would look unused and the diagnostics don't belong on the active file
+    // (imported impl methods carry no origin, so the publish filter can't drop
+    // them). Skip.
+    if fnstmt.fn_body.len() == 0 {
+        return;
+    }
     if fnstmt.fn_params == null {
         return;
     }
