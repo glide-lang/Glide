@@ -376,7 +376,12 @@ fn jp_string_value(p: *JsonParser) -> *JsonValue {
     // and would leak the size of the source substring per request
     // (165 KB+ for any LSP didChange on a non-trivial file).
     let unescaped: string = jp_unescape(raw);
-    c_raw! { free(((char*)(raw )) - 4); }
+    // Only free `raw` when it came from libc malloc (no active arena). When the
+    // caller parses into an arena (the LSP request loop), `raw` lives in that
+    // arena and is reclaimed in bulk; free()ing an arena pointer corrupts the heap.
+    if __glide_palloc_active() == 0 {
+        c_raw! { free(((char*)(raw )) - 4); }
+    }
     return json_string(unescaped);
 }
 

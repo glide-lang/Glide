@@ -2031,8 +2031,8 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
             // locals (pa, aa) go out of scope on early return.
             let pa_v: Type = param_ty.args.get(i);
             let aa_v: Type = arg_ty.args.get(i);
-            let pa_p: *Type = malloc(sizeof(Type)) as *Type;
-            let aa_p: *Type = malloc(sizeof(Type)) as *Type;
+            let pa_p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            let aa_p: *Type = __glide_palloc(sizeof(Type)) as *Type;
             *pa_p = pa_v;
             *aa_p = aa_v;
             let r: *Type = extract_for_var(pa_p, aa_p, var_name);
@@ -2056,8 +2056,8 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
         for let i: i32 = 0; i < param_ty.args.len(); i++ {
             let pa_v: Type = param_ty.args.get(i);
             let aa_v: Type = arg_ty.args.get(i);
-            let pa_p: *Type = malloc(sizeof(Type)) as *Type;
-            let aa_p: *Type = malloc(sizeof(Type)) as *Type;
+            let pa_p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            let aa_p: *Type = __glide_palloc(sizeof(Type)) as *Type;
             *pa_p = pa_v;
             *aa_p = aa_v;
             let r: *Type = extract_for_var(pa_p, aa_p, var_name);
@@ -2075,8 +2075,8 @@ fn extract_for_var(param_ty: *Type, arg_ty: *Type, var_name: string) -> *Type {
             for let i: i32 = 0; i < param_ty.args.len(); i++ {
                 let pa_v: Type = param_ty.args.get(i);
                 let aa_v: Type = arg_ty.args.get(i);
-                let pa_p: *Type = malloc(sizeof(Type)) as *Type;
-                let aa_p: *Type = malloc(sizeof(Type)) as *Type;
+                let pa_p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                let aa_p: *Type = __glide_palloc(sizeof(Type)) as *Type;
                 *pa_p = pa_v;
                 *aa_p = aa_v;
                 let r: *Type = extract_for_var(pa_p, aa_p, var_name);
@@ -2182,7 +2182,7 @@ fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type,
                 let key: string = bound.concat("::").concat(cname).concat("::").concat(ty.name);
                 if t.assoc_table.contains(key) {
                     let resolved: Type = t.assoc_table.get(key);
-                    let p: *Type = malloc(sizeof(Type)) as *Type;
+                    let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
                     *p = resolved;
                     return p;
                 }
@@ -2194,7 +2194,7 @@ fn rewrite_assoc_in_type(t: *Typer, sig: *FnSig, args: *Vector<Expr>, ty: *Type,
     // Recurse through wrappers.
     if ty.kind == TY_OPTION || ty.kind == TY_RESULT || ty.kind == TY_OPT_RESULT || ty.kind == TY_POINTER || ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT || ty.kind == TY_SLICE {
         let new_inner: *Type = rewrite_assoc_in_type(t, sig, args, ty.inner, plen, bn);
-        let p: *Type = malloc(sizeof(Type)) as *Type;
+        let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
         *p = *ty;
         p.inner = new_inner;
         return p;
