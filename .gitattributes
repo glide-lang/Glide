@@ -2,10 +2,10 @@
 # checkout's core.autocrlf (a CRLF shebang breaks `bash script.sh`).
 *.sh text eol=lf
 
-# Glide isn't in GitHub Linguist yet, so .glide files show up unhighlighted on
-# github.com. The syntax is Rust-shaped (fn / let mut / struct / impl / trait /
-# match / generics / ::), so render them as Rust for now — it reads far better
-# than plain text. Side effect: the language bar counts .glide as Rust; append
-# `linguist-detectable=false` below to keep the highlighting but drop it from
-# the stats.
-*.glide linguist-language=Rust
+# Glide isn't in GitHub Linguist yet, so .glide files render as plain text on
+# github.com. Its syntax is Rust-shaped (fn / let mut / struct / impl / trait /
+# match / generics / ::), so borrow Rust's grammar just for the highlighting.
+# linguist-detectable=false keeps .glide OUT of the language stats, so the repo
+# is not labelled "Rust" in the language bar. Glide itself can't appear there
+# until it's in Linguist; with .glide excluded the bar reflects the other files.
+*.glide linguist-language=Rust linguist-detectable=false
