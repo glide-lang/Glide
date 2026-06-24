@@ -52,6 +52,14 @@ pub struct Parser {
     pub prev_line: i32,
     pub prev_col: i32,
     pub prev_len: i32,
+    // When set, parse only declaration HEADERS: function / method bodies are
+    // brace-skipped instead of parsed into an AST. Used by the LSP to load
+    // imported files as signatures only (no body allocation). Macro defs and
+    // proc-macro fns keep their bodies (the expander needs them).
+    pub header_only: bool,
+    // Per-fn latch set by the caller (which holds the attrs) right before
+    // parse_fn, telling it to brace-skip this body. Reset inside parse_fn.
+    pub skip_fn_body: bool,
 }
 
 impl Parser {
@@ -63,6 +71,8 @@ impl Parser {
         p.error_count = 0;
         p.no_struct_lit = false;
         p.fmt_mode = false;
+        p.header_only = false;
+        p.skip_fn_body = false;
         let dv: *Vector<ParseDiag> = Vector::new();
         p.diags = dv;
         return p;
@@ -330,6 +340,7 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
         is_naked_fn = true;
     }
     if p.at_kw("fn") {
+        p.skip_fn_body = p.header_only && !_attrs_keep_body(attrs_collected);
         let s: *Stmt = parse_fn(p);
         if s != null {
             s.is_pub = is_pub;
@@ -509,7 +520,46 @@ fn parse_macro_matchers(p: *Parser) -> *Vector<MacroParam> {
     return out;
 }
 
+// True if a fn carrying these attrs must keep its body even in header-only
+// mode: proc-macro functions are executed by the expander, so their bodies are
+// part of the public contract, not just an implementation detail.
+fn _attrs_keep_body(attrs: *Vector<Attr>) -> bool {
+    if attrs == null {
+        return false;
+    }
+    for let i: i32 = 0; i < attrs.len(); i++ {
+        let a: Attr = attrs.get(i);
+        if a.name.eq("proc_macro") || a.name.eq("proc_macro_expr") || a.name.eq("proc_macro_str")
+           || a.name.eq("proc_derive") || a.name.eq("proc_attr") || a.name.eq("proc_pass") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Consume a `{ ... }` block at the token level without building an AST. The
+// lexer collapses strings, char literals and c_raw! { } into single tokens, so
+// counting `{` / `}` operator tokens is enough to find the matching brace.
+fn skip_block(p: *Parser) -> *Vector<Stmt> {
+    let empty: *Vector<Stmt> = Vector::new();
+    if !p.expect_op("{") {
+        return empty;
+    }
+    let mut depth: i32 = 1;
+    while depth > 0 && !p.at_eof() {
+        if p.at_op("{") {
+            depth = depth + 1;
+        } else if p.at_op("}") {
+            depth = depth - 1;
+        }
+        p.advance();
+    }
+    return empty;
+}
+
 fn parse_fn(p: *Parser) -> *Stmt {
+    let skip_body: bool = p.skip_fn_body;
+    p.skip_fn_body = false;
     let line: i32 = p.current.line;
     let col: i32 = p.current.column;
     p.advance(); // 'fn'
@@ -565,7 +615,12 @@ fn parse_fn(p: *Parser) -> *Stmt {
         }
         return s;
     }
-    let body: *Vector<Stmt> = parse_block(p);
+    let mut body: *Vector<Stmt> = null;
+    if skip_body {
+        body = skip_block(p);
+    } else {
+        body = parse_block(p);
+    }
     let s: *Stmt = stmt_fn(name, params, ret_ty, body, line, col);
     if s != null {
         s.type_params = tps;
@@ -902,6 +957,7 @@ fn parse_impl(p: *Parser) -> *Stmt {
             continue;
         }
         if p.at_kw("fn") {
+            p.skip_fn_body = p.header_only && !_attrs_keep_body(mem_attrs);
             let m: *Stmt = parse_fn(p);
             if m != null {
                 m.is_pub = is_pub;

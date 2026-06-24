@@ -162,6 +162,12 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         __glide_palloc_set(null);
         let lex: *Lexer = Lexer::new(src);
         let p: *Parser = Parser::new(lex);
+        // This path only ever runs for the LSP's IMPORT cache (build/check use
+        // load_into). Parse imported files as signatures only: fn/method bodies
+        // are brace-skipped, so the resident AST drops to the part the typer and
+        // editor actually read (registration + hover/goto/completion). Macro and
+        // proc-macro bodies are kept so the expander can still run them.
+        p.header_only = true;
         let parsed_raw: *Vector<Stmt> = parse_program(p);
         // The cache key has to outlive the active arena — `path` came in
         // from a caller-allocated concat() that's bump-allocated and will
