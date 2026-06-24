@@ -1239,6 +1239,39 @@ fn stmt_lower_free_children(s: *Stmt) {
     }
 }
 
+// True if the source uses a proc-macro: a `@`-attribute that isn't one of the
+// cheap built-ins. A proc-macro is an interpreted fn whose helper bodies live in
+// imports, so those imports must be parsed FULL (not header-only) for the
+// expander to run it and produce correct output.
+fn _uses_proc_macro(text: string) -> bool {
+    let n: i32 = text.len();
+    let mut i: i32 = 0;
+    while i < n {
+        if text.at(i).to_int() == 64 {
+            let s: i32 = i + 1;
+            let mut j: i32 = s;
+            while j < n {
+                let c: i32 = text.at(j).to_int();
+                if c >= 97 && c <= 122 || c >= 65 && c <= 90 || c >= 48 && c <= 57 || c == 95 {
+                    j = j + 1;
+                } else {
+                    break;
+                }
+            }
+            if j > s {
+                let name: string = text.substring(s, j);
+                if !name.eq("cfg") && !name.eq("allow") && !name.eq("lint") && !name.eq("expect") && !name.eq("deprecated") && !name.eq("doc") {
+                    return true;
+                }
+            }
+            i = j;
+        } else {
+            i = i + 1;
+        }
+    }
+    return false;
+}
+
 fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     _lsp_log("  analyze enter: ".concat(uri));
     // Save the request-scoped arena (set by lsp_main for the duration
@@ -1303,7 +1336,15 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // codebase) resolve. Imports are resolved relative to the user file's dir.
     // Transitive imports go through state.parse_cache so stdlib + builtins
     // aren't relexed/reparsed on every keystroke.
-    load_into_str_with_cache(stmts, text, path, loaded, pdiags, state.parse_cache);
+    if _uses_proc_macro(text) {
+        // Proc-macro expansion runs interpreted helper fns that live in the
+        // imports; parse those FULL so the expander sees real bodies and emits
+        // correct code (real derived methods, signatures, diagnostics), the same
+        // as `glide check`. Header-only would leave them empty.
+        load_into_str(stmts, text, path, loaded, pdiags);
+    } else {
+        load_into_str_with_cache(stmts, text, path, loaded, pdiags, state.parse_cache);
+    }
     // Harvest macro definitions (free `macro foo!()`, `impl T { macro x!() }`,
     // proc-macro fns) BEFORE expand_macros runs — it consumes the defs into
     // a private registry and drops them from the output. Completion needs
@@ -1857,7 +1898,7 @@ struct UseSite {
 
 // ---- Custom analysis passes --------------------------------------------
 fn _raw_ident_ch(c: i32) -> bool {
-    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95;
+    return c >= 97 && c <= 122 || c >= 65 && c <= 90 || c >= 48 && c <= 57 || c == 95;
 }
 
 // True if `name` occurs as a whole identifier inside the raw text `raw` (a
