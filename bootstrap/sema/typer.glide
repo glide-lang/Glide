@@ -4188,6 +4188,31 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
             return null;
         }
+        // Field access on an unwrapped Result/Option/OptResult. The wrapper only
+        // exposes its own fields (ok/has/tag, err, val); the wrapped value's own
+        // fields are NOT reachable through it — codegen would emit them against
+        // the wrapper struct and the C compiler would reject it. Type the real
+        // wrapper fields, and give a clear "unwrap first" error for anything else
+        // instead of leaking a confusing generated-C failure.
+        if recv_ty != null && (recv_ty.kind == TY_RESULT || recv_ty.kind == TY_OPTION || recv_ty.kind == TY_OPT_RESULT) && e.field != null && !e.field.eq("") {
+            if e.field.eq("val") {
+                return recv_ty.inner;
+            }
+            if recv_ty.kind == TY_RESULT && e.field.eq("ok") || recv_ty.kind == TY_OPTION && e.field.eq("has") {
+                return ty_named("bool");
+            }
+            if recv_ty.kind == TY_OPT_RESULT && e.field.eq("tag") {
+                return ty_named("i32");
+            }
+            if (recv_ty.kind == TY_RESULT || recv_ty.kind == TY_OPT_RESULT) && e.field.eq("err") {
+                return ty_named("string");
+            }
+            let unwrapper: string = if recv_ty.kind == TY_OPTION { "some" } else { "ok" };
+            let fl: i32 = _field_pos_line(e);
+            let fcol: i32 = _field_pos_col(e);
+            t.err_code_range(fl, fcol, e.field.len(), "unwrap-needed", "`".concat(e.field).concat("` is a field of the value wrapped by `").concat(type_to_string(recv_ty)).concat("`, not of the wrapper itself; unwrap it first with `if let ").concat(unwrapper).concat("(x) = ...`, `match`, or `?`"));
+            return null;
+        }
         // Cross-file field privacy: if the receiver resolves to a known
         // struct and the field isn't marked `pub`, only that struct's
         // own file can access it. Methods are still resolved later via
