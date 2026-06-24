@@ -2968,6 +2968,16 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     } else {
         cmd = cmd.concat(" -o ").concat(out_path);
     }
+    // `-static` (from --static or a `-static` cflag) MUST come before the `-l`
+    // flags: gcc/clang only static-link libraries that appear AFTER it on the
+    // command line. Appended at the end (with user_cflags) it's a no-op — the
+    // default -lpthread/-lm and the platform libs still link dynamically, so a
+    // mingw host build keeps pulling libwinpthread-1.dll. Hoist it here so the
+    // whole link is static. (A later duplicate from user_cflags is harmless.)
+    let wants_static: bool = user_cflags.contains("-static");
+    if wants_static {
+        cmd = cmd.concat(" -static");
+    }
     // `-g` ships debug info so the runtime trap handler can resolve
     // each frame's instruction pointer back to a function name and
     // source line via dbghelp (Windows) / addr2line (POSIX). Cheap —
@@ -3040,11 +3050,13 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             cmd = cmd.concat(" -lcrypt32");
         }
     } else {
-        if !cross && !eff_release {
+        if !cross && !eff_release && !wants_static {
             // -rdynamic only on host POSIX builds — cross builds use static
             // linking where dynamic symbol export isn't applicable. Skipped in
             // release: it pins a full .dynsym that survives `-s` and keeps the
-            // linker from garbage-collecting otherwise-dead symbols.
+            // linker from garbage-collecting otherwise-dead symbols. Also
+            // skipped under --static: -rdynamic forces a dynamic link, which
+            // defeats the point (and on glibc the two conflict).
             cmd = cmd.concat(" -rdynamic");
         }
     }
@@ -4592,8 +4604,15 @@ fn main() -> i32 {
     let mut want_lto: bool = false;
     let mut want_static: bool = false;
     let mut march_val: string = "";
-    let flag_start: i32 = if src_arg_idx >= arg_limit { 2 } else { src_arg_idx + 1 };
-    for let i: i32 = flag_start; i < arg_limit; i++ {
+    // Scan the WHOLE arg range for flags, not just what comes after the source.
+    // `glide build --static app.glide` puts the flag before the file, and the
+    // old `src_arg_idx + 1` start silently dropped it. Skip index 0 (the glide
+    // binary) and the source path itself; the subcommand and other positionals
+    // match no flag check, so scanning them is harmless.
+    for let i: i32 = 1; i < arg_limit; i++ {
+        if i == src_arg_idx {
+            continue;
+        }
         let a: string = args_at(i);
         if a.eq("-o") && i + 1 < argc {
             out_path = args_at(i + 1);
