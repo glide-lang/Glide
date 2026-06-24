@@ -3077,6 +3077,204 @@ fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue
     }
 }
 
+// ===================== C completion inside `c_raw! { }` =====================
+//
+// The Glide lexer swallows a c_raw body as one opaque token, so ordinary Glide
+// completion can't see into it. When the cursor lands inside a c_raw block we
+// offer C-side suggestions instead: the Glide locals in scope (codegen emits
+// them under their verbatim name, so they're the exact C identifiers the body
+// uses), plus C keywords, common libc functions and the parts of the Glide C
+// runtime that c_raw bodies actually reach for.
+
+fn _byte_off_at(text: string, line0: i32, col0: i32) -> i32 {
+    let n: i32 = text.len();
+    let mut line: i32 = 0;
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n && line < line0 {
+        if text.at(i).to_int() == 10 {
+            line = line + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    let mut off: i32 = start + col0;
+    if off > n {
+        off = n;
+    }
+    return off;
+}
+
+fn _str_at(text: string, i: i32, kw: string) -> bool {
+    let kl: i32 = kw.len();
+    if i + kl > text.len() {
+        return false;
+    }
+    for let k: i32 = 0; k < kl; k++ {
+        if text.at(i + k).to_int() != kw.at(k).to_int() {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn _is_ident_byte(c: i32) -> bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95;
+}
+
+// Index of the `{` that opens a `c_raw! {` starting at `i`, or -1 when `i`
+// isn't a c_raw opener. Mirrors the lexer: `c_raw` on a word boundary,
+// immediately followed by `!`, optional whitespace, then `{`.
+fn _c_raw_open_brace(text: string, i: i32, n: i32) -> i32 {
+    if !_str_at(text, i, "c_raw") {
+        return -1;
+    }
+    if i > 0 && _is_ident_byte(text.at(i - 1).to_int()) {
+        return -1;
+    }
+    if i + 5 >= n || text.at(i + 5).to_int() != 33 {
+        return -1;
+    }
+    let mut j: i32 = i + 6;
+    while j < n {
+        let c: i32 = text.at(j).to_int();
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            j = j + 1;
+        } else {
+            break;
+        }
+    }
+    if j < n && text.at(j).to_int() == 123 {
+        return j;
+    }
+    return -1;
+}
+
+// True if `off` lies inside the body of some `c_raw! { ... }`. Uses the same
+// naive brace count as the lexer (the bodies it accepts are brace-balanced at
+// the raw level, so string/comment awareness isn't needed to match it).
+fn _off_in_c_raw(text: string, off: i32) -> bool {
+    let n: i32 = text.len();
+    let mut i: i32 = 0;
+    while i < n {
+        let ob: i32 = _c_raw_open_brace(text, i, n);
+        if ob >= 0 {
+            let body_start: i32 = ob + 1;
+            let mut depth: i32 = 1;
+            let mut j: i32 = body_start;
+            while j < n && depth > 0 {
+                let c: i32 = text.at(j).to_int();
+                if c == 123 {
+                    depth = depth + 1;
+                } else if c == 125 {
+                    depth = depth - 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                j = j + 1;
+            }
+            if off >= body_start && off <= j - 1 {
+                return true;
+            }
+            i = j + 1;
+        } else {
+            i = i + 1;
+        }
+    }
+    return false;
+}
+
+// Push each space-separated word in `words` as a completion item of `kind`.
+fn _push_words(items: *JsonValue, seen: *HashMap<bool>, kind: i32, detail: string, words: string) {
+    let n: i32 = words.len();
+    let mut i: i32 = 0;
+    while i < n {
+        while i < n && words.at(i).to_int() == 32 {
+            i = i + 1;
+        }
+        let s: i32 = i;
+        while i < n && words.at(i).to_int() != 32 {
+            i = i + 1;
+        }
+        if i > s {
+            let w: string = words.substring(s, i);
+            if !seen.contains(w) {
+                seen.insert(w, true);
+                json_arr_push(items, completion_item(w, kind, detail));
+            }
+        }
+    }
+}
+
+fn _push_runtime_fn(items: *JsonValue, seen: *HashMap<bool>, name: string, detail: string) {
+    if seen.contains(name) {
+        return;
+    }
+    seen.insert(name, true);
+    json_arr_push(items, completion_item(name, 3, detail));
+}
+
+// Offer C-side completions for a cursor inside a c_raw body.
+fn handle_c_raw_completion(id: *JsonValue, doc: LspDoc, _state: *LspState, line0: i32, _col0: i32, path: string) {
+    let items: *JsonValue = json_array();
+    let seen: *HashMap<bool> = HashMap::new();
+
+    // 1. Glide locals in scope. Codegen emits each under its own name, so these
+    //    are the C identifiers the body will actually reference.
+    if doc.stmts != null {
+        let host: *Stmt = fn_containing(doc.stmts, line0, path);
+        if host != null {
+            if host.fn_params != null {
+                for let i: i32 = 0; i < host.fn_params.len(); i++ {
+                    let p: Param = host.fn_params.get(i);
+                    if p.name != null && !seen.contains(p.name) {
+                        seen.insert(p.name, true);
+                        json_arr_push(items, completion_item(p.name, 6, "Glide param (C name)"));
+                    }
+                }
+            }
+            let cps: *Vector<Param> = Vector::new();
+            collect_active_closure_params(host.fn_body, line0, cps);
+            for let i: i32 = 0; i < cps.len(); i++ {
+                let cp: Param = cps.get(i);
+                if cp.name != null && !seen.contains(cp.name) {
+                    seen.insert(cp.name, true);
+                    json_arr_push(items, completion_item(cp.name, 6, "Glide param (C name)"));
+                }
+            }
+            let locals: *Vector<Stmt> = Vector::new();
+            collect_locals(host.fn_body, line0, locals);
+            for let i: i32 = 0; i < locals.len(); i++ {
+                let s: Stmt = locals.get(i);
+                if s.name != null && !seen.contains(s.name) {
+                    seen.insert(s.name, true);
+                    json_arr_push(items, completion_item(s.name, 6, "Glide local (C name)"));
+                }
+            }
+        }
+    }
+
+    // 2. C keywords.
+    _push_words(items, seen, 14, "C keyword", "if else while for do switch case default break continue return goto sizeof struct union enum typedef const static volatile unsigned signed void char short int long float double extern register inline");
+
+    // 3. Common libc.
+    _push_words(items, seen, 3, "libc", "malloc calloc realloc free memcpy memmove memset memcmp strlen strcmp strncmp strcpy strncpy strcat strchr strstr snprintf sprintf printf fprintf fputs fwrite fread fopen fclose fflush exit abort atoi strtol qsort");
+
+    // 4. Glide C runtime surface that c_raw bodies commonly use.
+    _push_runtime_fn(items, seen, "__glide_palloc", "void *__glide_palloc(size): bump-alloc in the active arena (calloc fallback)");
+    _push_runtime_fn(items, seen, "__glide_palloc_make", "void *__glide_palloc_make(): create a new arena");
+    _push_runtime_fn(items, seen, "__glide_palloc_set", "void __glide_palloc_set(void*): make an arena active");
+    _push_runtime_fn(items, seen, "__glide_palloc_get", "void *__glide_palloc_get(): current active arena head");
+    _push_runtime_fn(items, seen, "__glide_palloc_free", "void __glide_palloc_free(void*): free a whole arena chain");
+    _push_runtime_fn(items, seen, "__glide_palloc_active", "int __glide_palloc_active(): 1 when an arena is active");
+    _push_runtime_fn(items, seen, "__glide_str_alloc", "char *__glide_str_alloc(len): allocate an SDS string buffer");
+    _push_runtime_fn(items, seen, "__glide_string_from_buf", "string __glide_string_from_buf(char*, len): wrap raw bytes as a string");
+
+    seen.free();
+    lsp_send_response(id, items);
+}
+
 pub fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -3094,6 +3292,14 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // (Package fields, vec_of, Dep::path/git) instead of generic symbols.
     if path_is_manifest(uri_to_path(uri)) {
         handle_manifest_completion(id, doc, line0, col0);
+        return;
+    }
+    // Cursor inside a `c_raw! { ... }` body: the C code is opaque to Glide's
+    // lexer, so offer C-side completions (libc, the Glide C runtime, C keywords
+    // and the in-scope Glide locals by their codegen'd C name) and stop before
+    // the Glide symbol machinery, which would only suggest nonsense here.
+    if _off_in_c_raw(doc.text, _byte_off_at(doc.text, line0, col0)) {
+        handle_c_raw_completion(id, doc, state, line0, col0, uri_to_path(uri));
         return;
     }
     if doc.stmts == null {
