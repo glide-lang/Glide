@@ -65,9 +65,9 @@
 (asm_block (asm_line (string_literal) @string.special))
 (asm_operand (string_literal) @string.special)
 
-; c_raw block contents — neutral so the rest of the editor doesn't
-; try to color C as Glide.
-(raw_brace_block) @comment.block
+; c_raw block contents are highlighted as embedded C (see injections.scm).
+; Keep the surrounding braces as punctuation so they don't read as Glide.
+(raw_brace_block ["{" "}"] @punctuation.bracket)
 
 ; Namespaced method call: `obj.NS::method()` — NS is left without a
 ; capture so the editor renders it in the default identifier color
