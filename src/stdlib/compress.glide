@@ -1,78 +1,684 @@
-// gzip / deflate helpers. Links `-lz` (already pulled in by
-// stdlib::http::compress for the response middleware).
+// gzip / zlib / raw-DEFLATE decoding, implemented natively in Glide (no -lz).
 //
-// Decoding is needed for the package manager's tarball fetch — github's
-// codeload endpoints only serve gzipped tar archives.
+// A direct port of the canonical reference inflater (puff.c): a bit reader,
+// canonical Huffman decode, and the three DEFLATE block types (stored, fixed,
+// dynamic). Decoding is needed for the package manager's tarball fetch -
+// github's codeload endpoints only serve gzipped archives.
+//
+// RFC 1951 (DEFLATE) + RFC 1950 (zlib) + RFC 1952 (gzip).
+import stdlib::bytes::*;
 
-extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
-extern fn __glide_gunzip_decode(input: string, in_len: i32, out_len_ptr: *i32) -> *void;
+// Decoder state: the input bit stream plus the growing output and the fixed
+// length / distance base + extra-bit tables (built once per run).
+struct Inf {
+    src: string,
+    inlen: i32,
+    incnt: i32,
+    bitbuf: i32,
+    bitcnt: i32,
+    out: *ByteBuffer,
+    err: bool,
+    lbase: *Vector<i32>,
+    lext: *Vector<i32>,
+    dbase: *Vector<i32>,
+    dext: *Vector<i32>,
+}
 
-c_raw! {
-    #include <zlib.h>
-    #include <stdint.h>
-    #include <stdlib.h>
-    #include <string.h>
+// A canonical Huffman code: count[len] = how many codes have each bit length,
+// symbol[] = the symbols ordered by (length, then value).
+struct Huff {
+    count: *Vector<i32>,
+    symbol: *Vector<i32>,
+}
 
-    // Inflate a gzip-wrapped stream. Doubles the output buffer on
-    // demand — typical compression ratios mean ~3x is plenty, but
-    // we resize unconditionally if zlib reports Z_BUF_ERROR. Returns
-    // a fresh malloc'd buffer; NULL on any error. `*out_len` ends up
-    // at the decompressed byte count.
-    void* __glide_gunzip_decode(const char* input, int in_len, int* out_len) {
-        if (in_len <= 0) { *out_len = 0; return NULL; }
-        size_t cap = (size_t)in_len * 4 + 64;
-        unsigned char* buf = (unsigned char*)malloc(cap);
-        if (!buf) { *out_len = 0; return NULL; }
+fn _vec_zeros(n: i32) -> *Vector<i32> {
+    let v: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < n; i++ {
+        v.push(0);
+    }
+    return v;
+}
 
-        z_stream zs;
-        memset(&zs, 0, sizeof(zs));
-        // 15 + 32 = auto-detect gzip OR zlib wrapper.
-        if (inflateInit2(&zs, 15 + 32) != Z_OK) {
-            free(buf); *out_len = 0; return NULL;
+fn _byte_at(s: *Inf, i: i32) -> i32 {
+    return s.src.at(i).to_int() & 255;
+}
+
+// Read `need` bits, least-significant first (DEFLATE bit order).
+fn _inf_bits(s: *Inf, need: i32) -> i32 {
+    let mut val: i32 = s.bitbuf;
+    while s.bitcnt < need {
+        if s.incnt >= s.inlen {
+            s.err = true;
+            return 0;
         }
-        zs.next_in  = (Bytef*)input;
-        zs.avail_in = (uInt)in_len;
-        zs.next_out = buf;
-        zs.avail_out = (uInt)cap;
+        val = val | _byte_at(s, s.incnt) << s.bitcnt;
+        s.incnt = s.incnt + 1;
+        s.bitcnt = s.bitcnt + 8;
+    }
+    s.bitbuf = val >> need;
+    s.bitcnt = s.bitcnt - need;
+    return val & (1 << need) - 1;
+}
 
-        for (;;) {
-            int rc = inflate(&zs, Z_NO_FLUSH);
-            if (rc == Z_STREAM_END) break;
-            if (rc == Z_OK && zs.avail_out > 0) continue;
-            if (rc != Z_OK && rc != Z_BUF_ERROR) {
-                inflateEnd(&zs); free(buf); *out_len = 0; return NULL;
+// Build a Huffman decode table from per-symbol code lengths. Returns the
+// "left" count: 0 = complete, >0 = incomplete (valid for some fixed tables),
+// <0 = over-subscribed (corrupt).
+fn _inf_construct(h: Huff, lengths: *Vector<i32>, n: i32) -> i32 {
+    for let len: i32 = 0; len <= 15; len++ {
+        h.count.set(len, 0);
+    }
+    for let sym: i32 = 0; sym < n; sym++ {
+        let l: i32 = lengths.get(sym);
+        h.count.set(l, h.count.get(l) + 1);
+    }
+    if h.count.get(0) == n {
+        return 0;
+    }
+    let mut left: i32 = 1;
+    for let len: i32 = 1; len <= 15; len++ {
+        left = left * 2;
+        left = left - h.count.get(len);
+        if left < 0 {
+            return left;
+        }
+    }
+    let offs: *Vector<i32> = _vec_zeros(16);
+    for let len: i32 = 1; len < 15; len++ {
+        offs.set(len + 1, offs.get(len) + h.count.get(len));
+    }
+    for let sym: i32 = 0; sym < n; sym++ {
+        let l: i32 = lengths.get(sym);
+        if l != 0 {
+            h.symbol.set(offs.get(l), sym);
+            offs.set(l, offs.get(l) + 1);
+        }
+    }
+    return left;
+}
+
+// Decode one symbol from the stream using Huffman code `h`.
+fn _inf_decode(s: *Inf, h: Huff) -> i32 {
+    let mut code: i32 = 0;
+    let mut first: i32 = 0;
+    let mut index: i32 = 0;
+    for let len: i32 = 1; len <= 15; len++ {
+        code = code | _inf_bits(s, 1);
+        if s.err {
+            return -1;
+        }
+        let count: i32 = h.count.get(len);
+        if code - count < first {
+            return h.symbol.get(index + (code - first));
+        }
+        index = index + count;
+        first = first + count;
+        first = first << 1;
+        code = code << 1;
+    }
+    s.err = true;
+    return -1;
+}
+
+// Decode literal/length + distance symbols for one block, emitting literals and
+// copying LZ77 back-references into the output.
+fn _inf_codes(s: *Inf, lencode: Huff, distcode: Huff) {
+    while true {
+        let sym: i32 = _inf_decode(s, lencode);
+        if s.err {
+            return;
+        }
+        if sym < 256 {
+            s.out.push((sym & 255) as u8);
+        } else {
+            if sym == 256 {
+                return;
             }
-            size_t old_total = zs.total_out;
-            size_t new_cap = cap * 2;
-            unsigned char* nb = (unsigned char*)realloc(buf, new_cap);
-            if (!nb) { inflateEnd(&zs); free(buf); *out_len = 0; return NULL; }
-            buf = nb;
-            zs.next_out  = buf + old_total;
-            zs.avail_out = (uInt)(new_cap - old_total);
-            cap = new_cap;
+            let li: i32 = sym - 257;
+            if li >= 29 {
+                s.err = true;
+                return;
+            }
+            let length: i32 = s.lbase.get(li) + _inf_bits(s, s.lext.get(li));
+            let dsym: i32 = _inf_decode(s, distcode);
+            if s.err {
+                return;
+            }
+            if dsym >= 30 {
+                s.err = true;
+                return;
+            }
+            let dist: i32 = s.dbase.get(dsym) + _inf_bits(s, s.dext.get(dsym));
+            let start: i32 = s.out.len() - dist;
+            if start < 0 {
+                s.err = true;
+                return;
+            }
+            for let k: i32 = 0; k < length; k++ {
+                s.out.push(s.out.at(start + k));
+            }
         }
-        *out_len = (int)zs.total_out;
-        inflateEnd(&zs);
-        return buf;
     }
 }
 
-/// Decompress a gzip-wrapped or zlib-wrapped buffer.
-///
-/// Returns the decoded bytes as a *void buffer plus the byte count
-/// through `out_len`. On any decode error the buffer is null and
-/// `out_len` is zero. Caller is responsible for `free`ing the buffer
-/// (or wrapping it via `__glide_string_from_buf` and letting the GC
-/// take ownership).
-///
-/// ```glide
-/// let mut out_len: i32 = 0;
-/// let buf: *void = gzip_decode(payload, payload.len(), &out_len);
-/// if buf != null {
-///     let decoded: string = __glide_string_from_buf(buf, out_len);
-///     free(buf);
-/// }
-/// ```
+// Stored (uncompressed) block: align, read LEN/NLEN, copy LEN bytes verbatim.
+fn _inf_stored(s: *Inf) {
+    s.bitbuf = 0;
+    s.bitcnt = 0;
+    if s.incnt + 4 > s.inlen {
+        s.err = true;
+        return;
+    }
+    let len: i32 = _byte_at(s, s.incnt) | _byte_at(s, s.incnt + 1) << 8;
+    s.incnt = s.incnt + 4; // skip LEN + NLEN
+    if s.incnt + len > s.inlen {
+        s.err = true;
+        return;
+    }
+    for let i: i32 = 0; i < len; i++ {
+        s.out.push(_byte_at(s, s.incnt + i) as u8);
+    }
+    s.incnt = s.incnt + len;
+}
+
+// Fixed Huffman block: the predefined RFC 1951 literal/length + distance codes.
+fn _inf_fixed(s: *Inf) {
+    let litlen: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < 288; i++ {
+        if i < 144 {
+            litlen.push(8);
+        } else {
+            if i < 256 {
+                litlen.push(9);
+            } else {
+                if i < 280 {
+                    litlen.push(7);
+                } else {
+                    litlen.push(8);
+                }
+            }
+        }
+    }
+    let distlen: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < 30; i++ {
+        distlen.push(5);
+    }
+    let lc: Huff = Huff { count: _vec_zeros(16), symbol: _vec_zeros(288) };
+    let dc: Huff = Huff { count: _vec_zeros(16), symbol: _vec_zeros(30) };
+    _inf_construct(lc, litlen, 288);
+    _inf_construct(dc, distlen, 30);
+    _inf_codes(s, lc, dc);
+}
+
+// Dynamic Huffman block: read the code-length code, RLE-decode the literal/
+// length + distance code lengths, build both tables, then decode the data.
+fn _inf_dynamic(s: *Inf) {
+    let order: *Vector<i32> = Vector::new();
+    let ord: *Vector<i32> = _push_order(order);
+    let nlen: i32 = _inf_bits(s, 5) + 257;
+    let ndist: i32 = _inf_bits(s, 5) + 1;
+    let ncode: i32 = _inf_bits(s, 4) + 4;
+    if nlen > 286 || ndist > 30 {
+        s.err = true;
+        return;
+    }
+    let cllen: *Vector<i32> = _vec_zeros(19);
+    for let i: i32 = 0; i < ncode; i++ {
+        cllen.set(ord.get(i), _inf_bits(s, 3));
+    }
+    let clcode: Huff = Huff { count: _vec_zeros(16), symbol: _vec_zeros(19) };
+    if _inf_construct(clcode, cllen, 19) != 0 {
+        s.err = true;
+        return;
+    }
+    let lengths: *Vector<i32> = Vector::new();
+    let total: i32 = nlen + ndist;
+    while lengths.len() < total {
+        let sym: i32 = _inf_decode(s, clcode);
+        if s.err {
+            return;
+        }
+        if sym < 16 {
+            lengths.push(sym);
+        } else {
+            if sym == 16 {
+                if lengths.len() == 0 {
+                    s.err = true;
+                    return;
+                }
+                let prev: i32 = lengths.get(lengths.len() - 1);
+                let rep: i32 = 3 + _inf_bits(s, 2);
+                for let k: i32 = 0; k < rep; k++ {
+                    lengths.push(prev);
+                }
+            } else {
+                if sym == 17 {
+                    let rep: i32 = 3 + _inf_bits(s, 3);
+                    for let k: i32 = 0; k < rep; k++ {
+                        lengths.push(0);
+                    }
+                } else {
+                    let rep: i32 = 11 + _inf_bits(s, 7);
+                    for let k: i32 = 0; k < rep; k++ {
+                        lengths.push(0);
+                    }
+                }
+            }
+        }
+    }
+    if lengths.len() > total {
+        s.err = true;
+        return;
+    }
+    let litlen: *Vector<i32> = Vector::new();
+    let distlen: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < nlen; i++ {
+        litlen.push(lengths.get(i));
+    }
+    for let i: i32 = nlen; i < total; i++ {
+        distlen.push(lengths.get(i));
+    }
+    let lc: Huff = Huff { count: _vec_zeros(16), symbol: _vec_zeros(nlen) };
+    let dc: Huff = Huff { count: _vec_zeros(16), symbol: _vec_zeros(ndist) };
+    _inf_construct(lc, litlen, nlen);
+    _inf_construct(dc, distlen, ndist);
+    _inf_codes(s, lc, dc);
+}
+
+fn _push_order(v: *Vector<i32>) -> *Vector<i32> {
+    v.push(16);
+    v.push(17);
+    v.push(18);
+    v.push(0);
+    v.push(8);
+    v.push(7);
+    v.push(9);
+    v.push(6);
+    v.push(10);
+    v.push(5);
+    v.push(11);
+    v.push(4);
+    v.push(12);
+    v.push(3);
+    v.push(13);
+    v.push(2);
+    v.push(14);
+    v.push(1);
+    v.push(15);
+    return v;
+}
+
+fn _push_pairs(base: *Vector<i32>, ext: *Vector<i32>, vals: string) {
+    // `vals` is "base:ext base:ext ..." - compact table literal.
+    let n: i32 = vals.len();
+    let mut i: i32 = 0;
+    while i < n {
+        while i < n && vals.at(i).to_int() == 32 {
+            i = i + 1;
+        }
+        let mut b: i32 = 0;
+        while i < n && vals.at(i).to_int() != 58 {
+            b = b * 10 + (vals.at(i).to_int() - 48);
+            i = i + 1;
+        }
+        i = i + 1; // skip ':'
+        let mut e: i32 = 0;
+        while i < n && vals.at(i).to_int() != 32 {
+            e = e * 10 + (vals.at(i).to_int() - 48);
+            i = i + 1;
+        }
+        base.push(b);
+        ext.push(e);
+    }
+}
+
+fn _inf_new(src: string, inlen: i32, start: i32) -> *Inf {
+    let lbase: *Vector<i32> = Vector::new();
+    let lext: *Vector<i32> = Vector::new();
+    _push_pairs(lbase, lext, "3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:1 13:1 15:1 17:1 19:2 23:2 27:2 31:2 35:3 43:3 51:3 59:3 67:4 83:4 99:4 115:4 131:5 163:5 195:5 227:5 258:0");
+    let dbase: *Vector<i32> = Vector::new();
+    let dext: *Vector<i32> = Vector::new();
+    _push_pairs(dbase, dext, "1:0 2:0 3:0 4:0 5:1 7:1 9:2 13:2 17:3 25:3 33:4 49:4 65:5 97:5 129:6 193:6 257:7 385:7 513:8 769:8 1025:9 1537:9 2049:10 3073:10 4097:11 6145:11 8193:12 12289:12 16385:13 24577:13");
+    let s: *Inf = malloc(sizeof(Inf)) as *Inf;
+    s.src = src;
+    s.inlen = inlen;
+    s.incnt = start;
+    s.bitbuf = 0;
+    s.bitcnt = 0;
+    s.out = ByteBuffer::new();
+    s.err = false;
+    s.lbase = lbase;
+    s.lext = lext;
+    s.dbase = dbase;
+    s.dext = dext;
+    return s;
+}
+
+// Run the DEFLATE block loop. Returns the decoded output, or null on error.
+fn _inflate_raw(src: string, inlen: i32, start: i32) -> *ByteBuffer {
+    let s: *Inf = _inf_new(src, inlen, start);
+    let mut last: i32 = 0;
+    while last == 0 {
+        last = _inf_bits(s, 1);
+        let btype: i32 = _inf_bits(s, 2);
+        if s.err {
+            return null;
+        }
+        if btype == 0 {
+            _inf_stored(s);
+        } else {
+            if btype == 1 {
+                _inf_fixed(s);
+            } else {
+                if btype == 2 {
+                    _inf_dynamic(s);
+                } else {
+                    return null;
+                }
+            }
+        }
+        if s.err {
+            return null;
+        }
+    }
+    return s.out;
+}
+
+// Locate the start of the DEFLATE payload: skip a gzip (RFC 1952) or zlib
+// (RFC 1950) wrapper, or assume raw DEFLATE. Returns the byte offset, or -1.
+fn _deflate_start(src: string, n: i32) -> i32 {
+    if n < 2 {
+        return -1;
+    }
+    let b0: i32 = src.at(0).to_int() & 255;
+    let b1: i32 = src.at(1).to_int() & 255;
+    if b0 == 31 && b1 == 139 {
+        // gzip: 10-byte header + optional fields.
+        if n < 10 {
+            return -1;
+        }
+        let flg: i32 = src.at(3).to_int() & 255;
+        let mut p: i32 = 10;
+        if (flg & 4) != 0 {
+            // FEXTRA: 2-byte length then that many bytes.
+            if p + 2 > n {
+                return -1;
+            }
+            let xlen: i32 = src.at(p).to_int() & 255 | (src.at(p + 1).to_int() & 255) << 8;
+            p = p + 2 + xlen;
+        }
+        if (flg & 8) != 0 {
+            // FNAME: NUL-terminated.
+            while p < n && (src.at(p).to_int() & 255) != 0 {
+                p = p + 1;
+            }
+            p = p + 1;
+        }
+        if (flg & 16) != 0 {
+            // FCOMMENT: NUL-terminated.
+            while p < n && (src.at(p).to_int() & 255) != 0 {
+                p = p + 1;
+            }
+            p = p + 1;
+        }
+        if (flg & 2) != 0 {
+            p = p + 2; // FHCRC
+        }
+        return p;
+    }
+    if (b0 & 15) == 8 && (b0 << 8 | b1) % 31 == 0 {
+        // zlib wrapper: 2-byte header (+ 4 if a preset dictionary is present).
+        if (b1 & 32) != 0 {
+            return 6;
+        }
+        return 2;
+    }
+    return 0; // assume raw DEFLATE
+}
+
+// Decompress a gzip-wrapped, zlib-wrapped, or raw DEFLATE buffer.
+//
+// Returns the decoded bytes as a *void buffer plus the byte count through
+// `out_len`. On any decode error the buffer is null and `out_len` is zero.
+// The caller owns the buffer (free it, or wrap it via __glide_string_from_buf
+// and let the GC take ownership).
+//
+// ```glide
+// let mut out_len: i32 = 0;
+// let buf: *void = gzip_decode(payload, payload.len(), &out_len);
+// if buf != null {
+//     let decoded: string = __glide_string_from_buf(buf, out_len);
+//     free(buf);
+// }
+// ```
 pub fn gzip_decode(input: string, in_len: i32, out_len: *i32) -> *void {
-    return __glide_gunzip_decode(input, in_len, out_len);
+    if in_len <= 0 {
+        *out_len = 0;
+        return null;
+    }
+    let start: i32 = _deflate_start(input, in_len);
+    if start < 0 || start >= in_len {
+        *out_len = 0;
+        return null;
+    }
+    let out: *ByteBuffer = _inflate_raw(input, in_len, start);
+    if out == null {
+        *out_len = 0;
+        return null;
+    }
+    *out_len = out.len();
+    // Hand the malloc'd byte buffer to the caller; the small wrapper leaks.
+    return out.data as *void;
+}
+
+// ===================== DEFLATE compression (gzip encode) =====================
+//
+// LZ77 (hash-chain match finder) + fixed Huffman + a gzip wrapper. Fixed
+// Huffman keeps it simple (no dynamic tree to build/transmit); the LZ77 stage
+// does the real work. Output is standard gzip, decodable by any inflater.
+struct BitW {
+    out: *ByteBuffer,
+    bitbuf: i32,
+    bitcnt: i32,
+}
+
+fn _bw_new() -> *BitW {
+    let w: *BitW = malloc(sizeof(BitW)) as *BitW;
+    w.out = ByteBuffer::new();
+    w.bitbuf = 0;
+    w.bitcnt = 0;
+    return w;
+}
+
+// Write `n` low bits of `val`, least-significant first.
+fn _bw_bits(w: *BitW, val: i32, n: i32) {
+    w.bitbuf = w.bitbuf | (val & (1 << n) - 1) << w.bitcnt;
+    w.bitcnt = w.bitcnt + n;
+    while w.bitcnt >= 8 {
+        w.out.push((w.bitbuf & 255) as u8);
+        w.bitbuf = w.bitbuf >> 8;
+        w.bitcnt = w.bitcnt - 8;
+    }
+}
+
+fn _bw_flush(w: *BitW) {
+    if w.bitcnt > 0 {
+        w.out.push((w.bitbuf & 255) as u8);
+        w.bitbuf = 0;
+        w.bitcnt = 0;
+    }
+}
+
+// Reverse the low `len` bits of `code` (Huffman codes are packed MSB-first).
+fn _rev_bits(code: i32, len: i32) -> i32 {
+    let mut r: i32 = 0;
+    for let i: i32 = 0; i < len; i++ {
+        r = r << 1 | code >> i & 1;
+    }
+    return r;
+}
+
+// Emit a fixed-Huffman literal/length symbol (RFC 1951 3.2.6).
+fn _emit_litlen(w: *BitW, sym: i32) {
+    if sym < 144 {
+        _bw_bits(w, _rev_bits(48 + sym, 8), 8);
+    } else {
+        if sym < 256 {
+            _bw_bits(w, _rev_bits(400 + (sym - 144), 9), 9);
+        } else {
+            if sym < 280 {
+                _bw_bits(w, _rev_bits(sym - 256, 7), 7);
+            } else {
+                _bw_bits(w, _rev_bits(192 + (sym - 280), 8), 8);
+            }
+        }
+    }
+}
+
+fn _crc_table() -> *Vector<i32> {
+    let t: *Vector<i32> = Vector::new();
+    let poly: i32 = -306674912; // 0xEDB88320
+    for let n: i32 = 0; n < 256; n++ {
+        let mut c: i32 = n;
+        for let k: i32 = 0; k < 8; k++ {
+            if (c & 1) != 0 {
+                c = poly ^ c >> 1 & 2147483647;
+            } else {
+                c = c >> 1 & 2147483647;
+            }
+        }
+        t.push(c);
+    }
+    return t;
+}
+
+fn _crc32(data: string, n: i32) -> i32 {
+    let t: *Vector<i32> = _crc_table();
+    let mut crc: i32 = -1;
+    for let i: i32 = 0; i < n; i++ {
+        let b: i32 = data.at(i).to_int() & 255;
+        crc = crc >> 8 & 16777215 ^ t.get((crc ^ b) & 255);
+    }
+    return crc ^ -1;
+}
+
+// Compress `input` (in_len bytes) with a gzip wrapper, natively (no zlib).
+// Returns a malloc'd buffer + length through `out_len`; null on failure.
+pub fn gzip_encode(input: string, in_len: i32, out_len: *i32) -> *void {
+    if in_len <= 0 {
+        *out_len = 0;
+        return null;
+    }
+    let lbase: *Vector<i32> = Vector::new();
+    let lext: *Vector<i32> = Vector::new();
+    _push_pairs(lbase, lext, "3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:1 13:1 15:1 17:1 19:2 23:2 27:2 31:2 35:3 43:3 51:3 59:3 67:4 83:4 99:4 115:4 131:5 163:5 195:5 227:5 258:0");
+    let dbase: *Vector<i32> = Vector::new();
+    let dext: *Vector<i32> = Vector::new();
+    _push_pairs(dbase, dext, "1:0 2:0 3:0 4:0 5:1 7:1 9:2 13:2 17:3 25:3 33:4 49:4 65:5 97:5 129:6 193:6 257:7 385:7 513:8 769:8 1025:9 1537:9 2049:10 3073:10 4097:11 6145:11 8193:12 12289:12 16385:13 24577:13");
+    let w: *BitW = _bw_new();
+    // gzip header: magic, deflate, no flags, no mtime, unknown OS.
+    w.out.push(31 as u8);
+    w.out.push(139 as u8);
+    w.out.push(8 as u8);
+    w.out.push(0 as u8);
+    w.out.push(0 as u8);
+    w.out.push(0 as u8);
+    w.out.push(0 as u8);
+    w.out.push(0 as u8);
+    w.out.push(0 as u8);
+    w.out.push(255 as u8);
+    // One fixed-Huffman final block.
+    _bw_bits(w, 3, 3); // BFINAL=1, BTYPE=01
+    // LZ77 with a hash-chain match finder.
+    let hsize: i32 = 32768;
+    let head: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < hsize; i++ {
+        head.push(-1);
+    }
+    let prev: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < in_len; i++ {
+        prev.push(-1);
+    }
+    let mut pos: i32 = 0;
+    while pos < in_len {
+        let mut best_len: i32 = 0;
+        let mut best_dist: i32 = 0;
+        if pos + 3 <= in_len {
+            let b0: i32 = input.at(pos).to_int() & 255;
+            let b1: i32 = input.at(pos + 1).to_int() & 255;
+            let b2: i32 = input.at(pos + 2).to_int() & 255;
+            let h: i32 = (b0 << 10 ^ b1 << 5 ^ b2) & hsize - 1;
+            let mut cand: i32 = head.get(h);
+            let mut chain: i32 = 0;
+            while cand >= 0 && chain < 32 {
+                if pos - cand <= 32768 {
+                    let mut l: i32 = 0;
+                    while l < 258 && pos + l < in_len && (input.at(cand + l).to_int() & 255) == (input.at(pos + l).to_int() & 255) {
+                        l = l + 1;
+                    }
+                    if l > best_len {
+                        best_len = l;
+                        best_dist = pos - cand;
+                    }
+                }
+                cand = prev.get(cand);
+                chain = chain + 1;
+            }
+            prev.set(pos, head.get(h));
+            head.set(h, pos);
+        }
+        if best_len >= 3 {
+            let mut li: i32 = 28;
+            for let i: i32 = 0; i < 28; i++ {
+                if best_len < lbase.get(i + 1) {
+                    li = i;
+                    break;
+                }
+            }
+            _emit_litlen(w, 257 + li);
+            if lext.get(li) > 0 {
+                _bw_bits(w, best_len - lbase.get(li), lext.get(li));
+            }
+            let mut di: i32 = 29;
+            for let i: i32 = 0; i < 29; i++ {
+                if best_dist < dbase.get(i + 1) {
+                    di = i;
+                    break;
+                }
+            }
+            _bw_bits(w, _rev_bits(di, 5), 5);
+            if dext.get(di) > 0 {
+                _bw_bits(w, best_dist - dbase.get(di), dext.get(di));
+            }
+            let end: i32 = pos + best_len;
+            pos = pos + 1;
+            while pos < end {
+                if pos + 3 <= in_len {
+                    let c0: i32 = input.at(pos).to_int() & 255;
+                    let c1: i32 = input.at(pos + 1).to_int() & 255;
+                    let c2: i32 = input.at(pos + 2).to_int() & 255;
+                    let hh: i32 = (c0 << 10 ^ c1 << 5 ^ c2) & hsize - 1;
+                    prev.set(pos, head.get(hh));
+                    head.set(hh, pos);
+                }
+                pos = pos + 1;
+            }
+        } else {
+            _emit_litlen(w, input.at(pos).to_int() & 255);
+            pos = pos + 1;
+        }
+    }
+    _emit_litlen(w, 256); // end of block
+    _bw_flush(w);
+    // gzip trailer: CRC-32 + ISIZE, both little-endian.
+    let crc: i32 = _crc32(input, in_len);
+    w.out.push((crc & 255) as u8);
+    w.out.push((crc >> 8 & 255) as u8);
+    w.out.push((crc >> 16 & 255) as u8);
+    w.out.push((crc >> 24 & 255) as u8);
+    w.out.push((in_len & 255) as u8);
+    w.out.push((in_len >> 8 & 255) as u8);
+    w.out.push((in_len >> 16 & 255) as u8);
+    w.out.push((in_len >> 24 & 255) as u8);
+    *out_len = w.out.len();
+    return w.out.data as *void;
 }
