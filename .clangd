@@ -1,38 +1,37 @@
-# clangd configuration for editing Glide's bootstrap C runtime in IDEs.
+# clangd configuration for the C in this repo.
 #
-# Glide builds with `zig cc` and the bundled Zig toolchain at runtime/zig.
-# clangd by default doesn't know that, so opening bootstrap/seed/bootstrap.c
-# or any of bootstrap/runtime/*.c shows phantom 'pthread.h not found' /
-# 'unknown type pthread_mutex_t' diagnostics.
+# None of the C here is meant to compile standalone in an editor:
+#   - bootstrap/runtime/*.c are templates spliced into bootstrap/seed/bootstrap.c
+#   - the C that `glide --emit` (or a failed `glide build`) leaves as *.__glide.c
+#     is a single self-contained translation unit the Glide pipeline feeds to
+#     `zig cc` / mingw `gcc` with -D_GNU_SOURCE, pthreads, winsock, dbghelp, etc.
 #
-# This file tells clangd to use the same include search paths the Glide
-# build pipeline uses, so the diagnostics match what you'd see during a
-# real build.
+# clangd uses clang's frontend, which on Windows targets MSVC and has no
+# <pthread.h>, so opening any of these files shows phantom "pthread.h not found",
+# "implicit declaration", "unknown type" errors even though the real build is
+# fine. The settings below feed clangd the same include paths the build uses and
+# silence the false positives so the editor only surfaces things that matter.
 
 CompileFlags:
   Add:
+    - -D_GNU_SOURCE
     - -Iruntime/zig/lib/libc/include/any-windows-any
     - -Iruntime/zig/lib/libc/include/any-linux-any
     - -Iruntime/zig/lib/libc/glibc/include
     - -Iruntime/zig/lib/include
-    - -Wno-pragma-once-outside-header
-    - -Wno-unknown-pragmas
-  # zig cc speaks gcc's flags but reports as clang; treat the bootstrap C
-  # runtime as if it were being compiled with the bundled toolchain.
+    - -Wno-everything
+    - -Wno-error=implicit-function-declaration
   Compiler: clang
 
-# bootstrap/runtime/*.c files are templates that get spliced together into
-# bootstrap/seed/bootstrap.c. They reference symbols that come from
-# sibling templates, so opening them in isolation is always going to be
-# noisy — silence the most common false positives there.
----
-If:
-  PathMatch:
-    - bootstrap/runtime/.*\.c
-    - bootstrap/runtime/.*\.tmpl
+# Global (every C file, not just bootstrap/runtime): the Glide-emitted and
+# runtime C reference symbols that come from sibling templates or are provided
+# by the link step, so isolated analysis is always noisy.
 Diagnostics:
   Suppress:
     - implicit_function_declaration
     - unknown_typename
     - pp_file_not_found
     - undeclared_var_use
+    - ovl_no_viable_function_in_call
+    - typecheck_invalid_operands
+    - err_typecheck_call_too_many_args
