@@ -3,93 +3,81 @@
 // Usage:
 //   r.use_mw(gzip_mw);
 //
-// `gzip_mw` runs `chain_next(c)`, then compresses the response body
-// with gzip iff:
+// `gzip_mw` runs `chain_next(c)`, then compresses the response body with gzip
+// iff:
 //   - the request advertised `Accept-Encoding: gzip`
 //   - the response status is 2xx
 //   - the response doesn't already carry `Content-Encoding`
-//   - the body is ≥ 1024 bytes (compression overhead exceeds savings
-//     for tiny payloads)
-//   - the response Content-Type isn't already a compressed format
-//     (image/*, video/*, audio/*, application/zip, application/gzip,
+//   - the body is ≥ 1024 bytes (compression overhead exceeds savings for tiny
+//     payloads)
+//   - the response Content-Type isn't already a compressed format (image/*,
+//     video/*, audio/*, application/zip, application/gzip,
 //     application/octet-stream)
 //
-// Implementation: zlib via c_raw (`compress2` with `gzip` window).
-// The compiled binary links `-lz` (added in bootstrap/main.glide:1028).
-// `__glide_gzip_encode` returns the gzipped bytes as a Glide string
-// built via `__glide_string_from_buf`, so embedded NULs survive.
-
+// Compression is the native `gzip_encode` in stdlib::compress (no -lz).
 import stdlib::http::*;
 import stdlib::http::router::*;
+import stdlib::compress::*;
 
 extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
-extern fn __glide_gzip_encode(input: string, in_len: i32, out_len_ptr: *i32) -> *void;
-
-c_raw! {
-    #include <zlib.h>
-    #include <stdint.h>
-
-    // Compress `input` (in_len bytes) with the gzip wrapper. Allocates
-    // a fresh buffer; returns NULL on failure. `*out_len` is set to
-    // the actual compressed byte count.
-    void* __glide_gzip_encode(const char* input, int in_len, int* out_len) {
-        if (in_len <= 0) { *out_len = 0; return NULL; }
-        // gzip header adds ~18 bytes; compressBound covers raw deflate.
-        uLongf bound = compressBound((uLong)in_len) + 32;
-        unsigned char* buf = (unsigned char*)malloc(bound);
-        if (!buf) { *out_len = 0; return NULL; }
-
-        z_stream zs;
-        memset(&zs, 0, sizeof(zs));
-        // 15 + 16 = gzip wrapper (vs 15 = zlib wrapper).
-        if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
-                         15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
-            free(buf); *out_len = 0; return NULL;
-        }
-        zs.next_in  = (Bytef*)input;
-        zs.avail_in = (uInt)in_len;
-        zs.next_out = buf;
-        zs.avail_out = (uInt)bound;
-        int rc = deflate(&zs, Z_FINISH);
-        if (rc != Z_STREAM_END) {
-            deflateEnd(&zs); free(buf); *out_len = 0; return NULL;
-        }
-        *out_len = (int)zs.total_out;
-        deflateEnd(&zs);
-        return buf;
-    }
-}
 
 const _GZIP_MIN_BYTES: i32 = 1024;
 
 pub fn gzip_mw(req: *HttpRequest, c: *Chain) -> HttpResponse {
     let accept: string = req.header("Accept-Encoding").to_lower();
     let resp: HttpResponse = chain_next(c);
-    if !accept.contains("gzip") { return resp; }
-    if resp.status < 200 || resp.status >= 300 { return resp; }
-    if resp.body.len() < _GZIP_MIN_BYTES { return resp; }
-    if (&resp).header("Content-Encoding").len() > 0 { return resp; }
+    if !accept.contains("gzip") {
+        return resp;
+    }
+    if resp.status < 200 || resp.status >= 300 {
+        return resp;
+    }
+    if resp.body.len() < _GZIP_MIN_BYTES {
+        return resp;
+    }
+    if (&resp).header("Content-Encoding").len() > 0 {
+        return resp;
+    }
     let ct: string = (&resp).header("Content-Type").to_lower();
-    if _is_already_compressed(ct) { return resp; }
-
+    if _is_already_compressed(ct) {
+        return resp;
+    }
     let mut out_len: i32 = 0;
-    let buf: *void = __glide_gzip_encode(resp.body, resp.body.len(), &out_len);
-    if buf == null || out_len == 0 { return resp; }
+    let buf: *void = gzip_encode(resp.body, resp.body.len(), &out_len);
+    if buf == null || out_len == 0 {
+        return resp;
+    }
     let encoded: string = __glide_string_from_buf(buf, out_len);
     free(buf);
     return resp.body(encoded).set("Content-Encoding", "gzip");
 }
 
-// Skip already-compressed media types — re-gzipping a JPEG yields
-// near-zero savings and burns CPU.
+// Skip already-compressed media types — re-gzipping a JPEG yields near-zero
+// savings and burns CPU.
 fn _is_already_compressed(ct: string) -> bool {
-    if ct.starts_with("image/") { return true; }
-    if ct.starts_with("video/") { return true; }
-    if ct.starts_with("audio/") { return true; }
-    if ct.starts_with("application/zip")     { return true; }
-    if ct.starts_with("application/gzip")    { return true; }
-    if ct.starts_with("application/x-gzip")  { return true; }
-    if ct.starts_with("application/x-bzip2") { return true; }
-    if ct.starts_with("application/octet-stream") { return true; }
+    if ct.starts_with("image/") {
+        return true;
+    }
+    if ct.starts_with("video/") {
+        return true;
+    }
+    if ct.starts_with("audio/") {
+        return true;
+    }
+    if ct.starts_with("application/zip") {
+        return true;
+    }
+    if ct.starts_with("application/gzip") {
+        return true;
+    }
+    if ct.starts_with("application/x-gzip") {
+        return true;
+    }
+    if ct.starts_with("application/x-bzip2") {
+        return true;
+    }
+    if ct.starts_with("application/octet-stream") {
+        return true;
+    }
     return false;
 }
