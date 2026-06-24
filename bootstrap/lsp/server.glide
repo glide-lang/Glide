@@ -1856,9 +1856,49 @@ struct UseSite {
 }
 
 // ---- Custom analysis passes --------------------------------------------
+fn _raw_ident_ch(c: i32) -> bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95;
+}
+
+// True if `name` occurs as a whole identifier inside the raw text `raw` (a
+// c_raw! body). Whole-word so `alelo` doesn't match inside `alelo2` / `xalelo`.
+fn _name_in_raw(raw: string, name: string) -> bool {
+    let rn: i32 = raw.len();
+    let nn: i32 = name.len();
+    if nn == 0 {
+        return false;
+    }
+    let mut i: i32 = 0;
+    while i + nn <= rn {
+        let mut hit: bool = true;
+        for let k: i32 = 0; k < nn; k++ {
+            if raw.at(i + k).to_int() != name.at(k).to_int() {
+                hit = false;
+                break;
+            }
+        }
+        if hit {
+            let before_ok: bool = i == 0 || !_raw_ident_ch(raw.at(i - 1).to_int());
+            let after_ok: bool = i + nn >= rn || !_raw_ident_ch(raw.at(i + nn).to_int());
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
 pub fn stmt_uses_name(s: *Stmt, name: string) -> bool {
     if s == null {
         return false;
+    }
+    // A c_raw! body is opaque raw C text (stored in `name`); scan it for the
+    // identifier so a local used only inside c_raw isn't flagged unused.
+    if s.kind == ST_CRAW {
+        if s.name != null && _name_in_raw(s.name, name) {
+            return true;
+        }
     }
     if s.let_value != null && expr_uses_name(s.let_value, name) {
         return true;
