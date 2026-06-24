@@ -318,6 +318,14 @@ pub fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
         if s.kind != ST_IMPL {
             continue;
         }
+        // Synthesized impls (proc-macro / @derive output, emitted at line 0)
+        // are the compiler's job to validate. The LSP parses imported bodies
+        // header-only, so a proc-derive's helper fns are empty here and the
+        // generated impl comes out method-less — flagging it would be a false
+        // positive. The real `glide build` expands and checks it for real.
+        if s.line <= 0 {
+            continue;
+        }
         if s.impl_trait_name == null || s.impl_trait_name.eq("") {
             continue;
         }
