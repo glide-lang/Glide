@@ -415,7 +415,44 @@ c_raw! {
 /// let body: string = fs_read("config.toml");
 /// if body.eq("") { eprintln("config missing or empty"); }
 /// ```
-pub fn fs_read(path: string) -> string { return read_file(path); }
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+
+extern fn __glide_read_file_buf(path: string, len_out: *i32) -> *void;
+
+extern fn __glide_write_buf(path: string, data: string, n: i32) -> bool;
+
+c_raw! {
+    // Binary-safe file I/O, byte-length based so embedded NULs survive (the
+    // text read_file / write_file truncate at the first NUL via strlen).
+    void* __glide_read_file_buf(const char* path, int* len_out) {
+        FILE* f = fopen(path, "rb");
+        if (!f) { *len_out = 0; return NULL; }
+        fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+        if (n < 0) n = 0;
+        unsigned char* buf = (unsigned char*)malloc((size_t)n + 1);
+        if (!buf) { *len_out = 0; return NULL; }
+        size_t got = fread(buf, 1, (size_t)n, f); fclose(f);
+        *len_out = (int)got;
+        return buf;
+    }
+    bool __glide_write_buf(const char* path, const char* data, int n) {
+        FILE* f = fopen(path, "wb"); if (!f) return false;
+        size_t wrote = (n > 0) ? fwrite(data, 1, (size_t)n, f) : 0;
+        fclose(f);
+        return wrote == (size_t)n;
+    }
+}
+
+pub fn fs_read(path: string) -> string {
+    let mut n: i32 = 0;
+    let buf: *void = __glide_read_file_buf(path, &n);
+    if buf == null {
+        return "";
+    }
+    let s: string = __glide_string_from_buf(buf, n);
+    free(buf);
+    return s;
+}
 
 /// Write `content` to `path`, replacing any existing file. Returns
 /// `true` on success.
@@ -425,7 +462,9 @@ pub fn fs_read(path: string) -> string { return read_file(path); }
 ///     eprintln("write failed");
 /// }
 /// ```
-pub fn fs_write(path: string, content: string) -> bool { return write_file(path, content); }
+pub fn fs_write(path: string, content: string) -> bool {
+    return __glide_write_buf(path, content, content.len());
+}
 
 /// `true` if `path` is openable for reading. Cheap stat-style check —
 /// returns `false` for missing files and unreadable ones alike.
