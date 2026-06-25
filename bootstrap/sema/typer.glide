@@ -3280,13 +3280,8 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     if s.kind == ST_LET && s.is_auto_owned && s.let_value != null && s.let_value.kind == EX_NULL {
         t.err_code(s.line, s.column, "null-auto-drop", "auto-drop binding `".concat(s.name).concat("` cannot be initialized with null"));
     }
-    // Borrow rule: rebinding an owned local would double-free at scope end.
-    if s.let_value != null && s.let_value.kind == EX_IDENT {
-        let src: string = s.let_value.str_val;
-        if t.owned_locals.contains(src) {
-            t.err_code(s.line, s.column, "owned-move", "cannot move owned value `".concat(src).concat("` into another binding (auto-drop conflict)"));
-        }
-    }
+    // `let b = a` where a is owned is a MOVE (a is consumed below; the codegen
+    // re-targets the auto-drop from a to b), not an error.
     // Detect auto-drop:
     //   - explicit `let v* = expr` marker, OR
     //   - `let p: *T = T { ... }` struct-lit pattern.
@@ -3299,10 +3294,11 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     }
     if s.let_value != null {
         let val_ty: *Type = infer_expr(t, s.let_value);
-        // Value-struct move: `let a = p` where p is a struct VALUE (not a pointer)
-        // moves p; reading p afterward is use-after-move. Primitives copy. Marked
-        // AFTER inferring rt so the RHS read on this line is not itself flagged.
-        if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT && val_ty != null && val_ty.kind == TY_NAMED && t.structs.contains(val_ty.name) {
+        // Move on rebind: `let b = a` where a is a struct VALUE or an owned
+        // pointer (struct-lit, explicit, or call-result owned) moves a; reading a
+        // afterward is use-after-move. Primitives copy. Marked AFTER inferring the
+        // RHS so the read on this line is not itself flagged.
+        if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT && ((val_ty != null && val_ty.kind == TY_NAMED && t.structs.contains(val_ty.name)) || t.owned_locals.contains(s.let_value.str_val) || t.call_owned.contains(s.let_value.str_val)) {
             t.consumed_locals.insert(s.let_value.str_val, true);
             t.moved_out.insert(s.let_value.str_val, true);
         }
