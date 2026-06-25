@@ -781,6 +781,11 @@ pub struct Typer {
     // them in the current fn body. Subsequent reads error with
     // `use-after-free`.
     pub consumed_locals: *HashMap<bool>,
+    // Owned locals moved out (assigned / stored / passed). Also recorded in
+    // consumed_locals (which drives the read-after error + branch handling);
+    // this parallel set only distinguishes the message: `use-after-move` vs
+    // `use-after-free`.
+    pub moved_out: *HashMap<bool>,
     pub borrows: *Vector<BorrowEvent>, // active let-bound borrows; save/restore per block
     pub current_ret: *Type,
     // Type parameters of the enclosing fn (e.g. `["T", "U"]`). Used by
@@ -1295,6 +1300,7 @@ impl Typer {
         t.arena_locals = ar_locals;
         t.arena_origin = ar_origin;
         t.consumed_locals = consumed;
+        t.moved_out = HashMap::new();
         t.borrows = bw;
         t.diagnostics = dg;
         let rel: *Vector<DiagRelated> = Vector::new();
@@ -2714,6 +2720,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let saved_arena_locals: *HashMap<bool> = t.arena_locals;
     let saved_arena_origin: *HashMap<string> = t.arena_origin;
     let saved_consumed: *HashMap<bool> = t.consumed_locals;
+    let saved_moved_out: *HashMap<bool> = t.moved_out;
     let saved_borrows: *Vector<BorrowEvent> = t.borrows;
     let saved_ret: *Type = t.current_ret;
     let saved_tps: *Vector<string> = t.current_type_params;
@@ -2722,12 +2729,14 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let new_arena_locals: *HashMap<bool> = HashMap::new();
     let new_arena_origin: *HashMap<string> = HashMap::new();
     let new_consumed: *HashMap<bool> = HashMap::new();
+    let new_moved_out: *HashMap<bool> = HashMap::new();
     let new_borrows: *Vector<BorrowEvent> = Vector::new();
     t.scope = new_scope;
     t.owned_locals = new_owned;
     t.arena_locals = new_arena_locals;
     t.arena_origin = new_arena_origin;
     t.consumed_locals = new_consumed;
+    t.moved_out = new_moved_out;
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
     t.current_type_params = s.type_params;
@@ -2760,12 +2769,14 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.arena_locals.free();
     t.arena_origin.free();
     t.consumed_locals.free();
+    t.moved_out.free();
     t.borrows.free();
     t.scope = saved_scope;
     t.owned_locals = saved_owned;
     t.arena_locals = saved_arena_locals;
     t.arena_origin = saved_arena_origin;
     t.consumed_locals = saved_consumed;
+    t.moved_out = saved_moved_out;
     t.borrows = saved_borrows;
     t.current_ret = saved_ret;
     t.current_type_params = saved_tps;
@@ -3623,7 +3634,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // this binding; reading it now would touch reclaimed memory.
         // Type lookup continues so downstream diagnostics still resolve.
         if t.consumed_locals.contains(e.str_val) && t.consumed_locals.get(e.str_val) {
-            t.err_code(e.line, e.column, "use-after-free", "value `".concat(e.str_val).concat("` was freed earlier in this function; subsequent reads touch reclaimed memory"));
+            if t.moved_out.contains(e.str_val) && t.moved_out.get(e.str_val) {
+                t.err_code(e.line, e.column, "use-after-move", "value `".concat(e.str_val).concat("` was moved earlier in this function; its ownership now belongs to the target"));
+            } else {
+                t.err_code(e.line, e.column, "use-after-free", "value `".concat(e.str_val).concat("` was freed earlier in this function; subsequent reads touch reclaimed memory"));
+            }
         }
         // Locals + parameters always win; visibility check skipped for them.
         if t.scope.contains(e.str_val) {
@@ -3792,6 +3807,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e.kind == EX_ASSIGN {
         let lt: *Type = infer_expr(t, e.lhs);
         let rt: *Type = infer_expr(t, e.rhs);
+        // Move-on-assign: a plain `=` whose RHS is an owned local moves it; later
+        // reads of that local are use-after-move (ownership now belongs to the
+        // target). Mark AFTER inferring rt so the RHS read here is not flagged.
+        if e.rhs != null && e.rhs.kind == EX_IDENT && t.owned_locals.contains(e.rhs.str_val) {
+            t.consumed_locals.insert(e.rhs.str_val, true);
+            t.moved_out.insert(e.rhs.str_val, true);
+        }
         if !types_compat(lt, rt) {
             t.err(e.line, e.column, "assignment type mismatch: ".concat(type_to_string(lt)).concat(" = ").concat(type_to_string(rt)));
         }
