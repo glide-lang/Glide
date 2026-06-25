@@ -235,6 +235,7 @@ pub struct Field {
     pub bang_pub: bool, // exported via the `!field: T,` short sigil; kept
     // so `fmt` reproduces the author's chosen spelling
     pub trail: string, // same-line comment after the field decl (fmt)
+    pub is_own: bool, // `own *T` field — the struct owns it, freed recursively on drop
 }
 
 pub struct EnumVariant {
@@ -519,6 +520,7 @@ pub fn make_field(name: string, ty: *Type, is_pub: bool) -> *Field {
     f.ty = ty;
     f.is_pub = is_pub;
     f.trail = "";
+    f.is_own = false;
     return f;
 }
 

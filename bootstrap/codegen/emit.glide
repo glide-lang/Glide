@@ -4462,6 +4462,20 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                     has_method = true;
                 }
             }
+            // Does T have `own` fields? Then its cleanup is the generated
+            // recursive drop fn (computed inline to avoid a cross-file call).
+            let mut t_has_own: bool = false;
+            if inner_ty != null && inner_ty.kind == TY_NAMED && g.structs.contains(inner_ty.name) {
+                let _osd: Stmt = g.structs.get(inner_ty.name);
+                if _osd.struct_fields != null {
+                    for let _ofi: i32 = 0; _ofi < _osd.struct_fields.len(); _ofi = _ofi + 1 {
+                        let _off: Field = _osd.struct_fields.get(_ofi);
+                        if _off.is_own {
+                            t_has_own = true;
+                        }
+                    }
+                }
+            }
             if has_method {
                 // Push `v.free()` (member call) onto defer; emit_expr will
                 // dispatch through the existing method-on-receiver path,
@@ -4471,6 +4485,14 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                 let no_args: *Vector<Expr> = Vector::new();
                 let call: *Expr = expr_call(mem, no_args);
                 g.auto_drop_stack.push(*call);
+            } else if t_has_own {
+                // T owns heap fields (`own *F` / `own F`); call its generated
+                // recursive drop fn, which frees those fields then frees `v`.
+                let dcallee: *Expr = expr_ident("__glide_drop_".concat(inner_ty.name), s.line, s.column);
+                let dargs: *Vector<Expr> = Vector::new();
+                dargs.push(*expr_ident(s.name, s.line, s.column));
+                let dcall: *Expr = expr_call(dcallee, dargs);
+                g.auto_drop_stack.push(*dcall);
             } else {
                 let free_call: *Expr = calloc(1, sizeof(Expr)) as *Expr;
                 free_call.kind = EX_CALL;

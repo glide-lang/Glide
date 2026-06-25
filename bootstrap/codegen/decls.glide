@@ -1334,6 +1334,69 @@ fn emit_named_type_def(g: *CG, program: *Vector<Stmt>, name: string, field_monos
 // headers (these survive `-nostdlib` because they belong to the C compiler,
 // not libc), skip the hosted runtime bake (stdlib/scheduler/socket), and skip
 // the `main` wrapper. The user program supplies its own entry + primitives.
+// True when struct stmt `s` declares any `own *T` field.
+fn _stmt_has_own_field(s: *Stmt) -> bool {
+    if s == null || s.struct_fields == null {
+        return false;
+    }
+    for let i: i32 = 0; i < s.struct_fields.len(); i = i + 1 {
+        let f: Field = s.struct_fields.get(i);
+        if f.is_own {
+            return true;
+        }
+    }
+    return false;
+}
+
+// True when struct `name` has any `own *T` field (so it gets a recursive drop fn).
+fn _struct_has_own_fields_by_name(g: *CG, name: string) -> bool {
+    if name == null || name.eq("") || !g.structs.contains(name) {
+        return false;
+    }
+    let sd: Stmt = g.structs.get(name);
+    return _stmt_has_own_field(&sd);
+}
+
+// Emit `void __glide_drop_T(T* p) { ...; free(p); }` for each struct with
+// `own *F` fields. An own field whose type itself has own fields is freed via
+// that type's drop fn (recursion / self-recursion handles linked structures);
+// a leaf own field is freed directly. Non-own `*T` fields are left untouched.
+fn emit_struct_drop_bodies(g: *CG, program: *Vector<Stmt>) {
+    for let i: i32 = 0; i < program.len(); i = i + 1 {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_STRUCT || !_stmt_has_own_field(&s) {
+            continue;
+        }
+        println!("void __glide_drop_".concat(s.name).concat("(").concat(c_safe_ident(s.name)).concat("* p) {"));
+        println!("  if (!p) return;");
+        for let j: i32 = 0; j < s.struct_fields.len(); j = j + 1 {
+            let f: Field = s.struct_fields.get(j);
+            if !f.is_own {
+                continue;
+            }
+            // Drop the owned field by F's own rule: an `F_free` method if it has
+            // one (custom cleanup), else F's recursive drop (own fields), else a
+            // plain free.
+            let mut handled: bool = false;
+            if f.ty != null && f.ty.kind == TY_POINTER && f.ty.inner != null && f.ty.inner.kind == TY_NAMED {
+                let _fn: string = f.ty.inner.name;
+                if g.fns.contains(_fn.concat("_free")) {
+                    println!("  ".concat(_fn).concat("_free(p->").concat(c_safe_ident(f.name)).concat(");"));
+                    handled = true;
+                } else if _struct_has_own_fields_by_name(g, _fn) {
+                    println!("  __glide_drop_".concat(_fn).concat("(p->").concat(c_safe_ident(f.name)).concat(");"));
+                    handled = true;
+                }
+            }
+            if !handled {
+                println!("  free((void*)(p->".concat(c_safe_ident(f.name)).concat("));"));
+            }
+        }
+        println!("  free((void*)p);");
+        println!("}");
+    }
+}
+
 pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool) {
     // Alpha-rename shadowing locals to unique C names before anything is
     // emitted, so `let b = …; let b = b.val;` compiles.
@@ -1447,6 +1510,14 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
     }
     println!("");
+    // Forward-declare recursive-drop fns for structs with `own` fields (bodies
+    // emitted near the end, after every struct body is in scope).
+    for let i: i32 = 0; i < program.len(); i = i + 1 {
+        let sd: Stmt = program.get(i);
+        if sd.kind == ST_STRUCT && _stmt_has_own_field(&sd) {
+            println!("void __glide_drop_".concat(sd.name).concat("(").concat(c_safe_ident(sd.name)).concat("* p);"));
+        }
+    }
     // Anonymous tuple structs — early pass. Collect tuple types reachable
     // from type annotations (struct fields, fn signatures, written `let`
     // annotations) and emit their typedefs now, before any struct body or
@@ -2142,6 +2213,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         println!("}");
         println!("");
     }
+    emit_struct_drop_bodies(g, program);
     g.free();
 }
 

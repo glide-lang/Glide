@@ -752,8 +752,15 @@ fn parse_struct(p: *Parser) -> *Stmt {
         }
         let fname: string = p.expect_ident();
         p.expect_op(":");
+        // `own *T` field: the struct owns this pointer and frees it (recursively)
+        // when it drops. Bare `*T` is a non-owning reference, left untouched.
+        let mut fown: bool = false;
+        if p.current.kind == TOK_IDENT && p.current.lexeme.eq("own") {
+            fown = true;
+            p.advance();
+        }
         let fty: *Type = parse_type(p);
-        let mut f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang, trail: "" };
+        let mut f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang, trail: "", is_own: fown };
         let had_comma: bool = p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             f.trail = p.current.trail;
