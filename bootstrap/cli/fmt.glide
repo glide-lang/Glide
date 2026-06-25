@@ -464,7 +464,9 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
         return int_to_str(e.int_val);
     }
     if e.kind == EX_FLOAT {
-        return int_to_str(e.int_val);
+        // float_val holds the original source lexeme ("3.14"); int_val is 0 for
+        // a float, so emitting int_val here silently rewrote every float to 0.
+        return e.float_val;
     }
     if e.kind == EX_STRING {
         return "\"".concat(e.str_val).concat("\"");
