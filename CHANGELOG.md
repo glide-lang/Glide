@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.6.0 — 2026-06-25
+
+The memory-model release. Glide now manages memory automatically without a GC
+and without Rust-style lifetime annotations: a value is owned by default, moves
+when you transfer it, and frees itself at the end of its scope. You never write
+`malloc` / `free` for the common case, and the compiler catches use-after-move
+and double-free at compile time. Borrows (`&T` / `&mut T`), the manual heap
+(`new` + `free`), and arenas remain as deliberate escape hatches.
+
+### Ownership and move
+
+- Owned heap values auto-free at scope end (RAII). A constructor that returns a
+  struct-literal value (`let t: *T = T{...}; return t;`) hands ownership to the
+  caller (move-out), and the caller auto-drops it — no manual `free`, no leak,
+  no crash. This works the same with or without a type annotation
+  (`let g = T::new()`), in plain functions as well as impl methods.
+- Ownership moves on every transfer, not only `return`: assignment (`a = b`),
+  struct-field store (`T { f: x }`), let-rebind (`let b = a`), and passing an
+  owned value to a `*T` parameter, where the callee takes ownership. A `&T`
+  parameter borrows instead. Every value is freed exactly once.
+- Reading a value after it was moved is a `use-after-move` compile error,
+  enforced uniformly across rebind, assignment, and pass. Reassigning the
+  variable revives it.
+- `c = d` where `c` already held an owned value frees the old value first, so
+  reassignment does not leak; and ownership detection follows passthrough
+  returns (`fn make() { let r = T::new(); return r; }`).
+
+### `own` fields and recursive drop
+
+- A struct field marked `own` means the struct owns that heap value and frees it
+  on drop: `struct List { head: own *Node }`. A bare `*T` field is a non-owning
+  reference, left untouched. The compiler generates a recursive drop that frees
+  the owned fields (by their `free` method, else recursively, else a plain free)
+  and then the struct, so a linked list or tree frees its whole chain with no
+  `free` written.
+- `own T` (no `*`) is sugar for `own *T` — an owned heap pointer with the `*`
+  left implicit.
+- A struct that owns heap fields is heap-managed whether or not the binding is
+  annotated; a pure-data struct stays a stack value with copy/move semantics.
+
+### Language
+
+- Struct-literal field shorthand: `Self { x, y }` is sugar for
+  `Self { x: x, y: y }`.
+
+### Diagnostics
+
+- A return type written without `->` (`fn f(x) T`) now reports a clear
+  `missing-arrow` error instead of derailing into a confusing downstream ICE.
+
+### stdlib
+
+- `HttpClientRequest` and `HttpClient` gained `free()`, so a manual
+  `new()` + `do()` no longer leaks the request envelope.
+
 ## 0.5.0 — 2026-06-25
 
 The first tagged release since 0.4.1, and it carries a lot. Builds are static
