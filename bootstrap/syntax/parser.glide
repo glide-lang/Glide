@@ -759,7 +759,13 @@ fn parse_struct(p: *Parser) -> *Stmt {
             fown = true;
             p.advance();
         }
-        let fty: *Type = parse_type(p);
+        let mut fty: *Type = parse_type(p);
+        if fown && fty != null && fty.kind != TY_POINTER {
+            // `own T` (no *) is sugar for `own *T`: an owned heap pointer with the
+            // `*` left implicit. Stored as *T everywhere downstream, so you write
+            // `own Conn` and assign a pointer-returning ctor; the drop frees it.
+            fty = ty_pointer(fty);
+        }
         let mut f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang, trail: "", is_own: fown };
         let had_comma: bool = p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
