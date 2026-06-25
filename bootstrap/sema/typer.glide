@@ -787,6 +787,13 @@ pub struct Typer {
     // EX_PATH resolution: `T::method(v)` is valid inside a `<T: Trait>`
     // body when T is one of these. Null/empty outside any generic fn.
     pub current_type_params: *Vector<string>,
+    // Impl-body checking. impl_type_params holds the enclosing `impl<T>`'s own
+    // type params so they're in scope inside its methods. demote_errors turns
+    // method-body errors into warnings: impl bodies were never type-checked, so
+    // emitting the backlog as hard errors would break the self-host; warnings
+    // let the issues surface and get fixed before promoting them to errors.
+    pub impl_type_params: *Vector<string>,
+    pub demote_errors: bool,
     pub current_origin: string, // file the typer is currently checking
     // LSP-only: when set to the edited file's path, check_program skips the
     // BODY typecheck of functions from OTHER (imported) files — their
@@ -863,15 +870,22 @@ pub struct FnptrHint {
 // a generic type parameter — the actual concrete type is substituted
 // later at monomorphization time.
 fn _is_current_type_param(t: *Typer, name: string) -> bool {
-    if t.current_type_params == null {
-        return false;
-    }
     if name == null || name.eq("") {
         return false;
     }
-    for let i: i32 = 0; i < t.current_type_params.len(); i++ {
-        if t.current_type_params.get(i).eq(name) {
-            return true;
+    if t.current_type_params != null {
+        for let i: i32 = 0; i < t.current_type_params.len(); i++ {
+            if t.current_type_params.get(i).eq(name) {
+                return true;
+            }
+        }
+    }
+    // Also the enclosing impl's own type params, in scope inside its methods.
+    if t.impl_type_params != null {
+        for let i: i32 = 0; i < t.impl_type_params.len(); i++ {
+            if t.impl_type_params.get(i).eq(name) {
+                return true;
+            }
         }
     }
     return false;
@@ -1287,6 +1301,8 @@ impl Typer {
         t.related = rel;
         t.current_ret = null;
         t.current_type_params = null;
+        t.impl_type_params = null;
+        t.demote_errors = false;
         t.current_origin = "";
         t.user_origin = "";
         let vis: *HashMap<bool> = HashMap::new();
@@ -1591,11 +1607,19 @@ impl Typer {
     }
 
     fn err(self: *Typer, line: i32, col: i32, msg: string) {
+        if self.demote_errors {
+            self.push_diag(line, col, 2, "", msg);
+            return;
+        }
         self.push_diag(line, col, 1, "", msg);
         self.error_count = self.error_count + 1;
     }
 
     fn err_code(self: *Typer, line: i32, col: i32, code: string, msg: string) {
+        if self.demote_errors {
+            self.push_diag(line, col, 2, code, msg);
+            return;
+        }
         self.push_diag(line, col, 1, code, msg);
         self.error_count = self.error_count + 1;
     }
@@ -1609,9 +1633,12 @@ impl Typer {
         if origin == null {
             origin = "";
         }
-        let e: DiagEntry = DiagEntry { line: line, col: col, end_line: line, end_col: col + e_len, severity: 1, code: code, message: msg, origin: origin, tag: 0, fix_line: 0, fix_col: 0, fix_end_line: 0, fix_end_col: 0, fix_replacement: "" };
+        let sev: i32 = if self.demote_errors { 2 } else { 1 };
+        let e: DiagEntry = DiagEntry { line: line, col: col, end_line: line, end_col: col + e_len, severity: sev, code: code, message: msg, origin: origin, tag: 0, fix_line: 0, fix_col: 0, fix_end_line: 0, fix_end_col: 0, fix_replacement: "" };
         self.diagnostics.push(e);
-        self.error_count = self.error_count + 1;
+        if !self.demote_errors {
+            self.error_count = self.error_count + 1;
+        }
     }
 
     // Error (severity 1) carrying a mechanical fix the LSP turns into a
@@ -1625,9 +1652,12 @@ impl Typer {
         if origin == null {
             origin = "";
         }
-        let e: DiagEntry = DiagEntry { line: line, col: col, end_line: line, end_col: col + e_len, severity: 1, code: code, message: msg, origin: origin, tag: 0, fix_line: fl, fix_col: fc, fix_end_line: fel, fix_end_col: fec, fix_replacement: repl };
+        let sev: i32 = if self.demote_errors { 2 } else { 1 };
+        let e: DiagEntry = DiagEntry { line: line, col: col, end_line: line, end_col: col + e_len, severity: sev, code: code, message: msg, origin: origin, tag: 0, fix_line: fl, fix_col: fc, fix_end_line: fel, fix_end_col: fec, fix_replacement: repl };
         self.diagnostics.push(e);
-        self.error_count = self.error_count + 1;
+        if !self.demote_errors {
+            self.error_count = self.error_count + 1;
+        }
     }
 
     fn warn(self: *Typer, line: i32, col: i32, code: string, msg: string) {
@@ -2603,6 +2633,26 @@ fn check_top(t: *Typer, s: *Stmt) {
         return;
     }
     if s.kind == ST_IMPL {
+        // Impl method bodies were historically never type-checked. Check them
+        // now, but in demote mode: their errors surface as WARNINGS so the
+        // backlog can be triaged and fixed before promoting them to hard errors
+        // (doing it as errors now would break the self-host). Scoped to focused
+        // checking (LSP / `glide check <file>`, where user_origin is set) so full
+        // builds stay quiet. The impl's own type params are put in scope so an
+        // `impl<T>` method body doesn't see `T` as an unknown type.
+        if t.user_origin != null && !t.user_origin.eq("") && s.impl_methods != null {
+            let saved_tps: *Vector<string> = t.impl_type_params;
+            t.impl_type_params = s.type_params;
+            t.demote_errors = true;
+            for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+                let m: Stmt = s.impl_methods.get(i);
+                if m.kind == ST_FN {
+                    check_fn(t, &m);
+                }
+            }
+            t.demote_errors = false;
+            t.impl_type_params = saved_tps;
+        }
         return;
     }
     if s.kind == ST_CONST {
