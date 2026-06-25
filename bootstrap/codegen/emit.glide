@@ -882,6 +882,66 @@ fn _auto_drop_subject(ex: *Expr) -> string {
     return "";
 }
 
+// True when `st` is an auto-dropped (owned) local: `let v: *T = T { .. }`
+// (rewritten to malloc+init) or the explicit `let v* = ..` form.
+fn _let_is_auto_drop(st: *Stmt) -> bool {
+    if st == null {
+        return false;
+    }
+    if st.is_auto_owned {
+        return true;
+    }
+    if st.let_ty != null && st.let_ty.kind == TY_POINTER && st.let_value != null && st.let_value.kind == EX_STRUCT_LIT && st.let_ty.inner != null && st.let_ty.inner.kind == TY_NAMED && st.let_ty.inner.name.eq(st.let_value.str_val) {
+        return true;
+    }
+    return false;
+}
+
+// True when `fn_stmt` hands an owned value to its caller: it returns one of its
+// own auto-drop locals directly (`let t: *T = T{..}; ...; return t;`). A
+// malloc-based constructor does NOT match (it returns a raw malloc, not an
+// auto-drop local), so the existing stdlib/compiler are unaffected.
+fn _returns_auto_owned_local(fn_stmt: *Stmt) -> bool {
+    if fn_stmt == null || fn_stmt.fn_body == null {
+        return false;
+    }
+    let body: *Vector<Stmt> = fn_stmt.fn_body;
+    let owned: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < body.len(); i++ {
+        let st: Stmt = body.get(i);
+        if st.kind == ST_LET && _let_is_auto_drop(&st) {
+            owned.insert(st.name, true);
+        }
+    }
+    let mut hit: bool = false;
+    for let i: i32 = 0; i < body.len(); i++ {
+        let st: Stmt = body.get(i);
+        if st.kind == ST_RETURN && st.expr_value != null && st.expr_value.kind == EX_IDENT && owned.contains(st.expr_value.str_val) {
+            hit = true;
+        }
+    }
+    owned.free();
+    return hit;
+}
+
+// The g.fns key a call resolves to: a free fn by its ident, or a method
+// `T::m()` as `<T>_m` using the let binding's annotated type. Empty when it
+// cannot be resolved cleanly - the caller then conservatively does nothing
+// (a missed move just leaks, never double-frees).
+fn _call_target_key(call: *Expr, let_ty: *Type) -> string {
+    if call == null || call.lhs == null {
+        return "";
+    }
+    let callee: *Expr = call.lhs;
+    if callee.kind == EX_IDENT {
+        return callee.str_val;
+    }
+    if callee.field != null && !callee.field.eq("") && let_ty != null && let_ty.kind == TY_POINTER && let_ty.inner != null && let_ty.inner.kind == TY_NAMED {
+        return let_ty.inner.name.concat("_").concat(callee.field);
+    }
+    return "";
+}
+
 impl CG {
     pub fn new() -> *CG {
         let g: *CG = malloc(sizeof(CG)) as *CG;
@@ -4210,7 +4270,21 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                 }
             }
         }
-        let auto_owned: bool = struct_lit_auto || s.is_auto_owned;
+        let mut auto_owned: bool = struct_lit_auto || s.is_auto_owned;
+        // Caller-side move: `let x: *T = make()` where `make` returns a value it
+        // owns (a struct-literal local it moved out) takes ownership of that
+        // value, so x is auto-dropped at scope end and the caller never frees it
+        // by hand. malloc-based constructors are not owned-returning, so they are
+        // unaffected; an unresolved call just leaks (never double-frees).
+        if !auto_owned && s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_CALL {
+            let _ck: string = _call_target_key(s.let_value, s.let_ty);
+            if !_ck.eq("") && g.fns.contains(_ck) {
+                let _callee: Stmt = g.fns.get(_ck);
+                if _returns_auto_owned_local(&_callee) {
+                    auto_owned = true;
+                }
+            }
+        }
         // ---- pre-pass: detect generic fn call BEFORE we emit anything,
         //      since we may need to print a forward decl on its own line.
 
