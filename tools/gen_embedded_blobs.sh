@@ -61,17 +61,23 @@ emit_array() {
     local symbol="$1" path="$2"
     local n
     n=$(wc -c < "$path" | tr -d ' ')
-    echo "static const unsigned char ${symbol}[] = {"
+    # Emit the bytes as a C string literal ("\xNN\xNN"...) rather than a
+    # {0x..,..} array. clang/gcc build a per-element AST node for an array
+    # initializer, so a ~100 MB embedded blob costs many GB of compiler RAM and
+    # OOMs the release runners; a string literal is parsed as one opaque blob.
+    # Each byte is \xNN (two hex digits) so the next \x always delimits the
+    # previous escape - no ambiguity from a trailing hex digit. The implicit NUL
+    # terminator + any embedded NULs are harmless: readers use ${symbol}_len.
+    echo "static const unsigned char ${symbol}[] ="
     od -An -v -tx1 "$path" | awk '
+        BEGIN { bs = "\\" }
         {
-            for (i = 1; i <= NF; i++) {
-                printf "0x%s,", $i
-                if (++c % 20 == 0) printf "\n"
-            }
+            printf "\""
+            for (i = 1; i <= NF; i++) printf "%sx%s", bs, $i
+            printf "\"\n"
         }
-        END { if (c % 20 != 0) printf "\n" }
     '
-    echo "};"
+    echo ";"
     echo "static const unsigned int ${symbol}_len = ${n};"
 }
 
