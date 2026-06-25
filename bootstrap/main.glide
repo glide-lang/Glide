@@ -2711,6 +2711,16 @@ fn run_build(src_path: string, out_path: string, target: string, then_run: bool,
 // runners drive lots of builds in a row and the spinner-per-build
 // would flood the log in non-TTY mode (no in-place redraw).
 fn run_build_q(src_path: string, out_path: string, target: string, then_run: bool, quiet: bool, release: bool, tiny: bool, no_std: bool, cli_cflags: string, cli_ldflags: string, prog_args: string) -> i32 {
+    // Bump-arena the whole build pipeline. Without this every allocation
+    // (~4.4M of them for a self-build) falls back to a per-call calloc that is
+    // never freed; the heap overhead + fragmentation then balloons the resident
+    // set to ~1.9 GB for ~122 MB of real data. The arena packs them contiguously
+    // and returns the pages to the OS in bulk on free.
+    let _prev_arena: *void = __glide_palloc_get();
+    let _build_arena: *void = __glide_palloc_make();
+    __glide_palloc_set(_build_arena);
+    defer __glide_palloc_free(_build_arena);
+    defer __glide_palloc_set(_prev_arena);
     // 0. Auto-fetch missing git deps from the project's glide.glide
     //    before we start parsing anything. No-op when there's no manifest.
     auto_fetch_for(src_path);
