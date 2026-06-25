@@ -3321,6 +3321,44 @@ fn handle_c_raw_completion(id: *JsonValue, doc: LspDoc, _state: *LspState, line0
     lsp_send_response(id, items);
 }
 
+// True when the cursor sits in an `impl <here>` header slot - after the `impl`
+// keyword (and optional `<...>`), before the `{`. There the only valid
+// completions are type names (the implementor, or a trait), so we offer just
+// those instead of the whole symbol bag.
+fn _in_impl_header(text: string, line0: i32, col0: i32) -> bool {
+    let lstart: i32 = _byte_off_at(text, line0, 0);
+    let cur: i32 = _byte_off_at(text, line0, col0);
+    if cur <= lstart {
+        return false;
+    }
+    let prefix: string = text.substring(lstart, cur);
+    let mut i: i32 = 0;
+    while i < prefix.len() && (prefix.at(i).to_int() == 32 || prefix.at(i).to_int() == 9) {
+        i = i + 1;
+    }
+    if i + 4 > prefix.len() {
+        return false;
+    }
+    if !(prefix.at(i).to_int() == 105 && prefix.at(i + 1).to_int() == 109 && prefix.at(i + 2).to_int() == 112 && prefix.at(i + 3).to_int() == 108) {
+        return false;
+    }
+    // The char right after `impl` must be a boundary, not part of a longer ident
+    // (`implementation`).
+    if i + 4 < prefix.len() {
+        let c: i32 = prefix.at(i + 4).to_int();
+        if !(c == 32 || c == 9 || c == 60) {
+            return false;
+        }
+    }
+    // A `{` before the cursor means we are already in the body, not the header.
+    for let k: i32 = i; k < prefix.len(); k = k + 1 {
+        if prefix.at(k).to_int() == 123 {
+            return false;
+        }
+    }
+    return true;
+}
+
 pub fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -3582,6 +3620,51 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         } else {
             // Inside `@derive(...)` — derive list.
             _push_derive_completions(doc, state, items, seen);
+        }
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+    // Impl header (`impl <type>`): only type names make sense - the implementor
+    // or a trait. Offer those, same-file ones first then the rest, and never the
+    // primitive / macro / local bag the general path below would dump.
+    if _in_impl_header(doc.text, line0, col0) {
+        let _ih_path: string = uri_to_path(uri);
+        let mut _ih_pass: i32 = 0;
+        while _ih_pass < 2 {
+            for let i: i32 = 0; i < doc.stmts.len(); i++ {
+                let s: Stmt = doc.stmts.get(i);
+                if s.kind != ST_STRUCT && s.kind != ST_ENUM && s.kind != ST_TRAIT {
+                    continue;
+                }
+                if s.name == null || s.name.eq("") || seen.contains(s.name) {
+                    continue;
+                }
+                if s.name.at(0).to_int() == 95 {
+                    continue;
+                }
+                let _ih_same: bool = s.origin == null || s.origin.eq("") || s.origin.eq(_ih_path);
+                if _ih_pass == 0 && !_ih_same {
+                    continue;
+                }
+                if _ih_pass == 1 && _ih_same {
+                    continue;
+                }
+                // Cross-file non-pub types are not visible here.
+                if !s.is_pub && s.origin != null && !s.origin.eq("") && !s.origin.eq(_ih_path) {
+                    continue;
+                }
+                seen.insert(s.name, true);
+                let mut _ih_lbl: string = "struct ";
+                if s.kind == ST_ENUM {
+                    _ih_lbl = "enum ";
+                }
+                if s.kind == ST_TRAIT {
+                    _ih_lbl = "trait ";
+                }
+                json_arr_push(items, completion_item(s.name, ci_kind_for(&s), _ih_lbl.concat(s.name)));
+            }
+            _ih_pass = _ih_pass + 1;
         }
         seen.free();
         lsp_send_response(id, items);

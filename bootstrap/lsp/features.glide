@@ -4052,18 +4052,36 @@ pub fn fn_containing(stmts: *Vector<Stmt>, line0: i32, path: string) -> *Stmt {
     let mut best_line: i32 = -1;
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
-        if s.kind != ST_FN || s.fn_body == null {
-            continue;
-        }
         if !path.eq("") && s.origin != null && !s.origin.eq(path) {
             continue;
         }
-        let start: i32 = s.line - 1;
-        if start <= line0 && start > best_line {
-            best_line = start;
-            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
-            *p = s;
-            best = p;
+        if s.kind == ST_FN && s.fn_body != null {
+            let start: i32 = s.line - 1;
+            if start <= line0 && start > best_line {
+                best_line = start;
+                let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *p = s;
+                best = p;
+            }
+        }
+        // Descend into impl blocks: a cursor inside a method body needs that
+        // method's params (incl. self) and locals, so the method is the
+        // containing fn there. Without this, completion in an impl method body
+        // sees no locals and no self.
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind != ST_FN || m.fn_body == null {
+                    continue;
+                }
+                let mstart: i32 = m.line - 1;
+                if mstart <= line0 && mstart > best_line {
+                    best_line = mstart;
+                    let mp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                    *mp = m;
+                    best = mp;
+                }
+            }
         }
     }
     return best;
