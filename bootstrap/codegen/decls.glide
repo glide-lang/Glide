@@ -507,6 +507,15 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
                         s.let_ty = vt;
                         body.set(i, s);
                         g.declare(s.name, vt);
+                    } else if vt != null && vt.kind == TY_NAMED && s.let_value.kind == EX_STRUCT_LIT && _struct_has_own_fields_by_name(g, vt.name) {
+                        // `let p = Pool { .. }` where Pool owns heap fields: make it
+                        // a heap-owned *Pool so its own fields are dropped at scope,
+                        // matching the annotated `let p: *Pool = ...` form. Pure-data
+                        // structs (no own fields) stay stack values.
+                        let _pp: *Type = ty_pointer(vt);
+                        s.let_ty = _pp;
+                        body.set(i, s);
+                        g.declare(s.name, _pp);
                     }
                 }
             }
