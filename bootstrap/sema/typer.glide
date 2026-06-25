@@ -4201,13 +4201,16 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         for let i: i32 = 0; i < plen; i++ {
                             let p: Param = sig.params.get(i);
                             let a: Expr = e.args.get(i);
-                            // Borrow rule: passing an owned local by value to a
-                            // *T param would move ownership and conflict with
-                            // auto-drop. Pass via & / &mut instead.
-                            if a.kind == EX_IDENT && t.owned_locals.contains(a.str_val) && p.ty != null && p.ty.kind == TY_POINTER {
-                                t.err_code_range(a.line, a.column, _arg_span(&a), "", "cannot move owned value `".concat(a.str_val).concat("` into `*T` parameter (auto-drop conflict)"));
-                            }
                             let at: *Type = infer_expr(t, &a);
+                            // `*T` param takes ownership: passing an owned value
+                            // MOVES it - the source is consumed (later reads are
+                            // use-after-move) and the callee owns it. A `&T` param
+                            // borrows (no move). Marked AFTER inferring `at` so the
+                            // arg read on this line is not itself flagged.
+                            if a.kind == EX_IDENT && (t.owned_locals.contains(a.str_val) || t.call_owned.contains(a.str_val)) && p.ty != null && p.ty.kind == TY_POINTER {
+                                t.consumed_locals.insert(a.str_val, true);
+                                t.moved_out.insert(a.str_val, true);
+                            }
                             if !arg_compat(p.ty, at, sig.type_params) {
                                 let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
                                 t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)).concat(_fnptr_hint(t, p.ty, at, got_name)));

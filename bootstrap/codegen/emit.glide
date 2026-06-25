@@ -3231,6 +3231,20 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     }
     if e.kind == EX_CALL {
         g._sds_adopt_skip = false; // re-enable adopt-wrap for nested arg calls
+        // Move-on-pass: an owned local passed by value to a `*T` param moves
+        // ownership to the callee, so skip the caller's auto-drop of it (the
+        // callee owns it now). A `&T` param borrows - no move.
+        if e.args != null {
+            for let _mi: i32 = 0; _mi < e.args.len(); _mi = _mi + 1 {
+                let _ma: Expr = e.args.get(_mi);
+                if _ma.kind == EX_IDENT && _is_owned_local(g, _ma.str_val) {
+                    let _mpt: *Type = callee_param_ty(g, e, _mi);
+                    if _mpt != null && _mpt.kind == TY_POINTER {
+                        g.moved_locals.insert(_ma.str_val, true);
+                    }
+                }
+            }
+        }
         // Bare `some(x)` / `ok(x)` ctor with no surrounding type hint (the let/
         // fn-ret paths rewrite the callee to `__glide_some_<m>` before emit, so
         // those never reach here). Lower it from the argument's inferred type so
