@@ -499,7 +499,11 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
                     // program-wide tuple collection discovers the type even when
                     // the elements are non-literal (idents resolved via scope).
                     let vt: *Type = infer_for_codegen(g, s.let_value);
-                    if vt != null && vt.kind == TY_TUPLE {
+                    // Backfill un-annotated lets whose value is a tuple OR a
+                    // pointer to a named struct (`let h = Holder::new()`), so the
+                    // auto-drop / recursive-drop path (which keys off let_ty) sees
+                    // the type without an explicit annotation.
+                    if vt != null && (vt.kind == TY_TUPLE || (vt.kind == TY_POINTER && vt.inner != null && vt.inner.kind == TY_NAMED)) {
                         s.let_ty = vt;
                         body.set(i, s);
                         g.declare(s.name, vt);
@@ -1388,9 +1392,12 @@ fn emit_struct_drop_bodies(g: *CG, program: *Vector<Stmt>) {
                     handled = true;
                 }
             }
-            if !handled {
+            if !handled && f.ty != null && f.ty.kind == TY_POINTER {
                 println!("  free((void*)(p->".concat(c_safe_ident(f.name)).concat("));"));
             }
+            // A non-pointer `own T` field is an inline value (auto-box not yet
+            // implemented): it lives inside the parent and is freed with it, so
+            // nothing to free here.
         }
         println!("  free((void*)p);");
         println!("}");
