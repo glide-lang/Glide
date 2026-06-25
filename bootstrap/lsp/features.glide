@@ -91,18 +91,19 @@ fn find_local_decl(host: *Stmt, name: string, before_line: i32) -> *Stmt {
             if !p.name.eq(name) {
                 continue;
             }
-            // Synthesise a Stmt at the fn's name position so callers
-            // can reuse range_for_decl_name + path_to_uri.
+            // Synthesise a Stmt at the PARAM's own name position (the parser
+            // records it on the Param) so goto-definition lands on the parameter
+            // itself, not the enclosing fn's name.
             let s: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             s.kind = ST_LET;
             s.name = p.name;
             s.let_ty = p.ty;
             s.let_value = null;
             s.is_mut = false;
-            s.line = host.name_line;
-            s.column = host.name_col;
-            s.name_line = host.name_line;
-            s.name_col = host.name_col;
+            s.line = p.name_line;
+            s.column = p.name_col;
+            s.name_line = p.name_line;
+            s.name_col = p.name_col;
             s.name_len = p.name.len();
             s.origin = host.origin;
             return s;

@@ -141,7 +141,10 @@ fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
         return;
     }
     if e.kind == EX_STRUCT_LIT && e.str_val != null && e.field_names != null && e.args != null {
-        let sd: *Stmt = find_top_decl(stmts, e.str_val);
+        // A qualified literal (`pkg::MyStruct { ... }`) arrives with the full
+        // `pkg::MyStruct` name; strip the module prefix so the struct decl is
+        // actually found and its fields get checked (else it was skipped silently).
+        let sd: *Stmt = find_top_decl(stmts, t._strip_mod_prefix(e.str_val));
         if sd != null && sd.kind == ST_STRUCT && sd.struct_fields != null {
             let nf: i32 = e.field_names.len();
             for let i: i32 = 0; i < nf; i++ {
