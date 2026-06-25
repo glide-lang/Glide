@@ -3299,6 +3299,13 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     }
     if s.let_value != null {
         let val_ty: *Type = infer_expr(t, s.let_value);
+        // Value-struct move: `let a = p` where p is a struct VALUE (not a pointer)
+        // moves p; reading p afterward is use-after-move. Primitives copy. Marked
+        // AFTER inferring rt so the RHS read on this line is not itself flagged.
+        if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT && val_ty != null && val_ty.kind == TY_NAMED && t.structs.contains(val_ty.name) {
+            t.consumed_locals.insert(s.let_value.str_val, true);
+            t.moved_out.insert(s.let_value.str_val, true);
+        }
         // Synthesized `for x in <scalar>` binding (lowered for-in): the
         // iterable is a number, not a range/collection. Report it here with a
         // quick fix that wraps it in `0..` — far better than the link-time
