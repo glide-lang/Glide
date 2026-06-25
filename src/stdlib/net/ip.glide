@@ -46,7 +46,10 @@ impl IpAddr {
     pub fn v4(a: i32, b: i32, c: i32, d: i32) -> *IpAddr {
         let ip: *IpAddr = malloc(sizeof(IpAddr)) as *IpAddr;
         ip.kind = 4;
-        ip.v4 = (a << 24) | (b << 16) | (c << 8) | d;
+        // Pack unsigned so a high first octet (>=128) does not overflow the
+        // signed shift; the i32 field holds the same bit pattern and readers
+        // mask with `& 255`.
+        ip.v4 = (((a as u32) << 24) | ((b as u32) << 16) | ((c as u32) << 8) | (d as u32)) as i32;
         ip.v6_hi = 0;
         ip.v6_lo = 0;
         return ip;

@@ -28,8 +28,8 @@ impl Rng {
         // are staged through `1 as i64` shifts because Glide int literals
         // are 32-bit and silently wrap if you write the full value.
         if seed == 0 {
-            let one: i64 = 1;
-            r.state = (one << 63) | (one << 31) | one;
+            let one: u64 = 1;
+            r.state = ((one << 63) | (one << 31) | one) as i64;
         } else {
             r.state = seed;
         }
@@ -57,16 +57,17 @@ impl Rng {
     /// let raw: i64 = r.next_i64();
     /// ```
     pub fn next_i64(self: *Rng) -> i64 {
-        let mut x: i64 = self.state;
+        let mut x: u64 = self.state as u64;
         x = x ^ (x << 13);
         x = x ^ (x >> 7);
         x = x ^ (x << 17);
-        self.state = x;
-        // Mixing multiplier built piecewise so the 32-bit literals stay
-        // in range. Final value is an arbitrary odd 64-bit constant.
-        let one: i64 = 1;
-        let mul: i64 = ((one << 50) | (one << 33) | (one << 17) | one) | 1;
-        return x * mul;
+        self.state = x as i64;
+        // Unsigned so the xorshift shifts + the mixing multiply wrap cleanly
+        // (defined) instead of tripping zig's signed-overflow trap. Multiplier
+        // built piecewise so the 32-bit literals stay in range.
+        let one: u64 = 1;
+        let mul: u64 = ((one << 50) | (one << 33) | (one << 17) | one) | 1;
+        return (x * mul) as i64;
     }
 
     /// Next non-negative `int`. Truncates to 31 bits so the result is

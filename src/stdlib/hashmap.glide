@@ -82,16 +82,17 @@ impl<V> HashMap<V> {
     /// ```
     fn cap(self: *HashMap<V>) -> i32 { return self.cap; }
 
-    /// Internal: hash a string with the classic 31x multiply-add. Folds the
-    /// negative case into the positive range so callers can `& mask` safely.
+    /// Internal: hash a string with the classic 31x multiply-add. Accumulates
+    /// unsigned so the 31x overflow wraps cleanly (defined) instead of tripping
+    /// zig's signed-overflow trap, then masks to a non-negative i32 so callers
+    /// can `& mask` safely.
     fn hash_key(self: *HashMap<V>, k: string) -> i32 {
-        let mut h: i32 = 0;
+        let mut h: u32 = 0;
         let n: i32 = k.len();
         for let i: i32 = 0; i < n; i++ {
-            h = h * 31 + k.at(i).to_int();
+            h = h * 31 + (k.at(i).to_int() as u32);
         }
-        if h < 0 { h = -h; }
-        return h;
+        return (h & 0x7fffffff) as i32;
     }
 
     /// Internal: linear-probe to find either the slot holding `k` or the
