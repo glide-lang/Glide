@@ -736,7 +736,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
         }
     }
     // Flush any deferred exprs that didn't hit a return (e.g. fall-through fn end).
-    g.emit_deferred_reverse(1);
+    g.emit_deferred_reverse(1, "");
     // Implicit `return __glide_ok_void();` at end of `fn -> !` so users can
     // write fns where success = falling off the end. Unreachable when every
     // path already returned, but harmless (no -Wreturn-type from gcc).
@@ -830,7 +830,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
                 emit_stmt(g, &b, 1);
             }
         }
-        g.emit_deferred_reverse(1);
+        g.emit_deferred_reverse(1, "");
         g.defer_stack = saved_defer;
         g.err_defer_stack = saved_err_defer;
         g.auto_drop_stack = saved_drop;
@@ -2079,7 +2079,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             let b: Stmt = new_body.get(j);
             emit_stmt(g, &b, 1);
         }
-        g.emit_deferred_reverse(1);
+        g.emit_deferred_reverse(1, "");
         g.current_ret_ty = saved_ret_mono;
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
@@ -2128,7 +2128,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             }
         }
         g.current_ret_ty = saved_ret_anon;
-        g.emit_deferred_reverse(1);
+        g.emit_deferred_reverse(1, "");
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
         println!("}");

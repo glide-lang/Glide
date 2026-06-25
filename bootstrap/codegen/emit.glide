@@ -860,6 +860,28 @@ pub struct CG {
     pub _sds_adopt_skip: bool,
 }
 
+// The local name an auto-drop cleanup frees: `v.free()` -> "v",
+// `free(v as *void)` -> "v". Lets a `return <local>` skip the drop of the
+// value it moves out to the caller (see emit_deferred_reverse's skip_name).
+fn _auto_drop_subject(ex: *Expr) -> string {
+    if ex == null || ex.kind != EX_CALL {
+        return "";
+    }
+    if ex.lhs != null && ex.lhs.kind == EX_MEMBER && ex.lhs.lhs != null && ex.lhs.lhs.kind == EX_IDENT {
+        return ex.lhs.lhs.str_val;
+    }
+    if ex.args != null && ex.args.len() > 0 {
+        let a: Expr = ex.args.get(0);
+        if a.kind == EX_CAST && a.lhs != null && a.lhs.kind == EX_IDENT {
+            return a.lhs.str_val;
+        }
+        if a.kind == EX_IDENT {
+            return a.str_val;
+        }
+    }
+    return "";
+}
+
 impl CG {
     pub fn new() -> *CG {
         let g: *CG = malloc(sizeof(CG)) as *CG;
@@ -992,11 +1014,17 @@ impl CG {
     // Auto-drops fire first (innermost block first), then explicit defers
     // (so e.g. `defer arena.free()` at fn-top fires after auto-drops that
     // allocated inside it).
-    fn emit_deferred_reverse(self: *CG, depth: i32) {
+    // `skip_name` names a local being returned (`return v`): its ownership
+    // moves to the caller, so its auto-drop is skipped here (otherwise the
+    // returned pointer would dangle). Empty string = drop everything.
+    fn emit_deferred_reverse(self: *CG, depth: i32, skip_name: string) {
         let na: i32 = self.auto_drop_stack.len();
         for let i: i32 = na - 1; i >= 0; i = i - 1 {
-            ind(depth);
             let ex: Expr = self.auto_drop_stack.get(i);
+            if !skip_name.eq("") && _auto_drop_subject(&ex).eq(skip_name) {
+                continue;
+            }
+            ind(depth);
             emit_expr(self, &ex);
             println!(";");
         }
@@ -4392,6 +4420,13 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
         // of v fires.
         let has_err_defers: bool = is_err_return && g.err_defer_stack.len() > 0;
         let has_cleanup: bool = g.defer_stack.len() > 0 || g.auto_drop_stack.len() > 0 || has_err_defers;
+        // `return <local>` moves that local out to the caller; skip its auto-drop
+        // here so the returned pointer does not dangle. Only the direct ident
+        // form is a move (a wrapped `return ok(v)` is left to its own path).
+        let mut ret_name: string = "";
+        if s.expr_value != null && s.expr_value.kind == EX_IDENT {
+            ret_name = s.expr_value.str_val;
+        }
         if s.expr_value != null && has_cleanup {
             ind(depth);
             print!("__typeof__(");
@@ -4402,14 +4437,14 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
             if has_err_defers {
                 g.emit_err_defers_reverse(depth);
             }
-            g.emit_deferred_reverse(depth);
+            g.emit_deferred_reverse(depth, ret_name);
             ind(depth);
             println!("return __glide_ret;");
         } else {
             if has_err_defers {
                 g.emit_err_defers_reverse(depth);
             }
-            g.emit_deferred_reverse(depth);
+            g.emit_deferred_reverse(depth, ret_name);
             ind(depth);
             print!("return");
             if s.expr_value != null {
