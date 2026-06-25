@@ -902,8 +902,8 @@ fn _let_is_auto_drop(st: *Stmt) -> bool {
 // own auto-drop locals directly (`let t: *T = T{..}; ...; return t;`). A
 // malloc-based constructor does NOT match (it returns a raw malloc, not an
 // auto-drop local), so the existing stdlib/compiler are unaffected.
-fn _returns_auto_owned_local(fn_stmt: *Stmt) -> bool {
-    if fn_stmt == null || fn_stmt.fn_body == null {
+fn _returns_auto_owned_local(g: *CG, fn_stmt: *Stmt, depth: i32) -> bool {
+    if fn_stmt == null || fn_stmt.fn_body == null || depth > 8 {
         return false;
     }
     let body: *Vector<Stmt> = fn_stmt.fn_body;
@@ -912,6 +912,17 @@ fn _returns_auto_owned_local(fn_stmt: *Stmt) -> bool {
         let st: Stmt = body.get(i);
         if st.kind == ST_LET && _let_is_auto_drop(&st) {
             owned.insert(st.name, true);
+        } else if st.kind == ST_LET && st.let_value != null && st.let_value.kind == EX_CALL {
+            // `let r = make(); ... return r;` - r is owned when `make` itself
+            // returns an owned value (recursive, so passthrough chains carry the
+            // ownership through). Guarded by depth to stop self-recursion.
+            let _k: string = _call_target_key(st.let_value, st.let_ty);
+            if !_k.eq("") && g.fns.contains(_k) {
+                let _c: Stmt = g.fns.get(_k);
+                if _returns_auto_owned_local(g, &_c, depth + 1) {
+                    owned.insert(st.name, true);
+                }
+            }
         }
     }
     let mut hit: bool = false;
@@ -4333,7 +4344,7 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
             let _ck: string = _call_target_key(s.let_value, s.let_ty);
             if !_ck.eq("") && g.fns.contains(_ck) {
                 let _callee: Stmt = g.fns.get(_ck);
-                if _returns_auto_owned_local(&_callee) {
+                if _returns_auto_owned_local(g, &_callee, 0) {
                     auto_owned = true;
                 }
             }
