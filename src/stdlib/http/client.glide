@@ -70,6 +70,13 @@ impl HttpClientRequest {
         self.body = s;
         self.set("Content-Length", _hcli_itos(s.len()));
     }
+
+    /// Free the request envelope (the malloc'd struct). The header/body
+    /// strings it holds are managed by Glide's allocator, not freed here.
+    /// Pair with `new` via `defer req.free();`.
+    pub fn free(self: *HttpClientRequest) {
+        free(self as *void);
+    }
 }
 
 /// Persistent client config. Keep one around to share defaults across
@@ -396,6 +403,12 @@ impl HttpClient {
         let r: !*HttpResponse = self.do(req);
         free(req as *void);
         return r;
+    }
+
+    /// Free the client (the malloc'd struct). Pair with `new` via
+    /// `defer client.free();`.
+    pub fn free(self: *HttpClient) {
+        free(self as *void);
     }
 }
 
