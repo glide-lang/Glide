@@ -1511,6 +1511,18 @@ fn _target_wants_exe(target: string) -> bool {
 // golden runners, etc). In a project we drop them under `build/` so the
 // tree stays clean; outside a project we fall back to the system temp
 // dir. Created lazily — callers can assume it exists on success.
+extern fn __glide_pid() -> i32;
+
+c_raw! {
+    #ifdef _WIN32
+    #include <process.h>
+    static int __glide_pid(void) { return (int)_getpid(); }
+    #else
+    #include <unistd.h>
+    static int __glide_pid(void) { return (int)getpid(); }
+    #endif
+}
+
 fn _scratch_dir() -> string {
     let root: string = find_manifest_root(".");
     if !root.eq("") {
@@ -3880,10 +3892,13 @@ fn _test_summary_print(total: i32, failed: i32) -> i32 {
 fn _run_test_serial(files: *Vector<string>, scratch: string) -> i32 {
     let mut total_files: i32 = 0;
     let mut failed_files: i32 = 0;
-    let tmp_path: string = scratch.concat("/__glide_test_run.glide");
-    let mut out_path: string = scratch.concat("/__glide_test_run.exe");
+    // Per-PID suffix so two concurrent `glide test` runs in the same project
+    // don't clobber each other's scratch source / binary.
+    let stem: string = scratch.concat("/__glide_test_run_").concat(int_to_str(__glide_pid()));
+    let tmp_path: string = stem.concat(".glide");
+    let mut out_path: string = stem.concat(".exe");
     if __glide_is_windows() == 0 {
-        out_path = scratch.concat("/__glide_test_run");
+        out_path = stem;
     }
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
@@ -4124,7 +4139,7 @@ fn run_golden(dir: string) -> i32 {
         return 1;
     }
     let names: *Vector<string> = raw.split("\n");
-    let stdout_path: string = "__glide_golden_stdout.txt";
+    let stdout_path: string = _scratch_dir().concat("/__glide_golden_stdout_").concat(int_to_str(__glide_pid())).concat(".txt");
     let mut passed: i32 = 0;
     let mut failed: i32 = 0;
     let mut skipped: i32 = 0;
