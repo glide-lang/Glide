@@ -19,6 +19,7 @@ fn _req(method: string, path: string, headers: string, body: string) -> *HttpReq
     req.body = body;
     req.params = nope;
     req.queries = nope;
+    req.tls = false;
     req.headers_cache = null;
     return req;
 }
