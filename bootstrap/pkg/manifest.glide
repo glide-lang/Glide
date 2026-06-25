@@ -957,10 +957,18 @@ pub fn cache_root() -> string {
 // v1.0 for github.com/x/logger" actually unify on disk.
 pub fn dep_cache_dir(m: *Manifest, d: ManifestDep) -> string {
     if d.kind == DEP_PATH {
-        if d.path.len() > 0 && d.path.at(0).to_int() == 47 {
-            return d.path;
+        // Absolute path -> use as-is; otherwise it is relative to the project
+        // root. Absolute = a leading '/' or '\' (unix / UNC) OR a Windows drive
+        // letter ("C:\..." / "C:/..."). The original '/'-only check mistook a
+        // Windows absolute path for relative and prepended the project root,
+        // producing a bogus `<root>/C:/...` that never resolved.
+        let p: string = d.path;
+        let c0: i32 = if p.len() > 0 { p.at(0).to_int() } else { 0 };
+        let drive: bool = p.len() >= 2 && p.at(1).to_int() == 58;
+        if c0 == 47 || c0 == 92 || drive {
+            return p;
         }
-        return m.root_dir.concat("/").concat(d.path);
+        return m.root_dir.concat("/").concat(p);
     }
     if d.kind == DEP_GIT {
         let mut rev: string = d.rev;
