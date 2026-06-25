@@ -3243,7 +3243,13 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
             t.err_code_range_fix(s.let_value.line, s.let_value.column, _iter_expr_span(s.let_value), "for-in-not-iterable", "cannot iterate over ".concat(what).concat(": `for-in` walks a range or a collection, not a single value. ").concat("To count, wrap it in a range like `0..n` (end-exclusive) or `0..=n` (inclusive). ").concat("To visit each element, iterate the `Vector` itself."), s.let_value.line, s.let_value.column, s.let_value.line, s.let_value.column, "0..");
         }
         if final_ty != null {
-            if !types_compat(final_ty, val_ty) {
+            // `let p: *T = T { .. }` auto-drop pattern: the struct literal is a
+            // value but the binding is a pointer; codegen heap-allocates it
+            // (malloc+init), so this is not a real mismatch. Previously it only
+            // slipped through inside impl method bodies (which skip typechecking),
+            // so the same line erred in a plain fn - this makes it consistent.
+            let _slauto: bool = final_ty.kind == TY_POINTER && s.let_value.kind == EX_STRUCT_LIT && val_ty != null && val_ty.kind == TY_NAMED && final_ty.inner != null && final_ty.inner.kind == TY_NAMED && final_ty.inner.name.eq(val_ty.name);
+            if !_slauto && !types_compat(final_ty, val_ty) {
                 let wc: string = _wrap_ctor_code(final_ty, val_ty);
                 let base: string = "let initializer type mismatch: expected ".concat(type_to_string(final_ty)).concat(", got ").concat(type_to_string(val_ty));
                 // Pointer-vs-value: a by-value annotation (`let v: Vector<i32>`)
@@ -3383,10 +3389,9 @@ fn check_return(t: *Typer, s: *Stmt) {
     if !arena_src.eq("") && t.arena_locals.contains(arena_src) {
         t.err_code(s.line, s.column, "arena-escape", "returned pointer derives from local arena `".concat(arena_src).concat("`; the caller would read freed memory. Accept the arena as a parameter so its lifetime is owned by the caller."));
     }
-    // Borrow rule: cannot return an owned local (auto-drop would free it).
-    if e.kind == EX_IDENT && t.owned_locals.contains(e.str_val) {
-        t.err(s.line, s.column, "cannot return owned value `".concat(e.str_val).concat("` (auto-drop would free it)"));
-    }
+    // Returning an owned local is a MOVE, not a bug: codegen skips its auto-drop
+    // at the `return` (move-out) so the caller receives a live pointer and takes
+    // ownership of it. (This was an error before move-out existed.)
     // Borrow rule: cannot return `&local` / `&mut local`. Pass-through of a
     // borrow-typed param is allowed since the borrow's lifetime extends
     // beyond this fn.

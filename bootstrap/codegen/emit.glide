@@ -4139,6 +4139,11 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 // struct-lit is emitted without a prescan pass, so the call
                 // wouldn't otherwise pick up its `*Vector<T>` hint.
                 let _fmono: bool = try_mono_call(g, &v, fty);
+                // Move-on-store: an owned local placed into a struct field
+                // transfers ownership to the field, so skip its auto-drop.
+                if v.kind == EX_IDENT && _is_owned_local(g, v.str_val) {
+                    g.moved_locals.insert(v.str_val, true);
+                }
                 emit_expr(g, &v);
             }
         }
