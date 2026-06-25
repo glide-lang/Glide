@@ -148,11 +148,41 @@ fn _try_tarball(d: ManifestDep, url: string, cache: string) -> string {
 // when codeload rejected the URL. We try `--branch` first (works for
 // tags and branch names); if that fails we fall back to a full clone
 // followed by `git checkout <rev>` so raw commit SHAs work too.
+// True when `s` is safe to splice into a shell command line: non-empty, not a
+// leading-dash flag, and built only from characters a git ref or URL actually
+// uses (letters, digits, and `. _ / : @ ~ + -`). A manifest is remote data, so
+// a `rev` or `url` carrying a quote / `$` / backtick / `;` / space could break
+// out of the surrounding quotes and run arbitrary commands. Reject the whole
+// fetch instead of trying to quote it.
+fn _valid_git_token(s: string) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    if s.at(0).to_int() == 45 {
+        return false;
+    }
+    let n: i32 = s.len();
+    let mut i: i32 = 0;
+    while i < n {
+        let c: i32 = s.at(i).to_int();
+        let ok: bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 46 || c == 95 || c == 47 || c == 58 || c == 64 || c == 126 || c == 43 || c == 45;
+        if !ok {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
 fn _try_git_clone(d: ManifestDep, cache: string) -> string {
+    let url: string = _normalise_git_url(d.path);
+    if !_valid_git_token(d.rev) || !_valid_git_token(url) {
+        println!("dep: refusing to fetch, unsafe characters in rev/url:", d.rev, url);
+        return "";
+    }
     // git clone refuses to write into a non-empty dir; nuke the
     // half-populated cache first.
     fs_remove_dir_rec(cache);
-    let url: string = _normalise_git_url(d.path);
     // Attempt 1: shallow clone of a specific branch/tag.
     let cmd1: string = "git clone --depth=1 --quiet --branch \"".concat(d.rev).concat("\" \"").concat(url).concat("\" \"").concat(cache).concat("\"");
     let rc1: i32 = __glide_shell(cmd1);
