@@ -1511,17 +1511,9 @@ fn _target_wants_exe(target: string) -> bool {
 // golden runners, etc). In a project we drop them under `build/` so the
 // tree stays clean; outside a project we fall back to the system temp
 // dir. Created lazily — callers can assume it exists on success.
+// Defined in the emitted runtime (stdlib.c). Used to give per-process scratch
+// names so concurrent `glide test` runs don't collide.
 extern fn __glide_pid() -> i32;
-
-c_raw! {
-    #ifdef _WIN32
-    #include <process.h>
-    static int __glide_pid(void) { return (int)_getpid(); }
-    #else
-    #include <unistd.h>
-    static int __glide_pid(void) { return (int)getpid(); }
-    #endif
-}
 
 fn _scratch_dir() -> string {
     let root: string = find_manifest_root(".");
