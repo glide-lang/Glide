@@ -266,6 +266,45 @@ impl Lexer {
                     while self.pos < self.src_len && depth > 0 {
                         let cc: char = self.peek();
                         let ic: i32 = cc.to_int();
+                        // Skip C string / char literals and // and /* */ comments
+                        // so a `{` or `}` inside them doesn't move the brace depth
+                        // (otherwise `char c = '}';` or `// }` closes the block early).
+                        if ic == 34 || ic == 39 {
+                            let quote: i32 = ic;
+                            self.advance();
+                            while self.pos < self.src_len {
+                                let q: i32 = self.peek().to_int();
+                                if q == 92 {
+                                    self.advance();
+                                    self.advance();
+                                    continue;
+                                }
+                                self.advance();
+                                if q == quote {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        if ic == 47 && self.peek_at(1).to_int() == 47 {
+                            while self.pos < self.src_len && self.peek().to_int() != 10 {
+                                self.advance();
+                            }
+                            continue;
+                        }
+                        if ic == 47 && self.peek_at(1).to_int() == 42 {
+                            self.advance();
+                            self.advance();
+                            while self.pos < self.src_len {
+                                if self.peek().to_int() == 42 && self.peek_at(1).to_int() == 47 {
+                                    self.advance();
+                                    self.advance();
+                                    break;
+                                }
+                                self.advance();
+                            }
+                            continue;
+                        }
                         if ic == 123 {
                             depth = depth + 1;
                         } else {
