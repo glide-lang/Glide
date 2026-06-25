@@ -239,7 +239,7 @@ const MODE_CHECK: i32 = 3;
 const MODE_FMT: i32 = 4;
 // Bumped manually on release. `glide --version` reads it; same value
 // lives in glide.glide at the repo root (kept in sync by hand for now).
-const GLIDE_VERSION: string = "0.4.2";
+const GLIDE_VERSION: string = "0.5.0";
 
 // The latest PUBLISHED release whose sysroot assets exist on GitHub. It lags
 // GLIDE_VERSION between releases: a source/dev build already carries the next

@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.5.0 — 2026-06-25
+
+The first tagged release since 0.4.1, and it carries a lot. Builds are static
+and self-contained by default, the package manager grew a working local-dep
+flow and moved deps under `build/`, the editor gained proc-macro and `c_raw`
+intelligence, the typer started checking `impl` method bodies, and a class of
+latent undefined behavior that only the zig toolchain trips was cleared out so
+the full test suite is green on Windows too. The correctness pass first staged
+as 0.4.2 (below) ships as part of this release.
+
+### Build and packaging
+
+- `glide build` now links statically and self-contained by default, with
+  OpenSSL / zlib / ngtcp2 baked in from the sysroot. `--dynamic` opts back out.
+  macOS stays a hybrid (static deps, dynamic libSystem) since Apple ships no
+  static libc.
+- DEFLATE inflate and deflate are implemented in pure Glide, so
+  `stdlib::compress` no longer links `-lz` and compress programs build fully
+  static.
+- The cross-compile sysroot is fetched from the last published release rather
+  than the in-development version, so source builds between releases stop
+  404ing.
+
+### Package manager
+
+- Downloaded git deps live in a content-addressed cache (`~/.glide/cache/`),
+  with per-project links under `build/deps/` (gitignored, removed by
+  `glide clean`) in place of a top-level `glide_modules/`.
+- A local dep added with an absolute Windows path (`C:\...` / `C:/...`) now
+  resolves; the absolute-path check previously recognized only a leading `/`
+  and mistook the drive path for a relative one.
+- A dependency `rev` or `url` carrying shell-unsafe characters is rejected
+  before it can reach a `git` command.
+- Missing deps are auto-fetched when a project is opened in the editor.
+
+### Editor and LSP
+
+- Imported files are parsed header-only (signatures kept, function bodies
+  brace-skipped), cutting project-index memory use sharply.
+- `@derive` and other proc-macro methods get completion, hover, and
+  go-to-definition; a synthesized `impl` is no longer flagged as missing its
+  trait methods.
+- `c_raw!` bodies get C-aware completion (libc, runtime, and Glide locals by
+  their C name) plus embedded-C syntax highlighting.
+- Go-to-definition on a parameter lands on the parameter itself, and a
+  qualified `pkg::T { ... }` literal gets its fields checked.
+- Two per-keystroke leaks are gone (the parsed request JSON and the per-path
+  overlay arena).
+
+### Formatter
+
+- Comments are preserved across operator chains, `match` arms, enum variants,
+  and end-of-block positions, and the output uses minimal parentheses instead
+  of wrapping every operator.
+- Float literals are no longer rewritten to `0`.
+
+### Typer
+
+- `impl` method bodies are type-checked for the first time. The findings
+  surface as warnings for now, scoped to focused checking (LSP / `glide check`),
+  so the existing backlog can be cleared before they become hard errors without
+  breaking the self-host.
+- Inner-field access through an unwrapped `!T` / `?T` reports a clear
+  `unwrap-needed` error instead of failing later in the C compile.
+
+### stdlib
+
+- `fs`, the `crypto` digests (SHA-256, SHA-1, HMAC), and `process` output
+  capture are binary-safe: they carry real lengths and no longer truncate at an
+  embedded NUL.
+- JWT signature verification uses a constant-time comparison.
+
+### Platform (Windows and zig)
+
+- A run of latent undefined behavior that gcc quietly tolerates but the zig
+  safety build traps was removed, so `glide test` passes on Windows+zig. `fs`
+  uses the Win32 file API instead of `_stat` (which mingw and the UCRT both
+  define as `_stat64i32`, a duplicate-symbol link error); the HashMap hash, the
+  xorshift PRNG, and IPv4 octet packing accumulate unsigned so the overflow
+  wraps cleanly; and an uninitialized `bool` read was fixed.
+
+### Internals
+
+- The compiler is reorganized into layered modules. `_cg_replace` is linear
+  instead of O(n^2), test and bench builds run in isolated child processes, and
+  cc errors are anchored back to Glide source with `c_raw` validated before the
+  C compile.
+
 ## 0.4.2 — 2026-06-21
 
 A correctness release. A wide bug hunt turned up a class of defects where
