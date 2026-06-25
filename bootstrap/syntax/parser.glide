@@ -3157,9 +3157,16 @@ fn parse_prefix(p: *Parser) -> *Expr {
             let names: *Vector<string> = Vector::new();
             let values: *Vector<Expr> = Vector::new();
             while !p.at_op("}") && !p.at_eof() {
+                let fline: i32 = p.current.line;
+                let fcol: i32 = p.current.column;
                 let fname: string = p.expect_ident();
-                p.expect_op(":");
-                let v: *Expr = parse_expr(p, 0);
+                let mut v: *Expr = null;
+                if p.eat_op(":") {
+                    v = parse_expr(p, 0);
+                } else {
+                    // Field shorthand: `T { x }` is sugar for `T { x: x }`.
+                    v = expr_ident(fname, fline, fcol);
+                }
                 if v != null {
                     names.push(fname);
                     values.push(*v);
