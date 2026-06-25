@@ -272,6 +272,19 @@ c_raw! {
     static void* __glide_proj_allow_get(void)   { return __glide_proj_allow_g; }
 }
 
+// `--dynamic` opts out of the now-default static link. A c_raw global so the
+// link-command builder in `run_build_q` reads it without threading another
+// param through run_build's signature (same reason as the deny list above).
+extern fn __glide_set_dynamic(v: i32);
+
+extern fn __glide_want_dynamic() -> i32;
+
+c_raw! {
+    static int __glide_dynamic_g = 0;
+    static void __glide_set_dynamic(int v) { __glide_dynamic_g = v; }
+    static int __glide_want_dynamic(void)  { return __glide_dynamic_g; }
+}
+
 fn deny_codes() -> *Vector<string> {
     let p: *void = __glide_deny_get();
     if p == null {
@@ -2975,13 +2988,24 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     } else {
         cmd = cmd.concat(" -o ").concat(out_path);
     }
-    // `-static` (from --static or a `-static` cflag) MUST come before the `-l`
-    // flags: gcc/clang only static-link libraries that appear AFTER it on the
-    // command line. Appended at the end (with user_cflags) it's a no-op — the
-    // default -lpthread/-lm and the platform libs still link dynamically, so a
-    // mingw host build keeps pulling libwinpthread-1.dll. Hoist it here so the
-    // whole link is static. (A later duplicate from user_cflags is harmless.)
-    let wants_static: bool = user_cflags.contains("-static");
+    // Default to a static, self-contained binary (Go-style: runs anywhere with
+    // no system openssl / libc / libwinpthread to install). Two carve-outs:
+    //   - macOS can't link a fully static executable (Apple ships no static
+    //     libSystem / crt0), so there it stays at its max — static deps from the
+    //     sysroot, dynamic libSystem (which every mac has).
+    //   - `--dynamic` opts out on the platforms that can do static.
+    // `-static` MUST come before the `-l` flags: gcc/clang only static-link
+    // libraries that appear AFTER it, so appending it at the end is a silent
+    // no-op (a mingw build would keep pulling libwinpthread-1.dll). Hoisted here
+    // so the whole link is static. A later duplicate from --static is harmless.
+    let mut target_is_macos: bool = false;
+    if cross {
+        let tos: string = _target_os(eff_target);
+        target_is_macos = tos.eq("macos") || tos.eq("darwin");
+    } else {
+        target_is_macos = _host_triple().contains("macos");
+    }
+    let wants_static: bool = !target_is_macos && __glide_want_dynamic() == 0;
     if wants_static {
         cmd = cmd.concat(" -static");
     }
@@ -3578,7 +3602,9 @@ fn _test_jobs() -> i32 {
 // unlike the synchronous system() path which needs the manual wrap.
 fn _test_build_cmd(exe: string, tmp: string, out: string, log: string, fast: bool) -> string {
     let q: string = "\"";
-    let mut bc: string = q.concat(exe).concat(q).concat(" build ").concat(q).concat(tmp).concat(q).concat(" -o ").concat(q).concat(out).concat(q);
+    // Test/bench binaries are ephemeral and run on the build machine, so they
+    // don't need the default static link — `--dynamic` keeps the link fast.
+    let mut bc: string = q.concat(exe).concat(q).concat(" build ").concat(q).concat(tmp).concat(q).concat(" -o ").concat(q).concat(out).concat(q).concat(" --dynamic");
     if fast {
         bc = bc.concat(" --cflag=-O0 --cflag=-g0 --cflag=-pipe");
     }
@@ -4641,6 +4667,9 @@ fn main() -> i32 {
         }
         if a.eq("--static") {
             want_static = true;
+        }
+        if a.eq("--dynamic") {
+            __glide_set_dynamic(1);
         }
         if a.len() > 9 {
             let prefix: string = a.substring(0, 9);
