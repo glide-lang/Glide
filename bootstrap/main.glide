@@ -4344,7 +4344,7 @@ fn main() -> i32 {
         }
         return run_search(q);
     }
-    // `clean` — drop the per-project glide_modules/ + glide.lock. Global
+    // `clean` — drop the per-project build/ (incl. build/deps/) + glide.lock. Global
     // cache (~/.glide/cache) is left alone since other projects share it.
     if cmd.eq("clean") {
         return run_clean();

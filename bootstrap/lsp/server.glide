@@ -202,7 +202,7 @@ pub struct LspState {
     pub project_root: string,
     // Fingerprint of the project's dep set last time we indexed: hash
     // of the manifest content plus a sorted list of every `.glide`
-    // path under `glide_modules/`. When this changes (manifest edit,
+    // path under `build/deps/`. When this changes (manifest edit,
     // `glide fetch` completion, dep file added/removed) we rebuild the
     // project index instead of reusing the cached one.
     pub project_dep_fp: string,
@@ -696,7 +696,7 @@ fn populate_stdlib_index(state: *LspState) {
 // switch can clear+rebuild the project bag without poisoning stdlib.
 //
 // `pkg_leaf` is the bare package name when this call is the package
-// root (e.g. "glicord" when called for `glide_modules/glicord/src/`);
+// root (e.g. "glicord" when called for `build/deps/glicord/src/`);
 // `""` for stdlib and recursive sub-dirs. A `.glide` file whose
 // basename matches `pkg_leaf` is the package's entry file — its
 // module path collapses to just `module_prefix`, so the auto-import
@@ -885,7 +885,7 @@ fn _refresh_project_index(state: *LspState, uri: string) {
 
 // Compact summary of the inputs that would change the project index.
 // Built from the manifest source (catches dep adds/removes/rev changes)
-// plus every `.glide` path under `glide_modules/` (catches `glide fetch`
+// plus every `.glide` path under `build/deps/` (catches `glide fetch`
 // completion + dep file shuffles). Doesn't read dep file contents — a
 // rev advance with no file changes won't trigger a rebuild and still
 // requires a manual LSP restart, which is the rare case.
@@ -1187,7 +1187,7 @@ extern fn __glide_file_exists(path: string) -> bool;
 
 // `__glide_file_exists` opens the path with `fopen("rb")`, which fails on
 // directories — using it to probe a dir always returns false. Use this
-// for directory checks (project src/, glide_modules/, dep cache slots).
+// for directory checks (project src/, build/deps/, dep cache slots).
 extern fn __glide_fs_is_dir(path: string) -> bool;
 
 fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
