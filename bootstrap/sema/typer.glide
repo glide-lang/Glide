@@ -3870,6 +3870,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return inner;
     }
     if e.kind == EX_ASSIGN {
+        // `c = ...` writes c, so clear any moved/consumed state on it first (the
+        // LHS is a write target; c is valid again afterward). Avoids a false
+        // use-after-move when reassigning a previously-moved variable.
+        if e.lhs != null && e.lhs.kind == EX_IDENT {
+            t.consumed_locals.insert(e.lhs.str_val, false);
+            t.moved_out.insert(e.lhs.str_val, false);
+        }
         let lt: *Type = infer_expr(t, e.lhs);
         let rt: *Type = infer_expr(t, e.rhs);
         // Move-on-assign: a plain `=` whose RHS is an owned local moves it; later

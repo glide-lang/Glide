@@ -1116,7 +1116,7 @@ impl CG {
             if !skip_name.eq("") && _subj.eq(skip_name) {
                 continue;
             }
-            if !_subj.eq("") && self.moved_locals.contains(_subj) {
+            if !_subj.eq("") && self.moved_locals.contains(_subj) && self.moved_locals.get(_subj) {
                 continue;
             }
             ind(depth);
@@ -1139,7 +1139,7 @@ impl CG {
         for let i: i32 = n - 1; i >= saved; i = i - 1 {
             let ex: Expr = self.auto_drop_stack.get(i);
             let _subj: string = _auto_drop_subject(&ex);
-            if !_subj.eq("") && self.moved_locals.contains(_subj) {
+            if !_subj.eq("") && self.moved_locals.contains(_subj) && self.moved_locals.get(_subj) {
                 continue;
             }
             ind(depth);
@@ -3227,6 +3227,13 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_ASSIGN {
+        // Destination overwrite: `c = ...` where c is an owned local that still
+        // holds its value frees that old value first (so it does not leak),
+        // unless c was already moved away (then someone else owns it).
+        let mut _ov: bool = false;
+        if e.lhs != null && e.lhs.kind == EX_IDENT && op_to_c(e.op_code).eq("=") && _is_owned_local(g, e.lhs.str_val) && !(g.moved_locals.contains(e.lhs.str_val) && g.moved_locals.get(e.lhs.str_val)) {
+            _ov = true;
+        }
         // Move-on-assign / move-on-store: a plain `=` whose RHS is an owned
         // local transfers that ownership to the target (a variable or a struct
         // field), so the local must NOT auto-drop afterwards.
@@ -3234,10 +3241,43 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             g.moved_locals.insert(e.rhs.str_val, true);
         }
         print!("(");
+        if _ov {
+            let _ci: *Type = strip_ptr(g.lookup(e.lhs.str_val));
+            let mut _ovhasown: bool = false;
+            if _ci != null && _ci.kind == TY_NAMED && g.structs.contains(_ci.name) {
+                let _osd: Stmt = g.structs.get(_ci.name);
+                if _osd.struct_fields != null {
+                    for let _fi: i32 = 0; _fi < _osd.struct_fields.len(); _fi = _fi + 1 {
+                        let _ff: Field = _osd.struct_fields.get(_fi);
+                        if _ff.is_own {
+                            _ovhasown = true;
+                        }
+                    }
+                }
+            }
+            if _ci != null && _ci.kind == TY_NAMED && g.fns.contains(_ci.name.concat("_free")) {
+                print!(_ci.name.concat("_free("));
+                emit_expr(g, e.lhs);
+                print!("), ");
+            } else if _ovhasown {
+                print!("__glide_drop_".concat(_ci.name).concat("("));
+                emit_expr(g, e.lhs);
+                print!("), ");
+            } else {
+                print!("free((void*)(");
+                emit_expr(g, e.lhs);
+                print!(")), ");
+            }
+        }
         emit_expr(g, e.lhs);
         print!(" ", op_to_c(e.op_code), " ");
         emit_expr(g, e.rhs);
         print!(")");
+        // c now holds a fresh value: un-move it so its new value drops at scope
+        // (it may have been moved away earlier and then reassigned here).
+        if e.lhs != null && e.lhs.kind == EX_IDENT && op_to_c(e.op_code).eq("=") {
+            g.moved_locals.insert(e.lhs.str_val, false);
+        }
         return;
     }
     if e.kind == EX_CALL {
@@ -4348,6 +4388,12 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                     auto_owned = true;
                 }
             }
+        }
+        // Let-rebind move: `let e = c` where c is an owned local moves it to e -
+        // e inherits the auto-drop and c is marked moved (so c is not also freed).
+        if !auto_owned && s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT && _is_owned_local(g, s.let_value.str_val) {
+            g.moved_locals.insert(s.let_value.str_val, true);
+            auto_owned = true;
         }
         // ---- pre-pass: detect generic fn call BEFORE we emit anything,
         //      since we may need to print a forward decl on its own line.
