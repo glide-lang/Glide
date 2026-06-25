@@ -601,6 +601,16 @@ fn parse_fn(p: *Parser) -> *Stmt {
     if p.eat_op("->") {
         ret_ty = parse_type(p);
     }
+    // A return type written without the `->` is the most common slip:
+    // `fn f(x) T { ... }` instead of `fn f(x) -> T { ... }`. Without this guard
+    // the stray type tokens derail block parsing into a confusing cascade (or,
+    // when the fn is called across a file boundary, an ICE in codegen because the
+    // return type was silently dropped to void). Flag it clearly and recover by
+    // consuming the type so the rest of the file still parses.
+    if ret_ty == null && !p.at_op("{") && !p.at_op(";") {
+        p.err_code("missing-arrow", "missing `->` before the return type (write `fn name(args) -> Type`)");
+        ret_ty = parse_type(p);
+    }
     // Bodyless form: `fn name(args) -> ret;` (used after `extern`).
     if p.eat_op(";") {
         let no_body: *Vector<Stmt> = null;
