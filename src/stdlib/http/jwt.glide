@@ -86,6 +86,24 @@ fn _json_int_or_zero(v: *JsonValue, key: string) -> i32 {
     return f.i;
 }
 
+// Constant-time string equality for the signature check: compares every byte
+// even after a mismatch, so the time taken doesn't leak how many leading bytes
+// matched. A plain `.eq` short-circuits on the first difference, which is a
+// timing oracle an attacker can use to recover the expected MAC byte by byte.
+fn _ct_eq(a: string, b: string) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let n: i32 = a.len();
+    let mut diff: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n {
+        diff = diff | (a.at(i).to_int() ^ b.at(i).to_int());
+        i = i + 1;
+    }
+    return diff == 0;
+}
+
 pub fn jwt_verify(token: string, key: string) -> !JwtClaims {
     let parts: *Vector<string> = token.split(".");
     if parts.len() != 3 {
@@ -110,7 +128,7 @@ pub fn jwt_verify(token: string, key: string) -> !JwtClaims {
     let signing_input: string = parts.get(0).concat(".").concat(parts.get(1));
     let expected_hex: string = hmac_sha256_hex(key, signing_input);
     let got_hex: string = __glide_jwt_b64url_to_hex(parts.get(2));
-    if !got_hex.eq(expected_hex) {
+    if !_ct_eq(got_hex, expected_hex) {
         return err("401:bad signature");
     }
 
