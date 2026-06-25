@@ -781,6 +781,7 @@ pub struct CG {
     pub defer_stack: *Vector<Expr>, // explicit `defer expr;` (fn-scoped)
     pub err_defer_stack: *Vector<Expr>, // `defer_err expr;` — fires only on err return / `?` (fn-scoped)
     pub auto_drop_stack: *Vector<Expr>, // `let v*` cleanups (block-scoped)
+    pub moved_locals: *HashMap<bool>, // owned locals whose ownership moved out (assign/store/pass); their auto-drop is skipped
     // Anonymous fn lifts (collected during codegen, emitted at end).
     pub anon_fns: *Vector<AnonFn>,
     pub anon_count: i32,
@@ -942,6 +943,23 @@ fn _call_target_key(call: *Expr, let_ty: *Type) -> string {
     return "";
 }
 
+// True when `name` is an owned (auto-drop) local in the current fn - i.e. it has
+// a pending cleanup on the auto-drop stack. Used to decide whether assigning /
+// storing / passing it should move ownership (skip its auto-drop).
+fn _is_owned_local(g: *CG, name: string) -> bool {
+    if name.eq("") {
+        return false;
+    }
+    let n: i32 = g.auto_drop_stack.len();
+    for let i: i32 = 0; i < n; i = i + 1 {
+        let ex: Expr = g.auto_drop_stack.get(i);
+        if _auto_drop_subject(&ex).eq(name) {
+            return true;
+        }
+    }
+    return false;
+}
+
 impl CG {
     pub fn new() -> *CG {
         let g: *CG = malloc(sizeof(CG)) as *CG;
@@ -960,6 +978,8 @@ impl CG {
         g.err_defer_stack = eds;
         let ads: *Vector<Expr> = Vector::new();
         g.auto_drop_stack = ads;
+        let ml: *HashMap<bool> = HashMap::new();
+        g.moved_locals = ml;
         let af: *Vector<AnonFn> = Vector::new();
         g.anon_fns = af;
         g.anon_count = 0;
@@ -1081,7 +1101,11 @@ impl CG {
         let na: i32 = self.auto_drop_stack.len();
         for let i: i32 = na - 1; i >= 0; i = i - 1 {
             let ex: Expr = self.auto_drop_stack.get(i);
-            if !skip_name.eq("") && _auto_drop_subject(&ex).eq(skip_name) {
+            let _subj: string = _auto_drop_subject(&ex);
+            if !skip_name.eq("") && _subj.eq(skip_name) {
+                continue;
+            }
+            if !_subj.eq("") && self.moved_locals.contains(_subj) {
                 continue;
             }
             ind(depth);
@@ -1102,8 +1126,12 @@ impl CG {
     fn emit_block_drops(self: *CG, saved: i32, depth: i32) {
         let n: i32 = self.auto_drop_stack.len();
         for let i: i32 = n - 1; i >= saved; i = i - 1 {
-            ind(depth);
             let ex: Expr = self.auto_drop_stack.get(i);
+            let _subj: string = _auto_drop_subject(&ex);
+            if !_subj.eq("") && self.moved_locals.contains(_subj) {
+                continue;
+            }
+            ind(depth);
             emit_expr(self, &ex);
             println!(";");
         }
@@ -3188,6 +3216,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_ASSIGN {
+        // Move-on-assign / move-on-store: a plain `=` whose RHS is an owned
+        // local transfers that ownership to the target (a variable or a struct
+        // field), so the local must NOT auto-drop afterwards.
+        if e.rhs != null && e.rhs.kind == EX_IDENT && op_to_c(e.op_code).eq("=") && _is_owned_local(g, e.rhs.str_val) {
+            g.moved_locals.insert(e.rhs.str_val, true);
+        }
         print!("(");
         emit_expr(g, e.lhs);
         print!(" ", op_to_c(e.op_code), " ");

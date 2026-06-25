@@ -723,6 +723,8 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.defer_stack = new_defer;
     g.err_defer_stack = new_err_defer;
     g.auto_drop_stack = new_drop;
+    let new_moved: *HashMap<bool> = HashMap::new();
+    g.moved_locals = new_moved;
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
@@ -818,6 +820,8 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.defer_stack = nd;
         g.err_defer_stack = ned;
         g.auto_drop_stack = nadr;
+        let nmoved: *HashMap<bool> = HashMap::new();
+        g.moved_locals = nmoved;
         if m.fn_params != null {
             for let j: i32 = 0; j < m.fn_params.len(); j++ {
                 let p: Param = m.fn_params.get(j);
@@ -2069,6 +2073,8 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let nadr_q: *Vector<Expr> = Vector::new();
         g.defer_stack = nd_q;
         g.auto_drop_stack = nadr_q;
+        let nmoved_q: *HashMap<bool> = HashMap::new();
+        g.moved_locals = nmoved_q;
         for let j: i32 = 0; j < new_params_v.len(); j++ {
             let p: Param = new_params_v.get(j);
             g.declare(p.name, p.ty);
@@ -2111,6 +2117,8 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let nadr: *Vector<Expr> = Vector::new();
         g.defer_stack = nd;
         g.auto_drop_stack = nadr;
+        let nmoved_a: *HashMap<bool> = HashMap::new();
+        g.moved_locals = nmoved_a;
         if af.params != null {
             for let j: i32 = 0; j < af.params.len(); j++ {
                 let p: Param = af.params.get(j);
