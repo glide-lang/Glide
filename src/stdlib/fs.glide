@@ -129,20 +129,24 @@ c_raw! {
     #define GLIDE_FS_MKDIR_DEFINED
     #ifdef _WIN32
     #include <direct.h>
-    #include <sys/stat.h>
+    #include <windows.h>
+    // Use the Win32 file API rather than _stat/_stat64: mingw expands those to
+    // _stat64i32, which zig's bundled mingw libc defines statically AND the UCRT
+    // exports, so the linker rejects the duplicate symbol. GetFileAttributes
+    // sidesteps the conflicting symbol entirely.
     static bool __glide_fs_is_dir(const char* path) {
-        struct _stat st;
-        if (_stat(path, &st) != 0) return false;
-        return (st.st_mode & _S_IFDIR) != 0;
+        DWORD a = GetFileAttributesA(path);
+        if (a == INVALID_FILE_ATTRIBUTES) return false;
+        return (a & FILE_ATTRIBUTE_DIRECTORY) != 0;
     }
     static bool __glide_fs_mkdir_one(const char* path) {
         if (__glide_fs_is_dir(path)) return true;
         return _mkdir(path) == 0;
     }
     static int64_t __glide_fs_size(const char* path) {
-        struct _stat64 st;
-        if (_stat64(path, &st) != 0) return -1;
-        return (int64_t)st.st_size;
+        WIN32_FILE_ATTRIBUTE_DATA fad;
+        if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return -1;
+        return ((int64_t)fad.nFileSizeHigh << 32) | (int64_t)fad.nFileSizeLow;
     }
     #else
     #include <sys/stat.h>
