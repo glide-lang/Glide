@@ -105,25 +105,21 @@ c_raw! {
         }
     }
 
-    // Glide-string entry. `s` is a NUL-terminated cstring; we use strlen
-    // as the byte count. NUL inside the data isn't supported via this
-    // entry — pre-build a ByteBuffer if you need it (unimplemented here).
-    static const char* __glide_sha256_str(const char* s) {
-        int64_t n = (int64_t)strlen(s);
-        uint8_t digest[32];
-        __glide_sha256_raw((const uint8_t*)s, n, digest);
-        // 32-byte raw output as a Glide string. Allocate +1 for NUL.
-        char* out = (char*)malloc(33);
-        memcpy(out, digest, 32);
-        out[32] = 0;
+    // Glide-string entry. The byte count is the SDS length the caller passes
+    // (data.len()), so embedded NUL bytes are handled — binary-safe. The raw
+    // 32-byte digest is returned as a bare buffer; the Glide side wraps it with
+    // __glide_string_from_buf so the SDS header is set and nothing is strlen'd.
+    static void* __glide_sha256_buf(void* s, int n) {
+        void* out = malloc(32);
+        __glide_sha256_raw((const uint8_t*)s, (int64_t)n, (uint8_t*)out);
         return out;
     }
 
-    // Hex flavour: 64 lowercase chars + NUL.
-    static const char* __glide_sha256_hex_str(const char* s) {
-        int64_t n = (int64_t)strlen(s);
+    // Hex flavour: 64 lowercase chars + NUL (pure ASCII, so the strlen adopt
+    // on the way back to Glide is fine).
+    static const char* __glide_sha256_hex_str(void* s, int n) {
         uint8_t digest[32];
-        __glide_sha256_raw((const uint8_t*)s, n, digest);
+        __glide_sha256_raw((const uint8_t*)s, (int64_t)n, digest);
         char* out = (char*)malloc(65);
         static const char H[] = "0123456789abcdef";
         for (int i = 0; i < 32; i++) {
@@ -165,24 +161,17 @@ c_raw! {
         __glide_sha256_raw(obuf, 96, out);
     }
 
-    static const char* __glide_hmac_sha256_str(const char* key, const char* msg) {
-        int64_t klen = (int64_t)strlen(key);
-        int64_t mlen = (int64_t)strlen(msg);
-        uint8_t digest[32];
-        __glide_hmac_sha256_raw((const uint8_t*)key, klen,
-                                (const uint8_t*)msg, mlen, digest);
-        char* out = (char*)malloc(33);
-        memcpy(out, digest, 32);
-        out[32] = 0;
+    static void* __glide_hmac_sha256_buf(void* key, int klen, void* msg, int mlen) {
+        void* out = malloc(32);
+        __glide_hmac_sha256_raw((const uint8_t*)key, (int64_t)klen,
+                                (const uint8_t*)msg, (int64_t)mlen, (uint8_t*)out);
         return out;
     }
 
-    static const char* __glide_hmac_sha256_hex_str(const char* key, const char* msg) {
-        int64_t klen = (int64_t)strlen(key);
-        int64_t mlen = (int64_t)strlen(msg);
+    static const char* __glide_hmac_sha256_hex_str(void* key, int klen, void* msg, int mlen) {
         uint8_t digest[32];
-        __glide_hmac_sha256_raw((const uint8_t*)key, klen,
-                                (const uint8_t*)msg, mlen, digest);
+        __glide_hmac_sha256_raw((const uint8_t*)key, (int64_t)klen,
+                                (const uint8_t*)msg, (int64_t)mlen, digest);
         char* out = (char*)malloc(65);
         static const char H[] = "0123456789abcdef";
         for (int i = 0; i < 32; i++) {
@@ -250,20 +239,15 @@ c_raw! {
         }
     }
 
-    static const char* __glide_sha1_str(const char* s) {
-        int64_t n = (int64_t)strlen(s);
-        uint8_t digest[20];
-        __glide_sha1_raw((const uint8_t*)s, n, digest);
-        char* out = (char*)malloc(21);
-        memcpy(out, digest, 20);
-        out[20] = 0;
+    static void* __glide_sha1_buf(void* s, int n) {
+        void* out = malloc(20);
+        __glide_sha1_raw((const uint8_t*)s, (int64_t)n, (uint8_t*)out);
         return out;
     }
 
-    static const char* __glide_sha1_hex_str(const char* s) {
-        int64_t n = (int64_t)strlen(s);
+    static const char* __glide_sha1_hex_str(void* s, int n) {
         uint8_t digest[20];
-        __glide_sha1_raw((const uint8_t*)s, n, digest);
+        __glide_sha1_raw((const uint8_t*)s, (int64_t)n, digest);
         char* out = (char*)malloc(41);
         static const char H[] = "0123456789abcdef";
         for (int i = 0; i < 20; i++) {
@@ -276,51 +260,51 @@ c_raw! {
     #endif
 }
 
-extern fn __glide_sha256_str(s: string) -> string;
-extern fn __glide_sha256_hex_str(s: string) -> string;
-extern fn __glide_hmac_sha256_str(key: string, msg: string) -> string;
-extern fn __glide_hmac_sha256_hex_str(key: string, msg: string) -> string;
-extern fn __glide_sha1_str(s: string) -> string;
-extern fn __glide_sha1_hex_str(s: string) -> string;
+extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
+
+extern fn __glide_sha256_buf(s: *void, n: i32) -> *void;
+extern fn __glide_sha256_hex_str(s: *void, n: i32) -> string;
+extern fn __glide_hmac_sha256_buf(key: *void, klen: i32, msg: *void, mlen: i32) -> *void;
+extern fn __glide_hmac_sha256_hex_str(key: *void, klen: i32, msg: *void, mlen: i32) -> string;
+extern fn __glide_sha1_buf(s: *void, n: i32) -> *void;
+extern fn __glide_sha1_hex_str(s: *void, n: i32) -> string;
 
 /// SHA-256 over `data`, returned as a 32-byte raw string. Useful when
 /// you need to feed the digest into another binary protocol; for human
 /// display use `sha256_hex`.
 ///
-/// **Caveat:** treats `data` as a NUL-terminated cstring, so embedded
-/// NUL bytes truncate the input. Hash binary blobs with embedded NULs
-/// via a future `sha256_bytes(*ByteBuffer)` once that's wired.
+/// Binary-safe: the full byte length is hashed (embedded NUL bytes
+/// included) and the 32-byte digest comes back intact.
 ///
 /// ```glide
 /// let raw: string = sha256("hello");
 /// hex_encode(raw);   // 2cf24dba...8b9824 (32 bytes)
 /// ```
 pub fn sha256(data: string) -> string {
-    return __glide_sha256_str(data);
+    return __glide_string_from_buf(__glide_sha256_buf(data as *void, data.len()), 32);
 }
 
-/// SHA-256 over `data`, returned as 64 lowercase hex chars. Same NUL
-/// caveat as `sha256`.
+/// SHA-256 over `data`, returned as 64 lowercase hex chars. Binary-safe
+/// like `sha256`.
 ///
 /// ```glide
 /// sha256_hex("");      // e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 /// sha256_hex("abc");   // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 /// ```
 pub fn sha256_hex(data: string) -> string {
-    return __glide_sha256_hex_str(data);
+    return __glide_sha256_hex_str(data as *void, data.len());
 }
 
 /// HMAC-SHA-256 with `key`, message `msg`. Returns the 32-byte raw MAC.
 ///
-/// Same NUL caveat as `sha256` — both `key` and `msg` are read until
-/// the first NUL. RFC 2104.
+/// Binary-safe: the full `key` and `msg` byte lengths are used. RFC 2104.
 ///
 /// ```glide
 /// let mac: string = hmac_sha256("secret", "payload");
 /// hex_encode(mac);    // 32 raw bytes as hex
 /// ```
 pub fn hmac_sha256(key: string, msg: string) -> string {
-    return __glide_hmac_sha256_str(key, msg);
+    return __glide_string_from_buf(__glide_hmac_sha256_buf(key as *void, key.len(), msg as *void, msg.len()), 32);
 }
 
 /// HMAC-SHA-256, hex-encoded.
@@ -330,7 +314,7 @@ pub fn hmac_sha256(key: string, msg: string) -> string {
 /// // -> f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
 /// ```
 pub fn hmac_sha256_hex(key: string, msg: string) -> string {
-    return __glide_hmac_sha256_hex_str(key, msg);
+    return __glide_hmac_sha256_hex_str(key as *void, key.len(), msg as *void, msg.len());
 }
 
 /// SHA-1 of `data`. Returns 20 raw bytes. **Cryptographically broken**
@@ -342,7 +326,7 @@ pub fn hmac_sha256_hex(key: string, msg: string) -> string {
 /// hex_encode(raw);   // a9993e36...c9cd0d89 (20 bytes)
 /// ```
 pub fn sha1(data: string) -> string {
-    return __glide_sha1_str(data);
+    return __glide_string_from_buf(__glide_sha1_buf(data as *void, data.len()), 20);
 }
 
 /// SHA-1 of `data`, returned as 40 lowercase hex chars. Same caveat
@@ -353,5 +337,5 @@ pub fn sha1(data: string) -> string {
 /// sha1_hex("abc");   // a9993e364706816aba3e25717850c26c9cd0d89d
 /// ```
 pub fn sha1_hex(data: string) -> string {
-    return __glide_sha1_hex_str(data);
+    return __glide_sha1_hex_str(data as *void, data.len());
 }
