@@ -3369,6 +3369,83 @@ fn _in_impl_header(text: string, line0: i32, col0: i32) -> bool {
     return true;
 }
 
+// True when the cursor sits in an impl body at a fresh declaration start (after
+// the impl `{`, between methods), where only `pub` / `fn` / `const` / `macro`
+// make sense. Excludes method bodies (the immediate `{` there is the method's,
+// preceded by `)`), and mid-signature positions (a `(` on the line means
+// params / return type, where the symbol bag is wanted instead).
+fn _in_impl_body(text: string, line0: i32, col0: i32) -> bool {
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF {
+            break;
+        }
+        let tline: i32 = tok.line - 1;
+        let tcol: i32 = tok.column - 1;
+        if tline > line0 {
+            break;
+        }
+        if tline == line0 && tcol >= col0 {
+            break;
+        }
+        toks.push(tok);
+    }
+    let n: i32 = toks.len();
+    let mut depth: i32 = 0;
+    let mut open_idx: i32 = -1;
+    for let i: i32 = n - 1; i >= 0; i = i - 1 {
+        let t: Token = toks.get(i);
+        if t.kind != TOK_OP {
+            continue;
+        }
+        if t.lexeme.eq("}") || t.lexeme.eq(")") || t.lexeme.eq("]") {
+            depth = depth + 1;
+            continue;
+        }
+        if t.lexeme.eq("(") || t.lexeme.eq("[") {
+            if depth > 0 {
+                depth = depth - 1;
+                continue;
+            }
+            return false;
+        }
+        if t.lexeme.eq("{") {
+            if depth > 0 {
+                depth = depth - 1;
+                continue;
+            }
+            open_idx = i;
+            break;
+        }
+    }
+    if open_idx < 2 {
+        return false;
+    }
+    let name_tok: Token = toks.get(open_idx - 1);
+    if name_tok.kind != TOK_IDENT {
+        return false;
+    }
+    let kw: Token = toks.get(open_idx - 2);
+    if !(kw.lexeme.eq("impl") || kw.lexeme.eq("for")) {
+        return false;
+    }
+    // Fresh decl start only: a `(` on the current line means we are inside the
+    // method signature (params / return), where types are wanted.
+    let lstart: i32 = _byte_off_at(text, line0, 0);
+    let cur: i32 = _byte_off_at(text, line0, col0);
+    if cur > lstart {
+        let prefix: string = text.substring(lstart, cur);
+        for let k: i32 = 0; k < prefix.len(); k = k + 1 {
+            if prefix.at(k).to_int() == 40 {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 pub fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -3679,6 +3756,17 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             json_obj_set(_ih_item, "sortText", json_string(_ih_bucket.concat("_").concat(s.name)));
             json_arr_push(items, _ih_item);
         }
+        seen.free();
+        lsp_send_response(id, items);
+        return;
+    }
+    // Impl body (between methods, at a fresh decl start): only the method
+    // declaration keywords make sense here, not the struct / fn / const bag.
+    if _in_impl_body(doc.text, line0, col0) {
+        json_arr_push(items, completion_item("pub", 14, "export the method across files"));
+        json_arr_push(items, completion_item("fn", 14, "method declaration"));
+        json_arr_push(items, completion_item("const", 14, "associated constant"));
+        json_arr_push(items, completion_item("macro", 14, "type-attached macro"));
         seen.free();
         lsp_send_response(id, items);
         return;
