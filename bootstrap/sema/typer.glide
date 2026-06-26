@@ -2705,7 +2705,11 @@ fn check_top(t: *Typer, s: *Stmt) {
         if t.user_origin != null && !t.user_origin.eq("") && s.impl_methods != null {
             let saved_tps: *Vector<string> = t.impl_type_params;
             t.impl_type_params = s.type_params;
-            t.demote_errors = true;
+            // The user's own impl methods (in the focused file) get real errors,
+            // exactly like a top-level fn. Imported impls stay demoted to
+            // warnings so their latent backlog doesn't surface as errors here.
+            let own_impl: bool = s.origin == null || s.origin.eq("") || s.origin.eq(t.user_origin);
+            t.demote_errors = !own_impl;
             for let i: i32 = 0; i < s.impl_methods.len(); i++ {
                 let m: Stmt = s.impl_methods.get(i);
                 if m.kind == ST_FN {

@@ -1105,32 +1105,51 @@ fn expr_reassigns(e: *Expr, name: string) -> bool {
 
 // Function declared `-> T` (non-void) where some path doesn't return.
 // Conservative: walks the body, checks the LAST stmt of each branch.
+fn _missing_return_check(t: *Typer, s: *Stmt, origin: string) {
+    if s.fn_body == null {
+        return;
+    }
+    if s.fn_ret_ty == null {
+        return;
+    } // void -> ok
+    if s.is_naked {
+        return;
+    } // raw asm; `ret` lives in the asm
+    // `-> !` (Result-without-value) returns Ok implicitly when the body
+    // falls off the end. Codegen injects `return __glide_ok_void();` at
+    // the function tail, so missing explicit return is not an error.
+    if s.fn_ret_ty.kind == TY_RESULT && s.fn_ret_ty.inner != null && s.fn_ret_ty.inner.kind == TY_NAMED && s.fn_ret_ty.inner.name.eq("void") {
+        return;
+    }
+    // Bool ret is okay-ish but still must return; same logic.
+    if !body_always_returns(s.fn_body) {
+        t.current_origin = origin;
+        t.err_code_range(s.name_line, s.name_col, s.name.len(), "missing-return", "function `".concat(s.name).concat("` declared `-> ").concat(type_to_string(s.fn_ret_ty)).concat("` must return a value on every path, but can reach the end without returning"));
+    }
+}
+
 pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        // Methods inside the user's own impl blocks are checked exactly like
+        // top-level fns. Scoped to the focused file so an imported impl's
+        // backlog doesn't surface, and so full builds (no user_origin) skip it.
+        if s.kind == ST_IMPL && s.impl_methods != null {
+            let own: bool = t.user_origin != null && !t.user_origin.eq("") && (s.origin == null || s.origin.eq(t.user_origin));
+            if own {
+                for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                    let m: Stmt = s.impl_methods.get(j);
+                    if m.kind == ST_FN {
+                        _missing_return_check(t, &m, s.origin);
+                    }
+                }
+            }
+            continue;
+        }
         if s.kind != ST_FN {
             continue;
         }
-        if s.fn_body == null {
-            continue;
-        }
-        if s.fn_ret_ty == null {
-            continue;
-        } // void -> ok
-        if s.is_naked {
-            continue;
-        } // raw asm; `ret` lives in the asm
-        // `-> !` (Result-without-value) returns Ok implicitly when the body
-        // falls off the end. Codegen injects `return __glide_ok_void();` at
-        // the function tail, so missing explicit return is not an error.
-        if s.fn_ret_ty.kind == TY_RESULT && s.fn_ret_ty.inner != null && s.fn_ret_ty.inner.kind == TY_NAMED && s.fn_ret_ty.inner.name.eq("void") {
-            continue;
-        }
-        // Bool ret is okay-ish but still must return; same logic.
-        if !body_always_returns(s.fn_body) {
-            t.current_origin = s.origin;
-            t.err_code_range(s.name_line, s.name_col, s.name.len(), "missing-return", "function `".concat(s.name).concat("` declared `-> ").concat(type_to_string(s.fn_ret_ty)).concat("` must return a value on every path, but can reach the end without returning"));
-        }
+        _missing_return_check(t, &s, s.origin);
     }
 }
 
