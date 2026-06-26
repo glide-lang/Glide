@@ -3,7 +3,7 @@
 ## 0.6.0 — 2026-06-25
 
 The memory-model release. Glide now manages memory automatically without a GC
-and without Rust-style lifetime annotations: a value is owned by default, moves
+and without lifetime annotations: a value is owned by default, moves
 when you transfer it, and frees itself at the end of its scope. You never write
 `malloc` / `free` for the common case, and the compiler catches use-after-move
 and double-free at compile time. Borrows (`&T` / `&mut T`), the manual heap
@@ -520,8 +520,7 @@ over package import/export ergonomics. No source-breaking changes from 0.3.1.
 - **TLS verify on Windows**: `SSL_CTX_set_default_verify_paths` is a no-op
   on MSYS2 / mingw (its compiled-in `OPENSSLDIR` ships empty), so every
   HTTPS verify returned `tls: connect failed`. Now bridges the Windows
-  ROOT + CA system stores into OpenSSL's `X509_STORE` via Crypt32 — the
-  same approach Rust and Go take.
+  ROOT + CA system stores into OpenSSL's `X509_STORE` via Crypt32.
 - Windows host builds copy the runtime DLLs they link against next to the
   produced `.exe`, so a non-bundle build runs from any shell.
 
@@ -558,7 +557,7 @@ manager landed; this release makes it work.
 ## 0.3.0 — 2026-05-27
 
 The intelligent-LSP, build-introspection, and dev-ergonomics release. The
-language server goes from basic to rust-analyzer-class, editing large files
+language server goes from basic to IDE-class, editing large files
 gets ~15× faster, and a family of compile-time macros (`pkg!`, `cfg!`, `env!`,
 `panic!`, `assert!`, `dbg!`, …) lands. No source-breaking changes from 0.2.0.
 
@@ -1327,8 +1326,7 @@ on bootstrap-sized projects:
 Completion items now carry a `[module]` tag in the detail string so
 the popup distinguishes `http_listen` (from `stdlib::http`) from
 `http_listen` in user code at a glance. The tag is positioned at the
-HEAD of the detail field so long signatures don't clip it — matches
-gopls / rust-analyzer's `core::iter` indicator style.
+HEAD of the detail field so long signatures don't clip it.
 
 ### Toolchain + docs
 
@@ -1405,8 +1403,8 @@ that doesn't parse symbol bodies until they're queried.
 ## 0.0.1 (preview) — 2026-05-05
 
 Early preview tagged at the bootstrap milestone (now superseded by 0.1.0).
-Glide is a self-hosted, plug-and-play systems language with no Rust or
-system C compiler required.
+Glide is a self-hosted, plug-and-play systems language with no system C
+compiler required.
 
 ### Language
 
