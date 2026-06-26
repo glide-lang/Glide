@@ -79,7 +79,7 @@ pub struct IValue {
 }
 
 pub fn iv_null() -> IValue {
-    return IValue { kind: IV_NULL, i: 0, b: false, s: "", f: 0, c: 0 as char, p: null, ty_tag: "", vec: null, map: null };
+    return IValue { kind: IV_NULL, i: 0, b: false, s: "", f: 0.0, c: 0 as char, p: null, ty_tag: "", vec: null, map: null };
 }
 
 pub fn iv_int(n: i32) -> IValue {
