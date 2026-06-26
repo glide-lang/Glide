@@ -1,6 +1,8 @@
 # Glide tutorial
 
-Walks you from a fresh install through writing, building, and running Glide programs. Assumes you've installed Glide via the one-liner from the README.
+Walks you from a fresh install through writing, building, and running Glide
+programs. Assumes you've installed Glide from the releases page linked in the
+README.
 
 ```bash
 glide
@@ -13,7 +15,7 @@ Running `glide` with no args prints usage. If it does, you're set.
 Save this as `hello.glide`:
 
 ```glide
-fn main() -> int {
+fn main() -> i32 {
     println!("hello, glide");
     return 0;
 }
@@ -25,17 +27,20 @@ Run it:
 glide run hello.glide
 ```
 
-`glide run` compiles to a temp executable, runs it, then deletes it. To keep the binary, use `glide build hello.glide -o hello`.
+`glide run` compiles to a temp executable, runs it, then deletes it. To keep the
+binary, use `glide build hello.glide -o hello`.
 
 ## values and bindings
 
-Glide has a small set of primitive types: `int`, `uint`, `i32`, `i64`, `u32`, `u64`, `usize`, `isize`, `f32`, `f64`, `float`, `bool`, `char`, `string`.
+The primitive types are the fixed-width integers `i8`–`i64` and `u8`–`u64`, the
+pointer-sized `usize` / `isize`, the floats `f32` / `f64`, and `bool`, `char`,
+`string`.
 
 ```glide
-let x: int = 42;            // immutable
-let mut y: int = 0;         // mutable
+let x: i32 = 42;            // immutable
+let mut y: i32 = 0;         // mutable
 y = x + 1;
-let pi: float = 3.14;
+let pi: f64 = 3.14;
 let ok: bool = true;
 let name: string = "glide";
 ```
@@ -44,13 +49,13 @@ Type annotations are optional when the compiler can infer:
 
 ```glide
 let v = Vector::new();      // T inferred from later v.push(...)
-v.push(10);                 // T = int
+v.push(10);                 // T = i32
 ```
 
 ## functions
 
 ```glide
-fn add(a: int, b: int) -> int {
+fn add(a: i32, b: i32) -> i32 {
     return a + b;
 }
 
@@ -65,14 +70,14 @@ fn greet(name: string) {
 
 ```glide
 struct Point {
-    x: int,
-    y: int,
+    x: i32,
+    y: i32,
 }
 
 impl Point {
-    fn distance(self: *Point, other: *Point) -> int {
-        let dx: int = self.x - other.x;
-        let dy: int = self.y - other.y;
+    fn distance(self: *Point, other: *Point) -> i32 {
+        let dx: i32 = self.x - other.x;
+        let dy: i32 = self.y - other.y;
         return dx * dx + dy * dy;
     }
 }
@@ -82,47 +87,69 @@ Call a method as `p.distance(q)`. The compiler auto-borrows where needed.
 
 ## memory
 
-Three categories of values you actually allocate:
+You rarely manage memory by hand. A heap value is **owned by default**, **moves**
+when you transfer it, and **frees itself at the end of its scope**.
 
-**stack** — value types, automatic:
+**stack** — primitives and pure-data structs, automatic and copied by value:
 
 ```glide
 let p: Point = Point { x: 1, y: 2 };   // lives on the stack
 ```
 
-**owned heap with auto-drop** — your binding owns it; freed at scope exit:
+**owned heap** — a constructor that returns a heap value hands you ownership;
+the binding frees it at scope end with no `free` written:
 
 ```glide
 fn process() {
-    let v* = Vector::new();    // malloc'd
+    let v = Vector::new();     // owned heap value
     v.push(10);
     v.push(20);
-}                              // automatic v.free() here
+}                              // freed automatically here
 ```
 
-The `*` after the binding name is the explicit "this is owned, clean up at scope end" marker. Works for any expression that returns a pointer.
+Ownership **moves** on every transfer: returning it hands ownership to the
+caller, passing it to a `*T` parameter hands it to the callee, and a let-rebind
+(`let b = a`) moves it to the new name. After a move the old binding is gone,
+and reading it is a `use-after-move` compile error. A `&T` parameter borrows
+instead of taking ownership, so the caller keeps it.
 
-**arena** — group of allocations with a shared lifetime:
+**`own` fields** — a struct that owns heap data marks those fields `own`, and
+the compiler frees the whole chain on drop:
+
+```glide
+struct List {
+    head: own *Node,           // owned; freed recursively on drop
+}
+```
+
+A bare `*T` field is a non-owning reference and is left untouched. `own T` is
+shorthand for `own *T`.
+
+**arena** — a bag of allocations with a shared lifetime, freed in one shot:
 
 ```glide
 let arena: *Arena = Arena::new(4096);
 defer arena.free();
 
-let p: *Point = arena.create(Point);
-let q: *Point = arena.create(Point);
+let p: *Point = arena.alloc(sizeof(Point)) as *Point;
+let q: *Point = arena.alloc(sizeof(Point)) as *Point;
 // freed together when arena.free() runs
 ```
 
+For fully manual control, `new T { ... }` allocates a raw heap value you free
+yourself.
+
 ## borrows
 
-`&T` and `&mut T` are non-owning views. They can't be null and can't outlive the function.
+`&T` and `&mut T` are non-owning views. They can't be null and can't outlive the
+function.
 
 ```glide
-fn touch(p: &Point) -> int {
+fn touch(p: &Point) -> i32 {
     return p.x + p.y;
 }
 
-fn main() -> int {
+fn main() -> i32 {
     let p: Point = Point { x: 3, y: 4 };
     return touch(&p);
 }
@@ -131,35 +158,40 @@ fn main() -> int {
 The compiler enforces:
 
 - A value can have many `&T` viewers OR one `&mut T` viewer, not both
-- A borrow can't be passed back as a function return when its source was a local
+- A borrow can't be returned when its source was a local
 - Two arguments to the same call can't alias the same variable if any is `&mut`
 
 You never write lifetime annotations.
 
 ## errors as values
 
-`!T` is a result type. `?` propagates errors. `ok` and `err` build them.
+`!T` is a result type and `?T` is an option type. `?` propagates errors. `ok`
+and `err` build a result; `some` and `none` build an option.
 
 ```glide
-fn parse_pos(n: int) -> !int {
+fn parse_pos(n: i32) -> !i32 {
     if n < 0 { return err("negative"); }
     return ok(n * 2);
 }
 
-fn pipeline(n: int) -> !int {
-    let v: int = parse_pos(n)?;     // if err, return err from pipeline
+fn pipeline(n: i32) -> !i32 {
+    let v: i32 = parse_pos(n)?;      // if err, return err from pipeline
     return ok(v + 1);
 }
 
-fn main() -> int {
-    let r: !int = pipeline(5);
-    return unwrap(r);                // 11
+fn main() -> i32 {
+    let r: !i32 = pipeline(5);
+    return r.unwrap();               // 11
 }
 ```
 
+A `?`-bound `let` infers the unwrapped type, so `parse_pos(n)?` gives an `i32`,
+not an `!i32`.
+
 ## generics
 
-Type parameters use angle brackets. Inference works from arguments and from later uses of the binding.
+Type parameters use angle brackets. Inference works from arguments and from
+later uses of the binding.
 
 ```glide
 fn first<T>(v: *Vector<T>) -> T {
@@ -167,22 +199,21 @@ fn first<T>(v: *Vector<T>) -> T {
 }
 
 let v = Vector::new();           // T deferred
-v.push(42);                      // T = int
-let n: int = first(v);           // 42
+v.push(42);                      // T = i32
+let n: i32 = first(v);           // 42
 ```
 
-`Vector<T>` is auto-injected from `src/builtins/`. `HashMap<V>`,
-strings, fs, os, env, io, time, http, net, math, etc. live under
-`src/stdlib/` and need an explicit `import`:
+`Vector<T>` is built in. `HashMap<V>`, strings, fs, os, env, io, time, http,
+net, and math live under `src/stdlib/` and need an explicit `import`:
 
 ```glide
 import stdlib::hashmap::*;
 
-fn count(words: *Vector<string>) -> *HashMap<int> {
-    let m: *HashMap<int> = HashMap::new();
-    for let i: int = 0; i < words.len(); i++ {
+fn count(words: *Vector<string>) -> *HashMap<i32> {
+    let m: *HashMap<i32> = HashMap::new();
+    for let i: i32 = 0; i < words.len(); i++ {
         let w: string = words.get(i);
-        let mut prev: int = 0;
+        let mut prev: i32 = 0;
         if m.contains(w) { prev = m.get(w); }
         m.insert(w, prev + 1);
     }
@@ -207,32 +238,32 @@ trait Greet {
 impl Greet for Cat { fn greet(self: Self) -> string { return "meow"; } }
 impl Greet for Dog { fn greet(self: Self) -> string { return "woof"; } }
 
-// Static dispatch (one specialization per type, no runtime cost).
+// Static dispatch: one specialization per type, no runtime cost.
 fn say_hi<T: Greet>(g: T) { println!(g.greet()); }
 
-// Dynamic dispatch via *dyn Trait — fat pointer, runtime vtable.
+// Dynamic dispatch via *dyn Trait: a fat pointer with a runtime vtable.
 let pets: *Vector<*dyn Greet> = Vector::new();
 pets.push(cat as *dyn Greet);
 pets.push(dog as *dyn Greet);
-for let i: int = 0; i < pets.len(); i++ {
+for let i: i32 = 0; i < pets.len(); i++ {
     println!(pets.get(i).greet());
 }
 ```
 
 ## concurrency
 
-`chan<T>` is a typed bounded channel. `spawn` runs a function on the
-M:N coroutine scheduler — coroutines park / unpark on
-`recv` / `send` / `sleep_ms` without blocking an OS thread.
+`chan<T>` is a typed bounded channel. `spawn` runs a function on the M:N
+coroutine scheduler. Coroutines park and unpark on `recv` / `send` / `sleep_ms`
+without blocking an OS thread.
 
 ```glide
-fn worker(c: chan<int>) {
+fn worker(c: chan<i32>) {
     c.send(42);
     c.close();
 }
 
-fn main() -> int {
-    let c: chan<int> = make_chan(1);
+fn main() -> i32 {
+    let c: chan<i32> = make_chan(1);
     spawn worker(c);
     return c.recv();
 }
@@ -244,21 +275,21 @@ Drain a channel until close with `while let`:
 while let v = c.recv() { use(v); }
 ```
 
-For a real OS thread (e.g. blocking I/O that doesn't go through the
-reactor) use `spawn_thread fn_call(args)`. Shared-nothing by design:
-data crosses goroutines through channels.
+For a real OS thread, for example blocking I/O that doesn't go through the
+reactor, use `spawn_thread fn_call(args)`. Data crosses coroutines through
+channels.
 
 ## macros
 
-`macro_rules!`-style expansion runs between parse and typer, so the
-typer sees fully-expanded code.
+`macro_rules!`-style expansion runs between parse and typer, so the typer sees
+fully-expanded code.
 
 ```glide
 macro bail!($cond:expr, $msg:expr) {
     if $cond { return err($msg); }
 }
 
-fn check(n: int) -> !int {
+fn check(n: i32) -> !i32 {
     bail!(n < 0, "negative");
     return ok(n);
 }
@@ -273,14 +304,14 @@ list_each!(1, 2, 3);
 impl<T> Vector<T> {
     macro push_all!($($x:expr),*) { $( self.push($x); )* }
 }
-let v: *Vector<int> = Vector::new();
+let v: *Vector<i32> = Vector::new();
 v.push_all!(10, 20, 30);
 ```
 
-A macro whose body ends in `return <expr>;` produces a **value** when
-called in expression position — so it works in a `let`, as an argument,
-or in a larger expression. Macro locals are hygienic (renamed per
-expansion, so they never clash with caller variables).
+A macro whose body ends in `return <expr>;` produces a value when called in
+expression position, so it works in a `let`, as an argument, or in a larger
+expression. Macro locals are hygienic: renamed per expansion so they never clash
+with caller variables.
 
 ```glide
 macro ints!($($x:expr),*) {
@@ -299,14 +330,9 @@ let v: *Vector<i32> = vec_of!(10, 20, 30);
 
 ## next steps
 
-- `examples/tour.glide` walks through every feature in one file —
-  `glide run examples/tour.glide` exercises auto-drop, borrows,
-  arenas, errors-as-values, generics with bounds, traits + `*dyn`,
-  channels, spawn, macros, string interpolation, inline `asm`,
-  `naked fn`, `@cfg`, `c_raw!`.
 - `LANGUAGE.md` is the full reference.
-- `glide check foo.glide` runs the type+borrow checker without
-  codegen; pair with `--write` to apply formatter changes.
+- `glide check foo.glide` runs the type and borrow checker without codegen;
+  `glide fmt foo.glide --write` applies the formatter.
 - `glide test [path]` runs `*_test.glide` files (see `TESTING.md`).
-- `glide lsp` is the LSP server — install the Zed or VS Code
-  extension to get completion, hover, goto, rename in your editor.
+- `glide lsp` is the language server; install the Zed or VS Code extension to
+  get completion, hover, goto, and rename in your editor.
