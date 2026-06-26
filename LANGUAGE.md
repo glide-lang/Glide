@@ -1,13 +1,14 @@
 # Glide language reference
 
-Targeted at someone who already knows another systems language (Rust, C, Go, Zig). For a learning-oriented walkthrough see `TUTORIAL.md`.
+Targeted at someone who already knows a systems language. For a
+learning-oriented walkthrough see `TUTORIAL.md`.
 
 ## lexical structure
 
 ### keywords
 
 ```
-let const mut fn struct enum impl trait dyn type extern pub move naked
+let const mut fn struct enum impl trait dyn type extern pub move naked own new
 if else while for return break continue match defer spawn spawn_thread
 import use as in
 true false null self Self
@@ -27,11 +28,12 @@ keywords.
 &  |  ^  ~  << >>           bitwise
 =  += -= *= /=              assignment / compound
 &  &mut                     borrow / mutable borrow
-*                           dereference / pointer-type prefix / auto-drop suffix
+*                           dereference / pointer-type prefix
 ->                          fn return type
 =>                          match arm
 ::                          path
-?                           result propagation (postfix)
+?                           result / option propagation (postfix)
+??                          default for a result / option
 ```
 
 ### literals
@@ -57,27 +59,26 @@ The lexer currently discards comments; the formatter doesn't preserve them.
 
 | Type            | Meaning                                                   |
 | --------------- | --------------------------------------------------------- |
-| `int` `uint`    | platform `int` (typically 32-bit) and unsigned variant     |
 | `i8`–`i64`, `u8`–`u64` | fixed-width integers                                |
 | `usize` `isize` | pointer-sized integers                                    |
-| `f32` `f64` `float` | floating point                                       |
+| `f32` `f64`     | floating point                                            |
 | `bool` `char` `string` | primitives. `string` is `const char*`             |
-| `*T`            | pointer; non-owning unless declared with auto-drop         |
+| `*T`            | pointer; the heap value is owned by its binding by default |
 | `&T`            | shared borrow (non-null, no lifetime annotation)           |
 | `&mut T`        | exclusive mutable borrow (non-null)                        |
 | `[]T`           | slice: `{ data: *T, len: usize }`                         |
 | `T<U, V>`       | generic instantiation                                      |
 | `fn(A, B) -> R` | function pointer                                           |
 | `!T`            | result: success carries `T`, error carries a `string`      |
+| `?T`            | option: present carries `T`, or absent                     |
 | `chan<T>`       | typed channel (bounded MPMC)                               |
 | `*dyn Trait`    | fat pointer (vtable + data); runtime dispatch              |
 
 ## statements
 
 ```glide
-let name[: T] = expr;             // immutable
+let name[: T] = expr;             // immutable; owns the value if it's a heap value
 let mut name[: T] = expr;         // mutable
-let name*[: T] = expr;            // owned + auto-drop at scope exit
 
 const NAME[: T] = expr;           // file-scope or block-scope constant
 
@@ -114,55 +115,92 @@ import a::b::c::{X, Y};           // selective
 
 [pub] enum Name {
     Variant1,
-    Variant2(int, string),
+    Variant2(i32, string),
 }
 
 [pub] trait Name {
-    fn required(self: Self) -> int;
-    fn provided(self: Self) -> int { return 0; }   // default method
+    fn required(self: Self) -> i32;
+    fn provided(self: Self) -> i32 { return 0; }   // default method
 }
 
 impl[<T>] Name[<T>] {
-    fn method(self: *Name<T>, arg: int) -> int { ... }
+    fn method(self: *Name<T>, arg: i32) -> i32 { ... }
 }
 
 impl Trait for Type {
-    fn required(self: Self) -> int { ... }
+    fn required(self: Self) -> i32 { ... }
 }
 
 extern fn libc_function(args) -> ret;          // declare a C function
 ```
 
-`pub` makes the symbol importable from other Glide files. Top-level visibility defaults to private.
+`pub` makes the symbol importable from other Glide files. Top-level visibility
+defaults to private.
 
 ## memory model
 
+A heap value is owned by default: the binding that creates it owns it, ownership
+moves when you transfer it, and it frees itself at the end of its scope. You
+never write `malloc` / `free` for the common case, and the compiler catches
+use-after-move and double-free at compile time.
+
 ### stack values
 
-Plain primitives and `let p: T = T { ... }` (no `*`) live on the stack and are copied on assignment / return-by-value.
+Plain primitives and pure-data structs (`let p: T = T { ... }`, no pointer) live
+on the stack and are copied on assignment / return-by-value.
 
-### owned heap (`*T` with auto-drop)
+### owned heap
 
-Two equivalent patterns:
-
-```glide
-let p: *Point = Point { x: 1, y: 2 };   // implicit: type annotation + struct lit
-let p* = Point { x: 1, y: 2 };          // explicit marker
-let v* = Vector::new();                  // works for any pointer-returning expr
-```
-
-The compiler emits `free(p as *void)` (or `p.free()` if the type defines a `free` method) at the end of the enclosing block. Cleanup is scope-based: an auto-drop binding inside a `for` body fires once per iteration.
-
-### raw heap (`*T`)
-
-Pointers that aren't auto-drop are raw:
+A constructor that returns a heap value, or a struct literal bound through a
+pointer, produces an owned value:
 
 ```glide
-let p: *Point = some_call();    // up to you to free
-let q: *Point = new Point { x: 1, y: 2 };   // explicit `new`, raw
+let v = Vector::new();                  // owned
+let p: *Point = Point { x: 1, y: 2 };   // owned
 ```
 
-You're responsible for matching `free(p as *void)` or letting them leak intentionally (e.g. the program owns them until exit).
+The compiler frees it at the end of the enclosing block, by `p.free()` if the
+type defines one, else a recursive drop of its owned fields, else a plain free.
+An owned binding inside a `for` body frees once per iteration.
+
+### move
+
+Ownership moves on every transfer:
+
+- `return v` hands ownership to the caller, which auto-drops it (move-out).
+- `f(v)` where `f` takes a `*T` parameter by value hands ownership to the
+  callee. A `&T` parameter borrows instead and leaves the caller owning it.
+- `let b = a` and `a = b` move the value into the new binding.
+- a struct literal `T { f: v }` moves `v` into the field.
+
+Reading a binding after its value was moved is a `use-after-move` compile error.
+Reassigning the binding revives it. `c = d` where `c` already owned a value frees
+the old value first, so reassignment never leaks.
+
+### `own` fields and recursive drop
+
+A struct field marked `own` means the struct owns that heap value and frees it
+on drop:
+
+```glide
+struct List {
+    head: own *Node,        // owned; freed recursively on drop
+}
+```
+
+A bare `*T` field is a non-owning reference, left untouched. `own T` is shorthand
+for `own *T`. A struct that owns heap fields is heap-managed; a pure-data struct
+stays a stack value with copy / move semantics.
+
+### raw heap (`new`)
+
+```glide
+let p: *Point = new Point { x: 1, y: 2 };   // raw, not auto-dropped
+```
+
+`new` allocates a heap value the compiler does not track. You free it yourself
+with `free(p as *void)`, or leak it intentionally (e.g. the program owns it
+until exit).
 
 ### arenas
 
@@ -170,26 +208,26 @@ You're responsible for matching `free(p as *void)` or letting them leak intentio
 let arena: *Arena = Arena::new(4096);
 defer arena.free();
 
-let p: *Point = arena.create(Point);            // sugar for arena.alloc(sizeof(Point)) as *Point
-let buf: *int = arena.create(int, 100);         // sugar for an array
-let raw: *void = arena.alloc(bytes);            // raw escape hatch
+let p: *Point = arena.alloc(sizeof(Point)) as *Point;
+let raw: *void = arena.alloc(bytes);
 ```
 
-Use arenas when you have a bag of allocations sharing a lifetime (parser nodes, request-scoped data). Free is `O(1)` regardless of count.
+Use arenas when you have a bag of allocations sharing a lifetime (parser nodes,
+request-scoped data). `arena.free()` reclaims everything in `O(1)`;
+`arena.reset()` rewinds it for reuse.
 
 ### borrows
 
-`&T` and `&mut T` are non-null views with function-scoped lifetimes. The borrow checker enforces:
+`&T` and `&mut T` are non-null views with function-scoped lifetimes. The borrow
+checker enforces:
 
 | Code                    | Description                                                    |
 | ----------------------- | -------------------------------------------------------------- |
 | `borrow-in-field`       | `&T` / `&mut T` can't appear in a struct field (use `*T`)      |
 | `borrow-alias-in-call`  | `f(&x, &mut x)` and `f(&mut x, &mut x)` are rejected           |
 | `dangling-return`       | `return &local` is rejected; pass-through of borrow params OK   |
-| `owned-escape`          | `return owned_p` is rejected (auto-drop would free it)         |
-| `owned-move`            | `let q = owned_p` is rejected (double-free risk)               |
-| `owned-into-ptr-param`  | `f(owned_p)` where `f` takes `*T` by value is rejected         |
 | `overlap-borrow`        | conflicting `&` / `&mut` in the same scope is rejected          |
+| `use-after-move`        | reading a value after it was moved is rejected                 |
 
 You never write lifetime annotations.
 
@@ -201,7 +239,7 @@ type, and `else` is required:
 
 ```glide
 let label: string = if x > 3 { "big" } else { "small" };
-let r: int = (if x > 0 { 10 } else { -10 }) * 2;
+let r: i32 = (if x > 0 { 10 } else { -10 }) * 2;
 
 // else-if chains compose:
 let category: string =
@@ -212,32 +250,43 @@ Codegen lowers it to a C ternary, so there's no extra cost vs writing
 the `cond ? a : b` shape by hand. Branches with multiple statements
 still need the statement form (`let mut x = default; if cond { x = ... }`).
 
-## errors as values
+## errors and options as values
+
+`!T` is a result and `?T` is an option. `ok` / `err` build a result; `some` /
+`none` build an option. `?` propagates the failure case; `??` supplies a default.
 
 ```glide
-fn parse(s: string) -> !int {
+fn parse(s: string) -> !i32 {
     if s.eq("") { return err("empty"); }
     return ok(42);
 }
 
-fn pipeline(s: string) -> !int {
-    let n = parse(s)?;          // n is `int`; the annotation is optional
+fn pipeline(s: string) -> !i32 {
+    let n = parse(s)?;          // n is `i32`; the annotation is optional
     return ok(n + 1);
 }
+
+let v: i32 = parse("12") ?? 0;  // the value, or 0 on err
 ```
 
-`?` only works inside a function whose return type is `!U` for some `U`. Result conversion happens at the propagation site: an `!T` with err `e` becomes `!U` with err `e`.
+`?` only works inside a function whose return type is `!U` (or `?U`). Result
+conversion happens at the propagation site: an `!T` with err `e` becomes `!U`
+with err `e`.
 
-A `?`-bound `let` infers the *unwrapped* type: `let n = parse(s)?` declares `n` as `int`, not `!int`, so `n + 1` and `n.method()` work without an explicit annotation.
+A `?`-bound `let` infers the *unwrapped* type: `let n = parse(s)?` declares `n`
+as `i32`, not `!i32`, so `n + 1` and `n.method()` work without an explicit
+annotation.
 
-`unwrap(r)` returns the inner value or a zero-initialized fallback if `r` is err. Use it at boundaries where you've already checked the error.
+`r.unwrap()` returns the inner value or a zero-initialized fallback if `r` is
+the failure case. Use it at boundaries where you've already checked.
 
 ## generics
 
-Function and struct type parameters use angle brackets; instantiation is monomorphized.
+Function and struct type parameters use angle brackets; instantiation is
+monomorphized.
 
 ```glide
-struct Vec<T> { data: *T, len: int, cap: int }
+struct Vec<T> { data: *T, len: i32, cap: i32 }
 
 impl<T> Vec<T> {
     fn new() -> *Vec<T> { ... }
@@ -253,9 +302,10 @@ fn dump<T: Display + Clone>(v: T) { println!(v.clone().to_string()); }
 
 Inference fires from:
 
-- An explicit return-type hint at the call site (`let v: *Vec<int> = Vec::new()`)
+- An explicit return-type hint at the call site (`let v: *Vec<i32> = Vec::new()`)
 - Argument types passed in (`first(v)` infers `T` from `v`)
-- Method calls on a not-yet-bound `let v = Generic::new()` — the first call that uses a type parameter resolves it
+- Method calls on a not-yet-bound `let v = Generic::new()` — the first call that
+  uses a type parameter resolves it
 
 There's no turbofish syntax; if inference fails you must annotate the let.
 
@@ -272,7 +322,7 @@ trait Render {
 // Supertrait: every Render implementor must also impl Named.
 trait Render: Named { ... }
 
-impl Render for Box    { fn render(self: Self) -> string { return "Box"; } }
+impl Render for Square { fn render(self: Self) -> string { return "Square"; } }
 impl Render for Circle { fn render(self: Self) -> string { return "Circle"; } }
 
 // Static dispatch via generic bound (monomorphized per type).
@@ -282,7 +332,7 @@ fn show_all<T: Render>(items: *Vector<T>) { ... }
 fn show(r: *dyn Render) { println!(r.render()); }
 
 let shapes: *Vector<*dyn Render> = Vector::new();
-shapes.push(box_p as *dyn Render);
+shapes.push(square_p as *dyn Render);
 shapes.push(circle_p as *dyn Render);
 ```
 
@@ -292,7 +342,7 @@ copying a default body into an impl that doesn't override it.
 
 ## macros
 
-User-defined macro_rules! for AST-level expansion.
+User-defined `macro_rules!` for AST-level expansion.
 
 ```glide
 macro bail!($cond:expr, $msg:expr) {
@@ -354,7 +404,7 @@ diagnostic rather than hanging.
 ### builtin macros
 
 `println!`, `print!`, `format!`, `panic!`, `printf`, `dbg!`, and
-`vec_of!` are codegen builtins — they don't go through the macro_rules
+`vec_of!` are codegen builtins — they don't go through the `macro_rules`
 expander. `vec_of!(a, b, c)` builds a `*Vector<T>` (T = the element type)
 and is available everywhere without an import:
 
@@ -368,7 +418,7 @@ let names = vec_of!("alice", "bob");   // *Vector<string>
 ```glide
 let name: string = "world";
 let s: string = "hello, ${name}!";
-let n: int = 7;
+let n: i32 = 7;
 let label: string = "count: ${n}, double: ${n * 2}";
 ```
 
@@ -388,7 +438,7 @@ fn read_tsc() -> u64 {
 
 // Naked: no prologue / epilogue, body must be only `asm`.
 @cfg("posix")
-naked fn add_raw(a: int, b: int) -> int {
+naked fn add_raw(a: i32, b: i32) -> i32 {
     asm { "lea (%rdi,%rsi,1), %rax" : : : }
     asm { "ret" : : : }
 }
@@ -422,15 +472,15 @@ c_raw! {
 ## concurrency
 
 ```glide
-fn worker(c: chan<int>) {
+fn worker(c: chan<i32>) {
     c.send(42);
     c.close();
 }
 
-fn main() -> int {
-    let c: chan<int> = make_chan(4);     // buffered, capacity 4
+fn main() -> i32 {
+    let c: chan<i32> = make_chan(4);     // buffered, capacity 4
     spawn worker(c);                      // M:N coroutine
-    let v: int = c.recv();                // parks the caller, frees worker
+    let v: i32 = c.recv();                // parks the caller, frees worker
     return v;
 }
 
@@ -450,12 +500,13 @@ cells. Blocking ops (`recv`, `send` to full chan, `sleep_ms`) park
 the coroutine on a tiny park/unpark primitive without consuming a
 worker thread. `c.recv()` on a closed empty channel returns a
 zero-initialized `T`; `while let v = c.recv()` exits naturally on
-close.
+close. `stdlib::sync` adds `Mutex<T>`, atomics, and a `WaitGroup`, and
+`select!` waits on several channels at once.
 
 ## FFI
 
 ```glide
-extern fn printf(fmt: string, ...) -> int;     // C-style variadic
+extern fn printf(fmt: string, ...) -> i32;     // C-style variadic
 extern fn malloc(n: usize) -> *void;
 extern fn free(p: *void);
 ```
@@ -486,32 +537,22 @@ c_raw! {
     #endif
 }
 
-extern fn now_ticks() -> int;
+extern fn now_ticks() -> i32;
 ```
 
 ## memory layout and ABI
 
-Glide compiles to C99 + pthread. Structs follow the C ABI: same layout as the equivalent C struct. Generic struct instantiations are mangled with their type arguments (e.g. `Vector<int>` becomes `Vector__int`). Function pointers fit in a `void*` slot and cast at call sites.
+Glide compiles to C99 + pthread. Structs follow the C ABI: same layout as the
+equivalent C struct. Generic struct instantiations are mangled with their type
+arguments (e.g. `Vector<i32>` becomes `Vector__i32`). Function pointers fit in a
+`void*` slot and cast at call sites.
 
 ## what's intentionally not in the language
 
-- **Lifetimes / generic over lifetimes** — borrows are function-scoped
-  only.
-- **Reflection** — none. Generics + traits cover the structural cases;
-  macros cover the syntactic ones.
-- **Garbage collection** — explicitly excluded.
-- **Nullable type (`?T`)** — pointers are nullable; borrows are non-null
-  by typer enforcement. `?T` is on the roadmap.
-
-## deferred (planned, not in 0.1.0)
-
-- **`async fn` / `await`** — coroutines + `chan` + `sleep_ms` cover the
-  cases an executor would; `async fn` syntax is on the roadmap once
-  the reactor + parker work is exposed at the language level.
-- **Stack growth** — coroutines have fixed-size stacks today. Lazy
-  growth via mmap-backed regions is planned.
-- **`Mutex<T>` / `select!`** — channels are the recommended sync
-  primitive. A typed mutex and `select!` over multiple chans are
-  planned.
-- **Non-lexical lifetimes** — borrow lifetimes are block-scoped.
-- **`move` returns** — owned values can't escape their declaring fn.
+- **Lifetimes / generic over lifetimes** — borrows are function-scoped only.
+- **Reflection** — none. Generics + traits cover the structural cases; macros
+  cover the syntactic ones.
+- **Garbage collection** — explicitly excluded; ownership and scope-based drop
+  handle reclamation.
+- **`async` / `await`** — the concurrency model is coroutines plus channels, so
+  there is no separate async function colour.
