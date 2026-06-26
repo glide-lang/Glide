@@ -2797,6 +2797,16 @@ fn _struct_lit_ctx(text: string, line0: i32, col0: i32, present: *HashMap<bool>)
     if name_tok.kind != TOK_IDENT {
         return "";
     } // block body, not a struct literal
+    // `impl T {`, `impl Tr for T {`, `struct/enum/trait T {` are declaration
+    // bodies, not struct literals: the IDENT before `{` names the type being
+    // declared/implemented, not a constructor. Don't hijack the body with field
+    // completion (which would offer nothing and suppress everything else).
+    if open_idx >= 2 {
+        let kw_tok: Token = toks.get(open_idx - 2);
+        if kw_tok.lexeme.eq("impl") || kw_tok.lexeme.eq("for") || kw_tok.lexeme.eq("struct") || kw_tok.lexeme.eq("enum") || kw_tok.lexeme.eq("trait") {
+            return "";
+        }
+    }
     // Harvest already-written field names: an IDENT immediately followed by
     // `:` at the literal's own brace depth is a bound field.
     let mut d2: i32 = 0;
