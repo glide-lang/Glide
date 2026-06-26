@@ -1408,6 +1408,17 @@ fn _local_type_node_d(stmts: *Vector<Stmt>, line0: i32, var: string, path: strin
     if depth > 32 {
         return null;
     }
+    // `self` always denotes the enclosing impl's target type. Resolve it
+    // directly (member listing strips the pointer anyway) so `self.<field>`
+    // completes whether or not the receiver carries an explicit `: *T`
+    // annotation — and even when a parse error left the `self` param with a
+    // bogus recovered type that would otherwise resolve to nothing.
+    if var.eq("self") {
+        let _stn: string = enclosing_impl_target_name(stmts, line0, path);
+        if !_stn.eq("") {
+            return ty_named(_stn);
+        }
+    }
     let host: *Stmt = fn_containing(stmts, line0, path);
     if host == null {
         return null;
@@ -1415,7 +1426,7 @@ fn _local_type_node_d(stmts: *Vector<Stmt>, line0: i32, var: string, path: strin
     if host.fn_params != null {
         for let i: i32 = 0; i < host.fn_params.len(); i++ {
             let p: Param = host.fn_params.get(i);
-            if p.name.eq(var) {
+            if p.name.eq(var) && p.ty != null {
                 return p.ty;
             }
         }
@@ -2152,22 +2163,30 @@ fn list_fields_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonVal
         if s.kind != ST_STRUCT || !s.name.eq(type_name) {
             continue;
         }
-        if s.struct_fields == null {
+        _emit_struct_fields(&s, items, seen, pub_only);
+    }
+}
+
+// Emit the field-name completions of one struct decl. Used both by the by-name
+// lister above and by struct-literal completion, which has already resolved the
+// exact decl (so a user struct shadowing a same-named builtin offers only its
+// own fields, not the builtin's).
+fn _emit_struct_fields(s: *Stmt, items: *JsonValue, seen: *HashMap<bool>, pub_only: bool) {
+    if s == null || s.struct_fields == null {
+        return;
+    }
+    for let j: i32 = 0; j < s.struct_fields.len(); j++ {
+        let f: Field = s.struct_fields.get(j);
+        // Cross-file, only `pub` (and `!`) fields can be set, so offer
+        // just those; same-file offers every field.
+        if pub_only && !f.is_pub {
             continue;
         }
-        for let j: i32 = 0; j < s.struct_fields.len(); j++ {
-            let f: Field = s.struct_fields.get(j);
-            // Cross-file, only `pub` (and `!`) fields can be set, so offer
-            // just those; same-file offers every field.
-            if pub_only && !f.is_pub {
-                continue;
-            }
-            if seen.contains(f.name) {
-                continue;
-            }
-            seen.insert(f.name, true);
-            json_arr_push(items, completion_item(f.name, 5, type_to_string_pretty(f.ty))); // 5 = Field
+        if seen.contains(f.name) {
+            continue;
         }
+        seen.insert(f.name, true);
+        json_arr_push(items, completion_item(f.name, 5, type_to_string_pretty(f.ty))); // 5 = Field
     }
 }
 
@@ -2723,6 +2742,26 @@ fn handle_manifest_completion(id: *JsonValue, doc: LspDoc, line0: i32, col0: i32
 // call/index, a `;` statement boundary, or a `{` not preceded by an ident
 // (a block body — `fn f() {`, `if c {`, `=> {`). Lexer-driven, so braces in
 // strings/comments don't fool it.
+// Resolve a top-level struct decl named `name`, preferring one whose origin is
+// `path` (the file being edited) so a user-declared `struct Pair` shadows a
+// same-named builtin / stdlib type. Falls back to the first decl of that name.
+fn _struct_decl_local_first(stmts: *Vector<Stmt>, name: string, path: string) -> *Stmt {
+    if stmts == null {
+        return null;
+    }
+    if !path.eq("") {
+        for let i: i32 = 0; i < stmts.len(); i++ {
+            let s: Stmt = stmts.get(i);
+            if s.kind == ST_STRUCT && s.name != null && s.name.eq(name) && s.origin != null && s.origin.eq(path) {
+                let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *p = s;
+                return p;
+            }
+        }
+    }
+    return find_top_decl(stmts, name);
+}
+
 fn _struct_lit_ctx(text: string, line0: i32, col0: i32, present: *HashMap<bool>) -> string {
     let toks: *Vector<Token> = Vector::new();
     let lex: *Lexer = Lexer::new(text);
@@ -3535,15 +3574,15 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     let mut slit_name: string = _struct_lit_ctx(doc.text, line0, col0, slit_present);
     // `Self { … }` inside an impl method names the implementor type. Expand it
     // so field completion resolves against the concrete struct.
-    if slit_name.eq("Self") {
+    let slit_was_self: bool = slit_name.eq("Self");
+    if slit_was_self {
         let self_ty: string = enclosing_impl_target_name(doc.stmts, line0, uri_to_path(uri));
         if !self_ty.eq("") {
             slit_name = self_ty;
         }
     }
     if !slit_name.eq("") {
-        let mut slit_sd: *Stmt = find_top_decl(doc.stmts, slit_name);
-        let mut fstmts: *Vector<Stmt> = doc.stmts;
+        let mut slit_sd: *Stmt = _struct_decl_local_first(doc.stmts, slit_name, uri_to_path(uri));
         let mut fpub_only: bool = false;
         if slit_sd != null && slit_sd.kind == ST_STRUCT {
             // In the open doc: pub-filter only when the struct lives in
@@ -3560,7 +3599,6 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
                 let isd: *Stmt = find_top_decl(istmts, slit_name);
                 if isd != null && isd.kind == ST_STRUCT {
                     slit_sd = isd;
-                    fstmts = istmts;
                     fpub_only = true;
                 }
             }
@@ -3579,11 +3617,22 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             for let i: i32 = 0; i < pk.len(); i++ {
                 seen.insert(pk.get(i), true);
             }
-            list_fields_for_type(fstmts, slit_name, items, seen, fpub_only);
+            // List from the resolved decl, not by name: a user `struct Pair`
+            // shadowing a builtin Pair must offer only its own fields.
+            _emit_struct_fields(slit_sd, items, seen, fpub_only);
             seen.free();
             lsp_send_response(id, items);
             return;
         }
+    }
+    // A `Self { }` literal whose implementor we could not resolve to a struct
+    // (the struct isn't declared yet, or only the impl exists) must NOT spill
+    // the global completion bag into a field-name slot — there are no fields to
+    // offer, so return an empty list rather than every primitive / type / fn.
+    if slit_was_self {
+        seen.free();
+        lsp_send_response(id, items);
+        return;
     }
     // Type-annotation position (`: T`, `-> T`, `<T>`): seed the list with the
     // primitive type names + the enclosing fn/impl type params up front, so
@@ -3636,8 +3685,17 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         return;
     }
     // Path completion: cursor is right after `Type::` (or `Type::partial`).
-    let qualifier: string = path_qualifier_before(doc.text, line0, col0);
+    let mut qualifier: string = path_qualifier_before(doc.text, line0, col0);
     if !qualifier.eq("") {
+        // `Self::` inside an impl method names the implementor type. Expand it
+        // so static-method / associated-item completion resolves the same way
+        // the concrete `TypeName::` does (otherwise `Self::` offers nothing).
+        if qualifier.eq("Self") {
+            let _spath: string = enclosing_impl_target_name(doc.stmts, line0, uri_to_path(uri));
+            if !_spath.eq("") {
+                qualifier = _spath;
+            }
+        }
         // After `Type::` only static methods (no `self`) make sense.
         list_methods_for_type(doc.stmts, qualifier, items, seen, false);
         // 256-bit ints construct via `u256::from(n)` / `i256::from(n)`, which

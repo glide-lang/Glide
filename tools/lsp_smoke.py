@@ -2076,6 +2076,48 @@ case_hover_has("hover Self outside impl keeps keyword doc",
   'fn f() -> Self {\n    return 0;\n}\n',
   {"line":0,"character":11}, "implementing type")
 
+# `Self::` inside an impl method offers the implementor's static methods, the
+# same way the concrete `TypeName::` does (Self used to resolve to nothing).
+SELF_PATH_BODY = ('struct Point {\n'
+                  '    x: i32,\n'
+                  '}\n'
+                  'impl Point {\n'
+                  '    fn zero() -> Point { return Point { x: 0 }; }\n'
+                  '    fn go(self: *Point) -> i32 { let p = Self::\n'
+                  'return 0; }\n'
+                  '}\n')
+case_completion_has("Self:: offers implementor static methods", SELF_PATH_BODY,
+  {"line":5,"character":47}, ["zero"])
+
+# `self.` member access offers the implementor's fields + methods whether the
+# receiver is annotated `self: *T` or a bare `self`.
+SELF_DOT_BODY = ('struct G {\n'
+                 '    count: i32,\n'
+                 '    name: string,\n'
+                 '}\n'
+                 'impl G {\n'
+                 '    pub fn run(self: *G) -> i32 {\n'
+                 '        self.\n'
+                 '        return 0;\n'
+                 '    }\n'
+                 '}\n')
+case_completion_has("self. offers implementor fields and methods", SELF_DOT_BODY,
+  {"line":6,"character":13}, ["count", "name", "run"])
+
+# A `Self { }` literal whose implementor isn't a resolvable struct must offer an
+# EMPTY list, never the global primitive/type/fn bag.
+case_completion_absent("Self {} with unresolvable target offers no garbage",
+  'impl Ghost {\n    fn make() -> Self {\n        return Self {\n\n        };\n    }\n}\n',
+  {"line":3,"character":0}, ["i32", "string", "Vector", "println!"])
+
+# A user struct shadowing a same-named builtin (`Pair`) offers ITS OWN fields in
+# a `Self { }` literal, not the builtin's.
+case_completion_has("Self {} prefers user struct over same-named builtin",
+  'struct Pair {\n    a: i32,\n    b: i32,\n}\nimpl Pair {\n    fn make() -> Self {\n        return Self {\n\n        };\n    }\n}\n',
+  {"line":7,"character":0}, ["a", "b"])
+case_completion_absent("Self {} user-struct shadow hides builtin fields",
+  'struct Pair {\n    a: i32,\n    b: i32,\n}\nimpl Pair {\n    fn make() -> Self {\n        return Self {\n\n        };\n    }\n}\n',
+  {"line":7,"character":0}, ["first", "second"])
 
 # ---- workflow-authored 'unused / dead / redundant' lint cases ----
 # unused-struct / unused-enum / unused-const / unused-variant / redundant-import.
