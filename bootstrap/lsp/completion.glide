@@ -3630,41 +3630,44 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // primitive / macro / local bag the general path below would dump.
     if _in_impl_header(doc.text, line0, col0) {
         let _ih_path: string = uri_to_path(uri);
-        let mut _ih_pass: i32 = 0;
-        while _ih_pass < 2 {
-            for let i: i32 = 0; i < doc.stmts.len(); i++ {
-                let s: Stmt = doc.stmts.get(i);
-                if s.kind != ST_STRUCT && s.kind != ST_ENUM && s.kind != ST_TRAIT {
-                    continue;
-                }
-                if s.name == null || s.name.eq("") || seen.contains(s.name) {
-                    continue;
-                }
-                if s.name.at(0).to_int() == 95 {
-                    continue;
-                }
-                let _ih_same: bool = s.origin == null || s.origin.eq("") || s.origin.eq(_ih_path);
-                if _ih_pass == 0 && !_ih_same {
-                    continue;
-                }
-                if _ih_pass == 1 && _ih_same {
-                    continue;
-                }
-                // Cross-file non-pub types are not visible here.
-                if !s.is_pub && s.origin != null && !s.origin.eq("") && !s.origin.eq(_ih_path) {
-                    continue;
-                }
-                seen.insert(s.name, true);
-                let mut _ih_lbl: string = "struct ";
-                if s.kind == ST_ENUM {
-                    _ih_lbl = "enum ";
-                }
-                if s.kind == ST_TRAIT {
-                    _ih_lbl = "trait ";
-                }
-                json_arr_push(items, completion_item(s.name, ci_kind_for(&s), _ih_lbl.concat(s.name)));
+        for let i: i32 = 0; i < doc.stmts.len(); i++ {
+            let s: Stmt = doc.stmts.get(i);
+            if s.kind != ST_STRUCT && s.kind != ST_ENUM && s.kind != ST_TRAIT {
+                continue;
             }
-            _ih_pass = _ih_pass + 1;
+            if s.name == null || s.name.eq("") || seen.contains(s.name) {
+                continue;
+            }
+            if s.name.at(0).to_int() == 95 {
+                continue;
+            }
+            // Cross-file non-pub types are not visible here.
+            if !s.is_pub && s.origin != null && !s.origin.eq("") && !s.origin.eq(_ih_path) {
+                continue;
+            }
+            seen.insert(s.name, true);
+            // Locality bucket drives sortText so the editor (which re-sorts by
+            // sortText, ignoring insertion order) puts same-file types first,
+            // then project siblings, then library types.
+            let mut _ih_bucket: string = "1";
+            if s.origin == null || s.origin.eq("") || s.origin.eq(_ih_path) {
+                _ih_bucket = "0";
+            } else {
+                let _ih_mod: string = pretty_module(s.origin);
+                if _ih_mod.len() >= 8 && _ih_mod.substring(0, 8).eq("stdlib::") {
+                    _ih_bucket = "2";
+                }
+            }
+            let mut _ih_lbl: string = "struct ";
+            if s.kind == ST_ENUM {
+                _ih_lbl = "enum ";
+            }
+            if s.kind == ST_TRAIT {
+                _ih_lbl = "trait ";
+            }
+            let _ih_item: *JsonValue = completion_item(s.name, ci_kind_for(&s), _ih_lbl.concat(s.name));
+            json_obj_set(_ih_item, "sortText", json_string(_ih_bucket.concat("_").concat(s.name)));
+            json_arr_push(items, _ih_item);
         }
         seen.free();
         lsp_send_response(id, items);
